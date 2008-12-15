@@ -12,6 +12,12 @@ What's New in Python 2.6.1
 Core and Builtins
 -----------------
 
+- Issue #4597: Fixed exception handling when the __exit__ function of a
+  context manager returns a value that cannot be converted to a bool.
+
+- Issue #4597: Fixed several opcodes that weren't always propagating
+  exceptions.
+
 - Issue #3996: On Windows, the PyOS_CheckStack function would cause the
   interpreter to abort ("Fatal Python error: Could not reset the stack!")
   instead of throwing a MemoryError.
