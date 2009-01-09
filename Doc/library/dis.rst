@@ -421,37 +421,6 @@ nothing on the stack.
 Miscellaneous opcodes.
 
 
-.. opcode:: PRINT_EXPR ()
-
-   Implements the expression statement for the interactive mode.  TOS is removed
-   from the stack and printed.  In non-interactive mode, an expression statement is
-   terminated with ``POP_STACK``.
-
-
-.. opcode:: PRINT_ITEM ()
-
-   Prints TOS to the file-like object bound to ``sys.stdout``.  There is one such
-   instruction for each item in the :keyword:`print` statement.
-
-
-.. opcode:: PRINT_ITEM_TO ()
-
-   Like ``PRINT_ITEM``, but prints the item second from TOS to the file-like object
-   at TOS.  This is used by the extended print statement.
-
-
-.. opcode:: PRINT_NEWLINE ()
-
-   Prints a new line on ``sys.stdout``.  This is generated as the last operation of
-   a :keyword:`print` statement, unless the statement ends with a comma.
-
-
-.. opcode:: PRINT_NEWLINE_TO ()
-
-   Like ``PRINT_NEWLINE``, but prints the new line on the file-like object on the
-   TOS.  This is used by the extended print statement.
-
-
 .. opcode:: BREAK_LOOP ()
 
    Terminates a loop due to a :keyword:`break` statement.
@@ -468,13 +437,6 @@ Miscellaneous opcodes.
    Calls ``list.append(TOS1, TOS)``.  Used to implement list comprehensions.
 
 
-.. opcode:: LOAD_LOCALS ()
-
-   Pushes a reference to the locals of the current scope on the stack. This is used
-   in the code for a class definition: After the class body is evaluated, the
-   locals are passed to the class definition.
-
-
 .. opcode:: RETURN_VALUE ()
 
    Returns with TOS to the caller of the function.
@@ -483,19 +445,6 @@ Miscellaneous opcodes.
 .. opcode:: YIELD_VALUE ()
 
    Pops ``TOS`` and yields it from a :term:`generator`.
-
-
-.. opcode:: IMPORT_STAR ()
-
-   Loads all symbols not starting with ``'_'`` directly from the module TOS to the
-   local namespace. The module is popped after loading all names. This opcode
-   implements ``from module import *``.
-
-
-.. opcode:: EXEC_STMT ()
-
-   Implements ``exec TOS2,TOS1,TOS``.  The compiler fills missing optional
-   parameters with ``None``.
 
 
 .. opcode:: POP_BLOCK ()
@@ -509,12 +458,6 @@ Miscellaneous opcodes.
    Terminates a :keyword:`finally` clause.  The interpreter recalls whether the
    exception has to be re-raised, or whether the function returns, and continues
    with the outer-next block.
-
-
-.. opcode:: BUILD_CLASS ()
-
-   Creates a new class object.  TOS is the methods dictionary, TOS1 the tuple of
-   the names of the base classes, and TOS2 the class name.
 
 
 .. opcode:: WITH_CLEANUP ()
@@ -626,22 +569,6 @@ the more significant byte last.
 
    Performs a Boolean operation.  The operation name can be found in
    ``cmp_op[opname]``.
-
-
-.. opcode:: IMPORT_NAME (namei)
-
-   Imports the module ``co_names[namei]``.  TOS and TOS1 are popped and provide
-   the *fromlist* and *level* arguments of :func:`__import__`.  The module
-   object is pushed onto the stack.  The current namespace is not affected:
-   for a proper import statement, a subsequent ``STORE_FAST`` instruction
-   modifies the namespace.
-
-
-.. opcode:: IMPORT_FROM (namei)
-
-   Loads the attribute ``co_names[namei]`` from the module found in TOS. The
-   resulting object is pushed onto the stack, to be subsequently stored by a
-   ``STORE_FAST`` instruction.
 
 
 .. opcode:: JUMP_FORWARD (delta)
@@ -757,13 +684,6 @@ the more significant byte last.
    are on the stack, with the right-most parameter on top.  Below the parameters,
    the function object to call is on the stack.  Pops all function arguments, and 
    the function itself off the stack, and pushes the return value.
-
-
-.. opcode:: MAKE_FUNCTION (argc)
-
-   Pushes a new function object on the stack.  TOS is the code associated with the
-   function.  The function object is defined to have *argc* default parameters,
-   which are found below TOS.
 
 
 .. opcode:: MAKE_CLOSURE (argc)

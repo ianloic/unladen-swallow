@@ -74,11 +74,12 @@ def main():
 # Don't remove this comment. Everything below it is auto-generated.
 #--cut--------------------------------------------------------------------------
 ProfileTest.expected_output['print_stats'] = """\
-         127 function calls (107 primitive calls) in 999.749 CPU seconds
+         128 function calls (108 primitive calls) in 999.747 CPU seconds
 
    Ordered by: standard name
 
    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1   -0.002   -0.002  999.749  999.749 :0(#@exec)
         4   -0.004   -0.001   -0.004   -0.001 :0(append)
         4   -0.004   -0.001   -0.004   -0.001 :0(exc_info)
        12   -0.024   -0.002   11.964    0.997 :0(hasattr)
@@ -86,7 +87,7 @@ ProfileTest.expected_output['print_stats'] = """\
         1    0.000    0.000    0.000    0.000 :0(setprofile)
         1   -0.002   -0.002  999.751  999.751 <string>:1(<module>)
         0    0.000             0.000          profile:0(profiler)
-        1   -0.002   -0.002  999.749  999.749 profile:0(testfunc())
+        1   -0.002   -0.002  999.747  999.747 profile:0(testfunc())
        28   27.972    0.999   27.972    0.999 profilee.py:110(__getattr__)
         1  269.996  269.996  999.753  999.753 profilee.py:25(testfunc)
      23/3  149.937    6.519  169.917   56.639 profilee.py:35(factorial)
@@ -103,13 +104,14 @@ ProfileTest.expected_output['print_callers'] = """\
    Ordered by: standard name
 
 Function                          was called by...
+:0(#@exec)                        <- profile:0(testfunc())(1)  999.747
 :0(append)                        <- profilee.py:73(helper1)(4)  119.964
 :0(exc_info)                      <- profilee.py:73(helper1)(4)  119.964
 :0(hasattr)                       <- profilee.py:73(helper1)(4)  119.964
                                      profilee.py:88(helper2)(8)  399.896
 :0(range)                         <- profilee.py:98(subhelper)(8)   79.944
-:0(setprofile)                    <- profile:0(testfunc())(1)  999.749
-<string>:1(<module>)              <- profile:0(testfunc())(1)  999.749
+:0(setprofile)                    <- profile:0(testfunc())(1)  999.747
+<string>:1(<module>)              <- :0(#@exec)(1)  999.749
 profile:0(profiler)               <-
 profile:0(testfunc())             <- profile:0(profiler)(1)    0.000
 profilee.py:110(__getattr__)      <- :0(hasattr)(12)   11.964
@@ -132,15 +134,16 @@ ProfileTest.expected_output['print_callees'] = """\
    Ordered by: standard name
 
 Function                          called...
+:0(#@exec)                        -> <string>:1(<module>)(1)  999.751
 :0(append)                        ->
 :0(exc_info)                      ->
 :0(hasattr)                       -> profilee.py:110(__getattr__)(12)   27.972
 :0(range)                         ->
 :0(setprofile)                    ->
 <string>:1(<module>)              -> profilee.py:25(testfunc)(1)  999.753
-profile:0(profiler)               -> profile:0(testfunc())(1)  999.749
-profile:0(testfunc())             -> :0(setprofile)(1)    0.000
-                                     <string>:1(<module>)(1)  999.751
+profile:0(profiler)               -> profile:0(testfunc())(1)  999.747
+profile:0(testfunc())             -> :0(#@exec)(1)  999.749
+                                     :0(setprofile)(1)    0.000
 profilee.py:110(__getattr__)      ->
 profilee.py:25(testfunc)          -> profilee.py:35(factorial)(1)  169.917
                                      profilee.py:55(helper)(2)  599.814

@@ -548,27 +548,27 @@ PyCode_Addr2Line(PyCodeObject *co, int addrq)
 
 	   1: def f(a):
 	   2:     if a:
-	   3:        print 1
+	   3:        b()
 	   4:     else:
-	   5:        print 2
+	   5:        c()
 
 	   which compiles to this:
 
-	   2           0 LOAD_FAST                0 (a)
+	   2          0 LOAD_FAST                0 (a)
 		       3 JUMP_IF_FALSE            9 (to 15)
 		       6 POP_TOP
 
-	   3           7 LOAD_CONST               1 (1)
-		      10 PRINT_ITEM
-		      11 PRINT_NEWLINE
-		      12 JUMP_FORWARD             6 (to 21)
-		 >>   15 POP_TOP
+	   3           7 LOAD_GLOBAL               1 (b)
+		      10 CALL_FUNCTION                 0
+		      13 POP_TOP
+		      14 JUMP_FORWARD             11 (to 25)
+		 >>   17 POP_TOP
 
-	   5          16 LOAD_CONST               2 (2)
-		      19 PRINT_ITEM
-		      20 PRINT_NEWLINE
-		 >>   21 LOAD_CONST               0 (None)
-		      24 RETURN_VALUE
+	   5          18 LOAD_GLOBAL               2 (c)
+		      21 CALL_FUNCTION                 0
+		      24 POP_TOP
+		 >>   25 LOAD_CONST               0 (None)
+		      28 RETURN_VALUE
 
 	   If 'a' is false, execution will jump to instruction at offset
 	   15 and the co_lnotab will claim that execution has moved to
@@ -582,7 +582,7 @@ PyCode_Addr2Line(PyCodeObject *co, int addrq)
 	   start of a line by the co_lnotab.
 
 	   This also takes care of the situation where 'a' is true.
-	   Execution will jump from instruction offset 12 to offset 21.
+	   Execution will jump from instruction offset 14 to offset 25.
 	   Then the co_lnotab would imply that execution has moved to line
 	   5, which is again misleading.
 

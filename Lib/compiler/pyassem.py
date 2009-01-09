@@ -290,8 +290,8 @@ class Block:
     def getContainedGraphs(self):
         """Return all graphs contained within this block.
 
-        For example, a MAKE_FUNCTION block will contain a reference to
-        the graph for the function body.
+        For example, the arguments to #@make_function will contain a
+        reference to the graph for the function body.
         """
         contained = []
         for inst in self.insts:
@@ -528,8 +528,6 @@ class PyFlowGraph(FlowGraph):
         return self._lookupName(arg, self.names)
     _convert_STORE_NAME = _convert_NAME
     _convert_DELETE_NAME = _convert_NAME
-    _convert_IMPORT_NAME = _convert_NAME
-    _convert_IMPORT_FROM = _convert_NAME
     _convert_STORE_ATTR = _convert_NAME
     _convert_LOAD_ATTR = _convert_NAME
     _convert_DELETE_ATTR = _convert_NAME
@@ -605,7 +603,7 @@ class PyFlowGraph(FlowGraph):
     def getConsts(self):
         """Return a tuple for the const slot of the code object
 
-        Must convert references to code (MAKE_FUNCTION) to code
+        Must convert references to code (#@make_function) to code
         objects recursively.
         """
         l = []
@@ -758,12 +756,8 @@ class StackDepthTracker:
         'DELETE_SLICE+3': -3,
         'STORE_SUBSCR': -3,
         'DELETE_SUBSCR': -2,
-        # PRINT_EXPR?
-        'PRINT_ITEM': -1,
         'RETURN_VALUE': -1,
         'YIELD_VALUE': -1,
-        'EXEC_STMT': -3,
-        'BUILD_CLASS': -2,
         'STORE_NAME': -1,
         'STORE_ATTR': -2,
         'DELETE_ATTR': -1,
@@ -771,9 +765,6 @@ class StackDepthTracker:
         'BUILD_MAP': 1,
         'COMPARE_OP': -1,
         'STORE_FAST': -1,
-        'IMPORT_STAR': -1,
-        'IMPORT_NAME': -1,
-        'IMPORT_FROM': 1,
         'LOAD_ATTR': 0, # unlike other loads
         # close enough...
         'SETUP_EXCEPT': 3,
@@ -802,8 +793,6 @@ class StackDepthTracker:
         return self.CALL_FUNCTION(argc)-1
     def CALL_FUNCTION_VAR_KW(self, argc):
         return self.CALL_FUNCTION(argc)-2
-    def MAKE_FUNCTION(self, argc):
-        return -argc
     def MAKE_CLOSURE(self, argc):
         # XXX need to account for free variables too!
         return -argc

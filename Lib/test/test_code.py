@@ -53,7 +53,7 @@ consts: ('None',)
 >>> dump(attrs.func_code)
 name: attrs
 argcount: 1
-names: ('attr1', 'attr2', 'attr3')
+names: ('#@print_stmt', 'attr1', 'attr2', 'attr3')
 varnames: ('obj',)
 cellvars: ()
 freevars: ()

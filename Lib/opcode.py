@@ -101,11 +101,11 @@ def_op('BINARY_OR', 66)
 def_op('INPLACE_POWER', 67)
 def_op('GET_ITER', 68)
 
-def_op('PRINT_EXPR', 70)
-def_op('PRINT_ITEM', 71)
-def_op('PRINT_NEWLINE', 72)
-def_op('PRINT_ITEM_TO', 73)
-def_op('PRINT_NEWLINE_TO', 74)
+# def_op('PRINT_EXPR', 70)  Replaced with the #@displayhook function.
+# def_op('PRINT_ITEM', 71)  Other PRINT_* opcodes replaced by #@print_stmt().
+# def_op('PRINT_NEWLINE', 72)
+# def_op('PRINT_ITEM_TO', 73)
+# def_op('PRINT_NEWLINE_TO', 74)
 def_op('INPLACE_LSHIFT', 75)
 def_op('INPLACE_RSHIFT', 76)
 def_op('INPLACE_AND', 77)
@@ -113,14 +113,14 @@ def_op('INPLACE_XOR', 78)
 def_op('INPLACE_OR', 79)
 def_op('BREAK_LOOP', 80)
 def_op('WITH_CLEANUP', 81)
-def_op('LOAD_LOCALS', 82)
+# def_op('LOAD_LOCALS', 82)  Replaced with a function call to #@locals.
 def_op('RETURN_VALUE', 83)
-def_op('IMPORT_STAR', 84)
-def_op('EXEC_STMT', 85)
+# def_op('IMPORT_STAR', 84)  Replaced with a function call to #@import_star.
+# def_op('EXEC_STMT', 85)  Replaced with a function call to #@exec.
 def_op('YIELD_VALUE', 86)
 def_op('POP_BLOCK', 87)
 def_op('END_FINALLY', 88)
-def_op('BUILD_CLASS', 89)
+# def_op('BUILD_CLASS', 89)  Replaced with a function call to #@buildclass.
 
 HAVE_ARGUMENT = 90              # Opcodes from here have an argument:
 
@@ -143,8 +143,8 @@ def_op('BUILD_MAP', 104)        # Number of dict entries (upto 255)
 name_op('LOAD_ATTR', 105)       # Index in name list
 def_op('COMPARE_OP', 106)       # Comparison operator
 hascompare.append(106)
-name_op('IMPORT_NAME', 107)     # Index in name list
-name_op('IMPORT_FROM', 108)     # Index in name list
+# name_op('IMPORT_NAME', 107)   # Replaced by #@import_name.
+# name_op('IMPORT_FROM', 108)   # Replaced by #@import_from.
 
 jrel_op('JUMP_FORWARD', 110)    # Number of bytes to skip
 jrel_op('JUMP_IF_FALSE', 111)   # ""
@@ -167,7 +167,7 @@ haslocal.append(126)
 
 def_op('RAISE_VARARGS', 130)    # Number of raise arguments (1, 2, or 3)
 def_op('CALL_FUNCTION', 131)    # #args + (#kwargs << 8)
-def_op('MAKE_FUNCTION', 132)    # Number of args with default values
+# def_op('MAKE_FUNCTION', 132)  Replaced by #@make_function calls.
 def_op('BUILD_SLICE', 133)      # Number of items
 def_op('MAKE_CLOSURE', 134)
 def_op('LOAD_CLOSURE', 135)

@@ -392,9 +392,8 @@ class Transformer:
             start = 1
         for i in range(start, len(nodelist), 2):
             items.append(self.com_node(nodelist[i]))
-        if nodelist[-1][0] == token.COMMA:
-            return Print(items, dest, lineno=nodelist[0][2])
-        return Printnl(items, dest, lineno=nodelist[0][2])
+        newline = (nodelist[-1][0] != token.COMMA)
+        return Print(items, dest, newline, lineno=nodelist[0][2])
 
     def del_stmt(self, nodelist):
         return self.com_assign(nodelist[1], OP_DELETE)

@@ -13,13 +13,6 @@ from compiler.consts import (CO_VARARGS, CO_VARKEYWORDS, CO_NEWLOCALS,
      CO_FUTURE_ABSIMPORT, CO_FUTURE_WITH_STATEMENT, CO_FUTURE_PRINT_FUNCTION)
 from compiler.pyassem import TupleArg
 
-# XXX The version-specific code can go, since this code only works with 2.x.
-# Do we have Python 1.x or Python 2.x?
-try:
-    VERSION = sys.version_info[0]
-except AttributeError:
-    VERSION = 1
-
 callfunc_opcode_info = {
     # (Have *args, Have **args) : opcode
     (0,0) : "CALL_FUNCTION",
@@ -382,9 +375,7 @@ class CodeGenerator:
         walk(node.code, gen)
         gen.finish()
         self.set_lineno(node)
-        for default in node.defaults:
-            self.visit(default)
-        self._makeClosure(gen, len(node.defaults))
+        self._makeClosure(gen, node.defaults)
         for i in range(ndecorators):
             self.emit('CALL_FUNCTION', 1)
 
@@ -394,13 +385,14 @@ class CodeGenerator:
         walk(node.code, gen)
         gen.finish()
         self.set_lineno(node)
+        self.emit('LOAD_GLOBAL', '#@buildclass')
         self.emit('LOAD_CONST', node.name)
         for base in node.bases:
             self.visit(base)
         self.emit('BUILD_TUPLE', len(node.bases))
-        self._makeClosure(gen, 0)
-        self.emit('CALL_FUNCTION', 0)
-        self.emit('BUILD_CLASS')
+        self._makeClosure(gen, [])
+        self.emit('CALL_FUNCTION', 0)  # Call the closure, get the locals dict
+        self.emit('CALL_FUNCTION', 3)  # Call #@buildclass
         self.storeName(node.name)
 
     # The rest are standard visitor methods
@@ -628,17 +620,22 @@ class CodeGenerator:
         self.newBlock()
         self.emit('POP_TOP')
 
-    def _makeClosure(self, gen, args):
+    def _makeClosure(self, gen, defaults):
         frees = gen.scope.get_free_vars()
         if frees:
+            for default in defaults:
+                self.visit(default)
             for name in frees:
                 self.emit('LOAD_CLOSURE', name)
             self.emit('BUILD_TUPLE', len(frees))
             self.emit('LOAD_CONST', gen)
-            self.emit('MAKE_CLOSURE', args)
+            self.emit('MAKE_CLOSURE', len(defaults))
         else:
+            self.emit('LOAD_GLOBAL', '#@make_function')
             self.emit('LOAD_CONST', gen)
-            self.emit('MAKE_FUNCTION', args)
+            for default in defaults:
+                self.visit(default)
+            self.emit('CALL_FUNCTION', len(defaults) + 1)
 
     def visitGenExpr(self, node):
         gen = GenExprCodeGenerator(node, self.scopes, self.class_name,
@@ -646,7 +643,7 @@ class CodeGenerator:
         walk(node.code, gen)
         gen.finish()
         self.set_lineno(node)
-        self._makeClosure(gen, 0)
+        self._makeClosure(gen, [])
         # precomputation of outmost iterable
         self.visit(node.code.quals[0].iter)
         self.emit('GET_ITER')
@@ -884,10 +881,11 @@ class CodeGenerator:
         self.set_lineno(node)
         level = 0 if self.graph.checkFlag(CO_FUTURE_ABSIMPORT) else -1
         for name, alias in node.names:
-            if VERSION > 1:
-                self.emit('LOAD_CONST', level)
-                self.emit('LOAD_CONST', None)
-            self.emit('IMPORT_NAME', name)
+            self.emit('LOAD_GLOBAL', '#@import_name')
+            self.emit('LOAD_CONST', level)
+            self.emit('LOAD_CONST', None)
+            self.emit('LOAD_CONST', name)
+            self.emit('CALL_FUNCTION', 3)
             mod = name.split(".")[0]
             if alias:
                 self._resolveDots(name)
@@ -901,25 +899,36 @@ class CodeGenerator:
         if level == 0 and not self.graph.checkFlag(CO_FUTURE_ABSIMPORT):
             level = -1
         fromlist = map(lambda (name, alias): name, node.names)
-        if VERSION > 1:
+        # Handle 'from x import *' statements.
+        if node.names[0][0] == '*':
+            # There can only be one name w/ from ... import *
+            assert len(node.names) == 1
+            self.namespace = 0
+            self.emit('LOAD_GLOBAL', '#@import_star')
+            self.emit('LOAD_GLOBAL', '#@import_name')
             self.emit('LOAD_CONST', level)
             self.emit('LOAD_CONST', tuple(fromlist))
-        self.emit('IMPORT_NAME', node.modname)
+            self.emit('LOAD_CONST', node.modname)
+            self.emit('CALL_FUNCTION', 3)
+            self.emit('CALL_FUNCTION', 1)
+            self.emit('POP_TOP')
+            return
+        self.emit('LOAD_GLOBAL', '#@import_from')
+        self.emit('LOAD_GLOBAL', '#@import_name')
+        self.emit('LOAD_CONST', level)
+        self.emit('LOAD_CONST', tuple(fromlist))
+        self.emit('LOAD_CONST', node.modname)
+        self.emit('CALL_FUNCTION', 3)
         for name, alias in node.names:
-            if VERSION > 1:
-                if name == '*':
-                    self.namespace = 0
-                    self.emit('IMPORT_STAR')
-                    # There can only be one name w/ from ... import *
-                    assert len(node.names) == 1
-                    return
-                else:
-                    self.emit('IMPORT_FROM', name)
-                    self._resolveDots(name)
-                    self.storeName(alias or name)
-            else:
-                self.emit('IMPORT_FROM', name)
-        self.emit('POP_TOP')
+            # The DUP_TOPX 2 is duplicating [#@import_from, module], where
+            # module is the return value from #@import_name.
+            self.emit('DUP_TOPX', 2)
+            self.emit('LOAD_CONST', name)
+            self.emit('CALL_FUNCTION', 2)
+            self._resolveDots(name)
+            self.storeName(alias or name)
+        self.emit('POP_TOP')  # Remove the imported module.
+        self.emit('POP_TOP')  # Remove the #@import_from function.
 
     def _resolveDots(self, name):
         elts = name.split(".")
@@ -970,15 +979,8 @@ class CodeGenerator:
         for child in node.nodes:
             self.visit(child)
 
-    if VERSION > 1:
-        visitAssTuple = _visitAssSequence
-        visitAssList = _visitAssSequence
-    else:
-        def visitAssTuple(self, node):
-            self._visitAssSequence(node, 'UNPACK_TUPLE')
-
-        def visitAssList(self, node):
-            self._visitAssSequence(node, 'UNPACK_LIST')
+    visitAssTuple = _visitAssSequence
+    visitAssList = _visitAssSequence
 
     # augmented assignment
 
@@ -1045,6 +1047,7 @@ class CodeGenerator:
             self.emit('STORE_SUBSCR')
 
     def visitExec(self, node):
+        self.emit('LOAD_GLOBAL', '#@exec')
         self.visit(node.expr)
         if node.locals is None:
             self.emit('LOAD_CONST', None)
@@ -1054,7 +1057,8 @@ class CodeGenerator:
             self.emit('DUP_TOP')
         else:
             self.visit(node.globals)
-        self.emit('EXEC_STMT')
+        self.emit('CALL_FUNCTION', 3)
+        self.emit('POP_TOP')
 
     def visitCallFunc(self, node):
         pos = 0
@@ -1076,28 +1080,22 @@ class CodeGenerator:
         opcode = callfunc_opcode_info[have_star, have_dstar]
         self.emit(opcode, kw << 8 | pos)
 
-    def visitPrint(self, node, newline=0):
+    def visitPrint(self, node):
+        kwargs = 0
         self.set_lineno(node)
-        if node.dest:
-            self.visit(node.dest)
+        self.emit('LOAD_GLOBAL', '#@print_stmt')
         for child in node.nodes:
-            if node.dest:
-                self.emit('DUP_TOP')
             self.visit(child)
-            if node.dest:
-                self.emit('ROT_TWO')
-                self.emit('PRINT_ITEM_TO')
-            else:
-                self.emit('PRINT_ITEM')
-        if node.dest and not newline:
-            self.emit('POP_TOP')
-
-    def visitPrintnl(self, node):
-        self.visitPrint(node, newline=1)
+        if not node.newline:
+            self.emit('LOAD_CONST', 'end')
+            self.emit('LOAD_CONST', '')
+            kwargs += 1
         if node.dest:
-            self.emit('PRINT_NEWLINE_TO')
-        else:
-            self.emit('PRINT_NEWLINE')
+            self.emit('LOAD_CONST', 'file')
+            self.visit(node.dest)
+            kwargs += 1
+        self.emit('CALL_FUNCTION', len(node.nodes) | (kwargs << 8))
+        self.emit('POP_TOP')
 
     def visitReturn(self, node):
         self.set_lineno(node)
@@ -1315,8 +1313,10 @@ class InteractiveCodeGenerator(NestedScopeMixin, CodeGenerator):
     def visitDiscard(self, node):
         # XXX Discard means it's an expression.  Perhaps this is a bad
         # name.
+        self.emit('LOAD_GLOBAL', '#@displayhook')
         self.visit(node.expr)
-        self.emit('PRINT_EXPR')
+        self.emit('CALL_FUNCTION', 1)
+        self.emit('POP_TOP')
 
 class AbstractFunctionCode:
     optimized = 1
@@ -1368,10 +1368,7 @@ class AbstractFunctionCode:
                 self.unpackSequence(arg)
 
     def unpackSequence(self, tup):
-        if VERSION > 1:
-            self.emit('UNPACK_SEQUENCE', len(tup))
-        else:
-            self.emit('UNPACK_TUPLE', len(tup))
+        self.emit('UNPACK_SEQUENCE', len(tup))
         for elt in tup:
             if isinstance(elt, tuple):
                 self.unpackSequence(elt)
@@ -1430,7 +1427,8 @@ class AbstractClassCode:
 
     def finish(self):
         self.graph.startExitBlock()
-        self.emit('LOAD_LOCALS')
+        self.emit('LOAD_GLOBAL', '#@locals')
+        self.emit('CALL_FUNCTION', 0)
         self.emit('RETURN_VALUE')
 
 class ClassCodeGenerator(NestedScopeMixin, AbstractClassCode, CodeGenerator):

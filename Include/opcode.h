@@ -62,11 +62,11 @@ extern "C" {
 #define INPLACE_POWER	67
 #define GET_ITER	68
 
-#define PRINT_EXPR	70
-#define PRINT_ITEM	71
-#define PRINT_NEWLINE	72
+/* #define PRINT_EXPR	70  Replaced by #@displayhook builtin. */
+/* #define PRINT_ITEM	71  Other PRINT_* opcodes replaced by #@print_stmt
+#define PRINT_NEWLINE	72	builtin.
 #define PRINT_ITEM_TO   73
-#define PRINT_NEWLINE_TO 74
+#define PRINT_NEWLINE_TO 74 */
 #define INPLACE_LSHIFT	75
 #define INPLACE_RSHIFT	76
 #define INPLACE_AND	77
@@ -74,14 +74,14 @@ extern "C" {
 #define INPLACE_OR	79
 #define BREAK_LOOP	80
 #define WITH_CLEANUP    81
-#define LOAD_LOCALS	82
+/* #define LOAD_LOCALS	82  Replaced by #@locals builtin. */
 #define RETURN_VALUE	83
-#define IMPORT_STAR	84
-#define EXEC_STMT	85
+/* #define IMPORT_STAR	84  Replaced by #@import_star builtin. */
+/* #define EXEC_STMT	85  Replaced by #@exec builtin. */
 #define YIELD_VALUE	86
 #define POP_BLOCK	87
 #define END_FINALLY	88
-#define BUILD_CLASS	89
+/*#define BUILD_CLASS	89  Replaced by #@buildclass builtin. */
 
 #define HAVE_ARGUMENT	90	/* Opcodes from here have an argument: */
 
@@ -102,8 +102,8 @@ extern "C" {
 #define BUILD_MAP	104	/* Always zero for now */
 #define LOAD_ATTR	105	/* Index in name list */
 #define COMPARE_OP	106	/* Comparison operator */
-#define IMPORT_NAME	107	/* Index in name list */
-#define IMPORT_FROM	108	/* Index in name list */
+/* #define IMPORT_NAME	107	 Replaced by #@import_name builtin. */
+/* #define IMPORT_FROM	108	 Replaced by #@import_from builtin. */
 
 #define JUMP_FORWARD	110	/* Number of bytes to skip */
 #define JUMP_IF_FALSE	111	/* "" */
@@ -124,13 +124,13 @@ extern "C" {
 #define RAISE_VARARGS	130	/* Number of raise arguments (1, 2 or 3) */
 /* CALL_FUNCTION_XXX opcodes defined below depend on this definition */
 #define CALL_FUNCTION	131	/* #args + (#kwargs<<8) */
-#define MAKE_FUNCTION	132	/* #defaults */
+/* #define MAKE_FUNCTION	132	Replaced by #@make_function() builtin. */
 #define BUILD_SLICE 	133	/* Number of items */
 
 #define MAKE_CLOSURE    134     /* #free vars */
 #define LOAD_CLOSURE    135     /* Load free variable from closure */
-#define LOAD_DEREF      136     /* Load and dereference from closure cell */ 
-#define STORE_DEREF     137     /* Store into cell */ 
+#define LOAD_DEREF      136     /* Load and dereference from closure cell */
+#define STORE_DEREF     137     /* Store into cell */
 
 /* The next 3 opcodes must be contiguous and satisfy
    (CALL_FUNCTION_VAR - CALL_FUNCTION) & 3 == 1  */

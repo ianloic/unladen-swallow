@@ -117,11 +117,6 @@ static PyObject * apply_slice(PyObject *, PyObject *, PyObject *);
 static int assign_slice(PyObject *, PyObject *,
 			PyObject *, PyObject *);
 static PyObject * cmp_outcome(int, PyObject *, PyObject *);
-static PyObject * import_from(PyObject *, PyObject *);
-static int import_all_from(PyObject *, PyObject *);
-static PyObject * build_class(PyObject *, PyObject *, PyObject *);
-static int exec_statement(PyFrameObject *,
-			  PyObject *, PyObject *, PyObject *);
 static void set_exc_info(PyThreadState *, PyObject *, PyObject *, PyObject *);
 static void reset_exc_info(PyThreadState *);
 static void format_exc_check_arg(PyObject *, char *, PyObject *);
@@ -555,7 +550,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 	register PyObject *w;
 	register PyObject *u;
 	register PyObject *t;
-	register PyObject *stream = NULL;    /* for PRINT opcodes */
 	register PyObject **fastlocals, **freevars;
 	PyObject *retval = NULL;	/* Return value */
 	PyThreadState *tstate = PyThreadState_GET();
@@ -607,11 +601,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
    execute new Python code or not.
 
    It's a case-by-case judgement.  I'll use intr1 for the following
-   cases:
+   case:
 
-   EXEC_STMT
-   IMPORT_STAR
-   IMPORT_FROM
    CALL_FUNCTION (and friends)
 
  */
@@ -1562,114 +1553,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if (err != 0) why = WHY_EXCEPTION;
 			break;
 
-		case PRINT_EXPR:
-			v = POP();
-			w = PySys_GetObject("displayhook");
-			why = WHY_NOT;  /* Redundant, but clearer. */
-			if (w == NULL) {
-				PyErr_SetString(PyExc_RuntimeError,
-						"lost sys.displayhook");
-				why = WHY_EXCEPTION;
-				x = NULL;
-			}
-			if (why == WHY_NOT) {
-				x = PyTuple_Pack(1, v);
-				if (x == NULL)
-					why = WHY_EXCEPTION;
-			}
-			if (why == WHY_NOT) {
-				w = PyEval_CallObject(w, x);
-				Py_XDECREF(w);
-				if (w == NULL)
-					why = WHY_EXCEPTION;
-			}
-			Py_DECREF(v);
-			Py_XDECREF(x);
-			break;
-
-		case PRINT_ITEM_TO:
-			w = stream = POP();
-			/* fall through to PRINT_ITEM */
-
-		case PRINT_ITEM:
-			v = POP();
-			err = 0;
-			if (stream == NULL || stream == Py_None) {
-				w = PySys_GetObject("stdout");
-				if (w == NULL) {
-					PyErr_SetString(PyExc_RuntimeError,
-							"lost sys.stdout");
-					err = -1;
-				}
-			}
-			/* PyFile_SoftSpace() can exececute arbitrary code
-			   if sys.stdout is an instance with a __getattr__.
-			   If __getattr__ raises an exception, w will
-			   be freed, so we need to prevent that temporarily. */
-			Py_XINCREF(w);
-			if (w != NULL && PyFile_SoftSpace(w, 0))
-				err = PyFile_WriteString(" ", w);
-			if (err == 0)
-				err = PyFile_WriteObject(v, w, Py_PRINT_RAW);
-			if (err == 0) {
-			    /* XXX move into writeobject() ? */
-			    if (PyString_Check(v)) {
-				char *s = PyString_AS_STRING(v);
-				Py_ssize_t len = PyString_GET_SIZE(v);
-				if (len == 0 ||
-				    !isspace(Py_CHARMASK(s[len-1])) ||
-				    s[len-1] == ' ')
-					PyFile_SoftSpace(w, 1);
-			    }
-#ifdef Py_USING_UNICODE
-			    else if (PyUnicode_Check(v)) {
-				Py_UNICODE *s = PyUnicode_AS_UNICODE(v);
-				Py_ssize_t len = PyUnicode_GET_SIZE(v);
-				if (len == 0 ||
-				    !Py_UNICODE_ISSPACE(s[len-1]) ||
-				    s[len-1] == ' ')
-				    PyFile_SoftSpace(w, 1);
-			    }
-#endif
-			    else
-			    	PyFile_SoftSpace(w, 1);
-			}
-			Py_XDECREF(w);
-			Py_DECREF(v);
-			Py_XDECREF(stream);
-			stream = NULL;
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
-
-		case PRINT_NEWLINE_TO:
-			w = stream = POP();
-			/* fall through to PRINT_NEWLINE */
-
-		case PRINT_NEWLINE:
-			if (stream == NULL || stream == Py_None) {
-				w = PySys_GetObject("stdout");
-				if (w == NULL) {
-					PyErr_SetString(PyExc_RuntimeError,
-							"lost sys.stdout");
-					why = WHY_EXCEPTION;
-				}
-			}
-			if (w != NULL) {
-				/* w.write() may replace sys.stdout, so we
-				 * have to keep our reference to it */
-				Py_INCREF(w);
-				err = PyFile_WriteString("\n", w);
-				if (err == 0)
-					PyFile_SoftSpace(w, 0);
-				else
-					why = WHY_EXCEPTION;
-				Py_DECREF(w);
-			}
-			Py_XDECREF(stream);
-			stream = NULL;
-			break;
-
-
 #ifdef CASE_TOO_BIG
 		default: switch (opcode) {
 #endif
@@ -1695,16 +1578,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			}
 			break;
 
-		case LOAD_LOCALS:
-			if ((x = f->f_locals) != NULL) {
-				Py_INCREF(x);
-				PUSH(x);
-				break;
-			}
-			PyErr_SetString(PyExc_SystemError, "no locals");
-			why = WHY_EXCEPTION;
-			break;
-
 		case RETURN_VALUE:
 			retval = POP();
 			why = WHY_RETURN;
@@ -1715,20 +1588,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			f->f_stacktop = stack_pointer;
 			why = WHY_YIELD;
 			goto fast_yield;
-
-		case EXEC_STMT:
-			w = TOP();
-			v = SECOND();
-			u = THIRD();
-			STACKADJ(-3);
-			READ_TIMESTAMP(intr0);
-			if (exec_statement(f, u, v, w) != 0)
-				why = WHY_EXCEPTION;
-			READ_TIMESTAMP(intr1);
-			Py_DECREF(u);
-			Py_DECREF(v);
-			Py_DECREF(w);
-			break;
 
 		case POP_BLOCK:
 			{
@@ -1764,20 +1623,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				why = WHY_EXCEPTION;
 			}
 			Py_DECREF(v);
-			break;
-
-		case BUILD_CLASS:
-			u = TOP();
-			v = SECOND();
-			w = THIRD();
-			STACKADJ(-2);
-			x = build_class(u, v, w);
-			if (x == NULL)
-				why = WHY_EXCEPTION;
-			SET_TOP(x);
-			Py_DECREF(u);
-			Py_DECREF(v);
-			Py_DECREF(w);
 			break;
 
 		case STORE_NAME:
@@ -2125,78 +1970,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			PREDICT(JUMP_IF_TRUE);
 			break;
 
-		case IMPORT_NAME:
-			w = GETITEM(names, oparg);
-			x = PyDict_GetItemString(f->f_builtins, "__import__");
-			if (x == NULL) {
-				PyErr_SetString(PyExc_ImportError,
-						"__import__ not found");
-				why = WHY_EXCEPTION;
-				break;
-			}
-			Py_INCREF(x);
-			v = POP();
-			u = TOP();
-			if (PyInt_AsLong(u) != -1 || PyErr_Occurred())
-				w = PyTuple_Pack(5,
-					    w,
-					    f->f_globals,
-					    f->f_locals == NULL ?
-						  Py_None : f->f_locals,
-					    v,
-					    u);
-			else
-				w = PyTuple_Pack(4,
-					    w,
-					    f->f_globals,
-					    f->f_locals == NULL ?
-						  Py_None : f->f_locals,
-					    v);
-			Py_DECREF(v);
-			Py_DECREF(u);
-			if (w == NULL) {
-				POP();
-				Py_DECREF(x);
-				why = WHY_EXCEPTION;
-				break;
-			}
-			READ_TIMESTAMP(intr0);
-			v = x;
-			x = PyEval_CallObject(v, w);
-			Py_DECREF(v);
-			READ_TIMESTAMP(intr1);
-			Py_DECREF(w);
-			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
-
-		case IMPORT_STAR:
-			v = POP();
-			PyFrame_FastToLocals(f);
-			if ((x = f->f_locals) == NULL) {
-				PyErr_SetString(PyExc_SystemError,
-					"no locals found during 'import *'");
-				why = WHY_EXCEPTION;
-				break;
-			}
-			READ_TIMESTAMP(intr0);
-			err = import_all_from(x, v);
-			READ_TIMESTAMP(intr1);
-			PyFrame_LocalsToFast(f, 0);
-			Py_DECREF(v);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
-
-		case IMPORT_FROM:
-			w = GETITEM(names, oparg);
-			v = TOP();
-			READ_TIMESTAMP(intr0);
-			x = import_from(v, w);
-			READ_TIMESTAMP(intr1);
-			PUSH(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
-
 		case JUMP_FORWARD:
 			JUMPBY(oparg);
 			goto fast_next_opcode;
@@ -2471,30 +2244,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		    if (x == NULL) why = WHY_EXCEPTION;
 		    break;
 		}
-
-		case MAKE_FUNCTION:
-			v = POP(); /* code object */
-			x = PyFunction_New(v, f->f_globals);
-			Py_DECREF(v);
-			/* XXX Maybe this should be a separate opcode? */
-			if (x != NULL && oparg > 0) {
-				v = PyTuple_New(oparg);
-				if (v == NULL) {
-					Py_DECREF(x);
-					why = WHY_EXCEPTION;
-					break;
-				}
-				while (--oparg >= 0) {
-					w = POP();
-					PyTuple_SET_ITEM(v, oparg, w);
-				}
-				if (PyFunction_SetDefaults(x, v) != 0)
-					why = WHY_EXCEPTION;
-				Py_DECREF(v);
-			}
-			PUSH(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
 
 		case MAKE_CLOSURE:
 		{
@@ -4235,236 +3984,6 @@ cmp_outcome(int op, register PyObject *v, register PyObject *w)
 	v = res ? Py_True : Py_False;
 	Py_INCREF(v);
 	return v;
-}
-
-static PyObject *
-import_from(PyObject *v, PyObject *name)
-{
-	PyObject *x;
-
-	x = PyObject_GetAttr(v, name);
-	if (x == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
-		PyErr_Format(PyExc_ImportError,
-			     "cannot import name %.230s",
-			     PyString_AsString(name));
-	}
-	return x;
-}
-
-static int
-import_all_from(PyObject *locals, PyObject *v)
-{
-	PyObject *all = PyObject_GetAttrString(v, "__all__");
-	PyObject *dict, *name, *value;
-	int skip_leading_underscores = 0;
-	int pos, err;
-
-	if (all == NULL) {
-		if (!PyErr_ExceptionMatches(PyExc_AttributeError))
-			return -1; /* Unexpected error */
-		PyErr_Clear();
-		dict = PyObject_GetAttrString(v, "__dict__");
-		if (dict == NULL) {
-			if (!PyErr_ExceptionMatches(PyExc_AttributeError))
-				return -1;
-			PyErr_SetString(PyExc_ImportError,
-			"from-import-* object has no __dict__ and no __all__");
-			return -1;
-		}
-		all = PyMapping_Keys(dict);
-		Py_DECREF(dict);
-		if (all == NULL)
-			return -1;
-		skip_leading_underscores = 1;
-	}
-
-	for (pos = 0, err = 0; ; pos++) {
-		name = PySequence_GetItem(all, pos);
-		if (name == NULL) {
-			if (!PyErr_ExceptionMatches(PyExc_IndexError))
-				err = -1;
-			else
-				PyErr_Clear();
-			break;
-		}
-		if (skip_leading_underscores &&
-		    PyString_Check(name) &&
-		    PyString_AS_STRING(name)[0] == '_')
-		{
-			Py_DECREF(name);
-			continue;
-		}
-		value = PyObject_GetAttr(v, name);
-		if (value == NULL)
-			err = -1;
-		else if (PyDict_CheckExact(locals))
-			err = PyDict_SetItem(locals, name, value);
-		else
-			err = PyObject_SetItem(locals, name, value);
-		Py_DECREF(name);
-		Py_XDECREF(value);
-		if (err != 0)
-			break;
-	}
-	Py_DECREF(all);
-	return err;
-}
-
-static PyObject *
-build_class(PyObject *methods, PyObject *bases, PyObject *name)
-{
-	PyObject *metaclass = NULL, *result, *base;
-
-	if (PyDict_Check(methods))
-		metaclass = PyDict_GetItemString(methods, "__metaclass__");
-	if (metaclass != NULL)
-		Py_INCREF(metaclass);
-	else if (PyTuple_Check(bases) && PyTuple_GET_SIZE(bases) > 0) {
-		base = PyTuple_GET_ITEM(bases, 0);
-		metaclass = PyObject_GetAttrString(base, "__class__");
-		if (metaclass == NULL) {
-			PyErr_Clear();
-			metaclass = (PyObject *)base->ob_type;
-			Py_INCREF(metaclass);
-		}
-	}
-	else {
-		PyObject *g = PyEval_GetGlobals();
-		if (g != NULL && PyDict_Check(g))
-			metaclass = PyDict_GetItemString(g, "__metaclass__");
-		if (metaclass == NULL)
-			metaclass = (PyObject *) &PyClass_Type;
-		Py_INCREF(metaclass);
-	}
-	result = PyObject_CallFunctionObjArgs(metaclass, name, bases, methods,
-					      NULL);
-	Py_DECREF(metaclass);
-	if (result == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
-		/* A type error here likely means that the user passed
-		   in a base that was not a class (such the random module
-		   instead of the random.random type).  Help them out with
-		   by augmenting the error message with more information.*/
-
-		PyObject *ptype, *pvalue, *ptraceback;
-
-		PyErr_Fetch(&ptype, &pvalue, &ptraceback);
-		if (PyString_Check(pvalue)) {
-			PyObject *newmsg;
-			newmsg = PyString_FromFormat(
-				"Error when calling the metaclass bases\n"
-				"    %s",
-				PyString_AS_STRING(pvalue));
-			if (newmsg != NULL) {
-				Py_DECREF(pvalue);
-				pvalue = newmsg;
-			}
-		}
-		PyErr_Restore(ptype, pvalue, ptraceback);
-	}
-	return result;
-}
-
-static int
-exec_statement(PyFrameObject *f, PyObject *prog, PyObject *globals,
-	       PyObject *locals)
-{
-	int n;
-	PyObject *v;
-	int plain = 0;
-
-	if (PyTuple_Check(prog) && globals == Py_None && locals == Py_None &&
-	    ((n = PyTuple_Size(prog)) == 2 || n == 3)) {
-		/* Backward compatibility hack */
-		globals = PyTuple_GetItem(prog, 1);
-		if (n == 3)
-			locals = PyTuple_GetItem(prog, 2);
-		prog = PyTuple_GetItem(prog, 0);
-	}
-	if (globals == Py_None) {
-		globals = PyEval_GetGlobals();
-		if (locals == Py_None) {
-			locals = PyEval_GetLocals();
-			plain = 1;
-		}
-		if (!globals || !locals) {
-			PyErr_SetString(PyExc_SystemError,
-					"globals and locals cannot be NULL");
-			return -1;
-		}
-	}
-	else if (locals == Py_None)
-		locals = globals;
-	if (!PyString_Check(prog) &&
-	    !PyUnicode_Check(prog) &&
-	    !PyCode_Check(prog) &&
-	    !PyFile_Check(prog)) {
-		PyErr_SetString(PyExc_TypeError,
-			"exec: arg 1 must be a string, file, or code object");
-		return -1;
-	}
-	if (!PyDict_Check(globals)) {
-		PyErr_SetString(PyExc_TypeError,
-		    "exec: arg 2 must be a dictionary or None");
-		return -1;
-	}
-	if (!PyMapping_Check(locals)) {
-		PyErr_SetString(PyExc_TypeError,
-		    "exec: arg 3 must be a mapping or None");
-		return -1;
-	}
-	if (PyDict_GetItemString(globals, "__builtins__") == NULL)
-		PyDict_SetItemString(globals, "__builtins__", f->f_builtins);
-	if (PyCode_Check(prog)) {
-		if (PyCode_GetNumFree((PyCodeObject *)prog) > 0) {
-			PyErr_SetString(PyExc_TypeError,
-		"code object passed to exec may not contain free variables");
-			return -1;
-		}
-		v = PyEval_EvalCode((PyCodeObject *) prog, globals, locals);
-	}
-	else if (PyFile_Check(prog)) {
-		FILE *fp = PyFile_AsFile(prog);
-		char *name = PyString_AsString(PyFile_Name(prog));
-		PyCompilerFlags cf;
-		if (name == NULL)
-			return -1;
-		cf.cf_flags = 0;
-		if (PyEval_MergeCompilerFlags(&cf))
-			v = PyRun_FileFlags(fp, name, Py_file_input, globals,
-					    locals, &cf);
-		else
-			v = PyRun_File(fp, name, Py_file_input, globals,
-				       locals);
-	}
-	else {
-		PyObject *tmp = NULL;
-		char *str;
-		PyCompilerFlags cf;
-		cf.cf_flags = 0;
-#ifdef Py_USING_UNICODE
-		if (PyUnicode_Check(prog)) {
-			tmp = PyUnicode_AsUTF8String(prog);
-			if (tmp == NULL)
-				return -1;
-			prog = tmp;
-			cf.cf_flags |= PyCF_SOURCE_IS_UTF8;
-		}
-#endif
-		if (PyString_AsStringAndSize(prog, &str, NULL))
-			return -1;
-		if (PyEval_MergeCompilerFlags(&cf))
-			v = PyRun_StringFlags(str, Py_file_input, globals,
-					      locals, &cf);
-		else
-			v = PyRun_String(str, Py_file_input, globals, locals);
-		Py_XDECREF(tmp);
-	}
-	if (plain)
-		PyFrame_LocalsToFast(f, 0);
-	if (v == NULL)
-		return -1;
-	Py_DECREF(v);
-	return 0;
 }
 
 static void

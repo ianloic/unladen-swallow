@@ -38,7 +38,7 @@ def main():
 # Don't remove this comment. Everything below it is auto-generated.
 #--cut--------------------------------------------------------------------------
 CProfileTest.expected_output['print_stats'] = """\
-         126 function calls (106 primitive calls) in 1.000 CPU seconds
+         127 function calls (107 primitive calls) in 1.000 CPU seconds
 
    Ordered by: standard name
 
@@ -53,6 +53,7 @@ CProfileTest.expected_output['print_stats'] = """\
         2    0.000    0.000    0.140    0.070 profilee.py:84(helper2_indirect)
         8    0.312    0.039    0.400    0.050 profilee.py:88(helper2)
         8    0.064    0.008    0.080    0.010 profilee.py:98(subhelper)
+        1    0.000    0.000    1.000    1.000 {#@exec}
        12    0.000    0.000    0.012    0.001 {hasattr}
         4    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
         1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
@@ -66,7 +67,7 @@ CProfileTest.expected_output['print_callers'] = """\
 
 Function                                          was called by...
                                                       ncalls  tottime  cumtime
-<string>:1(<module>)                              <-
+<string>:1(<module>)                              <-       1    0.000    1.000  {#@exec}
 profilee.py:110(__getattr__)                      <-      16    0.016    0.016  profilee.py:98(subhelper)
                                                           12    0.012    0.012  {hasattr}
 profilee.py:25(testfunc)                          <-       1    0.270    1.000  <string>:1(<module>)
@@ -80,6 +81,7 @@ profilee.py:84(helper2_indirect)                  <-       2    0.000    0.140  
 profilee.py:88(helper2)                           <-       6    0.234    0.300  profilee.py:55(helper)
                                                            2    0.078    0.100  profilee.py:84(helper2_indirect)
 profilee.py:98(subhelper)                         <-       8    0.064    0.080  profilee.py:88(helper2)
+{#@exec}                                          <-
 {hasattr}                                         <-       4    0.000    0.004  profilee.py:73(helper1)
                                                            8    0.000    0.008  profilee.py:88(helper2)
 {method 'append' of 'list' objects}               <-       4    0.000    0.000  profilee.py:73(helper1)
@@ -113,6 +115,7 @@ profilee.py:88(helper2)                           ->       8    0.064    0.080  
                                                            8    0.000    0.008  {hasattr}
 profilee.py:98(subhelper)                         ->      16    0.016    0.016  profilee.py:110(__getattr__)
                                                            8    0.000    0.000  {range}
+{#@exec}                                          ->       1    0.000    1.000  <string>:1(<module>)
 {hasattr}                                         ->      12    0.012    0.012  profilee.py:110(__getattr__)
 {method 'append' of 'list' objects}               ->
 {method 'disable' of '_lsprof.Profiler' objects}  ->

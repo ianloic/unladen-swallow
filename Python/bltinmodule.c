@@ -6,6 +6,7 @@
 #include "node.h"
 #include "code.h"
 #include "eval.h"
+#include "frameobject.h"
 
 #include <ctype.h>
 
@@ -211,7 +212,7 @@ Deprecated since release 2.3. Instead, use the extended call syntax:\n\
 static PyObject *
 builtin_bin(PyObject *self, PyObject *v)
 {
-        return PyNumber_ToBase(v, 2);
+	return PyNumber_ToBase(v, 2);
 }
 
 PyDoc_STRVAR(bin_doc,
@@ -219,6 +220,68 @@ PyDoc_STRVAR(bin_doc,
 \n\
 Return the binary representation of an integer or long integer.");
 
+static PyObject *
+builtin_buildclass(PyObject *self, PyObject *args)
+{
+	PyObject *metaclass = NULL, *result, *base, *methods, *bases, *name;
+
+	if (!PyArg_UnpackTuple(args, "#@buildclass", 3, 3,
+	                       &name, &bases, &methods))
+		return NULL;
+
+	if (PyDict_Check(methods))
+		metaclass = PyDict_GetItemString(methods, "__metaclass__");
+	if (metaclass != NULL)
+		Py_INCREF(metaclass);
+	else if (PyTuple_Check(bases) && PyTuple_GET_SIZE(bases) > 0) {
+		base = PyTuple_GET_ITEM(bases, 0);
+		metaclass = PyObject_GetAttrString(base, "__class__");
+		if (metaclass == NULL) {
+			PyErr_Clear();
+			metaclass = (PyObject *)base->ob_type;
+			Py_INCREF(metaclass);
+		}
+	}
+	else {
+		PyObject *g = PyEval_GetGlobals();
+		if (g != NULL && PyDict_Check(g))
+			metaclass = PyDict_GetItemString(g, "__metaclass__");
+		if (metaclass == NULL)
+			metaclass = (PyObject *) &PyClass_Type;
+		Py_INCREF(metaclass);
+	}
+	result = PyObject_CallFunctionObjArgs(metaclass, name, bases, methods,
+					      NULL);
+	Py_DECREF(metaclass);
+	if (result == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
+		/* A type error here likely means that the user passed
+		   in a base that was not a class (such the random module
+		   instead of the random.random type).  Help them out
+		   by augmenting the error message with more information.*/
+
+		PyObject *ptype, *pvalue, *ptraceback;
+
+		PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+		if (PyString_Check(pvalue)) {
+			PyObject *newmsg;
+			newmsg = PyString_FromFormat(
+				"Error when calling the metaclass bases\n"
+				"    %s",
+				PyString_AS_STRING(pvalue));
+			if (newmsg != NULL) {
+				Py_DECREF(pvalue);
+				pvalue = newmsg;
+			}
+		}
+		PyErr_Restore(ptype, pvalue, ptraceback);
+	}
+	return result;
+}
+
+PyDoc_STRVAR(buildclass_doc,
+"#@buildclass(name, bases, methods) -> class\n\
+\n\
+Build a class. For internal use only.");
 
 static PyObject *
 builtin_callable(PyObject *self, PyObject *v)
@@ -234,6 +297,158 @@ PyDoc_STRVAR(callable_doc,
 \n\
 Return whether the object is callable (i.e., some kind of function).\n\
 Note that classes are callable, as are instances with a __call__() method.");
+
+
+static PyObject *
+builtin_displayhook(PyObject *self, PyObject *args)
+{
+	PyObject *displayhook, *result;
+
+	displayhook = PySys_GetObject("displayhook");
+	if (displayhook == NULL) {
+		PyErr_SetString(PyExc_RuntimeError, "lost sys.displayhook");
+		return NULL;
+	}
+	result = PyEval_CallObject(displayhook, args);
+	Py_XDECREF(result);
+	if (result == NULL)
+		return NULL;
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(displayhook_doc,
+"#@displayhook(object) -> None\n\
+\n\
+Print an object using sys.displayhook(). For internal use only.");
+
+static PyObject *
+builtin_exec(PyObject *self, PyObject *args)
+{
+	int n;
+	PyObject *v, *prog, *globals, *locals, *builtins_dict;
+	PyFrameObject *f;
+	int plain = 0;
+
+	if (!PyArg_UnpackTuple(args, "#@exec", 1, 3,
+	                       &prog, &globals, &locals))
+		return NULL;
+
+	f = PyThreadState_Get()->frame;
+
+	if (PyTuple_Check(prog) && globals == Py_None && locals == Py_None &&
+	    ((n = PyTuple_Size(prog)) == 2 || n == 3)) {
+		/* Backward compatibility hack */
+		globals = PyTuple_GetItem(prog, 1);
+		if (n == 3)
+			locals = PyTuple_GetItem(prog, 2);
+		prog = PyTuple_GetItem(prog, 0);
+	}
+	if (globals == Py_None) {
+		globals = PyEval_GetGlobals();
+		if (locals == Py_None) {
+			locals = PyEval_GetLocals();
+			plain = 1;
+		}
+		if (!globals || !locals) {
+			PyErr_SetString(PyExc_SystemError,
+					"globals and locals cannot be NULL");
+			return NULL;
+		}
+	}
+	else if (locals == Py_None)
+		locals = globals;
+	if (!PyString_Check(prog) &&
+	    !PyUnicode_Check(prog) &&
+	    !PyCode_Check(prog) &&
+	    !PyFile_Check(prog)) {
+		PyErr_SetString(PyExc_TypeError,
+			"exec: arg 1 must be a string, file, or code object");
+		return NULL;
+	}
+	if (!PyDict_Check(globals)) {
+		PyErr_SetString(PyExc_TypeError,
+		    "exec: arg 2 must be a dictionary or None");
+		return NULL;
+	}
+	if (!PyMapping_Check(locals)) {
+		PyErr_SetString(PyExc_TypeError,
+		    "exec: arg 3 must be a mapping or None");
+		return NULL;
+	}
+	builtins_dict = PyDict_GetItemString(globals, "__builtins__");
+	if (builtins_dict == NULL)
+		PyDict_SetItemString(globals, "__builtins__", f->f_builtins);
+	else if (PyDict_Check(builtins_dict) && PyDict_Size(builtins_dict) == 0) {
+		/* Copy over the #@-prefixed functions. */
+		PyObject *key, *value;
+		Py_ssize_t pos = 0;
+
+		while (PyDict_Next(f->f_builtins, &pos, &key, &value)) {
+			if (PyString_Check(key)) {
+				char *key_str = PyString_AsString(key);
+				if (key_str[0] == '#' && key_str[1] == '@') {
+					PyDict_SetItem(builtins_dict, key, value);
+				}
+			}
+		}
+	}
+	if (PyCode_Check(prog)) {
+		if (PyCode_GetNumFree((PyCodeObject *)prog) > 0) {
+			PyErr_SetString(PyExc_TypeError,
+		"code object passed to exec may not contain free variables");
+			return NULL;
+		}
+		v = PyEval_EvalCode((PyCodeObject *) prog, globals, locals);
+	}
+	else if (PyFile_Check(prog)) {
+		FILE *fp = PyFile_AsFile(prog);
+		char *name = PyString_AsString(PyFile_Name(prog));
+		PyCompilerFlags cf;
+		if (name == NULL)
+			return NULL;
+		cf.cf_flags = 0;
+		if (PyEval_MergeCompilerFlags(&cf))
+			v = PyRun_FileFlags(fp, name, Py_file_input, globals,
+					    locals, &cf);
+		else
+			v = PyRun_File(fp, name, Py_file_input, globals,
+				       locals);
+	}
+	else {
+		PyObject *tmp = NULL;
+		char *str;
+		PyCompilerFlags cf;
+		cf.cf_flags = 0;
+#ifdef Py_USING_UNICODE
+		if (PyUnicode_Check(prog)) {
+			tmp = PyUnicode_AsUTF8String(prog);
+			if (tmp == NULL)
+				return NULL;
+			prog = tmp;
+			cf.cf_flags |= PyCF_SOURCE_IS_UTF8;
+		}
+#endif
+		if (PyString_AsStringAndSize(prog, &str, NULL))
+			return NULL;
+		if (PyEval_MergeCompilerFlags(&cf))
+			v = PyRun_StringFlags(str, Py_file_input, globals,
+					      locals, &cf);
+		else
+			v = PyRun_String(str, Py_file_input, globals, locals);
+		Py_XDECREF(tmp);
+	}
+	if (plain)
+		PyFrame_LocalsToFast(f, 0);
+	if (v == NULL)
+		return NULL;
+	Py_DECREF(v);
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(exec_doc,
+"#@exec(program, [globals, [locals]]) -> None\n\
+\n\
+Execute Python code. For internal use only.");
 
 
 static PyObject *
@@ -766,7 +981,7 @@ builtin_execfile(PyObject *self, PyObject *args)
 	}
 #endif
 
-        if (exists) {
+	if (exists) {
 		Py_BEGIN_ALLOW_THREADS
 		fp = fopen(filename, "r" PY_STDIOTEXTMODE);
 		Py_END_ALLOW_THREADS
@@ -774,7 +989,7 @@ builtin_execfile(PyObject *self, PyObject *args)
 		if (fp == NULL) {
 			exists = 0;
 		}
-        }
+	}
 
 	if (!exists) {
 		PyErr_SetFromErrnoWithFilename(PyExc_IOError, filename);
@@ -909,6 +1124,202 @@ PyDoc_STRVAR(id_doc,
 Return the identity of an object.  This is guaranteed to be unique among\n\
 simultaneously existing objects.  (Hint: it's the object's memory address.)");
 
+
+static PyObject *
+builtin_import_from(PyObject *self, PyObject *args)
+{
+	PyObject *module, *name, *obj;
+
+	if (!PyArg_UnpackTuple(args, "#@import_from", 2, 2, &module, &name))
+		return NULL;
+
+	obj = PyObject_GetAttr(module, name);
+	if (obj == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+		PyErr_Format(PyExc_ImportError,
+			     "cannot import name %.230s",
+			     PyString_AsString(name));
+	}
+	return obj;
+}
+
+PyDoc_STRVAR(import_from_doc,
+"#@import_from(module, attr_name) -> object\n\
+\n\
+Simulate the removed IMPORT_FROM opcode. Internal use only.");
+
+
+static PyObject *
+builtin_import_name(PyObject *self, PyObject *args)
+{
+	PyObject *module_name, *import, *import_args, *names, *level, *module;
+	PyFrameObject *frame = PyThreadState_Get()->frame;
+
+	if (!PyArg_UnpackTuple(args, "#@import_name", 3, 3,
+			       &level, &names, &module_name))
+		return NULL;
+
+	import = PyDict_GetItemString(frame->f_builtins, "__import__");
+	if (import == NULL) {
+		PyErr_SetString(PyExc_ImportError, "__import__ not found");
+		return NULL;
+	}
+	Py_INCREF(import);
+	if (PyInt_AsLong(level) != -1 || PyErr_Occurred())
+		import_args = PyTuple_Pack(5,
+			    module_name,
+			    frame->f_globals,
+			    frame->f_locals == NULL ? Py_None : frame->f_locals,
+			    names,
+			    level);
+	else
+		import_args = PyTuple_Pack(4,
+			    module_name,
+			    frame->f_globals,
+			    frame->f_locals == NULL ? Py_None : frame->f_locals,
+			    names);
+	if (import_args == NULL) {
+		Py_DECREF(import);
+		return NULL;
+	}
+	module = PyEval_CallObject(import, import_args);
+	Py_DECREF(import);
+	Py_DECREF(import_args);
+	return module;
+}
+
+PyDoc_STRVAR(import_name_doc,
+"#@import_name(level, names, module_name) -> module_name\n\
+\n\
+Simulate the removed IMPORT_NAME opcode. Internal use only.");
+
+
+/* Helper for builtin_import_star below. */
+static int
+import_all_from(PyObject *locals, PyObject *v)
+{
+	PyObject *all = PyObject_GetAttrString(v, "__all__");
+	PyObject *dict, *name, *value;
+	int skip_leading_underscores = 0;
+	int pos, err;
+
+	if (all == NULL) {
+		if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+			return -1; /* Unexpected error */
+		PyErr_Clear();
+		dict = PyObject_GetAttrString(v, "__dict__");
+		if (dict == NULL) {
+			if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+				return -1;
+			PyErr_SetString(PyExc_ImportError,
+			"from-import-* object has no __dict__ and no __all__");
+			return -1;
+		}
+		all = PyMapping_Keys(dict);
+		Py_DECREF(dict);
+		if (all == NULL)
+			return -1;
+		skip_leading_underscores = 1;
+	}
+
+	for (pos = 0, err = 0; ; pos++) {
+		name = PySequence_GetItem(all, pos);
+		if (name == NULL) {
+			if (!PyErr_ExceptionMatches(PyExc_IndexError))
+				err = -1;
+			else
+				PyErr_Clear();
+			break;
+		}
+		if (skip_leading_underscores &&
+		    PyString_Check(name) &&
+		    PyString_AS_STRING(name)[0] == '_')
+		{
+			Py_DECREF(name);
+			continue;
+		}
+		value = PyObject_GetAttr(v, name);
+		if (value == NULL)
+			err = -1;
+		else if (PyDict_CheckExact(locals))
+			err = PyDict_SetItem(locals, name, value);
+		else
+			err = PyObject_SetItem(locals, name, value);
+		Py_DECREF(name);
+		Py_XDECREF(value);
+		if (err != 0)
+			break;
+	}
+	Py_DECREF(all);
+	return err;
+}
+
+static PyObject *
+builtin_import_star(PyObject *self, PyObject *module)
+{
+	int err;
+	PyObject *locals;
+	PyFrameObject *frame = PyThreadState_Get()->frame;
+
+	PyFrame_FastToLocals(frame);
+	if ((locals = frame->f_locals) == NULL) {
+		PyErr_SetString(PyExc_SystemError,
+			"no locals found during 'import *'");
+		return NULL;
+	}
+	err = import_all_from(locals, module);
+	PyFrame_LocalsToFast(frame, 0);
+	if (err)
+		return NULL;
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(import_star_doc,
+"#@import_star(module) -> None\n\
+\n\
+Implement 'from foo import *'. Internal use only.");
+
+static PyObject *
+builtin_make_function(PyObject *self, PyObject *args)
+{
+	PyFrameObject *frame;
+	PyObject *code_obj, *func;
+	int i, n = PyTuple_Size(args);
+
+	frame = PyThreadState_Get()->frame;
+
+	code_obj = PyTuple_GetItem(args, 0);
+	if (code_obj == NULL)
+		return NULL;
+	func = PyFunction_New(code_obj, frame->f_globals);
+	if (func == NULL)
+		return NULL;
+
+	if (n > 1) {
+		PyObject *default_obj;
+		PyObject *defaults = PyTuple_New(n - 1);
+		if (defaults == NULL) {
+			Py_DECREF(func);
+			return NULL;
+		}
+		for (i = 1; i < n; i++) {
+			default_obj = PyTuple_GET_ITEM(args, i);
+			Py_INCREF(default_obj);
+			PyTuple_SET_ITEM(defaults, i - 1, default_obj);
+		}
+		if (PyFunction_SetDefaults(func, defaults)) {
+			Py_DECREF(defaults);
+			Py_DECREF(func);
+			return NULL;
+		}
+		Py_DECREF(defaults);
+	}
+	return func;
+}
+
+PyDoc_STRVAR(make_function_doc,
+"#@make_function(code_obj, *default_args) -> function\n\
+\n\
+Build a function object. Internal use only.");
 
 static PyObject *
 builtin_map(PyObject *self, PyObject *args)
@@ -1622,6 +2033,113 @@ file: a file-like object (stream); defaults to the current sys.stdout.\n\
 sep:  string inserted between values, default a space.\n\
 end:  string appended after the last value, default a newline.");
 
+static void
+print_stmt_set_softspace(PyObject *obj, PyObject *file)
+{
+	if (PyString_Check(obj)) {
+		char *s = PyString_AS_STRING(obj);
+		Py_ssize_t len = PyString_GET_SIZE(obj);
+		if (len == 0 || !isspace(Py_CHARMASK(s[len-1])) || s[len-1] == ' ')
+			PyFile_SoftSpace(file, 1);
+	}
+#ifdef Py_USING_UNICODE
+	else if (PyUnicode_Check(obj)) {
+		Py_UNICODE *s = PyUnicode_AS_UNICODE(obj);
+		Py_ssize_t len = PyUnicode_GET_SIZE(obj);
+		if (len == 0 || !Py_UNICODE_ISSPACE(s[len-1]) || s[len-1] == ' ')
+			PyFile_SoftSpace(file, 1);
+	}
+#endif
+	else
+		PyFile_SoftSpace(file, 1);
+}
+
+/* This is the builtin_print() function above, but with support for all the
+ * softspace stuff needed to implement the print statement.
+ */
+static PyObject *
+builtin_print_stmt(PyObject *self, PyObject *args, PyObject *kwds)
+{
+	static char *kwlist[] = {"end", "file", 0};
+	static PyObject *dummy_args;
+	PyObject *end = NULL, *file = NULL, *to_print;
+	int i, err = 0;
+
+	if (dummy_args == NULL) {
+		if ((dummy_args = PyTuple_New(0)) == NULL)
+			return NULL;
+	}
+	if (!PyArg_ParseTupleAndKeywords(dummy_args, kwds, "|OO:print_stmt",
+				kwlist, &end, &file))
+		return NULL;
+	if (file == NULL || file == Py_None) {
+		file = PySys_GetObject("stdout");
+		/* sys.stdout may be None when FILE* stdout isn't connected */
+		if (file == Py_None)
+			Py_RETURN_NONE;
+		else if (file == NULL) {
+			PyErr_SetString(PyExc_RuntimeError, "lost sys.stdout");
+			return NULL;
+		}
+	}
+
+	if (end && end != Py_None && !PyString_Check(end) &&
+	    !PyUnicode_Check(end)) {
+		PyErr_Format(PyExc_TypeError,
+				"end must be None, str or unicode, not %.200s",
+				end->ob_type->tp_name);
+		return NULL;
+	}
+
+	/* PyFile_SoftSpace() can exececute arbitrary code
+	   if sys.stdout is an instance with a __getattr__.
+	   If __getattr__ raises an exception, w will
+	   be freed, so we need to prevent that temporarily. */
+	Py_INCREF(file);
+	if (PyTuple_Size(args) > 0 && PyFile_SoftSpace(file, 0)) {
+		if (PyFile_WriteString(" ", file))
+			goto on_error;
+	}
+
+	for (i = 0; i < PyTuple_Size(args); i++) {
+		if (i > 0 && PyFile_SoftSpace(file, 0)) {
+			if (PyFile_WriteString(" ", file))
+				goto on_error;
+		}
+		to_print = PyTuple_GetItem(args, i);
+		err = PyFile_WriteObject(to_print, file, Py_PRINT_RAW);
+		if (err)
+			goto on_error;
+		print_stmt_set_softspace(to_print, file);
+	}
+
+	if (end == NULL || end == Py_None) {
+		err = PyFile_WriteString("\n", file);
+		PyFile_SoftSpace(file, 0);
+	} else if (PyString_Check(end) && PyString_Size(end) == 0) {
+		/* Adjust softspace appropriately based on the last item in
+		the tuple. */
+		if (PyTuple_Size(args)) {
+			Py_ssize_t last_idx = PyTuple_Size(args) - 1;
+			PyObject *last_obj = PyTuple_GetItem(args, last_idx);
+			if (!last_obj)
+				goto on_error;
+			print_stmt_set_softspace(last_obj, file);
+		}
+	} else {
+		err = PyFile_WriteObject(end, file, Py_PRINT_RAW);
+		print_stmt_set_softspace(end, file);
+	}
+	Py_DECREF(file);
+	if (err)
+		return NULL;
+
+	Py_RETURN_NONE;
+
+on_error:
+	Py_DECREF(file);
+	return NULL;
+}
 
 /* Return number of items in range (lo, hi, step), when arguments are
  * PyInt or PyLong objects.  step > 0 required.  Return a value < 0 if
@@ -2528,6 +3046,16 @@ static PyMethodDef builtin_methods[] = {
 #endif
  	{"vars",	builtin_vars,       METH_VARARGS, vars_doc},
   	{"zip",         builtin_zip,        METH_VARARGS, zip_doc},
+    /* The following built-in functions are for internal use only. */
+	{"#@buildclass",	builtin_buildclass,	    METH_VARARGS, buildclass_doc},
+ 	{"#@displayhook",	builtin_displayhook,     METH_VARARGS, displayhook_doc},
+	{"#@exec",	        builtin_exec,	    METH_VARARGS, exec_doc},
+	{"#@import_from",	builtin_import_from,	    METH_VARARGS, import_from_doc},
+	{"#@import_name",	builtin_import_name,	    METH_VARARGS, import_name_doc},
+	{"#@import_star",	(PyCFunction)builtin_import_star,	    METH_O, import_star_doc},
+ 	{"#@locals",		(PyCFunction)builtin_locals,     METH_NOARGS, locals_doc},
+	{"#@make_function",	builtin_make_function,	    METH_VARARGS, make_function_doc},
+ 	{"#@print_stmt",    (PyCFunction)builtin_print_stmt,      METH_VARARGS | METH_KEYWORDS, print_doc},
 	{NULL,		NULL},
 };
 
