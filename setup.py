@@ -537,6 +537,64 @@ class PyBuildExt(build_ext):
         # libraries, are platform-specific, or present other surprises.
         #
 
+        # Psyco, the specializing compiler.
+        class PsycoError(Exception):
+            pass
+
+        def psyco_autodetect_platform():
+            platform = sys.platform.lower()
+            if platform.startswith('win'):   # assume an Intel Windows
+                return 'i386'
+            # assume we have 'uname'
+            mach = os.popen('uname -m', 'r').read().strip()
+            if not mach:
+                raise PsycoError("cannot run 'uname -m'")
+            if mach == 'x86_64' and sys.maxint == 2147483647:
+                mach = 'x86'  # A 64-bit processor but in 32-bits mode, maybe?
+            try:
+                return {'i386': 'i386',
+                        'i486': 'i386',
+                        'i586': 'i386',
+                        'i686': 'i386',
+                        'i86pc': 'i386',    # Solaris/Intel
+                        'x86':   'i386',    # Apple
+                        }[mach]
+            except KeyError:
+                raise PsycoError("unsupported processor '%s'" % mach)
+
+        def psyco_find_source_files():
+            # This is copied very closely from Pysco's setup.py. I leave its
+            # mysteries untouched.
+            SOURCEDIR = os.path.join('Modules', '_psyco')
+
+            data = {}
+            execfile(os.path.join(SOURCEDIR, 'files.py'), data)
+
+            SRC = data['SRC']
+            MAINFILE = data['MAINFILE']
+            PLATFILE = data['PLATFILE']
+
+            processor_dir = psyco_find_processor_dir()
+            localsetup = os.path.join(processor_dir, 'localsetup.py')
+            if os.path.isfile(localsetup):
+                d = globals().copy()
+                d['__file__'] = localsetup
+                execfile(localsetup, d)
+
+            return [SOURCEDIR + '/' + MAINFILE, SOURCEDIR + '/' + PLATFILE]
+
+        def psyco_find_processor_dir():
+            try:
+                processor = psyco_autodetect_platform()
+            except PyscoError:
+                processor = 'ivm'  # Fall back to the generic virtual machine.
+            return os.path.join('Modules', '_psyco', processor)
+
+        exts.append( Extension(name = '_psyco',
+                               sources = psyco_find_source_files(),
+                               define_macros = [('ALL_STATIC', '1')],
+                               include_dirs = [psyco_find_processor_dir()]) )
+
         # Multimedia modules
         # These don't work for 64-bit platforms!!!
         # These represent audio samples or images as strings:
