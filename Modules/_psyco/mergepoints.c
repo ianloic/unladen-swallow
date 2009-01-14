@@ -99,8 +99,7 @@ static char* NoControlFlowIfBuiltin[] = {
    when locals() is globals() */
 #define IS_MODULE_INSTR(op) (op == STORE_NAME ||        \
                              op == DELETE_NAME ||       \
-                             op == LOAD_NAME ||         \
-                             op == IMPORT_STAR)
+                             op == LOAD_NAME)
 
 /* all other supported instructions must be listed here. */
 #define OTHER_OPCODE(op)  (op == UNARY_POSITIVE ||            \
@@ -150,12 +149,6 @@ static char* NoControlFlowIfBuiltin[] = {
                            op == DELETE_SLICE+3 ||            \
                            op == STORE_SUBSCR ||              \
                            op == DELETE_SUBSCR ||             \
-                           op == PRINT_EXPR ||                \
-                           op == PRINT_ITEM ||                \
-                           op == PRINT_ITEM_TO ||             \
-                           op == PRINT_NEWLINE ||             \
-                           op == PRINT_NEWLINE_TO ||          \
-                           op == BUILD_CLASS ||               \
                            op == STORE_ATTR ||                \
                            op == DELETE_ATTR ||               \
                            op == STORE_GLOBAL ||              \
@@ -163,14 +156,11 @@ static char* NoControlFlowIfBuiltin[] = {
                            op == LOAD_GLOBAL ||               \
                            op == LOAD_ATTR ||                 \
                            /* COMPARE_OP special-cased */     \
-                           op == IMPORT_NAME ||               \
-                           op == IMPORT_FROM ||               \
                            op == GET_ITER ||                  \
                            op == CALL_FUNCTION ||             \
                            op == CALL_FUNCTION_VAR ||         \
                            op == CALL_FUNCTION_KW ||          \
                            op == CALL_FUNCTION_VAR_KW ||      \
-                           op == MAKE_FUNCTION ||             \
                            op == BUILD_SLICE ||               \
                            op == SETUP_LOOP)
 

@@ -2267,46 +2267,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		POP_DECREF();
 		goto fine;
 
-	case PRINT_EXPR:
-		if (!psyco_generic_call(po, cimpl_print_expr,
-					CfNoReturnValue|CfPyErrIfNonNull,
-					"v", TOP()))
-			break;
-		POP_DECREF();
-		goto fine;
-
-	case PRINT_ITEM:
-		if (!psyco_generic_call(po, cimpl_print_item_to,
-					CfNoReturnValue|CfPyErrIfNonNull,
-					"vl", TOP(), 0))
-			break;
-		POP_DECREF();
-		goto fine;
-		
-	case PRINT_ITEM_TO:
-		if (!psyco_generic_call(po, cimpl_print_item_to,
-					CfNoReturnValue|CfPyErrIfNonNull,
-					"vv", NTOP(2), TOP()))
-			break;
-		POP_DECREF();
-		POP_DECREF();
-		goto fine;
-		
-	case PRINT_NEWLINE:
-		if (!psyco_generic_call(po, cimpl_print_newline_to,
-					CfNoReturnValue|CfPyErrIfNonNull,
-					"l", 0))
-			break;
-		goto fine;
-		
-	case PRINT_NEWLINE_TO:
-		if (!psyco_generic_call(po, cimpl_print_newline_to,
-					CfNoReturnValue|CfPyErrIfNonNull,
-					"v", TOP()))
-			break;
-		POP_DECREF();
-		goto fine;
-
 	case BREAK_LOOP:
 		PycException_Raise(po, vinfo_new(VirtualTime_New(&EBreak)),
 				   NULL);
@@ -2339,7 +2299,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		vinfo_decref(x, po);
 		break;
 
-        /*MISSING_OPCODE(LOAD_LOCALS);*/
         /*MISSING_OPCODE(WITH_CLEANUP);*/
 
 	case RETURN_VALUE:
@@ -2415,19 +2374,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 			POP(po->pr.tb);
 			break;
 		}
-
-	case BUILD_CLASS:
-		x = psyco_generic_call(po, cimpl_build_class,
-				       CfReturnRef|CfPyErrIfNull,
-				       "vvvv", LOC_GLOBALS,
-						NTOP(1), NTOP(2), NTOP(3));
-		if (x == NULL)
-			break;
-		POP_DECREF();
-		POP_DECREF();
-		POP_DECREF();
-		PUSH(x);
-		goto fine;
 
 	case UNPACK_SEQUENCE:
 	{
@@ -2738,69 +2684,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		goto fine;
 	}
 
-	case IMPORT_NAME:
-	{
-		PyObject* w = GETNAMEV(oparg);
-#if !VERYCONVOLUTED_IMPORT_NAME   /* Python < 2.5 */
-		x = psyco_generic_call(po, cimpl_import_name,
-				       CfReturnRef|CfPyErrIfNull,
-				       "vlv", LOC_GLOBALS, w, TOP());
-		if (x == NULL)
-			break;
-		POP_DECREF();
-#else
-		v = TOP();
-		u = NTOP(2);
-		x = psyco_generic_call(po, cimpl_import_name,
-				       CfReturnRef|CfPyErrIfNull,
-				       "vlvv", LOC_GLOBALS, w, v, u);
-		if (x == NULL)
-			break;
-		POP_DECREF();
-		POP_DECREF();
-#endif
-		PUSH(x);
-		goto fine;
-	}
-	
-	case IMPORT_STAR:
-	{
-		/* only for modules: we can only reach this point
-		   for code objects compiled from frames where
-		   f_locals == f_globals */
-		x = psyco_generic_call(po, cimpl_import_all_from,
-				       CfReturnNormal|CfPyErrIfNonNull,
-				       "vv", LOC_GLOBALS, TOP());
-		if (x == NULL)
-			break;
-		vinfo_decref(x, po);
-		POP_DECREF();
-		goto fine;
-	}
-
-	case IMPORT_FROM:
-	{
-		PyObject* name = GETNAMEV(oparg);
-		w = vinfo_new(CompileTime_New(((long) name)));
-		v = TOP();
-		x = PsycoObject_GetAttr(po, v, w);
-		vinfo_decref(w, po);
-		if (x == NULL) {
-			extra_assert(PycException_Occurred(po));
-			
-			/* catch PyExc_AttributeError */
-			v = PycException_Matches(po, PyExc_AttributeError);
-			if (runtime_NON_NULL_t(po, v) == true) {
-				PycException_SetFormat(po, PyExc_ImportError,
-					"cannot import name %.230s",
-					PyString_AsString(name));
-			}
-			break;
-		}
-		PUSH(x);
-		goto fine;
-	}
-
 	case JUMP_FORWARD:
 		JUMPBY(oparg);
 		mp = psyco_next_merge_point(po->pr.merge_points, next_instr);
@@ -2911,22 +2794,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 	}
 
 	/*MISSING_OPCODE(MAKE_CLOSURE);*/
-
-	case MAKE_FUNCTION:
-		if (oparg > 0)
-			v = PsycoTuple_New(oparg, STACK_POINTER() - oparg - 1);
-		else
-			v = NULL;
-		x = PsycoFunction_New(po, TOP(), LOC_GLOBALS, v);
-		vinfo_xdecref(v, po);
-		if (x == NULL)
-			break;
-		
-		/* clean up the stack (remove args and func) */
-		while (oparg-- >= 0)
-			POP_DECREF();
-		PUSH(x);
-		goto fine;
 
 	case BUILD_SLICE:
 		if (oparg == 3) {
