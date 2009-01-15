@@ -612,7 +612,23 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 		}
 		else
 			Py_INCREF(builtins);
-
+		if (PyDict_Size(builtins) < 2) {  /* Account for None above. */
+			PyObject *key, *value;
+			Py_ssize_t pos = 0;
+			/* Copy over the #@-prefixed functions. */
+			while (PyDict_Next(back->f_builtins, &pos,
+                                           &key, &value)) {
+				if (PyString_Check(key)) {
+					char *key_str = PyString_AsString(key);
+					if (key_str[0] == '#' &&
+                                            key_str[1] == '@') {
+						PyDict_SetItem(builtins,
+                                                               key,
+                                                               value);
+					}
+				}
+			}
+		}
 	}
 	else {
 		/* If we share the globals, we share the builtins.

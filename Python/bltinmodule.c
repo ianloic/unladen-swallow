@@ -378,20 +378,6 @@ builtin_exec(PyObject *self, PyObject *args)
 	builtins_dict = PyDict_GetItemString(globals, "__builtins__");
 	if (builtins_dict == NULL)
 		PyDict_SetItemString(globals, "__builtins__", f->f_builtins);
-	else if (PyDict_Check(builtins_dict) && PyDict_Size(builtins_dict) == 0) {
-		/* Copy over the #@-prefixed functions. */
-		PyObject *key, *value;
-		Py_ssize_t pos = 0;
-
-		while (PyDict_Next(f->f_builtins, &pos, &key, &value)) {
-			if (PyString_Check(key)) {
-				char *key_str = PyString_AsString(key);
-				if (key_str[0] == '#' && key_str[1] == '@') {
-					PyDict_SetItem(builtins_dict, key, value);
-				}
-			}
-		}
-	}
 	if (PyCode_Check(prog)) {
 		if (PyCode_GetNumFree((PyCodeObject *)prog) > 0) {
 			PyErr_SetString(PyExc_TypeError,
