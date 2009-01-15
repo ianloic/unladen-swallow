@@ -584,17 +584,19 @@ class PyBuildExt(build_ext):
             return [SOURCEDIR + '/' + MAINFILE, SOURCEDIR + '/' + PLATFILE]
 
         def psyco_find_processor_dir():
-            try:
-                processor = psyco_autodetect_platform()
-            except PsycoError:
-                processor = 'ivm'  # Fall back to the generic virtual machine.
+            processor = psyco_autodetect_platform()
             return os.path.join(os.getcwd(), srcdir, 'Modules',
                                 '_psyco', processor)
 
-        exts.append( Extension(name = '_psyco',
-                               sources = psyco_find_source_files(),
-                               define_macros = [('ALL_STATIC', '1')],
-                               include_dirs = [psyco_find_processor_dir()]) )
+        try:
+            exts.append( Extension(
+                name = '_psyco',
+                sources = psyco_find_source_files(),
+                define_macros = [('ALL_STATIC', '1')],
+                include_dirs = [psyco_find_processor_dir()]) )
+        except PsycoError:
+            # Don't try to build psyco if it doesn't support the processor.
+            missing.extend(['_psyco'])
 
         # Multimedia modules
         # These don't work for 64-bit platforms!!!
