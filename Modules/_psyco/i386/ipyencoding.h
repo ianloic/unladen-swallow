@@ -138,7 +138,7 @@ PSY_INLINE void dictitem_update_nochange(void* originalmacrocode,
   NEED_CC();                                            \
   code[0] = 0xFF;  /* INC [address] */                  \
   code[1] = 0x05;                                       \
-  *(int**)(code+2) = &(pyobj)->ob_refcnt;               \
+  *(Py_ssize_t**)(code+2) = &(pyobj)->ob_refcnt;        \
   code += 6;                                            \
  } while (0)
 
@@ -147,7 +147,7 @@ PSY_INLINE void dictitem_update_nochange(void* originalmacrocode,
   NEED_CC();                                            \
   code[0] = 0xFF;  /* DEC [address] */                  \
   code[1] = (1<<3) | 0x05;                              \
-  *(int**)(code+2) = &(pyobj)->ob_refcnt;               \
+  *(Py_ssize_t**)(code+2) = &(pyobj)->ob_refcnt;        \
   code += 6;                                            \
  } while (0)
 

@@ -248,7 +248,7 @@ DEFINEFN
 void psyco_stats_reset(void)
 {
 	/* reset all stats */
-	int i = 0;
+	Py_ssize_t i = 0;
 	PyObject *key, *value, *d;
 	stats_printf(("stats: reset\n"));
 
@@ -290,7 +290,7 @@ DEFINEFN
 PyObject* psyco_stats_dump(void)
 {
 	PyObject* d = PyDict_New();
-	int i = 0;
+	Py_ssize_t i = 0;
 	PyObject *key, *value;
 	if (d == NULL)
 		return NULL;
@@ -314,7 +314,7 @@ PyObject* psyco_stats_top(int n)
 {
 	PyObject* l;
 	PyObject* l2 = NULL;
-	int i, k=0, full=0;
+	Py_ssize_t i, k=0, full=0;
 	PyObject *key, *value;
 	float charge_min = (float)(charge_total * 0.001);
 
