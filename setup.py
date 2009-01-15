@@ -563,9 +563,9 @@ class PyBuildExt(build_ext):
                 raise PsycoError("unsupported processor '%s'" % mach)
 
         def psyco_find_source_files():
-            # This is copied very closely from Pysco's setup.py. I leave its
+            # This is copied very closely from Psyco's setup.py. I leave its
             # mysteries untouched.
-            SOURCEDIR = os.path.join('Modules', '_psyco')
+            SOURCEDIR = os.path.join(os.getcwd(), srcdir, 'Modules', '_psyco')
 
             data = {}
             execfile(os.path.join(SOURCEDIR, 'files.py'), data)
@@ -586,9 +586,10 @@ class PyBuildExt(build_ext):
         def psyco_find_processor_dir():
             try:
                 processor = psyco_autodetect_platform()
-            except PyscoError:
+            except PsycoError:
                 processor = 'ivm'  # Fall back to the generic virtual machine.
-            return os.path.join('Modules', '_psyco', processor)
+            return os.path.join(os.getcwd(), srcdir, 'Modules',
+                                '_psyco', processor)
 
         exts.append( Extension(name = '_psyco',
                                sources = psyco_find_source_files(),
