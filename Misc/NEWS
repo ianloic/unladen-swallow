@@ -23,6 +23,11 @@ Library
 
 - Unladen Swallow 2008Q1 ships with Psyco 1.6.
 
+Tools/Demos
+-----------
+
+- Issue #4677: add two list comprehension tests to pybench.
+
 
 What's New in Python 2.6.1
 ==========================
