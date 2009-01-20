@@ -565,7 +565,7 @@ class PyBuildExt(build_ext):
         def psyco_find_source_files():
             # This is copied very closely from Psyco's setup.py. I leave its
             # mysteries untouched.
-            SOURCEDIR = os.path.join(os.getcwd(), srcdir, 'Modules', '_psyco')
+            SOURCEDIR = os.path.join(srcdir, 'Modules', '_psyco')
 
             data = {}
             execfile(os.path.join(SOURCEDIR, 'files.py'), data)
@@ -581,12 +581,11 @@ class PyBuildExt(build_ext):
                 d['__file__'] = localsetup
                 execfile(localsetup, d)
 
-            return [SOURCEDIR + '/' + MAINFILE, SOURCEDIR + '/' + PLATFILE]
+            return ['_psyco/' + MAINFILE, '_psyco/' + PLATFILE]
 
         def psyco_find_processor_dir():
             processor = psyco_autodetect_platform()
-            return os.path.join(os.getcwd(), srcdir, 'Modules',
-                                '_psyco', processor)
+            return os.path.join(srcdir, 'Modules', '_psyco', processor)
 
         try:
             exts.append( Extension(
