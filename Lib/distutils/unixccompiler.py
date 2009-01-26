@@ -287,7 +287,7 @@ class UnixCCompiler(CCompiler):
             return "+s -L" + dir
         elif sys.platform[:7] == "irix646" or sys.platform[:6] == "osf1V5":
             return ["-rpath", dir]
-        elif compiler[:3] == "gcc" or compiler[:3] == "g++":
+        elif "gcc" in compiler or "g++" in compiler:
             return "-Wl,-R" + dir
         else:
             return "-R" + dir
