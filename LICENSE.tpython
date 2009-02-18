@@ -1,0 +1,39 @@
+Parts of this code are derived from Jakob Sievers' port to vmgen. The
+following is his email specifying the licence we can use it under (the
+same as the rest of Python).
+
+---------- Forwarded message ----------
+From: Jakob Sievers <cadr4u@gmail.com>
+Date: Sun, Nov 23, 2008 at 9:30 AM
+Subject: Re: [Python-Dev] [ANN] VPython 0.1
+To: Jeffrey Yasskin <jyasskin@gmail.com>
+
+
+"Jeffrey Yasskin" <jyasskin@gmail.com> writes:
+
+> Could you send the two awk scripts you use to generate
+> ceval-translate.i and ceval-disasm-bytes.i?
+
+Certainly, but these are just a liittle hackish:
+
+http://svirfneblin.org/stuff/gentranslate.awk
+http://svirfneblin.org/stuff/gendisasm.awk
+http://svirfneblin.org/stuff/OPCODES
+http://svirfneblin.org/stuff/MOREOPS
+
+Makefile rules:
+
+$(BASE)-translate.i: tools/gentranslate.awk tools/OPCODES
+      ./tools/gentranslate.awk ./tools/OPCODES > $@
+
+$(BASE)-disasm-bytes.i: tools/gendisasm.awk tools/OPCODES tools/MOREOPS
+      ./tools/gendisasm.awk ./tools/OPCODES ./tools/MOREOPS > $@
+
+
+> I also noticed that the tarfile doesn't include a license. What
+> license did you intend?
+
+Whatever CPython is released under. PSF License?
+
+Cheers,
+-jakob

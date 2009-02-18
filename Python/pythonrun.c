@@ -172,6 +172,9 @@ Py_InitializeEx(int install_sigs)
 
 	_Py_ReadyTypes();
 
+	if (!_PyPeephole_Init())
+		Py_FatalError("Py_Initialize: can't init peephole optimizer");
+
 	if (!_PyFrame_Init())
 		Py_FatalError("Py_Initialize: can't init frames");
 
@@ -1939,4 +1942,3 @@ PyRun_InteractiveLoop(FILE *f, const char *p)
 #ifdef __cplusplus
 }
 #endif
-

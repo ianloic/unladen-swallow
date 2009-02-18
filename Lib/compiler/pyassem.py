@@ -387,7 +387,7 @@ class PyFlowGraph(FlowGraph):
                 pc = pc + 1
             else:
                 print "\t", "%3d" % pc, opname, t[1]
-                pc = pc + 3
+                pc = pc + 2
         if io:
             sys.stdout = save
 
@@ -435,8 +435,8 @@ class PyFlowGraph(FlowGraph):
                 if len(inst) == 1:
                     pc = pc + 1
                 elif inst[0] != "SET_LINENO":
-                    # arg takes 2 bytes
-                    pc = pc + 3
+                    # arg takes 1 byte
+                    pc = pc + 2
             end[b] = pc
         pc = 0
         for i in range(len(insts)):
@@ -444,7 +444,7 @@ class PyFlowGraph(FlowGraph):
             if len(inst) == 1:
                 pc = pc + 1
             elif inst[0] != "SET_LINENO":
-                pc = pc + 3
+                pc = pc + 2
             opname = inst[0]
             if self.hasjrel.has_elt(opname):
                 oparg = inst[1]
@@ -570,12 +570,11 @@ class PyFlowGraph(FlowGraph):
                 if opname == "SET_LINENO":
                     lnotab.nextLine(oparg)
                     continue
-                hi, lo = twobyte(oparg)
                 try:
-                    lnotab.addCode(self.opnum[opname], lo, hi)
+                    lnotab.addCode(self.opnum[opname], oparg)
                 except ValueError:
                     print opname, oparg
-                    print self.opnum[opname], lo, hi
+                    print self.opnum[opname], oparg
                     raise
         self.stage = DONE
 
@@ -636,11 +635,6 @@ def getArgCount(args):
                 argcount = argcount - numNames
     return argcount
 
-def twobyte(val):
-    """Convert an int argument into high and low bytes"""
-    assert isinstance(val, int)
-    return divmod(val, 256)
-
 class LineAddrTable:
     """lnotab
 
@@ -665,8 +659,10 @@ class LineAddrTable:
         self.lnotab = []
 
     def addCode(self, *args):
-        for arg in args:
-            self.code.append(chr(arg))
+        if args:
+            self.code.append(dis.make_opcode(args[0]))
+        for arg in args[1:]:
+            self.code.append(dis.make_argument(arg))
         self.codeOffset = self.codeOffset + len(args)
 
     def nextLine(self, lineno):
@@ -702,7 +698,7 @@ class LineAddrTable:
                 self.lastoff = self.codeOffset
 
     def getCode(self):
-        return ''.join(self.code)
+        return list(self.code)
 
     def getTable(self):
         return ''.join(map(chr, self.lnotab))
@@ -742,22 +738,26 @@ class StackDepthTracker:
     effect = {
         'POP_TOP': -1,
         'DUP_TOP': 1,
+        'DUP_TOP_TWO': 2,
+        'DUP_TOP_THREE': 3,
         'LIST_APPEND': -2,
-        'SLICE+1': -1,
-        'SLICE+2': -1,
-        'SLICE+3': -2,
-        'STORE_SLICE+0': -1,
-        'STORE_SLICE+1': -2,
-        'STORE_SLICE+2': -2,
-        'STORE_SLICE+3': -3,
-        'DELETE_SLICE+0': -1,
-        'DELETE_SLICE+1': -2,
-        'DELETE_SLICE+2': -2,
-        'DELETE_SLICE+3': -3,
+        'SLICE_LEFT': -1,
+        'SLICE_RIGHT': -1,
+        'SLICE_BOTH': -2,
+        'STORE_SLICE_NONE': -1,
+        'STORE_SLICE_LEFT': -2,
+        'STORE_SLICE_RIGHT': -2,
+        'STORE_SLICE_BOTH': -3,
+        'DELETE_SLICE_NONE': -1,
+        'DELETE_SLICE_LEFT': -2,
+        'DELETE_SLICE_RIGHT': -2,
+        'DELETE_SLICE_BOTH': -3,
         'STORE_SUBSCR': -3,
         'DELETE_SUBSCR': -2,
         'RETURN_VALUE': -1,
         'YIELD_VALUE': -1,
+        'BUILD_SLICE_TWO': -1,
+        'BUILD_SLICE_THREE': -2,
         'STORE_NAME': -1,
         'STORE_ATTR': -2,
         'DELETE_ATTR': -1,
@@ -787,21 +787,17 @@ class StackDepthTracker:
     def CALL_FUNCTION(self, argc):
         hi, lo = divmod(argc, 256)
         return -(lo + hi * 2)
-    def CALL_FUNCTION_VAR(self, argc):
-        return self.CALL_FUNCTION(argc)-1
-    def CALL_FUNCTION_KW(self, argc):
-        return self.CALL_FUNCTION(argc)-1
     def CALL_FUNCTION_VAR_KW(self, argc):
-        return self.CALL_FUNCTION(argc)-2
+        # The low 16 bits of argc stores whether the call had *args or
+        # **kwargs. If the value is 1 or 2, only 1 is present and will
+        # be popped off by the call. If the value is 3, both are
+        # present and will be popped off.
+        star_effect = -1
+        if argc & 0xFFFF == 3:
+            star_effect = -2
+        return self.CALL_FUNCTION(argc >> 16) + star_effect
     def MAKE_CLOSURE(self, argc):
         # XXX need to account for free variables too!
         return -argc
-    def BUILD_SLICE(self, argc):
-        if argc == 2:
-            return -1
-        elif argc == 3:
-            return -2
-    def DUP_TOPX(self, argc):
-        return argc
 
 findDepth = StackDepthTracker().findDepth

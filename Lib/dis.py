@@ -59,16 +59,17 @@ def distb(tb=None):
 
 def disassemble(co, lasti=-1):
     """Disassemble a code object."""
-    code = co.co_code
+    code = tuple(co.co_code)
     labels = findlabels(code)
     linestarts = dict(findlinestarts(co))
     n = len(code)
-    i = 0
     extended_arg = 0
     free = None
-    while i < n:
+    for i in range(n):
         c = code[i]
-        op = ord(c)
+        if is_argument(c):
+            continue
+        op = get_opcode(c)
         if i in linestarts:
             if i > 0:
                 print
@@ -81,30 +82,16 @@ def disassemble(co, lasti=-1):
         if i in labels: print '>>',
         else: print '  ',
         print repr(i).rjust(4),
-        print opname[op].ljust(20),
-        i = i+1
-        if op >= HAVE_ARGUMENT:
-            oparg = ord(code[i]) + ord(code[i+1])*256 + extended_arg
-            extended_arg = 0
-            i = i+2
-            if op == EXTENDED_ARG:
-                extended_arg = oparg*65536L
-            print repr(oparg).rjust(5),
-            if op in hasconst:
-                print '(' + repr(co.co_consts[oparg]) + ')',
-            elif op in hasname:
-                print '(' + co.co_names[oparg] + ')',
-            elif op in hasjrel:
-                print '(to ' + repr(i + oparg) + ')',
-            elif op in haslocal:
-                print '(' + co.co_varnames[oparg] + ')',
-            elif op in hascompare:
-                print '(' + cmp_op[oparg] + ')',
-            elif op in hasfree:
-                if free is None:
-                    free = co.co_cellvars + co.co_freevars
-                print '(' + free[oparg] + ')',
-        print
+        if op in super2prim:
+            print (opname[op] + ':').ljust(20)
+            insts, new_i = decode_superinstruction(code, i)
+            for sub_i in range(len(insts)):
+                if is_argument(insts[sub_i]):
+                    continue
+                print ' ' * 17,
+                _print_one_op(co, insts[sub_i:sub_i+2], i)
+        else:
+            _print_one_op(co, code[i:i+2], i)
 
 def disassemble_string(code, lasti=-1, varnames=None, names=None,
                        constants=None):
@@ -113,7 +100,7 @@ def disassemble_string(code, lasti=-1, varnames=None, names=None,
     i = 0
     while i < n:
         c = code[i]
-        op = ord(c)
+        op = get_opcode(c)
         if i == lasti: print '-->',
         else: print '   ',
         if i in labels: print '>>',
@@ -121,9 +108,9 @@ def disassemble_string(code, lasti=-1, varnames=None, names=None,
         print repr(i).rjust(4),
         print opname[op].ljust(15),
         i = i+1
-        if op >= HAVE_ARGUMENT:
-            oparg = ord(code[i]) + ord(code[i+1])*256
-            i = i+2
+        if i < n and is_argument(code[i]):
+            oparg = get_argument(code[i])
+            i = i+1
             print repr(oparg).rjust(5),
             if op in hasconst:
                 if constants:
@@ -156,17 +143,16 @@ def findlabels(code):
     """
     labels = []
     n = len(code)
-    i = 0
-    while i < n:
+    for i in range(n):
         c = code[i]
-        op = ord(c)
-        i = i+1
-        if op >= HAVE_ARGUMENT:
-            oparg = ord(code[i]) + ord(code[i+1])*256
-            i = i+2
+        if is_argument(c):
+            continue
+        op = get_opcode(c)
+        if i+1 < n and is_argument(code[i+1]):
+            oparg = get_argument(code[i+1])
             label = -1
             if op in hasjrel:
-                label = i+oparg
+                label = i+2+oparg
             elif op in hasjabs:
                 label = oparg
             if label >= 0:
@@ -195,6 +181,34 @@ def findlinestarts(code):
         lineno += line_incr
     if lineno != lastlineno:
         yield (addr, lineno)
+
+def _print_one_op(co, insts, i):
+    """Print the primitive operation in insts, with any argument it has.
+
+    The operation will be considered to start at index i for the
+    purpose of relative jumps.
+
+    """
+    op = get_opcode(insts[0])
+    print opname[op].ljust(20),
+    if len(insts) > 1 and is_argument(insts[1]):
+        oparg = get_argument(insts[1])
+        print repr(oparg).rjust(5),
+        if op in hasconst:
+            print '(' + repr(co.co_consts[oparg]) + ')',
+        elif op in hasname:
+            print '(' + co.co_names[oparg] + ')',
+        elif op in hasjrel:
+            print '(to ' + repr(i + 2 + oparg) + ')',
+        elif op in haslocal:
+            print '(' + co.co_varnames[oparg] + ')',
+        elif op in hascompare:
+            print '(' + cmp_op[oparg] + ')',
+        elif op in hasfree:
+            if free is None:
+                free = co.co_cellvars + co.co_freevars
+            print '(' + free[oparg] + ')',
+    print
 
 def _test():
     """Simple test program to disassemble a file."""

@@ -5,8 +5,13 @@ operate on bytecodes (e.g. peephole optimizers).
 """
 
 __all__ = ["cmp_op", "hasconst", "hasname", "hasjrel", "hasjabs",
-           "haslocal", "hascompare", "hasfree", "opname", "opmap",
-           "HAVE_ARGUMENT", "EXTENDED_ARG"]
+           "haslocal", "hascompare", "hasfree", "opname", "opmap", "argdesc",
+           "is_argument", "get_opcode", "get_argument",
+           "make_opcode", "make_argument",
+           "prim2super", "super2prim",
+           "decode_superinstruction"]
+
+import _opcode
 
 cmp_op = ('<', '<=', '==', '!=', '>', '>=', 'in', 'not in', 'is',
         'is not', 'exception match', 'BAD')
@@ -24,163 +29,139 @@ opname = [''] * 256
 for op in range(256): opname[op] = '<%r>' % (op,)
 del op
 
-def def_op(name, op):
-    opname[op] = name
-    opmap[name] = op
+for i, name in enumerate(_opcode.opcodes):
+    opname[i] = name
+    opmap[name] = i
+del i, name
 
-def name_op(name, op):
-    def_op(name, op)
+prim2super = _opcode.superinstruction_table
+super2prim = dict((super,prims) for prims, super in prim2super.iteritems())
+
+argdesc = {}
+
+def arg_op(name, description):
+    argdesc[opmap[name]] = description
+
+def name_op(name, description):
+    op = opmap[name]
     hasname.append(op)
+    argdesc[op] = description
 
-def jrel_op(name, op):
-    def_op(name, op)
+def jrel_op(name, description):
+    op = opmap[name]
     hasjrel.append(op)
+    argdesc[op] = description
 
-def jabs_op(name, op):
-    def_op(name, op)
+def jabs_op(name, description):
+    op = opmap[name]
     hasjabs.append(op)
+    argdesc[op] = description
 
 # Instruction opcodes for compiled code
-# Blank lines correspond to available opcodes
 
-def_op('STOP_CODE', 0)
-def_op('POP_TOP', 1)
-def_op('ROT_TWO', 2)
-def_op('ROT_THREE', 3)
-def_op('DUP_TOP', 4)
-def_op('ROT_FOUR', 5)
+name_op('STORE_NAME', 'Index in name list')
+name_op('DELETE_NAME', 'Index in name list')
+arg_op('UNPACK_SEQUENCE', 'Number of tuple items')
+jrel_op('FOR_ITER', '???')
 
-def_op('NOP', 9)
-def_op('UNARY_POSITIVE', 10)
-def_op('UNARY_NEGATIVE', 11)
-def_op('UNARY_NOT', 12)
-def_op('UNARY_CONVERT', 13)
+name_op('STORE_ATTR', 'Index in name list')
+name_op('DELETE_ATTR', 'Index in name list')
+name_op('STORE_GLOBAL', 'Index in name list')
+name_op('DELETE_GLOBAL', 'Index in name list')
 
-def_op('UNARY_INVERT', 15)
+arg_op('LOAD_CONST', 'Index in const list')
+hasconst.append(opmap['LOAD_CONST'])
+name_op('LOAD_NAME', 'Index in name list')
+arg_op('BUILD_TUPLE', 'Number of tuple items')
+arg_op('BUILD_LIST', 'Number of list items')
+arg_op('BUILD_MAP', 'Number of dict entries (upto 255)')
+name_op('LOAD_ATTR', 'Index in name list')
+arg_op('COMPARE_OP', 'Comparison operator')
+hascompare.append(opmap['COMPARE_OP'])
+# name_op('IMPORT_NAME', 'Index in name list')   # Replaced by #@import_name.
+# name_op('IMPORT_FROM', 'Index in name list')   # Replaced by #@import_from.
 
-def_op('LIST_APPEND', 18)
-def_op('BINARY_POWER', 19)
-def_op('BINARY_MULTIPLY', 20)
-def_op('BINARY_DIVIDE', 21)
-def_op('BINARY_MODULO', 22)
-def_op('BINARY_ADD', 23)
-def_op('BINARY_SUBTRACT', 24)
-def_op('BINARY_SUBSCR', 25)
-def_op('BINARY_FLOOR_DIVIDE', 26)
-def_op('BINARY_TRUE_DIVIDE', 27)
-def_op('INPLACE_FLOOR_DIVIDE', 28)
-def_op('INPLACE_TRUE_DIVIDE', 29)
-def_op('SLICE+0', 30)
-def_op('SLICE+1', 31)
-def_op('SLICE+2', 32)
-def_op('SLICE+3', 33)
+jrel_op('JUMP_FORWARD', 'Number of bytes to skip')
+jrel_op('JUMP_IF_FALSE', 'Number of bytes to skip')
+jrel_op('JUMP_IF_TRUE', 'Number of bytes to skip')
+jabs_op('JUMP_ABSOLUTE', 'Target byte offset from beginning of code')
 
-def_op('STORE_SLICE+0', 40)
-def_op('STORE_SLICE+1', 41)
-def_op('STORE_SLICE+2', 42)
-def_op('STORE_SLICE+3', 43)
+name_op('LOAD_GLOBAL', 'Index in name list')
 
-def_op('DELETE_SLICE+0', 50)
-def_op('DELETE_SLICE+1', 51)
-def_op('DELETE_SLICE+2', 52)
-def_op('DELETE_SLICE+3', 53)
+jabs_op('CONTINUE_LOOP', 'Target address')
+jrel_op('SETUP_LOOP', 'Distance to target address')
+jrel_op('SETUP_EXCEPT', 'Distance to target address')
+jrel_op('SETUP_FINALLY', 'Distance to target address')
 
-def_op('STORE_MAP', 54)
-def_op('INPLACE_ADD', 55)
-def_op('INPLACE_SUBTRACT', 56)
-def_op('INPLACE_MULTIPLY', 57)
-def_op('INPLACE_DIVIDE', 58)
-def_op('INPLACE_MODULO', 59)
-def_op('STORE_SUBSCR', 60)
-def_op('DELETE_SUBSCR', 61)
-def_op('BINARY_LSHIFT', 62)
-def_op('BINARY_RSHIFT', 63)
-def_op('BINARY_AND', 64)
-def_op('BINARY_XOR', 65)
-def_op('BINARY_OR', 66)
-def_op('INPLACE_POWER', 67)
-def_op('GET_ITER', 68)
+arg_op('LOAD_FAST', 'Local variable number')
+haslocal.append(opmap['LOAD_FAST'])
+arg_op('STORE_FAST', 'Local variable number')
+haslocal.append(opmap['STORE_FAST'])
+arg_op('DELETE_FAST', 'Local variable number')
+haslocal.append(opmap['DELETE_FAST'])
 
-# def_op('PRINT_EXPR', 70)  Replaced with the #@displayhook function.
-# def_op('PRINT_ITEM', 71)  Other PRINT_* opcodes replaced by #@print_stmt().
-# def_op('PRINT_NEWLINE', 72)
-# def_op('PRINT_ITEM_TO', 73)
-# def_op('PRINT_NEWLINE_TO', 74)
-def_op('INPLACE_LSHIFT', 75)
-def_op('INPLACE_RSHIFT', 76)
-def_op('INPLACE_AND', 77)
-def_op('INPLACE_XOR', 78)
-def_op('INPLACE_OR', 79)
-def_op('BREAK_LOOP', 80)
-def_op('WITH_CLEANUP', 81)
-# def_op('LOAD_LOCALS', 82)  Replaced with a function call to #@locals.
-def_op('RETURN_VALUE', 83)
-# def_op('IMPORT_STAR', 84)  Replaced with a function call to #@import_star.
-# def_op('EXEC_STMT', 85)  Replaced with a function call to #@exec.
-def_op('YIELD_VALUE', 86)
-def_op('POP_BLOCK', 87)
-def_op('END_FINALLY', 88)
-# def_op('BUILD_CLASS', 89)  Replaced with a function call to #@buildclass.
+arg_op('CALL_FUNCTION', '#args + (#kwargs << 8)')
+# arg_op('MAKE_FUNCTION', 'Number of args with default values')  Replaced by #@make_function calls.
+arg_op('MAKE_CLOSURE', '???')
+arg_op('LOAD_CLOSURE', '???')
+hasfree.append(opmap['LOAD_CLOSURE'])
+arg_op('LOAD_DEREF', '???')
+hasfree.append(opmap['LOAD_DEREF'])
+arg_op('STORE_DEREF', '???')
+hasfree.append(opmap['STORE_DEREF'])
 
-HAVE_ARGUMENT = 90              # Opcodes from here have an argument:
+arg_op('CALL_FUNCTION_VAR_KW',
+       '((#args + (#kwargs << 8)) << 16) + code;'
+       ' where code&1 is true if there\'s a *args parameter,'
+       ' and code&2 is true if there\'s a **kwargs parameter.')
 
-name_op('STORE_NAME', 90)       # Index in name list
-name_op('DELETE_NAME', 91)      # ""
-def_op('UNPACK_SEQUENCE', 92)   # Number of tuple items
-jrel_op('FOR_ITER', 93)
+del arg_op, name_op, jrel_op, jabs_op
 
-name_op('STORE_ATTR', 95)       # Index in name list
-name_op('DELETE_ATTR', 96)      # ""
-name_op('STORE_GLOBAL', 97)     # ""
-name_op('DELETE_GLOBAL', 98)    # ""
-def_op('DUP_TOPX', 99)          # number of items to duplicate
-def_op('LOAD_CONST', 100)       # Index in const list
-hasconst.append(100)
-name_op('LOAD_NAME', 101)       # Index in name list
-def_op('BUILD_TUPLE', 102)      # Number of tuple items
-def_op('BUILD_LIST', 103)       # Number of list items
-def_op('BUILD_MAP', 104)        # Number of dict entries (upto 255)
-name_op('LOAD_ATTR', 105)       # Index in name list
-def_op('COMPARE_OP', 106)       # Comparison operator
-hascompare.append(106)
-# name_op('IMPORT_NAME', 107)   # Replaced by #@import_name.
-# name_op('IMPORT_FROM', 108)   # Replaced by #@import_from.
+# The following functions help Python code manipulate encoded
+# instructions. When instructions are exposed to Python code, they get
+# encoded as integers. The lowest bit is 1 is the instruction is an
+# argument and 0 if the instruction is an opcode. The higher bits hold
+# the value of the argument or opcode.
+def is_argument(instruction):
+    return bool(instruction & 1)
 
-jrel_op('JUMP_FORWARD', 110)    # Number of bytes to skip
-jrel_op('JUMP_IF_FALSE', 111)   # ""
-jrel_op('JUMP_IF_TRUE', 112)    # ""
-jabs_op('JUMP_ABSOLUTE', 113)   # Target byte offset from beginning of code
+def get_opcode(instruction):
+    assert not is_argument(instruction), '%d is argument, not opcode' % instruction
+    return instruction >> 1
 
-name_op('LOAD_GLOBAL', 116)     # Index in name list
+def get_argument(instruction):
+    assert is_argument(instruction), '%d is opcode, not argument' % instruction
+    return instruction >> 1
 
-jabs_op('CONTINUE_LOOP', 119)   # Target address
-jrel_op('SETUP_LOOP', 120)      # Distance to target address
-jrel_op('SETUP_EXCEPT', 121)    # ""
-jrel_op('SETUP_FINALLY', 122)   # ""
+def make_opcode(op):
+    return op << 1
 
-def_op('LOAD_FAST', 124)        # Local variable number
-haslocal.append(124)
-def_op('STORE_FAST', 125)       # Local variable number
-haslocal.append(125)
-def_op('DELETE_FAST', 126)      # Local variable number
-haslocal.append(126)
+def make_argument(arg):
+    return (arg << 1) | 1
 
-def_op('RAISE_VARARGS', 130)    # Number of raise arguments (1, 2, or 3)
-def_op('CALL_FUNCTION', 131)    # #args + (#kwargs << 8)
-# def_op('MAKE_FUNCTION', 132)  Replaced by #@make_function calls.
-def_op('BUILD_SLICE', 133)      # Number of items
-def_op('MAKE_CLOSURE', 134)
-def_op('LOAD_CLOSURE', 135)
-hasfree.append(135)
-def_op('LOAD_DEREF', 136)
-hasfree.append(136)
-def_op('STORE_DEREF', 137)
-hasfree.append(137)
+def decode_superinstruction(instructions, index):
+    """Given a sequence of instructions, decodes the superinstruction
+    at the beginning and returns the list of primitive instructions
+    and arguments that it executes, and the instruction just after the
+    superinstruction's arguments.
 
-def_op('CALL_FUNCTION_VAR', 140)     # #args + (#kwargs << 8)
-def_op('CALL_FUNCTION_KW', 141)      # #args + (#kwargs << 8)
-def_op('CALL_FUNCTION_VAR_KW', 142)  # #args + (#kwargs << 8)
-def_op('EXTENDED_ARG', 143)
-EXTENDED_ARG = 143
-
-del def_op, name_op, jrel_op, jabs_op
+    This function does not change argument values that refer to
+    instruction indices, so it alone can't convert the whole
+    instruction sequence back into primitive instructions.
+    """
+    ops = [get_opcode(instructions[index])]
+    while ops[0] in super2prim:
+        ops[0:1] = super2prim[ops[0]]
+    result = []
+    next_arg = index + 1
+    for op in ops:
+        result.append(make_opcode(op))
+        if op in argdesc:
+            # The primitive takes an argument, so pull it off of the
+            # instruction stream.
+            assert is_argument(instructions[next_arg])
+            result.append(instructions[next_arg])
+            next_arg += 1
+    assert (next_arg == len(instructions) or
+            not is_argument(instructions[next_arg]))
+    return result, next_arg

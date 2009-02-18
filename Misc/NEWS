@@ -12,6 +12,10 @@ What's New in Unladen Swallow 2008Q1 (Python 2.6.1)
 Core and Builtins
 -----------------
 
+- Changed EvalFrameEx() to use a vmgen-generated interpretation loop
+  that includes threaded dispatch and superinstructions.  See
+  README.vmgen for details.
+
 - Issue #4074: Change the criteria for doing a full garbage collection (i.e.
   collecting the oldest generation) so that allocating lots of objects without
   destroying them does not show quadratic performance. Based on a proposal by

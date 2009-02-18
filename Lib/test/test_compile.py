@@ -460,6 +460,37 @@ if 1:
         ast.body = [_ast.BoolOp()]
         self.assertRaises(TypeError, compile, ast, '<ast>', 'exec')
 
+    def test_many_positional_arguments(self):
+        def check_args(*args):
+            for i, arg in enumerate(args):
+                self.assertEqual(i, arg)
+        eval('check_args(%s)' % ','.join(str(x) for x in range(255)))
+        try:
+            eval('check_args(%s)' % ','.join(str(x) for x in range(256)))
+        except SyntaxError as e:
+            if 'more than 255 arguments' not in str(e):
+                raise
+        else:
+            self.fail('Failed to throw SyntaxError on call with more'
+                      ' than 255 positional parameters.')
+
+    def test_many_keyword_arguments(self):
+        def check_args(**kwargs):
+            for key, value in kwargs.iteritems():
+                key_num = int(key[1:])
+                self.assertEqual(key_num, value)
+        eval('check_args(%s)' % ','.join('a%s=%s' % (x,x)
+                                         for x in range(255)))
+        try:
+            eval('check_args(%s)' % ','.join('a%s=%s' % (x,x)
+                                             for x in range(256)))
+        except SyntaxError as e:
+            if 'more than 255 arguments' not in str(e):
+                raise
+        else:
+            self.fail('Failed to throw SyntaxError on call with more'
+                      ' than 255 keyword parameters.')
+
 
 def test_main():
     test_support.run_unittest(TestSpecifics)

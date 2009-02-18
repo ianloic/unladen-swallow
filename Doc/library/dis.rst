@@ -346,22 +346,22 @@ the original TOS1.
 The slice opcodes take up to three parameters.
 
 
-.. opcode:: SLICE+0 ()
+.. opcode:: SLICE_NONE ()
 
    Implements ``TOS = TOS[:]``.
 
 
-.. opcode:: SLICE+1 ()
+.. opcode:: SLICE_LEFT ()
 
    Implements ``TOS = TOS1[TOS:]``.
 
 
-.. opcode:: SLICE+2 ()
+.. opcode:: SLICE_RIGHT ()
 
    Implements ``TOS = TOS1[:TOS]``.
 
 
-.. opcode:: SLICE+3 ()
+.. opcode:: SLICE_BOTH ()
 
    Implements ``TOS = TOS2[TOS1:TOS]``.
 
@@ -369,42 +369,42 @@ Slice assignment needs even an additional parameter.  As any statement, they put
 nothing on the stack.
 
 
-.. opcode:: STORE_SLICE+0 ()
+.. opcode:: STORE_SLICE_NONE ()
 
    Implements ``TOS[:] = TOS1``.
 
 
-.. opcode:: STORE_SLICE+1 ()
+.. opcode:: STORE_SLICE_LEFT ()
 
    Implements ``TOS1[TOS:] = TOS2``.
 
 
-.. opcode:: STORE_SLICE+2 ()
+.. opcode:: STORE_SLICE_RIGHT ()
 
    Implements ``TOS1[:TOS] = TOS2``.
 
 
-.. opcode:: STORE_SLICE+3 ()
+.. opcode:: STORE_SLICE_BOTH ()
 
    Implements ``TOS2[TOS1:TOS] = TOS3``.
 
 
-.. opcode:: DELETE_SLICE+0 ()
+.. opcode:: DELETE_SLICE_NONE ()
 
    Implements ``del TOS[:]``.
 
 
-.. opcode:: DELETE_SLICE+1 ()
+.. opcode:: DELETE_SLICE_LEFT ()
 
    Implements ``del TOS1[TOS:]``.
 
 
-.. opcode:: DELETE_SLICE+2 ()
+.. opcode:: DELETE_SLICE_RIGHT ()
 
    Implements ``del TOS1[:TOS]``.
 
 
-.. opcode:: DELETE_SLICE+3 ()
+.. opcode:: DELETE_SLICE_BOTH ()
 
    Implements ``del TOS2[TOS1:TOS]``.
 
@@ -484,8 +484,7 @@ Miscellaneous opcodes.
    .. XXX explain the WHY stuff!
 
 
-All of the following opcodes expect arguments.  An argument is two bytes, with
-the more significant byte last.
+All of the following opcodes expect arguments.  An argument is 31 bits.
 
 .. opcode:: STORE_NAME (namei)
 
@@ -506,10 +505,14 @@ the more significant byte last.
    right-to-left.
 
 
-.. opcode:: DUP_TOPX (count)
+.. opcode:: DUP_TOP_TWO ()
 
-   Duplicate *count* items, keeping them in the same order. Due to implementation
-   limits, *count* should be between 1 and 5 inclusive.
+   Duplicate 2 items, keeping them in the same order.
+
+
+.. opcode:: DUP_TOP_THREE ()
+
+   Duplicate 3 items, keeping them in the same order.
 
 
 .. opcode:: STORE_ATTR (namei)
@@ -668,11 +671,12 @@ the more significant byte last.
    This opcode is obsolete.
 
 
-.. opcode:: RAISE_VARARGS (argc)
+.. opcode:: RAISE_VARARGS_XXX ()
 
-   Raises an exception. *argc* indicates the number of parameters to the raise
-   statement, ranging from 0 to 3.  The handler will find the traceback as TOS2,
-   the parameter as TOS1, and the exception as TOS.
+   Raises an exception. *XXX* is *ZERO*, *ONE*, *TWO*, or *THREE* and
+   indicates the number of parameters to the raise statement.  The
+   handler will find the traceback as TOS2, the parameter as TOS1, and
+   the exception as TOS.
 
 
 .. opcode:: CALL_FUNCTION (argc)
@@ -694,47 +698,39 @@ the more significant byte last.
    *argc* default parameters, which are found below the cells.
 
 
-.. opcode:: BUILD_SLICE (argc)
+.. opcode:: BUILD_SLICE_TWO ()
 
    .. index:: builtin: slice
 
-   Pushes a slice object on the stack.  *argc* must be 2 or 3.  If it is 2,
-   ``slice(TOS1, TOS)`` is pushed; if it is 3, ``slice(TOS2, TOS1, TOS)`` is
-   pushed. See the :func:`slice` built-in function for more information.
+   Pushes ``slice(TOS1, TOS)`` on the stack. See the :func:`slice`
+   built-in function for more information.
 
 
-.. opcode:: EXTENDED_ARG (ext)
+.. opcode:: BUILD_SLICE_THREE ()
 
-   Prefixes any opcode which has an argument too big to fit into the default two
-   bytes.  *ext* holds two additional bytes which, taken together with the
-   subsequent opcode's argument, comprise a four-byte argument, *ext* being the two
-   most-significant bytes.
+   .. index:: builtin: slice
 
-
-.. opcode:: CALL_FUNCTION_VAR (argc)
-
-   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``. The top element
-   on the stack contains the variable argument list, followed by keyword and
-   positional arguments.
-
-
-.. opcode:: CALL_FUNCTION_KW (argc)
-
-   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``. The top element
-   on the stack contains the keyword arguments dictionary,  followed by explicit
-   keyword and positional arguments.
+   Pushes ``slice(TOS2, TOS1, TOS)`` on the stack. See the
+   :func:`slice` built-in function for more information.
 
 
 .. opcode:: CALL_FUNCTION_VAR_KW (argc)
 
-   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``.  The top
-   element on the stack contains the keyword arguments dictionary, followed by the
-   variable-arguments tuple, followed by explicit keyword and positional arguments.
+   Calls a function. *argc* is split into 2 16-bit fields. The top 16
+   bits are interpreted as ``CALL_FUNCTION``'s *argc* parameter.  The
+   low 16 bits describe whether a keyword arguments dictionary and/or
+   variable-arguments tuple are present.
 
+   If the low 16 bits contain 1, the top element on the stack contains
+   the variable argument list, followed by keyword and positional
+   arguments.
 
-.. opcode:: HAVE_ARGUMENT ()
+   If the low 16 bits contain 2, the top element on the stack contains
+   the keyword arguments dictionary, followed by explicit keyword and
+   positional arguments.
 
-   This is not really an opcode.  It identifies the dividing line between opcodes
-   which don't take arguments ``< HAVE_ARGUMENT`` and those which do ``>=
-   HAVE_ARGUMENT``.
+   If the low 16 bits contain 3, the top element on the stack contains
+   the keyword arguments dictionary, followed by the
+   variable-arguments tuple, followed by explicit keyword and
+   positional arguments.
 

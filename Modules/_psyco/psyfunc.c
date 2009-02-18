@@ -8,6 +8,7 @@
 #include "Python/pycompiler.h"
 
 #include <eval.h>  /* for PyEval_EvalCodeEx() */
+#include <instructionsobject.h>
 
 
  /***************************************************************/
@@ -505,16 +506,17 @@ PyObject* psyco_proxycode(PyFunctionObject* func, int rec)
 {
   PsycoFunctionObject *psyco_fun;
   PyCodeObject *code, *newcode;
-  PyObject *consts, *proxy_cobj;
+  PyObject *consts;
+  PyInstructionsObject *proxy_cobj;
   static PyObject *varnames = NULL;
   static PyObject *free_cell_vars = NULL;
   static PyObject *empty_string = NULL;
-  unsigned char proxy_bytecode[] = {
-    LOAD_CONST, 1, 0,
-    LOAD_FAST, 0, 0,
-    LOAD_FAST, 1, 0,
-    CALL_FUNCTION_VAR_KW, 0, 0,
-    RETURN_VALUE
+  PyInst proxy_bytecode[] = {
+    {false, LOAD_CONST}, {true, 1},
+    {false, LOAD_FAST}, {true, 0},
+    {false, LOAD_FAST}, {true, 1},
+    {false, CALL_FUNCTION_VAR_KW}, {true, 3},
+    {false, RETURN_VALUE}
   };
   code = (PyCodeObject *)func->func_code;
   if (is_proxycode(code))
@@ -568,14 +570,15 @@ PyObject* psyco_proxycode(PyFunctionObject* func, int rec)
         goto error;
     }
 
-  proxy_cobj = PyString_FromStringAndSize((char*)proxy_bytecode,
-					  sizeof(proxy_bytecode));
+  proxy_cobj = _PyInstructions_New(sizeof(proxy_bytecode) /
+                                   sizeof(proxy_bytecode[0]));
   if (proxy_cobj == NULL)
     goto error;
+  memcpy(proxy_cobj->inst, proxy_bytecode, sizeof(proxy_bytecode));
 
   newcode = PyCode_New(0, 2, 3,
                        CO_OPTIMIZED|CO_NEWLOCALS|CO_VARARGS|CO_VARKEYWORDS,
-                       proxy_cobj, consts,
+                       (PyObject *)proxy_cobj, consts,
 		       varnames, varnames, free_cell_vars,
 		       free_cell_vars, code->co_filename,
 		       code->co_name, code->co_firstlineno,

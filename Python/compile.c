@@ -29,6 +29,7 @@
 #include "ast.h"
 #include "code.h"
 #include "compile.h"
+#include "instructionsobject.h"
 #include "symtable.h"
 #include "opcode.h"
 
@@ -710,31 +711,31 @@ opcode_stack_effect(int opcode, int oparg)
 		case INPLACE_TRUE_DIVIDE:
 			return -1;
 
-		case SLICE+0:
+		case SLICE_NONE:
 			return 1;
-		case SLICE+1:
+		case SLICE_LEFT:
 			return 0;
-		case SLICE+2:
+		case SLICE_RIGHT:
 			return 0;
-		case SLICE+3:
+		case SLICE_BOTH:
 			return -1;
 
-		case STORE_SLICE+0:
+		case STORE_SLICE_NONE:
 			return -2;
-		case STORE_SLICE+1:
+		case STORE_SLICE_LEFT:
 			return -3;
-		case STORE_SLICE+2:
+		case STORE_SLICE_RIGHT:
 			return -3;
-		case STORE_SLICE+3:
+		case STORE_SLICE_BOTH:
 			return -4;
 
-		case DELETE_SLICE+0:
+		case DELETE_SLICE_NONE:
 			return -1;
-		case DELETE_SLICE+1:
+		case DELETE_SLICE_LEFT:
 			return -2;
-		case DELETE_SLICE+2:
+		case DELETE_SLICE_RIGHT:
 			return -2;
-		case DELETE_SLICE+3:
+		case DELETE_SLICE_BOTH:
 			return -3;
 
 		case INPLACE_ADD:
@@ -798,8 +799,10 @@ opcode_stack_effect(int opcode, int oparg)
 			return -1;
 		case DELETE_GLOBAL:
 			return 0;
-		case DUP_TOPX:
-			return oparg;
+		case DUP_TOP_TWO:
+			return 2;
+		case DUP_TOP_THREE:
+			return 3;
 		case LOAD_CONST:
 			return 1;
 		case LOAD_NAME:
@@ -838,23 +841,24 @@ opcode_stack_effect(int opcode, int oparg)
 		case DELETE_FAST:
 			return 0;
 
-		case RAISE_VARARGS:
-			return -oparg;
+		case RAISE_VARARGS_ZERO:
+			return 0;
+		case RAISE_VARARGS_ONE:
+			return -1;
+		case RAISE_VARARGS_TWO:
+			return -2;
+		case RAISE_VARARGS_THREE:
+			return -3;
 #define NARGS(o) (((o) % 256) + 2*((o) / 256))
 		case CALL_FUNCTION:
 			return -NARGS(oparg);
-		case CALL_FUNCTION_VAR:
-		case CALL_FUNCTION_KW:
-			return -NARGS(oparg)-1;
 		case CALL_FUNCTION_VAR_KW:
-			return -NARGS(oparg)-2;
+			return -NARGS(oparg>>16) - ((oparg&1) + ((oparg>>1)&1));
 #undef NARGS			
-		case BUILD_SLICE:
-			if (oparg == 3)
-				return -2;
-			else
-				return -1;
-
+		case BUILD_SLICE_TWO:
+			return -1;
+		case BUILD_SLICE_THREE:
+			return -2;
 		case MAKE_CLOSURE:
 			return -oparg;
 		case LOAD_CLOSURE:
@@ -2080,9 +2084,9 @@ compiler_from_import(struct compiler *c, stmt_ty s)
 		alias = (alias_ty)asdl_seq_GET(s->v.ImportFrom.names, i);
 		identifier store_name;
 
-		/* The DUP_TOPX 2 ends up duplicating [#@import_from, module],
+		/* The DUP_TOP_TWO ends up duplicating [#@import_from, module],
 		where module is the return value from #@import_name. */
-		ADDOP_I(c, DUP_TOPX, 2);
+		ADDOP(c, DUP_TOP_TWO);
 		ADDOP_O(c, LOAD_CONST, alias->name, consts);
 		ADDOP_I(c, CALL_FUNCTION, 2);
 		store_name = alias->name;
@@ -2129,10 +2133,10 @@ compiler_assert(struct compiler *c, stmt_ty s)
 	ADDOP_O(c, LOAD_GLOBAL, assertion_error, names);
 	if (s->v.Assert.msg) {
 		VISIT(c, expr, s->v.Assert.msg);
-		ADDOP_I(c, RAISE_VARARGS, 2);
+		ADDOP(c, RAISE_VARARGS_TWO);
 	}
 	else {
-		ADDOP_I(c, RAISE_VARARGS, 1);
+		ADDOP(c, RAISE_VARARGS_ONE);
 	}
 	compiler_use_next_block(c, end);
 	ADDOP(c, POP_TOP);
@@ -2143,6 +2147,8 @@ static int
 compiler_visit_stmt(struct compiler *c, stmt_ty s)
 {
 	int i, n;
+	const int raise_varargs[] = { RAISE_VARARGS_ZERO, RAISE_VARARGS_ONE,
+				      RAISE_VARARGS_TWO, RAISE_VARARGS_THREE };
 
 	/* Always assign a lineno to the next instruction for a stmt. */
 	c->u->u_lineno = s->lineno;
@@ -2200,7 +2206,7 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 				}
 			}
 		}
-		ADDOP_I(c, RAISE_VARARGS, n);
+		ADDOP(c, raise_varargs[n]);
 		break;
 	case TryExcept_kind:
 		return compiler_try_except(c, s);
@@ -2628,14 +2634,16 @@ static int
 compiler_call(struct compiler *c, expr_ty e)
 {
 	int n, code = 0;
+	int n_positional_args, n_keyword_args = 0;
 
 	VISIT(c, expr, e->v.Call.func);
-	n = asdl_seq_LEN(e->v.Call.args);
+	n_positional_args = asdl_seq_LEN(e->v.Call.args);
 	VISIT_SEQ(c, expr, e->v.Call.args);
 	if (e->v.Call.keywords) {
 		VISIT_SEQ(c, keyword, e->v.Call.keywords);
-		n |= asdl_seq_LEN(e->v.Call.keywords) << 8;
+		n_keyword_args = asdl_seq_LEN(e->v.Call.keywords);
 	}
+	n = n_positional_args | (n_keyword_args << 8);
 	if (e->v.Call.starargs) {
 		VISIT(c, expr, e->v.Call.starargs);
 		code |= 1;
@@ -2649,13 +2657,13 @@ compiler_call(struct compiler *c, expr_ty e)
 		ADDOP_I(c, CALL_FUNCTION, n);
 		break;
 	case 1:
-		ADDOP_I(c, CALL_FUNCTION_VAR, n);
-		break;
 	case 2:
-		ADDOP_I(c, CALL_FUNCTION_KW, n);
-		break;
 	case 3:
-		ADDOP_I(c, CALL_FUNCTION_VAR_KW, n);
+		/* XXX this doesn't work with >2^8 positional or
+		   keyword arguments */
+		assert(n_positional_args < 256);
+		assert(n_keyword_args < 256);
+		ADDOP_I(c, CALL_FUNCTION_VAR_KW, (n << 16) | code);
 		break;
 	}
 	return 1;
@@ -3288,7 +3296,7 @@ compiler_handle_subscr(struct compiler *c, const char *kind,
 			return 0;
 	}
 	if (ctx == AugLoad) {
-		ADDOP_I(c, DUP_TOPX, 2);
+		ADDOP(c, DUP_TOP_TWO);
 	}
 	else if (ctx == AugStore) {
 		ADDOP(c, ROT_THREE);
@@ -3300,7 +3308,7 @@ compiler_handle_subscr(struct compiler *c, const char *kind,
 static int
 compiler_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 {
-	int n = 2;
+	int slice_has_three_args = 0;
 	assert(s->kind == Slice_kind);
 
 	/* only handles the cases where BUILD_SLICE is emitted */
@@ -3319,17 +3327,23 @@ compiler_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 	}
 
 	if (s->v.Slice.step) {
-		n++;
+		slice_has_three_args = 1;
 		VISIT(c, expr, s->v.Slice.step);
 	}
-	ADDOP_I(c, BUILD_SLICE, n);
+	ADDOP(c, slice_has_three_args ? BUILD_SLICE_THREE : BUILD_SLICE_TWO);
 	return 1;
 }
 
 static int
 compiler_simple_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 {
-	int op = 0, slice_offset = 0, stack_count = 0;
+	const int slice[] = { SLICE_NONE, SLICE_LEFT, SLICE_RIGHT, SLICE_BOTH };
+	const int store_slice[] = { STORE_SLICE_NONE, STORE_SLICE_LEFT,
+				    STORE_SLICE_RIGHT, STORE_SLICE_BOTH };
+	const int delete_slice[] = { DELETE_SLICE_NONE, DELETE_SLICE_LEFT,
+				     DELETE_SLICE_RIGHT, DELETE_SLICE_BOTH };
+	const int *op_array = NULL;
+	int slice_offset = 0, stack_count = 0;
 
 	assert(s->v.Slice.step == NULL);
 	if (s->v.Slice.lower) {
@@ -3348,8 +3362,8 @@ compiler_simple_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 	if (ctx == AugLoad) {
 		switch (stack_count) {
 		case 0: ADDOP(c, DUP_TOP); break;
-		case 1: ADDOP_I(c, DUP_TOPX, 2); break;
-		case 2: ADDOP_I(c, DUP_TOPX, 3); break;
+		case 1: ADDOP(c, DUP_TOP_TWO); break;
+		case 2: ADDOP(c, DUP_TOP_THREE); break;
 		}
 	}
 	else if (ctx == AugStore) {
@@ -3362,10 +3376,10 @@ compiler_simple_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 
 	switch (ctx) {
 	case AugLoad: /* fall through to Load */
-	case Load: op = SLICE; break;
+	case Load: op_array = slice; break;
 	case AugStore:/* fall through to Store */
-	case Store: op = STORE_SLICE; break;
-	case Del: op = DELETE_SLICE; break;
+	case Store: op_array = store_slice; break;
+	case Del: op_array = delete_slice; break;
 	case Param:
 	default:
 		PyErr_SetString(PyExc_SystemError,
@@ -3373,7 +3387,7 @@ compiler_simple_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 		return 0;
 	}
 
-	ADDOP(c, op + slice_offset);
+	ADDOP(c, op_array[slice_offset]);
 	return 1;
 }
 
@@ -3456,7 +3470,7 @@ compiler_visit_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 */
 
 struct assembler {
-	PyObject *a_bytecode;  /* string containing bytecode */
+	PyInstructionsObject *a_code;    /* contains opcode.h, not vmgen codes */
 	int a_offset;	       /* offset into bytecode */
 	int a_nblocks;	       /* number of reachable blocks */
 	basicblock **a_postorder; /* list of blocks in dfs postorder */
@@ -3539,8 +3553,8 @@ assemble_init(struct assembler *a, int nblocks, int firstlineno)
 {
 	memset(a, 0, sizeof(struct assembler));
 	a->a_lineno = firstlineno;
-	a->a_bytecode = PyString_FromStringAndSize(NULL, DEFAULT_CODE_SIZE);
-	if (!a->a_bytecode)
+	a->a_code = _PyInstructions_New(DEFAULT_CODE_SIZE);
+	if (a->a_code == NULL)
 		return 0;
 	a->a_lnotab = PyString_FromStringAndSize(NULL, DEFAULT_LNOTAB_SIZE);
 	if (!a->a_lnotab)
@@ -3561,22 +3575,20 @@ assemble_init(struct assembler *a, int nblocks, int firstlineno)
 static void
 assemble_free(struct assembler *a)
 {
-	Py_XDECREF(a->a_bytecode);
+	Py_XDECREF(a->a_code);
 	Py_XDECREF(a->a_lnotab);
 	if (a->a_postorder)
 		PyObject_Free(a->a_postorder);
 }
 
-/* Return the size of a basic block in bytes. */
+/* Return the size of a basic block in PyInst (usually 4-byte) units. */
 
 static int
 instrsize(struct instr *instr)
 {
 	if (!instr->i_hasarg)
 		return 1;	/* 1 byte for the opcode*/
-	if (instr->i_oparg > 0xffff)
-		return 6;	/* 1 (opcode) + 1 (EXTENDED_ARG opcode) + 2 (oparg) + 2(oparg extended) */
-	return 3; 		/* 1 (opcode) + 2 (oparg) */
+	return 2;  /* 1 (opcode) + 1 (arg) */
 }
 
 static int
@@ -3738,8 +3750,8 @@ static int
 assemble_emit(struct assembler *a, struct instr *i)
 {
 	int size, arg = 0, ext = 0;
-	Py_ssize_t len = PyString_GET_SIZE(a->a_bytecode);
-	char *code;
+	Py_ssize_t len = Py_SIZE(a->a_code);
+	PyInst *code;
 
 	size = instrsize(i);
 	if (i->i_hasarg) {
@@ -3751,23 +3763,15 @@ assemble_emit(struct assembler *a, struct instr *i)
 	if (a->a_offset + size >= len) {
 		if (len > PY_SSIZE_T_MAX / 2)
 			return 0;
-		if (_PyString_Resize(&a->a_bytecode, len * 2) < 0)
+		if (_PyInstructions_Resize(&a->a_code, len * 2) < 0)
 		    return 0;
 	}
-	code = PyString_AS_STRING(a->a_bytecode) + a->a_offset;
+	code = a->a_code->inst + a->a_offset;
 	a->a_offset += size;
-	if (size == 6) {
-		assert(i->i_hasarg);
-		*code++ = (char)EXTENDED_ARG;
-		*code++ = ext & 0xff;
-		*code++ = ext >> 8;
-		arg &= 0xffff;
-	}
-	*code++ = i->i_opcode;
+	PyInst_SET_OPCODE(code++, i->i_opcode);
 	if (i->i_hasarg) {
-		assert(size == 3 || size == 6);
-		*code++ = arg & 0xff;
-		*code++ = arg >> 8;
+		assert(size == 2);
+		PyInst_SET_ARG(code++, arg);
 	}
 	return 1;
 }
@@ -3900,6 +3904,7 @@ makecode(struct compiler *c, struct assembler *a)
 {
 	PyObject *tmp;
 	PyCodeObject *co = NULL;
+	PyObject *code = NULL;
 	PyObject *consts = NULL;
 	PyObject *names = NULL;
 	PyObject *varnames = NULL;
@@ -3907,7 +3912,6 @@ makecode(struct compiler *c, struct assembler *a)
 	PyObject *name = NULL;
 	PyObject *freevars = NULL;
 	PyObject *cellvars = NULL;
-	PyObject *bytecode = NULL;
 	int nlocals, flags;
 
 	tmp = dict_keys_inorder(c->u->u_consts, 0);
@@ -3936,8 +3940,8 @@ makecode(struct compiler *c, struct assembler *a)
 	if (flags < 0)
 		goto error;
 
-	bytecode = PyCode_Optimize(a->a_bytecode, consts, names, a->a_lnotab);
-	if (!bytecode)
+	code = PyCode_Optimize((PyObject *)a->a_code, consts, names, a->a_lnotab);
+	if (!code)
 		goto error;
 
 	tmp = PyList_AsTuple(consts); /* PyCode_New requires a tuple */
@@ -3947,7 +3951,7 @@ makecode(struct compiler *c, struct assembler *a)
 	consts = tmp;
 
 	co = PyCode_New(c->u->u_argcount, nlocals, stackdepth(c), flags,
-			bytecode, consts, names, varnames,
+			code, consts, names, varnames,
 			freevars, cellvars,
 			filename, c->u->u_name,
 			c->u->u_firstlineno,
@@ -3960,7 +3964,7 @@ makecode(struct compiler *c, struct assembler *a)
 	Py_XDECREF(name);
 	Py_XDECREF(freevars);
 	Py_XDECREF(cellvars);
-	Py_XDECREF(bytecode);
+	Py_XDECREF(code);
 	return co;
 }
 
@@ -4049,7 +4053,7 @@ assemble(struct compiler *c, int addNone)
 
 	if (_PyString_Resize(&a.a_lnotab, a.a_lnotab_off) < 0)
 		goto error;
-	if (_PyString_Resize(&a.a_bytecode, a.a_offset) < 0)
+	if (_PyInstructions_Resize(&a.a_code, a.a_offset) < 0)
 		goto error;
 
 	co = makecode(c, &a);

@@ -839,9 +839,9 @@ void psyco_pycompiler_init(void)
                                      po->pr.stack_base+po->pr.stack_level+(n) < \
                                      po->vlocals.count)
 
-#define NEXTOP()	(bytecode[next_instr++])
-#define NEXTARG()	(next_instr += 2,                                       \
-                         (bytecode[next_instr-1]<<8) + bytecode[next_instr-2])
+#define NEXTOP()	(PyInst_GET_OPCODE(&bytecode[next_instr++]))
+#define NEXTARG()	(next_instr++,                                       \
+                         (PyInst_GET_ARG(&bytecode[next_instr-1])))
 
 #define PUSH(v)         (CHKSTACK(0), stack_a[po->pr.stack_level++] = v)
 #define POP(targ)       (CHKSTACK(-1), targ = stack_a[--po->pr.stack_level],   \
@@ -1299,15 +1299,27 @@ static bool psyco_assign_slice(PsycoObject* po, vinfo_t* u,
 static vinfo_t* psyco_ext_do_calls(PsycoObject* po, int opcode, int oparg,
 				   vinfo_t** stack_top, int* stack_to_pop)
 {
-	int na = oparg & 0xff;
-	int nk = (oparg>>8) & 0xff;
-	int flags = (opcode - CALL_FUNCTION) & 3;
-	int n = na + 2 * nk;
+	int na;
+	int nk;
+	int flags;
+	int n;
 	vinfo_t** args;
 	vinfo_t* vargs = NULL;
 	vinfo_t* wdict = NULL;
 	vinfo_t* result = NULL;
 	
+	if (opcode == CALL_FUNCTION) {
+		na = oparg & 0xff;
+		nk = (oparg>>8) & 0xff;
+		flags = 0;
+	}
+	else {
+		na = (oparg>>16) & 0xff;
+		nk = (oparg>>24) & 0xff;
+		flags = oparg & 3;
+	}
+	n = na + 2 * nk;
+
 	if (flags & CALL_FLAG_VAR)
 		n++;
 	if (flags & CALL_FLAG_KW)
@@ -1735,7 +1747,9 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
     {
       /* 'co' is the code object we are interpreting/compiling */
       PyCodeObject* co = po->pr.co;
-      unsigned char* bytecode = (unsigned char*) PyString_AS_STRING(co->co_code);
+      PyInst* bytecode = ((PyInstructionsObject*)co->co_code)->inst;
+      int next_insts[10];  /* superinstructions hold less than 10 instructions */
+      int next_inst_index = 0;
       vinfo_t *u, *v,	/* temporary objects    */
               *w, *x;	/* popped off the stack */
       condition_code_t cc;
@@ -1761,10 +1775,14 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 					 case of an opcode that cannot set
 					 run-time conditions */
 	
-	opcode = NEXTOP();
+	if (next_inst_index == 0) {
+		next_inst_index = _PyCode_UncombineSuperInstruction(
+			PyInst_GET_OPCODE(&bytecode[next_instr++]),
+			next_insts, 10);
+	}
+	opcode = next_insts[--next_inst_index];
 	if (HAS_ARG(opcode))
 		oparg = NEXTARG();
-  dispatch_opcode:
 
 	/* Main switch on opcode */
 	
@@ -1823,16 +1841,26 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		PUSH(v);
 		goto fine;
 
-	case DUP_TOPX:
-	{
-		int i;
-		for (i=0; i<oparg; i++) {
-			x = NTOP(oparg);
-			vinfo_incref(x);
-			PUSH(x);
-		}
+	case DUP_TOP_TWO:
+		x = NTOP(2);
+		vinfo_incref(x);
+		PUSH(x);
+		x = NTOP(2);
+		vinfo_incref(x);
+		PUSH(x);
 		goto fine;
-	}
+
+	case DUP_TOP_THREE:
+		x = NTOP(3);
+		vinfo_incref(x);
+		PUSH(x);
+		x = NTOP(3);
+		vinfo_incref(x);
+		PUSH(x);
+		x = NTOP(3);
+		vinfo_incref(x);
+		PUSH(x);
+		goto fine;
 
         case UNARY_POSITIVE:
 		x = PsycoNumber_Positive(po, TOP());
@@ -1971,19 +1999,19 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 	BINARY_OPCODE(INPLACE_XOR, PsycoNumber_InPlaceXor);
 	BINARY_OPCODE(INPLACE_OR, PsycoNumber_InPlaceOr);
 
-	case SLICE+0:
-	case SLICE+1:
-	case SLICE+2:
-	case SLICE+3:
+	case SLICE_NONE:
+	case SLICE_LEFT:
+	case SLICE_RIGHT:
+	case SLICE_BOTH:
 	{
 		int from_top = 1;
-		if ((opcode-SLICE) & 2) {
+		if ((opcode-SLICE_NONE) & 2) {
 			w = NTOP(from_top);
 			from_top++;
 		}
 		else
 			w = NULL;
-		if ((opcode-SLICE) & 1) {
+		if ((opcode-SLICE_NONE) & 1) {
 			v = NTOP(from_top);
 			from_top++;
 		}
@@ -2000,19 +2028,19 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		goto fine;
 	}
 
-	case STORE_SLICE+0:
-	case STORE_SLICE+1:
-	case STORE_SLICE+2:
-	case STORE_SLICE+3:
+	case STORE_SLICE_NONE:
+	case STORE_SLICE_LEFT:
+	case STORE_SLICE_RIGHT:
+	case STORE_SLICE_BOTH:
 	{
 		int from_top = 1;
-		if ((opcode-STORE_SLICE) & 2) {
+		if ((opcode-STORE_SLICE_NONE) & 2) {
 			w = NTOP(from_top);
 			from_top++;
 		}
 		else
 			w = NULL;
-		if ((opcode-STORE_SLICE) & 1) {
+		if ((opcode-STORE_SLICE_NONE) & 1) {
 			v = NTOP(from_top);
 			from_top++;
 		}
@@ -2028,19 +2056,19 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		goto fine;
 	}
 	
-	case DELETE_SLICE+0:
-	case DELETE_SLICE+1:
-	case DELETE_SLICE+2:
-	case DELETE_SLICE+3:
+	case DELETE_SLICE_NONE:
+	case DELETE_SLICE_LEFT:
+	case DELETE_SLICE_RIGHT:
+	case DELETE_SLICE_BOTH:
 	{
 		int from_top = 1;
-		if ((opcode-DELETE_SLICE) & 2) {
+		if ((opcode-DELETE_SLICE_NONE) & 2) {
 			w = NTOP(from_top);
 			from_top++;
 		}
 		else
 			w = NULL;
-		if ((opcode-DELETE_SLICE) & 1) {
+		if ((opcode-DELETE_SLICE_NONE) & 1) {
 			v = NTOP(from_top);
 			from_top++;
 		}
@@ -2087,25 +2115,27 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 				   vinfo_new(CompileTime_New(oparg)));
 		break;
 
-	case RAISE_VARARGS:
+	case RAISE_VARARGS_ZERO:
+	case RAISE_VARARGS_ONE:
+	case RAISE_VARARGS_TWO:
+	case RAISE_VARARGS_THREE:
 		u = v = w = x = psyco_vi_Zero();
-		switch (oparg) {
-		case 3:
-			u = NTOP(oparg-2); /* traceback */
-			/* Fallthrough */
-		case 2:
-			v = NTOP(oparg-1); /* value */
-			/* Fallthrough */
-		case 1:
-			w = NTOP(oparg-0); /* exc */
-		case 0: /* Fallthrough */
-			psyco_generic_call(po, cimpl_do_raise, CfPyErrAlways,
-					   "vvv", w, v, u);
+		switch (opcode) {
+		case RAISE_VARARGS_THREE:
+			u = NTOP(1); /* traceback */
+			v = NTOP(2); /* value */
+			w = NTOP(3); /* exc */
+			break;
+		case RAISE_VARARGS_TWO:
+			v = NTOP(1); /* value */
+			w = NTOP(2); /* exc */
+			break;
+		case RAISE_VARARGS_ONE:
+			w = NTOP(1); /* exc */
                         break;
-		default:
-			PycException_SetString(po, PyExc_SystemError,
-					       "bad RAISE_VARARGS oparg");
 		}
+		psyco_generic_call(po, cimpl_do_raise, CfPyErrAlways,
+				   "vvv", w, v, u);
 		vinfo_decref(x, po);
 		break;
 
@@ -2586,8 +2616,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 #endif
 
 	case CALL_FUNCTION:
-	case CALL_FUNCTION_VAR:
-	case CALL_FUNCTION_KW:
 	case CALL_FUNCTION_VAR_KW:
 	{
 		int i, stack_to_pop;
@@ -2605,8 +2633,9 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 
 	/*MISSING_OPCODE(MAKE_CLOSURE);*/
 
-	case BUILD_SLICE:
-		if (oparg == 3) {
+	case BUILD_SLICE_TWO:
+	case BUILD_SLICE_THREE:
+		if (opcode == BUILD_SLICE_THREE) {
 			w = NTOP(1);
 			v = NTOP(2);
 			u = NTOP(3);
@@ -2619,22 +2648,17 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		x = psyco_generic_call(po, PySlice_New,
 				       CfReturnRef|CfPyErrIfNull,
 				       "vvv", u, v, w);
-		if (oparg != 3)
+		if (opcode != BUILD_SLICE_THREE)
 			vinfo_decref(w, po);
 		if (x == NULL)
 			break;
 		Psyco_AssertType(po, x, &PySlice_Type);
-		if (oparg == 3)
+		if (opcode == BUILD_SLICE_THREE)
 			POP_DECREF();	/* w */
 		POP_DECREF();		/* v */
 		POP_DECREF();		/* u */
 		PUSH(x);
 		goto fine;
-
-	case EXTENDED_ARG:
-		opcode = NEXTOP();
-		oparg = oparg<<16 | NEXTARG();
-		goto dispatch_opcode;
 
 	default:
 		fprintf(stderr,

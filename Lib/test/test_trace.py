@@ -701,44 +701,65 @@ class JumpTestCase(unittest.TestCase):
         sys.settrace(None)
         self.compare_jump_output(func.output, output)
 
-    def test_01_jump_simple_forwards(self):
-        self.run_test(jump_simple_forwards)
-    def test_02_jump_simple_backwards(self):
-        self.run_test(jump_simple_backwards)
-    def test_03_jump_out_of_block_forwards(self):
-        self.run_test(jump_out_of_block_forwards)
-    def test_04_jump_out_of_block_backwards(self):
-        self.run_test(jump_out_of_block_backwards)
-    def test_05_jump_to_codeless_line(self):
-        self.run_test(jump_to_codeless_line)
-    def test_06_jump_to_same_line(self):
-        self.run_test(jump_to_same_line)
-    def test_07_jump_in_nested_finally(self):
-        self.run_test(jump_in_nested_finally)
-    def test_08_no_jump_too_far_forwards(self):
-        self.run_test(no_jump_too_far_forwards)
-    def test_09_no_jump_too_far_backwards(self):
-        self.run_test(no_jump_too_far_backwards)
-    def test_10_no_jump_to_except_1(self):
-        self.run_test(no_jump_to_except_1)
-    def test_11_no_jump_to_except_2(self):
-        self.run_test(no_jump_to_except_2)
-    def test_12_no_jump_to_except_3(self):
-        self.run_test(no_jump_to_except_3)
-    def test_13_no_jump_to_except_4(self):
-        self.run_test(no_jump_to_except_4)
-    def test_14_no_jump_forwards_into_block(self):
-        self.run_test(no_jump_forwards_into_block)
-    def test_15_no_jump_backwards_into_block(self):
-        self.run_test(no_jump_backwards_into_block)
-    def test_16_no_jump_into_finally_block(self):
-        self.run_test(no_jump_into_finally_block)
-    def test_17_no_jump_out_of_finally_block(self):
-        self.run_test(no_jump_out_of_finally_block)
-    def test_18_no_jump_to_non_integers(self):
-        self.run_test(no_jump_to_non_integers)
-    def test_19_no_jump_without_trace_function(self):
-        no_jump_without_trace_function()
+    if __debug__:
+        # Only run these tests in debug mode because it's illegal to
+        # jump when running under -O.  The peephole optimizer crosses
+        # line boundaries, which would let users crash the
+        # interpreter.
+        def test_01_jump_simple_forwards(self):
+            self.run_test(jump_simple_forwards)
+        def test_02_jump_simple_backwards(self):
+            self.run_test(jump_simple_backwards)
+        def test_03_jump_out_of_block_forwards(self):
+            self.run_test(jump_out_of_block_forwards)
+        def test_04_jump_out_of_block_backwards(self):
+            self.run_test(jump_out_of_block_backwards)
+        def test_05_jump_to_codeless_line(self):
+            self.run_test(jump_to_codeless_line)
+        def test_06_jump_to_same_line(self):
+            self.run_test(jump_to_same_line)
+        def test_07_jump_in_nested_finally(self):
+            self.run_test(jump_in_nested_finally)
+        def test_08_no_jump_too_far_forwards(self):
+            self.run_test(no_jump_too_far_forwards)
+        def test_09_no_jump_too_far_backwards(self):
+            self.run_test(no_jump_too_far_backwards)
+        def test_10_no_jump_to_except_1(self):
+            self.run_test(no_jump_to_except_1)
+        def test_11_no_jump_to_except_2(self):
+            self.run_test(no_jump_to_except_2)
+        def test_12_no_jump_to_except_3(self):
+            self.run_test(no_jump_to_except_3)
+        def test_13_no_jump_to_except_4(self):
+            self.run_test(no_jump_to_except_4)
+        def test_14_no_jump_forwards_into_block(self):
+            self.run_test(no_jump_forwards_into_block)
+        def test_15_no_jump_backwards_into_block(self):
+            self.run_test(no_jump_backwards_into_block)
+        def test_16_no_jump_into_finally_block(self):
+            self.run_test(no_jump_into_finally_block)
+        def test_17_no_jump_out_of_finally_block(self):
+            self.run_test(no_jump_out_of_finally_block)
+        def test_18_no_jump_to_non_integers(self):
+            self.run_test(no_jump_to_non_integers)
+        def test_19_no_jump_without_trace_function(self):
+            no_jump_without_trace_function()
+
+    if not __debug__:
+        def test_jumping_forbidden_with_dash_O(self):
+            tracer = JumpTracer(jump_simple_forwards)
+            sys.settrace(tracer.trace)
+            output = []
+            try:
+                jump_simple_forwards(output)
+            except AttributeError as e:
+                self.assertEquals(
+                    str(e),
+                    "f_lineno attribute is read-only when running with -O")
+            else:
+                self.fail("Expected AttributeError on attempt to set lineno.")
+            sys.settrace(None)
+        
 
 def test_main():
     test_support.run_unittest(

@@ -15,12 +15,12 @@ else:
     # remain compatible with Python  < 2.3
     READ_MODE = "r"
 
-LOAD_GLOBAL = chr(dis.opname.index('LOAD_GLOBAL'))
-LOAD_CONST = chr(dis.opname.index('LOAD_CONST'))
-STORE_NAME = chr(dis.opname.index('STORE_NAME'))
-STORE_GLOBAL = chr(dis.opname.index('STORE_GLOBAL'))
+LOAD_GLOBAL = dis.opname.index('LOAD_GLOBAL')
+CC = dis.opname.index('CC')
+C_CALL_FUNCTION = dis.opname.index('C_CALL_FUNCTION')
+STORE_NAME = dis.opname.index('STORE_NAME')
+STORE_GLOBAL = dis.opname.index('STORE_GLOBAL')
 STORE_OPS = [STORE_NAME, STORE_GLOBAL]
-HAVE_ARGUMENT = chr(dis.HAVE_ARGUMENT)
 
 # Modulefinder does a good job at simulating Python's, but it can not
 # handle __path__ modifications packages make at runtime.  Therefore there
@@ -337,39 +337,36 @@ class ModuleFinder:
                         self._add_badmodule(fullname, caller)
 
     def scan_opcodes(self, co, unpack=struct.unpack):
-        # Scan the code, and yield 'interesting' opcode combinations.
-        # This supports the absolute and relative imports introduced in
-        # Python 2.5.
-        code = co.co_code
+        # Scan the code, and yield 'interesting' opcode combinations
+        code = list(co.co_code)
         names = co.co_names
         consts = co.co_consts
-        OPCODE_SIG = LOAD_GLOBAL + LOAD_CONST + LOAD_CONST + LOAD_CONST
         while code:
-            c = code[0]
+            c = dis.get_opcode(code[0])
             if c in STORE_OPS:
-                oparg, = unpack('<H', code[1:3])
+                oparg = dis.get_argument(code[1])
                 yield "store", (names[oparg],)
-                code = code[3:]
+                code = code[2:]
                 continue
-            if code[:12:3] == OPCODE_SIG and '#@import_name' in names:
-                load_global_args = chr(names.index('#@import_name')) + chr(0)
-                if code[:3] == LOAD_GLOBAL + load_global_args:
-                    oparg_1, oparg_2, oparg_3 = unpack('<xHxHxH', code[3:12])
-                    level = consts[oparg_1]
-                    if level == -1: # normal import
-                        yield "import", (consts[oparg_2], consts[oparg_3])
-                    elif level == 0: # absolute import
-                        yield "absolute_import", (consts[oparg_2],
-                                                  consts[oparg_3])
-                    else: # relative import
-                        yield "relative_import", (level,
-                                                  consts[oparg_2],
-                                                  consts[oparg_3])
-                    code = code[9:]
-                    continue
-            if c >= HAVE_ARGUMENT:
-                code = code[3:]
-            else:
+            if (len(code) >= 8 and
+                dis.get_opcode(code[0]) == LOAD_GLOBAL and
+                '#@import_name' in names and
+                dis.get_argument(code[1]) == names.index('#@import_name') and
+                dis.get_opcode(code[2]) == CC and
+                dis.get_opcode(code[5]) == C_CALL_FUNCTION):
+                oparg_1, oparg_2, oparg_3 = (dis.get_argument(code[x])
+                                             for x in (3,4,6))
+                level = consts[oparg_1]
+                if level == -1: # normal import
+                    yield "import", (consts[oparg_2], consts[oparg_3])
+                elif level == 0: # absolute import
+                    yield "absolute_import", (consts[oparg_2], consts[oparg_3])
+                else: # relative import
+                    yield "relative_import", (level, consts[oparg_2], consts[oparg_3])
+                code = code[8:]
+                continue
+            code = code[1:]
+            while code and dis.is_argument(code[0]):
                 code = code[1:]
 
     def scan_code(self, co, m):

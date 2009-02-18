@@ -2,6 +2,7 @@
 #include "vcompiler.h"
 #include "stats.h"
 #include "Python/pycinternal.h"
+#include <instructionsobject.h>
 
 /* set to 1 to compute the detailed control flow
    which allows for early variable deletion */
@@ -42,7 +43,10 @@ static char* NoControlFlowIfBuiltin[] = {
                               op == JUMP_FORWARD ||   \
                               op == JUMP_ABSOLUTE ||  \
                               op == CONTINUE_LOOP ||  \
-                              op == RAISE_VARARGS ||  \
+                              op == RAISE_VARARGS_ZERO || \
+                              op == RAISE_VARARGS_ONE || \
+                              op == RAISE_VARARGS_TWO || \
+                              op == RAISE_VARARGS_THREE || \
                               IS_EPILOGUE_INSTR(op))
 
 /* instructions with a target: */
@@ -83,7 +87,8 @@ static char* NoControlFlowIfBuiltin[] = {
                              op == ROT_THREE ||         \
                              op == ROT_FOUR ||          \
                              op == DUP_TOP ||           \
-                             op == DUP_TOPX ||          \
+                             op == DUP_TOP_TWO ||       \
+                             op == DUP_TOP_THREE ||     \
                              op == POP_BLOCK ||         \
                              op == END_FINALLY ||       \
                              op == LOAD_CONST ||        \
@@ -135,18 +140,18 @@ static char* NoControlFlowIfBuiltin[] = {
                            op == INPLACE_AND ||               \
                            op == INPLACE_XOR ||               \
                            op == INPLACE_OR ||                \
-                           op == SLICE+0 ||                   \
-                           op == SLICE+1 ||                   \
-                           op == SLICE+2 ||                   \
-                           op == SLICE+3 ||                   \
-                           op == STORE_SLICE+0 ||             \
-                           op == STORE_SLICE+1 ||             \
-                           op == STORE_SLICE+2 ||             \
-                           op == STORE_SLICE+3 ||             \
-                           op == DELETE_SLICE+0 ||            \
-                           op == DELETE_SLICE+1 ||            \
-                           op == DELETE_SLICE+2 ||            \
-                           op == DELETE_SLICE+3 ||            \
+                           op == SLICE_NONE ||                \
+                           op == SLICE_LEFT ||                \
+                           op == SLICE_RIGHT ||               \
+                           op == SLICE_BOTH ||                \
+                           op == STORE_SLICE_NONE ||          \
+                           op == STORE_SLICE_LEFT ||          \
+                           op == STORE_SLICE_RIGHT ||         \
+                           op == STORE_SLICE_BOTH ||          \
+                           op == DELETE_SLICE_NONE ||         \
+                           op == DELETE_SLICE_LEFT ||         \
+                           op == DELETE_SLICE_RIGHT ||        \
+                           op == DELETE_SLICE_BOTH ||         \
                            op == STORE_SUBSCR ||              \
                            op == DELETE_SUBSCR ||             \
                            op == STORE_ATTR ||                \
@@ -158,10 +163,9 @@ static char* NoControlFlowIfBuiltin[] = {
                            /* COMPARE_OP special-cased */     \
                            op == GET_ITER ||                  \
                            op == CALL_FUNCTION ||             \
-                           op == CALL_FUNCTION_VAR ||         \
-                           op == CALL_FUNCTION_KW ||          \
                            op == CALL_FUNCTION_VAR_KW ||      \
-                           op == BUILD_SLICE ||               \
+                           op == BUILD_SLICE_TWO ||           \
+                           op == BUILD_SLICE_THREE ||         \
                            op == SETUP_LOOP)
 
 #define SUPPORTED_COMPARE_ARG(oparg)  ( \
@@ -484,8 +488,10 @@ PyObject* psyco_build_merge_points(PyCodeObject* co, int module)
   PyObject* s;
   mergepoint_t* mp;
   int mp_flags = MP_FLAGS_EXTRA;
-  int length = PyString_GET_SIZE(co->co_code);
-  unsigned char* source = (unsigned char*) PyString_AS_STRING(co->co_code);
+  int length = Py_SIZE(co->co_code);
+  PyInst* source =  ((PyInstructionsObject*)co->co_code)->inst;
+  int next_insts[10];  /* superinstructions hold less than 10 instructions */
+  int next_inst_index = 0;
   size_t ibytes = (length+1) * sizeof(struct instrnode_s);
   struct instrnode_s* instrnodes;
   int i, lasti, count;
@@ -525,24 +531,24 @@ PyObject* psyco_build_merge_points(PyCodeObject* co, int module)
 
   /* parse the bytecode once, filling the instrnodes[].opcode,back,mask fields */
   iblock = 0;
-  for (i=0; i<length; )
+  for (i=0; i<length || next_inst_index > 0; )
     {
       int oparg = 0;
       int i0 = i;
       int btop;
-      unsigned char op = source[i++];
+      int op;
+      if (next_inst_index == 0)
+        {
+          next_inst_index = _PyCode_UncombineSuperInstruction(
+              PyInst_GET_OPCODE(&source[i++]),
+              next_insts, 10);
+        }
+      op = next_insts[--next_inst_index];
       instrnodes[i0].opcode = op;
       if (HAS_ARG(op))
         {
-          i += 2;
-          oparg = (source[i-1]<<8) + source[i-2];
-          if (op == EXTENDED_ARG)
-            {
-              op = source[i++];
-              psyco_assert(HAS_ARG(op) && op != EXTENDED_ARG);
-              i += 2;
-              oparg = oparg<<16 | ((source[i-1]<<8) + source[i-2]);
-            }
+          i++;
+          oparg = PyInst_GET_ARG(&source[i-1]);
           instrnodes[i0+1].back = instrnodes[i-1].back = (i-1) - i0;
           instrnodes[i0+1].mask = instrnodes[i-1].mask = oparg;  /* save oparg */
         }

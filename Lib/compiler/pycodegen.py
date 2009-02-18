@@ -13,14 +13,6 @@ from compiler.consts import (CO_VARARGS, CO_VARKEYWORDS, CO_NEWLOCALS,
      CO_FUTURE_ABSIMPORT, CO_FUTURE_WITH_STATEMENT, CO_FUTURE_PRINT_FUNCTION)
 from compiler.pyassem import TupleArg
 
-callfunc_opcode_info = {
-    # (Have *args, Have **args) : opcode
-    (0,0) : "CALL_FUNCTION",
-    (1,0) : "CALL_FUNCTION_VAR",
-    (0,1) : "CALL_FUNCTION_KW",
-    (1,1) : "CALL_FUNCTION_VAR_KW",
-}
-
 LOOP = 1
 EXCEPT = 2
 TRY_FINALLY = 3
@@ -729,9 +721,9 @@ class CodeGenerator:
             self.emit('LOAD_GLOBAL', 'AssertionError')
             if node.fail:
                 self.visit(node.fail)
-                self.emit('RAISE_VARARGS', 2)
+                self.emit('RAISE_VARARGS_TWO')
             else:
-                self.emit('RAISE_VARARGS', 1)
+                self.emit('RAISE_VARARGS_ONE')
             self.nextBlock(end)
             self.emit('POP_TOP')
 
@@ -747,7 +739,7 @@ class CodeGenerator:
         if node.expr3:
             self.visit(node.expr3)
             n = n + 1
-        self.emit('RAISE_VARARGS', n)
+        self.emit('RAISE_VARARGS_' + ('ZERO', 'ONE', 'TWO', 'THREE')[n])
 
     def visitTryExcept(self, node):
         body = self.newBlock()
@@ -920,9 +912,9 @@ class CodeGenerator:
         self.emit('LOAD_CONST', node.modname)
         self.emit('CALL_FUNCTION', 3)
         for name, alias in node.names:
-            # The DUP_TOPX 2 is duplicating [#@import_from, module], where
+            # The DUP_TOP_TWO is duplicating [#@import_from, module], where
             # module is the return value from #@import_name.
-            self.emit('DUP_TOPX', 2)
+            self.emit('DUP_TOP_TWO')
             self.emit('LOAD_CONST', name)
             self.emit('CALL_FUNCTION', 2)
             self._resolveDots(name)
@@ -1037,7 +1029,7 @@ class CodeGenerator:
                 self.emit('ROT_FOUR')
             else:
                 self.emit('ROT_THREE')
-            self.emit('STORE_SLICE+%d' % slice)
+            self.emit('STORE_SLICE_' + ('NONE', 'LEFT', 'RIGHT', 'BOTH')[slice])
 
     def visitAugSubscript(self, node, mode):
         if mode == "load":
@@ -1077,8 +1069,15 @@ class CodeGenerator:
             self.visit(node.dstar_args)
         have_star = node.star_args is not None
         have_dstar = node.dstar_args is not None
-        opcode = callfunc_opcode_info[have_star, have_dstar]
-        self.emit(opcode, kw << 8 | pos)
+        if not have_star and not have_dstar:
+            self.emit('CALL_FUNCTION', kw << 8 | pos)
+        else:
+            var_kw = 0
+            if have_star:
+                var_kw = var_kw | 1
+            if have_dstar:
+                var_kw = var_kw | 2
+            self.emit('CALL_FUNCTION_VAR_KW', (kw << 8 | pos) << 16 | var_kw)
 
     def visitPrint(self, node):
         kwargs = 0
@@ -1123,15 +1122,15 @@ class CodeGenerator:
             if slice == 0:
                 self.emit('DUP_TOP')
             elif slice == 3:
-                self.emit('DUP_TOPX', 3)
+                self.emit('DUP_TOP_THREE')
             else:
-                self.emit('DUP_TOPX', 2)
+                self.emit('DUP_TOP_TWO')
         if node.flags == 'OP_APPLY':
-            self.emit('SLICE+%d' % slice)
+            self.emit('SLICE_' + ('NONE', 'LEFT', 'RIGHT', 'BOTH')[slice])
         elif node.flags == 'OP_ASSIGN':
-            self.emit('STORE_SLICE+%d' % slice)
+            self.emit('STORE_SLICE_' + ('NONE', 'LEFT', 'RIGHT', 'BOTH')[slice])
         elif node.flags == 'OP_DELETE':
-            self.emit('DELETE_SLICE+%d' % slice)
+            self.emit('DELETE_SLICE_' + ('NONE', 'LEFT', 'RIGHT', 'BOTH')[slice])
         else:
             print "weird slice", node.flags
             raise
@@ -1143,7 +1142,7 @@ class CodeGenerator:
         if len(node.subs) > 1:
             self.emit('BUILD_TUPLE', len(node.subs))
         if aug_flag:
-            self.emit('DUP_TOPX', 2)
+            self.emit('DUP_TOP_TWO')
         if node.flags == 'OP_APPLY':
             self.emit('BINARY_SUBSCR')
         elif node.flags == 'OP_ASSIGN':
@@ -1246,7 +1245,8 @@ class CodeGenerator:
     def visitSliceobj(self, node):
         for child in node.nodes:
             self.visit(child)
-        self.emit('BUILD_SLICE', len(node.nodes))
+        # ZERO and ONE aren't actually used.
+        self.emit('BUILD_SLICE_' + ('ZERO', 'ONE', 'TWO', 'THREE')[len(node.nodes)])
 
     def visitDict(self, node):
         self.set_lineno(node)

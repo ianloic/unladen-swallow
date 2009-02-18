@@ -1,5 +1,6 @@
 #include "Python.h"
 #include "code.h"
+#include "instructionsobject.h"
 #include "structmember.h"
 
 #define NAME_CHARS \
@@ -51,7 +52,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 	Py_ssize_t i;
 	/* Check argument types */
 	if (argcount < 0 || nlocals < 0 ||
-	    code == NULL ||
+	    code == NULL || !PyInstructions_Check(code) ||
 	    consts == NULL || !PyTuple_Check(consts) ||
 	    names == NULL || !PyTuple_Check(names) ||
 	    varnames == NULL || !PyTuple_Check(varnames) ||
@@ -59,8 +60,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 	    cellvars == NULL || !PyTuple_Check(cellvars) ||
 	    name == NULL || !PyString_Check(name) ||
 	    filename == NULL || !PyString_Check(filename) ||
-	    lnotab == NULL || !PyString_Check(lnotab) ||
-	    !PyObject_CheckReadBuffer(code)) {
+	    lnotab == NULL || !PyString_Check(lnotab)) {
 		PyErr_BadInternalCall();
 		return NULL;
 	}
@@ -103,10 +103,63 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		Py_INCREF(lnotab);
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
+                co->co_tcode = NULL;
 	}
 	return co;
 }
 
+PyCodeObject *
+PyCode_NewEmpty(const char *filename, const char *funcname, int firstlineno)
+{
+	static PyObject *instructions = NULL;
+	static PyObject *nulltuple = NULL;
+	static PyObject *lnotab = NULL;
+	PyObject *filename_ob = NULL;
+	PyObject *funcname_ob = NULL;
+	PyCodeObject *result = NULL;
+	if (instructions == NULL) {
+		instructions = (PyObject *)_PyInstructions_New(0);
+		if (instructions == NULL)
+			goto failed;
+	}
+	if (nulltuple == NULL) {
+		nulltuple = PyTuple_New(0);
+		if (nulltuple == NULL)
+			goto failed;
+	}
+	if (lnotab == NULL) {
+		lnotab = PyString_FromString("");
+		if (lnotab == NULL)
+			goto failed;
+	}
+	funcname_ob = PyString_FromString(funcname);
+	if (funcname_ob == NULL)
+		goto failed;
+	filename_ob = PyString_FromString(filename);
+	if (filename_ob == NULL)
+		goto failed;
+
+	result = PyCode_New(0,			/* argcount */
+			    0,			/* nlocals */
+			    0,			/* stacksize */
+			    0,			/* flags */
+			    instructions,	/* code */
+			    nulltuple,		/* consts */
+			    nulltuple,		/* names */
+			    nulltuple,		/* varnames */
+			    nulltuple,		/* freevars */
+			    nulltuple,		/* cellvars */
+			    filename_ob,	/* filename */
+			    funcname_ob,	/* name */
+			    firstlineno,	/* firstlineno */
+			    lnotab		/* lnotab */
+			    );
+
+failed:
+	Py_XDECREF(funcname_ob);
+	Py_XDECREF(filename_ob);
+	return result;
+}
 
 #define OFF(x) offsetof(PyCodeObject, x)
 
@@ -186,7 +239,7 @@ code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 	int stacksize;
 	int flags;
 	PyObject *co = NULL;
-	PyObject *code;
+	PyObject *code; PyObject *ourcode = NULL;
 	PyObject *consts;
 	PyObject *names, *ournames = NULL;
 	PyObject *varnames, *ourvarnames = NULL;
@@ -197,7 +250,7 @@ code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 	int firstlineno;
 	PyObject *lnotab;
 
-	if (!PyArg_ParseTuple(args, "iiiiSO!O!O!SSiS|O!O!:code",
+	if (!PyArg_ParseTuple(args, "iiiiOO!O!O!SSiS|O!O!:code",
 			      &argcount, &nlocals, &stacksize, &flags,
 			      &code,
 			      &PyTuple_Type, &consts,
@@ -223,6 +276,9 @@ code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 		goto cleanup;
 	}
 
+	ourcode = PyInstructions_FromSequence(code);
+        if (ourcode == NULL)
+		goto cleanup;
 	ournames = validate_and_copy_tuple(names);
 	if (ournames == NULL)
 		goto cleanup;
@@ -243,10 +299,11 @@ code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 		goto cleanup;
 
 	co = (PyObject *)PyCode_New(argcount, nlocals, stacksize, flags,
-				    code, consts, ournames, ourvarnames,
+				    ourcode, consts, ournames, ourvarnames,
 				    ourfreevars, ourcellvars, filename,
 				    name, firstlineno, lnotab);
   cleanup:
+	Py_XDECREF(ourcode);
 	Py_XDECREF(ournames);
 	Py_XDECREF(ourvarnames);
 	Py_XDECREF(ourfreevars);
@@ -268,6 +325,8 @@ code_dealloc(PyCodeObject *co)
 	Py_XDECREF(co->co_lnotab);
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
+        if (co->co_tcode != NULL)
+                PyMem_FREE(co->co_tcode);
 	PyObject_DEL(co);
 }
 

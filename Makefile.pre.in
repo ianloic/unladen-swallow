@@ -42,6 +42,9 @@ SHELL=		/bin/sh
 # Use this to make a link between python$(VERSION) and python in $(BINDIR)
 LN=		@LN@
 
+# Used to create the ceval .i files.
+AWK=            @AWK@
+
 # Portable install script (configure doesn't always guess right)
 INSTALL=	@INSTALL@
 INSTALL_PROGRAM=@INSTALL_PROGRAM@
@@ -316,6 +319,7 @@ OBJECT_OBJS=	\
 		Objects/floatobject.o \
 		Objects/frameobject.o \
 		Objects/funcobject.o \
+		Objects/instructionsobject.o \
 		Objects/intobject.o \
 		Objects/iterobject.o \
 		Objects/listobject.o \
@@ -570,6 +574,29 @@ Python/formatter_unicode.o: $(srcdir)/Python/formatter_unicode.c \
 Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 				$(STRINGLIB_HEADERS)
 
+# Vmgen-provided ceval bits
+
+Python/ceval.o: $(srcdir)/Python/ceval.c \
+		$(srcdir)/Include/ceval-vm.i
+	$(CC) -c $(PY_CFLAGS) -fno-gcse -o $@ $<
+
+# Actually generates all of Include/ceval-vm.i,
+# Include/ceval-labels.i, and Include/ceval-peephole.i, but I can't
+# figure out how to tell make that a single command produces multiple
+# outputs, so I abbreviate that whole list with just ceval-vm.i.
+#
+# We generate these into $(srcdir) so that people without the patched
+# vmgen can still build Python; they just can't modify ceval.vmg.
+$(srcdir)/Include/ceval-vm.i: $(srcdir)/Python/ceval.vmg $(srcdir)/Python/mangler.awk
+	vmgen $<
+	$(AWK) -f $(srcdir)/Python/mangler.awk ceval-vm.i > $(srcdir)/Include/ceval-vm.i
+	rm ceval-vm.i
+	mv ceval-labels.i ceval-peephole.i $(srcdir)/Include/
+	rm ceval-disasm.i ceval-gen.i ceval-profile.i
+
+# Already built, just telling make.
+$(srcdir)/Include/ceval-labels.i $(srcdir)/Include/ceval-peephole.i : $(srcdir)/Include/ceval-vm.i
+
 ############################################################################
 # Header files
 
@@ -586,6 +613,9 @@ PYTHON_HEADERS= \
 		Include/bufferobject.h \
 		Include/cellobject.h \
 		Include/ceval.h \
+		Include/ceval-peephole.i \
+		Include/ceval-vm.i \
+		Include/ceval-labels.i \
 		Include/classobject.h \
 		Include/cobject.h \
 		Include/code.h \
@@ -603,6 +633,7 @@ PYTHON_HEADERS= \
 		Include/funcobject.h \
 		Include/genobject.h \
 		Include/import.h \
+		Include/instructionsobject.h \
 		Include/intobject.h \
 		Include/intrcheck.h \
 		Include/iterobject.h \
