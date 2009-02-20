@@ -483,7 +483,10 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -1;
 {
-a = PyNumber_Remainder(a1, a2);
+if (PyString_CheckExact(a1))
+	a = PyString_Format(a1, a2);
+else
+	a = PyNumber_Remainder(a1, a2);
 }
 
 NEXT_P1;
@@ -3091,7 +3094,10 @@ Obj a;
 vm_Obj2a(stack_pointerTOS,a1);
 vm_Obj2a(_stack_pointer1,a2);
 {
-a = PyNumber_Remainder(a1, a2);
+if (PyString_CheckExact(a1))
+	a = PyString_Format(a1, a2);
+else
+	a = PyNumber_Remainder(a1, a2);
 }
 
 vm_a2Obj(a,stack_pointerTOS);

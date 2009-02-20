@@ -122,7 +122,10 @@ BINARY_FLOOR_DIVIDE ( a1 a2 -- a  dec:a1 dec:a2  next:a )
 a = PyNumber_FloorDivide(a1, a2);
 
 BINARY_MODULO ( a1 a2 -- a  dec:a1 dec:a2  next:a )
-a = PyNumber_Remainder(a1, a2);
+if (PyString_CheckExact(a1))
+	a = PyString_Format(a1, a2);
+else
+	a = PyNumber_Remainder(a1, a2);
 
 BINARY_ADD ( a1 a2 -- a   next:a )
 if (PyInt_CheckExact(a1) && PyInt_CheckExact(a2)) {
