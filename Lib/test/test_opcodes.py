@@ -109,8 +109,25 @@ class OpcodeTest(unittest.TestCase):
         self.assertEqual(MyString() % 3, 42)
 
 
+class SuperinstructionTest(unittest.TestCase):
+
+    def test_LOAD_FAST_LOAD_FAST_invalid_local(self):
+        def f():
+            # This will compile to:
+            #   FF(a, b)
+            #   INPLACE_LSHIFT
+            #
+            # The first LOAD_FAST in the FF will fail to load 'a'
+            # (since it hasn't been assigned yet) and raise an
+            # exception.  Old versions of vmgen would then crash since
+            # they didn't restore the stack properly.
+            a <<= b
+            b = a
+        self.assertRaises(UnboundLocalError, f)
+
+
 def test_main():
-    run_unittest(OpcodeTest)
+    run_unittest(OpcodeTest, SuperinstructionTest)
 
 if __name__ == '__main__':
     test_main()

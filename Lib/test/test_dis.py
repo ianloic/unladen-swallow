@@ -13,14 +13,15 @@ def _f(a):
 
 dis_f = """\
  %-4d         0 LOAD_GLOBAL              0 (#@print_stmt)
-              2 LOAD_FAST                0 (a)
-              4 CALL_FUNCTION            1
-              6 POP_TOP
+              2 F_CALL_FUNCTION:
+                  LOAD_FAST                0 (a)
+                  CALL_FUNCTION            1
+              5 POP_TOP
 
- %-4d         7 RETURN_CONST:
+ %-4d         6 RETURN_CONST:
                   LOAD_CONST               1 (1)
                   RETURN_VALUE
-              9 RETURN_VALUE
+              8 RETURN_VALUE
 """%(_f.func_code.co_firstlineno + 1,
      _f.func_code.co_firstlineno + 2)
 
@@ -29,10 +30,10 @@ def _supertest(a):
     return a + 1
 
 dis_supertest = """\
- %-4d         0 LOAD_FAST                0 (a)
-              2 CBINARY_ADD:
+ %-4d         0 FC:
+                  LOAD_FAST                0 (a)
                   LOAD_CONST               1 (1)
-                  BINARY_ADD
+              3 BINARY_ADD
               4 RETURN_VALUE
 """%(_supertest.func_code.co_firstlineno + 1,)
 
@@ -41,10 +42,10 @@ def _2arg_supertest(a):
     return (a, 1, 2)
 
 dis_2arg_supertest = """\
- %-4d         0 LOAD_FAST                0 (a)
-              2 CC:
+ %-4d         0 FC:
+                  LOAD_FAST                0 (a)
                   LOAD_CONST               1 (1)
-                  LOAD_CONST               2 (2)
+              3 LOAD_CONST               2 (2)
               5 BUILD_TUPLE              3
               7 RETURN_VALUE
 """%(_2arg_supertest.func_code.co_firstlineno + 1,)

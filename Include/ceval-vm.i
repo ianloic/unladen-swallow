@@ -11,7 +11,7 @@ LABEL2(NOP)
 NEXT_P2;
 }
 
-LABEL(LOAD_FAST) /* LOAD_FAST ( #i -- a  inc:a ) */
+LABEL(LOAD_FAST) /* LOAD_FAST ( #i -- a ) */
 NAME("LOAD_FAST")
 {
 DEF_CA
@@ -31,14 +31,18 @@ if (a == NULL) {
                 PyTuple_GetItem(co->co_varnames, i));
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
-        STACKADJ(-1);
-        ERROR();
+        have_error = 1;
+
+NEXT_P1;
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P2;
+
 }
+Py_INCREF(a);
 }
 
 NEXT_P1;
 vm_a2Obj(a,stack_pointerTOS);
-vm_a2incref(a,__none__TOS);
 LABEL2(LOAD_FAST)
 NEXT_P2;
 }
@@ -2815,9 +2819,9 @@ x = a = GETITEM(consts, i);
 }
 
 vm_a2Obj(a,stack_pointer[-2]);
-vm_a2incref(a,__none__[1]);
+vm_a2incref(a,__none__TOS);
 }
-/* LOAD_FAST ( #i -- a  inc:a ) */
+/* LOAD_FAST ( #i -- a ) */
 NAME("LOAD_FAST")
 {
 Oparg i;
@@ -2833,16 +2837,212 @@ if (a == NULL) {
                 PyTuple_GetItem(co->co_varnames, i));
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
-        STACKADJ(-1);
-        ERROR();
+        have_error = 1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
 }
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,stack_pointerTOS);
+}
+NEXT_P1;
+LABEL2(CF)
+NEXT_P2;
+}
+
+LABEL(FC)
+{
+DEF_CA
+Cell MAYBE_UNUSED _IP0;
+Cell MAYBE_UNUSED _IP1;
+Obj MAYBE_UNUSED _stack_pointer0;
+Obj MAYBE_UNUSED _stack_pointer1;
+NEXT_P0;
+IF_stack_pointerTOS(stack_pointer[-1] = stack_pointerTOS);
+/* LOAD_FAST ( #i -- a ) */
+NAME("LOAD_FAST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IPTOS,305397797 ),i);
+stack_pointer += 2;
+{
+x = a = GETLOCAL(i);
+if (a == NULL) {
+        format_exc_check_arg(
+                PyExc_UnboundLocalError,
+                UNBOUNDLOCAL_ERROR_MSG,
+                PyTuple_GetItem(co->co_varnames, i));
+        why = WHY_EXCEPTION;
+        /* On exception, make sure the stack is valid. */
+        have_error = 1;
+        INC_IP(1);
+stack_pointer += -1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+IF_stack_pointerTOS(stack_pointerTOS = stack_pointer[-1]);
+NEXT_P2;
+
+}
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,stack_pointer[-2]);
+}
+/* LOAD_CONST ( #i -- a  inc:a ) */
+NAME("LOAD_CONST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IP[1],305397798 ),i);
+INC_IP(2);
+{
+x = a = GETITEM(consts, i);
 }
 
 vm_a2Obj(a,stack_pointerTOS);
 vm_a2incref(a,__none__TOS);
 }
 NEXT_P1;
-LABEL2(CF)
+LABEL2(FC)
+NEXT_P2;
+}
+
+LABEL(FF)
+{
+DEF_CA
+Cell MAYBE_UNUSED _IP0;
+Cell MAYBE_UNUSED _IP1;
+Obj MAYBE_UNUSED _stack_pointer0;
+Obj MAYBE_UNUSED _stack_pointer1;
+NEXT_P0;
+IF_stack_pointerTOS(stack_pointer[-1] = stack_pointerTOS);
+/* LOAD_FAST ( #i -- a ) */
+NAME("LOAD_FAST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IPTOS,305397799 ),i);
+stack_pointer += 2;
+{
+x = a = GETLOCAL(i);
+if (a == NULL) {
+        format_exc_check_arg(
+                PyExc_UnboundLocalError,
+                UNBOUNDLOCAL_ERROR_MSG,
+                PyTuple_GetItem(co->co_varnames, i));
+        why = WHY_EXCEPTION;
+        /* On exception, make sure the stack is valid. */
+        have_error = 1;
+        INC_IP(1);
+stack_pointer += -1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+IF_stack_pointerTOS(stack_pointerTOS = stack_pointer[-1]);
+NEXT_P2;
+
+}
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,stack_pointer[-2]);
+}
+/* LOAD_FAST ( #i -- a ) */
+NAME("LOAD_FAST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IP[1],305397800 ),i);
+INC_IP(2);
+{
+x = a = GETLOCAL(i);
+if (a == NULL) {
+        format_exc_check_arg(
+                PyExc_UnboundLocalError,
+                UNBOUNDLOCAL_ERROR_MSG,
+                PyTuple_GetItem(co->co_varnames, i));
+        why = WHY_EXCEPTION;
+        /* On exception, make sure the stack is valid. */
+        have_error = 1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
+}
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,stack_pointerTOS);
+}
+NEXT_P1;
+LABEL2(FF)
+NEXT_P2;
+}
+
+LABEL(FA)
+{
+DEF_CA
+Cell MAYBE_UNUSED _IP0;
+Cell MAYBE_UNUSED _IP1;
+Obj MAYBE_UNUSED _stack_pointer0;
+NEXT_P0;
+IF_stack_pointerTOS(stack_pointer[-1] = stack_pointerTOS);
+/* LOAD_FAST ( #i -- a ) */
+NAME("LOAD_FAST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IPTOS,305397801 ),i);
+stack_pointer += 1;
+{
+x = a = GETLOCAL(i);
+if (a == NULL) {
+        format_exc_check_arg(
+                PyExc_UnboundLocalError,
+                UNBOUNDLOCAL_ERROR_MSG,
+                PyTuple_GetItem(co->co_varnames, i));
+        why = WHY_EXCEPTION;
+        /* On exception, make sure the stack is valid. */
+        have_error = 1;
+        INC_IP(1);
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
+}
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,_stack_pointer0);
+}
+/* LOAD_ATTR ( #i a1 -- a3  dec:a1  next:a3 ) */
+NAME("LOAD_ATTR")
+{
+Oparg i;
+Obj a1;
+Obj a3;
+vm_Cell2i(IMM_ARG(IP[1],305397802 ),i);
+vm_Obj2a(_stack_pointer0,a1);
+INC_IP(2);
+{
+a2 = GETITEM(names, i);
+a3 = PyObject_GetAttr(a1, a2);
+}
+
+vm_a2Obj(a3,stack_pointerTOS);
+vm_a2decref(a1,__none__TOS);
+vm_a2next(a3,__none__TOS);
+}
+NEXT_P1;
+LABEL2(FA)
 NEXT_P2;
 }
 
@@ -2858,7 +3058,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397797 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397803 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -2901,7 +3101,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397798 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397804 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -2944,7 +3144,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397799 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397805 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -2990,7 +3190,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397800 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397806 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3033,7 +3233,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397801 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397807 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3076,7 +3276,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397802 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397808 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3122,7 +3322,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397803 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397809 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3185,7 +3385,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397804 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397810 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3239,7 +3439,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397805 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397811 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3293,7 +3493,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397806 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397812 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3336,7 +3536,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397807 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397813 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3379,7 +3579,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397808 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397814 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3422,7 +3622,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397809 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397815 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3465,7 +3665,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397810 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397816 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3508,7 +3708,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397811 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397817 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3551,7 +3751,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397812 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397818 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3614,7 +3814,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397813 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397819 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3668,7 +3868,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397814 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397820 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3711,7 +3911,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397815 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397821 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3754,7 +3954,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397816 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397822 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3797,7 +3997,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397817 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397823 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3841,7 +4041,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397818 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397824 ),i);
 {
 x = a = GETITEM(consts, i);
 }
@@ -3856,7 +4056,7 @@ Oparg i;
 Obj a1;
 Obj a2;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397819 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397825 ),i);
 vm_Obj2a(stack_pointerTOS,a1);
 vm_Obj2a(_stack_pointer1,a2);
 INC_IP(2);
@@ -3910,19 +4110,19 @@ NAME("STORE_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397820 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397826 ),i);
 vm_Obj2a(stack_pointerTOS,a);
 {
 SETLOCAL(i, a);
 }
 
 }
-/* LOAD_FAST ( #i -- a  inc:a ) */
+/* LOAD_FAST ( #i -- a ) */
 NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397821 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397827 ),i);
 INC_IP(2);
 {
 x = a = GETLOCAL(i);
@@ -3933,13 +4133,17 @@ if (a == NULL) {
                 PyTuple_GetItem(co->co_varnames, i));
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
-        STACKADJ(-1);
-        ERROR();
+        have_error = 1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
 }
+Py_INCREF(a);
 }
 
 vm_a2Obj(a,stack_pointerTOS);
-vm_a2incref(a,__none__TOS);
 }
 NEXT_P1;
 LABEL2(STORE_LOAD_FAST)
@@ -3962,12 +4166,12 @@ vm_Obj2a(stack_pointerTOS,a);
 
 vm_a2decref(a,__none__TOS);
 }
-/* LOAD_FAST ( #i -- a  inc:a ) */
+/* LOAD_FAST ( #i -- a ) */
 NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397822 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397828 ),i);
 INC_IP(1);
 {
 x = a = GETLOCAL(i);
@@ -3978,13 +4182,17 @@ if (a == NULL) {
                 PyTuple_GetItem(co->co_varnames, i));
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
-        STACKADJ(-1);
-        ERROR();
+        have_error = 1;
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
 }
+Py_INCREF(a);
 }
 
 vm_a2Obj(a,stack_pointerTOS);
-vm_a2incref(a,__none__TOS);
 }
 NEXT_P1;
 LABEL2(POP_LOAD_FAST)
@@ -4004,7 +4212,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397823 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397829 ),i);
 stack_pointer += 1;
 {
 x = a = GETITEM(consts, i);
@@ -4017,7 +4225,7 @@ vm_a2incref(a,__none__TOS);
 NAME("CALL_FUNCTION")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IP[1],305397824 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397830 ),i);
 INC_IP(2);
 {
 PyObject **sp = stack_pointer;
@@ -4032,6 +4240,65 @@ ERROR();
 }
 NEXT_P1;
 LABEL2(C_CALL_FUNCTION)
+NEXT_P2;
+}
+
+LABEL(F_CALL_FUNCTION)
+{
+DEF_CA
+Cell MAYBE_UNUSED _IP0;
+Cell MAYBE_UNUSED _IP1;
+Obj MAYBE_UNUSED _stack_pointer0;
+NEXT_P0;
+IF_stack_pointerTOS(stack_pointer[-1] = stack_pointerTOS);
+/* LOAD_FAST ( #i -- a ) */
+NAME("LOAD_FAST")
+{
+Oparg i;
+Obj a;
+vm_Cell2i(IMM_ARG(IPTOS,305397831 ),i);
+stack_pointer += 1;
+{
+x = a = GETLOCAL(i);
+if (a == NULL) {
+        format_exc_check_arg(
+                PyExc_UnboundLocalError,
+                UNBOUNDLOCAL_ERROR_MSG,
+                PyTuple_GetItem(co->co_varnames, i));
+        why = WHY_EXCEPTION;
+        /* On exception, make sure the stack is valid. */
+        have_error = 1;
+        INC_IP(1);
+
+vm_a2Obj(a,stack_pointerTOS);
+NEXT_P1;
+NEXT_P2;
+
+}
+Py_INCREF(a);
+}
+
+vm_a2Obj(a,stack_pointerTOS);
+}
+/* CALL_FUNCTION ( #i -- ) */
+NAME("CALL_FUNCTION")
+{
+Oparg i;
+vm_Cell2i(IMM_ARG(IP[1],305397832 ),i);
+INC_IP(2);
+{
+PyObject **sp = stack_pointer;
+x = call_function(&sp, i);
+stack_pointer = sp;
+PUSH(x);
+if (x != NULL) NEXT();
+why = WHY_EXCEPTION;
+ERROR();
+}
+
+}
+NEXT_P1;
+LABEL2(F_CALL_FUNCTION)
 NEXT_P2;
 }
 
@@ -4050,7 +4317,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397825 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397833 ),i);
 stack_pointer += 2;
 {
 x = a = GETITEM(consts, i);
@@ -4064,7 +4331,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397826 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397834 ),i);
 {
 x = a = GETITEM(consts, i);
 }
@@ -4076,7 +4343,7 @@ vm_a2incref(a,__none__TOS);
 NAME("CALL_FUNCTION")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IP[2],305397827 ),i);
+vm_Cell2i(IMM_ARG(IP[2],305397835 ),i);
 INC_IP(3);
 {
 PyObject **sp = stack_pointer;
@@ -4107,7 +4374,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397828 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397836 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -4153,7 +4420,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397829 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397837 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -4200,7 +4467,7 @@ vm_a2decref(a,__none__TOS);
 NAME("JUMP_ABSOLUTE")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IPTOS,305397830 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397838 ),i);
 INC_IP(1);
 {
 JUMPTO(i);

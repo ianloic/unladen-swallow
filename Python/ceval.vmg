@@ -1,8 +1,13 @@
 
 \ VM instruction implementations
 
-\ To compile this file with vmgen, find prims2x.fs in the gforth distribution
-\ and change "4 constant max-stacks" to "9 constant max-stacks".
+\ To compile this file with vmgen, find prims2x.fs in the gforth
+\ distribution (often /usr/share/gforth/0.6.2/prims2x.fs) and replace
+\ it with version 1.8 of the upstream source:
+\ http://www.complang.tuwien.ac.at/viewcvs/cgi-bin/viewcvs.cgi/*checkout*/gforth/prims2x0.6.2.fs?rev=1.8
+\ This increases the allowed number of stacks and allows instructions
+\ like LOAD_FAST to be prefixes for superinstructions.  Later upstream
+\ versions may work, but I haven't tested them.
 
 \ _. Stack definitions &c.
 
@@ -38,7 +43,7 @@
 \ _ , Superinstruction Prefix Approved Opcodes (TM)
 NOP ( -- )
 
-LOAD_FAST ( #i -- a  inc:a )
+LOAD_FAST ( #i -- a )
 x = a = GETLOCAL(i);
 if (a == NULL) {
         format_exc_check_arg(
@@ -47,9 +52,10 @@ if (a == NULL) {
                 PyTuple_GetItem(co->co_varnames, i));
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
-        STACKADJ(-1);
-        ERROR();
+        have_error = 1;
+        INST_TAIL;
 }
+Py_INCREF(a);
 
 LOAD_CONST ( #i -- a  inc:a )
 x = a = GETITEM(consts, i);
@@ -939,6 +945,9 @@ ERROR();
 \ _. Superinstructions
 CC = LOAD_CONST LOAD_CONST
 CF = LOAD_CONST LOAD_FAST
+FC = LOAD_FAST LOAD_CONST
+FF = LOAD_FAST LOAD_FAST
+FA = LOAD_FAST LOAD_ATTR
 
 CBINARY_POWER = LOAD_CONST BINARY_POWER
 CBINARY_MULTIPLY = LOAD_CONST BINARY_MULTIPLY
@@ -966,6 +975,7 @@ CCOMPARE_OP = LOAD_CONST COMPARE_OP
 STORE_LOAD_FAST = STORE_FAST LOAD_FAST
 POP_LOAD_FAST = POP_TOP LOAD_FAST
 C_CALL_FUNCTION = LOAD_CONST CALL_FUNCTION
+F_CALL_FUNCTION = LOAD_FAST CALL_FUNCTION
 CC_CALL_FUNCTION = LOAD_CONST LOAD_CONST CALL_FUNCTION
 C_STORE_MAP = LOAD_CONST STORE_MAP
 RETURN_CONST = LOAD_CONST RETURN_VALUE

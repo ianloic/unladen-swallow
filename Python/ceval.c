@@ -610,6 +610,10 @@ typedef PyObject *Obj;
 /* Put an indirect jump in every opcode to take advantage of the
    processor's branch predictor. */
 #define NEXT_P2 do { \
+		if (have_error) { \
+			have_error = 0; \
+			goto on_error; \
+		} \
 		if (_Py_TracingPossible) goto fast_next_opcode; \
 		goto *next_label; \
 	} while(0)
@@ -700,6 +704,12 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 	PyObject *retval = NULL;	/* Return value */
 	PyThreadState *tstate = PyThreadState_GET();
 	PyCodeObject *co;
+
+	int have_error = 0;  /* Used to tell NEXT_P2 to goto on_error
+			        instead of the next opcode.  As long
+			        as we keep this 0 through nearly all
+			        of the code, it gets optimized
+			        away. */
 
 	/* when tracing we set things up so that
 
