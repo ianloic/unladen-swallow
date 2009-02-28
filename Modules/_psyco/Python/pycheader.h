@@ -48,7 +48,8 @@
 
 typedef struct {
   PyCodeObject* co;     /* code object we are compiling */
-  int next_instr;       /* next instruction to compile */
+  int next_prim:4;      /* next primitive inside bytecode[next_instr] to compile */
+  int next_instr:28;    /* next instruction to compile */
   short auto_recursion; /* # levels to auto-compile calls to Python functions */
   char is_inlining;     /* true when compiling a code inlined in a parent */
   unsigned char iblock; /* index in blockstack */

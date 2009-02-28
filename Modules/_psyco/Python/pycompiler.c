@@ -862,10 +862,12 @@ void psyco_pycompiler_init(void)
 #define STACK_POINTER() (stack_a + po->pr.stack_level)
 #define INSTR_OFFSET()  (next_instr)
 #define STACK_LEVEL()   (po->pr.stack_level)
-#define JUMPBY(offset)  (next_instr += (offset))
-#define JUMPTO(target)  (next_instr = (target))
+#define JUMPBY(offset)  (next_prim = 0, next_instr += (offset))
+#define JUMPTO(target)  (next_prim = 0, next_instr = (target))
 
-#define SAVE_NEXT_INSTR(nextinstr1)   (po->pr.next_instr = (nextinstr1))
+#define SAVE_NEXT_INSTR(nextinstr1, nextprim1) \
+	(po->pr.next_instr = (nextinstr1), \
+	 po->pr.next_prim = (nextprim1))
 
 /* #define MISSING_OPCODE(opcode)					 */
 /* 	case opcode:						 */
@@ -1749,7 +1751,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
       PyCodeObject* co = po->pr.co;
       PyInst* bytecode = ((PyInstructionsObject*)co->co_code)->inst;
       int next_insts[10];  /* superinstructions hold less than 10 instructions */
-      int next_inst_index = 0;
+      int next_prim = 0;
       vinfo_t *u, *v,	/* temporary objects    */
               *w, *x;	/* popped off the stack */
       condition_code_t cc;
@@ -1757,6 +1759,26 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
       int next_instr = po->pr.next_instr;
       mergepoint_t* mp = psyco_next_merge_point(po->pr.merge_points,
                                                 next_instr+1);
+
+      /* Go back to the beginning of a superinstruction. */
+      while (bytecode[next_instr].is_arg)
+	next_instr--;
+      extra_assert(next_instr >= 0);
+      /* Advance next_instr and next_prim to where they were at the
+	 last call to SAVE_NEXT_INSTR(). */
+      if (po->pr.next_prim > 0)
+	{
+	  next_prim = _PyCode_UncombineSuperInstruction(
+	      PyInst_GET_OPCODE(&bytecode[next_instr++]),
+	      next_insts, 10);
+	  while (next_prim > po->pr.next_prim)
+	    {
+	      opcode = next_insts[--next_prim];
+	      if (HAS_ARG(opcode))
+		oparg = NEXTARG();
+	    }
+	}
+      extra_assert(next_instr == po->pr.next_instr);
 
       /* trace each code block entry point */
       TRACE_EXECUTION_NOERR("ENTER_MAINLOOP");
@@ -1770,17 +1792,17 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
         /* are we potentially running out of stack space? */
         CHECK_STACK_SPACE();
 
-	/* save 'next_instr' and 'respawn_cnt' */
-	SAVE_NEXT_INSTR(next_instr);  /* could be optimized, not needed in the
-					 case of an opcode that cannot set
-					 run-time conditions */
-	
-	if (next_inst_index == 0) {
-		next_inst_index = _PyCode_UncombineSuperInstruction(
+	/* Save 'next_instr' and 'respawn_cnt'. Could be optimized,
+           not needed in the case of an opcode that cannot set
+           run-time conditions */
+	SAVE_NEXT_INSTR(next_instr, next_prim);
+
+	if (next_prim == 0) {
+		next_prim = _PyCode_UncombineSuperInstruction(
 			PyInst_GET_OPCODE(&bytecode[next_instr++]),
 			next_insts, 10);
 	}
-	opcode = next_insts[--next_inst_index];
+	opcode = next_insts[--next_prim];
 	if (HAS_ARG(opcode))
 		oparg = NEXTARG();
 
@@ -2545,7 +2567,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 			/* compile the beginning of the "if true" path */
 			int current_instr = next_instr;
 			JUMPBY(oparg);
-			SAVE_NEXT_INSTR(next_instr);
+			SAVE_NEXT_INSTR(next_instr, next_prim);
 			psyco_compile_cond(po,
 				psyco_exact_merge_point(po->pr.merge_points,
 							next_instr),
@@ -2690,7 +2712,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 			   stop compilation. When this point is reached
 			   at run-time, compilation will go on in a
 			   new buffer. */
-			SAVE_NEXT_INSTR(next_instr);
+			SAVE_NEXT_INSTR(next_instr, next_prim);
 			if (mp->bytecode_position != next_instr)
 				mp = NULL;
 			code1 = psyco_compile(po, mp, false);
@@ -2701,7 +2723,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 	/* mark merge points via a call to psyco_compile() */
 	if (mp->bytecode_position == next_instr) {
 		extra_assert(!is_respawning(po));
-		SAVE_NEXT_INSTR(next_instr);
+		SAVE_NEXT_INSTR(next_instr, next_prim);
                 /* simplify the po->vlocals array */
 		if (!psyco_limit_nested_weight(po, &po->vlocals, NWI_NORMAL,
 					       NESTED_WEIGHT_END))
@@ -2846,7 +2868,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
             block_setup(po, b->b_type, b->b_handler, b->b_level);
             JUMPTO(CompileTime_Get(po->pr.val->source)->value);
             clear_pseudo_exception(po);
-            SAVE_NEXT_INSTR(next_instr);
+            SAVE_NEXT_INSTR(next_instr, next_prim);
             break;
           }
 	
@@ -2860,7 +2882,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
             int next_instr;
             clear_pseudo_exception(po);
             JUMPTO(b->b_handler);
-            SAVE_NEXT_INSTR(next_instr);
+            SAVE_NEXT_INSTR(next_instr, next_prim);
             break;
           }
 	if (b->b_type == SETUP_FINALLY)
@@ -2880,7 +2902,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
             po->pr.tb  = NULL;
             PUSH(exc_info);
             JUMPTO(b->b_handler);
-            SAVE_NEXT_INSTR(next_instr);
+            SAVE_NEXT_INSTR(next_instr, next_prim);
             break;
           }
 	if (b->b_type == SETUP_EXCEPT && PycException_IsPython(po))
@@ -2903,7 +2925,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
             PUSH(po->pr.val);    po->pr.val = NULL;
             PUSH(po->pr.exc);    po->pr.exc = NULL;
             JUMPTO(b->b_handler);
-            SAVE_NEXT_INSTR(next_instr);
+            SAVE_NEXT_INSTR(next_instr, next_prim);
             break;
           }
       } /* end of unwind stack */
