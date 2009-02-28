@@ -788,6 +788,7 @@ with_fpectl
 with_libm
 with_libc
 enable_unicode
+with_py3k_warnings
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1462,6 +1463,10 @@ Optional Packages:
   --with-fpectl           enable SIGFPE catching
   --with-libm=STRING      math library
   --with-libc=STRING      C library
+  --with(out)-py3k-warnings
+                          Emit Python 3.x compatibility warnings when -3 is
+                          enabled. Turning this off makes things faster.
+                          Enabled by default.
 
 Some influential environment variables:
   CC          C compiler command
@@ -25413,6 +25418,30 @@ _ACEOF
 
 fi
 
+
+# Check for --with-py3k-warnings
+{ $as_echo "$as_me:$LINENO: checking for --with(out)-py3k-warnings" >&5
+$as_echo_n "checking for --with(out)-py3k-warnings... " >&6; }
+
+# Check whether --with-py3k-warnings was given.
+if test "${with_py3k_warnings+set}" = set; then
+  withval=$with_py3k_warnings;
+fi
+
+
+if test -z "$with_py3k_warnings"
+then with_py3k_warnings="yes"
+fi
+if test "$with_py3k_warnings" != no
+then
+
+cat >>confdefs.h <<\_ACEOF
+#define WITH_PY3K_WARNINGS 1
+_ACEOF
+
+fi
+{ $as_echo "$as_me:$LINENO: result: $with_py3k_warnings" >&5
+$as_echo "$with_py3k_warnings" >&6; }
 
 
 

@@ -995,6 +995,9 @@
    library plus accessory files). */
 #undef WITH_NEXT_FRAMEWORK
 
+/* Define to get Py3k compat warnings at the cost of a little speed. */
+#undef WITH_PY3K_WARNINGS
+
 /* Define if you want to compile in Python-specific mallocs */
 #undef WITH_PYMALLOC
 

@@ -85,8 +85,13 @@ static char *usage_3 = "\
 -W arg : warning control; arg is action:message:category:module:lineno\n\
 -x     : skip first line of source, allowing use of non-Unix forms of #!cmd\n\
 ";
+#ifdef WITH_PY3K_WARNINGS
 static char *usage_4 = "\
--3     : warn about Python 3.x incompatibilities\n\
+-3     : warn about Python 3.x incompatibilitie that 2to3 cannot trivially fix\n";
+#else
+static char *usage_4 = "";
+#endif
+static char *usage_5 = "\
 file   : program read from script file\n\
 -      : program read from stdin (default; interactive mode if a tty)\n\
 arg ...: arguments passed to program in sys.argv[1:]\n\n\
@@ -95,7 +100,7 @@ PYTHONSTARTUP: file executed on interactive startup (no default)\n\
 PYTHONPATH   : '%c'-separated list of directories prefixed to the\n\
                default module search path.  The result is sys.path.\n\
 ";
-static char *usage_5 = "\
+static char *usage_6 = "\
 PYTHONHOME   : alternate <prefix> directory (or <prefix>%c<exec_prefix>).\n\
                The default module search path uses %s.\n\
 PYTHONCASEOK : ignore case in 'import' statements (Windows).\n\
@@ -115,8 +120,9 @@ usage(int exitcode, char* program)
 		fprintf(f, usage_1);
 		fprintf(f, usage_2);
 		fprintf(f, usage_3);
-		fprintf(f, usage_4, DELIM);
-		fprintf(f, usage_5, DELIM, PYTHONHOMEHELP);
+		fprintf(f, usage_4);
+		fprintf(f, usage_5, DELIM);
+		fprintf(f, usage_6, DELIM, PYTHONHOMEHELP);
 	}
 #if defined(__VMS)
 	if (exitcode == 0) {
@@ -316,7 +322,12 @@ Py_Main(int argc, char **argv)
 			break;
 
 		case '3':
+#ifdef WITH_PY3K_WARNINGS
 			Py_Py3kWarningFlag++;
+#else
+			Py_FatalError("Py3k warnings are disabled in this "
+				      "build of Python");
+#endif
 			break;
 
 		case 'Q':

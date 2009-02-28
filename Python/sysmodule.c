@@ -1384,7 +1384,11 @@ _PySys_Init(void)
 	SET_SYS_FROM_STRING("maxint",
 			    PyInt_FromLong(PyInt_GetMax()));
 	SET_SYS_FROM_STRING("py3kwarning",
+#ifdef WITH_PY3K_WARNINGS
 			    PyBool_FromLong(Py_Py3kWarningFlag));
+#else
+			    PyBool_FromLong(0));
+#endif
 	SET_SYS_FROM_STRING("float_info",
 			    PyFloat_GetInfo());
 #ifdef Py_USING_UNICODE

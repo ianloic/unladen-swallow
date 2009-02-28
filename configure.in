@@ -3701,6 +3701,22 @@ AC_CHECK_TYPE(socklen_t,,
 #endif
 ])
 
+# Check for --with-py3k-warnings
+AC_MSG_CHECKING(for --with(out)-py3k-warnings)
+AC_ARG_WITH(py3k-warnings,
+         AC_HELP_STRING(--with(out)-py3k-warnings,
+                        Emit Python 3.x compatibility warnings when -3 is enabled. Turning this off makes things faster. Enabled by default.))
+
+if test -z "$with_py3k_warnings"
+then with_py3k_warnings="yes"
+fi
+if test "$with_py3k_warnings" != no
+then
+    AC_DEFINE(WITH_PY3K_WARNINGS, 1,
+        [Define to get Py3k compat warnings at the cost of a little speed.])
+fi
+AC_MSG_RESULT($with_py3k_warnings)
+
 AC_SUBST(THREADHEADERS)
 
 for h in `(cd $srcdir;echo Python/thread_*.h)`
