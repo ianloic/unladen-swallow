@@ -32,8 +32,10 @@ enum cmp_op {PyCmp_LT=Py_LT, PyCmp_LE=Py_LE, PyCmp_EQ=Py_EQ, PyCmp_NE=Py_NE, PyC
                      (op) == LOAD_ATTR || \
                      (op) == COMPARE_OP || \
                      (op) == JUMP_FORWARD || \
-                     (op) == JUMP_IF_FALSE || \
-                     (op) == JUMP_IF_TRUE || \
+                     (op) == POP_JUMP_IF_FALSE || \
+                     (op) == POP_JUMP_IF_TRUE || \
+                     (op) == JUMP_IF_FALSE_OR_POP || \
+                     (op) == JUMP_IF_TRUE_OR_POP || \
                      (op) == JUMP_ABSOLUTE || \
                      (op) == LOAD_GLOBAL || \
                      (op) == CONTINUE_LOOP || \

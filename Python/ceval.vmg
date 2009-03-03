@@ -674,11 +674,52 @@ if (PyInt_CheckExact(a2) && PyInt_CheckExact(a1)) {
 JUMP_FORWARD ( #i -- )
 JUMPBY(i);
 
-JUMP_IF_FALSE ( #i a1 -- a1 )
+POP_JUMP_IF_FALSE ( #i -- )
+a1 = POP();
 if (a1 == Py_True)
         ;
 else if (a1 == Py_False)
-        JUMPBY(i);
+        JUMPTO(i);
+else {
+        err = PyObject_IsTrue(a1);
+        Py_DECREF(a1);
+        if (err < 0) {
+                why = WHY_EXCEPTION;
+                ERROR();
+        }
+        else if (err == 0)
+                JUMPTO(i);
+        NEXT();
+}
+Py_DECREF(a1);
+
+POP_JUMP_IF_TRUE ( #i -- )
+a1 = POP();
+if (a1 == Py_False)
+        ;
+else if (a1 == Py_True)
+        JUMPTO(i);
+else {
+        err = PyObject_IsTrue(a1);
+        Py_DECREF(a1);
+        if (err < 0) {
+                why = WHY_EXCEPTION;
+                ERROR();
+        }
+        else if (err > 0)
+                JUMPTO(i);
+        NEXT();
+}
+Py_DECREF(a1);
+
+JUMP_IF_FALSE_OR_POP ( #i -- )
+a1 = TOP();
+if (a1 == Py_True) {
+        STACKADJ(-1);
+        Py_DECREF(a1);
+}
+else if (a1 == Py_False)
+        JUMPTO(i);
 else {
         err = PyObject_IsTrue(a1);
         if (err < 0) {
@@ -686,15 +727,22 @@ else {
                 ERROR();
         }
         else if (err == 0)
-                JUMPBY(i);
+                JUMPTO(i);
+        else {
+                STACKADJ(-1);
+                Py_DECREF(a1);
+        }
         NEXT();
 }
 
-JUMP_IF_TRUE ( #i a1 -- a1 )
-if (a1 == Py_False)
-        ;
+JUMP_IF_TRUE_OR_POP ( #i -- )
+a1 = TOP();
+if (a1 == Py_False) {
+        STACKADJ(-1);
+        Py_DECREF(a1);
+}
 else if (a1 == Py_True)
-        JUMPBY(i);
+        JUMPTO(i);
 else {
         err = PyObject_IsTrue(a1);
         if (err < 0) {
@@ -702,7 +750,11 @@ else {
                 ERROR();
         }
         else if (err > 0)
-                JUMPBY(i);
+                JUMPTO(i);
+        else {
+                STACKADJ(-1);
+                Py_DECREF(a1);
+        }
         NEXT();
 }
 

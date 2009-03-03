@@ -76,9 +76,12 @@ extern time_t PyOS_GetLastModificationTime(char *, FILE *);
        Unladen Swallow 2.6.1: 62171 (Replace 12 opcodes with functions)
        Unladen Swallow 2.6.1: 62181 (vmgen-based opcodes)
        Unladen Swallow 2.6.1: 62191 (superinstructions starting with LOAD_FAST)
+       Unladen Swallow 2.6.1: 62201 (optimize conditional branches:
+			             introduce POP_JUMP_IF_FALSE and
+                                     POP_JUMP_IF_TRUE)
 .
 */
-#define MAGIC (62191 | ((long)'\r'<<16) | ((long)'\n'<<24))
+#define MAGIC (62201 | ((long)'\r'<<16) | ((long)'\n'<<24))
 
 /* Magic word as global; note that _PyImport_Init() can change the
    value of this global to accommodate for alterations of how the

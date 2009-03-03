@@ -1989,7 +1989,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
         BINARY_OPCODE(INPLACE_TRUE_DIVIDE, PsycoNumber_InPlaceTrueDivide);
         BINARY_OPCODE(INPLACE_FLOOR_DIVIDE, PsycoNumber_InPlaceFloorDivide);
 
-#ifdef LIST_APPEND
 	case LIST_APPEND:
 		w = NTOP(1);
 		v = NTOP(2);
@@ -1998,7 +1997,6 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		POP_DECREF();
 		POP_DECREF();
 		goto fine;
-#endif
 
 	case INPLACE_POWER:
 		u = psyco_vi_None();
@@ -2178,10 +2176,8 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		break;
 #endif
 
-#ifdef NOP
 	case NOP:
 		goto fine;
-#endif
 
 	/*MISSING_OPCODE(YIELD_VALUE);*/
 	/*MISSING_OPCODE(EXEC_STMT);*/
@@ -2551,17 +2547,23 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		mp = psyco_next_merge_point(po->pr.merge_points, next_instr);
 		goto fine;
 
-	case JUMP_IF_TRUE:
-	case JUMP_IF_FALSE:
+	case POP_JUMP_IF_TRUE:
+	case POP_JUMP_IF_FALSE:
+	case JUMP_IF_TRUE_OR_POP:
+	case JUMP_IF_FALSE_OR_POP:
 		/* This code is very different from the original
 		   interpreter's, because we generally do not know the
-		   outcome of PyObject_IsTrue(). In the case of JUMP_IF_xxx
-		   we must be prepared to have to compile the two possible
-		   paths. */
+		   outcome of PyObject_IsTrue(). In the case of conditional
+		   jumps we must be prepared to have to compile the two
+		   possible paths. */
 		cc = integer_NON_NULL(po, PsycoObject_IsTrue(po, TOP()));
 		if (cc == CC_ERROR)
 			break;
-		if (opcode == JUMP_IF_FALSE)
+		if (opcode == POP_JUMP_IF_TRUE ||
+		    opcode == POP_JUMP_IF_FALSE)
+			POP_DECREF();
+		if (opcode == POP_JUMP_IF_FALSE ||
+		    opcode == JUMP_IF_FALSE_OR_POP)
 			cc = INVERT_CC(cc);
 		if ((int)cc < CC_TOTAL) {
 			/* compile the beginning of the "if true" path */
@@ -2573,14 +2575,22 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 							next_instr),
                                            cc);
 			next_instr = current_instr;
+			SAVE_NEXT_INSTR(next_instr, next_prim);
+			if (opcode == JUMP_IF_TRUE_OR_POP ||
+			    opcode == JUMP_IF_FALSE_OR_POP)
+				POP_DECREF();
 		}
 		else if (cc == CC_ALWAYS_TRUE) {
-			JUMPBY(oparg);   /* always jump */
+			JUMPTO(oparg);   /* always jump */
 			mp = psyco_next_merge_point(po->pr.merge_points,
 						    next_instr);
                 }
-		else
-			;                  /* never jump */
+		else {
+			/* never jump */
+			if (opcode == JUMP_IF_TRUE_OR_POP ||
+			    opcode == JUMP_IF_FALSE_OR_POP)
+				POP_DECREF();
+		}
 		goto fine;
 
 	case JUMP_ABSOLUTE:

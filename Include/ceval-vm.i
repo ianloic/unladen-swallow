@@ -2301,21 +2301,88 @@ LABEL2(JUMP_FORWARD)
 NEXT_P2;
 }
 
-LABEL(JUMP_IF_FALSE) /* JUMP_IF_FALSE ( #i a1 -- a1 ) */
-NAME("JUMP_IF_FALSE")
+LABEL(POP_JUMP_IF_FALSE) /* POP_JUMP_IF_FALSE ( #i -- ) */
+NAME("POP_JUMP_IF_FALSE")
 {
 DEF_CA
 Oparg i;
-Obj a1;
 NEXT_P0;
 vm_Cell2i(IMM_ARG(IPTOS,305397782 ),i);
-vm_Obj2a(stack_pointerTOS,a1);
 INC_IP(1);
 {
+a1 = POP();
 if (a1 == Py_True)
         ;
 else if (a1 == Py_False)
-        JUMPBY(i);
+        JUMPTO(i);
+else {
+        err = PyObject_IsTrue(a1);
+        Py_DECREF(a1);
+        if (err < 0) {
+                why = WHY_EXCEPTION;
+                ERROR();
+        }
+        else if (err == 0)
+                JUMPTO(i);
+        NEXT();
+}
+Py_DECREF(a1);
+}
+
+NEXT_P1;
+LABEL2(POP_JUMP_IF_FALSE)
+NEXT_P2;
+}
+
+LABEL(POP_JUMP_IF_TRUE) /* POP_JUMP_IF_TRUE ( #i -- ) */
+NAME("POP_JUMP_IF_TRUE")
+{
+DEF_CA
+Oparg i;
+NEXT_P0;
+vm_Cell2i(IMM_ARG(IPTOS,305397783 ),i);
+INC_IP(1);
+{
+a1 = POP();
+if (a1 == Py_False)
+        ;
+else if (a1 == Py_True)
+        JUMPTO(i);
+else {
+        err = PyObject_IsTrue(a1);
+        Py_DECREF(a1);
+        if (err < 0) {
+                why = WHY_EXCEPTION;
+                ERROR();
+        }
+        else if (err > 0)
+                JUMPTO(i);
+        NEXT();
+}
+Py_DECREF(a1);
+}
+
+NEXT_P1;
+LABEL2(POP_JUMP_IF_TRUE)
+NEXT_P2;
+}
+
+LABEL(JUMP_IF_FALSE_OR_POP) /* JUMP_IF_FALSE_OR_POP ( #i -- ) */
+NAME("JUMP_IF_FALSE_OR_POP")
+{
+DEF_CA
+Oparg i;
+NEXT_P0;
+vm_Cell2i(IMM_ARG(IPTOS,305397784 ),i);
+INC_IP(1);
+{
+a1 = TOP();
+if (a1 == Py_True) {
+        STACKADJ(-1);
+        Py_DECREF(a1);
+}
+else if (a1 == Py_False)
+        JUMPTO(i);
 else {
         err = PyObject_IsTrue(a1);
         if (err < 0) {
@@ -2323,31 +2390,36 @@ else {
                 ERROR();
         }
         else if (err == 0)
-                JUMPBY(i);
+                JUMPTO(i);
+        else {
+                STACKADJ(-1);
+                Py_DECREF(a1);
+        }
         NEXT();
 }
 }
 
 NEXT_P1;
-LABEL2(JUMP_IF_FALSE)
+LABEL2(JUMP_IF_FALSE_OR_POP)
 NEXT_P2;
 }
 
-LABEL(JUMP_IF_TRUE) /* JUMP_IF_TRUE ( #i a1 -- a1 ) */
-NAME("JUMP_IF_TRUE")
+LABEL(JUMP_IF_TRUE_OR_POP) /* JUMP_IF_TRUE_OR_POP ( #i -- ) */
+NAME("JUMP_IF_TRUE_OR_POP")
 {
 DEF_CA
 Oparg i;
-Obj a1;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397783 ),i);
-vm_Obj2a(stack_pointerTOS,a1);
+vm_Cell2i(IMM_ARG(IPTOS,305397785 ),i);
 INC_IP(1);
 {
-if (a1 == Py_False)
-        ;
+a1 = TOP();
+if (a1 == Py_False) {
+        STACKADJ(-1);
+        Py_DECREF(a1);
+}
 else if (a1 == Py_True)
-        JUMPBY(i);
+        JUMPTO(i);
 else {
         err = PyObject_IsTrue(a1);
         if (err < 0) {
@@ -2355,13 +2427,17 @@ else {
                 ERROR();
         }
         else if (err > 0)
-                JUMPBY(i);
+                JUMPTO(i);
+        else {
+                STACKADJ(-1);
+                Py_DECREF(a1);
+        }
         NEXT();
 }
 }
 
 NEXT_P1;
-LABEL2(JUMP_IF_TRUE)
+LABEL2(JUMP_IF_TRUE_OR_POP)
 NEXT_P2;
 }
 
@@ -2371,7 +2447,7 @@ NAME("JUMP_ABSOLUTE")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397784 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397786 ),i);
 INC_IP(1);
 {
 JUMPTO(i);
@@ -2413,7 +2489,7 @@ NAME("FOR_ITER")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397785 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397787 ),i);
 INC_IP(1);
 {
 /* before: [iter]; after: [iter, iter()] *or* [] */
@@ -2463,7 +2539,7 @@ NAME("CONTINUE_LOOP")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397786 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397788 ),i);
 INC_IP(1);
 {
 retval = PyInt_FromLong(i);
@@ -2486,7 +2562,7 @@ NAME("SETUP_LOOP")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397787 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397789 ),i);
 INC_IP(1);
 {
 PyFrame_BlockSetup(f, SETUP_LOOP, INSTR_OFFSET() + i, STACK_LEVEL());
@@ -2504,7 +2580,7 @@ NAME("SETUP_EXCEPT")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397788 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397790 ),i);
 INC_IP(1);
 {
 PyFrame_BlockSetup(f, SETUP_EXCEPT, INSTR_OFFSET() + i, STACK_LEVEL());
@@ -2522,7 +2598,7 @@ NAME("SETUP_FINALLY")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397789 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397791 ),i);
 INC_IP(1);
 {
 PyFrame_BlockSetup(f, SETUP_FINALLY, INSTR_OFFSET() + i, STACK_LEVEL());
@@ -2639,7 +2715,7 @@ NAME("CALL_FUNCTION")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397790 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397792 ),i);
 INC_IP(1);
 {
 PyObject **sp = stack_pointer;
@@ -2662,7 +2738,7 @@ NAME("CALL_FUNCTION_VAR_KW")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397791 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397793 ),i);
 INC_IP(1);
 {
 int var_kw = i & 0x0000FFFF;
@@ -2714,7 +2790,7 @@ NAME("MAKE_CLOSURE")
 DEF_CA
 Oparg i;
 NEXT_P0;
-vm_Cell2i(IMM_ARG(IPTOS,305397792 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397794 ),i);
 INC_IP(1);
 {
 a1 = POP(); /* code object */
@@ -2770,7 +2846,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397793 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397795 ),i);
 stack_pointer += 2;
 {
 x = a = GETITEM(consts, i);
@@ -2784,7 +2860,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397794 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397796 ),i);
 INC_IP(2);
 {
 x = a = GETITEM(consts, i);
@@ -2812,7 +2888,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397795 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397797 ),i);
 stack_pointer += 2;
 {
 x = a = GETITEM(consts, i);
@@ -2826,7 +2902,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397796 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397798 ),i);
 INC_IP(2);
 {
 x = a = GETLOCAL(i);
@@ -2868,7 +2944,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397797 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397799 ),i);
 stack_pointer += 2;
 {
 x = a = GETLOCAL(i);
@@ -2899,7 +2975,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397798 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397800 ),i);
 INC_IP(2);
 {
 x = a = GETITEM(consts, i);
@@ -2927,7 +3003,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397799 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397801 ),i);
 stack_pointer += 2;
 {
 x = a = GETLOCAL(i);
@@ -2958,7 +3034,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397800 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397802 ),i);
 INC_IP(2);
 {
 x = a = GETLOCAL(i);
@@ -2999,7 +3075,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397801 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397803 ),i);
 stack_pointer += 1;
 {
 x = a = GETLOCAL(i);
@@ -3029,7 +3105,7 @@ NAME("LOAD_ATTR")
 Oparg i;
 Obj a1;
 Obj a3;
-vm_Cell2i(IMM_ARG(IP[1],305397802 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397804 ),i);
 vm_Obj2a(_stack_pointer0,a1);
 INC_IP(2);
 {
@@ -3058,7 +3134,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397803 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397805 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3101,7 +3177,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397804 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397806 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3144,7 +3220,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397805 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397807 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3190,7 +3266,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397806 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397808 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3233,7 +3309,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397807 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397809 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3276,7 +3352,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397808 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397810 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3322,7 +3398,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397809 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397811 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3385,7 +3461,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397810 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397812 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3439,7 +3515,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397811 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397813 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3493,7 +3569,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397812 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397814 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3536,7 +3612,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397813 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397815 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3579,7 +3655,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397814 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397816 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3622,7 +3698,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397815 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397817 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3665,7 +3741,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397816 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397818 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3708,7 +3784,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397817 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397819 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3751,7 +3827,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397818 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397820 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3814,7 +3890,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397819 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397821 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3868,7 +3944,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397820 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397822 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3911,7 +3987,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397821 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397823 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3954,7 +4030,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397822 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397824 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -3997,7 +4073,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397823 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397825 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -4041,7 +4117,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397824 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397826 ),i);
 {
 x = a = GETITEM(consts, i);
 }
@@ -4056,7 +4132,7 @@ Oparg i;
 Obj a1;
 Obj a2;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397825 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397827 ),i);
 vm_Obj2a(stack_pointerTOS,a1);
 vm_Obj2a(_stack_pointer1,a2);
 INC_IP(2);
@@ -4110,7 +4186,7 @@ NAME("STORE_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397826 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397828 ),i);
 vm_Obj2a(stack_pointerTOS,a);
 {
 SETLOCAL(i, a);
@@ -4122,7 +4198,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397827 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397829 ),i);
 INC_IP(2);
 {
 x = a = GETLOCAL(i);
@@ -4171,7 +4247,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397828 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397830 ),i);
 INC_IP(1);
 {
 x = a = GETLOCAL(i);
@@ -4212,7 +4288,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397829 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397831 ),i);
 stack_pointer += 1;
 {
 x = a = GETITEM(consts, i);
@@ -4225,7 +4301,7 @@ vm_a2incref(a,__none__TOS);
 NAME("CALL_FUNCTION")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IP[1],305397830 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397832 ),i);
 INC_IP(2);
 {
 PyObject **sp = stack_pointer;
@@ -4256,7 +4332,7 @@ NAME("LOAD_FAST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397831 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397833 ),i);
 stack_pointer += 1;
 {
 x = a = GETLOCAL(i);
@@ -4284,7 +4360,7 @@ vm_a2Obj(a,stack_pointerTOS);
 NAME("CALL_FUNCTION")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IP[1],305397832 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397834 ),i);
 INC_IP(2);
 {
 PyObject **sp = stack_pointer;
@@ -4317,7 +4393,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397833 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397835 ),i);
 stack_pointer += 2;
 {
 x = a = GETITEM(consts, i);
@@ -4331,7 +4407,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IP[1],305397834 ),i);
+vm_Cell2i(IMM_ARG(IP[1],305397836 ),i);
 {
 x = a = GETITEM(consts, i);
 }
@@ -4343,7 +4419,7 @@ vm_a2incref(a,__none__TOS);
 NAME("CALL_FUNCTION")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IP[2],305397835 ),i);
+vm_Cell2i(IMM_ARG(IP[2],305397837 ),i);
 INC_IP(3);
 {
 PyObject **sp = stack_pointer;
@@ -4374,7 +4450,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397836 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397838 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -4420,7 +4496,7 @@ NAME("LOAD_CONST")
 {
 Oparg i;
 Obj a;
-vm_Cell2i(IMM_ARG(IPTOS,305397837 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397839 ),i);
 INC_IP(1);
 {
 x = a = GETITEM(consts, i);
@@ -4467,7 +4543,7 @@ vm_a2decref(a,__none__TOS);
 NAME("JUMP_ABSOLUTE")
 {
 Oparg i;
-vm_Cell2i(IMM_ARG(IPTOS,305397838 ),i);
+vm_Cell2i(IMM_ARG(IPTOS,305397840 ),i);
 INC_IP(1);
 {
 JUMPTO(i);

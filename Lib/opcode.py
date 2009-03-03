@@ -82,8 +82,10 @@ hascompare.append(opmap['COMPARE_OP'])
 # name_op('IMPORT_FROM', 'Index in name list')   # Replaced by #@import_from.
 
 jrel_op('JUMP_FORWARD', 'Number of bytes to skip')
-jrel_op('JUMP_IF_FALSE', 'Number of bytes to skip')
-jrel_op('JUMP_IF_TRUE', 'Number of bytes to skip')
+jabs_op('POP_JUMP_IF_FALSE', 'Target byte offset from beginning of code')
+jabs_op('POP_JUMP_IF_TRUE', 'Target byte offset from beginning of code')
+jabs_op('JUMP_IF_FALSE_OR_POP', 'Target byte offset from beginning of code')
+jabs_op('JUMP_IF_TRUE_OR_POP', 'Target byte offset from beginning of code')
 jabs_op('JUMP_ABSOLUTE', 'Target byte offset from beginning of code')
 
 name_op('LOAD_GLOBAL', 'Index in name list')

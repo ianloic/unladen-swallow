@@ -51,14 +51,16 @@ static char* NoControlFlowIfBuiltin[] = {
 
 /* instructions with a target: */
 #define HAS_JREL_INSTR(op)   (op == JUMP_FORWARD ||   \
-                              op == JUMP_IF_FALSE ||  \
-                              op == JUMP_IF_TRUE ||   \
                               op == FOR_ITER ||     \
                               /*    SETUP_LOOP replaced by FOR_ITER */    \
                               op == SETUP_EXCEPT ||   \
                               op == SETUP_FINALLY)
 
 #define HAS_JABS_INSTR(op)   (op == JUMP_ABSOLUTE ||  \
+                              op == POP_JUMP_IF_FALSE ||  \
+                              op == POP_JUMP_IF_TRUE ||   \
+                              op == JUMP_IF_FALSE_OR_POP ||  \
+                              op == JUMP_IF_TRUE_OR_POP ||   \
                               op == CONTINUE_LOOP)
 
 /* instructions whose target may be jumped to several times: */
