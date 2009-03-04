@@ -73,10 +73,10 @@ extern time_t PyOS_GetLastModificationTime(char *, FILE *);
        Python 2.5c2: 62131 (fix wrong code: for x, in ... in listcomp/genexp)
        Python 2.6a0: 62151 (peephole optimizations and STORE_MAP opcode)
        Python 2.6a1: 62161 (WITH_CLEANUP optimization)
-       Unladen Swallow 2.6.1: 62171 (Replace 12 opcodes with functions)
-       Unladen Swallow 2.6.1: 62181 (vmgen-based opcodes)
-       Unladen Swallow 2.6.1: 62191 (superinstructions starting with LOAD_FAST)
-       Unladen Swallow 2.6.1: 62201 (optimize conditional branches:
+       Unladen Swallow 2009Q1: 62171 (Replace 12 opcodes with functions)
+       Unladen Swallow 2009Q1: 62181 (vmgen-based opcodes)
+       Unladen Swallow 2009Q1: 62191 (superinstructions starting with LOAD_FAST)
+       Unladen Swallow 2009Q1: 62201 (optimize conditional branches:
 			             introduce POP_JUMP_IF_FALSE and
                                      POP_JUMP_IF_TRUE)
 .
