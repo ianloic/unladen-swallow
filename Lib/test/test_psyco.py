@@ -1,7 +1,7 @@
-from test.test_support import run_unittest
+from test import test_support
 import cStringIO
 import dis
-import psyco
+import subprocess
 import sys
 import unittest
 
@@ -61,7 +61,28 @@ class PsycoTests(unittest.TestCase):
 
 
 def test_main():
-    run_unittest(PsycoTests)
+    # Because Psyco pollutes the interpreter, we want to sandbox it as much as
+    # possible. Failing to do so can cause other tests (anything having to do
+    # with frames or tracing) to fail if run after test_psyco. The pollution
+    # happens at import-time, so delay that until we're safely inside the
+    # subprocess.
+    if "child" in sys.argv:
+        global psyco
+        import psyco
+        test_support.run_unittest(PsycoTests)
+    else:
+        pipe = subprocess.PIPE
+        if test_support.verbose:
+            pipe = None
+
+        child = subprocess.Popen([sys.executable, "-E", __file__, "child"],
+                                 stdout=pipe, stderr=pipe)
+        result, err = child.communicate()
+        if child.returncode != 0:
+            raise AssertionError(err or "Test failed in subprocess")
+        if test_support.verbose and result:
+            print result,
+
 
 if __name__ == "__main__":
     test_main()
