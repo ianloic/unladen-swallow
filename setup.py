@@ -475,7 +475,8 @@ class PyBuildExt(build_ext):
         # _json speedups
         exts.append( Extension("_json", ["_json.c"]) )
         # Python C API test module
-        exts.append( Extension('_testcapi', ['_testcapimodule.c']) )
+        exts.append( Extension('_testcapi', ['_testcapimodule.c', 'cPickle.c'],
+                               define_macros=[('NO_STATIC_MEMOTABLE', 1)]) )
         # profilers (_lsprof is for cProfile.py)
         exts.append( Extension('_hotshot', ['_hotshot.c']) )
         exts.append( Extension('_lsprof', ['_lsprof.c', 'rotatingtree.c']) )

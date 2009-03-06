@@ -8,6 +8,7 @@
 #include "Python.h"
 #include <float.h>
 #include "structmember.h"
+#include "cPickle.h"
 
 #ifdef WITH_THREAD
 #include "pythread.h"
@@ -772,8 +773,61 @@ traceback_print(PyObject *self, PyObject *args)
 	Py_RETURN_NONE;
 }
 
+/* Tests for the PyMemoTable object in cPickle.c */
+
+static PyObject *
+test_memotable(PyObject *self)
+{
+	PyMemoTable *memo;
+	long i;
+
+#define ASSERT_EQ(a, b, msg) if ((a) != (b)) { \
+	return raiseTestError("test_memotable", #a " != " #b ": " msg); }
+
+	memo = PyMemoTable_New();
+	ASSERT_EQ(PyMemoTable_Size(memo), 0, "Non-zero empty size");
+	ASSERT_EQ(PyMemoTable_Get(memo, (void *)5), NULL, "Got invalid entry");
+
+	PyMemoTable_Set(memo, (void *)5, 7);
+	ASSERT_EQ(PyMemoTable_Size(memo), 1, "Bad memo size");
+	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 7, "Failed to get entry");
+
+	/* Update an existing entry */
+	PyMemoTable_Set(memo, (void *)5, 9);
+	ASSERT_EQ(PyMemoTable_Size(memo), 1, "Bad memo size");
+	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 9, "Failed to get entry");
+
+	/* Force a hash collision */
+	PyMemoTable_Set(memo, (void *)21, 11);
+	ASSERT_EQ(PyMemoTable_Size(memo), 2, "Bad memo size");
+	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 9, "Failed to get entry");
+	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)21), 11,
+		  "Failed to get entry");
+
+	/* Clear the memo */
+	PyMemoTable_Clear(memo);
+	ASSERT_EQ(PyMemoTable_Size(memo), 0, "Non-zero empty size");
+	ASSERT_EQ(PyMemoTable_Get(memo, (void *)5), NULL, "Got invalid entry");
+	ASSERT_EQ(PyMemoTable_Get(memo, (void *)21), NULL,
+		  "Got invalid entry");
+
+	/* Insert enough entries to trigger a resize. */
+	for (i = 1; i < 12; i++)
+		PyMemoTable_Set(memo, (void *)i, i);
+	ASSERT_EQ(PyMemoTable_Size(memo), 11, "Bad memo size");
+	ASSERT_EQ(memo->mt_allocated, 32, "Allocated less/more than expected");
+	for (i = 1; i < 12; i++)
+		ASSERT_EQ(*PyMemoTable_Get(memo, (void *)i), i, "Wrong value");
+
+	PyMemoTable_Del(memo);
+	Py_RETURN_NONE;
+}
+
+/* End of tests for the PyMemoTable object in cPickle.c */
+
 static PyMethodDef TestMethods[] = {
 	{"raise_exception",	raise_exception,		 METH_VARARGS},
+	{"test_memotable",      (PyCFunction)test_memotable,     METH_NOARGS},
 	{"test_config",		(PyCFunction)test_config,	 METH_NOARGS},
 	{"test_list_api",	(PyCFunction)test_list_api,	 METH_NOARGS},
 	{"test_dict_iteration",	(PyCFunction)test_dict_iteration,METH_NOARGS},

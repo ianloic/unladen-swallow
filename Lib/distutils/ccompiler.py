@@ -371,41 +371,6 @@ class CCompiler:
                                         output_dir=outdir)
         assert len(objects) == len(sources)
 
-        # XXX should redo this code to eliminate skip_source entirely.
-        # XXX instead create build and issue skip messages inline
-
-        if self.force:
-            skip_source = {}            # rebuild everything
-            for source in sources:
-                skip_source[source] = 0
-        elif depends is None:
-            # If depends is None, figure out which source files we
-            # have to recompile according to a simplistic check. We
-            # just compare the source and object file, no deep
-            # dependency checking involving header files.
-            skip_source = {}            # rebuild everything
-            for source in sources:      # no wait, rebuild nothing
-                skip_source[source] = 1
-
-            n_sources, n_objects = newer_pairwise(sources, objects)
-            for source in n_sources:    # no really, only rebuild what's
-                skip_source[source] = 0 # out-of-date
-        else:
-            # If depends is a list of files, then do a different
-            # simplistic check.  Assume that each object depends on
-            # its source and all files in the depends list.
-            skip_source = {}
-            # L contains all the depends plus a spot at the end for a
-            # particular source file
-            L = depends[:] + [None]
-            for i in range(len(objects)):
-                source = sources[i]
-                L[-1] = source
-                if newer_group(L, objects[i]):
-                    skip_source[source] = 0
-                else:
-                    skip_source[source] = 1
-
         pp_opts = gen_preprocess_options(macros, incdirs)
 
         build = {}
@@ -414,10 +379,7 @@ class CCompiler:
             obj = objects[i]
             ext = os.path.splitext(src)[1]
             self.mkpath(os.path.dirname(obj))
-            if skip_source[src]:
-                log.debug("skipping %s (%s up-to-date)", src, obj)
-            else:
-                build[obj] = src, ext
+            build[obj] = (src, ext)
 
         return macros, objects, extra, pp_opts, build
 

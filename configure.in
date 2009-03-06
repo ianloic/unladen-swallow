@@ -3717,6 +3717,24 @@ then
 fi
 AC_MSG_RESULT($with_py3k_warnings)
 
+# Check for --with-computed-gotos
+AC_MSG_CHECKING(for --with-computed-gotos)
+AC_ARG_WITH(computed-gotos,
+            AC_HELP_STRING(--with-computed-gotos,
+                           Use computed gotos / threaded dispatch in evaluation loops
+                           (not available on all compilers)))
+
+if test -z "$with_computed_gotos"
+then with_computed_gotos="yes"
+fi
+if test "$with_computed_gotos" != no
+then
+    AC_DEFINE(USE_COMPUTED_GOTOS, 1,
+        [Use computed gotos / threaded dispatch in evaluation loops
+        (not available on all compilers).])
+fi
+AC_MSG_RESULT($with_computed_gotos)
+
 AC_SUBST(THREADHEADERS)
 
 for h in `(cd $srcdir;echo Python/thread_*.h)`

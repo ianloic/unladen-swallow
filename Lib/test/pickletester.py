@@ -1,6 +1,7 @@
 import unittest
 import pickle
 import cPickle
+import cStringIO
 import pickletools
 import copy_reg
 
@@ -409,12 +410,11 @@ class AbstractPickleTests(unittest.TestCase):
     # is a mystery.  cPickle also suppresses PUT for objects with a refcount
     # of 1.
     def dont_test_disassembly(self):
-        from cStringIO import StringIO
         from pickletools import dis
 
         for proto, expected in (0, DATA0_DIS), (1, DATA1_DIS):
             s = self.dumps(self._testdata, proto)
-            filelike = StringIO()
+            filelike = cStringIO.StringIO()
             dis(s, out=filelike)
             got = filelike.getvalue()
             self.assertEqual(expected, got)
@@ -872,6 +872,21 @@ class AbstractPickleTests(unittest.TestCase):
             except (AttributeError, pickle.PickleError, cPickle.PickleError):
                 pass
 
+    def test_many_puts_and_gets(self):
+        # Test that internal data structures correctly deal with lots of
+        # puts/gets. There were once bugs in cPickle related to this.
+        keys = ("aaa" + str(i) for i in xrange(100))
+        large_dict = dict((k, [4, 5, 6]) for k in keys)
+        obj = [dict(large_dict), dict(large_dict), dict(large_dict)]
+
+        for proto in [0, 1, 2]:
+            dumped = self.dumps(obj, proto)
+            loaded = self.loads(dumped)
+            self.assertEqual(loaded, obj,
+                             "Failed protocol %d: %r != %r"
+                             % (proto, obj, loaded))
+
+
 # Test classes for reduce_ex
 
 class REX_one(object):
@@ -978,8 +993,7 @@ class AbstractPickleModuleTests(unittest.TestCase):
         self.assertEqual(self.module.HIGHEST_PROTOCOL, 2)
 
     def test_callapi(self):
-        from cStringIO import StringIO
-        f = StringIO()
+        f = cStringIO.StringIO()
         # With and without keyword arguments
         self.module.dump(123, f, -1)
         self.module.dump(123, file=f, protocol=-1)
@@ -1022,3 +1036,75 @@ class AbstractPersistentPicklerTests(unittest.TestCase):
         self.assertEqual(self.loads(self.dumps(L, 1)), L)
         self.assertEqual(self.id_count, 5)
         self.assertEqual(self.load_count, 5)
+
+class AbstractPicklerObjectTests(unittest.TestCase):
+
+    pickler_class = None
+
+    def setUp(self):
+        assert self.pickler_class
+
+    def test_clear_memo(self):
+        # To test whether clear_memo() has any effect, we pickle an object,
+        # then pickle it again without clearing the memo; the two serialized
+        # forms should be different. If we clear_memo() and then pickle the
+        # object again, the third serialized form should be identical to the
+        # first one we obtained.
+        data = ["abcdefg", "abcdefg", 44]
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+
+        pickler.dump(data)
+        first_pickled = f.getvalue()
+
+        # Reset StringIO object.
+        f.seek(0)
+        f.truncate()
+
+        pickler.dump(data)
+        second_pickled = f.getvalue()
+
+        # Reset the Pickler and StringIO objects.
+        pickler.clear_memo()
+        f.seek(0)
+        f.truncate()
+
+        pickler.dump(data)
+        third_pickled = f.getvalue()
+
+        self.assertNotEqual(first_pickled, second_pickled)
+        self.assertEqual(first_pickled, third_pickled)
+
+class AbstractUnpicklerObjectTests(unittest.TestCase):
+
+    pickler_class = None
+    unpickler_class = None
+
+    def setUp(self):
+        assert self.pickler_class
+        assert self.unpickler_class
+
+    def test_reusing_unpickler_objects(self):
+        data1 = ["abcdefg", "abcdefg", 44]
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+        pickler.dump(data1)
+        pickled1 = f.getvalue()
+
+        data2 = ["abcdefg", 44, 44]
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+        pickler.dump(data2)
+        pickled2 = f.getvalue()
+
+        f = cStringIO.StringIO()
+        f.write(pickled1)
+        f.seek(0)
+        unpickler = self.unpickler_class(f)
+        self.assertEqual(unpickler.load(), data1)
+
+        f.seek(0)
+        f.truncate()
+        f.write(pickled2)
+        f.seek(0)
+        self.assertEqual(unpickler.load(), data2)

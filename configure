@@ -789,6 +789,7 @@ with_libm
 with_libc
 enable_unicode
 with_py3k_warnings
+with_computed_gotos
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1467,6 +1468,8 @@ Optional Packages:
                           Emit Python 3.x compatibility warnings when -3 is
                           enabled. Turning this off makes things faster.
                           Enabled by default.
+  --with-computed-gotos   Use computed gotos / threaded dispatch in evaluation
+                          loops (not available on all compilers)
 
 Some influential environment variables:
   CC          C compiler command
@@ -25442,6 +25445,30 @@ _ACEOF
 fi
 { $as_echo "$as_me:$LINENO: result: $with_py3k_warnings" >&5
 $as_echo "$with_py3k_warnings" >&6; }
+
+# Check for --with-computed-gotos
+{ $as_echo "$as_me:$LINENO: checking for --with-computed-gotos" >&5
+$as_echo_n "checking for --with-computed-gotos... " >&6; }
+
+# Check whether --with-computed-gotos was given.
+if test "${with_computed_gotos+set}" = set; then
+  withval=$with_computed_gotos;
+fi
+
+
+if test -z "$with_computed_gotos"
+then with_computed_gotos="yes"
+fi
+if test "$with_computed_gotos" != no
+then
+
+cat >>confdefs.h <<\_ACEOF
+#define USE_COMPUTED_GOTOS 1
+_ACEOF
+
+fi
+{ $as_echo "$as_me:$LINENO: result: $with_computed_gotos" >&5
+$as_echo "$with_computed_gotos" >&6; }
 
 
 

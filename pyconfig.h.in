@@ -942,6 +942,10 @@
 /* Define to 1 if your <sys/time.h> declares `struct tm'. */
 #undef TM_IN_SYS_TIME
 
+/* Use computed gotos / threaded dispatch in evaluation loops (not available
+   on all compilers). */
+#undef USE_COMPUTED_GOTOS
+
 /* Enable extensions on AIX 3, Interix.  */
 #ifndef _ALL_SOURCE
 # undef _ALL_SOURCE

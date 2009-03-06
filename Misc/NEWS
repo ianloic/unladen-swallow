@@ -27,6 +27,11 @@ Library
 
 - Unladen Swallow 2008Q1 ships with Psyco 1.6.
 
+- The cPickle module is significantly faster and uses 
+
+- cPickle.Unpickler objects no longer support repeated load() calls on the same
+  input data. This will be rectified in 2009Q1.1.
+
 Tools/Demos
 -----------
 
