@@ -4,6 +4,17 @@ Python News
 
 (editors: check NEWS.help for information about editing NEWS using ReST.)
 
+What's New in Unladen Swallow 2009Q2 (Python 2.6.1)
+===================================================
+
+*Release date: 01-Jul-2009*
+
+Core and Builtins
+-----------------
+
+- Unladen Swallow 2009Q2 replaces Python's custom VM with a JIT based on LLVM.
+
+
 What's New in Unladen Swallow 2008Q1 (Python 2.6.1)
 ===================================================
 
