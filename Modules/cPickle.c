@@ -5698,17 +5698,19 @@ finally:
 static PyObject *
 cpm_load(PyObject *self, PyObject *ob)
 {
-	Unpicklerobject *unpickler = 0;
+	Unpicklerobject *unpickler;
 	PyObject *res = NULL;
 
-	if (!( unpickler = newUnpicklerobject(ob)))
+	unpickler = newUnpicklerobject(ob);
+	if (unpickler == NULL)
 		goto finally;
 
+	if (_Unpickler_ReadFromFile(unpickler) < 0)
+		goto finally;
 	res = load(unpickler);
 
-  finally:
+finally:
 	Py_XDECREF(unpickler);
-
 	return res;
 }
 

@@ -988,6 +988,14 @@ class AbstractPickleModuleTests(unittest.TestCase):
         finally:
             os.remove(TESTFN)
 
+    def test_load_from_and_dump_to_file(self):
+        stream = cStringIO.StringIO()
+        data = [123, {}, 124]
+        self.module.dump(data, stream)
+        stream.seek(0)
+        unpickled = self.module.load(stream)
+        self.assertEqual(unpickled, data)
+
     def test_highest_protocol(self):
         # Of course this needs to be changed when HIGHEST_PROTOCOL changes.
         self.assertEqual(self.module.HIGHEST_PROTOCOL, 2)
