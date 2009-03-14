@@ -51,8 +51,20 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 	PyCodeObject *co;
 	Py_ssize_t i;
 	/* Check argument types */
+
+	if (PyString_Check(code)) {
+		if (PyString_Size(code) == 0) {
+			code = (PyObject *)_PyInstructions_New(0);
+			if (code == NULL)
+				return NULL;
+		} else {
+			PyErr_BadInternalCall();
+			return NULL;
+		}
+	}
+	
 	if (argcount < 0 || nlocals < 0 ||
-	    code == NULL ||
+	    code == NULL || !PyInstructions_Check(code) ||
 	    consts == NULL || !PyTuple_Check(consts) ||
 	    names == NULL || !PyTuple_Check(names) ||
 	    varnames == NULL || !PyTuple_Check(varnames) ||
@@ -61,17 +73,6 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 	    name == NULL || !PyString_Check(name) ||
 	    filename == NULL || !PyString_Check(filename) ||
 	    lnotab == NULL || !PyString_Check(lnotab)) {
-		PyErr_BadInternalCall();
-		return NULL;
-	/* Backwards compatibility support for passing code="". Real-world code
-	   depends on this. */
-	} else if (PyString_Check(code) && PyString_Size(code) == 0) {
-		if (PyString_Size(lnotab) != 0) {
-			PyErr_BadInternalCall();
-			return NULL;
-		}
-		return PyCode_NewEmpty(filename, name, firstlineno);	
-	} else if (!PyInstructions_Check(code)) {
 		PyErr_BadInternalCall();
 		return NULL;
 	}
