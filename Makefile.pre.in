@@ -30,7 +30,6 @@ VPATH=		@srcdir@
 
 CC=		@CC@
 CXX=		@CXX@
-MAINCC=		@MAINCC@
 LINKCC=		@LINKCC@
 AR=		@AR@
 RANLIB=		@RANLIB@
@@ -74,6 +73,12 @@ LINKFORSHARED=	@LINKFORSHARED@
 CFLAGSFORSHARED=@CFLAGSFORSHARED@
 # C flags used for building the interpreter object files
 PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
+
+# LLVM flags extracted from llvm-config jit
+LLVMCXXFLAGS=	-IUtil/llvm/include -I$(srcdir)/Util/llvm/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
+LLVM_LIB_DIR=	Util/llvm/@LLVM_OBJ_DIR@/lib
+LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
+LLVMLDFLAGS+=	$(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
 
 
 # Machine-dependent subdirectories
@@ -384,10 +389,13 @@ coverage:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS) -O0 -pg -fprofile-arcs -ftest-coverage" LIBS="$(LIBS) -lgcov"
 
+llvm:
+	$(MAKE) -C Util/llvm libs-only
+
 
 # Build the interpreter
-$(BUILDPYTHON):	Modules/python.o $(LIBRARY) $(LDLIBRARY)
-		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
+$(BUILDPYTHON): llvm Modules/python.o $(LIBRARY) $(LDLIBRARY)
+		$(LINKCC) $(LDFLAGS) $(LLVMLDFLAGS) $(LINKFORSHARED) -o $@ \
 			Modules/python.o \
 			$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(SYSLIBS) $(LDLAST)
 
@@ -512,7 +520,7 @@ Modules/getpath.o: $(srcdir)/Modules/getpath.c Makefile
 		-o $@ $(srcdir)/Modules/getpath.c
 
 Modules/python.o: $(srcdir)/Modules/python.c
-	$(MAINCC) -c $(PY_CFLAGS) -o $@ $(srcdir)/Modules/python.c
+	$(CXX) -c $(PY_CFLAGS) -o $@ $(srcdir)/Modules/python.c
 
 
 $(GRAMMAR_H) $(GRAMMAR_C): $(PGEN) $(GRAMMAR_INPUT)
@@ -1124,6 +1132,9 @@ config.status:	$(srcdir)/configure
 .c.o:
 	$(CC) -c $(PY_CFLAGS) -o $@ $<
 
+.cc.o:
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -o $@ $<
+
 # Run reindent on the library
 reindent:
 	./$(BUILDPYTHON) $(srcdir)/Tools/scripts/reindent.py -r $(srcdir)/Lib
@@ -1235,6 +1246,6 @@ Python/thread.o: @THREADHEADERS@
 .PHONY: frameworkinstall frameworkinstallframework frameworkinstallstructure
 .PHONY: frameworkinstallmaclib frameworkinstallapps frameworkinstallunixtools
 .PHONY: frameworkaltinstallunixtools recheck autoconf clean clobber distclean 
-.PHONY: smelly funny patchcheck
+.PHONY: smelly funny patchcheck llvm
 
 # IF YOU PUT ANYTHING HERE IT WILL GO AWAY

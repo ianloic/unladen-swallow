@@ -454,51 +454,8 @@ fi
 
 AC_PROG_CC
 
-AC_SUBST(CXX)
-AC_SUBST(MAINCC)
-AC_MSG_CHECKING(for --with-cxx-main=<compiler>)
-AC_ARG_WITH(cxx_main,
-            AC_HELP_STRING([--with-cxx-main=<compiler>],
-                           [compile main() and link python executable with C++ compiler]),
-[
-	
-	case $withval in
-	no)	with_cxx_main=no
-		MAINCC='$(CC)';;
-	yes)	with_cxx_main=yes
-		MAINCC='$(CXX)';;
-	*)	with_cxx_main=yes
-		MAINCC=$withval
-		if test -z "$CXX"
-		then
-			CXX=$withval
-		fi;;
-	esac], [
-	with_cxx_main=no
-	MAINCC='$(CC)'
-])
-AC_MSG_RESULT($with_cxx_main)
-
 preset_cxx="$CXX"
-if test -z "$CXX"
-then
-        case "$CC" in
-        gcc)    AC_PATH_PROG(CXX, [g++], [g++], [notfound]) ;;
-        cc)     AC_PATH_PROG(CXX, [c++], [c++], [notfound]) ;;
-        esac
-	if test "$CXX" = "notfound"
-	then
-		CXX=""
-	fi
-fi
-if test -z "$CXX"
-then
-	AC_CHECK_PROGS(CXX, $CCC c++ g++ gcc CC cxx cc++ cl, notfound)
-	if test "$CXX" = "notfound"
-	then
-		CXX=""
-	fi
-fi
+AC_PROG_CXX
 if test "$preset_cxx" != "$CXX"
 then
         AC_MSG_WARN([
@@ -607,17 +564,14 @@ DLLLIBRARY=''
 LDLIBRARYDIR=''
 RUNSHARED=''
 
-# LINKCC is the command that links the python executable -- default is $(CC).
-# If CXX is set, and if it is needed to link a main function that was
-# compiled with CXX, LINKCC is CXX instead. Always using CXX is undesirable:
-# python might then depend on the C++ runtime
+# LINKCC is the command that links the python executable -- default is $(CXX).
 # This is altered for AIX in order to build the export list before 
 # linking.
 AC_SUBST(LINKCC)
 AC_MSG_CHECKING(LINKCC)
 if test -z "$LINKCC"
 then
-	LINKCC='$(PURIFY) $(MAINCC)'
+	LINKCC='$(PURIFY) $(CXX)'
 	case $ac_sys_system in
 	AIX*)
 	   exp_extra="\"\""
@@ -3736,6 +3690,24 @@ fi
 AC_MSG_RESULT($with_computed_gotos)
 
 AC_SUBST(THREADHEADERS)
+
+# Re-assigning $ac_configure_args is a hack to pass different
+# arguments to LLVM's configure script due to a limitation in
+# AC_CONFIG_SUBDIRS.  Since AC_CONFIG_SUBDIRS only runs the configure
+# script inside of AC_OUTPUT, we can't re-assign the old configure
+# arguments at any time it would make a difference.  The practical
+# effect is that config.status passes some extra arguments when it
+# re-runs the Python configure script.
+ac_configure_args="$ac_configure_args --enable-jit --enable-targets=host-only"
+if test "$Py_DEBUG" = 'true' ; then
+    ac_configure_args="$ac_configure_args --enable-debug-runtime --enable-assertions"
+    LLVM_OBJ_DIR=Debug
+else
+    ac_configure_args="$ac_configure_args --enable-optimized --disable-assertions"
+    LLVM_OBJ_DIR=Release-Asserts
+fi
+AC_SUBST(LLVM_OBJ_DIR)
+AC_CONFIG_SUBDIRS([Util/llvm])
 
 for h in `(cd $srcdir;echo Python/thread_*.h)`
 do
