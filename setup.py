@@ -92,7 +92,7 @@ def find_module_file(module, dirlist):
     return os.path.join(list[0], module)
 
 def combine_dirs_to_check(extra_dirs, orig_lib_dirs):
-    extra_dirs = [d for d in extra_dirs if os.path.isdir(d)]
+    extra_dirs = [d for d in extra_dirs if d and os.path.isdir(d)]
     # First search extra directories that already appear in the
     # original list.
     extra_dirs.sort(key=lambda d:0 if d in orig_lib_dirs else 1)
@@ -696,6 +696,9 @@ class PyBuildExt(build_ext):
                               '/usr/local/ssl/include',
                               '/usr/contrib/ssl/include/'
                              ]
+        if "SSL_ROOT" in os.environ:
+            search_for_ssl_incs_in.append(os.path.join(os.environ["SSL_ROOT"],
+                                                       "include"))
         ssl_incs = find_file('openssl/ssl.h', inc_dirs,
                              search_for_ssl_incs_in
                              )
@@ -705,10 +708,15 @@ class PyBuildExt(build_ext):
                 ['/usr/kerberos/include'] if use_system_paths else [])
             if krb5_h:
                 ssl_incs += krb5_h
+        search_for_ssl_libs_in = []
+        if use_system_paths:
+            search_for_ssl_libs_in = ['/usr/local/ssl/lib',
+                                      '/usr/contrib/ssl/lib/']
+        if "SSL_ROOT" in os.environ:
+            search_for_ssl_libs_in.append(os.path.join(os.environ["SSL_ROOT"],
+                                                       "lib"))
         ssl_libs = find_library_file(self.compiler, 'ssl',lib_dirs,
-                                     ['/usr/local/ssl/lib',
-                                      '/usr/contrib/ssl/lib/'
-                                     ] if use_system_paths else [])
+                                     search_for_ssl_libs_in)
 
         if (ssl_incs is not None and
             ssl_libs is not None):
@@ -979,6 +987,8 @@ class PyBuildExt(build_ext):
                                  '/usr/local/include/sqlite',
                                  '/usr/local/include/sqlite3',
                                  ]
+        if "SQLITE_INC" in os.environ:
+            sqlite_inc_paths.append(os.environ["SQLITE_INC"])
         MIN_SQLITE_VERSION_NUMBER = (3, 0, 8)
         MIN_SQLITE_VERSION = ".".join([str(x)
                                     for x in MIN_SQLITE_VERSION_NUMBER])
@@ -1017,6 +1027,7 @@ class PyBuildExt(build_ext):
                 os.path.join(sqlite_incdir, '..', 'lib'),
                 os.path.join(sqlite_incdir, '..', '..', 'lib64'),
                 os.path.join(sqlite_incdir, '..', '..', 'lib'),
+                os.environ.get("SQLITE_LIB", ""),
                 ], lib_dirs)
             sqlite_libfile = self.compiler.find_library_file(
                                 sqlite_dirs_to_check, 'sqlite3')
