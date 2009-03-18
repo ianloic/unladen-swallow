@@ -1,4 +1,4 @@
-from test import test_support
+from test import test_grammar, test_support
 import cStringIO
 import dis
 import subprocess
@@ -59,6 +59,9 @@ class PsycoTests(unittest.TestCase):
         arg = [xrange(5) for _ in xrange(5)]
         self.assertEquals(functions['normal'](arg), functions['optimized'](arg))
 
+    def test_grammar(self):
+        psyco.bind(test_grammar.GrammarTests)
+        test_grammar.test_main()
 
 def test_main():
     # Because Psyco pollutes the interpreter, we want to sandbox it as much as

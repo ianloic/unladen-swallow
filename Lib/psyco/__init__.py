@@ -24,31 +24,48 @@ except ImportError:
 # More documentation can be found in core.py.
 #
 
+# TODO(collinwinter): fix Psyco. It is disabled here until it passes all its
+# tests.
+
+def full(*args, **kwargs):
+    pass
+
+def bind(*args, **kwargs):
+    pass
+
+def profile(*args, **kwargs):
+    pass
+
+def log(*args, **kwargs):
+    pass
+
+def proxy(obj):
+    return obj
 
 # Try to import the dynamic-loading _psyco and report errors
-try:
-    import _psyco
-except ImportError, e:
-    extramsg = ''
-    import sys, imp
-    try:
-        file, filename, (suffix, mode, type) = imp.find_module('_psyco', __path__)
-    except ImportError:
-        ext = [suffix for suffix, mode, type in imp.get_suffixes()
-               if type == imp.C_EXTENSION]
-        if ext:
-            extramsg = (" (cannot locate the compiled extension '_psyco%s' "
-                        "in the package path '%s')" % (ext[0], '; '.join(__path__)))
-    else:
-        extramsg = (" (check that the compiled extension '%s' is for "
-                    "the correct Python version; this is Python %s)" %
-                    (filename, sys.version.split()[0]))
-    raise ImportError, str(e) + extramsg
+# try:
+#     import _psyco
+# except ImportError, e:
+#     extramsg = ''
+#     import sys, imp
+#     try:
+#         file, filename, (suffix, mode, type) = imp.find_module('_psyco', __path__)
+#     except ImportError:
+#         ext = [suffix for suffix, mode, type in imp.get_suffixes()
+#                if type == imp.C_EXTENSION]
+#         if ext:
+#             extramsg = (" (cannot locate the compiled extension '_psyco%s' "
+#                         "in the package path '%s')" % (ext[0], '; '.join(__path__)))
+#     else:
+#         extramsg = (" (check that the compiled extension '%s' is for "
+#                     "the correct Python version; this is Python %s)" %
+#                     (filename, sys.version.split()[0]))
+#     raise ImportError, str(e) + extramsg
 
 # Publish important data by importing them in the package
-from support import __version__, error, warning, _getrealframe, _getemulframe
-from support import version_info, __version__ as hexversion
-from core import full, profile, background, runonly, stop, cannotcompile
-from core import log, bind, unbind, proxy, unproxy, dumpcodebuf
-from _psyco import setfilter
-from _psyco import compact, compacttype
+# from support import __version__, error, warning, _getrealframe, _getemulframe
+# from support import version_info, __version__ as hexversion
+# from core import full, profile, background, runonly, stop, cannotcompile
+# from core import log, bind, unbind, proxy, unproxy, dumpcodebuf
+# from _psyco import setfilter
+# from _psyco import compact, compacttype
