@@ -2568,7 +2568,7 @@ code_t* psyco_pycompiler_mainloop(PsycoObject* po)
 		if ((int)cc < CC_TOTAL) {
 			/* compile the beginning of the "if true" path */
 			int current_instr = next_instr;
-			JUMPBY(oparg);
+			JUMPTO(oparg);
 			SAVE_NEXT_INSTR(next_instr, next_prim);
 			psyco_compile_cond(po,
 				psyco_exact_merge_point(po->pr.merge_points,
