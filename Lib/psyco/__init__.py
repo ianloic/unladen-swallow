@@ -30,7 +30,13 @@ except ImportError:
 def full(*args, **kwargs):
     pass
 
+def stop(*args, **kwargs):
+    pass
+
 def bind(*args, **kwargs):
+    pass
+
+def unbind(*args, **kwargs):
     pass
 
 def profile(*args, **kwargs):
@@ -41,6 +47,9 @@ def log(*args, **kwargs):
 
 def proxy(obj):
     return obj
+
+def cannotcompile(*args, **kwargs):
+    pass
 
 # Try to import the dynamic-loading _psyco and report errors
 # try:
