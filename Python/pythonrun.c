@@ -17,6 +17,7 @@
 #include "ast.h"
 #include "eval.h"
 #include "marshal.h"
+#include "_llvmmoduleobject.h"
 
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
@@ -183,6 +184,9 @@ Py_InitializeEx(int install_sigs)
 
 	if (!PyByteArray_Init())
 		Py_FatalError("Py_Initialize: can't init bytearray");
+
+        if (!_PyLlvm_Init())
+		Py_FatalError("Py_Initialize: can't init LLVM support");
 
 	_PyFloat_Init();
 

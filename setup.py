@@ -686,6 +686,9 @@ class PyBuildExt(build_ext):
         # CSV files
         exts.append( Extension('_csv', ['_csv.c']) )
 
+        # LLVM wrappers
+        exts.append( Extension('_llvm', ['_llvm.c']) )
+
         # socket(2)
         exts.append( Extension('_socket', ['socketmodule.c'],
                                depends = ['socketmodule.h']) )
