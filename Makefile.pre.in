@@ -397,9 +397,10 @@ llvm:
 
 # Build the interpreter
 $(BUILDPYTHON): llvm Modules/python.o $(LIBRARY) $(LDLIBRARY)
-		$(LINKCC) $(LDFLAGS) $(LLVMLDFLAGS) $(LINKFORSHARED) -o $@ \
+		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
 			Modules/python.o \
-			$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(SYSLIBS) $(LDLAST)
+			$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(LLVMLDFLAGS) \
+			$(SYSLIBS) $(LDLAST)
 
 platform: $(BUILDPYTHON)
 	$(RUNSHARED) ./$(BUILDPYTHON) -E -c 'import sys ; from distutils.util import get_platform ; print get_platform()+"-"+sys.version[0:3]' >platform
