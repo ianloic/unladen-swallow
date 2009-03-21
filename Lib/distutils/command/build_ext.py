@@ -331,7 +331,8 @@ class build_ext (Command):
             for macro in self.undef:
                 self.compiler.undefine_macro(macro)
         if self.libraries is not None:
-            self.compiler.set_libraries(self.libraries)
+            for lib in self.libraries:
+                self.compiler.add_library(lib)
         if self.library_dirs is not None:
             self.compiler.set_library_dirs(self.library_dirs)
         if self.rpath is not None:
