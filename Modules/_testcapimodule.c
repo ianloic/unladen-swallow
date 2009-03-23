@@ -778,7 +778,7 @@ traceback_print(PyObject *self, PyObject *args)
 static PyObject *
 test_memotable(PyObject *self)
 {
-	PyMemoTable *memo;
+	PyMemoTable *memo, *copy;
 	long i;
 
 #define ASSERT_EQ(a, b, msg) if ((a) != (b)) { \
@@ -819,7 +819,14 @@ test_memotable(PyObject *self)
 	for (i = 1; i < 12; i++)
 		ASSERT_EQ(*PyMemoTable_Get(memo, (void *)i), i, "Wrong value");
 
+	/* Copy the memo, and verify that the copy is independent. */
+	copy = PyMemoTable_Copy(memo);
+	PyMemoTable_Set(copy, (void *)3, 777);
+	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)3), 3, "Wrong value");
+	ASSERT_EQ(*PyMemoTable_Get(copy, (void *)3), 777, "Wrong value");
+
 	PyMemoTable_Del(memo);
+	PyMemoTable_Del(copy);
 	Py_RETURN_NONE;
 }
 

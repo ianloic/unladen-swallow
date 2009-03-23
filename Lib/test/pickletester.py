@@ -1045,14 +1045,16 @@ class AbstractPersistentPicklerTests(unittest.TestCase):
         self.assertEqual(self.id_count, 5)
         self.assertEqual(self.load_count, 5)
 
-class AbstractPicklerObjectTests(unittest.TestCase):
+class AbstractPicklerUnpicklerObjectTests(unittest.TestCase):
 
     pickler_class = None
+    unpickler_class = None
 
     def setUp(self):
         assert self.pickler_class
+        assert self.unpickler_class
 
-    def test_clear_memo(self):
+    def test_clear_pickler_memo(self):
         # To test whether clear_memo() has any effect, we pickle an object,
         # then pickle it again without clearing the memo; the two serialized
         # forms should be different. If we clear_memo() and then pickle the
@@ -1083,14 +1085,55 @@ class AbstractPicklerObjectTests(unittest.TestCase):
         self.assertNotEqual(first_pickled, second_pickled)
         self.assertEqual(first_pickled, third_pickled)
 
-class AbstractUnpicklerObjectTests(unittest.TestCase):
+    def test_priming_pickler_memo(self):
+        # Verify that we can set the Pickler's memo attribute.
+        data = ["abcdefg", "abcdefg", 44]
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
 
-    pickler_class = None
-    unpickler_class = None
+        pickler.dump(data)
+        first_pickled = f.getvalue()
 
-    def setUp(self):
-        assert self.pickler_class
-        assert self.unpickler_class
+        f = cStringIO.StringIO()
+        primed = self.pickler_class(f)
+        primed.memo = pickler.memo
+
+        primed.dump(data)
+        primed_pickled = f.getvalue()
+
+        self.assertNotEqual(first_pickled, primed_pickled)
+
+    def test_priming_unpickler_memo(self):
+        # Verify that we can set the Unpickler's memo attribute.
+        data = ["abcdefg", "abcdefg", 44]
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+
+        pickler.dump(data)
+        first_pickled = f.getvalue()
+
+        f = cStringIO.StringIO()
+        primed = self.pickler_class(f)
+        primed.memo = pickler.memo
+
+        primed.dump(data)
+        primed_pickled = f.getvalue()
+
+        unpickler = self.unpickler_class(cStringIO.StringIO(first_pickled))
+        unpickled_data1 = unpickler.load()
+
+        self.assertEqual(unpickled_data1, data)
+
+        primed = self.unpickler_class(cStringIO.StringIO(primed_pickled))
+        primed.memo = unpickler.memo
+        unpickled_data2 = primed.load()
+
+        # TODO(collinwinter): add dedicated tests for memo.clear(). This will
+        # require implementing stream support for unpickling.
+        primed.memo.clear()
+
+        self.assertEqual(unpickled_data2, data)
+        self.assertTrue(unpickled_data2 is unpickled_data1)
 
     def test_reusing_unpickler_objects(self):
         data1 = ["abcdefg", "abcdefg", 44]

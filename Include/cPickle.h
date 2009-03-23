@@ -48,6 +48,8 @@ STATIC_MEMOTABLE long *PyMemoTable_Get(PyMemoTable *self, void *key);
 /* Add a new key/value pair to the memo. Returns 0 on success, -1 on failure. */
 STATIC_MEMOTABLE int PyMemoTable_Set(PyMemoTable *self, void *key, long value);
 
+/* Copy an existing PyMemoTable struct. Returns NULL on failure. */
+STATIC_MEMOTABLE PyMemoTable *PyMemoTable_Copy(PyMemoTable *self);
 
 #ifdef __cplusplus
 }

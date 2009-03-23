@@ -348,6 +348,30 @@ PyMemoTable_New(void)
 	return memo;
 }
 
+STATIC_MEMOTABLE PyMemoTable *
+PyMemoTable_Copy(PyMemoTable *self)
+{
+	PyMemoTable *new = PyMemoTable_New();
+	if (new == NULL)
+		return NULL;
+
+	new->mt_used = self->mt_used;
+	new->mt_allocated = self->mt_allocated;
+	new->mt_mask = self->mt_mask;
+	/* The table we get from _New() is probably smaller than we wanted.
+	   Free it and allocate one that's the right size. */
+	PyMem_FREE(new->mt_table);
+	new->mt_table = PyMem_NEW(PyMemoEntry, self->mt_allocated);
+	if (new->mt_table == NULL) {
+		PyMem_FREE(new);
+		return NULL;
+	}
+	memcpy(new->mt_table, self->mt_table,
+	       sizeof(PyMemoEntry) * self->mt_allocated);
+
+	return new;
+}
+
 STATIC_MEMOTABLE void
 PyMemoTable_Del(PyMemoTable *self)
 {
@@ -3207,6 +3231,139 @@ Pickler_clear(Picklerobject *self)
 	return 0;
 }
 
+
+/* Define a proxy object for the Pickler's internal memo object. This is to
+ * avoid breaking code like:
+ * 	pickler.memo.clear()
+ * and
+ * 	pickler.memo = saved_memo
+ * Is this a good idea? Not really, but we don't want to break code that uses
+ * it. Note that we don't implement the entire mapping API here. This is
+ * intentional, as these should be treated as black-box implementation details.
+ */
+
+typedef struct {
+	PyObject_HEAD
+	Picklerobject *pickler;	/* Pickler whose memo table we're proxying. */
+} PicklerMemoProxyObject;
+
+static PyObject *
+pmp_clear(PicklerMemoProxyObject *self)
+{
+	PyMemoTable_Clear(self->pickler->memo);
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(clear__doc__,
+"memo.clear() -> None.  Remove all items from memo.");
+
+static PyMethodDef picklerproxy_methods[] = {
+	{"clear",	(PyCFunction)pmp_clear, METH_NOARGS, clear__doc__},
+	{NULL,		NULL}	/* sentinel */
+};
+
+static void
+PicklerMemoProxy_dealloc(PicklerMemoProxyObject *self)
+{
+	PyObject_GC_UnTrack(self);
+	Py_XDECREF(self->pickler);
+	Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static int
+PicklerMemoProxy_traverse(PicklerMemoProxyObject *self,
+                          visitproc visit, void *arg)
+{
+	Py_VISIT(self->pickler);
+	return 0;
+}
+
+static int
+PicklerMemoProxy_clear(PicklerMemoProxyObject *self)
+{
+	Py_CLEAR(self->pickler);
+	return 0;
+}
+
+
+static PyTypeObject PicklerMemoProxyType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "cPickle.PicklerMemoProxy",			/*tp_name*/
+    sizeof(PicklerMemoProxyObject),		/*tp_basicsize*/
+    0,
+    (destructor)PicklerMemoProxy_dealloc,	/* tp_dealloc */
+    0,						/* tp_print */
+    0,						/* tp_getattr */
+    0,						/* tp_setattr */
+    0,						/* tp_compare */
+    0,						/* tp_repr */
+    0,						/* tp_as_number */
+    0,						/* tp_as_sequence */
+    0,						/* tp_as_mapping */
+    (hashfunc)PyObject_HashNotImplemented,	/* tp_hash */
+    0,						/* tp_call */
+    0,						/* tp_str */
+    PyObject_GenericGetAttr,			/* tp_getattro */
+    PyObject_GenericSetAttr,			/* tp_setattro */
+    0,						/* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    0,						/* tp_doc */
+    (traverseproc)PicklerMemoProxy_traverse,	/* tp_traverse */
+    (inquiry)PicklerMemoProxy_clear,		/* tp_clear */
+    0,						/* tp_richcompare */
+    0,						/* tp_weaklistoffset */
+    0,						/* tp_iter */
+    0,						/* tp_iternext */
+    picklerproxy_methods,			/* tp_methods */
+};
+
+static PyObject *
+PicklerMemoProxy_New(Picklerobject *pickler)
+{
+	PicklerMemoProxyObject *self;
+
+	self = PyObject_GC_New(PicklerMemoProxyObject, &PicklerMemoProxyType);
+	if (self == NULL)
+		return NULL;
+	Py_INCREF(pickler);
+	self->pickler = pickler;
+	PyObject_GC_Track(self);
+	return (PyObject *)self;
+}
+
+/*****************************************************************************/
+
+static PyObject *
+Pickler_get_memo(Picklerobject *p)
+{
+	return PicklerMemoProxy_New(p);
+}
+
+static int
+Pickler_set_memo(Picklerobject *p, PyObject *pyvalue)
+{
+	PicklerMemoProxyObject *value;
+
+	if (Py_TYPE(pyvalue) != &PicklerMemoProxyType) {
+		PyErr_Format(PyExc_TypeError,
+			     "'memo' attribute must be a PicklerMemoProxy "
+			     "object, not %.200s", Py_TYPE(pyvalue)->tp_name);
+		return -1;
+	}
+	value = (PicklerMemoProxyObject *)pyvalue;
+
+	if (p->memo != NULL) {
+		PyMemoTable_Del(p->memo);
+		p->memo = NULL;
+	}
+
+	p->memo = PyMemoTable_Copy(value->pickler->memo);
+	if (p->memo == NULL)
+		return -1;
+
+	return 0;
+}
+
 static PyObject *
 Pickler_get_pers_func(Picklerobject *p)
 {
@@ -3263,6 +3420,7 @@ static PyGetSetDef Pickler_getsets[] = {
     {"persistent_id", (getter)Pickler_get_pers_func,
                      (setter)Pickler_set_pers_func},
     {"inst_persistent_id", NULL, (setter)Pickler_set_inst_pers_func},
+    {"memo", (getter)Pickler_get_memo, (setter)Pickler_set_memo},
     {"PicklingError", (getter)Pickler_get_error, NULL},
     {NULL}
 };
@@ -5567,6 +5725,112 @@ Unpickler_clear(Unpicklerobject *self)
 	return 0;
 }
 
+/* Define a proxy object for the Unpickler's internal memo object. This is to
+ * avoid breaking code like:
+ * 	unpickler.memo.clear()
+ * and
+ * 	unpickler.memo = saved_memo
+ * Is this a good idea? Not really, but we don't want to break code that uses
+ * it. Note that we don't implement the entire mapping API here. This is
+ * intentional, as these should be treated as black-box implementation details.
+ */
+
+typedef struct {
+	PyObject_HEAD
+	Unpicklerobject *unpickler;
+} UnpicklerMemoProxyObject;
+
+static PyObject *
+ump_clear(UnpicklerMemoProxyObject *self)
+{
+	_Unpickler_MemoCleanup(self->unpickler);
+	self->unpickler->memo = _Unpickler_NewMemo(self->unpickler->memo_size);
+	if (self->unpickler->memo == NULL)
+		return NULL;
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(ump_clear__doc__,
+"memo.clear() -> None.  Remove all items from memo.");
+
+static PyMethodDef unpicklerproxy_methods[] = {
+	{"clear",	(PyCFunction)ump_clear, METH_NOARGS, ump_clear__doc__},
+	{NULL,		NULL}	/* sentinel */
+};
+
+static void
+UnpicklerMemoProxy_dealloc(UnpicklerMemoProxyObject *self)
+{
+	PyObject_GC_UnTrack(self);
+	Py_XDECREF(self->unpickler);
+	Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static int
+UnpicklerMemoProxy_traverse(UnpicklerMemoProxyObject *self,
+                            visitproc visit, void *arg)
+{
+	Py_VISIT(self->unpickler);
+	return 0;
+}
+
+static int
+UnpicklerMemoProxy_clear(UnpicklerMemoProxyObject *self)
+{
+	Py_CLEAR(self->unpickler);
+	return 0;
+}
+
+
+static PyTypeObject UnpicklerMemoProxyType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "cPickle.UnpicklerMemoProxy",		/*tp_name*/
+    sizeof(UnpicklerMemoProxyObject),		/*tp_basicsize*/
+    0,
+    (destructor)UnpicklerMemoProxy_dealloc,	/* tp_dealloc */
+    0,						/* tp_print */
+    0,						/* tp_getattr */
+    0,						/* tp_setattr */
+    0,						/* tp_compare */
+    0,						/* tp_repr */
+    0,						/* tp_as_number */
+    0,						/* tp_as_sequence */
+    0,						/* tp_as_mapping */
+    (hashfunc)PyObject_HashNotImplemented,	/* tp_hash */
+    0,						/* tp_call */
+    0,						/* tp_str */
+    PyObject_GenericGetAttr,			/* tp_getattro */
+    PyObject_GenericSetAttr,			/* tp_setattro */
+    0,						/* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    0,						/* tp_doc */
+    (traverseproc)UnpicklerMemoProxy_traverse,	/* tp_traverse */
+    (inquiry)UnpicklerMemoProxy_clear,		/* tp_clear */
+    0,						/* tp_richcompare */
+    0,						/* tp_weaklistoffset */
+    0,						/* tp_iter */
+    0,						/* tp_iternext */
+    unpicklerproxy_methods,			/* tp_methods */
+};
+
+static PyObject *
+UnpicklerMemoProxy_New(Unpicklerobject *unpickler)
+{
+	UnpicklerMemoProxyObject *self;
+
+	self = PyObject_GC_New(UnpicklerMemoProxyObject,
+			       &UnpicklerMemoProxyType);
+	if (self == NULL)
+		return NULL;
+	Py_INCREF(unpickler);
+	self->unpickler = unpickler;
+	PyObject_GC_Track(self);
+	return (PyObject *)self;
+}
+
+/*****************************************************************************/
+
+
 static PyObject *
 Unpickler_getattr(Unpicklerobject *self, char *name)
 {
@@ -5595,6 +5859,10 @@ Unpickler_getattr(Unpicklerobject *self, char *name)
 		return UnpicklingError;
 	}
 
+	if (!strcmp(name, "memo")) {
+		return UnpicklerMemoProxy_New(self);
+	}
+
 	return Py_FindMethod(Unpickler_methods, (PyObject *)self, name);
 }
 
@@ -5617,10 +5885,37 @@ Unpickler_setattr(Unpicklerobject *self, char *name, PyObject *value)
 		return 0;
 	}
 
-	if (! value) {
+	if (value == NULL) {
 		PyErr_SetString(PyExc_TypeError,
 				"attribute deletion is not supported");
 		return -1;
+	}
+
+	if (!strcmp(name, "memo")) {
+		PyObject **new_memo;
+		Unpicklerobject *unpickler;
+		Py_ssize_t i;
+
+		if (Py_TYPE(value) != &UnpicklerMemoProxyType) {
+			PyErr_Format(PyExc_TypeError,
+				     "'memo' attribute must be an "
+				     "UnpicklerMemoProxy object, not %.200s",
+				     Py_TYPE(value)->tp_name);
+			return -1;
+		}
+
+		unpickler = ((UnpicklerMemoProxyObject *)value)->unpickler;
+		new_memo = _Unpickler_NewMemo(unpickler->memo_size);
+		if (new_memo == NULL)
+			return -1;
+		_Unpickler_MemoCleanup(self);
+		self->memo_size = unpickler->memo_size;
+		self->memo = new_memo;
+		for (i = 0; i < self->memo_size; i++) {
+			Py_XINCREF(unpickler->memo[i]);
+			self->memo[i] = unpickler->memo[i];
+		}
+		return 0;
 	}
 
 	PyErr_SetString(PyExc_AttributeError, name);
@@ -5831,6 +6126,10 @@ init_stuff(PyObject *module_dict)
 	if (PyType_Ready(&Unpicklertype) < 0)
 		return -1;
 	if (PyType_Ready(&Picklertype) < 0)
+		return -1;
+	if (PyType_Ready(&PicklerMemoProxyType) < 0)
+		return -1;
+	if (PyType_Ready(&UnpicklerMemoProxyType) < 0)
 		return -1;
 
 	INIT_STR(__class__);

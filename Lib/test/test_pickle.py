@@ -6,8 +6,7 @@ from test import test_support
 from test.pickletester import AbstractPickleTests
 from test.pickletester import AbstractPickleModuleTests
 from test.pickletester import AbstractPersistentPicklerTests
-from test.pickletester import AbstractPicklerObjectTests
-from test.pickletester import AbstractUnpicklerObjectTests
+from test.pickletester import AbstractPicklerUnpicklerObjectTests
 
 class PickleTests(AbstractPickleTests, AbstractPickleModuleTests):
 
@@ -62,11 +61,7 @@ class PersPicklerTests(AbstractPersistentPicklerTests):
         u = PersUnpickler(f)
         return u.load()
 
-class PicklerObjectTests(AbstractPicklerObjectTests):
-
-    pickler_class = pickle.Pickler
-
-class UnpicklerObjectTests(AbstractUnpicklerObjectTests):
+class PicklerUnpicklerObjectTests(AbstractPicklerUnpicklerObjectTests):
 
     pickler_class = pickle.Pickler
     unpickler_class = pickle.Unpickler
@@ -77,8 +72,7 @@ def test_main():
         PickleTests,
         PicklerTests,
         PersPicklerTests,
-        PicklerObjectTests,
-        UnpicklerObjectTests,
+        PicklerUnpicklerObjectTests,
     )
     test_support.run_doctest(pickle)
 
