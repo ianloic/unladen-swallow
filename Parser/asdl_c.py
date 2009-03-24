@@ -1150,6 +1150,10 @@ def main(srcfile):
         f = open(p, "wb")
         f.write(auto_gen_msg)
         f.write('#include "asdl.h"\n\n')
+        f.write('#ifdef __cplusplus\n'
+                'extern "C" {\n'
+                '#endif\n\n')
+
         c = ChainOfVisitors(TypeDefVisitor(f),
                             StructVisitor(f),
                             PrototypeVisitor(f),
@@ -1158,6 +1162,9 @@ def main(srcfile):
         f.write("PyObject* PyAST_mod2obj(mod_ty t);\n")
         f.write("mod_ty PyAST_obj2mod(PyObject* ast, PyArena* arena, int mode);\n")
         f.write("int PyAST_Check(PyObject* obj);\n")
+        f.write('\n#ifdef __cplusplus\n'
+                '}\n'  # To end the extern "C"
+                '#endif\n')
         f.close()
 
     if SRC_DIR:

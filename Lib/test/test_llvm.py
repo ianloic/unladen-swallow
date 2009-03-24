@@ -67,6 +67,27 @@ entry:
         self.assertRaises(TypeError, _llvm._module)
         self.assertRaises(TypeError, _llvm._function)
 
+    def test_simple_function_definition(self):
+        # The LLVM compiler can't yet compile anything; it just
+        # attaches a function declaration to each code object.
+        namespace = {}
+        exec "def foo(a): return a + 3" in namespace
+        self.assertEquals(str(namespace['foo'].__code__.co_llvm),
+                          """\
+
+declare %__pyobject @foo(%__pyobject, %__pyobject, %__pyobject, %__pyobject)
+""")
+        self.assertEquals(str(namespace['foo'].__code__.co_llvm.module),
+                          """\
+; ModuleID = '<string>'
+	%__function_type = type %__pyobject (%__pyobject, %__pyobject, %__pyobject, %__pyobject)
+	%__pyobject = type { %__pyobject*, %__pyobject*, i32, %__pyobject* }
+
+declare %__pyobject @"<module>"(%__pyobject, %__pyobject, %__pyobject, %__pyobject)
+
+declare %__pyobject @foo(%__pyobject, %__pyobject, %__pyobject, %__pyobject)
+""")
+
 
 def test_main():
     run_unittest(LlvmTests)

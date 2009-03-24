@@ -2,6 +2,10 @@
 
 #include "asdl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct _mod *mod_ty;
 
 typedef struct _stmt *stmt_ty;
@@ -510,3 +514,7 @@ alias_ty _Py_alias(identifier name, identifier asname, PyArena *arena);
 PyObject* PyAST_mod2obj(mod_ty t);
 mod_ty PyAST_obj2mod(PyObject* ast, PyArena* arena, int mode);
 int PyAST_Check(PyObject* obj);
+
+#ifdef __cplusplus
+}
+#endif

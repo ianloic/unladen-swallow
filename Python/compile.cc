@@ -33,6 +33,20 @@
 #include "symtable.h"
 #include "opcode.h"
 
+#undef Module
+
+#include "_llvmfunctionobject.h"
+#include "_llvmmoduleobject.h"
+
+#include "llvm/BasicBlock.h"
+#include "llvm/DerivedTypes.h"
+#include "llvm/Function.h"
+#include "llvm/Module.h"
+#include "llvm/Type.h"
+
+#include <string>
+#include <vector>
+
 int Py_OptimizeFlag = 0;
 
 #define DEFAULT_BLOCK_SIZE 16
@@ -72,6 +86,8 @@ typedef struct basicblock_ {
 	int b_startdepth;
 	/* instruction offset for block, computed by assemble_jump_offsets() */
 	int b_offset;
+
+	llvm::BasicBlock *b_llvm_block;
 } basicblock;
 
 /* fblockinfo tracks the current frame block.
@@ -121,6 +137,8 @@ struct compiler_unit {
 	int u_lineno;	   /* the lineno for the current stmt */
 	bool u_lineno_set; /* boolean to indicate whether instr
 			      has been generated with current lineno */
+
+	llvm::Function *u_llvm_function;
 };
 
 /* This struct captures the global state of a compilation.  
@@ -143,6 +161,14 @@ struct compiler {
 	PyObject *c_stack;	 /* Python list holding compiler_unit ptrs */
 	char *c_encoding;	 /* source encoding (a borrowed reference) */
 	PyArena *c_arena;	 /* pointer to memory allocation arena */
+
+	/* An llvm::Module that holds the code for this whole file.
+	   The other compilation units (compiler_unit, basicblock, and
+	   maybe instr) hold borrowed pointers directly to the LLVM
+	   C++ types, but because this one also needs to hold
+	   ownership and hand it off to the returned PyCodeObject, it
+	   holds a python-level object instead. */
+	PyLlvmModuleObject *c_llvm_module;
 };
 
 static int compiler_enter_scope(struct compiler *, identifier, void *, int);
@@ -180,6 +206,69 @@ static int compiler_with(struct compiler *, stmt_ty);
 
 static PyCodeObject *assemble(struct compiler *, int addNone);
 static PyObject *__doc__;
+
+// Helpers:
+static llvm::Module *
+compiler_get_llvm_module(struct compiler *c)
+{
+	return (llvm::Module *)c->c_llvm_module->the_module;
+}
+
+static std::string
+pystring_to_std_string(PyObject *str)
+{
+	if (!PyString_Check(str)) {
+		return "<not a string>";
+	}
+	return std::string(PyString_AS_STRING(str),
+			   PyString_GET_SIZE(str));
+}
+
+static const llvm::Type *
+getPyObjectType(llvm::Module *module)
+{
+	std::string pyobject_name("__pyobject");
+	const llvm::Type *result = module->getTypeByName(pyobject_name);
+	if (result != NULL)
+		return result;
+
+	// Keep this in sync with object.h.
+	llvm::PATypeHolder object_ty = llvm::OpaqueType::get();
+	llvm::Type *p_object_ty = llvm::PointerType::getUnqual(object_ty);
+	llvm::StructType *temp_object_ty = llvm::StructType::get(
+		// Fields from PyObject_HEAD.
+#ifdef Py_TRACE_REFS
+		// _ob_next, _ob_prev
+		p_object_ty, p_object_ty,
+#endif
+		llvm::IntegerType::get(sizeof(ssize_t) * 8),
+		p_object_ty,
+		NULL);
+	// Unifies the OpaqueType fields with the whole structure.  We
+	// couldn't do that originally because the type's recursive.
+	llvm::cast<llvm::OpaqueType>(object_ty.get())
+		->refineAbstractTypeTo(temp_object_ty);
+	module->addTypeName(pyobject_name, object_ty.get());
+	return object_ty.get();
+}
+
+static const llvm::FunctionType *
+getFunctionType(llvm::Module *module)
+{
+	std::string function_type_name("__function_type");
+	const llvm::FunctionType *result =
+		llvm::cast_or_null<llvm::FunctionType>(
+			module->getTypeByName(function_type_name));
+	if (result != NULL)
+		return result;
+
+	const llvm::Type *pyobject_type = getPyObjectType(module);
+	std::vector<const llvm::Type *> params(4, pyobject_type);
+	// Declare "PyObject (PyObject, PyObject, PyObject, PyObject)".
+	result = llvm::FunctionType::get(pyobject_type, params, false);
+	module->addTypeName(function_type_name, result);
+	return result;
+}
 
 PyObject *
 _Py_Mangle(PyObject *privateobj, PyObject *ident)
@@ -287,6 +376,10 @@ PyAST_Compile(mod_ty mod, const char *filename, PyCompilerFlags *flags,
 	/* XXX initialize to NULL for now, need to handle */
 	c.c_encoding = NULL;
 
+	c.c_llvm_module = (PyLlvmModuleObject *)PyLlvmModule_New(filename);
+	if (c.c_llvm_module == NULL)
+		goto finally;
+
 	co = compiler_mod(&c, mod);
 
  finally:
@@ -318,6 +411,7 @@ compiler_free(struct compiler *c)
 	if (c->c_future)
 		PyObject_Free(c->c_future);
 	Py_DECREF(c->c_stack);
+	Py_XDECREF(c->c_llvm_module);
 }
 
 static PyObject *
@@ -489,6 +583,12 @@ compiler_enter_scope(struct compiler *c, identifier name, void *key,
 		compiler_unit_free(u);
 		return 0;
 	}
+
+	u->u_llvm_function = llvm::Function::Create(
+		getFunctionType(compiler_get_llvm_module(c)),
+		llvm::GlobalValue::ExternalLinkage,
+		pystring_to_std_string(name),
+		compiler_get_llvm_module(c));
 
 	u->u_private = NULL;
 
@@ -3936,6 +4036,9 @@ makecode(struct compiler *c, struct assembler *a)
 			filename, c->u->u_name,
 			c->u->u_firstlineno,
 			a->a_lnotab);
+	if (co != NULL)
+		co->co_llvm_function = _PyLlvmFunction_FromModuleAndPtr(
+			(PyObject *)c->c_llvm_module, c->u->u_llvm_function);
  error:
 	Py_XDECREF(consts);
 	Py_XDECREF(names);

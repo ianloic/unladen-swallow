@@ -40,6 +40,10 @@ typedef struct {
     int co_firstlineno;		/* first source line number */
     PyObject *co_lnotab;	/* string (encoding addr<->lineno mapping) */
     void *co_zombieframe;     /* for optimization only (see frameobject.c) */
+    /* PyLlvmFunctionObject. See
+       http://code.google.com/p/unladen-swallow/wiki/FunctionCallingConvention
+       for the calling convention. */
+    PyObject *co_llvm_function;
 } PyCodeObject;
 
 /* Masks for co_flags above */
@@ -52,7 +56,7 @@ typedef struct {
 /* The CO_NOFREE flag is set if there are no free or cell variables.
    This information is redundant, but it allows a single flag test
    to determine whether there is any extra work to be done when the
-   call frame it setup.
+   call frame is setup.
 */
 #define CO_NOFREE       0x0040
 

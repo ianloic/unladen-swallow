@@ -18,6 +18,18 @@ get_module(PyLlvmModuleObject *obj)
 }
 
 PyObject *
+PyLlvmModule_New(const char *module_name)
+{
+    PyLlvmModuleObject *result =
+        PyObject_NEW(PyLlvmModuleObject, &PyLlvmModule_Type);
+    if (result == NULL) {
+        return NULL;
+    }
+    result->the_module = new llvm::Module(module_name);
+    return (PyObject *)result;
+}
+
+PyObject *
 PyLlvmModule_FromBitcode(PyObject *module_name_obj, PyObject *bitcode_str)
 {
     if (!PyString_Check(module_name_obj)) {

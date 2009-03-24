@@ -36,6 +36,8 @@ PyAPI_FUNC(PyFutureFeatures *) PyFuture_FromAST(struct _mod *, const char *);
 #define ERR_LATE_FUTURE \
 "from __future__ imports must occur at the beginning of the file"
 
+PyAPI_FUNC(PyObject*) _Py_Mangle(PyObject *p, PyObject *name);
+
 #ifdef __cplusplus
 }
 #endif

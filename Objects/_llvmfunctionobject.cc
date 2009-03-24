@@ -4,6 +4,8 @@
 #include "_llvmfunctionobject.h"
 
 #include "_llvmmoduleobject.h"
+#include "structmember.h"
+
 #include "llvm/Function.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream>
@@ -63,6 +65,13 @@ llvmfunction_str(PyLlvmFunctionObject *functionobj)
     return PyString_FromStringAndSize(result.data(), result.size());
 }
 
+#define OFF(x) offsetof(PyLlvmFunctionObject, x)
+
+static PyMemberDef llvmfunction_memberlist[] = {
+    {"module",	T_OBJECT,	OFF(module),	READONLY},
+    {NULL}  // Sentinel
+};
+
 // PyType_Ready is called on this in _llvmmoduleobject.cc:_PyLlvm_Init().
 PyTypeObject PyLlvmFunction_Type = {
 	PyVarObject_HEAD_INIT(&PyType_Type, 0)
@@ -93,7 +102,7 @@ PyTypeObject PyLlvmFunction_Type = {
 	0,				/* tp_iter */
 	0,				/* tp_iternext */
 	0,				/* tp_methods */
-	0,				/* tp_members */
+	llvmfunction_memberlist,	/* tp_members */
 	0,				/* tp_getset */
 	0,				/* tp_base */
 	0,				/* tp_dict */
