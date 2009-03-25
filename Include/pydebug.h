@@ -26,6 +26,8 @@ PyAPI_DATA(int) Py_NoUserSiteDirectory;
 PyAPI_DATA(int) _Py_QnewFlag;
 /* Warn about 3.x issues */
 PyAPI_DATA(int) Py_Py3kWarningFlag;
+/* Show the total reference count after each execution. */
+PyAPI_DATA(int) Py_ShowRefcountFlag;
 
 /* this is a wrapper around getenv() that pays attention to
    Py_IgnoreEnvironmentFlag.  It should be used for getting variables like

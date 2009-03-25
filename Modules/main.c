@@ -40,7 +40,7 @@ static char **orig_argv;
 static int  orig_argc;
 
 /* command line options */
-#define BASE_OPTS "3bBc:dEhiJm:OQ:sStuUvVW:xX?"
+#define BASE_OPTS "3RbBc:dEhiJm:OQ:sStuUvVW:xX?"
 
 #ifndef RISCOS
 #define PROGRAM_OPTS BASE_OPTS
@@ -91,7 +91,13 @@ static char *usage_4 = "\
 #else
 static char *usage_4 = "";
 #endif
+#ifdef Py_REF_DEBUG
 static char *usage_5 = "\
+-R     : show refcount information after execution\n";
+#else
+static char *usage_5 = "";
+#endif;
+static char *usage_6 = "\
 file   : program read from script file\n\
 -      : program read from stdin (default; interactive mode if a tty)\n\
 arg ...: arguments passed to program in sys.argv[1:]\n\n\
@@ -100,7 +106,7 @@ PYTHONSTARTUP: file executed on interactive startup (no default)\n\
 PYTHONPATH   : '%c'-separated list of directories prefixed to the\n\
                default module search path.  The result is sys.path.\n\
 ";
-static char *usage_6 = "\
+static char *usage_7 = "\
 PYTHONHOME   : alternate <prefix> directory (or <prefix>%c<exec_prefix>).\n\
                The default module search path uses %s.\n\
 PYTHONCASEOK : ignore case in 'import' statements (Windows).\n\
@@ -121,8 +127,9 @@ usage(int exitcode, char* program)
 		fprintf(f, usage_2);
 		fprintf(f, usage_3);
 		fprintf(f, usage_4);
-		fprintf(f, usage_5, DELIM);
-		fprintf(f, usage_6, DELIM, PYTHONHOMEHELP);
+		fprintf(f, usage_5);
+		fprintf(f, usage_6, DELIM);
+		fprintf(f, usage_7, DELIM, PYTHONHOMEHELP);
 	}
 #if defined(__VMS)
 	if (exitcode == 0) {
@@ -327,6 +334,14 @@ Py_Main(int argc, char **argv)
 #else
 			Py_FatalError("Py3k warnings are disabled in this "
 				      "build of Python");
+#endif
+			break;
+
+		case 'R':
+#ifdef Py_REF_DEBUG
+			Py_ShowRefcountFlag++;
+#else
+			Py_FatalError("-R requires a debug build of Python");
 #endif
 			break;
 

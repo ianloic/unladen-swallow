@@ -36,9 +36,10 @@
 #ifndef Py_REF_DEBUG
 #define PRINT_TOTAL_REFS()
 #else /* Py_REF_DEBUG */
-#define PRINT_TOTAL_REFS() fprintf(stderr,				\
+#define PRINT_TOTAL_REFS() if(Py_ShowRefcountFlag) {			\
+				fprintf(stderr,				\
 				   "[%" PY_FORMAT_SIZE_T "d refs]\n",	\
-				   _Py_GetRefTotal())
+				   _Py_GetRefTotal()); }
 #endif
 
 #ifdef __cplusplus
@@ -84,6 +85,7 @@ int Py_IgnoreEnvironmentFlag; /* e.g. PYTHONPATH, PYTHONHOME */
   true divisions (which they will be in 2.3). */
 int _Py_QnewFlag = 0;
 int Py_NoUserSiteDirectory = 0; /* for -s and site.py */
+int Py_ShowRefcountFlag = 0; /* For -R */
 
 /* PyModule_GetWarningsModule is no longer necessary as of 2.6
 since _warnings is builtin.  This API should not be used. */
