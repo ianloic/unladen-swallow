@@ -69,8 +69,13 @@ def send_to_worker(python, obj, proto):
     Returns:
         The pickled data received from the child process.
     """
+    # Prevent the subprocess from picking up invalid .pyc files.
+    target = __file__
+    if target[-1] in ("c", "o"):
+        target = target[:-1]
+
     data = cPickle.dumps((proto, obj), proto)
-    worker = subprocess.Popen([python, __file__, "worker"],
+    worker = subprocess.Popen([python, target, "worker"],
                               stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
