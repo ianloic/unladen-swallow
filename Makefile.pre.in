@@ -278,6 +278,7 @@ PYTHON_OBJS=	\
 		Python/graminit.o \
 		Python/import.o \
 		Python/importdl.o \
+		Python/ll_compile.o \
 		Python/marshal.o \
 		Python/modsupport.o \
 		Python/mystrtoul.o \
@@ -694,6 +695,7 @@ PYTHON_HEADERS= \
 		Include/weakrefobject.h \
 		Include/_llvmfunctionobject.h \
 		Include/_llvmmoduleobject.h \
+		Python/ll_compile.h \
 		pyconfig.h \
 		$(PARSER_HEADERS)
 

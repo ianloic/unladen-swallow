@@ -189,7 +189,7 @@ class TestTranforms(unittest.TestCase):
         asm = disassemble(f)
         self.assert_('JUMP_FORWARD' not in asm)
         self.assert_('JUMP_ABSOLUTE' not in asm)
-        self.assertEqual(asm.split().count('RETURN_VALUE'), 7)
+        self.assertEqual(asm.split().count('RETURN_VALUE'), 6)
 
     def test_elim_jump_after_return2(self):
         # Eliminate dead code: jumps immediately after returns can't be reached

@@ -21,7 +21,6 @@ dis_f = """\
  %-4d         6 RETURN_CONST:
                   LOAD_CONST               1 (1)
                   RETURN_VALUE
-              8 RETURN_VALUE
 """%(_f.func_code.co_firstlineno + 1,
      _f.func_code.co_firstlineno + 2)
 

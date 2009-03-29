@@ -20,7 +20,7 @@ typedef union inst {
 } vmgen_Cell, Inst;
 
 
-/* Bytecode object */
+/* Bytecode object.  Keep this in sync with Python/ll_compile.cc. */
 typedef struct {
     PyObject_HEAD
     int co_argcount;		/* #arguments, except *args */

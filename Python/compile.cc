@@ -24,6 +24,8 @@
 #include "Python.h"
 
 #include "Python-ast.h"
+#undef Module  // Macros that break LLVM
+#undef Pass
 #include "node.h"
 #include "pyarena.h"
 #include "ast.h"
@@ -32,16 +34,17 @@
 #include "instructionsobject.h"
 #include "symtable.h"
 #include "opcode.h"
-
-#undef Module
-
 #include "_llvmfunctionobject.h"
 #include "_llvmmoduleobject.h"
 
+#include "Python/ll_compile.h"
+
+#include "llvm/Analysis/Verifier.h"
 #include "llvm/BasicBlock.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/Module.h"
+#include "llvm/Support/IRBuilder.h"
 #include "llvm/Type.h"
 
 #include <string>
@@ -138,7 +141,8 @@ struct compiler_unit {
 	bool u_lineno_set; /* boolean to indicate whether instr
 			      has been generated with current lineno */
 
-	llvm::Function *u_llvm_function;
+	py::LlvmFunctionBuilder *fb; /* Short name because we'll be
+					calling into this a lot. */
 };
 
 /* This struct captures the global state of a compilation.  
@@ -176,7 +180,8 @@ static void compiler_free(struct compiler *);
 static basicblock *compiler_new_block(struct compiler *);
 static int compiler_next_instr(struct compiler *, basicblock *);
 static int compiler_addop(struct compiler *, int);
-static int compiler_addop_o(struct compiler *, int, PyObject *, PyObject *);
+static int compiler_addop_o(struct compiler *, int, PyObject *, PyObject *,
+			    void (py::LlvmFunctionBuilder::*)(int));
 static int compiler_addop_i(struct compiler *, int, int);
 static int compiler_addop_j(struct compiler *, int, basicblock *, int);
 static basicblock *compiler_use_new_block(struct compiler *);
@@ -207,7 +212,6 @@ static int compiler_with(struct compiler *, stmt_ty);
 static PyCodeObject *assemble(struct compiler *, int addNone);
 static PyObject *__doc__;
 
-// Helpers:
 static llvm::Module *
 compiler_get_llvm_module(struct compiler *c)
 {
@@ -222,52 +226,6 @@ pystring_to_std_string(PyObject *str)
 	}
 	return std::string(PyString_AS_STRING(str),
 			   PyString_GET_SIZE(str));
-}
-
-static const llvm::Type *
-getPyObjectType(llvm::Module *module)
-{
-	std::string pyobject_name("__pyobject");
-	const llvm::Type *result = module->getTypeByName(pyobject_name);
-	if (result != NULL)
-		return result;
-
-	// Keep this in sync with object.h.
-	llvm::PATypeHolder object_ty = llvm::OpaqueType::get();
-	llvm::Type *p_object_ty = llvm::PointerType::getUnqual(object_ty);
-	llvm::StructType *temp_object_ty = llvm::StructType::get(
-		// Fields from PyObject_HEAD.
-#ifdef Py_TRACE_REFS
-		// _ob_next, _ob_prev
-		p_object_ty, p_object_ty,
-#endif
-		llvm::IntegerType::get(sizeof(ssize_t) * 8),
-		p_object_ty,
-		NULL);
-	// Unifies the OpaqueType fields with the whole structure.  We
-	// couldn't do that originally because the type's recursive.
-	llvm::cast<llvm::OpaqueType>(object_ty.get())
-		->refineAbstractTypeTo(temp_object_ty);
-	module->addTypeName(pyobject_name, object_ty.get());
-	return object_ty.get();
-}
-
-static const llvm::FunctionType *
-getFunctionType(llvm::Module *module)
-{
-	std::string function_type_name("__function_type");
-	const llvm::FunctionType *result =
-		llvm::cast_or_null<llvm::FunctionType>(
-			module->getTypeByName(function_type_name));
-	if (result != NULL)
-		return result;
-
-	const llvm::Type *pyobject_type = getPyObjectType(module);
-	std::vector<const llvm::Type *> params(4, pyobject_type);
-	// Declare "PyObject (PyObject, PyObject, PyObject, PyObject)".
-	result = llvm::FunctionType::get(pyobject_type, params, false);
-	module->addTypeName(function_type_name, result);
-	return result;
 }
 
 PyObject *
@@ -529,6 +487,7 @@ compiler_unit_free(struct compiler_unit *u)
 	Py_CLEAR(u->u_freevars);
 	Py_CLEAR(u->u_cellvars);
 	Py_CLEAR(u->u_private);
+	delete u->fb;
 	PyObject_Free(u);
 }
 
@@ -584,11 +543,8 @@ compiler_enter_scope(struct compiler *c, identifier name, void *key,
 		return 0;
 	}
 
-	u->u_llvm_function = llvm::Function::Create(
-		getFunctionType(compiler_get_llvm_module(c)),
-		llvm::GlobalValue::ExternalLinkage,
-		pystring_to_std_string(name),
-		compiler_get_llvm_module(c));
+	u->fb = new py::LlvmFunctionBuilder(compiler_get_llvm_module(c),
+					    pystring_to_std_string(name));
 
 	u->u_private = NULL;
 
@@ -666,6 +622,7 @@ compiler_new_block(struct compiler *c)
 		return NULL;
 	}
 	memset((void *)b, 0, sizeof(basicblock));
+	b->b_llvm_block = llvm::BasicBlock::Create("L", u->fb->function());
 	/* Extend the singly linked list of blocks with new block. */
 	b->b_list = u->u_blocks;
 	u->u_blocks = b;
@@ -679,6 +636,25 @@ compiler_use_new_block(struct compiler *c)
 	if (block == NULL)
 		return NULL;
 	c->u->u_curblock = block;
+	c->u->fb->builder().CreateBr(block->b_llvm_block);
+	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
+	return block;
+}
+
+static basicblock *
+compiler_use_next_block(struct compiler *c, basicblock *block)
+{
+	assert(block != NULL);
+
+        if (c->u->u_curblock->b_llvm_block->getTerminator() == NULL) {
+            // If the block doesn't already end with a branch or
+            // return, branch to the next block.
+            c->u->fb->builder().CreateBr(block->b_llvm_block);
+        }
+	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
+
+	c->u->u_curblock->b_next = block;
+	c->u->u_curblock = block;
 	return block;
 }
 
@@ -688,18 +664,8 @@ compiler_next_block(struct compiler *c)
 	basicblock *block = compiler_new_block(c);
 	if (block == NULL)
 		return NULL;
-	c->u->u_curblock->b_next = block;
-	c->u->u_curblock = block;
-	return block;
-}
 
-static basicblock *
-compiler_use_next_block(struct compiler *c, basicblock *block)
-{
-	assert(block != NULL);
-	c->u->u_curblock->b_next = block;
-	c->u->u_curblock = block;
-	return block;
+        return compiler_use_next_block(c, block);
 }
 
 /* Returns the offset of the next instruction in the current block's
@@ -1002,6 +968,12 @@ compiler_addop(struct compiler *c, int opcode)
 	return 1;
 }
 
+// Adds 'o' to the mapping stored in 'dict' (if it wasn't already
+// there) so it can be looked up by opcodes like LOAD_CONST and
+// LOAD_NAME.  This function derives a tuple from o to avoid pairs of
+// values like 0.0 and -0.0 or 0 and 0.0 that compare equal but need
+// to be kept separate.  'o' is mapped to a small integer, and its
+// mapping is returned.
 static int
 compiler_add_o(struct compiler *c, PyObject *dict, PyObject *o)
 {
@@ -1082,16 +1054,26 @@ compiler_add_o(struct compiler *c, PyObject *dict, PyObject *o)
 	return arg;
 }
 
+// Adds opcode(o) as the next instruction in the current basic block.
+// Because opcodes only take integer arguments, we give 'o' a number
+// unique within 'dict' and store the mapping in 'dict'.  We also call
+// 'method()' to add the same opcode to the LLVM function.  'dict' is
+// one of c->u->u_{consts,names,varnames} and must match the
+// code::co_list that 'opcode' looks in.
 static int
 compiler_addop_o(struct compiler *c, int opcode, PyObject *dict,
-		     PyObject *o)
+		 PyObject *o, void (py::LlvmFunctionBuilder::*method)(int))
 {
     int arg = compiler_add_o(c, dict, o);
     if (arg < 0)
 	return 0;
-    return compiler_addop_i(c, opcode, arg);
+    if (compiler_addop_i(c, opcode, arg) == 0)
+	return 0;
+    (c->u->fb->*method)(arg);
+    return 1;
 }
 
+// Mangles 'o' and then behaves like compiler_addop_o.
 static int
 compiler_addop_name(struct compiler *c, int opcode, PyObject *dict,
 		    PyObject *o)
@@ -1127,6 +1109,8 @@ compiler_addop_i(struct compiler *c, int opcode, int oparg)
 	return 1;
 }
 
+// Adds a jump opcode whose target is 'b'. This works for both
+// conditional and unconditional jumps.
 static int
 compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
 {
@@ -1149,21 +1133,14 @@ compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
 	return 1;
 }
 
-/* The distinction between NEW_BLOCK and NEXT_BLOCK is subtle.	(I'd
-   like to find better names.)	NEW_BLOCK() creates a new block and sets
-   it as the current block.  NEXT_BLOCK() also creates an implicit jump
-   from the current block to the new block.
+/* NEXT_BLOCK() creates a new block, creates an implicit jump from the
+   current block to the new block, and sets the new block as the
+   current block.
 */
 
 /* The returns inside these macros make it impossible to decref objects
    created in the local function.  Local objects should use the arena.
 */
-
-
-#define NEW_BLOCK(C) { \
-	if (compiler_use_new_block((C)) == NULL) \
-		return 0; \
-}
 
 #define NEXT_BLOCK(C) { \
 	if (compiler_next_block((C)) == NULL) \
@@ -1183,7 +1160,8 @@ compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
 }
 
 #define ADDOP_O(C, OP, O, TYPE) { \
-	if (!compiler_addop_o((C), (OP), (C)->u->u_ ## TYPE, (O))) \
+	if (!compiler_addop_o((C), (OP), (C)->u->u_ ## TYPE, (O), \
+			      &py::LlvmFunctionBuilder::OP)) \
 		return 0; \
 }
 
@@ -1564,6 +1542,7 @@ compiler_class(struct compiler *c, stmt_ty s)
 	ADDOP_I(c, CALL_FUNCTION, 0);
 
 	ADDOP_IN_SCOPE(c, RETURN_VALUE);
+	c->u->fb->RETURN_VALUE();
 	co = assemble(c, 1);
 	compiler_exit_scope(c);
 	if (co == NULL)
@@ -1654,6 +1633,7 @@ compiler_lambda(struct compiler *c, expr_ty e)
 	c->u->u_argcount = asdl_seq_LEN(args->args);
 	VISIT_IN_SCOPE(c, expr, e->v.Lambda.body);
 	ADDOP_IN_SCOPE(c, RETURN_VALUE);
+	c->u->fb->RETURN_VALUE();
 	co = assemble(c, 1);
 	compiler_exit_scope(c);
 	if (co == NULL)
@@ -1830,8 +1810,10 @@ compiler_while(struct compiler *c, stmt_ty s)
 		ADDOP(c, POP_BLOCK);
 	}
 	compiler_pop_fblock(c, LOOP, loop);
-	if (orelse != NULL) /* what if orelse is just pass? */
+	if (orelse != NULL) { /* what if orelse is just pass? */
+		compiler_use_next_block(c, orelse);
 		VISIT_SEQ(c, stmt, s->v.While.orelse);
+	}
 	compiler_use_next_block(c, end);
 
 	return 1;
@@ -2260,9 +2242,12 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 		if (s->v.Return.value) {
 			VISIT(c, expr, s->v.Return.value);
 		}
-		else
+		else {
 			ADDOP_O(c, LOAD_CONST, Py_None, consts);
+		}
 		ADDOP(c, RETURN_VALUE);
+		c->u->fb->RETURN_VALUE();
+		NEXT_BLOCK(c);
 		break;
 	case Delete_kind:
 		VISIT_SEQ(c, expr, s->v.Delete.targets)
@@ -2558,7 +2543,25 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
 					"param invalid for local variable");
 			return 0;
 		}
-		ADDOP_O(c, op, mangled, varnames);
+		// This switch is equivalent to ADDOP_O(c, op,
+		// mangled, varnames) but allows the preprocessor to
+		// construct &py::LlvmFunctionBuilder::LOAD_FAST
+		// instead of ...::op.
+		switch (op) {
+		case LOAD_FAST:
+			ADDOP_O(c, LOAD_FAST, mangled, varnames);
+			break;
+		case STORE_FAST:
+			ADDOP_O(c, STORE_FAST, mangled, varnames);
+			break;
+		case DELETE_FAST:
+			ADDOP_O(c, DELETE_FAST, mangled, varnames);
+			break;
+		default:
+			PyErr_SetString(PyExc_SystemError,
+					"Unexpected opcode");
+			return 0;
+		}
 		Py_DECREF(mangled);
 		return 1;
 	case OP_GLOBAL:
@@ -2771,16 +2774,14 @@ compiler_listcomp_generator(struct compiler *c, PyObject *tmpname,
 	   and then write to the element */
 
 	comprehension_ty l;
-	basicblock *start, *anchor, *skip, *if_cleanup;
+	basicblock *start, *anchor, *if_cleanup;
 	int i, n;
 
 	start = compiler_new_block(c);
-	skip = compiler_new_block(c);
 	if_cleanup = compiler_new_block(c);
 	anchor = compiler_new_block(c);
 
-	if (start == NULL || skip == NULL || if_cleanup == NULL ||
-		anchor == NULL)
+	if (start == NULL || if_cleanup == NULL || anchor == NULL)
 	    return 0;
 
 	l = (comprehension_ty)asdl_seq_GET(generators, gen_index);
@@ -2811,8 +2812,6 @@ compiler_listcomp_generator(struct compiler *c, PyObject *tmpname,
 		return 0;
 	    VISIT(c, expr, elt);
 	    ADDOP(c, LIST_APPEND);
-
-	    compiler_use_next_block(c, skip);
 	}
 	compiler_use_next_block(c, if_cleanup);
 	ADDOP_JABS(c, JUMP_ABSOLUTE, start);
@@ -2854,16 +2853,15 @@ compiler_genexp_generator(struct compiler *c,
 	   and then write to the element */
 
 	comprehension_ty ge;
-	basicblock *start, *anchor, *skip, *if_cleanup, *end;
+	basicblock *start, *anchor, *if_cleanup, *end;
 	int i, n;
 
 	start = compiler_new_block(c);
-	skip = compiler_new_block(c);
 	if_cleanup = compiler_new_block(c);
 	anchor = compiler_new_block(c);
 	end = compiler_new_block(c);
 
-	if (start == NULL || skip == NULL || if_cleanup == NULL ||
+	if (start == NULL || if_cleanup == NULL ||
 	    anchor == NULL || end == NULL)
 		return 0;
 
@@ -2905,8 +2903,6 @@ compiler_genexp_generator(struct compiler *c,
 		VISIT(c, expr, elt);
 		ADDOP(c, YIELD_VALUE);
 		ADDOP(c, POP_TOP);
-
-		compiler_use_next_block(c, skip);
 	}
 	compiler_use_next_block(c, if_cleanup);
 	ADDOP_JABS(c, JUMP_ABSOLUTE, start);
@@ -4038,7 +4034,7 @@ makecode(struct compiler *c, struct assembler *a)
 			a->a_lnotab);
 	if (co != NULL)
 		co->co_llvm_function = _PyLlvmFunction_FromModuleAndPtr(
-			(PyObject *)c->c_llvm_module, c->u->u_llvm_function);
+			(PyObject *)c->c_llvm_module, c->u->fb->function());
  error:
 	Py_XDECREF(consts);
 	Py_XDECREF(names);
@@ -4103,6 +4099,13 @@ assemble(struct compiler *c, int addNone)
 		if (addNone)
 			ADDOP_O(c, LOAD_CONST, Py_None, consts);
 		ADDOP(c, RETURN_VALUE);
+		c->u->fb->RETURN_VALUE();
+	}
+
+	if (llvm::verifyFunction(*c->u->fb->function(),
+				 llvm::PrintMessageAction)) {
+		PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
+		return NULL;
 	}
 
 	nblocks = 0;

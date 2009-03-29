@@ -19,6 +19,8 @@ count, but does decrement the reference count of the item it replaces,
 if not nil.  It does *decrement* the reference count if it is *not*
 inserted in the tuple.  Similarly, PyTuple_GetItem does not increment the
 returned item's reference count.
+
+Keep this in sync with Python/ll_compile.cc.
 */
 
 typedef struct {
