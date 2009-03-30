@@ -3997,6 +3997,7 @@ makecode(struct compiler *c, struct assembler *a)
 	PyObject *name = NULL;
 	PyObject *freevars = NULL;
 	PyObject *cellvars = NULL;
+	PyGlobalLlvmData *global_llvm_data;
 	int nlocals, flags;
 
 	tmp = dict_keys_inorder(c->u->u_consts, 0);
@@ -4029,8 +4030,7 @@ makecode(struct compiler *c, struct assembler *a)
 	if (!code)
 		goto error;
 
-	PyGlobalLlvmData *global_llvm_data =
-		PyThreadState_Get()->interp->global_llvm_data;
+	global_llvm_data = PyThreadState_Get()->interp->global_llvm_data;
 	global_llvm_data->OptimizeQuickly(*c->u->fb->function());
 
 	tmp = PyList_AsTuple(consts); /* PyCode_New requires a tuple */
