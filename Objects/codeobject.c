@@ -116,6 +116,8 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
                 co->co_tcode = NULL;
+		co->co_llvm_function = NULL;
+		co->co_use_llvm = 0;
 	}
 	return co;
 }
@@ -191,6 +193,7 @@ static PyMemberDef code_memberlist[] = {
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
 	{"co_llvm",	T_OBJECT,	OFF(co_llvm_function),	READONLY},
+	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 	{NULL}	/* Sentinel */
 };
 

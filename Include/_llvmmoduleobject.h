@@ -15,6 +15,8 @@ typedef struct {
     PyObject_HEAD
     /* This has type llvm::Module*, but we can't say that in a C header. */
     void *the_module;
+    /* This has type llvm::ModuleProvider*. */
+    void *module_provider;
 } PyLlvmModuleObject;
 
 PyAPI_DATA(PyTypeObject) PyLlvmModule_Type;

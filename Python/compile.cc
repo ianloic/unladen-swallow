@@ -37,6 +37,7 @@
 #include "_llvmfunctionobject.h"
 #include "_llvmmoduleobject.h"
 
+#include "Python/global_llvm_data.h"
 #include "Python/ll_compile.h"
 
 #include "llvm/Analysis/Verifier.h"
@@ -651,6 +652,14 @@ compiler_use_next_block(struct compiler *c, basicblock *block)
             // return, branch to the next block.
             c->u->fb->builder().CreateBr(block->b_llvm_block);
         }
+	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
+
+
+	if (c->u->u_curblock->b_llvm_block->getTerminator() == NULL) {
+		// If the block doesn't already end with a branch or
+		// return, branch to the next block.
+		c->u->fb->builder().CreateBr(block->b_llvm_block);
+	}
 	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
 
 	c->u->u_curblock->b_next = block;
@@ -4019,6 +4028,10 @@ makecode(struct compiler *c, struct assembler *a)
 	code = PyCode_Optimize((PyObject *)a->a_code, consts, names, a->a_lnotab);
 	if (!code)
 		goto error;
+
+	PyGlobalLlvmData *global_llvm_data =
+		PyThreadState_Get()->interp->global_llvm_data;
+	global_llvm_data->OptimizeQuickly(*c->u->fb->function());
 
 	tmp = PyList_AsTuple(consts); /* PyCode_New requires a tuple */
 	if (!tmp)

@@ -27,6 +27,8 @@ typedef struct _is {
     PyObject *codec_search_cache;
     PyObject *codec_error_registry;
 
+    struct PyGlobalLlvmData *global_llvm_data;
+
 #ifdef HAVE_DLOPEN
     int dlopenflags;
 #endif

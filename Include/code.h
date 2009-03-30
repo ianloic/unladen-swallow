@@ -44,6 +44,8 @@ typedef struct {
        http://code.google.com/p/unladen-swallow/wiki/FunctionCallingConvention
        for the calling convention. */
     PyObject *co_llvm_function;
+    /* True if interpretation will be done through the LLVM JIT. */
+    char co_use_llvm;
 } PyCodeObject;
 
 /* Masks for co_flags above */

@@ -64,9 +64,6 @@ private:
     // The following pointers hold values created in the function's
     // entry block. They're constant after construction.
     llvm::Value *frame_;
-    llvm::Value *self_;
-    llvm::Value *args_;
-    llvm::Value *kwargs_;
 
     llvm::Value *stack_pointer_addr_;
     llvm::Value *consts_;

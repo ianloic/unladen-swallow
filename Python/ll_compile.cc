@@ -248,10 +248,11 @@ get_function_type(Module *module)
     if (result != NULL)
         return result;
 
+    // Functions have the signature PyObject *func(PyFrameObject *).
     const Type *p_pyobject_type =
         PointerType::getUnqual(get_pyobject_type(module));
-    std::vector<const Type *> params(4,p_pyobject_type);
-    params[0] = PointerType::getUnqual(get_pyframeobject_type(module));
+    std::vector<const Type *> params;
+    params.push_back(PointerType::getUnqual(get_pyframeobject_type(module)));
     result = llvm::FunctionType::get(p_pyobject_type, params, false);
     module->addTypeName(function_type_name, result);
     return result;
@@ -329,11 +330,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 {
     Function::arg_iterator args = function()->arg_begin();
     this->frame_ = args++;
-    this->self_ = args++;
-    this->args_ = args++;
-    this->kwargs_ = args++;
     assert(args == function()->arg_end() &&
            "Unexpected number of arguments");
+    this->frame_->setName("frame");
 
     builder().SetInsertPoint(BasicBlock::Create("entry", function()));
 

@@ -3,9 +3,12 @@
 #include "Python.h"
 #include "_llvmmoduleobject.h"
 
+#include "Python/global_llvm_data.h"
 #include "_llvmfunctionobject.h"
 #include "llvm/Bitcode/ReaderWriter.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Module.h"
+#include "llvm/ModuleProvider.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -25,7 +28,15 @@ PyLlvmModule_New(const char *module_name)
     if (result == NULL) {
         return NULL;
     }
-    result->the_module = new llvm::Module(module_name);
+    llvm::Module *module = new llvm::Module(module_name);
+    result->the_module = module;
+    llvm::ModuleProvider *provider = new llvm::ExistingModuleProvider(module);
+    result->module_provider = provider;
+    PyInterpreterState *interp = PyThreadState_Get()->interp;
+    // Hands ownership of the module and provider to the
+    // ExecutionEngine.  We'll tell the ExecutionEngine to delete them
+    // when our refcount goes to zero.
+    interp->global_llvm_data->getExecutionEngine()->addModuleProvider(provider);
     return (PyObject *)result;
 }
 
@@ -96,7 +107,9 @@ llvmmodule_from_bitcode(PyTypeObject *type, PyObject *args)
 static void
 llvmmodule_dealloc(PyLlvmModuleObject *moduleobj)
 {
-    delete get_module(moduleobj);
+    PyInterpreterState *interp = PyThreadState_Get()->interp;
+    interp->global_llvm_data->getExecutionEngine()->deleteModuleProvider(
+        (llvm::ModuleProvider *)moduleobj->module_provider);
 }
 
 static PyObject *

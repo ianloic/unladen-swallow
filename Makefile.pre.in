@@ -74,11 +74,11 @@ CFLAGSFORSHARED=@CFLAGSFORSHARED@
 # C flags used for building the interpreter object files
 PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
 
-# LLVM flags extracted from llvm-config jit bitreader
+# LLVM flags extracted from llvm-config jit bitreader x86
 LLVMCXXFLAGS=	-IUtil/llvm/include -I$(srcdir)/Util/llvm/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
 LLVM_LIB_DIR=	Util/llvm/@LLVM_OBJ_DIR@/lib
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
-LLVMLDFLAGS+=	$(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMBitReader -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
+LLVMLDFLAGS+=	-lLLVMBitReader $(LLVM_LIB_DIR)/LLVMX86AsmPrinter.o $(LLVM_LIB_DIR)/LLVMX86CodeGen.o -lLLVMSelectionDAG -lLLVMAsmPrinter $(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
 
 
 # Machine-dependent subdirectories
@@ -275,6 +275,7 @@ PYTHON_OBJS=	\
 		Python/getmtime.o \
 		Python/getplatform.o \
 		Python/getversion.o \
+		Python/global_llvm_data.o \
 		Python/graminit.o \
 		Python/import.o \
 		Python/importdl.o \
@@ -588,9 +589,9 @@ Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 
 # Vmgen-provided ceval bits
 
-Python/ceval.o: $(srcdir)/Python/ceval.c \
+Python/ceval.o: $(srcdir)/Python/ceval.cc \
 		$(srcdir)/Include/ceval-vm.i
-	$(CC) -c $(PY_CFLAGS) -fno-gcse -o $@ $<
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -fno-gcse -o $@ $<
 
 # Actually generates all of Include/ceval-vm.i,
 # Include/ceval-labels.i, and Include/ceval-peephole.i, but I can't
@@ -695,6 +696,8 @@ PYTHON_HEADERS= \
 		Include/weakrefobject.h \
 		Include/_llvmfunctionobject.h \
 		Include/_llvmmoduleobject.h \
+		Python/global_llvm_data.h \
+		Python/global_llvm_data_fwd.h \
 		Python/ll_compile.h \
 		pyconfig.h \
 		$(PARSER_HEADERS)
