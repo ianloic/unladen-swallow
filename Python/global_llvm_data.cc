@@ -81,11 +81,16 @@ void
 PyGlobalLlvmData::InitializeQuickOptimizations()
 {
     quick_optimizations_.add(new llvm::TargetData(*engine_->getTargetData()));
+    // Lw: ...1; br Lx ; Lx: ...2  --> Lw: ...1 ...2
     quick_optimizations_.add(llvm::createCFGSimplificationPass());
+    // -> SSA form.
     quick_optimizations_.add(llvm::createPromoteMemoryToRegisterPass());
     quick_optimizations_.add(llvm::createInstructionCombiningPass());
+    // Lw: br %cond Lx, Ly ; Lx: br %cond Lz, Lv  --> Lw: br %cond Lz, Ly
     quick_optimizations_.add(llvm::createJumpThreadingPass());
     quick_optimizations_.add(llvm::createDeadStoreEliminationPass());
+    // Make block ordering a bit less dependent on how the C++ is arranged.
+    quick_optimizations_.add(llvm::createBlockPlacementPass());
     // Make sure the output is still good.
     quick_optimizations_.add(llvm::createVerifierPass());
 }

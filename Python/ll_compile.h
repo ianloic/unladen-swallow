@@ -20,6 +20,11 @@ public:
     llvm::Function *function() { return function_; }
     llvm::IRBuilder<>& builder() { return builder_; }
 
+    /// Sets the insert point to next_block, inserting an
+    /// unconditional branch to there if the current block doesn't yet
+    /// have a terminator instruction.
+    void FallThroughTo(llvm::BasicBlock *next_block);
+
     /// The following methods operate like the opcodes with the same
     /// name.
     void LOAD_CONST(int index);
@@ -29,9 +34,7 @@ public:
     void LOAD_GLOBAL(int index) {
         InsertAbort();
     }
-    void LOAD_FAST(int index) {
-        InsertAbort();
-    }
+    void LOAD_FAST(int index);
     void STORE_FAST(int index) {
         InsertAbort();
     }
@@ -66,9 +69,13 @@ private:
     llvm::Value *frame_;
 
     llvm::Value *stack_pointer_addr_;
+    llvm::Value *varnames_;
+    llvm::Value *names_;
     llvm::Value *consts_;
+    llvm::Value *fastlocals_;
+    llvm::Value *freevars_;
 };
 
 }  // namespace py
 
-#endif PYTHON_LL_COMPILE_H
+#endif  // PYTHON_LL_COMPILE_H

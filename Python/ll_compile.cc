@@ -2,6 +2,9 @@
 
 #include "Python.h"
 #include "code.h"
+#include "frameobject.h"
+
+#include "Util/TypeBuilder.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BasicBlock.h"
@@ -16,13 +19,16 @@
 #include <vector>
 
 using llvm::BasicBlock;
+using llvm::Constant;
 using llvm::ConstantInt;
 using llvm::Function;
+using llvm::FunctionType;
 using llvm::IntegerType;
 using llvm::Module;
 using llvm::PointerType;
 using llvm::Type;
 using llvm::Value;
+using llvm::array_endof;
 
 namespace py {
 
@@ -35,226 +41,252 @@ get_signed_constant_int(const Type *type, int64_t v)
     return ConstantInt::get(type, static_cast<uint64_t>(v), true /* signed */);
 }
 
-static const Type *
-get_pyobject_type(Module *module)
-{
-    std::string pyobject_name("__pyobject");
-    const Type *result = module->getTypeByName(pyobject_name);
-    if (result != NULL)
-        return result;
+template<> class TypeBuilder<PyObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pyobject_name("__pyobject");
+        const Type *result = module->getTypeByName(pyobject_name);
+        if (result != NULL)
+            return result;
 
-    // Keep this in sync with object.h.
-    llvm::PATypeHolder object_ty = llvm::OpaqueType::get();
-    Type *p_object_ty = PointerType::getUnqual(object_ty);
-    llvm::StructType *temp_object_ty = llvm::StructType::get(
-        // Fields from PyObject_HEAD.
+        // Keep this in sync with object.h.
+        llvm::PATypeHolder object_ty = llvm::OpaqueType::get();
+        Type *p_object_ty = PointerType::getUnqual(object_ty);
+        llvm::StructType *temp_object_ty = llvm::StructType::get(
+            // Fields from PyObject_HEAD.
 #ifdef Py_TRACE_REFS
-        // _ob_next, _ob_prev
-        p_object_ty, p_object_ty,
+            // _ob_next, _ob_prev
+            p_object_ty, p_object_ty,
 #endif
-        IntegerType::get(sizeof(ssize_t) * 8),
-        p_object_ty,
-        NULL);
-    // Unifies the OpaqueType fields with the whole structure.  We
-    // couldn't do that originally because the type's recursive.
-    llvm::cast<llvm::OpaqueType>(object_ty.get())
-        ->refineAbstractTypeTo(temp_object_ty);
-    module->addTypeName(pyobject_name, object_ty.get());
-    return object_ty.get();
-}
+            TypeBuilder<ssize_t>::cache(module),
+            p_object_ty,
+            NULL);
+	// Unifies the OpaqueType fields with the whole structure.  We
+	// couldn't do that originally because the type's recursive.
+        llvm::cast<llvm::OpaqueType>(object_ty.get())
+            ->refineAbstractTypeTo(temp_object_ty);
+        module->addTypeName(pyobject_name, object_ty.get());
+        return object_ty.get();
+    }
 
-enum ObjectFields {
+    enum Fields {
 #ifdef Py_TRACE_REFS
-    OBJECT_FIELD_NEXT,
-    OBJECT_FIELD_PREV,
+        FIELD_NEXT,
+        FIELD_PREV,
 #endif
-    OBJECT_FIELD_REFCNT,
-    OBJECT_FIELD_TYPE,
+        FIELD_REFCNT,
+        FIELD_TYPE,
+    };
 };
+typedef TypeBuilder<PyObject> ObjectTy;
 
-static const Type *
-get_pytupleobject_type(Module *module)
-{
-    std::string pytupleobject_name("__pytupleobject");
-    const Type *result = module->getTypeByName(pytupleobject_name);
-    if (result != NULL)
+template<> class TypeBuilder<PyTupleObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pytupleobject_name("__pytupleobject");
+        const Type *result = module->getTypeByName(pytupleobject_name);
+        if (result != NULL)
+            return result;
+
+        // Keep this in sync with code.h.
+        result = llvm::StructType::get(
+            // From PyObject_HEAD. In C these are directly nested
+            // fields, but the layout should be the same when it's
+            // represented as a nested struct.
+            TypeBuilder<PyObject>::cache(module),
+            // From PyObject_VAR_HEAD
+            TypeBuilder<ssize_t>::cache(module),
+            // From PyTupleObject
+            TypeBuilder<PyObject*[]>::cache(module),  // ob_item
+            NULL);
+
+        module->addTypeName(pytupleobject_name, result);
         return result;
+    }
 
-    // Keep this in sync with code.h.
-    const Type *pyobject_type = get_pyobject_type(module);
-    const Type *p_pyobject_type = PointerType::getUnqual(pyobject_type);
-    result = llvm::StructType::get(
-        // From PyObject_HEAD. In C these are directly nested
-        // fields, but the layout should be the same when it's
-        // represented as a nested struct.
-        pyobject_type,
-        // From PyObject_VAR_HEAD
-        IntegerType::get(sizeof(ssize_t) * 8),
-        // From PyTupleObject
-        llvm::ArrayType::get(p_pyobject_type, 0),  // ob_item
-        NULL);
-
-    module->addTypeName(pytupleobject_name, result);
-    return result;
+    enum Fields {
+        FIELD_OBJECT,
+        FIELD_SIZE,
+        FIELD_ITEM,
+    };
 };
+typedef TypeBuilder<PyTupleObject> TupleTy;
 
-enum TupleFields {
-    TUPLE_FIELD_OBJECT,
-    TUPLE_FIELD_SIZE,
-    TUPLE_FIELD_ITEM,
-};
+template<> class TypeBuilder<PyCodeObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pycodeobject_name("__pycodeobject");
+        const Type *result = module->getTypeByName(pycodeobject_name);
+        if (result != NULL)
+            return result;
 
-static const Type *
-get_pycodeobject_type(Module *module)
-{
-    std::string pycodeobject_name("__pycodeobject");
-    const Type *result = module->getTypeByName(pycodeobject_name);
-    if (result != NULL)
+        // Keep this in sync with code.h.
+        const Type *p_pyobject_type = TypeBuilder<PyObject*>::cache(module);
+        const Type *int_type = TypeBuilder<int>::cache(module);
+        result = llvm::StructType::get(
+            // From PyObject_HEAD. In C these are directly nested
+            // fields, but the layout should be the same when it's
+            // represented as a nested struct.
+            TypeBuilder<PyObject>::cache(module),
+            // From PyCodeObject
+            int_type,  // co_argcount
+            int_type,  // co_nlocals
+            int_type,  // co_stacksize
+            int_type,  // co_flags
+            p_pyobject_type,  // co_code
+            p_pyobject_type,  // co_consts
+            p_pyobject_type,  // co_names
+            p_pyobject_type,  // co_varnames
+            p_pyobject_type,  // co_freevars
+            p_pyobject_type,  // co_cellvars
+            //  Not bothering with defining the Inst struct.
+            TypeBuilder<char*>::cache(module),  // co_tcode
+            p_pyobject_type,  // co_filename
+            p_pyobject_type,  // co_name
+            int_type,  // co_firstlineno
+            p_pyobject_type,  // co_lnotab
+            TypeBuilder<char*>::cache(module),  //co_zombieframe
+            p_pyobject_type,  // co_llvm_function
+            NULL);
+
+        module->addTypeName(pycodeobject_name, result);
         return result;
+    }
 
-    // Keep this in sync with code.h.
-    const Type *pyobject_type = get_pyobject_type(module);
-    const Type *p_pyobject_type = PointerType::getUnqual(pyobject_type);
-    const Type *int_type = IntegerType::get(sizeof(int) * 8);
-    result = llvm::StructType::get(
-        // From PyObject_HEAD. In C these are directly nested
-        // fields, but the layout should be the same when it's
-        // represented as a nested struct.
-        pyobject_type,
-        // From PyCodeObject
-        int_type,  // co_argcount
-        int_type,  // co_nlocals
-        int_type,  // co_stacksize
-        int_type,  // co_flags
-        p_pyobject_type,  // co_code
-        p_pyobject_type,  // co_consts
-        p_pyobject_type,  // co_names
-        p_pyobject_type,  // co_varnames
-        p_pyobject_type,  // co_freevars
-        p_pyobject_type,  // co_cellvars
-        //  Not bothering with defining the Inst struct.
-        PointerType::getUnqual(Type::Int8Ty),  // co_tcode
-        p_pyobject_type,  // co_filename
-        p_pyobject_type,  // co_name
-        int_type,  // co_firstlineno
-        p_pyobject_type,  // co_lnotab
-        PointerType::getUnqual(Type::Int8Ty),  //co_zombieframe
-        p_pyobject_type,  // co_llvm_function
-        NULL);
+    enum Fields {
+        FIELD_OBJECT,
+        FIELD_ARGCOUNT,
+        FIELD_NLOCALS,
+        FIELD_STACKSIZE,
+        FIELD_FLAGS,
+        FIELD_CODE,
+        FIELD_CONSTS,
+        FIELD_NAMES,
+        FIELD_VARNAMES,
+        FIELD_FREEVARS,
+        FIELD_CELLVARS,
+        FIELD_TCODE,
+        FIELD_FILENAME,
+        FIELD_NAME,
+        FIELD_FIRSTLINENO,
+        FIELD_LNOTAB,
+        FIELD_ZOMBIEFRAME,
+        FIELD_LLVM_FUNCTION,
+    };
+};
+typedef TypeBuilder<PyCodeObject> CodeTy;
 
-    module->addTypeName(pycodeobject_name, result);
-    return result;
+template<> class TypeBuilder<PyTryBlock> {
+public:
+    static const Type *cache(Module *module) {
+        const Type *int_type = TypeBuilder<int>::cache(module);
+        return llvm::StructType::get(
+            // b_type, b_handler, b_level
+            int_type, int_type, int_type, NULL);
+    }
+    enum Fields {
+        FIELD_TYPE,
+        FIELD_HANDLER,
+        FIELD_LEVEL,
+    };
 };
 
-enum CodeFields {
-    CODE_FIELD_OBJECT,
-    CODE_FIELD_ARGCOUNT,
-    CODE_FIELD_NLOCALS,
-    CODE_FIELD_STACKSIZE,
-    CODE_FIELD_FLAGS,
-    CODE_FIELD_CODE,
-    CODE_FIELD_CONSTS,
-    CODE_FIELD_NAMES,
-    CODE_FIELD_VARNAMES,
-    CODE_FIELD_FREEVARS,
-    CODE_FIELD_CELLVARS,
-    CODE_FIELD_TCODE,
-    CODE_FIELD_FILENAME,
-    CODE_FIELD_NAME,
-    CODE_FIELD_FIRSTLINENO,
-    CODE_FIELD_LNOTAB,
-    CODE_FIELD_ZOMBIEFRAME,
-    CODE_FIELD_LLVM_FUNCTION,
-};
+template<> class TypeBuilder<PyFrameObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pyframeobject_name("__pyframeobject");
+        const Type *result = module->getTypeByName(pyframeobject_name);
+        if (result != NULL)
+            return result;
 
-static const Type *
-get_pyframeobject_type(Module *module)
-{
-    std::string pyframeobject_name("__pyframeobject");
-    const Type *result = module->getTypeByName(pyframeobject_name);
-    if (result != NULL)
+        // Keep this in sync with frameobject.h.
+        const Type *p_pyobject_type = TypeBuilder<PyObject*>::cache(module);
+        const Type *int_type = TypeBuilder<int>::cache(module);
+        result = llvm::StructType::get(
+            // From PyObject_HEAD. In C these are directly nested
+            // fields, but the layout should be the same when it's
+            // represented as a nested struct.
+            ObjectTy::cache(module),
+            // From PyObject_VAR_HEAD
+            TypeBuilder<ssize_t>::cache(module),
+            // From struct _frame
+            p_pyobject_type,  // f_back
+            TypeBuilder<PyCodeObject*>::cache(module),  // f_code
+            p_pyobject_type,  // f_builtins
+            p_pyobject_type,  // f_globals
+            p_pyobject_type,  // f_locals
+            TypeBuilder<PyObject**>::cache(module),  // f_valuestack
+            TypeBuilder<PyObject**>::cache(module),  // f_stacktop
+            p_pyobject_type,  // f_trace
+            p_pyobject_type,  // f_exc_type
+            p_pyobject_type,  // f_exc_value
+            p_pyobject_type,  // f_exc_traceback
+            // f_tstate; punt on the type:
+            TypeBuilder<char*>::cache(module),
+            int_type,  // f_lasti
+            int_type,  // f_lineno
+            int_type,  // f_iblock
+            // f_blockstack:
+            TypeBuilder<PyTryBlock[CO_MAXBLOCKS]>::cache(module),
+            // f_localsplus, flexible array.
+            TypeBuilder<PyObject*[]>::cache(module),
+            NULL);
+
+        module->addTypeName(pyframeobject_name, result);
         return result;
+    }
 
-    // Keep this in sync with frameobject.h.
-    const Type *pyobject_type = get_pyobject_type(module);
-    const Type *p_pyobject_type = PointerType::getUnqual(pyobject_type);
-    const Type *int_type = IntegerType::get(sizeof(int) * 8);
-    const Type *pytryblock_type = llvm::StructType::get(
-        // b_type, b_handler, b_level
-        int_type, int_type, int_type, NULL);
-    result = llvm::StructType::get(
-        // From PyObject_HEAD. In C these are directly nested
-        // fields, but the layout should be the same when it's
-        // represented as a nested struct.
-        pyobject_type,
-        // From PyObject_VAR_HEAD
-        IntegerType::get(sizeof(ssize_t) * 8),
-        // From struct _frame
-        p_pyobject_type,  // f_back
-        PointerType::getUnqual(get_pycodeobject_type(module)),  // f_code
-        p_pyobject_type,  // f_builtins
-        p_pyobject_type,  // f_globals
-        p_pyobject_type,  // f_locals
-        PointerType::getUnqual(p_pyobject_type),  // f_valuestack
-        PointerType::getUnqual(p_pyobject_type),  // f_stacktop
-        p_pyobject_type,  // f_trace
-        p_pyobject_type,  // f_exc_type
-        p_pyobject_type,  // f_exc_value
-        p_pyobject_type,  // f_exc_traceback
-        // f_tstate; punt on the type:
-        PointerType::getUnqual(Type::Int8Ty),
-        int_type,  // f_lasti
-        int_type,  // f_lineno
-        int_type,  // f_iblock
-        // f_blockstack:
-        llvm::ArrayType::get(pytryblock_type, CO_MAXBLOCKS),
-        // f_localsplus, flexible array.
-        llvm::ArrayType::get(p_pyobject_type, 0),
-        NULL);
-
-    module->addTypeName(pyframeobject_name, result);
-    return result;
-}
-
-enum FrameFields {
-    FRAME_FIELD_OBJECT_HEAD,
-    FRAME_FIELD_OB_SIZE,
-    FRAME_FIELD_BACK,
-    FRAME_FIELD_CODE,
-    FRAME_FIELD_BUILTINS,
-    FRAME_FIELD_GLOBALS,
-    FRAME_FIELD_LOCALS,
-    FRAME_FIELD_VALUESTACK,
-    FRAME_FIELD_STACKTOP,
-    FRAME_FIELD_TRACE,
-    FRAME_FIELD_EXC_TYPE,
-    FRAME_FIELD_EXC_VALUE,
-    FRAME_FIELD_EXC_TRACEBACK,
-    FRAME_FIELD_TSTATE,
-    FRAME_FIELD_LASTI,
-    FRAME_FIELD_LINENO,
-    FRAME_FIELD_IBLOCK,
-    FRAME_FIELD_BLOCKSTACK,
-    FRAME_FIELD_LOCALSPLUS,
+    enum Fields {
+        FIELD_OBJECT_HEAD,
+        FIELD_OB_SIZE,
+        FIELD_BACK,
+        FIELD_CODE,
+        FIELD_BUILTINS,
+        FIELD_GLOBALS,
+        FIELD_LOCALS,
+        FIELD_VALUESTACK,
+        FIELD_STACKTOP,
+        FIELD_TRACE,
+        FIELD_EXC_TYPE,
+        FIELD_EXC_VALUE,
+        FIELD_EXC_TRACEBACK,
+        FIELD_TSTATE,
+        FIELD_LASTI,
+        FIELD_LINENO,
+        FIELD_IBLOCK,
+        FIELD_BLOCKSTACK,
+        FIELD_LOCALSPLUS,
+    };
 };
+typedef TypeBuilder<PyFrameObject> FrameTy;
 
-static const llvm::FunctionType *
+static const FunctionType *
 get_function_type(Module *module)
 {
     std::string function_type_name("__function_type");
-    const llvm::FunctionType *result =
-        llvm::cast_or_null<llvm::FunctionType>(
+    const FunctionType *result =
+        llvm::cast_or_null<FunctionType>(
             module->getTypeByName(function_type_name));
     if (result != NULL)
         return result;
 
-    // Functions have the signature PyObject *func(PyFrameObject *).
-    const Type *p_pyobject_type =
-        PointerType::getUnqual(get_pyobject_type(module));
-    std::vector<const Type *> params;
-    params.push_back(PointerType::getUnqual(get_pyframeobject_type(module)));
-    result = llvm::FunctionType::get(p_pyobject_type, params, false);
+    result = TypeBuilder<PyObject*(PyFrameObject*)>::cache(module);
     module->addTypeName(function_type_name, result);
+    return result;
+}
+
+template<typename FunctionType>
+static Function *
+get_global_function(Module *module, const char *name)
+{
+    Function *result = module->getFunction(name);
+    if (result == NULL) {
+        result = llvm::cast<Function>(
+            module->getOrInsertFunction(
+                name,
+                TypeBuilder<FunctionType>::cache(module)));
+        result->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    }
     return result;
 }
 
@@ -269,7 +301,7 @@ get_py_reftotal(Module *module)
     // The Module keeps ownership of the new GlobalVariable, and will
     // return it the next time we call getGlobalVariable().
     return new llvm::GlobalVariable(
-        IntegerType::get(sizeof(Py_ssize_t) * 8),
+        TypeBuilder<Py_ssize_t>::cache(module),
         false,  // Not constant.
         llvm::GlobalValue::ExternalLinkage,
         // NULL intializer makes this a declaration, to be imported from the
@@ -288,16 +320,10 @@ get_py_negativerefcount(Module *module)
 
     // The Module keeps ownership of the new Function, and will return
     // it the next time we call getFunction().
-    std::vector<const Type*> params;
-    params.push_back(PointerType::getUnqual(Type::Int8Ty));
-    params.push_back(IntegerType::get(sizeof(int) * 8));
-    params.push_back(PointerType::getUnqual(get_pyobject_type(module)));
-    // Declare void _Py_NegativeRefcount(char*, int, PyObject*);
-    return Function::Create(llvm::FunctionType::get(Type::VoidTy,
-                                                    params,
-                                                    false /* not vararg */),
-                            llvm::GlobalValue::ExternalLinkage,
-                            py_negativerefcount_name, module);
+    return Function::Create(
+        TypeBuilder<void(const char*, int, PyObject*)>::cache(module),
+        llvm::GlobalValue::ExternalLinkage,
+        py_negativerefcount_name, module);
 }
 
 static Function *
@@ -309,12 +335,7 @@ get_py_dealloc(Module *module)
 
     // The Module keeps ownership of the new Function, and will return
     // it the next time we call getFunction().
-    std::vector<const Type*> params;
-    params.push_back(PointerType::getUnqual(get_pyobject_type(module)));
-    // Declare void _Py_Dealloc(PyObject*);
-    return Function::Create(llvm::FunctionType::get(Type::VoidTy,
-                                                    params,
-                                                    false /* not vararg */),
+    return Function::Create(TypeBuilder<void(PyObject*)>::cache(module),
                             llvm::GlobalValue::ExternalLinkage,
                             py_dealloc_name, module);
 }
@@ -336,37 +357,109 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     builder().SetInsertPoint(BasicBlock::Create("entry", function()));
 
-    const Type *pyobject_type = get_pyobject_type(module);
     this->stack_pointer_addr_ = builder().CreateAlloca(
-        PointerType::getUnqual(PointerType::getUnqual(pyobject_type)),
+        TypeBuilder<PyObject**>::cache(module),
         0, "stack_pointer_addr");
     Value *initial_stack_pointer =
         builder().CreateLoad(
-            builder().CreateStructGEP(this->frame_, FRAME_FIELD_STACKTOP),
+            builder().CreateStructGEP(this->frame_, FrameTy::FIELD_STACKTOP),
             "initial_stack_pointer");
     builder().CreateStore(initial_stack_pointer, this->stack_pointer_addr_);
 
     Value *code = builder().CreateLoad(
-        builder().CreateStructGEP(this->frame_, FRAME_FIELD_CODE), "co");
-    this->consts_ = builder().CreateBitCast(
+        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_CODE), "co");
+    this->varnames_ = builder().CreateLoad(
+        builder().CreateStructGEP(code, CodeTy::FIELD_VARNAMES),
+        "varnames");
+    this->names_ = builder().CreateBitCast(
         builder().CreateLoad(
-            builder().CreateStructGEP(code, CODE_FIELD_CONSTS)),
-        PointerType::getUnqual(get_pytupleobject_type(module)),
-        "consts");
+            builder().CreateStructGEP(code, CodeTy::FIELD_NAMES)),
+        TypeBuilder<PyTupleObject*>::cache(module),
+        "names");
+    Value *consts_tuple =  // (PyTupleObject*)code->co_consts
+        builder().CreateBitCast(
+            builder().CreateLoad(
+                builder().CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
+            TypeBuilder<PyTupleObject*>::cache(module));
+    // The next GEP-magic assigns this->consts_ to &consts_tuple[0].ob_item[0].
+    Value *consts_item_indices[] = {
+        ConstantInt::get(Type::Int32Ty, 0),
+        ConstantInt::get(Type::Int32Ty, TupleTy::FIELD_ITEM),
+        ConstantInt::get(Type::Int32Ty, 0),
+    };
+    this->consts_ =
+        builder().CreateGEP(
+            consts_tuple,
+            consts_item_indices, array_endof(consts_item_indices),
+            "consts");
+
+    // The next GEP-magic assigns this->fastlocals_ to
+    // &frame_[0].f_localsplus[0].
+    Value* fastlocals_indices[] = {
+        ConstantInt::get(Type::Int32Ty, 0),
+        ConstantInt::get(Type::Int32Ty, FrameTy::FIELD_LOCALSPLUS),
+        ConstantInt::get(Type::Int32Ty, 0),
+    };
+    this->fastlocals_ =
+        builder().CreateGEP(this->frame_,
+                            fastlocals_indices, array_endof(fastlocals_indices),
+                            "fastlocals");
+    Value *nlocals = builder().CreateLoad(
+        builder().CreateStructGEP(code, CodeTy::FIELD_NLOCALS), "nlocals");
+
+    this->freevars_ =
+        builder().CreateGEP(this->fastlocals_, nlocals, "freevars");
+}
+
+void
+LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
+{
+    if (builder().GetInsertBlock()->getTerminator() == NULL) {
+        // If the block doesn't already end with a branch or
+        // return, branch to the next block.
+        builder().CreateBr(next_block);
+    }
+    builder().SetInsertPoint(next_block);
 }
 
 void
 LlvmFunctionBuilder::LOAD_CONST(int index)
 {
-    Value *indices[] = {
-        ConstantInt::get(Type::Int32Ty, 0),
-        ConstantInt::get(Type::Int32Ty, TUPLE_FIELD_ITEM),
-        ConstantInt::get(Type::Int32Ty, index),
-    };
     Value *const_ = builder().CreateLoad(
-        builder().CreateGEP(this->consts_, indices, array_endof(indices)));
+        builder().CreateGEP(this->consts_,
+                            ConstantInt::get(Type::Int32Ty, index)));
     IncRef(const_);
     Push(const_);
+}
+
+void
+LlvmFunctionBuilder::LOAD_FAST(int index)
+{
+    BasicBlock *unbound_local =
+        BasicBlock::Create("LOAD_FAST_unbound", function());
+    BasicBlock *success =
+        BasicBlock::Create("LOAD_FAST_success", function());
+
+    Value *local = builder().CreateLoad(
+        builder().CreateGEP(this->fastlocals_,
+                            ConstantInt::get(Type::Int32Ty, index)));
+    Value *is_null = builder().CreateICmpEQ(
+        local, Constant::getNullValue(local->getType()));
+    builder().CreateCondBr(is_null, unbound_local, success);
+
+    builder().SetInsertPoint(unbound_local);
+    Function *do_raise =
+        get_global_function<void(PyFrameObject*, int)>(
+            this->module_, "_PyEval_RaiseForUnboundLocal");
+    builder().CreateCall2(
+        do_raise, this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
+                         index, true /* signed */));
+    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    IncRef(local);
+    Push(local);
 }
 
 void
@@ -399,9 +492,9 @@ LlvmFunctionBuilder::IncRef(Value *value)
 #endif
 
     Value *as_pyobject = builder().CreateBitCast(
-        value, PointerType::getUnqual(get_pyobject_type(this->module_)));
+        value, TypeBuilder<PyObject*>::cache(this->module_));
     Value *refcnt_addr =
-        builder().CreateStructGEP(as_pyobject, OBJECT_FIELD_REFCNT);
+        builder().CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
     increment_and_get(builder(), refcnt_addr, 1);
 }
 
@@ -415,9 +508,9 @@ LlvmFunctionBuilder::DecRef(Value *value)
 #endif
 
     Value *as_pyobject = builder().CreateBitCast(
-        value, PointerType::getUnqual(get_pyobject_type(this->module_)));
+        value, TypeBuilder<PyObject*>::cache(this->module_));
     Value *refcnt_addr =
-        builder().CreateStructGEP(as_pyobject, OBJECT_FIELD_REFCNT);
+        builder().CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
     Value *new_refcnt = increment_and_get(builder(), refcnt_addr, -1);
 
     // Check if we need to deallocate the object.
@@ -429,13 +522,13 @@ LlvmFunctionBuilder::DecRef(Value *value)
 #endif
 
     Value *ne_zero = builder().CreateICmpNE(
-        new_refcnt, llvm::Constant::getNullValue(new_refcnt->getType()));
+        new_refcnt, Constant::getNullValue(new_refcnt->getType()));
     builder().CreateCondBr(ne_zero, block_ref_ne_zero, block_dealloc);
 
 #ifdef Py_REF_DEBUG
     builder().SetInsertPoint(block_ref_ne_zero);
     Value *less_zero = builder().CreateICmpSLT(
-        new_refcnt, llvm::Constant::getNullValue(new_refcnt->getType()));
+        new_refcnt, Constant::getNullValue(new_refcnt->getType()));
     BasicBlock *block_ref_lt_zero = BasicBlock::Create("negative_refcount",
                                                  this->function_);
     builder().CreateCondBr(less_zero, block_ref_lt_zero, block_tail);
@@ -446,7 +539,7 @@ LlvmFunctionBuilder::DecRef(Value *value)
     builder().CreateCall3(
         neg_refcount,
         llvm::ConstantArray::get(__FILE__),
-        ConstantInt::get(IntegerType::get(sizeof(int) * 8), __LINE__),
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), __LINE__),
         as_pyobject);
     builder().CreateBr(block_tail);
 #endif
@@ -454,6 +547,7 @@ LlvmFunctionBuilder::DecRef(Value *value)
     builder().SetInsertPoint(block_dealloc);
     Value *dealloc = get_py_dealloc(this->module_);
     builder().CreateCall(dealloc, as_pyobject);
+    builder().CreateBr(block_tail);
 
     builder().SetInsertPoint(block_tail);
 }
@@ -485,6 +579,5 @@ LlvmFunctionBuilder::InsertAbort()
     builder().CreateCall(llvm::Intrinsic::getDeclaration(
                              this->module_, llvm::Intrinsic::trap));
 }
-
 
 }  // namespace py

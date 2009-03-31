@@ -136,7 +136,7 @@ class PyBuildExt(build_ext):
         moddir = os.path.normpath(moddir)
 
         moddirlist = [moddir]
-        incdirlist = ['./Include']
+        incdirlist = ['./Include', './Util/llvm/include']
 
         # Platform-dependent module source and include directories
         platform = self.get_platform()
@@ -687,7 +687,7 @@ class PyBuildExt(build_ext):
         exts.append( Extension('_csv', ['_csv.c']) )
 
         # LLVM wrappers
-        exts.append( Extension('_llvm', ['_llvm.c']) )
+        exts.append( Extension('_llvm', ['_llvm.cc']) )
 
         # socket(2)
         exts.append( Extension('_socket', ['socketmodule.c'],

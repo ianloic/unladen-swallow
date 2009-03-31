@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-struct PyGlobalLlvmData *PyGlobalLlvmData_New();
+struct PyGlobalLlvmData *PyGlobalLlvmData_New(void);
 void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
 

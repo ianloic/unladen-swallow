@@ -2741,6 +2741,15 @@ cmp_outcome(int op, register PyObject *v, register PyObject *w)
 	return v;
 }
 
+extern "C" void
+_PyEval_RaiseForUnboundLocal(PyFrameObject *frame, int var_index)
+{
+	format_exc_check_arg(
+		PyExc_UnboundLocalError,
+		UNBOUNDLOCAL_ERROR_MSG,
+		PyTuple_GetItem(frame->f_code->co_varnames, var_index));
+}
+
 static void
 format_exc_check_arg(PyObject *exc, char *format_str, PyObject *obj)
 {

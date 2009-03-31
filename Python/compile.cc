@@ -647,20 +647,7 @@ compiler_use_next_block(struct compiler *c, basicblock *block)
 {
 	assert(block != NULL);
 
-        if (c->u->u_curblock->b_llvm_block->getTerminator() == NULL) {
-            // If the block doesn't already end with a branch or
-            // return, branch to the next block.
-            c->u->fb->builder().CreateBr(block->b_llvm_block);
-        }
-	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
-
-
-	if (c->u->u_curblock->b_llvm_block->getTerminator() == NULL) {
-		// If the block doesn't already end with a branch or
-		// return, branch to the next block.
-		c->u->fb->builder().CreateBr(block->b_llvm_block);
-	}
-	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
+	c->u->fb->FallThroughTo(block->b_llvm_block);
 
 	c->u->u_curblock->b_next = block;
 	c->u->u_curblock = block;
