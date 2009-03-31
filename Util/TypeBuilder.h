@@ -53,18 +53,24 @@ public:
         return llvm::Type::Int8Ty;
     }
 };
-template<> class TypeBuilder<int> {
-public:
-    static const llvm::Type *cache(llvm::Module *m) {
-        return llvm::IntegerType::get(sizeof(int) * 8);
-    }
-};
-template<> class TypeBuilder<Py_ssize_t> {
-public:
-    static const llvm::Type *cache(llvm::Module *m) {
-        return llvm::IntegerType::get(sizeof(Py_ssize_t) * 8);
-    }
-};
+
+#define DECLARE_INTEGRAL_TYPEBUILDER(T) \
+template<> class TypeBuilder<T> { \
+public: \
+    static const llvm::Type *cache(llvm::Module *m) { \
+        return llvm::IntegerType::get(sizeof(T) * 8); \
+    } \
+}
+DECLARE_INTEGRAL_TYPEBUILDER(short);
+DECLARE_INTEGRAL_TYPEBUILDER(unsigned short);
+DECLARE_INTEGRAL_TYPEBUILDER(int);
+DECLARE_INTEGRAL_TYPEBUILDER(unsigned int);
+DECLARE_INTEGRAL_TYPEBUILDER(long);
+DECLARE_INTEGRAL_TYPEBUILDER(unsigned long);
+DECLARE_INTEGRAL_TYPEBUILDER(long long);
+DECLARE_INTEGRAL_TYPEBUILDER(unsigned long long);
+#undef DECLARE_INTEGRAL_TYPEBUILDER
+
 template<typename R> class TypeBuilder<R()> {
 public:
     static const llvm::FunctionType *cache(llvm::Module *m) {
