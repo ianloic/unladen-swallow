@@ -5,17 +5,30 @@
 
 import cPickle
 import os
+import os.path
 import pickle
+import subprocess
 import sys
+import types
 import unittest
 
-# Python 2.3 doesn't have this, but the worker doesn't need it anyway.
-# This is just here to make the worker execute cleanly under 2.3.
-if sys.version_info >= (2, 4):
-    import subprocess
-
 from test import test_support
-from test.pickletester import AbstractPickleTests
+
+# This hurts my soul. Most distro-supplied Pythons don't include the tests
+# or test support files, and some don't include a way to get these back even if
+# you're will to install extra packages (like Ubuntu). Doing things like this
+# "provides" a pickletester module for older versions of Python that may be
+# installed without it. Note that one other design for this involves messing
+# with sys.path, which is less precise.
+mod_path = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                        "pickletester.py"))
+mod = types.ModuleType("test.pickletester")
+execfile(mod_path, mod.__dict__, mod.__dict__)
+AbstractPickleTests = mod.AbstractPickleTests
+if mod.__name__ in sys.modules:
+    raise RuntimeError("Did not expect to find test.pickletester loaded")
+sys.modules[mod.__name__] = mod
+
 
 class DumpCPickle_LoadPickle(AbstractPickleTests):
 
@@ -111,23 +124,6 @@ class AbstractCompatTests(AbstractPickleTests):
         pass
 
 
-if not have_python_version("python2.3"):
-    class Python23Compat(unittest.TestCase):
-        pass
-else:
-    class Python23Compat(AbstractCompatTests):
-
-        python = "python2.3"
-
-        # Disable these tests for Python 2.3. Making them pass would require
-        # nontrivially monkeypatching the pickletester module in the worker.
-        def test_reduce_calls_base(self):
-            pass
-
-        def test_reduce_ex_calls_base(self):
-            pass
-
-
 if not have_python_version("python2.4"):
     class Python24Compat(unittest.TestCase):
         pass
@@ -164,7 +160,6 @@ def test_main():
     test_support.run_unittest(
         DumpCPickle_LoadPickle,
         DumpPickle_LoadCPickle,
-        Python23Compat,
         Python24Compat,
         Python25Compat,
     )

@@ -5,14 +5,47 @@ import cStringIO
 import pickletools
 import copy_reg
 
-from test.test_support import TestFailed, have_unicode, TESTFN, \
-                              run_with_locale
+from test.test_support import TestFailed, have_unicode, TESTFN
 
 # Tests that try a number of pickle protocols should have a
 #     for proto in protocols:
 # kind of outer loop.
 assert pickle.HIGHEST_PROTOCOL == cPickle.HIGHEST_PROTOCOL == 2
 protocols = range(pickle.HIGHEST_PROTOCOL + 1)
+
+# Copy of test.test_support.run_with_locale. This is needed to support Python
+# 2.4, which didn't include it.
+def run_with_locale(catstr, *locales):
+    def decorator(func):
+        def inner(*args, **kwds):
+            try:
+                import locale
+                category = getattr(locale, catstr)
+                orig_locale = locale.setlocale(category)
+            except AttributeError:
+                # if the test author gives us an invalid category string
+                raise
+            except:
+                # cannot retrieve original locale, so do nothing
+                locale = orig_locale = None
+            else:
+                for loc in locales:
+                    try:
+                        locale.setlocale(category, loc)
+                        break
+                    except:
+                        pass
+
+            # now run the function, resetting the locale on exceptions
+            try:
+                return func(*args, **kwds)
+            finally:
+                if locale and orig_locale:
+                    locale.setlocale(category, orig_locale)
+        inner.func_name = func.func_name
+        inner.__doc__ = func.__doc__
+        return inner
+    return decorator
 
 
 # Return True if opcode code appears in the pickle, else False.
