@@ -53,6 +53,8 @@ public:
         return llvm::Type::Int8Ty;
     }
 };
+template<> class TypeBuilder<unsigned char> : public TypeBuilder<char> {};
+template<> class TypeBuilder<signed char> : public TypeBuilder<char> {};
 
 #define DECLARE_INTEGRAL_TYPEBUILDER(T) \
 template<> class TypeBuilder<T> { \
@@ -70,6 +72,9 @@ DECLARE_INTEGRAL_TYPEBUILDER(unsigned long);
 DECLARE_INTEGRAL_TYPEBUILDER(long long);
 DECLARE_INTEGRAL_TYPEBUILDER(unsigned long long);
 #undef DECLARE_INTEGRAL_TYPEBUILDER
+
+// Special case void* which is allowed in C but not LLVM.
+template<> class TypeBuilder<void*> : public TypeBuilder<char*> {};
 
 template<typename R> class TypeBuilder<R()> {
 public:

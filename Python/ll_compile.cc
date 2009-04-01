@@ -112,6 +112,147 @@ public:
 };
 typedef TypeBuilder<PyTupleObject> TupleTy;
 
+template<> class TypeBuilder<PyTypeObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pytypeobject_name("__pytypeobject");
+        const Type *result = module->getTypeByName(pytypeobject_name);
+        if (result != NULL)
+            return result;
+
+        // Keep this in sync with code.h.
+        result = llvm::StructType::get(
+            // From PyObject_HEAD. In C these are directly nested
+            // fields, but the layout should be the same when it's
+            // represented as a nested struct.
+            TypeBuilder<PyObject>::cache(module),
+            // From PyObject_VAR_HEAD
+            TypeBuilder<ssize_t>::cache(module),
+            // From PyTYPEObject
+            TypeBuilder<const char *>::cache(module),  // tp_name
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_basicsize
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_itemsize
+            TypeBuilder<destructor>::cache(module),  // tp_dealloc
+            // tp_print
+            TypeBuilder<int (*)(PyObject*, char*, int)>::cache(module),
+            TypeBuilder<getattrfunc>::cache(module),  // tp_getattr
+            TypeBuilder<setattrfunc>::cache(module),  // tp_setattr
+            TypeBuilder<cmpfunc>::cache(module),  // tp_compare
+            TypeBuilder<reprfunc>::cache(module),  // tp_repr
+            TypeBuilder<char *>::cache(module),  // tp_as_number
+            TypeBuilder<char *>::cache(module),  // tp_as_sequence
+            TypeBuilder<char *>::cache(module),  // tp_as_mapping
+            TypeBuilder<hashfunc>::cache(module),  // tp_hash
+            TypeBuilder<ternaryfunc>::cache(module),  // tp_call
+            TypeBuilder<reprfunc>::cache(module),  // tp_str
+            TypeBuilder<getattrofunc>::cache(module),  // tp_getattro
+            TypeBuilder<setattrofunc>::cache(module),  // tp_setattro
+            TypeBuilder<char *>::cache(module),  // tp_as_buffer
+            TypeBuilder<long>::cache(module),  // tp_flags
+            TypeBuilder<const char *>::cache(module),  // tp_doc
+            TypeBuilder<traverseproc>::cache(module),  // tp_traverse
+            TypeBuilder<inquiry>::cache(module),  // tp_clear
+            TypeBuilder<richcmpfunc>::cache(module),  // tp_richcompare
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_weaklistoffset
+            TypeBuilder<getiterfunc>::cache(module),  // tp_iter
+            TypeBuilder<iternextfunc>::cache(module),  // tp_iternext
+            TypeBuilder<char *>::cache(module),  // tp_methods
+            TypeBuilder<char *>::cache(module),  // tp_members
+            TypeBuilder<char *>::cache(module),  // tp_getset
+            TypeBuilder<PyObject *>::cache(module),  // tp_base
+            TypeBuilder<PyObject *>::cache(module),  // tp_dict
+            TypeBuilder<descrgetfunc>::cache(module),  // tp_descr_get
+            TypeBuilder<descrsetfunc>::cache(module),  // tp_descr_set
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_dictoffset
+            TypeBuilder<initproc>::cache(module),  // tp_init
+            // Can't use newfunc or allocfunc because they refer to
+            // PyTypeObject.
+            TypeBuilder<PyObject *(*)(PyObject *,
+                                      Py_ssize_t)>::cache(module),  // tp_alloc
+            TypeBuilder<PyObject *(*)(PyObject *, PyObject *,
+                                      PyObject *)>::cache(module),  // tp_new
+            TypeBuilder<freefunc>::cache(module),  // tp_free
+            TypeBuilder<inquiry>::cache(module),  // tp_is_gc
+            TypeBuilder<PyObject *>::cache(module),  // tp_bases
+            TypeBuilder<PyObject *>::cache(module),  // tp_mro
+            TypeBuilder<PyObject *>::cache(module),  // tp_cache
+            TypeBuilder<PyObject *>::cache(module),  // tp_subclasses
+            TypeBuilder<PyObject *>::cache(module),  // tp_weaklist
+            TypeBuilder<destructor>::cache(module),  // tp_del
+            TypeBuilder<unsigned int>::cache(module),  // tp_version_tag
+#ifdef COUNT_ALLOCS
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_allocs
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_frees
+            TypeBuilder<Py_ssize_t>::cache(module),  // tp_maxalloc
+            TypeBuilder<PyObject *>::cache(module),  // tp_prev
+            TypeBuilder<PyObject *>::cache(module),  // tp_next
+#endif
+            NULL);
+
+        module->addTypeName(pytypeobject_name, result);
+        return result;
+    }
+
+    enum Fields {
+        FIELD_OBJECT,
+        FIELD_SIZE,
+        FIELD_NAME,
+        FIELD_BASICSIZE,
+        FIELD_ITEMSIZE,
+        FIELD_DEALLOC,
+        FIELD_PRINT,
+        FIELD_GETATTR,
+        FIELD_SETATTR,
+        FIELD_COMPARE,
+        FIELD_REPR,
+        FIELD_AS_NUMBER,
+        FIELD_AS_SEQUENCE,
+        FIELD_AS_MAPPING,
+        FIELD_HASH,
+        FIELD_CALL,
+        FIELD_STR,
+        FIELD_GETATTRO,
+        FIELD_SETATTRO,
+        FIELD_AS_BUFFER,
+        FIELD_FLAGS,
+        FIELD_DOC,
+        FIELD_TRAVERSE,
+        FIELD_CLEAR,
+        FIELD_RICHCOMPARE,
+        FIELD_WEAKLISTOFFSET,
+        FIELD_ITER,
+        FIELD_ITERNEXT,
+        FIELD_METHODS,
+        FIELD_MEMBERS,
+        FIELD_GETSET,
+        FIELD_BASE,
+        FIELD_DICT,
+        FIELD_DESCR_GET,
+        FIELD_DESCR_SET,
+        FIELD_DICTOFFSET,
+        FIELD_INIT,
+        FIELD_ALLOC,
+        FIELD_NEW,
+        FIELD_FREE,
+        FIELD_IS_GC,
+        FIELD_BASES,
+        FIELD_MRO,
+        FIELD_CACHE,
+        FIELD_SUBCLASSES,
+        FIELD_WEAKLIST,
+        FIELD_DEL,
+        FIELD_TP_VERSION_TAG,
+#ifdef COUNT_ALLOCS
+        FIELD_ALLOCS,
+        FIELD_FREES,
+        FIELD_MAXALLOC,
+        FIELD_PREV,
+        FIELD_NEXT,
+#endif
+    };
+};
+typedef TypeBuilder<PyTypeObject> TypeTy;
+
 template<> class TypeBuilder<PyCodeObject> {
 public:
     static const Type *cache(Module *module) {
@@ -275,71 +416,6 @@ get_function_type(Module *module)
     return result;
 }
 
-template<typename FunctionType>
-static Function *
-get_global_function(Module *module, const char *name)
-{
-    Function *result = module->getFunction(name);
-    if (result == NULL) {
-        result = llvm::cast<Function>(
-            module->getOrInsertFunction(
-                name,
-                TypeBuilder<FunctionType>::cache(module)));
-        result->setLinkage(llvm::GlobalValue::ExternalLinkage);
-    }
-    return result;
-}
-
-static llvm::GlobalVariable *
-get_py_reftotal(Module *module)
-{
-    const std::string py_reftotal_name("_Py_RefTotal");
-    llvm::GlobalVariable *result = module->getGlobalVariable(py_reftotal_name);
-    if (result != NULL)
-        return result;
-
-    // The Module keeps ownership of the new GlobalVariable, and will
-    // return it the next time we call getGlobalVariable().
-    return new llvm::GlobalVariable(
-        TypeBuilder<Py_ssize_t>::cache(module),
-        false,  // Not constant.
-        llvm::GlobalValue::ExternalLinkage,
-        // NULL intializer makes this a declaration, to be imported from the
-        // main Python executable.
-        NULL,
-        py_reftotal_name,
-        module);
-}
-
-static Function *
-get_py_negativerefcount(Module *module)
-{
-    const std::string py_negativerefcount_name("_Py_NegativeRefcount");
-    if (Function *result = module->getFunction(py_negativerefcount_name))
-        return result;
-
-    // The Module keeps ownership of the new Function, and will return
-    // it the next time we call getFunction().
-    return Function::Create(
-        TypeBuilder<void(const char*, int, PyObject*)>::cache(module),
-        llvm::GlobalValue::ExternalLinkage,
-        py_negativerefcount_name, module);
-}
-
-static Function *
-get_py_dealloc(Module *module)
-{
-    const std::string py_dealloc_name("_Py_Dealloc");
-    if (Function *result = module->getFunction(py_dealloc_name))
-        return result;
-
-    // The Module keeps ownership of the new Function, and will return
-    // it the next time we call getFunction().
-    return Function::Create(TypeBuilder<void(PyObject*)>::cache(module),
-                            llvm::GlobalValue::ExternalLinkage,
-                            py_dealloc_name, module);
-}
-
 LlvmFunctionBuilder::LlvmFunctionBuilder(
     Module *module, const std::string& name)
     : module_(module),
@@ -442,15 +518,14 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
 
     Value *local = builder().CreateLoad(
         builder().CreateGEP(this->fastlocals_,
-                            ConstantInt::get(Type::Int32Ty, index)));
-    Value *is_null = builder().CreateICmpEQ(
-        local, Constant::getNullValue(local->getType()));
-    builder().CreateCondBr(is_null, unbound_local, success);
+                            ConstantInt::get(Type::Int32Ty, index)),
+        "FAST_loaded");
+    builder().CreateCondBr(IsNull(local), unbound_local, success);
 
     builder().SetInsertPoint(unbound_local);
     Function *do_raise =
-        get_global_function<void(PyFrameObject*, int)>(
-            this->module_, "_PyEval_RaiseForUnboundLocal");
+        GetGlobalFunction<void(PyFrameObject*, int)>(
+            "_PyEval_RaiseForUnboundLocal");
     builder().CreateCall2(
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
@@ -461,6 +536,105 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
     IncRef(local);
     Push(local);
 }
+
+void
+LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
+                                   llvm::BasicBlock *fallthrough)
+{
+    builder().CreateBr(target);
+}
+
+void
+LlvmFunctionBuilder::STORE_FAST(int index)
+{
+    SetLocal(index, Pop());
+}
+
+void
+LlvmFunctionBuilder::SETUP_LOOP(llvm::BasicBlock *target,
+                                llvm::BasicBlock *fallthrough)
+{
+    // TODO: I think we can ignore this until we have an exception story.
+    //InsertAbort("SETUP_LOOP");
+}
+
+void
+LlvmFunctionBuilder::GET_ITER()
+{
+    Value *obj = Pop();
+    Function *pyobject_getiter = GetGlobalFunction<PyObject*(PyObject*)>(
+        "PyObject_GetIter");
+    Value *iter = builder().CreateCall(pyobject_getiter, obj);
+    DecRef(obj);
+    BasicBlock *got_iter = BasicBlock::Create("got_iter", function());
+    BasicBlock *was_exception = BasicBlock::Create("was_exception", function());
+    builder().CreateCondBr(IsNull(iter), was_exception, got_iter);
+
+    builder().SetInsertPoint(was_exception);
+    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(got_iter);
+    Push(iter);
+}
+
+void
+LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
+                              llvm::BasicBlock *fallthrough)
+{
+    Value *iter = Pop();
+    Value *iter_tp = builder().CreateBitCast(
+        builder().CreateLoad(
+            builder().CreateStructGEP(iter, ObjectTy::FIELD_TYPE)),
+        TypeBuilder<PyTypeObject *>::cache(this->module_),
+        "iter_type");
+    Value *iternext = builder().CreateLoad(
+        builder().CreateStructGEP(iter_tp, TypeTy::FIELD_ITERNEXT),
+        "iternext");
+    Value *next = builder().CreateCall(iternext, iter, "next");
+    BasicBlock *got_next = BasicBlock::Create("got_next", function());
+    BasicBlock *next_null = BasicBlock::Create("next_null", function());
+    builder().CreateCondBr(IsNull(next), next_null, got_next);
+
+    builder().SetInsertPoint(next_null);
+    Value *err_occurred = builder().CreateCall(
+        GetGlobalFunction<PyObject*()>("PyErr_Occurred"));
+    BasicBlock *iter_ended = BasicBlock::Create("iter_ended", function());
+    BasicBlock *exception = BasicBlock::Create("exception", function());
+    builder().CreateCondBr(IsNull(err_occurred), iter_ended, exception);
+
+    builder().SetInsertPoint(exception);
+    Value *exc_stopiteration = builder().CreateLoad(
+        GetGlobalVariable<PyObject*>("PyExc_StopIteration"));
+    Value *was_stopiteration = builder().CreateCall(
+        GetGlobalFunction<int(PyObject *)>("PyErr_ExceptionMatches"),
+        exc_stopiteration);
+    BasicBlock *clear_err = BasicBlock::Create("clear_err", function());
+    BasicBlock *propagate = BasicBlock::Create("propagate", function());
+    builder().CreateCondBr(IsNonZero(was_stopiteration), clear_err, propagate);
+
+    builder().SetInsertPoint(propagate);
+    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(clear_err);
+    builder().CreateCall(GetGlobalFunction<void()>("PyErr_Clear"));
+    builder().CreateBr(iter_ended);
+
+    builder().SetInsertPoint(iter_ended);
+    DecRef(iter);
+    builder().CreateBr(target);
+
+    builder().SetInsertPoint(got_next);
+    Push(iter);
+    Push(next);
+}
+
+void
+LlvmFunctionBuilder::POP_BLOCK()
+{
+    // TODO: I think we can ignore this until we have an exception story.
+    //InsertAbort("POP_BLOCK");
+}
+
 
 void
 LlvmFunctionBuilder::RETURN_VALUE()
@@ -487,7 +661,7 @@ LlvmFunctionBuilder::IncRef(Value *value)
 {
 #ifdef Py_REF_DEBUG
     // Increment the global reference count.
-    Value *reftotal_addr = get_py_reftotal(this->module_);
+    Value *reftotal_addr = GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
     increment_and_get(builder(), reftotal_addr, 1);
 #endif
 
@@ -503,7 +677,7 @@ LlvmFunctionBuilder::DecRef(Value *value)
 {
 #ifdef Py_REF_DEBUG
     // Decrement the global reference count.
-    Value *reftotal_addr = get_py_reftotal(this->module_);
+    Value *reftotal_addr = GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
     increment_and_get(builder(), reftotal_addr, -1);
 #endif
 
@@ -521,9 +695,8 @@ LlvmFunctionBuilder::DecRef(Value *value)
     block_ref_ne_zero = BasicBlock::Create("check_refcnt", this->function_);
 #endif
 
-    Value *ne_zero = builder().CreateICmpNE(
-        new_refcnt, Constant::getNullValue(new_refcnt->getType()));
-    builder().CreateCondBr(ne_zero, block_ref_ne_zero, block_dealloc);
+    builder().CreateCondBr(IsNonZero(new_refcnt),
+                           block_ref_ne_zero, block_dealloc);
 
 #ifdef Py_REF_DEBUG
     builder().SetInsertPoint(block_ref_ne_zero);
@@ -534,22 +707,37 @@ LlvmFunctionBuilder::DecRef(Value *value)
     builder().CreateCondBr(less_zero, block_ref_lt_zero, block_tail);
 
     builder().SetInsertPoint(block_ref_lt_zero);
-    Value *neg_refcount = get_py_negativerefcount(this->module_);
+    Value *neg_refcount = GetGlobalFunction<void(const char*, int, PyObject*)>(
+        "_Py_NegativeRefcount");
     // TODO: Well that __FILE__ and __LINE__ are going to be useless!
     builder().CreateCall3(
         neg_refcount,
-        llvm::ConstantArray::get(__FILE__),
+        builder().CreateGlobalStringPtr(__FILE__, __FILE__),
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), __LINE__),
         as_pyobject);
     builder().CreateBr(block_tail);
 #endif
 
     builder().SetInsertPoint(block_dealloc);
-    Value *dealloc = get_py_dealloc(this->module_);
+    Value *dealloc = GetGlobalFunction<void(PyObject *)>("_PyLlvm_WrapDealloc");
     builder().CreateCall(dealloc, as_pyobject);
     builder().CreateBr(block_tail);
 
     builder().SetInsertPoint(block_tail);
+}
+
+void
+LlvmFunctionBuilder::XDecRef(Value *value)
+{
+    BasicBlock *do_decref = BasicBlock::Create("decref", function());
+    BasicBlock *decref_end = BasicBlock::Create("decref_end", function());
+    builder().CreateCondBr(IsNull(value), decref_end, do_decref);
+
+    builder().SetInsertPoint(do_decref);
+    DecRef(value);
+    builder().CreateBr(decref_end);
+
+    builder().SetInsertPoint(decref_end);
 }
 
 void
@@ -574,10 +762,68 @@ LlvmFunctionBuilder::Pop()
 }
 
 void
-LlvmFunctionBuilder::InsertAbort()
+LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
 {
-    builder().CreateCall(llvm::Intrinsic::getDeclaration(
-                             this->module_, llvm::Intrinsic::trap));
+    Value *local_slot = builder().CreateGEP(
+        this->fastlocals_, ConstantInt::get(Type::Int32Ty, locals_index));
+    Value *orig_value = builder().CreateLoad(local_slot, "local_overwritten");
+    builder().CreateStore(new_value, local_slot);
+    XDecRef(orig_value);
+}
+
+
+void
+LlvmFunctionBuilder::InsertAbort(const char *opcode_name)
+{
+    std::string message("Undefined opcode: ");
+    message.append(opcode_name);
+    builder().CreateCall(GetGlobalFunction<int(const char*)>("puts"),
+                         builder().CreateGlobalStringPtr(message.c_str(),
+                                                         message.c_str()));
+    builder().CreateCall(GetGlobalFunction<void()>("abort"));
+}
+
+template<typename FunctionType> Function *
+LlvmFunctionBuilder::GetGlobalFunction(const std::string &name)
+{
+    return llvm::cast<Function>(
+        this->module_->getOrInsertFunction(
+            name, TypeBuilder<FunctionType>::cache(this->module_)));
+}
+
+template<typename VariableType> Constant *
+LlvmFunctionBuilder::GetGlobalVariable(const std::string &name)
+{
+    return this->module_->getOrInsertGlobal(
+        name, TypeBuilder<VariableType>::cache(this->module_));
+}
+
+Value *
+LlvmFunctionBuilder::IsNull(Value *value)
+{
+    return builder().CreateICmpEQ(
+        value, Constant::getNullValue(value->getType()));
+}
+
+Value *
+LlvmFunctionBuilder::IsNonZero(Value *value)
+{
+    return builder().CreateICmpNE(
+        value, Constant::getNullValue(value->getType()));
 }
 
 }  // namespace py
+
+
+// Helper functions for the LLVM IR. These exist for
+// non-speed-critical code that's easier to write in C, or for calls
+// that are functions in pydebug mode and macros otherwise.
+extern "C" {
+
+void
+_PyLlvm_WrapDealloc(PyObject *obj)
+{
+    _Py_Dealloc(obj);
+}
+
+}

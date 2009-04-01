@@ -24,7 +24,14 @@ llvm_setdebug(PyObject *self, PyObject *on_obj)
     if (on == -1)  // Error.
         return NULL;
 
+#ifdef NDEBUG
+    if (on) {
+        PyErr_SetString(PyExc_ValueError, "llvm debugging not available");
+        return NULL;
+    }
+#else
     llvm::DebugFlag = on;
+#endif
     Py_RETURN_NONE;
 }
 

@@ -67,54 +67,6 @@ entry:
         self.assertRaises(TypeError, _llvm._module)
         self.assertRaises(TypeError, _llvm._function)
 
-    def test_module_data(self):
-        # Certain types and constants get defined at the module level,
-        # uniformly for any function.
-        namespace = {}
-        exec "def foo(): pass" in namespace
-        disassembly = str(namespace['foo'].__code__.co_llvm.module)
-        module_data = disassembly[:disassembly.find(
-                'define %__pyobject* @"<module>"')]
-        self.assertEquals(module_data,
-                          """\
-; ModuleID = '<string>'
-	%__function_type = type %__pyobject* (%__pyframeobject*)
-	%__pycodeobject = type { %__pyobject, i32, i32, i32, i32, %__pyobject*, %__pyobject*, %__pyobject*, %__pyobject*, %__pyobject*, %__pyobject*, i8*, %__pyobject*, %__pyobject*, i32, %__pyobject*, i8*, %__pyobject* }
-	%__pyframeobject = type { %__pyobject, i32, %__pyobject*, %__pycodeobject*, %__pyobject*, %__pyobject*, %__pyobject*, %__pyobject**, %__pyobject**, %__pyobject*, %__pyobject*, %__pyobject*, %__pyobject*, i8*, i32, i32, i32, [20 x { i32, i32, i32 }], [0 x %__pyobject*] }
-	%__pyobject = type { %__pyobject*, %__pyobject*, i32, %__pyobject* }
-	%__pytupleobject = type { %__pyobject, i32, [0 x %__pyobject*] }
-@_Py_RefTotal = external global i32		; <i32*> [#uses=6]
-
-""")
-
-    def test_simple_function_definition(self):
-        namespace = {}
-        exec "def foo(): return" in namespace
-        self.assertEquals(str(namespace['foo'].__code__.co_llvm),
-                          """\
-
-define %__pyobject* @foo(%__pyframeobject* %frame) {
-entry:
-	%0 = getelementptr %__pyframeobject* %frame, i32 0, i32 8		; <%__pyobject***> [#uses=1]
-	%initial_stack_pointer = load %__pyobject*** %0		; <%__pyobject**> [#uses=1]
-	%1 = getelementptr %__pyframeobject* %frame, i32 0, i32 3		; <%__pycodeobject**> [#uses=1]
-	%co = load %__pycodeobject** %1		; <%__pycodeobject*> [#uses=1]
-	%2 = getelementptr %__pycodeobject* %co, i32 0, i32 6		; <%__pyobject**> [#uses=1]
-	%3 = load %__pyobject** %2		; <%__pyobject*> [#uses=1]
-	%consts = getelementptr %__pyobject* %3, i32 1, i32 1		; <%__pyobject**> [#uses=1]
-	%4 = load %__pyobject** %consts		; <%__pyobject*> [#uses=3]
-	%5 = load i32* @_Py_RefTotal		; <i32> [#uses=1]
-	%6 = add i32 %5, 1		; <i32> [#uses=1]
-	store i32 %6, i32* @_Py_RefTotal
-	%7 = getelementptr %__pyobject* %4, i32 0, i32 2		; <i32*> [#uses=2]
-	%8 = load i32* %7		; <i32> [#uses=1]
-	%9 = add i32 %8, 1		; <i32> [#uses=1]
-	store i32 %9, i32* %7
-	store %__pyobject* %4, %__pyobject** %initial_stack_pointer
-	ret %__pyobject* %4
-}
-""")
-
     def test_run_simple_function(self):
         def foo():
             pass
@@ -130,8 +82,6 @@ entry:
 
     def test_unbound_local(self):
         def foo():
-            # STORE_FAST(a) isn't implemented yet, but the
-            # UnboundLocalError is raised before we get there.
             a = a
         foo.__code__.__use_llvm__ = True
         try:
@@ -141,6 +91,45 @@ entry:
                 str(e), "local variable 'a' referenced before assignment")
         else:
             self.fail("Expected UnboundLocalError")
+
+    def test_assign(self):
+        def foo(a):
+            b = a
+            return b
+        foo.__code__.__use_llvm__ = True
+        self.assertEquals(3, foo(3))
+        self.assertEquals("Hello", foo("Hello"))
+
+    def test_raising_getiter(self):
+        class RaisingIter(object):
+            def __iter__(self):
+                raise RuntimeError
+        def loop(range):
+            for i in range:
+                pass
+        loop.__code__.__use_llvm__ = True
+        self.assertRaises(RuntimeError, loop, RaisingIter())
+
+    def test_raising_next(self):
+        class RaisingNext(object):
+            def __iter__(self):
+                return self
+            def next(self):
+                raise RuntimeError
+        def loop(range):
+            for i in range:
+                pass
+        loop.__code__.__use_llvm__ = True
+        self.assertRaises(RuntimeError, loop, RaisingNext())
+
+    def test_loop(self):
+        def loop(range):
+            for i in range:
+                pass
+        loop.__code__.__use_llvm__ = True
+        r = iter(range(12))
+        self.assertEquals(None, loop(r))
+        self.assertRaises(StopIteration, next, r)
 
 
 def test_main():
