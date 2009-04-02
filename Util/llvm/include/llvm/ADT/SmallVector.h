@@ -210,7 +210,7 @@ public:
   void append(in_iter in_start, in_iter in_end) {
     size_type NumInputs = std::distance(in_start, in_end);
     // Grow allocated space if needed.
-    if (End+NumInputs > Capacity)
+    if (NumInputs > size_type(Capacity-End))
       grow(size()+NumInputs);
 
     // Copy the new elements over.
