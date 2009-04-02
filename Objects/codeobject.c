@@ -343,6 +343,7 @@ code_dealloc(PyCodeObject *co)
                 PyObject_GC_Del(co->co_zombieframe);
         if (co->co_tcode != NULL)
                 PyMem_FREE(co->co_tcode);
+	Py_XDECREF(co->co_llvm_function);
 	PyObject_DEL(co);
 }
 

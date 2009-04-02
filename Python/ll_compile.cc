@@ -657,6 +657,7 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
     builder().CreateCondBr(IsNonZero(was_stopiteration), clear_err, propagate);
 
     builder().SetInsertPoint(propagate);
+    DecRef(iter);
     Return(Constant::getNullValue(function()->getReturnType()));
 
     builder().SetInsertPoint(clear_err);
