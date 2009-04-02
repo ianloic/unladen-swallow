@@ -15,6 +15,9 @@ namespace py {
 /// functions.  This class maintains the IRBuilder and several Value*s
 /// set up in the entry block.
 class LlvmFunctionBuilder {
+    LlvmFunctionBuilder(const LlvmFunctionBuilder &);  // Not implemented.
+    void operator=(const LlvmFunctionBuilder &);  // Not implemented.
+
 public:
     LlvmFunctionBuilder(llvm::Module *module, const std::string& name);
 
@@ -199,6 +202,15 @@ private:
     // Returns an i1, true if value is a non-zero integer.
     llvm::Value *IsNonZero(llvm::Value *value);
 
+    // Inserts a jump to the return block, returning retval.  You
+    // should _never_ call CreateRet directly from one of the opcode
+    // handlers, since doing so would fail to unwind the stack.
+    void Return(llvm::Value *retval);
+
+    // Only for use in the constructor: Fills in the return block. Has
+    // no effect on the IRBuilder's current insertion block.
+    void FillReturnBlock(llvm::BasicBlock *return_block);
+
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;
@@ -213,6 +225,9 @@ private:
     llvm::Value *consts_;
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
+
+    llvm::BasicBlock *return_block_;
+    llvm::Value *retval_addr_;
 };
 
 }  // namespace py

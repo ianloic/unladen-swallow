@@ -26,6 +26,7 @@
 #include "Python-ast.h"
 #undef Module  // Macros that break LLVM
 #undef Pass
+#undef Return
 #include "node.h"
 #include "pyarena.h"
 #include "ast.h"

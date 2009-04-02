@@ -432,10 +432,15 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->frame_->setName("frame");
 
     builder().SetInsertPoint(BasicBlock::Create("entry", function()));
+    this->return_block_ = BasicBlock::Create("return_block", function());
 
     this->stack_pointer_addr_ = builder().CreateAlloca(
         TypeBuilder<PyObject**>::cache(module),
         0, "stack_pointer_addr");
+    this->retval_addr_ = builder().CreateAlloca(
+        TypeBuilder<PyObject*>::cache(module),
+        0, "retval_addr_");
+
     Value *initial_stack_pointer =
         builder().CreateLoad(
             builder().CreateStructGEP(this->frame_, FrameTy::FIELD_STACKTOP),
@@ -485,6 +490,38 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     this->freevars_ =
         builder().CreateGEP(this->fastlocals_, nlocals, "freevars");
+
+    FillReturnBlock(this->return_block_);
+}
+
+void
+LlvmFunctionBuilder::FillReturnBlock(BasicBlock *return_block)
+{
+    BasicBlock *const orig_block = builder().GetInsertBlock();
+    builder().SetInsertPoint(this->return_block_);
+    Value *stack_bottom = builder().CreateLoad(
+        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
+        "stack_bottom");
+
+    BasicBlock *pop_loop = BasicBlock::Create("pop_loop", function());
+    BasicBlock *pop_block = BasicBlock::Create("pop_stack", function());
+    BasicBlock *do_return = BasicBlock::Create("do_return", function());
+
+    FallThroughTo(pop_loop);
+    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
+    Value *finished_popping = builder().CreateICmpULE(
+        stack_pointer, stack_bottom);
+    builder().CreateCondBr(finished_popping, do_return, pop_block);
+
+    builder().SetInsertPoint(pop_block);
+    XDecRef(Pop());
+    builder().CreateBr(pop_loop);
+
+    builder().SetInsertPoint(do_return);
+    Value *retval = builder().CreateLoad(this->retval_addr_, "retval");
+    builder().CreateRet(retval);
+
+    builder().SetInsertPoint(orig_block);
 }
 
 void
@@ -496,6 +533,13 @@ LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
         builder().CreateBr(next_block);
     }
     builder().SetInsertPoint(next_block);
+}
+
+void
+LlvmFunctionBuilder::Return(Value *retval)
+{
+    builder().CreateStore(retval, this->retval_addr_);
+    builder().CreateBr(this->return_block_);
 }
 
 void
@@ -530,7 +574,7 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
                          index, true /* signed */));
-    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+    Return(Constant::getNullValue(function()->getReturnType()));
 
     builder().SetInsertPoint(success);
     IncRef(local);
@@ -571,7 +615,7 @@ LlvmFunctionBuilder::GET_ITER()
     builder().CreateCondBr(IsNull(iter), was_exception, got_iter);
 
     builder().SetInsertPoint(was_exception);
-    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+    Return(Constant::getNullValue(function()->getReturnType()));
 
     builder().SetInsertPoint(got_iter);
     Push(iter);
@@ -613,7 +657,7 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
     builder().CreateCondBr(IsNonZero(was_stopiteration), clear_err, propagate);
 
     builder().SetInsertPoint(propagate);
-    builder().CreateRet(Constant::getNullValue(function()->getReturnType()));
+    Return(Constant::getNullValue(function()->getReturnType()));
 
     builder().SetInsertPoint(clear_err);
     builder().CreateCall(GetGlobalFunction<void()>("PyErr_Clear"));
@@ -640,7 +684,7 @@ void
 LlvmFunctionBuilder::RETURN_VALUE()
 {
     Value *retval = Pop();
-    builder().CreateRet(retval);
+    Return(retval);
 }
 
 

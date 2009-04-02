@@ -131,6 +131,13 @@ entry:
         self.assertEquals(None, loop(r))
         self.assertRaises(StopIteration, next, r)
 
+    def test_return_from_loop(self):
+        def loop(range):
+            for i in range:
+                return i
+        loop.__code__.__use_llvm__ = True
+        self.assertEquals(1, loop([1,2,3]))
+
 
 def test_main():
     run_unittest(LlvmTests)
