@@ -688,6 +688,89 @@ LlvmFunctionBuilder::RETURN_VALUE()
     Return(retval);
 }
 
+void
+LlvmFunctionBuilder::STORE_SUBSCR()
+{
+    BasicBlock *failure = BasicBlock::Create("STORE_SUBSCR_failure",
+                                             function());
+    BasicBlock *success = BasicBlock::Create("STORE_SUBSCR_success",
+                                             function());
+    // Performing obj[key] = val
+    Value *key = Pop();
+    Value *obj = Pop();
+    Value *value = Pop();
+    Function *setitem = GetGlobalFunction<
+          int(PyObject *, PyObject *, PyObject *)>("PyObject_SetItem");
+    Value *result = builder().CreateCall3(setitem, obj, key, value,
+                                          "STORE_SUBSCR_result");
+    DecRef(value);
+    DecRef(obj);
+    DecRef(key);
+    builder().CreateCondBr(IsNonZero(result), failure, success);
+    
+    builder().SetInsertPoint(failure);
+    Return(Constant::getNullValue(function()->getReturnType()));
+    
+    builder().SetInsertPoint(success);
+}
+
+// Common code for almost all binary operations
+void
+LlvmFunctionBuilder::GenericBinOp(const char *apifunc)
+{
+    BasicBlock *failure = BasicBlock::Create("binop_failure", function());
+    BasicBlock *success = BasicBlock::Create("binop_success", function());
+    Value *rhs = Pop();
+    Value *lhs = Pop();
+    Function *op =
+        GetGlobalFunction<PyObject*(PyObject*, PyObject*)>(apifunc);
+    Value *result = builder().CreateCall2(op, lhs, rhs, "binop_result");
+    DecRef(lhs);
+    DecRef(rhs);
+    builder().CreateCondBr(IsNull(result), failure, success);
+    
+    builder().SetInsertPoint(failure);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    Push(result);
+}
+
+#define BINOP_METH(OPCODE, APIFUNC) 		\
+void						\
+LlvmFunctionBuilder::OPCODE()			\
+{						\
+    GenericBinOp(#APIFUNC);			\
+}
+
+BINOP_METH(BINARY_ADD, PyNumber_Add)
+BINOP_METH(BINARY_SUBTRACT, PyNumber_Subtract)
+BINOP_METH(BINARY_MULTIPLY, PyNumber_Multiply)
+BINOP_METH(BINARY_TRUE_DIVIDE, PyNumber_TrueDivide)
+BINOP_METH(BINARY_DIVIDE, PyNumber_Divide)
+BINOP_METH(BINARY_MODULO, PyNumber_Remainder)
+BINOP_METH(BINARY_LSHIFT, PyNumber_Lshift)
+BINOP_METH(BINARY_RSHIFT, PyNumber_Rshift)
+BINOP_METH(BINARY_OR, PyNumber_Or)
+BINOP_METH(BINARY_XOR, PyNumber_Xor)
+BINOP_METH(BINARY_AND, PyNumber_And)
+BINOP_METH(BINARY_FLOOR_DIVIDE, PyNumber_FloorDivide)
+BINOP_METH(BINARY_SUBSCR, PyObject_GetItem)
+
+BINOP_METH(INPLACE_ADD, PyNumber_InPlaceAdd)
+BINOP_METH(INPLACE_SUBTRACT, PyNumber_InPlaceSubtract)
+BINOP_METH(INPLACE_MULTIPLY, PyNumber_InPlaceMultiply)
+BINOP_METH(INPLACE_TRUE_DIVIDE, PyNumber_InPlaceTrueDivide)
+BINOP_METH(INPLACE_DIVIDE, PyNumber_InPlaceDivide)
+BINOP_METH(INPLACE_MODULO, PyNumber_InPlaceRemainder)
+BINOP_METH(INPLACE_LSHIFT, PyNumber_InPlaceLshift)
+BINOP_METH(INPLACE_RSHIFT, PyNumber_InPlaceRshift)
+BINOP_METH(INPLACE_OR, PyNumber_InPlaceOr)
+BINOP_METH(INPLACE_XOR, PyNumber_InPlaceXor)
+BINOP_METH(INPLACE_AND, PyNumber_InPlaceAnd)
+BINOP_METH(INPLACE_FLOOR_DIVIDE, PyNumber_InPlaceFloorDivide)
+
+#undef BINOP_METH
 
 // Adds delta to *addr, and returns the new value.
 static Value *
