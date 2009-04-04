@@ -2,11 +2,15 @@
 
 #include "Python.h"
 
+#include "_llvmfunctionobject.h"
+#include "_llvmmoduleobject.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Function.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Scalar.h"
 
@@ -106,4 +110,23 @@ PyGlobalLlvmData::OptimizeQuickly(llvm::Function &f)
     // TODO: Lock this.
     py::TempModuleProvider mp(quick_optimizations_, f.getParent());
     quick_optimizations_.run(f);
+}
+
+int
+_PyLlvm_Init()
+{
+    if (PyType_Ready(&PyLlvmModule_Type) < 0)
+        return 0;
+    if (PyType_Ready(&PyLlvmFunction_Type) < 0)
+        return 0;
+
+    llvm::cl::ParseEnvironmentOptions("python", "PYTHONLLVMFLAGS", "", true);
+
+    return 1;
+}
+
+void
+_PyLlvm_Fini()
+{
+    llvm::llvm_shutdown();
 }

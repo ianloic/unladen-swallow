@@ -230,6 +230,7 @@ PyDoc_STRVAR(llvmmodule_doc,
 \n\
 Create an _llvmmodule object from an LLVM bitcode string.");
 
+// PyType_Ready is called on this in global_llvm_data.cc:_PyLlvm_Init().
 PyTypeObject PyLlvmModule_Type = {
 	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	"_llvmmodule",
@@ -270,14 +271,3 @@ PyTypeObject PyLlvmModule_Type = {
 	0,				/* tp_alloc */
 	0,				/* tp_new */
 };
-
-int
-_PyLlvm_Init()
-{
-    if (PyType_Ready(&PyLlvmModule_Type) < 0)
-        return 0;
-    if (PyType_Ready(&PyLlvmFunction_Type) < 0)
-        return 0;
-
-    return 1;
-}

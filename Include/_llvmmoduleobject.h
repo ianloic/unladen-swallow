@@ -32,9 +32,6 @@ PyAPI_FUNC(PyObject *)PyLlvmModule_New(const char *module_name);
 PyAPI_FUNC(PyObject *) PyLlvmModule_FromBitcode(PyObject *name,
                                                 PyObject *bitcode);
 
-/* Initializes all LLVM wrapper types, not just the module wrapper. */
-PyAPI_FUNC(int) _PyLlvm_Init(void);
-
 #ifdef __cplusplus
 }
 #endif

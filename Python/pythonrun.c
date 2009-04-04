@@ -17,7 +17,7 @@
 #include "ast.h"
 #include "eval.h"
 #include "marshal.h"
-#include "_llvmmoduleobject.h"
+#include "Python/global_llvm_data_fwd.h"
 
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
@@ -509,6 +509,7 @@ Py_Finalize(void)
 	PyInt_Fini();
 	PyFloat_Fini();
 	PyDict_Fini();
+	_PyLlvm_Fini();
 
 #ifdef Py_USING_UNICODE
 	/* Cleanup Unicode implementation */

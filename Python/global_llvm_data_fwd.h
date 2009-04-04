@@ -11,6 +11,12 @@ struct PyGlobalLlvmData *PyGlobalLlvmData_New(void);
 void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
 
+/* Initializes LLVM and all of the LLVM wrapper types. */
+int _PyLlvm_Init(void);
+
+/* Finalizes LLVM. */
+void _PyLlvm_Fini(void);
+
 #ifdef __cplusplus
 }
 #endif

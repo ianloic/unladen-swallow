@@ -72,7 +72,7 @@ static PyMemberDef llvmfunction_memberlist[] = {
     {NULL}  // Sentinel
 };
 
-// PyType_Ready is called on this in _llvmmoduleobject.cc:_PyLlvm_Init().
+// PyType_Ready is called on this in global_llvm_data.cc:_PyLlvm_Init().
 PyTypeObject PyLlvmFunction_Type = {
 	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	"_llvmfunction",
