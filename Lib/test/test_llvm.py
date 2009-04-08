@@ -323,7 +323,7 @@ class OperatorTests(unittest.TestCase):
         self.assertEquals(non_llvm_recorder.ops, llvm_recorder.ops)
 
     def test_basic_arithmetic(self):
-        operators = ('+', '-', '*', '/', '//', '%',
+        operators = ('+', '-', '*', '/', '//', '%', '**',
                      '<<', '>>', '&', '|', '^')
         num_ops = len(operators) * 3
         parts = []
@@ -563,7 +563,7 @@ class OperatorRaisingTests(unittest.TestCase):
         self.assertEquals(non_llvm_raiser.ops, llvm_raiser.ops)
 
     def test_basic_arithmetic(self):
-        operators = ('+', '-', '*', '/', '//', '%',
+        operators = ('+', '-', '*', '/', '//', '%', '**',
                      '<<', '>>', '&', '|', '^')
         parts = []
         for idx, op in enumerate(operators):

@@ -53,6 +53,7 @@ public:
     void BINARY_TRUE_DIVIDE();
     void BINARY_DIVIDE();
     void BINARY_MODULO();
+    void BINARY_POWER();
     void BINARY_LSHIFT();
     void BINARY_RSHIFT();
     void BINARY_OR();
@@ -67,6 +68,7 @@ public:
     void INPLACE_TRUE_DIVIDE();
     void INPLACE_DIVIDE();
     void INPLACE_MODULO();
+    void INPLACE_POWER();
     void INPLACE_LSHIFT();
     void INPLACE_RSHIFT();
     void INPLACE_OR();
@@ -100,8 +102,6 @@ public:
     UNIMPLEMENTED(UNARY_NOT)
     UNIMPLEMENTED(UNARY_POSITIVE)
     UNIMPLEMENTED(UNARY_NEGATIVE)
-    UNIMPLEMENTED(BINARY_POWER)
-    UNIMPLEMENTED(INPLACE_POWER)
     UNIMPLEMENTED(DELETE_SUBSCR)
     UNIMPLEMENTED(SLICE_NONE);
     UNIMPLEMENTED(SLICE_LEFT);
@@ -217,6 +217,8 @@ private:
     // of the Python/C API function that implements the operation.
     // GenericBinOp's apifunc is "PyObject *(*)(PyObject *, PyObject *)"
     void GenericBinOp(const char *apifunc);
+    // GenericPowOp's is "PyObject *(*)(PyObject *, PyObject *, PyObject *)"
+    void GenericPowOp(const char *apifunc);
 
     llvm::Module *const module_;
     llvm::Function *const function_;

@@ -772,6 +772,43 @@ BINOP_METH(INPLACE_FLOOR_DIVIDE, PyNumber_InPlaceFloorDivide)
 
 #undef BINOP_METH
 
+// PyNumber_Power() and PyNumber_InPlacePower() take three arguments, the
+// third should be Py_None when calling from BINARY_POWER/INPLACE_POWER.
+void
+LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
+{
+    BasicBlock *failure = BasicBlock::Create("powop_failure", function());
+    BasicBlock *success = BasicBlock::Create("powop_success", function());
+    Value *rhs = Pop();
+    Value *lhs = Pop();
+    Function *op = GetGlobalFunction<PyObject*(PyObject*, PyObject*,
+        PyObject *)>(apifunc);
+    Value *pynone = GetGlobalVariable<PyObject>("_Py_NoneStruct");
+    Value *result = builder().CreateCall3(op, lhs, rhs, pynone,
+                                          "powop_result");
+    DecRef(lhs);
+    DecRef(rhs);
+    builder().CreateCondBr(IsNull(result), failure, success);
+    
+    builder().SetInsertPoint(failure);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    Push(result);
+}
+
+void
+LlvmFunctionBuilder::BINARY_POWER()
+{
+    GenericPowOp("PyNumber_Power");
+}
+
+void
+LlvmFunctionBuilder::INPLACE_POWER()
+{
+    GenericPowOp("PyNumber_InPlacePower");
+}
+
 // Adds delta to *addr, and returns the new value.
 static Value *
 increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)
