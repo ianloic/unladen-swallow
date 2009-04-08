@@ -893,7 +893,7 @@ Internal types
       which it was defined), while a code object contains no context; also the default
       argument values are stored in the function object, not in the code object
       (because they represent values calculated at run-time).  Unlike function
-      objects, code objects are immutable and contain no references (directly or
+      objects, code objects are nearly immutable and contain no references (directly or
       indirectly) to mutable objects.
 
       Special read-only attributes: :attr:`co_name` gives the function name;
@@ -908,10 +908,19 @@ Internal types
       used by the bytecode; :attr:`co_names` is a tuple containing the names used by
       the bytecode; :attr:`co_filename` is the filename from which the code was
       compiled; :attr:`co_firstlineno` is the first line number of the function;
-      :attr:`co_lnotab` is a string encoding the mapping from bytecode offsets to
-      line numbers (for details see the source code of the interpreter);
+      :attr:`co_lnotab` is a string encoding the mapping from bytecode offsets to line
+      numbers (for details see the source code of the interpreter);
       :attr:`co_stacksize` is the required stack size (including local variables);
       :attr:`co_flags` is an integer encoding a number of flags for the interpreter.
+      :attr:`co_llvm` refers to an llvm::Function wrapper that can pretty-print the
+      LLVM assembly that implements this code object.
+
+      Writable attributes: :attr:`__use_llvm__` is ``True`` if LLVM will be used to
+      run this function, or ``False`` if the normal CPython interpreter will be used.
+      :attr:`co_optimization` is an integer from -1 to 2 recording how optimized
+      :attr:`co_llvm` is.  -1 is totally unoptimized, and 0 is the default
+      optimization that happens before a function is JITted.  You cannot lower the
+      optimization level of an already-optimized function.
 
       .. index::
          single: co_argcount (code object attribute)

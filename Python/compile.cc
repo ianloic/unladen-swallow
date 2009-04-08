@@ -4057,7 +4057,6 @@ makecode(struct compiler *c, struct assembler *a)
 	PyObject *name = NULL;
 	PyObject *freevars = NULL;
 	PyObject *cellvars = NULL;
-	PyGlobalLlvmData *global_llvm_data;
 	PyObject *llvm_function = NULL;
 	int nlocals, flags;
 
@@ -4087,12 +4086,10 @@ makecode(struct compiler *c, struct assembler *a)
 	if (flags < 0)
 		goto error;
 
-	code = PyCode_Optimize((PyObject *)a->a_code, consts, names, a->a_lnotab);
+	code = PyCode_Optimize((PyObject *)a->a_code, consts, names,
+			       a->a_lnotab);
 	if (!code)
 		goto error;
-
-	global_llvm_data = PyThreadState_Get()->interp->global_llvm_data;
-	global_llvm_data->OptimizeQuickly(*c->u->fb->function());
 
 	llvm_function = _PyLlvmFunction_FromModuleAndPtr(
 		(PyObject *)c->c_llvm_module, c->u->fb->function());

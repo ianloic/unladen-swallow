@@ -3,6 +3,9 @@
    interface. */
 #ifndef PYTHON_GLOBAL_LLVM_DATA_FWD_H
 #define PYTHON_GLOBAL_LLVM_DATA_FWD_H
+
+#include "Python.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -10,6 +13,8 @@ extern "C" {
 struct PyGlobalLlvmData *PyGlobalLlvmData_New(void);
 void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
+
+int PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *, PyObject *, int);
 
 /* Initializes LLVM and all of the LLVM wrapper types. */
 int _PyLlvm_Init(void);

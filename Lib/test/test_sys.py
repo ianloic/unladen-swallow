@@ -484,7 +484,7 @@ class SizeofTest(unittest.TestCase):
         # complex
         check(complex(0,1), size(h + '2d'))
         # code
-        check(get_cell().func_code, size(h + '4i9Pi3Pc'))
+        check(get_cell().func_code, size(h + '4i9Pi3Pci'))
         # BaseException
         check(BaseException(), size(h + '3P'))
         # UnicodeEncodeError

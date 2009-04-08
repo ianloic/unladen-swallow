@@ -2,6 +2,7 @@
 #include "code.h"
 #include "instructionsobject.h"
 #include "structmember.h"
+#include "Python/global_llvm_data_fwd.h"
 
 #define NAME_CHARS \
 	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
@@ -118,6 +119,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
                 co->co_tcode = NULL;
 		co->co_llvm_function = NULL;
 		co->co_use_llvm = 0;
+		co->co_optimization = -1;
 	}
 	return co;
 }
@@ -196,6 +198,50 @@ static PyMemberDef code_memberlist[] = {
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 	{NULL}	/* Sentinel */
 };
+
+static PyObject *
+code_get_optimization(PyCodeObject *code)
+{
+	return PyInt_FromLong(code->co_optimization);
+}
+
+static int
+code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
+{
+	struct PyGlobalLlvmData *global_llvm_data;
+	long new_opt_level = PyInt_AsLong(new_opt_level_obj);
+	if (new_opt_level == -1 && PyErr_Occurred())
+		return -1;
+	if (new_opt_level < code->co_optimization) {
+		PyErr_Format(PyExc_ValueError,
+			     "Cannot reduce optimization level of code object"
+			     " from %d to %ld",
+			     code->co_optimization,
+			     new_opt_level);
+		return -1;
+	}
+	global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;
+	while (code->co_optimization < new_opt_level) {
+		int next_level = code->co_optimization + 1;
+		if (PyGlobalLlvmData_Optimize(global_llvm_data,
+					      code->co_llvm_function,
+					      next_level) < 0) {
+			PyErr_Format(PyExc_ValueError,
+				     "Failed to optimize to level %d",
+				     next_level);
+			return -1;
+		}
+		code->co_optimization++;
+	}
+	return 0;
+}
+
+static PyGetSetDef code_getsetlist[] = {
+	{"co_optimization", (getter)code_get_optimization,
+	 (setter)code_set_optimization},
+	{NULL} /* Sentinel */
+};
+
 
 /* Helper for code_new: return a shallow copy of a tuple that is
    guaranteed to contain exact strings, by converting string subclasses
@@ -526,7 +572,7 @@ PyTypeObject PyCode_Type = {
 	0,				/* tp_iternext */
 	0,				/* tp_methods */
 	code_memberlist,		/* tp_members */
-	0,				/* tp_getset */
+	code_getsetlist,		/* tp_getset */
 	0,				/* tp_base */
 	0,				/* tp_dict */
 	0,				/* tp_descr_get */

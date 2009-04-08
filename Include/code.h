@@ -46,6 +46,11 @@ typedef struct {
     PyObject *co_llvm_function;
     /* True if interpretation will be done through the LLVM JIT. */
     char co_use_llvm;
+    /* Stores which optimizations have been applied to this code
+       object.  Each level corresponds to an argument to
+       PyGlobalLlvmData::Optimize().  Starts at -1 for unoptimized
+       code. */
+    int co_optimization;
 } PyCodeObject;
 
 /* Masks for co_flags above */

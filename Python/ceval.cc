@@ -826,6 +826,23 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			retval = NULL;
 			goto exit_eval_frame;
 		}
+		if (co->co_optimization < 0) {
+			PyObject *zero = PyInt_FromLong(0);
+			if (zero == NULL) {
+				retval = NULL;
+				goto exit_eval_frame;
+			}
+			// Always optimize code to level 0 before JITting
+			// it, since that speeds up the JIT.
+			if (PyObject_SetAttrString((PyObject *)co,
+						   "co_optimization",
+						   zero) == -1) {
+				Py_DECREF(zero);
+				retval = NULL;
+				goto exit_eval_frame;
+			}
+			Py_DECREF(zero);
+		}
 		retval = eval_llvm_function(
 			(PyLlvmFunctionObject *)co->co_llvm_function, f);
 		goto exit_eval_frame;

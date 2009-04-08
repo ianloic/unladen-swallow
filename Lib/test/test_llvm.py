@@ -1,9 +1,36 @@
 # Tests for our minimal LLVM wrappers
 
 from test.test_support import run_unittest, findfile
-import unittest
 import _llvm
+import functools
+import unittest
 import __future__
+
+
+def at_each_optimization_level(func):
+    """Decorator for test functions, to run them at each optimization level."""
+    @functools.wraps(func)
+    def result(self):
+        for level in (-1,0,1,2):
+            func(self, level)
+    return result
+
+
+def compile_for_llvm(function_name, def_string, optimization_level=-1):
+    """Compiles function_name, defined in def_string to be run through LLVM.
+
+    Compiles and runs def_string in a temporary namespace, pulls the
+    function named 'function_name' out of that namespace, optimizes it
+    at level 'optimization_level', -1 for the default optimization,
+    and marks it to be JITted and run through LLVM.
+
+    """
+    namespace = {}
+    exec def_string in namespace
+    func = namespace[function_name]
+    func.__code__.co_optimization = optimization_level
+    func.__code__.__use_llvm__ = True
+    return func
 
 
 class LlvmTests(unittest.TestCase):
@@ -68,23 +95,29 @@ entry:
         self.assertRaises(TypeError, _llvm._module)
         self.assertRaises(TypeError, _llvm._function)
 
-    def test_run_simple_function(self):
-        def foo():
-            pass
-        foo.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_run_simple_function(self, level):
+        foo = compile_for_llvm("foo", """
+def foo():
+    pass
+""", level)
         self.assertEquals(None, foo())
 
-    def test_return_arg(self):
-        def foo(a):
-            return a
-        foo.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_return_arg(self, level):
+        foo = compile_for_llvm("foo", """
+def foo(a):
+    return a
+""", level)
         self.assertEquals(3, foo(3))
         self.assertEquals("Hello", foo("Hello"))
 
-    def test_unbound_local(self):
-        def foo():
-            a = a
-        foo.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_unbound_local(self, level):
+        foo = compile_for_llvm("foo", """
+def foo():
+    a = a
+""", level)
         try:
             foo()
         except UnboundLocalError as e:
@@ -93,50 +126,60 @@ entry:
         else:
             self.fail("Expected UnboundLocalError")
 
-    def test_assign(self):
-        def foo(a):
-            b = a
-            return b
-        foo.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_assign(self, level):
+        foo = compile_for_llvm("foo", """
+def foo(a):
+    b = a
+    return b
+""", level)
         self.assertEquals(3, foo(3))
         self.assertEquals("Hello", foo("Hello"))
 
-    def test_raising_getiter(self):
+    @at_each_optimization_level
+    def test_raising_getiter(self, level):
         class RaisingIter(object):
             def __iter__(self):
                 raise RuntimeError
-        def loop(range):
-            for i in range:
-                pass
-        loop.__code__.__use_llvm__ = True
+        loop = compile_for_llvm("loop", """
+def loop(range):
+    for i in range:
+        pass
+""", level)
         self.assertRaises(RuntimeError, loop, RaisingIter())
 
-    def test_raising_next(self):
+    @at_each_optimization_level
+    def test_raising_next(self, level):
         class RaisingNext(object):
             def __iter__(self):
                 return self
             def next(self):
                 raise RuntimeError
-        def loop(range):
-            for i in range:
-                pass
-        loop.__code__.__use_llvm__ = True
+        loop = compile_for_llvm("loop", """
+def loop(range):
+    for i in range:
+        pass
+""", level)
         self.assertRaises(RuntimeError, loop, RaisingNext())
 
-    def test_loop(self):
-        def loop(range):
-            for i in range:
-                pass
-        loop.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_loop(self, level):
+        loop = compile_for_llvm("loop", """
+def loop(range):
+    for i in range:
+        pass
+""", level)
         r = iter(range(12))
         self.assertEquals(None, loop(r))
         self.assertRaises(StopIteration, next, r)
 
-    def test_return_from_loop(self):
-        def loop(range):
-            for i in range:
-                return i
-        loop.__code__.__use_llvm__ = True
+    @at_each_optimization_level
+    def test_return_from_loop(self, level):
+        loop = compile_for_llvm("loop", """
+def loop(range):
+    for i in range:
+        return i
+""", level)
         self.assertEquals(1, loop([1,2,3]))
 
 # dont_inherit will unfortunately not turn off true division when
@@ -304,8 +347,8 @@ class OpRecorder(object):
         self.ops.append(('delitem', item))
 
 class OperatorTests(unittest.TestCase):
-    def run_and_compare(self, testfunc, expected_num_ops,
-                        expected_num_results):
+    def run_and_compare(self, testfunc, optimization_level,
+                        expected_num_ops, expected_num_results):
         non_llvm_results = {}
         non_llvm_recorder = OpRecorder()
         testfunc(non_llvm_recorder, non_llvm_results)
@@ -313,7 +356,8 @@ class OperatorTests(unittest.TestCase):
         self.assertEquals(len(non_llvm_results), expected_num_results)
         self.assertEquals(len(set(non_llvm_results.values())),
                           len(non_llvm_results))
-        
+
+        testfunc.__code__.co_optimization = optimization_level
         testfunc.__code__.__use_llvm__ = True
         llvm_results = {}
         llvm_recorder = OpRecorder()
@@ -322,7 +366,8 @@ class OperatorTests(unittest.TestCase):
         self.assertEquals(non_llvm_results, llvm_results)
         self.assertEquals(non_llvm_recorder.ops, llvm_recorder.ops)
 
-    def test_basic_arithmetic(self):
+    @at_each_optimization_level
+    def test_basic_arithmetic(self, level):
         operators = ('+', '-', '*', '/', '//', '%', '**',
                      '<<', '>>', '&', '|', '^')
         num_ops = len(operators) * 3
@@ -341,10 +386,12 @@ class OperatorTests(unittest.TestCase):
         exec co in namespace
         del namespace['__builtins__']
         self.run_and_compare(namespace['test'],
+                             level,
                              expected_num_ops=num_ops,
                              expected_num_results=num_ops)
 
-    def test_truediv(self):
+    @at_each_optimization_level
+    def test_truediv(self, level):
         truedivcode = '''def test(x, results):
                              results["regular div"] = x / 1
                              results["reverse div"] = 1 / x
@@ -355,17 +402,20 @@ class OperatorTests(unittest.TestCase):
         namespace = {}
         exec co in namespace
         del namespace['__builtins__']
-        self.run_and_compare(namespace['test'], expected_num_ops=3,
-                             expected_num_results=3)
+        self.run_and_compare(namespace['test'], level,
+                             expected_num_ops=3, expected_num_results=3)
 
-    def test_subscr(self):
-        def testfunc(x, results):
-            results['idx'] = x['item']
-            x['item'] = 1
+    @at_each_optimization_level
+    def test_subscr(self, level):
+        namespace = {}
+        exec """
+def testfunc(x, results):
+    results['idx'] = x['item']
+    x['item'] = 1
+""" in namespace
+        self.run_and_compare(namespace['testfunc'], level,
+                             expected_num_ops=2, expected_num_results=1)
 
-        self.run_and_compare(testfunc, expected_num_ops=2,
-                             expected_num_results=1)
-                             
 class OpExc(Exception):
     def __cmp__(self, other):
         return cmp(self.args, other.args)
@@ -437,7 +487,7 @@ class OpRaiser(object):
             return '<OpRecorder %r>' % self.ops
         self.ops.append('repr')
         raise OpExc('<OpRecorder 17>')
-        
+
     # right-hand binary arithmetic operations
     def __radd__(self, other):
         self.ops.append('radd')
@@ -532,7 +582,7 @@ class OpRaiser(object):
         raise OpExc(1016)
 
 class OperatorRaisingTests(unittest.TestCase):
-    def run_and_compare(self, namespace):
+    def run_and_compare(self, namespace, optimization_level):
         non_llvm_results = []
         non_llvm_raiser = OpRaiser()
         funcs = namespace.items()
@@ -552,6 +602,7 @@ class OperatorRaisingTests(unittest.TestCase):
         llvm_results = []
         llvm_raiser = OpRaiser()
         for fname, func in funcs:
+            func.__code__.co_optimization = optimization_level
             func.__code__.__use_llvm__ = True
             try:
                 func(llvm_raiser)
@@ -562,7 +613,8 @@ class OperatorRaisingTests(unittest.TestCase):
         self.assertEquals(non_llvm_results, llvm_results)
         self.assertEquals(non_llvm_raiser.ops, llvm_raiser.ops)
 
-    def test_basic_arithmetic(self):
+    @at_each_optimization_level
+    def test_basic_arithmetic(self, level):
         operators = ('+', '-', '*', '/', '//', '%', '**',
                      '<<', '>>', '&', '|', '^')
         parts = []
@@ -580,9 +632,10 @@ class OperatorRaisingTests(unittest.TestCase):
         namespace = {}
         exec co in namespace
         del namespace['__builtins__']
-        self.run_and_compare(namespace)
-        
-    def test_truediv(self):
+        self.run_and_compare(namespace, level)
+
+    @at_each_optimization_level
+    def test_truediv(self, level):
         truedivcode = '\n'.join(['def regular(x): x / 1',
                                  'def reverse(x): 1 / x',
                                  'def inplace(x): x /= 1',
@@ -593,13 +646,17 @@ class OperatorRaisingTests(unittest.TestCase):
         namespace = {}
         exec co in namespace
         del namespace['__builtins__']
-        self.run_and_compare(namespace)
+        self.run_and_compare(namespace, level)
 
-    def test_subscr(self):
-        def getitem(x): x['item']
-        def setitem(x): x['item'] = 1
-
-        self.run_and_compare({'getitem': getitem, 'setitem': setitem})
+    @at_each_optimization_level
+    def test_subscr(self, level):
+        namespace = {}
+        exec """
+def getitem(x): x['item']
+def setitem(x): x['item'] = 1
+""" in namespace
+        del namespace['__builtins__']
+        self.run_and_compare(namespace, level)
 
 
 def test_main():
