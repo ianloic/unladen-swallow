@@ -75,6 +75,13 @@ public:
     void INPLACE_XOR();
     void INPLACE_AND();
     void INPLACE_FLOOR_DIVIDE();
+
+    void UNARY_CONVERT();
+    void UNARY_INVERT();
+    void UNARY_POSITIVE();
+    void UNARY_NEGATIVE();
+    void UNARY_NOT();
+
     void STORE_SUBSCR();
 
 #define UNIMPLEMENTED(NAME) \
@@ -97,11 +104,6 @@ public:
     UNIMPLEMENTED(ROT_TWO)
     UNIMPLEMENTED(ROT_THREE)
     UNIMPLEMENTED(ROT_FOUR)
-    UNIMPLEMENTED(UNARY_CONVERT)
-    UNIMPLEMENTED(UNARY_INVERT)
-    UNIMPLEMENTED(UNARY_NOT)
-    UNIMPLEMENTED(UNARY_POSITIVE)
-    UNIMPLEMENTED(UNARY_NEGATIVE)
     UNIMPLEMENTED(DELETE_SUBSCR)
     UNIMPLEMENTED(SLICE_NONE);
     UNIMPLEMENTED(SLICE_LEFT);
@@ -219,6 +221,8 @@ private:
     void GenericBinOp(const char *apifunc);
     // GenericPowOp's is "PyObject *(*)(PyObject *, PyObject *, PyObject *)"
     void GenericPowOp(const char *apifunc);
+    // GenericUnaryOp's is "PyObject *(*)(PyObject *)"
+    void GenericUnaryOp(const char *apifunc);
 
     llvm::Module *const module_;
     llvm::Function *const function_;

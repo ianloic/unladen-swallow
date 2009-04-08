@@ -416,6 +416,20 @@ def testfunc(x, results):
         self.run_and_compare(namespace['testfunc'], level,
                              expected_num_ops=2, expected_num_results=1)
 
+    @at_each_optimization_level
+    def test_unary(self, level):
+        namespace = {}
+        exec """
+def testfunc(x, results):
+    results['not'] = not x
+    results['invert'] = ~x
+    results['pos'] = +x
+    results['neg'] = -x
+    results['convert'] = `x`
+""" in namespace
+        self.run_and_compare(namespace['testfunc'], level,
+                             expected_num_ops=5, expected_num_results=5)
+
 class OpExc(Exception):
     def __cmp__(self, other):
         return cmp(self.args, other.args)
@@ -645,6 +659,19 @@ class OperatorRaisingTests(unittest.TestCase):
                      dont_inherit=True)
         namespace = {}
         exec co in namespace
+        del namespace['__builtins__']
+        self.run_and_compare(namespace, level)
+
+    @at_each_optimization_level
+    def test_unary(self, level):
+        namespace = {}
+        exec """
+def not_(x): return not x
+def invert(x): return ~x
+def pos(x): return +x
+def neg(x): return -x
+def convert(x): return `x`
+""" in namespace
         del namespace['__builtins__']
         self.run_and_compare(namespace, level)
 

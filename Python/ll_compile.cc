@@ -809,6 +809,71 @@ LlvmFunctionBuilder::INPLACE_POWER()
     GenericPowOp("PyNumber_InPlacePower");
 }
 
+// Implementation of almost all unary operations
+void
+LlvmFunctionBuilder::GenericUnaryOp(const char *apifunc)
+{
+    BasicBlock *failure = BasicBlock::Create("unaryop_failure", function());
+    BasicBlock *success = BasicBlock::Create("unaryop_success", function());
+    Value *value = Pop();
+    Function *op = GetGlobalFunction<PyObject*(PyObject*)>(apifunc);
+    Value *result = builder().CreateCall(op, value, "unaryop_result");
+    DecRef(value);
+    builder().CreateCondBr(IsNull(result), failure, success);
+
+    builder().SetInsertPoint(failure);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    Push(result);
+}
+
+#define UNARYOP_METH(NAME, APIFUNC)			\
+void							\
+LlvmFunctionBuilder::NAME()				\
+{							\
+    GenericUnaryOp(#APIFUNC);				\
+}
+
+UNARYOP_METH(UNARY_CONVERT, PyObject_Repr)
+UNARYOP_METH(UNARY_INVERT, PyNumber_Invert)
+UNARYOP_METH(UNARY_POSITIVE, PyNumber_Positive)
+UNARYOP_METH(UNARY_NEGATIVE, PyNumber_Negative)
+
+#undef UNARYOP_METH
+
+void
+LlvmFunctionBuilder::UNARY_NOT()
+{
+    BasicBlock *success = BasicBlock::Create("UNARY_NOT_success", function());
+    BasicBlock *failure = BasicBlock::Create("UNARY_NOT_failure", function());
+
+    Value *value = Pop();
+    Function *pyobject_istrue =
+        GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
+    Value *result = builder().CreateCall(pyobject_istrue, value,
+                                         "UNARY_NOT_obj_as_bool");
+    Value *zero = ConstantInt::get(
+        TypeBuilder<int>::cache(this->module_), 0, true /* signed */);
+    Value *iserr = builder().CreateICmpSLT(result, zero, "UNARY_NOT_is_err");
+    DecRef(value);
+    builder().CreateCondBr(iserr, failure, success);
+
+    builder().SetInsertPoint(failure);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    Value *istrue = builder().CreateICmpSGT(result, zero,
+                                            "UNARY_NOT_is_true");
+    Value *retval = builder().CreateSelect(
+        istrue,
+        GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
+        GetGlobalVariable<PyObject>("_Py_TrueStruct"),
+        "UNARY_NOT_result");
+    IncRef(retval);
+    Push(retval);
+}
+
 // Adds delta to *addr, and returns the new value.
 static Value *
 increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)
