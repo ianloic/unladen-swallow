@@ -430,6 +430,20 @@ def testfunc(x, results):
         self.run_and_compare(namespace['testfunc'], level,
                              expected_num_ops=5, expected_num_results=5)
 
+    @at_each_optimization_level
+    def test_subscr_augassign(self, level):
+        namespace = {}
+        exec """
+def testfunc(x, results):
+    results['item'] = x
+    results['item'] += 1
+    x['item'] += 1
+""" in namespace
+        # expect __iadd__, __getitem__ and __setitem__ on x,
+        # and one item in results.
+        self.run_and_compare(namespace['testfunc'], level,
+                             expected_num_ops=3, expected_num_results=1)
+
 class OpExc(Exception):
     def __cmp__(self, other):
         return cmp(self.args, other.args)
@@ -596,9 +610,10 @@ class OpRaiser(object):
         raise OpExc(1016)
 
 class OperatorRaisingTests(unittest.TestCase):
-    def run_and_compare(self, namespace, optimization_level):
+    def run_and_compare(self, namespace, optimization_level,
+                        argument_factory=OpRaiser):
         non_llvm_results = []
-        non_llvm_raiser = OpRaiser()
+        non_llvm_raiser = argument_factory()
         funcs = namespace.items()
         funcs.sort()
         for fname, func in funcs:
@@ -614,7 +629,7 @@ class OperatorRaisingTests(unittest.TestCase):
                           len(non_llvm_results))
 
         llvm_results = []
-        llvm_raiser = OpRaiser()
+        llvm_raiser = argument_factory()
         for fname, func in funcs:
             func.__code__.co_optimization = optimization_level
             func.__code__.__use_llvm__ = True
@@ -685,6 +700,42 @@ def setitem(x): x['item'] = 1
         del namespace['__builtins__']
         self.run_and_compare(namespace, level)
 
+    @at_each_optimization_level
+    def test_subscr_augassign_(self, level):
+        # We can't reuse setitem for the different tests because
+        # running it will increase the optimization level from -1 to 0.
+        def make_setitem():
+            namespace = {}
+            exec """
+def setitem(x):
+    x['item'] += 1
+""" in namespace
+            del namespace['__builtins__']
+            return namespace
+        # Test x.__getitem__ raising an exception.
+        self.run_and_compare(make_setitem(), level)
+        # Test x.__setitem__ raising an exception.
+        class HalfOpRaiser(OpRaiser):
+            def __getitem__(self, item):
+                # Not recording this operation, we care about __setitem__.
+                return 1
+        self.run_and_compare(make_setitem(), level,
+                             argument_factory=HalfOpRaiser)
+        # Test item.__iadd__(1) raising an exception, between the
+        # x.__getitem__ and x.__setitem__ calls.
+        class OpRaiserProvider(OpRaiser):
+            def __init__(self):
+                OpRaiser.__init__(self)
+                self.opraiser = None
+            def __cmp__(self, other):
+                return cmp((self.ops, self.opraiser),
+                           (other.ops, other.opraiser))
+            def __getitem__(self, item):
+                self.ops.append('getitem')
+                self.opraiser = OpRaiser()
+                return self.opraiser
+        self.run_and_compare(make_setitem(), level,
+                             argument_factory=OpRaiserProvider)
 
 def test_main():
     run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests)
