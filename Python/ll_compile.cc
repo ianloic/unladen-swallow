@@ -2,6 +2,7 @@
 
 #include "Python.h"
 #include "code.h"
+#include "opcode.h"
 #include "frameobject.h"
 
 #include "Util/TypeBuilder.h"
@@ -610,14 +611,7 @@ LlvmFunctionBuilder::GET_ITER()
         "PyObject_GetIter");
     Value *iter = builder().CreateCall(pyobject_getiter, obj);
     DecRef(obj);
-    BasicBlock *got_iter = BasicBlock::Create("got_iter", function());
-    BasicBlock *was_exception = BasicBlock::Create("was_exception", function());
-    builder().CreateCondBr(IsNull(iter), was_exception, got_iter);
-
-    builder().SetInsertPoint(was_exception);
-    Return(Constant::getNullValue(function()->getReturnType()));
-
-    builder().SetInsertPoint(got_iter);
+    PropagateExceptionOnNull(iter);
     Push(iter);
 }
 
@@ -691,10 +685,6 @@ LlvmFunctionBuilder::RETURN_VALUE()
 void
 LlvmFunctionBuilder::STORE_SUBSCR()
 {
-    BasicBlock *failure = BasicBlock::Create("STORE_SUBSCR_failure",
-                                             function());
-    BasicBlock *success = BasicBlock::Create("STORE_SUBSCR_success",
-                                             function());
     // Performing obj[key] = val
     Value *key = Pop();
     Value *obj = Pop();
@@ -706,20 +696,13 @@ LlvmFunctionBuilder::STORE_SUBSCR()
     DecRef(value);
     DecRef(obj);
     DecRef(key);
-    builder().CreateCondBr(IsNonZero(result), failure, success);
-    
-    builder().SetInsertPoint(failure);
-    Return(Constant::getNullValue(function()->getReturnType()));
-    
-    builder().SetInsertPoint(success);
+    PropagateExceptionOnNonZero(result);
 }
 
 // Common code for almost all binary operations
 void
 LlvmFunctionBuilder::GenericBinOp(const char *apifunc)
 {
-    BasicBlock *failure = BasicBlock::Create("binop_failure", function());
-    BasicBlock *success = BasicBlock::Create("binop_success", function());
     Value *rhs = Pop();
     Value *lhs = Pop();
     Function *op =
@@ -727,12 +710,7 @@ LlvmFunctionBuilder::GenericBinOp(const char *apifunc)
     Value *result = builder().CreateCall2(op, lhs, rhs, "binop_result");
     DecRef(lhs);
     DecRef(rhs);
-    builder().CreateCondBr(IsNull(result), failure, success);
-    
-    builder().SetInsertPoint(failure);
-    Return(Constant::getNullValue(function()->getReturnType()));
-
-    builder().SetInsertPoint(success);
+    PropagateExceptionOnNull(result);
     Push(result);
 }
 
@@ -777,8 +755,6 @@ BINOP_METH(INPLACE_FLOOR_DIVIDE, PyNumber_InPlaceFloorDivide)
 void
 LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
 {
-    BasicBlock *failure = BasicBlock::Create("powop_failure", function());
-    BasicBlock *success = BasicBlock::Create("powop_success", function());
     Value *rhs = Pop();
     Value *lhs = Pop();
     Function *op = GetGlobalFunction<PyObject*(PyObject*, PyObject*,
@@ -788,12 +764,7 @@ LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
                                           "powop_result");
     DecRef(lhs);
     DecRef(rhs);
-    builder().CreateCondBr(IsNull(result), failure, success);
-    
-    builder().SetInsertPoint(failure);
-    Return(Constant::getNullValue(function()->getReturnType()));
-
-    builder().SetInsertPoint(success);
+    PropagateExceptionOnNull(result);
     Push(result);
 }
 
@@ -813,18 +784,11 @@ LlvmFunctionBuilder::INPLACE_POWER()
 void
 LlvmFunctionBuilder::GenericUnaryOp(const char *apifunc)
 {
-    BasicBlock *failure = BasicBlock::Create("unaryop_failure", function());
-    BasicBlock *success = BasicBlock::Create("unaryop_success", function());
     Value *value = Pop();
     Function *op = GetGlobalFunction<PyObject*(PyObject*)>(apifunc);
     Value *result = builder().CreateCall(op, value, "unaryop_result");
     DecRef(value);
-    builder().CreateCondBr(IsNull(result), failure, success);
-
-    builder().SetInsertPoint(failure);
-    Return(Constant::getNullValue(function()->getReturnType()));
-
-    builder().SetInsertPoint(success);
+    PropagateExceptionOnNull(result);
     Push(result);
 }
 
@@ -853,20 +817,15 @@ LlvmFunctionBuilder::UNARY_NOT()
         GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
     Value *result = builder().CreateCall(pyobject_istrue, value,
                                          "UNARY_NOT_obj_as_bool");
-    Value *zero = ConstantInt::get(
-        TypeBuilder<int>::cache(this->module_), 0, true /* signed */);
-    Value *iserr = builder().CreateICmpSLT(result, zero, "UNARY_NOT_is_err");
     DecRef(value);
-    builder().CreateCondBr(iserr, failure, success);
+    builder().CreateCondBr(IsNegative(result), failure, success);
 
     builder().SetInsertPoint(failure);
     Return(Constant::getNullValue(function()->getReturnType()));
 
     builder().SetInsertPoint(success);
-    Value *istrue = builder().CreateICmpSGT(result, zero,
-                                            "UNARY_NOT_is_true");
     Value *retval = builder().CreateSelect(
-        istrue,
+        IsNonZero(result),
         GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
         GetGlobalVariable<PyObject>("_Py_TrueStruct"),
         "UNARY_NOT_result");
@@ -896,6 +855,108 @@ LlvmFunctionBuilder::ROT_THREE()
     Push(first);
     Push(third);
     Push(second);
+}
+
+void
+LlvmFunctionBuilder::RichCompare(Value *lhs, Value *rhs, int cmp_op)
+{
+    Function *pyobject_richcompare = GetGlobalFunction<
+        PyObject *(PyObject *, PyObject *, int)>("PyObject_RichCompare");
+    Value *result = builder().CreateCall3(
+        pyobject_richcompare, lhs, rhs,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), cmp_op),
+        "COMPARE_OP_RichCompare_result");
+    DecRef(lhs);
+    DecRef(rhs);
+    PropagateExceptionOnNull(result);
+    Push(result);
+}
+
+Value *
+LlvmFunctionBuilder::ContainerContains(Value *container, Value *item)
+{
+    Function *contains =
+        GetGlobalFunction<int(PyObject *, PyObject *)>("PySequence_Contains");
+    Value *result = builder().CreateCall2(
+        contains, container, item, "ContainerContains_result");
+    DecRef(item);
+    DecRef(container);
+    PropagateExceptionOnNegative(result);
+    Value *bool_result = builder().CreateICmpSGT(
+        result,
+        ConstantInt::get(result->getType(), 0, true /* signed */),
+        "COMPARE_OP_IN_result");
+    return bool_result;
+}
+
+// TODO(twouters): test this (used in exception handling.)
+Value *
+LlvmFunctionBuilder::ExceptionMatches(Value *exc, Value *exc_type)
+{
+    Function *exc_matches = GetGlobalFunction<
+        int(PyObject *, PyObject *)>("_PyEval_CheckedExceptionMatches");
+    Value *result = builder().CreateCall2(
+        exc_matches, exc, exc_type, "ExceptionMatches_result");
+    DecRef(exc_type);
+    DecRef(exc);
+    PropagateExceptionOnNegative(result);
+    Value *bool_result = builder().CreateICmpSGT(
+        result,
+        ConstantInt::get(result->getType(), 0, true /* signed */),
+        "COMPARE_OP_EXC_MATCH_result");
+    return bool_result;
+}
+
+void
+LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
+{
+    Value *rhs = Pop();
+    Value *lhs = Pop();
+    Value *result;
+    switch (cmp_op) {
+    case PyCmp_IS:
+        result = builder().CreateICmpEQ(lhs, rhs, "COMPARE_OP_is_same");
+        DecRef(lhs);
+        DecRef(rhs);
+        break;
+    case PyCmp_IS_NOT:
+        result = builder().CreateICmpNE(lhs, rhs, "COMPARE_OP_is_not_same");
+        DecRef(lhs);
+        DecRef(rhs);
+        break;
+    case PyCmp_IN:
+        // item in seq -> ContainerContains(seq, item)
+        result = ContainerContains(rhs, lhs);
+        break;
+    case PyCmp_NOT_IN:
+    {
+        Value *inverted_result = ContainerContains(rhs, lhs);
+        result = builder().CreateICmpEQ(
+            inverted_result, ConstantInt::get(inverted_result->getType(), 0),
+            "COMPARE_OP_not_in_result");
+        break;
+    }
+    case PyCmp_EXC_MATCH:
+        result = ExceptionMatches(lhs, rhs);
+        break;
+    case PyCmp_EQ:
+    case PyCmp_NE:
+    case PyCmp_LT:
+    case PyCmp_LE:
+    case PyCmp_GT:
+    case PyCmp_GE:
+        RichCompare(lhs, rhs, cmp_op);
+        return;
+    default:
+        Py_FatalError("unknown COMPARE_OP oparg");;
+    }
+    Value *value = builder().CreateSelect(
+        result,
+        GetGlobalVariable<PyObject>("_Py_TrueStruct"),
+        GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
+        "COMPARE_OP_result");
+    IncRef(value);
+    Push(value);
 }
 
 // Adds delta to *addr, and returns the new value.
@@ -1064,6 +1125,66 @@ LlvmFunctionBuilder::IsNonZero(Value *value)
 {
     return builder().CreateICmpNE(
         value, Constant::getNullValue(value->getType()));
+}
+
+Value *
+LlvmFunctionBuilder::IsNegative(Value *value)
+{
+    return builder().CreateICmpSLT(
+        value, ConstantInt::get(value->getType(), 0, true /* signed */));
+}
+
+// TODO(twouters): do actual exception handling here, instead of blindly
+// returning NULL from the current function.
+void
+LlvmFunctionBuilder::PropagateExceptionOnNull(Value *value)
+{
+    BasicBlock *propagate =
+        BasicBlock::Create("PropagateExceptionOnNull_propagate", function());
+    BasicBlock *pass =
+        BasicBlock::Create("PropagateExceptionOnNull_pass", function());
+    builder().CreateCondBr(IsNull(value), propagate, pass);
+
+    builder().SetInsertPoint(propagate);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(pass);
+}
+
+// TODO(twouters): do actual exception handling here, instead of blindly
+// returning NULL from the current function.
+void
+LlvmFunctionBuilder::PropagateExceptionOnNegative(Value *value)
+{
+    BasicBlock *propagate =
+        BasicBlock::Create("PropagateExceptionOnNegative_propagate",
+        function());
+    BasicBlock *pass =
+        BasicBlock::Create("PropagateExceptionOnNegative_pass", function());
+    builder().CreateCondBr(IsNegative(value), propagate, pass);
+
+    builder().SetInsertPoint(propagate);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(pass);
+}
+
+// TODO(twouters): do actual exception handling here, instead of blindly
+// returning NULL from the current function.
+void
+LlvmFunctionBuilder::PropagateExceptionOnNonZero(Value *value)
+{
+    BasicBlock *propagate =
+        BasicBlock::Create("PropagateExceptionOnNonZero_propagate",
+        function());
+    BasicBlock *pass =
+        BasicBlock::Create("PropagateExceptionOnNonZero_pass", function());
+    builder().CreateCondBr(IsNonZero(value), propagate, pass);
+
+    builder().SetInsertPoint(propagate);
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(pass);
 }
 
 }  // namespace py

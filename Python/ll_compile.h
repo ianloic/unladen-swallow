@@ -87,6 +87,8 @@ public:
 
     void STORE_SUBSCR();
 
+    void COMPARE_OP(int cmp_op);
+
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
         InsertAbort(#NAME); \
@@ -147,7 +149,6 @@ public:
     UNIMPLEMENTED_I(CALL_FUNCTION_VAR_KW)
     UNIMPLEMENTED_I(LOAD_CLOSURE)
     UNIMPLEMENTED_I(MAKE_CLOSURE)
-    UNIMPLEMENTED_I(COMPARE_OP)
     UNIMPLEMENTED_I(UNPACK_SEQUENCE)
     UNIMPLEMENTED_I(BUILD_TUPLE)
     UNIMPLEMENTED_I(BUILD_LIST)
@@ -204,6 +205,8 @@ private:
 
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
+    // Returns an i1, true if value is a negative integer.
+    llvm::Value *IsNegative(llvm::Value *value);
     // Returns an i1, true if value is a non-zero integer.
     llvm::Value *IsNonZero(llvm::Value *value);
 
@@ -224,6 +227,28 @@ private:
     void GenericPowOp(const char *apifunc);
     // GenericUnaryOp's is "PyObject *(*)(PyObject *)"
     void GenericUnaryOp(const char *apifunc);
+
+    // Call PyObject_RichCompare(lhs, rhs, cmp_op), pushing the result
+    // onto the stack. cmp_op is one of Py_EQ, Py_NE, Py_LT, Py_LE, Py_GT
+    // or Py_GE as defined in Python/object.h. Steals both references.
+    void RichCompare(llvm::Value *lhs, llvm::Value *rhs, int cmp_op);
+    // Call PySequence_Contains(seq, item), returning the result as an i1.
+    // Steals both references.
+    llvm::Value *ContainerContains(llvm::Value *seq, llvm::Value *item);
+    // Check whether exc (a thrown exception) matches exc_type
+    // (a class or tuple of classes) for the purpose of catching
+    // exc in an except clause. Returns an i1. Steals both references.
+    llvm::Value *ExceptionMatches(llvm::Value *exc, llvm::Value *exc_type);
+
+    // If 'value' represents NULL, propagates the exception.
+    // Otherwise, falls through.
+    void PropagateExceptionOnNull(llvm::Value *value);
+    // If 'value' represents a negative integer, propagates the exception.
+    // Otherwise, falls through.
+    void PropagateExceptionOnNegative(llvm::Value *value);
+    // If 'value' represents a non-zero integer, propagates the exception.
+    // Otherwise, falls through.
+    void PropagateExceptionOnNonZero(llvm::Value *value);
 
     llvm::Module *const module_;
     llvm::Function *const function_;

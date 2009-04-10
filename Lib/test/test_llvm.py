@@ -11,7 +11,7 @@ def at_each_optimization_level(func):
     """Decorator for test functions, to run them at each optimization level."""
     @functools.wraps(func)
     def result(self):
-        for level in (-1,0,1,2):
+        for level in (None, -1, 0, 1, 2):
             func(self, level)
     return result
 
@@ -28,8 +28,9 @@ def compile_for_llvm(function_name, def_string, optimization_level=-1):
     namespace = {}
     exec def_string in namespace
     func = namespace[function_name]
-    func.__code__.co_optimization = optimization_level
-    func.__code__.__use_llvm__ = True
+    if optimization_level is not None:
+        func.__code__.co_optimization = optimization_level
+        func.__code__.__use_llvm__ = True
     return func
 
 
@@ -254,7 +255,7 @@ class OpRecorder(object):
     def __repr__(self):
         self.ops.append('repr')
         return '<OpRecorder 17>'
-        
+
     # right-hand binary arithmetic operations
     def __radd__(self, other):
         self.ops.append('radd')
@@ -357,8 +358,9 @@ class OperatorTests(unittest.TestCase):
         self.assertEquals(len(set(non_llvm_results.values())),
                           len(non_llvm_results))
 
-        testfunc.__code__.co_optimization = optimization_level
-        testfunc.__code__.__use_llvm__ = True
+        if optimization_level is not None:
+            testfunc.__code__.co_optimization = optimization_level
+            testfunc.__code__.__use_llvm__ = True
         llvm_results = {}
         llvm_recorder = OpRecorder()
         testfunc(llvm_recorder, llvm_results)
@@ -631,8 +633,9 @@ class OperatorRaisingTests(unittest.TestCase):
         llvm_results = []
         llvm_raiser = argument_factory()
         for fname, func in funcs:
-            func.__code__.co_optimization = optimization_level
-            func.__code__.__use_llvm__ = True
+            if optimization_level is not None:
+                func.__code__.co_optimization = optimization_level
+                func.__code__.__use_llvm__ = True
             try:
                 func(llvm_raiser)
             except OpExc, e:
@@ -737,8 +740,195 @@ def setitem(x):
         self.run_and_compare(make_setitem(), level,
                              argument_factory=OpRaiserProvider)
 
+
+class ComparisonReporter(object):
+    def __cmp__(self, other):
+        return 'cmp'
+    def __eq__(self, other):
+        return 'eq'
+    def __ne__(self, other):
+        return 'ne'
+    def __lt__(self, other):
+        return 'lt'
+    def __le__(self, other):
+        return 'le'
+    def __gt__(self, other):
+        return 'gt'
+    def __ge__(self, other):
+        return 'ge'
+    def __contains__(self, other):
+        return True
+
+
+class ComparisonRaiser(object):
+    def __cmp__(self, other):
+        raise RuntimeError, 'cmp should not be called'
+    def __eq__(self, other):
+        raise OpExc('eq')
+    def __ne__(self, other):
+        raise OpExc('ne')
+    def __lt__(self, other):
+        raise OpExc('lt')
+    def __le__(self, other):
+        raise OpExc('le')
+    def __gt__(self, other):
+        raise OpExc('gt')
+    def __ge__(self, other):
+        raise OpExc('ge')
+    def __contains__(self, other):
+        raise OpExc('contains')
+
+
+class ComparisonTests(unittest.TestCase):
+    def assertRaisesWithMessage(self, expected_exception_type,
+                                expected_message, f, *args, **kwargs):
+        try:
+            f(*args, **kwargs)
+        except Exception, real_exception:
+            pass
+        else:
+            self.fail("%r not raised" % expected_exception)
+        self.assertEquals(type(real_exception), expected_exception_type)
+        self.assertEquals(real_exception.args, (expected_message,))
+
+    @at_each_optimization_level
+    def test_is(self, level):
+        is_ = compile_for_llvm('is_', 'def is_(x, y): return x is y', level)
+        # Don't rely on Python making separate literal 1's the same object.
+        one = 1
+        reporter = ComparisonReporter()
+        self.assertTrue(is_(one, one))
+        self.assertFalse(is_(2, 3))
+        self.assertFalse(is_([], []))
+        self.assertTrue(is_(reporter, reporter))
+        self.assertFalse(is_(7, reporter))
+
+    @at_each_optimization_level
+    def test_is_not(self, level):
+        is_not = compile_for_llvm('is_not',
+                                  'def is_not(x, y): return x is not y',
+                                  level)
+        # Don't rely on Python making separate literal 1's the same object.
+        one = 1
+        reporter = ComparisonReporter()
+        self.assertFalse(is_not(one, one))
+        self.assertTrue(is_not(2, 3))
+        self.assertTrue(is_not([], []))
+        self.assertFalse(is_not(reporter, reporter))
+        self.assertTrue(is_not(7, reporter))
+
+    @at_each_optimization_level
+    def test_eq(self, level):
+        eq = compile_for_llvm('eq', 'def eq(x, y): return x == y', level)
+        self.assertTrue(eq(1, 1))
+        self.assertFalse(eq(2, 3))
+        self.assertTrue(eq([], []))
+        self.assertEquals(eq(ComparisonReporter(), 6), 'eq')
+        self.assertEquals(eq(7, ComparisonReporter()), 'eq')
+        self.assertRaisesWithMessage(OpExc, 'eq', eq, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'eq', eq, 1, ComparisonRaiser())
+
+    @at_each_optimization_level
+    def test_ne(self, level):
+        ne = compile_for_llvm('ne', 'def ne(x, y): return x != y', level)
+        self.assertFalse(ne(1, 1))
+        self.assertTrue(ne(2, 3))
+        self.assertFalse(ne([], []))
+        self.assertEquals(ne(ComparisonReporter(), 6), 'ne')
+        self.assertEquals(ne(7, ComparisonReporter()), 'ne')
+        self.assertRaisesWithMessage(OpExc, 'ne', ne, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'ne', ne, 1, ComparisonRaiser())
+
+    @at_each_optimization_level
+    def test_lt(self, level):
+        lt = compile_for_llvm('lt', 'def lt(x, y): return x < y', level)
+        self.assertFalse(lt(1, 1))
+        self.assertTrue(lt(2, 3))
+        self.assertFalse(lt(5, 4))
+        self.assertFalse(lt([], []))
+        self.assertEquals(lt(ComparisonReporter(), 6), 'lt')
+        self.assertEquals(lt(7, ComparisonReporter()), 'gt')
+        self.assertRaisesWithMessage(OpExc, 'lt', lt, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'gt', lt, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            'no ordering relation is defined for complex numbers',
+            lt, 1, 1j)
+
+    @at_each_optimization_level
+    def test_le(self, level):
+        le = compile_for_llvm('le', 'def le(x, y): return x <= y', level)
+        self.assertTrue(le(1, 1))
+        self.assertTrue(le(2, 3))
+        self.assertFalse(le(5, 4))
+        self.assertTrue(le([], []))
+        self.assertEquals(le(ComparisonReporter(), 6), 'le')
+        self.assertEquals(le(7, ComparisonReporter()), 'ge')
+        self.assertRaisesWithMessage(OpExc, 'le', le, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'ge', le, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            'no ordering relation is defined for complex numbers',
+            le, 1, 1j)
+
+    @at_each_optimization_level
+    def test_gt(self, level):
+        gt = compile_for_llvm('gt', 'def gt(x, y): return x > y', level)
+        self.assertFalse(gt(1, 1))
+        self.assertFalse(gt(2, 3))
+        self.assertTrue(gt(5, 4))
+        self.assertFalse(gt([], []))
+        self.assertEquals(gt(ComparisonReporter(), 6), 'gt')
+        self.assertEquals(gt(7, ComparisonReporter()), 'lt')
+        self.assertRaisesWithMessage(OpExc, 'gt', gt, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'lt', gt, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            'no ordering relation is defined for complex numbers',
+            gt, 1, 1j)
+
+    @at_each_optimization_level
+    def test_ge(self, level):
+        ge = compile_for_llvm('ge', 'def ge(x, y): return x >= y', level)
+        self.assertTrue(ge(1, 1))
+        self.assertFalse(ge(2, 3))
+        self.assertTrue(ge(5, 4))
+        self.assertTrue(ge([], []))
+        self.assertEquals(ge(ComparisonReporter(), 6), 'ge')
+        self.assertEquals(ge(7, ComparisonReporter()), 'le')
+        self.assertRaisesWithMessage(OpExc, 'ge', ge, ComparisonRaiser(), 1)
+        self.assertRaisesWithMessage(OpExc, 'le', ge, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            'no ordering relation is defined for complex numbers',
+            ge, 1, 1j)
+
+    @at_each_optimization_level
+    def test_in(self, level):
+        in_ = compile_for_llvm('in_', 'def in_(x, y): return x in y', level)
+        self.assertTrue(in_(1, [1, 2]))
+        self.assertFalse(in_(1, [0, 2]))
+        self.assertTrue(in_(1, ComparisonReporter()))
+        self.assertRaisesWithMessage(OpExc, 'contains',
+                                     in_, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            "argument of type 'int' is not iterable",
+            in_, 1, 1)
+
+    @at_each_optimization_level
+    def test_not_in(self, level):
+        not_in = compile_for_llvm('not_in',
+                                  'def not_in(x, y): return x not in y',
+                                  level)
+        self.assertFalse(not_in(1, [1, 2]))
+        self.assertTrue(not_in(1, [0, 2]))
+        self.assertFalse(not_in(1, ComparisonReporter()))
+        self.assertRaisesWithMessage(OpExc, 'contains',
+                                   not_in, 1, ComparisonRaiser())
+        self.assertRaisesWithMessage(TypeError,
+            "argument of type 'int' is not iterable",
+            not_in, 1, 1)
+
+
 def test_main():
-    run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests)
+    run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests,
+                 ComparisonTests)
 
 
 if __name__ == "__main__":

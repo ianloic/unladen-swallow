@@ -2676,6 +2676,60 @@ assign_slice(PyObject *u, PyObject *v, PyObject *w, PyObject *x)
 #define CANNOT_CATCH_MSG "catching classes that don't inherit from " \
 			 "BaseException is not allowed in 3.x"
 
+/* Call PyErr_GivenExceptionMatches(), but check the exception type(s)
+   for deprecated types: strings and non-BaseException-subclasses.
+   Return -1 with an appropriate exception set on failure,
+   1 if the given exception matches one or more of the given type(s),
+   0 otherwise. */
+extern "C" int
+_PyEval_CheckedExceptionMatches(PyObject *exc, PyObject *exc_type)
+{
+	int ret_val;
+	Py_ssize_t i, length;
+	if (PyTuple_Check(exc_type)) {
+		length = PyTuple_Size(exc_type);
+		for (i = 0; i < length; i += 1) {
+			PyObject *e = PyTuple_GET_ITEM(exc_type, i);
+			if (PyString_Check(e)) {
+				ret_val = PyErr_WarnEx(
+					PyExc_DeprecationWarning,
+					"catching of string "
+					"exceptions is deprecated", 1);
+				if (ret_val < 0)
+					return -1;
+			}
+			else if (Py_Py3kWarningFlag  &&
+				 !PyTuple_Check(e) &&
+				 !Py3kExceptionClass_Check(e))
+			{
+				int ret_val;
+				ret_val = PyErr_WarnEx(
+					PyExc_DeprecationWarning,
+					CANNOT_CATCH_MSG, 1);
+				if (ret_val < 0)
+					return -1;
+			}
+		}
+	}
+	else if (PyString_Check(exc_type)) {
+		ret_val = PyErr_WarnEx(PyExc_DeprecationWarning,
+				       "catching of string exceptions "
+				       "is deprecated", 1);
+		if (ret_val < 0)
+			return -1;
+	}
+	else if (Py_Py3kWarningFlag  &&
+		 !PyTuple_Check(exc_type) &&
+		 !Py3kExceptionClass_Check(exc_type))
+	{
+		ret_val = PyErr_WarnEx(PyExc_DeprecationWarning,
+				       CANNOT_CATCH_MSG, 1);
+		if (ret_val < 0)
+			return -1;
+	}
+	return PyErr_GivenExceptionMatches(exc, exc_type);
+}
+
 static PyObject *
 cmp_outcome(int op, register PyObject *v, register PyObject *w)
 {
@@ -2699,56 +2753,9 @@ cmp_outcome(int op, register PyObject *v, register PyObject *w)
 		res = !res;
 		break;
 	case PyCmp_EXC_MATCH:
-		if (PyTuple_Check(w)) {
-			Py_ssize_t i, length;
-			length = PyTuple_Size(w);
-			for (i = 0; i < length; i += 1) {
-				PyObject *exc = PyTuple_GET_ITEM(w, i);
-				if (PyString_Check(exc)) {
-					int ret_val;
-					ret_val = PyErr_WarnEx(
-						PyExc_DeprecationWarning,
-						"catching of string "
-						"exceptions is deprecated", 1);
-					if (ret_val < 0)
-						return NULL;
-				}
-				else if (Py_Py3kWarningFlag  &&
-					 !PyTuple_Check(exc) &&
-					 !Py3kExceptionClass_Check(exc))
-				{
-					int ret_val;
-					ret_val = PyErr_WarnEx(
-						PyExc_DeprecationWarning,
-						CANNOT_CATCH_MSG, 1);
-					if (ret_val < 0)
-						return NULL;
-				}
-			}
-		}
-		else {
-			if (PyString_Check(w)) {
-				int ret_val;
-				ret_val = PyErr_WarnEx(
-						PyExc_DeprecationWarning,
-						"catching of string "
-						"exceptions is deprecated", 1);
-				if (ret_val < 0)
-					return NULL;
-			}
-			else if (Py_Py3kWarningFlag  &&
-				 !PyTuple_Check(w) &&
-				 !Py3kExceptionClass_Check(w))
-			{
-				int ret_val;
-				ret_val = PyErr_WarnEx(
-					PyExc_DeprecationWarning,
-					CANNOT_CATCH_MSG, 1);
-				if (ret_val < 0)
-					return NULL;
-			}
-		}
-		res = PyErr_GivenExceptionMatches(v, w);
+		res = _PyEval_CheckedExceptionMatches(v, w);
+		if (res < 0)
+			return NULL;
 		break;
 	default:
 		return PyObject_RichCompare(v, w, op);
