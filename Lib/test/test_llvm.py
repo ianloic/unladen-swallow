@@ -183,6 +183,37 @@ def loop(range):
 """, level)
         self.assertEquals(1, loop([1,2,3]))
 
+    @at_each_optimization_level
+    def test_delete_fast(self, level):
+        delit = compile_for_llvm('delit', """
+def delit(x):
+    y = 2
+    z = 3
+    del y
+    del x
+    return z
+""", level)
+        self.assertEquals(delit(1), 3)
+
+        useit = compile_for_llvm('useit', """
+def useit(x):
+    del x
+    return x
+""", level)
+        self.assertRaises(UnboundLocalError, useit, 1)
+
+        misuseit = compile_for_llvm('misuseit', 'def misuseit(x): del y',
+                                    level)
+        self.assertRaises(UnboundLocalError, misuseit, 1)
+
+        reuseit = compile_for_llvm('reuseit', """
+def reuseit(x):
+    del x
+    x = 3
+    return x
+""", level)
+        self.assertEquals(reuseit(1), 3)
+
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in
 # test_basic_arithmetic when running with -Qnew.

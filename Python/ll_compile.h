@@ -34,6 +34,7 @@ public:
     void LOAD_CONST(int index);
     void LOAD_FAST(int index);
     void STORE_FAST(int index);
+    void DELETE_FAST(int index);
 
     void SETUP_LOOP(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void GET_ITER();
@@ -138,7 +139,6 @@ public:
 
     UNIMPLEMENTED_I(LOAD_ATTR)
     UNIMPLEMENTED_I(STORE_ATTR)
-    UNIMPLEMENTED_I(DELETE_FAST)
     UNIMPLEMENTED_I(DELETE_ATTR)
     UNIMPLEMENTED_I(LOAD_DEREF);
     UNIMPLEMENTED_I(STORE_DEREF);
@@ -254,7 +254,7 @@ private:
     // Get the address of the idx'th item in a list or tuple object.
     llvm::Value *GetListItemSlot(llvm::Value *lst, int idx);
     llvm::Value *GetTupleItemSlot(llvm::Value *tup, int idx);
-    // Helper method for building a new sequence from items on the stack. 
+    // Helper method for building a new sequence from items on the stack.
     // 'size' is the number of items to build, 'createname' the Python/C API
     // function to call to create the sequence, and 'getitemslot' is called
     // to get each item's address (GetListItemSlot or GetTupleItemSlot.)

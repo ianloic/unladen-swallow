@@ -622,6 +622,35 @@ LlvmFunctionBuilder::STORE_FAST(int index)
 }
 
 void
+LlvmFunctionBuilder::DELETE_FAST(int index)
+{
+    BasicBlock *failure =
+        BasicBlock::Create("DELETE_FAST_failure", function());
+    BasicBlock *success =
+        BasicBlock::Create("DELETE_FAST_success", function());
+    Value *local_slot = builder().CreateGEP(
+        this->fastlocals_, ConstantInt::get(Type::Int32Ty, index));
+    Value *orig_value = builder().CreateLoad(
+        local_slot, "DELETE_FAST_old_reference");
+    builder().CreateCondBr(IsNull(orig_value), failure, success);
+
+    builder().SetInsertPoint(failure);
+    Function *do_raise = GetGlobalFunction<
+        void(PyFrameObject *, int)>("_PyEval_RaiseForUnboundLocal");
+    builder().CreateCall2(
+        do_raise, this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
+                         index, true /* signed */));
+    Return(Constant::getNullValue(function()->getReturnType()));
+
+    builder().SetInsertPoint(success);
+    builder().CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject *>::cache(this->module_)),
+        local_slot);
+    DecRef(orig_value);
+}
+
+void
 LlvmFunctionBuilder::SETUP_LOOP(llvm::BasicBlock *target,
                                 llvm::BasicBlock *fallthrough)
 {
