@@ -89,6 +89,9 @@ public:
 
     void COMPARE_OP(int cmp_op);
 
+    void BUILD_TUPLE(int size);
+    void BUILD_LIST(int size);
+
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
         InsertAbort(#NAME); \
@@ -150,8 +153,6 @@ public:
     UNIMPLEMENTED_I(LOAD_CLOSURE)
     UNIMPLEMENTED_I(MAKE_CLOSURE)
     UNIMPLEMENTED_I(UNPACK_SEQUENCE)
-    UNIMPLEMENTED_I(BUILD_TUPLE)
-    UNIMPLEMENTED_I(BUILD_LIST)
     UNIMPLEMENTED_I(BUILD_MAP)
 
     UNIMPLEMENTED_J(POP_JUMP_IF_FALSE);
@@ -249,6 +250,17 @@ private:
     // If 'value' represents a non-zero integer, propagates the exception.
     // Otherwise, falls through.
     void PropagateExceptionOnNonZero(llvm::Value *value);
+
+    // Get the address of the idx'th item in a list or tuple object.
+    llvm::Value *GetListItemSlot(llvm::Value *lst, int idx);
+    llvm::Value *GetTupleItemSlot(llvm::Value *tup, int idx);
+    // Helper method for building a new sequence from items on the stack. 
+    // 'size' is the number of items to build, 'createname' the Python/C API
+    // function to call to create the sequence, and 'getitemslot' is called
+    // to get each item's address (GetListItemSlot or GetTupleItemSlot.)
+    void BuildSequenceLiteral(
+        int size, const char *createname,
+        llvm::Value *(LlvmFunctionBuilder::*getitemslot)(llvm::Value *, int));
 
     llvm::Module *const module_;
     llvm::Function *const function_;

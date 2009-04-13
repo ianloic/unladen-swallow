@@ -19,6 +19,7 @@ returned item's reference count.
 extern "C" {
 #endif
 
+// PyListObject; keep in sync with Python/ll_compile.cc.
 typedef struct {
     PyObject_VAR_HEAD
     /* Vector of pointers to list elements.  list[0] is ob_item[0], etc. */

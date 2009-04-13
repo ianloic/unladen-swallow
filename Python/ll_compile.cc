@@ -89,7 +89,7 @@ public:
         if (result != NULL)
             return result;
 
-        // Keep this in sync with code.h.
+        // Keep this in sync with tupleobject.h.
         result = llvm::StructType::get(
             // From PyObject_HEAD. In C these are directly nested
             // fields, but the layout should be the same when it's
@@ -112,6 +112,40 @@ public:
     };
 };
 typedef TypeBuilder<PyTupleObject> TupleTy;
+
+template<> class TypeBuilder<PyListObject> {
+public:
+    static const Type *cache(Module *module) {
+        std::string pylistobject_name("__pylistobject");
+        const Type *result = module->getTypeByName(pylistobject_name);
+        if (result != NULL)
+            return result;
+
+        // Keep this in sync with listobject.h.
+        result = llvm::StructType::get(
+            // From PyObject_HEAD. In C these are directly nested
+            // fields, but the layout should be the same when it's
+            // represented as a nested struct.
+            TypeBuilder<PyObject>::cache(module),
+            // From PyObject_VAR_HEAD
+            TypeBuilder<ssize_t>::cache(module),
+            // From PyListObject
+            TypeBuilder<PyObject**>::cache(module),  // ob_item
+            TypeBuilder<Py_ssize_t>::cache(module),  // allocated
+            NULL);
+
+        module->addTypeName(pylistobject_name, result);
+        return result;
+    }
+
+    enum Fields {
+        FIELD_OBJECT,
+        FIELD_SIZE,
+        FIELD_ITEM,
+        FIELD_ALLOCATED,
+    };
+};
+typedef TypeBuilder<PyListObject> ListTy;
 
 template<> class TypeBuilder<PyTypeObject> {
 public:
@@ -463,17 +497,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
             builder().CreateLoad(
                 builder().CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
             TypeBuilder<PyTupleObject*>::cache(module));
-    // The next GEP-magic assigns this->consts_ to &consts_tuple[0].ob_item[0].
-    Value *consts_item_indices[] = {
-        ConstantInt::get(Type::Int32Ty, 0),
-        ConstantInt::get(Type::Int32Ty, TupleTy::FIELD_ITEM),
-        ConstantInt::get(Type::Int32Ty, 0),
-    };
-    this->consts_ =
-        builder().CreateGEP(
-            consts_tuple,
-            consts_item_indices, array_endof(consts_item_indices),
-            "consts");
+    // Get the address of the const_tuple's first item, for convenient
+    // indexing of all its items.
+    this->consts_ = GetTupleItemSlot(consts_tuple, 0);
 
     // The next GEP-magic assigns this->fastlocals_ to
     // &frame_[0].f_localsplus[0].
@@ -957,6 +983,70 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
         "COMPARE_OP_result");
     IncRef(value);
     Push(value);
+}
+
+Value *
+LlvmFunctionBuilder::GetListItemSlot(Value *lst, int idx)
+{
+    Value *listobj = builder().CreateBitCast(
+        lst, TypeBuilder<PyListObject *>::cache(this->module_));
+    // Load the target of the ob_item PyObject** into list_items.
+    Value *list_items = builder().CreateLoad(
+        builder().CreateStructGEP(listobj, ListTy::FIELD_ITEM));
+    // GEP the list_items PyObject* up to the desired item
+    return builder().CreateGEP(list_items,
+                               ConstantInt::get(Type::Int32Ty, idx),
+                               "list_item_slot");
+}
+
+Value *
+LlvmFunctionBuilder::GetTupleItemSlot(Value *tup, int idx)
+{
+    Value *tupobj = builder().CreateBitCast(
+        tup, TypeBuilder<PyTupleObject*>::cache(this->module_));
+    // Make CreateGEP perform &tup_item_indices[0].ob_item[idx].
+    Value *tup_item_indices[] = {
+        ConstantInt::get(Type::Int32Ty, 0),
+        ConstantInt::get(Type::Int32Ty, TupleTy::FIELD_ITEM),
+        ConstantInt::get(Type::Int32Ty, idx),
+    };
+    return builder().CreateGEP(tupobj, tup_item_indices,
+                               array_endof(tup_item_indices),
+                               "tuple_item_slot");
+}
+
+void
+LlvmFunctionBuilder::BuildSequenceLiteral(
+    int size, const char *createname,
+    Value *(LlvmFunctionBuilder::*getitemslot)(Value*, int))
+{
+    const Type *IntSsizeTy = TypeBuilder<Py_ssize_t>::cache(this->module_);
+    Value *seqsize = ConstantInt::get(IntSsizeTy, size, true /* signed */);
+
+    Function *create = GetGlobalFunction<PyObject *(Py_ssize_t)>(createname);
+    Value *seq = builder().CreateCall(create, seqsize, "sequence_literal");
+    PropagateExceptionOnNull(seq);
+
+    // XXX(twouters): do this with a memcpy?
+    while (--size >= 0) {
+        Value *itemslot = (this->*getitemslot)(seq, size);
+        builder().CreateStore(Pop(), itemslot);
+    }
+    Push(seq);
+}
+
+void
+LlvmFunctionBuilder::BUILD_LIST(int size)
+{
+   BuildSequenceLiteral(size, "PyList_New",
+                        &LlvmFunctionBuilder::GetListItemSlot);
+}
+
+void
+LlvmFunctionBuilder::BUILD_TUPLE(int size)
+{
+   BuildSequenceLiteral(size, "PyTuple_New",
+                        &LlvmFunctionBuilder::GetTupleItemSlot);
 }
 
 // Adds delta to *addr, and returns the new value.

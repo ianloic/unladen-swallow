@@ -926,9 +926,37 @@ class ComparisonTests(unittest.TestCase):
             not_in, 1, 1)
 
 
+class LiteralsTests(unittest.TestCase):
+    @at_each_optimization_level
+    def test_build_tuple(self, level):
+        t1 = compile_for_llvm('t1', 'def t1(): return (1, 2, 3)', level)
+        self.assertEquals(t1(), (1, 2, 3))
+        t2 = compile_for_llvm('t2', 'def t2(x): return (1, x + 1, 3)', level)
+        self.assertEquals(t2(1), (1, 2, 3))
+        self.assertRaises(TypeError, t2, "1")
+        t3 = compile_for_llvm('t3',
+                              'def t3(x): return ([1], x, (3, x + 1), 2, 1)',
+                              level)
+        self.assertEquals(t3(2), ([1], 2, (3, 3), 2, 1))
+        self.assertRaises(TypeError, t3, "2")
+
+    @at_each_optimization_level
+    def test_build_list(self, level):
+        l1 = compile_for_llvm('l1', 'def l1(): return [1, 2, 3]', level)
+        self.assertEquals(l1(), [1, 2, 3])
+        l2 = compile_for_llvm('l2', 'def l2(x): return [1, x + 1, 3]', level)
+        self.assertEquals(l2(1), [1, 2, 3])
+        self.assertRaises(TypeError, l2, "1")
+        l3 = compile_for_llvm('l3',
+                              'def l3(x): return [(1,), x, [3, x + 1], 2, 1]',
+                              level)
+        self.assertEquals(l3(2), [(1,), 2, [3, 3], 2, 1])
+        self.assertRaises(TypeError, l3, "2")
+
+
 def test_main():
     run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests,
-                 ComparisonTests)
+                 ComparisonTests, LiteralsTests)
 
 
 if __name__ == "__main__":
