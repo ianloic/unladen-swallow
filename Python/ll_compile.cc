@@ -1326,6 +1326,24 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
     Push(value);
 }
 
+void
+LlvmFunctionBuilder::STORE_MAP()
+{
+    Value *key = Pop();
+    Value *value = Pop();
+    Value *dict = Pop();
+    Push(dict);
+    // XXX(twouters): ceval does an assert(PyDict_CheckExact(dict);
+    // add it here if/when it's convenient to do in IRBuilder.
+    Function *setitem = GetGlobalFunction<
+        int(PyObject *, PyObject *, PyObject *)>("PyDict_SetItem");
+    Value *result = builder().CreateCall3(setitem, dict, key, value,
+                                          "STORE_MAP_result");
+    DecRef(value);
+    DecRef(key);
+    PropagateExceptionOnNonZero(result);
+}
+
 Value *
 LlvmFunctionBuilder::GetListItemSlot(Value *lst, int idx)
 {
@@ -1388,6 +1406,20 @@ LlvmFunctionBuilder::BUILD_TUPLE(int size)
 {
    BuildSequenceLiteral(size, "PyTuple_New",
                         &LlvmFunctionBuilder::GetTupleItemSlot);
+}
+
+void
+LlvmFunctionBuilder::BUILD_MAP(int size)
+{
+    Value *sizehint = ConstantInt::get(
+        TypeBuilder<Py_ssize_t>::cache(this->module_),
+        size, true /* signed */);
+    Function *create_dict = GetGlobalFunction<
+        PyObject *(Py_ssize_t)>("_PyDict_NewPresized");
+    Value *result = builder().CreateCall(create_dict, sizehint,
+                                         "BULD_MAP_result");
+    PropagateExceptionOnNull(result);
+    Push(result);
 }
 
 // Adds delta to *addr, and returns the new value.

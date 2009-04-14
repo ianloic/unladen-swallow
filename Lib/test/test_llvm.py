@@ -1083,6 +1083,17 @@ class LiteralsTests(unittest.TestCase):
         self.assertEquals(l3(2), [(1,), 2, [3, 3], 2, 1])
         self.assertRaises(TypeError, l3, "2")
 
+    @at_each_optimization_level
+    def test_build_map(self, level):
+        f1 = compile_for_llvm('f1', 'def f1(x): return {1: x, x + 1: 4}',
+                              level)
+        self.assertEquals(f1(2), {1: 2, 3: 4})
+        self.assertRaises(TypeError, f1, '2')
+        f2 = compile_for_llvm('f2', 'def f2(x): return {1: {x: 3}, x: 5}',
+                              level)
+        self.assertEquals(f2(2), {1: {2: 3}, 2: 5})
+        self.assertRaises(TypeError, f2, {})
+
 
 def test_main():
     run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests,
