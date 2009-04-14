@@ -817,7 +817,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
         this->stack_pointer_addr_);
     PropagateExceptionOnNull(result);
     Push(result);
-}  
+}
 
 void
 LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
