@@ -33,6 +33,17 @@ using llvm::array_endof;
 
 namespace py {
 
+// These have the same meanings as the why_code enum in ceval.cc.
+enum UnwindReason {
+    UNWIND_NOUNWIND,
+    UNWIND_EXCEPTION,
+    UNWIND_RERAISE,
+    UNWIND_RETURN,
+    UNWIND_BREAK,
+    UNWIND_CONTINUE,
+    UNWIND_YIELD
+};
+
 static ConstantInt *
 get_signed_constant_int(const Type *type, int64_t v)
 {
@@ -467,15 +478,22 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->frame_->setName("frame");
 
     builder().SetInsertPoint(BasicBlock::Create("entry", function()));
-    this->return_block_ = BasicBlock::Create("return_block", function());
+    this->unwind_block_ = BasicBlock::Create("unwind_block", function());
 
     this->stack_pointer_addr_ = builder().CreateAlloca(
         TypeBuilder<PyObject**>::cache(module),
-        0, "stack_pointer_addr");
+        NULL, "stack_pointer_addr");
     this->retval_addr_ = builder().CreateAlloca(
         TypeBuilder<PyObject*>::cache(module),
-        0, "retval_addr_");
+        NULL, "retval_addr");
+    this->unwind_reason_addr_ = builder().CreateAlloca(
+        Type::Int8Ty, NULL, "unwind_reason_addr");
+    this->unwind_target_index_addr_ = builder().CreateAlloca(
+        Type::Int32Ty, NULL, "unwind_target_index_addr");
 
+    this->stack_bottom_ = builder().CreateLoad(
+        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
+        "stack_bottom");
     Value *initial_stack_pointer =
         builder().CreateLoad(
             builder().CreateStructGEP(this->frame_, FrameTy::FIELD_STACKTOP),
@@ -518,37 +536,173 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->freevars_ =
         builder().CreateGEP(this->fastlocals_, nlocals, "freevars");
 
-    FillReturnBlock(this->return_block_);
+    FillUnwindBlock();
 }
 
 void
-LlvmFunctionBuilder::FillReturnBlock(BasicBlock *return_block)
+LlvmFunctionBuilder::FillUnwindBlock()
 {
     BasicBlock *const orig_block = builder().GetInsertBlock();
-    builder().SetInsertPoint(this->return_block_);
-    Value *stack_bottom = builder().CreateLoad(
-        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
-        "stack_bottom");
 
+    BasicBlock *unreachable_block =
+        BasicBlock::Create("unreachable", function());
+    builder().SetInsertPoint(unreachable_block);
+    Function *abort_func = GetGlobalFunction<void()>("abort");
+    builder().CreateCall(abort_func);
+    builder().CreateUnreachable();
+
+    // Handles, roughly, the ceval.cc JUMPTO macro.
+    BasicBlock *goto_unwind_target_block =
+        BasicBlock::Create("goto_unwind_target", function());
+    builder().SetInsertPoint(goto_unwind_target_block);
+    Value *unwind_target_index =
+        builder().CreateLoad(this->unwind_target_index_addr_,
+                             "unwind_target_index");
+    // Each call to AddUnwindTarget() will add a new case to this
+    // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
+    // but LLVM won't let us do that so we default to jumping to the
+    // unreachable block.
+    this->unwind_target_switch_ =
+        builder().CreateSwitch(unwind_target_index, unreachable_block);
+
+    // Code that needs to unwind the stack will jump here.
+    // (e.g. returns, exceptions, breaks, and continues).
+    builder().SetInsertPoint(this->unwind_block_);
+    Value *unwind_reason =
+        builder().CreateLoad(this->unwind_reason_addr_, "unwind_reason");
+
+    BasicBlock *do_return =
+        BasicBlock::Create("do_return", function());
+    {  // Implements the fast_block_end loop toward the end of
+       // PyEval_EvalFrameEx().  This pops blocks off the block-stack
+       // and values off the value-stack until it finds a block that
+       // wants to handle the current unwind reason.
+        BasicBlock *unwind_loop_header =
+            BasicBlock::Create("unwind_loop_header", function());
+        BasicBlock *unwind_loop_body =
+            BasicBlock::Create("unwind_loop_body", function());
+
+        FallThroughTo(unwind_loop_header);
+        // Continue looping if frame->f_iblock > 0.
+        Value *blocks_left = builder().CreateLoad(
+            builder().CreateStructGEP(this->frame_, FrameTy::FIELD_IBLOCK));
+        builder().CreateCondBr(IsPositive(blocks_left),
+                               unwind_loop_body, do_return);
+
+        builder().SetInsertPoint(unwind_loop_body);
+        Value *popped_block = builder().CreateLoad(
+            builder().CreateCall(
+                GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
+                    "PyFrame_BlockPop"),
+                this->frame_));
+        Value *block_type =
+            builder().CreateExtractValue(popped_block,
+                                         TypeBuilder<PyTryBlock>::FIELD_TYPE,
+                                         "block_type");
+
+        // TODO(jyasskin): Handle SETUP_LOOP with UNWIND_CONTINUE.
+
+        // Pop values back to where this block started.
+        Value *pop_to_level =
+            builder().CreateExtractValue(popped_block,
+                                         TypeBuilder<PyTryBlock>::FIELD_LEVEL,
+                                         "block_level");
+        PopAndDecrefTo(builder().CreateGEP(this->stack_bottom_, pop_to_level));
+
+        BasicBlock *handle_finally =
+            BasicBlock::Create("handle_finally", function());
+
+        llvm::SwitchInst *block_type_switch =
+            builder().CreateSwitch(block_type, unreachable_block, 3);
+        block_type_switch->addCase(
+            ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
+            // TODO(jyasskin): Handle SETUP_LOOP with UNWIND_BREAK.
+            unwind_loop_header);
+        block_type_switch->addCase(
+            ConstantInt::get(block_type->getType(), ::SETUP_EXCEPT),
+            // TODO(jyasskin): Handle SETUP_EXCEPT with UNWIND_EXCEPTION.
+            unwind_loop_header);
+        block_type_switch->addCase(
+            ConstantInt::get(block_type->getType(), ::SETUP_FINALLY),
+            handle_finally);
+
+        builder().SetInsertPoint(handle_finally);
+        // Jump to the finally block, with the stack prepared for
+        // END_FINALLY to continue unwinding.  TODO(jyasskin): Push
+        // exceptions onto the stack.
+
+        // When unwinding for a return or continue, we have to save
+        // the return value or continue target onto the stack.
+        BasicBlock *push_retval = BasicBlock::Create("push_retval", function());
+        BasicBlock *handle_finally_end =
+            BasicBlock::Create("handle_finally_end", function());
+        llvm::SwitchInst *should_push_retval = builder().CreateSwitch(
+            unwind_reason, handle_finally_end, 2);
+        should_push_retval->addCase(
+            ConstantInt::get(Type::Int8Ty, UNWIND_RETURN), push_retval);
+        should_push_retval->addCase(
+            ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE), push_retval);
+
+        builder().SetInsertPoint(push_retval);
+        Push(builder().CreateLoad(this->retval_addr_, "retval"));
+
+        FallThroughTo(handle_finally_end);
+        // END_FINALLY expects to find the unwind reason on the top of
+        // the stack.  There's probably a way to do this that doesn't
+        // involve allocating an int for every unwind through a
+        // finally block, but imitating CPython is simpler.
+        Value *unwind_reason_as_pyint = builder().CreateCall(
+            GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
+            builder().CreateZExt(unwind_reason,
+                                 TypeBuilder<long>::cache(this->module_)),
+            "unwind_reason_as_pyint");
+        Push(unwind_reason_as_pyint);
+        // Clear the unwind reason while running through the finally
+        // block.  mem2reg should never actually decide to use this
+        // value, but having it here should make such forgotten stores
+        // more obvious.
+        builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
+                              this->unwind_reason_addr_);
+        // The block's handler field holds the index of the block
+        // defining this finally.  Jump to it through the unwind
+        // switch statement defined above.
+        Value *block_handler = builder().CreateExtractValue(
+            popped_block, TypeBuilder<PyTryBlock>::FIELD_HANDLER,
+            "block_handler");
+        builder().CreateStore(block_handler,
+                              this->unwind_target_index_addr_);
+        builder().CreateBr(goto_unwind_target_block);
+    }  // End unwind loop.
+
+    // If we fall off the end of the unwind loop, there are no blocks
+    // left and it's time to pop the rest of the value stack and
+    // return.
+    builder().SetInsertPoint(do_return);
+    PopAndDecrefTo(this->stack_bottom_);
+    Value *retval = builder().CreateLoad(this->retval_addr_, "retval");
+    builder().CreateRet(retval);
+
+    builder().SetInsertPoint(orig_block);
+}
+
+void
+LlvmFunctionBuilder::PopAndDecrefTo(Value *target_stack_pointer)
+{
     BasicBlock *pop_loop = BasicBlock::Create("pop_loop", function());
     BasicBlock *pop_block = BasicBlock::Create("pop_stack", function());
-    BasicBlock *do_return = BasicBlock::Create("do_return", function());
+    BasicBlock *pop_done = BasicBlock::Create("pop_done", function());
 
     FallThroughTo(pop_loop);
     Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
     Value *finished_popping = builder().CreateICmpULE(
-        stack_pointer, stack_bottom);
-    builder().CreateCondBr(finished_popping, do_return, pop_block);
+        stack_pointer, target_stack_pointer);
+    builder().CreateCondBr(finished_popping, pop_done, pop_block);
 
     builder().SetInsertPoint(pop_block);
     XDecRef(Pop());
     builder().CreateBr(pop_loop);
 
-    builder().SetInsertPoint(do_return);
-    Value *retval = builder().CreateLoad(this->retval_addr_, "retval");
-    builder().CreateRet(retval);
-
-    builder().SetInsertPoint(orig_block);
+    builder().SetInsertPoint(pop_done);
 }
 
 void
@@ -562,11 +716,36 @@ LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
     builder().SetInsertPoint(next_block);
 }
 
+ConstantInt *
+LlvmFunctionBuilder::AddUnwindTarget(llvm::BasicBlock *target)
+{
+    // The size of the switch instruction will give us a small unique
+    // number for each target block.
+    ConstantInt *target_index =
+        ConstantInt::get(Type::Int32Ty,
+                         this->unwind_target_switch_->getNumCases());
+    this->unwind_target_switch_->addCase(target_index, target);
+    return target_index;
+}
+
 void
 LlvmFunctionBuilder::Return(Value *retval)
 {
     builder().CreateStore(retval, this->retval_addr_);
-    builder().CreateBr(this->return_block_);
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
+                          this->unwind_reason_addr_);
+    builder().CreateBr(this->unwind_block_);
+}
+
+void
+LlvmFunctionBuilder::PropagateException()
+{
+    builder().CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        this->retval_addr_);
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                          this->unwind_reason_addr_);
+    builder().CreateBr(this->unwind_block_);
 }
 
 void
@@ -601,7 +780,7 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
                          index, true /* signed */));
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(success);
     IncRef(local);
@@ -654,8 +833,7 @@ void
 LlvmFunctionBuilder::SETUP_LOOP(llvm::BasicBlock *target,
                                 llvm::BasicBlock *fallthrough)
 {
-    // TODO: I think we can ignore this until we have an exception story.
-    //InsertAbort("SETUP_LOOP");
+    CallBlockSetup(::SETUP_LOOP, target);
 }
 
 void
@@ -707,7 +885,7 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
 
     builder().SetInsertPoint(propagate);
     DecRef(iter);
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(clear_err);
     builder().CreateCall(GetGlobalFunction<void()>("PyErr_Clear"));
@@ -725,10 +903,128 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
 void
 LlvmFunctionBuilder::POP_BLOCK()
 {
-    // TODO: I think we can ignore this until we have an exception story.
-    //InsertAbort("POP_BLOCK");
+    Value *block_info = builder().CreateCall(
+        GetGlobalFunction<PyTryBlock *(PyFrameObject *)>("PyFrame_BlockPop"),
+        this->frame_);
+    Value *pop_to_level = builder().CreateLoad(
+        builder().CreateStructGEP(block_info,
+                                  TypeBuilder<PyTryBlock>::FIELD_LEVEL));
+    Value *pop_to_addr = builder().CreateGEP(this->stack_bottom_, pop_to_level);
+    PopAndDecrefTo(pop_to_addr);
 }
 
+void
+LlvmFunctionBuilder::SETUP_FINALLY(llvm::BasicBlock *target,
+                                   llvm::BasicBlock *fallthrough)
+{
+    CallBlockSetup(::SETUP_FINALLY, target);
+}
+
+void
+LlvmFunctionBuilder::END_FINALLY()
+{
+    Value *finally_discriminator = Pop();
+    // END_FINALLY is fairly complicated. It decides what to do based
+    // on the top value in the stack.  If that value is an int, it's
+    // interpreted as one of the unwind reasons.  If it's an exception
+    // type, the next two stack values are the rest of the exception,
+    // and it's re-raised.  Otherwise, it's supposed to be None,
+    // indicating that the finally was entered through normal control
+    // flow.
+
+    BasicBlock *unwind_code = BasicBlock::Create("unwind_code", function());
+    BasicBlock *test_exception =
+        BasicBlock::Create("test_exception", function());
+    BasicBlock *reraise_exception =
+        BasicBlock::Create("reraise_exception", function());
+    BasicBlock *check_none = BasicBlock::Create("check_none", function());
+    BasicBlock *not_none = BasicBlock::Create("not_none", function());
+    BasicBlock *finally_fallthrough =
+        BasicBlock::Create("finally_fallthrough", function());
+
+    builder().CreateCondBr(
+        IsInstanceOfFlagClass(finally_discriminator, Py_TPFLAGS_INT_SUBCLASS),
+        unwind_code, test_exception);
+
+    builder().SetInsertPoint(unwind_code);
+    // The top of the stack was an int, interpreted as an unwind code.
+    // If we're resuming a return or continue, the return value or
+    // loop target (respectively) is now on top of the stack and needs
+    // to be popped off.
+    Value *unwind_reason = builder().CreateTrunc(
+        builder().CreateCall(
+            GetGlobalFunction<long(PyObject *)>("PyInt_AsLong"),
+            finally_discriminator),
+        Type::Int8Ty,
+        "unwind_reason");
+    DecRef(finally_discriminator);
+    // Save the unwind reason for when we jump to the unwind block.
+    builder().CreateStore(unwind_reason, this->unwind_reason_addr_);
+    // Check if we need to pop the return value or loop target.
+    BasicBlock *pop_retval = BasicBlock::Create("pop_retval", function());
+    llvm::SwitchInst *should_pop_retval =
+        builder().CreateSwitch(unwind_reason, this->unwind_block_, 2);
+    should_pop_retval->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
+                               pop_retval);
+    should_pop_retval->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
+                               pop_retval);
+
+    builder().SetInsertPoint(pop_retval);
+    // We're continuing a return or continue.  Retrieve its argument.
+    builder().CreateStore(Pop(), this->retval_addr_);
+    builder().CreateBr(this->unwind_block_);
+
+    builder().SetInsertPoint(test_exception);
+    Value *is_exception_or_string = builder().CreateCall(
+        GetGlobalFunction<int(PyObject *)>("_PyLlvm_WrapIsExceptionOrString"),
+        finally_discriminator);
+    builder().CreateCondBr(IsNonZero(is_exception_or_string),
+                           reraise_exception, check_none);
+
+    builder().SetInsertPoint(reraise_exception);
+    Value *err_type = finally_discriminator;
+    Value *err_value = Pop();
+    Value *err_traceback = Pop();
+    builder().CreateCall3(
+        GetGlobalFunction<void(PyObject *, PyObject *, PyObject *)>(
+            "PyErr_Restore"),
+        err_type, err_value, err_traceback);
+    // TODO(jyasskin): Make sure this is the right unwind reason and
+    // jump target for the finally block's re-raise.
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_RERAISE),
+                          this->unwind_reason_addr_);
+    builder().CreateBr(this->unwind_block_);
+
+    builder().SetInsertPoint(check_none);
+    // The contents of the try block push None onto the stack just
+    // before falling through to the finally block.  If we didn't get
+    // an unwind reason or an exception, we expect to fall through,
+    // but for sanity we also double-check that the None is present.
+    Value *is_none = builder().CreateICmpEQ(
+        finally_discriminator, GetGlobalVariable<PyObject>("_Py_NoneStruct"));
+    DecRef(finally_discriminator);
+    builder().CreateCondBr(is_none, finally_fallthrough, not_none);
+
+    builder().SetInsertPoint(not_none);
+    // If we didn't get a None, raise a SystemError.
+    Value *system_error = builder().CreateLoad(GetGlobalVariable<PyObject *>(
+                                                   "PyExc_SystemError"));
+    Value *err_msg =
+        builder().CreateGlobalStringPtr("'finally' pops bad exception");
+    builder().CreateCall2(GetGlobalFunction<void(PyObject *, const char *)>(
+                              "PyErr_SetString"),
+                          system_error, err_msg);
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                          this->unwind_reason_addr_);
+    builder().CreateBr(this->unwind_block_);
+
+    // After falling through into a finally block, we also fall
+    // through out of the block.  This has the nice side-effect of
+    // avoiding jumps and switch instructions in the common case,
+    // although returning out of a finally may still be slower than
+    // ideal.
+    builder().SetInsertPoint(finally_fallthrough);
+}
 
 void
 LlvmFunctionBuilder::RETURN_VALUE()
@@ -864,21 +1160,13 @@ UNARYOP_METH(UNARY_NEGATIVE, PyNumber_Negative)
 void
 LlvmFunctionBuilder::UNARY_NOT()
 {
-    BasicBlock *success = BasicBlock::Create("UNARY_NOT_success", function());
-    BasicBlock *failure = BasicBlock::Create("UNARY_NOT_failure", function());
-
     Value *value = Pop();
     Function *pyobject_istrue =
         GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
     Value *result = builder().CreateCall(pyobject_istrue, value,
                                          "UNARY_NOT_obj_as_bool");
     DecRef(value);
-    builder().CreateCondBr(IsNegative(result), failure, success);
-
-    builder().SetInsertPoint(failure);
-    Return(Constant::getNullValue(function()->getReturnType()));
-
-    builder().SetInsertPoint(success);
+    PropagateExceptionOnNegative(result);
     Value *retval = builder().CreateSelect(
         IsNonZero(result),
         GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
@@ -937,11 +1225,7 @@ LlvmFunctionBuilder::ContainerContains(Value *container, Value *item)
     DecRef(item);
     DecRef(container);
     PropagateExceptionOnNegative(result);
-    Value *bool_result = builder().CreateICmpSGT(
-        result,
-        ConstantInt::get(result->getType(), 0, true /* signed */),
-        "COMPARE_OP_IN_result");
-    return bool_result;
+    return IsPositive(result);
 }
 
 // TODO(twouters): test this (used in exception handling.)
@@ -955,11 +1239,7 @@ LlvmFunctionBuilder::ExceptionMatches(Value *exc, Value *exc_type)
     DecRef(exc_type);
     DecRef(exc);
     PropagateExceptionOnNegative(result);
-    Value *bool_result = builder().CreateICmpSGT(
-        result,
-        ConstantInt::get(result->getType(), 0, true /* signed */),
-        "COMPARE_OP_EXC_MATCH_result");
-    return bool_result;
+    return IsPositive(result);
 }
 
 void
@@ -1195,6 +1475,26 @@ LlvmFunctionBuilder::Pop()
     return former_top;
 }
 
+Value *
+LlvmFunctionBuilder::GetStackLevel()
+{
+    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
+    Value *stack_pointer_int =
+        builder().CreatePtrToInt(stack_pointer, Type::Int64Ty);
+    Value *stack_bottom_int =
+        builder().CreatePtrToInt(this->stack_bottom_, Type::Int64Ty);
+    Value *difference =
+        builder().CreateSub(stack_pointer_int, stack_bottom_int);
+    Value *level64 = builder().CreateSDiv(
+        difference,
+        llvm::ConstantExpr::getSizeOf(
+            TypeBuilder<PyObject*>::cache(this->module_)));
+    // The stack level is stored as an int, not an int64.
+    return builder().CreateTrunc(level64,
+                                 TypeBuilder<int>::cache(this->module_),
+                                 "stack_level");
+}
+
 void
 LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
 {
@@ -1205,6 +1505,19 @@ LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
     XDecRef(orig_value);
 }
 
+void
+LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler) {
+    Value *stack_level = GetStackLevel();
+    Value *unwind_target_index = AddUnwindTarget(handler);
+    Function *blocksetup =
+        GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
+            "PyFrame_BlockSetup");
+    builder().CreateCall4(
+        blocksetup, this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), block_type),
+        unwind_target_index,
+        stack_level);
+}
 
 void
 LlvmFunctionBuilder::InsertAbort(const char *opcode_name)
@@ -1253,8 +1566,30 @@ LlvmFunctionBuilder::IsNegative(Value *value)
         value, ConstantInt::get(value->getType(), 0, true /* signed */));
 }
 
-// TODO(twouters): do actual exception handling here, instead of blindly
-// returning NULL from the current function.
+Value *
+LlvmFunctionBuilder::IsPositive(Value *value)
+{
+    return builder().CreateICmpSGT(
+        value, ConstantInt::get(value->getType(), 0, true /* signed */));
+}
+
+Value *
+LlvmFunctionBuilder::IsInstanceOfFlagClass(llvm::Value *value, int flag)
+{
+    Value *type = builder().CreateBitCast(
+        builder().CreateLoad(
+            builder().CreateStructGEP(value, ObjectTy::FIELD_TYPE),
+            "type"),
+        TypeBuilder<PyTypeObject *>::cache(this->module_));
+    Value *type_flags = builder().CreateLoad(
+        builder().CreateStructGEP(type, TypeTy::FIELD_FLAGS),
+        "type_flags");
+    Value *is_instance = builder().CreateAnd(
+        type_flags,
+        ConstantInt::get(type_flags->getType(), flag));
+    return IsNonZero(is_instance);
+}
+
 void
 LlvmFunctionBuilder::PropagateExceptionOnNull(Value *value)
 {
@@ -1265,13 +1600,11 @@ LlvmFunctionBuilder::PropagateExceptionOnNull(Value *value)
     builder().CreateCondBr(IsNull(value), propagate, pass);
 
     builder().SetInsertPoint(propagate);
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(pass);
 }
 
-// TODO(twouters): do actual exception handling here, instead of blindly
-// returning NULL from the current function.
 void
 LlvmFunctionBuilder::PropagateExceptionOnNegative(Value *value)
 {
@@ -1283,13 +1616,11 @@ LlvmFunctionBuilder::PropagateExceptionOnNegative(Value *value)
     builder().CreateCondBr(IsNegative(value), propagate, pass);
 
     builder().SetInsertPoint(propagate);
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(pass);
 }
 
-// TODO(twouters): do actual exception handling here, instead of blindly
-// returning NULL from the current function.
 void
 LlvmFunctionBuilder::PropagateExceptionOnNonZero(Value *value)
 {
@@ -1301,7 +1632,7 @@ LlvmFunctionBuilder::PropagateExceptionOnNonZero(Value *value)
     builder().CreateCondBr(IsNonZero(value), propagate, pass);
 
     builder().SetInsertPoint(propagate);
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(pass);
 }
@@ -1318,6 +1649,12 @@ void
 _PyLlvm_WrapDealloc(PyObject *obj)
 {
     _Py_Dealloc(obj);
+}
+
+int
+_PyLlvm_WrapIsExceptionOrString(PyObject *obj)
+{
+    return PyExceptionClass_Check(obj) || PyString_Check(obj);
 }
 
 }

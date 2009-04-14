@@ -41,6 +41,9 @@ public:
     void FOR_ITER(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void POP_BLOCK();
 
+    void SETUP_FINALLY(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
+    void END_FINALLY();
+
     void JUMP_FORWARD(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) {
         JUMP_ABSOLUTE(target, fallthrough);
     }
@@ -134,7 +137,6 @@ public:
     UNIMPLEMENTED(RAISE_VARARGS_TWO)
     UNIMPLEMENTED(RAISE_VARARGS_THREE)
     UNIMPLEMENTED(WITH_CLEANUP)
-    UNIMPLEMENTED(END_FINALLY)
     UNIMPLEMENTED(YIELD_VALUE)
 
     UNIMPLEMENTED_I(LOAD_ATTR)
@@ -161,7 +163,6 @@ public:
     UNIMPLEMENTED_J(JUMP_IF_TRUE_OR_POP);
     UNIMPLEMENTED_J(CONTINUE_LOOP);
     UNIMPLEMENTED_J(SETUP_EXCEPT);
-    UNIMPLEMENTED_J(SETUP_FINALLY);
 
 #undef UNIMPLEMENTED
 #undef UNIMPLEMENTED_I
@@ -185,10 +186,23 @@ private:
     void Push(llvm::Value *value);
     llvm::Value *Pop();
 
+    /// Takes a target stack pointer and pops values off the stack
+    /// until it gets there, decref'ing as it goes.
+    void PopAndDecrefTo(llvm::Value *target_stack_pointer);
+
+    /// Returns the difference between the current stack pointer and
+    /// the base of the stack.
+    llvm::Value *GetStackLevel();
+
     // Replaces a local variable with the PyObject* stored in
     // new_value.  Decrements the original value's refcount after
     // replacing it.
     void SetLocal(int locals_index, llvm::Value *new_value);
+
+    // Adds handler to the switch for unwind targets and then sets up
+    // a call to PyFrame_BlockSetup() with the block type, handler
+    // index, and current stack level.
+    void CallBlockSetup(int block_type, llvm::BasicBlock *handler);
 
     /// Inserts a call that will print opcode_name and abort the
     /// program when it's reached. This is useful for not-yet-defined
@@ -210,15 +224,32 @@ private:
     llvm::Value *IsNegative(llvm::Value *value);
     // Returns an i1, true if value is a non-zero integer.
     llvm::Value *IsNonZero(llvm::Value *value);
+    // Returns an i1, true if value is a positive (>0) integer.
+    llvm::Value *IsPositive(llvm::Value *value);
+    // Returns an i1, true if value is an instance of the class
+    // represented by the flag argument.  flag should be something
+    // like Py_TPFLAGS_INT_SUBCLASS.
+    llvm::Value *IsInstanceOfFlagClass(llvm::Value *value, int flag);
+
+    /// During stack unwinding it may be necessary to jump back into
+    /// the function to handle a finally or except block.  Since LLVM
+    /// doesn't allow us to directly store labels as data, we instead
+    /// add the label to a switch instruction and return the i32 that
+    /// will jump there.
+    llvm::ConstantInt *AddUnwindTarget(llvm::BasicBlock *target);
 
     // Inserts a jump to the return block, returning retval.  You
     // should _never_ call CreateRet directly from one of the opcode
     // handlers, since doing so would fail to unwind the stack.
     void Return(llvm::Value *retval);
 
-    // Only for use in the constructor: Fills in the return block. Has
+    // Propagates an exception by jumping to the unwind block with an
+    // appropriate unwind reason set.
+    void PropagateException();
+
+    // Only for use in the constructor: Fills in the unwind block. Has
     // no effect on the IRBuilder's current insertion block.
-    void FillReturnBlock(llvm::BasicBlock *return_block);
+    void FillUnwindBlock();
 
     // Helper methods for binary and unary operators, passing the name
     // of the Python/C API function that implements the operation.
@@ -270,6 +301,7 @@ private:
     // entry block. They're constant after construction.
     llvm::Value *frame_;
 
+    llvm::Value *stack_bottom_;
     llvm::Value *stack_pointer_addr_;
     llvm::Value *varnames_;
     llvm::Value *names_;
@@ -277,7 +309,12 @@ private:
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
 
-    llvm::BasicBlock *return_block_;
+    llvm::BasicBlock *unwind_block_;
+    llvm::Value *unwind_target_index_addr_;
+    llvm::SwitchInst *unwind_target_switch_;
+    // Stores one of the UNWIND_XXX constants defined at the top of
+    // ll_compile.cc
+    llvm::Value *unwind_reason_addr_;
     llvm::Value *retval_addr_;
 };
 

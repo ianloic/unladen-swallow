@@ -114,6 +114,19 @@ public:
         return llvm::FunctionType::get(TypeBuilder<R>::cache(m), params, false);
     }
 };
+template<typename R, typename A1, typename A2, typename A3, typename A4>
+class TypeBuilder<R(A1, A2, A3, A4)> {
+public:
+    static const llvm::FunctionType *cache(llvm::Module *m) {
+        std::vector<const llvm::Type*> params;
+        params.reserve(4);
+        params.push_back(TypeBuilder<A1>::cache(m));
+        params.push_back(TypeBuilder<A2>::cache(m));
+        params.push_back(TypeBuilder<A3>::cache(m));
+        params.push_back(TypeBuilder<A4>::cache(m));
+        return llvm::FunctionType::get(TypeBuilder<R>::cache(m), params, false);
+    }
+};
 
 template<typename R> class TypeBuilder<R(...)> {
 public:

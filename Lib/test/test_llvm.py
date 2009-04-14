@@ -184,6 +184,88 @@ def loop(range):
         self.assertEquals(1, loop([1,2,3]))
 
     @at_each_optimization_level
+    def test_finally(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup(obj):
+    try:
+        return 3
+    finally:
+        obj['x'] = 2
+""", level)
+        obj = {}
+        self.assertEquals(3, cleanup(obj))
+        self.assertEquals({'x': 2}, obj)
+
+    @at_each_optimization_level
+    def test_nested_finally(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup(obj):
+    try:
+        try:
+            return 3
+        finally:
+            obj['x'] = 2
+    finally:
+        obj['y'] = 3
+""", level)
+        obj = {}
+        self.assertEquals(3, cleanup(obj))
+        self.assertEquals({'x': 2, 'y': 3}, obj)
+
+    @at_each_optimization_level
+    def test_finally_fallthrough(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup(obj):
+    try:
+        obj['y'] = 3
+    finally:
+        obj['x'] = 2
+    return 3
+""", level)
+        obj = {}
+        self.assertEquals(3, cleanup(obj))
+        self.assertEquals({'x': 2, 'y': 3}, obj)
+
+    @at_each_optimization_level
+    def test_exception_out_of_finally(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup(obj):
+    try:
+        obj['x'] = 2
+    finally:
+        a = a
+        obj['y'] = 3
+    return 3
+""", level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, cleanup, obj)
+        self.assertEquals({'x': 2}, obj)
+
+    @at_each_optimization_level
+    def test_exception_through_finally(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup(obj):
+    try:
+        a = a
+    finally:
+        obj['x'] = 2
+""", level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, cleanup, obj)
+        self.assertEquals({'x': 2}, obj)
+
+    @at_each_optimization_level
+    def test_return_in_finally_overrides(self, level):
+        cleanup = compile_for_llvm("cleanup", """
+def cleanup():
+    try:
+        return 3
+    finally:
+        return 2
+""", level)
+        self.assertEquals(2, cleanup())
+
+    @at_each_optimization_level
     def test_delete_fast(self, level):
         delit = compile_for_llvm('delit', """
 def delit(x):
