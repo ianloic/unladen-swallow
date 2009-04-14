@@ -93,11 +93,6 @@ typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
 /* Forward declarations */
 static PyObject * eval_llvm_function(PyLlvmFunctionObject *, PyFrameObject *);
-#ifdef WITH_TSC
-static PyObject * call_function(PyObject ***, int, uint64*, uint64*);
-#else
-static PyObject * call_function(PyObject ***, int);
-#endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
 static PyObject * ext_do_call(PyObject *, PyObject ***, int, int, int);
@@ -2198,8 +2193,8 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 	x = call; \
 	}
 
-static PyObject *
-call_function(PyObject ***pp_stack, int oparg
+PyObject *
+_PyEval_CallFunction(PyObject ***pp_stack, int oparg
 #ifdef WITH_TSC
 		, uint64* pintr0, uint64* pintr1
 #endif

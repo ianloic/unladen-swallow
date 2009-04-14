@@ -914,7 +914,11 @@ WITH_CLEANUP ( -- )
 \ _ , CALL_FUNCTION
 CALL_FUNCTION ( #i -- )
 PyObject **sp = stack_pointer;
-x = call_function(&sp, i);
+#ifdef WITH_TSC
+x = _PyEval_CallFunction(&sp, i, &intr0, &intr1)
+#else
+x = _PyEval_CallFunction(&sp, i);
+#endif
 stack_pointer = sp;
 PUSH(x);
 if (x != NULL) NEXT();

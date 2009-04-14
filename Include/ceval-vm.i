@@ -2719,7 +2719,11 @@ vm_Cell2i(IMM_ARG(IPTOS,305397792 ),i);
 INC_IP(1);
 {
 PyObject **sp = stack_pointer;
-x = call_function(&sp, i);
+#ifdef WITH_TSC
+x = _PyEval_CallFunction(&sp, i, &intr0, &intr1);
+#else
+x = _PyEval_CallFunction(&sp, i);
+#endif
 stack_pointer = sp;
 PUSH(x);
 if (x != NULL) NEXT();
@@ -4305,7 +4309,11 @@ vm_Cell2i(IMM_ARG(IP[1],305397832 ),i);
 INC_IP(2);
 {
 PyObject **sp = stack_pointer;
-x = call_function(&sp, i);
+#ifdef WITH_TSC
+x = _PyEval_CallFunction(&sp, i, &intr0, &intr1);
+#else
+x = _PyEval_CallFunction(&sp, i);
+#endif
 stack_pointer = sp;
 PUSH(x);
 if (x != NULL) NEXT();
@@ -4364,7 +4372,11 @@ vm_Cell2i(IMM_ARG(IP[1],305397834 ),i);
 INC_IP(2);
 {
 PyObject **sp = stack_pointer;
-x = call_function(&sp, i);
+#ifdef WITH_TSC
+x = _PyEval_CallFunction(&sp, i, &intr0, &intr1);
+#else
+x = _PyEval_CallFunction(&sp, i);
+#endif
 stack_pointer = sp;
 PUSH(x);
 if (x != NULL) NEXT();
@@ -4423,7 +4435,11 @@ vm_Cell2i(IMM_ARG(IP[2],305397837 ),i);
 INC_IP(3);
 {
 PyObject **sp = stack_pointer;
-x = call_function(&sp, i);
+#ifdef WITH_TSC
+x = _PyEval_CallFunction(&sp, i, &intr0, &intr1);
+#else
+x = _PyEval_CallFunction(&sp, i);
+#endif
 stack_pointer = sp;
 PUSH(x);
 if (x != NULL) NEXT();

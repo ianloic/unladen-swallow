@@ -19,6 +19,13 @@ PyAPI_FUNC(PyObject *) PyEval_EvalCodeEx(PyCodeObject *co,
 
 PyAPI_FUNC(PyObject *) _PyEval_CallTracing(PyObject *func, PyObject *args);
 
+#ifdef WITH_TSC
+PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int,
+                                            uint64*, uint64*);
+#else
+PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

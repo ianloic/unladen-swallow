@@ -788,6 +788,38 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
 }
 
 void
+LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
+{
+#ifdef WITH_TSC
+// XXX(twouters): figure out how to support WITH_TSC in LLVM.
+#error WITH_TSC builds are unsupported at this time.
+#endif
+    Function *call_function = GetGlobalFunction<
+        PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
+
+    // ceval.cc passes a copy of the stack pointer to _PyEval_CallFunction,
+    // so we do the same thing.
+    // XXX(twouters): find out if this is really necessary; we just end up
+    // using the stack pointer anyway, even in the error case.
+    Value *temp_stack_pointer_addr = builder().CreateAlloca(
+        TypeBuilder<PyObject**>::cache(this->module_),
+        0, "CALL_FUNCTION_stack_pointer_addr");
+    builder().CreateStore(
+        builder().CreateLoad(this->stack_pointer_addr_),
+        temp_stack_pointer_addr);
+    Value *result = builder().CreateCall2(
+        call_function,
+        temp_stack_pointer_addr,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
+        "CALL_FUNCTION_result");
+    builder().CreateStore(
+        builder().CreateLoad(temp_stack_pointer_addr),
+        this->stack_pointer_addr_);
+    PropagateExceptionOnNull(result);
+    Push(result);
+}  
+
+void
 LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {

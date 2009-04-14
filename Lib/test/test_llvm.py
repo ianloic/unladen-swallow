@@ -296,6 +296,23 @@ def reuseit(x):
 """, level)
         self.assertEquals(reuseit(1), 3)
 
+    @at_each_optimization_level
+    def test_call_function(self, level):
+        f1 = compile_for_llvm("f1", "def f1(x): return x()", level)
+        self.assertEquals(f1(lambda: 5), 5)
+        def raise_exc():
+            raise ValueError
+        self.assertRaises(ValueError, f1, raise_exc)
+
+        f2 = compile_for_llvm("f2", "def f2(x, y, z): return x(y, 2, z)",
+                              level)
+        self.assertEquals(f2(lambda *args: args, 1, 3), (1, 2, 3))
+
+        f3 = compile_for_llvm("f3", "def f3(x, y, z): return x(y(z()))",
+                              level)
+        self.assertEquals(f3(lambda x: x+1, lambda x: x+2, lambda: 0), 3)
+
+
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in
 # test_basic_arithmetic when running with -Qnew.
