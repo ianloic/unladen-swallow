@@ -820,7 +820,7 @@ LlvmFunctionBuilder::DELETE_FAST(int index)
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
                          index, true /* signed */));
-    Return(Constant::getNullValue(function()->getReturnType()));
+    PropagateException();
 
     builder().SetInsertPoint(success);
     builder().CreateStore(
