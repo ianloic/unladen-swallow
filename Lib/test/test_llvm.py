@@ -312,6 +312,49 @@ def reuseit(x):
                               level)
         self.assertEquals(f3(lambda x: x+1, lambda x: x+2, lambda: 0), 3)
 
+    @at_each_optimization_level
+    def test_load_global(self, level):
+        testvalue = 'test global value'
+        loadglobal = compile_for_llvm('loadglobal',
+                                      'def loadglobal(): return testvalue',
+                                      level)
+        loadglobal.func_globals['testvalue'] = testvalue
+        self.assertEquals(loadglobal(), testvalue)
+
+        loadbuiltin = compile_for_llvm('loadbuiltin',
+                                       'def loadbuiltin(): return str',
+                                       level)
+        self.assertEquals(loadbuiltin(), str)
+
+        nosuchglobal = compile_for_llvm('nosuchglobal', '''
+def nosuchglobal():
+    return there_better_be_no_such_global
+''', level)
+        self.assertRaises(NameError, nosuchglobal)
+
+    @at_each_optimization_level
+    def test_store_global(self, level):
+        setglobal = compile_for_llvm('setglobal', '''
+def setglobal(x):
+    global _test_global
+    _test_global = x
+''', level)
+        testvalue = "test global value"
+        self.assertTrue('_test_global' not in setglobal.func_globals)
+        setglobal(testvalue)
+        self.assertTrue('_test_global' in setglobal.func_globals)
+        self.assertEquals(setglobal.func_globals['_test_global'], testvalue)
+
+        delglobal = compile_for_llvm('delglobal', '''
+def delglobal():
+    global _test_global
+    del _test_global
+''', level)
+        delglobal.func_globals['_test_global'] = 'test global value'
+        self.assertTrue('_test_global' in delglobal.func_globals)
+        delglobal()
+        self.assertTrue('_test_global' not in delglobal.func_globals)
+
 
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in
@@ -1055,48 +1098,6 @@ class ComparisonTests(unittest.TestCase):
             "argument of type 'int' is not iterable",
             not_in, 1, 1)
 
-    @at_each_optimization_level
-    def test_load_global(self, level):
-        testvalue = 'test global value'
-        loadglobal = compile_for_llvm('loadglobal',
-                                      'def loadglobal(): return testvalue',
-                                      level)
-        loadglobal.func_globals['testvalue'] = testvalue
-        self.assertEquals(loadglobal(), testvalue)
-
-        loadbuiltin = compile_for_llvm('loadbuiltin',
-                                       'def loadbuiltin(): return str',
-                                       level)
-        self.assertEquals(loadbuiltin(), str)
-
-        nosuchglobal = compile_for_llvm('nosuchglobal', '''
-def nosuchglobal():
-    return there_better_be_no_such_global
-''', level)
-        self.assertRaises(NameError, nosuchglobal)
-
-    @at_each_optimization_level
-    def test_store_global(self, level):
-        setglobal = compile_for_llvm('setglobal', '''
-def setglobal(x):
-    global _test_global
-    _test_global = x
-''', level)
-        testvalue = "test global value"
-        self.assertTrue('_test_global' not in setglobal.func_globals)
-        setglobal(testvalue)
-        self.assertTrue('_test_global' in setglobal.func_globals)
-        self.assertEquals(setglobal.func_globals['_test_global'], testvalue)
-
-        delglobal = compile_for_llvm('delglobal', '''
-def delglobal():
-    global _test_global
-    del _test_global
-''', level)
-        delglobal.func_globals['_test_global'] = 'test global value'
-        self.assertTrue('_test_global' in delglobal.func_globals)
-        delglobal()
-        self.assertTrue('_test_global' not in delglobal.func_globals)
 
 class LiteralsTests(unittest.TestCase):
     @at_each_optimization_level
