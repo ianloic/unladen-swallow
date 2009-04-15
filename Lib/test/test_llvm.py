@@ -355,6 +355,135 @@ def delglobal():
         delglobal()
         self.assertTrue('_test_global' not in delglobal.func_globals)
 
+    @at_each_optimization_level
+    def test_simple_if_stmt(self, level):
+        simple_if = compile_for_llvm("simple_if", """
+def simple_if(x):
+    if x:
+        return "true"
+""", level)
+        self.assertEquals(simple_if(True), "true")
+        self.assertEquals(simple_if(False), None)
+
+        simple_if_else = compile_for_llvm("simple_if_else", """
+def simple_if_else(x):
+    if x:
+        return "true"
+    else:
+        return "false"
+""", level)
+        self.assertEquals(simple_if_else("not false"), "true")
+        self.assertEquals(simple_if_else(""), "false")
+
+    @at_each_optimization_level
+    def test_if_stmt_exceptions(self, level):
+        if_exception = compile_for_llvm("if_exception", """
+def if_exception(x):
+    if x:
+        return 1
+""", level)
+        class Unboolable(object):
+            def __nonzero__(self):
+                raise RuntimeError
+        self.assertRaises(RuntimeError, if_exception, Unboolable())
+
+    @at_each_optimization_level
+    def test_complex_if(self, level):
+        complex_if = compile_for_llvm("complex_if", """
+def complex_if(x, y, z):
+    if x:
+        if y:
+            return 1
+        else:
+            if z:
+                return 2
+            return 1 / 0
+    else:
+        return 3
+""", level)
+        self.assertEquals(complex_if(True, True, False), 1)
+        self.assertEquals(complex_if(True, False, True), 2)
+        self.assertEquals(complex_if(False, True, True), 3)
+        self.assertRaises(ZeroDivisionError, complex_if, True, False, False)
+
+# TODO(twouters): assert needs LOAD_GLOBAL and RAISE_VARARGS
+##     @at_each_optimization_level
+##     def test_assert(self, level):
+##         f = comile_for_llvm("f", "def f(x): assert x", level)
+##         self.assertEquals(f(1), None)
+##         self.assertRaises(AssertionError, f, 0)
+
+    @at_each_optimization_level
+    def test_and(self, level):
+        and1 = compile_for_llvm("and1",
+                                "def and1(x, y): return x and y", level)
+        self.assertEquals(and1("x", "y"), "y")
+        self.assertEquals(and1((), "y"), ())
+        self.assertEquals(and1((), ""), ())
+
+        and2 = compile_for_llvm("and2",
+                                "def and2(x, y): return x+1 and y+1",
+                                level)
+        self.assertEquals(and2(-1, "5"), 0)
+        self.assertRaises(TypeError, and2, "5", 5)
+        self.assertRaises(TypeError, and2,  5, "5")
+
+    @at_each_optimization_level
+    def test_or(self, level):
+        or1 = compile_for_llvm("or1", "def or1(x, y): return x or y", level)
+        self.assertEquals(or1("x", "y"), "x")
+        self.assertEquals(or1((), "y"), "y")
+        self.assertEquals(or1((), ""), "")
+
+        or2 = compile_for_llvm("or2",
+                               "def or2(x, y): return x+1 or y+1", level)
+        self.assertEquals(or2(5, "5"), 6)
+        self.assertRaises(TypeError, or2, "5", 5)
+        self.assertRaises(TypeError, or2, -1, "5")
+
+    @at_each_optimization_level
+    def test_complex_or(self, level):
+        complex_or = compile_for_llvm('complex_or', '''
+def complex_or(a, b, c):
+    return a or b or c
+''', level)
+        self.assertEquals(complex_or(1, 2, 0), 1)
+        self.assertEquals(complex_or(1, 2, 3), 1)
+        self.assertEquals(complex_or(3, 0, 0), 3)
+        self.assertEquals(complex_or(0, 3, 0), 3)
+        self.assertEquals(complex_or(0, 0, 1), 1)
+        self.assertEquals(complex_or(0, 0, 0), 0)
+
+        complex_or_and = compile_for_llvm('complex_or_and', '''
+def complex_or_and(a, b, c):
+    return a or b and c
+''', level)
+        self.assertEquals(complex_or_and(3, 0, 0), 3)
+        self.assertEquals(complex_or_and("", 3, 0), 0)
+        self.assertEquals(complex_or_and("", 0, 1), 0)
+        self.assertEquals(complex_or_and(0, 3, 1), 1)
+
+    @at_each_optimization_level
+    def test_complex_and(self, level):
+        complex_and = compile_for_llvm('complex_and', '''
+def complex_and(a, b, c):
+    return a and b and c
+''', level)
+        self.assertEquals(complex_and(3, 0, ""), 0)
+        self.assertEquals(complex_and(3, 2, 0), 0)
+        self.assertEquals(complex_and(3, 2, 1), 1)
+        self.assertEquals(complex_and(0, 3, 2), 0)
+        self.assertEquals(complex_and(3, 0, 2), 0)
+
+        complex_and_or = compile_for_llvm('complex_and_or', '''
+def complex_and_or(a, b, c):
+    return a and b or c
+''', level)
+        self.assertEquals(complex_and_or(3, "", 0), 0)
+        self.assertEquals(complex_and_or(1, 3, 0), 3)
+        self.assertEquals(complex_and_or(1, 3, 2), 3)
+        self.assertEquals(complex_and_or(0, 3, 1), 1)
+
 
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in

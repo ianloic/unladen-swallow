@@ -13,6 +13,7 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
+#include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/Module.h"
 #include "llvm/Type.h"
@@ -478,6 +479,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->frame_->setName("frame");
 
     builder().SetInsertPoint(BasicBlock::Create("entry", function()));
+    // CreateAllocaInEntryBlock will insert alloca's here, before
+    // any other instructions in the 'entry' block.
+
     this->unwind_block_ = BasicBlock::Create("unwind_block", function());
 
     this->stack_pointer_addr_ = builder().CreateAlloca(
@@ -719,6 +723,20 @@ LlvmFunctionBuilder::PopAndDecrefTo(Value *target_stack_pointer)
     builder().SetInsertPoint(pop_done);
 }
 
+Value *
+LlvmFunctionBuilder::CreateAllocaInEntryBlock(
+    const Type *alloca_type, Value *array_size, const char *name="")
+{
+    // In order for LLVM to optimize alloca's, we should emit alloca
+    // instructions in the function entry block. We can get at the block
+    // with function()->begin(), but it will already have a 'br' instruction
+    // at the end. Instantiating the AllocaInst class directly, we pass it
+    // the begin() iterator of the entry block, causing it to insert itself
+    // right before the first instruction in the block.
+    return new llvm::AllocaInst(alloca_type, array_size, name,
+                                function()->begin()->begin());
+}
+
 void
 LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
 {
@@ -829,7 +847,7 @@ LlvmFunctionBuilder::STORE_GLOBAL(int name_index)
         "STORE_GLOBAL_result");
     DecRef(value);
     PropagateExceptionOnNonZero(result);
-}    
+}
 
 void
 LlvmFunctionBuilder::DELETE_GLOBAL(int name_index)
@@ -852,7 +870,7 @@ LlvmFunctionBuilder::DELETE_GLOBAL(int name_index)
     PropagateException();
 
     builder().SetInsertPoint(success);
-}    
+}
 
 void
 LlvmFunctionBuilder::LOAD_FAST(int index)
@@ -897,7 +915,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     // so we do the same thing.
     // XXX(twouters): find out if this is really necessary; we just end up
     // using the stack pointer anyway, even in the error case.
-    Value *temp_stack_pointer_addr = builder().CreateAlloca(
+    Value *temp_stack_pointer_addr = CreateAllocaInEntryBlock(
         TypeBuilder<PyObject**>::cache(this->module_),
         0, "CALL_FUNCTION_stack_pointer_addr");
     builder().CreateStore(
@@ -920,6 +938,63 @@ LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {
     builder().CreateBr(target);
+}
+
+void
+LlvmFunctionBuilder::POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
+                                       llvm::BasicBlock *fallthrough)
+{
+    Value *test_value = Pop();
+    Value *is_true = IsPythonTrue(test_value);
+    builder().CreateCondBr(is_true, fallthrough, target);
+}
+
+void
+LlvmFunctionBuilder::POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
+                                      llvm::BasicBlock *fallthrough)
+{
+    Value *test_value = Pop();
+    Value *is_true = IsPythonTrue(test_value);
+    builder().CreateCondBr(is_true, target, fallthrough);
+}
+
+void
+LlvmFunctionBuilder::JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
+                                          llvm::BasicBlock *fallthrough)
+{
+    BasicBlock *true_path =
+        BasicBlock::Create("JUMP_IF_FALSE_OR_POP_pop", function());
+    Value *test_value = Pop();
+    Push(test_value);
+    // IsPythonTrue() will steal the reference to test_value, so make sure
+    // the stack owns one too.
+    IncRef(test_value);
+    Value *is_true = IsPythonTrue(test_value);
+    builder().CreateCondBr(is_true, true_path, target);
+    builder().SetInsertPoint(true_path);
+    test_value = Pop();
+    DecRef(test_value);
+    builder().CreateBr(fallthrough);
+
+}
+
+void
+LlvmFunctionBuilder::JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
+                                         llvm::BasicBlock *fallthrough)
+{
+    BasicBlock *false_path =
+        BasicBlock::Create("JUMP_IF_TRUE_OR_POP_pop", function());
+    Value *test_value = Pop();
+    Push(test_value);
+    // IsPythonTrue() will steal the reference to test_value, so make sure
+    // the stack owns one too.
+    IncRef(test_value);
+    Value *is_true = IsPythonTrue(test_value);
+    builder().CreateCondBr(is_true, target, false_path);
+    builder().SetInsertPoint(false_path);
+    test_value = Pop();
+    DecRef(test_value);
+    builder().CreateBr(fallthrough);
 }
 
 void
@@ -1289,14 +1364,8 @@ void
 LlvmFunctionBuilder::UNARY_NOT()
 {
     Value *value = Pop();
-    Function *pyobject_istrue =
-        GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
-    Value *result = builder().CreateCall(pyobject_istrue, value,
-                                         "UNARY_NOT_obj_as_bool");
-    DecRef(value);
-    PropagateExceptionOnNegative(result);
     Value *retval = builder().CreateSelect(
-        IsNonZero(result),
+        IsPythonTrue(value),
         GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
         GetGlobalVariable<PyObject>("_Py_TrueStruct"),
         "UNARY_NOT_result");
@@ -1805,6 +1874,54 @@ LlvmFunctionBuilder::LookupName(int name_index)
             this->names_, ConstantInt::get(Type::Int32Ty, name_index),
             "constant_name"));
     return name;
+}
+
+llvm::Value *
+LlvmFunctionBuilder::IsPythonTrue(Value *value)
+{
+    BasicBlock *not_py_true =
+        BasicBlock::Create("IsPythonTrue_is_not_PyTrue", function());
+    BasicBlock *not_py_false =
+        BasicBlock::Create("IsPythonTrue_is_not_PyFalse", function());
+    BasicBlock *decref_value =
+        BasicBlock::Create("IsPythonTrue_decref_value", function());
+    BasicBlock *done =
+        BasicBlock::Create("IsPythonTrue_done", function());
+
+    Value *result_addr =
+        CreateAllocaInEntryBlock(Type::Int1Ty, NULL, "IsPythonTrue_result");
+    Value *py_false = GetGlobalVariable<PyObject>("_Py_ZeroStruct");
+    Value *py_true = GetGlobalVariable<PyObject>("_Py_TrueStruct");
+
+    Value *is_PyTrue = builder().CreateICmpEQ(
+        py_true, value, "IsPythonTrue_is_PyTrue");
+    builder().CreateStore(is_PyTrue, result_addr);
+    builder().CreateCondBr(is_PyTrue, decref_value, not_py_true);
+
+    builder().SetInsertPoint(not_py_true);
+    Value *is_not_PyFalse = builder().CreateICmpNE(
+        py_false, value, "IsPythonTrue_is_PyFalse");
+    builder().CreateStore(is_not_PyFalse, result_addr);
+    builder().CreateCondBr(is_not_PyFalse, not_py_false, decref_value);
+
+    builder().SetInsertPoint(not_py_false);
+    Function *pyobject_istrue =
+        GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
+    Value *istrue_result = builder().CreateCall(
+        pyobject_istrue, value, "PyObject_IsTrue_result");
+    DecRef(value);
+    PropagateExceptionOnNegative(istrue_result);
+    builder().CreateStore(
+        IsPositive(istrue_result),
+        result_addr);
+    builder().CreateBr(done);
+
+    builder().SetInsertPoint(decref_value);
+    DecRef(value);
+    builder().CreateBr(done);
+
+    builder().SetInsertPoint(done);
+    return builder().CreateLoad(result_addr);
 }
 
 }  // namespace py

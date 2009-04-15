@@ -49,6 +49,15 @@ public:
     }
     void JUMP_ABSOLUTE(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
 
+    void POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
+                           llvm::BasicBlock *fallthrough);
+    void POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
+                          llvm::BasicBlock *fallthrough);
+    void JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
+                             llvm::BasicBlock *fallthrough);
+    void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
+                             llvm::BasicBlock *fallthrough);
+
     void RETURN_VALUE();
 
     void DUP_TOP_TWO();
@@ -158,10 +167,6 @@ public:
     UNIMPLEMENTED_I(MAKE_CLOSURE)
     UNIMPLEMENTED_I(UNPACK_SEQUENCE)
 
-    UNIMPLEMENTED_J(POP_JUMP_IF_FALSE);
-    UNIMPLEMENTED_J(POP_JUMP_IF_TRUE);
-    UNIMPLEMENTED_J(JUMP_IF_FALSE_OR_POP);
-    UNIMPLEMENTED_J(JUMP_IF_TRUE_OR_POP);
     UNIMPLEMENTED_J(CONTINUE_LOOP);
     UNIMPLEMENTED_J(SETUP_EXCEPT);
 
@@ -231,6 +236,9 @@ private:
     llvm::Value *IsNonZero(llvm::Value *value);
     // Returns an i1, true if value is a positive (>0) integer.
     llvm::Value *IsPositive(llvm::Value *value);
+    // Returns an i1, true if value is a PyObject considered true.
+    // Steals the reference to value.
+    llvm::Value *IsPythonTrue(llvm::Value *value);
     // Returns an i1, true if value is an instance of the class
     // represented by the flag argument.  flag should be something
     // like Py_TPFLAGS_INT_SUBCLASS.
@@ -255,6 +263,14 @@ private:
     // Only for use in the constructor: Fills in the unwind block. Has
     // no effect on the IRBuilder's current insertion block.
     void FillUnwindBlock();
+
+    // Create an alloca in the entry block, so that LLVM can optimize
+    // it more easily, and return the resulting address. The signature
+    // matches IRBuilder.CreateAlloca()'s.
+    llvm::Value *CreateAllocaInEntryBlock(
+        const llvm::Type *alloca_type,
+        llvm::Value *array_size,
+        const char *name);
 
     // Helper methods for binary and unary operators, passing the name
     // of the Python/C API function that implements the operation.
