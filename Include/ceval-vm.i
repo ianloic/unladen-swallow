@@ -25,10 +25,7 @@ stack_pointer += 1;
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -1681,11 +1678,7 @@ why = WHY_EXCEPTION;
 if (PyErr_Occurred())
         ERROR();
 if (i < PyTuple_GET_SIZE(co->co_cellvars)) {
-        a1 = PyTuple_GET_ITEM(co->co_cellvars, i);
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                a1);
+        _PyEval_RaiseForUnboundLocal(f, i);
 } else {
         a1 = PyTuple_GET_ITEM(
                 co->co_freevars,
@@ -2173,10 +2166,7 @@ if (x != NULL) {
         SETLOCAL(i, NULL);
         NEXT();
 }
-format_exc_check_arg(
-        PyExc_UnboundLocalError,
-        UNBOUNDLOCAL_ERROR_MSG,
-        PyTuple_GetItem(co->co_varnames, i));
+_PyEval_RaiseForUnboundLocal(f, i);
 why = WHY_EXCEPTION;
 ERROR();
 }
@@ -2908,10 +2898,7 @@ INC_IP(2);
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -2950,10 +2937,7 @@ stack_pointer += 2;
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -3009,10 +2993,7 @@ stack_pointer += 2;
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -3040,10 +3021,7 @@ INC_IP(2);
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -3081,10 +3059,7 @@ stack_pointer += 1;
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -4204,10 +4179,7 @@ INC_IP(2);
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -4253,10 +4225,7 @@ INC_IP(1);
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;
@@ -4342,10 +4311,7 @@ stack_pointer += 1;
 {
 x = a = GETLOCAL(i);
 if (a == NULL) {
-        format_exc_check_arg(
-                PyExc_UnboundLocalError,
-                UNBOUNDLOCAL_ERROR_MSG,
-                PyTuple_GetItem(co->co_varnames, i));
+        _PyEval_RaiseForUnboundLocal(f, i);
         why = WHY_EXCEPTION;
         /* On exception, make sure the stack is valid. */
         have_error = 1;

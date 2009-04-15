@@ -487,6 +487,15 @@ _Py_CheckRecursiveCall(char *where)
 	return 0;
 }
 
+extern "C" void
+_PyEval_RaiseForUnboundLocal(PyFrameObject *frame, int var_index)
+{
+	format_exc_check_arg(
+		PyExc_UnboundLocalError,
+		UNBOUNDLOCAL_ERROR_MSG,
+		PyTuple_GetItem(frame->f_code->co_varnames, var_index));
+}
+
 /* Status code for main loop (reason for stack unwind) */
 enum why_code {
 		WHY_NOT =	0x0001,	/* No error */
@@ -2758,15 +2767,6 @@ cmp_outcome(int op, register PyObject *v, register PyObject *w)
 	v = res ? Py_True : Py_False;
 	Py_INCREF(v);
 	return v;
-}
-
-extern "C" void
-_PyEval_RaiseForUnboundLocal(PyFrameObject *frame, int var_index)
-{
-	format_exc_check_arg(
-		PyExc_UnboundLocalError,
-		UNBOUNDLOCAL_ERROR_MSG,
-		PyTuple_GetItem(frame->f_code->co_varnames, var_index));
 }
 
 void
