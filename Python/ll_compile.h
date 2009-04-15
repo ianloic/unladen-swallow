@@ -99,6 +99,10 @@ public:
     void BUILD_LIST(int size);
     void BUILD_MAP(int size);
 
+    void LOAD_GLOBAL(int index);
+    void STORE_GLOBAL(int index);
+    void DELETE_GLOBAL(int index);
+
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
         InsertAbort(#NAME); \
@@ -146,9 +150,6 @@ public:
     UNIMPLEMENTED_I(DELETE_ATTR)
     UNIMPLEMENTED_I(LOAD_DEREF);
     UNIMPLEMENTED_I(STORE_DEREF);
-    UNIMPLEMENTED_I(LOAD_GLOBAL);
-    UNIMPLEMENTED_I(STORE_GLOBAL);
-    UNIMPLEMENTED_I(DELETE_GLOBAL);
     UNIMPLEMENTED_I(LOAD_NAME);
     UNIMPLEMENTED_I(STORE_NAME);
     UNIMPLEMENTED_I(DELETE_NAME);
@@ -203,6 +204,10 @@ private:
     // a call to PyFrame_BlockSetup() with the block type, handler
     // index, and current stack level.
     void CallBlockSetup(int block_type, llvm::BasicBlock *handler);
+
+    // Look up a name in the function's names list, returning the
+    // PyStringObject for the name_index.
+    llvm::Value *LookupName(int name_index);
 
     /// Inserts a call that will print opcode_name and abort the
     /// program when it's reached. This is useful for not-yet-defined
@@ -305,6 +310,8 @@ private:
     llvm::Value *stack_pointer_addr_;
     llvm::Value *varnames_;
     llvm::Value *names_;
+    llvm::Value *globals_;
+    llvm::Value *builtins_;
     llvm::Value *consts_;
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;

@@ -1623,10 +1623,7 @@ if (x == NULL) {
         x = PyDict_GetItem(f->f_builtins, a1);
         if (x == NULL) {
         load_global_error:
-                format_exc_check_arg(
-                        PyExc_NameError,
-                        GLOBAL_NAME_ERROR_MSG,
-                        a1);
+                _PyEval_RaiseForGlobalNameError(a1);
                 why = WHY_EXCEPTION;
                 ERROR();
         }
@@ -2151,7 +2148,7 @@ INC_IP(1);
 {
 a1 = GETITEM(names, i);
 if ((err = PyDict_DelItem(f->f_globals, a1)) != 0) {
-        format_exc_check_arg(PyExc_NameError, GLOBAL_NAME_ERROR_MSG, a1);
+        _PyEval_RaiseForGlobalNameError(a1);
         why = WHY_EXCEPTION;
 }
 }
