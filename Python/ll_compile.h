@@ -41,6 +41,7 @@ public:
     void FOR_ITER(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void POP_BLOCK();
 
+    void SETUP_EXCEPT(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void SETUP_FINALLY(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void END_FINALLY();
 
@@ -60,6 +61,8 @@ public:
 
     void RETURN_VALUE();
 
+    void POP_TOP();
+    void DUP_TOP();
     void DUP_TOP_TWO();
     void ROT_THREE();
 
@@ -125,8 +128,6 @@ public:
         InsertAbort(#NAME); \
     }
 
-    UNIMPLEMENTED(POP_TOP)
-    UNIMPLEMENTED(DUP_TOP)
     UNIMPLEMENTED(DUP_TOP_THREE)
     UNIMPLEMENTED(ROT_TWO)
     UNIMPLEMENTED(ROT_FOUR)
@@ -168,7 +169,6 @@ public:
     UNIMPLEMENTED_I(UNPACK_SEQUENCE)
 
     UNIMPLEMENTED_J(CONTINUE_LOOP);
-    UNIMPLEMENTED_J(SETUP_EXCEPT);
 
 #undef UNIMPLEMENTED
 #undef UNIMPLEMENTED_I

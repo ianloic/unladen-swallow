@@ -119,7 +119,6 @@ static PyObject * apply_slice(PyObject *, PyObject *, PyObject *);
 static int assign_slice(PyObject *, PyObject *,
 			PyObject *, PyObject *);
 static PyObject * cmp_outcome(int, PyObject *, PyObject *);
-static void set_exc_info(PyThreadState *, PyObject *, PyObject *, PyObject *);
 static void reset_exc_info(PyThreadState *);
 static void format_exc_check_arg(PyObject *, char *, PyObject *);
 static PyObject * string_concatenate(PyObject *, PyObject *,
@@ -1134,6 +1133,9 @@ fast_block_end:
 		    (b->b_type == SETUP_EXCEPT &&
 		     why == WHY_EXCEPTION)) {
 			if (why == WHY_EXCEPTION) {
+				/* Keep this in sync with
+				   _PyLlvm_WrapEnterExceptOrFinally in
+				   ll_compile.cc. */
 				PyObject *exc, *val, *tb;
 				PyErr_Fetch(&exc, &val, &tb);
 				if (val == NULL) {
@@ -1148,8 +1150,8 @@ fast_block_end:
 				if (b->b_type == SETUP_EXCEPT) {
 					PyErr_NormalizeException(
 						&exc, &val, &tb);
-					set_exc_info(tstate,
-						     exc, val, tb);
+					_PyEval_SetExcInfo(tstate,
+							   exc, val, tb);
 				}
 				if (tb == NULL) {
 					Py_INCREF(Py_None);
@@ -1495,7 +1497,7 @@ fail: /* Jump here from prelude on failure */
 }
 
 
-/* Implementation notes for set_exc_info() and reset_exc_info():
+/* Implementation notes for _PyEval_SetExcInfo() and reset_exc_info():
 
 - Below, 'exc_ZZZ' stands for 'exc_type', 'exc_value' and
   'exc_traceback'.  These always travel together.
@@ -1505,8 +1507,9 @@ fail: /* Jump here from prelude on failure */
 
 - Once an exception is caught by an except clause, it is transferred
   from tstate->curexc_ZZZ to tstate->exc_ZZZ, from which sys.exc_info()
-  can pick it up.  This is the primary task of set_exc_info().
-  XXX That can't be right:  set_exc_info() doesn't look at tstate->curexc_ZZZ.
+  can pick it up.  This is the primary task of _PyEval_SetExcInfo().
+  XXX That can't be right: _PyEval_SetExcInfo() doesn't look at
+  tstate->curexc_ZZZ.
 
 - Now let me explain the complicated dance with frame->f_exc_ZZZ.
 
@@ -1547,7 +1550,7 @@ fail: /* Jump here from prelude on failure */
 
   The reset_exc_info() function in ceval.c restores the tstate->exc_ZZZ
   variables to what they were before the current frame was called.  The
-  set_exc_info() function saves them on the frame so that
+  _PyEval_SetExcInfo() function saves them on the frame so that
   reset_exc_info() can restore them.  The invariant is that
   frame->f_exc_ZZZ is NULL iff the current frame never caught an
   exception (where "catching" an exception applies only to successful
@@ -1557,9 +1560,9 @@ fail: /* Jump here from prelude on failure */
 
 */
 
-static void
-set_exc_info(PyThreadState *tstate,
-	     PyObject *type, PyObject *value, PyObject *tb)
+void
+_PyEval_SetExcInfo(PyThreadState *tstate,
+		   PyObject *type, PyObject *value, PyObject *tb)
 {
 	PyFrameObject *frame = tstate->frame;
 	PyObject *tmp_type, *tmp_value, *tmp_tb;

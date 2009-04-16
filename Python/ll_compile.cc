@@ -448,6 +448,28 @@ public:
 };
 typedef TypeBuilder<PyFrameObject> FrameTy;
 
+// This type collects the set of three values that constitute an
+// exception.  So far, it's only used for
+// _PyLlvm_WrapEnterExceptOrFinally().
+struct ExcInfo {
+    PyObject *exc;
+    PyObject *val;
+    PyObject *tb;
+};
+
+template<> class TypeBuilder<ExcInfo> {
+public:
+    static const Type *cache(Module *module) {
+        const Type *pyobject_p = TypeBuilder<PyObject *>::cache(module);
+        return llvm::StructType::get(pyobject_p, pyobject_p, pyobject_p, NULL);
+    }
+    enum Fields {
+        FIELD_EXC,
+        FIELD_VAL,
+        FIELD_TB,
+    };
+};
+
 static const FunctionType *
 get_function_type(Module *module)
 {
@@ -627,8 +649,14 @@ LlvmFunctionBuilder::FillUnwindBlock()
                                          "block_level");
         PopAndDecrefTo(builder().CreateGEP(this->stack_bottom_, pop_to_level));
 
+        BasicBlock *handle_except =
+            BasicBlock::Create("handle_except", function());
         BasicBlock *handle_finally =
             BasicBlock::Create("handle_finally", function());
+        BasicBlock *push_exception =
+            BasicBlock::Create("push_exception", function());
+        BasicBlock *goto_block_handler =
+            BasicBlock::Create("goto_block_handler", function());
 
         llvm::SwitchInst *block_type_switch =
             builder().CreateSwitch(block_type, unreachable_block, 3);
@@ -638,24 +666,57 @@ LlvmFunctionBuilder::FillUnwindBlock()
             unwind_loop_header);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_EXCEPT),
-            // TODO(jyasskin): Handle SETUP_EXCEPT with UNWIND_EXCEPTION.
-            unwind_loop_header);
+            handle_except);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_FINALLY),
             handle_finally);
 
+        builder().SetInsertPoint(handle_except);
+        // We only consider visiting except blocks when an exception
+        // is being unwound.
+        Value *unwinding_exception = builder().CreateICmpEQ(
+            unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+            "currently_unwinding_exception");
+        builder().CreateCondBr(unwinding_exception,
+                               push_exception, unwind_loop_header);
+
+        builder().SetInsertPoint(push_exception);
+        // We need an alloca here so _PyLlvm_WrapEnterExceptOrFinally
+        // can return into it.  This alloca _won't_ be optimized by
+        // mem2reg because its address is taken.
+        Value *exc_info = CreateAllocaInEntryBlock(
+            TypeBuilder<ExcInfo>::cache(this->module_), NULL, "exc_info");
+        builder().CreateCall2(
+            GetGlobalFunction<void(ExcInfo*, int)>(
+                "_PyLlvm_WrapEnterExceptOrFinally"),
+            exc_info,
+            block_type);
+        Push(builder().CreateLoad(
+                 builder().CreateStructGEP(
+                     exc_info, TypeBuilder<ExcInfo>::FIELD_TB)));
+        Push(builder().CreateLoad(
+                 builder().CreateStructGEP(
+                     exc_info, TypeBuilder<ExcInfo>::FIELD_VAL)));
+        Push(builder().CreateLoad(
+                 builder().CreateStructGEP(
+                     exc_info, TypeBuilder<ExcInfo>::FIELD_EXC)));
+        builder().CreateBr(goto_block_handler);
+
         builder().SetInsertPoint(handle_finally);
         // Jump to the finally block, with the stack prepared for
-        // END_FINALLY to continue unwinding.  TODO(jyasskin): Push
-        // exceptions onto the stack.
+        // END_FINALLY to continue unwinding.
 
-        // When unwinding for a return or continue, we have to save
-        // the return value or continue target onto the stack.
         BasicBlock *push_retval = BasicBlock::Create("push_retval", function());
         BasicBlock *handle_finally_end =
             BasicBlock::Create("handle_finally_end", function());
         llvm::SwitchInst *should_push_retval = builder().CreateSwitch(
             unwind_reason, handle_finally_end, 2);
+        // When unwinding for an exception, we have to save the
+        // exception onto the stack.
+        should_push_retval->addCase(
+            ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION), push_exception);
+        // When unwinding for a return or continue, we have to save
+        // the return value or continue target onto the stack.
         should_push_retval->addCase(
             ConstantInt::get(Type::Int8Ty, UNWIND_RETURN), push_retval);
         should_push_retval->addCase(
@@ -675,15 +736,18 @@ LlvmFunctionBuilder::FillUnwindBlock()
                                  TypeBuilder<long>::cache(this->module_)),
             "unwind_reason_as_pyint");
         Push(unwind_reason_as_pyint);
-        // Clear the unwind reason while running through the finally
-        // block.  mem2reg should never actually decide to use this
+
+        FallThroughTo(goto_block_handler);
+        // Clear the unwind reason while running through the block's
+        // handler.  mem2reg should never actually decide to use this
         // value, but having it here should make such forgotten stores
         // more obvious.
         builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
                               this->unwind_reason_addr_);
         // The block's handler field holds the index of the block
-        // defining this finally.  Jump to it through the unwind
-        // switch statement defined above.
+        // defining this finally or except, or the tail of the loop we
+        // just broke out of.  Jump to it through the unwind switch
+        // statement defined above.
         Value *block_handler = builder().CreateExtractValue(
             popped_block, TypeBuilder<PyTryBlock>::FIELD_HANDLER,
             "block_handler");
@@ -777,6 +841,8 @@ LlvmFunctionBuilder::PropagateException()
         this->retval_addr_);
     builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                           this->unwind_reason_addr_);
+    // TODO(jyasskin): Arrange to call PyTraceBack_Here and, if
+    // tracing is turned on, the appropriate trace function.
     builder().CreateBr(this->unwind_block_);
 }
 
@@ -1117,6 +1183,13 @@ LlvmFunctionBuilder::POP_BLOCK()
 }
 
 void
+LlvmFunctionBuilder::SETUP_EXCEPT(llvm::BasicBlock *target,
+                                   llvm::BasicBlock *fallthrough)
+{
+    CallBlockSetup(::SETUP_EXCEPT, target);
+}
+
+void
 LlvmFunctionBuilder::SETUP_FINALLY(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {
@@ -1192,9 +1265,11 @@ LlvmFunctionBuilder::END_FINALLY()
         GetGlobalFunction<void(PyObject *, PyObject *, PyObject *)>(
             "PyErr_Restore"),
         err_type, err_value, err_traceback);
-    // TODO(jyasskin): Make sure this is the right unwind reason and
-    // jump target for the finally block's re-raise.
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_RERAISE),
+    // Logically this is an UNWIND_RERAISE, but all of the exception
+    // handling logic expects UNWIND_EXCEPTION.  The only difference
+    // in EvalFrameEx is that UNWIND_EXCEPTION calls
+    // PyTraceBack_Here(frame) and traces the exception.
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                           this->unwind_reason_addr_);
     builder().CreateBr(this->unwind_block_);
 
@@ -1371,6 +1446,21 @@ LlvmFunctionBuilder::UNARY_NOT()
         "UNARY_NOT_result");
     IncRef(retval);
     Push(retval);
+}
+
+void
+LlvmFunctionBuilder::POP_TOP()
+{
+    DecRef(Pop());
+}
+
+void
+LlvmFunctionBuilder::DUP_TOP()
+{
+    Value *first = Pop();
+    IncRef(first);
+    Push(first);
+    Push(first);
 }
 
 void
@@ -1942,6 +2032,39 @@ int
 _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
 {
     return PyExceptionClass_Check(obj) || PyString_Check(obj);
+}
+
+// Copied from the SETUP_FINALLY && WHY_EXCEPTION block in
+// fast_block_end in PyEval_EvalFrameEx().
+void
+_PyLlvm_WrapEnterExceptOrFinally(py::ExcInfo *exc_info, int block_type)
+{
+    PyThreadState *tstate = PyThreadState_GET();
+    PyErr_Fetch(&exc_info->exc, &exc_info->val, &exc_info->tb);
+    if (exc_info->val == NULL) {
+        exc_info->val = Py_None;
+        Py_INCREF(exc_info->val);
+    }
+    /* Make the raw exception data
+       available to the handler,
+       so a program can emulate the
+       Python main loop.  Don't do
+       this for 'finally'. */
+    if (block_type == SETUP_EXCEPT) {
+        PyErr_NormalizeException(
+            &exc_info->exc, &exc_info->val, &exc_info->tb);
+        _PyEval_SetExcInfo(tstate,
+                           exc_info->exc, exc_info->val, exc_info->tb);
+    }
+    if (exc_info->tb == NULL) {
+        Py_INCREF(Py_None);
+        exc_info->tb = Py_None;
+    }
+    /* Within the except or finally block,
+       PyErr_Occurred() should be false.
+       END_FINALLY will restore the
+       exception if necessary. */
+    PyErr_Clear();
 }
 
 }

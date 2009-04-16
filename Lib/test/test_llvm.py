@@ -266,6 +266,210 @@ def cleanup():
         self.assertEquals(2, cleanup())
 
     @at_each_optimization_level
+    def test_except(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        1 / 0
+    except:
+        obj["x"] = 2
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
+    def test_except_skipped_on_fallthrough(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        obj["x"] = 2
+    except:
+        obj["y"] = 3
+    return 7
+""", level)
+        obj = {}
+        self.assertEquals(7, catch(obj))
+        self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
+    def test_else_hit_on_fallthrough(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        obj["x"] = 2
+    except:
+        obj["y"] = 3
+    else:
+        obj["z"] = 4
+    return 7
+""", level)
+        obj = {}
+        self.assertEquals(7, catch(obj))
+        self.assertEquals({"x": 2, "z": 4}, obj)
+
+    @at_each_optimization_level
+    def test_else_skipped_on_catch(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        a = a
+    except:
+        obj["y"] = 3
+    else:
+        obj["z"] = 4
+    return 7
+""", level)
+        obj = {}
+        self.assertEquals(7, catch(obj))
+        self.assertEquals({"y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_raise_from_except(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        1 / 0
+    except:
+        a = a
+    obj["x"] = 2
+""", level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, catch, obj)
+        self.assertEquals({}, obj)
+
+    @at_each_optimization_level
+    def test_nested_except(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            1 / 0
+        except:
+            obj["x"] = 2
+            a = a
+    except:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_nested_except_skipped_on_fallthrough(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            1 / 0
+        except:
+            obj["x"] = 2
+    except:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
+    def test_nested_finally_doesnt_block_catch(self, level):
+        # Raise from the try.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            1 / 0
+        finally:
+            obj["x"] = 2
+    except:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+        # And raise from the finally.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            obj["x"] = 2
+        finally:
+            1 / 0
+    except:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_nested_except_goes_through_finally(self, level):
+        # Raise from the try.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            1 / 0
+        except:
+            obj["x"] = 2
+    finally:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+        # And raise from the except.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        try:
+            a = a
+        except:
+            1 / 0
+    finally:
+        obj["y"] = 3
+""", level)
+        obj = {}
+        self.assertRaises(ZeroDivisionError, catch, obj)
+        self.assertEquals({"y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_finally_in_finally(self, level):
+        # Raise from the try.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        1 / 0
+    finally:
+        try:
+            a = a
+        finally:
+            obj["x"] = 2
+""", level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, catch, obj)
+        self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
+    def test_subexception_caught_in_finally(self, level):
+        # Raise from the try.
+        catch = compile_for_llvm("catch", """
+def catch(obj):
+    try:
+        1 / 0
+    finally:
+        try:
+            a = a
+        except:
+            obj["x"] = 2
+""", level)
+        obj = {}
+        self.assertRaises(ZeroDivisionError, catch, obj)
+        self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
     def test_delete_fast(self, level):
         delit = compile_for_llvm('delit', """
 def delit(x):
@@ -483,6 +687,42 @@ def complex_and_or(a, b, c):
         self.assertEquals(complex_and_or(1, 3, 0), 3)
         self.assertEquals(complex_and_or(1, 3, 2), 3)
         self.assertEquals(complex_and_or(0, 3, 1), 1)
+
+
+class LoopExceptionInteractionTests(unittest.TestCase):
+    @at_each_optimization_level
+    def test_except_through_loop_caught(self, level):
+        nested = compile_for_llvm('nested', '''
+def nested(lst, obj):
+    try:
+        for x in lst:
+            a = a
+    except:
+        obj["x"] = 2
+    # Make sure the block stack is ok.
+    try:
+        for x in lst:
+            return x
+    finally:
+        obj["y"] = 3
+''', level)
+        obj = {}
+        self.assertEquals(1, nested([1,2,3], obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_except_through_loop_finally(self, level):
+        nested = compile_for_llvm('nested', '''
+def nested(lst, obj):
+    try:
+        for x in lst:
+            a = a
+    finally:
+        obj["x"] = 2
+''', level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, nested, [1,2,3], obj)
+        self.assertEquals({"x": 2}, obj)
 
 
 # dont_inherit will unfortunately not turn off true division when
@@ -1268,8 +1508,8 @@ class LiteralsTests(unittest.TestCase):
 
 
 def test_main():
-    run_unittest(LlvmTests, OperatorTests, OperatorRaisingTests,
-                 ComparisonTests, LiteralsTests)
+    run_unittest(LoopExceptionInteractionTests, LlvmTests, OperatorTests,
+                 OperatorRaisingTests, ComparisonTests, LiteralsTests)
 
 
 if __name__ == "__main__":
