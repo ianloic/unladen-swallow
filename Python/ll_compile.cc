@@ -1582,6 +1582,20 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
 }
 
 void
+LlvmFunctionBuilder::LIST_APPEND()
+{
+    Value *item = Pop();
+    Value *listobj = Pop();
+    Function *list_append = GetGlobalFunction<
+        int(PyObject *, PyObject *)>("PyList_Append");
+    Value *result = builder().CreateCall2(list_append, listobj, item,
+                                          "LIST_APPEND_result");
+    DecRef(listobj);
+    DecRef(item);
+    PropagateExceptionOnNonZero(result);
+}
+
+void
 LlvmFunctionBuilder::STORE_MAP()
 {
     Value *key = Pop();

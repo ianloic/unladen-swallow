@@ -988,6 +988,26 @@ def testfunc(x, results):
         self.run_and_compare(namespace['testfunc'], level,
                              expected_num_ops=3, expected_num_results=1)
 
+    @at_each_optimization_level
+    def test_listcomp(self, level):
+        listcomp = compile_for_llvm('listcomp', '''
+def listcomp(x):
+    return [ item + 1 for item in x ]
+''', level)
+        self.assertEquals(listcomp([1, 2, 3]), [2, 3, 4])
+
+        listcomp_exc = compile_for_llvm('listcomp_exc', '''
+def listcomp_exc(x):
+    return [ item + 5 for item in x ]
+''', level)
+        recorders = [OpRecorder(), OpRecorder(), OpRaiser(), OpRecorder()]
+        self.assertRaises(OpExc, listcomp_exc, recorders)
+        # Test that the last OpRecorder wasn't touched, and we didn't
+        # leak references.
+        self.assertEquals([o.ops for o in recorders],
+                          [['add'], ['add'], ['add'], []])
+
+
 class OpExc(Exception):
     def __cmp__(self, other):
         return cmp(self.args, other.args)
