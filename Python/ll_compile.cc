@@ -939,6 +939,50 @@ LlvmFunctionBuilder::DELETE_GLOBAL(int name_index)
 }
 
 void
+LlvmFunctionBuilder::LOAD_ATTR(int index)
+{
+    Value *attr = LookupName(index);
+    Value *obj = Pop();
+    Function *pyobj_getattr = GetGlobalFunction<
+        PyObject *(PyObject *, PyObject *)>("PyObject_GetAttr");
+    Value *result = builder().CreateCall2(
+        pyobj_getattr, obj, attr, "LOAD_ATTR_result");
+    DecRef(obj);
+    PropagateExceptionOnNull(result);
+    Push(result);
+}
+
+void
+LlvmFunctionBuilder::STORE_ATTR(int index)
+{
+    Value *attr = LookupName(index);
+    Value *obj = Pop();
+    Value *value = Pop();
+    Function *pyobj_setattr = GetGlobalFunction<
+        int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
+    Value *result = builder().CreateCall3(
+        pyobj_setattr, obj, attr, value, "STORE_ATTR_result");
+    DecRef(obj);
+    DecRef(value);
+    PropagateExceptionOnNonZero(result);
+}
+
+void
+LlvmFunctionBuilder::DELETE_ATTR(int index)
+{
+    Value *attr = LookupName(index);
+    Value *obj = Pop();
+    Value *value =
+        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_));
+    Function *pyobj_setattr = GetGlobalFunction<
+        int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
+    Value *result = builder().CreateCall3(
+        pyobj_setattr, obj, attr, value, "STORE_ATTR_result");
+    DecRef(obj);
+    PropagateExceptionOnNonZero(result);
+}
+
+void
 LlvmFunctionBuilder::LOAD_FAST(int index)
 {
     BasicBlock *unbound_local =

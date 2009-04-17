@@ -132,6 +132,10 @@ public:
     void STORE_GLOBAL(int index);
     void DELETE_GLOBAL(int index);
 
+    void LOAD_ATTR(int index);
+    void STORE_ATTR(int index);
+    void DELETE_ATTR(int index);
+
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
         InsertAbort(#NAME); \
@@ -156,9 +160,6 @@ public:
     UNIMPLEMENTED(WITH_CLEANUP)
     UNIMPLEMENTED(YIELD_VALUE)
 
-    UNIMPLEMENTED_I(LOAD_ATTR)
-    UNIMPLEMENTED_I(STORE_ATTR)
-    UNIMPLEMENTED_I(DELETE_ATTR)
     UNIMPLEMENTED_I(LOAD_DEREF);
     UNIMPLEMENTED_I(STORE_DEREF);
     UNIMPLEMENTED_I(LOAD_NAME);

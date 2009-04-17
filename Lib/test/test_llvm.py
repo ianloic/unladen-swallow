@@ -702,6 +702,34 @@ def complex_and_or(a, b, c):
         self.assertEquals(complex_and_or(0, 3, 1), 1)
 
     @at_each_optimization_level
+    def test_load_attr(self, level):
+        load_attr = compile_for_llvm('load_attr',
+                                     'def load_attr(o): return o.attr',
+                                     level)
+        load_attr.attr = 1
+        self.assertEquals(load_attr(load_attr), 1)
+        self.assertRaises(AttributeError, load_attr, object())
+
+    @at_each_optimization_level
+    def test_store_attr(self, level):
+        store_attr = compile_for_llvm('store_attr',
+                                      'def store_attr(o): o.attr = 2',
+                                      level)
+        store_attr(store_attr)
+        self.assertEquals(store_attr.attr, 2)
+        self.assertRaises(AttributeError, store_attr, object())
+
+    @at_each_optimization_level
+    def test_delete_attr(self, level):
+        delete_attr = compile_for_llvm('delete_attr',
+                                       'def delete_attr(o): del o.attr',
+                                       level)
+        delete_attr.attr = 3
+        delete_attr(delete_attr)
+        self.assertFalse(hasattr(delete_attr, 'attr'))
+        self.assertRaises(AttributeError, delete_attr, object())
+
+    @at_each_optimization_level
     def test_call_varargs(self, level):
         f1 = compile_for_llvm("f1", "def f1(x, args): return x(*args)",
                               level)
