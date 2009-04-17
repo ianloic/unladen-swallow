@@ -119,7 +119,7 @@ static PyObject * cmp_outcome(int, PyObject *, PyObject *);
 static void reset_exc_info(PyThreadState *);
 static void format_exc_check_arg(PyObject *, char *, PyObject *);
 static PyObject * string_concatenate(PyObject *, PyObject *,
-                                     PyFrameObject *, int, int );
+                                     PyFrameObject *, PyInst *);
 
 #define NAME_ERROR_MSG \
 	"name '%.200s' is not defined"
@@ -587,7 +587,6 @@ typedef PyObject *Obj;
 #define NEXT_P0 do { \
 		f->f_lasti = INSTR_OFFSET(); \
 		next_instr++; \
-		next_label = next_instr->opcode; \
 	} while (0)
 
 /* There are three ``kinds'' of instructions as far as dispatch is
@@ -621,7 +620,7 @@ typedef PyObject *Obj;
 			goto on_error; \
 		} \
 		if (_Py_TracingPossible) goto fast_next_opcode; \
-		goto *next_label; \
+		goto *next_instr->opcode; \
 	} while(0)
 #else  /* DYNAMIC_EXECUTION_PROFILE defined */
 /* Every instruction needs to go through the profiling code for the
@@ -698,8 +697,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #endif
 	PyObject **stack_pointer;   /* Next free slot in value stack */
 	Inst *next_instr;
-	void *next_label;  /* Caches next_instr->opcode so error
-                              conditions can override it. */
 	register enum why_code why; /* Reason for block stack unwind */
 	register int err;	/* Error status -- nonzero if error */
 	register PyObject *x;	/* Temporary objects popped off stack */
@@ -757,11 +754,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #define IPTOS           (*next_instr)
 #define INC_IP(n)       do { \
 		next_instr += (n); \
-		next_label = next_instr->opcode; \
 	} while(0)
 #define SET_IP(target)  do { \
 		next_instr = (target); \
-		next_label = next_instr->opcode; \
 	} while(0)
 
 /* Stack manipulation macros */
@@ -2854,7 +2849,7 @@ format_exc_check_arg(PyObject *exc, char *format_str, PyObject *obj)
 
 static PyObject *
 string_concatenate(PyObject *v, PyObject *w,
-		   PyFrameObject *f, int opcode, int oparg)
+		   PyFrameObject *f, PyInst *next_instr)
 {
 	/* This function implements 'variable += expr' when both arguments
 	   are strings. */
@@ -2874,9 +2869,10 @@ string_concatenate(PyObject *v, PyObject *w,
 		 * 'variable'.  We try to delete the variable now to reduce
 		 * the refcnt to 1.
 		 */
-		switch (opcode) {
+		switch (PyInst_GET_OPCODE(next_instr)) {
 		case STORE_FAST:
 		{
+			int oparg = PyInst_GET_ARG(next_instr + 1);
 			PyObject **fastlocals = f->f_localsplus;
 			if (GETLOCAL(oparg) == v)
 				SETLOCAL(oparg, NULL);
@@ -2884,6 +2880,7 @@ string_concatenate(PyObject *v, PyObject *w,
 		}
 		case STORE_DEREF:
 		{
+			int oparg = PyInst_GET_ARG(next_instr + 1);
 			PyObject **freevars = f->f_localsplus + f->f_code->co_nlocals;
 			PyObject *c = freevars[oparg];
 			if (PyCell_GET(c) == v)
@@ -2892,6 +2889,7 @@ string_concatenate(PyObject *v, PyObject *w,
 		}
 		case STORE_NAME:
 		{
+			int oparg = PyInst_GET_ARG(next_instr + 1);
 			PyObject *names = f->f_code->co_names;
 			PyObject *name = GETITEM(names, oparg);
 			PyObject *locals = f->f_locals;

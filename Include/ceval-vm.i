@@ -525,9 +525,9 @@ if (PyInt_CheckExact(a1) && PyInt_CheckExact(a2)) {
 } else if (PyString_CheckExact(a1) && PyString_CheckExact(a2)) {
         /* Look in the parallel PyInstructions object to find the
            symbolic opcode. */
-        int opcode = PyInst_GET_OPCODE(
-                &((PyInstructionsObject *)co->co_code)->inst[INSTR_OFFSET()]);
-        a = string_concatenate(a1, a2, f, opcode, (next_instr+1)->oparg);
+        a = string_concatenate(a1, a2, f,
+                               ((PyInstructionsObject *)co->co_code)->inst +
+                               INSTR_OFFSET());
         /* string_concatenate consumed the ref to v */
 } else {
         a = PyNumber_Add(a1, a2);
@@ -929,9 +929,9 @@ if (PyInt_CheckExact(a1) && PyInt_CheckExact(a2)) {
 } else if (PyString_CheckExact(a1) && PyString_CheckExact(a2)) {
         /* Look in the parallel PyInstructions object to find the
            symbolic opcode. */
-        int opcode = PyInst_GET_OPCODE(
-                &((PyInstructionsObject *)co->co_code)->inst[INSTR_OFFSET()]);
-        a = string_concatenate(a1, a2, f, opcode, (next_instr+1)->oparg);
+        a = string_concatenate(a1, a2, f,
+                               ((PyInstructionsObject *)co->co_code)->inst +
+                               INSTR_OFFSET());
         /* string_concatenate consumed the ref to v */
 } else {
         a = PyNumber_InPlaceAdd(a1, a2);
@@ -3382,9 +3382,9 @@ if (PyInt_CheckExact(a1) && PyInt_CheckExact(a2)) {
 } else if (PyString_CheckExact(a1) && PyString_CheckExact(a2)) {
         /* Look in the parallel PyInstructions object to find the
            symbolic opcode. */
-        int opcode = PyInst_GET_OPCODE(
-                &((PyInstructionsObject *)co->co_code)->inst[INSTR_OFFSET()]);
-        a = string_concatenate(a1, a2, f, opcode, (next_instr+1)->oparg);
+        a = string_concatenate(a1, a2, f,
+                               ((PyInstructionsObject *)co->co_code)->inst +
+                               INSTR_OFFSET());
         /* string_concatenate consumed the ref to v */
 } else {
         a = PyNumber_Add(a1, a2);
@@ -3811,9 +3811,9 @@ if (PyInt_CheckExact(a1) && PyInt_CheckExact(a2)) {
 } else if (PyString_CheckExact(a1) && PyString_CheckExact(a2)) {
         /* Look in the parallel PyInstructions object to find the
            symbolic opcode. */
-        int opcode = PyInst_GET_OPCODE(
-                &((PyInstructionsObject *)co->co_code)->inst[INSTR_OFFSET()]);
-        a = string_concatenate(a1, a2, f, opcode, (next_instr+1)->oparg);
+        a = string_concatenate(a1, a2, f,
+                               ((PyInstructionsObject *)co->co_code)->inst +
+                               INSTR_OFFSET());
         /* string_concatenate consumed the ref to v */
 } else {
         a = PyNumber_InPlaceAdd(a1, a2);
