@@ -101,6 +101,18 @@ public:
     void UNARY_NEGATIVE();
     void UNARY_NOT();
 
+    void SLICE_NONE();
+    void SLICE_LEFT();
+    void SLICE_RIGHT();
+    void SLICE_BOTH();
+    void STORE_SLICE_NONE();
+    void STORE_SLICE_LEFT();
+    void STORE_SLICE_RIGHT();
+    void STORE_SLICE_BOTH();
+    void DELETE_SLICE_NONE();
+    void DELETE_SLICE_LEFT();
+    void DELETE_SLICE_RIGHT();
+    void DELETE_SLICE_BOTH();
     void STORE_SUBSCR();
     void DELETE_SUBSCR();
     void STORE_MAP();
@@ -134,18 +146,6 @@ public:
     UNIMPLEMENTED(DUP_TOP_THREE)
     UNIMPLEMENTED(ROT_TWO)
     UNIMPLEMENTED(ROT_FOUR)
-    UNIMPLEMENTED(SLICE_NONE);
-    UNIMPLEMENTED(SLICE_LEFT);
-    UNIMPLEMENTED(SLICE_RIGHT);
-    UNIMPLEMENTED(SLICE_BOTH);
-    UNIMPLEMENTED(STORE_SLICE_NONE);
-    UNIMPLEMENTED(STORE_SLICE_LEFT);
-    UNIMPLEMENTED(STORE_SLICE_RIGHT);
-    UNIMPLEMENTED(STORE_SLICE_BOTH);
-    UNIMPLEMENTED(DELETE_SLICE_NONE);
-    UNIMPLEMENTED(DELETE_SLICE_LEFT);
-    UNIMPLEMENTED(DELETE_SLICE_RIGHT);
-    UNIMPLEMENTED(DELETE_SLICE_BOTH);
     UNIMPLEMENTED(BUILD_SLICE_TWO)
     UNIMPLEMENTED(BUILD_SLICE_THREE)
     UNIMPLEMENTED(BREAK_LOOP)
@@ -313,6 +313,17 @@ private:
     void BuildSequenceLiteral(
         int size, const char *createname,
         llvm::Value *(LlvmFunctionBuilder::*getitemslot)(llvm::Value *, int));
+
+    // Apply a classic slice to a sequence, pushing the result onto the
+    // stack.  'start' and 'stop' can be Value*'s representing NULL to
+    // indicate missing arguments, and all references are stolen.
+    void ApplySlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop);
+    // Assign to or delete a slice of a sequence. 'start' and 'stop' can be
+    // Value*'s representing NULL to indicate missing arguments, and
+    // 'source' can be a Value* representing NULL to indicate slice
+    // deletion. All references are stolen.
+    void AssignSlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop,
+                     llvm::Value *source);
 
     llvm::Module *const module_;
     llvm::Function *const function_;

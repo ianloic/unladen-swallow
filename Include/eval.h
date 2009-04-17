@@ -30,6 +30,10 @@ PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int);
 PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int);
 #endif
 
+PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);
+PyAPI_FUNC(int) _PyEval_AssignSlice(PyObject *, PyObject *,
+                                    PyObject *, PyObject *);
+
 #ifdef __cplusplus
 }
 #endif

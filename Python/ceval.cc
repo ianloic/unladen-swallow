@@ -115,9 +115,6 @@ static void call_exc_trace(Py_tracefunc, PyObject *, PyFrameObject *);
 static int maybe_call_line_trace(Py_tracefunc, PyObject *,
 				  PyFrameObject *, int *, int *, int *);
 
-static PyObject * apply_slice(PyObject *, PyObject *, PyObject *);
-static int assign_slice(PyObject *, PyObject *,
-			PyObject *, PyObject *);
 static PyObject * cmp_outcome(int, PyObject *, PyObject *);
 static void reset_exc_info(PyThreadState *);
 static void format_exc_check_arg(PyObject *, char *, PyObject *);
@@ -2643,8 +2640,8 @@ eval_llvm_function(PyLlvmFunctionObject *function_obj, PyFrameObject *frame)
    Return 0 on error, 1 on success.
 */
 /* Note:  If v is NULL, return success without storing into *pi.  This
-   is because_PyEval_SliceIndex() is called by apply_slice(), which can be
-   called by the SLICE opcode with v and/or w equal to NULL.
+   is because_PyEval_SliceIndex() is called by _PyEval_ApplySlice(), which
+   can be called by the SLICE opcode with v and/or w equal to NULL.
 */
 int
 _PyEval_SliceIndex(PyObject *v, Py_ssize_t *pi)
@@ -2678,8 +2675,8 @@ _PyEval_SliceIndex(PyObject *v, Py_ssize_t *pi)
 #define ISINDEX(x) ((x) == NULL || \
 		    PyInt_Check(x) || PyLong_Check(x) || PyIndex_Check(x))
 
-static PyObject *
-apply_slice(PyObject *u, PyObject *v, PyObject *w) /* return u[v:w] */
+PyObject *
+_PyEval_ApplySlice(PyObject *u, PyObject *v, PyObject *w) /* return u[v:w] */
 {
 	PyTypeObject *tp = u->ob_type;
 	PySequenceMethods *sq = tp->tp_as_sequence;
@@ -2704,8 +2701,8 @@ apply_slice(PyObject *u, PyObject *v, PyObject *w) /* return u[v:w] */
 	}
 }
 
-static int
-assign_slice(PyObject *u, PyObject *v, PyObject *w, PyObject *x)
+int
+_PyEval_AssignSlice(PyObject *u, PyObject *v, PyObject *w, PyObject *x)
 	/* u[v:w] = x */
 {
 	PyTypeObject *tp = u->ob_type;

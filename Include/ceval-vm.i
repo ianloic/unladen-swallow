@@ -1111,7 +1111,7 @@ Obj a2;
 NEXT_P0;
 vm_Obj2a(stack_pointerTOS,a1);
 {
-a2 = apply_slice(a1, NULL, NULL);
+a2 = _PyEval_ApplySlice(a1, NULL, NULL);
 }
 
 NEXT_P1;
@@ -1134,7 +1134,7 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -1;
 {
-a = apply_slice(a1, a2, NULL);
+a = _PyEval_ApplySlice(a1, a2, NULL);
 }
 
 NEXT_P1;
@@ -1158,7 +1158,7 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -1;
 {
-a = apply_slice(a1, NULL, a2);
+a = _PyEval_ApplySlice(a1, NULL, a2);
 }
 
 NEXT_P1;
@@ -1184,7 +1184,7 @@ vm_Obj2a(stack_pointer[-2],a2);
 vm_Obj2a(stack_pointerTOS,a3);
 stack_pointer += -2;
 {
-a = apply_slice(a1, a2, a3);
+a = _PyEval_ApplySlice(a1, a2, a3);
 }
 
 NEXT_P1;
@@ -1208,7 +1208,7 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -2;
 {
-err = assign_slice(a2, NULL, NULL, a1);
+err = _PyEval_AssignSlice(a2, NULL, NULL, a1);
 }
 
 NEXT_P1;
@@ -1233,7 +1233,7 @@ vm_Obj2a(stack_pointer[-2],a2);
 vm_Obj2a(stack_pointerTOS,a3);
 stack_pointer += -3;
 {
-err = assign_slice(a2, a3, NULL, a1);
+err = _PyEval_AssignSlice(a2, a3, NULL, a1);
 }
 
 NEXT_P1;
@@ -1259,7 +1259,7 @@ vm_Obj2a(stack_pointer[-2],a2);
 vm_Obj2a(stack_pointerTOS,a3);
 stack_pointer += -3;
 {
-err = assign_slice(a2, NULL, a3, a1);
+err = _PyEval_AssignSlice(a2, NULL, a3, a1);
 }
 
 NEXT_P1;
@@ -1287,7 +1287,7 @@ vm_Obj2a(stack_pointer[-2],a3);
 vm_Obj2a(stack_pointerTOS,a4);
 stack_pointer += -4;
 {
-err = assign_slice(a2, a3, a4, a1); /* a2[a3:a4] = a1 */
+err = _PyEval_AssignSlice(a2, a3, a4, a1); /* a2[a3:a4] = a1 */
 }
 
 NEXT_P1;
@@ -1310,7 +1310,7 @@ NEXT_P0;
 vm_Obj2a(stack_pointerTOS,a1);
 stack_pointer += -1;
 {
-err = assign_slice(a1, NULL, NULL, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, NULL, NULL, (PyObject *) NULL);
 }
 
 NEXT_P1;
@@ -1332,7 +1332,7 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -2;
 {
-err = assign_slice(a1, a2, NULL, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, a2, NULL, (PyObject *) NULL);
 }
 
 NEXT_P1;
@@ -1355,7 +1355,7 @@ vm_Obj2a(stack_pointer[-2],a1);
 vm_Obj2a(stack_pointerTOS,a2);
 stack_pointer += -2;
 {
-err = assign_slice(a1, NULL, a2, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, NULL, a2, (PyObject *) NULL);
 }
 
 NEXT_P1;
@@ -1380,7 +1380,7 @@ vm_Obj2a(stack_pointer[-2],a2);
 vm_Obj2a(stack_pointerTOS,a3);
 stack_pointer += -3;
 {
-err = assign_slice(a1, a2, a3, (PyObject *) NULL); /* del a1[a2:a3] */
+err = _PyEval_AssignSlice(a1, a2, a3, (PyObject *) NULL); /* del a1[a2:a3] */
 }
 
 NEXT_P1;
@@ -3957,7 +3957,7 @@ Obj a;
 vm_Obj2a(stack_pointerTOS,a1);
 vm_Obj2a(_stack_pointer1,a2);
 {
-a = apply_slice(a1, a2, NULL);
+a = _PyEval_ApplySlice(a1, a2, NULL);
 }
 
 vm_a2Obj(a,stack_pointerTOS);
@@ -4000,7 +4000,7 @@ Obj a;
 vm_Obj2a(stack_pointerTOS,a1);
 vm_Obj2a(_stack_pointer1,a2);
 {
-a = apply_slice(a1, NULL, a2);
+a = _PyEval_ApplySlice(a1, NULL, a2);
 }
 
 vm_a2Obj(a,stack_pointerTOS);

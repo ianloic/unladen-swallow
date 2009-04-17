@@ -3,6 +3,7 @@
 from test.test_support import run_unittest, findfile
 import _llvm
 import functools
+import sys
 import unittest
 import __future__
 
@@ -32,6 +33,18 @@ def compile_for_llvm(function_name, def_string, optimization_level=-1):
         func.__code__.co_optimization = optimization_level
         func.__code__.__use_llvm__ = True
     return func
+
+
+class ExtraAssertsTestCase(unittest.TestCase):
+    def assertRaisesWithArgs(self, expected_exception_type,
+                             expected_args, f, *args, **kwargs):
+        try:
+            f(*args, **kwargs)
+        except expected_exception_type, real_exception:
+            pass
+        else:
+            self.fail("%r not raised" % expected_exception)
+        self.assertEquals(real_exception.args, expected_args)
 
 
 class LlvmTests(unittest.TestCase):
@@ -927,7 +940,16 @@ class OpRecorder(object):
     def __delitem__(self, item):
         self.ops.append(('delitem', item))
 
-class OperatorTests(unittest.TestCase):
+    # Slicing
+    def __getslice__(self, start, stop):
+        self.ops.append(('getslice', start, stop))
+        return ('getslice', start, stop)
+    def __setslice__(self, start, stop, seq):
+        self.ops.append(('setslice', start, stop, seq))
+    def __delslice__(self, start, stop):
+        self.ops.append(('delslice', start, stop))
+
+class OperatorTests(ExtraAssertsTestCase):
     def run_and_compare(self, testfunc, optimization_level,
                         expected_num_ops, expected_num_results):
         non_llvm_results = {}
@@ -1046,6 +1068,127 @@ def listcomp_exc(x):
         self.assertEquals([o.ops for o in recorders],
                           [['add'], ['add'], ['add'], []])
 
+
+    @at_each_optimization_level
+    def test_slice_none(self, level):
+        getslice_none = compile_for_llvm('getslice_none',
+                                         'def getslice_none(x): return x[:]',
+                                         level)
+        self.assertEquals(getslice_none(OpRecorder()),
+                          ('getslice', 0, sys.maxint))
+        self.assertRaisesWithArgs(OpExc, ('getslice', 0, sys.maxint),
+                                  getslice_none, OpRaiser())
+
+        setslice_none = compile_for_llvm('setslice_none',
+                                         'def setslice_none(x): x[:] = [0]',
+                                         level)
+        op = OpRecorder()
+        setslice_none(op)
+        self.assertEquals(op.ops, [('setslice', 0, sys.maxint, [0])])
+        self.assertRaisesWithArgs(OpExc, ('setslice', 0, sys.maxint, [0]),
+                                  setslice_none, OpRaiser())
+
+        delslice_none = compile_for_llvm('delslice_none',
+                                         'def delslice_none(x): del x[:]',
+                                         level)
+        op = OpRecorder()
+        delslice_none(op)
+        self.assertEquals(op.ops, [('delslice', 0, sys.maxint)])
+        self.assertRaisesWithArgs(OpExc, ('delslice', 0, sys.maxint),
+                                  delslice_none, OpRaiser())
+
+    @at_each_optimization_level
+    def test_slice_left(self, level):
+        getslice_left = compile_for_llvm('getslice_left', '''
+def getslice_left(x, y):
+    return x[y:]
+''', level)
+        self.assertEquals(getslice_left(OpRecorder(), 5),
+                          ('getslice', 5, sys.maxint))
+        self.assertRaisesWithArgs(OpExc, ('getslice', 5, sys.maxint),
+                                  getslice_left, OpRaiser(), 5)
+
+        setslice_left = compile_for_llvm('setslice_left', '''
+def setslice_left(x, y):
+    x[y:] = [1]
+''', level)
+        op = OpRecorder()
+        setslice_left(op, 5)
+        self.assertEquals(op.ops, [('setslice', 5, sys.maxint, [1])])
+        self.assertRaisesWithArgs(OpExc, ('setslice', 5, sys.maxint, [1]),
+                                  setslice_left, OpRaiser(), 5)
+
+        delslice_left = compile_for_llvm('delslice_left', '''
+def delslice_left(x, y):
+    del x[y:]
+''', level)
+        op = OpRecorder()
+        delslice_left(op, 5)
+        self.assertEquals(op.ops, [('delslice', 5, sys.maxint)])
+        self.assertRaisesWithArgs(OpExc, ('delslice', 5, sys.maxint),
+                                  delslice_left, OpRaiser(), 5)
+
+    @at_each_optimization_level
+    def test_slice_right(self, level):
+        getslice_right = compile_for_llvm('getslice_right', '''
+def getslice_right(x, y):
+    return x[:y]
+''', level)
+        self.assertEquals(getslice_right(OpRecorder(), 10),
+                          ('getslice', 0, 10))
+        self.assertRaisesWithArgs(OpExc, ('getslice', 0, 10),
+                                  getslice_right, OpRaiser(), 10)
+
+        setslice_right = compile_for_llvm('setslice_right', '''
+def setslice_right(x, y):
+    x[:y] = [2]
+''', level)
+        op = OpRecorder()
+        setslice_right(op, 10)
+        self.assertEquals(op.ops, [('setslice', 0, 10, [2])])
+        self.assertRaisesWithArgs(OpExc, ('setslice', 0, 10, [2]),
+                                  setslice_right, OpRaiser(), 10)
+
+        delslice_right = compile_for_llvm('delslice_right', '''
+def delslice_right(x, y):
+    del x[:y]
+''', level)
+        op = OpRecorder()
+        delslice_right(op, 10)
+        self.assertEquals(op.ops, [('delslice', 0, 10)])
+        self.assertRaisesWithArgs(OpExc, ('delslice', 0, 10),
+                                  delslice_right, OpRaiser(), 10)
+
+    @at_each_optimization_level
+    def test_slice_both(self, level):
+        getslice_both = compile_for_llvm('getslice_both', '''
+def getslice_both(x, y, z):
+    return x[y:z]
+''', level)
+        self.assertEquals(getslice_both(OpRecorder(), 4, -6),
+                          ('getslice', 4, -6))
+        self.assertRaisesWithArgs(OpExc, ('getslice', 4, -6),
+                                  getslice_both, OpRaiser(), 4, -6)
+
+        setslice_both = compile_for_llvm('setslice_both', '''
+def setslice_both(x, y, z):
+    x[y:z] = [3]
+''', level)
+        op = OpRecorder()
+        setslice_both(op, 4, -6)
+        self.assertEquals(op.ops, [('setslice', 4, -6, [3])])
+        self.assertRaisesWithArgs(OpExc, ('setslice', 4, -6, [3]),
+                                  setslice_both, OpRaiser(), 4, -6)
+
+        delslice_both = compile_for_llvm('delslice_both', '''
+def delslice_both(x, y, z):
+    del x[y:z]
+''', level)
+        op = OpRecorder()
+        delslice_both(op, 4, -6)
+        self.assertEquals(op.ops, [('delslice', 4, -6)])
+        self.assertRaisesWithArgs(OpExc, ('delslice', 4, -6),
+                                  delslice_both, OpRaiser(), 4, -6)
 
 class OpExc(Exception):
     def __cmp__(self, other):
@@ -1211,6 +1354,14 @@ class OpRaiser(object):
     def __delitem__(self, item):
         self.ops.append(('delitem', item))
         raise OpExc(1016)
+
+    # Classic slices
+    def __getslice__(self, start, stop):
+        raise OpExc('getslice', start, stop)
+    def __setslice__(self, start, stop, seq):
+        raise OpExc('setslice', start, stop, seq)
+    def __delslice__(self, start, stop):
+        raise OpExc('delslice', start, stop)
 
 class OperatorRaisingTests(unittest.TestCase):
     def run_and_compare(self, namespace, optimization_level,
@@ -1381,18 +1532,7 @@ class ComparisonRaiser(object):
         raise OpExc('contains')
 
 
-class ComparisonTests(unittest.TestCase):
-    def assertRaisesWithMessage(self, expected_exception_type,
-                                expected_message, f, *args, **kwargs):
-        try:
-            f(*args, **kwargs)
-        except Exception, real_exception:
-            pass
-        else:
-            self.fail("%r not raised" % expected_exception)
-        self.assertEquals(type(real_exception), expected_exception_type)
-        self.assertEquals(real_exception.args, (expected_message,))
-
+class ComparisonTests(ExtraAssertsTestCase):
     @at_each_optimization_level
     def test_is(self, level):
         is_ = compile_for_llvm('is_', 'def is_(x, y): return x is y', level)
@@ -1427,8 +1567,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(eq([], []))
         self.assertEquals(eq(ComparisonReporter(), 6), 'eq')
         self.assertEquals(eq(7, ComparisonReporter()), 'eq')
-        self.assertRaisesWithMessage(OpExc, 'eq', eq, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'eq', eq, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(OpExc, ('eq',), eq, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('eq',), eq, 1, ComparisonRaiser())
 
     @at_each_optimization_level
     def test_ne(self, level):
@@ -1438,8 +1578,8 @@ class ComparisonTests(unittest.TestCase):
         self.assertFalse(ne([], []))
         self.assertEquals(ne(ComparisonReporter(), 6), 'ne')
         self.assertEquals(ne(7, ComparisonReporter()), 'ne')
-        self.assertRaisesWithMessage(OpExc, 'ne', ne, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'ne', ne, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(OpExc, ('ne',), ne, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('ne',), ne, 1, ComparisonRaiser())
 
     @at_each_optimization_level
     def test_lt(self, level):
@@ -1450,10 +1590,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertFalse(lt([], []))
         self.assertEquals(lt(ComparisonReporter(), 6), 'lt')
         self.assertEquals(lt(7, ComparisonReporter()), 'gt')
-        self.assertRaisesWithMessage(OpExc, 'lt', lt, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'gt', lt, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            'no ordering relation is defined for complex numbers',
+        self.assertRaisesWithArgs(OpExc, ('lt',), lt, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('gt',), lt, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(TypeError,
+            ('no ordering relation is defined for complex numbers',),
             lt, 1, 1j)
 
     @at_each_optimization_level
@@ -1465,10 +1605,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(le([], []))
         self.assertEquals(le(ComparisonReporter(), 6), 'le')
         self.assertEquals(le(7, ComparisonReporter()), 'ge')
-        self.assertRaisesWithMessage(OpExc, 'le', le, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'ge', le, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            'no ordering relation is defined for complex numbers',
+        self.assertRaisesWithArgs(OpExc, ('le',), le, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('ge',), le, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(TypeError,
+            ('no ordering relation is defined for complex numbers',),
             le, 1, 1j)
 
     @at_each_optimization_level
@@ -1480,10 +1620,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertFalse(gt([], []))
         self.assertEquals(gt(ComparisonReporter(), 6), 'gt')
         self.assertEquals(gt(7, ComparisonReporter()), 'lt')
-        self.assertRaisesWithMessage(OpExc, 'gt', gt, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'lt', gt, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            'no ordering relation is defined for complex numbers',
+        self.assertRaisesWithArgs(OpExc, ('gt',), gt, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('lt',), gt, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(TypeError,
+            ('no ordering relation is defined for complex numbers',),
             gt, 1, 1j)
 
     @at_each_optimization_level
@@ -1495,10 +1635,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(ge([], []))
         self.assertEquals(ge(ComparisonReporter(), 6), 'ge')
         self.assertEquals(ge(7, ComparisonReporter()), 'le')
-        self.assertRaisesWithMessage(OpExc, 'ge', ge, ComparisonRaiser(), 1)
-        self.assertRaisesWithMessage(OpExc, 'le', ge, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            'no ordering relation is defined for complex numbers',
+        self.assertRaisesWithArgs(OpExc, ('ge',), ge, ComparisonRaiser(), 1)
+        self.assertRaisesWithArgs(OpExc, ('le',), ge, 1, ComparisonRaiser())
+        self.assertRaisesWithArgs(TypeError,
+            ('no ordering relation is defined for complex numbers',),
             ge, 1, 1j)
 
     @at_each_optimization_level
@@ -1507,10 +1647,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(in_(1, [1, 2]))
         self.assertFalse(in_(1, [0, 2]))
         self.assertTrue(in_(1, ComparisonReporter()))
-        self.assertRaisesWithMessage(OpExc, 'contains',
+        self.assertRaisesWithArgs(OpExc, ('contains',),
                                      in_, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            "argument of type 'int' is not iterable",
+        self.assertRaisesWithArgs(TypeError,
+            ("argument of type 'int' is not iterable",),
             in_, 1, 1)
 
     @at_each_optimization_level
@@ -1521,10 +1661,10 @@ class ComparisonTests(unittest.TestCase):
         self.assertFalse(not_in(1, [1, 2]))
         self.assertTrue(not_in(1, [0, 2]))
         self.assertFalse(not_in(1, ComparisonReporter()))
-        self.assertRaisesWithMessage(OpExc, 'contains',
+        self.assertRaisesWithArgs(OpExc, ('contains',),
                                    not_in, 1, ComparisonRaiser())
-        self.assertRaisesWithMessage(TypeError,
-            "argument of type 'int' is not iterable",
+        self.assertRaisesWithArgs(TypeError,
+            ("argument of type 'int' is not iterable",),
             not_in, 1, 1)
 
 

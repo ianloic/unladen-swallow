@@ -280,40 +280,40 @@ a = PyNumber_InPlaceOr(a1, a2);
 
 \ _ , SLICE
 SLICE_NONE ( a1 -- a2  dec:a1  next:a2 )
-a2 = apply_slice(a1, NULL, NULL);
+a2 = _PyEval_ApplySlice(a1, NULL, NULL);
 
 SLICE_LEFT ( a1 a2 -- a  dec:a1 dec:a2  next:a )
-a = apply_slice(a1, a2, NULL);
+a = _PyEval_ApplySlice(a1, a2, NULL);
 
 SLICE_RIGHT ( a1 a2 -- a  dec:a1 dec:a2  next:a )
-a = apply_slice(a1, NULL, a2);
+a = _PyEval_ApplySlice(a1, NULL, a2);
 
 SLICE_BOTH ( a1 a2 a3 -- a  dec:a1 dec:a2 dec:a3  next:a )
-a = apply_slice(a1, a2, a3);
+a = _PyEval_ApplySlice(a1, a2, a3);
 
 STORE_SLICE_NONE ( a1 a2 -- dec:a1 dec:a2  next:error )
-err = assign_slice(a2, NULL, NULL, a1);
+err = _PyEval_AssignSlice(a2, NULL, NULL, a1);
 
 STORE_SLICE_LEFT ( a1 a2 a3 -- dec:a1 dec:a2 dec:a3  next:error )
-err = assign_slice(a2, a3, NULL, a1);
+err = _PyEval_AssignSlice(a2, a3, NULL, a1);
 
 STORE_SLICE_RIGHT ( a1 a2 a3 -- dec:a1 dec:a2 dec:a3  next:error )
-err = assign_slice(a2, NULL, a3, a1);
+err = _PyEval_AssignSlice(a2, NULL, a3, a1);
 
 STORE_SLICE_BOTH ( a1 a2 a3 a4 -- dec:a1 dec:a2 dec:a3 dec:a4  next:error )
-err = assign_slice(a2, a3, a4, a1); /* a2[a3:a4] = a1 */
+err = _PyEval_AssignSlice(a2, a3, a4, a1); /* a2[a3:a4] = a1 */
 
 DELETE_SLICE_NONE ( a1 -- dec:a1  next:error )
-err = assign_slice(a1, NULL, NULL, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, NULL, NULL, (PyObject *) NULL);
 
 DELETE_SLICE_LEFT ( a1 a2 -- dec:a1 dec:a2  next:error )
-err = assign_slice(a1, a2, NULL, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, a2, NULL, (PyObject *) NULL);
 
 DELETE_SLICE_RIGHT ( a1 a2 -- dec:a1 dec:a2  next:error )
-err = assign_slice(a1, NULL, a2, (PyObject *) NULL);
+err = _PyEval_AssignSlice(a1, NULL, a2, (PyObject *) NULL);
 
 DELETE_SLICE_BOTH ( a1 a2 a3 -- dec:a1 dec:a2 dec:a3  next:error )
-err = assign_slice(a1, a2, a3, (PyObject *) NULL); /* del a1[a2:a3] */
+err = _PyEval_AssignSlice(a1, a2, a3, (PyObject *) NULL); /* del a1[a2:a3] */
 
 \ _ , SUBSCR
 STORE_SUBSCR ( a1 a2 a3 -- dec:a1 dec:a2 dec:a3  next:error )
