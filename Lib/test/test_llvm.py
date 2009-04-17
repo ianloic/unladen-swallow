@@ -701,42 +701,6 @@ def complex_and_or(a, b, c):
         self.assertEquals(complex_and_or(1, 3, 2), 3)
         self.assertEquals(complex_and_or(0, 3, 1), 1)
 
-
-class LoopExceptionInteractionTests(unittest.TestCase):
-    @at_each_optimization_level
-    def test_except_through_loop_caught(self, level):
-        nested = compile_for_llvm('nested', '''
-def nested(lst, obj):
-    try:
-        for x in lst:
-            a = a
-    except:
-        obj["x"] = 2
-    # Make sure the block stack is ok.
-    try:
-        for x in lst:
-            return x
-    finally:
-        obj["y"] = 3
-''', level)
-        obj = {}
-        self.assertEquals(1, nested([1,2,3], obj))
-        self.assertEquals({"x": 2, "y": 3}, obj)
-
-    @at_each_optimization_level
-    def test_except_through_loop_finally(self, level):
-        nested = compile_for_llvm('nested', '''
-def nested(lst, obj):
-    try:
-        for x in lst:
-            a = a
-    finally:
-        obj["x"] = 2
-''', level)
-        obj = {}
-        self.assertRaises(UnboundLocalError, nested, [1,2,3], obj)
-        self.assertEquals({"x": 2}, obj)
-
     @at_each_optimization_level
     def test_call_varargs(self, level):
         f1 = compile_for_llvm("f1", "def f1(x, args): return x(*args)",
@@ -791,6 +755,42 @@ def f(x, args, kwargs):
                                      level)
         self.assertEquals(slice_three(Sliceable()), slice(1, 2, 3))
         # No way to make BUILD_SLICE_* raise exceptions.
+
+
+class LoopExceptionInteractionTests(unittest.TestCase):
+    @at_each_optimization_level
+    def test_except_through_loop_caught(self, level):
+        nested = compile_for_llvm('nested', '''
+def nested(lst, obj):
+    try:
+        for x in lst:
+            a = a
+    except:
+        obj["x"] = 2
+    # Make sure the block stack is ok.
+    try:
+        for x in lst:
+            return x
+    finally:
+        obj["y"] = 3
+''', level)
+        obj = {}
+        self.assertEquals(1, nested([1,2,3], obj))
+        self.assertEquals({"x": 2, "y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_except_through_loop_finally(self, level):
+        nested = compile_for_llvm('nested', '''
+def nested(lst, obj):
+    try:
+        for x in lst:
+            a = a
+    finally:
+        obj["x"] = 2
+''', level)
+        obj = {}
+        self.assertRaises(UnboundLocalError, nested, [1,2,3], obj)
+        self.assertEquals({"x": 2}, obj)
 
 
 # dont_inherit will unfortunately not turn off true division when
