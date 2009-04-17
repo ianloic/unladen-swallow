@@ -1328,6 +1328,20 @@ LlvmFunctionBuilder::STORE_SUBSCR()
     PropagateExceptionOnNonZero(result);
 }
 
+void
+LlvmFunctionBuilder::DELETE_SUBSCR()
+{
+    Value *key = Pop();
+    Value *obj = Pop();
+    Function *delitem = GetGlobalFunction<
+          int(PyObject *, PyObject *)>("PyObject_DelItem");
+    Value *result = builder().CreateCall2(delitem, obj, key,
+                                          "DELETE_SUBSCR_result");
+    DecRef(obj);
+    DecRef(key);
+    PropagateExceptionOnNonZero(result);
+}
+
 // Common code for almost all binary operations
 void
 LlvmFunctionBuilder::GenericBinOp(const char *apifunc)

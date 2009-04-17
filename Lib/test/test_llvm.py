@@ -956,9 +956,10 @@ class OperatorTests(unittest.TestCase):
 def testfunc(x, results):
     results['idx'] = x['item']
     x['item'] = 1
+    del x['item']
 """ in namespace
         self.run_and_compare(namespace['testfunc'], level,
-                             expected_num_ops=2, expected_num_results=1)
+                             expected_num_ops=3, expected_num_results=1)
 
     @at_each_optimization_level
     def test_unary(self, level):
@@ -1261,6 +1262,7 @@ def convert(x): return `x`
         exec """
 def getitem(x): x['item']
 def setitem(x): x['item'] = 1
+def delitem(x): del x['item']
 """ in namespace
         del namespace['__builtins__']
         self.run_and_compare(namespace, level)
