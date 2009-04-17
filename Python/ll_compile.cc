@@ -1885,6 +1885,40 @@ LlvmFunctionBuilder::DELETE_SLICE_NONE()
     AssignSlice(seq, start, stop, source);
 }
 
+void
+LlvmFunctionBuilder::BUILD_SLICE_TWO()
+{
+    Value *step = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *stop = Pop();
+    Value *start = Pop();
+    Function *build_slice = GetGlobalFunction<
+        PyObject *(PyObject *, PyObject *, PyObject *)>("PySlice_New");
+    Value *result = builder().CreateCall3(
+        build_slice, start, stop, step, "BUILD_SLICE_result");
+    DecRef(start);
+    DecRef(stop);
+    PropagateExceptionOnNull(result);
+    Push(result);
+}
+
+void
+LlvmFunctionBuilder::BUILD_SLICE_THREE()
+{
+    Value *step = Pop();
+    Value *stop = Pop();
+    Value *start = Pop();
+    Function *build_slice = GetGlobalFunction<
+        PyObject *(PyObject *, PyObject *, PyObject *)>("PySlice_New");
+    Value *result = builder().CreateCall3(
+        build_slice, start, stop, step, "BUILD_SLICE_result");
+    DecRef(start);
+    DecRef(stop);
+    DecRef(step);
+    PropagateExceptionOnNull(result);
+    Push(result);
+}
+
 // Adds delta to *addr, and returns the new value.
 static Value *
 increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)

@@ -775,6 +775,23 @@ def f(x, args, kwargs):
         self.assertEquals(f(receiver, (2, 3), {'e': 5, 'f': 6}),
                           ((1, 2, 3), {'d': 4, 'e': 5, 'f': 6}))
 
+    @at_each_optimization_level
+    def test_build_slice(self, level):
+        class Sliceable(object):
+            def __getitem__(self, item):
+                return item
+        # Test BUILD_SLICE_TWO; make sure we didn't swap arguments.
+        slice_two = compile_for_llvm('slice_two',
+                                      'def slice_two(o): return o[1:2:]',
+                                      level)
+        self.assertEquals(slice_two(Sliceable()), slice(1, 2, None))
+        # Test BUILD_SLICE_THREE.
+        slice_three = compile_for_llvm('slice_three',
+                                     'def slice_three(o): return o[1:2:3]',
+                                     level)
+        self.assertEquals(slice_three(Sliceable()), slice(1, 2, 3))
+        # No way to make BUILD_SLICE_* raise exceptions.
+
 
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in
