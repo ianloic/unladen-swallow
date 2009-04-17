@@ -789,6 +789,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #define POP()		BASIC_POP()
 #define STACKADJ(n)	BASIC_STACKADJ(n)
 #define EXT_POP(STACK_POINTER) (*--(STACK_POINTER))
+#define EXT_PUSH(v, STACK_POINTER) (*(STACK_POINTER)++ = (v))
 
 /* Local variable macros */
 
@@ -2285,6 +2286,67 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg
 		PCALL(PCALL_POP);
 	}
 	return x;
+}
+
+/* In spite of the name, not much like _PyEval_CallFunction, because it
+   pushes the result of the call onto the stack, and it's apparently okay
+   for it to modify the stack pointer directly. Does return -1 on failure, 0
+   on success. */
+#ifdef WITH_TSC
+int
+_PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg,
+                          uint64* pintr0, uint64* pintr1)
+#else
+int
+_PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg)
+#endif
+{
+	PyObject **pfunc, *func, **sp, *result;
+	/* oparg is the flags for *args, **kwargs, the number of positional
+	   arguments and the number of keyword arguments all bitpacked into
+	   one int. */
+	int flags = oparg & 3;
+	int encoded_args  = oparg >> 16;
+	int num_posargs = encoded_args & 0xff;
+	int num_kwargs = (encoded_args >> 8) & 0xff;
+	int num_stackitems = num_posargs + 2 * num_kwargs;
+	PCALL(PCALL_ALL);
+	if (flags & CALL_FLAG_VAR)
+		num_stackitems++;
+	if (flags & CALL_FLAG_KW)
+		num_stackitems++;
+	pfunc = *stack_pointer - num_stackitems - 1;
+	func  = *pfunc;
+	if (PyMethod_Check(func) && PyMethod_GET_SELF(func) != NULL) {
+		/* If func is a bound method object, replace func on the
+		   stack with its self, func itself with its function, and
+		   pretend we were called with one extra positional
+		   argument. */
+		PyObject *self = PyMethod_GET_SELF(func);
+		Py_INCREF(self);
+		func = PyMethod_GET_FUNCTION(func);
+		Py_INCREF(func);
+		Py_DECREF(*pfunc);
+		*pfunc = self;
+		num_posargs++;
+	}
+	else
+		Py_INCREF(func);
+	sp = *stack_pointer;
+	READ_TIMESTAMP(*pintr0);
+	result = ext_do_call(func, &sp, flags, num_posargs, num_kwargs);
+	READ_TIMESTAMP(*pintr1);
+	*stack_pointer = sp;
+	Py_DECREF(func);
+	while (*stack_pointer > pfunc) {
+		PyObject *item = EXT_POP(*stack_pointer);
+		Py_DECREF(item);
+	}
+	EXT_PUSH(result, *stack_pointer);
+	if (result == NULL)
+		return -1;
+	else
+		return 0;
 }
 
 /* The fast_function() function optimize calls for which no argument

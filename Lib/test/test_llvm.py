@@ -724,6 +724,44 @@ def nested(lst, obj):
         self.assertRaises(UnboundLocalError, nested, [1,2,3], obj)
         self.assertEquals({"x": 2}, obj)
 
+    @at_each_optimization_level
+    def test_call_varargs(self, level):
+        f1 = compile_for_llvm("f1", "def f1(x, args): return x(*args)",
+                              level)
+        def receiver1(a, b):
+            return a, b
+        self.assertEquals(f1(receiver1, (1, 2)), (1, 2))
+        self.assertRaises(TypeError, f1, receiver1, None)
+        self.assertRaises(TypeError, f1, None, (1, 2))
+
+        f2 = compile_for_llvm("f2",
+                              "def f2(x, args): return x(1, 2, *args)",
+                              level)
+        def receiver2(a, *args):
+            return a, args
+        self.assertEquals(f2(receiver2, (3, 4, 5)), (1, (2, 3, 4, 5)))
+
+    @at_each_optimization_level
+    def test_call_kwargs(self, level):
+        f = compile_for_llvm("f",
+                             "def f(x, kwargs): return x(a=1, **kwargs)",
+                             level)
+        def receiver(**kwargs):
+            return kwargs
+        self.assertEquals(f(receiver, {'b': 2, 'c': 3}),
+                          {'a': 1, 'b': 2, 'c': 3})
+
+    @at_each_optimization_level
+    def test_call_args_kwargs(self, level):
+        f = compile_for_llvm("f", """
+def f(x, args, kwargs):
+    return x(1, d=4, *args, **kwargs)
+""", level)
+        def receiver(*args, **kwargs):
+            return args, kwargs
+        self.assertEquals(f(receiver, (2, 3), {'e': 5, 'f': 6}),
+                          ((1, 2, 3), {'d': 4, 'e': 5, 'f': 6}))
+
 
 # dont_inherit will unfortunately not turn off true division when
 # running with -Qnew, so we can't test classic division in

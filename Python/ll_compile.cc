@@ -1000,6 +1000,24 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
 }
 
 void
+LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
+{
+#ifdef WITH_TSC
+// XXX(twouters): figure out how to support WITH_TSC in LLVM.
+#error WITH_TSC builds are unsupported at this time.
+#endif
+    Function *call_function = GetGlobalFunction<
+        PyObject *(PyObject ***, int)>("_PyEval_CallFunctionVarKw");
+    Value *result = builder().CreateCall2(
+        call_function,
+        this->stack_pointer_addr_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
+        "CALL_FUNCTION_VAR_KW_result");
+    PropagateExceptionOnNonZero(result);
+    // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
+}
+
+void
 LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {

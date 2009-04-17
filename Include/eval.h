@@ -23,8 +23,11 @@ PyAPI_FUNC(void) _PyEval_RaiseForGlobalNameError(PyObject *name);
 #ifdef WITH_TSC
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int,
                                             uint64*, uint64*);
+PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int,
+                                          uint64*, uint64*);
 #else
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int);
+PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int);
 #endif
 
 #ifdef __cplusplus

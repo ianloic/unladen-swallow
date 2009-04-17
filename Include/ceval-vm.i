@@ -2732,42 +2732,18 @@ NEXT_P0;
 vm_Cell2i(IMM_ARG(IPTOS,305397793 ),i);
 INC_IP(1);
 {
-int var_kw = i & 0x0000FFFF;
-int oparg  = i>>16;
-int na     = oparg & 0xff;
-int nk     = (oparg>>8) & 0xff;
-int flags  = var_kw & 3;
-int n      = na + 2 * nk;
-PyObject **pfunc, *func, **sp;
-if (flags & CALL_FLAG_VAR)
-        n++;
-if (flags & CALL_FLAG_KW)
-        n++;
-pfunc = stack_pointer - n - 1;
-func  = *pfunc;
-if (PyMethod_Check(func) && PyMethod_GET_SELF(func) != NULL) {
-        PyObject *self = PyMethod_GET_SELF(func);
-        Py_INCREF(self);
-        func = PyMethod_GET_FUNCTION(func);
-        Py_INCREF(func);
-        Py_DECREF(*pfunc);
-        *pfunc = self;
-        na++;
-        n++;
-} else
-        Py_INCREF(func);
-sp = stack_pointer;
-x = ext_do_call(func, &sp, flags, na, nk);
-stack_pointer = sp;
-Py_DECREF(func);
-while (stack_pointer > pfunc) {
-        a1 = POP();
-        Py_DECREF(a1);
+if (
+#ifdef WITH_TSC
+    _PyEval_CallFunctionVarKw(&stack_pointer, i, &intr0, &intr1)
+#else
+    _PyEval_CallFunctionVarKw(&stack_pointer, i)
+#endif
+        < 0) {
+    why = WHY_EXCEPTION;
+    ERROR();
+} else {
+    NEXT();
 }
-PUSH(x);
-if (x != NULL) NEXT();
-why = WHY_EXCEPTION;
-ERROR();
 }
 
 NEXT_P1;
