@@ -649,6 +649,8 @@ LlvmFunctionBuilder::FillUnwindBlock()
                                          "block_level");
         PopAndDecrefTo(builder().CreateGEP(this->stack_bottom_, pop_to_level));
 
+        BasicBlock *handle_loop =
+            BasicBlock::Create("handle_loop", function());
         BasicBlock *handle_except =
             BasicBlock::Create("handle_except", function());
         BasicBlock *handle_finally =
@@ -662,14 +664,20 @@ LlvmFunctionBuilder::FillUnwindBlock()
             builder().CreateSwitch(block_type, unreachable_block, 3);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
-            // TODO(jyasskin): Handle SETUP_LOOP with UNWIND_BREAK.
-            unwind_loop_header);
+            handle_loop);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_EXCEPT),
             handle_except);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_FINALLY),
             handle_finally);
+
+        builder().SetInsertPoint(handle_loop);
+        Value *unwinding_break = builder().CreateICmpEQ(
+            unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_BREAK),
+            "currently_unwinding_break");
+        builder().CreateCondBr(unwinding_break,
+                               goto_block_handler, unwind_loop_header);
 
         builder().SetInsertPoint(handle_except);
         // We only consider visiting except blocks when an exception
@@ -1364,6 +1372,20 @@ LlvmFunctionBuilder::END_FINALLY()
     // although returning out of a finally may still be slower than
     // ideal.
     builder().SetInsertPoint(finally_fallthrough);
+}
+
+void
+LlvmFunctionBuilder::BREAK_LOOP()
+{
+    // Accept code after a break statement, even though it's never executed.
+    // Otherwise, CPython's willingness to insert code after block
+    // terminators causes problems.
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
+    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_BREAK),
+                          this->unwind_reason_addr_);
+    builder().CreateBr(this->unwind_block_);
+
+    builder().SetInsertPoint(dead_code);
 }
 
 void

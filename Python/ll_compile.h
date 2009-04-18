@@ -59,6 +59,7 @@ public:
     void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
 
+    void BREAK_LOOP();
     void RETURN_VALUE();
 
     void POP_TOP();
@@ -152,7 +153,6 @@ public:
     UNIMPLEMENTED(DUP_TOP_THREE)
     UNIMPLEMENTED(ROT_TWO)
     UNIMPLEMENTED(ROT_FOUR)
-    UNIMPLEMENTED(BREAK_LOOP)
     UNIMPLEMENTED(RAISE_VARARGS_ZERO)
     UNIMPLEMENTED(RAISE_VARARGS_ONE)
     UNIMPLEMENTED(RAISE_VARARGS_TWO)

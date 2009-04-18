@@ -702,6 +702,36 @@ def complex_and_or(a, b, c):
         self.assertEquals(complex_and_or(0, 3, 1), 1)
 
     @at_each_optimization_level
+    def test_break(self, level):
+        break_one = compile_for_llvm("break_one", """
+def break_one(x):
+    for y in [1, 2]:
+        x["break"] = y
+        break
+        x["post break"] = y
+    else:
+        x["else"] = True
+    return x
+""", level)
+        self.assertEqual(break_one({}), {"break": 1})
+
+        nested = compile_for_llvm("nested", """
+def nested(x):
+    for y in [1, 2]:
+        for z in [3, 4]:            
+            x["break"] = z
+            break
+            x["post break"] = z
+        else:
+            x["inner else"] = True
+        x["outer"] = y
+    else:
+        x["else"] = True
+    return x
+""", level)
+        self.assertEqual(nested({}), {"break": 3, "outer": 2, "else": True})
+
+    @at_each_optimization_level
     def test_load_attr(self, level):
         load_attr = compile_for_llvm('load_attr',
                                      'def load_attr(o): return o.attr',
@@ -819,6 +849,32 @@ def nested(lst, obj):
         obj = {}
         self.assertRaises(UnboundLocalError, nested, [1,2,3], obj)
         self.assertEquals({"x": 2}, obj)
+
+    @at_each_optimization_level
+    def test_break_in_try(self, level):
+        break_one = compile_for_llvm("break_one", """
+def break_one(x):
+    for y in [1, 2]:
+        try:
+            x["break"] = y
+            break
+            x["post break"] = y
+        except ZeroDivisionError:
+            x["except"] = 77
+        finally:
+            x["finally"] = y
+    else:
+        x["else"] = True
+
+    # Make sure the block stack is ok.
+    try:
+        1 / 0
+    except ZeroDivisionError:
+        x["except"] = ZeroDivisionError
+    return x
+""", level)
+        self.assertEqual(break_one({}), {"break": 1, "finally": 1,
+                                         "except": ZeroDivisionError})
 
 
 # dont_inherit will unfortunately not turn off true division when
