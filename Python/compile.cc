@@ -36,7 +36,6 @@
 #include "symtable.h"
 #include "opcode.h"
 #include "_llvmfunctionobject.h"
-#include "_llvmmoduleobject.h"
 
 #include "Python/global_llvm_data.h"
 #include "Python/ll_compile.h"
@@ -168,13 +167,7 @@ struct compiler {
 	char *c_encoding;	 /* source encoding (a borrowed reference) */
 	PyArena *c_arena;	 /* pointer to memory allocation arena */
 
-	/* An llvm::Module that holds the code for this whole file.
-	   The other compilation units (compiler_unit, basicblock, and
-	   maybe instr) hold borrowed pointers directly to the LLVM
-	   C++ types, but because this one also needs to hold
-	   ownership and hand it off to the returned PyCodeObject, it
-	   holds a python-level object instead. */
-	PyLlvmModuleObject *c_llvm_module;
+	PyGlobalLlvmData *c_llvm;  /* Cached from the interpreter state. */
 };
 
 static int compiler_enter_scope(struct compiler *, identifier, void *, int);
@@ -220,12 +213,6 @@ static int compiler_with(struct compiler *, stmt_ty);
 
 static PyCodeObject *assemble(struct compiler *, int addNone);
 static PyObject *__doc__;
-
-static llvm::Module *
-compiler_get_llvm_module(struct compiler *c)
-{
-	return (llvm::Module *)c->c_llvm_module->the_module;
-}
 
 static std::string
 pystring_to_std_string(PyObject *str)
@@ -343,9 +330,7 @@ PyAST_Compile(mod_ty mod, const char *filename, PyCompilerFlags *flags,
 	/* XXX initialize to NULL for now, need to handle */
 	c.c_encoding = NULL;
 
-	c.c_llvm_module = (PyLlvmModuleObject *)PyLlvmModule_New(filename);
-	if (c.c_llvm_module == NULL)
-		goto finally;
+	c.c_llvm = PyGlobalLlvmData::Get();
 
 	co = compiler_mod(&c, mod);
 
@@ -378,7 +363,6 @@ compiler_free(struct compiler *c)
 	if (c->c_future)
 		PyObject_Free(c->c_future);
 	Py_DECREF(c->c_stack);
-	Py_XDECREF(c->c_llvm_module);
 }
 
 static PyObject *
@@ -552,7 +536,7 @@ compiler_enter_scope(struct compiler *c, identifier name, void *key,
 		return 0;
 	}
 
-	u->fb = new py::LlvmFunctionBuilder(compiler_get_llvm_module(c),
+	u->fb = new py::LlvmFunctionBuilder(c->c_llvm,
 					    pystring_to_std_string(name));
 
 	u->u_private = NULL;
@@ -4091,8 +4075,7 @@ makecode(struct compiler *c, struct assembler *a)
 	if (!code)
 		goto error;
 
-	llvm_function = _PyLlvmFunction_FromModuleAndPtr(
-		(PyObject *)c->c_llvm_module, c->u->fb->function());
+	llvm_function = _PyLlvmFunction_FromPtr(c->u->fb->function());
 	if (!llvm_function)
 		goto error;
 

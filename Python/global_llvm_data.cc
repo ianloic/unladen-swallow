@@ -3,7 +3,6 @@
 #include "Python.h"
 
 #include "_llvmfunctionobject.h"
-#include "_llvmmoduleobject.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Function.h"
@@ -14,34 +13,7 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Scalar.h"
 
-namespace py {
-
-/// Temporarily replaces the ModuleProvider for a particular
-/// FunctionPassManager so that it can operate on an arbitrary
-/// function.  Unlike ExistingModuleProvider, does not take ownership
-/// of the Module.
-class TempModuleProvider : public llvm::ModuleProvider {
-public:
-    TempModuleProvider(llvm::FunctionPassManager &fpm, llvm::Module *m)
-        : fpm_(fpm) {
-        TheModule = m;
-        fpm_.setModuleProvider(this);
-    }
-    ~TempModuleProvider() {
-        fpm_.setModuleProvider(NULL);
-        // Stop ~ModuleProvider from deleting the module.
-        TheModule = NULL;
-    }
-    bool materializeFunction(llvm::Function *, std::string * = 0) {
-        return false;
-    }
-    llvm::Module* materializeModule(std::string * = 0) { return TheModule; }
-
-private:
-    llvm::FunctionPassManager &fpm_;
-};
-
-}  // namespace py
+using llvm::Module;
 
 PyGlobalLlvmData *
 PyGlobalLlvmData_New()
@@ -61,14 +33,22 @@ PyGlobalLlvmData_Free(PyGlobalLlvmData * global_data)
     delete global_data;
 }
 
+PyGlobalLlvmData *
+PyGlobalLlvmData::Get()
+{
+    return PyThreadState_GET()->interp->global_llvm_data;
+}
+
 PyGlobalLlvmData::PyGlobalLlvmData()
-    : optimizations_0_(NULL),
-      optimizations_1_(NULL),
-      optimizations_2_(NULL)
+    : module_(new Module("<main>")),
+      module_provider_(new llvm::ExistingModuleProvider(module_)),
+      optimizations_0_(module_provider_),
+      optimizations_1_(module_provider_),
+      optimizations_2_(module_provider_)
 {
     std::string error;
     engine_ = llvm::ExecutionEngine::create(
-        new llvm::ExistingModuleProvider(new llvm::Module("<dummy>")),
+        module_provider_,
         // Don't force the interpreter (use JIT if possible).
         false,
         &error,
@@ -152,8 +132,8 @@ PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
         optimizations = &this->optimizations_2_;
         break;
     }
-    // TODO: Lock this.
-    py::TempModuleProvider mp(*optimizations, f.getParent());
+    assert(module_ == f.getParent() &&
+           "We assume that all functions belong to the same module.");
     optimizations->run(f);
     return 0;
 }
@@ -168,15 +148,14 @@ PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *global_data,
         return -1;
     }
     PyLlvmFunctionObject *function = (PyLlvmFunctionObject *)llvm_function;
-    return global_data->Optimize(*(llvm::Function *)function->the_function,
-                                 level);
+    return global_data->Optimize(
+        *(llvm::Function *)_PyLlvmFunction_GetFunction(function),
+        level);
 }
 
 int
 _PyLlvm_Init()
 {
-    if (PyType_Ready(&PyLlvmModule_Type) < 0)
-        return 0;
     if (PyType_Ready(&PyLlvmFunction_Type) < 0)
         return 0;
 

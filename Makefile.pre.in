@@ -345,7 +345,6 @@ OBJECT_OBJS=	\
 		Objects/typeobject.o \
 		Objects/weakrefobject.o \
 		Objects/_llvmfunctionobject.o \
-		Objects/_llvmmoduleobject.o \
 		$(UNICODE_OBJS)
 
 
@@ -695,7 +694,6 @@ PYTHON_HEADERS= \
 		Include/warnings.h \
 		Include/weakrefobject.h \
 		Include/_llvmfunctionobject.h \
-		Include/_llvmmoduleobject.h \
 		Python/global_llvm_data.h \
 		Python/global_llvm_data_fwd.h \
 		Python/ll_compile.h \

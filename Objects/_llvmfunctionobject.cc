@@ -3,12 +3,23 @@
 #include "Python.h"
 #include "_llvmfunctionobject.h"
 
-#include "_llvmmoduleobject.h"
+#include "frameobject.h"
 #include "structmember.h"
+#include "Python/global_llvm_data.h"
 
 #include "llvm/Function.h"
+#include "llvm/Module.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sstream>
+
+struct PyLlvmFunctionObject {
+public:
+    PyObject_HEAD
+    // TODO(jyasskin): Make this a WeakVH when we import llvm's
+    // Support/ValueHandle.h.
+    llvm::Function *the_function;
+};
 
 static llvm::Function *
 get_function(PyLlvmFunctionObject *obj)
@@ -17,23 +28,45 @@ get_function(PyLlvmFunctionObject *obj)
 }
 
 PyObject *
-_PyLlvmFunction_FromModuleAndPtr(PyObject *module, void *llvm_function)
+_PyLlvmFunction_FromPtr(void *llvm_function)
 {
-    if (!PyLlvmModule_Check(module)) {
-        PyErr_Format(PyExc_TypeError,
-                     "Expected _llvmmodule. Got %s",
-                     Py_TYPE(module)->tp_name);
-        return NULL;
-    }
     PyLlvmFunctionObject *result =
         PyObject_NEW(PyLlvmFunctionObject, &PyLlvmFunction_Type);
     if (result == NULL) {
         return NULL;
     }
-    Py_INCREF(module);
-    result->module = module;
-    result->the_function = (llvm::Function *)llvm_function;
+    llvm::Function *function = (llvm::Function *)llvm_function;
+    result->the_function = function;
+
+    // Make sure the function survives global optimizations.
+    function->setLinkage(llvm::GlobalValue::ExternalLinkage);
+
     return (PyObject *)result;
+}
+
+void *
+_PyLlvmFunction_GetFunction(PyLlvmFunctionObject *llvm_function)
+{
+    return llvm_function->the_function;
+}
+
+PyObject *
+_PyLlvmFunction_Eval(PyLlvmFunctionObject *function_obj, PyFrameObject *frame)
+{
+    if (!PyLlvmFunction_Check(function_obj)) {
+        PyErr_Format(PyExc_TypeError,
+                     "Expected PyLlvmFunctionObject; got %s",
+                     Py_TYPE(function_obj)->tp_name);
+        return NULL;
+    }
+    llvm::Function *function = function_obj->the_function;
+    PyGlobalLlvmData *global_llvm_data =
+        PyThreadState_GET()->interp->global_llvm_data;
+    typedef PyObject *(*NativeFunction)(PyFrameObject *);
+    llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+    NativeFunction native =
+        (NativeFunction)engine->getPointerToFunction(function);
+    return native(frame);
 }
 
 PyDoc_STRVAR(llvmfunction_doc,
@@ -45,7 +78,13 @@ existing _llvmmodule objects.");
 static void
 llvmfunction_dealloc(PyLlvmFunctionObject *functionobj)
 {
-    Py_XDECREF(functionobj->module);
+    llvm::Function *function = functionobj->the_function;
+    // Allow global optimizations to destroy the function.
+    function->setLinkage(llvm::GlobalValue::InternalLinkage);
+    if (function->use_empty()) {
+        // Delete the function if it's already unused.
+        function->eraseFromParent();
+    }
 }
 
 static PyObject *
@@ -65,11 +104,27 @@ llvmfunction_str(PyLlvmFunctionObject *functionobj)
     return PyString_FromStringAndSize(result.data(), result.size());
 }
 
-#define OFF(x) offsetof(PyLlvmFunctionObject, x)
+static PyObject *
+func_get_module(PyLlvmFunctionObject *op)
+{
+    llvm::Module *module = op->the_function->getParent();
+    if (module == NULL) {
+        PyErr_BadInternalCall();
+        return NULL;
+    }
 
-static PyMemberDef llvmfunction_memberlist[] = {
-    {"module",	T_OBJECT,	OFF(module),	READONLY},
-    {NULL}  // Sentinel
+    std::string result;
+    llvm::raw_string_ostream wrapper(result);
+    module->print(wrapper, NULL /* No extra annotations in the output */);
+    wrapper.flush();
+
+    return PyString_FromStringAndSize(result.data(),
+                                      result.size());
+}
+
+static PyGetSetDef llvmfunction_getsetlist[] = {
+    {"module", (getter)func_get_module, NULL},
+    NULL
 };
 
 // PyType_Ready is called on this in global_llvm_data.cc:_PyLlvm_Init().
@@ -102,8 +157,8 @@ PyTypeObject PyLlvmFunction_Type = {
 	0,				/* tp_iter */
 	0,				/* tp_iternext */
 	0,				/* tp_methods */
-	llvmfunction_memberlist,	/* tp_members */
-	0,				/* tp_getset */
+	0,				/* tp_members */
+	llvmfunction_getsetlist,	/* tp_getset */
 	0,				/* tp_base */
 	0,				/* tp_dict */
 	0,				/* tp_descr_get */

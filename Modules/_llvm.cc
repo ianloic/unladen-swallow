@@ -8,7 +8,6 @@ LLVM-py.
 
 #include "Python.h"
 #include "_llvmfunctionobject.h"
-#include "_llvmmoduleobject.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -50,10 +49,6 @@ init_llvm(void)
     if (module == NULL)
         return;
 
-    Py_INCREF(&PyLlvmModule_Type);
-    if (PyModule_AddObject(module, "_module",
-                           (PyObject *)&PyLlvmModule_Type))
-        return;
     Py_INCREF(&PyLlvmFunction_Type);
     if (PyModule_AddObject(module, "_function",
                            (PyObject *)&PyLlvmFunction_Type))

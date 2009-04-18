@@ -9,6 +9,8 @@
 #include "llvm/Support/IRBuilder.h"
 #include <string>
 
+struct PyGlobalLlvmData;
+
 namespace py {
 
 /// Helps the compiler build LLVM functions corresponding to Python
@@ -19,7 +21,7 @@ class LlvmFunctionBuilder {
     void operator=(const LlvmFunctionBuilder &);  // Not implemented.
 
 public:
-    LlvmFunctionBuilder(llvm::Module *module, const std::string& name);
+    LlvmFunctionBuilder(PyGlobalLlvmData *global_data, const std::string& name);
 
     llvm::Function *function() { return function_; }
     llvm::IRBuilder<>& builder() { return builder_; }
@@ -326,6 +328,7 @@ private:
     void AssignSlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop,
                      llvm::Value *source);
 
+    PyGlobalLlvmData *const llvm_data_;
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;

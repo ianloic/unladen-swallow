@@ -13,10 +13,17 @@
 
 #include "llvm/PassManager.h"
 
-namespace llvm { class ExecutionEngine; }
+namespace llvm {
+class ExecutionEngine;
+class ExistingModuleProvider;
+class Module;
+}
 
 struct PyGlobalLlvmData {
 public:
+    // Retrieves the PyGlobalLlvmData out of the interpreter state.
+    static PyGlobalLlvmData *Get();
+
     PyGlobalLlvmData();
     ~PyGlobalLlvmData();
 
@@ -28,10 +35,18 @@ public:
     // range, for example).
     int Optimize(llvm::Function &f, int level);
 
-    llvm::ExecutionEngine *getExecutionEngine() { return engine_; }
+    llvm::ExecutionEngine *getExecutionEngine() { return this->engine_; }
+
+    llvm::Module *module() { return this->module_; }
 
 private:
     void InitializeOptimizations();
+
+    // We have a single global module that holds all compiled code.
+    // Any cached global object that function definitions use will be
+    // stored in here.  These are owned by engine_.
+    llvm::Module *const module_;
+    llvm::ExistingModuleProvider *const module_provider_;
 
     llvm::ExecutionEngine *engine_;  // Not modified after the constructor.
 

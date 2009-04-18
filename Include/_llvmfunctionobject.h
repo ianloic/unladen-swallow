@@ -7,27 +7,27 @@ extern "C" {
 #endif
 
 /*
-_llvmfunction represents an llvm::Function instance.  Only _llvmmodule
-can create these, but they also know how to prettyprint themselves to
-LLVM assembly.
+_llvmfunction represents an llvm::Function instance.  Only the
+compiler can create these, but they also know how to prettyprint
+themselves to LLVM assembly.
 */
 
-typedef struct {
-    PyObject_HEAD
-    /* Keep the module alive. It owns the Function. */
-    PyObject *module;
-    /* This has type llvm::Function*, but we can't say that in a C header. */
-    void *the_function;
-} PyLlvmFunctionObject;
+typedef struct PyLlvmFunctionObject PyLlvmFunctionObject;
 
 PyAPI_DATA(PyTypeObject) PyLlvmFunction_Type;
 
 #define PyLlvmFunction_Check(op) (Py_TYPE(op) == &PyLlvmFunction_Type)
 
-/* llvm_function must be an llvm::Function, and module must be the
-   PyLlvmModuleObject holding llvm_function->getParent(). */
-PyAPI_FUNC(PyObject *) _PyLlvmFunction_FromModuleAndPtr(PyObject *module,
-                                                        void *llvm_function);
+/* llvm_function must be an llvm::Function. */
+PyAPI_FUNC(PyObject *) _PyLlvmFunction_FromPtr(void *llvm_function);
+
+/* Returns the llvm::Function* this PyLlvmFunctionObject wraps. */
+PyAPI_FUNC(void *) _PyLlvmFunction_GetFunction(
+    PyLlvmFunctionObject *llvm_function);
+
+/* JIT compiles and executes the llvm function. */
+PyAPI_FUNC(PyObject *) _PyLlvmFunction_Eval(
+    PyLlvmFunctionObject *llvm_function, struct _frame *frame);
 
 #ifdef __cplusplus
 }

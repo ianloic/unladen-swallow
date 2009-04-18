@@ -5,6 +5,7 @@
 #include "opcode.h"
 #include "frameobject.h"
 
+#include "Python/global_llvm_data.h"
 #include "Util/TypeBuilder.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -486,13 +487,16 @@ get_function_type(Module *module)
 }
 
 LlvmFunctionBuilder::LlvmFunctionBuilder(
-    Module *module, const std::string& name)
-    : module_(module),
+    PyGlobalLlvmData *llvm_data, const std::string& name)
+    : llvm_data_(llvm_data),
+      module_(llvm_data_->module()),
       function_(Function::Create(
-                    get_function_type(module),
+                    get_function_type(this->module_),
                     llvm::GlobalValue::ExternalLinkage,
-                    name,
-                    module))
+                    // Prefix names with "#u#" to avoid collisions
+                    // with runtime functions.
+                    "#u#" + name,
+                    this->module_))
 {
     Function::arg_iterator args = function()->arg_begin();
     this->frame_ = args++;
@@ -507,10 +511,10 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->unwind_block_ = BasicBlock::Create("unwind_block", function());
 
     this->stack_pointer_addr_ = builder().CreateAlloca(
-        TypeBuilder<PyObject**>::cache(module),
+        TypeBuilder<PyObject**>::cache(this->module_),
         NULL, "stack_pointer_addr");
     this->retval_addr_ = builder().CreateAlloca(
-        TypeBuilder<PyObject*>::cache(module),
+        TypeBuilder<PyObject*>::cache(this->module_),
         NULL, "retval_addr");
     this->unwind_reason_addr_ = builder().CreateAlloca(
         Type::Int8Ty, NULL, "unwind_reason_addr");
@@ -535,14 +539,14 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         builder().CreateBitCast(
             builder().CreateLoad(
                 builder().CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
-            TypeBuilder<PyTupleObject*>::cache(module));
+            TypeBuilder<PyTupleObject*>::cache(this->module_));
     // Get the address of the const_tuple's first item, for convenient
     // indexing of all its items.
     this->consts_ = GetTupleItemSlot(consts_tuple, 0);
     Value *names_tuple = builder().CreateBitCast(
         builder().CreateLoad(
             builder().CreateStructGEP(code, CodeTy::FIELD_NAMES)),
-        TypeBuilder<PyTupleObject*>::cache(module),
+        TypeBuilder<PyTupleObject*>::cache(this->module_),
         "names");
     // Get the address of the names_tuple's first item as well.
     this->names_ = GetTupleItemSlot(names_tuple, 0);
@@ -568,13 +572,13 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
             builder().CreateLoad(
                 builder().CreateStructGEP(this->frame_,
                                           FrameTy::FIELD_GLOBALS)),
-            TypeBuilder<PyObject *>::cache(module));
+            TypeBuilder<PyObject *>::cache(this->module_));
     this->builtins_ =
         builder().CreateBitCast(
             builder().CreateLoad(
                 builder().CreateStructGEP(this->frame_,
                                           FrameTy::FIELD_BUILTINS)),
-            TypeBuilder<PyObject *>::cache(module));
+            TypeBuilder<PyObject *>::cache(this->module_));
 
     FillUnwindBlock();
 }
