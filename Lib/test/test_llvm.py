@@ -47,7 +47,7 @@ class ExtraAssertsTestCase(unittest.TestCase):
         self.assertEquals(real_exception.args, expected_args)
 
 
-class LlvmTests(unittest.TestCase):
+class LlvmTests(ExtraAssertsTestCase):
     def test_uncreatable(self):
         # Functions can only be created by their static factories.
         self.assertRaises(TypeError, _llvm._function)
@@ -238,7 +238,7 @@ def cleanup():
         catch = compile_for_llvm("catch", """
 def catch(obj):
     try:
-        1 / 0
+        raise ZeroDivisionError
     except:
         obj["x"] = 2
 """, level)
@@ -297,7 +297,7 @@ def catch(obj):
         catch = compile_for_llvm("catch", """
 def catch(obj):
     try:
-        1 / 0
+        raise ZeroDivisionError
     except:
         a = a
     obj["x"] = 2
@@ -329,7 +329,7 @@ def catch(obj):
 def catch(obj):
     try:
         try:
-            1 / 0
+            raise ZeroDivisionError
         except:
             obj["x"] = 2
     except:
@@ -363,7 +363,7 @@ def catch(obj):
         try:
             obj["x"] = 2
         finally:
-            1 / 0
+            raise ZeroDivisionError
     except:
         obj["y"] = 3
 """, level)
@@ -393,7 +393,7 @@ def catch(obj):
 def catch(obj):
     try:
         try:
-            a = a
+            raise UnboundLocalError
         except:
             1 / 0
     finally:
@@ -409,7 +409,7 @@ def catch(obj):
         catch = compile_for_llvm("catch", """
 def catch(obj):
     try:
-        1 / 0
+        raise ZeroDivisionError
     finally:
         try:
             a = a
@@ -769,6 +769,87 @@ def f(x, args, kwargs):
         self.assertEquals(slice_three(Sliceable()), slice(1, 2, 3))
         # No way to make BUILD_SLICE_* raise exceptions.
 
+    @at_each_optimization_level
+    def test_raise(self, level):
+        raise_onearg = compile_for_llvm('raise_onearg', '''
+def raise_onearg(x):
+    raise x
+''', level)
+        self.assertRaises(OpExc, raise_onearg, OpExc);
+
+        raise_twoargs = compile_for_llvm('raise_twoargs', '''
+def raise_twoargs(x, y):
+    raise x, y
+''', level)
+        self.assertRaisesWithArgs(OpExc, ('twoarg',),
+                                  raise_twoargs, OpExc, OpExc('twoarg'));
+
+    @at_each_optimization_level
+    def test_reraise(self, level):
+        raise_noargs = compile_for_llvm('raise_noargs', '''
+def raise_noargs():
+    raise
+''', level)
+        exc = OpExc('exc')
+        def setup_traceback(e):
+            raise e
+        try:
+            setup_traceback(exc)
+        except OpExc:
+            # orig_tb and exc re-used for raise_threeargs.
+            orig_tb = sys.exc_info()[2]
+            try:
+                raise_noargs()
+            except OpExc, e:
+                new_tb = sys.exc_info()[2]
+                # Test that we got the right exception and the right
+                # traceback. Test both equality and identity for more
+                # convenient error displays when things aren't as expected.
+                self.assertEquals(e, exc)
+                self.assertTrue(e is exc)
+                self.assertEquals(new_tb.tb_next, orig_tb)
+                self.assertTrue(new_tb.tb_next is orig_tb)
+            else:
+                self.fail('expected OpExc exception')
+        else:
+            self.fail('expected OpExc exception')
+
+        raise_threeargs = compile_for_llvm('raise_threeargs', '''
+def raise_threeargs(x, y, z):
+    raise x, y, z
+''', level)
+        # Explicit version of the no-args raise.
+        try:
+            # Re-using exc and orig_tb from raise_noargs.
+            raise_threeargs(OpExc, exc, orig_tb)
+        except OpExc, e:
+            new_tb = sys.exc_info()[2]
+            self.assertEquals(e, exc)
+            self.assertTrue(e is exc)
+            self.assertEquals(new_tb.tb_next, orig_tb)
+            self.assertTrue(new_tb.tb_next is orig_tb)
+        else:
+            self.fail('expected OpExc exception')
+
+    @at_each_optimization_level
+    def test_complex_reraise(self, level):
+        reraise = compile_for_llvm('reraise', '''
+def reraise(raiser, exctype):
+    try:
+        raiser()
+    except:
+        try:
+            raise
+        except exctype:
+            return "inner"
+        return "middle"
+    return "outer"
+''', level)
+        def raiser():
+            raise ZeroDivisionError
+        self.assertEquals(reraise(raiser, ZeroDivisionError),
+                          "inner")
+        self.assertRaises(ZeroDivisionError, reraise, raiser, TypeError)
 
 class LoopExceptionInteractionTests(unittest.TestCase):
     @at_each_optimization_level
@@ -777,7 +858,7 @@ class LoopExceptionInteractionTests(unittest.TestCase):
 def nested(lst, obj):
     try:
         for x in lst:
-            a = a
+            raise UnboundLocalError
     except:
         obj["x"] = 2
     # Make sure the block stack is ok.

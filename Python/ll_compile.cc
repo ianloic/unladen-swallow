@@ -1400,6 +1400,76 @@ LlvmFunctionBuilder::RETURN_VALUE()
 }
 
 void
+LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
+{
+    // Accept code after a raise statement, even though it's never executed.
+    // Otherwise, CPython's willingness to insert code after block
+    // terminators causes problems.
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
+
+    Function *do_raise = GetGlobalFunction<
+        int(PyObject*, PyObject *, PyObject *)>("_PyEval_DoRaise");
+    // _PyEval_DoRaise eats references.
+    Value *is_reraise = builder().CreateCall3(
+        do_raise, exc_type, exc_inst, exc_tb, "raise_is_reraise");
+    // TODO(twouters): We should be handling re-raises and new exceptions
+    // differently, but we don't, yet. If is_reraise is non-zero,
+    // we should omit building a new traceback and jump to the correct
+    // handler (and/or set the unwind reason to UNWIND_RERAISE).
+    builder().CreateStore(
+        ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+        this->unwind_reason_addr_);
+    builder().CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        this->retval_addr_);
+    builder().CreateBr(this->unwind_block_);
+
+    builder().SetInsertPoint(dead_code);
+}
+
+void
+LlvmFunctionBuilder::RAISE_VARARGS_ZERO()
+{
+    Value *exc_tb = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *exc_inst = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *exc_type = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    DoRaise(exc_type, exc_inst, exc_tb);
+}
+
+void
+LlvmFunctionBuilder::RAISE_VARARGS_ONE()
+{
+    Value *exc_tb = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *exc_inst = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *exc_type = Pop();
+    DoRaise(exc_type, exc_inst, exc_tb);
+}
+
+void
+LlvmFunctionBuilder::RAISE_VARARGS_TWO()
+{
+    Value *exc_tb = Constant::getNullValue(
+        TypeBuilder<PyObject *>::cache(this->module_));
+    Value *exc_inst = Pop();
+    Value *exc_type = Pop();
+    DoRaise(exc_type, exc_inst, exc_tb);
+}
+
+void
+LlvmFunctionBuilder::RAISE_VARARGS_THREE()
+{
+    Value *exc_tb = Pop();
+    Value *exc_inst = Pop();
+    Value *exc_type = Pop();
+    DoRaise(exc_type, exc_inst, exc_tb);
+}
+
+void
 LlvmFunctionBuilder::STORE_SUBSCR()
 {
     // Performing obj[key] = val

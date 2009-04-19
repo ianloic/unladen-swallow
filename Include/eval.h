@@ -34,6 +34,8 @@ PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(int) _PyEval_AssignSlice(PyObject *, PyObject *,
                                     PyObject *, PyObject *);
 
+PyAPI_FUNC(int) _PyEval_DoRaise(PyObject *type, PyObject *val, PyObject *tb);
+
 #ifdef __cplusplus
 }
 #endif

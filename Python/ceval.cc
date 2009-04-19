@@ -1749,6 +1749,25 @@ do_raise(PyObject *type, PyObject *value, PyObject *tb)
 	return WHY_EXCEPTION;
 }
 
+/* Expose do_raise with a slightly different return value for ll_compile.cc;
+   return 1 for WHY_RERAISE, 0 for WHY_EXCEPTION */
+int
+_PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
+{
+	enum why_code reason = do_raise(type, value, tb);
+	switch (reason) {
+	case WHY_EXCEPTION:
+		return 0;
+	case WHY_RERAISE:
+		return -1;
+	default:
+		PyErr_Format(PyExc_SystemError,
+			     "Unhandled why_code %d in _PyEval_DoRaise()",
+			     reason);
+		return 0;
+	}
+}
+
 /* Iterate v argcnt times and store the results on the stack (via decreasing
    sp).  Return 1 for success, 0 if error. */
 

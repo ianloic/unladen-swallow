@@ -139,6 +139,11 @@ public:
     void STORE_ATTR(int index);
     void DELETE_ATTR(int index);
 
+    void RAISE_VARARGS_ZERO();
+    void RAISE_VARARGS_ONE();
+    void RAISE_VARARGS_TWO();
+    void RAISE_VARARGS_THREE();
+
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
         InsertAbort(#NAME); \
@@ -155,10 +160,6 @@ public:
     UNIMPLEMENTED(DUP_TOP_THREE)
     UNIMPLEMENTED(ROT_TWO)
     UNIMPLEMENTED(ROT_FOUR)
-    UNIMPLEMENTED(RAISE_VARARGS_ZERO)
-    UNIMPLEMENTED(RAISE_VARARGS_ONE)
-    UNIMPLEMENTED(RAISE_VARARGS_TWO)
-    UNIMPLEMENTED(RAISE_VARARGS_THREE)
     UNIMPLEMENTED(WITH_CLEANUP)
     UNIMPLEMENTED(YIELD_VALUE)
 
@@ -274,6 +275,12 @@ private:
         const llvm::Type *alloca_type,
         llvm::Value *array_size,
         const char *name);
+
+    // Set exception information and jump to exception handling. The
+    // arguments can be Value*'s representing NULL to implement the
+    // four forms of the 'raise' statement. Steals all references.
+    void DoRaise(llvm::Value *exc_type, llvm::Value *exc_inst,
+                 llvm::Value *exc_tb);
 
     // Helper methods for binary and unary operators, passing the name
     // of the Python/C API function that implements the operation.
