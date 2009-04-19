@@ -82,7 +82,14 @@ llvmfunction_dealloc(PyLlvmFunctionObject *functionobj)
     // Allow global optimizations to destroy the function.
     function->setLinkage(llvm::GlobalValue::InternalLinkage);
     if (function->use_empty()) {
-        // Delete the function if it's already unused.
+        // Delete the function if it's already unused. 
+        // Free the machine code for the function first, or LLVM will try to
+        // reuse it later.  This is probably a bug in LLVM. TODO(twouters):
+        // fix the bug in LLVM and remove this workaround.
+        PyGlobalLlvmData *global_llvm_data =
+	    PyThreadState_GET()->interp->global_llvm_data;
+        llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+        engine->freeMachineCodeForFunction(function);
         function->eraseFromParent();
     }
 }
