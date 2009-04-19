@@ -1759,7 +1759,7 @@ _PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
 	case WHY_EXCEPTION:
 		return 0;
 	case WHY_RERAISE:
-		return -1;
+		return 1;
 	default:
 		PyErr_Format(PyExc_SystemError,
 			     "Unhandled why_code %d in _PyEval_DoRaise()",
