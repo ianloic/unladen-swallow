@@ -1234,6 +1234,20 @@ def listcomp_exc(x):
         self.assertRaisesWithArgs(OpExc, ('delslice', 0, sys.maxint),
                                   delslice_none, OpRaiser())
 
+        augassign_none = compile_for_llvm('augassign_none', '''
+def augassign_none(x):
+    x[:] += (0,)
+''', level)
+        op = OpRecorder()
+        augassign_none(op)
+        self.assertEquals(op.ops, [
+            # The result of op.__getslice__(0, sys.maxint), and ..
+            ('getslice', 0, sys.maxint),
+            # ... the result of op.__setslice__(0, sys.maxint, seq) ..
+            ('setslice', 0, sys.maxint,
+             # .. with seq being op.__getslice__(0, sys.maxint) + (0,)
+             ('getslice', 0, sys.maxint, 0))])
+
     @at_each_optimization_level
     def test_slice_left(self, level):
         getslice_left = compile_for_llvm('getslice_left', '''
@@ -1264,6 +1278,20 @@ def delslice_left(x, y):
         self.assertEquals(op.ops, [('delslice', 5, sys.maxint)])
         self.assertRaisesWithArgs(OpExc, ('delslice', 5, sys.maxint),
                                   delslice_left, OpRaiser(), 5)
+
+        augassign_left = compile_for_llvm('augassign_left', '''
+def augassign_left(x, y):
+    x[y:] += (1,)
+''', level)
+        op = OpRecorder()
+        augassign_left(op, 2)
+        self.assertEquals(op.ops, [
+            # The result of op.__getslice__(2, sys.maxint), and ..
+            ('getslice', 2, sys.maxint),
+            # ... the result of op.__setslice__(2, sys.maxint, seq) ..
+            ('setslice', 2, sys.maxint,
+             # .. with seq being op.__getslice__(2, sys.maxint) + (1,)
+             ('getslice', 2, sys.maxint, 1))])
 
     @at_each_optimization_level
     def test_slice_right(self, level):
@@ -1296,6 +1324,20 @@ def delslice_right(x, y):
         self.assertRaisesWithArgs(OpExc, ('delslice', 0, 10),
                                   delslice_right, OpRaiser(), 10)
 
+        augassign_right = compile_for_llvm('augassign_right', '''
+def augassign_right(x, y):
+    x[:y] += (2,)
+''', level)
+        op = OpRecorder()
+        augassign_right(op, 1)
+        self.assertEquals(op.ops, [
+            # The result of op.__getslice__(0, 1), and ..
+            ('getslice', 0, 1),
+            # ... the result of op.__setslice__(0, 1, seq) ..
+            ('setslice', 0, 1,
+             # .. with seq being op.__getslice__(0, 1) + (2,)
+             ('getslice', 0, 1, 2))])
+
     @at_each_optimization_level
     def test_slice_both(self, level):
         getslice_both = compile_for_llvm('getslice_both', '''
@@ -1326,6 +1368,20 @@ def delslice_both(x, y, z):
         self.assertEquals(op.ops, [('delslice', 4, -6)])
         self.assertRaisesWithArgs(OpExc, ('delslice', 4, -6),
                                   delslice_both, OpRaiser(), 4, -6)
+
+        augassign_both = compile_for_llvm('augassign_both', '''
+def augassign_both(x, y, z):
+    x[y:z] += (3,)
+''', level)
+        op = OpRecorder()
+        augassign_both(op, 1, 2)
+        self.assertEquals(op.ops, [
+            # The result of op.__getslice__(1, 2), and ..
+            ('getslice', 1, 2),
+            # ... the result of op.__setslice__(1, 2, seq) ..
+            ('setslice', 1, 2,
+             # .. with seq being op.__getslice__(1, 2) + (3,)
+             ('getslice', 1, 2, 3))])
 
 class OpExc(Exception):
     def __cmp__(self, other):

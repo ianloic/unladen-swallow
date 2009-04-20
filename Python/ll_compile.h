@@ -67,7 +67,10 @@ public:
     void POP_TOP();
     void DUP_TOP();
     void DUP_TOP_TWO();
+    void DUP_TOP_THREE();
+    void ROT_TWO();
     void ROT_THREE();
+    void ROT_FOUR();
 
     void BINARY_ADD();
     void BINARY_SUBTRACT();
@@ -157,9 +160,6 @@ public:
         InsertAbort(#NAME); \
     }
 
-    UNIMPLEMENTED(DUP_TOP_THREE)
-    UNIMPLEMENTED(ROT_TWO)
-    UNIMPLEMENTED(ROT_FOUR)
     UNIMPLEMENTED(WITH_CLEANUP)
     UNIMPLEMENTED(YIELD_VALUE)
 

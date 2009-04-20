@@ -1649,12 +1649,51 @@ LlvmFunctionBuilder::DUP_TOP_TWO()
 }
 
 void
+LlvmFunctionBuilder::DUP_TOP_THREE()
+{
+    Value *first = Pop();
+    Value *second = Pop();
+    Value *third = Pop();
+    IncRef(first);
+    IncRef(second);
+    IncRef(third);
+    Push(third);
+    Push(second);
+    Push(first);
+    Push(third);
+    Push(second);
+    Push(first);
+}
+
+void
+LlvmFunctionBuilder::ROT_TWO()
+{
+    Value *first = Pop();
+    Value *second = Pop();
+    Push(first);
+    Push(second);
+}
+
+void
 LlvmFunctionBuilder::ROT_THREE()
 {
     Value *first = Pop();
     Value *second = Pop();
     Value *third = Pop();
     Push(first);
+    Push(third);
+    Push(second);
+}
+
+void
+LlvmFunctionBuilder::ROT_FOUR()
+{
+    Value *first = Pop();
+    Value *second = Pop();
+    Value *third = Pop();
+    Value *fourth = Pop();
+    Push(first);
+    Push(fourth);
     Push(third);
     Push(second);
 }
