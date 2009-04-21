@@ -4,8 +4,11 @@
 
 #include "_llvmfunctionobject.h"
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/Constants.h"
+#include "llvm/DerivedTypes.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Function.h"
+#include "llvm/GlobalVariable.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/Support/CommandLine.h"
@@ -151,6 +154,35 @@ PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *global_data,
     return global_data->Optimize(
         *(llvm::Function *)_PyLlvmFunction_GetFunction(function),
         level);
+}
+
+llvm::Value *
+PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
+{
+    // Use operator[] because we want to insert a new value if one
+    // wasn't already present.
+    llvm::GlobalVariable *& the_string = this->constant_strings_[value];
+    if (the_string == NULL) {
+        llvm::Constant *str_const = llvm::ConstantArray::get(value, true);
+        the_string = new llvm::GlobalVariable(
+            str_const->getType(),
+            true,  // Is constant.
+            llvm::GlobalValue::InternalLinkage,
+            str_const,
+            value,  // Name.
+            this->module_,
+            false);  // Not thread-local.
+    }
+
+    // the_string is a [(value->size()+1) x i8]*. C functions
+    // expecting string constants instead expect an i8* pointing to
+    // the first element.  We use GEP instead of bitcasting to make
+    // type safety more obvious.
+    llvm::Constant *indices[] = {
+        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0),
+        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0)
+    };
+    return llvm::ConstantExpr::getGetElementPtr(the_string, indices, 2);
 }
 
 int

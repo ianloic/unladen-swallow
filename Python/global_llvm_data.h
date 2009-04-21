@@ -12,11 +12,16 @@
 #include "Python/global_llvm_data_fwd.h"
 
 #include "llvm/PassManager.h"
+#include "llvm/ADT/StringMap.h"
+
+#include <string>
 
 namespace llvm {
 class ExecutionEngine;
 class ExistingModuleProvider;
+class GlobalVariable;
 class Module;
+class Value;
 }
 
 struct PyGlobalLlvmData {
@@ -39,6 +44,13 @@ public:
 
     llvm::Module *module() { return this->module_; }
 
+    // Helper functions for building functions in IR.
+
+    // Returns an i8* pointing to a 0-terminated C string holding the
+    // characters from value.  If two such strings have the same
+    // value, only one global constant will be created in the Module.
+    llvm::Value *GetGlobalStringPtr(const std::string &value);
+
 private:
     void InitializeOptimizations();
 
@@ -53,6 +65,10 @@ private:
     llvm::FunctionPassManager optimizations_0_;
     llvm::FunctionPassManager optimizations_1_;
     llvm::FunctionPassManager optimizations_2_;
+
+    // Cached data in module_.  TODO(jyasskin): Make this hold WeakVHs
+    // or other ValueHandles when we import them from LLVM trunk.
+    llvm::StringMap<llvm::GlobalVariable *> constant_strings_;
 };
 
 #endif  /* PYTHON_GLOBAL_LLVM_DATA_H */

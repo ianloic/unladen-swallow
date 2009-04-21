@@ -489,7 +489,7 @@ get_function_type(Module *module)
 LlvmFunctionBuilder::LlvmFunctionBuilder(
     PyGlobalLlvmData *llvm_data, const std::string& name)
     : llvm_data_(llvm_data),
-      module_(llvm_data_->module()),
+      module_(this->llvm_data_->module()),
       function_(Function::Create(
                     get_function_type(this->module_),
                     llvm::GlobalValue::ExternalLinkage,
@@ -1362,7 +1362,7 @@ LlvmFunctionBuilder::END_FINALLY()
     Value *system_error = builder().CreateLoad(GetGlobalVariable<PyObject *>(
                                                    "PyExc_SystemError"));
     Value *err_msg =
-        builder().CreateGlobalStringPtr("'finally' pops bad exception");
+        this->llvm_data_->GetGlobalStringPtr("'finally' pops bad exception");
     builder().CreateCall2(GetGlobalFunction<void(PyObject *, const char *)>(
                               "PyErr_SetString"),
                           system_error, err_msg);
@@ -2166,7 +2166,7 @@ LlvmFunctionBuilder::DecRef(Value *value)
     // TODO: Well that __FILE__ and __LINE__ are going to be useless!
     builder().CreateCall3(
         neg_refcount,
-        builder().CreateGlobalStringPtr(__FILE__, __FILE__),
+        this->llvm_data_->GetGlobalStringPtr(__FILE__),
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), __LINE__),
         as_pyobject);
     builder().CreateBr(block_tail);
@@ -2265,8 +2265,7 @@ LlvmFunctionBuilder::InsertAbort(const char *opcode_name)
     std::string message("Undefined opcode: ");
     message.append(opcode_name);
     builder().CreateCall(GetGlobalFunction<int(const char*)>("puts"),
-                         builder().CreateGlobalStringPtr(message.c_str(),
-                                                         message.c_str()));
+                         this->llvm_data_->GetGlobalStringPtr(message));
     builder().CreateCall(GetGlobalFunction<void()>("abort"));
 }
 
