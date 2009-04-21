@@ -133,6 +133,7 @@ public:
     void BUILD_MAP(int size);
     void BUILD_SLICE_TWO();
     void BUILD_SLICE_THREE();
+    void UNPACK_SEQUENCE(int size);
 
     void LOAD_GLOBAL(int index);
     void STORE_GLOBAL(int index);
@@ -170,7 +171,6 @@ public:
     UNIMPLEMENTED_I(DELETE_NAME);
     UNIMPLEMENTED_I(LOAD_CLOSURE)
     UNIMPLEMENTED_I(MAKE_CLOSURE)
-    UNIMPLEMENTED_I(UNPACK_SEQUENCE)
 
     UNIMPLEMENTED_J(CONTINUE_LOOP);
 

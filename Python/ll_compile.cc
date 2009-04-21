@@ -2098,6 +2098,38 @@ LlvmFunctionBuilder::BUILD_SLICE_THREE()
     Push(result);
 }
 
+void
+LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
+{
+    // TODO(twouters): we could speed up the common case quite a bit by
+    // doing the unpacking inline, like ceval.cc does; that would allow
+    // LLVM to optimize the heck out of it as well. Then again, we could
+    // do even better by combining this opcode and the STORE_* ones that
+    // follow into a single block of code circumventing the stack
+    // altogether. And omitting the horrible external stack munging that
+    // UnpackIterable does.
+    Value *iterable = Pop();
+    Function *unpack_iterable = GetGlobalFunction<
+        int(PyObject *, int, PyObject **)>("_PyEval_UnpackIterable");
+    Value *new_stack_pointer = builder().CreateGEP(
+        builder().CreateLoad(this->stack_pointer_addr_),
+        ConstantInt::get(TypeBuilder<Py_ssize_t>::cache(this->module_),
+                         size, true /* signed */));
+    Value *result = builder().CreateCall3(
+        unpack_iterable, iterable,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), size, true),
+        // _PyEval_UnpackIterable really takes the *new* stack pointer as
+        // an argument, because it builds the result stack in reverse.
+        new_stack_pointer);
+    DecRef(iterable);
+    PropagateExceptionOnNonZero(result);
+    // Not setting the new stackpointer on failure does mean that if
+    // _PyEval_UnpackIterable failed after pushing some values onto the
+    // stack, and it didn't clean up after itself, we lose references.  This
+    // is what ceval.cc does as well.
+    builder().CreateStore(new_stack_pointer, this->stack_pointer_addr_);
+}
+
 // Adds delta to *addr, and returns the new value.
 static Value *
 increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)

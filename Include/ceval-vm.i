@@ -2204,11 +2204,11 @@ if (PyTuple_CheckExact(a1) && PyTuple_GET_SIZE(a1) == i) {
                 Py_INCREF(a2);
                 PUSH(a2);
         }
-} else if (unpack_iterable(a1, i, stack_pointer + i)) {
-        stack_pointer += i;
-} else {
-        /* unpack_iterable() raised an exception */
+} else if (_PyEval_UnpackIterable(a1, i, stack_pointer + i) < 0) {
+        /* _PyEval_UnpackIterable() raised an exception */
         why = WHY_EXCEPTION;
+} else {
+        stack_pointer += i;
 }
 Py_DECREF(a1);
 ERROR();

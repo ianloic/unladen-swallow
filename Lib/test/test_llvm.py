@@ -1926,6 +1926,18 @@ class LiteralsTests(unittest.TestCase):
         self.assertRaises(TypeError, t3, "2")
 
     @at_each_optimization_level
+    def test_unpack_tuple(self, level):
+        unpack = compile_for_llvm('unpack', '''
+def unpack(x):
+    a, b, (c, d) = x
+    return (a, b, c, d)
+''', level)
+        self.assertEquals(unpack((1, 2, (3, 4))), (1, 2, 3, 4))
+        self.assertRaises(TypeError, unpack, None)
+        self.assertRaises(ValueError, unpack, (1, 2, (3, 4, 5)))
+        self.assertRaises(ValueError, unpack, (1, 2))
+
+    @at_each_optimization_level
     def test_build_list(self, level):
         l1 = compile_for_llvm('l1', 'def l1(): return [1, 2, 3]', level)
         self.assertEquals(l1(), [1, 2, 3])

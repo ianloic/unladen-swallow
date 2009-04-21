@@ -502,7 +502,6 @@ enum why_code {
 };
 
 static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
-static int unpack_iterable(PyObject *, int, PyObject **);
 
 /* Records whether tracing is on for any thread.  Counts the number of
    threads for which tstate->c_tracefunc is non-NULL, so if the value
@@ -1768,25 +1767,26 @@ _PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
 	}
 }
 
-/* Iterate v argcnt times and store the results on the stack (via decreasing
-   sp).  Return 1 for success, 0 if error. */
-
-static int
-unpack_iterable(PyObject *v, int argcnt, PyObject **sp)
+/* Iterate iterable argcount times and store the results on the stack (by
+   manipulating stack_pointer). The iterable must have exactly argcount
+   items. Return 0 for success, -1 if error. */
+int
+_PyEval_UnpackIterable(PyObject *iterable, int argcount,
+                       PyObject **stack_pointer)
 {
-	int i = 0;
+	int i;
 	PyObject *it;  /* iter(v) */
-	PyObject *w;
+	PyObject *item;
 
-	assert(v != NULL);
+	assert(iterable != NULL);
 
-	it = PyObject_GetIter(v);
+	it = PyObject_GetIter(iterable);
 	if (it == NULL)
-		goto Error;
+		return -1;
 
-	for (; i < argcnt; i++) {
-		w = PyIter_Next(it);
-		if (w == NULL) {
+	for (i = 0; i < argcount; i++) {
+		item = PyIter_Next(it);
+		if (item == NULL) {
 			/* Iterator done, via error or exhaustion. */
 			if (!PyErr_Occurred()) {
 				PyErr_Format(PyExc_ValueError,
@@ -1795,25 +1795,25 @@ unpack_iterable(PyObject *v, int argcnt, PyObject **sp)
 			}
 			goto Error;
 		}
-		*--sp = w;
+		*--stack_pointer = item;
 	}
 
 	/* We better have exhausted the iterator now. */
-	w = PyIter_Next(it);
-	if (w == NULL) {
+	item = PyIter_Next(it);
+	if (item == NULL) {
 		if (PyErr_Occurred())
 			goto Error;
 		Py_DECREF(it);
-		return 1;
+		return 0;
 	}
-	Py_DECREF(w);
+	Py_DECREF(item);
 	PyErr_SetString(PyExc_ValueError, "too many values to unpack");
 	/* fall through */
 Error:
-	for (; i > 0; i--, sp++)
-		Py_DECREF(*sp);
+	for (; i > 0; i--, stack_pointer++)
+		Py_DECREF(*stack_pointer);
 	Py_XDECREF(it);
-	return 0;
+	return -1;
 }
 
 
