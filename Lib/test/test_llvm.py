@@ -247,6 +247,35 @@ def catch(obj):
         self.assertEquals({"x": 2}, obj)
 
     @at_each_optimization_level
+    def test_filtered_except(self, level):
+        catch = compile_for_llvm("catch", """
+def catch(exc_type, obj):
+    try:
+        1 / 0
+    except exc_type:
+        obj["x"] = 2
+""", level)
+        obj = {}
+        self.assertEquals(None, catch(ZeroDivisionError, obj))
+        self.assertEquals({"x": 2}, obj)
+        obj = {}
+        self.assertRaises(ZeroDivisionError, catch, UnboundLocalError, obj)
+        self.assertEquals({}, obj)
+
+    @at_each_optimization_level
+    def test_filtered_except_var(self, level):
+        catch = compile_for_llvm("catch", """
+def catch():
+    try:
+        1 / 0
+    except ZeroDivisionError, exc:
+        return exc
+""", level)
+        exc = catch()
+        self.assertEquals(ZeroDivisionError, type(exc))
+        self.assertEquals(('integer division or modulo by zero',), exc.args)
+
+    @at_each_optimization_level
     def test_except_skipped_on_fallthrough(self, level):
         catch = compile_for_llvm("catch", """
 def catch(obj):
@@ -405,7 +434,6 @@ def catch(obj):
 
     @at_each_optimization_level
     def test_finally_in_finally(self, level):
-        # Raise from the try.
         catch = compile_for_llvm("catch", """
 def catch(obj):
     try:
@@ -422,7 +450,6 @@ def catch(obj):
 
     @at_each_optimization_level
     def test_subexception_caught_in_finally(self, level):
-        # Raise from the try.
         catch = compile_for_llvm("catch", """
 def catch(obj):
     try:
@@ -871,6 +898,29 @@ def nested(lst, obj):
         obj = {}
         self.assertEquals(1, nested([1,2,3], obj))
         self.assertEquals({"x": 2, "y": 3}, obj)
+
+    @at_each_optimization_level
+    def test_except_in_loop(self, level):
+        nested = compile_for_llvm('nested', '''
+def nested(lst, obj):
+    try:
+        for x in lst:
+            try:
+                a = a
+            except ZeroDivisionError:
+                obj["x"] = 2
+    except UnboundLocalError:
+        obj["z"] = 4
+    # Make sure the block stack is ok.
+    try:
+        for x in lst:
+            return x
+    finally:
+        obj["y"] = 3
+''', level)
+        obj = {}
+        self.assertEquals(1, nested([1,2,3], obj))
+        self.assertEquals({"z": 4, "y": 3}, obj)
 
     @at_each_optimization_level
     def test_except_through_loop_finally(self, level):
