@@ -506,7 +506,7 @@ static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
 /* Records whether tracing is on for any thread.  Counts the number of
    threads for which tstate->c_tracefunc is non-NULL, so if the value
    is 0, we know we don't have to check this thread's c_tracefunc.
-   This speeds up the if statement in PyEval_EvalFrameEx() after
+   This speeds up the if statement in PyEval_EvalFrame() after
    fast_next_opcode*/
 static int _Py_TracingPossible = 0;
 
@@ -679,15 +679,19 @@ PyEval_EvalCode(PyCodeObject *co, PyObject *globals, PyObject *locals)
 /* Interpreter main loop */
 
 PyObject *
-PyEval_EvalFrame(PyFrameObject *f) {
+PyEval_EvalFrameEx(PyFrameObject *f, int throwflag) {
 	/* This is for backward compatibility with extension modules that
            used this API; core interpreter code should call
-           PyEval_EvalFrameEx() */
-	return PyEval_EvalFrameEx(f, 0);
+           PyEval_EvalFrame() */
+	PyObject *result;
+	f->f_throwflag = throwflag;
+	result = PyEval_EvalFrame(f);
+	f->f_throwflag = 0;
+	return result;
 }
 
 PyObject *
-PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
+PyEval_EvalFrame(PyFrameObject *f)
 {
 #ifdef DXPAIRS
 	int lastopcode = 0;
@@ -928,7 +932,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 	why = WHY_NOT;
 
-	if (throwflag) { /* support for generator.throw() */
+	if (f->f_throwflag) { /* support for generator.throw() */
 		why = WHY_EXCEPTION;
 		goto on_error;
 	}
@@ -1470,7 +1474,7 @@ kw_found:
 		return PyGen_New(f);
 	}
 
-	retval = PyEval_EvalFrameEx(f,0);
+	retval = PyEval_EvalFrame(f);
 
 fail: /* Jump here from prelude on failure */
 
@@ -2404,7 +2408,7 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 			Py_INCREF(*stack);
 			fastlocals[i] = *stack++;
 		}
-		retval = PyEval_EvalFrameEx(f,0);
+		retval = PyEval_EvalFrame(f);
 		++tstate->recursion_depth;
 		Py_DECREF(f);
 		--tstate->recursion_depth;

@@ -11,7 +11,7 @@ typedef int Oparg;
 
 /* The same information as PyInst, but optimized for a threaded
    interpreter.  opcode is now the address of the label in
-   PyEval_EvalFrameEx that interprets the operation. This struct also
+   PyEval_EvalFrame that interprets the operation. This struct also
    throws away the information about which array elements are
    arguments, but you can get that back by looking into co_code. */
 typedef union inst {

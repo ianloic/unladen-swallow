@@ -725,6 +725,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	f->f_lasti = -1;
 	f->f_lineno = code->co_firstlineno;
 	f->f_iblock = 0;
+	f->f_throwflag = 0;
 
 	_PyObject_GC_TRACK(f);
 	return f;

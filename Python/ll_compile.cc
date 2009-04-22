@@ -414,7 +414,8 @@ public:
             TypeBuilder<char*>::cache(module),
             int_type,  // f_lasti
             int_type,  // f_lineno
-            int_type,  // f_iblock
+            TypeBuilder<short>::cache(module),  // f_throwflag
+            TypeBuilder<short>::cache(module),  // f_iblock
             // f_blockstack:
             TypeBuilder<PyTryBlock[CO_MAXBLOCKS]>::cache(module),
             // f_localsplus, flexible array.
@@ -442,6 +443,7 @@ public:
         FIELD_TSTATE,
         FIELD_LASTI,
         FIELD_LINENO,
+        FIELD_THROWFLAG,
         FIELD_IBLOCK,
         FIELD_BLOCKSTACK,
         FIELD_LOCALSPLUS,
@@ -642,7 +644,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
     BasicBlock *do_return =
         BasicBlock::Create("do_return", this->function_);
     {  // Implements the fast_block_end loop toward the end of
-       // PyEval_EvalFrameEx().  This pops blocks off the block-stack
+       // PyEval_EvalFrame().  This pops blocks off the block-stack
        // and values off the value-stack until it finds a block that
        // wants to handle the current unwind reason.
         BasicBlock *unwind_loop_header =
@@ -1422,7 +1424,7 @@ LlvmFunctionBuilder::END_FINALLY()
         err_type, err_value, err_traceback);
     // Logically this is an UNWIND_RERAISE, but all of the exception
     // handling logic expects UNWIND_EXCEPTION.  The only difference
-    // in EvalFrameEx is that UNWIND_EXCEPTION calls
+    // in EvalFrame is that UNWIND_EXCEPTION calls
     // PyTraceBack_Here(frame) and traces the exception.
     this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
@@ -2668,7 +2670,7 @@ _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
 }
 
 // Copied from the SETUP_FINALLY && WHY_EXCEPTION block in
-// fast_block_end in PyEval_EvalFrameEx().
+// fast_block_end in PyEval_EvalFrame().
 void
 _PyLlvm_WrapEnterExceptOrFinally(py::ExcInfo *exc_info, int block_type)
 {

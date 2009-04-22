@@ -81,7 +81,9 @@ gen_send_ex(PyGenObject *gen, PyObject *arg, int exc)
 	f->f_back = tstate->frame;
 
 	gen->gi_running = 1;
-	result = PyEval_EvalFrameEx(f, exc);
+	f->f_throwflag = exc;
+	result = PyEval_EvalFrame(f);
+	f->f_throwflag = 0;
 	gen->gi_running = 0;
 
 	/* Don't keep the reference to f_back any longer than necessary.  It
