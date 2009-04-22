@@ -498,58 +498,61 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                     "#u#" + name,
                     this->module_))
 {
-    Function::arg_iterator args = function()->arg_begin();
+    Function::arg_iterator args = this->function_->arg_begin();
     this->frame_ = args++;
-    assert(args == function()->arg_end() &&
+    assert(args == this->function_->arg_end() &&
            "Unexpected number of arguments");
     this->frame_->setName("frame");
 
-    builder().SetInsertPoint(BasicBlock::Create("entry", function()));
+    this->builder_.SetInsertPoint(BasicBlock::Create("entry", this->function_));
     // CreateAllocaInEntryBlock will insert alloca's here, before
     // any other instructions in the 'entry' block.
 
-    this->unwind_block_ = BasicBlock::Create("unwind_block", function());
+    this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
 
-    this->stack_pointer_addr_ = builder().CreateAlloca(
+    this->stack_pointer_addr_ = this->builder_.CreateAlloca(
         TypeBuilder<PyObject**>::cache(this->module_),
         NULL, "stack_pointer_addr");
-    this->retval_addr_ = builder().CreateAlloca(
+    this->retval_addr_ = this->builder_.CreateAlloca(
         TypeBuilder<PyObject*>::cache(this->module_),
         NULL, "retval_addr");
-    this->unwind_reason_addr_ = builder().CreateAlloca(
+    this->unwind_reason_addr_ = this->builder_.CreateAlloca(
         Type::Int8Ty, NULL, "unwind_reason_addr");
-    this->unwind_target_index_addr_ = builder().CreateAlloca(
+    this->unwind_target_index_addr_ = this->builder_.CreateAlloca(
         Type::Int32Ty, NULL, "unwind_target_index_addr");
 
-    this->stack_bottom_ = builder().CreateLoad(
-        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
+    this->stack_bottom_ = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
         "stack_bottom");
     Value *initial_stack_pointer =
-        builder().CreateLoad(
-            builder().CreateStructGEP(this->frame_, FrameTy::FIELD_STACKTOP),
+        this->builder_.CreateLoad(
+            this->builder_.CreateStructGEP(this->frame_,
+                                           FrameTy::FIELD_STACKTOP),
             "initial_stack_pointer");
-    builder().CreateStore(initial_stack_pointer, this->stack_pointer_addr_);
+    this->builder_.CreateStore(initial_stack_pointer,
+                               this->stack_pointer_addr_);
 
-    Value *code = builder().CreateLoad(
-        builder().CreateStructGEP(this->frame_, FrameTy::FIELD_CODE), "co");
-    this->varnames_ = builder().CreateLoad(
-        builder().CreateStructGEP(code, CodeTy::FIELD_VARNAMES),
+    Value *code = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_CODE),
+        "co");
+    this->varnames_ = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(code, CodeTy::FIELD_VARNAMES),
         "varnames");
     Value *consts_tuple =  // (PyTupleObject*)code->co_consts
-        builder().CreateBitCast(
-            builder().CreateLoad(
-                builder().CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
+        this->builder_.CreateBitCast(
+            this->builder_.CreateLoad(
+                this->builder_.CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
             TypeBuilder<PyTupleObject*>::cache(this->module_));
     // Get the address of the const_tuple's first item, for convenient
     // indexing of all its items.
-    this->consts_ = GetTupleItemSlot(consts_tuple, 0);
-    Value *names_tuple = builder().CreateBitCast(
-        builder().CreateLoad(
-            builder().CreateStructGEP(code, CodeTy::FIELD_NAMES)),
+    this->consts_ = this->GetTupleItemSlot(consts_tuple, 0);
+    Value *names_tuple = this->builder_.CreateBitCast(
+        this->builder_.CreateLoad(
+            this->builder_.CreateStructGEP(code, CodeTy::FIELD_NAMES)),
         TypeBuilder<PyTupleObject*>::cache(this->module_),
         "names");
     // Get the address of the names_tuple's first item as well.
-    this->names_ = GetTupleItemSlot(names_tuple, 0);
+    this->names_ = this->GetTupleItemSlot(names_tuple, 0);
 
     // The next GEP-magic assigns this->fastlocals_ to
     // &frame_[0].f_localsplus[0].
@@ -558,26 +561,26 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         ConstantInt::get(Type::Int32Ty, FrameTy::FIELD_LOCALSPLUS),
         ConstantInt::get(Type::Int32Ty, 0),
     };
-    this->fastlocals_ =
-        builder().CreateGEP(this->frame_,
-                            fastlocals_indices, array_endof(fastlocals_indices),
-                            "fastlocals");
-    Value *nlocals = builder().CreateLoad(
-        builder().CreateStructGEP(code, CodeTy::FIELD_NLOCALS), "nlocals");
+    this->fastlocals_ = this->builder_.CreateGEP(
+        this->frame_,
+        fastlocals_indices, array_endof(fastlocals_indices),
+        "fastlocals");
+    Value *nlocals = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(code, CodeTy::FIELD_NLOCALS), "nlocals");
 
     this->freevars_ =
-        builder().CreateGEP(this->fastlocals_, nlocals, "freevars");
+        this->builder_.CreateGEP(this->fastlocals_, nlocals, "freevars");
     this->globals_ =
-        builder().CreateBitCast(
-            builder().CreateLoad(
-                builder().CreateStructGEP(this->frame_,
-                                          FrameTy::FIELD_GLOBALS)),
+        this->builder_.CreateBitCast(
+            this->builder_.CreateLoad(
+                this->builder_.CreateStructGEP(this->frame_,
+                                               FrameTy::FIELD_GLOBALS)),
             TypeBuilder<PyObject *>::cache(this->module_));
     this->builtins_ =
-        builder().CreateBitCast(
-            builder().CreateLoad(
-                builder().CreateStructGEP(this->frame_,
-                                          FrameTy::FIELD_BUILTINS)),
+        this->builder_.CreateBitCast(
+            this->builder_.CreateLoad(
+                this->builder_.CreateStructGEP(this->frame_,
+                                               FrameTy::FIELD_BUILTINS)),
             TypeBuilder<PyObject *>::cache(this->module_));
 
     FillUnwindBlock();
@@ -586,86 +589,88 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 void
 LlvmFunctionBuilder::FillUnwindBlock()
 {
-    BasicBlock *const orig_block = builder().GetInsertBlock();
+    BasicBlock *const orig_block = this->builder_.GetInsertBlock();
 
     BasicBlock *unreachable_block =
-        BasicBlock::Create("unreachable", function());
-    builder().SetInsertPoint(unreachable_block);
-    Function *abort_func = GetGlobalFunction<void()>("abort");
-    builder().CreateCall(abort_func);
-    builder().CreateUnreachable();
+        BasicBlock::Create("unreachable", this->function_);
+    this->builder_.SetInsertPoint(unreachable_block);
+    Function *abort_func = this->GetGlobalFunction<void()>("abort");
+    this->builder_.CreateCall(abort_func);
+    this->builder_.CreateUnreachable();
 
     // Handles, roughly, the ceval.cc JUMPTO macro.
     BasicBlock *goto_unwind_target_block =
-        BasicBlock::Create("goto_unwind_target", function());
-    builder().SetInsertPoint(goto_unwind_target_block);
+        BasicBlock::Create("goto_unwind_target", this->function_);
+    this->builder_.SetInsertPoint(goto_unwind_target_block);
     Value *unwind_target_index =
-        builder().CreateLoad(this->unwind_target_index_addr_,
-                             "unwind_target_index");
+        this->builder_.CreateLoad(this->unwind_target_index_addr_,
+                                  "unwind_target_index");
     // Each call to AddUnwindTarget() will add a new case to this
     // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
     // but LLVM won't let us do that so we default to jumping to the
     // unreachable block.
     this->unwind_target_switch_ =
-        builder().CreateSwitch(unwind_target_index, unreachable_block);
+        this->builder_.CreateSwitch(unwind_target_index, unreachable_block);
 
     // Code that needs to unwind the stack will jump here.
     // (e.g. returns, exceptions, breaks, and continues).
-    builder().SetInsertPoint(this->unwind_block_);
+    this->builder_.SetInsertPoint(this->unwind_block_);
     Value *unwind_reason =
-        builder().CreateLoad(this->unwind_reason_addr_, "unwind_reason");
+        this->builder_.CreateLoad(this->unwind_reason_addr_, "unwind_reason");
 
     BasicBlock *do_return =
-        BasicBlock::Create("do_return", function());
+        BasicBlock::Create("do_return", this->function_);
     {  // Implements the fast_block_end loop toward the end of
        // PyEval_EvalFrameEx().  This pops blocks off the block-stack
        // and values off the value-stack until it finds a block that
        // wants to handle the current unwind reason.
         BasicBlock *unwind_loop_header =
-            BasicBlock::Create("unwind_loop_header", function());
+            BasicBlock::Create("unwind_loop_header", this->function_);
         BasicBlock *unwind_loop_body =
-            BasicBlock::Create("unwind_loop_body", function());
+            BasicBlock::Create("unwind_loop_body", this->function_);
 
-        FallThroughTo(unwind_loop_header);
+        this->FallThroughTo(unwind_loop_header);
         // Continue looping if frame->f_iblock > 0.
-        Value *blocks_left = builder().CreateLoad(
-            builder().CreateStructGEP(this->frame_, FrameTy::FIELD_IBLOCK));
-        builder().CreateCondBr(IsPositive(blocks_left),
-                               unwind_loop_body, do_return);
+        Value *blocks_left = this->builder_.CreateLoad(
+            this->builder_.CreateStructGEP(this->frame_,
+                                           FrameTy::FIELD_IBLOCK));
+        this->builder_.CreateCondBr(this->IsPositive(blocks_left),
+                                    unwind_loop_body, do_return);
 
-        builder().SetInsertPoint(unwind_loop_body);
-        Value *popped_block = builder().CreateLoad(
-            builder().CreateCall(
-                GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
+        this->builder_.SetInsertPoint(unwind_loop_body);
+        Value *popped_block = this->builder_.CreateLoad(
+            this->builder_.CreateCall(
+                this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
                     "PyFrame_BlockPop"),
                 this->frame_));
         Value *block_type =
-            builder().CreateExtractValue(popped_block,
-                                         TypeBuilder<PyTryBlock>::FIELD_TYPE,
-                                         "block_type");
+            this->builder_.CreateExtractValue(
+                popped_block, TypeBuilder<PyTryBlock>::FIELD_TYPE,
+                "block_type");
 
         // TODO(jyasskin): Handle SETUP_LOOP with UNWIND_CONTINUE.
 
         // Pop values back to where this block started.
         Value *pop_to_level =
-            builder().CreateExtractValue(popped_block,
-                                         TypeBuilder<PyTryBlock>::FIELD_LEVEL,
-                                         "block_level");
-        PopAndDecrefTo(builder().CreateGEP(this->stack_bottom_, pop_to_level));
+            this->builder_.CreateExtractValue(
+                popped_block, TypeBuilder<PyTryBlock>::FIELD_LEVEL,
+                "block_level");
+        this->PopAndDecrefTo(this->builder_.CreateGEP(
+                                 this->stack_bottom_, pop_to_level));
 
         BasicBlock *handle_loop =
-            BasicBlock::Create("handle_loop", function());
+            BasicBlock::Create("handle_loop", this->function_);
         BasicBlock *handle_except =
-            BasicBlock::Create("handle_except", function());
+            BasicBlock::Create("handle_except", this->function_);
         BasicBlock *handle_finally =
-            BasicBlock::Create("handle_finally", function());
+            BasicBlock::Create("handle_finally", this->function_);
         BasicBlock *push_exception =
-            BasicBlock::Create("push_exception", function());
+            BasicBlock::Create("push_exception", this->function_);
         BasicBlock *goto_block_handler =
-            BasicBlock::Create("goto_block_handler", function());
+            BasicBlock::Create("goto_block_handler", this->function_);
 
         llvm::SwitchInst *block_type_switch =
-            builder().CreateSwitch(block_type, unreachable_block, 3);
+            this->builder_.CreateSwitch(block_type, unreachable_block, 3);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
             handle_loop);
@@ -676,52 +681,53 @@ LlvmFunctionBuilder::FillUnwindBlock()
             ConstantInt::get(block_type->getType(), ::SETUP_FINALLY),
             handle_finally);
 
-        builder().SetInsertPoint(handle_loop);
-        Value *unwinding_break = builder().CreateICmpEQ(
+        this->builder_.SetInsertPoint(handle_loop);
+        Value *unwinding_break = this->builder_.CreateICmpEQ(
             unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_BREAK),
             "currently_unwinding_break");
-        builder().CreateCondBr(unwinding_break,
-                               goto_block_handler, unwind_loop_header);
+        this->builder_.CreateCondBr(unwinding_break,
+                                    goto_block_handler, unwind_loop_header);
 
-        builder().SetInsertPoint(handle_except);
+        this->builder_.SetInsertPoint(handle_except);
         // We only consider visiting except blocks when an exception
         // is being unwound.
-        Value *unwinding_exception = builder().CreateICmpEQ(
+        Value *unwinding_exception = this->builder_.CreateICmpEQ(
             unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
             "currently_unwinding_exception");
-        builder().CreateCondBr(unwinding_exception,
-                               push_exception, unwind_loop_header);
+        this->builder_.CreateCondBr(unwinding_exception,
+                                    push_exception, unwind_loop_header);
 
-        builder().SetInsertPoint(push_exception);
+        this->builder_.SetInsertPoint(push_exception);
         // We need an alloca here so _PyLlvm_WrapEnterExceptOrFinally
         // can return into it.  This alloca _won't_ be optimized by
         // mem2reg because its address is taken.
-        Value *exc_info = CreateAllocaInEntryBlock(
+        Value *exc_info = this->CreateAllocaInEntryBlock(
             TypeBuilder<ExcInfo>::cache(this->module_), NULL, "exc_info");
-        builder().CreateCall2(
-            GetGlobalFunction<void(ExcInfo*, int)>(
+        this->builder_.CreateCall2(
+            this->GetGlobalFunction<void(ExcInfo*, int)>(
                 "_PyLlvm_WrapEnterExceptOrFinally"),
             exc_info,
             block_type);
-        Push(builder().CreateLoad(
-                 builder().CreateStructGEP(
-                     exc_info, TypeBuilder<ExcInfo>::FIELD_TB)));
-        Push(builder().CreateLoad(
-                 builder().CreateStructGEP(
-                     exc_info, TypeBuilder<ExcInfo>::FIELD_VAL)));
-        Push(builder().CreateLoad(
-                 builder().CreateStructGEP(
-                     exc_info, TypeBuilder<ExcInfo>::FIELD_EXC)));
-        builder().CreateBr(goto_block_handler);
+        this->Push(this->builder_.CreateLoad(
+                       this->builder_.CreateStructGEP(
+                           exc_info, TypeBuilder<ExcInfo>::FIELD_TB)));
+        this->Push(this->builder_.CreateLoad(
+                       this->builder_.CreateStructGEP(
+                           exc_info, TypeBuilder<ExcInfo>::FIELD_VAL)));
+        this->Push(this->builder_.CreateLoad(
+                       this->builder_.CreateStructGEP(
+                           exc_info, TypeBuilder<ExcInfo>::FIELD_EXC)));
+        this->builder_.CreateBr(goto_block_handler);
 
-        builder().SetInsertPoint(handle_finally);
+        this->builder_.SetInsertPoint(handle_finally);
         // Jump to the finally block, with the stack prepared for
         // END_FINALLY to continue unwinding.
 
-        BasicBlock *push_retval = BasicBlock::Create("push_retval", function());
+        BasicBlock *push_retval =
+            BasicBlock::Create("push_retval", this->function_);
         BasicBlock *handle_finally_end =
-            BasicBlock::Create("handle_finally_end", function());
-        llvm::SwitchInst *should_push_retval = builder().CreateSwitch(
+            BasicBlock::Create("handle_finally_end", this->function_);
+        llvm::SwitchInst *should_push_retval = this->builder_.CreateSwitch(
             unwind_reason, handle_finally_end, 2);
         // When unwinding for an exception, we have to save the
         // exception onto the stack.
@@ -734,69 +740,70 @@ LlvmFunctionBuilder::FillUnwindBlock()
         should_push_retval->addCase(
             ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE), push_retval);
 
-        builder().SetInsertPoint(push_retval);
-        Push(builder().CreateLoad(this->retval_addr_, "retval"));
+        this->builder_.SetInsertPoint(push_retval);
+        this->Push(this->builder_.CreateLoad(this->retval_addr_, "retval"));
 
-        FallThroughTo(handle_finally_end);
+        this->FallThroughTo(handle_finally_end);
         // END_FINALLY expects to find the unwind reason on the top of
         // the stack.  There's probably a way to do this that doesn't
         // involve allocating an int for every unwind through a
         // finally block, but imitating CPython is simpler.
-        Value *unwind_reason_as_pyint = builder().CreateCall(
-            GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
-            builder().CreateZExt(unwind_reason,
-                                 TypeBuilder<long>::cache(this->module_)),
+        Value *unwind_reason_as_pyint = this->builder_.CreateCall(
+            this->GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
+            this->builder_.CreateZExt(unwind_reason,
+                                      TypeBuilder<long>::cache(this->module_)),
             "unwind_reason_as_pyint");
-        Push(unwind_reason_as_pyint);
+        this->Push(unwind_reason_as_pyint);
 
-        FallThroughTo(goto_block_handler);
+        this->FallThroughTo(goto_block_handler);
         // Clear the unwind reason while running through the block's
         // handler.  mem2reg should never actually decide to use this
         // value, but having it here should make such forgotten stores
         // more obvious.
-        builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
-                              this->unwind_reason_addr_);
+        this->builder_.CreateStore(
+            ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
+            this->unwind_reason_addr_);
         // The block's handler field holds the index of the block
         // defining this finally or except, or the tail of the loop we
         // just broke out of.  Jump to it through the unwind switch
         // statement defined above.
-        Value *block_handler = builder().CreateExtractValue(
+        Value *block_handler = this->builder_.CreateExtractValue(
             popped_block, TypeBuilder<PyTryBlock>::FIELD_HANDLER,
             "block_handler");
-        builder().CreateStore(block_handler,
-                              this->unwind_target_index_addr_);
-        builder().CreateBr(goto_unwind_target_block);
+        this->builder_.CreateStore(block_handler,
+                                   this->unwind_target_index_addr_);
+        this->builder_.CreateBr(goto_unwind_target_block);
     }  // End unwind loop.
 
     // If we fall off the end of the unwind loop, there are no blocks
     // left and it's time to pop the rest of the value stack and
     // return.
-    builder().SetInsertPoint(do_return);
-    PopAndDecrefTo(this->stack_bottom_);
-    Value *retval = builder().CreateLoad(this->retval_addr_, "retval");
-    builder().CreateRet(retval);
+    this->builder_.SetInsertPoint(do_return);
+    this->PopAndDecrefTo(this->stack_bottom_);
+    Value *retval = this->builder_.CreateLoad(this->retval_addr_, "retval");
+    this->builder_.CreateRet(retval);
 
-    builder().SetInsertPoint(orig_block);
+    this->builder_.SetInsertPoint(orig_block);
 }
 
 void
 LlvmFunctionBuilder::PopAndDecrefTo(Value *target_stack_pointer)
 {
-    BasicBlock *pop_loop = BasicBlock::Create("pop_loop", function());
-    BasicBlock *pop_block = BasicBlock::Create("pop_stack", function());
-    BasicBlock *pop_done = BasicBlock::Create("pop_done", function());
+    BasicBlock *pop_loop = BasicBlock::Create("pop_loop", this->function_);
+    BasicBlock *pop_block = BasicBlock::Create("pop_stack", this->function_);
+    BasicBlock *pop_done = BasicBlock::Create("pop_done", this->function_);
 
-    FallThroughTo(pop_loop);
-    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
-    Value *finished_popping = builder().CreateICmpULE(
+    this->FallThroughTo(pop_loop);
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    Value *finished_popping = this->builder_.CreateICmpULE(
         stack_pointer, target_stack_pointer);
-    builder().CreateCondBr(finished_popping, pop_done, pop_block);
+    this->builder_.CreateCondBr(finished_popping, pop_done, pop_block);
 
-    builder().SetInsertPoint(pop_block);
-    XDecRef(Pop());
-    builder().CreateBr(pop_loop);
+    this->builder_.SetInsertPoint(pop_block);
+    this->XDecRef(this->Pop());
+    this->builder_.CreateBr(pop_loop);
 
-    builder().SetInsertPoint(pop_done);
+    this->builder_.SetInsertPoint(pop_done);
 }
 
 Value *
@@ -804,24 +811,25 @@ LlvmFunctionBuilder::CreateAllocaInEntryBlock(
     const Type *alloca_type, Value *array_size, const char *name="")
 {
     // In order for LLVM to optimize alloca's, we should emit alloca
-    // instructions in the function entry block. We can get at the block
-    // with function()->begin(), but it will already have a 'br' instruction
-    // at the end. Instantiating the AllocaInst class directly, we pass it
-    // the begin() iterator of the entry block, causing it to insert itself
-    // right before the first instruction in the block.
+    // instructions in the function entry block. We can get at the
+    // block with this->function_->begin(), but it will already have a
+    // 'br' instruction at the end. Instantiating the AllocaInst class
+    // directly, we pass it the begin() iterator of the entry block,
+    // causing it to insert itself right before the first instruction
+    // in the block.
     return new llvm::AllocaInst(alloca_type, array_size, name,
-                                function()->begin()->begin());
+                                this->function_->begin()->begin());
 }
 
 void
 LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
 {
-    if (builder().GetInsertBlock()->getTerminator() == NULL) {
+    if (this->builder_.GetInsertBlock()->getTerminator() == NULL) {
         // If the block doesn't already end with a branch or
         // return, branch to the next block.
-        builder().CreateBr(next_block);
+        this->builder_.CreateBr(next_block);
     }
-    builder().SetInsertPoint(next_block);
+    this->builder_.SetInsertPoint(next_block);
 }
 
 ConstantInt *
@@ -839,188 +847,190 @@ LlvmFunctionBuilder::AddUnwindTarget(llvm::BasicBlock *target)
 void
 LlvmFunctionBuilder::Return(Value *retval)
 {
-    builder().CreateStore(retval, this->retval_addr_);
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
-                          this->unwind_reason_addr_);
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateStore(retval, this->retval_addr_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
 }
 
 void
 LlvmFunctionBuilder::PropagateException()
 {
-    builder().CreateStore(
+    this->builder_.CreateStore(
         Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
         this->retval_addr_);
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
-                          this->unwind_reason_addr_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                               this->unwind_reason_addr_);
     // TODO(jyasskin): Arrange to call PyTraceBack_Here and, if
     // tracing is turned on, the appropriate trace function.
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateBr(this->unwind_block_);
 }
 
 void
 LlvmFunctionBuilder::LOAD_CONST(int index)
 {
-    Value *const_ = builder().CreateLoad(
-        builder().CreateGEP(this->consts_,
-                            ConstantInt::get(Type::Int32Ty, index)));
-    IncRef(const_);
-    Push(const_);
+    Value *const_ = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(this->consts_,
+                                 ConstantInt::get(Type::Int32Ty, index)));
+    this->IncRef(const_);
+    this->Push(const_);
 }
 
 void
 LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
 {
     BasicBlock *global_missing = BasicBlock::Create(
-        "LOAD_GLOBAL_global_missing", function());
+        "LOAD_GLOBAL_global_missing", this->function_);
     BasicBlock *global_success = BasicBlock::Create(
-        "LOAD_GLOBAL_global_success", function());
+        "LOAD_GLOBAL_global_success", this->function_);
     BasicBlock *builtin_missing = BasicBlock::Create(
-        "LOAD_GLOBAL_builtin_missing", function());
+        "LOAD_GLOBAL_builtin_missing", this->function_);
     BasicBlock *builtin_success = BasicBlock::Create(
-        "LOAD_GLOBAL_builtin_success", function());
-    BasicBlock *done = BasicBlock::Create("LOAD_GLOBAL_done", function());
-    Value *name = LookupName(name_index);
-    Function *pydict_getitem = GetGlobalFunction<
+        "LOAD_GLOBAL_builtin_success", this->function_);
+    BasicBlock *done = BasicBlock::Create("LOAD_GLOBAL_done", this->function_);
+    Value *name = this->LookupName(name_index);
+    Function *pydict_getitem = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *)>("PyDict_GetItem");
-    Value *global = builder().CreateCall2(
+    Value *global = this->builder_.CreateCall2(
         pydict_getitem, this->globals_, name, "global_variable");
-    builder().CreateCondBr(IsNull(global), global_missing, global_success);
+    this->builder_.CreateCondBr(this->IsNull(global),
+                                global_missing, global_success);
 
-    builder().SetInsertPoint(global_success);
-    IncRef(global);
-    Push(global);
-    builder().CreateBr(done);
+    this->builder_.SetInsertPoint(global_success);
+    this->IncRef(global);
+    this->Push(global);
+    this->builder_.CreateBr(done);
 
-    builder().SetInsertPoint(global_missing);
+    this->builder_.SetInsertPoint(global_missing);
     // This ignores any exception set by PyDict_GetItem (and similarly
     // for the builtins dict below,) but this is what ceval does too.
-    Value *builtin = builder().CreateCall2(
+    Value *builtin = this->builder_.CreateCall2(
         pydict_getitem, this->builtins_, name, "builtin_variable");
-    builder().CreateCondBr(IsNull(builtin), builtin_missing, builtin_success);
+    this->builder_.CreateCondBr(this->IsNull(builtin),
+                                builtin_missing, builtin_success);
 
-    builder().SetInsertPoint(builtin_missing);
-    Function *do_raise = GetGlobalFunction<
+    this->builder_.SetInsertPoint(builtin_missing);
+    Function *do_raise = this->GetGlobalFunction<
         void(PyObject *)>("_PyEval_RaiseForGlobalNameError");
-    builder().CreateCall(do_raise, name);
-    PropagateException();
+    this->builder_.CreateCall(do_raise, name);
+    this->PropagateException();
 
-    builder().SetInsertPoint(builtin_success);
-    IncRef(builtin);
-    Push(builtin);
-    builder().CreateBr(done);
+    this->builder_.SetInsertPoint(builtin_success);
+    this->IncRef(builtin);
+    this->Push(builtin);
+    this->builder_.CreateBr(done);
 
-    builder().SetInsertPoint(done);
+    this->builder_.SetInsertPoint(done);
 }
 
 void
 LlvmFunctionBuilder::STORE_GLOBAL(int name_index)
 {
-    Value *name = LookupName(name_index);
-    Value *value = Pop();
-    Function *pydict_setitem = GetGlobalFunction<
+    Value *name = this->LookupName(name_index);
+    Value *value = this->Pop();
+    Function *pydict_setitem = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyDict_SetItem");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         pydict_setitem, this->globals_, name, value,
         "STORE_GLOBAL_result");
-    DecRef(value);
-    PropagateExceptionOnNonZero(result);
+    this->DecRef(value);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::DELETE_GLOBAL(int name_index)
 {
     BasicBlock *failure = BasicBlock::Create("DELETE_GLOBAL_failure",
-                                             function());
+                                             this->function_);
     BasicBlock *success = BasicBlock::Create("DELETE_GLOBAL_success",
-                                             function());
-    Value *name = LookupName(name_index);
-    Function *pydict_setitem = GetGlobalFunction<
+                                             this->function_);
+    Value *name = this->LookupName(name_index);
+    Function *pydict_setitem = this->GetGlobalFunction<
         int(PyObject *, PyObject *)>("PyDict_DelItem");
-    Value *result = builder().CreateCall2(
+    Value *result = this->builder_.CreateCall2(
         pydict_setitem, this->globals_, name, "STORE_GLOBAL_result");
-    builder().CreateCondBr(IsNonZero(result), failure, success);
+    this->builder_.CreateCondBr(this->IsNonZero(result), failure, success);
 
-    builder().SetInsertPoint(failure);
-    Function *do_raise = GetGlobalFunction<
+    this->builder_.SetInsertPoint(failure);
+    Function *do_raise = this->GetGlobalFunction<
         void(PyObject *)>("_PyEval_RaiseForGlobalNameError");
-    builder().CreateCall(do_raise, name);
-    PropagateException();
+    this->builder_.CreateCall(do_raise, name);
+    this->PropagateException();
 
-    builder().SetInsertPoint(success);
+    this->builder_.SetInsertPoint(success);
 }
 
 void
 LlvmFunctionBuilder::LOAD_ATTR(int index)
 {
-    Value *attr = LookupName(index);
-    Value *obj = Pop();
-    Function *pyobj_getattr = GetGlobalFunction<
+    Value *attr = this->LookupName(index);
+    Value *obj = this->Pop();
+    Function *pyobj_getattr = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *)>("PyObject_GetAttr");
-    Value *result = builder().CreateCall2(
+    Value *result = this->builder_.CreateCall2(
         pyobj_getattr, obj, attr, "LOAD_ATTR_result");
-    DecRef(obj);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->DecRef(obj);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
 LlvmFunctionBuilder::STORE_ATTR(int index)
 {
-    Value *attr = LookupName(index);
-    Value *obj = Pop();
-    Value *value = Pop();
-    Function *pyobj_setattr = GetGlobalFunction<
+    Value *attr = this->LookupName(index);
+    Value *obj = this->Pop();
+    Value *value = this->Pop();
+    Function *pyobj_setattr = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         pyobj_setattr, obj, attr, value, "STORE_ATTR_result");
-    DecRef(obj);
-    DecRef(value);
-    PropagateExceptionOnNonZero(result);
+    this->DecRef(obj);
+    this->DecRef(value);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::DELETE_ATTR(int index)
 {
-    Value *attr = LookupName(index);
-    Value *obj = Pop();
+    Value *attr = this->LookupName(index);
+    Value *obj = this->Pop();
     Value *value =
         Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_));
-    Function *pyobj_setattr = GetGlobalFunction<
+    Function *pyobj_setattr = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         pyobj_setattr, obj, attr, value, "STORE_ATTR_result");
-    DecRef(obj);
-    PropagateExceptionOnNonZero(result);
+    this->DecRef(obj);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::LOAD_FAST(int index)
 {
     BasicBlock *unbound_local =
-        BasicBlock::Create("LOAD_FAST_unbound", function());
+        BasicBlock::Create("LOAD_FAST_unbound", this->function_);
     BasicBlock *success =
-        BasicBlock::Create("LOAD_FAST_success", function());
+        BasicBlock::Create("LOAD_FAST_success", this->function_);
 
-    Value *local = builder().CreateLoad(
-        builder().CreateGEP(this->fastlocals_,
-                            ConstantInt::get(Type::Int32Ty, index)),
+    Value *local = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(this->fastlocals_,
+                                 ConstantInt::get(Type::Int32Ty, index)),
         "FAST_loaded");
-    builder().CreateCondBr(IsNull(local), unbound_local, success);
+    this->builder_.CreateCondBr(this->IsNull(local), unbound_local, success);
 
-    builder().SetInsertPoint(unbound_local);
+    this->builder_.SetInsertPoint(unbound_local);
     Function *do_raise =
-        GetGlobalFunction<void(PyFrameObject*, int)>(
+        this->GetGlobalFunction<void(PyFrameObject*, int)>(
             "_PyEval_RaiseForUnboundLocal");
-    builder().CreateCall2(
+    this->builder_.CreateCall2(
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
                          index, true /* signed */));
-    PropagateException();
+    this->PropagateException();
 
-    builder().SetInsertPoint(success);
-    IncRef(local);
-    Push(local);
+    this->builder_.SetInsertPoint(success);
+    this->IncRef(local);
+    this->Push(local);
 }
 
 void
@@ -1030,29 +1040,29 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
 // XXX(twouters): figure out how to support WITH_TSC in LLVM.
 #error WITH_TSC builds are unsupported at this time.
 #endif
-    Function *call_function = GetGlobalFunction<
+    Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
 
     // ceval.cc passes a copy of the stack pointer to _PyEval_CallFunction,
     // so we do the same thing.
     // XXX(twouters): find out if this is really necessary; we just end up
     // using the stack pointer anyway, even in the error case.
-    Value *temp_stack_pointer_addr = CreateAllocaInEntryBlock(
+    Value *temp_stack_pointer_addr = this->CreateAllocaInEntryBlock(
         TypeBuilder<PyObject**>::cache(this->module_),
         0, "CALL_FUNCTION_stack_pointer_addr");
-    builder().CreateStore(
-        builder().CreateLoad(this->stack_pointer_addr_),
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(this->stack_pointer_addr_),
         temp_stack_pointer_addr);
-    Value *result = builder().CreateCall2(
+    Value *result = this->builder_.CreateCall2(
         call_function,
         temp_stack_pointer_addr,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
         "CALL_FUNCTION_result");
-    builder().CreateStore(
-        builder().CreateLoad(temp_stack_pointer_addr),
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(temp_stack_pointer_addr),
         this->stack_pointer_addr_);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
@@ -1062,14 +1072,14 @@ LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
 // XXX(twouters): figure out how to support WITH_TSC in LLVM.
 #error WITH_TSC builds are unsupported at this time.
 #endif
-    Function *call_function = GetGlobalFunction<
+    Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int)>("_PyEval_CallFunctionVarKw");
-    Value *result = builder().CreateCall2(
+    Value *result = this->builder_.CreateCall2(
         call_function,
         this->stack_pointer_addr_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
         "CALL_FUNCTION_VAR_KW_result");
-    PropagateExceptionOnNonZero(result);
+    this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
 }
 
@@ -1077,25 +1087,25 @@ void
 LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {
-    builder().CreateBr(target);
+    this->builder_.CreateBr(target);
 }
 
 void
 LlvmFunctionBuilder::POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
                                        llvm::BasicBlock *fallthrough)
 {
-    Value *test_value = Pop();
-    Value *is_true = IsPythonTrue(test_value);
-    builder().CreateCondBr(is_true, fallthrough, target);
+    Value *test_value = this->Pop();
+    Value *is_true = this->IsPythonTrue(test_value);
+    this->builder_.CreateCondBr(is_true, fallthrough, target);
 }
 
 void
 LlvmFunctionBuilder::POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
                                       llvm::BasicBlock *fallthrough)
 {
-    Value *test_value = Pop();
-    Value *is_true = IsPythonTrue(test_value);
-    builder().CreateCondBr(is_true, target, fallthrough);
+    Value *test_value = this->Pop();
+    Value *is_true = this->IsPythonTrue(test_value);
+    this->builder_.CreateCondBr(is_true, target, fallthrough);
 }
 
 void
@@ -1103,18 +1113,18 @@ LlvmFunctionBuilder::JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
                                           llvm::BasicBlock *fallthrough)
 {
     BasicBlock *true_path =
-        BasicBlock::Create("JUMP_IF_FALSE_OR_POP_pop", function());
-    Value *test_value = Pop();
-    Push(test_value);
+        BasicBlock::Create("JUMP_IF_FALSE_OR_POP_pop", this->function_);
+    Value *test_value = this->Pop();
+    this->Push(test_value);
     // IsPythonTrue() will steal the reference to test_value, so make sure
     // the stack owns one too.
-    IncRef(test_value);
-    Value *is_true = IsPythonTrue(test_value);
-    builder().CreateCondBr(is_true, true_path, target);
-    builder().SetInsertPoint(true_path);
-    test_value = Pop();
-    DecRef(test_value);
-    builder().CreateBr(fallthrough);
+    this->IncRef(test_value);
+    Value *is_true = this->IsPythonTrue(test_value);
+    this->builder_.CreateCondBr(is_true, true_path, target);
+    this->builder_.SetInsertPoint(true_path);
+    test_value = this->Pop();
+    this->DecRef(test_value);
+    this->builder_.CreateBr(fallthrough);
 
 }
 
@@ -1123,157 +1133,161 @@ LlvmFunctionBuilder::JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
                                          llvm::BasicBlock *fallthrough)
 {
     BasicBlock *false_path =
-        BasicBlock::Create("JUMP_IF_TRUE_OR_POP_pop", function());
-    Value *test_value = Pop();
-    Push(test_value);
+        BasicBlock::Create("JUMP_IF_TRUE_OR_POP_pop", this->function_);
+    Value *test_value = this->Pop();
+    this->Push(test_value);
     // IsPythonTrue() will steal the reference to test_value, so make sure
     // the stack owns one too.
-    IncRef(test_value);
-    Value *is_true = IsPythonTrue(test_value);
-    builder().CreateCondBr(is_true, target, false_path);
-    builder().SetInsertPoint(false_path);
-    test_value = Pop();
-    DecRef(test_value);
-    builder().CreateBr(fallthrough);
+    this->IncRef(test_value);
+    Value *is_true = this->IsPythonTrue(test_value);
+    this->builder_.CreateCondBr(is_true, target, false_path);
+    this->builder_.SetInsertPoint(false_path);
+    test_value = this->Pop();
+    this->DecRef(test_value);
+    this->builder_.CreateBr(fallthrough);
 }
 
 void
 LlvmFunctionBuilder::STORE_FAST(int index)
 {
-    SetLocal(index, Pop());
+    this->SetLocal(index, this->Pop());
 }
 
 void
 LlvmFunctionBuilder::DELETE_FAST(int index)
 {
     BasicBlock *failure =
-        BasicBlock::Create("DELETE_FAST_failure", function());
+        BasicBlock::Create("DELETE_FAST_failure", this->function_);
     BasicBlock *success =
-        BasicBlock::Create("DELETE_FAST_success", function());
-    Value *local_slot = builder().CreateGEP(
+        BasicBlock::Create("DELETE_FAST_success", this->function_);
+    Value *local_slot = this->builder_.CreateGEP(
         this->fastlocals_, ConstantInt::get(Type::Int32Ty, index));
-    Value *orig_value = builder().CreateLoad(
+    Value *orig_value = this->builder_.CreateLoad(
         local_slot, "DELETE_FAST_old_reference");
-    builder().CreateCondBr(IsNull(orig_value), failure, success);
+    this->builder_.CreateCondBr(this->IsNull(orig_value), failure, success);
 
-    builder().SetInsertPoint(failure);
-    Function *do_raise = GetGlobalFunction<
+    this->builder_.SetInsertPoint(failure);
+    Function *do_raise = this->GetGlobalFunction<
         void(PyFrameObject *, int)>("_PyEval_RaiseForUnboundLocal");
-    builder().CreateCall2(
+    this->builder_.CreateCall2(
         do_raise, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_),
                          index, true /* signed */));
-    PropagateException();
+    this->PropagateException();
 
-    builder().SetInsertPoint(success);
-    builder().CreateStore(
+    this->builder_.SetInsertPoint(success);
+    this->builder_.CreateStore(
         Constant::getNullValue(TypeBuilder<PyObject *>::cache(this->module_)),
         local_slot);
-    DecRef(orig_value);
+    this->DecRef(orig_value);
 }
 
 void
 LlvmFunctionBuilder::SETUP_LOOP(llvm::BasicBlock *target,
                                 llvm::BasicBlock *fallthrough)
 {
-    CallBlockSetup(::SETUP_LOOP, target);
+    this->CallBlockSetup(::SETUP_LOOP, target);
 }
 
 void
 LlvmFunctionBuilder::GET_ITER()
 {
-    Value *obj = Pop();
-    Function *pyobject_getiter = GetGlobalFunction<PyObject*(PyObject*)>(
+    Value *obj = this->Pop();
+    Function *pyobject_getiter = this->GetGlobalFunction<PyObject*(PyObject*)>(
         "PyObject_GetIter");
-    Value *iter = builder().CreateCall(pyobject_getiter, obj);
-    DecRef(obj);
-    PropagateExceptionOnNull(iter);
-    Push(iter);
+    Value *iter = this->builder_.CreateCall(pyobject_getiter, obj);
+    this->DecRef(obj);
+    this->PropagateExceptionOnNull(iter);
+    this->Push(iter);
 }
 
 void
 LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
                               llvm::BasicBlock *fallthrough)
 {
-    Value *iter = Pop();
-    Value *iter_tp = builder().CreateBitCast(
-        builder().CreateLoad(
-            builder().CreateStructGEP(iter, ObjectTy::FIELD_TYPE)),
+    Value *iter = this->Pop();
+    Value *iter_tp = this->builder_.CreateBitCast(
+        this->builder_.CreateLoad(
+            this->builder_.CreateStructGEP(iter, ObjectTy::FIELD_TYPE)),
         TypeBuilder<PyTypeObject *>::cache(this->module_),
         "iter_type");
-    Value *iternext = builder().CreateLoad(
-        builder().CreateStructGEP(iter_tp, TypeTy::FIELD_ITERNEXT),
+    Value *iternext = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(iter_tp, TypeTy::FIELD_ITERNEXT),
         "iternext");
-    Value *next = builder().CreateCall(iternext, iter, "next");
-    BasicBlock *got_next = BasicBlock::Create("got_next", function());
-    BasicBlock *next_null = BasicBlock::Create("next_null", function());
-    builder().CreateCondBr(IsNull(next), next_null, got_next);
+    Value *next = this->builder_.CreateCall(iternext, iter, "next");
+    BasicBlock *got_next = BasicBlock::Create("got_next", this->function_);
+    BasicBlock *next_null = BasicBlock::Create("next_null", this->function_);
+    this->builder_.CreateCondBr(this->IsNull(next), next_null, got_next);
 
-    builder().SetInsertPoint(next_null);
-    Value *err_occurred = builder().CreateCall(
-        GetGlobalFunction<PyObject*()>("PyErr_Occurred"));
-    BasicBlock *iter_ended = BasicBlock::Create("iter_ended", function());
-    BasicBlock *exception = BasicBlock::Create("exception", function());
-    builder().CreateCondBr(IsNull(err_occurred), iter_ended, exception);
+    this->builder_.SetInsertPoint(next_null);
+    Value *err_occurred = this->builder_.CreateCall(
+        this->GetGlobalFunction<PyObject*()>("PyErr_Occurred"));
+    BasicBlock *iter_ended = BasicBlock::Create("iter_ended", this->function_);
+    BasicBlock *exception = BasicBlock::Create("exception", this->function_);
+    this->builder_.CreateCondBr(this->IsNull(err_occurred),
+                                iter_ended, exception);
 
-    builder().SetInsertPoint(exception);
-    Value *exc_stopiteration = builder().CreateLoad(
-        GetGlobalVariable<PyObject*>("PyExc_StopIteration"));
-    Value *was_stopiteration = builder().CreateCall(
-        GetGlobalFunction<int(PyObject *)>("PyErr_ExceptionMatches"),
+    this->builder_.SetInsertPoint(exception);
+    Value *exc_stopiteration = this->builder_.CreateLoad(
+        this->GetGlobalVariable<PyObject*>("PyExc_StopIteration"));
+    Value *was_stopiteration = this->builder_.CreateCall(
+        this->GetGlobalFunction<int(PyObject *)>("PyErr_ExceptionMatches"),
         exc_stopiteration);
-    BasicBlock *clear_err = BasicBlock::Create("clear_err", function());
-    BasicBlock *propagate = BasicBlock::Create("propagate", function());
-    builder().CreateCondBr(IsNonZero(was_stopiteration), clear_err, propagate);
+    BasicBlock *clear_err = BasicBlock::Create("clear_err", this->function_);
+    BasicBlock *propagate = BasicBlock::Create("propagate", this->function_);
+    this->builder_.CreateCondBr(this->IsNonZero(was_stopiteration),
+                                clear_err, propagate);
 
-    builder().SetInsertPoint(propagate);
-    DecRef(iter);
-    PropagateException();
+    this->builder_.SetInsertPoint(propagate);
+    this->DecRef(iter);
+    this->PropagateException();
 
-    builder().SetInsertPoint(clear_err);
-    builder().CreateCall(GetGlobalFunction<void()>("PyErr_Clear"));
-    builder().CreateBr(iter_ended);
+    this->builder_.SetInsertPoint(clear_err);
+    this->builder_.CreateCall(this->GetGlobalFunction<void()>("PyErr_Clear"));
+    this->builder_.CreateBr(iter_ended);
 
-    builder().SetInsertPoint(iter_ended);
-    DecRef(iter);
-    builder().CreateBr(target);
+    this->builder_.SetInsertPoint(iter_ended);
+    this->DecRef(iter);
+    this->builder_.CreateBr(target);
 
-    builder().SetInsertPoint(got_next);
-    Push(iter);
-    Push(next);
+    this->builder_.SetInsertPoint(got_next);
+    this->Push(iter);
+    this->Push(next);
 }
 
 void
 LlvmFunctionBuilder::POP_BLOCK()
 {
-    Value *block_info = builder().CreateCall(
-        GetGlobalFunction<PyTryBlock *(PyFrameObject *)>("PyFrame_BlockPop"),
+    Value *block_info = this->builder_.CreateCall(
+        this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
+            "PyFrame_BlockPop"),
         this->frame_);
-    Value *pop_to_level = builder().CreateLoad(
-        builder().CreateStructGEP(block_info,
-                                  TypeBuilder<PyTryBlock>::FIELD_LEVEL));
-    Value *pop_to_addr = builder().CreateGEP(this->stack_bottom_, pop_to_level);
-    PopAndDecrefTo(pop_to_addr);
+    Value *pop_to_level = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(block_info,
+                                       TypeBuilder<PyTryBlock>::FIELD_LEVEL));
+    Value *pop_to_addr =
+        this->builder_.CreateGEP(this->stack_bottom_, pop_to_level);
+    this->PopAndDecrefTo(pop_to_addr);
 }
 
 void
 LlvmFunctionBuilder::SETUP_EXCEPT(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {
-    CallBlockSetup(::SETUP_EXCEPT, target);
+    this->CallBlockSetup(::SETUP_EXCEPT, target);
 }
 
 void
 LlvmFunctionBuilder::SETUP_FINALLY(llvm::BasicBlock *target,
                                    llvm::BasicBlock *fallthrough)
 {
-    CallBlockSetup(::SETUP_FINALLY, target);
+    this->CallBlockSetup(::SETUP_FINALLY, target);
 }
 
 void
 LlvmFunctionBuilder::END_FINALLY()
 {
-    Value *finally_discriminator = Pop();
+    Value *finally_discriminator = this->Pop();
     // END_FINALLY is fairly complicated. It decides what to do based
     // on the top value in the stack.  If that value is an int, it's
     // interpreted as one of the unwind reasons.  If it's an exception
@@ -1282,100 +1296,106 @@ LlvmFunctionBuilder::END_FINALLY()
     // indicating that the finally was entered through normal control
     // flow.
 
-    BasicBlock *unwind_code = BasicBlock::Create("unwind_code", function());
+    BasicBlock *unwind_code =
+        BasicBlock::Create("unwind_code", this->function_);
     BasicBlock *test_exception =
-        BasicBlock::Create("test_exception", function());
+        BasicBlock::Create("test_exception", this->function_);
     BasicBlock *reraise_exception =
-        BasicBlock::Create("reraise_exception", function());
-    BasicBlock *check_none = BasicBlock::Create("check_none", function());
-    BasicBlock *not_none = BasicBlock::Create("not_none", function());
+        BasicBlock::Create("reraise_exception", this->function_);
+    BasicBlock *check_none = BasicBlock::Create("check_none", this->function_);
+    BasicBlock *not_none = BasicBlock::Create("not_none", this->function_);
     BasicBlock *finally_fallthrough =
-        BasicBlock::Create("finally_fallthrough", function());
+        BasicBlock::Create("finally_fallthrough", this->function_);
 
-    builder().CreateCondBr(
-        IsInstanceOfFlagClass(finally_discriminator, Py_TPFLAGS_INT_SUBCLASS),
+    this->builder_.CreateCondBr(
+        this->IsInstanceOfFlagClass(finally_discriminator,
+                                    Py_TPFLAGS_INT_SUBCLASS),
         unwind_code, test_exception);
 
-    builder().SetInsertPoint(unwind_code);
+    this->builder_.SetInsertPoint(unwind_code);
     // The top of the stack was an int, interpreted as an unwind code.
     // If we're resuming a return or continue, the return value or
     // loop target (respectively) is now on top of the stack and needs
     // to be popped off.
-    Value *unwind_reason = builder().CreateTrunc(
-        builder().CreateCall(
-            GetGlobalFunction<long(PyObject *)>("PyInt_AsLong"),
+    Value *unwind_reason = this->builder_.CreateTrunc(
+        this->builder_.CreateCall(
+            this->GetGlobalFunction<long(PyObject *)>("PyInt_AsLong"),
             finally_discriminator),
         Type::Int8Ty,
         "unwind_reason");
-    DecRef(finally_discriminator);
+    this->DecRef(finally_discriminator);
     // Save the unwind reason for when we jump to the unwind block.
-    builder().CreateStore(unwind_reason, this->unwind_reason_addr_);
+    this->builder_.CreateStore(unwind_reason, this->unwind_reason_addr_);
     // Check if we need to pop the return value or loop target.
-    BasicBlock *pop_retval = BasicBlock::Create("pop_retval", function());
+    BasicBlock *pop_retval = BasicBlock::Create("pop_retval", this->function_);
     llvm::SwitchInst *should_pop_retval =
-        builder().CreateSwitch(unwind_reason, this->unwind_block_, 2);
+        this->builder_.CreateSwitch(unwind_reason, this->unwind_block_, 2);
     should_pop_retval->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
                                pop_retval);
     should_pop_retval->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
                                pop_retval);
 
-    builder().SetInsertPoint(pop_retval);
+    this->builder_.SetInsertPoint(pop_retval);
     // We're continuing a return or continue.  Retrieve its argument.
-    builder().CreateStore(Pop(), this->retval_addr_);
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateStore(this->Pop(), this->retval_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
 
-    builder().SetInsertPoint(test_exception);
-    Value *is_exception_or_string = builder().CreateCall(
-        GetGlobalFunction<int(PyObject *)>("_PyLlvm_WrapIsExceptionOrString"),
+    this->builder_.SetInsertPoint(test_exception);
+    Value *is_exception_or_string = this->builder_.CreateCall(
+        this->GetGlobalFunction<int(PyObject *)>(
+            "_PyLlvm_WrapIsExceptionOrString"),
         finally_discriminator);
-    builder().CreateCondBr(IsNonZero(is_exception_or_string),
-                           reraise_exception, check_none);
+    this->builder_.CreateCondBr(this->IsNonZero(is_exception_or_string),
+                                reraise_exception, check_none);
 
-    builder().SetInsertPoint(reraise_exception);
+    this->builder_.SetInsertPoint(reraise_exception);
     Value *err_type = finally_discriminator;
-    Value *err_value = Pop();
-    Value *err_traceback = Pop();
-    builder().CreateCall3(
-        GetGlobalFunction<void(PyObject *, PyObject *, PyObject *)>(
+    Value *err_value = this->Pop();
+    Value *err_traceback = this->Pop();
+    this->builder_.CreateCall3(
+        this->GetGlobalFunction<void(PyObject *, PyObject *, PyObject *)>(
             "PyErr_Restore"),
         err_type, err_value, err_traceback);
     // Logically this is an UNWIND_RERAISE, but all of the exception
     // handling logic expects UNWIND_EXCEPTION.  The only difference
     // in EvalFrameEx is that UNWIND_EXCEPTION calls
     // PyTraceBack_Here(frame) and traces the exception.
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
-                          this->unwind_reason_addr_);
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
 
-    builder().SetInsertPoint(check_none);
+    this->builder_.SetInsertPoint(check_none);
     // The contents of the try block push None onto the stack just
     // before falling through to the finally block.  If we didn't get
     // an unwind reason or an exception, we expect to fall through,
     // but for sanity we also double-check that the None is present.
-    Value *is_none = builder().CreateICmpEQ(
-        finally_discriminator, GetGlobalVariable<PyObject>("_Py_NoneStruct"));
-    DecRef(finally_discriminator);
-    builder().CreateCondBr(is_none, finally_fallthrough, not_none);
+    Value *is_none = this->builder_.CreateICmpEQ(
+        finally_discriminator,
+        this->GetGlobalVariable<PyObject>("_Py_NoneStruct"));
+    this->DecRef(finally_discriminator);
+    this->builder_.CreateCondBr(is_none, finally_fallthrough, not_none);
 
-    builder().SetInsertPoint(not_none);
+    this->builder_.SetInsertPoint(not_none);
     // If we didn't get a None, raise a SystemError.
-    Value *system_error = builder().CreateLoad(GetGlobalVariable<PyObject *>(
-                                                   "PyExc_SystemError"));
+    Value *system_error = this->builder_.CreateLoad(
+        this->GetGlobalVariable<PyObject *>(
+            "PyExc_SystemError"));
     Value *err_msg =
         this->llvm_data_->GetGlobalStringPtr("'finally' pops bad exception");
-    builder().CreateCall2(GetGlobalFunction<void(PyObject *, const char *)>(
-                              "PyErr_SetString"),
-                          system_error, err_msg);
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
-                          this->unwind_reason_addr_);
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateCall2(
+        this->GetGlobalFunction<void(PyObject *, const char *)>(
+            "PyErr_SetString"),
+        system_error, err_msg);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
 
     // After falling through into a finally block, we also fall
     // through out of the block.  This has the nice side-effect of
     // avoiding jumps and switch instructions in the common case,
     // although returning out of a finally may still be slower than
     // ideal.
-    builder().SetInsertPoint(finally_fallthrough);
+    this->builder_.SetInsertPoint(finally_fallthrough);
 }
 
 void
@@ -1384,19 +1404,19 @@ LlvmFunctionBuilder::BREAK_LOOP()
     // Accept code after a break statement, even though it's never executed.
     // Otherwise, CPython's willingness to insert code after block
     // terminators causes problems.
-    BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
-    builder().CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_BREAK),
-                          this->unwind_reason_addr_);
-    builder().CreateBr(this->unwind_block_);
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", this->function_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_BREAK),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
 
-    builder().SetInsertPoint(dead_code);
+    this->builder_.SetInsertPoint(dead_code);
 }
 
 void
 LlvmFunctionBuilder::RETURN_VALUE()
 {
-    Value *retval = Pop();
-    Return(retval);
+    Value *retval = this->Pop();
+    this->Return(retval);
 }
 
 void
@@ -1405,26 +1425,26 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
     // Accept code after a raise statement, even though it's never executed.
     // Otherwise, CPython's willingness to insert code after block
     // terminators causes problems.
-    BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", this->function_);
 
-    Function *do_raise = GetGlobalFunction<
+    Function *do_raise = this->GetGlobalFunction<
         int(PyObject*, PyObject *, PyObject *)>("_PyEval_DoRaise");
     // _PyEval_DoRaise eats references.
-    Value *is_reraise = builder().CreateCall3(
+    Value *is_reraise = this->builder_.CreateCall3(
         do_raise, exc_type, exc_inst, exc_tb, "raise_is_reraise");
     // TODO(twouters): We should be handling re-raises and new exceptions
     // differently, but we don't, yet. If is_reraise is non-zero,
     // we should omit building a new traceback and jump to the correct
     // handler (and/or set the unwind reason to UNWIND_RERAISE).
-    builder().CreateStore(
+    this->builder_.CreateStore(
         ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
         this->unwind_reason_addr_);
-    builder().CreateStore(
+    this->builder_.CreateStore(
         Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
         this->retval_addr_);
-    builder().CreateBr(this->unwind_block_);
+    this->builder_.CreateBr(this->unwind_block_);
 
-    builder().SetInsertPoint(dead_code);
+    this->builder_.SetInsertPoint(dead_code);
 }
 
 void
@@ -1436,7 +1456,7 @@ LlvmFunctionBuilder::RAISE_VARARGS_ZERO()
         TypeBuilder<PyObject *>::cache(this->module_));
     Value *exc_type = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    DoRaise(exc_type, exc_inst, exc_tb);
+    this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
 void
@@ -1446,8 +1466,8 @@ LlvmFunctionBuilder::RAISE_VARARGS_ONE()
         TypeBuilder<PyObject *>::cache(this->module_));
     Value *exc_inst = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *exc_type = Pop();
-    DoRaise(exc_type, exc_inst, exc_tb);
+    Value *exc_type = this->Pop();
+    this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
 void
@@ -1455,71 +1475,71 @@ LlvmFunctionBuilder::RAISE_VARARGS_TWO()
 {
     Value *exc_tb = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *exc_inst = Pop();
-    Value *exc_type = Pop();
-    DoRaise(exc_type, exc_inst, exc_tb);
+    Value *exc_inst = this->Pop();
+    Value *exc_type = this->Pop();
+    this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
 void
 LlvmFunctionBuilder::RAISE_VARARGS_THREE()
 {
-    Value *exc_tb = Pop();
-    Value *exc_inst = Pop();
-    Value *exc_type = Pop();
-    DoRaise(exc_type, exc_inst, exc_tb);
+    Value *exc_tb = this->Pop();
+    Value *exc_inst = this->Pop();
+    Value *exc_type = this->Pop();
+    this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
 void
 LlvmFunctionBuilder::STORE_SUBSCR()
 {
     // Performing obj[key] = val
-    Value *key = Pop();
-    Value *obj = Pop();
-    Value *value = Pop();
-    Function *setitem = GetGlobalFunction<
+    Value *key = this->Pop();
+    Value *obj = this->Pop();
+    Value *value = this->Pop();
+    Function *setitem = this->GetGlobalFunction<
           int(PyObject *, PyObject *, PyObject *)>("PyObject_SetItem");
-    Value *result = builder().CreateCall3(setitem, obj, key, value,
-                                          "STORE_SUBSCR_result");
-    DecRef(value);
-    DecRef(obj);
-    DecRef(key);
-    PropagateExceptionOnNonZero(result);
+    Value *result = this->builder_.CreateCall3(setitem, obj, key, value,
+                                               "STORE_SUBSCR_result");
+    this->DecRef(value);
+    this->DecRef(obj);
+    this->DecRef(key);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::DELETE_SUBSCR()
 {
-    Value *key = Pop();
-    Value *obj = Pop();
-    Function *delitem = GetGlobalFunction<
+    Value *key = this->Pop();
+    Value *obj = this->Pop();
+    Function *delitem = this->GetGlobalFunction<
           int(PyObject *, PyObject *)>("PyObject_DelItem");
-    Value *result = builder().CreateCall2(delitem, obj, key,
-                                          "DELETE_SUBSCR_result");
-    DecRef(obj);
-    DecRef(key);
-    PropagateExceptionOnNonZero(result);
+    Value *result = this->builder_.CreateCall2(delitem, obj, key,
+                                               "DELETE_SUBSCR_result");
+    this->DecRef(obj);
+    this->DecRef(key);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 // Common code for almost all binary operations
 void
 LlvmFunctionBuilder::GenericBinOp(const char *apifunc)
 {
-    Value *rhs = Pop();
-    Value *lhs = Pop();
+    Value *rhs = this->Pop();
+    Value *lhs = this->Pop();
     Function *op =
-        GetGlobalFunction<PyObject*(PyObject*, PyObject*)>(apifunc);
-    Value *result = builder().CreateCall2(op, lhs, rhs, "binop_result");
-    DecRef(lhs);
-    DecRef(rhs);
-    PropagateExceptionOnNull(result);
-    Push(result);
+        this->GetGlobalFunction<PyObject*(PyObject*, PyObject*)>(apifunc);
+    Value *result = this->builder_.CreateCall2(op, lhs, rhs, "binop_result");
+    this->DecRef(lhs);
+    this->DecRef(rhs);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 #define BINOP_METH(OPCODE, APIFUNC) 		\
 void						\
 LlvmFunctionBuilder::OPCODE()			\
 {						\
-    GenericBinOp(#APIFUNC);			\
+    this->GenericBinOp(#APIFUNC);		\
 }
 
 BINOP_METH(BINARY_ADD, PyNumber_Add)
@@ -1556,48 +1576,48 @@ BINOP_METH(INPLACE_FLOOR_DIVIDE, PyNumber_InPlaceFloorDivide)
 void
 LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
 {
-    Value *rhs = Pop();
-    Value *lhs = Pop();
-    Function *op = GetGlobalFunction<PyObject*(PyObject*, PyObject*,
+    Value *rhs = this->Pop();
+    Value *lhs = this->Pop();
+    Function *op = this->GetGlobalFunction<PyObject*(PyObject*, PyObject*,
         PyObject *)>(apifunc);
-    Value *pynone = GetGlobalVariable<PyObject>("_Py_NoneStruct");
-    Value *result = builder().CreateCall3(op, lhs, rhs, pynone,
-                                          "powop_result");
-    DecRef(lhs);
-    DecRef(rhs);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    Value *pynone = this->GetGlobalVariable<PyObject>("_Py_NoneStruct");
+    Value *result = this->builder_.CreateCall3(op, lhs, rhs, pynone,
+                                               "powop_result");
+    this->DecRef(lhs);
+    this->DecRef(rhs);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
 LlvmFunctionBuilder::BINARY_POWER()
 {
-    GenericPowOp("PyNumber_Power");
+    this->GenericPowOp("PyNumber_Power");
 }
 
 void
 LlvmFunctionBuilder::INPLACE_POWER()
 {
-    GenericPowOp("PyNumber_InPlacePower");
+    this->GenericPowOp("PyNumber_InPlacePower");
 }
 
 // Implementation of almost all unary operations
 void
 LlvmFunctionBuilder::GenericUnaryOp(const char *apifunc)
 {
-    Value *value = Pop();
-    Function *op = GetGlobalFunction<PyObject*(PyObject*)>(apifunc);
-    Value *result = builder().CreateCall(op, value, "unaryop_result");
-    DecRef(value);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    Value *value = this->Pop();
+    Function *op = this->GetGlobalFunction<PyObject*(PyObject*)>(apifunc);
+    Value *result = this->builder_.CreateCall(op, value, "unaryop_result");
+    this->DecRef(value);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 #define UNARYOP_METH(NAME, APIFUNC)			\
 void							\
 LlvmFunctionBuilder::NAME()				\
 {							\
-    GenericUnaryOp(#APIFUNC);				\
+    this->GenericUnaryOp(#APIFUNC);			\
 }
 
 UNARYOP_METH(UNARY_CONVERT, PyObject_Repr)
@@ -1610,167 +1630,169 @@ UNARYOP_METH(UNARY_NEGATIVE, PyNumber_Negative)
 void
 LlvmFunctionBuilder::UNARY_NOT()
 {
-    Value *value = Pop();
-    Value *retval = builder().CreateSelect(
-        IsPythonTrue(value),
-        GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
-        GetGlobalVariable<PyObject>("_Py_TrueStruct"),
+    Value *value = this->Pop();
+    Value *retval = this->builder_.CreateSelect(
+        this->IsPythonTrue(value),
+        this->GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
+        this->GetGlobalVariable<PyObject>("_Py_TrueStruct"),
         "UNARY_NOT_result");
-    IncRef(retval);
-    Push(retval);
+    this->IncRef(retval);
+    this->Push(retval);
 }
 
 void
 LlvmFunctionBuilder::POP_TOP()
 {
-    DecRef(Pop());
+    this->DecRef(this->Pop());
 }
 
 void
 LlvmFunctionBuilder::DUP_TOP()
 {
-    Value *first = Pop();
-    IncRef(first);
-    Push(first);
-    Push(first);
+    Value *first = this->Pop();
+    this->IncRef(first);
+    this->Push(first);
+    this->Push(first);
 }
 
 void
 LlvmFunctionBuilder::DUP_TOP_TWO()
 {
-    Value *first = Pop();
-    Value *second = Pop();
-    IncRef(first);
-    IncRef(second);
-    Push(second);
-    Push(first);
-    Push(second);
-    Push(first);
+    Value *first = this->Pop();
+    Value *second = this->Pop();
+    this->IncRef(first);
+    this->IncRef(second);
+    this->Push(second);
+    this->Push(first);
+    this->Push(second);
+    this->Push(first);
 }
 
 void
 LlvmFunctionBuilder::DUP_TOP_THREE()
 {
-    Value *first = Pop();
-    Value *second = Pop();
-    Value *third = Pop();
-    IncRef(first);
-    IncRef(second);
-    IncRef(third);
-    Push(third);
-    Push(second);
-    Push(first);
-    Push(third);
-    Push(second);
-    Push(first);
+    Value *first = this->Pop();
+    Value *second = this->Pop();
+    Value *third = this->Pop();
+    this->IncRef(first);
+    this->IncRef(second);
+    this->IncRef(third);
+    this->Push(third);
+    this->Push(second);
+    this->Push(first);
+    this->Push(third);
+    this->Push(second);
+    this->Push(first);
 }
 
 void
 LlvmFunctionBuilder::ROT_TWO()
 {
-    Value *first = Pop();
-    Value *second = Pop();
-    Push(first);
-    Push(second);
+    Value *first = this->Pop();
+    Value *second = this->Pop();
+    this->Push(first);
+    this->Push(second);
 }
 
 void
 LlvmFunctionBuilder::ROT_THREE()
 {
-    Value *first = Pop();
-    Value *second = Pop();
-    Value *third = Pop();
-    Push(first);
-    Push(third);
-    Push(second);
+    Value *first = this->Pop();
+    Value *second = this->Pop();
+    Value *third = this->Pop();
+    this->Push(first);
+    this->Push(third);
+    this->Push(second);
 }
 
 void
 LlvmFunctionBuilder::ROT_FOUR()
 {
-    Value *first = Pop();
-    Value *second = Pop();
-    Value *third = Pop();
-    Value *fourth = Pop();
-    Push(first);
-    Push(fourth);
-    Push(third);
-    Push(second);
+    Value *first = this->Pop();
+    Value *second = this->Pop();
+    Value *third = this->Pop();
+    Value *fourth = this->Pop();
+    this->Push(first);
+    this->Push(fourth);
+    this->Push(third);
+    this->Push(second);
 }
 
 void
 LlvmFunctionBuilder::RichCompare(Value *lhs, Value *rhs, int cmp_op)
 {
-    Function *pyobject_richcompare = GetGlobalFunction<
+    Function *pyobject_richcompare = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *, int)>("PyObject_RichCompare");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         pyobject_richcompare, lhs, rhs,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), cmp_op),
         "COMPARE_OP_RichCompare_result");
-    DecRef(lhs);
-    DecRef(rhs);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->DecRef(lhs);
+    this->DecRef(rhs);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 Value *
 LlvmFunctionBuilder::ContainerContains(Value *container, Value *item)
 {
     Function *contains =
-        GetGlobalFunction<int(PyObject *, PyObject *)>("PySequence_Contains");
-    Value *result = builder().CreateCall2(
+        this->GetGlobalFunction<int(PyObject *, PyObject *)>(
+            "PySequence_Contains");
+    Value *result = this->builder_.CreateCall2(
         contains, container, item, "ContainerContains_result");
-    DecRef(item);
-    DecRef(container);
-    PropagateExceptionOnNegative(result);
-    return IsPositive(result);
+    this->DecRef(item);
+    this->DecRef(container);
+    this->PropagateExceptionOnNegative(result);
+    return this->IsPositive(result);
 }
 
 // TODO(twouters): test this (used in exception handling.)
 Value *
 LlvmFunctionBuilder::ExceptionMatches(Value *exc, Value *exc_type)
 {
-    Function *exc_matches = GetGlobalFunction<
+    Function *exc_matches = this->GetGlobalFunction<
         int(PyObject *, PyObject *)>("_PyEval_CheckedExceptionMatches");
-    Value *result = builder().CreateCall2(
+    Value *result = this->builder_.CreateCall2(
         exc_matches, exc, exc_type, "ExceptionMatches_result");
-    DecRef(exc_type);
-    DecRef(exc);
-    PropagateExceptionOnNegative(result);
-    return IsPositive(result);
+    this->DecRef(exc_type);
+    this->DecRef(exc);
+    this->PropagateExceptionOnNegative(result);
+    return this->IsPositive(result);
 }
 
 void
 LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
 {
-    Value *rhs = Pop();
-    Value *lhs = Pop();
+    Value *rhs = this->Pop();
+    Value *lhs = this->Pop();
     Value *result;
     switch (cmp_op) {
     case PyCmp_IS:
-        result = builder().CreateICmpEQ(lhs, rhs, "COMPARE_OP_is_same");
-        DecRef(lhs);
-        DecRef(rhs);
+        result = this->builder_.CreateICmpEQ(lhs, rhs, "COMPARE_OP_is_same");
+        this->DecRef(lhs);
+        this->DecRef(rhs);
         break;
     case PyCmp_IS_NOT:
-        result = builder().CreateICmpNE(lhs, rhs, "COMPARE_OP_is_not_same");
-        DecRef(lhs);
-        DecRef(rhs);
+        result = this->builder_.CreateICmpNE(lhs, rhs,
+                                             "COMPARE_OP_is_not_same");
+        this->DecRef(lhs);
+        this->DecRef(rhs);
         break;
     case PyCmp_IN:
         // item in seq -> ContainerContains(seq, item)
-        result = ContainerContains(rhs, lhs);
+        result = this->ContainerContains(rhs, lhs);
         break;
     case PyCmp_NOT_IN:
     {
-        Value *inverted_result = ContainerContains(rhs, lhs);
-        result = builder().CreateICmpEQ(
+        Value *inverted_result = this->ContainerContains(rhs, lhs);
+        result = this->builder_.CreateICmpEQ(
             inverted_result, ConstantInt::get(inverted_result->getType(), 0),
             "COMPARE_OP_not_in_result");
         break;
     }
     case PyCmp_EXC_MATCH:
-        result = ExceptionMatches(lhs, rhs);
+        result = this->ExceptionMatches(lhs, rhs);
         break;
     case PyCmp_EQ:
     case PyCmp_NE:
@@ -1778,70 +1800,70 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
     case PyCmp_LE:
     case PyCmp_GT:
     case PyCmp_GE:
-        RichCompare(lhs, rhs, cmp_op);
+        this->RichCompare(lhs, rhs, cmp_op);
         return;
     default:
         Py_FatalError("unknown COMPARE_OP oparg");;
     }
-    Value *value = builder().CreateSelect(
+    Value *value = this->builder_.CreateSelect(
         result,
-        GetGlobalVariable<PyObject>("_Py_TrueStruct"),
-        GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
+        this->GetGlobalVariable<PyObject>("_Py_TrueStruct"),
+        this->GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
         "COMPARE_OP_result");
-    IncRef(value);
-    Push(value);
+    this->IncRef(value);
+    this->Push(value);
 }
 
 void
 LlvmFunctionBuilder::LIST_APPEND()
 {
-    Value *item = Pop();
-    Value *listobj = Pop();
-    Function *list_append = GetGlobalFunction<
+    Value *item = this->Pop();
+    Value *listobj = this->Pop();
+    Function *list_append = this->GetGlobalFunction<
         int(PyObject *, PyObject *)>("PyList_Append");
-    Value *result = builder().CreateCall2(list_append, listobj, item,
-                                          "LIST_APPEND_result");
-    DecRef(listobj);
-    DecRef(item);
-    PropagateExceptionOnNonZero(result);
+    Value *result = this->builder_.CreateCall2(list_append, listobj, item,
+                                               "LIST_APPEND_result");
+    this->DecRef(listobj);
+    this->DecRef(item);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::STORE_MAP()
 {
-    Value *key = Pop();
-    Value *value = Pop();
-    Value *dict = Pop();
-    Push(dict);
+    Value *key = this->Pop();
+    Value *value = this->Pop();
+    Value *dict = this->Pop();
+    this->Push(dict);
     // XXX(twouters): ceval does an assert(PyDict_CheckExact(dict);
     // add it here if/when it's convenient to do in IRBuilder.
-    Function *setitem = GetGlobalFunction<
+    Function *setitem = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyDict_SetItem");
-    Value *result = builder().CreateCall3(setitem, dict, key, value,
-                                          "STORE_MAP_result");
-    DecRef(value);
-    DecRef(key);
-    PropagateExceptionOnNonZero(result);
+    Value *result = this->builder_.CreateCall3(setitem, dict, key, value,
+                                               "STORE_MAP_result");
+    this->DecRef(value);
+    this->DecRef(key);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 Value *
 LlvmFunctionBuilder::GetListItemSlot(Value *lst, int idx)
 {
-    Value *listobj = builder().CreateBitCast(
+    Value *listobj = this->builder_.CreateBitCast(
         lst, TypeBuilder<PyListObject *>::cache(this->module_));
     // Load the target of the ob_item PyObject** into list_items.
-    Value *list_items = builder().CreateLoad(
-        builder().CreateStructGEP(listobj, ListTy::FIELD_ITEM));
+    Value *list_items = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(listobj, ListTy::FIELD_ITEM));
     // GEP the list_items PyObject* up to the desired item
-    return builder().CreateGEP(list_items,
-                               ConstantInt::get(Type::Int32Ty, idx),
-                               "list_item_slot");
+    return this->builder_.CreateGEP(list_items,
+                                    ConstantInt::get(Type::Int32Ty, idx),
+                                    "list_item_slot");
 }
 
 Value *
 LlvmFunctionBuilder::GetTupleItemSlot(Value *tup, int idx)
 {
-    Value *tupobj = builder().CreateBitCast(
+    Value *tupobj = this->builder_.CreateBitCast(
         tup, TypeBuilder<PyTupleObject*>::cache(this->module_));
     // Make CreateGEP perform &tup_item_indices[0].ob_item[idx].
     Value *tup_item_indices[] = {
@@ -1849,9 +1871,9 @@ LlvmFunctionBuilder::GetTupleItemSlot(Value *tup, int idx)
         ConstantInt::get(Type::Int32Ty, TupleTy::FIELD_ITEM),
         ConstantInt::get(Type::Int32Ty, idx),
     };
-    return builder().CreateGEP(tupobj, tup_item_indices,
-                               array_endof(tup_item_indices),
-                               "tuple_item_slot");
+    return this->builder_.CreateGEP(tupobj, tup_item_indices,
+                                    array_endof(tup_item_indices),
+                                    "tuple_item_slot");
 }
 
 void
@@ -1862,30 +1884,31 @@ LlvmFunctionBuilder::BuildSequenceLiteral(
     const Type *IntSsizeTy = TypeBuilder<Py_ssize_t>::cache(this->module_);
     Value *seqsize = ConstantInt::get(IntSsizeTy, size, true /* signed */);
 
-    Function *create = GetGlobalFunction<PyObject *(Py_ssize_t)>(createname);
-    Value *seq = builder().CreateCall(create, seqsize, "sequence_literal");
-    PropagateExceptionOnNull(seq);
+    Function *create =
+        this->GetGlobalFunction<PyObject *(Py_ssize_t)>(createname);
+    Value *seq = this->builder_.CreateCall(create, seqsize, "sequence_literal");
+    this->PropagateExceptionOnNull(seq);
 
     // XXX(twouters): do this with a memcpy?
     while (--size >= 0) {
         Value *itemslot = (this->*getitemslot)(seq, size);
-        builder().CreateStore(Pop(), itemslot);
+        this->builder_.CreateStore(this->Pop(), itemslot);
     }
-    Push(seq);
+    this->Push(seq);
 }
 
 void
 LlvmFunctionBuilder::BUILD_LIST(int size)
 {
-   BuildSequenceLiteral(size, "PyList_New",
-                        &LlvmFunctionBuilder::GetListItemSlot);
+   this->BuildSequenceLiteral(size, "PyList_New",
+                              &LlvmFunctionBuilder::GetListItemSlot);
 }
 
 void
 LlvmFunctionBuilder::BUILD_TUPLE(int size)
 {
-   BuildSequenceLiteral(size, "PyTuple_New",
-                        &LlvmFunctionBuilder::GetTupleItemSlot);
+   this->BuildSequenceLiteral(size, "PyTuple_New",
+                              &LlvmFunctionBuilder::GetTupleItemSlot);
 }
 
 void
@@ -1894,35 +1917,35 @@ LlvmFunctionBuilder::BUILD_MAP(int size)
     Value *sizehint = ConstantInt::get(
         TypeBuilder<Py_ssize_t>::cache(this->module_),
         size, true /* signed */);
-    Function *create_dict = GetGlobalFunction<
+    Function *create_dict = this->GetGlobalFunction<
         PyObject *(Py_ssize_t)>("_PyDict_NewPresized");
-    Value *result = builder().CreateCall(create_dict, sizehint,
-                                         "BULD_MAP_result");
-    PropagateExceptionOnNull(result);
-    Push(result);
+    Value *result = this->builder_.CreateCall(create_dict, sizehint,
+                                              "BULD_MAP_result");
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
 LlvmFunctionBuilder::ApplySlice(Value *seq, Value *start, Value *stop)
 {
-    Function *build_slice = GetGlobalFunction<
+    Function *build_slice = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *, PyObject *)>("_PyEval_ApplySlice");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         build_slice, seq, start, stop, "ApplySlice_result");
-    XDecRef(stop);
-    XDecRef(start);
-    DecRef(seq);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->XDecRef(stop);
+    this->XDecRef(start);
+    this->DecRef(seq);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
 LlvmFunctionBuilder::SLICE_BOTH()
 {
-    Value *stop = Pop();
-    Value *start = Pop();
-    Value *seq = Pop();
-    ApplySlice(seq, start, stop);
+    Value *stop = this->Pop();
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
+    this->ApplySlice(seq, start, stop);
 }
 
 void
@@ -1930,19 +1953,19 @@ LlvmFunctionBuilder::SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *start = Pop();
-    Value *seq = Pop();
-    ApplySlice(seq, start, stop);
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
+    this->ApplySlice(seq, start, stop);
 }
 
 void
 LlvmFunctionBuilder::SLICE_RIGHT()
 {
-    Value *stop = Pop();
+    Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
-    ApplySlice(seq, start, stop);
+    Value *seq = this->Pop();
+    this->ApplySlice(seq, start, stop);
 }
 
 void
@@ -1952,34 +1975,34 @@ LlvmFunctionBuilder::SLICE_NONE()
         TypeBuilder<PyObject *>::cache(this->module_));
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
-    ApplySlice(seq, start, stop);
+    Value *seq = this->Pop();
+    this->ApplySlice(seq, start, stop);
 }
 
 void
 LlvmFunctionBuilder::AssignSlice(Value *seq, Value *start, Value *stop,
                                  Value *source)
 {
-    Function *assign_slice = GetGlobalFunction<
+    Function *assign_slice = this->GetGlobalFunction<
         int (PyObject *, PyObject *, PyObject *, PyObject *)>(
             "_PyEval_AssignSlice");
-    Value *result = builder().CreateCall4(
+    Value *result = this->builder_.CreateCall4(
         assign_slice, seq, start, stop, source, "ApplySlice_result");
-    XDecRef(source);
-    XDecRef(stop);
-    XDecRef(start);
-    DecRef(seq);
-    PropagateExceptionOnNonZero(result);
+    this->XDecRef(source);
+    this->XDecRef(stop);
+    this->XDecRef(start);
+    this->DecRef(seq);
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void
 LlvmFunctionBuilder::STORE_SLICE_BOTH()
 {
-    Value *stop = Pop();
-    Value *start = Pop();
-    Value *seq = Pop();
-    Value *source = Pop();
-    AssignSlice(seq, start, stop, source);
+    Value *stop = this->Pop();
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
+    Value *source = this->Pop();
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
@@ -1987,21 +2010,21 @@ LlvmFunctionBuilder::STORE_SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *start = Pop();
-    Value *seq = Pop();
-    Value *source = Pop();
-    AssignSlice(seq, start, stop, source);
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
+    Value *source = this->Pop();
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::STORE_SLICE_RIGHT()
 {
-    Value *stop = Pop();
+    Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
-    Value *source = Pop();
-    AssignSlice(seq, start, stop, source);
+    Value *seq = this->Pop();
+    Value *source = this->Pop();
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
@@ -2011,20 +2034,20 @@ LlvmFunctionBuilder::STORE_SLICE_NONE()
         TypeBuilder<PyObject *>::cache(this->module_));
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
-    Value *source = Pop();
-    AssignSlice(seq, start, stop, source);
+    Value *seq = this->Pop();
+    Value *source = this->Pop();
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::DELETE_SLICE_BOTH()
 {
-    Value *stop = Pop();
-    Value *start = Pop();
-    Value *seq = Pop();
+    Value *stop = this->Pop();
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    AssignSlice(seq, start, stop, source);
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
@@ -2032,23 +2055,23 @@ LlvmFunctionBuilder::DELETE_SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *start = Pop();
-    Value *seq = Pop();
+    Value *start = this->Pop();
+    Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    AssignSlice(seq, start, stop, source);
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::DELETE_SLICE_RIGHT()
 {
-    Value *stop = Pop();
+    Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
+    Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    AssignSlice(seq, start, stop, source);
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
@@ -2058,10 +2081,10 @@ LlvmFunctionBuilder::DELETE_SLICE_NONE()
         TypeBuilder<PyObject *>::cache(this->module_));
     Value *start = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *seq = Pop();
+    Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    AssignSlice(seq, start, stop, source);
+    this->AssignSlice(seq, start, stop, source);
 }
 
 void
@@ -2069,33 +2092,33 @@ LlvmFunctionBuilder::BUILD_SLICE_TWO()
 {
     Value *step = Constant::getNullValue(
         TypeBuilder<PyObject *>::cache(this->module_));
-    Value *stop = Pop();
-    Value *start = Pop();
-    Function *build_slice = GetGlobalFunction<
+    Value *stop = this->Pop();
+    Value *start = this->Pop();
+    Function *build_slice = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *, PyObject *)>("PySlice_New");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         build_slice, start, stop, step, "BUILD_SLICE_result");
-    DecRef(start);
-    DecRef(stop);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->DecRef(start);
+    this->DecRef(stop);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
 LlvmFunctionBuilder::BUILD_SLICE_THREE()
 {
-    Value *step = Pop();
-    Value *stop = Pop();
-    Value *start = Pop();
-    Function *build_slice = GetGlobalFunction<
+    Value *step = this->Pop();
+    Value *stop = this->Pop();
+    Value *start = this->Pop();
+    Function *build_slice = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *, PyObject *)>("PySlice_New");
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         build_slice, start, stop, step, "BUILD_SLICE_result");
-    DecRef(start);
-    DecRef(stop);
-    DecRef(step);
-    PropagateExceptionOnNull(result);
-    Push(result);
+    this->DecRef(start);
+    this->DecRef(stop);
+    this->DecRef(step);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 }
 
 void
@@ -2108,26 +2131,26 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
     // follow into a single block of code circumventing the stack
     // altogether. And omitting the horrible external stack munging that
     // UnpackIterable does.
-    Value *iterable = Pop();
-    Function *unpack_iterable = GetGlobalFunction<
+    Value *iterable = this->Pop();
+    Function *unpack_iterable = this->GetGlobalFunction<
         int(PyObject *, int, PyObject **)>("_PyEval_UnpackIterable");
-    Value *new_stack_pointer = builder().CreateGEP(
-        builder().CreateLoad(this->stack_pointer_addr_),
+    Value *new_stack_pointer = this->builder_.CreateGEP(
+        this->builder_.CreateLoad(this->stack_pointer_addr_),
         ConstantInt::get(TypeBuilder<Py_ssize_t>::cache(this->module_),
                          size, true /* signed */));
-    Value *result = builder().CreateCall3(
+    Value *result = this->builder_.CreateCall3(
         unpack_iterable, iterable,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), size, true),
         // _PyEval_UnpackIterable really takes the *new* stack pointer as
         // an argument, because it builds the result stack in reverse.
         new_stack_pointer);
-    DecRef(iterable);
-    PropagateExceptionOnNonZero(result);
+    this->DecRef(iterable);
+    this->PropagateExceptionOnNonZero(result);
     // Not setting the new stackpointer on failure does mean that if
     // _PyEval_UnpackIterable failed after pushing some values onto the
     // stack, and it didn't clean up after itself, we lose references.  This
     // is what ceval.cc does as well.
-    builder().CreateStore(new_stack_pointer, this->stack_pointer_addr_);
+    this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
 }
 
 // Adds delta to *addr, and returns the new value.
@@ -2147,15 +2170,15 @@ LlvmFunctionBuilder::IncRef(Value *value)
 {
 #ifdef Py_REF_DEBUG
     // Increment the global reference count.
-    Value *reftotal_addr = GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
-    increment_and_get(builder(), reftotal_addr, 1);
+    Value *reftotal_addr = this->GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
+    increment_and_get(this->builder_, reftotal_addr, 1);
 #endif
 
-    Value *as_pyobject = builder().CreateBitCast(
+    Value *as_pyobject = this->builder_.CreateBitCast(
         value, TypeBuilder<PyObject*>::cache(this->module_));
     Value *refcnt_addr =
-        builder().CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
-    increment_and_get(builder(), refcnt_addr, 1);
+        this->builder_.CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
+    increment_and_get(this->builder_, refcnt_addr, 1);
 }
 
 void
@@ -2163,15 +2186,15 @@ LlvmFunctionBuilder::DecRef(Value *value)
 {
 #ifdef Py_REF_DEBUG
     // Decrement the global reference count.
-    Value *reftotal_addr = GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
-    increment_and_get(builder(), reftotal_addr, -1);
+    Value *reftotal_addr = this->GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
+    increment_and_get(this->builder_, reftotal_addr, -1);
 #endif
 
-    Value *as_pyobject = builder().CreateBitCast(
+    Value *as_pyobject = this->builder_.CreateBitCast(
         value, TypeBuilder<PyObject*>::cache(this->module_));
     Value *refcnt_addr =
-        builder().CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
-    Value *new_refcnt = increment_and_get(builder(), refcnt_addr, -1);
+        this->builder_.CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
+    Value *new_refcnt = increment_and_get(this->builder_, refcnt_addr, -1);
 
     // Check if we need to deallocate the object.
     BasicBlock *block_dealloc = BasicBlock::Create("dealloc", this->function_);
@@ -2181,110 +2204,113 @@ LlvmFunctionBuilder::DecRef(Value *value)
     block_ref_ne_zero = BasicBlock::Create("check_refcnt", this->function_);
 #endif
 
-    builder().CreateCondBr(IsNonZero(new_refcnt),
-                           block_ref_ne_zero, block_dealloc);
+    this->builder_.CreateCondBr(this->IsNonZero(new_refcnt),
+                                block_ref_ne_zero, block_dealloc);
 
 #ifdef Py_REF_DEBUG
-    builder().SetInsertPoint(block_ref_ne_zero);
-    Value *less_zero = builder().CreateICmpSLT(
+    this->builder_.SetInsertPoint(block_ref_ne_zero);
+    Value *less_zero = this->builder_.CreateICmpSLT(
         new_refcnt, Constant::getNullValue(new_refcnt->getType()));
     BasicBlock *block_ref_lt_zero = BasicBlock::Create("negative_refcount",
-                                                 this->function_);
-    builder().CreateCondBr(less_zero, block_ref_lt_zero, block_tail);
+                                                       this->function_);
+    this->builder_.CreateCondBr(less_zero, block_ref_lt_zero, block_tail);
 
-    builder().SetInsertPoint(block_ref_lt_zero);
-    Value *neg_refcount = GetGlobalFunction<void(const char*, int, PyObject*)>(
-        "_Py_NegativeRefcount");
+    this->builder_.SetInsertPoint(block_ref_lt_zero);
+    Value *neg_refcount =
+        this->GetGlobalFunction<void(const char*, int, PyObject*)>(
+            "_Py_NegativeRefcount");
     // TODO: Well that __FILE__ and __LINE__ are going to be useless!
-    builder().CreateCall3(
+    this->builder_.CreateCall3(
         neg_refcount,
         this->llvm_data_->GetGlobalStringPtr(__FILE__),
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), __LINE__),
         as_pyobject);
-    builder().CreateBr(block_tail);
+    this->builder_.CreateBr(block_tail);
 #endif
 
-    builder().SetInsertPoint(block_dealloc);
-    Value *dealloc = GetGlobalFunction<void(PyObject *)>("_PyLlvm_WrapDealloc");
-    builder().CreateCall(dealloc, as_pyobject);
-    builder().CreateBr(block_tail);
+    this->builder_.SetInsertPoint(block_dealloc);
+    Value *dealloc =
+        this->GetGlobalFunction<void(PyObject *)>("_PyLlvm_WrapDealloc");
+    this->builder_.CreateCall(dealloc, as_pyobject);
+    this->builder_.CreateBr(block_tail);
 
-    builder().SetInsertPoint(block_tail);
+    this->builder_.SetInsertPoint(block_tail);
 }
 
 void
 LlvmFunctionBuilder::XDecRef(Value *value)
 {
-    BasicBlock *do_decref = BasicBlock::Create("decref", function());
-    BasicBlock *decref_end = BasicBlock::Create("decref_end", function());
-    builder().CreateCondBr(IsNull(value), decref_end, do_decref);
+    BasicBlock *do_decref = BasicBlock::Create("decref", this->function_);
+    BasicBlock *decref_end = BasicBlock::Create("decref_end", this->function_);
+    this->builder_.CreateCondBr(this->IsNull(value), decref_end, do_decref);
 
-    builder().SetInsertPoint(do_decref);
-    DecRef(value);
-    builder().CreateBr(decref_end);
+    this->builder_.SetInsertPoint(do_decref);
+    this->DecRef(value);
+    this->builder_.CreateBr(decref_end);
 
-    builder().SetInsertPoint(decref_end);
+    this->builder_.SetInsertPoint(decref_end);
 }
 
 void
 LlvmFunctionBuilder::Push(Value *value)
 {
-    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
-    builder().CreateStore(value, stack_pointer);
-    Value *new_stack_pointer = builder().CreateGEP(
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    this->builder_.CreateStore(value, stack_pointer);
+    Value *new_stack_pointer = this->builder_.CreateGEP(
         stack_pointer, ConstantInt::get(Type::Int32Ty, 1));
-    builder().CreateStore(new_stack_pointer, this->stack_pointer_addr_);
+    this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
 }
 
 Value *
 LlvmFunctionBuilder::Pop()
 {
-    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
-    Value *new_stack_pointer = builder().CreateGEP(
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    Value *new_stack_pointer = this->builder_.CreateGEP(
         stack_pointer, get_signed_constant_int(Type::Int32Ty, -1));
-    Value *former_top = builder().CreateLoad(new_stack_pointer);
-    builder().CreateStore(new_stack_pointer, this->stack_pointer_addr_);
+    Value *former_top = this->builder_.CreateLoad(new_stack_pointer);
+    this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
     return former_top;
 }
 
 Value *
 LlvmFunctionBuilder::GetStackLevel()
 {
-    Value *stack_pointer = builder().CreateLoad(this->stack_pointer_addr_);
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
     Value *stack_pointer_int =
-        builder().CreatePtrToInt(stack_pointer, Type::Int64Ty);
+        this->builder_.CreatePtrToInt(stack_pointer, Type::Int64Ty);
     Value *stack_bottom_int =
-        builder().CreatePtrToInt(this->stack_bottom_, Type::Int64Ty);
+        this->builder_.CreatePtrToInt(this->stack_bottom_, Type::Int64Ty);
     Value *difference =
-        builder().CreateSub(stack_pointer_int, stack_bottom_int);
-    Value *level64 = builder().CreateSDiv(
+        this->builder_.CreateSub(stack_pointer_int, stack_bottom_int);
+    Value *level64 = this->builder_.CreateSDiv(
         difference,
         llvm::ConstantExpr::getSizeOf(
             TypeBuilder<PyObject*>::cache(this->module_)));
     // The stack level is stored as an int, not an int64.
-    return builder().CreateTrunc(level64,
-                                 TypeBuilder<int>::cache(this->module_),
-                                 "stack_level");
+    return this->builder_.CreateTrunc(level64,
+                                      TypeBuilder<int>::cache(this->module_),
+                                      "stack_level");
 }
 
 void
 LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
 {
-    Value *local_slot = builder().CreateGEP(
+    Value *local_slot = this->builder_.CreateGEP(
         this->fastlocals_, ConstantInt::get(Type::Int32Ty, locals_index));
-    Value *orig_value = builder().CreateLoad(local_slot, "local_overwritten");
-    builder().CreateStore(new_value, local_slot);
-    XDecRef(orig_value);
+    Value *orig_value =
+        this->builder_.CreateLoad(local_slot, "local_overwritten");
+    this->builder_.CreateStore(new_value, local_slot);
+    this->XDecRef(orig_value);
 }
 
 void
 LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler) {
-    Value *stack_level = GetStackLevel();
-    Value *unwind_target_index = AddUnwindTarget(handler);
+    Value *stack_level = this->GetStackLevel();
+    Value *unwind_target_index = this->AddUnwindTarget(handler);
     Function *blocksetup =
-        GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
+        this->GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
             "PyFrame_BlockSetup");
-    builder().CreateCall4(
+    this->builder_.CreateCall4(
         blocksetup, this->frame_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), block_type),
         unwind_target_index,
@@ -2296,9 +2322,9 @@ LlvmFunctionBuilder::InsertAbort(const char *opcode_name)
 {
     std::string message("Undefined opcode: ");
     message.append(opcode_name);
-    builder().CreateCall(GetGlobalFunction<int(const char*)>("puts"),
-                         this->llvm_data_->GetGlobalStringPtr(message));
-    builder().CreateCall(GetGlobalFunction<void()>("abort"));
+    this->builder_.CreateCall(this->GetGlobalFunction<int(const char*)>("puts"),
+                              this->llvm_data_->GetGlobalStringPtr(message));
+    this->builder_.CreateCall(this->GetGlobalFunction<void()>("abort"));
 }
 
 template<typename FunctionType> Function *
@@ -2319,61 +2345,62 @@ LlvmFunctionBuilder::GetGlobalVariable(const std::string &name)
 Value *
 LlvmFunctionBuilder::IsNull(Value *value)
 {
-    return builder().CreateICmpEQ(
+    return this->builder_.CreateICmpEQ(
         value, Constant::getNullValue(value->getType()));
 }
 
 Value *
 LlvmFunctionBuilder::IsNonZero(Value *value)
 {
-    return builder().CreateICmpNE(
+    return this->builder_.CreateICmpNE(
         value, Constant::getNullValue(value->getType()));
 }
 
 Value *
 LlvmFunctionBuilder::IsNegative(Value *value)
 {
-    return builder().CreateICmpSLT(
+    return this->builder_.CreateICmpSLT(
         value, ConstantInt::get(value->getType(), 0, true /* signed */));
 }
 
 Value *
 LlvmFunctionBuilder::IsPositive(Value *value)
 {
-    return builder().CreateICmpSGT(
+    return this->builder_.CreateICmpSGT(
         value, ConstantInt::get(value->getType(), 0, true /* signed */));
 }
 
 Value *
 LlvmFunctionBuilder::IsInstanceOfFlagClass(llvm::Value *value, int flag)
 {
-    Value *type = builder().CreateBitCast(
-        builder().CreateLoad(
-            builder().CreateStructGEP(value, ObjectTy::FIELD_TYPE),
+    Value *type = this->builder_.CreateBitCast(
+        this->builder_.CreateLoad(
+            this->builder_.CreateStructGEP(value, ObjectTy::FIELD_TYPE),
             "type"),
         TypeBuilder<PyTypeObject *>::cache(this->module_));
-    Value *type_flags = builder().CreateLoad(
-        builder().CreateStructGEP(type, TypeTy::FIELD_FLAGS),
+    Value *type_flags = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(type, TypeTy::FIELD_FLAGS),
         "type_flags");
-    Value *is_instance = builder().CreateAnd(
+    Value *is_instance = this->builder_.CreateAnd(
         type_flags,
         ConstantInt::get(type_flags->getType(), flag));
-    return IsNonZero(is_instance);
+    return this->IsNonZero(is_instance);
 }
 
 void
 LlvmFunctionBuilder::PropagateExceptionOnNull(Value *value)
 {
     BasicBlock *propagate =
-        BasicBlock::Create("PropagateExceptionOnNull_propagate", function());
+        BasicBlock::Create("PropagateExceptionOnNull_propagate",
+                           this->function_);
     BasicBlock *pass =
-        BasicBlock::Create("PropagateExceptionOnNull_pass", function());
-    builder().CreateCondBr(IsNull(value), propagate, pass);
+        BasicBlock::Create("PropagateExceptionOnNull_pass", this->function_);
+    this->builder_.CreateCondBr(IsNull(value), propagate, pass);
 
-    builder().SetInsertPoint(propagate);
-    PropagateException();
+    this->builder_.SetInsertPoint(propagate);
+    this->PropagateException();
 
-    builder().SetInsertPoint(pass);
+    this->builder_.SetInsertPoint(pass);
 }
 
 void
@@ -2381,15 +2408,16 @@ LlvmFunctionBuilder::PropagateExceptionOnNegative(Value *value)
 {
     BasicBlock *propagate =
         BasicBlock::Create("PropagateExceptionOnNegative_propagate",
-        function());
+        this->function_);
     BasicBlock *pass =
-        BasicBlock::Create("PropagateExceptionOnNegative_pass", function());
-    builder().CreateCondBr(IsNegative(value), propagate, pass);
+        BasicBlock::Create("PropagateExceptionOnNegative_pass",
+                           this->function_);
+    this->builder_.CreateCondBr(this->IsNegative(value), propagate, pass);
 
-    builder().SetInsertPoint(propagate);
-    PropagateException();
+    this->builder_.SetInsertPoint(propagate);
+    this->PropagateException();
 
-    builder().SetInsertPoint(pass);
+    this->builder_.SetInsertPoint(pass);
 }
 
 void
@@ -2397,22 +2425,22 @@ LlvmFunctionBuilder::PropagateExceptionOnNonZero(Value *value)
 {
     BasicBlock *propagate =
         BasicBlock::Create("PropagateExceptionOnNonZero_propagate",
-        function());
+        this->function_);
     BasicBlock *pass =
-        BasicBlock::Create("PropagateExceptionOnNonZero_pass", function());
-    builder().CreateCondBr(IsNonZero(value), propagate, pass);
+        BasicBlock::Create("PropagateExceptionOnNonZero_pass", this->function_);
+    this->builder_.CreateCondBr(this->IsNonZero(value), propagate, pass);
 
-    builder().SetInsertPoint(propagate);
-    PropagateException();
+    this->builder_.SetInsertPoint(propagate);
+    this->PropagateException();
 
-    builder().SetInsertPoint(pass);
+    this->builder_.SetInsertPoint(pass);
 }
 
 Value *
 LlvmFunctionBuilder::LookupName(int name_index)
 {
-    Value *name = builder().CreateLoad(
-        builder().CreateGEP(
+    Value *name = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(
             this->names_, ConstantInt::get(Type::Int32Ty, name_index),
             "constant_name"));
     return name;
@@ -2422,48 +2450,48 @@ llvm::Value *
 LlvmFunctionBuilder::IsPythonTrue(Value *value)
 {
     BasicBlock *not_py_true =
-        BasicBlock::Create("IsPythonTrue_is_not_PyTrue", function());
+        BasicBlock::Create("IsPythonTrue_is_not_PyTrue", this->function_);
     BasicBlock *not_py_false =
-        BasicBlock::Create("IsPythonTrue_is_not_PyFalse", function());
+        BasicBlock::Create("IsPythonTrue_is_not_PyFalse", this->function_);
     BasicBlock *decref_value =
-        BasicBlock::Create("IsPythonTrue_decref_value", function());
+        BasicBlock::Create("IsPythonTrue_decref_value", this->function_);
     BasicBlock *done =
-        BasicBlock::Create("IsPythonTrue_done", function());
+        BasicBlock::Create("IsPythonTrue_done", this->function_);
 
-    Value *result_addr =
-        CreateAllocaInEntryBlock(Type::Int1Ty, NULL, "IsPythonTrue_result");
-    Value *py_false = GetGlobalVariable<PyObject>("_Py_ZeroStruct");
-    Value *py_true = GetGlobalVariable<PyObject>("_Py_TrueStruct");
+    Value *result_addr = this->CreateAllocaInEntryBlock(
+        Type::Int1Ty, NULL, "IsPythonTrue_result");
+    Value *py_false = this->GetGlobalVariable<PyObject>("_Py_ZeroStruct");
+    Value *py_true = this->GetGlobalVariable<PyObject>("_Py_TrueStruct");
 
-    Value *is_PyTrue = builder().CreateICmpEQ(
+    Value *is_PyTrue = this->builder_.CreateICmpEQ(
         py_true, value, "IsPythonTrue_is_PyTrue");
-    builder().CreateStore(is_PyTrue, result_addr);
-    builder().CreateCondBr(is_PyTrue, decref_value, not_py_true);
+    this->builder_.CreateStore(is_PyTrue, result_addr);
+    this->builder_.CreateCondBr(is_PyTrue, decref_value, not_py_true);
 
-    builder().SetInsertPoint(not_py_true);
-    Value *is_not_PyFalse = builder().CreateICmpNE(
+    this->builder_.SetInsertPoint(not_py_true);
+    Value *is_not_PyFalse = this->builder_.CreateICmpNE(
         py_false, value, "IsPythonTrue_is_PyFalse");
-    builder().CreateStore(is_not_PyFalse, result_addr);
-    builder().CreateCondBr(is_not_PyFalse, not_py_false, decref_value);
+    this->builder_.CreateStore(is_not_PyFalse, result_addr);
+    this->builder_.CreateCondBr(is_not_PyFalse, not_py_false, decref_value);
 
-    builder().SetInsertPoint(not_py_false);
+    this->builder_.SetInsertPoint(not_py_false);
     Function *pyobject_istrue =
-        GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
-    Value *istrue_result = builder().CreateCall(
+        this->GetGlobalFunction<int(PyObject *)>("PyObject_IsTrue");
+    Value *istrue_result = this->builder_.CreateCall(
         pyobject_istrue, value, "PyObject_IsTrue_result");
-    DecRef(value);
-    PropagateExceptionOnNegative(istrue_result);
-    builder().CreateStore(
-        IsPositive(istrue_result),
+    this->DecRef(value);
+    this->PropagateExceptionOnNegative(istrue_result);
+    this->builder_.CreateStore(
+        this->IsPositive(istrue_result),
         result_addr);
-    builder().CreateBr(done);
+    this->builder_.CreateBr(done);
 
-    builder().SetInsertPoint(decref_value);
-    DecRef(value);
-    builder().CreateBr(done);
+    this->builder_.SetInsertPoint(decref_value);
+    this->DecRef(value);
+    this->builder_.CreateBr(done);
 
-    builder().SetInsertPoint(done);
-    return builder().CreateLoad(result_addr);
+    this->builder_.SetInsertPoint(done);
+    return this->builder_.CreateLoad(result_addr);
 }
 
 }  // namespace py

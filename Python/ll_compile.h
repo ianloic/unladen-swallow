@@ -48,7 +48,7 @@ public:
     void END_FINALLY();
 
     void JUMP_FORWARD(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) {
-        JUMP_ABSOLUTE(target, fallthrough);
+        this->JUMP_ABSOLUTE(target, fallthrough);
     }
     void JUMP_ABSOLUTE(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
 
@@ -150,15 +150,15 @@ public:
 
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
-        InsertAbort(#NAME); \
+        this->InsertAbort(#NAME); \
     }
 #define UNIMPLEMENTED_I(NAME) \
     void NAME(int index) { \
-        InsertAbort(#NAME); \
+        this->InsertAbort(#NAME); \
     }
 #define UNIMPLEMENTED_J(NAME) \
     void NAME(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) { \
-        InsertAbort(#NAME); \
+        this->InsertAbort(#NAME); \
     }
 
     UNIMPLEMENTED(WITH_CLEANUP)
