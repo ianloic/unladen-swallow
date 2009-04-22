@@ -65,6 +65,7 @@ public:
 
     void BREAK_LOOP();
     void RETURN_VALUE();
+    void YIELD_VALUE();
 
     void POP_TOP();
     void DUP_TOP();
@@ -160,7 +161,6 @@ public:
     }
 
     UNIMPLEMENTED(WITH_CLEANUP)
-    UNIMPLEMENTED(YIELD_VALUE)
 
     UNIMPLEMENTED_I(LOAD_DEREF);
     UNIMPLEMENTED_I(STORE_DEREF);
@@ -355,6 +355,14 @@ private:
     llvm::Value *consts_;
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
+
+    llvm::BasicBlock *unreachable_block_;
+
+    // The block index that the function will resume execution at.
+    // This is only useful for generators; for all other functions
+    // it's always 0.
+    llvm::Value *resume_block_;
+    llvm::SwitchInst *yield_resume_switch_;
 
     llvm::BasicBlock *unwind_block_;
     llvm::Value *unwind_target_index_addr_;

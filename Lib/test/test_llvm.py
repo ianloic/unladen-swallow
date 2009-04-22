@@ -922,6 +922,66 @@ def reraise(raiser, exctype):
                           "inner")
         self.assertRaises(ZeroDivisionError, reraise, raiser, TypeError)
 
+    @at_each_optimization_level
+    def test_simple_yield(self, level):
+        generator = compile_for_llvm("generator", """
+def generator():
+    yield 1
+    yield 2
+    yield 3
+""", level)
+        g = generator()
+        self.assertEquals(1, g.next())
+        self.assertEquals(2, g.next())
+        self.assertEquals(3, g.next())
+        self.assertRaises(StopIteration, g.next)
+
+    @at_each_optimization_level
+    def test_yield_in_loop(self, level):
+        generator = compile_for_llvm("generator", """
+def generator(x):
+    for i in x:
+        yield i
+""", level)
+        g = generator([1, 2, 3, 4])
+        self.assertEquals([1, 2, 3, 4], list(g))
+
+        cross_product = compile_for_llvm("cross_product", """
+def cross_product(x, y):
+    for i in x:
+        for j in y:
+            yield (i, j)
+""", level)
+        g = cross_product([1, 2], [3, 4])
+        self.assertEquals([(1,3), (1,4), (2,3), (2,4)], list(g))
+
+    @at_each_optimization_level
+    def test_yield_saves_block_stack(self, level):
+        generator = compile_for_llvm("generator", """
+def generator(x):
+    yield "starting"
+    for i in x:
+        try:
+            try:
+                1 / i
+                yield ("survived", i)
+            finally:
+                yield ("finally", i)
+        except ZeroDivisionError:
+            yield "caught exception"
+    yield "done looping"
+""", level)
+        self.assertEquals(list(generator([0, 1, 2])),
+                          ["starting",
+                           ("finally", 0),
+                           "caught exception",
+                           ("survived", 1),
+                           ("finally", 1),
+                           ("survived", 2),
+                           ("finally", 2),
+                           "done looping"])
+
+
 class LoopExceptionInteractionTests(unittest.TestCase):
     @at_each_optimization_level
     def test_except_through_loop_caught(self, level):

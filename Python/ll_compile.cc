@@ -504,11 +504,14 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
            "Unexpected number of arguments");
     this->frame_->setName("frame");
 
-    this->builder_.SetInsertPoint(BasicBlock::Create("entry", this->function_));
+    BasicBlock *entry = BasicBlock::Create("entry", this->function_);
+    this->unreachable_block_ =
+        BasicBlock::Create("unreachable", this->function_);
+    this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
+
+    this->builder_.SetInsertPoint(entry);
     // CreateAllocaInEntryBlock will insert alloca's here, before
     // any other instructions in the 'entry' block.
-
-    this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
 
     this->stack_pointer_addr_ = this->builder_.CreateAlloca(
         TypeBuilder<PyObject**>::cache(this->module_),
@@ -524,13 +527,18 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->stack_bottom_ = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
         "stack_bottom");
+    Value *f_stacktop = this->builder_.CreateStructGEP(
+        this->frame_, FrameTy::FIELD_STACKTOP, "f_stacktop");
     Value *initial_stack_pointer =
         this->builder_.CreateLoad(
-            this->builder_.CreateStructGEP(this->frame_,
-                                           FrameTy::FIELD_STACKTOP),
+            f_stacktop,
             "initial_stack_pointer");
     this->builder_.CreateStore(initial_stack_pointer,
                                this->stack_pointer_addr_);
+    /* f_stacktop remains NULL unless yield suspends the frame. */
+    this->builder_.CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject **>::cache(this->module_)),
+        f_stacktop);
 
     Value *code = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_CODE),
@@ -583,20 +591,34 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                                                FrameTy::FIELD_BUILTINS)),
             TypeBuilder<PyObject *>::cache(this->module_));
 
+    this->resume_block_ = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_LASTI,
+                                       "f_lasti"));
+    // Each use of a YIELD_VALUE opcode will add a new case to this
+    // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
+    // but LLVM won't let us do that so we default to jumping to the
+    // unreachable block.
+    this->yield_resume_switch_ =
+        this->builder_.CreateSwitch(this->resume_block_,
+                                    this->unreachable_block_);
+
+    BasicBlock *start = BasicBlock::Create("body_start", this->function_);
+    this->yield_resume_switch_->addCase(
+        get_signed_constant_int(TypeBuilder<int>::cache(this->module_), -1),
+        start);
+
+    this->builder_.SetInsertPoint(this->unreachable_block_);
+    this->Abort("Jumped to unreachable code.");
+    this->builder_.CreateUnreachable();
+
     FillUnwindBlock();
+
+    this->builder_.SetInsertPoint(start);
 }
 
 void
 LlvmFunctionBuilder::FillUnwindBlock()
 {
-    BasicBlock *const orig_block = this->builder_.GetInsertBlock();
-
-    BasicBlock *unreachable_block =
-        BasicBlock::Create("unreachable", this->function_);
-    this->builder_.SetInsertPoint(unreachable_block);
-    this->Abort("Jumped to unreachable code.");
-    this->builder_.CreateUnreachable();
-
     // Handles, roughly, the ceval.cc JUMPTO macro.
     BasicBlock *goto_unwind_target_block =
         BasicBlock::Create("goto_unwind_target", this->function_);
@@ -608,8 +630,8 @@ LlvmFunctionBuilder::FillUnwindBlock()
     // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
     // but LLVM won't let us do that so we default to jumping to the
     // unreachable block.
-    this->unwind_target_switch_ =
-        this->builder_.CreateSwitch(unwind_target_index, unreachable_block);
+    this->unwind_target_switch_ = this->builder_.CreateSwitch(
+        unwind_target_index, this->unreachable_block_);
 
     // Code that needs to unwind the stack will jump here.
     // (e.g. returns, exceptions, breaks, and continues).
@@ -716,8 +738,8 @@ LlvmFunctionBuilder::FillUnwindBlock()
         BasicBlock *goto_block_handler =
             BasicBlock::Create("goto_block_handler", this->function_);
 
-        llvm::SwitchInst *block_type_switch =
-            this->builder_.CreateSwitch(block_type, unreachable_block, 3);
+        llvm::SwitchInst *block_type_switch = this->builder_.CreateSwitch(
+            block_type, this->unreachable_block_, 3);
         block_type_switch->addCase(
             ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
             handle_loop);
@@ -826,8 +848,6 @@ LlvmFunctionBuilder::FillUnwindBlock()
     this->PopAndDecrefTo(this->stack_bottom_);
     Value *retval = this->builder_.CreateLoad(this->retval_addr_, "retval");
     this->builder_.CreateRet(retval);
-
-    this->builder_.SetInsertPoint(orig_block);
 }
 
 void
@@ -1486,6 +1506,39 @@ LlvmFunctionBuilder::RETURN_VALUE()
 {
     Value *retval = this->Pop();
     this->Return(retval);
+}
+
+void
+LlvmFunctionBuilder::YIELD_VALUE()
+{
+    BasicBlock *yield_resume =
+        BasicBlock::Create("yield_resume", this->function_);
+    ConstantInt *yield_number =
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
+                         this->yield_resume_switch_->getNumCases());
+    this->yield_resume_switch_->addCase(yield_number, yield_resume);
+
+    Value *retval = Pop();
+
+    // Save the current stack pointer into the frame.
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    Value *f_stacktop = this->builder_.CreateStructGEP(
+        this->frame_, FrameTy::FIELD_STACKTOP, "f_stacktop");
+    this->builder_.CreateStore(stack_pointer, f_stacktop);
+
+    // Save the right block to jump back to when we resume this generator.
+    Value *f_lasti = this->builder_.CreateStructGEP(
+        this->frame_, FrameTy::FIELD_LASTI, "f_lasti");
+    this->builder_.CreateStore(yield_number, f_lasti);
+
+    // Yields return from the current function without unwinding the
+    // stack.  TODO(jyasskin): They _are_ supposed to trace the return
+    // and call reset_exc_info like everything else, so add those back
+    // in when everything else does them.
+    this->builder_.CreateRet(retval);
+
+    // Continue inserting code inside the resume block.
+    this->builder_.SetInsertPoint(yield_resume);
 }
 
 void
