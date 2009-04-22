@@ -24,7 +24,8 @@
 #include "Python.h"
 
 #include "Python-ast.h"
-#undef Module  // Macros that break LLVM
+#undef Assert  // Macros that break LLVM or our code.
+#undef Module
 #undef Pass
 #undef Return
 #include "node.h"

@@ -150,15 +150,15 @@ public:
 
 #define UNIMPLEMENTED(NAME) \
     void NAME() { \
-        this->InsertAbort(#NAME); \
+        this->DieForUndefinedOpcode(#NAME); \
     }
 #define UNIMPLEMENTED_I(NAME) \
     void NAME(int index) { \
-        this->InsertAbort(#NAME); \
+        this->DieForUndefinedOpcode(#NAME); \
     }
 #define UNIMPLEMENTED_J(NAME) \
     void NAME(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) { \
-        this->InsertAbort(#NAME); \
+        this->DieForUndefinedOpcode(#NAME); \
     }
 
     UNIMPLEMENTED(WITH_CLEANUP)
@@ -219,9 +219,17 @@ private:
     llvm::Value *LookupName(int name_index);
 
     /// Inserts a call that will print opcode_name and abort the
-    /// program when it's reached. This is useful for not-yet-defined
-    /// instructions.
-    void InsertAbort(const char *opcode_name);
+    /// program when it's reached.
+    void DieForUndefinedOpcode(const char *opcode_name);
+
+    /// Implements something like the C assert statement.  If
+    /// should_be_true (an i1) is false, prints failure_message (with
+    /// puts) and aborts.  Compiles to nothing in optimized mode.
+    void Assert(llvm::Value *should_be_true,
+                const std::string &failure_message);
+
+    /// Prints failure_message (with puts) and aborts.
+    void Abort(const std::string &failure_message);
 
     // Returns the global variable with type T and name 'name'. The
     // variable will be looked up in Python's C runtime.

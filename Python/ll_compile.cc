@@ -594,8 +594,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
     BasicBlock *unreachable_block =
         BasicBlock::Create("unreachable", this->function_);
     this->builder_.SetInsertPoint(unreachable_block);
-    Function *abort_func = this->GetGlobalFunction<void()>("abort");
-    this->builder_.CreateCall(abort_func);
+    this->Abort("Jumped to unreachable code.");
     this->builder_.CreateUnreachable();
 
     // Handles, roughly, the ceval.cc JUMPTO macro.
@@ -1835,8 +1834,12 @@ LlvmFunctionBuilder::STORE_MAP()
     Value *value = this->Pop();
     Value *dict = this->Pop();
     this->Push(dict);
-    // XXX(twouters): ceval does an assert(PyDict_CheckExact(dict);
-    // add it here if/when it's convenient to do in IRBuilder.
+    Value *dict_type = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(dict, ObjectTy::FIELD_TYPE));
+    Value *is_exact_dict = this->builder_.CreateICmpEQ(
+        dict_type, GetGlobalVariable<PyObject>("PyDict_Type"));
+    this->Assert(is_exact_dict,
+                 "dict argument to STORE_MAP is not exactly a PyDict");
     Function *setitem = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyDict_SetItem");
     Value *result = this->builder_.CreateCall3(setitem, dict, key, value,
@@ -2318,13 +2321,39 @@ LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler) {
 }
 
 void
-LlvmFunctionBuilder::InsertAbort(const char *opcode_name)
+LlvmFunctionBuilder::DieForUndefinedOpcode(const char *opcode_name)
 {
     std::string message("Undefined opcode: ");
     message.append(opcode_name);
-    this->builder_.CreateCall(this->GetGlobalFunction<int(const char*)>("puts"),
-                              this->llvm_data_->GetGlobalStringPtr(message));
-    this->builder_.CreateCall(this->GetGlobalFunction<void()>("abort"));
+    this->Abort(message);
+}
+
+void
+LlvmFunctionBuilder::Assert(llvm::Value *should_be_true,
+                            const std::string &failure_message)
+{
+#ifndef NDEBUG
+    BasicBlock *assert_passed = BasicBlock::Create(
+        failure_message + "_assert_passed", this->function_);
+    BasicBlock *assert_failed = BasicBlock::Create(
+        failure_message + "_assert_failed", this->function_);
+    this->builder_.CreateCondBr(should_be_true, assert_passed, assert_failed);
+
+    this->builder_.SetInsertPoint(assert_failed);
+    this->Abort(failure_message);
+    this->builder_.CreateUnreachable();
+
+    this->builder_.SetInsertPoint(assert_passed);
+#endif
+}
+
+void
+LlvmFunctionBuilder::Abort(const std::string &failure_message)
+{
+    this->builder_.CreateCall(
+        GetGlobalFunction<int(const char*)>("puts"),
+        this->llvm_data_->GetGlobalStringPtr(failure_message));
+    this->builder_.CreateCall(GetGlobalFunction<void()>("abort"));
 }
 
 template<typename FunctionType> Function *
