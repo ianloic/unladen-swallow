@@ -700,7 +700,7 @@ def break_one(x):
         nested = compile_for_llvm("nested", """
 def nested(x):
     for y in [1, 2]:
-        for z in [3, 4]:            
+        for z in [3, 4]:
             x["break"] = z
             break
             x["post break"] = z
@@ -712,6 +712,50 @@ def nested(x):
     return x
 """, level)
         self.assertEqual(nested({}), {"break": 3, "outer": 2, "else": True})
+
+    @at_each_optimization_level
+    def test_continue(self, level):
+        # CONTINUE_LOOP is only used inside a try/except block. Otherwise,
+        # the continue statement is lowered to a JUMP_ABSOLUTE.
+        continue_one = compile_for_llvm("continue_one", """
+def continue_one(x):
+    for y in [1, 2]:
+        if y:
+            x["continue"] = y
+            try:
+                continue
+            except:
+                pass
+            finally:
+                x["finally"] = y
+        1 / 0
+    else:
+        x["else"] = True
+    return x
+""", level)
+        self.assertEqual(continue_one({}), {"continue": 2, "else": True,
+                                            "finally": 2})
+
+        nested = compile_for_llvm("nested", """
+def nested(x):
+    for y in [1, 2]:
+        for z in [3, 4]:
+            if z:
+                x["continue"] = z
+                try:
+                    continue
+                except:
+                    pass
+            1 / 0
+        else:
+            x["inner else"] = True
+        x["outer"] = y
+    else:
+        x["else"] = True
+    return x
+""", level)
+        self.assertEqual(nested({}), {"continue": 4, "outer": 2,
+                                      "inner else": True, "else": True})
 
     @at_each_optimization_level
     def test_load_attr(self, level):

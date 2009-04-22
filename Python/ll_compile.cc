@@ -642,20 +642,68 @@ LlvmFunctionBuilder::FillUnwindBlock()
                 this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
                     "PyFrame_BlockPop"),
                 this->frame_));
-        Value *block_type =
-            this->builder_.CreateExtractValue(
-                popped_block, TypeBuilder<PyTryBlock>::FIELD_TYPE,
-                "block_type");
+        Value *block_type = this->builder_.CreateExtractValue(
+            popped_block,
+            TypeBuilder<PyTryBlock>::FIELD_TYPE,
+            "block_type");
+        Value *block_handler = this->builder_.CreateExtractValue(
+            popped_block,
+            TypeBuilder<PyTryBlock>::FIELD_HANDLER,
+            "block_handler");
+        Value *block_level = this->builder_.CreateExtractValue(
+            popped_block,
+            TypeBuilder<PyTryBlock>::FIELD_LEVEL,
+            "block_level");
 
-        // TODO(jyasskin): Handle SETUP_LOOP with UNWIND_CONTINUE.
+        // Handle SETUP_LOOP with UNWIND_CONTINUE.
+        BasicBlock *not_continue =
+            BasicBlock::Create("not_continue", function());
+        BasicBlock *unwind_continue =
+            BasicBlock::Create("unwind_continue", function());
+        Value *is_setup_loop = this->builder_.CreateICmpEQ(
+            block_type,
+            ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
+            "is_setup_loop");
+        Value *is_continue = this->builder_.CreateICmpEQ(
+            unwind_reason,
+            ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
+            "is_continue");
+        this->builder_.CreateCondBr(
+            this->builder_.CreateAnd(is_setup_loop, is_continue),
+            unwind_continue, not_continue);
 
+        this->builder_.SetInsertPoint(unwind_continue);
+        // Put the loop block back on the stack, clear the unwind reason,
+        // then jump to the proper FOR_ITER.
+        this->builder_.CreateCall4(
+            this->GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
+                "PyFrame_BlockSetup"),
+            this->frame_,
+            block_type,
+            block_handler,
+            block_level);
+        this->builder_.CreateStore(
+            ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
+            this->unwind_reason_addr_);
+        // Convert the return value to the unwind target. This is in keeping
+        // with ceval.cc. There's probably some LLVM magic that will allow
+        // us to skip the boxing/unboxing, but this will work for now.
+        Value *boxed_retval = this->builder_.CreateLoad(this->retval_addr_);
+        Value *unbox_retval = this->builder_.CreateTrunc(
+            this->builder_.CreateCall(
+                this->GetGlobalFunction<long(PyObject *)>("PyInt_AsLong"),
+                boxed_retval),
+            Type::Int32Ty,
+            "unboxed_retval");
+        this->DecRef(boxed_retval);
+        this->builder_.CreateStore(unbox_retval,
+                                   this->unwind_target_index_addr_);
+        this->builder_.CreateBr(goto_unwind_target_block);
+
+        this->builder_.SetInsertPoint(not_continue);
         // Pop values back to where this block started.
-        Value *pop_to_level =
-            this->builder_.CreateExtractValue(
-                popped_block, TypeBuilder<PyTryBlock>::FIELD_LEVEL,
-                "block_level");
-        this->PopAndDecrefTo(this->builder_.CreateGEP(
-                                 this->stack_bottom_, pop_to_level));
+        this->PopAndDecrefTo(
+            this->builder_.CreateGEP(this->stack_bottom_, block_level));
 
         BasicBlock *handle_loop =
             BasicBlock::Create("handle_loop", this->function_);
@@ -766,9 +814,6 @@ LlvmFunctionBuilder::FillUnwindBlock()
         // defining this finally or except, or the tail of the loop we
         // just broke out of.  Jump to it through the unwind switch
         // statement defined above.
-        Value *block_handler = this->builder_.CreateExtractValue(
-            popped_block, TypeBuilder<PyTryBlock>::FIELD_HANDLER,
-            "block_handler");
         this->builder_.CreateStore(block_handler,
                                    this->unwind_target_index_addr_);
         this->builder_.CreateBr(goto_unwind_target_block);
@@ -1395,6 +1440,31 @@ LlvmFunctionBuilder::END_FINALLY()
     // although returning out of a finally may still be slower than
     // ideal.
     this->builder_.SetInsertPoint(finally_fallthrough);
+}
+
+void
+LlvmFunctionBuilder::CONTINUE_LOOP(llvm::BasicBlock *target,
+                                   llvm::BasicBlock *fallthrough)
+{
+    // Accept code after a continue statement, even though it's never executed.
+    // Otherwise, CPython's willingness to insert code after block
+    // terminators causes problems.
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
+                               this->unwind_reason_addr_);
+    Value *unwind_target = this->AddUnwindTarget(target);
+    // Yes, store the unwind target in the return value slot. This is to
+    // keep the translation from ceval.cc as close as possible; deviation will
+    // only introduce bugs. The UNWIND_CONTINUE cases in the unwind block
+    // (see FillUnwindBlock()) will pick this up and deal with it.
+    Value *pytarget = this->builder_.CreateCall(
+            this->GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
+            this->builder_.CreateZExt(unwind_target,
+                                      TypeBuilder<long>::cache(this->module_)));
+    this->builder_.CreateStore(pytarget, this->retval_addr_);
+    this->builder_.CreateBr(this->unwind_block_);
+
+    this->builder_.SetInsertPoint(dead_code);
 }
 
 void
@@ -2307,7 +2377,8 @@ LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
 }
 
 void
-LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler) {
+LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler)
+{
     Value *stack_level = this->GetStackLevel();
     Value *unwind_target_index = this->AddUnwindTarget(handler);
     Function *blocksetup =

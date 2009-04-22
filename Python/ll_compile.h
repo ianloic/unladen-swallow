@@ -60,6 +60,8 @@ public:
                              llvm::BasicBlock *fallthrough);
     void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
+    void CONTINUE_LOOP(llvm::BasicBlock *target,
+                       llvm::BasicBlock *fallthrough);
 
     void BREAK_LOOP();
     void RETURN_VALUE();
@@ -156,10 +158,6 @@ public:
     void NAME(int index) { \
         this->DieForUndefinedOpcode(#NAME); \
     }
-#define UNIMPLEMENTED_J(NAME) \
-    void NAME(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) { \
-        this->DieForUndefinedOpcode(#NAME); \
-    }
 
     UNIMPLEMENTED(WITH_CLEANUP)
     UNIMPLEMENTED(YIELD_VALUE)
@@ -172,12 +170,8 @@ public:
     UNIMPLEMENTED_I(LOAD_CLOSURE)
     UNIMPLEMENTED_I(MAKE_CLOSURE)
 
-    UNIMPLEMENTED_J(CONTINUE_LOOP);
-
 #undef UNIMPLEMENTED
 #undef UNIMPLEMENTED_I
-#undef UNIMPLEMENTED_UNCOND_J
-#undef UNIMPLEMENTED_COND_J
 
 private:
     /// These two functions increment or decrement the reference count
