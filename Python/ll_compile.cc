@@ -414,8 +414,8 @@ public:
             TypeBuilder<char*>::cache(module),
             int_type,  // f_lasti
             int_type,  // f_lineno
-            TypeBuilder<short>::cache(module),  // f_throwflag
-            TypeBuilder<short>::cache(module),  // f_iblock
+            TypeBuilder<unsigned char>::cache(module),  // f_throwflag
+            TypeBuilder<unsigned char>::cache(module),  // f_iblock
             // f_blockstack:
             TypeBuilder<PyTryBlock[CO_MAXBLOCKS]>::cache(module),
             // f_localsplus, flexible array.
@@ -593,6 +593,25 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                                                FrameTy::FIELD_BUILTINS)),
             TypeBuilder<PyObject *>::cache(this->module_));
 
+    // Support generator.throw().  If frame->f_throwflag is set, the
+    // caller has set an exception, and we're supposed to propagate
+    // it.
+    BasicBlock *propagate_generator_throw =
+        BasicBlock::Create("propagate_generator_throw", this->function_);
+    BasicBlock *continue_generator_or_start_func =
+        BasicBlock::Create("continue_generator_or_start_func", this->function_);
+
+    Value *throwflag = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_THROWFLAG),
+        "f_throwflag");
+    this->builder_.CreateCondBr(
+        this->IsNonZero(throwflag),
+        propagate_generator_throw, continue_generator_or_start_func);
+
+    this->builder_.SetInsertPoint(propagate_generator_throw);
+    PropagateException();
+
+    this->builder_.SetInsertPoint(continue_generator_or_start_func);
     this->resume_block_ = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_LASTI,
                                        "f_lasti"));

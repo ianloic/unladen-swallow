@@ -42,8 +42,8 @@ typedef struct _frame {
     /* As of 2.3 f_lineno is only valid when tracing is active (i.e. when
        f_trace is set) -- at other times use PyCode_Addr2Line instead. */
     int f_lineno;		/* Current line number */
-    short f_throwflag;		/* true if generator.throw() was called */
-    short f_iblock;		/* index in f_blockstack */
+    unsigned char f_throwflag;	/* true if generator.throw() was called */
+    unsigned char f_iblock;	/* index in f_blockstack */
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
     PyObject *f_localsplus[1];	/* locals+stack, dynamically sized */
 } PyFrameObject;

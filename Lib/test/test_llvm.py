@@ -981,6 +981,43 @@ def generator(x):
                            ("finally", 2),
                            "done looping"])
 
+    @at_each_optimization_level
+    def test_generator_send(self, level):
+        generator = compile_for_llvm("generator", """
+def generator():
+    yield (yield 1)
+""", level)
+        g = generator()
+        self.assertEquals(1, g.next())
+        self.assertEquals("Hello world", g.send("Hello world"))
+        self.assertRaises(StopIteration, g.send, 3)
+
+    @at_each_optimization_level
+    def test_generator_throw(self, level):
+        generator = compile_for_llvm("generator", """
+def generator(obj):
+    try:
+        yield "starting"
+    except ArithmeticError:
+        obj["caught"] = 1
+    finally:
+        obj["finally"] = 1
+    yield "done"
+""", level)
+        obj = {}
+        g = generator(obj)
+        self.assertEquals("starting", g.next())
+        self.assertEquals("done", g.throw(ArithmeticError))
+        self.assertEquals(None, g.close())
+        self.assertEquals({"caught": 1, "finally": 1}, obj)
+
+        obj = {}
+        g = generator(obj)
+        self.assertEquals("starting", g.next())
+        self.assertRaises(UnboundLocalError, g.throw, UnboundLocalError)
+        self.assertRaises(StopIteration, g.next)
+        self.assertEquals({"finally": 1}, obj)
+
 
 class LoopExceptionInteractionTests(unittest.TestCase):
     @at_each_optimization_level
