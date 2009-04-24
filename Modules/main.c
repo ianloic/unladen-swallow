@@ -96,7 +96,7 @@ static char *usage_5 = "\
 -R     : show refcount information after execution\n";
 #else
 static char *usage_5 = "";
-#endif;
+#endif
 static char *usage_6 = "\
 file   : program read from script file\n\
 -      : program read from stdin (default; interactive mode if a tty)\n\
