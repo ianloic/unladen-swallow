@@ -146,6 +146,11 @@ public:
     void STORE_ATTR(int index);
     void DELETE_ATTR(int index);
 
+    void LOAD_CLOSURE(int freevar_index);
+    void MAKE_CLOSURE(int num_defaults);
+    void LOAD_DEREF(int index);
+    void STORE_DEREF(int index);
+
     void RAISE_VARARGS_ZERO();
     void RAISE_VARARGS_ONE();
     void RAISE_VARARGS_TWO();
@@ -162,13 +167,9 @@ public:
 
     UNIMPLEMENTED(WITH_CLEANUP)
 
-    UNIMPLEMENTED_I(LOAD_DEREF);
-    UNIMPLEMENTED_I(STORE_DEREF);
     UNIMPLEMENTED_I(LOAD_NAME);
     UNIMPLEMENTED_I(STORE_NAME);
     UNIMPLEMENTED_I(DELETE_NAME);
-    UNIMPLEMENTED_I(LOAD_CLOSURE)
-    UNIMPLEMENTED_I(MAKE_CLOSURE)
 
 #undef UNIMPLEMENTED
 #undef UNIMPLEMENTED_I

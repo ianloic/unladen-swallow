@@ -1018,6 +1018,60 @@ def generator(obj):
         self.assertRaises(StopIteration, g.next)
         self.assertEquals({"finally": 1}, obj)
 
+    @at_each_optimization_level
+    def test_closure(self, level):
+        make_closure = compile_for_llvm('make_closure', '''
+def make_closure(a, level):
+    b = 5
+    c = 3
+    def inner(d):
+        c = d + 1
+        return a, b, c, d
+    if level is not None:
+        inner.__code__.__use_llvm__ = True
+        inner.__code__.co_optimization = level
+    b = 2
+    return inner
+''', level)
+        inner = make_closure(1, level)
+        self.assertEquals(inner(4), (1, 2, 5, 4))
+        self.assertRaises(TypeError, inner, "5")
+
+    @at_each_optimization_level
+    def test_closure_unbound_freevar(self, level):
+        unbound_freevar = compile_for_llvm('unbound_freevar', '''
+def unbound_freevar(level):
+    if 0:
+        b = 2
+    def inner():
+        return b
+    if level is not None:
+        inner.__code__.__use_llvm__ = True
+        inner.__code__.co_optimization = level
+    return inner
+''', level)
+        inner = unbound_freevar(level)
+        self.assertRaisesWithArgs(NameError,
+            ("free variable 'b' referenced before "
+             "assignment in enclosing scope",), inner)
+
+    @at_each_optimization_level
+    def test_closure_unbound_local(self, level):
+        unbound_local = compile_for_llvm('unbound_local', '''
+def unbound_local(level):
+    def inner():
+        if 0:
+            b = 3
+        return b
+    if level is not None:
+        inner.__code__.__use_llvm__ = True
+        inner.__code__.co_optimization = level
+    return inner
+''', level)
+        inner = unbound_local(level)
+        self.assertRaisesWithArgs(UnboundLocalError,
+            ("local variable 'b' referenced before assignment",), inner)
+
 
 class LoopExceptionInteractionTests(unittest.TestCase):
     @at_each_optimization_level

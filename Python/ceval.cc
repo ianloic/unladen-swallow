@@ -2828,6 +2828,23 @@ cmp_outcome(int op, register PyObject *v, register PyObject *w)
 }
 
 void
+_PyEval_RaiseForUnboundFreeVar(PyFrameObject *frame, int name_index)
+{
+	Py_ssize_t num_cells = PyTuple_GET_SIZE(frame->f_code->co_cellvars);
+	if (name_index < num_cells) {
+		_PyEval_RaiseForUnboundLocal(frame, name_index);
+	} else {
+		PyObject *varname = PyTuple_GET_ITEM(
+			frame->f_code->co_freevars,
+			name_index - num_cells);
+		format_exc_check_arg(
+			PyExc_NameError,
+			UNBOUNDFREE_ERROR_MSG,
+			varname);
+	}
+}
+
+void
 _PyEval_RaiseForGlobalNameError(PyObject *name)
 {
 	format_exc_check_arg(PyExc_NameError, GLOBAL_NAME_ERROR_MSG, name);

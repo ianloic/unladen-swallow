@@ -1119,6 +1119,73 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
 }
 
 void
+LlvmFunctionBuilder::LOAD_CLOSURE(int freevars_index)
+{
+    Value *cell = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(
+            this->freevars_,
+            ConstantInt::get(Type::Int32Ty, freevars_index)));
+    this->IncRef(cell);
+    this->Push(cell);
+}
+
+void
+LlvmFunctionBuilder::MAKE_CLOSURE(int num_defaults)
+{
+    Value *code_object = this->Pop();
+    Function *pyfunction_new = this->GetGlobalFunction<
+        PyObject *(PyObject *, PyObject *)>("PyFunction_New");
+    Value *func_object = this->builder_.CreateCall2(
+        pyfunction_new, code_object, this->globals_, "MAKE_CLOSURE_result");
+    this->DecRef(code_object);
+    this->PropagateExceptionOnNull(func_object);
+    Value *closure = this->Pop();
+    Function *pyfunction_setclosure = this->GetGlobalFunction<
+        int(PyObject *, PyObject *)>("PyFunction_SetClosure");
+    Value *setclosure_result = this->builder_.CreateCall2(
+        pyfunction_setclosure, func_object, closure,
+        "MAKE_CLOSURE_setclosure_result");
+    this->DecRef(closure);
+    this->PropagateExceptionOnNonZero(setclosure_result);
+    if (num_defaults > 0) {
+        // Effectively inline BuildSequenceLiteral and
+        // PropagateExceptionOnNull so we can DecRef func_object on error.
+        BasicBlock *failure = BasicBlock::Create("MAKE_CLOSURE_failure",
+                                                 this->function_);
+        BasicBlock *success = BasicBlock::Create("MAKE_CLOSURE_success",
+                                                 this->function_);
+
+        Value *tupsize = ConstantInt::get(
+            TypeBuilder<Py_ssize_t>::cache(this->module_), num_defaults);
+        Function *pytuple_new =
+            this->GetGlobalFunction<PyObject *(Py_ssize_t)>("PyTuple_New");
+        Value *defaults = this->builder_.CreateCall(pytuple_new, tupsize,
+                                                    "MAKE_CLOSURE_defaults");
+        this->builder_.CreateCondBr(this->IsNull(defaults),
+                                    failure, success);
+
+        this->builder_.SetInsertPoint(failure);
+        this->DecRef(func_object);
+        this->PropagateException();
+
+        this->builder_.SetInsertPoint(success);
+        // XXX(twouters): do this with a memcpy?
+        while (--num_defaults >= 0) {
+            Value *itemslot = this->GetTupleItemSlot(defaults, num_defaults);
+            this->builder_.CreateStore(this->Pop(), itemslot);
+        }
+        // End of inlining.
+        Function *pyfunction_setdefaults = this->GetGlobalFunction<
+            int(PyObject *, PyObject *)>("PyFunction_SetDefaults");
+        Value *setdefaults_result = this->builder_.CreateCall2(
+            pyfunction_setdefaults, func_object, defaults,
+            "MAKE_CLOSURE_setdefaults_result");
+        this->PropagateExceptionOnNonZero(setdefaults_result);
+    }
+    this->Push(func_object);
+}
+
+void
 LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
 {
 #ifdef WITH_TSC
@@ -1166,6 +1233,66 @@ LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
         "CALL_FUNCTION_VAR_KW_result");
     this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
+}
+
+void
+LlvmFunctionBuilder::LOAD_DEREF(int index)
+{
+    BasicBlock *failed_load =
+        BasicBlock::Create("LOAD_DEREF_failed_load", this->function_);
+    BasicBlock *unbound_local =
+        BasicBlock::Create("LOAD_DEREF_unbound_local", this->function_);
+    BasicBlock *error =
+        BasicBlock::Create("LOAD_DEREF_error", this->function_);
+    BasicBlock *success =
+        BasicBlock::Create("LOAD_DEREF_success", this->function_);
+
+    Value *cell = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(
+            this->freevars_, ConstantInt::get(Type::Int32Ty, index)));
+    Function *pycell_get = this->GetGlobalFunction<
+        PyObject *(PyObject *)>("PyCell_Get");
+    Value *value = this->builder_.CreateCall(
+        pycell_get, cell, "LOAD_DEREF_cell_contents");
+    this->builder_.CreateCondBr(this->IsNull(value), failed_load, success);
+
+    this->builder_.SetInsertPoint(failed_load);
+    Function *pyerr_occurred =
+        this->GetGlobalFunction<PyObject *()>("PyErr_Occurred");
+    Value *was_err =
+        this->builder_.CreateCall(pyerr_occurred, "LOAD_DEREF_err_occurred");
+    this->builder_.CreateCondBr(this->IsNull(was_err), unbound_local, error);
+
+    this->builder_.SetInsertPoint(unbound_local);
+    Function *do_raise =
+        this->GetGlobalFunction<void(PyFrameObject*, int)>(
+            "_PyEval_RaiseForUnboundFreeVar");
+    this->builder_.CreateCall2(
+        do_raise, this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+
+    this->FallThroughTo(error);
+    this->PropagateException();
+
+    this->builder_.SetInsertPoint(success);
+    this->Push(value);
+}
+
+void
+LlvmFunctionBuilder::STORE_DEREF(int index)
+{
+    Value *value = this->Pop();
+    Value *cell = this->builder_.CreateLoad(
+        this->builder_.CreateGEP(
+            this->freevars_, ConstantInt::get(Type::Int32Ty, index)));
+    Function *pycell_set = this->GetGlobalFunction<
+        int(PyObject *, PyObject *)>("PyCell_Set");
+    Value *result = this->builder_.CreateCall2(
+        pycell_set, cell, value, "STORE_DEREF_result");
+    this->DecRef(value);
+    // ceval.c doesn't actually check the return value of this, I guess
+    // we are a little more likely to do things wrong.
+    this->PropagateExceptionOnNonZero(result);
 }
 
 void

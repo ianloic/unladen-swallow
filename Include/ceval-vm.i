@@ -1635,7 +1635,7 @@ LABEL2(LOAD_GLOBAL)
 NEXT_P2;
 }
 
-LABEL(LOAD_CLOSURE) /* LOAD_CLOSURE ( #i -- a  inc:a  next:a ) */
+LABEL(LOAD_CLOSURE) /* LOAD_CLOSURE ( #i -- a  inc:a ) */
 NAME("LOAD_CLOSURE")
 {
 DEF_CA
@@ -1653,7 +1653,6 @@ a = freevars[i];
 NEXT_P1;
 vm_a2Obj(a,stack_pointerTOS);
 vm_a2incref(a,__none__TOS);
-vm_a2next(a,__none__TOS);
 LABEL2(LOAD_CLOSURE)
 NEXT_P2;
 }
@@ -1677,17 +1676,7 @@ why = WHY_EXCEPTION;
 /* Don't stomp existing exception */
 if (PyErr_Occurred())
         ERROR();
-if (i < PyTuple_GET_SIZE(co->co_cellvars)) {
-        _PyEval_RaiseForUnboundLocal(f, i);
-} else {
-        a1 = PyTuple_GET_ITEM(
-                co->co_freevars,
-                i - PyTuple_GET_SIZE(co->co_cellvars));
-        format_exc_check_arg(
-                PyExc_NameError,
-                UNBOUNDFREE_ERROR_MSG,
-                a1);
-}
+_PyEval_RaiseForUnboundFreeVar(f, i);
 ERROR();
 }
 
@@ -2769,6 +2758,8 @@ if (x != NULL) {
         if (PyFunction_SetClosure(x, a1) != 0) {
                 /* Can't happen unless bytecode is corrupt. */
                 why = WHY_EXCEPTION;
+                Py_DECREF(x);
+                x = NULL;
         }
         Py_DECREF(a1);
 }

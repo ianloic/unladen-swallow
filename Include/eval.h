@@ -18,7 +18,9 @@ PyAPI_FUNC(PyObject *) PyEval_EvalCodeEx(PyCodeObject *co,
 					PyObject *closure);
 
 PyAPI_FUNC(PyObject *) _PyEval_CallTracing(PyObject *func, PyObject *args);
+
 PyAPI_FUNC(void) _PyEval_RaiseForGlobalNameError(PyObject *name);
+PyAPI_FUNC(void) _PyEval_RaiseForUnboundFreeVar(struct _frame *, int);
 
 #ifdef WITH_TSC
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int,
