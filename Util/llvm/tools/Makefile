@@ -22,6 +22,10 @@ PARALLEL_DIRS := llvm-config  \
 		 lli gccas gccld llvm-extract llvm-db \
 		 bugpoint llvm-bcanalyzer llvm-stub llvmc
 
+ifdef ONLY_TOOLS
+  OPTIONAL_PARALLEL_DIRS :=
+  PARALLEL_DIRS := $(ONLY_TOOLS)
+endif
 
 include $(LEVEL)/Makefile.config
 

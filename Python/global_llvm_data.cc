@@ -16,6 +16,9 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Scalar.h"
 
+// Declare the function from initial_llvm_module.cc.
+llvm::Module* FillInitialGlobalModule(llvm::Module*);
+
 using llvm::Module;
 
 PyGlobalLlvmData *
@@ -62,6 +65,8 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
+
+    FillInitialGlobalModule(this->module_);
 
     InitializeOptimizations();
 }

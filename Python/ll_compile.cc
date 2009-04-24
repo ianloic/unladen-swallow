@@ -21,6 +21,8 @@
 
 #include <vector>
 
+struct PyExcInfo;
+
 using llvm::BasicBlock;
 using llvm::Constant;
 using llvm::ConstantInt;
@@ -55,41 +57,27 @@ get_signed_constant_int(const Type *type, int64_t v)
     return ConstantInt::get(type, static_cast<uint64_t>(v), true /* signed */);
 }
 
+#ifdef Py_TRACE_REFS
+#define OBJECT_HEAD_FIELDS \
+        FIELD_NEXT, \
+        FIELD_PREV, \
+        FIELD_REFCNT, \
+        FIELD_TYPE,
+#else
+#define OBJECT_HEAD_FIELDS \
+        FIELD_REFCNT, \
+        FIELD_TYPE,
+#endif
+
 template<> class TypeBuilder<PyObject> {
 public:
     static const Type *cache(Module *module) {
-        std::string pyobject_name("__pyobject");
-        const Type *result = module->getTypeByName(pyobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with object.h.
-        llvm::PATypeHolder object_ty = llvm::OpaqueType::get();
-        Type *p_object_ty = PointerType::getUnqual(object_ty);
-        llvm::StructType *temp_object_ty = llvm::StructType::get(
-            // Fields from PyObject_HEAD.
-#ifdef Py_TRACE_REFS
-            // _ob_next, _ob_prev
-            p_object_ty, p_object_ty,
-#endif
-            TypeBuilder<ssize_t>::cache(module),
-            p_object_ty,
-            NULL);
-	// Unifies the OpaqueType fields with the whole structure.  We
-	// couldn't do that originally because the type's recursive.
-        llvm::cast<llvm::OpaqueType>(object_ty.get())
-            ->refineAbstractTypeTo(temp_object_ty);
-        module->addTypeName(pyobject_name, object_ty.get());
-        return object_ty.get();
+        // Clang's name for the PyObject struct.
+        return module->getTypeByName("struct._object");
     }
 
     enum Fields {
-#ifdef Py_TRACE_REFS
-        FIELD_NEXT,
-        FIELD_PREV,
-#endif
-        FIELD_REFCNT,
-        FIELD_TYPE,
+        OBJECT_HEAD_FIELDS
     };
 };
 typedef TypeBuilder<PyObject> ObjectTy;
@@ -163,86 +151,12 @@ typedef TypeBuilder<PyListObject> ListTy;
 template<> class TypeBuilder<PyTypeObject> {
 public:
     static const Type *cache(Module *module) {
-        std::string pytypeobject_name("__pytypeobject");
-        const Type *result = module->getTypeByName(pytypeobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with code.h.
-        result = llvm::StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            TypeBuilder<PyObject>::cache(module),
-            // From PyObject_VAR_HEAD
-            TypeBuilder<ssize_t>::cache(module),
-            // From PyTYPEObject
-            TypeBuilder<const char *>::cache(module),  // tp_name
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_basicsize
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_itemsize
-            TypeBuilder<destructor>::cache(module),  // tp_dealloc
-            // tp_print
-            TypeBuilder<int (*)(PyObject*, char*, int)>::cache(module),
-            TypeBuilder<getattrfunc>::cache(module),  // tp_getattr
-            TypeBuilder<setattrfunc>::cache(module),  // tp_setattr
-            TypeBuilder<cmpfunc>::cache(module),  // tp_compare
-            TypeBuilder<reprfunc>::cache(module),  // tp_repr
-            TypeBuilder<char *>::cache(module),  // tp_as_number
-            TypeBuilder<char *>::cache(module),  // tp_as_sequence
-            TypeBuilder<char *>::cache(module),  // tp_as_mapping
-            TypeBuilder<hashfunc>::cache(module),  // tp_hash
-            TypeBuilder<ternaryfunc>::cache(module),  // tp_call
-            TypeBuilder<reprfunc>::cache(module),  // tp_str
-            TypeBuilder<getattrofunc>::cache(module),  // tp_getattro
-            TypeBuilder<setattrofunc>::cache(module),  // tp_setattro
-            TypeBuilder<char *>::cache(module),  // tp_as_buffer
-            TypeBuilder<long>::cache(module),  // tp_flags
-            TypeBuilder<const char *>::cache(module),  // tp_doc
-            TypeBuilder<traverseproc>::cache(module),  // tp_traverse
-            TypeBuilder<inquiry>::cache(module),  // tp_clear
-            TypeBuilder<richcmpfunc>::cache(module),  // tp_richcompare
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_weaklistoffset
-            TypeBuilder<getiterfunc>::cache(module),  // tp_iter
-            TypeBuilder<iternextfunc>::cache(module),  // tp_iternext
-            TypeBuilder<char *>::cache(module),  // tp_methods
-            TypeBuilder<char *>::cache(module),  // tp_members
-            TypeBuilder<char *>::cache(module),  // tp_getset
-            TypeBuilder<PyObject *>::cache(module),  // tp_base
-            TypeBuilder<PyObject *>::cache(module),  // tp_dict
-            TypeBuilder<descrgetfunc>::cache(module),  // tp_descr_get
-            TypeBuilder<descrsetfunc>::cache(module),  // tp_descr_set
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_dictoffset
-            TypeBuilder<initproc>::cache(module),  // tp_init
-            // Can't use newfunc or allocfunc because they refer to
-            // PyTypeObject.
-            TypeBuilder<PyObject *(*)(PyObject *,
-                                      Py_ssize_t)>::cache(module),  // tp_alloc
-            TypeBuilder<PyObject *(*)(PyObject *, PyObject *,
-                                      PyObject *)>::cache(module),  // tp_new
-            TypeBuilder<freefunc>::cache(module),  // tp_free
-            TypeBuilder<inquiry>::cache(module),  // tp_is_gc
-            TypeBuilder<PyObject *>::cache(module),  // tp_bases
-            TypeBuilder<PyObject *>::cache(module),  // tp_mro
-            TypeBuilder<PyObject *>::cache(module),  // tp_cache
-            TypeBuilder<PyObject *>::cache(module),  // tp_subclasses
-            TypeBuilder<PyObject *>::cache(module),  // tp_weaklist
-            TypeBuilder<destructor>::cache(module),  // tp_del
-            TypeBuilder<unsigned int>::cache(module),  // tp_version_tag
-#ifdef COUNT_ALLOCS
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_allocs
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_frees
-            TypeBuilder<Py_ssize_t>::cache(module),  // tp_maxalloc
-            TypeBuilder<PyObject *>::cache(module),  // tp_prev
-            TypeBuilder<PyObject *>::cache(module),  // tp_next
-#endif
-            NULL);
-
-        module->addTypeName(pytypeobject_name, result);
-        return result;
+        // Clang's name for the PyTypeObject struct.
+        return module->getTypeByName("struct._typeobject");
     }
 
     enum Fields {
-        FIELD_OBJECT,
+        OBJECT_HEAD_FIELDS
         FIELD_SIZE,
         FIELD_NAME,
         FIELD_BASICSIZE,
@@ -451,20 +365,12 @@ public:
 };
 typedef TypeBuilder<PyFrameObject> FrameTy;
 
-// This type collects the set of three values that constitute an
-// exception.  So far, it's only used for
-// _PyLlvm_WrapEnterExceptOrFinally().
-struct ExcInfo {
-    PyObject *exc;
-    PyObject *val;
-    PyObject *tb;
-};
-
-template<> class TypeBuilder<ExcInfo> {
+template<> class TypeBuilder<PyExcInfo> {
 public:
     static const Type *cache(Module *module) {
-        const Type *pyobject_p = TypeBuilder<PyObject *>::cache(module);
-        return llvm::StructType::get(pyobject_p, pyobject_p, pyobject_p, NULL);
+        // Clang's name for the PyExcInfo struct defined in
+        // llvm_inline_functions.c.
+        return module->getTypeByName("struct.PyExcInfo");
     }
     enum Fields {
         FIELD_EXC,
@@ -792,21 +698,21 @@ LlvmFunctionBuilder::FillUnwindBlock()
         // can return into it.  This alloca _won't_ be optimized by
         // mem2reg because its address is taken.
         Value *exc_info = this->CreateAllocaInEntryBlock(
-            TypeBuilder<ExcInfo>::cache(this->module_), NULL, "exc_info");
+            TypeBuilder<PyExcInfo>::cache(this->module_), NULL, "exc_info");
         this->builder_.CreateCall2(
-            this->GetGlobalFunction<void(ExcInfo*, int)>(
+            this->GetGlobalFunction<void(PyExcInfo*, int)>(
                 "_PyLlvm_WrapEnterExceptOrFinally"),
             exc_info,
             block_type);
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<ExcInfo>::FIELD_TB)));
+                           exc_info, TypeBuilder<PyExcInfo>::FIELD_TB)));
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<ExcInfo>::FIELD_VAL)));
+                           exc_info, TypeBuilder<PyExcInfo>::FIELD_VAL)));
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<ExcInfo>::FIELD_EXC)));
+                           exc_info, TypeBuilder<PyExcInfo>::FIELD_EXC)));
         this->builder_.CreateBr(goto_block_handler);
 
         this->builder_.SetInsertPoint(handle_finally);
@@ -2108,7 +2014,7 @@ LlvmFunctionBuilder::STORE_MAP()
     Value *dict_type = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(dict, ObjectTy::FIELD_TYPE));
     Value *is_exact_dict = this->builder_.CreateICmpEQ(
-        dict_type, GetGlobalVariable<PyObject>("PyDict_Type"));
+        dict_type, GetGlobalVariable<PyTypeObject>("PyDict_Type"));
     this->Assert(is_exact_dict,
                  "dict argument to STORE_MAP is not exactly a PyDict");
     Function *setitem = this->GetGlobalFunction<
@@ -2796,56 +2702,3 @@ LlvmFunctionBuilder::IsPythonTrue(Value *value)
 }
 
 }  // namespace py
-
-
-// Helper functions for the LLVM IR. These exist for
-// non-speed-critical code that's easier to write in C, or for calls
-// that are functions in pydebug mode and macros otherwise.
-extern "C" {
-
-void
-_PyLlvm_WrapDealloc(PyObject *obj)
-{
-    _Py_Dealloc(obj);
-}
-
-int
-_PyLlvm_WrapIsExceptionOrString(PyObject *obj)
-{
-    return PyExceptionClass_Check(obj) || PyString_Check(obj);
-}
-
-// Copied from the SETUP_FINALLY && WHY_EXCEPTION block in
-// fast_block_end in PyEval_EvalFrame().
-void
-_PyLlvm_WrapEnterExceptOrFinally(py::ExcInfo *exc_info, int block_type)
-{
-    PyThreadState *tstate = PyThreadState_GET();
-    PyErr_Fetch(&exc_info->exc, &exc_info->val, &exc_info->tb);
-    if (exc_info->val == NULL) {
-        exc_info->val = Py_None;
-        Py_INCREF(exc_info->val);
-    }
-    /* Make the raw exception data
-       available to the handler,
-       so a program can emulate the
-       Python main loop.  Don't do
-       this for 'finally'. */
-    if (block_type == SETUP_EXCEPT) {
-        PyErr_NormalizeException(
-            &exc_info->exc, &exc_info->val, &exc_info->tb);
-        _PyEval_SetExcInfo(tstate,
-                           exc_info->exc, exc_info->val, exc_info->tb);
-    }
-    if (exc_info->tb == NULL) {
-        Py_INCREF(Py_None);
-        exc_info->tb = Py_None;
-    }
-    /* Within the except or finally block,
-       PyErr_Occurred() should be false.
-       END_FINALLY will restore the
-       exception if necessary. */
-    PyErr_Clear();
-}
-
-}

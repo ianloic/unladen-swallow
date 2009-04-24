@@ -77,6 +77,7 @@ PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
 # LLVM flags extracted from llvm-config jit bitreader x86
 LLVMCXXFLAGS=	-IUtil/llvm/include -I$(srcdir)/Util/llvm/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
 LLVM_LIB_DIR=	Util/llvm/@LLVM_OBJ_DIR@/lib
+LLVM_BIN_DIR=	Util/llvm/@LLVM_OBJ_DIR@/bin
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
 LLVMLDFLAGS+=	-lLLVMBitReader $(LLVM_LIB_DIR)/LLVMX86AsmPrinter.o $(LLVM_LIB_DIR)/LLVMX86CodeGen.o -lLLVMSelectionDAG -lLLVMAsmPrinter $(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
 
@@ -280,6 +281,7 @@ PYTHON_OBJS=	\
 		Python/import.o \
 		Python/importdl.o \
 		Python/ll_compile.o \
+		Python/initial_llvm_module.o \
 		Python/marshal.o \
 		Python/modsupport.o \
 		Python/mystrtoul.o \
@@ -394,6 +396,9 @@ coverage:
 
 llvm:
 	$(MAKE) -C Util/llvm libs-only
+
+llvm_tools: llvm
+	$(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc"
 
 
 # Build the interpreter
@@ -585,6 +590,20 @@ Python/formatter_unicode.o: $(srcdir)/Python/formatter_unicode.c \
 
 Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 				$(STRINGLIB_HEADERS)
+
+Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_tools
+	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm-bc  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
+
+# TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
+# less than other parts of LLVM.  If it breaks us more than a couple
+# times, we should try to run parts of LLVM's standard test suite
+# through it.
+Python/initial_llvm_module.cc: Python/llvm_inline_functions.bc \
+		$(srcdir)/Python/initial_llvm_module.cc.header llvm_tools
+	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
+		-cppfname=FillInitialGlobalModule -o $@.tmp -f
+	cat $(srcdir)/Python/initial_llvm_module.cc.header $@.tmp > $@
+	rm $@.tmp
 
 # Vmgen-provided ceval bits
 

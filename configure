@@ -25681,7 +25681,7 @@ $as_echo "$with_computed_gotos" >&6; }
 # arguments at any time it would make a difference.  The practical
 # effect is that config.status passes some extra arguments when it
 # re-runs the Python configure script.
-ac_configure_args="$ac_configure_args --enable-jit --enable-targets=host-only --enable-bindings=none"
+ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
 if test "$Py_DEBUG" = 'true' ; then
     ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
     LLVM_OBJ_DIR=Debug
