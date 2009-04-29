@@ -48,15 +48,6 @@ enum UnwindReason {
     UNWIND_YIELD
 };
 
-static ConstantInt *
-get_signed_constant_int(const Type *type, int64_t v)
-{
-    // This is an LLVM idiom. It expects an unsigned integer but does
-    // different conversions internally depending on whether it was
-    // originally signed or not.
-    return ConstantInt::get(type, static_cast<uint64_t>(v), true /* signed */);
-}
-
 #ifdef Py_TRACE_REFS
 #define OBJECT_HEAD_FIELDS \
         FIELD_NEXT, \
@@ -531,7 +522,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     BasicBlock *start = BasicBlock::Create("body_start", this->function_);
     this->yield_resume_switch_->addCase(
-        get_signed_constant_int(TypeBuilder<int>::cache(this->module_), -1),
+        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_), -1),
         start);
 
     this->builder_.SetInsertPoint(this->unreachable_block_);
@@ -1015,8 +1006,8 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
             "_PyEval_RaiseForUnboundLocal");
     this->builder_.CreateCall2(
         do_raise, this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
-                         index, true /* signed */));
+        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+                               index));
     this->PropagateException();
 
     this->builder_.SetInsertPoint(success);
@@ -1289,8 +1280,8 @@ LlvmFunctionBuilder::DELETE_FAST(int index)
         void(PyFrameObject *, int)>("_PyEval_RaiseForUnboundLocal");
     this->builder_.CreateCall2(
         do_raise, this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
-                         index, true /* signed */));
+        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+                               index));
     this->PropagateException();
 
     this->builder_.SetInsertPoint(success);
@@ -2062,7 +2053,7 @@ LlvmFunctionBuilder::BuildSequenceLiteral(
     Value *(LlvmFunctionBuilder::*getitemslot)(Value*, int))
 {
     const Type *IntSsizeTy = TypeBuilder<Py_ssize_t>::cache(this->module_);
-    Value *seqsize = ConstantInt::get(IntSsizeTy, size, true /* signed */);
+    Value *seqsize = ConstantInt::getSigned(IntSsizeTy, size);
 
     Function *create =
         this->GetGlobalFunction<PyObject *(Py_ssize_t)>(createname);
@@ -2094,9 +2085,8 @@ LlvmFunctionBuilder::BUILD_TUPLE(int size)
 void
 LlvmFunctionBuilder::BUILD_MAP(int size)
 {
-    Value *sizehint = ConstantInt::get(
-        TypeBuilder<Py_ssize_t>::cache(this->module_),
-        size, true /* signed */);
+    Value *sizehint = ConstantInt::getSigned(
+        TypeBuilder<Py_ssize_t>::cache(this->module_), size);
     Function *create_dict = this->GetGlobalFunction<
         PyObject *(Py_ssize_t)>("_PyDict_NewPresized");
     Value *result = this->builder_.CreateCall(create_dict, sizehint,
@@ -2316,8 +2306,8 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
         int(PyObject *, int, PyObject **)>("_PyEval_UnpackIterable");
     Value *new_stack_pointer = this->builder_.CreateGEP(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
-        ConstantInt::get(TypeBuilder<Py_ssize_t>::cache(this->module_),
-                         size, true /* signed */));
+        ConstantInt::getSigned(TypeBuilder<Py_ssize_t>::cache(this->module_),
+                               size));
     Value *result = this->builder_.CreateCall3(
         unpack_iterable, iterable,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), size, true),
@@ -2340,7 +2330,7 @@ increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)
     Value *orig = builder.CreateLoad(addr);
     Value *new_ = builder.CreateAdd(
         orig,
-        get_signed_constant_int(orig->getType(), delta));
+        ConstantInt::getSigned(orig->getType(), delta));
     builder.CreateStore(new_, addr);
     return new_;
 }
@@ -2446,7 +2436,7 @@ LlvmFunctionBuilder::Pop()
 {
     Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
     Value *new_stack_pointer = this->builder_.CreateGEP(
-        stack_pointer, get_signed_constant_int(Type::Int32Ty, -1));
+        stack_pointer, ConstantInt::getSigned(Type::Int32Ty, -1));
     Value *former_top = this->builder_.CreateLoad(new_stack_pointer);
     this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
     return former_top;
@@ -2567,14 +2557,14 @@ Value *
 LlvmFunctionBuilder::IsNegative(Value *value)
 {
     return this->builder_.CreateICmpSLT(
-        value, ConstantInt::get(value->getType(), 0, true /* signed */));
+        value, ConstantInt::getSigned(value->getType(), 0));
 }
 
 Value *
 LlvmFunctionBuilder::IsPositive(Value *value)
 {
     return this->builder_.CreateICmpSGT(
-        value, ConstantInt::get(value->getType(), 0, true /* signed */));
+        value, ConstantInt::getSigned(value->getType(), 0));
 }
 
 Value *
