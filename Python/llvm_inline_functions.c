@@ -7,9 +7,21 @@
 #include "opcode.h"
 
 void
-_PyLlvm_WrapDealloc(PyObject *obj)
+_PyLlvm_WrapIncref(PyObject *obj)
 {
-    _Py_Dealloc(obj);
+    Py_INCREF(obj);
+}
+
+void
+_PyLlvm_WrapDecref(PyObject *obj)
+{
+    Py_DECREF(obj);
+}
+
+void
+_PyLlvm_WrapXDecref(PyObject *obj)
+{
+    Py_XDECREF(obj);
 }
 
 int

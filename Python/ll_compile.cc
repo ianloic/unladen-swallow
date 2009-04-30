@@ -2323,102 +2323,28 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
     this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
 }
 
-// Adds delta to *addr, and returns the new value.
-static Value *
-increment_and_get(llvm::IRBuilder<>& builder, Value *addr, int64_t delta)
-{
-    Value *orig = builder.CreateLoad(addr);
-    Value *new_ = builder.CreateAdd(
-        orig,
-        ConstantInt::getSigned(orig->getType(), delta));
-    builder.CreateStore(new_, addr);
-    return new_;
-}
-
 void
 LlvmFunctionBuilder::IncRef(Value *value)
 {
-#ifdef Py_REF_DEBUG
-    // Increment the global reference count.
-    Value *reftotal_addr = this->GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
-    increment_and_get(this->builder_, reftotal_addr, 1);
-#endif
-
-    Value *as_pyobject = this->builder_.CreateBitCast(
-        value, TypeBuilder<PyObject*>::cache(this->module_));
-    Value *refcnt_addr =
-        this->builder_.CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
-    increment_and_get(this->builder_, refcnt_addr, 1);
+    Function *incref = this->GetGlobalFunction<void(PyObject*)>(
+        "_PyLlvm_WrapIncref");
+    this->builder_.CreateCall(incref, value);
 }
 
 void
 LlvmFunctionBuilder::DecRef(Value *value)
 {
-#ifdef Py_REF_DEBUG
-    // Decrement the global reference count.
-    Value *reftotal_addr = this->GetGlobalVariable<Py_ssize_t>("_Py_RefTotal");
-    increment_and_get(this->builder_, reftotal_addr, -1);
-#endif
-
-    Value *as_pyobject = this->builder_.CreateBitCast(
-        value, TypeBuilder<PyObject*>::cache(this->module_));
-    Value *refcnt_addr =
-        this->builder_.CreateStructGEP(as_pyobject, ObjectTy::FIELD_REFCNT);
-    Value *new_refcnt = increment_and_get(this->builder_, refcnt_addr, -1);
-
-    // Check if we need to deallocate the object.
-    BasicBlock *block_dealloc = BasicBlock::Create("dealloc", this->function_);
-    BasicBlock *block_tail = BasicBlock::Create("decref_tail", this->function_);
-    BasicBlock *block_ref_ne_zero = block_tail;
-#ifdef Py_REF_DEBUG
-    block_ref_ne_zero = BasicBlock::Create("check_refcnt", this->function_);
-#endif
-
-    this->builder_.CreateCondBr(this->IsNonZero(new_refcnt),
-                                block_ref_ne_zero, block_dealloc);
-
-#ifdef Py_REF_DEBUG
-    this->builder_.SetInsertPoint(block_ref_ne_zero);
-    Value *less_zero = this->builder_.CreateICmpSLT(
-        new_refcnt, Constant::getNullValue(new_refcnt->getType()));
-    BasicBlock *block_ref_lt_zero = BasicBlock::Create("negative_refcount",
-                                                       this->function_);
-    this->builder_.CreateCondBr(less_zero, block_ref_lt_zero, block_tail);
-
-    this->builder_.SetInsertPoint(block_ref_lt_zero);
-    Value *neg_refcount =
-        this->GetGlobalFunction<void(const char*, int, PyObject*)>(
-            "_Py_NegativeRefcount");
-    // TODO: Well that __FILE__ and __LINE__ are going to be useless!
-    this->builder_.CreateCall3(
-        neg_refcount,
-        this->llvm_data_->GetGlobalStringPtr(__FILE__),
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), __LINE__),
-        as_pyobject);
-    this->builder_.CreateBr(block_tail);
-#endif
-
-    this->builder_.SetInsertPoint(block_dealloc);
-    Value *dealloc =
-        this->GetGlobalFunction<void(PyObject *)>("_PyLlvm_WrapDealloc");
-    this->builder_.CreateCall(dealloc, as_pyobject);
-    this->builder_.CreateBr(block_tail);
-
-    this->builder_.SetInsertPoint(block_tail);
+    Function *decref = this->GetGlobalFunction<void(PyObject*)>(
+        "_PyLlvm_WrapDecref");
+    this->builder_.CreateCall(decref, value);
 }
 
 void
 LlvmFunctionBuilder::XDecRef(Value *value)
 {
-    BasicBlock *do_decref = BasicBlock::Create("decref", this->function_);
-    BasicBlock *decref_end = BasicBlock::Create("decref_end", this->function_);
-    this->builder_.CreateCondBr(this->IsNull(value), decref_end, do_decref);
-
-    this->builder_.SetInsertPoint(do_decref);
-    this->DecRef(value);
-    this->builder_.CreateBr(decref_end);
-
-    this->builder_.SetInsertPoint(decref_end);
+    Function *xdecref = this->GetGlobalFunction<void(PyObject*)>(
+        "_PyLlvm_WrapXDecref");
+    this->builder_.CreateCall(xdecref, value);
 }
 
 void
