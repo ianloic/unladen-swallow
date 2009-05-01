@@ -841,6 +841,146 @@ def f(x, args, kwargs):
         # No way to make BUILD_SLICE_* raise exceptions.
 
     @at_each_optimization_level
+    def test_with(self, level):
+        class SimpleCM(object):
+            def __enter__(self):
+                self.enter = True
+
+            def __exit__(self, *exc_info):
+                self.exit = True
+
+        with_simple = compile_for_llvm('with_simple', '''
+def with_simple(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+    self.assertEqual(x.__dict__, {"enter": True, "exit": True})
+''', level)
+        with_simple(self, SimpleCM())
+
+        with_raise = compile_for_llvm('with_raise', '''
+def with_raise(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+        raise ArithmeticError
+''', level)
+        x = SimpleCM()
+        self.assertRaises(ArithmeticError, with_raise, self, x)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        with_return = compile_for_llvm('with_return', '''
+def with_return(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+        return 55
+''', level)
+        x = SimpleCM()
+        self.assertEqual(with_return(self, x), 55)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        class SwallowingCM(object):
+            def __enter__(self):
+                self.enter = True
+
+            def __exit__(self, *exc_info):
+                self.exit = True
+                return True  # Swallow the raised exception
+
+        with_swallow = compile_for_llvm('with_swallow', '''
+def with_swallow(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+        raise ArithmeticError
+    return 55
+''', level)
+        x = SwallowingCM()
+        self.assertEqual(with_swallow(self, x), 55)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        class BustedExitCM(object):
+            def __enter__(self):
+                self.enter = True
+
+            def __exit__(self, *exc_info):
+                self.exit = True
+                class A(object):
+                    def __nonzero__(self):
+                        raise ArithmeticError
+                return A()  # Test error paths in WITH_CLEANUP
+
+        with_ignored_bad_exit = compile_for_llvm('with_ignored_bad_exit', '''
+def with_ignored_bad_exit(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+    return 55
+''', level)
+        x = BustedExitCM()
+        self.assertEqual(with_ignored_bad_exit(self, x), 55)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        with_bad_exit = compile_for_llvm('with_bad_exit', '''
+def with_bad_exit(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": True})
+        raise KeyError
+    return 55
+''', level)
+        x = BustedExitCM()
+        self.assertRaises(ArithmeticError, with_bad_exit, self, x)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        class RaisingCM(object):
+            def __enter__(self):
+                self.enter = True
+
+            def __exit__(self, *exc_info):
+                self.exit = True
+                raise ArithmeticError
+
+        with_error = compile_for_llvm('with_error', '''
+def with_error(self, x):
+    with x:
+        return 55
+''', level)
+        x = RaisingCM()
+        self.assertRaises(ArithmeticError, with_error, self, x)
+        self.assertEqual(x.__dict__, {'enter': True, 'exit': True})
+
+        class NestedCM(object):
+            def __init__(self):
+                self.enter = 0
+                self.exit = 0
+
+            def __enter__(self):
+                self.enter += 1
+
+            def __exit__(self, *exc_info):
+                self.exit += 1
+
+        with_yield = compile_for_llvm('with_yield', '''
+def with_yield(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": 1, "exit": 0})
+        yield 7
+        self.assertEqual(x.__dict__, {"enter": 1, "exit": 0})
+        yield 8
+    self.assertEqual(x.__dict__, {"enter": 1, "exit": 1})
+''', level)
+        x = NestedCM()
+        self.assertEqual(list(with_yield(self, x)), [7, 8])
+
+        with_nested = compile_for_llvm('with_nested', '''
+def with_nested(self, x):
+    with x:
+        self.assertEqual(x.__dict__, {"enter": 1, "exit": 0})
+        with x:
+            self.assertEqual(x.__dict__, {"enter": 2, "exit": 0})
+        self.assertEqual(x.__dict__, {"enter": 2, "exit": 1})
+    self.assertEqual(x.__dict__, {"enter": 2, "exit": 2})
+''', level)
+        x = NestedCM()
+        with_nested(self, x)
+
+    @at_each_optimization_level
     def test_raise(self, level):
         raise_onearg = compile_for_llvm('raise_onearg', '''
 def raise_onearg(x):

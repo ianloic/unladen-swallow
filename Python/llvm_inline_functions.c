@@ -6,6 +6,12 @@
 #include "Python.h"
 #include "opcode.h"
 
+int
+_PyLlvm_WrapIntCheck(PyObject *obj)
+{
+    return PyInt_Check(obj);
+}
+
 void
 _PyLlvm_WrapIncref(PyObject *obj)
 {

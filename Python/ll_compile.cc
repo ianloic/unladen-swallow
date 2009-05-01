@@ -392,7 +392,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
       function_(Function::Create(
                     get_function_type(this->module_),
                     llvm::GlobalValue::ExternalLinkage,
-                    // Prefix names with "#u#" to avoid collisions
+                    // Prefix names with #u# to avoid collisions
                     // with runtime functions.
                     "#u#" + name,
                     this->module_))
@@ -1013,6 +1013,187 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
     this->builder_.SetInsertPoint(success);
     this->IncRef(local);
     this->Push(local);
+}
+
+void
+LlvmFunctionBuilder::WITH_CLEANUP()
+{
+    /* At the top of the stack are 1-3 values indicating
+       how/why we entered the finally clause:
+       - TOP = None
+       - (TOP, SECOND) = (WHY_{RETURN,CONTINUE}), retval
+       - TOP = WHY_*; no retval below it
+       - (TOP, SECOND, THIRD) = exc_info()
+       Below them is EXIT, the context.__exit__ bound method.
+       In the last case, we must call
+       EXIT(TOP, SECOND, THIRD)
+       otherwise we must call
+       EXIT(None, None, None)
+
+       In all cases, we remove EXIT from the stack, leaving
+       the rest in the same order.
+
+       In addition, if the stack represents an exception,
+       *and* the function call returns a 'true' value, we
+       "zap" this information, to prevent END_FINALLY from
+       re-raising the exception. (But non-local gotos
+       should still be resumed.)
+    */
+
+    Value *exc_type = this->CreateAllocaInEntryBlock(
+        TypeBuilder<PyObject*>::cache(this->module_),
+        NULL, "WITH_CLEANUP_exc_type");
+    Value *exc_value = this->CreateAllocaInEntryBlock(
+        TypeBuilder<PyObject*>::cache(this->module_),
+        NULL, "WITH_CLEANUP_exc_value");
+    Value *exc_traceback = this->CreateAllocaInEntryBlock(
+        TypeBuilder<PyObject*>::cache(this->module_),
+        NULL, "WITH_CLEANUP_exc_traceback");
+    Value *exit_func = this->CreateAllocaInEntryBlock(
+        TypeBuilder<PyObject*>::cache(this->module_),
+        NULL, "WITH_CLEANUP_exit_func");
+
+    BasicBlock *handle_none =
+        BasicBlock::Create("WITH_CLEANUP_handle_none", this->function_);
+    BasicBlock *check_int =
+        BasicBlock::Create("WITH_CLEANUP_check_int", this->function_);
+    BasicBlock *handle_int =
+        BasicBlock::Create("WITH_CLEANUP_handle_int", this->function_);
+    BasicBlock *handle_ret_cont =
+        BasicBlock::Create("WITH_CLEANUP_handle_ret_cont", this->function_);
+    BasicBlock *handle_default =
+        BasicBlock::Create("WITH_CLEANUP_handle_default", this->function_);
+    BasicBlock *handle_else =
+        BasicBlock::Create("WITH_CLEANUP_handle_else", this->function_);
+    BasicBlock *main_block =
+        BasicBlock::Create("WITH_CLEANUP_main_block", this->function_);
+
+    Value *none = this->GetGlobalVariable<PyObject>("_Py_NoneStruct");
+    this->builder_.CreateStore(this->Pop(), exc_type);
+
+    Value *is_none = this->builder_.CreateICmpEQ(
+        this->builder_.CreateLoad(exc_type), none,
+        "reason_is_none");
+    this->builder_.CreateCondBr(is_none, handle_none, check_int);
+
+    this->builder_.SetInsertPoint(handle_none);
+    this->builder_.CreateStore(this->Pop(), exit_func);
+    this->Push(this->builder_.CreateLoad(exc_type));
+    this->builder_.CreateStore(none, exc_value);
+    this->builder_.CreateStore(none, exc_traceback);
+    this->builder_.CreateBr(main_block);
+
+    this->builder_.SetInsertPoint(check_int);
+    Value *is_int = this->builder_.CreateCall(
+        this->GetGlobalFunction<int(PyObject *)>("_PyLlvm_WrapIntCheck"),
+        this->builder_.CreateLoad(exc_type),
+        "WITH_CLEANUP_pyint_check");
+    this->builder_.CreateCondBr(this->IsNonZero(is_int),
+                                handle_int, handle_else);
+
+    this->builder_.SetInsertPoint(handle_int);
+    Value *unboxed = this->builder_.CreateTrunc(
+        this->builder_.CreateCall(
+            this->GetGlobalFunction<long(PyObject *)>("PyInt_AsLong"),
+            this->builder_.CreateLoad(exc_type)),
+        Type::Int8Ty,
+        "unboxed_unwind_reason");
+    // The LLVM equivalent of
+    // switch (reason)
+    //   case UNWIND_RETURN:
+    //   case UNWIND_CONTINUE:
+    //     ...
+    //     break;
+    //   default:
+    //     break;
+    llvm::SwitchInst *unwind_kind =
+        this->builder_.CreateSwitch(unboxed, handle_default, 2);
+    unwind_kind->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
+                         handle_ret_cont);
+    unwind_kind->addCase(ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
+                         handle_ret_cont);
+
+    this->builder_.SetInsertPoint(handle_ret_cont);
+    Value *retval = this->Pop();
+    this->builder_.CreateStore(this->Pop(), exit_func);
+    this->Push(retval);
+    this->Push(this->builder_.CreateLoad(exc_type));
+    this->builder_.CreateStore(none, exc_type);
+    this->builder_.CreateStore(none, exc_value);
+    this->builder_.CreateStore(none, exc_traceback);
+    this->builder_.CreateBr(main_block);
+
+    this->builder_.SetInsertPoint(handle_default);
+    this->builder_.CreateStore(this->Pop(), exit_func);
+    this->Push(this->builder_.CreateLoad(exc_type));
+    this->builder_.CreateStore(none, exc_type);
+    this->builder_.CreateStore(none, exc_value);
+    this->builder_.CreateStore(none, exc_traceback);
+    this->builder_.CreateBr(main_block);
+
+    // This is the (TOP, SECOND, THIRD) = exc_info() case above.
+    this->builder_.SetInsertPoint(handle_else);
+    this->builder_.CreateStore(this->Pop(), exc_value);
+    this->builder_.CreateStore(this->Pop(), exc_traceback);
+    this->builder_.CreateStore(this->Pop(), exit_func);
+    this->Push(this->builder_.CreateLoad(exc_traceback));
+    this->Push(this->builder_.CreateLoad(exc_value));
+    this->Push(this->builder_.CreateLoad(exc_type));
+    this->builder_.CreateBr(main_block);
+
+    this->builder_.SetInsertPoint(main_block);
+    // Build a vector because there is no CreateCall5().
+    // This is easier than building the tuple ourselves, but doing so would
+    // probably be faster.
+    std::vector<Value*> args;
+    args.push_back(this->builder_.CreateLoad(exit_func));
+    args.push_back(this->builder_.CreateLoad(exc_type));
+    args.push_back(this->builder_.CreateLoad(exc_value));
+    args.push_back(this->builder_.CreateLoad(exc_traceback));
+    args.push_back(
+        Constant::getNullValue(TypeBuilder<PyObject *>::cache(this->module_)));
+    Value *ret = this->builder_.CreateCall(
+        this->GetGlobalFunction<PyObject *(PyObject *, ...)>(
+            "PyObject_CallFunctionObjArgs"),
+        args.begin(), args.end());
+    this->DecRef(this->builder_.CreateLoad(exit_func));
+    this->PropagateExceptionOnNull(ret);
+
+    BasicBlock *check_silence =
+        BasicBlock::Create("WITH_CLEANUP_check_silence", this->function_);
+    BasicBlock *no_silence =
+        BasicBlock::Create("WITH_CLEANUP_no_silence", this->function_);
+    BasicBlock *cleanup =
+        BasicBlock::Create("WITH_CLEANUP_cleanup", this->function_);
+    BasicBlock *next =
+        BasicBlock::Create("WITH_CLEANUP_next", this->function_);
+
+    // Don't bother checking whether to silence the exception if there's
+    // no exception to silence.
+    this->builder_.CreateCondBr(
+        this->builder_.CreateICmpEQ(this->builder_.CreateLoad(exc_type), none),
+        no_silence, check_silence);
+
+    this->builder_.SetInsertPoint(no_silence);
+    this->DecRef(ret);
+    this->builder_.CreateBr(next);
+
+    this->builder_.SetInsertPoint(check_silence);
+    this->builder_.CreateCondBr(this->IsPythonTrue(ret), cleanup, next);
+
+    this->builder_.SetInsertPoint(cleanup);
+    // There was an exception and a true return. Swallow the exception.
+    this->Pop();
+    this->Pop();
+    this->Pop();
+    this->IncRef(none);
+    this->Push(none);
+    this->DecRef(this->builder_.CreateLoad(exc_type));
+    this->DecRef(this->builder_.CreateLoad(exc_value));
+    this->DecRef(this->builder_.CreateLoad(exc_traceback));
+    this->builder_.CreateBr(next);
+
+    this->builder_.SetInsertPoint(next);
 }
 
 void

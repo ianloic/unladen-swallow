@@ -46,6 +46,7 @@ public:
     void SETUP_EXCEPT(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void SETUP_FINALLY(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void END_FINALLY();
+    void WITH_CLEANUP();
 
     void JUMP_FORWARD(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough) {
         this->JUMP_ABSOLUTE(target, fallthrough);
@@ -156,22 +157,15 @@ public:
     void RAISE_VARARGS_TWO();
     void RAISE_VARARGS_THREE();
 
-#define UNIMPLEMENTED(NAME) \
-    void NAME() { \
-        this->DieForUndefinedOpcode(#NAME); \
-    }
 #define UNIMPLEMENTED_I(NAME) \
     void NAME(int index) { \
         this->DieForUndefinedOpcode(#NAME); \
     }
 
-    UNIMPLEMENTED(WITH_CLEANUP)
-
     UNIMPLEMENTED_I(LOAD_NAME);
     UNIMPLEMENTED_I(STORE_NAME);
     UNIMPLEMENTED_I(DELETE_NAME);
 
-#undef UNIMPLEMENTED
 #undef UNIMPLEMENTED_I
 
 private:
