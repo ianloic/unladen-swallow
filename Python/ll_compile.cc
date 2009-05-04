@@ -943,6 +943,42 @@ LlvmFunctionBuilder::DELETE_GLOBAL(int name_index)
 }
 
 void
+LlvmFunctionBuilder::LOAD_NAME(int index)
+{
+    Value *result = this->builder_.CreateCall2(
+        this->GetGlobalFunction<PyObject *(PyFrameObject*, int)>(
+            "_PyEval_LoadName"),
+        this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+    PropagateExceptionOnNull(result);
+    Push(result);
+}
+
+void
+LlvmFunctionBuilder::STORE_NAME(int index)
+{
+    Value *to_store = this->Pop();
+    Value *err = this->builder_.CreateCall3(
+        this->GetGlobalFunction<int(PyFrameObject*, int, PyObject*)>(
+            "_PyEval_StoreName"),
+        this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index),
+        to_store);
+    PropagateExceptionOnNonZero(err);
+}
+
+void
+LlvmFunctionBuilder::DELETE_NAME(int index)
+{
+    Value *err = this->builder_.CreateCall2(
+        this->GetGlobalFunction<int(PyFrameObject*, int)>(
+            "_PyEval_DeleteName"),
+        this->frame_,
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+    PropagateExceptionOnNonZero(err);
+}
+
+void
 LlvmFunctionBuilder::LOAD_ATTR(int index)
 {
     Value *attr = this->LookupName(index);

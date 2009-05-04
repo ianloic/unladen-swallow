@@ -555,6 +555,71 @@ def delglobal():
         self.assertTrue('_test_global' not in delglobal.func_globals)
 
     @at_each_optimization_level
+    def test_load_name(self, level):
+        testvalue = 'test name value'
+        loadlocal = compile_for_llvm('loadlocal', '''
+def loadlocal():
+    exec 'testvalue = "Hello"'
+    return testvalue
+''', level)
+        loadlocal.func_globals['testvalue'] = testvalue
+        self.assertEquals(loadlocal(), 'Hello')
+
+        loadglobal = compile_for_llvm('loadglobal', '''
+def loadglobal():
+    exec ''
+    return testvalue
+''', level)
+        loadglobal.func_globals['testvalue'] = testvalue
+        self.assertEquals(loadglobal(), testvalue)
+
+        loadbuiltin = compile_for_llvm('loadbuiltin', '''
+def loadbuiltin():
+    exec ''
+    return str
+''', level)
+        self.assertEquals(loadbuiltin(), str)
+
+        nosuchname = compile_for_llvm('nosuchname', '''
+def nosuchname():
+    exec ''
+    return there_better_be_no_such_name
+''', level)
+        self.assertRaises(NameError, nosuchname)
+
+    @at_each_optimization_level
+    def test_store_name(self, level):
+        set_local = compile('a = 3', '<string>', 'exec')
+        if level is not None:
+            set_local.co_optimization = level
+            set_local.__use_llvm__ = True
+        exec set_local
+        self.assertEquals(a, 3)
+
+    @at_each_optimization_level
+    def test_delete_name(self, level):
+        do_del = compile('del a', '<string>', 'exec')
+        if level is not None:
+            do_del.co_optimization = level
+            do_del.__use_llvm__ = True
+        exec 'a = 3'
+        self.assertEquals(a, 3)
+        exec do_del
+        try:
+            a
+        except NameError:
+            pass
+        else:
+            self.fail('Expected "a" to be deleted')
+
+        try:
+            exec compile('del nonexistent', '<string>', 'exec')
+        except NameError, e:
+            self.assertEquals(e.args, ('name \'nonexistent\' is not defined',))
+        else:
+            self.fail('Expected not to find "nonexistent"')
+
+    @at_each_optimization_level
     def test_simple_if_stmt(self, level):
         simple_if = compile_for_llvm("simple_if", """
 def simple_if(x):

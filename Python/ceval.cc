@@ -2731,6 +2731,86 @@ _PyEval_AssignSlice(PyObject *u, PyObject *v, PyObject *w, PyObject *x)
 	}
 }
 
+/* Returns NULL on error. */
+PyObject *
+_PyEval_LoadName(PyFrameObject *f, int name_index)
+{
+	PyObject *locals, *name, *x;
+	name = GETITEM(f->f_code->co_names, name_index);
+	if ((locals = f->f_locals) == NULL) {
+		PyErr_Format(PyExc_SystemError,
+			     "no locals when loading %s",
+			     PyObject_REPR(name));
+		return NULL;
+	}
+	if (PyDict_CheckExact(locals)) {
+		x = PyDict_GetItem(locals, name);
+		Py_XINCREF(x);
+	} else {
+		x = PyObject_GetItem(locals, name);
+		if (x == NULL && PyErr_Occurred()) {
+			if (!PyErr_ExceptionMatches(PyExc_KeyError)) {
+				return NULL;
+			}
+			PyErr_Clear();
+		}
+	}
+	if (x == NULL) {
+		x = PyDict_GetItem(f->f_globals, name);
+		if (x == NULL) {
+			x = PyDict_GetItem(f->f_builtins, name);
+			if (x == NULL) {
+				format_exc_check_arg(PyExc_NameError,
+						     NAME_ERROR_MSG, name);
+				return NULL;
+			}
+		}
+		Py_INCREF(x);
+	}
+	return x;
+}
+
+/* Returns non-zero on error. */
+int
+_PyEval_StoreName(PyFrameObject *f, int name_index, PyObject *to_store)
+{
+	int err;
+	PyObject *a2, *x;
+	a2 = GETITEM(f->f_code->co_names, name_index);
+	if ((x = f->f_locals) != NULL) {
+		if (PyDict_CheckExact(x))
+			err = PyDict_SetItem(x, a2, to_store);
+		else
+			err = PyObject_SetItem(x, a2, to_store);
+		Py_DECREF(to_store);
+		return err;
+	}
+	PyErr_Format(PyExc_SystemError,
+		     "no locals found when storing %s",
+		     PyObject_REPR(a2));
+	return -1;
+}
+
+/* Returns non-zero on error. */
+int
+_PyEval_DeleteName(PyFrameObject *f, int name_index)
+{
+	int err;
+	PyObject *a1, *x;
+	a1 = GETITEM(f->f_code->co_names, name_index);
+	if ((x = f->f_locals) != NULL) {
+		if ((err = PyObject_DelItem(x, a1)) != 0) {
+			format_exc_check_arg(PyExc_NameError,
+					     NAME_ERROR_MSG, a1);
+		}
+		return err;
+	}
+	PyErr_Format(PyExc_SystemError,
+		     "no locals when deleting %s",
+		     PyObject_REPR(a1));
+	return -1;
+}
+
 #define Py3kExceptionClass_Check(x)     \
     (PyType_Check((x)) &&               \
      PyType_FastSubclass((PyTypeObject*)(x), Py_TPFLAGS_BASE_EXC_SUBCLASS))

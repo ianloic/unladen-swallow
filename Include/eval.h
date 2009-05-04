@@ -40,6 +40,10 @@ PyAPI_FUNC(int) _PyEval_DoRaise(PyObject *type, PyObject *val, PyObject *tb);
 
 PyAPI_FUNC(int) _PyEval_UnpackIterable(PyObject *, int, PyObject **);
 
+PyAPI_FUNC(PyObject *) _PyEval_LoadName(struct _frame *, int);
+PyAPI_FUNC(int) _PyEval_StoreName(struct _frame *, int, PyObject *);
+PyAPI_FUNC(int) _PyEval_DeleteName(struct _frame *, int);
+
 #ifdef __cplusplus
 }
 #endif

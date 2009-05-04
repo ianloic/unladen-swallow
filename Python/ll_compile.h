@@ -143,6 +143,10 @@ public:
     void STORE_GLOBAL(int index);
     void DELETE_GLOBAL(int index);
 
+    void LOAD_NAME(int index);
+    void STORE_NAME(int index);
+    void DELETE_NAME(int index);
+
     void LOAD_ATTR(int index);
     void STORE_ATTR(int index);
     void DELETE_ATTR(int index);
@@ -156,17 +160,6 @@ public:
     void RAISE_VARARGS_ONE();
     void RAISE_VARARGS_TWO();
     void RAISE_VARARGS_THREE();
-
-#define UNIMPLEMENTED_I(NAME) \
-    void NAME(int index) { \
-        this->DieForUndefinedOpcode(#NAME); \
-    }
-
-    UNIMPLEMENTED_I(LOAD_NAME);
-    UNIMPLEMENTED_I(STORE_NAME);
-    UNIMPLEMENTED_I(DELETE_NAME);
-
-#undef UNIMPLEMENTED_I
 
 private:
     /// These two functions increment or decrement the reference count

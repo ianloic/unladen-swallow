@@ -1529,38 +1529,10 @@ NEXT_P0;
 vm_Cell2i(IMM_ARG(IPTOS,305397763 ),i);
 INC_IP(1);
 {
-a2 = GETITEM(names, i);
-if ((a1 = f->f_locals) == NULL) {
-        PyErr_Format(PyExc_SystemError,
-                     "no locals when loading %s",
-                     PyObject_REPR(a2));
+x = _PyEval_LoadName(f, i);
+if (x == NULL) {
         why = WHY_EXCEPTION;
         ERROR();
-}
-if (PyDict_CheckExact(a1)) {
-        x = PyDict_GetItem(a1, a2);
-        Py_XINCREF(x);
-} else {
-        x = PyObject_GetItem(a1, a2);
-        if (x == NULL && PyErr_Occurred()) {
-                if (!PyErr_ExceptionMatches(PyExc_KeyError)) {
-                        why = WHY_EXCEPTION;
-                        ERROR();
-                }
-                PyErr_Clear();
-        }
-}
-if (x == NULL) {
-        x = PyDict_GetItem(f->f_globals, a2);
-        if (x == NULL) {
-                x = PyDict_GetItem(f->f_builtins, a2);
-                if (x == NULL) {
-                        format_exc_check_arg(PyExc_NameError, NAME_ERROR_MSG, a2);
-                        why = WHY_EXCEPTION;
-                        ERROR();
-                }
-        }
-        Py_INCREF(x);
 }
 PUSH(x);
 NEXT();
@@ -1966,21 +1938,9 @@ NEXT_P0;
 vm_Cell2i(IMM_ARG(IPTOS,305397771 ),i);
 INC_IP(1);
 {
-a2 = GETITEM(names, i);
 a1 = POP();
-if ((x = f->f_locals) != NULL) {
-        if (PyDict_CheckExact(x))
-                err = PyDict_SetItem(x, a2, a1);
-        else
-                err = PyObject_SetItem(x, a2, a1);
-        Py_DECREF(a1);
-        if (err == 0) NEXT();
-        why = WHY_EXCEPTION;
-        ERROR();
-}
-PyErr_Format(PyExc_SystemError,
-             "no locals found when storing %s",
-             PyObject_REPR(a2));
+err = _PyEval_StoreName(f, i, a1);
+if (err == 0) NEXT();
 why = WHY_EXCEPTION;
 ERROR();
 }
@@ -2074,19 +2034,12 @@ NEXT_P0;
 vm_Cell2i(IMM_ARG(IPTOS,305397775 ),i);
 INC_IP(1);
 {
-a1 = GETITEM(names, i);
-if ((x = f->f_locals) != NULL) {
-        if ((err = PyObject_DelItem(x, a1)) != 0) {
-                format_exc_check_arg(PyExc_NameError, NAME_ERROR_MSG, a1);
-                why = WHY_EXCEPTION;
-        }
+err = _PyEval_DeleteName(f, i);
+if (err != 0) {
+        why = WHY_EXCEPTION;
         ERROR();
 }
-PyErr_Format(PyExc_SystemError,
-             "no locals when deleting %s",
-             PyObject_REPR(a1));
-why = WHY_EXCEPTION;
-ERROR();
+NEXT();
 }
 
 NEXT_P1;
