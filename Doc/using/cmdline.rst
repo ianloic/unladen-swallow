@@ -21,7 +21,7 @@ Command line
 
 When invoking Python, you may specify any of these options::
 
-    python [-dEiOQsStuUvxX3?] [-c command | -m module-name | script | - ] [args]
+    python [-dEiLOQsStuUvxX3?] [-c command | -m module-name | script | - ] [args]
 
 The most common use case is, of course, a simple invocation of a script::
 
@@ -204,6 +204,15 @@ Miscellaneous options
    
    This can be useful to inspect global variables or a stack trace when a script
    raises an exception.  See also :envvar:`PYTHONINSPECT`.
+
+
+.. cmdoption:: -L <arg>
+
+   Run all Python code through the LLVM JIT compiler, optimized to level
+   ``<arg>``, which must be ``0``, ``1``, or ``2``.  By default, we run most
+   code through the bytecode interpreter and only compile hot code to a
+   dynamically-chosen optimization level.  See also
+   :envvar:`PYTHONLLVMEVERYTHING`.
 
 
 .. cmdoption:: -O
@@ -452,6 +461,12 @@ These environment variables influence Python's behavior.
 
    This variable can also be modified by Python code using :data:`os.environ`
    to force inspect mode on program termination.
+
+
+.. envvar:: PYTHONLLVMEVERYTHING
+
+   If this option is set to an integer ``<N>``, it is equivalent to passing
+   :option:`-L` ``<N>`` on the command line.
 
 
 .. envvar:: PYTHONUNBUFFERED

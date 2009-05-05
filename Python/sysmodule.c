@@ -1224,6 +1224,7 @@ static PyStructSequence_Field flags_fields[] = {
 	{"unicode",		"-U"},
 	/* {"skip_first",		"-x"}, */
 	{"bytes_warning", "-b"},
+	{"llvm_everything",	"-L"},
 	{0}
 };
 
@@ -1232,9 +1233,9 @@ static PyStructSequence_Desc flags_desc = {
 	flags__doc__,	/* doc */
 	flags_fields,	/* fields */
 #ifdef RISCOS
-	16
+	17
 #else
-	15
+	16
 #endif
 };
 
@@ -1270,7 +1271,8 @@ make_flags(void)
 	/* SetFlag(saw_unbuffered_flag); */
 	SetFlag(Py_UnicodeFlag);
 	/* SetFlag(skipfirstline); */
-    SetFlag(Py_BytesWarningFlag);
+	SetFlag(Py_BytesWarningFlag);
+	SetFlag(Py_LlvmEverythingFlag);
 #undef SetFlag
 
 	if (PyErr_Occurred()) {

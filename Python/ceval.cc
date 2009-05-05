@@ -733,7 +733,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 	co = f->f_code;
 	tstate->frame = f;
 
-	if (co->co_use_llvm) {
+	if (co->co_use_llvm || Py_LlvmEverythingFlag >= 0) {
+		int target_optimization_level = 0;
 		if (co->co_llvm_function == NULL) {
 			PyErr_Format(PyExc_SystemError,
 				     "Requested execution of %s at %s:%d but"
@@ -746,22 +747,27 @@ PyEval_EvalFrame(PyFrameObject *f)
 			retval = NULL;
 			goto exit_eval_frame;
 		}
-		if (co->co_optimization < 0) {
-			PyObject *zero = PyInt_FromLong(0);
-			if (zero == NULL) {
+		if (target_optimization_level < Py_LlvmEverythingFlag)
+			target_optimization_level = Py_LlvmEverythingFlag;
+		if (co->co_optimization < target_optimization_level) {
+			// Always optimize code to level 0 before
+			// JITting it, since that speeds up the JIT.
+			// If Py_LlvmEverythingFlag is set to a higher
+			// number, optimize to that level instead.
+			PyObject *opt_level =
+			    PyInt_FromLong(target_optimization_level);
+			if (opt_level == NULL) {
 				retval = NULL;
 				goto exit_eval_frame;
 			}
-			// Always optimize code to level 0 before JITting
-			// it, since that speeds up the JIT.
 			if (PyObject_SetAttrString((PyObject *)co,
 						   "co_optimization",
-						   zero) == -1) {
-				Py_DECREF(zero);
+						   opt_level) == -1) {
+				Py_DECREF(opt_level);
 				retval = NULL;
 				goto exit_eval_frame;
 			}
-			Py_DECREF(zero);
+			Py_DECREF(opt_level);
 		}
 		retval = _PyLlvmFunction_Eval(
 			(PyLlvmFunctionObject *)co->co_llvm_function, f);

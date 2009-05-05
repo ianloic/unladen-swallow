@@ -28,6 +28,11 @@ PyAPI_DATA(int) _Py_QnewFlag;
 PyAPI_DATA(int) Py_Py3kWarningFlag;
 /* Show the total reference count after each execution. */
 PyAPI_DATA(int) Py_ShowRefcountFlag;
+/* Defaults to -1.  If -1, we default to running through the bytecode
+   interpreter unless the code object has __use_llvm__ set.  If
+   higher, we run every function through LLVM and optimize it to the
+   level indicated by the value of the flag. */
+PyAPI_DATA(int) Py_LlvmEverythingFlag;
 
 /* this is a wrapper around getenv() that pays attention to
    Py_IgnoreEnvironmentFlag.  It should be used for getting variables like
