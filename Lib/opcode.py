@@ -139,7 +139,7 @@ name_op('STORE_ATTR', 95)       # Index in name list
 name_op('DELETE_ATTR', 96)      # ""
 name_op('STORE_GLOBAL', 97)     # ""
 name_op('DELETE_GLOBAL', 98)    # ""
-def_op('DUP_TOPX', 99)          # number of items to duplicate
+
 def_op('LOAD_CONST', 100)       # Index in const list
 hasconst.append(100)
 name_op('LOAD_NAME', 101)       # Index in name list
@@ -173,10 +173,9 @@ haslocal.append(125)
 def_op('DELETE_FAST', 126)      # Local variable number
 haslocal.append(126)
 
-def_op('RAISE_VARARGS', 130)    # Number of raise arguments (1, 2, or 3)
 def_op('CALL_FUNCTION', 131)    # #args + (#kwargs << 8)
 # def_op('MAKE_FUNCTION', 132)  Replaced by #@make_function calls.
-def_op('BUILD_SLICE', 133)      # Number of items
+
 def_op('MAKE_CLOSURE', 134)
 def_op('LOAD_CLOSURE', 135)
 hasfree.append(135)
