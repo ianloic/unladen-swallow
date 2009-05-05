@@ -9,7 +9,6 @@
 #include "Python.h"
 #include "longintrepr.h"
 #include "code.h"
-#include "instructionsobject.h"
 #include "marshal.h"
 
 /* High water mark to determine when the marshalled object is dangerously deep
@@ -387,11 +386,6 @@ w_object(PyObject *v, WFILE *p)
 		}
 		w_long((long)n, p);
 		w_string(s, (int)n, p);
-	}
-	else if (PyInstructions_Check(v)) {
-		PyObject *temp_list = PySequence_List(v);
-		w_object(temp_list, p);
-		Py_DECREF(temp_list);
 	}
 	else {
 		w_byte(TYPE_UNKNOWN, p);
@@ -908,7 +902,6 @@ r_object(RFILE *p)
 			int nlocals;
 			int stacksize;
 			int flags;
-			PyObject *code_list = NULL;
 			PyObject *code = NULL;
 			PyObject *consts = NULL;
 			PyObject *names = NULL;
@@ -927,10 +920,7 @@ r_object(RFILE *p)
 			nlocals = (int)r_long(p);
 			stacksize = (int)r_long(p);
 			flags = (int)r_long(p);
-			code_list = r_object(p);
-			if (code_list == NULL)
-				goto code_error;
-			code = PyInstructions_FromSequence(code_list);
+			code = r_object(p);
 			if (code == NULL)
 				goto code_error;
 			consts = r_object(p);
@@ -966,7 +956,6 @@ r_object(RFILE *p)
 					firstlineno, lnotab);
 
 		  code_error:
-			Py_XDECREF(code_list);
 			Py_XDECREF(code);
 			Py_XDECREF(consts);
 			Py_XDECREF(names);

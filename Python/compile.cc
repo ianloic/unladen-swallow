@@ -21,6 +21,7 @@
  * objects.
  */
 
+
 #include "Python.h"
 
 #include "Python-ast.h"
@@ -33,7 +34,6 @@
 #include "ast.h"
 #include "code.h"
 #include "compile.h"
-#include "instructionsobject.h"
 #include "symtable.h"
 #include "opcode.h"
 #include "_llvmfunctionobject.h"
@@ -911,8 +911,11 @@ opcode_stack_effect(int opcode, int oparg)
 #define NARGS(o) (((o) % 256) + 2*((o) / 256))
 		case CALL_FUNCTION:
 			return -NARGS(oparg);
+		case CALL_FUNCTION_VAR:
+		case CALL_FUNCTION_KW:
+			return -NARGS(oparg)-1;
 		case CALL_FUNCTION_VAR_KW:
-			return -NARGS(oparg>>16) - ((oparg&1) + ((oparg>>1)&1));
+			return -NARGS(oparg)-2;
 #undef NARGS			
 		case BUILD_SLICE_TWO:
 			return -1;
@@ -2788,13 +2791,13 @@ compiler_call(struct compiler *c, expr_ty e)
 		ADDOP_I(c, CALL_FUNCTION, n);
 		break;
 	case 1:
+		ADDOP_I(c, CALL_FUNCTION_VAR, n);
+		break;
 	case 2:
+		ADDOP_I(c, CALL_FUNCTION_KW, n);
+		break;
 	case 3:
-		/* XXX this doesn't work with >2^8 positional or
-		   keyword arguments */
-		assert(n_positional_args < 256);
-		assert(n_keyword_args < 256);
-		ADDOP_I(c, CALL_FUNCTION_VAR_KW, (n << 16) | code);
+		ADDOP_I(c, CALL_FUNCTION_VAR_KW, n);
 		break;
 	}
 	return 1;
@@ -3600,7 +3603,7 @@ compiler_visit_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 */
 
 struct assembler {
-	PyInstructionsObject *a_code;    /* contains opcode.h, not vmgen codes */
+	PyObject *a_bytecode;  /* string containing bytecode */
 	int a_offset;	       /* offset into bytecode */
 	int a_nblocks;	       /* number of reachable blocks */
 	basicblock **a_postorder; /* list of blocks in dfs postorder */
@@ -3683,8 +3686,8 @@ assemble_init(struct assembler *a, int nblocks, int firstlineno)
 {
 	memset(a, 0, sizeof(struct assembler));
 	a->a_lineno = firstlineno;
-	a->a_code = _PyInstructions_New(DEFAULT_CODE_SIZE);
-	if (a->a_code == NULL)
+	a->a_bytecode = PyString_FromStringAndSize(NULL, DEFAULT_CODE_SIZE);
+	if (!a->a_bytecode)
 		return 0;
 	a->a_lnotab = PyString_FromStringAndSize(NULL, DEFAULT_LNOTAB_SIZE);
 	if (!a->a_lnotab)
@@ -3705,20 +3708,22 @@ assemble_init(struct assembler *a, int nblocks, int firstlineno)
 static void
 assemble_free(struct assembler *a)
 {
-	Py_XDECREF(a->a_code);
+	Py_XDECREF(a->a_bytecode);
 	Py_XDECREF(a->a_lnotab);
 	if (a->a_postorder)
 		PyObject_Free(a->a_postorder);
 }
 
-/* Return the size of a basic block in PyInst (usually 4-byte) units. */
+/* Return the size of a basic block in bytes. */
 
 static int
 instrsize(struct instr *instr)
 {
 	if (!instr->i_hasarg)
 		return 1;	/* 1 byte for the opcode*/
-	return 2;  /* 1 (opcode) + 1 (arg) */
+	if (instr->i_oparg > 0xffff)
+		return 6;	/* 1 (opcode) + 1 (EXTENDED_ARG opcode) + 2 (oparg) + 2(oparg extended) */
+	return 3; 		/* 1 (opcode) + 2 (oparg) */
 }
 
 static int
@@ -3880,8 +3885,8 @@ static int
 assemble_emit(struct assembler *a, struct instr *i)
 {
 	int size, arg = 0, ext = 0;
-	Py_ssize_t len = Py_SIZE(a->a_code);
-	PyInst *code;
+	Py_ssize_t len = PyString_GET_SIZE(a->a_bytecode);
+	char *code;
 
 	size = instrsize(i);
 	if (i->i_hasarg) {
@@ -3893,15 +3898,23 @@ assemble_emit(struct assembler *a, struct instr *i)
 	if (a->a_offset + size >= len) {
 		if (len > PY_SSIZE_T_MAX / 2)
 			return 0;
-		if (_PyInstructions_Resize(&a->a_code, len * 2) < 0)
+		if (_PyString_Resize(&a->a_bytecode, len * 2) < 0)
 		    return 0;
 	}
-	code = a->a_code->inst + a->a_offset;
+	code = PyString_AS_STRING(a->a_bytecode) + a->a_offset;
 	a->a_offset += size;
-	PyInst_SET_OPCODE(code++, i->i_opcode);
+	if (size == 6) {
+		assert(i->i_hasarg);
+		*code++ = (char)EXTENDED_ARG;
+		*code++ = ext & 0xff;
+		*code++ = ext >> 8;
+		arg &= 0xffff;
+	}
+	*code++ = i->i_opcode;
 	if (i->i_hasarg) {
-		assert(size == 2);
-		PyInst_SET_ARG(code++, arg);
+		assert(size == 3 || size == 6);
+		*code++ = arg & 0xff;
+		*code++ = arg >> 8;
 	}
 	return 1;
 }
@@ -4034,7 +4047,6 @@ makecode(struct compiler *c, struct assembler *a)
 {
 	PyObject *tmp;
 	PyCodeObject *co = NULL;
-	PyObject *code = NULL;
 	PyObject *consts = NULL;
 	PyObject *names = NULL;
 	PyObject *varnames = NULL;
@@ -4042,6 +4054,7 @@ makecode(struct compiler *c, struct assembler *a)
 	PyObject *name = NULL;
 	PyObject *freevars = NULL;
 	PyObject *cellvars = NULL;
+	PyObject *bytecode = NULL;
 	PyObject *llvm_function = NULL;
 	int nlocals, flags;
 
@@ -4071,9 +4084,8 @@ makecode(struct compiler *c, struct assembler *a)
 	if (flags < 0)
 		goto error;
 
-	code = PyCode_Optimize((PyObject *)a->a_code, consts, names,
-			       a->a_lnotab);
-	if (!code)
+	bytecode = PyCode_Optimize(a->a_bytecode, consts, names, a->a_lnotab);
+	if (!bytecode)
 		goto error;
 
 	llvm_function = _PyLlvmFunction_FromPtr(c->u->fb->function());
@@ -4087,7 +4099,7 @@ makecode(struct compiler *c, struct assembler *a)
 	consts = tmp;
 
 	co = PyCode_New(c->u->u_argcount, nlocals, stackdepth(c), flags,
-			code, consts, names, varnames,
+			bytecode, consts, names, varnames,
 			freevars, cellvars,
 			filename, c->u->u_name,
 			c->u->u_firstlineno,
@@ -4104,7 +4116,7 @@ makecode(struct compiler *c, struct assembler *a)
 	Py_XDECREF(name);
 	Py_XDECREF(freevars);
 	Py_XDECREF(cellvars);
-	Py_XDECREF(code);
+	Py_XDECREF(bytecode);
 	Py_XDECREF(llvm_function);
 	return co;
 }
@@ -4200,7 +4212,7 @@ assemble(struct compiler *c, int addNone)
 
 	if (_PyString_Resize(&a.a_lnotab, a.a_lnotab_off) < 0)
 		goto error;
-	if (_PyInstructions_Resize(&a.a_code, a.a_offset) < 0)
+	if (_PyString_Resize(&a.a_bytecode, a.a_offset) < 0)
 		goto error;
 
 	co = makecode(c, &a);

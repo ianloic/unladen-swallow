@@ -2,7 +2,6 @@
 /* Generic object operations; and implementation of None (NoObject) */
 
 #include "Python.h"
-#include "instructionsobject.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -2028,9 +2027,6 @@ _Py_ReadyTypes(void)
 
 	if (PyType_Ready(&PyCode_Type) < 0)
 		Py_FatalError("Can't initialize 'code'");
-
-	if (PyType_Ready(&PyInstructions_Type) < 0)
-		Py_FatalError("Can't initialize 'instructions'");
 }
 
 

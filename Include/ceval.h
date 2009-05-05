@@ -35,20 +35,6 @@ PyAPI_FUNC(PyObject *) PyEval_GetLocals(void);
 PyAPI_FUNC(struct _frame *) PyEval_GetFrame(void);
 PyAPI_FUNC(int) PyEval_GetRestricted(void);
 
-/* Provide C-level access to the opcode names and superinstruction
-   definitions.  Most Python code will access these through the opcode
-   module instead. */
-
-/* Returns a python list of opcode names such that
-   opcode_names[OPCODE] == "OPCODE" */
-PyAPI_FUNC(PyObject *) _PyEval_GetOpcodeNames(void);
-
-/* Returns a python dict mapping
-     (prefix, primitive_instruction) -> superinstruction
-   All of these are integers; to get names, go through the
-   opcode_names list.  Implemented in peephole.c. */
-PyAPI_FUNC(PyObject *) _PyEval_GetSuperinstructionDefinitions(void);
-
 /* Look at the current frame's (if any) code's co_flags, and turn on
    the corresponding compiler flags in cf->cf_flags.  Return 1 if any
    flag was set, else return 0. */

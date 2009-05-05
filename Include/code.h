@@ -6,20 +6,6 @@
 extern "C" {
 #endif
 
-typedef void *Opcode;
-typedef int Oparg;
-
-/* The same information as PyInst, but optimized for a threaded
-   interpreter.  opcode is now the address of the label in
-   PyEval_EvalFrame that interprets the operation. This struct also
-   throws away the information about which array elements are
-   arguments, but you can get that back by looking into co_code. */
-typedef union inst {
-        Opcode opcode;
-        Oparg  oparg;
-} vmgen_Cell, Inst;
-
-
 /* Bytecode object.  Keep this in sync with Python/ll_compile.cc. */
 typedef struct {
     PyObject_HEAD
@@ -27,14 +13,13 @@ typedef struct {
     int co_nlocals;		/* #local variables */
     int co_stacksize;		/* #entries needed for evaluation stack */
     int co_flags;		/* CO_..., see below */
-    PyObject *co_code;		/* PyInstructions object: the actual code */
+    PyObject *co_code;		/* instruction opcodes */
     PyObject *co_consts;	/* list (constants used) */
     PyObject *co_names;		/* list of strings (names used) */
     PyObject *co_varnames;	/* tuple of strings (local variable names) */
     PyObject *co_freevars;	/* tuple of strings (free variable names) */
     PyObject *co_cellvars;      /* tuple of strings (cell variable names) */
     /* The rest doesn't count for hash/cmp */
-    Inst *co_tcode;             /* threaded instructions */
     PyObject *co_filename;	/* string (where it was loaded from) */
     PyObject *co_name;		/* string (name, for reference) */
     int co_firstlineno;		/* first source line number */
@@ -96,12 +81,6 @@ PyAPI_FUNC(PyCodeObject *) PyCode_New(
 	int, int, int, int, PyObject *, PyObject *, PyObject *, PyObject *,
 	PyObject *, PyObject *, PyObject *, PyObject *, int, PyObject *); 
         /* same as struct above */
-
-/* Creates a new empty code object so callers don't have to know the
-   types of most of the arguments. */
-PyAPI_FUNC(PyCodeObject *)
-PyCode_NewEmpty(const char *filename, const char *funcname, int firstlineno);
-
 PyAPI_FUNC(int) PyCode_Addr2Line(PyCodeObject *, int);
 
 /* for internal use only */
@@ -126,20 +105,6 @@ PyAPI_FUNC(int) PyCode_CheckLineNumber(PyCodeObject* co,
 
 PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
                                       PyObject *names, PyObject *lineno_obj);
-
-/* Takes 'super', an instruction index, and fills the component
-   primitive instructions into the 'prims' array, which must hold at
-   least 'prims_len' elements.  Returns the number of primitive
-   instructions now in the array.  The instructions are returned in
-   reverse order, so if _PyCode_UncombineSuperInstruction returns 3,
-   prims[2] will hold the first component instruction, prims[1] will
-   hold the second, and prims[0] will hold the third.  Returns -1 if
-   prims_len is too small. */
-PyAPI_FUNC(int) _PyCode_UncombineSuperInstruction(
-	int super, int *prims, int prims_len);
-
-/* Initializes the peephole optimizer used in PyCode_Optimize(). */
-PyAPI_FUNC(int) _PyPeephole_Init(void);
 
 #ifdef __cplusplus
 }

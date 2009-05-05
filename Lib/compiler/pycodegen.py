@@ -13,6 +13,14 @@ from compiler.consts import (CO_VARARGS, CO_VARKEYWORDS, CO_NEWLOCALS,
      CO_FUTURE_ABSIMPORT, CO_FUTURE_WITH_STATEMENT, CO_FUTURE_PRINT_FUNCTION)
 from compiler.pyassem import TupleArg
 
+callfunc_opcode_info = {
+    # (Have *args, Have **args) : opcode
+    (0,0) : "CALL_FUNCTION",
+    (1,0) : "CALL_FUNCTION_VAR",
+    (0,1) : "CALL_FUNCTION_KW",
+    (1,1) : "CALL_FUNCTION_VAR_KW",
+}
+
 LOOP = 1
 EXCEPT = 2
 TRY_FINALLY = 3
@@ -1046,15 +1054,8 @@ class CodeGenerator:
             self.visit(node.dstar_args)
         have_star = node.star_args is not None
         have_dstar = node.dstar_args is not None
-        if not have_star and not have_dstar:
-            self.emit('CALL_FUNCTION', kw << 8 | pos)
-        else:
-            var_kw = 0
-            if have_star:
-                var_kw = var_kw | 1
-            if have_dstar:
-                var_kw = var_kw | 2
-            self.emit('CALL_FUNCTION_VAR_KW', (kw << 8 | pos) << 16 | var_kw)
+        opcode = callfunc_opcode_info[have_star, have_dstar]
+        self.emit(opcode, kw << 8 | pos)
 
     def visitPrint(self, node):
         kwargs = 0

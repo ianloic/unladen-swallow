@@ -1331,23 +1331,49 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     this->Push(result);
 }
 
+// Keep this in sync with ceval.cc
+#define CALL_FLAG_VAR 1
+#define CALL_FLAG_KW 2
+
 void
-LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
+LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
 {
 #ifdef WITH_TSC
 // XXX(twouters): figure out how to support WITH_TSC in LLVM.
 #error WITH_TSC builds are unsupported at this time.
 #endif
     Function *call_function = this->GetGlobalFunction<
-        PyObject *(PyObject ***, int)>("_PyEval_CallFunctionVarKw");
-    Value *result = this->builder_.CreateCall2(
+        PyObject *(PyObject ***, int, int)>("_PyEval_CallFunctionVarKw");
+    Value *result = this->builder_.CreateCall3(
         call_function,
         this->stack_pointer_addr_,
         ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
+        ConstantInt::get(TypeBuilder<int>::cache(this->module_), call_flag),
         "CALL_FUNCTION_VAR_KW_result");
     this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
 }
+
+void
+LlvmFunctionBuilder::CALL_FUNCTION_VAR(int num_args)
+{
+    this->CallVarKwFunction(num_args, CALL_FLAG_VAR);
+}
+
+void
+LlvmFunctionBuilder::CALL_FUNCTION_KW(int num_args)
+{
+    this->CallVarKwFunction(num_args, CALL_FLAG_KW);
+}
+
+void
+LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
+{
+    this->CallVarKwFunction(num_args, CALL_FLAG_KW | CALL_FLAG_VAR);
+}
+
+#undef CALL_FLAG_VAR
+#undef CALL_FLAG_KW
 
 void
 LlvmFunctionBuilder::LOAD_DEREF(int index)

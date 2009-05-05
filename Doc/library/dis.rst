@@ -724,23 +724,29 @@ All of the following opcodes expect arguments.  An argument is 31 bits.
    :func:`slice` built-in function for more information.
 
 
+.. opcode:: CALL_FUNCTION_VAR (argc)
+
+   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``. The top element
+   on the stack contains the variable argument list, followed by keyword and
+   positional arguments.
+
+
+.. opcode:: CALL_FUNCTION_KW (argc)
+
+   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``. The top element
+   on the stack contains the keyword arguments dictionary,  followed by explicit
+   keyword and positional arguments.
+
+
 .. opcode:: CALL_FUNCTION_VAR_KW (argc)
 
-   Calls a function. *argc* is split into 2 16-bit fields. The top 16
-   bits are interpreted as ``CALL_FUNCTION``'s *argc* parameter.  The
-   low 16 bits describe whether a keyword arguments dictionary and/or
-   variable-arguments tuple are present.
+   Calls a function. *argc* is interpreted as in ``CALL_FUNCTION``.  The top
+   element on the stack contains the keyword arguments dictionary, followed by the
+   variable-arguments tuple, followed by explicit keyword and positional arguments.
 
-   If the low 16 bits contain 1, the top element on the stack contains
-   the variable argument list, followed by keyword and positional
-   arguments.
 
-   If the low 16 bits contain 2, the top element on the stack contains
-   the keyword arguments dictionary, followed by explicit keyword and
-   positional arguments.
+.. opcode:: HAVE_ARGUMENT ()
 
-   If the low 16 bits contain 3, the top element on the stack contains
-   the keyword arguments dictionary, followed by the
-   variable-arguments tuple, followed by explicit keyword and
-   positional arguments.
-
+   This is not really an opcode.  It identifies the dividing line between opcodes
+   which don't take arguments ``< HAVE_ARGUMENT`` and those which do ``>=
+   HAVE_ARGUMENT``.

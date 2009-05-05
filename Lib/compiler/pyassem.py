@@ -201,8 +201,10 @@ class Block:
         block.prev.append(self)
         assert len(block.prev) == 1, map(str, block.prev)
 
-    _uncond_transfer = ('RETURN_VALUE', 'RAISE_VARARGS',
-                        'JUMP_ABSOLUTE', 'JUMP_FORWARD', 'CONTINUE_LOOP',
+    _uncond_transfer = ('RETURN_VALUE', 'RAISE_VARARGS_ZERO',
+                        'RAISE_VARARGS_ONE', 'RAISE_VARARGS_TWO',
+                        'RAISE_VARARGS_THREE', 'JUMP_ABSOLUTE',
+                        'JUMP_FORWARD', 'CONTINUE_LOOP',
                         )
 
     def has_unconditional_transfer(self):
@@ -328,7 +330,7 @@ class PyFlowGraph(FlowGraph):
                 pc = pc + 1
             else:
                 print "\t", "%3d" % pc, opname, t[1]
-                pc = pc + 2
+                pc = pc + 3
         if io:
             sys.stdout = save
 
@@ -376,8 +378,8 @@ class PyFlowGraph(FlowGraph):
                 if len(inst) == 1:
                     pc = pc + 1
                 elif inst[0] != "SET_LINENO":
-                    # arg takes 1 byte
-                    pc = pc + 2
+                    # arg takes 2 bytes
+                    pc = pc + 3
             end[b] = pc
         pc = 0
         for i in range(len(insts)):
@@ -385,7 +387,7 @@ class PyFlowGraph(FlowGraph):
             if len(inst) == 1:
                 pc = pc + 1
             elif inst[0] != "SET_LINENO":
-                pc = pc + 2
+                pc = pc + 3
             opname = inst[0]
             if opname in self.hasjrel:
                 oparg = inst[1]
@@ -511,11 +513,12 @@ class PyFlowGraph(FlowGraph):
                 if opname == "SET_LINENO":
                     lnotab.nextLine(oparg)
                     continue
+                hi, lo = twobyte(oparg)
                 try:
-                    lnotab.addCode(self.opnum[opname], oparg)
+                    lnotab.addCode(self.opnum[opname], lo, hi)
                 except ValueError:
                     print opname, oparg
-                    print self.opnum[opname], oparg
+                    print self.opnum[opname], lo, hi
                     raise
         self.stage = DONE
 
@@ -576,6 +579,11 @@ def getArgCount(args):
                 argcount = argcount - numNames
     return argcount
 
+def twobyte(val):
+    """Convert an int argument into high and low bytes"""
+    assert isinstance(val, int)
+    return divmod(val, 256)
+
 class LineAddrTable:
     """lnotab
 
@@ -600,10 +608,8 @@ class LineAddrTable:
         self.lnotab = []
 
     def addCode(self, *args):
-        if args:
-            self.code.append(dis.make_opcode(args[0]))
-        for arg in args[1:]:
-            self.code.append(dis.make_argument(arg))
+        for arg in args:
+            self.code.append(chr(arg))
         self.codeOffset = self.codeOffset + len(args)
 
     def nextLine(self, lineno):
@@ -639,7 +645,7 @@ class LineAddrTable:
                 self.lastoff = self.codeOffset
 
     def getCode(self):
-        return list(self.code)
+        return ''.join(self.code)
 
     def getTable(self):
         return ''.join(map(chr, self.lnotab))
@@ -728,15 +734,12 @@ class StackDepthTracker:
     def CALL_FUNCTION(self, argc):
         hi, lo = divmod(argc, 256)
         return -(lo + hi * 2)
+    def CALL_FUNCTION_VAR(self, argc):
+        return self.CALL_FUNCTION(argc)-1
+    def CALL_FUNCTION_KW(self, argc):
+        return self.CALL_FUNCTION(argc)-1
     def CALL_FUNCTION_VAR_KW(self, argc):
-        # The low 16 bits of argc stores whether the call had *args or
-        # **kwargs. If the value is 1 or 2, only 1 is present and will
-        # be popped off by the call. If the value is 3, both are
-        # present and will be popped off.
-        star_effect = -1
-        if argc & 0xFFFF == 3:
-            star_effect = -2
-        return self.CALL_FUNCTION(argc >> 16) + star_effect
+        return self.CALL_FUNCTION(argc)-2
     def MAKE_CLOSURE(self, argc):
         # XXX need to account for free variables too!
         return -argc

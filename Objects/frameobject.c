@@ -3,7 +3,6 @@
 #include "Python.h"
 
 #include "code.h"
-#include "instructionsobject.h"
 #include "frameobject.h"
 #include "opcode.h"
 #include "structmember.h"
@@ -48,13 +47,12 @@ frame_getlineno(PyFrameObject *f, void *closure)
 	return PyInt_FromLong(lineno);
 }
 
-/* Setter for f_lineno - as long as you didn't pass -O, you can set
- * f_lineno from within a trace function in order to jump to a given
- * line of code, subject to some restrictions.  Most lines are OK to
- * jump to because they don't make any assumptions about the state of
- * the stack (obvious because you could remove the line and the code
- * would still work without any stack errors), but there are some
- * constructs that limit jumping:
+/* Setter for f_lineno - you can set f_lineno from within a trace function in
+ * order to jump to a given line of code, subject to some restrictions.	 Most
+ * lines are OK to jump to because they don't make any assumptions about the
+ * state of the stack (obvious because you could remove the line and the code
+ * would still work without any stack errors), but there are some constructs
+ * that limit jumping:
  *
  *  o Lines with an 'except' statement on them can't be jumped to, because
  *    they expect an exception to be on the top of the stack.
@@ -63,8 +61,6 @@ frame_getlineno(PyFrameObject *f, void *closure)
  *  o 'try'/'for'/'while' blocks can't be jumped into because the blockstack
  *    needs to be set up before their code runs, and for 'for' loops the
  *    iterator needs to be on the stack.
- *  o With -O, the peephole optimizer will combine some instructions
- *    across line boundaries, making all jumping unsafe.
  */
 static int
 frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
@@ -72,7 +68,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	int new_lineno = 0;		/* The new value of f_lineno */
 	int new_lasti = 0;		/* The new value of f_lasti */
 	int new_iblock = 0;		/* The new value of f_iblock */
-	PyInst *code = NULL;		/* The bytecode for the frame... */
+	unsigned char *code = NULL;	/* The bytecode for the frame... */
 	Py_ssize_t code_len = 0;	/* ...and its length */
 	char *lnotab = NULL;		/* Iterating over co_lnotab */
 	Py_ssize_t lnotab_len = 0;	/* (ditto) */
@@ -90,14 +86,6 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	int in_finally[CO_MAXBLOCKS];	/* (ditto) */
 	int blockstack_top = 0;		/* (ditto) */
 	unsigned char setup_op = 0;	/* (ditto) */
-
-	/* Can't set f_lineno in -O mode. */
-	if (Py_OptimizeFlag) {
-		PyErr_SetString(
-			PyExc_AttributeError,
-			"f_lineno attribute is read-only when running with -O");
-		return -1;
-	}
 
 	/* f_lineno must be an integer. */
 	if (!PyInt_Check(p_new_lineno)) {
@@ -149,8 +137,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	}
 
 	/* We're now ready to look at the bytecode. */
-	code = ((PyInstructionsObject *)f->f_code->co_code)->inst;
-	code_len = Py_SIZE(f->f_code->co_code);
+	PyString_AsStringAndSize(f->f_code->co_code, (char **)&code, &code_len);
 	min_addr = MIN(new_lasti, f->f_lasti);
 	max_addr = MAX(new_lasti, f->f_lasti);
 
@@ -164,8 +151,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	 * cases (AFAIK) where a line's code can start with DUP_TOP or
 	 * POP_TOP, but if any ever appear, they'll be subject to the same
 	 * restriction (but with a different error message). */
-	if (PyInst_GET_OPCODE(code + new_lasti) == DUP_TOP ||
-	    PyInst_GET_OPCODE(code + new_lasti) == POP_TOP) {
+	if (code[new_lasti] == DUP_TOP || code[new_lasti] == POP_TOP) {
 		PyErr_SetString(PyExc_ValueError,
 		    "can't jump to 'except' line as there's no exception");
 		return -1;
@@ -186,10 +172,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	memset(in_finally, '\0', sizeof(in_finally));
 	blockstack_top = 0;
 	for (addr = 0; addr < code_len; addr++) {
-		if (code[addr].is_arg) {
-			continue;
-		}
-		unsigned char op = PyInst_GET_OPCODE(code + addr);
+		unsigned char op = code[addr];
 		switch (op) {
 		case SETUP_LOOP:
 		case SETUP_EXCEPT:
@@ -200,8 +183,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 
 		case POP_BLOCK:
 			assert(blockstack_top > 0);
-			setup_op = PyInst_GET_OPCODE(
-				code + blockstack[blockstack_top-1]);
+			setup_op = code[blockstack[blockstack_top-1]];
 			if (setup_op == SETUP_FINALLY) {
 				in_finally[blockstack_top-1] = 1;
 			}
@@ -216,8 +198,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 			 * 'finally' block.  (If blockstack_top is 0, we must
 			 * be seeing such an END_FINALLY.) */
 			if (blockstack_top > 0) {
-				setup_op = PyInst_GET_OPCODE(
-					code + blockstack[blockstack_top-1]);
+				setup_op = code[blockstack[blockstack_top-1]];
 				if (setup_op == SETUP_FINALLY) {
 					blockstack_top--;
 				}
@@ -248,6 +229,10 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 				}
 			}
 		}
+
+		if (op >= HAVE_ARGUMENT) {
+			addr += 2;
+		}
 	}
 
 	/* Verify that the blockstack tracking code didn't get lost. */
@@ -271,10 +256,7 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 	 * again - in that case we raise an exception below. */
 	delta_iblock = 0;
 	for (addr = min_addr; addr < max_addr; addr++) {
-		if (code[addr].is_arg) {
-			continue;
-		}
-		unsigned char op = PyInst_GET_OPCODE(code + addr);
+		unsigned char op = code[addr];
 		switch (op) {
 		case SETUP_LOOP:
 		case SETUP_EXCEPT:
@@ -288,6 +270,10 @@ frame_setlineno(PyFrameObject *f, PyObject* p_new_lineno)
 		}
 
 		min_delta_iblock = MIN(min_delta_iblock, delta_iblock);
+
+		if (op >= HAVE_ARGUMENT) {
+			addr += 2;
+		}
 	}
 
 	/* Derive the absolute iblock values from the deltas. */

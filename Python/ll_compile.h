@@ -130,6 +130,8 @@ public:
 
     void COMPARE_OP(int cmp_op);
     void CALL_FUNCTION(int num_args);
+    void CALL_FUNCTION_VAR(int num_args);
+    void CALL_FUNCTION_KW(int num_args);
     void CALL_FUNCTION_VAR_KW(int num_args);
 
     void BUILD_TUPLE(int size);
@@ -324,6 +326,11 @@ private:
     // deletion. All references are stolen.
     void AssignSlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop,
                      llvm::Value *source);
+
+    // Helper method for CALL_FUNCTION_(VAR|KW|VAR_KW); calls
+    // _PyEval_CallFunctionVarKw() with the given flags and the current
+    // stack pointer.
+    void CallVarKwFunction(int num_args, int call_flag);
 
     PyGlobalLlvmData *const llvm_data_;
     llvm::Module *const module_;

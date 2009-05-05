@@ -29,7 +29,7 @@ PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int,
                                           uint64*, uint64*);
 #else
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int);
-PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int);
+PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int, int);
 #endif
 
 PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);

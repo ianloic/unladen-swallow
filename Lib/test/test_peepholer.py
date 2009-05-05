@@ -200,7 +200,7 @@ class TestTranforms(unittest.TestCase):
         self.assert_('JUMP_FORWARD' not in asm)
         # There should be one jump for the while loop.
         self.assertEqual(asm.split().count('JUMP_ABSOLUTE'), 1)
-        self.assertEqual(asm.split().count('RETURN_VALUE'), 3)
+        self.assertEqual(asm.split().count('RETURN_VALUE'), 2)
 
 
 def test_main(verbose=None):

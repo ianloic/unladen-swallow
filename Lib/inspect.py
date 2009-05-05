@@ -753,12 +753,12 @@ def getargs(co):
         if args[i][:1] in ('', '.'):
             stack, remain, count = [], [], []
             while step < len(co.co_code):
-                op = dis.get_opcode(co.co_code[step])
+                op = ord(co.co_code[step])
                 step = step + 1
-                if step < len(co.co_code) and dis.is_argument(co.co_code[step]):
+                if op >= dis.HAVE_ARGUMENT:
                     opname = dis.opname[op]
-                    value = dis.get_argument(co.co_code[step])
-                    step = step + 1
+                    value = ord(co.co_code[step]) + ord(co.co_code[step+1])*256
+                    step = step + 2
                     if opname in ('UNPACK_TUPLE', 'UNPACK_SEQUENCE'):
                         remain.append(value)
                         count.append(value)

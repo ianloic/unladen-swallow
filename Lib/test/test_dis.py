@@ -13,41 +13,14 @@ def _f(a):
 
 dis_f = """\
  %-4d         0 LOAD_GLOBAL              0 (#@print_stmt)
-              2 F_CALL_FUNCTION:
-                  LOAD_FAST                0 (a)
-                  CALL_FUNCTION            1
-              5 POP_TOP
+              3 LOAD_FAST                0 (a)
+              6 CALL_FUNCTION            1
+              9 POP_TOP
 
- %-4d         6 RETURN_CONST:
-                  LOAD_CONST               1 (1)
-                  RETURN_VALUE
+ %-4d        10 LOAD_CONST               1 (1)
+             13 RETURN_VALUE
 """%(_f.func_code.co_firstlineno + 1,
      _f.func_code.co_firstlineno + 2)
-
-
-def _supertest(a):
-    return a + 1
-
-dis_supertest = """\
- %-4d         0 FC:
-                  LOAD_FAST                0 (a)
-                  LOAD_CONST               1 (1)
-              3 BINARY_ADD
-              4 RETURN_VALUE
-"""%(_supertest.func_code.co_firstlineno + 1,)
-
-
-def _2arg_supertest(a):
-    return (a, 1, 2)
-
-dis_2arg_supertest = """\
- %-4d         0 FC:
-                  LOAD_FAST                0 (a)
-                  LOAD_CONST               1 (1)
-              3 LOAD_CONST               2 (2)
-              5 BUILD_TUPLE              3
-              7 RETURN_VALUE
-"""%(_2arg_supertest.func_code.co_firstlineno + 1,)
 
 
 def bug708901():
@@ -55,47 +28,21 @@ def bug708901():
                      10):
         pass
 
-if __debug__:
-    dis_bug708901 = """\
- %-4d         0 SETUP_LOOP              15 (to 17)
-              2 LOAD_GLOBAL              0 (range)
-              4 LOAD_CONST               1 (1)
+dis_bug708901 = """\
+ %-4d         0 SETUP_LOOP              23 (to 26)
+              3 LOAD_GLOBAL              0 (range)
+              6 LOAD_CONST               1 (1)
 
- %-4d         6 C_CALL_FUNCTION:
-                  LOAD_CONST               2 (10)
-                  CALL_FUNCTION            2
-              9 GET_ITER
-        >>   10 FOR_ITER                 4 (to 16)
-             12 STORE_FAST               0 (res)
+ %-4d         9 LOAD_CONST               2 (10)
+             12 CALL_FUNCTION            2
+             15 GET_ITER
+        >>   16 FOR_ITER                 6 (to 25)
+             19 STORE_FAST               0 (res)
 
- %-4d        14 JUMP_ABSOLUTE           10
-        >>   16 POP_BLOCK
-        >>   17 RETURN_CONST:
-                  LOAD_CONST               0 (None)
-                  RETURN_VALUE
-             19 RETURN_VALUE
-"""%(bug708901.func_code.co_firstlineno + 1,
-     bug708901.func_code.co_firstlineno + 2,
-     bug708901.func_code.co_firstlineno + 3)
-else:
-    dis_bug708901 = """\
- %-4d         0 SETUP_LOOP              14 (to 16)
-              2 LOAD_GLOBAL              0 (range)
-
- %-4d         4 CC_CALL_FUNCTION:
-                  LOAD_CONST               1 (1)
-                  LOAD_CONST               2 (10)
-                  CALL_FUNCTION            2
-              8 GET_ITER
-        >>    9 FOR_ITER                 4 (to 15)
-             11 STORE_FAST               0 (res)
-
- %-4d        13 JUMP_ABSOLUTE            9
-        >>   15 POP_BLOCK
-        >>   16 RETURN_CONST:
-                  LOAD_CONST               0 (None)
-                  RETURN_VALUE
-             18 RETURN_VALUE
+ %-4d        22 JUMP_ABSOLUTE           16
+        >>   25 POP_BLOCK
+        >>   26 LOAD_CONST               0 (None)
+             29 RETURN_VALUE
 """%(bug708901.func_code.co_firstlineno + 1,
      bug708901.func_code.co_firstlineno + 2,
      bug708901.func_code.co_firstlineno + 3)
@@ -107,50 +54,37 @@ def bug1333982(x=[]):
     pass
 
 dis_bug1333982 = """\
-%3d           0 LOAD_CONST               1 (0)
-              2 POP_JUMP_IF_TRUE        28
-              4 LOAD_GLOBAL              0 (AssertionError)
-              6 BUILD_LIST               0
-              8 DUP_TOP
-              9 STORE_LOAD_FAST:
-                  STORE_FAST               1 (_[1])
-                  LOAD_FAST                0 (x)
-             12 GET_ITER
-        >>   13 FOR_ITER                 8 (to 23)
-             15 STORE_LOAD_FAST:
-                  STORE_FAST               2 (s)
-                  LOAD_FAST                1 (_[1])
-             18 LOAD_FAST                2 (s)
-             20 LIST_APPEND
-             21 JUMP_ABSOLUTE           13
-        >>   23 DELETE_FAST              1 (_[1])
+ %-4d         0 LOAD_CONST               1 (0)
+              3 POP_JUMP_IF_TRUE        44
+              6 LOAD_GLOBAL              0 (AssertionError)
+              9 BUILD_LIST               0
+             12 DUP_TOP
+             13 STORE_FAST               1 (_[1])
+             16 LOAD_FAST                0 (x)
+             19 GET_ITER
+        >>   20 FOR_ITER                13 (to 36)
+             23 STORE_FAST               2 (s)
+             26 LOAD_FAST                1 (_[1])
+             29 LOAD_FAST                2 (s)
+             32 LIST_APPEND
+             33 JUMP_ABSOLUTE           20
+        >>   36 DELETE_FAST              1 (_[1])
 
-%3d          25 CBINARY_ADD:
-                  LOAD_CONST               2 (1)
-                  BINARY_ADD
-             27 RAISE_VARARGS_TWO
+ %-4d        39 LOAD_CONST               2 (1)
+             42 BINARY_ADD
+             43 RAISE_VARARGS_TWO
 
-%3d     >>   28 RETURN_CONST:
-                  LOAD_CONST               0 (None)
-                  RETURN_VALUE
-             30 RETURN_VALUE
+ %-4d   >>   44 LOAD_CONST               0 (None)
+             47 RETURN_VALUE
 """%(bug1333982.func_code.co_firstlineno + 1,
      bug1333982.func_code.co_firstlineno + 2,
      bug1333982.func_code.co_firstlineno + 3)
 
-_BIG_LINENO_PEEPHOLED_FORMAT = """\
+_BIG_LINENO_FORMAT = """\
 %3d           0 LOAD_GLOBAL              0 (spam)
-              2 POP_TOP
-              3 RETURN_CONST:
-                  LOAD_CONST               0 (None)
-                  RETURN_VALUE
-              5 RETURN_VALUE
-"""
-_BIG_LINENO_UNPEEPHOLED_FORMAT = """\
-%3d           0 LOAD_GLOBAL              0 (spam)
-              2 POP_TOP
-              3 LOAD_CONST               0 (None)
-              5 RETURN_VALUE
+              3 POP_TOP
+              4 LOAD_CONST               0 (None)
+              7 RETURN_VALUE
 """
 
 class DisTests(unittest.TestCase):
@@ -173,20 +107,19 @@ class DisTests(unittest.TestCase):
                                         lines)))
 
     def test_opmap(self):
+        self.assertEqual(dis.opmap["STOP_CODE"], 0)
         self.assertEqual(dis.opmap["LOAD_CONST"] in dis.hasconst, True)
         self.assertEqual(dis.opmap["STORE_NAME"] in dis.hasname, True)
 
     def test_opname(self):
         self.assertEqual(dis.opname[dis.opmap["LOAD_FAST"]], "LOAD_FAST")
 
+    def test_boundaries(self):
+        self.assertEqual(dis.opmap["EXTENDED_ARG"], dis.EXTENDED_ARG)
+        self.assertEqual(dis.opmap["STORE_NAME"], dis.HAVE_ARGUMENT)
+
     def test_dis(self):
         self.do_disassembly_test(_f, dis_f)
-
-    def test_dis_super(self):
-        self.do_disassembly_test(_supertest, dis_supertest)
-
-    def test_dis_2_arg_super(self):
-        self.do_disassembly_test(_2arg_supertest, dis_2arg_supertest)
 
     def test_bug_708901(self):
         self.do_disassembly_test(bug708901, dis_bug708901)
@@ -206,16 +139,12 @@ class DisTests(unittest.TestCase):
 
         # Test all small ranges
         for i in xrange(1, 300):
-            if i < 254:
-                format = _BIG_LINENO_PEEPHOLED_FORMAT
-            else:
-                format = _BIG_LINENO_UNPEEPHOLED_FORMAT
-            expected = format % (i + 2)
+            expected = _BIG_LINENO_FORMAT % (i + 2)
             self.do_disassembly_test(func(i), expected)
 
         # Test some larger ranges too
         for i in xrange(300, 5000, 10):
-            expected = _BIG_LINENO_UNPEEPHOLED_FORMAT % (i + 2)
+            expected = _BIG_LINENO_FORMAT % (i + 2)
             self.do_disassembly_test(func(i), expected)
 
 def test_main():
