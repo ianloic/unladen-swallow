@@ -79,8 +79,12 @@ PyAPI_DATA(PyTypeObject) PyCode_Type;
 /* Public interface */
 PyAPI_FUNC(PyCodeObject *) PyCode_New(
 	int, int, int, int, PyObject *, PyObject *, PyObject *, PyObject *,
-	PyObject *, PyObject *, PyObject *, PyObject *, int, PyObject *); 
+	PyObject *, PyObject *, PyObject *, PyObject *, int, PyObject *);
         /* same as struct above */
+
+/* Return the line number associated with the specified bytecode index
+   in this code object.  Unless you want to be tied to the bytecode
+   format, try to use PyFrame_GetLineNumber() instead. */
 PyAPI_FUNC(int) PyCode_Addr2Line(PyCodeObject *, int);
 
 /* for internal use only */

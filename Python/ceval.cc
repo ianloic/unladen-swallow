@@ -2608,7 +2608,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		default:
 			fprintf(stderr,
 				"XXX lineno: %d, opcode: %d\n",
-				PyCode_Addr2Line(f->f_code, f->f_lasti),
+				PyFrame_GetLineNumber(f),
 				opcode);
 			PyErr_SetString(PyExc_SystemError, "unknown opcode");
 			why = WHY_EXCEPTION;
@@ -3082,11 +3082,10 @@ fail: /* Jump here from prelude on failure */
 - tstate->curexc_ZZZ is the "hot" exception that is set by
   PyErr_SetString(), cleared by PyErr_Clear(), and so on.
 
-- Once an exception is caught by an except clause, it is transferred
-  from tstate->curexc_ZZZ to tstate->exc_ZZZ, from which sys.exc_info()
+- Once an exception is caught by an except clause, it is retrieved
+  from tstate->curexc_ZZZ by PyErr_Fetch() and set into
+  tstate->exc_ZZZ by _PyEval_SetExcInfo(), from which sys.exc_info()
   can pick it up.  This is the primary task of _PyEval_SetExcInfo().
-  XXX That can't be right: _PyEval_SetExcInfo() doesn't look at
-  tstate->curexc_ZZZ.
 
 - Now let me explain the complicated dance with frame->f_exc_ZZZ.
 

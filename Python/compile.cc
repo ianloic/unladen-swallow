@@ -726,6 +726,7 @@ compiler_set_lineno(struct compiler *c, int off)
 	c->u->u_lineno_set = true;
 	b = c->u->u_curblock;
 	b->b_instr[off].i_lineno = c->u->u_lineno;
+	c->u->fb->SetLineNumber(c->u->u_lineno);
 }
 
 static int

@@ -38,9 +38,22 @@ typedef struct _frame {
     PyObject *f_exc_type, *f_exc_value, *f_exc_traceback;
 
     PyThreadState *f_tstate;
-    int f_lasti;		/* Last instruction if called */
-    /* As of 2.3 f_lineno is only valid when tracing is active (i.e. when
-       f_trace is set) -- at other times use PyCode_Addr2Line instead. */
+    /* When running through the bytecode interpreter, f_lasti records
+       the index of the most recent instruction to start executing.
+       It's used to resume generators, to let tracers change the
+       current line number, and to look up the current line number
+       through co_lnotab (See PyCode_Addr2Line).  Under LLVM, f_lasti
+       is a negative number used to index basic blocks that we might
+       want to resume from (for generators and line changes within
+       tracing functions).  When f_lasti is negative (and hence
+       meaningless), f_lineno is correct.  f_lasti is initialized to
+       -1 when a function is first entered. */
+    int f_lasti;
+    /* Call PyFrame_GetLineNumber() instead of reading this field
+       directly.  As of Unladen Swallow 2009Q2 f_lineno is valid when
+       tracing is active (i.e. when f_trace is set) and when f_lasti
+       is negative.  At other times we use PyCode_Addr2Line to
+       calculate the line from the current bytecode index. */
     int f_lineno;		/* Current line number */
     unsigned char f_throwflag;	/* true if generator.throw() was called */
     unsigned char f_iblock;	/* index in f_blockstack */
@@ -78,6 +91,9 @@ PyAPI_FUNC(void) PyFrame_LocalsToFast(PyFrameObject *, int);
 PyAPI_FUNC(void) PyFrame_FastToLocals(PyFrameObject *);
 
 PyAPI_FUNC(int) PyFrame_ClearFreeList(void);
+
+/* Return the line of code the frame is currently executing. */
+PyAPI_FUNC(int) PyFrame_GetLineNumber(PyFrameObject *);
 
 #ifdef __cplusplus
 }

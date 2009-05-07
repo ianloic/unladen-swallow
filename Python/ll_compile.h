@@ -26,6 +26,11 @@ public:
     llvm::Function *function() { return function_; }
     llvm::IRBuilder<>& builder() { return builder_; }
 
+    /// Sets the current line number being executed.  This is
+    /// currently used to make tracebacks correct and will be used to
+    /// get tracing to fire in the right places.
+    void SetLineNumber(int line);
+
     /// Sets the insert point to next_block, inserting an
     /// unconditional branch to there if the current block doesn't yet
     /// have a terminator instruction.
@@ -256,8 +261,14 @@ private:
     // appropriate unwind reason set.
     void PropagateException();
 
-    // Only for use in the constructor: Fills in the unwind block. Has
-    // no effect on the IRBuilder's current insertion block.
+    // Only for use in the constructor: Fills in the block that starts
+    // propagating an exception.  Jump to this block when you want to
+    // add a traceback entry for the current line.  Don't jump to this
+    // block (and just set retval_addr_ and unwind_reason_addr_
+    // directly) when you're re-raising an exception and you want to
+    // use its traceback.
+    void FillPropagateExceptionBlock();
+    // Only for use in the constructor: Fills in the unwind block.
     void FillUnwindBlock();
 
     // Create an alloca in the entry block, so that LLVM can optimize
@@ -359,6 +370,7 @@ private:
     llvm::Value *resume_block_;
     llvm::SwitchInst *yield_resume_switch_;
 
+    llvm::BasicBlock *propagate_exception_block_;
     llvm::BasicBlock *unwind_block_;
     llvm::Value *unwind_target_index_addr_;
     llvm::SwitchInst *unwind_target_switch_;

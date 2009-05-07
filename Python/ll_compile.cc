@@ -41,7 +41,6 @@ namespace py {
 enum UnwindReason {
     UNWIND_NOUNWIND,
     UNWIND_EXCEPTION,
-    UNWIND_RERAISE,
     UNWIND_RETURN,
     UNWIND_BREAK,
     UNWIND_CONTINUE,
@@ -406,6 +405,8 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     BasicBlock *entry = BasicBlock::Create("entry", this->function_);
     this->unreachable_block_ =
         BasicBlock::Create("unreachable", this->function_);
+    this->propagate_exception_block_ =
+        BasicBlock::Create("propagate_exception", this->function_);
     this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
 
     this->builder_.SetInsertPoint(entry);
@@ -529,9 +530,27 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->Abort("Jumped to unreachable code.");
     this->builder_.CreateUnreachable();
 
+    FillPropagateExceptionBlock();
     FillUnwindBlock();
 
     this->builder_.SetInsertPoint(start);
+}
+
+void
+LlvmFunctionBuilder::FillPropagateExceptionBlock()
+{
+    this->builder_.SetInsertPoint(this->propagate_exception_block_);
+    this->builder_.CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        this->retval_addr_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateCall(this->GetGlobalFunction<int(PyFrameObject*)>(
+                                  "PyTraceBack_Here"),
+                              this->frame_);
+    // TODO(jyasskin): Arrange to call the appropriate trace function
+    // if tracing is turned on.
+    this->builder_.CreateBr(this->unwind_block_);
 }
 
 void
@@ -804,6 +823,16 @@ LlvmFunctionBuilder::CreateAllocaInEntryBlock(
 }
 
 void
+LlvmFunctionBuilder::SetLineNumber(int line)
+{
+    Value *f_lineno = this->builder_.CreateStructGEP(
+        this->frame_, FrameTy::FIELD_LINENO, "f_lineno");
+    this->builder_.CreateStore(
+        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_), line),
+        f_lineno);
+}
+
+void
 LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
 {
     if (this->builder_.GetInsertBlock()->getTerminator() == NULL) {
@@ -838,14 +867,7 @@ LlvmFunctionBuilder::Return(Value *retval)
 void
 LlvmFunctionBuilder::PropagateException()
 {
-    this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
-        this->retval_addr_);
-    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
-                               this->unwind_reason_addr_);
-    // TODO(jyasskin): Arrange to call PyTraceBack_Here and, if
-    // tracing is turned on, the appropriate trace function.
-    this->builder_.CreateBr(this->unwind_block_);
+    this->builder_.CreateBr(this->propagate_exception_block_);
 }
 
 void
@@ -1708,10 +1730,11 @@ LlvmFunctionBuilder::END_FINALLY()
         this->GetGlobalFunction<void(PyObject *, PyObject *, PyObject *)>(
             "PyErr_Restore"),
         err_type, err_value, err_traceback);
-    // Logically this is an UNWIND_RERAISE, but all of the exception
-    // handling logic expects UNWIND_EXCEPTION.  The only difference
-    // in EvalFrame is that UNWIND_EXCEPTION calls
-    // PyTraceBack_Here(frame) and traces the exception.
+    // This is a "re-raise" rather than a new exception, so we don't
+    // jump to the propagate_exception_block_.
+    this->builder_.CreateStore(
+        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        this->retval_addr_);
     this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
     this->builder_.CreateBr(this->unwind_block_);
@@ -1801,9 +1824,13 @@ LlvmFunctionBuilder::YIELD_VALUE()
 {
     BasicBlock *yield_resume =
         BasicBlock::Create("yield_resume", this->function_);
+    // Make sure f_lasti is negative when running through LLVM to
+    // signal that f_lineno is accurate.  getNumCases() starts at 2,
+    // one for the default target, and the other for the (-1=>start)
+    // mapping we added in the entry block.
     ConstantInt *yield_number =
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_),
-                         this->yield_resume_switch_->getNumCases());
+        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+                               -this->yield_resume_switch_->getNumCases());
     this->yield_resume_switch_->addCase(yield_number, yield_resume);
 
     Value *retval = Pop();
@@ -1837,22 +1864,27 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
     // terminators causes problems.
     BasicBlock *dead_code = BasicBlock::Create("dead_code", this->function_);
 
-    Function *do_raise = this->GetGlobalFunction<
-        int(PyObject*, PyObject *, PyObject *)>("_PyEval_DoRaise");
-    // _PyEval_DoRaise eats references.
-    Value *is_reraise = this->builder_.CreateCall3(
-        do_raise, exc_type, exc_inst, exc_tb, "raise_is_reraise");
-    // TODO(twouters): We should be handling re-raises and new exceptions
-    // differently, but we don't, yet. If is_reraise is non-zero,
-    // we should omit building a new traceback and jump to the correct
-    // handler (and/or set the unwind reason to UNWIND_RERAISE).
+    // All raises set 'why' to UNWIND_EXCEPTION and the return value to NULL.
+    // This is redundant with the propagate_exception_block_, but mem2reg will
+    // remove the redundancy.
     this->builder_.CreateStore(
         ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
         this->unwind_reason_addr_);
     this->builder_.CreateStore(
         Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
         this->retval_addr_);
-    this->builder_.CreateBr(this->unwind_block_);
+
+    Function *do_raise = this->GetGlobalFunction<
+        int(PyObject*, PyObject *, PyObject *)>("_PyEval_DoRaise");
+    // _PyEval_DoRaise eats references.
+    Value *is_reraise = this->builder_.CreateCall3(
+        do_raise, exc_type, exc_inst, exc_tb, "raise_is_reraise");
+    // If this is a "re-raise", we jump straight to the unwind block.
+    // If it's a new raise, we call PyTraceBack_Here from the
+    // propagate_exception_block_.
+    this->builder_.CreateCondBr(
+        this->IsNonZero(is_reraise),
+        this->unwind_block_, this->propagate_exception_block_);
 
     this->builder_.SetInsertPoint(dead_code);
 }
