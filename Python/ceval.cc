@@ -581,6 +581,114 @@ PyEval_EvalFrame(PyFrameObject *f)
 	char *filename;
 #endif
 
+/* Computed GOTOs, or
+       the-optimization-commonly-but-improperly-known-as-"threaded code"
+   using gcc's labels-as-values extension
+   (http://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html).
+
+   The traditional bytecode evaluation loop uses a "switch" statement, which
+   decent compilers will optimize as a single indirect branch instruction 
+   combined with a lookup table of jump addresses. However, since the
+   indirect jump instruction is shared by all opcodes, the CPU will have a
+   hard time making the right prediction for where to jump next (actually,
+   it will be always wrong except in the uncommon case of a sequence of
+   several identical opcodes).
+
+   "Threaded code" in contrast, uses an explicit jump table and an explicit
+   indirect jump instruction at the end of each opcode. Since the jump
+   instruction is at a different address for each opcode, the CPU will make a
+   separate prediction for each of these instructions, which is equivalent to
+   predicting the second opcode of each opcode pair. These predictions have
+   a much better chance to turn out valid, especially in small bytecode loops.
+
+   A mispredicted branch on a modern CPU flushes the whole pipeline and
+   can cost several CPU cycles (depending on the pipeline depth), 
+   and potentially many more instructions (depending on the pipeline width).
+   A correctly predicted branch, however, is nearly free.
+
+   At the time of this writing, the "threaded code" version is up to 15-20%
+   faster than the normal "switch" version, depending on the compiler and the
+   CPU architecture.
+
+   We disable the optimization if DYNAMIC_EXECUTION_PROFILE is defined,
+   because it would render the measurements invalid.
+
+
+   NOTE: care must be taken that the compiler doesn't try to "optimize" the
+   indirect jumps by sharing them between all opcodes. Such optimizations
+   can be disabled on gcc by using the -fno-gcse flag (or possibly
+   -fno-crossjumping).
+*/
+
+#if defined(USE_COMPUTED_GOTOS) && defined(DYNAMIC_EXECUTION_PROFILE)
+#undef USE_COMPUTED_GOTOS
+#endif
+
+#ifdef USE_COMPUTED_GOTOS
+/* Import the static jump table */
+#include "opcode_targets.h"
+
+/* This macro is used when several opcodes defer to the same implementation
+   (e.g. SETUP_LOOP, SETUP_FINALLY) */
+#define TARGET_WITH_IMPL(op, impl) \
+	TARGET_##op: \
+		opcode = op; \
+		if (HAS_ARG(op)) \
+			oparg = NEXTARG(); \
+	case op: \
+		goto impl; \
+
+#define TARGET(op) \
+	TARGET_##op: \
+		opcode = op; \
+		if (HAS_ARG(op)) \
+			oparg = NEXTARG(); \
+	case op:
+
+
+#define DISPATCH() \
+	{ \
+		/* Avoid multiple loads from _Py_Ticker despite `volatile` */ \
+		int _tick = _Py_Ticker - 1; \
+		_Py_Ticker = _tick; \
+		if (_tick >= 0) { \
+			FAST_DISPATCH(); \
+		} \
+		continue; \
+	}
+
+#ifdef LLTRACE
+#define FAST_DISPATCH() \
+	{ \
+		if (!lltrace && !_Py_TracingPossible) { \
+			f->f_lasti = INSTR_OFFSET(); \
+			goto *opcode_targets[*next_instr++]; \
+		} \
+		goto fast_next_opcode; \
+	}
+#else
+#define FAST_DISPATCH() \
+	{ \
+		if (!_Py_TracingPossible) { \
+			f->f_lasti = INSTR_OFFSET(); \
+			goto *opcode_targets[*next_instr++]; \
+		} \
+		goto fast_next_opcode; \
+	}
+#endif
+
+#else
+#define TARGET(op) \
+	case op:
+#define TARGET_WITH_IMPL(op, impl) \
+	/* silence compiler warnings about `impl` unused */ \
+	if (0) goto impl; \
+	case op:
+#define DISPATCH() continue
+#define FAST_DISPATCH() goto fast_next_opcode
+#endif
+
+
 /* Tuple access macros */
 
 #ifndef Py_DEBUG
@@ -656,16 +764,23 @@ PyEval_EvalFrame(PyFrameObject *f)
 	predictions turned-on and interpret the results as if some opcodes
 	had been combined or turn-off predictions so that the opcode frequency
 	counter updates for both opcodes.
+
+    Opcode prediction is disabled with threaded code, since the latter allows
+	the CPU to record separate branch prediction information for each
+	opcode.
+
 */
 
-#ifdef DYNAMIC_EXECUTION_PROFILE
+#if defined(DYNAMIC_EXECUTION_PROFILE) || defined(USE_COMPUTED_GOTOS)
 #define PREDICT(op)		if (0) goto PRED_##op
+#define PREDICTED(op)		PRED_##op:
+#define PREDICTED_WITH_ARG(op)	PRED_##op:
 #else
 #define PREDICT(op)		if (*next_instr == op) goto PRED_##op
-#endif
-
 #define PREDICTED(op)		PRED_##op: next_instr++
 #define PREDICTED_WITH_ARG(op)	PRED_##op: oparg = PEEKARG(); next_instr += 3
+#endif
+
 
 /* Stack manipulation macros */
 
@@ -1004,54 +1119,54 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		/* case STOP_CODE: this is an error! */
 
-		case NOP:
-			goto fast_next_opcode;
+		TARGET(NOP)
+			FAST_DISPATCH();
 
-		case LOAD_FAST:
+		TARGET(LOAD_FAST)
 			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				Py_INCREF(x);
 				PUSH(x);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			_PyEval_RaiseForUnboundLocal(f, oparg);
 			why = WHY_EXCEPTION;
 			break;
 
-		case LOAD_CONST:
+		TARGET(LOAD_CONST)
 			x = GETITEM(consts, oparg);
 			Py_INCREF(x);
 			PUSH(x);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
 		PREDICTED_WITH_ARG(STORE_FAST);
-		case STORE_FAST:
+		TARGET(STORE_FAST)
 			v = POP();
 			SETLOCAL(oparg, v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case POP_TOP:
+		TARGET(POP_TOP)
 			v = POP();
 			Py_DECREF(v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case ROT_TWO:
+		TARGET(ROT_TWO)
 			v = TOP();
 			w = SECOND();
 			SET_TOP(w);
 			SET_SECOND(v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case ROT_THREE:
+		TARGET(ROT_THREE)
 			v = TOP();
 			w = SECOND();
 			x = THIRD();
 			SET_TOP(w);
 			SET_SECOND(x);
 			SET_THIRD(v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case ROT_FOUR:
+		TARGET(ROT_FOUR)
 			u = TOP();
 			v = SECOND();
 			w = THIRD();
@@ -1060,15 +1175,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 			SET_SECOND(w);
 			SET_THIRD(x);
 			SET_FOURTH(u);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case DUP_TOP:
+		TARGET(DUP_TOP)
 			v = TOP();
 			Py_INCREF(v);
 			PUSH(v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case DUP_TOP_TWO:
+		TARGET(DUP_TOP_TWO)
 			x = TOP();
 			Py_INCREF(x);
 			w = SECOND();
@@ -1076,9 +1191,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			STACKADJ(2);
 			SET_TOP(x);
 			SET_SECOND(w);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case DUP_TOP_THREE:
+		TARGET(DUP_TOP_THREE)
 			x = TOP();
 			Py_INCREF(x);
 			w = SECOND();
@@ -1089,79 +1204,97 @@ PyEval_EvalFrame(PyFrameObject *f)
 			SET_TOP(x);
 			SET_SECOND(w);
 			SET_THIRD(v);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
-		case UNARY_POSITIVE:
+		TARGET(UNARY_POSITIVE)
 			v = TOP();
 			x = PyNumber_Positive(v);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case UNARY_NEGATIVE:
+		TARGET(UNARY_NEGATIVE)
 			v = TOP();
 			x = PyNumber_Negative(v);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case UNARY_NOT:
+		TARGET(UNARY_NOT)
 			v = TOP();
 			err = PyObject_IsTrue(v);
 			Py_DECREF(v);
 			if (err == 0) {
 				Py_INCREF(Py_True);
 				SET_TOP(Py_True);
-				break;
+				DISPATCH();
 			}
 			else if (err > 0) {
 				Py_INCREF(Py_False);
 				SET_TOP(Py_False);
-				break;
+				DISPATCH();
 			}
 			STACKADJ(-1);
 			why = WHY_EXCEPTION;
 			break;
 
-		case UNARY_CONVERT:
+		TARGET(UNARY_CONVERT)
 			v = TOP();
 			x = PyObject_Repr(v);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case UNARY_INVERT:
+		TARGET(UNARY_INVERT)
 			v = TOP();
 			x = PyNumber_Invert(v);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_POWER:
+		TARGET(BINARY_POWER)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Power(v, w, Py_None);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_MULTIPLY:
+		TARGET(BINARY_MULTIPLY)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Multiply(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_DIVIDE:
+		TARGET(BINARY_DIVIDE)
 			if (!_Py_QnewFlag) {
 				w = POP();
 				v = TOP();
@@ -1169,32 +1302,43 @@ PyEval_EvalFrame(PyFrameObject *f)
 				Py_DECREF(v);
 				Py_DECREF(w);
 				SET_TOP(x);
-				if (x == NULL) why = WHY_EXCEPTION;
-				break;
+				if (x == NULL) {
+					why = WHY_EXCEPTION;
+					break;
+				}
+				DISPATCH();
 			}
-			/* -Qnew is in effect:	fall through to
-			   BINARY_TRUE_DIVIDE */
-		case BINARY_TRUE_DIVIDE:
+			/* -Qnew is in effect: jump to BINARY_TRUE_DIVIDE */
+			goto _binary_true_divide;
+
+		TARGET(BINARY_TRUE_DIVIDE)
+		_binary_true_divide:
 			w = POP();
 			v = TOP();
 			x = PyNumber_TrueDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_FLOOR_DIVIDE:
+		TARGET(BINARY_FLOOR_DIVIDE)
 			w = POP();
 			v = TOP();
 			x = PyNumber_FloorDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_MODULO:
+		TARGET(BINARY_MODULO)
 			w = POP();
 			v = TOP();
 			if (PyString_CheckExact(v))
@@ -1204,10 +1348,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_ADD:
+		TARGET(BINARY_ADD)
 			w = POP();
 			v = TOP();
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
@@ -1234,10 +1381,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 		  skip_decref_vx:
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_SUBTRACT:
+		TARGET(BINARY_SUBTRACT)
 			w = POP();
 			v = TOP();
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
@@ -1257,10 +1407,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_SUBSCR:
+		TARGET(BINARY_SUBSCR)
 			w = POP();
 			v = TOP();
 			if (PyList_CheckExact(v) && PyInt_CheckExact(w)) {
@@ -1281,93 +1434,117 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_LSHIFT:
+		TARGET(BINARY_LSHIFT)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Lshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_RSHIFT:
+		TARGET(BINARY_RSHIFT)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Rshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_AND:
+		TARGET(BINARY_AND)
 			w = POP();
 			v = TOP();
 			x = PyNumber_And(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_XOR:
+		TARGET(BINARY_XOR)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Xor(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case BINARY_OR:
+		TARGET(BINARY_OR)
 			w = POP();
 			v = TOP();
 			x = PyNumber_Or(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case LIST_APPEND:
+		TARGET(LIST_APPEND)
 			w = POP();
 			v = POP();
 			err = PyList_Append(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
-			if (err == 0) {
-				PREDICT(JUMP_ABSOLUTE);
-			}
-			else
+			if (err != 0) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			PREDICT(JUMP_ABSOLUTE);
+			DISPATCH();
 
-		case INPLACE_POWER:
+		TARGET(INPLACE_POWER)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlacePower(v, w, Py_None);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_MULTIPLY:
+		TARGET(INPLACE_MULTIPLY)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceMultiply(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_DIVIDE:
+		TARGET(INPLACE_DIVIDE)
 			if (!_Py_QnewFlag) {
 				w = POP();
 				v = TOP();
@@ -1375,42 +1552,56 @@ PyEval_EvalFrame(PyFrameObject *f)
 				Py_DECREF(v);
 				Py_DECREF(w);
 				SET_TOP(x);
-				if (x == NULL) why = WHY_EXCEPTION;
-				break;
+				if (x == NULL) {
+					why = WHY_EXCEPTION;
+					break;
+				}
+				DISPATCH();
 			}
-			/* -Qnew is in effect:	fall through to
-			   INPLACE_TRUE_DIVIDE */
-		case INPLACE_TRUE_DIVIDE:
+			/* -Qnew is in effect: jump to INPLACE_TRUE_DIVIDE */
+			goto _inplace_true_divide;
+
+		TARGET(INPLACE_TRUE_DIVIDE)
+		_inplace_true_divide:
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceTrueDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_FLOOR_DIVIDE:
+		TARGET(INPLACE_FLOOR_DIVIDE)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceFloorDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_MODULO:
+		TARGET(INPLACE_MODULO)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceRemainder(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_ADD:
+		TARGET(INPLACE_ADD)
 			w = POP();
 			v = TOP();
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
@@ -1437,10 +1628,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 		  skip_decref_v:
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_SUBTRACT:
+		TARGET(INPLACE_SUBTRACT)
 			w = POP();
 			v = TOP();
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
@@ -1460,92 +1654,121 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_LSHIFT:
+		TARGET(INPLACE_LSHIFT)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceLshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_RSHIFT:
+		TARGET(INPLACE_RSHIFT)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceRshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_AND:
+		TARGET(INPLACE_AND)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceAnd(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_XOR:
+		TARGET(INPLACE_XOR)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceXor(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case INPLACE_OR:
+		TARGET(INPLACE_OR)
 			w = POP();
 			v = TOP();
 			x = PyNumber_InPlaceOr(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case SLICE_NONE:
-		case SLICE_LEFT:
-		case SLICE_RIGHT:
-		case SLICE_BOTH:
-			if ((opcode-SLICE_NONE) & 2)
-				w = POP();
-			else
-				w = NULL;
-			if ((opcode-SLICE_NONE) & 1)
-				v = POP();
-			else
-				v = NULL;
+		TARGET(SLICE_NONE)
+			w = NULL;
+			v = NULL;
+			goto _slice_common;
+		TARGET(SLICE_LEFT)
+			w = NULL;
+			v = POP();
+			goto _slice_common;
+		TARGET(SLICE_RIGHT)
+			w = POP();
+			v = NULL;
+			goto _slice_common;
+		TARGET(SLICE_BOTH)
+			w = POP();
+			v = POP();
+		_slice_common:
 			u = TOP();
 			x = _PyEval_ApplySlice(u, v, w);
 			Py_DECREF(u);
 			Py_XDECREF(v);
 			Py_XDECREF(w);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case STORE_SLICE_NONE:
-		case STORE_SLICE_LEFT:
-		case STORE_SLICE_RIGHT:
-		case STORE_SLICE_BOTH:
-			if ((opcode-STORE_SLICE_NONE) & 2)
-				w = POP();
-			else
-				w = NULL;
-			if ((opcode-STORE_SLICE_NONE) & 1)
-				v = POP();
-			else
-				v = NULL;
+		TARGET(STORE_SLICE_NONE)
+			w = NULL;
+			v = NULL;
+			goto _store_slice_common;
+		TARGET(STORE_SLICE_LEFT)
+			w = NULL;
+			v = POP();
+			goto _store_slice_common;
+		TARGET(STORE_SLICE_RIGHT)
+			w = POP();
+			v = NULL;
+			goto _store_slice_common;
+		TARGET(STORE_SLICE_BOTH)
+			w = POP();
+			v = POP();
+		_store_slice_common:
 			u = POP();
 			t = POP();
 			err = _PyEval_AssignSlice(u, v, w, t); /* u[v:w] = t */
@@ -1553,31 +1776,42 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(u);
 			Py_XDECREF(v);
 			Py_XDECREF(w);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case DELETE_SLICE_NONE:
-		case DELETE_SLICE_LEFT:
-		case DELETE_SLICE_RIGHT:
-		case DELETE_SLICE_BOTH:
-			if ((opcode-DELETE_SLICE_NONE) & 2)
-				w = POP();
-			else
-				w = NULL;
-			if ((opcode-DELETE_SLICE_NONE) & 1)
-				v = POP();
-			else
-				v = NULL;
+		TARGET(DELETE_SLICE_NONE)
+			w = NULL;
+			v = NULL;
+			goto _delete_slice_common;
+		TARGET(DELETE_SLICE_LEFT)
+			w = NULL;
+			v = POP();
+			goto _delete_slice_common;
+		TARGET(DELETE_SLICE_RIGHT)
+			w = POP();
+			v = NULL;
+			goto _delete_slice_common;
+		TARGET(DELETE_SLICE_BOTH)
+			w = POP();
+			v = POP();
+			goto _delete_slice_common;
+		_delete_slice_common:
 			u = POP();
 			err = _PyEval_AssignSlice(u, v, w, (PyObject *)NULL);
 							/* del u[v:w] */
 			Py_DECREF(u);
 			Py_XDECREF(v);
 			Py_XDECREF(w);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case STORE_SUBSCR:
+		TARGET(STORE_SUBSCR)
 			w = TOP();
 			v = SECOND();
 			u = THIRD();
@@ -1587,10 +1821,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(u);
 			Py_DECREF(v);
 			Py_DECREF(w);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case DELETE_SUBSCR:
+		TARGET(DELETE_SUBSCR)
 			w = TOP();
 			v = SECOND();
 			STACKADJ(-2);
@@ -1598,49 +1835,50 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyObject_DelItem(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
 #ifdef CASE_TOO_BIG
 		default: switch (opcode) {
 #endif
-		case RAISE_VARARGS_ZERO:
-		case RAISE_VARARGS_ONE:
-		case RAISE_VARARGS_TWO:
-		case RAISE_VARARGS_THREE:
-			u = v = w = NULL;
-			switch (opcode-RAISE_VARARGS_ZERO) {
-			case 3:
-				u = POP(); /* traceback */
-				/* Fallthrough */
-			case 2:
-				v = POP(); /* value */
-				/* Fallthrough */
-			case 1:
-				w = POP(); /* exc */
-			case 0: /* Fallthrough */
-				why = do_raise(w, v, u);
-				break;
-			default:
-				PyErr_SetString(PyExc_SystemError,
-					   "bad RAISE_VARARGS oparg");
-				why = WHY_EXCEPTION;
-				break;
-			}
+		TARGET(RAISE_VARARGS_ZERO)
+			u = NULL;
+			v = NULL;
+			w = NULL;
+			goto _raise_varargs_common;
+		TARGET(RAISE_VARARGS_ONE)
+			u = NULL;
+			v = NULL;
+			w = POP();
+			goto _raise_varargs_common;
+		TARGET(RAISE_VARARGS_TWO)
+			u = NULL;
+			v = POP();
+			w = POP();
+			goto _raise_varargs_common;
+		TARGET(RAISE_VARARGS_THREE)
+			u = POP();
+			v = POP();
+			w = POP();
+		_raise_varargs_common:
+			why = do_raise(w, v, u);
 			break;
 
-		case RETURN_VALUE:
+		TARGET(RETURN_VALUE)
 			retval = POP();
 			why = WHY_RETURN;
 			goto fast_block_end;
 
-		case YIELD_VALUE:
+		TARGET(YIELD_VALUE)
 			retval = POP();
 			f->f_stacktop = stack_pointer;
 			why = WHY_YIELD;
 			goto fast_yield;
 
-		case POP_BLOCK:
+		TARGET(POP_BLOCK)
 			{
 				PyTryBlock *b = PyFrame_BlockPop(f);
 				while (STACK_LEVEL() > b->b_level) {
@@ -1648,10 +1886,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 					Py_DECREF(v);
 				}
 			}
-			break;
+			DISPATCH();
 
 		PREDICTED(END_FINALLY);
-		case END_FINALLY:
+		TARGET(END_FINALLY)
 			v = POP();
 			if (PyInt_Check(v)) {
 				why = (enum why_code) PyInt_AS_LONG(v);
@@ -1676,21 +1914,25 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			break;
 
-		case STORE_NAME:
+		TARGET(STORE_NAME)
 			x = POP();
 			err = _PyEval_StoreName(f, oparg, x);
-			if (err != 0)
+			if (err != 0) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			DISPATCH();
 
-		case DELETE_NAME:
+		TARGET(DELETE_NAME)
 			err = _PyEval_DeleteName(f, oparg);
-			if (err != 0)
+			if (err != 0) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			DISPATCH();
 
 		PREDICTED_WITH_ARG(UNPACK_SEQUENCE);
-		case UNPACK_SEQUENCE:
+		TARGET(UNPACK_SEQUENCE)
 			v = POP();
 			if (PyTuple_CheckExact(v) &&
 			    PyTuple_GET_SIZE(v) == oparg) {
@@ -1701,8 +1943,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 					Py_INCREF(w);
 					PUSH(w);
 				}
-				Py_DECREF(v);
-				break;
 			} else if (PyList_CheckExact(v) &&
 				   PyList_GET_SIZE(v) == oparg) {
 				PyObject **items = \
@@ -1716,14 +1956,16 @@ PyEval_EvalFrame(PyFrameObject *f)
 					stack_pointer + oparg) < 0) {
 				/* _PyEval_UnpackIterable() raised
 				   an exception */
+				Py_DECREF(v);
 				why = WHY_EXCEPTION;
+				break;
 			} else {
 				stack_pointer += oparg;
 			}
 			Py_DECREF(v);
-			break;
+			DISPATCH();
 
-		case STORE_ATTR:
+		TARGET(STORE_ATTR)
 			w = GETITEM(names, oparg);
 			v = TOP();
 			u = SECOND();
@@ -1731,43 +1973,55 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyObject_SetAttr(v, w, u); /* v.w = u */
 			Py_DECREF(v);
 			Py_DECREF(u);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case DELETE_ATTR:
+		TARGET(DELETE_ATTR)
 			w = GETITEM(names, oparg);
 			v = POP();
-			if (0 != PyObject_SetAttr(v, w, (PyObject *)NULL))
-							/* del v.w */
-				why = WHY_EXCEPTION;
+			/* del v.w */
+			err = PyObject_SetAttr(v, w, (PyObject *)NULL);
 			Py_DECREF(v);
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case STORE_GLOBAL:
+		TARGET(STORE_GLOBAL)
 			w = GETITEM(names, oparg);
 			v = POP();
 			err = PyDict_SetItem(f->f_globals, w, v);
 			Py_DECREF(v);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case DELETE_GLOBAL:
+		TARGET(DELETE_GLOBAL)
 			w = GETITEM(names, oparg);
-			if ((err = PyDict_DelItem(f->f_globals, w)) != 0) {
+			err = PyDict_DelItem(f->f_globals, w);
+			if (err != 0) {
 				_PyEval_RaiseForGlobalNameError(w);
 				why = WHY_EXCEPTION;
+				break;
 			}
-			break;
+			DISPATCH();
 
-		case LOAD_NAME:
+		TARGET(LOAD_NAME)
 			x = _PyEval_LoadName(f, oparg);
 			if (x == NULL) {
 				why = WHY_EXCEPTION;
+				break;
 			}
 			PUSH(x);
-			break;
+			DISPATCH();
 
-		case LOAD_GLOBAL:
+		TARGET(LOAD_GLOBAL)
 			w = GETITEM(names, oparg);
 			if (PyString_CheckExact(w)) {
 				/* Inline the PyDict_GetItem() calls.
@@ -1787,7 +2041,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
-						break;
+						DISPATCH();
 					}
 					d = (PyDictObject *)(f->f_builtins);
 					e = d->ma_lookup(d, w, hash);
@@ -1799,7 +2053,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
-						break;
+						DISPATCH();
 					}
 					goto load_global_error;
 				}
@@ -1817,30 +2071,30 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			Py_INCREF(x);
 			PUSH(x);
-			break;
+			DISPATCH();
 
-		case DELETE_FAST:
+		TARGET(DELETE_FAST)
 			x = GETLOCAL(oparg);
 			if (x != NULL) {
 				SETLOCAL(oparg, NULL);
-				break;
+				DISPATCH();
 			}
 			_PyEval_RaiseForUnboundLocal(f, oparg);
 			why = WHY_EXCEPTION;
 			break;
 
-		case LOAD_CLOSURE:
+		TARGET(LOAD_CLOSURE)
 			x = freevars[oparg];
 			Py_INCREF(x);
 			PUSH(x);
-			break;
+			DISPATCH();
 
-		case LOAD_DEREF:
+		TARGET(LOAD_DEREF)
 			x = freevars[oparg];
 			w = PyCell_Get(x);
 			if (w != NULL) {
 				PUSH(w);
-				break;
+				DISPATCH();
 			}
 			why = WHY_EXCEPTION;
 			/* Don't stomp existing exception */
@@ -1849,46 +2103,49 @@ PyEval_EvalFrame(PyFrameObject *f)
 			_PyEval_RaiseForUnboundFreeVar(f, oparg);
 			break;
 
-		case STORE_DEREF:
+		TARGET(STORE_DEREF)
 			w = POP();
 			x = freevars[oparg];
 			PyCell_Set(x, w);
 			Py_DECREF(w);
-			break;
+			DISPATCH();
 
-		case BUILD_TUPLE:
+		TARGET(BUILD_TUPLE)
 			x = PyTuple_New(oparg);
-			if (x != NULL) {
-				for (; --oparg >= 0;) {
-					w = POP();
-					PyTuple_SET_ITEM(x, oparg, w);
-				}
-				PUSH(x);
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
 				break;
 			}
-			why = WHY_EXCEPTION;
-			break;
+			for (; --oparg >= 0;) {
+				w = POP();
+				PyTuple_SET_ITEM(x, oparg, w);
+			}
+			PUSH(x);
+			DISPATCH();
 
-		case BUILD_LIST:
-			x =  PyList_New(oparg);
-			if (x != NULL) {
-				for (; --oparg >= 0;) {
-					w = POP();
-					PyList_SET_ITEM(x, oparg, w);
-				}
-				PUSH(x);
+		TARGET(BUILD_LIST)
+			x = PyList_New(oparg);
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
 				break;
 			}
-			why = WHY_EXCEPTION;
-			break;
+			for (; --oparg >= 0;) {
+				w = POP();
+				PyList_SET_ITEM(x, oparg, w);
+			}
+			PUSH(x);
+			DISPATCH();
 
-		case BUILD_MAP:
+		TARGET(BUILD_MAP)
 			x = _PyDict_NewPresized((Py_ssize_t)oparg);
 			PUSH(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case STORE_MAP:
+		TARGET(STORE_MAP)
 			w = TOP();     /* key */
 			u = SECOND();  /* value */
 			v = THIRD();   /* dict */
@@ -1897,19 +2154,25 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyDict_SetItem(v, w, u);  /* v[w] = u */
 			Py_DECREF(u);
 			Py_DECREF(w);
-			if (err != 0) why = WHY_EXCEPTION;
-			break;
+			if (err != 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case LOAD_ATTR:
+		TARGET(LOAD_ATTR)
 			w = GETITEM(names, oparg);
 			v = TOP();
 			x = PyObject_GetAttr(v, w);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 
-		case COMPARE_OP:
+		TARGET(COMPARE_OP)
 			w = POP();
 			v = TOP();
 			if (PyInt_CheckExact(w) && PyInt_CheckExact(v)) {
@@ -1945,104 +2208,108 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			PREDICT(POP_JUMP_IF_FALSE);
 			PREDICT(POP_JUMP_IF_TRUE);
-			break;
+			DISPATCH();
 
-		case JUMP_FORWARD:
+		TARGET(JUMP_FORWARD)
 			JUMPBY(oparg);
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 
 		PREDICTED_WITH_ARG(POP_JUMP_IF_FALSE);
-		case POP_JUMP_IF_FALSE:
+		TARGET(POP_JUMP_IF_FALSE)
 			w = POP();
 			if (w == Py_True) {
 				Py_DECREF(w);;
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			if (w == Py_False) {
 				Py_DECREF(w);
 				JUMPTO(oparg);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			err = PyObject_IsTrue(w);
 			Py_DECREF(w);
 			if (err < 0) {
 				why = WHY_EXCEPTION;
+				break;
 			}
 			else if (err == 0)
 				JUMPTO(oparg);
-			break;
+			DISPATCH();
 
 		PREDICTED_WITH_ARG(POP_JUMP_IF_TRUE);
-		case POP_JUMP_IF_TRUE:
+		TARGET(POP_JUMP_IF_TRUE)
 			w = POP();
 			if (w == Py_False) {
 				Py_DECREF(w);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			if (w == Py_True) {
 				Py_DECREF(w);
 				JUMPTO(oparg);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			err = PyObject_IsTrue(w);
 			Py_DECREF(w);
 			if (err < 0) {
 				why = WHY_EXCEPTION;
+				break;
 			}
 			else if (err > 0) {
 				JUMPTO(oparg);
 			}
-			break;
+			DISPATCH();
 
-		case JUMP_IF_FALSE_OR_POP:
+		TARGET(JUMP_IF_FALSE_OR_POP)
 			w = TOP();
 			if (w == Py_True) {
 				STACKADJ(-1);
 				Py_DECREF(w);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			if (w == Py_False) {
 				JUMPTO(oparg);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			err = PyObject_IsTrue(w);
-			if (err < 0)
+			if (err < 0) {
 				why = WHY_EXCEPTION;
+				break;
+			}
 			else if (err > 0) {
 				STACKADJ(-1);
 				Py_DECREF(w);
-				err = 0;
 			}
 			else
 				JUMPTO(oparg);
-			break;
+			DISPATCH();
 
-		case JUMP_IF_TRUE_OR_POP:
+		TARGET(JUMP_IF_TRUE_OR_POP)
 			w = TOP();
 			if (w == Py_False) {
 				STACKADJ(-1);
 				Py_DECREF(w);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			if (w == Py_True) {
 				JUMPTO(oparg);
-				goto fast_next_opcode;
+				FAST_DISPATCH();
 			}
 			err = PyObject_IsTrue(w);
-			if (err < 0)
+			if (err < 0) {
 				why = WHY_EXCEPTION;
+				break;
+			}
 			else if (err > 0) {
-				err = 0;
 				JUMPTO(oparg);
 			}
 			else {
 				STACKADJ(-1);
 				Py_DECREF(w);
 			}
-			break;
+			DISPATCH();
 
 		PREDICTED_WITH_ARG(JUMP_ABSOLUTE);
-		case JUMP_ABSOLUTE:
+		TARGET(JUMP_ABSOLUTE)
 			JUMPTO(oparg);
 #if FAST_LOOPS
 			/* Enabling this path speeds-up all while and for-loops by bypassing
@@ -2052,27 +2319,27 @@ PyEval_EvalFrame(PyFrameObject *f)
                            the speed-up and do not need break checking inside tight loops (ones
                            that contain only instructions ending with goto fast_next_opcode).
                         */
-			goto fast_next_opcode;
+			FAST_DISPATCH();
 #else
-			break;
+			DISPATCH();
 #endif
 
-		case GET_ITER:
+		TARGET(GET_ITER)
 			/* before: [obj]; after [getiter(obj)] */
 			v = TOP();
 			x = PyObject_GetIter(v);
 			Py_DECREF(v);
-			if (x != NULL) {
-				SET_TOP(x);
-				PREDICT(FOR_ITER);
+			if (x == NULL) {
+				STACKADJ(-1);
+				why = WHY_EXCEPTION;
 				break;
 			}
-			STACKADJ(-1);
-			why = WHY_EXCEPTION;
-			break;
+			SET_TOP(x);
+			PREDICT(FOR_ITER);
+			DISPATCH();
 
 		PREDICTED_WITH_ARG(FOR_ITER);
-		case FOR_ITER:
+		TARGET(FOR_ITER)
 			/* before: [iter]; after: [iter, iter()] *or* [] */
 			v = TOP();
 			x = (*v->ob_type->tp_iternext)(v);
@@ -2080,7 +2347,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				PUSH(x);
 				PREDICT(STORE_FAST);
 				PREDICT(UNPACK_SEQUENCE);
-				break;
+				DISPATCH();
 			}
 			if (PyErr_Occurred()) {
 				if (!PyErr_ExceptionMatches(
@@ -2094,13 +2361,13 @@ PyEval_EvalFrame(PyFrameObject *f)
  			v = POP();
 			Py_DECREF(v);
 			JUMPBY(oparg);
-			break;
+			DISPATCH();
 
-		case BREAK_LOOP:
+		TARGET(BREAK_LOOP)
 			why = WHY_BREAK;
 			goto fast_block_end;
 
-		case CONTINUE_LOOP:
+		TARGET(CONTINUE_LOOP)
 			retval = PyInt_FromLong(oparg);
 			if (!retval) {
 				why = WHY_EXCEPTION;
@@ -2109,9 +2376,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 			why = WHY_CONTINUE;
 			goto fast_block_end;
 
-		case SETUP_LOOP:
-		case SETUP_EXCEPT:
-		case SETUP_FINALLY:
+		TARGET_WITH_IMPL(SETUP_LOOP, _setup_finally)
+		TARGET_WITH_IMPL(SETUP_EXCEPT, _setup_finally)
+		TARGET(SETUP_FINALLY)
+		_setup_finally:
 			/* NOTE: If you add any new block-setup opcodes that
 		           are not try/except/finally handlers, you may need
 		           to update the PyGen_NeedsFinalizing() function.
@@ -2119,9 +2387,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 			PyFrame_BlockSetup(f, opcode, INSTR_OFFSET() + oparg,
 					   STACK_LEVEL());
-			break;
+			DISPATCH();
 
-		case WITH_CLEANUP:
+		TARGET(WITH_CLEANUP)
 		{
 			/* At the top of the stack are 1-3 values indicating
 			   how/why we entered the finally clause:
@@ -2209,10 +2477,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 				   above. Let END_FINALLY do its thing */
 			}
 			PREDICT(END_FINALLY);
-			break;
+			DISPATCH();
 		}
 
-		case CALL_FUNCTION:
+		TARGET(CALL_FUNCTION)
 		{
 			PyObject **sp;
 			PCALL(PCALL_ALL);
@@ -2224,23 +2492,48 @@ PyEval_EvalFrame(PyFrameObject *f)
 #endif
 			stack_pointer = sp;
 			PUSH(x);
-			if (x == NULL) why = WHY_EXCEPTION;
-			break;
+			if (x == NULL) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
 		}
 
-		case CALL_FUNCTION_VAR:
-		case CALL_FUNCTION_KW:
-		case CALL_FUNCTION_VAR_KW:
-			if (_PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-				(opcode - CALL_FUNCTION) & 3) < 0)
+		TARGET(CALL_FUNCTION_VAR)
+			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
+			                                CALL_FLAG_VAR);
+			if (err < 0) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			DISPATCH();
 
-		case MAKE_CLOSURE:
+		TARGET(CALL_FUNCTION_KW)
+			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
+			                                CALL_FLAG_KW);
+			if (err < 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
+
+		TARGET(CALL_FUNCTION_VAR_KW)
+			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
+					        CALL_FLAG_VAR | CALL_FLAG_KW);
+			if (err < 0) {
+				why = WHY_EXCEPTION;
+				break;
+			}
+			DISPATCH();
+
+		TARGET(MAKE_CLOSURE)
 		{
 			v = POP(); /* code object */
-			if ((x = PyFunction_New(v, f->f_globals)) == NULL)
+			x = PyFunction_New(v, f->f_globals);
+			if (x == NULL) {
 				why = WHY_EXCEPTION;
+				break;
+			}
 			Py_DECREF(v);
 			if (x != NULL) {
 				v = POP();
@@ -2267,25 +2560,29 @@ PyEval_EvalFrame(PyFrameObject *f)
 					/* Can't happen unless
                                            PyFunction_SetDefaults changes. */
 					why = WHY_EXCEPTION;
+					Py_DECREF(v);
+					break;
 				}
 				Py_DECREF(v);
 			}
 			PUSH(x);
-			break;
+			DISPATCH();
 		}
 
-		case BUILD_SLICE_TWO:
+		TARGET(BUILD_SLICE_TWO)
 			v = POP();
 			u = TOP();
 			x = PySlice_New(u, v, NULL);
 			Py_DECREF(u);
 			Py_DECREF(v);
 			SET_TOP(x);
-			if (x == NULL)
+			if (x == NULL) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			DISPATCH();
 
-		case BUILD_SLICE_THREE:
+		TARGET(BUILD_SLICE_THREE)
 			w = POP();
 			v = POP();
 			u = TOP();
@@ -2294,15 +2591,20 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
-			if (x == NULL)
+			if (x == NULL) {
 				why = WHY_EXCEPTION;
-			break;
+				break;
+			}
+			DISPATCH();
 
-		case EXTENDED_ARG:
+		TARGET(EXTENDED_ARG)
 			opcode = NEXTOP();
 			oparg = oparg<<16 | NEXTARG();
 			goto dispatch_opcode;
 
+#ifdef USE_COMPUTED_GOTOS
+		_unknown_opcode:
+#endif
 		default:
 			fprintf(stderr,
 				"XXX lineno: %d, opcode: %d\n",

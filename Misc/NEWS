@@ -14,6 +14,9 @@ Core and Builtins
 
 - Unladen Swallow 2009Q2 replaces Python's custom VM with a JIT based on LLVM.
 
+- Revert the vmgen-generated interpretation loop added in 2009Q1 in favour
+  of the computed-goto patch used upstream (which is slightly slower, but
+  more maintainable.)
 
 What's New in Unladen Swallow 2009Q1 (Python 2.6.1)
 ===================================================
