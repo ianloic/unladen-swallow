@@ -2,9 +2,9 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="9,00"
-	Name="_testcapi"
-	ProjectGUID="{6901D91C-6E48-4BB7-9FEC-700C8131DF1D}"
-	RootNamespace="_testcapi"
+	Name="_llvm"
+	ProjectGUID="{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}"
+	RootNamespace="_llvm"
 	Keyword="Win32Proj"
 	TargetFrameworkVersion="196613"
 	>
@@ -42,7 +42,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -55,7 +55,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Debug"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -103,7 +104,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -116,7 +117,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Debug"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -164,7 +166,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -177,7 +179,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -226,7 +229,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -239,7 +242,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -287,7 +291,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -300,7 +304,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -349,7 +354,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -362,7 +367,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
 				TargetMachine="17"
 			/>
 			<Tool
@@ -411,7 +417,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -424,7 +430,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
 			/>
 			<Tool
 				Name="VCALinkTool"
@@ -473,7 +480,7 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NO_STATIC_MEMOTABLE"
+				AdditionalIncludeDirectories="..\Util\llvm\include;..\Util\llvm\win32"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -486,7 +493,8 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				BaseAddress="0x1e1F0000"
+				AdditionalDependencies="support.lib System.lib"
+				AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
 				TargetMachine="17"
 			/>
 			<Tool
@@ -519,11 +527,7 @@
 			Name="Source Files"
 			>
 			<File
-				RelativePath="..\Modules\_testcapimodule.c"
-				>
-			</File>
-			<File
-				RelativePath="..\Modules\cPickle.c"
+				RelativePath="..\Modules\_llvm.cc"
 				>
 			</File>
 		</Filter>

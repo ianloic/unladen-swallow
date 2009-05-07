@@ -132,6 +132,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "_multiprocessing", "_multip
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "kill_python", "kill_python.vcproj", "{6DE10744-E396-40A5-B4E2-1B69AA7C8D31}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "_llvm", "_llvm.vcproj", "{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}"
+	ProjectSection(ProjectDependencies) = postProject
+		{CF7AC3D1-E2DF-41D2-BEA6-1E2556CDEA26} = {CF7AC3D1-E2DF-41D2-BEA6-1E2556CDEA26}
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -552,6 +557,22 @@ Global
 		{6DE10744-E396-40A5-B4E2-1B69AA7C8D31}.Release|Win32.Build.0 = Release|Win32
 		{6DE10744-E396-40A5-B4E2-1B69AA7C8D31}.Release|x64.ActiveCfg = Release|x64
 		{6DE10744-E396-40A5-B4E2-1B69AA7C8D31}.Release|x64.Build.0 = Release|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Debug|Win32.ActiveCfg = Debug|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Debug|Win32.Build.0 = Debug|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Debug|x64.ActiveCfg = Debug|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Debug|x64.Build.0 = Debug|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGInstrument|Win32.ActiveCfg = PGInstrument|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGInstrument|Win32.Build.0 = PGInstrument|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGInstrument|x64.ActiveCfg = PGInstrument|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGInstrument|x64.Build.0 = PGInstrument|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGUpdate|Win32.ActiveCfg = PGUpdate|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGUpdate|Win32.Build.0 = PGUpdate|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGUpdate|x64.ActiveCfg = PGUpdate|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.PGUpdate|x64.Build.0 = PGUpdate|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Release|Win32.ActiveCfg = Release|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Release|Win32.Build.0 = Release|Win32
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Release|x64.ActiveCfg = Release|x64
+		{1D4309A5-D084-4DBA-8895-51D0C92AE3C8}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

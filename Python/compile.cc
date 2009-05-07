@@ -2082,7 +2082,7 @@ compiler_import(struct compiler *c, stmt_ty s)
 		else {
 			identifier tmp = alias->name;
 			const char *base = PyString_AS_STRING(alias->name);
-			char *dot = strchr(base, '.');
+			const char *dot = strchr(base, '.');
 			if (dot)
 				tmp = PyString_FromStringAndSize(base,
 								 dot - base);

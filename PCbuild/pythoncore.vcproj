@@ -43,8 +43,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -63,8 +64,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -118,8 +121,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -138,8 +142,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -196,8 +202,9 @@
 				Optimization="0"
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="3"
 			/>
 			<Tool
@@ -216,8 +223,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Debug"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName)_d.pdb"
 				BaseAddress="0x1e000000"
@@ -274,8 +283,9 @@
 				Optimization="0"
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="3"
 			/>
 			<Tool
@@ -294,8 +304,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Debug"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName)_d.pdb"
 				BaseAddress="0x1e000000"
@@ -348,8 +360,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -368,8 +381,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -423,8 +438,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -443,8 +459,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -498,8 +516,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -518,8 +537,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\Win32\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -573,8 +594,9 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\win32"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				ExceptionHandling="1"
 				RuntimeLibrary="2"
 			/>
 			<Tool
@@ -593,8 +615,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o"
+				AdditionalDependencies="getbuildinfo.o Analysis.lib Bitcode.lib CodeGen.lib ExecutionEngine.lib support.lib System.lib Target.lib Transforms.lib VMCore.lib x86.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
+                AdditionalLibraryDirectories="..\Util\llvm\win32\bin\x64\Release"
+				ForceSymbolReferences="_X86TargetMachineModule"
 				IgnoreDefaultLibraryNames="libc"
 				ProgramDatabaseFile="$(OutDir)$(PyDllName).pdb"
 				BaseAddress="0x1e000000"
@@ -630,6 +654,10 @@
 		<Filter
 			Name="Include"
 			>
+			<File
+				RelativePath="..\Include\_llvmfunctionobject.h"
+				>
+			</File>
 			<File
 				RelativePath="..\Include\abstract.h"
 				>
@@ -1359,6 +1387,10 @@
 			Name="Objects"
 			>
 			<File
+				RelativePath="..\Objects\_llvmfunctionobject.cc"
+				>
+			</File>
+			<File
 				RelativePath="..\Objects\abstract.c"
 				>
 			</File>
@@ -1647,7 +1679,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\ceval.c"
+				RelativePath="..\Python\ceval.cc"
 				>
 			</File>
 			<File
@@ -1655,7 +1687,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\compile.c"
+				RelativePath="..\Python\compile.cc"
 				>
 			</File>
 			<File
@@ -1711,6 +1743,18 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Python\global_llvm_data.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Python\global_llvm_data.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Python\global_llvm_data_fwd.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Python\graminit.c"
 				>
 			</File>
@@ -1724,6 +1768,18 @@
 			</File>
 			<File
 				RelativePath="..\Python\importdl.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Python\initial_llvm_module.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Python\ll_compile.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Python\ll_compile.h"
 				>
 			</File>
 			<File

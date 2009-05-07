@@ -153,6 +153,11 @@ PyAPI_FUNC(int) _PyEval_SliceIndex(PyObject *, Py_ssize_t *);
 PyAPI_FUNC(void) _PyEval_SetExcInfo(PyThreadState *tstate, PyObject *type,
 				    PyObject *value, PyObject *tb);
 
+PyAPI_FUNC(void) _PyEval_RaiseForUnboundLocal(struct _frame *frame,
+                                              int var_index);
+PyAPI_FUNC(int) _PyEval_CheckedExceptionMatches(PyObject *exc,
+                                                PyObject *exc_type);
+
 #ifdef __cplusplus
 }
 #endif
