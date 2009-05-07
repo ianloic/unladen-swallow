@@ -1,14 +1,14 @@
 #===- test/Makefile ----------------------------------------*- Makefile -*--===#
-# 
+#
 #                     The LLVM Compiler Infrastructure
 #
 # This file is distributed under the University of Illinois Open Source
 # License. See LICENSE.TXT for details.
-# 
+#
 #===------------------------------------------------------------------------===#
 
 LEVEL = ..
-DIRS  = 
+DIRS  =
 
 #
 # Make Dejagnu the default for testing
@@ -51,6 +51,7 @@ endif
 ifneq ($(RUNTEST),)
 check-local:: site.exp
 	( ulimit -t 600 ; ulimit -d 512000 ; \
+	  ulimit -m 512000 ; ulimit -v 512000 ; \
 	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(PATH)" \
 	  $(RUNTEST) $(RUNTESTFLAGS) )
 else
@@ -74,6 +75,7 @@ check-one: site.exp $(TCLSH)
 	  echo "source $(LLVM_SRC_ROOT)/test/lib/llvm.exp" ; \
 	  echo "RunLLVMTests $(TESTPATH)" ) | \
 	( ulimit -t 600 ; ulimit -d 512000 ; \
+	  ulimit -m 512000 ; ulimit -v 512000 ; \
 	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(PATH)" \
 	  $(TCLSH) )
 endif
@@ -86,6 +88,11 @@ ifeq ($(OS),Darwin)
 DSYMUTIL=dsymutil
 else
 DSYMUTIL=true
+endif
+ifdef TargetCommonOpts
+BUGPOINT_TOPTS="-gcc-tool-args $(TargetCommonOpts)"
+else
+BUGPOINT_TOPTS=""
 endif
 
 FORCE:
@@ -108,12 +115,13 @@ site.exp: FORCE
 	@echo 'set objdir "$(LLVM_OBJ_ROOT)/test"' >>site.tmp
 	@echo 'set gccpath "$(CC)"' >>site.tmp
 	@echo 'set gxxpath "$(CXX)"' >>site.tmp
-	@echo 'set compile_c "$(CC) $(CPP.Flags) $(CompileCommonOpts) -c "' >>site.tmp
-	@echo 'set compile_cxx "$(CXX) $(CPP.Flags) $(CXX.Flags) $(CompileCommonOpts) -c"' >> site.tmp
-	@echo 'set link "$(CXX) $(CPP.Flags) $(CXX.Flags) $(CompileCommonOpts) $(LD.Flags)"' >>site.tmp
-	@echo 'set llvmgcc "$(LLVMGCC) $(EXTRA_OPTIONS)"' >> site.tmp
-	@echo 'set llvmgxx "$(LLVMGCC) $(EXTRA_OPTIONS)"' >> site.tmp
+	@echo 'set compile_c "' $(CC) $(CPP.Flags) $(TargetCommonOpts) $(CompileCommonOpts) -c '"' >>site.tmp
+	@echo 'set compile_cxx "' $(CXX) $(CPP.Flags) $(CXX.Flags) $(TargetCommonOpts) $(CompileCommonOpts) -c '"' >> site.tmp
+	@echo 'set link "' $(CXX) $(CPP.Flags) $(CXX.Flags) $(TargetCommonOpts) $(CompileCommonOpts) $(LD.Flags) '"' >>site.tmp
+	@echo 'set llvmgcc "$(LLVMGCC) $(TargetCommonOpts) $(EXTRA_OPTIONS)"' >> site.tmp
+	@echo 'set llvmgxx "$(LLVMGCC) $(TargetCommonOpts) $(EXTRA_OPTIONS)"' >> site.tmp
 	@echo 'set llvmgccmajvers "$(LLVMGCC_MAJVERS)"' >> site.tmp
+	@echo 'set bugpoint_topts $(BUGPOINT_TOPTS)' >> site.tmp
 	@echo 'set shlibext "$(SHLIBEXT)"' >> site.tmp
 	@echo 'set ocamlc "$(OCAMLC) -cc $(CXX) -I $(LibDir)/ocaml"' >> site.tmp
 	@echo 'set valgrind "$(VALGRIND)"' >> site.tmp

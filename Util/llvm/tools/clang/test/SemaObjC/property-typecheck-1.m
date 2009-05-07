@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 @interface A
 -(float) x;	// expected-note {{declared at}}
@@ -13,7 +13,7 @@
 -(int) moo {
   return 0;
 }
--(void) setMoo: (float) x { // expected-warning {{conflicting types for 'setMoo:'}}
+-(void) setMoo: (float) x { // expected-warning {{conflicting parameter types in implementation of 'setMoo:': 'int' vs 'float'}}
 }
 @end
 

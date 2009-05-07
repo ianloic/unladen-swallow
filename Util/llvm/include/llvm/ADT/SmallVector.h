@@ -17,9 +17,9 @@
 #include "llvm/ADT/iterator.h"
 #include "llvm/Support/type_traits.h"
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <memory>
-#include <cassert>
 
 #ifdef _MSC_VER
 namespace std {
@@ -75,7 +75,7 @@ protected:
   // Space after 'FirstEl' is clobbered, do not add any instance vars after it.
 public:
   // Default ctor - Initialize to empty.
-  SmallVectorImpl(unsigned N)
+  explicit SmallVectorImpl(unsigned N)
     : Begin(reinterpret_cast<T*>(&FirstEl)),
       End(reinterpret_cast<T*>(&FirstEl)),
       Capacity(reinterpret_cast<T*>(&FirstEl)+N) {
@@ -293,15 +293,16 @@ public:
     // Uninvalidate the iterator.
     I = begin()+InsertElt;
 
-    // If we already have this many elements in the collection, append the
-    // dest elements at the end, then copy over the appropriate elements.  Since
-    // we already reserved space, we know that this won't reallocate the vector.
-    if (size() >= NumToInsert) {
+    // If there are more elements between the insertion point and the end of the
+    // range than there are being inserted, we can use a simple approach to
+    // insertion.  Since we already reserved space, we know that this won't
+    // reallocate the vector.
+    if (size_t(end()-I) >= NumToInsert) {
       T *OldEnd = End;
       append(End-NumToInsert, End);
 
       // Copy the existing elements that get replaced.
-      std::copy(I, OldEnd-NumToInsert, I+NumToInsert);
+      std::copy_backward(I, OldEnd-NumToInsert, OldEnd);
 
       std::fill_n(I, NumToInsert, Elt);
       return I;
@@ -341,15 +342,16 @@ public:
     // Uninvalidate the iterator.
     I = begin()+InsertElt;
 
-    // If we already have this many elements in the collection, append the
-    // dest elements at the end, then copy over the appropriate elements.  Since
-    // we already reserved space, we know that this won't reallocate the vector.
-    if (size() >= NumToInsert) {
+    // If there are more elements between the insertion point and the end of the
+    // range than there are being inserted, we can use a simple approach to
+    // insertion.  Since we already reserved space, we know that this won't
+    // reallocate the vector.
+    if (size_t(end()-I) >= NumToInsert) {
       T *OldEnd = End;
       append(End-NumToInsert, End);
 
       // Copy the existing elements that get replaced.
-      std::copy(I, OldEnd-NumToInsert, I+NumToInsert);
+      std::copy_backward(I, OldEnd-NumToInsert, OldEnd);
 
       std::copy(From, To, I);
       return I;

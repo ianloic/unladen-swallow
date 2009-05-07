@@ -22,27 +22,6 @@
 #include "llvm/ADT/StringExtras.h"
 using namespace llvm;
 
-BasicBlock *ilist_traits<BasicBlock>::createSentinel() {
-  BasicBlock *Ret = BasicBlock::Create();
-  // This should not be garbage monitored.
-  LeakDetector::removeGarbageObject(Ret);
-  return Ret;
-}
-
-iplist<BasicBlock> &ilist_traits<BasicBlock>::getList(Function *F) {
-  return F->getBasicBlockList();
-}
-
-Argument *ilist_traits<Argument>::createSentinel() {
-  Argument *Ret = new Argument(Type::Int32Ty);
-  // This should not be garbage monitored.
-  LeakDetector::removeGarbageObject(Ret);
-  return Ret;
-}
-
-iplist<Argument> &ilist_traits<Argument>::getList(Function *F) {
-  return F->getArgumentList();
-}
 
 // Explicit instantiations of SymbolTableListTraits since some of the methods
 // are not in the public header file...
@@ -175,7 +154,7 @@ Function::Function(const FunctionType *Ty, LinkageTypes Linkage,
     ParentModule->getFunctionList().push_back(this);
 
   // Ensure intrinsics have the right parameter attributes.
-  if (unsigned IID = getIntrinsicID(true))
+  if (unsigned IID = getIntrinsicID())
     setAttributes(Intrinsic::getAttributes(Intrinsic::ID(IID)));
 
 }
@@ -304,7 +283,7 @@ void Function::copyAttributesFrom(const GlobalValue *Src) {
 /// particular intrinsic functions which correspond to this value are defined in
 /// llvm/Intrinsics.h.
 ///
-unsigned Function::getIntrinsicID(bool noAssert) const {
+unsigned Function::getIntrinsicID() const {
   const ValueName *ValName = this->getValueName();
   if (!ValName)
     return 0;
@@ -315,12 +294,9 @@ unsigned Function::getIntrinsicID(bool noAssert) const {
       || Name[2] != 'v' || Name[3] != 'm')
     return 0;  // All intrinsics start with 'llvm.'
 
-  assert((Len != 5 || noAssert) && "'llvm.' is an invalid intrinsic name!");
-
 #define GET_FUNCTION_RECOGNIZER
 #include "llvm/Intrinsics.gen"
 #undef GET_FUNCTION_RECOGNIZER
-  assert(noAssert && "Invalid LLVM intrinsic name");
   return 0;
 }
 
@@ -359,6 +335,16 @@ const FunctionType *Intrinsic::getType(ID id, const Type **Tys,
   return FunctionType::get(ResultTy, ArgTys, IsVarArg); 
 }
 
+bool Intrinsic::isOverloaded(ID id) {
+  const bool OTable[] = {
+    false,
+#define GET_INTRINSIC_OVERLOAD_TABLE
+#include "llvm/Intrinsics.gen"
+#undef GET_INTRINSIC_OVERLOAD_TABLE
+  };
+  return OTable[id];
+}
+
 /// This defines the "Intrinsic::getAttributes(ID id)" method.
 #define GET_INTRINSIC_ATTRIBUTES
 #include "llvm/Intrinsics.gen"
@@ -372,5 +358,10 @@ Function *Intrinsic::getDeclaration(Module *M, ID id, const Type **Tys,
     cast<Function>(M->getOrInsertFunction(getName(id, Tys, numTys),
                                           getType(id, Tys, numTys)));
 }
+
+// This defines the "Intrinsic::getIntrinsicForGCCBuiltin()" method.
+#define GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
+#include "llvm/Intrinsics.gen"
+#undef GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
 
 // vim: sw=2 ai

@@ -16,6 +16,8 @@
 #define LLVM_CLANG_AST_BUILTINS_H
 
 #include <cstring>
+#include <string>
+#include "llvm/ADT/SmallVector.h"
 
 namespace clang {
   class TargetInfo;
@@ -32,8 +34,9 @@ enum ID {
 };
 
 struct Info {
-  const char *Name, *Type, *Attributes;
-  
+  const char *Name, *Type, *Attributes, *HeaderName;
+  bool Suppressed;
+
   bool operator==(const Info &RHS) const {
     return !strcmp(Name, RHS.Name) &&
            !strcmp(Type, RHS.Type) &&
@@ -49,11 +52,19 @@ class Context {
   unsigned NumTSRecords;
 public:
   Context() : TSRecords(0), NumTSRecords(0) {}
-  
+
+  /// \brief Load all of the target builtins. This should be called
+  /// prior to initializing the builtin identifiers.
+  void InitializeTargetBuiltins(const TargetInfo &Target);
+
   /// InitializeBuiltins - Mark the identifiers for all the builtins with their
   /// appropriate builtin ID # and mark any non-portable builtin identifiers as
   /// such.
-  void InitializeBuiltins(IdentifierTable &Table, const TargetInfo &Target);
+  void InitializeBuiltins(IdentifierTable &Table, bool NoBuiltins = false);
+
+  /// \brief Popular the vector with the names of all of the builtins.
+  void GetBuiltinNames(llvm::SmallVectorImpl<const char *> &Names,
+                       bool NoBuiltins);
   
   /// Builtin::GetName - Return the identifier name for the specified builtin,
   /// e.g. "__builtin_abs".
@@ -78,14 +89,45 @@ public:
     return strchr(GetRecord(ID).Attributes, 'F') != 0;
   }
   
+  /// \brief Determines whether this builtin is a predefined libc/libm
+  /// function, such as "malloc", where we know the signature a
+  /// priori.
+  bool isPredefinedLibFunction(unsigned ID) const {
+    return strchr(GetRecord(ID).Attributes, 'f') != 0;
+  }
+
+  /// \brief If this is a library function that comes from a specific
+  /// header, retrieve that header name.
+  const char *getHeaderName(unsigned ID) const {
+    return GetRecord(ID).HeaderName;
+  }
+
+  /// \brief Determine whether this builtin is like printf in its
+  /// formatting rules and, if so, set the index to the format string
+  /// argument and whether this function as a va_list argument.
+  bool isPrintfLike(unsigned ID, unsigned &FormatIdx, bool &HasVAListArg);
+
   /// hasVAListUse - Return true of the specified builtin uses __builtin_va_list
   /// as an operand or return type.
   bool hasVAListUse(unsigned ID) const {
     return strpbrk(GetRecord(ID).Type, "Aa") != 0;
   }
   
+  /// isConstWithoutErrno - Return true if this function has no side
+  /// effects and doesn't read memory, except for possibly errno. Such
+  /// functions can be const when the MathErrno lang option is
+  /// disabled.
+  bool isConstWithoutErrno(unsigned ID) const {
+    return strchr(GetRecord(ID).Attributes, 'e') != 0;
+  }
+
   /// GetBuiltinType - Return the type for the specified builtin.
-  QualType GetBuiltinType(unsigned ID, ASTContext &Context) const;
+  enum GetBuiltinTypeError {
+    GE_None, //< No error
+    GE_Missing_FILE //< Missing the FILE type from <stdio.h>
+  };
+  QualType GetBuiltinType(unsigned ID, ASTContext &Context,
+                          GetBuiltinTypeError &Error) const;
 private:
   const Info &GetRecord(unsigned ID) const;
 };

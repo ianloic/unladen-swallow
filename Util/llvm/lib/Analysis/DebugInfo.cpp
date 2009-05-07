@@ -20,12 +20,56 @@
 #include "llvm/Instructions.h"
 #include "llvm/Module.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/Streams.h"
 using namespace llvm;
+using namespace llvm::dwarf;
 
 //===----------------------------------------------------------------------===//
 // DIDescriptor
 //===----------------------------------------------------------------------===//
+
+/// ValidDebugInfo - Return true if V represents valid debug info value.
+bool DIDescriptor::ValidDebugInfo(Value *V, CodeGenOpt::Level OptLevel) {
+  if (!V)
+    return false;
+
+  GlobalVariable *GV = dyn_cast<GlobalVariable>(V->stripPointerCasts());
+  if (!GV)
+    return false;
+
+  if (!GV->hasInternalLinkage () && !GV->hasLinkOnceLinkage())
+    return false;
+
+  DIDescriptor DI(GV);
+
+  // Check current version. Allow Version6 for now.
+  unsigned Version = DI.getVersion();
+  if (Version != LLVMDebugVersion && Version != LLVMDebugVersion6)
+    return false;
+
+  unsigned Tag = DI.getTag();
+  switch (Tag) {
+  case DW_TAG_variable:
+    assert(DIVariable(GV).Verify() && "Invalid DebugInfo value");
+    break;
+  case DW_TAG_compile_unit:
+    assert(DICompileUnit(GV).Verify() && "Invalid DebugInfo value");
+    break;
+  case DW_TAG_subprogram:
+    assert(DISubprogram(GV).Verify() && "Invalid DebugInfo value");
+    break;
+  case DW_TAG_lexical_block:
+    /// FIXME. This interfers with the quality of generated code when
+    /// during optimization.
+    if (OptLevel != CodeGenOpt::None)
+      return false;
+  default:
+    break;
+  }
+
+  return true;
+}
 
 DIDescriptor::DIDescriptor(GlobalVariable *gv, unsigned RequiredTag) {
   GV = gv;
@@ -35,17 +79,23 @@ DIDescriptor::DIDescriptor(GlobalVariable *gv, unsigned RequiredTag) {
     GV = 0;
 }
 
+const std::string &
+DIDescriptor::getStringField(unsigned Elt, std::string &Result) const {
+  if (GV == 0) {
+    Result.clear();
+    return Result;
+  }
 
-std::string DIDescriptor::getStringField(unsigned Elt) const {
-  if (GV == 0) return "";
   Constant *C = GV->getInitializer();
-  if (C == 0 || Elt >= C->getNumOperands())
-    return "";
+  if (C == 0 || Elt >= C->getNumOperands()) {
+    Result.clear();
+    return Result;
+  }
   
-  std::string Result;
   // Fills in the string if it succeeds
   if (!GetConstantStringInfo(C->getOperand(Elt), Result))
     Result.clear();
+
   return Result;
 }
 
@@ -58,7 +108,6 @@ uint64_t DIDescriptor::getUInt64Field(unsigned Elt) const {
     return CI->getZExtValue();
   return 0;
 }
-
 
 DIDescriptor DIDescriptor::getDescriptorField(unsigned Elt) const {
   if (GV == 0) return DIDescriptor();
@@ -145,6 +194,7 @@ bool DIType::isCompositeType(unsigned TAG) {
   case dwarf::DW_TAG_enumeration_type:
   case dwarf::DW_TAG_vector_type:
   case dwarf::DW_TAG_subroutine_type:
+  case dwarf::DW_TAG_class_type:
     return true;
   default:
     return false;
@@ -169,8 +219,8 @@ bool DIVariable::isVariable(unsigned Tag) {
   }
 }
 
-DIVariable::DIVariable(GlobalVariable *GV) : DIDescriptor(GV) {
-  if (GV && !isVariable(getTag()))
+DIVariable::DIVariable(GlobalVariable *gv) : DIDescriptor(gv) {
+  if (gv && !isVariable(getTag()))
     GV = 0;
 }
 
@@ -185,7 +235,8 @@ unsigned DIArray::getNumElements() const {
 bool DICompileUnit::Verify() const {
   if (isNull()) 
     return false;
-  if (getFilename().empty()) 
+  std::string Res;
+  if (getFilename(Res).empty()) 
     return false;
   // It is possible that directory and produce string is empty.
   return true;
@@ -244,7 +295,7 @@ bool DIGlobalVariable::Verify() const {
     return false;
 
   DICompileUnit CU = getCompileUnit();
-  if (!CU.Verify()) 
+  if (!CU.isNull() && !CU.Verify()) 
     return false;
 
   DIType Ty = getType();
@@ -269,11 +320,32 @@ bool DIVariable::Verify() const {
   if (!Ty.Verify())
     return false;
 
-
   return true;
 }
 
+/// getOriginalTypeSize - If this type is derived from a base type then
+/// return base type size.
+uint64_t DIDerivedType::getOriginalTypeSize() const {
+  if (getTag() != dwarf::DW_TAG_member)
+    return getSizeInBits();
+  DIType BT = getTypeDerivedFrom();
+  if (BT.getTag() != dwarf::DW_TAG_base_type)
+    return getSizeInBits();
+  return BT.getSizeInBits();
+}
 
+/// describes - Return true if this subprogram provides debugging
+/// information for the function F.
+bool DISubprogram::describes(const Function *F) {
+  assert (F && "Invalid function");
+  std::string Name;
+  getLinkageName(Name);
+  if (Name.empty())
+    getName(Name);
+  if (!Name.empty() && (strcmp(Name.c_str(), F->getNameStart()) == false))
+    return true;
+  return false;
+}
 
 //===----------------------------------------------------------------------===//
 // DIFactory: Basic Helpers
@@ -335,7 +407,7 @@ DIAnchor DIFactory::GetOrCreateAnchor(unsigned TAG, const char *Name) {
   if (GV->hasInitializer()) 
     return SubProgramAnchor = DIAnchor(GV);
   
-  GV->setLinkage(GlobalValue::LinkOnceLinkage);
+  GV->setLinkage(GlobalValue::LinkOnceAnyLinkage);
   GV->setSection("llvm.metadata");
   GV->setConstant(true);
   M.addTypeName("llvm.dbg.anchor.type", EltTy);
@@ -444,7 +516,8 @@ DICompileUnit DIFactory::CreateCompileUnit(unsigned LangID,
                                            const std::string &Producer,
                                            bool isMain,
                                            bool isOptimized,
-                                           const char *Flags) {
+                                           const char *Flags,
+                                           unsigned RunTimeVer) {
   Constant *Elts[] = {
     GetTagConstant(dwarf::DW_TAG_compile_unit),
     getCastToEmpty(GetOrCreateCompileUnitAnchor()),
@@ -454,7 +527,8 @@ DICompileUnit DIFactory::CreateCompileUnit(unsigned LangID,
     GetStringConstant(Producer),
     ConstantInt::get(Type::Int1Ty, isMain),
     ConstantInt::get(Type::Int1Ty, isOptimized),
-    GetStringConstant(Flags)
+    GetStringConstant(Flags),
+    ConstantInt::get(Type::Int32Ty, RunTimeVer)
   };
   
   Constant *Init = ConstantStruct::get(Elts, sizeof(Elts)/sizeof(Elts[0]));
@@ -564,7 +638,8 @@ DICompositeType DIFactory::CreateCompositeType(unsigned Tag,
                                                uint64_t OffsetInBits,
                                                unsigned Flags,
                                                DIType DerivedFrom,
-                                               DIArray Elements) {
+                                               DIArray Elements,
+                                               unsigned RuntimeLang) {
 
   Constant *Elts[] = {
     GetTagConstant(Tag),
@@ -577,7 +652,8 @@ DICompositeType DIFactory::CreateCompositeType(unsigned Tag,
     ConstantInt::get(Type::Int64Ty, OffsetInBits),
     ConstantInt::get(Type::Int32Ty, Flags),
     getCastToEmpty(DerivedFrom),
-    getCastToEmpty(Elements)
+    getCastToEmpty(Elements),
+    ConstantInt::get(Type::Int32Ty, RuntimeLang)
   };
   
   Constant *Init = ConstantStruct::get(Elts, sizeof(Elts)/sizeof(Elts[0]));
@@ -822,6 +898,34 @@ namespace llvm {
     return 0;
   }
 
+  Value *findDbgGlobalDeclare(GlobalVariable *V)
+  {
+    const Module *M = V->getParent();
+    const Type *Ty = M->getTypeByName("llvm.dbg.global_variable.type");
+    if (!Ty)
+      return 0;
+    Ty = PointerType::get(Ty, 0);
+
+    Value *Val = V->stripPointerCasts();
+    for (Value::use_iterator I = Val->use_begin(), E =Val->use_end();
+         I != E; ++I) {
+      if (ConstantExpr *CE = dyn_cast<ConstantExpr>(I)) {
+        if (CE->getOpcode() == Instruction::BitCast) {
+          Value *VV = CE;
+          while (VV->hasOneUse()) {
+            VV = *VV->use_begin();
+          }
+          if (VV->getType() == Ty)
+            return VV;
+        }
+      }
+    }
+    
+    if (Val->getType() == Ty)
+      return Val;
+    return 0;
+  }
+
   /// Finds the dbg.declare intrinsic corresponding to this value if any.
   /// It looks through pointer casts too.
   const DbgDeclareInst *findDbgDeclare(const Value *V, bool stripCasts)
@@ -845,21 +949,63 @@ namespace llvm {
     }
     return 0;
   }
+
+  bool getLocationInfo(const Value *V, std::string &DisplayName, std::string &Type,
+                       unsigned &LineNo, std::string &File, std::string &Dir)
+  {
+    DICompileUnit Unit;
+    DIType TypeD;
+    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(const_cast<Value*>(V))) {
+      Value *DIGV = findDbgGlobalDeclare(GV);
+      if (!DIGV)
+        return false;
+      DIGlobalVariable Var(cast<GlobalVariable>(DIGV));
+      Var.getDisplayName(DisplayName);
+      LineNo = Var.getLineNumber();
+      Unit = Var.getCompileUnit();
+      TypeD = Var.getType();
+    } else {
+      const DbgDeclareInst *DDI = findDbgDeclare(V);
+      if (!DDI)
+        return false;
+      DIVariable Var(cast<GlobalVariable>(DDI->getVariable()));
+      Var.getName(DisplayName);
+      LineNo = Var.getLineNumber();
+      Unit = Var.getCompileUnit();
+      TypeD = Var.getType();
+    }
+    TypeD.getName(Type);
+    Unit.getFilename(File);
+    Unit.getDirectory(Dir);
+    return true;
+  }
+}
+
+/// dump - print descriptor.
+void DIDescriptor::dump() const {
+  cerr << " [" << dwarf::TagString(getTag()) << "]\n";
 }
 
 /// dump - print compile unit.
 void DICompileUnit::dump() const {
-  cerr << " [" << dwarf::LanguageString(getLanguage()) << "] ";
-  cerr << " [" << getDirectory() << "/" << getFilename() << " ]";
+  if (getLanguage())
+    cerr << " [" << dwarf::LanguageString(getLanguage()) << "] ";
+
+  std::string Res1, Res2;
+  cerr << " [" << getDirectory(Res1) << "/" << getFilename(Res2) << " ]";
 }
 
 /// dump - print type.
 void DIType::dump() const {
   if (isNull()) return;
-  if (!getName().empty())
-    cerr << " [" << getName() << "] ";
+
+  std::string Res;
+  if (!getName(Res).empty())
+    cerr << " [" << Res << "] ";
+
   unsigned Tag = getTag();
   cerr << " [" << dwarf::TagString(Tag) << "] ";
+
   // TODO : Print context
   getCompileUnit().dump();
   cerr << " [" 
@@ -868,10 +1014,12 @@ void DIType::dump() const {
        << getAlignInBits() << ", "
        << getOffsetInBits() 
        << "] ";
+
   if (isPrivate()) 
     cerr << " [private] ";
   else if (isProtected())
     cerr << " [protected] ";
+
   if (isForwardDecl())
     cerr << " [fwd] ";
 
@@ -885,13 +1033,13 @@ void DIType::dump() const {
     cerr << "Invalid DIType\n";
     return;
   }
+
   cerr << "\n";
 }
 
 /// dump - print basic type.
 void DIBasicType::dump() const {
   cerr << " [" << dwarf::AttributeEncodingString(getEncoding()) << "] ";
-
 }
 
 /// dump - print derived type.
@@ -909,16 +1057,20 @@ void DICompositeType::dump() const {
 
 /// dump - print global.
 void DIGlobal::dump() const {
+  std::string Res;
+  if (!getName(Res).empty())
+    cerr << " [" << Res << "] ";
 
-  if (!getName().empty())
-    cerr << " [" << getName() << "] ";
   unsigned Tag = getTag();
   cerr << " [" << dwarf::TagString(Tag) << "] ";
+
   // TODO : Print context
   getCompileUnit().dump();
   cerr << " [" << getLineNumber() << "] ";
+
   if (isLocalToUnit())
     cerr << " [local] ";
+
   if (isDefinition())
     cerr << " [def] ";
 
@@ -940,8 +1092,10 @@ void DIGlobalVariable::dump() const {
 
 /// dump - print variable.
 void DIVariable::dump() const {
-  if (!getName().empty())
-    cerr << " [" << getName() << "] ";
+  std::string Res;
+  if (!getName(Res).empty())
+    cerr << " [" << Res << "] ";
+
   getCompileUnit().dump();
   cerr << " [" << getLineNumber() << "] ";
   getType().dump();

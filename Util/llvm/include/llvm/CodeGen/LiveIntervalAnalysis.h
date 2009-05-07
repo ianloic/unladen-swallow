@@ -300,9 +300,9 @@ namespace llvm {
       r2iMap_.erase(I);
     }
 
-    /// isRemoved - returns true if the specified machine instr has been
-    /// removed.
-    bool isRemoved(MachineInstr* instr) const {
+    /// isNotInMIMap - returns true if the specified machine instr has been
+    /// removed or was never entered in the map.
+    bool isNotInMIMap(MachineInstr* instr) const {
       return !mi2iMap_.count(instr);
     }
 
@@ -356,19 +356,18 @@ namespace llvm {
     std::vector<LiveInterval*>
     addIntervalsForSpills(const LiveInterval& i,
                           SmallVectorImpl<LiveInterval*> &SpillIs,
-                          const MachineLoopInfo *loopInfo, VirtRegMap& vrm,
-                          float &SSWeight);
+                          const MachineLoopInfo *loopInfo, VirtRegMap& vrm);
     
     /// addIntervalsForSpillsFast - Quickly create new intervals for spilled
     /// defs / uses without remat or splitting.
     std::vector<LiveInterval*>
     addIntervalsForSpillsFast(const LiveInterval &li,
-                              const MachineLoopInfo *loopInfo,
-                              VirtRegMap &vrm, float& SSWeight);
+                              const MachineLoopInfo *loopInfo, VirtRegMap &vrm);
 
     /// spillPhysRegAroundRegDefsUses - Spill the specified physical register
-    /// around all defs and uses of the specified interval.
-    void spillPhysRegAroundRegDefsUses(const LiveInterval &li,
+    /// around all defs and uses of the specified interval. Return true if it
+    /// was able to cut its interval.
+    bool spillPhysRegAroundRegDefsUses(const LiveInterval &li,
                                        unsigned PhysReg, VirtRegMap &vrm);
 
     /// isReMaterializable - Returns true if every definition of MI of every
@@ -511,7 +510,7 @@ namespace llvm {
         SmallVector<int, 4> &ReMatIds, const MachineLoopInfo *loopInfo,
         unsigned &NewVReg, unsigned ImpUse, bool &HasDef, bool &HasUse,
         DenseMap<unsigned,unsigned> &MBBVRegsMap,
-        std::vector<LiveInterval*> &NewLIs, float &SSWeight);
+        std::vector<LiveInterval*> &NewLIs);
     void rewriteInstructionsForSpills(const LiveInterval &li, bool TrySplit,
         LiveInterval::Ranges::const_iterator &I,
         MachineInstr *OrigDefMI, MachineInstr *DefMI, unsigned Slot, int LdSlot,
@@ -523,7 +522,7 @@ namespace llvm {
         BitVector &RestoreMBBs,
         DenseMap<unsigned,std::vector<SRInfo> > &RestoreIdxes,
         DenseMap<unsigned,unsigned> &MBBVRegsMap,
-        std::vector<LiveInterval*> &NewLIs, float &SSWeight);
+        std::vector<LiveInterval*> &NewLIs);
 
     static LiveInterval* createInterval(unsigned Reg);
 

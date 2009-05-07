@@ -22,6 +22,7 @@
 #include "llvm/System/Signals.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PrettyStackTrace.h"
 #include "CallingConvEmitter.h"
 #include "CodeEmitterGen.h"
 #include "RegisterInfoEmitter.h"
@@ -33,6 +34,7 @@
 #include "SubtargetEmitter.h"
 #include "IntrinsicEmitter.h"
 #include "LLVMCConfigurationEmitter.h"
+#include "ClangDiagnosticsEmitter.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -45,10 +47,13 @@ enum ActionType {
   GenRegisterEnums, GenRegister, GenRegisterHeader,
   GenInstrEnums, GenInstrs, GenAsmWriter,
   GenCallingConv,
+  GenClangDiagsDefs,
+  GenClangDiagGroups,
   GenDAGISel,
   GenFastISel,
   GenSubtarget,
   GenIntrinsic,
+  GenTgtIntrinsic,
   GenLLVMCConf,
   PrintEnums
 };
@@ -82,6 +87,12 @@ namespace {
                                "Generate subtarget enumerations"),
                     clEnumValN(GenIntrinsic, "gen-intrinsic",
                                "Generate intrinsic information"),
+                    clEnumValN(GenTgtIntrinsic, "gen-tgt-intrinsic",
+                               "Generate target intrinsic information"),
+                    clEnumValN(GenClangDiagsDefs, "gen-clang-diags-defs",
+                               "Generate Clang diagnostics definitions"),
+                    clEnumValN(GenClangDiagGroups, "gen-clang-diag-groups",
+                               "Generate Clang diagnostic groups"),
                     clEnumValN(GenLLVMCConf, "gen-llvmc",
                                "Generate LLVMC configuration library"),
                     clEnumValN(PrintEnums, "print-enums",
@@ -102,22 +113,41 @@ namespace {
   cl::list<std::string>
   IncludeDirs("I", cl::desc("Directory of include files"),
               cl::value_desc("directory"), cl::Prefix);
+  
+  cl::opt<std::string>
+  ClangComponent("clang-component",
+                 cl::desc("Only use warnings from specified component"),
+                 cl::value_desc("component"), cl::Hidden);
 }
 
+
+// FIXME: Eliminate globals from tblgen.
 RecordKeeper llvm::Records;
+
+static TGSourceMgr SrcMgr;
+
+void llvm::PrintError(TGLoc ErrorLoc, const std::string &Msg) {
+  SrcMgr.PrintError(ErrorLoc, Msg);
+}
+
+
 
 /// ParseFile - this function begins the parsing of the specified tablegen
 /// file.
 static bool ParseFile(const std::string &Filename,
-                      const std::vector<std::string> &IncludeDirs) {
+                      const std::vector<std::string> &IncludeDirs,
+                      TGSourceMgr &SrcMgr) {
   std::string ErrorStr;
   MemoryBuffer *F = MemoryBuffer::getFileOrSTDIN(Filename.c_str(), &ErrorStr);
   if (F == 0) {
     cerr << "Could not open input file '" + Filename + "': " << ErrorStr <<"\n";
     return true;
   }
-
-  TGParser Parser(F);
+  
+  // Tell SrcMgr about this buffer, which is what TGParser will pick up.
+  SrcMgr.AddNewSourceBuffer(F, TGLoc());
+  
+  TGParser Parser(SrcMgr);
 
   // Record the location of the include directory so that the lexer can find
   // it later.
@@ -127,10 +157,13 @@ static bool ParseFile(const std::string &Filename,
 }
 
 int main(int argc, char **argv) {
+  sys::PrintStackTraceOnErrorSignal();
+  PrettyStackTraceProgram X(argc, argv);
   cl::ParseCommandLineOptions(argc, argv);
 
+  
   // Parse the input file.
-  if (ParseFile(InputFilename, IncludeDirs))
+  if (ParseFile(InputFilename, IncludeDirs, SrcMgr))
     return 1;
 
   std::ostream *Out = cout.stream();
@@ -164,7 +197,6 @@ int main(int argc, char **argv) {
     case GenRegisterHeader:
       RegisterInfoEmitter(Records).runHeader(*Out);
       break;
-
     case GenInstrEnums:
       InstrEnumEmitter(Records).run(*Out);
       break;
@@ -177,7 +209,12 @@ int main(int argc, char **argv) {
     case GenAsmWriter:
       AsmWriterEmitter(Records).run(*Out);
       break;
-
+    case GenClangDiagsDefs:
+      ClangDiagsDefsEmitter(Records, ClangComponent).run(*Out);
+      break;
+    case GenClangDiagGroups:
+      ClangDiagGroupsEmitter(Records).run(*Out);
+      break;        
     case GenDAGISel:
       DAGISelEmitter(Records).run(*Out);
       break;
@@ -189,6 +226,9 @@ int main(int argc, char **argv) {
       break;
     case GenIntrinsic:
       IntrinsicEmitter(Records).run(*Out);
+      break;
+    case GenTgtIntrinsic:
+      IntrinsicEmitter(Records, true).run(*Out);
       break;
     case GenLLVMCConf:
       LLVMCConfigurationEmitter(Records).run(*Out);
@@ -205,31 +245,26 @@ int main(int argc, char **argv) {
       assert(1 && "Invalid Action");
       return 1;
     }
+    
+    if (Out != cout.stream()) 
+      delete Out;                               // Close the file
+    return 0;
+    
+  } catch (const TGError &Error) {
+    cerr << argv[0] << ": error:\n";
+    PrintError(Error.getLoc(), Error.getMessage());
+    
   } catch (const std::string &Error) {
     cerr << argv[0] << ": " << Error << "\n";
-    if (Out != cout.stream()) {
-      delete Out;                             // Close the file
-      std::remove(OutputFilename.c_str());    // Remove the file, it's broken
-    }
-    return 1;
   } catch (const char *Error) {
     cerr << argv[0] << ": " << Error << "\n";
-    if (Out != cout.stream()) {
-      delete Out;                             // Close the file
-      std::remove(OutputFilename.c_str());    // Remove the file, it's broken
-    }
-    return 1;
   } catch (...) {
     cerr << argv[0] << ": Unknown unexpected exception occurred.\n";
-    if (Out != cout.stream()) {
-      delete Out;                             // Close the file
-      std::remove(OutputFilename.c_str());    // Remove the file, it's broken
-    }
-    return 2;
   }
-
+  
   if (Out != cout.stream()) {
-    delete Out;                               // Close the file
+    delete Out;                             // Close the file
+    std::remove(OutputFilename.c_str());    // Remove the file, it's broken
   }
-  return 0;
+  return 1;
 }

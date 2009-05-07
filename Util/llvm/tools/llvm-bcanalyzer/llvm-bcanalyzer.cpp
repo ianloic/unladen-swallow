@@ -30,9 +30,11 @@
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Bitcode/BitstreamReader.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
+#include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/System/Signals.h"
 #include <map>
 #include <fstream>
@@ -70,13 +72,22 @@ static enum {
 
 /// GetBlockName - Return a symbolic block name if known, otherwise return
 /// null.
-static const char *GetBlockName(unsigned BlockID) {
+static const char *GetBlockName(unsigned BlockID,
+                                const BitstreamReader &StreamFile) {
   // Standard blocks for all bitcode files.
   if (BlockID < bitc::FIRST_APPLICATION_BLOCKID) {
     if (BlockID == bitc::BLOCKINFO_BLOCK_ID)
       return "BLOCKINFO_BLOCK";
     return 0;
   }
+  
+  // Check to see if we have a blockinfo record for this block, with a name.
+  if (const BitstreamReader::BlockInfo *Info =
+        StreamFile.getBlockInfo(BlockID)) {
+    if (!Info->Name.empty())
+      return Info->Name.c_str();
+  }
+  
   
   if (CurStreamType != LLVMIRBitstream) return 0;
   
@@ -94,17 +105,29 @@ static const char *GetBlockName(unsigned BlockID) {
 
 /// GetCodeName - Return a symbolic code name if known, otherwise return
 /// null.
-static const char *GetCodeName(unsigned CodeID, unsigned BlockID) {
+static const char *GetCodeName(unsigned CodeID, unsigned BlockID,
+                               const BitstreamReader &StreamFile) {
   // Standard blocks for all bitcode files.
   if (BlockID < bitc::FIRST_APPLICATION_BLOCKID) {
     if (BlockID == bitc::BLOCKINFO_BLOCK_ID) {
       switch (CodeID) {
       default: return 0;
-      case bitc::MODULE_CODE_VERSION:     return "VERSION";
+      case bitc::BLOCKINFO_CODE_SETBID:        return "SETBID";
+      case bitc::BLOCKINFO_CODE_BLOCKNAME:     return "BLOCKNAME";
+      case bitc::BLOCKINFO_CODE_SETRECORDNAME: return "SETRECORDNAME";
       }
     }
     return 0;
   }
+  
+  // Check to see if we have a blockinfo record for this record, with a name.
+  if (const BitstreamReader::BlockInfo *Info =
+        StreamFile.getBlockInfo(BlockID)) {
+    for (unsigned i = 0, e = Info->RecordNames.size(); i != e; ++i)
+      if (Info->RecordNames[i].first == CodeID)
+        return Info->RecordNames[i].second.c_str();
+  }
+  
   
   if (CurStreamType != LLVMIRBitstream) return 0;
   
@@ -222,6 +245,13 @@ static const char *GetCodeName(unsigned CodeID, unsigned BlockID) {
   }
 }
 
+struct PerRecordStats {
+  unsigned NumInstances;
+  unsigned NumAbbrev;
+  uint64_t TotalBits;
+  
+  PerRecordStats() : NumInstances(0), NumAbbrev(0), TotalBits(0) {}
+};
 
 struct PerBlockIDStats {
   /// NumInstances - This the number of times this block ID has been seen.
@@ -241,7 +271,7 @@ struct PerBlockIDStats {
   unsigned NumRecords, NumAbbreviatedRecords;
   
   /// CodeFreq - Keep track of the number of times we see each code.
-  std::vector<unsigned> CodeFreq;
+  std::vector<PerRecordStats> CodeFreq;
   
   PerBlockIDStats()
     : NumInstances(0), NumBits(0),
@@ -260,7 +290,7 @@ static bool Error(const std::string &Err) {
 }
 
 /// ParseBlock - Read a block, updating statistics, etc.
-static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
+static bool ParseBlock(BitstreamCursor &Stream, unsigned IndentLevel) {
   std::string Indent(IndentLevel*2, ' ');
   uint64_t BlockBitStart = Stream.GetCurrentBitNo();
   unsigned BlockID = Stream.ReadSubBlockID();
@@ -287,7 +317,7 @@ static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
   const char *BlockName = 0;
   if (Dump) {
     std::cerr << Indent << "<";
-    if ((BlockName = GetBlockName(BlockID)))
+    if ((BlockName = GetBlockName(BlockID, *Stream.getBitStreamReader())))
       std::cerr << BlockName;
     else
       std::cerr << "UnknownBlock" << BlockID;
@@ -306,6 +336,8 @@ static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
     if (Stream.AtEndOfStream())
       return Error("Premature end of bitstream");
 
+    uint64_t RecordStartBit = Stream.GetCurrentBitNo();
+    
     // Read the code for this record.
     unsigned AbbrevID = Stream.ReadCode();
     switch (AbbrevID) {
@@ -339,25 +371,36 @@ static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
       ++BlockStats.NumAbbrevs;
       break;
     default:
+      Record.clear();
+
       ++BlockStats.NumRecords;
       if (AbbrevID != bitc::UNABBREV_RECORD)
         ++BlockStats.NumAbbreviatedRecords;
-      
-      Record.clear();
-      unsigned Code = Stream.ReadRecord(AbbrevID, Record);
+        
+      const char *BlobStart = 0;
+      unsigned BlobLen = 0;
+      unsigned Code = Stream.ReadRecord(AbbrevID, Record, BlobStart, BlobLen);
 
+        
+        
       // Increment the # occurrences of this code.
       if (BlockStats.CodeFreq.size() <= Code)
         BlockStats.CodeFreq.resize(Code+1);
-      BlockStats.CodeFreq[Code]++;
-      
+      BlockStats.CodeFreq[Code].NumInstances++;
+      BlockStats.CodeFreq[Code].TotalBits +=
+        Stream.GetCurrentBitNo()-RecordStartBit;
+      if (AbbrevID != bitc::UNABBREV_RECORD)
+        BlockStats.CodeFreq[Code].NumAbbrev++;
+        
       if (Dump) {
         std::cerr << Indent << "  <";
-        if (const char *CodeName = GetCodeName(Code, BlockID))
+        if (const char *CodeName =
+              GetCodeName(Code, BlockID, *Stream.getBitStreamReader()))
           std::cerr << CodeName;
         else
           std::cerr << "UnknownCode" << Code;
-        if (NonSymbolic && GetCodeName(Code, BlockID))
+        if (NonSymbolic &&
+            GetCodeName(Code, BlockID, *Stream.getBitStreamReader()))
           std::cerr << " codeid=" << Code;
         if (AbbrevID != bitc::UNABBREV_RECORD)
           std::cerr << " abbrevid=" << AbbrevID;
@@ -365,7 +408,24 @@ static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
         for (unsigned i = 0, e = Record.size(); i != e; ++i)
           std::cerr << " op" << i << "=" << (int64_t)Record[i];
         
-        std::cerr << "/>\n";
+        std::cerr << "/>";
+        
+        if (BlobStart) {
+          std::cerr << " blob data = ";
+          bool BlobIsPrintable = true;
+          for (unsigned i = 0; i != BlobLen; ++i)
+            if (!isprint(BlobStart[i])) {
+              BlobIsPrintable = false;
+              break;
+            }
+          
+          if (BlobIsPrintable)
+            std::cerr << "'" << std::string(BlobStart, BlobStart+BlobLen) <<"'";
+          else
+            std::cerr << "unprintable, " << BlobLen << " bytes.";
+        }
+        
+        std::cerr << "\n";
       }
       
       break;
@@ -374,24 +434,37 @@ static bool ParseBlock(BitstreamReader &Stream, unsigned IndentLevel) {
 }
 
 static void PrintSize(double Bits) {
-  std::cerr << Bits << "b/" << Bits/8 << "B/" << Bits/32 << "W";
+  fprintf(stderr, "%.2f/%.2fB/%lluW", Bits, Bits/8,(unsigned long long)Bits/32);
+}
+static void PrintSize(uint64_t Bits) {
+  fprintf(stderr, "%llub/%.2fB/%lluW", (unsigned long long)Bits,
+          (double)Bits/8, (unsigned long long)Bits/32);
 }
 
 
 /// AnalyzeBitcode - Analyze the bitcode file specified by InputFilename.
 static int AnalyzeBitcode() {
   // Read the input file.
-  MemoryBuffer *Buffer = MemoryBuffer::getFileOrSTDIN(InputFilename.c_str());
+  MemoryBuffer *MemBuf = MemoryBuffer::getFileOrSTDIN(InputFilename.c_str());
 
-  if (Buffer == 0)
+  if (MemBuf == 0)
     return Error("Error reading '" + InputFilename + "'.");
   
-  if (Buffer->getBufferSize() & 3)
+  if (MemBuf->getBufferSize() & 3)
     return Error("Bitcode stream should be a multiple of 4 bytes in length");
   
-  unsigned char *BufPtr = (unsigned char *)Buffer->getBufferStart();
-  BitstreamReader Stream(BufPtr, BufPtr+Buffer->getBufferSize());
-
+  unsigned char *BufPtr = (unsigned char *)MemBuf->getBufferStart();
+  unsigned char *EndBufPtr = BufPtr+MemBuf->getBufferSize();
+  
+  // If we have a wrapper header, parse it and ignore the non-bc file contents.
+  // The magic number is 0x0B17C0DE stored in little endian.
+  if (isBitcodeWrapper(BufPtr, EndBufPtr))
+    if (SkipBitcodeWrapperHeader(BufPtr, EndBufPtr))
+      return Error("Invalid bitcode wrapper header");
+  
+  BitstreamReader StreamFile(BufPtr, EndBufPtr);
+  BitstreamCursor Stream(StreamFile);
+  StreamFile.CollectBlockInfoNames();
   
   // Read the stream signature.
   char Signature[6];
@@ -424,7 +497,7 @@ static int AnalyzeBitcode() {
   
   if (Dump) std::cerr << "\n\n";
   
-  uint64_t BufferSizeBits = Buffer->getBufferSize()*8;
+  uint64_t BufferSizeBits = (EndBufPtr-BufPtr)*CHAR_BIT;
   // Print a summary of the read file.
   std::cerr << "Summary of " << InputFilename << ":\n";
   std::cerr << "         Total size: ";
@@ -444,7 +517,7 @@ static int AnalyzeBitcode() {
   for (std::map<unsigned, PerBlockIDStats>::iterator I = BlockIDStats.begin(),
        E = BlockIDStats.end(); I != E; ++I) {
     std::cerr << "  Block ID #" << I->first;
-    if (const char *BlockName = GetBlockName(I->first))
+    if (const char *BlockName = GetBlockName(I->first, StreamFile))
       std::cerr << " (" << BlockName << ")";
     std::cerr << ":\n";
     
@@ -479,18 +552,30 @@ static int AnalyzeBitcode() {
     if (!NoHistogram && !Stats.CodeFreq.empty()) {
       std::vector<std::pair<unsigned, unsigned> > FreqPairs;  // <freq,code>
       for (unsigned i = 0, e = Stats.CodeFreq.size(); i != e; ++i)
-        if (unsigned Freq = Stats.CodeFreq[i])
+        if (unsigned Freq = Stats.CodeFreq[i].NumInstances)
           FreqPairs.push_back(std::make_pair(Freq, i));
       std::stable_sort(FreqPairs.begin(), FreqPairs.end());
       std::reverse(FreqPairs.begin(), FreqPairs.end());
       
-      std::cerr << "\tCode Histogram:\n";
+      std::cerr << "\tRecord Histogram:\n";
+      fprintf(stderr, "\t\t  Count    # Bits   %% Abv  Record Kind\n");
       for (unsigned i = 0, e = FreqPairs.size(); i != e; ++i) {
-        std::cerr << "\t\t" << FreqPairs[i].first << "\t";
-        if (const char *CodeName = GetCodeName(FreqPairs[i].second, I->first))
-          std::cerr << CodeName << "\n";
+        const PerRecordStats &RecStats = Stats.CodeFreq[FreqPairs[i].second];
+        
+        fprintf(stderr, "\t\t%7d %9llu ", RecStats.NumInstances,
+                (unsigned long long)RecStats.TotalBits);
+        
+        if (RecStats.NumAbbrev)
+          fprintf(stderr, "%7.2f  ",
+                  (double)RecStats.NumAbbrev/RecStats.NumInstances*100);
         else
-          std::cerr << "UnknownCode" << FreqPairs[i].second << "\n";
+          fprintf(stderr, "         ");
+        
+        if (const char *CodeName = 
+              GetCodeName(FreqPairs[i].second, I->first, StreamFile))
+          fprintf(stderr, "%s\n", CodeName);
+        else
+          fprintf(stderr, "UnknownCode%d\n", FreqPairs[i].second);
       }
       std::cerr << "\n";
       
@@ -501,10 +586,11 @@ static int AnalyzeBitcode() {
 
 
 int main(int argc, char **argv) {
-  llvm_shutdown_obj X;  // Call llvm_shutdown() on exit.
-  cl::ParseCommandLineOptions(argc, argv, "llvm-bcanalyzer file analyzer\n");
-  
+  // Print a stack trace if we signal out.
   sys::PrintStackTraceOnErrorSignal();
+  PrettyStackTraceProgram X(argc, argv);
+  llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
+  cl::ParseCommandLineOptions(argc, argv, "llvm-bcanalyzer file analyzer\n");
   
   return AnalyzeBitcode();
 }

@@ -379,13 +379,15 @@ bool ARMDAGToDAGISel::SelectAddrModePC(SDValue Op, SDValue N,
 
 bool ARMDAGToDAGISel::SelectThumbAddrModeRR(SDValue Op, SDValue N,
                                             SDValue &Base, SDValue &Offset){
+  // FIXME dl should come from the parent load or store, not the address
+  DebugLoc dl = Op.getDebugLoc();
   if (N.getOpcode() != ISD::ADD) {
     Base = N;
     // We must materialize a zero in a reg! Returning a constant here
     // wouldn't work without additional code to position the node within
     // ISel's topological ordering in a place where ISel will process it
     // normally.  Instead, just explicitly issue a tMOVri8 node!
-    Offset = SDValue(CurDAG->getTargetNode(ARM::tMOVi8, MVT::i32,
+    Offset = SDValue(CurDAG->getTargetNode(ARM::tMOVi8, dl, MVT::i32,
                                     CurDAG->getTargetConstant(0, MVT::i32)), 0);
     return true;
   }
@@ -532,6 +534,7 @@ static inline SDValue getAL(SelectionDAG *CurDAG) {
 
 SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
   SDNode *N = Op.getNode();
+  DebugLoc dl = N->getDebugLoc();
 
   if (N->isMachineOpcode())
     return NULL;   // Already selected.
@@ -556,7 +559,7 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
 
       SDNode *ResNode;
       if (Subtarget->isThumb())
-        ResNode = CurDAG->getTargetNode(ARM::tLDRcp, MVT::i32, MVT::Other,
+        ResNode = CurDAG->getTargetNode(ARM::tLDRcp, dl, MVT::i32, MVT::Other,
                                         CPIdx, CurDAG->getEntryNode());
       else {
         SDValue Ops[] = {
@@ -567,7 +570,8 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
           CurDAG->getRegister(0, MVT::i32),
           CurDAG->getEntryNode()
         };
-        ResNode=CurDAG->getTargetNode(ARM::LDRcp, MVT::i32, MVT::Other, Ops, 6);
+        ResNode=CurDAG->getTargetNode(ARM::LDRcp, dl, MVT::i32, MVT::Other,
+                                      Ops, 6);
       }
       ReplaceUses(Op, SDValue(ResNode, 0));
       return NULL;
@@ -580,10 +584,10 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
     // Selects to ADDri FI, 0 which in turn will become ADDri SP, imm.
     int FI = cast<FrameIndexSDNode>(N)->getIndex();
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, TLI.getPointerTy());
-    if (Subtarget->isThumb())
+    if (Subtarget->isThumb()) {
       return CurDAG->SelectNodeTo(N, ARM::tADDrSPi, MVT::i32, TFI,
                                   CurDAG->getTargetConstant(0, MVT::i32));
-    else {
+    } else {
       SDValue Ops[] = { TFI, CurDAG->getTargetConstant(0, MVT::i32),
                           getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
                           CurDAG->getRegister(0, MVT::i32) };
@@ -591,6 +595,8 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
     }
   }
   case ISD::ADD: {
+    if (!Subtarget->isThumb())
+      break;
     // Select add sp, c to tADDhirr.
     SDValue N0 = Op.getOperand(0);
     SDValue N1 = Op.getOperand(1);
@@ -601,7 +607,9 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
       std::swap(LHSR, RHSR);
     }
     if (RHSR && RHSR->getReg() == ARM::SP) {
-      return CurDAG->SelectNodeTo(N, ARM::tADDhirr, Op.getValueType(), N0, N1);
+      SDValue Val = SDValue(CurDAG->getTargetNode(ARM::tMOVlor2hir, dl,
+                                  Op.getValueType(), N0, N0), 0);
+      return CurDAG->SelectNodeTo(N, ARM::tADDhirr, Op.getValueType(), Val, N1);
     }
     break;
   }
@@ -632,20 +640,20 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
     }
     break;
   case ARMISD::FMRRD:
-    return CurDAG->getTargetNode(ARM::FMRRD, MVT::i32, MVT::i32,
+    return CurDAG->getTargetNode(ARM::FMRRD, dl, MVT::i32, MVT::i32,
                                  Op.getOperand(0), getAL(CurDAG),
                                  CurDAG->getRegister(0, MVT::i32));
   case ISD::UMUL_LOHI: {
     SDValue Ops[] = { Op.getOperand(0), Op.getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
                         CurDAG->getRegister(0, MVT::i32) };
-    return CurDAG->getTargetNode(ARM::UMULL, MVT::i32, MVT::i32, Ops, 5);
+    return CurDAG->getTargetNode(ARM::UMULL, dl, MVT::i32, MVT::i32, Ops, 5);
   }
   case ISD::SMUL_LOHI: {
     SDValue Ops[] = { Op.getOperand(0), Op.getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
                         CurDAG->getRegister(0, MVT::i32) };
-    return CurDAG->getTargetNode(ARM::SMULL, MVT::i32, MVT::i32, Ops, 5);
+    return CurDAG->getTargetNode(ARM::SMULL, dl, MVT::i32, MVT::i32, Ops, 5);
   }
   case ISD::LOAD: {
     LoadSDNode *LD = cast<LoadSDNode>(Op);
@@ -685,7 +693,7 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
         SDValue Base = LD->getBasePtr();
         SDValue Ops[]= { Base, Offset, AMOpc, getAL(CurDAG),
                            CurDAG->getRegister(0, MVT::i32), Chain };
-        return CurDAG->getTargetNode(Opcode, MVT::i32, MVT::i32,
+        return CurDAG->getTargetNode(Opcode, dl, MVT::i32, MVT::i32,
                                      MVT::Other, Ops, 6);
       }
     }
@@ -715,7 +723,8 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
                                cast<ConstantSDNode>(N2)->getZExtValue()),
                                MVT::i32);
     SDValue Ops[] = { N1, Tmp2, N3, Chain, InFlag };
-    SDNode *ResNode = CurDAG->getTargetNode(Opc, MVT::Other, MVT::Flag, Ops, 5);
+    SDNode *ResNode = CurDAG->getTargetNode(Opc, dl, MVT::Other, 
+                                            MVT::Flag, Ops, 5);
     Chain = SDValue(ResNode, 0);
     if (Op.getNode()->getNumValues() == 2) {
       InFlag = SDValue(ResNode, 1);
@@ -832,13 +841,18 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
     SDValue N1 = Op.getOperand(1);
     SDValue N2 = Op.getOperand(2);
     FrameIndexSDNode *FINode = dyn_cast<FrameIndexSDNode>(N1);
-    if (!FINode)
-      break;
+    // FIXME: handle VLAs.
+    if (!FINode) {
+      ReplaceUses(Op.getValue(0), Chain);
+      return NULL;
+    }
     if (N2.getOpcode() == ARMISD::PIC_ADD && isa<LoadSDNode>(N2.getOperand(0)))
       N2 = N2.getOperand(0);
     LoadSDNode *Ld = dyn_cast<LoadSDNode>(N2);
-    if (!Ld)
-      break;
+    if (!Ld) {
+      ReplaceUses(Op.getValue(0), Chain);
+      return NULL;
+    }
     SDValue BasePtr = Ld->getBasePtr();
     assert(BasePtr.getOpcode() == ARMISD::Wrapper &&
            isa<ConstantPoolSDNode>(BasePtr.getOperand(0)) &&
@@ -850,15 +864,17 @@ SDNode *ARMDAGToDAGISel::Select(SDValue Op) {
       GV = ACPV->getGV();
     } else
       GV = dyn_cast<GlobalValue>(CP->getConstVal());
-    if (GV) {
-      SDValue Tmp1 = CurDAG->getTargetFrameIndex(FINode->getIndex(),
-                                                 TLI.getPointerTy());
-      SDValue Tmp2 = CurDAG->getTargetGlobalAddress(GV, TLI.getPointerTy());
-      SDValue Ops[] = { Tmp1, Tmp2, Chain };
-      return CurDAG->getTargetNode(TargetInstrInfo::DECLARE,
-                                   MVT::Other, Ops, 3);
+    if (!GV) {
+      ReplaceUses(Op.getValue(0), Chain);
+      return NULL;
     }
-    break;
+    
+    SDValue Tmp1 = CurDAG->getTargetFrameIndex(FINode->getIndex(),
+                                               TLI.getPointerTy());
+    SDValue Tmp2 = CurDAG->getTargetGlobalAddress(GV, TLI.getPointerTy());
+    SDValue Ops[] = { Tmp1, Tmp2, Chain };
+    return CurDAG->getTargetNode(TargetInstrInfo::DECLARE, dl,
+                                 MVT::Other, Ops, 3);
   }
   }
 

@@ -41,15 +41,24 @@ sub GetPPExt {
   return ".i";
 }
 
+# Set this to 1 if we want to include 'parser rejects' files.
+my $IncludeParserRejects = 0;
 my $ParserRejects = "Parser Rejects";
+
+my $AttributeIgnored = "Attribute Ignored";
 
 sub ProcessClangFailure {
   my ($Clang, $Lang, $file, $Args, $HtmlDir, $ErrorType, $ofile) = @_;
-  my $Dir = "$HtmlDir/crashes";
+  my $Dir = "$HtmlDir/failures";
   mkpath $Dir;
   
   my $prefix = "clang_crash";
-  if ($ErrorType eq $ParserRejects) { $prefix = "clang_parser_rejects"; }
+  if ($ErrorType eq $ParserRejects) {
+    $prefix = "clang_parser_rejects";
+  }
+  elsif ($ErrorType eq $AttributeIgnored) {
+    $prefix = "clang_attribute_ignored";
+  }
 
   # Generate the preprocessed file with cc (i.e., gcc).
   my ($PPH, $PPFile) = tempfile( $prefix . "_XXXXXX",
@@ -73,6 +82,7 @@ sub ProcessClangFailure {
   `uname -a >> $PPFile.info.txt 2>&1`;
   `$CC -v >> $PPFile.info.txt 2>&1`;
   system 'mv',$ofile,"$PPFile.stderr.txt";
+  return (basename $PPFile);
 }
 
 ##----------------------------------------------------------------------------##
@@ -104,8 +114,10 @@ sub Analyze {
     push @CmdArgs,'-DIBOutlet=__attribute__((iboutlet))';
     push @CmdArgs,@$Args;
     @CmdArgsSansAnalyses = @CmdArgs;
-    push @CmdArgs,'--analyze';
-    push @CmdArgs,"--analyzer-display-progress";
+    push @CmdArgs,'-analyze';
+    push @CmdArgs,"-analyzer-display-progress";
+    push @CmdArgs,"-disable-free";
+    push @CmdArgs,"-analyzer-eagerly-assume";
     push @CmdArgs,(split /\s/,$Analyses);
     $RunAnalyzer = 1;
   }
@@ -175,8 +187,51 @@ sub Analyze {
                         "Crash", $ofile);
   }
   elsif ($Result) {
-    ProcessClangFailure($Clang, $Lang, $file, \@CmdArgsSansAnalyses, $HtmlDir,
-                        $ParserRejects, $ofile);
+    if ($IncludeParserRejects && !($file =~/conftest/)) {
+      ProcessClangFailure($Clang, $Lang, $file, \@CmdArgsSansAnalyses, $HtmlDir,
+                          $ParserRejects, $ofile);
+    }
+  }
+  else {
+    # Check if there were any unhandled attributes.
+    if (open(CHILD, $ofile)) {
+      my %attributes_not_handled;
+      
+      # Don't flag warnings about the following attributes that we
+      # know are currently not supported by Clang.
+      $attributes_not_handled{"cdecl"} = 1;
+      
+      my $ppfile;
+      while (<CHILD>) {
+        next if (! /warning: '([^\']+)' attribute ignored/);
+
+        # Have we already spotted this unhandled attribute?
+        next if (defined $attributes_not_handled{$1});
+        $attributes_not_handled{$1} = 1;
+        
+        # Get the name of the attribute file.
+        my $dir = "$HtmlDir/failures";
+        my $afile = "$dir/attribute_ignored_$1.txt";
+        
+        # Only create another preprocessed file if the attribute file
+        # doesn't exist yet.
+        next if (-e $afile);
+        
+        # Add this file to the list of files that contained this attribute.
+        # Generate a preprocessed file if we haven't already.
+        if (!(defined $ppfile)) {
+          $ppfile = ProcessClangFailure($Clang, $Lang, $file,
+                                        \@CmdArgsSansAnalyses,
+                                        $HtmlDir, $AttributeIgnored, $ofile);
+        }
+
+        mkpath $dir;
+        open(AFILE, ">$afile");
+        print AFILE "$ppfile\n";
+        close(AFILE);
+      }
+      close CHILD;
+    }
   }
   
   `rm -f $ofile`;
@@ -190,7 +245,8 @@ my %CompileOptionMap = (
   '-nostdinc' => 0,
   '-fblocks' => 0,
   '-fobjc-gc-only' => 0,
-  '-fobjc-gc' => 0,  
+  '-fobjc-gc' => 0,
+  '-ffreestanding' => 0,
   '-include' => 1,
   '-idirafter' => 1,
   '-iprefix' => 1,
@@ -209,7 +265,8 @@ my %CompilerLinkerOptionMap = (
   '-arch' => 1,
   '-v' => 0,
   '-fpascal-strings' => 0,
-  '-mmacosx-version-min' => 0 # This is really a 1 argument, but always has '='
+  '-mmacosx-version-min' => 0, # This is really a 1 argument, but always has '='
+  '-miphoneos-version-min' => 0 # This is really a 1 argument, but always has '='
 );
 
 my %IgnoredOptionMap = (
@@ -267,9 +324,15 @@ if (!defined($Analyses)) { $Analyses = '-checker-cfref'; }
 
 # Get the store model.
 my $StoreModel = $ENV{'CCC_ANALYZER_STORE_MODEL'};
+if (!defined $StoreModel) { $StoreModel = "basic"; }
+
+# Get the constraints engine.
+my $ConstraintsModel = $ENV{'CCC_ANALYZER_CONSTRAINTS_MODEL'};
+if (!defined $ConstraintsModel) { $ConstraintsModel = "range"; }
 
 # Get the output format.
 my $OutputFormat = $ENV{'CCC_ANALYZER_OUTPUT_FORMAT'};
+if (!defined $OutputFormat) { $OutputFormat = "html"; }
 
 # Determine the level of verbosity.
 my $Verbose = 0;
@@ -278,12 +341,14 @@ if (defined $ENV{CCC_ANALYZER_LOG}) { $Verbose = 2; }
 
 # Determine what clang executable to use.
 my $Clang = $ENV{'CLANG'};
-if (!defined $Clang) { $Clang = 'clang'; }
+if (!defined $Clang) { $Clang = 'clang-cc'; }
 
 # Get the HTML output directory.
 my $HtmlDir = $ENV{'CCC_ANALYZER_HTML'};
 
+my %DisabledArchs = ('ppc' => 1, 'ppc64' => 1);
 my %ArchsSeen;
+my $HadArch = 0;
 
 # Process the arguments.
 foreach (my $i = 0; $i < scalar(@ARGV); ++$i) {
@@ -298,7 +363,10 @@ foreach (my $i = 0; $i < scalar(@ARGV); ++$i) {
   # Specially handle duplicate cases of -arch
   if ($Arg eq "-arch") {
     my $arch = $ARGV[$i+1];
-    $ArchsSeen{$arch} = 1;
+    # We don't want to process 'ppc' because of Clang's lack of support
+    # for Altivec (also some #defines won't likely be defined correctly, etc.)
+    if (!(defined $DisabledArchs{$arch})) { $ArchsSeen{$arch} = 1; }
+    $HadArch = 1;
     ++$i;
     next;
   }
@@ -426,6 +494,10 @@ foreach (my $i = 0; $i < scalar(@ARGV); ++$i) {
 }
 
 if ($Action eq 'compile' or $Action eq 'link') {
+  my @Archs = keys %ArchsSeen;
+  # Skip the file if we don't support the architectures specified.
+  exit 0 if ($HadArch && scalar(@Archs) == 0);
+  
   foreach my $file (@Files) {
     # Determine the language for the file.
     my $FileLang = $Lang;
@@ -447,11 +519,15 @@ if ($Action eq 'compile' or $Action eq 'link') {
     }
 
     if (defined $StoreModel) {
-      push @AnalyzeArgs, $StoreModel;
+      push @AnalyzeArgs, "-analyzer-store=$StoreModel";
     }
-    
+
+    if (defined $ConstraintsModel) {
+      push @AnalyzeArgs, "-analyzer-constraints=$ConstraintsModel";
+    }
+
     if (defined $OutputFormat) {
-      push @AnalyzeArgs, "-analyzer-output-" . $OutputFormat;
+      push @AnalyzeArgs, "-analyzer-output=" . $OutputFormat;
       if ($OutputFormat eq "plist") {
         # Change "Output" to be a file.
         my ($h, $f) = tempfile("report-XXXXXX", SUFFIX => ".plist",
@@ -459,13 +535,11 @@ if ($Action eq 'compile' or $Action eq 'link') {
         $ResultFile = $f;
         $CleanupFile = $f;
       }
-      
     }
 
     push @AnalyzeArgs,@CompileOpts;
     push @AnalyzeArgs,$file;
 
-    my @Archs = keys %ArchsSeen;
     if (scalar @Archs) {
       foreach my $arch (@Archs) {
         my @NewArgs;

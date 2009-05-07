@@ -48,7 +48,7 @@ namespace llvm {
     // To make VS STL happy
     AsmWriterOperand():OperandType(isLiteralTextOperand) {}
 
-    AsmWriterOperand(const std::string &LitStr)
+    explicit AsmWriterOperand(const std::string &LitStr)
       : OperandType(isLiteralTextOperand), Str(LitStr) {}
 
     AsmWriterOperand(const std::string &Printer, unsigned OpNo, 
@@ -130,11 +130,20 @@ AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
 
     // Emit a constant string fragment.
     if (DollarPos != LastEmitted) {
-      // TODO: this should eventually handle escaping.
-      if (CurVariant == Variant || CurVariant == ~0U)
-        AddLiteralString(std::string(AsmString.begin()+LastEmitted,
-                                     AsmString.begin()+DollarPos));
-      LastEmitted = DollarPos;
+      if (CurVariant == Variant || CurVariant == ~0U) {
+        for (; LastEmitted != DollarPos; ++LastEmitted)
+          switch (AsmString[LastEmitted]) {
+          case '\n': AddLiteralString("\\n"); break;
+          case '\t': AddLiteralString("\\t"); break;
+          case '"': AddLiteralString("\\\""); break;
+          case '\\': AddLiteralString("\\\\"); break;
+          default:
+            AddLiteralString(std::string(1, AsmString[LastEmitted]));
+            break;
+          }
+      } else {
+        LastEmitted = DollarPos;
+      }
     } else if (AsmString[DollarPos] == '\\') {
       if (DollarPos+1 != AsmString.size() &&
           (CurVariant == Variant || CurVariant == ~0U)) {
@@ -639,6 +648,19 @@ void AsmWriterEmitter::run(std::ostream &O) {
     }
   }
   O << "\";\n\n";
+
+  O << "  if (TAI->doesSupportDebugInformation() &&\n"
+    << "      DW->ShouldEmitDwarfDebug()) {\n"
+    << "    DebugLoc CurDL = MI->getDebugLoc();\n\n"
+    << "    if (!CurDL.isUnknown()) {\n"
+    << "      static DebugLocTuple PrevDLT(0, ~0U, ~0U);\n"
+    << "      DebugLocTuple CurDLT = MF->getDebugLocTuple(CurDL);\n\n"
+    << "      if (CurDLT.CompileUnit != 0 && PrevDLT != CurDLT)\n"
+    << "        printLabel(DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,\n"
+    << "                               DICompileUnit(CurDLT.CompileUnit)));\n\n"
+    << "      PrevDLT = CurDLT;\n"
+    << "    }\n"
+    << "  }\n\n";
 
   O << "  if (MI->getOpcode() == TargetInstrInfo::INLINEASM) {\n"
     << "    O << \"\\t\";\n"

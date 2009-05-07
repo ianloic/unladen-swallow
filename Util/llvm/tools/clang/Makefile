@@ -1,5 +1,5 @@
 LEVEL = ../..
-DIRS := lib Driver docs tools
+DIRS := include lib tools docs
 
 include $(LEVEL)/Makefile.common
 
@@ -20,4 +20,13 @@ report::
 clean::
 	@ $(MAKE) -C test clean
 
-.PHONY: test report clean
+tags::
+	$(Verb) etags `find . -type f -name \*.h | grep -v /lib/Headers | grep -v /test/` `find . -type f -name \*.cpp | grep -v /lib/Headers | grep -v /test/`
+
+cscope.files:
+	find tools lib include -name '*.cpp' \
+	                    -or -name '*.def' \
+	                    -or -name '*.td' \
+	                    -or -name '*.h' > cscope.files
+
+.PHONY: test report clean cscope.files

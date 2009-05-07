@@ -17,10 +17,12 @@
 using namespace clang;
 
 void CXXConditionDeclExpr::Destroy(ASTContext& C) {
-  getVarDecl()->Destroy(C);
-  delete this;
+  // FIXME: Cannot destroy the decl here, because it is linked into the
+  // DeclContext's chain.
+  //getVarDecl()->Destroy(C);
+  this->~CXXConditionDeclExpr();
+  C.Deallocate(this);
 }
-
 
 //===----------------------------------------------------------------------===//
 //  Child Iterators for iterating over subexpressions/substatements
@@ -61,14 +63,6 @@ Stmt::child_iterator CXXDefaultArgExpr::child_end() {
   return child_iterator();
 }
 
-// CXXTemporaryObjectExpr
-Stmt::child_iterator CXXTemporaryObjectExpr::child_begin() { 
-  return child_iterator(Args);
-}
-Stmt::child_iterator CXXTemporaryObjectExpr::child_end() {
-  return child_iterator(Args + NumArgs);
-}
-
 // CXXZeroInitValueExpr
 Stmt::child_iterator CXXZeroInitValueExpr::child_begin() { 
   return child_iterator();
@@ -93,7 +87,8 @@ CXXNewExpr::CXXNewExpr(bool globalNew, FunctionDecl *operatorNew,
                        Expr **constructorArgs, unsigned numConsArgs,
                        FunctionDecl *operatorDelete, QualType ty,
                        SourceLocation startLoc, SourceLocation endLoc)
-  : Expr(CXXNewExprClass, ty), GlobalNew(globalNew), ParenTypeId(parenTypeId),
+  : Expr(CXXNewExprClass, ty, ty->isDependentType(), ty->isDependentType()),
+    GlobalNew(globalNew), ParenTypeId(parenTypeId),
     Initializer(initializer), Array(arraySize), NumPlacementArgs(numPlaceArgs),
     NumConstructorArgs(numConsArgs), OperatorNew(operatorNew),
     OperatorDelete(operatorDelete), Constructor(constructor),
@@ -120,11 +115,11 @@ Stmt::child_iterator CXXNewExpr::child_end() {
 Stmt::child_iterator CXXDeleteExpr::child_begin() { return &Argument; }
 Stmt::child_iterator CXXDeleteExpr::child_end() { return &Argument+1; }
 
-// CXXDependentNameExpr
-Stmt::child_iterator CXXDependentNameExpr::child_begin() { 
+// UnresolvedFunctionNameExpr
+Stmt::child_iterator UnresolvedFunctionNameExpr::child_begin() { 
   return child_iterator(); 
 }
-Stmt::child_iterator CXXDependentNameExpr::child_end() {
+Stmt::child_iterator UnresolvedFunctionNameExpr::child_end() {
   return child_iterator();
 }
 
@@ -136,7 +131,16 @@ Stmt::child_iterator UnaryTypeTraitExpr::child_end() {
   return child_iterator();
 }
 
-bool UnaryTypeTraitExpr::Evaluate() const {
+// UnresolvedDeclRefExpr
+StmtIterator UnresolvedDeclRefExpr::child_begin() {
+  return child_iterator();
+}
+
+StmtIterator UnresolvedDeclRefExpr::child_end() {
+  return child_iterator();
+}
+
+bool UnaryTypeTraitExpr::EvaluateTrait() const {
   switch(UTT) {
   default: assert(false && "Unknown type trait or not implemented");
   case UTT_IsPOD: return QueriedType->isPODType();
@@ -154,28 +158,19 @@ bool UnaryTypeTraitExpr::Evaluate() const {
       return cast<CXXRecordDecl>(Record->getDecl())->isPolymorphic();
     }
     return false;
+  case UTT_IsAbstract:
+    if (const RecordType *RT = QueriedType->getAsRecordType())
+      return cast<CXXRecordDecl>(RT->getDecl())->isAbstract();
+    return false;
+  case UTT_HasTrivialConstructor:
+    if (const RecordType *RT = QueriedType->getAsRecordType())
+      return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialConstructor();
+    return false;
+  case UTT_HasTrivialDestructor:
+    if (const RecordType *RT = QueriedType->getAsRecordType())
+      return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialDestructor();
+    return false;
   }
-}
-
-OverloadedOperatorKind CXXOperatorCallExpr::getOperator() const {
-  // All simple function calls (e.g. func()) are implicitly cast to pointer to
-  // function. As a result, we try and obtain the DeclRefExpr from the 
-  // ImplicitCastExpr.
-  const ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(getCallee());
-  if (!ICE) // FIXME: deal with more complex calls (e.g. (func)(), (*func)()).
-    return OO_None;
-  
-  const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(ICE->getSubExpr());
-  if (!DRE)
-    return OO_None;
-  
-  if (const FunctionDecl *FDecl = dyn_cast<FunctionDecl>(DRE->getDecl()))
-    return FDecl->getDeclName().getCXXOverloadedOperator();  
-  else if (const OverloadedFunctionDecl *Ovl 
-             = dyn_cast<OverloadedFunctionDecl>(DRE->getDecl()))
-    return Ovl->getDeclName().getCXXOverloadedOperator();
-  else
-    return OO_None;
 }
 
 SourceRange CXXOperatorCallExpr::getSourceRange() const {
@@ -228,22 +223,81 @@ const char *CXXNamedCastExpr::getCastName() const {
   }
 }
 
-CXXTemporaryObjectExpr::CXXTemporaryObjectExpr(CXXConstructorDecl *Cons,
+CXXTemporaryObjectExpr::CXXTemporaryObjectExpr(ASTContext &C, VarDecl *vd,
+                                               CXXConstructorDecl *Cons,
                                                QualType writtenTy,
                                                SourceLocation tyBeginLoc, 
                                                Expr **Args,
                                                unsigned NumArgs, 
                                                SourceLocation rParenLoc)
-  : Expr(CXXTemporaryObjectExprClass, writtenTy),
-    TyBeginLoc(tyBeginLoc), RParenLoc(rParenLoc),
-    Constructor(Cons), Args(0), NumArgs(NumArgs) {
-  if (NumArgs > 0) {
-    this->Args = new Stmt*[NumArgs];
-    for (unsigned i = 0; i < NumArgs; ++i)
-      this->Args[i] = Args[i];
+  : CXXConstructExpr(C, CXXTemporaryObjectExprClass, vd, writtenTy, Cons, 
+                     false, Args, NumArgs), 
+  TyBeginLoc(tyBeginLoc), RParenLoc(rParenLoc) {
+}
+
+CXXConstructExpr *CXXConstructExpr::Create(ASTContext &C, VarDecl *VD, 
+                                           QualType T, CXXConstructorDecl *D,  
+                                           bool Elidable,
+                                           Expr **Args, unsigned NumArgs) {
+  return new (C) CXXConstructExpr(C, CXXConstructExprClass, VD, T, D, Elidable, 
+                                  Args, NumArgs);
+}
+
+CXXConstructExpr::CXXConstructExpr(ASTContext &C, StmtClass SC, VarDecl *vd, 
+                                   QualType T, CXXConstructorDecl *D, 
+                                   bool elidable,
+                                   Expr **args, unsigned numargs) 
+: Expr(SC, T,
+       T->isDependentType(),
+       (T->isDependentType() ||
+        CallExpr::hasAnyValueDependentArguments(args, numargs))),
+  VD(vd), Constructor(D), Elidable(elidable), Args(0), NumArgs(numargs) {
+    if (NumArgs > 0) {
+      Args = new (C) Stmt*[NumArgs];
+      for (unsigned i = 0; i < NumArgs; ++i)
+        Args[i] = args[i];
+    }
+}
+
+void CXXConstructExpr::Destroy(ASTContext &C) {
+  DestroyChildren(C);
+  if (Args)
+    C.Deallocate(Args);
+  this->~CXXConstructExpr();
+  C.Deallocate(this);
+}
+
+CXXExprWithTemporaries::CXXExprWithTemporaries(Expr *subexpr, 
+                                               CXXTempVarDecl **decls, 
+                                               unsigned numdecls)
+: Expr(CXXExprWithTemporariesClass, subexpr->getType(),
+       subexpr->isTypeDependent(), subexpr->isValueDependent()), 
+  SubExpr(subexpr), Decls(0), NumDecls(numdecls) {
+  if (NumDecls > 0) {
+    Decls = new CXXTempVarDecl*[NumDecls];
+    for (unsigned i = 0; i < NumDecls; ++i)
+      Decls[i] = decls[i];
   }
 }
 
-CXXTemporaryObjectExpr::~CXXTemporaryObjectExpr() {
-  delete [] Args;
+CXXExprWithTemporaries::~CXXExprWithTemporaries() {
+  delete[] Decls;
 }
+
+// CXXConstructExpr
+Stmt::child_iterator CXXConstructExpr::child_begin() {
+  return &Args[0];
+}
+Stmt::child_iterator CXXConstructExpr::child_end() {
+  return &Args[0]+NumArgs;
+}
+
+// CXXExprWithTemporaries
+Stmt::child_iterator CXXExprWithTemporaries::child_begin() {
+  return &SubExpr;
+}
+
+Stmt::child_iterator CXXExprWithTemporaries::child_end() { 
+  return &SubExpr + 1;
+}
+

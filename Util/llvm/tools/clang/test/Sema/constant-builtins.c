@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only %s -verify -pedantic
+// RUN: clang-cc -fsyntax-only %s -verify -pedantic
 
 // Math stuff
 
@@ -13,7 +13,7 @@ long double  g5 = __builtin_infl();
 
 extern int f();
 
-int h0 = __builtin_types_compatible_p(int,float); // expected-warning {{extension}}
+int h0 = __builtin_types_compatible_p(int,float);
 //int h1 = __builtin_choose_expr(1, 10, f());
 //int h2 = __builtin_expect(0, 0);
 

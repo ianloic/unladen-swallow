@@ -14,9 +14,48 @@
 #include "clang/Parse/Parser.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
+#include "clang/Basic/TargetInfo.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/RecyclingAllocator.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace clang;
+
+///  Out-of-line virtual destructor to provide home for ActionBase class.
+ActionBase::~ActionBase() {}
+
+///  Out-of-line virtual destructor to provide home for Action class.
+Action::~Action() {}
+
+// Defined out-of-line here because of dependecy on AttributeList
+Action::DeclPtrTy Action::ActOnUsingDirective(Scope *CurScope,
+                                              SourceLocation UsingLoc,
+                                              SourceLocation NamespcLoc,
+                                              const CXXScopeSpec &SS,
+                                              SourceLocation IdentLoc,
+                                              IdentifierInfo *NamespcName,
+                                              AttributeList *AttrList) {
+  
+  // FIXME: Parser seems to assume that Action::ActOn* takes ownership over
+  // passed AttributeList, however other actions don't free it, is it
+  // temporary state or bug?
+  delete AttrList;
+  return DeclPtrTy();
+}
+
+
+void PrettyStackTraceActionsDecl::print(llvm::raw_ostream &OS) const {
+  if (Loc.isValid()) {
+    Loc.print(OS, SM);
+    OS << ": ";
+  }
+  OS << Message;
+  
+  std::string Name = Actions.getDeclName(TheDecl);
+  if (!Name.empty())
+    OS << " '" << Name << '\'';
+  
+  OS << '\n';
+}
 
 /// TypeNameInfo - A link exists here for each scope that an identifier is
 /// defined.
@@ -36,7 +75,7 @@ namespace {
     
     void AddEntry(bool isTypename, IdentifierInfo *II) {
       TypeNameInfo *TI = Allocator.Allocate<TypeNameInfo>();
-      new (TI) TypeNameInfo(1, II->getFETokenInfo<TypeNameInfo>());
+      new (TI) TypeNameInfo(isTypename, II->getFETokenInfo<TypeNameInfo>());
       II->setFETokenInfo(TI);
     }
     
@@ -62,16 +101,22 @@ MinimalAction::~MinimalAction() {
 
 void MinimalAction::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
   TUScope = S;
-  if (!PP.getLangOptions().ObjC1) return;
-
 
   TypeNameInfoTable &TNIT = *getTable(TypeNameInfoTablePtr);
+
+  if (PP.getTargetInfo().getPointerWidth(0) >= 64) {
+    // Install [u]int128_t for 64-bit targets.
+    TNIT.AddEntry(true, &Idents.get("__int128_t"));
+    TNIT.AddEntry(true, &Idents.get("__uint128_t"));
+  }
   
-  // Recognize the ObjC built-in type identifiers as types. 
-  TNIT.AddEntry(true, &Idents.get("id"));
-  TNIT.AddEntry(true, &Idents.get("SEL"));
-  TNIT.AddEntry(true, &Idents.get("Class"));
-  TNIT.AddEntry(true, &Idents.get("Protocol"));
+  if (PP.getLangOptions().ObjC1) {
+    // Recognize the ObjC built-in type identifiers as types. 
+    TNIT.AddEntry(true, &Idents.get("id"));
+    TNIT.AddEntry(true, &Idents.get("SEL"));
+    TNIT.AddEntry(true, &Idents.get("Class"));
+    TNIT.AddEntry(true, &Idents.get("Protocol"));
+  }
 }
 
 /// isTypeName - This looks at the IdentifierInfo::FETokenInfo field to
@@ -80,8 +125,8 @@ void MinimalAction::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
 ///
 /// FIXME: Use the passed CXXScopeSpec for accurate C++ type checking.
 Action::TypeTy *
-MinimalAction::getTypeName(IdentifierInfo &II, Scope *S,
-                           const CXXScopeSpec *SS) {
+MinimalAction::getTypeName(IdentifierInfo &II, SourceLocation Loc,
+                           Scope *S, const CXXScopeSpec *SS) {
   if (TypeNameInfo *TI = II.getFETokenInfo<TypeNameInfo>())
     if (TI->isTypeName)
       return TI;
@@ -95,25 +140,22 @@ bool MinimalAction::isCurrentClassName(const IdentifierInfo &, Scope *,
   return false;
 }
 
-  /// isTemplateName - Determines whether the identifier II is a
-  /// template name in the current scope, and returns the template
-  /// declaration if II names a template. An optional CXXScope can be
-  /// passed to indicate the C++ scope in which the identifier will be
-  /// found. 
-Action::DeclTy *MinimalAction::isTemplateName(IdentifierInfo &II, Scope *S,
-                                              const CXXScopeSpec *SS ) {
-  return 0;
+TemplateNameKind 
+MinimalAction::isTemplateName(const IdentifierInfo &II, Scope *S,
+                              TemplateTy &TemplateDecl,
+                              const CXXScopeSpec *SS) {
+  return TNK_Non_template;
 }
 
 /// ActOnDeclarator - If this is a typedef declarator, we modify the
 /// IdentifierInfo::FETokenInfo field to keep track of this fact, until S is
 /// popped.
-Action::DeclTy *
-MinimalAction::ActOnDeclarator(Scope *S, Declarator &D, DeclTy *LastInGroup) {
+Action::DeclPtrTy
+MinimalAction::ActOnDeclarator(Scope *S, Declarator &D) {
   IdentifierInfo *II = D.getIdentifier();
   
   // If there is no identifier associated with this declarator, bail out.
-  if (II == 0) return 0;
+  if (II == 0) return DeclPtrTy();
   
   TypeNameInfo *weCurrentlyHaveTypeInfo = II->getFETokenInfo<TypeNameInfo>();
   bool isTypeName =
@@ -127,29 +169,29 @@ MinimalAction::ActOnDeclarator(Scope *S, Declarator &D, DeclTy *LastInGroup) {
     getTable(TypeNameInfoTablePtr)->AddEntry(isTypeName, II);
   
     // Remember that this needs to be removed when the scope is popped.
-    S->AddDecl(II);
+    S->AddDecl(DeclPtrTy::make(II));
   } 
-  return 0;
+  return DeclPtrTy();
 }
 
-Action::DeclTy *
+Action::DeclPtrTy
 MinimalAction::ActOnStartClassInterface(SourceLocation AtInterfaceLoc,
                                         IdentifierInfo *ClassName,
                                         SourceLocation ClassLoc,
                                         IdentifierInfo *SuperName,
                                         SourceLocation SuperLoc,
-                                        DeclTy * const *ProtoRefs,
+                                        const DeclPtrTy *ProtoRefs,
                                         unsigned NumProtocols,
                                         SourceLocation EndProtoLoc,
                                         AttributeList *AttrList) {
   // Allocate and add the 'TypeNameInfo' "decl".
   getTable(TypeNameInfoTablePtr)->AddEntry(true, ClassName);
-  return 0;
+  return DeclPtrTy();
 }
 
 /// ActOnForwardClassDeclaration - 
 /// Scope will always be top level file scope. 
-Action::DeclTy *
+Action::DeclPtrTy
 MinimalAction::ActOnForwardClassDeclaration(SourceLocation AtClassLoc,
                                 IdentifierInfo **IdentList, unsigned NumElts) {
   for (unsigned i = 0; i != NumElts; ++i) {
@@ -157,9 +199,9 @@ MinimalAction::ActOnForwardClassDeclaration(SourceLocation AtClassLoc,
     getTable(TypeNameInfoTablePtr)->AddEntry(true, IdentList[i]);
   
     // Remember that this needs to be removed when the scope is popped.
-    TUScope->AddDecl(IdentList[i]);
+    TUScope->AddDecl(DeclPtrTy::make(IdentList[i]));
   }
-  return 0;
+  return DeclPtrTy();
 }
 
 /// ActOnPopScope - When a scope is popped, if any typedefs are now
@@ -169,7 +211,7 @@ void MinimalAction::ActOnPopScope(SourceLocation Loc, Scope *S) {
   
   for (Scope::decl_iterator I = S->decl_begin(), E = S->decl_end();
        I != E; ++I) {
-    IdentifierInfo &II = *static_cast<IdentifierInfo*>(*I);
+    IdentifierInfo &II = *(*I).getAs<IdentifierInfo>();
     TypeNameInfo *TI = II.getFETokenInfo<TypeNameInfo>();
     assert(TI && "This decl didn't get pushed??");
     

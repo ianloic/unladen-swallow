@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 //  This file defines a meta-engine for path-sensitive dataflow analysis that
-//  is built on GREngine, but provides the boilerplate to execute transfer
+//  is built on GRCoreEngine, but provides the boilerplate to execute transfer
 //  functions and build the ExplodedGraph at the expression level.
 //
 //===----------------------------------------------------------------------===//
@@ -20,18 +20,17 @@
 #include "clang/Analysis/PathSensitive/GRState.h"
 #include "clang/Analysis/PathSensitive/GRSimpleAPICheck.h"
 #include "clang/Analysis/PathSensitive/GRTransferFuncs.h"
+#include "clang/Analysis/PathSensitive/BugReporter.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/ExprObjC.h"
 
 namespace clang {  
   
-  class BugType;
   class PathDiagnosticClient;
   class Diagnostic;
-  class BugReporterData;
+  class ObjCForCollectionStmt;
 
-class GRExprEngine {
-  
+class GRExprEngine {  
 public:
   typedef GRState                  StateTy;
   typedef ExplodedGraph<StateTy>      GraphTy;
@@ -44,7 +43,6 @@ public:
   typedef GRSwitchNodeBuilder<StateTy>        SwitchNodeBuilder;
   typedef GREndPathNodeBuilder<StateTy>       EndPathNodeBuilder;
   typedef ExplodedNodeSet<StateTy>            NodeSet;
-  
     
 protected:
   GRCoreEngine<GRExprEngine> CoreEngine;
@@ -62,13 +60,12 @@ protected:
   
   /// StateMgr - Object that manages the data for all created states.
   GRStateManager StateMgr;
-  
-  /// BugTypes - Objects used for reporting bugs.
-  typedef std::vector<BugType*> BugTypeSet;
-  BugTypeSet BugTypes;
-  
+
   /// SymMgr - Object that manages the symbol information.
   SymbolManager& SymMgr;
+  
+  /// ValMgr - Object that manages/creates SVals.
+  ValueManager &ValMgr;
   
   /// EntryNode - The immediate predecessor node.
   NodeTy* EntryNode;
@@ -92,9 +89,43 @@ protected:
   /// PurgeDead - Remove dead bindings before processing a statement.
   bool PurgeDead;
   
+  /// BR - The BugReporter associated with this engine.  It is important that
+  //   this object be placed at the very end of member variables so that its
+  //   destructor is called before the rest of the GRExprEngine is destroyed.
+  GRBugReporter BR;
+  
+  /// EargerlyAssume - A flag indicating how the engine should handle
+  //   expressions such as: 'x = (y != 0)'.  When this flag is true then
+  //   the subexpression 'y != 0' will be eagerly assumed to be true or false,
+  //   thus evaluating it to the integers 0 or 1 respectively.  The upside
+  //   is that this can increase analysis precision until we have a better way
+  //   to lazily evaluate such logic.  The downside is that it eagerly
+  //   bifurcates paths.
+  const bool EagerlyAssume;
+
 public:
   typedef llvm::SmallPtrSet<NodeTy*,2> ErrorNodes;  
   typedef llvm::DenseMap<NodeTy*, Expr*> UndefArgsTy;
+  
+  /// NilReceiverStructRetExplicit - Nodes in the ExplodedGraph that resulted
+  ///  from [x ...] with 'x' definitely being nil and the result was a 'struct'
+  //  (an undefined value).
+  ErrorNodes NilReceiverStructRetExplicit;
+  
+  /// NilReceiverStructRetImplicit - Nodes in the ExplodedGraph that resulted
+  ///  from [x ...] with 'x' possibly being nil and the result was a 'struct'
+  //  (an undefined value).
+  ErrorNodes NilReceiverStructRetImplicit;
+  
+  /// NilReceiverLargerThanVoidPtrRetExplicit - Nodes in the ExplodedGraph that
+  /// resulted from [x ...] with 'x' definitely being nil and the result's size
+  // was larger than sizeof(void *) (an undefined value).
+  ErrorNodes NilReceiverLargerThanVoidPtrRetExplicit;
+
+  /// NilReceiverLargerThanVoidPtrRetImplicit - Nodes in the ExplodedGraph that
+  /// resulted from [x ...] with 'x' possibly being nil and the result's size
+  // was larger than sizeof(void *) (an undefined value).
+  ErrorNodes NilReceiverLargerThanVoidPtrRetImplicit;
   
   /// RetsStackAddr - Nodes in the ExplodedGraph that result from returning
   ///  the address of a stack variable.
@@ -177,10 +208,11 @@ public:
   
 public:
   GRExprEngine(CFG& cfg, Decl& CD, ASTContext& Ctx, LiveVariables& L,
-               bool purgeDead,
+               BugReporterData& BRD,
+               bool purgeDead, bool eagerlyAssume = true,
                StoreManagerCreator SMC = CreateBasicStoreManager,
                ConstraintManagerCreator CMC = CreateBasicConstraintManager);
-  
+
   ~GRExprEngine();
   
   void ExecuteWorkList(unsigned Steps = 150000) {
@@ -194,6 +226,8 @@ public:
   CFG& getCFG() { return G.getCFG(); }
   
   GRTransferFuncs& getTF() { return *StateMgr.TF; }
+  
+  BugReporter& getBugReporter() { return BR; }
   
   /// setTransferFunctions
   void setTransferFunctions(GRTransferFuncs* tf);
@@ -219,26 +253,8 @@ public:
   
   GraphTy& getGraph() { return G; }
   const GraphTy& getGraph() const { return G; }
-      
-  typedef BugTypeSet::iterator bug_type_iterator;
-  typedef BugTypeSet::const_iterator const_bug_type_iterator;
-  
-  bug_type_iterator bug_types_begin() { return BugTypes.begin(); }
-  bug_type_iterator bug_types_end() { return BugTypes.end(); }
 
-  const_bug_type_iterator bug_types_begin() const { return BugTypes.begin(); }
-  const_bug_type_iterator bug_types_end() const { return BugTypes.end(); }
-  
-  /// Register - Register a BugType with the analyzer engine.  A registered
-  ///  BugType object will have its 'EmitWarnings' method called when the
-  ///  the analyzer finishes analyzing a method or function.
-  void Register(BugType* B) {
-    BugTypes.push_back(B);
-  }
-  
   void RegisterInternalChecks();
-  
-  void EmitWarnings(BugReporterData& BRData);  
   
   bool isRetStackAddr(const NodeTy* N) const {
     return N->isSink() && RetsStackAddr.count(const_cast<NodeTy*>(N)) != 0;
@@ -317,6 +333,28 @@ public:
     return ImplicitNullDeref.end();
   }
   
+  typedef ErrorNodes::iterator nil_receiver_struct_ret_iterator;
+  
+  nil_receiver_struct_ret_iterator nil_receiver_struct_ret_begin() {
+    return NilReceiverStructRetExplicit.begin();
+  }
+
+  nil_receiver_struct_ret_iterator nil_receiver_struct_ret_end() {
+    return NilReceiverStructRetExplicit.end();
+  }
+  
+  typedef ErrorNodes::iterator nil_receiver_larger_than_voidptr_ret_iterator;
+  
+  nil_receiver_larger_than_voidptr_ret_iterator
+  nil_receiver_larger_than_voidptr_ret_begin() {
+    return NilReceiverLargerThanVoidPtrRetExplicit.begin();
+  }
+
+  nil_receiver_larger_than_voidptr_ret_iterator
+  nil_receiver_larger_than_voidptr_ret_end() {
+    return NilReceiverLargerThanVoidPtrRetExplicit.end();
+  }
+  
   typedef ErrorNodes::iterator undef_deref_iterator;
   undef_deref_iterator undef_derefs_begin() { return UndefDeref.begin(); }
   undef_deref_iterator undef_derefs_end() { return UndefDeref.end(); }
@@ -383,6 +421,7 @@ public:
   }
 
   void AddCheck(GRSimpleAPICheck* A, Stmt::StmtClass C);
+  void AddCheck(GRSimpleAPICheck* A);
   
   /// ProcessStmt - Called by GRCoreEngine. Used to generate new successor
   ///  nodes by processing the 'effects' of a block-level statement.  
@@ -418,6 +457,11 @@ public:
 
   StoreManager& getStoreManager() { return StateMgr.getStoreManager(); }
   
+  ConstraintManager& getConstraintManager() {
+    return StateMgr.getConstraintManager();
+  }
+  
+  // FIXME: Remove when we migrate over to just using ValueManager.
   BasicValueFactory& getBasicVals() {
     return StateMgr.getBasicVals();
   }
@@ -425,6 +469,10 @@ public:
     return StateMgr.getBasicVals();
   }
   
+  ValueManager &getValueManager() { return ValMgr; }  
+  const ValueManager &getValueManager() const { return ValMgr; }
+  
+  // FIXME: Remove when we migrate over to just using ValueManager.
   SymbolManager& getSymbolManager() { return SymMgr; }
   const SymbolManager& getSymbolManager() const { return SymMgr; }
   
@@ -491,11 +539,11 @@ protected:
     return StateMgr.AssumeInBound(St, Idx, UpperBound, Assumption, isFeasible);
   }
 
+public:
   NodeTy* MakeNode(NodeSet& Dst, Stmt* S, NodeTy* Pred, const GRState* St,
-                   ProgramPoint::Kind K = ProgramPoint::PostStmtKind) {
-    assert (Builder && "GRStmtNodeBuilder not present.");
-    return Builder->MakeNode(Dst, S, Pred, St, K);
-  }
+                   ProgramPoint::Kind K = ProgramPoint::PostStmtKind,
+                   const void *tag = 0);
+protected:
     
   /// Visit - Transfer function logic for all statements.  Dispatches to
   ///  other functions that handle specific kinds of statements.
@@ -533,7 +581,7 @@ protected:
                  NodeSet& Dst);
   void VisitCallRec(CallExpr* CE, NodeTy* Pred,
                     CallExpr::arg_iterator AI, CallExpr::arg_iterator AE,
-                    NodeSet& Dst, const FunctionTypeProto *, 
+                    NodeSet& Dst, const FunctionProtoType *, 
                     unsigned ParamIdx = 0);
   
   /// VisitCast - Transfer function logic for all casts (implicit and explicit).
@@ -603,6 +651,11 @@ protected:
   const GRState* CheckDivideZero(Expr* Ex, const GRState* St, NodeTy* Pred,
                                  SVal Denom);  
   
+  /// EvalEagerlyAssume - Given the nodes in 'Src', eagerly assume symbolic
+  ///  expressions of the form 'x != 0' and generate new nodes (stored in Dst)
+  ///  with those assumptions.
+  void EvalEagerlyAssume(NodeSet& Dst, NodeSet& Src, Expr *Ex);
+  
   SVal EvalCast(SVal X, QualType CastT) {
     if (X.isUnknownOrUndef())
       return X;
@@ -621,54 +674,62 @@ protected:
     return X.isValid() ? getTF().EvalComplement(*this, cast<NonLoc>(X)) : X;
   }
   
-  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, NonLoc R) {
-    return R.isValid() ? getTF().DetermEvalBinOpNN(*this, Op, L, R)
+public:
+  
+  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, NonLoc R, QualType T) {
+    return R.isValid() ? getTF().DetermEvalBinOpNN(*this, Op, L, R, T)
                        : R;
   }
 
-  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, SVal R) {
+  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, SVal R, QualType T) {
     return R.isValid() ? getTF().DetermEvalBinOpNN(*this, Op, L,
-                                                   cast<NonLoc>(R)) : R;
+                                                   cast<NonLoc>(R), T) : R;
   }
   
   void EvalBinOp(ExplodedNodeSet<GRState>& Dst, Expr* Ex,
                  BinaryOperator::Opcode Op, NonLoc L, NonLoc R,
-                 ExplodedNode<GRState>* Pred);
+                 ExplodedNode<GRState>* Pred, QualType T);
   
   void EvalBinOp(GRStateSet& OStates, const GRState* St, Expr* Ex,
-                 BinaryOperator::Opcode Op, NonLoc L, NonLoc R);  
+                 BinaryOperator::Opcode Op, NonLoc L, NonLoc R, QualType T);  
   
-  SVal EvalBinOp(BinaryOperator::Opcode Op, SVal L, SVal R);
+  SVal EvalBinOp(BinaryOperator::Opcode Op, SVal L, SVal R, QualType T);
   
-  void EvalCall(NodeSet& Dst, CallExpr* CE, SVal L, NodeTy* Pred) {
-    assert (Builder && "GRStmtNodeBuilder must be defined.");
-    getTF().EvalCall(Dst, *this, *Builder, CE, L, Pred);
-  }
+protected:
+  
+  void EvalCall(NodeSet& Dst, CallExpr* CE, SVal L, NodeTy* Pred);
   
   void EvalObjCMessageExpr(NodeSet& Dst, ObjCMessageExpr* ME, NodeTy* Pred) {
     assert (Builder && "GRStmtNodeBuilder must be defined.");
     getTF().EvalObjCMessageExpr(Dst, *this, *Builder, ME, Pred);
   }
-  
-  void EvalStore(NodeSet& Dst, Expr* E, NodeTy* Pred, const GRState* St,
-                 SVal TargetLV, SVal Val);
-  
-  void EvalStore(NodeSet& Dst, Expr* E, Expr* StoreE, NodeTy* Pred,
-                 const GRState* St, SVal TargetLV, SVal Val);
-  
-  // FIXME: The "CheckOnly" option exists only because Array and Field
-  //  loads aren't fully implemented.  Eventually this option will go away.
-  
-  void EvalLoad(NodeSet& Dst, Expr* Ex, NodeTy* Pred,
-                const GRState* St, SVal location, bool CheckOnly = false);
-  
-  NodeTy* EvalLocation(Stmt* Ex, NodeTy* Pred,
-                       const GRState* St, SVal location);
-  
+
   void EvalReturn(NodeSet& Dst, ReturnStmt* s, NodeTy* Pred);
   
   const GRState* MarkBranch(const GRState* St, Stmt* Terminator, 
                             bool branchTaken);
+  
+  /// EvalBind - Handle the semantics of binding a value to a specific location.
+  ///  This method is used by EvalStore, VisitDeclStmt, and others.
+  void EvalBind(NodeSet& Dst, Expr* Ex, NodeTy* Pred,
+                const GRState* St, SVal location, SVal Val);
+  
+public:
+  void EvalLoad(NodeSet& Dst, Expr* Ex, NodeTy* Pred,
+                const GRState* St, SVal location, const void *tag = 0);
+  
+  NodeTy* EvalLocation(Stmt* Ex, NodeTy* Pred,
+                       const GRState* St, SVal location,
+                       const void *tag = 0);
+
+  
+  void EvalStore(NodeSet& Dst, Expr* E, NodeTy* Pred, const GRState* St,
+                 SVal TargetLV, SVal Val, const void *tag = 0);
+  
+  void EvalStore(NodeSet& Dst, Expr* E, Expr* StoreE, NodeTy* Pred,
+                 const GRState* St, SVal TargetLV, SVal Val,
+                 const void *tag = 0);
+  
 };
   
 } // end clang namespace

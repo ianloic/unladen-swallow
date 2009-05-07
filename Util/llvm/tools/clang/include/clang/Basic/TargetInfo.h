@@ -15,6 +15,7 @@
 #define LLVM_CLANG_BASIC_TARGETINFO_H
 
 #include "llvm/Support/DataTypes.h"
+#include <cassert>
 #include <vector>
 #include <string>
 
@@ -36,6 +37,7 @@ protected:
   // Target values set by the ctor of the actual target implementation.  Default
   // values are specified by the TargetInfo constructor.
   bool CharIsSigned;
+  bool TLSSupported;
   unsigned char PointerWidth, PointerAlign;
   unsigned char WCharWidth, WCharAlign;
   unsigned char IntWidth, IntAlign;
@@ -48,6 +50,7 @@ protected:
   const char *DescriptionString;
   const char *UserLabelPrefix;
   const llvm::fltSemantics *FloatFormat, *DoubleFormat, *LongDoubleFormat;
+  unsigned char RegParmMax, SSERegParmMax;
 
   // TargetInfo Constructor.  Default initializes all fields.
   TargetInfo(const std::string &T);
@@ -61,7 +64,7 @@ public:
 
   ///===---- Target Data Type Query Methods -------------------------------===//
   enum IntType {
-    NoInt = 0x0,
+    NoInt = 0,
     SignedShort,
     UnsignedShort,
     SignedInt,
@@ -70,14 +73,18 @@ public:
     UnsignedLong,
     SignedLongLong,
     UnsignedLongLong
-  } SizeType, IntMaxType, UIntMaxType, PtrDiffType, WCharType;  
-  enum IntType getSizeType() const {return SizeType;}
-  enum IntType getIntMaxType() const {return IntMaxType;}
-  enum IntType getUIntMaxType() const {return UIntMaxType;}
-  enum IntType getPtrDiffType(unsigned AddrSpace) const {
+  };
+protected:
+  IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType;
+public:
+  IntType getSizeType() const { return SizeType; }
+  IntType getIntMaxType() const { return IntMaxType; }
+  IntType getUIntMaxType() const { return UIntMaxType; }
+  IntType getPtrDiffType(unsigned AddrSpace) const {
     return AddrSpace == 0 ? PtrDiffType : getPtrDiffTypeV(AddrSpace);
   }
-  enum IntType getWCharType() const {return WCharType;}
+  IntType getIntPtrType() const { return IntPtrType; }
+  IntType getWCharType() const { return WCharType; }
 
   /// isCharSigned - Return true if 'char' is 'signed char' or false if it is
   /// treated as 'unsigned char'.  This is implementation defined according to
@@ -162,11 +169,16 @@ public:
     return UserLabelPrefix;
   }
   
+  /// getTypeName - Return the user string for the specified integer type enum.
+  /// For example, SignedShort -> "short".
+  static const char *getTypeName(IntType T);
+  
   ///===---- Other target property query methods --------------------------===//
   
   /// getTargetDefines - Appends the target-specific #define values for this
   /// target set to the specified buffer.
-  virtual void getTargetDefines(std::vector<char> &DefineBuffer) const = 0;
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &DefineBuffer) const = 0;
   
   /// getTargetBuiltins - Return information about target-specific builtins for
   /// the current primary target, and info about which builtins are non-portable
@@ -187,26 +199,70 @@ public:
   // For example, on x86 it will return "ax" when "eax" is passed in.
   const char *getNormalizedGCCRegisterName(const char *Name) const;
   
-  enum ConstraintInfo {
-    CI_None = 0x00,
-    CI_AllowsMemory = 0x01,
-    CI_AllowsRegister = 0x02,
-    CI_ReadWrite = 0x04
+  struct ConstraintInfo {
+    enum {
+      CI_None = 0x00,
+      CI_AllowsMemory = 0x01,
+      CI_AllowsRegister = 0x02,
+      CI_ReadWrite = 0x04,       // "+r" output constraint (read and write).
+      CI_HasMatchingInput = 0x08 // This output operand has a matching input.
+    };
+    unsigned Flags;
+    int TiedOperand;
+    
+    std::string ConstraintStr;  // constraint: "=rm"
+    std::string Name;           // Operand name: [foo] with no []'s.
+  public:
+    ConstraintInfo(const char *str, unsigned strlen, const std::string &name)
+      : Flags(0), TiedOperand(-1), ConstraintStr(str, str+strlen), Name(name) {}
+    explicit ConstraintInfo(const std::string &Str, const std::string &name)
+      : Flags(0), TiedOperand(-1), ConstraintStr(Str), Name(name) {}
+
+    const std::string &getConstraintStr() const { return ConstraintStr; }
+    const std::string &getName() const { return Name; }
+    bool isReadWrite() const { return (Flags & CI_ReadWrite) != 0; }
+    bool allowsRegister() const { return (Flags & CI_AllowsRegister) != 0; }
+    bool allowsMemory() const { return (Flags & CI_AllowsMemory) != 0; }
+    
+    /// hasMatchingInput - Return true if this output operand has a matching
+    /// (tied) input operand.
+    bool hasMatchingInput() const { return (Flags & CI_HasMatchingInput) != 0; }
+    
+    /// hasTiedOperand() - Return true if this input operand is a matching
+    /// constraint that ties it to an output operand.  If this returns true,
+    /// then getTiedOperand will indicate which output operand this is tied to.
+    bool hasTiedOperand() const { return TiedOperand != -1; }
+    unsigned getTiedOperand() const {
+      assert(hasTiedOperand() && "Has no tied operand!");
+      return (unsigned)TiedOperand;
+    }
+    
+    void setIsReadWrite() { Flags |= CI_ReadWrite; }
+    void setAllowsMemory() { Flags |= CI_AllowsMemory; }
+    void setAllowsRegister() { Flags |= CI_AllowsRegister; }
+    void setHasMatchingInput() { Flags |= CI_HasMatchingInput; }
+    
+    /// setTiedOperand - Indicate that this is an input operand that is tied to
+    /// the specified output operand.  Copy over the various constraint
+    /// information from the output.
+    void setTiedOperand(unsigned N, ConstraintInfo &Output) {
+      Output.setHasMatchingInput();
+      Flags = Output.Flags;
+      TiedOperand = N;
+      // Don't copy Name or constraint string.
+    }
   };
 
   // validateOutputConstraint, validateInputConstraint - Checks that
   // a constraint is valid and provides information about it.
   // FIXME: These should return a real error instead of just true/false.
-  bool validateOutputConstraint(const char *Name, ConstraintInfo &Info) const;
-  bool validateInputConstraint(const char *Name, 
-                               const std::string *OutputNamesBegin,
-                               const std::string *OutputNamesEnd,
-                               ConstraintInfo* OutputConstraints,
+  bool validateOutputConstraint(ConstraintInfo &Info) const;
+  bool validateInputConstraint(ConstraintInfo *OutputConstraints,
+                               unsigned NumOutputs,
                                ConstraintInfo &info) const;
   bool resolveSymbolicName(const char *&Name,
-                           const std::string *OutputNamesBegin,
-                           const std::string *OutputNamesEnd,
-                           unsigned &Index) const;
+                           ConstraintInfo *OutputConstraints,
+                           unsigned NumOutputs, unsigned &Index) const;
   
   virtual std::string convertConstraint(const char Constraint) const {
     return std::string(1, Constraint);
@@ -236,10 +292,75 @@ public:
 
   virtual bool useGlobalsForAutomaticVariables() const { return false; }
 
+  /// getStringSymbolPrefix - Get the default symbol prefix to
+  /// use for string literals.
+  virtual const char *getStringSymbolPrefix(bool IsConstant) const { 
+    return ".str";
+  }
+
+  /// getCFStringSymbolPrefix - Get the default symbol prefix
+  /// to use for CFString literals.
+  virtual const char *getCFStringSymbolPrefix() const { 
+    return "";
+  }
+
+  /// getUnicodeStringSymbolPrefix - Get the default symbol prefix to
+  /// use for string literals.
+  virtual const char *getUnicodeStringSymbolPrefix() const { 
+    return ".str";
+  }
+
+  /// getUnicodeStringSection - Return the section to use for unicode
+  /// string literals, or 0 if no special section is used.
+  virtual const char *getUnicodeStringSection() const { 
+    return 0;
+  }
+
+  /// getCFStringSection - Return the section to use for CFString
+  /// literals, or 0 if no special section is used.
+  virtual const char *getCFStringSection() const { 
+    return "__DATA,__cfstring";
+  }
+
+  /// getCFStringDataSection - Return the section to use for the
+  /// constant string data associated with a CFString literal, or 0 if
+  /// no special section is used.
+  virtual const char *getCFStringDataSection() const { 
+    return "__TEXT,__cstring,cstring_literals";
+  }
+
   /// getDefaultLangOptions - Allow the target to specify default settings for
   /// various language options.  These may be overridden by command line
   /// options. 
   virtual void getDefaultLangOptions(LangOptions &Opts) {}
+
+  /// HandleTargetFeatures - Handle target-specific options like -mattr=+sse2
+  /// and friends.  An array of arguments is passed in: if they are all valid,
+  /// this should handle them and return -1.  If there is an error, the index of
+  /// the invalid argument should be returned along with an optional error
+  /// string.
+  ///
+  /// Note that the driver should have already consolidated all the
+  /// target-feature settings and passed them to us in the -mattr list.  The
+  /// -mattr list is treated by the code generator as a diff against the -mcpu
+  /// setting, but the driver should pass all enabled options as "+" settings.
+  /// This means that the target should only look at + settings.
+  virtual int HandleTargetFeatures(std::string *StrArray, unsigned NumStrs,
+                                   std::string &ErrorReason) {
+    if (NumStrs == 0)
+      return -1;
+    return 0;
+  }
+
+  // getRegParmMax - Returns maximal number of args passed in registers.
+  unsigned getRegParmMax() const {
+    return RegParmMax;
+  }
+
+  // isTLSSupported - Whether the target supports thread-local storage
+  unsigned isTLSSupported() const {
+    return TLSSupported;
+  }
 
 protected:
   virtual uint64_t getPointerWidthV(unsigned AddrSpace) const {
@@ -255,7 +376,7 @@ protected:
                               unsigned &NumNames) const = 0;
   virtual void getGCCRegAliases(const GCCRegAlias *&Aliases, 
                                 unsigned &NumAliases) const = 0;
-  virtual bool validateAsmConstraint(char c, 
+  virtual bool validateAsmConstraint(const char *&Name, 
                                      TargetInfo::ConstraintInfo &info) const= 0;
 };
 

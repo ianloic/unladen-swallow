@@ -17,6 +17,7 @@
 #include "clang/Lex/PTHLexer.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/IdentifierTable.h"
+#include "clang/Basic/Diagnostic.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Allocator.h"
 #include <string>
@@ -30,6 +31,7 @@ namespace clang {
 class FileEntry;
 class PTHLexer;
 class Diagnostic;
+class StatSysCallCache;
   
 class PTHManager : public IdentifierInfoLookup {
   friend class PTHLexer;
@@ -53,9 +55,9 @@ class PTHManager : public IdentifierInfoLookup {
   ///  reconsitute an IdentifierInfo.
   const unsigned char* const IdDataTable;
   
-  /// SortedIdTable - Array ordering persistent identifier IDs by the lexical
-  ///  order of their corresponding strings.  This is used by get().
-  const unsigned char* const SortedIdTable;
+  /// SortedIdTable - Abstract data structure mapping from strings to
+  ///  persistent IDs.  This is used by get().
+  void* StringIdLookup;
 
   /// NumIds - The number of identifiers in the PTH file.
   const unsigned NumIds;
@@ -68,12 +70,16 @@ class PTHManager : public IdentifierInfoLookup {
   ///  contains the cached spellings for literals.
   const unsigned char* const SpellingBase;
   
+  /// OriginalSourceFile - A null-terminated C-string that specifies the name
+  ///  if the file (if any) that was to used to generate the PTH cache.
+  const char* OriginalSourceFile;
+  
   /// This constructor is intended to only be called by the static 'Create'
   /// method.
   PTHManager(const llvm::MemoryBuffer* buf, void* fileLookup,
              const unsigned char* idDataTable, IdentifierInfo** perIDCache,
-             const unsigned char* sortedIdTable, unsigned numIds,
-             const unsigned char* spellingBase);
+             void* stringIdLookup, unsigned numIds,
+             const unsigned char* spellingBase, const char *originalSourceFile);
 
   // Do not implement.
   PTHManager();
@@ -82,7 +88,6 @@ class PTHManager : public IdentifierInfoLookup {
   /// getSpellingAtPTHOffset - Used by PTHLexer classes to get the cached 
   ///  spelling for a token.
   unsigned getSpellingAtPTHOffset(unsigned PTHOffset, const char*& Buffer);
-  
   
   /// GetIdentifierInfo - Used to reconstruct IdentifierInfo objects from the
   ///  PTH file.
@@ -96,9 +101,15 @@ class PTHManager : public IdentifierInfoLookup {
   
 public:
   // The current PTH version.
-  enum { Version = 1 };
+  enum { Version = 9 };
 
   ~PTHManager();
+  
+  /// getOriginalSourceFile - Return the full path to the original header
+  ///  file name that was used to generate the PTH cache.
+  const char* getOriginalSourceFile() const {
+    return OriginalSourceFile;
+  }
   
   /// get - Return the identifier token info for the specified named identifier.
   ///  Unlike the version in IdentifierTable, this returns a pointer instead
@@ -108,7 +119,8 @@ public:
   
   /// Create - This method creates PTHManager objects.  The 'file' argument
   ///  is the name of the PTH file.  This method returns NULL upon failure.
-  static PTHManager *Create(const std::string& file, Diagnostic* Diags = 0);
+  static PTHManager *Create(const std::string& file, Diagnostic* Diags = 0,
+                            Diagnostic::Level failureLevel=Diagnostic::Warning);
 
   void setPreprocessor(Preprocessor *pp) { PP = pp; }    
   
@@ -116,6 +128,12 @@ public:
   ///  specified file.  This method returns NULL if no cached tokens exist.
   ///  It is the responsibility of the caller to 'delete' the returned object.
   PTHLexer *CreateLexer(FileID FID);  
+  
+  /// createStatCache - Returns a StatSysCallCache object for use with
+  ///  FileManager objects.  These objects use the PTH data to speed up
+  ///  calls to stat by memoizing their results from when the PTH file
+  ///  was generated.
+  StatSysCallCache *createStatCache();
 };
   
 }  // end namespace clang

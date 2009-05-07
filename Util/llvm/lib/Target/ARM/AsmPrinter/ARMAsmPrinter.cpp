@@ -42,13 +42,7 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  struct VISIBILITY_HIDDEN ARMAsmPrinter : public AsmPrinter {
-    ARMAsmPrinter(raw_ostream &O, TargetMachine &TM, const TargetAsmInfo *T)
-      : AsmPrinter(O, TM, T), DW(0), MMI(NULL), AFI(NULL), MCP(NULL),
-        InCPMode(false) {
-      Subtarget = &TM.getSubtarget<ARMSubtarget>();
-    }
-
+  class VISIBILITY_HIDDEN ARMAsmPrinter : public AsmPrinter {
     DwarfWriter *DW;
     MachineModuleInfo *MMI;
 
@@ -85,7 +79,15 @@ namespace {
 
     /// True if asm printer is printing a series of CONSTPOOL_ENTRY.
     bool InCPMode;
-    
+  public:
+    explicit ARMAsmPrinter(raw_ostream &O, TargetMachine &TM,
+                           const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                           bool V)
+      : AsmPrinter(O, TM, T, OL, V), DW(0), MMI(NULL), AFI(NULL), MCP(NULL),
+        InCPMode(false) {
+      Subtarget = &TM.getSubtarget<ARMSubtarget>();
+    }
+
     virtual const char *getPassName() const {
       return "ARM Assembly Printer";
     }
@@ -183,6 +185,8 @@ namespace {
 /// method to print assembly for each instruction.
 ///
 bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
+
   AFI = MF.getInfo<ARMFunctionInfo>();
   MCP = MF.getConstantPool();
 
@@ -205,8 +209,10 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     SwitchToTextSection("\t.text", F);
     O << "\t.globl\t" << CurrentFnName << "\n";
     break;
-  case Function::WeakLinkage:
-  case Function::LinkOnceLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
     if (Subtarget->isTargetDarwin()) {
       SwitchToTextSection(
                 ".section __TEXT,__textcoal_nt,coalesced,pure_instructions", F);
@@ -250,7 +256,7 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
        I != E; ++I) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
-      printBasicBlockLabel(I, true, true);
+      printBasicBlockLabel(I, true, true, VerboseAsm);
       O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
@@ -341,7 +347,8 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
   }
 }
 
-static void printSOImm(raw_ostream &O, int64_t V, const TargetAsmInfo *TAI) {
+static void printSOImm(raw_ostream &O, int64_t V, bool VerboseAsm,
+                       const TargetAsmInfo *TAI) {
   assert(V < (1 << 12) && "Not a valid so_imm value!");
   unsigned Imm = ARM_AM::getSOImmValImm(V);
   unsigned Rot = ARM_AM::getSOImmValRot(V);
@@ -351,7 +358,9 @@ static void printSOImm(raw_ostream &O, int64_t V, const TargetAsmInfo *TAI) {
   if (Rot) {
     O << "#" << Imm << ", " << Rot;
     // Pretty printed version.
-    O << ' ' << TAI->getCommentString() << ' ' << (int)ARM_AM::rotr32(Imm, Rot);
+    if (VerboseAsm)
+      O << ' ' << TAI->getCommentString()
+        << ' ' << (int)ARM_AM::rotr32(Imm, Rot);
   } else {
     O << "#" << Imm;
   }
@@ -362,7 +371,7 @@ static void printSOImm(raw_ostream &O, int64_t V, const TargetAsmInfo *TAI) {
 void ARMAsmPrinter::printSOImmOperand(const MachineInstr *MI, int OpNum) {
   const MachineOperand &MO = MI->getOperand(OpNum);
   assert(MO.isImm() && "Not a valid so_imm value!");
-  printSOImm(O, MO.getImm(), TAI);
+  printSOImm(O, MO.getImm(), VerboseAsm, TAI);
 }
 
 /// printSOImm2PartOperand - SOImm is broken into two pieces using a 'mov'
@@ -372,7 +381,7 @@ void ARMAsmPrinter::printSOImm2PartOperand(const MachineInstr *MI, int OpNum) {
   assert(MO.isImm() && "Not a valid so_imm value!");
   unsigned V1 = ARM_AM::getSOImmTwoPartFirst(MO.getImm());
   unsigned V2 = ARM_AM::getSOImmTwoPartSecond(MO.getImm());
-  printSOImm(O, ARM_AM::getSOImmVal(V1), TAI);
+  printSOImm(O, ARM_AM::getSOImmVal(V1), VerboseAsm, TAI);
   O << "\n\torr";
   printPredicateOperand(MI, 2);
   O << " ";
@@ -380,7 +389,7 @@ void ARMAsmPrinter::printSOImm2PartOperand(const MachineInstr *MI, int OpNum) {
   O << ", ";
   printOperand(MI, 0); 
   O << ", ";
-  printSOImm(O, ARM_AM::getSOImmVal(V2), TAI);
+  printSOImm(O, ARM_AM::getSOImmVal(V2), VerboseAsm, TAI);
 }
 
 // so_reg is a 4-operand unit corresponding to register forms of the A5.1
@@ -731,7 +740,10 @@ bool ARMAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     
     switch (ExtraCode[0]) {
     default: return true;  // Unknown modifier.
+    case 'a': // Don't print "#" before a global var name or constant.
     case 'c': // Don't print "$" before a global var name or constant.
+      printOperand(MI, OpNo, "no_hash");
+      return false;
     case 'P': // Print a VFP double precision register.
       printOperand(MI, OpNo);
       return false;
@@ -796,7 +808,7 @@ bool ARMAsmPrinter::doInitialization(Module &M) {
 }
 
 /// PrintUnmangledNameSafely - Print out the printable characters in the name.
-/// Don't print things like \n or \0.
+/// Don't print things like \\n or \\0.
 static void PrintUnmangledNameSafely(const Value *V, raw_ostream &OS) {
   for (const char *Name = V->getNameStart(), *E = Name+V->getNameLen();
        Name != E; ++Name)
@@ -835,7 +847,9 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (Subtarget->isTargetELF())
     O << "\t.type " << name << ",%object\n";
 
-  if (C->isNullValue() && !GVar->hasSection() && !GVar->isThreadLocal()) {
+  if (C->isNullValue() && !GVar->hasSection() && !GVar->isThreadLocal() &&
+      !(isDarwin &&
+        TAI->SectionKindForGlobal(GVar) == SectionKind::RODataMergeStr)) {
     // FIXME: This seems to be pretty darwin-specific
 
     if (GVar->hasExternalLinkage()) {
@@ -848,7 +862,7 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
       }
     }
 
-    if (GVar->hasLocalLinkage() || GVar->mayBeOverridden()) {
+    if (GVar->hasLocalLinkage() || GVar->isWeakForLinker()) {
       if (Size == 0) Size = 1;   // .comm Foo, 0 is undefined, avoid it.
 
       if (isDarwin) {
@@ -863,8 +877,11 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
           O << "\t.globl " << name << '\n'
             << TAI->getWeakDefDirective() << name << '\n';
           EmitAlignment(Align, GVar);
-          O << name << ":\t\t\t\t" << TAI->getCommentString() << ' ';
-          PrintUnmangledNameSafely(GVar, O);
+          O << name << ":";
+          if (VerboseAsm) {
+            O << "\t\t\t\t" << TAI->getCommentString() << ' ';
+            PrintUnmangledNameSafely(GVar, O);
+          }
           O << '\n';
           EmitGlobalConstant(C);
           return;
@@ -885,8 +902,10 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
         if (TAI->getCOMMDirectiveTakesAlignment())
           O << "," << (TAI->getAlignmentIsInBytes() ? (1 << Align) : Align);
       }
-      O << "\t\t" << TAI->getCommentString() << " ";
-      PrintUnmangledNameSafely(GVar, O);
+      if (VerboseAsm) {
+        O << "\t\t" << TAI->getCommentString() << " ";
+        PrintUnmangledNameSafely(GVar, O);
+      }
       O << "\n";
       return;
     }
@@ -895,8 +914,10 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   SwitchToSection(TAI->SectionForGlobal(GVar));
   switch (GVar->getLinkage()) {
    case GlobalValue::CommonLinkage:
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage:
+   case GlobalValue::WeakODRLinkage:
     if (isDarwin) {
       O << "\t.globl " << name << "\n"
         << "\t.weak_definition " << name << "\n";
@@ -919,8 +940,11 @@ void ARMAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   }
 
   EmitAlignment(Align, GVar);
-  O << name << ":\t\t\t\t" << TAI->getCommentString() << " ";
-  PrintUnmangledNameSafely(GVar, O);
+  O << name << ":";
+  if (VerboseAsm) {
+    O << "\t\t\t\t" << TAI->getCommentString() << " ";
+    PrintUnmangledNameSafely(GVar, O);
+  }
   O << "\n";
   if (TAI->hasDotTypeDotSizeDirective())
     O << "\t.size " << name << ", " << Size << "\n";
@@ -1037,8 +1061,10 @@ bool ARMAsmPrinter::doFinalization(Module &M) {
 /// regardless of whether the function is in SSA form.
 ///
 FunctionPass *llvm::createARMCodePrinterPass(raw_ostream &o,
-                                             ARMTargetMachine &tm) {
-  return new ARMAsmPrinter(o, tm, tm.getTargetAsmInfo());
+                                             ARMTargetMachine &tm,
+                                             CodeGenOpt::Level OptLevel,
+                                             bool verbose) {
+  return new ARMAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
 }
 
 namespace {

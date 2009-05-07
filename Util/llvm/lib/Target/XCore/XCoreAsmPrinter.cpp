@@ -53,14 +53,15 @@ static cl::opt<unsigned> MaxThreads("xcore-max-threads", cl::Optional,
   cl::init(8));
 
 namespace {
-  struct VISIBILITY_HIDDEN XCoreAsmPrinter : public AsmPrinter {
-    XCoreAsmPrinter(raw_ostream &O, XCoreTargetMachine &TM,
-                    const TargetAsmInfo *T)
-      : AsmPrinter(O, TM, T), DW(0),
-        Subtarget(*TM.getSubtargetImpl()) { }
-
+  class VISIBILITY_HIDDEN XCoreAsmPrinter : public AsmPrinter {
     DwarfWriter *DW;
     const XCoreSubtarget &Subtarget;
+  public:
+    explicit XCoreAsmPrinter(raw_ostream &O, XCoreTargetMachine &TM,
+                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                             bool V)
+      : AsmPrinter(O, TM, T, OL, V), DW(0),
+        Subtarget(*TM.getSubtargetImpl()) {}
 
     virtual const char *getPassName() const {
       return "XCore Assembly Printer";
@@ -104,8 +105,10 @@ namespace {
 /// regardless of whether the function is in SSA form.
 ///
 FunctionPass *llvm::createXCoreCodePrinterPass(raw_ostream &o,
-                                               XCoreTargetMachine &tm) {
-  return new XCoreAsmPrinter(o, tm, tm.getTargetAsmInfo());
+                                               XCoreTargetMachine &tm,
+                                               CodeGenOpt::Level OptLevel,
+                                               bool verbose) {
+  return new XCoreAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
 }
 
 // PrintEscapedString - Print each character of the specified string, escaping
@@ -187,8 +190,10 @@ emitGlobal(const GlobalVariable *GV)
     case GlobalValue::AppendingLinkage:
       cerr << "AppendingLinkage is not supported by this target!\n";
       abort();
-    case GlobalValue::LinkOnceLinkage:
-    case GlobalValue::WeakLinkage:
+    case GlobalValue::LinkOnceAnyLinkage:
+    case GlobalValue::LinkOnceODRLinkage:
+    case GlobalValue::WeakAnyLinkage:
+    case GlobalValue::WeakODRLinkage:
     case GlobalValue::ExternalLinkage:
       emitArrayBound(name, GV);
       emitGlobalDirective(name);
@@ -265,8 +270,10 @@ emitFunctionStart(MachineFunction &MF)
   case Function::ExternalLinkage:
     emitGlobalDirective(CurrentFnName);
     break;
-  case Function::LinkOnceLinkage:
-  case Function::WeakLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
     // TODO Use COMDAT groups for LinkOnceLinkage
     O << TAI->getGlobalDirective() << CurrentFnName << "\n";
     O << TAI->getWeakDefDirective() << CurrentFnName << "\n";
@@ -293,6 +300,8 @@ emitFunctionEnd(MachineFunction &MF)
 ///
 bool XCoreAsmPrinter::runOnMachineFunction(MachineFunction &MF)
 {
+  this->MF = &MF;
+
   SetupMachineFunction(MF);
 
   // Print out constants referenced by the function

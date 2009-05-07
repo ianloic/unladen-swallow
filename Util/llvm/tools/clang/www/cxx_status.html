@@ -2,10 +2,10 @@
           "http://www.w3.org/TR/html4/strict.dtd">
 <html>
 <head>
-  <META http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+  <META http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
   <title>Clang - C++ Support</title>
-  <link type="text/css" rel="stylesheet" href="menu.css" />
-  <link type="text/css" rel="stylesheet" href="content.css" />
+  <link type="text/css" rel="stylesheet" href="menu.css">
+  <link type="text/css" rel="stylesheet" href="content.css">
   <style type="text/css">
     .na { background-color: #C0C0C0 }
     .broken { background-color: #C11B17 }
@@ -27,7 +27,7 @@
 
 <p>
 This page tracks the status of C++ support in Clang.<br>
-Currently most of the C++ features are missing; here you can find features that are at least partially supported in Clang. </p>
+Currently most of the C++ features are missing; here you can find features that are at least partially supported in Clang. If you are looking to <a href="get_involved.html">get involved with Clang development</a> to help work on support for C++, please also look at our <a href="OpenProjects.html">Open Projects</a> page for some specific ideas.</p>
 
 
 <!-- Within this table: The colors we're using to color-code our level
@@ -347,10 +347,10 @@ welcome!</p>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;3.4.2 [basic.lookup.argdep]</td>
   <td class="na">N/A</td>
+  <td class="advanced" align="center"></td>
+  <td class="advanced" align="center"></td>
   <td class="na">N/A</td>
-  <td class="broken"></td>
-  <td class="na">N/A</td>
-  <td></td>
+  <td>Missing support for templates, friend functions.</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;3.4.3 [basic.lookup.qual]</td>
@@ -358,10 +358,24 @@ welcome!</p>
   <td class="na">N/A</td>
   <td class="advanced"></td>
   <td class="na">N/A</td>
-  <td>What's the state of namespaces now?</td>
+  <td></td>
 </tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3.4.3.1 [class.qual]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3.4.3.2 [namespace.qual]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3.4.3.1 [class.qual]</td>
+  <td class="na">N/A</td>
+  <td class="na">N/A</td>
+  <td class="advanced"></td>
+  <td class="na">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3.4.3.2 [namespace.qual]</td>
+  <td class="na">N/A</td>
+  <td class="na">N/A</td>
+  <td class="advanced"></td>
+  <td class="na">N/A</td>
+  <td></td>  
+</tr>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;3.4.4 [basic.lookup.elab]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;3.4.5 [basic.lookup.classref]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;3.4.6 [basic.lookup.udir]</td><td></td><td></td><td></td><td></td><td></td></tr>
@@ -516,9 +530,9 @@ welcome!</p>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;5.2.2 [expr.call]</td>
   <td class="complete" align="center">&#x2713;</td>
   <td class="complete" align="center">&#x2713;</td>
-  <td class="medium" align="center"></td>
+  <td class="advanced" align="center"></td>
   <td></td>
-  <td>Argument-dependent lookup is unsupported</td>
+  <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;5.2.3 [expr.type.conv]</td>
@@ -605,10 +619,10 @@ welcome!</p>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;5.3.1p2-5 Unary &amp;</td>
   <td class="complete" align="center">&#x2713;</td>
-  <td class="basic" align="center"></td>
-  <td class="basic" align="center"></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
   <td></td>
-  <td>Member pointers not supported in any way</td>
+  <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;5.3.1p6 Unary +</td>
@@ -684,11 +698,11 @@ welcome!</p>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;5.5 [expr.mptr.oper]</td>
-  <td class="broken"></td>
-  <td class="broken"></td>
-  <td class="broken"></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="advanced"></td>
+  <td class="advanced"></td>
   <td></td>
-  <td></td>
+  <td>Dereferenced member function pointers have the wrong type.</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;5.6 [expr.mul]</td>
@@ -774,9 +788,9 @@ welcome!</p>
   <td>&nbsp;&nbsp;5.16 [expr.cond]</td>
   <td class="complete" align="center">&#x2713;</td>
   <td class="complete" align="center">&#x2713;</td>
-  <td class="medium" align="center"></td>
+  <td class="complete" align="center">&#x2713;</td>
   <td></td>
-  <td>throw expressions not supported, type unification rules are based on C only</td>
+  <td>some invalid hierarchy casts still accepted, but that's a general problem</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;5.17 [expr.ass]</td>
@@ -947,39 +961,158 @@ welcome!</p>
   <td></td>
 </tr>
 <tr><td>7 [dcl.dcl]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;7.1 [dcl.spec]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.1 [dcl.stc]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.2 [dcl.fct.spec]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>
+  &nbsp;&nbsp;7.1 [dcl.spec]</td>
+  <td class="advanced" align="center"></td>
+  <td class="advanced" align="center"></td>
+  <td class="advanced" align="center"></td>
+  <td></td>
+  <td>No support for friend declarations.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.1 [dcl.stc]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="advanced" align="center"></td>
+  <td class="advanced" align="center"></td>
+  <td></td>
+  <td>Linkage merging has some errors.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.2 [dcl.fct.spec]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.3 [dcl.typedef]</td>
   <td class="complete" align="center">&#x2713;</td>
   <td class="complete" align="center">&#x2713;</td>
   <td class="complete" align="center">&#x2713;</td>
-  <td class="advanced"></td>
-  <td>Typedefs of anonymous tag types do not use the name of the typedef for linkage purposes.</td>
-</tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.4 [dcl.friend]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.5 [dcl.type]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.1 [dcl.type.cv]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.2 [dcl.type.simple]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.3 [dcl.type.elab]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;7.2 [dcl.enum]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;7.3 [basic.namespace]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.1 [namespace.def]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.3.1.1 [namespace.unnamed]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.3.1.2 [namespace.memdef]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.2 [namespace.alias]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.3 [namespace.udecl]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr>
-  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.4[namespace.udir]</td>
   <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.4 [dcl.friend]</td>
+  <td class="broken"></td>
+  <td class="broken"></td>
+  <td class="broken"></td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.1.5 [dcl.type]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.1 [dcl.type.cv]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.2 [dcl.type.simple]</td>
+  <td class="medium"></td>
+  <td class="advanced"></td>
+  <td class="advanced"></td>
+  <td></td>
+  <td>Cannot parse template IDs.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.1.5.3 [dcl.type.elab]</td>
+  <td class="medium"></td>
+  <td class="advanced"></td>
+  <td class="advanced"></td>
+  <td></td>
+  <td>Cannot parse template IDs.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;7.2 [dcl.enum]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;7.3 [basic.namespace]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.1 [namespace.def]</td>
+  <td class="medium"></td>
+  <td class="medium"></td>
+  <td class="medium"></td>
+  <td></td>
+  <td>Cannot parse namespace aliases.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.3.1.1 [namespace.unnamed]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="broken"></td>
+  <td></td>
+  <td>Unnamed namespace members cannot be looked up.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.3.1.2 [namespace.memdef]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="advanced"></td>
+  <td></td>
+  <td>The friend stuff is not supported.</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.2 [namespace.alias]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="na">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.3 [namespace.udecl]</td>
   <td class="broken" align="center"></td>
   <td class="broken" align="center"></td>
   <td class="broken" align="center"></td>
   <td></td>
+  <td></td>
 </tr>
-<tr><td>&nbsp;&nbsp;7.4 [dcl.asm]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;7.5 [dcl.link]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;7.3.4[namespace.udir]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="advanced"></td>
+  <td class="broken" align="center"></td>
+  <td>Example in p4 fails.</td>
+</tr>
+<tr><td>
+  &nbsp;&nbsp;7.4 [dcl.asm]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;7.5 [dcl.link]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="basic"></td>
+  <td class="basic"></td>
+  <td></td>
+  <td></td>
+</tr>
 <tr><td>8 [dcl.decl]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;8.1 [dcl.name]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;8.2 [dcl.ambig.res]</td><td></td><td></td><td></td><td></td><td></td></tr>
@@ -1007,7 +1140,14 @@ welcome!</p>
   <td class="basic" align="center"></td>
   <td>No CodeGen for initializing non-aggregates or dynamic initialization.</td>
 </tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;8.5.2 [dcl.init.string]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;8.5.2[dcl.init.string]</td>
+  <td class="advanced" align="center"></td>
+  <td class="advanced" align="center"></td>
+  <td class="medium" align="center"></td>
+  <td class="basic" align="center"></td>
+  <td></td>
+</tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;8.5.3 [dcl.init.ref]</td>
   <td class="advanced" align="center"></td>
@@ -1035,56 +1175,56 @@ welcome!</p>
 <tr>
   <td>&nbsp;&nbsp;9.2 [class.mem]</td>
   <td class="advanced" align="center"></td>
-  <td></td>
-  <td></td>
+  <td class="medium" align="center"></td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td>No parser support for using declarations, or templates.</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;9.3 [class.mfct]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="medium" align="center"></td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;9.3.1 [class.mfct.non-static]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="medium" align="center"></td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;9.3.2 [class.this]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="medium" align="center"></td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;9.4 [class.static]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;9.4.1 [class.static.mfct]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;9.4.2 [class.static.data]</td>
   <td class="complete" align="center">&#x2713;</td>  
-  <td></td>
-  <td></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="medium" align="center"></td>
   <td></td>
   <td></td>
 </tr>
@@ -1132,7 +1272,14 @@ welcome!</p>
 <tr><td>&nbsp;&nbsp;10.1 [class.mi]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;10.2 [class.member.lookup]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;10.3 [class.virtual]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;10.4 [class.abstract]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr>
+  <td>&nbsp;&nbsp;10.4 [class.abstract]</td>
+  <td class="complete" align="center">&#x2713;</td>  
+  <td class="complete" align="center">&#x2713;</td>  
+  <td class="complete" align="center">&#x2713;</td>  
+  <td class="na">N/A</td>
+  <td></td>
+ </tr>
 <tr><td>11 [class.access]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;11.1 [class.access.spec]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;11.2 [class.access.base]</td><td></td><td></td><td></td><td></td><td></td></tr>
@@ -1487,16 +1634,86 @@ welcome!</p>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;14.8.2.3 [temp.deduct.conv]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;14.8.2.4 [temp.deduct.type]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;14.8.3 [temp.over]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>15 [except]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.1 [except.throw]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.2 [except.ctor]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.3 [except.handle]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.4 [except.spec]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.5 [except.special]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.1 [except.terminate]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.2 [except.unexpected]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.3 [except.uncaught]</td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>&nbsp;&nbsp;15.6 [except.access]</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr>
+  <td>15 [except]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.1 [except.throw]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="advanced" align="center"></td>
+  <td></td>
+  <td>Does not check for existence of copy constructor and destructor, and some other details</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.2 [except.ctor]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.3 [except.handle]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="advanced" align="center"></td>
+  <td></td>
+  <td>Not all constraints are checked</td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.4 [except.spec]</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td></td>
+  <td></td>
+  <td></td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.5 [except.special]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.1 [except.terminate]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.2 [except.unexpected]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;&nbsp;&nbsp;15.5.3 [except.uncaught]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td></td>
+</tr>
+<tr>
+  <td>&nbsp;&nbsp;15.6 [except.access]</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td class="na" align="center">N/A</td>
+  <td>Redundant - struck from C++0x</td>
+</tr>
 <tr><td>16 [cpp]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;16.1 [cpp.cond]</td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>&nbsp;&nbsp;16.2 [cpp.include]</td><td></td><td></td><td></td><td></td><td></td></tr>
@@ -1564,6 +1781,31 @@ welcome!</p>
   <td class="advanced" align="center"></td>
   <td class="broken"></td>
   <td>No name mangling; ASTs don't contain calls to conversion operators</td>
+  </tr>
+  <tr>
+  <td>Static assertions (<a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2004/n1720.pdf">N1720</a>)</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="na">N/A</td>
+  <td></td>
+  </tr>
+  <tr>
+  <td>Deleted functions (<a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2007/n2346.htm">N2346</a>)</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="na">N/A</td>
+  <td></td>
+  </tr>
+  <tr>
+  <td>Rvalue references (<a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2118.html">N2118</a> + <a href="http://www.open-std.org/JTC1/SC22/WG21/docs/papers/2009/n2831.html">N2831</a>)</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="broken"></td>
+  <td></td>
+  </tr>
 </tr>
 
 </table>

@@ -61,7 +61,7 @@ PyGlobalLlvmData::PyGlobalLlvmData()
         // JIT slowly, to produce better machine code.  TODO: We'll
         // almost certainly want to make this configurable per
         // function.
-        false);
+        llvm::CodeGenOpt::Default);
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }

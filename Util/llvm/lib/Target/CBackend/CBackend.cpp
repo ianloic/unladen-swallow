@@ -116,6 +116,11 @@ namespace {
     virtual bool doInitialization(Module &M);
 
     bool runOnFunction(Function &F) {
+     // Do not codegen any 'available_externally' functions at all, they have
+     // definitions outside the translation unit.
+     if (F.hasAvailableExternallyLinkage())
+       return false;
+
       LI = &getAnalysis<LoopInfo>();
 
       // Get rid of intrinsics we can't handle.
@@ -2087,9 +2092,8 @@ void CWriter::printFloatingPointConstants(const Constant *C) {
     APInt api = FPC->getValueAPF().bitcastToAPInt();
     const uint64_t *p = api.getRawData();
     Out << "static const ConstantFP80Ty FPConstant" << FPCounter++
-    << " = { 0x"
-    << utohexstr((uint16_t)p[1] | (p[0] & 0xffffffffffffLL)<<16)
-    << "ULL, 0x" << utohexstr((uint16_t)(p[0] >> 48)) << ",{0,0,0}"
+    << " = { 0x" << utohexstr(p[0]) 
+    << "ULL, 0x" << utohexstr((uint16_t)p[1]) << ",{0,0,0}"
     << "}; /* Long double constant */\n";
   } else if (FPC->getType() == Type::PPC_FP128Ty) {
     APInt api = FPC->getValueAPF().bitcastToAPInt();
@@ -3583,7 +3587,7 @@ void CWriter::visitExtractValueInst(ExtractValueInst &EVI) {
 bool CTargetMachine::addPassesToEmitWholeFile(PassManager &PM,
                                               raw_ostream &o,
                                               CodeGenFileType FileType,
-                                              bool Fast) {
+                                              CodeGenOpt::Level OptLevel) {
   if (FileType != TargetMachine::AssemblyFile) return true;
 
   PM.add(createGCLoweringPass());

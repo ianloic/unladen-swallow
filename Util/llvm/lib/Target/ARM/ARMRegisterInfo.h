@@ -38,7 +38,8 @@ public:
                          MachineBasicBlock::iterator &MBBI,
                          unsigned DestReg, int Val,
                          unsigned Pred, unsigned PredReg,
-                         const TargetInstrInfo *TII, bool isThumb) const;
+                         const TargetInstrInfo *TII, bool isThumb,
+                         DebugLoc dl) const;
 
   /// getRegisterNumbering - Given the enum value for some register, e.g.
   /// ARM::LR, return the number that it corresponds to (e.g. 14).
@@ -48,7 +49,13 @@ public:
   /// if the register is a single precision VFP register.
   static unsigned getRegisterNumbering(unsigned RegEnum, bool &isSPVFP);
 
+  /// getPointerRegClass - Return the register class to use to hold pointers.
+  /// This is used for addressing modes.
+  const TargetRegisterClass *getPointerRegClass() const;
+
   /// Code Generation virtual methods...
+  const TargetRegisterClass *
+    getPhysicalRegisterRegClass(unsigned Reg, MVT VT = MVT::Other) const;
   const unsigned *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
 
   const TargetRegisterClass* const*

@@ -45,10 +45,12 @@ TEMPLATE_INSTANTIATION(class basic_parser<unsigned>);
 TEMPLATE_INSTANTIATION(class basic_parser<double>);
 TEMPLATE_INSTANTIATION(class basic_parser<float>);
 TEMPLATE_INSTANTIATION(class basic_parser<std::string>);
+TEMPLATE_INSTANTIATION(class basic_parser<char>);
 
 TEMPLATE_INSTANTIATION(class opt<unsigned>);
 TEMPLATE_INSTANTIATION(class opt<int>);
 TEMPLATE_INSTANTIATION(class opt<std::string>);
+TEMPLATE_INSTANTIATION(class opt<char>);
 TEMPLATE_INSTANTIATION(class opt<bool>);
 
 void Option::anchor() {}
@@ -60,6 +62,7 @@ void parser<unsigned>::anchor() {}
 void parser<double>::anchor() {}
 void parser<float>::anchor() {}
 void parser<std::string>::anchor() {}
+void parser<char>::anchor() {}
 
 //===----------------------------------------------------------------------===//
 
@@ -872,8 +875,6 @@ bool parser<bool>::parse(Option &O, const char *ArgName,
     return O.error(": '" + Arg +
                    "' is invalid value for boolean argument! Try 0 or 1");
   }
-  if (IsInvertable && strncmp(ArgName+1, "no-", 3) == 0)
-    Value = !Value;
   return false;
 }
 

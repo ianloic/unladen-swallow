@@ -14,10 +14,13 @@
 #ifndef LLVM_CLANG_ATTRLIST_H
 #define LLVM_CLANG_ATTRLIST_H
 
-#include "clang/Parse/Action.h"
+#include "clang/Parse/Ownership.h"
+#include "clang/Basic/SourceLocation.h"
 #include <cassert>
 
 namespace clang {
+  class IdentifierInfo;
+  class Action;
   
 /// AttributeList - Represents GCC's __attribute__ declaration. There are
 /// 4 forms of this construct...they are:
@@ -32,52 +35,72 @@ class AttributeList {
   SourceLocation AttrLoc;
   IdentifierInfo *ParmName;
   SourceLocation ParmLoc;
-  Action::ExprTy **Args;
+  ActionBase::ExprTy **Args;
   unsigned NumArgs;
   AttributeList *Next;
+  AttributeList(const AttributeList &); // DO NOT IMPLEMENT
+  void operator=(const AttributeList &); // DO NOT IMPLEMENT
 public:
   AttributeList(IdentifierInfo *AttrName, SourceLocation AttrLoc,
                 IdentifierInfo *ParmName, SourceLocation ParmLoc,
-                Action::ExprTy **args, unsigned numargs, AttributeList *Next);
+                ActionBase::ExprTy **args, unsigned numargs,
+                AttributeList *Next);
   ~AttributeList();
   
   enum Kind {              // Please keep this list alphabetized.
+    AT_IBOutlet,          // Clang-specific.
     AT_address_space,
     AT_alias,
     AT_aligned,
     AT_always_inline,
+    AT_analyzer_noreturn,
     AT_annotate,
+    AT_blocks,
+    AT_cleanup,
+    AT_const,
     AT_constructor,
     AT_deprecated,
     AT_destructor,
-    AT_dllimport,
     AT_dllexport,
+    AT_dllimport,
     AT_ext_vector_type,
     AT_fastcall,
     AT_format,
-    AT_IBOutlet,          // Clang-specific.
-    AT_malloc,
+    AT_gnu_inline,
     AT_mode,
+    AT_nodebug,
     AT_noinline,
+    AT_no_instrument_function,
     AT_nonnull,
     AT_noreturn,
     AT_nothrow,
+    AT_nsobject,
+    AT_objc_exception,
+    AT_cf_releases,        // Clang-specific.
+    AT_cf_retains,         // Clang-specific.
+    AT_cf_returns_owned,   // Clang-specific.
+    AT_ns_autoreleases,    // Clang-specific.
+    AT_ns_releases,        // Clang-specific.
+    AT_ns_retains,         // Clang-specific.
+    AT_ns_returns_owned,   // Clang-specific.
+    AT_objc_gc,
+    AT_overloadable,       // Clang-specific.
     AT_packed,
     AT_pure,
+    AT_regparm,
+    AT_section,
+    AT_sentinel,
     AT_stdcall,
     AT_transparent_union,
     AT_unavailable,
     AT_unused,
+    AT_used,
     AT_vector_size,
     AT_visibility,
     AT_warn_unused_result,
     AT_weak,
-    AT_objc_gc,
-    AT_blocks,
-    AT_sentinel,
-    AT_const,
-    AT_nsobject,
-    AT_cleanup,
+    AT_weak_import,
+    IgnoredAttribute,
     UnknownAttribute
   };
   
@@ -105,16 +128,16 @@ public:
   unsigned getNumArgs() const { return NumArgs; }
   
   /// getArg - Return the specified argument.
-  Action::ExprTy *getArg(unsigned Arg) const {
+  ActionBase::ExprTy *getArg(unsigned Arg) const {
     assert(Arg < NumArgs && "Arg access out of range!");
     return Args[Arg];
   }
   
   class arg_iterator {
-    Action::ExprTy** X;
+    ActionBase::ExprTy** X;
     unsigned Idx;
   public:
-    arg_iterator(Action::ExprTy** x, unsigned idx) : X(x), Idx(idx) {}    
+    arg_iterator(ActionBase::ExprTy** x, unsigned idx) : X(x), Idx(idx) {}    
 
     arg_iterator& operator++() {
       ++Idx;
@@ -131,7 +154,7 @@ public:
       return !operator==(I);
     }
     
-    Action::ExprTy* operator*() const {
+    ActionBase::ExprTy* operator*() const {
       return X[Idx];
     }
     

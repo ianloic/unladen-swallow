@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 // rdar://5986251
 
 @protocol SomeProtocol
@@ -20,5 +20,16 @@ void foo(id x) {
 - (void)m1:(id <MyProtocol> const)arg1;
 
 // FIXME: provide a better diagnostic (no typedef).
-- (void)m2:(id <MyProtocol> short)arg1; // expected-error {{'short typedef' is invalid}}
+- (void)m2:(id <MyProtocol> short)arg1; // expected-error {{'short type-name' is invalid}}
 @end
+
+typedef int NotAnObjCObjectType;
+
+// GCC doesn't diagnose this.
+NotAnObjCObjectType <SomeProtocol> *obj; // expected-error {{invalid protocol qualifiers on non-ObjC type}}
+
+// Decided not to support the following GCC extension. Found while researching rdar://6497631
+typedef struct objc_class *Class;
+
+Class <SomeProtocol> UnfortunateGCCExtension; // expected-error {{protocol qualified 'Class' is unsupported}}
+

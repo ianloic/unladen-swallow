@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify -fms-extensions -x=objective-c++ %s
+// RUN: clang-cc -fsyntax-only -verify -fms-extensions -x=objective-c++ %s
 __stdcall int func0();
 int __stdcall func();
 typedef int (__cdecl *tptr)();
@@ -11,7 +11,7 @@ void * __ptr64 PtrToPtr64(const void *p)
 {
     return((void * __ptr64) (unsigned __int64) (ULONG_PTR)p );
 }
-__forceinline InterlockedBitTestAndSet (long *Base, long Bit)
+__forceinline InterlockedBitTestAndSet (long *Base, long Bit)  // expected-warning {{type specifier missing, defaults to 'int'}}
 {
     __asm {
            mov eax, Bit

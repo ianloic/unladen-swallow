@@ -21,24 +21,39 @@
 namespace clang {
 
   class CXXConstructorDecl;
+  class CXXTempVarDecl;
 
 //===--------------------------------------------------------------------===//
 // C++ Expressions.
 //===--------------------------------------------------------------------===//
 
-/// CXXOperatorCallExpr - Represents a call to an overloaded operator
-/// written using operator syntax, e.g., "x + y" or "*p". While
-/// semantically equivalent to a normal call, this AST node provides
-/// better information about the syntactic representation of the call.
+/// \brief A call to an overloaded operator written using operator
+/// syntax.
+///
+/// Represents a call to an overloaded operator written using operator
+/// syntax, e.g., "x + y" or "*p". While semantically equivalent to a
+/// normal call, this AST node provides better information about the
+/// syntactic representation of the call.
+///
+/// In a C++ template, this expression node kind will be used whenever
+/// any of the arguments are type-dependent. In this case, the
+/// function itself will be a (possibly empty) set of functions and
+/// function templates that were found by name lookup at template
+/// definition time.
 class CXXOperatorCallExpr : public CallExpr {
+  /// \brief The overloaded operator.
+  OverloadedOperatorKind Operator;
+
 public:
-  CXXOperatorCallExpr(Expr *fn, Expr **args, unsigned numargs, QualType t,
+  CXXOperatorCallExpr(ASTContext& C, OverloadedOperatorKind Op, Expr *fn, 
+                      Expr **args, unsigned numargs, QualType t, 
                       SourceLocation operatorloc)
-    : CallExpr(CXXOperatorCallExprClass, fn, args, numargs, t, operatorloc) { }
+    : CallExpr(C, CXXOperatorCallExprClass, fn, args, numargs, t, operatorloc),
+      Operator(Op) {}
 
   /// getOperator - Returns the kind of overloaded operator that this
   /// expression refers to.
-  OverloadedOperatorKind getOperator() const;
+  OverloadedOperatorKind getOperator() const { return Operator; }
 
   /// getOperatorLoc - Returns the location of the operator symbol in
   /// the expression. When @c getOperator()==OO_Call, this is the
@@ -65,9 +80,9 @@ public:
 /// the object argument).
 class CXXMemberCallExpr : public CallExpr {
 public:
-  CXXMemberCallExpr(Expr *fn, Expr **args, unsigned numargs, QualType t,
-                      SourceLocation rparenloc)
-    : CallExpr(CXXMemberCallExprClass, fn, args, numargs, t, rparenloc) { }
+  CXXMemberCallExpr(ASTContext& C, Expr *fn, Expr **args, unsigned numargs,
+                    QualType t, SourceLocation rparenloc)
+    : CallExpr(C, CXXMemberCallExprClass, fn, args, numargs, t, rparenloc) {}
 
   /// getImplicitObjectArgument - Retrieves the implicit object
   /// argument for the member call. For example, in "x.f(5)", this
@@ -115,10 +130,6 @@ public:
     }
   }
   static bool classof(const CXXNamedCastExpr *) { return true; }
-      
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXNamedCastExpr *CreateImpl(llvm::Deserializer& D, ASTContext& C,
-                                      StmtClass SC);
 };
 
 /// CXXStaticCastExpr - A C++ @c static_cast expression (C++ [expr.static.cast]).
@@ -227,12 +238,18 @@ private:
 
 public:
   CXXTypeidExpr(bool isTypeOp, void *op, QualType Ty, const SourceRange r) :
-      Expr(CXXTypeidExprClass, Ty), isTypeOp(isTypeOp), Range(r) {
+      Expr(CXXTypeidExprClass, Ty,
+        // typeid is never type-dependent (C++ [temp.dep.expr]p4)
+        false,
+        // typeid is value-dependent if the type or expression are dependent
+        (isTypeOp ? QualType::getFromOpaquePtr(op)->isDependentType()
+                  : static_cast<Expr*>(op)->isValueDependent())),
+      isTypeOp(isTypeOp), Range(r) {
     if (isTypeOp)
       Operand.Ty = op;
     else
       // op was an Expr*, so cast it back to that to be safe
-      Operand.Ex = static_cast<Stmt*>(op);
+      Operand.Ex = static_cast<Expr*>(op);
   }
 
   bool isTypeOperand() const { return isTypeOp; }
@@ -256,9 +273,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXTypeidExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXThisExpr - Represents the "this" expression in C++, which is a
@@ -277,7 +291,11 @@ class CXXThisExpr : public Expr {
 
 public:
   CXXThisExpr(SourceLocation L, QualType Type) 
-    : Expr(CXXThisExprClass, Type), Loc(L) { }
+    : Expr(CXXThisExprClass, Type,
+           // 'this' is type-dependent if the class type of the enclosing
+           // member function is dependent (C++ [temp.dep.expr]p2)
+           Type->isDependentType(), Type->isDependentType()),
+      Loc(L) { }
 
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
 
@@ -289,9 +307,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXThisExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);  
 };
 
 ///  CXXThrowExpr - [C++ 15] C++ Throw Expression.  This handles
@@ -306,7 +321,7 @@ public:
   // exepression.  The l is the location of the throw keyword.  expr
   // can by null, if the optional expression to throw isn't present.
   CXXThrowExpr(Expr *expr, QualType Ty, SourceLocation l) :
-    Expr(CXXThrowExprClass, Ty), Op(expr), ThrowLoc(l) {}
+    Expr(CXXThrowExprClass, Ty, false, false), Op(expr), ThrowLoc(l) {}
   const Expr *getSubExpr() const { return cast_or_null<Expr>(Op); }
   Expr *getSubExpr() { return cast_or_null<Expr>(Op); }
 
@@ -363,11 +378,56 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
+};
 
-  // Serialization
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXDefaultArgExpr* CreateImpl(llvm::Deserializer& D,
-                                       ASTContext& C);
+/// CXXConstructExpr - Represents a call to a C++ constructor.
+class CXXConstructExpr : public Expr {
+  VarDecl *VD;
+  CXXConstructorDecl *Constructor;
+
+  bool Elidable;
+  
+  Stmt **Args;
+  unsigned NumArgs;
+
+  
+protected:
+  CXXConstructExpr(ASTContext &C, StmtClass SC, VarDecl *vd, QualType T, 
+                   CXXConstructorDecl *d, bool elidable,
+                   Expr **args, unsigned numargs);
+  ~CXXConstructExpr() { } 
+
+public:
+  static CXXConstructExpr *Create(ASTContext &C, VarDecl *VD, QualType T,
+                                  CXXConstructorDecl *D, bool Elidable, 
+                                  Expr **Args, unsigned NumArgs);
+  
+  void Destroy(ASTContext &C);
+  
+  const VarDecl* getVarDecl() const { return VD; }
+  const CXXConstructorDecl* getConstructor() const { return Constructor; }
+
+  typedef ExprIterator arg_iterator;
+  typedef ConstExprIterator const_arg_iterator;
+  
+  arg_iterator arg_begin() { return Args; }
+  arg_iterator arg_end() { return Args + NumArgs; }
+  const_arg_iterator arg_begin() const { return Args; }
+  const_arg_iterator arg_end() const { return Args + NumArgs; }
+
+  unsigned getNumArgs() const { return NumArgs; }
+
+  virtual SourceRange getSourceRange() const { return SourceRange(); }
+
+  static bool classof(const Stmt *T) { 
+    return T->getStmtClass() == CXXConstructExprClass ||
+      T->getStmtClass() == CXXTemporaryObjectExprClass;
+  }
+  static bool classof(const CXXConstructExpr *) { return true; }
+  
+  // Iterators
+  virtual child_iterator child_begin();
+  virtual child_iterator child_end();
 };
 
 /// CXXFunctionalCastExpr - Represents an explicit C++ type conversion
@@ -393,10 +453,6 @@ public:
     return T->getStmtClass() == CXXFunctionalCastExprClass; 
   }
   static bool classof(const CXXFunctionalCastExpr *) { return true; }
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXFunctionalCastExpr *
-      CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// @brief Represents a C++ functional cast expression that builds a
@@ -418,31 +474,21 @@ public:
 ///   return X(1, 3.14f); // creates a CXXTemporaryObjectExpr
 /// };
 /// @endcode
-class CXXTemporaryObjectExpr : public Expr {
+class CXXTemporaryObjectExpr : public CXXConstructExpr {
   SourceLocation TyBeginLoc;
   SourceLocation RParenLoc;
-  CXXConstructorDecl *Constructor;
-  Stmt **Args;
-  unsigned NumArgs;
 
 public:
-  CXXTemporaryObjectExpr(CXXConstructorDecl *Cons, QualType writtenTy,
+  CXXTemporaryObjectExpr(ASTContext &C, VarDecl *vd, 
+                         CXXConstructorDecl *Cons, QualType writtenTy,
                          SourceLocation tyBeginLoc, Expr **Args,
                          unsigned NumArgs, SourceLocation rParenLoc);
 
-  ~CXXTemporaryObjectExpr();
+  ~CXXTemporaryObjectExpr() { } 
 
   SourceLocation getTypeBeginLoc() const { return TyBeginLoc; }
   SourceLocation getRParenLoc() const { return RParenLoc; }
-  
-  typedef ExprIterator arg_iterator;
-  typedef ConstExprIterator const_arg_iterator;
-    
-  arg_iterator arg_begin() { return Args; }
-  arg_iterator arg_end() { return Args + NumArgs; }
-  const_arg_iterator arg_begin() const { return Args; }
-  const_arg_iterator arg_end() const { return Args + NumArgs; }
-  
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(TyBeginLoc, RParenLoc);
   }
@@ -450,13 +496,6 @@ public:
     return T->getStmtClass() == CXXTemporaryObjectExprClass;
   }
   static bool classof(const CXXTemporaryObjectExpr *) { return true; }
-  
-  // Iterators
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXTemporaryObjectExpr *CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXZeroInitValueExpr - [C++ 5.2.3p2]
@@ -495,10 +534,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXZeroInitValueExpr *
-      CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXConditionDeclExpr - Condition declaration of a if/switch/while/for
@@ -532,11 +567,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  // FIXME: Implement these.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  //static CXXConditionDeclExpr *
-  //    CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXNewExpr - A new expression for memory allocation and constructor calls,
@@ -572,18 +602,6 @@ class CXXNewExpr : public Expr {
   SourceLocation StartLoc;
   SourceLocation EndLoc;
 
-  // Deserialization constructor
-  CXXNewExpr(QualType ty, bool globalNew, bool parenTypeId, bool initializer,
-             bool array, unsigned numPlaceArgs, unsigned numConsArgs,
-             Stmt **subExprs, FunctionDecl *operatorNew,
-             FunctionDecl *operatorDelete, CXXConstructorDecl *constructor,
-             SourceLocation startLoc, SourceLocation endLoc)
-    : Expr(CXXNewExprClass, ty), GlobalNew(globalNew), ParenTypeId(parenTypeId),
-      Initializer(initializer), Array(array), NumPlacementArgs(numPlaceArgs),
-      NumConstructorArgs(numConsArgs), SubExprs(subExprs),
-      OperatorNew(operatorNew), OperatorDelete(operatorDelete),
-      Constructor(constructor), StartLoc(startLoc), EndLoc(endLoc)
-  { }
 public:
   CXXNewExpr(bool globalNew, FunctionDecl *operatorNew, Expr **placementArgs,
              unsigned numPlaceArgs, bool ParenTypeId, Expr *arraySize,
@@ -677,9 +695,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXNewExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXDeleteExpr - A delete expression for memory deallocation and destructor
@@ -698,7 +713,7 @@ class CXXDeleteExpr : public Expr {
 public:
   CXXDeleteExpr(QualType ty, bool globalDelete, bool arrayForm,
                 FunctionDecl *operatorDelete, Expr *arg, SourceLocation loc)
-    : Expr(CXXDeleteExprClass, ty), GlobalDelete(globalDelete),
+    : Expr(CXXDeleteExprClass, ty, false, false), GlobalDelete(globalDelete),
       ArrayForm(arrayForm), OperatorDelete(operatorDelete), Argument(arg),
       Loc(loc) { }
 
@@ -722,33 +737,37 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXDeleteExpr * CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
-/// CXXDependentNameExpr - Represents a dependent name in C++ for
-/// which we could not locate any definition. These names can only
-/// occur as in the example below, with an unqualified call to a
-/// function name whose arguments are dependent.
+/// \brief Represents the name of a function that has not been
+/// resolved to any declaration.
+///
+/// Unresolved function names occur when a function name is
+/// encountered prior to an open parentheses ('(') in a C++ function
+/// call, and the function name itself did not resolve to a
+/// declaration. These function names can only be resolved when they
+/// form the postfix-expression of a function call, so that
+/// argument-dependent lookup finds declarations corresponding to
+/// these functions.
+
 /// @code
 /// template<typename T> void f(T x) {
-///   g(x); // g is a dependent name.
+///   g(x); // g is an unresolved function name (that is also a dependent name)
 /// }
 /// @endcode
-class CXXDependentNameExpr : public Expr {
-  /// Name - The name that was present in the source code.
-  IdentifierInfo *Name;
+class UnresolvedFunctionNameExpr : public Expr {
+  /// The name that was present in the source 
+  DeclarationName Name;
 
-  /// Loc - The location 
+  /// The location of this name in the source code
   SourceLocation Loc;
 
 public:
-  CXXDependentNameExpr(IdentifierInfo *N, QualType T, SourceLocation L)
-    : Expr(CXXDependentNameExprClass, T, true, true), Name(N), Loc(L) { }
+  UnresolvedFunctionNameExpr(DeclarationName N, QualType T, SourceLocation L)
+    : Expr(UnresolvedFunctionNameExprClass, T, false, false), Name(N), Loc(L) { }
 
-  /// getName - Retrieves the name that occurred in the source code.
-  IdentifierInfo *getName() const { return Name; }
+  /// \brief Retrieves the name that occurred in the source code.
+  DeclarationName getName() const { return Name; }
 
   /// getLocation - Retrieves the location in the source code where
   /// the name occurred.
@@ -757,16 +776,13 @@ public:
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
 
   static bool classof(const Stmt *T) { 
-    return T->getStmtClass() == CXXDependentNameExprClass;
+    return T->getStmtClass() == UnresolvedFunctionNameExprClass;
   }
-  static bool classof(const CXXDependentNameExpr *) { return true; }
+  static bool classof(const UnresolvedFunctionNameExpr *) { return true; }
 
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXDependentNameExpr *CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// UnaryTypeTraitExpr - A GCC or MS unary type trait, as used in the
@@ -799,7 +815,7 @@ public:
 
   QualType getQueriedType() const { return QueriedType; }
 
-  bool Evaluate() const;
+  bool EvaluateTrait() const;
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == UnaryTypeTraitExprClass;
@@ -809,36 +825,129 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static UnaryTypeTraitExpr *CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// QualifiedDeclRefExpr - A reference to a declared variable,
 /// function, enum, etc., that includes a qualification, e.g.,
 /// "N::foo".
 class QualifiedDeclRefExpr : public DeclRefExpr {
-  /// NestedNameLoc - The location of the beginning of the
-  /// nested-name-specifier that qualifies this declaration.
-  SourceLocation NestedNameLoc;
+  /// QualifierRange - The source range that covers the
+  /// nested-name-specifier.
+  SourceRange QualifierRange;
+
+  /// \brief The nested-name-specifier that qualifies this declaration
+  /// name.
+  NestedNameSpecifier *NNS;
 
 public:
   QualifiedDeclRefExpr(NamedDecl *d, QualType t, SourceLocation l, bool TD, 
-                       bool VD, SourceLocation nnl)
+                       bool VD, SourceRange R, NestedNameSpecifier *NNS)
     : DeclRefExpr(QualifiedDeclRefExprClass, d, t, l, TD, VD), 
-      NestedNameLoc(nnl) { }
+      QualifierRange(R), NNS(NNS) { }
+
+  /// \brief Retrieve the source range of the nested-name-specifier.
+  SourceRange getQualifierRange() const { return QualifierRange; }
+
+  /// \brief Retrieve the nested-name-specifier that qualifies this
+  /// declaration.
+  NestedNameSpecifier *getQualifier() const { return NNS; }
 
   virtual SourceRange getSourceRange() const { 
-    return SourceRange(NestedNameLoc, getLocation()); 
+    return SourceRange(QualifierRange.getBegin(), getLocation()); 
   }
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == QualifiedDeclRefExprClass;
   }
   static bool classof(const QualifiedDeclRefExpr *) { return true; }
+};
 
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static QualifiedDeclRefExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
+/// \brief A qualified reference to a name whose declaration cannot
+/// yet be resolved.
+///
+/// UnresolvedDeclRefExpr is similar to QualifiedDeclRefExpr in that
+/// it expresses a qualified reference to a declaration such as
+/// X<T>::value. The difference, however, is that an
+/// UnresolvedDeclRefExpr node is used only within C++ templates when
+/// the qualification (e.g., X<T>::) refers to a dependent type. In
+/// this case, X<T>::value cannot resolve to a declaration because the
+/// declaration will differ from on instantiation of X<T> to the
+/// next. Therefore, UnresolvedDeclRefExpr keeps track of the
+/// qualifier (X<T>::) and the name of the entity being referenced
+/// ("value"). Such expressions will instantiate to
+/// QualifiedDeclRefExprs.
+class UnresolvedDeclRefExpr : public Expr {
+  /// The name of the entity we will be referencing.
+  DeclarationName Name;
+
+  /// Location of the name of the declaration we're referencing.
+  SourceLocation Loc;
+
+  /// QualifierRange - The source range that covers the
+  /// nested-name-specifier.
+  SourceRange QualifierRange;
+
+  /// \brief The nested-name-specifier that qualifies this unresolved
+  /// declaration name.
+  NestedNameSpecifier *NNS;
+
+public:
+  UnresolvedDeclRefExpr(DeclarationName N, QualType T, SourceLocation L,
+                        SourceRange R, NestedNameSpecifier *NNS)
+    : Expr(UnresolvedDeclRefExprClass, T, true, true), 
+      Name(N), Loc(L), QualifierRange(R), NNS(NNS) { }
+
+  /// \brief Retrieve the name that this expression refers to.
+  DeclarationName getDeclName() const { return Name; }
+
+  /// \brief Retrieve the location of the name within the expression.
+  SourceLocation getLocation() const { return Loc; }
+
+  /// \brief Retrieve the source range of the nested-name-specifier.
+  SourceRange getQualifierRange() const { return QualifierRange; }
+
+  /// \brief Retrieve the nested-name-specifier that qualifies this
+  /// declaration.
+  NestedNameSpecifier *getQualifier() const { return NNS; }
+
+  virtual SourceRange getSourceRange() const { 
+    return SourceRange(QualifierRange.getBegin(), getLocation()); 
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == UnresolvedDeclRefExprClass;
+  }
+  static bool classof(const UnresolvedDeclRefExpr *) { return true; }
+
+  virtual StmtIterator child_begin();
+  virtual StmtIterator child_end();
+};
+
+class CXXExprWithTemporaries : public Expr {
+  Stmt *SubExpr;
+    
+  CXXTempVarDecl **Decls;
+  unsigned NumDecls;
+
+public:
+  CXXExprWithTemporaries(Expr *subexpr, CXXTempVarDecl **decls, 
+                         unsigned numdecls);
+  ~CXXExprWithTemporaries();
+
+  const Expr *getSubExpr() const { return cast<Expr>(SubExpr); }
+  Expr *getSubExpr() { return cast<Expr>(SubExpr); }
+
+  virtual SourceRange getSourceRange() const { return SourceRange(); }
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXExprWithTemporariesClass;
+  }
+  static bool classof(const CXXExprWithTemporaries *) { return true; }
+
+  // Iterators
+  virtual child_iterator child_begin();
+  virtual child_iterator child_end();
 };
 
 }  // end namespace clang

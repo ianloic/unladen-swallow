@@ -26,6 +26,14 @@ namespace llvm {
   /// elimination optimization, this option should disable it.
   extern bool NoFramePointerElim;
 
+  /// LessPreciseFPMAD - This flag is enabled when the
+  /// -enable-fp-mad is specified on the command line.  When this flag is off
+  /// (the default), the code generator is not allowed to generate mad
+  /// (multiply add) if the result is "less precise" than doing those operations
+  /// individually.
+  extern bool LessPreciseFPMADOption;
+  extern bool LessPreciseFPMAD();
+
   /// NoExcessFPPrecision - This flag is enabled when the
   /// -disable-excess-fp-precision flag is specified on the command line.  When
   /// this flag is off (the default), the code generator is allowed to produce
@@ -39,7 +47,7 @@ namespace llvm {
   /// this flag is off (the default), the code generator is not allowed to
   /// produce results that are "less precise" than IEEE allows.  This includes
   /// use of X86 instructions like FSIN and FCOS instead of libcalls.
-  /// UnsafeFPMath implies FiniteOnlyFPMath.
+  /// UnsafeFPMath implies FiniteOnlyFPMath and LessPreciseFPMAD.
   extern bool UnsafeFPMath;
 
   /// FiniteOnlyFPMath - This returns true when the -enable-finite-only-fp-math
@@ -64,6 +72,12 @@ namespace llvm {
   /// generate libcalls to the software floating point library instead of
   /// target FP instructions.
   extern bool UseSoftFloat;
+
+  /// NoImplicitFloat - This flag is enabled when the -no-implicit-float flag is
+  /// specified on the command line.  When this flag is on, the code generator
+  /// won't generate any implicit floating point instructions. I.e., no XMM or
+  /// x87 or vectorized memcpy/memmove instructions. This is for X86 only.
+  extern bool NoImplicitFloat;
 
   /// NoZerosInBSS - By default some codegens place zero-initialized data to
   /// .bss section. This flag disables such behaviour (necessary, e.g. for
@@ -90,15 +104,11 @@ namespace llvm {
   /// realigned, if needed.
   extern bool RealignStack;
 
-  /// VerboseAsm - When this flag is set, the asm printer prints additional
-  /// comments to asm directives.
-  extern bool VerboseAsm;
-
   /// DisableJumpTables - This flag indicates jump tables should not be 
   /// generated.
   extern bool DisableJumpTables;
 
-  /// FastISel - This flag enables fast-path instruction selection
+  /// EnableFastISel - This flag enables fast-path instruction selection
   /// which trades away generated code quality in favor of reducing
   /// compile time.
   extern bool EnableFastISel;

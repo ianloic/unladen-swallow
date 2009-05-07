@@ -18,8 +18,11 @@
 #include <cassert>
 #include <cstring>
 #include "llvm/Support/DataTypes.h"
+#include "llvm/Support/PointerLikeTypeTraits.h"
 
 namespace llvm {
+
+class SmallPtrSetIteratorImpl;
 
 /// SmallPtrSetImpl - This is the common code shared among all the
 /// SmallPtrSet<>'s, which is almost everything.  SmallPtrSet has two modes, one
@@ -40,6 +43,7 @@ namespace llvm {
 /// more.  When this happens, the table is doubled in size.
 ///
 class SmallPtrSetImpl {
+  friend class SmallPtrSetIteratorImpl;
 protected:
   /// CurArray - This is the current set of buckets.  If it points to
   /// SmallArray, then the set is in 'small mode'.
@@ -56,7 +60,6 @@ protected:
 
   // Helper to copy construct a SmallPtrSet.
   SmallPtrSetImpl(const SmallPtrSetImpl& that);
-public:
   explicit SmallPtrSetImpl(unsigned SmallSize) {
     assert(SmallSize && (SmallSize & (SmallSize-1)) == 0 &&
            "Initial size must be a power of two!");
@@ -69,15 +72,9 @@ public:
   }
   ~SmallPtrSetImpl();
 
+public:
   bool empty() const { return size() == 0; }
   unsigned size() const { return NumElements; }
-
-  static void *getTombstoneMarker() { return reinterpret_cast<void*>(-2); }
-  static void *getEmptyMarker() {
-    // Note that -1 is chosen to make clear() efficiently implementable with
-    // memset and because it's not a valid pointer value.
-    return reinterpret_cast<void*>(-1);
-  }
 
   void clear() {
     // If the capacity of the array is huge, and the # elements used is small,
@@ -92,6 +89,13 @@ public:
   }
 
 protected:
+  static void *getTombstoneMarker() { return reinterpret_cast<void*>(-2); }
+  static void *getEmptyMarker() {
+    // Note that -1 is chosen to make clear() efficiently implementable with
+    // memset and because it's not a valid pointer value.
+    return reinterpret_cast<void*>(-1);
+  }
+
   /// insert_imp - This returns true if the pointer was new to the set, false if
   /// it was already in the set.  This is hidden from the client so that the
   /// derived class can check that the right type of pointer is passed in.
@@ -165,6 +169,7 @@ protected:
 /// SmallPtrSetIterator - This implements a const_iterator for SmallPtrSet.
 template<typename PtrTy>
 class SmallPtrSetIterator : public SmallPtrSetIteratorImpl {
+  typedef PointerLikeTypeTraits<PtrTy> PtrTraits;
 public:
   explicit SmallPtrSetIterator(const void *const *BP)
     : SmallPtrSetIteratorImpl(BP) {}
@@ -172,7 +177,7 @@ public:
   // Most methods provided by baseclass.
 
   const PtrTy operator*() const {
-    return static_cast<const PtrTy>(const_cast<void*>(*Bucket));
+    return PtrTraits::getFromVoidPointer(const_cast<void*>(*Bucket));
   }
 
   inline SmallPtrSetIterator& operator++() {          // Preincrement
@@ -210,7 +215,7 @@ template<unsigned N>
 struct NextPowerOfTwo {
   enum { Val = NextPowerOfTwoH<N, (N&(N-1)) == 0>::Val };
 };
-
+  
 
 /// SmallPtrSet - This class implements a set which is optimizer for holding
 /// SmallSize or less elements.  This internally rounds up SmallSize to the next
@@ -221,6 +226,7 @@ class SmallPtrSet : public SmallPtrSetImpl {
   // Make sure that SmallSize is a power of two, round up if not.
   enum { SmallSizePowTwo = NextPowerOfTwo<SmallSize>::Val };
   void *SmallArray[SmallSizePowTwo];
+  typedef PointerLikeTypeTraits<PtrType> PtrTraits;
 public:
   SmallPtrSet() : SmallPtrSetImpl(NextPowerOfTwo<SmallSizePowTwo>::Val) {}
   SmallPtrSet(const SmallPtrSet &that) : SmallPtrSetImpl(that) {}
@@ -233,14 +239,20 @@ public:
 
   /// insert - This returns true if the pointer was new to the set, false if it
   /// was already in the set.
-  bool insert(PtrType Ptr) { return insert_imp(Ptr); }
+  bool insert(PtrType Ptr) {
+    return insert_imp(PtrTraits::getAsVoidPointer(Ptr));
+  }
 
   /// erase - If the set contains the specified pointer, remove it and return
   /// true, otherwise return false.
-  bool erase(PtrType Ptr) { return erase_imp(Ptr); }
+  bool erase(PtrType Ptr) {
+    return erase_imp(PtrTraits::getAsVoidPointer(Ptr));
+  }
 
   /// count - Return true if the specified pointer is in the set.
-  bool count(PtrType Ptr) const { return count_imp(Ptr); }
+  bool count(PtrType Ptr) const {
+    return count_imp(PtrTraits::getAsVoidPointer(Ptr));
+  }
 
   template <typename IterT>
   void insert(IterT I, IterT E) {

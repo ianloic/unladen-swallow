@@ -28,6 +28,7 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -36,6 +37,7 @@
 using namespace llvm;
 
 STATISTIC(NumHoisted, "Number of machine instructions hoisted out of loops");
+STATISTIC(NumCSEed,   "Number of hoisted machine instructions CSEed");
 
 namespace {
   class VISIBILITY_HIDDEN MachineLICM : public MachineFunctionPass {
@@ -51,6 +53,10 @@ namespace {
     bool         Changed;          // True if a loop is changed.
     MachineLoop *CurLoop;          // The current loop we are working on.
     MachineBasicBlock *CurPreheader; // The preheader for CurLoop.
+
+    // For each BB and opcode pair, keep a list of hoisted instructions.
+    DenseMap<std::pair<unsigned, unsigned>,
+      std::vector<const MachineInstr*> > CSEMap;
   public:
     static char ID; // Pass identification, replacement for typeid
     MachineLICM() : MachineFunctionPass(&ID) {}
@@ -68,6 +74,11 @@ namespace {
       AU.addPreserved<MachineDominatorTree>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
+
+    virtual void releaseMemory() {
+      CSEMap.clear();
+    }
+
   private:
     /// IsLoopInvariantInst - Returns true if the instruction is loop
     /// invariant. I.e., all virtual register operands are defined outside of
@@ -75,6 +86,10 @@ namespace {
     /// and the instruction is hoistable.
     /// 
     bool IsLoopInvariantInst(MachineInstr &I);
+
+    /// IsProfitableToHoist - Return true if it is potentially profitable to
+    /// hoist the given loop invariant.
+    bool IsProfitableToHoist(MachineInstr &MI);
 
     /// HoistRegion - Walk the specified region of the CFG (defined by all
     /// blocks dominated by the specified block, and that are in the current
@@ -111,6 +126,10 @@ static bool LoopIsOuterMostWithPreheader(MachineLoop *CurLoop) {
 /// loop.
 ///
 bool MachineLICM::runOnMachineFunction(MachineFunction &MF) {
+  const Function *F = MF.getFunction();
+  if (F->hasFnAttr(Attribute::OptimizeForSize))
+    return false;
+
   DOUT << "******** Machine LICM ********\n";
 
   Changed = false;
@@ -159,13 +178,13 @@ void MachineLICM::HoistRegion(MachineDomTreeNode *N) {
   if (!CurLoop->contains(BB)) return;
 
   for (MachineBasicBlock::iterator
-         I = BB->begin(), E = BB->end(); I != E; ) {
-    MachineInstr &MI = *I++;
+         MII = BB->begin(), E = BB->end(); MII != E; ) {
+    MachineBasicBlock::iterator NextMII = MII; ++NextMII;
+    MachineInstr &MI = *MII;
 
-    // Try hoisting the instruction out of the loop. We can only do this if
-    // all of the operands of the instruction are loop invariant and if it is
-    // safe to hoist the instruction.
     Hoist(MI);
+
+    MII = NextMII;
   }
 
   const std::vector<MachineDomTreeNode*> &Children = N->getChildren();
@@ -186,7 +205,7 @@ bool MachineLICM::IsLoopInvariantInst(MachineInstr &I) {
   if (TID.mayStore() || TID.isCall() || TID.isTerminator() ||
       TID.hasUnmodeledSideEffects())
     return false;
-  
+
   if (TID.mayLoad()) {
     // Okay, this instruction does a load. As a refinement, we allow the target
     // to decide whether the loaded value is actually a constant. If so, we can
@@ -254,11 +273,84 @@ bool MachineLICM::IsLoopInvariantInst(MachineInstr &I) {
   return true;
 }
 
+
+/// HasPHIUses - Return true if the specified register has any PHI use.
+static bool HasPHIUses(unsigned Reg, MachineRegisterInfo *RegInfo) {
+  for (MachineRegisterInfo::use_iterator UI = RegInfo->use_begin(Reg),
+         UE = RegInfo->use_end(); UI != UE; ++UI) {
+    MachineInstr *UseMI = &*UI;
+    if (UseMI->getOpcode() == TargetInstrInfo::PHI)
+      return true;
+  }
+  return false;
+}
+
+/// IsProfitableToHoist - Return true if it is potentially profitable to hoist
+/// the given loop invariant.
+bool MachineLICM::IsProfitableToHoist(MachineInstr &MI) {
+  if (MI.getOpcode() == TargetInstrInfo::IMPLICIT_DEF)
+    return false;
+
+  const TargetInstrDesc &TID = MI.getDesc();
+
+  // FIXME: For now, only hoist re-materilizable instructions. LICM will
+  // increase register pressure. We want to make sure it doesn't increase
+  // spilling.
+  if (!TID.mayLoad() && (!TID.isRematerializable() ||
+                         !TII->isTriviallyReMaterializable(&MI)))
+    return false;
+
+  // If result(s) of this instruction is used by PHIs, then don't hoist it.
+  // The presence of joins makes it difficult for current register allocator
+  // implementation to perform remat.
+  for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = MI.getOperand(i);
+    if (!MO.isReg() || !MO.isDef())
+      continue;
+    if (HasPHIUses(MO.getReg(), RegInfo))
+      return false;
+  }
+
+  return true;
+}
+
+static const MachineInstr *LookForDuplicate(const MachineInstr *MI,
+                                      std::vector<const MachineInstr*> &PrevMIs,
+                                      MachineRegisterInfo *RegInfo) {
+  unsigned NumOps = MI->getNumOperands();
+  for (unsigned i = 0, e = PrevMIs.size(); i != e; ++i) {
+    const MachineInstr *PrevMI = PrevMIs[i];
+    unsigned NumOps2 = PrevMI->getNumOperands();
+    if (NumOps != NumOps2)
+      continue;
+    bool IsSame = true;
+    for (unsigned j = 0; j != NumOps; ++j) {
+      const MachineOperand &MO = MI->getOperand(j);
+      if (MO.isReg() && MO.isDef()) {
+        if (RegInfo->getRegClass(MO.getReg()) !=
+            RegInfo->getRegClass(PrevMI->getOperand(j).getReg())) {
+          IsSame = false;
+          break;
+        }
+        continue;
+      }
+      if (!MO.isIdenticalTo(PrevMI->getOperand(j))) {
+        IsSame = false;
+        break;
+      }
+    }
+    if (IsSame)
+      return PrevMI;
+  }
+  return 0;
+}
+
 /// Hoist - When an instruction is found to use only loop invariant operands
 /// that are safe to hoist, this instruction is called to do the dirty work.
 ///
 void MachineLICM::Hoist(MachineInstr &MI) {
   if (!IsLoopInvariantInst(MI)) return;
+  if (!IsProfitableToHoist(MI)) return;
 
   // Now move the instructions to the predecessor, inserting it before any
   // terminator instructions.
@@ -273,7 +365,41 @@ void MachineLICM::Hoist(MachineInstr &MI) {
       DOUT << "\n";
     });
 
-  CurPreheader->splice(CurPreheader->getFirstTerminator(), MI.getParent(), &MI);
+  // Look for opportunity to CSE the hoisted instruction.
+  std::pair<unsigned, unsigned> BBOpcPair =
+    std::make_pair(CurPreheader->getNumber(), MI.getOpcode());
+  DenseMap<std::pair<unsigned, unsigned>,
+    std::vector<const MachineInstr*> >::iterator CI = CSEMap.find(BBOpcPair);
+  bool DoneCSE = false;
+  if (CI != CSEMap.end()) {
+    const MachineInstr *Dup = LookForDuplicate(&MI, CI->second, RegInfo);
+    if (Dup) {
+      DOUT << "CSEing " << MI;
+      DOUT << " with " << *Dup;
+      for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+        const MachineOperand &MO = MI.getOperand(i);
+        if (MO.isReg() && MO.isDef())
+          RegInfo->replaceRegWith(MO.getReg(), Dup->getOperand(i).getReg());
+      }
+      MI.eraseFromParent();
+      DoneCSE = true;
+      ++NumCSEed;
+    }
+  }
+
+  // Otherwise, splice the instruction to the preheader.
+  if (!DoneCSE) {
+    CurPreheader->splice(CurPreheader->getFirstTerminator(),
+                         MI.getParent(), &MI);
+    // Add to the CSE map.
+    if (CI != CSEMap.end())
+      CI->second.push_back(&MI);
+    else {
+      std::vector<const MachineInstr*> CSEMIs;
+      CSEMIs.push_back(&MI);
+      CSEMap.insert(std::make_pair(BBOpcPair, CSEMIs));
+    }
+  }
 
   ++NumHoisted;
   Changed = true;

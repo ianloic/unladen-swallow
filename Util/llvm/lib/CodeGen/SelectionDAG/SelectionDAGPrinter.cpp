@@ -11,11 +11,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ScheduleDAGSDNodes.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/SelectionDAG.h"
-#include "llvm/CodeGen/ScheduleDAGSDNodes.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -162,7 +162,7 @@ std::string DOTGraphTraits<SelectionDAG*>::getNodeLabel(const SDNode *Node,
         Op += '>';
       }
     }
-    Op += " A=" + itostr(1 << CP->getAlignment());
+    Op += " A=" + itostr(CP->getAlignment());
   } else if (const BasicBlockSDNode *BBDN = dyn_cast<BasicBlockSDNode>(Node)) {
     Op = "BB: ";
     const Value *LBB = (const Value*)BBDN->getBasicBlock()->getBasicBlock();
@@ -179,7 +179,8 @@ std::string DOTGraphTraits<SelectionDAG*>::getNodeLabel(const SDNode *Node,
     }
   } else if (const DbgStopPointSDNode *D = dyn_cast<DbgStopPointSDNode>(Node)) {
     DICompileUnit CU(cast<GlobalVariable>(D->getCompileUnit()));
-    Op += ": " + CU.getFilename();
+    std::string FN;
+    Op += ": " + CU.getFilename(FN);
     Op += ":" + utostr(D->getLine());
     if (D->getColumn() != 0)
       Op += ":" + utostr(D->getColumn());

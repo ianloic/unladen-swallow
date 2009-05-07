@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 class A {};
 
@@ -13,7 +13,7 @@ namespace D {
   
   class C {
     
-    using namespace B ; // expected-error{{expected unqualified-id}}
+    using namespace B ; // expected-error{{expected member name or ';' after declaration specifiers}}
     //FIXME: this needs better error message
   };
   
@@ -28,8 +28,9 @@ namespace D {
 
 using namespace ! ; // expected-error{{expected namespace name}}
 using namespace A ; // expected-error{{expected namespace name}}
-using namespace ::A // expected-error{{expected namespace name}}
-                    B ; // expected-error{{expected ';' after namespace name}}
+using namespace ::A // expected-error{{expected namespace name}} \
+                    // expected-error{{expected ';' after namespace name}}
+                    B ; 
 
 void test_nslookup() {
   int B;

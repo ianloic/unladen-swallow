@@ -1,4 +1,4 @@
-// RUN: clang %s -verify -pedantic -fsyntax-only
+// RUN: clang-cc %s -verify -pedantic -fsyntax-only
 
 typedef short short_fixed;
 
@@ -13,5 +13,5 @@ enum
 
 enum
 {
-        SOME_VALUE= FLOAT_TO_SHORT_FIXED(0.1)
+        SOME_VALUE= FLOAT_TO_SHORT_FIXED(0.1) // expected-warning{{expression is not integer constant expression}}
 };

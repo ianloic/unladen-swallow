@@ -16,33 +16,40 @@
 
 namespace clang {
   class ASTContext;
-  class TranslationUnit;
-  class Decl;
+  class DeclGroupRef;
   class TagDecl;
   class HandleTagDeclDefinition;
-  
+  class SemaConsumer; // layering violation required for safe SemaConsumer
+  class VarDecl;
+
 /// ASTConsumer - This is an abstract interface that should be implemented by
 /// clients that read ASTs.  This abstraction layer allows the client to be
 /// independent of the AST producer (e.g. parser vs AST dump file reader, etc).
 class ASTConsumer {
+  /// \brief Whether this AST consumer also requires information about
+  /// semantic analysis.
+  bool SemaConsumer;
+
+  friend class SemaConsumer;
+
 public:
-  virtual ~ASTConsumer();
+  ASTConsumer() : SemaConsumer(false) { }
+
+  virtual ~ASTConsumer() {}
   
   /// Initialize - This is called to initialize the consumer, providing the
-  /// ASTContext.
+  /// ASTContext and the Action.
   virtual void Initialize(ASTContext &Context) {}
-  
-  virtual void InitializeTU(TranslationUnit& TU);
   
   /// HandleTopLevelDecl - Handle the specified top-level declaration.  This is
   ///  called by the parser to process every top-level Decl*. Note that D can
   ///  be the head of a chain of Decls (e.g. for `int a, b` the chain will have
   ///  two elements). Use Decl::getNextDeclarator() to walk the chain.
-  virtual void HandleTopLevelDecl(Decl *D) {}
+  virtual void HandleTopLevelDecl(DeclGroupRef D);
   
   /// HandleTranslationUnit - This method is called when the ASTs for entire
   ///  translation unit have been parsed.
-  virtual void HandleTranslationUnit(TranslationUnit& TU) {}    
+  virtual void HandleTranslationUnit(ASTContext &Ctx) {}    
   
   /// HandleTagDeclDefinition - This callback is invoked each time a TagDecl
   /// (e.g. struct, union, enum, class) is completed.  This allows the client to
@@ -50,9 +57,23 @@ public:
   /// can be defined in declspecs).
   virtual void HandleTagDeclDefinition(TagDecl *D) {}
   
+  /// \brief Callback invoked at the end of a translation unit to
+  /// notify the consumer that the given tentative definition should
+  /// be completed.
+  ///
+  /// The variable declaration itself will be a tentative
+  /// definition. If it had an incomplete array type, its type will
+  /// have already been changed to an array of size 1. However, the
+  /// declaration remains a tentative definition and has not been
+  /// modified by the introduction of an implicit zero initializer.
+  virtual void CompleteTentativeDefinition(VarDecl *D) {}
+
   /// PrintStats - If desired, print any statistics.
   virtual void PrintStats() {
   }
+
+  // Support isa/cast/dyn_cast
+  static bool classof(const ASTConsumer *) { return true; }
 };
 
 } // end namespace clang.

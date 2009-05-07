@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 #define EVAL_EXPR(testno, expr) int test##testno = sizeof(struct{char qq[expr];});
 int x;
@@ -29,3 +29,39 @@ void f()
 
 // FIXME: Turn into EVAL_EXPR test once we have more folding.
 _Complex float g16 = (1.0f + 1.0fi);
+
+// ?: in constant expressions.
+int g17[(3?:1) - 2]; 
+
+EVAL_EXPR(18, ((int)((void*)10 + 10)) == 20 ? 1 : -1);
+
+struct s {
+  int a[(int)-1.0f]; // expected-error {{array size is negative}}
+};
+
+EVAL_EXPR(19, ((int)&*(char*)10 == 10 ? 1 : -1));
+
+EVAL_EXPR(20, __builtin_constant_p(*((int*) 10), -1, 1));
+
+EVAL_EXPR(21, (__imag__ 2i) == 2 ? 1 : -1);
+
+EVAL_EXPR(22, (__real__ (2i+3)) == 3 ? 1 : -1);
+
+int g23[(int)(1.0 / 1.0)] = { 1 };
+int g24[(int)(1.0 / 1.0)] = { 1 , 2 }; // expected-warning {{excess elements in array initializer}}
+int g25[(int)(1.0 + 1.0)], g26 = sizeof(g25);
+
+EVAL_EXPR(26, (_Complex double)0 ? -1 : 1)
+EVAL_EXPR(27, (_Complex int)0 ? -1 : 1)
+EVAL_EXPR(28, (_Complex double)1 ? 1 : -1)
+EVAL_EXPR(29, (_Complex int)1 ? 1 : -1)
+
+
+// PR4027 + rdar://6808859
+struct a { int x, y };
+static struct a V2 = (struct a)(struct a){ 1, 2};
+static const struct a V1 = (struct a){ 1, 2};
+
+EVAL_EXPR(30, (int)(_Complex float)((1<<30)-1) == (1<<30) ? 1 : -1)
+EVAL_EXPR(31, (int*)0 == (int*)0 ? 1 : -1)
+EVAL_EXPR(32, (int*)0 != (int*)0 ? -1 : 1)

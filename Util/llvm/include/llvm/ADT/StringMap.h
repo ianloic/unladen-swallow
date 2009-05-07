@@ -34,6 +34,7 @@ class StringMapEntryInitializer {
 public:
   template <typename InitTy>
   static void Initialize(StringMapEntry<ValueTy> &T, InitTy InitVal) {
+    T.second = InitVal;
   }
 };
 
@@ -195,7 +196,7 @@ public:
   }
 
   static StringMapEntry *Create(const char *KeyStart, const char *KeyEnd) {
-    return Create(KeyStart, KeyEnd, 0);
+    return Create(KeyStart, KeyEnd, ValueTy());
   }
 
   /// GetStringMapEntryFromValue - Given a value that is known to be embedded
@@ -240,6 +241,17 @@ public:
   StringMap() : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))) {}
   explicit StringMap(unsigned InitialSize)
     : StringMapImpl(InitialSize, static_cast<unsigned>(sizeof(MapEntryTy))) {}
+  explicit StringMap(const StringMap &RHS)
+    : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))) {
+    assert(RHS.empty() &&
+           "Copy ctor from non-empty stringmap not implemented yet!");
+  }
+  void operator=(const StringMap &RHS) {
+    assert(RHS.empty() &&
+           "assignment from non-empty stringmap not implemented yet!");
+    clear();
+  }
+
 
   AllocatorTy &getAllocator() { return Allocator; }
   const AllocatorTy &getAllocator() const { return Allocator; }
@@ -291,14 +303,33 @@ public:
     return find(key_start, key_start + Key.size());
   }
 
+   /// lookup - Return the entry for the specified key, or a default
+  /// constructed value if no such entry exists.
+  ValueTy lookup(const char *KeyStart, const char *KeyEnd) const {
+    const_iterator it = find(KeyStart, KeyEnd);
+    if (it != end())
+      return it->second;
+    return ValueTy();
+  }
+  ValueTy lookup(const char *Key) const {
+    const_iterator it = find(Key);
+    if (it != end())
+      return it->second;
+    return ValueTy();
+  }
+  ValueTy lookup(const std::string &Key) const {
+    const_iterator it = find(Key);
+    if (it != end())
+      return it->second;
+    return ValueTy();
+  }
+
   ValueTy& operator[](const char *Key) {
-    value_type& entry = GetOrCreateValue(Key, Key + strlen(Key));
-    return entry.getValue();
+    return GetOrCreateValue(Key, Key + strlen(Key)).getValue();
   }
   ValueTy& operator[](const std::string &Key) {
     const char* key_start = (Key.empty() ? NULL : &Key[0]);
-    value_type& entry = GetOrCreateValue(key_start, key_start + Key.size());
-    return entry.getValue();
+    return GetOrCreateValue(key_start, key_start + Key.size()).getValue();
   }
 
   size_type count(const char *KeyStart, const char *KeyEnd) const {
@@ -378,7 +409,7 @@ public:
 
   StringMapEntry<ValueTy> &GetOrCreateValue(const char *KeyStart,
                                             const char *KeyEnd) {
-    return GetOrCreateValue(KeyStart, KeyEnd, 0);
+    return GetOrCreateValue(KeyStart, KeyEnd, ValueTy());
   }
 
   /// remove - Remove the specified key/value pair from the map, but do not
@@ -411,9 +442,6 @@ public:
     clear();
     free(TheTable);
   }
-private:
-  StringMap(const StringMap &);  // FIXME: Implement.
-  void operator=(const StringMap &);  // FIXME: Implement.
 };
 
 

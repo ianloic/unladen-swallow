@@ -69,7 +69,7 @@ class PPCInstrInfo : public TargetInstrInfoImpl {
                            unsigned SrcReg, bool isKill, int FrameIdx,
                            const TargetRegisterClass *RC,
                            SmallVectorImpl<MachineInstr*> &NewMIs) const;
-  void LoadRegFromStackSlot(MachineFunction &MF,
+  void LoadRegFromStackSlot(MachineFunction &MF, DebugLoc DL, 
                             unsigned DestReg, int FrameIdx,
                             const TargetRegisterClass *RC,
                             SmallVectorImpl<MachineInstr*> &NewMIs) const;
@@ -81,10 +81,6 @@ public:
   /// always be able to get register info as well (through this method).
   ///
   virtual const PPCRegisterInfo &getRegisterInfo() const { return RI; }
-
-  /// getPointerRegClass - Return the register class to use to hold pointers.
-  /// This is used for addressing modes.
-  virtual const TargetRegisterClass *getPointerRegClass() const;  
 
   /// Return true if the instruction is a register to register move and return
   /// the source and dest operands and their sub-register indices by reference.

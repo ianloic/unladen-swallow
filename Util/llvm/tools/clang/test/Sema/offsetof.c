@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 #define offsetof(TYPE, MEMBER) __builtin_offsetof (TYPE, MEMBER)
 
@@ -35,3 +35,16 @@ int v2 = (int)(&((struct s2 *) 0)->a) == 0 ? 0 : f();
 
 struct s3 { int a; }; 
 int v3 = __builtin_offsetof(struct s3, a) == 0 ? 0 : f();
+
+// PR3396
+struct sockaddr_un {
+ unsigned char sun_len;
+ char sun_path[104];
+};
+int a(int len) {
+int a[__builtin_offsetof(struct sockaddr_un, sun_path[len+1])];
+}
+
+// PR4079
+union x {struct {int x;};};
+int x[__builtin_offsetof(union x, x)];

@@ -177,8 +177,8 @@ public:
   ///
   inline TypeID getTypeID() const { return ID; }
 
-  /// getDescription - Return the string representation of the type...
-  const std::string &getDescription() const;
+  /// getDescription - Return the string representation of the type.
+  std::string getDescription() const;
 
   /// isInteger - True if this is an instance of IntegerType.
   ///
@@ -326,7 +326,7 @@ public:
   //===--------------------------------------------------------------------===//
   // These are the builtin types that are always available...
   //
-  static const Type *VoidTy, *LabelTy, *FloatTy, *DoubleTy;
+  static const Type *VoidTy, *LabelTy, *FloatTy, *DoubleTy, *EmptyStructTy;
   static const Type *X86_FP80Ty, *FP128Ty, *PPC_FP128Ty;
   static const IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
 
@@ -363,6 +363,10 @@ public:
   /// again.
   ///
   void removeAbstractTypeUser(AbstractTypeUser *U) const;
+
+  /// getPointerTo - Return a pointer to the current type.  This is equivalent
+  /// to PointerType::get(Foo, AddrSpace).
+  PointerType *getPointerTo(unsigned AddrSpace = 0) const;
 
 private:
   /// isSizedDerivedType - Derived types like structures and arrays are sized

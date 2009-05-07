@@ -105,9 +105,11 @@ static bool isAlphaIntCondCode(unsigned Opcode) {
 }
 
 unsigned AlphaInstrInfo::InsertBranch(MachineBasicBlock &MBB,
-                            MachineBasicBlock *TBB,
-                            MachineBasicBlock *FBB,
+                                      MachineBasicBlock *TBB,
+                                      MachineBasicBlock *FBB,
                             const SmallVectorImpl<MachineOperand> &Cond) const {
+  // FIXME this should probably have a DebugLoc argument
+  DebugLoc dl = DebugLoc::getUnknownLoc();
   assert(TBB && "InsertBranch must not be told to insert a fallthrough");
   assert((Cond.size() == 2 || Cond.size() == 0) && 
          "Alpha branch conditions have two components!");
@@ -115,45 +117,54 @@ unsigned AlphaInstrInfo::InsertBranch(MachineBasicBlock &MBB,
   // One-way branch.
   if (FBB == 0) {
     if (Cond.empty())   // Unconditional branch
-      BuildMI(&MBB, get(Alpha::BR)).addMBB(TBB);
+      BuildMI(&MBB, dl, get(Alpha::BR)).addMBB(TBB);
     else                // Conditional branch
       if (isAlphaIntCondCode(Cond[0].getImm()))
-        BuildMI(&MBB, get(Alpha::COND_BRANCH_I))
+        BuildMI(&MBB, dl, get(Alpha::COND_BRANCH_I))
           .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
       else
-        BuildMI(&MBB, get(Alpha::COND_BRANCH_F))
+        BuildMI(&MBB, dl, get(Alpha::COND_BRANCH_F))
           .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
     return 1;
   }
   
   // Two-way Conditional Branch.
   if (isAlphaIntCondCode(Cond[0].getImm()))
-    BuildMI(&MBB, get(Alpha::COND_BRANCH_I))
+    BuildMI(&MBB, dl, get(Alpha::COND_BRANCH_I))
       .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
   else
-    BuildMI(&MBB, get(Alpha::COND_BRANCH_F))
+    BuildMI(&MBB, dl, get(Alpha::COND_BRANCH_F))
       .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
-  BuildMI(&MBB, get(Alpha::BR)).addMBB(FBB);
+  BuildMI(&MBB, dl, get(Alpha::BR)).addMBB(FBB);
   return 2;
 }
 
 bool AlphaInstrInfo::copyRegToReg(MachineBasicBlock &MBB,
-                                     MachineBasicBlock::iterator MI,
-                                     unsigned DestReg, unsigned SrcReg,
-                                     const TargetRegisterClass *DestRC,
-                                     const TargetRegisterClass *SrcRC) const {
+                                  MachineBasicBlock::iterator MI,
+                                  unsigned DestReg, unsigned SrcReg,
+                                  const TargetRegisterClass *DestRC,
+                                  const TargetRegisterClass *SrcRC) const {
   //cerr << "copyRegToReg " << DestReg << " <- " << SrcReg << "\n";
   if (DestRC != SrcRC) {
     // Not yet supported!
     return false;
   }
 
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
   if (DestRC == Alpha::GPRCRegisterClass) {
-    BuildMI(MBB, MI, get(Alpha::BISr), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(Alpha::BISr), DestReg)
+      .addReg(SrcReg)
+      .addReg(SrcReg);
   } else if (DestRC == Alpha::F4RCRegisterClass) {
-    BuildMI(MBB, MI, get(Alpha::CPYSS), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(Alpha::CPYSS), DestReg)
+      .addReg(SrcReg)
+      .addReg(SrcReg);
   } else if (DestRC == Alpha::F8RCRegisterClass) {
-    BuildMI(MBB, MI, get(Alpha::CPYST), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(Alpha::CPYST), DestReg)
+      .addReg(SrcReg)
+      .addReg(SrcReg);
   } else {
     // Attempt to copy register that is not GPR or FPR
     return false;
@@ -164,22 +175,26 @@ bool AlphaInstrInfo::copyRegToReg(MachineBasicBlock &MBB,
 
 void
 AlphaInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
-                                       MachineBasicBlock::iterator MI,
-                                     unsigned SrcReg, bool isKill, int FrameIdx,
-                                     const TargetRegisterClass *RC) const {
+                                    MachineBasicBlock::iterator MI,
+                                    unsigned SrcReg, bool isKill, int FrameIdx,
+                                    const TargetRegisterClass *RC) const {
   //cerr << "Trying to store " << getPrettyName(SrcReg) << " to "
   //     << FrameIdx << "\n";
   //BuildMI(MBB, MI, Alpha::WTF, 0).addReg(SrcReg);
+
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
   if (RC == Alpha::F4RCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::STS))
+    BuildMI(MBB, MI, DL, get(Alpha::STS))
       .addReg(SrcReg, false, false, isKill)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::F8RCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::STT))
+    BuildMI(MBB, MI, DL, get(Alpha::STT))
       .addReg(SrcReg, false, false, isKill)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::GPRCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::STQ))
+    BuildMI(MBB, MI, DL, get(Alpha::STQ))
       .addReg(SrcReg, false, false, isKill)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else
@@ -200,15 +215,11 @@ void AlphaInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
     Opc = Alpha::STQ;
   else
     abort();
+  DebugLoc DL = DebugLoc::getUnknownLoc();
   MachineInstrBuilder MIB = 
-    BuildMI(MF, get(Opc)).addReg(SrcReg, false, false, isKill);
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i) {
-    MachineOperand &MO = Addr[i];
-    if (MO.isReg())
-      MIB.addReg(MO.getReg(), MO.isDef(), MO.isImplicit());
-    else
-      MIB.addImm(MO.getImm());
-  }
+    BuildMI(MF, DL, get(Opc)).addReg(SrcReg, false, false, isKill);
+  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
+    MIB.addOperand(Addr[i]);
   NewMIs.push_back(MIB);
 }
 
@@ -219,14 +230,17 @@ AlphaInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                         const TargetRegisterClass *RC) const {
   //cerr << "Trying to load " << getPrettyName(DestReg) << " to "
   //     << FrameIdx << "\n";
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
   if (RC == Alpha::F4RCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::LDS), DestReg)
+    BuildMI(MBB, MI, DL, get(Alpha::LDS), DestReg)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::F8RCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::LDT), DestReg)
+    BuildMI(MBB, MI, DL, get(Alpha::LDT), DestReg)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::GPRCRegisterClass)
-    BuildMI(MBB, MI, get(Alpha::LDQ), DestReg)
+    BuildMI(MBB, MI, DL, get(Alpha::LDQ), DestReg)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else
     abort();
@@ -245,15 +259,11 @@ void AlphaInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
     Opc = Alpha::LDQ;
   else
     abort();
+  DebugLoc DL = DebugLoc::getUnknownLoc();
   MachineInstrBuilder MIB = 
-    BuildMI(MF, get(Opc), DestReg);
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i) {
-    MachineOperand &MO = Addr[i];
-    if (MO.isReg())
-      MIB.addReg(MO.getReg(), MO.isDef(), MO.isImplicit());
-    else
-      MIB.addImm(MO.getImm());
-  }
+    BuildMI(MF, DL, get(Opc), DestReg);
+  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
+    MIB.addOperand(Addr[i]);
   NewMIs.push_back(MIB);
 }
 
@@ -279,7 +289,8 @@ MachineInstr *AlphaInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
          bool isKill = MI->getOperand(1).isKill();
          Opc = (Opc == Alpha::BISr) ? Alpha::STQ : 
            ((Opc == Alpha::CPYSS) ? Alpha::STS : Alpha::STT);
-         NewMI = BuildMI(MF, get(Opc)).addReg(InReg, false, false, isKill)
+         NewMI = BuildMI(MF, MI->getDebugLoc(), get(Opc))
+           .addReg(InReg, false, false, isKill)
            .addFrameIndex(FrameIndex)
            .addReg(Alpha::F31);
        } else {           // load -> move
@@ -287,7 +298,8 @@ MachineInstr *AlphaInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
          bool isDead = MI->getOperand(0).isDead();
          Opc = (Opc == Alpha::BISr) ? Alpha::LDQ : 
            ((Opc == Alpha::CPYSS) ? Alpha::LDS : Alpha::LDT);
-         NewMI = BuildMI(MF, get(Opc)).addReg(OutReg, true, false, false, isDead)
+         NewMI = BuildMI(MF, MI->getDebugLoc(), get(Opc))
+           .addReg(OutReg, true, false, false, isDead)
            .addFrameIndex(FrameIndex)
            .addReg(Alpha::F31);
        }
@@ -410,7 +422,10 @@ unsigned AlphaInstrInfo::RemoveBranch(MachineBasicBlock &MBB) const {
 
 void AlphaInstrInfo::insertNoop(MachineBasicBlock &MBB, 
                                 MachineBasicBlock::iterator MI) const {
-  BuildMI(MBB, MI, get(Alpha::BISr), Alpha::R31).addReg(Alpha::R31)
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+  BuildMI(MBB, MI, DL, get(Alpha::BISr), Alpha::R31)
+    .addReg(Alpha::R31)
     .addReg(Alpha::R31);
 }
 

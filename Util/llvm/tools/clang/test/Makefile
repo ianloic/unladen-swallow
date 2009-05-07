@@ -10,9 +10,15 @@ TESTDIRS +=
 endif
 
 ifdef VERBOSE
+ifeq ($(VERBOSE),0)
+PROGRESS = :
+REPORTFAIL = echo 'FAIL: clang' $(TARGET_TRIPLE) $(subst $(LLVM_SRC_ROOT)/tools/clang/,,$<)
+DONE = $(LLVMToolDir)/clang -v
+else
 PROGRESS = echo $<
 REPORTFAIL = cat $@
 DONE = true
+endif
 else
 PROGRESS = printf '.'
 REPORTFAIL = (echo; echo '----' $< 'failed ----')
@@ -27,7 +33,7 @@ Output/%.testresults: %
 all::
 	@ mkdir -p $(addprefix Output/, $(TESTDIRS))
 	@ rm -f $(TESTS)
-	@ echo '--- Running clang tests ---'
+	@ echo '--- Running clang tests for $(TARGET_TRIPLE) ---'
 	@ $(MAKE) $(TESTS)
 	@ $(DONE)
 	@ !(cat $(TESTS) | grep -q " FAILED! ")

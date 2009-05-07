@@ -34,7 +34,7 @@ namespace llvm {
     /// parameter values of an intrinsic. If the number of return values is > 1,
     /// then the intrinsic implicitly returns a first-class aggregate. The
     /// numbering of the types starts at 0 with the first return value and
-    /// continues from there throug the parameter list. This is useful for
+    /// continues from there through the parameter list. This is useful for
     /// "matching" types.
     struct IntrinsicSignature {
       /// RetVTs - The MVT::SimpleValueType for each return type. Note that this
@@ -80,7 +80,8 @@ namespace llvm {
 
   /// LoadIntrinsics - Read all of the intrinsics defined in the specified
   /// .td file.
-  std::vector<CodeGenIntrinsic> LoadIntrinsics(const RecordKeeper &RC);
+  std::vector<CodeGenIntrinsic> LoadIntrinsics(const RecordKeeper &RC,
+                                               bool TargetOnly);
 }
 
 #endif

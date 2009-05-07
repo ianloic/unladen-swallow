@@ -22,6 +22,7 @@ using namespace llvm;
 //
 
 namespace llvm {
+  bool LessPreciseFPMADOption;
   bool PrintMachineCode;
   bool NoFramePointerElim;
   bool NoExcessFPPrecision;
@@ -29,6 +30,7 @@ namespace llvm {
   bool FiniteOnlyFPMathOption;
   bool HonorSignDependentRoundingFPMathOption;
   bool UseSoftFloat;
+  bool NoImplicitFloat;
   bool NoZerosInBSS;
   bool ExceptionHandling;
   bool UnwindTablesMandatory;
@@ -37,67 +39,75 @@ namespace llvm {
   bool PerformTailCallOpt;
   unsigned StackAlignment;
   bool RealignStack;
-  bool VerboseAsm;
   bool DisableJumpTables;
   bool StrongPHIElim;
   bool DisableRedZone;
+  bool AsmVerbosityDefault(false);
 }
 
-static cl::opt<bool, true> PrintCode("print-machineinstrs",
+static cl::opt<bool, true>
+PrintCode("print-machineinstrs",
   cl::desc("Print generated machine code"),
   cl::location(PrintMachineCode), cl::init(false));
-
 static cl::opt<bool, true>
 DisableFPElim("disable-fp-elim",
-              cl::desc("Disable frame pointer elimination optimization"),
-              cl::location(NoFramePointerElim),
-              cl::init(false));
+  cl::desc("Disable frame pointer elimination optimization"),
+  cl::location(NoFramePointerElim),
+  cl::init(false));
 static cl::opt<bool, true>
 DisableExcessPrecision("disable-excess-fp-precision",
-             cl::desc("Disable optimizations that may increase FP precision"),
-             cl::location(NoExcessFPPrecision),
-             cl::init(false));
+  cl::desc("Disable optimizations that may increase FP precision"),
+  cl::location(NoExcessFPPrecision),
+  cl::init(false));
+static cl::opt<bool, true>
+EnableFPMAD("enable-fp-mad",
+  cl::desc("Enable less precise MAD instructions to be generated"),
+  cl::location(LessPreciseFPMADOption),
+  cl::init(false));
 static cl::opt<bool, true>
 EnableUnsafeFPMath("enable-unsafe-fp-math",
-             cl::desc("Enable optimizations that may decrease FP precision"),
-             cl::location(UnsafeFPMath),
-             cl::init(false));
+  cl::desc("Enable optimizations that may decrease FP precision"),
+  cl::location(UnsafeFPMath),
+  cl::init(false));
 static cl::opt<bool, true>
 EnableFiniteOnlyFPMath("enable-finite-only-fp-math",
-             cl::desc("Enable optimizations that assumes non- NaNs / +-Infs"),
-             cl::location(FiniteOnlyFPMathOption),
-             cl::init(false));
+  cl::desc("Enable optimizations that assumes non- NaNs / +-Infs"),
+  cl::location(FiniteOnlyFPMathOption),
+  cl::init(false));
 static cl::opt<bool, true>
-EnableHonorSignDependentRoundingFPMath(cl::Hidden,
-             "enable-sign-dependent-rounding-fp-math",
-     cl::desc("Force codegen to assume rounding mode can change dynamically"),
-             cl::location(HonorSignDependentRoundingFPMathOption),
-             cl::init(false));
-
+EnableHonorSignDependentRoundingFPMath("enable-sign-dependent-rounding-fp-math",
+  cl::Hidden,
+  cl::desc("Force codegen to assume rounding mode can change dynamically"),
+  cl::location(HonorSignDependentRoundingFPMathOption),
+  cl::init(false));
 static cl::opt<bool, true>
 GenerateSoftFloatCalls("soft-float",
-             cl::desc("Generate software floating point library calls"),
-             cl::location(UseSoftFloat),
-             cl::init(false));
+  cl::desc("Generate software floating point library calls"),
+  cl::location(UseSoftFloat),
+  cl::init(false));
+static cl::opt<bool, true>
+GenerateNoImplicitFloats("no-implicit-float",
+  cl::desc("Don't generate implicit floating point instructions (x86-only)"),
+  cl::location(NoImplicitFloat),
+  cl::init(false));
 static cl::opt<bool, true>
 DontPlaceZerosInBSS("nozero-initialized-in-bss",
-            cl::desc("Don't place zero-initialized symbols into bss section"),
-            cl::location(NoZerosInBSS),
-            cl::init(false));
+  cl::desc("Don't place zero-initialized symbols into bss section"),
+  cl::location(NoZerosInBSS),
+  cl::init(false));
 static cl::opt<bool, true>
 EnableExceptionHandling("enable-eh",
-             cl::desc("Emit DWARF exception handling (default if target supports)"),
-             cl::location(ExceptionHandling),
-             cl::init(false));
+  cl::desc("Emit DWARF exception handling (default if target supports)"),
+  cl::location(ExceptionHandling),
+  cl::init(false));
 static cl::opt<bool, true>
 EnableUnwindTables("unwind-tables",
-             cl::desc("Generate unwinding tables for all functions"),
-             cl::location(UnwindTablesMandatory),
-             cl::init(false));
+  cl::desc("Generate unwinding tables for all functions"),
+  cl::location(UnwindTablesMandatory),
+  cl::init(false));
 
 static cl::opt<llvm::Reloc::Model, true>
-DefRelocationModel(
-  "relocation-model",
+DefRelocationModel("relocation-model",
   cl::desc("Choose relocation model"),
   cl::location(RelocationModel),
   cl::init(Reloc::Default),
@@ -112,8 +122,7 @@ DefRelocationModel(
                "Relocatable external references, non-relocatable code"),
     clEnumValEnd));
 static cl::opt<llvm::CodeModel::Model, true>
-DefCodeModel(
-  "code-model",
+DefCodeModel("code-model",
   cl::desc("Choose code model"),
   cl::location(CMModel),
   cl::init(CodeModel::Default),
@@ -129,47 +138,36 @@ DefCodeModel(
     clEnumValN(CodeModel::Large, "large",
                "Large code model"),
     clEnumValEnd));
-
 static cl::opt<bool, true>
 EnablePerformTailCallOpt("tailcallopt",
-                         cl::desc("Turn on tail call optimization."),
-                         cl::location(PerformTailCallOpt),
-                         cl::init(false));
-
+  cl::desc("Turn on tail call optimization."),
+  cl::location(PerformTailCallOpt),
+  cl::init(false));
 static cl::opt<unsigned, true>
 OverrideStackAlignment("stack-alignment",
-                       cl::desc("Override default stack alignment"),
-                       cl::location(StackAlignment),
-                       cl::init(0));
-
+  cl::desc("Override default stack alignment"),
+  cl::location(StackAlignment),
+  cl::init(0));
 static cl::opt<bool, true>
 EnableRealignStack("realign-stack",
-                   cl::desc("Realign stack if needed"),
-                   cl::location(RealignStack),
-                   cl::init(true));
-
-static cl::opt<bool, true>
-AsmVerbose("asm-verbose", cl::desc("Add comments to directives."),
-           cl::location(VerboseAsm),
-           cl::init(false));
-
+  cl::desc("Realign stack if needed"),
+  cl::location(RealignStack),
+  cl::init(true));
 static cl::opt<bool, true>
 DisableSwitchTables(cl::Hidden, "disable-jump-tables", 
-           cl::desc("Do not generate jump tables."),
-           cl::location(DisableJumpTables),
-           cl::init(false));
-
+  cl::desc("Do not generate jump tables."),
+  cl::location(DisableJumpTables),
+  cl::init(false));
 static cl::opt<bool, true>
 EnableStrongPHIElim(cl::Hidden, "strong-phi-elim",
-           cl::desc("Use strong PHI elimination."),
-           cl::location(StrongPHIElim),
-           cl::init(false));
-
+  cl::desc("Use strong PHI elimination."),
+  cl::location(StrongPHIElim),
+  cl::init(false));
 static cl::opt<bool, true>
 DisableRedZoneOption("disable-red-zone",
-           cl::desc("Do not emit code that uses the red zone."),
-           cl::location(DisableRedZone),
-           cl::init(false));
+  cl::desc("Do not emit code that uses the red zone."),
+  cl::location(DisableRedZone),
+  cl::init(false));
 
 //---------------------------------------------------------------------------
 // TargetMachine Class
@@ -201,7 +199,21 @@ void TargetMachine::setCodeModel(CodeModel::Model Model) {
   CMModel = Model;
 }
 
+bool TargetMachine::getAsmVerbosityDefault() {
+  return AsmVerbosityDefault;
+}
+
+void TargetMachine::setAsmVerbosityDefault(bool V) {
+  AsmVerbosityDefault = V;
+}
+
 namespace llvm {
+  /// LessPreciseFPMAD - This flag return true when -enable-fp-mad option
+  /// is specified on the command line.  When this flag is off(default), the
+  /// code generator is not allowed to generate mad (multiply add) if the
+  /// result is "less precise" than doing those operations individually.
+  bool LessPreciseFPMAD() { return UnsafeFPMath || LessPreciseFPMADOption; }
+
   /// FiniteOnlyFPMath - This returns true when the -enable-finite-only-fp-math
   /// option is specified on the command line. If this returns false (default),
   /// the code generator is not allowed to assume that FP arithmetic arguments

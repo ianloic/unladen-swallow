@@ -78,10 +78,9 @@ namespace llvm {
 
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG,
                               const SPUTargetMachine &TM);
-    SDValue LowerSplat_v2i64(MVT OpVT, SelectionDAG &DAG, uint64_t splat);
-
-    SDValue getBorrowGenerateShufMask(SelectionDAG &DAG);
-    SDValue getCarryGenerateShufMask(SelectionDAG &DAG);
+    //! Simplify a MVT::v2i64 constant splat to CellSPU-ready form
+    SDValue LowerV2I64Splat(MVT OpVT, SelectionDAG &DAG, uint64_t splat,
+                             DebugLoc dl);
   }
 
   class SPUTargetMachine;            // forward dec'l.

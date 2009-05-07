@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/LiveInterval.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Streams.h"
@@ -121,6 +122,22 @@ bool LiveInterval::overlapsFrom(const LiveInterval& other,
   }
 
   return false;
+}
+
+/// overlaps - Return true if the live interval overlaps a range specified
+/// by [Start, End).
+bool LiveInterval::overlaps(unsigned Start, unsigned End) const {
+  assert(Start < End && "Invalid range");
+  const_iterator I  = begin();
+  const_iterator E  = end();
+  const_iterator si = std::upper_bound(I, E, Start);
+  const_iterator ei = std::upper_bound(I, E, End);
+  if (si != ei)
+    return true;
+  if (si == I)
+    return false;
+  --si;
+  return si->contains(Start);
 }
 
 /// extendIntervalEndTo - This method is used when we want to extend the range
@@ -441,7 +458,7 @@ void LiveInterval::join(LiveInterval &Other, const int *LHSValNoAssignments,
   for (unsigned i = 0; i < NumNewVals; ++i) {
     VNInfo *VNI = NewVNInfo[i];
     if (VNI) {
-      if (i >= NumVals)
+      if (NumValNos >= NumVals)
         valnos.push_back(VNI);
       else 
         valnos[NumValNos] = VNI;
@@ -559,32 +576,91 @@ void LiveInterval::MergeInClobberRanges(const LiveInterval &Clobbers,
                                         BumpPtrAllocator &VNInfoAllocator) {
   if (Clobbers.empty()) return;
   
+  DenseMap<VNInfo*, VNInfo*> ValNoMaps;
+  VNInfo *UnusedValNo = 0;
+  iterator IP = begin();
+  for (const_iterator I = Clobbers.begin(), E = Clobbers.end(); I != E; ++I) {
+    // For every val# in the Clobbers interval, create a new "unknown" val#.
+    VNInfo *ClobberValNo = 0;
+    DenseMap<VNInfo*, VNInfo*>::iterator VI = ValNoMaps.find(I->valno);
+    if (VI != ValNoMaps.end())
+      ClobberValNo = VI->second;
+    else if (UnusedValNo)
+      ClobberValNo = UnusedValNo;
+    else {
+      UnusedValNo = ClobberValNo = getNextValue(~0U, 0, VNInfoAllocator);
+      ValNoMaps.insert(std::make_pair(I->valno, ClobberValNo));
+    }
+
+    bool Done = false;
+    unsigned Start = I->start, End = I->end;
+    // If a clobber range starts before an existing range and ends after
+    // it, the clobber range will need to be split into multiple ranges.
+    // Loop until the entire clobber range is handled.
+    while (!Done) {
+      Done = true;
+      IP = std::upper_bound(IP, end(), Start);
+      unsigned SubRangeStart = Start;
+      unsigned SubRangeEnd = End;
+
+      // If the start of this range overlaps with an existing liverange, trim it.
+      if (IP != begin() && IP[-1].end > SubRangeStart) {
+        SubRangeStart = IP[-1].end;
+        // Trimmed away the whole range?
+        if (SubRangeStart >= SubRangeEnd) continue;
+      }
+      // If the end of this range overlaps with an existing liverange, trim it.
+      if (IP != end() && SubRangeEnd > IP->start) {
+        // If the clobber live range extends beyond the existing live range,
+        // it'll need at least another live range, so set the flag to keep
+        // iterating.
+        if (SubRangeEnd > IP->end) {
+          Start = IP->end;
+          Done = false;
+        }
+        SubRangeEnd = IP->start;
+        // If this trimmed away the whole range, ignore it.
+        if (SubRangeStart == SubRangeEnd) continue;
+      }
+
+      // Insert the clobber interval.
+      IP = addRangeFrom(LiveRange(SubRangeStart, SubRangeEnd, ClobberValNo),
+                        IP);
+      UnusedValNo = 0;
+    }
+  }
+
+  if (UnusedValNo) {
+    // Delete the last unused val#.
+    valnos.pop_back();
+    UnusedValNo->~VNInfo();
+  }
+}
+
+void LiveInterval::MergeInClobberRange(unsigned Start, unsigned End,
+                                       BumpPtrAllocator &VNInfoAllocator) {
   // Find a value # to use for the clobber ranges.  If there is already a value#
   // for unknown values, use it.
-  // FIXME: Use a single sentinal number for these!
   VNInfo *ClobberValNo = getNextValue(~0U, 0, VNInfoAllocator);
   
   iterator IP = begin();
-  for (const_iterator I = Clobbers.begin(), E = Clobbers.end(); I != E; ++I) {
-    unsigned Start = I->start, End = I->end;
-    IP = std::upper_bound(IP, end(), Start);
+  IP = std::upper_bound(IP, end(), Start);
     
-    // If the start of this range overlaps with an existing liverange, trim it.
-    if (IP != begin() && IP[-1].end > Start) {
-      Start = IP[-1].end;
-      // Trimmed away the whole range?
-      if (Start >= End) continue;
-    }
-    // If the end of this range overlaps with an existing liverange, trim it.
-    if (IP != end() && End > IP->start) {
-      End = IP->start;
-      // If this trimmed away the whole range, ignore it.
-      if (Start == End) continue;
-    }
-    
-    // Insert the clobber interval.
-    IP = addRangeFrom(LiveRange(Start, End, ClobberValNo), IP);
+  // If the start of this range overlaps with an existing liverange, trim it.
+  if (IP != begin() && IP[-1].end > Start) {
+    Start = IP[-1].end;
+    // Trimmed away the whole range?
+    if (Start >= End) return;
   }
+  // If the end of this range overlaps with an existing liverange, trim it.
+  if (IP != end() && End > IP->start) {
+    End = IP->start;
+    // If this trimmed away the whole range, ignore it.
+    if (Start == End) return;
+  }
+    
+  // Insert the clobber interval.
+  addRangeFrom(LiveRange(Start, End, ClobberValNo), IP);
 }
 
 /// MergeValueNumberInto - This method is called when two value nubmers

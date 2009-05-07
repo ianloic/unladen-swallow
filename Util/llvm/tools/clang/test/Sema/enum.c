@@ -1,4 +1,4 @@
-// RUN: clang %s -fsyntax-only -verify -pedantic
+// RUN: clang-cc %s -fsyntax-only -verify -pedantic
 enum e {A, 
         B = 42LL << 32,        // expected-warning {{ISO C restricts enumerator values to range of 'int'}}
       C = -4, D = 12456 };
@@ -21,13 +21,13 @@ int test() {
   return sizeof(enum e) ;
 }
 
-enum gccForwardEnumExtension ve; // expected-error {{variable has incomplete type 'enum gccForwardEnumExtension'}} \
-                                 // expected-warning{{ISO C forbids forward references to 'enum' types}} \
-                                 // expected-note{{forward declaration of 'enum gccForwardEnumExtension'}}
+enum gccForwardEnumExtension ve; // expected-warning{{ISO C forbids forward references to 'enum' types}} \
+// expected-error{{tentative definition has type 'enum gccForwardEnumExtension' that is never completed}} \
+// expected-note{{forward declaration of 'enum gccForwardEnumExtension'}}
 
 int test2(int i)
 {
-  ve + i;
+  ve + i; // expected-error{{invalid operands to binary expression}}
 }
 
 // PR2020
@@ -73,3 +73,14 @@ typedef enum { X = 0 }; // expected-warning{{typedef requires a name}}
 enum NotYetComplete { // expected-note{{definition of 'enum NotYetComplete' is not complete until the closing '}'}}
   NYC1 = sizeof(enum NotYetComplete) // expected-error{{invalid application of 'sizeof' to an incomplete type 'enum NotYetComplete'}}
 };
+
+/// PR3688
+struct s1 {
+  enum e1 (*bar)(void); // expected-warning{{ISO C forbids forward references to 'enum' types}}
+};
+
+enum e1 { YES, NO };
+
+static enum e1 badfunc(struct s1 *q) {
+  return q->bar();
+}

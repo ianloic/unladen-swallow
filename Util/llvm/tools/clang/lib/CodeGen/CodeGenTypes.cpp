@@ -85,13 +85,13 @@ const llvm::Type *CodeGenTypes::ConvertType(QualType T) {
   // circular types.  Loop through all these defered pointees, if any, and
   // resolve them now.
   while (!PointersToResolve.empty()) {
-    std::pair<const PointerLikeType *, llvm::OpaqueType*> P =
+    std::pair<QualType, llvm::OpaqueType*> P =
       PointersToResolve.back();
     PointersToResolve.pop_back();
     // We can handle bare pointers here because we know that the only pointers
     // to the Opaque type are P.second and from other types.  Refining the
     // opqaue type away will invalidate P.second, but we don't mind :).
-    const llvm::Type *NT = ConvertTypeRecursive(P.first->getPointeeType());
+    const llvm::Type *NT = ConvertTypeForMemRecursive(P.first);
     P.second->refineAbstractTypeTo(NT);
   }
 
@@ -99,7 +99,7 @@ const llvm::Type *CodeGenTypes::ConvertType(QualType T) {
 }
 
 const llvm::Type *CodeGenTypes::ConvertTypeRecursive(QualType T) {
-  T = Context.getCanonicalType(T);;
+  T = Context.getCanonicalType(T);
   
   // See if type is already cached.
   llvm::DenseMap<Type *, llvm::PATypeHolder>::iterator
@@ -112,6 +112,13 @@ const llvm::Type *CodeGenTypes::ConvertTypeRecursive(QualType T) {
   const llvm::Type *ResultType = ConvertNewType(T);
   TypeCache.insert(std::make_pair(T.getTypePtr(), 
                                   llvm::PATypeHolder(ResultType)));
+  return ResultType;
+}
+
+const llvm::Type *CodeGenTypes::ConvertTypeForMemRecursive(QualType T) {
+  const llvm::Type *ResultType = ConvertTypeRecursive(T);
+  if (ResultType == llvm::Type::Int1Ty)
+    return llvm::IntegerType::get((unsigned)Context.getTypeSize(T));
   return ResultType;
 }
 
@@ -129,6 +136,21 @@ const llvm::Type *CodeGenTypes::ConvertTypeForMem(QualType T) {
   // Otherwise, return an integer of the target-specified size.
   return llvm::IntegerType::get((unsigned)Context.getTypeSize(T));
   
+}
+
+// Code to verify a given function type is complete, i.e. the return type
+// and all of the argument types are complete.
+static const TagType *VerifyFuncTypeComplete(const Type* T) {
+  const FunctionType *FT = cast<FunctionType>(T);
+  if (const TagType* TT = FT->getResultType()->getAsTagType())
+    if (!TT->getDecl()->isDefinition())
+      return TT;
+  if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(T))
+    for (unsigned i = 0; i < FPT->getNumArgs(); i++)
+      if (const TagType* TT = FPT->getArgType(i)->getAsTagType())
+        if (!TT->getDecl()->isDefinition())
+          return TT;
+  return 0;
 }
 
 /// UpdateCompletedType - When we find the full definition for a TagDecl,
@@ -153,6 +175,26 @@ void CodeGenTypes::UpdateCompletedType(const TagDecl *TD) {
 
   // Refine the old opaque type to its new definition.
   cast<llvm::OpaqueType>(OpaqueHolder.get())->refineAbstractTypeTo(NT);
+
+  // Since we just completed a tag type, check to see if any function types
+  // were completed along with the tag type.
+  // FIXME: This is very inefficient; if we track which function types depend
+  // on which tag types, though, it should be reasonably efficient.
+  llvm::DenseMap<const Type*, llvm::PATypeHolder>::iterator i;
+  for (i = FunctionTypes.begin(); i != FunctionTypes.end(); ++i) {
+    if (const TagType* TT = VerifyFuncTypeComplete(i->first)) {
+      // This function type still depends on an incomplete tag type; make sure
+      // that tag type has an associated opaque type.
+      ConvertTagDeclType(TT->getDecl());
+    } else {
+      // This function no longer depends on an incomplete tag type; create the
+      // function type, and refine the opaque type to the new function type.
+      llvm::PATypeHolder OpaqueHolder = i->second;
+      const llvm::Type *NFT = ConvertNewType(QualType(i->first, 0));
+      cast<llvm::OpaqueType>(OpaqueHolder.get())->refineAbstractTypeTo(NFT);
+      FunctionTypes.erase(i);
+    }
+  }
 }
 
 static const llvm::Type* getTypeForFormat(const llvm::fltSemantics &format) {
@@ -174,12 +216,14 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
   const clang::Type &Ty = *Context.getCanonicalType(T);
   
   switch (Ty.getTypeClass()) {
-  case Type::TypeName:        // typedef isn't canonical.
-  case Type::TemplateTypeParm:// template type parameters never generated
-  case Type::DependentSizedArray: // dependent types are never generated
-  case Type::TypeOfExp:       // typeof isn't canonical.
-  case Type::TypeOfTyp:       // typeof isn't canonical.
-    assert(0 && "Non-canonical type, shouldn't happen");
+#define TYPE(Class, Base)
+#define ABSTRACT_TYPE(Class, Base)
+#define NON_CANONICAL_TYPE(Class, Base) case Type::Class:
+#define DEPENDENT_TYPE(Class, Base) case Type::Class:
+#include "clang/AST/TypeNodes.def"
+    assert(false && "Non-canonical or dependent types aren't possible.");
+    break;
+
   case Type::Builtin: {
     switch (cast<BuiltinType>(Ty).getKind()) {
     default: assert(0 && "Unknown builtin type!");
@@ -212,20 +256,33 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     case BuiltinType::Double:
     case BuiltinType::LongDouble:
       return getTypeForFormat(Context.getFloatTypeSemantics(T));
+          
+    case BuiltinType::UInt128:
+    case BuiltinType::Int128:
+      return llvm::IntegerType::get(128);
     }
     break;
   }
+  case Type::FixedWidthInt:
+    return llvm::IntegerType::get(cast<FixedWidthIntType>(T)->getWidth());
   case Type::Complex: {
     const llvm::Type *EltTy = 
       ConvertTypeRecursive(cast<ComplexType>(Ty).getElementType());
     return llvm::StructType::get(EltTy, EltTy, NULL);
   }
-  case Type::Reference:
+  case Type::LValueReference:
+  case Type::RValueReference: {
+    const ReferenceType &RTy = cast<ReferenceType>(Ty);
+    QualType ETy = RTy.getPointeeType();
+    llvm::OpaqueType *PointeeType = llvm::OpaqueType::get();
+    PointersToResolve.push_back(std::make_pair(ETy, PointeeType));
+    return llvm::PointerType::get(PointeeType, ETy.getAddressSpace());
+  }
   case Type::Pointer: {
-    const PointerLikeType &PTy = cast<PointerLikeType>(Ty);
+    const PointerType &PTy = cast<PointerType>(Ty);
     QualType ETy = PTy.getPointeeType();
     llvm::OpaqueType *PointeeType = llvm::OpaqueType::get();
-    PointersToResolve.push_back(std::make_pair(&PTy, PointeeType));
+    PointersToResolve.push_back(std::make_pair(ETy, PointeeType));
     return llvm::PointerType::get(PointeeType, ETy.getAddressSpace());
   }
     
@@ -235,18 +292,18 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
            "FIXME: We only handle trivial array types so far!");
     // VLAs resolve to the innermost element type; this matches
     // the return of alloca, and there isn't any obviously better choice.
-    return ConvertTypeRecursive(A.getElementType());
+    return ConvertTypeForMemRecursive(A.getElementType());
   }
   case Type::IncompleteArray: {
     const IncompleteArrayType &A = cast<IncompleteArrayType>(Ty);
     assert(A.getIndexTypeQualifier() == 0 &&
            "FIXME: We only handle trivial array types so far!");
     // int X[] -> [0 x int]
-    return llvm::ArrayType::get(ConvertTypeRecursive(A.getElementType()), 0);
+    return llvm::ArrayType::get(ConvertTypeForMemRecursive(A.getElementType()), 0);
   }
   case Type::ConstantArray: {
     const ConstantArrayType &A = cast<ConstantArrayType>(Ty);
-    const llvm::Type *EltTy = ConvertTypeRecursive(A.getElementType());
+    const llvm::Type *EltTy = ConvertTypeForMemRecursive(A.getElementType());
     return llvm::ArrayType::get(EltTy, A.getSize().getZExtValue());
   }
   case Type::ExtVector:
@@ -256,41 +313,52 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
                                  VT.getNumElements());
   }
   case Type::FunctionNoProto:
-    return GetFunctionType(getFunctionInfo(cast<FunctionTypeNoProto>(&Ty)), 
-                           true);
   case Type::FunctionProto: {
-    const FunctionTypeProto *FTP = cast<FunctionTypeProto>(&Ty);
-    return GetFunctionType(getFunctionInfo(FTP), FTP->isVariadic());
+    // First, check whether we can build the full function type.
+    if (const TagType* TT = VerifyFuncTypeComplete(&Ty)) {
+      // This function's type depends on an incomplete tag type; make sure
+      // we have an opaque type corresponding to the tag type.
+      ConvertTagDeclType(TT->getDecl());
+      // Create an opaque type for this function type, save it, and return it.
+      llvm::Type *ResultType = llvm::OpaqueType::get();
+      FunctionTypes.insert(std::make_pair(&Ty, ResultType));
+      return ResultType;
+    }
+    // The function type can be built; call the appropriate routines to
+    // build it.
+    if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(&Ty))
+      return GetFunctionType(getFunctionInfo(FPT), FPT->isVariadic());
+
+    const FunctionNoProtoType *FNPT = cast<FunctionNoProtoType>(&Ty);
+    return GetFunctionType(getFunctionInfo(FNPT), true);
   }
   
-  case Type::ASQual:
+  case Type::ExtQual:
     return
-      ConvertTypeRecursive(QualType(cast<ASQualType>(Ty).getBaseType(), 0));
+      ConvertTypeRecursive(QualType(cast<ExtQualType>(Ty).getBaseType(), 0));
 
-  case Type::ObjCInterface: {
-    // Warning: Use of this is strongly discouraged.  Late binding of instance
-    // variables is supported on some runtimes and so using static binding can
-    // break code when libraries are updated.  Only use this if you have
-    // previously checked that the ObjCRuntime subclass in use does not support
-    // late-bound ivars.
-    // We are issuing warnings elsewhere!
-    ObjCInterfaceType OIT = cast<ObjCInterfaceType>(Ty);
-    ObjCInterfaceDecl *ID = OIT.getDecl();
-    const RecordDecl *RD = Context.addRecordToClass(ID);
-    return ConvertTagDeclType(cast<TagDecl>(RD));
+  case Type::ObjCQualifiedInterface: {
+    // Lower foo<P1,P2> just like foo.
+    ObjCInterfaceDecl *ID = cast<ObjCQualifiedInterfaceType>(Ty).getDecl();
+    return ConvertTypeRecursive(Context.getObjCInterfaceType(ID));
   }
       
-  case Type::ObjCQualifiedInterface: {
-    ObjCQualifiedInterfaceType QIT = cast<ObjCQualifiedInterfaceType>(Ty);
-    
-    return ConvertTypeRecursive(Context.getObjCInterfaceType(QIT.getDecl()));
+  case Type::ObjCInterface: {
+    // Objective-C interfaces are always opaque (outside of the
+    // runtime, which can do whatever it likes); we never refine
+    // these.
+    const llvm::Type *&T = InterfaceTypes[cast<ObjCInterfaceType>(&Ty)];
+    if (!T)
+        T = llvm::OpaqueType::get();
+    return T;
   }
-
+      
   case Type::ObjCQualifiedId:
     // Protocols don't influence the LLVM type.
     return ConvertTypeRecursive(Context.getObjCIdType());
 
-  case Type::Tagged: {
+  case Type::Record:
+  case Type::Enum: {
     const TagDecl *TD = cast<TagType>(Ty).getDecl();
     const llvm::Type *Res = ConvertTagDeclType(TD);
     
@@ -312,8 +380,9 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
 
   case Type::BlockPointer: {
     const QualType FTy = cast<BlockPointerType>(Ty).getPointeeType();
-    return llvm::PointerType::get(ConvertTypeRecursive(FTy), 
-                                  FTy.getAddressSpace());
+    llvm::OpaqueType *PointeeType = llvm::OpaqueType::get();
+    PointersToResolve.push_back(std::make_pair(FTy, PointeeType));
+    return llvm::PointerType::get(PointeeType, FTy.getAddressSpace());
   }
 
   case Type::MemberPointer:
@@ -322,6 +391,9 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     // http://gcc.gnu.org/onlinedocs/gccint/Type-Layout.html#Type-Layout
     assert(0 && "FIXME: We can't handle member pointers yet.");
     return llvm::OpaqueType::get();
+
+  case Type::TemplateSpecialization:
+    assert(false && "Dependent types can't get here");
   }
   
   // FIXME: implement.
@@ -368,11 +440,20 @@ const llvm::Type *CodeGenTypes::ConvertTagDeclType(const TagDecl *TD) {
   
   const llvm::Type *ResultType;
   const RecordDecl *RD = cast<const RecordDecl>(TD);
-  if (TD->isStruct() || TD->isClass()) {
+
+  // There isn't any extra information for empty structures/unions.
+  if (RD->field_empty(getContext())) {
+    ResultType = llvm::StructType::get(std::vector<const llvm::Type*>());
+  } else {
     // Layout fields.
     RecordOrganizer RO(*this, *RD);
     
-    RO.layoutStructFields(Context.getASTRecordLayout(RD));
+    if (TD->isStruct() || TD->isClass())
+      RO.layoutStructFields(Context.getASTRecordLayout(RD));
+    else {
+      assert(TD->isUnion() && "unknown tag decl kind!");
+      RO.layoutUnionFields(Context.getASTRecordLayout(RD));
+    }
     
     // Get llvm::StructType.
     const Type *Key = 
@@ -380,27 +461,6 @@ const llvm::Type *CodeGenTypes::ConvertTagDeclType(const TagDecl *TD) {
     CGRecordLayouts[Key] = new CGRecordLayout(RO.getLLVMType(), 
                                               RO.getPaddingFields());
     ResultType = RO.getLLVMType();
-    
-  } else if (TD->isUnion()) {
-    // Just use the largest element of the union, breaking ties with the
-    // highest aligned member.
-    if (!RD->field_empty()) {
-      RecordOrganizer RO(*this, *RD);
-      
-      RO.layoutUnionFields(Context.getASTRecordLayout(RD));
-      
-      // Get llvm::StructType.
-      const Type *Key = 
-        Context.getTagDeclType(const_cast<TagDecl*>(TD)).getTypePtr();
-      CGRecordLayouts[Key] = new CGRecordLayout(RO.getLLVMType(),
-                                                RO.getPaddingFields());
-      ResultType = RO.getLLVMType();
-    } else {       
-      ResultType = llvm::StructType::get(std::vector<const llvm::Type*>());
-    }
-  } else {
-    assert(0 && "FIXME: Unknown tag decl kind!");
-    abort();
   }
   
   // Refine our Opaque type to ResultType.  This can invalidate ResultType, so
@@ -465,21 +525,16 @@ void RecordOrganizer::layoutStructFields(const ASTRecordLayout &RL) {
   std::vector<const llvm::Type*> LLVMFields;
 
   unsigned curField = 0;
-  for (RecordDecl::field_iterator Field = RD.field_begin(),
-                               FieldEnd = RD.field_end();
+  for (RecordDecl::field_iterator Field = RD.field_begin(CGT.getContext()),
+                               FieldEnd = RD.field_end(CGT.getContext());
        Field != FieldEnd; ++Field) {
     uint64_t offset = RL.getFieldOffset(curField);
-    const llvm::Type *Ty = CGT.ConvertTypeRecursive(Field->getType());
+    const llvm::Type *Ty = CGT.ConvertTypeForMemRecursive(Field->getType());
     uint64_t size = CGT.getTargetData().getTypePaddedSizeInBits(Ty);
 
     if (Field->isBitField()) {
-      Expr *BitWidth = Field->getBitWidth();
-      llvm::APSInt FieldSize(32);
-      bool isBitField =
-        BitWidth->isIntegerConstantExpr(FieldSize, CGT.getContext());
-      assert(isBitField && "Invalid BitField size expression");
-      isBitField=isBitField; // silence warning.
-      uint64_t BitFieldSize = FieldSize.getZExtValue();
+      uint64_t BitFieldSize =
+          Field->getBitWidth()->EvaluateAsInt(CGT.getContext()).getZExtValue();
 
       // Bitfield field info is different from other field info;
       // it actually ignores the underlying LLVM struct because
@@ -516,8 +571,8 @@ void RecordOrganizer::layoutStructFields(const ASTRecordLayout &RL) {
 /// all fields are added.
 void RecordOrganizer::layoutUnionFields(const ASTRecordLayout &RL) {
   unsigned curField = 0;
-  for (RecordDecl::field_iterator Field = RD.field_begin(),
-                               FieldEnd = RD.field_end();
+  for (RecordDecl::field_iterator Field = RD.field_begin(CGT.getContext()),
+                               FieldEnd = RD.field_end(CGT.getContext());
        Field != FieldEnd; ++Field) {
     // The offset should usually be zero, but bitfields could be strange
     uint64_t offset = RL.getFieldOffset(curField);
@@ -526,7 +581,7 @@ void RecordOrganizer::layoutUnionFields(const ASTRecordLayout &RL) {
     if (Field->isBitField()) {
       Expr *BitWidth = Field->getBitWidth();
       uint64_t BitFieldSize =  
-        BitWidth->getIntegerConstantExprValue(CGT.getContext()).getZExtValue();
+        BitWidth->EvaluateAsInt(CGT.getContext()).getZExtValue();
 
       CGT.addFieldInfo(*Field, 0);
       CGT.addBitFieldInfo(*Field, offset, BitFieldSize);
@@ -542,6 +597,11 @@ void RecordOrganizer::layoutUnionFields(const ASTRecordLayout &RL) {
   // of the result doesn't matter because anyone allocating
   // structures should be aligning them appropriately anyway.
   // FIXME: We can be a bit more intuitive in a lot of cases.
-  STy = llvm::ArrayType::get(llvm::Type::Int8Ty, RL.getSize() / 8);
+  // FIXME: Make this a struct type to work around PR2399; the
+  // C backend doesn't like structs using array types.
+  std::vector<const llvm::Type*> LLVMFields;
+  LLVMFields.push_back(llvm::ArrayType::get(llvm::Type::Int8Ty,
+                                            RL.getSize() / 8));
+  STy = llvm::StructType::get(LLVMFields, true);
   assert(CGT.getTargetData().getTypePaddedSizeInBits(STy) == RL.getSize());
 }

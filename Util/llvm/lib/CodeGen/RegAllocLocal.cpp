@@ -633,7 +633,7 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
           // Check if this is a two address instruction.  If so, then
           // the def does not kill the use.
           if (last->second.first == I &&
-              I->isRegReDefinedByTwoAddr(i))
+              I->isRegTiedToUseOperand(i))
             continue;
           
           MachineOperand& lastUD =
@@ -695,7 +695,7 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
     if (isPhysReg || !usedOutsideBlock) {
       if (MO.isUse()) {
         // Don't mark uses that are tied to defs as kills.
-        if (MI->getDesc().getOperandConstraint(idx, TOI::TIED_TO) == -1)
+        if (!MI->isRegTiedToDefOperand(idx))
           MO.setIsKill(true);
       } else
         MO.setIsDead(true);

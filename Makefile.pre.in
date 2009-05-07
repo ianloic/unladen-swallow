@@ -588,7 +588,7 @@ Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 				$(STRINGLIB_HEADERS)
 
 Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_tools
-	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm-bc  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
+	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
 
 # TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
 # less than other parts of LLVM.  If it breaks us more than a couple

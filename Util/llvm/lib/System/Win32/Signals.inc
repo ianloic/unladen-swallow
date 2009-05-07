@@ -14,6 +14,7 @@
 #include "Win32.h"
 #include <stdio.h>
 #include <vector>
+#include <algorithm>
 
 #ifdef __MINGW32__
  #include <imagehlp.h>
@@ -39,7 +40,7 @@ static BOOL WINAPI LLVMConsoleCtrlHandler(DWORD dwCtrlType);
 static void (*InterruptFunction)() = 0;
 
 static std::vector<llvm::sys::Path> *FilesToRemove = NULL;
-static std::vector<llvm::sys::Path> *DirectoriesToRemove = NULL;
+static std::vector<std::pair<void(*)(void*), void*> > *CallBacksToRun = 0;
 static bool RegisteredUnhandledExceptionFilter = false;
 static bool CleanupExecuted = false;
 static PTOP_LEVEL_EXCEPTION_FILTER OldFilter = NULL;
@@ -98,37 +99,6 @@ bool sys::RemoveFileOnSignal(const sys::Path &Filename, std::string* ErrMsg) {
   return false;
 }
 
-// RemoveDirectoryOnSignal - The public API
-bool sys::RemoveDirectoryOnSignal(const sys::Path& path, std::string* ErrMsg) {
-  // Not a directory?
-  WIN32_FILE_ATTRIBUTE_DATA fi;
-  if (!GetFileAttributesEx(path.c_str(), GetFileExInfoStandard, &fi)) {
-    MakeErrMsg(ErrMsg, path.toString() + ": can't get status of file");
-    return true;
-  }
-    
-  if (!(fi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-    if (ErrMsg)
-      *ErrMsg = path.toString() + ": not a directory";
-    return true;
-  }
-
-  RegisterHandler();
-
-  if (CleanupExecuted) {
-    if (ErrMsg)
-      *ErrMsg = "Process terminating -- cannot register for removal";
-    return true;
-  }
-
-  if (DirectoriesToRemove == NULL)
-    DirectoriesToRemove = new std::vector<sys::Path>;
-  DirectoriesToRemove->push_back(path);
-
-  LeaveCriticalSection(&CriticalSection);
-  return false;
-}
-
 /// PrintStackTraceOnErrorSignal - When an error signal (such as SIBABRT or
 /// SIGSEGV) is delivered to the process, print a stack trace and then exit.
 void sys::PrintStackTraceOnErrorSignal() {
@@ -141,6 +111,17 @@ void sys::SetInterruptFunction(void (*IF)()) {
   RegisterHandler();
   InterruptFunction = IF;
   LeaveCriticalSection(&CriticalSection);
+}
+
+
+/// AddSignalHandler - Add a function to be called when a signal is delivered
+/// to the process.  The handler can have a cookie passed to it to identify
+/// what instance of the handler it is.
+void sys::AddSignalHandler(void (*FnPtr)(void *), void *Cookie) {
+  if (CallBacksToRun == 0)
+    CallBacksToRun = new std::vector<std::pair<void(*)(void*), void*> >();
+  CallBacksToRun->push_back(std::make_pair(FnPtr, Cookie));
+  RegisterHandler();
 }
 }
 
@@ -162,14 +143,9 @@ static void Cleanup() {
       FilesToRemove->pop_back();
     }
 
-  if (DirectoriesToRemove != NULL)
-    while (!DirectoriesToRemove->empty()) {
-      try {
-        DirectoriesToRemove->back().eraseFromDisk(true);
-      } catch (...) {
-      }
-      DirectoriesToRemove->pop_back();
-    }
+  if (CallBacksToRun)
+    for (unsigned i = 0, e = CallBacksToRun->size(); i != e; ++i)
+      (*CallBacksToRun)[i].first((*CallBacksToRun)[i].second);
 
   LeaveCriticalSection(&CriticalSection);
 }
@@ -212,10 +188,10 @@ static LONG WINAPI LLVMUnhandledExceptionFilter(LPEXCEPTION_POINTERS ep) {
 
       // Print the PC in hexadecimal.
       DWORD PC = StackFrame.AddrPC.Offset;
-      fprintf(stderr, "%08X", PC);
+      fprintf(stderr, "%08lX", PC);
 
       // Print the parameters.  Assume there are four.
-      fprintf(stderr, " (0x%08X 0x%08X 0x%08X 0x%08X)", StackFrame.Params[0],
+      fprintf(stderr, " (0x%08lX 0x%08lX 0x%08lX 0x%08lX)", StackFrame.Params[0],
               StackFrame.Params[1], StackFrame.Params[2], StackFrame.Params[3]);
 
       // Verify the PC belongs to a module in this process.
@@ -239,7 +215,7 @@ static LONG WINAPI LLVMUnhandledExceptionFilter(LPEXCEPTION_POINTERS ep) {
 
       buffer[511] = 0;
       if (dwDisp > 0)
-        fprintf(stderr, ", %s()+%04d bytes(s)", symbol->Name, dwDisp);
+        fprintf(stderr, ", %s()+%04lu bytes(s)", symbol->Name, dwDisp);
       else
         fprintf(stderr, ", %s", symbol->Name);
 
@@ -248,9 +224,9 @@ static LONG WINAPI LLVMUnhandledExceptionFilter(LPEXCEPTION_POINTERS ep) {
       memset(&line, 0, sizeof(line));
       line.SizeOfStruct = sizeof(line);
       if (SymGetLineFromAddr(hProcess, PC, &dwDisp, &line)) {
-        fprintf(stderr, ", %s, line %d", line.FileName, line.LineNumber);
+        fprintf(stderr, ", %s, line %lu", line.FileName, line.LineNumber);
         if (dwDisp > 0)
-          fprintf(stderr, "+%04d byte(s)", dwDisp);
+          fprintf(stderr, "+%04lu byte(s)", dwDisp);
       }
 
       fputc('\n', stderr);
@@ -259,7 +235,7 @@ static LONG WINAPI LLVMUnhandledExceptionFilter(LPEXCEPTION_POINTERS ep) {
 #endif
 
   } catch (...) {
-      assert(!"Crashed in LLVMUnhandledExceptionFilter");
+      assert(0 && "Crashed in LLVMUnhandledExceptionFilter");
   }
 
   // Allow dialog box to pop up allowing choice to start debugger.

@@ -18,6 +18,7 @@
 #include "ARMSubtarget.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/CodeGen/CallingConvLower.h"
 #include <vector>
 
 namespace llvm {
@@ -88,7 +89,7 @@ namespace llvm {
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                       MachineBasicBlock *MBB);
+                                                  MachineBasicBlock *MBB) const;
 
     /// isLegalAddressingMode - Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
@@ -124,6 +125,16 @@ namespace llvm {
     getRegClassForInlineAsmConstraint(const std::string &Constraint,
                                       MVT VT) const;
 
+    /// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
+    /// vector.  If it is invalid, don't add anything to Ops. If hasMemory is
+    /// true it means one of the asm constraint of the inline asm instruction
+    /// being processed is 'm'.
+    virtual void LowerAsmOperandForConstraint(SDValue Op,
+                                              char ConstraintLetter,
+                                              bool hasMemory,
+                                              std::vector<SDValue> &Ops,
+                                              SelectionDAG &DAG) const;
+    
     virtual const ARMSubtarget* getSubtarget() {
       return Subtarget;
     }
@@ -137,7 +148,13 @@ namespace llvm {
     ///
     unsigned ARMPCLabelIndex;
 
+    SDValue LowerMemOpCallTo(CallSDNode *TheCall, SelectionDAG &DAG,
+                             const SDValue &StackPtr, const CCValAssign &VA,
+                             SDValue Chain, SDValue Arg, ISD::ArgFlagsTy Flags);
+    SDNode *LowerCallResult(SDValue Chain, SDValue InFlag, CallSDNode *TheCall,
+                            unsigned CallingConv, SelectionDAG &DAG);
     SDValue LowerCALL(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerRET(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddressDarwin(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddressELF(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG);
@@ -149,7 +166,7 @@ namespace llvm {
     SDValue LowerFORMAL_ARGUMENTS(SDValue Op, SelectionDAG &DAG);
     SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG);
 
-    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG,
+    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                                       SDValue Chain,
                                       SDValue Dst, SDValue Src,
                                       SDValue Size, unsigned Align,

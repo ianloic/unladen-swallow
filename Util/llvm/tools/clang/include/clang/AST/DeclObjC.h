@@ -15,8 +15,7 @@
 #define LLVM_CLANG_AST_DECLOBJC_H
 
 #include "clang/AST/Decl.h"
-#include "clang/Basic/IdentifierTable.h"
-#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace clang {
 class Expr;
@@ -30,6 +29,29 @@ class ObjCProtocolDecl;
 class ObjCCategoryDecl;
 class ObjCPropertyDecl;
 class ObjCPropertyImplDecl;
+
+class ObjCListBase {
+  void operator=(const ObjCListBase &);     // DO NOT IMPLEMENT
+  ObjCListBase(const ObjCListBase&);        // DO NOT IMPLEMENT
+protected:
+  /// List is an array of pointers to objects that are not owned by this object.
+  void **List;
+  unsigned NumElts;
+
+public:
+  ObjCListBase() : List(0), NumElts(0) {}
+  ~ObjCListBase() {
+    assert(List == 0 && "Destroy should have been called before dtor");
+  }
+  
+  void Destroy(ASTContext &Ctx);
+  
+  unsigned size() const { return NumElts; }
+  bool empty() const { return NumElts == 0; }
+  
+protected:
+  void set(void *const* InList, unsigned Elts, ASTContext &Ctx);
+};
   
   
 /// ObjCList - This is a simple template class used to hold various lists of
@@ -37,37 +59,19 @@ class ObjCPropertyImplDecl;
 /// this supports is setting the list all at once and then reading elements out
 /// of it.
 template <typename T>
-class ObjCList {
-  /// List is a new[]'d array of pointers to objects that are not owned by this
-  /// list.
-  T **List;
-  unsigned NumElts;
-  
-  void operator=(const ObjCList &); // DO NOT IMPLEMENT
-  ObjCList(const ObjCList&);        // DO NOT IMPLEMENT
+class ObjCList : public ObjCListBase {
 public:
-  ObjCList() : List(0), NumElts(0) {}
-  ~ObjCList() {
-    delete[] List;
-  }
-
-  void set(T* const* InList, unsigned Elts) {
-    assert(List == 0 && "Elements already set!");
-    List = new T*[Elts];
-    NumElts = Elts;
-    memcpy(List, InList, sizeof(T*)*Elts);
+  void set(T* const* InList, unsigned Elts, ASTContext &Ctx) {
+    ObjCListBase::set(reinterpret_cast<void*const*>(InList), Elts, Ctx);
   }
   
   typedef T* const * iterator;
-  iterator begin() const { return List; }
-  iterator end() const { return List+NumElts; }
+  iterator begin() const { return (iterator)List; }
+  iterator end() const { return (iterator)List+NumElts; }
   
-  unsigned size() const { return NumElts; }
-  bool empty() const { return NumElts == 0; }
-  
-  T* operator[](unsigned idx) const {
-    assert(idx < NumElts && "Invalid access");
-    return List[idx];
+  T* operator[](unsigned Idx) const {
+    assert(Idx < NumElts && "Invalid access");
+    return (T*)List[Idx];
   }
 };
 
@@ -116,10 +120,9 @@ private:
   
   // Type of this method.
   QualType MethodDeclType;
-  /// ParamInfo - new[]'d array of pointers to VarDecls for the formal
-  /// parameters of this Method.  This is null if there are no formals.  
-  ParmVarDecl **ParamInfo;
-  unsigned NumMethodParams;
+  /// ParamInfo - List of pointers to VarDecls for the formal parameters of this
+  /// Method.
+  ObjCList<ParmVarDecl> ParamInfo;
   
   /// List of attributes for this method declaration.
   SourceLocation EndLoc; // the location of the ';' or '{'.
@@ -148,10 +151,9 @@ private:
     IsSynthesized(isSynthesized),
     DeclImplementation(impControl), objcDeclQualifier(OBJC_TQ_None),
     MethodDeclType(T), 
-    ParamInfo(0), NumMethodParams(0), 
     EndLoc(endLoc), Body(0), SelfDecl(0), CmdDecl(0) {}
 
-  virtual ~ObjCMethodDecl();
+  virtual ~ObjCMethodDecl() {}
   
 public:
   
@@ -175,6 +177,7 @@ public:
   // Location information, modeled after the Stmt API.
   SourceLocation getLocStart() const { return getLocation(); }
   SourceLocation getLocEnd() const { return EndLoc; }
+  void setEndLoc(SourceLocation Loc) { EndLoc = Loc; }
   SourceRange getSourceRange() const { 
     return SourceRange(getLocation(), EndLoc); 
   }
@@ -187,26 +190,29 @@ public:
   Selector getSelector() const { return getDeclName().getObjCSelector(); }
   unsigned getSynthesizedMethodSize() const;
   QualType getResultType() const { return MethodDeclType; }
+  void setResultType(QualType T) { MethodDeclType = T; }
   
   // Iterator access to formal parameters.
-  unsigned param_size() const { return NumMethodParams; }
-  typedef ParmVarDecl **param_iterator;
-  typedef ParmVarDecl * const *param_const_iterator;
-  param_iterator param_begin() { return ParamInfo; }
-  param_iterator param_end() { return ParamInfo+param_size(); }
-  param_const_iterator param_begin() const { return ParamInfo; }
-  param_const_iterator param_end() const { return ParamInfo+param_size(); }
-  
-  unsigned getNumParams() const { return NumMethodParams; }
-  ParmVarDecl *getParamDecl(unsigned i) const {
-    assert(i < getNumParams() && "Illegal param #");
-    return ParamInfo[i];
-  }  
-  void setParamDecl(int i, ParmVarDecl *pDecl) {
-    ParamInfo[i] = pDecl;
-  }  
-  void setMethodParams(ParmVarDecl **NewParamInfo, unsigned NumParams);
+  unsigned param_size() const { return ParamInfo.size(); }
+  typedef ObjCList<ParmVarDecl>::iterator param_iterator;
+  param_iterator param_begin() const { return ParamInfo.begin(); }
+  param_iterator param_end() const { return ParamInfo.end(); }
 
+  void setMethodParams(ASTContext &C, ParmVarDecl *const *List, unsigned Num) {
+    ParamInfo.set(List, Num, C);
+  }
+
+  // Iterator access to parameter types.
+  typedef std::const_mem_fun_t<QualType, ParmVarDecl> deref_fun;
+  typedef llvm::mapped_iterator<param_iterator, deref_fun> arg_type_iterator;
+
+  arg_type_iterator arg_type_begin() const {
+    return llvm::map_iterator(param_begin(), deref_fun(&ParmVarDecl::getType));
+  }
+  arg_type_iterator arg_type_end() const {
+    return llvm::map_iterator(param_end(), deref_fun(&ParmVarDecl::getType));
+  }
+  
   /// createImplicitParams - Used to lazily create the self and cmd
   /// implict parameters. This must be called prior to using getSelfDecl()
   /// or getCmdDecl(). The call is ignored if the implicit paramters
@@ -214,15 +220,19 @@ public:
   void createImplicitParams(ASTContext &Context, const ObjCInterfaceDecl *ID);
 
   ImplicitParamDecl * getSelfDecl() const { return SelfDecl; }
+  void setSelfDecl(ImplicitParamDecl *SD) { SelfDecl = SD; }
   ImplicitParamDecl * getCmdDecl() const { return CmdDecl; }
+  void setCmdDecl(ImplicitParamDecl *CD) { CmdDecl = CD; }
   
   bool isInstanceMethod() const { return IsInstance; }
+  void setInstanceMethod(bool isInst) { IsInstance = isInst; }
   bool isVariadic() const { return IsVariadic; }
+  void setVariadic(bool isVar) { IsVariadic = isVar; }
   
   bool isClassMethod() const { return !IsInstance; }
 
   bool isSynthesized() const { return IsSynthesized; }
-  void setIsSynthesized() { IsSynthesized = true; }
+  void setSynthesized(bool isSynth) { IsSynthesized = isSynth; }
   
   // Related to protocols declared in  @protocol
   void setDeclImplementation(ImplementationControl ic) { 
@@ -232,7 +242,10 @@ public:
     return ImplementationControl(DeclImplementation); 
   }
 
-  virtual Stmt *getBody() const { return Body; }
+  virtual Stmt *getBody(ASTContext &C) const { 
+    return (Stmt*) Body; 
+  }
+  CompoundStmt *getBody() { return (CompoundStmt*)Body; }
   void setBody(Stmt *B) { Body = B; }
 
   // Implement isa/cast/dyncast/etc.
@@ -243,6 +256,21 @@ public:
   }
   static ObjCMethodDecl *castFromDeclContext(const DeclContext *DC) {
     return static_cast<ObjCMethodDecl *>(const_cast<DeclContext*>(DC));
+  }
+};
+
+/// ObjCMethodList - a linked list of methods with different signatures.
+struct ObjCMethodList {
+  ObjCMethodDecl *Method;
+  ObjCMethodList *Next;
+  
+  ObjCMethodList() {
+    Method = 0; 
+    Next = 0;
+  }
+  ObjCMethodList(ObjCMethodDecl *M, ObjCMethodList *C) {
+    Method = M;
+    Next = C;
   }
 };
 
@@ -259,57 +287,59 @@ public:
                     IdentifierInfo *Id)
     : NamedDecl(DK, DC, L, Id), DeclContext(DK) {}
 
-  virtual ~ObjCContainerDecl();
+  virtual ~ObjCContainerDecl() {}
 
   // Iterator access to properties.
   typedef specific_decl_iterator<ObjCPropertyDecl> prop_iterator;
-  prop_iterator prop_begin() const { 
-    return prop_iterator(decls_begin());
+  prop_iterator prop_begin(ASTContext &Context) const { 
+    return prop_iterator(decls_begin(Context));
   }
-  prop_iterator prop_end() const { 
-    return prop_iterator(decls_end());
+  prop_iterator prop_end(ASTContext &Context) const { 
+    return prop_iterator(decls_end(Context));
   }
   
   // Iterator access to instance/class methods.
   typedef specific_decl_iterator<ObjCMethodDecl> method_iterator;
-  method_iterator meth_begin() const { 
-    return method_iterator(decls_begin());
+  method_iterator meth_begin(ASTContext &Context) const { 
+    return method_iterator(decls_begin(Context));
   }
-  method_iterator meth_end() const { 
-    return method_iterator(decls_end());
+  method_iterator meth_end(ASTContext &Context) const { 
+    return method_iterator(decls_end(Context));
   }
 
   typedef filtered_decl_iterator<ObjCMethodDecl, 
                                  &ObjCMethodDecl::isInstanceMethod> 
     instmeth_iterator;
-  instmeth_iterator instmeth_begin() const {
-    return instmeth_iterator(decls_begin());
+  instmeth_iterator instmeth_begin(ASTContext &Context) const {
+    return instmeth_iterator(decls_begin(Context));
   }
-  instmeth_iterator instmeth_end() const {
-    return instmeth_iterator(decls_end());
+  instmeth_iterator instmeth_end(ASTContext &Context) const {
+    return instmeth_iterator(decls_end(Context));
   }
 
   typedef filtered_decl_iterator<ObjCMethodDecl, 
                                  &ObjCMethodDecl::isClassMethod> 
     classmeth_iterator;
-  classmeth_iterator classmeth_begin() const {
-    return classmeth_iterator(decls_begin());
+  classmeth_iterator classmeth_begin(ASTContext &Context) const {
+    return classmeth_iterator(decls_begin(Context));
   }
-  classmeth_iterator classmeth_end() const {
-    return classmeth_iterator(decls_end());
+  classmeth_iterator classmeth_end(ASTContext &Context) const {
+    return classmeth_iterator(decls_end(Context));
   }
 
   // Get the local instance/class method declared in this interface.
-  ObjCMethodDecl *getInstanceMethod(Selector Sel) const;
-  ObjCMethodDecl *getClassMethod(Selector Sel) const;
+  ObjCMethodDecl *getInstanceMethod(ASTContext &Context, Selector Sel) const;
+  ObjCMethodDecl *getClassMethod(ASTContext &Context, Selector Sel) const;
 
-  ObjCPropertyDecl *FindPropertyDeclaration(IdentifierInfo *PropertyId) const;
+  ObjCMethodDecl *
+  getMethod(ASTContext &Context, Selector Sel, bool isInstance) const {
+    return isInstance ? getInstanceMethod(Context, Sel) 
+                      : getClassMethod(Context, Sel);
+  }
+    
+  ObjCPropertyDecl *FindPropertyDeclaration(ASTContext &Context, 
+                                            IdentifierInfo *PropertyId) const;
 
-  // Get the number of methods, properties. These methods are slow, O(n).
-  unsigned getNumInstanceMethods() const;
-  unsigned getNumClassMethods() const;
-  unsigned getNumProperties() const;
-  
   // Marks the end of the container.
   SourceLocation getAtEndLoc() const { return AtEndLoc; }
   void setAtEndLoc(SourceLocation L) { AtEndLoc = L; }
@@ -353,7 +383,7 @@ public:
 class ObjCInterfaceDecl : public ObjCContainerDecl {
   /// TypeForDecl - This indicates the Type object that represents this
   /// TypeDecl.  It is a cache maintained by ASTContext::getObjCInterfaceType
-  Type *TypeForDecl;
+  mutable Type *TypeForDecl;
   friend class ASTContext;
   
   /// Class's super class.
@@ -362,11 +392,11 @@ class ObjCInterfaceDecl : public ObjCContainerDecl {
   /// Protocols referenced in interface header declaration
   ObjCList<ObjCProtocolDecl> ReferencedProtocols;
   
-  /// Ivars/NumIvars - This is a new[]'d array of pointers to Decls.
-  ObjCIvarDecl **Ivars;   // Null if not defined.
-  unsigned NumIvars;      // 0 if none.
+  /// Instance variables in the interface.
+  ObjCList<ObjCIvarDecl> IVars;
   
   /// List of categories defined for this class.
+  /// FIXME: Why is this a linked list??
   ObjCCategoryDecl *CategoryList;
     
   bool ForwardDecl:1; // declared with @class.
@@ -377,16 +407,9 @@ class ObjCInterfaceDecl : public ObjCContainerDecl {
   SourceLocation EndLoc; // marks the '>', '}', or identifier.
 
   ObjCInterfaceDecl(DeclContext *DC, SourceLocation atLoc, IdentifierInfo *Id,
-                    SourceLocation CLoc, bool FD, bool isInternal)
-    : ObjCContainerDecl(ObjCInterface, DC, atLoc, Id),
-      TypeForDecl(0), SuperClass(0),
-      Ivars(0), NumIvars(0),
-      CategoryList(0), 
-      ForwardDecl(FD), InternalInterface(isInternal),
-      ClassLoc(CLoc) {
-      }
+                    SourceLocation CLoc, bool FD, bool isInternal);
   
-  virtual ~ObjCInterfaceDecl();
+  virtual ~ObjCInterfaceDecl() {}
   
 public:
 
@@ -404,28 +427,28 @@ public:
   }
   
   ObjCCategoryDecl *FindCategoryDeclaration(IdentifierInfo *CategoryId) const;
-  ObjCIvarDecl *FindIvarDeclaration(IdentifierInfo *IvarId) const;
 
   typedef ObjCList<ObjCProtocolDecl>::iterator protocol_iterator;
   protocol_iterator protocol_begin() const {return ReferencedProtocols.begin();}
   protocol_iterator protocol_end() const { return ReferencedProtocols.end(); }
-  
-  typedef ObjCIvarDecl * const *ivar_iterator;
-  ivar_iterator ivar_begin() const { return Ivars; }
-  ivar_iterator ivar_end() const { return Ivars + ivar_size();}
-  unsigned ivar_size() const { return NumIvars; }
-  bool ivar_empty() const { return NumIvars == 0; }
+  unsigned protocol_size() const { return ReferencedProtocols.size(); }
+
+  typedef ObjCList<ObjCIvarDecl>::iterator ivar_iterator;
+  ivar_iterator ivar_begin() const { return IVars.begin(); }
+  ivar_iterator ivar_end() const { return IVars.end(); }
+  unsigned ivar_size() const { return IVars.size(); }
+  bool ivar_empty() const { return IVars.empty(); }
     
-  /// addReferencedProtocols - Set the list of protocols that this interface
+  /// setProtocolList - Set the list of protocols that this interface
   /// implements.
-  void addReferencedProtocols(ObjCProtocolDecl *const*List, unsigned NumRPs) {
-    ReferencedProtocols.set(List, NumRPs);
+  void setProtocolList(ObjCProtocolDecl *const* List, unsigned Num,
+                       ASTContext &C) {
+    ReferencedProtocols.set(List, Num, C);
   }
    
-  void addInstanceVariablesToClass(ObjCIvarDecl **ivars, unsigned numIvars,
-                                   SourceLocation RBracLoc);
-  FieldDecl *lookupFieldDeclForIvar(ASTContext &Context, 
-                                    const ObjCIvarDecl *ivar);
+  void setIVarList(ObjCIvarDecl * const *List, unsigned Num, ASTContext &C) {
+    IVars.set(List, Num, C);
+  }
 
   bool isForwardDecl() const { return ForwardDecl; }
   void setForwardDecl(bool val) { ForwardDecl = val; }
@@ -450,40 +473,42 @@ public:
     return false;
   }
   
-  ObjCIvarDecl *lookupInstanceVariable(IdentifierInfo *IVarName,
+  ObjCIvarDecl *lookupInstanceVariable(ASTContext &Context, 
+                                       IdentifierInfo *IVarName,
                                        ObjCInterfaceDecl *&ClassDeclared);
-  ObjCIvarDecl *lookupInstanceVariable(IdentifierInfo *IVarName) {
+  ObjCIvarDecl *lookupInstanceVariable(ASTContext &Context, 
+                                       IdentifierInfo *IVarName) {
     ObjCInterfaceDecl *ClassDeclared;
-    return lookupInstanceVariable(IVarName, ClassDeclared);
+    return lookupInstanceVariable(Context, IVarName, ClassDeclared);
   }
 
   // Lookup a method. First, we search locally. If a method isn't
   // found, we search referenced protocols and class categories.
-  ObjCMethodDecl *lookupInstanceMethod(Selector Sel);
-  ObjCMethodDecl *lookupClassMethod(Selector Sel);
+  ObjCMethodDecl *lookupInstanceMethod(ASTContext &Context, Selector Sel);
+  ObjCMethodDecl *lookupClassMethod(ASTContext &Context, Selector Sel);
 
   // Location information, modeled after the Stmt API. 
   SourceLocation getLocStart() const { return getLocation(); } // '@'interface
   SourceLocation getLocEnd() const { return EndLoc; }
   void setLocEnd(SourceLocation LE) { EndLoc = LE; };
   
+  void setClassLoc(SourceLocation Loc) { ClassLoc = Loc; }
   SourceLocation getClassLoc() const { return ClassLoc; }
   void setSuperClassLoc(SourceLocation Loc) { SuperClassLoc = Loc; }
   SourceLocation getSuperClassLoc() const { return SuperClassLoc; }
     
-  /// ImplicitInterfaceDecl - check that this is an implicitely declared
+  /// isImplicitInterfaceDecl - check that this is an implicitly declared
   /// ObjCInterfaceDecl node. This is for legacy objective-c @implementation
   /// declaration without an @interface declaration.
-  bool ImplicitInterfaceDecl() const { return InternalInterface; }
+  bool isImplicitInterfaceDecl() const { return InternalInterface; }
+  void setImplicitInterfaceDecl(bool val) { InternalInterface = val; }
   
+  // Low-level accessor
+  Type *getTypeForDecl() const { return TypeForDecl; }
+  void setTypeForDecl(Type *TD) const { TypeForDecl = TD; }
+
   static bool classof(const Decl *D) { return D->getKind() == ObjCInterface; }
   static bool classof(const ObjCInterfaceDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const ObjCInterfaceDecl *D) {
-    return static_cast<DeclContext *>(const_cast<ObjCInterfaceDecl*>(D));
-  }
-  static ObjCInterfaceDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<ObjCInterfaceDecl *>(const_cast<DeclContext*>(DC));
-  }
 };
 
 /// ObjCIvarDecl - Represents an ObjC instance variable. In general, ObjC
@@ -508,13 +533,13 @@ public:
   };
   
 private:
-  ObjCIvarDecl(SourceLocation L, IdentifierInfo *Id, QualType T,
-               AccessControl ac, Expr *BW)
-    : FieldDecl(ObjCIvar, 0, L, Id, T, BW, /*Mutable=*/false), 
+  ObjCIvarDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
+               QualType T, AccessControl ac, Expr *BW)
+    : FieldDecl(ObjCIvar, DC, L, Id, T, BW, /*Mutable=*/false), 
       DeclAccess(ac) {}
   
 public:
-  static ObjCIvarDecl *Create(ASTContext &C, SourceLocation L,
+  static ObjCIvarDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
                               IdentifierInfo *Id, QualType T,
                               AccessControl ac, Expr *BW = NULL);
     
@@ -584,44 +609,45 @@ class ObjCProtocolDecl : public ObjCContainerDecl {
   /// Referenced protocols
   ObjCList<ObjCProtocolDecl> ReferencedProtocols;
   
-  /// protocol properties
-  ObjCPropertyDecl **PropertyDecl;  // Null if no property
-  unsigned NumPropertyDecl;  // 0 if none
-  
   bool isForwardProtoDecl; // declared with @protocol.
   
   SourceLocation EndLoc; // marks the '>' or identifier.
-  SourceLocation AtEndLoc; // marks the end of the entire interface.
   
   ObjCProtocolDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id)
     : ObjCContainerDecl(ObjCProtocol, DC, L, Id), 
-      PropertyDecl(0), NumPropertyDecl(0),
       isForwardProtoDecl(true) {
   }
   
-  virtual ~ObjCProtocolDecl();
+  virtual ~ObjCProtocolDecl() {}
   
 public:
   static ObjCProtocolDecl *Create(ASTContext &C, DeclContext *DC, 
                                   SourceLocation L, IdentifierInfo *Id);
 
+  /// Destroy - Call destructors and release memory.
+  virtual void Destroy(ASTContext& C);
+  
   const ObjCList<ObjCProtocolDecl> &getReferencedProtocols() const { 
     return ReferencedProtocols;
   }
   typedef ObjCList<ObjCProtocolDecl>::iterator protocol_iterator;
   protocol_iterator protocol_begin() const {return ReferencedProtocols.begin();}
   protocol_iterator protocol_end() const { return ReferencedProtocols.end(); }
+  unsigned protocol_size() const { return ReferencedProtocols.size(); }
   
-  /// addReferencedProtocols - Set the list of protocols that this interface
+  /// setProtocolList - Set the list of protocols that this interface
   /// implements.
-  void addReferencedProtocols(ObjCProtocolDecl *const*List, unsigned NumRPs) {
-    ReferencedProtocols.set(List, NumRPs);
+  void setProtocolList(ObjCProtocolDecl *const*List, unsigned Num,
+                       ASTContext &C) {
+    ReferencedProtocols.set(List, Num, C);
   }
+  
+  ObjCProtocolDecl *lookupProtocolNamed(IdentifierInfo *PName);
   
   // Lookup a method. First, we search locally. If a method isn't
   // found, we search referenced protocols and class categories.
-  ObjCMethodDecl *lookupInstanceMethod(Selector Sel);
-  ObjCMethodDecl *lookupClassMethod(Selector Sel);
+  ObjCMethodDecl *lookupInstanceMethod(ASTContext &Context, Selector Sel);
+  ObjCMethodDecl *lookupClassMethod(ASTContext &Context, Selector Sel);
 
   bool isForwardDecl() const { return isForwardProtoDecl; }
   void setForwardDecl(bool val) { isForwardProtoDecl = val; }
@@ -633,55 +659,36 @@ public:
   
   static bool classof(const Decl *D) { return D->getKind() == ObjCProtocol; }
   static bool classof(const ObjCProtocolDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const ObjCProtocolDecl *D) {
-    return static_cast<DeclContext *>(const_cast<ObjCProtocolDecl*>(D));
-  }
-  static ObjCProtocolDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<ObjCProtocolDecl *>(const_cast<DeclContext*>(DC));
-  }
 };
   
 /// ObjCClassDecl - Specifies a list of forward class declarations. For example:
 ///
 /// @class NSCursor, NSImage, NSPasteboard, NSWindow;
 ///
-/// FIXME: This could be a transparent DeclContext (!)
 class ObjCClassDecl : public Decl {
-  ObjCInterfaceDecl **ForwardDecls;
-  unsigned NumForwardDecls;
+  ObjCList<ObjCInterfaceDecl> ForwardDecls;
   
   ObjCClassDecl(DeclContext *DC, SourceLocation L, 
-                ObjCInterfaceDecl **Elts, unsigned nElts)
-    : Decl(ObjCClass, DC, L) { 
-    if (nElts) {
-      ForwardDecls = new ObjCInterfaceDecl*[nElts];
-      memcpy(ForwardDecls, Elts, nElts*sizeof(ObjCInterfaceDecl*));
-    } else {
-      ForwardDecls = 0;
-    }
-    NumForwardDecls = nElts;
-  }
-  
-  virtual ~ObjCClassDecl();
-  
+                ObjCInterfaceDecl *const *Elts, unsigned nElts, ASTContext &C);
+  virtual ~ObjCClassDecl() {}
 public:
   
   /// Destroy - Call destructors and release memory.
   virtual void Destroy(ASTContext& C);
   
   static ObjCClassDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
-                               ObjCInterfaceDecl **Elts, unsigned nElts);
+                               ObjCInterfaceDecl *const *Elts = 0, 
+                               unsigned nElts = 0);
   
-  void setInterfaceDecl(unsigned idx, ObjCInterfaceDecl *OID) {
-    assert(idx < NumForwardDecls && "index out of range");
-    ForwardDecls[idx] = OID;
+  typedef ObjCList<ObjCInterfaceDecl>::iterator iterator;
+  iterator begin() const { return ForwardDecls.begin(); }
+  iterator end() const { return ForwardDecls.end(); }
+  unsigned size() const { return ForwardDecls.size(); }
+
+  /// setClassList - Set the list of forward classes.
+  void setClassList(ASTContext &C, ObjCInterfaceDecl*const*List, unsigned Num) {
+    ForwardDecls.set(List, Num, C);
   }
-  ObjCInterfaceDecl** getForwardDecls() const { return ForwardDecls; }
-  int getNumForwardDecls() const { return NumForwardDecls; }
-  
-  typedef ObjCInterfaceDecl * const * iterator;
-  iterator begin() const { return ForwardDecls; }
-  iterator end() const { return ForwardDecls+NumForwardDecls; }
   
   static bool classof(const Decl *D) { return D->getKind() == ObjCClass; }
   static bool classof(const ObjCClassDecl *D) { return true; }
@@ -692,51 +699,33 @@ public:
 /// 
 /// @protocol NSTextInput, NSChangeSpelling, NSDraggingInfo;
 /// 
-/// FIXME: Should this be a transparent DeclContext?
 class ObjCForwardProtocolDecl : public Decl {
-  ObjCProtocolDecl **ReferencedProtocols;
-  unsigned NumReferencedProtocols;
+  ObjCList<ObjCProtocolDecl> ReferencedProtocols;
   
   ObjCForwardProtocolDecl(DeclContext *DC, SourceLocation L,
-                          ObjCProtocolDecl **Elts, unsigned nElts)
-    : Decl(ObjCForwardProtocol, DC, L) { 
-    NumReferencedProtocols = nElts;
-    if (nElts) {
-      ReferencedProtocols = new ObjCProtocolDecl*[nElts];
-      memcpy(ReferencedProtocols, Elts, nElts*sizeof(ObjCProtocolDecl*));
-    } else {
-      ReferencedProtocols = 0;
-    }
-  }
-  
-  virtual ~ObjCForwardProtocolDecl();
+                          ObjCProtocolDecl *const *Elts, unsigned nElts,
+                          ASTContext &C);  
+  virtual ~ObjCForwardProtocolDecl() {}
   
 public:
   static ObjCForwardProtocolDecl *Create(ASTContext &C, DeclContext *DC,
                                          SourceLocation L, 
-                                         ObjCProtocolDecl **Elts, unsigned Num);
+                                         ObjCProtocolDecl *const *Elts = 0,
+                                         unsigned Num = 0);
 
+  /// Destroy - Call destructors and release memory.
+  virtual void Destroy(ASTContext& C);
   
-  void setForwardProtocolDecl(unsigned idx, ObjCProtocolDecl *OID) {
-    assert(idx < NumReferencedProtocols && "index out of range");
-    ReferencedProtocols[idx] = OID;
+  typedef ObjCList<ObjCProtocolDecl>::iterator protocol_iterator;
+  protocol_iterator protocol_begin() const {return ReferencedProtocols.begin();}
+  protocol_iterator protocol_end() const { return ReferencedProtocols.end(); }
+  unsigned protocol_size() const { return ReferencedProtocols.size(); }
+
+  /// setProtocolList - Set the list of forward protocols.
+  void setProtocolList(ObjCProtocolDecl *const*List, unsigned Num,
+                       ASTContext &C) {
+    ReferencedProtocols.set(List, Num, C);
   }
-  
-  unsigned getNumForwardDecls() const { return NumReferencedProtocols; }
-  
-  ObjCProtocolDecl *getForwardProtocolDecl(unsigned idx) {
-    assert(idx < NumReferencedProtocols && "index out of range");
-    return ReferencedProtocols[idx];
-  }
-  const ObjCProtocolDecl *getForwardProtocolDecl(unsigned idx) const {
-    assert(idx < NumReferencedProtocols && "index out of range");
-    return ReferencedProtocols[idx];
-  }
-  
-  typedef ObjCProtocolDecl * const * iterator;
-  iterator begin() const { return ReferencedProtocols; }
-  iterator end() const { return ReferencedProtocols+NumReferencedProtocols; }
-  
   static bool classof(const Decl *D) {
     return D->getKind() == ObjCForwardProtocol;
   }
@@ -767,19 +756,15 @@ class ObjCCategoryDecl : public ObjCContainerDecl {
   /// referenced protocols in this category.
   ObjCList<ObjCProtocolDecl> ReferencedProtocols;
   
-  /// Next category belonging to this class
+  /// Next category belonging to this class.
+  /// FIXME: this should not be a singly-linked list.  Move storage elsewhere.
   ObjCCategoryDecl *NextClassCategory;
-  
-  /// category properties
-  ObjCPropertyDecl **PropertyDecl;  // Null if no property
-  unsigned NumPropertyDecl;  // 0 if none  
   
   SourceLocation EndLoc; // marks the '>' or identifier.
   
   ObjCCategoryDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id)
     : ObjCContainerDecl(ObjCCategory, DC, L, Id),
-      ClassInterface(0),
-      NextClassCategory(0), PropertyDecl(0),  NumPropertyDecl(0) {
+      ClassInterface(0), NextClassCategory(0){
   }
 public:
   
@@ -790,21 +775,26 @@ public:
   const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
   void setClassInterface(ObjCInterfaceDecl *IDecl) { ClassInterface = IDecl; }
   
-  /// addReferencedProtocols - Set the list of protocols that this interface
+  /// setProtocolList - Set the list of protocols that this interface
   /// implements.
-  void addReferencedProtocols(ObjCProtocolDecl *const*List, unsigned NumRPs) {
-    ReferencedProtocols.set(List, NumRPs);
+  void setProtocolList(ObjCProtocolDecl *const*List, unsigned Num,
+                              ASTContext &C) {
+    ReferencedProtocols.set(List, Num, C);
   }
   
   const ObjCList<ObjCProtocolDecl> &getReferencedProtocols() const { 
     return ReferencedProtocols;
   }
   
-  typedef ObjCProtocolDecl * const * protocol_iterator;
+  typedef ObjCList<ObjCProtocolDecl>::iterator protocol_iterator;
   protocol_iterator protocol_begin() const {return ReferencedProtocols.begin();}
   protocol_iterator protocol_end() const { return ReferencedProtocols.end(); }
+  unsigned protocol_size() const { return ReferencedProtocols.size(); }
   
   ObjCCategoryDecl *getNextClassCategory() const { return NextClassCategory; }
+  void setNextClassCategory(ObjCCategoryDecl *Cat) {
+    NextClassCategory = Cat;
+  }
   void insertNextClassCategory() {
     NextClassCategory = ClassInterface->getCategoryList();
     ClassInterface->setCategoryList(this);
@@ -816,14 +806,92 @@ public:
   
   static bool classof(const Decl *D) { return D->getKind() == ObjCCategory; }
   static bool classof(const ObjCCategoryDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const ObjCCategoryDecl *D) {
-    return static_cast<DeclContext *>(const_cast<ObjCCategoryDecl*>(D));
-  }
-  static ObjCCategoryDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<ObjCCategoryDecl *>(const_cast<DeclContext*>(DC));
-  }
 };
 
+class ObjCImplDecl : public NamedDecl, public DeclContext {
+  /// Class interface for this category implementation
+  ObjCInterfaceDecl *ClassInterface;
+  
+  SourceLocation EndLoc;  
+  
+protected:
+  ObjCImplDecl(Kind DK, DeclContext *DC, SourceLocation L,
+               ObjCInterfaceDecl *classInterface)
+    : NamedDecl(DK, DC, L, 
+                classInterface? classInterface->getDeclName() 
+                              : DeclarationName()), 
+      DeclContext(DK), ClassInterface(classInterface) {}
+  
+public:
+  virtual ~ObjCImplDecl() {}
+  
+  const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
+  ObjCInterfaceDecl *getClassInterface() { return ClassInterface; }
+  void setClassInterface(ObjCInterfaceDecl *IFace) { ClassInterface = IFace; }
+
+  void addInstanceMethod(ASTContext &Context, ObjCMethodDecl *method) { 
+    // FIXME: Context should be set correctly before we get here.
+    method->setLexicalDeclContext(this);
+    addDecl(Context, method); 
+  }
+  void addClassMethod(ASTContext &Context, ObjCMethodDecl *method) { 
+    // FIXME: Context should be set correctly before we get here.
+    method->setLexicalDeclContext(this);
+    addDecl(Context, method); 
+  }
+  
+  // Get the local instance/class method declared in this interface.
+  ObjCMethodDecl *getInstanceMethod(ASTContext &Context, Selector Sel) const;
+  ObjCMethodDecl *getClassMethod(ASTContext &Context, Selector Sel) const;
+  ObjCMethodDecl *getMethod(ASTContext &Context, Selector Sel, 
+                            bool isInstance) const {
+    return isInstance ? getInstanceMethod(Context, Sel) 
+                      : getClassMethod(Context, Sel);
+  }
+  
+  void addPropertyImplementation(ASTContext &Context, 
+                                 ObjCPropertyImplDecl *property);
+  
+  ObjCPropertyImplDecl *FindPropertyImplDecl(ASTContext &Context, 
+                                             IdentifierInfo *propertyId) const;
+  ObjCPropertyImplDecl *FindPropertyImplIvarDecl(ASTContext &Context, 
+                                                 IdentifierInfo *ivarId) const;
+
+  // Iterator access to properties.
+  typedef specific_decl_iterator<ObjCPropertyImplDecl> propimpl_iterator;
+  propimpl_iterator propimpl_begin(ASTContext &Context) const { 
+    return propimpl_iterator(decls_begin(Context));
+  }
+  propimpl_iterator propimpl_end(ASTContext &Context) const { 
+    return propimpl_iterator(decls_end(Context));
+  }
+
+  typedef filtered_decl_iterator<ObjCMethodDecl, 
+                                 &ObjCMethodDecl::isInstanceMethod> 
+    instmeth_iterator;
+  instmeth_iterator instmeth_begin(ASTContext &Context) const {
+    return instmeth_iterator(decls_begin(Context));
+  }
+  instmeth_iterator instmeth_end(ASTContext &Context) const {
+    return instmeth_iterator(decls_end(Context));
+  }
+
+  typedef filtered_decl_iterator<ObjCMethodDecl, 
+                                 &ObjCMethodDecl::isClassMethod> 
+    classmeth_iterator;
+  classmeth_iterator classmeth_begin(ASTContext &Context) const {
+    return classmeth_iterator(decls_begin(Context));
+  }
+  classmeth_iterator classmeth_end(ASTContext &Context) const {
+    return classmeth_iterator(decls_end(Context));
+  }
+
+  // Location information, modeled after the Stmt API. 
+  SourceLocation getLocStart() const { return getLocation(); }
+  SourceLocation getLocEnd() const { return EndLoc; }
+  void setLocEnd(SourceLocation LE) { EndLoc = LE; };
+};
+  
 /// ObjCCategoryImplDecl - An object of this class encapsulates a category 
 /// @implementation declaration. If a category class has declaration of a 
 /// property, its implementation must be specified in the category's 
@@ -836,84 +904,38 @@ public:
 ///  @dynamic p1,d1;
 /// @end
 ///
-class ObjCCategoryImplDecl : public NamedDecl, public DeclContext {
-  /// Class interface for this category implementation
-  ObjCInterfaceDecl *ClassInterface;
-
-  /// implemented instance methods
-  llvm::SmallVector<ObjCMethodDecl*, 32> InstanceMethods;
-  
-  /// implemented class methods
-  llvm::SmallVector<ObjCMethodDecl*, 32> ClassMethods;
-  
-  /// Property Implementations in this category
-  llvm::SmallVector<ObjCPropertyImplDecl*, 8> PropertyImplementations;
-
-  SourceLocation EndLoc;  
+/// ObjCCategoryImplDecl
+class ObjCCategoryImplDecl : public ObjCImplDecl {
+  // Category name
+  IdentifierInfo *Id;
 
   ObjCCategoryImplDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
                        ObjCInterfaceDecl *classInterface)
-    : NamedDecl(ObjCCategoryImpl, DC, L, Id), DeclContext(ObjCCategoryImpl),
-      ClassInterface(classInterface) {}
+    : ObjCImplDecl(ObjCCategoryImpl, DC, L, classInterface), Id(Id) {}
 public:
   static ObjCCategoryImplDecl *Create(ASTContext &C, DeclContext *DC,
                                       SourceLocation L, IdentifierInfo *Id,
                                       ObjCInterfaceDecl *classInterface);
         
-  const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
-  ObjCInterfaceDecl *getClassInterface() { return ClassInterface; }
-  
-  unsigned getNumInstanceMethods() const { return InstanceMethods.size(); }
-  unsigned getNumClassMethods() const { return ClassMethods.size(); }
+  /// getIdentifier - Get the identifier that names the class
+  /// interface associated with this implementation.
+  IdentifierInfo *getIdentifier() const { 
+    return Id; 
+  }
+  void setIdentifier(IdentifierInfo *II) { Id = II; }
 
-  void addInstanceMethod(ObjCMethodDecl *method) {
-    InstanceMethods.push_back(method);
-  }
-  void addClassMethod(ObjCMethodDecl *method) {
-    ClassMethods.push_back(method);
-  }   
-  // Get the instance method definition for this implementation.
-  ObjCMethodDecl *getInstanceMethod(Selector Sel) const;
-  
-  // Get the class method definition for this implementation.
-  ObjCMethodDecl *getClassMethod(Selector Sel) const;
-  
-  void addPropertyImplementation(ObjCPropertyImplDecl *property) {
-    PropertyImplementations.push_back(property);
-  }
-
-  ObjCPropertyImplDecl *FindPropertyImplDecl(IdentifierInfo *propertyId) const;
-  ObjCPropertyImplDecl *FindPropertyImplIvarDecl(IdentifierInfo *ivarId) const;
-  
-  unsigned getNumPropertyImplementations() const
-  { return PropertyImplementations.size(); }
-  
-  
-  typedef llvm::SmallVector<ObjCPropertyImplDecl*, 8>::const_iterator
-    propimpl_iterator;
-  propimpl_iterator propimpl_begin() const { 
-    return PropertyImplementations.begin(); 
-  }
-  propimpl_iterator propimpl_end() const { 
-    return PropertyImplementations.end(); 
+  /// getNameAsCString - Get the name of identifier for the class
+  /// interface associated with this implementation as a C string
+  /// (const char*).
+  const char *getNameAsCString() const {
+    return Id ? Id->getName() : "";
   }
   
-  typedef llvm::SmallVector<ObjCMethodDecl*, 32>::const_iterator
-    instmeth_iterator;
-  instmeth_iterator instmeth_begin() const { return InstanceMethods.begin(); }
-  instmeth_iterator instmeth_end() const { return InstanceMethods.end(); }
+  /// @brief Get the name of the class associated with this interface.
+  std::string getNameAsString() const {
+    return Id ? Id->getName() : "";
+  }
   
-  typedef llvm::SmallVector<ObjCMethodDecl*, 32>::const_iterator
-    classmeth_iterator;
-  classmeth_iterator classmeth_begin() const { return ClassMethods.begin(); }
-  classmeth_iterator classmeth_end() const { return ClassMethods.end(); }
-  
-  
-  // Location information, modeled after the Stmt API. 
-  SourceLocation getLocStart() const { return getLocation(); }
-  SourceLocation getLocEnd() const { return EndLoc; }
-  void setLocEnd(SourceLocation LE) { EndLoc = LE; };
-    
   static bool classof(const Decl *D) { return D->getKind() == ObjCCategoryImpl;}
   static bool classof(const ObjCCategoryImplDecl *D) { return true; }
   static DeclContext *castToDeclContext(const ObjCCategoryImplDecl *D) {
@@ -935,77 +957,23 @@ public:
 ///
 /// Typically, instance variables are specified in the class interface, 
 /// *not* in the implementation. Nevertheless (for legacy reasons), we
-/// allow instance variables to be specified in the implementation. When
-/// specified, they need to be *identical* to the interface. Now that we
-/// have support for non-fragile ivars in ObjC 2.0, we can consider removing
-/// the legacy semantics and allow developers to move private ivar declarations
-/// from the class interface to the class implementation (but I digress:-)
+/// allow instance variables to be specified in the implementation.  When
+/// specified, they need to be *identical* to the interface.
 ///
-class ObjCImplementationDecl : public Decl, public DeclContext {
-  /// Class interface for this implementation
-  ObjCInterfaceDecl *ClassInterface;
-  
+class ObjCImplementationDecl : public ObjCImplDecl {  
   /// Implementation Class's super class.
   ObjCInterfaceDecl *SuperClass;
     
-  /// Optional Ivars/NumIvars - This is a new[]'d array of pointers to Decls.
-  ObjCIvarDecl **Ivars;   // Null if not specified
-  unsigned NumIvars;      // 0 if none.
-
-  /// implemented instance methods
-  llvm::SmallVector<ObjCMethodDecl*, 32> InstanceMethods;
-  
-  /// implemented class methods
-  llvm::SmallVector<ObjCMethodDecl*, 32> ClassMethods;
-
-  /// Propertys' being implemented
-  llvm::SmallVector<ObjCPropertyImplDecl*, 8> PropertyImplementations;
-  
-  SourceLocation EndLoc;
-
   ObjCImplementationDecl(DeclContext *DC, SourceLocation L, 
                          ObjCInterfaceDecl *classInterface,
                          ObjCInterfaceDecl *superDecl)
-    : Decl(ObjCImplementation, DC, L), DeclContext(ObjCImplementation),
-      ClassInterface(classInterface), SuperClass(superDecl),
-      Ivars(0), NumIvars(0) {}
+    : ObjCImplDecl(ObjCImplementation, DC, L, classInterface), 
+       SuperClass(superDecl){}
 public:  
   static ObjCImplementationDecl *Create(ASTContext &C, DeclContext *DC, 
                                         SourceLocation L, 
                                         ObjCInterfaceDecl *classInterface,
                                         ObjCInterfaceDecl *superDecl);
-  
-  
-  void ObjCAddInstanceVariablesToClassImpl(ObjCIvarDecl **ivars, 
-                                           unsigned numIvars);
-    
-  void addInstanceMethod(ObjCMethodDecl *method) {
-    InstanceMethods.push_back(method);
-  }
-  void addClassMethod(ObjCMethodDecl *method) {
-    ClassMethods.push_back(method);
-  }    
-  
-  void addPropertyImplementation(ObjCPropertyImplDecl *property) {
-    PropertyImplementations.push_back(property);
-  } 
-
-  ObjCPropertyImplDecl *FindPropertyImplDecl(IdentifierInfo *propertyId) const;
-  ObjCPropertyImplDecl *FindPropertyImplIvarDecl(IdentifierInfo *ivarId) const;
-
-  typedef llvm::SmallVector<ObjCPropertyImplDecl*, 8>::const_iterator
-  propimpl_iterator;
-  propimpl_iterator propimpl_begin() const { 
-    return PropertyImplementations.begin(); 
-  }
-  propimpl_iterator propimpl_end() const { 
-    return PropertyImplementations.end(); 
-  }
-  
-  // Location information, modeled after the Stmt API. 
-  SourceLocation getLocStart() const { return getLocation(); }
-  SourceLocation getLocEnd() const { return EndLoc; }
-  void setLocEnd(SourceLocation LE) { EndLoc = LE; };
   
   /// getIdentifier - Get the identifier that names the class
   /// interface associated with this implementation.
@@ -1026,40 +994,24 @@ public:
     return getClassInterface()->getNameAsString();
   }
 
-  const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
-  ObjCInterfaceDecl *getClassInterface() { return ClassInterface; }
   const ObjCInterfaceDecl *getSuperClass() const { return SuperClass; }
   ObjCInterfaceDecl *getSuperClass() { return SuperClass; }
   
   void setSuperClass(ObjCInterfaceDecl * superCls) { SuperClass = superCls; }
-  
-  unsigned getNumInstanceMethods() const { return InstanceMethods.size(); }
-  unsigned getNumClassMethods() const { return ClassMethods.size(); }
-  
-  unsigned getNumPropertyImplementations() const 
-    { return PropertyImplementations.size(); }
-
-  typedef llvm::SmallVector<ObjCMethodDecl*, 32>::const_iterator
-       instmeth_iterator;
-  instmeth_iterator instmeth_begin() const { return InstanceMethods.begin(); }
-  instmeth_iterator instmeth_end() const { return InstanceMethods.end(); }
-
-  typedef llvm::SmallVector<ObjCMethodDecl*, 32>::const_iterator
-    classmeth_iterator;
-  classmeth_iterator classmeth_begin() const { return ClassMethods.begin(); }
-  classmeth_iterator classmeth_end() const { return ClassMethods.end(); }
-  
-  // Get the instance method definition for this implementation.
-  ObjCMethodDecl *getInstanceMethod(Selector Sel) const;
-  
-  // Get the class method definition for this implementation.
-  ObjCMethodDecl *getClassMethod(Selector Sel) const;
-  
-  typedef ObjCIvarDecl * const *ivar_iterator;
-  ivar_iterator ivar_begin() const { return Ivars; }
-  ivar_iterator ivar_end() const { return Ivars+NumIvars; }
-  unsigned ivar_size() const { return NumIvars; }
-  bool ivar_empty() const { return NumIvars == 0; }
+    
+  typedef specific_decl_iterator<ObjCIvarDecl> ivar_iterator;
+  ivar_iterator ivar_begin(ASTContext &Context) const { 
+    return ivar_iterator(decls_begin(Context)); 
+  }
+  ivar_iterator ivar_end(ASTContext &Context) const { 
+    return ivar_iterator(decls_end(Context));
+  }
+  unsigned ivar_size(ASTContext &Context) const { 
+    return std::distance(ivar_begin(Context), ivar_end(Context));
+  }
+  bool ivar_empty(ASTContext &Context) const { 
+    return ivar_begin(Context) == ivar_end(Context);
+  }
   
   static bool classof(const Decl *D) {
     return D->getKind() == ObjCImplementation;
@@ -1089,6 +1041,7 @@ public:
 
   const ObjCInterfaceDecl *getClassInterface() const { return AliasedClass; }
   ObjCInterfaceDecl *getClassInterface() { return AliasedClass; }
+  void setClassInterface(ObjCInterfaceDecl *D) { AliasedClass = D; }
   
   static bool classof(const Decl *D) {
     return D->getKind() == ObjCCompatibleAlias;
@@ -1129,6 +1082,7 @@ private:
   
   ObjCMethodDecl *GetterMethodDecl; // Declaration of getter instance method
   ObjCMethodDecl *SetterMethodDecl; // Declaration of setter instance method
+  ObjCIvarDecl *PropertyIvarDecl;   // Synthesize ivar for this property
 
   ObjCPropertyDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id, 
                    QualType T)
@@ -1136,14 +1090,15 @@ private:
       PropertyAttributes(OBJC_PR_noattr), PropertyImplementation(None),
       GetterName(Selector()), 
       SetterName(Selector()),
-      GetterMethodDecl(0), SetterMethodDecl(0) {}
+      GetterMethodDecl(0), SetterMethodDecl(0) , PropertyIvarDecl(0) {}
 public:
   static ObjCPropertyDecl *Create(ASTContext &C, DeclContext *DC, 
                                   SourceLocation L, 
                                   IdentifierInfo *Id, QualType T,
                                   PropertyControl propControl = None);
   QualType getType() const { return DeclType; }
-  
+  void setType(QualType T) { DeclType = T; }
+
   PropertyAttributeKind getPropertyAttributes() const {
     return PropertyAttributeKind(PropertyAttributes);
   }
@@ -1194,6 +1149,13 @@ public:
     return PropertyControl(PropertyImplementation);
   }  
   
+  void setPropertyIvarDecl(ObjCIvarDecl *Ivar) {
+    PropertyIvarDecl = Ivar;
+  }
+  ObjCIvarDecl *getPropertyIvarDecl() const {
+    return PropertyIvarDecl;
+  }
+  
   static bool classof(const Decl *D) {
     return D->getKind() == ObjCProperty;
   }
@@ -1235,11 +1197,13 @@ public:
                                       ObjCIvarDecl *ivarDecl);
 
   SourceLocation getLocStart() const { return AtLoc; }
+  void setAtLoc(SourceLocation Loc) { AtLoc = Loc; }
 
   ObjCPropertyDecl *getPropertyDecl() const {
     return PropertyDecl;
   }
-  
+  void setPropertyDecl(ObjCPropertyDecl *Prop) { PropertyDecl = Prop; }
+
   Kind getPropertyImplementation() const {
     return PropertyIvarDecl ? Synthesize : Dynamic;
   }
@@ -1247,7 +1211,8 @@ public:
   ObjCIvarDecl *getPropertyIvarDecl() const {
     return PropertyIvarDecl;
   }
-  
+  void setPropertyIvarDecl(ObjCIvarDecl *Ivar) { PropertyIvarDecl = Ivar; }
+
   static bool classof(const Decl *D) {
     return D->getKind() == ObjCPropertyImpl;
   }

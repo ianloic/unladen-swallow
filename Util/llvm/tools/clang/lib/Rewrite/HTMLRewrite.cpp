@@ -15,6 +15,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Rewrite/Rewriter.h"
 #include "clang/Rewrite/HTMLRewrite.h"
+#include "clang/Lex/TokenConcatenation.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/SmallString.h"
@@ -40,7 +41,7 @@ void html::HighlightRange(Rewriter &R, SourceLocation B, SourceLocation E,
   unsigned EOffset = SM.getFileOffset(E);
   
   // Include the whole end token in the range.
-  EOffset += Lexer::MeasureTokenLength(E, R.getSourceMgr());
+  EOffset += Lexer::MeasureTokenLength(E, R.getSourceMgr(), R.getLangOpts());
   
   HighlightRange(R.getEditBuffer(FID), BOffset, EOffset,
                  SM.getBufferData(FID).first, StartTag, EndTag);
@@ -302,22 +303,31 @@ void html::AddHeaderFooterInternalBuiltinCSS(Rewriter& R, FileID FID,
              // Macros are position: relative to provide base for expansions.
              " position: relative }\n"
       " .num { width:2.5em; padding-right:2ex; background-color:#eeeeee }\n"
-      " .num { text-align:right; font-size: smaller }\n"
+      " .num { text-align:right; font-size:8pt }\n"
       " .num { color:#444444 }\n"
       " .line { padding-left: 1ex; border-left: 3px solid #ccc }\n"
       " .line { white-space: pre }\n"
-      " .msg { background-color:#fff8b4; color:#000000 }\n"
       " .msg { -webkit-box-shadow:1px 1px 7px #000 }\n"
       " .msg { -webkit-border-radius:5px }\n"
-      " .msg { font-family:Helvetica, sans-serif; font-size: smaller }\n"
-      " .msg { font-weight: bold }\n"
+      " .msg { font-family:Helvetica, sans-serif; font-size:8pt }\n"
       " .msg { float:left }\n"
-      " .msg { padding:0.5em 1ex 0.5em 1ex }\n"
+      " .msg { padding:0.25em 1ex 0.25em 1ex }\n"
       " .msg { margin-top:10px; margin-bottom:10px }\n"
-      " .msg { max-width:60em; word-wrap: break-word; white-space: pre-wrap;}\n"
+      " .msg { font-weight:bold }\n"
+      " .msg { max-width:60em; word-wrap: break-word; white-space: pre-wrap }\n"
+      " .msgT { padding:0x; spacing:0x }\n"
+      " .msgEvent { background-color:#fff8b4; color:#000000 }\n"
+      " .msgControl { background-color:#bbbbbb; color:#000000 }\n"
       " .mrange { background-color:#dfddf3 }\n"
       " .mrange { border-bottom:1px solid #6F9DBE }\n"
-      " .PathIndex { font-weight: bold }\n"
+      " .PathIndex { font-weight: bold; padding:0px 5px 0px 5px; "
+        "margin-right:5px; }\n"
+      " .PathIndex { -webkit-border-radius:8px }\n"
+      " .PathIndexEvent { background-color:#bfba87 }\n"
+      " .PathIndexControl { background-color:#8c8c8c }\n"
+      " .CodeInsertionHint { font-weight: bold; background-color: #10dd10 }\n"
+      " .CodeRemovalHint { background-color:#de1010 }\n"
+      " .CodeRemovalHint { border-bottom:1px solid #6F9DBE }\n"
       " table.simpletable {\n"
       "   padding: 5px;\n"
       "   font-size:12pt;\n"
@@ -343,8 +353,8 @@ void html::AddHeaderFooterInternalBuiltinCSS(Rewriter& R, FileID FID,
 void html::SyntaxHighlight(Rewriter &R, FileID FID, Preprocessor &PP) {
   RewriteBuffer &RB = R.getEditBuffer(FID);
 
-  const SourceManager &SourceMgr = PP.getSourceManager();
-  Lexer L(FID, SourceMgr, PP.getLangOptions());
+  const SourceManager &SM = PP.getSourceManager();
+  Lexer L(FID, SM, PP.getLangOptions());
   const char *BufferStart = L.getBufferStart();
   
   // Inform the preprocessor that we want to retain comments as tokens, so we 
@@ -359,7 +369,7 @@ void html::SyntaxHighlight(Rewriter &R, FileID FID, Preprocessor &PP) {
   while (Tok.isNot(tok::eof)) {
     // Since we are lexing unexpanded tokens, all tokens are from the main
     // FileID.
-    unsigned TokOffs = SourceMgr.getFileOffset(Tok.getLocation());
+    unsigned TokOffs = SM.getFileOffset(Tok.getLocation());
     unsigned TokLen = Tok.getLength();
     switch (Tok.getKind()) {
     default: break;
@@ -397,7 +407,7 @@ void html::SyntaxHighlight(Rewriter &R, FileID FID, Preprocessor &PP) {
       unsigned TokEnd = TokOffs+TokLen;
       L.LexFromRawLexer(Tok);
       while (!Tok.isAtStartOfLine() && Tok.isNot(tok::eof)) {
-        TokEnd = SourceMgr.getFileOffset(Tok.getLocation())+Tok.getLength();
+        TokEnd = SM.getFileOffset(Tok.getLocation())+Tok.getLength();
         L.LexFromRawLexer(Tok);
       }
       
@@ -414,22 +424,77 @@ void html::SyntaxHighlight(Rewriter &R, FileID FID, Preprocessor &PP) {
   }
 }
 
+namespace {
+/// IgnoringDiagClient - This is a diagnostic client that just ignores all
+/// diags.
+class IgnoringDiagClient : public DiagnosticClient {
+  void HandleDiagnostic(Diagnostic::Level DiagLevel,
+                        const DiagnosticInfo &Info) {
+    // Just ignore it.
+  }
+};
+}
+
 /// HighlightMacros - This uses the macro table state from the end of the
-/// file, to reexpand macros and insert (into the HTML) information about the
+/// file, to re-expand macros and insert (into the HTML) information about the
 /// macro expansions.  This won't be perfectly perfect, but it will be
 /// reasonably close.
 void html::HighlightMacros(Rewriter &R, FileID FID, Preprocessor& PP) {
+  // Re-lex the raw token stream into a token buffer.
+  const SourceManager &SM = PP.getSourceManager();
+  std::vector<Token> TokenStream;
   
-  RewriteBuffer &RB = R.getEditBuffer(FID);
+  Lexer L(FID, SM, PP.getLangOptions());
+  
+  // Lex all the tokens in raw mode, to avoid entering #includes or expanding
+  // macros.
+  while (1) {
+    Token Tok;
+    L.LexFromRawLexer(Tok);
+    
+    // If this is a # at the start of a line, discard it from the token stream.
+    // We don't want the re-preprocess step to see #defines, #includes or other
+    // preprocessor directives.
+    if (Tok.is(tok::hash) && Tok.isAtStartOfLine())
+      continue;
+
+    // If this is a ## token, change its kind to unknown so that repreprocessing
+    // it will not produce an error.
+    if (Tok.is(tok::hashhash))
+      Tok.setKind(tok::unknown);
+    
+    // If this raw token is an identifier, the raw lexer won't have looked up
+    // the corresponding identifier info for it.  Do this now so that it will be
+    // macro expanded when we re-preprocess it.
+    if (Tok.is(tok::identifier)) {
+      // Change the kind of this identifier to the appropriate token kind, e.g.
+      // turning "for" into a keyword.
+      Tok.setKind(PP.LookUpIdentifierInfo(Tok)->getTokenID());
+    }    
+      
+    TokenStream.push_back(Tok);
+    
+    if (Tok.is(tok::eof)) break;
+  }
+  
+  // Temporarily change the diagnostics object so that we ignore any generated
+  // diagnostics from this pass.
+  IgnoringDiagClient TmpDC;
+  Diagnostic TmpDiags(&TmpDC);
+  
+  Diagnostic *OldDiags = &PP.getDiagnostics();
+  PP.setDiagnostics(TmpDiags);
   
   // Inform the preprocessor that we don't want comments.
   PP.SetCommentRetentionState(false, false);
+
+  // Enter the tokens we just lexed.  This will cause them to be macro expanded
+  // but won't enter sub-files (because we removed #'s).
+  PP.EnterTokenStream(&TokenStream[0], TokenStream.size(), false, false);
   
-  // Start parsing the specified input file.
-  PP.EnterMainSourceFile();
+  TokenConcatenation ConcatInfo(PP);
   
   // Lex all the tokens.
-  const SourceManager &SourceMgr = PP.getSourceManager();
   Token Tok;
   PP.Lex(Tok);
   while (Tok.isNot(tok::eof)) {
@@ -439,32 +504,25 @@ void html::HighlightMacros(Rewriter &R, FileID FID, Preprocessor& PP) {
       continue;
     }
     
-    // Ignore tokens whose instantiation location was not the main file.
-    SourceLocation LLoc = SourceMgr.getInstantiationLoc(Tok.getLocation());
-    std::pair<FileID, unsigned> LLocInfo = SourceMgr.getDecomposedLoc(LLoc);
+    // Okay, we have the first token of a macro expansion: highlight the
+    // instantiation by inserting a start tag before the macro instantiation and
+    // end tag after it.
+    std::pair<SourceLocation, SourceLocation> LLoc =
+      SM.getInstantiationRange(Tok.getLocation());
     
-    if (LLocInfo.first != FID) {
+    // Ignore tokens whose instantiation location was not the main file.
+    if (SM.getFileID(LLoc.first) != FID) {
       PP.Lex(Tok);
       continue;
     }
-    
-    // Okay, we have the first token of a macro expansion: highlight the
-    // instantiation.
-  
-    // Get the size of current macro call itself.
-    // FIXME: This should highlight the args of a function-like
-    // macro, using a heuristic.
-    unsigned TokLen = Lexer::MeasureTokenLength(LLoc, SourceMgr);
-    
-    unsigned TokOffs = LLocInfo.second;
-    // Highlight the macro invocation itself.
-    RB.InsertTextAfter(TokOffs, "<span class='macro'>",
-                       strlen("<span class='macro'>"));
-    RB.InsertTextBefore(TokOffs+TokLen, "</span>", strlen("</span>"));
-    
+
+    assert(SM.getFileID(LLoc.second) == FID &&
+           "Start and end of expansion must be in the same ultimate file!");
+
     std::string Expansion = PP.getSpelling(Tok);
     unsigned LineLen = Expansion.size();
     
+    Token PrevTok = Tok;
     // Okay, eat this token, getting the next one.
     PP.Lex(Tok);
     
@@ -472,7 +530,7 @@ void html::HighlightMacros(Rewriter &R, FileID FID, Preprocessor& PP) {
     // instantiation.  It would be really nice to pop up a window with all the
     // spelling of the tokens or something.
     while (!Tok.is(tok::eof) &&
-           SourceMgr.getInstantiationLoc(Tok.getLocation()) == LLoc) {
+           SM.getInstantiationLoc(Tok.getLocation()) == LLoc.first) {
       // Insert a newline if the macro expansion is getting large.
       if (LineLen > 60) {
         Expansion += "<br>";
@@ -480,16 +538,32 @@ void html::HighlightMacros(Rewriter &R, FileID FID, Preprocessor& PP) {
       }
       
       LineLen -= Expansion.size();
+      
+      // If the tokens were already space separated, or if they must be to avoid
+      // them being implicitly pasted, add a space between them.
+      if (Tok.hasLeadingSpace() ||
+          ConcatInfo.AvoidConcat(PrevTok, Tok))
+        Expansion += ' ';
+      
       // Escape any special characters in the token text.
-      Expansion += ' ' + EscapeText(PP.getSpelling(Tok));
+      Expansion += EscapeText(PP.getSpelling(Tok));
       LineLen += Expansion.size();
+      
+      PrevTok = Tok;
       PP.Lex(Tok);
     }
     
-    // Insert the information about the expansion inside the macro span.
-    Expansion = "<span class='expansion'>" + Expansion + "</span>";
-    RB.InsertTextBefore(TokOffs+TokLen, Expansion.c_str(), Expansion.size());
+
+    // Insert the expansion as the end tag, so that multi-line macros all get
+    // highlighted.
+    Expansion = "<span class='expansion'>" + Expansion + "</span></span>";
+
+    HighlightRange(R, LLoc.first, LLoc.second,
+                   "<span class='macro'>", Expansion.c_str());
   }
+
+  // Restore diagnostics object back to its own thing.
+  PP.setDiagnostics(*OldDiags);
 }
 
 void html::HighlightMacros(Rewriter &R, FileID FID,

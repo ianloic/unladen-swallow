@@ -612,16 +612,16 @@ BranchInst::BranchInst(BasicBlock *IfTrue, Instruction *InsertBefore)
                    OperandTraits<BranchInst>::op_end(this) - 1,
                    1, InsertBefore) {
   assert(IfTrue != 0 && "Branch destination may not be null!");
-  Op<0>() = IfTrue;
+  Op<-1>() = IfTrue;
 }
 BranchInst::BranchInst(BasicBlock *IfTrue, BasicBlock *IfFalse, Value *Cond,
                        Instruction *InsertBefore)
   : TerminatorInst(Type::VoidTy, Instruction::Br,
                    OperandTraits<BranchInst>::op_end(this) - 3,
                    3, InsertBefore) {
-  Op<0>() = IfTrue;
-  Op<1>() = IfFalse;
-  Op<2>() = Cond;
+  Op<-1>() = IfTrue;
+  Op<-2>() = IfFalse;
+  Op<-3>() = Cond;
 #ifndef NDEBUG
   AssertOK();
 #endif
@@ -632,7 +632,7 @@ BranchInst::BranchInst(BasicBlock *IfTrue, BasicBlock *InsertAtEnd)
                    OperandTraits<BranchInst>::op_end(this) - 1,
                    1, InsertAtEnd) {
   assert(IfTrue != 0 && "Branch destination may not be null!");
-  Op<0>() = IfTrue;
+  Op<-1>() = IfTrue;
 }
 
 BranchInst::BranchInst(BasicBlock *IfTrue, BasicBlock *IfFalse, Value *Cond,
@@ -640,9 +640,9 @@ BranchInst::BranchInst(BasicBlock *IfTrue, BasicBlock *IfFalse, Value *Cond,
   : TerminatorInst(Type::VoidTy, Instruction::Br,
                    OperandTraits<BranchInst>::op_end(this) - 3,
                    3, InsertAtEnd) {
-  Op<0>() = IfTrue;
-  Op<1>() = IfFalse;
-  Op<2>() = Cond;
+  Op<-1>() = IfTrue;
+  Op<-2>() = IfFalse;
+  Op<-3>() = Cond;
 #ifndef NDEBUG
   AssertOK();
 #endif
@@ -653,13 +653,38 @@ BranchInst::BranchInst(const BranchInst &BI) :
   TerminatorInst(Type::VoidTy, Instruction::Br,
                  OperandTraits<BranchInst>::op_end(this) - BI.getNumOperands(),
                  BI.getNumOperands()) {
-  OperandList[0] = BI.getOperand(0);
+  Op<-1>() = BI.Op<-1>();
   if (BI.getNumOperands() != 1) {
     assert(BI.getNumOperands() == 3 && "BR can have 1 or 3 operands!");
-    OperandList[1] = BI.getOperand(1);
-    OperandList[2] = BI.getOperand(2);
+    Op<-3>() = BI.Op<-3>();
+    Op<-2>() = BI.Op<-2>();
   }
 }
+
+
+Use* Use::getPrefix() {
+  PointerIntPair<Use**, 2, PrevPtrTag> &PotentialPrefix(this[-1].Prev);
+  if (PotentialPrefix.getOpaqueValue())
+    return 0;
+
+  return reinterpret_cast<Use*>((char*)&PotentialPrefix + 1);
+}
+
+BranchInst::~BranchInst() {
+  if (NumOperands == 1) {
+    if (Use *Prefix = OperandList->getPrefix()) {
+      Op<-1>() = 0;
+      //
+      // mark OperandList to have a special value for scrutiny
+      // by baseclass destructors and operator delete
+      OperandList = Prefix;
+    } else {
+      NumOperands = 3;
+      OperandList = op_begin();
+    }
+  }
+}
+
 
 BasicBlock *BranchInst::getSuccessorV(unsigned idx) const {
   return getSuccessor(idx);
@@ -1037,26 +1062,32 @@ GetElementPtrInst::GetElementPtrInst(Value *Ptr, Value *Idx,
   init(Ptr, Idx, Name);
 }
 
-// getIndexedType - Returns the type of the element that would be loaded with
-// a load instruction with the specified parameters.
-//
-// The Idxs pointer should point to a continuous piece of memory containing the
-// indices, either as Value* or uint64_t.
-//
-// A null type is returned if the indices are invalid for the specified
-// pointer type.
-//
+/// getIndexedType - Returns the type of the element that would be accessed with
+/// a gep instruction with the specified parameters.
+///
+/// The Idxs pointer should point to a continuous piece of memory containing the
+/// indices, either as Value* or uint64_t.
+///
+/// A null type is returned if the indices are invalid for the specified
+/// pointer type.
+///
 template <typename IndexTy>
-static const Type* getIndexedTypeInternal(const Type *Ptr,
-                                  IndexTy const *Idxs,
-                                  unsigned NumIdx) {
+static const Type* getIndexedTypeInternal(const Type *Ptr, IndexTy const *Idxs,
+                                          unsigned NumIdx) {
   const PointerType *PTy = dyn_cast<PointerType>(Ptr);
   if (!PTy) return 0;   // Type isn't a pointer type!
   const Type *Agg = PTy->getElementType();
 
-  // Handle the special case of the empty set index set...
+  // Handle the special case of the empty set index set, which is always valid.
   if (NumIdx == 0)
     return Agg;
+  
+  // If there is at least one index, the top level type must be sized, otherwise
+  // it cannot be 'stepped over'.  We explicitly allow abstract types (those
+  // that contain opaque types) under the assumption that it will be resolved to
+  // a sane type later.
+  if (!Agg->isSized() && !Agg->isAbstract())
+    return 0;
 
   unsigned CurIdx = 1;
   for (; CurIdx != NumIdx; ++CurIdx) {
@@ -2921,7 +2952,8 @@ ReturnInst *ReturnInst::clone() const {
   return new(getNumOperands()) ReturnInst(*this);
 }
 BranchInst *BranchInst::clone() const {
-  return new(getNumOperands()) BranchInst(*this);
+  unsigned Ops(getNumOperands());
+  return new(Ops, Ops == 1) BranchInst(*this);
 }
 SwitchInst *SwitchInst::clone() const { return new SwitchInst(*this); }
 InvokeInst *InvokeInst::clone() const {

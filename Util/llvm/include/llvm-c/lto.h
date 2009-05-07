@@ -30,6 +30,7 @@ typedef enum {
     LTO_SYMBOL_DEFINITION_TENTATIVE   = 0x00000200,    
     LTO_SYMBOL_DEFINITION_WEAK        = 0x00000300,    
     LTO_SYMBOL_DEFINITION_UNDEFINED   = 0x00000400,    
+    LTO_SYMBOL_DEFINITION_WEAKUNDEF   = 0x00000500,
     LTO_SYMBOL_SCOPE_MASK             = 0x00003800,    
     LTO_SYMBOL_SCOPE_INTERNAL         = 0x00000800,    
     LTO_SYMBOL_SCOPE_HIDDEN           = 0x00001000,    
@@ -86,7 +87,7 @@ lto_module_is_object_file(const char* path);
  */
 extern bool
 lto_module_is_object_file_for_target(const char* path, 
-                                            const char* target_triple_prefix);
+                                     const char* target_triple_prefix);
 
 
 /**
@@ -196,6 +197,14 @@ lto_codegen_set_debug_model(lto_code_gen_t cg, lto_debug_model);
  */
 extern bool
 lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model);
+
+
+/**
+ * Sets the location of the "gcc" to run. If not set, libLTO will search for
+ * "gcc" on the path.
+ */
+extern void
+lto_codegen_set_gcc_path(lto_code_gen_t cg, const char* path);
 
 
 /**

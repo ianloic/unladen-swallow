@@ -10,43 +10,56 @@
 // This file implements Loop Index Splitting Pass. This pass handles three
 // kinds of loops.
 //
-// [1] Loop is eliminated when loop body is executed only once. For example,
+// [1] A loop may be eliminated if the body is executed exactly once.
+//     For example,
+//
 // for (i = 0; i < N; ++i) {
-//   if ( i == X) {
+//   if (i == X) {
+//     body;
+//   }
+// }
+//
+// is transformed to
+//
+// i = X;
+// body;
+//
+// [2] A loop's iteration space may be shrunk if the loop body is executed
+//     for a proper sub-range of the loop's iteration space. For example,
+//
+// for (i = 0; i < N; ++i) {
+//   if (i > A && i < B) {
 //     ...
 //   }
 // }
 //
-// [2] Loop's iteration space is shrunk if loop body is executed for certain
-//     range only. For example,
-// 
-// for (i = 0; i < N; ++i) {
-//   if ( i > A && i < B) {
-//     ...
-//   }
-// }
-// is trnasformed to iterators from A to B, if A > 0 and B < N.
+// is transformed to iterators from A to B, if A > 0 and B < N.
 //
-// [3] Loop is split if the loop body is dominated by an branch. For example,
+// [3] A loop may be split if the loop body is dominated by a branch.
+//     For example,
 //
 // for (i = LB; i < UB; ++i) { if (i < SV) A; else B; }
 //
 // is transformed into
+//
 // AEV = BSV = SV
 // for (i = LB; i < min(UB, AEV); ++i)
 //    A;
 // for (i = max(LB, BSV); i < UB; ++i);
 //    B;
+//
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "loop-index-split"
 
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Analysis/LoopPass.h"
-#include "llvm/Analysis/ScalarEvolutionExpander.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
@@ -69,7 +82,6 @@ namespace {
     bool runOnLoop(Loop *L, LPPassManager &LPM);
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<ScalarEvolution>();
       AU.addPreserved<ScalarEvolution>();
       AU.addRequiredID(LCSSAID);
       AU.addPreservedID(LCSSAID);
@@ -173,7 +185,6 @@ namespace {
     Loop *L;
     LPPassManager *LPM;
     LoopInfo *LI;
-    ScalarEvolution *SE;
     DominatorTree *DT;
     DominanceFrontier *DF;
 
@@ -204,7 +215,6 @@ bool LoopIndexSplit::runOnLoop(Loop *IncomingLoop, LPPassManager &LPM_Ref) {
   if (!L->getSubLoops().empty())
     return false;
 
-  SE = &getAnalysis<ScalarEvolution>();
   DT = &getAnalysis<DominatorTree>();
   LI = &getAnalysis<LoopInfo>();
   DF = &getAnalysis<DominanceFrontier>();
@@ -235,15 +245,14 @@ bool LoopIndexSplit::runOnLoop(Loop *IncomingLoop, LPPassManager &LPM_Ref) {
     }
 
   // Reject loop if loop exit condition is not suitable.
-  SmallVector<BasicBlock *, 2> EBs;
-  L->getExitingBlocks(EBs);
-  if (EBs.size() != 1)
+  BasicBlock *ExitingBlock = L->getExitingBlock();
+  if (!ExitingBlock)
     return false;
-  BranchInst *EBR = dyn_cast<BranchInst>(EBs[0]->getTerminator());
+  BranchInst *EBR = dyn_cast<BranchInst>(ExitingBlock->getTerminator());
   if (!EBR) return false;
   ExitCondition = dyn_cast<ICmpInst>(EBR->getCondition());
   if (!ExitCondition) return false;
-  if (EBs[0] != L->getLoopLatch()) return false;
+  if (ExitingBlock != L->getLoopLatch()) return false;
   IVExitValue = ExitCondition->getOperand(1);
   if (!L->isLoopInvariant(IVExitValue))
     IVExitValue = ExitCondition->getOperand(0);
@@ -348,10 +357,25 @@ bool LoopIndexSplit::processOneIterationLoop() {
   if (!L->isLoopInvariant(SplitValue))
     return false;
   Instruction *OPI = dyn_cast<Instruction>(OPV);
-  if (!OPI) return false;
+  if (!OPI) 
+    return false;
   if (OPI->getParent() != Header || isUsedOutsideLoop(OPI, L))
     return false;
-  
+  Value *StartValue = IVStartValue;
+  Value *ExitValue = IVExitValue;;
+
+  if (OPV != IndVar) {
+    // If BR operand is IV based then use this operand to calculate
+    // effective conditions for loop body.
+    BinaryOperator *BOPV = dyn_cast<BinaryOperator>(OPV);
+    if (!BOPV) 
+      return false;
+    if (BOPV->getOpcode() != Instruction::Add) 
+      return false;
+    StartValue = BinaryOperator::CreateAdd(OPV, StartValue, "" , BR);
+    ExitValue = BinaryOperator::CreateAdd(OPV, ExitValue, "" , BR);
+  }
+
   if (!cleanBlock(Header))
     return false;
 
@@ -402,13 +426,13 @@ bool LoopIndexSplit::processOneIterationLoop() {
   //      and i32 c1, c2 
   Instruction *C1 = new ICmpInst(ExitCondition->isSignedPredicate() ? 
                                  ICmpInst::ICMP_SGE : ICmpInst::ICMP_UGE,
-                                 SplitValue, IVStartValue, "lisplit", BR);
+                                 SplitValue, StartValue, "lisplit", BR);
 
   CmpInst::Predicate C2P  = ExitCondition->getPredicate();
   BranchInst *LatchBR = cast<BranchInst>(Latch->getTerminator());
   if (LatchBR->getOperand(0) != Header)
     C2P = CmpInst::getInversePredicate(C2P);
-  Instruction *C2 = new ICmpInst(C2P, SplitValue, IVExitValue, "lisplit", BR);
+  Instruction *C2 = new ICmpInst(C2P, SplitValue, ExitValue, "lisplit", BR);
   Instruction *NSplitCond = BinaryOperator::CreateAnd(C1, C2, "lisplit", BR);
 
   SplitCondition->replaceAllUsesWith(NSplitCond);
@@ -422,11 +446,11 @@ bool LoopIndexSplit::processOneIterationLoop() {
     if (Header != *SI)
       LatchSucc = *SI;
   }
-  LatchBR->setUnconditionalDest(LatchSucc);
 
-  // Remove IVIncrement
-  IVIncrement->replaceAllUsesWith(UndefValue::get(IVIncrement->getType()));
-  IVIncrement->eraseFromParent();
+  // Clean up latch block.
+  Value *LatchBRCond = LatchBR->getCondition();
+  LatchBR->setUnconditionalDest(LatchSucc);
+  RecursivelyDeleteTriviallyDeadInstructions(LatchBRCond);
   
   LPM->deleteLoopFromQueue(L);
 
@@ -535,6 +559,21 @@ bool LoopIndexSplit::updateLoopIterationSpace() {
   BasicBlock *ExitingBlock = ExitCondition->getParent();
   if (!cleanBlock(ExitingBlock)) return false;
 
+  // If the merge point for BR is not loop latch then skip this loop.
+  if (BR->getSuccessor(0) != Latch) {
+    DominanceFrontier::iterator DF0 = DF->find(BR->getSuccessor(0));
+    assert (DF0 != DF->end() && "Unable to find dominance frontier");
+    if (!DF0->second.count(Latch))
+      return false;
+  }
+  
+  if (BR->getSuccessor(1) != Latch) {
+    DominanceFrontier::iterator DF1 = DF->find(BR->getSuccessor(1));
+    assert (DF1 != DF->end() && "Unable to find dominance frontier");
+    if (!DF1->second.count(Latch))
+      return false;
+  }
+    
   // Verify that loop exiting block has only two predecessor, where one pred
   // is split condition block. The other predecessor will become exiting block's
   // dominator after CFG is updated. TODO : Handle CFG's where exiting block has
@@ -661,14 +700,15 @@ void LoopIndexSplit::removeBlocks(BasicBlock *DeadBB, Loop *LP,
 
   while (!WorkList.empty()) {
     BasicBlock *BB = WorkList.back(); WorkList.pop_back();
+    LPM->deleteSimpleAnalysisValue(BB, LP);
     for(BasicBlock::iterator BBI = BB->begin(), BBE = BB->end(); 
         BBI != BBE; ) {
       Instruction *I = BBI;
       ++BBI;
       I->replaceAllUsesWith(UndefValue::get(I->getType()));
+      LPM->deleteSimpleAnalysisValue(I, LP);
       I->eraseFromParent();
     }
-    LPM->deleteSimpleAnalysisValue(BB, LP);
     DT->eraseNode(BB);
     DF->removeBlock(BB);
     LI->removeBlock(BB);
@@ -1031,7 +1071,7 @@ bool LoopIndexSplit::splitLoop() {
   DT->changeImmediateDominator(B_ExitBlock, B_ExitingBlock);
   DF->changeImmediateDominator(B_ExitBlock, B_ExitingBlock, DT);
 
- //[*] Split ALoop's exit edge. This creates a new block which
+  //[*] Split ALoop's exit edge. This creates a new block which
   //    serves two purposes. First one is to hold PHINode defnitions
   //    to ensure that ALoop's LCSSA form. Second use it to act
   //    as a preheader for BLoop.
@@ -1104,7 +1144,8 @@ bool LoopIndexSplit::cleanBlock(BasicBlock *BB) {
     Instruction *I = BI;
 
     if (isa<PHINode>(I) || I == Terminator || I == ExitCondition
-        || I == SplitCondition || IVBasedValues.count(I))
+        || I == SplitCondition || IVBasedValues.count(I) 
+        || isa<DbgInfoIntrinsic>(I))
       continue;
 
     if (I->mayWriteToMemory())

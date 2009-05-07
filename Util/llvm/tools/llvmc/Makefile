@@ -9,11 +9,9 @@
 
 LEVEL = ../..
 
-BUILTIN_PLUGINS = Base Clang
-DRIVER_NAME = llvmc
-DIRS = plugins driver
+export LLVMC_BASED_DRIVER_NAME = llvmc
+export LLVMC_BUILTIN_PLUGINS = Base Clang
 
-export BUILTIN_PLUGINS
-export DRIVER_NAME
+DIRS = plugins driver
 
 include $(LEVEL)/Makefile.common

@@ -17,6 +17,7 @@
 #define CLANG_CODEGEN_OBCJRUNTIME_H
 #include "clang/Basic/IdentifierTable.h" // Selector
 #include "llvm/ADT/SmallVector.h"
+#include "clang/AST/DeclObjC.h"
 #include <string>
 
 #include "CGBuilder.h"
@@ -25,10 +26,12 @@
 
 namespace llvm {
   class Constant;
+  class Function;
+  class Module;
+  class StructLayout;
+  class StructType;
   class Type;
   class Value;
-  class Module;
-  class Function;
 }
 
 namespace clang {
@@ -36,6 +39,7 @@ namespace CodeGen {
   class CodeGenFunction;
 }
 
+  class FieldDecl;
   class ObjCAtTryStmt;
   class ObjCAtThrowStmt;
   class ObjCAtSynchronizedStmt;
@@ -48,6 +52,7 @@ namespace CodeGen {
   class ObjCProtocolDecl;
   class Selector;
   class ObjCIvarDecl;
+  class ObjCStringLiteral;
 
 namespace CodeGen {
   class CodeGenModule;
@@ -57,6 +62,31 @@ namespace CodeGen {
 
 /// Implements runtime-specific code generation functions.
 class CGObjCRuntime {
+public:
+  // Utility functions for unified ivar access. These need to
+  // eventually be folded into other places (the structure layout
+  // code).
+
+protected:
+  /// Compute an offset to the given ivar, suitable for passing to
+  /// EmitValueForIvarAtOffset.  Note that the correct handling of
+  /// bit-fields is carefully coordinated by these two, use caution!
+  ///
+  /// The latter overload is suitable for computing the offset of a
+  /// sythesized ivar.
+  uint64_t ComputeIvarBaseOffset(CodeGen::CodeGenModule &CGM,
+                                 const ObjCInterfaceDecl *OID,
+                                 const ObjCIvarDecl *Ivar);
+  uint64_t ComputeIvarBaseOffset(CodeGen::CodeGenModule &CGM,
+                                 const ObjCImplementationDecl *OID,
+                                 const ObjCIvarDecl *Ivar);
+
+  LValue EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
+                                  const ObjCInterfaceDecl *OID,
+                                  llvm::Value *BaseValue,
+                                  const ObjCIvarDecl *Ivar,
+                                  unsigned CVRQualifiers,
+                                  llvm::Value *Offset);  
 
 public:
   virtual ~CGObjCRuntime();
@@ -71,8 +101,12 @@ public:
   virtual llvm::Value *GetSelector(CGBuilderTy &Builder,
                                    Selector Sel) = 0;
 
+  /// Get a typed selector.  
+  virtual llvm::Value *GetSelector(CGBuilderTy &Builder,
+                                   const ObjCMethodDecl *Method) = 0;
+
   /// Generate a constant string object.
-  virtual llvm::Constant *GenerateConstantString(const std::string &String) = 0;
+  virtual llvm::Constant *GenerateConstantString(const ObjCStringLiteral *) = 0;
 
   /// Generate a category.  A category contains a list of methods (and
   /// accompanying metadata) and a list of protocols.
@@ -81,14 +115,15 @@ public:
   /// Generate a class stucture for this class.
   virtual void GenerateClass(const ObjCImplementationDecl *OID) = 0;
   
-  /// Generate an Objective-C message send operation.
+  /// Generate an Objective-C message send operation. 
   virtual CodeGen::RValue 
   GenerateMessageSend(CodeGen::CodeGenFunction &CGF,
                       QualType ResultType,
                       Selector Sel,
                       llvm::Value *Receiver,
                       bool IsClassMessage,
-                      const CallArgList &CallArgs) = 0;
+                      const CallArgList &CallArgs,
+                      const ObjCMethodDecl *Method=0) = 0;
 
   /// Generate an Objective-C message send operation to the super
   /// class initiated in a method for Class and with the given Self
@@ -98,6 +133,7 @@ public:
                            QualType ResultType,
                            Selector Sel,
                            const ObjCInterfaceDecl *Class,
+                           bool isCategoryImpl,
                            llvm::Value *Self,
                            bool IsClassMessage,
                            const CallArgList &CallArgs) = 0;
@@ -122,10 +158,10 @@ public:
                                          const ObjCContainerDecl *CD) = 0;
 
   /// Return the runtime function for getting properties.
-  virtual llvm::Function *GetPropertyGetFunction() = 0;
+  virtual llvm::Constant *GetPropertyGetFunction() = 0;
   
   /// Return the runtime function for setting properties.
-  virtual llvm::Function *GetPropertySetFunction() = 0;
+  virtual llvm::Constant *GetPropertySetFunction() = 0;
 
   /// GetClass - Return a reference to the class for the given
   /// interface decl.
@@ -134,20 +170,14 @@ public:
 
   /// EnumerationMutationFunction - Return the function that's called by the
   /// compiler when a mutation is detected during foreach iteration.
-  virtual llvm::Function *EnumerationMutationFunction() = 0;
-    
-  /// If instance variable addresses are determined at runtime then this should
-  /// return true, otherwise instance variables will be accessed directly from
-  /// the structure.  If this returns true then @defs is invalid for this
-  /// runtime and a warning should be generated.
-  virtual bool LateBoundIVars() const { return false; }
-
+  virtual llvm::Constant *EnumerationMutationFunction() = 0;
+  
   virtual void EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
                                          const Stmt &S) = 0;
   virtual void EmitThrowStmt(CodeGen::CodeGenFunction &CGF,
                              const ObjCAtThrowStmt &S) = 0;
-  virtual llvm::Value * EmitObjCWeakRead(CodeGen::CodeGenFunction &CGF,
-                                         llvm::Value *AddrWeakObj) = 0;
+  virtual llvm::Value *EmitObjCWeakRead(CodeGen::CodeGenFunction &CGF,
+                                        llvm::Value *AddrWeakObj) = 0;
   virtual void EmitObjCWeakAssign(CodeGen::CodeGenFunction &CGF,
                                   llvm::Value *src, llvm::Value *dest) = 0;
   virtual void EmitObjCGlobalAssign(CodeGen::CodeGenFunction &CGF,
@@ -157,12 +187,14 @@ public:
   virtual void EmitObjCStrongCastAssign(CodeGen::CodeGenFunction &CGF,
                                         llvm::Value *src, llvm::Value *dest) = 0;
   
-  virtual llvm::Value *EmitObjCValueForIvar(CodeGen::CodeGenFunction &CGF,
-                                            QualType ObjectTy,
-                                            llvm::Value *BaseValue,
-                                            const ObjCIvarDecl *Ivar,
-                                            const FieldDecl *Field,
-                                            unsigned CVRQualifiers) = 0;
+  virtual LValue EmitObjCValueForIvar(CodeGen::CodeGenFunction &CGF,
+                                      QualType ObjectTy,
+                                      llvm::Value *BaseValue,
+                                      const ObjCIvarDecl *Ivar,
+                                      unsigned CVRQualifiers) = 0;
+  virtual llvm::Value *EmitIvarOffset(CodeGen::CodeGenFunction &CGF,
+                                      const ObjCInterfaceDecl *Interface,
+                                      const ObjCIvarDecl *Ivar) = 0;
 };
 
 /// Creates an instance of an Objective-C runtime class.  

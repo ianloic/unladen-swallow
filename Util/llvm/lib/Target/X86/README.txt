@@ -233,94 +233,9 @@ Optimize copysign(x, *y) to use an integer load from y.
 
 //===---------------------------------------------------------------------===//
 
-%X = weak global int 0
-
-void %foo(int %N) {
-	%N = cast int %N to uint
-	%tmp.24 = setgt int %N, 0
-	br bool %tmp.24, label %no_exit, label %return
-
-no_exit:
-	%indvar = phi uint [ 0, %entry ], [ %indvar.next, %no_exit ]
-	%i.0.0 = cast uint %indvar to int
-	volatile store int %i.0.0, int* %X
-	%indvar.next = add uint %indvar, 1
-	%exitcond = seteq uint %indvar.next, %N
-	br bool %exitcond, label %return, label %no_exit
-
-return:
-	ret void
-}
-
-compiles into:
-
-	.text
-	.align	4
-	.globl	_foo
-_foo:
-	movl 4(%esp), %eax
-	cmpl $1, %eax
-	jl LBB_foo_4	# return
-LBB_foo_1:	# no_exit.preheader
-	xorl %ecx, %ecx
-LBB_foo_2:	# no_exit
-	movl L_X$non_lazy_ptr, %edx
-	movl %ecx, (%edx)
-	incl %ecx
-	cmpl %eax, %ecx
-	jne LBB_foo_2	# no_exit
-LBB_foo_3:	# return.loopexit
-LBB_foo_4:	# return
-	ret
-
-We should hoist "movl L_X$non_lazy_ptr, %edx" out of the loop after
-remateralization is implemented. This can be accomplished with 1) a target
-dependent LICM pass or 2) makeing SelectDAG represent the whole function. 
-
-//===---------------------------------------------------------------------===//
-
 The following tests perform worse with LSR:
 
 lambda, siod, optimizer-eval, ackermann, hash2, nestedloop, strcat, and Treesor.
-
-//===---------------------------------------------------------------------===//
-
-We are generating far worse code than gcc:
-
-volatile short X, Y;
-
-void foo(int N) {
-  int i;
-  for (i = 0; i < N; i++) { X = i; Y = i*4; }
-}
-
-LBB1_1:	# entry.bb_crit_edge
-	xorl	%ecx, %ecx
-	xorw	%dx, %dx
-LBB1_2:	# bb
-	movl	L_X$non_lazy_ptr, %esi
-	movw	%cx, (%esi)
-	movl	L_Y$non_lazy_ptr, %esi
-	movw	%dx, (%esi)
-	addw	$4, %dx
-	incl	%ecx
-	cmpl	%eax, %ecx
-	jne	LBB1_2	# bb
-
-vs.
-
-	xorl	%edx, %edx
-	movl	L_X$non_lazy_ptr-"L00000000001$pb"(%ebx), %esi
-	movl	L_Y$non_lazy_ptr-"L00000000001$pb"(%ebx), %ecx
-L4:
-	movw	%dx, (%esi)
-	leal	0(,%edx,4), %eax
-	movw	%ax, (%ecx)
-	addl	$1, %edx
-	cmpl	%edx, %edi
-	jne	L4
-
-This is due to the lack of post regalloc LICM.
 
 //===---------------------------------------------------------------------===//
 
@@ -1831,3 +1746,138 @@ unsigned long f2(struct s2 x) {
 
 //===---------------------------------------------------------------------===//
 
+We currently compile this:
+
+define i32 @func1(i32 %v1, i32 %v2) nounwind {
+entry:
+  %t = call {i32, i1} @llvm.sadd.with.overflow.i32(i32 %v1, i32 %v2)
+  %sum = extractvalue {i32, i1} %t, 0
+  %obit = extractvalue {i32, i1} %t, 1
+  br i1 %obit, label %overflow, label %normal
+normal:
+  ret i32 %sum
+overflow:
+  call void @llvm.trap()
+  unreachable
+}
+declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)
+declare void @llvm.trap()
+
+to:
+
+_func1:
+	movl	4(%esp), %eax
+	addl	8(%esp), %eax
+	jo	LBB1_2	## overflow
+LBB1_1:	## normal
+	ret
+LBB1_2:	## overflow
+	ud2
+
+it would be nice to produce "into" someday.
+
+//===---------------------------------------------------------------------===//
+
+This code:
+
+void vec_mpys1(int y[], const int x[], int scaler) {
+int i;
+for (i = 0; i < 150; i++)
+ y[i] += (((long long)scaler * (long long)x[i]) >> 31);
+}
+
+Compiles to this loop with GCC 3.x:
+
+.L5:
+	movl	%ebx, %eax
+	imull	(%edi,%ecx,4)
+	shrdl	$31, %edx, %eax
+	addl	%eax, (%esi,%ecx,4)
+	incl	%ecx
+	cmpl	$149, %ecx
+	jle	.L5
+
+llvm-gcc compiles it to the much uglier:
+
+LBB1_1:	## bb1
+	movl	24(%esp), %eax
+	movl	(%eax,%edi,4), %ebx
+	movl	%ebx, %ebp
+	imull	%esi, %ebp
+	movl	%ebx, %eax
+	mull	%ecx
+	addl	%ebp, %edx
+	sarl	$31, %ebx
+	imull	%ecx, %ebx
+	addl	%edx, %ebx
+	shldl	$1, %eax, %ebx
+	movl	20(%esp), %eax
+	addl	%ebx, (%eax,%edi,4)
+	incl	%edi
+	cmpl	$150, %edi
+	jne	LBB1_1	## bb1
+
+//===---------------------------------------------------------------------===//
+
+Test instructions can be eliminated by using EFLAGS values from arithmetic
+instructions. This is currently not done for mul, and, or, xor, neg, shl,
+sra, srl, shld, shrd, atomic ops, and others. It is also currently not done
+for read-modify-write instructions. It is also current not done if the
+OF or CF flags are needed.
+
+The shift operators have the complication that when the shift count is
+zero, EFLAGS is not set, so they can only subsume a test instruction if
+the shift count is known to be non-zero. Also, using the EFLAGS value
+from a shift is apparently very slow on some x86 implementations.
+
+In read-modify-write instructions, the root node in the isel match is
+the store, and isel has no way for the use of the EFLAGS result of the
+arithmetic to be remapped to the new node.
+
+Add and subtract instructions set OF on signed overflow and CF on unsiged
+overflow, while test instructions always clear OF and CF. In order to
+replace a test with an add or subtract in a situation where OF or CF is
+needed, codegen must be able to prove that the operation cannot see
+signed or unsigned overflow, respectively.
+
+//===---------------------------------------------------------------------===//
+
+memcpy/memmove do not lower to SSE copies when possible.  A silly example is:
+define <16 x float> @foo(<16 x float> %A) nounwind {
+	%tmp = alloca <16 x float>, align 16
+	%tmp2 = alloca <16 x float>, align 16
+	store <16 x float> %A, <16 x float>* %tmp
+	%s = bitcast <16 x float>* %tmp to i8*
+	%s2 = bitcast <16 x float>* %tmp2 to i8*
+	call void @llvm.memcpy.i64(i8* %s, i8* %s2, i64 64, i32 16)
+	%R = load <16 x float>* %tmp2
+	ret <16 x float> %R
+}
+
+declare void @llvm.memcpy.i64(i8* nocapture, i8* nocapture, i64, i32) nounwind
+
+which compiles to:
+
+_foo:
+	subl	$140, %esp
+	movaps	%xmm3, 112(%esp)
+	movaps	%xmm2, 96(%esp)
+	movaps	%xmm1, 80(%esp)
+	movaps	%xmm0, 64(%esp)
+	movl	60(%esp), %eax
+	movl	%eax, 124(%esp)
+	movl	56(%esp), %eax
+	movl	%eax, 120(%esp)
+	movl	52(%esp), %eax
+        <many many more 32-bit copies>
+      	movaps	(%esp), %xmm0
+	movaps	16(%esp), %xmm1
+	movaps	32(%esp), %xmm2
+	movaps	48(%esp), %xmm3
+	addl	$140, %esp
+	ret
+
+On Nehalem, it may even be cheaper to just use movups when unaligned than to
+fall back to lower-granularity chunks.
+
+//===---------------------------------------------------------------------===//

@@ -38,7 +38,7 @@ using namespace llvm;
 
 MemoryBuffer::~MemoryBuffer() {
   if (MustDeleteBuffer)
-    delete [] BufferStart;
+    free((void*)BufferStart);
 }
 
 /// initCopyOf - Initialize this source buffer with a copy of the specified
@@ -46,7 +46,7 @@ MemoryBuffer::~MemoryBuffer() {
 /// successfully.
 void MemoryBuffer::initCopyOf(const char *BufStart, const char *BufEnd) {
   size_t Size = BufEnd-BufStart;
-  BufferStart = new char[Size+1];
+  BufferStart = (char *)malloc((Size+1) * sizeof(char));
   BufferEnd = BufferStart+Size;
   memcpy(const_cast<char*>(BufferStart), BufStart, Size);
   *const_cast<char*>(BufferEnd) = 0;   // Null terminate buffer.
@@ -108,7 +108,8 @@ MemoryBuffer *MemoryBuffer::getMemBufferCopy(const char *StartPtr,
 /// the MemoryBuffer object.
 MemoryBuffer *MemoryBuffer::getNewUninitMemBuffer(size_t Size,
                                                   const char *BufferName) {
-  char *Buf = new char[Size+1];
+  char *Buf = (char *)malloc((Size+1) * sizeof(char));
+  if (!Buf) return 0;
   Buf[Size] = 0;
   MemoryBufferMem *SB = new MemoryBufferMem(Buf, Buf+Size, BufferName);
   // The memory for this buffer is owned by the MemoryBuffer.
@@ -123,6 +124,7 @@ MemoryBuffer *MemoryBuffer::getNewUninitMemBuffer(size_t Size,
 MemoryBuffer *MemoryBuffer::getNewMemBuffer(size_t Size,
                                             const char *BufferName) {
   MemoryBuffer *SB = getNewUninitMemBuffer(Size, BufferName);
+  if (!SB) return 0;
   memset(const_cast<char*>(SB->getBufferStart()), 0, Size+1);
   return SB;
 }
@@ -209,9 +211,16 @@ MemoryBuffer *MemoryBuffer::getFile(const char *Filename, std::string *ErrStr,
       return new MemoryBufferMMapFile(Filename, Pages, FileSize);
     }
   }
-  
-  OwningPtr<MemoryBuffer> SB;
-  SB.reset(MemoryBuffer::getNewUninitMemBuffer(FileSize, Filename));
+
+  MemoryBuffer *Buf = MemoryBuffer::getNewUninitMemBuffer(FileSize, Filename);
+  if (!Buf) {
+    // Failed to create a buffer.
+    if (ErrStr) *ErrStr = "could not allocate buffer";
+    ::close(FD);
+    return 0;
+  }
+
+  OwningPtr<MemoryBuffer> SB(Buf);
   char *BufPtr = const_cast<char*>(SB->getBufferStart());
   
   size_t BytesLeft = FileSize;

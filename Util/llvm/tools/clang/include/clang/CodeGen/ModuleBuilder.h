@@ -23,7 +23,8 @@ namespace llvm {
 
 namespace clang {
   class Diagnostic;
-  struct LangOptions;
+  class LangOptions;
+  class CompileOptions;
   
   class CodeGenerator : public ASTConsumer {
   public:
@@ -32,9 +33,8 @@ namespace clang {
   };
   
   CodeGenerator *CreateLLVMCodeGen(Diagnostic &Diags,
-                                   const LangOptions &Features,
-                                   const std::string& ModuleName,
-                                   bool GenerateDebugInfo);
+                                   const std::string &ModuleName,
+                                   const CompileOptions &CO);
 }
 
 #endif

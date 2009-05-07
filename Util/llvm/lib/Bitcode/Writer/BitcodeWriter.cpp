@@ -276,15 +276,18 @@ static unsigned getEncodedLinkage(const GlobalValue *GV) {
   default: assert(0 && "Invalid linkage!");
   case GlobalValue::GhostLinkage:  // Map ghost linkage onto external.
   case GlobalValue::ExternalLinkage:     return 0;
-  case GlobalValue::WeakLinkage:         return 1;
+  case GlobalValue::WeakAnyLinkage:      return 1;
   case GlobalValue::AppendingLinkage:    return 2;
   case GlobalValue::InternalLinkage:     return 3;
-  case GlobalValue::LinkOnceLinkage:     return 4;
+  case GlobalValue::LinkOnceAnyLinkage:  return 4;
   case GlobalValue::DLLImportLinkage:    return 5;
   case GlobalValue::DLLExportLinkage:    return 6;
   case GlobalValue::ExternalWeakLinkage: return 7;
   case GlobalValue::CommonLinkage:       return 8;
   case GlobalValue::PrivateLinkage:      return 9;
+  case GlobalValue::WeakODRLinkage:      return 10;
+  case GlobalValue::LinkOnceODRLinkage:  return 11;
+  case GlobalValue::AvailableExternallyLinkage:  return 12;
   }
 }
 
@@ -456,6 +459,8 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
   unsigned String8Abbrev = 0;
   unsigned CString7Abbrev = 0;
   unsigned CString6Abbrev = 0;
+  unsigned MDString8Abbrev = 0;
+  unsigned MDString6Abbrev = 0;
   // If this is a constant pool for the module, emit module-specific abbrevs.
   if (isGlobal) {
     // Abbrev for CST_CODE_AGGREGATE.
@@ -483,6 +488,19 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
     Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
     Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Char6));
     CString6Abbrev = Stream.EmitAbbrev(Abbv);
+
+    // Abbrev for CST_CODE_MDSTRING.
+    Abbv = new BitCodeAbbrev();
+    Abbv->Add(BitCodeAbbrevOp(bitc::CST_CODE_MDSTRING));
+    Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
+    Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 8));
+    MDString8Abbrev = Stream.EmitAbbrev(Abbv);
+    // Abbrev for CST_CODE_MDSTRING.
+    Abbv = new BitCodeAbbrev();
+    Abbv->Add(BitCodeAbbrevOp(bitc::CST_CODE_MDSTRING));
+    Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
+    Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Char6));
+    MDString6Abbrev = Stream.EmitAbbrev(Abbv);
   }  
   
   SmallVector<uint64_t, 64> Record;
@@ -557,10 +575,11 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
         Record.push_back(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
       } else if (Ty == Type::X86_FP80Ty) {
         // api needed to prevent premature destruction
+        // bits are not in the same order as a normal i80 APInt, compensate.
         APInt api = CFP->getValueAPF().bitcastToAPInt();
         const uint64_t *p = api.getRawData();
-        Record.push_back(p[0]);
-        Record.push_back((uint16_t)p[1]);
+        Record.push_back((p[1] << 48) | (p[0] >> 16));
+        Record.push_back(p[0] & 0xffffLL);
       } else if (Ty == Type::FP128Ty || Ty == Type::PPC_FP128Ty) {
         APInt api = CFP->getValueAPF().bitcastToAPInt();
         const uint64_t *p = api.getRawData();
@@ -643,7 +662,16 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
         Record.push_back(VE.getValueID(C->getOperand(2)));
         break;
       case Instruction::ShuffleVector:
-        Code = bitc::CST_CODE_CE_SHUFFLEVEC;
+        // If the return type and argument types are the same, this is a
+        // standard shufflevector instruction.  If the types are different,
+        // then the shuffle is widening or truncating the input vectors, and
+        // the argument type must also be encoded.
+        if (C->getType() == C->getOperand(0)->getType()) {
+          Code = bitc::CST_CODE_CE_SHUFFLEVEC;
+        } else {
+          Code = bitc::CST_CODE_CE_SHUFVEC_EX;
+          Record.push_back(VE.getTypeID(C->getOperand(0)->getType()));
+        }
         Record.push_back(VE.getValueID(C->getOperand(0)));
         Record.push_back(VE.getValueID(C->getOperand(1)));
         Record.push_back(VE.getValueID(C->getOperand(2)));
@@ -665,6 +693,22 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
         Record.push_back(VE.getValueID(C->getOperand(1)));
         Record.push_back(CE->getPredicate());
         break;
+      }
+    } else if (const MDString *S = dyn_cast<MDString>(C)) {
+      Code = bitc::CST_CODE_MDSTRING;
+      AbbrevToUse = MDString6Abbrev;
+      for (unsigned i = 0, e = S->size(); i != e; ++i) {
+        char V = S->begin()[i];
+        Record.push_back(V);
+
+        if (!BitCodeAbbrevOp::isChar6(V))
+          AbbrevToUse = MDString8Abbrev;
+      }
+    } else if (const MDNode *N = dyn_cast<MDNode>(C)) {
+      Code = bitc::CST_CODE_MDNODE;
+      for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
+        Record.push_back(VE.getTypeID(N->getOperand(i)->getType()));
+        Record.push_back(VE.getValueID(N->getOperand(i)));
       }
     } else {
       assert(0 && "Unknown constant!");

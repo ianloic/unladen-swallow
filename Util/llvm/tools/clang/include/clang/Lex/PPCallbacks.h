@@ -21,6 +21,7 @@
 namespace clang {
   class SourceLocation;
   class IdentifierInfo;
+  class MacroInfo;
     
 /// PPCallbacks - This interface provides a way to observe the actions of the
 /// preprocessor as it does its thing.  Clients can define their hooks here to
@@ -54,6 +55,65 @@ public:
                              const std::string &Str) {
   }
   
+  /// MacroExpands - This is called by
+  /// Preprocessor::HandleMacroExpandedIdentifier when a macro invocation is
+  /// found.
+  virtual void MacroExpands(const Token &Id, const MacroInfo* MI) {
+  }
+  
+  /// MacroDefined - This hook is called whenever a macro definition is seen.
+  virtual void MacroDefined(const IdentifierInfo *II, const MacroInfo *MI) {
+  }
+
+  /// MacroUndefined - This hook is called whenever a macro #undef is seen.
+  /// MI is released immediately following this callback.
+  virtual void MacroUndefined(const IdentifierInfo *II, const MacroInfo *MI) {
+  }
+};
+
+/// PPChainedCallbacks - Simple wrapper class for chaining callbacks.
+class PPChainedCallbacks : public PPCallbacks {
+  PPCallbacks *First, *Second;
+
+public:  
+  PPChainedCallbacks(PPCallbacks *_First, PPCallbacks *_Second)
+    : First(_First), Second(_Second) {}
+  ~PPChainedCallbacks() {
+    delete Second;
+    delete First;
+  }
+
+  virtual void FileChanged(SourceLocation Loc, FileChangeReason Reason,
+                           SrcMgr::CharacteristicKind FileType) {
+    First->FileChanged(Loc, Reason, FileType);
+    Second->FileChanged(Loc, Reason, FileType);
+  }
+  
+  virtual void Ident(SourceLocation Loc, const std::string &str) {
+    First->Ident(Loc, str);
+    Second->Ident(Loc, str);
+  }
+  
+  virtual void PragmaComment(SourceLocation Loc, const IdentifierInfo *Kind, 
+                             const std::string &Str) {
+    First->PragmaComment(Loc, Kind, Str);
+    Second->PragmaComment(Loc, Kind, Str);
+  }
+  
+  virtual void MacroExpands(const Token &Id, const MacroInfo* MI) {
+    First->MacroExpands(Id, MI);
+    Second->MacroExpands(Id, MI);
+  }
+  
+  virtual void MacroDefined(const IdentifierInfo *II, const MacroInfo *MI) {
+    First->MacroDefined(II, MI);
+    Second->MacroDefined(II, MI);
+  }
+
+  virtual void MacroUndefined(const IdentifierInfo *II, const MacroInfo *MI) {
+    First->MacroUndefined(II, MI);
+    Second->MacroUndefined(II, MI);
+  }
 };
 
 }  // end namespace clang

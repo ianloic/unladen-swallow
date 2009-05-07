@@ -26,7 +26,6 @@ namespace clang {
 class GRState;
 class GRStateManager;
 class SVal;
-class SymbolRef;
 
 class ConstraintManager {
 public:
@@ -38,7 +37,8 @@ public:
                                        SVal UpperBound, bool Assumption,
                                        bool& isFeasible) = 0;
 
-  virtual const llvm::APSInt* getSymVal(const GRState* St, SymbolRef sym) = 0;
+  virtual const llvm::APSInt* getSymVal(const GRState* St, SymbolRef sym)
+    const = 0;
 
   virtual bool isEqual(const GRState* St, SymbolRef sym, 
                        const llvm::APSInt& V) const = 0;
@@ -50,9 +50,17 @@ public:
                      const char* nl, const char *sep) = 0;
 
   virtual void EndPath(const GRState* St) {}
+  
+  /// canReasonAbout - Not all ConstraintManagers can accurately reason about
+  ///  all SVal values.  This method returns true if the ConstraintManager can
+  ///  reasonably handle a given SVal value.  This is typically queried by
+  ///  GRExprEngine to determine if the value should be replaced with a
+  ///  conjured symbolic value in order to recover some precision.
+  virtual bool canReasonAbout(SVal X) const = 0;
 };
 
 ConstraintManager* CreateBasicConstraintManager(GRStateManager& statemgr);
+ConstraintManager* CreateRangeConstraintManager(GRStateManager& statemgr);
 
 } // end clang namespace
 

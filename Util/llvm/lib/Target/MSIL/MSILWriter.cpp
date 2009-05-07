@@ -35,7 +35,8 @@ namespace {
 
     virtual bool WantsWholeFile() const { return true; }
     virtual bool addPassesToEmitWholeFile(PassManager &PM, raw_ostream &Out,
-                                         CodeGenFileType FileType, bool Fast);
+                                          CodeGenFileType FileType,
+                                          CodeGenOpt::Level OptLevel);
 
     // This class always works, but shouldn't be the default in most cases.
     static unsigned getModuleMatchQuality(const Module &M) { return 1; }
@@ -93,6 +94,12 @@ char MSILWriter::ID = 0;
 
 bool MSILWriter::runOnFunction(Function &F) {
   if (F.isDeclaration()) return false;
+
+  // Do not codegen any 'available_externally' functions at all, they have
+  // definitions outside the translation unit.
+  if (F.hasAvailableExternallyLinkage())
+    return false;
+
   LInfo = &getAnalysis<LoopInfo>();
   printFunction(F);
   return false;
@@ -178,7 +185,7 @@ void MSILWriter::printModuleStartup() {
     Out << "\tldc.i4.0\n\tret\n}\n";
     return;
   }
-  bool BadSig = true;;
+  bool BadSig = true;
   std::string Args("");
   Function::const_arg_iterator Arg1,Arg2;
 
@@ -1656,7 +1663,8 @@ void MSILWriter::printExternals() {
 //===----------------------------------------------------------------------===//
 
 bool MSILTarget::addPassesToEmitWholeFile(PassManager &PM, raw_ostream &o,
-                                          CodeGenFileType FileType, bool Fast)
+                                          CodeGenFileType FileType,
+                                          CodeGenOpt::Level OptLevel)
 {
   if (FileType != TargetMachine::AssemblyFile) return true;
   MSILWriter* Writer = new MSILWriter(o);

@@ -68,7 +68,8 @@ unsigned SparcTargetMachine::getModuleMatchQuality(const Module &M) {
 #endif
 }
 
-bool SparcTargetMachine::addInstSelector(PassManagerBase &PM, bool Fast) {
+bool SparcTargetMachine::addInstSelector(PassManagerBase &PM,
+                                         CodeGenOpt::Level OptLevel) {
   PM.add(createSparcISelDag(*this));
   return false;
 }
@@ -76,15 +77,18 @@ bool SparcTargetMachine::addInstSelector(PassManagerBase &PM, bool Fast) {
 /// addPreEmitPass - This pass may be implemented by targets that want to run
 /// passes immediately before machine code is emitted.  This should return
 /// true if -print-machineinstrs should print out the code after the passes.
-bool SparcTargetMachine::addPreEmitPass(PassManagerBase &PM, bool Fast) {
+bool SparcTargetMachine::addPreEmitPass(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel){
   PM.add(createSparcFPMoverPass(*this));
   PM.add(createSparcDelaySlotFillerPass(*this));
   return true;
 }
 
-bool SparcTargetMachine::addAssemblyEmitter(PassManagerBase &PM, bool Fast, 
+bool SparcTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool Verbose,
                                             raw_ostream &Out) {
   // Output assembly language.
-  PM.add(createSparcCodePrinterPass(Out, *this));
+  PM.add(createSparcCodePrinterPass(Out, *this, OptLevel, Verbose));
   return false;
 }

@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 typedef struct objc_class *Class;
 typedef struct objc_object {
@@ -24,8 +24,8 @@ typedef struct objc_object {
 
 @implementation MyList (BasicTest)
 - (void)compilerTestAgainst {
-    static i;
-        for (id el, elem in self)  // expected-error {{Only one element declaration is allowed}}
+    static i;// expected-warning {{type specifier missing, defaults to 'int'}}
+        for (id el, elem in self)  // expected-error {{only one element declaration is allowed}}
            ++i;
         for (id el in self) 
            ++i;

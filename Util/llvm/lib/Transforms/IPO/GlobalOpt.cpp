@@ -50,6 +50,8 @@ STATISTIC(NumShrunkToBool  , "Number of global vars shrunk to booleans");
 STATISTIC(NumFastCallFns   , "Number of functions converted to fastcc");
 STATISTIC(NumCtorsEvaluated, "Number of static ctors evaluated");
 STATISTIC(NumNestRemoved   , "Number of nest attributes removed");
+STATISTIC(NumAliasesResolved, "Number of global aliases resolved");
+STATISTIC(NumAliasesRemoved, "Number of global aliases eliminated");
 
 namespace {
   struct VISIBILITY_HIDDEN GlobalOpt : public ModulePass {
@@ -65,7 +67,7 @@ namespace {
     GlobalVariable *FindGlobalCtors(Module &M);
     bool OptimizeFunctions(Module &M);
     bool OptimizeGlobalVars(Module &M);
-    bool ResolveAliases(Module &M);
+    bool OptimizeGlobalAliases(Module &M);
     bool OptimizeGlobalCtorsList(GlobalVariable *&GCL);
     bool ProcessInternalGlobal(GlobalVariable *GV,Module::global_iterator &GVI);
   };
@@ -217,7 +219,7 @@ static bool AnalyzeGlobal(Value *V, GlobalStatus &GS,
           if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
         GS.HasPHIUser = true;
       } else if (isa<CmpInst>(I)) {
-      } else if (isa<MemCpyInst>(I) || isa<MemMoveInst>(I)) {
+      } else if (isa<MemTransferInst>(I)) {
         if (I->getOperand(1) == V)
           GS.StoredType = GlobalStatus::isStored;
         if (I->getOperand(2) == V)
@@ -1529,10 +1531,12 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
   const Type *GVElType = GV->getType()->getElementType();
   
   // If GVElType is already i1, it is already shrunk.  If the type of the GV is
-  // an FP value or vector, don't do this optimization because a select between
-  // them is very expensive and unlikely to lead to later simplification.
+  // an FP value, pointer or vector, don't do this optimization because a select
+  // between them is very expensive and unlikely to lead to later
+  // simplification.  In these cases, we typically end up with "cond ? v1 : v2"
+  // where v1 and v2 both require constant pool loads, a big loss.
   if (GVElType == Type::Int1Ty || GVElType->isFloatingPoint() ||
-      isa<VectorType>(GVElType))
+      isa<PointerType>(GVElType) || isa<VectorType>(GVElType))
     return false;
   
   // Walk the use list of the global seeing if all the uses are load or store.
@@ -1806,6 +1810,9 @@ bool GlobalOpt::OptimizeFunctions(Module &M) {
   // Optimize functions.
   for (Module::iterator FI = M.begin(), E = M.end(); FI != E; ) {
     Function *F = FI++;
+    // Functions without names cannot be referenced outside this module.
+    if (!F->hasName() && !F->isDeclaration())
+      F->setLinkage(GlobalValue::InternalLinkage);
     F->removeDeadConstantUsers();
     if (F->use_empty() && (F->hasLocalLinkage() ||
                            F->hasLinkOnceLinkage())) {
@@ -1842,6 +1849,9 @@ bool GlobalOpt::OptimizeGlobalVars(Module &M) {
   for (Module::global_iterator GVI = M.global_begin(), E = M.global_end();
        GVI != E; ) {
     GlobalVariable *GV = GVI++;
+    // Global variables without names cannot be referenced outside this module.
+    if (!GV->hasName() && !GV->isDeclaration())
+      GV->setLinkage(GlobalValue::InternalLinkage);
     if (!GV->isConstant() && GV->hasLocalLinkage() &&
         GV->hasInitializer())
       Changed |= ProcessInternalGlobal(GV, GVI);
@@ -2189,6 +2199,13 @@ static bool EvaluateFunction(Function *F, Constant *&RetVal,
                                               AI->getName()));
       InstResult = AllocaTmps.back();     
     } else if (CallInst *CI = dyn_cast<CallInst>(CurInst)) {
+
+      // Debug info can safely be ignored here.
+      if (isa<DbgInfoIntrinsic>(CI)) {
+        ++CurInst;
+        continue;
+      }
+
       // Cannot handle inline asm.
       if (isa<InlineAsm>(CI->getOperand(0))) return false;
 
@@ -2214,7 +2231,6 @@ static bool EvaluateFunction(Function *F, Constant *&RetVal,
           return false;
         
         Constant *RetVal;
-        
         // Execute the call, if successful, use the return value.
         if (!EvaluateFunction(Callee, RetVal, Formals, CallStack,
                               MutatedMemory, AllocaTmps))
@@ -2369,19 +2385,59 @@ bool GlobalOpt::OptimizeGlobalCtorsList(GlobalVariable *&GCL) {
   return true;
 }
 
-bool GlobalOpt::ResolveAliases(Module &M) {
+bool GlobalOpt::OptimizeGlobalAliases(Module &M) {
   bool Changed = false;
 
   for (Module::alias_iterator I = M.alias_begin(), E = M.alias_end();
-       I != E; ++I) {
-    if (I->use_empty())
+       I != E;) {
+    Module::alias_iterator J = I++;
+    // Aliases without names cannot be referenced outside this module.
+    if (!J->hasName() && !J->isDeclaration())
+      J->setLinkage(GlobalValue::InternalLinkage);
+    // If the aliasee may change at link time, nothing can be done - bail out.
+    if (J->mayBeOverridden())
       continue;
 
-    if (const GlobalValue *GV = I->resolveAliasedGlobal())
-      if (GV != I) {
-        I->replaceAllUsesWith(const_cast<GlobalValue*>(GV));
-        Changed = true;
-      }
+    Constant *Aliasee = J->getAliasee();
+    GlobalValue *Target = cast<GlobalValue>(Aliasee->stripPointerCasts());
+    Target->removeDeadConstantUsers();
+    bool hasOneUse = Target->hasOneUse() && Aliasee->hasOneUse();
+
+    // Make all users of the alias use the aliasee instead.
+    if (!J->use_empty()) {
+      J->replaceAllUsesWith(Aliasee);
+      ++NumAliasesResolved;
+      Changed = true;
+    }
+
+    // If the aliasee has internal linkage, give it the name and linkage
+    // of the alias, and delete the alias.  This turns:
+    //   define internal ... @f(...)
+    //   @a = alias ... @f
+    // into:
+    //   define ... @a(...)
+    if (!Target->hasLocalLinkage())
+      continue;
+
+    // The transform is only useful if the alias does not have internal linkage.
+    if (J->hasLocalLinkage())
+      continue;
+
+    // Do not perform the transform if multiple aliases potentially target the
+    // aliasee.  This check also ensures that it is safe to replace the section
+    // and other attributes of the aliasee with those of the alias.
+    if (!hasOneUse)
+      continue;
+
+    // Give the aliasee the name, linkage and other attributes of the alias.
+    Target->takeName(J);
+    Target->setLinkage(J->getLinkage());
+    Target->GlobalValue::copyAttributesFrom(J);
+
+    // Delete the alias.
+    M.getAliasList().erase(J);
+    ++NumAliasesRemoved;
+    Changed = true;
   }
 
   return Changed;
@@ -2408,7 +2464,7 @@ bool GlobalOpt::runOnModule(Module &M) {
     LocalChange |= OptimizeGlobalVars(M);
 
     // Resolve aliases, when possible.
-    LocalChange |= ResolveAliases(M);
+    LocalChange |= OptimizeGlobalAliases(M);
     Changed |= LocalChange;
   }
   

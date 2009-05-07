@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 typedef signed char BOOL;
 typedef unsigned int NSUInteger;
@@ -25,7 +25,7 @@ typedef struct _NSRange {
 }
   CSSM_FIELDGROUP, *CSSM_FIELDGROUP_PTR;
 @protocol XDUMLClassifier;
-@protocol XDUMLClassInterfaceCommons <XDUMLClassifier>  // expected-warning {{cannot find protocol definition for 'XDUMLClassifier'}}
+@protocol XDUMLClassInterfaceCommons <XDUMLClassifier> 
 @end  @protocol XDUMLImplementation;
 @protocol XDUMLElement <NSObject> - (NSArray *) ownedElements;
 @end @protocol XDUMLDataType;
@@ -49,6 +49,6 @@ typedef NSUInteger XDSourceLanguage;
 {
 }
 // GCC doesn't currently warn about this.
-+ (NSUInteger) compartmentsForClassifier: (id <XDSCClassifier>) classifier withSpecification: (XDSCDisplaySpecification *) displaySpec { // expected-warning {{conflicting types for 'compartmentsForClassifier:withSpecification:'}}
++ (NSUInteger) compartmentsForClassifier: (id <XDSCClassifier>) classifier withSpecification: (XDSCDisplaySpecification *) displaySpec { // expected-warning {{conflicting parameter types in implementation of 'compartmentsForClassifier:withSpecification:': 'id<XDUMLClassifier>' vs 'id<XDSCClassifier>'}}
 }
 @end 

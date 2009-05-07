@@ -1,17 +1,18 @@
 macro(add_clang_library name)
   set(srcs ${ARGN})
-  if(MSVC_IDE)
+  if(MSVC_IDE OR XCODE)
     file( GLOB_RECURSE headers *.h)
     set(srcs ${srcs} ${headers})
     string( REGEX MATCHALL "/[^/]+" split_path ${CMAKE_CURRENT_SOURCE_DIR})
     list( GET split_path -1 dir)
     file( GLOB_RECURSE headers ../../include/clang${dir}/*.h)
     set(srcs ${srcs} ${headers})
-  endif(MSVC_IDE)
+  endif(MSVC_IDE OR XCODE)
   add_library( ${name} ${srcs} )
   if( LLVM_COMMON_DEPENDS )
     add_dependencies( ${name} ${LLVM_COMMON_DEPENDS} )
   endif( LLVM_COMMON_DEPENDS )
+  add_dependencies(${name} ClangDiagnosticCommon)
   if(MSVC)
     get_target_property(cflag ${name} COMPILE_FLAGS)
     if(NOT cflag)
@@ -38,6 +39,7 @@ endmacro(add_clang_executable)
 
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/include
   )
 
 install(DIRECTORY include
@@ -47,7 +49,8 @@ install(DIRECTORY include
 
 add_definitions( -D_GNU_SOURCE )
 
+add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(Driver)
+add_subdirectory(tools)
 
 # TODO: docs.

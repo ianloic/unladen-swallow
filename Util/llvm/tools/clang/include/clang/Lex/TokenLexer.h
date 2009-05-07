@@ -42,7 +42,10 @@ class TokenLexer {
 
   /// Tokens - This is the pointer to an array of tokens that the macro is
   /// defined to, with arguments expanded for function-like macros.  If this is
-  /// a token stream, these are the tokens we are returning.
+  /// a token stream, these are the tokens we are returning.  This points into
+  /// the macro definition we are lexing from, a scratch buffer allocated from
+  /// the preprocessor's bump pointer allocator, or some other buffer that we
+  /// may or may not own (depending on OwnsTokens).
   const Token *Tokens;
   
   /// NumTokens - This is the length of the Tokens array.
@@ -53,9 +56,9 @@ class TokenLexer {
   ///
   unsigned CurToken;
   
-  /// InstantiateLoc - The source location where this macro was instantiated.
-  ///
-  SourceLocation InstantiateLoc;
+  /// InstantiateLocStart/End - The source location range where this macro was
+  /// instantiated.
+  SourceLocation InstantiateLocStart, InstantiateLocEnd;
   
   /// Lexical information about the expansion point of the macro: the identifier
   /// that the macro expanded from had these properties.
@@ -77,15 +80,19 @@ class TokenLexer {
 public:
   /// Create a TokenLexer for the specified macro with the specified actual
   /// arguments.  Note that this ctor takes ownership of the ActualArgs pointer.
-  TokenLexer(Token &Tok, MacroArgs *ActualArgs, Preprocessor &pp)
+  /// ILEnd specifies the location of the ')' for a function-like macro or the
+  /// identifier for an object-like macro.
+  TokenLexer(Token &Tok, SourceLocation ILEnd, MacroArgs *ActualArgs,
+             Preprocessor &pp)
     : Macro(0), ActualArgs(0), PP(pp), OwnsTokens(false) {
-    Init(Tok, ActualArgs);
+    Init(Tok, ILEnd, ActualArgs);
   }
   
   /// Init - Initialize this TokenLexer to expand from the specified macro
   /// with the specified argument information.  Note that this ctor takes
-  /// ownership of the ActualArgs pointer.
-  void Init(Token &Tok, MacroArgs *ActualArgs);
+  /// ownership of the ActualArgs pointer.  ILEnd specifies the location of the
+  /// ')' for a function-like macro or the identifier for an object-like macro.
+  void Init(Token &Tok, SourceLocation ILEnd, MacroArgs *ActualArgs);
   
   /// Create a TokenLexer for the specified token stream.  If 'OwnsTokens' is
   /// specified, this takes ownership of the tokens and delete[]'s them when

@@ -31,7 +31,7 @@ dnl===
 dnl===-----------------------------------------------------------------------===
 dnl Initialize autoconf and define the package name, version number and
 dnl email address for reporting bugs.
-AC_INIT([[llvm]],[[2.5]],[llvmbugs@cs.uiuc.edu])
+AC_INIT([[llvm]],[[2.6svn]],[llvmbugs@cs.uiuc.edu])
 
 dnl Provide a copyright substitution and ensure the copyright notice is included
 dnl in the output of --version option of the generated configure script.
@@ -222,10 +222,11 @@ AC_CACHE_CHECK([target architecture],[llvm_cv_target_arch],
   powerpc*-*)             llvm_cv_target_arch="PowerPC" ;;
   alpha*-*)               llvm_cv_target_arch="Alpha" ;;
   ia64-*)                 llvm_cv_target_arch="IA64" ;;
-  arm-*)                  llvm_cv_target_arch="ARM" ;;
+  arm*-*)                 llvm_cv_target_arch="ARM" ;;
   mips-*)                 llvm_cv_target_arch="Mips" ;;
   pic16-*)                llvm_cv_target_arch="PIC16" ;;
   xcore-*)                llvm_cv_target_arch="XCore" ;;
+  msp430-*)               llvm_cv_target_arch="MSP430" ;;
   *)                      llvm_cv_target_arch="Unknown" ;;
 esac])
 
@@ -255,13 +256,13 @@ else
   AC_SUBST(LLVM_CROSS_COMPILING, [0])
 fi
 
-dnl Check to see if there's a "CVS" (or .svn) directory indicating that this
-dnl build is being done from a checkout. This sets up several defaults for the
-dnl command line switches. When we build with a CVS directory, we get a
-dnl debug with assertions turned on. Without, we assume a source release and we
-dnl get an optimized build without assertions. See --enable-optimized and
-dnl --enable-assertions below
-if test -d "CVS" -o -d "${srcdir}/CVS" -o -d ".svn" -o -d "${srcdir}/.svn"; then
+dnl Check to see if there's a "CVS" (or .svn or .git) directory indicating
+dnl that this build is being done from a checkout. This sets up several
+dnl defaults for the command line switches. When we build with a CVS directory,
+dnl we get a debug with assertions turned on. Without, we assume a source
+dnl release and we get an optimized build without assertions.
+dnl See --enable-optimized and --enable-assertions below
+if test -d "CVS" -o -d "${srcdir}/CVS" -o -d ".svn" -o -d "${srcdir}/.svn" -o -d ".git" -o -d "${srcdir}/.git"; then
   cvsbuild="yes"
   optimize="no"
   AC_SUBST(CVSBUILD,[[CVSBUILD=1]])
@@ -283,6 +284,15 @@ if test ${enableval} = "no" ; then
   AC_SUBST(ENABLE_OPTIMIZED,[[]])
 else
   AC_SUBST(ENABLE_OPTIMIZED,[[ENABLE_OPTIMIZED=1]])
+fi
+
+dnl --enable-profiling : check whether they want to do a profile build:
+AC_ARG_ENABLE(profiling, AS_HELP_STRING(
+ [--enable-profiling,Compile with profiling enabled (default is NO)]),,enableval="no")
+if test ${enableval} = "no" ; then
+  AC_SUBST(ENABLE_PROFILING,[[]])
+else
+  AC_SUBST(ENABLE_PROFILING,[[ENABLE_PROFILING=1]])
 fi
 
 dnl --enable-assertions : check whether they want to turn on assertions or not:
@@ -334,6 +344,7 @@ else
     Mips)    AC_SUBST(TARGET_HAS_JIT,0) ;;
     PIC16)   AC_SUBST(TARGET_HAS_JIT,0) ;;
     XCore)   AC_SUBST(TARGET_HAS_JIT,0) ;;
+    MSP430)  AC_SUBST(TARGET_HAS_JIT,0) ;;
     *)       AC_SUBST(TARGET_HAS_JIT,0) ;;
   esac
 fi
@@ -363,15 +374,15 @@ case "$enableval" in
 esac
 AC_DEFINE_UNQUOTED([ENABLE_THREADS],$ENABLE_THREADS,[Define if threads enabled])
 
-dnl Allow building with position independent code
+dnl Allow building without position independent code
 AC_ARG_ENABLE(pic,
   AS_HELP_STRING([--enable-pic],
-                 [Build LLVM with Position Independent Code (default is NO)]),,
+                 [Build LLVM with Position Independent Code (default is YES)]),,
                  enableval=default)
 case "$enableval" in
   yes) AC_SUBST(ENABLE_PIC,[1]) ;;
   no)  AC_SUBST(ENABLE_PIC,[0]) ;;
-  default) AC_SUBST(ENABLE_PIC,[0]) ;;
+  default) AC_SUBST(ENABLE_PIC,[1]) ;;
   *) AC_MSG_ERROR([Invalid setting for --enable-pic. Use "yes" or "no"]) ;;
 esac
 AC_DEFINE_UNQUOTED([ENABLE_PIC],$ENABLE_PIC,
@@ -383,7 +394,7 @@ AC_ARG_ENABLE([targets],AS_HELP_STRING([--enable-targets],
     [Build specific host targets: all,host-only,{target-name} (default=all)]),,
     enableval=all)
 case "$enableval" in
-  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha IA64 ARM Mips CellSPU PIC16 XCore CBackend MSIL CppBackend" ;;
+  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha IA64 ARM Mips CellSPU PIC16 XCore MSP430 CBackend MSIL CppBackend" ;;
   host-only)
     case "$llvm_cv_target_arch" in
       x86)     TARGETS_TO_BUILD="X86" ;;
@@ -397,6 +408,7 @@ case "$enableval" in
       CellSPU|SPU) TARGETS_TO_BUILD="CellSPU" ;;
       PIC16)   TARGETS_TO_BUILD="PIC16" ;;
       XCore)   TARGETS_TO_BUILD="XCore" ;;
+      MSP430)  TARGETS_TO_BUILD="MSP430" ;;
       *)       AC_MSG_ERROR([Can not set target to build]) ;;
     esac
     ;;
@@ -413,6 +425,7 @@ case "$enableval" in
         spu)     TARGETS_TO_BUILD="CellSPU $TARGETS_TO_BUILD" ;;
         pic16)   TARGETS_TO_BUILD="PIC16 $TARGETS_TO_BUILD" ;;
         xcore)   TARGETS_TO_BUILD="XCore $TARGETS_TO_BUILD" ;;
+        msp430)  TARGETS_TO_BUILD="MSP430 $TARGETS_TO_BUILD" ;;
         cbe)     TARGETS_TO_BUILD="CBackend $TARGETS_TO_BUILD" ;;
         msil)    TARGETS_TO_BUILD="MSIL $TARGETS_TO_BUILD" ;;
         cpp)     TARGETS_TO_BUILD="CppBackend $TARGETS_TO_BUILD" ;;
@@ -462,6 +475,14 @@ AC_ARG_WITH(llvmgxx,
     [Specify location of llvm-g++ driver (default searches PATH)]),
     LLVMGXX=$with_llvmgxx
     WITH_LLVMGCCDIR="",)
+
+if test -n "$LLVMGCC"; then
+   LLVMGCCCOMMAND="$LLVMGCC"
+fi
+
+if test -n "$LLVMGXX"; then
+   LLVMGXXCOMMAND="$LLVMGXX"
+fi
 
 if test -n "$LLVMGCC" && test -z "$LLVMGXX"; then
    AC_MSG_ERROR([Invalid llvm-g++. Use --with-llvmgxx when --with-llvmgcc is used]);
@@ -514,6 +535,24 @@ case "$withval" in
   *) AC_MSG_ERROR([Invalid path for --with-ocaml-libdir. Provide full path]) ;;
 esac
 
+dnl Allow linking of LLVM with GPLv3 binutils code.
+AC_ARG_WITH(binutils-include,
+  AS_HELP_STRING([--with-binutils-include],
+    [Specify path to binutils/include/ containing plugin-api.h file for gold plugin.]),,
+  withval=default)
+case "$withval" in
+  default) WITH_BINUTILS_INCDIR=default ;;
+  /* | [[A-Za-z]]:[[\\/]]*)      WITH_BINUTILS_INCDIR=$withval ;;
+  *) AC_MSG_ERROR([Invalid path for --with-binutils-include. Provide full path]) ;;
+esac
+if test "x$WITH_BINUTILS_INCDIR" != xdefault ; then
+  AC_SUBST(BINUTILS_INCDIR,$WITH_BINUTILS_INCDIR)
+  if test ! -f "$WITH_BINUTILS_INCDIR/plugin-api.h"; then
+     echo "$WITH_BINUTILS_INCDIR/plugin-api.h"
+     AC_MSG_ERROR([Invalid path to directory containing plugin-api.h.]);
+  fi
+fi
+
 dnl===-----------------------------------------------------------------------===
 dnl===
 dnl=== SECTION 4: Check for programs we need and that they are the right version
@@ -524,8 +563,6 @@ dnl Check for compilation tools
 AC_PROG_CPP
 AC_PROG_CC(gcc)
 AC_PROG_CXX(g++)
-AC_PROG_FLEX
-AC_PROG_BISON
 
 AC_PROG_NM
 AC_SUBST(NM)
@@ -620,8 +657,11 @@ AC_PATH_PROGS(OCAMLDEP, [ocamldep])
 AC_PATH_PROGS(OCAMLDOC, [ocamldoc])
 AC_PATH_PROGS(GAS, [gas as])
 
-dnl Determine if the linker supports the -R option.
+dnl Determine whether the linker supports the -R option.
 AC_LINK_USE_R
+
+dnl Determine whether the linker supports the -export-dynamic option.
+AC_LINK_EXPORT_DYNAMIC
 
 dnl Check for libtool and the library that has dlopen function (which must come
 dnl before the AC_PROG_LIBTOOL check in order to enable dlopening libraries with
@@ -635,21 +675,32 @@ if test "$lt_cv_dlopen_self" = "yes" ; then
               [Define if dlopen(0) will open the symbols of the program])
 fi
 
+
 if test "$WITH_LLVMGCCDIR" = "default" ; then
   LLVMGCC="llvm-gcc${EXEEXT}"
   LLVMGXX="llvm-g++${EXEEXT}"
+  LLVMGCCCOMMAND="$LLVMGCC"
+  LLVMGXXCOMMAND="$LLVMGXX"
+  AC_SUBST(LLVMGCCCOMMAND,$LLVMGCCCOMMAND)
+  AC_SUBST(LLVMGXXCOMMAND,$LLVMGXXCOMMAND)
   AC_PATH_PROG(LLVMGCC, $LLVMGCC, [])
   AC_PATH_PROG(LLVMGXX, $LLVMGXX, [])
 else
   if test -z "$LLVMGCC"; then
     LLVMGCC="$WITH_LLVMGCCDIR/bin/llvm-gcc${EXEEXT}"
+    LLVMGCCCOMMAND="$LLVMGCC"
   fi
   if test -z "$LLVMGXX"; then
     LLVMGXX="$WITH_LLVMGCCDIR/bin/llvm-g++${EXEEXT}"
+    LLVMGXXCOMMAND="$LLVMGXX"
   fi
+
   AC_SUBST(LLVMGCC,$LLVMGCC)
   AC_SUBST(LLVMGXX,$LLVMGXX)
+  AC_SUBST(LLVMGCCCOMMAND,$LLVMGCCCOMMAND)
+  AC_SUBST(LLVMGXXCOMMAND,$LLVMGXXCOMMAND)
 fi
+
 
 AC_MSG_CHECKING([tool compatibility])
 
@@ -717,6 +768,11 @@ AC_SEARCH_LIBS(dlopen,dl,AC_DEFINE([HAVE_DLOPEN],[1],
                [Define if dlopen() is available on this platform.]),
                AC_MSG_WARN([dlopen() not found - disabling plugin support]))
 
+dnl libffi is optional; used to call external functions from the interpreter
+AC_SEARCH_LIBS(ffi_call,ffi,AC_DEFINE([HAVE_FFI_CALL],[1],
+               [Define if libffi is available on this platform.]),
+               AC_MSG_WARN([libffi not found - disabling external calls from interpreter]))
+
 dnl mallinfo is optional; the code can compile (minus features) without it
 AC_SEARCH_LIBS(mallinfo,malloc,AC_DEFINE([HAVE_MALLINFO],[1],
                [Define if mallinfo() is available on this platform.]))
@@ -773,11 +829,14 @@ AC_CHECK_HEADERS([sys/mman.h sys/param.h sys/resource.h sys/time.h])
 AC_CHECK_HEADERS([sys/types.h malloc/malloc.h mach/mach.h])
 if test "$ENABLE_THREADS" -eq 1 ; then
   AC_CHECK_HEADERS(pthread.h,
-                  AC_SUBST(HAVE_PTHREAD, 1),
-		   AC_SUBST(HAVE_PTHREAD, 0))
+                   AC_SUBST(HAVE_PTHREAD, 1),
+                   AC_SUBST(HAVE_PTHREAD, 0))
 else
   AC_SUBST(HAVE_PTHREAD, 0)
 fi
+
+dnl Try to find ffi.h.
+AC_CHECK_HEADERS([ffi.h ffi/ffi.h])
 
 dnl===-----------------------------------------------------------------------===
 dnl===
@@ -814,8 +873,6 @@ AC_FUNC_RAND48
 
 dnl Check for variations in the Standard C++ library and STL. These macros are
 dnl provided by LLVM in the autoconf/m4 directory.
-AC_CXX_HAVE_HASH_MAP
-AC_CXX_HAVE_HASH_SET
 AC_CXX_HAVE_STD_ITERATOR
 AC_CXX_HAVE_BI_ITERATOR
 AC_CXX_HAVE_FWD_ITERATOR
@@ -936,7 +993,7 @@ AC_DEFINE_UNQUOTED(LLVM_MANDIR, "$LLVM_MANDIR",
 AC_DEFINE_UNQUOTED(LLVM_CONFIGTIME, "$LLVM_CONFIGTIME",
                    [Time at which LLVM was configured])
 AC_DEFINE_UNQUOTED(LLVM_HOSTTRIPLE, "$host",
-	 	   [Host triple we were built on])
+                   [Host triple we were built on])
 
 # Determine which bindings to build.
 if test "$BINDINGS_TO_BUILD" = auto ; then
@@ -988,8 +1045,24 @@ if test "$binding_prereqs_failed" = 1 ; then
   AC_MSG_ERROR([Prequisites for bindings not satisfied. Fix them or use configure --disable-bindings.])
 fi
 
-dnl Determine if the compiler supports -fvisibility-inlines-hidden.
+dnl Determine whether the compiler supports -fvisibility-inlines-hidden.
 AC_CXX_USE_VISIBILITY_INLINES_HIDDEN
+
+dnl Determine linker rpath flag
+if test "$llvm_cv_link_use_r" = "yes" ; then
+  RPATH="-Wl,-R"
+else
+  RPATH="-Wl,-rpath"
+fi
+AC_SUBST(RPATH)
+
+dnl Determine linker rdynamic flag
+if test "$llvm_cv_link_use_export_dynamic" = "yes" ; then
+  RDYNAMIC="-Wl,-export-dynamic"
+else
+  RDYNAMIC=""
+fi
+AC_SUBST(RDYNAMIC)
 
 dnl===-----------------------------------------------------------------------===
 dnl===
@@ -1004,8 +1077,6 @@ dnl contains the same list of files as AC_CONFIG_HEADERS below. This ensures the
 dnl files can be updated automatically when their *.in sources change.
 AC_CONFIG_HEADERS([include/llvm/Config/config.h])
 AC_CONFIG_HEADERS([include/llvm/Support/DataTypes.h])
-AC_CONFIG_HEADERS([include/llvm/ADT/hash_map.h])
-AC_CONFIG_HEADERS([include/llvm/ADT/hash_set.h])
 AC_CONFIG_HEADERS([include/llvm/ADT/iterator.h])
 
 dnl Configure the makefile's configuration data
@@ -1016,6 +1087,9 @@ AC_CONFIG_FILES([llvm.spec])
 
 dnl Configure doxygen's configuration file
 AC_CONFIG_FILES([docs/doxygen.cfg])
+
+dnl Configure llvmc's Base plugin
+AC_CONFIG_FILES([tools/llvmc/plugins/Base/Base.td])
 
 dnl Do the first stage of configuration for llvm-config.in.
 AC_CONFIG_FILES([tools/llvm-config/llvm-config.in])

@@ -28,8 +28,10 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/DebugLoc.h"
+#include "llvm/Target/TargetMachine.h"
 #include <climits>
 #include <map>
 #include <vector>
@@ -53,6 +55,18 @@ namespace llvm {
   class TargetRegisterClass;
   class TargetSubtarget;
   class Value;
+
+  // FIXME: should this be here?
+  namespace TLSModel {
+    enum Model {
+      GeneralDynamic,
+      LocalDynamic,
+      InitialExec,
+      LocalExec
+    };
+  }
+  TLSModel::Model getTLSModel(const GlobalValue *GV, Reloc::Model reloc);
+
 
 //===----------------------------------------------------------------------===//
 /// TargetLowering - This class defines information used to lower LLVM code to
@@ -315,7 +329,8 @@ public:
   /// support *some* VECTOR_SHUFFLE operations, those with specific masks.
   /// By default, if a target supports the VECTOR_SHUFFLE node, all mask values
   /// are assumed to be legal.
-  virtual bool isShuffleMaskLegal(SDValue Mask, MVT VT) const {
+  virtual bool isShuffleMaskLegal(const SmallVectorImpl<int> &Mask,
+                                  MVT VT) const {
     return true;
   }
 
@@ -323,9 +338,8 @@ public:
   /// used by Targets can use this to indicate if there is a suitable
   /// VECTOR_SHUFFLE that can be used to replace a VAND with a constant
   /// pool entry.
-  virtual bool isVectorClearMaskLegal(const std::vector<SDValue> &BVOps,
-                                      MVT EVT,
-                                      SelectionDAG &DAG) const {
+  virtual bool isVectorClearMaskLegal(const SmallVectorImpl<int> &Mask,
+                                      MVT VT) const {
     return false;
   }
 
@@ -734,6 +748,13 @@ public:
     /// there are any bits set in the constant that are not demanded.  If so,
     /// shrink the constant and return true.
     bool ShrinkDemandedConstant(SDValue Op, const APInt &Demanded);
+
+    /// ShrinkDemandedOp - Convert x+y to (VT)((SmallVT)x+(SmallVT)y) if the
+    /// casts are free.  This uses isZExtFree and ZERO_EXTEND for the widening
+    /// cast, but it could be generalized for targets with other types of
+    /// implicit widening casts.
+    bool ShrinkDemandedOp(SDValue Op, unsigned BitWidth, const APInt &Demanded,
+                          DebugLoc dl);
   };
                                                 
   /// SimplifyDemandedBits - Look at Op.  At this point, we know that only the
@@ -778,9 +799,10 @@ public:
     bool isCalledByLegalizer() const { return CalledByLegalizer; }
     
     void AddToWorklist(SDNode *N);
-    SDValue CombineTo(SDNode *N, const std::vector<SDValue> &To);
-    SDValue CombineTo(SDNode *N, SDValue Res);
-    SDValue CombineTo(SDNode *N, SDValue Res0, SDValue Res1);
+    SDValue CombineTo(SDNode *N, const std::vector<SDValue> &To,
+                      bool AddTo = true);
+    SDValue CombineTo(SDNode *N, SDValue Res, bool AddTo = true);
+    SDValue CombineTo(SDNode *N, SDValue Res0, SDValue Res1, bool AddTo = true);
 
     void CommitTargetLoweringOpt(const TargetLoweringOpt &TLO);
   };
@@ -1101,7 +1123,7 @@ public:
   /// for another call). If the target chooses to decline an AlwaysInline
   /// request here, legalize will resort to using simple loads and stores.
   virtual SDValue
-  EmitTargetCodeForMemcpy(SelectionDAG &DAG,
+  EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                           SDValue Chain,
                           SDValue Op1, SDValue Op2,
                           SDValue Op3, unsigned Align,
@@ -1118,7 +1140,7 @@ public:
   /// SDValue if the target declines to use custom code and a different
   /// lowering strategy should be used.
   virtual SDValue
-  EmitTargetCodeForMemmove(SelectionDAG &DAG,
+  EmitTargetCodeForMemmove(SelectionDAG &DAG, DebugLoc dl,
                            SDValue Chain,
                            SDValue Op1, SDValue Op2,
                            SDValue Op3, unsigned Align,
@@ -1134,7 +1156,7 @@ public:
   /// SDValue if the target declines to use custom code and a different
   /// lowering strategy should be used.
   virtual SDValue
-  EmitTargetCodeForMemset(SelectionDAG &DAG,
+  EmitTargetCodeForMemset(SelectionDAG &DAG, DebugLoc dl,
                           SDValue Chain,
                           SDValue Op1, SDValue Op2,
                           SDValue Op3, unsigned Align,
@@ -1192,18 +1214,7 @@ public:
   /// preceeds the RET node and whether the return uses the result of the node
   /// or is a void return. This function can be used by the target to determine
   /// eligiblity of tail call optimization.
-  static bool CheckTailCallReturnConstraints(CallSDNode *TheCall, SDValue Ret) {
-    unsigned NumOps = Ret.getNumOperands();
-    if ((NumOps == 1 &&
-       (Ret.getOperand(0) == SDValue(TheCall,1) ||
-        Ret.getOperand(0) == SDValue(TheCall,0))) ||
-      (NumOps > 1 &&
-       Ret.getOperand(0) == SDValue(TheCall,
-                                    TheCall->getNumValues()-1) &&
-       Ret.getOperand(1) == SDValue(TheCall,0)))
-      return true;
-    return false;
-  }
+  static bool CheckTailCallReturnConstraints(CallSDNode *TheCall, SDValue Ret); 
 
   /// GetPossiblePreceedingTailCall - Get preceeding TailCallNodeOpCode node if
   /// it exists. Skip a possible ISD::TokenFactor.
@@ -1346,7 +1357,7 @@ public:
   // insert.  The specified MachineInstr is created but not inserted into any
   // basic blocks, and the scheduler passes ownership of it to this method.
   virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                        MachineBasicBlock *MBB);
+                                                  MachineBasicBlock *MBB) const;
 
   //===--------------------------------------------------------------------===//
   // Addressing mode description hooks (used by LSR etc).
@@ -1383,7 +1394,23 @@ public:
   virtual bool isTruncateFree(MVT VT1, MVT VT2) const {
     return false;
   }
-  
+
+  /// isZExtFree - Return true if any actual instruction that defines a
+  /// value of type Ty1 implicit zero-extends the value to Ty2 in the result
+  /// register. This does not necessarily include registers defined in
+  /// unknown ways, such as incoming arguments, or copies from unknown
+  /// virtual registers. Also, if isTruncateFree(Ty2, Ty1) is true, this
+  /// does not necessarily apply to truncate instructions. e.g. on x86-64,
+  /// all instructions that define 32-bit values implicit zero-extend the
+  /// result out to 64 bits.
+  virtual bool isZExtFree(const Type *Ty1, const Type *Ty2) const {
+    return false;
+  }
+
+  virtual bool isZExtFree(MVT VT1, MVT VT2) const {
+    return false;
+  }
+
   //===--------------------------------------------------------------------===//
   // Div utility functions
   //
@@ -1584,7 +1611,7 @@ private:
   ISD::CondCode CmpLibcallCCs[RTLIB::UNKNOWN_LIBCALL];
 
 protected:
-  /// When lowering @llvm.memset this field specifies the maximum number of
+  /// When lowering \@llvm.memset this field specifies the maximum number of
   /// store operations that may be substituted for the call to memset. Targets
   /// must set this value based on the cost threshold for that target. Targets
   /// should assume that the memset will be done using as many of the largest
@@ -1595,7 +1622,7 @@ protected:
   /// @brief Specify maximum number of store instructions per memset call.
   unsigned maxStoresPerMemset;
 
-  /// When lowering @llvm.memcpy this field specifies the maximum number of
+  /// When lowering \@llvm.memcpy this field specifies the maximum number of
   /// store operations that may be substituted for a call to memcpy. Targets
   /// must set this value based on the cost threshold for that target. Targets
   /// should assume that the memcpy will be done using as many of the largest
@@ -1607,7 +1634,7 @@ protected:
   /// @brief Specify maximum bytes of store instructions per memcpy call.
   unsigned maxStoresPerMemcpy;
 
-  /// When lowering @llvm.memmove this field specifies the maximum number of
+  /// When lowering \@llvm.memmove this field specifies the maximum number of
   /// store instructions that may be substituted for a call to memmove. Targets
   /// must set this value based on the cost threshold for that target. Targets
   /// should assume that the memmove will be done using as many of the largest

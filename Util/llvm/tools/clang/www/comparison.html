@@ -50,11 +50,10 @@
     <ul>
     <li>GCC supports languages that clang does not aim to, such as Java, Ada,
         FORTRAN, etc.</li>
-    <li>GCC front-ends are very mature and already support C/C++/ObjC and all
-        the variants we are interested in.  <a href="cxx_status.html">clang's 
-        support for C++</a> in particular is nowhere near what GCC supports.</li>
-    <li>GCC's codegen is much more mature than clang's right now and supports 
-        more targets than LLVM.</li>
+    <li>GCC front-ends are very mature and already support C++.
+        <a href="cxx_status.html">clang's support for C++</a> is nowhere near 
+        what GCC supports.</li>
+    <li>GCC supports more targets than LLVM.</li>
     <li>GCC is popular and widely adopted.</li>
     <li>GCC does not require a C++ compiler to build it.</li>
     </ul>
@@ -103,10 +102,10 @@
         less memory</a> than GCC.</li>
     <li>Clang aims to provide extremely clear and concise diagnostics (error and
         warning messages), and includes support for <a
-        href="features.html#expressivediags">expressive diagnostics</a>.  GCC's
-        warnings are acceptable, but are often confusing and it does not support
+        href="diagnostics.html">expressive diagnostics</a>.  GCC's warnings are 
+        sometimes acceptable, but are often confusing and it does not support
         expressive diagnostics.  Clang also preserves typedefs in diagnostics
-        consistently.</li>
+        consistently, showing macro expansions and many other features.</li>
     <li>GCC is licensed under the GPL license.  clang uses a BSD license, which
         allows it to be used by projects that do not themselves want to be
         GPL.</li>

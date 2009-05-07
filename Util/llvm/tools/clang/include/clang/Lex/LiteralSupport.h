@@ -124,7 +124,7 @@ private:
 /// CharLiteralParser - Perform interpretation and semantic analysis of a
 /// character literal.
 class CharLiteralParser {
-  unsigned Value;
+  uint64_t Value;
   bool IsWide;
   bool HadError;
 public:
@@ -133,7 +133,7 @@ public:
 
   bool hadError() const { return HadError; }
   bool isWide() const { return IsWide; }
-  unsigned getValue() const { return Value; }
+  uint64_t getValue() const { return Value; }
 };
 
 /// StringLiteralParser - This decodes string escape characters and performs
@@ -155,7 +155,18 @@ public:
   bool Pascal;
   
   const char *GetString() { return &ResultBuf[0]; }
-  unsigned GetStringLength() { return ResultPtr-&ResultBuf[0]; }
+  unsigned GetStringLength() const { return ResultPtr-&ResultBuf[0]; }
+
+  unsigned GetNumStringChars() const {
+    if (AnyWide)
+      return GetStringLength() / wchar_tByteWidth;
+    return GetStringLength();
+  }  
+  /// getOffsetOfStringByte - This function returns the offset of the
+  /// specified byte of the string data represented by Token.  This handles
+  /// advancing over escape sequences in the string.
+  static unsigned getOffsetOfStringByte(const Token &TheTok, unsigned ByteNo,
+                                        Preprocessor &PP);
 };
   
 }  // end namespace clang

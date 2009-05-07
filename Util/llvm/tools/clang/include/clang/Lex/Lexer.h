@@ -94,7 +94,8 @@ public:
   /// _Pragma expansion.  This has a variety of magic semantics that this method
   /// sets up.  It returns a new'd Lexer that must be delete'd when done.
   static Lexer *Create_PragmaLexer(SourceLocation SpellingLoc, 
-                                   SourceLocation InstantiationLoc,
+                                   SourceLocation InstantiationLocStart,
+                                   SourceLocation InstantiationLocEnd,
                                    unsigned TokLen, Preprocessor &PP);
   
   
@@ -137,7 +138,7 @@ public:
   
   /// LexFromRawLexer - Lex a token from a designated raw lexer (one with no
   /// associated preprocessor object.  Return true if the 'next character to
-  /// read' pointer points and the end of the lexer buffer, false otherwise.
+  /// read' pointer points at the end of the lexer buffer, false otherwise.
   bool LexFromRawLexer(Token &Result) {
     assert(LexingRawMode && "Not already in raw mode!");
     Lex(Result);
@@ -210,7 +211,8 @@ public:
   /// includes a trigraph or an escaped newline) then this count includes bytes
   /// that are part of that.
   static unsigned MeasureTokenLength(SourceLocation Loc,
-                                     const SourceManager &SM);
+                                     const SourceManager &SM,
+                                     const LangOptions &LangOpts);
   
   //===--------------------------------------------------------------------===//
   // Internal implementation interfaces.
@@ -334,6 +336,16 @@ public:
     Size = 0;
     return getCharAndSizeSlowNoWarn(Ptr, Size, Features);
   }
+  
+  /// getEscapedNewLineSize - Return the size of the specified escaped newline,
+  /// or 0 if it is not an escaped newline. P[-1] is known to be a "\" on entry
+  /// to this function.
+  static unsigned getEscapedNewLineSize(const char *P);
+  
+  /// SkipEscapedNewLines - If P points to an escaped newline (or a series of
+  /// them), skip over them and return the first non-escaped-newline found,
+  /// otherwise return P.
+  static const char *SkipEscapedNewLines(const char *P);
 private:
   
   /// getCharAndSizeSlowNoWarn - Same as getCharAndSizeSlow, but never emits a

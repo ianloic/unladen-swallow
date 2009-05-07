@@ -155,11 +155,6 @@ namespace {
       return MayAlias;
     }
 
-    virtual ModRefBehavior getModRefBehavior(Function *F, CallSite CS,
-                                         std::vector<PointerAccessInfo> *Info) {
-      return UnknownModRefBehavior;
-    }
-
     virtual void getArgumentAccesses(Function *F, CallSite CS,
                                      std::vector<PointerAccessInfo> &Info) {
       assert(0 && "This method may not be called on this function!");
@@ -206,7 +201,7 @@ namespace {
 
     ModRefResult getModRefInfo(CallSite CS, Value *P, unsigned Size);
     ModRefResult getModRefInfo(CallSite CS1, CallSite CS2);
-    
+
     /// hasNoModRefInfoForCalls - We can provide mod/ref information against
     /// non-escaping allocations.
     virtual bool hasNoModRefInfoForCalls() const { return false; }
@@ -249,6 +244,7 @@ bool BasicAliasAnalysis::pointsToConstantMemory(const Value *P) {
   return false;
 }
 
+
 // getModRefInfo - Check to see if the specified callsite can clobber the
 // specified memory object.  Since we only look at local properties of this
 // function, we really can't say much about this query.  We do, however, use
@@ -272,7 +268,7 @@ BasicAliasAnalysis::getModRefInfo(CallSite CS, Value *P, unsigned Size) {
     // If the pointer is to a locally allocated object that does not escape,
     // then the call can not mod/ref the pointer unless the call takes the
     // argument without capturing it.
-    if (isNonEscapingLocalObject(Object)) {
+    if (isNonEscapingLocalObject(Object) && CS.getInstruction() != Object) {
       bool passedAsArg = false;
       // TODO: Eventually only check 'nocapture' arguments.
       for (CallSite::arg_iterator CI = CS.arg_begin(), CE = CS.arg_end();
@@ -367,10 +363,10 @@ BasicAliasAnalysis::alias(const Value *V1, unsigned V1Size,
   // non-escaping local object, then we know the object couldn't escape to a
   // point where the call could return it.
   if ((isa<CallInst>(O1) || isa<InvokeInst>(O1)) &&
-      isNonEscapingLocalObject(O2))
+      isNonEscapingLocalObject(O2) && O1 != O2)
     return NoAlias;
   if ((isa<CallInst>(O2) || isa<InvokeInst>(O2)) &&
-      isNonEscapingLocalObject(O1))
+      isNonEscapingLocalObject(O1) && O1 != O2)
     return NoAlias;
   
   // If we have two gep instructions with must-alias'ing base pointers, figure

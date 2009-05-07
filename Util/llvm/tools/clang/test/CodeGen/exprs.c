@@ -1,4 +1,4 @@
-// RUN: clang %s -emit-llvm -o -
+// RUN: clang-cc %s -emit-llvm -o -
 
 // PR1895
 // sizeof function
@@ -51,4 +51,56 @@ void eMaisUma() {
 	double t[1];
 	if (*t)
 		return;
+}
+
+// rdar://6520707
+void f0(void (*fp)(void), void (*fp2)(void)) {
+  int x = fp - fp2;
+}
+
+// noop casts as lvalues.
+struct X {
+  int Y;
+};
+struct X foo();
+int bar() {
+  return ((struct X)foo()).Y + 1;
+}
+
+// PR3809: INC/DEC of function pointers.
+void f2(void);
+unsigned f1(void) {
+  void (*fp)(void) = f2;
+  
+  ++fp;
+  fp++;
+  --fp;
+  fp--;
+  return (unsigned) fp;
+}  
+
+union f3_x {int x; float y;};
+int f3() {return ((union f3_x)2).x;}
+
+union f4_y {int x; _Complex float y;};
+_Complex float f4() {return ((union f4_y)(_Complex float)2.0).y;}
+
+struct f5_a { int a; } f5_a;
+union f5_z {int x; struct f5_a y;};
+struct f5_a f5() {return ((union f5_z)f5_a).y;}
+
+// ?: in "lvalue"
+struct s6 { int f0; };
+int f6(int a0, struct s6 a1, struct s6 a2) {
+  return (a0 ? a1 : a2).f0;
+}
+
+// PR4026
+void f7() {
+  __func__;
+}
+
+// PR4067
+int f8() {
+  return ({ foo(); }).Y;
 }

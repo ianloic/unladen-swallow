@@ -38,8 +38,14 @@ using namespace llvm;
 static AnnotationID MF_AID(
   AnnotationManager::getID("CodeGen::MachineCodeForFunction"));
 
-// Out of line virtual function to home classes.
-void MachineFunctionPass::virtfn() {}
+bool MachineFunctionPass::runOnFunction(Function &F) {
+  // Do not codegen any 'available_externally' functions at all, they have
+  // definitions outside the translation unit.
+  if (F.hasAvailableExternallyLinkage())
+    return false;
+  
+  return runOnMachineFunction(MachineFunction::get(&F));
+}
 
 namespace {
   struct VISIBILITY_HIDDEN Printer : public MachineFunctionPass {
@@ -379,12 +385,22 @@ MachineFunction& MachineFunction::get(const Function *F)
   return *mc;
 }
 
+/// addLiveIn - Add the specified physical register as a live-in value and
+/// create a corresponding virtual register for it.
+unsigned MachineFunction::addLiveIn(unsigned PReg,
+                                    const TargetRegisterClass *RC) {
+  assert(RC->contains(PReg) && "Not the correct regclass!");
+  unsigned VReg = getRegInfo().createVirtualRegister(RC);
+  getRegInfo().addLiveIn(PReg, VReg);
+  return VReg;
+}
+
 /// getOrCreateDebugLocID - Look up the DebugLocTuple index with the given
-/// source file, line, and column. If none currently exists, create add a new
-/// new DebugLocTuple and insert it into the DebugIdMap.
-unsigned MachineFunction::getOrCreateDebugLocID(unsigned Src, unsigned Line,
-                                                unsigned Col) {
-  struct DebugLocTuple Tuple(Src, Line, Col);
+/// source file, line, and column. If none currently exists, create a new
+/// DebugLocTuple, and insert it into the DebugIdMap.
+unsigned MachineFunction::getOrCreateDebugLocID(GlobalVariable *CompileUnit,
+                                                unsigned Line, unsigned Col) {
+  DebugLocTuple Tuple(CompileUnit, Line, Col);
   DenseMap<DebugLocTuple, unsigned>::iterator II
     = DebugLocInfo.DebugIdMap.find(Tuple);
   if (II != DebugLocInfo.DebugIdMap.end())
@@ -394,6 +410,14 @@ unsigned MachineFunction::getOrCreateDebugLocID(unsigned Src, unsigned Line,
   DebugLocInfo.DebugLocations.push_back(Tuple);
   DebugLocInfo.DebugIdMap[Tuple] = Id;
   return Id;
+}
+
+/// getDebugLocTuple - Get the DebugLocTuple for a given DebugLoc object.
+DebugLocTuple MachineFunction::getDebugLocTuple(DebugLoc DL) const {
+  unsigned Idx = DL.getIndex();
+  assert(Idx < DebugLocInfo.DebugLocations.size() &&
+         "Invalid index into debug locations!");
+  return DebugLocInfo.DebugLocations[Idx];
 }
 
 //===----------------------------------------------------------------------===//
@@ -472,6 +496,23 @@ unsigned MachineJumpTableInfo::getJumpTableIndex(
   return JumpTables.size()-1;
 }
 
+/// ReplaceMBBInJumpTables - If Old is the target of any jump tables, update
+/// the jump tables to branch to New instead.
+bool
+MachineJumpTableInfo::ReplaceMBBInJumpTables(MachineBasicBlock *Old,
+                                             MachineBasicBlock *New) {
+  assert(Old != New && "Not making a change?");
+  bool MadeChange = false;
+  for (size_t i = 0, e = JumpTables.size(); i != e; ++i) {
+    MachineJumpTableEntry &JTE = JumpTables[i];
+    for (size_t j = 0, e = JTE.MBBs.size(); j != e; ++j)
+      if (JTE.MBBs[j] == Old) {
+        JTE.MBBs[j] = New;
+        MadeChange = true;
+      }
+  }
+  return MadeChange;
+}
 
 void MachineJumpTableInfo::print(std::ostream &OS) const {
   // FIXME: this is lame, maybe we could print out the MBB numbers or something
@@ -513,19 +554,12 @@ unsigned MachineConstantPool::getConstantPoolIndex(Constant *C,
   // Check to see if we already have this constant.
   //
   // FIXME, this could be made much more efficient for large constant pools.
-  unsigned AlignMask = (1 << Alignment)-1;
   for (unsigned i = 0, e = Constants.size(); i != e; ++i)
-    if (Constants[i].Val.ConstVal == C && (Constants[i].Offset & AlignMask)== 0)
+    if (Constants[i].Val.ConstVal == C &&
+        (Constants[i].getAlignment() & (Alignment - 1)) == 0)
       return i;
   
-  unsigned Offset = 0;
-  if (!Constants.empty()) {
-    Offset = Constants.back().getOffset();
-    Offset += TD->getTypePaddedSize(Constants.back().getType());
-    Offset = (Offset+AlignMask)&~AlignMask;
-  }
-  
-  Constants.push_back(MachineConstantPoolEntry(C, Offset));
+  Constants.push_back(MachineConstantPoolEntry(C, Alignment));
   return Constants.size()-1;
 }
 
@@ -537,19 +571,11 @@ unsigned MachineConstantPool::getConstantPoolIndex(MachineConstantPoolValue *V,
   // Check to see if we already have this constant.
   //
   // FIXME, this could be made much more efficient for large constant pools.
-  unsigned AlignMask = (1 << Alignment)-1;
   int Idx = V->getExistingMachineCPValue(this, Alignment);
   if (Idx != -1)
     return (unsigned)Idx;
-  
-  unsigned Offset = 0;
-  if (!Constants.empty()) {
-    Offset = Constants.back().getOffset();
-    Offset += TD->getTypePaddedSize(Constants.back().getType());
-    Offset = (Offset+AlignMask)&~AlignMask;
-  }
-  
-  Constants.push_back(MachineConstantPoolEntry(V, Offset));
+
+  Constants.push_back(MachineConstantPoolEntry(V, Alignment));
   return Constants.size()-1;
 }
 
@@ -560,9 +586,9 @@ void MachineConstantPool::print(raw_ostream &OS) const {
       Constants[i].Val.MachineCPVal->print(OS);
     else
       OS << *(Value*)Constants[i].Val.ConstVal;
-    OS << " , offset=" << Constants[i].getOffset();
+    OS << " , alignment=" << Constants[i].getAlignment();
     OS << "\n";
   }
 }
 
-void MachineConstantPool::dump() const { print(errs()); errs().flush(); }
+void MachineConstantPool::dump() const { print(errs()); }

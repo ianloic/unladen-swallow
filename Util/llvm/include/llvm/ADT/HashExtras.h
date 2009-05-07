@@ -10,14 +10,13 @@
 // This file contains some templates that are useful if you are working with the
 // STL Hashed containers.
 //
-// No library is required when using these functinons.
+// No library is required when using these functions.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_HASHEXTRAS_H
 #define LLVM_ADT_HASHEXTRAS_H
 
-#include "llvm/ADT/hash_map.h"
 #include <string>
 
 // Cannot specialize hash template from outside of the std namespace.

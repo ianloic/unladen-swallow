@@ -32,11 +32,11 @@ namespace llvm {
 namespace clang {
   class ABIInfo;
   class ASTContext;
+  class CXXMethodDecl;
   class FieldDecl;
-  class FunctionTypeProto;
+  class FunctionProtoType;
   class ObjCInterfaceDecl;
   class ObjCIvarDecl;
-  class PointerLikeType;
   class PointerType;
   class QualType;
   class RecordDecl;
@@ -85,10 +85,18 @@ class CodeGenTypes {
   const llvm::TargetData& TheTargetData;
   mutable const ABIInfo* TheABIInfo;
   
-  llvm::SmallVector<std::pair<const PointerLikeType *,
+  llvm::SmallVector<std::pair<QualType,
                               llvm::OpaqueType *>, 8>  PointersToResolve;
 
   llvm::DenseMap<const Type*, llvm::PATypeHolder> TagDeclTypes;
+
+  llvm::DenseMap<const Type*, llvm::PATypeHolder> FunctionTypes;
+
+  /// The opaque type map for Objective-C interfaces. All direct
+  /// manipulation is done by the runtime interfaces, which are
+  /// responsible for coercing to the appropriate type; these opaque
+  /// types are never refined.
+  llvm::DenseMap<const ObjCInterfaceType*, const llvm::Type *> InterfaceTypes;
 
   /// CGRecordLayouts - This maps llvm struct type with corresponding 
   /// record layout info. 
@@ -145,14 +153,13 @@ public:
   /// a type.  For example, the scalar representation for _Bool is i1, but the
   /// memory representation is usually i8 or i32, depending on the target.
   const llvm::Type *ConvertTypeForMem(QualType T);
+  const llvm::Type *ConvertTypeForMemRecursive(QualType T);
 
   /// GetFunctionType - Get the LLVM function type for \arg Info.
   const llvm::FunctionType *GetFunctionType(const CGFunctionInfo &Info,
                                             bool IsVariadic);
   
   const CGRecordLayout *getCGRecordLayout(const TagDecl*) const;
-  /// Returns a StructType representing an Objective-C object
-  const llvm::Type *ConvertObjCInterfaceToStruct(const ObjCInterfaceDecl *OID);
   
   /// getLLVMFieldNo - Return llvm::StructType element number
   /// that corresponds to the field FD.
@@ -167,12 +174,14 @@ public:
                                         const llvm::SmallVector<QualType,16> 
                                         &ArgTys);
 
-  const CGFunctionInfo &getFunctionInfo(const FunctionTypeNoProto *FTNP);
-  const CGFunctionInfo &getFunctionInfo(const FunctionTypeProto *FTP);
+  const CGFunctionInfo &getFunctionInfo(const FunctionNoProtoType *FTNP);
+  const CGFunctionInfo &getFunctionInfo(const FunctionProtoType *FTP);
   const CGFunctionInfo &getFunctionInfo(const FunctionDecl *FD);
+  const CGFunctionInfo &getFunctionInfo(const CXXMethodDecl *MD);
   const CGFunctionInfo &getFunctionInfo(const ObjCMethodDecl *MD);
   const CGFunctionInfo &getFunctionInfo(QualType ResTy, 
                                         const CallArgList &Args);
+public:
   const CGFunctionInfo &getFunctionInfo(QualType ResTy, 
                                         const FunctionArgList &Args);
   

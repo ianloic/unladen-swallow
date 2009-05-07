@@ -1,4 +1,4 @@
-//===- InlineCoast.cpp - Cost analysis for inliner ------------------------===//
+//===- InlineCost.cpp - Cost analysis for inliner -------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -76,10 +76,8 @@ unsigned InlineCostAnalyzer::FunctionInfo::
       Reduction += 10;
     else if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I)) {
       // If the GEP has variable indices, we won't be able to do much with it.
-      for (Instruction::op_iterator I = GEP->op_begin()+1, E = GEP->op_end();
-           I != E; ++I)
-        if (!isa<Constant>(*I)) return 0;
-      Reduction += CountCodeReductionForAlloca(GEP)+15;
+      if (!GEP->hasAllConstantIndices())
+        Reduction += CountCodeReductionForAlloca(GEP)+15;
     } else {
       // If there is some other strange instruction, we're not going to be able
       // to do much if we inline this.
@@ -143,13 +141,8 @@ void InlineCostAnalyzer::FunctionInfo::analyzeFunction(Function *F) {
                  dyn_cast<GetElementPtrInst>(II)) {
         // If a GEP has all constant indices, it will probably be folded with
         // a load/store.
-        bool AllConstant = true;
-        for (unsigned i = 1, e = GEPI->getNumOperands(); i != e; ++i)
-          if (!isa<ConstantInt>(GEPI->getOperand(i))) {
-            AllConstant = false;
-            break;
-          }
-        if (AllConstant) continue;
+        if (GEPI->hasAllConstantIndices())
+          continue;
       }
       
       ++NumInsts;
@@ -182,12 +175,9 @@ InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
 
       // Don't inline functions which can be redefined at link-time to mean
       // something else.
-      // FIXME: We allow link-once linkage since in practice all versions of
-      // the function have the same body (C++ ODR) - but the LLVM definition
-      // of LinkOnceLinkage doesn't require this.
-   if ((Callee->mayBeOverridden() && !Callee->hasLinkOnceLinkage()) ||
-      // Don't inline functions marked noinline.
-      Callee->hasFnAttr(Attribute::NoInline) || NeverInline.count(Callee))
+   if (Callee->mayBeOverridden() ||
+       // Don't inline functions marked noinline.
+       Callee->hasFnAttr(Attribute::NoInline) || NeverInline.count(Callee))
     return llvm::InlineCost::getNever();
 
   // InlineCost - This value measures how good of an inline candidate this call
@@ -227,6 +217,13 @@ InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
   if (CalleeFI.NeverInline)
     return InlineCost::getNever();
 
+  // FIXME: It would be nice to kill off CalleeFI.NeverInline. Then we
+  // could move this up and avoid computing the FunctionInfo for
+  // things we are going to just return always inline for. This
+  // requires handling setjmp somewhere else, however.
+  if (!Callee->isDeclaration() && Callee->hasFnAttr(Attribute::AlwaysInline))
+    return InlineCost::getAlways();
+    
   if (CalleeFI.usesDynamicAlloca) {
     // Get infomation about the caller...
     FunctionInfo &CallerFI = CachedFunctionInfo[Caller];
@@ -242,13 +239,6 @@ InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
       return InlineCost::getNever();
   }
 
-  // FIXME: It would be nice to kill off CalleeFI.NeverInline. Then we
-  // could move this up and avoid computing the FunctionInfo for
-  // things we are going to just return always inline for. This
-  // requires handling setjmp somewhere else, however.
-  if (!Callee->isDeclaration() && Callee->hasFnAttr(Attribute::AlwaysInline))
-    return InlineCost::getAlways();
-    
   // Add to the inline quality for properties that make the call valuable to
   // inline.  This includes factors that indicate that the result of inlining
   // the function will be optimizable.  Currently this just looks at arguments

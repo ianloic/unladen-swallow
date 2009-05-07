@@ -18,6 +18,7 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
+#include <climits>
 #include <cstring>
 #include <string>
 
@@ -81,7 +82,8 @@ class APInt {
   /// This enum is used to hold the constants we needed for APInt.
   enum {
     /// Bits in a word
-    APINT_BITS_PER_WORD = static_cast<unsigned int>(sizeof(uint64_t)) * 8,
+    APINT_BITS_PER_WORD = static_cast<unsigned int>(sizeof(uint64_t)) *
+                          CHAR_BIT,
     /// Byte size of a word
     APINT_WORD_SIZE = static_cast<unsigned int>(sizeof(uint64_t))
   };
@@ -998,6 +1000,14 @@ public:
   /// @returns the number of words to hold the integer value of this APInt.
   /// @brief Get the number of words.
   unsigned getNumWords() const {
+    return getNumWords(BitWidth);
+  }
+
+  /// Here one word's bitwidth equals to that of uint64_t.
+  /// @returns the number of words to hold the integer value with a
+  /// given bit width.
+  /// @brief Get the number of words.
+  static unsigned getNumWords(unsigned BitWidth) {
     return (BitWidth + APINT_BITS_PER_WORD - 1) / APINT_BITS_PER_WORD;
   }
 
@@ -1125,13 +1135,13 @@ public:
   /// Considers the APInt to be unsigned and converts it into a string in the
   /// radix given. The radix can be 2, 8, 10 or 16.
   void toStringUnsigned(SmallVectorImpl<char> &Str, unsigned Radix = 10) const {
-    return toString(Str, Radix, false);
+    toString(Str, Radix, false);
   }
 
   /// Considers the APInt to be signed and converts it into a string in the
   /// radix given. The radix can be 2, 8, 10 or 16.
   void toStringSigned(SmallVectorImpl<char> &Str, unsigned Radix = 10) const {
-    return toString(Str, Radix, true);
+    toString(Str, Radix, true);
   }
 
   /// toString - This returns the APInt as a std::string.  Note that this is an
@@ -1248,6 +1258,18 @@ public:
   APInt multiplicativeInverse(const APInt& modulo) const;
 
   /// @}
+  /// @name Support for division by constant
+  /// @{
+
+  /// Calculate the magic number for signed division by a constant.
+  struct ms;
+  ms magic() const;
+
+  /// Calculate the magic number for unsigned division by a constant.
+  struct mu;
+  mu magicu() const;
+
+  /// @}
   /// @name Building-block Operations for APInt and APFloat
   /// @{
 
@@ -1275,7 +1297,8 @@ public:
   /// srcLSB, to DST, of dstCOUNT parts, such that the bit srcLSB
   /// becomes the least significant bit of DST.  All high bits above
   /// srcBITS in DST are zero-filled.
-  static void tcExtract(integerPart *, unsigned int dstCount, const integerPart *,
+  static void tcExtract(integerPart *, unsigned int dstCount,
+                        const integerPart *,
                         unsigned int srcBits, unsigned int srcLSB);
 
   /// Set the given bit of a bignum.  Zero-based.
@@ -1375,6 +1398,19 @@ public:
   void dump() const;
 
   /// @}
+};
+
+/// Magic data for optimising signed division by a constant.
+struct APInt::ms {
+  APInt m;  ///< magic number
+  unsigned s;  ///< shift amount
+};
+
+/// Magic data for optimising unsigned division by a constant.
+struct APInt::mu {
+  APInt m;     ///< magic number
+  bool a;      ///< add indicator
+  unsigned s;  ///< shift amount
 };
 
 inline bool operator==(uint64_t V1, const APInt& V2) {

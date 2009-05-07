@@ -33,10 +33,8 @@ template<typename NodeTy> class ilist_iterator;
 template<typename NodeTy, typename Traits> class iplist;
 template<typename Ty> struct ilist_traits;
 
-// ValueSubClass  - The type of objects that I hold, e.g. Instruction.
-// ItemParentType - The type of object that owns the list, e.g. BasicBlock.
-// TraitBaseClass - The class this trait should inherit from, it should
-//                  inherit from ilist_traits<ValueSubClass>
+// ValueSubClass   - The type of objects that I hold, e.g. Instruction.
+// ItemParentClass - The type of object that owns the list, e.g. BasicBlock.
 //
 template<typename ValueSubClass, typename ItemParentClass>
 class SymbolTableListTraits : public ilist_default_traits<ValueSubClass> {
@@ -47,12 +45,21 @@ public:
   /// getListOwner - Return the object that owns this list.  If this is a list
   /// of instructions, it returns the BasicBlock that owns them.
   ItemParentClass *getListOwner() {
-    return reinterpret_cast<ItemParentClass*>(reinterpret_cast<char*>(this)-
-                                              TraitsClass::getListOffset());
+    typedef iplist<ValueSubClass> ItemParentClass::*Sublist;
+    Sublist Sub(ItemParentClass::
+                getSublistAccess(static_cast<ValueSubClass*>(0)));
+    size_t Offset(size_t(&((ItemParentClass*)0->*Sub)));
+    iplist<ValueSubClass>* Anchor(static_cast<iplist<ValueSubClass>*>(this));
+    return reinterpret_cast<ItemParentClass*>(reinterpret_cast<char*>(Anchor)-
+                                              Offset);
   }
 
-  void deleteNode(ValueSubClass *V) {
-    delete V;
+  static iplist<ValueSubClass> &getList(ItemParentClass *Par) {
+    return Par->*(Par->getSublistAccess((ValueSubClass*)0));
+  }
+
+  static ValueSymbolTable *getSymTab(ItemParentClass *Par) {
+    return Par ? toPtr(Par->getValueSymbolTable()) : 0;
   }
 
   void addNodeToList(ValueSubClass *V);
@@ -63,6 +70,8 @@ public:
 //private:
   template<typename TPtr>
   void setSymTabObject(TPtr *, TPtr);
+  static ValueSymbolTable *toPtr(ValueSymbolTable *P) { return P; }
+  static ValueSymbolTable *toPtr(ValueSymbolTable &R) { return &R; }
 };
 
 } // End llvm namespace

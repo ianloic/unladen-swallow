@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 struct X { // expected-note{{previous definition is here}}
   struct X { } x; // expected-error{{nested redefinition of 'X'}}
 }; 
@@ -16,7 +16,7 @@ struct Z {
 
 void f2(void) {
   struct T t;
-  // FIXME: this is well-formed, but Clang breaks on it struct U u;
+  struct U u;
 }
 
 

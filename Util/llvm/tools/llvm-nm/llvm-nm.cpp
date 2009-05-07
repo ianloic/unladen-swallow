@@ -22,6 +22,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/System/Signals.h"
 #include <algorithm>
 #include <cctype>
@@ -68,7 +69,6 @@ namespace {
 }
 
 static char TypeCharForSymbol(GlobalValue &GV) {
-  /* FIXME: what to do with private linkage? */
   if (GV.isDeclaration())                                  return 'U';
   if (GV.hasLinkOnceLinkage())                             return 'C';
   if (GV.hasCommonLinkage())                               return 'C';
@@ -86,8 +86,11 @@ static char TypeCharForSymbol(GlobalValue &GV) {
 }
 
 static void DumpSymbolNameForGlobalValue(GlobalValue &GV) {
+  // Private linkage and available_externally linkage don't exist in symtab.
+  if (GV.hasPrivateLinkage() || GV.hasAvailableExternallyLinkage()) return;
+  
   const std::string SymbolAddrStr = "        "; // Not used yet...
-  char TypeChar = TypeCharForSymbol (GV);
+  char TypeChar = TypeCharForSymbol(GV);
   if ((TypeChar != 'U') && UndefinedOnly)
     return;
   if ((TypeChar == 'U') && DefinedOnly)
@@ -95,17 +98,17 @@ static void DumpSymbolNameForGlobalValue(GlobalValue &GV) {
   if (GV.hasLocalLinkage () && ExternalOnly)
     return;
   if (OutputFormat == posix) {
-    std::cout << GV.getName () << " " << TypeCharForSymbol (GV) << " "
+    std::cout << GV.getName () << " " << TypeCharForSymbol(GV) << " "
               << SymbolAddrStr << "\n";
   } else if (OutputFormat == bsd) {
-    std::cout << SymbolAddrStr << " " << TypeCharForSymbol (GV) << " "
+    std::cout << SymbolAddrStr << " " << TypeCharForSymbol(GV) << " "
               << GV.getName () << "\n";
   } else if (OutputFormat == sysv) {
     std::string PaddedName (GV.getName ());
     while (PaddedName.length () < 20)
       PaddedName += " ";
     std::cout << PaddedName << "|" << SymbolAddrStr << "|   "
-              << TypeCharForSymbol (GV)
+              << TypeCharForSymbol(GV)
               << "  |                  |      |     |\n";
   }
 }
@@ -121,10 +124,10 @@ static void DumpSymbolNamesFromModule(Module *M) {
               << "Name                  Value   Class        Type"
               << "         Size   Line  Section\n";
   }
-  std::for_each (M->begin (), M->end (), DumpSymbolNameForGlobalValue);
-  std::for_each (M->global_begin (), M->global_end (),
+  std::for_each (M->begin(), M->end(), DumpSymbolNameForGlobalValue);
+  std::for_each (M->global_begin(), M->global_end(),
                  DumpSymbolNameForGlobalValue);
-  std::for_each (M->alias_begin (), M->alias_end (),
+  std::for_each (M->alias_begin(), M->alias_end(),
                  DumpSymbolNameForGlobalValue);
 }
 
@@ -166,9 +169,12 @@ static void DumpSymbolNamesFromFile(std::string &Filename) {
 }
 
 int main(int argc, char **argv) {
-  llvm_shutdown_obj X;  // Call llvm_shutdown() on exit.
-  cl::ParseCommandLineOptions(argc, argv, "llvm symbol table dumper\n");
+  // Print a stack trace if we signal out.
   sys::PrintStackTraceOnErrorSignal();
+  PrettyStackTraceProgram X(argc, argv);
+  
+  llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
+  cl::ParseCommandLineOptions(argc, argv, "llvm symbol table dumper\n");
 
   ToolName = argv[0];
   if (BSDFormat) OutputFormat = bsd;

@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 class C {
 public:
   auto int errx; // expected-error {{error: storage class specified for a member declaration}}
@@ -20,22 +20,22 @@ public:
 
   int b : 1, w : 2;
   int : 1, : 2;
-  typedef int E : 1; // expected-error {{error: cannot declare 'E' to be a bit-field type}}
+  typedef int E : 1; // expected-error {{typedef member 'E' cannot be a bit-field}}
   static int sb : 1; // expected-error {{error: static member 'sb' cannot be a bit-field}}
   static int vs;
 
   typedef int func();
   func tm;
   func *ptm;
-  func btm : 1; // expected-error {{error: bit-field 'btm' with non-integral type}}
-  NestedC bc : 1; // expected-error {{error: bit-field 'bc' with non-integral type}}
+  func btm : 1; // expected-error {{bit-field 'btm' has non-integral type}}
+  NestedC bc : 1; // expected-error {{bit-field 'bc' has non-integral type}}
 
   enum E1 { en1, en2 };
 
   int i = 0; // expected-error {{error: 'i' can only be initialized if it is a static const integral data member}}
   static int si = 0; // expected-error {{error: 'si' can only be initialized if it is a static const integral data member}}
   static const NestedC ci = 0; // expected-error {{error: 'ci' can only be initialized if it is a static const integral data member}}
-  static const int nci = vs; // expected-error {{error: initializer element is not a compile-time constant}}
+  static const int nci = vs; // expected-error {{in-class initializer is not an integral constant expression}}
   static const int vi = 0;
   static const E evi = 0;
 
@@ -53,7 +53,7 @@ public:
 
   typedef int A;
 
-  virtual int viv; // expected-error {{error: 'virtual' can only appear on non-static member functions}}
+  virtual int viv; // expected-error {{'virtual' can only appear on non-static member functions}}
   virtual static int vsif(); // expected-error {{error: 'virtual' can only appear on non-static member functions}}
   virtual int vif();
 

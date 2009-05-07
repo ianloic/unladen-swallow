@@ -35,6 +35,37 @@ ELFTargetAsmInfo::ELFTargetAsmInfo(const TargetMachine &TM)
   TLSBSSSection = getNamedSection("\t.tbss",
                 SectionFlags::Writeable | SectionFlags::TLS | SectionFlags::BSS);
 
+  DataRelSection = getNamedSection("\t.data.rel", SectionFlags::Writeable);
+  DataRelLocalSection = getNamedSection("\t.data.rel.local",
+                                        SectionFlags::Writeable);
+  DataRelROSection = getNamedSection("\t.data.rel.ro",
+                                     SectionFlags::Writeable);
+  DataRelROLocalSection = getNamedSection("\t.data.rel.ro.local",
+                                          SectionFlags::Writeable);
+}
+
+SectionKind::Kind
+ELFTargetAsmInfo::SectionKindForGlobal(const GlobalValue *GV) const {
+  SectionKind::Kind Kind = TargetAsmInfo::SectionKindForGlobal(GV);
+
+  if (Kind != SectionKind::Data)
+    return Kind;
+
+  // Decide, whether we need data.rel stuff
+  const GlobalVariable* GVar = dyn_cast<GlobalVariable>(GV);
+  if (GVar->hasInitializer()) {
+    Constant *C = GVar->getInitializer();
+    bool isConstant = GVar->isConstant();
+    unsigned Reloc = RelocBehaviour();
+    if (Reloc != Reloc::None && C->ContainsRelocations(Reloc))
+      return (C->ContainsRelocations(Reloc::Global) ?
+              (isConstant ?
+               SectionKind::DataRelRO : SectionKind::DataRel) :
+              (isConstant ?
+               SectionKind::DataRelROLocal : SectionKind::DataRelLocal));
+  }
+
+  return Kind;
 }
 
 const Section*
@@ -49,14 +80,16 @@ ELFTargetAsmInfo::SelectSectionForGlobal(const GlobalValue *GV) const {
      case Function::DLLExportLinkage:
      case Function::ExternalLinkage:
       return TextSection;
-     case Function::WeakLinkage:
-     case Function::LinkOnceLinkage:
+     case Function::WeakAnyLinkage:
+     case Function::WeakODRLinkage:
+     case Function::LinkOnceAnyLinkage:
+     case Function::LinkOnceODRLinkage:
       std::string Name = UniqueSectionForGlobal(GV, Kind);
       unsigned Flags = SectionFlagsForGlobal(GV, Name.c_str());
       return getNamedSection(Name.c_str(), Flags);
     }
   } else if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV)) {
-    if (GVar->mayBeOverridden()) {
+    if (GVar->isWeakForLinker()) {
       std::string Name = UniqueSectionForGlobal(GVar, Kind);
       unsigned Flags = SectionFlagsForGlobal(GVar, Name.c_str());
       return getNamedSection(Name.c_str(), Flags);
@@ -65,6 +98,14 @@ ELFTargetAsmInfo::SelectSectionForGlobal(const GlobalValue *GV) const {
        case SectionKind::Data:
        case SectionKind::SmallData:
         return DataSection;
+       case SectionKind::DataRel:
+        return DataRelSection;
+       case SectionKind::DataRelLocal:
+        return DataRelLocalSection;
+       case SectionKind::DataRelRO:
+        return DataRelROSection;
+       case SectionKind::DataRelROLocal:
+        return DataRelROLocalSection;
        case SectionKind::BSS:
        case SectionKind::SmallBSS:
         // ELF targets usually have BSS sections

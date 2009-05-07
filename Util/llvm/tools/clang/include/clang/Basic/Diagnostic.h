@@ -25,15 +25,17 @@ namespace llvm {
 namespace clang {
   class DiagnosticClient;
   class SourceRange;
-  class SourceManager;
   class DiagnosticBuilder;
   class IdentifierInfo;
+  class LangOptions;
   
   // Import the diagnostic enums themselves.
   namespace diag {
     // Start position for diagnostics.
     enum {
-      DIAG_START_LEX      =                        300,
+      DIAG_START_DRIVER   =                        300,
+      DIAG_START_FRONTEND = DIAG_START_DRIVER   +  100,
+      DIAG_START_LEX      = DIAG_START_FRONTEND +  100,
       DIAG_START_PARSE    = DIAG_START_LEX      +  300,
       DIAG_START_AST      = DIAG_START_PARSE    +  300,
       DIAG_START_SEMA     = DIAG_START_AST      +  100,
@@ -48,23 +50,86 @@ namespace clang {
 
     // Get typedefs for common diagnostics.
     enum {
-#define DIAG(ENUM,FLAGS,DESC) ENUM,
-#include "clang/Basic/DiagnosticCommonKinds.def"
+#define DIAG(ENUM,FLAGS,DEFAULT_MAPPING,DESC,GROUP) ENUM,
+#include "clang/Basic/DiagnosticCommonKinds.inc"
       NUM_BUILTIN_COMMON_DIAGNOSTICS
 #undef DIAG
     };
       
     /// Enum values that allow the client to map NOTEs, WARNINGs, and EXTENSIONs
     /// to either MAP_IGNORE (nothing), MAP_WARNING (emit a warning), MAP_ERROR
-    /// (emit as an error), or MAP_DEFAULT (handle the default way).
+    /// (emit as an error).  It allows clients to map errors to
+    /// MAP_ERROR/MAP_DEFAULT or MAP_FATAL (stop emitting diagnostics after this
+    /// one).
     enum Mapping {
-      MAP_DEFAULT = 0,     //< Do not map this diagnostic.
+      // NOTE: 0 means "uncomputed".
       MAP_IGNORE  = 1,     //< Map this diagnostic to nothing, ignore it.
       MAP_WARNING = 2,     //< Map this diagnostic to a warning.
-      MAP_ERROR   = 3      //< Map this diagnostic to an error.
+      MAP_ERROR   = 3,     //< Map this diagnostic to an error.
+      MAP_FATAL   = 4,     //< Map this diagnostic to a fatal error.
+      
+      /// Map this diagnostic to "warning", but make it immune to -Werror.  This
+      /// happens when you specify -Wno-error=foo.
+      MAP_WARNING_NO_WERROR = 5
     };
   }
   
+/// \brief Annotates a diagnostic with some code that should be
+/// inserted, removed, or replaced to fix the problem.
+///
+/// This kind of hint should be used when we are certain that the
+/// introduction, removal, or modification of a particular (small!)
+/// amount of code will correct a compilation error. The compiler
+/// should also provide full recovery from such errors, such that
+/// suppressing the diagnostic output can still result in successful
+/// compilation.
+class CodeModificationHint {
+public:
+  /// \brief Tokens that should be removed to correct the error.
+  SourceRange RemoveRange;
+
+  /// \brief The location at which we should insert code to correct
+  /// the error.
+  SourceLocation InsertionLoc;
+
+  /// \brief The actual code to insert at the insertion location, as a
+  /// string.
+  std::string CodeToInsert;
+
+  /// \brief Empty code modification hint, indicating that no code
+  /// modification is known.
+  CodeModificationHint() : RemoveRange(), InsertionLoc() { }
+
+  /// \brief Create a code modification hint that inserts the given
+  /// code string at a specific location.
+  static CodeModificationHint CreateInsertion(SourceLocation InsertionLoc, 
+                                              const std::string &Code) {
+    CodeModificationHint Hint;
+    Hint.InsertionLoc = InsertionLoc;
+    Hint.CodeToInsert = Code;
+    return Hint;
+  }
+
+  /// \brief Create a code modification hint that removes the given
+  /// source range.
+  static CodeModificationHint CreateRemoval(SourceRange RemoveRange) {
+    CodeModificationHint Hint;
+    Hint.RemoveRange = RemoveRange;
+    return Hint;
+  }
+
+  /// \brief Create a code modification hint that replaces the given
+  /// source range with the given code string.
+  static CodeModificationHint CreateReplacement(SourceRange RemoveRange, 
+                                                const std::string &Code) {
+    CodeModificationHint Hint;
+    Hint.RemoveRange = RemoveRange;
+    Hint.InsertionLoc = RemoveRange.getBegin();
+    Hint.CodeToInsert = Code;
+    return Hint;
+  }
+};
+
 /// Diagnostic - This concrete class is used by the front-end to report
 /// problems and issues.  It massages the diagnostics (e.g. handling things like
 /// "report warnings as errors" and passes them off to the DiagnosticClient for
@@ -73,34 +138,51 @@ class Diagnostic {
 public:
   /// Level - The level of the diagnostic, after it has been through mapping.
   enum Level {
-    Ignored, Note, Warning, Error
+    Ignored, Note, Warning, Error, Fatal
+  };
+  
+  /// ExtensionHandling - How do we handle otherwise-unmapped extension?  This
+  /// is controlled by -pedantic and -pedantic-errors.
+  enum ExtensionHandling {
+    Ext_Ignore, Ext_Warn, Ext_Error
   };
   
   enum ArgumentKind {
-    ak_std_string,     // std::string
-    ak_c_string,       // const char *
-    ak_sint,           // int
-    ak_uint,           // unsigned
-    ak_identifierinfo, // IdentifierInfo
-    ak_qualtype,       // QualType
-    ak_declarationname // DeclarationName
+    ak_std_string,      // std::string
+    ak_c_string,        // const char *
+    ak_sint,            // int
+    ak_uint,            // unsigned
+    ak_identifierinfo,  // IdentifierInfo
+    ak_qualtype,        // QualType
+    ak_declarationname, // DeclarationName
+    ak_nameddecl        // NamedDecl *
   };
-  
-private:  
-  bool IgnoreAllWarnings;     // Ignore all warnings: -w
-  bool WarningsAsErrors;      // Treat warnings like errors: 
-  bool WarnOnExtensions;      // Enables warnings for gcc extensions: -pedantic.
-  bool ErrorOnExtensions;     // Error on extensions: -pedantic-errors.
-  bool SuppressSystemWarnings;// Suppress warnings in system headers.
+
+private: 
+  unsigned char AllExtensionsSilenced; // Used by __extension__
+  bool IgnoreAllWarnings;        // Ignore all warnings: -w
+  bool WarningsAsErrors;         // Treat warnings like errors: 
+  bool SuppressSystemWarnings;   // Suppress warnings in system headers.
+  ExtensionHandling ExtBehavior; // Map extensions onto warnings or errors?
   DiagnosticClient *Client;
 
   /// DiagMappings - Mapping information for diagnostics.  Mapping info is
-  /// packed into two bits per diagnostic.
-  unsigned char DiagMappings[diag::DIAG_UPPER_LIMIT/4];
+  /// packed into four bits per diagnostic.  The low three bits are the mapping
+  /// (an instance of diag::Mapping), or zero if unset.  The high bit is set
+  /// when the mapping was established as a user mapping.  If the high bit is
+  /// clear, then the low bits are set to the default value, and should be
+  /// mapped with -pedantic, -Werror, etc.
+  mutable unsigned char DiagMappings[diag::DIAG_UPPER_LIMIT/2];
   
-  /// ErrorOccurred - This is set to true when an error is emitted, and is
-  /// sticky.
+  /// ErrorOccurred / FatalErrorOccurred - This is set to true when an error or
+  /// fatal error is emitted, and is sticky.
   bool ErrorOccurred;
+  bool FatalErrorOccurred;
+  
+  /// LastDiagLevel - This is the level of the last diagnostic emitted.  This is
+  /// used to emit continuation diagnostics with the same level as the
+  /// diagnostic that they follow.
+  Diagnostic::Level LastDiagLevel;
 
   unsigned NumDiagnostics;    // Number of diagnostics reported
   unsigned NumErrors;         // Number of diagnostics that are errors
@@ -115,7 +197,9 @@ private:
   typedef void (*ArgToStringFnTy)(ArgumentKind Kind, intptr_t Val,
                                   const char *Modifier, unsigned ModifierLen,
                                   const char *Argument, unsigned ArgumentLen,
-                                  llvm::SmallVectorImpl<char> &Output);
+                                  llvm::SmallVectorImpl<char> &Output,
+                                  void *Cookie);
+  void *ArgToStringCookie;
   ArgToStringFnTy ArgToStringFn;
 public:
   explicit Diagnostic(DiagnosticClient *client = 0);
@@ -140,40 +224,42 @@ public:
   void setWarningsAsErrors(bool Val) { WarningsAsErrors = Val; }
   bool getWarningsAsErrors() const { return WarningsAsErrors; }
   
-  /// setWarnOnExtensions - When set to true, issue warnings on GCC extensions,
-  /// the equivalent of GCC's -pedantic.
-  void setWarnOnExtensions(bool Val) { WarnOnExtensions = Val; }
-  bool getWarnOnExtensions() const { return WarnOnExtensions; }
-  
-  /// setErrorOnExtensions - When set to true issue errors for GCC extensions
-  /// instead of warnings.  This is the equivalent to GCC's -pedantic-errors.
-  void setErrorOnExtensions(bool Val) { ErrorOnExtensions = Val; }
-  bool getErrorOnExtensions() const { return ErrorOnExtensions; }
-
   /// setSuppressSystemWarnings - When set to true mask warnings that
   /// come from system headers.
   void setSuppressSystemWarnings(bool Val) { SuppressSystemWarnings = Val; }
   bool getSuppressSystemWarnings() const { return SuppressSystemWarnings; }
 
+  /// setExtensionHandlingBehavior - This controls whether otherwise-unmapped
+  /// extension diagnostics are mapped onto ignore/warning/error.  This
+  /// corresponds to the GCC -pedantic and -pedantic-errors option.
+  void setExtensionHandlingBehavior(ExtensionHandling H) {
+    ExtBehavior = H;
+  }
+  
+  /// AllExtensionsSilenced - This is a counter bumped when an __extension__
+  /// block is encountered.  When non-zero, all extension diagnostics are
+  /// entirely silenced, no matter how they are mapped.
+  void IncrementAllExtensionsSilenced() { ++AllExtensionsSilenced; }
+  void DecrementAllExtensionsSilenced() { --AllExtensionsSilenced; }
+  
   /// setDiagnosticMapping - This allows the client to specify that certain
-  /// warnings are ignored.  Only NOTEs, WARNINGs, and EXTENSIONs can be mapped.
+  /// warnings are ignored.  Notes can never be mapped, errors can only be
+  /// mapped to fatal, and WARNINGs and EXTENSIONs can be mapped arbitrarily.
   void setDiagnosticMapping(diag::kind Diag, diag::Mapping Map) {
     assert(Diag < diag::DIAG_UPPER_LIMIT &&
            "Can only map builtin diagnostics");
-    assert(isBuiltinNoteWarningOrExtension(Diag) && "Cannot map errors!");
-    unsigned char &Slot = DiagMappings[Diag/4];
-    unsigned Bits = (Diag & 3)*2;
-    Slot &= ~(3 << Bits);
-    Slot |= Map << Bits;
-  }
-
-  /// getDiagnosticMapping - Return the mapping currently set for the specified
-  /// diagnostic.
-  diag::Mapping getDiagnosticMapping(diag::kind Diag) const {
-    return (diag::Mapping)((DiagMappings[Diag/4] >> (Diag & 3)*2) & 3);
+    assert((isBuiltinWarningOrExtension(Diag) || Map == diag::MAP_FATAL) &&
+           "Cannot map errors!");
+    setDiagnosticMappingInternal(Diag, Map, true);
   }
   
+  /// setDiagnosticGroupMapping - Change an entire diagnostic group (e.g.
+  /// "unknown-pragmas" to have the specified mapping.  This returns true and
+  /// ignores the request if "Group" was unknown, false otherwise.
+  bool setDiagnosticGroupMapping(const char *Group, diag::Mapping Map);
+
   bool hasErrorOccurred() const { return ErrorOccurred; }
+  bool hasFatalErrorOccurred() const { return FatalErrorOccurred; }
 
   unsigned getNumErrors() const { return NumErrors; }
   unsigned getNumDiagnostics() const { return NumDiagnostics; }
@@ -190,11 +276,13 @@ public:
                           const char *Modifier, unsigned ModLen,
                           const char *Argument, unsigned ArgLen,
                           llvm::SmallVectorImpl<char> &Output) const {
-    ArgToStringFn(Kind, Val, Modifier, ModLen, Argument, ArgLen, Output);
+    ArgToStringFn(Kind, Val, Modifier, ModLen, Argument, ArgLen, Output,
+                  ArgToStringCookie);
   }
   
-  void SetArgToStringFn(ArgToStringFnTy Fn) {
+  void SetArgToStringFn(ArgToStringFnTy Fn, void *Cookie) {
     ArgToStringFn = Fn;
+    ArgToStringCookie = Cookie;
   }
   
   //===--------------------------------------------------------------------===//
@@ -205,16 +293,30 @@ public:
   /// issue.
   const char *getDescription(unsigned DiagID) const;
   
-  /// isBuiltinNoteWarningOrExtension - Return true if the unmapped diagnostic
-  /// level of the specified diagnostic ID is a Note, Warning, or Extension.
-  /// Note that this only works on builtin diagnostics, not custom ones.
-  static bool isBuiltinNoteWarningOrExtension(unsigned DiagID);
+  /// isNoteWarningOrExtension - Return true if the unmapped diagnostic
+  /// level of the specified diagnostic ID is a Warning or Extension.
+  /// This only works on builtin diagnostics, not custom ones, and is not legal to
+  /// call on NOTEs.
+  static bool isBuiltinWarningOrExtension(unsigned DiagID);
+
+  /// \brief Determine whether the given built-in diagnostic ID is a
+  /// Note.
+  static bool isBuiltinNote(unsigned DiagID);
+  
+  /// isBuiltinExtensionDiag - Determine whether the given built-in diagnostic
+  /// ID is for an extension of some sort.
+  ///
+  static bool isBuiltinExtensionDiag(unsigned DiagID);
+  
+  /// getWarningOptionForDiag - Return the lowest-level warning option that
+  /// enables the specified diagnostic.  If there is no -Wfoo flag that controls
+  /// the diagnostic, this returns null.
+  static const char *getWarningOptionForDiag(unsigned DiagID);
 
   /// getDiagnosticLevel - Based on the way the client configured the Diagnostic
   /// object, classify the specified diagnostic ID into a Level, consumable by
   /// the DiagnosticClient.
-  Level getDiagnosticLevel(unsigned DiagID) const;
-  
+  Level getDiagnosticLevel(unsigned DiagID) const;  
   
   /// Report - Issue the message to the client.  @c DiagID is a member of the
   /// @c diag::kind enum.  This actually returns aninstance of DiagnosticBuilder
@@ -222,8 +324,31 @@ public:
   /// @c Pos represents the source location associated with the diagnostic,
   /// which can be an invalid location if no position information is available.
   inline DiagnosticBuilder Report(FullSourceLoc Pos, unsigned DiagID);
+
+  /// \brief Clear out the current diagnostic.
+  void Clear() { CurDiagID = ~0U; }
   
 private:
+  /// getDiagnosticMappingInfo - Return the mapping info currently set for the
+  /// specified builtin diagnostic.  This returns the high bit encoding, or zero
+  /// if the field is completely uninitialized.
+  unsigned getDiagnosticMappingInfo(diag::kind Diag) const {
+    return (diag::Mapping)((DiagMappings[Diag/2] >> (Diag & 1)*4) & 15);
+  }
+  
+  void setDiagnosticMappingInternal(unsigned DiagId, unsigned Map,
+                                    bool isUser) const {
+    if (isUser) Map |= 8;  // Set the high bit for user mappings.
+    unsigned char &Slot = DiagMappings[DiagId/2];
+    unsigned Shift = (DiagId & 1)*4;
+    Slot &= ~(15 << Shift);
+    Slot |= Map << Shift;
+  }
+  
+  /// getDiagnosticLevel - This is an internal implementation helper used when
+  /// DiagClass is already known.
+  Level getDiagnosticLevel(unsigned DiagID, unsigned DiagClass) const;
+
   // This is private state used by DiagnosticBuilder.  We put it here instead of
   // in DiagnosticBuilder in order to keep DiagnosticBuilder a small lightweight
   // object.  This implementation choice means that we can only have one
@@ -252,7 +377,10 @@ private:
   signed char NumDiagArgs;
   /// NumRanges - This is the number of ranges in the DiagRanges array.
   unsigned char NumDiagRanges;
-  
+  /// \brief The number of code modifications hints in the
+  /// CodeModificationHints array.
+  unsigned char NumCodeModificationHints;
+
   /// DiagArgumentsKind - This is an array of ArgumentKind::ArgumentKind enum
   /// values, with one for each argument.  This specifies whether the argument
   /// is in DiagArgumentsStr or in DiagArguments.
@@ -273,6 +401,12 @@ private:
   /// only support 10 ranges, could easily be extended if needed.
   const SourceRange *DiagRanges[10];
   
+  enum { MaxCodeModificationHints = 3 };
+
+  /// CodeModificationHints - If valid, provides a hint with some code
+  /// to insert, remove, or modify at a particular position.
+  CodeModificationHint CodeModificationHints[MaxCodeModificationHints];
+
   /// ProcessDiag - This is the method used to report a diagnostic that is
   /// finally fully formed.
   void ProcessDiag();
@@ -295,38 +429,54 @@ private:
 /// for example.
 class DiagnosticBuilder {
   mutable Diagnostic *DiagObj;
-  mutable unsigned NumArgs, NumRanges;
+  mutable unsigned NumArgs, NumRanges, NumCodeModificationHints;
   
   void operator=(const DiagnosticBuilder&); // DO NOT IMPLEMENT
   friend class Diagnostic;
   explicit DiagnosticBuilder(Diagnostic *diagObj)
-    : DiagObj(diagObj), NumArgs(0), NumRanges(0) {}
-public:
-  
+    : DiagObj(diagObj), NumArgs(0), NumRanges(0), 
+      NumCodeModificationHints(0) {}
+
+public:  
   /// Copy constructor.  When copied, this "takes" the diagnostic info from the
   /// input and neuters it.
   DiagnosticBuilder(const DiagnosticBuilder &D) {
     DiagObj = D.DiagObj;
     D.DiagObj = 0;
+    NumArgs = D.NumArgs;
+    NumRanges = D.NumRanges;
+    NumCodeModificationHints = D.NumCodeModificationHints;
   }
-  
-  /// Destructor - The dtor emits the diagnostic.
-  ~DiagnosticBuilder() {
-    // If DiagObj is null, then its soul was stolen by the copy ctor.
+
+  /// \brief Force the diagnostic builder to emit the diagnostic now.
+  ///
+  /// Once this function has been called, the DiagnosticBuilder object
+  /// should not be used again before it is destroyed.
+  void Emit() {
+    // If DiagObj is null, then its soul was stolen by the copy ctor
+    // or the user called Emit().
     if (DiagObj == 0) return;
 
-    // When destroyed, the ~DiagnosticBuilder sets the final argument count into
+    // When emitting diagnostics, we set the final argument count into
     // the Diagnostic object.
     DiagObj->NumDiagArgs = NumArgs;
     DiagObj->NumDiagRanges = NumRanges;
+    DiagObj->NumCodeModificationHints = NumCodeModificationHints;
 
     // Process the diagnostic, sending the accumulated information to the
     // DiagnosticClient.
     DiagObj->ProcessDiag();
 
-    // This diagnostic is no longer in flight.
-    DiagObj->CurDiagID = ~0U;
+    // Clear out the current diagnostic object.
+    DiagObj->Clear();
+
+    // This diagnostic is dead.
+    DiagObj = 0;
   }
+
+  /// Destructor - The dtor emits the diagnostic if it hasn't already
+  /// been emitted.
+  ~DiagnosticBuilder() { Emit(); }
   
   /// Operator bool: conversion of DiagnosticBuilder to bool always returns
   /// true.  This allows is to be used in boolean error contexts like:
@@ -353,6 +503,12 @@ public:
            "Too many arguments to diagnostic!");
     DiagObj->DiagRanges[NumRanges++] = &R;
   }    
+
+  void AddCodeModificationHint(const CodeModificationHint &Hint) const {
+    assert(NumCodeModificationHints < Diagnostic::MaxCodeModificationHints &&
+           "Too many code modification hints!");
+    DiagObj->CodeModificationHints[NumCodeModificationHints++] = Hint;
+  }
 };
 
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
@@ -396,7 +552,12 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
   DB.AddSourceRange(R);
   return DB;
 }
-  
+
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                           const CodeModificationHint &Hint) {
+  DB.AddCodeModificationHint(Hint);
+  return DB;
+}
 
 /// Report - Issue the message to the client.  DiagID is a member of the
 /// diag::kind enum.  This actually returns a new instance of DiagnosticBuilder
@@ -413,7 +574,7 @@ inline DiagnosticBuilder Diagnostic::Report(FullSourceLoc Loc, unsigned DiagID){
 //===----------------------------------------------------------------------===//
   
 /// DiagnosticInfo - This is a little helper class (which is basically a smart
-/// pointer that forward info from Diagnostic) that allows clients ot enquire
+/// pointer that forward info from Diagnostic) that allows clients to enquire
 /// about the currently in-flight diagnostic.
 class DiagnosticInfo {
   const Diagnostic *DiagObj;
@@ -487,19 +648,37 @@ public:
     return *DiagObj->DiagRanges[Idx];
   }
   
-  
+  unsigned getNumCodeModificationHints() const {
+    return DiagObj->NumCodeModificationHints;
+  }
+
+  const CodeModificationHint &getCodeModificationHint(unsigned Idx) const {
+    return DiagObj->CodeModificationHints[Idx];
+  }
+
+  const CodeModificationHint *getCodeModificationHints() const {
+    return DiagObj->NumCodeModificationHints? 
+             &DiagObj->CodeModificationHints[0] : 0;
+  }
+
   /// FormatDiagnostic - Format this diagnostic into a string, substituting the
   /// formal arguments into the %0 slots.  The result is appended onto the Str
   /// array.
   void FormatDiagnostic(llvm::SmallVectorImpl<char> &OutStr) const;
 };
   
-
 /// DiagnosticClient - This is an abstract interface implemented by clients of
 /// the front-end, which formats and prints fully processed diagnostics.
 class DiagnosticClient {
 public:
   virtual ~DiagnosticClient();
+  
+  /// setLangOptions - This is set by clients of diagnostics when they know the
+  /// language parameters of the diagnostics that may be sent through.  Note
+  /// that this can change over time if a DiagClient has multiple languages sent
+  /// through it.  It may also be set to null (e.g. when processing command line
+  /// options).
+  virtual void setLangOptions(const LangOptions *LO) {}
   
   /// IncludeInDiagnosticCounts - This method (whose default implementation
   ///  returns true) indicates whether the diagnostics handled by this

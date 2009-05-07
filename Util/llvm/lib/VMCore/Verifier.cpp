@@ -61,6 +61,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <sstream>
 #include <cstdarg>
@@ -216,7 +217,7 @@ namespace {
         return false;
       case ReturnStatusAction:
         msgs << "compilation terminated.\n";
-        return Broken;
+        return true;
       }
     }
 
@@ -290,8 +291,10 @@ namespace {
     }
 
     void WriteType(const Type *T) {
-      if ( !T ) return;
-      WriteTypeSymbolic(msgs, T, Mod );
+      if (!T) return;
+      raw_os_ostream RO(msgs);
+      RO << ' ';
+      WriteTypeSymbolic(RO, T, Mod);
     }
 
 
@@ -335,6 +338,36 @@ static RegisterPass<Verifier> X("verify", "Module Verifier");
 #define Assert4(C, M, V1, V2, V3, V4) \
   do { if (!(C)) { CheckFailed(M, V1, V2, V3, V4); return; } } while (0)
 
+/// Check whether or not a Value is metadata or made up of a constant
+/// expression involving metadata.
+static bool isMetadata(Value *X) {
+  SmallPtrSet<Value *, 8> Visited;
+  SmallVector<Value *, 8> Queue;
+  Queue.push_back(X);
+
+  while (!Queue.empty()) {
+    Value *V = Queue.back();
+    Queue.pop_back();
+    if (!Visited.insert(V))
+      continue;
+
+    if (isa<MDString>(V) || isa<MDNode>(V))
+      return true;
+    if (!isa<ConstantExpr>(V))
+      continue;
+    ConstantExpr *CE = cast<ConstantExpr>(V);
+
+    if (CE->getType() != Type::EmptyStructTy)
+      continue;
+
+    // The only constant expression that works on metadata type is select.
+    if (CE->getOpcode() != Instruction::Select) return false;
+
+    Queue.push_back(CE->getOperand(1));
+    Queue.push_back(CE->getOperand(2));
+  }
+  return false;
+}
 
 void Verifier::visit(Instruction &I) {
   for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i)
@@ -394,7 +427,9 @@ void Verifier::visitGlobalAlias(GlobalAlias &GA) {
 
   if (!isa<GlobalValue>(GA.getAliasee())) {
     const ConstantExpr *CE = dyn_cast<ConstantExpr>(GA.getAliasee());
-    Assert1(CE && CE->getOpcode() == Instruction::BitCast &&
+    Assert1(CE && 
+            (CE->getOpcode() == Instruction::BitCast ||
+             CE->getOpcode() == Instruction::GetElementPtr) &&
             isa<GlobalValue>(CE->getOperand(0)),
             "Aliasee should be either GlobalValue or bitcast of GlobalValue",
             &GA);
@@ -646,6 +681,7 @@ void Verifier::visitReturnInst(ReturnInst &RI) {
             "Found return instr that returns non-void in Function of void "
             "return type!", &RI, F->getReturnType());
   else if (N == 1 && F->getReturnType() == RI.getOperand(0)->getType()) {
+    Assert1(!isMetadata(RI.getOperand(0)), "Invalid use of metadata!", &RI);
     // Exactly one return value and it matches the return type. Good.
   } else if (const StructType *STy = dyn_cast<StructType>(F->getReturnType())) {
     // The return type is a struct; check for multiple return values.
@@ -693,6 +729,8 @@ void Verifier::visitSelectInst(SelectInst &SI) {
 
   Assert1(SI.getTrueValue()->getType() == SI.getType(),
           "Select values must have same type as select instruction!", &SI);
+  Assert1(!isMetadata(SI.getOperand(1)) && !isMetadata(SI.getOperand(2)),
+          "Invalid use of metadata!", &SI);
   visitInstruction(SI);
 }
 
@@ -948,6 +986,13 @@ void Verifier::visitPHINode(PHINode &PN) {
     Assert1(PN.getType() == PN.getIncomingValue(i)->getType(),
             "PHI node operands are not the same type as the result!", &PN);
 
+  // Check that it's not a PHI of metadata.
+  if (PN.getType() == Type::EmptyStructTy) {
+    for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i)
+      Assert1(!isMetadata(PN.getIncomingValue(i)),
+              "Invalid use of metadata!", &PN);
+  }
+
   // All other PHI node constraints are checked in the visitBasicBlock method.
 
   visitInstruction(PN);
@@ -978,6 +1023,14 @@ void Verifier::VerifyCallSite(CallSite CS) {
             "Call parameter type does not match function signature!",
             CS.getArgument(i), FTy->getParamType(i), I);
 
+  if (CS.getCalledValue()->getNameLen() < 5 ||
+      strncmp(CS.getCalledValue()->getNameStart(), "llvm.", 5) != 0) {
+    // Verify that none of the arguments are metadata...
+    for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i)
+      Assert2(!isMetadata(CS.getArgument(i)), "Invalid use of metadata!",
+              CS.getArgument(i), I);
+  }
+
   const AttrListPtr &Attrs = CS.getAttributes();
 
   Assert1(VerifyAttributeCount(Attrs, CS.arg_size()),
@@ -1004,10 +1057,9 @@ void Verifier::VerifyCallSite(CallSite CS) {
 void Verifier::visitCallInst(CallInst &CI) {
   VerifyCallSite(&CI);
 
-  if (Function *F = CI.getCalledFunction()) {
+  if (Function *F = CI.getCalledFunction())
     if (Intrinsic::ID ID = (Intrinsic::ID)F->getIntrinsicID())
       visitIntrinsicFunctionCall(ID, CI);
-  }
 }
 
 void Verifier::visitInvokeInst(InvokeInst &II) {
@@ -1150,6 +1202,7 @@ void Verifier::visitStoreInst(StoreInst &SI) {
     cast<PointerType>(SI.getOperand(1)->getType())->getElementType();
   Assert2(ElTy == SI.getOperand(0)->getType(),
           "Stored value type does not match pointer operand type!", &SI, ElTy);
+  Assert1(!isMetadata(SI.getOperand(0)), "Invalid use of metadata!", &SI);
   visitInstruction(SI);
 }
 
@@ -1220,7 +1273,7 @@ void Verifier::visitInstruction(Instruction &I) {
             *UI);
     Instruction *Used = cast<Instruction>(*UI);
     Assert2(Used->getParent() != 0, "Instruction referencing instruction not"
-            " embeded in a basic block!", &I, Used);
+            " embedded in a basic block!", &I, Used);
   }
 
   for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i) {
@@ -1479,7 +1532,7 @@ bool Verifier::PerformTypeCheck(Intrinsic::ID ID, Function *F, const Type *Ty,
     if (EltTy != Ty)
       Suffix += "v" + utostr(NumElts);
 
-    Suffix += "i" + utostr(GotBits);;
+    Suffix += "i" + utostr(GotBits);
 
     // Check some constraints on various intrinsics.
     switch (ID) {

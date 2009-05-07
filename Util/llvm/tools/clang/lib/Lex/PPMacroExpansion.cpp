@@ -18,20 +18,19 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Lex/LexDiagnostic.h"
+#include <cstdio>
 #include <ctime>
 using namespace clang;
 
 /// setMacroInfo - Specify a macro for this identifier.
 ///
 void Preprocessor::setMacroInfo(IdentifierInfo *II, MacroInfo *MI) {
-  if (MI == 0) {
-    if (II->hasMacroDefinition()) {
-      Macros.erase(II);
-      II->setHasMacroDefinition(false);
-    }
-  } else {
+  if (MI) {
     Macros[II] = MI;
     II->setHasMacroDefinition(true);
+  } else if (II->hasMacroDefinition()) {
+    Macros.erase(II);
+    II->setHasMacroDefinition(false);
   }
 }
 
@@ -56,6 +55,7 @@ void Preprocessor::RegisterBuiltinMacros() {
   Ident__FILE__ = RegisterBuiltinMacro("__FILE__");
   Ident__DATE__ = RegisterBuiltinMacro("__DATE__");
   Ident__TIME__ = RegisterBuiltinMacro("__TIME__");
+  Ident__COUNTER__ = RegisterBuiltinMacro("__COUNTER__");
   Ident_Pragma  = RegisterBuiltinMacro("_Pragma");
   
   // GCC Extensions.
@@ -136,19 +136,15 @@ bool Preprocessor::isNextPPTokenLParen() {
   // Okay, if we know that the token is a '(', lex it and return.  Otherwise we
   // have found something that isn't a '(' or we found the end of the
   // translation unit.  In either case, return false.
-  if (Val != 1)
-    return false;
-  
-  Token Tok;
-  LexUnexpandedToken(Tok);
-  assert(Tok.is(tok::l_paren) && "Error computing l-paren-ness?");
-  return true;
+  return Val == 1;
 }
 
 /// HandleMacroExpandedIdentifier - If an identifier token is read that is to be
 /// expanded as a macro, handle it and return the next token as 'Identifier'.
 bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier, 
                                                  MacroInfo *MI) {
+  if (Callbacks) Callbacks->MacroExpands(Identifier, MI);
+  
   // If this is a macro exapnsion in the "#if !defined(x)" line for the file,
   // then the macro could expand to different things in other contexts, we need
   // to disable the optimization in this case.
@@ -165,11 +161,14 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
   /// invocation.
   MacroArgs *Args = 0;
   
+  // Remember where the end of the instantiation occurred.  For an object-like
+  // macro, this is the identifier.  For a function-like macro, this is the ')'.
+  SourceLocation InstantiationEnd = Identifier.getLocation();
+  
   // If this is a function-like macro, read the arguments.
   if (MI->isFunctionLike()) {
     // C99 6.10.3p10: If the preprocessing token immediately after the the macro
-    // name isn't a '(', this macro should not be expanded.  Otherwise, consume
-    // it.
+    // name isn't a '(', this macro should not be expanded.
     if (!isNextPPTokenLParen())
       return true;
     
@@ -177,7 +176,7 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
     // Preprocessor directives used inside macro arguments are not portable, and
     // this enables the warning.
     InMacroArgs = true;
-    Args = ReadFunctionLikeMacroArgs(Identifier, MI);
+    Args = ReadFunctionLikeMacroArgs(Identifier, MI, InstantiationEnd);
     
     // Finished parsing args.
     InMacroArgs = false;
@@ -248,7 +247,7 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
     // locations.
     SourceLocation Loc =
       SourceMgr.createInstantiationLoc(Identifier.getLocation(), InstantiateLoc,
-                                       Identifier.getLength());
+                                       InstantiationEnd,Identifier.getLength());
     Identifier.setLocation(Loc);
     
     // If this is #define X X, we must mark the result as unexpandible.
@@ -263,7 +262,7 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
   }
   
   // Start expanding the macro.
-  EnterMacro(Identifier, Args);
+  EnterMacro(Identifier, InstantiationEnd, Args);
   
   // Now that the macro is at the top of the include stack, ask the
   // preprocessor to read the next token from it.
@@ -271,27 +270,38 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
   return false;
 }
 
-/// ReadFunctionLikeMacroArgs - After reading "MACRO(", this method is
-/// invoked to read all of the actual arguments specified for the macro
-/// invocation.  This returns null on error.
+/// ReadFunctionLikeMacroArgs - After reading "MACRO" and knowing that the next
+/// token is the '(' of the macro, this method is invoked to read all of the
+/// actual arguments specified for the macro invocation.  This returns null on
+/// error.
 MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
-                                                   MacroInfo *MI) {
+                                                   MacroInfo *MI,
+                                                   SourceLocation &MacroEnd) {
   // The number of fixed arguments to parse.
   unsigned NumFixedArgsLeft = MI->getNumArgs();
   bool isVariadic = MI->isVariadic();
   
   // Outer loop, while there are more arguments, keep reading them.
   Token Tok;
-  Tok.setKind(tok::comma);
-  --NumFixedArgsLeft;  // Start reading the first arg.
 
+  // Read arguments as unexpanded tokens.  This avoids issues, e.g., where
+  // an argument value in a macro could expand to ',' or '(' or ')'.
+  LexUnexpandedToken(Tok);
+  assert(Tok.is(tok::l_paren) && "Error computing l-paren-ness?");
+  
   // ArgTokens - Build up a list of tokens that make up each argument.  Each
   // argument is separated by an EOF token.  Use a SmallVector so we can avoid
   // heap allocations in the common case.
   llvm::SmallVector<Token, 64> ArgTokens;
 
   unsigned NumActuals = 0;
-  while (Tok.is(tok::comma)) {
+  while (Tok.isNot(tok::r_paren)) {
+    assert((Tok.is(tok::l_paren) || Tok.is(tok::comma)) &&
+           "only expect argument separators here");
+    
+    unsigned ArgTokenStart = ArgTokens.size();
+    SourceLocation ArgStartLoc = Tok.getLocation();
+    
     // C99 6.10.3p11: Keep track of the number of l_parens we have seen.  Note
     // that we already consumed the first one.
     unsigned NumParens = 0;
@@ -308,28 +318,24 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
         return 0;
       } else if (Tok.is(tok::r_paren)) {
         // If we found the ) token, the macro arg list is done.
-        if (NumParens-- == 0)
+        if (NumParens-- == 0) {
+          MacroEnd = Tok.getLocation();
           break;
+        }
       } else if (Tok.is(tok::l_paren)) {
         ++NumParens;
       } else if (Tok.is(tok::comma) && NumParens == 0) {
         // Comma ends this argument if there are more fixed arguments expected.
-        if (NumFixedArgsLeft)
+        // However, if this is a variadic macro, and this is part of the
+        // variadic part, then the comma is just an argument token. 
+        if (!isVariadic) break;
+        if (NumFixedArgsLeft > 1)
           break;
-        
-        // If this is not a variadic macro, too many args were specified.
-        if (!isVariadic) {
-          // Emit the diagnostic at the macro name in case there is a missing ).
-          // Emitting it at the , could be far away from the macro name.
-          Diag(MacroName, diag::err_too_many_args_in_macro_invoc);
-          return 0;
-        }
-        // Otherwise, continue to add the tokens to this variable argument.
       } else if (Tok.is(tok::comment) && !KeepMacroComments) {
         // If this is a comment token in the argument list and we're just in
         // -C mode (not -CC mode), discard the comment.
         continue;
-      } else if (Tok.is(tok::identifier)) {
+      } else if (Tok.getIdentifierInfo() != 0) {
         // Reading macro arguments can cause macros that we are currently
         // expanding from to be popped off the expansion stack.  Doing so causes
         // them to be reenabled for expansion.  Here we record whether any
@@ -342,10 +348,27 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
       }
       ArgTokens.push_back(Tok);
     }
+    
+    // If this was an empty argument list foo(), don't add this as an empty
+    // argument.
+    if (ArgTokens.empty() && Tok.getKind() == tok::r_paren)
+      break;
 
+    // If this is not a variadic macro, and too many args were specified, emit
+    // an error.
+    if (!isVariadic && NumFixedArgsLeft == 0) {
+      if (ArgTokens.size() != ArgTokenStart)
+        ArgStartLoc = ArgTokens[ArgTokenStart].getLocation();
+      
+      // Emit the diagnostic at the macro name in case there is a missing ).
+      // Emitting it at the , could be far away from the macro name.
+      Diag(ArgStartLoc, diag::err_too_many_args_in_macro_invoc);
+      return 0;
+    }
+    
     // Empty arguments are standard in C99 and supported as an extension in
     // other modes.
-    if (ArgTokens.empty() && !Features.C99)
+    if (ArgTokens.size() == ArgTokenStart && !Features.C99)
       Diag(Tok, diag::ext_empty_fnmacro_arg);
     
     // Add a marker EOF token to the end of the token list for this argument.
@@ -356,8 +379,9 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
     EOFTok.setLength(0);
     ArgTokens.push_back(EOFTok);
     ++NumActuals;
+    assert(NumFixedArgsLeft != 0 && "Too many arguments parsed");
     --NumFixedArgsLeft;
-  };
+  }
   
   // Okay, we either found the r_paren.  Check to see if we parsed too few
   // arguments.
@@ -368,27 +392,28 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
   
   if (NumActuals < MinArgsExpected) {
     // There are several cases where too few arguments is ok, handle them now.
-    if (NumActuals+1 == MinArgsExpected && MI->isVariadic()) {
+    if (NumActuals == 0 && MinArgsExpected == 1) {
+      // #define A(X)  or  #define A(...)   ---> A()
+      
+      // If there is exactly one argument, and that argument is missing,
+      // then we have an empty "()" argument empty list.  This is fine, even if
+      // the macro expects one argument (the argument is just empty).
+      isVarargsElided = MI->isVariadic();
+    } else if (MI->isVariadic() &&
+               (NumActuals+1 == MinArgsExpected ||  // A(x, ...) -> A(X)
+                (NumActuals == 0 && MinArgsExpected == 2))) {// A(x,...) -> A()
       // Varargs where the named vararg parameter is missing: ok as extension.
       // #define A(x, ...)
       // A("blah")
       Diag(Tok, diag::ext_missing_varargs_arg);
 
-      // Remember this occurred if this is a macro invocation with at least
-      // one actual argument.  This allows us to elide the comma when used for
+      // Remember this occurred, allowing us to elide the comma when used for
       // cases like:
       //   #define A(x, foo...) blah(a, ## foo) 
-      //   #define A(x, ...) blah(a, ## __VA_ARGS__) 
-      isVarargsElided = MI->getNumArgs() > 1;
-    } else if (MI->getNumArgs() == 1) {
-      // #define A(x)
-      //   A()
-      // is ok because it is an empty argument.
-      
-      // Empty arguments are standard in C99 and supported as an extension in
-      // other modes.
-      if (ArgTokens.empty() && !Features.C99)
-        Diag(Tok, diag::ext_empty_fnmacro_arg);
+      //   #define B(x, ...) blah(a, ## __VA_ARGS__) 
+      //   #define C(...) blah(a, ## __VA_ARGS__) 
+      //  A(x) B(x) C()
+      isVarargsElided = true;
     } else {
       // Otherwise, emit the error.
       Diag(Tok, diag::err_too_few_args_in_macro_invoc);
@@ -402,6 +427,11 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
     Tok.setLocation(EndLoc);
     Tok.setLength(0);
     ArgTokens.push_back(Tok);
+  } else if (NumActuals > MinArgsExpected && !MI->isVariadic()) {
+    // Emit the diagnostic at the macro name in case there is a missing ).
+    // Emitting it at the , could be far away from the macro name.
+    Diag(MacroName, diag::err_too_many_args_in_macro_invoc);
+    return 0;
   }
   
   return MacroArgs::create(MI, &ArgTokens[0], ArgTokens.size(),isVarargsElided);
@@ -457,16 +487,24 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     // C99 6.10.8: "__LINE__: The presumed line number (within the current
     // source file) of the current source line (an integer constant)".  This can
     // be affected by #line.
-    PresumedLoc PLoc = SourceMgr.getPresumedLoc(Tok.getLocation());
+    SourceLocation Loc = Tok.getLocation();
     
-    // __LINE__ expands to a simple numeric value.  Add a space after it so that
-    // it will tokenize as a number (and not run into stuff after it in the temp
-    // buffer).
-    sprintf(TmpBuffer, "%u ", PLoc.getLine());
-    unsigned Length = strlen(TmpBuffer)-1;
+    // Advance to the location of the first _, this might not be the first byte
+    // of the token if it starts with an escaped newline.
+    Loc = AdvanceToTokenCharacter(Loc, 0);
+    
+    // One wrinkle here is that GCC expands __LINE__ to location of the *end* of
+    // a macro instantiation.  This doesn't matter for object-like macros, but
+    // can matter for a function-like macro that expands to contain __LINE__.
+    // Skip down through instantiation points until we find a file loc for the
+    // end of the instantiation history.
+    Loc = SourceMgr.getInstantiationRange(Loc).second;
+    PresumedLoc PLoc = SourceMgr.getPresumedLoc(Loc);
+    
+    // __LINE__ expands to a simple numeric value.
+    sprintf(TmpBuffer, "%u", PLoc.getLine());
     Tok.setKind(tok::numeric_constant);
-    CreateString(TmpBuffer, Length+1, Tok, Tok.getLocation());
-    Tok.setLength(Length);  // Trim off space.
+    CreateString(TmpBuffer, strlen(TmpBuffer), Tok, Tok.getLocation());
   } else if (II == Ident__FILE__ || II == Ident__BASE_FILE__) {
     // C99 6.10.8: "__FILE__: The presumed name of the current source file (a
     // character string literal)". This can be affected by #line.
@@ -494,6 +532,7 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     Tok.setKind(tok::string_literal);
     Tok.setLength(strlen("\"Mmm dd yyyy\""));
     Tok.setLocation(SourceMgr.createInstantiationLoc(DATELoc, Tok.getLocation(),
+                                                     Tok.getLocation(),
                                                      Tok.getLength()));
   } else if (II == Ident__TIME__) {
     if (!TIMELoc.isValid())
@@ -501,6 +540,7 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     Tok.setKind(tok::string_literal);
     Tok.setLength(strlen("\"hh:mm:ss\""));
     Tok.setLocation(SourceMgr.createInstantiationLoc(TIMELoc, Tok.getLocation(),
+                                                     Tok.getLocation(),
                                                      Tok.getLength()));
   } else if (II == Ident__INCLUDE_LEVEL__) {
     Diag(Tok, diag::ext_pp_include_level);
@@ -514,14 +554,10 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     for (; PLoc.isValid(); ++Depth)
       PLoc = SourceMgr.getPresumedLoc(PLoc.getIncludeLoc());
     
-    // __INCLUDE_LEVEL__ expands to a simple numeric value.  Add a space after
-    // it so that it will tokenize as a number (and not run into stuff after it
-    // in the temp buffer).
-    sprintf(TmpBuffer, "%u ", Depth);
-    unsigned Length = strlen(TmpBuffer)-1;
+    // __INCLUDE_LEVEL__ expands to a simple numeric value.
+    sprintf(TmpBuffer, "%u", Depth);
     Tok.setKind(tok::numeric_constant);
-    CreateString(TmpBuffer, Length, Tok, Tok.getLocation());
-    Tok.setLength(Length);  // Trim off space.
+    CreateString(TmpBuffer, strlen(TmpBuffer), Tok, Tok.getLocation());
   } else if (II == Ident__TIMESTAMP__) {
     // MSVC, ICC, GCC, VisualAge C++ extension.  The generated string should be
     // of the form "Ddd Mmm dd hh::mm::ss yyyy", which is returned by asctime.
@@ -547,10 +583,16 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     TmpBuffer[0] = '"';
     strcpy(TmpBuffer+1, Result);
     unsigned Len = strlen(TmpBuffer);
-    TmpBuffer[Len-1] = '"';  // Replace the newline with a quote.
+    TmpBuffer[Len] = '"';  // Replace the newline with a quote.
     Tok.setKind(tok::string_literal);
     CreateString(TmpBuffer, Len+1, Tok, Tok.getLocation());
-    Tok.setLength(Len);  // Trim off space.
+  } else if (II == Ident__COUNTER__) {
+    Diag(Tok, diag::ext_pp_counter);
+    
+    // __COUNTER__ expands to a simple numeric value.
+    sprintf(TmpBuffer, "%u", CounterValue++);
+    Tok.setKind(tok::numeric_constant);
+    CreateString(TmpBuffer, strlen(TmpBuffer), Tok, Tok.getLocation());
   } else {
     assert(0 && "Unknown identifier!");
   }

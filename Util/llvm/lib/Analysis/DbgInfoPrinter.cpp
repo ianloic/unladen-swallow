@@ -19,6 +19,7 @@
 #include "llvm/Module.h"
 #include "llvm/Value.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/Assembly/Writer.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -57,11 +58,17 @@ FunctionPass *llvm::createDbgInfoPrinterPass() { return new PrintDbgInfo(); }
 
 void PrintDbgInfo::printVariableDeclaration(const Value *V)
 {
-  if(const DbgDeclareInst* DDI = findDbgDeclare(V)) {
-    DIVariable Var(cast<GlobalVariable>(DDI->getVariable()));
-    Out << "; variable " << Var.getName()
-      << " of type " << Var.getType().getName()
-      << " at line " << Var.getLineNumber() << "\n";
+  std::string DisplayName, File, Directory, Type;
+  unsigned LineNo;
+  if (getLocationInfo(V, DisplayName, Type, LineNo, File, Directory)) {
+    Out << "; ";
+    WriteAsOperand(Out, V, false, 0);
+    Out << " is variable " << DisplayName
+      << " of type " << Type << " declared at ";
+    if (PrintDirectory) {
+      Out << Directory << "/";
+    }
+    Out << File << ":" << LineNo << "\n";
   }
 }
 
@@ -83,8 +90,9 @@ void PrintDbgInfo::printStopPoint(const DbgStopPointInst *DSI)
 void PrintDbgInfo::printFuncStart(const DbgFuncStartInst *FS)
 {
   DISubprogram Subprogram(cast<GlobalVariable>(FS->getSubprogram()));
-  Out << ";fully qualified function name: " << Subprogram.getDisplayName()
-    << " return type: " << Subprogram.getType().getName()
+  std::string Res1, Res2;
+  Out << ";fully qualified function name: " << Subprogram.getDisplayName(Res1)
+    << " return type: " << Subprogram.getType().getName(Res2)
     << " at line " << Subprogram.getLineNumber()
     << "\n\n";
 }
@@ -138,6 +146,11 @@ bool PrintDbgInfo::runOnFunction(Function &F)
         }
         Out << *i;
         printVariableDeclaration(i);
+        if (const User *U = dyn_cast<User>(i)) {
+          for(unsigned i=0;i<U->getNumOperands();i++) {
+            printVariableDeclaration(U->getOperand(i));
+          }
+        }
       }
     }
   }

@@ -63,6 +63,9 @@ protected:
     setType(T);
   }
 
+  /// \brief Construct an empty expression.
+  explicit Expr(StmtClass SC, EmptyShell) : Stmt(SC) { }
+
 public:  
   QualType getType() const { return TR; }
   void setType(QualType t) { 
@@ -88,6 +91,9 @@ public:
   /// @endcode
   bool isValueDependent() const { return ValueDependent; }
 
+  /// \brief Set whether this expression is value-dependent or not.
+  void setValueDependent(bool VD) { ValueDependent = VD; }
+
   /// isTypeDependent - Determines whether this expression is
   /// type-dependent (C++ [temp.dep.expr]), which means that its type
   /// could change from one template instantiation to the next. For
@@ -101,6 +107,9 @@ public:
   /// @endcode
   bool isTypeDependent() const { return TypeDependent; }
 
+  /// \brief Set whether this expression is type-dependent or not.
+  void setTypeDependent(bool TD) { TypeDependent = TD; }
+
   /// SourceLocation tokens are not useful in isolation - they are low level
   /// value objects created/interpreted by SourceManager. We assume AST
   /// clients will have a pointer to the respective SourceManager.
@@ -110,9 +119,12 @@ public:
   /// a problem with a generic expression.
   virtual SourceLocation getExprLoc() const { return getLocStart(); }
   
-  /// hasLocalSideEffect - Return true if this immediate expression has side
-  /// effects, not counting any sub-expressions.
-  bool hasLocalSideEffect() const;
+  /// isUnusedResultAWarning - Return true if this immediate expression should
+  /// be warned about if the result is unused.  If so, fill in Loc and Ranges
+  /// with location to warn on and the source range[s] to report with the
+  /// warning.
+  bool isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
+                              SourceRange &R2) const;
   
   /// isLvalue - C99 6.3.2.1: an lvalue is an expression with an object type or
   /// incomplete type other than void. Nonarray expressions that can be lvalues:
@@ -124,6 +136,7 @@ public:
   ///  - *e, the type of e cannot be a function type
   ///  - string-constant
   ///  - reference type [C++ [expr]]
+  ///  - b ? x : y, where x and y are lvalues of suitable types [C++]
   ///
   enum isLvalueResult {
     LV_Valid,
@@ -134,12 +147,19 @@ public:
     LV_MemberFunction
   };
   isLvalueResult isLvalue(ASTContext &Ctx) const;
+
+  // Same as above, but excluding checks for non-object and void types in C
+  isLvalueResult isLvalueInternal(ASTContext &Ctx) const;
   
   /// isModifiableLvalue - C99 6.3.2.1: an lvalue that does not have array type,
   /// does not have an incomplete type, does not have a const-qualified type,
   /// and if it is a structure or union, does not have any member (including, 
   /// recursively, any member or element of all contained aggregates or unions)
   /// with a const-qualified type.
+  ///
+  /// \param Loc [in] [out] - A source location which *may* be filled
+  /// in with the location of the expression making this a
+  /// non-modifiable lvalue, if specified.
   enum isModifiableLvalueResult {
     MLV_Valid,
     MLV_NotObjectType,
@@ -155,20 +175,12 @@ public:
     MLV_NoSetterProperty,
     MLV_MemberFunction
   };
-  isModifiableLvalueResult isModifiableLvalue(ASTContext &Ctx) const;
+  isModifiableLvalueResult isModifiableLvalue(ASTContext &Ctx,
+                                              SourceLocation *Loc = 0) const;
   
-  bool isBitField();
-
-  /// getIntegerConstantExprValue() - Return the value of an integer
-  /// constant expression. The expression must be a valid integer
-  /// constant expression as determined by isIntegerConstantExpr.
-  llvm::APSInt getIntegerConstantExprValue(ASTContext &Ctx) const {
-    llvm::APSInt X;
-    bool success = isIntegerConstantExpr(X, Ctx);
-    success = success;
-    assert(success && "Illegal argument to getIntegerConstantExpr");
-    return X;
-  }
+  /// \brief If this expression refers to a bit-field, retrieve the
+  /// declaration of that bit-field.
+  FieldDecl *getBitField();
 
   /// isIntegerConstantExpr - Return true if this expression is a valid integer
   /// constant expression, and, if so, return its value in Result.  If not a
@@ -187,7 +199,7 @@ public:
   
   /// EvalResult is a struct with detailed info about an evaluated expression.
   struct EvalResult {
-    /// Val - This is the scalar value the expression can be folded to.
+    /// Val - This is the value the expression can be folded to.
     APValue Val;
     
     /// HasSideEffects - Whether the evaluated expression has side effects.
@@ -223,6 +235,9 @@ public:
   /// must be called on an expression that constant folds to an integer.
   llvm::APSInt EvaluateAsInt(ASTContext &Ctx) const;
 
+  /// EvaluateAsLValue - Evaluate an expression to see if it's a valid LValue.
+  bool EvaluateAsLValue(EvalResult &Result, ASTContext &Ctx) const;
+
   /// isNullPointerConstant - C99 6.3.2.3p3 -  Return true if this is either an
   /// integer constant expression with the value zero, or if this is one that is
   /// cast to void*.
@@ -232,6 +247,10 @@ public:
   /// duration.  This means that the address of this expression is a link-time
   /// constant.
   bool hasGlobalStorage() const;  
+
+  /// isOBJCGCCandidate - Return true if this expression may be used in a read/
+  /// write barrier. 
+  bool isOBJCGCCandidate() const;
   
   /// IgnoreParens - Ignore parentheses.  If this Expr is a ParenExpr, return
   ///  its subexpression.  If that subexpression is also a ParenExpr, 
@@ -243,13 +262,21 @@ public:
   /// or CastExprs, returning their operand.
   Expr *IgnoreParenCasts();
   
+  /// IgnoreParenNoopCasts - Ignore parentheses and casts that do not change the
+  /// value (including ptr->int casts of the same size).  Strip off any
+  /// ParenExpr or CastExprs, returning their operand.
+  Expr *IgnoreParenNoopCasts(ASTContext &Ctx);
+  
   const Expr* IgnoreParens() const {
     return const_cast<Expr*>(this)->IgnoreParens();
   }
   const Expr *IgnoreParenCasts() const {
     return const_cast<Expr*>(this)->IgnoreParenCasts();
   }
-
+  const Expr *IgnoreParenNoopCasts(ASTContext &Ctx) const {
+    return const_cast<Expr*>(this)->IgnoreParenNoopCasts(Ctx);
+  }
+  
   static bool hasAnyTypeDependentArguments(Expr** Exprs, unsigned NumExprs);
   static bool hasAnyValueDependentArguments(Expr** Exprs, unsigned NumExprs);
 
@@ -258,10 +285,6 @@ public:
            T->getStmtClass() <= lastExprConstant; 
   }
   static bool classof(const Expr *) { return true; }
-  
-  static inline Expr* Create(llvm::Deserializer& D, ASTContext& C) {
-    return cast<Expr>(Stmt::Create(D, C));
-  }
 };
 
   
@@ -294,11 +317,16 @@ public:
   DeclRefExpr(NamedDecl *d, QualType t, SourceLocation l, bool TD, bool VD) : 
     Expr(DeclRefExprClass, t, TD, VD), D(d), Loc(l) {}
   
+  /// \brief Construct an empty declaration reference expression.
+  explicit DeclRefExpr(EmptyShell Empty) 
+    : Expr(DeclRefExprClass, Empty) { }
+
   NamedDecl *getDecl() { return D; }
   const NamedDecl *getDecl() const { return D; }
   void setDecl(NamedDecl *NewD) { D = NewD; }
 
   SourceLocation getLocation() const { return Loc; }
+  void setLocation(SourceLocation L) { Loc = L; }
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
   
   static bool classof(const Stmt *T) { 
@@ -311,9 +339,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static DeclRefExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// PredefinedExpr - [C99 6.4.2.2] - A predefined identifier such as __func__.
@@ -332,7 +357,20 @@ public:
   PredefinedExpr(SourceLocation l, QualType type, IdentType IT) 
     : Expr(PredefinedExprClass, type), Loc(l), Type(IT) {}
   
+  /// \brief Construct an empty predefined expression.
+  explicit PredefinedExpr(EmptyShell Empty) 
+    : Expr(PredefinedExprClass, Empty) { }
+
   IdentType getIdentType() const { return Type; }
+  void setIdentType(IdentType IT) { Type = IT; }
+
+  SourceLocation getLocation() const { return Loc; }
+  void setLocation(SourceLocation L) { Loc = L; }
+
+  // FIXME: The logic for computing the value of a predefined expr should go
+  // into a method here that takes the inner-most code decl (a block, function
+  // or objc method) that the expr lives in.  This would allow sema and codegen
+  // to be consistent for things like sizeof(__func__) etc.
   
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
 
@@ -344,9 +382,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static PredefinedExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class IntegerLiteral : public Expr {
@@ -359,8 +394,21 @@ public:
     : Expr(IntegerLiteralClass, type), Value(V), Loc(l) {
     assert(type->isIntegerType() && "Illegal type in IntegerLiteral");
   }
+
+  /// \brief Construct an empty integer literal.
+  explicit IntegerLiteral(EmptyShell Empty) 
+    : Expr(IntegerLiteralClass, Empty) { }
+
+  IntegerLiteral* Clone(ASTContext &C) const;
+  
   const llvm::APInt &getValue() const { return Value; }
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
+
+  /// \brief Retrieve the location of the literal.
+  SourceLocation getLocation() const { return Loc; }
+
+  void setValue(const llvm::APInt &Val) { Value = Val; }
+  void setLocation(SourceLocation Location) { Loc = Location; }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == IntegerLiteralClass; 
@@ -370,9 +418,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static IntegerLiteral* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class CharacterLiteral : public Expr {
@@ -384,12 +429,20 @@ public:
   CharacterLiteral(unsigned value, bool iswide, QualType type, SourceLocation l)
     : Expr(CharacterLiteralClass, type), Value(value), Loc(l), IsWide(iswide) {
   }
+
+  /// \brief Construct an empty character literal.
+  CharacterLiteral(EmptyShell Empty) : Expr(CharacterLiteralClass, Empty) { }
+
   SourceLocation getLoc() const { return Loc; }
   bool isWide() const { return IsWide; }
   
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
   
   unsigned getValue() const { return Value; }
+
+  void setLocation(SourceLocation Location) { Loc = Location; }
+  void setWide(bool W) { IsWide = W; }
+  void setValue(unsigned Val) { Value = Val; }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == CharacterLiteralClass; 
@@ -399,9 +452,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CharacterLiteral* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class FloatingLiteral : public Expr {
@@ -413,15 +463,29 @@ public:
                   QualType Type, SourceLocation L)
     : Expr(FloatingLiteralClass, Type), Value(V), IsExact(*isexact), Loc(L) {} 
 
+  /// \brief Construct an empty floating-point literal.
+  FloatingLiteral(EmptyShell Empty) 
+    : Expr(FloatingLiteralClass, Empty), Value(0.0) { }
+
   const llvm::APFloat &getValue() const { return Value; }
-  
+  void setValue(const llvm::APFloat &Val) { Value = Val; }
+
   bool isExact() const { return IsExact; }
+  void setExact(bool E) { IsExact = E; }
 
   /// getValueAsApproximateDouble - This returns the value as an inaccurate
   /// double.  Note that this may cause loss of precision, but is useful for
   /// debugging dumps, etc.
   double getValueAsApproximateDouble() const;
  
+  SourceLocation getLocation() const { return Loc; }
+  void setLocation(SourceLocation L) { Loc = L; }
+
+  // FIXME: The logic for computing the value of a predefined expr should go
+  // into a method here that takes the inner-most code decl (a block, function
+  // or objc method) that the expr lives in.  This would allow sema and codegen
+  // to be consistent for things like sizeof(__func__) etc.
+  
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
 
   static bool classof(const Stmt *T) { 
@@ -432,9 +496,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static FloatingLiteral* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ImaginaryLiteral - We support imaginary integer and floating point literals,
@@ -448,9 +509,14 @@ public:
   ImaginaryLiteral(Expr *val, QualType Ty)
     : Expr(ImaginaryLiteralClass, Ty), Val(val) {}
   
+  /// \brief Build an empty imaginary literal.
+  explicit ImaginaryLiteral(EmptyShell Empty) 
+    : Expr(ImaginaryLiteralClass, Empty) { }
+
   const Expr *getSubExpr() const { return cast<Expr>(Val); }
   Expr *getSubExpr() { return cast<Expr>(Val); }
-  
+  void setSubExpr(Expr *E) { Val = E; }
+
   virtual SourceRange getSourceRange() const { return Val->getSourceRange(); }
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ImaginaryLiteralClass; 
@@ -460,35 +526,86 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ImaginaryLiteral* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// StringLiteral - This represents a string literal expression, e.g. "foo"
 /// or L"bar" (wide strings).  The actual string is returned by getStrData()
 /// is NOT null-terminated, and the length of the string is determined by
 /// calling getByteLength().  The C type for a string is always a
-/// ConstantArrayType.
+/// ConstantArrayType.  In C++, the char type is const qualified, in C it is
+/// not.
+///
+/// Note that strings in C can be formed by concatenation of multiple string
+/// literal pptokens in translation phase #6.  This keeps track of the locations
+/// of each of these pieces.
+///
+/// Strings in C can also be truncated and extended by assigning into arrays,
+/// e.g. with constructs like:
+///   char X[2] = "foobar";
+/// In this case, getByteLength() will return 6, but the string literal will
+/// have type "char[2]".
 class StringLiteral : public Expr {
   const char *StrData;
   unsigned ByteLength;
   bool IsWide;
-  // if the StringLiteral was composed using token pasting, both locations
-  // are needed. If not (the common case), firstTokLoc == lastTokLoc.
-  // FIXME: if space becomes an issue, we should create a sub-class.
-  SourceLocation firstTokLoc, lastTokLoc;
+  unsigned NumConcatenated;
+  SourceLocation TokLocs[1];
+
+  StringLiteral(QualType Ty) : Expr(StringLiteralClass, Ty) {}
 public:
-  StringLiteral(const char *strData, unsigned byteLength, bool Wide, 
-                QualType t, SourceLocation b, SourceLocation e);
-  virtual ~StringLiteral();
+  /// This is the "fully general" constructor that allows representation of
+  /// strings formed from multiple concatenated tokens.
+  static StringLiteral *Create(ASTContext &C, const char *StrData,
+                               unsigned ByteLength, bool Wide, QualType Ty,
+                               const SourceLocation *Loc, unsigned NumStrs);
+
+  /// Simple constructor for string literals made from one token.
+  static StringLiteral *Create(ASTContext &C, const char *StrData, 
+                               unsigned ByteLength,
+                               bool Wide, QualType Ty, SourceLocation Loc) {
+    return Create(C, StrData, ByteLength, Wide, Ty, &Loc, 1);
+  }
+
+  /// \brief Construct an empty string literal.
+  static StringLiteral *CreateEmpty(ASTContext &C, unsigned NumStrs);
+
+  StringLiteral* Clone(ASTContext &C) const;
+  void Destroy(ASTContext &C);
   
   const char *getStrData() const { return StrData; }
   unsigned getByteLength() const { return ByteLength; }
+
+  /// \brief Sets the string data to the given string data.
+  void setStrData(ASTContext &C, const char *Str, unsigned Len);
+
   bool isWide() const { return IsWide; }
+  void setWide(bool W) { IsWide = W; }
+
+  bool containsNonAsciiOrNull() const {
+    for (unsigned i = 0; i < getByteLength(); ++i)
+      if (!isascii(getStrData()[i]) || !getStrData()[i])
+        return true;
+    return false;
+  }
+  /// getNumConcatenated - Get the number of string literal tokens that were
+  /// concatenated in translation phase #6 to form this string literal.
+  unsigned getNumConcatenated() const { return NumConcatenated; }
+  
+  SourceLocation getStrTokenLoc(unsigned TokNum) const {
+    assert(TokNum < NumConcatenated && "Invalid tok number");
+    return TokLocs[TokNum];
+  }
+  void setStrTokenLoc(unsigned TokNum, SourceLocation L) { 
+    assert(TokNum < NumConcatenated && "Invalid tok number");
+    TokLocs[TokNum] = L;
+  }
+
+  typedef const SourceLocation *tokloc_iterator;
+  tokloc_iterator tokloc_begin() const { return TokLocs; }
+  tokloc_iterator tokloc_end() const { return TokLocs+NumConcatenated; }
 
   virtual SourceRange getSourceRange() const { 
-    return SourceRange(firstTokLoc,lastTokLoc); 
+    return SourceRange(TokLocs[0], TokLocs[NumConcatenated-1]); 
   }
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == StringLiteralClass; 
@@ -498,9 +615,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static StringLiteral* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ParenExpr - This represents a parethesized expression, e.g. "(1)".  This
@@ -514,9 +628,23 @@ public:
            val->isTypeDependent(), val->isValueDependent()), 
       L(l), R(r), Val(val) {}
   
+  /// \brief Construct an empty parenthesized expression.
+  explicit ParenExpr(EmptyShell Empty) 
+    : Expr(ParenExprClass, Empty) { }
+
   const Expr *getSubExpr() const { return cast<Expr>(Val); }
   Expr *getSubExpr() { return cast<Expr>(Val); }
+  void setSubExpr(Expr *E) { Val = E; }
+
   virtual SourceRange getSourceRange() const { return SourceRange(L, R); }
+
+  /// \brief Get the location of the left parentheses '('.
+  SourceLocation getLParen() const { return L; }
+  void setLParen(SourceLocation Loc) { L = Loc; }
+
+  /// \brief Get the location of the right parentheses ')'.
+  SourceLocation getRParen() const { return R; }
+  void setRParen(SourceLocation Loc) { R = Loc; }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ParenExprClass; 
@@ -526,9 +654,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ParenExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -571,17 +696,29 @@ public:
            input->isValueDependent()), 
       Val(input), Opc(opc), Loc(l) {}
 
+  /// \brief Build an empty unary operator.
+  explicit UnaryOperator(EmptyShell Empty) 
+    : Expr(UnaryOperatorClass, Empty), Opc(AddrOf) { }
+
   Opcode getOpcode() const { return Opc; }
+  void setOpcode(Opcode O) { Opc = O; }
+
   Expr *getSubExpr() const { return cast<Expr>(Val); }
-  
+  void setSubExpr(Expr *E) { Val = E; }
+
   /// getOperatorLoc - Return the location of the operator.
   SourceLocation getOperatorLoc() const { return Loc; }
-  
+  void setOperatorLoc(SourceLocation L) { Loc = L; }
+
   /// isPostfix - Return true if this is a postfix operation, like x++.
-  static bool isPostfix(Opcode Op);
+  static bool isPostfix(Opcode Op) {
+    return Op == PostInc || Op == PostDec;
+  }
 
   /// isPostfix - Return true if this is a prefix operation, like --x.
-  static bool isPrefix(Opcode Op);
+  static bool isPrefix(Opcode Op) {
+    return Op == PreInc || Op == PreDec;
+  }
 
   bool isPrefix() const { return isPrefix(Opc); }
   bool isPostfix() const { return isPostfix(Opc); }
@@ -593,6 +730,14 @@ public:
   /// getOpcodeStr - Turn an Opcode enum value into the punctuation char it
   /// corresponds to, e.g. "sizeof" or "[pre]++"
   static const char *getOpcodeStr(Opcode Op);
+
+  /// \brief Retrieve the unary opcode that corresponds to the given
+  /// overloaded operator.
+  static Opcode getOverloadedOpcode(OverloadedOperatorKind OO, bool Postfix);
+
+  /// \brief Retrieve the overloaded operator kind that corresponds to
+  /// the given unary opcode.
+  static OverloadedOperatorKind getOverloadedOperator(Opcode Opc);
 
   virtual SourceRange getSourceRange() const {
     if (isPostfix())
@@ -607,14 +752,9 @@ public:
   }
   static bool classof(const UnaryOperator *) { return true; }
   
-  int64_t evaluateOffsetOf(ASTContext& C) const;
-  
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static UnaryOperator* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// SizeOfAlignOfExpr - [C99 6.5.3.4] - This is for sizeof/alignof, both of
@@ -628,21 +768,37 @@ class SizeOfAlignOfExpr : public Expr {
   } Argument;
   SourceLocation OpLoc, RParenLoc;
 public:
-  SizeOfAlignOfExpr(bool issizeof, bool istype, void *argument,
+  SizeOfAlignOfExpr(bool issizeof, QualType T, 
                     QualType resultType, SourceLocation op,
                     SourceLocation rp) :
-      Expr(SizeOfAlignOfExprClass, resultType), isSizeof(issizeof),
-      isType(istype), OpLoc(op), RParenLoc(rp) {
-    if (isType)
-      Argument.Ty = argument;
-    else
-      // argument was an Expr*, so cast it back to that to be safe
-      Argument.Ex = static_cast<Expr*>(argument);
+      Expr(SizeOfAlignOfExprClass, resultType,
+           false, // Never type-dependent (C++ [temp.dep.expr]p3).
+           // Value-dependent if the argument is type-dependent.
+           T->isDependentType()),
+      isSizeof(issizeof), isType(true), OpLoc(op), RParenLoc(rp) {
+    Argument.Ty = T.getAsOpaquePtr();
   }
+
+  SizeOfAlignOfExpr(bool issizeof, Expr *E, 
+                    QualType resultType, SourceLocation op,
+                    SourceLocation rp) :
+      Expr(SizeOfAlignOfExprClass, resultType,
+           false, // Never type-dependent (C++ [temp.dep.expr]p3).
+           // Value-dependent if the argument is type-dependent.
+           E->isTypeDependent()),
+      isSizeof(issizeof), isType(false), OpLoc(op), RParenLoc(rp) {
+    Argument.Ex = E;
+  }
+
+  /// \brief Construct an empty sizeof/alignof expression.
+  explicit SizeOfAlignOfExpr(EmptyShell Empty)
+    : Expr(SizeOfAlignOfExprClass, Empty) { }
 
   virtual void Destroy(ASTContext& C);
 
   bool isSizeOf() const { return isSizeof; }
+  void setSizeof(bool S) { isSizeof = S; }
+
   bool isArgumentType() const { return isType; }
   QualType getArgumentType() const {
     assert(isArgumentType() && "calling getArgumentType() when arg is expr");
@@ -655,7 +811,13 @@ public:
   const Expr *getArgumentExpr() const {
     return const_cast<SizeOfAlignOfExpr*>(this)->getArgumentExpr();
   }
-  
+
+  void setArgument(Expr *E) { Argument.Ex = E; isType = false; }
+  void setArgument(QualType T) { 
+    Argument.Ty = T.getAsOpaquePtr(); 
+    isType = true; 
+  }
+
   /// Gets the argument type, or the type of the argument expression, whichever
   /// is appropriate.
   QualType getTypeOfArgument() const {
@@ -663,6 +825,10 @@ public:
   }
 
   SourceLocation getOperatorLoc() const { return OpLoc; }
+  void setOperatorLoc(SourceLocation L) { OpLoc = L; }
+
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(OpLoc, RParenLoc);
@@ -676,9 +842,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static SizeOfAlignOfExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 //===----------------------------------------------------------------------===//
@@ -693,11 +856,18 @@ class ArraySubscriptExpr : public Expr {
 public:
   ArraySubscriptExpr(Expr *lhs, Expr *rhs, QualType t,
                      SourceLocation rbracketloc)
-  : Expr(ArraySubscriptExprClass, t), RBracketLoc(rbracketloc) {
+  : Expr(ArraySubscriptExprClass, t,
+         lhs->isTypeDependent() || rhs->isTypeDependent(),
+         lhs->isValueDependent() || rhs->isValueDependent()),
+    RBracketLoc(rbracketloc) {
     SubExprs[LHS] = lhs;
     SubExprs[RHS] = rhs;
   }
   
+  /// \brief Create an empty array subscript expression.
+  explicit ArraySubscriptExpr(EmptyShell Shell)
+    : Expr(ArraySubscriptExprClass, Shell) { }
+
   /// An array access can be written A[4] or 4[A] (both are equivalent).
   /// - getBase() and getIdx() always present the normalized view: A[4].
   ///    In this case getBase() returns "A" and getIdx() returns "4".
@@ -709,9 +879,11 @@ public:
   /// integer type
   Expr *getLHS() { return cast<Expr>(SubExprs[LHS]); }
   const Expr *getLHS() const { return cast<Expr>(SubExprs[LHS]); }
-  
+  void setLHS(Expr *E) { SubExprs[LHS] = E; }
+
   Expr *getRHS() { return cast<Expr>(SubExprs[RHS]); }
   const Expr *getRHS() const { return cast<Expr>(SubExprs[RHS]); }
+  void setRHS(Expr *E) { SubExprs[RHS] = E; }
   
   Expr *getBase() { 
     return cast<Expr>(getRHS()->getType()->isIntegerType() ? getLHS():getRHS());
@@ -733,6 +905,9 @@ public:
     return SourceRange(getLHS()->getLocStart(), RBracketLoc);
   }
   
+  SourceLocation getRBracketLoc() const { return RBracketLoc; }
+  void setRBracketLoc(SourceLocation L) { RBracketLoc = L; }
+
   virtual SourceLocation getExprLoc() const { return getBase()->getExprLoc(); }
 
   static bool classof(const Stmt *T) { 
@@ -743,9 +918,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ArraySubscriptExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -769,15 +941,19 @@ class CallExpr : public Expr {
 
 protected:
   // This version of the constructor is for derived classes.
-  CallExpr(StmtClass SC, Expr *fn, Expr **args, unsigned numargs, QualType t, 
-           SourceLocation rparenloc);
+  CallExpr(ASTContext& C, StmtClass SC, Expr *fn, Expr **args, unsigned numargs,
+           QualType t, SourceLocation rparenloc);
   
 public:
-  CallExpr(Expr *fn, Expr **args, unsigned numargs, QualType t, 
+  CallExpr(ASTContext& C, Expr *fn, Expr **args, unsigned numargs, QualType t, 
            SourceLocation rparenloc);
-  ~CallExpr() {
-    delete [] SubExprs;
-  }
+  
+  /// \brief Build an empty call expression.
+  CallExpr(ASTContext &C, EmptyShell Empty);
+
+  ~CallExpr() {}
+  
+  void Destroy(ASTContext& C);
   
   const Expr *getCallee() const { return cast<Expr>(SubExprs[FN]); }
   Expr *getCallee() { return cast<Expr>(SubExprs[FN]); }
@@ -796,6 +972,7 @@ public:
     assert(Arg < NumArgs && "Arg access out of range!");
     return cast<Expr>(SubExprs[Arg+ARGS_START]);
   }
+  
   /// setArg - Set the specified argument.
   void setArg(unsigned Arg, Expr *ArgExpr) {
     assert(Arg < NumArgs && "Arg access out of range!");
@@ -805,7 +982,7 @@ public:
   /// setNumArgs - This changes the number of arguments present in this call.
   /// Any orphaned expressions are deleted by this, and any new operands are set
   /// to null.
-  void setNumArgs(unsigned NumArgs);
+  void setNumArgs(ASTContext& C, unsigned NumArgs);
   
   typedef ExprIterator arg_iterator;
   typedef ConstExprIterator const_arg_iterator;
@@ -821,9 +998,10 @@ public:
 
   /// isBuiltinCall - If this is a call to a builtin, return the builtin ID.  If
   /// not, return 0.
-  unsigned isBuiltinCall() const;
+  unsigned isBuiltinCall(ASTContext &Context) const;
   
   SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(getCallee()->getLocStart(), RParenLoc);
@@ -841,33 +1019,58 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CallExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C, 
-                              StmtClass SC);
 };
 
-/// MemberExpr - [C99 6.5.2.3] Structure and Union Members.
+/// MemberExpr - [C99 6.5.2.3] Structure and Union Members.  X->F and X.F.
 ///
 class MemberExpr : public Expr {
+  /// Base - the expression for the base pointer or structure references.  In
+  /// X.F, this is "X".
   Stmt *Base;
+  
+  /// MemberDecl - This is the decl being referenced by the field/member name.
+  /// In X.F, this is the decl referenced by F.
   NamedDecl *MemberDecl;
+  
+  /// MemberLoc - This is the location of the member name.
   SourceLocation MemberLoc;
-  bool IsArrow;      // True if this is "X->F", false if this is "X.F".
+  
+  /// IsArrow - True if this is "X->F", false if this is "X.F".
+  bool IsArrow;
 public:
   MemberExpr(Expr *base, bool isarrow, NamedDecl *memberdecl, SourceLocation l,
              QualType ty) 
     : Expr(MemberExprClass, ty),
       Base(base), MemberDecl(memberdecl), MemberLoc(l), IsArrow(isarrow) {}
 
+  /// \brief Build an empty member reference expression.
+  explicit MemberExpr(EmptyShell Empty) : Expr(MemberExprClass, Empty) { }
+
   void setBase(Expr *E) { Base = E; }
   Expr *getBase() const { return cast<Expr>(Base); }
+
+  /// \brief Retrieve the member declaration to which this expression refers.
+  ///
+  /// The returned declaration will either be a FieldDecl or (in C++)
+  /// a CXXMethodDecl.
   NamedDecl *getMemberDecl() const { return MemberDecl; }
   void setMemberDecl(NamedDecl *D) { MemberDecl = D; }
+
   bool isArrow() const { return IsArrow; }
+  void setArrow(bool A) { IsArrow = A; }
+
+  /// getMemberLoc - Return the location of the "member", in X->F, it is the
+  /// location of 'F'.
+  SourceLocation getMemberLoc() const { return MemberLoc; }
+  void setMemberLoc(SourceLocation L) { MemberLoc = L; }
 
   virtual SourceRange getSourceRange() const {
-    return SourceRange(getBase()->getLocStart(), MemberLoc);
+    // If we have an implicit base (like a C++ implicit this),
+    // make sure not to return its location
+    SourceLocation BaseLoc = getBase()->getLocStart();
+    if (BaseLoc.isInvalid())
+      return SourceRange(MemberLoc, MemberLoc);
+    return SourceRange(BaseLoc, MemberLoc);
   }
   
   virtual SourceLocation getExprLoc() const { return MemberLoc; }
@@ -880,9 +1083,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static MemberExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CompoundLiteralExpr - [C99 6.5.2.5] 
@@ -900,13 +1100,20 @@ public:
     : Expr(CompoundLiteralExprClass, ty), LParenLoc(lparenloc), Init(init),
       FileScope(fileScope) {}
   
+  /// \brief Construct an empty compound literal.
+  explicit CompoundLiteralExpr(EmptyShell Empty)
+    : Expr(CompoundLiteralExprClass, Empty) { }
+
   const Expr *getInitializer() const { return cast<Expr>(Init); }
   Expr *getInitializer() { return cast<Expr>(Init); }
+  void setInitializer(Expr *E) { Init = E; }
 
   bool isFileScope() const { return FileScope; }
-  
+  void setFileScope(bool FS) { FileScope = FS; }
+
   SourceLocation getLParenLoc() const { return LParenLoc; }
-  
+  void setLParenLoc(SourceLocation L) { LParenLoc = L; }
+
   virtual SourceRange getSourceRange() const {
     // FIXME: Init should never be null.
     if (!Init)
@@ -924,9 +1131,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CompoundLiteralExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CastExpr - Base class for type casts, including both implicit
@@ -946,10 +1150,15 @@ protected:
          ty->isDependentType() || (op && op->isValueDependent())), 
     Op(op) {}
   
+  /// \brief Construct an empty cast.
+  CastExpr(StmtClass SC, EmptyShell Empty) 
+    : Expr(SC, Empty) { }
+  
 public:
   Expr *getSubExpr() { return cast<Expr>(Op); }
   const Expr *getSubExpr() const { return cast<Expr>(Op); }
-  
+  void setSubExpr(Expr *E) { Op = E; }
+
   static bool classof(const Stmt *T) { 
     StmtClass SC = T->getStmtClass();
     if (SC >= CXXNamedCastExprClass && SC <= CXXFunctionalCastExprClass)
@@ -991,6 +1200,11 @@ public:
   ImplicitCastExpr(QualType ty, Expr *op, bool Lvalue) : 
     CastExpr(ImplicitCastExprClass, ty, op), LvalueCast(Lvalue) { }
 
+  /// \brief Construct an empty implicit cast.
+  explicit ImplicitCastExpr(EmptyShell Shell) 
+    : CastExpr(ImplicitCastExprClass, Shell) { }
+
+
   virtual SourceRange getSourceRange() const {
     return getSubExpr()->getSourceRange();
   }
@@ -1005,9 +1219,6 @@ public:
     return T->getStmtClass() == ImplicitCastExprClass; 
   }
   static bool classof(const ImplicitCastExpr *) { return true; }
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ImplicitCastExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ExplicitCastExpr - An explicit cast written in the source
@@ -1035,10 +1246,15 @@ protected:
   ExplicitCastExpr(StmtClass SC, QualType exprTy, Expr *op, QualType writtenTy) 
     : CastExpr(SC, exprTy, op), TypeAsWritten(writtenTy) {}
 
+  /// \brief Construct an empty explicit cast.
+  ExplicitCastExpr(StmtClass SC, EmptyShell Shell) 
+    : CastExpr(SC, Shell) { }
+
 public:
   /// getTypeAsWritten - Returns the type that this expression is
   /// casting to, as written in the source code.
   QualType getTypeAsWritten() const { return TypeAsWritten; }
+  void setTypeAsWritten(QualType T) { TypeAsWritten = T; }
 
   static bool classof(const Stmt *T) { 
     StmtClass SC = T->getStmtClass();
@@ -1064,9 +1280,16 @@ public:
     ExplicitCastExpr(CStyleCastExprClass, exprTy, op, writtenTy), 
     LPLoc(l), RPLoc(r) {}
 
+  /// \brief Construct an empty C-style explicit cast.
+  explicit CStyleCastExpr(EmptyShell Shell) 
+    : ExplicitCastExpr(CStyleCastExprClass, Shell) { }
+
   SourceLocation getLParenLoc() const { return LPLoc; }
+  void setLParenLoc(SourceLocation L) { LPLoc = L; }
+
   SourceLocation getRParenLoc() const { return RPLoc; }
-  
+  void setRParenLoc(SourceLocation L) { RPLoc = L; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(LPLoc, getSubExpr()->getSourceRange().getEnd());
   }
@@ -1074,16 +1297,32 @@ public:
     return T->getStmtClass() == CStyleCastExprClass; 
   }
   static bool classof(const CStyleCastExpr *) { return true; }
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CStyleCastExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
+/// \brief A builtin binary operation expression such as "x + y" or "x <= y".
+///
+/// This expression node kind describes a builtin binary operation,
+/// such as "x + y" for integer values "x" and "y". The operands will
+/// already have been converted to appropriate types (e.g., by
+/// performing promotions or conversions).
+///
+/// In C++, where operators may be overloaded, a different kind of
+/// expression node (CXXOperatorCallExpr) is used to express the
+/// invocation of an overloaded operator with operator syntax. Within
+/// a C++ template, whether BinaryOperator or CXXOperatorCallExpr is
+/// used to store an expression "x + y" depends on the subexpressions
+/// for x and y. If neither x or y is type-dependent, and the "+"
+/// operator resolves to a built-in operation, BinaryOperator will be
+/// used to express the computation (x and y may still be
+/// value-dependent). If either x or y is type-dependent, or if the
+/// "+" resolves to an overloaded operator, CXXOperatorCallExpr will
+/// be used to express the computation.
 class BinaryOperator : public Expr {
 public:
   enum Opcode {
     // Operators listed in order of precedence.
     // Note that additions to this should also update the StmtVisitor class.
+    PtrMemD, PtrMemI, // [C++ 5.5] Pointer-to-member operators.
     Mul, Div, Rem,    // [C99 6.5.5] Multiplicative operators.
     Add, Sub,         // [C99 6.5.6] Additive operators.
     Shl, Shr,         // [C99 6.5.7] Bitwise shift operators.
@@ -1121,10 +1360,21 @@ public:
            "Use ArithAssignBinaryOperator for compound assignments");
   }
 
+  /// \brief Construct an empty binary operator.
+  explicit BinaryOperator(EmptyShell Empty) 
+    : Expr(BinaryOperatorClass, Empty), Opc(Comma) { }
+
   SourceLocation getOperatorLoc() const { return OpLoc; }
+  void setOperatorLoc(SourceLocation L) { OpLoc = L; }
+
   Opcode getOpcode() const { return Opc; }
+  void setOpcode(Opcode O) { Opc = O; }
+
   Expr *getLHS() const { return cast<Expr>(SubExprs[LHS]); }
+  void setLHS(Expr *E) { SubExprs[LHS] = E; }
   Expr *getRHS() const { return cast<Expr>(SubExprs[RHS]); }
+  void setRHS(Expr *E) { SubExprs[RHS] = E; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(getLHS()->getLocStart(), getRHS()->getLocEnd());
   }
@@ -1132,6 +1382,14 @@ public:
   /// getOpcodeStr - Turn an Opcode enum value into the punctuation char it
   /// corresponds to, e.g. "<<=".
   static const char *getOpcodeStr(Opcode Op);
+
+  /// \brief Retrieve the binary opcode that corresponds to the given
+  /// overloaded operator.
+  static Opcode getOverloadedOpcode(OverloadedOperatorKind OO);
+
+  /// \brief Retrieve the overloaded operator kind that corresponds to
+  /// the given binary opcode.
+  static OverloadedOperatorKind getOverloadedOperator(Opcode Opc);
 
   /// predicates to categorize the respective opcodes.
   bool isMultiplicativeOp() const { return Opc >= Mul && Opc <= Rem; }
@@ -1161,9 +1419,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static BinaryOperator* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 
 protected:
   BinaryOperator(Expr *lhs, Expr *rhs, Opcode opc, QualType ResTy,
@@ -1172,6 +1427,9 @@ protected:
     SubExprs[LHS] = lhs;
     SubExprs[RHS] = rhs;
   }
+
+  BinaryOperator(StmtClass SC, EmptyShell Empty) 
+    : Expr(SC, Empty), Opc(MulAssign) { }
 };
 
 /// CompoundAssignOperator - For compound assignments (e.g. +=), we keep
@@ -1181,27 +1439,37 @@ protected:
 /// place.  This captures the intermediate type which the computation is done
 /// in.
 class CompoundAssignOperator : public BinaryOperator {
-  QualType ComputationType;
+  QualType ComputationLHSType;
+  QualType ComputationResultType;
 public:
   CompoundAssignOperator(Expr *lhs, Expr *rhs, Opcode opc,
-                         QualType ResType, QualType CompType,
+                         QualType ResType, QualType CompLHSType,
+                         QualType CompResultType,
                          SourceLocation OpLoc)
     : BinaryOperator(lhs, rhs, opc, ResType, OpLoc, true),
-      ComputationType(CompType) {
+      ComputationLHSType(CompLHSType),
+      ComputationResultType(CompResultType) {
     assert(isCompoundAssignmentOp() && 
            "Only should be used for compound assignments");
   }
 
-  QualType getComputationType() const { return ComputationType; }
-  
+  /// \brief Build an empty compound assignment operator expression.
+  explicit CompoundAssignOperator(EmptyShell Empty)
+    : BinaryOperator(CompoundAssignOperatorClass, Empty) { }
+
+  // The two computation types are the type the LHS is converted
+  // to for the computation and the type of the result; the two are
+  // distinct in a few cases (specifically, int+=ptr and ptr-=ptr).
+  QualType getComputationLHSType() const { return ComputationLHSType; }
+  void setComputationLHSType(QualType T) { ComputationLHSType = T; }
+
+  QualType getComputationResultType() const { return ComputationResultType; }
+  void setComputationResultType(QualType T) { ComputationResultType = T; }
+
   static bool classof(const CompoundAssignOperator *) { return true; }
   static bool classof(const Stmt *S) { 
     return S->getStmtClass() == CompoundAssignOperatorClass; 
   }
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CompoundAssignOperator* CreateImpl(llvm::Deserializer& D,
-                                            ASTContext& C);
 };
 
 /// ConditionalOperator - The ?: operator.  Note that LHS may be null when the
@@ -1225,9 +1493,14 @@ public:
     SubExprs[RHS] = rhs;
   }
 
+  /// \brief Build an empty conditional operator.
+  explicit ConditionalOperator(EmptyShell Empty)
+    : Expr(ConditionalOperatorClass, Empty) { }
+
   // getCond - Return the expression representing the condition for
   //  the ?: operator.
   Expr *getCond() const { return cast<Expr>(SubExprs[COND]); }
+  void setCond(Expr *E) { SubExprs[COND] = E; }
 
   // getTrueExpr - Return the subexpression representing the value of the ?:
   //  expression if the condition evaluates to true.  In most cases this value
@@ -1244,7 +1517,10 @@ public:
   Expr *getFalseExpr() const { return cast<Expr>(SubExprs[RHS]); }
   
   Expr *getLHS() const { return cast_or_null<Expr>(SubExprs[LHS]); }
+  void setLHS(Expr *E) { SubExprs[LHS] = E; }
+
   Expr *getRHS() const { return cast<Expr>(SubExprs[RHS]); }
+  void setRHS(Expr *E) { SubExprs[RHS] = E; }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(getCond()->getLocStart(), getRHS()->getLocEnd());
@@ -1257,9 +1533,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ConditionalOperator* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// AddrLabelExpr - The GNU address of label extension, representing &&label.
@@ -1271,12 +1544,22 @@ public:
                 QualType t)
     : Expr(AddrLabelExprClass, t), AmpAmpLoc(AALoc), LabelLoc(LLoc), Label(L) {}
   
+  /// \brief Build an empty address of a label expression.
+  explicit AddrLabelExpr(EmptyShell Empty) 
+    : Expr(AddrLabelExprClass, Empty) { }
+
+  SourceLocation getAmpAmpLoc() const { return AmpAmpLoc; }
+  void setAmpAmpLoc(SourceLocation L) { AmpAmpLoc = L; }
+  SourceLocation getLabelLoc() const { return LabelLoc; }
+  void setLabelLoc(SourceLocation L) { LabelLoc = L; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(AmpAmpLoc, LabelLoc);
   }
   
   LabelStmt *getLabel() const { return Label; }
-  
+  void setLabel(LabelStmt *S) { Label = S; }
+
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == AddrLabelExprClass; 
   }
@@ -1285,9 +1568,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static AddrLabelExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// StmtExpr - This is the GNU Statement Expression extension: ({int X=4; X;}).
@@ -1301,12 +1581,21 @@ public:
            SourceLocation lp, SourceLocation rp) :
     Expr(StmtExprClass, T), SubStmt(substmt),  LParenLoc(lp), RParenLoc(rp) { }
   
+  /// \brief Build an empty statement expression.
+  explicit StmtExpr(EmptyShell Empty) : Expr(StmtExprClass, Empty) { }
+
   CompoundStmt *getSubStmt() { return cast<CompoundStmt>(SubStmt); }
   const CompoundStmt *getSubStmt() const { return cast<CompoundStmt>(SubStmt); }
-  
+  void setSubStmt(CompoundStmt *S) { SubStmt = S; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(LParenLoc, RParenLoc);
   }
+  
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  void setLParenLoc(SourceLocation L) { LParenLoc = L; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
   
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == StmtExprClass; 
@@ -1316,9 +1605,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static StmtExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// TypesCompatibleExpr - GNU builtin-in function __builtin_type_compatible_p.
@@ -1335,9 +1621,21 @@ public:
     Expr(TypesCompatibleExprClass, ReturnType), Type1(t1), Type2(t2),
     BuiltinLoc(BLoc), RParenLoc(RP) {}
 
+  /// \brief Build an empty __builtin_type_compatible_p expression.
+  explicit TypesCompatibleExpr(EmptyShell Empty)
+    : Expr(TypesCompatibleExprClass, Empty) { }
+
   QualType getArgType1() const { return Type1; }
+  void setArgType1(QualType T) { Type1 = T; }
   QualType getArgType2() const { return Type2; }
+  void setArgType2(QualType T) { Type2 = T; }
     
+  SourceLocation getBuiltinLoc() const { return BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation L) { BuiltinLoc = L; }
+  
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
+  
   virtual SourceRange getSourceRange() const {
     return SourceRange(BuiltinLoc, RParenLoc);
   }
@@ -1349,9 +1647,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static TypesCompatibleExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ShuffleVectorExpr - clang-specific builtin-in function
@@ -1381,7 +1676,17 @@ public:
     for (unsigned i = 0; i < nexpr; i++)
       SubExprs[i] = args[i];
   }
-    
+
+  /// \brief Build an empty vector-shuffle expression.
+  explicit ShuffleVectorExpr(EmptyShell Empty) 
+    : Expr(ShuffleVectorExprClass, Empty), SubExprs(0) { }
+
+  SourceLocation getBuiltinLoc() const { return BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation L) { BuiltinLoc = L; }
+  
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(BuiltinLoc, RParenLoc);
   }
@@ -1409,25 +1714,27 @@ public:
     return cast<Expr>(SubExprs[Index]);
   }
 
+  void setExprs(Expr ** Exprs, unsigned NumExprs);
+
   unsigned getShuffleMaskIdx(ASTContext &Ctx, unsigned N) {
     assert((N < NumExprs - 2) && "Shuffle idx out of range!");
-    return getExpr(N+2)->getIntegerConstantExprValue(Ctx).getZExtValue();
+    return getExpr(N+2)->EvaluateAsInt(Ctx).getZExtValue();
   }
   
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ShuffleVectorExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ChooseExpr - GNU builtin-in function __builtin_choose_expr.
 /// This AST node is similar to the conditional operator (?:) in C, with 
 /// the following exceptions:
-/// - the test expression must be a constant expression.
-/// - the expression returned has it's type unaltered by promotion rules.
-/// - does not evaluate the expression that was not chosen.
+/// - the test expression must be a integer constant expression.
+/// - the expression returned acts like the chosen subexpression in every
+///   visible way: the type is the same as that of the chosen subexpression,
+///   and all predicates (whether it's an l-value, whether it's an integer
+///   constant expression, etc.) return the same result as for the chosen
+///   sub-expression.
 class ChooseExpr : public Expr {
   enum { COND, LHS, RHS, END_EXPR };
   Stmt* SubExprs[END_EXPR]; // Left/Middle/Right hand sides.
@@ -1441,14 +1748,32 @@ public:
       SubExprs[LHS] = lhs;
       SubExprs[RHS] = rhs;
     }        
-  
-  /// isConditionTrue - Return true if the condition is true.  This is always
-  /// statically knowable for a well-formed choosexpr.
+
+  /// \brief Build an empty __builtin_choose_expr.
+  explicit ChooseExpr(EmptyShell Empty) : Expr(ChooseExprClass, Empty) { }
+
+  /// isConditionTrue - Return whether the condition is true (i.e. not
+  /// equal to zero).
   bool isConditionTrue(ASTContext &C) const;
-  
+
+  /// getChosenSubExpr - Return the subexpression chosen according to the
+  /// condition.
+  Expr *getChosenSubExpr(ASTContext &C) const {
+    return isConditionTrue(C) ? getLHS() : getRHS();
+  }
+
   Expr *getCond() const { return cast<Expr>(SubExprs[COND]); }
+  void setCond(Expr *E) { SubExprs[COND] = E; }
   Expr *getLHS() const { return cast<Expr>(SubExprs[LHS]); }
+  void setLHS(Expr *E) { SubExprs[LHS] = E; }
   Expr *getRHS() const { return cast<Expr>(SubExprs[RHS]); }
+  void setRHS(Expr *E) { SubExprs[RHS] = E; }
+
+  SourceLocation getBuiltinLoc() const { return BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation L) { BuiltinLoc = L; }
+  
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(BuiltinLoc, RParenLoc);
@@ -1461,9 +1786,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ChooseExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// GNUNullExpr - Implements the GNU __null extension, which is a name
@@ -1480,8 +1802,12 @@ public:
   GNUNullExpr(QualType Ty, SourceLocation Loc) 
     : Expr(GNUNullExprClass, Ty), TokenLoc(Loc) { }
 
+  /// \brief Build an empty GNU __null expression.
+  explicit GNUNullExpr(EmptyShell Empty) : Expr(GNUNullExprClass, Empty) { }
+
   /// getTokenLocation - The location of the __null token.
   SourceLocation getTokenLocation() const { return TokenLoc; }
+  void setTokenLocation(SourceLocation L) { TokenLoc = L; }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(TokenLoc);
@@ -1494,100 +1820,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static GNUNullExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);  
-};
-
-/// OverloadExpr - Clang builtin function __builtin_overload.
-/// This AST node provides a way to overload functions in C.
-///
-/// The first argument is required to be a constant expression, for the number
-/// of arguments passed to each candidate function.
-///
-/// The next N arguments, where N is the value of the constant expression,
-/// are the values to be passed as arguments.
-///
-/// The rest of the arguments are values of pointer to function type, which 
-/// are the candidate functions for overloading.
-///
-/// The result is a equivalent to a CallExpr taking N arguments to the 
-/// candidate function whose parameter types match the types of the N arguments.
-///
-/// example: float Z = __builtin_overload(2, X, Y, modf, mod, modl);
-/// If X and Y are long doubles, Z will assigned the result of modl(X, Y);
-/// If X and Y are floats, Z will be assigned the result of modf(X, Y);
-class OverloadExpr : public Expr {
-  // SubExprs - the list of values passed to the __builtin_overload function.
-  // SubExpr[0] is a constant expression
-  // SubExpr[1-N] are the parameters to pass to the matching function call
-  // SubExpr[N-...] are the candidate functions, of type pointer to function.
-  Stmt **SubExprs;
-
-  // NumExprs - the size of the SubExprs array
-  unsigned NumExprs;
-
-  // The index of the matching candidate function
-  unsigned FnIndex;
-
-  SourceLocation BuiltinLoc;
-  SourceLocation RParenLoc;
-public:
-  OverloadExpr(Expr **args, unsigned nexprs, unsigned idx, QualType t, 
-               SourceLocation bloc, SourceLocation rploc)
-    : Expr(OverloadExprClass, t), NumExprs(nexprs), FnIndex(idx),
-      BuiltinLoc(bloc), RParenLoc(rploc) {
-    SubExprs = new Stmt*[nexprs];
-    for (unsigned i = 0; i != nexprs; ++i)
-      SubExprs[i] = args[i];
-  }
-  ~OverloadExpr() {
-    delete [] SubExprs;
-  }
-
-  /// arg_begin - Return a pointer to the list of arguments that will be passed
-  /// to the matching candidate function, skipping over the initial constant
-  /// expression.
-  typedef ConstExprIterator const_arg_iterator;
-  const_arg_iterator arg_begin() const { return &SubExprs[0]+1; }
-  const_arg_iterator arg_end(ASTContext& Ctx) const {
-    return &SubExprs[0]+1+getNumArgs(Ctx);
-  }
-  
-  /// getNumArgs - Return the number of arguments to pass to the candidate
-  /// functions.
-  unsigned getNumArgs(ASTContext &Ctx) const {
-    return getExpr(0)->getIntegerConstantExprValue(Ctx).getZExtValue();
-  }
-
-  /// getNumSubExprs - Return the size of the SubExprs array.  This includes the
-  /// constant expression, the actual arguments passed in, and the function
-  /// pointers.
-  unsigned getNumSubExprs() const { return NumExprs; }
-  
-  /// getExpr - Return the Expr at the specified index.
-  Expr *getExpr(unsigned Index) const {
-    assert((Index < NumExprs) && "Arg access out of range!");
-    return cast<Expr>(SubExprs[Index]);
-  }
-  
-  /// getFn - Return the matching candidate function for this OverloadExpr.
-  Expr *getFn() const { return cast<Expr>(SubExprs[FnIndex]); }
-  
-  virtual SourceRange getSourceRange() const {
-    return SourceRange(BuiltinLoc, RParenLoc);
-  }
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == OverloadExprClass; 
-  }
-  static bool classof(const OverloadExpr *) { return true; }
-  
-  // Iterators
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static OverloadExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// VAArgExpr, used for the builtin function __builtin_va_start.
@@ -1601,8 +1833,19 @@ public:
       BuiltinLoc(BLoc),
       RParenLoc(RPLoc) { }
   
+  /// \brief Create an empty __builtin_va_start expression.
+  explicit VAArgExpr(EmptyShell Empty) : Expr(VAArgExprClass, Empty) { }
+
   const Expr *getSubExpr() const { return cast<Expr>(Val); }
   Expr *getSubExpr() { return cast<Expr>(Val); }
+  void setSubExpr(Expr *E) { Val = E; }
+
+  SourceLocation getBuiltinLoc() const { return BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation L) { BuiltinLoc = L; }
+  
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(BuiltinLoc, RParenLoc);
   }  
@@ -1614,9 +1857,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();  
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static VAArgExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
   
 /// @brief Describes an C or C++ initializer list.
@@ -1675,6 +1915,9 @@ class InitListExpr : public Expr {
 public:
   InitListExpr(SourceLocation lbraceloc, Expr **initexprs, unsigned numinits,
                SourceLocation rbraceloc);
+
+  /// \brief Build an empty initializer list.
+  explicit InitListExpr(EmptyShell Empty) : Expr(InitListExprClass, Empty) { }
   
   unsigned getNumInits() const { return InitExprs.size(); }
   
@@ -1693,6 +1936,9 @@ public:
     InitExprs[Init] = expr;
   }
 
+  /// \brief Reserve space for some number of initializers.
+  void reserveInits(unsigned NumInits);
+  
   /// @brief Specify the number of initializers
   ///
   /// If there are more than @p NumInits initializers, the remaining
@@ -1725,6 +1971,9 @@ public:
     return LBraceLoc.isValid() && RBraceLoc.isValid();
   }
   
+  SourceLocation getLBraceLoc() const { return LBraceLoc; }
+  void setLBraceLoc(SourceLocation Loc) { LBraceLoc = Loc; }
+  SourceLocation getRBraceLoc() const { return RBraceLoc; }
   void setRBraceLoc(SourceLocation Loc) { RBraceLoc = Loc; }
 
   /// @brief Retrieve the initializer list that describes the
@@ -1735,8 +1984,8 @@ public:
   void setSyntacticForm(InitListExpr *Init) { SyntacticForm = Init; }
 
   bool hadArrayRangeDesignator() const { return HadArrayRangeDesignator; }
-  void sawArrayRangeDesignator() { 
-    HadArrayRangeDesignator = true;
+  void sawArrayRangeDesignator(bool ARD = true) { 
+    HadArrayRangeDesignator = ARD;
   }
 
   virtual SourceRange getSourceRange() const {
@@ -1758,14 +2007,6 @@ public:
   iterator end() { return InitExprs.end(); }
   reverse_iterator rbegin() { return InitExprs.rbegin(); }
   reverse_iterator rend() { return InitExprs.rend(); }
-  
-  // Serailization.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static InitListExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-private:
-  // Used by serializer.
-  InitListExpr() : Expr(InitListExprClass, QualType()) {}
 };
 
 /// @brief Represents a C99 designated initializer expression.
@@ -1789,28 +2030,40 @@ private:
 /// designators, one array designator for @c [2] followed by one field
 /// designator for @c .y. The initalization expression will be 1.0.
 class DesignatedInitExpr : public Expr {
+public:
+  /// \brief Forward declaration of the Designator class.
+  class Designator;
+
+private:
   /// The location of the '=' or ':' prior to the actual initializer
   /// expression.
   SourceLocation EqualOrColonLoc;
 
-  /// Whether this designated initializer used the GNU deprecated ':'
+  /// Whether this designated initializer used the GNU deprecated
   /// syntax rather than the C99 '=' syntax.
-  bool UsesColonSyntax : 1;
+  bool GNUSyntax : 1;
 
   /// The number of designators in this initializer expression.
   unsigned NumDesignators : 15;
+
+  /// \brief The designators in this designated initialization
+  /// expression.
+  Designator *Designators;
 
   /// The number of subexpressions of this initializer expression,
   /// which contains both the initializer and any additional
   /// expressions used by array and array-range designators.
   unsigned NumSubExprs : 16;
 
+
   DesignatedInitExpr(QualType Ty, unsigned NumDesignators, 
-                     SourceLocation EqualOrColonLoc, bool UsesColonSyntax,
-                     unsigned NumSubExprs)
-    : Expr(DesignatedInitExprClass, Ty), 
-      EqualOrColonLoc(EqualOrColonLoc), UsesColonSyntax(UsesColonSyntax), 
-      NumDesignators(NumDesignators), NumSubExprs(NumSubExprs) { }
+                     const Designator *Designators,
+                     SourceLocation EqualOrColonLoc, bool GNUSyntax,
+                     unsigned NumSubExprs);
+
+  explicit DesignatedInitExpr(unsigned NumSubExprs)
+    : Expr(DesignatedInitExprClass, EmptyShell()),
+      NumDesignators(0), Designators(0), NumSubExprs(NumSubExprs) { }
 
 public:
   /// A field designator, e.g., ".x".
@@ -1867,6 +2120,8 @@ public:
     friend class DesignatedInitExpr;
 
   public:
+    Designator() {}
+
     /// @brief Initializes a field designator.
     Designator(const IdentifierInfo *FieldName, SourceLocation DotLoc, 
                SourceLocation FieldLoc) 
@@ -1943,6 +2198,12 @@ public:
       return SourceLocation::getFromRawEncoding(ArrayOrRange.EllipsisLoc);
     }
 
+    unsigned getFirstExprIndex() const {
+      assert((Kind == ArrayDesignator || Kind == ArrayRangeDesignator) &&
+             "Only valid on an array or array-range designator");
+      return ArrayOrRange.Index;
+    }
+
     SourceLocation getStartLocation() const {
       if (Kind == FieldDesignator)
         return getDotLoc().isInvalid()? getFieldLoc() : getDotLoc();
@@ -1955,15 +2216,23 @@ public:
                                     unsigned NumDesignators,
                                     Expr **IndexExprs, unsigned NumIndexExprs,
                                     SourceLocation EqualOrColonLoc,
-                                    bool UsesColonSyntax, Expr *Init);
+                                    bool GNUSyntax, Expr *Init);
+
+  static DesignatedInitExpr *CreateEmpty(ASTContext &C, unsigned NumIndexExprs);
 
   /// @brief Returns the number of designators in this initializer.
   unsigned size() const { return NumDesignators; }
 
   // Iterator access to the designators.
   typedef Designator* designators_iterator;
-  designators_iterator designators_begin();
-  designators_iterator designators_end();
+  designators_iterator designators_begin() { return Designators; }
+  designators_iterator designators_end() { 
+    return Designators + NumDesignators; 
+  }
+
+  Designator *getDesignator(unsigned Idx) { return &designators_begin()[Idx]; }
+
+  void setDesignators(const Designator *Desigs, unsigned NumDesigs);
 
   Expr *getArrayIndex(const Designator& D);
   Expr *getArrayRangeStart(const Designator& D);
@@ -1972,10 +2241,12 @@ public:
   /// @brief Retrieve the location of the '=' that precedes the
   /// initializer value itself, if present.
   SourceLocation getEqualOrColonLoc() const { return EqualOrColonLoc; }
+  void setEqualOrColonLoc(SourceLocation L) { EqualOrColonLoc = L; }
 
   /// @brief Determines whether this designated initializer used the
-  /// GNU 'fieldname:' syntax or the C99 '=' syntax.
-  bool usesColonSyntax() const { return UsesColonSyntax; }
+  /// deprecated GNU syntax for designated initializers.
+  bool usesGNUSyntax() const { return GNUSyntax; }
+  void setGNUSyntax(bool GNU) { GNUSyntax = GNU; }
 
   /// @brief Retrieve the initializer value.
   Expr *getInit() const { 
@@ -1986,7 +2257,34 @@ public:
     *child_begin() = init;
   }
 
+  /// \brief Retrieve the total number of subexpressions in this
+  /// designated initializer expression, including the actual
+  /// initialized value and any expressions that occur within array
+  /// and array-range designators.
+  unsigned getNumSubExprs() const { return NumSubExprs; }
+
+  Expr *getSubExpr(unsigned Idx) {
+    assert(Idx < NumSubExprs && "Subscript out of range");
+    char* Ptr = static_cast<char*>(static_cast<void *>(this));
+    Ptr += sizeof(DesignatedInitExpr);
+    return reinterpret_cast<Expr**>(reinterpret_cast<void**>(Ptr))[Idx];
+  }
+
+  void setSubExpr(unsigned Idx, Expr *E) {
+    assert(Idx < NumSubExprs && "Subscript out of range");
+    char* Ptr = static_cast<char*>(static_cast<void *>(this));
+    Ptr += sizeof(DesignatedInitExpr);
+    reinterpret_cast<Expr**>(reinterpret_cast<void**>(Ptr))[Idx] = E;
+  }
+
+  /// \brief Replaces the designator at index @p Idx with the series
+  /// of designators in [First, Last).
+  void ExpandDesignator(unsigned Idx, const Designator *First, 
+                        const Designator *Last);
+
   virtual SourceRange getSourceRange() const;
+
+  virtual void Destroy(ASTContext &C);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == DesignatedInitExprClass; 
@@ -2001,13 +2299,19 @@ public:
 /// \brief Represents an implicitly-generated value initialization of
 /// an object of a given type.
 ///
-/// Implicit value initializations occur within semantic initialize
-/// list expressions (\see InitListExpr) as placeholders for subobject
+/// Implicit value initializations occur within semantic initializer
+/// list expressions (InitListExpr) as placeholders for subobject
 /// initializations not explicitly specified by the user.
+///
+/// \see InitListExpr
 class ImplicitValueInitExpr : public Expr { 
 public:
   explicit ImplicitValueInitExpr(QualType ty) 
     : Expr(ImplicitValueInitExprClass, ty) { }
+
+  /// \brief Construct an empty implicit value initialization.
+  explicit ImplicitValueInitExpr(EmptyShell Empty)
+    : Expr(ImplicitValueInitExprClass, Empty) { }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ImplicitValueInitExprClass;
@@ -2032,21 +2336,33 @@ public:
 /// vector, and may occur on the left hand side or right hand side.  For example
 /// the following is legal:  "V.xy = V.zw" if V is a 4 element extended vector.
 ///
+/// Note that the base may have either vector or pointer to vector type, just
+/// like a struct field reference.
+///
 class ExtVectorElementExpr : public Expr {
   Stmt *Base;
-  IdentifierInfo &Accessor;
+  IdentifierInfo *Accessor;
   SourceLocation AccessorLoc;
 public:
   ExtVectorElementExpr(QualType ty, Expr *base, IdentifierInfo &accessor,
                        SourceLocation loc)
     : Expr(ExtVectorElementExprClass, ty), 
-      Base(base), Accessor(accessor), AccessorLoc(loc) {}
+      Base(base), Accessor(&accessor), AccessorLoc(loc) {}
                      
+  /// \brief Build an empty vector element expression.
+  explicit ExtVectorElementExpr(EmptyShell Empty)
+    : Expr(ExtVectorElementExprClass, Empty) { }
+
   const Expr *getBase() const { return cast<Expr>(Base); }
   Expr *getBase() { return cast<Expr>(Base); }
-  
-  IdentifierInfo &getAccessor() const { return Accessor; }
-  
+  void setBase(Expr *E) { Base = E; }
+
+  IdentifierInfo &getAccessor() const { return *Accessor; }
+  void setAccessor(IdentifierInfo *II) { Accessor = II; }
+
+  SourceLocation getAccessorLoc() const { return AccessorLoc; }
+  void setAccessorLoc(SourceLocation L) { AccessorLoc = L; }
+
   /// getNumElements - Get the number of components being selected.
   unsigned getNumElements() const;
   
@@ -2062,6 +2378,10 @@ public:
     return SourceRange(getBase()->getLocStart(), AccessorLoc);
   }
   
+  /// isArrow - Return true if the base expression is a pointer to vector,
+  /// return false if the base expression is a vector.
+  bool isArrow() const;
+  
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ExtVectorElementExprClass; 
   }
@@ -2070,9 +2390,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ExtVectorElementExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -2081,16 +2398,26 @@ public:
 class BlockExpr : public Expr {
 protected:
   BlockDecl *TheBlock;
+  bool HasBlockDeclRefExprs;
 public:
-  BlockExpr(BlockDecl *BD, QualType ty) : Expr(BlockExprClass, ty), 
-            TheBlock(BD) {}
+  BlockExpr(BlockDecl *BD, QualType ty, bool hasBlockDeclRefExprs)
+    : Expr(BlockExprClass, ty), 
+      TheBlock(BD), HasBlockDeclRefExprs(hasBlockDeclRefExprs) {}
 
+  /// \brief Build an empty block expression.
+  explicit BlockExpr(EmptyShell Empty) : Expr(BlockExprClass, Empty) { }
+
+  const BlockDecl *getBlockDecl() const { return TheBlock; }
   BlockDecl *getBlockDecl() { return TheBlock; }
-  
+  void setBlockDecl(BlockDecl *BD) { TheBlock = BD; }
+
   // Convenience functions for probing the underlying BlockDecl.
   SourceLocation getCaretLocation() const;
   const Stmt *getBody() const;
   Stmt *getBody();
+
+  const Stmt *getBody(ASTContext &C) const { return getBody(); }
+  Stmt *getBody(ASTContext &C) { return getBody(); }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(getCaretLocation(), getBody()->getLocEnd());
@@ -2098,6 +2425,11 @@ public:
 
   /// getFunctionType - Return the underlying function type for this block.
   const FunctionType *getFunctionType() const;
+
+  /// hasBlockDeclRefExprs - Return true iff the block has BlockDeclRefExpr
+  /// inside of the block that reference values outside the block.
+  bool hasBlockDeclRefExprs() const { return HasBlockDeclRefExprs; }
+  void setHasBlockDeclRefExprs(bool BDRE) { HasBlockDeclRefExprs = BDRE; }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == BlockExprClass;
@@ -2107,9 +2439,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static BlockExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
     
 /// BlockDeclRefExpr - A reference to a declared variable, function,
@@ -2121,13 +2450,24 @@ class BlockDeclRefExpr : public Expr {
 public:
   BlockDeclRefExpr(ValueDecl *d, QualType t, SourceLocation l, bool ByRef) : 
        Expr(BlockDeclRefExprClass, t), D(d), Loc(l), IsByRef(ByRef) {}
+
+  // \brief Build an empty reference to a declared variable in a
+  // block.
+  explicit BlockDeclRefExpr(EmptyShell Empty)
+    : Expr(BlockDeclRefExprClass, Empty) { }
   
   ValueDecl *getDecl() { return D; }
   const ValueDecl *getDecl() const { return D; }
+  void setDecl(ValueDecl *VD) { D = VD; }
+
+  SourceLocation getLocation() const { return Loc; }
+  void setLocation(SourceLocation L) { Loc = L; }
+
   virtual SourceRange getSourceRange() const { return SourceRange(Loc); }
   
   bool isByRef() const { return IsByRef; }
-  
+  void setByRef(bool BR) { IsByRef = BR; }
+
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == BlockDeclRefExprClass; 
   }
@@ -2136,9 +2476,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static BlockDeclRefExpr* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 }  // end namespace clang

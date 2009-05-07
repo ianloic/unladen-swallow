@@ -21,12 +21,12 @@
 #include "llvm/ModuleProvider.h"
 #include "llvm/CodeGen/MachineCodeEmitter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
-#include "llvm/Support/MutexGuard.h"
-#include "llvm/System/DynamicLibrary.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetJITInfo.h"
-
+#include "llvm/Support/Dwarf.h"
+#include "llvm/Support/MutexGuard.h"
+#include "llvm/System/DynamicLibrary.h"
 #include "llvm/Config/config.h"
 
 using namespace llvm;
@@ -86,7 +86,13 @@ namespace llvm {
 
 extern "C" void __register_frame(void*);
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED <= 1050
+# define USE_KEYMGR 1
+#else
+# define USE_KEYMGR 0
+#endif
+
+#if USE_KEYMGR
 
 namespace {
 
@@ -141,16 +147,14 @@ struct LibgccObjectInfo {
   unsigned unused[2];
 };
 
-// for DW_EH_PE_omit
-#include "llvm/Support/Dwarf.h"
-
 /// darwin_register_frame - Since __register_frame does not work with darwin's
 /// libgcc,we provide our own function, which "tricks" libgcc by modifying the
 /// "Dwarf2 object list" key.
 void DarwinRegisterFrame(void* FrameBegin) {
   // Get the key.
-  struct LibgccObjectInfo* LOI = (struct LibgccObjectInfo*)
+  LibgccObjectInfo* LOI = (struct LibgccObjectInfo*)
     _keymgr_get_and_lock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST);
+  assert(LOI && "This should be preallocated by the runtime");
   
   // Allocate a new LibgccObject to represent this frame. Deallocation of this
   // object may be impossible: since darwin code in libgcc was written after
@@ -192,8 +196,8 @@ void DarwinRegisterFrame(void* FrameBegin) {
 ExecutionEngine *ExecutionEngine::createJIT(ModuleProvider *MP,
                                             std::string *ErrorStr,
                                             JITMemoryManager *JMM,
-                                            bool Fast) {
-  ExecutionEngine *EE = JIT::createJIT(MP, ErrorStr, JMM, Fast);
+                                            CodeGenOpt::Level OptLevel) {
+  ExecutionEngine *EE = JIT::createJIT(MP, ErrorStr, JMM, OptLevel);
   if (!EE) return 0;
   
   // Make sure we can resolve symbols in the program as well. The zero arg
@@ -203,7 +207,7 @@ ExecutionEngine *ExecutionEngine::createJIT(ModuleProvider *MP,
 }
 
 JIT::JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
-         JITMemoryManager *JMM, bool Fast)
+         JITMemoryManager *JMM, CodeGenOpt::Level OptLevel)
   : ExecutionEngine(MP), TM(tm), TJI(tji) {
   setTargetData(TM.getTargetData());
 
@@ -219,25 +223,23 @@ JIT::JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
 
   // Turn the machine code intermediate representation into bytes in memory that
   // may be executed.
-  if (TM.addPassesToEmitMachineCode(PM, *MCE, Fast)) {
+  if (TM.addPassesToEmitMachineCode(PM, *MCE, OptLevel)) {
     cerr << "Target does not support machine code emission!\n";
     abort();
   }
   
   // Register routine for informing unwinding runtime about new EH frames
 #if defined(__GNUC__) && !defined(__ARM_EABI__)
-#if defined(__APPLE__)
+#if USE_KEYMGR
   struct LibgccObjectInfo* LOI = (struct LibgccObjectInfo*)
     _keymgr_get_and_lock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST);
   
   // The key is created on demand, and libgcc creates it the first time an
   // exception occurs. Since we need the key to register frames, we create
   // it now.
-  if (!LOI) {
-    LOI = (LibgccObjectInfo*)malloc(sizeof(struct LibgccObjectInfo)); 
-    _keymgr_set_and_unlock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST,
-                                           LOI);
-  }
+  if (!LOI)
+    LOI = (LibgccObjectInfo*)calloc(sizeof(struct LibgccObjectInfo), 1); 
+  _keymgr_set_and_unlock_processwide_ptr(KEYMGR_GCC3_DW2_OBJ_LIST, LOI);
   InstallExceptionTableRegister(DarwinRegisterFrame);
 #else
   InstallExceptionTableRegister(__register_frame);
@@ -270,7 +272,7 @@ void JIT::addModuleProvider(ModuleProvider *MP) {
 
     // Turn the machine code intermediate representation into bytes in memory
     // that may be executed.
-    if (TM.addPassesToEmitMachineCode(PM, *MCE, false /*fast*/)) {
+    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
       cerr << "Target does not support machine code emission!\n";
       abort();
     }
@@ -289,11 +291,28 @@ Module *JIT::removeModuleProvider(ModuleProvider *MP, std::string *E) {
   Module *result = ExecutionEngine::removeModuleProvider(MP, E);
   
   MutexGuard locked(lock);
-  if (Modules.empty()) {
+  
+  if (jitstate->getMP() == MP) {
     delete jitstate;
     jitstate = 0;
   }
   
+  if (!jitstate && !Modules.empty()) {
+    jitstate = new JITState(Modules[0]);
+
+    FunctionPassManager &PM = jitstate->getPM(locked);
+    PM.add(new TargetData(*TM.getTargetData()));
+    
+    // Turn the machine code intermediate representation into bytes in memory
+    // that may be executed.
+    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
+      cerr << "Target does not support machine code emission!\n";
+      abort();
+    }
+    
+    // Initialize passes.
+    PM.doInitialization();
+  }    
   return result;
 }
 
@@ -304,10 +323,28 @@ void JIT::deleteModuleProvider(ModuleProvider *MP, std::string *E) {
   ExecutionEngine::deleteModuleProvider(MP, E);
   
   MutexGuard locked(lock);
-  if (Modules.empty()) {
+  
+  if (jitstate->getMP() == MP) {
     delete jitstate;
     jitstate = 0;
   }
+
+  if (!jitstate && !Modules.empty()) {
+    jitstate = new JITState(Modules[0]);
+    
+    FunctionPassManager &PM = jitstate->getPM(locked);
+    PM.add(new TargetData(*TM.getTargetData()));
+    
+    // Turn the machine code intermediate representation into bytes in memory
+    // that may be executed.
+    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
+      cerr << "Target does not support machine code emission!\n";
+      abort();
+    }
+    
+    // Initialize passes.
+    PM.doInitialization();
+  }    
 }
 
 /// run - Start execution with the specified function and arguments.
@@ -321,8 +358,9 @@ GenericValue JIT::runFunction(Function *F,
   const FunctionType *FTy = F->getFunctionType();
   const Type *RetTy = FTy->getReturnType();
 
-  assert((FTy->getNumParams() <= ArgValues.size() || FTy->isVarArg()) &&
-         "Too many arguments passed into function!");
+  assert((FTy->getNumParams() == ArgValues.size() ||
+          (FTy->isVarArg() && FTy->getNumParams() <= ArgValues.size())) &&
+         "Wrong number of arguments passed into function!");
   assert(FTy->getNumParams() == ArgValues.size() &&
          "This doesn't support passing arguments through varargs (yet)!");
 
@@ -475,9 +513,12 @@ GenericValue JIT::runFunction(Function *F,
 /// GlobalAddress[F] with the address of F's machine code.
 ///
 void JIT::runJITOnFunction(Function *F) {
-  static bool isAlreadyCodeGenerating = false;
-
   MutexGuard locked(lock);
+  runJITOnFunctionUnlocked(F, locked);
+}
+
+void JIT::runJITOnFunctionUnlocked(Function *F, const MutexGuard &locked) {
+  static bool isAlreadyCodeGenerating = false;
   assert(!isAlreadyCodeGenerating && "Error: Recursive compilation detected!");
 
   // JIT the function
@@ -485,14 +526,26 @@ void JIT::runJITOnFunction(Function *F) {
   jitstate->getPM(locked).run(*F);
   isAlreadyCodeGenerating = false;
 
-  // If the function referred to a global variable that had not yet been
-  // emitted, it allocates memory for the global, but doesn't emit it yet.  Emit
-  // all of these globals now.
-  while (!jitstate->getPendingGlobals(locked).empty()) {
-    const GlobalVariable *GV = jitstate->getPendingGlobals(locked).back();
-    jitstate->getPendingGlobals(locked).pop_back();
-    EmitGlobalVariable(GV);
+  // If the function referred to another function that had not yet been
+  // read from bitcode, but we are jitting non-lazily, emit it now.
+  while (!jitstate->getPendingFunctions(locked).empty()) {
+    Function *PF = jitstate->getPendingFunctions(locked).back();
+    jitstate->getPendingFunctions(locked).pop_back();
+
+    // JIT the function
+    isAlreadyCodeGenerating = true;
+    jitstate->getPM(locked).run(*PF);
+    isAlreadyCodeGenerating = false;
+    
+    // Now that the function has been jitted, ask the JITEmitter to rewrite
+    // the stub with real address of the function.
+    updateFunctionStub(PF);
   }
+  
+  // If the JIT is configured to emit info so that dlsym can be used to
+  // rewrite stubs to external globals, do so now.
+  if (areDlsymStubsEnabled() && isLazyCompilationDisabled())
+    updateDlsymStubTable();
 }
 
 /// getPointerToFunction - This method is used to get the address of the
@@ -502,6 +555,8 @@ void *JIT::getPointerToFunction(Function *F) {
 
   if (void *Addr = getPointerToGlobalIfAvailable(F))
     return Addr;   // Check if function already code gen'd
+
+  MutexGuard locked(lock);
 
   // Make sure we read in the function if it exists in this Module.
   if (F->hasNotBeenReadFromBitcode()) {
@@ -528,16 +583,15 @@ void *JIT::getPointerToFunction(Function *F) {
       return Addr;
   }
 
-  MutexGuard locked(lock);
-
   if (F->isDeclaration()) {
-    bool AbortOnFailure = F->getLinkage() != GlobalValue::ExternalWeakLinkage;
+    bool AbortOnFailure =
+      !areDlsymStubsEnabled() && !F->hasExternalWeakLinkage();
     void *Addr = getPointerToNamedFunction(F->getName(), AbortOnFailure);
     addGlobalMapping(F, Addr);
     return Addr;
   }
 
-  runJITOnFunction(F);
+  runJITOnFunctionUnlocked(F, locked);
 
   void *Addr = getPointerToGlobalIfAvailable(F);
   assert(Addr && "Code generation didn't add function to GlobalAddress table!");
@@ -560,12 +614,12 @@ void *JIT::getOrEmitGlobalVariable(const GlobalVariable *GV) {
       return (void*)&__dso_handle;
 #endif
     Ptr = sys::DynamicLibrary::SearchForAddressOfSymbol(GV->getName().c_str());
-    if (Ptr == 0) {
+    if (Ptr == 0 && !areDlsymStubsEnabled()) {
       cerr << "Could not resolve external global address: "
            << GV->getName() << "\n";
       abort();
-    addGlobalMapping(GV, Ptr);
     }
+    addGlobalMapping(GV, Ptr);
   } else {
     // GlobalVariable's which are not "constant" will cause trouble in a server
     // situation. It's returned in the same block of memory as code which may
@@ -640,4 +694,9 @@ char* JIT::getMemoryForGV(const GlobalVariable* GV) {
   } else {
     return new char[GVSize];
   }
+}
+
+void JIT::addPendingFunction(Function *F) {
+  MutexGuard locked(lock);
+  jitstate->getPendingFunctions(locked).push_back(F);
 }

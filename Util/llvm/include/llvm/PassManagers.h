@@ -88,7 +88,12 @@
 // MPPassManagers.
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Support/PrettyStackTrace.h"
+
 namespace llvm {
+  class Pass;
+  class Value;
+  class Module;
 
 /// FunctionPassManager and PassManager, two top level managers, serve 
 /// as the public interface of pass manager infrastructure.
@@ -109,6 +114,25 @@ enum PassDebuggingString {
   ON_CG_MSG // "' on Call Graph ...\n'"
 };  
 
+/// PassManagerPrettyStackEntry - This is used to print informative information
+/// about what pass is running when/if a stack trace is generated.
+class PassManagerPrettyStackEntry : public PrettyStackTraceEntry {
+  Pass *P;
+  Value *V;
+  Module *M;
+public:
+  PassManagerPrettyStackEntry(Pass *p)
+    : P(p), V(0), M(0) {}  // When P is releaseMemory'd.
+  PassManagerPrettyStackEntry(Pass *p, Value &v)
+    : P(p), V(&v), M(0) {} // When P is run on V
+  PassManagerPrettyStackEntry(Pass *p, Module &m)
+    : P(p), V(0), M(&m) {} // When P is run on M
+  
+  /// print - Emit information about this stack frame to OS.
+  virtual void print(raw_ostream &OS) const;
+};
+  
+  
 //===----------------------------------------------------------------------===//
 // PMStack
 //
@@ -384,12 +408,15 @@ class FPPassManager : public ModulePass, public PMDataManager {
 public:
   static char ID;
   explicit FPPassManager(int Depth) 
-  : ModulePass(intptr_t(&ID)), PMDataManager(Depth) { }
+  : ModulePass(&ID), PMDataManager(Depth) { }
   
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool runOnFunction(Function &F);
   bool runOnModule(Module &M);
+  
+  /// cleanup - After running all passes, clean up pass manager cache.
+  void cleanup();
 
   /// doInitialization - Run all of the initializers for the function passes.
   ///

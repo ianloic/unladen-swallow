@@ -17,12 +17,26 @@
 #include "clang/Basic/IdentifierTable.h"
 #include "llvm/System/Path.h"
 #include "llvm/ADT/SmallString.h"
+#include <cstdio>
 using namespace clang;
+
+const IdentifierInfo *
+HeaderFileInfo::getControllingMacro(ExternalIdentifierLookup *External) {
+  if (ControllingMacro)
+    return ControllingMacro;
+
+  if (!ControllingMacroID || !External)
+    return 0;
+
+  ControllingMacro = External->GetIdentifier(ControllingMacroID);
+  return ControllingMacro;
+}
 
 HeaderSearch::HeaderSearch(FileManager &FM) : FileMgr(FM), FrameworkMap(64) {
   SystemDirIdx = 0;
   NoCurDirSearch = false;
-  
+ 
+  ExternalLookup = 0;
   NumIncluded = 0;
   NumMultiIncludeFileOptzn = 0;
   NumFrameworkLookups = NumSubFrameworkLookups = 0;
@@ -376,13 +390,19 @@ LookupSubframeworkHeader(const char *FilenameStart,
 //===----------------------------------------------------------------------===//
 
 
-/// getFileInfo - Return the PerFileInfo structure for the specified
+/// getFileInfo - Return the HeaderFileInfo structure for the specified
 /// FileEntry.
-HeaderSearch::PerFileInfo &HeaderSearch::getFileInfo(const FileEntry *FE) {
+HeaderFileInfo &HeaderSearch::getFileInfo(const FileEntry *FE) {
   if (FE->getUID() >= FileInfo.size())
     FileInfo.resize(FE->getUID()+1);
   return FileInfo[FE->getUID()];
 }  
+
+void HeaderSearch::setHeaderFileInfoForUID(HeaderFileInfo HFI, unsigned UID) {
+  if (UID >= FileInfo.size())
+    FileInfo.resize(UID+1);
+  FileInfo[UID] = HFI;
+}
 
 /// ShouldEnterIncludeFile - Mark the specified file as a target of of a
 /// #include, #include_next, or #import directive.  Return false if #including
@@ -391,7 +411,7 @@ bool HeaderSearch::ShouldEnterIncludeFile(const FileEntry *File, bool isImport){
   ++NumIncluded; // Count # of attempted #includes.
 
   // Get information about this file.
-  PerFileInfo &FileInfo = getFileInfo(File);
+  HeaderFileInfo &FileInfo = getFileInfo(File);
   
   // If this is a #import directive, check that we have not already imported
   // this header.
@@ -410,11 +430,12 @@ bool HeaderSearch::ShouldEnterIncludeFile(const FileEntry *File, bool isImport){
   
   // Next, check to see if the file is wrapped with #ifndef guards.  If so, and
   // if the macro that guards it is defined, we know the #include has no effect.
-  if (FileInfo.ControllingMacro &&
-      FileInfo.ControllingMacro->hasMacroDefinition()) {
-    ++NumMultiIncludeFileOptzn;
-    return false;
-  }
+  if (const IdentifierInfo *ControllingMacro 
+      = FileInfo.getControllingMacro(ExternalLookup))
+    if (ControllingMacro->hasMacroDefinition()) {
+      ++NumMultiIncludeFileOptzn;
+      return false;
+    }
   
   // Increment the number of times this file has been included.
   ++FileInfo.NumIncludes;

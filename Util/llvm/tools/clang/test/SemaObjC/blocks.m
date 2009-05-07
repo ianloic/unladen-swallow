@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify -fblocks %s
+// RUN: clang-cc -fsyntax-only -verify -fblocks %s
 @protocol NSObject;
 
 void bar(id(^)(void));
@@ -18,9 +18,29 @@ void foo3(id (*objectCreationBlock)(int)) {
 
 void bar4(id(^)());
 void foo4(id (^objectCreationBlock)(int)) {
-    return bar4(objectCreationBlock); // expected-warning{{incompatible block pointer types passing 'id (^)(int)', expected 'id (^)()'}}
+    return bar4(objectCreationBlock);
 }
 
-void foo5(id (^x)(int)) {
+void bar5(id(^)(void));
+void foo5(id (^objectCreationBlock)(int)) {
+    return bar5(objectCreationBlock); // expected-error {{incompatible block pointer types passing 'id (^)(int)', expected 'id (^)(void)'}}
+}
+
+void bar6(id(^)(int));
+void foo6(id (^objectCreationBlock)()) {
+    return bar6(objectCreationBlock); // expected-error {{incompatible block pointer types passing 'id (^)()', expected 'id (^)(int)'}}
+}
+
+void foo7(id (^x)(int)) {
   if (x) { }
+}
+
+@interface itf
+@end
+
+void foo8() {
+  void *P = ^(itf x) {};  // expected-error {{Objective-C interface type 'itf' cannot be passed by value}}
+  P = ^itf(int x) {};     // expected-error {{Objective-C interface type 'itf' cannot be returned by value}}
+  P = ^itf() {};          // expected-error {{Objective-C interface type 'itf' cannot be returned by value}}
+  P = ^itf{};             // expected-error {{Objective-C interface type 'itf' cannot be returned by value}}
 }

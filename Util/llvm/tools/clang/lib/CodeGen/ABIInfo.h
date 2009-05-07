@@ -10,7 +10,20 @@
 #ifndef CLANG_CODEGEN_ABIINFO_H
 #define CLANG_CODEGEN_ABIINFO_H
 
+namespace llvm {
+  class Type;
+}
+
 namespace clang {
+  class ASTContext;
+
+  // FIXME: This is a layering issue if we want to move ABIInfo
+  // down. Fortunately CGFunctionInfo has no real tie to CodeGen.
+  namespace CodeGen {
+    class CGFunctionInfo;
+    class CodeGenFunction;
+  }
+
   /* FIXME: All of this stuff should be part of the target interface
      somehow. It is currently here because it is not clear how to factor
      the targets to support this, since the Targets currently live in a
@@ -22,22 +35,19 @@ namespace clang {
   class ABIArgInfo {
   public:
     enum Kind {
-      Default,
-      StructRet, /// Only valid for return values. The return value
-                 /// should be passed through a pointer to a caller
-                 /// allocated location passed as an implicit first
-                 /// argument to the function.
+      Direct,    /// Pass the argument directly using the normal
+                 /// converted LLVM type. Complex and structure types
+                 /// are passed using first class aggregates.
+  
+      Indirect,  /// Pass the argument indirectly via a hidden pointer
+                 /// with the specified alignment (0 indicates default
+                 /// alignment).
   
       Ignore,    /// Ignore the argument (treat as void). Useful for
                  /// void and empty structs.
   
       Coerce,    /// Only valid for aggregate return types, the argument
                  /// should be accessed by coercion to a provided type.
-  
-      ByVal,     /// Only valid for aggregate argument types. The
-                 /// structure should be passed "byval" with the
-                 /// specified alignment (0 indicates default
-                 /// alignment).
   
       Expand,    /// Only valid for aggregate argument types. The
                  /// structure should be expanded into consecutive
@@ -46,7 +56,7 @@ namespace clang {
                  /// are all scalar types or are themselves expandable
                  /// types.
   
-      KindFirst=Default, KindLast=Expand
+      KindFirst=Direct, KindLast=Expand
     };
   
   private:
@@ -57,13 +67,12 @@ namespace clang {
     ABIArgInfo(Kind K, const llvm::Type *TD=0,
                unsigned UI=0) : TheKind(K),
                                 TypeData(TD),
-                                UIntData(0) {}
+                                UIntData(UI) {}
   public:
-    static ABIArgInfo getDefault() { 
-      return ABIArgInfo(Default); 
-    }
-    static ABIArgInfo getStructRet() { 
-      return ABIArgInfo(StructRet); 
+    ABIArgInfo() : TheKind(Direct), TypeData(0), UIntData(0) {}
+
+    static ABIArgInfo getDirect() { 
+      return ABIArgInfo(Direct); 
     }
     static ABIArgInfo getIgnore() {
       return ABIArgInfo(Ignore);
@@ -71,19 +80,18 @@ namespace clang {
     static ABIArgInfo getCoerce(const llvm::Type *T) { 
       return ABIArgInfo(Coerce, T);
     }
-    static ABIArgInfo getByVal(unsigned Alignment) {
-      return ABIArgInfo(ByVal, 0, Alignment);
+    static ABIArgInfo getIndirect(unsigned Alignment) {
+      return ABIArgInfo(Indirect, 0, Alignment);
     }
     static ABIArgInfo getExpand() {
       return ABIArgInfo(Expand);
     }
   
     Kind getKind() const { return TheKind; }
-    bool isDefault() const { return TheKind == Default; }
-    bool isStructRet() const { return TheKind == StructRet; }
+    bool isDirect() const { return TheKind == Direct; }
     bool isIgnore() const { return TheKind == Ignore; }
     bool isCoerce() const { return TheKind == Coerce; }
-    bool isByVal() const { return TheKind == ByVal; }
+    bool isIndirect() const { return TheKind == Indirect; }
     bool isExpand() const { return TheKind == Expand; }
   
     // Coerce accessors
@@ -93,10 +101,12 @@ namespace clang {
     }
   
     // ByVal accessors
-    unsigned getByValAlignment() const {
-      assert(TheKind == ByVal && "Invalid kind!");
+    unsigned getIndirectAlign() const {
+      assert(TheKind == Indirect && "Invalid kind!");
       return UIntData;
     }
+
+    void dump() const;
   };
 
   /// ABIInfo - Target specific hooks for defining how a type should be
@@ -104,12 +114,19 @@ namespace clang {
   class ABIInfo {
   public:
     virtual ~ABIInfo();
-  
-    virtual ABIArgInfo classifyReturnType(QualType RetTy, 
-                                          ASTContext &Context) const = 0;
-  
-    virtual ABIArgInfo classifyArgumentType(QualType Ty,
-                                            ASTContext &Context) const = 0;
+
+    virtual void computeInfo(CodeGen::CGFunctionInfo &FI,
+                             ASTContext &Ctx) const = 0;
+
+    /// EmitVAArg - Emit the target dependent code to load a value of
+    /// \arg Ty from the va_list pointed to by \arg VAListAddr.
+    
+    // FIXME: This is a gaping layering violation if we wanted to drop
+    // the ABI information any lower than CodeGen. Of course, for
+    // VAArg handling it has to be at this level; there is no way to
+    // abstract this out.
+    virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                   CodeGen::CodeGenFunction &CGF) const = 0;
   };
 }  // end namespace clang
 

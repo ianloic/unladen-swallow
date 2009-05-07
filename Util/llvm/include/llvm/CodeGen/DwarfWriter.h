@@ -21,6 +21,7 @@
 #define LLVM_CODEGEN_DWARFWRITER_H
 
 #include "llvm/Pass.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 
@@ -29,11 +30,16 @@ class DwarfDebug;
 class DwarfException;
 class MachineModuleInfo;
 class MachineFunction;
+class MachineInstr;
 class Value;
 class Module;
 class GlobalVariable;
 class TargetAsmInfo;
 class raw_ostream;
+class Instruction;
+class DICompileUnit;
+class DISubprogram;
+class DIVariable;
 
 //===----------------------------------------------------------------------===//
 // DwarfWriter - Emits Dwarf debug and exception handling directives.
@@ -48,13 +54,13 @@ private:
   /// DE - Provides the DwarfWriter exception implementation.
   ///
   DwarfException *DE;
-  
+
 public:
   static char ID; // Pass identification, replacement for typeid
 
   DwarfWriter();
   virtual ~DwarfWriter();
-  
+
   //===--------------------------------------------------------------------===//
   // Main entry points.
   //
@@ -76,17 +82,10 @@ public:
   ///
   void EndFunction(MachineFunction *MF);
 
-  /// ValidDebugInfo - Return true if V represents valid debug info value.
-  bool ValidDebugInfo(Value *V);
-
   /// RecordSourceLine - Register a source line with debug info. Returns a
   /// unique label ID used to generate a label and provide correspondence to
   /// the source line list.
-  unsigned RecordSourceLine(unsigned Line, unsigned Col, unsigned Src);
-
-  /// RecordSource - Register a source file with debug info. Returns an source
-  /// ID.
-  unsigned RecordSource(const std::string &Dir, const std::string &File);
+  unsigned RecordSourceLine(unsigned Line, unsigned Col, DICompileUnit CU);
 
   /// RecordRegionStart - Indicate the start of a region.
   unsigned RecordRegionStart(GlobalVariable *V);
@@ -99,8 +98,23 @@ public:
 
   /// RecordVariable - Indicate the declaration of  a local variable.
   ///
-  void RecordVariable(GlobalVariable *GV, unsigned FrameIndex);
+  void RecordVariable(GlobalVariable *GV, unsigned FrameIndex, 
+                      const MachineInstr *MI);
 
+  /// ShouldEmitDwarfDebug - Returns true if Dwarf debugging declarations should
+  /// be emitted.
+  bool ShouldEmitDwarfDebug() const;
+
+  //// RecordInlinedFnStart - Indicate the start of a inlined function.
+  void RecordInlinedFnStart(Instruction *I, DISubprogram &SP, unsigned LabelID,
+                            DICompileUnit CU, unsigned Line, unsigned Col);
+
+  /// RecordInlinedFnEnd - Indicate the end of inlined subroutine.
+  unsigned RecordInlinedFnEnd(DISubprogram &SP);
+
+  /// RecordVariableScope - Record scope for the variable declared by
+  /// DeclareMI. DeclareMI must describe TargetInstrInfo::DECLARE.
+  void RecordVariableScope(DIVariable &DV, const MachineInstr *DeclareMI);
 };
 
 

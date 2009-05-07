@@ -17,12 +17,14 @@
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Type.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Streams.h"
 using namespace llvm;
@@ -44,10 +46,12 @@ namespace {
 
   private:
     bool MadeChange;
+    SmallVector<BasicBlock *, 4> DeadBlocks;
     void SimplifyBlock(BasicBlock *BB);
     void SimplifyPredecessors(BranchInst *BI);
     void SimplifyPredecessors(SwitchInst *SI);
     void RevectorBlockTo(BasicBlock *FromBB, BasicBlock *ToBB);
+    bool RevectorBlockTo(BasicBlock *FromBB, Value *Cond, BranchInst *BI);
   };
 }
   
@@ -60,14 +64,22 @@ FunctionPass *llvm::createCondPropagationPass() {
 
 bool CondProp::runOnFunction(Function &F) {
   bool EverMadeChange = false;
+  DeadBlocks.clear();
 
   // While we are simplifying blocks, keep iterating.
   do {
     MadeChange = false;
-    for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
-      SimplifyBlock(BB);
+    for (Function::iterator BB = F.begin(), E = F.end(); BB != E;)
+      SimplifyBlock(BB++);
     EverMadeChange = EverMadeChange || MadeChange;
   } while (MadeChange);
+
+  if (EverMadeChange) {
+    while (!DeadBlocks.empty()) {
+      BasicBlock *BB = DeadBlocks.back(); DeadBlocks.pop_back();
+      DeleteDeadBlock(BB);
+    }
+  }
   return EverMadeChange;
 }
 
@@ -111,8 +123,9 @@ void CondProp::SimplifyBlock(BasicBlock *BB) {
 
       // Succ is now dead, but we cannot delete it without potentially
       // invalidating iterators elsewhere.  Just insert an unreachable
-      // instruction in it.
+      // instruction in it and delete this block later on.
       new UnreachableInst(Succ);
+      DeadBlocks.push_back(Succ);
       MadeChange = true;
     }
 }
@@ -123,8 +136,8 @@ void CondProp::SimplifyBlock(BasicBlock *BB) {
 // jump directly to the destination instead of going through this block.
 void CondProp::SimplifyPredecessors(BranchInst *BI) {
   // TODO: We currently only handle the most trival case, where the PHI node has
-  // one use (the branch), and is the only instruction besides the branch in the
-  // block.
+  // one use (the branch), and is the only instruction besides the branch and dbg
+  // intrinsics in the block.
   PHINode *PN = cast<PHINode>(BI->getCondition());
 
   if (PN->getNumIncomingValues() == 1) {
@@ -137,26 +150,30 @@ void CondProp::SimplifyPredecessors(BranchInst *BI) {
   if (!PN->hasOneUse()) return;
 
   BasicBlock *BB = BI->getParent();
-  if (&*BB->begin() != PN || &*next(BB->begin()) != BI)
+  if (&*BB->begin() != PN)
+    return;
+  BasicBlock::iterator BBI = BB->begin();
+  BasicBlock::iterator BBE = BB->end();
+  while (BBI != BBE && isa<DbgInfoIntrinsic>(++BBI)) /* empty */;
+  if (&*BBI != BI)
     return;
 
   // Ok, we have this really simple case, walk the PHI operands, looking for
   // constants.  Walk from the end to remove operands from the end when
   // possible, and to avoid invalidating "i".
-  for (unsigned i = PN->getNumIncomingValues(); i != 0; --i)
-    if (ConstantInt *CB = dyn_cast<ConstantInt>(PN->getIncomingValue(i-1))) {
-      // If we have a constant, forward the edge from its current to its
-      // ultimate destination.
-      RevectorBlockTo(PN->getIncomingBlock(i-1),
-                      BI->getSuccessor(CB->isZero()));
-      ++NumBrThread;
+  for (unsigned i = PN->getNumIncomingValues(); i != 0; --i) {
+    Value *InVal = PN->getIncomingValue(i-1);
+    if (!RevectorBlockTo(PN->getIncomingBlock(i-1), InVal, BI))
+      continue;
 
-      // If there were two predecessors before this simplification, or if the
-      // PHI node contained all the same value except for the one we just
-      // substituted, the PHI node may be deleted.  Don't iterate through it the
-      // last time.
-      if (BI->getCondition() != PN) return;
-    }
+    ++NumBrThread;
+
+    // If there were two predecessors before this simplification, or if the
+    // PHI node contained all the same value except for the one we just
+    // substituted, the PHI node may be deleted.  Don't iterate through it the
+    // last time.
+    if (BI->getCondition() != PN) return;
+  }
 }
 
 // SimplifyPredecessors(switch) - We know that SI is switch based on a PHI node
@@ -165,13 +182,18 @@ void CondProp::SimplifyPredecessors(BranchInst *BI) {
 // the destination instead of going through this block.
 void CondProp::SimplifyPredecessors(SwitchInst *SI) {
   // TODO: We currently only handle the most trival case, where the PHI node has
-  // one use (the branch), and is the only instruction besides the branch in the
-  // block.
+  // one use (the branch), and is the only instruction besides the branch and 
+  // dbg intrinsics in the block.
   PHINode *PN = cast<PHINode>(SI->getCondition());
   if (!PN->hasOneUse()) return;
 
   BasicBlock *BB = SI->getParent();
-  if (&*BB->begin() != PN || &*next(BB->begin()) != SI)
+  if (&*BB->begin() != PN)
+    return;
+  BasicBlock::iterator BBI = BB->begin();
+  BasicBlock::iterator BBE = BB->end();
+  while (BBI != BBE && isa<DbgInfoIntrinsic>(++BBI)) /* empty */;
+  if (&*BBI != SI)
     return;
 
   bool RemovedPreds = false;
@@ -219,4 +241,55 @@ void CondProp::RevectorBlockTo(BasicBlock *FromBB, BasicBlock *ToBB) {
   FromBr->setSuccessor(0, ToBB);
 
   MadeChange = true;
+}
+
+bool CondProp::RevectorBlockTo(BasicBlock *FromBB, Value *Cond, BranchInst *BI){
+  BranchInst *FromBr = cast<BranchInst>(FromBB->getTerminator());
+  if (!FromBr->isUnconditional())
+    return false;
+
+  // Get the old block we are threading through.
+  BasicBlock *OldSucc = FromBr->getSuccessor(0);
+
+  // If the condition is a constant, simply revector the unconditional branch at
+  // the end of FromBB to one of the successors of its current successor.
+  if (ConstantInt *CB = dyn_cast<ConstantInt>(Cond)) {
+    BasicBlock *ToBB = BI->getSuccessor(CB->isZero());
+
+    // OldSucc had multiple successors. If ToBB has multiple predecessors, then 
+    // the edge between them would be critical, which we already took care of.
+    // If ToBB has single operand PHI node then take care of it here.
+    FoldSingleEntryPHINodes(ToBB);
+
+    // Update PHI nodes in OldSucc to know that FromBB no longer branches to it.
+    OldSucc->removePredecessor(FromBB);
+
+    // Change FromBr to branch to the new destination.
+    FromBr->setSuccessor(0, ToBB);
+  } else {
+    BasicBlock *Succ0 = BI->getSuccessor(0);
+    // Do not perform transform if the new destination has PHI nodes. The
+    // transform will add new preds to the PHI's.
+    if (isa<PHINode>(Succ0->begin()))
+      return false;
+
+    BasicBlock *Succ1 = BI->getSuccessor(1);
+    if (isa<PHINode>(Succ1->begin()))
+      return false;
+
+    // Insert the new conditional branch.
+    BranchInst::Create(Succ0, Succ1, Cond, FromBr);
+
+    FoldSingleEntryPHINodes(Succ0);
+    FoldSingleEntryPHINodes(Succ1);
+
+    // Update PHI nodes in OldSucc to know that FromBB no longer branches to it.
+    OldSucc->removePredecessor(FromBB);
+
+    // Delete the old branch.
+    FromBr->eraseFromParent();
+  }
+
+  MadeChange = true;
+  return true;
 }

@@ -175,12 +175,33 @@ struct PatternSortingPredicate {
   }
 };
 
-/// getRegisterValueType - Look up and return the first ValueType of specified 
-/// RegisterClass record
+/// getRegisterValueType - Look up and return the ValueType of the specified
+/// register. If the register is a member of multiple register classes which
+/// have different associated types, return MVT::Other.
 static MVT::SimpleValueType getRegisterValueType(Record *R, const CodeGenTarget &T) {
-  if (const CodeGenRegisterClass *RC = T.getRegisterClassForRegister(R))
-    return RC->getValueTypeNum(0);
-  return MVT::Other;
+  bool FoundRC = false;
+  MVT::SimpleValueType VT = MVT::Other;
+  const std::vector<CodeGenRegisterClass> &RCs = T.getRegisterClasses();
+  std::vector<CodeGenRegisterClass>::const_iterator RC;
+  std::vector<Record*>::const_iterator Element;
+
+  for (RC = RCs.begin() ; RC != RCs.end() ; RC++) {
+    Element = find((*RC).Elements.begin(), (*RC).Elements.end(), R);
+    if (Element != (*RC).Elements.end()) {
+      if (!FoundRC) {
+        FoundRC = true;
+        VT = (*RC).getValueTypeNum(0);
+      } else {
+        // In multiple RC's
+        if (VT != (*RC).getValueTypeNum(0)) {
+          // Types of the RC's do not agree. Return MVT::Other. The
+          // target is responsible for handling this.
+          return MVT::Other;
+        }
+      }
+    }
+  }
+  return VT;
 }
 
 
@@ -444,7 +465,7 @@ public:
       NumInputRootOps = N->getNumChildren();
 
       if (DisablePatternForFastISel(N, CGP))
-        emitCheck("!Fast");
+        emitCheck("OptLevel != CodeGenOpt::None");
 
       emitCheck(PredicateCheck);
     }
@@ -897,6 +918,15 @@ public:
                    getEnumName(N->getTypeNum(0)) + ");");
           NodeOps.push_back("Tmp" + utostr(ResNo));
           return NodeOps;
+        } else if (DI->getDef()->isSubClassOf("RegisterClass")) {
+          // Handle a reference to a register class. This is used
+          // in COPY_TO_SUBREG instructions.
+          emitCode("SDValue Tmp" + utostr(ResNo) +
+                   " = CurDAG->getTargetConstant(" +
+                   getQualifiedName(DI->getDef()) + "RegClassID, " +
+                   "MVT::i32);");
+          NodeOps.push_back("Tmp" + utostr(ResNo));
+          return NodeOps;
         }
       } else if (IntInit *II = dynamic_cast<IntInit*>(N->getLeafValue())) {
         unsigned ResNo = TmpNo++;
@@ -978,7 +1008,8 @@ public:
           emitCode("}");
         }
         emitCode("InChains.push_back(" + ChainName + ");");
-        emitCode(ChainName + " = CurDAG->getNode(ISD::TokenFactor, MVT::Other, "
+        emitCode(ChainName + " = CurDAG->getNode(ISD::TokenFactor, "
+                 "N.getDebugLoc(), MVT::Other, "
                  "&InChains[0], InChains.size());");
         if (GenDebug) {
           emitCode("CurDAG->setSubgraphColor(" + ChainName +".getNode(), \"yellow\");");
@@ -1395,6 +1426,7 @@ private:
               }
               std::string Decl = (!ResNodeDecled) ? "SDNode *" : "";
               emitCode(Decl + "ResNode = CurDAG->getCopyToReg(" + ChainName +
+                       ", " + RootName + ".getDebugLoc()" +
                        ", " + getQualifiedName(RR) +
                        ", " +  RootName + utostr(OpNo) + ", InFlag).getNode();");
               ResNodeDecled = true;
@@ -1587,7 +1619,7 @@ void DAGISelEmitter::EmitPatterns(std::vector<std::pair<const PatternToMatch*,
     // in this group share the same next line, emit it inline now.  Do this
     // until we run out of common predicates.
     while (!ErasedPatterns && Patterns.back().second.back().first == 1) {
-      // Check that all of fhe patterns in Patterns end with the same predicate.
+      // Check that all of the patterns in Patterns end with the same predicate.
       bool AllEndWithSamePredicate = true;
       for (unsigned i = 0, e = Patterns.size(); i != e; ++i)
         if (Patterns[i].second.back() != Patterns.back().second.back()) {
@@ -1901,8 +1933,8 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
      << "  std::vector<MVT> VTs;\n"
      << "  VTs.push_back(MVT::Other);\n"
      << "  VTs.push_back(MVT::Flag);\n"
-     << "  SDValue New = CurDAG->getNode(ISD::INLINEASM, VTs, &Ops[0], "
-                 "Ops.size());\n"
+     << "  SDValue New = CurDAG->getNode(ISD::INLINEASM, N.getDebugLoc(), "
+                 "VTs, &Ops[0], Ops.size());\n"
      << "  return New.getNode();\n"
      << "}\n\n";
 
@@ -1944,25 +1976,6 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
      << "                              MVT::Other, Tmp1, Tmp2, Chain);\n"
      << "}\n\n";
 
-  OS << "SDNode *Select_EXTRACT_SUBREG(const SDValue &N) {\n"
-     << "  SDValue N0 = N.getOperand(0);\n"
-     << "  SDValue N1 = N.getOperand(1);\n"
-     << "  unsigned C = cast<ConstantSDNode>(N1)->getZExtValue();\n"
-     << "  SDValue Tmp = CurDAG->getTargetConstant(C, MVT::i32);\n"
-     << "  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::EXTRACT_SUBREG,\n"
-     << "                              N.getValueType(), N0, Tmp);\n"
-     << "}\n\n";
-
-  OS << "SDNode *Select_INSERT_SUBREG(const SDValue &N) {\n"
-     << "  SDValue N0 = N.getOperand(0);\n"
-     << "  SDValue N1 = N.getOperand(1);\n"
-     << "  SDValue N2 = N.getOperand(2);\n"
-     << "  unsigned C = cast<ConstantSDNode>(N2)->getZExtValue();\n"
-     << "  SDValue Tmp = CurDAG->getTargetConstant(C, MVT::i32);\n"
-     << "  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::INSERT_SUBREG,\n"
-     << "                              N.getValueType(), N0, N1, Tmp);\n"
-     << "}\n\n";
-
   OS << "// The main instruction selector code.\n"
      << "SDNode *SelectCode(SDValue N) {\n"
      << "  MVT::SimpleValueType NVT = N.getNode()->getValueType(0).getSimpleVT();\n"
@@ -1997,8 +2010,6 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
      << "  case ISD::DBG_LABEL: return Select_DBG_LABEL(N);\n"
      << "  case ISD::EH_LABEL: return Select_EH_LABEL(N);\n"
      << "  case ISD::DECLARE: return Select_DECLARE(N);\n"
-     << "  case ISD::EXTRACT_SUBREG: return Select_EXTRACT_SUBREG(N);\n"
-     << "  case ISD::INSERT_SUBREG: return Select_INSERT_SUBREG(N);\n"
      << "  case ISD::UNDEF: return Select_UNDEF(N);\n";
 
   // Loop over all of the case statements, emiting a call to each method we
@@ -2091,7 +2102,7 @@ void DAGISelEmitter::run(std::ostream &OS) {
 
   OS << "// Include standard, target-independent definitions and methods used\n"
      << "// by the instruction selector.\n";
-  OS << "#include <llvm/CodeGen/DAGISelHeader.h>\n\n";
+  OS << "#include \"llvm/CodeGen/DAGISelHeader.h\"\n\n";
   
   EmitNodeTransforms(OS);
   EmitPredicateFunctions(OS);

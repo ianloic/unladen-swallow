@@ -26,15 +26,21 @@ class MachineFunction;
 template <>
 struct ilist_traits<MachineInstr> : public ilist_default_traits<MachineInstr> {
 private:
-  mutable MachineInstr Sentinel;
+  mutable ilist_node<MachineInstr> Sentinel;
 
   // this is only set by the MachineBasicBlock owning the LiveList
   friend class MachineBasicBlock;
   MachineBasicBlock* Parent;
 
 public:
-  MachineInstr *createSentinel() const { return &Sentinel; }
+  MachineInstr *createSentinel() const {
+    return static_cast<MachineInstr*>(&Sentinel);
+  }
   void destroySentinel(MachineInstr *) const {}
+
+  MachineInstr *provideInitialHead() const { return createSentinel(); }
+  MachineInstr *ensureHead(MachineInstr*) const { return createSentinel(); }
+  static void noteHead(MachineInstr*, MachineInstr*) {}
 
   void addNodeToList(MachineInstr* N);
   void removeNodeFromList(MachineInstr* N);
@@ -71,7 +77,6 @@ class MachineBasicBlock : public ilist_node<MachineBasicBlock> {
   bool IsLandingPad;
 
   // Intrusive list support
-  friend struct ilist_sentinel_traits<MachineBasicBlock>;
   MachineBasicBlock() {}
 
   explicit MachineBasicBlock(MachineFunction &mf, const BasicBlock *bb);
@@ -234,19 +239,24 @@ public:
   
   /// isSuccessor - Return true if the specified MBB is a successor of this
   /// block.
-  bool isSuccessor(MachineBasicBlock *MBB) const;
+  bool isSuccessor(const MachineBasicBlock *MBB) const;
 
   /// isLayoutSuccessor - Return true if the specified MBB will be emitted
   /// immediately after this block, such that if this block exits by
   /// falling through, control will transfer to the specified MBB. Note
   /// that MBB need not be a successor at all, for example if this block
   /// ends with an unconditional branch to some other block.
-  bool isLayoutSuccessor(MachineBasicBlock *MBB) const;
+  bool isLayoutSuccessor(const MachineBasicBlock *MBB) const;
 
   /// getFirstTerminator - returns an iterator to the first terminator
   /// instruction of this basic block. If a terminator does not exist,
   /// it returns end()
   iterator getFirstTerminator();
+
+  /// isOnlyReachableViaFallthough - Return true if this basic block has
+  /// exactly one predecessor and the control transfer mechanism between
+  /// the predecessor and this block is a fall-through.
+  bool isOnlyReachableByFallthrough() const;
 
   void pop_front() { Insts.pop_front(); }
   void pop_back() { Insts.pop_back(); }

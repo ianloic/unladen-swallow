@@ -26,21 +26,25 @@ namespace clang {
   /// match with Table 9 of (C++ 13.3.3.1.1) and are listed such that
   /// better conversion kinds have smaller values.
   enum ImplicitConversionKind {
-    ICK_Identity = 0,        ///< Identity conversion (no conversion)
-    ICK_Lvalue_To_Rvalue,    ///< Lvalue-to-rvalue conversion (C++ 4.1)
-    ICK_Array_To_Pointer,    ///< Array-to-pointer conversion (C++ 4.2)
-    ICK_Function_To_Pointer, ///< Function-to-pointer (C++ 4.3)
-    ICK_Qualification,       ///< Qualification conversions (C++ 4.4)
-    ICK_Integral_Promotion,  ///< Integral promotions (C++ 4.5)
-    ICK_Floating_Promotion,  ///< Floating point promotions (C++ 4.6)
-    ICK_Integral_Conversion, ///< Integral conversions (C++ 4.7)
-    ICK_Floating_Conversion, ///< Floating point conversions (C++ 4.8)
-    ICK_Floating_Integral,   ///< Floating-integral conversions (C++ 4.9)
-    ICK_Pointer_Conversion,  ///< Pointer conversions (C++ 4.10)
-    ICK_Pointer_Member,      ///< Pointer-to-member conversions (C++ 4.11)
-    ICK_Boolean_Conversion,  ///< Boolean conversions (C++ 4.12)
-    ICK_Derived_To_Base,     ///< Derived-to-base (C++ [over.best.ics][)
-    ICK_Num_Conversion_Kinds ///< The number of conversion kinds
+    ICK_Identity = 0,          ///< Identity conversion (no conversion)
+    ICK_Lvalue_To_Rvalue,      ///< Lvalue-to-rvalue conversion (C++ 4.1)
+    ICK_Array_To_Pointer,      ///< Array-to-pointer conversion (C++ 4.2)
+    ICK_Function_To_Pointer,   ///< Function-to-pointer (C++ 4.3)
+    ICK_Qualification,         ///< Qualification conversions (C++ 4.4)
+    ICK_Integral_Promotion,    ///< Integral promotions (C++ 4.5)
+    ICK_Floating_Promotion,    ///< Floating point promotions (C++ 4.6)
+    ICK_Complex_Promotion,     ///< Complex promotions (Clang extension)
+    ICK_Integral_Conversion,   ///< Integral conversions (C++ 4.7)
+    ICK_Floating_Conversion,   ///< Floating point conversions (C++ 4.8)
+    ICK_Complex_Conversion,    ///< Complex conversions (C99 6.3.1.6)
+    ICK_Floating_Integral,     ///< Floating-integral conversions (C++ 4.9)
+    ICK_Complex_Real,          ///< Complex-real conversions (C99 6.3.1.7)
+    ICK_Pointer_Conversion,    ///< Pointer conversions (C++ 4.10)
+    ICK_Pointer_Member,        ///< Pointer-to-member conversions (C++ 4.11)
+    ICK_Boolean_Conversion,    ///< Boolean conversions (C++ 4.12)
+    ICK_Compatible_Conversion, ///< Conversions between compatible types in C99
+    ICK_Derived_To_Base,       ///< Derived-to-base (C++ [over.best.ics])
+    ICK_Num_Conversion_Kinds   ///< The number of conversion kinds
   };
 
   /// ImplicitConversionCategory - The category of an implicit
@@ -110,6 +114,10 @@ namespace clang {
     /// direct binding (C++ [dcl.init.ref]).
     bool DirectBinding : 1;
 
+    /// RRefBinding - True when this is a reference binding of an rvalue
+    /// reference to an rvalue (C++0x [over.ics.rank]p3b4).
+    bool RRefBinding : 1;
+
     /// FromType - The type that this conversion is converting
     /// from. This is an opaque pointer that can be translated into a
     /// QualType.
@@ -161,7 +169,7 @@ namespace clang {
 
   /// ImplicitConversionSequence - Represents an implicit conversion
   /// sequence, which may be a standard conversion sequence 
-  // (C++ 13.3.3.1.1), user-defined conversion sequence (C++ 13.3.3.1.2),
+  /// (C++ 13.3.3.1.1), user-defined conversion sequence (C++ 13.3.3.1.2),
   /// or an ellipsis conversion sequence (C++ 13.3.3.1.3).
   struct ImplicitConversionSequence {
     /// Kind - The kind of implicit conversion sequence. BadConversion

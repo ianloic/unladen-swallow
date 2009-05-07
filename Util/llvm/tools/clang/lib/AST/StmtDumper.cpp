@@ -14,6 +14,7 @@
 
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/Compiler.h"
 #include <cstdio>
@@ -216,14 +217,9 @@ void StmtDumper::DumpDeclarator(Decl *D) {
     fprintf(F, "\"");
     // Emit storage class for vardecls.
     if (VarDecl *V = dyn_cast<VarDecl>(VD)) {
-      switch (V->getStorageClass()) {
-      default: assert(0 && "Unknown storage class!");
-      case VarDecl::None:     break;
-      case VarDecl::Extern:   fprintf(F, "extern "); break;
-      case VarDecl::Static:   fprintf(F, "static "); break; 
-      case VarDecl::Auto:     fprintf(F, "auto "); break;
-      case VarDecl::Register: fprintf(F, "register "); break;
-      }
+      if (V->getStorageClass() != VarDecl::None)
+        fprintf(F, "%s ", 
+                VarDecl::getStorageClassSpecifierString(V->getStorageClass()));
     }
     
     std::string Name = VD->getNameAsString();
@@ -247,6 +243,14 @@ void StmtDumper::DumpDeclarator(Decl *D) {
       tagname = "<anonymous>";
     fprintf(F, "\"%s %s;\"", TD->getKindName(), tagname);
     // FIXME: print tag bodies.
+  } else if (UsingDirectiveDecl *UD = dyn_cast<UsingDirectiveDecl>(D)) {
+    // print using-directive decl (e.g. "using namespace x;")
+    const char *ns;
+    if (const IdentifierInfo *II = UD->getNominatedNamespace()->getIdentifier())
+      ns = II->getName();
+    else
+      ns = "<anonymous>";
+    fprintf(F, "\"%s %s;\"",UD->getDeclKindName(), ns);
   } else {
     assert(0 && "Unexpected decl");
   }
@@ -262,7 +266,7 @@ void StmtDumper::VisitDeclStmt(DeclStmt *Node) {
     Indent();
     fprintf(F, "%p ", (void*) D);
     DumpDeclarator(D);
-    if (D->getNextDeclarator())
+    if (DI+1 != DE)
       fprintf(F,"\n");
     --IndentLevel;
   }
@@ -396,9 +400,11 @@ void StmtDumper::VisitBinaryOperator(BinaryOperator *Node) {
 }
 void StmtDumper::VisitCompoundAssignOperator(CompoundAssignOperator *Node) {
   DumpExpr(Node);
-  fprintf(F, " '%s' ComputeTy=",
+  fprintf(F, " '%s' ComputeLHSTy=",
           BinaryOperator::getOpcodeStr(Node->getOpcode()));
-  DumpType(Node->getComputationType());
+  DumpType(Node->getComputationLHSType());
+  fprintf(F, " ComputeResultTy=");
+  DumpType(Node->getComputationResultType());
 }
 
 // GNU extensions.

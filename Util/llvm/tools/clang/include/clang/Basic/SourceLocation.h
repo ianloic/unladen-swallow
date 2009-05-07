@@ -14,12 +14,12 @@
 #ifndef LLVM_CLANG_SOURCELOCATION_H
 #define LLVM_CLANG_SOURCELOCATION_H
 
-#include <cassert>
-#include "llvm/Bitcode/SerializationFwd.h"
 #include <utility>
+#include <cassert>
 
 namespace llvm {
   class MemoryBuffer;
+  class raw_ostream;
   template <typename T> struct DenseMapInfo;
 }
 
@@ -129,12 +129,7 @@ public:
     return X;
   }
   
-  /// Emit - Emit this SourceLocation object to Bitcode.
-  void Emit(llvm::Serializer& S) const;
-  
-  /// ReadVal - Read a SourceLocation object from Bitcode.
-  static SourceLocation ReadVal(llvm::Deserializer& D);
-  
+  void print(llvm::raw_ostream &OS, const SourceManager &SM) const;
   void dump(const SourceManager &SM) const;
 };
 
@@ -167,11 +162,13 @@ public:
   
   bool isValid() const { return B.isValid() && E.isValid(); }
   
-  /// Emit - Emit this SourceRange object to Bitcode.
-  void Emit(llvm::Serializer& S) const;    
-
-  /// ReadVal - Read a SourceRange object from Bitcode.
-  static SourceRange ReadVal(llvm::Deserializer& D);
+  bool operator==(const SourceRange &X) const {
+    return B == X.B && E == X.E;
+  }
+  
+  bool operator!=(const SourceRange &X) const {
+    return B != X.B || E != X.E;
+  }
 };
   
 /// FullSourceLoc - A SourceLocation and its associated SourceManager.  Useful
@@ -200,9 +197,6 @@ public:
   FullSourceLoc getInstantiationLoc() const;
   FullSourceLoc getSpellingLoc() const;
 
-  unsigned getLineNumber() const;
-  unsigned getColumnNumber() const;
-  
   unsigned getInstantiationLineNumber() const;
   unsigned getInstantiationColumnNumber() const;
 
@@ -217,6 +211,11 @@ public:
   /// data for the specified FileID.
   std::pair<const char*, const char*> getBufferData() const;
   
+  /// getDecomposedLoc - Decompose the specified location into a raw FileID +
+  /// Offset pair.  The first element is the FileID, the second is the
+  /// offset from the start of the buffer of the location.
+  std::pair<FileID, unsigned> getDecomposedLoc() const;
+
   bool isInSystemHeader() const;
   
   /// Prints information about this FullSourceLoc to stderr. Useful for

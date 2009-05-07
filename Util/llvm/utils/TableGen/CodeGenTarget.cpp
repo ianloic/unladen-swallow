@@ -344,7 +344,12 @@ getInstructionsByEnumValue(std::vector<const CodeGenInstruction*>
   if (I == Instructions.end())
     throw "Could not find 'SUBREG_TO_REG' instruction!";
   const CodeGenInstruction *SUBREG_TO_REG = &I->second;
-  
+
+  I = getInstructions().find("COPY_TO_REGCLASS");
+  if (I == Instructions.end())
+    throw "Could not find 'COPY_TO_REGCLASS' instruction!";
+  const CodeGenInstruction *COPY_TO_REGCLASS = &I->second;
+
   // Print out the rest of the instructions now.
   NumberedInstructions.push_back(PHI);
   NumberedInstructions.push_back(INLINEASM);
@@ -356,6 +361,7 @@ getInstructionsByEnumValue(std::vector<const CodeGenInstruction*>
   NumberedInstructions.push_back(INSERT_SUBREG);
   NumberedInstructions.push_back(IMPLICIT_DEF);
   NumberedInstructions.push_back(SUBREG_TO_REG);
+  NumberedInstructions.push_back(COPY_TO_REGCLASS);
   for (inst_iterator II = inst_begin(), E = inst_end(); II != E; ++II)
     if (&II->second != PHI &&
         &II->second != INLINEASM &&
@@ -366,7 +372,8 @@ getInstructionsByEnumValue(std::vector<const CodeGenInstruction*>
         &II->second != EXTRACT_SUBREG &&
         &II->second != INSERT_SUBREG &&
         &II->second != IMPLICIT_DEF &&
-        &II->second != SUBREG_TO_REG)
+        &II->second != SUBREG_TO_REG &&
+        &II->second != COPY_TO_REGCLASS)
       NumberedInstructions.push_back(&II->second);
 }
 
@@ -426,13 +433,17 @@ ComplexPattern::ComplexPattern(Record *R) {
 // CodeGenIntrinsic Implementation
 //===----------------------------------------------------------------------===//
 
-std::vector<CodeGenIntrinsic> llvm::LoadIntrinsics(const RecordKeeper &RC) {
+std::vector<CodeGenIntrinsic> llvm::LoadIntrinsics(const RecordKeeper &RC,
+                                                   bool TargetOnly) {
   std::vector<Record*> I = RC.getAllDerivedDefinitions("Intrinsic");
   
   std::vector<CodeGenIntrinsic> Result;
 
-  for (unsigned i = 0, e = I.size(); i != e; ++i)
-    Result.push_back(CodeGenIntrinsic(I[i]));
+  for (unsigned i = 0, e = I.size(); i != e; ++i) {
+    bool isTarget = I[i]->getValueAsBit("isTarget");
+    if (isTarget == TargetOnly)
+      Result.push_back(CodeGenIntrinsic(I[i]));
+  }
   return Result;
 }
 
@@ -479,22 +490,30 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   }
   
   // Parse the list of return types.
+  std::vector<MVT::SimpleValueType> OverloadedVTs;
   ListInit *TypeList = R->getValueAsListInit("RetTypes");
   for (unsigned i = 0, e = TypeList->getSize(); i != e; ++i) {
     Record *TyEl = TypeList->getElementAsRecord(i);
     assert(TyEl->isSubClassOf("LLVMType") && "Expected a type!");
     MVT::SimpleValueType VT;
     if (TyEl->isSubClassOf("LLVMMatchType")) {
-      VT = IS.RetVTs[TyEl->getValueAsInt("Number")];
+      unsigned MatchTy = TyEl->getValueAsInt("Number");
+      assert(MatchTy < OverloadedVTs.size() &&
+             "Invalid matching number!");
+      VT = OverloadedVTs[MatchTy];
       // It only makes sense to use the extended and truncated vector element
       // variants with iAny types; otherwise, if the intrinsic is not
       // overloaded, all the types can be specified directly.
       assert(((!TyEl->isSubClassOf("LLVMExtendedElementVectorType") &&
                !TyEl->isSubClassOf("LLVMTruncatedElementVectorType")) ||
               VT == MVT::iAny) && "Expected iAny type");
-    } else
+    } else {
       VT = getValueType(TyEl->getValueAsDef("VT"));
-    isOverloaded |= VT == MVT::iAny || VT == MVT::fAny || VT == MVT::iPTRAny;
+    }
+    if (VT == MVT::iAny || VT == MVT::fAny || VT == MVT::iPTRAny) {
+      OverloadedVTs.push_back(VT);
+      isOverloaded |= true;
+    }
     IS.RetVTs.push_back(VT);
     IS.RetTypeDefs.push_back(TyEl);
   }
@@ -510,10 +529,9 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
     MVT::SimpleValueType VT;
     if (TyEl->isSubClassOf("LLVMMatchType")) {
       unsigned MatchTy = TyEl->getValueAsInt("Number");
-      if (MatchTy < IS.RetVTs.size())
-        VT = IS.RetVTs[MatchTy];
-      else
-        VT = IS.ParamVTs[MatchTy - IS.RetVTs.size()];
+      assert(MatchTy < OverloadedVTs.size() &&
+             "Invalid matching number!");
+      VT = OverloadedVTs[MatchTy];
       // It only makes sense to use the extended and truncated vector element
       // variants with iAny types; otherwise, if the intrinsic is not
       // overloaded, all the types can be specified directly.
@@ -522,7 +540,10 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
               VT == MVT::iAny) && "Expected iAny type");
     } else
       VT = getValueType(TyEl->getValueAsDef("VT"));
-    isOverloaded |= VT == MVT::iAny || VT == MVT::fAny || VT == MVT::iPTRAny;
+    if (VT == MVT::iAny || VT == MVT::fAny || VT == MVT::iPTRAny) {
+      OverloadedVTs.push_back(VT);
+      isOverloaded |= true;
+    }
     IS.ParamVTs.push_back(VT);
     IS.ParamTypeDefs.push_back(TyEl);
   }

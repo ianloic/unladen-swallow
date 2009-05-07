@@ -45,7 +45,7 @@ class DirectoryLookup;
 /// like the #include stack, token expansion, etc.
 ///
 class Preprocessor {
-  Diagnostic        &Diags;
+  Diagnostic        *Diags;
   const LangOptions &Features;
   TargetInfo        &Target;
   FileManager       &FileMgr;
@@ -67,9 +67,11 @@ class Preprocessor {
   IdentifierInfo *Ident__INCLUDE_LEVEL__;          // __INCLUDE_LEVEL__
   IdentifierInfo *Ident__BASE_FILE__;              // __BASE_FILE__
   IdentifierInfo *Ident__TIMESTAMP__;              // __TIMESTAMP__
+  IdentifierInfo *Ident__COUNTER__;                // __COUNTER__
   IdentifierInfo *Ident_Pragma, *Ident__VA_ARGS__; // _Pragma, __VA_ARGS__
   
   SourceLocation DATELoc, TIMELoc;
+  unsigned CounterValue;  // Next __COUNTER__ value.
 
   enum {
     /// MaxIncludeStackDepth - Maximum depth of #includes.
@@ -196,7 +198,10 @@ public:
 
   ~Preprocessor();
 
-  Diagnostic &getDiagnostics() const { return Diags; }
+  Diagnostic &getDiagnostics() const { return *Diags; }
+  void setDiagnostics(Diagnostic &D) { Diags = &D; }
+
+  
   const LangOptions &getLangOptions() const { return Features; }
   TargetInfo &getTargetInfo() const { return Target; }
   FileManager &getFileManager() const { return FileMgr; }
@@ -205,8 +210,11 @@ public:
 
   IdentifierTable &getIdentifierTable() { return Identifiers; }
   SelectorTable &getSelectorTable() { return Selectors; }
+  llvm::BumpPtrAllocator &getPreprocessorAllocator() { return BP; }
+    
+  void setPTHManager(PTHManager* pm);
   
-  void setPTHManager(PTHManager* pm) { PTH.reset(pm); }
+  PTHManager *getPTHManager() { return PTH.get(); }
 
   /// SetCommentRetentionState - Control whether or not the preprocessor retains
   /// comments in output.
@@ -233,7 +241,8 @@ public:
   /// it.
   PPCallbacks *getPPCallbacks() const { return Callbacks; }
   void setPPCallbacks(PPCallbacks *C) {
-    delete Callbacks;
+    if (Callbacks)
+      C = new PPChainedCallbacks(C, Callbacks);
     Callbacks = C;
   }
   
@@ -246,6 +255,15 @@ public:
   /// setMacroInfo - Specify a macro for this identifier.
   ///
   void setMacroInfo(IdentifierInfo *II, MacroInfo *MI);
+  
+  /// macro_iterator/macro_begin/macro_end - This allows you to walk the current
+  /// state of the macro table.  This visits every currently-defined macro.
+  typedef llvm::DenseMap<IdentifierInfo*, 
+                         MacroInfo*>::const_iterator macro_iterator;
+  macro_iterator macro_begin() const { return Macros.begin(); }
+  macro_iterator macro_end() const { return Macros.end(); }
+  
+  
   
   const std::string &getPredefines() const { return Predefines; }
   /// setPredefines - Set the predefines for this Preprocessor.  These
@@ -289,7 +307,10 @@ public:
   /// EnterMacro - Add a Macro to the top of the include stack and start lexing
   /// tokens from it instead of the current buffer.  Args specifies the
   /// tokens input to a function-like macro.
-  void EnterMacro(Token &Identifier, MacroArgs *Args);
+  ///
+  /// ILEnd specifies the location of the ')' for a function-like macro or the
+  /// identifier for an object-like macro.
+  void EnterMacro(Token &Identifier, SourceLocation ILEnd, MacroArgs *Args);
   
   /// EnterTokenStream - Add a "macro" context to the top of the include stack,
   /// which will cause the lexer to start returning the specified tokens.
@@ -419,17 +440,31 @@ public:
     if (CachedLexPos != 0 && isBacktrackEnabled())
       AnnotatePreviousCachedTokens(Tok);
   }
-  
+
+  /// \brief Replace the last token with an annotation token. 
+  ///
+  /// Like AnnotateCachedTokens(), this routine replaces an
+  /// already-parsed (and resolved) token with an annotation
+  /// token. However, this routine only replaces the last token with
+  /// the annotation token; it does not affect any other cached
+  /// tokens. This function has no effect if backtracking is not
+  /// enabled.
+  void ReplaceLastTokenWithAnnotation(const Token &Tok) {
+    assert(Tok.isAnnotation() && "Expected annotation token");
+    if (CachedLexPos != 0 && isBacktrackEnabled())
+      CachedTokens[CachedLexPos-1] = Tok;
+  }
+
   /// Diag - Forwarding function for diagnostics.  This emits a diagnostic at
   /// the specified Token's location, translating the token's start
   /// position in the current buffer into a SourcePosition object for rendering.
   DiagnosticBuilder Diag(SourceLocation Loc, unsigned DiagID) {
-    return Diags.Report(FullSourceLoc(Loc, getSourceManager()), DiagID);
+    return Diags->Report(FullSourceLoc(Loc, getSourceManager()), DiagID);
   }
   
   DiagnosticBuilder Diag(const Token &Tok, unsigned DiagID) {
-    return Diags.Report(FullSourceLoc(Tok.getLocation(), getSourceManager()),
-                        DiagID);
+    return Diags->Report(FullSourceLoc(Tok.getLocation(), getSourceManager()),
+                         DiagID);
   }
   
   /// getSpelling() - Return the 'spelling' of the Tok token.  The spelling of a
@@ -450,7 +485,7 @@ public:
   /// copy).  The caller is not allowed to modify the returned buffer pointer
   /// if an internal buffer is returned.
   unsigned getSpelling(const Token &Tok, const char *&Buffer) const;
-  
+
   /// getSpellingOfSingleCharacterNumericConstant - Tok is a numeric constant
   /// with length 1, return the character.
   char getSpellingOfSingleCharacterNumericConstant(const Token &Tok) const {
@@ -472,7 +507,19 @@ public:
   /// location provides a location of the instantiation point of the token.
   void CreateString(const char *Buf, unsigned Len,
                     Token &Tok, SourceLocation SourceLoc = SourceLocation());
-  
+
+  /// \brief Computes the source location just past the end of the
+  /// token at this source location.
+  ///
+  /// This routine can be used to produce a source location that
+  /// points just past the end of the token referenced by \p Loc, and
+  /// is generally used when a diagnostic needs to point just after a
+  /// token where it expected something different that it received. If
+  /// the returned source location would not be meaningful (e.g., if
+  /// it points into a macro), this routine returns an invalid
+  /// source location.
+  SourceLocation getLocForEndOfToken(SourceLocation Loc);
+    
   /// DumpToken - Print the token to stderr, used for debugging.
   ///
   void DumpToken(const Token &Tok, bool DumpFlags = false) const;
@@ -534,12 +581,25 @@ public:
   void HandleDirective(Token &Result);
 
   /// CheckEndOfDirective - Ensure that the next token is a tok::eom token.  If
-  /// not, emit a diagnostic and consume up until the eom.
-  void CheckEndOfDirective(const char *Directive);
+  /// not, emit a diagnostic and consume up until the eom.  If EnableMacros is
+  /// true, then we consider macros that expand to zero tokens as being ok.
+  void CheckEndOfDirective(const char *Directive, bool EnableMacros = false);
   
   /// DiscardUntilEndOfDirective - Read and discard all tokens remaining on the
   /// current line until the tok::eom token is found.
   void DiscardUntilEndOfDirective();
+  
+  /// SawDateOrTime - This returns true if the preprocessor has seen a use of
+  /// __DATE__ or __TIME__ in the file so far.
+  bool SawDateOrTime() const {
+    return DATELoc != SourceLocation() || TIMELoc != SourceLocation();
+  }
+  unsigned getCounterValue() const { return CounterValue; }
+  void setCounterValue(unsigned V) { CounterValue = V; }
+  
+  /// AllocateMacroInfo - Allocate a new MacroInfo object with the provide
+  ///  SourceLocation.
+  MacroInfo* AllocateMacroInfo(SourceLocation L);
   
 private:
   
@@ -561,15 +621,9 @@ private:
     IncludeMacroStack.pop_back();
   }
   
-  /// AllocateMacroInfo - Allocate a new MacroInfo object with the provide
-  ///  SourceLocation.
-  MacroInfo* AllocateMacroInfo(SourceLocation L);
-  
   /// ReleaseMacroInfo - Release the specified MacroInfo.  This memory will
   ///  be reused for allocating new MacroInfo objects.
-  void ReleaseMacroInfo(MacroInfo* MI) {
-    MICache.push_back(MI);
-  }
+  void ReleaseMacroInfo(MacroInfo* MI);
   
   /// isInPrimaryFile - Return true if we're in the top-level file, not in a
   /// #include.
@@ -628,7 +682,8 @@ private:
   /// ReadFunctionLikeMacroArgs - After reading "MACRO(", this method is
   /// invoked to read all of the formal arguments specified for the macro
   /// invocation.  This returns null on error.
-  MacroArgs *ReadFunctionLikeMacroArgs(Token &MacroName, MacroInfo *MI);
+  MacroArgs *ReadFunctionLikeMacroArgs(Token &MacroName, MacroInfo *MI,
+                                       SourceLocation &InstantiationEnd);
 
   /// ExpandBuiltinMacro - If an identifier token is read that is to be expanded
   /// as a builtin macro, handle it and return the next token as 'Tok'.
@@ -705,6 +760,7 @@ private:
                               const DirectoryLookup *LookupFrom = 0,
                               bool isImport = false);
   void HandleIncludeNextDirective(Token &Tok);
+  void HandleIncludeMacrosDirective(Token &Tok);
   void HandleImportDirective(Token &Tok);
   
   // Macro handling.

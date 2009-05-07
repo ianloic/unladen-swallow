@@ -47,15 +47,10 @@ class BasicValueFactory {
   typedef llvm::FoldingSet<llvm::FoldingSetNodeWrapper<llvm::APSInt> >
           APSIntSetTy;
 
-  typedef llvm::FoldingSet<SymIntConstraint>
-          SymIntCSetTy;
-  
-
   ASTContext& Ctx;
   llvm::BumpPtrAllocator& BPAlloc;
 
   APSIntSetTy   APSIntSet;
-  SymIntCSetTy  SymIntCSet;
   void*         PersistentSVals;
   void*         PersistentSValPairs;
 
@@ -75,23 +70,70 @@ public:
   const llvm::APSInt& getValue(const llvm::APInt& X, bool isUnsigned);
   const llvm::APSInt& getValue(uint64_t X, unsigned BitWidth, bool isUnsigned);
   const llvm::APSInt& getValue(uint64_t X, QualType T);
+  
+  /// Convert - Create a new persistent APSInt with the same value as 'From'
+  ///  but with the bitwidth and signedness of 'To'.
+  const llvm::APSInt& Convert(const llvm::APSInt& To,
+                              const llvm::APSInt& From) {
+    
+    if (To.isUnsigned() == From.isUnsigned() &&
+        To.getBitWidth() == From.getBitWidth())
+      return From;
+    
+    return getValue(From.getSExtValue(),
+                    To.getBitWidth(),
+                    To.isUnsigned());
+  }
 
   const llvm::APSInt& getIntValue(uint64_t X, bool isUnsigned) {
     QualType T = isUnsigned ? Ctx.UnsignedIntTy : Ctx.IntTy;
     return getValue(X, T);
   }
+  
+  inline const llvm::APSInt& getMaxValue(const llvm::APSInt &v) {
+    return getValue(llvm::APSInt::getMaxValue(v.getBitWidth(), v.isUnsigned()));
+  }
+  
+  inline const llvm::APSInt& getMinValue(const llvm::APSInt &v) {
+    return getValue(llvm::APSInt::getMinValue(v.getBitWidth(), v.isUnsigned()));
+  }
 
+  inline const llvm::APSInt& getMaxValue(QualType T) {
+    assert(T->isIntegerType() || Loc::IsLocType(T));
+    bool isUnsigned = T->isUnsignedIntegerType() || Loc::IsLocType(T);
+    return getValue(llvm::APSInt::getMaxValue(Ctx.getTypeSize(T), isUnsigned));
+  }
+  
+  inline const llvm::APSInt& getMinValue(QualType T) {
+    assert(T->isIntegerType() || Loc::IsLocType(T));
+    bool isUnsigned = T->isUnsignedIntegerType() || Loc::IsLocType(T);
+    return getValue(llvm::APSInt::getMinValue(Ctx.getTypeSize(T), isUnsigned));
+  }
+  
+  inline const llvm::APSInt& Add1(const llvm::APSInt& V) {
+    llvm::APSInt X = V;
+    ++X;
+    return getValue(X);
+  }
+  
+  inline const llvm::APSInt& Sub1(const llvm::APSInt& V) {
+    llvm::APSInt X = V;
+    --X;
+    return getValue(X);
+  }
+  
   inline const llvm::APSInt& getZeroWithPtrWidth(bool isUnsigned = true) {
     return getValue(0, Ctx.getTypeSize(Ctx.VoidPtrTy), isUnsigned);
   }
 
-  inline const llvm::APSInt& getTruthValue(bool b) {
-    return getValue(b ? 1 : 0, Ctx.getTypeSize(Ctx.IntTy), false);
+  inline const llvm::APSInt& getTruthValue(bool b, QualType T) {
+    return getValue(b ? 1 : 0, Ctx.getTypeSize(T), false);
   }
-
-  const SymIntConstraint& getConstraint(SymbolRef sym, BinaryOperator::Opcode Op,
-                                        const llvm::APSInt& V);
-
+  
+  inline const llvm::APSInt& getTruthValue(bool b) {
+    return getTruthValue(b, Ctx.IntTy);
+  }
+  
   const CompoundValData* getCompoundValData(QualType T, 
                                             llvm::ImmutableList<SVal> Vals);
   

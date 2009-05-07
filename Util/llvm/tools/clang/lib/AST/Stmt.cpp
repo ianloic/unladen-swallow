@@ -14,7 +14,11 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtObjC.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTDiagnostic.h"
 using namespace clang;
 
 static struct StmtClassNameTable {
@@ -42,23 +46,22 @@ const char *Stmt::getStmtClassName() const {
   return getStmtInfoTableEntry(sClass).Name;
 }
 
-void Stmt::DestroyChildren(ASTContext& C) {
-  for (child_iterator I = child_begin(), E = child_end(); I !=E; ) {
+void Stmt::DestroyChildren(ASTContext &C) {
+  for (child_iterator I = child_begin(), E = child_end(); I !=E; )
     if (Stmt* Child = *I++) Child->Destroy(C);
-  }
 }
 
-void Stmt::Destroy(ASTContext& C) {
+void Stmt::Destroy(ASTContext &C) {
   DestroyChildren(C);
   // FIXME: Eventually all Stmts should be allocated with the allocator
   //  in ASTContext, just like with Decls.
-  // this->~Stmt();
-  delete this;
+  this->~Stmt();
+  C.Deallocate((void *)this);
 }
 
-void DeclStmt::Destroy(ASTContext& C) {
-  DG.Destroy(C);
-  delete this;
+void DeclStmt::Destroy(ASTContext &C) {
+  this->~DeclStmt();
+  C.Deallocate((void *)this);
 }
 
 void Stmt::PrintStats() {
@@ -95,6 +98,14 @@ bool Stmt::CollectingStats(bool enable) {
   return StatSwitch;
 }
 
+void CompoundStmt::setStmts(ASTContext &C, Stmt **Stmts, unsigned NumStmts) {
+  if (this->Body)
+    C.Deallocate(Body);
+  this->NumStmts = NumStmts;
+
+  Body = new (C) Stmt*[NumStmts];
+  memcpy(Body, Stmts, sizeof(Stmt *) * NumStmts);
+}
 
 const char *LabelStmt::getName() const {
   return getID()->getName();
@@ -130,17 +141,211 @@ bool Stmt::hasImplicitControlFlow() const {
   }
 }
 
-const Expr* AsmStmt::getOutputExpr(unsigned i) const {
+Expr *AsmStmt::getOutputExpr(unsigned i) {
   return cast<Expr>(Exprs[i]);
 }
-Expr* AsmStmt::getOutputExpr(unsigned i) {
-  return cast<Expr>(Exprs[i]);
+
+/// getOutputConstraint - Return the constraint string for the specified
+/// output operand.  All output constraints are known to be non-empty (either
+/// '=' or '+').
+std::string AsmStmt::getOutputConstraint(unsigned i) const {
+  return std::string(Constraints[i]->getStrData(),
+                     Constraints[i]->getByteLength());
 }
-Expr* AsmStmt::getInputExpr(unsigned i) {
+
+/// getNumPlusOperands - Return the number of output operands that have a "+"
+/// constraint.
+unsigned AsmStmt::getNumPlusOperands() const {
+  unsigned Res = 0;
+  for (unsigned i = 0, e = getNumOutputs(); i != e; ++i)
+    if (isOutputPlusConstraint(i))
+      ++Res;
+  return Res;
+}
+
+
+
+Expr *AsmStmt::getInputExpr(unsigned i) {
   return cast<Expr>(Exprs[i + NumOutputs]);
 }
-const Expr* AsmStmt::getInputExpr(unsigned i) const {
-  return cast<Expr>(Exprs[i + NumOutputs]);
+
+/// getInputConstraint - Return the specified input constraint.  Unlike output
+/// constraints, these can be empty.
+std::string AsmStmt::getInputConstraint(unsigned i) const {
+  return std::string(Constraints[i + NumOutputs]->getStrData(),
+                     Constraints[i + NumOutputs]->getByteLength());
+}
+
+
+void AsmStmt::setOutputsAndInputs(unsigned NumOutputs,
+                                  unsigned NumInputs, 
+                                  const std::string *Names,
+                                  StringLiteral **Constraints,
+                                  Stmt **Exprs) {
+  this->NumOutputs = NumOutputs;
+  this->NumInputs = NumInputs;
+  this->Names.clear();
+  this->Names.insert(this->Names.end(), Names, Names + NumOutputs + NumInputs);
+  this->Constraints.clear();
+  this->Constraints.insert(this->Constraints.end(), 
+                           Constraints, Constraints + NumOutputs + NumInputs);
+  this->Exprs.clear();
+  this->Exprs.insert(this->Exprs.end(), Exprs, Exprs + NumOutputs + NumInputs);
+}
+
+/// getNamedOperand - Given a symbolic operand reference like %[foo],
+/// translate this into a numeric value needed to reference the same operand.
+/// This returns -1 if the operand name is invalid.
+int AsmStmt::getNamedOperand(const std::string &SymbolicName) const {
+  unsigned NumPlusOperands = 0;
+  
+  // Check if this is an output operand.
+  for (unsigned i = 0, e = getNumOutputs(); i != e; ++i) {
+    if (getOutputName(i) == SymbolicName)
+      return i;
+  }
+  
+  for (unsigned i = 0, e = getNumInputs(); i != e; ++i)
+    if (getInputName(i) == SymbolicName)
+      return getNumOutputs() + NumPlusOperands + i;
+
+  // Not found.
+  return -1;
+}
+
+void AsmStmt::setClobbers(StringLiteral **Clobbers, unsigned NumClobbers) {
+  this->Clobbers.clear();
+  this->Clobbers.insert(this->Clobbers.end(), Clobbers, Clobbers + NumClobbers);
+}
+
+/// AnalyzeAsmString - Analyze the asm string of the current asm, decomposing
+/// it into pieces.  If the asm string is erroneous, emit errors and return
+/// true, otherwise return false.
+unsigned AsmStmt::AnalyzeAsmString(llvm::SmallVectorImpl<AsmStringPiece>&Pieces,
+                                   ASTContext &C, unsigned &DiagOffs) const {
+  const char *StrStart = getAsmString()->getStrData();
+  const char *StrEnd = StrStart + getAsmString()->getByteLength();
+  const char *CurPtr = StrStart;
+  
+  // "Simple" inline asms have no constraints or operands, just convert the asm
+  // string to escape $'s.
+  if (isSimple()) {
+    std::string Result;
+    for (; CurPtr != StrEnd; ++CurPtr) {
+      switch (*CurPtr) {
+      case '$':
+        Result += "$$";
+        break;
+      default:
+        Result += *CurPtr;
+        break;
+      }
+    }
+    Pieces.push_back(AsmStringPiece(Result));
+    return 0;
+  }
+
+  // CurStringPiece - The current string that we are building up as we scan the
+  // asm string.
+  std::string CurStringPiece;
+  
+  while (1) {
+    // Done with the string?
+    if (CurPtr == StrEnd) {
+      if (!CurStringPiece.empty())
+        Pieces.push_back(AsmStringPiece(CurStringPiece));
+      return 0;
+    }
+    
+    char CurChar = *CurPtr++;
+    if (CurChar == '$') {
+      CurStringPiece += "$$";
+      continue;
+    } else if (CurChar != '%') {
+      CurStringPiece += CurChar;
+      continue;
+    }
+    
+    // Escaped "%" character in asm string.
+    if (CurPtr == StrEnd) {
+      // % at end of string is invalid (no escape).
+      DiagOffs = CurPtr-StrStart-1;
+      return diag::err_asm_invalid_escape;
+    }
+    
+    char EscapedChar = *CurPtr++;
+    if (EscapedChar == '%') {  // %% -> %
+      // Escaped percentage sign.
+      CurStringPiece += '%';
+      continue;
+    }
+    
+    if (EscapedChar == '=') {  // %= -> Generate an unique ID.
+      CurStringPiece += "${:uid}";
+      continue;
+    }
+    
+    // Otherwise, we have an operand.  If we have accumulated a string so far,
+    // add it to the Pieces list.
+    if (!CurStringPiece.empty()) {
+      Pieces.push_back(AsmStringPiece(CurStringPiece));
+      CurStringPiece.clear();
+    }
+    
+    // Handle %x4 and %x[foo] by capturing x as the modifier character.
+    char Modifier = '\0';
+    if (isalpha(EscapedChar)) {
+      Modifier = EscapedChar;
+      EscapedChar = *CurPtr++;
+    }
+    
+    if (isdigit(EscapedChar)) {
+      // %n - Assembler operand n
+      unsigned N = 0;
+      
+      --CurPtr;
+      while (CurPtr != StrEnd && isdigit(*CurPtr))
+        N = N*10 + ((*CurPtr++)-'0');
+      
+      unsigned NumOperands =
+        getNumOutputs() + getNumPlusOperands() + getNumInputs();
+      if (N >= NumOperands) {
+        DiagOffs = CurPtr-StrStart-1;
+        return diag::err_asm_invalid_operand_number;
+      }
+
+      Pieces.push_back(AsmStringPiece(N, Modifier));
+      continue;
+    }
+    
+    // Handle %[foo], a symbolic operand reference.
+    if (EscapedChar == '[') {
+      DiagOffs = CurPtr-StrStart-1;
+      
+      // Find the ']'.
+      const char *NameEnd = (const char*)memchr(CurPtr, ']', StrEnd-CurPtr);
+      if (NameEnd == 0)
+        return diag::err_asm_unterminated_symbolic_operand_name;
+      if (NameEnd == CurPtr)
+        return diag::err_asm_empty_symbolic_operand_name;
+      
+      std::string SymbolicName(CurPtr, NameEnd);
+      
+      int N = getNamedOperand(SymbolicName);
+      if (N == -1) {
+        // Verify that an operand with that name exists.
+        DiagOffs = CurPtr-StrStart;
+        return diag::err_asm_unknown_symbolic_operand_name;
+      }
+      Pieces.push_back(AsmStringPiece(N, Modifier));
+      
+      CurPtr = NameEnd+1;
+      continue;
+    }
+    
+    DiagOffs = CurPtr-StrStart-1;
+    return diag::err_asm_invalid_escape;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -179,12 +384,13 @@ ObjCForCollectionStmt::ObjCForCollectionStmt(Stmt *Elem, Expr *Collect,
 
 ObjCAtCatchStmt::ObjCAtCatchStmt(SourceLocation atCatchLoc,
                                  SourceLocation rparenloc,
-                                 Stmt *catchVarStmtDecl, Stmt *atCatchStmt,
+                                 ParmVarDecl *catchVarDecl, Stmt *atCatchStmt,
                                  Stmt *atCatchList)
 : Stmt(ObjCAtCatchStmtClass) {
-  SubExprs[SELECTOR] = catchVarStmtDecl;
+  ExceptionDecl = catchVarDecl;
   SubExprs[BODY] = atCatchStmt;
   SubExprs[NEXT_CATCH] = NULL;
+  // FIXME: O(N^2) in number of catch blocks.
   if (atCatchList) {
     ObjCAtCatchStmt *AtCatchList = static_cast<ObjCAtCatchStmt*>(atCatchList);
 
@@ -217,7 +423,7 @@ Stmt::child_iterator NullStmt::child_end() { return child_iterator(); }
 
 // CompoundStmt
 Stmt::child_iterator CompoundStmt::child_begin() { return &Body[0]; }
-Stmt::child_iterator CompoundStmt::child_end() { return &Body[0]+Body.size(); }
+Stmt::child_iterator CompoundStmt::child_end() { return &Body[0]+NumStmts; }
 
 // CaseStmt
 Stmt::child_iterator CaseStmt::child_begin() { return &SubExprs[0]; }

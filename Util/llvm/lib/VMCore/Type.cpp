@@ -13,14 +13,16 @@
 
 #include "llvm/DerivedTypes.h"
 #include "llvm/Constants.h"
+#include "llvm/Assembly/Writer.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdarg>
 using namespace llvm;
@@ -42,10 +44,8 @@ AbstractTypeUser::~AbstractTypeUser() {}
 // for types as they are needed.  Because resolution of types must invalidate
 // all of the abstract type descriptions, we keep them in a seperate map to make
 // this easy.
-static ManagedStatic<std::map<const Type*, 
-                              std::string> > ConcreteTypeDescriptions;
-static ManagedStatic<std::map<const Type*,
-                              std::string> > AbstractTypeDescriptions;
+static ManagedStatic<TypePrinting> ConcreteTypeDescriptions;
+static ManagedStatic<TypePrinting> AbstractTypeDescriptions;
 
 /// Because of the way Type subclasses are allocated, this function is necessary
 /// to use the correct kind of "delete" operator to deallocate the Type object.
@@ -229,151 +229,14 @@ void Type::typeBecameConcrete(const DerivedType *AbsTy) {
 }
 
 
-// getTypeDescription - This is a recursive function that walks a type hierarchy
-// calculating the description for a type.
-//
-static std::string getTypeDescription(const Type *Ty,
-                                      std::vector<const Type *> &TypeStack) {
-  if (isa<OpaqueType>(Ty)) {                     // Base case for the recursion
-    std::map<const Type*, std::string>::iterator I =
-      AbstractTypeDescriptions->find(Ty);
-    if (I != AbstractTypeDescriptions->end())
-      return I->second;
-    std::string Desc = "opaque";
-    AbstractTypeDescriptions->insert(std::make_pair(Ty, Desc));
-    return Desc;
-  }
-
-  if (!Ty->isAbstract()) {                       // Base case for the recursion
-    std::map<const Type*, std::string>::iterator I =
-      ConcreteTypeDescriptions->find(Ty);
-    if (I != ConcreteTypeDescriptions->end()) 
-      return I->second;
-    
-    if (Ty->isPrimitiveType()) {
-      switch (Ty->getTypeID()) {
-      default: assert(0 && "Unknown prim type!");
-      case Type::VoidTyID:   return (*ConcreteTypeDescriptions)[Ty] = "void";
-      case Type::FloatTyID:  return (*ConcreteTypeDescriptions)[Ty] = "float";
-      case Type::DoubleTyID: return (*ConcreteTypeDescriptions)[Ty] = "double";
-      case Type::X86_FP80TyID: 
-            return (*ConcreteTypeDescriptions)[Ty] = "x86_fp80";
-      case Type::FP128TyID: return (*ConcreteTypeDescriptions)[Ty] = "fp128";
-      case Type::PPC_FP128TyID: 
-          return (*ConcreteTypeDescriptions)[Ty] = "ppc_fp128";
-      case Type::LabelTyID:  return (*ConcreteTypeDescriptions)[Ty] = "label";
-      }
-    }
-  }
-
-  // Check to see if the Type is already on the stack...
-  unsigned Slot = 0, CurSize = TypeStack.size();
-  while (Slot < CurSize && TypeStack[Slot] != Ty) ++Slot; // Scan for type
-
-  // This is another base case for the recursion.  In this case, we know
-  // that we have looped back to a type that we have previously visited.
-  // Generate the appropriate upreference to handle this.
-  //
-  if (Slot < CurSize)
-    return "\\" + utostr(CurSize-Slot);         // Here's the upreference
-
-  // Recursive case: derived types...
-  std::string Result;
-  TypeStack.push_back(Ty);    // Add us to the stack..
-
-  switch (Ty->getTypeID()) {
-  case Type::IntegerTyID: {
-    const IntegerType *ITy = cast<IntegerType>(Ty);
-    Result = "i" + utostr(ITy->getBitWidth());
-    break;
-  }
-  case Type::FunctionTyID: {
-    const FunctionType *FTy = cast<FunctionType>(Ty);
-    if (!Result.empty())
-      Result += " ";
-    Result += getTypeDescription(FTy->getReturnType(), TypeStack) + " (";
-    for (FunctionType::param_iterator I = FTy->param_begin(),
-         E = FTy->param_end(); I != E; ++I) {
-      if (I != FTy->param_begin())
-        Result += ", ";
-      Result += getTypeDescription(*I, TypeStack);
-    }
-    if (FTy->isVarArg()) {
-      if (FTy->getNumParams()) Result += ", ";
-      Result += "...";
-    }
-    Result += ")";
-    break;
-  }
-  case Type::StructTyID: {
-    const StructType *STy = cast<StructType>(Ty);
-    if (STy->isPacked())
-      Result = "<{ ";
-    else
-      Result = "{ ";
-    for (StructType::element_iterator I = STy->element_begin(),
-           E = STy->element_end(); I != E; ++I) {
-      if (I != STy->element_begin())
-        Result += ", ";
-      Result += getTypeDescription(*I, TypeStack);
-    }
-    Result += " }";
-    if (STy->isPacked())
-      Result += ">";
-    break;
-  }
-  case Type::PointerTyID: {
-    const PointerType *PTy = cast<PointerType>(Ty);
-    Result = getTypeDescription(PTy->getElementType(), TypeStack);
-    if (unsigned AddressSpace = PTy->getAddressSpace())
-      Result += " addrspace(" + utostr(AddressSpace) + ")";
-    Result += " *";
-    break;
-  }
-  case Type::ArrayTyID: {
-    const ArrayType *ATy = cast<ArrayType>(Ty);
-    unsigned NumElements = ATy->getNumElements();
-    Result = "[";
-    Result += utostr(NumElements) + " x ";
-    Result += getTypeDescription(ATy->getElementType(), TypeStack) + "]";
-    break;
-  }
-  case Type::VectorTyID: {
-    const VectorType *PTy = cast<VectorType>(Ty);
-    unsigned NumElements = PTy->getNumElements();
-    Result = "<";
-    Result += utostr(NumElements) + " x ";
-    Result += getTypeDescription(PTy->getElementType(), TypeStack) + ">";
-    break;
-  }
-  default:
-    Result = "<error>";
-    assert(0 && "Unhandled type in getTypeDescription!");
-  }
-
-  TypeStack.pop_back();       // Remove self from stack...
-
-  return Result;
-}
-
-
-
-static const std::string &getOrCreateDesc(std::map<const Type*,std::string>&Map,
-                                          const Type *Ty) {
-  std::map<const Type*, std::string>::iterator I = Map.find(Ty);
-  if (I != Map.end()) return I->second;
-
-  std::vector<const Type *> TypeStack;
-  std::string Result = getTypeDescription(Ty, TypeStack);
-  return Map[Ty] = Result;
-}
-
-
-const std::string &Type::getDescription() const {
-  if (isAbstract())
-    return getOrCreateDesc(*AbstractTypeDescriptions, this);
-  else
-    return getOrCreateDesc(*ConcreteTypeDescriptions, this);
+std::string Type::getDescription() const {
+  TypePrinting &Map =
+    isAbstract() ? *AbstractTypeDescriptions : *ConcreteTypeDescriptions;
+  
+  std::string DescStr;
+  raw_string_ostream DescOS(DescStr);
+  Map.print(this, DescOS);
+  return DescOS.str();
 }
 
 
@@ -424,6 +287,8 @@ const IntegerType *Type::Int8Ty  = new BuiltinIntegerType(8);
 const IntegerType *Type::Int16Ty = new BuiltinIntegerType(16);
 const IntegerType *Type::Int32Ty = new BuiltinIntegerType(32);
 const IntegerType *Type::Int64Ty = new BuiltinIntegerType(64);
+
+const Type *Type::EmptyStructTy = StructType::get(NULL, NULL);
 
 
 //===----------------------------------------------------------------------===//
@@ -521,6 +386,10 @@ OpaqueType::OpaqueType() : DerivedType(OpaqueTyID) {
 #ifdef DEBUG_MERGE_TYPES
   DOUT << "Derived new type: " << *this << "\n";
 #endif
+}
+
+void PATypeHolder::destroy() {
+  Ty = 0;
 }
 
 // dropAllTypeUses - When this (abstract) type is resolved to be equal to
@@ -801,6 +670,27 @@ protected:
   std::multimap<unsigned, PATypeHolder> TypesByHash;
 
 public:
+  ~TypeMapBase() {
+    // PATypeHolder won't destroy non-abstract types.
+    // We can't destroy them by simply iterating, because
+    // they may contain references to each-other.
+#if 0
+    for (std::multimap<unsigned, PATypeHolder>::iterator I
+         = TypesByHash.begin(), E = TypesByHash.end(); I != E; ++I) {
+      Type *Ty = const_cast<Type*>(I->second.Ty);
+      I->second.destroy();
+      // We can't invoke destroy or delete, because the type may
+      // contain references to already freed types.
+      // So we have to destruct the object the ugly way.
+      if (Ty) {
+        Ty->AbstractTypeUsers.clear();
+        static_cast<const Type*>(Ty)->Type::~Type();
+        operator delete(Ty);
+      }
+    }
+#endif
+  }
+
   void RemoveFromTypesByHash(unsigned Hash, const Type *Ty) {
     std::multimap<unsigned, PATypeHolder>::iterator I =
       TypesByHash.lower_bound(Hash);
@@ -1324,6 +1214,10 @@ PointerType *PointerType::get(const Type *ValueType, unsigned AddressSpace) {
   return PT;
 }
 
+PointerType *Type::getPointerTo(unsigned addrs) const {
+  return PointerType::get(this, addrs);
+}
+
 //===----------------------------------------------------------------------===//
 //                     Derived Type Refinement Functions
 //===----------------------------------------------------------------------===//
@@ -1372,7 +1266,8 @@ void DerivedType::refineAbstractTypeTo(const Type *NewType) {
   assert(ForwardType == 0 && "This type has already been refined!");
 
   // The descriptions may be out of date.  Conservatively clear them all!
-  AbstractTypeDescriptions->clear();
+  if (AbstractTypeDescriptions.isConstructed())
+    AbstractTypeDescriptions->clear();
 
 #ifdef DEBUG_MERGE_TYPES
   DOUT << "REFINING abstract type [" << (void*)this << " "
@@ -1515,8 +1410,8 @@ void PointerType::typeBecameConcrete(const DerivedType *AbsTy) {
 }
 
 bool SequentialType::indexValid(const Value *V) const {
-  if (const IntegerType *IT = dyn_cast<IntegerType>(V->getType())) 
-    return IT->getBitWidth() == 32 || IT->getBitWidth() == 64;
+  if (isa<IntegerType>(V->getType())) 
+    return true;
   return false;
 }
 
@@ -1530,6 +1425,11 @@ std::ostream &operator<<(std::ostream &OS, const Type *T) {
 }
 
 std::ostream &operator<<(std::ostream &OS, const Type &T) {
+  T.print(OS);
+  return OS;
+}
+
+raw_ostream &operator<<(raw_ostream &OS, const Type &T) {
   T.print(OS);
   return OS;
 }

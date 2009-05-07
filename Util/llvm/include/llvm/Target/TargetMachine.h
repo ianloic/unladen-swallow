@@ -23,6 +23,7 @@ class TargetAsmInfo;
 class TargetData;
 class TargetSubtarget;
 class TargetInstrInfo;
+class TargetIntrinsicInfo;
 class TargetJITInfo;
 class TargetLowering;
 class TargetFrameInfo;
@@ -64,6 +65,15 @@ namespace FileModel {
     AsmFile,
     MachOFile,
     ElfFile
+  };
+}
+
+// Code generation optimization level.
+namespace CodeGenOpt {
+  enum Level {
+    Default,
+    None,
+    Aggressive
   };
 }
 
@@ -118,7 +128,6 @@ public:
   virtual       TargetLowering    *getTargetLowering() const { return 0; }
   virtual const TargetData            *getTargetData() const { return 0; }
   
-  
   /// getTargetAsmInfo - Return target specific asm information.
   ///
   const TargetAsmInfo *getTargetAsmInfo() const {
@@ -141,6 +150,11 @@ public:
   /// details of graph coloring register allocation removed from it.
   ///
   virtual const TargetRegisterInfo *getRegisterInfo() const { return 0; }
+  
+  /// getIntrinsicInfo - If intrinsic information is available, return it.  If
+  /// not, return null.
+  ///
+  virtual const TargetIntrinsicInfo *getIntrinsicInfo() const { return 0; }
 
   /// getJITInfo - If this target supports a JIT, return information for it,
   /// otherwise return null.
@@ -169,6 +183,7 @@ public:
   static Reloc::Model getRelocationModel();
 
   /// setRelocationModel - Sets the code generation relocation model.
+  ///
   static void setRelocationModel(Reloc::Model Model);
 
   /// getCodeModel - Returns the code model. The choices are small, kernel,
@@ -176,7 +191,16 @@ public:
   static CodeModel::Model getCodeModel();
 
   /// setCodeModel - Sets the code model.
+  ///
   static void setCodeModel(CodeModel::Model Model);
+
+  /// getAsmVerbosityDefault - Returns the default value of asm verbosity.
+  ///
+  static bool getAsmVerbosityDefault();
+
+  /// setAsmVerbosityDefault - Set the default value of asm verbosity. Default
+  /// is false.
+  static void setAsmVerbosityDefault(bool);
 
   /// CodeGenFileType - These enums are meant to be passed into
   /// addPassesToEmitFile to indicate what type of file to emit.
@@ -198,7 +222,7 @@ public:
   virtual FileModel::Model addPassesToEmitFile(PassManagerBase &,
                                                raw_ostream &,
                                                CodeGenFileType,
-                                               bool /*Fast*/) {
+                                               CodeGenOpt::Level) {
     return FileModel::None;
   }
 
@@ -207,7 +231,8 @@ public:
   /// used to finish up adding passes to emit the file, if necessary.
   ///
   virtual bool addPassesToEmitFileFinish(PassManagerBase &,
-                                         MachineCodeEmitter *, bool /*Fast*/) {
+                                         MachineCodeEmitter *,
+                                         CodeGenOpt::Level) {
     return true;
   }
  
@@ -219,7 +244,7 @@ public:
   ///
   virtual bool addPassesToEmitMachineCode(PassManagerBase &,
                                           MachineCodeEmitter &,
-                                          bool /*Fast*/) {
+                                          CodeGenOpt::Level) {
     return true;
   }
 
@@ -228,7 +253,8 @@ public:
   /// use this.
   virtual bool WantsWholeFile() const { return false; }
   virtual bool addPassesToEmitWholeFile(PassManager &, raw_ostream &,
-                                        CodeGenFileType, bool /*Fast*/) {
+                                        CodeGenFileType,
+                                        CodeGenOpt::Level) {
     return true;
   }
 };
@@ -243,16 +269,16 @@ protected: // Can only create subclasses.
   /// addCommonCodeGenPasses - Add standard LLVM codegen passes used for
   /// both emitting to assembly files or machine code output.
   ///
-  bool addCommonCodeGenPasses(PassManagerBase &, bool /*Fast*/);
+  bool addCommonCodeGenPasses(PassManagerBase &, CodeGenOpt::Level);
 
 public:
   
   /// addPassesToEmitFile - Add passes to the specified pass manager to get the
   /// specified file emitted.  Typically this will involve several steps of code
-  /// generation.  If Fast is set to true, the code generator should emit code
-  /// as fast as possible, though the generated code may be less efficient.
-  /// This method should return FileModel::Error if emission of this file type
-  /// is not supported.
+  /// generation.  If OptLevel is None, the code generator should emit code as fast
+  /// as possible, though the generated code may be less efficient.  This method
+  /// should return FileModel::Error if emission of this file type is not
+  /// supported.
   ///
   /// The default implementation of this method adds components from the
   /// LLVM retargetable code generator, invoking the methods below to get
@@ -261,14 +287,15 @@ public:
   virtual FileModel::Model addPassesToEmitFile(PassManagerBase &PM,
                                                raw_ostream &Out,
                                                CodeGenFileType FileType,
-                                               bool Fast);
+                                               CodeGenOpt::Level);
   
   /// addPassesToEmitFileFinish - If the passes to emit the specified file had
   /// to be split up (e.g., to add an object writer pass), this method can be
   /// used to finish up adding passes to emit the file, if necessary.
   ///
   virtual bool addPassesToEmitFileFinish(PassManagerBase &PM,
-                                         MachineCodeEmitter *MCE, bool Fast);
+                                         MachineCodeEmitter *MCE,
+                                         CodeGenOpt::Level);
  
   /// addPassesToEmitMachineCode - Add passes to the specified pass manager to
   /// get machine code emitted.  This uses a MachineCodeEmitter object to handle
@@ -277,21 +304,22 @@ public:
   /// not supported.
   ///
   virtual bool addPassesToEmitMachineCode(PassManagerBase &PM,
-                                          MachineCodeEmitter &MCE, bool Fast);
+                                          MachineCodeEmitter &MCE,
+                                          CodeGenOpt::Level);
   
   /// Target-Independent Code Generator Pass Configuration Options.
   
   /// addInstSelector - This method should add any "last minute" LLVM->LLVM
   /// passes, then install an instruction selector pass, which converts from
   /// LLVM code to machine instructions.
-  virtual bool addInstSelector(PassManagerBase &, bool /*Fast*/) {
+  virtual bool addInstSelector(PassManagerBase &, CodeGenOpt::Level) {
     return true;
   }
 
   /// addPreRegAllocPasses - This method may be implemented by targets that want
   /// to run passes immediately before register allocation. This should return
   /// true if -print-machineinstrs should print after these passes.
-  virtual bool addPreRegAlloc(PassManagerBase &, bool /*Fast*/) {
+  virtual bool addPreRegAlloc(PassManagerBase &, CodeGenOpt::Level) {
     return false;
   }
 
@@ -299,14 +327,14 @@ public:
   /// want to run passes after register allocation but before prolog-epilog
   /// insertion.  This should return true if -print-machineinstrs should print
   /// after these passes.
-  virtual bool addPostRegAlloc(PassManagerBase &, bool /*Fast*/) {
+  virtual bool addPostRegAlloc(PassManagerBase &, CodeGenOpt::Level) {
     return false;
   }
   
   /// addPreEmitPass - This pass may be implemented by targets that want to run
   /// passes immediately before machine code is emitted.  This should return
   /// true if -print-machineinstrs should print out the code after the passes.
-  virtual bool addPreEmitPass(PassManagerBase &, bool /*Fast*/) {
+  virtual bool addPreEmitPass(PassManagerBase &, CodeGenOpt::Level) {
     return false;
   }
   
@@ -314,15 +342,15 @@ public:
   /// addAssemblyEmitter - This pass should be overridden by the target to add
   /// the asmprinter, if asm emission is supported.  If this is not supported,
   /// 'true' should be returned.
-  virtual bool addAssemblyEmitter(PassManagerBase &, bool /*Fast*/, 
-                                  raw_ostream &) {
+  virtual bool addAssemblyEmitter(PassManagerBase &, CodeGenOpt::Level,
+                                  bool /* VerboseAsmDefault */, raw_ostream &) {
     return true;
   }
   
   /// addCodeEmitter - This pass should be overridden by the target to add a
   /// code emitter, if supported.  If this is not supported, 'true' should be
   /// returned. If DumpAsm is true, the generated assembly is printed to cerr.
-  virtual bool addCodeEmitter(PassManagerBase &, bool /*Fast*/,
+  virtual bool addCodeEmitter(PassManagerBase &, CodeGenOpt::Level,
                               bool /*DumpAsm*/, MachineCodeEmitter &) {
     return true;
   }
@@ -331,7 +359,7 @@ public:
   /// a code emitter (without setting flags), if supported.  If this is not
   /// supported, 'true' should be returned.  If DumpAsm is true, the generated
   /// assembly is printed to cerr.
-  virtual bool addSimpleCodeEmitter(PassManagerBase &, bool /*Fast*/,
+  virtual bool addSimpleCodeEmitter(PassManagerBase &, CodeGenOpt::Level,
                                     bool /*DumpAsm*/, MachineCodeEmitter &) {
     return true;
   }

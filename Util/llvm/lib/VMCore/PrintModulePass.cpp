@@ -27,10 +27,10 @@ namespace {
     bool DeleteStream;      // Delete the ostream in our dtor?
   public:
     static char ID;
-    PrintModulePass() : ModulePass(intptr_t(&ID)), Out(&errs()), 
+    PrintModulePass() : ModulePass(&ID), Out(&errs()), 
       DeleteStream(false) {}
     PrintModulePass(raw_ostream *o, bool DS)
-      : ModulePass(intptr_t(&ID)), Out(o), DeleteStream(DS) {}
+      : ModulePass(&ID), Out(o), DeleteStream(DS) {}
     
     ~PrintModulePass() {
       if (DeleteStream) delete Out;
@@ -38,7 +38,6 @@ namespace {
     
     bool runOnModule(Module &M) {
       (*Out) << M;
-      Out->flush();
       return false;
     }
     
@@ -53,10 +52,10 @@ namespace {
     bool DeleteStream;      // Delete the ostream in our dtor?
   public:
     static char ID;
-    PrintFunctionPass() : FunctionPass(intptr_t(&ID)), Banner(""), Out(&errs()), 
+    PrintFunctionPass() : FunctionPass(&ID), Banner(""), Out(&errs()), 
                           DeleteStream(false) {}
     PrintFunctionPass(const std::string &B, raw_ostream *o, bool DS)
-      : FunctionPass(intptr_t(&ID)), Banner(B), Out(o), DeleteStream(DS) {}
+      : FunctionPass(&ID), Banner(B), Out(o), DeleteStream(DS) {}
     
     inline ~PrintFunctionPass() {
       if (DeleteStream) delete Out;
@@ -67,7 +66,6 @@ namespace {
     //
     bool runOnFunction(Function &F) {
       (*Out) << Banner << static_cast<Value&>(F);
-      Out->flush();
       return false;
     }
     

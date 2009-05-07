@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 struct X {
   union {
     float f3;
@@ -47,16 +47,15 @@ struct Redecl {
   };
 
   int z; // expected-error{{duplicate member 'z'}}
-  void zz(); // expected-error{{duplicate member 'zz'}} \
-            //  expected-error{{field 'zz' declared as a function}}
+  void zz(); // expected-error{{duplicate member 'zz'}} 
 };
 
-union { // expected-error{{anonymous unions must be struct or union members}}
+union { // expected-error{{declaration does not declare anything}}
   int int_val;
   float float_val;
 };
 
-static union { // expected-error{{anonymous unions must be struct or union members}}
+static union { // expected-error{{declaration does not declare anything}}
   int int_val2;
   float float_val2;
 };
@@ -67,7 +66,7 @@ void f() {
 }
 
 void g() {
-  union { // expected-error{{anonymous unions must be struct or union members}}
+  union { // expected-error{{declaration does not declare anything}}
     int i;
     float f2;
   };
@@ -80,3 +79,20 @@ struct s0 { union { int f0; }; };
 
 // <rdar://problem/6481130>
 typedef struct { }; // expected-error{{declaration does not declare anything}}
+
+// PR3675
+struct s1 {
+  int f0; // expected-note{{previous declaration is here}}
+  union {
+    int f0; // expected-error{{member of anonymous union redeclares 'f0'}}
+  };
+};
+
+// PR3680
+struct {}; // expected-error{{declaration does not declare anything}}
+
+struct s2 {
+  union {
+    int a;
+  }
+}; // expected-error{{expected member name or ';' after declaration specifiers}}

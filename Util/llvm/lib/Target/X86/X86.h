@@ -15,6 +15,8 @@
 #ifndef TARGET_X86_H
 #define TARGET_X86_H
 
+#include "llvm/Target/TargetMachine.h"
+
 namespace llvm {
 
 class X86TargetMachine;
@@ -25,7 +27,7 @@ class raw_ostream;
 /// createX86ISelDag - This pass converts a legalized DAG into a 
 /// X86-specific DAG, ready for instruction scheduling.
 ///
-FunctionPass *createX86ISelDag(X86TargetMachine &TM, bool Fast);
+FunctionPass *createX86ISelDag(X86TargetMachine &TM, CodeGenOpt::Level OptLevel);
 
 /// createX86FloatingPointStackifierPass - This function returns a pass which
 /// converts floating point register references and pseudo instructions into
@@ -42,7 +44,10 @@ FunctionPass *createX87FPRegKillInserterPass();
 /// assembly code for a MachineFunction to the given output stream,
 /// using the given target machine description.
 ///
-FunctionPass *createX86CodePrinterPass(raw_ostream &o, X86TargetMachine &tm);
+FunctionPass *createX86CodePrinterPass(raw_ostream &o,
+                                       X86TargetMachine &tm,
+                                       CodeGenOpt::Level OptLevel,
+                                       bool Verbose);
 
 /// createX86CodeEmitterPass - Return a pass that emits the collected X86 code
 /// to the specified MCE object.

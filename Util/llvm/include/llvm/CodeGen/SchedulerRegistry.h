@@ -16,6 +16,7 @@
 #define LLVM_CODEGENSCHEDULERREGISTRY_H
 
 #include "llvm/CodeGen/MachinePassRegistry.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 
@@ -26,13 +27,14 @@ namespace llvm {
 //===----------------------------------------------------------------------===//
 
 class SelectionDAGISel;
-class ScheduleDAG;
+class ScheduleDAGSDNodes;
 class SelectionDAG;
 class MachineBasicBlock;
 
 class RegisterScheduler : public MachinePassRegistryNode {
 public:
-  typedef ScheduleDAG *(*FunctionPassCtor)(SelectionDAGISel*, bool);
+  typedef ScheduleDAGSDNodes *(*FunctionPassCtor)(SelectionDAGISel*,
+                                                  CodeGenOpt::Level);
 
   static MachinePassRegistry Registry;
 
@@ -63,28 +65,28 @@ public:
 
 /// createBURRListDAGScheduler - This creates a bottom up register usage
 /// reduction list scheduler.
-ScheduleDAG* createBURRListDAGScheduler(SelectionDAGISel *IS,
-                                        bool Fast);
+ScheduleDAGSDNodes *createBURRListDAGScheduler(SelectionDAGISel *IS,
+                                               CodeGenOpt::Level OptLevel);
 
 /// createTDRRListDAGScheduler - This creates a top down register usage
 /// reduction list scheduler.
-ScheduleDAG* createTDRRListDAGScheduler(SelectionDAGISel *IS,
-                                        bool Fast);
+ScheduleDAGSDNodes *createTDRRListDAGScheduler(SelectionDAGISel *IS,
+                                               CodeGenOpt::Level OptLevel);
 
 /// createTDListDAGScheduler - This creates a top-down list scheduler with
 /// a hazard recognizer.
-ScheduleDAG* createTDListDAGScheduler(SelectionDAGISel *IS,
-                                      bool Fast);
+ScheduleDAGSDNodes *createTDListDAGScheduler(SelectionDAGISel *IS,
+                                             CodeGenOpt::Level OptLevel);
 
 /// createFastDAGScheduler - This creates a "fast" scheduler.
 ///
-ScheduleDAG *createFastDAGScheduler(SelectionDAGISel *IS,
-                                    bool Fast);
+ScheduleDAGSDNodes *createFastDAGScheduler(SelectionDAGISel *IS,
+                                           CodeGenOpt::Level OptLevel);
 
 /// createDefaultScheduler - This creates an instruction scheduler appropriate
 /// for the target.
-ScheduleDAG* createDefaultScheduler(SelectionDAGISel *IS,
-                                    bool Fast);
+ScheduleDAGSDNodes *createDefaultScheduler(SelectionDAGISel *IS,
+                                           CodeGenOpt::Level OptLevel);
 
 } // end namespace llvm
 

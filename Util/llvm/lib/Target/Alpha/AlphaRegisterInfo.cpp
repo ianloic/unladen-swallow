@@ -125,11 +125,11 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
 
       MachineInstr *New;
       if (Old->getOpcode() == Alpha::ADJUSTSTACKDOWN) {
-        New=BuildMI(MF, TII.get(Alpha::LDA), Alpha::R30)
+        New=BuildMI(MF, Old->getDebugLoc(), TII.get(Alpha::LDA), Alpha::R30)
           .addImm(-Amount).addReg(Alpha::R30);
       } else {
          assert(Old->getOpcode() == Alpha::ADJUSTSTACKUP);
-         New=BuildMI(MF, TII.get(Alpha::LDA), Alpha::R30)
+         New=BuildMI(MF, Old->getDebugLoc(), TII.get(Alpha::LDA), Alpha::R30)
           .addImm(Amount).addReg(Alpha::R30);
       }
 
@@ -188,7 +188,8 @@ void AlphaRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     MI.getOperand(i + 1).ChangeToRegister(Alpha::R28, false);
     MI.getOperand(i).ChangeToImmediate(getLower16(Offset));
     //insert the new
-    MachineInstr* nMI=BuildMI(MF, TII.get(Alpha::LDAH), Alpha::R28)
+    MachineInstr* nMI=BuildMI(MF, MI.getDebugLoc(),
+                              TII.get(Alpha::LDAH), Alpha::R28)
       .addImm(getUpper16(Offset)).addReg(FP ? Alpha::R15 : Alpha::R30);
     MBB.insert(II, nMI);
   } else {
@@ -201,20 +202,22 @@ void AlphaRegisterInfo::emitPrologue(MachineFunction &MF) const {
   MachineBasicBlock &MBB = MF.front();   // Prolog goes in entry BB
   MachineBasicBlock::iterator MBBI = MBB.begin();
   MachineFrameInfo *MFI = MF.getFrameInfo();
+  DebugLoc dl = (MBBI != MBB.end() ?
+                 MBBI->getDebugLoc() : DebugLoc::getUnknownLoc());
   bool FP = hasFP(MF);
 
   static int curgpdist = 0;
 
   //handle GOP offset
-  BuildMI(MBB, MBBI, TII.get(Alpha::LDAHg), Alpha::R29)
+  BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDAHg), Alpha::R29)
     .addGlobalAddress(const_cast<Function*>(MF.getFunction()))
     .addReg(Alpha::R27).addImm(++curgpdist);
-  BuildMI(MBB, MBBI, TII.get(Alpha::LDAg), Alpha::R29)
+  BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDAg), Alpha::R29)
     .addGlobalAddress(const_cast<Function*>(MF.getFunction()))
     .addReg(Alpha::R29).addImm(curgpdist);
 
   //evil const_cast until MO stuff setup to handle const
-  BuildMI(MBB, MBBI, TII.get(Alpha::ALTENT))
+  BuildMI(MBB, MBBI, dl, TII.get(Alpha::ALTENT))
     .addGlobalAddress(const_cast<Function*>(MF.getFunction()));
 
   // Get the number of bytes to allocate from the FrameInfo
@@ -235,13 +238,13 @@ void AlphaRegisterInfo::emitPrologue(MachineFunction &MF) const {
   // adjust stack pointer: r30 -= numbytes
   NumBytes = -NumBytes;
   if (NumBytes >= IMM_LOW) {
-    BuildMI(MBB, MBBI, TII.get(Alpha::LDA), Alpha::R30).addImm(NumBytes)
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDA), Alpha::R30).addImm(NumBytes)
       .addReg(Alpha::R30);
   } else if (getUpper16(NumBytes) >= IMM_LOW) {
-    BuildMI(MBB, MBBI, TII.get(Alpha::LDAH), Alpha::R30).addImm(getUpper16(NumBytes))
-      .addReg(Alpha::R30);
-    BuildMI(MBB, MBBI, TII.get(Alpha::LDA), Alpha::R30).addImm(getLower16(NumBytes))
-      .addReg(Alpha::R30);
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDAH), Alpha::R30)
+      .addImm(getUpper16(NumBytes)).addReg(Alpha::R30);
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDA), Alpha::R30)
+      .addImm(getLower16(NumBytes)).addReg(Alpha::R30);
   } else {
     cerr << "Too big a stack frame at " << NumBytes << "\n";
     abort();
@@ -250,10 +253,10 @@ void AlphaRegisterInfo::emitPrologue(MachineFunction &MF) const {
   //now if we need to, save the old FP and set the new
   if (FP)
   {
-    BuildMI(MBB, MBBI, TII.get(Alpha::STQ))
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::STQ))
       .addReg(Alpha::R15).addImm(0).addReg(Alpha::R30);
     //this must be the last instr in the prolog
-    BuildMI(MBB, MBBI, TII.get(Alpha::BISr), Alpha::R15)
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::BISr), Alpha::R15)
       .addReg(Alpha::R30).addReg(Alpha::R30);
   }
 
@@ -266,6 +269,7 @@ void AlphaRegisterInfo::emitEpilogue(MachineFunction &MF,
   assert((MBBI->getOpcode() == Alpha::RETDAG ||
           MBBI->getOpcode() == Alpha::RETDAGp)
          && "Can only insert epilog into returning blocks");
+  DebugLoc dl = MBBI->getDebugLoc();
 
   bool FP = hasFP(MF);
 
@@ -275,20 +279,21 @@ void AlphaRegisterInfo::emitEpilogue(MachineFunction &MF,
   //now if we need to, restore the old FP
   if (FP) {
     //copy the FP into the SP (discards allocas)
-    BuildMI(MBB, MBBI, TII.get(Alpha::BISr), Alpha::R30).addReg(Alpha::R15)
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::BISr), Alpha::R30).addReg(Alpha::R15)
       .addReg(Alpha::R15);
     //restore the FP
-    BuildMI(MBB, MBBI, TII.get(Alpha::LDQ), Alpha::R15).addImm(0).addReg(Alpha::R15);
+    BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDQ), Alpha::R15)
+      .addImm(0).addReg(Alpha::R15);
   }
 
   if (NumBytes != 0) {
     if (NumBytes <= IMM_HIGH) {
-      BuildMI(MBB, MBBI, TII.get(Alpha::LDA), Alpha::R30).addImm(NumBytes)
+      BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDA), Alpha::R30).addImm(NumBytes)
         .addReg(Alpha::R30);
     } else if (getUpper16(NumBytes) <= IMM_HIGH) {
-      BuildMI(MBB, MBBI, TII.get(Alpha::LDAH), Alpha::R30)
+      BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDAH), Alpha::R30)
         .addImm(getUpper16(NumBytes)).addReg(Alpha::R30);
-      BuildMI(MBB, MBBI, TII.get(Alpha::LDA), Alpha::R30)
+      BuildMI(MBB, MBBI, dl, TII.get(Alpha::LDA), Alpha::R30)
         .addImm(getLower16(NumBytes)).addReg(Alpha::R30);
     } else {
       cerr << "Too big a stack frame at " << NumBytes << "\n";

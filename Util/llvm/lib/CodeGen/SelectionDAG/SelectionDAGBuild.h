@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/CallSite.h"
+#include "llvm/Target/TargetMachine.h"
 #include <vector>
 #include <set>
 
@@ -135,7 +136,7 @@ public:
   struct LiveOutInfo {
     unsigned NumSignBits;
     APInt KnownOne, KnownZero;
-    LiveOutInfo() : NumSignBits(0) {}
+    LiveOutInfo() : NumSignBits(0), KnownOne(1, 0), KnownZero(1, 0) {}
   };
   
   /// LiveOutRegInfo - Information about live out vregs, indexed by their
@@ -354,14 +355,19 @@ public:
   /// FuncInfo - Information about the function as a whole.
   ///
   FunctionLoweringInfo &FuncInfo;
+
+  /// OptLevel - What optimization level we're generating code for.
+  /// 
+  CodeGenOpt::Level OptLevel;
   
   /// GFI - Garbage collection metadata for the function.
   GCFunctionInfo *GFI;
 
   SelectionDAGLowering(SelectionDAG &dag, TargetLowering &tli,
-                       FunctionLoweringInfo &funcinfo)
+                       FunctionLoweringInfo &funcinfo,
+                       CodeGenOpt::Level ol)
     : CurDebugLoc(DebugLoc::getUnknownLoc()), 
-      TLI(tli), DAG(dag), FuncInfo(funcinfo) {
+      TLI(tli), DAG(dag), FuncInfo(funcinfo), OptLevel(ol) {
   }
 
   void init(GCFunctionInfo *gfi, AliasAnalysis &aa);
@@ -388,6 +394,7 @@ public:
   SDValue getControlRoot();
 
   DebugLoc getCurDebugLoc() const { return CurDebugLoc; }
+  void setCurDebugLoc(DebugLoc dl) { CurDebugLoc = dl; }
 
   void CopyValueToVirtualRegister(Value *V, unsigned Reg);
 
@@ -417,6 +424,7 @@ public:
                                     MachineBasicBlock *CurBB);
   bool ShouldEmitAsBranches(const std::vector<CaseBlock> &Cases);
   bool isExportableFromCurrentBlock(Value *V, const BasicBlock *FromBB);
+  void CopyToExportRegsIfNeeded(Value *V);
   void ExportFromCurrentBlock(Value *V);
   void LowerCallTo(CallSite CS, SDValue Callee, bool IsTailCall,
                    MachineBasicBlock *LandingPad = NULL);
@@ -538,8 +546,6 @@ private:
   
   const char *implVisitBinaryAtomic(CallInst& I, ISD::NodeType Op);
   const char *implVisitAluOverflow(CallInst &I, ISD::NodeType Op);
-
-  void setCurDebugLoc(DebugLoc dl) { CurDebugLoc = dl; }
 };
 
 /// AddCatchInfo - Extract the personality and type infos from an eh.selector

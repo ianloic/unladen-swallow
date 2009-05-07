@@ -76,30 +76,36 @@ AlphaTargetMachine::AlphaTargetMachine(const Module &M, const std::string &FS)
 // Pass Pipeline Configuration
 //===----------------------------------------------------------------------===//
 
-bool AlphaTargetMachine::addInstSelector(PassManagerBase &PM, bool Fast) {
+bool AlphaTargetMachine::addInstSelector(PassManagerBase &PM,
+                                         CodeGenOpt::Level OptLevel) {
   PM.add(createAlphaISelDag(*this));
   return false;
 }
-bool AlphaTargetMachine::addPreEmitPass(PassManagerBase &PM, bool Fast) {
+bool AlphaTargetMachine::addPreEmitPass(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel) {
   // Must run branch selection immediately preceding the asm printer
   PM.add(createAlphaBranchSelectionPass());
   return false;
 }
-bool AlphaTargetMachine::addAssemblyEmitter(PassManagerBase &PM, bool Fast, 
+bool AlphaTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool Verbose,
                                             raw_ostream &Out) {
   PM.add(createAlphaLLRPPass(*this));
-  PM.add(createAlphaCodePrinterPass(Out, *this));
+  PM.add(createAlphaCodePrinterPass(Out, *this, OptLevel, Verbose));
   return false;
 }
-bool AlphaTargetMachine::addCodeEmitter(PassManagerBase &PM, bool Fast,
+bool AlphaTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel,
                                         bool DumpAsm, MachineCodeEmitter &MCE) {
   PM.add(createAlphaCodeEmitterPass(*this, MCE));
   if (DumpAsm)
-    PM.add(createAlphaCodePrinterPass(errs(), *this));
+    PM.add(createAlphaCodePrinterPass(errs(), *this, OptLevel, true));
   return false;
 }
 bool AlphaTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
-                                              bool Fast, bool DumpAsm,
+                                              CodeGenOpt::Level OptLevel,
+                                              bool DumpAsm,
                                               MachineCodeEmitter &MCE) {
-  return addCodeEmitter(PM, Fast, DumpAsm, MCE);
+  return addCodeEmitter(PM, OptLevel, DumpAsm, MCE);
 }

@@ -1,5 +1,5 @@
-// RUN: clang %s -fsyntax-only -print-stats &&
-// RUN: clang -x c-header -o %t %s && clang -token-cache %t %s
+// RUN: clang-cc %s -print-stats &&
+// RUN: clang-cc %s -disable-free
 #ifdef __APPLE__
 #include <Carbon/Carbon.h>
 #endif

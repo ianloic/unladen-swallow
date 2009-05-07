@@ -3,10 +3,10 @@
 <!-- Material used from: HTML 4.01 specs: http://www.w3.org/TR/html401/ -->
 <html>
 <head>
-  <META http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+  <META http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
   <title>"clang" C Language Family Frontend for LLVM</title>
-  <link type="text/css" rel="stylesheet" href="menu.css" />
-  <link type="text/css" rel="stylesheet" href="content.css" />
+  <link type="text/css" rel="stylesheet" href="menu.css">
+  <link type="text/css" rel="stylesheet" href="content.css">
 </head>
 <body>
 <!--#include virtual="menu.html.incl"-->
@@ -30,7 +30,7 @@
 
   <ul>
   <li>Fast compiles and low memory use</li>
-  <li>Expressive diagnostics</li>
+  <li>Expressive diagnostics (<a href="diagnostics.html">examples</a>)</li>
   <li>GCC compatibility</li>
   </ul>
 
@@ -89,17 +89,14 @@
   <h2>Current Status</h2>
   <!--=====================================================================-->
   
-  <p>Clang is still in early development stages.  If you are looking for
-  source analysis or source-to-source transformation tools, clang is probably
-  a great solution for you.  If you want to use it as a drop in C compiler, it
-  is not yet ready.</p>
+  <p>Clang is still under heavy development.  Clang is considered to be 
+   a production quality C and Objective-C compiler when targetting X86-32 and X86-64
+   (other targets may have caveats, but are usually easy to fix).  If you are 
+   looking for source 
+   analysis or source-to-source transformation tools, clang is probably
+   a great solution for you.  If you are interested in C++,
+   <a href="cxx_status.html">full support</a> is still way off.</p>
 
-  <p>Clang currently has pretty good parsing and semantic analysis support for
-     C and Objective-C right now, and bugs are usually quickly fixed once
-     reported.  <a href="cxx_status.html">C++ support</a> is still very early,
-     and we don't expect to have respectable C++ support for another 2 years
-     or so.</p>
-  
   <!--=====================================================================-->
   <h2>Get it and get involved!</h2>
   <!--=====================================================================-->

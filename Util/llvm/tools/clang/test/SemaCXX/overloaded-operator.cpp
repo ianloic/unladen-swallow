@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 class X { };
 
 X operator+(X, X);
@@ -67,7 +67,7 @@ void enum_test(Enum1 enum1, Enum2 enum2, E1 e1, E2 e2) {
   float &f1 = (e1 == e2);
   float &f2 = (enum1 == e2); 
   float &f3 = (e1 == enum2); 
-  float &f4 = (enum1 == enum2);  // expected-error{{non-const reference to type 'float' cannot be initialized with a temporary of type '_Bool'}}
+  float &f4 = (enum1 == enum2);  // expected-error{{non-const lvalue reference to type 'float' cannot be initialized with a temporary of type '_Bool'}}
 }
 
 
@@ -195,3 +195,17 @@ struct CopyCon : public CopyConBase {
     *this = *Base;
   }
 };
+
+namespace N {
+  struct X { };
+}
+
+namespace M {
+  N::X operator+(N::X, N::X);
+}
+
+namespace M {
+  void test_X(N::X x) {
+    (void)(x + x);
+  }
+}

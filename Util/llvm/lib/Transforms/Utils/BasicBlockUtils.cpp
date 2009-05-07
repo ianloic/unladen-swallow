@@ -15,12 +15,15 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Constant.h"
 #include "llvm/Type.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/ValueHandle.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -71,6 +74,23 @@ void llvm::FoldSingleEntryPHINodes(BasicBlock *BB) {
   }
 }
 
+
+/// DeleteDeadPHIs - Examine each PHI in the given block and delete it if it
+/// is dead. Also recursively delete any operands that become dead as
+/// a result. This includes tracing the def-use list from the PHI to see if
+/// it is ultimately unused or if it reaches an unused cycle.
+void llvm::DeleteDeadPHIs(BasicBlock *BB) {
+  // Recursively deleting a PHI may cause multiple PHIs to be deleted
+  // or RAUW'd undef, so use an array of WeakVH for the PHIs to delete.
+  SmallVector<WeakVH, 8> PHIs;
+  for (BasicBlock::iterator I = BB->begin();
+       PHINode *PN = dyn_cast<PHINode>(I); ++I)
+    PHIs.push_back(PN);
+
+  for (unsigned i = 0, e = PHIs.size(); i != e; ++i)
+    if (PHINode *PN = dyn_cast_or_null<PHINode>(PHIs[i].operator Value*()))
+      RecursivelyDeleteDeadPHINode(PN);
+}
 
 /// MergeBlockIntoPredecessor - Attempts to merge a block into its predecessor,
 /// if possible.  The return value indicates success or failure.
@@ -421,12 +441,62 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
   return NewBB;
 }
 
+/// FindFunctionBackedges - Analyze the specified function to find all of the
+/// loop backedges in the function and return them.  This is a relatively cheap
+/// (compared to computing dominators and loop info) analysis.
+///
+/// The output is added to Result, as pairs of <from,to> edge info.
+void llvm::FindFunctionBackedges(const Function &F,
+     SmallVectorImpl<std::pair<const BasicBlock*,const BasicBlock*> > &Result) {
+  const BasicBlock *BB = &F.getEntryBlock();
+  if (succ_begin(BB) == succ_end(BB))
+    return;
+  
+  SmallPtrSet<const BasicBlock*, 8> Visited;
+  SmallVector<std::pair<const BasicBlock*, succ_const_iterator>, 8> VisitStack;
+  SmallPtrSet<const BasicBlock*, 8> InStack;
+  
+  Visited.insert(BB);
+  VisitStack.push_back(std::make_pair(BB, succ_begin(BB)));
+  InStack.insert(BB);
+  do {
+    std::pair<const BasicBlock*, succ_const_iterator> &Top = VisitStack.back();
+    const BasicBlock *ParentBB = Top.first;
+    succ_const_iterator &I = Top.second;
+    
+    bool FoundNew = false;
+    while (I != succ_end(ParentBB)) {
+      BB = *I++;
+      if (Visited.insert(BB)) {
+        FoundNew = true;
+        break;
+      }
+      // Successor is in VisitStack, it's a back edge.
+      if (InStack.count(BB))
+        Result.push_back(std::make_pair(ParentBB, BB));
+    }
+    
+    if (FoundNew) {
+      // Go down one level if there is a unvisited successor.
+      InStack.insert(BB);
+      VisitStack.push_back(std::make_pair(BB, succ_begin(BB)));
+    } else {
+      // Go up one level.
+      InStack.erase(VisitStack.pop_back_val().first);
+    }
+  } while (!VisitStack.empty());
+  
+  
+}
+
+
+
 /// AreEquivalentAddressValues - Test if A and B will obviously have the same
 /// value. This includes recognizing that %t0 and %t1 will have the same
 /// value in code like this:
-///   %t0 = getelementptr @a, 0, 3
+///   %t0 = getelementptr \@a, 0, 3
 ///   store i32 0, i32* %t0
-///   %t1 = getelementptr @a, 0, 3
+///   %t1 = getelementptr \@a, 0, 3
 ///   %t2 = load i32* %t1
 ///
 static bool AreEquivalentAddressValues(const Value *A, const Value *B) {
@@ -471,11 +541,24 @@ Value *llvm::FindAvailableLoadedValue(Value *Ptr, BasicBlock *ScanBB,
   }
   
   while (ScanFrom != ScanBB->begin()) {
+    // We must ignore debug info directives when counting (otherwise they
+    // would affect codegen).
+    Instruction *Inst = --ScanFrom;
+    if (isa<DbgInfoIntrinsic>(Inst))
+      continue;
+    // We skip pointer-to-pointer bitcasts, which are NOPs.
+    // It is necessary for correctness to skip those that feed into a
+    // llvm.dbg.declare, as these are not present when debugging is off.
+    if (isa<BitCastInst>(Inst) && isa<PointerType>(Inst->getType()))
+      continue;
+
+    // Restore ScanFrom to expected value in case next test succeeds
+    ScanFrom++;
+   
     // Don't scan huge blocks.
     if (MaxInstsToScan-- == 0) return 0;
     
-    Instruction *Inst = --ScanFrom;
-    
+    --ScanFrom;
     // If this is a load of Ptr, the loaded value is available.
     if (LoadInst *LI = dyn_cast<LoadInst>(Inst))
       if (AreEquivalentAddressValues(LI->getOperand(0), Ptr))
@@ -522,4 +605,18 @@ Value *llvm::FindAvailableLoadedValue(Value *Ptr, BasicBlock *ScanBB,
   // Got to the start of the block, we didn't find it, but are done for this
   // block.
   return 0;
+}
+
+/// CopyPrecedingStopPoint - If I is immediately preceded by a StopPoint,
+/// make a copy of the stoppoint before InsertPos (presumably before copying
+/// or moving I).
+void llvm::CopyPrecedingStopPoint(Instruction *I, 
+                                  BasicBlock::iterator InsertPos) {
+  if (I != I->getParent()->begin()) {
+    BasicBlock::iterator BBI = I;  --BBI;
+    if (DbgStopPointInst *DSPI = dyn_cast<DbgStopPointInst>(BBI)) {
+      CallInst *newDSPI = DSPI->clone();
+      newDSPI->insertBefore(InsertPos);
+    }
+  }
 }

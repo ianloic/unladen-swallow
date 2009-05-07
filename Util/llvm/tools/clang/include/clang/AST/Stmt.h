@@ -21,15 +21,15 @@
 #include "clang/AST/DeclGroup.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator.h"
-#include "llvm/Bitcode/SerializationFwd.h"
+#include "clang/AST/ASTContext.h"
 #include <string>
-
 using llvm::dyn_cast_or_null;
 
 namespace clang {
   class ASTContext;
   class Expr;
   class Decl;
+  class ParmVarDecl;
   class QualType;
   class IdentifierInfo;
   class SourceManager;
@@ -102,19 +102,62 @@ public:
 };
 private:
   const StmtClass sClass;
+
+  // Make vanilla 'new' and 'delete' illegal for Stmts.
+protected:
+  void* operator new(size_t bytes) throw() {
+    assert(0 && "Stmts cannot be allocated with regular 'new'.");
+    return 0;
+  }
+  void operator delete(void* data) throw() {
+    assert(0 && "Stmts cannot be released with regular 'delete'.");
+  }
   
+public:
+  // Only allow allocation of Stmts using the allocator in ASTContext
+  // or by doing a placement new.  
+  void* operator new(size_t bytes, ASTContext& C,
+                     unsigned alignment = 16) throw() {
+    return ::operator new(bytes, C, alignment);
+  }
+  
+  void* operator new(size_t bytes, ASTContext* C,
+                     unsigned alignment = 16) throw() {
+    return ::operator new(bytes, *C, alignment);
+  }
+  
+  void* operator new(size_t bytes, void* mem) throw() {
+    return mem;
+  }
+
+  void operator delete(void*, ASTContext&, unsigned) throw() { }
+  void operator delete(void*, ASTContext*, unsigned) throw() { }
+  void operator delete(void*, std::size_t) throw() { }
+  void operator delete(void*, void*) throw() { }
+
+public:
+  /// \brief A placeholder type used to construct an empty shell of a
+  /// type, that will be filled in later (e.g., by some
+  /// de-serialization).
+  struct EmptyShell { };
+
 protected:
   /// DestroyChildren - Invoked by destructors of subclasses of Stmt to
   ///  recursively release child AST nodes.
   void DestroyChildren(ASTContext& Ctx);
   
+  /// \brief Construct an empty statement.
+  explicit Stmt(StmtClass SC, EmptyShell) : sClass(SC) { 
+    if (Stmt::CollectingStats()) Stmt::addStmtClass(SC);
+  }
+
 public:
   Stmt(StmtClass SC) : sClass(SC) { 
     if (Stmt::CollectingStats()) Stmt::addStmtClass(SC);
   }
   virtual ~Stmt() {}
   
-  virtual void Destroy(ASTContext& Ctx);
+  virtual void Destroy(ASTContext &Ctx);
 
   StmtClass getStmtClass() const { return sClass; }
   const char *getStmtClassName() const;
@@ -144,7 +187,8 @@ public:
   /// dumpPretty/printPretty - These two methods do a "pretty print" of the AST
   /// back to its original source language syntax.
   void dumpPretty() const;
-  void printPretty(llvm::raw_ostream &OS, PrinterHelper* = NULL) const;
+  void printPretty(llvm::raw_ostream &OS, PrinterHelper* = NULL, unsigned = 0,
+                   bool NoIndent=false) const;
   
   /// viewAST - Visualize an AST rooted at this Stmt* using GraphViz.  Only
   ///   works on systems with GraphViz (Mac OS X) or dot+gv installed.
@@ -176,14 +220,6 @@ public:
   const_child_iterator child_end() const {
     return const_child_iterator(const_cast<Stmt*>(this)->child_end());
   }
-  
-  void Emit(llvm::Serializer& S) const;
-  static Stmt* Create(llvm::Deserializer& D, ASTContext& C);
-
-  virtual void EmitImpl(llvm::Serializer& S) const {
-    // This method will eventually be a pure-virtual function.
-    assert (false && "Not implemented.");
-  }
 };
 
 /// DeclStmt - Adaptor class for mixing declarations with statements and
@@ -192,37 +228,36 @@ public:
 /// the first statement can be an expression or a declaration.
 ///
 class DeclStmt : public Stmt {
-protected:
-  DeclGroupOwningRef DG;
+  DeclGroupRef DG;
   SourceLocation StartLoc, EndLoc;
 public:
-  DeclStmt(DeclGroupOwningRef& dg, SourceLocation startLoc, 
+  DeclStmt(DeclGroupRef dg, SourceLocation startLoc, 
            SourceLocation endLoc) : Stmt(DeclStmtClass), DG(dg),
                                     StartLoc(startLoc), EndLoc(endLoc) {}
   
+  /// \brief Build an empty declaration statement.
+  explicit DeclStmt(EmptyShell Empty) : Stmt(DeclStmtClass, Empty) { }
+
   virtual void Destroy(ASTContext& Ctx);
 
-  // hasSolitaryDecl - This method returns true if this DeclStmt refers
-  // to a single Decl.
-  bool hasSolitaryDecl() const {
-    return DG.hasSolitaryDecl();
+  /// isSingleDecl - This method returns true if this DeclStmt refers
+  /// to a single Decl.
+  bool isSingleDecl() const {
+    return DG.isSingleDecl();
   }
  
-  const Decl* getSolitaryDecl() const {
-    assert (hasSolitaryDecl() &&
-            "Caller assumes this DeclStmt points to one Decl*");
-    return llvm::cast<Decl>(*DG.begin());
-  }
+  const Decl *getSingleDecl() const { return DG.getSingleDecl(); }
+  Decl *getSingleDecl() { return DG.getSingleDecl(); }  
   
-  Decl* getSolitaryDecl() {
-    assert (hasSolitaryDecl() &&
-            "Caller assumes this DeclStmt points to one Decl*");
-    return llvm::cast<Decl>(*DG.begin());
-  }  
+  const DeclGroupRef getDeclGroup() const { return DG; }
+  DeclGroupRef getDeclGroup() { return DG; }
+  void setDeclGroup(DeclGroupRef DGR) { DG = DGR; }
 
   SourceLocation getStartLoc() const { return StartLoc; }
+  void setStartLoc(SourceLocation L) { StartLoc = L; }
   SourceLocation getEndLoc() const { return EndLoc; }
-  
+  void setEndLoc(SourceLocation L) { EndLoc = L; }
+
   SourceRange getSourceRange() const {
     return SourceRange(StartLoc, EndLoc);
   }
@@ -236,46 +271,13 @@ public:
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
   
-  class decl_iterator {
-    DeclGroupRef::iterator I;
-  public:
-    decl_iterator(DeclGroupRef::iterator i) : I(i) {}
-    decl_iterator& operator++() { ++I; return *this; }
-    bool operator==(const decl_iterator& R) const {
-      return R.I == I;
-    }
-    bool operator!=(const decl_iterator& R) const {
-      return R.I != I;
-    }
-    Decl* operator*() const {
-      return llvm::cast<Decl>(*I);
-    }
-  };
-    
-  class const_decl_iterator {
-    DeclGroupRef::const_iterator I;
-  public:
-    const_decl_iterator(DeclGroupRef::const_iterator i) : I(i) {}
-    const_decl_iterator& operator++() { ++I; return *this; }
-    bool operator==(const const_decl_iterator& R) const {
-      return R.I == I;
-    }
-    bool operator!=(const const_decl_iterator& R) const {
-      return R.I != I;
-    }
-    Decl* operator*() const {
-      return llvm::cast<Decl>(*I);
-    }
-  };
+  typedef DeclGroupRef::iterator decl_iterator;
+  typedef DeclGroupRef::const_iterator const_decl_iterator;
   
   decl_iterator decl_begin() { return DG.begin(); }
   decl_iterator decl_end() { return DG.end(); }
   const_decl_iterator decl_begin() const { return DG.begin(); }
   const_decl_iterator decl_end() const { return DG.end(); }
-  
-  // Serialization.  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static DeclStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// NullStmt - This is the null statement ";": C99 6.8.3p3.
@@ -285,7 +287,11 @@ class NullStmt : public Stmt {
 public:
   NullStmt(SourceLocation L) : Stmt(NullStmtClass), SemiLoc(L) {}
 
+  /// \brief Build an empty null statement.
+  explicit NullStmt(EmptyShell Empty) : Stmt(NullStmtClass, Empty) { }
+
   SourceLocation getSemiLoc() const { return SemiLoc; }
+  void setSemiLoc(SourceLocation L) { SemiLoc = L; }
 
   virtual SourceRange getSourceRange() const { return SourceRange(SemiLoc); }
   
@@ -297,51 +303,73 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static NullStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CompoundStmt - This represents a group of statements like { stmt stmt }.
 ///
 class CompoundStmt : public Stmt {
-  llvm::SmallVector<Stmt*, 16> Body;
+  Stmt** Body;
+  unsigned NumStmts;
   SourceLocation LBracLoc, RBracLoc;
 public:
-  CompoundStmt(Stmt **StmtStart, unsigned NumStmts, 
-               SourceLocation LB, SourceLocation RB)
-    : Stmt(CompoundStmtClass), Body(StmtStart, StmtStart+NumStmts),
-      LBracLoc(LB), RBracLoc(RB) {}
-    
-  bool body_empty() const { return Body.empty(); }
+  CompoundStmt(ASTContext& C, Stmt **StmtStart, unsigned numStmts, 
+                             SourceLocation LB, SourceLocation RB)
+  : Stmt(CompoundStmtClass), NumStmts(numStmts), LBracLoc(LB), RBracLoc(RB) {
+    if (NumStmts == 0) {
+      Body = 0;
+      return;
+    }
   
-  typedef llvm::SmallVector<Stmt*, 16>::iterator body_iterator;
-  body_iterator body_begin() { return Body.begin(); }
-  body_iterator body_end() { return Body.end(); }
-  Stmt *body_back() { return Body.back(); }
+    Body = new (C) Stmt*[NumStmts];
+    memcpy(Body, StmtStart, numStmts * sizeof(*Body));
+  }           
 
-  typedef llvm::SmallVector<Stmt*, 16>::const_iterator const_body_iterator;
-  const_body_iterator body_begin() const { return Body.begin(); }
-  const_body_iterator body_end() const { return Body.end(); }
-  const Stmt *body_back() const { return Body.back(); }
+  // \brief Build an empty compound statement.
+  explicit CompoundStmt(EmptyShell Empty)
+    : Stmt(CompoundStmtClass, Empty), Body(0), NumStmts(0) { }
 
-  typedef llvm::SmallVector<Stmt*, 16>::reverse_iterator reverse_body_iterator;
-  reverse_body_iterator body_rbegin() { return Body.rbegin(); }
-  reverse_body_iterator body_rend() { return Body.rend(); }
-
-  typedef llvm::SmallVector<Stmt*, 16>::const_reverse_iterator 
-    const_reverse_body_iterator;
-  const_reverse_body_iterator body_rbegin() const { return Body.rbegin(); }
-  const_reverse_body_iterator body_rend() const { return Body.rend(); }
-    
-  void push_back(Stmt *S) { Body.push_back(S); }
+  void setStmts(ASTContext &C, Stmt **Stmts, unsigned NumStmts);
   
+  bool body_empty() const { return NumStmts == 0; }
+  unsigned size() const { return NumStmts; }
+
+  typedef Stmt** body_iterator;
+  body_iterator body_begin() { return Body; }
+  body_iterator body_end() { return Body + NumStmts; }
+  Stmt *body_back() { return NumStmts ? Body[NumStmts-1] : 0; }
+
+  typedef Stmt* const * const_body_iterator;
+  const_body_iterator body_begin() const { return Body; }
+  const_body_iterator body_end() const { return Body + NumStmts; }
+  const Stmt *body_back() const { return NumStmts ? Body[NumStmts-1] : 0; }
+
+  typedef std::reverse_iterator<body_iterator> reverse_body_iterator;
+  reverse_body_iterator body_rbegin() {
+    return reverse_body_iterator(body_end());
+  }
+  reverse_body_iterator body_rend() {
+    return reverse_body_iterator(body_begin());
+  }
+
+  typedef std::reverse_iterator<const_body_iterator>
+          const_reverse_body_iterator;
+
+  const_reverse_body_iterator body_rbegin() const {
+    return const_reverse_body_iterator(body_end());
+  }
+  
+  const_reverse_body_iterator body_rend() const {
+    return const_reverse_body_iterator(body_begin());
+  }
+    
   virtual SourceRange getSourceRange() const { 
     return SourceRange(LBracLoc, RBracLoc); 
   }
   
   SourceLocation getLBracLoc() const { return LBracLoc; }
+  void setLBracLoc(SourceLocation L) { LBracLoc = L; }
   SourceLocation getRBracLoc() const { return RBracLoc; }
+  void setRBracLoc(SourceLocation L) { RBracLoc = L; }
   
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == CompoundStmtClass; 
@@ -351,9 +379,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CompoundStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 // SwitchCase is the base class for CaseStmt and DefaultStmt,
@@ -372,7 +397,6 @@ public:
 
   void setNextSwitchCase(SwitchCase *SC) { NextSwitchCase = SC; }
 
-  virtual Stmt* v_getSubStmt() = 0;  
   Stmt *getSubStmt() { return v_getSubStmt(); }
 
   virtual SourceRange getSourceRange() const { return SourceRange(); }
@@ -382,6 +406,8 @@ public:
     T->getStmtClass() == DefaultStmtClass;
   }
   static bool classof(const SwitchCase *) { return true; }
+protected:
+  virtual Stmt* v_getSubStmt() = 0;  
 };
 
 class CaseStmt : public SwitchCase {
@@ -389,21 +415,26 @@ class CaseStmt : public SwitchCase {
   Stmt* SubExprs[END_EXPR];  // The expression for the RHS is Non-null for 
                              // GNU "case 1 ... 4" extension
   SourceLocation CaseLoc;
+  virtual Stmt* v_getSubStmt() { return getSubStmt(); }
 public:
-  CaseStmt(Expr *lhs, Expr *rhs, Stmt *substmt, SourceLocation caseLoc) 
+  CaseStmt(Expr *lhs, Expr *rhs, SourceLocation caseLoc) 
     : SwitchCase(CaseStmtClass) {
-    SubExprs[SUBSTMT] = substmt;
+    SubExprs[SUBSTMT] = 0;
     SubExprs[LHS] = reinterpret_cast<Stmt*>(lhs);
     SubExprs[RHS] = reinterpret_cast<Stmt*>(rhs);
     CaseLoc = caseLoc;
   }
-  
+
+  /// \brief Build an empty switch case statement.
+  explicit CaseStmt(EmptyShell Empty) : SwitchCase(CaseStmtClass) { }
+
   SourceLocation getCaseLoc() const { return CaseLoc; }
-  
+  void setCaseLoc(SourceLocation L) { CaseLoc = L; }
+
   Expr *getLHS() { return reinterpret_cast<Expr*>(SubExprs[LHS]); }
   Expr *getRHS() { return reinterpret_cast<Expr*>(SubExprs[RHS]); }
   Stmt *getSubStmt() { return SubExprs[SUBSTMT]; }
-  virtual Stmt* v_getSubStmt() { return getSubStmt(); }
+
   const Expr *getLHS() const { 
     return reinterpret_cast<const Expr*>(SubExprs[LHS]); 
   }
@@ -417,8 +448,13 @@ public:
   void setRHS(Expr *Val) { SubExprs[RHS] = reinterpret_cast<Stmt*>(Val); }
   
   
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(CaseLoc, SubExprs[SUBSTMT]->getLocEnd()); 
+  virtual SourceRange getSourceRange() const {
+    // Handle deeply nested case statements with iteration instead of recursion.
+    const CaseStmt *CS = this;
+    while (const CaseStmt *CS2 = dyn_cast<CaseStmt>(CS->getSubStmt()))
+      CS = CS2;
+    
+    return SourceRange(CaseLoc, CS->getSubStmt()->getLocEnd()); 
   }
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == CaseStmtClass; 
@@ -428,23 +464,25 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CaseStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class DefaultStmt : public SwitchCase {
   Stmt* SubStmt;
   SourceLocation DefaultLoc;
+  virtual Stmt* v_getSubStmt() { return getSubStmt(); }
 public:
   DefaultStmt(SourceLocation DL, Stmt *substmt) : 
     SwitchCase(DefaultStmtClass), SubStmt(substmt), DefaultLoc(DL) {}
-    
+
+  /// \brief Build an empty default statement.
+  explicit DefaultStmt(EmptyShell) : SwitchCase(DefaultStmtClass) { }
+
   Stmt *getSubStmt() { return SubStmt; }
-  virtual Stmt* v_getSubStmt() { return getSubStmt(); }
   const Stmt *getSubStmt() const { return SubStmt; }
-    
+  void setSubStmt(Stmt *S) { SubStmt = S; }
+
   SourceLocation getDefaultLoc() const { return DefaultLoc; }
+  void setDefaultLoc(SourceLocation L) { DefaultLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(DefaultLoc, SubStmt->getLocEnd()); 
@@ -457,9 +495,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static DefaultStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class LabelStmt : public Stmt {
@@ -470,13 +505,16 @@ public:
   LabelStmt(SourceLocation IL, IdentifierInfo *label, Stmt *substmt) 
     : Stmt(LabelStmtClass), Label(label), 
       SubStmt(substmt), IdentLoc(IL) {}
+
+  // \brief Build an empty label statement.
+  explicit LabelStmt(EmptyShell Empty) : Stmt(LabelStmtClass, Empty) { }
   
   SourceLocation getIdentLoc() const { return IdentLoc; }
   IdentifierInfo *getID() const { return Label; }
+  void setID(IdentifierInfo *II) { Label = II; }
   const char *getName() const;
   Stmt *getSubStmt() { return SubStmt; }
   const Stmt *getSubStmt() const { return SubStmt; }
-
   void setIdentLoc(SourceLocation L) { IdentLoc = L; }
   void setSubStmt(Stmt *SS) { SubStmt = SS; }
 
@@ -491,9 +529,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static LabelStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -512,13 +547,22 @@ public:
     IfLoc = IL;
   }
   
+  /// \brief Build an empty if/then/else statement
+  explicit IfStmt(EmptyShell Empty) : Stmt(IfStmtClass, Empty) { }
+
   const Expr *getCond() const { return reinterpret_cast<Expr*>(SubExprs[COND]);}
+  void setCond(Expr *E) { SubExprs[COND] = reinterpret_cast<Stmt *>(E); }
   const Stmt *getThen() const { return SubExprs[THEN]; }
+  void setThen(Stmt *S) { SubExprs[THEN] = S; } 
   const Stmt *getElse() const { return SubExprs[ELSE]; }
+  void setElse(Stmt *S) { SubExprs[ELSE] = S; }
 
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]); }
   Stmt *getThen() { return SubExprs[THEN]; }
   Stmt *getElse() { return SubExprs[ELSE]; }
+
+  SourceLocation getIfLoc() const { return IfLoc; }
+  void setIfLoc(SourceLocation L) { IfLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     if (SubExprs[ELSE])
@@ -535,9 +579,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static IfStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// SwitchStmt - This represents a 'switch' stmt.
@@ -554,22 +595,30 @@ public:
       SubExprs[BODY] = NULL;
     }
   
+  /// \brief Build a empty switch statement.
+  explicit SwitchStmt(EmptyShell Empty) : Stmt(SwitchStmtClass, Empty) { }
+
   const Expr *getCond() const { return reinterpret_cast<Expr*>(SubExprs[COND]);}
   const Stmt *getBody() const { return SubExprs[BODY]; }
   const SwitchCase *getSwitchCaseList() const { return FirstCase; }
 
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]);}
+  void setCond(Expr *E) { SubExprs[COND] = reinterpret_cast<Stmt *>(E); }
   Stmt *getBody() { return SubExprs[BODY]; }
+  void setBody(Stmt *S) { SubExprs[BODY] = S; }
   SwitchCase *getSwitchCaseList() { return FirstCase; }
+  void setSwitchCaseList(SwitchCase *SC) { FirstCase = SC; }
+
+  SourceLocation getSwitchLoc() const { return SwitchLoc; }
+  void setSwitchLoc(SourceLocation L) { SwitchLoc = L; }
 
   void setBody(Stmt *S, SourceLocation SL) { 
     SubExprs[BODY] = S; 
     SwitchLoc = SL;
   }  
   void addSwitchCase(SwitchCase *SC) {
-    if (FirstCase)
-      SC->setNextSwitchCase(FirstCase);
-
+    assert(!SC->getNextSwitchCase() && "case/default already added to a switch");
+    SC->setNextSwitchCase(FirstCase);
     FirstCase = SC;
   }
   virtual SourceRange getSourceRange() const { 
@@ -583,9 +632,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static SwitchStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -602,10 +648,18 @@ public:
     WhileLoc = WL;
   }
   
+  /// \brief Build an empty while statement.
+  explicit WhileStmt(EmptyShell Empty) : Stmt(WhileStmtClass, Empty) { }
+
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]); }
   const Expr *getCond() const { return reinterpret_cast<Expr*>(SubExprs[COND]);}
+  void setCond(Expr *E) { SubExprs[COND] = reinterpret_cast<Stmt*>(E); }
   Stmt *getBody() { return SubExprs[BODY]; }
   const Stmt *getBody() const { return SubExprs[BODY]; }
+  void setBody(Stmt *S) { SubExprs[BODY] = S; }
+
+  SourceLocation getWhileLoc() const { return WhileLoc; }
+  void setWhileLoc(SourceLocation L) { WhileLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(WhileLoc, SubExprs[BODY]->getLocEnd()); 
@@ -618,9 +672,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static WhileStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// DoStmt - This represents a 'do/while' stmt.
@@ -636,11 +687,19 @@ public:
     SubExprs[BODY] = body;
     DoLoc = DL;
   }  
+
+  /// \brief Build an empty do-while statement.
+  explicit DoStmt(EmptyShell Empty) : Stmt(DoStmtClass, Empty) { }
   
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]); }
   const Expr *getCond() const { return reinterpret_cast<Expr*>(SubExprs[COND]);}
+  void setCond(Expr *E) { SubExprs[COND] = reinterpret_cast<Stmt*>(E); }
   Stmt *getBody() { return SubExprs[BODY]; }
   const Stmt *getBody() const { return SubExprs[BODY]; }  
+  void setBody(Stmt *S) { SubExprs[BODY] = S; }
+
+  SourceLocation getDoLoc() const { return DoLoc; }
+  void setDoLoc(SourceLocation L) { DoLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(DoLoc, SubExprs[BODY]->getLocEnd()); 
@@ -653,9 +712,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static DoStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -677,6 +733,9 @@ public:
     ForLoc = FL;
   }
   
+  /// \brief Build an empty for statement.
+  explicit ForStmt(EmptyShell Empty) : Stmt(ForStmtClass, Empty) { }
+
   Stmt *getInit() { return SubExprs[INIT]; }
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]); }
   Expr *getInc()  { return reinterpret_cast<Expr*>(SubExprs[INC]); }
@@ -686,6 +745,14 @@ public:
   const Expr *getCond() const { return reinterpret_cast<Expr*>(SubExprs[COND]);}
   const Expr *getInc()  const { return reinterpret_cast<Expr*>(SubExprs[INC]); }
   const Stmt *getBody() const { return SubExprs[BODY]; }
+
+  void setInit(Stmt *S) { SubExprs[INIT] = S; }
+  void setCond(Expr *E) { SubExprs[COND] = reinterpret_cast<Stmt*>(E); }
+  void setInc(Expr *E) { SubExprs[INC] = reinterpret_cast<Stmt*>(E); }
+  void setBody(Stmt *S) { SubExprs[BODY] = S; }
+
+  SourceLocation getForLoc() const { return ForLoc; }
+  void setForLoc(SourceLocation L) { ForLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(ForLoc, SubExprs[BODY]->getLocEnd()); 
@@ -698,9 +765,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ForStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
   
 /// GotoStmt - This represents a direct goto.
@@ -713,7 +777,16 @@ public:
   GotoStmt(LabelStmt *label, SourceLocation GL, SourceLocation LL) 
     : Stmt(GotoStmtClass), Label(label), GotoLoc(GL), LabelLoc(LL) {}
   
+  /// \brief Build an empty goto statement.
+  explicit GotoStmt(EmptyShell Empty) : Stmt(GotoStmtClass, Empty) { }
+
   LabelStmt *getLabel() const { return Label; }
+  void setLabel(LabelStmt *S) { Label = S; }
+
+  SourceLocation getGotoLoc() const { return GotoLoc; }
+  void setGotoLoc(SourceLocation L) { GotoLoc = L; }
+  SourceLocation getLabelLoc() const { return LabelLoc; }
+  void setLabelLoc(SourceLocation L) { LabelLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(GotoLoc, LabelLoc); 
@@ -726,25 +799,31 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static GotoStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// IndirectGotoStmt - This represents an indirect goto.
 ///
 class IndirectGotoStmt : public Stmt {
+  SourceLocation GotoLoc;
   Stmt *Target;
-  // FIXME: Add location information (e.g. SourceLocation objects).
-  //        When doing so, update the serialization routines.
 public:
-  IndirectGotoStmt(Expr *target) : Stmt(IndirectGotoStmtClass),
-                                   Target((Stmt*)target){}
+  IndirectGotoStmt(SourceLocation gotoLoc, Expr *target)
+    : Stmt(IndirectGotoStmtClass), GotoLoc(gotoLoc), Target((Stmt*)target) {}
+
+  /// \brief Build an empty indirect goto statement.
+  explicit IndirectGotoStmt(EmptyShell Empty) 
+    : Stmt(IndirectGotoStmtClass, Empty) { }
+  
+  void setGotoLoc(SourceLocation L) { GotoLoc = L; }
+  SourceLocation getGotoLoc() const { return GotoLoc; }
   
   Expr *getTarget();
   const Expr *getTarget() const;
+  void setTarget(Expr *E) { Target = reinterpret_cast<Stmt*>(E); }
 
-  virtual SourceRange getSourceRange() const { return SourceRange(); }
+  virtual SourceRange getSourceRange() const {
+    return SourceRange(GotoLoc, Target->getLocEnd());
+  }
   
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == IndirectGotoStmtClass; 
@@ -754,9 +833,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static IndirectGotoStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -767,6 +843,12 @@ class ContinueStmt : public Stmt {
 public:
   ContinueStmt(SourceLocation CL) : Stmt(ContinueStmtClass), ContinueLoc(CL) {}
   
+  /// \brief Build an empty continue statement.
+  explicit ContinueStmt(EmptyShell Empty) : Stmt(ContinueStmtClass, Empty) { }
+
+  SourceLocation getContinueLoc() const { return ContinueLoc; }
+  void setContinueLoc(SourceLocation L) { ContinueLoc = L; }
+
   virtual SourceRange getSourceRange() const { 
     return SourceRange(ContinueLoc); 
   }
@@ -778,9 +860,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ContinueStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// BreakStmt - This represents a break.
@@ -790,6 +869,12 @@ class BreakStmt : public Stmt {
 public:
   BreakStmt(SourceLocation BL) : Stmt(BreakStmtClass), BreakLoc(BL) {}
   
+  /// \brief Build an empty break statement.
+  explicit BreakStmt(EmptyShell Empty) : Stmt(BreakStmtClass, Empty) { }
+
+  SourceLocation getBreakLoc() const { return BreakLoc; }
+  void setBreakLoc(SourceLocation L) { BreakLoc = L; }
+
   virtual SourceRange getSourceRange() const { return SourceRange(BreakLoc); }
 
   static bool classof(const Stmt *T) { 
@@ -800,9 +885,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static BreakStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -821,9 +903,16 @@ class ReturnStmt : public Stmt {
 public:
   ReturnStmt(SourceLocation RL, Expr *E = 0) : Stmt(ReturnStmtClass), 
     RetExpr((Stmt*) E), RetLoc(RL) {}
-  
+
+  /// \brief Build an empty return expression.
+  explicit ReturnStmt(EmptyShell Empty) : Stmt(ReturnStmtClass, Empty) { }
+
   const Expr *getRetValue() const;
   Expr *getRetValue();
+  void setRetValue(Expr *E) { RetExpr = reinterpret_cast<Stmt*>(E); }
+
+  SourceLocation getReturnLoc() const { return RetLoc; }
+  void setReturnLoc(SourceLocation L) { RetLoc = L; }
 
   virtual SourceRange getSourceRange() const;
   
@@ -835,9 +924,6 @@ public:
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ReturnStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// AsmStmt - This represents a GNU inline-assembly statement extension.
@@ -864,8 +950,76 @@ public:
           Expr **exprs, StringLiteral *asmstr, unsigned numclobbers,
           StringLiteral **clobbers, SourceLocation rparenloc);
 
+  /// \brief Build an empty inline-assembly statement.
+  explicit AsmStmt(EmptyShell Empty) : Stmt(AsmStmtClass, Empty) { }
+
+  SourceLocation getAsmLoc() const { return AsmLoc; }
+  void setAsmLoc(SourceLocation L) { AsmLoc = L; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
+
   bool isVolatile() const { return IsVolatile; }
+  void setVolatile(bool V) { IsVolatile = V; }
   bool isSimple() const { return IsSimple; }
+  void setSimple(bool V) { IsSimple = false; }
+
+  //===--- Asm String Analysis ---===//
+
+  const StringLiteral *getAsmString() const { return AsmStr; }
+  StringLiteral *getAsmString() { return AsmStr; }
+  void setAsmString(StringLiteral *E) { AsmStr = E; }
+
+  /// AsmStringPiece - this is part of a decomposed asm string specification
+  /// (for use with the AnalyzeAsmString function below).  An asm string is
+  /// considered to be a concatenation of these parts.
+  class AsmStringPiece {
+  public:
+    enum Kind {
+      String,  // String in .ll asm string form, "$" -> "$$" and "%%" -> "%".
+      Operand  // Operand reference, with optional modifier %c4.
+    };
+  private:
+    Kind MyKind;
+    std::string Str;
+    unsigned OperandNo;
+  public:
+    AsmStringPiece(const std::string &S) : MyKind(String), Str(S) {}
+    AsmStringPiece(unsigned OpNo, char Modifier)
+      : MyKind(Operand), Str(), OperandNo(OpNo) {
+      Str += Modifier;
+    }
+    
+    bool isString() const { return MyKind == String; }
+    bool isOperand() const { return MyKind == Operand; }
+    
+    const std::string &getString() const {
+      assert(isString());
+      return Str;
+    }
+
+    unsigned getOperandNo() const {
+      assert(isOperand());
+      return OperandNo;
+    }
+    
+    /// getModifier - Get the modifier for this operand, if present.  This
+    /// returns '\0' if there was no modifier.
+    char getModifier() const {
+      assert(isOperand());
+      return Str[0];
+    }
+  };
+  
+  /// AnalyzeAsmString - Analyze the asm string of the current asm, decomposing
+  /// it into pieces.  If the asm string is erroneous, emit errors and return
+  /// true, otherwise return false.  This handles canonicalization and
+  /// translation of strings from GCC syntax to LLVM IR syntax, and handles
+  //// flattening of named references like %[foo] to Operand AsmStringPiece's. 
+  unsigned AnalyzeAsmString(llvm::SmallVectorImpl<AsmStringPiece> &Pieces,
+                            ASTContext &C, unsigned &DiagOffs) const;
+  
+  
+  //===--- Output operands ---===//
 
   unsigned getNumOutputs() const { return NumOutputs; }
 
@@ -873,38 +1027,82 @@ public:
     return Names[i];
   }
 
-  const StringLiteral *getOutputConstraint(unsigned i) const {
+  /// getOutputConstraint - Return the constraint string for the specified
+  /// output operand.  All output constraints are known to be non-empty (either
+  /// '=' or '+').
+  std::string getOutputConstraint(unsigned i) const;
+  
+  const StringLiteral *getOutputConstraintLiteral(unsigned i) const {
     return Constraints[i];
   }
-
-  StringLiteral *getOutputConstraint(unsigned i)
-    { return Constraints[i]; }
-
-  const Expr *getOutputExpr(unsigned i) const;
+  StringLiteral *getOutputConstraintLiteral(unsigned i) {
+    return Constraints[i];
+  }
+  
+  
   Expr *getOutputExpr(unsigned i);
+  
+  const Expr *getOutputExpr(unsigned i) const {
+    return const_cast<AsmStmt*>(this)->getOutputExpr(i);
+  }
+  
+  /// isOutputPlusConstraint - Return true if the specified output constraint
+  /// is a "+" constraint (which is both an input and an output) or false if it
+  /// is an "=" constraint (just an output).
+  bool isOutputPlusConstraint(unsigned i) const {
+    return getOutputConstraint(i)[0] == '+';
+  }
+  
+  /// getNumPlusOperands - Return the number of output operands that have a "+"
+  /// constraint.
+  unsigned getNumPlusOperands() const;
+  
+  //===--- Input operands ---===//
   
   unsigned getNumInputs() const { return NumInputs; }  
   
   const std::string &getInputName(unsigned i) const {
     return Names[i + NumOutputs];
   }
-  StringLiteral *getInputConstraint(unsigned i) {
+  
+  /// getInputConstraint - Return the specified input constraint.  Unlike output
+  /// constraints, these can be empty.
+  std::string getInputConstraint(unsigned i) const;
+  
+  const StringLiteral *getInputConstraintLiteral(unsigned i) const {
     return Constraints[i + NumOutputs];
   }
-  const StringLiteral *getInputConstraint(unsigned i) const {
+  StringLiteral *getInputConstraintLiteral(unsigned i) {
     return Constraints[i + NumOutputs];
   }
-
+  
+  
   Expr *getInputExpr(unsigned i);
-  const Expr *getInputExpr(unsigned i) const;
+  
+  const Expr *getInputExpr(unsigned i) const {
+    return const_cast<AsmStmt*>(this)->getInputExpr(i);
+  }
 
-  const StringLiteral *getAsmString() const { return AsmStr; }
-  StringLiteral *getAsmString() { return AsmStr; }
+  void setOutputsAndInputs(unsigned NumOutputs,
+                           unsigned NumInputs, 
+                           const std::string *Names,
+                           StringLiteral **Constraints,
+                           Stmt **Exprs);
+
+  //===--- Other ---===//
+  
+  /// getNamedOperand - Given a symbolic operand reference like %[foo],
+  /// translate this into a numeric value needed to reference the same operand.
+  /// This returns -1 if the operand name is invalid.
+  int getNamedOperand(const std::string &SymbolicName) const;
+
+  
 
   unsigned getNumClobbers() const { return Clobbers.size(); }
   StringLiteral *getClobber(unsigned i) { return Clobbers[i]; }
   const StringLiteral *getClobber(unsigned i) const { return Clobbers[i]; }
-  
+  void setClobbers(StringLiteral **Clobbers, unsigned NumClobbers);
+
   virtual SourceRange getSourceRange() const {
     return SourceRange(AsmLoc, RParenLoc);
   }
@@ -957,334 +1155,6 @@ public:
   
   virtual child_iterator child_begin();
   virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static AsmStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-
-/// ObjCForCollectionStmt - This represents Objective-c's collection statement;
-/// represented as 'for (element 'in' collection-expression)' stmt.
-///
-class ObjCForCollectionStmt : public Stmt {
-  enum { ELEM, COLLECTION, BODY, END_EXPR };
-  Stmt* SubExprs[END_EXPR]; // SubExprs[ELEM] is an expression or declstmt.
-  SourceLocation ForLoc;
-  SourceLocation RParenLoc;
-public:
-  ObjCForCollectionStmt(Stmt *Elem, Expr *Collect, Stmt *Body, 
-                        SourceLocation FCL, SourceLocation RPL);
-  
-  Stmt *getElement() { return SubExprs[ELEM]; }
-  Expr *getCollection() { 
-    return reinterpret_cast<Expr*>(SubExprs[COLLECTION]); 
-  }
-  Stmt *getBody() { return SubExprs[BODY]; }
-  
-  const Stmt *getElement() const { return SubExprs[ELEM]; }
-  const Expr *getCollection() const { 
-    return reinterpret_cast<Expr*>(SubExprs[COLLECTION]);
-  }
-  const Stmt *getBody() const { return SubExprs[BODY]; }
-  
-  SourceLocation getRParenLoc() const { return RParenLoc; }
-  
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(ForLoc, SubExprs[BODY]->getLocEnd()); 
-  }
-  static bool classof(const Stmt *T) { 
-    return T->getStmtClass() == ObjCForCollectionStmtClass; 
-  }
-  static bool classof(const ObjCForCollectionStmt *) { return true; }
-  
-  // Iterators
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCForCollectionStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};  
-  
-/// ObjCAtCatchStmt - This represents objective-c's @catch statement.
-class ObjCAtCatchStmt : public Stmt {
-private:
-  enum { SELECTOR, BODY, NEXT_CATCH, END_EXPR };
-  Stmt *SubExprs[END_EXPR];
-  SourceLocation AtCatchLoc, RParenLoc;
-
-  // Used by deserialization.
-  ObjCAtCatchStmt(SourceLocation atCatchLoc, SourceLocation rparenloc)
-  : Stmt(ObjCAtCatchStmtClass), AtCatchLoc(atCatchLoc), RParenLoc(rparenloc) {}
-
-public:
-  ObjCAtCatchStmt(SourceLocation atCatchLoc, SourceLocation rparenloc,
-                  Stmt *catchVarStmtDecl, Stmt *atCatchStmt, Stmt *atCatchList);
-  
-  const Stmt *getCatchBody() const { return SubExprs[BODY]; }
-  Stmt *getCatchBody() { return SubExprs[BODY]; }
-
-  const ObjCAtCatchStmt *getNextCatchStmt() const {
-    return static_cast<const ObjCAtCatchStmt*>(SubExprs[NEXT_CATCH]);
-  }
-  ObjCAtCatchStmt *getNextCatchStmt() { 
-    return static_cast<ObjCAtCatchStmt*>(SubExprs[NEXT_CATCH]);
-  }
-
-  const Stmt *getCatchParamStmt() const { return SubExprs[SELECTOR]; }
-  Stmt *getCatchParamStmt() { return SubExprs[SELECTOR]; }
-  
-  SourceLocation getRParenLoc() const { return RParenLoc; }
-  
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(AtCatchLoc, SubExprs[BODY]->getLocEnd()); 
-  }
-
-  bool hasEllipsis() const { return getCatchParamStmt() == 0; }
-  
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == ObjCAtCatchStmtClass;
-  }
-  static bool classof(const ObjCAtCatchStmt *) { return true; }
-  
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCAtCatchStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-  
-/// ObjCAtFinallyStmt - This represent objective-c's @finally Statement 
-class ObjCAtFinallyStmt : public Stmt {
-  Stmt *AtFinallyStmt;
-  SourceLocation AtFinallyLoc;    
-public:
-  ObjCAtFinallyStmt(SourceLocation atFinallyLoc, Stmt *atFinallyStmt)
-  : Stmt(ObjCAtFinallyStmtClass), 
-    AtFinallyStmt(atFinallyStmt), AtFinallyLoc(atFinallyLoc) {}
-  
-  const Stmt *getFinallyBody () const { return AtFinallyStmt; }
-  Stmt *getFinallyBody () { return AtFinallyStmt; }
-
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(AtFinallyLoc, AtFinallyStmt->getLocEnd()); 
-  }
-  
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == ObjCAtFinallyStmtClass;
-  }
-  static bool classof(const ObjCAtFinallyStmt *) { return true; }
-  
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCAtFinallyStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-  
-/// ObjCAtTryStmt - This represent objective-c's over-all 
-/// @try ... @catch ... @finally statement.
-class ObjCAtTryStmt : public Stmt {
-private:
-  enum { TRY, CATCH, FINALLY, END_EXPR };
-  Stmt* SubStmts[END_EXPR]; 
-  
-  SourceLocation AtTryLoc;      
-public:
-  ObjCAtTryStmt(SourceLocation atTryLoc, Stmt *atTryStmt, 
-                Stmt *atCatchStmt, 
-                Stmt *atFinallyStmt)
-  : Stmt(ObjCAtTryStmtClass) {
-      SubStmts[TRY] = atTryStmt;
-      SubStmts[CATCH] = atCatchStmt;
-      SubStmts[FINALLY] = atFinallyStmt;
-      AtTryLoc = atTryLoc;
-    }
-    
-  const Stmt *getTryBody() const { return SubStmts[TRY]; }
-  Stmt *getTryBody() { return SubStmts[TRY]; }
-  const ObjCAtCatchStmt *getCatchStmts() const { 
-    return dyn_cast_or_null<ObjCAtCatchStmt>(SubStmts[CATCH]); 
-  }
-  ObjCAtCatchStmt *getCatchStmts() { 
-    return dyn_cast_or_null<ObjCAtCatchStmt>(SubStmts[CATCH]); 
-  }
-  const ObjCAtFinallyStmt *getFinallyStmt() const { 
-    return dyn_cast_or_null<ObjCAtFinallyStmt>(SubStmts[FINALLY]); 
-  }
-  ObjCAtFinallyStmt *getFinallyStmt() { 
-    return dyn_cast_or_null<ObjCAtFinallyStmt>(SubStmts[FINALLY]); 
-  }
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(AtTryLoc, SubStmts[TRY]->getLocEnd()); 
-  }
-    
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == ObjCAtTryStmtClass;
-  }
-  static bool classof(const ObjCAtTryStmt *) { return true; }
-    
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCAtTryStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-
-/// ObjCAtSynchronizedStmt - This is for objective-c's @synchronized statement.
-/// Example: @synchronized (sem) {
-///             do-something;
-///          }
-///
-class ObjCAtSynchronizedStmt : public Stmt {
-private:
-  enum { SYNC_EXPR, SYNC_BODY, END_EXPR };
-  Stmt* SubStmts[END_EXPR];
-  SourceLocation AtSynchronizedLoc;
-  
-public:
-  ObjCAtSynchronizedStmt(SourceLocation atSynchronizedLoc, Stmt *synchExpr,
-                         Stmt *synchBody)
-  : Stmt(ObjCAtSynchronizedStmtClass) {
-      SubStmts[SYNC_EXPR] = synchExpr;
-      SubStmts[SYNC_BODY] = synchBody;
-      AtSynchronizedLoc = atSynchronizedLoc;
-    }
-  
-  const CompoundStmt *getSynchBody() const {
-    return reinterpret_cast<CompoundStmt*>(SubStmts[SYNC_BODY]);
-  }
-  CompoundStmt *getSynchBody() { 
-    return reinterpret_cast<CompoundStmt*>(SubStmts[SYNC_BODY]); 
-  }
-  
-  const Expr *getSynchExpr() const { 
-    return reinterpret_cast<Expr*>(SubStmts[SYNC_EXPR]); 
-  }
-  Expr *getSynchExpr() { 
-    return reinterpret_cast<Expr*>(SubStmts[SYNC_EXPR]); 
-  }
-  
-  virtual SourceRange getSourceRange() const { 
-    return SourceRange(AtSynchronizedLoc, getSynchBody()->getLocEnd()); 
-  }
-  
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == ObjCAtSynchronizedStmtClass;
-  }
-  static bool classof(const ObjCAtSynchronizedStmt *) { return true; }
-  
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCAtSynchronizedStmt* CreateImpl(llvm::Deserializer& D,
-                                            ASTContext& C);
-};
-  
-/// ObjCAtThrowStmt - This represents objective-c's @throw statement.
-class ObjCAtThrowStmt : public Stmt {
-  Stmt *Throw;
-  SourceLocation AtThrowLoc;
-public:
-  ObjCAtThrowStmt(SourceLocation atThrowLoc, Stmt *throwExpr)
-  : Stmt(ObjCAtThrowStmtClass), Throw(throwExpr) {
-    AtThrowLoc = atThrowLoc;
-  }
-  
-  const Expr *getThrowExpr() const { return reinterpret_cast<Expr*>(Throw); }
-  Expr *getThrowExpr() { return reinterpret_cast<Expr*>(Throw); }
-  
-  virtual SourceRange getSourceRange() const {
-    if (Throw)
-      return SourceRange(AtThrowLoc, Throw->getLocEnd()); 
-    else 
-      return SourceRange(AtThrowLoc);
-  }
-  
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == ObjCAtThrowStmtClass;
-  }
-  static bool classof(const ObjCAtThrowStmt *) { return true; }
-  
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-  
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static ObjCAtThrowStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-
-/// CXXCatchStmt - This represents a C++ catch block.
-class CXXCatchStmt : public Stmt {
-  SourceLocation CatchLoc;
-  /// The exception-declaration of the type.
-  Decl *ExceptionDecl;
-  /// The handler block.
-  Stmt *HandlerBlock;
-
-public:
-  CXXCatchStmt(SourceLocation catchLoc, Decl *exDecl, Stmt *handlerBlock)
-  : Stmt(CXXCatchStmtClass), CatchLoc(catchLoc), ExceptionDecl(exDecl),
-    HandlerBlock(handlerBlock) {}
-
-  virtual void Destroy(ASTContext& Ctx);
-
-  virtual SourceRange getSourceRange() const {
-    return SourceRange(CatchLoc, HandlerBlock->getLocEnd());
-  }
-
-  Decl *getExceptionDecl() { return ExceptionDecl; }
-  QualType getCaughtType();
-  Stmt *getHandlerBlock() { return HandlerBlock; }
-
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == CXXCatchStmtClass;
-  }
-  static bool classof(const CXXCatchStmt *) { return true; }
-
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXCatchStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-};
-
-/// CXXTryStmt - A C++ try block, including all handlers.
-class CXXTryStmt : public Stmt {
-  SourceLocation TryLoc;
-  // First place is the guarded CompoundStatement. Subsequent are the handlers.
-  // More than three handlers should be rare.
-  llvm::SmallVector<Stmt*, 4> Stmts;
-
-public:
-  CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
-             Stmt **handlers, unsigned numHandlers);
-
-  virtual SourceRange getSourceRange() const {
-    return SourceRange(TryLoc, Stmts.back()->getLocEnd());
-  }
-
-  CompoundStmt *getTryBlock() { return llvm::cast<CompoundStmt>(Stmts[0]); }
-  const CompoundStmt *getTryBlock() const {
-    return llvm::cast<CompoundStmt>(Stmts[0]);
-  }
-
-  unsigned getNumHandlers() const { return Stmts.size() - 1; }
-  CXXCatchStmt *getHandler(unsigned i) {
-    return llvm::cast<CXXCatchStmt>(Stmts[i + 1]);
-  }
-  const CXXCatchStmt *getHandler(unsigned i) const {
-    return llvm::cast<CXXCatchStmt>(Stmts[i + 1]);
-  }
-
-  static bool classof(const Stmt *T) {
-    return T->getStmtClass() == CXXTryStmtClass;
-  }
-  static bool classof(const CXXTryStmt *) { return true; }
-
-  virtual child_iterator child_begin();
-  virtual child_iterator child_end();
-
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  static CXXTryStmt* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 }  // end namespace clang

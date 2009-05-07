@@ -38,9 +38,10 @@ public:
   const
   MachineInstrBuilder &addReg(unsigned RegNo, bool isDef = false, 
                               bool isImp = false, bool isKill = false, 
-                              bool isDead = false, unsigned SubReg = 0) const {
+                              bool isDead = false, unsigned SubReg = 0,
+                              bool isEarlyClobber = false) const {
     MI->addOperand(MachineOperand::CreateReg(RegNo, isDef, isImp, isKill,
-                                             isDead, SubReg));
+                                             isDead, SubReg, isEarlyClobber));
     return *this;
   }
 
@@ -93,16 +94,33 @@ public:
     MI->addMemOperand(*MI->getParent()->getParent(), MMO);
     return *this;
   }
+
+  const MachineInstrBuilder &addOperand(const MachineOperand &MO) const {
+    if (MO.isReg())
+      return addReg(MO.getReg(), MO.isDef(), MO.isImplicit(),
+                    MO.isKill(), MO.isDead(), MO.getSubReg(),
+                    MO.isEarlyClobber());
+    if (MO.isImm())
+      return addImm(MO.getImm());
+    if (MO.isFI())
+      return addFrameIndex(MO.getIndex());
+    if (MO.isGlobal())
+      return addGlobalAddress(MO.getGlobal(), MO.getOffset());
+    if (MO.isCPI())
+      return addConstantPoolIndex(MO.getIndex(), MO.getOffset());
+    if (MO.isSymbol())
+      return addExternalSymbol(MO.getSymbolName());
+    if (MO.isJTI())
+      return addJumpTableIndex(MO.getIndex());
+
+    assert(0 && "Unknown operand for MachineInstrBuilder::AddOperand!");
+    return *this;
+  }
 };
 
 /// BuildMI - Builder interface.  Specify how to create the initial instruction
 /// itself.
 ///
-inline MachineInstrBuilder BuildMI(MachineFunction &MF,
-                                   const TargetInstrDesc &TID) {
-  return MachineInstrBuilder(MF.CreateMachineInstr(TID,
-                                                   DebugLoc::getUnknownLoc()));
-}
 inline MachineInstrBuilder BuildMI(MachineFunction &MF,
                                    DebugLoc DL,
                                    const TargetInstrDesc &TID) {
@@ -112,13 +130,6 @@ inline MachineInstrBuilder BuildMI(MachineFunction &MF,
 /// BuildMI - This version of the builder sets up the first operand as a
 /// destination virtual register.
 ///
-inline MachineInstrBuilder BuildMI(MachineFunction &MF,
-                                   const TargetInstrDesc &TID,
-                                   unsigned DestReg) {
-  return MachineInstrBuilder(MF.CreateMachineInstr(TID,
-                                                   DebugLoc::getUnknownLoc()))
-            .addReg(DestReg, true);
-}
 inline MachineInstrBuilder BuildMI(MachineFunction &MF,
                                    DebugLoc DL,
                                    const TargetInstrDesc &TID,
@@ -131,15 +142,6 @@ inline MachineInstrBuilder BuildMI(MachineFunction &MF,
 /// instruction before the given position in the given MachineBasicBlock, and
 /// sets up the first operand as a destination virtual register.
 ///
-inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
-                                   MachineBasicBlock::iterator I,
-                                   const TargetInstrDesc &TID,
-                                   unsigned DestReg) {
-  MachineInstr *MI =
-    BB.getParent()->CreateMachineInstr(TID, DebugLoc::getUnknownLoc());
-  BB.insert(I, MI);
-  return MachineInstrBuilder(MI).addReg(DestReg, true);
-}
 inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                                    MachineBasicBlock::iterator I,
                                    DebugLoc DL,
@@ -156,14 +158,6 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
 ///
 inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                                    MachineBasicBlock::iterator I,
-                                   const TargetInstrDesc &TID) {
-  MachineInstr *MI =
-    BB.getParent()->CreateMachineInstr(TID, DebugLoc::getUnknownLoc());
-  BB.insert(I, MI);
-  return MachineInstrBuilder(MI);
-}
-inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
-                                   MachineBasicBlock::iterator I,
                                    DebugLoc DL,
                                    const TargetInstrDesc &TID) {
   MachineInstr *MI = BB.getParent()->CreateMachineInstr(TID, DL);
@@ -176,10 +170,6 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
 /// destination register.
 ///
 inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
-                                   const TargetInstrDesc &TID) {
-  return BuildMI(*BB, BB->end(), TID);
-}
-inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
                                    DebugLoc DL,
                                    const TargetInstrDesc &TID) {
   return BuildMI(*BB, BB->end(), DL, TID);
@@ -189,11 +179,6 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
 /// instruction at the end of the given MachineBasicBlock, and sets up the first
 /// operand as a destination virtual register. 
 ///
-inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
-                                   const TargetInstrDesc &TID,
-                                   unsigned DestReg) {
-  return BuildMI(*BB, BB->end(), TID, DestReg);
-}
 inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
                                    DebugLoc DL,
                                    const TargetInstrDesc &TID,

@@ -43,39 +43,6 @@ public:
 
 
 //===----------------------------------------------------------------------===//
-// LookupContext Implementation
-//===----------------------------------------------------------------------===//
-
-/// getContext - Returns translation unit context for non Decls and
-/// for EnumConstantDecls returns the parent context of their EnumDecl.
-DeclContext *IdentifierResolver::LookupContext::getContext(Decl *D) {
-  DeclContext *Ctx = D->getDeclContext();
-
-  if (!Ctx) // FIXME: HACK! We shouldn't end up with a NULL context here.
-    return TUCtx();
-
-  Ctx = Ctx->getLookupContext();
-
-  if (isa<TranslationUnitDecl>(Ctx))
-    return TUCtx();
-
-  return Ctx;
-}
-
-/// isEqOrContainedBy - Returns true of the given context is the same or a
-/// parent of this one.
-bool IdentifierResolver::LookupContext::isEqOrContainedBy(
-                                                const LookupContext &PC) const {
-  if (PC.isTU()) return true;
-
-  for (LookupContext Next = *this; !Next.isTU();  Next = Next.getParent())
-    if (Next.Ctx == PC.Ctx) return true;
-
-  return false;
-}
-
-
-//===----------------------------------------------------------------------===//
 // IdDeclInfo Implementation
 //===----------------------------------------------------------------------===//
 
@@ -108,6 +75,18 @@ void IdentifierResolver::IdDeclInfo::RemoveDecl(NamedDecl *D) {
   assert(0 && "Didn't find this decl on its identifier's chain!");
 }
 
+bool 
+IdentifierResolver::IdDeclInfo::ReplaceDecl(NamedDecl *Old, NamedDecl *New) {
+  for (DeclsTy::iterator I = Decls.end(); I != Decls.begin(); --I) {
+    if (Old == *(I-1)) {
+      *(I - 1) = New;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 
 //===----------------------------------------------------------------------===//
 // IdentifierResolver Implementation
@@ -133,7 +112,7 @@ bool IdentifierResolver::isDeclInScope(Decl *D, DeclContext *Ctx,
            ((DeclContext *)S->getEntity())->isTransparentContext())
       S = S->getParent();
 
-    if (S->isDeclScope(D))
+    if (S->isDeclScope(Action::DeclPtrTy::make(D)))
       return true;
     if (LangOpt.CPlusPlus) {
       // C++ 3.3.2p3:
@@ -150,12 +129,12 @@ bool IdentifierResolver::isDeclInScope(Decl *D, DeclContext *Ctx,
       //
       assert(S->getParent() && "No TUScope?");
       if (S->getParent()->getFlags() & Scope::ControlScope)
-        return S->getParent()->isDeclScope(D);
+        return S->getParent()->isDeclScope(Action::DeclPtrTy::make(D));
     }
     return false;
   }
 
-  return LookupContext(D) == LookupContext(Ctx->getPrimaryContext());
+  return D->getDeclContext()->getLookupContext() == Ctx->getPrimaryContext();
 }
 
 /// AddDecl - Link the decl to its shadowed decl chain.
@@ -225,24 +204,65 @@ void IdentifierResolver::RemoveDecl(NamedDecl *D) {
   return toIdDeclInfo(Ptr)->RemoveDecl(D);
 }
 
+bool IdentifierResolver::ReplaceDecl(NamedDecl *Old, NamedDecl *New) {
+  assert(Old->getDeclName() == New->getDeclName() && 
+         "Cannot replace a decl with another decl of a different name");
+  
+  DeclarationName Name = Old->getDeclName();
+  void *Ptr = Name.getFETokenInfo<void>();
+
+  if (!Ptr)
+    return false;
+
+  if (isDeclPtr(Ptr)) {
+    if (Ptr == Old) {
+      Name.setFETokenInfo(New);
+      return true;
+    }
+    return false;
+  }
+
+  return toIdDeclInfo(Ptr)->ReplaceDecl(Old, New);  
+}
+
 /// begin - Returns an iterator for decls with name 'Name'.
 IdentifierResolver::iterator
 IdentifierResolver::begin(DeclarationName Name) {
   void *Ptr = Name.getFETokenInfo<void>();
   if (!Ptr) return end();
 
-  if (isDeclPtr(Ptr)) {
-    NamedDecl *D = static_cast<NamedDecl*>(Ptr);
-    return iterator(D);
-  }
+  if (isDeclPtr(Ptr))
+    return iterator(static_cast<NamedDecl*>(Ptr));
 
   IdDeclInfo *IDI = toIdDeclInfo(Ptr);
 
   IdDeclInfo::DeclsTy::iterator I = IDI->decls_end();
   if (I != IDI->decls_begin())
     return iterator(I-1);
-  else // No decls found.
-    return end();
+  // No decls found.
+  return end();
+}
+
+void IdentifierResolver::AddDeclToIdentifierChain(IdentifierInfo *II, 
+                                                  NamedDecl *D) {
+  void *Ptr = II->getFETokenInfo<void>();
+
+  if (!Ptr) {
+    II->setFETokenInfo(D);
+    return;
+  }
+
+  IdDeclInfo *IDI;
+
+  if (isDeclPtr(Ptr)) {
+    II->setFETokenInfo(NULL);
+    IDI = &(*IdDeclInfos)[II];
+    NamedDecl *PrevD = static_cast<NamedDecl*>(Ptr);
+    IDI->AddDecl(PrevD);
+  } else
+    IDI = toIdDeclInfo(Ptr);
+
+  IDI->AddDecl(D);
 }
 
 //===----------------------------------------------------------------------===//

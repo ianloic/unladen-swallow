@@ -24,10 +24,14 @@
 
 namespace llvm {
   struct VISIBILITY_HIDDEN PIC16AsmPrinter : public AsmPrinter {
-    PIC16AsmPrinter(raw_ostream &O, TargetMachine &TM, const TargetAsmInfo *T)
-      : AsmPrinter(O, TM, T) {
-      CurrentBankselLabelInBasicBlock = "";
+    explicit PIC16AsmPrinter(raw_ostream &O, PIC16TargetMachine &TM,
+                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                             bool V)
+      : AsmPrinter(O, TM, T, OL, V) {
+      CurBank = "";
+      FunctionLabelBegin = '@';
       IsRomData = false;
+      PTLI = TM.getTargetLowering();
     }
     private :
     virtual const char *getPassName() const {
@@ -44,16 +48,16 @@ namespace llvm {
     void EmitUnInitData (Module &M);
     void EmitRomData (Module &M);
     void emitFunctionData(MachineFunction &MF);
-    void emitFunctionTempData(MachineFunction &MF, unsigned &FrameSize);
 
     protected:
     bool doInitialization(Module &M);
     bool doFinalization(Module &M);
-    bool inSameBank(char *s1, char *s2);
 
     private:
-    std::string CurrentBankselLabelInBasicBlock;
+    PIC16TargetLowering *PTLI;
+    std::string CurBank;
     bool IsRomData;
+    char FunctionLabelBegin;
   };
 } // end of namespace
 

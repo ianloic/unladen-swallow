@@ -14,10 +14,11 @@
 #ifndef LLVM_ADT_DENSEMAP_H
 #define LLVM_ADT_DENSEMAP_H
 
-#include "llvm/Support/DataTypes.h"
+#include "llvm/Support/PointerLikeTypeTraits.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <utility>
+#include <new>
 
 namespace llvm {
 
@@ -33,8 +34,16 @@ struct DenseMapInfo {
 // Provide DenseMapInfo for all pointers.
 template<typename T>
 struct DenseMapInfo<T*> {
-  static inline T* getEmptyKey() { return reinterpret_cast<T*>(-1); }
-  static inline T* getTombstoneKey() { return reinterpret_cast<T*>(-2); }
+  static inline T* getEmptyKey() {
+    intptr_t Val = -1;
+    Val <<= PointerLikeTypeTraits<T*>::NumLowBitsAvailable;
+    return reinterpret_cast<T*>(Val);
+  }
+  static inline T* getTombstoneKey() {
+    intptr_t Val = -2;
+    Val <<= PointerLikeTypeTraits<T*>::NumLowBitsAvailable;
+    return reinterpret_cast<T*>(Val);
+  }
   static unsigned getHashValue(const T *PtrVal) {
     return (unsigned((uintptr_t)PtrVal) >> 4) ^
            (unsigned((uintptr_t)PtrVal) >> 9);
@@ -43,6 +52,17 @@ struct DenseMapInfo<T*> {
   static bool isPod() { return true; }
 };
 
+// Provide DenseMapInfo for chars.
+template<> struct DenseMapInfo<char> {
+  static inline char getEmptyKey() { return ~0; }
+  static inline char getTombstoneKey() { return ~0 - 1; }
+  static unsigned getHashValue(const char& Val) { return Val * 37; }
+  static bool isPod() { return true; }
+  static bool isEqual(const char &LHS, const char &RHS) {
+    return LHS == RHS;
+  }
+};
+  
 // Provide DenseMapInfo for unsigned ints.
 template<> struct DenseMapInfo<unsigned> {
   static inline unsigned getEmptyKey() { return ~0; }
@@ -271,6 +291,18 @@ public:
     return *this;
   }
 
+  /// isPointerIntoBucketsArray - Return true if the specified pointer points
+  /// somewhere into the DenseMap's array of buckets (i.e. either to a key or
+  /// value in the DenseMap).
+  bool isPointerIntoBucketsArray(const void *Ptr) const {
+    return Ptr >= Buckets && Ptr < Buckets+NumBuckets;
+  }
+
+  /// getPointerIntoBucketsArray() - Return an opaque pointer into the buckets
+  /// array.  In conjunction with the previous method, this can be used to
+  /// determine whether an insertion caused the DenseMap to reallocate.
+  const void *getPointerIntoBucketsArray() const { return Buckets; }
+
 private:
   void CopyFrom(const DenseMap& other) {
     if (NumBuckets != 0 && (!KeyInfoT::isPod() || !ValueInfoT::isPod())) {
@@ -314,12 +346,12 @@ private:
     // probe almost the entire table until it found the empty bucket.  If the
     // table completely filled with tombstones, no lookup would ever succeed,
     // causing infinite loops in lookup.
+    ++NumEntries;
     if (NumEntries*4 >= NumBuckets*3 ||
         NumBuckets-(NumEntries+NumTombstones) < NumBuckets/8) {
       this->grow(NumBuckets * 2);
       LookupBucketFor(Key, TheBucket);
     }
-    ++NumEntries;
 
     // If we are writing over a tombstone, remember this.
     if (!KeyInfoT::isEqual(TheBucket->first, getEmptyKey()))

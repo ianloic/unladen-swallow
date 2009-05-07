@@ -17,7 +17,9 @@
 #include "llvm/GlobalValue.h"
 #include "llvm/Instructions.h"
 #include "llvm/Module.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -90,14 +92,31 @@ bool Constant::canTrap() const {
   }
 }
 
-/// ContaintsRelocations - Return true if the constant value contains
-/// relocations which cannot be resolved at compile time.
-bool Constant::ContainsRelocations() const {
-  if (isa<GlobalValue>(this))
-    return true;
-  for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
-    if (getOperand(i)->ContainsRelocations())
+/// ContainsRelocations - Return true if the constant value contains relocations
+/// which cannot be resolved at compile time. Kind argument is used to filter
+/// only 'interesting' sorts of relocations.
+bool Constant::ContainsRelocations(unsigned Kind) const {
+  if (const GlobalValue* GV = dyn_cast<GlobalValue>(this)) {
+    bool isLocal = GV->hasLocalLinkage();
+    if ((Kind & Reloc::Local) && isLocal) {
+      // Global has local linkage and 'local' kind of relocations are
+      // requested
       return true;
+    }
+
+    if ((Kind & Reloc::Global) && !isLocal) {
+      // Global has non-local linkage and 'global' kind of relocations are
+      // requested
+      return true;
+    }
+
+    return false;
+  }
+
+  for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
+    if (getOperand(i)->ContainsRelocations(Kind))
+      return true;
+
   return false;
 }
 
@@ -554,7 +573,10 @@ public:
     return User::operator new(s, 3);
   }
   ShuffleVectorConstantExpr(Constant *C1, Constant *C2, Constant *C3)
-  : ConstantExpr(C1->getType(), Instruction::ShuffleVector, 
+  : ConstantExpr(VectorType::get(
+                   cast<VectorType>(C1->getType())->getElementType(),
+                   cast<VectorType>(C3->getType())->getNumElements()),
+                 Instruction::ShuffleVector, 
                  &Op<0>(), 3) {
     Op<0>() = C1;
     Op<1>() = C2;
@@ -1274,8 +1296,8 @@ ConstantAggregateZero *ConstantAggregateZero::get(const Type *Ty) {
   return AggZeroConstants->getOrCreate(Ty, 0);
 }
 
-// destroyConstant - Remove the constant from the constant table...
-//
+/// destroyConstant - Remove the constant from the constant table...
+///
 void ConstantAggregateZero::destroyConstant() {
   AggZeroConstants->remove(this);
   destroyConstantImpl();
@@ -1325,8 +1347,8 @@ Constant *ConstantArray::get(const ArrayType *Ty,
   return ConstantAggregateZero::get(Ty);
 }
 
-// destroyConstant - Remove the constant from the constant table...
-//
+/// destroyConstant - Remove the constant from the constant table...
+///
 void ConstantArray::destroyConstant() {
   ArrayConstants->remove(this);
   destroyConstantImpl();
@@ -1367,7 +1389,7 @@ bool ConstantArray::isString() const {
 }
 
 /// isCString - This method returns true if the array is a string (see
-/// isString) and it ends in a null byte \0 and does not contains any other
+/// isString) and it ends in a null byte \\0 and does not contains any other
 /// null bytes except its terminator.
 bool ConstantArray::isCString() const {
   // Check the element type for i8...
@@ -1388,10 +1410,10 @@ bool ConstantArray::isCString() const {
 }
 
 
-// getAsString - If the sub-element type of this array is i8
-// then this method converts the array to an std::string and returns it.
-// Otherwise, it asserts out.
-//
+/// getAsString - If the sub-element type of this array is i8
+/// then this method converts the array to an std::string and returns it.
+/// Otherwise, it asserts out.
+///
 std::string ConstantArray::getAsString() const {
   assert(isString() && "Not a string!");
   std::string Result;
@@ -1637,6 +1659,63 @@ void UndefValue::destroyConstant() {
   destroyConstantImpl();
 }
 
+//---- MDString::get() implementation
+//
+
+MDString::MDString(const char *begin, const char *end)
+  : Constant(Type::EmptyStructTy, MDStringVal, 0, 0),
+    StrBegin(begin), StrEnd(end) {}
+
+static ManagedStatic<StringMap<MDString*> > MDStringCache;
+
+MDString *MDString::get(const char *StrBegin, const char *StrEnd) {
+  StringMapEntry<MDString *> &Entry = MDStringCache->GetOrCreateValue(StrBegin,
+                                                                      StrEnd);
+  MDString *&S = Entry.getValue();
+  if (!S) S = new MDString(Entry.getKeyData(),
+                           Entry.getKeyData() + Entry.getKeyLength());
+  return S;
+}
+
+void MDString::destroyConstant() {
+  MDStringCache->erase(MDStringCache->find(StrBegin, StrEnd));
+  destroyConstantImpl();
+}
+
+//---- MDNode::get() implementation
+//
+
+static ManagedStatic<FoldingSet<MDNode> > MDNodeSet;
+
+MDNode::MDNode(Constant*const* Vals, unsigned NumVals)
+  : Constant(Type::EmptyStructTy, MDNodeVal,
+             OperandTraits<MDNode>::op_end(this) - NumVals, NumVals) {
+  std::copy(Vals, Vals + NumVals, OperandList);
+}
+
+void MDNode::Profile(FoldingSetNodeID &ID) {
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I)
+    ID.AddPointer(*I);
+}
+
+MDNode *MDNode::get(Constant*const* Vals, unsigned NumVals) {
+  FoldingSetNodeID ID;
+  for (unsigned i = 0; i != NumVals; ++i)
+    ID.AddPointer(Vals[i]);
+
+  void *InsertPoint;
+  if (MDNode *N = MDNodeSet->FindNodeOrInsertPos(ID, InsertPoint))
+    return N;
+
+  // InsertPoint will have been set by the FindNodeOrInsertPos call.
+  MDNode *N = new(NumVals) MDNode(Vals, NumVals);
+  MDNodeSet->InsertNode(N, InsertPoint);
+  return N;
+}
+
+void MDNode::destroyConstant() {
+  destroyConstantImpl();
+}
 
 //---- ConstantExpr::get() implementations...
 //
@@ -1992,7 +2071,12 @@ Constant *ConstantExpr::getBitCast(Constant *C, const Type *DstTy) {
   unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
   unsigned DstBitSize = DstTy->getPrimitiveSizeInBits();
 #endif
-  assert(SrcBitSize == DstBitSize && "BitCast requies types of same width");
+  assert(SrcBitSize == DstBitSize && "BitCast requires types of same width");
+  
+  // It is common to ask for a bitcast of a value to its own type, handle this
+  // speedily.
+  if (C->getType() == DstTy) return C;
+  
   return getFoldedCast(Instruction::BitCast, C, DstTy);
 }
 
@@ -2092,7 +2176,7 @@ Constant *ConstantExpr::get(unsigned Opcode, Constant *C1, Constant *C2) {
   case Instruction::LShr:
   case Instruction::AShr:
     assert(C1->getType() == C2->getType() && "Op types should be identical!");
-    assert(C1->getType()->isInteger() &&
+    assert(C1->getType()->isIntOrIntVector() &&
            "Tried to create a shift operation on a non-integer type!");
     break;
   default:
@@ -2349,7 +2433,11 @@ Constant *ConstantExpr::getShuffleVector(Constant *V1, Constant *V2,
                                          Constant *Mask) {
   assert(ShuffleVectorInst::isValidOperands(V1, V2, Mask) &&
          "Invalid shuffle vector constant expr operands!");
-  return getShuffleVectorTy(V1->getType(), V1, V2, Mask);
+
+  unsigned NElts = cast<VectorType>(Mask->getType())->getNumElements();
+  const Type *EltTy = cast<VectorType>(V1->getType())->getElementType();
+  const Type *ShufTy = VectorType::get(EltTy, NElts);
+  return getShuffleVectorTy(ShufTy, V1, V2, Mask);
 }
 
 Constant *ConstantExpr::getInsertValueTy(const Type *ReqTy, Constant *Agg,
@@ -2704,6 +2792,27 @@ void ConstantExpr::replaceUsesOfWithOnConstant(Value *From, Value *ToV,
     return;
   }
   
+  assert(Replacement != this && "I didn't contain From!");
+  
+  // Everyone using this now uses the replacement.
+  uncheckedReplaceAllUsesWith(Replacement);
+  
+  // Delete the old constant!
+  destroyConstant();
+}
+
+void MDNode::replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U) {
+  assert(isa<Constant>(To) && "Cannot make Constant refer to non-constant!");
+  
+  SmallVector<Constant*, 8> Values;
+  Values.reserve(getNumOperands());  // Build replacement array...
+  for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
+    Constant *Val = getOperand(i);
+    if (Val == From) Val = cast<Constant>(To);
+    Values.push_back(Val);
+  }
+  
+  Constant *Replacement = MDNode::get(&Values[0], Values.size());
   assert(Replacement != this && "I didn't contain From!");
   
   // Everyone using this now uses the replacement.

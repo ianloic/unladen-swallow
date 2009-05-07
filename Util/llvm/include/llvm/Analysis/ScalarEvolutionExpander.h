@@ -30,13 +30,14 @@ namespace llvm {
     ScalarEvolution &SE;
     LoopInfo &LI;
     std::map<SCEVHandle, Value*> InsertedExpressions;
-    std::set<Instruction*> InsertedInstructions;
+    std::set<Value*> InsertedValues;
 
-    Instruction *InsertPt;
+    BasicBlock::iterator InsertPt;
 
     friend struct SCEVVisitor<SCEVExpander, Value*>;
   public:
-    SCEVExpander(ScalarEvolution &se, LoopInfo &li) : SE(se), LI(li) {}
+    SCEVExpander(ScalarEvolution &se, LoopInfo &li)
+      : SE(se), LI(li) {}
 
     LoopInfo &getLoopInfo() const { return LI; }
 
@@ -49,7 +50,13 @@ namespace llvm {
     /// inserted by the code rewriter.  If so, the client should not modify the
     /// instruction.
     bool isInsertedInstruction(Instruction *I) const {
-      return InsertedInstructions.count(I);
+      return InsertedValues.count(I);
+    }
+
+    /// isInsertedExpression - Return true if the the code rewriter has a
+    /// Value* recorded for the given expression.
+    bool isInsertedExpression(const SCEV *S) const {
+      return InsertedExpressions.count(S);
     }
 
     /// getOrInsertCanonicalInductionVariable - This method returns the
@@ -65,52 +72,69 @@ namespace llvm {
 
     /// addInsertedValue - Remember the specified instruction as being the
     /// canonical form for the specified SCEV.
-    void addInsertedValue(Instruction *I, SCEV *S) {
-      InsertedExpressions[S] = (Value*)I;
-      InsertedInstructions.insert(I);
+    void addInsertedValue(Value *V, const SCEV *S) {
+      InsertedExpressions[S] = V;
+      InsertedValues.insert(V);
     }
 
-    Instruction *getInsertionPoint() const { return InsertPt; }
-    
+    void setInsertionPoint(BasicBlock::iterator NewIP) { InsertPt = NewIP; }
+
+    BasicBlock::iterator getInsertionPoint() const { return InsertPt; }
+
+    /// expandCodeFor - Insert code to directly compute the specified SCEV
+    /// expression into the program.  The inserted code is inserted into the
+    /// SCEVExpander's current insertion point.
+    Value *expandCodeFor(SCEVHandle SH, const Type *Ty);
+
     /// expandCodeFor - Insert code to directly compute the specified SCEV
     /// expression into the program.  The inserted code is inserted into the
     /// specified block.
-    Value *expandCodeFor(SCEVHandle SH, Instruction *IP);
+    Value *expandCodeFor(SCEVHandle SH, const Type *Ty,
+                         BasicBlock::iterator IP) {
+      setInsertionPoint(IP);
+      return expandCodeFor(SH, Ty);
+    }
 
     /// InsertCastOfTo - Insert a cast of V to the specified type, doing what
     /// we can to share the casts.
-    static Value *InsertCastOfTo(Instruction::CastOps opcode, Value *V, 
-                                 const Type *Ty);
+    Value *InsertCastOfTo(Instruction::CastOps opcode, Value *V,
+                          const Type *Ty);
+
+    /// InsertNoopCastOfTo - Insert a cast of V to the specified type,
+    /// which must be possible with a noop cast.
+    Value *InsertNoopCastOfTo(Value *V, const Type *Ty);
+
     /// InsertBinop - Insert the specified binary operator, doing a small amount
     /// of work to avoid inserting an obviously redundant operation.
-    static Value *InsertBinop(Instruction::BinaryOps Opcode, Value *LHS,
-                              Value *RHS, Instruction *InsertPt);
-  protected:
-    Value *expand(SCEV *S);
-    
-    Value *visitConstant(SCEVConstant *S) {
+    Value *InsertBinop(Instruction::BinaryOps Opcode, Value *LHS,
+                       Value *RHS, BasicBlock::iterator InsertPt);
+
+  private:
+    Value *expand(const SCEV *S);
+
+    Value *visitConstant(const SCEVConstant *S) {
       return S->getValue();
     }
 
-    Value *visitTruncateExpr(SCEVTruncateExpr *S);
+    Value *visitTruncateExpr(const SCEVTruncateExpr *S);
 
-    Value *visitZeroExtendExpr(SCEVZeroExtendExpr *S);
+    Value *visitZeroExtendExpr(const SCEVZeroExtendExpr *S);
 
-    Value *visitSignExtendExpr(SCEVSignExtendExpr *S);
+    Value *visitSignExtendExpr(const SCEVSignExtendExpr *S);
 
-    Value *visitAddExpr(SCEVAddExpr *S);
+    Value *visitAddExpr(const SCEVAddExpr *S);
 
-    Value *visitMulExpr(SCEVMulExpr *S);
+    Value *visitMulExpr(const SCEVMulExpr *S);
 
-    Value *visitUDivExpr(SCEVUDivExpr *S);
+    Value *visitUDivExpr(const SCEVUDivExpr *S);
 
-    Value *visitAddRecExpr(SCEVAddRecExpr *S);
+    Value *visitAddRecExpr(const SCEVAddRecExpr *S);
 
-    Value *visitSMaxExpr(SCEVSMaxExpr *S);
+    Value *visitSMaxExpr(const SCEVSMaxExpr *S);
 
-    Value *visitUMaxExpr(SCEVUMaxExpr *S);
+    Value *visitUMaxExpr(const SCEVUMaxExpr *S);
 
-    Value *visitUnknown(SCEVUnknown *S) {
+    Value *visitUnknown(const SCEVUnknown *S) {
       return S->getValue();
     }
   };

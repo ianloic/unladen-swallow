@@ -1,34 +1,33 @@
-// RUN: clang -fsyntax-only -verify %s
-
+// RUN: clang-cc -fsyntax-only -verify %s
 struct A { 
-  int a;  // expected-note{{member found by ambiguous name lookup}}
+  int a;  // expected-note 4{{member found by ambiguous name lookup}}
   static int b;
-  static int c; // expected-note{{member found by ambiguous name lookup}}
+  static int c; // expected-note 4{{member found by ambiguous name lookup}}
 
   enum E { enumerator };
 
   typedef int type;
 
   static void f(int);
-  void f(float); // expected-note{{member found by ambiguous name lookup}}
+  void f(float); // expected-note 2{{member found by ambiguous name lookup}}
 
   static void static_f(int);
   static void static_f(double);
 };
 
 struct B : A {
-  int d; // expected-note{{member found by ambiguous name lookup}}
+  int d; // expected-note 2{{member found by ambiguous name lookup}}
 
   enum E2 { enumerator2 };
 
-  enum E3 { enumerator3 }; // expected-note{{member found by ambiguous name lookup}}
+  enum E3 { enumerator3 }; // expected-note 2{{member found by ambiguous name lookup}}
 };
 
 struct C : A {
-  int c; // expected-note{{member found by ambiguous name lookup}}
-  int d; // expected-note{{member found by ambiguous name lookup}}
+  int c; // expected-note 2{{member found by ambiguous name lookup}}
+  int d; // expected-note 2{{member found by ambiguous name lookup}}
 
-  enum E3 { enumerator3_2 }; // expected-note{{member found by ambiguous name lookup}}
+  enum E3 { enumerator3_2 }; // expected-note 2{{member found by ambiguous name lookup}}
 };
 
 struct D : B, C {
@@ -48,7 +47,7 @@ void test_lookup(D d) {
 
   D::E2 e2 = D::enumerator2; // okay
 
-  D::E3 e3; // expected-error{{member 'E3' found in multiple base classes of different types}}
+  D::E3 e3; // expected-error{{multiple base classes}}
 }
 
 void D::test_lookup() {
@@ -68,18 +67,18 @@ void D::test_lookup() {
 }
 
 struct B2 : virtual A {
-  int d; // expected-note{{member found by ambiguous name lookup}}
+  int d; // expected-note 2{{member found by ambiguous name lookup}}
 
   enum E2 { enumerator2 };
 
-  enum E3 { enumerator3 }; // expected-note{{member found by ambiguous name lookup}}
+  enum E3 { enumerator3 }; // expected-note 2 {{member found by ambiguous name lookup}}
 };
 
 struct C2 : virtual A {
-  int c; // expected-note{{member found by ambiguous name lookup}}
-  int d; // expected-note{{member found by ambiguous name lookup}}
+  int c; // expected-note 2{{member found by ambiguous name lookup}}
+  int d; // expected-note 2{{member found by ambiguous name lookup}}
 
-  enum E3 { enumerator3_2 }; // expected-note{{member found by ambiguous name lookup}}
+  enum E3 { enumerator3_2 }; // expected-note 2{{member found by ambiguous name lookup}}
 };
 
 struct D2 : B2, C2 { 
@@ -130,3 +129,20 @@ void G::test_virtual_lookup() {
   a; // expected-error{{non-static member 'a' found in multiple base-class subobjects of type 'struct A'}}
   static_f(0); // okay
 }
+
+
+struct HasMemberType1 {
+  struct type { }; // expected-note{{member found by ambiguous name lookup}}
+};
+
+struct HasMemberType2 {
+  struct type { }; // expected-note{{member found by ambiguous name lookup}}
+};
+
+struct HasAnotherMemberType : HasMemberType1, HasMemberType2 { 
+  struct type { };
+};
+
+struct UsesAmbigMemberType : HasMemberType1, HasMemberType2 {
+  type t; // expected-error{{member 'type' found in multiple base classes of different types}}
+};

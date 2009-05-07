@@ -75,6 +75,21 @@ void DAGTypeLegalizer::ExpandRes_BIT_CONVERT(SDNode *N, SDValue &Lo,
       Lo = DAG.getNode(ISD::BIT_CONVERT, dl, NOutVT, Lo);
       Hi = DAG.getNode(ISD::BIT_CONVERT, dl, NOutVT, Hi);
       return;
+    case WidenVector: {
+      assert(!(InVT.getVectorNumElements() & 1) && "Unsupported BIT_CONVERT");
+      InOp = GetWidenedVector(InOp);
+      MVT InNVT = MVT::getVectorVT(InVT.getVectorElementType(),
+                                   InVT.getVectorNumElements()/2);
+      Lo = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, InNVT, InOp,
+                       DAG.getIntPtrConstant(0));
+      Hi = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, InNVT, InOp,
+                       DAG.getIntPtrConstant(InNVT.getVectorNumElements()));
+      if (TLI.isBigEndian())
+        std::swap(Lo, Hi);
+      Lo = DAG.getNode(ISD::BIT_CONVERT, dl, NOutVT, Lo);
+      Hi = DAG.getNode(ISD::BIT_CONVERT, dl, NOutVT, Hi);
+      return;
+    }
   }
 
   // Lower the bit-convert to a store/load from the stack.
@@ -120,16 +135,11 @@ void DAGTypeLegalizer::ExpandRes_EXTRACT_ELEMENT(SDNode *N, SDValue &Lo,
   GetExpandedOp(N->getOperand(0), Lo, Hi);
   SDValue Part = cast<ConstantSDNode>(N->getOperand(1))->getZExtValue() ?
                    Hi : Lo;
-  DebugLoc dl = N->getDebugLoc();
 
   assert(Part.getValueType() == N->getValueType(0) &&
          "Type twice as big as expanded type not itself expanded!");
-  MVT NVT = TLI.getTypeToTransformTo(N->getValueType(0));
 
-  Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, NVT, Part,
-                   DAG.getConstant(0, TLI.getPointerTy()));
-  Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, NVT, Part,
-                   DAG.getConstant(1, TLI.getPointerTy()));
+  GetPairElements(Part, Lo, Hi);
 }
 
 void DAGTypeLegalizer::ExpandRes_EXTRACT_VECTOR_ELT(SDNode *N, SDValue &Lo,
@@ -154,7 +164,7 @@ void DAGTypeLegalizer::ExpandRes_EXTRACT_VECTOR_ELT(SDNode *N, SDValue &Lo,
   if (Idx.getValueType().bitsLT(TLI.getPointerTy()))
     Idx = DAG.getNode(ISD::ZERO_EXTEND, dl, TLI.getPointerTy(), Idx);
 
-  Idx = DAG.getNode(ISD::ADD, Idx.getValueType(), Idx, Idx);
+  Idx = DAG.getNode(ISD::ADD, dl, Idx.getValueType(), Idx, Idx);
   Lo = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, NewVT, NewVec, Idx);
 
   Idx = DAG.getNode(ISD::ADD, dl, Idx.getValueType(), Idx,
@@ -209,9 +219,10 @@ void DAGTypeLegalizer::ExpandRes_VAARG(SDNode *N, SDValue &Lo, SDValue &Hi) {
   MVT NVT = TLI.getTypeToTransformTo(N->getValueType(0));
   SDValue Chain = N->getOperand(0);
   SDValue Ptr = N->getOperand(1);
+  DebugLoc dl = N->getDebugLoc();
 
-  Lo = DAG.getVAArg(NVT, Chain, Ptr, N->getOperand(2));
-  Hi = DAG.getVAArg(NVT, Lo.getValue(1), Ptr, N->getOperand(2));
+  Lo = DAG.getVAArg(NVT, dl, Chain, Ptr, N->getOperand(2));
+  Hi = DAG.getVAArg(NVT, dl, Lo.getValue(1), Ptr, N->getOperand(2));
 
   // Handle endianness of the load.
   if (TLI.isBigEndian())
@@ -261,6 +272,9 @@ SDValue DAGTypeLegalizer::ExpandOp_BUILD_VECTOR(SDNode *N) {
   MVT OldVT = N->getOperand(0).getValueType();
   MVT NewVT = TLI.getTypeToTransformTo(OldVT);
   DebugLoc dl = N->getDebugLoc();
+
+  assert(OldVT == VecVT.getVectorElementType() &&
+         "BUILD_VECTOR operand type doesn't match vector element type!");
 
   // Build a vector of twice the length out of the expanded elements.
   // For example <3 x i64> -> <6 x i32>.
@@ -328,10 +342,12 @@ SDValue DAGTypeLegalizer::ExpandOp_INSERT_VECTOR_ELT(SDNode *N) {
 SDValue DAGTypeLegalizer::ExpandOp_SCALAR_TO_VECTOR(SDNode *N) {
   DebugLoc dl = N->getDebugLoc();
   MVT VT = N->getValueType(0);
+  assert(VT.getVectorElementType() == N->getOperand(0).getValueType() &&
+         "SCALAR_TO_VECTOR operand type doesn't match vector element type!");
   unsigned NumElts = VT.getVectorNumElements();
   SmallVector<SDValue, 16> Ops(NumElts);
   Ops[0] = N->getOperand(0);
-  SDValue UndefVal = DAG.getNode(ISD::UNDEF, dl, Ops[0].getValueType());
+  SDValue UndefVal = DAG.getUNDEF(Ops[0].getValueType());
   for (unsigned i = 1; i < NumElts; ++i)
     Ops[i] = UndefVal;
   return DAG.getNode(ISD::BUILD_VECTOR, dl, VT, &Ops[0], NumElts);
@@ -432,6 +448,6 @@ void DAGTypeLegalizer::SplitRes_UNDEF(SDNode *N, SDValue &Lo, SDValue &Hi) {
   MVT LoVT, HiVT;
   DebugLoc dl = N->getDebugLoc();
   GetSplitDestVTs(N->getValueType(0), LoVT, HiVT);
-  Lo = DAG.getNode(ISD::UNDEF, dl, LoVT);
-  Hi = DAG.getNode(ISD::UNDEF, dl, HiVT);
+  Lo = DAG.getUNDEF(LoVT);
+  Hi = DAG.getUNDEF(HiVT);
 }

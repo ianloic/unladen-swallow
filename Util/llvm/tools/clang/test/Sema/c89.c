@@ -1,4 +1,4 @@
-/* RUN: clang %s -std=c89 -pedantic -fsyntax-only -verify
+/* RUN: clang-cc %s -std=c89 -pedantic -fsyntax-only -verify
  */
 void test1() {
   {
@@ -67,3 +67,16 @@ void test11 (int x[static 4]); /* expected-warning {{use of C99-specific array f
 void test12 (int x[const 4]) { /* expected-warning {{use of C99-specific array features}} */
   int Y[x[1]]; /* expected-warning {{variable length arrays are a C99 feature, accepted as an extension}} */
 }
+
+/* PR4074 */
+struct test13 {
+  int X[23];
+} test13a();
+
+void test13b() {
+  int a = test13a().X[1]; /* expected-warning {{ISO C90 does not allow subscripting non-lvalue array}} */
+  int b = 1[test13a().X]; /* expected-warning {{ISO C90 does not allow subscripting non-lvalue array}} */
+}
+
+/* Make sure we allow *test14 as a "function designator" */
+int test14() { return (&*test14)(); }

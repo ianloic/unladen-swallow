@@ -1,8 +1,9 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 @interface B1 {
 @public
   double fill_B;	// expected-note {{previous declaration is here}}
+  unsigned : 0;
 }
 @end
 
@@ -10,6 +11,7 @@
 @public
   int one;	// expected-note {{previous declaration is here}}
   int one;	// expected-error {{duplicate member 'one'}}
+  unsigned : 0;
 }
 @end
 

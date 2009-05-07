@@ -82,7 +82,9 @@ GlobalAssign ::= GlobalName "=" ;
 GVInternalLinkage
   ::= + internal
  | weak
+ | "weak_odr"
  | linkonce
+ | "linkonce_odr"
  | appending
  | dllexport
  | common
@@ -111,11 +113,13 @@ FunctionDefineLinkage
   ::= + _
  | internal
  | linkonce
+ | "linkonce_odr"
  | weak
+ | "weak_odr"
  | dllexport
  ;
 
-AliasLinkage ::= + _ | weak | internal ;
+AliasLinkage ::= + _ | weak | "weak_odr" | internal ;
 
 OptCallingConv ::= + _ |
                  ccc |
@@ -126,9 +130,7 @@ OptCallingConv ::= + _ |
                  cc EUINT64VAL ;
 
 ParamAttr ::= zeroext
- | zext
  | signext
- | sext
  | inreg
  | sret
  | noalias

@@ -8,13 +8,12 @@
 //===----------------------------------------------------------------------===//
 //
 // This file provides Sema routines for C++ inheritance semantics,
-// including searching the inheritance hierarchy and (eventually)
-// access checking.
+// including searching the inheritance hierarchy.
 //
 //===----------------------------------------------------------------------===//
 
-#include "Sema.h"
 #include "SemaInherit.h"
+#include "Sema.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Type.h"
@@ -25,6 +24,34 @@
 #include <string>
 
 using namespace clang;
+
+/// \brief Computes the set of declarations referenced by these base
+/// paths.
+void BasePaths::ComputeDeclsFound() {
+  assert(NumDeclsFound == 0 && !DeclsFound && 
+         "Already computed the set of declarations");
+  
+  std::set<NamedDecl *> Decls;
+  for (BasePaths::paths_iterator Path = begin(), PathEnd = end();
+       Path != PathEnd; ++Path)
+    Decls.insert(*Path->Decls.first);
+
+  NumDeclsFound = Decls.size();
+  DeclsFound = new NamedDecl * [NumDeclsFound];
+  std::copy(Decls.begin(), Decls.end(), DeclsFound);
+}
+
+NamedDecl **BasePaths::found_decls_begin() {
+  if (NumDeclsFound == 0)
+    ComputeDeclsFound();
+  return DeclsFound;
+}
+
+NamedDecl **BasePaths::found_decls_end() {
+  if (NumDeclsFound == 0)
+    ComputeDeclsFound();
+  return DeclsFound + NumDeclsFound;
+}
 
 /// isAmbiguous - Determines whether the set of paths provided is
 /// ambiguous, i.e., there are two or more paths that refer to
@@ -87,7 +114,7 @@ bool Sema::IsDerivedFrom(QualType Derived, QualType Base, BasePaths &Paths) {
     return false;
 
   Paths.setOrigin(Derived);
-  return LookupInBases(cast<CXXRecordType>(Derived->getAsRecordType())->getDecl(),
+  return LookupInBases(cast<CXXRecordDecl>(Derived->getAsRecordType()->getDecl()),
                        MemberLookupCriteria(Base), Paths);
 }
 
@@ -123,7 +150,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
       if (Paths.isDetectingVirtual() && Paths.DetectedVirtual == 0) {
         // If this is the first virtual we find, remember it. If it turns out
         // there is no base path here, we'll reset it later.
-        Paths.DetectedVirtual = cast<CXXRecordType>(BaseType->getAsRecordType());
+        Paths.DetectedVirtual = BaseType->getAsRecordType();
         SetVirtual = true;
       }
     } else
@@ -133,6 +160,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
       // Add this base specifier to the current path.
       BasePathElement Element;
       Element.Base = &*BaseSpec;
+      Element.Class = Class;
       if (BaseSpec->isVirtual())
         Element.SubobjectNumber = 0;
       else
@@ -151,7 +179,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
       FoundPathToThisBase 
         = (Context.getCanonicalType(BaseSpec->getType()) == Criteria.Base);
     } else {
-      Paths.ScratchPath.Decls = BaseRecord->lookup(Criteria.Name);
+      Paths.ScratchPath.Decls = BaseRecord->lookup(Context, Criteria.Name);
       while (Paths.ScratchPath.Decls.first != Paths.ScratchPath.Decls.second) {
         if (isAcceptableLookupResult(*Paths.ScratchPath.Decls.first,
                                      Criteria.NameKind, Criteria.IDNS)) {
@@ -203,7 +231,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
 /// CheckDerivedToBaseConversion - Check whether the Derived-to-Base
 /// conversion (where Derived and Base are class types) is
 /// well-formed, meaning that the conversion is unambiguous (and
-/// FIXME: that all of the base classes are accessible). Returns true
+/// that all of the base classes are accessible). Returns true
 /// and emits a diagnostic if the code is ill-formed, returns false
 /// otherwise. Loc is the location where this routine should point to
 /// if there is an error, and Range is the source range to highlight
@@ -215,15 +243,17 @@ Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
   // ambiguous. This is slightly more expensive than checking whether
   // the Derived to Base conversion exists, because here we need to
   // explore multiple paths to determine if there is an ambiguity.
-  BasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/false,
+  BasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/true,
                   /*DetectVirtual=*/false);
   bool DerivationOkay = IsDerivedFrom(Derived, Base, Paths);
   assert(DerivationOkay &&
          "Can only be used with a derived-to-base conversion");
   (void)DerivationOkay;
 
-  if (!Paths.isAmbiguous(Context.getCanonicalType(Base).getUnqualifiedType()))
-    return false;
+  if (!Paths.isAmbiguous(Context.getCanonicalType(Base).getUnqualifiedType())) {
+    // Check that the base class can be accessed.
+    return CheckBaseClassAccess(Derived, Base, Paths, Loc);
+  }
 
   // We know that the derived-to-base conversion is ambiguous, and
   // we're going to produce a diagnostic. Perform the derived-to-base

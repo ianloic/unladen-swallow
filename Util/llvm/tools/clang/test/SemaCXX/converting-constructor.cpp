@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 class Z { };
 
 class Y { 
@@ -12,13 +12,13 @@ public:
   X(const Y&);
 };
 
-void f(X);
+void f(X); // expected-note{{candidate function}}
 
 void g(short s, Y y, Z z) {
   f(s);
   f(1.0f);
   f(y);
-  f(z); // expected-error{{incompatible type passing 'class Z', expected 'class X'}}
+  f(z); // expected-error{{no matching function}}
 }
 
 

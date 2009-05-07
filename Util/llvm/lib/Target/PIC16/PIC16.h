@@ -15,6 +15,7 @@
 #ifndef LLVM_TARGET_PIC16_H
 #define LLVM_TARGET_PIC16_H
 
+#include "llvm/Target/TargetMachine.h"
 #include <iosfwd>
 #include <cassert>
 
@@ -74,7 +75,9 @@ namespace PIC16CC {
 
   FunctionPass *createPIC16ISelDag(PIC16TargetMachine &TM);
   FunctionPass *createPIC16CodePrinterPass(raw_ostream &OS, 
-                                           PIC16TargetMachine &TM);
+                                           PIC16TargetMachine &TM,
+                                           CodeGenOpt::Level OptLevel,
+                                           bool Verbose);
 } // end namespace llvm;
 
 // Defines symbolic names for PIC16 registers.  This defines a mapping from

@@ -14,11 +14,14 @@
 
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Constants.h"
+#include "llvm/GlobalVariable.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/MathExtras.h"
@@ -159,6 +162,9 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB) {
 bool llvm::isInstructionTriviallyDead(Instruction *I) {
   if (!I->use_empty() || isa<TerminatorInst>(I)) return false;
 
+  // We don't want debug info removed by anything this general.
+  if (isa<DbgInfoIntrinsic>(I)) return false;
+    
   if (!I->mayWriteToMemory())
     return true;
 
@@ -175,11 +181,7 @@ bool llvm::isInstructionTriviallyDead(Instruction *I) {
 /// RecursivelyDeleteTriviallyDeadInstructions - If the specified value is a
 /// trivially dead instruction, delete it.  If that makes any of its operands
 /// trivially dead, delete them too, recursively.
-///
-/// If DeadInst is specified, the vector is filled with the instructions that
-/// are actually deleted.
-void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V,
-                                      SmallVectorImpl<Instruction*> *DeadInst) {
+void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V) {
   Instruction *I = dyn_cast<Instruction>(V);
   if (!I || !I->use_empty() || !isInstructionTriviallyDead(I))
     return;
@@ -191,10 +193,6 @@ void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V,
     I = DeadInsts.back();
     DeadInsts.pop_back();
 
-    // If the client wanted to know, tell it about deleted instructions.
-    if (DeadInst)
-      DeadInst->push_back(I);
-    
     // Null out all of the instruction's operands to see if any operand becomes
     // dead as we go.
     for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
@@ -215,6 +213,35 @@ void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V,
   }
 }
 
+/// RecursivelyDeleteDeadPHINode - If the specified value is an effectively
+/// dead PHI node, due to being a def-use chain of single-use nodes that
+/// either forms a cycle or is terminated by a trivially dead instruction,
+/// delete it.  If that makes any of its operands trivially dead, delete them
+/// too, recursively.
+void
+llvm::RecursivelyDeleteDeadPHINode(PHINode *PN) {
+
+  // We can remove a PHI if it is on a cycle in the def-use graph
+  // where each node in the cycle has degree one, i.e. only one use,
+  // and is an instruction with no side effects.
+  if (!PN->hasOneUse())
+    return;
+
+  SmallPtrSet<PHINode *, 4> PHIs;
+  PHIs.insert(PN);
+  for (Instruction *J = cast<Instruction>(*PN->use_begin());
+       J->hasOneUse() && !J->mayWriteToMemory();
+       J = cast<Instruction>(*J->use_begin()))
+    // If we find a PHI more than once, we're on a cycle that
+    // won't prove fruitful.
+    if (PHINode *JP = dyn_cast<PHINode>(J))
+      if (!PHIs.insert(cast<PHINode>(JP))) {
+        // Break the cycle and delete the PHI and its operands.
+        JP->replaceAllUsesWith(UndefValue::get(JP->getType()));
+        RecursivelyDeleteTriviallyDeadInstructions(JP);
+        break;
+      }
+}
 
 //===----------------------------------------------------------------------===//
 //  Control Flow Graph Restructuring...
@@ -247,4 +274,68 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB) {
   
   // Nuke BB.
   PredBB->eraseFromParent();
+}
+
+/// OnlyUsedByDbgIntrinsics - Return true if the instruction I is only used
+/// by DbgIntrinsics. If DbgInUses is specified then the vector is filled 
+/// with the DbgInfoIntrinsic that use the instruction I.
+bool llvm::OnlyUsedByDbgInfoIntrinsics(Instruction *I, 
+                               SmallVectorImpl<DbgInfoIntrinsic *> *DbgInUses) {
+  if (DbgInUses)
+    DbgInUses->clear();
+
+  for (Value::use_iterator UI = I->use_begin(), UE = I->use_end(); UI != UE; 
+       ++UI) {
+    if (DbgInfoIntrinsic *DI = dyn_cast<DbgInfoIntrinsic>(*UI)) {
+      if (DbgInUses)
+        DbgInUses->push_back(DI);
+    } else {
+      if (DbgInUses)
+        DbgInUses->clear();
+      return false;
+    }
+  }
+  return true;
+}
+
+/// UserIsDebugInfo - Return true if U is a constant expr used by 
+/// llvm.dbg.variable or llvm.dbg.global_variable
+bool llvm::UserIsDebugInfo(User *U) {
+  ConstantExpr *CE = dyn_cast<ConstantExpr>(U);
+
+  if (!CE || CE->getNumUses() != 1)
+    return false;
+
+  Constant *Init = dyn_cast<Constant>(CE->use_back());
+  if (!Init || Init->getNumUses() != 1)
+    return false;
+
+  GlobalVariable *GV = dyn_cast<GlobalVariable>(Init->use_back());
+  if (!GV || !GV->hasInitializer() || GV->getInitializer() != Init)
+    return false;
+
+  DIVariable DV(GV);
+  if (!DV.isNull()) 
+    return true; // User is llvm.dbg.variable
+
+  DIGlobalVariable DGV(GV);
+  if (!DGV.isNull())
+    return true; // User is llvm.dbg.global_variable
+
+  return false;
+}
+
+/// RemoveDbgInfoUser - Remove an User which is representing debug info.
+void llvm::RemoveDbgInfoUser(User *U) {
+  assert (UserIsDebugInfo(U) && "Unexpected User!");
+  ConstantExpr *CE = cast<ConstantExpr>(U);
+  while (!CE->use_empty()) {
+    Constant *C = cast<Constant>(CE->use_back());
+    while (!C->use_empty()) {
+      GlobalVariable *GV = cast<GlobalVariable>(C->use_back());
+      GV->eraseFromParent();
+    }
+    C->destroyConstant();
+  }
+  CE->destroyConstant();
 }

@@ -16,6 +16,7 @@
 
 #include "clang/Lex/Token.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Allocator.h"
 #include <vector>
 #include <cassert>
 
@@ -30,6 +31,8 @@ class MacroInfo {
 
   /// Location - This is the place the macro is defined.
   SourceLocation Location;
+  /// EndLocation - The location of the last token in the macro.
+  SourceLocation EndLocation;
 
   /// Arguments - The list of arguments for a function-like macro.  This can be
   /// empty, for, e.g. "#define X()".  In a C99-style variadic macro, this
@@ -72,17 +75,39 @@ private:
   /// been used, or if it is not defined in the main file.  This is used to 
   /// emit -Wunused-macros diagnostics.
   bool IsUsed : 1;
+  
+  ~MacroInfo() {
+    assert(ArgumentList == 0 && "Didn't call destroy before dtor!");
+  }
+  
 public:
   MacroInfo(SourceLocation DefLoc);
   
-  ~MacroInfo() {
-    delete[] ArgumentList;
+  /// FreeArgumentList - Free the argument list of the macro, restoring it to a
+  /// state where it can be reused for other devious purposes.
+  void FreeArgumentList(llvm::BumpPtrAllocator &PPAllocator) {
+    PPAllocator.Deallocate(ArgumentList);
+    ArgumentList = 0;
+    NumArguments = 0;
+  }
+  
+  /// Destroy - destroy this MacroInfo object.
+  void Destroy(llvm::BumpPtrAllocator &PPAllocator) {
+    FreeArgumentList(PPAllocator);
+    this->~MacroInfo();
   }
   
   /// getDefinitionLoc - Return the location that the macro was defined at.
   ///
   SourceLocation getDefinitionLoc() const { return Location; }
-  
+
+  /// setDefinitionEndLoc - Set the location of the last token in the macro.
+  ///
+  void setDefinitionEndLoc(SourceLocation EndLoc) { EndLocation = EndLoc; }
+  /// getDefinitionEndLoc - Return the location of the last token in the macro.
+  ///
+  SourceLocation getDefinitionEndLoc() const { return EndLocation; }
+
   /// isIdenticalTo - Return true if the specified macro definition is equal to
   /// this macro in spelling, arguments, and whitespace.  This is used to emit
   /// duplicate definition warnings.  This implements the rules in C99 6.10.3.
@@ -102,20 +127,22 @@ public:
 
   /// setArgumentList - Set the specified list of identifiers as the argument
   /// list for this macro.
-  template<typename ItTy>
-  void setArgumentList(ItTy ArgBegin, ItTy ArgEnd) {
-    assert(ArgumentList == 0 && "Argument list already set!");
-    unsigned NumArgs = ArgEnd-ArgBegin;
+  void setArgumentList(IdentifierInfo* const *List, unsigned NumArgs,
+                       llvm::BumpPtrAllocator &PPAllocator) {
+    assert(ArgumentList == 0 && NumArguments == 0 &&
+           "Argument list already set!");
     if (NumArgs == 0) return;
+    
     NumArguments = NumArgs;
-    ArgumentList = new IdentifierInfo*[NumArgs];
-    for (unsigned i = 0; ArgBegin != ArgEnd; ++i, ++ArgBegin)
-      ArgumentList[i] = *ArgBegin;
+    ArgumentList = PPAllocator.Allocate<IdentifierInfo*>(NumArgs);
+    for (unsigned i = 0; i != NumArgs; ++i)
+      ArgumentList[i] = List[i];
   }
   
   /// Arguments - The list of arguments for a function-like macro.  This can be
   /// empty, for, e.g. "#define X()".
   typedef IdentifierInfo* const *arg_iterator;
+  bool arg_empty() const { return NumArguments == 0; }
   arg_iterator arg_begin() const { return ArgumentList; }
   arg_iterator arg_end() const { return ArgumentList+NumArguments; }
   unsigned getNumArgs() const { return NumArguments; }
@@ -163,6 +190,7 @@ public:
   typedef llvm::SmallVector<Token, 8>::const_iterator tokens_iterator;
   tokens_iterator tokens_begin() const { return ReplacementTokens.begin(); }
   tokens_iterator tokens_end() const { return ReplacementTokens.end(); }
+  bool tokens_empty() const { return ReplacementTokens.empty(); }
   
   /// AddTokenToBody - Add the specified token to the replacement text for the
   /// macro.

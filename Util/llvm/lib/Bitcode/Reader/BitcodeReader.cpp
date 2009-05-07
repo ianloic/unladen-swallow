@@ -59,15 +59,18 @@ static GlobalValue::LinkageTypes GetDecodedLinkage(unsigned Val) {
   switch (Val) {
   default: // Map unknown/new linkages to external
   case 0: return GlobalValue::ExternalLinkage;
-  case 1: return GlobalValue::WeakLinkage;
+  case 1: return GlobalValue::WeakAnyLinkage;
   case 2: return GlobalValue::AppendingLinkage;
   case 3: return GlobalValue::InternalLinkage;
-  case 4: return GlobalValue::LinkOnceLinkage;
+  case 4: return GlobalValue::LinkOnceAnyLinkage;
   case 5: return GlobalValue::DLLImportLinkage;
   case 6: return GlobalValue::DLLExportLinkage;
   case 7: return GlobalValue::ExternalWeakLinkage;
   case 8: return GlobalValue::CommonLinkage;
   case 9: return GlobalValue::PrivateLinkage;
+  case 10: return GlobalValue::WeakODRLinkage;
+  case 11: return GlobalValue::LinkOnceODRLinkage;
+  case 12: return GlobalValue::AvailableExternallyLinkage;
   }
 }
 
@@ -144,64 +147,67 @@ namespace {
     
     
     /// Provide fast operand accessors
-    DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+    //DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
   };
 }
 
-
-  // FIXME: can we inherit this from ConstantExpr?
+// FIXME: can we inherit this from ConstantExpr?
 template <>
 struct OperandTraits<ConstantPlaceHolder> : FixedNumOperandTraits<1> {
 };
-
-DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ConstantPlaceHolder, Value)
 }
 
-void BitcodeReaderValueList::resize(unsigned Desired) {
-  if (Desired > Capacity) {
-    // Since we expect many values to come from the bitcode file we better
-    // allocate the double amount, so that the array size grows exponentially
-    // at each reallocation.  Also, add a small amount of 100 extra elements
-    // each time, to reallocate less frequently when the array is still small.
-    //
-    Capacity = Desired * 2 + 100;
-    Use *New = allocHungoffUses(Capacity);
-    Use *Old = OperandList;
-    unsigned Ops = getNumOperands();
-    for (int i(Ops - 1); i >= 0; --i)
-      New[i] = Old[i].get();
-    OperandList = New;
-    if (Old) Use::zap(Old, Old + Ops, true);
+
+void BitcodeReaderValueList::AssignValue(Value *V, unsigned Idx) {
+  if (Idx == size()) {
+    push_back(V);
+    return;
+  }
+  
+  if (Idx >= size())
+    resize(Idx+1);
+  
+  WeakVH &OldV = ValuePtrs[Idx];
+  if (OldV == 0) {
+    OldV = V;
+    return;
+  }
+  
+  // Handle constants and non-constants (e.g. instrs) differently for
+  // efficiency.
+  if (Constant *PHC = dyn_cast<Constant>(&*OldV)) {
+    ResolveConstants.push_back(std::make_pair(PHC, Idx));
+    OldV = V;
+  } else {
+    // If there was a forward reference to this value, replace it.
+    Value *PrevVal = OldV;
+    OldV->replaceAllUsesWith(V);
+    delete PrevVal;
   }
 }
+  
 
 Constant *BitcodeReaderValueList::getConstantFwdRef(unsigned Idx,
                                                     const Type *Ty) {
-  if (Idx >= size()) {
-    // Insert a bunch of null values.
+  if (Idx >= size())
     resize(Idx + 1);
-    NumOperands = Idx+1;
-  }
 
-  if (Value *V = OperandList[Idx]) {
+  if (Value *V = ValuePtrs[Idx]) {
     assert(Ty == V->getType() && "Type mismatch in constant table!");
     return cast<Constant>(V);
   }
 
   // Create and return a placeholder, which will later be RAUW'd.
   Constant *C = new ConstantPlaceHolder(Ty);
-  OperandList[Idx] = C;
+  ValuePtrs[Idx] = C;
   return C;
 }
 
 Value *BitcodeReaderValueList::getValueFwdRef(unsigned Idx, const Type *Ty) {
-  if (Idx >= size()) {
-    // Insert a bunch of null values.
+  if (Idx >= size())
     resize(Idx + 1);
-    NumOperands = Idx+1;
-  }
   
-  if (Value *V = OperandList[Idx]) {
+  if (Value *V = ValuePtrs[Idx]) {
     assert((Ty == 0 || Ty == V->getType()) && "Type mismatch in value table!");
     return V;
   }
@@ -211,7 +217,7 @@ Value *BitcodeReaderValueList::getValueFwdRef(unsigned Idx, const Type *Ty) {
   
   // Create and return a placeholder, which will later be RAUW'd.
   Value *V = new Argument(Ty);
-  OperandList[Idx] = V;
+  ValuePtrs[Idx] = V;
   return V;
 }
 
@@ -230,7 +236,7 @@ void BitcodeReaderValueList::ResolveConstantForwardRefs() {
   SmallVector<Constant*, 64> NewOps;
   
   while (!ResolveConstants.empty()) {
-    Value *RealVal = getOperand(ResolveConstants.back().second);
+    Value *RealVal = operator[](ResolveConstants.back().second);
     Constant *Placeholder = ResolveConstants.back().first;
     ResolveConstants.pop_back();
     
@@ -266,7 +272,7 @@ void BitcodeReaderValueList::ResolveConstantForwardRefs() {
                              std::pair<Constant*, unsigned>(cast<Constant>(*I),
                                                             0));
           assert(It != ResolveConstants.end() && It->first == *I);
-          NewOp = this->getOperand(It->second);
+          NewOp = operator[](It->second);
         }
 
         NewOps.push_back(cast<Constant>(NewOp));
@@ -281,10 +287,12 @@ void BitcodeReaderValueList::ResolveConstantForwardRefs() {
                                    UserCS->getType()->isPacked());
       } else if (isa<ConstantVector>(UserC)) {
         NewC = ConstantVector::get(&NewOps[0], NewOps.size());
-      } else {
-        // Must be a constant expression.
+      } else if (isa<ConstantExpr>(UserC)) {
         NewC = cast<ConstantExpr>(UserC)->getWithOperands(&NewOps[0],
                                                           NewOps.size());
+      } else {
+        assert(isa<MDNode>(UserC) && "Must be a metadata node.");
+        NewC = MDNode::get(&NewOps[0], NewOps.size());
       }
       
       UserC->replaceAllUsesWith(NewC);
@@ -799,9 +807,13 @@ bool BitcodeReader::ParseConstants() {
         V = ConstantFP::get(APFloat(APInt(32, (uint32_t)Record[0])));
       else if (CurTy == Type::DoubleTy)
         V = ConstantFP::get(APFloat(APInt(64, Record[0])));
-      else if (CurTy == Type::X86_FP80Ty)
-        V = ConstantFP::get(APFloat(APInt(80, 2, &Record[0])));
-      else if (CurTy == Type::FP128Ty)
+      else if (CurTy == Type::X86_FP80Ty) {
+        // Bits are not stored the same way as a normal i80 APInt, compensate.
+        uint64_t Rearrange[2];
+        Rearrange[0] = (Record[1] & 0xffffLL) | (Record[0] << 16);
+        Rearrange[1] = Record[0] >> 48;
+        V = ConstantFP::get(APFloat(APInt(80, 2, Rearrange)));
+      } else if (CurTy == Type::FP128Ty)
         V = ConstantFP::get(APFloat(APInt(128, 2, &Record[0]), true));
       else if (CurTy == Type::PPC_FP128Ty)
         V = ConstantFP::get(APFloat(APInt(128, 2, &Record[0])));
@@ -933,11 +945,23 @@ bool BitcodeReader::ParseConstants() {
     case bitc::CST_CODE_CE_SHUFFLEVEC: { // CE_SHUFFLEVEC: [opval, opval, opval]
       const VectorType *OpTy = dyn_cast<VectorType>(CurTy);
       if (Record.size() < 3 || OpTy == 0)
-        return Error("Invalid CE_INSERTELT record");
+        return Error("Invalid CE_SHUFFLEVEC record");
       Constant *Op0 = ValueList.getConstantFwdRef(Record[0], OpTy);
       Constant *Op1 = ValueList.getConstantFwdRef(Record[1], OpTy);
       const Type *ShufTy=VectorType::get(Type::Int32Ty, OpTy->getNumElements());
       Constant *Op2 = ValueList.getConstantFwdRef(Record[2], ShufTy);
+      V = ConstantExpr::getShuffleVector(Op0, Op1, Op2);
+      break;
+    }
+    case bitc::CST_CODE_CE_SHUFVEC_EX: { // [opty, opval, opval, opval]
+      const VectorType *RTy = dyn_cast<VectorType>(CurTy);
+      const VectorType *OpTy = dyn_cast<VectorType>(getTypeByID(Record[0]));
+      if (Record.size() < 4 || RTy == 0 || OpTy == 0)
+        return Error("Invalid CE_SHUFVEC_EX record");
+      Constant *Op0 = ValueList.getConstantFwdRef(Record[1], OpTy);
+      Constant *Op1 = ValueList.getConstantFwdRef(Record[2], OpTy);
+      const Type *ShufTy=VectorType::get(Type::Int32Ty, RTy->getNumElements());
+      Constant *Op2 = ValueList.getConstantFwdRef(Record[3], ShufTy);
       V = ConstantExpr::getShuffleVector(Op0, Op1, Op2);
       break;
     }
@@ -976,6 +1000,29 @@ bool BitcodeReader::ParseConstants() {
       const PointerType *PTy = cast<PointerType>(CurTy);
       V = InlineAsm::get(cast<FunctionType>(PTy->getElementType()),
                          AsmStr, ConstrStr, HasSideEffects);
+      break;
+    }
+    case bitc::CST_CODE_MDSTRING: {
+      if (Record.size() < 2) return Error("Invalid MDSTRING record");
+      unsigned MDStringLength = Record.size();
+      SmallString<8> String;
+      String.resize(MDStringLength);
+      for (unsigned i = 0; i != MDStringLength; ++i)
+        String[i] = Record[i];
+      V = MDString::get(String.c_str(), String.c_str() + MDStringLength);
+      break;
+    }
+    case bitc::CST_CODE_MDNODE: {
+      if (Record.empty() || Record.size() % 2 == 1)
+        return Error("Invalid CST_MDNODE record");
+      
+      unsigned Size = Record.size();
+      SmallVector<Constant*, 8> Elts;
+      for (unsigned i = 0; i != Size; i += 2) {
+        const Type *Ty = getTypeByID(Record[i], false);
+        Elts.push_back(ValueList.getConstantFwdRef(Record[i+1], Ty));
+      }
+      V = MDNode::get(&Elts[0], Elts.size());
       break;
     }
     }
@@ -1284,48 +1331,6 @@ bool BitcodeReader::ParseModule(const std::string &ModuleID) {
   return Error("Premature end of bitstream");
 }
 
-/// SkipWrapperHeader - Some systems wrap bc files with a special header for
-/// padding or other reasons.  The format of this header is:
-///
-/// struct bc_header {
-///   uint32_t Magic;         // 0x0B17C0DE
-///   uint32_t Version;       // Version, currently always 0.
-///   uint32_t BitcodeOffset; // Offset to traditional bitcode file.
-///   uint32_t BitcodeSize;   // Size of traditional bitcode file.
-///   ... potentially other gunk ...
-/// };
-/// 
-/// This function is called when we find a file with a matching magic number.
-/// In this case, skip down to the subsection of the file that is actually a BC
-/// file.
-static bool SkipWrapperHeader(unsigned char *&BufPtr, unsigned char *&BufEnd) {
-  enum {
-    KnownHeaderSize = 4*4,  // Size of header we read.
-    OffsetField = 2*4,      // Offset in bytes to Offset field.
-    SizeField = 3*4         // Offset in bytes to Size field.
-  };
-  
-  
-  // Must contain the header!
-  if (BufEnd-BufPtr < KnownHeaderSize) return true;
-  
-  unsigned Offset = ( BufPtr[OffsetField  ]        |
-                     (BufPtr[OffsetField+1] << 8)  |
-                     (BufPtr[OffsetField+2] << 16) |
-                     (BufPtr[OffsetField+3] << 24));
-  unsigned Size   = ( BufPtr[SizeField    ]        |
-                     (BufPtr[SizeField  +1] << 8)  |
-                     (BufPtr[SizeField  +2] << 16) |
-                     (BufPtr[SizeField  +3] << 24));
-  
-  // Verify that Offset+Size fits in the file.
-  if (Offset+Size > unsigned(BufEnd-BufPtr))
-    return true;
-  BufPtr += Offset;
-  BufEnd = BufPtr+Size;
-  return false;
-}
-
 bool BitcodeReader::ParseBitcode() {
   TheModule = 0;
   
@@ -1337,12 +1342,12 @@ bool BitcodeReader::ParseBitcode() {
   
   // If we have a wrapper header, parse it and ignore the non-bc file contents.
   // The magic number is 0x0B17C0DE stored in little endian.
-  if (BufPtr != BufEnd && BufPtr[0] == 0xDE && BufPtr[1] == 0xC0 && 
-      BufPtr[2] == 0x17 && BufPtr[3] == 0x0B)
-    if (SkipWrapperHeader(BufPtr, BufEnd))
+  if (isBitcodeWrapper(BufPtr, BufEnd))
+    if (SkipBitcodeWrapperHeader(BufPtr, BufEnd))
       return Error("Invalid bitcode wrapper header");
   
-  Stream.init(BufPtr, BufEnd);
+  StreamFile.init(BufPtr, BufEnd);
+  Stream.init(StreamFile);
   
   // Sniff for the signature.
   if (Stream.Read(8) != 'B' ||
@@ -2046,7 +2051,8 @@ Module *BitcodeReader::materializeModule(std::string *ErrInfo) {
         if (CallInst* CI = dyn_cast<CallInst>(*UI++))
           UpgradeIntrinsicCall(CI, I->second);
       }
-      ValueList.replaceUsesOfWith(I->first, I->second);
+      if (!I->first->use_empty())
+        I->first->replaceAllUsesWith(I->second);
       I->first->eraseFromParent();
     }
   }

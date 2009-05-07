@@ -24,18 +24,19 @@ namespace clang {
 /// This class contains layout information for one RecordDecl,
 /// which is a struct/union/class.  The decl represented must be a definition,
 /// not a forward declaration.  
-/// This class is also used to contain layout informaiton for one 
+/// This class is also used to contain layout information for one 
 /// ObjCInterfaceDecl. FIXME - Find appropriate name.
 /// These objects are managed by ASTContext.
 class ASTRecordLayout {
   uint64_t Size;        // Size of record in bits.
+  uint64_t NextOffset;  // Next available offset
+  uint64_t *FieldOffsets;
   unsigned Alignment;   // Alignment of record in bits.
   unsigned FieldCount;  // Number of fields
-  uint64_t *FieldOffsets;
   friend class ASTContext;
 
   ASTRecordLayout(uint64_t S = 0, unsigned A = 8) 
-    : Size(S), Alignment(A), FieldCount(0) {}
+    : Size(S), NextOffset(S), Alignment(A), FieldCount(0) {}
   ~ASTRecordLayout() {
     delete [] FieldOffsets;
   }
@@ -71,14 +72,27 @@ class ASTRecordLayout {
   void operator=(const ASTRecordLayout&); // DO NOT IMPLEMENT
 public:
   
+  /// getAlignment - Get the record alignment in bits.
   unsigned getAlignment() const { return Alignment; }
+
+  /// getSize - Get the record size in bits.
   uint64_t getSize() const { return Size; }
   
+  /// getFieldCount - Get the number of fields in the layout.
+  unsigned getFieldCount() const { return FieldCount; }
+  
+  /// getFieldOffset - Get the offset of the given field index, in
+  /// bits.
   uint64_t getFieldOffset(unsigned FieldNo) const {
     assert (FieldNo < FieldCount && "Invalid Field No");
     return FieldOffsets[FieldNo];
   }
     
+  /// getNextOffset - Get the next available (unused) offset in the
+  /// structure, in bits.
+  uint64_t getNextOffset() const {
+    return NextOffset;
+  }
 };
 
 }  // end namespace clang

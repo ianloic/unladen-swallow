@@ -18,8 +18,9 @@
 #include <vector>
 #include <map>
 #include <string>
-#include "llvm/System/Mutex.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/System/Mutex.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 
@@ -66,6 +67,7 @@ class ExecutionEngine {
   bool LazyCompilationDisabled;
   bool GVCompilationDisabled;
   bool SymbolSearchingDisabled;
+  bool DlsymStubsEnabled;
 
 protected:
   /// Modules - This is a list of ModuleProvider's that we are JIT'ing from.  We
@@ -83,7 +85,7 @@ protected:
   // libraries, the JIT and Interpreter set these functions to ctor pointers
   // at startup time if they are linked in.
   typedef ExecutionEngine *(*EECtorFn)(ModuleProvider*, std::string*,
-                                       bool Fast);
+                                       CodeGenOpt::Level OptLevel);
   static EECtorFn JITCtor, InterpCtor;
 
   /// LazyFunctionCreator - If an unknown function is needed, this function
@@ -113,7 +115,8 @@ public:
   static ExecutionEngine *create(ModuleProvider *MP,
                                  bool ForceInterpreter = false,
                                  std::string *ErrorStr = 0,
-                                 bool Fast = false);
+                                 CodeGenOpt::Level OptLevel =
+                                   CodeGenOpt::Default);
   
   /// create - This is the factory method for creating an execution engine which
   /// is appropriate for the current machine.  This takes ownership of the
@@ -126,10 +129,9 @@ public:
   static ExecutionEngine *createJIT(ModuleProvider *MP,
                                     std::string *ErrorStr = 0,
                                     JITMemoryManager *JMM = 0,
-                                    bool Fast = false);
-  
-  
-  
+                                    CodeGenOpt::Level OptLevel =
+                                      CodeGenOpt::Default);
+
   /// addModuleProvider - Add a ModuleProvider to the list of modules that we
   /// can JIT from.  Note that this takes ownership of the ModuleProvider: when
   /// the ExecutionEngine is destroyed, it destroys the MP as well.
@@ -185,7 +187,8 @@ public:
   /// at the specified location.  This is used internally as functions are JIT'd
   /// and as global variables are laid out in memory.  It can and should also be
   /// used by clients of the EE that want to have an LLVM global overlay
-  /// existing data in memory.
+  /// existing data in memory.  After adding a mapping for GV, you must not
+  /// destroy it until you've removed the mapping.
   void addGlobalMapping(const GlobalValue *GV, void *Addr);
   
   /// clearAllGlobalMappings - Clear all global mappings and start over again
@@ -209,19 +212,29 @@ public:
   void *getPointerToGlobalIfAvailable(const GlobalValue *GV);
 
   /// getPointerToGlobal - This returns the address of the specified global
-  /// value.  This may involve code generation if it's a function.
+  /// value.  This may involve code generation if it's a function.  After
+  /// getting a pointer to GV, it and all globals it transitively refers to have
+  /// been passed to addGlobalMapping.  You must clear the mapping for each
+  /// referred-to global before destroying it.  If a referred-to global RTG is a
+  /// function and this ExecutionEngine is a JIT compiler, calling
+  /// updateGlobalMapping(RTG, 0) will leak the function's machine code, so you
+  /// should call freeMachineCodeForFunction(RTG) instead.  Note that
+  /// optimizations can move and delete non-external GlobalValues without
+  /// notifying the ExecutionEngine.
   ///
   void *getPointerToGlobal(const GlobalValue *GV);
 
   /// getPointerToFunction - The different EE's represent function bodies in
   /// different ways.  They should each implement this to say what a function
-  /// pointer should look like.
+  /// pointer should look like.  See getPointerToGlobal for the requirements on
+  /// destroying F and any GlobalValues it refers to.
   ///
   virtual void *getPointerToFunction(Function *F) = 0;
 
   /// getPointerToFunctionOrStub - If the specified function has been
   /// code-gen'd, return a pointer to the function.  If not, compile it, or use
-  /// a stub to implement lazy compilation if available.
+  /// a stub to implement lazy compilation if available.  See getPointerToGlobal
+  /// for the requirements on destroying F and any GlobalValues it refers to.
   ///
   virtual void *getPointerToFunctionOrStub(Function *F) {
     // Default implementation, just codegen the function.
@@ -254,7 +267,8 @@ public:
 
   /// getOrEmitGlobalVariable - Return the address of the specified global
   /// variable, possibly emitting it to memory if needed.  This is used by the
-  /// Emitter.
+  /// Emitter.  See getPointerToGlobal for the requirements on destroying GV and
+  /// any GlobalValues it refers to.
   virtual void *getOrEmitGlobalVariable(const GlobalVariable *GV) {
     return getPointerToGlobal((GlobalValue*)GV);
   }
@@ -288,6 +302,13 @@ public:
     return SymbolSearchingDisabled;
   }
   
+  /// EnableDlsymStubs - 
+  void EnableDlsymStubs(bool Enabled = true) {
+    DlsymStubsEnabled = Enabled;
+  }
+  bool areDlsymStubsEnabled() const {
+    return DlsymStubsEnabled;
+  }
   
   /// InstallLazyFunctionCreator - If an unknown function is needed, the
   /// specified function pointer is invoked to create it.  If it returns null,

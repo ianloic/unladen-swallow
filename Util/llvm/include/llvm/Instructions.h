@@ -108,7 +108,8 @@ public:
   MallocInst(const Type *Ty, const std::string &NameStr,
              Instruction *InsertBefore = 0)
     : AllocationInst(Ty, 0, Malloc, 0, NameStr, InsertBefore) {}
-  MallocInst(const Type *Ty, const std::string &NameStr, BasicBlock *InsertAtEnd)
+  MallocInst(const Type *Ty, const std::string &NameStr,
+             BasicBlock *InsertAtEnd)
     : AllocationInst(Ty, 0, Malloc, 0, NameStr, InsertAtEnd) {}
 
   MallocInst(const Type *Ty, Value *ArraySize, unsigned Align,
@@ -164,7 +165,7 @@ public:
     : AllocationInst(Ty, ArraySize, Alloca, Align, NameStr, InsertAtEnd) {}
 
   virtual AllocaInst *clone() const;
-  
+
   /// isStaticAlloca - Return true if this alloca is in the entry block of the
   /// function and is a constant size.  If so, the code generator will fold it
   /// into the prolog/epilog code, so it is basically free.
@@ -194,7 +195,7 @@ public:
   FreeInst(Value *Ptr, BasicBlock *InsertAfter);
 
   virtual FreeInst *clone() const;
-  
+
   // Accessor methods for consistency with other memory operations
   Value *getPointerOperand() { return getOperand(0); }
   const Value *getPointerOperand() const { return getOperand(0); }
@@ -232,7 +233,7 @@ class LoadInst : public UnaryInstruction {
 public:
   LoadInst(Value *Ptr, const std::string &NameStr, Instruction *InsertBefore);
   LoadInst(Value *Ptr, const std::string &NameStr, BasicBlock *InsertAtEnd);
-  LoadInst(Value *Ptr, const std::string &NameStr, bool isVolatile = false, 
+  LoadInst(Value *Ptr, const std::string &NameStr, bool isVolatile = false,
            Instruction *InsertBefore = 0);
   LoadInst(Value *Ptr, const std::string &NameStr, bool isVolatile,
            unsigned Align, Instruction *InsertBefore = 0);
@@ -247,7 +248,7 @@ public:
                     bool isVolatile = false,  Instruction *InsertBefore = 0);
   LoadInst(Value *Ptr, const char *NameStr, bool isVolatile,
            BasicBlock *InsertAtEnd);
-  
+
   /// isVolatile - Return true if this is a load from a volatile memory
   /// location.
   ///
@@ -255,8 +256,8 @@ public:
 
   /// setVolatile - Specify whether this is a volatile load or not.
   ///
-  void setVolatile(bool V) { 
-    SubclassData = (SubclassData & ~1) | (V ? 1 : 0); 
+  void setVolatile(bool V) {
+    SubclassData = (SubclassData & ~1) | (V ? 1 : 0);
   }
 
   virtual LoadInst *clone() const;
@@ -266,7 +267,7 @@ public:
   unsigned getAlignment() const {
     return (1 << (SubclassData>>1)) >> 1;
   }
-  
+
   void setAlignment(unsigned Align);
 
   Value *getPointerOperand() { return getOperand(0); }
@@ -292,14 +293,14 @@ public:
 ///
 class StoreInst : public Instruction {
   void *operator new(size_t, unsigned);  // DO NOT IMPLEMENT
-  
+
   StoreInst(const StoreInst &SI) : Instruction(SI.getType(), Store,
                                                &Op<0>(), 2) {
     Op<0>() = SI.Op<0>();
     Op<1>() = SI.Op<1>();
     setVolatile(SI.isVolatile());
     setAlignment(SI.getAlignment());
-    
+
 #ifndef NDEBUG
     AssertOK();
 #endif
@@ -328,8 +329,8 @@ public:
 
   /// setVolatile - Specify whether this is a volatile load or not.
   ///
-  void setVolatile(bool V) { 
-    SubclassData = (SubclassData & ~1) | (V ? 1 : 0); 
+  void setVolatile(bool V) {
+    SubclassData = (SubclassData & ~1) | (V ? 1 : 0);
   }
 
   /// Transparently provide more efficient getOperand methods.
@@ -340,9 +341,9 @@ public:
   unsigned getAlignment() const {
     return (1 << (SubclassData>>1)) >> 1;
   }
-  
+
   void setAlignment(unsigned Align);
-  
+
   virtual StoreInst *clone() const;
 
   Value *getPointerOperand() { return getOperand(1); }
@@ -393,7 +394,7 @@ class GetElementPtrInst : public Instruction {
             // do arithmetic on in constant time
             std::random_access_iterator_tag) {
     unsigned NumIdx = static_cast<unsigned>(std::distance(IdxBegin, IdxEnd));
-    
+
     if (NumIdx > 0) {
       // This requires that the iterator points to contiguous memory.
       init(Ptr, &*IdxBegin, NumIdx, NameStr); // FIXME: for the general case
@@ -412,7 +413,7 @@ class GetElementPtrInst : public Instruction {
   ///
   template<typename InputIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin, 
+                                    InputIterator IdxBegin,
                                     InputIterator IdxEnd,
                                     // This argument ensures that we
                                     // have an iterator we can do
@@ -432,7 +433,7 @@ class GetElementPtrInst : public Instruction {
   /// instruction, the second appends the new instruction to the specified
   /// BasicBlock.
   template<typename InputIterator>
-  inline GetElementPtrInst(Value *Ptr, InputIterator IdxBegin, 
+  inline GetElementPtrInst(Value *Ptr, InputIterator IdxBegin,
                            InputIterator IdxEnd,
                            unsigned Values,
                            const std::string &NameStr,
@@ -451,11 +452,11 @@ class GetElementPtrInst : public Instruction {
                     const std::string &NameStr, BasicBlock *InsertAtEnd);
 public:
   template<typename InputIterator>
-  static GetElementPtrInst *Create(Value *Ptr, InputIterator IdxBegin, 
+  static GetElementPtrInst *Create(Value *Ptr, InputIterator IdxBegin,
                                    InputIterator IdxEnd,
                                    const std::string &NameStr = "",
                                    Instruction *InsertBefore = 0) {
-    typename std::iterator_traits<InputIterator>::difference_type Values = 
+    typename std::iterator_traits<InputIterator>::difference_type Values =
       1 + std::distance(IdxBegin, IdxEnd);
     return new(Values)
       GetElementPtrInst(Ptr, IdxBegin, IdxEnd, Values, NameStr, InsertBefore);
@@ -465,7 +466,7 @@ public:
                                    InputIterator IdxBegin, InputIterator IdxEnd,
                                    const std::string &NameStr,
                                    BasicBlock *InsertAtEnd) {
-    typename std::iterator_traits<InputIterator>::difference_type Values = 
+    typename std::iterator_traits<InputIterator>::difference_type Values =
       1 + std::distance(IdxBegin, IdxEnd);
     return new(Values)
       GetElementPtrInst(Ptr, IdxBegin, IdxEnd, Values, NameStr, InsertAtEnd);
@@ -507,7 +508,7 @@ public:
     return getIndexedType(Ptr, IdxBegin, IdxEnd,
                           typename std::iterator_traits<InputIterator>::
                           iterator_category());
-  }  
+  }
 
   static const Type *getIndexedType(const Type *Ptr,
                                     Value* const *Idx, unsigned NumIdx);
@@ -531,13 +532,13 @@ public:
   static unsigned getPointerOperandIndex() {
     return 0U;                      // get index for modifying correct operand
   }
-  
+
   /// getPointerOperandType - Method to return the pointer operand as a
   /// PointerType.
   const PointerType *getPointerOperandType() const {
     return reinterpret_cast<const PointerType*>(getPointerOperand()->getType());
   }
-  
+
 
   unsigned getNumIndices() const {  // Note: always non-negative
     return getNumOperands() - 1;
@@ -546,17 +547,17 @@ public:
   bool hasIndices() const {
     return getNumOperands() > 1;
   }
-  
+
   /// hasAllZeroIndices - Return true if all of the indices of this GEP are
   /// zeros.  If so, the result pointer and the first operand have the same
   /// value, just potentially different types.
   bool hasAllZeroIndices() const;
-  
+
   /// hasAllConstantIndices - Return true if all of the indices of this GEP are
   /// constant integers.  If so, the result pointer and the first operand have
   /// a constant offset between them.
   bool hasAllConstantIndices() const;
-  
+
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const GetElementPtrInst *) { return true; }
@@ -574,7 +575,7 @@ struct OperandTraits<GetElementPtrInst> : VariadicOperandTraits<1> {
 
 template<typename InputIterator>
 GetElementPtrInst::GetElementPtrInst(Value *Ptr,
-                                     InputIterator IdxBegin, 
+                                     InputIterator IdxBegin,
                                      InputIterator IdxEnd,
                                      unsigned Values,
                                      const std::string &NameStr,
@@ -639,7 +640,7 @@ public:
     assert(getOperand(0)->getType() == getOperand(1)->getType() &&
           "Both operands to ICmp instruction are not of the same type!");
     // Check that the operands are the right type
-    assert((getOperand(0)->getType()->isIntOrIntVector() || 
+    assert((getOperand(0)->getType()->isIntOrIntVector() ||
             isa<PointerType>(getOperand(0)->getType())) &&
            "Invalid operand types for ICmp instruction");
   }
@@ -660,7 +661,7 @@ public:
     assert(getOperand(0)->getType() == getOperand(1)->getType() &&
           "Both operands to ICmp instruction are not of the same type!");
     // Check that the operands are the right type
-    assert((getOperand(0)->getType()->isIntOrIntVector() || 
+    assert((getOperand(0)->getType()->isIntOrIntVector() ||
             isa<PointerType>(getOperand(0)->getType())) &&
            "Invalid operand types for ICmp instruction");
   }
@@ -694,7 +695,7 @@ public:
   static bool isEquality(Predicate P) {
     return P == ICMP_EQ || P == ICMP_NE;
   }
-  
+
   /// isEquality - Return true if this predicate is either EQ or NE.  This also
   /// tests for commutativity.
   bool isEquality() const {
@@ -705,18 +706,18 @@ public:
   /// @brief Determine if this relation is commutative.
   bool isCommutative() const { return isEquality(); }
 
-  /// isRelational - Return true if the predicate is relational (not EQ or NE). 
+  /// isRelational - Return true if the predicate is relational (not EQ or NE).
   ///
   bool isRelational() const {
     return !isEquality();
   }
 
-  /// isRelational - Return true if the predicate is relational (not EQ or NE). 
+  /// isRelational - Return true if the predicate is relational (not EQ or NE).
   ///
   static bool isRelational(Predicate P) {
     return !isEquality(P);
   }
-  
+
   /// @returns true if the predicate of this ICmpInst is signed, false otherwise
   /// @brief Determine if this instruction's predicate is signed.
   bool isSignedPredicate() const { return isSignedPredicate(getPredicate()); }
@@ -741,14 +742,14 @@ public:
     return isTrueWhenEqual(getPredicate());
   }
 
-  /// Initialize a set of values that all satisfy the predicate with C. 
+  /// Initialize a set of values that all satisfy the predicate with C.
   /// @brief Make a ConstantRange for a relation with a constant value.
   static ConstantRange makeConstantRange(Predicate pred, const APInt &C);
 
   /// Exchange the two operands to this instruction in such a way that it does
   /// not modify the semantics of the instruction. The predicate value may be
   /// changed to retain the same result if the predicate is order dependent
-  /// (e.g. ult). 
+  /// (e.g. ult).
   /// @brief Swap operands and adjust predicate.
   void swapOperands() {
     SubclassData = getSwappedPredicate();
@@ -773,7 +774,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 /// This instruction compares its operands according to the predicate given
-/// to the constructor. It only operates on floating point values or packed     
+/// to the constructor. It only operates on floating point values or packed
 /// vectors of floating point values. The operands must be identical types.
 /// @brief Represents a floating point comparison operator.
 class FCmpInst: public CmpInst {
@@ -833,14 +834,14 @@ public:
            SubclassData == FCMP_UNO;
   }
 
-  /// @returns true if the predicate is relational (not EQ or NE). 
+  /// @returns true if the predicate is relational (not EQ or NE).
   /// @brief Determine if this a relational predicate.
   bool isRelational() const { return !isEquality(); }
 
   /// Exchange the two operands to this instruction in such a way that it does
   /// not modify the semantics of the instruction. The predicate value may be
   /// changed to retain the same result if the predicate is order dependent
-  /// (e.g. ult). 
+  /// (e.g. ult).
   /// @brief Swap operands and adjust predicate.
   void swapOperands() {
     SubclassData = getSwappedPredicate();
@@ -857,7 +858,7 @@ public:
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
   }
-  
+
 };
 
 //===----------------------------------------------------------------------===//
@@ -901,7 +902,7 @@ public:
     assert(getOperand(0)->getType() == getOperand(1)->getType() &&
           "Both operands to VICmp instruction are not of the same type!");
   }
-  
+
   /// @brief Return the predicate for this instruction.
   Predicate getPredicate() const { return Predicate(SubclassData); }
 
@@ -996,7 +997,7 @@ class CallInst : public Instruction {
             // do arithmetic on in constant time
             std::random_access_iterator_tag) {
     unsigned NumArgs = (unsigned)std::distance(ArgBegin, ArgEnd);
-    
+
     // This requires that the iterator points to contiguous memory.
     init(Func, NumArgs ? &*ArgBegin : 0, NumArgs);
     setName(NameStr);
@@ -1074,7 +1075,7 @@ public:
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-  
+
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.
   unsigned getCallingConv() const { return SubclassData >> 1; }
@@ -1089,7 +1090,7 @@ public:
   /// setAttributes - Set the parameter attributes for this call.
   ///
   void setAttributes(const AttrListPtr &Attrs) { AttributeList = Attrs; }
-  
+
   /// addAttribute - adds the attribute to the list of attributes.
   void addAttribute(unsigned i, Attributes attr);
 
@@ -1140,7 +1141,7 @@ public:
     else removeAttribute(~0, Attribute::NoUnwind);
   }
 
-  /// @brief Determine if the call returns a structure through first 
+  /// @brief Determine if the call returns a structure through first
   /// pointer argument.
   bool hasStructRetAttr() const {
     // Be friendly and also check the callee.
@@ -1156,13 +1157,13 @@ public:
   /// indirect function invocation.
   ///
   Function *getCalledFunction() const {
-    return dyn_cast<Function>(getOperand(0));
+    return dyn_cast<Function>(Op<0>());
   }
 
-  /// getCalledValue - Get a pointer to the function that is invoked by this 
+  /// getCalledValue - Get a pointer to the function that is invoked by this
   /// instruction
-  const Value *getCalledValue() const { return getOperand(0); }
-        Value *getCalledValue()       { return getOperand(0); }
+  const Value *getCalledValue() const { return Op<0>(); }
+        Value *getCalledValue()       { return Op<0>(); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const CallInst *) { return true; }
@@ -1198,7 +1199,7 @@ CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
                 Instruction::Call,
                 OperandTraits<CallInst>::op_end(this) - (ArgEnd - ArgBegin + 1),
                 (unsigned)(ArgEnd - ArgBegin + 1), InsertBefore) {
-  init(Func, ArgBegin, ArgEnd, NameStr, 
+  init(Func, ArgBegin, ArgEnd, NameStr,
        typename std::iterator_traits<InputIterator>::iterator_category());
 }
 
@@ -1251,7 +1252,7 @@ public:
   Value *getCondition() const { return Op<0>(); }
   Value *getTrueValue() const { return Op<1>(); }
   Value *getFalseValue() const { return Op<2>(); }
-  
+
   /// areInvalidOperands - Return a string if the specified operands are invalid
   /// for a select operation, otherwise return null.
   static const char *areInvalidOperands(Value *Cond, Value *True, Value *False);
@@ -1378,9 +1379,11 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ExtractElementInst, Value)
 class InsertElementInst : public Instruction {
   InsertElementInst(const InsertElementInst &IE);
   InsertElementInst(Value *Vec, Value *NewElt, Value *Idx,
-                    const std::string &NameStr = "",Instruction *InsertBefore = 0);
+                    const std::string &NameStr = "",
+                    Instruction *InsertBefore = 0);
   InsertElementInst(Value *Vec, Value *NewElt, unsigned Idx,
-                    const std::string &NameStr = "",Instruction *InsertBefore = 0);
+                    const std::string &NameStr = "",
+                    Instruction *InsertBefore = 0);
   InsertElementInst(Value *Vec, Value *NewElt, Value *Idx,
                     const std::string &NameStr, BasicBlock *InsertAtEnd);
   InsertElementInst(Value *Vec, Value *NewElt, unsigned Idx,
@@ -1477,7 +1480,7 @@ public:
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-  
+
   /// getMaskValue - Return the index from the shuffle mask for the specified
   /// output result.  This is either -1 if the element is undef or a number less
   /// than 2*numelements.
@@ -1521,7 +1524,7 @@ class ExtractValueInst : public UnaryInstruction {
             // do arithmetic on in constant time
             std::random_access_iterator_tag) {
     unsigned NumIdx = static_cast<unsigned>(std::distance(IdxBegin, IdxEnd));
-    
+
     // There's no fundamental reason why we require at least one index
     // (other than weirdness with &*IdxBegin being invalid; see
     // getelementptr's init routine for example). But there's no
@@ -1544,7 +1547,7 @@ class ExtractValueInst : public UnaryInstruction {
 
   template<typename InputIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin, 
+                                    InputIterator IdxBegin,
                                     InputIterator IdxEnd,
                                     // This argument ensures that we
                                     // have an iterator we can do
@@ -1564,7 +1567,7 @@ class ExtractValueInst : public UnaryInstruction {
   /// an existing instruction, the second appends the new instruction to the
   /// specified BasicBlock.
   template<typename InputIterator>
-  inline ExtractValueInst(Value *Agg, InputIterator IdxBegin, 
+  inline ExtractValueInst(Value *Agg, InputIterator IdxBegin,
                           InputIterator IdxEnd,
                           const std::string &NameStr,
                           Instruction *InsertBefore);
@@ -1580,7 +1583,7 @@ class ExtractValueInst : public UnaryInstruction {
 
 public:
   template<typename InputIterator>
-  static ExtractValueInst *Create(Value *Agg, InputIterator IdxBegin, 
+  static ExtractValueInst *Create(Value *Agg, InputIterator IdxBegin,
                                   InputIterator IdxEnd,
                                   const std::string &NameStr = "",
                                   Instruction *InsertBefore = 0) {
@@ -1631,7 +1634,7 @@ public:
     return getIndexedType(Ptr, IdxBegin, IdxEnd,
                           typename std::iterator_traits<InputIterator>::
                           iterator_category());
-  }  
+  }
   static const Type *getIndexedType(const Type *Ptr, unsigned Idx);
 
   typedef const unsigned* idx_iterator;
@@ -1655,7 +1658,7 @@ public:
   bool hasIndices() const {
     return true;
   }
-  
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const ExtractValueInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -1668,7 +1671,7 @@ public:
 
 template<typename InputIterator>
 ExtractValueInst::ExtractValueInst(Value *Agg,
-                                   InputIterator IdxBegin, 
+                                   InputIterator IdxBegin,
                                    InputIterator IdxEnd,
                                    const std::string &NameStr,
                                    Instruction *InsertBefore)
@@ -1716,7 +1719,7 @@ class InsertValueInst : public Instruction {
             // do arithmetic on in constant time
             std::random_access_iterator_tag) {
     unsigned NumIdx = static_cast<unsigned>(std::distance(IdxBegin, IdxEnd));
-    
+
     // There's no fundamental reason why we require at least one index
     // (other than weirdness with &*IdxBegin being invalid; see
     // getelementptr's init routine for example). But there's no
@@ -1733,7 +1736,7 @@ class InsertValueInst : public Instruction {
   /// optionally insert before an existing instruction, the second appends
   /// the new instruction to the specified BasicBlock.
   template<typename InputIterator>
-  inline InsertValueInst(Value *Agg, Value *Val, InputIterator IdxBegin, 
+  inline InsertValueInst(Value *Agg, Value *Val, InputIterator IdxBegin,
                          InputIterator IdxEnd,
                          const std::string &NameStr,
                          Instruction *InsertBefore);
@@ -1827,7 +1830,7 @@ public:
   bool hasIndices() const {
     return true;
   }
-  
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const InsertValueInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -1845,7 +1848,7 @@ struct OperandTraits<InsertValueInst> : FixedNumOperandTraits<2> {
 template<typename InputIterator>
 InsertValueInst::InsertValueInst(Value *Agg,
                                  Value *Val,
-                                 InputIterator IdxBegin, 
+                                 InputIterator IdxBegin,
                                  InputIterator IdxEnd,
                                  const std::string &NameStr,
                                  Instruction *InsertBefore)
@@ -1939,8 +1942,12 @@ public:
     assert(i*2 < getNumOperands() && "Invalid value number!");
     setOperand(i*2, V);
   }
-  unsigned getOperandNumForIncomingValue(unsigned i) {
+  static unsigned getOperandNumForIncomingValue(unsigned i) {
     return i*2;
+  }
+  static unsigned getIncomingValueNumForOperand(unsigned i) {
+    assert(i % 2 == 0 && "Invalid incoming-value operand index!");
+    return i/2;
   }
 
   /// getIncomingBlock - Return incoming basic block corresponding
@@ -1959,8 +1966,12 @@ public:
   void setIncomingBlock(unsigned i, BasicBlock *BB) {
     setOperand(i*2+1, BB);
   }
-  unsigned getOperandNumForIncomingBlock(unsigned i) {
+  static unsigned getOperandNumForIncomingBlock(unsigned i) {
     return i*2+1;
+  }
+  static unsigned getIncomingBlockNumForOperand(unsigned i) {
+    assert(i % 2 == 1 && "Invalid incoming-block operand index!");
+    return i/2;
   }
 
   /// addIncoming - Add an incoming value to the end of the PHI list
@@ -2030,7 +2041,7 @@ template <>
 struct OperandTraits<PHINode> : HungoffOperandTraits<2> {
 };
 
-DEFINE_TRANSPARENT_OPERAND_ACCESSORS(PHINode, Value)  
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(PHINode, Value)
 
 
 //===----------------------------------------------------------------------===//
@@ -2114,8 +2125,9 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReturnInst, Value)
 ///
 class BranchInst : public TerminatorInst {
   /// Ops list - Branches are strange.  The operands are ordered:
-  ///  TrueDest, FalseDest, Cond.  This makes some accessors faster because
-  /// they don't have to check for cond/uncond branchness.
+  ///  [Cond, FalseDest,] TrueDest.  This makes some accessors faster because
+  /// they don't have to check for cond/uncond branchness. These are mostly
+  /// accessed relative from op_end().
   BranchInst(const BranchInst &BI);
   void AssertOK();
   // BranchInst constructors (where {B, T, F} are blocks, and C is a condition):
@@ -2133,24 +2145,21 @@ class BranchInst : public TerminatorInst {
              BasicBlock *InsertAtEnd);
 public:
   static BranchInst *Create(BasicBlock *IfTrue, Instruction *InsertBefore = 0) {
-    return new(1) BranchInst(IfTrue, InsertBefore);
+    return new(1, true) BranchInst(IfTrue, InsertBefore);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *IfFalse,
                             Value *Cond, Instruction *InsertBefore = 0) {
     return new(3) BranchInst(IfTrue, IfFalse, Cond, InsertBefore);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *InsertAtEnd) {
-    return new(1) BranchInst(IfTrue, InsertAtEnd);
+    return new(1, true) BranchInst(IfTrue, InsertAtEnd);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *IfFalse,
                             Value *Cond, BasicBlock *InsertAtEnd) {
     return new(3) BranchInst(IfTrue, IfFalse, Cond, InsertAtEnd);
   }
 
-  ~BranchInst() {
-    if (NumOperands == 1)
-      NumOperands = (unsigned)((Use*)this - OperandList);
-  }
+  ~BranchInst();
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2162,23 +2171,24 @@ public:
 
   Value *getCondition() const {
     assert(isConditional() && "Cannot get condition of an uncond branch!");
-    return getOperand(2);
+    return Op<-3>();
   }
 
   void setCondition(Value *V) {
     assert(isConditional() && "Cannot set condition of unconditional branch!");
-    setOperand(2, V);
+    Op<-3>() = V;
   }
 
   // setUnconditionalDest - Change the current branch to an unconditional branch
   // targeting the specified block.
   // FIXME: Eliminate this ugly method.
   void setUnconditionalDest(BasicBlock *Dest) {
-    Op<0>() = Dest;
+    Op<-1>() = Dest;
     if (isConditional()) {  // Convert this to an uncond branch.
-      Op<1>().set(0);
-      Op<2>().set(0);
+      Op<-2>() = 0;
+      Op<-3>() = 0;
       NumOperands = 1;
+      OperandList = op_begin();
     }
   }
 
@@ -2186,12 +2196,12 @@ public:
 
   BasicBlock *getSuccessor(unsigned i) const {
     assert(i < getNumSuccessors() && "Successor # out of range for Branch!");
-    return cast<BasicBlock>(getOperand(i));
+    return cast_or_null<BasicBlock>((&Op<-1>() - i)->get());
   }
 
   void setSuccessor(unsigned idx, BasicBlock *NewSucc) {
     assert(idx < getNumSuccessors() && "Successor # out of range for Branch!");
-    setOperand(idx, NewSucc);
+    *(&Op<-1>() - idx) = NewSucc;
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -2209,11 +2219,7 @@ private:
 };
 
 template <>
-struct OperandTraits<BranchInst> : HungoffOperandTraits<> {
-  // we need to access operands via OperandList, since
-  // the NumOperands may change from 3 to 1
-  static inline void *allocate(unsigned); // FIXME
-};
+struct OperandTraits<BranchInst> : VariadicOperandTraits<1> {};
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(BranchInst, Value)
 
@@ -2244,7 +2250,7 @@ class SwitchInst : public TerminatorInst {
   /// constructor can also autoinsert before another instruction.
   SwitchInst(Value *Value, BasicBlock *Default, unsigned NumCases,
              Instruction *InsertBefore = 0);
-  
+
   /// SwitchInst ctor - Create a new switch instruction, specifying a value to
   /// switch on and a default destination.  The number of additional cases can
   /// be specified here to make memory allocation more efficient.  This
@@ -2365,7 +2371,7 @@ template <>
 struct OperandTraits<SwitchInst> : HungoffOperandTraits<2> {
 };
 
-DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SwitchInst, Value)  
+DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SwitchInst, Value)
 
 
 //===----------------------------------------------------------------------===//
@@ -2389,7 +2395,7 @@ class InvokeInst : public TerminatorInst {
             // do arithmetic on in constant time
             std::random_access_iterator_tag) {
     unsigned NumArgs = (unsigned)std::distance(ArgBegin, ArgEnd);
-    
+
     // This requires that the iterator points to contiguous memory.
     init(Func, IfNormal, IfException, NumArgs ? &*ArgBegin : 0, NumArgs);
     setName(NameStr);
@@ -2446,7 +2452,7 @@ public:
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-  
+
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.
   unsigned getCallingConv() const { return SubclassData; }
@@ -2470,7 +2476,7 @@ public:
 
   /// @brief Determine whether the call or the callee has the given attribute.
   bool paramHasAttr(unsigned i, Attributes attr) const;
-  
+
   /// @brief Extract the alignment for a call or parameter (0=unknown).
   unsigned getParamAlignment(unsigned i) const {
     return AttributeList.getParamAlignment(i);
@@ -2512,7 +2518,7 @@ public:
     else removeAttribute(~0, Attribute::NoUnwind);
   }
 
-  /// @brief Determine if the call returns a structure through first 
+  /// @brief Determine if the call returns a structure through first
   /// pointer argument.
   bool hasStructRetAttr() const {
     // Be friendly and also check the callee.
@@ -2531,7 +2537,7 @@ public:
     return dyn_cast<Function>(getOperand(0));
   }
 
-  /// getCalledValue - Get a pointer to the function that is invoked by this 
+  /// getCalledValue - Get a pointer to the function that is invoked by this
   /// instruction
   const Value *getCalledValue() const { return getOperand(0); }
         Value *getCalledValue()       { return getOperand(0); }

@@ -16,6 +16,7 @@
 #include "llvm/System/Program.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Config/config.h"
+#include "llvm/Support/Compiler.h"
 #include <ostream>
 
 #if defined(HAVE_UNISTD_H)
@@ -63,10 +64,7 @@ raw_ostream &raw_ostream::operator<<(unsigned long N) {
 
 raw_ostream &raw_ostream::operator<<(long N) {
   if (N <  0) {
-    if (OutBufCur >= OutBufEnd)
-      flush_impl();
-    *OutBufCur++ = '-';
-    
+    *this << '-';
     N = -N;
   }
   
@@ -91,10 +89,7 @@ raw_ostream &raw_ostream::operator<<(unsigned long long N) {
 
 raw_ostream &raw_ostream::operator<<(long long N) {
   if (N <  0) {
-    if (OutBufCur >= OutBufEnd)
-      flush_impl();
-    *OutBufCur++ = '-';
-    
+    *this << '-';
     N = -N;
   }
   
@@ -102,14 +97,63 @@ raw_ostream &raw_ostream::operator<<(long long N) {
 }
 
 raw_ostream &raw_ostream::operator<<(const void *P) {
-  // FIXME: This could be much faster if it matters.
-  return *this << format("%p", P);
+  uintptr_t N = (uintptr_t) P;
+  *this << '0' << 'x';
+  
+  // Zero is a special case.
+  if (N == 0)
+    return *this << '0';
+
+  char NumberBuffer[20];
+  char *EndPtr = NumberBuffer+sizeof(NumberBuffer);
+  char *CurPtr = EndPtr;
+
+  while (N) {
+    unsigned x = N % 16;
+    *--CurPtr = (x < 10 ? '0' + x : 'a' + x - 10);
+    N /= 16;
+  }
+
+  return write(CurPtr, EndPtr-CurPtr);
 }
 
+void raw_ostream::flush_nonempty() {
+  assert(OutBufCur > OutBufStart && "Invalid call to flush_nonempty.");
+  write_impl(OutBufStart, OutBufCur - OutBufStart);
+  OutBufCur = OutBufStart;    
+}
+
+raw_ostream &raw_ostream::write(unsigned char C) {
+  // Group exceptional cases into a single branch.
+  if (OutBufCur >= OutBufEnd) {
+    if (Unbuffered) {
+      write_impl(reinterpret_cast<char*>(&C), 1);
+      return *this;
+    }
+    
+    if (!OutBufStart)
+      SetBufferSize();
+    else
+      flush_nonempty();
+  }
+
+  *OutBufCur++ = C;
+  return *this;
+}
 
 raw_ostream &raw_ostream::write(const char *Ptr, unsigned Size) {
-  if (OutBufCur+Size > OutBufEnd)
-    flush_impl();
+  // Group exceptional cases into a single branch.
+  if (BUILTIN_EXPECT(OutBufCur+Size > OutBufEnd, false)) {
+    if (Unbuffered) {
+      write_impl(Ptr, Size);
+      return *this;
+    }
+    
+    if (!OutBufStart)
+      SetBufferSize();
+    else
+      flush_nonempty();
+  }
   
   // Handle short strings specially, memcpy isn't very good at very short
   // strings.
@@ -124,30 +168,29 @@ raw_ostream &raw_ostream::write(const char *Ptr, unsigned Size) {
     if (Size <= unsigned(OutBufEnd-OutBufStart)) {
       memcpy(OutBufCur, Ptr, Size);
       break;
-    }
+    } 
 
-    // If emitting a string larger than our buffer, emit in chunks.  In this
-    // case we know that we just flushed the buffer.
-    while (Size) {
-      unsigned NumToEmit = OutBufEnd-OutBufStart;
-      if (Size < NumToEmit) NumToEmit = Size;
-      assert(OutBufCur == OutBufStart);
-      memcpy(OutBufStart, Ptr, NumToEmit);
-      Ptr += NumToEmit;
-      Size -= NumToEmit;
-      OutBufCur = OutBufStart + NumToEmit;
-      flush_impl();
-    }
+    // Otherwise we are emitting a string larger than our buffer. We
+    // know we already flushed, so just write it out directly.
+    write_impl(Ptr, Size);
+    Size = 0;
     break;
   }
   OutBufCur += Size;
+
   return *this;
 }
 
 // Formatted output.
 raw_ostream &raw_ostream::operator<<(const format_object_base &Fmt) {
-  // If we have more than a few bytes left in our output buffer, try formatting
-  // directly onto its end.
+  // If we have more than a few bytes left in our output buffer, try
+  // formatting directly onto its end.
+  //
+  // FIXME: This test is a bit silly, since if we don't have enough
+  // space in the buffer we will have to flush the formatted output
+  // anyway. We should just flush upfront in such cases, and use the
+  // whole buffer as our scratch pad. Note, however, that this case is
+  // also necessary for correctness on unbuffered streams.
   unsigned NextBufferSize = 127;
   if (OutBufEnd-OutBufCur > 3) {
     unsigned BufferBytesLeft = OutBufEnd-OutBufCur;
@@ -238,13 +281,10 @@ raw_fd_ostream::~raw_fd_ostream() {
   }
 }
 
-void raw_fd_ostream::flush_impl() {
+void raw_fd_ostream::write_impl(const char *Ptr, unsigned Size) {
   assert (FD >= 0 && "File already closed.");
-  if (OutBufCur-OutBufStart) {
-    pos += (OutBufCur - OutBufStart);
-    ::write(FD, OutBufStart, OutBufCur-OutBufStart);
-  }
-  HandleFlush();
+  pos += Size;
+  ::write(FD, Ptr, Size);
 }
 
 void raw_fd_ostream::close() {
@@ -266,7 +306,8 @@ uint64_t raw_fd_ostream::seek(uint64_t off) {
 //===----------------------------------------------------------------------===//
 
 raw_stdout_ostream::raw_stdout_ostream():raw_fd_ostream(STDOUT_FILENO, false) {}
-raw_stderr_ostream::raw_stderr_ostream():raw_fd_ostream(STDERR_FILENO, false) {}
+raw_stderr_ostream::raw_stderr_ostream():raw_fd_ostream(STDERR_FILENO, false, 
+                                                        true) {}
 
 // An out of line virtual method to provide a home for the class vtable.
 void raw_stdout_ostream::handle() {}
@@ -294,13 +335,14 @@ raw_os_ostream::~raw_os_ostream() {
   flush();
 }
 
-/// flush_impl - The is the piece of the class that is implemented by
-/// subclasses.  This outputs the currently buffered data and resets the
-/// buffer to empty.
-void raw_os_ostream::flush_impl() {
-  if (OutBufCur-OutBufStart)
-    OS.write(OutBufStart, OutBufCur-OutBufStart);
-  HandleFlush();
+void raw_os_ostream::write_impl(const char *Ptr, unsigned Size) {
+  OS.write(Ptr, Size);
+}
+
+uint64_t raw_os_ostream::current_pos() { return OS.tellp(); }
+
+uint64_t raw_os_ostream::tell() { 
+  return (uint64_t)OS.tellp() + GetNumBytesInBuffer(); 
 }
 
 //===----------------------------------------------------------------------===//
@@ -311,13 +353,8 @@ raw_string_ostream::~raw_string_ostream() {
   flush();
 }
 
-/// flush_impl - The is the piece of the class that is implemented by
-/// subclasses.  This outputs the currently buffered data and resets the
-/// buffer to empty.
-void raw_string_ostream::flush_impl() {
-  if (OutBufCur-OutBufStart)
-    OS.append(OutBufStart, OutBufCur-OutBufStart);
-  HandleFlush();
+void raw_string_ostream::write_impl(const char *Ptr, unsigned Size) {
+  OS.append(Ptr, Size);
 }
 
 //===----------------------------------------------------------------------===//
@@ -328,12 +365,12 @@ raw_svector_ostream::~raw_svector_ostream() {
   flush();
 }
 
-/// flush_impl - The is the piece of the class that is implemented by
-/// subclasses.  This outputs the currently buffered data and resets the
-/// buffer to empty.
-void raw_svector_ostream::flush_impl() {
-  if (OutBufCur-OutBufStart)
-    OS.append(OutBufStart, OutBufCur);
-  HandleFlush();
+void raw_svector_ostream::write_impl(const char *Ptr, unsigned Size) {
+  OS.append(Ptr, Ptr + Size);
 }
 
+uint64_t raw_svector_ostream::current_pos() { return OS.size(); }
+
+uint64_t raw_svector_ostream::tell() { 
+  return OS.size() + GetNumBytesInBuffer(); 
+}

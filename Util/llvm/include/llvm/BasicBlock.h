@@ -25,12 +25,28 @@ class TerminatorInst;
 
 template<> struct ilist_traits<Instruction>
   : public SymbolTableListTraits<Instruction, BasicBlock> {
-  // createSentinel is used to create a node that marks the end of the list...
-  static Instruction *createSentinel();
-  static void destroySentinel(Instruction *I) { delete I; }
-  static iplist<Instruction> &getList(BasicBlock *BB);
-  static ValueSymbolTable *getSymTab(BasicBlock *ItemParent);
-  static int getListOffset();
+  // createSentinel is used to get hold of a node that marks the end of
+  // the list...
+  // The sentinel is relative to this instance, so we use a non-static
+  // method.
+  Instruction *createSentinel() const {
+    // since i(p)lists always publicly derive from the corresponding
+    // traits, placing a data member in this class will augment i(p)list.
+    // But since the NodeTy is expected to publicly derive from
+    // ilist_node<NodeTy>, there is a legal viable downcast from it
+    // to NodeTy. We use this trick to superpose i(p)list with a "ghostly"
+    // NodeTy, which becomes the sentinel. Dereferencing the sentinel is
+    // forbidden (save the ilist_node<NodeTy>) so no one will ever notice
+    // the superposition.
+    return static_cast<Instruction*>(&Sentinel);
+  }
+  static void destroySentinel(Instruction*) {}
+
+  Instruction *provideInitialHead() const { return createSentinel(); }
+  Instruction *ensureHead(Instruction*) const { return createSentinel(); }
+  static void noteHead(Instruction*, Instruction*) {}
+private:
+  mutable ilist_node<Instruction> Sentinel;
 };
 
 /// This represents a single basic block in LLVM. A basic block is simply a
@@ -49,9 +65,10 @@ template<> struct ilist_traits<Instruction>
 /// @brief LLVM Basic Block Representation
 class BasicBlock : public Value, // Basic blocks are data objects also
                    public ilist_node<BasicBlock> {
+
 public:
   typedef iplist<Instruction> InstListType;
-private :
+private:
   InstListType InstList;
   Function *Parent;
 
@@ -87,7 +104,8 @@ public:
         Function *getParent()       { return Parent; }
 
   /// use_back - Specialize the methods defined in Value, as we know that an
-  /// BasicBlock can only be used by Instructions (specifically PHI and terms).
+  /// BasicBlock can only be used by Instructions (specifically PHI nodes and
+  /// terminators).
   Instruction       *use_back()       { return cast<Instruction>(*use_begin());}
   const Instruction *use_back() const { return cast<Instruction>(*use_begin());}
   
@@ -165,6 +183,14 @@ public:
   const InstListType &getInstList() const { return InstList; }
         InstListType &getInstList()       { return InstList; }
 
+  /// getSublistAccess() - returns pointer to member of instruction list
+  static iplist<Instruction> BasicBlock::*getSublistAccess(Instruction*) {
+    return &BasicBlock::InstList;
+  }
+
+  /// getValueSymbolTable() - returns pointer to symbol table (if any)
+  ValueSymbolTable *getValueSymbolTable();
+
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const BasicBlock *) { return true; }
   static inline bool classof(const Value *V) {
@@ -202,18 +228,7 @@ public:
   /// the basic block).
   ///
   BasicBlock *splitBasicBlock(iterator I, const std::string &BBName = "");
-  
-  
-  static unsigned getInstListOffset() {
-    BasicBlock *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->InstList));
-  }
 };
-
-inline int 
-ilist_traits<Instruction>::getListOffset() {
-  return BasicBlock::getInstListOffset();
-}
 
 } // End llvm namespace
 

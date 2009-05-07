@@ -47,8 +47,7 @@ public:
   /// and returns the result.
   ComplexPairTy EmitLoadOfLValue(const Expr *E) {
     LValue LV = CGF.EmitLValue(E);
-    // FIXME: Volatile
-    return EmitLoadOfComplex(LV.getAddress(), false);
+    return EmitLoadOfComplex(LV.getAddress(), LV.isVolatileQualified());
   }
   
   /// EmitLoadOfComplex - Given a pointer to a complex value, emit code to load
@@ -94,7 +93,6 @@ public:
   }
   ComplexPairTy VisitCallExpr(const CallExpr *E);
   ComplexPairTy VisitStmtExpr(const StmtExpr *E);
-  ComplexPairTy VisitOverloadExpr(const OverloadExpr *OE);
 
   // Operators.
   ComplexPairTy VisitPrePostIncDec(const UnaryOperator *E,
@@ -192,6 +190,8 @@ public:
   ComplexPairTy VisitChooseExpr(ChooseExpr *CE);
 
   ComplexPairTy VisitInitListExpr(InitListExpr *E);
+
+  ComplexPairTy VisitVAArgExpr(VAArgExpr *E);
 };
 }  // end anonymous namespace.
 
@@ -258,11 +258,6 @@ ComplexPairTy ComplexExprEmitter::VisitCallExpr(const CallExpr *E) {
   return CGF.EmitCallExpr(E).getComplexVal();
 }
 
-ComplexPairTy ComplexExprEmitter::VisitOverloadExpr(const OverloadExpr *E) {
-  return CGF.EmitCallExpr(E->getFn(), E->arg_begin(), 
-                          E->arg_end(CGF.getContext())).getComplexVal();
-}
-
 ComplexPairTy ComplexExprEmitter::VisitStmtExpr(const StmtExpr *E) {
   return CGF.EmitCompoundStmt(*E->getSubStmt(), true).getComplexVal();
 }
@@ -289,7 +284,7 @@ ComplexPairTy ComplexExprEmitter::EmitCast(Expr *Op, QualType DestTy) {
     return EmitComplexToComplexCast(Visit(Op), Op->getType(), DestTy);
   
   // C99 6.3.1.7: When a value of real type is converted to a complex type, the
-  // real part of the complex  result value is determined by the rules of
+  // real part of the complex result value is determined by the rules of
   // conversion to the corresponding real type and the imaginary part of the
   // complex result value is a positive zero or an unsigned zero.
   llvm::Value *Elt = CGF.EmitScalarExpr(Op);
@@ -305,23 +300,18 @@ ComplexPairTy ComplexExprEmitter::EmitCast(Expr *Op, QualType DestTy) {
 ComplexPairTy ComplexExprEmitter::VisitPrePostIncDec(const UnaryOperator *E,
                                                      bool isInc, bool isPre) {
   LValue LV = CGF.EmitLValue(E->getSubExpr());
-  // FIXME: Handle volatile!
-  ComplexPairTy InVal = EmitLoadOfComplex(LV.getAddress(), false);
-  
-  uint64_t AmountVal = isInc ? 1 : -1;
+  ComplexPairTy InVal = EmitLoadOfComplex(LV.getAddress(), LV.isVolatileQualified());
   
   llvm::Value *NextVal;
-  if (isa<llvm::IntegerType>(InVal.first->getType()))
-    NextVal = llvm::ConstantInt::get(InVal.first->getType(), AmountVal);
-  else if (InVal.first->getType() == llvm::Type::FloatTy)
-    // FIXME: Handle long double.
-    NextVal = 
-      llvm::ConstantFP::get(llvm::APFloat(static_cast<float>(AmountVal)));
-  else {
-    // FIXME: Handle long double.
-    assert(InVal.first->getType() == llvm::Type::DoubleTy);
-    NextVal = 
-      llvm::ConstantFP::get(llvm::APFloat(static_cast<double>(AmountVal)));
+  if (isa<llvm::IntegerType>(InVal.first->getType())) {
+    uint64_t AmountVal = isInc ? 1 : -1;
+    NextVal = llvm::ConstantInt::get(InVal.first->getType(), AmountVal, true);
+  } else {
+    QualType ElemTy = E->getType()->getAsComplexType()->getElementType();
+    llvm::APFloat FVal(CGF.getContext().getFloatTypeSemantics(ElemTy), 1);
+    if (!isInc)
+      FVal.changeSign();
+    NextVal = llvm::ConstantFP::get(FVal);
   }
   
   // Add the inc/dec to the real part.
@@ -330,7 +320,7 @@ ComplexPairTy ComplexExprEmitter::VisitPrePostIncDec(const UnaryOperator *E,
   ComplexPairTy IncVal(NextVal, InVal.second);
   
   // Store the updated result through the lvalue.
-  EmitStoreOfComplex(IncVal, LV.getAddress(), false);  /* FIXME: Volatile */
+  EmitStoreOfComplex(IncVal, LV.getAddress(), LV.isVolatileQualified());
   
   // If this is a postinc, return the value read from memory, otherwise use the
   // updated value.
@@ -429,10 +419,10 @@ EmitCompoundAssign(const CompoundAssignOperator *E,
   LValue LHSLV = CGF.EmitLValue(E->getLHS());
 
   BinOpInfo OpInfo;
-  OpInfo.Ty = E->getComputationType();
+  OpInfo.Ty = E->getComputationResultType();
 
   // We know the LHS is a complex lvalue.
-  OpInfo.LHS = EmitLoadOfComplex(LHSLV.getAddress(), false);// FIXME: Volatile.
+  OpInfo.LHS = EmitLoadOfComplex(LHSLV.getAddress(), LHSLV.isVolatileQualified());
   OpInfo.LHS = EmitComplexToComplexCast(OpInfo.LHS, LHSTy, OpInfo.Ty);
     
   // It is possible for the RHS to be complex or scalar.
@@ -445,7 +435,7 @@ EmitCompoundAssign(const CompoundAssignOperator *E,
   Result = EmitComplexToComplexCast(Result, OpInfo.Ty, LHSTy);
   
   // Store the result value into the LHS lvalue.
-  EmitStoreOfComplex(Result, LHSLV.getAddress(), false); // FIXME: VOLATILE
+  EmitStoreOfComplex(Result, LHSLV.getAddress(), LHSLV.isVolatileQualified());
   return Result;
 }
 
@@ -460,8 +450,7 @@ ComplexPairTy ComplexExprEmitter::VisitBinAssign(const BinaryOperator *E) {
   LValue LHS = CGF.EmitLValue(E->getLHS());
   
   // Store into it.
-  // FIXME: Volatility!
-  EmitStoreOfComplex(Val, LHS.getAddress(), false);
+  EmitStoreOfComplex(Val, LHS.getAddress(), LHS.isVolatileQualified());
   return Val;
 }
 
@@ -513,8 +502,7 @@ VisitConditionalOperator(const ConditionalOperator *E) {
 }
 
 ComplexPairTy ComplexExprEmitter::VisitChooseExpr(ChooseExpr *E) {
-  // Emit the LHS or RHS as appropriate.
-  return Visit(E->isConditionTrue(CGF.getContext()) ? E->getLHS() :E->getRHS());
+  return Visit(E->getChosenSubExpr(CGF.getContext()));
 }
 
 ComplexPairTy ComplexExprEmitter::VisitInitListExpr(InitListExpr *E) {
@@ -526,6 +514,22 @@ ComplexPairTy ComplexExprEmitter::VisitInitListExpr(InitListExpr *E) {
   const llvm::Type* LTy = CGF.ConvertType(Ty);
   llvm::Value* zeroConstant = llvm::Constant::getNullValue(LTy);
   return ComplexPairTy(zeroConstant, zeroConstant);
+}
+
+ComplexPairTy ComplexExprEmitter::VisitVAArgExpr(VAArgExpr *E) {
+  llvm::Value *ArgValue = CGF.EmitVAListRef(E->getSubExpr());
+  llvm::Value *ArgPtr = CGF.EmitVAArg(ArgValue, E->getType());
+
+  if (!ArgPtr) {
+    CGF.ErrorUnsupported(E, "complex va_arg expression");
+    const llvm::Type *EltTy = 
+      CGF.ConvertType(E->getType()->getAsComplexType()->getElementType());
+    llvm::Value *U = llvm::UndefValue::get(EltTy);
+    return ComplexPairTy(U, U);
+  }
+
+  // FIXME Volatility.
+  return EmitLoadOfComplex(ArgPtr, false);
 }
 
 //===----------------------------------------------------------------------===//

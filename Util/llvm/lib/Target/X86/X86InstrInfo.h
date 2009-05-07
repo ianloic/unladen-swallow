@@ -243,13 +243,15 @@ namespace X86II {
   };
 }
 
+const int X86AddrNumOperands = 5;
+
 inline static bool isScale(const MachineOperand &MO) {
   return MO.isImm() &&
     (MO.getImm() == 1 || MO.getImm() == 2 ||
      MO.getImm() == 4 || MO.getImm() == 8);
 }
 
-inline static bool isMem(const MachineInstr *MI, unsigned Op) {
+inline static bool isLeaMem(const MachineInstr *MI, unsigned Op) {
   if (MI->getOperand(Op).isFI()) return true;
   return Op+4 <= MI->getNumOperands() &&
     MI->getOperand(Op  ).isReg() && isScale(MI->getOperand(Op+1)) &&
@@ -258,6 +260,13 @@ inline static bool isMem(const MachineInstr *MI, unsigned Op) {
      MI->getOperand(Op+3).isGlobal() ||
      MI->getOperand(Op+3).isCPI() ||
      MI->getOperand(Op+3).isJTI());
+}
+
+inline static bool isMem(const MachineInstr *MI, unsigned Op) {
+  if (MI->getOperand(Op).isFI()) return true;
+  return Op+5 <= MI->getNumOperands() &&
+    MI->getOperand(Op+4).isReg() &&
+    isLeaMem(MI, Op);
 }
 
 class X86InstrInfo : public TargetInstrInfoImpl {
@@ -407,12 +416,9 @@ public:
   virtual
   bool ReverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const;
 
-  /// IgnoreRegisterClassBarriers - Returns true if pre-register allocation
-  /// live interval splitting pass should ignore barriers of the specified
-  /// register class.
-  bool IgnoreRegisterClassBarriers(const TargetRegisterClass *RC) const;
-
-  const TargetRegisterClass *getPointerRegClass() const;
+  /// isSafeToMoveRegClassDefs - Return true if it's safe to move a machine
+  /// instruction that defines the specified register class.
+  bool isSafeToMoveRegClassDefs(const TargetRegisterClass *RC) const;
 
   // getBaseOpcodeFor - This function returns the "base" X86 opcode for the
   // specified machine instruction.

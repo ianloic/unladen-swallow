@@ -18,6 +18,7 @@
 #include <map>
 #include <vector>
 #include <cassert>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,7 +49,7 @@ namespace {
     
     /// BlockSize - This is the size in bytes of this memory block,
     /// including this header.
-    uintptr_t BlockSize : (sizeof(intptr_t)*8 - 2);
+    uintptr_t BlockSize : (sizeof(intptr_t)*CHAR_BIT - 2);
     
 
     /// getBlockAfter - Return the memory block immediately after this one.
@@ -258,6 +259,7 @@ namespace {
     
     unsigned char *CurStubPtr, *StubBase;
     unsigned char *GOTBase;      // Target Specific reserved memory
+    void *DlsymTable;            // Stub external symbol information
 
     // Centralize memory block allocation.
     sys::MemoryBlock getNewMemoryBlock(unsigned size);
@@ -269,17 +271,35 @@ namespace {
     ~DefaultJITMemoryManager();
 
     void AllocateGOT();
-
+    void SetDlsymTable(void *);
+    
     unsigned char *allocateStub(const GlobalValue* F, unsigned StubSize,
                                 unsigned Alignment);
     
     /// startFunctionBody - When a function starts, allocate a block of free
     /// executable memory, returning a pointer to it and its actual size.
     unsigned char *startFunctionBody(const Function *F, uintptr_t &ActualSize) {
-      CurBlock = FreeMemoryList;
       
+      FreeRangeHeader* candidateBlock = FreeMemoryList;
+      FreeRangeHeader* head = FreeMemoryList;
+      FreeRangeHeader* iter = head->Next;
+
+      uintptr_t largest = candidateBlock->BlockSize;
+      
+      // Search for the largest free block
+      while (iter != head) {
+          if (iter->BlockSize > largest) {
+              largest = iter->BlockSize;
+              candidateBlock = iter;
+          }
+          iter = iter->Next;
+      }
+      
+      // Select this candidate block for allocation
+      CurBlock = candidateBlock;
+
       // Allocate the entire memory block.
-      FreeMemoryList = FreeMemoryList->AllocateBlock();
+      FreeMemoryList = candidateBlock->AllocateBlock();
       ActualSize = CurBlock->BlockSize-sizeof(MemoryRangeHeader);
       return (unsigned char *)(CurBlock+1);
     }
@@ -341,6 +361,10 @@ namespace {
     
     unsigned char *getGOTBase() const {
       return GOTBase;
+    }
+    
+    void *getDlsymTable() const {
+      return DlsymTable;
     }
     
     /// deallocateMemForFunction - Deallocate all memory for the specified
@@ -463,6 +487,7 @@ DefaultJITMemoryManager::DefaultJITMemoryManager() {
   FreeMemoryList = Mem0;
 
   GOTBase = NULL;
+  DlsymTable = NULL;
 }
 
 void DefaultJITMemoryManager::AllocateGOT() {
@@ -471,6 +496,9 @@ void DefaultJITMemoryManager::AllocateGOT() {
   HasGOT = true;
 }
 
+void DefaultJITMemoryManager::SetDlsymTable(void *ptr) {
+  DlsymTable = ptr;
+}
 
 DefaultJITMemoryManager::~DefaultJITMemoryManager() {
   for (unsigned i = 0, e = Blocks.size(); i != e; ++i)

@@ -36,7 +36,6 @@ char MachineModuleInfo::ID = 0;
   
 MachineModuleInfo::MachineModuleInfo()
 : ImmutablePass(&ID)
-, Lines()
 , LabelIDList()
 , FrameMoves()
 , LandingPads()
@@ -334,7 +333,7 @@ bool DebugLabelFolder::runOnMachineFunction(MachineFunction &MF) {
     // Iterate through instructions.
     for (MachineBasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ) {
       // Is it a label.
-      if (I->isDebugLabel()) {
+      if (I->isDebugLabel() && !MMI->isDbgLabelUsed(I->getOperand(0).getImm())){
         // The label ID # is always operand #0, an immediate.
         unsigned NextLabel = I->getOperand(0).getImm();
         

@@ -83,6 +83,9 @@ public:
   ///
   void setCurDebugLoc(DebugLoc dl) { DL = dl; }
 
+  /// getCurDebugLoc() - Return current debug location information.
+  DebugLoc getCurDebugLoc() const { return DL; }
+
   /// SelectInstruction - Do "fast" instruction selection for the given
   /// LLVM IR instruction, and append generated machine instructions to
   /// the current block. Return true if selection was successful.
@@ -269,12 +272,17 @@ protected:
   unsigned FastEmitInst_extractsubreg(MVT::SimpleValueType RetVT,
                                       unsigned Op0, uint32_t Idx);
 
+  /// FastEmitZExtFromI1 - Emit MachineInstrs to compute the value of Op
+  /// with all but the least significant bit set to zero.
+  unsigned FastEmitZExtFromI1(MVT::SimpleValueType VT,
+                              unsigned Op);
+
   /// FastEmitBranch - Emit an unconditional branch to the given block,
   /// unless it is the immediate (fall-through) successor, and update
   /// the CFG.
   void FastEmitBranch(MachineBasicBlock *MBB);
 
-  void UpdateValueMap(Value* I, unsigned Reg);
+  unsigned UpdateValueMap(Value* I, unsigned Reg);
 
   unsigned createResultReg(const TargetRegisterClass *RC);
   

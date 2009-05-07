@@ -17,8 +17,10 @@
 #ifndef LLVM_CODEGEN_VIRTREGMAP_H
 #define LLVM_CODEGEN_VIRTREGMAP_H
 
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -26,11 +28,13 @@
 #include <map>
 
 namespace llvm {
+  class LiveIntervals;
   class MachineInstr;
   class MachineFunction;
   class TargetInstrInfo;
+  class TargetRegisterInfo;
 
-  class VirtRegMap {
+  class VirtRegMap : public MachineFunctionPass {
   public:
     enum {
       NO_PHYS_REG = 0,
@@ -43,9 +47,12 @@ namespace llvm {
                           std::pair<unsigned, ModRef> > MI2VirtMapTy;
 
   private:
-    const TargetInstrInfo &TII;
+    const TargetInstrInfo *TII;
+    const TargetRegisterInfo *TRI;
+    MachineFunction *MF;
 
-    MachineFunction &MF;
+    DenseMap<const TargetRegisterClass*, BitVector> allocatableRCRegs;
+
     /// Virt2PhysMap - This is a virtual to physical register
     /// mapping. Each virtual register is required to have an entry in
     /// it; even spilled virtual registers (the register mapped to a
@@ -121,11 +128,26 @@ namespace llvm {
     /// the register is implicitly defined.
     BitVector ImplicitDefed;
 
+    /// UnusedRegs - A list of physical registers that have not been used.
+    BitVector UnusedRegs;
+
     VirtRegMap(const VirtRegMap&);     // DO NOT IMPLEMENT
     void operator=(const VirtRegMap&); // DO NOT IMPLEMENT
 
   public:
-    explicit VirtRegMap(MachineFunction &mf);
+    static char ID;
+    VirtRegMap() : MachineFunctionPass(&ID), Virt2PhysMap(NO_PHYS_REG),
+                   Virt2StackSlotMap(NO_STACK_SLOT), 
+                   Virt2ReMatIdMap(NO_STACK_SLOT), Virt2SplitMap(0),
+                   Virt2SplitKillMap(0), ReMatMap(NULL),
+                   ReMatId(MAX_STACK_SLOT+1),
+                   LowSpillSlot(NO_STACK_SLOT), HighSpillSlot(NO_STACK_SLOT) { }
+    virtual bool runOnMachineFunction(MachineFunction &MF);
+
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.setPreservesAll();
+      MachineFunctionPass::getAnalysisUsage(AU);
+    }
 
     void grow();
 
@@ -264,8 +286,10 @@ namespace llvm {
 
     /// @brief records the specified MachineInstr as a spill point for virtReg.
     void addSpillPoint(unsigned virtReg, bool isKill, MachineInstr *Pt) {
-      if (SpillPt2VirtMap.find(Pt) != SpillPt2VirtMap.end())
-        SpillPt2VirtMap[Pt].push_back(std::make_pair(virtReg, isKill));
+      std::map<MachineInstr*, std::vector<std::pair<unsigned,bool> > >::iterator
+        I = SpillPt2VirtMap.find(Pt);
+      if (I != SpillPt2VirtMap.end())
+        I->second.push_back(std::make_pair(virtReg, isKill));
       else {
         std::vector<std::pair<unsigned,bool> > Virts;
         Virts.push_back(std::make_pair(virtReg, isKill));
@@ -276,7 +300,7 @@ namespace llvm {
     /// @brief - transfer spill point information from one instruction to
     /// another.
     void transferSpillPts(MachineInstr *Old, MachineInstr *New) {
-      std::map<MachineInstr*,std::vector<std::pair<unsigned,bool> > >::iterator
+      std::map<MachineInstr*, std::vector<std::pair<unsigned,bool> > >::iterator
         I = SpillPt2VirtMap.find(Old);
       if (I == SpillPt2VirtMap.end())
         return;
@@ -302,8 +326,10 @@ namespace llvm {
 
     /// @brief records the specified MachineInstr as a restore point for virtReg.
     void addRestorePoint(unsigned virtReg, MachineInstr *Pt) {
-      if (RestorePt2VirtMap.find(Pt) != RestorePt2VirtMap.end())
-        RestorePt2VirtMap[Pt].push_back(virtReg);
+      std::map<MachineInstr*, std::vector<unsigned> >::iterator I =
+        RestorePt2VirtMap.find(Pt);
+      if (I != RestorePt2VirtMap.end())
+        I->second.push_back(virtReg);
       else {
         std::vector<unsigned> Virts;
         Virts.push_back(virtReg);
@@ -314,7 +340,7 @@ namespace llvm {
     /// @brief - transfer restore point information from one instruction to
     /// another.
     void transferRestorePts(MachineInstr *Old, MachineInstr *New) {
-      std::map<MachineInstr*,std::vector<unsigned> >::iterator I =
+      std::map<MachineInstr*, std::vector<unsigned> >::iterator I =
         RestorePt2VirtMap.find(Old);
       if (I == RestorePt2VirtMap.end())
         return;
@@ -417,7 +443,41 @@ namespace llvm {
     /// the folded instruction map and spill point map.
     void RemoveMachineInstrFromMaps(MachineInstr *MI);
 
-    void print(std::ostream &OS) const;
+    /// FindUnusedRegisters - Gather a list of allocatable registers that
+    /// have not been allocated to any virtual register.
+    bool FindUnusedRegisters(const TargetRegisterInfo *TRI,
+                             LiveIntervals* LIs);
+
+    /// HasUnusedRegisters - Return true if there are any allocatable registers
+    /// that have not been allocated to any virtual register.
+    bool HasUnusedRegisters() const {
+      return !UnusedRegs.none();
+    }
+
+    /// setRegisterUsed - Remember the physical register is now used.
+    void setRegisterUsed(unsigned Reg) {
+      UnusedRegs.reset(Reg);
+    }
+
+    /// isRegisterUnused - Return true if the physical register has not been
+    /// used.
+    bool isRegisterUnused(unsigned Reg) const {
+      return UnusedRegs[Reg];
+    }
+
+    /// getFirstUnusedRegister - Return the first physical register that has not
+    /// been used.
+    unsigned getFirstUnusedRegister(const TargetRegisterClass *RC) {
+      int Reg = UnusedRegs.find_first();
+      while (Reg != -1) {
+        if (allocatableRCRegs[RC][Reg])
+          return (unsigned)Reg;
+        Reg = UnusedRegs.find_next(Reg);
+      }
+      return 0;
+    }
+
+    void print(std::ostream &OS, const Module* M = 0) const;
     void print(std::ostream *OS) const { if (OS) print(*OS); }
     void dump() const;
   };
@@ -430,19 +490,6 @@ namespace llvm {
     VRM.print(OS);
     return OS;
   }
-
-  /// Spiller interface: Implementations of this interface assign spilled
-  /// virtual registers to stack slots, rewriting the code.
-  struct Spiller {
-    virtual ~Spiller();
-    virtual bool runOnMachineFunction(MachineFunction &MF,
-                                      VirtRegMap &VRM) = 0;
-  };
-
-  /// createSpiller - Create an return a spiller object, as specified on the
-  /// command line.
-  Spiller* createSpiller();
-
 } // End llvm namespace
 
 #endif

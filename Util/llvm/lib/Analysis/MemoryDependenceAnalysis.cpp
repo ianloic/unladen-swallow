@@ -18,6 +18,7 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Function.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/ADT/Statistic.h"
@@ -85,9 +86,9 @@ bool MemoryDependenceAnalysis::runOnFunction(Function &) {
 /// 'Inst's set in ReverseMap.  If the set becomes empty, remove Inst's entry.
 template <typename KeyTy>
 static void RemoveFromReverseMap(DenseMap<Instruction*, 
-                                 SmallPtrSet<KeyTy*, 4> > &ReverseMap,
-                                 Instruction *Inst, KeyTy *Val) {
-  typename DenseMap<Instruction*, SmallPtrSet<KeyTy*, 4> >::iterator
+                                 SmallPtrSet<KeyTy, 4> > &ReverseMap,
+                                 Instruction *Inst, KeyTy Val) {
+  typename DenseMap<Instruction*, SmallPtrSet<KeyTy, 4> >::iterator
   InstIt = ReverseMap.find(Inst);
   assert(InstIt != ReverseMap.end() && "Reverse map out of sync?");
   bool Found = InstIt->second.erase(Val);
@@ -121,6 +122,8 @@ getCallSiteDependencyFrom(CallSite CS, bool isReadOnlyCall,
       // FreeInsts erase the entire structure
       PointerSize = ~0ULL;
     } else if (isa<CallInst>(Inst) || isa<InvokeInst>(Inst)) {
+      // Debug intrinsics don't cause dependences.
+      if (isa<DbgInfoIntrinsic>(Inst)) continue;
       CallSite InstCS = CallSite::get(Inst);
       // If these two calls do not interfere, look past it.
       switch (AA->getModRefInfo(CS, InstCS)) {
@@ -174,6 +177,9 @@ getPointerDependencyFrom(Value *MemPtr, uint64_t MemSize, bool isLoad,
   // Walk backwards through the basic block, looking for dependencies.
   while (ScanIt != BB->begin()) {
     Instruction *Inst = --ScanIt;
+
+    // Debug intrinsics don't cause dependences.
+    if (isa<DbgInfoIntrinsic>(Inst)) continue;
 
     // Values depend on loads if the pointers are must aliased.  This means that
     // a load depends on another must aliased load from the same value.
@@ -554,8 +560,7 @@ GetNonLocalInfoForBlock(Value *Pointer, uint64_t PointeeSize,
     
     // Eliminating the dirty entry from 'Cache', so update the reverse info.
     ValueIsLoadPair CacheKey(Pointer, isLoad);
-    RemoveFromReverseMap(ReverseNonLocalPtrDeps, ScanPos,
-                         CacheKey.getOpaqueValue());
+    RemoveFromReverseMap(ReverseNonLocalPtrDeps, ScanPos, CacheKey);
   } else {
     ++NumUncacheNonLocalPtr;
   }
@@ -582,7 +587,7 @@ GetNonLocalInfoForBlock(Value *Pointer, uint64_t PointeeSize,
   Instruction *Inst = Dep.getInst();
   assert(Inst && "Didn't depend on anything?");
   ValueIsLoadPair CacheKey(Pointer, isLoad);
-  ReverseNonLocalPtrDeps[Inst].insert(CacheKey.getOpaqueValue());
+  ReverseNonLocalPtrDeps[Inst].insert(CacheKey);
   return Dep;
 }
 
@@ -821,7 +826,7 @@ getNonLocalPointerDepFromBB(Value *Pointer, uint64_t PointeeSize,
       assert(I->second.isNonLocal() &&
              "Should only be here with transparent block");
       I->second = MemDepResult::getClobber(BB->begin());
-      ReverseNonLocalPtrDeps[BB->begin()].insert(CacheKey.getOpaqueValue());
+      ReverseNonLocalPtrDeps[BB->begin()].insert(CacheKey);
       Result.push_back(*I);
       break;
     }
@@ -877,7 +882,7 @@ RemoveCachedNonLocalPointerDependencies(ValueIsLoadPair P) {
     assert(Target->getParent() == PInfo[i].first);
     
     // Eliminating the dirty entry from 'Cache', so update the reverse info.
-    RemoveFromReverseMap(ReverseNonLocalPtrDeps, Target, P.getOpaqueValue());
+    RemoveFromReverseMap(ReverseNonLocalPtrDeps, Target, P);
   }
   
   // Remove P from NonLocalPointerDeps (which deletes NonLocalDepInfo).
@@ -1024,13 +1029,12 @@ void MemoryDependenceAnalysis::removeInstruction(Instruction *RemInst) {
   ReverseNonLocalPtrDepTy::iterator ReversePtrDepIt =
     ReverseNonLocalPtrDeps.find(RemInst);
   if (ReversePtrDepIt != ReverseNonLocalPtrDeps.end()) {
-    SmallPtrSet<void*, 4> &Set = ReversePtrDepIt->second;
+    SmallPtrSet<ValueIsLoadPair, 4> &Set = ReversePtrDepIt->second;
     SmallVector<std::pair<Instruction*, ValueIsLoadPair>,8> ReversePtrDepsToAdd;
     
-    for (SmallPtrSet<void*, 4>::iterator I = Set.begin(), E = Set.end();
-         I != E; ++I) {
-      ValueIsLoadPair P;
-      P.setFromOpaqueValue(*I);
+    for (SmallPtrSet<ValueIsLoadPair, 4>::iterator I = Set.begin(),
+         E = Set.end(); I != E; ++I) {
+      ValueIsLoadPair P = *I;
       assert(P.getPointer() != RemInst &&
              "Already removed NonLocalPointerDeps info for RemInst");
       
@@ -1060,7 +1064,7 @@ void MemoryDependenceAnalysis::removeInstruction(Instruction *RemInst) {
     
     while (!ReversePtrDepsToAdd.empty()) {
       ReverseNonLocalPtrDeps[ReversePtrDepsToAdd.back().first]
-        .insert(ReversePtrDepsToAdd.back().second.getOpaqueValue());
+        .insert(ReversePtrDepsToAdd.back().second);
       ReversePtrDepsToAdd.pop_back();
     }
   }
@@ -1120,10 +1124,10 @@ void MemoryDependenceAnalysis::verifyRemoved(Instruction *D) const {
        E = ReverseNonLocalPtrDeps.end(); I != E; ++I) {
     assert(I->first != D && "Inst occurs in rev NLPD map");
     
-    for (SmallPtrSet<void*, 4>::const_iterator II = I->second.begin(),
+    for (SmallPtrSet<ValueIsLoadPair, 4>::const_iterator II = I->second.begin(),
          E = I->second.end(); II != E; ++II)
-      assert(*II != ValueIsLoadPair(D, false).getOpaqueValue() &&
-             *II != ValueIsLoadPair(D, true).getOpaqueValue() &&
+      assert(*II != ValueIsLoadPair(D, false) &&
+             *II != ValueIsLoadPair(D, true) &&
              "Inst occurs in ReverseNonLocalPtrDeps map");
   }
   

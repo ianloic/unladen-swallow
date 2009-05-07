@@ -1,6 +1,7 @@
-// RUN: clang -analyze -std=gnu99 -checker-simple -verify %s &&
-// RUN: clang -analyze -std=gnu99 -checker-simple -analyzer-store-region -analyzer-purge-dead=false -verify %s &&
-// RUN: clang -analyze -std=gnu99 -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -std=gnu99 -checker-simple -verify %s &&
+// RUN: clang-cc -analyze -std=gnu99 -checker-simple -verify %s   -analyzer-constraints=range &&
+// RUN: clang-cc -analyze -std=gnu99 -checker-simple -analyzer-store=region -analyzer-purge-dead=false -verify %s &&
+// RUN: clang-cc -analyze -std=gnu99 -checker-cfref -analyzer-store=region -verify %s
 
 #include<stdint.h>
 #include <assert.h>
@@ -68,7 +69,7 @@ int f4_b() {
     *p = 5; // no-warning
     p = 0;
   }
-  else return;
+  else return; // expected-warning {{non-void function 'f4_b' should return a value}}
 
   *p += 10; // expected-warning{{Dereference of null pointer}}
 }
@@ -116,6 +117,49 @@ int f7(int x) {
   return x;
 }
 
+int* f7b(int *x) {
+  
+  int* p = 0;
+  
+  if (((void*)0) == x)
+    p = qux();
+  
+  if (((void*)0) == x)
+    *p = 1; // no-warning
+    
+  return x;
+}
+
+int* f7c(int *x) {
+  
+  int* p = 0;
+  
+  if (((void*)0) == x)
+    p = qux();
+  
+  if (((void*)0) != x)
+    return x;
+
+  // If we reach here then 'p' is not null.
+  *p = 1; // no-warning
+  return x;
+}
+
+int* f7c2(int *x) {
+  
+  int* p = 0;
+  
+  if (((void*)0) == x)
+    p = qux();
+  
+  if (((void*)0) == x)
+    return x;
+    
+  *p = 1; // expected-warning{{null}}
+  return x;
+}
+
+
 int f8(int *p, int *q) {
   if (!p)
     if (p)
@@ -159,7 +203,7 @@ int* f10(int* p, signed char x, int y) {
   // This tests that our symbolication worked, and that we correctly test
   // x against 0 (with the same bitwidth).
   if (!x) {
-    if (!p) return;
+    if (!p) return; // expected-warning {{non-void function 'f10' should return a value}}
     *p = 10;
   }
   else p = 0;
@@ -211,4 +255,11 @@ void f12(HF12ITEM i, char *q) {
   
   *p = 1; // no-warning
 }
+
+// Test handling of translating between integer "pointers" and back.
+void f13() {
+  int *x = 0;
+  if (((((int) x) << 2) + 1) >> 1) *x = 1; // no-warning
+}
+
 

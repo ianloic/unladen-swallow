@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 namespace Ns {
   int f(); // expected-note{{previous declaration is here}}
 
@@ -109,4 +109,3 @@ struct Undef { // expected-note{{definition of 'struct Undef' is not complete un
 int Undef::f() {
   return sizeof(Undef);
 }
-

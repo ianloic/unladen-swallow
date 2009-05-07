@@ -28,27 +28,41 @@ namespace llvm {
 
 class FunctionType;
 
-// Traits for intrusive list of instructions...
+// Traits for intrusive list of basic blocks...
 template<> struct ilist_traits<BasicBlock>
   : public SymbolTableListTraits<BasicBlock, Function> {
 
-  // createSentinel is used to create a node that marks the end of the list...
-  static BasicBlock *createSentinel();
-  static void destroySentinel(BasicBlock *BB) { delete BB; }
-  static iplist<BasicBlock> &getList(Function *F);
+  // createSentinel is used to get hold of the node that marks the end of the
+  // list... (same trick used here as in ilist_traits<Instruction>)
+  BasicBlock *createSentinel() const {
+    return static_cast<BasicBlock*>(&Sentinel);
+  }
+  static void destroySentinel(BasicBlock*) {}
+
+  BasicBlock *provideInitialHead() const { return createSentinel(); }
+  BasicBlock *ensureHead(BasicBlock*) const { return createSentinel(); }
+  static void noteHead(BasicBlock*, BasicBlock*) {}
+
   static ValueSymbolTable *getSymTab(Function *ItemParent);
-  static int getListOffset();
+private:
+  mutable ilist_node<BasicBlock> Sentinel;
 };
 
 template<> struct ilist_traits<Argument>
   : public SymbolTableListTraits<Argument, Function> {
 
-  // createSentinel is used to create a node that marks the end of the list...
-  static Argument *createSentinel();
-  static void destroySentinel(Argument *A) { delete A; }
-  static iplist<Argument> &getList(Function *F);
+  Argument *createSentinel() const {
+    return static_cast<Argument*>(&Sentinel);
+  }
+  static void destroySentinel(Argument*) {}
+
+  Argument *provideInitialHead() const { return createSentinel(); }
+  Argument *ensureHead(Argument*) const { return createSentinel(); }
+  static void noteHead(Argument*, Argument*) {}
+
   static ValueSymbolTable *getSymTab(Function *ItemParent);
-  static int getListOffset();
+private:
+  mutable ilist_node<Argument> Sentinel;
 };
 
 class Function : public GlobalValue, public Annotable,
@@ -129,7 +143,7 @@ public:
   /// The particular intrinsic functions which correspond to this value are
   /// defined in llvm/Intrinsics.h.
   ///
-  unsigned getIntrinsicID(bool noAssert = false) const;
+  unsigned getIntrinsicID() const;
   bool isIntrinsic() const { return getIntrinsicID() != 0; }
 
   /// getCallingConv()/setCallingConv(uint) - These method get and set the
@@ -287,9 +301,15 @@ public:
     CheckLazyArguments();
     return ArgumentList;
   }
+  static iplist<Argument> Function::*getSublistAccess(Argument*) {
+    return &Function::ArgumentList;
+  }
 
   const BasicBlockListType &getBasicBlockList() const { return BasicBlocks; }
         BasicBlockListType &getBasicBlockList()       { return BasicBlocks; }
+  static iplist<BasicBlock> Function::*getSublistAccess(BasicBlock*) {
+    return &Function::BasicBlocks;
+  }
 
   const BasicBlock       &getEntryBlock() const   { return front(); }
         BasicBlock       &getEntryBlock()         { return front(); }
@@ -375,15 +395,6 @@ public:
   /// including any contained basic blocks.
   ///
   void dropAllReferences();
-  
-  static unsigned getBasicBlockListOffset() {
-    Function *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->BasicBlocks));
-  }
-  static unsigned getArgumentListOffset() {
-    Function *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->ArgumentList));
-  }
 };
 
 inline ValueSymbolTable *
@@ -395,17 +406,6 @@ inline ValueSymbolTable *
 ilist_traits<Argument>::getSymTab(Function *F) {
   return F ? &F->getValueSymbolTable() : 0;
 }
-
-inline int 
-ilist_traits<BasicBlock>::getListOffset() {
-  return Function::getBasicBlockListOffset();
-}
-
-inline int 
-ilist_traits<Argument>::getListOffset() {
-  return Function::getArgumentListOffset();
-}
-
 
 } // End llvm namespace
 

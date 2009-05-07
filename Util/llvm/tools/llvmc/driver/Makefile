@@ -8,12 +8,15 @@
 ##===----------------------------------------------------------------------===##
 
 LEVEL = ../../..
-TOOLNAME = $(DRIVER_NAME)
+
+TOOLNAME = $(LLVMC_BASED_DRIVER_NAME)
+LLVMLIBS = CompilerDriver
+
+ifneq ($(LLVMC_BUILTIN_PLUGINS),)
+USEDLIBS += $(patsubst %,plugin_llvmc_%,$(LLVMC_BUILTIN_PLUGINS))
+endif
+
 LINK_COMPONENTS = support system
 REQUIRES_EH := 1
-
-ifneq ($(BUILTIN_PLUGINS),)
-USEDLIBS = $(patsubst %,plugin_llvmc_%,$(BUILTIN_PLUGINS))
-endif
 
 include $(LEVEL)/Makefile.common

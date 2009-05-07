@@ -20,15 +20,18 @@
 #include "llvm/Function.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Utils/AddrModeMatcher.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/Assembly/Writer.h"
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -49,7 +52,7 @@ namespace {
 
     /// BackEdges - Keep a set of all the loop back edges.
     ///
-    SmallSet<std::pair<BasicBlock*,BasicBlock*>, 8> BackEdges;
+    SmallSet<std::pair<const BasicBlock*, const BasicBlock*>, 8> BackEdges;
   public:
     static char ID; // Pass identification, replacement for typeid
     explicit CodeGenPrepare(const TargetLowering *tli = 0)
@@ -66,7 +69,7 @@ namespace {
     bool OptimizeInlineAsmInst(Instruction *I, CallSite CS,
                                DenseMap<Value*,Value*> &SunkAddrs);
     bool OptimizeExtUses(Instruction *I);
-    void findLoopBackEdges(Function &F);
+    void findLoopBackEdges(const Function &F);
   };
 }
 
@@ -80,45 +83,11 @@ FunctionPass *llvm::createCodeGenPreparePass(const TargetLowering *TLI) {
 
 /// findLoopBackEdges - Do a DFS walk to find loop back edges.
 ///
-void CodeGenPrepare::findLoopBackEdges(Function &F) {
-  SmallPtrSet<BasicBlock*, 8> Visited;
-  SmallVector<std::pair<BasicBlock*, succ_iterator>, 8> VisitStack;
-  SmallPtrSet<BasicBlock*, 8> InStack;
-
-  BasicBlock *BB = &F.getEntryBlock();
-  if (succ_begin(BB) == succ_end(BB))
-    return;
-  Visited.insert(BB);
-  VisitStack.push_back(std::make_pair(BB, succ_begin(BB)));
-  InStack.insert(BB);
-  do {
-    std::pair<BasicBlock*, succ_iterator> &Top = VisitStack.back();
-    BasicBlock *ParentBB = Top.first;
-    succ_iterator &I = Top.second;
-
-    bool FoundNew = false;
-    while (I != succ_end(ParentBB)) {
-      BB = *I++;
-      if (Visited.insert(BB)) {
-        FoundNew = true;
-        break;
-      }
-      // Successor is in VisitStack, it's a back edge.
-      if (InStack.count(BB))
-        BackEdges.insert(std::make_pair(ParentBB, BB));
-    }
-
-    if (FoundNew) {
-      // Go down one level if there is a unvisited successor.
-      InStack.insert(BB);
-      VisitStack.push_back(std::make_pair(BB, succ_begin(BB)));
-    } else {
-      // Go up one level.
-      std::pair<BasicBlock*, succ_iterator> &Pop = VisitStack.back();
-      InStack.erase(Pop.first);
-      VisitStack.pop_back();
-    }
-  } while (!VisitStack.empty());
+void CodeGenPrepare::findLoopBackEdges(const Function &F) {
+  SmallVector<std::pair<const BasicBlock*,const BasicBlock*>, 32> Edges;
+  FindFunctionBackedges(F, Edges);
+  
+  BackEdges.insert(Edges.begin(), Edges.end());
 }
 
 
@@ -142,10 +111,11 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
   return EverMadeChange;
 }
 
-/// EliminateMostlyEmptyBlocks - eliminate blocks that contain only PHI nodes
-/// and an unconditional branch.  Passes before isel (e.g. LSR/loopsimplify)
-/// often split edges in ways that are non-optimal for isel.  Start by
-/// eliminating these blocks so we can split them the way we want them.
+/// EliminateMostlyEmptyBlocks - eliminate blocks that contain only PHI nodes,
+/// debug info directives, and an unconditional branch.  Passes before isel
+/// (e.g. LSR/loopsimplify) often split edges in ways that are non-optimal for
+/// isel.  Start by eliminating these blocks so we can split them the way we
+/// want them.
 bool CodeGenPrepare::EliminateMostlyEmptyBlocks(Function &F) {
   bool MadeChange = false;
   // Note that this intentionally skips the entry block.
@@ -157,12 +127,18 @@ bool CodeGenPrepare::EliminateMostlyEmptyBlocks(Function &F) {
     if (!BI || !BI->isUnconditional())
       continue;
 
-    // If the instruction before the branch isn't a phi node, then other stuff
-    // is happening here.
+    // If the instruction before the branch (skipping debug info) isn't a phi
+    // node, then other stuff is happening here.
     BasicBlock::iterator BBI = BI;
     if (BBI != BB->begin()) {
       --BBI;
-      if (!isa<PHINode>(BBI)) continue;
+      while (isa<DbgInfoIntrinsic>(BBI)) {
+        if (BBI == BB->begin())
+          break;
+        --BBI;
+      }
+      if (!isa<DbgInfoIntrinsic>(BBI) && !isa<PHINode>(BBI))
+        continue;
     }
 
     // Do not break infinite loops.
@@ -318,12 +294,19 @@ void CodeGenPrepare::EliminateMostlyEmptyBlock(BasicBlock *BB) {
 /// predecessor of the succ that is empty (and thus has no phi nodes), use it
 /// instead of introducing a new block.
 static void SplitEdgeNicely(TerminatorInst *TI, unsigned SuccNum,
-                     SmallSet<std::pair<BasicBlock*,BasicBlock*>, 8> &BackEdges,
+                     SmallSet<std::pair<const BasicBlock*,
+                                        const BasicBlock*>, 8> &BackEdges,
                              Pass *P) {
   BasicBlock *TIBB = TI->getParent();
   BasicBlock *Dest = TI->getSuccessor(SuccNum);
   assert(isa<PHINode>(Dest->begin()) &&
          "This should only be called if Dest has a PHI!");
+
+  // Do not split edges to EH landing pads.
+  if (InvokeInst *Invoke = dyn_cast<InvokeInst>(TI)) {
+    if (Invoke->getSuccessor(1) == Dest)
+      return;
+  }
 
   // As a hack, never split backedges of loops.  Even though the copy for any
   // PHIs inserted on the backedge would be dead for exits from the loop, we
@@ -342,15 +325,20 @@ static void SplitEdgeNicely(TerminatorInst *TI, unsigned SuccNum,
       BasicBlock *Pred = *PI;
       // To be usable, the pred has to end with an uncond branch to the dest.
       BranchInst *PredBr = dyn_cast<BranchInst>(Pred->getTerminator());
-      if (!PredBr || !PredBr->isUnconditional() ||
-          // Must be empty other than the branch.
-          &Pred->front() != PredBr ||
-          // Cannot be the entry block; its label does not get emitted.
-          Pred == &(Dest->getParent()->getEntryBlock()))
+      if (!PredBr || !PredBr->isUnconditional())
+        continue;
+      // Must be empty other than the branch and debug info.
+      BasicBlock::iterator I = Pred->begin();
+      while (isa<DbgInfoIntrinsic>(I))
+        I++;
+      if (dyn_cast<Instruction>(I) != PredBr)
+        continue;
+      // Cannot be the entry block; its label does not get emitted.
+      if (Pred == &(Dest->getParent()->getEntryBlock()))
         continue;
 
       // Finally, since we know that Dest has phi nodes in it, we have to make
-      // sure that jumping to Pred will have the same affect as going to Dest in
+      // sure that jumping to Pred will have the same effect as going to Dest in
       // terms of PHI values.
       PHINode *PN;
       unsigned PHINo = 0;
@@ -548,644 +536,6 @@ static bool OptimizeCmpExpression(CmpInst *CI) {
 }
 
 //===----------------------------------------------------------------------===//
-// Addressing Mode Analysis and Optimization
-//===----------------------------------------------------------------------===//
-
-namespace {
-  /// ExtAddrMode - This is an extended version of TargetLowering::AddrMode
-  /// which holds actual Value*'s for register values.
-  struct ExtAddrMode : public TargetLowering::AddrMode {
-    Value *BaseReg;
-    Value *ScaledReg;
-    ExtAddrMode() : BaseReg(0), ScaledReg(0) {}
-    void print(OStream &OS) const;
-    void dump() const {
-      print(cerr);
-      cerr << '\n';
-    }
-  };
-} // end anonymous namespace
-
-static inline OStream &operator<<(OStream &OS, const ExtAddrMode &AM) {
-  AM.print(OS);
-  return OS;
-}
-
-void ExtAddrMode::print(OStream &OS) const {
-  bool NeedPlus = false;
-  OS << "[";
-  if (BaseGV)
-    OS << (NeedPlus ? " + " : "")
-       << "GV:%" << BaseGV->getName(), NeedPlus = true;
-
-  if (BaseOffs)
-    OS << (NeedPlus ? " + " : "") << BaseOffs, NeedPlus = true;
-
-  if (BaseReg)
-    OS << (NeedPlus ? " + " : "")
-       << "Base:%" << BaseReg->getName(), NeedPlus = true;
-  if (Scale)
-    OS << (NeedPlus ? " + " : "")
-       << Scale << "*%" << ScaledReg->getName(), NeedPlus = true;
-
-  OS << ']';
-}
-
-namespace {
-/// AddressingModeMatcher - This class exposes a single public method, which is
-/// used to construct a "maximal munch" of the addressing mode for the target
-/// specified by TLI for an access to "V" with an access type of AccessTy.  This
-/// returns the addressing mode that is actually matched by value, but also
-/// returns the list of instructions involved in that addressing computation in
-/// AddrModeInsts.
-class AddressingModeMatcher {
-  SmallVectorImpl<Instruction*> &AddrModeInsts;
-  const TargetLowering &TLI;
-
-  /// AccessTy/MemoryInst - This is the type for the access (e.g. double) and
-  /// the memory instruction that we're computing this address for.
-  const Type *AccessTy;
-  Instruction *MemoryInst;
-  
-  /// AddrMode - This is the addressing mode that we're building up.  This is
-  /// part of the return value of this addressing mode matching stuff.
-  ExtAddrMode &AddrMode;
-  
-  /// IgnoreProfitability - This is set to true when we should not do
-  /// profitability checks.  When true, IsProfitableToFoldIntoAddressingMode
-  /// always returns true.
-  bool IgnoreProfitability;
-  
-  AddressingModeMatcher(SmallVectorImpl<Instruction*> &AMI,
-                        const TargetLowering &T, const Type *AT,
-                        Instruction *MI, ExtAddrMode &AM)
-    : AddrModeInsts(AMI), TLI(T), AccessTy(AT), MemoryInst(MI), AddrMode(AM) {
-    IgnoreProfitability = false;
-  }
-public:
-  
-  /// Match - Find the maximal addressing mode that a load/store of V can fold,
-  /// give an access type of AccessTy.  This returns a list of involved
-  /// instructions in AddrModeInsts.
-  static ExtAddrMode Match(Value *V, const Type *AccessTy,
-                           Instruction *MemoryInst,
-                           SmallVectorImpl<Instruction*> &AddrModeInsts,
-                           const TargetLowering &TLI) {
-    ExtAddrMode Result;
-
-    bool Success = 
-      AddressingModeMatcher(AddrModeInsts, TLI, AccessTy,
-                            MemoryInst, Result).MatchAddr(V, 0);
-    Success = Success; assert(Success && "Couldn't select *anything*?");
-    return Result;
-  }
-private:
-  bool MatchScaledValue(Value *ScaleReg, int64_t Scale, unsigned Depth);
-  bool MatchAddr(Value *V, unsigned Depth);
-  bool MatchOperationAddr(User *Operation, unsigned Opcode, unsigned Depth);
-  bool IsProfitableToFoldIntoAddressingMode(Instruction *I,
-                                            ExtAddrMode &AMBefore,
-                                            ExtAddrMode &AMAfter);
-  bool ValueAlreadyLiveAtInst(Value *Val, Value *KnownLive1, Value *KnownLive2);
-};
-} // end anonymous namespace
-
-/// MatchScaledValue - Try adding ScaleReg*Scale to the current addressing mode.
-/// Return true and update AddrMode if this addr mode is legal for the target,
-/// false if not.
-bool AddressingModeMatcher::MatchScaledValue(Value *ScaleReg, int64_t Scale,
-                                             unsigned Depth) {
-  // If Scale is 1, then this is the same as adding ScaleReg to the addressing
-  // mode.  Just process that directly.
-  if (Scale == 1)
-    return MatchAddr(ScaleReg, Depth);
-  
-  // If the scale is 0, it takes nothing to add this.
-  if (Scale == 0)
-    return true;
-  
-  // If we already have a scale of this value, we can add to it, otherwise, we
-  // need an available scale field.
-  if (AddrMode.Scale != 0 && AddrMode.ScaledReg != ScaleReg)
-    return false;
-
-  ExtAddrMode TestAddrMode = AddrMode;
-
-  // Add scale to turn X*4+X*3 -> X*7.  This could also do things like
-  // [A+B + A*7] -> [B+A*8].
-  TestAddrMode.Scale += Scale;
-  TestAddrMode.ScaledReg = ScaleReg;
-
-  // If the new address isn't legal, bail out.
-  if (!TLI.isLegalAddressingMode(TestAddrMode, AccessTy))
-    return false;
-
-  // It was legal, so commit it.
-  AddrMode = TestAddrMode;
-  
-  // Okay, we decided that we can add ScaleReg+Scale to AddrMode.  Check now
-  // to see if ScaleReg is actually X+C.  If so, we can turn this into adding
-  // X*Scale + C*Scale to addr mode.
-  ConstantInt *CI; Value *AddLHS;
-  if (isa<Instruction>(ScaleReg) &&  // not a constant expr.
-      match(ScaleReg, m_Add(m_Value(AddLHS), m_ConstantInt(CI)))) {
-    TestAddrMode.ScaledReg = AddLHS;
-    TestAddrMode.BaseOffs += CI->getSExtValue()*TestAddrMode.Scale;
-      
-    // If this addressing mode is legal, commit it and remember that we folded
-    // this instruction.
-    if (TLI.isLegalAddressingMode(TestAddrMode, AccessTy)) {
-      AddrModeInsts.push_back(cast<Instruction>(ScaleReg));
-      AddrMode = TestAddrMode;
-      return true;
-    }
-  }
-
-  // Otherwise, not (x+c)*scale, just return what we have.
-  return true;
-}
-
-/// MightBeFoldableInst - This is a little filter, which returns true if an
-/// addressing computation involving I might be folded into a load/store
-/// accessing it.  This doesn't need to be perfect, but needs to accept at least
-/// the set of instructions that MatchOperationAddr can.
-static bool MightBeFoldableInst(Instruction *I) {
-  switch (I->getOpcode()) {
-  case Instruction::BitCast:
-    // Don't touch identity bitcasts.
-    if (I->getType() == I->getOperand(0)->getType())
-      return false;
-    return isa<PointerType>(I->getType()) || isa<IntegerType>(I->getType());
-  case Instruction::PtrToInt:
-    // PtrToInt is always a noop, as we know that the int type is pointer sized.
-    return true;
-  case Instruction::IntToPtr:
-    // We know the input is intptr_t, so this is foldable.
-    return true;
-  case Instruction::Add:
-    return true;
-  case Instruction::Mul:
-  case Instruction::Shl:
-    // Can only handle X*C and X << C.
-    return isa<ConstantInt>(I->getOperand(1));
-  case Instruction::GetElementPtr:
-    return true;
-  default:
-    return false;
-  }
-}
-
-
-/// MatchOperationAddr - Given an instruction or constant expr, see if we can
-/// fold the operation into the addressing mode.  If so, update the addressing
-/// mode and return true, otherwise return false without modifying AddrMode.
-bool AddressingModeMatcher::MatchOperationAddr(User *AddrInst, unsigned Opcode,
-                                               unsigned Depth) {
-  // Avoid exponential behavior on extremely deep expression trees.
-  if (Depth >= 5) return false;
-  
-  switch (Opcode) {
-  case Instruction::PtrToInt:
-    // PtrToInt is always a noop, as we know that the int type is pointer sized.
-    return MatchAddr(AddrInst->getOperand(0), Depth);
-  case Instruction::IntToPtr:
-    // This inttoptr is a no-op if the integer type is pointer sized.
-    if (TLI.getValueType(AddrInst->getOperand(0)->getType()) ==
-        TLI.getPointerTy())
-      return MatchAddr(AddrInst->getOperand(0), Depth);
-    return false;
-  case Instruction::BitCast:
-    // BitCast is always a noop, and we can handle it as long as it is
-    // int->int or pointer->pointer (we don't want int<->fp or something).
-    if ((isa<PointerType>(AddrInst->getOperand(0)->getType()) ||
-         isa<IntegerType>(AddrInst->getOperand(0)->getType())) &&
-        // Don't touch identity bitcasts.  These were probably put here by LSR,
-        // and we don't want to mess around with them.  Assume it knows what it
-        // is doing.
-        AddrInst->getOperand(0)->getType() != AddrInst->getType())
-      return MatchAddr(AddrInst->getOperand(0), Depth);
-    return false;
-  case Instruction::Add: {
-    // Check to see if we can merge in the RHS then the LHS.  If so, we win.
-    ExtAddrMode BackupAddrMode = AddrMode;
-    unsigned OldSize = AddrModeInsts.size();
-    if (MatchAddr(AddrInst->getOperand(1), Depth+1) &&
-        MatchAddr(AddrInst->getOperand(0), Depth+1))
-      return true;
-    
-    // Restore the old addr mode info.
-    AddrMode = BackupAddrMode;
-    AddrModeInsts.resize(OldSize);
-    
-    // Otherwise this was over-aggressive.  Try merging in the LHS then the RHS.
-    if (MatchAddr(AddrInst->getOperand(0), Depth+1) &&
-        MatchAddr(AddrInst->getOperand(1), Depth+1))
-      return true;
-    
-    // Otherwise we definitely can't merge the ADD in.
-    AddrMode = BackupAddrMode;
-    AddrModeInsts.resize(OldSize);
-    break;
-  }
-  //case Instruction::Or:
-  // TODO: We can handle "Or Val, Imm" iff this OR is equivalent to an ADD.
-  //break;
-  case Instruction::Mul:
-  case Instruction::Shl: {
-    // Can only handle X*C and X << C.
-    ConstantInt *RHS = dyn_cast<ConstantInt>(AddrInst->getOperand(1));
-    if (!RHS) return false;
-    int64_t Scale = RHS->getSExtValue();
-    if (Opcode == Instruction::Shl)
-      Scale = 1 << Scale;
-    
-    return MatchScaledValue(AddrInst->getOperand(0), Scale, Depth);
-  }
-  case Instruction::GetElementPtr: {
-    // Scan the GEP.  We check it if it contains constant offsets and at most
-    // one variable offset.
-    int VariableOperand = -1;
-    unsigned VariableScale = 0;
-    
-    int64_t ConstantOffset = 0;
-    const TargetData *TD = TLI.getTargetData();
-    gep_type_iterator GTI = gep_type_begin(AddrInst);
-    for (unsigned i = 1, e = AddrInst->getNumOperands(); i != e; ++i, ++GTI) {
-      if (const StructType *STy = dyn_cast<StructType>(*GTI)) {
-        const StructLayout *SL = TD->getStructLayout(STy);
-        unsigned Idx =
-          cast<ConstantInt>(AddrInst->getOperand(i))->getZExtValue();
-        ConstantOffset += SL->getElementOffset(Idx);
-      } else {
-        uint64_t TypeSize = TD->getTypePaddedSize(GTI.getIndexedType());
-        if (ConstantInt *CI = dyn_cast<ConstantInt>(AddrInst->getOperand(i))) {
-          ConstantOffset += CI->getSExtValue()*TypeSize;
-        } else if (TypeSize) {  // Scales of zero don't do anything.
-          // We only allow one variable index at the moment.
-          if (VariableOperand != -1)
-            return false;
-          
-          // Remember the variable index.
-          VariableOperand = i;
-          VariableScale = TypeSize;
-        }
-      }
-    }
-    
-    // A common case is for the GEP to only do a constant offset.  In this case,
-    // just add it to the disp field and check validity.
-    if (VariableOperand == -1) {
-      AddrMode.BaseOffs += ConstantOffset;
-      if (ConstantOffset == 0 || TLI.isLegalAddressingMode(AddrMode, AccessTy)){
-        // Check to see if we can fold the base pointer in too.
-        if (MatchAddr(AddrInst->getOperand(0), Depth+1))
-          return true;
-      }
-      AddrMode.BaseOffs -= ConstantOffset;
-      return false;
-    }
-
-    // Save the valid addressing mode in case we can't match.
-    ExtAddrMode BackupAddrMode = AddrMode;
-    
-    // Check that this has no base reg yet.  If so, we won't have a place to
-    // put the base of the GEP (assuming it is not a null ptr).
-    bool SetBaseReg = true;
-    if (isa<ConstantPointerNull>(AddrInst->getOperand(0)))
-      SetBaseReg = false;   // null pointer base doesn't need representation.
-    else if (AddrMode.HasBaseReg)
-      return false;  // Base register already specified, can't match GEP.
-    else {
-      // Otherwise, we'll use the GEP base as the BaseReg.
-      AddrMode.HasBaseReg = true;
-      AddrMode.BaseReg = AddrInst->getOperand(0);
-    }
-    
-    // See if the scale and offset amount is valid for this target.
-    AddrMode.BaseOffs += ConstantOffset;
-    
-    if (!MatchScaledValue(AddrInst->getOperand(VariableOperand), VariableScale,
-                          Depth)) {
-      AddrMode = BackupAddrMode;
-      return false;
-    }
-    
-    // If we have a null as the base of the GEP, folding in the constant offset
-    // plus variable scale is all we can do.
-    if (!SetBaseReg) return true;
-      
-    // If this match succeeded, we know that we can form an address with the
-    // GepBase as the basereg.  Match the base pointer of the GEP more
-    // aggressively by zeroing out BaseReg and rematching.  If the base is
-    // (for example) another GEP, this allows merging in that other GEP into
-    // the addressing mode we're forming.
-    AddrMode.HasBaseReg = false;
-    AddrMode.BaseReg = 0;
-    bool Success = MatchAddr(AddrInst->getOperand(0), Depth+1);
-    assert(Success && "MatchAddr should be able to fill in BaseReg!");
-    Success=Success;
-    return true;
-  }
-  }
-  return false;
-}
-
-/// MatchAddr - If we can, try to add the value of 'Addr' into the current
-/// addressing mode.  If Addr can't be added to AddrMode this returns false and
-/// leaves AddrMode unmodified.  This assumes that Addr is either a pointer type
-/// or intptr_t for the target.
-///
-bool AddressingModeMatcher::MatchAddr(Value *Addr, unsigned Depth) {
-  if (ConstantInt *CI = dyn_cast<ConstantInt>(Addr)) {
-    // Fold in immediates if legal for the target.
-    AddrMode.BaseOffs += CI->getSExtValue();
-    if (TLI.isLegalAddressingMode(AddrMode, AccessTy))
-      return true;
-    AddrMode.BaseOffs -= CI->getSExtValue();
-  } else if (GlobalValue *GV = dyn_cast<GlobalValue>(Addr)) {
-    // If this is a global variable, try to fold it into the addressing mode.
-    if (AddrMode.BaseGV == 0) {
-      AddrMode.BaseGV = GV;
-      if (TLI.isLegalAddressingMode(AddrMode, AccessTy))
-        return true;
-      AddrMode.BaseGV = 0;
-    }
-  } else if (Instruction *I = dyn_cast<Instruction>(Addr)) {
-    ExtAddrMode BackupAddrMode = AddrMode;
-    unsigned OldSize = AddrModeInsts.size();
-
-    // Check to see if it is possible to fold this operation.
-    if (MatchOperationAddr(I, I->getOpcode(), Depth)) {
-      // Okay, it's possible to fold this.  Check to see if it is actually
-      // *profitable* to do so.  We use a simple cost model to avoid increasing
-      // register pressure too much.
-      if (I->hasOneUse() ||
-          IsProfitableToFoldIntoAddressingMode(I, BackupAddrMode, AddrMode)) {
-        AddrModeInsts.push_back(I);
-        return true;
-      }
-      
-      // It isn't profitable to do this, roll back.
-      //cerr << "NOT FOLDING: " << *I;
-      AddrMode = BackupAddrMode;
-      AddrModeInsts.resize(OldSize);
-    }
-  } else if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Addr)) {
-    if (MatchOperationAddr(CE, CE->getOpcode(), Depth))
-      return true;
-  } else if (isa<ConstantPointerNull>(Addr)) {
-    // Null pointer gets folded without affecting the addressing mode.
-    return true;
-  }
-
-  // Worse case, the target should support [reg] addressing modes. :)
-  if (!AddrMode.HasBaseReg) {
-    AddrMode.HasBaseReg = true;
-    AddrMode.BaseReg = Addr;
-    // Still check for legality in case the target supports [imm] but not [i+r].
-    if (TLI.isLegalAddressingMode(AddrMode, AccessTy))
-      return true;
-    AddrMode.HasBaseReg = false;
-    AddrMode.BaseReg = 0;
-  }
-
-  // If the base register is already taken, see if we can do [r+r].
-  if (AddrMode.Scale == 0) {
-    AddrMode.Scale = 1;
-    AddrMode.ScaledReg = Addr;
-    if (TLI.isLegalAddressingMode(AddrMode, AccessTy))
-      return true;
-    AddrMode.Scale = 0;
-    AddrMode.ScaledReg = 0;
-  }
-  // Couldn't match.
-  return false;
-}
-
-
-/// IsOperandAMemoryOperand - Check to see if all uses of OpVal by the specified
-/// inline asm call are due to memory operands.  If so, return true, otherwise
-/// return false.
-static bool IsOperandAMemoryOperand(CallInst *CI, InlineAsm *IA, Value *OpVal,
-                                    const TargetLowering &TLI) {
-  std::vector<InlineAsm::ConstraintInfo>
-  Constraints = IA->ParseConstraints();
-  
-  unsigned ArgNo = 1;   // ArgNo - The operand of the CallInst.
-  for (unsigned i = 0, e = Constraints.size(); i != e; ++i) {
-    TargetLowering::AsmOperandInfo OpInfo(Constraints[i]);
-    
-    // Compute the value type for each operand.
-    switch (OpInfo.Type) {
-      case InlineAsm::isOutput:
-        if (OpInfo.isIndirect)
-          OpInfo.CallOperandVal = CI->getOperand(ArgNo++);
-        break;
-      case InlineAsm::isInput:
-        OpInfo.CallOperandVal = CI->getOperand(ArgNo++);
-        break;
-      case InlineAsm::isClobber:
-        // Nothing to do.
-        break;
-    }
-    
-    // Compute the constraint code and ConstraintType to use.
-    TLI.ComputeConstraintToUse(OpInfo, SDValue(),
-                             OpInfo.ConstraintType == TargetLowering::C_Memory);
-    
-    // If this asm operand is our Value*, and if it isn't an indirect memory
-    // operand, we can't fold it!
-    if (OpInfo.CallOperandVal == OpVal &&
-        (OpInfo.ConstraintType != TargetLowering::C_Memory ||
-         !OpInfo.isIndirect))
-      return false;
-  }
-  
-  return true;
-}
-
-
-/// FindAllMemoryUses - Recursively walk all the uses of I until we find a
-/// memory use.  If we find an obviously non-foldable instruction, return true.
-/// Add the ultimately found memory instructions to MemoryUses.
-static bool FindAllMemoryUses(Instruction *I,
-                SmallVectorImpl<std::pair<Instruction*,unsigned> > &MemoryUses,
-                              SmallPtrSet<Instruction*, 16> &ConsideredInsts,
-                              const TargetLowering &TLI) {
-  // If we already considered this instruction, we're done.
-  if (!ConsideredInsts.insert(I))
-    return false;
-  
-  // If this is an obviously unfoldable instruction, bail out.
-  if (!MightBeFoldableInst(I))
-    return true;
-
-  // Loop over all the uses, recursively processing them.
-  for (Value::use_iterator UI = I->use_begin(), E = I->use_end();
-       UI != E; ++UI) {
-    if (LoadInst *LI = dyn_cast<LoadInst>(*UI)) {
-      MemoryUses.push_back(std::make_pair(LI, UI.getOperandNo()));
-      continue;
-    }
-    
-    if (StoreInst *SI = dyn_cast<StoreInst>(*UI)) {
-      if (UI.getOperandNo() == 0) return true; // Storing addr, not into addr.
-      MemoryUses.push_back(std::make_pair(SI, UI.getOperandNo()));
-      continue;
-    }
-    
-    if (CallInst *CI = dyn_cast<CallInst>(*UI)) {
-      InlineAsm *IA = dyn_cast<InlineAsm>(CI->getCalledValue());
-      if (IA == 0) return true;
-      
-      // If this is a memory operand, we're cool, otherwise bail out.
-      if (!IsOperandAMemoryOperand(CI, IA, I, TLI))
-        return true;
-      continue;
-    }
-    
-    if (FindAllMemoryUses(cast<Instruction>(*UI), MemoryUses, ConsideredInsts,
-                          TLI))
-      return true;
-  }
-
-  return false;
-}
-
-
-/// ValueAlreadyLiveAtInst - Retrn true if Val is already known to be live at
-/// the use site that we're folding it into.  If so, there is no cost to
-/// include it in the addressing mode.  KnownLive1 and KnownLive2 are two values
-/// that we know are live at the instruction already.
-bool AddressingModeMatcher::ValueAlreadyLiveAtInst(Value *Val,Value *KnownLive1,
-                                                   Value *KnownLive2) {
-  // If Val is either of the known-live values, we know it is live!
-  if (Val == 0 || Val == KnownLive1 || Val == KnownLive2)
-    return true;
-  
-  // All values other than instructions and arguments (e.g. constants) are live.
-  if (!isa<Instruction>(Val) && !isa<Argument>(Val)) return true;
-  
-  // If Val is a constant sized alloca in the entry block, it is live, this is
-  // true because it is just a reference to the stack/frame pointer, which is
-  // live for the whole function.
-  if (AllocaInst *AI = dyn_cast<AllocaInst>(Val))
-    if (AI->isStaticAlloca())
-      return true;
-  
-  // Check to see if this value is already used in the memory instruction's
-  // block.  If so, it's already live into the block at the very least, so we
-  // can reasonably fold it.
-  BasicBlock *MemBB = MemoryInst->getParent();
-  for (Value::use_iterator UI = Val->use_begin(), E = Val->use_end();
-       UI != E; ++UI)
-    // We know that uses of arguments and instructions have to be instructions.
-    if (cast<Instruction>(*UI)->getParent() == MemBB)
-      return true;
-  
-  return false;
-}
-
-
-
-/// IsProfitableToFoldIntoAddressingMode - It is possible for the addressing
-/// mode of the machine to fold the specified instruction into a load or store
-/// that ultimately uses it.  However, the specified instruction has multiple
-/// uses.  Given this, it may actually increase register pressure to fold it
-/// into the load.  For example, consider this code:
-///
-///     X = ...
-///     Y = X+1
-///     use(Y)   -> nonload/store
-///     Z = Y+1
-///     load Z
-///
-/// In this case, Y has multiple uses, and can be folded into the load of Z
-/// (yielding load [X+2]).  However, doing this will cause both "X" and "X+1" to
-/// be live at the use(Y) line.  If we don't fold Y into load Z, we use one
-/// fewer register.  Since Y can't be folded into "use(Y)" we don't increase the
-/// number of computations either.
-///
-/// Note that this (like most of CodeGenPrepare) is just a rough heuristic.  If
-/// X was live across 'load Z' for other reasons, we actually *would* want to
-/// fold the addressing mode in the Z case.  This would make Y die earlier.
-bool AddressingModeMatcher::
-IsProfitableToFoldIntoAddressingMode(Instruction *I, ExtAddrMode &AMBefore,
-                                     ExtAddrMode &AMAfter) {
-  if (IgnoreProfitability) return true;
-  
-  // AMBefore is the addressing mode before this instruction was folded into it,
-  // and AMAfter is the addressing mode after the instruction was folded.  Get
-  // the set of registers referenced by AMAfter and subtract out those
-  // referenced by AMBefore: this is the set of values which folding in this
-  // address extends the lifetime of.
-  //
-  // Note that there are only two potential values being referenced here,
-  // BaseReg and ScaleReg (global addresses are always available, as are any
-  // folded immediates).
-  Value *BaseReg = AMAfter.BaseReg, *ScaledReg = AMAfter.ScaledReg;
-  
-  // If the BaseReg or ScaledReg was referenced by the previous addrmode, their
-  // lifetime wasn't extended by adding this instruction.
-  if (ValueAlreadyLiveAtInst(BaseReg, AMBefore.BaseReg, AMBefore.ScaledReg))
-    BaseReg = 0;
-  if (ValueAlreadyLiveAtInst(ScaledReg, AMBefore.BaseReg, AMBefore.ScaledReg))
-    ScaledReg = 0;
-
-  // If folding this instruction (and it's subexprs) didn't extend any live
-  // ranges, we're ok with it.
-  if (BaseReg == 0 && ScaledReg == 0)
-    return true;
-
-  // If all uses of this instruction are ultimately load/store/inlineasm's,
-  // check to see if their addressing modes will include this instruction.  If
-  // so, we can fold it into all uses, so it doesn't matter if it has multiple
-  // uses.
-  SmallVector<std::pair<Instruction*,unsigned>, 16> MemoryUses;
-  SmallPtrSet<Instruction*, 16> ConsideredInsts;
-  if (FindAllMemoryUses(I, MemoryUses, ConsideredInsts, TLI))
-    return false;  // Has a non-memory, non-foldable use!
-  
-  // Now that we know that all uses of this instruction are part of a chain of
-  // computation involving only operations that could theoretically be folded
-  // into a memory use, loop over each of these uses and see if they could
-  // *actually* fold the instruction.
-  SmallVector<Instruction*, 32> MatchedAddrModeInsts;
-  for (unsigned i = 0, e = MemoryUses.size(); i != e; ++i) {
-    Instruction *User = MemoryUses[i].first;
-    unsigned OpNo = MemoryUses[i].second;
-    
-    // Get the access type of this use.  If the use isn't a pointer, we don't
-    // know what it accesses.
-    Value *Address = User->getOperand(OpNo);
-    if (!isa<PointerType>(Address->getType()))
-      return false;
-    const Type *AddressAccessTy =
-      cast<PointerType>(Address->getType())->getElementType();
-    
-    // Do a match against the root of this address, ignoring profitability. This
-    // will tell us if the addressing mode for the memory operation will
-    // *actually* cover the shared instruction.
-    ExtAddrMode Result;
-    AddressingModeMatcher Matcher(MatchedAddrModeInsts, TLI, AddressAccessTy,
-                                  MemoryInst, Result);
-    Matcher.IgnoreProfitability = true;
-    bool Success = Matcher.MatchAddr(Address, 0);
-    Success = Success; assert(Success && "Couldn't select *anything*?");
-
-    // If the match didn't cover I, then it won't be shared by it.
-    if (std::find(MatchedAddrModeInsts.begin(), MatchedAddrModeInsts.end(),
-                  I) == MatchedAddrModeInsts.end())
-      return false;
-    
-    MatchedAddrModeInsts.clear();
-  }
-  
-  return true;
-}
-
-
-//===----------------------------------------------------------------------===//
 // Memory Optimization
 //===----------------------------------------------------------------------===//
 
@@ -1241,11 +591,13 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   // computation.
   Value *&SunkAddr = SunkAddrs[Addr];
   if (SunkAddr) {
-    DEBUG(cerr << "CGP: Reusing nonlocal addrmode: " << AddrMode << "\n");
+    DEBUG(cerr << "CGP: Reusing nonlocal addrmode: " << AddrMode << " for "
+               << *MemoryInst);
     if (SunkAddr->getType() != Addr->getType())
       SunkAddr = new BitCastInst(SunkAddr, Addr->getType(), "tmp", InsertPt);
   } else {
-    DEBUG(cerr << "CGP: SINKING nonlocal addrmode: " << AddrMode << "\n");
+    DEBUG(cerr << "CGP: SINKING nonlocal addrmode: " << AddrMode << " for "
+               << *MemoryInst);
     const Type *IntPtrTy = TLI->getTargetData()->getIntPtrType();
 
     Value *Result = 0;
@@ -1505,9 +857,12 @@ bool CodeGenPrepare::OptimizeBlock(BasicBlock &BB) {
       if (TLI && isa<InlineAsm>(CI->getCalledValue()))
         if (const TargetAsmInfo *TAI =
             TLI->getTargetMachine().getTargetAsmInfo()) {
-          if (TAI->ExpandInlineAsm(CI))
+          if (TAI->ExpandInlineAsm(CI)) {
             BBI = BB.begin();
-          else
+            // Avoid processing instructions out of order, which could cause
+            // reuse before a value is defined.
+            SunkAddrs.clear();
+          } else
             // Sink address computing for memory operands into the block.
             MadeChange |= OptimizeInlineAsmInst(I, &(*CI), SunkAddrs);
         }

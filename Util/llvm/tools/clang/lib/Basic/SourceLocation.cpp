@@ -7,60 +7,62 @@
 //
 //===----------------------------------------------------------------------===//
 //
-//  This file defines serialization methods for the SourceLocation class.
 //  This file defines accessor methods for the FullSourceLoc class.
 //
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/SourceManager.h"
-#include "llvm/Bitcode/Serialize.h"
-#include "llvm/Bitcode/Deserialize.h"
 #include "llvm/Support/MemoryBuffer.h"
-
+#include "llvm/Support/raw_ostream.h"
+#include <cstdio>
 using namespace clang;
 
-void SourceLocation::Emit(llvm::Serializer& S) const {
-  S.EmitInt(getRawEncoding());  
+//===----------------------------------------------------------------------===//
+// PrettyStackTraceLoc
+//===----------------------------------------------------------------------===//
+
+void PrettyStackTraceLoc::print(llvm::raw_ostream &OS) const {
+  if (Loc.isValid()) {
+    Loc.print(OS, SM);
+    OS << ": ";
+  }
+  OS << Message << '\n';
 }
 
-SourceLocation SourceLocation::ReadVal(llvm::Deserializer& D) {
-  return SourceLocation::getFromRawEncoding(D.ReadInt());   
-}
+//===----------------------------------------------------------------------===//
+// SourceLocation
+//===----------------------------------------------------------------------===//
 
-void SourceLocation::dump(const SourceManager &SM) const {
+void SourceLocation::print(llvm::raw_ostream &OS, const SourceManager &SM)const{
   if (!isValid()) {
-    fprintf(stderr, "<invalid loc>");
+    OS << "<invalid loc>";
     return;
   }
   
   if (isFileID()) {
     PresumedLoc PLoc = SM.getPresumedLoc(*this);
-    
     // The instantiation and spelling pos is identical for file locs.
-    fprintf(stderr, "%s:%d:%d",
-            PLoc.getFilename(), PLoc.getLine(), PLoc.getColumn());
+    OS << PLoc.getFilename() << ':' << PLoc.getLine()
+       << ':' << PLoc.getColumn();
     return;
   }
   
-  SM.getInstantiationLoc(*this).dump(SM);
-  
-  fprintf(stderr, " <Spelling=");
-  SM.getSpellingLoc(*this).dump(SM);
-  fprintf(stderr, ">");
+  SM.getInstantiationLoc(*this).print(OS, SM);
+
+  OS << " <Spelling=";
+  SM.getSpellingLoc(*this).print(OS, SM);
+  OS << '>';
 }
 
-
-void SourceRange::Emit(llvm::Serializer& S) const {
-  B.Emit(S);
-  E.Emit(S);
+void SourceLocation::dump(const SourceManager &SM) const {
+  print(llvm::errs(), SM);
 }
 
-SourceRange SourceRange::ReadVal(llvm::Deserializer& D) {
-  SourceLocation A = SourceLocation::ReadVal(D);
-  SourceLocation B = SourceLocation::ReadVal(D);
-  return SourceRange(A,B);
-}
+//===----------------------------------------------------------------------===//
+// FullSourceLoc
+//===----------------------------------------------------------------------===//
 
 FileID FullSourceLoc::getFileID() const {
   assert(isValid());
@@ -77,17 +79,6 @@ FullSourceLoc FullSourceLoc::getSpellingLoc() const {
   assert(isValid());
   return FullSourceLoc(SrcMgr->getSpellingLoc(*this), *SrcMgr);
 }
-
-unsigned FullSourceLoc::getLineNumber() const {
-  assert(isValid());
-  return SrcMgr->getLineNumber(*this);
-}
-
-unsigned FullSourceLoc::getColumnNumber() const {
-  assert(isValid());
-  return SrcMgr->getColumnNumber(*this);
-}
-
 
 unsigned FullSourceLoc::getInstantiationLineNumber() const {
   assert(isValid());
@@ -127,4 +118,8 @@ const llvm::MemoryBuffer* FullSourceLoc::getBuffer() const {
 std::pair<const char*, const char*> FullSourceLoc::getBufferData() const {
   const llvm::MemoryBuffer *Buf = getBuffer();
   return std::make_pair(Buf->getBufferStart(), Buf->getBufferEnd());
+}
+
+std::pair<FileID, unsigned> FullSourceLoc::getDecomposedLoc() const {
+  return SrcMgr->getDecomposedLoc(*this);
 }

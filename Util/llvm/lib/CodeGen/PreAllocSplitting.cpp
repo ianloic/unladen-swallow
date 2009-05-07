@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "pre-alloc-split"
+#include "VirtRegMap.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -38,10 +39,12 @@ using namespace llvm;
 
 static cl::opt<int> PreSplitLimit("pre-split-limit", cl::init(-1), cl::Hidden);
 static cl::opt<int> DeadSplitLimit("dead-split-limit", cl::init(-1), cl::Hidden);
+static cl::opt<int> RestoreFoldLimit("restore-fold-limit", cl::init(-1), cl::Hidden);
 
 STATISTIC(NumSplits, "Number of intervals split");
 STATISTIC(NumRemats, "Number of intervals split by rematerialization");
 STATISTIC(NumFolds, "Number of intervals split with spill folding");
+STATISTIC(NumRestoreFolds, "Number of intervals split with restore folding");
 STATISTIC(NumRenumbers, "Number of intervals renumbered into new registers");
 STATISTIC(NumDeadSpills, "Number of dead spills removed");
 
@@ -55,6 +58,7 @@ namespace {
     MachineRegisterInfo   *MRI;
     LiveIntervals         *LIs;
     LiveStacks            *LSs;
+    VirtRegMap            *VRM;
 
     // Barrier - Current barrier being processed.
     MachineInstr          *Barrier;
@@ -98,8 +102,10 @@ namespace {
         AU.addPreservedID(PHIEliminationID);
       AU.addRequired<MachineDominatorTree>();
       AU.addRequired<MachineLoopInfo>();
+      AU.addRequired<VirtRegMap>();
       AU.addPreserved<MachineDominatorTree>();
       AU.addPreserved<MachineLoopInfo>();
+      AU.addPreserved<VirtRegMap>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
     
@@ -159,6 +165,12 @@ namespace {
                             MachineBasicBlock* MBB,
                             int& SS,
                             SmallPtrSet<MachineInstr*, 4>& RefsInMBB);
+    MachineInstr* FoldRestore(unsigned vreg, 
+                              const TargetRegisterClass* RC,
+                              MachineInstr* Barrier,
+                              MachineBasicBlock* MBB,
+                              int SS,
+                              SmallPtrSet<MachineInstr*, 4>& RefsInMBB);
     void RenumberValno(VNInfo* VN);
     void ReconstructLiveInterval(LiveInterval* LI);
     bool removeDeadSpills(SmallPtrSet<LiveInterval*, 8>& split);
@@ -220,65 +232,38 @@ PreAllocSplitting::findSpillPoint(MachineBasicBlock *MBB, MachineInstr *MI,
                                   unsigned &SpillIndex) {
   MachineBasicBlock::iterator Pt = MBB->begin();
 
-  // Go top down if RefsInMBB is empty.
-  if (RefsInMBB.empty() && !DefMI) {
-    MachineBasicBlock::iterator MII = MBB->begin();
-    MachineBasicBlock::iterator EndPt = MI;
-    do {
-      ++MII;
-      unsigned Index = LIs->getInstructionIndex(MII);
-      unsigned Gap = LIs->findGapBeforeInstr(Index);
-      
-      // We can't insert the spill between the barrier (a call), and its
-      // corresponding call frame setup/teardown.
-      if (prior(MII)->getOpcode() == TRI->getCallFrameSetupOpcode()) {
-        bool reachedBarrier = false;
-        do {
-          if (MII == EndPt) {
-            reachedBarrier = true;
-            break;
-          }
-          ++MII;
-        } while (MII->getOpcode() != TRI->getCallFrameDestroyOpcode());
-        
-        if (reachedBarrier) break;
-      } else if (Gap) {
-        Pt = MII;
-        SpillIndex = Gap;
-        break;
-      }
-    } while (MII != EndPt);
-  } else {
-    MachineBasicBlock::iterator MII = MI;
-    MachineBasicBlock::iterator EndPt = DefMI
-      ? MachineBasicBlock::iterator(DefMI) : MBB->begin();
+  MachineBasicBlock::iterator MII = MI;
+  MachineBasicBlock::iterator EndPt = DefMI
+    ? MachineBasicBlock::iterator(DefMI) : MBB->begin();
     
-    while (MII != EndPt && !RefsInMBB.count(MII)) {
-      unsigned Index = LIs->getInstructionIndex(MII);
-      
-      // We can't insert the spill between the barrier (a call), and its
-      // corresponding call frame setup.
-      if (prior(MII)->getOpcode() == TRI->getCallFrameSetupOpcode()) {
+  while (MII != EndPt && !RefsInMBB.count(MII) &&
+         MII->getOpcode() != TRI->getCallFrameSetupOpcode())
+    --MII;
+  if (MII == EndPt || RefsInMBB.count(MII)) return Pt;
+    
+  while (MII != EndPt && !RefsInMBB.count(MII)) {
+    unsigned Index = LIs->getInstructionIndex(MII);
+    
+    // We can't insert the spill between the barrier (a call), and its
+    // corresponding call frame setup.
+    if (MII->getOpcode() == TRI->getCallFrameDestroyOpcode()) {
+      while (MII->getOpcode() != TRI->getCallFrameSetupOpcode()) {
         --MII;
-        continue;
-      } if (MII->getOpcode() == TRI->getCallFrameDestroyOpcode()) {
-        bool reachedBarrier = false;
-        while (MII->getOpcode() != TRI->getCallFrameSetupOpcode()) {
-          --MII;
-          if (MII == EndPt) {
-            reachedBarrier = true;
-            break;
-          }
+        if (MII == EndPt) {
+          return Pt;
         }
-        
-        if (reachedBarrier) break;
-        else continue;
-      } else if (LIs->hasGapBeforeInstr(Index)) {
-        Pt = MII;
-        SpillIndex = LIs->findGapBeforeInstr(Index, true);
       }
-      --MII;
+      continue;
+    } else if (LIs->hasGapBeforeInstr(Index)) {
+      Pt = MII;
+      SpillIndex = LIs->findGapBeforeInstr(Index, true);
     }
+    
+    if (RefsInMBB.count(MII))
+      return Pt;
+    
+    
+    --MII;
   }
 
   return Pt;
@@ -296,78 +281,44 @@ PreAllocSplitting::findRestorePoint(MachineBasicBlock *MBB, MachineInstr *MI,
   // FIXME: Allow spill to be inserted to the beginning of the mbb. Update mbb
   // begin index accordingly.
   MachineBasicBlock::iterator Pt = MBB->end();
-  unsigned EndIdx = LIs->getMBBEndIdx(MBB);
+  MachineBasicBlock::iterator EndPt = MBB->getFirstTerminator();
 
-  // Go bottom up if RefsInMBB is empty and the end of the mbb isn't beyond
-  // the last index in the live range.
-  if (RefsInMBB.empty() && LastIdx >= EndIdx) {
-    MachineBasicBlock::iterator MII = MBB->getFirstTerminator();
-    MachineBasicBlock::iterator EndPt = MI;
-    --MII;
-    do {
-      unsigned Index = LIs->getInstructionIndex(MII);
-      unsigned Gap = LIs->findGapBeforeInstr(Index);
+  // We start at the call, so walk forward until we find the call frame teardown
+  // since we can't insert restores before that.  Bail if we encounter a use
+  // during this time.
+  MachineBasicBlock::iterator MII = MI;
+  if (MII == EndPt) return Pt;
+  
+  while (MII != EndPt && !RefsInMBB.count(MII) &&
+         MII->getOpcode() != TRI->getCallFrameDestroyOpcode())
+    ++MII;
+  if (MII == EndPt || RefsInMBB.count(MII)) return Pt;
+  ++MII;
+  
+  // FIXME: Limit the number of instructions to examine to reduce
+  // compile time?
+  while (MII != EndPt) {
+    unsigned Index = LIs->getInstructionIndex(MII);
+    if (Index > LastIdx)
+      break;
+    unsigned Gap = LIs->findGapBeforeInstr(Index);
       
-      // We can't insert a restore between the barrier (a call) and its 
-      // corresponding call frame teardown.
-      if (MII->getOpcode() == TRI->getCallFrameDestroyOpcode()) {
-        bool reachedBarrier = false;
-        while (MII->getOpcode() != TRI->getCallFrameSetupOpcode()) {
-          --MII;
-          if (MII == EndPt) {
-            reachedBarrier = true;
-            break;
-          }
-        }
-        
-        if (reachedBarrier) break;
-        else continue;
-      } else if (Gap) {
-        Pt = MII;
-        RestoreIndex = Gap;
-        break;
-      }
-      
-      --MII;
-    } while (MII != EndPt);
-  } else {
-    MachineBasicBlock::iterator MII = MI;
-    MII = ++MII;
-    
-    // FIXME: Limit the number of instructions to examine to reduce
-    // compile time?
-    while (MII != MBB->getFirstTerminator()) {
-      unsigned Index = LIs->getInstructionIndex(MII);
-      if (Index > LastIdx)
-        break;
-      unsigned Gap = LIs->findGapBeforeInstr(Index);
-      
-      // We can't insert a restore between the barrier (a call) and its 
-      // corresponding call frame teardown.
-      if (MII->getOpcode() == TRI->getCallFrameDestroyOpcode()) {
+    // We can't insert a restore between the barrier (a call) and its 
+    // corresponding call frame teardown.
+    if (MII->getOpcode() == TRI->getCallFrameSetupOpcode()) {
+      do {
+        if (MII == EndPt || RefsInMBB.count(MII)) return Pt;
         ++MII;
-        continue;
-      } else if (prior(MII)->getOpcode() == TRI->getCallFrameSetupOpcode()) {
-        bool reachedBarrier = false;
-        do {
-          if (MII == MBB->getFirstTerminator() || RefsInMBB.count(MII)) {
-            reachedBarrier = true;
-            break;
-          }
-          
-          ++MII;
-        } while (MII->getOpcode() != TRI->getCallFrameDestroyOpcode());
-        
-        if (reachedBarrier) break;
-      } else if (Gap) {
-        Pt = MII;
-        RestoreIndex = Gap;
-      }
-      
-      if (RefsInMBB.count(MII))
-        break;
-      ++MII;
+      } while (MII->getOpcode() != TRI->getCallFrameDestroyOpcode());
+    } else if (Gap) {
+      Pt = MII;
+      RestoreIndex = Gap;
     }
+    
+    if (RefsInMBB.count(MII))
+      return Pt;
+    
+    ++MII;
   }
 
   return Pt;
@@ -388,7 +339,7 @@ int PreAllocSplitting::CreateSpillStackSlot(unsigned Reg,
   }
 
   // Create live interval for stack slot.
-  CurrSLI = &LSs->getOrCreateInterval(SS);
+  CurrSLI = &LSs->getOrCreateInterval(SS, RC);
   if (CurrSLI->hasAtLeastOneValue())
     CurrSValNo = CurrSLI->getValNumInfo(0);
   else
@@ -852,7 +803,7 @@ void PreAllocSplitting::RenumberValno(VNInfo* VN) {
       MachineInstr* MI = LIs->getInstructionFromIndex(*KI);
       unsigned DefIdx = MI->findRegisterDefOperandIdx(CurrLI->reg);
       if (DefIdx == ~0U) continue;
-      if (MI->isRegReDefinedByTwoAddr(DefIdx)) {
+      if (MI->isRegTiedToUseOperand(DefIdx)) {
         VNInfo* NextVN =
                      CurrLI->findDefinedVNInfo(LiveIntervals::getDefIndex(*KI));
         if (NextVN == OldVN) continue;
@@ -902,6 +853,9 @@ void PreAllocSplitting::RenumberValno(VNInfo* VN) {
     MachineOperand& MO = Inst->getOperand(OpIdx);
     MO.setReg(NewVReg);
   }
+  
+  // Grow the VirtRegMap, since we've created a new vreg.
+  VRM->grow();
   
   // The renumbered vreg shares a stack slot with the old register.
   if (IntervalSSMap.count(CurrLI->reg))
@@ -972,8 +926,7 @@ MachineInstr* PreAllocSplitting::FoldSpill(unsigned vreg,
   if (I != IntervalSSMap.end()) {
     SS = I->second;
   } else {
-    SS = MFI->CreateStackObject(RC->getSize(), RC->getAlignment());
-    
+    SS = MFI->CreateStackObject(RC->getSize(), RC->getAlignment());    
   }
   
   MachineInstr* FMI = TII->foldMemoryOperand(*MBB->getParent(),
@@ -985,11 +938,84 @@ MachineInstr* PreAllocSplitting::FoldSpill(unsigned vreg,
     ++NumFolds;
     
     IntervalSSMap[vreg] = SS;
-    CurrSLI = &LSs->getOrCreateInterval(SS);
+    CurrSLI = &LSs->getOrCreateInterval(SS, RC);
     if (CurrSLI->hasAtLeastOneValue())
       CurrSValNo = CurrSLI->getValNumInfo(0);
     else
       CurrSValNo = CurrSLI->getNextValue(~0U, 0, LSs->getVNInfoAllocator());
+  }
+  
+  return FMI;
+}
+
+MachineInstr* PreAllocSplitting::FoldRestore(unsigned vreg, 
+                                             const TargetRegisterClass* RC,
+                                             MachineInstr* Barrier,
+                                             MachineBasicBlock* MBB,
+                                             int SS,
+                                     SmallPtrSet<MachineInstr*, 4>& RefsInMBB) {
+  if ((int)RestoreFoldLimit != -1 && RestoreFoldLimit == (int)NumRestoreFolds)
+    return 0;
+                                       
+  // Go top down if RefsInMBB is empty.
+  if (RefsInMBB.empty())
+    return 0;
+  
+  // Can't fold a restore between a call stack setup and teardown.
+  MachineBasicBlock::iterator FoldPt = Barrier;
+  
+  // Advance from barrier to call frame teardown.
+  while (FoldPt != MBB->getFirstTerminator() &&
+         FoldPt->getOpcode() != TRI->getCallFrameDestroyOpcode()) {
+    if (RefsInMBB.count(FoldPt))
+      return 0;
+    
+    ++FoldPt;
+  }
+  
+  if (FoldPt == MBB->getFirstTerminator())
+    return 0;
+  else
+    ++FoldPt;
+  
+  // Now find the restore point.
+  while (FoldPt != MBB->getFirstTerminator() && !RefsInMBB.count(FoldPt)) {
+    if (FoldPt->getOpcode() == TRI->getCallFrameSetupOpcode()) {
+      while (FoldPt != MBB->getFirstTerminator() &&
+             FoldPt->getOpcode() != TRI->getCallFrameDestroyOpcode()) {
+        if (RefsInMBB.count(FoldPt))
+          return 0;
+        
+        ++FoldPt;
+      }
+      
+      if (FoldPt == MBB->getFirstTerminator())
+        return 0;
+    } 
+    
+    ++FoldPt;
+  }
+  
+  if (FoldPt == MBB->getFirstTerminator())
+    return 0;
+  
+  int OpIdx = FoldPt->findRegisterUseOperandIdx(vreg, true);
+  if (OpIdx == -1)
+    return 0;
+  
+  SmallVector<unsigned, 1> Ops;
+  Ops.push_back(OpIdx);
+  
+  if (!TII->canFoldMemoryOperand(FoldPt, Ops))
+    return 0;
+  
+  MachineInstr* FMI = TII->foldMemoryOperand(*MBB->getParent(),
+                                             FoldPt, Ops, SS);
+  
+  if (FMI) {
+    LIs->ReplaceMachineInstrInMaps(FoldPt, FMI);
+    FMI = MBB->insert(MBB->erase(FoldPt), FMI);
+    ++NumRestoreFolds;
   }
   
   return FMI;
@@ -1102,18 +1128,29 @@ bool PreAllocSplitting::SplitRegLiveInterval(LiveInterval *LI) {
     Def2SpillMap[ValNo->def] = SpillIndex;
 
   // Add restore.
-  TII->loadRegFromStackSlot(*BarrierMBB, RestorePt, CurrLI->reg, SS, RC);
-  MachineInstr *LoadMI = prior(RestorePt);
-  LIs->InsertMachineInstrInMaps(LoadMI, RestoreIndex);
+  bool FoldedRestore = false;
+  if (MachineInstr* LMI = FoldRestore(CurrLI->reg, RC, Barrier,
+                                      BarrierMBB, SS, RefsInMBB)) {
+    RestorePt = LMI;
+    RestoreIndex = LIs->getInstructionIndex(RestorePt);
+    FoldedRestore = true;
+  } else {
+    TII->loadRegFromStackSlot(*BarrierMBB, RestorePt, CurrLI->reg, SS, RC);
+    MachineInstr *LoadMI = prior(RestorePt);
+    LIs->InsertMachineInstrInMaps(LoadMI, RestoreIndex);
+  }
 
   // Update spill stack slot live interval.
   UpdateSpillSlotInterval(ValNo, LIs->getUseIndex(SpillIndex)+1,
                           LIs->getDefIndex(RestoreIndex));
 
   ReconstructLiveInterval(CurrLI);
-  unsigned RestoreIdx = LIs->getInstructionIndex(prior(RestorePt));
-  RestoreIdx = LiveIntervals::getDefIndex(RestoreIdx);
-  RenumberValno(CurrLI->findDefinedVNInfo(RestoreIdx));
+  
+  if (!FoldedRestore) {
+    unsigned RestoreIdx = LIs->getInstructionIndex(prior(RestorePt));
+    RestoreIdx = LiveIntervals::getDefIndex(RestoreIdx);
+    RenumberValno(CurrLI->findDefinedVNInfo(RestoreIdx));
+  }
   
   ++NumSplits;
   return true;
@@ -1128,7 +1165,10 @@ PreAllocSplitting::SplitRegLiveIntervals(const TargetRegisterClass **RCs,
   // by the current barrier.
   SmallVector<LiveInterval*, 8> Intervals;
   for (const TargetRegisterClass **RC = RCs; *RC; ++RC) {
-    if (TII->IgnoreRegisterClassBarriers(*RC))
+    // FIXME: If it's not safe to move any instruction that defines the barrier
+    // register class, then it means there are some special dependencies which
+    // codegen is not modelling. Ignore these barriers for now.
+    if (!TII->isSafeToMoveRegClassDefs(*RC))
       continue;
     std::vector<unsigned> &VRs = MRI->getRegClassVirtRegs(*RC);
     for (unsigned i = 0, e = VRs.size(); i != e; ++i) {
@@ -1173,7 +1213,7 @@ unsigned PreAllocSplitting::getNumberOfNonSpills(
       NonSpills++;
     
     int DefIdx = (*UI)->findRegisterDefOperandIdx(Reg);
-    if (DefIdx != -1 && (*UI)->isRegReDefinedByTwoAddr(DefIdx))
+    if (DefIdx != -1 && (*UI)->isRegTiedToUseOperand(DefIdx))
       FeedsTwoAddr = true;
   }
   
@@ -1411,6 +1451,7 @@ bool PreAllocSplitting::runOnMachineFunction(MachineFunction &MF) {
   MRI    = &MF.getRegInfo();
   LIs    = &getAnalysis<LiveIntervals>();
   LSs    = &getAnalysis<LiveStacks>();
+  VRM    = &getAnalysis<VirtRegMap>();
 
   bool MadeChange = false;
 

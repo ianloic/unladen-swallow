@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only  %s
+// RUN: clang-cc -fsyntax-only  %s
 
 struct X { };
 
@@ -13,3 +13,5 @@ void h() throw(X, Y) { }
 class Class {
   void foo() throw (X, Y) { }
 };
+
+void (*fptr)() throw();

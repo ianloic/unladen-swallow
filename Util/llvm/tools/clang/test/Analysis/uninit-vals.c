@@ -1,4 +1,4 @@
-// RUN: clang -analyze -warn-uninit-values -verify %s
+// RUN: clang-cc -analyze -warn-uninit-values -verify %s
 
 int f1() {
   int x;
@@ -31,7 +31,9 @@ int f5() {
 void f6(int i) {
   int x;
   for (i = 0 ; i < 10; i++)
-    printf("%d",x++); // expected-warning {{use of uninitialized variable}}
+    printf("%d",x++); // expected-warning {{use of uninitialized variable}} \
+  // expected-warning{{implicitly declaring C library function 'printf' with type 'int (char const *, ...)'}} \
+  // expected-note{{please include the header <stdio.h> or explicitly provide a declaration for 'printf'}}
 }
 
 void f7(int i) {
@@ -41,4 +43,11 @@ void f7(int i) {
     printf("%d",x++); // no-warning
     x += y; // expected-warning {{use of uninitialized variable}}
   }
+}
+
+int f8(int j) {
+  int x = 1, y = x + 1;
+  if (y) // no-warning
+    return x;
+  return y;
 }

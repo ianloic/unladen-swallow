@@ -33,14 +33,23 @@ class MachineFrameInfo;
 class MachineConstantPool;
 class MachineJumpTableInfo;
 class TargetMachine;
+class TargetRegisterClass;
 
 template <>
 struct ilist_traits<MachineBasicBlock>
     : public ilist_default_traits<MachineBasicBlock> {
-  mutable MachineBasicBlock Sentinel;
+  mutable ilist_node<MachineBasicBlock> Sentinel;
 public:
-  MachineBasicBlock *createSentinel() const { return &Sentinel; }
+  MachineBasicBlock *createSentinel() const {
+    return static_cast<MachineBasicBlock*>(&Sentinel);
+  }
   void destroySentinel(MachineBasicBlock *) const {}
+
+  MachineBasicBlock *provideInitialHead() const { return createSentinel(); }
+  MachineBasicBlock *ensureHead(MachineBasicBlock*) const {
+    return createSentinel();
+  }
+  static void noteHead(MachineBasicBlock*, MachineBasicBlock*) {}
 
   void addNodeToList(MachineBasicBlock* MBB);
   void removeNodeFromList(MachineBasicBlock* MBB);
@@ -94,6 +103,10 @@ class MachineFunction : private Annotation {
   // List of machine basic blocks in function
   typedef ilist<MachineBasicBlock> BasicBlockListType;
   BasicBlockListType BasicBlocks;
+
+  // Default debug location. Used to print out the debug label at the beginning
+  // of a function.
+  DebugLoc DefaultDebugLoc;
 
   // Tracks debug locations.
   DebugLocTracker DebugLocInfo;
@@ -226,6 +239,10 @@ public:
   typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
   typedef std::reverse_iterator<iterator>             reverse_iterator;
 
+  /// addLiveIn - Add the specified physical register as a live-in value and
+  /// create a corresponding virtual register for it.
+  unsigned addLiveIn(unsigned PReg, const TargetRegisterClass *RC);
+
   //===--------------------------------------------------------------------===//
   // BasicBlock accessor functions.
   //
@@ -313,9 +330,21 @@ public:
   //
 
   /// getOrCreateDebugLocID - Look up the DebugLocTuple index with the given
-  /// source file, line, and column. If none currently exists, create add a new
-  /// new DebugLocTuple and insert it into the DebugIdMap.
-  unsigned getOrCreateDebugLocID(unsigned Src, unsigned Line, unsigned Col);
+  /// source file, line, and column. If none currently exists, create a new
+  /// DebugLocTuple, and insert it into the DebugIdMap.
+  unsigned getOrCreateDebugLocID(GlobalVariable *CompileUnit,
+                                 unsigned Line, unsigned Col);
+
+  /// getDebugLocTuple - Get the DebugLocTuple for a given DebugLoc object.
+  DebugLocTuple getDebugLocTuple(DebugLoc DL) const;
+
+  /// getDefaultDebugLoc - Get the default debug location for the machine
+  /// function.
+  DebugLoc getDefaultDebugLoc() const { return DefaultDebugLoc; }
+
+  /// setDefaultDebugLoc - Get the default debug location for the machine
+  /// function.
+  void setDefaultDebugLoc(DebugLoc DL) { DefaultDebugLoc = DL; }
 };
 
 //===--------------------------------------------------------------------===//
@@ -346,8 +375,12 @@ template <> struct GraphTraits<const MachineFunction*> :
 
   // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
   typedef MachineFunction::const_iterator nodes_iterator;
-  static nodes_iterator nodes_begin(const MachineFunction *F) { return F->begin(); }
-  static nodes_iterator nodes_end  (const MachineFunction *F) { return F->end(); }
+  static nodes_iterator nodes_begin(const MachineFunction *F) {
+    return F->begin();
+  }
+  static nodes_iterator nodes_end  (const MachineFunction *F) {
+    return F->end();
+  }
 };
 
 

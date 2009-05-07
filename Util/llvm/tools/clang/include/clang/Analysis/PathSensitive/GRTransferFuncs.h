@@ -23,28 +23,25 @@
 namespace clang {
   
   class GRExprEngine;
+  class BugReporter;
   class ObjCMessageExpr;
+  class GRStmtNodeBuilderRef;
   
 class GRTransferFuncs {
-  
-  friend class GRExprEngine;
-  
+  friend class GRExprEngine;  
 protected:
-  
-  
   virtual SVal DetermEvalBinOpNN(GRExprEngine& Eng,
                                  BinaryOperator::Opcode Op,
-                                 NonLoc L, NonLoc R) {
+                                 NonLoc L, NonLoc R, QualType T) {
     return UnknownVal();
   }
-  
   
 public:
   GRTransferFuncs() {}
   virtual ~GRTransferFuncs() {}
   
   virtual void RegisterPrinters(std::vector<GRState::Printer*>& Printers) {}
-  virtual void RegisterChecks(GRExprEngine& Eng);
+  virtual void RegisterChecks(BugReporter& BR) {}
   
   // Casts.
   
@@ -62,7 +59,8 @@ public:
   // for OStates
   virtual void EvalBinOpNN(GRStateSet& OStates, GRExprEngine& Eng,
                            const GRState* St, Expr* Ex,
-                           BinaryOperator::Opcode Op, NonLoc L, NonLoc R);
+                           BinaryOperator::Opcode Op, NonLoc L, NonLoc R,
+                           QualType T);
   
   virtual SVal EvalBinOp(GRExprEngine& Engine, BinaryOperator::Opcode Op,
                          Loc L, Loc R) = 0;
@@ -88,15 +86,7 @@ public:
   
   // Stores.
   
-  /// EvalStore - Evaluate the effects of a store, creating a new node
-  ///  the represents the effect of binding 'Val' to the location 'TargetLV'.
-  //   TargetLV is guaranteed to either be an UnknownVal or an Loc.
-  virtual void EvalStore(ExplodedNodeSet<GRState>& Dst,
-                         GRExprEngine& Engine,
-                         GRStmtNodeBuilder<GRState>& Builder,
-                         Expr* E, ExplodedNode<GRState>* Pred,
-                         const GRState* St, SVal TargetLV, SVal Val);
-                         
+  virtual void EvalBind(GRStmtNodeBuilderRef& B, SVal location, SVal val) {}
   
   // End-of-path and dead symbol notification.
   

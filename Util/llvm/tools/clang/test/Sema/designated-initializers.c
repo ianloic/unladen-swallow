@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify -arch x86_64 %s
+// RUN: clang-cc -fsyntax-only -verify -arch x86_64 %s
 
 int complete_array_from_init[] = { 1, 2, [10] = 5, 1, 2, [5] = 2, 6 };
 
@@ -18,6 +18,7 @@ int iarray2[10] = {
 };
 
 int iarray3[10] = {
+  [3] 2, // expected-warning{{use of GNU 'missing =' extension in designator}}
   [5 ... 12] = 2 // expected-error{{array designator index (12) exceeds array bounds (10)}}
 };
 
@@ -28,7 +29,7 @@ struct point {
 
 struct point p1 = { 
   .y = 1.0, 
-  x: 2.0,
+  x: 2.0, // expected-warning{{}}
   .a = 4.0, // expected-error{{field designator 'a' does not refer to any field in type 'struct point'}}
 };
 
@@ -151,3 +152,83 @@ struct XY { int before; struct XX xx, *xp; float* after; } xy[] = {
   0, // expected-warning{{initializer overrides prior initialization of this subobject}}
   &xy[2].xx.a, &xy[2].xx, &global_float
 };
+
+// PR3519
+struct foo {
+  int arr[10];
+};
+
+struct foo Y[10] = {
+  [1] .arr [1] = 2,
+  [4] .arr [2] = 4
+};
+
+struct bar {
+  struct foo f;
+  float *arr[10];
+};
+
+extern float f;
+struct bar saloon = {
+  .f.arr[3] = 1,
+  .arr = { &f }
+};
+
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+
+union wibble {
+        u_char  arr1[6];
+        u_short arr2[3];
+};
+
+const union wibble wobble = { .arr2[0] = 0xffff,
+                              .arr2[1] = 0xffff,
+                              .arr2[2] = 0xffff };
+
+const union wibble wobble2 = { .arr2 = {4, 5, 6}, 7 }; // expected-warning{{excess elements in union initializer}}
+
+// PR3778
+struct s {
+    union { int i; };
+};
+struct s si = {
+    { .i = 1 }
+};
+
+double d0;
+char c0;
+float f0;
+int i0;
+
+struct Enigma {
+  union {
+    struct {
+      struct {
+        double *double_ptr;
+        char *string;
+      };
+      float *float_ptr;
+    };
+    int *int_ptr;
+  };
+  char *string2;
+};
+
+struct Enigma enigma = { 
+  .double_ptr = &d0, &c0, 
+  &f0, // expected-note{{previous}}
+  &c0,
+  .float_ptr = &f0 // expected-warning{{overrides}}
+};
+
+
+/// PR4073
+/// Should use evaluate to fold aggressively and emit a warning if not an ice.
+extern int crazy_x;
+
+int crazy_Y[] = {
+  [ 0 ? crazy_x : 4] = 1
+};
+
+

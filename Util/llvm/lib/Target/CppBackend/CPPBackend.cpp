@@ -94,7 +94,6 @@ namespace {
   /// CppWriter - This class is the main chunk of code that converts an LLVM
   /// module to a C++ translation unit.
   class CppWriter : public ModulePass {
-    const char* progname;
     raw_ostream &Out;
     const Module *TheModule;
     uint64_t uniqueNum;
@@ -218,7 +217,7 @@ namespace {
   }
 
   void CppWriter::error(const std::string& msg) {
-    cerr << progname << ": " << msg << "\n";
+    cerr << msg << "\n";
     exit(2);
   }
 
@@ -294,10 +293,16 @@ namespace {
       Out << "GlobalValue::InternalLinkage"; break;
     case GlobalValue::PrivateLinkage:
       Out << "GlobalValue::PrivateLinkage"; break;
-    case GlobalValue::LinkOnceLinkage:
-      Out << "GlobalValue::LinkOnceLinkage "; break;
-    case GlobalValue::WeakLinkage:
-      Out << "GlobalValue::WeakLinkage"; break;
+    case GlobalValue::AvailableExternallyLinkage:
+      Out << "GlobalValue::AvailableExternallyLinkage "; break;
+    case GlobalValue::LinkOnceAnyLinkage:
+      Out << "GlobalValue::LinkOnceAnyLinkage "; break;
+    case GlobalValue::LinkOnceODRLinkage:
+      Out << "GlobalValue::LinkOnceODRLinkage "; break;
+    case GlobalValue::WeakAnyLinkage:
+      Out << "GlobalValue::WeakAnyLinkage"; break;
+    case GlobalValue::WeakODRLinkage:
+      Out << "GlobalValue::WeakODRLinkage"; break;
     case GlobalValue::AppendingLinkage:
       Out << "GlobalValue::AppendingLinkage"; break;
     case GlobalValue::ExternalLinkage:
@@ -354,9 +359,10 @@ namespace {
         unsigned BitWidth = cast<IntegerType>(Ty)->getBitWidth();
         return "IntegerType::get(" + utostr(BitWidth) + ")";
       }
-      case Type::FloatTyID:  return "Type::FloatTy";
-      case Type::DoubleTyID: return "Type::DoubleTy";
-      case Type::LabelTyID:  return "Type::LabelTy";
+      case Type::X86_FP80TyID: return "Type::X86_FP80Ty";
+      case Type::FloatTyID:    return "Type::FloatTy";
+      case Type::DoubleTyID:   return "Type::DoubleTy";
+      case Type::LabelTyID:    return "Type::LabelTy";
       default:
         error("Invalid primitive type");
         break;
@@ -1086,9 +1092,9 @@ namespace {
       const BranchInst* br = cast<BranchInst>(I);
       Out << "BranchInst::Create(" ;
       if (br->getNumOperands() == 3 ) {
-        Out << opNames[0] << ", "
+        Out << opNames[2] << ", "
             << opNames[1] << ", "
-            << opNames[2] << ", ";
+            << opNames[0] << ", ";
 
       } else if (br->getNumOperands() == 1) {
         Out << opNames[0] << ", ";
@@ -1362,7 +1368,7 @@ namespace {
     }
     case Instruction::Call:{
       const CallInst* call = cast<CallInst>(I);
-      if (InlineAsm* ila = dyn_cast<InlineAsm>(call->getOperand(0))) {
+      if (const InlineAsm* ila = dyn_cast<InlineAsm>(call->getCalledValue())) {
         Out << "InlineAsm* " << getCppName(ila) << " = InlineAsm::get("
             << getCppName(ila->getFunctionType()) << ", \""
             << ila->getAsmString() << "\", \""
@@ -1798,7 +1804,6 @@ namespace {
     Out << "int main(int argc, char**argv) {\n";
     Out << "  Module* Mod = " << fname << "();\n";
     Out << "  verifyModule(*Mod, PrintMessageAction);\n";
-    Out << "  errs().flush();\n";
     Out << "  outs().flush();\n";
     Out << "  PassManager PM;\n";
     Out << "  PM.add(createPrintModulePass(&outs()));\n";
@@ -1990,7 +1995,7 @@ char CppWriter::ID = 0;
 bool CPPTargetMachine::addPassesToEmitWholeFile(PassManager &PM,
                                                 raw_ostream &o,
                                                 CodeGenFileType FileType,
-                                                bool Fast) {
+                                                CodeGenOpt::Level OptLevel) {
   if (FileType != TargetMachine::AssemblyFile) return true;
   PM.add(new CppWriter(o));
   return false;

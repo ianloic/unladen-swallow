@@ -133,12 +133,10 @@ AR_PATH = @AR@
 NM_PATH = @NM@
 
 # The pathnames of the programs we require to build
-BISON      := @BISON@
 CMP        := @CMP@
 CP         := @CP@
 DATE       := @DATE@
 FIND       := @FIND@
-FLEX       := @LEX@
 GREP       := @GREP@
 INSTALL    := @INSTALL@
 MKDIR      := $(LLVM_SRC_ROOT)/autoconf/mkinstalldirs
@@ -147,7 +145,6 @@ RANLIB     := @RANLIB@
 RM         := @RM@
 SED        := @SED@
 TAR        := @TAR@
-YACC       := @YACC@
 
 # Paths to miscellaneous programs we hope are present but might not be
 PERL       := @PERL@
@@ -203,6 +200,12 @@ LLVMGCC_LANGS := @LLVMGCC_LANGS@
 # object files.
 OBJ_ROOT := .
 
+# What to pass as rpath flag to g++
+RPATH := @RPATH@
+
+# What to pass as -rdynamic flag to g++
+RDYNAMIC := @RDYNAMIC@
+
 # These are options that can either be enabled here, or can be enabled on the
 # make command line (ie, make ENABLE_PROFILING=1):
 
@@ -212,7 +215,15 @@ OBJ_ROOT := .
 #ENABLE_OPTIMIZED = 1
 @ENABLE_OPTIMIZED@
 
-# When DISABLE_ASSERTIONS is enabled, builds of all of the LLVM code will
+# When ENABLE_PROFILING is enabled, profile instrumentation is done
+# and output is put into the "<Flavor>+Profile" directories, where
+# <Flavor> is either Debug or Release depending on how other builkd
+# flags are set.. Otherwise, output is put in the <Flavor>
+# directories.
+#ENABLE_PROFILING = 1
+@ENABLE_PROFILING@
+
+# When DISABLE_ASSERTIONS is enabled, builds of all of the LLVM code will 
 # exclude assertion checks, otherwise they are included.
 #DISABLE_ASSERTIONS = 1
 @DISABLE_ASSERTIONS@
@@ -283,3 +294,6 @@ ifneq (,$(findstring -mno-cygwin, $(CXX)))
 else
   SYSPATH = $(1)
 endif
+
+# Location of the plugin header file for gold.
+BINUTILS_INCDIR := @BINUTILS_INCDIR@

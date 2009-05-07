@@ -57,9 +57,9 @@ void AllocaRegion::Profile(llvm::FoldingSetNodeID& ID) const {
   ProfileRegion(ID, Ex, Cnt);
 }
 
-void AnonTypedRegion::ProfileRegion(llvm::FoldingSetNodeID& ID, QualType T, 
+void TypedViewRegion::ProfileRegion(llvm::FoldingSetNodeID& ID, QualType T, 
                                     const MemRegion* superRegion) {
-  ID.AddInteger((unsigned) AnonTypedRegionKind);
+  ID.AddInteger((unsigned) TypedViewRegionKind);
   ID.Add(T);
   ID.AddPointer(superRegion);
 }
@@ -96,27 +96,28 @@ void SymbolicRegion::Profile(llvm::FoldingSetNodeID& ID) const {
   SymbolicRegion::ProfileRegion(ID, sym);
 }
 
-void ElementRegion::ProfileRegion(llvm::FoldingSetNodeID& ID, SVal Idx, 
+void ElementRegion::ProfileRegion(llvm::FoldingSetNodeID& ID,
+                                  QualType ElementType, SVal Idx, 
                                   const MemRegion* superRegion) {
   ID.AddInteger(MemRegion::ElementRegionKind);
+  ID.Add(ElementType);
   ID.AddPointer(superRegion);
   Idx.Profile(ID);
 }
 
 void ElementRegion::Profile(llvm::FoldingSetNodeID& ID) const {
-  ElementRegion::ProfileRegion(ID, Index, superRegion);
+  ElementRegion::ProfileRegion(ID, ElementType, Index, superRegion);
 }
 
-QualType ElementRegion::getRValueType(ASTContext& C) const {
-  // Strip off typedefs from the ArrayRegion's RvalueType.
-  QualType T = getArrayRegion()->getRValueType(C)->getDesugaredType();
+void CodeTextRegion::ProfileRegion(llvm::FoldingSetNodeID& ID, const void* data,
+                                   QualType t) {
+  ID.AddInteger(MemRegion::CodeTextRegionKind);
+  ID.AddPointer(data);
+  ID.Add(t);
+}
 
-  if (ArrayType* AT = dyn_cast<ArrayType>(T.getTypePtr()))
-    return AT->getElementType();
-
-  // If the RValueType of the array region isn't an ArrayType, then essentially
-  // the element's  
-  return T;
+void CodeTextRegion::Profile(llvm::FoldingSetNodeID& ID) const {
+  CodeTextRegion::ProfileRegion(ID, Data, LocationType);
 }
 
 //===----------------------------------------------------------------------===//
@@ -146,29 +147,14 @@ void AllocaRegion::print(llvm::raw_ostream& os) const {
   os << "alloca{" << (void*) Ex << ',' << Cnt << '}';
 }
 
-void AnonTypedRegion::print(llvm::raw_ostream& os) const {
-  os << "anon_type{" << T.getAsString() << ',';
-  getSuperRegion()->print(os);
+void CodeTextRegion::print(llvm::raw_ostream& os) const {
+  os << "code{";
+  if (isDeclared())
+    os << getDecl()->getDeclName().getAsString();
+  else
+    os << '$' << getSymbol();
+
   os << '}';
-}
-
-void VarRegion::print(llvm::raw_ostream& os) const {
-  os << cast<VarDecl>(D)->getNameAsString();
-}
-
-void SymbolicRegion::print(llvm::raw_ostream& os) const {
-  os << "SymRegion-";
-  sym.print(os);
-}
-
-void FieldRegion::print(llvm::raw_ostream& os) const {
-  superRegion->print(os);
-  os << "->" << getDecl()->getNameAsString();
-}
-
-void ElementRegion::print(llvm::raw_ostream& os) const {
-  superRegion->print(os);
-  os << '['; Index.print(os); os << ']';
 }
 
 void CompoundLiteralRegion::print(llvm::raw_ostream& os) const {
@@ -176,8 +162,32 @@ void CompoundLiteralRegion::print(llvm::raw_ostream& os) const {
   os << "{ " << (void*) CL <<  " }";
 }
 
+void ElementRegion::print(llvm::raw_ostream& os) const {
+  superRegion->print(os);
+  os << '['; Index.print(os); os << ']';
+}
+
+void FieldRegion::print(llvm::raw_ostream& os) const {
+  superRegion->print(os);
+  os << "->" << getDecl()->getNameAsString();
+}
+
 void StringRegion::print(llvm::raw_ostream& os) const {
   Str->printPretty(os);
+}
+
+void SymbolicRegion::print(llvm::raw_ostream& os) const {
+  os << "SymRegion-" << sym;
+}
+
+void TypedViewRegion::print(llvm::raw_ostream& os) const {
+  os << "typed_view{" << LValueType.getAsString() << ',';
+  getSuperRegion()->print(os);
+  os << '}';
+}
+
+void VarRegion::print(llvm::raw_ostream& os) const {
+  os << cast<VarDecl>(D)->getNameAsString();
 }
 
 //===----------------------------------------------------------------------===//
@@ -208,6 +218,10 @@ MemSpaceRegion* MemRegionManager::getHeapRegion() {
 
 MemSpaceRegion* MemRegionManager::getUnknownRegion() {
   return LazyAllocate(unknown);
+}
+
+MemSpaceRegion* MemRegionManager::getCodeRegion() {
+  return LazyAllocate(code);
 }
 
 bool MemRegionManager::onStack(const MemRegion* R) {
@@ -289,10 +303,11 @@ MemRegionManager::getCompoundLiteralRegion(const CompoundLiteralExpr* CL) {
 }
 
 ElementRegion*
-MemRegionManager::getElementRegion(SVal Idx, const TypedRegion* superRegion){
+MemRegionManager::getElementRegion(QualType elementType, SVal Idx,
+                                   const TypedRegion* superRegion){
 
   llvm::FoldingSetNodeID ID;
-  ElementRegion::ProfileRegion(ID, Idx, superRegion);
+  ElementRegion::ProfileRegion(ID, elementType, Idx, superRegion);
 
   void* InsertPos;
   MemRegion* data = Regions.FindNodeOrInsertPos(ID, InsertPos);
@@ -300,7 +315,40 @@ MemRegionManager::getElementRegion(SVal Idx, const TypedRegion* superRegion){
 
   if (!R) {
     R = (ElementRegion*) A.Allocate<ElementRegion>();
-    new (R) ElementRegion(Idx, superRegion);
+    new (R) ElementRegion(elementType, Idx, superRegion);
+    Regions.InsertNode(R, InsertPos);
+  }
+
+  return R;
+}
+
+CodeTextRegion* MemRegionManager::getCodeTextRegion(const FunctionDecl* fd,
+                                                    QualType t) {
+  llvm::FoldingSetNodeID ID;
+  CodeTextRegion::ProfileRegion(ID, fd, t);
+  void* InsertPos;
+  MemRegion* data = Regions.FindNodeOrInsertPos(ID, InsertPos);
+  CodeTextRegion* R = cast_or_null<CodeTextRegion>(data);
+
+  if (!R) {
+    R = (CodeTextRegion*) A.Allocate<CodeTextRegion>();
+    new (R) CodeTextRegion(fd, t, getCodeRegion());
+    Regions.InsertNode(R, InsertPos);
+  }
+
+  return R;
+}
+
+CodeTextRegion* MemRegionManager::getCodeTextRegion(SymbolRef sym, QualType t) {
+  llvm::FoldingSetNodeID ID;
+  CodeTextRegion::ProfileRegion(ID, sym, t);
+  void* InsertPos;
+  MemRegion* data = Regions.FindNodeOrInsertPos(ID, InsertPos);
+  CodeTextRegion* R = cast_or_null<CodeTextRegion>(data);
+
+  if (!R) {
+    R = (CodeTextRegion*) A.Allocate<CodeTextRegion>();
+    new (R) CodeTextRegion(sym, t, getCodeRegion());
     Regions.InsertNode(R, InsertPos);
   }
 
@@ -308,18 +356,17 @@ MemRegionManager::getElementRegion(SVal Idx, const TypedRegion* superRegion){
 }
 
 /// getSymbolicRegion - Retrieve or create a "symbolic" memory region.
-SymbolicRegion* MemRegionManager::getSymbolicRegion(const SymbolRef sym) {
-  
+SymbolicRegion* MemRegionManager::getSymbolicRegion(SymbolRef sym) {
   llvm::FoldingSetNodeID ID;
   SymbolicRegion::ProfileRegion(ID, sym);
-  
   void* InsertPos;
   MemRegion* data = Regions.FindNodeOrInsertPos(ID, InsertPos);
   SymbolicRegion* R = cast_or_null<SymbolicRegion>(data);
   
   if (!R) {
     R = (SymbolicRegion*) A.Allocate<SymbolicRegion>();
-    new (R) SymbolicRegion(sym);
+    // SymbolicRegion's storage class is usually unknown.
+    new (R) SymbolicRegion(sym, getUnknownRegion());
     Regions.InsertNode(R, InsertPos);
   }
   
@@ -383,18 +430,18 @@ MemRegionManager::getObjCObjectRegion(const ObjCInterfaceDecl* d,
   return R;
 }
 
-AnonTypedRegion* 
-MemRegionManager::getAnonTypedRegion(QualType t, const MemRegion* superRegion) {
+TypedViewRegion* 
+MemRegionManager::getTypedViewRegion(QualType t, const MemRegion* superRegion) {
   llvm::FoldingSetNodeID ID;
-  AnonTypedRegion::ProfileRegion(ID, t, superRegion);
+  TypedViewRegion::ProfileRegion(ID, t, superRegion);
 
   void* InsertPos;
   MemRegion* data = Regions.FindNodeOrInsertPos(ID, InsertPos);
-  AnonTypedRegion* R = cast_or_null<AnonTypedRegion>(data);
+  TypedViewRegion* R = cast_or_null<TypedViewRegion>(data);
 
   if (!R) {
-    R = (AnonTypedRegion*) A.Allocate<AnonTypedRegion>();
-    new (R) AnonTypedRegion(t, superRegion);
+    R = (TypedViewRegion*) A.Allocate<TypedViewRegion>();
+    new (R) TypedViewRegion(t, superRegion);
     Regions.InsertNode(R, InsertPos);
   }
 
@@ -435,6 +482,21 @@ bool MemRegionManager::hasStackStorage(const MemRegion* R) {
     
     SR = dyn_cast<SubRegion>(R);    
   }
-  
+
   return false;
+}
+
+
+//===----------------------------------------------------------------------===//
+// View handling.
+//===----------------------------------------------------------------------===//
+
+const MemRegion *TypedViewRegion::removeViews() const {
+  const SubRegion *SR = this;
+  const MemRegion *R = SR;
+  while (SR && isa<TypedViewRegion>(SR)) {
+    R = SR->getSuperRegion();
+    SR = dyn_cast<SubRegion>(R);
+  }
+  return R;
 }

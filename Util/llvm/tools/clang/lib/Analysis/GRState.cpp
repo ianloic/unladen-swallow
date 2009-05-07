@@ -45,8 +45,8 @@ GRStateManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
   llvm::SmallVector<const MemRegion*, 10> RegionRoots;
   GRState NewState = *state;
 
-  NewState.Env = EnvMgr.RemoveDeadBindings(NewState.Env, Loc, SymReaper,
-                                           RegionRoots);
+  NewState.Env = EnvMgr.RemoveDeadBindings(NewState.Env, Loc, SymReaper, *this,
+                                           state, RegionRoots);
 
   // Clean up the store.
   NewState.St = StoreMgr->RemoveDeadBindings(&NewState, Loc, SymReaper,
@@ -205,6 +205,88 @@ const GRState* GRStateManager::addGDM(const GRState* St, void* Key, void* Data){
 }
 
 //===----------------------------------------------------------------------===//
+// Utility.
+//===----------------------------------------------------------------------===//
+
+namespace {
+class VISIBILITY_HIDDEN ScanReachableSymbols : public SubRegionMap::Visitor  {
+  typedef llvm::DenseSet<const MemRegion*> VisitedRegionsTy;
+
+  VisitedRegionsTy visited;
+  GRStateRef state;
+  SymbolVisitor &visitor;
+  llvm::OwningPtr<SubRegionMap> SRM;
+public:
+  
+  ScanReachableSymbols(GRStateManager* sm, const GRState *st, SymbolVisitor& v)
+    : state(st, *sm), visitor(v) {}
+  
+  bool scan(nonloc::CompoundVal val);
+  bool scan(SVal val);
+  bool scan(const MemRegion *R);
+    
+  // From SubRegionMap::Visitor.
+  bool Visit(const MemRegion* Parent, const MemRegion* SubRegion) {
+    return scan(SubRegion);
+  }
+};
+}
+
+bool ScanReachableSymbols::scan(nonloc::CompoundVal val) {
+  for (nonloc::CompoundVal::iterator I=val.begin(), E=val.end(); I!=E; ++I)
+    if (!scan(*I))
+      return false;
+
+  return true;
+}
+    
+bool ScanReachableSymbols::scan(SVal val) {
+  if (loc::MemRegionVal *X = dyn_cast<loc::MemRegionVal>(&val))
+    return scan(X->getRegion());
+
+  if (SymbolRef Sym = val.getAsSymbol())
+    return visitor.VisitSymbol(Sym);
+  
+  if (nonloc::CompoundVal *X = dyn_cast<nonloc::CompoundVal>(&val))
+    return scan(*X);
+  
+  return true;
+}
+  
+bool ScanReachableSymbols::scan(const MemRegion *R) {
+  if (isa<MemSpaceRegion>(R) || visited.count(R))
+    return true;
+  
+  visited.insert(R);
+
+  // If this is a symbolic region, visit the symbol for the region.
+  if (const SymbolicRegion *SR = dyn_cast<SymbolicRegion>(R))
+    if (!visitor.VisitSymbol(SR->getSymbol()))
+      return false;
+  
+  // If this is a subregion, also visit the parent regions.
+  if (const SubRegion *SR = dyn_cast<SubRegion>(R))
+    if (!scan(SR->getSuperRegion()))
+      return false;
+  
+  // Now look at the binding to this region (if any).
+  if (!scan(state.GetSValAsScalarOrLoc(R)))
+    return false;
+  
+  // Now look at the subregions.
+  if (!SRM.get())
+   SRM.reset(state.getManager().getStoreManager().getSubRegionMap(state));
+  
+  return SRM->iterSubRegions(R, *this);
+}
+
+bool GRStateManager::scanReachableSymbols(SVal val, const GRState* state,
+                                          SymbolVisitor& visitor) {
+  ScanReachableSymbols S(this, state, visitor);
+  return S.scan(val);
+}
+
+//===----------------------------------------------------------------------===//
 // Queries.
 //===----------------------------------------------------------------------===//
 
@@ -219,17 +301,14 @@ bool GRStateManager::isEqual(const GRState* state, Expr* Ex,
   if (nonloc::ConcreteInt* X = dyn_cast<nonloc::ConcreteInt>(&V))
     return X->getValue() == Y;
     
-  if (nonloc::SymbolVal* X = dyn_cast<nonloc::SymbolVal>(&V))
-    return ConstraintMgr->isEqual(state, X->getSymbol(), Y);
-  
-  if (loc::SymbolVal* X = dyn_cast<loc::SymbolVal>(&V))
-    return ConstraintMgr->isEqual(state, X->getSymbol(), Y);
-  
+  if (SymbolRef Sym = V.getAsSymbol())
+    return ConstraintMgr->isEqual(state, Sym, Y);
+
   return false;
 }
   
 bool GRStateManager::isEqual(const GRState* state, Expr* Ex, uint64_t x) {
-  return isEqual(state, Ex, BasicVals.getValue(x, Ex->getType()));
+  return isEqual(state, Ex, getBasicVals().getValue(x, Ex->getType()));
 }
 
 //===----------------------------------------------------------------------===//

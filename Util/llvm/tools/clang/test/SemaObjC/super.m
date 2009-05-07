@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 @interface Foo
 - iMethod;
@@ -32,7 +32,8 @@ void f(id super) {
   [super m];
 }
 void f0(int super) {
-  [super m]; // expected-error{{bad receiver type 'int'}}
+  [super m]; // expected-warning{{receiver type 'int' is not 'id'}} \
+                expected-warning {{method '-m' not found (return type defaults to 'id')}}
 }
 void f1(int puper) {
   [super m]; // expected-error{{use of undeclared identifier 'super'}}

@@ -67,12 +67,11 @@ void StmtIteratorBase::NextDecl(bool ImmediateAdvance) {
   if (inDecl()) {
     assert (decl);
     
+    // FIXME: SIMPLIFY AWAY.
     if (ImmediateAdvance)
-      decl = decl->getNextDeclarator();
-    
-    for ( ; decl ; decl = decl->getNextDeclarator())
-      if (HandleDecl(decl))
-        return;
+      decl = 0;
+    else if (HandleDecl(decl))
+      return;
   }
   else {
     assert (inDeclGroup());
@@ -132,16 +131,16 @@ StmtIteratorBase::StmtIteratorBase(VariableArrayType* t)
 
 Stmt*& StmtIteratorBase::GetDeclExpr() const {
   
-  if (inDeclGroup()) {
-    VarDecl* VD = cast<VarDecl>(*DGI);
-    return VD->Init;
-  }
-  
-  assert (inDecl() || inSizeOfTypeVA());
-  
   if (VariableArrayType* VAPtr = getVAPtr()) {
     assert (VAPtr->SizeExpr);
     return VAPtr->SizeExpr;
+  }
+
+  assert (inDecl() || inDeclGroup());
+  
+  if (inDeclGroup()) {
+    VarDecl* VD = cast<VarDecl>(*DGI);
+    return VD->Init;
   }
   
   assert (inDecl());

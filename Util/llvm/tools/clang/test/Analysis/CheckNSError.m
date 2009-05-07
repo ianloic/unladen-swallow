@@ -1,5 +1,8 @@
-// RUN: clang -analyze -checker-cfref -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
+
 
 typedef signed char BOOL;
 typedef int NSInteger;
@@ -38,7 +41,19 @@ void foo(CFErrorRef* error) { // expected-warning {{Function accepting CFErrorRe
   *error = 0;  // expected-warning {{Potential null dereference.}}
 }
 
-int bar(CFErrorRef* error) {
-  if (error) *error = 0;
+int f1(CFErrorRef* error) {
+  if (error) *error = 0; // no-warning
   return 0;
 }
+
+int f2(CFErrorRef* error) {
+  if (0 != error) *error = 0; // no-warning
+  return 0;
+}
+
+int f3(CFErrorRef* error) {
+  if (error != 0) *error = 0; // no-warning
+  return 0;
+}
+
+

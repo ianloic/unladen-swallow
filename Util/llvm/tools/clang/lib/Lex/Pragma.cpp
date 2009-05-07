@@ -70,7 +70,10 @@ void PragmaNamespace::HandlePragma(Preprocessor &PP, Token &Tok) {
   
   // Get the handler for this token.  If there is no handler, ignore the pragma.
   PragmaHandler *Handler = FindHandler(Tok.getIdentifierInfo(), false);
-  if (Handler == 0) return;
+  if (Handler == 0) {
+    PP.Diag(Tok, diag::warn_pragma_ignored);
+    return;
+  }
   
   // Otherwise, pass it down.
   Handler->HandlePragma(PP, Tok);
@@ -117,7 +120,6 @@ void Preprocessor::Handle_Pragma(Token &Tok) {
   
   // Remember the string.
   std::string StrVal = getSpelling(Tok);
-  SourceLocation StrLoc = Tok.getLocation();
 
   // Read the ')'.
   Lex(Tok);
@@ -125,6 +127,8 @@ void Preprocessor::Handle_Pragma(Token &Tok) {
     Diag(PragmaLoc, diag::err__Pragma_malformed);
     return;
   }
+  
+  SourceLocation RParenLoc = Tok.getLocation();
   
   // The _Pragma is lexically sound.  Destringize according to C99 6.10.9.1:
   // "The string literal is destringized by deleting the L prefix, if present,
@@ -140,9 +144,8 @@ void Preprocessor::Handle_Pragma(Token &Tok) {
   // contents appear to have a space before them.
   StrVal[0] = ' ';
   
-  // Replace the terminating quote with a \n\0.
+  // Replace the terminating quote with a \n.
   StrVal[StrVal.size()-1] = '\n';
-  StrVal += '\0';
   
   // Remove escaped quotes and escapes.
   for (unsigned i = 0, e = StrVal.size(); i != e-1; ++i) {
@@ -163,9 +166,8 @@ void Preprocessor::Handle_Pragma(Token &Tok) {
 
   // Make and enter a lexer object so that we lex and expand the tokens just
   // like any others.
-  Lexer *TL = Lexer::Create_PragmaLexer(TokLoc, StrLoc,
-                                        // do not include the null in the count.
-                                        StrVal.size()-1, *this);
+  Lexer *TL = Lexer::Create_PragmaLexer(TokLoc, PragmaLoc, RParenLoc,
+                                        StrVal.size(), *this);
 
   EnterSourceFileWithLexer(TL, 0);
 
@@ -314,7 +316,7 @@ void Preprocessor::HandlePragmaDependency(Token &DependencyTok) {
 ///   #pragma comment(linker, "foo")
 /// 'linker' is one of five identifiers: compiler, exestr, lib, linker, user.
 /// "foo" is a string, which is fully macro expanded, and permits string
-/// concatenation, embeded escape characters etc.  See MSDN for more details.
+/// concatenation, embedded escape characters etc.  See MSDN for more details.
 void Preprocessor::HandlePragmaComment(Token &Tok) {
   SourceLocation CommentLoc = Tok.getLocation();
   Lex(Tok);
@@ -346,7 +348,7 @@ void Preprocessor::HandlePragmaComment(Token &Tok) {
     Lex(Tok); // eat the comma.
 
     // We need at least one string.
-    if (Tok.getKind() != tok::string_literal) {
+    if (Tok.isNot(tok::string_literal)) {
       Diag(Tok.getLocation(), diag::err_pragma_comment_malformed);
       return;
     }
@@ -355,7 +357,7 @@ void Preprocessor::HandlePragmaComment(Token &Tok) {
     // macro expansion.
     // "foo " "bar" "Baz"
     llvm::SmallVector<Token, 4> StrToks;
-    while (Tok.getKind() == tok::string_literal) {
+    while (Tok.is(tok::string_literal)) {
       StrToks.push_back(Tok);
       Lex(Tok);
     }
@@ -462,7 +464,7 @@ namespace {
 struct PragmaOnceHandler : public PragmaHandler {
   PragmaOnceHandler(const IdentifierInfo *OnceID) : PragmaHandler(OnceID) {}
   virtual void HandlePragma(Preprocessor &PP, Token &OnceTok) {
-    PP.CheckEndOfDirective("#pragma once");
+    PP.CheckEndOfDirective("pragma once");
     PP.HandlePragmaOnce(OnceTok);
   }
 };
@@ -490,13 +492,88 @@ struct PragmaSystemHeaderHandler : public PragmaHandler {
   PragmaSystemHeaderHandler(const IdentifierInfo *ID) : PragmaHandler(ID) {}
   virtual void HandlePragma(Preprocessor &PP, Token &SHToken) {
     PP.HandlePragmaSystemHeader(SHToken);
-    PP.CheckEndOfDirective("#pragma");
+    PP.CheckEndOfDirective("pragma");
   }
 };
 struct PragmaDependencyHandler : public PragmaHandler {
   PragmaDependencyHandler(const IdentifierInfo *ID) : PragmaHandler(ID) {}
   virtual void HandlePragma(Preprocessor &PP, Token &DepToken) {
     PP.HandlePragmaDependency(DepToken);
+  }
+};
+  
+/// PragmaDiagnosticHandler - e.g. '#pragma GCC diagnostic ignored "-Wformat"'
+struct PragmaDiagnosticHandler : public PragmaHandler {
+  PragmaDiagnosticHandler(const IdentifierInfo *ID) : PragmaHandler(ID) {}
+  virtual void HandlePragma(Preprocessor &PP, Token &DiagToken) {
+    Token Tok;
+    PP.LexUnexpandedToken(Tok);
+    if (Tok.isNot(tok::identifier)) {
+      PP.Diag(Tok, diag::warn_pragma_diagnostic_invalid);
+      return;
+    }
+    IdentifierInfo *II = Tok.getIdentifierInfo();
+    
+    diag::Mapping Map;
+    if (II->isStr("warning"))
+      Map = diag::MAP_WARNING;
+    else if (II->isStr("error"))
+      Map = diag::MAP_ERROR;
+    else if (II->isStr("ignored"))
+      Map = diag::MAP_IGNORE;
+    else if (II->isStr("fatal"))
+      Map = diag::MAP_FATAL;
+    else {
+      PP.Diag(Tok, diag::warn_pragma_diagnostic_invalid);
+      return;
+    }
+    
+    PP.LexUnexpandedToken(Tok);
+
+    // We need at least one string.
+    if (Tok.isNot(tok::string_literal)) {
+      PP.Diag(Tok.getLocation(), diag::warn_pragma_diagnostic_invalid_token);
+      return;
+    }
+    
+    // String concatenation allows multiple strings, which can even come from
+    // macro expansion.
+    // "foo " "bar" "Baz"
+    llvm::SmallVector<Token, 4> StrToks;
+    while (Tok.is(tok::string_literal)) {
+      StrToks.push_back(Tok);
+      PP.LexUnexpandedToken(Tok);
+    }
+    
+    if (Tok.isNot(tok::eom)) {
+      PP.Diag(Tok.getLocation(), diag::warn_pragma_diagnostic_invalid_token);
+      return;
+    }
+    
+    // Concatenate and parse the strings.
+    StringLiteralParser Literal(&StrToks[0], StrToks.size(), PP);
+    assert(!Literal.AnyWide && "Didn't allow wide strings in");
+    if (Literal.hadError)
+      return;
+    if (Literal.Pascal) {
+      PP.Diag(StrToks[0].getLocation(), diag::warn_pragma_diagnostic_invalid);
+      return;
+    }
+    
+    std::string WarningName(Literal.GetString(),
+                            Literal.GetString()+Literal.GetStringLength());
+
+    if (WarningName.size() < 3 || WarningName[0] != '-' ||
+        WarningName[1] != 'W') {
+      PP.Diag(StrToks[0].getLocation(),
+              diag::warn_pragma_diagnostic_invalid_option);
+      return;
+    }
+    
+    if (PP.getDiagnostics().setDiagnosticGroupMapping(WarningName.c_str()+2,
+                                                      Map))
+      PP.Diag(StrToks[0].getLocation(),
+              diag::warn_pragma_diagnostic_unknown_warning) << WarningName;
   }
 };
   
@@ -507,6 +584,80 @@ struct PragmaCommentHandler : public PragmaHandler {
     PP.HandlePragmaComment(CommentTok);
   }
 };
+  
+// Pragma STDC implementations.
+
+enum STDCSetting {
+  STDC_ON, STDC_OFF, STDC_DEFAULT, STDC_INVALID
+};
+  
+static STDCSetting LexOnOffSwitch(Preprocessor &PP) {
+  Token Tok;
+  PP.LexUnexpandedToken(Tok);
+
+  if (Tok.isNot(tok::identifier)) {
+    PP.Diag(Tok, diag::ext_stdc_pragma_syntax);
+    return STDC_INVALID;
+  }
+  IdentifierInfo *II = Tok.getIdentifierInfo();
+  STDCSetting Result;
+  if (II->isStr("ON"))
+    Result = STDC_ON;
+  else if (II->isStr("OFF"))
+    Result = STDC_OFF;
+  else if (II->isStr("DEFAULT"))
+    Result = STDC_DEFAULT;
+  else {
+    PP.Diag(Tok, diag::ext_stdc_pragma_syntax);
+    return STDC_INVALID;
+  }
+
+  // Verify that this is followed by EOM.
+  PP.LexUnexpandedToken(Tok);
+  if (Tok.isNot(tok::eom))
+    PP.Diag(Tok, diag::ext_stdc_pragma_syntax_eom);
+  return Result;
+}
+  
+/// PragmaSTDC_FP_CONTRACTHandler - "#pragma STDC FP_CONTRACT ...".
+struct PragmaSTDC_FP_CONTRACTHandler : public PragmaHandler {
+  PragmaSTDC_FP_CONTRACTHandler(const IdentifierInfo *ID) : PragmaHandler(ID) {}
+  virtual void HandlePragma(Preprocessor &PP, Token &Tok) {
+    // We just ignore the setting of FP_CONTRACT. Since we don't do contractions
+    // at all, our default is OFF and setting it to ON is an optimization hint
+    // we can safely ignore.  When we support -ffma or something, we would need
+    // to diagnose that we are ignoring FMA.
+    LexOnOffSwitch(PP);
+  }
+};
+  
+/// PragmaSTDC_FENV_ACCESSHandler - "#pragma STDC FENV_ACCESS ...".
+struct PragmaSTDC_FENV_ACCESSHandler : public PragmaHandler {
+  PragmaSTDC_FENV_ACCESSHandler(const IdentifierInfo *ID) : PragmaHandler(ID) {}
+  virtual void HandlePragma(Preprocessor &PP, Token &Tok) {
+    if (LexOnOffSwitch(PP) == STDC_ON)
+      PP.Diag(Tok, diag::warn_stdc_fenv_access_not_supported);
+  }
+};
+  
+/// PragmaSTDC_CX_LIMITED_RANGEHandler - "#pragma STDC CX_LIMITED_RANGE ...".
+struct PragmaSTDC_CX_LIMITED_RANGEHandler : public PragmaHandler {
+  PragmaSTDC_CX_LIMITED_RANGEHandler(const IdentifierInfo *ID)
+    : PragmaHandler(ID) {}
+  virtual void HandlePragma(Preprocessor &PP, Token &Tok) {
+    LexOnOffSwitch(PP);
+  }
+};
+  
+/// PragmaSTDC_UnknownHandler - "#pragma STDC ...".
+struct PragmaSTDC_UnknownHandler : public PragmaHandler {
+  PragmaSTDC_UnknownHandler() : PragmaHandler(0) {}
+  virtual void HandlePragma(Preprocessor &PP, Token &UnknownTok) {
+    // C99 6.10.6p2, unknown forms are not allowed.
+    PP.Diag(UnknownTok, diag::ext_stdc_pragma_ignored);
+  }
+};
+  
 }  // end anonymous namespace
 
 
@@ -520,6 +671,16 @@ void Preprocessor::RegisterBuiltinPragmas() {
                                           getIdentifierInfo("system_header")));
   AddPragmaHandler("GCC", new PragmaDependencyHandler(
                                           getIdentifierInfo("dependency")));
+  AddPragmaHandler("GCC", new PragmaDiagnosticHandler(
+                                              getIdentifierInfo("diagnostic")));
+  
+  AddPragmaHandler("STDC", new PragmaSTDC_FP_CONTRACTHandler(
+                                             getIdentifierInfo("FP_CONTRACT")));
+  AddPragmaHandler("STDC", new PragmaSTDC_FENV_ACCESSHandler(
+                                             getIdentifierInfo("FENV_ACCESS")));
+  AddPragmaHandler("STDC", new PragmaSTDC_CX_LIMITED_RANGEHandler(
+                                        getIdentifierInfo("CX_LIMITED_RANGE")));
+  AddPragmaHandler("STDC", new PragmaSTDC_UnknownHandler());
   
   // MS extensions.
   if (Features.Microsoft)

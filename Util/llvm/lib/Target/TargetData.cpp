@@ -176,11 +176,11 @@ void TargetData::init(const std::string &TargetDescription) {
   PointerPrefAlign = PointerABIAlign;
 
   // Default alignments
-  setAlignment(INTEGER_ALIGN,   1,  1, 1);   // Bool
-  setAlignment(INTEGER_ALIGN,   1,  1, 8);   // Byte
-  setAlignment(INTEGER_ALIGN,   2,  2, 16);  // short
-  setAlignment(INTEGER_ALIGN,   4,  4, 32);  // int
-  setAlignment(INTEGER_ALIGN,   4,  8, 64);  // long
+  setAlignment(INTEGER_ALIGN,   1,  1, 1);   // i1
+  setAlignment(INTEGER_ALIGN,   1,  1, 8);   // i8
+  setAlignment(INTEGER_ALIGN,   2,  2, 16);  // i16
+  setAlignment(INTEGER_ALIGN,   4,  4, 32);  // i32
+  setAlignment(INTEGER_ALIGN,   4,  8, 64);  // i64
   setAlignment(FLOAT_ALIGN,     4,  4, 32);  // float
   setAlignment(FLOAT_ALIGN,     8,  8, 64);  // double
   setAlignment(VECTOR_ALIGN,    8,  8, 64);  // v2i32
@@ -302,14 +302,14 @@ unsigned TargetData::getAlignmentInfo(AlignTypeEnum AlignType,
       BestMatchIdx = LargestInt;
     } else {
       assert(AlignType == VECTOR_ALIGN && "Unknown alignment type!");
-      
+
       // If we didn't find a vector size that is smaller or equal to this type,
       // then we will end up scalarizing this to its element type.  Just return
       // the alignment of the element.
       return getAlignment(cast<VectorType>(Ty)->getElementType(), ABIInfo);
-    }    
+    }
   }
-    
+
   // Since we got a "best match" index, just return it.
   return ABIInfo ? Alignments[BestMatchIdx].ABIAlign
                  : Alignments[BestMatchIdx].PrefAlign;
@@ -475,12 +475,12 @@ unsigned char TargetData::getAlignment(const Type *Ty, bool abi_or_pref) const {
             : getPointerPrefAlignment());
   case Type::ArrayTyID:
     return getAlignment(cast<ArrayType>(Ty)->getElementType(), abi_or_pref);
-    
+
   case Type::StructTyID: {
     // Packed structure types always have an ABI alignment of one.
     if (cast<StructType>(Ty)->isPacked() && abi_or_pref)
       return 1;
-    
+
     // Get the layout annotation... which is lazily created on demand.
     const StructLayout *Layout = getStructLayout(cast<StructType>(Ty));
     unsigned Align = getAlignmentInfo(AGGREGATE_ALIGN, 0, abi_or_pref, Ty);

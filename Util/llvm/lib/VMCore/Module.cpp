@@ -29,14 +29,6 @@ using namespace llvm;
 // Methods to implement the globals and functions lists.
 //
 
-Function *ilist_traits<Function>::createSentinel() {
-  FunctionType *FTy =
-    FunctionType::get(Type::VoidTy, std::vector<const Type*>(), false);
-  Function *Ret = Function::Create(FTy, GlobalValue::ExternalLinkage);
-  // This should not be garbage monitored.
-  LeakDetector::removeGarbageObject(Ret);
-  return Ret;
-}
 GlobalVariable *ilist_traits<GlobalVariable>::createSentinel() {
   GlobalVariable *Ret = new GlobalVariable(Type::Int32Ty, false,
                                            GlobalValue::ExternalLinkage);
@@ -50,16 +42,6 @@ GlobalAlias *ilist_traits<GlobalAlias>::createSentinel() {
   // This should not be garbage monitored.
   LeakDetector::removeGarbageObject(Ret);
   return Ret;
-}
-
-iplist<Function> &ilist_traits<Function>::getList(Module *M) {
-  return M->getFunctionList();
-}
-iplist<GlobalVariable> &ilist_traits<GlobalVariable>::getList(Module *M) {
-  return M->getGlobalList();
-}
-iplist<GlobalAlias> &ilist_traits<GlobalAlias>::getList(Module *M) {
-  return M->getAliasList();
 }
 
 // Explicit instantiations of SymbolTableListTraits since some of the methods
@@ -127,6 +109,18 @@ Module::PointerSize Module::getPointerSize() const {
   return ret;
 }
 
+/// getNamedValue - Return the first global value in the module with
+/// the specified name, of arbitrary type.  This method returns null
+/// if a global with the specified name is not found.
+GlobalValue *Module::getNamedValue(const std::string &Name) const {
+  return cast_or_null<GlobalValue>(getValueSymbolTable().lookup(Name));
+}
+
+GlobalValue *Module::getNamedValue(const char *Name) const {
+  llvm::Value *V = getValueSymbolTable().lookup(Name, Name+strlen(Name));
+  return cast_or_null<GlobalValue>(V);
+}
+
 //===----------------------------------------------------------------------===//
 // Methods for easy access to the functions in the module.
 //
@@ -139,10 +133,8 @@ Module::PointerSize Module::getPointerSize() const {
 Constant *Module::getOrInsertFunction(const std::string &Name,
                                       const FunctionType *Ty,
                                       AttrListPtr AttributeList) {
-  ValueSymbolTable &SymTab = getValueSymbolTable();
-
   // See if we have a definition for the specified function already.
-  GlobalValue *F = dyn_cast_or_null<GlobalValue>(SymTab.lookup(Name));
+  GlobalValue *F = getNamedValue(Name);
   if (F == 0) {
     // Nope, add it
     Function *New = Function::Create(Ty, GlobalVariable::ExternalLinkage, Name);
@@ -167,6 +159,23 @@ Constant *Module::getOrInsertFunction(const std::string &Name,
   if (F->getType() != PointerType::getUnqual(Ty))
     return ConstantExpr::getBitCast(F, PointerType::getUnqual(Ty));
   
+  // Otherwise, we just found the existing function or a prototype.
+  return F;  
+}
+
+Constant *Module::getOrInsertTargetIntrinsic(const std::string &Name,
+                                             const FunctionType *Ty,
+                                             AttrListPtr AttributeList) {
+  // See if we have a definition for the specified function already.
+  GlobalValue *F = getNamedValue(Name);
+  if (F == 0) {
+    // Nope, add it
+    Function *New = Function::Create(Ty, GlobalVariable::ExternalLinkage, Name);
+    New->setAttributes(AttributeList);
+    FunctionList.push_back(New);
+    return New; // Return the new prototype.
+  }
+
   // Otherwise, we just found the existing function or a prototype.
   return F;  
 }
@@ -221,13 +230,11 @@ Constant *Module::getOrInsertFunction(const std::string &Name,
 // If it does not exist, return null.
 //
 Function *Module::getFunction(const std::string &Name) const {
-  const ValueSymbolTable &SymTab = getValueSymbolTable();
-  return dyn_cast_or_null<Function>(SymTab.lookup(Name));
+  return dyn_cast_or_null<Function>(getNamedValue(Name));
 }
 
 Function *Module::getFunction(const char *Name) const {
-  const ValueSymbolTable &SymTab = getValueSymbolTable();
-  return dyn_cast_or_null<Function>(SymTab.lookup(Name, Name+strlen(Name)));
+  return dyn_cast_or_null<Function>(getNamedValue(Name));
 }
 
 //===----------------------------------------------------------------------===//
@@ -243,11 +250,10 @@ Function *Module::getFunction(const char *Name) const {
 ///
 GlobalVariable *Module::getGlobalVariable(const std::string &Name,
                                           bool AllowLocal) const {
-  if (Value *V = ValSymTab->lookup(Name)) {
-    GlobalVariable *Result = dyn_cast<GlobalVariable>(V);
-    if (Result && (AllowLocal || !Result->hasLocalLinkage()))
+  if (GlobalVariable *Result = 
+      dyn_cast_or_null<GlobalVariable>(getNamedValue(Name)))
+    if (AllowLocal || !Result->hasLocalLinkage())
       return Result;
-  }
   return 0;
 }
 
@@ -258,10 +264,8 @@ GlobalVariable *Module::getGlobalVariable(const std::string &Name,
 ///   3. Finally, if the existing global is the correct delclaration, return the
 ///      existing global.
 Constant *Module::getOrInsertGlobal(const std::string &Name, const Type *Ty) {
-  ValueSymbolTable &SymTab = getValueSymbolTable();
-
   // See if we have a definition for the specified global already.
-  GlobalVariable *GV = dyn_cast_or_null<GlobalVariable>(SymTab.lookup(Name));
+  GlobalVariable *GV = dyn_cast_or_null<GlobalVariable>(getNamedValue(Name));
   if (GV == 0) {
     // Nope, add it
     GlobalVariable *New =
@@ -287,8 +291,7 @@ Constant *Module::getOrInsertGlobal(const std::string &Name, const Type *Ty) {
 // If it does not exist, return null.
 //
 GlobalAlias *Module::getNamedAlias(const std::string &Name) const {
-  const ValueSymbolTable &SymTab = getValueSymbolTable();
-  return dyn_cast_or_null<GlobalAlias>(SymTab.lookup(Name));
+  return dyn_cast_or_null<GlobalAlias>(getNamedValue(Name));
 }
 
 //===----------------------------------------------------------------------===//

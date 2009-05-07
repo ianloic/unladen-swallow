@@ -1,7 +1,10 @@
-// RUN: clang -analyze -warn-dead-stores -verify %s &&
-// RUN: clang -analyze -checker-simple -warn-dead-stores -verify %s &&
-// RUN: clang -analyze -warn-dead-stores -checker-simple -verify %s
-
+// RUN: clang-cc -analyze -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-simple -analyzer-store=basic -analyzer-constraints=basic -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-simple -analyzer-store=basic -analyzer-constraints=range -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -warn-dead-stores -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -warn-dead-stores -verify %s
 
 void f1() {
   int k, y;
@@ -12,7 +15,8 @@ void f1() {
 void f2(void *b) {
  char *c = (char*)b; // no-warning
  char *d = b+1; // expected-warning {{never read}}
- printf("%s", c);
+ printf("%s", c); // expected-warning{{implicitly declaring C library function 'printf' with type 'int (char const *, ...)'}} \
+ // expected-note{{please include the header <stdio.h> or explicitly provide a declaration for 'printf'}}
 }
 
 void f3() {
@@ -147,3 +151,25 @@ int f18() {
 
    return (x = 10); // expected-warning{{Although the value stored to 'x' is used in the enclosing expression, the value is never actually read from 'x'}}
 }
+
+// PR 3514: false positive `dead initialization` warning for init to global
+//  http://llvm.org/bugs/show_bug.cgi?id=3514
+extern const int MyConstant;
+int f19(void) {
+  int x = MyConstant;  // no-warning
+  x = 1;
+  return x;
+}
+
+int f19b(void) { // This case is the same as f19.
+  const int MyConstant = 0;
+  int x = MyConstant; // no-warning
+  x = 1;
+  return x;  
+}
+
+void f20(void) {
+  int x = 1; // no-warning
+#pragma unused(x)
+}
+

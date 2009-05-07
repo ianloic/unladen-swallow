@@ -64,7 +64,11 @@ public:
 
     /// FunctionPrototypeScope - This is a scope that corresponds to the
     /// parameters within a function prototype.
-    FunctionPrototypeScope = 0x100
+    FunctionPrototypeScope = 0x100,
+    
+    /// AtCatchScope - This is a scope that corresponds to the Objective-C
+    /// @catch statement.
+    AtCatchScope = 0x200
   };
 private:
   /// The parent scope for this scope.  This is null for the translation-unit
@@ -77,7 +81,7 @@ private:
   
   /// Flags - This contains a set of ScopeFlags, which indicates how the scope
   /// interrelates with other control flow statements.
-  unsigned Flags : 9;
+  unsigned Flags : 10;
   
   /// WithinElse - Whether this scope is part of the "else" branch in
   /// its parent ControlScope.
@@ -113,7 +117,7 @@ private:
   /// popped, these declarations are removed from the IdentifierTable's notion
   /// of current declaration.  It is up to the current Action implementation to
   /// implement these semantics.
-  typedef llvm::SmallPtrSet<Action::DeclTy*, 32> DeclSetTy;
+  typedef llvm::SmallPtrSet<Action::DeclPtrTy, 32> DeclSetTy;
   DeclSetTy DeclsInScope;
   
   /// Entity - The entity with which this scope is associated. For
@@ -121,6 +125,9 @@ private:
   /// entity of a function scope is a function, etc. This field is
   /// maintained by the Action implementation.
   void *Entity;
+
+  typedef llvm::SmallVector<Action::DeclPtrTy, 2> UsingDirectivesTy;
+  UsingDirectivesTy UsingDirectives;
 
 public:
   Scope(Scope *Parent, unsigned ScopeFlags) {
@@ -184,17 +191,17 @@ public:
   decl_iterator decl_end()   const { return DeclsInScope.end(); }
   bool decl_empty()          const { return DeclsInScope.empty(); }
 
-  void AddDecl(Action::DeclTy *D) {
+  void AddDecl(Action::DeclPtrTy D) {
     DeclsInScope.insert(D);
   }
 
-  void RemoveDecl(Action::DeclTy *D) {
+  void RemoveDecl(Action::DeclPtrTy D) {
     DeclsInScope.erase(D);
   }
 
   /// isDeclScope - Return true if this is the scope that the specified decl is
   /// declared in.
-  bool isDeclScope(Action::DeclTy *D) {
+  bool isDeclScope(Action::DeclPtrTy D) {
     return DeclsInScope.count(D) != 0;
   }
 
@@ -228,11 +235,39 @@ public:
     return getFlags() & Scope::FunctionPrototypeScope;
   }
 
+  /// isAtCatchScope - Return true if this scope is @catch.
+  bool isAtCatchScope() const {
+    return getFlags() & Scope::AtCatchScope;
+  }
+
   /// isWithinElse - Whether we are within the "else" of the
   /// ControlParent (if any).
   bool isWithinElse() const { return WithinElse; }
 
   void setWithinElse(bool WE) { WithinElse = WE; }
+
+  typedef UsingDirectivesTy::iterator udir_iterator;
+  typedef UsingDirectivesTy::const_iterator const_udir_iterator;
+
+  void PushUsingDirective(Action::DeclPtrTy UDir) {
+    UsingDirectives.push_back(UDir);
+  }
+
+  udir_iterator using_directives_begin() {
+    return UsingDirectives.begin();
+  }
+
+  udir_iterator using_directives_end() {
+    return UsingDirectives.end();
+  }
+
+  const_udir_iterator using_directives_begin() const {
+    return UsingDirectives.begin();
+  }
+
+  const_udir_iterator using_directives_end() const {
+    return UsingDirectives.end();
+  }
 
   /// Init - This is used by the parser to implement scope caching.
   ///
@@ -265,6 +300,7 @@ public:
     if (Flags & BlockScope)         BlockParent = this;
     if (Flags & TemplateParamScope) TemplateParamParent = this;
     DeclsInScope.clear();
+    UsingDirectives.clear();
     Entity = 0;
   }
 };

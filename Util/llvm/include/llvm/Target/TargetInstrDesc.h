@@ -131,10 +131,6 @@ public:
     return -1;
   }
 
-  /// findTiedToSrcOperand - Returns the operand that is tied to the specified
-  /// dest operand. Returns -1 if there isn't one.
-  int findTiedToSrcOperand(unsigned OpNum) const;
-  
   /// getOpcode - Return the opcode number for this descriptor.
   unsigned getOpcode() const {
     return Opcode;
@@ -202,6 +198,24 @@ public:
   /// This method returns null if the instruction has no implicit defs.
   const unsigned *getImplicitDefs() const {
     return ImplicitDefs;
+  }
+  
+  /// hasImplicitUseOfPhysReg - Return true if this instruction implicitly
+  /// uses the specified physical register.
+  bool hasImplicitUseOfPhysReg(unsigned Reg) const {
+    if (const unsigned *ImpUses = ImplicitUses)
+      for (; *ImpUses; ++ImpUses)
+        if (*ImpUses == Reg) return true;
+    return false;
+  }
+  
+  /// hasImplicitDefOfPhysReg - Return true if this instruction implicitly
+  /// defines the specified physical register.
+  bool hasImplicitDefOfPhysReg(unsigned Reg) const {
+    if (const unsigned *ImpDefs = ImplicitDefs)
+      for (; *ImpDefs; ++ImpDefs)
+        if (*ImpDefs == Reg) return true;
+    return false;
   }
 
   /// getRegClassBarriers - Return a list of register classes that are
@@ -407,9 +421,10 @@ public:
 
   /// isAsCheapAsAMove - Returns true if this instruction has the same cost (or
   /// less) than a move instruction. This is useful during certain types of
-  /// rematerializations (e.g., during two-address conversion) where we would
-  /// like to remat the instruction, but not if it costs more than moving the
-  /// instruction into the appropriate register.
+  /// optimizations (e.g., remat during two-address conversion or machine licm)
+  /// where we would like to remat or hoist the instruction, but not if it costs
+  /// more than moving the instruction into the appropriate register. Note, we
+  /// are not marking copies from and to the same register class with this flag.
   bool isAsCheapAsAMove() const {
     return Flags & (1 << TID::CheapAsAMove);
   }

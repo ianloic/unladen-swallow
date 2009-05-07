@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 typedef int INT;
 
 class Foo {
@@ -9,7 +9,7 @@ class Foo {
 
   ((Foo))(INT); // expected-error{{cannot be redeclared}}
 
-  Foo(Foo foo, int i = 17, int j = 42); // expected-error {{copy constructor must pass its first argument by reference}}
+  Foo(Foo foo, int i = 17, int j = 42); // expected-error{{copy constructor must pass its first argument by reference}}
 
   static Foo(short, short); // expected-error{{constructor cannot be declared 'static'}}
   virtual Foo(double); // expected-error{{constructor cannot be declared 'virtual'}}
@@ -40,3 +40,21 @@ extern y b;
 struct Length {
   Length l() const { return *this; }
 };
+
+// <rdar://problem/6815988>
+struct mmst_reg{
+ char mmst_reg[10];
+};
+
+// PR3948
+namespace PR3948 {
+// PR3948
+class a {
+  public:
+  int b(int a());
+};
+int x();
+void y() {
+  a z; z.b(x);
+}
+}

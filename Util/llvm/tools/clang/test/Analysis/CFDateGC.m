@@ -1,6 +1,8 @@
-// RUN: clang -analyze -checker-cfref -verify -fobjc-gc %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify -fobjc-gc %s
-
+// RUN: clang-cc -analyze -checker-cfref -verify -fobjc-gc -analyzer-constraints=basic %s &&
+// RUN: clang-cc -analyze -checker-cfref -verify -fobjc-gc -analyzer-constraints=range %s &&
+// RUN: clang-cc -analyze -checker-cfref -verify -fobjc-gc -disable-free %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify -fobjc-gc %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify -fobjc-gc %s
 
 //===----------------------------------------------------------------------===//
 // The following code is reduced using delta-debugging from
@@ -70,8 +72,8 @@ CFAbsoluteTime f2_noleak() {
 }
 
 void f3_leak_with_gc() {
-  CFDateRef date = CFDateCreate(0, CFAbsoluteTimeGetCurrent());
-  [[(id) date retain] release]; // expected-warning{{leak}}
+  CFDateRef date = CFDateCreate(0, CFAbsoluteTimeGetCurrent()); // expected-warning 2 {{leak}}
+  [[(id) date retain] release];
 }
 
 // The following test case verifies that we "stop tracking" a retained object

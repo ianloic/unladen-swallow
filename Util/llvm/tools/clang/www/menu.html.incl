@@ -10,7 +10,9 @@
     <a href="/comparison.html">Comparisons</a>
     <a href="/get_started.html">Get&nbsp;Started</a>
     <a href="/get_involved.html">Get&nbsp;Involved</a>
+    <a href="/OpenProjects.html">Open&nbsp;Projects</a>
     <a href="/cxx_status.html">C++ Status</a>
+    <a href="/docs/LanguageExtensions.html">Language&nbsp;Extensions</a>
     <a href="/docs/InternalsManual.html">Clang&nbsp;Internals</a>
     <a href="/hacking.html">Hacking on Clang</a>
     <a href="/performance.html">Performance</a>
@@ -30,7 +32,7 @@
     <a href="http://llvm.org/viewvc/llvm-project/cfe/trunk/">Browse ViewVC</a>
     <a href="http://clang.llvm.org/doxygen/">doxygen</a>
     <a href="http://t1.minormatter.com/~ddunbar/references.html">Spec. References</a>
-<!--    <a href="http://keeda.stanford.edu/~ddunbar/clang/coverage/">Testing Coverage</a> -->
+    <a href="http://t1.minormatter.com/~ddunbar/clang-cov/">Testing Coverage</a>
   </div>
   
   <div class="submenu">

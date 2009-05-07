@@ -19,6 +19,20 @@
 namespace llvm {
   template<typename T> class SmallVectorImpl;
 
+  /// If object contains references to other objects, then relocations are
+  /// usually required for emission of such object (especially in PIC mode). One
+  /// usually distinguishes local and global relocations. Local relocations are
+  /// made wrt objects in the same module and these objects have local (internal
+  /// or private) linkage. Global relocations are made wrt externally visible
+  /// objects. In most cases local relocations can be resolved via so-called
+  /// 'pre-link' technique.
+  namespace Reloc {
+    const unsigned None   = 0;
+    const unsigned Local  = 1 << 0; ///< Local relocations are required
+    const unsigned Global = 1 << 1; ///< Global relocations are required
+    const unsigned LocalOrGlobal = Local | Global;
+  }
+
 /// This is an important base class in LLVM. It provides the common facilities
 /// of all constant values in an LLVM program. A constant is a value that is
 /// immutable at runtime. Functions are constants because their address is
@@ -62,9 +76,11 @@ public:
   /// true for things like constant expressions that could divide by zero.
   bool canTrap() const;
 
-  /// ContaintsRelocations - Return true if the constant value contains
-  /// relocations which cannot be resolved at compile time.
-  bool ContainsRelocations() const;
+  /// ContainsRelocations - Return true if the constant value contains
+  /// relocations which cannot be resolved at compile time. Note that answer is
+  /// not exclusive: there can be possibility that relocations of other kind are
+  /// required as well.
+  bool ContainsRelocations(unsigned Kind = Reloc::LocalOrGlobal) const;
 
   // Specialize get/setOperand for Constants as their operands are always
   // constants as well.

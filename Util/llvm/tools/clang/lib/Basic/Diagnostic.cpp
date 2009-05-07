@@ -12,6 +12,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/Diagnostic.h"
+
+#include "clang/Lex/LexDiagnostic.h"
+#include "clang/Parse/ParseDiagnostic.h"
+#include "clang/AST/ASTDiagnostic.h"
+#include "clang/Sema/SemaDiagnostic.h"
+#include "clang/Frontend/FrontendDiagnostic.h"
+#include "clang/Analysis/AnalysisDiagnostic.h"
+#include "clang/Driver/DriverDiagnostic.h"
+
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/SmallVector.h"
@@ -25,95 +34,94 @@ using namespace clang;
 // Builtin Diagnostic information
 //===----------------------------------------------------------------------===//
 
-/// Flag values for diagnostics.
+// Diagnostic classes.
 enum {
-  // Diagnostic classes.
-  NOTE       = 0x01,
-  WARNING    = 0x02,
-  EXTENSION  = 0x03,
-  EXTWARN    = 0x04,
-  ERROR      = 0x05,
-  class_mask = 0x07
+  CLASS_NOTE       = 0x01,
+  CLASS_WARNING    = 0x02,
+  CLASS_EXTENSION  = 0x03,
+  CLASS_ERROR      = 0x04
 };
 
-/// DiagnosticFlags - A set of flags, or'd together, that describe the
-/// diagnostic.
-#define DIAG(ENUM,FLAGS,DESC) FLAGS,
-static unsigned char DiagnosticFlagsCommon[] = {
-#include "clang/Basic/DiagnosticCommonKinds.def"
-  0
+struct StaticDiagInfoRec {
+  unsigned short DiagID;
+  unsigned Mapping : 3;
+  unsigned Class : 3;
+  const char *Description;
+  const char *OptionGroup;
+  
+  bool operator<(const StaticDiagInfoRec &RHS) const {
+    return DiagID < RHS.DiagID;
+  }
+  bool operator>(const StaticDiagInfoRec &RHS) const {
+    return DiagID > RHS.DiagID;
+  }
 };
-static unsigned char DiagnosticFlagsLex[] = {
-#include "clang/Basic/DiagnosticLexKinds.def"
-  0
-};
-static unsigned char DiagnosticFlagsParse[] = {
-#include "clang/Basic/DiagnosticParseKinds.def"
-  0
-};
-static unsigned char DiagnosticFlagsAST[] = {
-#include "clang/Basic/DiagnosticASTKinds.def"
-  0
-};
-static unsigned char DiagnosticFlagsSema[] = {
-#include "clang/Basic/DiagnosticSemaKinds.def"
-  0
-};
-static unsigned char DiagnosticFlagsAnalysis[] = {
-#include "clang/Basic/DiagnosticAnalysisKinds.def"
-  0
+
+static const StaticDiagInfoRec StaticDiagInfo[] = {
+#define DIAG(ENUM,CLASS,DEFAULT_MAPPING,DESC,GROUP) \
+  { diag::ENUM, DEFAULT_MAPPING, CLASS, DESC, GROUP },
+#include "clang/Basic/DiagnosticCommonKinds.inc"
+#include "clang/Basic/DiagnosticDriverKinds.inc"
+#include "clang/Basic/DiagnosticFrontendKinds.inc"
+#include "clang/Basic/DiagnosticLexKinds.inc"
+#include "clang/Basic/DiagnosticParseKinds.inc"
+#include "clang/Basic/DiagnosticASTKinds.inc"
+#include "clang/Basic/DiagnosticSemaKinds.inc"
+#include "clang/Basic/DiagnosticAnalysisKinds.inc"
+{ 0, 0, 0, 0, 0 }
 };
 #undef DIAG
+
+/// GetDiagInfo - Return the StaticDiagInfoRec entry for the specified DiagID,
+/// or null if the ID is invalid.
+static const StaticDiagInfoRec *GetDiagInfo(unsigned DiagID) {
+  unsigned NumDiagEntries = sizeof(StaticDiagInfo)/sizeof(StaticDiagInfo[0])-1;
+
+  // If assertions are enabled, verify that the StaticDiagInfo array is sorted.
+#ifndef NDEBUG
+  static bool IsFirst = true;
+  if (IsFirst) {
+    for (unsigned i = 1; i != NumDiagEntries; ++i)
+      assert(StaticDiagInfo[i-1] < StaticDiagInfo[i] &&
+             "Improperly sorted diag info");
+    IsFirst = false;
+  }
+#endif
+  
+  // Search the diagnostic table with a binary search.
+  StaticDiagInfoRec Find = { DiagID, 0, 0, 0, 0 };
+  
+  const StaticDiagInfoRec *Found =
+    std::lower_bound(StaticDiagInfo, StaticDiagInfo + NumDiagEntries, Find);
+  if (Found == StaticDiagInfo + NumDiagEntries ||
+      Found->DiagID != DiagID)
+    return 0;
+    
+  return Found;
+}
+
+static unsigned GetDefaultDiagMapping(unsigned DiagID) {
+  if (const StaticDiagInfoRec *Info = GetDiagInfo(DiagID))
+    return Info->Mapping;
+  return diag::MAP_FATAL;
+}
+
+/// getWarningOptionForDiag - Return the lowest-level warning option that
+/// enables the specified diagnostic.  If there is no -Wfoo flag that controls
+/// the diagnostic, this returns null.
+const char *Diagnostic::getWarningOptionForDiag(unsigned DiagID) {
+  if (const StaticDiagInfoRec *Info = GetDiagInfo(DiagID))
+    return Info->OptionGroup;
+  return 0;
+}
 
 /// getDiagClass - Return the class field of the diagnostic.
 ///
 static unsigned getBuiltinDiagClass(unsigned DiagID) {
-  assert(DiagID < diag::DIAG_UPPER_LIMIT &&
-         "Diagnostic ID out of range!");
-  unsigned res;
-  if (DiagID < diag::DIAG_START_LEX)
-    res = DiagnosticFlagsCommon[DiagID];
-  else if (DiagID < diag::DIAG_START_PARSE)
-    res = DiagnosticFlagsLex[DiagID - diag::DIAG_START_LEX - 1];
-  else if (DiagID < diag::DIAG_START_AST)
-    res = DiagnosticFlagsParse[DiagID - diag::DIAG_START_PARSE - 1];
-  else if (DiagID < diag::DIAG_START_SEMA)
-    res = DiagnosticFlagsAST[DiagID - diag::DIAG_START_AST - 1];
-  else if (DiagID < diag::DIAG_START_ANALYSIS)
-    res = DiagnosticFlagsSema[DiagID - diag::DIAG_START_SEMA - 1];
-  else
-    res = DiagnosticFlagsAnalysis[DiagID - diag::DIAG_START_ANALYSIS - 1];
-  return res & class_mask;
+  if (const StaticDiagInfoRec *Info = GetDiagInfo(DiagID))
+    return Info->Class;
+  return ~0U;
 }
-
-/// DiagnosticText - An english message to print for the diagnostic.  These
-/// should be localized.
-#define DIAG(ENUM,FLAGS,DESC) DESC,
-static const char * const DiagnosticTextCommon[] = {
-#include "clang/Basic/DiagnosticCommonKinds.def"
-  0
-};
-static const char * const DiagnosticTextLex[] = {
-#include "clang/Basic/DiagnosticLexKinds.def"
-  0
-};
-static const char * const DiagnosticTextParse[] = {
-#include "clang/Basic/DiagnosticParseKinds.def"
-  0
-};
-static const char * const DiagnosticTextAST[] = {
-#include "clang/Basic/DiagnosticASTKinds.def"
-  0
-};
-static const char * const DiagnosticTextSema[] = {
-#include "clang/Basic/DiagnosticSemaKinds.def"
-  0
-};
-static const char * const DiagnosticTextAnalysis[] = {
-#include "clang/Basic/DiagnosticAnalysisKinds.def"
-  0
-};
-#undef DIAG
 
 //===----------------------------------------------------------------------===//
 // Custom Diagnostic information
@@ -154,11 +162,6 @@ namespace clang {
         unsigned ID = DiagInfo.size()+DIAG_UPPER_LIMIT;
         DiagIDs.insert(std::make_pair(D, ID));
         DiagInfo.push_back(D);
-
-        // If this is a warning, and all warnings are supposed to map to errors,
-        // insert the mapping now.
-        if (L == Diagnostic::Warning && Diags.getWarningsAsErrors())
-          Diags.setDiagnosticMapping((diag::kind)ID, diag::MAP_ERROR);
         return ID;
       }
     };
@@ -174,28 +177,33 @@ namespace clang {
 static void DummyArgToStringFn(Diagnostic::ArgumentKind AK, intptr_t QT,
                                const char *Modifier, unsigned ML,
                                const char *Argument, unsigned ArgLen,
-                               llvm::SmallVectorImpl<char> &Output) {
+                               llvm::SmallVectorImpl<char> &Output,
+                               void *Cookie) {
   const char *Str = "<can't format argument>";
   Output.append(Str, Str+strlen(Str));
 }
 
 
 Diagnostic::Diagnostic(DiagnosticClient *client) : Client(client) {
+  AllExtensionsSilenced = 0;
   IgnoreAllWarnings = false;
   WarningsAsErrors = false;
-  WarnOnExtensions = false;
-  ErrorOnExtensions = false;
   SuppressSystemWarnings = false;
-  // Clear all mappings, setting them to MAP_DEFAULT.
-  memset(DiagMappings, 0, sizeof(DiagMappings));
+  ExtBehavior = Ext_Ignore;
   
   ErrorOccurred = false;
+  FatalErrorOccurred = false;
   NumDiagnostics = 0;
   NumErrors = 0;
   CustomDiagInfo = 0;
   CurDiagID = ~0U;
+  LastDiagLevel = Ignored;
   
   ArgToStringFn = DummyArgToStringFn;
+  ArgToStringCookie = 0;
+  
+  // Set all mappings to 'unset'.
+  memset(DiagMappings, 0, sizeof(DiagMappings));
 }
 
 Diagnostic::~Diagnostic() {
@@ -212,32 +220,36 @@ unsigned Diagnostic::getCustomDiagID(Level L, const char *Message) {
 }
 
 
-/// isBuiltinNoteWarningOrExtension - Return true if the unmapped diagnostic
-/// level of the specified diagnostic ID is a Note, Warning, or Extension.
-/// Note that this only works on builtin diagnostics, not custom ones.
-bool Diagnostic::isBuiltinNoteWarningOrExtension(unsigned DiagID) {
-  return DiagID < diag::DIAG_UPPER_LIMIT && getBuiltinDiagClass(DiagID) < ERROR;
+/// isBuiltinWarningOrExtension - Return true if the unmapped diagnostic
+/// level of the specified diagnostic ID is a Warning or Extension.
+/// This only works on builtin diagnostics, not custom ones, and is not legal to
+/// call on NOTEs.
+bool Diagnostic::isBuiltinWarningOrExtension(unsigned DiagID) {
+  return DiagID < diag::DIAG_UPPER_LIMIT &&
+         getBuiltinDiagClass(DiagID) != CLASS_ERROR;
+}
+
+/// \brief Determine whether the given built-in diagnostic ID is a
+/// Note.
+bool Diagnostic::isBuiltinNote(unsigned DiagID) {
+  return DiagID < diag::DIAG_UPPER_LIMIT &&
+    getBuiltinDiagClass(DiagID) == CLASS_NOTE;
+}
+
+/// isBuiltinExtensionDiag - Determine whether the given built-in diagnostic
+/// ID is for an extension of some sort.
+///
+bool Diagnostic::isBuiltinExtensionDiag(unsigned DiagID) {
+  return DiagID < diag::DIAG_UPPER_LIMIT &&
+         getBuiltinDiagClass(DiagID) == CLASS_EXTENSION;
 }
 
 
 /// getDescription - Given a diagnostic ID, return a description of the
 /// issue.
 const char *Diagnostic::getDescription(unsigned DiagID) const {
-  if (DiagID < diag::DIAG_UPPER_LIMIT) {
-    if (DiagID < diag::DIAG_START_LEX)
-      return DiagnosticTextCommon[DiagID];
-    else if (DiagID < diag::DIAG_START_PARSE)
-      return DiagnosticTextLex[DiagID - diag::DIAG_START_LEX - 1];
-    else if (DiagID < diag::DIAG_START_AST)
-      return DiagnosticTextParse[DiagID - diag::DIAG_START_PARSE - 1];
-    else if (DiagID < diag::DIAG_START_SEMA)
-      return DiagnosticTextAST[DiagID - diag::DIAG_START_AST - 1];
-    else if (DiagID < diag::DIAG_START_ANALYSIS)
-      return DiagnosticTextSema[DiagID - diag::DIAG_START_SEMA - 1];
-    else if (DiagID < diag::DIAG_UPPER_LIMIT)
-      return DiagnosticTextAnalysis[DiagID - diag::DIAG_START_ANALYSIS - 1];
-  }
-   
+  if (const StaticDiagInfoRec *Info = GetDiagInfo(DiagID))
+    return Info->Description;
   return CustomDiagInfo->getDescription(DiagID);
 }
 
@@ -250,78 +262,221 @@ Diagnostic::Level Diagnostic::getDiagnosticLevel(unsigned DiagID) const {
     return CustomDiagInfo->getLevel(DiagID);
   
   unsigned DiagClass = getBuiltinDiagClass(DiagID);
-  
+  assert(DiagClass != CLASS_NOTE && "Cannot get diagnostic level of a note!");
+  return getDiagnosticLevel(DiagID, DiagClass);
+}
+
+/// getDiagnosticLevel - Based on the way the client configured the Diagnostic
+/// object, classify the specified diagnostic ID into a Level, consumable by
+/// the DiagnosticClient.
+Diagnostic::Level
+Diagnostic::getDiagnosticLevel(unsigned DiagID, unsigned DiagClass) const {
   // Specific non-error diagnostics may be mapped to various levels from ignored
-  // to error.
-  if (DiagClass < ERROR) {
-    switch (getDiagnosticMapping((diag::kind)DiagID)) {
-    case diag::MAP_DEFAULT: break;
-    case diag::MAP_IGNORE:  return Diagnostic::Ignored;
-    case diag::MAP_WARNING: DiagClass = WARNING; break;
-    case diag::MAP_ERROR:   DiagClass = ERROR; break;
-    }
+  // to error.  Errors can only be mapped to fatal.
+  Diagnostic::Level Result = Diagnostic::Fatal;
+  
+  // Get the mapping information, if unset, compute it lazily.
+  unsigned MappingInfo = getDiagnosticMappingInfo((diag::kind)DiagID);
+  if (MappingInfo == 0) {
+    MappingInfo = GetDefaultDiagMapping(DiagID);
+    setDiagnosticMappingInternal(DiagID, MappingInfo, false);
   }
   
-  // Map diagnostic classes based on command line argument settings.
-  if (DiagClass == EXTENSION) {
-    if (ErrorOnExtensions)
-      DiagClass = ERROR;
-    else if (WarnOnExtensions)
-      DiagClass = WARNING;
-    else
-      return Ignored;
-  } else if (DiagClass == EXTWARN) {
-    DiagClass = ErrorOnExtensions ? ERROR : WARNING;
-  }
-  
-  // If warnings are globally mapped to ignore or error, do it.
-  if (DiagClass == WARNING) {
+  switch (MappingInfo & 7) {
+  default: assert(0 && "Unknown mapping!");
+  case diag::MAP_IGNORE:
+    // Ignore this, unless this is an extension diagnostic and we're mapping
+    // them onto warnings or errors.
+    if (!isBuiltinExtensionDiag(DiagID) ||  // Not an extension
+        ExtBehavior == Ext_Ignore ||        // Extensions ignored anyway
+        (MappingInfo & 8) != 0)             // User explicitly mapped it.
+      return Diagnostic::Ignored;
+    Result = Diagnostic::Warning;
+    if (ExtBehavior == Ext_Error) Result = Diagnostic::Error;
+    break;
+  case diag::MAP_ERROR:
+    Result = Diagnostic::Error;
+    break;
+  case diag::MAP_FATAL:
+    Result = Diagnostic::Fatal;
+    break;
+  case diag::MAP_WARNING:
+    // If warnings are globally mapped to ignore or error, do it.
     if (IgnoreAllWarnings)
       return Diagnostic::Ignored;
+      
+    Result = Diagnostic::Warning;
+      
+    // If this is an extension diagnostic and we're in -pedantic-error mode, and
+    // if the user didn't explicitly map it, upgrade to an error.
+    if (ExtBehavior == Ext_Error &&
+        (MappingInfo & 8) == 0 &&
+        isBuiltinExtensionDiag(DiagID))
+      Result = Diagnostic::Error;
+      
     if (WarningsAsErrors)
-      DiagClass = ERROR;
+      Result = Diagnostic::Error;
+    break;
+      
+  case diag::MAP_WARNING_NO_WERROR:
+    // Diagnostics specified with -Wno-error=foo should be set to warnings, but
+    // not be adjusted by -Werror or -pedantic-errors.
+    Result = Diagnostic::Warning;
+      
+    // If warnings are globally mapped to ignore or error, do it.
+    if (IgnoreAllWarnings)
+      return Diagnostic::Ignored;
+      
+    break;
+  }
+
+  // Okay, we're about to return this as a "diagnostic to emit" one last check:
+  // if this is any sort of extension warning, and if we're in an __extension__
+  // block, silence it.
+  if (AllExtensionsSilenced && isBuiltinExtensionDiag(DiagID))
+    return Diagnostic::Ignored;
+  
+  return Result;
+}
+
+struct WarningOption {
+  const char  *Name;
+  const short *Members;
+  const char  *SubGroups;
+};
+
+#define GET_DIAG_ARRAYS
+#include "clang/Basic/DiagnosticGroups.inc"
+#undef GET_DIAG_ARRAYS
+
+// Second the table of options, sorted by name for fast binary lookup.
+static const WarningOption OptionTable[] = {
+#define GET_DIAG_TABLE
+#include "clang/Basic/DiagnosticGroups.inc"
+#undef GET_DIAG_TABLE
+};
+static const size_t OptionTableSize =
+sizeof(OptionTable) / sizeof(OptionTable[0]);
+
+static bool WarningOptionCompare(const WarningOption &LHS,
+                                 const WarningOption &RHS) {
+  return strcmp(LHS.Name, RHS.Name) < 0;
+}
+
+static void MapGroupMembers(const WarningOption *Group, diag::Mapping Mapping,
+                            Diagnostic &Diags) {
+  // Option exists, poke all the members of its diagnostic set.
+  if (const short *Member = Group->Members) {
+    for (; *Member != -1; ++Member)
+      Diags.setDiagnosticMapping(*Member, Mapping);
   }
   
-  switch (DiagClass) {
-  default: assert(0 && "Unknown diagnostic class!");
-  case NOTE:        return Diagnostic::Note;
-  case WARNING:     return Diagnostic::Warning;
-  case ERROR:       return Diagnostic::Error;
+  // Enable/disable all subgroups along with this one.
+  if (const char *SubGroups = Group->SubGroups) {
+    for (; *SubGroups != (char)-1; ++SubGroups)
+      MapGroupMembers(&OptionTable[(unsigned char)*SubGroups], Mapping, Diags);
   }
 }
+
+/// setDiagnosticGroupMapping - Change an entire diagnostic group (e.g.
+/// "unknown-pragmas" to have the specified mapping.  This returns true and
+/// ignores the request if "Group" was unknown, false otherwise.
+bool Diagnostic::setDiagnosticGroupMapping(const char *Group,
+                                           diag::Mapping Map) {
+  
+  WarningOption Key = { Group, 0, 0 };
+  const WarningOption *Found =
+  std::lower_bound(OptionTable, OptionTable + OptionTableSize, Key,
+                   WarningOptionCompare);
+  if (Found == OptionTable + OptionTableSize ||
+      strcmp(Found->Name, Group) != 0)
+    return true;  // Option not found.
+  
+  MapGroupMembers(Found, Map, *this);
+  return false;
+}
+
 
 /// ProcessDiag - This is the method used to report a diagnostic that is
 /// finally fully formed.
 void Diagnostic::ProcessDiag() {
   DiagnosticInfo Info(this);
-  
+    
   // Figure out the diagnostic level of this message.
-  Diagnostic::Level DiagLevel = getDiagnosticLevel(Info.getID());
+  Diagnostic::Level DiagLevel;
+  unsigned DiagID = Info.getID();
   
-  // If the client doesn't care about this message, don't issue it.
-  if (DiagLevel == Diagnostic::Ignored)
-    return;
-
-  // If this is not an error and we are in a system header, ignore it.  We
-  // have to check on the original Diag ID here, because we also want to
-  // ignore extensions and warnings in -Werror and -pedantic-errors modes,
-  // which *map* warnings/extensions to errors.
-  if (SuppressSystemWarnings &&
-      Info.getID() < diag::DIAG_UPPER_LIMIT &&
-      getBuiltinDiagClass(Info.getID()) != ERROR &&
-      Info.getLocation().isValid() &&
-      Info.getLocation().getSpellingLoc().isInSystemHeader())
-    return;
+  // ShouldEmitInSystemHeader - True if this diagnostic should be produced even
+  // in a system header.
+  bool ShouldEmitInSystemHeader;
   
-  if (DiagLevel >= Diagnostic::Error) {
-    ErrorOccurred = true;
-
-    ++NumErrors;
+  if (DiagID >= diag::DIAG_UPPER_LIMIT) {
+    // Handle custom diagnostics, which cannot be mapped.
+    DiagLevel = CustomDiagInfo->getLevel(DiagID);
+    
+    // Custom diagnostics always are emitted in system headers.
+    ShouldEmitInSystemHeader = true;
+  } else {
+    // Get the class of the diagnostic.  If this is a NOTE, map it onto whatever
+    // the diagnostic level was for the previous diagnostic so that it is
+    // filtered the same as the previous diagnostic.
+    unsigned DiagClass = getBuiltinDiagClass(DiagID);
+    if (DiagClass == CLASS_NOTE) {
+      DiagLevel = Diagnostic::Note;
+      ShouldEmitInSystemHeader = false;  // extra consideration is needed
+    } else {
+      // If this is not an error and we are in a system header, we ignore it. 
+      // Check the original Diag ID here, because we also want to ignore
+      // extensions and warnings in -Werror and -pedantic-errors modes, which
+      // *map* warnings/extensions to errors.
+      ShouldEmitInSystemHeader = DiagClass == CLASS_ERROR;
+      
+      DiagLevel = getDiagnosticLevel(DiagID, DiagClass);
+    }
   }
 
+  if (DiagLevel != Diagnostic::Note) {
+    // Record that a fatal error occurred only when we see a second
+    // non-note diagnostic. This allows notes to be attached to the
+    // fatal error, but suppresses any diagnostics that follow those
+    // notes.
+    if (LastDiagLevel == Diagnostic::Fatal)
+      FatalErrorOccurred = true;
+
+    LastDiagLevel = DiagLevel;
+  }  
+
+  // If a fatal error has already been emitted, silence all subsequent
+  // diagnostics.
+  if (FatalErrorOccurred)
+    return;
+
+  // If the client doesn't care about this message, don't issue it.  If this is
+  // a note and the last real diagnostic was ignored, ignore it too.
+  if (DiagLevel == Diagnostic::Ignored ||
+      (DiagLevel == Diagnostic::Note && LastDiagLevel == Diagnostic::Ignored))
+    return;
+
+  // If this diagnostic is in a system header and is not a clang error, suppress
+  // it.
+  if (SuppressSystemWarnings && !ShouldEmitInSystemHeader &&
+      Info.getLocation().isValid() &&
+      Info.getLocation().getSpellingLoc().isInSystemHeader() &&
+      (DiagLevel != Diagnostic::Note || LastDiagLevel == Diagnostic::Ignored)) {
+    LastDiagLevel = Diagnostic::Ignored;
+    return;
+  }
+
+  if (DiagLevel >= Diagnostic::Error) {
+    ErrorOccurred = true;
+    ++NumErrors;
+  }
+  
   // Finally, report it.
   Client->HandleDiagnostic(DiagLevel, Info);
   if (Client->IncludeInDiagnosticCounts()) ++NumDiagnostics;
+
+  CurDiagID = ~0U;
 }
 
 
@@ -371,8 +526,7 @@ static void HandleIntegerSModifier(unsigned ValNo,
 
 
 /// PluralNumber - Parse an unsigned integer and advance Start.
-static unsigned PluralNumber(const char *&Start, const char *End)
-{
+static unsigned PluralNumber(const char *&Start, const char *End) {
   // Programming 101: Parse a decimal number :-)
   unsigned Val = 0;
   while (Start != End && *Start >= '0' && *Start <= '9') {
@@ -384,8 +538,7 @@ static unsigned PluralNumber(const char *&Start, const char *End)
 }
 
 /// TestPluralRange - Test if Val is in the parsed range. Modifies Start.
-static bool TestPluralRange(unsigned Val, const char *&Start, const char *End)
-{
+static bool TestPluralRange(unsigned Val, const char *&Start, const char *End) {
   if (*Start != '[') {
     unsigned Ref = PluralNumber(Start, End);
     return Ref == Val;
@@ -402,8 +555,7 @@ static bool TestPluralRange(unsigned Val, const char *&Start, const char *End)
 }
 
 /// EvalPluralExpr - Actual expression evaluator for HandlePluralModifier.
-static bool EvalPluralExpr(unsigned ValNo, const char *Start, const char *End)
-{
+static bool EvalPluralExpr(unsigned ValNo, const char *Start, const char *End) {
   // Empty condition?
   if (*Start == ':')
     return true;
@@ -471,8 +623,7 @@ static bool EvalPluralExpr(unsigned ValNo, const char *Start, const char *End)
 /// {1:form0|%100=[10,20]:form2|%10=[2,4]:form1|:form2}
 static void HandlePluralModifier(unsigned ValNo,
                                  const char *Argument, unsigned ArgumentLen,
-                                 llvm::SmallVectorImpl<char> &OutStr)
-{
+                                 llvm::SmallVectorImpl<char> &OutStr) {
   const char *ArgumentEnd = Argument + ArgumentLen;
   while (1) {
     assert(Argument < ArgumentEnd && "Plural expression didn't match.");
@@ -558,6 +709,11 @@ FormatDiagnostic(llvm::SmallVectorImpl<char> &OutStr) const {
     case Diagnostic::ak_c_string: {
       const char *S = getArgCStr(ArgNo);
       assert(ModifierLen == 0 && "No modifiers for strings yet");
+
+      // Don't crash if get passed a null pointer by accident.
+      if (!S)
+        S = "(null)";
+      
       OutStr.append(S, S + strlen(S));
       break;
     }
@@ -599,20 +755,27 @@ FormatDiagnostic(llvm::SmallVectorImpl<char> &OutStr) const {
     }
     // ---- NAMES and TYPES ----
     case Diagnostic::ak_identifierinfo: {
-      OutStr.push_back('\'');
       const IdentifierInfo *II = getArgIdentifier(ArgNo);
       assert(ModifierLen == 0 && "No modifiers for strings yet");
+
+      // Don't crash if get passed a null pointer by accident.
+      if (!II) {
+        const char *S = "(null)";
+        OutStr.append(S, S + strlen(S));
+        continue;
+      }
+
+      OutStr.push_back('\'');
       OutStr.append(II->getName(), II->getName() + II->getLength());
       OutStr.push_back('\'');
       break;
     }
     case Diagnostic::ak_qualtype:
     case Diagnostic::ak_declarationname:
-      OutStr.push_back('\'');
+    case Diagnostic::ak_nameddecl:
       getDiags()->ConvertArgToString(getArgKind(ArgNo), getRawArg(ArgNo),
                                      Modifier, ModifierLen,
                                      Argument, ArgumentLen, OutStr);
-      OutStr.push_back('\'');
       break;
     }
   }

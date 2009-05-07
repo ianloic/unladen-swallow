@@ -112,6 +112,8 @@ X86DarwinTargetAsmInfo::X86DarwinTargetAsmInfo(const X86TargetMachine &TM):
   DwarfFrameSection = ".section __DWARF,__debug_frame,regular,debug";
   DwarfPubNamesSection = ".section __DWARF,__debug_pubnames,regular,debug";
   DwarfPubTypesSection = ".section __DWARF,__debug_pubtypes,regular,debug";
+  DwarfDebugInlineSection = ".section __DWARF,__debug_inlined,regular,debug";
+  DwarfUsesInlineInfoSection = true;
   DwarfStrSection = ".section __DWARF,__debug_str,regular,debug";
   DwarfLocSection = ".section __DWARF,__debug_loc,regular,debug";
   DwarfARangesSection = ".section __DWARF,__debug_aranges,regular,debug";
@@ -411,8 +413,11 @@ bool X86TargetAsmInfo<BaseTAI>::ExpandInlineAsm(CallInst *CI) const {
 
     // bswap $0
     if (AsmPieces.size() == 2 &&
-        AsmPieces[0] == "bswap" && (AsmPieces[1] == "$0" ||
-                                    AsmPieces[1] == "${0:q}")) {
+        (AsmPieces[0] == "bswap" ||
+         AsmPieces[0] == "bswapq" ||
+         AsmPieces[0] == "bswapl") &&
+        (AsmPieces[1] == "$0" ||
+         AsmPieces[1] == "${0:q}")) {
       // No need to check constraints, nothing other than the equivalent of
       // "=r,0" would be valid here.
       return LowerToBSwap(CI);

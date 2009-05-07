@@ -66,8 +66,8 @@ namespace {
 
     virtual bool runOnSCC(const std::vector<CallGraphNode *> &SCC);
     static char ID; // Pass identification, replacement for typeid
-    ArgPromotion(unsigned maxElements = 3) : CallGraphSCCPass(&ID),
-                                             maxElements(maxElements) {}
+    explicit ArgPromotion(unsigned maxElements = 3)
+      : CallGraphSCCPass(&ID), maxElements(maxElements) {}
 
     /// A vector used to hold the indices of a single GEP instruction
     typedef std::vector<uint64_t> IndicesVector;
@@ -565,11 +565,10 @@ Function *ArgPromotion::DoPromotion(Function *F,
       // Add a parameter to the function for each element passed in.
       for (ScalarizeTable::iterator SI = ArgIndices.begin(),
              E = ArgIndices.end(); SI != E; ++SI) {
-        unsigned num = SI->size();
         // not allowed to dereference ->begin() if size() is 0
         Params.push_back(GetElementPtrInst::getIndexedType(I->getType(),
-                                                           num ? &*SI->begin(): 0,
-                                                           num));
+                                                           SI->begin(),
+                                                           SI->end()));
         assert(Params.back());
       }
 

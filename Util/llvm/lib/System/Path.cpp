@@ -55,7 +55,7 @@ LLVMFileType
 sys::IdentifyFileType(const char *magic, unsigned length) {
   assert(magic && "Invalid magic number string");
   assert(length >=4 && "Invalid magic number length");
-  switch (magic[0]) {
+  switch ((unsigned char)magic[0]) {
     case 0xDE:  // 0x0B17C0DE = BC wraper
       if (magic[1] == (char)0xC0 && magic[2] == (char)0x17 &&
           magic[3] == (char)0x0B)
@@ -205,6 +205,18 @@ bool Path::hasMagicNumber(const std::string &Magic) const {
   if (getMagicNumber(actualMagic, static_cast<unsigned>(Magic.size())))
     return Magic == actualMagic;
   return false;
+}
+
+void Path::makeAbsolute() {
+  if (isAbsolute())
+    return;
+
+  Path CWD = Path::GetCurrentDirectory();
+  assert(CWD.isAbsolute() && "GetCurrentDirectory returned relative path!");
+
+  CWD.appendComponent(path);
+
+  path = CWD.toString();
 }
 
 static void getPathList(const char*path, std::vector<Path>& Paths) {

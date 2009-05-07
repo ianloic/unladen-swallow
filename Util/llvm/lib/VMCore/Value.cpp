@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the Value and User classes.
+// This file implements the Value, ValueHandle, and User classes.
 //
 //===----------------------------------------------------------------------===//
 
@@ -20,6 +20,9 @@
 #include "llvm/ValueSymbolTable.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LeakDetector.h"
+#include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/ValueHandle.h"
+#include "llvm/ADT/DenseMap.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -33,7 +36,7 @@ static inline const Type *checkType(const Type *Ty) {
 }
 
 Value::Value(const Type *ty, unsigned scid)
-  : SubclassID(scid), SubclassData(0), VTy(checkType(ty)),
+  : SubclassID(scid), HasValueHandle(0), SubclassData(0), VTy(checkType(ty)),
     UseList(0), Name(0) {
   if (isa<CallInst>(this) || isa<InvokeInst>(this))
     assert((VTy->isFirstClassType() || VTy == Type::VoidTy ||
@@ -46,6 +49,10 @@ Value::Value(const Type *ty, unsigned scid)
 }
 
 Value::~Value() {
+  // Notify all ValueHandles (if present) that this value is going away.
+  if (HasValueHandle)
+    ValueHandleBase::ValueIsDeleted(this);
+  
 #ifndef NDEBUG      // Only in -g mode...
   // Check to make sure that there are no uses of this value that are still
   // around when the value is destroyed.  If there are, then we have a dangling
@@ -297,6 +304,10 @@ void Value::takeName(Value *V) {
 // this problem.
 //
 void Value::uncheckedReplaceAllUsesWith(Value *New) {
+  // Notify all ValueHandles (if present) that this value is going away.
+  if (HasValueHandle)
+    ValueHandleBase::ValueIsRAUWd(this, New);
+ 
   while (!use_empty()) {
     Use &U = *UseList;
     // Must handle Constants specially, we cannot call replaceUsesOfWith on a
@@ -385,6 +396,166 @@ Value *Value::DoPHITranslation(const BasicBlock *CurBB,
   return this;
 }
 
+//===----------------------------------------------------------------------===//
+//                             ValueHandleBase Class
+//===----------------------------------------------------------------------===//
+
+/// ValueHandles - This map keeps track of all of the value handles that are
+/// watching a Value*.  The Value::HasValueHandle bit is used to know whether or
+/// not a value has an entry in this map.
+typedef DenseMap<Value*, ValueHandleBase*> ValueHandlesTy;
+static ManagedStatic<ValueHandlesTy> ValueHandles;
+
+/// AddToExistingUseList - Add this ValueHandle to the use list for VP, where
+/// List is known to point into the existing use list.
+void ValueHandleBase::AddToExistingUseList(ValueHandleBase **List) {
+  assert(List && "Handle list is null?");
+  
+  // Splice ourselves into the list.
+  Next = *List;
+  *List = this;
+  setPrevPtr(List);
+  if (Next) {
+    Next->setPrevPtr(&Next);
+    assert(VP == Next->VP && "Added to wrong list?");
+  }
+}
+
+/// AddToUseList - Add this ValueHandle to the use list for VP.
+void ValueHandleBase::AddToUseList() {
+  assert(VP && "Null pointer doesn't have a use list!");
+  if (VP->HasValueHandle) {
+    // If this value already has a ValueHandle, then it must be in the
+    // ValueHandles map already.
+    ValueHandleBase *&Entry = (*ValueHandles)[VP];
+    assert(Entry != 0 && "Value doesn't have any handles?");
+    return AddToExistingUseList(&Entry);
+  }
+  
+  // Ok, it doesn't have any handles yet, so we must insert it into the
+  // DenseMap.  However, doing this insertion could cause the DenseMap to
+  // reallocate itself, which would invalidate all of the PrevP pointers that
+  // point into the old table.  Handle this by checking for reallocation and
+  // updating the stale pointers only if needed.
+  ValueHandlesTy &Handles = *ValueHandles;
+  const void *OldBucketPtr = Handles.getPointerIntoBucketsArray();
+  
+  ValueHandleBase *&Entry = Handles[VP];
+  assert(Entry == 0 && "Value really did already have handles?");
+  AddToExistingUseList(&Entry);
+  VP->HasValueHandle = true;
+  
+  // If reallocation didn't happen or if this was the first insertion, don't
+  // walk the table.
+  if (Handles.isPointerIntoBucketsArray(OldBucketPtr) || 
+      Handles.size() == 1)
+    return;
+  
+  // Okay, reallocation did happen.  Fix the Prev Pointers.
+  for (ValueHandlesTy::iterator I = Handles.begin(), E = Handles.end();
+       I != E; ++I) {
+    assert(I->second && I->first == I->second->VP && "List invariant broken!");
+    I->second->setPrevPtr(&I->second);
+  }
+}
+
+/// RemoveFromUseList - Remove this ValueHandle from its current use list.
+void ValueHandleBase::RemoveFromUseList() {
+  assert(VP && VP->HasValueHandle && "Pointer doesn't have a use list!");
+
+  // Unlink this from its use list.
+  ValueHandleBase **PrevPtr = getPrevPtr();
+  assert(*PrevPtr == this && "List invariant broken");
+  
+  *PrevPtr = Next;
+  if (Next) {
+    assert(Next->getPrevPtr() == &Next && "List invariant broken");
+    Next->setPrevPtr(PrevPtr);
+    return;
+  }
+  
+  // If the Next pointer was null, then it is possible that this was the last
+  // ValueHandle watching VP.  If so, delete its entry from the ValueHandles
+  // map.
+  ValueHandlesTy &Handles = *ValueHandles;
+  if (Handles.isPointerIntoBucketsArray(PrevPtr)) {
+    Handles.erase(VP);
+    VP->HasValueHandle = false;
+  }
+}
+
+
+void ValueHandleBase::ValueIsDeleted(Value *V) {
+  assert(V->HasValueHandle && "Should only be called if ValueHandles present");
+
+  // Get the linked list base, which is guaranteed to exist since the
+  // HasValueHandle flag is set.
+  ValueHandleBase *Entry = (*ValueHandles)[V];
+  assert(Entry && "Value bit set but no entries exist");
+  
+  while (Entry) {
+    // Advance pointer to avoid invalidation.
+    ValueHandleBase *ThisNode = Entry;
+    Entry = Entry->Next;
+    
+    switch (ThisNode->getKind()) {
+    case Assert:
+#ifndef NDEBUG      // Only in -g mode...
+      cerr << "While deleting: " << *V->getType() << " %" << V->getNameStr()
+           << "\n";
+#endif
+      cerr << "An asserting value handle still pointed to this value!\n";
+      abort();
+    case Weak:
+      // Weak just goes to null, which will unlink it from the list.
+      ThisNode->operator=(0);
+      break;
+    case Callback:
+      // Forward to the subclass's implementation.
+      static_cast<CallbackVH*>(ThisNode)->deleted();
+      break;
+    }
+  }
+  
+  // All callbacks and weak references should be dropped by now.
+  assert(!V->HasValueHandle && "All references to V were not removed?");
+}
+
+
+void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
+  assert(Old->HasValueHandle &&"Should only be called if ValueHandles present");
+  assert(Old != New && "Changing value into itself!");
+  
+  // Get the linked list base, which is guaranteed to exist since the
+  // HasValueHandle flag is set.
+  ValueHandleBase *Entry = (*ValueHandles)[Old];
+  assert(Entry && "Value bit set but no entries exist");
+  
+  while (Entry) {
+    // Advance pointer to avoid invalidation.
+    ValueHandleBase *ThisNode = Entry;
+    Entry = Entry->Next;
+    
+    switch (ThisNode->getKind()) {
+    case Assert:
+      // Asserting handle does not follow RAUW implicitly.
+      break;
+    case Weak:
+      // Weak goes to the new value, which will unlink it from Old's list.
+      ThisNode->operator=(New);
+      break;
+    case Callback:
+      // Forward to the subclass's implementation.
+      static_cast<CallbackVH*>(ThisNode)->allUsesReplacedWith(New);
+      break;
+    }
+  }
+}
+
+/// ~CallbackVH. Empty, but defined here to avoid emitting the vtable
+/// more than once.
+CallbackVH::~CallbackVH() {}
+
 
 //===----------------------------------------------------------------------===//
 //                                 User Class
@@ -408,21 +579,3 @@ void User::replaceUsesOfWith(Value *From, Value *To) {
     }
 }
 
-void *User::operator new(size_t s, unsigned Us) {
-  void *Storage = ::operator new(s + sizeof(Use) * Us);
-  Use *Start = static_cast<Use*>(Storage);
-  Use *End = Start + Us;
-  User *Obj = reinterpret_cast<User*>(End);
-  Obj->OperandList = Start;
-  Obj->NumOperands = Us;
-  Use::initTags(Start, End);
-  return Obj;
-}
-
-void User::operator delete(void *Usr) {
-  User *Start = static_cast<User*>(Usr);
-  Use *Storage = static_cast<Use*>(Usr) - Start->NumOperands;
-  ::operator delete(Storage == Start->OperandList
-                    ? Storage
-                    : Usr);
-}

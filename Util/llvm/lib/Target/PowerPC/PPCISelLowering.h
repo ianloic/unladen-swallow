@@ -175,19 +175,21 @@ namespace llvm {
   namespace PPC {
     /// isVPKUHUMShuffleMask - Return true if this is the shuffle mask for a
     /// VPKUHUM instruction.
-    bool isVPKUHUMShuffleMask(SDNode *N, bool isUnary);
+    bool isVPKUHUMShuffleMask(ShuffleVectorSDNode *N, bool isUnary);
     
     /// isVPKUWUMShuffleMask - Return true if this is the shuffle mask for a
     /// VPKUWUM instruction.
-    bool isVPKUWUMShuffleMask(SDNode *N, bool isUnary);
+    bool isVPKUWUMShuffleMask(ShuffleVectorSDNode *N, bool isUnary);
 
     /// isVMRGLShuffleMask - Return true if this is a shuffle mask suitable for
     /// a VRGL* instruction with the specified unit size (1,2 or 4 bytes).
-    bool isVMRGLShuffleMask(SDNode *N, unsigned UnitSize, bool isUnary);
+    bool isVMRGLShuffleMask(ShuffleVectorSDNode *N, unsigned UnitSize,
+                            bool isUnary);
 
     /// isVMRGHShuffleMask - Return true if this is a shuffle mask suitable for
     /// a VRGH* instruction with the specified unit size (1,2 or 4 bytes).
-    bool isVMRGHShuffleMask(SDNode *N, unsigned UnitSize, bool isUnary);
+    bool isVMRGHShuffleMask(ShuffleVectorSDNode *N, unsigned UnitSize,
+                            bool isUnary);
     
     /// isVSLDOIShuffleMask - If this is a vsldoi shuffle mask, return the shift
     /// amount, otherwise return -1.
@@ -196,7 +198,7 @@ namespace llvm {
     /// isSplatShuffleMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a splat of a single element that is suitable for input to
     /// VSPLTB/VSPLTH/VSPLTW.
-    bool isSplatShuffleMask(SDNode *N, unsigned EltSize);
+    bool isSplatShuffleMask(ShuffleVectorSDNode *N, unsigned EltSize);
     
     /// isAllNegativeZeroVector - Returns true if all elements of build_vector
     /// are -0.0.
@@ -285,13 +287,13 @@ namespace llvm {
                                                 unsigned Depth = 0) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                        MachineBasicBlock *MBB);
+                                                  MachineBasicBlock *MBB) const;
     MachineBasicBlock *EmitAtomicBinary(MachineInstr *MI, 
                                         MachineBasicBlock *MBB, bool is64Bit,
-                                        unsigned BinOpcode);
+                                        unsigned BinOpcode) const;
     MachineBasicBlock *EmitPartwordAtomicBinary(MachineInstr *MI, 
                                                 MachineBasicBlock *MBB, 
-                                                bool is8bit, unsigned Opcode);
+                                            bool is8bit, unsigned Opcode) const;
     
     ConstraintType getConstraintType(const std::string &Constraint) const;
     std::pair<unsigned, const TargetRegisterClass*> 
@@ -326,7 +328,7 @@ namespace llvm {
     /// the offset of the target addressing mode.
     virtual bool isLegalAddressImmediate(GlobalValue *GV) const;
 
-     /// IsEligibleForTailCallOptimization - Check whether the call is eligible
+    /// IsEligibleForTailCallOptimization - Check whether the call is eligible
     /// for tail call optimization. Target which want to do tail call
     /// optimization should implement this function.
     virtual bool IsEligibleForTailCallOptimization(CallSDNode *TheCall,
@@ -340,10 +342,11 @@ namespace llvm {
     SDValue getReturnAddrFrameIndex(SelectionDAG & DAG) const;
 
     SDValue EmitTailCallLoadFPAndRetAddr(SelectionDAG & DAG,
-                                           int SPDiff,
-                                           SDValue Chain,
-                                           SDValue &LROpOut,
-                                           SDValue &FPOpOut);
+                                         int SPDiff,
+                                         SDValue Chain,
+                                         SDValue &LROpOut,
+                                         SDValue &FPOpOut,
+                                         DebugLoc dl);
 
     SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG);
@@ -374,7 +377,7 @@ namespace llvm {
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG,
                                       const PPCSubtarget &Subtarget);
     SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG);
-    SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG, DebugLoc dl);
     SDValue LowerSINT_TO_FP(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG);
     SDValue LowerSHL_PARTS(SDValue Op, SelectionDAG &DAG);

@@ -87,7 +87,7 @@ entry:
 </pre>
 </div>
 
-Constant folding, as seen above, in particular, is a very common and very
+<p>Constant folding, as seen above, in particular, is a very common and very
 important optimization: so much so that many language implementors implement
 constant folding support in their AST representation.</p>
 
@@ -501,6 +501,11 @@ LLVM JIT and optimizer.  To build this example, use:
 </pre>
 </div>
 
+<p>
+If you are compiling this on Linux, make sure to add the "-rdynamic" option 
+as well.  This makes sure that the external functions are resolved properly 
+at runtime.</p>
+
 <p>Here is the code:</p>
 
 <div class="doc_code">
@@ -856,7 +861,7 @@ static PrototypeAST *ParseExtern() {
 //===----------------------------------------------------------------------===//
 
 static Module *TheModule;
-static IRBuilder Builder;
+static IRBuilder&lt;&gt; Builder;
 static std::map&lt;std::string, Value*&gt; NamedValues;
 static FunctionPassManager *TheFPM;
 

@@ -115,16 +115,23 @@ typedef enum {
 
 typedef enum {
   LLVMExternalLinkage,    /**< Externally visible function */
-  LLVMLinkOnceLinkage,    /**< Keep one copy of function when linking (inline)*/
-  LLVMWeakLinkage,        /**< Keep one copy of function when linking (weak) */
+  LLVMAvailableExternallyLinkage,
+  LLVMLinkOnceAnyLinkage, /**< Keep one copy of function when linking (inline)*/
+  LLVMLinkOnceODRLinkage, /**< Same, but only replaced by something
+                            equivalent. */
+  LLVMWeakAnyLinkage,     /**< Keep one copy of function when linking (weak) */
+  LLVMWeakODRLinkage,     /**< Same, but only replaced by something
+                            equivalent. */
   LLVMAppendingLinkage,   /**< Special purpose, only applies to global arrays */
   LLVMInternalLinkage,    /**< Rename collisions when linking (static
                                functions) */
+  LLVMPrivateLinkage,     /**< Like Internal, but omit from symbol table */
   LLVMDLLImportLinkage,   /**< Function to be imported from DLL */
   LLVMDLLExportLinkage,   /**< Function to be accessible from DLL */
   LLVMExternalWeakLinkage,/**< ExternalWeak linkage description */
-  LLVMGhostLinkage        /**< Stand-in functions for streaming fns from
+  LLVMGhostLinkage,       /**< Stand-in functions for streaming fns from
                                bitcode */
+  LLVMCommonLinkage       /**< Tentative definitions */
 } LLVMLinkage;
 
 typedef enum {

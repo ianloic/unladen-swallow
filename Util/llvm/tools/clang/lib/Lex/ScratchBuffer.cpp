@@ -32,8 +32,12 @@ ScratchBuffer::ScratchBuffer(SourceManager &SM) : SourceMgr(SM), CurBuffer(0) {
 /// token.
 SourceLocation ScratchBuffer::getToken(const char *Buf, unsigned Len,
                                        const char *&DestPtr) {
-  if (BytesUsed+Len > ScratchBufSize)
-    AllocScratchBuffer(Len);
+  if (BytesUsed+Len+2 > ScratchBufSize)
+    AllocScratchBuffer(Len+2);
+
+  // Prefix the token with a \n, so that it looks like it is the first thing on
+  // its own virtual line in caret diagnostics.
+  CurBuffer[BytesUsed++] = '\n';
   
   // Return a pointer to the character data.
   DestPtr = CurBuffer+BytesUsed;
@@ -42,9 +46,14 @@ SourceLocation ScratchBuffer::getToken(const char *Buf, unsigned Len,
   memcpy(CurBuffer+BytesUsed, Buf, Len);
 
   // Remember that we used these bytes.
-  BytesUsed += Len;
+  BytesUsed += Len+1;
+  
+  // Add a NUL terminator to the token.  This keeps the tokens separated, in
+  // case they get relexed, and puts them on their own virtual lines in case a
+  // diagnostic points to one.
+  CurBuffer[BytesUsed-1] = '\0';
 
-  return BufferStartLoc.getFileLocWithOffset(BytesUsed-Len);
+  return BufferStartLoc.getFileLocWithOffset(BytesUsed-Len-1);
 }
 
 void ScratchBuffer::AllocScratchBuffer(unsigned RequestLen) {
@@ -59,5 +68,6 @@ void ScratchBuffer::AllocScratchBuffer(unsigned RequestLen) {
   FileID FID = SourceMgr.createFileIDForMemBuffer(Buf);
   BufferStartLoc = SourceMgr.getLocForStartOfFile(FID);
   CurBuffer = const_cast<char*>(Buf->getBufferStart());
-  BytesUsed = 0;
+  BytesUsed = 1;
+  CurBuffer[0] = '0';  // Start out with a \0 for cleanliness.
 }

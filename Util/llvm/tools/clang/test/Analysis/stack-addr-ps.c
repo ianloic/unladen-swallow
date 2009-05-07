@@ -1,9 +1,8 @@
-// RUN: clang -analyze -checker-simple -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-simple -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify %s
 
 #include <stdlib.h>
-#include <alloca.h>
 
 int* f1() {
   int x = 0;
@@ -39,7 +38,7 @@ void* compound_literal(int x, int y) {
 }
 
 void* alloca_test() {
-  void* p = alloca(10);
+  void* p = __builtin_alloca(10);
   return p; // expected-warning{{Address of stack memory}}
 }
 

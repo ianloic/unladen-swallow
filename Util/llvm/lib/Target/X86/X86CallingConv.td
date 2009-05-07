@@ -22,8 +22,14 @@ class CCIfSubtarget<string F, CCAction A>
 
 // Return-value conventions common to all X86 CC's.
 def RetCC_X86Common : CallingConv<[
-  // Scalar values are returned in AX first, then DX.
-  CCIfType<[i8] , CCAssignToReg<[AL]>>,
+  // Scalar values are returned in AX first, then DX.  For i8, the ABI
+  // requires the values to be in AL and AH, however this code uses AL and DL
+  // instead. This is because using AH for the second register conflicts with
+  // the way LLVM does multiple return values -- a return of {i16,i8} would end
+  // up in AX and AH, which overlap. Front-ends wishing to conform to the ABI
+  // for functions that return two i8 values are currently expected to pack the
+  // values into an i16 (which uses AX, and thus AL:AH).
+  CCIfType<[i8] , CCAssignToReg<[AL, DL]>>,
   CCIfType<[i16], CCAssignToReg<[AX, DX]>>,
   CCIfType<[i32], CCAssignToReg<[EAX, EDX]>>,
   CCIfType<[i64], CCAssignToReg<[RAX, RDX]>>,
@@ -72,8 +78,11 @@ def RetCC_X86_64_C : CallingConv<[
   CCIfType<[f32], CCAssignToReg<[XMM0, XMM1]>>,
   CCIfType<[f64], CCAssignToReg<[XMM0, XMM1]>>,
 
-  // MMX vector types are always returned in XMM0.
-  CCIfType<[v8i8, v4i16, v2i32, v1i64, v2f32], CCAssignToReg<[XMM0, XMM1]>>,
+  // MMX vector types are always returned in XMM0 except for v1i64 which is
+  // returned in RAX. This disagrees with ABI documentation but is bug
+  // compatible with gcc.
+  CCIfType<[v1i64], CCAssignToReg<[RAX]>>,
+  CCIfType<[v8i8, v4i16, v2i32, v2f32], CCAssignToReg<[XMM0, XMM1]>>,
   CCDelegateTo<RetCC_X86Common>
 ]>;
 

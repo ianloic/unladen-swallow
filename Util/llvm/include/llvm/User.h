@@ -50,12 +50,11 @@ class User : public Value {
   template <unsigned>
   friend struct HungoffOperandTraits;
 protected:
-  /// OperandList - This is a pointer to the array of Users for this operand.
+  /// OperandList - This is a pointer to the array of Uses for this User.
   /// For nodes of fixed arity (e.g. a binary operator) this array will live
-  /// prefixed to the derived class.  For nodes of resizable variable arity
-  /// (e.g. PHINodes, SwitchInst etc.), this memory will be dynamically
-  /// allocated and should be destroyed by the classes' 
-  /// virtual dtor.
+  /// prefixed to some derived class instance.  For nodes of resizable variable
+  /// arity (e.g. PHINodes, SwitchInst etc.), this memory will be dynamically
+  /// allocated and should be destroyed by the classes' virtual dtor.
   Use *OperandList;
 
   /// NumOperands - The number of values used by this User.
@@ -63,6 +62,7 @@ protected:
   unsigned NumOperands;
 
   void *operator new(size_t s, unsigned Us);
+  void *operator new(size_t s, unsigned Us, bool Prefix);
   User(const Type *ty, unsigned vty, Use *OpList, unsigned NumOps)
     : Value(ty, vty), OperandList(OpList), NumOperands(NumOps) {}
   Use *allocHungoffUses(unsigned) const;
@@ -75,7 +75,8 @@ protected:
   }
 public:
   ~User() {
-    Use::zap(OperandList, OperandList + NumOperands);
+    if ((intptr_t(OperandList) & 1) == 0)
+      Use::zap(OperandList, OperandList + NumOperands);
   }
   /// operator delete - free memory allocated for User and Use objects
   void operator delete(void *Usr);
@@ -83,12 +84,23 @@ public:
   void operator delete(void*, unsigned) {
     assert(0 && "Constructor throws?");
   }
-  template <unsigned Idx> Use &Op() {
-    return OperandTraits<User>::op_begin(this)[Idx];
+  /// placement delete - required by std, but never called.
+  void operator delete(void*, unsigned, bool) {
+    assert(0 && "Constructor throws?");
   }
-  template <unsigned Idx> const Use &Op() const {
-    return OperandTraits<User>::op_begin(const_cast<User*>(this))[Idx];
+protected:
+  template <int Idx, typename U> static Use &OpFrom(const U *that) {
+    return Idx < 0
+      ? OperandTraits<U>::op_end(const_cast<U*>(that))[Idx]
+      : OperandTraits<U>::op_begin(const_cast<U*>(that))[Idx];
   }
+  template <int Idx> Use &Op() {
+    return OpFrom<Idx>(this);
+  }
+  template <int Idx> const Use &Op() const {
+    return OpFrom<Idx>(this);
+  }
+public:
   Value *getOperand(unsigned i) const {
     assert(i < NumOperands && "getOperand() out of range!");
     return OperandList[i];

@@ -12,7 +12,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Expr.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "llvm/ADT/STLExtras.h"
 using namespace clang;
@@ -21,48 +23,20 @@ using namespace clang;
 // Decl Allocation/Deallocation Method Implementations
 //===----------------------------------------------------------------------===//
 
-TemplateTypeParmDecl *
-TemplateTypeParmDecl::Create(ASTContext &C, DeclContext *DC,
-                             SourceLocation L, IdentifierInfo *Id,
-                             bool Typename) {
-  return new (C) TemplateTypeParmDecl(DC, L, Id, Typename);
-}
-
-NonTypeTemplateParmDecl *
-NonTypeTemplateParmDecl::Create(ASTContext &C, DeclContext *DC, 
-                                SourceLocation L, IdentifierInfo *Id,
-                                QualType T, SourceLocation TypeSpecStartLoc) {
-  return new (C) NonTypeTemplateParmDecl(DC, L, Id, T, TypeSpecStartLoc);
-}
-
-TemplateParameterList::TemplateParameterList(Decl **Params, unsigned NumParams)
-  : NumParams(NumParams) {
-  for (unsigned Idx = 0; Idx < NumParams; ++Idx)
-    begin()[Idx] = Params[Idx];
-}
-
-TemplateParameterList *
-TemplateParameterList::Create(ASTContext &C, Decl **Params, 
-                              unsigned NumParams) {
-  // FIXME: how do I pass in Size to ASTContext::new?
-  unsigned Size = sizeof(TemplateParameterList) + sizeof(Decl *) * NumParams;
-  unsigned Align = llvm::AlignOf<TemplateParameterList>::Alignment;
-  void *Mem = C.Allocate(Size, Align);
-  return new (Mem) TemplateParameterList(Params, NumParams);
-}
-
-CXXRecordDecl::CXXRecordDecl(TagKind TK, DeclContext *DC,
+CXXRecordDecl::CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
                              SourceLocation L, IdentifierInfo *Id) 
-  : RecordDecl(CXXRecord, TK, DC, L, Id),
+  : RecordDecl(K, TK, DC, L, Id),
     UserDeclaredConstructor(false), UserDeclaredCopyConstructor(false),
     UserDeclaredCopyAssignment(false), UserDeclaredDestructor(false),
-    Aggregate(true), PlainOldData(true), Polymorphic(false), Bases(0),
-    NumBases(0), Conversions(DC, DeclarationName()) { }
+    Aggregate(true), PlainOldData(true), Polymorphic(false), Abstract(false),
+    HasTrivialConstructor(true), HasTrivialDestructor(true),
+    Bases(0), NumBases(0), Conversions(DC, DeclarationName()),
+    TemplateOrInstantiation() { }
 
 CXXRecordDecl *CXXRecordDecl::Create(ASTContext &C, TagKind TK, DeclContext *DC,
                                      SourceLocation L, IdentifierInfo *Id,
                                      CXXRecordDecl* PrevDecl) {
-  CXXRecordDecl* R = new (C) CXXRecordDecl(TK, DC, L, Id);
+  CXXRecordDecl* R = new (C) CXXRecordDecl(CXXRecord, TK, DC, L, Id);
   C.getTypeDeclType(R, PrevDecl);  
   return R;
 }
@@ -82,6 +56,7 @@ CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases,
   if (this->Bases)
     delete [] this->Bases;
 
+  // FIXME: allocate using the ASTContext
   this->Bases = new CXXBaseSpecifier[NumBases];
   this->NumBases = NumBases;
   for (unsigned i = 0; i < NumBases; ++i)
@@ -96,7 +71,7 @@ bool CXXRecordDecl::hasConstCopyConstructor(ASTContext &Context) const {
                                            Context.getCanonicalType(ClassType));
   unsigned TypeQuals;
   DeclContext::lookup_const_iterator Con, ConEnd;
-  for (llvm::tie(Con, ConEnd) = this->lookup(ConstructorName);
+  for (llvm::tie(Con, ConEnd) = this->lookup(Context, ConstructorName);
        Con != ConEnd; ++Con) {
     if (cast<CXXConstructorDecl>(*Con)->isCopyConstructor(Context, TypeQuals) &&
         (TypeQuals & QualType::Const) != 0)
@@ -112,7 +87,7 @@ bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context) const {
   DeclarationName OpName =Context.DeclarationNames.getCXXOperatorName(OO_Equal);
 
   DeclContext::lookup_const_iterator Op, OpEnd;
-  for (llvm::tie(Op, OpEnd) = this->lookup(OpName);
+  for (llvm::tie(Op, OpEnd) = this->lookup(Context, OpName);
        Op != OpEnd; ++Op) {
     // C++ [class.copy]p9:
     //   A user-declared copy assignment operator is a non-static non-template
@@ -122,17 +97,17 @@ bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context) const {
     if (Method->isStatic())
       continue;
     // TODO: Skip templates? Or is this implicitly done due to parameter types?
-    const FunctionTypeProto *FnType =
-      Method->getType()->getAsFunctionTypeProto();
+    const FunctionProtoType *FnType =
+      Method->getType()->getAsFunctionProtoType();
     assert(FnType && "Overloaded operator has no prototype.");
     // Don't assert on this; an invalid decl might have been left in the AST.
     if (FnType->getNumArgs() != 1 || FnType->isVariadic())
       continue;
     bool AcceptsConst = true;
     QualType ArgType = FnType->getArgType(0);
-    if (const ReferenceType *Ref = ArgType->getAsReferenceType()) {
+    if (const LValueReferenceType *Ref = ArgType->getAsLValueReferenceType()) {
       ArgType = Ref->getPointeeType();
-      // Is it a non-const reference?
+      // Is it a non-const lvalue reference?
       if (!ArgType.isConstQualified())
         AcceptsConst = false;
     }
@@ -164,6 +139,11 @@ CXXRecordDecl::addedConstructor(ASTContext &Context,
     //   A POD-struct is an aggregate class [...]
     PlainOldData = false;
 
+    // C++ [class.ctor]p5:
+    //   A constructor is trivial if it is an implicitly-declared default
+    //   constructor.
+    HasTrivialConstructor = false;
+    
     // Note when we have a user-declared copy constructor, which will
     // suppress the implicit declaration of a copy constructor.
     if (ConDecl->isCopyConstructor(Context))
@@ -176,11 +156,11 @@ void CXXRecordDecl::addedAssignmentOperator(ASTContext &Context,
   // We're interested specifically in copy assignment operators.
   // Unlike addedConstructor, this method is not called for implicit
   // declarations.
-  const FunctionTypeProto *FnType = OpDecl->getType()->getAsFunctionTypeProto();
+  const FunctionProtoType *FnType = OpDecl->getType()->getAsFunctionProtoType();
   assert(FnType && "Overloaded operator has no proto function type.");
   assert(FnType->getNumArgs() == 1 && !FnType->isVariadic());
   QualType ArgType = FnType->getArgType(0);
-  if (const ReferenceType *Ref = ArgType->getAsReferenceType())
+  if (const LValueReferenceType *Ref = ArgType->getAsLValueReferenceType())
     ArgType = Ref->getPointeeType();
 
   ArgType = ArgType.getUnqualifiedType();
@@ -291,8 +271,9 @@ CXXConstructorDecl::isCopyConstructor(ASTContext &Context,
 
   const ParmVarDecl *Param = getParamDecl(0);
 
-  // Do we have a reference type?
-  const ReferenceType *ParamRefType = Param->getType()->getAsReferenceType();
+  // Do we have a reference type? Rvalue references don't count.
+  const LValueReferenceType *ParamRefType =
+    Param->getType()->getAsLValueReferenceType();
   if (!ParamRefType)
     return false;
 
@@ -320,7 +301,7 @@ bool CXXConstructorDecl::isConvertingConstructor() const {
     return false;
 
   return (getNumParams() == 0 && 
-          getType()->getAsFunctionTypeProto()->isVariadic()) ||
+          getType()->getAsFunctionProtoType()->isVariadic()) ||
          (getNumParams() == 1) ||
          (getNumParams() > 1 && getParamDecl(1)->getDefaultArg() != 0);
 }
@@ -345,12 +326,6 @@ CXXConversionDecl::Create(ASTContext &C, CXXRecordDecl *RD,
   return new (C) CXXConversionDecl(RD, L, N, T, isInline, isExplicit);
 }
 
-CXXClassVarDecl *CXXClassVarDecl::Create(ASTContext &C, CXXRecordDecl *RD,
-                                   SourceLocation L, IdentifierInfo *Id,
-                                   QualType T) {
-  return new (C) CXXClassVarDecl(RD, L, Id, T);
-}
-
 OverloadedFunctionDecl *
 OverloadedFunctionDecl::Create(ASTContext &C, DeclContext *DC,
                                DeclarationName N) {
@@ -363,3 +338,70 @@ LinkageSpecDecl *LinkageSpecDecl::Create(ASTContext &C,
                                          LanguageIDs Lang, bool Braces) {
   return new (C) LinkageSpecDecl(DC, L, Lang, Braces);
 }
+
+UsingDirectiveDecl *UsingDirectiveDecl::Create(ASTContext &C, DeclContext *DC,
+                                               SourceLocation L,
+                                               SourceLocation NamespaceLoc,
+                                               SourceLocation IdentLoc,
+                                               NamespaceDecl *Used,
+                                               DeclContext *CommonAncestor) {
+  return new (C) UsingDirectiveDecl(DC, L, NamespaceLoc, IdentLoc,
+                                    Used, CommonAncestor);
+}
+
+NamespaceAliasDecl *NamespaceAliasDecl::Create(ASTContext &C, DeclContext *DC, 
+                                               SourceLocation L, 
+                                               SourceLocation AliasLoc, 
+                                               IdentifierInfo *Alias, 
+                                               SourceLocation IdentLoc, 
+                                               NamedDecl *Namespace) {
+  return new (C) NamespaceAliasDecl(DC, L, AliasLoc, Alias, IdentLoc, 
+                                    Namespace);
+}
+
+StaticAssertDecl *StaticAssertDecl::Create(ASTContext &C, DeclContext *DC,
+                                           SourceLocation L, Expr *AssertExpr,
+                                           StringLiteral *Message) {
+  return new (C) StaticAssertDecl(DC, L, AssertExpr, Message);
+}
+
+void StaticAssertDecl::Destroy(ASTContext& C) {
+  AssertExpr->Destroy(C);
+  Message->Destroy(C);
+  this->~StaticAssertDecl();
+  C.Deallocate((void *)this);
+}
+
+StaticAssertDecl::~StaticAssertDecl() {
+}
+
+CXXTempVarDecl *CXXTempVarDecl::Create(ASTContext &C, DeclContext *DC,
+                                       QualType T) {
+  assert((T->isDependentType() || 
+          isa<CXXRecordDecl>(T->getAsRecordType()->getDecl())) &&
+         "CXXTempVarDecl must either have a dependent type "
+         "or a C++ record type!");
+  return new (C) CXXTempVarDecl(DC, T);
+}
+
+static const char *getAccessName(AccessSpecifier AS) {
+  switch (AS) {
+    default:
+    case AS_none:
+      assert("Invalid access specifier!");
+      return 0;
+    case AS_public:
+      return "public";
+    case AS_private:
+      return "private";
+    case AS_protected:
+      return "protected";
+  }
+}
+
+const DiagnosticBuilder &clang::operator<<(const DiagnosticBuilder &DB,
+                                           AccessSpecifier AS) {
+  return DB << getAccessName(AS);
+}
+
+

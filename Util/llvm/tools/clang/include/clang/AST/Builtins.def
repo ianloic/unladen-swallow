@@ -35,6 +35,7 @@
 //  a -> __builtin_va_list
 //  A -> "reference" to __builtin_va_list
 //  V -> Vector, following num elements and a base type.
+//  P -> FILE
 //  . -> "...".  This may only occur at the end of the function list.
 //
 // Types maybe prefixed with the following modifiers:
@@ -54,7 +55,20 @@
 //  n -> nothrow
 //  c -> const
 //  F -> this is a libc/libm function with a '__builtin_' prefix added.
+//  f -> this is a libc/libm function without the '__builtin_' prefix. It can
+//       be followed by ':headername:' to state which header this function
+//       comes from.
+//  p:N: -> this is a printf-like function whose Nth argument is the format 
+//          string.
+//  P:N: -> similar to the p:N: attribute, but the function is like vprintf
+//          in that it accepts its arguments as a va_list rather than 
+//          through an ellipsis
+//  e -> const, but only when -fmath-errno=0
 //  FIXME: gcc has nonnull
+
+#if defined(BUILTIN) && !defined(LIBBUILTIN)
+#  define LIBBUILTIN(ID, TYPE, ATTRS, HEADER) BUILTIN(ID, TYPE, ATTRS)
+#endif
 
 // Standard libc/libm functions:
 BUILTIN(__builtin_huge_val, "d", "nc")
@@ -120,13 +134,39 @@ BUILTIN(__builtin_va_start, "vA.", "n")
 BUILTIN(__builtin_va_end, "vA", "n")
 BUILTIN(__builtin_va_copy, "vAA", "n")
 BUILTIN(__builtin_stdarg_start, "vA.", "n")
+BUILTIN(__builtin_bcmp, "iv*v*z", "n")
+BUILTIN(__builtin_bcopy, "vv*v*z", "n")
 BUILTIN(__builtin_bzero, "vv*z", "n")
-BUILTIN(__builtin_memcpy, "v*v*vC*z", "n")
-BUILTIN(__builtin_memmove, "v*v*vC*z", "n")
-BUILTIN(__builtin_memset, "v*v*iz", "n")
+BUILTIN(__builtin_memcmp, "ivC*vC*z", "nF")
+BUILTIN(__builtin_memcpy, "v*v*vC*z", "nF")
+BUILTIN(__builtin_memmove, "v*v*vC*z", "nF")
+BUILTIN(__builtin_mempcpy, "v*v*vC*z", "nF")
+BUILTIN(__builtin_memset, "v*v*iz", "nF")
+BUILTIN(__builtin_stpcpy, "c*c*cC*", "nF")
+BUILTIN(__builtin_stpncpy, "c*c*cC*z", "nF")
+BUILTIN(__builtin_strcasecmp, "icC*cC*", "nF")
+BUILTIN(__builtin_strcat, "c*c*cC*", "nF")
+BUILTIN(__builtin_strchr, "c*cC*i", "nF")
+BUILTIN(__builtin_strcmp, "icC*cC*", "nF")
+BUILTIN(__builtin_strcpy, "c*c*cC*", "nF")
+BUILTIN(__builtin_strcspn, "zcC*cC*", "nF")
+BUILTIN(__builtin_strdup, "c*cC*", "nF")
+BUILTIN(__builtin_strlen, "zcC*", "nF")
+BUILTIN(__builtin_strncasecmp, "icC*cC*z", "nF")
+BUILTIN(__builtin_strncat, "c*c*cC*z", "nF")
+BUILTIN(__builtin_strncmp, "icC*cC*z", "nF")
+BUILTIN(__builtin_strncpy, "c*c*cC*z", "nF")
+BUILTIN(__builtin_strndup, "c*cC*z", "nF")
+BUILTIN(__builtin_strpbrk, "c*cC*cC*", "nF")
+BUILTIN(__builtin_strrchr, "c*cC*i", "nF")
+BUILTIN(__builtin_strspn, "zcC*cC*", "nF")
+BUILTIN(__builtin_strstr, "c*cC*cC*", "nF")
 BUILTIN(__builtin_return_address, "v*Ui", "n")
+BUILTIN(__builtin_extract_return_addr, "v*v*", "n")
 BUILTIN(__builtin_frame_address, "v*Ui", "n")
 BUILTIN(__builtin_flt_rounds, "i", "nc")
+BUILTIN(__builtin_setjmp, "iv**", "")
+BUILTIN(__builtin_longjmp, "vv**i", "")
 
 // GCC Object size checking builtins
 BUILTIN(__builtin_object_size, "zv*i", "n")
@@ -139,37 +179,99 @@ BUILTIN(__builtin___strcat_chk, "c*c*cC*z", "nF")
 BUILTIN(__builtin___strcpy_chk, "c*c*cC*z", "nF")
 BUILTIN(__builtin___strncat_chk, "c*c*cC*zz", "nF")
 BUILTIN(__builtin___strncpy_chk, "c*c*cC*zz", "nF")
-BUILTIN(__builtin___snprintf_chk, "ic*zizcC*.", "F") // FIXME: format printf attribute
-BUILTIN(__builtin___sprintf_chk, "ic*izcC*.", "F") // FIXME: format printf attribute
-BUILTIN(__builtin___vsnprintf_chk, "ic*zizcC*a", "F") // FIXME: format printf attribute
-BUILTIN(__builtin___vsprintf_chk, "ic*izcC*a", "F") // FIXME: format printf attribute
-//BUILTIN(__builtin___fprintf_chk, "i(FIXME:FILEPTR)icC*.", "F") // FIXME: format printf attribute
-BUILTIN(__builtin___printf_chk, "iicC*.", "F")
-//BUILTIN(__builtin___vfprintf_chk, "i(FIXME:FILEPTR)icC*a", "F") // FIXME: format printf attribute
-BUILTIN(__builtin___vprintf_chk, "iicC*a", "F") // FIXME: format printf attribute
+BUILTIN(__builtin___snprintf_chk, "ic*zizcC*.", "Fp:4:")
+BUILTIN(__builtin___sprintf_chk, "ic*izcC*.", "Fp:3:")
+BUILTIN(__builtin___vsnprintf_chk, "ic*zizcC*a", "FP:4:")
+BUILTIN(__builtin___vsprintf_chk, "ic*izcC*a", "FP:3:")
+BUILTIN(__builtin___fprintf_chk, "iP*icC*.", "Fp:2:")
+BUILTIN(__builtin___printf_chk, "iicC*.", "Fp:1:")
+BUILTIN(__builtin___vfprintf_chk, "iP*icC*a", "FP:2:")
+BUILTIN(__builtin___vprintf_chk, "iicC*a", "FP:1:")
 
 BUILTIN(__builtin_expect, "iii"   , "nc")
-BUILTIN(__builtin_prefetch, "vCv*.", "nc")
+BUILTIN(__builtin_prefetch, "vvC*.", "nc")
 BUILTIN(__builtin_trap, "v", "n")
 
 BUILTIN(__builtin_shufflevector, "v."   , "nc")
 
 BUILTIN(__builtin_alloca, "v*z"   , "n")
 
-// Atomic operators builtin.                                                  
+// Atomic operators builtin.
+
+// FIXME: These should be overloaded for i8, i16, i32, and i64.
 BUILTIN(__sync_fetch_and_add,"ii*i", "n")
 BUILTIN(__sync_fetch_and_sub,"ii*i", "n")
+BUILTIN(__sync_fetch_and_or,"ii*i", "n")
+BUILTIN(__sync_fetch_and_and,"ii*i", "n")
+BUILTIN(__sync_fetch_and_xor,"ii*i", "n")
+BUILTIN(__sync_fetch_and_nand,"ii*i", "n")
+
+// GCC does not support these, they are a Clang extension.
 BUILTIN(__sync_fetch_and_min,"ii*i", "n")
 BUILTIN(__sync_fetch_and_max,"ii*i", "n")
 BUILTIN(__sync_fetch_and_umin,"UiUi*Ui", "n")
 BUILTIN(__sync_fetch_and_umax,"UiUi*Ui", "n")
-BUILTIN(__sync_fetch_and_and,"ii*i", "n")                                                        
-BUILTIN(__sync_fetch_and_or,"ii*i", "n")
-BUILTIN(__sync_fetch_and_xor,"ii*i", "n")
-BUILTIN(__sync_lock_test_and_set,"ii*i", "n")
+
+BUILTIN(__sync_add_and_fetch,"ii*i", "n")
+BUILTIN(__sync_sub_and_fetch,"ii*i", "n")
+BUILTIN(__sync_or_and_fetch,"ii*i", "n")
+BUILTIN(__sync_and_and_fetch,"ii*i", "n")
+BUILTIN(__sync_xor_and_fetch,"ii*i", "n")
+BUILTIN(__sync_nand_and_fetch,"ii*i", "n")
+
+BUILTIN(__sync_bool_compare_and_swap,"ii*ii", "n")
 BUILTIN(__sync_val_compare_and_swap,"ii*ii", "n")
+BUILTIN(__sync_lock_test_and_set,"ii*i", "n")
+BUILTIN(__sync_lock_release,"ii*i", "n")
+BUILTIN(__sync_synchronize, "v.", "n")
 
 // LLVM instruction builtin
 BUILTIN(__builtin_llvm_memory_barrier,"vbbbbb", "n")
 
+// Builtin library functions
+LIBBUILTIN(alloca, "v*z",         "f",     "stdlib.h")
+LIBBUILTIN(calloc, "v*zz",        "f",     "stdlib.h")
+LIBBUILTIN(malloc, "v*z",         "f",     "stdlib.h")
+LIBBUILTIN(realloc, "v*v*z",      "f",     "stdlib.h")
+LIBBUILTIN(memcpy, "v*v*vC*z",    "f",     "string.h")
+LIBBUILTIN(memmove, "v*v*vC*z",   "f",     "string.h")
+LIBBUILTIN(memset, "v*v*iz",      "f",     "string.h")
+LIBBUILTIN(strcat, "c*c*cC*",     "f",     "string.h")
+LIBBUILTIN(strchr, "c*cC*i",      "f",     "string.h")
+LIBBUILTIN(strcpy, "c*c*cC*",     "f",     "string.h")
+LIBBUILTIN(strcspn, "zcC*cC*",    "f",     "string.h")
+LIBBUILTIN(strlen, "zcC*",        "f",     "string.h")
+LIBBUILTIN(strncat, "c*c*cC*z",   "f",     "string.h")
+LIBBUILTIN(strncpy, "c*c*cC*z",   "f",     "string.h")
+LIBBUILTIN(strpbrk, "c*cC*cC*",   "f",     "string.h")
+LIBBUILTIN(strrchr, "c*cC*i",     "f",     "string.h")
+LIBBUILTIN(strspn, "zcC*cC*",     "f",     "string.h")
+LIBBUILTIN(strstr, "c*cC*cC*",    "f",     "string.h")
+LIBBUILTIN(printf, "icC*.",       "fp:0:", "stdio.h")
+LIBBUILTIN(fprintf, "iP*cC*.",    "fp:1:", "stdio.h")
+LIBBUILTIN(snprintf, "ic*zcC*.",  "fp:2:", "stdio.h")
+LIBBUILTIN(sprintf, "ic*cC*.",    "fp:1:", "stdio.h")
+LIBBUILTIN(vprintf, "icC*a",      "fP:0:", "stdio.h")
+LIBBUILTIN(vfprintf, "iP*cC*a",   "fP:1:", "stdio.h")
+LIBBUILTIN(vsnprintf, "ic*zcC*a", "fP:2:", "stdio.h")
+LIBBUILTIN(vsprintf, "ic*cC*a",   "fP:1:", "stdio.h")
+
+// FIXME: This type isn't very correct, it should be
+//   id objc_msgSend(id, SEL)
+// but we need new type letters for that.
+LIBBUILTIN(objc_msgSend, "v*.",   "f",     "objc/message.h")
+
+// FIXME: asprintf and vasprintf aren't C99 functions. Should they be
+// target-specific builtins, perhaps? 
+
+// Builtin math library functions
+LIBBUILTIN(pow, "ddd", "fe", "math.h")
+LIBBUILTIN(powl, "LdLdLd", "fe", "math.h")
+LIBBUILTIN(powf, "fff", "fe", "math.h")
+
+LIBBUILTIN(sqrt, "dd", "fe", "math.h")
+LIBBUILTIN(sqrtl, "LdLd", "fe", "math.h")
+LIBBUILTIN(sqrtf, "ff", "fe", "math.h")
+
 #undef BUILTIN
+#undef LIBBUILTIN

@@ -114,15 +114,9 @@ private:
   }
 
   /// IgnoreNodeResults - Pretend all of this node's results are legal.
-  /// FIXME: Remove once PR2957 is done.
   bool IgnoreNodeResults(SDNode *N) const {
-    return N->getOpcode() == ISD::TargetConstant ||
-           IgnoredNodesResultsSet.count(N);
+    return N->getOpcode() == ISD::TargetConstant;
   }
-
-  /// IgnoredNode - Set of nodes whose result don't need to be legal.
-  /// FIXME: Remove once PR2957 is done.
-  DenseSet<SDNode*> IgnoredNodesResultsSet;
 
   /// PromotedIntegers - For integer nodes that are below legal width, this map
   /// indicates what promoted value to use.
@@ -190,6 +184,7 @@ private:
 
   // Common routines.
   SDValue BitConvertToInteger(SDValue Op);
+  SDValue BitConvertVectorToIntegerVector(SDValue Op);
   SDValue CreateStackStoreLoad(SDValue Op, MVT DestVT);
   bool CustomLowerResults(SDNode *N, MVT VT, bool LegalizeResult);
   SDValue GetVectorElementPointer(SDValue VecPtr, MVT EltVT, SDValue Index);
@@ -201,7 +196,6 @@ private:
   SDValue PromoteTargetBoolean(SDValue Bool, MVT VT);
   void ReplaceValueWith(SDValue From, SDValue To);
   void ReplaceValueWithHelper(SDValue From, SDValue To);
-  void SetIgnoredNodeResult(SDNode* N);
   void SplitInteger(SDValue Op, SDValue &Lo, SDValue &Hi);
   void SplitInteger(SDValue Op, MVT LoVT, MVT HiVT,
                     SDValue &Lo, SDValue &Hi);
@@ -231,8 +225,9 @@ private:
   /// final size.
   SDValue SExtPromotedInteger(SDValue Op) {
     MVT OldVT = Op.getValueType();
+    DebugLoc dl = Op.getDebugLoc();
     Op = GetPromotedInteger(Op);
-    return DAG.getNode(ISD::SIGN_EXTEND_INREG, Op.getValueType(), Op,
+    return DAG.getNode(ISD::SIGN_EXTEND_INREG, dl, Op.getValueType(), Op,
                        DAG.getValueType(OldVT));
   }
 
@@ -240,8 +235,9 @@ private:
   /// final size.
   SDValue ZExtPromotedInteger(SDValue Op) {
     MVT OldVT = Op.getValueType();
+    DebugLoc dl = Op.getDebugLoc();
     Op = GetPromotedInteger(Op);
-    return DAG.getZeroExtendInReg(Op, OldVT);
+    return DAG.getZeroExtendInReg(Op, dl, OldVT);
   }
 
   // Integer Result Promotion.
@@ -283,6 +279,7 @@ private:
   // Integer Operand Promotion.
   bool PromoteIntegerOperand(SDNode *N, unsigned OperandNo);
   SDValue PromoteIntOp_ANY_EXTEND(SDNode *N);
+  SDValue PromoteIntOp_BIT_CONVERT(SDNode *N);
   SDValue PromoteIntOp_BUILD_PAIR(SDNode *N);
   SDValue PromoteIntOp_BR_CC(SDNode *N, unsigned OpNo);
   SDValue PromoteIntOp_BRCOND(SDNode *N, unsigned OpNo);
@@ -290,6 +287,7 @@ private:
   SDValue PromoteIntOp_CONVERT_RNDSAT(SDNode *N);
   SDValue PromoteIntOp_INSERT_VECTOR_ELT(SDNode *N, unsigned OpNo);
   SDValue PromoteIntOp_MEMBARRIER(SDNode *N);
+  SDValue PromoteIntOp_SCALAR_TO_VECTOR(SDNode *N);
   SDValue PromoteIntOp_SELECT(SDNode *N, unsigned OpNo);
   SDValue PromoteIntOp_SELECT_CC(SDNode *N, unsigned OpNo);
   SDValue PromoteIntOp_SETCC(SDNode *N, unsigned OpNo);
@@ -348,6 +346,7 @@ private:
   void ExpandShiftByConstant(SDNode *N, unsigned Amt,
                              SDValue &Lo, SDValue &Hi);
   bool ExpandShiftWithKnownAmountBit(SDNode *N, SDValue &Lo, SDValue &Hi);
+  bool ExpandShiftWithUnknownAmountBit(SDNode *N, SDValue &Lo, SDValue &Hi);
 
   // Integer Operand Expansion.
   bool ExpandIntegerOperand(SDNode *N, unsigned OperandNo);
@@ -388,6 +387,7 @@ private:
   SDValue SoftenFloatRes_BIT_CONVERT(SDNode *N);
   SDValue SoftenFloatRes_BUILD_PAIR(SDNode *N);
   SDValue SoftenFloatRes_ConstantFP(ConstantFPSDNode *N);
+  SDValue SoftenFloatRes_EXTRACT_VECTOR_ELT(SDNode *N);
   SDValue SoftenFloatRes_FABS(SDNode *N);
   SDValue SoftenFloatRes_FADD(SDNode *N);
   SDValue SoftenFloatRes_FCEIL(SDNode *N);
@@ -407,6 +407,7 @@ private:
   SDValue SoftenFloatRes_FP_ROUND(SDNode *N);
   SDValue SoftenFloatRes_FPOW(SDNode *N);
   SDValue SoftenFloatRes_FPOWI(SDNode *N);
+  SDValue SoftenFloatRes_FREM(SDNode *N);
   SDValue SoftenFloatRes_FRINT(SDNode *N);
   SDValue SoftenFloatRes_FSIN(SDNode *N);
   SDValue SoftenFloatRes_FSQRT(SDNode *N);
@@ -415,6 +416,8 @@ private:
   SDValue SoftenFloatRes_LOAD(SDNode *N);
   SDValue SoftenFloatRes_SELECT(SDNode *N);
   SDValue SoftenFloatRes_SELECT_CC(SDNode *N);
+  SDValue SoftenFloatRes_UNDEF(SDNode *N);
+  SDValue SoftenFloatRes_VAARG(SDNode *N);
   SDValue SoftenFloatRes_XINT_TO_FP(SDNode *N);
 
   // Operand Float to Integer Conversion.
@@ -556,7 +559,8 @@ private:
   void SplitVecRes_LOAD(LoadSDNode *N, SDValue &Lo, SDValue &Hi);
   void SplitVecRes_SCALAR_TO_VECTOR(SDNode *N, SDValue &Lo, SDValue &Hi);
   void SplitVecRes_UNDEF(SDNode *N, SDValue &Lo, SDValue &Hi);
-  void SplitVecRes_VECTOR_SHUFFLE(SDNode *N, SDValue &Lo, SDValue &Hi);
+  void SplitVecRes_VECTOR_SHUFFLE(ShuffleVectorSDNode *N, SDValue &Lo, 
+                                  SDValue &Hi);
   void SplitVecRes_VSETCC(SDNode *N, SDValue &Lo, SDValue &Hi);
 
   // Vector Operand Splitting: <128 x ty> -> 2 x <64 x ty>.
@@ -567,7 +571,6 @@ private:
   SDValue SplitVecOp_EXTRACT_SUBVECTOR(SDNode *N);
   SDValue SplitVecOp_EXTRACT_VECTOR_ELT(SDNode *N);
   SDValue SplitVecOp_STORE(StoreSDNode *N, unsigned OpNo);
-  SDValue SplitVecOp_VECTOR_SHUFFLE(SDNode *N, unsigned OpNo);
 
   //===--------------------------------------------------------------------===//
   // Vector Widening Support: LegalizeVectorTypes.cpp
@@ -600,7 +603,7 @@ private:
   SDValue WidenVecRes_SELECT(SDNode* N);
   SDValue WidenVecRes_SELECT_CC(SDNode* N);
   SDValue WidenVecRes_UNDEF(SDNode *N);
-  SDValue WidenVecRes_VECTOR_SHUFFLE(SDNode *N);
+  SDValue WidenVecRes_VECTOR_SHUFFLE(ShuffleVectorSDNode *N);
   SDValue WidenVecRes_VSETCC(SDNode* N);
 
   SDValue WidenVecRes_Binary(SDNode *N);
@@ -684,6 +687,10 @@ private:
   /// GetSplitDestVTs - Compute the VTs needed for the low/hi parts of a type
   /// which is split (or expanded) into two not necessarily identical pieces.
   void GetSplitDestVTs(MVT InVT, MVT &LoVT, MVT &HiVT);
+
+  /// GetPairElements - Use ISD::EXTRACT_ELEMENT nodes to extract the low and
+  /// high parts of the given value.
+  void GetPairElements(SDValue Pair, SDValue &Lo, SDValue &Hi);
 
   // Generic Result Splitting.
   void SplitRes_MERGE_VALUES(SDNode *N, SDValue &Lo, SDValue &Hi);

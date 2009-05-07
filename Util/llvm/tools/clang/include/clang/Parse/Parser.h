@@ -15,31 +15,51 @@
 #define LLVM_CLANG_PARSE_PARSER_H
 
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Parse/AccessSpecifier.h"
 #include "clang/Parse/Action.h"
 #include "clang/Parse/DeclSpec.h"
+#include "llvm/ADT/OwningPtr.h"
 #include <stack>
+#include <list>
 
 namespace clang {
   class AttributeList;
-  class DeclSpec;
-  class Declarator;
-  class FieldDeclarator;
-  class ObjCDeclSpec;
   class PragmaHandler;
   class Scope;
   class DiagnosticBuilder;
+  class Parser;
+  class PragmaUnusedHandler;
 
+/// PrettyStackTraceParserEntry - If a crash happens while the parser is active,
+/// an entry is printed for it.
+class PrettyStackTraceParserEntry : public llvm::PrettyStackTraceEntry {
+  const Parser &P;
+public:
+  PrettyStackTraceParserEntry(const Parser &p) : P(p) {}
+  virtual void print(llvm::raw_ostream &OS) const;
+};
+  
+  
 /// Parser - This implements a parser for the C family of languages.  After
 /// parsing units of the grammar, productions are invoked to handle whatever has
 /// been read.
 ///
 class Parser {
+  friend class PragmaUnusedHandler;
+  PrettyStackTraceParserEntry CrashInfo;
+  
   Preprocessor &PP;
   
   /// Tok - The current token we are peeking ahead.  All parsing methods assume
   /// that this is valid.
   Token Tok;
   
+  // PrevTokLocation - The location of the token we previously
+  // consumed. This token is used for diagnostics where we expected to
+  // see a token following another token (e.g., the ';' at the end of
+  // a statement).
+  SourceLocation PrevTokLocation;
+
   unsigned short ParenCount, BracketCount, BraceCount;
 
   /// Actions - These are the callbacks we invoke as we parse various constructs
@@ -59,7 +79,30 @@ class Parser {
   /// comparison.
   IdentifierInfo *Ident_super;
 
-  PragmaHandler *PackHandler;
+  llvm::OwningPtr<PragmaHandler> PackHandler;
+  llvm::OwningPtr<PragmaHandler> UnusedHandler;
+
+  /// Whether the '>' token acts as an operator or not. This will be
+  /// true except when we are parsing an expression within a C++
+  /// template argument list, where the '>' closes the template
+  /// argument list.
+  bool GreaterThanIsOperator;
+
+  /// \brief RAII object that makes '>' behave either as an operator
+  /// or as the closing angle bracket for a template argument list.
+  struct GreaterThanIsOperatorScope {
+    bool &GreaterThanIsOperator;
+    bool OldGreaterThanIsOperator;
+   
+    GreaterThanIsOperatorScope(bool &GTIO, bool Val)
+      : GreaterThanIsOperator(GTIO), OldGreaterThanIsOperator(GTIO) { 
+      GreaterThanIsOperator = Val;
+    }
+
+    ~GreaterThanIsOperatorScope() {
+      GreaterThanIsOperator = OldGreaterThanIsOperator;
+    }
+  };
 
 public:
   Parser(Preprocessor &PP, Action &Actions);
@@ -67,19 +110,23 @@ public:
 
   const LangOptions &getLang() const { return PP.getLangOptions(); }
   TargetInfo &getTargetInfo() const { return PP.getTargetInfo(); }
+  Preprocessor &getPreprocessor() const { return PP; }
   Action &getActions() const { return Actions; }
+  
+  const Token &getCurToken() const { return Tok; }
   
   // Type forwarding.  All of these are statically 'void*', but they may all be
   // different actual classes based on the actions in place.
   typedef Action::ExprTy ExprTy;
   typedef Action::StmtTy StmtTy;
-  typedef Action::DeclTy DeclTy;
+  typedef Action::DeclPtrTy DeclPtrTy;
+  typedef Action::DeclGroupPtrTy DeclGroupPtrTy;
   typedef Action::TypeTy TypeTy;
   typedef Action::BaseTy BaseTy;
   typedef Action::MemInitTy MemInitTy;
   typedef Action::CXXScopeTy CXXScopeTy;
   typedef Action::TemplateParamsTy TemplateParamsTy;
-  typedef Action::TemplateArgTy TemplateArgTy;
+  typedef Action::TemplateTy TemplateTy;
 
   typedef llvm::SmallVector<TemplateParamsTy *, 4> TemplateParameterLists;
 
@@ -87,10 +134,10 @@ public:
   typedef Action::StmtResult        StmtResult;
   typedef Action::BaseResult        BaseResult;
   typedef Action::MemInitResult     MemInitResult;
+  typedef Action::TypeResult        TypeResult;
 
   typedef Action::OwningExprResult OwningExprResult;
   typedef Action::OwningStmtResult OwningStmtResult;
-  typedef Action::OwningTemplateArgResult OwningTemplateArgResult;
 
   typedef Action::ExprArg ExprArg;
   typedef Action::MultiStmtArg MultiStmtArg;
@@ -106,15 +153,9 @@ public:
 
   OwningExprResult ExprError() { return OwningExprResult(Actions, true); }
   OwningStmtResult StmtError() { return OwningStmtResult(Actions, true); }
-  OwningTemplateArgResult TemplateArgError() { 
-    return OwningTemplateArgResult(Actions, true); 
-  }
 
   OwningExprResult ExprError(const DiagnosticBuilder &) { return ExprError(); }
   OwningStmtResult StmtError(const DiagnosticBuilder &) { return StmtError(); }
-  OwningTemplateArgResult TemplateArgError(const DiagnosticBuilder &) {
-    return TemplateArgError();
-  }
 
   // Parsing methods.
   
@@ -128,7 +169,7 @@ public:
   
   /// ParseTopLevelDecl - Parse one top-level declaration. Returns true if 
   /// the EOF was encountered.
-  bool ParseTopLevelDecl(DeclTy*& Result);
+  bool ParseTopLevelDecl(DeclGroupPtrTy &Result);
   
 private:
   //===--------------------------------------------------------------------===//
@@ -163,9 +204,9 @@ private:
     assert(!isTokenStringLiteral() && !isTokenParen() && !isTokenBracket() &&
            !isTokenBrace() &&
            "Should consume special tokens with Consume*Token");
-    SourceLocation L = Tok.getLocation();
+    PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
-    return L;
+    return PrevTokLocation;
   }
   
   /// ConsumeAnyToken - Dispatch to the right Consume* method based on the
@@ -192,9 +233,9 @@ private:
       ++ParenCount;
     else if (ParenCount)
       --ParenCount;       // Don't let unbalanced )'s drive the count negative.
-    SourceLocation L = Tok.getLocation();
+    PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
-    return L;
+    return PrevTokLocation;
   }
   
   /// ConsumeBracket - This consume method keeps the bracket count up-to-date.
@@ -206,9 +247,9 @@ private:
     else if (BracketCount)
       --BracketCount;     // Don't let unbalanced ]'s drive the count negative.
     
-    SourceLocation L = Tok.getLocation();
+    PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
-    return L;
+    return PrevTokLocation;
   }
       
   /// ConsumeBrace - This consume method keeps the brace count up-to-date.
@@ -220,9 +261,9 @@ private:
     else if (BraceCount)
       --BraceCount;     // Don't let unbalanced }'s drive the count negative.
     
-    SourceLocation L = Tok.getLocation();
+    PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
-    return L;
+    return PrevTokLocation;
   }
   
   /// ConsumeStringToken - Consume the current 'peek token', lexing a new one
@@ -232,9 +273,9 @@ private:
   SourceLocation ConsumeStringToken() {
     assert(isTokenStringLiteral() &&
            "Should only consume string literals with this method");
-    SourceLocation L = Tok.getLocation();
+    PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
-    return L;
+    return PrevTokLocation;
   }
   
   /// GetLookAheadToken - This peeks ahead N tokens and returns that token
@@ -387,6 +428,9 @@ private:
   DiagnosticBuilder Diag(SourceLocation Loc, unsigned DiagID);
   DiagnosticBuilder Diag(const Token &Tok, unsigned DiagID);
 
+  void SuggestParentheses(SourceLocation Loc, unsigned DK, 
+                          SourceRange ParenRange);
+
   /// SkipUntil - Read tokens until we get to the specified token, then consume
   /// it (unless DontConsume is true).  Because we cannot guarantee that the
   /// token will ever occur, this skips to the next token, or to some likely
@@ -411,9 +455,9 @@ private:
   // Lexing and parsing of C++ inline methods.
 
   struct LexedMethod {
-    Action::DeclTy *D;
+    Action::DeclPtrTy D;
     CachedTokens Toks;
-    explicit LexedMethod(Action::DeclTy *MD) : D(MD) {}
+    explicit LexedMethod(Action::DeclPtrTy MD) : D(MD) {}
   };
 
   /// LateParsedDefaultArgument - Keeps track of a parameter that may
@@ -421,12 +465,12 @@ private:
   /// occurs within a member function declaration inside the class
   /// (C++ [class.mem]p2).
   struct LateParsedDefaultArgument {
-    explicit LateParsedDefaultArgument(Action::DeclTy *P, 
+    explicit LateParsedDefaultArgument(Action::DeclPtrTy P, 
                                        CachedTokens *Toks = 0)
       : Param(P), Toks(Toks) { }
 
     /// Param - The parameter declaration for this parameter.
-    Action::DeclTy *Param;
+    Action::DeclPtrTy Param;
 
     /// Toks - The sequence of tokens that comprises the default
     /// argument expression, not including the '=' or the terminating
@@ -440,10 +484,10 @@ private:
   /// until the class itself is completely-defined, such as a default
   /// argument (C++ [class.mem]p2).
   struct LateParsedMethodDeclaration {
-    explicit LateParsedMethodDeclaration(Action::DeclTy *M) : Method(M) { }
+    explicit LateParsedMethodDeclaration(Action::DeclPtrTy M) : Method(M) { }
 
     /// Method - The method declaration.
-    Action::DeclTy *Method;
+    Action::DeclPtrTy Method;
 
     /// DefaultArgs - Contains the parameters of the function and
     /// their default arguments. At least one of the parameters will
@@ -495,7 +539,7 @@ private:
   }
   void PopTopClassStack() { TopClassStacks.pop(); }
 
-  DeclTy *ParseCXXInlineMethodDef(AccessSpecifier AS, Declarator &D);
+  DeclPtrTy ParseCXXInlineMethodDef(AccessSpecifier AS, Declarator &D);
   void ParseLexedMethodDeclarations();
   void ParseLexedMethodDefs();
   bool ConsumeAndStoreUntil(tok::TokenKind T1, tok::TokenKind T2, 
@@ -505,38 +549,42 @@ private:
 
   //===--------------------------------------------------------------------===//
   // C99 6.9: External Definitions.
-  DeclTy *ParseExternalDeclaration();
-  DeclTy *ParseDeclarationOrFunctionDefinition(
-            TemplateParameterLists *TemplateParams = 0);
-  DeclTy *ParseFunctionDefinition(Declarator &D);
+  DeclGroupPtrTy ParseExternalDeclaration();
+  DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
+            TemplateParameterLists *TemplateParams = 0,
+            AccessSpecifier AS = AS_none);
+                                               
+  DeclPtrTy ParseFunctionDefinition(Declarator &D);
   void ParseKNRParamDeclarations(Declarator &D);
-  OwningExprResult ParseSimpleAsm();
+  // EndLoc, if non-NULL, is filled with the location of the last token of
+  // the simple-asm.
+  OwningExprResult ParseSimpleAsm(SourceLocation *EndLoc = 0);
   OwningExprResult ParseAsmStringLiteral();
 
   // Objective-C External Declarations
-  DeclTy *ParseObjCAtDirectives(); 
-  DeclTy *ParseObjCAtClassDeclaration(SourceLocation atLoc);
-  DeclTy *ParseObjCAtInterfaceDeclaration(SourceLocation atLoc, 
+  DeclPtrTy ParseObjCAtDirectives(); 
+  DeclPtrTy ParseObjCAtClassDeclaration(SourceLocation atLoc);
+  DeclPtrTy ParseObjCAtInterfaceDeclaration(SourceLocation atLoc, 
                                           AttributeList *prefixAttrs = 0);
-  void ParseObjCClassInstanceVariables(DeclTy *interfaceDecl, 
+  void ParseObjCClassInstanceVariables(DeclPtrTy interfaceDecl, 
                                        SourceLocation atLoc);
-  bool ParseObjCProtocolReferences(llvm::SmallVectorImpl<Action::DeclTy*> &P,
+  bool ParseObjCProtocolReferences(llvm::SmallVectorImpl<Action::DeclPtrTy> &P,
                                    bool WarnOnDeclarations, 
                                    SourceLocation &EndProtoLoc);
-  void ParseObjCInterfaceDeclList(DeclTy *interfaceDecl,
+  void ParseObjCInterfaceDeclList(DeclPtrTy interfaceDecl,
                                   tok::ObjCKeywordKind contextKey);
-  DeclTy *ParseObjCAtProtocolDeclaration(SourceLocation atLoc,
-                                         AttributeList *prefixAttrs = 0);
+  DeclPtrTy ParseObjCAtProtocolDeclaration(SourceLocation atLoc,
+                                           AttributeList *prefixAttrs = 0);
   
-  DeclTy *ObjCImpDecl;
+  DeclPtrTy ObjCImpDecl;
 
-  DeclTy *ParseObjCAtImplementationDeclaration(SourceLocation atLoc);
-  DeclTy *ParseObjCAtEndDeclaration(SourceLocation atLoc);
-  DeclTy *ParseObjCAtAliasDeclaration(SourceLocation atLoc);
-  DeclTy *ParseObjCPropertySynthesize(SourceLocation atLoc);
-  DeclTy *ParseObjCPropertyDynamic(SourceLocation atLoc);
+  DeclPtrTy ParseObjCAtImplementationDeclaration(SourceLocation atLoc);
+  DeclPtrTy ParseObjCAtEndDeclaration(SourceLocation atLoc);
+  DeclPtrTy ParseObjCAtAliasDeclaration(SourceLocation atLoc);
+  DeclPtrTy ParseObjCPropertySynthesize(SourceLocation atLoc);
+  DeclPtrTy ParseObjCPropertyDynamic(SourceLocation atLoc);
   
-  IdentifierInfo *ParseObjCSelector(SourceLocation &MethodLocation);
+  IdentifierInfo *ParseObjCSelectorPiece(SourceLocation &MethodLocation);
   // Definitions for Objective-c context sensitive keywords recognition.
   enum ObjCTypeQual {
     objc_in=0, objc_out, objc_inout, objc_oneway, objc_bycopy, objc_byref,
@@ -548,14 +596,14 @@ private:
 
   TypeTy *ParseObjCTypeName(ObjCDeclSpec &DS);
   void ParseObjCMethodRequirement();
-  DeclTy *ParseObjCMethodPrototype(DeclTy *classOrCat,
+  DeclPtrTy ParseObjCMethodPrototype(DeclPtrTy classOrCat,
             tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword);
-  DeclTy *ParseObjCMethodDecl(SourceLocation mLoc, tok::TokenKind mType,
-                              DeclTy *classDecl,
+  DeclPtrTy ParseObjCMethodDecl(SourceLocation mLoc, tok::TokenKind mType,
+                                DeclPtrTy classDecl,
             tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword);
   void ParseObjCPropertyAttribute(ObjCDeclSpec &DS);
   
-  DeclTy *ParseObjCMethodDefinition();
+  DeclPtrTy ParseObjCMethodDefinition();
   
   //===--------------------------------------------------------------------===//
   // C99 6.5: Expressions.
@@ -571,7 +619,8 @@ private:
 
   OwningExprResult ParseRHSOfBinaryExpression(OwningExprResult LHS,
                                               unsigned MinPrec);
-  OwningExprResult ParseCastExpression(bool isUnaryExpression);
+  OwningExprResult ParseCastExpression(bool isUnaryExpression,
+                                       bool isAddressOfOperand = false);
   OwningExprResult ParsePostfixExpressionSuffix(OwningExprResult LHS);
   OwningExprResult ParseSizeofAlignofExpression();
   OwningExprResult ParseBuiltinPrimaryExpression();
@@ -608,7 +657,7 @@ private:
 
   //===--------------------------------------------------------------------===//
   // C++ Expressions
-  OwningExprResult ParseCXXIdExpression();
+  OwningExprResult ParseCXXIdExpression(bool isAddressOfOperand = false);
 
   /// ParseOptionalCXXScopeSpecifier - Parse global scope or
   /// nested-name-specifier if present.  Returns true if a nested-name-specifier
@@ -632,7 +681,10 @@ private:
   //===--------------------------------------------------------------------===//
   // C++ 15: C++ Throw Expression
   OwningExprResult ParseThrowExpression();
-  bool ParseExceptionSpecification();
+  // EndLoc is filled with the location of the last token of the specification.
+  bool ParseExceptionSpecification(SourceLocation &EndLoc,
+                                   std::vector<TypeTy*> &Exceptions,
+                                   bool &hasAnyExceptionSpec);
 
   //===--------------------------------------------------------------------===//
   // C++ 2.13.5: C++ Boolean Literals
@@ -677,8 +729,7 @@ private:
     return ParseBraceInitializer();
   }
   OwningExprResult ParseBraceInitializer();
-  OwningExprResult ParseInitializerWithPotentialDesignator(
-                       InitListDesignations &D, unsigned InitNum);
+  OwningExprResult ParseInitializerWithPotentialDesignator();
 
   //===--------------------------------------------------------------------===//
   // clang Expressions
@@ -693,7 +744,7 @@ private:
       return false;
     
     IdentifierInfo *II = Tok.getIdentifierInfo();
-    if (Actions.getTypeName(*II, CurScope))
+    if (Actions.getTypeName(*II, Tok.getLocation(), CurScope))
       return true;
     
     return II == Ident_super;
@@ -746,6 +797,7 @@ private:
   // C++ 6: Statements and Blocks
 
   OwningStmtResult ParseCXXTryBlock();
+  OwningStmtResult ParseCXXTryBlockCommon(SourceLocation TryLoc);
   OwningStmtResult ParseCXXCatchBlock();
 
   //===--------------------------------------------------------------------===//
@@ -760,13 +812,20 @@ private:
   //===--------------------------------------------------------------------===//
   // C99 6.7: Declarations.
   
-  DeclTy *ParseDeclaration(unsigned Context);
-  DeclTy *ParseSimpleDeclaration(unsigned Context);
-  DeclTy *ParseInitDeclaratorListAfterFirstDeclarator(Declarator &D);
-  DeclTy *ParseFunctionStatementBody(DeclTy *Decl, 
-                                     SourceLocation L, SourceLocation R);
+  DeclGroupPtrTy ParseDeclaration(unsigned Context, SourceLocation &DeclEnd);
+  DeclGroupPtrTy ParseSimpleDeclaration(unsigned Context,
+                                        SourceLocation &DeclEnd,
+                                        bool RequireSemi = true);
+  DeclGroupPtrTy ParseInitDeclaratorListAfterFirstDeclarator(Declarator &D);
+  DeclPtrTy ParseFunctionStatementBody(DeclPtrTy Decl);
+  DeclPtrTy ParseFunctionTryBlock(DeclPtrTy Decl);
+
+  bool ParseImplicitInt(DeclSpec &DS, CXXScopeSpec *SS,
+                        TemplateParameterLists *TemplateParams,
+                        AccessSpecifier AS);
   void ParseDeclarationSpecifiers(DeclSpec &DS, 
-                                  TemplateParameterLists *TemplateParams = 0);
+                                  TemplateParameterLists *TemplateParams = 0,
+                                  AccessSpecifier AS = AS_none);
   bool ParseOptionalTypeSpecifier(DeclSpec &DS, int &isInvalid, 
                                   const char *&PrevSpec,
                                   TemplateParameterLists *TemplateParams = 0);
@@ -774,10 +833,11 @@ private:
   
   void ParseObjCTypeQualifierList(ObjCDeclSpec &DS);
 
-  void ParseEnumSpecifier(DeclSpec &DS);
-  void ParseEnumBody(SourceLocation StartLoc, DeclTy *TagDecl);
+  void ParseEnumSpecifier(SourceLocation TagLoc, DeclSpec &DS,
+                          AccessSpecifier AS = AS_none);
+  void ParseEnumBody(SourceLocation StartLoc, DeclPtrTy TagDecl);
   void ParseStructUnionBody(SourceLocation StartLoc, unsigned TagType,
-                            DeclTy *TagDecl);
+                            DeclPtrTy TagDecl);
   void ParseStructDeclaration(DeclSpec &DS,
                               llvm::SmallVectorImpl<FieldDeclarator> &Fields);
                               
@@ -804,12 +864,20 @@ private:
     return isDeclarationSpecifier();
   }
 
+  /// \brief Specifies the context in which type-id/expression
+  /// disambiguation will occur.
+  enum TentativeCXXTypeIdContext {
+    TypeIdInParens,
+    TypeIdAsTemplateArgument
+  };
+
+
   /// isTypeIdInParens - Assumes that a '(' was parsed and now we want to know
   /// whether the parens contain an expression or a type-id.
   /// Returns true for a type-id and false for an expression.
   bool isTypeIdInParens() {
     if (getLang().CPlusPlus)
-      return isCXXTypeIdInParens();
+      return isCXXTypeId(TypeIdInParens);
     return isTypeSpecifierQualifier();
   }
 
@@ -840,12 +908,7 @@ private:
   /// the function returns true to let the declaration parsing code handle it.
   bool isCXXConditionDeclaration();
 
-  /// isCXXTypeIdInParens - Assumes that a '(' was parsed and now we want to
-  /// know whether the parens contain an expression or a type-id.
-  /// Returns true for a type-id and false for an expression.
-  /// If during the disambiguation process a parsing error is encountered,
-  /// the function returns true to let the declaration parsing code handle it.
-  bool isCXXTypeIdInParens();
+  bool isCXXTypeId(TentativeCXXTypeIdContext Context);
 
   /// TPResult - Used as the result value for functions whose purpose is to
   /// disambiguate C++ constructs by "tentatively parsing" them.
@@ -894,9 +957,11 @@ private:
   TPResult TryParseFunctionDeclarator();
   TPResult TryParseBracketDeclarator();
 
-
-  TypeTy *ParseTypeName();
-  AttributeList *ParseAttributes();
+  TypeResult ParseTypeName();
+  void ParseBlockId();
+  // EndLoc, if non-NULL, is filled with the location of the last token of
+  // the attribute list.
+  AttributeList *ParseAttributes(SourceLocation *EndLoc = 0);
   void FuzzyParseMicrosoftDeclSpec();
   void ParseTypeofSpecifier(DeclSpec &DS);
 
@@ -939,55 +1004,88 @@ private:
   //===--------------------------------------------------------------------===//
   // C++ 7: Declarations [dcl.dcl]
   
-  DeclTy *ParseNamespace(unsigned Context);
-  DeclTy *ParseLinkage(unsigned Context);
-  DeclTy *ParseUsingDirectiveOrDeclaration(unsigned Context);
-  DeclTy *ParseUsingDirective(unsigned Context, SourceLocation UsingLoc);
-  DeclTy *ParseUsingDeclaration(unsigned Context, SourceLocation UsingLoc);
-
+  DeclPtrTy ParseNamespace(unsigned Context, SourceLocation &DeclEnd);
+  DeclPtrTy ParseLinkage(unsigned Context);
+  DeclPtrTy ParseUsingDirectiveOrDeclaration(unsigned Context,
+                                             SourceLocation &DeclEnd);
+  DeclPtrTy ParseUsingDirective(unsigned Context, SourceLocation UsingLoc,
+                                SourceLocation &DeclEnd);
+  DeclPtrTy ParseUsingDeclaration(unsigned Context, SourceLocation UsingLoc,
+                                  SourceLocation &DeclEnd);
+  DeclPtrTy ParseStaticAssertDeclaration(SourceLocation &DeclEnd);
+  DeclPtrTy ParseNamespaceAlias(SourceLocation NamespaceLoc,
+                                SourceLocation AliasLoc, IdentifierInfo *Alias,
+                                SourceLocation &DeclEnd);
+  
   //===--------------------------------------------------------------------===//
   // C++ 9: classes [class] and C structs/unions.
-  TypeTy *ParseClassName(const CXXScopeSpec *SS = 0);
-  void ParseClassSpecifier(DeclSpec &DS, 
-                           TemplateParameterLists *TemplateParams = 0);
+  TypeResult ParseClassName(SourceLocation &EndLocation, 
+                            const CXXScopeSpec *SS = 0);
+  void ParseClassSpecifier(tok::TokenKind TagTokKind, SourceLocation TagLoc,
+                           DeclSpec &DS, 
+                           TemplateParameterLists *TemplateParams = 0,
+                           AccessSpecifier AS = AS_none);
   void ParseCXXMemberSpecification(SourceLocation StartLoc, unsigned TagType,
-                                   DeclTy *TagDecl);
-  DeclTy *ParseCXXClassMemberDeclaration(AccessSpecifier AS);
-  void ParseConstructorInitializer(DeclTy *ConstructorDecl);
-  MemInitResult ParseMemInitializer(DeclTy *ConstructorDecl);
+                                   DeclPtrTy TagDecl);
+  void ParseCXXClassMemberDeclaration(AccessSpecifier AS);
+  void ParseConstructorInitializer(DeclPtrTy ConstructorDecl);
+  MemInitResult ParseMemInitializer(DeclPtrTy ConstructorDecl);
 
   //===--------------------------------------------------------------------===//
   // C++ 10: Derived classes [class.derived]
-  void ParseBaseClause(DeclTy *ClassDecl);
-  BaseResult ParseBaseSpecifier(DeclTy *ClassDecl);
+  void ParseBaseClause(DeclPtrTy ClassDecl);
+  BaseResult ParseBaseSpecifier(DeclPtrTy ClassDecl);
   AccessSpecifier getAccessSpecifierIfPresent() const;
 
   //===--------------------------------------------------------------------===//
   // C++ 13.5: Overloaded operators [over.oper]
-  OverloadedOperatorKind TryParseOperatorFunctionId();
-  TypeTy *ParseConversionFunctionId();
+  // EndLoc, if non-NULL, is filled with the location of the last token of
+  // the ID.
+  OverloadedOperatorKind TryParseOperatorFunctionId(SourceLocation *EndLoc = 0);
+  TypeTy *ParseConversionFunctionId(SourceLocation *EndLoc = 0);
 
   //===--------------------------------------------------------------------===//
   // C++ 14: Templates [temp]
-  typedef llvm::SmallVector<DeclTy *, 4> TemplateParameterList;
+  typedef llvm::SmallVector<DeclPtrTy, 4> TemplateParameterList;
 
   // C++ 14.1: Template Parameters [temp.param]
-  DeclTy *ParseTemplateDeclaration(unsigned Context);
+  DeclPtrTy ParseTemplateDeclarationOrSpecialization(unsigned Context,
+                                                     SourceLocation &DeclEnd,
+                                                   AccessSpecifier AS=AS_none);
   bool ParseTemplateParameters(unsigned Depth, 
                                TemplateParameterList &TemplateParams,
                                SourceLocation &LAngleLoc, 
                                SourceLocation &RAngleLoc);
   bool ParseTemplateParameterList(unsigned Depth,
                                   TemplateParameterList &TemplateParams);
-  DeclTy *ParseTemplateParameter(unsigned Depth, unsigned Position);
-  DeclTy *ParseTypeParameter(unsigned Depth, unsigned Position);
-  DeclTy *ParseTemplateTemplateParameter(unsigned Depth, unsigned Position);
-  DeclTy *ParseNonTypeTemplateParameter(unsigned Depth, unsigned Position);
+  DeclPtrTy ParseTemplateParameter(unsigned Depth, unsigned Position);
+  DeclPtrTy ParseTypeParameter(unsigned Depth, unsigned Position);
+  DeclPtrTy ParseTemplateTemplateParameter(unsigned Depth, unsigned Position);
+  DeclPtrTy ParseNonTypeTemplateParameter(unsigned Depth, unsigned Position);
   // C++ 14.3: Template arguments [temp.arg]
-  typedef llvm::SmallVector<TemplateArgTy*, 8> TemplateArgList;
-  void AnnotateTemplateIdToken(DeclTy *Template, const CXXScopeSpec *SS = 0);
-  bool ParseTemplateArgumentList(TemplateArgList &TemplateArgs);
-  OwningTemplateArgResult ParseTemplateArgument();
+  typedef llvm::SmallVector<void *, 16> TemplateArgList;
+  typedef llvm::SmallVector<bool, 16> TemplateArgIsTypeList;
+  typedef llvm::SmallVector<SourceLocation, 16> TemplateArgLocationList;
+
+  bool ParseTemplateIdAfterTemplateName(TemplateTy Template,
+                                        SourceLocation TemplateNameLoc, 
+                                        const CXXScopeSpec *SS,
+                                        bool ConsumeLastToken,
+                                        SourceLocation &LAngleLoc,
+                                        TemplateArgList &TemplateArgs,
+                                    TemplateArgIsTypeList &TemplateArgIsType,
+                               TemplateArgLocationList &TemplateArgLocations,
+                                        SourceLocation &RAngleLoc);
+
+  void AnnotateTemplateIdToken(TemplateTy Template, TemplateNameKind TNK,
+                               const CXXScopeSpec *SS,
+                               SourceLocation TemplateKWLoc = SourceLocation(),
+                               bool AllowTypeAnnotation = true);
+  void AnnotateTemplateIdTokenAsType(const CXXScopeSpec *SS = 0);
+  bool ParseTemplateArgumentList(TemplateArgList &TemplateArgs,
+                                 TemplateArgIsTypeList &TemplateArgIsType,
+                                 TemplateArgLocationList &TemplateArgLocations);
+  void *ParseTemplateArgument(bool &ArgIsType);
 
   //===--------------------------------------------------------------------===//
   // GNU G++: Type Traits [Type-Traits.html in the GCC manual]

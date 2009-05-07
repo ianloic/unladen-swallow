@@ -23,20 +23,37 @@ using namespace clang;
 using namespace CodeGen;
 using namespace llvm;
 
-/// Utility to insert an atomic instruction based Instrinsic::ID and
-// the expression node
-static RValue EmitBinaryAtomic(CodeGenFunction& CFG, 
+/// Utility to insert an atomic instruction based on Instrinsic::ID
+/// and the expression node.
+static RValue EmitBinaryAtomic(CodeGenFunction& CGF, 
                                Intrinsic::ID Id, const CallExpr *E) {
   const llvm::Type *ResType[2];
-  ResType[0] = CFG.ConvertType(E->getType());
-  ResType[1] = CFG.ConvertType(E->getArg(0)->getType());
-  Value *AtomF = CFG.CGM.getIntrinsic(Id, ResType, 2);
-  return RValue::get(CFG.Builder.CreateCall2(AtomF,
-                                             CFG.EmitScalarExpr(E->getArg(0)),
-                                             CFG.EmitScalarExpr(E->getArg(1))));
+  ResType[0] = CGF.ConvertType(E->getType());
+  ResType[1] = CGF.ConvertType(E->getArg(0)->getType());
+  Value *AtomF = CGF.CGM.getIntrinsic(Id, ResType, 2);
+  return RValue::get(CGF.Builder.CreateCall2(AtomF, 
+                                             CGF.EmitScalarExpr(E->getArg(0)), 
+                                             CGF.EmitScalarExpr(E->getArg(1))));
 }
 
-RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
+/// Utility to insert an atomic instruction based Instrinsic::ID and
+// the expression node, where the return value is the result of the
+// operation.
+static RValue EmitBinaryAtomicPost(CodeGenFunction& CGF, 
+                                   Intrinsic::ID Id, const CallExpr *E,
+                                   Instruction::BinaryOps Op) {
+  const llvm::Type *ResType[2];
+  ResType[0] = CGF.ConvertType(E->getType());
+  ResType[1] = CGF.ConvertType(E->getArg(0)->getType());
+  Value *AtomF = CGF.CGM.getIntrinsic(Id, ResType, 2);
+  Value *Ptr = CGF.EmitScalarExpr(E->getArg(0));
+  Value *Operand = CGF.EmitScalarExpr(E->getArg(1));
+  Value *Result = CGF.Builder.CreateCall2(AtomF, Ptr, Operand);
+  return RValue::get(CGF.Builder.CreateBinOp(Op, Result, Operand));
+}
+
+RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD, 
+                                        unsigned BuiltinID, const CallExpr *E) {
   // See if we can constant fold this builtin.  If so, don't emit it at all.
   Expr::EvalResult Result;
   if (E->Evaluate(Result, CGM.getContext())) {
@@ -49,11 +66,11 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
   switch (BuiltinID) {
   default: break;  // Handle intrinsics and libm functions below.
   case Builtin::BI__builtin___CFStringMakeConstantString:
-    return RValue::get(CGM.EmitConstantExpr(E, 0));
+    return RValue::get(CGM.EmitConstantExpr(E, E->getType(), 0));
   case Builtin::BI__builtin_stdarg_start:
   case Builtin::BI__builtin_va_start:
   case Builtin::BI__builtin_va_end: {
-    Value *ArgValue = EmitVAListRef(E->getArg(0));;
+    Value *ArgValue = EmitVAListRef(E->getArg(0));
     const llvm::Type *DestType = 
       llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
     if (ArgValue->getType() != DestType)
@@ -179,8 +196,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
   case Builtin::BI__builtin_object_size: {
     // FIXME: Implement. For now we just always fail and pretend we
     // don't know the object size.
-    llvm::APSInt TypeArg = 
-      E->getArg(1)->getIntegerConstantExprValue(CGM.getContext());
+    llvm::APSInt TypeArg = E->getArg(1)->EvaluateAsInt(CGM.getContext());
     const llvm::Type *ResType = ConvertType(E->getType());
     //    bool UseSubObject = TypeArg.getZExtValue() & 1;
     bool UseMinimum = TypeArg.getZExtValue() & 2;
@@ -280,7 +296,8 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
   case Builtin::BI__builtin_memset: {
     Value *Address = EmitScalarExpr(E->getArg(0));
     Builder.CreateCall4(CGM.getMemSetFn(), Address,
-                        EmitScalarExpr(E->getArg(1)),
+                        Builder.CreateTrunc(EmitScalarExpr(E->getArg(1)),
+                                            llvm::Type::Int8Ty),
                         EmitScalarExpr(E->getArg(2)),
                         llvm::ConstantInt::get(llvm::Type::Int32Ty, 1));
     return RValue::get(Address);
@@ -292,6 +309,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
   case Builtin::BI__builtin_frame_address: {
     Value *F = CGM.getIntrinsic(Intrinsic::frameaddress, 0, 0);
     return RValue::get(Builder.CreateCall(F, EmitScalarExpr(E->getArg(0))));
+  }
+  case Builtin::BI__builtin_extract_return_addr: {
+    // FIXME: There should be a target hook for this
+    return RValue::get(EmitScalarExpr(E->getArg(0)));
   }
   case Builtin::BI__sync_fetch_and_add:
     return EmitBinaryAtomic(*this, Intrinsic::atomic_load_add, E);
@@ -311,6 +332,23 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
     return EmitBinaryAtomic(*this, Intrinsic::atomic_load_or, E);
   case Builtin::BI__sync_fetch_and_xor:
     return EmitBinaryAtomic(*this, Intrinsic::atomic_load_xor, E);
+
+  case Builtin::BI__sync_add_and_fetch:
+    return EmitBinaryAtomicPost(*this, Intrinsic::atomic_load_add, E, 
+                                llvm::Instruction::Add);
+  case Builtin::BI__sync_sub_and_fetch:
+    return EmitBinaryAtomicPost(*this, Intrinsic::atomic_load_sub, E,
+                                llvm::Instruction::Sub);
+  case Builtin::BI__sync_and_and_fetch:
+    return EmitBinaryAtomicPost(*this, Intrinsic::atomic_load_and, E,
+                                llvm::Instruction::And);
+  case Builtin::BI__sync_or_and_fetch:
+    return EmitBinaryAtomicPost(*this, Intrinsic::atomic_load_or, E,
+                                llvm::Instruction::Or);
+  case Builtin::BI__sync_xor_and_fetch:
+    return EmitBinaryAtomicPost(*this, Intrinsic::atomic_load_xor, E,
+                                llvm::Instruction::Xor);
+
   case Builtin::BI__sync_val_compare_and_swap: {
     const llvm::Type *ResType[2];
     ResType[0]= ConvertType(E->getType());
@@ -321,24 +359,66 @@ RValue CodeGenFunction::EmitBuiltinExpr(unsigned BuiltinID, const CallExpr *E) {
                                            EmitScalarExpr(E->getArg(1)),
                                            EmitScalarExpr(E->getArg(2))));
   }
+
+  case Builtin::BI__sync_bool_compare_and_swap: {
+    const llvm::Type *ResType[2];
+    ResType[0]= ConvertType(E->getType());
+    ResType[1] = ConvertType(E->getArg(0)->getType());
+    Value *AtomF = CGM.getIntrinsic(Intrinsic::atomic_cmp_swap, ResType, 2);
+    Value *OldVal = EmitScalarExpr(E->getArg(1));
+    Value *PrevVal = Builder.CreateCall3(AtomF, 
+                                        EmitScalarExpr(E->getArg(0)),
+                                        OldVal,
+                                        EmitScalarExpr(E->getArg(2)));
+    Value *Result = Builder.CreateICmpEQ(PrevVal, OldVal);
+    // zext bool to int.
+    return RValue::get(Builder.CreateZExt(Result, ConvertType(E->getType())));
+  }
+
   case Builtin::BI__sync_lock_test_and_set:
     return EmitBinaryAtomic(*this, Intrinsic::atomic_swap, E);
+
+
+    // Library functions with special handling.
+
+  case Builtin::BIsqrt:
+  case Builtin::BIsqrtf:
+  case Builtin::BIsqrtl: {
+    // Rewrite sqrt to intrinsic if allowed.
+    if (!FD->hasAttr<ConstAttr>())
+      break;
+    Value *Arg0 = EmitScalarExpr(E->getArg(0));
+    const llvm::Type *ArgType = Arg0->getType();
+    Value *F = CGM.getIntrinsic(Intrinsic::sqrt, &ArgType, 1);
+    return RValue::get(Builder.CreateCall(F, Arg0, "tmp"));
+  }
+
+  case Builtin::BIpow:
+  case Builtin::BIpowf:
+  case Builtin::BIpowl: {
+    // Rewrite sqrt to intrinsic if allowed.
+    if (!FD->hasAttr<ConstAttr>())
+      break;
+    Value *Base = EmitScalarExpr(E->getArg(0));
+    Value *Exponent = EmitScalarExpr(E->getArg(1));
+    const llvm::Type *ArgType = Base->getType();
+    Value *F = CGM.getIntrinsic(Intrinsic::pow, &ArgType, 1);
+    return RValue::get(Builder.CreateCall2(F, Base, Exponent, "tmp"));
+  }
   }
   
   // If this is an alias for a libm function (e.g. __builtin_sin) turn it into
   // that function.
-  if (getContext().BuiltinInfo.isLibFunction(BuiltinID))
+  if (getContext().BuiltinInfo.isLibFunction(BuiltinID) ||
+      getContext().BuiltinInfo.isPredefinedLibFunction(BuiltinID))
     return EmitCallExpr(CGM.getBuiltinLibFunction(BuiltinID), 
                         E->getCallee()->getType(), E->arg_begin(),
                         E->arg_end());
   
   // See if we have a target specific intrinsic.
-  Intrinsic::ID IntrinsicID;
-  const char *TargetPrefix = Target.getTargetPrefix();
-  const char *BuiltinName = getContext().BuiltinInfo.GetName(BuiltinID);
-#define GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
-#include "llvm/Intrinsics.gen"
-#undef GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
+  const char *Name = getContext().BuiltinInfo.GetName(BuiltinID);
+  Intrinsic::ID IntrinsicID =
+    Intrinsic::getIntrinsicForGCCBuiltin(Target.getTargetPrefix(), Name);
   
   if (IntrinsicID != Intrinsic::not_intrinsic) {
     SmallVector<Value*, 16> Args;
@@ -813,7 +893,8 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
   }
   case X86::BI__builtin_ia32_shufpd: {
     unsigned i = cast<ConstantInt>(Ops[2])->getZExtValue();
-    return EmitShuffleVector(Ops[0], Ops[1], i & 1, (i & 2) + 2, "shufpd");
+    return EmitShuffleVector(Ops[0], Ops[1], i & 1,
+                             ((i & 2) >> 1)+2, "shufpd");
   }
   case X86::BI__builtin_ia32_punpcklbw128:
     return EmitShuffleVector(Ops[0], Ops[1], 0, 16, 1, 17, 2, 18, 3, 19,

@@ -1,5 +1,7 @@
-// RUN: clang -analyze -checker-cfref -warn-dead-stores -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -warn-dead-stores -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-cfref -warn-dead-stores -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -warn-dead-stores -analyzer-store=basic -analyzer-constraints=range -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -warn-dead-stores -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -warn-dead-stores -analyzer-store=region -analyzer-constraints=range -verify %s
 
 // These declarations were reduced using Delta-Debugging from Foundation.h
 // on Mac OS X.  The test cases are below.
@@ -67,7 +69,8 @@ void f2() {
 }
 
 void f2b() {
-  NSWindow *window = [[NSWindow alloc]
+  // FIXME: NSWindow doesn't own itself until it is displayed.
+  NSWindow *window = [[NSWindow alloc] // no-warning
                       initWithContentRect:NSMakeRect(0,0,100,100) 
                         styleMask:NSTitledWindowMask|NSClosableWindowMask
                         backing:NSBackingStoreBuffered
@@ -76,10 +79,11 @@ void f2b() {
 
   [window orderFrontRegardless];
   
-  [window retain]; // expected-warning{{leak}}
+  [window retain];
 }
 
 
 void f3() {
-  NSWindow *window = [NSWindow alloc];  // expected-warning{{never read}} expected-warning{{leak}}
+  // FIXME: For now we don't track NSWindow.
+  NSWindow *window = [NSWindow alloc];  // expected-warning{{never read}}
 }

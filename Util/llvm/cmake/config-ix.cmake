@@ -52,6 +52,11 @@ check_symbol_exists(mallinfo malloc.h HAVE_MALLINFO)
 check_symbol_exists(pthread_mutex_lock pthread.h HAVE_PTHREAD_MUTEX_LOCK)
 check_symbol_exists(strtoll stdlib.h HAVE_STRTOLL)
 
+check_symbol_exists(__GLIBC__ stdio.h LLVM_USING_GLIBC)
+if( LLVM_USING_GLIBC )
+  add_llvm_definitions( -D_GNU_SOURCE )
+endif()
+
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-fPIC" SUPPORTS_FPIC_FLAG)
 
@@ -69,6 +74,7 @@ endif( MINGW )
 
 if( MSVC )
   set(error_t int)
+  set(mode_t "unsigned short")
   set(LTDL_SHLIBPATH_VAR "PATH")
   set(LTDL_SYSSEARCHPATH "")
   set(LTDL_DLOPEN_DEPLIBS 1)
@@ -84,14 +90,6 @@ else( MSVC )
   set(LTDL_SYSSEARCHPATH "") # TODO
   set(LTDL_DLOPEN_DEPLIBS 0)  # TODO
 endif( MSVC )
-
-if( NOT MSVC )
-  # hash_map.h.in and hash_set.h.in contain a special case for MSVC
-  include(CheckCxxHashmap)
-  include(CheckCxxHashset)
-  check_hashmap()
-  check_hashset()
-endif( NOT MSVC )
 
 # FIXME: Signal handler return type, currently hardcoded to 'void'
 set(RETSIGTYPE void)
@@ -123,12 +121,3 @@ configure_file(
   ${LLVM_BINARY_DIR}/include/llvm/Support/DataTypes.h
   )
 
-configure_file(
-  ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT/hash_map.cmake
-  ${LLVM_BINARY_DIR}/include/llvm/ADT/hash_map.h
-  )
-
-configure_file(
-  ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT/hash_set.cmake
-  ${LLVM_BINARY_DIR}/include/llvm/ADT/hash_set.h
-  )

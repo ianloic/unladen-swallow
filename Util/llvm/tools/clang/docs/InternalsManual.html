@@ -27,6 +27,15 @@ td {
       classes</a></li>
   </ul>
 </li>
+<li><a href="#libdriver">The Driver Library</a>
+  <ul>
+  </ul>
+</li>
+<li><a href="#pth">Pretokenized Headers (PTH)</a>
+<li><a href="#libfrontend">The Frontend Library</a>
+  <ul>
+  </ul>
+</li>
 <li><a href="#liblex">The Lexer and Preprocessor Library</a>
   <ul>
   <li><a href="#Token">The Token class</a></li>
@@ -161,18 +170,31 @@ produce diagnostics to tell the user their code is non-portable.  The difference
 is that the former are ignored by default, and the later warn by default.  The
 <tt>WARNING</tt> severity is used for constructs that are valid in the currently
 selected source language but that are dubious in some way.  The <tt>NOTE</tt>
-level is used to staple more information onto a previous diagnostics.</p>
+level is used to staple more information onto previous diagnostics.</p>
 
 <p>These <em>severities</em> are mapped into a smaller set (the
 Diagnostic::Level enum, {<tt>Ignored</tt>, <tt>Note</tt>, <tt>Warning</tt>,
-<tt>Error</tt> }) of output <em>levels</em> by the diagnostics subsystem based
-on various configuration options.  For example, if the user specifies
-<tt>-pedantic</tt>, <tt>EXTENSION</tt> maps to <tt>Warning</tt>, if they specify
-<tt>-pedantic-errors</tt>, it turns into <tt>Error</tt>.  Clang also internally
-supports a fully fine grained mapping mechanism that allows you to map any
-diagnostic that doesn't have <tt>ERRROR</tt> severity to any output level that
-you want.  This is used to implement options like <tt>-Wunused_macros</tt>,
-<tt>-Wundef</tt> etc.</p>
+<tt>Error</tt>, <tt>Fatal</tt> }) of output <em>levels</em> by the diagnostics
+subsystem based on various configuration options.  Clang internally supports a
+fully fine grained mapping mechanism that allows you to map almost any
+diagnostic to the output level that you want.  The only diagnostics that cannot
+be mapped are <tt>NOTE</tt>s, which always follow the severity of the previously
+emitted diagnostic and <tt>ERROR</tt>s, which can only be mapped to
+<tt>Fatal</tt> (it is not possible to turn an error into a warning,
+for example).</p>
+
+<p>Diagnostic mappings are used in many ways.  For example, if the user
+specifies <tt>-pedantic</tt>, <tt>EXTENSION</tt> maps to <tt>Warning</tt>, if
+they specify <tt>-pedantic-errors</tt>, it turns into <tt>Error</tt>.  This is
+used to implement options like <tt>-Wunused_macros</tt>, <tt>-Wundef</tt> etc.
+</p>
+
+<p>
+Mapping to <tt>Fatal</tt> should only be used for diagnostics that are
+considered so severe that error recovery won't be able to recover sensibly from
+them (thus spewing a ton of bogus errors).  One example of this class of error
+are failure to #include a file.
+</p>
 
 <!-- ================= -->
 <h4>The Format String</h4>
@@ -321,6 +343,11 @@ Clang:</p>
     DeclarationName corresponds to an Objective-C instance method selector.  As
     such, it prints the selector with a leading '-'.</p></td></tr>
 
+<tr><td colspan="2"><b>"q" format</b></td></tr>
+<tr><td>Example:</td><td><tt>"candidate found by name lookup is %q0"</tt></td></tr>
+<tr><td>Class:</td><td>NamedDecl*</td></tr>
+<tr><td>Description</td><td><p>This formatter indicates that the fully-qualified name of the declaration should be printed, e.g., "std::vector" rather than "vector".</p></td></tr>
+    
 </table>
 
 <p>It is really easy to add format specifiers to the Clang diagnostics system,
@@ -367,6 +394,64 @@ The good news is that the call site that issues a diagnostic should be
 completely independent of how the diagnostic is formatted and in what language
 it is rendered.
 </p>
+
+<!-- ==================================================== -->
+<h4 id="code-modification-hints">Code Modification Hints</h4>
+<!-- ==================================================== -->
+
+<p>In some cases, the front end emits diagnostics when it is clear
+that some small change to the source code would fix the problem. For
+example, a missing semicolon at the end of a statement or a use of
+deprecated syntax that is easily rewritten into a more modern form. 
+Clang tries very hard to emit the diagnostic and recover gracefully
+in these and other cases.</p>
+
+<p>However, for these cases where the fix is obvious, the diagnostic 
+can be annotated with a code
+modification "hint" that describes how to change the code referenced
+by the diagnostic to fix the problem. For example, it might add the
+missing semicolon at the end of the statement or rewrite the use of a
+deprecated construct into something more palatable. Here is one such
+example C++ front end, where we warn about the right-shift operator
+changing meaning from C++98 to C++0x:</p>
+
+<pre>
+test.cpp:3:7: warning: use of right-shift operator ('&gt;&gt;') in template argument will require parentheses in C++0x
+A&lt;100 &gt;&gt; 2&gt; *a;
+      ^
+  (       )
+</pre>
+
+<p>Here, the code modification hint is suggesting that parentheses be
+added, and showing exactly where those parentheses would be inserted
+into the source code. The code modification hints themselves describe
+what changes to make to the source code in an abstract manner, which
+the text diagnostic printer renders as a line of "insertions" below
+the caret line. <a href="#DiagnosticClient">Other diagnostic
+clients</a> might choose to render the code differently (e.g., as
+markup inline) or even give the user the ability to automatically fix
+the problem.</p>
+
+<p>All code modification hints are described by the
+<code>CodeModificationHint</code> class, instances of which should be
+attached to the diagnostic using the &lt;&lt; operator in the same way
+that highlighted source ranges and arguments are passed to the
+diagnostic. Code modification hints can be created with one of three
+constructors:</p>
+
+<dl>
+  <dt><code>CodeModificationHint::CreateInsertion(Loc, Code)</code></dt>
+  <dd>Specifies that the given <code>Code</code> (a string) should be inserted
+  before the source location <code>Loc</code>.</dd>
+
+  <dt><code>CodeModificationHint::CreateRemoval(Range)</code></dt>
+  <dd>Specifies that the code in the given source <code>Range</code>
+  should be removed.</dd>
+
+  <dt><code>CodeModificationHint::CreateReplacement(Range, Code)</code></dt>
+  <dd>Specifies that the code in the given source <code>Range</code>
+  should be removed, and replaced with the given <code>Code</code> string.</dd>
+</dl>
 
 <!-- ============================================================= -->
 <h4><a name="DiagnosticClient">The DiagnosticClient Interface</a></h4>
@@ -454,6 +539,28 @@ tracked correctly.  If it is ever incorrect, the front-end may get confused and
 die.  The reason for this is that the notion of the 'spelling' of a Token in
 Clang depends on being able to find the original input characters for the token.
 This concept maps directly to the "spelling location" for the token.</p>
+
+<!-- ======================================================================= -->
+<h2 id="libdriver">The Driver Library</h2>
+<!-- ======================================================================= -->
+
+<p>The clang Driver and library are documented <a
+href="DriverInternals.html">here<a>.<p>
+
+<!-- ======================================================================= -->
+<h2 id="pth">Pretokenized Headers (PTH)</h2>
+<!-- ======================================================================= -->
+
+<p>Clang's current implementation of precompiled headers, known as PTH, is
+documented <a href="PTHInternals.html">here</a>.</p>
+
+<!-- ======================================================================= -->
+<h2 id="libfrontend">The Frontend Library</h2>
+<!-- ======================================================================= -->
+
+<p>The Frontend library contains functionality useful for building
+tools on top of the clang libraries, for example several methods for
+outputting diagnostics.</p>
 
 <!-- ======================================================================= -->
 <h2 id="liblex">The Lexer and Preprocessor Library</h2>
@@ -610,12 +717,10 @@ by the Action::ActOnCXXGlobalScopeSpecifier and
 Action::ActOnCXXNestedNameSpecifier callbacks.  In the case of Sema, this is a
 <tt>DeclContext*</tt>.</li>
 
-<li><b>tok::annot_template_id</b>: This annotation token represents a C++
-template-id such as "foo&lt;int, 4&gt;", which may refer to a function or type
-depending on whether foo is a function template or class template.  The
-AnnotationValue pointer is a pointer to a malloc'd TemplateIdAnnotation object.
-FIXME: I don't think the parsing logic is right for this.  Shouldn't type
-templates be turned into annot_typename??</li>
+<li><b>tok::annot_template_id</b>: This annotation token represents a
+C++ template-id such as "foo&lt;int, 4&gt;", where "foo" is the name
+of a template. The AnnotationValue pointer is a pointer to a malloc'd
+TemplateIdAnnotation object. Depending on the context, a parsed template-id that names a type might become a typename annotation token (if all we care about is the named type, e.g., because it occurs in a type specifier) or might remain a template-id token (if we want to retain more source location information or produce a new type, e.g., in a declaration of a class template specialization). template-id annotation tokens that refer to a type can be "upgraded" to typename annotation tokens by the parser.</li>
 
 </ol>
 

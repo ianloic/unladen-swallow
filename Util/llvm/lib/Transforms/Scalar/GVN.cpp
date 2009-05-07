@@ -10,7 +10,7 @@
 // This pass performs global value numbering to eliminate fully redundant
 // instructions.  It also performs simple dead load elimination.
 //
-// Note that this pass does the value numbering itself, it does not use the
+// Note that this pass does the value numbering itself; it does not use the
 // ValueNumbering analysis passes.
 //
 //===----------------------------------------------------------------------===//
@@ -21,7 +21,7 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
-#include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -1035,7 +1035,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     Value* v = GetValueForBlock(LI->getParent(), LI, BlockReplValues, true);
     LI->replaceAllUsesWith(v);
     
-    if (!isa<GlobalValue>(v))
+    if (isa<PHINode>(v))
       v->takeName(LI);
     if (isa<PointerType>(v->getType()))
       MD->invalidateCachedPointerInfo(v);
@@ -1132,7 +1132,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   // Perform PHI construction.
   Value* v = GetValueForBlock(LI->getParent(), LI, BlockReplValues, true);
   LI->replaceAllUsesWith(v);
-  if (!isa<GlobalValue>(v))
+  if (isa<PHINode>(v))
     v->takeName(LI);
   if (isa<PointerType>(v->getType()))
     MD->invalidateCachedPointerInfo(v);
@@ -1294,9 +1294,28 @@ bool GVN::processInstruction(Instruction *I,
   uint32_t nextNum = VN.getNextUnusedValueNumber();
   unsigned num = VN.lookup_or_add(I);
   
+  if (BranchInst* BI = dyn_cast<BranchInst>(I)) {
+    localAvail[I->getParent()]->table.insert(std::make_pair(num, I));
+    
+    if (!BI->isConditional() || isa<Constant>(BI->getCondition()))
+      return false;
+    
+    Value* branchCond = BI->getCondition();
+    uint32_t condVN = VN.lookup_or_add(branchCond);
+    
+    BasicBlock* trueSucc = BI->getSuccessor(0);
+    BasicBlock* falseSucc = BI->getSuccessor(1);
+    
+    if (trueSucc->getSinglePredecessor())
+      localAvail[trueSucc]->table[condVN] = ConstantInt::getTrue();
+    if (falseSucc->getSinglePredecessor())
+      localAvail[falseSucc]->table[condVN] = ConstantInt::getFalse();
+
+    return false;
+    
   // Allocations are always uniquely numbered, so we can save time and memory
-  // by fast failing them.
-  if (isa<AllocationInst>(I) || isa<TerminatorInst>(I)) {
+  // by fast failing them.  
+  } else if (isa<AllocationInst>(I) || isa<TerminatorInst>(I)) {
     localAvail[I->getParent()]->table.insert(std::make_pair(num, I));
     return false;
   }
@@ -1405,17 +1424,10 @@ bool GVN::runOnFunction(Function& F) {
 
 
 bool GVN::processBlock(BasicBlock* BB) {
-  DomTreeNode* DTN = DT->getNode(BB);
   // FIXME: Kill off toErase by doing erasing eagerly in a helper function (and
   // incrementing BI before processing an instruction).
   SmallVector<Instruction*, 8> toErase;
   bool changed_function = false;
-  
-  if (DTN->getIDom())
-    localAvail[BB] =
-                  new ValueNumberScope(localAvail[DTN->getIDom()->getBlock()]);
-  else
-    localAvail[BB] = new ValueNumberScope(0);
   
   for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();
        BI != BE;) {
@@ -1469,8 +1481,9 @@ bool GVN::performPRE(Function& F) {
       Instruction *CurInst = BI++;
       
       if (isa<AllocationInst>(CurInst) || isa<TerminatorInst>(CurInst) ||
-          isa<PHINode>(CurInst) || CurInst->mayReadFromMemory() ||
-          CurInst->mayWriteToMemory())
+          isa<PHINode>(CurInst) || (CurInst->getType() == Type::VoidTy) ||
+          CurInst->mayReadFromMemory() || CurInst->mayWriteToMemory() ||
+          isa<DbgInfoIntrinsic>(CurInst))
         continue;
       
       uint32_t valno = VN.lookup(CurInst);
@@ -1605,6 +1618,15 @@ bool GVN::performPRE(Function& F) {
 /// iterateOnFunction - Executes one iteration of GVN
 bool GVN::iterateOnFunction(Function &F) {
   cleanupGlobalSets();
+
+  for (df_iterator<DomTreeNode*> DI = df_begin(DT->getRootNode()),
+       DE = df_end(DT->getRootNode()); DI != DE; ++DI) {
+    if (DI->getIDom())
+      localAvail[DI->getBlock()] =
+                   new ValueNumberScope(localAvail[DI->getIDom()->getBlock()]);
+    else
+      localAvail[DI->getBlock()] = new ValueNumberScope(0);
+  }
 
   // Top-down walk of the dominator tree
   bool changed = false;

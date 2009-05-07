@@ -61,10 +61,11 @@
   <li><a href="#constants">Constants</a>
     <ol>
       <li><a href="#simpleconstants">Simple Constants</a></li>
-      <li><a href="#aggregateconstants">Aggregate Constants</a></li>
+      <li><a href="#complexconstants">Complex Constants</a></li>
       <li><a href="#globalconstants">Global Variable and Function Addresses</a></li>
       <li><a href="#undefvalues">Undefined Values</a></li>
       <li><a href="#constantexprs">Constant Expressions</a></li>
+      <li><a href="#metadata">Embedded Metadata</a></li>
     </ol>
   </li>
   <li><a href="#othervalues">Other Values</a>
@@ -150,6 +151,8 @@
         <ol>
           <li><a href="#i_icmp">'<tt>icmp</tt>' Instruction</a></li>
           <li><a href="#i_fcmp">'<tt>fcmp</tt>' Instruction</a></li>
+          <li><a href="#i_vicmp">'<tt>vicmp</tt>' Instruction</a></li>
+          <li><a href="#i_vfcmp">'<tt>vfcmp</tt>' Instruction</a></li>
           <li><a href="#i_phi">'<tt>phi</tt>'   Instruction</a></li>
           <li><a href="#i_select">'<tt>select</tt>' Instruction</a></li>
           <li><a href="#i_call">'<tt>call</tt>'  Instruction</a></li>
@@ -209,11 +212,12 @@
       </li>
       <li><a href="#int_overflow">Arithmetic with Overflow Intrinsics</a>
         <ol>
-          <li><a href="#int_sadd_ovf">'<tt>llvm.sadd.with.overflow.*</tt> Intrinsics</a></li>
-          <li><a href="#int_uadd_ovf">'<tt>llvm.uadd.with.overflow.*</tt> Intrinsics</a></li>
-          <li><a href="#int_ssub_ovf">'<tt>llvm.ssub.with.overflow.*</tt> Intrinsics</a></li>
-          <li><a href="#int_usub_ovf">'<tt>llvm.usub.with.overflow.*</tt> Intrinsics</a></li>
-          <li><a href="#int_smul_ovf">'<tt>llvm.smul.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_sadd_overflow">'<tt>llvm.sadd.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_uadd_overflow">'<tt>llvm.uadd.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_ssub_overflow">'<tt>llvm.ssub.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_usub_overflow">'<tt>llvm.usub.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_smul_overflow">'<tt>llvm.smul.with.overflow.*</tt> Intrinsics</a></li>
+          <li><a href="#int_umul_overflow">'<tt>llvm.umul.with.overflow.*</tt> Intrinsics</a></li>
         </ol>
       </li>
       <li><a href="#int_debugger">Debugger intrinsics</a></li>
@@ -505,6 +509,17 @@ All Global Variables and Functions have one of the following types of linkage:
   '<tt>static</tt>' keyword in C.
   </dd>
 
+  <dt><tt><b><a name="available_externally">available_externally</a></b></tt>:
+  </dt>
+
+  <dd>Globals with "<tt>available_externally</tt>" linkage are never emitted
+  into the object file corresponding to the LLVM module.  They exist to
+  allow inlining and other optimizations to take place given knowledge of the
+  definition of the global, which is known to be somewhere outside the module.
+  Globals with <tt>available_externally</tt> linkage are allowed to be discarded
+  at will, and are otherwise the same as <tt>linkonce_odr</tt>.  This linkage
+  type is only allowed on definitions, not declarations.</dd>
+
   <dt><tt><b><a name="linkage_linkonce">linkonce</a></b></tt>: </dt>
 
   <dd>Globals with "<tt>linkonce</tt>" linkage are merged with other globals of
@@ -542,9 +557,21 @@ All Global Variables and Functions have one of the following types of linkage:
   </dd>
 
   <dt><tt><b><a name="linkage_externweak">extern_weak</a></b></tt>: </dt>
+
   <dd>The semantics of this linkage follow the ELF object file model: the
     symbol is weak until linked, if not linked, the symbol becomes null instead
     of being an undefined reference.
+  </dd>
+
+  <dt><tt><b><a name="linkage_linkonce">linkonce_odr</a></b></tt>: </dt>
+  <dt><tt><b><a name="linkage_weak">weak_odr</a></b></tt>: </dt>
+  <dd>Some languages allow differing globals to be merged, such as two
+    functions with different semantics.  Other languages, such as <tt>C++</tt>,
+    ensure that only equivalent globals are ever merged (the "one definition
+    rule" - "ODR").  Such languages can use the <tt>linkonce_odr</tt>
+    and <tt>weak_odr</tt> linkage types to indicate that the global will only
+    be merged with equivalent globals.  These linkage types are otherwise the
+    same as their non-<tt>odr</tt> versions.
   </dd>
 
   <dt><tt><b><a name="linkage_external">externally visible</a></b></tt>:</dt>
@@ -588,10 +615,10 @@ preventing a collision.  Since "<tt>main</tt>" and "<tt>puts</tt>" are
 external (i.e., lacking any linkage declarations), they are accessible
 outside of the current module.</p>
 <p>It is illegal for a function <i>declaration</i>
-to have any linkage type other than "externally visible", <tt>dllimport</tt>,
+to have any linkage type other than "externally visible", <tt>dllimport</tt>
 or <tt>extern_weak</tt>.</p>
-<p>Aliases can have only <tt>external</tt>, <tt>internal</tt> and <tt>weak</tt>
-linkages.</p>
+<p>Aliases can have only <tt>external</tt>, <tt>internal</tt>, <tt>weak</tt>
+or <tt>weak_odr</tt> linkages.</p>
 </div>
 
 <!-- ======================================================================= -->
@@ -891,7 +918,7 @@ define [<a href="#linkage">linkage</a>] [<a href="#visibility">visibility</a>]
 
 <div class="doc_code">
 <pre>
-declare i32 @printf(i8* noalias , ...)
+declare i32 @printf(i8* noalias nocapture, ...)
 declare i32 @atoi(i8 zeroext)
 declare signext i8 @returns_signed_char()
 </pre>
@@ -929,7 +956,10 @@ declare signext i8 @returns_signed_char()
     belong to the caller not the callee (for example,
     <tt><a href="#readonly">readonly</a></tt> functions should not write to
     <tt>byval</tt> parameters). This is not a valid attribute for return
-    values. </dd>
+    values.  The byval attribute also supports specifying an alignment with the
+    align attribute.  This has a target-specific effect on the code generator
+    that usually indicates a desired alignment for the synthesized stack 
+    slot.</dd>
 
     <dt><tt>sret</tt></dt>
     <dd>This indicates that the pointer parameter specifies the address of a
@@ -1036,16 +1066,18 @@ exception it throws) based strictly on its arguments, without dereferencing any
 pointer arguments or otherwise accessing any mutable state (e.g. memory, control
 registers, etc) visible to caller functions.  It does not write through any
 pointer arguments (including <tt><a href="#byval">byval</a></tt> arguments) and
-never changes any state visible to callers.</dd>
+never changes any state visible to callers.  readnone functions may not throw
+an exception that escapes into the caller.</dd>
 
 <dt><tt><a name="readonly">readonly</a></tt></dt>
 <dd>This attribute indicates that the function does not write through any
 pointer arguments (including <tt><a href="#byval">byval</a></tt> arguments)
 or otherwise modify any state (e.g. memory, control registers, etc) visible to
 caller functions.  It may dereference pointer arguments and read state that may
-be set in the caller.  A readonly function always returns the same value (or
-throws the same exception) when called with the same set of arguments and global
-state.</dd>
+be set in the caller.  A readonly function always returns the same value when
+called with the same set of arguments and global
+state.  readonly functions may not throw an exception that escapes into the
+caller.</dd>
 
 <dt><tt><a name="ssp">ssp</a></tt></dt>
 <dd>This attribute indicates that the function should emit a stack smashing
@@ -1556,6 +1588,10 @@ reference to another object, which must live in memory. Pointer types may have
 an optional address space attribute defining the target-specific numbered 
 address space where the pointed-to object resides. The default address space is 
 zero.</p>
+
+<p>Note that LLVM does not permit pointers to void (<tt>void*</tt>) nor does 
+it permit pointers to labels (<tt>label*</tt>).  Use <tt>i8*</tt> instead.</p>
+
 <h5>Syntax:</h5>
 <pre>  &lt;type&gt; *<br></pre>
 <h5>Examples:</h5>
@@ -1667,7 +1703,7 @@ pointer to any of the types it is lexically a member of.  Example of up
 references (with their equivalent as named type declarations) include:</p>
 
 <pre>
-   { \2 * }                %x = type { %t* }
+   { \2 * }                %x = type { %x* }
    { \2 }*                 %y = type { %y }*
    \1*                     %z = type %z*
 </pre>
@@ -1750,25 +1786,42 @@ them all and their syntax.</p>
 
 </dl>
 
-<p>The one non-intuitive notation for constants is the optional hexadecimal form
+<p>The one non-intuitive notation for constants is the hexadecimal form
 of floating point constants.  For example, the form '<tt>double
 0x432ff973cafa8000</tt>' is equivalent to (but harder to read than) '<tt>double
 4.5e+15</tt>'.  The only time hexadecimal floating point constants are required
 (and the only time that they are generated by the disassembler) is when a 
 floating point constant must be emitted but it cannot be represented as a 
-decimal floating point number.  For example, NaN's, infinities, and other 
+decimal floating point number in a reasonable number of digits.  For example,
+NaN's, infinities, and other 
 special values are represented in their IEEE hexadecimal format so that 
 assembly and disassembly do not cause any bits to change in the constants.</p>
-
+<p>When using the hexadecimal form, constants of types float and double are
+represented using the 16-digit form shown above (which matches the IEEE754
+representation for double); float values must, however, be exactly representable
+as IEE754 single precision.
+Hexadecimal format is always used for long
+double, and there are three forms of long double.  The 80-bit
+format used by x86 is represented as <tt>0xK</tt>
+followed by 20 hexadecimal digits.
+The 128-bit format used by PowerPC (two adjacent doubles) is represented
+by <tt>0xM</tt> followed by 32 hexadecimal digits.  The IEEE 128-bit
+format is represented
+by <tt>0xL</tt> followed by 32 hexadecimal digits; no currently supported
+target uses this format.  Long doubles will only work if they match
+the long double format on your target.  All hexadecimal formats are big-endian
+(sign bit at the left).</p>
 </div>
 
 <!-- ======================================================================= -->
-<div class="doc_subsection"><a name="aggregateconstants">Aggregate Constants</a>
+<div class="doc_subsection">
+<a name="aggregateconstants"> <!-- old anchor -->
+<a name="complexconstants">Complex Constants</a></a>
 </div>
 
 <div class="doc_text">
-<p>Aggregate constants arise from aggregation of simple constants
-and smaller aggregate constants.</p>
+<p>Complex constants are a (potentially recursive) combination of simple
+constants and smaller complex constants.</p>
 
 <dl>
   <dt><b>Structure constants</b></dt>
@@ -1807,6 +1860,14 @@ and smaller aggregate constants.</p>
   This is often used to avoid having to print large zero initializers (e.g. for
   large arrays) and is always exactly equivalent to using explicit zero
   initializers.
+  </dd>
+
+  <dt><b>Metadata node</b></dt>
+
+  <dd>A metadata node is a structure-like constant with the type of an empty
+  struct.  For example: "<tt>{ } !{ i32 0, { } !"test" }</tt>". Unlike other
+  constants that are meant to be interpreted as part of the instruction stream,
+  metadata is a place to attach additional information such as debug info.
   </dd>
 </dl>
 
@@ -1922,14 +1983,9 @@ following is the syntax for constant expressions:</p>
   <i>really</i> dangerous!</dd>
 
   <dt><b><tt>bitcast ( CST to TYPE )</tt></b></dt>
-  <dd>Convert a constant, CST, to another TYPE. The size of CST and TYPE must be
-  identical (same number of bits). The conversion is done as if the CST value
-  was stored to memory and read back as TYPE. In other words, no bits change 
-  with this operator, just the type.  This can be used for conversion of
-  vector types to any other type, as long as they have the same bit width. For
-  pointers it is only valid to cast to another pointer type. It is not valid
-  to bitcast to or from an aggregate type.
-  </dd>
+  <dd>Convert a constant, CST, to another TYPE. The constraints of the operands
+      are the same as those for the <a href="#i_bitcast">bitcast
+      instruction</a>.</dd>
 
   <dt><b><tt>getelementptr ( CSTPTR, IDX0, IDX1, ... )</tt></b></dt>
 
@@ -1948,6 +2004,12 @@ following is the syntax for constant expressions:</p>
 
   <dt><b><tt>fcmp COND ( VAL1, VAL2 )</tt></b></dt>
   <dd>Performs the <a href="#i_fcmp">fcmp operation</a> on constants.</dd>
+
+  <dt><b><tt>vicmp COND ( VAL1, VAL2 )</tt></b></dt>
+  <dd>Performs the <a href="#i_vicmp">vicmp operation</a> on constants.</dd>
+
+  <dt><b><tt>vfcmp COND ( VAL1, VAL2 )</tt></b></dt>
+  <dd>Performs the <a href="#i_vfcmp">vfcmp operation</a> on constants.</dd>
 
   <dt><b><tt>extractelement ( VAL, IDX )</tt></b></dt>
 
@@ -1973,6 +2035,35 @@ following is the syntax for constant expressions:</p>
   the corresponding instruction (e.g. no bitwise operations on floating point
   values are allowed).</dd>
 </dl>
+</div>
+
+<!-- ======================================================================= -->
+<div class="doc_subsection"><a name="metadata">Embedded Metadata</a>
+</div>
+
+<div class="doc_text">
+
+<p>Embedded metadata provides a way to attach arbitrary data to the
+instruction stream without affecting the behaviour of the program.  There are
+two metadata primitives, strings and nodes. All metadata has the type of an
+empty struct and is identified in syntax by a preceding exclamation point
+('<tt>!</tt>').
+</p>
+
+<p>A metadata string is a string surrounded by double quotes.  It can contain
+any character by escaping non-printable characters with "\xx" where "xx" is
+the two digit hex code.  For example: "<tt>!"test\00"</tt>".
+</p>
+
+<p>Metadata nodes are represented with notation similar to structure constants
+(a comma separated list of elements, surrounded by braces and preceeded by an
+exclamation point).  For example: "<tt>!{ { } !"test\00", i32 10}</tt>".
+</p>
+
+<p>Optimizations may rely on metadata to provide additional information about
+the program that isn't available in the instructions, or that isn't easily
+computable. Similarly, the code generator may expect a certain metadata format
+to be used to express debugging information.</p>
 </div>
 
 <!-- *********************************************************************** -->
@@ -2114,7 +2205,7 @@ return value.</p>
 <pre>
   ret i32 5                       <i>; Return an integer value of 5</i>
   ret void                        <i>; Return from a void function</i>
-  ret { i32, i8 } { i32 4, i8 2 } <i>; Return an aggregate of values 4 and 2</i>
+  ret { i32, i8 } { i32 4, i8 2 } <i>; Return a struct of values 4 and 2</i>
 </pre>
 
 <p>Note that the code generator does not yet fully support large
@@ -3446,7 +3537,13 @@ alignment may produce less efficient code. An alignment of 1 is always
 safe.
 </p>
 <h5>Semantics:</h5>
-<p>The location of memory pointed to is loaded.</p>
+<p>The location of memory pointed to is loaded.  If the value being loaded
+is of scalar type then the number of bytes read does not exceed the minimum
+number of bytes needed to hold all bits of the type.  For example, loading an
+<tt>i24</tt> reads at most three bytes.  When loading a value of a type like
+<tt>i20</tt> with a size that is not an integral number of bytes, the result
+is undefined if the value was not originally written using a store of the
+same type.</p>
 <h5>Examples:</h5>
 <pre>  %ptr = <a href="#i_alloca">alloca</a> i32                               <i>; yields {i32*}:ptr</i>
   <a
@@ -3485,7 +3582,14 @@ safe.
 </p>
 <h5>Semantics:</h5>
 <p>The contents of memory are updated to contain '<tt>&lt;value&gt;</tt>'
-at the location specified by the '<tt>&lt;pointer&gt;</tt>' operand.</p>
+at the location specified by the '<tt>&lt;pointer&gt;</tt>' operand.
+If '<tt>&lt;value&gt;</tt>' is of scalar type then the number of bytes
+written does not exceed the minimum number of bytes needed to hold all
+bits of the type.  For example, storing an <tt>i24</tt> writes at most
+three bytes.  When writing a value of a type like <tt>i20</tt> with a
+size that is not an integral number of bytes, it is unspecified what
+happens to the extra bits that do not belong to the type, but they will
+typically be overwritten.</p>
 <h5>Example:</h5>
 <pre>  %ptr = <a href="#i_alloca">alloca</a> i32                               <i>; yields {i32*}:ptr</i>
   store i32 3, i32* %ptr                          <i>; yields {void}</i>
@@ -3527,8 +3631,7 @@ the pointer before continuing calculation.</p>
 <p>The type of each index argument depends on the type it is indexing into.
 When indexing into a (packed) structure, only <tt>i32</tt> integer
 <b>constants</b> are allowed.  When indexing into an array, pointer or vector,
-only integers of 32 or 64 bits are allowed (also non-constants). 32-bit values
-will be sign extended to 64-bits if required.</p>
+integers of any width are allowed (also non-constants).</p>
 
 <p>For example, let's consider a C code fragment and how it gets
 compiled to LLVM:</p>
@@ -3594,11 +3697,13 @@ the LLVM code for the given testcase is equivalent to:</p>
   }
 </pre>
 
-<p>Note that it is undefined to access an array out of bounds: array and 
-pointer indexes must always be within the defined bounds of the array type.
-The one exception for this rule is zero length arrays.  These arrays are
-defined to be accessible as variable length arrays, which requires access
-beyond the zero'th element.</p>
+<p>Note that it is undefined to access an array out of bounds: array
+and pointer indexes must always be within the defined bounds of the
+array type when accessed with an instruction that dereferences the
+pointer (e.g. a load or store instruction).  The one exception for
+this rule is zero length arrays.  These arrays are defined to be
+accessible as variable length arrays, which requires access beyond the
+zero'th element.</p>
 
 <p>The getelementptr instruction is often confusing.  For some more insight
 into how it works, see <a href="GetElementPtr.html">the getelementptr 
@@ -3613,6 +3718,8 @@ FAQ</a>.</p>
     %vptr = getelementptr {i32, &lt;2 x i8&gt;}* %svptr, i64 0, i32 1, i32 1
     <i>; yields i8*:eptr</i>
     %eptr = getelementptr [12 x i8]* %aptr, i64 0, i32 1
+    <i>; yields i32*:iptr</i>
+    %iptr = getelementptr [10 x i32]* @arr, i16 0, i16 0
 </pre>
 </div>
 
@@ -4251,6 +4358,109 @@ always yields an <a href="#t_primitive">i1</a> result, as follows:</p>
 <p>Note that the code generator does not yet support vector types with
    the <tt>fcmp</tt> instruction.</p>
 
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="i_vicmp">'<tt>vicmp</tt>' Instruction</a>
+</div>
+<div class="doc_text">
+<h5>Syntax:</h5>
+<pre>  &lt;result&gt; = vicmp &lt;cond&gt; &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;   <i>; yields {ty}:result</i>
+</pre>
+<h5>Overview:</h5>
+<p>The '<tt>vicmp</tt>' instruction returns an integer vector value based on
+element-wise comparison of its two integer vector operands.</p>
+<h5>Arguments:</h5>
+<p>The '<tt>vicmp</tt>' instruction takes three operands. The first operand is
+the condition code indicating the kind of comparison to perform. It is not
+a value, just a keyword. The possible condition code are:</p>
+<ol>
+  <li><tt>eq</tt>: equal</li>
+  <li><tt>ne</tt>: not equal </li>
+  <li><tt>ugt</tt>: unsigned greater than</li>
+  <li><tt>uge</tt>: unsigned greater or equal</li>
+  <li><tt>ult</tt>: unsigned less than</li>
+  <li><tt>ule</tt>: unsigned less or equal</li>
+  <li><tt>sgt</tt>: signed greater than</li>
+  <li><tt>sge</tt>: signed greater or equal</li>
+  <li><tt>slt</tt>: signed less than</li>
+  <li><tt>sle</tt>: signed less or equal</li>
+</ol>
+<p>The remaining two arguments must be <a href="#t_vector">vector</a> or
+<a href="#t_integer">integer</a> typed. They must also be identical types.</p>
+<h5>Semantics:</h5>
+<p>The '<tt>vicmp</tt>' instruction compares <tt>op1</tt> and <tt>op2</tt>
+according to the condition code given as <tt>cond</tt>. The comparison yields a 
+<a href="#t_vector">vector</a> of <a href="#t_integer">integer</a> result, of
+identical type as the values being compared.  The most significant bit in each
+element is 1 if the element-wise comparison evaluates to true, and is 0
+otherwise.  All other bits of the result are undefined.  The condition codes
+are evaluated identically to the <a href="#i_icmp">'<tt>icmp</tt>'
+instruction</a>.</p>
+
+<h5>Example:</h5>
+<pre>
+  &lt;result&gt; = vicmp eq &lt;2 x i32&gt; &lt; i32 4, i32 0&gt;, &lt; i32 5, i32 0&gt;   <i>; yields: result=&lt;2 x i32&gt; &lt; i32 0, i32 -1 &gt;</i>
+  &lt;result&gt; = vicmp ult &lt;2 x i8 &gt; &lt; i8 1, i8 2&gt;, &lt; i8 2, i8 2 &gt;        <i>; yields: result=&lt;2 x i8&gt; &lt; i8 -1, i8 0 &gt;</i>
+</pre>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="i_vfcmp">'<tt>vfcmp</tt>' Instruction</a>
+</div>
+<div class="doc_text">
+<h5>Syntax:</h5>
+<pre>  &lt;result&gt; = vfcmp &lt;cond&gt; &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;</pre>
+<h5>Overview:</h5>
+<p>The '<tt>vfcmp</tt>' instruction returns an integer vector value based on
+element-wise comparison of its two floating point vector operands.  The output
+elements have the same width as the input elements.</p>
+<h5>Arguments:</h5>
+<p>The '<tt>vfcmp</tt>' instruction takes three operands. The first operand is
+the condition code indicating the kind of comparison to perform. It is not
+a value, just a keyword. The possible condition code are:</p>
+<ol>
+  <li><tt>false</tt>: no comparison, always returns false</li>
+  <li><tt>oeq</tt>: ordered and equal</li>
+  <li><tt>ogt</tt>: ordered and greater than </li>
+  <li><tt>oge</tt>: ordered and greater than or equal</li>
+  <li><tt>olt</tt>: ordered and less than </li>
+  <li><tt>ole</tt>: ordered and less than or equal</li>
+  <li><tt>one</tt>: ordered and not equal</li>
+  <li><tt>ord</tt>: ordered (no nans)</li>
+  <li><tt>ueq</tt>: unordered or equal</li>
+  <li><tt>ugt</tt>: unordered or greater than </li>
+  <li><tt>uge</tt>: unordered or greater than or equal</li>
+  <li><tt>ult</tt>: unordered or less than </li>
+  <li><tt>ule</tt>: unordered or less than or equal</li>
+  <li><tt>une</tt>: unordered or not equal</li>
+  <li><tt>uno</tt>: unordered (either nans)</li>
+  <li><tt>true</tt>: no comparison, always returns true</li>
+</ol>
+<p>The remaining two arguments must be <a href="#t_vector">vector</a> of 
+<a href="#t_floating">floating point</a> typed. They must also be identical
+types.</p>
+<h5>Semantics:</h5>
+<p>The '<tt>vfcmp</tt>' instruction compares <tt>op1</tt> and <tt>op2</tt>
+according to  the condition code given as <tt>cond</tt>. The comparison yields a 
+<a href="#t_vector">vector</a> of <a href="#t_integer">integer</a> result, with
+an identical number of elements as the values being compared, and each element
+having identical with to the width of the floating point elements. The most 
+significant bit in each element is 1 if the element-wise comparison evaluates to
+true, and is 0 otherwise.  All other bits of the result are undefined.  The
+condition codes are evaluated identically to the 
+<a href="#i_fcmp">'<tt>fcmp</tt>' instruction</a>.</p>
+
+<h5>Example:</h5>
+<pre>
+  <i>; yields: result=&lt;2 x i32&gt; &lt; i32 0, i32 -1 &gt;</i>
+  &lt;result&gt; = vfcmp oeq &lt;2 x float&gt; &lt; float 4, float 0 &gt;, &lt; float 5, float 0 &gt;
+  
+  <i>; yields: result=&lt;2 x i64&gt; &lt; i64 -1, i64 0 &gt;</i>
+  &lt;result&gt; = vfcmp ult &lt;2 x double&gt; &lt; double 1, double 2 &gt;, &lt; double 2, double 2&gt;
+</pre>
 </div>
 
 <!-- _______________________________________________________________________ -->
@@ -5799,9 +6009,21 @@ reversed.  That is, the <tt>0</tt>th bit in <tt>%repl</tt> replaces the
 
 </div>
 
+<!-- ======================================================================= -->
+<div class="doc_subsection">
+  <a name="int_overflow">Arithmetic with Overflow Intrinsics</a>
+</div>
+
+<div class="doc_text">
+<p>
+LLVM provides intrinsics for some arithmetic with overflow operations.
+</p>
+
+</div>
+
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="int_sadd_ovf">'<tt>llvm.sadd.with.overflow.*</tt>' Intrinsics</a>
+  <a name="int_sadd_overflow">'<tt>llvm.sadd.with.overflow.*</tt>' Intrinsics</a>
 </div>
 
 <div class="doc_text">
@@ -5809,7 +6031,7 @@ reversed.  That is, the <tt>0</tt>th bit in <tt>%repl</tt> replaces the
 <h5>Syntax:</h5>
 
 <p>This is an overloaded intrinsic. You can use <tt>llvm.sadd.with.overflow</tt>
-on any integer bit width. However, not all targets support all bit widths.</p>
+on any integer bit width.</p>
 
 <pre>
   declare {i16, i1} @llvm.sadd.with.overflow.i16(i16 %a, i16 %b)
@@ -5849,7 +6071,7 @@ is a bit specifying if the signed summation resulted in an overflow.</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="int_uadd_ovf">'<tt>llvm.uadd.with.overflow.*</tt>' Intrinsics</a>
+  <a name="int_uadd_overflow">'<tt>llvm.uadd.with.overflow.*</tt>' Intrinsics</a>
 </div>
 
 <div class="doc_text">
@@ -5857,7 +6079,7 @@ is a bit specifying if the signed summation resulted in an overflow.</p>
 <h5>Syntax:</h5>
 
 <p>This is an overloaded intrinsic. You can use <tt>llvm.uadd.with.overflow</tt>
-on any integer bit width. However, not all targets support all bit widths.</p>
+on any integer bit width.</p>
 
 <pre>
   declare {i16, i1} @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
@@ -5897,7 +6119,7 @@ specifying if the unsigned summation resulted in a carry.</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="int_ssub_ovf">'<tt>llvm.ssub.with.overflow.*</tt>' Intrinsics</a>
+  <a name="int_ssub_overflow">'<tt>llvm.ssub.with.overflow.*</tt>' Intrinsics</a>
 </div>
 
 <div class="doc_text">
@@ -5905,7 +6127,7 @@ specifying if the unsigned summation resulted in a carry.</p>
 <h5>Syntax:</h5>
 
 <p>This is an overloaded intrinsic. You can use <tt>llvm.ssub.with.overflow</tt>
-on any integer bit width. However, not all targets support all bit widths.</p>
+on any integer bit width.</p>
 
 <pre>
   declare {i16, i1} @llvm.ssub.with.overflow.i16(i16 %a, i16 %b)
@@ -5945,7 +6167,7 @@ specifying if the signed subtraction resulted in an overflow.</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="int_usub_ovf">'<tt>llvm.usub.with.overflow.*</tt>' Intrinsics</a>
+  <a name="int_usub_overflow">'<tt>llvm.usub.with.overflow.*</tt>' Intrinsics</a>
 </div>
 
 <div class="doc_text">
@@ -5953,7 +6175,7 @@ specifying if the signed subtraction resulted in an overflow.</p>
 <h5>Syntax:</h5>
 
 <p>This is an overloaded intrinsic. You can use <tt>llvm.usub.with.overflow</tt>
-on any integer bit width. However, not all targets support all bit widths.</p>
+on any integer bit width.</p>
 
 <pre>
   declare {i16, i1} @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
@@ -5993,7 +6215,7 @@ specifying if the unsigned subtraction resulted in an overflow.</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="int_smul_ovf">'<tt>llvm.smul.with.overflow.*</tt>' Intrinsics</a>
+  <a name="int_smul_overflow">'<tt>llvm.smul.with.overflow.*</tt>' Intrinsics</a>
 </div>
 
 <div class="doc_text">
@@ -6001,7 +6223,7 @@ specifying if the unsigned subtraction resulted in an overflow.</p>
 <h5>Syntax:</h5>
 
 <p>This is an overloaded intrinsic. You can use <tt>llvm.smul.with.overflow</tt>
-on any integer bit width. However, not all targets support all bit widths.</p>
+on any integer bit width.</p>
 
 <pre>
   declare {i16, i1} @llvm.smul.with.overflow.i16(i16 %a, i16 %b)
@@ -6033,6 +6255,59 @@ overflow.</p>
 <h5>Examples:</h5>
 <pre>
   %res = call {i32, i1} @llvm.smul.with.overflow.i32(i32 %a, i32 %b)
+  %sum = extractvalue {i32, i1} %res, 0
+  %obit = extractvalue {i32, i1} %res, 1
+  br i1 %obit, label %overflow, label %normal
+</pre>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="int_umul_overflow">'<tt>llvm.umul.with.overflow.*</tt>' Intrinsics</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+
+<p>This is an overloaded intrinsic. You can use <tt>llvm.umul.with.overflow</tt>
+on any integer bit width.</p>
+
+<pre>
+  declare {i16, i1} @llvm.umul.with.overflow.i16(i16 %a, i16 %b)
+  declare {i32, i1} @llvm.umul.with.overflow.i32(i32 %a, i32 %b)
+  declare {i64, i1} @llvm.umul.with.overflow.i64(i64 %a, i64 %b)
+</pre>
+
+<h5>Overview:</h5>
+
+<p><i><b>Warning:</b> '<tt>llvm.umul.with.overflow</tt>' is badly broken. It is
+actively being fixed, but it should not currently be used!</i></p>
+
+<p>The '<tt>llvm.umul.with.overflow</tt>' family of intrinsic functions perform
+a unsigned multiplication of the two arguments, and indicate whether an overflow
+occurred during the unsigned multiplication.</p>
+
+<h5>Arguments:</h5>
+
+<p>The arguments (%a and %b) and the first element of the result structure may
+be of integer types of any bit width, but they must have the same bit width. The
+second element of the result structure must be of type <tt>i1</tt>. <tt>%a</tt>
+and <tt>%b</tt> are the two values that will undergo unsigned
+multiplication.</p>
+
+<h5>Semantics:</h5>
+
+<p>The '<tt>llvm.umul.with.overflow</tt>' family of intrinsic functions perform
+an unsigned multiplication of the two arguments. They return a structure &mdash;
+the first element of which is the multiplication, and the second element of
+which is a bit specifying if the unsigned multiplication resulted in an
+overflow.</p>
+
+<h5>Examples:</h5>
+<pre>
+  %res = call {i32, i1} @llvm.umul.with.overflow.i32(i32 %a, i32 %b)
   %sum = extractvalue {i32, i1} %res, 0
   %obit = extractvalue {i32, i1} %res, 1
   br i1 %obit, label %overflow, label %normal
@@ -6800,7 +7075,7 @@ declare void @llvm.stackprotector( i8* &lt;guard&gt;, i8** &lt;slot&gt; )
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-03-02 18:50:57 -0800 (Mon, 02 Mar 2009) $
+  Last modified: $Date: 2009-05-03 12:06:00 -0700 (Sun, 03 May 2009) $
 </address>
 
 </body>

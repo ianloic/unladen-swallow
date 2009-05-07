@@ -17,12 +17,14 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Function.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include <map>
 using namespace llvm;
@@ -46,7 +48,7 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
     NewBB->getInstList().push_back(NewInst);
     ValueMap[II] = NewInst;                // Add instruction map to value.
     
-    hasCalls |= isa<CallInst>(II);
+    hasCalls |= (isa<CallInst>(II) && !isa<DbgInfoIntrinsic>(II));
     if (const AllocaInst *AI = dyn_cast<AllocaInst>(II)) {
       if (isa<ConstantInt>(AI->getArraySize()))
         hasStaticAllocas = true;
@@ -181,7 +183,7 @@ namespace {
     const char *NameSuffix;
     ClonedCodeInfo *CodeInfo;
     const TargetData *TD;
-
+    Value *DbgFnStart;
   public:
     PruningFunctionCloner(Function *newFunc, const Function *oldFunc,
                           DenseMap<const Value*, Value*> &valueMap,
@@ -190,7 +192,7 @@ namespace {
                           ClonedCodeInfo *codeInfo,
                           const TargetData *td)
     : NewFunc(newFunc), OldFunc(oldFunc), ValueMap(valueMap), Returns(returns),
-      NameSuffix(nameSuffix), CodeInfo(codeInfo), TD(td) {
+      NameSuffix(nameSuffix), CodeInfo(codeInfo), TD(td), DbgFnStart(NULL) {
     }
 
     /// CloneBlock - The specified block is found to be reachable, clone it and
@@ -231,14 +233,27 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
       ValueMap[II] = C;
       continue;
     }
-    
+
+    // Do not clone llvm.dbg.region.end. It will be adjusted by the inliner.
+    if (const DbgFuncStartInst *DFSI = dyn_cast<DbgFuncStartInst>(II)) {
+      if (DbgFnStart == NULL) {
+        DISubprogram SP(cast<GlobalVariable>(DFSI->getSubprogram()));
+        if (SP.describes(BB->getParent()))
+          DbgFnStart = DFSI->getSubprogram();
+      }
+    } 
+    if (const DbgRegionEndInst *DREIS = dyn_cast<DbgRegionEndInst>(II)) {
+      if (DREIS->getContext() == DbgFnStart)
+        continue;
+    }
+      
     Instruction *NewInst = II->clone();
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
     ValueMap[II] = NewInst;                // Add instruction map to value.
     
-    hasCalls |= isa<CallInst>(II);
+    hasCalls |= (isa<CallInst>(II) && !isa<DbgInfoIntrinsic>(II));
     if (const AllocaInst *AI = dyn_cast<AllocaInst>(II)) {
       if (isa<ConstantInt>(AI->getArraySize()))
         hasStaticAllocas = true;
@@ -324,7 +339,7 @@ ConstantFoldMappedInstruction(const Instruction *I) {
     if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Ops[0]))
       if (!LI->isVolatile() && CE->getOpcode() == Instruction::GetElementPtr)
         if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0)))
-          if (GV->isConstant() && !GV->isDeclaration())
+          if (GV->isConstant() && GV->hasDefinitiveInitializer())
             return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(),
                                                           CE);
 

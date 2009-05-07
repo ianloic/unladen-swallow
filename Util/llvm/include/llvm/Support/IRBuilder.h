@@ -51,6 +51,10 @@ public:
   /// getFolder - Get the constant folder being used.
   const T& getFolder() { return Folder; }
 
+  /// isNamePreserving - Return true if this builder is configured to actually
+  /// add the requested names to IR created through it.
+  bool isNamePreserving() const { return preserveNames; }
+  
   //===--------------------------------------------------------------------===//
   // Builder configuration methods
   //===--------------------------------------------------------------------===//
@@ -318,32 +322,64 @@ public:
         return Folder.CreateGetElementPtr(PC, &IC, 1);
     return Insert(GetElementPtrInst::Create(Ptr, Idx), Name);
   }
-  Value *CreateStructGEP(Value *Ptr, unsigned Idx, const char *Name = "") {
-    llvm::Value *Idxs[] = {
-      ConstantInt::get(llvm::Type::Int32Ty, 0),
-      ConstantInt::get(llvm::Type::Int32Ty, Idx)
+  Value *CreateConstGEP1_32(Value *Ptr, unsigned Idx0, const char *Name = "") {
+    Value *Idx = ConstantInt::get(Type::Int32Ty, Idx0);
+
+    if (Constant *PC = dyn_cast<Constant>(Ptr))
+      return Folder.CreateGetElementPtr(PC, &Idx, 1);
+
+    return Insert(GetElementPtrInst::Create(Ptr, &Idx, &Idx+1), Name);    
+  }
+  Value *CreateConstGEP2_32(Value *Ptr, unsigned Idx0, unsigned Idx1, 
+                    const char *Name = "") {
+    Value *Idxs[] = {
+      ConstantInt::get(Type::Int32Ty, Idx0),
+      ConstantInt::get(Type::Int32Ty, Idx1)
     };
 
     if (Constant *PC = dyn_cast<Constant>(Ptr))
       return Folder.CreateGetElementPtr(PC, Idxs, 2);
 
-    return Insert(GetElementPtrInst::Create(Ptr, Idxs, Idxs+2), Name);
+    return Insert(GetElementPtrInst::Create(Ptr, Idxs, Idxs+2), Name);    
+  }
+  Value *CreateConstGEP1_64(Value *Ptr, uint64_t Idx0, const char *Name = "") {
+    Value *Idx = ConstantInt::get(Type::Int64Ty, Idx0);
+
+    if (Constant *PC = dyn_cast<Constant>(Ptr))
+      return Folder.CreateGetElementPtr(PC, &Idx, 1);
+
+    return Insert(GetElementPtrInst::Create(Ptr, &Idx, &Idx+1), Name);    
+  }
+  Value *CreateConstGEP2_64(Value *Ptr, uint64_t Idx0, uint64_t Idx1, 
+                    const char *Name = "") {
+    Value *Idxs[] = {
+      ConstantInt::get(Type::Int64Ty, Idx0),
+      ConstantInt::get(Type::Int64Ty, Idx1)
+    };
+
+    if (Constant *PC = dyn_cast<Constant>(Ptr))
+      return Folder.CreateGetElementPtr(PC, Idxs, 2);
+
+    return Insert(GetElementPtrInst::Create(Ptr, Idxs, Idxs+2), Name);    
+  }
+  Value *CreateStructGEP(Value *Ptr, unsigned Idx, const char *Name = "") {
+    return CreateConstGEP2_32(Ptr, 0, Idx, Name);
   }
   Value *CreateGlobalString(const char *Str = "", const char *Name = "") {
     Constant *StrConstant = ConstantArray::get(Str, true);
-    GlobalVariable *gv = new llvm::GlobalVariable(StrConstant->getType(),
-                                                  true,
-                                                  GlobalValue::InternalLinkage,
-                                                  StrConstant,
-                                                  "",
-                                                  BB->getParent()->getParent(),
-                                                  false);
+    GlobalVariable *gv = new GlobalVariable(StrConstant->getType(),
+                                            true,
+                                            GlobalValue::InternalLinkage,
+                                            StrConstant,
+                                            "",
+                                            BB->getParent()->getParent(),
+                                            false);
     gv->setName(Name);
     return gv;
   }
   Value *CreateGlobalStringPtr(const char *Str = "", const char *Name = "") {
     Value *gv = CreateGlobalString(Str, Name);
-    Value *zero = llvm::ConstantInt::get(llvm::Type::Int32Ty, 0);
+    Value *zero = ConstantInt::get(Type::Int32Ty, 0);
     Value *Args[] = { zero, zero };
     return CreateGEP(gv, Args, Args+2, Name);
   }
@@ -635,16 +671,30 @@ public:
 
   /// CreateIsNull - Return an i1 value testing if \arg Arg is null.
   Value *CreateIsNull(Value *Arg, const char *Name = "") {
-    return CreateICmpEQ(Arg, llvm::Constant::getNullValue(Arg->getType()), 
+    return CreateICmpEQ(Arg, Constant::getNullValue(Arg->getType()),
                         Name);
   }
 
   /// CreateIsNotNull - Return an i1 value testing if \arg Arg is not null.
   Value *CreateIsNotNull(Value *Arg, const char *Name = "") {
-    return CreateICmpNE(Arg, llvm::Constant::getNullValue(Arg->getType()), 
+    return CreateICmpNE(Arg, Constant::getNullValue(Arg->getType()),
                         Name);
   }
-  
+
+  /// CreatePtrDiff - Return the i64 difference between two pointer values,
+  /// dividing out the size of the pointed-to objects.  This is intended to
+  /// implement C-style pointer subtraction.
+  Value *CreatePtrDiff(Value *LHS, Value *RHS, const char *Name = "") {
+    assert(LHS->getType() == RHS->getType() &&
+           "Pointer subtraction operand types must match!");
+    const PointerType *ArgType = cast<PointerType>(LHS->getType());
+    Value *LHS_int = CreatePtrToInt(LHS, Type::Int64Ty);
+    Value *RHS_int = CreatePtrToInt(RHS, Type::Int64Ty);
+    Value *Difference = CreateSub(LHS_int, RHS_int);
+    return CreateSDiv(Difference,
+                      ConstantExpr::getSizeOf(ArgType->getElementType()),
+                      Name);
+  }
 };
 
 }

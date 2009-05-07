@@ -55,7 +55,8 @@ ifeq ($(MAKECMDGOALS),tools-only)
 endif
 
 ifeq ($(MAKECMDGOALS),install-clang)
-  DIRS := tools/clang/Driver tools/clang/lib/Headers tools/clang/tools/ccc
+  DIRS := tools/clang/tools/driver tools/clang/tools/clang-cc \
+	tools/clang/lib/Headers tools/clang/docs
   OPTIONAL_DIRS :=
   NO_INSTALL = 1
 endif
@@ -117,8 +118,6 @@ debug-opt-prof:
 dist-hook::
 	$(Echo) Eliminating files constructed by configure
 	$(Verb) $(RM) -f \
-	  $(TopDistDir)/include/llvm/ADT/hash_map.h  \
-	  $(TopDistDir)/include/llvm/ADT/hash_set.h  \
 	  $(TopDistDir)/include/llvm/ADT/iterator.h  \
 	  $(TopDistDir)/include/llvm/Config/config.h  \
 	  $(TopDistDir)/include/llvm/Support/DataTypes.h  \
@@ -137,8 +136,6 @@ install-libs: install
 FilesToConfig := \
   include/llvm/Config/config.h \
   include/llvm/Support/DataTypes.h \
-  include/llvm/ADT/hash_map.h \
-  include/llvm/ADT/hash_set.h \
   include/llvm/ADT/iterator.h
 FilesToConfigPATH  := $(addprefix $(LLVM_OBJ_ROOT)/,$(FilesToConfig))
 
@@ -190,7 +187,7 @@ SVN = svn
 SVN-UPDATE-OPTIONS =
 AWK = awk
 SUB-SVN-DIRS = $(AWK) '/\?\ \ \ \ \ \ / {print $$2}'   \
-		| LANG=C xargs $(SVN) info 2>/dev/null \
+		| LC_ALL=C xargs $(SVN) info 2>/dev/null \
 		| $(AWK) '/Path:\ / {print $$2}'
 
 update:

@@ -11,6 +11,15 @@
 // instruction or some other User instance which refers to a Value.  The Use
 // class keeps the "use list" of the referenced value up to date.
 //
+// Pointer tagging is used to efficiently find the User corresponding
+// to a Use without having to store a User pointer in every Use. A
+// User is preceded in memory by all the Uses corresponding to its
+// operands, and the low bits of one of the fields (Prev) of the Use
+// class are used to encode offsets to be able to find that User given
+// a pointer to any Use. For details, see:
+//
+//   http://www.llvm.org/docs/ProgrammersManual.html#UserLayout
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_USE_H
@@ -24,11 +33,21 @@ namespace llvm {
 
 class Value;
 class User;
-
+class Use;
 
 /// Tag - generic tag type for (at least 32 bit) pointers
 enum Tag { noTag, tagOne, tagTwo, tagThree };
 
+// Use** is only 4-byte aligned.
+template<>
+class PointerLikeTypeTraits<Use**> {
+public:
+  static inline void *getAsVoidPointer(Use** P) { return P; }
+  static inline Use **getFromVoidPointer(void *P) {
+    return static_cast<Use**>(P);
+  }
+  enum { NumLowBitsAvailable = 2 };
+};
 
 //===----------------------------------------------------------------------===//
 //                                  Use Class
@@ -92,6 +111,8 @@ public:
   /// a User changes.
   static void zap(Use *Start, const Use *Stop, bool del = false);
 
+  /// getPrefix - Return deletable pointer if appropriate
+  Use *getPrefix();
 private:
   const Use* getImpliedUser() const;
   static Use *initTags(Use *Start, Use *Stop, ptrdiff_t Done = 0);
@@ -210,7 +231,7 @@ template<> struct simplify_type<value_use_iterator<const User> > {
 
 template<> struct simplify_type<const value_use_iterator<const User> >
   : public simplify_type<value_use_iterator<const User> > {};
-
+ 
 } // End llvm namespace
 
 #endif

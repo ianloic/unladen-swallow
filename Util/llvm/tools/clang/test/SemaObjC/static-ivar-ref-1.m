@@ -1,7 +1,8 @@
-// RUN: clang -ast-print %s
+// RUN: clang-cc -ast-print %s
 
 @interface current 
 {
+@public
   int ivar;
   int ivar1;
   int ivar2;

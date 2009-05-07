@@ -20,6 +20,7 @@
 #include "llvm/Type.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/Compiler.h"
@@ -32,13 +33,13 @@ STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
   struct VISIBILITY_HIDDEN AlphaAsmPrinter : public AsmPrinter {
-
     /// Unique incrementer for label values for referencing Global values.
     ///
 
-    AlphaAsmPrinter(raw_ostream &o, TargetMachine &tm, const TargetAsmInfo *T)
-      : AsmPrinter(o, tm, T) {
-    }
+    explicit AlphaAsmPrinter(raw_ostream &o, TargetMachine &tm,
+                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                             bool V)
+      : AsmPrinter(o, tm, T, OL, V) {}
 
     virtual const char *getPassName() const {
       return "Alpha Assembly Printer";
@@ -67,8 +68,10 @@ namespace {
 /// regardless of whether the function is in SSA form.
 ///
 FunctionPass *llvm::createAlphaCodePrinterPass(raw_ostream &o,
-                                               TargetMachine &tm) {
-  return new AlphaAsmPrinter(o, tm, tm.getTargetAsmInfo());
+                                               TargetMachine &tm,
+                                               CodeGenOpt::Level OptLevel,
+                                               bool verbose) {
+  return new AlphaAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
 }
 
 #include "AlphaGenAsmWriter.inc"
@@ -138,6 +141,8 @@ void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
 /// method to print assembly for each instruction.
 ///
 bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
+
   SetupMachineFunction(MF);
   O << "\n\n";
 
@@ -160,8 +165,10 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
    case Function::ExternalLinkage:
      O << "\t.globl " << CurrentFnName << "\n";
      break;
-  case Function::WeakLinkage:
-  case Function::LinkOnceLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
     O << TAI->getWeakRefDirective() << CurrentFnName << "\n";
     break;
   }
@@ -228,8 +235,10 @@ void AlphaAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
 
   // 2: Kind
   switch (GVar->getLinkage()) {
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage:
+   case GlobalValue::WeakODRLinkage:
    case GlobalValue::CommonLinkage:
     O << TAI->getWeakRefDirective() << name << '\n';
     break;

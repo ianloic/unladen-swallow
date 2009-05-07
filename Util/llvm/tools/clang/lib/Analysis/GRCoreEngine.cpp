@@ -47,13 +47,35 @@ public:
     return U;
   }
 };
+  
+class VISIBILITY_HIDDEN BFS : public GRWorkList {
+  std::queue<GRWorkListUnit> Queue;
+public:
+  virtual bool hasWork() const {
+    return !Queue.empty();
+  }
+  
+  virtual void Enqueue(const GRWorkListUnit& U) {
+    Queue.push(U);
+  }
+  
+  virtual GRWorkListUnit Dequeue() {
+    // Don't use const reference.  The subsequent pop_back() might make it
+    // unsafe.
+    GRWorkListUnit U = Queue.front(); 
+    Queue.pop();
+    return U;
+  }
+};
+  
 } // end anonymous namespace
 
 // Place the dstor for GRWorkList here because it contains virtual member
 // functions, and we the code for the dstor generated in one compilation unit.
 GRWorkList::~GRWorkList() {}
 
-GRWorkList* GRWorkList::MakeDFS() { return new DFS(); }
+GRWorkList *GRWorkList::MakeDFS() { return new DFS(); }
+GRWorkList *GRWorkList::MakeBFS() { return new BFS(); }
 
 namespace {
   class VISIBILITY_HIDDEN BFSBlockDFSContents : public GRWorkList {
@@ -368,45 +390,50 @@ void GRStmtNodeBuilderImpl::GenerateAutoTransition(ExplodedNodeImpl* N) {
     Eng.WList->Enqueue(Succ, B, Idx+1);
 }
 
-static inline ProgramPoint GetPostLoc(Stmt* S, ProgramPoint::Kind K) {
+static inline PostStmt GetPostLoc(Stmt* S, ProgramPoint::Kind K,
+                                  const void *tag) {
   switch (K) {
     default:
       assert(false && "Invalid PostXXXKind.");
       
     case ProgramPoint::PostStmtKind:
-      return PostStmt(S);
+      return PostStmt(S, tag);
       
     case ProgramPoint::PostLoadKind:
-      return PostLoad(S);
+      return PostLoad(S, tag);
 
     case ProgramPoint::PostUndefLocationCheckFailedKind:
-      return PostUndefLocationCheckFailed(S);
+      return PostUndefLocationCheckFailed(S, tag);
 
     case ProgramPoint::PostLocationChecksSucceedKind:
-      return PostLocationChecksSucceed(S);
+      return PostLocationChecksSucceed(S, tag);
       
     case ProgramPoint::PostOutOfBoundsCheckFailedKind:
-      return PostOutOfBoundsCheckFailed(S);
+      return PostOutOfBoundsCheckFailed(S, tag);
       
     case ProgramPoint::PostNullCheckFailedKind:
-      return PostNullCheckFailed(S);
+      return PostNullCheckFailed(S, tag);
       
     case ProgramPoint::PostStoreKind:
-      return PostStore(S);
+      return PostStore(S, tag);
       
     case ProgramPoint::PostPurgeDeadSymbolsKind:
-      return PostPurgeDeadSymbols(S);
+      return PostPurgeDeadSymbols(S, tag);
   }
 }
 
 ExplodedNodeImpl*
 GRStmtNodeBuilderImpl::generateNodeImpl(Stmt* S, const void* State,
                                         ExplodedNodeImpl* Pred,
-                                        ProgramPoint::Kind K) {
-  
+                                        ProgramPoint::Kind K,
+                                        const void *tag) {
+  return generateNodeImpl(GetPostLoc(S, K, tag), State, Pred); 
+}
+
+ExplodedNodeImpl*
+GRStmtNodeBuilderImpl::generateNodeImpl(PostStmt Loc, const void* State,
+                                        ExplodedNodeImpl* Pred) {
   bool IsNew;
-  ProgramPoint Loc = GetPostLoc(S, K);
-  
   ExplodedNodeImpl* N = Eng.G->getNodeImpl(Loc, State, &IsNew);
   N->addPredecessor(Pred);
   Deferred.erase(Pred);

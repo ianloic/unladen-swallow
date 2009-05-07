@@ -18,6 +18,7 @@
 
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/ADT/DenseSet.h"
 #include <cassert>
 #include <functional>
 
@@ -56,28 +57,42 @@ public:
   typedef const TargetRegisterClass* const * sc_iterator;
 private:
   unsigned ID;
-  bool  isSubClass;
+  const char *Name;
   const vt_iterator VTs;
   const sc_iterator SubClasses;
   const sc_iterator SuperClasses;
+  const sc_iterator SubRegClasses;
+  const sc_iterator SuperRegClasses;
   const unsigned RegSize, Alignment;    // Size & Alignment of register in bytes
   const int CopyCost;
   const iterator RegsBegin, RegsEnd;
+  DenseSet<unsigned> RegSet;
 public:
   TargetRegisterClass(unsigned id,
+                      const char *name,
                       const MVT *vts,
                       const TargetRegisterClass * const *subcs,
                       const TargetRegisterClass * const *supcs,
+                      const TargetRegisterClass * const *subregcs,
+                      const TargetRegisterClass * const *superregcs,
                       unsigned RS, unsigned Al, int CC,
                       iterator RB, iterator RE)
-    : ID(id), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
-    RegSize(RS), Alignment(Al), CopyCost(CC), RegsBegin(RB), RegsEnd(RE) {}
+    : ID(id), Name(name), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
+    SubRegClasses(subregcs), SuperRegClasses(superregcs),
+    RegSize(RS), Alignment(Al), CopyCost(CC), RegsBegin(RB), RegsEnd(RE) {
+      for (iterator I = RegsBegin, E = RegsEnd; I != E; ++I)
+        RegSet.insert(*I);
+    }
   virtual ~TargetRegisterClass() {}     // Allow subclasses
   
   /// getID() - Return the register class ID number.
   ///
   unsigned getID() const { return ID; }
-  
+
+  /// getName() - Return the register class name for debugging.
+  ///
+  const char *getName() const { return Name; }
+
   /// begin/end - Return all of the registers in this class.
   ///
   iterator       begin() const { return RegsBegin; }
@@ -97,9 +112,7 @@ public:
   /// contains - Return true if the specified register is included in this
   /// register class.
   bool contains(unsigned Reg) const {
-    for (iterator I = begin(), E = end(); I != E; ++I)
-      if (*I == Reg) return true;
-    return false;
+    return RegSet.count(Reg);
   }
 
   /// hasType - return true if this TargetRegisterClass has the ValueType vt.
@@ -123,8 +136,42 @@ public:
     return I;
   }
 
-  /// hasSubClass - return true if the specified TargetRegisterClass is a
-  /// sub-register class of this TargetRegisterClass.
+  /// subregclasses_begin / subregclasses_end - Loop over all of
+  /// the subreg register classes of this register class.
+  sc_iterator subregclasses_begin() const {
+    return SubRegClasses;
+  }
+
+  sc_iterator subregclasses_end() const {
+    sc_iterator I = SubRegClasses;
+    while (*I != NULL) ++I;
+    return I;
+  }
+
+  /// getSubRegisterRegClass - Return the register class of subregisters with
+  /// index SubIdx, or NULL if no such class exists.
+  const TargetRegisterClass* getSubRegisterRegClass(unsigned SubIdx) const {
+    assert(SubIdx>0 && "Invalid subregister index");
+    for (unsigned s = 0; s != SubIdx-1; ++s)
+      if (!SubRegClasses[s])
+        return NULL;
+    return SubRegClasses[SubIdx-1];
+  }
+
+  /// superregclasses_begin / superregclasses_end - Loop over all of
+  /// the superreg register classes of this register class.
+  sc_iterator superregclasses_begin() const {
+    return SuperRegClasses;
+  }
+
+  sc_iterator superregclasses_end() const {
+    sc_iterator I = SuperRegClasses;
+    while (*I != NULL) ++I;
+    return I;
+  }
+
+  /// hasSubClass - return true if the the specified TargetRegisterClass
+  /// is a proper subset of this TargetRegisterClass.
   bool hasSubClass(const TargetRegisterClass *cs) const {
     for (int i = 0; SubClasses[i] != NULL; ++i) 
       if (SubClasses[i] == cs)
@@ -132,8 +179,8 @@ public:
     return false;
   }
 
-  /// subclasses_begin / subclasses_end - Loop over all of the sub-classes of
-  /// this register class.
+  /// subclasses_begin / subclasses_end - Loop over all of the classes
+  /// that are proper subsets of this register class.
   sc_iterator subclasses_begin() const {
     return SubClasses;
   }
@@ -145,7 +192,7 @@ public:
   }
   
   /// hasSuperClass - return true if the specified TargetRegisterClass is a
-  /// super-register class of this TargetRegisterClass.
+  /// proper superset of this TargetRegisterClass.
   bool hasSuperClass(const TargetRegisterClass *cs) const {
     for (int i = 0; SuperClasses[i] != NULL; ++i) 
       if (SuperClasses[i] == cs)
@@ -153,8 +200,8 @@ public:
     return false;
   }
 
-  /// superclasses_begin / superclasses_end - Loop over all of the super-classes
-  /// of this register class.
+  /// superclasses_begin / superclasses_end - Loop over all of the classes
+  /// that are proper supersets of this register class.
   sc_iterator superclasses_begin() const {
     return SuperClasses;
   }
@@ -165,8 +212,8 @@ public:
     return I;
   }
 
-  /// isASubClass - return true if this TargetRegisterClass is a sub-class of at
-  /// least one other TargetRegisterClass.
+  /// isASubClass - return true if this TargetRegisterClass is a subset
+  /// class of at least one other TargetRegisterClass.
   bool isASubClass() const {
     return SuperClasses[0] != 0;
   }
@@ -191,8 +238,6 @@ public:
     return end();
   }
 
-
-
   /// getSize - Return the size of the register in bytes, which is also the size
   /// of a stack slot allocated to hold a spilled copy of this register.
   unsigned getSize() const { return RegSize; }
@@ -202,7 +247,8 @@ public:
   unsigned getAlignment() const { return Alignment; }
 
   /// getCopyCost - Return the cost of copying a value between two registers in
-  /// this class.
+  /// this class. A negative number means the register class is very expensive
+  /// to copy e.g. status flag register classes.
   int getCopyCost() const { return CopyCost; }
 };
 
@@ -217,6 +263,10 @@ class TargetRegisterInfo {
 protected:
   const unsigned* SubregHash;
   const unsigned SubregHashSize;
+  const unsigned* SuperregHash;
+  const unsigned SuperregHashSize;
+  const unsigned* AliasesHash;
+  const unsigned AliasesHashSize;
 public:
   typedef const TargetRegisterClass * const * regclass_iterator;
 private:
@@ -233,7 +283,11 @@ protected:
                      int CallFrameSetupOpcode = -1,
                      int CallFrameDestroyOpcode = -1,
                      const unsigned* subregs = 0,
-                     const unsigned subregsize = 0);
+                     const unsigned subregsize = 0,
+		     const unsigned* superregs = 0,
+		     const unsigned superregsize = 0,
+		     const unsigned* aliases = 0,
+		     const unsigned aliasessize = 0);
   virtual ~TargetRegisterInfo();
 public:
 
@@ -266,8 +320,8 @@ public:
   /// getPhysicalRegisterRegClass - Returns the Register Class of a physical
   /// register of the given type. If type is MVT::Other, then just return any
   /// register class the register belongs to.
-  const TargetRegisterClass *getPhysicalRegisterRegClass(unsigned Reg,
-                                          MVT VT = MVT::Other) const;
+  virtual const TargetRegisterClass *
+    getPhysicalRegisterRegClass(unsigned Reg, MVT VT = MVT::Other) const;
 
   /// getAllocatableSet - Returns a bitset indexed by register number
   /// indicating if a register is allocatable or not. If a register class is
@@ -335,8 +389,17 @@ public:
   /// areAliases - Returns true if the two registers alias each other, false
   /// otherwise
   bool areAliases(unsigned regA, unsigned regB) const {
-    for (const unsigned *Alias = getAliasSet(regA); *Alias; ++Alias)
-      if (*Alias == regB) return true;
+    size_t index = (regA + regB * 37) & (AliasesHashSize-1);
+    unsigned ProbeAmt = 0;
+    while (AliasesHash[index*2] != 0 &&
+	   AliasesHash[index*2+1] != 0) {
+      if (AliasesHash[index*2] == regA && AliasesHash[index*2+1] == regB)
+	return true;
+
+      index = (index + ProbeAmt) & (AliasesHashSize-1);
+      ProbeAmt += 2;
+    }
+
     return false;
   }
 
@@ -372,8 +435,18 @@ public:
   /// isSuperRegister - Returns true if regB is a super-register of regA.
   ///
   bool isSuperRegister(unsigned regA, unsigned regB) const {
-    for (const unsigned *SR = getSuperRegisters(regA); *SR; ++SR)
-      if (*SR == regB) return true;
+    // SuperregHash is a simple quadratically probed hash table.
+    size_t index = (regA + regB * 37) & (SuperregHashSize-1);
+    unsigned ProbeAmt = 2;
+    while (SuperregHash[index*2] != 0 &&
+           SuperregHash[index*2+1] != 0) {
+      if (SuperregHash[index*2] == regA && SuperregHash[index*2+1] == regB)
+        return true;
+      
+      index = (index + ProbeAmt) & (SuperregHashSize-1);
+      ProbeAmt += 2;
+    }
+    
     return false;
   }
 
@@ -401,6 +474,16 @@ public:
   /// exist.
   virtual unsigned getSubReg(unsigned RegNo, unsigned Index) const = 0;
 
+  /// getMatchingSuperReg - Return a super-register of the specified register
+  /// Reg so its sub-register of index SubIdx is Reg.
+  unsigned getMatchingSuperReg(unsigned Reg, unsigned SubIdx, 
+                               const TargetRegisterClass *RC) const {
+    for (const unsigned *SRs = getSuperRegisters(Reg); unsigned SR = *SRs;++SRs)
+      if (Reg == getSubReg(SR, SubIdx) && RC->contains(SR))
+        return SR;
+    return 0;
+  }
+
   //===--------------------------------------------------------------------===//
   // Register Class Information
   //
@@ -421,11 +504,12 @@ public:
     return i ? RegClassBegin[i - 1] : NULL;
   }
 
-  //===--------------------------------------------------------------------===//
-  // Interfaces used by the register allocator and stack frame
-  // manipulation passes to move data around between registers,
-  // immediates and memory.  FIXME: Move these to TargetInstrInfo.h.
-  //
+  /// getPointerRegClass - Returns a TargetRegisterClass used for pointer
+  /// values.
+  virtual const TargetRegisterClass *getPointerRegClass() const {
+    assert(0 && "Target didn't implement getPointerRegClass!");
+    return 0; // Must return a value in order to compile with VS 2005
+  }
 
   /// getCrossCopyRegClass - Returns a legal register class to copy a register
   /// in the specified class to or from. Returns NULL if it is possible to copy
@@ -477,7 +561,6 @@ public:
   ///
   int getCallFrameSetupOpcode() const { return CallFrameSetupOpcode; }
   int getCallFrameDestroyOpcode() const { return CallFrameDestroyOpcode; }
-
 
   /// eliminateCallFramePseudoInstr - This method is called during prolog/epilog
   /// code insertion to eliminate call frame setup and destroy pseudo
@@ -555,12 +638,18 @@ public:
   virtual void getInitialFrameState(std::vector<MachineMove> &Moves) const;
 };
 
+
 // This is useful when building IndexedMaps keyed on virtual registers
 struct VirtReg2IndexFunctor : std::unary_function<unsigned, unsigned> {
   unsigned operator()(unsigned Reg) const {
     return Reg - TargetRegisterInfo::FirstVirtualRegister;
   }
 };
+
+/// getCommonSubClass - find the largest common subclass of A and B. Return NULL
+/// if there is no common subclass.
+const TargetRegisterClass *getCommonSubClass(const TargetRegisterClass *A,
+                                             const TargetRegisterClass *B);
 
 } // End llvm namespace
 

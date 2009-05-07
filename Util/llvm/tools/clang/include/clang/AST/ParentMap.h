@@ -16,6 +16,7 @@
 
 namespace clang {
 class Stmt;
+class Expr;
   
 class ParentMap {
   void* Impl;
@@ -23,10 +24,20 @@ public:
   ParentMap(Stmt* ASTRoot);
   ~ParentMap();
 
-  Stmt* getParent(Stmt*) const;  
+  Stmt* getParent(Stmt*) const;
+
+  const Stmt* getParent(const Stmt* S) const {
+    return getParent(const_cast<Stmt*>(S));
+  }
 
   bool hasParent(Stmt* S) const {
     return getParent(S) != 0;
+  }
+  
+  bool isConsumedExpr(Expr *E) const;
+  
+  bool isConsumedExpr(const Expr *E) const {
+    return isConsumedExpr(const_cast<Expr*>(E));
   }
 };
   

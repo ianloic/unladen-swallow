@@ -58,14 +58,17 @@ public:
   static unsigned getModuleMatchQuality(const Module &M);
   
   // Pass Pipeline Configuration
-  virtual bool addInstSelector(PassManagerBase &PM, bool Fast);
-  virtual bool addPreEmitPass(PassManagerBase &PM, bool Fast);
-  virtual bool addAssemblyEmitter(PassManagerBase &PM, bool Fast, 
-                                  raw_ostream &Out);
-  virtual bool addCodeEmitter(PassManagerBase &PM, bool Fast,
+  virtual bool addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
+  virtual bool addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
+  virtual bool addAssemblyEmitter(PassManagerBase &PM,
+                                  CodeGenOpt::Level OptLevel,
+                                  bool Verbose, raw_ostream &Out);
+  virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
                               bool DumpAsm, MachineCodeEmitter &MCE);
-  virtual bool addSimpleCodeEmitter(PassManagerBase &PM, bool Fast,
-                                    bool DumpAsm, MachineCodeEmitter &MCE);
+  virtual bool addSimpleCodeEmitter(PassManagerBase &PM,
+                                    CodeGenOpt::Level OptLevel,
+                                    bool DumpAsm,
+                                    MachineCodeEmitter &MCE);
 };
 
 } // end namespace llvm

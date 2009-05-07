@@ -1,4 +1,4 @@
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify %s
 
 //===----------------------------------------------------------------------===//
 // The following code is reduced using delta-debugging from
@@ -98,4 +98,21 @@ CFAbsoluteTime f4() {
   t = CFDateGetAbsoluteTime(date);   // expected-warning{{Reference-counted object is used after it is released.}}
   return t;
 }
+
+// Test that assigning to an self.ivar loses track of an object.
+// This is a temporary hack to reduce false positives.
+@interface Test3 : NSObject {
+  id myObj;
+}
+- (void)test_self_assign_ivar;
+@end
+
+@implementation Test3
+- (void)test_self_assign_ivar {
+  CFAbsoluteTime t = CFAbsoluteTimeGetCurrent();
+  CFDateRef date = CFDateCreate(0, t); // no-warning
+  myObj = (id) date;
+}
+@end
+
 

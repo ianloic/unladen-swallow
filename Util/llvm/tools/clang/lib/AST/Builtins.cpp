@@ -19,8 +19,9 @@
 using namespace clang;
 
 static const Builtin::Info BuiltinInfo[] = {
-  { "not a builtin function", 0, 0 },
-#define BUILTIN(ID, TYPE, ATTRS) { #ID, TYPE, ATTRS },
+  { "not a builtin function", 0, 0, 0, false },
+#define BUILTIN(ID, TYPE, ATTRS) { #ID, TYPE, ATTRS, 0, false },
+#define LIBBUILTIN(ID, TYPE, ATTRS, HEADER) { #ID, TYPE, ATTRS, HEADER, false },
 #include "clang/AST/Builtins.def"
 };
 
@@ -31,27 +32,72 @@ const Builtin::Info &Builtin::Context::GetRecord(unsigned ID) const {
   return TSRecords[ID - Builtin::FirstTSBuiltin];
 }
 
+/// \brief Load all of the target builtins. This must be called
+/// prior to initializing the builtin identifiers.
+void Builtin::Context::InitializeTargetBuiltins(const TargetInfo &Target) {
+  Target.getTargetBuiltins(TSRecords, NumTSRecords);
+}
 
 /// InitializeBuiltins - Mark the identifiers for all the builtins with their
 /// appropriate builtin ID # and mark any non-portable builtin identifiers as
 /// such.
 void Builtin::Context::InitializeBuiltins(IdentifierTable &Table,
-                                          const TargetInfo &Target) {
+                                          bool NoBuiltins) {
   // Step #1: mark all target-independent builtins with their ID's.
   for (unsigned i = Builtin::NotBuiltin+1; i != Builtin::FirstTSBuiltin; ++i)
-    Table.get(BuiltinInfo[i].Name).setBuiltinID(i);
+    if (!BuiltinInfo[i].Suppressed &&
+        (!NoBuiltins || !strchr(BuiltinInfo[i].Attributes, 'f')))
+      Table.get(BuiltinInfo[i].Name).setBuiltinID(i);
   
-  // Step #2: Get target builtins.
-  Target.getTargetBuiltins(TSRecords, NumTSRecords);
-
-  // Step #3: Register target-specific builtins.
+  // Step #2: Register target-specific builtins.
   for (unsigned i = 0, e = NumTSRecords; i != e; ++i)
-    Table.get(TSRecords[i].Name).setBuiltinID(i+Builtin::FirstTSBuiltin);
+    if (!TSRecords[i].Suppressed &&
+        (!NoBuiltins || 
+         (TSRecords[i].Attributes && 
+          !strchr(TSRecords[i].Attributes, 'f'))))
+      Table.get(TSRecords[i].Name).setBuiltinID(i+Builtin::FirstTSBuiltin);
+}
+
+void 
+Builtin::Context::GetBuiltinNames(llvm::SmallVectorImpl<const char *> &Names,
+                                  bool NoBuiltins) {
+  // Final all target-independent names
+  for (unsigned i = Builtin::NotBuiltin+1; i != Builtin::FirstTSBuiltin; ++i)
+    if (!BuiltinInfo[i].Suppressed &&
+        (!NoBuiltins || !strchr(BuiltinInfo[i].Attributes, 'f')))
+      Names.push_back(BuiltinInfo[i].Name);
+  
+  // Find target-specific names.
+  for (unsigned i = 0, e = NumTSRecords; i != e; ++i)
+    if (!TSRecords[i].Suppressed &&
+        (!NoBuiltins || 
+         (TSRecords[i].Attributes && 
+          !strchr(TSRecords[i].Attributes, 'f'))))
+      Names.push_back(TSRecords[i].Name);
+}
+
+bool 
+Builtin::Context::isPrintfLike(unsigned ID, unsigned &FormatIdx, 
+                               bool &HasVAListArg) {
+  const char *Printf = strpbrk(GetRecord(ID).Attributes, "pP");
+  if (!Printf)
+    return false;
+
+  HasVAListArg = (*Printf == 'P');
+
+  ++Printf;
+  assert(*Printf == ':' && "p or P specifier must have be followed by a ':'");
+  ++Printf;
+
+  assert(strchr(Printf, ':') && "printf specifier must end with a ':'");
+  FormatIdx = strtol(Printf, 0, 10);
+  return true;
 }
 
 /// DecodeTypeFromStr - This decodes one type descriptor from Str, advancing the
 /// pointer over the consumed characters.  This returns the resultant type.
 static QualType DecodeTypeFromStr(const char *&Str, ASTContext &Context, 
+                                  Builtin::Context::GetBuiltinTypeError &Error,
                                   bool AllowTypeModifiers = true) {
   // Modifiers.
   bool Long = false, LongLong = false, Signed = false, Unsigned = false;
@@ -156,7 +202,7 @@ static QualType DecodeTypeFromStr(const char *&Str, ASTContext &Context,
     if (Type->isArrayType()) {
       Type = Context.getArrayDecayedType(Type);
     } else {
-      Type = Context.getReferenceType(Type);
+      Type = Context.getLValueReferenceType(Type);
     }
     break;
   case 'V': {
@@ -167,9 +213,22 @@ static QualType DecodeTypeFromStr(const char *&Str, ASTContext &Context,
     
     Str = End;
     
-    QualType ElementType = DecodeTypeFromStr(Str, Context, false);
+    QualType ElementType = DecodeTypeFromStr(Str, Context, Error, false);
     Type = Context.getVectorType(ElementType, NumElements);
     break;
+  }
+  case 'P': {
+    IdentifierInfo *II = &Context.Idents.get("FILE");
+    DeclContext::lookup_result Lookup 
+      = Context.getTranslationUnitDecl()->lookup(Context, II);
+    if (Lookup.first != Lookup.second && isa<TypeDecl>(*Lookup.first)) {
+      Type = Context.getTypeDeclType(cast<TypeDecl>(*Lookup.first));
+      break;
+    }
+    else {
+      Error = Builtin::Context::GE_Missing_FILE;
+      return QualType();
+    }
   }
   }
   
@@ -184,8 +243,9 @@ static QualType DecodeTypeFromStr(const char *&Str, ASTContext &Context,
         Type = Context.getPointerType(Type);
         break;
       case '&':
-        Type = Context.getReferenceType(Type);
+        Type = Context.getLValueReferenceType(Type);
         break;
+      // FIXME: There's no way to have a built-in with an rvalue ref arg.
       case 'C':
         Type = Type.getQualifiedType(QualType::Const);
         break;
@@ -196,16 +256,21 @@ static QualType DecodeTypeFromStr(const char *&Str, ASTContext &Context,
 }
 
 /// GetBuiltinType - Return the type for the specified builtin.
-QualType Builtin::Context::GetBuiltinType(unsigned id,
-                                          ASTContext &Context) const {
+QualType Builtin::Context::GetBuiltinType(unsigned id, ASTContext &Context,
+                                          GetBuiltinTypeError &Error) const {
   const char *TypeStr = GetRecord(id).Type;
   
   llvm::SmallVector<QualType, 8> ArgTypes;
   
-  QualType ResType = DecodeTypeFromStr(TypeStr, Context);
+  Error = GE_None;
+  QualType ResType = DecodeTypeFromStr(TypeStr, Context, Error);
+  if (Error != GE_None)
+    return QualType();
   while (TypeStr[0] && TypeStr[0] != '.') {
-    QualType Ty = DecodeTypeFromStr(TypeStr, Context);
-    
+    QualType Ty = DecodeTypeFromStr(TypeStr, Context, Error);
+    if (Error != GE_None)
+      return QualType();
+
     // Do array -> pointer decay.  The builtin should use the decayed type.
     if (Ty->isArrayType())
       Ty = Context.getArrayDecayedType(Ty);
@@ -218,7 +283,7 @@ QualType Builtin::Context::GetBuiltinType(unsigned id,
 
   // handle untyped/variadic arguments "T c99Style();" or "T cppStyle(...);".
   if (ArgTypes.size() == 0 && TypeStr[0] == '.')
-    return Context.getFunctionTypeNoProto(ResType);
+    return Context.getFunctionNoProtoType(ResType);
   return Context.getFunctionType(ResType, &ArgTypes[0], ArgTypes.size(),
                                  TypeStr[0] == '.', 0);
 }

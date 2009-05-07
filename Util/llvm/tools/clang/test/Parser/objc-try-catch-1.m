@@ -1,5 +1,5 @@
-// RUN: clang -fsyntax-only -verify %s &&
-// RUN: clang -fsyntax-only -verify -x objective-c++ %s
+// RUN: clang-cc -fsyntax-only -verify %s &&
+// RUN: clang-cc -fsyntax-only -verify -x objective-c++ %s
 void * proc();
 
 @interface NSConstantString
@@ -27,7 +27,10 @@ void * foo()
       return proc();
     }
     @catch (Frob* ex) {
-      @throw 1,2;
+      @throw 1,2; // expected-error {{@throw requires an Objective-C object type ('int' invalid)}}
+    }
+    @catch (float x) {  // expected-error {{@catch parameter is not a pointer to an interface type}}
+      
     }
     @catch(...) {
       @throw (4,3,proc());

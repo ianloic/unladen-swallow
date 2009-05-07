@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
@@ -47,8 +48,6 @@ public:
   /// represents a value lvalue, this method emits the address of the lvalue,
   /// then loads the result into DestPtr.
   void EmitAggLoadOfLValue(const Expr *E);
-  
-  void EmitNonConstInit(InitListExpr *E);
 
   //===--------------------------------------------------------------------===//
   //                            Visitor Methods
@@ -65,23 +64,26 @@ public:
   void VisitMemberExpr(MemberExpr *ME) { EmitAggLoadOfLValue(ME); }
   void VisitUnaryDeref(UnaryOperator *E) { EmitAggLoadOfLValue(E); }
   void VisitStringLiteral(StringLiteral *E) { EmitAggLoadOfLValue(E); }
-  void VisitCompoundLiteralExpr(CompoundLiteralExpr *E)
-      { EmitAggLoadOfLValue(E); }
-
+  void VisitCompoundLiteralExpr(CompoundLiteralExpr *E) {
+    EmitAggLoadOfLValue(E); 
+  }
   void VisitArraySubscriptExpr(ArraySubscriptExpr *E) {
     EmitAggLoadOfLValue(E);
   }
+  void VisitBlockDeclRefExpr(const BlockDeclRefExpr *E) {
+    EmitAggLoadOfLValue(E); 
+  }
+  void VisitPredefinedExpr(const PredefinedExpr *E) {
+    EmitAggLoadOfLValue(E); 
+  }
   
   // Operators.
-  //  case Expr::UnaryOperatorClass:
-  //  case Expr::CastExprClass: 
   void VisitCStyleCastExpr(CStyleCastExpr *E);
   void VisitImplicitCastExpr(ImplicitCastExpr *E);
   void VisitCallExpr(const CallExpr *E);
   void VisitStmtExpr(const StmtExpr *E);
   void VisitBinaryOperator(const BinaryOperator *BO);
   void VisitBinAssign(const BinaryOperator *E);
-  void VisitOverloadExpr(const OverloadExpr *E);
   void VisitBinComma(const BinaryOperator *E);
 
   void VisitObjCMessageExpr(ObjCMessageExpr *E);
@@ -96,6 +98,7 @@ public:
   void VisitCXXDefaultArgExpr(CXXDefaultArgExpr *DAE) {
     Visit(DAE->getExpr());
   }
+  void VisitCXXConstructExpr(const CXXConstructExpr *E);
   void VisitVAArgExpr(VAArgExpr *E);
 
   void EmitInitializationToLValue(Expr *E, LValue Address);
@@ -133,7 +136,9 @@ void AggExprEmitter::VisitCStyleCastExpr(CStyleCastExpr *E) {
   // GCC union extension
   if (E->getType()->isUnionType()) {
     RecordDecl *SD = E->getType()->getAsRecordType()->getDecl();
-    LValue FieldLoc = CGF.EmitLValueForField(DestPtr, *SD->field_begin(), true, 0);
+    LValue FieldLoc = CGF.EmitLValueForField(DestPtr, 
+                                             *SD->field_begin(CGF.getContext()),
+                                             true, 0);
     EmitInitializationToLValue(E->getSubExpr(), FieldLoc);
     return;
   }
@@ -187,20 +192,6 @@ void AggExprEmitter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
 
 void AggExprEmitter::VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
   RValue RV = CGF.EmitObjCPropertyGet(E);
-  assert(RV.isAggregate() && "Return value must be aggregate value!");
-  
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
-    return;
-  
-  CGF.EmitAggregateCopy(DestPtr, RV.getAggregateAddr(), E->getType());
-}
-
-void AggExprEmitter::VisitOverloadExpr(const OverloadExpr *E) {
-  RValue RV = CGF.EmitCallExpr(E->getFn(), E->arg_begin(),
-                               E->arg_end(CGF.getContext()));
-  
   assert(RV.isAggregate() && "Return value must be aggregate value!");
   
   // If the result is ignored, don't copy from the value.
@@ -289,7 +280,7 @@ void AggExprEmitter::VisitConditionalOperator(const ConditionalOperator *E) {
 }
 
 void AggExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
-  llvm::Value *ArgValue = CGF.EmitLValue(VE->getSubExpr()).getAddress();
+  llvm::Value *ArgValue = CGF.EmitVAListRef(VE->getSubExpr());
   llvm::Value *ArgPtr = CGF.EmitVAArg(ArgValue, VE->getType());
 
   if (!ArgPtr) {
@@ -302,43 +293,11 @@ void AggExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
     CGF.EmitAggregateCopy(DestPtr, ArgPtr, VE->getType());
 }
 
-void AggExprEmitter::EmitNonConstInit(InitListExpr *E) {
-  const llvm::PointerType *APType =
-    cast<llvm::PointerType>(DestPtr->getType());
-  const llvm::Type *DestType = APType->getElementType();
-
-  if (E->hadArrayRangeDesignator()) {
-    CGF.ErrorUnsupported(E, "GNU array range designator extension");
-  }
-
-  if (const llvm::ArrayType *AType = dyn_cast<llvm::ArrayType>(DestType)) {
-    unsigned NumInitElements = E->getNumInits();
-
-    unsigned i;
-    for (i = 0; i != NumInitElements; ++i) {
-      llvm::Value *NextVal = Builder.CreateStructGEP(DestPtr, i, ".array");
-      Expr *Init = E->getInit(i);
-      if (isa<InitListExpr>(Init))
-        CGF.EmitAggExpr(Init, NextVal, VolatileDest);
-      else
-        // FIXME: volatility
-        Builder.CreateStore(CGF.EmitScalarExpr(Init), NextVal);
-    }
-
-    // Emit remaining default initializers
-    unsigned NumArrayElements = AType->getNumElements();
-    QualType QType = E->getInit(0)->getType();
-    const llvm::Type *EType = AType->getElementType();
-    for (/*Do not initialize i*/; i < NumArrayElements; ++i) {
-      llvm::Value *NextVal = Builder.CreateStructGEP(DestPtr, i, ".array");
-      if (EType->isSingleValueType())
-        // FIXME: volatility
-        Builder.CreateStore(llvm::Constant::getNullValue(EType), NextVal);
-      else
-        CGF.EmitAggregateClear(NextVal, QType);
-    }
-  } else
-    assert(false && "Invalid initializer");
+void
+AggExprEmitter::VisitCXXConstructExpr(const CXXConstructExpr *E) {
+  assert(DestPtr && "Must have a dest to emit into!");
+  
+  CGF.EmitCXXConstructExpr(DestPtr, E);
 }
 
 void AggExprEmitter::EmitInitializationToLValue(Expr* E, LValue LV) {
@@ -363,20 +322,11 @@ void AggExprEmitter::EmitNullInitializationToLValue(LValue LV, QualType T) {
     // Otherwise, just memset the whole thing to zero.  This is legal
     // because in LLVM, all default initializers are guaranteed to have a
     // bit pattern of all zeros.
+    // FIXME: That isn't true for member pointers!
     // There's a potential optimization opportunity in combining
     // memsets; that would be easy for arrays, but relatively
     // difficult for structures with the current code.
-    const llvm::Type *SizeTy = llvm::Type::Int64Ty;
-    llvm::Value *MemSet = CGF.CGM.getIntrinsic(llvm::Intrinsic::memset,
-                                               &SizeTy, 1);
-    uint64_t Size = CGF.getContext().getTypeSize(T);
-    
-    const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
-    llvm::Value* DestPtr = Builder.CreateBitCast(LV.getAddress(), BP, "tmp");
-    Builder.CreateCall4(MemSet, DestPtr, 
-                        llvm::ConstantInt::get(llvm::Type::Int8Ty, 0),
-                        llvm::ConstantInt::get(SizeTy, Size/8),
-                        llvm::ConstantInt::get(llvm::Type::Int32Ty, 0));
+    CGF.EmitMemSetToZero(LV.getAddress(), T);
   }
 }
 
@@ -461,8 +411,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 #ifndef NDEBUG
       // Make sure that it's really an empty and not a failure of
       // semantic analysis.
-      for (RecordDecl::field_iterator Field = SD->field_begin(),
-                                   FieldEnd = SD->field_end();
+      for (RecordDecl::field_iterator Field = SD->field_begin(CGF.getContext()),
+                                   FieldEnd = SD->field_end(CGF.getContext());
            Field != FieldEnd; ++Field)
         assert(Field->isUnnamedBitfield() && "Only unnamed bitfields allowed");
 #endif
@@ -486,8 +436,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
   
   // Here we iterate over the fields; this makes it simpler to both
   // default-initialize fields and skip over unnamed fields.
-  for (RecordDecl::field_iterator Field = SD->field_begin(),
-                               FieldEnd = SD->field_end();
+  for (RecordDecl::field_iterator Field = SD->field_begin(CGF.getContext()),
+                               FieldEnd = SD->field_end(CGF.getContext());
        Field != FieldEnd; ++Field) {
     // We're done once we hit the flexible array member
     if (Field->getType()->isIncompleteArrayType())
@@ -533,7 +483,16 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
                                         llvm::Value *SrcPtr, QualType Ty) {
   assert(!Ty->isAnyComplexType() && "Shouldn't happen for complex");
   
-  // Aggregate assignment turns into llvm.memmove.
+  // Aggregate assignment turns into llvm.memcpy.  This is almost valid per
+  // C99 6.5.16.1p3, which states "If the value being stored in an object is
+  // read from another object that overlaps in anyway the storage of the first
+  // object, then the overlap shall be exact and the two objects shall have
+  // qualified or unqualified versions of a compatible type."
+  //
+  // memcpy is not defined if the source and destination pointers are exactly
+  // equal, but other compilers do this optimization, and almost every memcpy
+  // implementation handles this case safely.  If there is a libc that does not
+  // safely handle this, we can add a target hook.
   const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
   if (DestPtr->getType() != BP)
     DestPtr = Builder.CreateBitCast(DestPtr, BP, "tmp");
@@ -546,7 +505,7 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
   // FIXME: Handle variable sized types.
   const llvm::Type *IntPtr = llvm::IntegerType::get(LLVMPointerWidth);
   
-  Builder.CreateCall4(CGM.getMemMoveFn(),
+  Builder.CreateCall4(CGM.getMemCpyFn(),
                       DestPtr, SrcPtr,
                       // TypeInfo.first describes size in bits.
                       llvm::ConstantInt::get(IntPtr, TypeInfo.first/8),

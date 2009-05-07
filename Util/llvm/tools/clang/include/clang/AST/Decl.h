@@ -14,12 +14,9 @@
 #ifndef LLVM_CLANG_AST_DECL_H
 #define LLVM_CLANG_AST_DECL_H
 
-#include "clang/Basic/IdentifierTable.h"
-#include "clang/Basic/OperatorKinds.h"
-#include "clang/AST/DeclarationName.h"
 #include "clang/AST/DeclBase.h"
-#include "clang/Parse/AccessSpecifier.h"
-#include "llvm/ADT/SmallVector.h"
+#include "clang/AST/DeclarationName.h"
+#include "clang/AST/ExternalASTSource.h"
 
 namespace clang {
 class Expr;
@@ -28,10 +25,6 @@ class CompoundStmt;
 class StringLiteral;
 
 /// TranslationUnitDecl - The top declaration context.
-/// FIXME: The TranslationUnit class should probably be modified to serve as
-/// the top decl context. It would have ownership of the top decls so that the
-/// AST is self-contained and easily de/serializable.
-/// FIXME: TranslationUnitDecl isn't really a Decl (!)
 class TranslationUnitDecl : public Decl, public DeclContext {
   TranslationUnitDecl()
     : Decl(TranslationUnit, 0, SourceLocation()),
@@ -47,15 +40,6 @@ public:
   static TranslationUnitDecl *castFromDeclContext(const DeclContext *DC) {
     return static_cast<TranslationUnitDecl *>(const_cast<DeclContext*>(DC));
   }
-
-protected:
-  /// EmitImpl - Serialize this TranslationUnitDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-
-  /// CreateImpl - Deserialize a TranslationUnitDecl.  Called by Decl::Create.
-  static TranslationUnitDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// NamedDecl - This represents a decl with a name.  Many decls have names such
@@ -68,10 +52,7 @@ class NamedDecl : public Decl {
 
 protected:
   NamedDecl(Kind DK, DeclContext *DC, SourceLocation L, DeclarationName N)
-    : Decl(DK, DC, L), Name(N) {}
-  
-  NamedDecl(Kind DK, DeclContext *DC, SourceLocation L, IdentifierInfo *Id)
-    : Decl(DK, DC, L), Name(Id) {}
+    : Decl(DK, DC, L), Name(N) { }
 
 public:
   /// getIdentifier - Get the identifier that names this declaration,
@@ -92,6 +73,9 @@ public:
   /// which may be a special name.
   DeclarationName getDeclName() const { return Name; }
 
+  /// \brief Set the name of this declaration.
+  void setDeclName(DeclarationName N) { Name = N; }
+
   /// getNameAsString - Get a human-readable name for the declaration, even if
   /// it is one of the special kinds of names (C++ constructor, Objective-C
   /// selector, etc).  Creating this name requires expensive string
@@ -99,6 +83,14 @@ public:
   /// For simple declarations, getNameAsCString() should suffice.
   std::string getNameAsString() const { return Name.getAsString(); }
   
+  /// getQualifiedNameAsString - Returns human-readable qualified name for
+  /// declaration, like A::B::i, for i being member of namespace A::B.
+  /// If declaration is not member of context which can be named (record,
+  /// namespace), it will return same result as getNameAsString().
+  /// Creating this name is expensive, so it should be called only when
+  /// performance doesn't matter.
+  std::string getQualifiedNameAsString() const;
+
   /// declarationReplaces - Determine whether this declaration, if
   /// known to be well-formed within its context, will replace the
   /// declaration OldD if introduced into scope. A declaration will
@@ -108,14 +100,13 @@ public:
   /// overloaded function.
   bool declarationReplaces(NamedDecl *OldD) const;
 
+  /// \brief Determine whether this declaration has linkage.
+  bool hasLinkage() const;
+
   static bool classof(const Decl *D) {
     return D->getKind() >= NamedFirst && D->getKind() <= NamedLast;
   }
   static bool classof(const NamedDecl *D) { return true; }
-  
-protected:
-  void EmitInRec(llvm::Serializer& S) const;
-  void ReadInRec(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// NamespaceDecl - Represent a C++ namespace.
@@ -128,15 +119,15 @@ class NamespaceDecl : public NamedDecl, public DeclContext {
   // namespace A { int y; }
   //
   // there will be one NamespaceDecl for each declaration.
-  // NextDeclarator points to the next extended declaration.
+  // NextNamespace points to the next extended declaration.
   // OrigNamespace points to the original namespace declaration.
   // OrigNamespace of the first namespace decl points to itself.
-
-  NamespaceDecl *OrigNamespace;
-
+  NamespaceDecl *OrigNamespace, *NextNamespace;
+  
   NamespaceDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id)
     : NamedDecl(Namespace, DC, L, Id), DeclContext(Namespace) {
-      OrigNamespace = this;
+    OrigNamespace = this;
+    NextNamespace = 0;
   }
 public:
   static NamespaceDecl *Create(ASTContext &C, DeclContext *DC,
@@ -144,13 +135,9 @@ public:
   
   virtual void Destroy(ASTContext& C);
 
-  NamespaceDecl *getNextNamespace() {
-    return cast_or_null<NamespaceDecl>(getNextDeclarator());
-  }
-  const NamespaceDecl *getNextNamespace() const {
-    return cast_or_null<NamespaceDecl>(getNextDeclarator());
-  }
-  void setNextNamespace(NamespaceDecl *ND) { setNextDeclarator(ND); }
+  NamespaceDecl *getNextNamespace() { return NextNamespace; }
+  const NamespaceDecl *getNextNamespace() const { return NextNamespace; }
+  void setNextNamespace(NamespaceDecl *ND) { NextNamespace = ND; }
 
   NamespaceDecl *getOriginalNamespace() const {
     return OrigNamespace;
@@ -175,15 +162,6 @@ public:
   static NamespaceDecl *castFromDeclContext(const DeclContext *DC) {
     return static_cast<NamespaceDecl *>(const_cast<DeclContext*>(DC));
   }
-  
-protected:
-  /// EmitImpl - Serialize this NamespaceDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-
-  /// CreateImpl - Deserialize a NamespaceDecl.  Called by Decl::Create.
-  static NamespaceDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// ValueDecl - Represent the declaration of a variable (in which case it is 
@@ -205,10 +183,6 @@ public:
     return D->getKind() >= ValueFirst && D->getKind() <= ValueLast;
   }
   static bool classof(const ValueDecl *D) { return true; }
-  
-protected:
-  void EmitInRec(llvm::Serializer& S) const;
-  void ReadInRec(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// VarDecl - An instance of this class is created to represent a variable
@@ -218,6 +192,13 @@ public:
   enum StorageClass {
     None, Auto, Register, Extern, Static, PrivateExtern
   };
+
+  /// getStorageClassSpecifierString - Return the string used to
+  /// specify the storage class \arg SC.
+  ///
+  /// It is illegal to call this function with SC == None.
+  static const char *getStorageClassSpecifierString(StorageClass SC);
+
 private:
   Stmt *Init;
   // FIXME: This can be packed into the bitfields in Decl.
@@ -229,6 +210,9 @@ private:
   /// condition, e.g., if (int x = foo()) { ... }.
   bool DeclaredInCondition : 1;
 
+  /// \brief The previous declaration of this variable.
+  VarDecl *PreviousDeclaration;
+
   // Move to DeclGroup when it is implemented.
   SourceLocation TypeSpecStartLoc;
   friend class StmtIteratorBase;
@@ -236,8 +220,9 @@ protected:
   VarDecl(Kind DK, DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
           QualType T, StorageClass SC, SourceLocation TSSL = SourceLocation())
     : ValueDecl(DK, DC, L, Id, T), Init(0),
-          ThreadSpecified(false), HasCXXDirectInit(false),
-          DeclaredInCondition(false), TypeSpecStartLoc(TSSL) { 
+      ThreadSpecified(false), HasCXXDirectInit(false),
+      DeclaredInCondition(false), PreviousDeclaration(0), 
+      TypeSpecStartLoc(TSSL) { 
     SClass = SC; 
   }
 public:
@@ -250,13 +235,23 @@ public:
   virtual void Destroy(ASTContext& C);
 
   StorageClass getStorageClass() const { return (StorageClass)SClass; }
+  void setStorageClass(StorageClass SC) { SClass = SC; }
 
   SourceLocation getTypeSpecStartLoc() const { return TypeSpecStartLoc; }
+  void setTypeSpecStartLoc(SourceLocation SL) {
+    TypeSpecStartLoc = SL;
+  }
 
   const Expr *getInit() const { return (const Expr*) Init; }
   Expr *getInit() { return (Expr*) Init; }
   void setInit(Expr *I) { Init = (Stmt*) I; }
       
+  /// \brief Retrieve the definition of this variable, which may come
+  /// from a previous declaration. Def will be set to the VarDecl that
+  /// contains the initializer, and the result will be that
+  /// initializer.
+  const Expr *getDefinition(const VarDecl *&Def) const;
+
   void setThreadSpecified(bool T) { ThreadSpecified = T; }
   bool isThreadSpecified() const {
     return ThreadSpecified;
@@ -286,6 +281,14 @@ public:
     DeclaredInCondition = InCondition; 
   }
 
+  /// getPreviousDeclaration - Return the previous declaration of this
+  /// variable.
+  const VarDecl *getPreviousDeclaration() const { return PreviousDeclaration; }
+
+  void setPreviousDeclaration(VarDecl *PrevDecl) {
+    PreviousDeclaration = PrevDecl;
+  }
+
   /// hasLocalStorage - Returns true if a variable with function scope
   ///  is a non-static local variable.
   bool hasLocalStorage() const {
@@ -296,6 +299,12 @@ public:
     // Return false for: Extern, Static, PrivateExtern.
     
     return getStorageClass() <= Register;
+  }
+
+  /// hasExternStorage - Returns true if a variable has extern or
+  /// __private_extern__ storage.
+  bool hasExternalStorage() const {
+    return getStorageClass() == Extern || getStorageClass() == PrivateExtern;
   }
 
   /// hasGlobalStorage - Returns true for all variables that do not
@@ -316,6 +325,19 @@ public:
     return false;
   }
   
+  /// \brief Determines whether this is a static data member.
+  ///
+  /// This will only be true in C++, and applies to, e.g., the
+  /// variable 'x' in:
+  /// \code
+  /// struct S {
+  ///   static int x;
+  /// };
+  /// \endcode
+  bool isStaticDataMember() const {
+    return getDeclContext()->isRecord();
+  }
+
   /// isFileVarDecl - Returns true for file scoped variable declaration.
   bool isFileVarDecl() const {
     if (getKind() != Decl::Var)
@@ -327,28 +349,20 @@ public:
     }
     return false;
   }
+
+  /// \brief Determine whether this is a tentative definition of a
+  /// variable in C.
+  bool isTentativeDefinition(ASTContext &Context) const;
   
+  /// \brief Determines whether this variable is a variable with
+  /// external, C linkage.
+  bool isExternC(ASTContext &Context) const;
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
     return D->getKind() >= VarFirst && D->getKind() <= VarLast;
   }
   static bool classof(const VarDecl *D) { return true; }
-
-protected:
-  void EmitInRec(llvm::Serializer& S) const;
-  void ReadInRec(llvm::Deserializer& D, ASTContext& C);
-  
-  void EmitOutRec(llvm::Serializer& S) const;
-  void ReadOutRec(llvm::Deserializer& D, ASTContext& C);
-  
-  /// EmitImpl - Serialize this VarDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// ReadImpl - Deserialize this VarDecl. Called by subclasses.
-  virtual void ReadImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  /// CreateImpl - Deserialize a VarDecl.  Called by Decl::Create.
-  static VarDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 class ImplicitParamDecl : public VarDecl {
@@ -432,15 +446,6 @@ public:
             D->getKind() == OriginalParmVar); 
   }
   static bool classof(const ParmVarDecl *D) { return true; }
-  
-protected:
-  /// EmitImpl - Serialize this ParmVarDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a ParmVarDecl.  Called by Decl::Create.
-  static ParmVarDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// OriginalParmVarDecl - Represent a parameter to a function, when
@@ -458,26 +463,16 @@ private:
                               Expr *DefArg)
   : ParmVarDecl(OriginalParmVar, DC, L, Id, T, S, DefArg), OriginalType(OT) {}
 public:
-    static OriginalParmVarDecl *Create(ASTContext &C, DeclContext *DC,
-                               SourceLocation L,IdentifierInfo *Id,
-                               QualType T, QualType OT,
-                               StorageClass S, Expr *DefArg);
+  static OriginalParmVarDecl *Create(ASTContext &C, DeclContext *DC,
+                                     SourceLocation L,IdentifierInfo *Id,
+                                     QualType T, QualType OT,
+                                     StorageClass S, Expr *DefArg);
+
+  void setOriginalType(QualType T) { OriginalType = T; }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return D->getKind() == OriginalParmVar; }
   static bool classof(const OriginalParmVarDecl *D) { return true; }
-    
-protected:
-  /// EmitImpl - Serialize this OriginalParmVarDecl. 
-  /// Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-    
-  /// CreateImpl - Deserialize a OriginalParmVarDecl.  
-  /// Called by Decl::Create.
-  static OriginalParmVarDecl* CreateImpl(llvm::Deserializer& D, 
-                                                 ASTContext& C);
-    
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
   
 /// FunctionDecl - An instance of this class is created to represent a
@@ -503,7 +498,7 @@ private:
   /// FunctionDecl object to save an allocation like FunctionType does.
   ParmVarDecl **ParamInfo;
   
-  Stmt *Body;  // Null if a prototype.
+  LazyDeclStmtPtr Body;
   
   /// PreviousDeclaration - A link to the previous declaration of this
   /// same function, NULL if this is the first declaration. For
@@ -516,11 +511,16 @@ private:
   ///   int f(int x, int y) { return x + y; }
   FunctionDecl *PreviousDeclaration;
 
+  // FIXME: This can be packed into the bitfields in Decl.
   // NOTE: VC++ treats enums as signed, avoid using the StorageClass enum
   unsigned SClass : 2;
   bool IsInline : 1;
+  bool C99InlineDefinition : 1;
   bool IsVirtual : 1;
   bool IsPure : 1;
+  bool InheritedPrototype : 1;
+  bool HasPrototype : 1;
+  bool IsDeleted : 1;
 
   // Move to DeclGroup when it is implemented.
   SourceLocation TypeSpecStartLoc;
@@ -531,9 +531,10 @@ protected:
                SourceLocation TSSL = SourceLocation())
     : ValueDecl(DK, DC, L, N, T), 
       DeclContext(DK),
-      ParamInfo(0), Body(0), PreviousDeclaration(0),
-      SClass(S), IsInline(isInline), IsVirtual(false), IsPure(false),
-      TypeSpecStartLoc(TSSL) {}
+      ParamInfo(0), Body(), PreviousDeclaration(0),
+      SClass(S), IsInline(isInline), C99InlineDefinition(false), 
+      IsVirtual(false), IsPure(false), InheritedPrototype(false), 
+      HasPrototype(true), IsDeleted(false), TypeSpecStartLoc(TSSL) {}
 
   virtual ~FunctionDecl() {}
   virtual void Destroy(ASTContext& C);
@@ -542,39 +543,92 @@ public:
   static FunctionDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
                               DeclarationName N, QualType T, 
                               StorageClass S = None, bool isInline = false,
+                              bool hasPrototype = true,
                               SourceLocation TSStartLoc = SourceLocation());  
   
   SourceLocation getTypeSpecStartLoc() const { return TypeSpecStartLoc; }
+  void setTypeSpecStartLoc(SourceLocation TS) { TypeSpecStartLoc = TS; }
 
   /// getBody - Retrieve the body (definition) of the function. The
   /// function body might be in any of the (re-)declarations of this
   /// function. The variant that accepts a FunctionDecl pointer will
   /// set that function declaration to the actual declaration
   /// containing the body (if there is one).
-  Stmt *getBody(const FunctionDecl *&Definition) const;
+  Stmt *getBody(ASTContext &Context, const FunctionDecl *&Definition) const;
 
-  virtual Stmt *getBody() const { 
+  virtual Stmt *getBody(ASTContext &Context) const {
     const FunctionDecl* Definition;
-    return getBody(Definition);
+    return getBody(Context, Definition);
   }
-  
+
+  /// \brief If the function has a body that is immediately available,
+  /// return it.
+  Stmt *getBodyIfAvailable() const;
+
   /// isThisDeclarationADefinition - Returns whether this specific
   /// declaration of the function is also a definition. This does not
   /// determine whether the function has been defined (e.g., in a
   /// previous definition); for that information, use getBody.
-  bool isThisDeclarationADefinition() const { return Body != 0; }
+  /// FIXME: Should return true if function is deleted or defaulted. However,
+  /// CodeGenModule.cpp uses it, and I don't know if this would break it.
+  bool isThisDeclarationADefinition() const { return Body; }
 
   void setBody(Stmt *B) { Body = B; }
+  void setLazyBody(uint64_t Offset) { Body = Offset; }
 
   /// Whether this function is virtual, either by explicit marking, or by
   /// overriding a virtual function. Only valid on C++ member functions.
   bool isVirtual() { return IsVirtual; }
-  void setVirtual() { IsVirtual = true; }
+  void setVirtual(bool V = true) { IsVirtual = V; }
 
   /// Whether this virtual function is pure, i.e. makes the containing class
   /// abstract.
-  bool isPure() { return IsPure; }
-  void setPure() { IsPure = true; }
+  bool isPure() const { return IsPure; }
+  void setPure(bool P = true) { IsPure = P; }
+
+  /// \brief Whether this function has a prototype, either because one
+  /// was explicitly written or because it was "inherited" by merging
+  /// a declaration without a prototype with a declaration that has a
+  /// prototype.
+  bool hasPrototype() const { return HasPrototype || InheritedPrototype; }
+  void setHasPrototype(bool P) { HasPrototype = P; }
+
+  /// \brief Whether this function inherited its prototype from a
+  /// previous declaration.
+  bool inheritedPrototype() const { return InheritedPrototype; }
+  void setInheritedPrototype(bool P = true) { InheritedPrototype = P; }
+
+  /// \brief Whether this function has been deleted.
+  ///
+  /// A function that is "deleted" (via the C++0x "= delete" syntax)
+  /// acts like a normal function, except that it cannot actually be
+  /// called or have its address taken. Deleted functions are
+  /// typically used in C++ overload resolution to attract arguments
+  /// whose type or lvalue/rvalue-ness would permit the use of a
+  /// different overload that would behave incorrectly. For example,
+  /// one might use deleted functions to ban implicit conversion from
+  /// a floating-point number to an Integer type:
+  ///
+  /// @code
+  /// struct Integer {
+  ///   Integer(long); // construct from a long
+  ///   Integer(double) = delete; // no construction from float or double
+  ///   Integer(long double) = delete; // no construction from long double
+  /// };
+  /// @endcode
+  bool isDeleted() const { return IsDeleted; }
+  void setDeleted(bool D = true) { IsDeleted = D; }
+
+  /// \brief Determines whether this is a function "main", which is
+  /// the entry point into an executable program.
+  bool isMain() const;
+
+  /// \brief Determines whether this function is a function with
+  /// external, C linkage.
+  bool isExternC(ASTContext &Context) const;
+
+  /// \brief Determines whether this is a global function.
+  bool isGlobal() const;
 
   /// getPreviousDeclaration - Return the previous declaration of this
   /// function.
@@ -586,6 +640,10 @@ public:
     PreviousDeclaration = PrevDecl;
   }
 
+  unsigned getBuiltinID(ASTContext &Context) const;
+
+  unsigned getNumParmVarDeclsFromType() const;
+  
   // Iterator access to formal parameters.
   unsigned param_size() const { return getNumParams(); }
   typedef ParmVarDecl **param_iterator;
@@ -597,7 +655,11 @@ public:
   param_const_iterator param_begin() const { return ParamInfo; }
   param_const_iterator param_end() const   { return ParamInfo+param_size(); }
   
+  /// getNumParams - Return the number of parameters this function must have
+  /// based on its functiontype.  This is the length of the PararmInfo array
+  /// after it has been created.
   unsigned getNumParams() const;
+  
   const ParmVarDecl *getParamDecl(unsigned i) const {
     assert(i < getNumParams() && "Illegal param #");
     return ParamInfo[i];
@@ -618,8 +680,29 @@ public:
     return getType()->getAsFunctionType()->getResultType();
   }
   StorageClass getStorageClass() const { return StorageClass(SClass); }
+  void setStorageClass(StorageClass SC) { SClass = SC; }
+
   bool isInline() const { return IsInline; }
- 
+  void setInline(bool I) { IsInline = I; }
+
+  /// \brief Whether this function is an "inline definition" as
+  /// defined by C99.
+  bool isC99InlineDefinition() const { return C99InlineDefinition; }
+  void setC99InlineDefinition(bool I) { C99InlineDefinition = I; }
+
+  /// \brief Determines whether this function has a gnu_inline
+  /// attribute that affects its semantics.
+  ///
+  /// The gnu_inline attribute only introduces GNU inline semantics
+  /// when all of the inline declarations of the function are marked
+  /// gnu_inline.
+  bool hasActiveGNUInlineAttribute() const;
+
+  /// \brief Determines whether this function is a GNU "extern
+  /// inline", which is roughly the opposite of a C99 "extern inline"
+  /// function.
+  bool isExternGNUInline() const;
+
   /// isOverloadedOperator - Whether this function declaration
   /// represents an C++ overloaded operator, e.g., "operator+".
   bool isOverloadedOperator() const { 
@@ -639,30 +722,19 @@ public:
   static FunctionDecl *castFromDeclContext(const DeclContext *DC) {
     return static_cast<FunctionDecl *>(const_cast<DeclContext*>(DC));
   }
-
-protected:
-  /// EmitImpl - Serialize this FunctionDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a FunctionDecl.  Called by Decl::Create.
-  static FunctionDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
-  friend class CXXRecordDecl;
 };
 
 
 /// FieldDecl - An instance of this class is created by Sema::ActOnField to 
 /// represent a member of a struct/union/class.
-class FieldDecl : public NamedDecl {
+class FieldDecl : public ValueDecl {
+  // FIXME: This can be packed into the bitfields in Decl.
   bool Mutable : 1;
-  QualType DeclType;  
   Expr *BitWidth;
 protected:
   FieldDecl(Kind DK, DeclContext *DC, SourceLocation L, 
             IdentifierInfo *Id, QualType T, Expr *BW, bool Mutable)
-    : NamedDecl(DK, DC, L, Id), Mutable(Mutable), DeclType(T), 
-      BitWidth(BW)
+    : ValueDecl(DK, DC, L, Id, T), Mutable(Mutable), BitWidth(BW)
       { }
 
 public:
@@ -670,10 +742,11 @@ public:
                            IdentifierInfo *Id, QualType T, Expr *BW, 
                            bool Mutable);
 
-  QualType getType() const { return DeclType; }
-
   /// isMutable - Determines whether this field is mutable (C++ only).
   bool isMutable() const { return Mutable; }
+
+  /// \brief Set whether this field is mutable (C++ only).
+  void setMutable(bool M) { Mutable = M; }
 
   /// isBitfield - Determines whether this field is a bitfield.
   bool isBitField() const { return BitWidth != NULL; }
@@ -688,20 +761,13 @@ public:
   bool isAnonymousStructOrUnion() const;
 
   Expr *getBitWidth() const { return BitWidth; }
+  void setBitWidth(Expr *BW) { BitWidth = BW; }
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
     return D->getKind() >= FieldFirst && D->getKind() <= FieldLast;
   }
   static bool classof(const FieldDecl *D) { return true; }
-
-protected:
-  /// EmitImpl - Serialize this FieldDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a FieldDecl.  Called by Decl::Create.
-  static FieldDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// EnumConstantDecl - An instance of this object exists for each enum constant
@@ -739,28 +805,23 @@ public:
   static bool classof(const EnumConstantDecl *D) { return true; }
   
   friend class StmtIteratorBase;
-  
-protected:
-  /// EmitImpl - Serialize this EnumConstantDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a EnumConstantDecl.  Called by Decl::Create.
-  static EnumConstantDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 
 /// TypeDecl - Represents a declaration of a type.
 ///
 class TypeDecl : public NamedDecl {
-  /// TypeForDecl - This indicates the Type object that represents this
-  /// TypeDecl.  It is a cache maintained by ASTContext::getTypedefType,
-  /// ASTContext::getTagDeclType, and ASTContext::getTemplateTypeParmType.
-  Type *TypeForDecl;
+  /// TypeForDecl - This indicates the Type object that represents
+  /// this TypeDecl.  It is a cache maintained by
+  /// ASTContext::getTypedefType, ASTContext::getTagDeclType, and
+  /// ASTContext::getTemplateTypeParmType, and TemplateTypeParmDecl.
+  mutable Type *TypeForDecl;
   friend class ASTContext;
   friend class DeclContext;
   friend class TagDecl;
+  friend class TemplateTypeParmDecl;
+  friend class ClassTemplateSpecializationDecl;
+  friend class TagType;
 
 protected:
   TypeDecl(Kind DK, DeclContext *DC, SourceLocation L,
@@ -768,6 +829,10 @@ protected:
     : NamedDecl(DK, DC, L, Id), TypeForDecl(0) {}
 
 public:
+  // Low-level accessor
+  Type *getTypeForDecl() const { return TypeForDecl; }
+  void setTypeForDecl(Type *TD) { TypeForDecl = TD; }
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
     return D->getKind() >= TypeFirst && D->getKind() <= TypeLast;
@@ -796,18 +861,10 @@ public:
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return D->getKind() == Typedef; }
   static bool classof(const TypedefDecl *D) { return true; }
-
-protected:
-  /// EmitImpl - Serialize this TypedefDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a TypedefDecl.  Called by Decl::Create.
-  static TypedefDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);  
 };
 
-
+class TypedefDecl;
+  
 /// TagDecl - Represents the declaration of a struct/union/class/enum.
 class TagDecl : public TypeDecl, public DeclContext {
 public:
@@ -819,16 +876,22 @@ public:
   };
 
 private:
+  // FIXME: This can be packed into the bitfields in Decl.
   /// TagDeclKind - The TagKind enum.
   unsigned TagDeclKind : 2;
 
   /// IsDefinition - True if this is a definition ("struct foo {};"), false if
   /// it is a declaration ("struct foo;").
   bool IsDefinition : 1;
+  
+  /// TypedefForAnonDecl - If a TagDecl is anonymous and part of a typedef,
+  /// this points to the TypedefDecl. Used for mangling.
+  TypedefDecl *TypedefForAnonDecl;
+  
 protected:
   TagDecl(Kind DK, TagKind TK, DeclContext *DC, SourceLocation L,
           IdentifierInfo *Id)
-    : TypeDecl(DK, DC, L, Id), DeclContext(DK) {
+    : TypeDecl(DK, DC, L, Id), DeclContext(DK), TypedefForAnonDecl(0) {
     assert((DK != Enum || TK == TK_enum) &&"EnumDecl not matched with TK_enum");
     TagDeclKind = TK;
     IsDefinition = false;
@@ -873,10 +936,15 @@ public:
     return TagKind(TagDeclKind);
   }
 
+  void setTagKind(TagKind TK) { TagDeclKind = TK; }
+
   bool isStruct() const { return getTagKind() == TK_struct; }
   bool isClass()  const { return getTagKind() == TK_class; }
   bool isUnion()  const { return getTagKind() == TK_union; }
   bool isEnum()   const { return getTagKind() == TK_enum; }
+  
+  TypedefDecl *getTypedefForAnonDecl() const { return TypedefForAnonDecl; }
+  void setTypedefForAnonDecl(TypedefDecl *TDD) { TypedefForAnonDecl = TDD; }
   
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
@@ -891,7 +959,6 @@ public:
     return static_cast<TagDecl *>(const_cast<DeclContext*>(DC));
   }
 
-protected:
   void setDefinition(bool V) { IsDefinition = V; }
 };
 
@@ -926,35 +993,23 @@ public:
   // enumeration.
   typedef specific_decl_iterator<EnumConstantDecl> enumerator_iterator;
 
-  enumerator_iterator enumerator_begin() const { 
-    return enumerator_iterator(this->decls_begin());
+  enumerator_iterator enumerator_begin(ASTContext &Context) const { 
+    return enumerator_iterator(this->decls_begin(Context));
   }
 
-  enumerator_iterator enumerator_end() const { 
-    return enumerator_iterator(this->decls_end());
+  enumerator_iterator enumerator_end(ASTContext &Context) const { 
+    return enumerator_iterator(this->decls_end(Context));
   }
 
   /// getIntegerType - Return the integer type this enum decl corresponds to.
   /// This returns a null qualtype for an enum forward definition.
   QualType getIntegerType() const { return IntegerType; }
-    
+
+  /// \brief Set the underlying integer type.
+  void setIntegerType(QualType T) { IntegerType = T; }
+
   static bool classof(const Decl *D) { return D->getKind() == Enum; }
   static bool classof(const EnumDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const EnumDecl *D) {
-    return static_cast<DeclContext *>(const_cast<EnumDecl*>(D));
-  }
-  static EnumDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<EnumDecl *>(const_cast<DeclContext*>(DC));
-  }
-  
-protected:
-  /// EmitImpl - Serialize this EnumDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a EnumDecl.  Called by Decl::Create.
-  static EnumDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 
@@ -964,6 +1019,7 @@ protected:
 /// This decl will be marked invalid if *any* members are invalid.
 ///
 class RecordDecl : public TagDecl {
+  // FIXME: This can be packed into the bitfields in Decl.
   /// HasFlexibleArrayMember - This is true if this struct ends with a flexible
   /// array member (e.g. int X[]) or if this union contains a struct that does.
   /// If so, this cannot be contained in arrays or other structs as a member.
@@ -1005,6 +1061,21 @@ public:
     AnonymousStructOrUnion = Anon;
   }
 
+  /// \brief Determines whether this declaration represents the
+  /// injected class name.
+  ///
+  /// The injected class name in C++ is the name of the class that
+  /// appears inside the class itself. For example:
+  ///
+  /// \code
+  /// struct C {
+  ///   // C is implicitly declared here as a synonym for the class name.
+  /// };
+  ///
+  /// C::C c; // same as "C c;"
+  /// \endcode
+  bool isInjectedClassName() const;
+
   /// getDefinition - Returns the RecordDecl that actually defines this 
   ///  struct/union/class.  When determining whether or not a struct/union/class
   ///  is completely defined, one should use this method as opposed to
@@ -1021,16 +1092,18 @@ public:
   // data members, functions, constructors, destructors, etc.
   typedef specific_decl_iterator<FieldDecl> field_iterator;
 
-  field_iterator field_begin() const {
-    return field_iterator(decls_begin());
+  field_iterator field_begin(ASTContext &Context) const {
+    return field_iterator(decls_begin(Context));
   }
-  field_iterator field_end() const {
-    return field_iterator(decls_end());
+  field_iterator field_end(ASTContext &Context) const {
+    return field_iterator(decls_end(Context));
   }
 
   // field_empty - Whether there are any fields (non-static data
   // members) in this record.
-  bool field_empty() const { return field_begin() == field_end(); }
+  bool field_empty(ASTContext &Context) const { 
+    return field_begin(Context) == field_end(Context);
+  }
 
   /// completeDefinition - Notes that the definition of this type is
   /// now complete.
@@ -1040,20 +1113,6 @@ public:
     return D->getKind() >= RecordFirst && D->getKind() <= RecordLast;
   }
   static bool classof(const RecordDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const RecordDecl *D) {
-    return static_cast<DeclContext *>(const_cast<RecordDecl*>(D));
-  }
-  static RecordDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<RecordDecl *>(const_cast<DeclContext*>(DC));
-  }
-protected:
-  /// EmitImpl - Serialize this RecordDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a RecordDecl.  Called by Decl::Create.
-  static RecordDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 class FileScopeAsmDecl : public Decl {
@@ -1066,18 +1125,12 @@ public:
 
   const StringLiteral *getAsmString() const { return AsmString; }
   StringLiteral *getAsmString() { return AsmString; }
+  void setAsmString(StringLiteral *Asm) { AsmString = Asm; }
+
   static bool classof(const Decl *D) {
     return D->getKind() == FileScopeAsm;
   }
   static bool classof(const FileScopeAsmDecl *D) { return true; }  
-protected:
-  /// EmitImpl - Serialize this FileScopeAsmDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a FileScopeAsmDecl.  Called by Decl::Create.
-  static FileScopeAsmDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// BlockDecl - This represents a block literal declaration, which is like an
@@ -1085,12 +1138,18 @@ protected:
 /// ^{ statement-body }   or   ^(int arg1, float arg2){ statement-body }
 ///
 class BlockDecl : public Decl, public DeclContext {
-  llvm::SmallVector<ParmVarDecl*, 8> Args;
+  /// ParamInfo - new[]'d array of pointers to ParmVarDecls for the formal
+  /// parameters of this function.  This is null if a prototype or if there are
+  /// no formals.
+  ParmVarDecl **ParamInfo;
+  unsigned NumParams;
+  
   Stmt *Body;
   
 protected:
   BlockDecl(DeclContext *DC, SourceLocation CaretLoc)
-    : Decl(Block, DC, CaretLoc), DeclContext(Block), Body(0) {}
+    : Decl(Block, DC, CaretLoc), DeclContext(Block), 
+      ParamInfo(0), NumParams(0), Body(0) {}
 
   virtual ~BlockDecl();
   virtual void Destroy(ASTContext& C);
@@ -1100,19 +1159,32 @@ public:
 
   SourceLocation getCaretLocation() const { return getLocation(); }
 
-  Stmt *getBody() const { return Body; }
-  void setBody(Stmt *B) { Body = B; }
+  CompoundStmt *getBody() const { return (CompoundStmt*) Body; }
+  Stmt *getBody(ASTContext &C) const { return (Stmt*) Body; }
+  void setBody(CompoundStmt *B) { Body = (Stmt*) B; }
 
-  void setArgs(ParmVarDecl **args, unsigned numargs) {
-    Args.clear(); 
-    Args.insert(Args.begin(), args, args+numargs);
-  }
+  // Iterator access to formal parameters.
+  unsigned param_size() const { return getNumParams(); }
+  typedef ParmVarDecl **param_iterator;
+  typedef ParmVarDecl * const *param_const_iterator;
   
-  /// arg_iterator - Iterate over the ParmVarDecl's for this block.
-  typedef llvm::SmallVector<ParmVarDecl*, 8>::const_iterator param_iterator;
-  bool param_empty() const { return Args.empty(); }
-  param_iterator param_begin() const { return Args.begin(); }
-  param_iterator param_end() const { return Args.end(); }
+  bool param_empty() const { return NumParams == 0; }
+  param_iterator param_begin()  { return ParamInfo; }
+  param_iterator param_end()   { return ParamInfo+param_size(); }
+  
+  param_const_iterator param_begin() const { return ParamInfo; }
+  param_const_iterator param_end() const   { return ParamInfo+param_size(); }
+  
+  unsigned getNumParams() const;
+  const ParmVarDecl *getParamDecl(unsigned i) const {
+    assert(i < getNumParams() && "Illegal param #");
+    return ParamInfo[i];
+  }
+  ParmVarDecl *getParamDecl(unsigned i) {
+    assert(i < getNumParams() && "Illegal param #");
+    return ParamInfo[i];
+  }
+  void setParams(ASTContext& C, ParmVarDecl **NewParamInfo, unsigned NumParams);
     
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return D->getKind() == Block; }
@@ -1123,16 +1195,15 @@ public:
   static BlockDecl *castFromDeclContext(const DeclContext *DC) {
     return static_cast<BlockDecl *>(const_cast<DeclContext*>(DC));
   }
-
-protected:
-  /// EmitImpl - Serialize this BlockDecl. Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-
-  /// CreateImpl - Deserialize a BlockDecl.  Called by Decl::Create.
-  static BlockDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
+
+/// Insertion operator for diagnostics.  This allows sending NamedDecl's
+/// into a diagnostic with <<.
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                           NamedDecl* ND) {
+  DB.AddTaggedVal(reinterpret_cast<intptr_t>(ND), Diagnostic::ak_nameddecl);
+  return DB;
+}
 
 }  // end namespace clang
 

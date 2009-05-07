@@ -71,7 +71,7 @@ LTOCodeGenerator::LTOCodeGenerator()
     : _linker("LinkTimeOptimizer", "ld-temp.o"), _target(NULL),
       _emitDwarfDebugInfo(false), _scopeRestrictionsDone(false),
       _codeModel(LTO_CODEGEN_PIC_MODEL_DYNAMIC),
-      _nativeObjectFile(NULL)
+      _nativeObjectFile(NULL), _gccPath(NULL)
 {
 
 }
@@ -118,6 +118,13 @@ bool LTOCodeGenerator::setCodePICModel(lto_codegen_model model,
     }
     errMsg = "unknown pic model";
     return true;
+}
+
+void LTOCodeGenerator::setGccPath(const char* path)
+{
+    if ( _gccPath )
+        delete _gccPath;
+    _gccPath = new sys::Path(path);
 }
 
 void LTOCodeGenerator::addMustPreserveSymbol(const char* sym)
@@ -212,11 +219,16 @@ const void* LTOCodeGenerator::compile(size_t* length, std::string& errMsg)
 bool LTOCodeGenerator::assemble(const std::string& asmPath, 
                                 const std::string& objPath, std::string& errMsg)
 {
-    // find compiler driver
-    const sys::Path gcc = sys::Program::FindProgramByName("gcc");
-    if ( gcc.isEmpty() ) {
-        errMsg = "can't locate gcc";
-        return true;
+    sys::Path gcc;
+    if ( _gccPath ) {
+        gcc = *_gccPath;
+    } else {
+        // find compiler driver
+        gcc = sys::Program::FindProgramByName("gcc");
+        if ( gcc.isEmpty() ) {
+            errMsg = "can't locate gcc";
+            return true;
+        }
     }
 
     // build argument list
@@ -239,6 +251,27 @@ bool LTOCodeGenerator::assemble(const std::string& asmPath,
         else if (strncmp(targetTriple.c_str(), "powerpc64-apple-", 16) == 0) {
             args.push_back("-arch");
             args.push_back("ppc64");
+        }
+        else if (strncmp(targetTriple.c_str(), "arm-apple-", 10) == 0) {
+            args.push_back("-arch");
+            args.push_back("arm");
+        }
+        else if ((strncmp(targetTriple.c_str(), "armv4t-apple-", 13) == 0) ||
+                 (strncmp(targetTriple.c_str(), "thumbv4t-apple-", 15) == 0)) {
+            args.push_back("-arch");
+            args.push_back("armv4t");
+        }
+        else if ((strncmp(targetTriple.c_str(), "armv5-apple-", 12) == 0) ||
+                 (strncmp(targetTriple.c_str(), "armv5e-apple-", 13) == 0) ||
+                 (strncmp(targetTriple.c_str(), "thumbv5-apple-", 14) == 0) ||
+                 (strncmp(targetTriple.c_str(), "thumbv5e-apple-", 15) == 0)) {
+            args.push_back("-arch");
+            args.push_back("armv5");
+        }
+        else if ((strncmp(targetTriple.c_str(), "armv6-apple-", 12) == 0) ||
+                 (strncmp(targetTriple.c_str(), "thumbv6-apple-", 14) == 0)) {
+            args.push_back("-arch");
+            args.push_back("armv6");
         }
     }
     args.push_back("-c");
@@ -391,6 +424,7 @@ bool LTOCodeGenerator::generateAssemblyCode(raw_ostream& out,
     passes.add(createScalarReplAggregatesPass()); // Break up allocas
 
     // Run a few AA driven optimizations here and now, to cleanup the code.
+    passes.add(createFunctionAttrsPass());        // Add nocapture
     passes.add(createGlobalsModRefPass());        // IP alias analysis
     passes.add(createLICMPass());                 // Hoist loop invariants
     passes.add(createGVNPass());                  // Remove common subexprs
@@ -420,7 +454,8 @@ bool LTOCodeGenerator::generateAssemblyCode(raw_ostream& out,
     MachineCodeEmitter* mce = NULL;
 
     switch (_target->addPassesToEmitFile(*codeGenPasses, out,
-                                      TargetMachine::AssemblyFile, true)) {
+                                         TargetMachine::AssemblyFile,
+                                         CodeGenOpt::Aggressive)) {
         case FileModel::MachOFile:
             mce = AddMachOWriter(*codeGenPasses, out, *_target);
             break;
@@ -435,7 +470,8 @@ bool LTOCodeGenerator::generateAssemblyCode(raw_ostream& out,
             return true;
     }
 
-    if (_target->addPassesToEmitFileFinish(*codeGenPasses, mce, true)) {
+    if (_target->addPassesToEmitFileFinish(*codeGenPasses, mce,
+                                           CodeGenOpt::Aggressive)) {
         errMsg = "target does not support generation of this file type";
         return true;
     }

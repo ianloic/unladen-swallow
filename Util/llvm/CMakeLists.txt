@@ -1,3 +1,5 @@
+# See docs/CMake.html for instructions about how to build LLVM with CMake.
+
 project(LLVM)
 cmake_minimum_required(VERSION 2.6.1)
 
@@ -74,6 +76,8 @@ set(CMAKE_MODULE_PATH
   "${LLVM_MAIN_SRC_DIR}/cmake/modules"
   )
 
+include(AddLLVMDefinitions)
+
 if(WIN32)
   if(CYGWIN)
     set(LLVM_ON_WIN32 0)
@@ -110,7 +114,7 @@ option(LLVM_ENABLE_PIC "Build Position-Independent Code" OFF)
 if( LLVM_ENABLE_PIC )
   if( SUPPORTS_FPIC_FLAG )
     message(STATUS "Building with -fPIC")
-    add_definitions(-fPIC)
+    add_llvm_definitions(-fPIC)
   else( SUPPORTS_FPIC_FLAG )
     message(STATUS "Warning: -fPIC not supported.")
   endif()
@@ -122,8 +126,8 @@ set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib )
 
 # set(CMAKE_VERBOSE_MAKEFILE true)
 
-add_definitions( -D__STDC_LIMIT_MACROS )
-add_definitions( -D__STDC_CONSTANT_MACROS )
+add_llvm_definitions( -D__STDC_LIMIT_MACROS )
+add_llvm_definitions( -D__STDC_CONSTANT_MACROS )
 
 set(LLVM_PLO_FLAGS "" CACHE
   STRING "Flags for creating partially linked objects.")
@@ -133,7 +137,7 @@ if( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
   option(LLVM_BUILD_32_BITS "Build 32 bits executables and libraries." OFF)
   if( LLVM_BUILD_32_BITS )
     message(STATUS "Building 32 bits executables and libraries.")
-    add_definitions( -m32 )
+    add_llvm_definitions( -m32 )
     list(APPEND CMAKE_EXE_LINKER_FLAGS -m32)
     list(APPEND CMAKE_SHARED_LINKER_FLAGS -m32)
     set( LLVM_PLO_FLAGS -melf_i386 ${LLVM_PLO_FLAGS} )
@@ -141,11 +145,11 @@ if( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
 endif( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
 
 if( MSVC )
-  add_definitions( -D_CRT_SECURE_NO_DEPRECATE -D_CRT_SECURE_NO_WARNINGS )
-  add_definitions( -D_SCL_SECURE_NO_WARNINGS -DCRT_NONSTDC_NO_WARNINGS )
-  add_definitions( -D_SCL_SECURE_NO_DEPRECATE )
-  add_definitions( -wd4146 -wd4503 -wd4996 -wd4800 -wd4244 -wd4624 )
-  add_definitions( -wd4355 -wd4715 )
+  add_llvm_definitions( -D_CRT_SECURE_NO_DEPRECATE -D_CRT_SECURE_NO_WARNINGS )
+  add_llvm_definitions( -D_SCL_SECURE_NO_WARNINGS -DCRT_NONSTDC_NO_WARNINGS )
+  add_llvm_definitions( -D_SCL_SECURE_NO_DEPRECATE )
+  add_llvm_definitions( -wd4146 -wd4503 -wd4996 -wd4800 -wd4244 -wd4624 )
+  add_llvm_definitions( -wd4355 -wd4715 -wd4180 -wd4345 -wd4224 )
 endif( MSVC )
 
 include_directories( ${LLVM_BINARY_DIR}/include ${LLVM_MAIN_INCLUDE_DIR})
@@ -203,6 +207,7 @@ add_subdirectory(lib/AsmParser)
 add_subdirectory(lib/Debugger)
 add_subdirectory(lib/Archive)
 
+add_subdirectory(projects)
 add_subdirectory(tools)
 
 add_subdirectory(examples)

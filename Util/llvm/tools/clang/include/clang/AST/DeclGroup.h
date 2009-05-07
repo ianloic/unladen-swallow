@@ -15,7 +15,6 @@
 #define LLVM_CLANG_AST_DECLGROUP_H
 
 #include "llvm/Support/DataTypes.h"
-#include "llvm/Bitcode/SerializationFwd.h"
 #include <cassert>
 
 namespace clang {
@@ -34,7 +33,7 @@ private:
   DeclGroup(unsigned numdecls, Decl** decls);
 
 public:
-  static DeclGroup* Create(ASTContext& C, unsigned numdecls, Decl** decls);
+  static DeclGroup *Create(ASTContext &C, Decl **Decls, unsigned NumDecls);
   void Destroy(ASTContext& C);
 
   unsigned size() const { return NumDecls; }
@@ -48,17 +47,12 @@ public:
     assert (i < NumDecls && "Out-of-bounds access.");
     return *((Decl* const*) (this+1));
   }
-  
-  /// Emit - Serialize a DeclGroup to Bitcode.
-  void Emit(llvm::Serializer& S) const;
-  
-  /// Read - Deserialize a DeclGroup from Bitcode.
-  static DeclGroup* Create(llvm::Deserializer& D, ASTContext& C);
 };
     
 class DeclGroupRef {
-protected:
-  enum Kind { DeclKind=0x0, DeclGroupKind=0x1, Mask=0x1 };  
+  // Note this is not a PointerIntPair because we need the address of the
+  // non-group case to be valid as a Decl** for iteration.
+  enum Kind { SingleDeclKind=0x0, DeclGroupKind=0x1, Mask=0x1 };  
   Decl* D;
 
   Kind getKind() const {
@@ -72,68 +66,87 @@ public:
   explicit DeclGroupRef(DeclGroup* dg)
     : D((Decl*) (reinterpret_cast<uintptr_t>(dg) | DeclGroupKind)) {}
   
+  static DeclGroupRef Create(ASTContext &C, Decl **Decls, unsigned NumDecls) {
+    if (NumDecls == 0)
+      return DeclGroupRef();
+    if (NumDecls == 1)
+      return DeclGroupRef(Decls[0]);
+    return DeclGroupRef(DeclGroup::Create(C, Decls, NumDecls));
+  }
+  
   typedef Decl** iterator;
   typedef Decl* const * const_iterator;
   
-  bool hasSolitaryDecl() const {
-    return getKind() == DeclKind;
-  }
+  bool isNull() const { return D == 0; }
+  bool isSingleDecl() const { return getKind() == SingleDeclKind; }
+  bool isDeclGroup() const { return getKind() == DeclGroupKind; }
 
+  Decl *getSingleDecl() {
+    assert(isSingleDecl() && "Isn't a declgroup");
+    return D;
+  }
+  const Decl *getSingleDecl() const {
+    return const_cast<DeclGroupRef*>(this)->getSingleDecl();
+  }
+  
+  DeclGroup &getDeclGroup() {
+    assert(isDeclGroup() && "Isn't a declgroup");
+    return *((DeclGroup*)(reinterpret_cast<uintptr_t>(D) & ~Mask));
+  }
+  const DeclGroup &getDeclGroup() const {
+    return const_cast<DeclGroupRef*>(this)->getDeclGroup();
+  }
+  
   iterator begin() {
-    if (getKind() == DeclKind) return D ? &D : 0;
-    DeclGroup& G = *((DeclGroup*) (reinterpret_cast<uintptr_t>(D) & ~Mask));
-    return &G[0];
+    if (isSingleDecl())
+      return D ? &D : 0;
+    return &getDeclGroup()[0];
   }
 
   iterator end() {
-    if (getKind() == DeclKind) return D ? &D + 1 : 0;
-    DeclGroup& G = *((DeclGroup*) (reinterpret_cast<uintptr_t>(D) & ~Mask));
+    if (isSingleDecl())
+      return D ? &D+1 : 0;
+    DeclGroup &G = getDeclGroup();
     return &G[0] + G.size();
   }
   
   const_iterator begin() const {
-    if (getKind() == DeclKind) return D ? &D : 0;
-    DeclGroup& G = *((DeclGroup*) (reinterpret_cast<uintptr_t>(D) & ~Mask));
-    return &G[0];
+    if (isSingleDecl())
+      return D ? &D : 0;
+    return &getDeclGroup()[0];
   }
   
   const_iterator end() const {
-    if (getKind() == DeclKind) return D ? &D + 1 : 0;
-    DeclGroup& G = *((DeclGroup*) (reinterpret_cast<uintptr_t>(D) & ~Mask));
+    if (isSingleDecl())
+      return D ? &D+1 : 0;
+    const DeclGroup &G = getDeclGroup();
     return &G[0] + G.size();
   }
 
-  /// Emit - Serialize a DeclGroupRef to Bitcode.
-  void Emit(llvm::Serializer& S) const;
-  
-  /// Read - Deserialize a DeclGroupRef from Bitcode.
-  static DeclGroupRef ReadVal(llvm::Deserializer& D);
-};
-  
-class DeclGroupOwningRef : public DeclGroupRef {
-public:
-  explicit DeclGroupOwningRef() : DeclGroupRef((Decl*)0) {}
-  explicit DeclGroupOwningRef(Decl* d) : DeclGroupRef(d) {}
-  explicit DeclGroupOwningRef(DeclGroup* dg) : DeclGroupRef(dg) {}
-
-  ~DeclGroupOwningRef();  
-  void Destroy(ASTContext& C);
-  
-  DeclGroupOwningRef(DeclGroupOwningRef& R)
-    : DeclGroupRef(R) { R.D = 0; }
-  
-  DeclGroupOwningRef& operator=(DeclGroupOwningRef& R) {
-    D = R.D;
-    R.D = 0;
-    return *this;
+  void *getAsOpaquePtr() const { return D; }
+  static DeclGroupRef getFromOpaquePtr(void *Ptr) {
+    DeclGroupRef X;
+    X.D = static_cast<Decl*>(Ptr);
+    return X;
   }
-  
-  /// Emit - Serialize a DeclGroupOwningRef to Bitcode.
-  void Emit(llvm::Serializer& S) const;
-  
-  /// Read - Deserialize a DeclGroupOwningRef from Bitcode.
-  DeclGroupOwningRef& Read(llvm::Deserializer& D, ASTContext& C);
 };
-
+  
 } // end clang namespace
+
+namespace llvm {
+  // DeclGroupRef is "like a pointer", implement PointerLikeTypeTraits.
+  template <typename T>
+  class PointerLikeTypeTraits;
+  template <>
+  class PointerLikeTypeTraits<clang::DeclGroupRef> {
+  public:
+    static inline void *getAsVoidPointer(clang::DeclGroupRef P) {
+      return P.getAsOpaquePtr();
+    }
+    static inline clang::DeclGroupRef getFromVoidPointer(void *P) {
+      return clang::DeclGroupRef::getFromOpaquePtr(P);
+    }
+    enum { NumLowBitsAvailable = 0 };
+  };
+}
 #endif

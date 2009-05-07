@@ -1,7 +1,9 @@
-// RUN: clang %s -E -Wundef -Werror 2>&1 | grep error | count 1 &&
-// RUN: clang %s -E -Werror 2>&1 | not grep error 
+// RUN: clang-cc %s -Eonly -Werror=undef -verify &&
+// RUN: clang-cc %s -Eonly -Werror-undef -verify
 
-#if foo   // Should generate an warning
+extern int x;
+
+#if foo   // expected-error {{'foo' is not defined, evaluates to 0}}
 #endif
 
 #ifdef foo
@@ -10,3 +12,10 @@
 #if defined(foo)
 #endif
 
+
+// PR3938
+#if 0
+#ifdef D
+#else 1       // Should not warn due to C99 6.10p4
+#endif
+#endif

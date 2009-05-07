@@ -74,27 +74,9 @@ public:
       AlwaysLive.push_back(VD);    
   }
   
-  void VisitUnaryOperator(UnaryOperator* U) {
-    // Check for '&'.  Any VarDecl whose value has its address-taken we
-    // treat as always being live (flow-insensitive).
-
-    Expr* E = U->getSubExpr()->IgnoreParenCasts();
-    
-    if (U->getOpcode() == UnaryOperator::AddrOf)
-      if (DeclRefExpr* DR = dyn_cast<DeclRefExpr>(E))
-        if (VarDecl* VD = dyn_cast<VarDecl>(DR->getDecl())) {
-          AD.Register(VD);
-          AlwaysLive.push_back(VD);
-          return;
-        }
-      
-    Visit(E);
-  }
-    
   CFG& getCFG() { return AD.getCFG(); }
 };
 } // end anonymous namespace
-
 
 LiveVariables::LiveVariables(ASTContext& Ctx, CFG& cfg) {
   // Register all referenced VarDecls.
@@ -194,7 +176,7 @@ TransferFuncs::BlockStmt_VisitObjCForCollectionStmt(ObjCForCollectionStmt* S) {
   VarDecl* VD = 0;
   
   if (DeclStmt* DS = dyn_cast<DeclStmt>(Element))
-    VD = cast<VarDecl>(DS->getSolitaryDecl());
+    VD = cast<VarDecl>(DS->getSingleDecl());
   else {
     Expr* ElemExpr = cast<Expr>(Element)->IgnoreParens();    
     if ((DR = dyn_cast<DeclRefExpr>(ElemExpr)))

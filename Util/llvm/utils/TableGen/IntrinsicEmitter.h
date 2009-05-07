@@ -20,9 +20,12 @@
 namespace llvm {
   class IntrinsicEmitter : public TableGenBackend {
     RecordKeeper &Records;
+    bool TargetOnly;
+    std::string TargetPrefix;
     
   public:
-    IntrinsicEmitter(RecordKeeper &R) : Records(R) {}
+    IntrinsicEmitter(RecordKeeper &R, bool T = false) 
+      : Records(R), TargetOnly(T) {}
 
     void run(std::ostream &OS);
     
@@ -33,12 +36,16 @@ namespace llvm {
                               std::ostream &OS);
     void EmitIntrinsicToNameTable(const std::vector<CodeGenIntrinsic> &Ints, 
                                   std::ostream &OS);
+    void EmitIntrinsicToOverloadTable(const std::vector<CodeGenIntrinsic> &Ints, 
+                                      std::ostream &OS);
     void EmitVerifier(const std::vector<CodeGenIntrinsic> &Ints, 
                       std::ostream &OS);
     void EmitGenerator(const std::vector<CodeGenIntrinsic> &Ints, 
                        std::ostream &OS);
     void EmitAttributes(const std::vector<CodeGenIntrinsic> &Ints,
                         std::ostream &OS);
+    void EmitModRefBehavior(const std::vector<CodeGenIntrinsic> &Ints,
+                            std::ostream &OS);
     void EmitGCCBuiltinList(const std::vector<CodeGenIntrinsic> &Ints, 
                             std::ostream &OS);
     void EmitIntrinsicToGCCBuiltinMap(const std::vector<CodeGenIntrinsic> &Ints, 

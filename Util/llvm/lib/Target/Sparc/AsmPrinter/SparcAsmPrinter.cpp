@@ -19,6 +19,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -39,17 +40,18 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  struct VISIBILITY_HIDDEN SparcAsmPrinter : public AsmPrinter {
-    SparcAsmPrinter(raw_ostream &O, TargetMachine &TM, const TargetAsmInfo *T)
-      : AsmPrinter(O, TM, T) {
-    }
-
+  class VISIBILITY_HIDDEN SparcAsmPrinter : public AsmPrinter {
     /// We name each basic block in a Function with a unique number, so
     /// that we can consistently refer to them later. This is cleared
     /// at the beginning of each call to runOnMachineFunction().
     ///
     typedef std::map<const Value *, unsigned> ValueMapTy;
     ValueMapTy NumberForBB;
+  public:
+    explicit SparcAsmPrinter(raw_ostream &O, TargetMachine &TM,
+                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                             bool V)
+      : AsmPrinter(O, TM, T, OL, V) {}
 
     virtual const char *getPassName() const {
       return "Sparc Assembly Printer";
@@ -80,14 +82,18 @@ namespace {
 /// regardless of whether the function is in SSA form.
 ///
 FunctionPass *llvm::createSparcCodePrinterPass(raw_ostream &o,
-                                               TargetMachine &tm) {
-  return new SparcAsmPrinter(o, tm, tm.getTargetAsmInfo());
+                                               TargetMachine &tm,
+                                               CodeGenOpt::Level OptLevel,
+                                               bool verbose) {
+  return new SparcAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
 }
 
 /// runOnMachineFunction - This uses the printInstruction()
 /// method to print assembly for each instruction.
 ///
 bool SparcAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
+
   SetupMachineFunction(MF);
 
   // Print out constants referenced by the function
@@ -256,7 +262,7 @@ void SparcAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
 
   if (C->isNullValue() && !GVar->hasSection()) {
     if (!GVar->isThreadLocal() &&
-        (GVar->hasLocalLinkage() || GVar->mayBeOverridden())) {
+        (GVar->hasLocalLinkage() || GVar->isWeakForLinker())) {
       if (Size == 0) Size = 1;   // .comm Foo, 0 is undefined, avoid it.
 
       if (GVar->hasLocalLinkage())
@@ -273,8 +279,10 @@ void SparcAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
 
   switch (GVar->getLinkage()) {
    case GlobalValue::CommonLinkage:
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:   // FIXME: Verify correct for weak.
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage: // FIXME: Verify correct for weak.
+   case GlobalValue::WeakODRLinkage: // FIXME: Verify correct for weak.
     // Nonnull linkonce -> weak
     O << "\t.weak " << name << '\n';
     break;

@@ -1,4 +1,4 @@
-// RUN: clang %s -fsyntax-only -verify
+// RUN: clang-cc -arch i386-apple-darwin9 %s -fsyntax-only -verify
 // rdar://5957506
 
 @interface NSWhatever :
@@ -20,8 +20,19 @@ NSObject     // expected-error {{cannot find interface declaration for 'NSObject
 @end
 
 void test2() {
-    INT1 b[3];          // expected-warning {{array of interface 'INT1' should probably be an array of pointers}}
+    // rdar://6827200
+    INT1 b[3];          // expected-error {{array of interface 'INT1' is invalid (probably should be an array of pointers)}}
     INT1 *c = &b[0];
     ++c;
 }
+
+
+// rdar://6611778
+@interface FOO  // expected-note {{previous definition is here}}
+- (void)method;
+@end
+
+@interface FOO  // expected-error {{duplicate interface definition for class 'FOO'}}
+- (void)method2;
+@end
 

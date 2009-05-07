@@ -16,9 +16,11 @@
 #ifndef LLVM_CODEGEN_ASMPRINTER_H
 #define LLVM_CODEGEN_ASMPRINTER_H
 
-#include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/Analysis/DebugInfo.h"
+#include "llvm/Support/DataTypes.h"
+#include "llvm/Target/TargetMachine.h"
 #include <set>
 
 namespace llvm {
@@ -51,20 +53,22 @@ namespace llvm {
     ///
     unsigned FunctionNumber;
 
-    /// DW -This is needed because printDeclare() has to insert
-    /// DbgVariable entries into the dwarf table. This is a short term hack
-    /// that ought be fixed soon.
-    DwarfWriter *DW;
-    
     // GCMetadataPrinters - The garbage collection metadata printer table.
     typedef DenseMap<GCStrategy*,GCMetadataPrinter*> gcp_map_type;
     typedef gcp_map_type::iterator gcp_iterator;
     gcp_map_type GCMetadataPrinters;
     
   protected:
+    /// DW -This is needed because printDeclare() has to insert
+    /// DbgVariable entries into the dwarf table. This is a short term hack
+    /// that ought be fixed soon.
+    DwarfWriter *DW;
+    
     // Necessary for external weak linkage support
     std::set<const GlobalValue*> ExtWeakSymbols;
 
+    /// OptLevel - Generating code at a specific optimization level.
+    CodeGenOpt::Level OptLevel;
   public:
     /// Output stream on which we're printing assembly code.
     ///
@@ -81,6 +85,9 @@ namespace llvm {
     /// Target Register Information.
     ///
     const TargetRegisterInfo *TRI;
+
+    /// The current machine function.
+    const MachineFunction *MF;
 
     /// Name-mangler for global names.
     ///
@@ -99,13 +106,22 @@ namespace llvm {
     /// IsInTextSection - True if the current section we are emitting to is a
     /// text section.
     bool IsInTextSection;
-  
+
+    /// VerboseAsm - Emit comments in assembly output if this is true.
+    ///
+    bool VerboseAsm;
+
   protected:
-    AsmPrinter(raw_ostream &o, TargetMachine &TM, const TargetAsmInfo *T);
+    explicit AsmPrinter(raw_ostream &o, TargetMachine &TM,
+                        const TargetAsmInfo *T, CodeGenOpt::Level OL, bool V);
     
   public:
     virtual ~AsmPrinter();
-    
+
+    /// isVerbose - Return true if assembly output should contain comments.
+    ///
+    bool isVerbose() const { return VerboseAsm; }
+
     /// SwitchToTextSection - Switch to the specified section of the executable
     /// if we are not already in it!  If GV is non-null and if the global has an
     /// explicitly requested section, we switch to the section indicated for the
@@ -139,7 +155,8 @@ namespace llvm {
     /// getGlobalLinkName - Returns the asm/link name of of the specified
     /// global variable.  Should be overridden by each target asm printer to
     /// generate the appropriate value.
-    virtual const std::string getGlobalLinkName(const GlobalVariable *GV) const;
+    virtual const std::string &getGlobalLinkName(const GlobalVariable *GV,
+                                                 std::string &LinkName) const;
 
     /// EmitExternalGlobal - Emit the external reference to a global variable.
     /// Should be overridden if an indirect reference should be used.
@@ -148,7 +165,8 @@ namespace llvm {
     /// getCurrentFunctionEHName - Called to return (and cache) the
     /// CurrentFnEHName.
     /// 
-    std::string getCurrentFunctionEHName(const MachineFunction *MF);
+    const std::string &getCurrentFunctionEHName(const MachineFunction *MF,
+                                                std::string &FuncEHName) const;
 
   protected:
     /// getAnalysisUsage - Record analysis usage.
@@ -170,7 +188,7 @@ namespace llvm {
     /// or other bits of target-specific knowledge into the asmstrings.  The
     /// syntax used is ${:comment}.  Targets can override this to add support
     /// for their own strange codes.
-    virtual void PrintSpecial(const MachineInstr *MI, const char *Code);
+    virtual void PrintSpecial(const MachineInstr *MI, const char *Code) const;
 
     /// PrintAsmOperand - Print the specified operand of MI, an INLINEASM
     /// instruction, using the specified assembler variant.  Targets should
@@ -271,7 +289,8 @@ namespace llvm {
     /// Special characters are emitted properly.
     /// @verbatim (Eg. '\t') @endverbatim
     void EmitString(const std::string &String) const;
-    
+    void EmitString(const char *String, unsigned Size) const;
+
     /// EmitFile - Emit a .file directive.
     void EmitFile(unsigned Number, const std::string &Name) const;
 
@@ -373,7 +392,7 @@ namespace llvm {
     void EmitXXStructorList(Constant *List);
     void EmitGlobalConstantStruct(const ConstantStruct* CVS,
                                   unsigned AddrSpace);
-    void EmitGlobalConstantArray(const ConstantArray* CVA);
+    void EmitGlobalConstantArray(const ConstantArray* CVA, unsigned AddrSpace);
     void EmitGlobalConstantVector(const ConstantVector* CP);
     void EmitGlobalConstantFP(const ConstantFP* CFP, unsigned AddrSpace);
     void EmitGlobalConstantLargeInt(const ConstantInt* CI, unsigned AddrSpace);

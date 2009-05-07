@@ -105,20 +105,52 @@ namespace clang {
 
 namespace {
 
+class VISIBILITY_HIDDEN RegionStoreSubRegionMap : public SubRegionMap {
+  typedef llvm::DenseMap<const MemRegion*,
+                         llvm::ImmutableSet<const MemRegion*> > Map;
+  
+  llvm::ImmutableSet<const MemRegion*>::Factory F;
+  Map M;
+
+public:
+  void add(const MemRegion* Parent, const MemRegion* SubRegion) {
+    Map::iterator I = M.find(Parent);
+    M.insert(std::make_pair(Parent, 
+             F.Add(I == M.end() ? F.GetEmptySet() : I->second, SubRegion)));
+  }
+    
+  ~RegionStoreSubRegionMap() {}
+  
+  bool iterSubRegions(const MemRegion* Parent, Visitor& V) const {
+    Map::iterator I = M.find(Parent);
+
+    if (I == M.end())
+      return true;
+    
+    llvm::ImmutableSet<const MemRegion*> S = I->second;
+    for (llvm::ImmutableSet<const MemRegion*>::iterator SI=S.begin(),SE=S.end();
+         SI != SE; ++SI) {
+      if (!V.Visit(Parent, *SI))
+        return false;
+    }
+    
+    return true;
+  }
+};  
+
 class VISIBILITY_HIDDEN RegionStoreManager : public StoreManager {
   RegionBindingsTy::Factory RBFactory;
   RegionViews::Factory RVFactory;
 
-  GRStateManager& StateMgr;
   const MemRegion* SelfRegion;
   const ImplicitParamDecl *SelfDecl;
 
 public:
   RegionStoreManager(GRStateManager& mgr) 
-    : StoreManager(mgr.getAllocator()),
+    : StoreManager(mgr),
       RBFactory(mgr.getAllocator()),
       RVFactory(mgr.getAllocator()),
-      StateMgr(mgr), SelfRegion(0), SelfDecl(0) {
+      SelfRegion(0), SelfDecl(0) {
     if (const ObjCMethodDecl* MD =
           dyn_cast<ObjCMethodDecl>(&StateMgr.getCodeDecl()))
       SelfDecl = MD->getSelfDecl();
@@ -126,7 +158,7 @@ public:
 
   virtual ~RegionStoreManager() {}
 
-  MemRegionManager& getRegionManager() { return MRMgr; }
+  SubRegionMap* getSubRegionMap(const GRState *state);
   
   const GRState* BindCompoundLiteral(const GRState* St, 
                                      const CompoundLiteralExpr* CL, SVal V);
@@ -151,8 +183,11 @@ public:
   SVal getLValueIvar(const GRState* St, const ObjCIvarDecl* D, SVal Base);
 
   SVal getLValueField(const GRState* St, SVal Base, const FieldDecl* D);
+  
+  SVal getLValueFieldOrIvar(const GRState* St, SVal Base, const Decl* D);
 
-  SVal getLValueElement(const GRState* St, SVal Base, SVal Offset);
+  SVal getLValueElement(const GRState* St, QualType elementType,
+                        SVal Base, SVal Offset);
 
   SVal getSizeInElements(const GRState* St, const MemRegion* R);
 
@@ -162,13 +197,9 @@ public:
   ///  version of that lvalue (i.e., a pointer to the first element of
   ///  the array).  This is called by GRExprEngine when evaluating
   ///  casts from arrays to pointers.
-  SVal ArrayToPointer(SVal Array);
+  SVal ArrayToPointer(Loc Array);
 
-  /// CastRegion - Used by GRExprEngine::VisitCast to handle casts from
-  ///  a MemRegion* to a specific location type.  'R' is the region being
-  ///  casted and 'CastToTy' the result type of the cast.  
-  CastResult CastRegion(const GRState* state, const MemRegion* R,
-                        QualType CastToTy);
+  SVal EvalBinOp(BinaryOperator::Opcode Op, Loc L, NonLoc R);
 
   /// The high level logic for this method is this:
   /// Retrieve (L)
@@ -231,10 +262,6 @@ public:
   }
 
 private:
-  Loc getVarLoc(const VarDecl* VD) {
-    return loc::MemRegionVal(MRMgr.getVarRegion(VD));
-  }
-
   const GRState* BindArray(const GRState* St, const TypedRegion* R, SVal V);
 
   /// Retrieve the values in a struct and return a CompoundVal, used when doing
@@ -243,6 +270,8 @@ private:
   /// x = y;
   /// y's value is retrieved by this method.
   SVal RetrieveStruct(const GRState* St, const TypedRegion* R);
+
+  SVal RetrieveArray(const GRState* St, const TypedRegion* R);
 
   const GRState* BindStruct(const GRState* St, const TypedRegion* R, SVal V);
 
@@ -266,6 +295,17 @@ StoreManager* clang::CreateRegionStoreManager(GRStateManager& StMgr) {
   return new RegionStoreManager(StMgr);
 }
 
+SubRegionMap* RegionStoreManager::getSubRegionMap(const GRState *state) {
+  RegionBindingsTy B = GetRegionBindings(state->getStore());
+  RegionStoreSubRegionMap *M = new RegionStoreSubRegionMap();
+  
+  for (RegionBindingsTy::iterator I=B.begin(), E=B.end(); I!=E; ++I) {
+    if (const SubRegion* R = dyn_cast<SubRegion>(I.getKey()))
+      M->add(R->getSuperRegion(), R);
+  }
+  
+  return M;
+}
 
 /// getLValueString - Returns an SVal representing the lvalue of a
 ///  StringLiteral.  Within RegionStore a StringLiteral has an
@@ -295,11 +335,16 @@ RegionStoreManager::getLValueCompoundLiteral(const GRState* St,
 
 SVal RegionStoreManager::getLValueIvar(const GRState* St, const ObjCIvarDecl* D,
                                        SVal Base) {
-  return UnknownVal();
+  return getLValueFieldOrIvar(St, Base, D);
 }
 
 SVal RegionStoreManager::getLValueField(const GRState* St, SVal Base,
                                         const FieldDecl* D) {
+  return getLValueFieldOrIvar(St, Base, D);
+}
+
+SVal RegionStoreManager::getLValueFieldOrIvar(const GRState* St, SVal Base,
+                                              const Decl* D) {
   if (Base.isUnknownOrUndef())
     return Base;
 
@@ -309,14 +354,13 @@ SVal RegionStoreManager::getLValueField(const GRState* St, SVal Base,
   switch (BaseL.getSubKind()) {
   case loc::MemRegionKind:
     BaseR = cast<loc::MemRegionVal>(BaseL).getRegion();
+    if (const SymbolicRegion* SR = dyn_cast<SymbolicRegion>(BaseR)) {
+      SymbolRef Sym = SR->getSymbol();
+      BaseR = MRMgr.getTypedViewRegion(Sym->getType(getContext()), SR);
+    }
     break;
 
-  case loc::SymbolValKind:
-    BaseR = MRMgr.getSymbolicRegion(cast<loc::SymbolVal>(&BaseL)->getSymbol());
-    break;
-  
   case loc::GotoLabelKind:
-  case loc::FuncValKind:
     // These are anormal cases. Flag an undefined value.
     return UndefinedVal();
 
@@ -331,22 +375,39 @@ SVal RegionStoreManager::getLValueField(const GRState* St, SVal Base,
     assert(0 && "Unhandled Base.");
     return Base;
   }
+  
+  // NOTE: We must have this check first because ObjCIvarDecl is a subclass
+  // of FieldDecl.
+  if (const ObjCIvarDecl *ID = dyn_cast<ObjCIvarDecl>(D))
+    return loc::MemRegionVal(MRMgr.getObjCIvarRegion(ID, BaseR));
 
-  return loc::MemRegionVal(MRMgr.getFieldRegion(D, BaseR));
+  return loc::MemRegionVal(MRMgr.getFieldRegion(cast<FieldDecl>(D), BaseR));
 }
 
-SVal RegionStoreManager::getLValueElement(const GRState* St, 
+SVal RegionStoreManager::getLValueElement(const GRState* St,
+                                          QualType elementType,
                                           SVal Base, SVal Offset) {
 
-  if (Base.isUnknownOrUndef() || isa<loc::SymbolVal>(Base))
+  // If the base is an unknown or undefined value, just return it back.
+  // FIXME: For absolute pointer addresses, we just return that value back as
+  //  well, although in reality we should return the offset added to that
+  //  value.
+  if (Base.isUnknownOrUndef() || isa<loc::ConcreteInt>(Base))
     return Base;
 
   // Only handle integer offsets... for now.
   if (!isa<nonloc::ConcreteInt>(Offset))
     return UnknownVal();
 
-  const TypedRegion *BaseRegion =
-    cast<TypedRegion>(cast<loc::MemRegionVal>(Base).getRegion());
+  const TypedRegion* BaseRegion = 0;
+
+  const MemRegion* R = cast<loc::MemRegionVal>(Base).getRegion();
+  if (const SymbolicRegion* SR = dyn_cast<SymbolicRegion>(R)) {
+    SymbolRef Sym = SR->getSymbol();
+    BaseRegion = MRMgr.getTypedViewRegion(Sym->getType(getContext()), SR);
+  }
+  else
+    BaseRegion = cast<TypedRegion>(R);
 
   // Pointer of any type can be cast and used as array base.
   const ElementRegion *ElemR = dyn_cast<ElementRegion>(BaseRegion);
@@ -359,9 +420,20 @@ SVal RegionStoreManager::getLValueElement(const GRState* St,
     //   char *p = __builtin_alloc(10);
     //   p[1] = 8;
     //
-    //  Observe that 'p' binds to an AnonTypedRegion<AllocaRegion>.
+    //  Observe that 'p' binds to an TypedViewRegion<AllocaRegion>.
     //
-    return loc::MemRegionVal(MRMgr.getElementRegion(Offset, BaseRegion));
+
+    // Offset might be unsigned. We have to convert it to signed ConcreteInt.
+    if (nonloc::ConcreteInt* CI = dyn_cast<nonloc::ConcreteInt>(&Offset)) {
+      const llvm::APSInt& OffI = CI->getValue();
+      if (OffI.isUnsigned()) {
+        llvm::APSInt Tmp = OffI;
+        Tmp.setIsSigned(true);
+        Offset = NonLoc::MakeVal(getBasicVals(), Tmp);
+      }
+    }
+    return loc::MemRegionVal(MRMgr.getElementRegion(elementType, Offset,
+                                                    BaseRegion));
   }
   
   SVal BaseIdx = ElemR->getIndex();
@@ -378,7 +450,7 @@ SVal RegionStoreManager::getLValueElement(const GRState* St,
   // can't we need to put a comment here.  If it can, we should handle it.
   assert(BaseIdxI.getBitWidth() >= OffI.getBitWidth());
 
-  const TypedRegion *ArrayR = ElemR->getArrayRegion();
+  const TypedRegion *ArrayR = cast<TypedRegion>(ElemR->getSuperRegion());
   SVal NewIdx;
   
   if (OffI.isUnsigned() || OffI.getBitWidth() < BaseIdxI.getBitWidth()) {
@@ -391,12 +463,12 @@ SVal RegionStoreManager::getLValueElement(const GRState* St,
     
     Tmp.setIsSigned(true);
     Tmp += BaseIdxI; // Compute the new offset.    
-    NewIdx = nonloc::ConcreteInt(getBasicVals().getValue(Tmp));    
+    NewIdx = NonLoc::MakeVal(getBasicVals(), Tmp);    
   }
   else
     NewIdx = nonloc::ConcreteInt(getBasicVals().getValue(BaseIdxI + OffI));
 
-  return loc::MemRegionVal(MRMgr.getElementRegion(NewIdx, ArrayR));
+  return loc::MemRegionVal(MRMgr.getElementRegion(elementType, NewIdx, ArrayR));
 }
 
 SVal RegionStoreManager::getSizeInElements(const GRState* St,
@@ -426,7 +498,7 @@ SVal RegionStoreManager::getSizeInElements(const GRState* St,
     return NonLoc::MakeIntVal(getBasicVals(), Str->getByteLength()+1, false);
   }
 
-  if (const AnonTypedRegion* ATR = dyn_cast<AnonTypedRegion>(R)) {
+  if (const TypedViewRegion* ATR = dyn_cast<TypedViewRegion>(R)) {
 #if 0
     // FIXME: This logic doesn't really work, as we can have all sorts of
     // weird cases.  For example, this crashes on test case 'rdar-6442306-1.m'.
@@ -475,6 +547,10 @@ SVal RegionStoreManager::getSizeInElements(const GRState* St,
     return UnknownVal();
   }
 
+  if (isa<SymbolicRegion>(R)) {
+    return UnknownVal();
+  }
+
   assert(0 && "Other regions are not supported yet.");
   return UnknownVal();
 }
@@ -485,12 +561,7 @@ SVal RegionStoreManager::getSizeInElements(const GRState* St,
 ///  version of that lvalue (i.e., a pointer to the first element of
 ///  the array).  This is called by GRExprEngine when evaluating casts
 ///  from arrays to pointers.
-SVal RegionStoreManager::ArrayToPointer(SVal Array) {
-  // FIXME: This should be factored into GRExprEngine.  This allows
-  // us to pass a "loc" instead of an "SVal" for "Array".
-  if (Array.isUnknownOrUndef())
-    return Array;
-  
+SVal RegionStoreManager::ArrayToPointer(Loc Array) {
   if (!isa<loc::MemRegionVal>(Array))
     return UnknownVal();
   
@@ -500,61 +571,85 @@ SVal RegionStoreManager::ArrayToPointer(SVal Array) {
   if (!ArrayR)
     return UnknownVal();
   
+  // Strip off typedefs from the ArrayRegion's RvalueType.
+  QualType T = ArrayR->getRValueType(getContext())->getDesugaredType();
+  ArrayType *AT = cast<ArrayType>(T);
+  T = AT->getElementType();
+  
   nonloc::ConcreteInt Idx(getBasicVals().getZeroWithPtrWidth(false));
-  ElementRegion* ER = MRMgr.getElementRegion(Idx, ArrayR);
+  ElementRegion* ER = MRMgr.getElementRegion(T, Idx, ArrayR);
   
   return loc::MemRegionVal(ER);                    
 }
 
-StoreManager::CastResult
-RegionStoreManager::CastRegion(const GRState* state, const MemRegion* R,
-                               QualType CastToTy) {
+SVal RegionStoreManager::EvalBinOp(BinaryOperator::Opcode Op, Loc L, NonLoc R) {
+  // Assume the base location is MemRegionVal(ElementRegion).
+  if (!isa<loc::MemRegionVal>(L))
+    return UnknownVal();
+
+  const MemRegion* MR = cast<loc::MemRegionVal>(L).getRegion();
+  if (isa<SymbolicRegion>(MR))
+    return UnknownVal();
+
+  const TypedRegion* TR = cast<TypedRegion>(MR);
+  const ElementRegion* ER = dyn_cast<ElementRegion>(TR);
   
-  // Return the same region if the region types are compatible.
-  if (const TypedRegion* TR = dyn_cast<TypedRegion>(R)) {
-    ASTContext& Ctx = StateMgr.getContext();
-    QualType Ta = Ctx.getCanonicalType(TR->getLValueType(Ctx));
-    QualType Tb = Ctx.getCanonicalType(CastToTy);
-    
-    if (Ta == Tb)
-      return CastResult(state, R);
+  if (!ER) {
+    // If the region is not element region, create one with index 0. This can
+    // happen in the following example:
+    // char *p = foo();
+    // p += 3;
+    // Note that p binds to a TypedViewRegion(SymbolicRegion).
+    nonloc::ConcreteInt Idx(getBasicVals().getZeroWithPtrWidth(false));
+    ER = MRMgr.getElementRegion(TR->getRValueType(getContext()), Idx, TR);
   }
 
-  // FIXME: We should handle the case when we are casting *back* to a
-  // previous type. For example:
-  //
-  //      void* x = ...;
-  //      char* y = (char*) x;
-  //      void* z = (void*) y; // <-- we should get the same region that is 
-  //                                  bound to 'x'
-  const MemRegion* ViewR = MRMgr.getAnonTypedRegion(CastToTy, R);  
-  return CastResult(AddRegionView(state, ViewR, R), ViewR);
+  SVal Idx = ER->getIndex();
+
+  nonloc::ConcreteInt* Base = dyn_cast<nonloc::ConcreteInt>(&Idx);
+  nonloc::ConcreteInt* Offset = dyn_cast<nonloc::ConcreteInt>(&R);
+
+  // Only support concrete integer indexes for now.
+  if (Base && Offset) {
+    // FIXME: For now, convert the signedness and bitwidth of offset in case
+    //  they don't match.  This can result from pointer arithmetic.  In reality,
+    //  we should figure out what are the proper semantics and implement them.
+    // 
+    //  This addresses the test case test/Analysis/ptr-arith.c
+    //
+    nonloc::ConcreteInt OffConverted(getBasicVals().Convert(Base->getValue(),
+                                                           Offset->getValue()));
+    SVal NewIdx = Base->EvalBinOp(getBasicVals(), Op, OffConverted);
+    const MemRegion* NewER =
+      MRMgr.getElementRegion(ER->getElementType(), NewIdx, 
+                             cast<TypedRegion>(ER->getSuperRegion()));
+    return Loc::MakeVal(NewER);
+
+  }
+  
+  return UnknownVal();
 }
 
 SVal RegionStoreManager::Retrieve(const GRState* St, Loc L, QualType T) {
   assert(!isa<UnknownVal>(L) && "location unknown");
   assert(!isa<UndefinedVal>(L) && "location undefined");
 
-  // FIXME: What does loc::SymbolVal represent?  It represents the value
-  //  of a location but that value is not known.  In the future we should
-  //  handle potential aliasing relationships; e.g. a loc::SymbolVal could
-  //  be an alias for a particular region.
-  if (isa<loc::SymbolVal>(L))
-    return UnknownVal();
-
   // FIXME: Is this even possible?  Shouldn't this be treated as a null
   //  dereference at a higher level?
   if (isa<loc::ConcreteInt>(L))
     return UndefinedVal();
 
-  // FIXME: Should this be refactored into GRExprEngine or GRStateManager?
-  //  It seems that all StoreManagers would do the same thing here.
-  if (isa<loc::FuncVal>(L))
-    return L;
+  const MemRegion* MR = cast<loc::MemRegionVal>(L).getRegion();
+
+  // We return unknown for symbolic region for now. This might be improved.
+  // Example:
+  // void f(int* p) { int x = *p; }
+  if (isa<SymbolicRegion>(MR))
+    return UnknownVal();
 
   // FIXME: Perhaps this method should just take a 'const MemRegion*' argument
   //  instead of 'Loc', and have the other Loc cases handled at a higher level.
-  const MemRegion* R = cast<loc::MemRegionVal>(L).getRegion();
+  const TypedRegion* R = cast<TypedRegion>(MR);
   assert(R && "bad region");
 
   // FIXME: We should eventually handle funny addressing.  e.g.:
@@ -566,9 +661,17 @@ SVal RegionStoreManager::Retrieve(const GRState* St, Loc L, QualType T) {
   //
   // Such funny addressing will occur due to layering of regions.
 
-  if (const TypedRegion* TR = dyn_cast<TypedRegion>(R))
-    if (TR->getRValueType(getContext())->isStructureType())
-      return RetrieveStruct(St, TR);
+  QualType RTy = R->getRValueType(getContext());
+
+  if (RTy->isStructureType())
+    return RetrieveStruct(St, R);
+
+  if (RTy->isArrayType())
+    return RetrieveArray(St, R);
+
+  // FIXME: handle Vector types.
+  if (RTy->isVectorType())
+      return UnknownVal();
   
   RegionBindingsTy B = GetRegionBindings(St->getStore());
   RegionBindingsTy::data_type* V = B.lookup(R);
@@ -583,13 +686,28 @@ SVal RegionStoreManager::Retrieve(const GRState* St, Loc L, QualType T) {
   if (state.contains<RegionKills>(R))
     return UnknownVal();
 
-  // If the region is an element of field, it may have a default value.
+  // If the region is an element or field, it may have a default value.
   if (isa<ElementRegion>(R) || isa<FieldRegion>(R)) {
     const MemRegion* SuperR = cast<SubRegion>(R)->getSuperRegion();
     GRStateTrait<RegionDefaultValue>::lookup_type D = 
       state.get<RegionDefaultValue>(SuperR);
     if (D)
       return *D;
+  }
+  
+  if (const ObjCIvarRegion *IVR = dyn_cast<ObjCIvarRegion>(R)) {
+    const MemRegion *SR = IVR->getSuperRegion();
+
+    // If the super region is 'self' then return the symbol representing
+    // the value of the ivar upon entry to the method.
+    if (SR == SelfRegion) {
+      // FIXME: Do we need to handle the case where the super region
+      // has a view?  We want to canonicalize the bindings.
+      return ValMgr.getRValueSymbolVal(R);
+    }
+    
+    // Otherwise, we need a new symbol.  For now return Unknown.
+    return UnknownVal();
   }
 
   // The location does not have a bound value.  This means that it has
@@ -600,12 +718,19 @@ SVal RegionStoreManager::Retrieve(const GRState* St, Loc L, QualType T) {
   if (const VarRegion* VR = dyn_cast<VarRegion>(R)) {
     const VarDecl *VD = VR->getDecl();
     
-    if (isa<ParmVarDecl>(VD))
-      return SVal::GetRValueSymbolVal(getSymbolManager(), VR);
-    else if (VD == SelfDecl)
+    if (VD == SelfDecl)
       return loc::MemRegionVal(getSelfRegion(0));
-  }
-  
+    
+    if (isa<ParmVarDecl>(VD) || isa<ImplicitParamDecl>(VD) ||
+        VD->hasGlobalStorage()) {
+      QualType VTy = VD->getType();
+      if (Loc::IsLocType(VTy) || VTy->isIntegerType())
+        return ValMgr.getRValueSymbolVal(VR);
+      else
+        return UnknownVal();
+    }
+  }  
+
   if (MRMgr.onStack(R) || MRMgr.onHeap(R)) {
     // All stack variables are considered to have undefined values
     // upon creation.  All heap allocated blocks are considered to
@@ -614,17 +739,14 @@ SVal RegionStoreManager::Retrieve(const GRState* St, Loc L, QualType T) {
     return UndefinedVal();
   }
 
-  // All other values are symbolic.
-  return SVal::GetRValueSymbolVal(getSymbolManager(), R);
-
-  // FIXME: consider default values for elements and fields.
+  // All other integer values are symbolic.
+  if (Loc::IsLocType(RTy) || RTy->isIntegerType())
+    return ValMgr.getRValueSymbolVal(R);
+  else
+    return UnknownVal();
 }
 
 SVal RegionStoreManager::RetrieveStruct(const GRState* St,const TypedRegion* R){
-
-  Store store = St->getStore();
-  GRStateRef state(St, StateMgr);
-
   // FIXME: Verify we want getRValueType instead of getLValueType.
   QualType T = R->getRValueType(getContext());
   assert(T->isStructureType());
@@ -635,39 +757,43 @@ SVal RegionStoreManager::RetrieveStruct(const GRState* St,const TypedRegion* R){
 
   llvm::ImmutableList<SVal> StructVal = getBasicVals().getEmptySValList();
 
-  std::vector<FieldDecl *> Fields(RD->field_begin(), RD->field_end());
+  std::vector<FieldDecl *> Fields(RD->field_begin(getContext()), 
+                                  RD->field_end(getContext()));
 
   for (std::vector<FieldDecl *>::reverse_iterator Field = Fields.rbegin(),
                                                FieldEnd = Fields.rend();
        Field != FieldEnd; ++Field) {
     FieldRegion* FR = MRMgr.getFieldRegion(*Field, R);
-    RegionBindingsTy B = GetRegionBindings(store);
-    RegionBindingsTy::data_type* data = B.lookup(FR);
-
-    SVal FieldValue;
-    if (data)
-      FieldValue = *data;
-    else if (state.contains<RegionKills>(FR))
-      FieldValue = UnknownVal();
-    else {
-      if (MRMgr.onStack(FR) || MRMgr.onHeap(FR))
-        FieldValue = UndefinedVal();
-      else
-        FieldValue = SVal::GetRValueSymbolVal(getSymbolManager(), FR);        
-    }
-
+    QualType FTy = (*Field)->getType();
+    SVal FieldValue = Retrieve(St, loc::MemRegionVal(FR), FTy);
     StructVal = getBasicVals().consVals(FieldValue, StructVal);
   }
 
   return NonLoc::MakeCompoundVal(T, StructVal, getBasicVals());
 }
 
-const GRState* RegionStoreManager::Bind(const GRState* St, Loc L, SVal V) {
-  // Currently we don't bind value to symbolic location. But if the logic is
-  // made clear, we might change this decision.
-  if (isa<loc::SymbolVal>(L))
-    return St;
+SVal RegionStoreManager::RetrieveArray(const GRState* St, const TypedRegion* R){
+  QualType T = R->getRValueType(getContext());
+  ConstantArrayType* CAT = cast<ConstantArrayType>(T.getTypePtr());
 
+  llvm::ImmutableList<SVal> ArrayVal = getBasicVals().getEmptySValList();
+  llvm::APSInt Size(CAT->getSize(), false);
+  llvm::APSInt i = getBasicVals().getValue(0, Size.getBitWidth(), 
+					   Size.isUnsigned());
+
+  for (; i < Size; ++i) {
+    SVal Idx = NonLoc::MakeVal(getBasicVals(), i);
+    ElementRegion* ER = MRMgr.getElementRegion(R->getRValueType(getContext()),
+                                               Idx, R);
+    QualType ETy = ER->getElementType();
+    SVal ElementVal = Retrieve(St, loc::MemRegionVal(ER), ETy);
+    ArrayVal = getBasicVals().consVals(ElementVal, ArrayVal);
+  }
+
+  return NonLoc::MakeCompoundVal(T, ArrayVal, getBasicVals());
+}
+
+const GRState* RegionStoreManager::Bind(const GRState* St, Loc L, SVal V) {
   // If we get here, the location should be a region.
   const MemRegion* R = cast<loc::MemRegionVal>(L).getRegion();
   assert(R);
@@ -700,8 +826,6 @@ Store RegionStoreManager::Remove(Store store, Loc L) {
   
   if (isa<loc::MemRegionVal>(L))
     R = cast<loc::MemRegionVal>(L).getRegion();
-  else if (isa<loc::SymbolVal>(L))
-    R = MRMgr.getSymbolicRegion(cast<loc::SymbolVal>(L).getSymbol());
   
   if (R) {
     RegionBindingsTy B = GetRegionBindings(store);  
@@ -741,6 +865,26 @@ const GRState* RegionStoreManager::setExtent(const GRState* St,
 
 
 static void UpdateLiveSymbols(SVal X, SymbolReaper& SymReaper) {
+  if (loc::MemRegionVal *XR = dyn_cast<loc::MemRegionVal>(&X)) {
+    const MemRegion *R = XR->getRegion();
+    
+    while (R) {
+      if (const SymbolicRegion *SR = dyn_cast<SymbolicRegion>(R)) {
+        SymReaper.markLive(SR->getSymbol());
+        return;
+      }
+      
+      if (const SubRegion *SR = dyn_cast<SubRegion>(R)) {
+        R = SR->getSuperRegion();
+        continue;
+      }
+      
+      break;
+    }
+    
+    return;
+  }
+  
   for (SVal::symbol_iterator SI=X.symbol_begin(), SE=X.symbol_end();SI!=SE;++SI)
     SymReaper.markLive(*SI);
 }
@@ -773,29 +917,41 @@ Store RegionStoreManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
   // Do a pass over the regions in the store.  For VarRegions we check if
   // the variable is still live and if so add it to the list of live roots.
   // For other regions we populate our region backmap.
+
+  llvm::SmallVector<const MemRegion*, 10> IntermediateRoots;
+
   for (RegionBindingsTy::iterator I = B.begin(), E = B.end(); I != E; ++I) {
-    const MemRegion* R = I.getKey();
+    IntermediateRoots.push_back(I.getKey());
+  }
+
+  while (!IntermediateRoots.empty()) {
+    const MemRegion* R = IntermediateRoots.back();
+    IntermediateRoots.pop_back();
+
     if (const VarRegion* VR = dyn_cast<VarRegion>(R)) {
       if (SymReaper.isLive(Loc, VR->getDecl()))
         RegionRoots.push_back(VR); // This is a live "root".
+    } 
+    else if (const SymbolicRegion* SR = dyn_cast<SymbolicRegion>(R)) {
+      if (SymReaper.isLive(SR->getSymbol()))
+        RegionRoots.push_back(SR);
     }
     else {
       // Get the super region for R.
       const MemRegion* SuperR = cast<SubRegion>(R)->getSuperRegion();
+
       // Get the current set of subregions for SuperR.
       const SubRegionsTy* SRptr = SubRegMap.lookup(SuperR);
       SubRegionsTy SR = SRptr ? *SRptr : SubRegF.GetEmptySet();
+
       // Add R to the subregions of SuperR.
       SubRegMap = SubRegMapF.Add(SubRegMap, SuperR, SubRegF.Add(SR, R));
-      
-      // Finally, check if SuperR is a VarRegion.  We need to do this
-      // to also mark SuperR as a root (as it may not have a value directly
-      // bound to it in the store).
-      if (const VarRegion* VR = dyn_cast<VarRegion>(SuperR)) {
-        if (SymReaper.isLive(Loc, VR->getDecl()))
-          RegionRoots.push_back(VR); // This is a live "root".
-      }
-    } 
+
+      // Super region may be VarRegion or subregion of another VarRegion. Add it
+      // to the work list.
+      if (isa<SubRegion>(SuperR))
+        IntermediateRoots.push_back(SuperR);
+    }
   }
   
   // Process the worklist of RegionRoots.  This performs a "mark-and-sweep"
@@ -842,8 +998,7 @@ Store RegionStoreManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
   
   // We have now scanned the store, marking reachable regions and symbols
   // as live.  We now remove all the regions that are dead from the store
-  // as well as update DSymbols with the set symbols that are now dead.
-  
+  // as well as update DSymbols with the set symbols that are now dead.  
   for (RegionBindingsTy::iterator I = B.begin(), E = B.end(); I != E; ++I) {
     const MemRegion* R = I.getKey();
     
@@ -890,8 +1045,6 @@ const GRState* RegionStoreManager::BindArray(const GRState* St,
   St = state.set<RegionDefaultValue>(R, NonLoc::MakeIntVal(getBasicVals(), 0, 
                                                            false));
 
-  Store store = St->getStore();
-
   ConstantArrayType* CAT = cast<ConstantArrayType>(T.getTypePtr());
 
   llvm::APSInt Size(CAT->getSize(), false);
@@ -914,18 +1067,18 @@ const GRState* RegionStoreManager::BindArray(const GRState* St,
         break;
 
       SVal Idx = NonLoc::MakeVal(getBasicVals(), i);
-      ElementRegion* ER = MRMgr.getElementRegion(Idx, R);
+      ElementRegion* ER =
+        MRMgr.getElementRegion(cast<ArrayType>(T)->getElementType(),
+                               Idx, R);
 
       SVal V = NonLoc::MakeVal(getBasicVals(), str[j], sizeof(char)*8, true);
       St = Bind(St, loc::MemRegionVal(ER), V);
     }
 
-    return StateMgr.MakeStateWithStore(St, store);
+    return St;
   }
 
-
   nonloc::CompoundVal& CV = cast<nonloc::CompoundVal>(Init);
-
   nonloc::CompoundVal::iterator VI = CV.begin(), VE = CV.end();
 
   for (; i < Size; ++i, ++VI) {
@@ -934,7 +1087,9 @@ const GRState* RegionStoreManager::BindArray(const GRState* St,
       break;
 
     SVal Idx = NonLoc::MakeVal(getBasicVals(), i);
-    ElementRegion* ER = MRMgr.getElementRegion(Idx, R);
+    ElementRegion* ER =
+      MRMgr.getElementRegion(cast<ArrayType>(T)->getElementType(),
+                             Idx, R);
 
     if (CAT->getElementType()->isStructureType())
       St = BindStruct(St, ER, *VI);
@@ -942,7 +1097,7 @@ const GRState* RegionStoreManager::BindArray(const GRState* St,
       St = Bind(St, Loc::MakeVal(ER), *VI);
   }
 
-  return StateMgr.MakeStateWithStore(St, store);
+  return St;
 }
 
 const GRState*
@@ -951,16 +1106,19 @@ RegionStoreManager::BindStruct(const GRState* St, const TypedRegion* R, SVal V){
   QualType T = R->getRValueType(getContext());
   assert(T->isStructureType());
 
-  RecordType* RT = cast<RecordType>(T.getTypePtr());
+  const RecordType* RT = T->getAsRecordType();
   RecordDecl* RD = RT->getDecl();
-  assert(RD->isDefinition());
+
+  if (!RD->isDefinition())
+    return St;
 
   if (V.isUnknown())
     return KillStruct(St, R);
 
   nonloc::CompoundVal& CV = cast<nonloc::CompoundVal>(V);
   nonloc::CompoundVal::iterator VI = CV.begin(), VE = CV.end();
-  RecordDecl::field_iterator FI = RD->field_begin(), FE = RD->field_end();
+  RecordDecl::field_iterator FI = RD->field_begin(getContext()), 
+                             FE = RD->field_end(getContext());
 
   for (; FI != FE; ++FI, ++VI) {
 

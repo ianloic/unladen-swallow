@@ -61,7 +61,6 @@ public:
   ///  NULL if there is no right subtree.
   ImutAVLTree* getRight() const { return Right; }
 
-
   /// getHeight - Returns the height of the tree.  A tree with no subtrees
   ///  has a height of 1.
   unsigned getHeight() const { return Height; }
@@ -86,6 +85,15 @@ public:
     }
 
     return NULL;
+  }
+  
+  /// getMaxElement - Find the subtree associated with the highest ranged
+  ///  key value.
+  ImutAVLTree* getMaxElement() {
+    ImutAVLTree *T = this;
+    ImutAVLTree *Right = T->getRight();    
+    while (Right) { T = Right; Right = T->getRight(); }
+    return T;
   }
 
   /// size - Returns the number of nodes in the tree, which includes
@@ -1002,6 +1010,10 @@ public:
   /// isEmpty - Return true if the set contains no elements.
   bool isEmpty() const { return !Root; }
 
+  /// isSingleton - Return true if the set contains exactly one element.
+  ///   This method runs in constant time.
+  bool isSingleton() const { return getHeight() == 1; }
+
   template <typename Callback>
   void foreach(Callback& C) { if (Root) Root->foreach(C); }
 
@@ -1026,6 +1038,7 @@ public:
     inline iterator  operator--(int) { iterator tmp(*this); --itr; return tmp; }
     inline bool operator==(const iterator& RHS) const { return RHS.itr == itr; }
     inline bool operator!=(const iterator& RHS) const { return RHS.itr != itr; }
+    inline value_type *operator->() const { return &(operator*()); }
   };
 
   iterator begin() const { return iterator(Root); }

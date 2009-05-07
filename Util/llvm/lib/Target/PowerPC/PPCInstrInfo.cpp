@@ -30,16 +30,6 @@ PPCInstrInfo::PPCInstrInfo(PPCTargetMachine &tm)
   : TargetInstrInfoImpl(PPCInsts, array_lengthof(PPCInsts)), TM(tm),
     RI(*TM.getSubtargetImpl(), *this) {}
 
-/// getPointerRegClass - Return the register class to use to hold pointers.
-/// This is used for addressing modes.
-const TargetRegisterClass *PPCInstrInfo::getPointerRegClass() const {
-  if (TM.getSubtargetImpl()->isPPC64())
-    return &PPC::G8RCRegClass;
-  else
-    return &PPC::GPRCRegClass;
-}
-
-
 bool PPCInstrInfo::isMoveInstr(const MachineInstr& MI,
                                unsigned& sourceReg,
                                unsigned& destReg,
@@ -184,7 +174,7 @@ PPCInstrInfo::commuteInstruction(MachineInstr *MI, bool NewMI) const {
     // Create a new instruction.
     unsigned Reg0 = ChangeReg0 ? Reg2 : MI->getOperand(0).getReg();
     bool Reg0IsDead = MI->getOperand(0).isDead();
-    return BuildMI(MF, MI->getDesc())
+    return BuildMI(MF, MI->getDebugLoc(), MI->getDesc())
       .addReg(Reg0, true, false, false, Reg0IsDead)
       .addReg(Reg2, false, false, Reg2IsKill)
       .addReg(Reg1, false, false, Reg1IsKill)
@@ -207,7 +197,10 @@ PPCInstrInfo::commuteInstruction(MachineInstr *MI, bool NewMI) const {
 
 void PPCInstrInfo::insertNoop(MachineBasicBlock &MBB, 
                               MachineBasicBlock::iterator MI) const {
-  BuildMI(MBB, MI, get(PPC::NOP));
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
+  BuildMI(MBB, MI, DL, get(PPC::NOP));
 }
 
 
@@ -299,6 +292,8 @@ unsigned
 PPCInstrInfo::InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
                            MachineBasicBlock *FBB,
                            const SmallVectorImpl<MachineOperand> &Cond) const {
+  // FIXME this should probably have a DebugLoc argument
+  DebugLoc dl = DebugLoc::getUnknownLoc();
   // Shouldn't be a fall through.
   assert(TBB && "InsertBranch must not be told to insert a fallthrough");
   assert((Cond.size() == 2 || Cond.size() == 0) && 
@@ -307,17 +302,17 @@ PPCInstrInfo::InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
   // One-way branch.
   if (FBB == 0) {
     if (Cond.empty())   // Unconditional branch
-      BuildMI(&MBB, get(PPC::B)).addMBB(TBB);
+      BuildMI(&MBB, dl, get(PPC::B)).addMBB(TBB);
     else                // Conditional branch
-      BuildMI(&MBB, get(PPC::BCC))
+      BuildMI(&MBB, dl, get(PPC::BCC))
         .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
     return 1;
   }
   
   // Two-way Conditional Branch.
-  BuildMI(&MBB, get(PPC::BCC))
+  BuildMI(&MBB, dl, get(PPC::BCC))
     .addImm(Cond[0].getImm()).addReg(Cond[1].getReg()).addMBB(TBB);
-  BuildMI(&MBB, get(PPC::B)).addMBB(FBB);
+  BuildMI(&MBB, dl, get(PPC::B)).addMBB(FBB);
   return 2;
 }
 
@@ -331,20 +326,23 @@ bool PPCInstrInfo::copyRegToReg(MachineBasicBlock &MBB,
     return false;
   }
 
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
   if (DestRC == PPC::GPRCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::OR), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::OR), DestReg).addReg(SrcReg).addReg(SrcReg);
   } else if (DestRC == PPC::G8RCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::OR8), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::OR8), DestReg).addReg(SrcReg).addReg(SrcReg);
   } else if (DestRC == PPC::F4RCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::FMRS), DestReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::FMRS), DestReg).addReg(SrcReg);
   } else if (DestRC == PPC::F8RCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::FMRD), DestReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::FMRD), DestReg).addReg(SrcReg);
   } else if (DestRC == PPC::CRRCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::MCRF), DestReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::MCRF), DestReg).addReg(SrcReg);
   } else if (DestRC == PPC::VRRCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::VOR), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::VOR), DestReg).addReg(SrcReg).addReg(SrcReg);
   } else if (DestRC == PPC::CRBITRCRegisterClass) {
-    BuildMI(MBB, MI, get(PPC::CROR), DestReg).addReg(SrcReg).addReg(SrcReg);
+    BuildMI(MBB, MI, DL, get(PPC::CROR), DestReg).addReg(SrcReg).addReg(SrcReg);
   } else {
     // Attempt to copy register that is not GPR or FPR
     return false;
@@ -359,43 +357,44 @@ PPCInstrInfo::StoreRegToStackSlot(MachineFunction &MF,
                                   int FrameIdx,
                                   const TargetRegisterClass *RC,
                                   SmallVectorImpl<MachineInstr*> &NewMIs) const{
+  DebugLoc DL = DebugLoc::getUnknownLoc();
   if (RC == PPC::GPRCRegisterClass) {
     if (SrcReg != PPC::LR) {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STW))
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STW))
                                          .addReg(SrcReg, false, false, isKill),
                                          FrameIdx));
     } else {
       // FIXME: this spills LR immediately to memory in one step.  To do this,
       // we use R11, which we know cannot be used in the prolog/epilog.  This is
       // a hack.
-      NewMIs.push_back(BuildMI(MF, get(PPC::MFLR), PPC::R11));
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STW))
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::MFLR), PPC::R11));
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STW))
                                          .addReg(PPC::R11, false, false, isKill),
                                          FrameIdx));
     }
   } else if (RC == PPC::G8RCRegisterClass) {
     if (SrcReg != PPC::LR8) {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STD))
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STD))
                               .addReg(SrcReg, false, false, isKill), FrameIdx));
     } else {
       // FIXME: this spills LR immediately to memory in one step.  To do this,
       // we use R11, which we know cannot be used in the prolog/epilog.  This is
       // a hack.
-      NewMIs.push_back(BuildMI(MF, get(PPC::MFLR8), PPC::X11));
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STD))
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::MFLR8), PPC::X11));
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STD))
                             .addReg(PPC::X11, false, false, isKill), FrameIdx));
     }
   } else if (RC == PPC::F8RCRegisterClass) {
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STFD))
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STFD))
                               .addReg(SrcReg, false, false, isKill), FrameIdx));
   } else if (RC == PPC::F4RCRegisterClass) {
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STFS))
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STFS))
                               .addReg(SrcReg, false, false, isKill), FrameIdx));
   } else if (RC == PPC::CRRCRegisterClass) {
     if ((EnablePPC32RS && !TM.getSubtargetImpl()->isPPC64()) ||
         (EnablePPC64RS && TM.getSubtargetImpl()->isPPC64())) {
       // FIXME (64-bit): Enable
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::SPILL_CR))
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::SPILL_CR))
                                          .addReg(SrcReg, false, false, isKill),
                                          FrameIdx));
       return true;
@@ -403,18 +402,18 @@ PPCInstrInfo::StoreRegToStackSlot(MachineFunction &MF,
       // FIXME: We use R0 here, because it isn't available for RA.  We need to
       // store the CR in the low 4-bits of the saved value.  First, issue a MFCR
       // to save all of the CRBits.
-      NewMIs.push_back(BuildMI(MF, get(PPC::MFCR), PPC::R0));
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::MFCR), PPC::R0));
     
       // If the saved register wasn't CR0, shift the bits left so that they are
       // in CR0's slot.
       if (SrcReg != PPC::CR0) {
         unsigned ShiftBits = PPCRegisterInfo::getRegisterNumbering(SrcReg)*4;
         // rlwinm r0, r0, ShiftBits, 0, 31.
-        NewMIs.push_back(BuildMI(MF, get(PPC::RLWINM), PPC::R0)
+        NewMIs.push_back(BuildMI(MF, DL, get(PPC::RLWINM), PPC::R0)
                        .addReg(PPC::R0).addImm(ShiftBits).addImm(0).addImm(31));
       }
     
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::STW))
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::STW))
                                          .addReg(PPC::R0, false, false, isKill),
                                          FrameIdx));
     }
@@ -450,9 +449,9 @@ PPCInstrInfo::StoreRegToStackSlot(MachineFunction &MF,
     // STVX VAL, 0, R0
     // 
     // FIXME: We use R0 here, because it isn't available for RA.
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::ADDI), PPC::R0),
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::ADDI), PPC::R0),
                                        FrameIdx, 0, 0));
-    NewMIs.push_back(BuildMI(MF, get(PPC::STVX))
+    NewMIs.push_back(BuildMI(MF, DL, get(PPC::STVX))
          .addReg(SrcReg, false, false, isKill).addReg(PPC::R0).addReg(PPC::R0));
   } else {
     assert(0 && "Unknown regclass!");
@@ -494,6 +493,7 @@ void PPCInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
     return;
   }
 
+  DebugLoc DL = DebugLoc::getUnknownLoc();
   unsigned Opc = 0;
   if (RC == PPC::GPRCRegisterClass) {
     Opc = PPC::STW;
@@ -509,53 +509,46 @@ void PPCInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
     assert(0 && "Unknown regclass!");
     abort();
   }
-  MachineInstrBuilder MIB = BuildMI(MF, get(Opc))
+  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc))
     .addReg(SrcReg, false, false, isKill);
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i) {
-    MachineOperand &MO = Addr[i];
-    if (MO.isReg())
-      MIB.addReg(MO.getReg());
-    else if (MO.isImm())
-      MIB.addImm(MO.getImm());
-    else
-      MIB.addFrameIndex(MO.getIndex());
-  }
+  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
+    MIB.addOperand(Addr[i]);
   NewMIs.push_back(MIB);
   return;
 }
 
 void
-PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF,
+PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF, DebugLoc DL,
                                    unsigned DestReg, int FrameIdx,
                                    const TargetRegisterClass *RC,
                                    SmallVectorImpl<MachineInstr*> &NewMIs)const{
   if (RC == PPC::GPRCRegisterClass) {
     if (DestReg != PPC::LR) {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LWZ), DestReg),
-                                         FrameIdx));
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LWZ),
+                                                 DestReg), FrameIdx));
     } else {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LWZ), PPC::R11),
-                                         FrameIdx));
-      NewMIs.push_back(BuildMI(MF, get(PPC::MTLR)).addReg(PPC::R11));
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LWZ),
+                                                 PPC::R11), FrameIdx));
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::MTLR)).addReg(PPC::R11));
     }
   } else if (RC == PPC::G8RCRegisterClass) {
     if (DestReg != PPC::LR8) {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LD), DestReg),
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LD), DestReg),
                                          FrameIdx));
     } else {
-      NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LD), PPC::R11),
-                                         FrameIdx));
-      NewMIs.push_back(BuildMI(MF, get(PPC::MTLR8)).addReg(PPC::R11));
+      NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LD),
+                                                 PPC::R11), FrameIdx));
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::MTLR8)).addReg(PPC::R11));
     }
   } else if (RC == PPC::F8RCRegisterClass) {
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LFD), DestReg),
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LFD), DestReg),
                                        FrameIdx));
   } else if (RC == PPC::F4RCRegisterClass) {
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LFS), DestReg),
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LFS), DestReg),
                                        FrameIdx));
   } else if (RC == PPC::CRRCRegisterClass) {
     // FIXME: We use R0 here, because it isn't available for RA.
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::LWZ), PPC::R0),
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::LWZ), PPC::R0),
                                        FrameIdx));
     
     // If the reloaded register isn't CR0, shift the bits right so that they are
@@ -563,11 +556,11 @@ PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF,
     if (DestReg != PPC::CR0) {
       unsigned ShiftBits = PPCRegisterInfo::getRegisterNumbering(DestReg)*4;
       // rlwinm r11, r11, 32-ShiftBits, 0, 31.
-      NewMIs.push_back(BuildMI(MF, get(PPC::RLWINM), PPC::R0)
+      NewMIs.push_back(BuildMI(MF, DL, get(PPC::RLWINM), PPC::R0)
                     .addReg(PPC::R0).addImm(32-ShiftBits).addImm(0).addImm(31));
     }
     
-    NewMIs.push_back(BuildMI(MF, get(PPC::MTCRF), DestReg).addReg(PPC::R0));
+    NewMIs.push_back(BuildMI(MF, DL, get(PPC::MTCRF), DestReg).addReg(PPC::R0));
   } else if (RC == PPC::CRBITRCRegisterClass) {
    
     unsigned Reg = 0;
@@ -588,7 +581,7 @@ PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF,
     else if (DestReg >= PPC::CR7LT || DestReg <= PPC::CR7UN) 
       Reg = PPC::CR7;
 
-    return LoadRegFromStackSlot(MF, Reg, FrameIdx, 
+    return LoadRegFromStackSlot(MF, DL, Reg, FrameIdx, 
                                 PPC::CRRCRegisterClass, NewMIs);
 
   } else if (RC == PPC::VRRCRegisterClass) {
@@ -597,9 +590,9 @@ PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF,
     // Dest = LVX 0, R0
     // 
     // FIXME: We use R0 here, because it isn't available for RA.
-    NewMIs.push_back(addFrameReference(BuildMI(MF, get(PPC::ADDI), PPC::R0),
+    NewMIs.push_back(addFrameReference(BuildMI(MF, DL, get(PPC::ADDI), PPC::R0),
                                        FrameIdx, 0, 0));
-    NewMIs.push_back(BuildMI(MF, get(PPC::LVX),DestReg).addReg(PPC::R0)
+    NewMIs.push_back(BuildMI(MF, DL, get(PPC::LVX),DestReg).addReg(PPC::R0)
                      .addReg(PPC::R0));
   } else {
     assert(0 && "Unknown regclass!");
@@ -614,7 +607,9 @@ PPCInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                    const TargetRegisterClass *RC) const {
   MachineFunction &MF = *MBB.getParent();
   SmallVector<MachineInstr*, 4> NewMIs;
-  LoadRegFromStackSlot(MF, DestReg, FrameIdx, RC, NewMIs);
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+  LoadRegFromStackSlot(MF, DL, DestReg, FrameIdx, RC, NewMIs);
   for (unsigned i = 0, e = NewMIs.size(); i != e; ++i)
     MBB.insert(MI, NewMIs[i]);
 }
@@ -624,7 +619,8 @@ void PPCInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
                                    const TargetRegisterClass *RC,
                                    SmallVectorImpl<MachineInstr*> &NewMIs)const{
   if (Addr[0].isFI()) {
-    LoadRegFromStackSlot(MF, DestReg, Addr[0].getIndex(), RC, NewMIs);
+    LoadRegFromStackSlot(MF, DebugLoc::getUnknownLoc(),
+                         DestReg, Addr[0].getIndex(), RC, NewMIs);
     return;
   }
 
@@ -645,16 +641,10 @@ void PPCInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
     assert(0 && "Unknown regclass!");
     abort();
   }
-  MachineInstrBuilder MIB = BuildMI(MF, get(Opc), DestReg);
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i) {
-    MachineOperand &MO = Addr[i];
-    if (MO.isReg())
-      MIB.addReg(MO.getReg());
-    else if (MO.isImm())
-      MIB.addImm(MO.getImm());
-    else
-      MIB.addFrameIndex(MO.getIndex());
-  }
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc), DestReg);
+  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
+    MIB.addOperand(Addr[i]);
   NewMIs.push_back(MIB);
   return;
 }
@@ -678,13 +668,13 @@ MachineInstr *PPCInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     if (OpNum == 0) {  // move -> store
       unsigned InReg = MI->getOperand(1).getReg();
       bool isKill = MI->getOperand(1).isKill();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::STW))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::STW))
                                 .addReg(InReg, false, false, isKill),
                                 FrameIndex);
     } else {           // move -> load
       unsigned OutReg = MI->getOperand(0).getReg();
       bool isDead = MI->getOperand(0).isDead();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::LWZ))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::LWZ))
                                 .addReg(OutReg, true, false, false, isDead),
                                 FrameIndex);
     }
@@ -693,13 +683,13 @@ MachineInstr *PPCInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     if (OpNum == 0) {  // move -> store
       unsigned InReg = MI->getOperand(1).getReg();
       bool isKill = MI->getOperand(1).isKill();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::STD))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::STD))
                                 .addReg(InReg, false, false, isKill),
                                 FrameIndex);
     } else {           // move -> load
       unsigned OutReg = MI->getOperand(0).getReg();
       bool isDead = MI->getOperand(0).isDead();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::LD))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::LD))
                                 .addReg(OutReg, true, false, false, isDead),
                                 FrameIndex);
     }
@@ -707,13 +697,13 @@ MachineInstr *PPCInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     if (OpNum == 0) {  // move -> store
       unsigned InReg = MI->getOperand(1).getReg();
       bool isKill = MI->getOperand(1).isKill();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::STFD))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::STFD))
                                 .addReg(InReg, false, false, isKill),
                                 FrameIndex);
     } else {           // move -> load
       unsigned OutReg = MI->getOperand(0).getReg();
       bool isDead = MI->getOperand(0).isDead();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::LFD))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::LFD))
                                 .addReg(OutReg, true, false, false, isDead),
                                 FrameIndex);
     }
@@ -721,13 +711,13 @@ MachineInstr *PPCInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     if (OpNum == 0) {  // move -> store
       unsigned InReg = MI->getOperand(1).getReg();
       bool isKill = MI->getOperand(1).isKill();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::STFS))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::STFS))
                                 .addReg(InReg, false, false, isKill),
                                 FrameIndex);
     } else {           // move -> load
       unsigned OutReg = MI->getOperand(0).getReg();
       bool isDead = MI->getOperand(0).isDead();
-      NewMI = addFrameReference(BuildMI(MF, get(PPC::LFS))
+      NewMI = addFrameReference(BuildMI(MF, MI->getDebugLoc(), get(PPC::LFS))
                                 .addReg(OutReg, true, false, false, isDead),
                                 FrameIndex);
     }

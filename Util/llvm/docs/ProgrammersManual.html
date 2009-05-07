@@ -54,7 +54,7 @@ option</a></li>
       <li><a href="#dss_vector">&lt;vector&gt;</a></li>
       <li><a href="#dss_deque">&lt;deque&gt;</a></li>
       <li><a href="#dss_list">&lt;list&gt;</a></li>
-      <li><a href="#dss_ilist">llvm/ADT/ilist</a></li>
+      <li><a href="#dss_ilist">llvm/ADT/ilist.h</a></li>
       <li><a href="#dss_other">Other Sequential Container Options</a></li>
     </ul></li>
     <li><a href="#ds_set">Set-Like Containers (std::set, SmallSet, SetVector, etc)</a>
@@ -117,6 +117,7 @@ with another <tt>Value</tt></a> </li>
           <li><a href="#schanges_deletingGV">Deleting <tt>GlobalVariable</tt>s</a> </li>  
         </ul>
       </li>
+      <li><a href="#create_types">How to Create Types</a></li>
 <!--
     <li>Working with the Control Flow Graph
     <ul>
@@ -247,10 +248,9 @@ reference</a> - an excellent reference for the STL and other parts of the
 standard C++ library.</li>
 
 <li><a href="http://www.tempest-sw.com/cpp/">C++ In a Nutshell</a> - This is an
-O'Reilly book in the making.  It has a decent 
-Standard Library
-Reference that rivals Dinkumware's, and is unfortunately no longer free since the book has been 
-published.</li>
+O'Reilly book in the making.  It has a decent Standard Library
+Reference that rivals Dinkumware's, and is unfortunately no longer free since the
+book has been published.</li>
 
 <li><a href="http://www.parashift.com/c++-faq-lite/">C++ Frequently Asked
 Questions</a></li>
@@ -878,7 +878,7 @@ not invalidate iterator or pointers to other elements in the list.</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="dss_ilist">llvm/ADT/ilist</a>
+  <a name="dss_ilist">llvm/ADT/ilist.h</a>
 </div>
 
 <div class="doc_text">
@@ -886,15 +886,102 @@ not invalidate iterator or pointers to other elements in the list.</p>
 intrusive, because it requires the element to store and provide access to the
 prev/next pointers for the list.</p>
 
-<p>ilist has the same drawbacks as std::list, and additionally requires an
-ilist_traits implementation for the element type, but it provides some novel
-characteristics.  In particular, it can efficiently store polymorphic objects,
-the traits class is informed when an element is inserted or removed from the
-list, and ilists are guaranteed to support a constant-time splice operation.
-</p>
+<p><tt>ilist</tt> has the same drawbacks as <tt>std::list</tt>, and additionally
+requires an <tt>ilist_traits</tt> implementation for the element type, but it
+provides some novel characteristics.  In particular, it can efficiently store
+polymorphic objects, the traits class is informed when an element is inserted or
+removed from the list, and <tt>ilist</tt>s are guaranteed to support a
+constant-time splice operation.</p>
 
-<p>These properties are exactly what we want for things like Instructions and
-basic blocks, which is why these are implemented with ilists.</p>
+<p>These properties are exactly what we want for things like
+<tt>Instruction</tt>s and basic blocks, which is why these are implemented with
+<tt>ilist</tt>s.</p>
+
+Related classes of interest are explained in the following subsections:
+    <ul>
+      <li><a href="#dss_ilist_traits">ilist_traits</a></li>
+      <li><a href="#dss_iplist">iplist</a></li>
+      <li><a href="#dss_ilist_node">llvm/ADT/ilist_node.h</a></li>
+      <li><a href="#dss_ilist_sentinel">Sentinels</a></li>
+    </ul>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="dss_ilist_traits">ilist_traits</a>
+</div>
+
+<div class="doc_text">
+<p><tt>ilist_traits&lt;T&gt;</tt> is <tt>ilist&lt;T&gt;</tt>'s customization
+mechanism. <tt>iplist&lt;T&gt;</tt> (and consequently <tt>ilist&lt;T&gt;</tt>)
+publicly derive from this traits class.</p>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="dss_iplist">iplist</a>
+</div>
+
+<div class="doc_text">
+<p><tt>iplist&lt;T&gt;</tt> is <tt>ilist&lt;T&gt;</tt>'s base and as such
+supports a slightly narrower interface. Notably, inserters from
+<tt>T&amp;</tt> are absent.</p>
+
+<p><tt>ilist_traits&lt;T&gt;</tt> is a public base of this class and can be
+used for a wide variety of customizations.</p>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="dss_ilist_node">llvm/ADT/ilist_node.h</a>
+</div>
+
+<div class="doc_text">
+<p><tt>ilist_node&lt;T&gt;</tt> implements a the forward and backward links
+that are expected by the <tt>ilist&lt;T&gt;</tt> (and analogous containers)
+in the default manner.</p>
+
+<p><tt>ilist_node&lt;T&gt;</tt>s are meant to be embedded in the node type
+<tt>T</tt>, usually <tt>T</tt> publicly derives from
+<tt>ilist_node&lt;T&gt;</tt>.</p>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="dss_ilist_sentinel">Sentinels</a>
+</div>
+
+<div class="doc_text">
+<p><tt>ilist</tt>s have another speciality that must be considered. To be a good
+citizen in the C++ ecosystem, it needs to support the standard container
+operations, such as <tt>begin</tt> and <tt>end</tt> iterators, etc. Also, the
+<tt>operator--</tt> must work correctly on the <tt>end</tt> iterator in the
+case of non-empty <tt>ilist</tt>s.</p>
+
+<p>The only sensible solution to this problem is to allocate a so-called
+<i>sentinel</i> along with the intrusive list, which serves as the <tt>end</tt>
+iterator, providing the back-link to the last element. However conforming to the
+C++ convention it is illegal to <tt>operator++</tt> beyond the sentinel and it
+also must not be dereferenced.</p>
+
+<p>These constraints allow for some implementation freedom to the <tt>ilist</tt>
+how to allocate and store the sentinel. The corresponding policy is dictated
+by <tt>ilist_traits&lt;T&gt;</tt>. By default a <tt>T</tt> gets heap-allocated
+whenever the need for a sentinel arises.</p>
+
+<p>While the default policy is sufficient in most cases, it may break down when
+<tt>T</tt> does not provide a default constructor. Also, in the case of many
+instances of <tt>ilist</tt>s, the memory overhead of the associated sentinels
+is wasted. To alleviate the situation with numerous and voluminous
+<tt>T</tt>-sentinels, sometimes a trick is employed, leading to <i>ghostly
+sentinels</i>.</p>
+
+<p>Ghostly sentinels are obtained by specially-crafted <tt>ilist_traits&lt;T&gt;</tt>
+which superpose the sentinel with the <tt>ilist</tt> instance in memory. Pointer
+arithmetic is used to obtain the sentinel, which is relative to the
+<tt>ilist</tt>'s <tt>this</tt> pointer. The <tt>ilist</tt> is augmented by an
+extra pointer, which serves as the back-link of the sentinel. This is the only
+field in the ghostly sentinel which can be legally accessed.</p>
 </div>
 
 <!-- _______________________________________________________________________ -->
@@ -1141,20 +1228,15 @@ factors, and produces a lot of malloc traffic.  It should be avoided.</p>
 
 <p>
 The STL provides several other options, such as std::multiset and the various 
-"hash_set" like containers (whether from C++ TR1 or from the SGI library).</p>
+"hash_set" like containers (whether from C++ TR1 or from the SGI library). We
+never use hash_set and unordered_set because they are generally very expensive 
+(each insertion requires a malloc) and very non-portable.
+</p>
 
 <p>std::multiset is useful if you're not interested in elimination of
 duplicates, but has all the drawbacks of std::set.  A sorted vector (where you 
 don't delete duplicate entries) or some other approach is almost always
 better.</p>
-
-<p>The various hash_set implementations (exposed portably by
-"llvm/ADT/hash_set") is a simple chained hashtable.  This algorithm is as malloc
-intensive as std::set (performing an allocation for each element inserted,
-thus having really high constant factors) but (usually) provides O(1)
-insertion/deletion of elements.  This can be useful if your elements are large
-(thus making the constant-factor cost relatively low) or if comparisons are
-expensive.  Element iteration does not visit elements in a useful order.</p>
 
 </div>
 
@@ -1294,19 +1376,13 @@ another element takes place).</p>
 
 <p>
 The STL provides several other options, such as std::multimap and the various 
-"hash_map" like containers (whether from C++ TR1 or from the SGI library).</p>
+"hash_map" like containers (whether from C++ TR1 or from the SGI library). We
+never use hash_set and unordered_set because they are generally very expensive 
+(each insertion requires a malloc) and very non-portable.</p>
 
 <p>std::multimap is useful if you want to map a key to multiple values, but has
 all the drawbacks of std::map.  A sorted vector or some other approach is almost
 always better.</p>
-
-<p>The various hash_map implementations (exposed portably by
-"llvm/ADT/hash_map") are simple chained hash tables.  This algorithm is as
-malloc intensive as std::map (performing an allocation for each element
-inserted, thus having really high constant factors) but (usually) provides O(1)
-insertion/deletion of elements.  This can be useful if your elements are large
-(thus making the constant-factor cost relatively low) or if comparisons are
-expensive.  Element iteration does not visit elements in a useful order.</p>
 
 </div>
 
@@ -2010,6 +2086,46 @@ Instruction. First, you must have a pointer to the global variable that you wish
 GV-&gt;eraseFromParent();
 </pre>
 </div>
+
+</div>
+
+<!-- ======================================================================= -->
+<div class="doc_subsection">
+  <a name="create_types">How to Create Types</a>
+</div>
+
+<div class="doc_text">
+
+<p>In generating IR, you may need some complex types.  If you know these types
+statically, you can use <tt>TypeBuilder&lt;...&gt;::get()</tt>, defined
+in <tt>llvm/Support/TypeBuilder.h</tt>, to retrieve them.  <tt>TypeBuilder</tt>
+has two forms depending on whether you're building types for cross-compilation
+or native library use.  <tt>TypeBuilder&lt;T, true&gt;</tt> requires
+that <tt>T</tt> be independent of the host environment, meaning that it's built
+out of types from
+the <a href="/doxygen/namespacellvm_1_1types.html"><tt>llvm::types</tt></a>
+namespace and pointers, functions, arrays, etc. built of
+those.  <tt>TypeBuilder&lt;T, false&gt;</tt> additionally allows native C types
+whose size may depend on the host compiler.  For example,</p>
+
+<div class="doc_code">
+<pre>
+FunctionType *ft = TypeBuilder&lt;types::i&lt;8&gt;(types::i&lt;32&gt;*), true&gt;::get();
+</pre>
+</div>
+
+<p>is easier to read and write than the equivalent</p>
+
+<div class="doc_code">
+<pre>
+std::vector<const Type*> params;
+params.push_back(PointerType::getUnqual(Type::Int32Ty));
+FunctionType *ft = FunctionType::get(Type::Int8Ty, params, false);
+</pre>
+</div>
+
+<p>See the <a href="/doxygen/TypeBuilder_8h-source.html#l00001">class
+comment</a> for more details.</p>
 
 </div>
 
@@ -3276,11 +3392,12 @@ never change at runtime).</p>
     <p>Create a new global variable of the specified type. If
     <tt>isConstant</tt> is true then the global variable will be marked as
     unchanging for the program. The Linkage parameter specifies the type of
-    linkage (internal, external, weak, linkonce, appending) for the variable. If
-    the linkage is InternalLinkage, WeakLinkage, or LinkOnceLinkage,&nbsp; then
-    the resultant global variable will have internal linkage.  AppendingLinkage
-    concatenates together all instances (in different translation units) of the
-    variable into a single variable but is only applicable to arrays.  &nbsp;See
+    linkage (internal, external, weak, linkonce, appending) for the variable.
+    If the linkage is InternalLinkage, WeakAnyLinkage, WeakODRLinkage,
+    LinkOnceAnyLinkage or LinkOnceODRLinkage,&nbsp; then the resultant
+    global variable will have internal linkage.  AppendingLinkage concatenates
+    together all instances (in different translation units) of the variable
+    into a single variable but is only applicable to arrays.  &nbsp;See
     the <a href="LangRef.html#modulestructure">LLVM Language Reference</a> for
     further details on linkage types. Optionally an initializer, a name, and the
     module to put the variable into may be specified for the global variable as
@@ -3419,7 +3536,7 @@ arguments. An argument has a pointer to the parent Function.</p>
   <a href="mailto:dhurjati@cs.uiuc.edu">Dinakar Dhurjati</a> and
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-01-05 08:05:32 -0800 (Mon, 05 Jan 2009) $
+  Last modified: $Date: 2009-05-01 13:40:51 -0700 (Fri, 01 May 2009) $
 </address>
 
 </body>

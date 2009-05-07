@@ -15,10 +15,11 @@
 #include "clang/Parse/Parser.h"
 #include "ExtensionRAIIObject.h"
 #include "AstGuard.h"
-#include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/SourceManager.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/PrettyStackTrace.h"
+#include "clang/Basic/SourceManager.h"
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -97,29 +98,31 @@ Parser::ParseStatementOrDeclaration(bool OnlyStatement) {
     }
     // PASS THROUGH.
 
-  default:
+  default: {
     if ((getLang().CPlusPlus || !OnlyStatement) && isDeclarationStatement()) {
-      SourceLocation DeclStart = Tok.getLocation();
-      DeclTy *Decl = ParseDeclaration(Declarator::BlockContext);
-      // FIXME: Pass in the right location for the end of the declstmt.
-      return Actions.ActOnDeclStmt(Decl, DeclStart, DeclStart);
-    } else if (Tok.is(tok::r_brace)) {
+      SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
+      DeclGroupPtrTy Decl = ParseDeclaration(Declarator::BlockContext, DeclEnd);
+      return Actions.ActOnDeclStmt(Decl, DeclStart, DeclEnd);
+    }
+
+    if (Tok.is(tok::r_brace)) {
       Diag(Tok, diag::err_expected_statement);
       return StmtError();
-    } else {
-      // expression[opt] ';'
-      OwningExprResult Expr(ParseExpression());
-      if (Expr.isInvalid()) {
-        // If the expression is invalid, skip ahead to the next semicolon.  Not
-        // doing this opens us up to the possibility of infinite loops if
-        // ParseExpression does not consume any tokens.
-        SkipUntil(tok::semi);
-        return StmtError();
-      }
-      // Otherwise, eat the semicolon.
-      ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
-      return Actions.ActOnExprStmt(move_arg(Expr));
     }
+    
+    // expression[opt] ';'
+    OwningExprResult Expr(ParseExpression());
+    if (Expr.isInvalid()) {
+      // If the expression is invalid, skip ahead to the next semicolon.  Not
+      // doing this opens us up to the possibility of infinite loops if
+      // ParseExpression does not consume any tokens.
+      SkipUntil(tok::semi);
+      return StmtError();
+    }
+    // Otherwise, eat the semicolon.
+    ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
+    return Actions.ActOnExprStmt(move(Expr));
+  }
 
   case tok::kw_case:                // C99 6.8.1: labeled-statement
     return ParseCaseStatement();
@@ -204,7 +207,7 @@ Parser::OwningStmtResult Parser::ParseLabeledStatement() {
   SourceLocation ColonLoc = ConsumeToken();
 
   // Read label attributes, if present.
-  DeclTy *AttrList = 0;
+  Action::AttrTy *AttrList = 0;
   if (Tok.is(tok::kw___attribute))
     // TODO: save these somewhere.
     AttrList = ParseAttributes();
@@ -217,7 +220,7 @@ Parser::OwningStmtResult Parser::ParseLabeledStatement() {
 
   return Actions.ActOnLabelStmt(IdentTok.getLocation(),
                                 IdentTok.getIdentifierInfo(),
-                                ColonLoc, move_arg(SubStmt));
+                                ColonLoc, move(SubStmt));
 }
 
 /// ParseCaseStatement
@@ -225,54 +228,112 @@ Parser::OwningStmtResult Parser::ParseLabeledStatement() {
 ///         'case' constant-expression ':' statement
 /// [GNU]   'case' constant-expression '...' constant-expression ':' statement
 ///
-/// Note that this does not parse the 'statement' at the end.
-///
 Parser::OwningStmtResult Parser::ParseCaseStatement() {
   assert(Tok.is(tok::kw_case) && "Not a case stmt!");
-  SourceLocation CaseLoc = ConsumeToken();  // eat the 'case'.
-
-  OwningExprResult LHS(ParseConstantExpression());
-  if (LHS.isInvalid()) {
-    SkipUntil(tok::colon);
-    return StmtError();
-  }
-
-  // GNU case range extension.
-  SourceLocation DotDotDotLoc;
-  OwningExprResult RHS(Actions);
-  if (Tok.is(tok::ellipsis)) {
-    Diag(Tok, diag::ext_gnu_case_range);
-    DotDotDotLoc = ConsumeToken();
-
-    RHS = ParseConstantExpression();
-    if (RHS.isInvalid()) {
+  
+  // It is very very common for code to contain many case statements recursively
+  // nested, as in (but usually without indentation):
+  //  case 1:
+  //    case 2:
+  //      case 3:
+  //         case 4:
+  //           case 5: etc.
+  //
+  // Parsing this naively works, but is both inefficient and can cause us to run
+  // out of stack space in our recursive descent parser.  As a special case,
+  // flatten this recursion into an iterative loop.  This is complex and gross,
+  // but all the grossness is constrained to ParseCaseStatement (and some
+  // wierdness in the actions), so this is just local grossness :).
+  
+  // TopLevelCase - This is the highest level we have parsed.  'case 1' in the
+  // example above.
+  OwningStmtResult TopLevelCase(Actions, true);
+  
+  // DeepestParsedCaseStmt - This is the deepest statement we have parsed, which
+  // gets updated each time a new case is parsed, and whose body is unset so
+  // far.  When parsing 'case 4', this is the 'case 3' node.
+  StmtTy *DeepestParsedCaseStmt = 0;
+  
+  // While we have case statements, eat and stack them.
+  do {
+    SourceLocation CaseLoc = ConsumeToken();  // eat the 'case'.
+    
+    OwningExprResult LHS(ParseConstantExpression());
+    if (LHS.isInvalid()) {
       SkipUntil(tok::colon);
       return StmtError();
     }
-  }
 
-  if (Tok.isNot(tok::colon)) {
-    Diag(Tok, diag::err_expected_colon_after) << "'case'";
-    SkipUntil(tok::colon);
-    return StmtError();
-  }
+    // GNU case range extension.
+    SourceLocation DotDotDotLoc;
+    OwningExprResult RHS(Actions);
+    if (Tok.is(tok::ellipsis)) {
+      Diag(Tok, diag::ext_gnu_case_range);
+      DotDotDotLoc = ConsumeToken();
 
-  SourceLocation ColonLoc = ConsumeToken();
+      RHS = ParseConstantExpression();
+      if (RHS.isInvalid()) {
+        SkipUntil(tok::colon);
+        return StmtError();
+      }
+    }
 
-  // Diagnose the common error "switch (X) { case 4: }", which is not valid.
-  if (Tok.is(tok::r_brace)) {
+    if (Tok.isNot(tok::colon)) {
+      Diag(Tok, diag::err_expected_colon_after) << "'case'";
+      SkipUntil(tok::colon);
+      return StmtError();
+    }
+
+    SourceLocation ColonLoc = ConsumeToken();
+    
+    OwningStmtResult Case =
+      Actions.ActOnCaseStmt(CaseLoc, move(LHS), DotDotDotLoc,
+                            move(RHS), ColonLoc);
+    
+    // If we had a sema error parsing this case, then just ignore it and
+    // continue parsing the sub-stmt.
+    if (Case.isInvalid()) {
+      if (TopLevelCase.isInvalid())  // No parsed case stmts.
+        return ParseStatement();
+      // Otherwise, just don't add it as a nested case.
+    } else {
+      // If this is the first case statement we parsed, it becomes TopLevelCase.
+      // Otherwise we link it into the current chain.
+      StmtTy *NextDeepest = Case.get();
+      if (TopLevelCase.isInvalid())
+        TopLevelCase = move(Case);
+      else
+        Actions.ActOnCaseStmtBody(DeepestParsedCaseStmt, move(Case));
+      DeepestParsedCaseStmt = NextDeepest;
+    }
+    
+    // Handle all case statements.
+  } while (Tok.is(tok::kw_case));
+    
+  assert(!TopLevelCase.isInvalid() && "Should have parsed at least one case!");
+  
+  // If we found a non-case statement, start by parsing it.
+  OwningStmtResult SubStmt(Actions);
+  
+  if (Tok.isNot(tok::r_brace)) {
+    SubStmt = ParseStatement();
+  } else {
+    // Nicely diagnose the common error "switch (X) { case 4: }", which is
+    // not valid.
+    // FIXME: add insertion hint.
     Diag(Tok, diag::err_label_end_of_compound_statement);
-    return StmtError();
+    SubStmt = true;
   }
-
-  OwningStmtResult SubStmt(ParseStatement());
-
-  // Broken substmt shouldn't prevent the case from being added to the AST.
+  
+  // Broken sub-stmt shouldn't prevent forming the case statement properly.
   if (SubStmt.isInvalid())
-    SubStmt = Actions.ActOnNullStmt(ColonLoc);
+    SubStmt = Actions.ActOnNullStmt(SourceLocation());
+  
+  // Install the body into the most deeply-nested case.
+  Actions.ActOnCaseStmtBody(DeepestParsedCaseStmt, move(SubStmt));
 
-  return Actions.ActOnCaseStmt(CaseLoc, move_arg(LHS), DotDotDotLoc,
-                               move_arg(RHS), ColonLoc, move_arg(SubStmt));
+  // Return the top level parsed statement tree.
+  return move(TopLevelCase);
 }
 
 /// ParseDefaultStatement
@@ -303,7 +364,7 @@ Parser::OwningStmtResult Parser::ParseDefaultStatement() {
     return StmtError();
 
   return Actions.ActOnDefaultStmt(DefaultLoc, ColonLoc,
-                                  move_arg(SubStmt), CurScope);
+                                  move(SubStmt), CurScope);
 }
 
 
@@ -351,6 +412,10 @@ Parser::OwningStmtResult Parser::ParseCompoundStatement(bool isStmtExpr) {
 /// consume the '}' at the end of the block.  It does not manipulate the scope
 /// stack.
 Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
+  PrettyStackTraceLoc CrashInfo(PP.getSourceManager(), 
+                                Tok.getLocation(),
+                                "in compound statement ('{}')");
+  
   SourceLocation LBraceLoc = ConsumeBrace();  // eat the '{'.
 
   // TODO: "__label__ X, Y, Z;" is the GNU "Local Label" extension.  These are
@@ -376,11 +441,10 @@ Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
 
       // If this is the start of a declaration, parse it as such.
       if (isDeclarationStatement()) {
-        // FIXME: Save the __extension__ on the decl as a node somehow.
-        SourceLocation DeclStart = Tok.getLocation();
-        DeclTy *Res = ParseDeclaration(Declarator::BlockContext);
-        // FIXME: Pass in the right location for the end of the declstmt.
-        R = Actions.ActOnDeclStmt(Res, DeclStart, DeclStart);
+        // FIXME: Save the __extension__ on the decl as a node somehow?
+        SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
+        DeclGroupPtrTy Res = ParseDeclaration(Declarator::BlockContext,DeclEnd);
+        R = Actions.ActOnDeclStmt(Res, DeclStart, DeclEnd);
       } else {
         // Otherwise this was a unary __extension__ marker.
         OwningExprResult Res(ParseExpressionWithLeadingExtension(ExtLoc));
@@ -393,7 +457,7 @@ Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
         // Eat the semicolon at the end of stmt and convert the expr into a
         // statement.
         ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
-        R = Actions.ActOnExprStmt(move_arg(Res));
+        R = Actions.ActOnExprStmt(move(Res));
       }
     }
 
@@ -568,8 +632,8 @@ Parser::OwningStmtResult Parser::ParseIfStatement() {
   if (ElseStmt.isInvalid())
     ElseStmt = Actions.ActOnNullStmt(ElseStmtLoc);
 
-  return Actions.ActOnIfStmt(IfLoc, move_arg(CondExp), move_arg(ThenStmt),
-                             ElseLoc, move_arg(ElseStmt));
+  return Actions.ActOnIfStmt(IfLoc, move(CondExp), move(ThenStmt),
+                             ElseLoc, move(ElseStmt));
 }
 
 /// ParseSwitchStatement
@@ -612,7 +676,7 @@ Parser::OwningStmtResult Parser::ParseSwitchStatement() {
 
   OwningStmtResult Switch(Actions);
   if (!Cond.isInvalid())
-    Switch = Actions.ActOnStartOfSwitchStmt(move_arg(Cond));
+    Switch = Actions.ActOnStartOfSwitchStmt(move(Cond));
 
   // C99 6.8.4p3 - In C99, the body of the switch statement is a scope, even if
   // there is no compound stmt.  C90 does not have this clause.  We only do this
@@ -644,8 +708,7 @@ Parser::OwningStmtResult Parser::ParseSwitchStatement() {
   if (Cond.isInvalid())
     return StmtError();
 
-  return Actions.ActOnFinishSwitchStmt(SwitchLoc, move_arg(Switch),
-                                       move_arg(Body));
+  return Actions.ActOnFinishSwitchStmt(SwitchLoc, move(Switch), move(Body));
 }
 
 /// ParseWhileStatement
@@ -714,7 +777,7 @@ Parser::OwningStmtResult Parser::ParseWhileStatement() {
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnWhileStmt(WhileLoc, move_arg(Cond), move_arg(Body));
+  return Actions.ActOnWhileStmt(WhileLoc, move(Cond), move(Body));
 }
 
 /// ParseDoStatement
@@ -778,7 +841,7 @@ Parser::OwningStmtResult Parser::ParseDoStatement() {
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnDoStmt(DoLoc, move_arg(Body), WhileLoc, move_arg(Cond));
+  return Actions.ActOnDoStmt(DoLoc, move(Body), WhileLoc, move(Cond));
 }
 
 /// ParseForStatement
@@ -804,7 +867,7 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
     return StmtError();
   }
 
-  bool C99orCXX = getLang().C99 || getLang().CPlusPlus;
+  bool C99orCXXorObjC = getLang().C99 || getLang().CPlusPlus || getLang().ObjC1;
 
   // C99 6.8.5p5 - In C99, the for statement is a block.  This is not
   // the case for C90.  Start the loop scope.
@@ -822,7 +885,7 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
   // as those declared in the condition.
   //
   unsigned ScopeFlags;
-  if (C99orCXX)
+  if (C99orCXXorObjC)
     ScopeFlags = Scope::BreakScope | Scope::ContinueScope |
                  Scope::DeclScope  | Scope::ControlScope;
   else
@@ -843,33 +906,37 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
     ConsumeToken();
   } else if (isSimpleDeclaration()) {  // for (int X = 4;
     // Parse declaration, which eats the ';'.
-    if (!C99orCXX)   // Use of C99-style for loops in C90 mode?
+    if (!C99orCXXorObjC)   // Use of C99-style for loops in C90 mode?
       Diag(Tok, diag::ext_c99_variable_decl_in_for_loop);
 
-    SourceLocation DeclStart = Tok.getLocation();
-    DeclTy *aBlockVarDecl = ParseSimpleDeclaration(Declarator::ForContext);
-    // FIXME: Pass in the right location for the end of the declstmt.
-    FirstPart = Actions.ActOnDeclStmt(aBlockVarDecl, DeclStart,
-                                          DeclStart);
-    if ((ForEach = isTokIdentifier_in())) {
+    SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
+    DeclGroupPtrTy DG = ParseSimpleDeclaration(Declarator::ForContext, DeclEnd,
+                                               false);
+    FirstPart = Actions.ActOnDeclStmt(DG, DeclStart, Tok.getLocation());
+    
+    if (Tok.is(tok::semi)) {  // for (int x = 4;
+      ConsumeToken();
+    } else if ((ForEach = isTokIdentifier_in())) {
+      // ObjC: for (id x in expr) 
       ConsumeToken(); // consume 'in'
       SecondPart = ParseExpression();
+    } else {
+      Diag(Tok, diag::err_expected_semi_for);
+      SkipUntil(tok::semi);
     }
   } else {
     Value = ParseExpression();
 
     // Turn the expression into a stmt.
     if (!Value.isInvalid())
-      FirstPart = Actions.ActOnExprStmt(move_arg(Value));
+      FirstPart = Actions.ActOnExprStmt(move(Value));
 
     if (Tok.is(tok::semi)) {
       ConsumeToken();
-    }
-    else if ((ForEach = isTokIdentifier_in())) {
+    } else if ((ForEach = isTokIdentifier_in())) {
       ConsumeToken(); // consume 'in'
       SecondPart = ParseExpression();
-    }
-    else {
+    } else {
       if (!Value.isInvalid()) Diag(Tok, diag::err_expected_semi_for);
       SkipUntil(tok::semi);
     }
@@ -891,11 +958,8 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
     }
 
     // Parse the third part of the for specifier.
-    if (Tok.is(tok::r_paren)) {  // for (...;...;)
-      // no third part.
-    } else {
+    if (Tok.isNot(tok::r_paren))    // for (...;...;)
       ThirdPart = ParseExpression();
-    }
   }
   // Match the ')'.
   SourceLocation RParenLoc = MatchRHSPunctuation(tok::r_paren, LParenLoc);
@@ -912,7 +976,7 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
   // for-init-statement/condition and a new scope for substatement in C++.
   //
   ParseScope InnerScope(this, Scope::DeclScope, 
-                        C99orCXX && Tok.isNot(tok::l_brace));
+                        C99orCXXorObjC && Tok.isNot(tok::l_brace));
 
   // Read the body statement.
   OwningStmtResult Body(ParseStatement());
@@ -927,14 +991,14 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
     return StmtError();
 
   if (!ForEach)
-    return Actions.ActOnForStmt(ForLoc, LParenLoc, move_arg(FirstPart),
-                              move_arg(SecondPart), move_arg(ThirdPart),
-                              RParenLoc, move_arg(Body));
-  else
-    return Actions.ActOnObjCForCollectionStmt(ForLoc, LParenLoc,
-                                              move_arg(FirstPart),
-                                              move_arg(SecondPart),
-                                              RParenLoc, move_arg(Body));
+    return Actions.ActOnForStmt(ForLoc, LParenLoc, move(FirstPart),
+                              move(SecondPart), move(ThirdPart),
+                              RParenLoc, move(Body));
+  
+  return Actions.ActOnObjCForCollectionStmt(ForLoc, LParenLoc,
+                                            move(FirstPart),
+                                            move(SecondPart),
+                                            RParenLoc, move(Body));
 }
 
 /// ParseGotoStatement
@@ -953,7 +1017,7 @@ Parser::OwningStmtResult Parser::ParseGotoStatement() {
     Res = Actions.ActOnGotoStmt(GotoLoc, Tok.getLocation(),
                                 Tok.getIdentifierInfo());
     ConsumeToken();
-  } else if (Tok.is(tok::star) && !getLang().NoExtensions) {
+  } else if (Tok.is(tok::star)) {
     // GNU indirect goto extension.
     Diag(Tok, diag::ext_gnu_indirect_goto);
     SourceLocation StarLoc = ConsumeToken();
@@ -962,7 +1026,7 @@ Parser::OwningStmtResult Parser::ParseGotoStatement() {
       SkipUntil(tok::semi, false, true);
       return StmtError();
     }
-    Res = Actions.ActOnIndirectGotoStmt(GotoLoc, StarLoc, move_arg(R));
+    Res = Actions.ActOnIndirectGotoStmt(GotoLoc, StarLoc, move(R));
   } else {
     Diag(Tok, diag::err_expected_ident);
     return StmtError();
@@ -1008,7 +1072,7 @@ Parser::OwningStmtResult Parser::ParseReturnStatement() {
       return StmtError();
     }
   }
-  return Actions.ActOnReturnStmt(ReturnLoc, move_arg(R));
+  return Actions.ActOnReturnStmt(ReturnLoc, move(R));
 }
 
 /// FuzzyParseMicrosoftAsmStatement. When -fms-extensions is enabled, this
@@ -1148,7 +1212,7 @@ Parser::OwningStmtResult Parser::ParseAsmStatement(bool &msAsm) {
   return Actions.ActOnAsmStmt(AsmLoc, isSimple, isVolatile,
                               NumOutputs, NumInputs, &Names[0],
                               move_arg(Constraints), move_arg(Exprs),
-                              move_arg(AsmString), move_arg(Clobbers),
+                              move(AsmString), move_arg(Clobbers),
                               RParenLoc);
 }
 
@@ -1208,7 +1272,9 @@ bool Parser::ParseAsmOperandsOpt(llvm::SmallVectorImpl<std::string> &Names,
     }
 
     // Read the parenthesized expression.
-    OwningExprResult Res(ParseSimpleParenExpression());
+    SourceLocation OpenLoc = ConsumeParen();
+    OwningExprResult Res(ParseExpression());
+    MatchRHSPunctuation(tok::r_paren, OpenLoc);
     if (Res.isInvalid()) {
       SkipUntil(tok::r_paren);
       return true;
@@ -1222,8 +1288,14 @@ bool Parser::ParseAsmOperandsOpt(llvm::SmallVectorImpl<std::string> &Names,
   return true;
 }
 
-Parser::DeclTy *Parser::ParseFunctionStatementBody(DeclTy *Decl, 
-                                           SourceLocation L, SourceLocation R) {
+Parser::DeclPtrTy Parser::ParseFunctionStatementBody(DeclPtrTy Decl) {
+  assert(Tok.is(tok::l_brace));
+  SourceLocation LBraceLoc = Tok.getLocation();
+
+  PrettyStackTraceActionsDecl CrashInfo(Decl, LBraceLoc, Actions,
+                                        PP.getSourceManager(),
+                                        "parsing function body");
+  
   // Do not enter a scope for the brace, as the arguments are in the same scope
   // (the function body) as the body itself.  Instead, just read the statement
   // list and put it into a CompoundStmt for safe keeping.
@@ -1231,9 +1303,38 @@ Parser::DeclTy *Parser::ParseFunctionStatementBody(DeclTy *Decl,
 
   // If the function body could not be parsed, make a bogus compoundstmt.
   if (FnBody.isInvalid())
-    FnBody = Actions.ActOnCompoundStmt(L, R, MultiStmtArg(Actions), false);
+    FnBody = Actions.ActOnCompoundStmt(LBraceLoc, LBraceLoc, 
+                                       MultiStmtArg(Actions), false);
 
-  return Actions.ActOnFinishFunctionBody(Decl, move_arg(FnBody));
+  return Actions.ActOnFinishFunctionBody(Decl, move(FnBody));
+}
+
+/// ParseFunctionTryBlock - Parse a C++ function-try-block.
+///
+///       function-try-block:
+///         'try' ctor-initializer[opt] compound-statement handler-seq
+///
+Parser::DeclPtrTy Parser::ParseFunctionTryBlock(DeclPtrTy Decl) {
+  assert(Tok.is(tok::kw_try) && "Expected 'try'");
+  SourceLocation TryLoc = ConsumeToken();
+
+  PrettyStackTraceActionsDecl CrashInfo(Decl, TryLoc, Actions,
+                                        PP.getSourceManager(),
+                                        "parsing function try block");
+
+  // Constructor initializer list?
+  if (Tok.is(tok::colon))
+    ParseConstructorInitializer(Decl);
+
+  SourceLocation LBraceLoc = Tok.getLocation();
+  OwningStmtResult FnBody(ParseCXXTryBlockCommon(TryLoc));
+  // If we failed to parse the try-catch, we just give the function an empty
+  // compound statement as the body.
+  if (FnBody.isInvalid())
+    FnBody = Actions.ActOnCompoundStmt(LBraceLoc, LBraceLoc,
+                                       MultiStmtArg(Actions), false);
+
+  return Actions.ActOnFinishFunctionBody(Decl, move(FnBody));
 }
 
 /// ParseCXXTryBlock - Parse a C++ try-block.
@@ -1241,13 +1342,26 @@ Parser::DeclTy *Parser::ParseFunctionStatementBody(DeclTy *Decl,
 ///       try-block:
 ///         'try' compound-statement handler-seq
 ///
-///       handler-seq:
-///         handler handler-seq[opt]
-///
 Parser::OwningStmtResult Parser::ParseCXXTryBlock() {
   assert(Tok.is(tok::kw_try) && "Expected 'try'");
 
   SourceLocation TryLoc = ConsumeToken();
+  return ParseCXXTryBlockCommon(TryLoc);
+}
+
+/// ParseCXXTryBlockCommon - Parse the common part of try-block and
+/// function-try-block.
+///
+///       try-block:
+///         'try' compound-statement handler-seq
+///
+///       function-try-block:
+///         'try' ctor-initializer[opt] compound-statement handler-seq
+///
+///       handler-seq:
+///         handler handler-seq[opt]
+///
+Parser::OwningStmtResult Parser::ParseCXXTryBlockCommon(SourceLocation TryLoc) {
   if (Tok.isNot(tok::l_brace))
     return StmtError(Diag(Tok, diag::err_expected_lbrace));
   OwningStmtResult TryBlock(ParseCompoundStatement());
@@ -1267,8 +1381,7 @@ Parser::OwningStmtResult Parser::ParseCXXTryBlock() {
   if (Handlers.empty())
     return StmtError();
 
-  return Actions.ActOnCXXTryBlock(TryLoc, move_arg(TryBlock),
-                                  move_arg(Handlers));
+  return Actions.ActOnCXXTryBlock(TryLoc, move(TryBlock), move_arg(Handlers));
 }
 
 /// ParseCXXCatchBlock - Parse a C++ catch block, called handler in the standard
@@ -1298,7 +1411,7 @@ Parser::OwningStmtResult Parser::ParseCXXCatchBlock() {
 
   // exception-declaration is equivalent to '...' or a parameter-declaration
   // without default arguments.
-  DeclTy *ExceptionDecl = 0;
+  DeclPtrTy ExceptionDecl;
   if (Tok.isNot(tok::ellipsis)) {
     DeclSpec DS;
     if (ParseCXXTypeSpecifierSeq(DS))
@@ -1319,5 +1432,5 @@ Parser::OwningStmtResult Parser::ParseCXXCatchBlock() {
   if (Block.isInvalid())
     return move(Block);
 
-  return Actions.ActOnCXXCatchBlock(CatchLoc, ExceptionDecl, move_arg(Block));
+  return Actions.ActOnCXXCatchBlock(CatchLoc, ExceptionDecl, move(Block));
 }

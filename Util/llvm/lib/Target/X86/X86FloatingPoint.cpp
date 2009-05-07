@@ -115,6 +115,8 @@ namespace {
 
     bool isAtTop(unsigned RegNo) const { return getSlot(RegNo) == StackTop-1; }
     void moveToTop(unsigned RegNo, MachineBasicBlock::iterator I) {
+      MachineInstr *MI = I;
+      DebugLoc dl = MI->getDebugLoc();
       if (isAtTop(RegNo)) return;
       
       unsigned STReg = getSTReg(RegNo);
@@ -128,15 +130,16 @@ namespace {
       std::swap(Stack[RegMap[RegOnTop]], Stack[StackTop-1]);
 
       // Emit an fxch to update the runtime processors version of the state.
-      BuildMI(*MBB, I, TII->get(X86::XCH_F)).addReg(STReg);
+      BuildMI(*MBB, I, dl, TII->get(X86::XCH_F)).addReg(STReg);
       NumFXCH++;
     }
 
     void duplicateToTop(unsigned RegNo, unsigned AsReg, MachineInstr *I) {
+      DebugLoc dl = I->getDebugLoc();
       unsigned STReg = getSTReg(RegNo);
       pushReg(AsReg);   // New register on top of stack
 
-      BuildMI(*MBB, I, TII->get(X86::LD_Frr)).addReg(STReg);
+      BuildMI(*MBB, I, dl, TII->get(X86::LD_Frr)).addReg(STReg);
     }
 
     // popStackAfter - Pop the current value off of the top of the FP stack
@@ -549,6 +552,8 @@ static const TableEntry PopTable[] = {
 /// instruction if it was modified in place.
 ///
 void FPS::popStackAfter(MachineBasicBlock::iterator &I) {
+  MachineInstr* MI = I;
+  DebugLoc dl = MI->getDebugLoc();
   ASSERT_SORTED(PopTable);
   assert(StackTop > 0 && "Cannot pop empty stack!");
   RegMap[Stack[--StackTop]] = ~0;     // Update state
@@ -560,7 +565,7 @@ void FPS::popStackAfter(MachineBasicBlock::iterator &I) {
     if (Opcode == X86::UCOM_FPPr)
       I->RemoveOperand(0);
   } else {    // Insert an explicit pop
-    I = BuildMI(*MBB, ++I, TII->get(X86::ST_FPrr)).addReg(X86::ST0);
+    I = BuildMI(*MBB, ++I, dl, TII->get(X86::ST_FPrr)).addReg(X86::ST0);
   }
 }
 
@@ -584,7 +589,9 @@ void FPS::freeStackSlotAfter(MachineBasicBlock::iterator &I, unsigned FPRegNo) {
   RegMap[TopReg]    = OldSlot;
   RegMap[FPRegNo]   = ~0;
   Stack[--StackTop] = ~0;
-  I = BuildMI(*MBB, ++I, TII->get(X86::ST_FPrr)).addReg(STReg);
+  MachineInstr *MI  = I;
+  DebugLoc dl = MI->getDebugLoc();
+  I = BuildMI(*MBB, ++I, dl, TII->get(X86::ST_FPrr)).addReg(STReg);
 }
 
 
@@ -611,7 +618,7 @@ void FPS::handleZeroArgFP(MachineBasicBlock::iterator &I) {
 void FPS::handleOneArgFP(MachineBasicBlock::iterator &I) {
   MachineInstr *MI = I;
   unsigned NumOps = MI->getDesc().getNumOperands();
-  assert((NumOps == 5 || NumOps == 1) &&
+  assert((NumOps == X86AddrNumOperands + 1 || NumOps == 1) &&
          "Can only handle fst* & ftst instructions!");
 
   // Is this the last use of the source register?
@@ -788,6 +795,7 @@ void FPS::handleTwoArgFP(MachineBasicBlock::iterator &I) {
   unsigned Op1 = getFPReg(MI->getOperand(NumOperands-1));
   bool KillsOp0 = MI->killsRegister(X86::FP0+Op0);
   bool KillsOp1 = MI->killsRegister(X86::FP0+Op1);
+  DebugLoc dl = MI->getDebugLoc();
 
   unsigned TOS = getStackEntry(0);
 
@@ -853,7 +861,7 @@ void FPS::handleTwoArgFP(MachineBasicBlock::iterator &I) {
 
   // Replace the old instruction with a new instruction
   MBB->remove(I++);
-  I = BuildMI(*MBB, I, TII->get(Opcode)).addReg(getSTReg(NotTOS));
+  I = BuildMI(*MBB, I, dl, TII->get(Opcode)).addReg(getSTReg(NotTOS));
 
   // If both operands are killed, pop one off of the stack in addition to
   // overwriting the other one.
@@ -935,6 +943,7 @@ void FPS::handleCondMovFP(MachineBasicBlock::iterator &I) {
 ///
 void FPS::handleSpecialFP(MachineBasicBlock::iterator &I) {
   MachineInstr *MI = I;
+  DebugLoc dl = MI->getDebugLoc();
   switch (MI->getOpcode()) {
   default: assert(0 && "Unknown SpecialFP instruction!");
   case X86::FpGET_ST0_32:// Appears immediately after a call returning FP type!
@@ -982,7 +991,21 @@ void FPS::handleSpecialFP(MachineBasicBlock::iterator &I) {
   case X86::FpSET_ST0_32:
   case X86::FpSET_ST0_64:
   case X86::FpSET_ST0_80:
-    assert(StackTop == 1 && "Stack should have one element on it to return!");
+    assert((StackTop == 1 || StackTop == 2)
+           && "Stack should have one or two element on it to return!");
+    --StackTop;   // "Forget" we have something on the top of stack!
+    break;
+  case X86::FpSET_ST1_32:
+  case X86::FpSET_ST1_64:
+  case X86::FpSET_ST1_80:
+    // StackTop can be 1 if a FpSET_ST0_* was before this. Exchange them.
+    if (StackTop == 1) {
+      BuildMI(*MBB, I, dl, TII->get(X86::XCH_F)).addReg(X86::ST1);
+      NumFXCH++;
+      StackTop = 0;
+      break;
+    }
+    assert(StackTop == 2 && "Stack should have two element on it to return!");
     --StackTop;   // "Forget" we have something on the top of stack!
     break;
   case X86::MOV_Fp3232:
@@ -994,9 +1017,37 @@ void FPS::handleSpecialFP(MachineBasicBlock::iterator &I) {
   case X86::MOV_Fp8032:
   case X86::MOV_Fp8064: 
   case X86::MOV_Fp8080: {
-    unsigned SrcReg = getFPReg(MI->getOperand(1));
-    unsigned DestReg = getFPReg(MI->getOperand(0));
+    const MachineOperand &MO1 = MI->getOperand(1);
+    unsigned SrcReg = getFPReg(MO1);
 
+    const MachineOperand &MO0 = MI->getOperand(0);
+    // These can be created due to inline asm. Two address pass can introduce
+    // copies from RFP registers to virtual registers.
+    if (MO0.getReg() == X86::ST0 && SrcReg == 0) {
+      assert(MO1.isKill());
+      // Treat %ST0<def> = MOV_Fp8080 %FP0<kill>
+      // like  FpSET_ST0_80 %FP0<kill>, %ST0<imp-def>
+      assert((StackTop == 1 || StackTop == 2)
+             && "Stack should have one or two element on it to return!");
+      --StackTop;   // "Forget" we have something on the top of stack!
+      break;
+    } else if (MO0.getReg() == X86::ST1 && SrcReg == 1) {
+      assert(MO1.isKill());
+      // Treat %ST1<def> = MOV_Fp8080 %FP1<kill>
+      // like  FpSET_ST1_80 %FP0<kill>, %ST1<imp-def>
+      // StackTop can be 1 if a FpSET_ST0_* was before this. Exchange them.
+      if (StackTop == 1) {
+        BuildMI(*MBB, I, dl, TII->get(X86::XCH_F)).addReg(X86::ST1);
+        NumFXCH++;
+        StackTop = 0;
+        break;
+      }
+      assert(StackTop == 2 && "Stack should have two element on it to return!");
+      --StackTop;   // "Forget" we have something on the top of stack!
+      break;
+    }
+
+    unsigned DestReg = getFPReg(MO0);
     if (MI->killsRegister(X86::FP0+SrcReg)) {
       // If the input operand is killed, we can just change the owner of the
       // incoming stack slot into the result.

@@ -62,8 +62,7 @@ struct SDTypeConstraint {
   unsigned OperandNo;   // The operand # this constraint applies to.
   enum { 
     SDTCisVT, SDTCisPtrTy, SDTCisInt, SDTCisFP, SDTCisSameAs, 
-    SDTCisVTSmallerThanOp, SDTCisOpSmallerThanOp, SDTCisIntVectorOfSameSize,
-    SDTCisEltOfVec
+    SDTCisVTSmallerThanOp, SDTCisOpSmallerThanOp, SDTCisEltOfVec
   } ConstraintType;
   
   union {   // The discriminated union.
@@ -79,9 +78,6 @@ struct SDTypeConstraint {
     struct {
       unsigned BigOperandNum;
     } SDTCisOpSmallerThanOp_Info;
-    struct {
-      unsigned OtherOperandNum;
-    } SDTCisIntVectorOfSameSize_Info;
     struct {
       unsigned OtherOperandNum;
     } SDTCisEltOfVec_Info;
@@ -145,7 +141,8 @@ public:
 /// TreePatternNode objects!
 class TreePatternNode {
   /// The inferred type for this node, or EMVT::isUnknown if it hasn't
-  /// been determined yet.
+  /// been determined yet. This is a std::vector because during inference
+  /// there may be multiple possible types.
   std::vector<unsigned char> Types;
   
   /// Operator - The Record for the operator if this is an interior node (not
@@ -365,7 +362,7 @@ public:
   }
   
   /// InferAllTypes - Infer/propagate as many types throughout the expression
-  /// patterns as possible.  Return true if all types are infered, false
+  /// patterns as possible.  Return true if all types are inferred, false
   /// otherwise.  Throw an exception if a type contradiction is found.
   bool InferAllTypes();
   
@@ -465,6 +462,7 @@ class CodeGenDAGPatterns {
   RecordKeeper &Records;
   CodeGenTarget Target;
   std::vector<CodeGenIntrinsic> Intrinsics;
+  std::vector<CodeGenIntrinsic> TgtIntrinsics;
   
   std::map<Record*, SDNodeInfo> SDNodes;
   std::map<Record*, std::pair<Record*, std::string> > SDNodeXForms;
@@ -515,18 +513,26 @@ public:
   const CodeGenIntrinsic &getIntrinsic(Record *R) const {
     for (unsigned i = 0, e = Intrinsics.size(); i != e; ++i)
       if (Intrinsics[i].TheDef == R) return Intrinsics[i];
+    for (unsigned i = 0, e = TgtIntrinsics.size(); i != e; ++i)
+      if (TgtIntrinsics[i].TheDef == R) return TgtIntrinsics[i];
     assert(0 && "Unknown intrinsic!");
     abort();
   }
   
   const CodeGenIntrinsic &getIntrinsicInfo(unsigned IID) const {
-    assert(IID-1 < Intrinsics.size() && "Bad intrinsic ID!");
-    return Intrinsics[IID-1];
+    if (IID-1 < Intrinsics.size())
+      return Intrinsics[IID-1];
+    if (IID-Intrinsics.size()-1 < TgtIntrinsics.size())
+      return TgtIntrinsics[IID-Intrinsics.size()-1];
+    assert(0 && "Bad intrinsic ID!");
+    abort();
   }
   
   unsigned getIntrinsicID(Record *R) const {
     for (unsigned i = 0, e = Intrinsics.size(); i != e; ++i)
       if (Intrinsics[i].TheDef == R) return i;
+    for (unsigned i = 0, e = TgtIntrinsics.size(); i != e; ++i)
+      if (TgtIntrinsics[i].TheDef == R) return i + Intrinsics.size();
     assert(0 && "Unknown intrinsic!");
     abort();
   }

@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TOOLS_LLVMC2_COMPILATION_GRAPH_H
-#define LLVM_TOOLS_LLVMC2_COMPILATION_GRAPH_H
+#ifndef LLVM_INCLUDE_COMPILER_DRIVER_COMPILATION_GRAPH_H
+#define LLVM_INCLUDE_COMPILER_DRIVER_COMPILATION_GRAPH_H
 
 #include "llvm/CompilerDriver/Tool.h"
 
@@ -157,8 +157,8 @@ namespace llvmc {
     /// in your path.
     void viewGraph();
 
-    /// writeGraph - Write a compilation-graph.dot file.
-    void writeGraph();
+    /// writeGraph - Write Graphviz .dot source file to the current direcotry.
+    void writeGraph(const std::string& OutputFilename);
 
     // GraphTraits support.
     friend NodesIterator GraphBegin(CompilationGraph*);
@@ -261,16 +261,19 @@ namespace llvmc {
       return *this;
     }
 
-    inline bool operator==(const ThisType& I) const
-    { return EdgeIter == I.EdgeIter; }
-    inline bool operator!=(const ThisType& I) const
-    { return EdgeIter != I.EdgeIter; }
+    inline bool operator==(const ThisType& I) const {
+      assert(OwningGraph == I.OwningGraph);
+      return EdgeIter == I.EdgeIter;
+    }
+    inline bool operator!=(const ThisType& I) const {
+      return !this->operator==(I);
+    }
 
     inline pointer operator*() const {
       return &OwningGraph->getNode((*EdgeIter)->ToolName());
     }
     inline pointer operator->() const {
-      return &OwningGraph->getNode((*EdgeIter)->ToolName());
+      return this->operator*();
     }
 
     ThisType& operator++() { ++EdgeIter; return *this; } // Preincrement
@@ -319,4 +322,4 @@ namespace llvm {
 
 }
 
-#endif // LLVM_TOOLS_LLVMC2_COMPILATION_GRAPH_H
+#endif // LLVM_INCLUDE_COMPILER_DRIVER_COMPILATION_GRAPH_H

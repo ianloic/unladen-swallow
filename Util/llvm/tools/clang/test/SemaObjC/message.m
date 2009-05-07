@@ -1,4 +1,9 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
+
+typedef struct objc_object {
+  Class isa;
+} *id;
+
 
 @interface foo
 - (void)meth;
@@ -68,3 +73,28 @@ extern Class NSClassFromObject(id object);
 int f0(I0 *ob) {
   [ ob nonVararg: 0, 1, 2]; // expected-error {{too many arguments to method call}}
 }
+
+int f2() {
+    const id foo;
+    [foo bar];  // expected-warning {{method '-bar' not found (return type defaults to 'id')}}
+    return 0;
+}
+
+
+// PR3766
+struct S { int X; } S;
+
+int test5(int X) {
+  int a = [X somemsg];  // expected-warning {{receiver type 'int' is not 'id'}} \
+                           expected-warning {{method '-somemsg' not found}} \
+                           expected-warning {{incompatible pointer to integer conversion initializing 'id', expected 'int'}}
+  int b = [S somemsg];  // expected-error {{bad receiver type 'struct S'}}
+}
+
+// PR4021
+void foo4() {
+  struct objc_object X[10];
+  
+  [X rect];
+}
+

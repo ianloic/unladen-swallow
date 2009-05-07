@@ -15,15 +15,13 @@
 #ifndef RECORD_H
 #define RECORD_H
 
+#include "TGSourceMgr.h"
 #include "llvm/Support/DataTypes.h"
-#include <string>
-#include <vector>
 #include <map>
 #include <ostream>
-#include <cassert>
 
 namespace llvm {
-
+  
 // RecTy subclasses.
 class BitRecTy;
 class BitsRecTy;
@@ -55,6 +53,7 @@ class VarListElementInit;
 // Other classes.
 class Record;
 class RecordVal;
+struct MultiClass;
 
 //===----------------------------------------------------------------------===//
 //  Type Classes
@@ -78,7 +77,9 @@ public:   // These methods should only be called from subclasses of Init
   virtual Init *convertValue(   IntInit *II) { return 0; }
   virtual Init *convertValue(StringInit *SI) { return 0; }
   virtual Init *convertValue(  ListInit *LI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) {
+    return convertValue((TypedInit*)UI);
+  }
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
@@ -124,7 +125,7 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return (Init*)VB; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -166,7 +167,7 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -204,7 +205,7 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -283,7 +284,7 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -320,7 +321,7 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -394,7 +395,7 @@ public:
   virtual Init *convertValue(  ListInit *LI) { return 0; }
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
-  virtual Init *convertValue( BinOpInit *UI) { return 0; }
+  virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue(   DefInit *DI);
   virtual Init *convertValue(   DagInit *DI) { return 0; }
   virtual Init *convertValue( TypedInit *VI);
@@ -657,36 +658,6 @@ public:
   inline bool           empty() const { return Values.empty(); }
 };
 
-/// BinOpInit - !op (X, Y) - Combine two inits.
-///
-class BinOpInit : public Init {
-public:
-  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT };
-private:
-  BinaryOp Opc;
-  Init *LHS, *RHS;
-public:
-  BinOpInit(BinaryOp opc, Init *lhs, Init *rhs) : Opc(opc), LHS(lhs), RHS(rhs) {
-  }
-  
-  BinaryOp getOpcode() const { return Opc; }
-  Init *getLHS() const { return LHS; }
-  Init *getRHS() const { return RHS; }
-
-  // Fold - If possible, fold this to a simpler init.  Return this if not
-  // possible to fold.
-  Init *Fold();
-
-  virtual Init *convertInitializerTo(RecTy *Ty) {
-    return Ty->convertValue(this);
-  }
-  
-  virtual Init *resolveReferences(Record &R, const RecordVal *RV);
-  
-  virtual std::string getAsString() const;
-};
-
-
 
 /// TypedInit - This is the common super-class of types that have a specific,
 /// explicit, type.
@@ -714,6 +685,43 @@ public:
   virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
                                             unsigned Elt) = 0;
 };
+
+
+/// BinOpInit - !op (X, Y) - Combine two inits.
+///
+class BinOpInit : public TypedInit {
+public:
+  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT, NAMECONCAT };
+private:
+  BinaryOp Opc;
+  Init *LHS, *RHS;
+public:
+  BinOpInit(BinaryOp opc, Init *lhs, Init *rhs, RecTy *Type) :
+      TypedInit(Type), Opc(opc), LHS(lhs), RHS(rhs) {
+  }
+  
+  BinaryOp getOpcode() const { return Opc; }
+  Init *getLHS() const { return LHS; }
+  Init *getRHS() const { return RHS; }
+
+  // Fold - If possible, fold this to a simpler init.  Return this if not
+  // possible to fold.
+  Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
+
+  virtual Init *convertInitializerTo(RecTy *Ty) {
+    return Ty->convertValue(this);
+  }
+  
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit);
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt);
+
+  virtual Init *resolveReferences(Record &R, const RecordVal *RV);
+  
+  virtual std::string getAsString() const;
+};
+
 
 /// VarInit - 'Opcode' - Represent a reference to an entire variable object.
 ///
@@ -859,11 +867,13 @@ public:
 ///
 class DagInit : public Init {
   Init *Val;
+  std::string ValName;
   std::vector<Init*> Args;
   std::vector<std::string> ArgNames;
 public:
-  DagInit(Init *V, const std::vector<std::pair<Init*, std::string> > &args)
-    : Val(V) {
+  DagInit(Init *V, std::string VN, 
+          const std::vector<std::pair<Init*, std::string> > &args)
+    : Val(V), ValName(VN) {
     Args.reserve(args.size());
     ArgNames.reserve(args.size());
     for (unsigned i = 0, e = args.size(); i != e; ++i) {
@@ -871,9 +881,9 @@ public:
       ArgNames.push_back(args[i].second);
     }
   }
-  DagInit(Init *V, const std::vector<Init*> &args, 
+  DagInit(Init *V, std::string VN, const std::vector<Init*> &args, 
           const std::vector<std::string> &argNames)
-  : Val(V), Args(args), ArgNames(argNames) {
+  : Val(V), ValName(VN), Args(args), ArgNames(argNames) {
   }
   
   virtual Init *convertInitializerTo(RecTy *Ty) {
@@ -881,6 +891,8 @@ public:
   }
 
   Init *getOperator() const { return Val; }
+
+  const std::string &getName() const { return ValName; }
 
   unsigned getNumArgs() const { return Args.size(); }
   Init *getArg(unsigned Num) const {
@@ -962,16 +974,20 @@ inline std::ostream &operator<<(std::ostream &OS, const RecordVal &RV) {
 
 class Record {
   std::string Name;
+  TGLoc Loc;
   std::vector<std::string> TemplateArgs;
   std::vector<RecordVal> Values;
   std::vector<Record*> SuperClasses;
 public:
 
-  explicit Record(const std::string &N) : Name(N) {}
+  explicit Record(const std::string &N, TGLoc loc) : Name(N), Loc(loc) {}
   ~Record() {}
-
+  
   const std::string &getName() const { return Name; }
   void setName(const std::string &Name);  // Also updates RecordKeeper.
+  
+  TGLoc getLoc() const { return Loc; }
+  
   const std::vector<std::string> &getTemplateArgs() const {
     return TemplateArgs;
   }
@@ -1015,7 +1031,7 @@ public:
     assert(0 && "Name does not exist in record!");
   }
 
-  bool isSubClassOf(Record *R) const {
+  bool isSubClassOf(const Record *R) const {
     for (unsigned i = 0, e = SuperClasses.size(); i != e; ++i)
       if (SuperClasses[i] == R)
         return true;
@@ -1118,6 +1134,16 @@ public:
 
 std::ostream &operator<<(std::ostream &OS, const Record &R);
 
+struct MultiClass {
+  Record Rec;  // Placeholder for template args and Name.
+  typedef std::vector<Record*> RecordVector;
+  RecordVector DefPrototypes;
+
+  void dump() const;
+
+  MultiClass(const std::string &Name, TGLoc Loc) : Rec(Name, Loc) {}
+};
+
 class RecordKeeper {
   std::map<std::string, Record*> Classes, Defs;
 public:
@@ -1193,11 +1219,25 @@ struct LessRecordFieldName {
   }
 };
 
+
+class TGError {
+  TGLoc Loc;
+  std::string Message;
+public:
+  TGError(TGLoc loc, const std::string &message) : Loc(loc), Message(message) {}
+  
+  TGLoc getLoc() const { return Loc; }
+  const std::string &getMessage() const { return Message; }
+};
+  
   
 std::ostream &operator<<(std::ostream &OS, const RecordKeeper &RK);
 
 extern RecordKeeper Records;
 
+void PrintError(TGLoc ErrorLoc, const std::string &Msg);
+
+  
 } // End llvm namespace
 
 #endif

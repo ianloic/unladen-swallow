@@ -138,10 +138,21 @@ Init *StringRecTy::convertValue(BinOpInit *BO) {
     Init *R = BO->getRHS()->convertInitializerTo(this);
     if (L == 0 || R == 0) return 0;
     if (L != BO->getLHS() || R != BO->getRHS())
-      return new BinOpInit(BinOpInit::STRCONCAT, L, R);
+      return new BinOpInit(BinOpInit::STRCONCAT, L, R, new StringRecTy);
     return BO;
   }
-  return 0;
+  if (BO->getOpcode() == BinOpInit::NAMECONCAT) {
+    if (BO->getType()->getAsString() == getAsString()) {
+      Init *L = BO->getLHS()->convertInitializerTo(this);
+      Init *R = BO->getRHS()->convertInitializerTo(this);
+      if (L == 0 || R == 0) return 0;
+      if (L != BO->getLHS() || R != BO->getRHS())
+        return new BinOpInit(BinOpInit::NAMECONCAT, L, R, new StringRecTy);
+      return BO;
+    }
+  }
+
+  return convertValue((TypedInit*)BO);
 }
 
 
@@ -195,8 +206,18 @@ Init *DagRecTy::convertValue(BinOpInit *BO) {
     Init *R = BO->getRHS()->convertInitializerTo(this);
     if (L == 0 || R == 0) return 0;
     if (L != BO->getLHS() || R != BO->getRHS())
-      return new BinOpInit(BinOpInit::CONCAT, L, R);
+      return new BinOpInit(BinOpInit::CONCAT, L, R, new DagRecTy);
     return BO;
+  }
+  if (BO->getOpcode() == BinOpInit::NAMECONCAT) {
+    if (BO->getType()->getAsString() == getAsString()) {
+      Init *L = BO->getLHS()->convertInitializerTo(this);
+      Init *R = BO->getRHS()->convertInitializerTo(this);
+      if (L == 0 || R == 0) return 0;
+      if (L != BO->getLHS() || R != BO->getRHS())
+        return new BinOpInit(BinOpInit::CONCAT, L, R, new DagRecTy);
+      return BO;
+    }
   }
   return 0;
 }
@@ -395,7 +416,7 @@ std::string ListInit::getAsString() const {
   return Result + "]";
 }
 
-Init *BinOpInit::Fold() {
+Init *BinOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) {
   switch (getOpcode()) {
   default: assert(0 && "Unknown binop");
   case CONCAT: {
@@ -426,7 +447,7 @@ Init *BinOpInit::Fold() {
         Args.push_back(RHSs->getArg(i));
         ArgNames.push_back(RHSs->getArgName(i));
       }
-      return new DagInit(LHSs->getOperator(), Args, ArgNames);
+      return new DagInit(LHSs->getOperator(), "", Args, ArgNames);
     }
     break;
   }
@@ -435,6 +456,57 @@ Init *BinOpInit::Fold() {
     StringInit *RHSs = dynamic_cast<StringInit*>(RHS);
     if (LHSs && RHSs)
       return new StringInit(LHSs->getValue() + RHSs->getValue());
+    break;
+  }
+  case NAMECONCAT: {
+    StringInit *LHSs = dynamic_cast<StringInit*>(LHS);
+    StringInit *RHSs = dynamic_cast<StringInit*>(RHS);
+    if (LHSs && RHSs) {
+      std::string Name(LHSs->getValue() + RHSs->getValue());
+
+      // From TGParser::ParseIDValue
+      if (CurRec) {
+        if (const RecordVal *RV = CurRec->getValue(Name)) {
+          if (RV->getType() != getType()) {
+            throw "type mismatch in nameconcat";
+          }
+          return new VarInit(Name, RV->getType());
+        }
+        
+        std::string TemplateArgName = CurRec->getName()+":"+Name;
+        if (CurRec->isTemplateArg(TemplateArgName)) {
+          const RecordVal *RV = CurRec->getValue(TemplateArgName);
+          assert(RV && "Template arg doesn't exist??");
+
+          if (RV->getType() != getType()) {
+            throw "type mismatch in nameconcat";
+          }
+
+          return new VarInit(TemplateArgName, RV->getType());
+        }
+      }
+
+      if (CurMultiClass) {
+        std::string MCName = CurMultiClass->Rec.getName()+"::"+Name;
+        if (CurMultiClass->Rec.isTemplateArg(MCName)) {
+          const RecordVal *RV = CurMultiClass->Rec.getValue(MCName);
+          assert(RV && "Template arg doesn't exist??");
+
+          if (RV->getType() != getType()) {
+            throw "type mismatch in nameconcat";
+          }
+          
+          return new VarInit(MCName, RV->getType());
+        }
+      }
+
+      if (Record *D = Records.getDef(Name))
+        return new DefInit(D);
+
+      cerr << "Variable not defined: '" + Name + "'\n";
+      assert(0 && "Variable not found");
+      return 0;
+    }
     break;
   }
   case SHL:
@@ -464,8 +536,8 @@ Init *BinOpInit::resolveReferences(Record &R, const RecordVal *RV) {
   Init *rhs = RHS->resolveReferences(R, RV);
   
   if (LHS != lhs || RHS != rhs)
-    return (new BinOpInit(getOpcode(), lhs, rhs))->Fold();
-  return Fold();
+    return (new BinOpInit(getOpcode(), lhs, rhs, getType()))->Fold(&R, 0);
+  return Fold(&R, 0);
 }
 
 std::string BinOpInit::getAsString() const {
@@ -476,8 +548,38 @@ std::string BinOpInit::getAsString() const {
   case SRA: Result = "!sra"; break;
   case SRL: Result = "!srl"; break;
   case STRCONCAT: Result = "!strconcat"; break;
+  case NAMECONCAT: 
+    Result = "!nameconcat<" + getType()->getAsString() + ">"; break;
   }
   return Result + "(" + LHS->getAsString() + ", " + RHS->getAsString() + ")";
+}
+
+Init *BinOpInit::resolveBitReference(Record &R, const RecordVal *IRV,
+                                   unsigned Bit) {
+  Init *Folded = Fold(&R, 0);
+
+  if (Folded != this) {
+    TypedInit *Typed = dynamic_cast<TypedInit *>(Folded);
+    if (Typed) {
+      return Typed->resolveBitReference(R, IRV, Bit);
+    }    
+  }
+  
+  return 0;
+}
+
+Init *BinOpInit::resolveListElementReference(Record &R, const RecordVal *IRV,
+                                           unsigned Elt) {
+  Init *Folded = Fold(&R, 0);
+
+  if (Folded != this) {
+    TypedInit *Typed = dynamic_cast<TypedInit *>(Folded);
+    if (Typed) {
+      return Typed->resolveListElementReference(R, IRV, Elt);
+    }    
+  }
+  
+  return 0;
 }
 
 Init *TypedInit::convertInitializerBitRange(const std::vector<unsigned> &Bits) {
@@ -679,7 +781,7 @@ Init *DagInit::resolveReferences(Record &R, const RecordVal *RV) {
   Init *Op = Val->resolveReferences(R, RV);
   
   if (Args != NewArgs || Op != Val)
-    return new DagInit(Op, NewArgs, ArgNames);
+    return new DagInit(Op, "", NewArgs, ArgNames);
     
   return this;
 }
@@ -687,6 +789,8 @@ Init *DagInit::resolveReferences(Record &R, const RecordVal *RV) {
 
 std::string DagInit::getAsString() const {
   std::string Result = "(" + Val->getAsString();
+  if (!ValName.empty())
+    Result += ":" + ValName;
   if (Args.size()) {
     Result += " " + Args[0]->getAsString();
     if (!ArgNames[0].empty()) Result += ":$" + ArgNames[0];
@@ -953,6 +1057,20 @@ std::string Record::getValueAsCode(const std::string &FieldName) const {
     return CI->getValue();
   throw "Record `" + getName() + "', field `" + FieldName +
     "' does not have a code initializer!";
+}
+
+
+void MultiClass::dump() const {
+  cerr << "Record:\n";
+  Rec.dump();
+  
+  cerr << "Defs:\n";
+  for (RecordVector::const_iterator r = DefPrototypes.begin(),
+         rend = DefPrototypes.end();
+       r != rend;
+       ++r) {
+    (*r)->dump();
+  }
 }
 
 

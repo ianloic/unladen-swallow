@@ -8,6 +8,7 @@
 #
 #     %s - Replaced with the input name of the program, or the program to
 #          execute, as appropriate.
+#     %S - Replaced with the directory where the input file resides
 #     %prcontext - prcontext.tcl script
 #     %t - temporary file name (derived from testcase name)
 #
@@ -15,6 +16,10 @@
 FILENAME=$1
 TESTNAME=$1
 SUBST=$1
+FILEDIR=`dirname $TESTNAME`
+
+# Make diagnostic printing more determinstic.
+export COLUMNS=0
 
 OUTPUT=Output/$1.out
 
@@ -43,17 +48,46 @@ CLANG=$CLANG
 if [ ! -n "$CLANG" ]; then
     CLANG="clang"
 fi
+
+# Resolve the path, and Make sure $CLANG actually exists; otherwise
+# ensuing failures are non-obvious.
+CLANG=$(which "$CLANG")
+if [ -z $CLANG ]; then
+  echo "Couldn't find 'clang' program, try setting CLANG in your environment"
+  exit 1
+fi
+
 if [ -n "$VG" ]; then
   rm -f $OUTPUT.vg
   CLANG="valgrind --leak-check=full --quiet --log-file=$OUTPUT.vg $CLANG"
+fi
+
+# Assuming $CLANG is correct, use it to derive clang-cc. We expect to
+# be looking in a build directory, so just add '-cc'.
+CLANGCC=$CLANGCC
+if [ ! -n "$CLANGCC" ]; then
+    CLANGCC="$CLANG-cc"
+fi
+
+# Try to sanity check $CLANGCC too
+CLANGCC=$(which "$CLANGCC")
+# If that failed, ask clang.
+if [ -z "$CLANGCC" ]; then
+    CLANGCC=$($CLANG -print-prog-name=clang-cc)
+fi
+if [ -z "$CLANGCC" ]; then
+  echo "Couldn't find 'clang-cc' program, make sure clang is found in your build directory"
+  exit 1
 fi
 
 SCRIPT=$OUTPUT.script
 TEMPOUTPUT=$OUTPUT.tmp
 grep 'RUN:' $FILENAME | \
   sed -e "s|^.*RUN:\(.*\)$|\1|g" \
-      -e "s|clang|$CLANG|g" \
+      -e "s| clang | $CLANG |g" \
+      -e "s| clang-cc | $CLANGCC |g" \
       -e "s|%s|$SUBST|g" \
+      -e "s|%S|$FILEDIR|g" \
       -e "s|%prcontext|prcontext.tcl|g" \
       -e "s|%t|$TEMPOUTPUT|g" > $SCRIPT
 

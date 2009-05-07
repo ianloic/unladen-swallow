@@ -17,9 +17,72 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/Lex/LiteralSupport.h"
 #include "clang/Lex/Preprocessor.h"
-#include "SemaUtil.h"
 using namespace clang;
+
+/// getLocationOfStringLiteralByte - Return a source location that points to the
+/// specified byte of the specified string literal.
+///
+/// Strings are amazingly complex.  They can be formed from multiple tokens and
+/// can have escape sequences in them in addition to the usual trigraph and
+/// escaped newline business.  This routine handles this complexity.
+///
+SourceLocation Sema::getLocationOfStringLiteralByte(const StringLiteral *SL,
+                                                    unsigned ByteNo) const {
+  assert(!SL->isWide() && "This doesn't work for wide strings yet");
+  
+  // Loop over all of the tokens in this string until we find the one that
+  // contains the byte we're looking for.
+  unsigned TokNo = 0;
+  while (1) {
+    assert(TokNo < SL->getNumConcatenated() && "Invalid byte number!");
+    SourceLocation StrTokLoc = SL->getStrTokenLoc(TokNo);
+   
+    // Get the spelling of the string so that we can get the data that makes up
+    // the string literal, not the identifier for the macro it is potentially
+    // expanded through.
+    SourceLocation StrTokSpellingLoc = SourceMgr.getSpellingLoc(StrTokLoc);
+
+    // Re-lex the token to get its length and original spelling.
+    std::pair<FileID, unsigned> LocInfo =
+      SourceMgr.getDecomposedLoc(StrTokSpellingLoc);
+    std::pair<const char *,const char *> Buffer =
+      SourceMgr.getBufferData(LocInfo.first);
+    const char *StrData = Buffer.first+LocInfo.second;
+    
+    // Create a langops struct and enable trigraphs.  This is sufficient for
+    // relexing tokens.
+    LangOptions LangOpts;
+    LangOpts.Trigraphs = true;
+    
+    // Create a lexer starting at the beginning of this token.
+    Lexer TheLexer(StrTokSpellingLoc, LangOpts, Buffer.first, StrData,
+                   Buffer.second);
+    Token TheTok;
+    TheLexer.LexFromRawLexer(TheTok);
+    
+    // Use the StringLiteralParser to compute the length of the string in bytes.
+    StringLiteralParser SLP(&TheTok, 1, PP);
+    unsigned TokNumBytes = SLP.GetStringLength();
+    
+    // If the byte is in this token, return the location of the byte.
+    if (ByteNo < TokNumBytes ||
+        (ByteNo == TokNumBytes && TokNo == SL->getNumConcatenated())) {
+      unsigned Offset = 
+        StringLiteralParser::getOffsetOfStringByte(TheTok, ByteNo, PP);
+     
+      // Now that we know the offset of the token in the spelling, use the
+      // preprocessor to get the offset in the original source.
+      return PP.AdvanceToTokenCharacter(StrTokLoc, Offset);
+    }
+    
+    // Move to the next string token.
+    ++TokNo;
+    ByteNo -= TokNumBytes;
+  }
+}
+
 
 /// CheckFunctionCall - Check a direct function call for various correctness
 /// and safety properties not strictly enforced by the C type system.
@@ -34,11 +97,11 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
   if (!FnInfo)
     return move(TheCallResult);
 
-  switch (FnInfo->getBuiltinID()) {
+  switch (FDecl->getBuiltinID(Context)) {
   case Builtin::BI__builtin___CFStringMakeConstantString:
     assert(TheCall->getNumArgs() == 1 &&
            "Wrong # arguments to builtin CFStringMakeConstantString");
-    if (CheckBuiltinCFStringArgument(TheCall->getArg(0)))
+    if (CheckObjCString(TheCall->getArg(0)))
       return ExprError();
     return move(TheCallResult);
   case Builtin::BI__builtin_stdarg_start:
@@ -71,54 +134,43 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
   case Builtin::BI__builtin_object_size:
     if (SemaBuiltinObjectSize(TheCall))
       return ExprError();
+    return move(TheCallResult);
+  case Builtin::BI__builtin_longjmp:
+    if (SemaBuiltinLongjmp(TheCall))
+      return ExprError();
+    return move(TheCallResult);
   }
 
   // FIXME: This mechanism should be abstracted to be less fragile and
   // more efficient. For example, just map function ids to custom
   // handlers.
 
-  // Search the KnownFunctionIDs for the identifier.
-  unsigned i = 0, e = id_num_known_functions;
-  for (; i != e; ++i) { if (KnownFunctionIDs[i] == FnInfo) break; }
-  if (i == e) return move(TheCallResult);
-
   // Printf checking.
-  if (i <= id_vprintf) {
-    // Retrieve the index of the format string parameter and determine
-    // if the function is passed a va_arg argument.
-    unsigned format_idx = 0;
-    bool HasVAListArg = false;
-
-    switch (i) {
-    default: assert(false && "No format string argument index.");
-    case id_NSLog:         format_idx = 0; break;
-    case id_asprintf:      format_idx = 1; break;
-    case id_fprintf:       format_idx = 1; break;
-    case id_printf:        format_idx = 0; break;
-    case id_snprintf:      format_idx = 2; break;
-    case id_snprintf_chk:  format_idx = 4; break;
-    case id_sprintf:       format_idx = 1; break;
-    case id_sprintf_chk:   format_idx = 3; break;
-    case id_vasprintf:     format_idx = 1; HasVAListArg = true; break;
-    case id_vfprintf:      format_idx = 1; HasVAListArg = true; break;
-    case id_vsnprintf:     format_idx = 2; HasVAListArg = true; break;
-    case id_vsnprintf_chk: format_idx = 4; HasVAListArg = true; break;
-    case id_vsprintf:      format_idx = 1; HasVAListArg = true; break;
-    case id_vsprintf_chk:  format_idx = 3; HasVAListArg = true; break;
-    case id_vprintf:       format_idx = 0; HasVAListArg = true; break;
+  if (const FormatAttr *Format = FDecl->getAttr<FormatAttr>()) {
+    if (Format->getType() == "printf") {
+      bool HasVAListArg = Format->getFirstArg() == 0;
+      if (!HasVAListArg) {
+        if (const FunctionProtoType *Proto 
+            = FDecl->getType()->getAsFunctionProtoType())
+        HasVAListArg = !Proto->isVariadic();
+      }
+      CheckPrintfArguments(TheCall, HasVAListArg, Format->getFormatIdx() - 1,
+                           HasVAListArg ? 0 : Format->getFirstArg() - 1);
     }
-
-    CheckPrintfArguments(TheCall, HasVAListArg, format_idx);
   }
 
   return move(TheCallResult);
 }
 
-/// CheckBuiltinCFStringArgument - Checks that the argument to the builtin
+/// CheckObjCString - Checks that the argument to the builtin
 /// CFString constructor is correct
-bool Sema::CheckBuiltinCFStringArgument(Expr* Arg) {
+/// FIXME: GCC currently emits the following warning:
+/// "warning: input conversion stopped due to an input byte that does not 
+///           belong to the input codeset UTF-8"
+/// Note: It might also make sense to do the UTF-16 conversion here (would
+/// simplify the backend).
+bool Sema::CheckObjCString(Expr *Arg) {
   Arg = Arg->IgnoreParenCasts();
-  
   StringLiteral *Literal = dyn_cast<StringLiteral>(Arg);
 
   if (!Literal || Literal->isWide()) {
@@ -131,15 +183,8 @@ bool Sema::CheckBuiltinCFStringArgument(Expr* Arg) {
   unsigned Length = Literal->getByteLength();
   
   for (unsigned i = 0; i < Length; ++i) {
-    if (!isascii(Data[i])) {
-      Diag(PP.AdvanceToTokenCharacter(Arg->getLocStart(), i + 1),
-           diag::warn_cfstring_literal_contains_non_ascii_character)
-        << Arg->getSourceRange();
-      break;
-    }
-    
     if (!Data[i]) {
-      Diag(PP.AdvanceToTokenCharacter(Arg->getLocStart(), i + 1),
+      Diag(getLocationOfStringLiteralByte(Literal, i),
            diag::warn_cfstring_literal_contains_nul_character)
         << Arg->getSourceRange();
       break;
@@ -169,9 +214,11 @@ bool Sema::SemaBuiltinVAStart(CallExpr *TheCall) {
 
   // Determine whether the current function is variadic or not.
   bool isVariadic;
-  if (getCurFunctionDecl()) {
-    if (FunctionTypeProto* FTP =
-            dyn_cast<FunctionTypeProto>(getCurFunctionDecl()->getType()))
+  if (CurBlock)
+    isVariadic = CurBlock->isVariadic;
+  else if (getCurFunctionDecl()) {
+    if (FunctionProtoType* FTP =
+            dyn_cast<FunctionProtoType>(getCurFunctionDecl()->getType()))
       isVariadic = FTP->isVariadic();
     else
       isVariadic = false;
@@ -194,7 +241,9 @@ bool Sema::SemaBuiltinVAStart(CallExpr *TheCall) {
       // FIXME: This isn't correct for methods (results in bogus warning).
       // Get the last formal in the current function.
       const ParmVarDecl *LastArg;
-      if (FunctionDecl *FD = getCurFunctionDecl())
+      if (CurBlock)
+        LastArg = *(CurBlock->TheDecl->param_end()-1);
+      else if (FunctionDecl *FD = getCurFunctionDecl())
         LastArg = *(FD->param_end()-1);
       else
         LastArg = *(getCurMethodDecl()->param_end()-1);
@@ -227,6 +276,12 @@ bool Sema::SemaBuiltinUnorderedCompare(CallExpr *TheCall) {
   // Do standard promotions between the two arguments, returning their common
   // type.
   QualType Res = UsualArithmeticConversions(OrigArg0, OrigArg1, false);
+
+  // Make sure any conversions are pushed back into the call; this is
+  // type safe since unordered compare builtins are declared as "_Bool
+  // foo(...)".
+  TheCall->setArg(0, OrigArg0);
+  TheCall->setArg(1, OrigArg1);
   
   // If the common type isn't a real floating type, then the arguments were
   // invalid for this operation.
@@ -306,9 +361,10 @@ Action::OwningExprResult Sema::SemaBuiltinShuffleVector(CallExpr *TheCall) {
     TheCall->setArg(i, 0);
   }
 
-  return Owned(new ShuffleVectorExpr(exprs.begin(), numElements+2, FAType,
-                                     TheCall->getCallee()->getLocStart(),
-                                     TheCall->getRParenLoc()));
+  return Owned(new (Context) ShuffleVectorExpr(exprs.begin(), numElements+2,
+                                            FAType,
+                                            TheCall->getCallee()->getLocStart(),
+                                            TheCall->getRParenLoc()));
 }
 
 /// SemaBuiltinPrefetch - Handle __builtin_prefetch.
@@ -373,47 +429,92 @@ bool Sema::SemaBuiltinObjectSize(CallExpr *TheCall) {
   return false;
 }
 
+/// SemaBuiltinLongjmp - Handle __builtin_longjmp(void *env[5], int val).
+/// This checks that val is a constant 1.
+bool Sema::SemaBuiltinLongjmp(CallExpr *TheCall) {
+  Expr *Arg = TheCall->getArg(1);
+  llvm::APSInt Result(32);
+  if (!Arg->isIntegerConstantExpr(Result, Context) || Result != 1)
+    return Diag(TheCall->getLocStart(), diag::err_builtin_longjmp_invalid_val)
+             << SourceRange(Arg->getLocStart(), Arg->getLocEnd());
+
+  return false;
+}
+
 // Handle i > 1 ? "x" : "y", recursivelly
-bool Sema::SemaCheckStringLiteral(Expr *E, CallExpr *TheCall, bool HasVAListArg,
-                                  unsigned format_idx) {
+bool Sema::SemaCheckStringLiteral(const Expr *E, const CallExpr *TheCall,
+                                  bool HasVAListArg,
+                                  unsigned format_idx, unsigned firstDataArg) {
 
   switch (E->getStmtClass()) {
   case Stmt::ConditionalOperatorClass: {
-    ConditionalOperator *C = cast<ConditionalOperator>(E);
+    const ConditionalOperator *C = cast<ConditionalOperator>(E);
     return SemaCheckStringLiteral(C->getLHS(), TheCall,
-                                  HasVAListArg, format_idx)
+                                  HasVAListArg, format_idx, firstDataArg)
         && SemaCheckStringLiteral(C->getRHS(), TheCall,
-                                  HasVAListArg, format_idx);
+                                  HasVAListArg, format_idx, firstDataArg);
   }
 
   case Stmt::ImplicitCastExprClass: {
-    ImplicitCastExpr *Expr = dyn_cast<ImplicitCastExpr>(E);
+    const ImplicitCastExpr *Expr = cast<ImplicitCastExpr>(E);
     return SemaCheckStringLiteral(Expr->getSubExpr(), TheCall, HasVAListArg,
-                                  format_idx);
+                                  format_idx, firstDataArg);
   }
 
   case Stmt::ParenExprClass: {
-    ParenExpr *Expr = dyn_cast<ParenExpr>(E);
+    const ParenExpr *Expr = cast<ParenExpr>(E);
     return SemaCheckStringLiteral(Expr->getSubExpr(), TheCall, HasVAListArg,
-                                  format_idx);
+                                  format_idx, firstDataArg);
+  }
+      
+  case Stmt::DeclRefExprClass: {
+    const DeclRefExpr *DR = cast<DeclRefExpr>(E);
+    
+    // As an exception, do not flag errors for variables binding to
+    // const string literals.
+    if (const VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl())) {
+      bool isConstant = false;
+      QualType T = DR->getType();
+
+      if (const ArrayType *AT = Context.getAsArrayType(T)) {
+        isConstant = AT->getElementType().isConstant(Context);
+      }
+      else if (const PointerType *PT = T->getAsPointerType()) {
+        isConstant = T.isConstant(Context) && 
+                     PT->getPointeeType().isConstant(Context);
+      }
+        
+      if (isConstant) {
+        const VarDecl *Def = 0;
+        if (const Expr *Init = VD->getDefinition(Def))
+          return SemaCheckStringLiteral(Init, TheCall,
+                                        HasVAListArg, format_idx, firstDataArg);
+      }
+    }
+        
+    return false;
   }
 
-  default: {
-    ObjCStringLiteral *ObjCFExpr = dyn_cast<ObjCStringLiteral>(E);
-    StringLiteral *StrE = NULL;
-
-    if (ObjCFExpr)
+  case Stmt::ObjCStringLiteralClass:
+  case Stmt::StringLiteralClass: {
+    const StringLiteral *StrE = NULL;
+    
+    if (const ObjCStringLiteral *ObjCFExpr = dyn_cast<ObjCStringLiteral>(E))
       StrE = ObjCFExpr->getString();
     else
-      StrE = dyn_cast<StringLiteral>(E);
-
+      StrE = cast<StringLiteral>(E);
+    
     if (StrE) {
-      CheckPrintfString(StrE, E, TheCall, HasVAListArg, format_idx);
+      CheckPrintfString(StrE, E, TheCall, HasVAListArg, format_idx, 
+                        firstDataArg);
       return true;
     }
     
     return false;
   }
+      
+  default:
+    return false;
   }
 }
 
@@ -468,9 +569,9 @@ bool Sema::SemaCheckStringLiteral(Expr *E, CallExpr *TheCall, bool HasVAListArg,
 ///
 /// For now, we ONLY do (1), (3), (5), (6), (7), and (8).
 void
-Sema::CheckPrintfArguments(CallExpr *TheCall, bool HasVAListArg, 
-                           unsigned format_idx) {
-  Expr *Fn = TheCall->getCallee();
+Sema::CheckPrintfArguments(const CallExpr *TheCall, bool HasVAListArg, 
+                           unsigned format_idx, unsigned firstDataArg) {
+  const Expr *Fn = TheCall->getCallee();
 
   // CHECK: printf-like function is called with no format string.  
   if (format_idx >= TheCall->getNumArgs()) {
@@ -479,7 +580,7 @@ Sema::CheckPrintfArguments(CallExpr *TheCall, bool HasVAListArg,
     return;
   }
   
-  Expr *OrigFormatExpr = TheCall->getArg(format_idx)->IgnoreParenCasts();
+  const Expr *OrigFormatExpr = TheCall->getArg(format_idx)->IgnoreParenCasts();
   
   // CHECK: format string is not a string literal.
   // 
@@ -493,43 +594,53 @@ Sema::CheckPrintfArguments(CallExpr *TheCall, bool HasVAListArg,
   // C string (e.g. "%d")
   // ObjC string uses the same format specifiers as C string, so we can use 
   // the same format string checking logic for both ObjC and C strings.
-  bool isFExpr = SemaCheckStringLiteral(OrigFormatExpr, TheCall, HasVAListArg, format_idx);
+  if (SemaCheckStringLiteral(OrigFormatExpr, TheCall, HasVAListArg, format_idx,
+                             firstDataArg))
+    return;  // Literal format string found, check done!
 
-  if (!isFExpr) {
-    // For vprintf* functions (i.e., HasVAListArg==true), we add a
-    // special check to see if the format string is a function parameter
-    // of the function calling the printf function.  If the function
-    // has an attribute indicating it is a printf-like function, then we
-    // should suppress warnings concerning non-literals being used in a call
-    // to a vprintf function.  For example:
-    //
-    // void
-    // logmessage(char const *fmt __attribute__ (format (printf, 1, 2)), ...) {
-    //      va_list ap;
-    //      va_start(ap, fmt);
-    //      vprintf(fmt, ap);  // Do NOT emit a warning about "fmt".
-    //      ...
-    //
-    //
-    //  FIXME: We don't have full attribute support yet, so just check to see
-    //    if the argument is a DeclRefExpr that references a parameter.  We'll
-    //    add proper support for checking the attribute later.
-    if (HasVAListArg)
-      if (DeclRefExpr* DR = dyn_cast<DeclRefExpr>(OrigFormatExpr))
-        if (isa<ParmVarDecl>(DR->getDecl()))
-          return;
+  // For vprintf* functions (i.e., HasVAListArg==true), we add a
+  // special check to see if the format string is a function parameter
+  // of the function calling the printf function.  If the function
+  // has an attribute indicating it is a printf-like function, then we
+  // should suppress warnings concerning non-literals being used in a call
+  // to a vprintf function.  For example:
+  //
+  // void
+  // logmessage(char const *fmt __attribute__ (format (printf, 1, 2)), ...) {
+  //      va_list ap;
+  //      va_start(ap, fmt);
+  //      vprintf(fmt, ap);  // Do NOT emit a warning about "fmt".
+  //      ...
+  //
+  //
+  //  FIXME: We don't have full attribute support yet, so just check to see
+  //    if the argument is a DeclRefExpr that references a parameter.  We'll
+  //    add proper support for checking the attribute later.
+  if (HasVAListArg)
+    if (const DeclRefExpr *DR = dyn_cast<DeclRefExpr>(OrigFormatExpr))
+      if (isa<ParmVarDecl>(DR->getDecl()))
+        return;
 
+  // If there are no arguments specified, warn with -Wformat-security, otherwise
+  // warn only with -Wformat-nonliteral.
+  if (TheCall->getNumArgs() == format_idx+1)
     Diag(TheCall->getArg(format_idx)->getLocStart(), 
-         diag::warn_printf_not_string_constant)
+         diag::warn_printf_nonliteral_noargs)
       << OrigFormatExpr->getSourceRange();
-    return;
-  }
+  else
+    Diag(TheCall->getArg(format_idx)->getLocStart(), 
+         diag::warn_printf_nonliteral)
+           << OrigFormatExpr->getSourceRange();
 }
 
-void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
-      CallExpr *TheCall, bool HasVAListArg, unsigned format_idx) {
+void Sema::CheckPrintfString(const StringLiteral *FExpr,
+                             const Expr *OrigFormatExpr,
+                             const CallExpr *TheCall, bool HasVAListArg,
+                             unsigned format_idx, unsigned firstDataArg) {
 
-  ObjCStringLiteral *ObjCFExpr = dyn_cast<ObjCStringLiteral>(OrigFormatExpr);
+  const ObjCStringLiteral *ObjCFExpr =
+    dyn_cast<ObjCStringLiteral>(OrigFormatExpr);
+
   // CHECK: is the format string a wide literal?
   if (FExpr->isWide()) {
     Diag(FExpr->getLocStart(),
@@ -539,10 +650,10 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
   }
 
   // Str - The format string.  NOTE: this is NOT null-terminated!
-  const char * const Str = FExpr->getStrData();
+  const char *Str = FExpr->getStrData();
 
   // CHECK: empty format string?
-  const unsigned StrLen = FExpr->getByteLength();
+  unsigned StrLen = FExpr->getByteLength();
   
   if (StrLen == 0) {
     Diag(FExpr->getLocStart(), diag::warn_printf_empty_format_string)
@@ -565,7 +676,7 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
   //  string.  This can only be determined for non vprintf-like
   //  functions.  For those functions, this value is 1 (the sole
   //  va_arg argument).
-  unsigned numDataArgs = TheCall->getNumArgs()-(format_idx+1);
+  unsigned numDataArgs = TheCall->getNumArgs()-firstDataArg;
 
   // Inspect the format string.
   unsigned StrIdx = 0;
@@ -584,7 +695,7 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
     if (Str[StrIdx] == '\0') {
       // The string returned by getStrData() is not null-terminated,
       // so the presence of a null character is likely an error.
-      Diag(PP.AdvanceToTokenCharacter(FExpr->getLocStart(), StrIdx+1),
+      Diag(getLocationOfStringLiteralByte(FExpr, StrIdx),
            diag::warn_printf_format_string_contains_null_char)
         <<  OrigFormatExpr->getSourceRange();
       return;
@@ -606,8 +717,7 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
       ++numConversions;
       
       if (!HasVAListArg && numConversions > numDataArgs) {
-        SourceLocation Loc = FExpr->getLocStart();
-        Loc = PP.AdvanceToTokenCharacter(Loc, StrIdx+1);
+        SourceLocation Loc = getLocationOfStringLiteralByte(FExpr, StrIdx);
 
         if (Str[StrIdx-1] == '.')
           Diag(Loc, diag::warn_printf_asterisk_precision_missing_arg)
@@ -621,13 +731,12 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
       }
       
       // Perform type checking on width/precision specifier.
-      Expr *E = TheCall->getArg(format_idx+numConversions);
+      const Expr *E = TheCall->getArg(format_idx+numConversions);
       if (const BuiltinType *BT = E->getType()->getAsBuiltinType())
         if (BT->getKind() == BuiltinType::Int)
           break;
 
-      SourceLocation Loc =
-        PP.AdvanceToTokenCharacter(FExpr->getLocStart(), StrIdx+1);
+      SourceLocation Loc = getLocationOfStringLiteralByte(FExpr, StrIdx);
       
       if (Str[StrIdx-1] == '.')
         Diag(Loc, diag::warn_printf_asterisk_precision_wrong_type)
@@ -674,8 +783,8 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
     case 'n': {
       ++numConversions;
       CurrentState = state_OrdChr;
-      SourceLocation Loc = PP.AdvanceToTokenCharacter(FExpr->getLocStart(),
-                                                      LastConversionIdx+1);
+      SourceLocation Loc = getLocationOfStringLiteralByte(FExpr,
+                                                          LastConversionIdx);
                                    
       Diag(Loc, diag::warn_printf_write_back)<<OrigFormatExpr->getSourceRange();
       break;
@@ -688,8 +797,8 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
         CurrentState = state_OrdChr; 
       else {
         // Issue a warning: invalid format conversion.
-        SourceLocation Loc = PP.AdvanceToTokenCharacter(FExpr->getLocStart(),
-                                                    LastConversionIdx+1);
+        SourceLocation Loc = 
+          getLocationOfStringLiteralByte(FExpr, LastConversionIdx);
     
         Diag(Loc, diag::warn_printf_invalid_conversion)
           <<  std::string(Str+LastConversionIdx,
@@ -709,8 +818,8 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
         CurrentState = state_OrdChr; 
       else {
         // Issue a warning: invalid format conversion.
-        SourceLocation Loc = PP.AdvanceToTokenCharacter(FExpr->getLocStart(),
-                                                        LastConversionIdx+1);
+        SourceLocation Loc =
+          getLocationOfStringLiteralByte(FExpr, LastConversionIdx);
             
         Diag(Loc, diag::warn_printf_invalid_conversion)
           << std::string(Str+LastConversionIdx, Str+StrIdx)
@@ -732,8 +841,8 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
 
   if (CurrentState == state_Conversion) {
     // Issue a warning: invalid format conversion.
-    SourceLocation Loc = PP.AdvanceToTokenCharacter(FExpr->getLocStart(),
-                                                    LastConversionIdx+1);
+    SourceLocation Loc =
+      getLocationOfStringLiteralByte(FExpr, LastConversionIdx);
     
     Diag(Loc, diag::warn_printf_invalid_conversion)
       << std::string(Str+LastConversionIdx,
@@ -746,8 +855,8 @@ void Sema::CheckPrintfString(StringLiteral *FExpr, Expr *OrigFormatExpr,
     // CHECK: Does the number of format conversions exceed the number
     //        of data arguments?
     if (numConversions > numDataArgs) {
-      SourceLocation Loc = PP.AdvanceToTokenCharacter(FExpr->getLocStart(),
-                                                      LastConversionIdx);
+      SourceLocation Loc =
+        getLocationOfStringLiteralByte(FExpr, LastConversionIdx);
                                    
       Diag(Loc, diag::warn_printf_insufficient_data_args)
         << OrigFormatExpr->getSourceRange();
@@ -784,8 +893,9 @@ Sema::CheckReturnStackAddr(Expr *RetValExp, QualType lhsType,
       RetValExp = IcExpr->getSubExpr();
 
     if (BlockExpr *C = dyn_cast_or_null<BlockExpr>(RetValExp))
-      Diag(C->getLocStart(), diag::err_ret_local_block)
-        << C->getSourceRange();
+      if (C->hasBlockDeclRefExprs())
+        Diag(C->getLocStart(), diag::err_ret_local_block)
+          << C->getSourceRange();
   }
   // Perform checking for stack values returned by reference.
   else if (lhsType->isReferenceType()) {
@@ -1036,12 +1146,12 @@ void Sema::CheckFloatComparison(SourceLocation loc, Expr* lex, Expr *rex) {
   // Check for comparisons with builtin types.
   if (EmitWarning)
     if (CallExpr* CL = dyn_cast<CallExpr>(LeftExprSansParen))
-      if (isCallBuiltin(CL))
+      if (CL->isBuiltinCall(Context))
         EmitWarning = false;
   
   if (EmitWarning)
     if (CallExpr* CR = dyn_cast<CallExpr>(RightExprSansParen))
-      if (isCallBuiltin(CR))
+      if (CR->isBuiltinCall(Context))
         EmitWarning = false;
   
   // Emit the diagnostic.

@@ -1,7 +1,7 @@
-// RUN: clang -fsyntax-only -verify -pedantic -fblocks %s
+// RUN: clang-cc -fsyntax-only -verify -pedantic -fblocks %s
 
 // PR2241
-float test2241[] = { 
+float test2241[2] = { 
   1e,            // expected-error {{exponent}}
   1ee0           // expected-error {{exponent}}
 };
@@ -11,7 +11,7 @@ float test2241[] = {
 static char *f (char * (*g) (char **, int), char **p, ...) {
     char *s;
     va_list v;                              // expected-error {{identifier}}
-    s = g (p, __builtin_va_arg(v, int));    // expected-error {{identifier}} expected-warning {{extension}}
+    s = g (p, __builtin_va_arg(v, int));    // expected-error {{identifier}}
 }
 
 
@@ -68,3 +68,8 @@ int test6248081() {
 struct forward; // expected-note{{forward declaration of 'struct forward'}}
 void x(struct forward* x) {switch(x->a) {}} // expected-error {{incomplete definition of type}}
 
+// PR3410
+void foo() {
+  int X;
+  X = 4 // expected-error{{expected ';' after expression}}
+}

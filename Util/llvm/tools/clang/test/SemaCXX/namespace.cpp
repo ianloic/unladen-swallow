@@ -1,5 +1,5 @@
-// RUN: clang -fsyntax-only -verify %s 
-namespace A { // expected-note {{previous definition is here}}
+// RUN: clang-cc -fsyntax-only -verify %s 
+namespace A { // expected-note 2 {{previous definition is here}}
   int A;
   void f() { A = 0; }
 }
@@ -56,3 +56,14 @@ namespace S1 {
 }
 
 namespace B {} // expected-error {{redefinition of 'B' as different kind of symbol}}
+
+
+namespace foo {
+  enum x {
+    Y
+  };
+}
+
+static foo::x  test1;  // ok
+
+static foo::X  test2;  // typo: expected-error {{unknown type name 'X'}}

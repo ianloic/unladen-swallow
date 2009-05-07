@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TGLexer.h"
+#include "TGSourceMgr.h"
 #include "llvm/Support/Streams.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <ostream>
@@ -23,18 +24,17 @@
 #include <cerrno>
 using namespace llvm;
 
-TGLexer::TGLexer(MemoryBuffer *StartBuf) : CurLineNo(1), CurBuf(StartBuf) {
+TGLexer::TGLexer(TGSourceMgr &SM) : SrcMgr(SM) {
+  CurBuffer = 0;
+  CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
   CurPtr = CurBuf->getBufferStart();
   TokStart = 0;
 }
 
-TGLexer::~TGLexer() {
-  while (!IncludeStack.empty()) {
-    delete IncludeStack.back().Buffer;
-    IncludeStack.pop_back();
-  }
-  delete CurBuf;
+TGLoc TGLexer::getLoc() const {
+  return TGLoc::getFromPointer(TokStart);
 }
+
 
 /// ReturnError - Set the error to the specified string at the specified
 /// location.  This is defined to always return tgtok::Error.
@@ -43,44 +43,22 @@ tgtok::TokKind TGLexer::ReturnError(const char *Loc, const std::string &Msg) {
   return tgtok::Error;
 }
 
-void TGLexer::PrintIncludeStack(std::ostream &OS) const {
-  for (unsigned i = 0, e = IncludeStack.size(); i != e; ++i)
-    OS << "Included from " << IncludeStack[i].Buffer->getBufferIdentifier()
-       << ":" << IncludeStack[i].LineNo << ":\n";
-  OS << "Parsing " << CurBuf->getBufferIdentifier() << ":"
-     << CurLineNo << ": ";
+
+void TGLexer::PrintError(const char *Loc, const std::string &Msg) const {
+  SrcMgr.PrintError(TGLoc::getFromPointer(Loc), Msg);
 }
 
-/// PrintError - Print the error at the specified location.
-void TGLexer::PrintError(const char *ErrorLoc,  const std::string &Msg) const {
-  PrintIncludeStack(*cerr.stream());
-  cerr << Msg << "\n";
-  assert(ErrorLoc && "Location not specified!");
-  
-  // Scan backward to find the start of the line.
-  const char *LineStart = ErrorLoc;
-  while (LineStart != CurBuf->getBufferStart() && 
-         LineStart[-1] != '\n' && LineStart[-1] != '\r')
-    --LineStart;
-  // Get the end of the line.
-  const char *LineEnd = ErrorLoc;
-  while (LineEnd != CurBuf->getBufferEnd() && 
-         LineEnd[0] != '\n' && LineEnd[0] != '\r')
-    ++LineEnd;
-  // Print out the line.
-  cerr << std::string(LineStart, LineEnd) << "\n";
-  // Print out spaces before the carat.
-  for (const char *Pos = LineStart; Pos != ErrorLoc; ++Pos)
-    cerr << (*Pos == '\t' ? '\t' : ' ');
-  cerr << "^\n";
+void TGLexer::PrintError(TGLoc Loc, const std::string &Msg) const {
+  SrcMgr.PrintError(Loc, Msg);
 }
+
 
 int TGLexer::getNextChar() {
   char CurChar = *CurPtr++;
   switch (CurChar) {
   default:
     return (unsigned char)CurChar;
-  case 0:
+  case 0: {
     // A nul character in the stream is either the end of the current buffer or
     // a random nul in the file.  Disambiguate that here.
     if (CurPtr-1 != CurBuf->getBufferEnd())
@@ -88,18 +66,18 @@ int TGLexer::getNextChar() {
     
     // If this is the end of an included file, pop the parent file off the
     // include stack.
-    if (!IncludeStack.empty()) {
-      delete CurBuf;
-      CurBuf = IncludeStack.back().Buffer;
-      CurLineNo = IncludeStack.back().LineNo;
-      CurPtr = IncludeStack.back().CurPtr;
-      IncludeStack.pop_back();
+    TGLoc ParentIncludeLoc = SrcMgr.getParentIncludeLoc(CurBuffer);
+    if (ParentIncludeLoc != TGLoc()) {
+      CurBuffer = SrcMgr.FindBufferContainingLoc(ParentIncludeLoc);
+      CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
+      CurPtr = ParentIncludeLoc.getPointer();
       return getNextChar();
     }
     
     // Otherwise, return end of file.
     --CurPtr;  // Another call to lex will return EOF again.  
     return EOF;
+  }
   case '\n':
   case '\r':
     // Handle the newline character by ignoring it and incrementing the line
@@ -108,8 +86,6 @@ int TGLexer::getNextChar() {
     if ((*CurPtr == '\n' || (*CurPtr == '\r')) &&
         *CurPtr != CurChar)
       ++CurPtr;  // Eat the two char newline sequence.
-      
-    ++CurLineNo;
     return '\n';
   }  
 }
@@ -122,7 +98,7 @@ tgtok::TokKind TGLexer::LexToken() {
   switch (CurChar) {
   default:
     // Handle letters: [a-zA-Z_]
-    if (isalpha(CurChar) || CurChar == '_')
+    if (isalpha(CurChar) || CurChar == '_' || CurChar == '#')
       return LexIdentifier();
       
     // Unknown character, emit an error.
@@ -175,6 +151,8 @@ tgtok::TokKind TGLexer::LexToken() {
 tgtok::TokKind TGLexer::LexString() {
   const char *StrStart = CurPtr;
   
+  CurStrVal = "";
+  
   while (*CurPtr != '"') {
     // If we hit the end of the buffer, report an error.
     if (*CurPtr == 0 && CurPtr == CurBuf->getBufferEnd())
@@ -183,10 +161,41 @@ tgtok::TokKind TGLexer::LexString() {
     if (*CurPtr == '\n' || *CurPtr == '\r')
       return ReturnError(StrStart, "End of line in string literal");
     
+    if (*CurPtr != '\\') {
+      CurStrVal += *CurPtr++;
+      continue;
+    }
+
     ++CurPtr;
+    
+    switch (*CurPtr) {
+    case '\\': case '\'': case '"':
+      // These turn into their literal character.
+      CurStrVal += *CurPtr++;
+      break;
+    case 't':
+      CurStrVal += '\t';
+      ++CurPtr;
+      break;
+    case 'n':
+      CurStrVal += '\n';
+      ++CurPtr;
+      break;
+        
+    case '\n':
+    case '\r':
+      return ReturnError(CurPtr, "escaped newlines not supported in tblgen");
+
+    // If we hit the end of the buffer, report an error.
+    case '\0':
+      if (CurPtr == CurBuf->getBufferEnd())
+        return ReturnError(StrStart, "End of file in string literal");
+      // FALL THROUGH
+    default:
+      return ReturnError(CurPtr, "invalid escape in string literal");
+    }
   }
   
-  CurStrVal.assign(StrStart, CurPtr);
   ++CurPtr;
   return tgtok::StrVal;
 }
@@ -211,8 +220,20 @@ tgtok::TokKind TGLexer::LexIdentifier() {
   const char *IdentStart = TokStart;
   
   // Match the rest of the identifier regex: [0-9a-zA-Z_]*
-  while (isalpha(*CurPtr) || isdigit(*CurPtr) || *CurPtr == '_')
-    ++CurPtr;
+  while (isalpha(*CurPtr) || isdigit(*CurPtr) || *CurPtr == '_'
+         || *CurPtr == '#') {
+    // If this contains a '#', make sure it's value
+    if (*CurPtr == '#') {
+      if (strncmp(CurPtr, "#NAME#", 6) != 0) {
+        return tgtok::Error;
+      }
+      CurPtr += 6;
+    }
+    else {
+      ++CurPtr;
+    }
+  }
+  
   
   // Check to see if this identifier is a keyword.
   unsigned Len = CurPtr-IdentStart;
@@ -272,9 +293,8 @@ bool TGLexer::LexInclude() {
   }
   
   // Save the line number and lex buffer of the includer.
-  IncludeStack.push_back(IncludeRec(CurBuf, CurPtr, CurLineNo));
+  CurBuffer = SrcMgr.AddNewSourceBuffer(NewBuf, TGLoc::getFromPointer(CurPtr));
   
-  CurLineNo = 1;  // Reset line numbering.
   CurBuf = NewBuf;
   CurPtr = CurBuf->getBufferStart();
   return false;
@@ -421,11 +441,12 @@ tgtok::TokKind TGLexer::LexExclaim() {
   // Check to see which operator this is.
   unsigned Len = CurPtr-Start;
   
-  if (Len == 3 && !memcmp(Start, "con", 3)) return tgtok::XConcat;
-  if (Len == 3 && !memcmp(Start, "sra", 3)) return tgtok::XSRA;
-  if (Len == 3 && !memcmp(Start, "srl", 3)) return tgtok::XSRL;
-  if (Len == 3 && !memcmp(Start, "shl", 3)) return tgtok::XSHL;
-  if (Len == 9 && !memcmp(Start, "strconcat", 9)) return tgtok::XStrConcat;
+  if (Len == 3  && !memcmp(Start, "con", 3)) return tgtok::XConcat;
+  if (Len == 3  && !memcmp(Start, "sra", 3)) return tgtok::XSRA;
+  if (Len == 3  && !memcmp(Start, "srl", 3)) return tgtok::XSRL;
+  if (Len == 3  && !memcmp(Start, "shl", 3)) return tgtok::XSHL;
+  if (Len == 9  && !memcmp(Start, "strconcat", 9))   return tgtok::XStrConcat;
+  if (Len == 10 && !memcmp(Start, "nameconcat", 10)) return tgtok::XNameConcat;
   
   return ReturnError(Start-1, "Unknown operator");
 }

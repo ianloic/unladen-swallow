@@ -31,8 +31,11 @@ public:
   /// @brief An enumeration for the kinds of linkage for global values.
   enum LinkageTypes {
     ExternalLinkage = 0,///< Externally visible function
-    LinkOnceLinkage,    ///< Keep one copy of function when linking (inline)
-    WeakLinkage,        ///< Keep one copy of named function when linking (weak)
+    AvailableExternallyLinkage, ///< Available for inspection, not emission.
+    LinkOnceAnyLinkage, ///< Keep one copy of function when linking (inline)
+    LinkOnceODRLinkage, ///< Same, but only replaced by something equivalent.
+    WeakAnyLinkage,     ///< Keep one copy of named function when linking (weak)
+    WeakODRLinkage,     ///< Same, but only replaced by something equivalent.
     AppendingLinkage,   ///< Special purpose, only applies to global arrays
     InternalLinkage,    ///< Rename collisions when linking (static functions)
     PrivateLinkage,     ///< Like Internal, but omit from symbol table
@@ -99,29 +102,57 @@ public:
     return reinterpret_cast<const PointerType*>(User::getType());
   }
 
-  bool hasExternalLinkage()   const { return Linkage == ExternalLinkage; }
-  bool hasLinkOnceLinkage()   const { return Linkage == LinkOnceLinkage; }
-  bool hasWeakLinkage()       const { return Linkage == WeakLinkage; }
-  bool hasCommonLinkage()     const { return Linkage == CommonLinkage; }
-  bool hasAppendingLinkage()  const { return Linkage == AppendingLinkage; }
-  bool hasInternalLinkage()   const { return Linkage == InternalLinkage; }
-  bool hasPrivateLinkage()    const { return Linkage == PrivateLinkage; }
-  bool hasLocalLinkage()      const {
-    return Linkage == InternalLinkage || Linkage == PrivateLinkage;
+  static LinkageTypes getLinkOnceLinkage(bool ODR) {
+    return ODR ? LinkOnceODRLinkage : LinkOnceAnyLinkage;
   }
-  bool hasDLLImportLinkage()  const { return Linkage == DLLImportLinkage; }
-  bool hasDLLExportLinkage()  const { return Linkage == DLLExportLinkage; }
+  static LinkageTypes getWeakLinkage(bool ODR) {
+    return ODR ? WeakODRLinkage : WeakAnyLinkage;
+  }
+
+  bool hasExternalLinkage() const { return Linkage == ExternalLinkage; }
+  bool hasAvailableExternallyLinkage() const {
+    return Linkage == AvailableExternallyLinkage;
+  }
+  bool hasLinkOnceLinkage() const {
+    return Linkage == LinkOnceAnyLinkage || Linkage == LinkOnceODRLinkage;
+  }
+  bool hasWeakLinkage() const {
+    return Linkage == WeakAnyLinkage || Linkage == WeakODRLinkage;
+  }
+  bool hasAppendingLinkage() const { return Linkage == AppendingLinkage; }
+  bool hasInternalLinkage() const { return Linkage == InternalLinkage; }
+  bool hasPrivateLinkage() const { return Linkage == PrivateLinkage; }
+  bool hasLocalLinkage() const {
+    return Linkage == InternalLinkage || Linkage == PrivateLinkage ||
+           Linkage == AvailableExternallyLinkage;
+  }
+  bool hasDLLImportLinkage() const { return Linkage == DLLImportLinkage; }
+  bool hasDLLExportLinkage() const { return Linkage == DLLExportLinkage; }
   bool hasExternalWeakLinkage() const { return Linkage == ExternalWeakLinkage; }
-  bool hasGhostLinkage()      const { return Linkage == GhostLinkage; }
+  bool hasGhostLinkage() const { return Linkage == GhostLinkage; }
+  bool hasCommonLinkage() const { return Linkage == CommonLinkage; }
+
   void setLinkage(LinkageTypes LT) { Linkage = LT; }
   LinkageTypes getLinkage() const { return Linkage; }
 
   /// mayBeOverridden - Whether the definition of this global may be replaced
-  /// at link time.  For example, if a function has weak linkage then the code
-  /// defining it may be replaced by different code.
+  /// by something non-equivalent at link time.  For example, if a function has
+  /// weak linkage then the code defining it may be replaced by different code.
   bool mayBeOverridden() const {
-    return (Linkage == WeakLinkage ||
-            Linkage == LinkOnceLinkage ||
+    return (Linkage == WeakAnyLinkage ||
+            Linkage == LinkOnceAnyLinkage ||
+            Linkage == CommonLinkage ||
+            Linkage == ExternalWeakLinkage);
+  }
+
+  /// isWeakForLinker - Whether the definition of this global may be replaced at
+  /// link time.
+  bool isWeakForLinker() const {
+    return (Linkage == AvailableExternallyLinkage ||
+            Linkage == WeakAnyLinkage ||
+            Linkage == WeakODRLinkage ||
+            Linkage == LinkOnceAnyLinkage ||
+            Linkage == LinkOnceODRLinkage ||
             Linkage == CommonLinkage ||
             Linkage == ExternalWeakLinkage);
   }
@@ -165,7 +196,7 @@ public:
   /// off of this global value, remove them.  This method is useful for clients
   /// that want to check to see if a global is unused, but don't want to deal
   /// with potentially dead constants hanging off of the globals.
-  void removeDeadConstantUsers();
+  void removeDeadConstantUsers() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const GlobalValue *) { return true; }

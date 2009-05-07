@@ -25,6 +25,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Assembly/Writer.h"
+#include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetOptions.h"
@@ -121,6 +122,7 @@ void X86IntelAsmPrinter::decorateName(std::string &Name,
 /// method to print assembly for each instruction.
 ///
 bool X86IntelAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
   SetupMachineFunction(MF);
   O << "\n\n";
 
@@ -269,10 +271,9 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
   }
 }
 
-void X86IntelAsmPrinter::printMemReference(const MachineInstr *MI, unsigned Op,
-                                           const char *Modifier) {
-  assert(isMem(MI, Op) && "Invalid memory reference!");
-
+void X86IntelAsmPrinter::printLeaMemReference(const MachineInstr *MI,
+                                              unsigned Op,
+                                              const char *Modifier) {
   const MachineOperand &BaseReg  = MI->getOperand(Op);
   int ScaleVal                   = MI->getOperand(Op+1).getImm();
   const MachineOperand &IndexReg = MI->getOperand(Op+2);
@@ -313,6 +314,17 @@ void X86IntelAsmPrinter::printMemReference(const MachineInstr *MI, unsigned Op,
     }
   }
   O << "]";
+}
+
+void X86IntelAsmPrinter::printMemReference(const MachineInstr *MI, unsigned Op,
+                                           const char *Modifier) {
+  assert(isMem(MI, Op) && "Invalid memory reference!");
+  MachineOperand Segment = MI->getOperand(Op+4);
+  if (Segment.getReg()) {
+      printOperand(MI, Op+4, Modifier);
+      O << ':';
+    }
+  printLeaMemReference(MI, Op, Modifier);
 }
 
 void X86IntelAsmPrinter::printPICJumpTableSetLabel(unsigned uid,
@@ -454,8 +466,10 @@ bool X86IntelAsmPrinter::doFinalization(Module &M) {
 
     switch (I->getLinkage()) {
     case GlobalValue::CommonLinkage:
-    case GlobalValue::LinkOnceLinkage:
-    case GlobalValue::WeakLinkage:
+    case GlobalValue::LinkOnceAnyLinkage:
+    case GlobalValue::LinkOnceODRLinkage:
+    case GlobalValue::WeakAnyLinkage:
+    case GlobalValue::WeakODRLinkage:
       SwitchToDataSection("");
       O << name << "?\tsegment common 'COMMON'\n";
       bCustomSegment = true;
@@ -485,8 +499,11 @@ bool X86IntelAsmPrinter::doFinalization(Module &M) {
     if (!bCustomSegment)
       EmitAlignment(Align, I);
 
-    O << name << ":\t\t\t\t" << TAI->getCommentString()
-      << " " << I->getName() << '\n';
+    O << name << ":";
+    if (VerboseAsm)
+      O << "\t\t\t\t" << TAI->getCommentString()
+        << " " << I->getName();
+    O << '\n';
 
     EmitGlobalConstant(C);
 

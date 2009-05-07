@@ -1,4 +1,4 @@
-##===- clang/lib/Analysis/Makefile -------------------------*- Makefile -*-===##
+##===- clang/lib/Driver/Makefile ---------------------------*- Makefile -*-===##
 # 
 #                     The LLVM Compiler Infrastructure
 #
@@ -6,17 +6,23 @@
 # License. See LICENSE.TXT for details.
 # 
 ##===----------------------------------------------------------------------===##
-#
-# This implements analyses built on top of source-level CFGs. 
-#
-##===----------------------------------------------------------------------===##
 
 LEVEL = ../../../..
 LIBRARYNAME := clangDriver
 BUILD_ARCHIVE = 1
 CXXFLAGS = -fno-rtti
 
-CPPFLAGS += -I$(PROJ_SRC_DIR)/../../include
 
 include $(LEVEL)/Makefile.common
 
+SVN_REVISION := $(shell cd $(PROJ_SRC_DIR)/../.. && svnversion)
+
+CPP.Defines += -I$(PROJ_SRC_DIR)/../../include -I$(PROJ_OBJ_DIR)/../../include \
+         -DSVN_REVISION='"$(SVN_REVISION)"'
+
+$(ObjDir)/.ver-svn .ver:
+	@if [ '$(SVN_REVISION)' != '$(shell cat $(ObjDir)/.ver-svn 2>/dev/null)' ]; then\
+		echo '$(SVN_REVISION)' > $(ObjDir)/.ver-svn;			\
+	fi
+$(ObjDir)/.ver-svn: .ver
+$(ObjDir)/Driver.o: $(ObjDir)/.ver-svn

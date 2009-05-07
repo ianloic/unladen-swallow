@@ -17,6 +17,7 @@
 
 namespace llvm {
 
+class User;
 class BasicBlock;
 class Instruction;
 class Value;
@@ -25,6 +26,7 @@ class PHINode;
 class AllocaInst;
 class ConstantExpr;
 class TargetData;
+struct DbgInfoIntrinsic;
 
 template<typename T> class SmallVectorImpl;
   
@@ -48,16 +50,18 @@ bool ConstantFoldTerminator(BasicBlock *BB);
 ///
 bool isInstructionTriviallyDead(Instruction *I);
 
-  
 /// RecursivelyDeleteTriviallyDeadInstructions - If the specified value is a
 /// trivially dead instruction, delete it.  If that makes any of its operands
 /// trivially dead, delete them too, recursively.
-///
-/// If DeadInst is specified, the vector is filled with the instructions that
-/// are actually deleted.
-void RecursivelyDeleteTriviallyDeadInstructions(Value *V,
-                                  SmallVectorImpl<Instruction*> *DeadInst = 0);
-    
+void RecursivelyDeleteTriviallyDeadInstructions(Value *V);
+
+/// RecursivelyDeleteDeadPHINode - If the specified value is an effectively
+/// dead PHI node, due to being a def-use chain of single-use nodes that
+/// either forms a cycle or is terminated by a trivially dead instruction,
+/// delete it.  If that makes any of its operands trivially dead, delete them
+/// too, recursively.
+void RecursivelyDeleteDeadPHINode(PHINode *PN);
+
 //===----------------------------------------------------------------------===//
 //  Control Flow Graph Restructuring.
 //
@@ -93,6 +97,19 @@ AllocaInst *DemoteRegToStack(Instruction &X, bool VolatileLoads = false,
 /// node and replaces it with a slot in the stack frame, allocated via alloca.
 /// The phi node is deleted and it returns the pointer to the alloca inserted. 
 AllocaInst *DemotePHIToStack(PHINode *P, Instruction *AllocaPoint = 0);
+
+/// OnlyUsedByDbgIntrinsics - Return true if the instruction I is only used
+/// by DbgIntrinsics. If DbgInUses is specified then the vector is filled 
+/// with DbgInfoIntrinsic that use the instruction I.
+bool OnlyUsedByDbgInfoIntrinsics(Instruction *I, 
+                           SmallVectorImpl<DbgInfoIntrinsic *> *DbgInUses = 0);
+
+/// UserIsDebugInfo - Return true if U is a constant expr used by 
+/// llvm.dbg.variable or llvm.dbg.global_variable
+bool UserIsDebugInfo(User *U);
+
+/// RemoveDbgInfoUser - Remove an User which is representing debug info.
+void RemoveDbgInfoUser(User *U);
 
 } // End llvm namespace
 

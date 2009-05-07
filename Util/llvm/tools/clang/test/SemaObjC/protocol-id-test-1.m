@@ -1,4 +1,4 @@
-// RUN: clang -verify %s
+// RUN: clang-cc -verify %s
 
 @interface FF
 - (void) Meth;
@@ -12,5 +12,5 @@
 @end
 
 @implementation INTF
-- (void)IMeth {INTF<P> *pi;  [pi Meth]; } // expected-warning {{method '-Meth' not found in protocol (return type defaults to 'id')}}
+- (void)IMeth {INTF<P> *pi;  [pi Meth]; } // expected-warning {{method '-Meth' not found (return type defaults to 'id')}}
 @end

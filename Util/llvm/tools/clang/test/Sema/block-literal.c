@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only %s -verify -fblocks
+// RUN: clang-cc -fsyntax-only %s -verify -fblocks
 
 void I( void (^)(void));
 void (^noop)(void);
@@ -21,7 +21,7 @@ T somefunction() {
 
 	I(^{ });
 
-	return ^{printf("\nClosure\n"); };  // expected-error {{returning block that lives on the local stack}}
+	return ^{printf("\nClosure\n"); };
 }
 void test2() {
 	int x = 4;
@@ -40,13 +40,13 @@ void test2() {
 
 foo:
 	takeclosure(^{ x = 4; });  // expected-error {{variable is not assignable (missing __block type specifier)}}
-  __block y = 7;
+  __block y = 7;    // expected-warning {{type specifier missing, defaults to 'int'}}
   takeclosure(^{ y = 8; });
 }
 
 
 void (^test3())(void) { 
-  return ^{};   // expected-error {{returning block that lives on the local stack}}
+  return ^{};
 }
 
 void test4() {
@@ -56,7 +56,7 @@ void test4() {
 
 void myfunc(int (^block)(int)) {}
 
-void myfunc3(int *x);
+void myfunc3(const int *x);
 
 void test5() {
     int a;
@@ -80,6 +80,12 @@ void test_arguments() {
 
 static int global_x = 10;
 void (^global_block)(void) = ^{ printf("global x is %d\n", global_x); };
+
+typedef void (^void_block_t)(void);
+
+static const void_block_t myBlock = ^{ };
+
+static const void_block_t myBlock2 = ^ void(void) { }; 
 
 #if 0
 // Old syntax. FIXME: convert/test.

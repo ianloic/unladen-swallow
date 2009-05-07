@@ -29,10 +29,12 @@ namespace  {
   class VISIBILITY_HIDDEN StmtPrinter : public StmtVisitor<StmtPrinter> {
     llvm::raw_ostream &OS;
     unsigned IndentLevel;
+    bool NoIndent;
     clang::PrinterHelper* Helper;
   public:
-    StmtPrinter(llvm::raw_ostream &os, PrinterHelper* helper) : 
-      OS(os), IndentLevel(0), Helper(helper) {}
+    StmtPrinter(llvm::raw_ostream &os, PrinterHelper* helper, unsigned I=0,
+                bool noIndent=false) :
+      OS(os), IndentLevel(I), NoIndent(noIndent), Helper(helper) {}
     
     void PrintStmt(Stmt *S, int SubIndent = 1) {
       IndentLevel += SubIndent;
@@ -52,6 +54,7 @@ namespace  {
     void PrintRawCompoundStmt(CompoundStmt *S);
     void PrintRawDecl(Decl *D);
     void PrintRawDeclStmt(DeclStmt *S);
+    void PrintFieldDecl(FieldDecl *FD);
     void PrintRawIfStmt(IfStmt *If);
     void PrintRawCXXCatchStmt(CXXCatchStmt *Catch);
     
@@ -62,9 +65,11 @@ namespace  {
         OS << "<null expr>";
     }
     
-    llvm::raw_ostream &Indent(int Delta = 0) const {
-      for (int i = 0, e = IndentLevel+Delta; i < e; ++i)
-        OS << "  ";
+    llvm::raw_ostream &Indent(int Delta = 0) {
+      if (!NoIndent) {
+        for (int i = 0, e = IndentLevel+Delta; i < e; ++i)
+          OS << "  ";
+      } else NoIndent = false;
       return OS;
     }
     
@@ -112,14 +117,9 @@ void StmtPrinter::PrintRawDecl(Decl *D) {
   } else if (ValueDecl *VD = dyn_cast<ValueDecl>(D)) {
     // Emit storage class for vardecls.
     if (VarDecl *V = dyn_cast<VarDecl>(VD)) {
-      switch (V->getStorageClass()) {
-        default: assert(0 && "Unknown storage class!");
-        case VarDecl::None:     break;
-        case VarDecl::Extern:   OS << "extern "; break;
-        case VarDecl::Static:   OS << "static "; break; 
-        case VarDecl::Auto:     OS << "auto "; break;
-        case VarDecl::Register: OS << "register "; break;
-      }
+      if (V->getStorageClass() != VarDecl::None)
+        OS << VarDecl::getStorageClassSpecifierString(V->getStorageClass()) 
+           << ' ';
     }
     
     std::string Name = VD->getNameAsString();
@@ -139,16 +139,29 @@ void StmtPrinter::PrintRawDecl(Decl *D) {
     OS << " ";
     if (const IdentifierInfo *II = TD->getIdentifier())
       OS << II->getName();
-    else
-      OS << "<anonymous>";
-    // FIXME: print tag bodies.
+    if (RecordDecl *RD = dyn_cast<RecordDecl>(TD)) {
+      OS << "{\n";
+      IndentLevel += 1;
+      // FIXME: The context passed to field_begin/field_end should
+      // never be NULL!
+      ASTContext *Context = 0;
+      for (RecordDecl::field_iterator i = RD->field_begin(*Context);
+           i != RD->field_end(*Context); ++i) {
+        PrintFieldDecl(*i);
+      IndentLevel -= 1;
+      }
+    }
   } else {
     assert(0 && "Unexpected decl");
   }
 }
 
+void StmtPrinter::PrintFieldDecl(FieldDecl *FD) {
+  Indent() << FD->getNameAsString() << "\n";
+}
+
 void StmtPrinter::PrintRawDeclStmt(DeclStmt *S) {
-  bool isFirst = false;
+  bool isFirst = true;
   
   for (DeclStmt::decl_iterator I = S->decl_begin(), E = S->decl_end();
        I != E; ++I) {
@@ -202,8 +215,9 @@ void StmtPrinter::VisitLabelStmt(LabelStmt *Node) {
 }
 
 void StmtPrinter::PrintRawIfStmt(IfStmt *If) {
-  OS << "if ";
+  OS << "if (";
   PrintExpr(If->getCond());
+  OS << ')';
   
   if (CompoundStmt *CS = dyn_cast<CompoundStmt>(If->getThen())) {
     OS << ' ';
@@ -381,7 +395,7 @@ void StmtPrinter::VisitAsmStmt(AsmStmt *Node) {
       OS << "] ";
     }
     
-    VisitStringLiteral(Node->getOutputConstraint(i));
+    VisitStringLiteral(Node->getOutputConstraintLiteral(i));
     OS << " ";
     Visit(Node->getOutputExpr(i));
   }
@@ -400,7 +414,7 @@ void StmtPrinter::VisitAsmStmt(AsmStmt *Node) {
       OS << "] ";
     }
     
-    VisitStringLiteral(Node->getInputConstraint(i));
+    VisitStringLiteral(Node->getInputConstraintLiteral(i));
     OS << " ";
     Visit(Node->getInputExpr(i));
   }
@@ -432,9 +446,9 @@ void StmtPrinter::VisitObjCAtTryStmt(ObjCAtTryStmt *Node) {
        catchStmt = 
          static_cast<ObjCAtCatchStmt *>(catchStmt->getNextCatchStmt())) {
     Indent() << "@catch(";
-    if (catchStmt->getCatchParamStmt()) {
-      if (DeclStmt *DS = dyn_cast<DeclStmt>(catchStmt->getCatchParamStmt()))
-        PrintRawDeclStmt(DS);
+    if (catchStmt->getCatchParamDecl()) {
+      if (Decl *DS = catchStmt->getCatchParamDecl())
+        PrintRawDecl(DS);
     }
     OS << ")";
     if (CompoundStmt *CS = dyn_cast<CompoundStmt>(catchStmt->getCatchBody())) 
@@ -514,29 +528,16 @@ void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
   OS << Node->getDecl()->getNameAsString();
 }
 
-void StmtPrinter::VisitQualifiedDeclRefExpr(QualifiedDeclRefExpr *Node) {
-  // FIXME: Should we keep enough information in QualifiedDeclRefExpr
-  // to produce the same qualification that the user wrote?
-  llvm::SmallVector<DeclContext *, 4> Contexts;
-  
+void StmtPrinter::VisitQualifiedDeclRefExpr(QualifiedDeclRefExpr *Node) {  
   NamedDecl *D = Node->getDecl();
 
-  // Build up a stack of contexts.
-  DeclContext *Ctx = D->getDeclContext();
-  for (; Ctx; Ctx = Ctx->getParent())
-    if (!Ctx->isTransparentContext())
-      Contexts.push_back(Ctx);
-
-  while (!Contexts.empty()) {
-    DeclContext *Ctx = Contexts.back();
-    if (isa<TranslationUnitDecl>(Ctx))
-      OS << "::";
-    else if (NamedDecl *ND = dyn_cast<NamedDecl>(Ctx))
-      OS << ND->getNameAsString() << "::";
-    Contexts.pop_back();
-  }
-
+  Node->getQualifier()->print(OS);
   OS << D->getNameAsString();
+}
+
+void StmtPrinter::VisitUnresolvedDeclRefExpr(UnresolvedDeclRefExpr *Node) {  
+  Node->getQualifier()->print(OS);
+  OS << Node->getDeclName().getAsString();
 }
 
 void StmtPrinter::VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node) {
@@ -708,7 +709,7 @@ void StmtPrinter::VisitUnaryOperator(UnaryOperator *Node) {
 }
 
 bool StmtPrinter::PrintOffsetOfDesignator(Expr *E) {
-  if (isa<CompoundLiteralExpr>(E)) {
+  if (isa<UnaryOperator>(E)) {
     // Base case, print the type and comma.
     OS << E->getType().getAsString() << ", ";
     return true;
@@ -848,15 +849,6 @@ void StmtPrinter::VisitChooseExpr(ChooseExpr *Node) {
 
 void StmtPrinter::VisitGNUNullExpr(GNUNullExpr *) {
   OS << "__null";
-}
-
-void StmtPrinter::VisitOverloadExpr(OverloadExpr *Node) {
-  OS << "__builtin_overload(";
-  for (unsigned i = 0, e = Node->getNumSubExprs(); i != e; ++i) {
-    if (i) OS << ", ";
-    PrintExpr(Node->getExpr(i));
-  }
-  OS << ")";
 }
 
 void StmtPrinter::VisitShuffleVectorExpr(ShuffleVectorExpr *Node) {
@@ -1101,8 +1093,17 @@ void StmtPrinter::VisitCXXDeleteExpr(CXXDeleteExpr *E) {
   PrintExpr(E->getArgument());
 }
 
-void StmtPrinter::VisitCXXDependentNameExpr(CXXDependentNameExpr *E) {
-  OS << E->getName()->getName();
+void StmtPrinter::VisitUnresolvedFunctionNameExpr(UnresolvedFunctionNameExpr *E) {
+  OS << E->getName().getAsString();
+}
+
+void StmtPrinter::VisitCXXConstructExpr(CXXConstructExpr *E) {
+  // Nothing to print.
+}
+
+void StmtPrinter::VisitCXXExprWithTemporaries(CXXExprWithTemporaries *E) {
+  // Just forward to the sub expression.
+  PrintExpr(E->getSubExpr());
 }
 
 static const char *getTypeTraitName(UnaryTypeTrait UTT) {
@@ -1186,9 +1187,9 @@ void StmtPrinter::VisitBlockExpr(BlockExpr *Node) {
   
   const FunctionType *AFT = Node->getFunctionType();
   
-  if (isa<FunctionTypeNoProto>(AFT)) {
+  if (isa<FunctionNoProtoType>(AFT)) {
     OS << "()";
-  } else if (!BD->param_empty() || cast<FunctionTypeProto>(AFT)->isVariadic()) {
+  } else if (!BD->param_empty() || cast<FunctionProtoType>(AFT)->isVariadic()) {
     OS << '(';
     std::string ParamStr;
     for (BlockDecl::param_iterator AI = BD->param_begin(),
@@ -1199,7 +1200,7 @@ void StmtPrinter::VisitBlockExpr(BlockExpr *Node) {
       OS << ParamStr;
     }
     
-    const FunctionTypeProto *FT = cast<FunctionTypeProto>(AFT);
+    const FunctionProtoType *FT = cast<FunctionProtoType>(AFT);
     if (FT->isVariadic()) {
       if (!BD->param_empty()) OS << ", ";
       OS << "...";
@@ -1216,18 +1217,17 @@ void StmtPrinter::VisitBlockDeclRefExpr(BlockDeclRefExpr *Node) {
 //===----------------------------------------------------------------------===//
 
 void Stmt::dumpPretty() const {
-  llvm::raw_ostream &OS = llvm::errs();
-  printPretty(OS);
-  OS.flush();
+  printPretty(llvm::errs());
 }
 
-void Stmt::printPretty(llvm::raw_ostream &OS, PrinterHelper* Helper) const {
+void Stmt::printPretty(llvm::raw_ostream &OS, PrinterHelper* Helper,
+                       unsigned I, bool NoIndent) const {
   if (this == 0) {
     OS << "<NULL>";
     return;
   }
 
-  StmtPrinter P(OS, Helper);
+  StmtPrinter P(OS, Helper, I, NoIndent);
   P.Visit(const_cast<Stmt*>(this));
 }
 

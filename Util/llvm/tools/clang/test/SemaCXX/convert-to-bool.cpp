@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 struct ConvToBool {
   operator bool() const;
 };
@@ -36,7 +36,7 @@ void test_conv_to_bool(ConvToBool ctb, ConvToInt cti, ExplicitConvToBool ecb) {
   bool b3 = ctb || ecb;
 }
 
-void accepts_bool(bool) { }
+void accepts_bool(bool) { } // expected-note{{candidate function}}
 
 struct ExplicitConvToRef {
   explicit operator int&(); // expected-warning{{explicit conversion functions are a C++0x extension}}
@@ -45,11 +45,11 @@ struct ExplicitConvToRef {
 void test_explicit_bool(ExplicitConvToBool ecb) {
   bool b1(ecb); // okay
   bool b2 = ecb; // expected-error{{incompatible type initializing 'struct ExplicitConvToBool', expected '_Bool'}}
-  accepts_bool(ecb); // expected-error{{incompatible type passing 'struct ExplicitConvToBool', expected '_Bool'}}
+  accepts_bool(ecb); // expected-error{{no matching function for call to}}
 }
 
 void test_explicit_conv_to_ref(ExplicitConvToRef ecr) {
-  int& i1 = ecr; // expected-error{{non-const reference to type 'int' cannot be initialized with a value of type 'struct ExplicitConvToRef'}}
+  int& i1 = ecr; // expected-error{{non-const lvalue reference to type 'int' cannot be initialized with a value of type 'struct ExplicitConvToRef'}}
   int& i2(ecr); // okay
 }
 
@@ -61,7 +61,7 @@ struct C {
 };
 
 void test_copy_init_conversions(C c) {
-  A &a = c; // expected-error{{non-const reference to type 'struct A' cannot be initialized with a value of type 'struct C'}}
+  A &a = c; // expected-error{{non-const lvalue reference to type 'struct A' cannot be initialized with a value of type 'struct C'}}
   B &b = b; // okay
 }
 

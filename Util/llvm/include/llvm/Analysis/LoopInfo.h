@@ -98,7 +98,7 @@ public:
   /// contains - Return true if the specified basic block is in this loop
   ///
   bool contains(const BlockT *BB) const {
-    return std::find(Blocks.begin(), Blocks.end(), BB) != Blocks.end();
+    return std::find(block_begin(), block_end(), BB) != block_end();
   }
 
   /// iterator/begin/end - Return the loops contained entirely within this loop.
@@ -173,8 +173,7 @@ public:
     std::sort(LoopBBs.begin(), LoopBBs.end());
 
     typedef GraphTraits<BlockT*> BlockTraits;
-    for (typename std::vector<BlockT*>::const_iterator BI = Blocks.begin(),
-         BE = Blocks.end(); BI != BE; ++BI)
+    for (block_iterator BI = block_begin(), BE = block_end(); BI != BE; ++BI)
       for (typename BlockTraits::ChildIteratorType I =
           BlockTraits::child_begin(*BI), E = BlockTraits::child_end(*BI);
           I != E; ++I)
@@ -183,6 +182,16 @@ public:
           ExitingBlocks.push_back(*BI);
           break;
         }
+  }
+
+  /// getExitingBlock - If getExitingBlocks would return exactly one block,
+  /// return that block. Otherwise return null.
+  BlockT *getExitingBlock() const {
+    SmallVector<BlockT*, 8> ExitingBlocks;
+    getExitingBlocks(ExitingBlocks);
+    if (ExitingBlocks.size() == 1)
+      return ExitingBlocks[0];
+    return 0;
   }
 
   /// getExitBlocks - Return all of the successor blocks of this loop.  These
@@ -195,8 +204,7 @@ public:
     std::sort(LoopBBs.begin(), LoopBBs.end());
 
     typedef GraphTraits<BlockT*> BlockTraits;
-    for (typename std::vector<BlockT*>::const_iterator BI = Blocks.begin(),
-         BE = Blocks.end(); BI != BE; ++BI)
+    for (block_iterator BI = block_begin(), BE = block_end(); BI != BE; ++BI)
       for (typename BlockTraits::ChildIteratorType I =
            BlockTraits::child_begin(*BI), E = BlockTraits::child_end(*BI);
            I != E; ++I)
@@ -217,8 +225,7 @@ public:
 
     std::vector<BlockT*> switchExitBlocks;  
 
-    for (typename std::vector<BlockT*>::const_iterator BI = Blocks.begin(),
-         BE = Blocks.end(); BI != BE; ++BI) {
+    for (block_iterator BI = block_begin(), BE = block_end(); BI != BE; ++BI) {
 
       BlockT *current = *BI;
       switchExitBlocks.clear();
@@ -300,10 +307,10 @@ public:
     return Out;
   }
 
-  /// getLoopLatch - If there is a latch block for this loop, return it.  A
-  /// latch block is the canonical backedge for a loop.  A loop header in normal
-  /// form has two edges into it: one from a preheader and one from a latch
-  /// block.
+  /// getLoopLatch - If there is a single latch block for this loop, return it.
+  /// A latch block is a block that contains a branch back to the header.
+  /// A loop header in normal form has two edges into it: one from a preheader
+  /// and one from a latch block.
   BlockT *getLoopLatch() const {
     BlockT *Header = getHeader();
     typedef GraphTraits<Inverse<BlockT*> > InvBlockTraits;
@@ -579,18 +586,22 @@ public:
     assert (getHeader() && "Loop header is missing");
     assert (getLoopPreheader() && "Loop preheader is missing");
     assert (getLoopLatch() && "Loop latch is missing");
-    for (typename std::vector<LoopBase<BlockT>*>::const_iterator I =
-         SubLoops.begin(), E = SubLoops.end(); I != E; ++I)
+    for (iterator I = SubLoops.begin(), E = SubLoops.end(); I != E; ++I)
       (*I)->verifyLoop();
 #endif
   }
 
   void print(std::ostream &OS, unsigned Depth = 0) const {
-    OS << std::string(Depth*2, ' ') << "Loop Containing: ";
+    OS << std::string(Depth*2, ' ') << "Loop at depth " << getLoopDepth()
+       << " containing: ";
 
     for (unsigned i = 0; i < getBlocks().size(); ++i) {
       if (i) OS << ",";
-      WriteAsOperand(OS, getBlocks()[i], false);
+      BlockT *BB = getBlocks()[i];
+      WriteAsOperand(OS, BB, false);
+      if (BB == getHeader())    OS << "<header>";
+      if (BB == getLoopLatch()) OS << "<latch>";
+      if (isLoopExit(BB))       OS << "<exit>";
     }
     OS << "\n";
 
@@ -931,7 +942,7 @@ class LoopInfo : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid
 
-  LoopInfo() : FunctionPass(intptr_t(&ID)) {
+  LoopInfo() : FunctionPass(&ID) {
     LI = new LoopInfoBase<BasicBlock>();
   }
   

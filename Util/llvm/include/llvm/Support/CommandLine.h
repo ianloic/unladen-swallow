@@ -25,6 +25,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cassert>
+#include <climits>
 #include <cstdarg>
 #include <string>
 #include <utility>
@@ -126,8 +127,7 @@ enum MiscFlags {               // Miscellaneous flags to adjust argument
   CommaSeparated     = 0x200,  // Should this cl::list split between commas?
   PositionalEatsArgs = 0x400,  // Should this positional cl::list eat -args?
   Sink               = 0x800,  // Should this cl::list eat all unknown options?
-  AllowInverse	     = 0x1000, // Can this option take a -Xno- form?
-  MiscMask           = 0x1E00  // Union of the above flags.
+  MiscMask           = 0xE00   // Union of the above flags.
 };
 
 
@@ -537,30 +537,14 @@ struct basic_parser : public basic_parser_impl {
 //
 template<>
 class parser<bool> : public basic_parser<bool> {
-  bool IsInvertable;	// Should we synthezise a -xno- style option?
   const char *ArgStr;
 public:
-  void getExtraOptionNames(std::vector<const char*> &OptionNames) {
-    if (IsInvertable) {
-      char *s = new char [strlen(ArgStr) + 3 + 1];
-      s[0] = ArgStr[0];
-      s[1] = 'n';
-      s[2] = 'o';
-      s[3] = '-';
-      strcpy(&s[4], ArgStr+1);
-      OptionNames.push_back(s);
-    }
-  }
-
+  
   // parse - Return true on error.
   bool parse(Option &O, const char *ArgName, const std::string &Arg, bool &Val);
 
   template <class Opt>
   void initialize(Opt &O) {
-    if (O.getMiscFlags() & llvm::cl::AllowInverse)
-      IsInvertable = true;
-    else
-      IsInvertable = false;
     ArgStr = O.ArgStr;
   }
 
@@ -695,6 +679,28 @@ public:
 
 EXTERN_TEMPLATE_INSTANTIATION(class basic_parser<std::string>);
 
+//--------------------------------------------------
+// parser<char>
+//
+template<>
+class parser<char> : public basic_parser<char> {
+public:
+  // parse - Return true on error.
+  bool parse(Option &, const char *, const std::string &Arg,
+             char &Value) {
+    Value = Arg[0];
+    return false;
+  }
+
+  // getValueName - Overload in subclass to provide a better default value.
+  virtual const char *getValueName() const { return "char"; }
+
+  // An out-of-line virtual method to provide a 'home' for this class.
+  virtual void anchor();
+};
+
+EXTERN_TEMPLATE_INSTANTIATION(class basic_parser<char>);
+
 //===----------------------------------------------------------------------===//
 // applicator class - This class is used because we must use partial
 // specialization to handle literal string arguments specially (const char* does
@@ -754,7 +760,7 @@ template<class DataType, bool ExternalStorage, bool isClass>
 class opt_storage {
   DataType *Location;   // Where to store the object...
 
-  void check() {
+  void check() const {
     assert(Location != 0 && "cl::location(...) not specified for a command "
            "line option with external storage, "
            "or cl::init specified before cl::location()!!");
@@ -833,8 +839,8 @@ class opt : public Option,
        typename ParserClass::parser_data_type();
     if (Parser.parse(*this, ArgName, Arg, Val))
       return true;                            // Parse error!
-    setValue(Val);
-    setPosition(pos);
+    this->setValue(Val);
+    this->setPosition(pos);
     return false;
   }
 
@@ -939,6 +945,7 @@ public:
 EXTERN_TEMPLATE_INSTANTIATION(class opt<unsigned>);
 EXTERN_TEMPLATE_INSTANTIATION(class opt<int>);
 EXTERN_TEMPLATE_INSTANTIATION(class opt<std::string>);
+EXTERN_TEMPLATE_INSTANTIATION(class opt<char>);
 EXTERN_TEMPLATE_INSTANTIATION(class opt<bool>);
 
 //===----------------------------------------------------------------------===//
@@ -1122,7 +1129,7 @@ class bits_storage {
   template<class T>
   static unsigned Bit(const T &V) {
     unsigned BitPos = reinterpret_cast<unsigned>(V);
-    assert(BitPos < sizeof(unsigned) * 8 &&
+    assert(BitPos < sizeof(unsigned) * CHAR_BIT &&
           "enum exceeds width of bit vector!");
     return 1 << BitPos;
   }
@@ -1163,7 +1170,7 @@ class bits_storage<DataType, bool> {
   template<class T>
   static unsigned Bit(const T &V) {
     unsigned BitPos = reinterpret_cast<unsigned>(V);
-    assert(BitPos < sizeof(unsigned) * 8 &&
+    assert(BitPos < sizeof(unsigned) * CHAR_BIT &&
           "enum exceeds width of bit vector!");
     return 1 << BitPos;
   }

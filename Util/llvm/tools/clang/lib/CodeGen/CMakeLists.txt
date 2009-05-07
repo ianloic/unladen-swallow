@@ -2,6 +2,7 @@ set(LLVM_NO_RTTI 1)
 
 add_clang_library(clangCodeGen
   CGBuiltin.cpp
+  CGBlocks.cpp
   CGCall.cpp
   CGCXX.cpp
   CGDebugInfo.cpp
@@ -18,5 +19,6 @@ add_clang_library(clangCodeGen
   CodeGenFunction.cpp
   CodeGenModule.cpp
   CodeGenTypes.cpp
+  Mangle.cpp
   ModuleBuilder.cpp
   )

@@ -16,6 +16,7 @@
 
 #include "clang/Analysis/PathSensitive/SVals.h"
 #include "clang/Analysis/PathSensitive/MemRegion.h"
+#include "clang/Analysis/PathSensitive/ValueManager.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/DenseSet.h"
@@ -31,14 +32,25 @@ class GRStateManager;
 class Stmt;
 class Expr;
 class ObjCIvarDecl;
-
+class SubRegionMap;
+  
 class StoreManager {
 protected:
+  ValueManager &ValMgr;
+  GRStateManager &StateMgr;
+
   /// MRMgr - Manages region objects associated with this StoreManager.
-  MemRegionManager MRMgr;
+  MemRegionManager &MRMgr;
 
-  StoreManager(llvm::BumpPtrAllocator& Alloc) : MRMgr(Alloc) {}
+  StoreManager(GRStateManager &stateMgr);
 
+protected:
+  virtual const GRState* AddRegionView(const GRState* St,
+                                       const MemRegion* View,
+                                       const MemRegion* Base) {
+    return St;
+  }
+  
 public:  
   virtual ~StoreManager() {}
   
@@ -71,8 +83,18 @@ public:
                                              const CompoundLiteralExpr* CL,
                                              SVal V) = 0;
   
+  /// getInitialStore - Returns the initial "empty" store representing the
+  ///  value bindings upon entry to an analyzed function.
   virtual Store getInitialStore() = 0;
+  
+  /// getRegionManager - Returns the internal RegionManager object that is
+  ///  used to query and manipulate MemRegion objects.
   MemRegionManager& getRegionManager() { return MRMgr; }
+  
+  /// getSubRegionMap - Returns an opaque map object that clients can query
+  ///  to get the subregions of a given MemRegion object.  It is the
+  //   caller's responsibility to 'delete' the returned map.
+  virtual SubRegionMap* getSubRegionMap(const GRState *state) = 0;
 
   virtual SVal getLValueVar(const GRState* St, const VarDecl* VD) = 0;
 
@@ -87,7 +109,8 @@ public:
   virtual SVal getLValueField(const GRState* St, SVal Base, 
                               const FieldDecl* D) = 0;
   
-  virtual SVal getLValueElement(const GRState* St, SVal Base, SVal Offset) = 0;
+  virtual SVal getLValueElement(const GRState* St, QualType elementType,
+                                SVal Base, SVal Offset) = 0;
 
   virtual SVal getSizeInElements(const GRState* St, const MemRegion* R) {
     return UnknownVal();
@@ -95,7 +118,7 @@ public:
 
   /// ArrayToPointer - Used by GRExprEngine::VistCast to handle implicit
   ///  conversions between arrays and pointers.
-  virtual SVal ArrayToPointer(SVal Array) = 0;
+  virtual SVal ArrayToPointer(Loc Array) = 0;
 
   
   class CastResult {
@@ -110,8 +133,13 @@ public:
   /// CastRegion - Used by GRExprEngine::VisitCast to handle casts from
   ///  a MemRegion* to a specific location type.  'R' is the region being
   ///  casted and 'CastToTy' the result type of the cast.
-  virtual CastResult CastRegion(const GRState* state, const MemRegion* R,
-                                QualType CastToTy) = 0;
+  CastResult CastRegion(const GRState* state, const MemRegion* R,
+                        QualType CastToTy);
+
+  /// EvalBinOp - Perform pointer arithmetic.
+  virtual SVal EvalBinOp(BinaryOperator::Opcode Op, Loc L, NonLoc R) {
+    return UnknownVal();
+  }
   
   /// getSelfRegion - Returns the region for the 'self' (Objective-C) or
   ///  'this' object (C++).  When used when analyzing a normal function this
@@ -140,11 +168,26 @@ public:
   public:    
     virtual ~BindingsHandler();
     virtual bool HandleBinding(StoreManager& SMgr, Store store,
-                               MemRegion* R, SVal val) = 0;
+                               const MemRegion* R, SVal val) = 0;
   };
   
   /// iterBindings - Iterate over the bindings in the Store.
   virtual void iterBindings(Store store, BindingsHandler& f) = 0;  
+};
+
+/// SubRegionMap - An abstract interface that represents a queryable map
+///  between MemRegion objects and their subregions.
+class SubRegionMap {
+public:
+  virtual ~SubRegionMap() {}
+  
+  class Visitor {
+  public:
+    virtual ~Visitor() {};
+    virtual bool Visit(const MemRegion* Parent, const MemRegion* SubRegion) = 0;
+  };
+  
+  virtual bool iterSubRegions(const MemRegion* R, Visitor& V) const = 0;  
 };
   
 StoreManager* CreateBasicStoreManager(GRStateManager& StMgr);

@@ -1,4 +1,4 @@
-// RUN: clang %s -emit-llvm -o -
+// RUN: clang-cc -triple i386-unknown-unknown %s -emit-llvm -o -
 
 struct  {
   int x;
@@ -157,6 +157,7 @@ int f14(int i, ...) {
   __builtin_va_list l;
   __builtin_va_start(l,i);
   a13 b = __builtin_va_arg(l, a13);
+  int c = __builtin_va_arg(l, a13).c;
   return b.b;
 }
 

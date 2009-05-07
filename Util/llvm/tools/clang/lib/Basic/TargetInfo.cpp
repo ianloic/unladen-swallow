@@ -23,6 +23,7 @@ TargetInfo::TargetInfo(const std::string &T) : Triple(T) {
   // like PPC or SPARC.
   // These should be overridden by concrete targets as needed.
   CharIsSigned = true;
+  TLSSupported = true;
   PointerWidth = PointerAlign = 32;
   WCharWidth = WCharAlign = 32;
   IntWidth = IntAlign = 32;
@@ -39,6 +40,7 @@ TargetInfo::TargetInfo(const std::string &T) : Triple(T) {
   PtrDiffType = SignedLong;
   IntMaxType = SignedLongLong;
   UIntMaxType = UnsignedLongLong;
+  IntPtrType = SignedLong;
   WCharType = SignedInt;
   FloatFormat = &llvm::APFloat::IEEEsingle;
   DoubleFormat = &llvm::APFloat::IEEEdouble;
@@ -50,6 +52,22 @@ TargetInfo::TargetInfo(const std::string &T) : Triple(T) {
 
 // Out of line virtual dtor for TargetInfo.
 TargetInfo::~TargetInfo() {}
+
+/// getTypeName - Return the user string for the specified integer type enum.
+/// For example, SignedShort -> "short".
+const char *TargetInfo::getTypeName(IntType T) {
+  switch (T) {
+  default: assert(0 && "not an integer!");
+  case SignedShort:      return "short";
+  case UnsignedShort:    return "unsigned short";
+  case SignedInt:        return "int";
+  case UnsignedInt:      return "unsigned int";
+  case SignedLong:       return "long int";
+  case UnsignedLong:     return "long unsigned int";
+  case SignedLongLong:   return "long long int";
+  case UnsignedLongLong: return "long long unsigned int";
+  }
+}
 
 //===----------------------------------------------------------------------===//
 
@@ -145,25 +163,20 @@ const char *TargetInfo::getNormalizedGCCRegisterName(const char *Name) const {
   return Name;
 }
 
-bool TargetInfo::validateOutputConstraint(const char *Name, 
-                                          ConstraintInfo &info) const
-{
-  info = CI_None;
-
+bool TargetInfo::validateOutputConstraint(ConstraintInfo &Info) const {
+  const char *Name = Info.getConstraintStr().c_str();
   // An output constraint must start with '=' or '+'
   if (*Name != '=' && *Name != '+')
     return false;
 
   if (*Name == '+')
-    info = CI_ReadWrite;
-  else
-    info = CI_None;
+    Info.setIsReadWrite();
 
   Name++;
   while (*Name) {
     switch (*Name) {
     default:
-      if (!validateAsmConstraint(*Name, info)) {
+      if (!validateAsmConstraint(Name, Info)) {
         // FIXME: We temporarily return false
         // so we can add more constraints as we hit it.
         // Eventually, an unknown constraint should just be treated as 'g'.
@@ -172,14 +185,15 @@ bool TargetInfo::validateOutputConstraint(const char *Name,
     case '&': // early clobber.
       break;
     case 'r': // general register.
-      info = (ConstraintInfo)(info|CI_AllowsRegister);
+      Info.setAllowsRegister();
       break;
     case 'm': // memory operand.
-      info = (ConstraintInfo)(info|CI_AllowsMemory);
+      Info.setAllowsMemory();
       break;
     case 'g': // general register, memory operand or immediate integer.
     case 'X': // any operand.
-      info = (ConstraintInfo)(info|CI_AllowsMemory|CI_AllowsRegister);
+      Info.setAllowsRegister();
+      Info.setAllowsMemory();
       break;
     }
     
@@ -190,12 +204,10 @@ bool TargetInfo::validateOutputConstraint(const char *Name,
 }
 
 bool TargetInfo::resolveSymbolicName(const char *&Name,
-                                     const std::string *OutputNamesBegin,
-                                     const std::string *OutputNamesEnd,
-                                     unsigned &Index) const
-{
+                                     ConstraintInfo *OutputConstraints,
+                                     unsigned NumOutputs,
+                                     unsigned &Index) const {
   assert(*Name == '[' && "Symbolic name did not start with '['");
-
   Name++;
   const char *Start = Name;
   while (*Name && *Name != ']')
@@ -208,30 +220,23 @@ bool TargetInfo::resolveSymbolicName(const char *&Name,
   
   std::string SymbolicName(Start, Name - Start);
   
-  Index = 0;
-  for (const std::string *it = OutputNamesBegin; 
-       it != OutputNamesEnd; 
-       ++it, Index++) {
-    if (SymbolicName == *it)
+  for (Index = 0; Index != NumOutputs; ++Index)
+    if (SymbolicName == OutputConstraints[Index].getName())
       return true;
-  }
 
   return false;
 }
 
-bool TargetInfo::validateInputConstraint(const char *Name,
-                                         const std::string *OutputNamesBegin,
-                                         const std::string *OutputNamesEnd,
-                                         ConstraintInfo* OutputConstraints,
-                                         ConstraintInfo &info) const {
-  info = CI_None;
+bool TargetInfo::validateInputConstraint(ConstraintInfo *OutputConstraints,
+                                         unsigned NumOutputs,
+                                         ConstraintInfo &Info) const {
+  const char *Name = Info.ConstraintStr.c_str();
 
   while (*Name) {
     switch (*Name) {
     default:
       // Check if we have a matching constraint
       if (*Name >= '0' && *Name <= '9') {
-        unsigned NumOutputs = OutputNamesEnd - OutputNamesBegin;
         unsigned i = *Name - '0';
   
         // Check if matching constraint is out of bounds.
@@ -240,8 +245,8 @@ bool TargetInfo::validateInputConstraint(const char *Name,
         
         // The constraint should have the same info as the respective 
         // output constraint.
-        info = (ConstraintInfo)(info|OutputConstraints[i]);
-      } else if (!validateAsmConstraint(*Name, info)) {
+        Info.setTiedOperand(i, OutputConstraints[i]);
+      } else if (!validateAsmConstraint(Name, Info)) {
         // FIXME: This error return is in place temporarily so we can
         // add more constraints as we hit it.  Eventually, an unknown
         // constraint should just be treated as 'g'.
@@ -250,7 +255,7 @@ bool TargetInfo::validateInputConstraint(const char *Name,
       break;
     case '[': {
       unsigned Index = 0;
-      if (!resolveSymbolicName(Name, OutputNamesBegin, OutputNamesEnd, Index))
+      if (!resolveSymbolicName(Name, OutputConstraints, NumOutputs, Index))
         return false;
     
       break;
@@ -263,14 +268,15 @@ bool TargetInfo::validateInputConstraint(const char *Name,
     case 'n': // immediate integer with a known value.
       break;
     case 'r': // general register.
-      info = (ConstraintInfo)(info|CI_AllowsRegister);
+      Info.setAllowsRegister();
       break;
     case 'm': // memory operand.
-      info = (ConstraintInfo)(info|CI_AllowsMemory);
+      Info.setAllowsMemory();
       break;
     case 'g': // general register, memory operand or immediate integer.
     case 'X': // any operand.
-      info = (ConstraintInfo)(info|CI_AllowsMemory|CI_AllowsRegister);
+      Info.setAllowsRegister();
+      Info.setAllowsMemory();
       break;
     }
     

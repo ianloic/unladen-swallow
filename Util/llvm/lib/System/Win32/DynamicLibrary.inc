@@ -19,6 +19,10 @@
  #include <dbghelp.h>
 #endif
 
+#ifdef _MSC_VER
+ #include <ntverp.h>
+#endif
+
 #ifdef __MINGW32__
  #if (HAVE_LIBIMAGEHLP != 1)
   #error "libimagehlp.a should be present"
@@ -44,7 +48,14 @@ static std::vector<HMODULE> OpenedHandles;
 #endif
 
 extern "C" {
-#if !defined(_MSC_VER) || _MSC_VER < 1500
+// Use old callback if:
+//  - Not using Visual Studio
+//  - Visual Studio 2005 or earlier but only if we are not using the Windows SDK 
+//    or Windows SDK version is older than 6.0
+// Use new callback if:
+//  - Newer Visual Studio (comes with newer SDK).
+//  - Visual Studio 2005 with Windows SDK 6.0+
+#if !defined(_MSC_VER) || _MSC_VER < 1500 && (!defined(VER_PRODUCTBUILD) || VER_PRODUCTBUILD < 6000)
   static BOOL CALLBACK ELM_Callback(PSTR  ModuleName,
                                     ModuleBaseType ModuleBase,
                                     ULONG ModuleSize,
@@ -138,7 +149,6 @@ bool DynamicLibrary::LoadLibraryPermanently(const char *filename,
     EXPLICIT_SYMBOL_DEF(__ashrdi3);
     EXPLICIT_SYMBOL_DEF(__cmpdi2);
     EXPLICIT_SYMBOL_DEF(__divdi3);
-    EXPLICIT_SYMBOL_DEF(__eprintf);
     EXPLICIT_SYMBOL_DEF(__fixdfdi);
     EXPLICIT_SYMBOL_DEF(__fixsfdi);
     EXPLICIT_SYMBOL_DEF(__fixunsdfdi);
@@ -176,7 +186,6 @@ void* DynamicLibrary::SearchForAddressOfSymbol(const char* symbolName) {
     EXPLICIT_SYMBOL(__ashrdi3);
     EXPLICIT_SYMBOL(__cmpdi2);
     EXPLICIT_SYMBOL(__divdi3);
-    EXPLICIT_SYMBOL(__eprintf);
     EXPLICIT_SYMBOL(__fixdfdi);
     EXPLICIT_SYMBOL(__fixsfdi);
     EXPLICIT_SYMBOL(__fixunsdfdi);

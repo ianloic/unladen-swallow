@@ -623,16 +623,94 @@ unsigned APInt::getBitsNeeded(const char* str, unsigned slen, uint8_t radix) {
   return isNegative + tmp.logBase2() + 1;
 }
 
-uint64_t APInt::getHashValue() const {
-  // Put the bit width into the low order bits.
-  uint64_t hash = BitWidth;
+// From http://www.burtleburtle.net, byBob Jenkins.
+// When targeting x86, both GCC and LLVM seem to recognize this as a
+// rotate instruction.
+#define rot(x,k) (((x)<<(k)) | ((x)>>(32-(k))))
 
-  // Add the sum of the words to the hash.
+// From http://www.burtleburtle.net, by Bob Jenkins.
+#define mix(a,b,c) \
+  { \
+    a -= c;  a ^= rot(c, 4);  c += b; \
+    b -= a;  b ^= rot(a, 6);  a += c; \
+    c -= b;  c ^= rot(b, 8);  b += a; \
+    a -= c;  a ^= rot(c,16);  c += b; \
+    b -= a;  b ^= rot(a,19);  a += c; \
+    c -= b;  c ^= rot(b, 4);  b += a; \
+  }
+
+// From http://www.burtleburtle.net, by Bob Jenkins.
+#define final(a,b,c) \
+  { \
+    c ^= b; c -= rot(b,14); \
+    a ^= c; a -= rot(c,11); \
+    b ^= a; b -= rot(a,25); \
+    c ^= b; c -= rot(b,16); \
+    a ^= c; a -= rot(c,4);  \
+    b ^= a; b -= rot(a,14); \
+    c ^= b; c -= rot(b,24); \
+  }
+
+// hashword() was adapted from http://www.burtleburtle.net, by Bob
+// Jenkins.  k is a pointer to an array of uint32_t values; length is
+// the length of the key, in 32-bit chunks.  This version only handles
+// keys that are a multiple of 32 bits in size.
+static inline uint32_t hashword(const uint64_t *k64, size_t length)
+{
+  const uint32_t *k = reinterpret_cast<const uint32_t *>(k64);
+  uint32_t a,b,c;
+
+  /* Set up the internal state */
+  a = b = c = 0xdeadbeef + (((uint32_t)length)<<2);
+
+  /*------------------------------------------------- handle most of the key */
+  while (length > 3)
+    {
+      a += k[0];
+      b += k[1];
+      c += k[2];
+      mix(a,b,c);
+      length -= 3;
+      k += 3;
+    }
+
+  /*------------------------------------------- handle the last 3 uint32_t's */
+  switch(length)                     /* all the case statements fall through */
+    {
+    case 3 : c+=k[2];
+    case 2 : b+=k[1];
+    case 1 : a+=k[0];
+      final(a,b,c);
+    case 0:     /* case 0: nothing left to add */
+      break;
+    }
+  /*------------------------------------------------------ report the result */
+  return c;
+}
+
+// hashword8() was adapted from http://www.burtleburtle.net, by Bob
+// Jenkins.  This computes a 32-bit hash from one 64-bit word.  When
+// targeting x86 (32 or 64 bit), both LLVM and GCC compile this
+// function into about 35 instructions when inlined.
+static inline uint32_t hashword8(const uint64_t k64)
+{
+  uint32_t a,b,c;
+  a = b = c = 0xdeadbeef + 4;
+  b += k64 >> 32;
+  a += k64 & 0xffffffff;
+  final(a,b,c);
+  return c;
+}
+#undef final
+#undef mix
+#undef rot
+
+uint64_t APInt::getHashValue() const {
+  uint64_t hash;
   if (isSingleWord())
-    hash += VAL << 6; // clear separation of up to 64 bits
+    hash = hashword8(VAL);
   else
-    for (unsigned i = 0; i < getNumWords(); ++i)
-      hash += pVal[i] << 6; // clear sepration of up to 64 bits
+    hash = hashword(pVal, getNumWords()*2);
   return hash;
 }
 
@@ -1357,6 +1435,98 @@ APInt APInt::multiplicativeInverse(const APInt& modulo) const {
   return t[i].isNegative() ? t[i] + modulo : t[i];
 }
 
+/// Calculate the magic numbers required to implement a signed integer division
+/// by a constant as a sequence of multiplies, adds and shifts.  Requires that
+/// the divisor not be 0, 1, or -1.  Taken from "Hacker's Delight", Henry S.
+/// Warren, Jr., chapter 10.
+APInt::ms APInt::magic() const {
+  const APInt& d = *this;
+  unsigned p;
+  APInt ad, anc, delta, q1, r1, q2, r2, t;
+  APInt allOnes = APInt::getAllOnesValue(d.getBitWidth());
+  APInt signedMin = APInt::getSignedMinValue(d.getBitWidth());
+  APInt signedMax = APInt::getSignedMaxValue(d.getBitWidth());
+  struct ms mag;
+  
+  ad = d.abs();
+  t = signedMin + (d.lshr(d.getBitWidth() - 1));
+  anc = t - 1 - t.urem(ad);   // absolute value of nc
+  p = d.getBitWidth() - 1;    // initialize p
+  q1 = signedMin.udiv(anc);   // initialize q1 = 2p/abs(nc)
+  r1 = signedMin - q1*anc;    // initialize r1 = rem(2p,abs(nc))
+  q2 = signedMin.udiv(ad);    // initialize q2 = 2p/abs(d)
+  r2 = signedMin - q2*ad;     // initialize r2 = rem(2p,abs(d))
+  do {
+    p = p + 1;
+    q1 = q1<<1;          // update q1 = 2p/abs(nc)
+    r1 = r1<<1;          // update r1 = rem(2p/abs(nc))
+    if (r1.uge(anc)) {  // must be unsigned comparison
+      q1 = q1 + 1;
+      r1 = r1 - anc;
+    }
+    q2 = q2<<1;          // update q2 = 2p/abs(d)
+    r2 = r2<<1;          // update r2 = rem(2p/abs(d))
+    if (r2.uge(ad)) {   // must be unsigned comparison
+      q2 = q2 + 1;
+      r2 = r2 - ad;
+    }
+    delta = ad - r2;
+  } while (q1.ule(delta) || (q1 == delta && r1 == 0));
+  
+  mag.m = q2 + 1;
+  if (d.isNegative()) mag.m = -mag.m;   // resulting magic number
+  mag.s = p - d.getBitWidth();          // resulting shift
+  return mag;
+}
+
+/// Calculate the magic numbers required to implement an unsigned integer
+/// division by a constant as a sequence of multiplies, adds and shifts.
+/// Requires that the divisor not be 0.  Taken from "Hacker's Delight", Henry
+/// S. Warren, Jr., chapter 10.
+APInt::mu APInt::magicu() const {
+  const APInt& d = *this;
+  unsigned p;
+  APInt nc, delta, q1, r1, q2, r2;
+  struct mu magu;
+  magu.a = 0;               // initialize "add" indicator
+  APInt allOnes = APInt::getAllOnesValue(d.getBitWidth());
+  APInt signedMin = APInt::getSignedMinValue(d.getBitWidth());
+  APInt signedMax = APInt::getSignedMaxValue(d.getBitWidth());
+
+  nc = allOnes - (-d).urem(d);
+  p = d.getBitWidth() - 1;  // initialize p
+  q1 = signedMin.udiv(nc);  // initialize q1 = 2p/nc
+  r1 = signedMin - q1*nc;   // initialize r1 = rem(2p,nc)
+  q2 = signedMax.udiv(d);   // initialize q2 = (2p-1)/d
+  r2 = signedMax - q2*d;    // initialize r2 = rem((2p-1),d)
+  do {
+    p = p + 1;
+    if (r1.uge(nc - r1)) {
+      q1 = q1 + q1 + 1;  // update q1
+      r1 = r1 + r1 - nc; // update r1
+    }
+    else {
+      q1 = q1+q1; // update q1
+      r1 = r1+r1; // update r1
+    }
+    if ((r2 + 1).uge(d - r2)) {
+      if (q2.uge(signedMax)) magu.a = 1;
+      q2 = q2+q2 + 1;     // update q2
+      r2 = r2+r2 + 1 - d; // update r2
+    }
+    else {
+      if (q2.uge(signedMin)) magu.a = 1;
+      q2 = q2+q2;     // update q2
+      r2 = r2+r2 + 1; // update r2
+    }
+    delta = d - 1 - r2;
+  } while (p < d.getBitWidth()*2 &&
+           (q1.ult(delta) || (q1 == delta && r1 == 0)));
+  magu.m = q2 + 1; // resulting magic number
+  magu.s = p - d.getBitWidth();  // resulting shift
+  return magu;
+}
+
 /// Implementation of Knuth's Algorithm D (Division of nonnegative integers)
 /// from "Art of Computer Programming, Volume 2", section 4.3.1, p. 272. The
 /// variables here have the same names as in the algorithm. Comments explain
@@ -1551,9 +1721,9 @@ void APInt::divide(const APInt LHS, unsigned lhsWords,
   // and the the Knuth "classical algorithm" which requires there to be native 
   // operations for +, -, and * on an m bit value with an m*2 bit result. We 
   // can't use 64-bit operands here because we don't have native results of 
-  // 128-bits. Furthremore, casting the 64-bit values to 32-bit values won't 
+  // 128-bits. Furthermore, casting the 64-bit values to 32-bit values won't 
   // work on large-endian machines.
-  uint64_t mask = ~0ull >> (sizeof(unsigned)*8);
+  uint64_t mask = ~0ull >> (sizeof(unsigned)*CHAR_BIT);
   unsigned n = rhsWords * 2;
   unsigned m = (lhsWords * 2) - n;
 
@@ -1583,7 +1753,7 @@ void APInt::divide(const APInt LHS, unsigned lhsWords,
   for (unsigned i = 0; i < lhsWords; ++i) {
     uint64_t tmp = (LHS.getNumWords() == 1 ? LHS.VAL : LHS.pVal[i]);
     U[i * 2] = (unsigned)(tmp & mask);
-    U[i * 2 + 1] = (unsigned)(tmp >> (sizeof(unsigned)*8));
+    U[i * 2 + 1] = (unsigned)(tmp >> (sizeof(unsigned)*CHAR_BIT));
   }
   U[m+n] = 0; // this extra word is for "spill" in the Knuth algorithm.
 
@@ -1592,7 +1762,7 @@ void APInt::divide(const APInt LHS, unsigned lhsWords,
   for (unsigned i = 0; i < rhsWords; ++i) {
     uint64_t tmp = (RHS.getNumWords() == 1 ? RHS.VAL : RHS.pVal[i]);
     V[i * 2] = (unsigned)(tmp & mask);
-    V[i * 2 + 1] = (unsigned)(tmp >> (sizeof(unsigned)*8));
+    V[i * 2 + 1] = (unsigned)(tmp >> (sizeof(unsigned)*CHAR_BIT));
   }
 
   // initialize the quotient and remainder
@@ -1884,10 +2054,12 @@ void APInt::fromString(unsigned numbits, const char *str, unsigned slen,
     }
 
     // Shift or multiply the value by the radix
-    if (shift)
-      *this <<= shift;
-    else
-      *this *= apradix;
+    if (slen > 1) {
+      if (shift)
+        *this <<= shift;
+      else
+        *this *= apradix;
+    }
 
     // Add in the digit we just interpreted
     if (apdigit.isSingleWord())

@@ -1258,10 +1258,9 @@ multiclass BitwiseAnd
   def fabs32: ANDInst<(outs R32FP:$rT), (ins R32FP:$rA, R32C:$rB),
                       [/* Intentionally does not match a pattern */]>;
 
-  def fabs64: ANDInst<(outs R64FP:$rT), (ins R64FP:$rA, VECREG:$rB),
+  def fabs64: ANDInst<(outs R64FP:$rT), (ins R64FP:$rA, R64C:$rB),
                       [/* Intentionally does not match a pattern */]>;
 
-  // Could use v4i32, but won't for clarity
   def fabsvec: ANDInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
                        [/* Intentionally does not match a pattern */]>;
 
@@ -1288,10 +1287,11 @@ class ANDCInst<dag OOL, dag IOL, list<dag> pattern>:
     RRForm<0b10000011010, OOL, IOL, "andc\t$rT, $rA, $rB",
            IntegerOp, pattern>;
 
-class ANDCVecInst<ValueType vectype>:
+class ANDCVecInst<ValueType vectype, PatFrag vnot_frag = vnot>:
     ANDCInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-             [(set (vectype VECREG:$rT), (and (vectype VECREG:$rA),
-                                              (vnot (vectype VECREG:$rB))))]>;
+             [(set (vectype VECREG:$rT),
+                   (and (vectype VECREG:$rA),
+                        (vnot_frag (vectype VECREG:$rB))))]>;
 
 class ANDCRegInst<RegisterClass rclass>:
     ANDCInst<(outs rclass:$rT), (ins rclass:$rA, rclass:$rB),
@@ -1309,6 +1309,9 @@ multiclass AndComplement
   def r32:  ANDCRegInst<R32C>;
   def r16:  ANDCRegInst<R16C>;
   def r8:   ANDCRegInst<R8C>;
+
+  // Sometimes, the xor pattern has a bitcast constant:
+  def v16i8_conv: ANDCVecInst<v16i8, vnot_conv>;
 }
 
 defm ANDC : AndComplement;
@@ -1429,9 +1432,6 @@ class ORExtractElt<RegisterClass rclass>:
 /* class ORCvtRegGPRC<RegisterClass rclass>:
     ORCvtForm<(outs GPRC:$rT), (ins rclass:$rA)>; */
 
-/* class ORCvtVecGPRC:
-    ORCvtForm<(outs GPRC:$rT), (ins VECREG:$rA)>; */
-
 /* class ORCvtGPRCReg<RegisterClass rclass>:
     ORCvtForm<(outs rclass:$rT), (ins GPRC:$rA)>; */
     
@@ -1447,8 +1447,11 @@ class ORCvtFormR64Reg<RegisterClass rclass, list<dag> pattern = [ ]>:
 class ORCvtFormRegR64<RegisterClass rclass, list<dag> pattern = [ ]>:
     ORCvtForm<(outs R64C:$rT), (ins rclass:$rA), pattern>;
 
-/* class ORCvtGPRCVec:
-    ORCvtForm<(outs VECREG:$rT), (ins GPRC:$rA)>; */
+class ORCvtGPRCVec:
+    ORCvtForm<(outs VECREG:$rT), (ins GPRC:$rA)>;
+
+class ORCvtVecGPRC:
+    ORCvtForm<(outs GPRC:$rT), (ins VECREG:$rA)>;
 
 multiclass BitwiseOr
 {
@@ -1496,8 +1499,14 @@ multiclass BitwiseOr
   def f32_v4f32: ORExtractElt<R32FP>;
   def f64_v2f64: ORExtractElt<R64FP>;
 
+  // Conversion from vector to GPRC
+  def i128_vec:  ORCvtVecGPRC;
+
+  // Conversion from GPRC to vector
+  def vec_i128:  ORCvtGPRCVec;
+
 /*
-  // Conversion from GPRC to register
+  // Conversion from register to GPRC
   def i128_r64:  ORCvtRegGPRC<R64C>;
   def i128_f64:  ORCvtRegGPRC<R64FP>;
   def i128_r32:  ORCvtRegGPRC<R32C>;
@@ -1505,36 +1514,30 @@ multiclass BitwiseOr
   def i128_r16:  ORCvtRegGPRC<R16C>;
   def i128_r8:   ORCvtRegGPRC<R8C>;
 
-  // Conversion from GPRC to vector
-  def i128_vec:  ORCvtVecGPRC;
-
-  // Conversion from register to GPRC
+  // Conversion from GPRC to register
   def r64_i128:  ORCvtGPRCReg<R64C>;
   def f64_i128:  ORCvtGPRCReg<R64FP>;
   def r32_i128:  ORCvtGPRCReg<R32C>;
   def f32_i128:  ORCvtGPRCReg<R32FP>;
   def r16_i128:  ORCvtGPRCReg<R16C>;
   def r8_i128:   ORCvtGPRCReg<R8C>;
-
-  // Conversion from vector to GPRC
-  def vec_i128:  ORCvtGPRCVec;
 */
 /*
   // Conversion from register to R32C:
-  def r16_r32:   ORCvtFormRegR32<R16C>;
-  def r8_r32:    ORCvtFormRegR32<R8C>;
+  def r32_r16:   ORCvtFormRegR32<R16C>;
+  def r32_r8:    ORCvtFormRegR32<R8C>;
   
   // Conversion from R32C to register
   def r32_r16:   ORCvtFormR32Reg<R16C>;
   def r32_r8:    ORCvtFormR32Reg<R8C>;
 */
   
-  // Conversion to register from R64C:
+  // Conversion from R64C to register:
   def r32_r64:   ORCvtFormR64Reg<R32C>;
   // def r16_r64:   ORCvtFormR64Reg<R16C>;
   // def r8_r64:    ORCvtFormR64Reg<R8C>;
   
-  // Conversion to R64C from register
+  // Conversion to R64C from register:
   def r64_r32:   ORCvtFormRegR64<R32C>;
   // def r64_r16:   ORCvtFormRegR64<R16C>;
   // def r64_r8:    ORCvtFormRegR64<R8C>;
@@ -1659,6 +1662,7 @@ multiclass BitwiseOrComplement
   def v4i32: ORCVecInst<v4i32>;
   def v2i64: ORCVecInst<v2i64>;
 
+  def r128:  ORCRegInst<GPRC>;
   def r64:   ORCRegInst<R64C>;
   def r32:   ORCRegInst<R32C>;
   def r16:   ORCRegInst<R16C>;
@@ -1783,17 +1787,16 @@ multiclass BitwiseExclusiveOr
   def r16:   XORRegInst<R16C>;
   def r8:    XORRegInst<R8C>;
 
-  // Special forms for floating point instructions.
-  // fneg and fabs require bitwise logical ops to manipulate the sign bit.
+  // XOR instructions used to negate f32 and f64 quantities.
 
   def fneg32: XORInst<(outs R32FP:$rT), (ins R32FP:$rA, R32C:$rB),
-                      [/* no pattern */]>;
+                     [/* no pattern */]>;
 
-  def fneg64: XORInst<(outs R64FP:$rT), (ins R64FP:$rA, VECREG:$rB),
-                      [/* no pattern */]>;
+  def fneg64: XORInst<(outs R64FP:$rT), (ins R64FP:$rA, R64C:$rB),
+                     [/* no pattern */]>;
 
   def fnegvec: XORInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-                       [/* no pattern, see fneg{32,64} */]>;
+                      [/* no pattern, see fneg{32,64} */]>;
 }
 
 defm XOR : BitwiseExclusiveOr;
@@ -1840,72 +1843,64 @@ def XORIr32:
       [(set R32C:$rT, (xor R32C:$rA, i32ImmSExt10:$val))]>;
 
 // NAND:
-def NANDv16i8:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set (v16i8 VECREG:$rT), (vnot (and (v16i8 VECREG:$rA),
-                                           (v16i8 VECREG:$rB))))]>;
 
-def NANDv8i16:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set (v8i16 VECREG:$rT), (vnot (and (v8i16 VECREG:$rA),
-                                           (v8i16 VECREG:$rB))))]>;
+class NANDInst<dag OOL, dag IOL, list<dag> pattern>:
+    RRForm<0b10010011000, OOL, IOL, "nand\t$rT, $rA, $rB",
+           IntegerOp, pattern>;
 
-def NANDv4i32:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set (v4i32 VECREG:$rT), (vnot (and (v4i32 VECREG:$rA),
-                                           (v4i32 VECREG:$rB))))]>;
+class NANDVecInst<ValueType vectype>:
+    NANDInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
+             [(set (vectype VECREG:$rT), (vnot (and (vectype VECREG:$rA),
+                                                    (vectype VECREG:$rB))))]>;
+class NANDRegInst<RegisterClass rclass>:
+    NANDInst<(outs rclass:$rT), (ins rclass:$rA, rclass:$rB),
+             [(set rclass:$rT, (not (and rclass:$rA, rclass:$rB)))]>;
 
-def NANDr32:
-    RRForm<0b10010010000, (outs R32C:$rT), (ins R32C:$rA, R32C:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set R32C:$rT, (not (and R32C:$rA, R32C:$rB)))]>;
+multiclass BitwiseNand
+{
+  def v16i8: NANDVecInst<v16i8>;
+  def v8i16: NANDVecInst<v8i16>;
+  def v4i32: NANDVecInst<v4i32>;
+  def v2i64: NANDVecInst<v2i64>;
 
-def NANDr16:
-    RRForm<0b10010010000, (outs R16C:$rT), (ins R16C:$rA, R16C:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set R16C:$rT, (not (and R16C:$rA, R16C:$rB)))]>;
+  def r128:  NANDRegInst<GPRC>;
+  def r64:   NANDRegInst<R64C>;
+  def r32:   NANDRegInst<R32C>;
+  def r16:   NANDRegInst<R16C>;
+  def r8:    NANDRegInst<R8C>;
+}
 
-def NANDr8:
-    RRForm<0b10010010000, (outs R8C:$rT), (ins R8C:$rA, R8C:$rB),
-      "nand\t$rT, $rA, $rB", IntegerOp,
-      [(set R8C:$rT, (not (and R8C:$rA, R8C:$rB)))]>;
+defm NAND : BitwiseNand;
 
 // NOR:
-def NORv16i8:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set (v16i8 VECREG:$rT), (vnot (or (v16i8 VECREG:$rA),
-                                          (v16i8 VECREG:$rB))))]>;
 
-def NORv8i16:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set (v8i16 VECREG:$rT), (vnot (or (v8i16 VECREG:$rA),
-                                          (v8i16 VECREG:$rB))))]>;
+class NORInst<dag OOL, dag IOL, list<dag> pattern>:
+    RRForm<0b10010010000, OOL, IOL, "nor\t$rT, $rA, $rB",
+           IntegerOp, pattern>;
 
-def NORv4i32:
-    RRForm<0b10010010000, (outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set (v4i32 VECREG:$rT), (vnot (or (v4i32 VECREG:$rA),
-                                          (v4i32 VECREG:$rB))))]>;
+class NORVecInst<ValueType vectype>:
+    NORInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB),
+            [(set (vectype VECREG:$rT), (vnot (or (vectype VECREG:$rA),
+                                                  (vectype VECREG:$rB))))]>;
+class NORRegInst<RegisterClass rclass>:
+    NORInst<(outs rclass:$rT), (ins rclass:$rA, rclass:$rB),
+            [(set rclass:$rT, (not (or rclass:$rA, rclass:$rB)))]>;
 
-def NORr32:
-    RRForm<0b10010010000, (outs R32C:$rT), (ins R32C:$rA, R32C:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set R32C:$rT, (not (or R32C:$rA, R32C:$rB)))]>;
+multiclass BitwiseNor
+{
+  def v16i8: NORVecInst<v16i8>;
+  def v8i16: NORVecInst<v8i16>;
+  def v4i32: NORVecInst<v4i32>;
+  def v2i64: NORVecInst<v2i64>;
 
-def NORr16:
-    RRForm<0b10010010000, (outs R16C:$rT), (ins R16C:$rA, R16C:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set R16C:$rT, (not (or R16C:$rA, R16C:$rB)))]>;
+  def r128:  NORRegInst<GPRC>;
+  def r64:   NORRegInst<R64C>;
+  def r32:   NORRegInst<R32C>;
+  def r16:   NORRegInst<R16C>;
+  def r8:    NORRegInst<R8C>;
+}
 
-def NORr8:
-    RRForm<0b10010010000, (outs R8C:$rT), (ins R8C:$rA, R8C:$rB),
-      "nor\t$rT, $rA, $rB", IntegerOp,
-      [(set R8C:$rT, (not (or R8C:$rA, R8C:$rB)))]>;
+defm NOR : BitwiseNor;
 
 // Select bits:
 class SELBInst<dag OOL, dag IOL, list<dag> pattern>:
@@ -4246,33 +4241,36 @@ def FMSv2f64 :
             (fsub (fmul (v2f64 VECREG:$rA), (v2f64 VECREG:$rB)),
                   (v2f64 VECREG:$rC)))]>;
 
-// FNMS: - (a * b - c)
+// DFNMS: - (a * b - c)
 // - (a * b) + c => c - (a * b)
-def FNMSf64 :
-    RRForm<0b01111010110, (outs R64FP:$rT),
-                          (ins R64FP:$rA, R64FP:$rB, R64FP:$rC),
-      "dfnms\t$rT, $rA, $rB", DPrecFP,
-      [(set R64FP:$rT, (fsub R64FP:$rC, (fmul R64FP:$rA, R64FP:$rB)))]>,
+
+class DFNMSInst<dag OOL, dag IOL, list<dag> pattern>:
+    RRForm<0b01111010110, OOL, IOL, "dfnms\t$rT, $rA, $rB",
+           DPrecFP, pattern>,
     RegConstraint<"$rC = $rT">,
     NoEncode<"$rC">;
 
-def : Pat<(fneg (fsub (fmul R64FP:$rA, R64FP:$rB), R64FP:$rC)),
-          (FNMSf64 R64FP:$rA, R64FP:$rB, R64FP:$rC)>;
+class DFNMSVecInst<list<dag> pattern>:
+    DFNMSInst<(outs VECREG:$rT), (ins VECREG:$rA, VECREG:$rB, VECREG:$rC),
+              pattern>;
 
-def FNMSv2f64 :
-    RRForm<0b01111010110, (outs VECREG:$rT),
-                          (ins VECREG:$rA, VECREG:$rB, VECREG:$rC),
-      "dfnms\t$rT, $rA, $rB", DPrecFP,
-      [(set (v2f64 VECREG:$rT),
-            (fsub (v2f64 VECREG:$rC),
-                  (fmul (v2f64 VECREG:$rA),
-                        (v2f64 VECREG:$rB))))]>,
-    RegConstraint<"$rC = $rT">,
-    NoEncode<"$rC">;
+class DFNMSRegInst<list<dag> pattern>:
+    DFNMSInst<(outs R64FP:$rT), (ins R64FP:$rA, R64FP:$rB, R64FP:$rC),
+             pattern>;
 
-def : Pat<(fneg (fsub (fmul (v2f64 VECREG:$rA), (v2f64 VECREG:$rB)),
-                (v2f64 VECREG:$rC))),
-          (FNMSv2f64 VECREG:$rA, VECREG:$rB, VECREG:$rC)>;
+multiclass DFMultiplySubtract
+{
+  def v2f64 : DFNMSVecInst<[(set (v2f64 VECREG:$rT), 
+                                 (fsub (v2f64 VECREG:$rC),
+                                       (fmul (v2f64 VECREG:$rA),
+                                             (v2f64 VECREG:$rB))))]>;
+
+  def f64 : DFNMSRegInst<[(set R64FP:$rT,
+                               (fsub R64FP:$rC,
+                                     (fmul R64FP:$rA, R64FP:$rB)))]>;
+}
+
+defm DFNMS : DFMultiplySubtract;
 
 // - (a * b + c)
 // - (a * b) - c
@@ -4306,29 +4304,15 @@ def : Pat<(fneg (v4f32 VECREG:$rA)),
 def : Pat<(fneg R32FP:$rA),
           (XORfneg32 R32FP:$rA, (ILHUr32 0x8000))>;
 
-def : Pat<(fneg (v2f64 VECREG:$rA)),
-          (XORfnegvec (v2f64 VECREG:$rA),
-                      (v2f64 (ANDBIv16i8 (FSMBIv16i8 0x8080), 0x80)))>;
-
-def : Pat<(fneg R64FP:$rA),
-          (XORfneg64 R64FP:$rA,
-                     (ANDBIv16i8 (FSMBIv16i8 0x8080), 0x80))>;
-
 // Floating point absolute value
+// Note: f64 fabs is custom-selected.
 
 def : Pat<(fabs R32FP:$rA),
           (ANDfabs32 R32FP:$rA, (IOHLr32 (ILHUr32 0x7fff), 0xffff))>;
 
 def : Pat<(fabs (v4f32 VECREG:$rA)),
           (ANDfabsvec (v4f32 VECREG:$rA),
-                      (v4f32 (ANDBIv16i8 (FSMBIv16i8 0xffff), 0x7f)))>;
-
-def : Pat<(fabs R64FP:$rA),
-          (ANDfabs64 R64FP:$rA, (ANDBIv16i8 (FSMBIv16i8 0xffff), 0x7f))>;
-
-def : Pat<(fabs (v2f64 VECREG:$rA)),
-          (ANDfabsvec (v2f64 VECREG:$rA),
-                      (v2f64 (ANDBIv16i8 (FSMBIv16i8 0xffff), 0x7f)))>;
+                      (IOHLv4i32 (ILHUv4i32 0x7fff), 0xffff))>;
 
 //===----------------------------------------------------------------------===//
 // Hint for branch instructions:
@@ -4361,8 +4345,7 @@ def LNOP : SPUInstr<(outs), (ins), "lnop", LoadNOP> {
 
 //===----------------------------------------------------------------------===//
 // Bit conversions (type conversions between vector/packed types)
-// NOTE: Promotions are handled using the XS* instructions. Truncation
-// is not handled.
+// NOTE: Promotions are handled using the XS* instructions.
 //===----------------------------------------------------------------------===//
 def : Pat<(v16i8 (bitconvert (v8i16 VECREG:$src))), (v16i8 VECREG:$src)>;
 def : Pat<(v16i8 (bitconvert (v4i32 VECREG:$src))), (v16i8 VECREG:$src)>;
@@ -4400,8 +4383,31 @@ def : Pat<(v2f64 (bitconvert (v4i32 VECREG:$src))), (v2f64 VECREG:$src)>;
 def : Pat<(v2f64 (bitconvert (v2i64 VECREG:$src))), (v2f64 VECREG:$src)>;
 def : Pat<(v2f64 (bitconvert (v2f64 VECREG:$src))), (v2f64 VECREG:$src)>;
 
-def : Pat<(f32 (bitconvert (i32 R32C:$src))), (f32 R32FP:$src)>;
-def : Pat<(f64 (bitconvert (i64 R64C:$src))), (f64 R64FP:$src)>;
+def : Pat<(i128 (bitconvert (v16i8 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+def : Pat<(i128 (bitconvert (v8i16 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+def : Pat<(i128 (bitconvert (v4i32 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+def : Pat<(i128 (bitconvert (v2i64 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+def : Pat<(i128 (bitconvert (v4f32 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+def : Pat<(i128 (bitconvert (v2f64 VECREG:$src))),
+          (ORi128_vec VECREG:$src)>;
+
+def : Pat<(v16i8 (bitconvert (i128 GPRC:$src))),
+          (v16i8 (ORvec_i128 GPRC:$src))>;
+def : Pat<(v8i16 (bitconvert (i128 GPRC:$src))),
+          (v8i16 (ORvec_i128 GPRC:$src))>;
+def : Pat<(v4i32 (bitconvert (i128 GPRC:$src))),
+          (v4i32 (ORvec_i128 GPRC:$src))>;
+def : Pat<(v2i64 (bitconvert (i128 GPRC:$src))),
+          (v2i64 (ORvec_i128 GPRC:$src))>;
+def : Pat<(v4f32 (bitconvert (i128 GPRC:$src))),
+          (v4f32 (ORvec_i128 GPRC:$src))>;
+def : Pat<(v2f64 (bitconvert (i128 GPRC:$src))),
+          (v2f64 (ORvec_i128 GPRC:$src))>;
 
 //===----------------------------------------------------------------------===//
 // Instruction patterns:
@@ -4598,7 +4604,7 @@ def : Pat<(add (SPUhi tjumptable:$in, 0), (SPUlo tjumptable:$in, 0)),
 def : Pat<(add (SPUhi tconstpool:$in, 0), (SPUlo tconstpool:$in, 0)),
           (IOHLlo (ILHUhi tconstpool:$in), tconstpool:$in)>;
 
-// Instrinsics:
+// Intrinsics:
 include "CellSDKIntrinsics.td"
 // Various math operator instruction sequences
 include "SPUMathInstr.td"

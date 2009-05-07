@@ -24,17 +24,25 @@ using namespace clang;
 // Utility Methods for Preprocessor Directive Handling.
 //===----------------------------------------------------------------------===//
 
-MacroInfo* Preprocessor::AllocateMacroInfo(SourceLocation L) {
+MacroInfo *Preprocessor::AllocateMacroInfo(SourceLocation L) {
   MacroInfo *MI;
   
   if (!MICache.empty()) {
     MI = MICache.back();
     MICache.pop_back();
-  }
-  else MI = (MacroInfo*) BP.Allocate<MacroInfo>();
+  } else
+    MI = (MacroInfo*) BP.Allocate<MacroInfo>();
   new (MI) MacroInfo(L);
   return MI;
 }
+
+/// ReleaseMacroInfo - Release the specified MacroInfo.  This memory will
+///  be reused for allocating new MacroInfo objects.
+void Preprocessor::ReleaseMacroInfo(MacroInfo* MI) {
+  MICache.push_back(MI);
+  MI->FreeArgumentList(BP);
+}
+
 
 /// DiscardUntilEndOfDirective - Read and discard all tokens remaining on the
 /// current line until the tok::eom token is found.
@@ -93,12 +101,17 @@ void Preprocessor::ReadMacroName(Token &MacroNameTok, char isDefineUndef) {
 }
 
 /// CheckEndOfDirective - Ensure that the next token is a tok::eom token.  If
-/// not, emit a diagnostic and consume up until the eom.
-void Preprocessor::CheckEndOfDirective(const char *DirType) {
+/// not, emit a diagnostic and consume up until the eom.  If EnableMacros is
+/// true, then we consider macros that expand to zero tokens as being ok.
+void Preprocessor::CheckEndOfDirective(const char *DirType, bool EnableMacros) {
   Token Tmp;
-  // Lex unexpanded tokens: macros might expand to zero tokens, causing us to
-  // miss diagnosing invalid lines.
-  LexUnexpandedToken(Tmp);
+  // Lex unexpanded tokens for most directives: macros might expand to zero
+  // tokens, causing us to miss diagnosing invalid lines.  Some directives (like
+  // #line) allow empty macros.
+  if (EnableMacros)
+    Lex(Tmp);
+  else
+    LexUnexpandedToken(Tmp);
   
   // There should be no tokens after the directive, but we allow them as an
   // extension.
@@ -106,7 +119,13 @@ void Preprocessor::CheckEndOfDirective(const char *DirType) {
     LexUnexpandedToken(Tmp);
   
   if (Tmp.isNot(tok::eom)) {
-    Diag(Tmp, diag::ext_pp_extra_tokens_at_eol) << DirType;
+    // Add a fixit in GNU/C99/C++ mode.  Don't offer a fixit for strict-C89,
+    // because it is more trouble than it is worth to insert /**/ and check that
+    // there is no /**/ in the range also.
+    CodeModificationHint FixItHint;
+    if (Features.GNUMode || Features.C99 || Features.CPlusPlus)
+      FixItHint = CodeModificationHint::CreateInsertion(Tmp.getLocation(),"//");
+    Diag(Tmp, diag::ext_pp_extra_tokens_at_eol) << DirType << FixItHint;
     DiscardUntilEndOfDirective();
   }
 }
@@ -235,7 +254,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation IfTokenLoc,
       }
     } else if (FirstChar == 'e') {
       if (IdLen == 5 && !strcmp(Directive+1, "ndif")) {  // "endif"
-        CheckEndOfDirective("#endif");
+        CheckEndOfDirective("endif");
         PPConditionalInfo CondInfo;
         CondInfo.WasSkipping = true; // Silence bogus warning.
         bool InCond = CurPPLexer->popConditionalLevel(CondInfo);
@@ -249,7 +268,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation IfTokenLoc,
         // #else directive in a skipping conditional.  If not in some other
         // skipping conditional, and if #else hasn't already been seen, enter it
         // as a non-skipping conditional.
-        CheckEndOfDirective("#else");
+        DiscardUntilEndOfDirective();  // C99 6.10p4.
         PPConditionalInfo &CondInfo = CurPPLexer->peekConditionalLevel();
         
         // If this is a #else with a #else before it, report the error.
@@ -343,10 +362,9 @@ void Preprocessor::PTHSkipExcludedConditionalBlock() {
       if (!CondInfo.FoundNonSkip) {
         CondInfo.FoundNonSkip = true;
         
-        // Consume the eom token.
+        // Scan until the eom token.
         CurPTHLexer->ParsingPreprocessorDirective = true;
-        LexUnexpandedToken(Tok);
-        assert(Tok.is(tok::eom));
+        DiscardUntilEndOfDirective();
         CurPTHLexer->ParsingPreprocessorDirective = false;
         
         break;
@@ -399,13 +417,24 @@ const FileEntry *Preprocessor::LookupFile(const char *FilenameStart,
   if (!FromDir) {
     FileID FID = getCurrentFileLexer()->getFileID();
     CurFileEnt = SourceMgr.getFileEntryForID(FID);
+    
+    // If there is no file entry associated with this file, it must be the
+    // predefines buffer.  Any other file is not lexed with a normal lexer, so
+    // it won't be scanned for preprocessor directives.   If we have the
+    // predefines buffer, resolve #include references (which come from the
+    // -include command line argument) as if they came from the main file, this
+    // affects file lookup etc.
+    if (CurFileEnt == 0) {
+      FID = SourceMgr.getMainFileID();
+      CurFileEnt = SourceMgr.getFileEntryForID(FID);
+    }
   }
   
   // Do a standard file entry lookup.
   CurDir = CurDirLookup;
   const FileEntry *FE =
-  HeaderInfo.LookupFile(FilenameStart, FilenameEnd,
-                        isAngled, FromDir, CurDir, CurFileEnt);
+    HeaderInfo.LookupFile(FilenameStart, FilenameEnd,
+                          isAngled, FromDir, CurDir, CurFileEnt);
   if (FE) return FE;
   
   // Otherwise, see if this is a subframework header.  If so, this is relative
@@ -457,6 +486,9 @@ void Preprocessor::HandleDirective(Token &Result) {
   // pp-directive.
   bool ReadAnyTokensBeforeDirective = CurPPLexer->MIOpt.getHasReadAnyTokensVal();
   
+  // Save the '#' token in case we need to return it later.
+  Token SavedHash = Result;
+  
   // Read the next token, the directive flavor.  This isn't expanded due to
   // C99 6.10.3p8.
   LexUnexpandedToken(Result);
@@ -480,6 +512,8 @@ TryAgain:
     goto TryAgain;
 
   case tok::numeric_constant:  // # 7  GNU line marker directive.
+    if (getLangOptions().AsmPreprocessor)
+      break;  // # 4 is not a preprocessor directive in .S files.
     return HandleDigitDirective(Result);
   default:
     IdentifierInfo *II = Result.getIdentifierInfo();
@@ -504,8 +538,10 @@ TryAgain:
       
     // C99 6.10.2 - Source File Inclusion.
     case tok::pp_include:
-      return HandleIncludeDirective(Result);            // Handle #include.
-
+      return HandleIncludeDirective(Result);       // Handle #include.
+    case tok::pp___include_macros:
+      return HandleIncludeMacrosDirective(Result); // Handle -imacros.
+        
     // C99 6.10.3 - Macro Replacement.
     case tok::pp_define:
       return HandleDefineDirective(Result);
@@ -547,6 +583,22 @@ TryAgain:
     break;
   }
   
+  // If this is a .S file, treat unknown # directives as non-preprocessor
+  // directives.  This is important because # may be a comment or introduce
+  // various pseudo-ops.  Just return the # token and push back the following
+  // token to be lexed next time.
+  if (getLangOptions().AsmPreprocessor) {
+    Token *Toks = new Token[2]();
+    // Return the # and the token after it.
+    Toks[0] = SavedHash; 
+    Toks[1] = Result;
+    // Enter this token stream so that we re-lex the tokens.  Make sure to
+    // enable macro expansion, in case the token after the # is an identifier
+    // that is expanded.
+    EnterTokenStream(Toks, 2, false, true);
+    return;
+  }
+  
   // If we reached here, the preprocessing token is not valid!
   Diag(Result, diag::err_pp_invalid_directive);
   
@@ -572,24 +624,27 @@ static bool GetLineValue(Token &DigitTok, unsigned &Val,
   IntegerBuffer.resize(DigitTok.getLength());
   const char *DigitTokBegin = &IntegerBuffer[0];
   unsigned ActualLength = PP.getSpelling(DigitTok, DigitTokBegin);
-  NumericLiteralParser Literal(DigitTokBegin, DigitTokBegin+ActualLength, 
-                               DigitTok.getLocation(), PP);
-  if (Literal.hadError)
-    return true;   // Error already emitted.
   
-  if (Literal.isFloatingLiteral() || Literal.isImaginary) {
-    PP.Diag(DigitTok, DiagID);
-    return true;
+  // Verify that we have a simple digit-sequence, and compute the value.  This
+  // is always a simple digit string computed in decimal, so we do this manually
+  // here.
+  Val = 0;
+  for (unsigned i = 0; i != ActualLength; ++i) {
+    if (!isdigit(DigitTokBegin[i])) {
+      PP.Diag(PP.AdvanceToTokenCharacter(DigitTok.getLocation(), i),
+              diag::err_pp_line_digit_sequence);
+      PP.DiscardUntilEndOfDirective();
+      return true;
+    }
+    
+    unsigned NextVal = Val*10+(DigitTokBegin[i]-'0');
+    if (NextVal < Val) { // overflow.
+      PP.Diag(DigitTok, DiagID);
+      PP.DiscardUntilEndOfDirective();
+      return true;
+    }
+    Val = NextVal;
   }
-  
-  // Parse the integer literal into Result.
-  llvm::APInt APVal(32, 0);
-  if (Literal.GetIntegerValue(APVal)) {
-    // Overflow parsing integer literal.
-    PP.Diag(DigitTok, DiagID);
-    return true;
-  }
-  Val = APVal.getZExtValue();
   
   // Reject 0, this is needed both by #line numbers and flags. 
   if (Val == 0) {
@@ -597,6 +652,9 @@ static bool GetLineValue(Token &DigitTok, unsigned &Val,
     PP.DiscardUntilEndOfDirective();
     return true;
   }
+  
+  if (DigitTokBegin[0] == '0')
+    PP.Diag(DigitTok.getLocation(), diag::warn_pp_line_decimal);
   
   return false;
 }
@@ -613,7 +671,7 @@ void Preprocessor::HandleLineDirective(Token &Tok) {
 
   // Validate the number and convert it to an unsigned.
   unsigned LineNo;
-  if (GetLineValue(DigitTok, LineNo, diag::err_pp_line_requires_integer, *this))
+  if (GetLineValue(DigitTok, LineNo, diag::err_pp_line_requires_integer,*this))
     return;
 
   // Enforce C99 6.10.4p3: "The digit sequence shall not specify ... a
@@ -647,11 +705,16 @@ void Preprocessor::HandleLineDirective(Token &Tok) {
     FilenameID = SourceMgr.getLineTableFilenameID(Literal.GetString(),
                                                   Literal.GetStringLength());
     
-    // Verify that there is nothing after the string, other than EOM.
-    CheckEndOfDirective("#line");
+    // Verify that there is nothing after the string, other than EOM.  Because
+    // of C99 6.10.4p5, macros that expand to empty tokens are ok.
+    CheckEndOfDirective("line", true);
   }
   
-  // FIXME: do something with the #line info.
+  SourceMgr.AddLineNote(DigitTok.getLocation(), LineNo, FilenameID);
+  
+  if (Callbacks)
+    Callbacks->FileChanged(DigitTok.getLocation(), PPCallbacks::RenameFile,
+                           SrcMgr::C_User);
 }
 
 /// ReadLineMarkerFlags - Parse and validate any flags at the end of a GNU line
@@ -676,6 +739,23 @@ static bool ReadLineMarkerFlags(bool &IsFileEntry, bool &IsFileExit,
   } else if (FlagVal == 2) {
     IsFileExit = true;
     
+    SourceManager &SM = PP.getSourceManager();
+    // If we are leaving the current presumed file, check to make sure the
+    // presumed include stack isn't empty!
+    FileID CurFileID =
+      SM.getDecomposedInstantiationLoc(FlagTok.getLocation()).first;
+    PresumedLoc PLoc = SM.getPresumedLoc(FlagTok.getLocation());
+      
+    // If there is no include loc (main file) or if the include loc is in a
+    // different physical file, then we aren't in a "1" line marker flag region.
+    SourceLocation IncLoc = PLoc.getIncludeLoc();
+    if (IncLoc.isInvalid() ||
+        SM.getDecomposedInstantiationLoc(IncLoc).first != CurFileID) {
+      PP.Diag(FlagTok, diag::err_pp_linemarker_invalid_pop);
+      PP.DiscardUntilEndOfDirective();
+      return true;
+    }
+    
     PP.Lex(FlagTok);
     if (FlagTok.is(tok::eom)) return false;
     if (GetLineValue(FlagTok, FlagVal, diag::err_pp_linemarker_invalid_flag,PP))
@@ -693,7 +773,7 @@ static bool ReadLineMarkerFlags(bool &IsFileEntry, bool &IsFileExit,
   
   PP.Lex(FlagTok);
   if (FlagTok.is(tok::eom)) return false;
-  if (GetLineValue(FlagTok, FlagVal, diag::err_pp_linemarker_invalid_flag,PP))
+  if (GetLineValue(FlagTok, FlagVal, diag::err_pp_linemarker_invalid_flag, PP))
     return true;
 
   // We must have 4 if there is yet another flag.
@@ -762,10 +842,28 @@ void Preprocessor::HandleDigitDirective(Token &DigitTok) {
       return;
   }
   
-  // FIXME: do something with the #line info.
+  // Create a line note with this information.
+  SourceMgr.AddLineNote(DigitTok.getLocation(), LineNo, FilenameID,
+                        IsFileEntry, IsFileExit, 
+                        IsSystemHeader, IsExternCHeader);
   
-  
-  
+  // If the preprocessor has callbacks installed, notify them of the #line
+  // change.  This is used so that the line marker comes out in -E mode for
+  // example.
+  if (Callbacks) {
+    PPCallbacks::FileChangeReason Reason = PPCallbacks::RenameFile;
+    if (IsFileEntry)
+      Reason = PPCallbacks::EnterFile;
+    else if (IsFileExit)
+      Reason = PPCallbacks::ExitFile;
+    SrcMgr::CharacteristicKind FileKind = SrcMgr::C_User;
+    if (IsExternCHeader)
+      FileKind = SrcMgr::C_ExternCSystem;
+    else if (IsSystemHeader)
+      FileKind = SrcMgr::C_System;
+    
+    Callbacks->FileChanged(DigitTok.getLocation(), Reason, FileKind);
+  }
 }
 
 
@@ -809,7 +907,7 @@ void Preprocessor::HandleIdentSCCSDirective(Token &Tok) {
   }
   
   // Verify that there is nothing after the string, other than EOM.
-  CheckEndOfDirective("#ident");
+  CheckEndOfDirective("ident");
 
   if (Callbacks)
     Callbacks->Ident(Tok.getLocation(), getSpelling(StrTok));
@@ -969,9 +1067,11 @@ void Preprocessor::HandleIncludeDirective(Token &IncludeTok,
     return;
   }
   
-  // Verify that there is nothing after the filename, other than EOM.  Use the
-  // preprocessor to lex this in case lexing the filename entered a macro.
-  CheckEndOfDirective("#include");
+  // Verify that there is nothing after the filename, other than EOM.  Note that
+  // we allow macros that expand to nothing after the filename, because this
+  // falls into the category of "#include pp-tokens new-line" specified in
+  // C99 6.10.2p4.
+  CheckEndOfDirective(IncludeTok.getIdentifierInfo()->getName(), true);
 
   // Check that we don't have infinite #include recursion.
   if (IncludeMacroStack.size() == MaxAllowedIncludeStackDepth-1) {
@@ -1039,9 +1139,36 @@ void Preprocessor::HandleIncludeNextDirective(Token &IncludeNextTok) {
 /// HandleImportDirective - Implements #import.
 ///
 void Preprocessor::HandleImportDirective(Token &ImportTok) {
-  Diag(ImportTok, diag::ext_pp_import_directive);
+  if (!Features.ObjC1)  // #import is standard for ObjC.
+    Diag(ImportTok, diag::ext_pp_import_directive);
   
   return HandleIncludeDirective(ImportTok, 0, true);
+}
+
+/// HandleIncludeMacrosDirective - The -imacros command line option turns into a
+/// pseudo directive in the predefines buffer.  This handles it by sucking all
+/// tokens through the preprocessor and discarding them (only keeping the side
+/// effects on the preprocessor).
+void Preprocessor::HandleIncludeMacrosDirective(Token &IncludeMacrosTok) {
+  // This directive should only occur in the predefines buffer.  If not, emit an
+  // error and reject it.
+  SourceLocation Loc = IncludeMacrosTok.getLocation();
+  if (strcmp(SourceMgr.getBufferName(Loc), "<built-in>") != 0) {
+    Diag(IncludeMacrosTok.getLocation(),
+         diag::pp_include_macros_out_of_predefines);
+    DiscardUntilEndOfDirective();
+    return;
+  }
+  
+  // Treat this as a normal #include for checking purposes.  If this is
+  // successful, it will push a new lexer onto the include stack.
+  HandleIncludeDirective(IncludeMacrosTok, 0, false);
+  
+  Token TmpTok;
+  do {
+    Lex(TmpTok);
+    assert(TmpTok.isNot(tok::eof) && "Didn't find end of -imacros!");
+  } while (TmpTok.isNot(tok::hashhash));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1061,10 +1188,8 @@ bool Preprocessor::ReadMacroDefinitionArgList(MacroInfo *MI) {
     switch (Tok.getKind()) {
     case tok::r_paren:
       // Found the end of the argument list.
-      if (Arguments.empty()) {  // #define FOO()
-        MI->setArgumentList(Arguments.begin(), Arguments.end());
+      if (Arguments.empty())  // #define FOO()
         return false;
-      }
       // Otherwise we have #define FOO(A,)
       Diag(Tok, diag::err_pp_expected_ident_in_arg_list);
       return true;
@@ -1081,7 +1206,7 @@ bool Preprocessor::ReadMacroDefinitionArgList(MacroInfo *MI) {
       // Add the __VA_ARGS__ identifier as an argument.
       Arguments.push_back(Ident__VA_ARGS__);
       MI->setIsC99Varargs();
-      MI->setArgumentList(Arguments.begin(), Arguments.end());
+      MI->setArgumentList(&Arguments[0], Arguments.size(), BP);
       return false;
     case tok::eom:  // #define X(
       Diag(Tok, diag::err_pp_missing_rparen_in_macro_def);
@@ -1115,7 +1240,7 @@ bool Preprocessor::ReadMacroDefinitionArgList(MacroInfo *MI) {
         Diag(Tok, diag::err_pp_expected_comma_in_arg_list);
         return true;
       case tok::r_paren: // #define X(A)
-        MI->setArgumentList(Arguments.begin(), Arguments.end());
+        MI->setArgumentList(&Arguments[0], Arguments.size(), BP);
         return false;
       case tok::comma:  // #define X(A,
         break;
@@ -1131,7 +1256,7 @@ bool Preprocessor::ReadMacroDefinitionArgList(MacroInfo *MI) {
         }
           
         MI->setIsGNUVarargs();
-        MI->setArgumentList(Arguments.begin(), Arguments.end());
+        MI->setArgumentList(&Arguments[0], Arguments.size(), BP);
         return false;
       }
     }
@@ -1150,6 +1275,8 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
   if (MacroNameTok.is(tok::eom))
     return;
 
+  Token LastTok = MacroNameTok;
+
   // If we are supposed to keep comments in #defines, reenable comment saving
   // mode.
   if (CurLexer) CurLexer->SetCommentRetentionState(KeepMacroComments);
@@ -1165,7 +1292,11 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
   // check other constraints on the first token of the macro body.
   if (Tok.is(tok::eom)) {
     // If there is no body to this macro, we have no special handling here.
-  } else if (Tok.is(tok::l_paren) && !Tok.hasLeadingSpace()) {
+  } else if (Tok.hasLeadingSpace()) {
+    // This is a normal token with leading space.  Clear the leading space
+    // marker on the first token to get proper expansion.
+    Tok.clearFlag(Token::LeadingSpace);
+  } else if (Tok.is(tok::l_paren)) {
     // This is a function-like macro definition.  Read the argument list.
     MI->setIsFunctionLike();
     if (ReadMacroDefinitionArgList(MI)) {
@@ -1177,36 +1308,51 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
       return;
     }
 
+    // If this is a definition of a variadic C99 function-like macro, not using
+    // the GNU named varargs extension, enabled __VA_ARGS__.
+    
+    // "Poison" __VA_ARGS__, which can only appear in the expansion of a macro.
+    // This gets unpoisoned where it is allowed.
+    assert(Ident__VA_ARGS__->isPoisoned() && "__VA_ARGS__ should be poisoned!");
+    if (MI->isC99Varargs())
+      Ident__VA_ARGS__->setIsPoisoned(false);
+    
     // Read the first token after the arg list for down below.
     LexUnexpandedToken(Tok);
-  } else if (!Tok.hasLeadingSpace()) {
+  } else if (Features.C99) {
     // C99 requires whitespace between the macro definition and the body.  Emit
     // a diagnostic for something like "#define X+".
-    if (Features.C99) {
-      Diag(Tok, diag::ext_c99_whitespace_required_after_macro_name);
-    } else {
-      // FIXME: C90/C++ do not get this diagnostic, but it does get a similar
-      // one in some cases!
-    }
+    Diag(Tok, diag::ext_c99_whitespace_required_after_macro_name);
   } else {
-    // This is a normal token with leading space.  Clear the leading space
-    // marker on the first token to get proper expansion.
-    Tok.clearFlag(Token::LeadingSpace);
+    // C90 6.8 TC1 says: "In the definition of an object-like macro, if the
+    // first character of a replacement list is not a character required by
+    // subclause 5.2.1, then there shall be white-space separation between the
+    // identifier and the replacement list.".  5.2.1 lists this set:
+    //   "A-Za-z0-9!"#%&'()*+,_./:;<=>?[\]^_{|}~" as well as whitespace, which
+    // is irrelevant here.
+    bool isInvalid = false;
+    if (Tok.is(tok::at)) // @ is not in the list above.
+      isInvalid = true;
+    else if (Tok.is(tok::unknown)) {
+      // If we have an unknown token, it is something strange like "`".  Since
+      // all of valid characters would have lexed into a single character
+      // token of some sort, we know this is not a valid case.
+      isInvalid = true;
+    }
+    if (isInvalid)
+      Diag(Tok, diag::ext_missing_whitespace_after_macro_name);
+    else
+      Diag(Tok, diag::warn_missing_whitespace_after_macro_name);
   }
-  
-  // If this is a definition of a variadic C99 function-like macro, not using
-  // the GNU named varargs extension, enabled __VA_ARGS__.
-  
-  // "Poison" __VA_ARGS__, which can only appear in the expansion of a macro.
-  // This gets unpoisoned where it is allowed.
-  assert(Ident__VA_ARGS__->isPoisoned() && "__VA_ARGS__ should be poisoned!");
-  if (MI->isC99Varargs())
-    Ident__VA_ARGS__->setIsPoisoned(false);
-  
+
+  if (!Tok.is(tok::eom))
+    LastTok = Tok;
+
   // Read the rest of the macro body.
   if (MI->isObjectLike()) {
     // Object-like macros are very simple, just read their body.
     while (Tok.isNot(tok::eom)) {
+      LastTok = Tok;
       MI->AddTokenToBody(Tok);
       // Get the next token of the macro.
       LexUnexpandedToken(Tok);
@@ -1216,6 +1362,7 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
     // Otherwise, read the body of a function-like macro.  This has to validate
     // the # (stringize) operator.
     while (Tok.isNot(tok::eom)) {
+      LastTok = Tok;
       MI->AddTokenToBody(Tok);
 
       // Check C99 6.10.3.2p1: ensure that # operators are followed by macro
@@ -1272,6 +1419,8 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
   // used yet.
   if (isInPrimaryFile())
     MI->setIsUsed(false);
+
+  MI->setDefinitionEndLoc(LastTok.getLocation());
   
   // Finally, if this identifier already had a macro defined for it, verify that
   // the macro bodies are identical and free the old definition.
@@ -1279,7 +1428,7 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
     // It is very common for system headers to have tons of macro redefinitions
     // and for warnings to be disabled in system headers.  If this is the case,
     // then don't bother calling MacroInfo::isIdenticalTo.
-    if (!Diags.getSuppressSystemWarnings() ||
+    if (!getDiagnostics().getSuppressSystemWarnings() ||
         !SourceMgr.isInSystemHeader(DefineTok.getLocation())) {
       if (!OtherMI->isUsed())
         Diag(OtherMI->getDefinitionLoc(), diag::pp_macro_not_used);
@@ -1297,6 +1446,10 @@ void Preprocessor::HandleDefineDirective(Token &DefineTok) {
   }
   
   setMacroInfo(MacroNameTok.getIdentifierInfo(), MI);
+  
+  // If the callbacks want to know, tell them about the macro definition.
+  if (Callbacks)
+    Callbacks->MacroDefined(MacroNameTok.getIdentifierInfo(), MI);
 }
 
 /// HandleUndefDirective - Implements #undef.
@@ -1312,7 +1465,7 @@ void Preprocessor::HandleUndefDirective(Token &UndefTok) {
     return;
   
   // Check to see if this is the last token on the #undef line.
-  CheckEndOfDirective("#undef");
+  CheckEndOfDirective("undef");
   
   // Okay, we finally have a valid identifier to undef.
   MacroInfo *MI = getMacroInfo(MacroNameTok.getIdentifierInfo());
@@ -1322,7 +1475,11 @@ void Preprocessor::HandleUndefDirective(Token &UndefTok) {
 
   if (!MI->isUsed())
     Diag(MI->getDefinitionLoc(), diag::pp_macro_not_used);
-  
+
+  // If the callbacks want to know, tell them about the macro #undef.
+  if (Callbacks)
+    Callbacks->MacroUndefined(MacroNameTok.getIdentifierInfo(), MI);
+
   // Free macro definition.
   ReleaseMacroInfo(MI);
   setMacroInfo(MacroNameTok.getIdentifierInfo(), 0);
@@ -1356,7 +1513,7 @@ void Preprocessor::HandleIfdefDirective(Token &Result, bool isIfndef,
   }
   
   // Check to see if this is the last token on the #if[n]def line.
-  CheckEndOfDirective(isIfndef ? "#ifndef" : "#ifdef");
+  CheckEndOfDirective(isIfndef ? "ifndef" : "ifdef");
 
   if (CurPPLexer->getConditionalStackDepth() == 0) {
     // If the start of a top-level #ifdef, inform MIOpt.
@@ -1425,7 +1582,7 @@ void Preprocessor::HandleEndifDirective(Token &EndifToken) {
   ++NumEndif;
   
   // Check that this is the whole directive.
-  CheckEndOfDirective("#endif");
+  CheckEndOfDirective("endif");
   
   PPConditionalInfo CondInfo;
   if (CurPPLexer->popConditionalLevel(CondInfo)) {
@@ -1447,7 +1604,7 @@ void Preprocessor::HandleElseDirective(Token &Result) {
   ++NumElse;
   
   // #else directive in a non-skipping conditional... start skipping.
-  CheckEndOfDirective("#else");
+  CheckEndOfDirective("else");
   
   PPConditionalInfo CI;
   if (CurPPLexer->popConditionalLevel(CI)) {

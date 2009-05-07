@@ -16,6 +16,7 @@
 #ifndef LLVM_CLANG_SEMA_INHERIT_H
 #define LLVM_CLANG_SEMA_INHERIT_H
 
+#include "Sema.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/Type.h"
@@ -25,9 +26,7 @@
 #include <map>
 
 namespace clang {
-  class Sema;
   class CXXBaseSpecifier;
-  class CXXRecordType;
 
   /// BasePathElement - An element in a path from a derived class to a
   /// base class. Each step in the path references the link from a
@@ -40,6 +39,9 @@ namespace clang {
     /// path element.
     const CXXBaseSpecifier *Base;
 
+    /// Class - The record decl of the class that the base is a base of.
+    const CXXRecordDecl *Class;
+    
     /// SubobjectNumber - Identifies which base class subobject (of type
     /// @c Base->getType()) this base path element refers to. This 
     /// value is only valid if @c !Base->isVirtual(), because there
@@ -128,9 +130,17 @@ namespace clang {
     BasePath ScratchPath;
 
     /// DetectedVirtual - The base class that is virtual.
-    const CXXRecordType *DetectedVirtual;
+    const RecordType *DetectedVirtual;
+
+    /// \brief Array of the declarations that have been found. This
+    /// array is constructed only if needed, e.g., to iterate over the
+    /// results within LookupResult.
+    NamedDecl **DeclsFound;
+    unsigned NumDeclsFound;
 
     friend class Sema;
+
+    void ComputeDeclsFound();
 
   public:
     typedef std::list<BasePath>::const_iterator paths_iterator;
@@ -141,14 +151,20 @@ namespace clang {
                        bool RecordPaths = true,
                        bool DetectVirtual = true)
       : FindAmbiguities(FindAmbiguities), RecordPaths(RecordPaths),
-        DetectVirtual(DetectVirtual), DetectedVirtual(0)
+        DetectVirtual(DetectVirtual), DetectedVirtual(0), DeclsFound(0),
+        NumDeclsFound(0)
     {}
+
+    ~BasePaths() { delete [] DeclsFound; }
 
     paths_iterator begin() const { return Paths.begin(); }
     paths_iterator end()   const { return Paths.end(); }
 
     BasePath&       front()       { return Paths.front(); }
     const BasePath& front() const { return Paths.front(); }
+
+    NamedDecl **found_decls_begin();
+    NamedDecl **found_decls_end();
 
     bool isAmbiguous(QualType BaseType);
 
@@ -167,7 +183,7 @@ namespace clang {
     bool isDetectingVirtual() const { return DetectVirtual; }
 
     /// getDetectedVirtual - The virtual base discovered on the path.
-    const CXXRecordType* getDetectedVirtual() const {
+    const RecordType* getDetectedVirtual() const {
       return DetectedVirtual;
     }
 

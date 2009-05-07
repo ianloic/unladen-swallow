@@ -14,16 +14,17 @@
 #ifndef LLVM_CLANG_PARSE_DECLSPEC_H
 #define LLVM_CLANG_PARSE_DECLSPEC_H
 
-#include "clang/Parse/Action.h"
 #include "clang/Parse/AttributeList.h"
 #include "clang/Lex/Token.h"
+#include "clang/Basic/OperatorKinds.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/PointerIntPair.h"
 
 namespace clang {
-  struct LangOptions;
+  class LangOptions;
   class Diagnostic;
   class IdentifierInfo;
+  class Preprocessor;
+  class Declarator;
   
 /// DeclSpec - This class captures information about "declaration specifiers",
 /// which encompasses storage-class-specifiers, type-specifiers,
@@ -78,9 +79,10 @@ public:
     TST_union,
     TST_struct,
     TST_class,        // C++ class type
-    TST_typedef,
+    TST_typename,     // Typedef, C++ class-name or enum name, etc.
     TST_typeofType,
-    TST_typeofExpr
+    TST_typeofExpr,
+    TST_error         // erroneous type
   };
   
   // type-qualifiers
@@ -124,7 +126,7 @@ private:
   /// TypeRep - This contains action-specific information about a specific TST.
   /// For example, for a typedef or struct, it might contain the declaration for
   /// these.
-  Action::TypeTy *TypeRep;  
+  ActionBase::TypeTy *TypeRep;  
   
   // attributes.
   AttributeList *AttrList;
@@ -132,7 +134,7 @@ private:
   // List of protocol qualifiers for objective-c classes.  Used for 
   // protocol-qualified interfaces "NString<foo>" and protocol-qualified id
   // "id<foo>".
-  Action::DeclTy * const *ProtocolQualifiers;
+  const ActionBase::DeclPtrTy *ProtocolQualifiers;
   unsigned NumProtocolQualifiers;
   
   // SourceLocation info.  These are null if the item wasn't specified or if
@@ -247,6 +249,12 @@ public:
   ///
   unsigned getParsedSpecifiers() const;
   
+  /// isEmpty - Return true if this declaration specifier is completely empty:
+  /// no tokens were parsed in the production of it.
+  bool isEmpty() const {
+    return getParsedSpecifiers() == DeclSpec::PQ_None;
+  }
+  
   void SetRangeStart(SourceLocation Loc) { Range.setBegin(Loc); }
   void SetRangeEnd(SourceLocation Loc) { Range.setEnd(Loc); }
   
@@ -259,8 +267,9 @@ public:
   bool SetTypeSpecComplex(TSC C, SourceLocation Loc, const char *&PrevSpec);
   bool SetTypeSpecSign(TSS S, SourceLocation Loc, const char *&PrevSpec);
   bool SetTypeSpecType(TST T, SourceLocation Loc, const char *&PrevSpec,
-                       Action::TypeTy *TypeRep = 0);
-  
+                       void *Rep = 0);
+  bool SetTypeSpecError();
+
   bool SetTypeQual(TQ T, SourceLocation Loc, const char *&PrevSpec,
                    const LangOptions &Lang);
   
@@ -300,24 +309,24 @@ public:
     return AL;
   }
   
-  typedef const Action::DeclTy * const * ProtocolQualifierListTy;
+  typedef const ActionBase::DeclPtrTy *ProtocolQualifierListTy;
   ProtocolQualifierListTy getProtocolQualifiers() const {
     return ProtocolQualifiers;
   }
   unsigned getNumProtocolQualifiers() const {
     return NumProtocolQualifiers;
   }
-  void setProtocolQualifiers(Action::DeclTy* const *Protos, unsigned NumProtos){
-    if (NumProtos == 0) return;
-    ProtocolQualifiers = new Action::DeclTy*[NumProtos];
-    memcpy((void*)ProtocolQualifiers, Protos,sizeof(Action::DeclTy*)*NumProtos);
-    NumProtocolQualifiers = NumProtos;
+  void setProtocolQualifiers(const ActionBase::DeclPtrTy *Protos, unsigned NP) {
+    if (NP == 0) return;
+    ProtocolQualifiers = new ActionBase::DeclPtrTy[NP];
+    memcpy((void*)ProtocolQualifiers, Protos, sizeof(ActionBase::DeclPtrTy)*NP);
+    NumProtocolQualifiers = NP;
   }
   
   /// Finish - This does final analysis of the declspec, issuing diagnostics for
   /// things like "_Imaginary" (lacking an FP type).  After calling this method,
   /// DeclSpec is guaranteed self-consistent, even if an error occurred.
-  void Finish(Diagnostic &D, SourceManager& SrcMgr, const LangOptions &Lang);
+  void Finish(Diagnostic &D, Preprocessor &PP);
 
   /// isMissingDeclaratorOk - This checks if this DeclSpec can stand alone,
   /// without a Declarator. Only tag declspecs can stand alone.
@@ -389,10 +398,10 @@ private:
 /// specifier.
 class CXXScopeSpec {
   SourceRange Range;
-  Action::CXXScopeTy *ScopeRep;
+  void *ScopeRep;
 
 public:
-  CXXScopeSpec() : ScopeRep(0) {}
+  CXXScopeSpec() : Range(), ScopeRep() { }
 
   const SourceRange &getRange() const { return Range; }
   void setRange(const SourceRange &R) { Range = R; }
@@ -401,8 +410,8 @@ public:
   SourceLocation getBeginLoc() const { return Range.getBegin(); }
   SourceLocation getEndLoc() const { return Range.getEnd(); }
 
-  Action::CXXScopeTy *getScopeRep() const { return ScopeRep; }
-  void setScopeRep(Action::CXXScopeTy *S) { ScopeRep = S; }
+  ActionBase::CXXScopeTy *getScopeRep() const { return ScopeRep; }
+  void setScopeRep(ActionBase::CXXScopeTy *S) { ScopeRep = S; }
 
   bool isEmpty() const { return !Range.isValid(); }
   bool isNotEmpty() const { return !isEmpty(); }
@@ -411,7 +420,7 @@ public:
   bool isInvalid() const { return isNotEmpty() && ScopeRep == 0; }
 
   /// isSet - A scope specifier was resolved to a valid C++ scope.
-  bool isSet() const { return getScopeRep() != 0; }
+  bool isSet() const { return ScopeRep != 0; }
 
   void clear() {
     Range = SourceRange();
@@ -446,7 +455,9 @@ struct DeclaratorChunk {
 
   struct ReferenceTypeInfo {
     /// The type qualifier: restrict. [GNU] C++ extension
-    bool HasRestrict;
+    bool HasRestrict : 1;
+    /// True if this is an lvalue reference, false if it's an rvalue reference.
+    bool LValueRef : 1;
     AttributeList *AttrList;
     void destroy() {
       delete AttrList;
@@ -466,7 +477,7 @@ struct DeclaratorChunk {
     /// This is the size of the array, or null if [] or [*] was specified.
     /// Since the parser is multi-purpose, and we don't want to impose a root
     /// expression class on all clients, NumElts is untyped.
-    Action::ExprTy *NumElts;
+    ActionBase::ExprTy *NumElts;
     void destroy() {}
   };
   
@@ -479,7 +490,7 @@ struct DeclaratorChunk {
   struct ParamInfo {
     IdentifierInfo *Ident;
     SourceLocation IdentLoc;
-    Action::DeclTy *Param;
+    ActionBase::DeclPtrTy Param;
 
     /// DefaultArgTokens - When the parameter's default argument
     /// cannot be parsed immediately (because it occurs within the
@@ -489,7 +500,8 @@ struct DeclaratorChunk {
     CachedTokens *DefaultArgTokens;
 
     ParamInfo() {}
-    ParamInfo(IdentifierInfo *ident, SourceLocation iloc, Action::DeclTy *param,
+    ParamInfo(IdentifierInfo *ident, SourceLocation iloc,
+              ActionBase::DeclPtrTy param,
               CachedTokens *DefArgTokens = 0)
       : Ident(ident), IdentLoc(iloc), Param(param), 
         DefaultArgTokens(DefArgTokens) {}
@@ -500,27 +512,45 @@ struct DeclaratorChunk {
     /// argument.  If the function is () or (a,b,c), then it has no prototype,
     /// and is treated as a K&R-style function.
     bool hasPrototype : 1;
-    
-    /// isVariadic - If this function has a prototype, and if that proto ends
-    /// with ',...)', this is true.
+
+    /// isVariadic - If this function has a prototype, and if that
+    /// proto ends with ',...)', this is true. When true, EllipsisLoc
+    /// contains the location of the ellipsis.
     bool isVariadic : 1;
 
     /// The type qualifiers: const/volatile/restrict.
     /// The qualifier bitmask values are the same as in QualType. 
     unsigned TypeQuals : 3;
 
+    /// hasExceptionSpec - True if the function has an exception specification.
+    bool hasExceptionSpec : 1;
+
+    /// hasAnyExceptionSpec - True if the function has a throw(...) specifier.
+    bool hasAnyExceptionSpec : 1;
+
     /// DeleteArgInfo - If this is true, we need to delete[] ArgInfo.
     bool DeleteArgInfo : 1;
+
+    /// When isVariadic is true, the location of the ellipsis in the source.
+    unsigned EllipsisLoc;
 
     /// NumArgs - This is the number of formal arguments provided for the
     /// declarator.
     unsigned NumArgs;
 
+    /// NumExceptions - This is the number of types in the exception-decl, if
+    /// the function has one.
+    unsigned NumExceptions;
+
     /// ArgInfo - This is a pointer to a new[]'d array of ParamInfo objects that
     /// describe the arguments for this function declarator.  This is null if
     /// there are no arguments specified.
     ParamInfo *ArgInfo;
-    
+
+    /// Exceptions - This is a pointer to a new[]'d array of TypeTy pointers
+    /// that contains the types in the function's exception specification.
+    ActionBase::TypeTy **Exceptions;
+
     /// freeArgs - reset the argument list to having zero arguments.  This is
     /// used in various places for error recovery.
     void freeArgs() {
@@ -530,10 +560,15 @@ struct DeclaratorChunk {
       }
       NumArgs = 0;
     }
-    
+
     void destroy() {
       if (DeleteArgInfo)
         delete[] ArgInfo;
+      delete[] Exceptions;
+    }
+
+    SourceLocation getEllipsisLoc() const {
+      return SourceLocation::getFromRawEncoding(EllipsisLoc);
     }
   };
 
@@ -541,7 +576,10 @@ struct DeclaratorChunk {
     /// For now, sema will catch these as invalid.
     /// The type qualifiers: const/volatile/restrict.
     unsigned TypeQuals : 3;
-    void destroy() {}
+    AttributeList *AttrList;
+    void destroy() {
+      delete AttrList;
+    }
   };
 
   struct MemberPointerTypeInfo {
@@ -597,7 +635,7 @@ struct DeclaratorChunk {
     case MemberPointer: return Mem.AttrList;
     case Array:         return 0;
     case Function:      return 0;
-    case BlockPointer:  return 0; // FIXME: Do blocks have attr list?
+    case BlockPointer:  return Cls.AttrList;
     }
   }
 
@@ -617,11 +655,12 @@ struct DeclaratorChunk {
   /// getReference - Return a DeclaratorChunk for a reference.
   ///
   static DeclaratorChunk getReference(unsigned TypeQuals, SourceLocation Loc,
-                                      AttributeList *AL) {
+                                      AttributeList *AL, bool lvalue) {
     DeclaratorChunk I;
     I.Kind            = Reference;
     I.Loc             = Loc;
     I.Ref.HasRestrict = (TypeQuals & DeclSpec::TQ_restrict) != 0;
+    I.Ref.LValueRef   = lvalue;
     I.Ref.AttrList  = AL;
     return I;
   }
@@ -644,18 +683,23 @@ struct DeclaratorChunk {
   /// DeclaratorChunk::getFunction - Return a DeclaratorChunk for a function.
   /// "TheDeclarator" is the declarator that this will be added to.
   static DeclaratorChunk getFunction(bool hasProto, bool isVariadic,
+                                     SourceLocation EllipsisLoc,
                                      ParamInfo *ArgInfo, unsigned NumArgs,
-                                     unsigned TypeQuals, SourceLocation Loc,
+                                     unsigned TypeQuals, bool hasExceptionSpec,
+                                     bool hasAnyExceptionSpec,
+                                     ActionBase::TypeTy **Exceptions,
+                                     unsigned NumExceptions, SourceLocation Loc,
                                      Declarator &TheDeclarator);
   
   /// getBlockPointer - Return a DeclaratorChunk for a block.
   ///
-  static DeclaratorChunk getBlockPointer(unsigned TypeQuals, 
-                                         SourceLocation Loc) {
+  static DeclaratorChunk getBlockPointer(unsigned TypeQuals, SourceLocation Loc,
+                                         AttributeList *AL) {
     DeclaratorChunk I;
     I.Kind          = BlockPointer;
     I.Loc           = Loc;
     I.Cls.TypeQuals = TypeQuals;
+    I.Cls.AttrList  = AL;
     return I;
   }
 
@@ -695,7 +739,8 @@ public:
     ForContext,          // Declaration within first part of a for loop.
     ConditionContext,    // Condition declaration in a C++ if/switch/while/for.
     TemplateParamContext,// Within a template parameter list.
-    CXXCatchContext      // C++ catch exception-declaration
+    CXXCatchContext,     // C++ catch exception-declaration
+    BlockLiteralContext  // Block literal declarator.
   };
 
   /// DeclaratorKind - The kind of declarator this represents.
@@ -714,7 +759,8 @@ private:
   CXXScopeSpec SS;
   IdentifierInfo *Identifier;
   SourceLocation IdentifierLoc;
-  
+  SourceRange Range;
+
   /// Context - Where we are parsing this declarator.
   ///
   TheContext Context;
@@ -728,7 +774,7 @@ private:
   /// DeclTypeInfo.back() will be the least closely bound.
   llvm::SmallVector<DeclaratorChunk, 8> DeclTypeInfo;
 
-  // InvalidType - Set by Sema::GetTypeForDeclarator().
+  /// InvalidType - Set by Sema::GetTypeForDeclarator().
   bool InvalidType : 1;
 
   /// GroupingParens - Set by Parser::ParseParenDeclarator().
@@ -738,13 +784,13 @@ private:
   AttributeList *AttrList;
   
   /// AsmLabel - The asm label, if specified.
-  Action::ExprTy *AsmLabel;
+  ActionBase::ExprTy *AsmLabel;
 
   union {
     // When Kind is DK_Constructor, DK_Destructor, or DK_Conversion, the
     // type associated with the constructor, destructor, or conversion
     // operator.
-    Action::TypeTy *Type;
+    ActionBase::TypeTy *Type;
 
     /// When Kind is DK_Operator, this is the actual overloaded
     /// operator that this declarator names.
@@ -754,13 +800,16 @@ private:
   /// InlineParams - This is a local array used for the first function decl
   /// chunk to avoid going to the heap for the common case when we have one
   /// function chunk in the declarator.
-  friend class DeclaratorChunk;
   DeclaratorChunk::ParamInfo InlineParams[16];
   bool InlineParamsUsed;
-  
+
+  friend struct DeclaratorChunk;
+
 public:
   Declarator(const DeclSpec &ds, TheContext C)
-    : DS(ds), Identifier(0), Context(C), Kind(DK_Abstract), InvalidType(false),
+    : DS(ds), Identifier(0), Range(ds.getSourceRange()), Context(C),
+      Kind(DK_Abstract),
+      InvalidType(DS.getTypeSpecType() == DeclSpec::TST_error),
       GroupingParens(false), AttrList(0), AsmLabel(0), Type(0),
       InlineParamsUsed(false) {
   }
@@ -788,14 +837,38 @@ public:
   TheContext getContext() const { return Context; }
   DeclaratorKind getKind() const { return Kind; }
 
-  // getSourceRange - FIXME: This should be implemented.
-  const SourceRange getSourceRange() const { return SourceRange(); }
-  
+  /// getSourceRange - Get the source range that spans this declarator.
+  const SourceRange &getSourceRange() const { return Range; }
+
+  void SetSourceRange(SourceRange R) { Range = R; }
+  /// SetRangeBegin - Set the start of the source range to Loc, unless it's
+  /// invalid.
+  void SetRangeBegin(SourceLocation Loc) {
+    if (!Loc.isInvalid())
+      Range.setBegin(Loc);
+  }
+  /// SetRangeEnd - Set the end of the source range to Loc, unless it's invalid.
+  void SetRangeEnd(SourceLocation Loc) {
+    if (!Loc.isInvalid())
+      Range.setEnd(Loc);
+  }
+  /// ExtendWithDeclSpec - Extend the declarator source range to include the
+  /// given declspec, unless its location is invalid. Adopts the range start if
+  /// the current range start is invalid.
+  void ExtendWithDeclSpec(const DeclSpec &DS) {
+    const SourceRange &SR = DS.getSourceRange();
+    if (Range.getBegin().isInvalid())
+      Range.setBegin(SR.getBegin());
+    if (!SR.getEnd().isInvalid())
+      Range.setEnd(SR.getEnd());
+  }
+
   /// clear - Reset the contents of this Declarator.
   void clear() {
     SS.clear();
     Identifier = 0;
     IdentifierLoc = SourceLocation();
+    Range = DS.getSourceRange();
     Kind = DK_Abstract;
 
     for (unsigned i = 0, e = DeclTypeInfo.size(); i != e; ++i)
@@ -813,14 +886,15 @@ public:
   /// parameter lists.
   bool mayOmitIdentifier() const {
     return Context == TypeNameContext || Context == PrototypeContext ||
-           Context == TemplateParamContext || Context == CXXCatchContext;
+           Context == TemplateParamContext || Context == CXXCatchContext ||
+           Context == BlockLiteralContext;
   }
 
   /// mayHaveIdentifier - Return true if the identifier is either optional or
   /// required.  This is true for normal declarators and prototypes, but not
   /// typenames.
   bool mayHaveIdentifier() const {
-    return Context != TypeNameContext;
+    return Context != TypeNameContext && Context != BlockLiteralContext;
   }
 
   /// mayBeFollowedByCXXDirectInit - Return true if the declarator can be
@@ -851,45 +925,65 @@ public:
       Kind = DK_Normal;
     else
       Kind = DK_Abstract;
+    SetRangeEnd(Loc);
   }
   
   /// setConstructor - Set this declarator to be a C++ constructor
-  /// declarator.
-  void setConstructor(Action::TypeTy *Ty, SourceLocation Loc) {
+  /// declarator. Also extends the range.
+  void setConstructor(ActionBase::TypeTy *Ty, SourceLocation Loc) {
     IdentifierLoc = Loc;
     Kind = DK_Constructor;
     Type = Ty;
+    SetRangeEnd(Loc);
   }
 
   /// setDestructor - Set this declarator to be a C++ destructor
-  /// declarator.
-  void setDestructor(Action::TypeTy *Ty, SourceLocation Loc) {
+  /// declarator. Also extends the range to End, which should be the identifier
+  /// token.
+  void setDestructor(ActionBase::TypeTy *Ty, SourceLocation Loc,
+                     SourceLocation EndLoc) {
     IdentifierLoc = Loc;
     Kind = DK_Destructor;
     Type = Ty;
+    if (!EndLoc.isInvalid())
+      SetRangeEnd(EndLoc);
   }
 
-  // setConversionFunction - Set this declarator to be a C++
-  // conversion function declarator (e.g., @c operator int const *).
-  void setConversionFunction(Action::TypeTy *Ty, SourceLocation Loc) {
+  /// setConversionFunction - Set this declarator to be a C++
+  /// conversion function declarator (e.g., @c operator int const *).
+  /// Also extends the range to EndLoc, which should be the last token of the
+  /// type name.
+  void setConversionFunction(ActionBase::TypeTy *Ty, SourceLocation Loc,
+                             SourceLocation EndLoc) {
     Identifier = 0;
     IdentifierLoc = Loc;
     Kind = DK_Conversion;
     Type = Ty;
+    if (!EndLoc.isInvalid())
+      SetRangeEnd(EndLoc);
   }
 
-  // setOverloadedOperator - Set this declaration to be a C++
-  // overloaded operator declarator (e.g., @c operator+).
-  void setOverloadedOperator(OverloadedOperatorKind Op, SourceLocation Loc) {
+  /// setOverloadedOperator - Set this declaration to be a C++
+  /// overloaded operator declarator (e.g., @c operator+).
+  /// Also extends the range to EndLoc, which should be the last token of the
+  /// operator.
+  void setOverloadedOperator(OverloadedOperatorKind Op, SourceLocation Loc,
+                             SourceLocation EndLoc) {
     IdentifierLoc = Loc;
     Kind = DK_Operator;
     OperatorKind = Op;
+    if (!EndLoc.isInvalid())
+      SetRangeEnd(EndLoc);
   }
- 
-  void AddTypeInfo(const DeclaratorChunk &TI) {
+
+  /// AddTypeInfo - Add a chunk to this declarator. Also extend the range to
+  /// EndLoc, which should be the last token of the chunk.
+  void AddTypeInfo(const DeclaratorChunk &TI, SourceLocation EndLoc) {
     DeclTypeInfo.push_back(TI);
+    if (!EndLoc.isInvalid())
+      SetRangeEnd(EndLoc);
   }
-  
+
   /// getNumTypeObjects() - Return the number of types applied to this
   /// declarator.
   unsigned getNumTypeObjects() const { return DeclTypeInfo.size(); }
@@ -918,27 +1012,33 @@ public:
   ///  short int x, __attribute__((aligned(16)) var
   ///                                 __attribute__((common,deprecated));
   ///
-  void AddAttributes(AttributeList *alist) { 
+  /// Also extends the range of the declarator.
+  void AddAttributes(AttributeList *alist, SourceLocation LastLoc) { 
     if (!alist)
       return; // we parsed __attribute__(()) or had a syntax error
-    
+
     if (AttrList) 
       alist->addAttributeList(AttrList); 
     AttrList = alist;
+
+    if (!LastLoc.isInvalid())
+      SetRangeEnd(LastLoc);
   }
   
   const AttributeList *getAttributes() const { return AttrList; }
   AttributeList *getAttributes() { return AttrList; }
 
-  void setAsmLabel(Action::ExprTy *E) { AsmLabel = E; }
-  Action::ExprTy *getAsmLabel() const { return AsmLabel; }
+  void setAsmLabel(ActionBase::ExprTy *E) { AsmLabel = E; }
+  ActionBase::ExprTy *getAsmLabel() const { return AsmLabel; }
 
-  Action::TypeTy *getDeclaratorIdType() const { return Type; }
+  ActionBase::TypeTy *getDeclaratorIdType() const { return Type; }
 
   OverloadedOperatorKind getOverloadedOperator() const { return OperatorKind; }
 
-  void setInvalidType(bool flag) { InvalidType = flag; }
-  bool getInvalidType() const { return InvalidType; }
+  void setInvalidType(bool Val = true) { InvalidType = Val; }
+  bool isInvalidType() const { 
+    return InvalidType || DS.getTypeSpecType() == DeclSpec::TST_error; 
+  }
 
   void setGroupingParens(bool flag) { GroupingParens = flag; }
   bool hasGroupingParens() const { return GroupingParens; }
@@ -948,7 +1048,7 @@ public:
 /// structure field declarators, which is basically just a bitfield size.
 struct FieldDeclarator {
   Declarator D;
-  Action::ExprTy *BitfieldSize;
+  ActionBase::ExprTy *BitfieldSize;
   explicit FieldDeclarator(DeclSpec &DS) : D(DS, Declarator::MemberContext) {
     BitfieldSize = 0;
   }

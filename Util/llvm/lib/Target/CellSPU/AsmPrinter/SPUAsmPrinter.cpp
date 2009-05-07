@@ -45,13 +45,13 @@ namespace {
 
   const std::string bss_section(".bss");
 
-  struct VISIBILITY_HIDDEN SPUAsmPrinter : public AsmPrinter {
+  class VISIBILITY_HIDDEN SPUAsmPrinter : public AsmPrinter {
     std::set<std::string> FnStubs, GVStubs;
-
-    SPUAsmPrinter(raw_ostream &O, TargetMachine &TM, const TargetAsmInfo *T) :
-      AsmPrinter(O, TM, T)
-    {
-    }
+  public:
+    explicit SPUAsmPrinter(raw_ostream &O, TargetMachine &TM,
+                           const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                           bool V) :
+      AsmPrinter(O, TM, T, OL, V) {}
 
     virtual const char *getPassName() const {
       return "STI CBEA SPU Assembly Printer";
@@ -285,17 +285,14 @@ namespace {
   };
 
   /// LinuxAsmPrinter - SPU assembly printer, customized for Linux
-  struct VISIBILITY_HIDDEN LinuxAsmPrinter : public SPUAsmPrinter {
-
+  class VISIBILITY_HIDDEN LinuxAsmPrinter : public SPUAsmPrinter {
     DwarfWriter *DW;
     MachineModuleInfo *MMI;
-
-    LinuxAsmPrinter(raw_ostream &O, SPUTargetMachine &TM,
-                    const TargetAsmInfo *T) :
-      SPUAsmPrinter(O, TM, T),
-      DW(0),
-      MMI(0)
-    { }
+  public:
+    explicit LinuxAsmPrinter(raw_ostream &O, SPUTargetMachine &TM,
+                             const TargetAsmInfo *T, CodeGenOpt::Level F,
+                             bool V)
+      : SPUAsmPrinter(O, TM, T, F, V), DW(0), MMI(0) {}
 
     virtual const char *getPassName() const {
       return "STI CBEA SPU Assembly Printer";
@@ -427,6 +424,8 @@ void SPUAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
 bool
 LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
 {
+  this->MF = &MF;
+
   SetupMachineFunction(MF);
   O << "\n\n";
 
@@ -448,8 +447,10 @@ LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
     O << "\t.global\t" << CurrentFnName << "\n"
       << "\t.type\t" << CurrentFnName << ", @function\n";
     break;
-  case Function::WeakLinkage:
-  case Function::LinkOnceLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
     O << "\t.global\t" << CurrentFnName << "\n";
     O << "\t.weak_definition\t" << CurrentFnName << "\n";
     break;
@@ -499,7 +500,7 @@ bool LinuxAsmPrinter::doInitialization(Module &M) {
 }
 
 /// PrintUnmangledNameSafely - Print out the printable characters in the name.
-/// Don't print things like \n or \0.
+/// Don't print things like \\n or \\0.
 static void PrintUnmangledNameSafely(const Value *V, raw_ostream &OS) {
   for (const char *Name = V->getNameStart(), *E = Name+V->getNameLen();
        Name != E; ++Name)
@@ -537,7 +538,7 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (C->isNullValue() && /* FIXME: Verify correct */
       !GVar->hasSection() &&
       (GVar->hasLocalLinkage() || GVar->hasExternalLinkage() ||
-       GVar->mayBeOverridden())) {
+       GVar->isWeakForLinker())) {
       if (Size == 0) Size = 1;   // .comm Foo, 0 is undefined, avoid it.
 
       if (GVar->hasExternalLinkage()) {
@@ -558,8 +559,10 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
 
   switch (GVar->getLinkage()) {
     // Should never be seen for the CellSPU platform...
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage:
+   case GlobalValue::WeakODRLinkage:
    case GlobalValue::CommonLinkage:
     O << "\t.global " << name << '\n'
       << "\t.type " << name << ", @object\n"
@@ -613,6 +616,8 @@ bool LinuxAsmPrinter::doFinalization(Module &M) {
 /// that the Linux SPU assembler can deal with.
 ///
 FunctionPass *llvm::createSPUAsmPrinterPass(raw_ostream &o,
-                                            SPUTargetMachine &tm) {
-  return new LinuxAsmPrinter(o, tm, tm.getTargetAsmInfo());
+                                            SPUTargetMachine &tm,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool verbose) {
+  return new LinuxAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
 }

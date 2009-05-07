@@ -147,6 +147,11 @@ namespace llvm {
       assert(0 && "JIT specific function called!");
       abort();
     }
+    virtual void startGVStub(const GlobalValue* F, void *Buffer, 
+                             unsigned StubSize) {
+      assert(0 && "JIT specific function called!");
+      abort();
+    }
     virtual void *finishGVStub(const GlobalValue* F) {
       assert(0 && "JIT specific function called!");
       abort();
@@ -951,8 +956,10 @@ MachOSym::MachOSym(const GlobalValue *gv, std::string name, uint8_t sect,
   default:
     assert(0 && "Unexpected linkage type!");
     break;
-  case GlobalValue::WeakLinkage:
-  case GlobalValue::LinkOnceLinkage:
+  case GlobalValue::WeakAnyLinkage:
+  case GlobalValue::WeakODRLinkage:
+  case GlobalValue::LinkOnceAnyLinkage:
+  case GlobalValue::LinkOnceODRLinkage:
   case GlobalValue::CommonLinkage:
     assert(!isa<Function>(gv) && "Unexpected linkage type for Function!");
   case GlobalValue::ExternalLinkage:

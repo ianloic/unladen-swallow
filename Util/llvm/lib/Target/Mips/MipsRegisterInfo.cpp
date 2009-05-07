@@ -133,8 +133,8 @@ MipsRegisterInfo::getCalleeSavedRegClasses(const MachineFunction *MF) const
     &Mips::CPURegsRegClass, &Mips::CPURegsRegClass, &Mips::CPURegsRegClass, 
     &Mips::CPURegsRegClass, &Mips::CPURegsRegClass, &Mips::CPURegsRegClass,
     &Mips::CPURegsRegClass, &Mips::CPURegsRegClass,
-    &Mips::AFGR32RegClass, &Mips::AFGR32RegClass, &Mips::AFGR32RegClass, 
-    &Mips::AFGR32RegClass, &Mips::AFGR32RegClass, &Mips::AFGR32RegClass,
+    &Mips::FGR32RegClass, &Mips::FGR32RegClass, &Mips::FGR32RegClass, 
+    &Mips::FGR32RegClass, &Mips::FGR32RegClass, &Mips::FGR32RegClass,
     &Mips::AFGR64RegClass, &Mips::AFGR64RegClass, &Mips::AFGR64RegClass, 
     &Mips::AFGR64RegClass, &Mips::AFGR64RegClass, &Mips::AFGR64RegClass, 0
   };
@@ -157,6 +157,12 @@ getReservedRegs(const MachineFunction &MF) const
   Reserved.set(Mips::SP);
   Reserved.set(Mips::FP);
   Reserved.set(Mips::RA);
+
+  // SRV4 requires that odd register can't be used.
+  if (!Subtarget.isSingleFloat())
+    for (unsigned FReg=(Mips::F0)+1; FReg < Mips::F30; FReg+=2)
+      Reserved.set(FReg);
+  
   return Reserved;
 }
 
@@ -267,7 +273,7 @@ void MipsRegisterInfo::adjustMipsStackFrame(MachineFunction &MF) const
 
   if (LastOffsetFI >= 0)
     StackOffset = MFI->getObjectOffset(LastOffsetFI)+ 
-                  MFI->getObjectAlignment(LastOffsetFI);
+                  MFI->getObjectSize(LastOffsetFI);
   StackOffset = ((StackOffset+StackAlign-1)/StackAlign*StackAlign);
 
   for (unsigned i = 0, e = CSI.size(); i != e ; ++i) {
@@ -391,6 +397,8 @@ emitPrologue(MachineFunction &MF) const
   MachineFrameInfo *MFI    = MF.getFrameInfo();
   MipsFunctionInfo *MipsFI = MF.getInfo<MipsFunctionInfo>();
   MachineBasicBlock::iterator MBBI = MBB.begin();
+  DebugLoc dl = (MBBI != MBB.end() ?
+                 MBBI->getDebugLoc() : DebugLoc::getUnknownLoc());
   bool isPIC = (MF.getTarget().getRelocationModel() == Reloc::PIC_);
 
   // Get the right frame order for Mips.
@@ -405,21 +413,21 @@ emitPrologue(MachineFunction &MF) const
   int FPOffset = MipsFI->getFPStackOffset();
   int RAOffset = MipsFI->getRAStackOffset();
 
-  BuildMI(MBB, MBBI, TII.get(Mips::NOREORDER));
+  BuildMI(MBB, MBBI, dl, TII.get(Mips::NOREORDER));
   
   // TODO: check need from GP here.
   if (isPIC && Subtarget.isABI_O32()) 
-    BuildMI(MBB, MBBI, TII.get(Mips::CPLOAD)).addReg(getPICCallReg());
-  BuildMI(MBB, MBBI, TII.get(Mips::NOMACRO));
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::CPLOAD)).addReg(getPICCallReg());
+  BuildMI(MBB, MBBI, dl, TII.get(Mips::NOMACRO));
 
   // Adjust stack : addi sp, sp, (-imm)
-  BuildMI(MBB, MBBI, TII.get(Mips::ADDiu), Mips::SP)
+  BuildMI(MBB, MBBI, dl, TII.get(Mips::ADDiu), Mips::SP)
       .addReg(Mips::SP).addImm(-StackSize);
 
   // Save the return address only if the function isnt a leaf one.
   // sw  $ra, stack_loc($sp)
   if (MFI->hasCalls()) { 
-    BuildMI(MBB, MBBI, TII.get(Mips::SW))
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::SW))
         .addReg(Mips::RA).addImm(RAOffset).addReg(Mips::SP);
   }
 
@@ -427,17 +435,17 @@ emitPrologue(MachineFunction &MF) const
   // to point to the stack pointer
   if (hasFP(MF)) {
     // sw  $fp,stack_loc($sp)
-    BuildMI(MBB, MBBI, TII.get(Mips::SW))
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::SW))
       .addReg(Mips::FP).addImm(FPOffset).addReg(Mips::SP);
 
     // move $fp, $sp
-    BuildMI(MBB, MBBI, TII.get(Mips::ADDu), Mips::FP)
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::ADDu), Mips::FP)
       .addReg(Mips::SP).addReg(Mips::ZERO);
   }
 
   // PIC speficic function prologue
   if ((isPIC) && (MFI->hasCalls())) {
-    BuildMI(MBB, MBBI, TII.get(Mips::CPRESTORE))
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::CPRESTORE))
       .addImm(MipsFI->getGPStackOffset());
   }
 }
@@ -448,6 +456,7 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const
   MachineBasicBlock::iterator MBBI = prior(MBB.end());
   MachineFrameInfo *MFI            = MF.getFrameInfo();
   MipsFunctionInfo *MipsFI         = MF.getInfo<MipsFunctionInfo>();
+  DebugLoc dl = MBBI->getDebugLoc();
 
   // Get the number of bytes from FrameInfo
   int NumBytes = (int) MFI->getStackSize();
@@ -460,24 +469,24 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const
   // stack pointer
   if (hasFP(MF)) {
     // move $sp, $fp
-    BuildMI(MBB, MBBI, TII.get(Mips::ADDu), Mips::SP)
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::ADDu), Mips::SP)
       .addReg(Mips::FP).addReg(Mips::ZERO);
 
     // lw  $fp,stack_loc($sp)
-    BuildMI(MBB, MBBI, TII.get(Mips::LW))
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::LW))
       .addReg(Mips::FP).addImm(FPOffset).addReg(Mips::SP);
   }
 
   // Restore the return address only if the function isnt a leaf one.
   // lw  $ra, stack_loc($sp)
   if (MFI->hasCalls()) { 
-    BuildMI(MBB, MBBI, TII.get(Mips::LW))
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::LW))
       .addReg(Mips::RA).addImm(RAOffset).addReg(Mips::SP);
   }
 
   // adjust stack  : insert addi sp, sp, (imm)
   if (NumBytes) {
-    BuildMI(MBB, MBBI, TII.get(Mips::ADDiu), Mips::SP)
+    BuildMI(MBB, MBBI, dl, TII.get(Mips::ADDiu), Mips::SP)
       .addReg(Mips::SP).addImm(NumBytes);
   }
 }

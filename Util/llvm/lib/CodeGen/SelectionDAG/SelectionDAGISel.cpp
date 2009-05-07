@@ -12,8 +12,9 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "isel"
-#include "llvm/CodeGen/SelectionDAGISel.h"
+#include "ScheduleDAGSDNodes.h"
 #include "SelectionDAGBuild.h"
+#include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Constants.h"
 #include "llvm/CallingConv.h"
@@ -33,7 +34,6 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/ScheduleDAGSDNodes.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAG.h"
@@ -52,8 +52,6 @@
 #include <algorithm>
 using namespace llvm;
 
-static cl::opt<bool>
-EnableValueProp("enable-value-prop", cl::Hidden);
 static cl::opt<bool>
 DisableLegalizeTypes("disable-legalize-types", cl::Hidden);
 #ifndef NDEBUG
@@ -137,17 +135,17 @@ namespace llvm {
   //===--------------------------------------------------------------------===//
   /// createDefaultScheduler - This creates an instruction scheduler appropriate
   /// for the target.
-  ScheduleDAG* createDefaultScheduler(SelectionDAGISel *IS,
-                                      bool Fast) {
+  ScheduleDAGSDNodes* createDefaultScheduler(SelectionDAGISel *IS,
+                                             CodeGenOpt::Level OptLevel) {
     const TargetLowering &TLI = IS->getTargetLowering();
 
-    if (Fast)
-      return createFastDAGScheduler(IS, Fast);
+    if (OptLevel == CodeGenOpt::None)
+      return createFastDAGScheduler(IS, OptLevel);
     if (TLI.getSchedulingPreference() == TargetLowering::SchedulingForLatency)
-      return createTDListDAGScheduler(IS, Fast);
+      return createTDListDAGScheduler(IS, OptLevel);
     assert(TLI.getSchedulingPreference() ==
          TargetLowering::SchedulingForRegPressure && "Unknown sched type!");
-    return createBURRListDAGScheduler(IS, Fast);
+    return createBURRListDAGScheduler(IS, OptLevel);
   }
 }
 
@@ -157,7 +155,7 @@ namespace llvm {
 // insert.  The specified MachineInstr is created but not inserted into any
 // basic blocks, and the scheduler passes ownership of it to this method.
 MachineBasicBlock *TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                       MachineBasicBlock *MBB) {
+                                                 MachineBasicBlock *MBB) const {
   cerr << "If a target marks an instruction with "
        << "'usesCustomDAGSchedInserter', it must implement "
        << "TargetLowering::EmitInstrWithCustomInserter!\n";
@@ -264,13 +262,13 @@ static void EmitLiveInCopies(MachineBasicBlock *EntryMBB,
 // SelectionDAGISel code
 //===----------------------------------------------------------------------===//
 
-SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, bool fast) :
+SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL) :
   FunctionPass(&ID), TM(tm), TLI(*tm.getTargetLowering()),
   FuncInfo(new FunctionLoweringInfo(TLI)),
   CurDAG(new SelectionDAG(TLI, *FuncInfo)),
-  SDL(new SelectionDAGLowering(*CurDAG, TLI, *FuncInfo)),
+  SDL(new SelectionDAGLowering(*CurDAG, TLI, *FuncInfo, OL)),
   GFI(),
-  Fast(fast),
+  OptLevel(OL),
   DAGSize(0)
 {}
 
@@ -297,6 +295,12 @@ bool SelectionDAGISel::runOnFunction(Function &Fn) {
          "-fast-isel-verbose requires -fast-isel");
   assert((!EnableFastISelAbort || EnableFastISel) &&
          "-fast-isel-abort requires -fast-isel");
+
+  // Do not codegen any 'available_externally' functions at all, they have
+  // definitions outside the translation unit.
+  if (Fn.hasAvailableExternallyLinkage())
+    return false;
+
 
   // Get alias analysis for load/store combining.
   AA = &getAnalysis<AliasAnalysis>();
@@ -440,9 +444,11 @@ static void CheckDAGForTailCallsAndFixThem(SelectionDAG &DAG,
             MVT VT = Arg.getValueType();
             unsigned VReg = MF.getRegInfo().
               createVirtualRegister(TLI.getRegClassFor(VT));
-            Chain = DAG.getCopyToReg(Chain, VReg, Arg, InFlag);
+            Chain = DAG.getCopyToReg(Chain, Arg.getDebugLoc(),
+                                     VReg, Arg, InFlag);
             InFlag = Chain.getValue(1);
-            Arg = DAG.getCopyFromReg(Chain, VReg, VT, InFlag);
+            Arg = DAG.getCopyFromReg(Chain, Arg.getDebugLoc(),
+                                     VReg, VT, InFlag);
             Chain = Arg.getValue(1);
             InFlag = Arg.getValue(2);
           }
@@ -470,11 +476,8 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
   // Ensure that all instructions which are used outside of their defining
   // blocks are available as virtual registers.  Invoke is handled elsewhere.
   for (BasicBlock::iterator I = Begin; I != End; ++I)
-    if (!I->use_empty() && !isa<PHINode>(I) && !isa<InvokeInst>(I)) {
-      DenseMap<const Value*,unsigned>::iterator VMI =FuncInfo->ValueMap.find(I);
-      if (VMI != FuncInfo->ValueMap.end())
-        SDL->CopyValueToVirtualRegister(I, VMI->second);
-    }
+    if (!isa<PHINode>(I) && !isa<InvokeInst>(I))
+      SDL->CopyToExportRegsIfNeeded(I);
 
   // Handle PHI nodes in successor blocks.
   if (End == LLVMBB->end()) {
@@ -548,8 +551,8 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
         FLI.LiveOutRegInfo.resize(DestReg+1);
       FunctionLoweringInfo::LiveOutInfo &LOI = FLI.LiveOutRegInfo[DestReg];
       LOI.NumSignBits = NumSignBits;
-      LOI.KnownOne = NumSignBits;
-      LOI.KnownZero = NumSignBits;
+      LOI.KnownOne = KnownOne;
+      LOI.KnownZero = KnownZero;
     }
   }
 }
@@ -573,9 +576,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   // Run the DAG combiner in pre-legalize mode.
   if (TimePassesIsEnabled) {
     NamedRegionTimer T("DAG Combining 1", GroupName);
-    CurDAG->Combine(Unrestricted, *AA, Fast);
+    CurDAG->Combine(Unrestricted, *AA, OptLevel);
   } else {
-    CurDAG->Combine(Unrestricted, *AA, Fast);
+    CurDAG->Combine(Unrestricted, *AA, OptLevel);
   }
   
   DOUT << "Optimized lowered selection DAG:\n";
@@ -605,9 +608,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
       // Run the DAG combiner in post-type-legalize mode.
       if (TimePassesIsEnabled) {
         NamedRegionTimer T("DAG Combining after legalize types", GroupName);
-        CurDAG->Combine(NoIllegalTypes, *AA, Fast);
+        CurDAG->Combine(NoIllegalTypes, *AA, OptLevel);
       } else {
-        CurDAG->Combine(NoIllegalTypes, *AA, Fast);
+        CurDAG->Combine(NoIllegalTypes, *AA, OptLevel);
       }
 
       DOUT << "Optimized type-legalized selection DAG:\n";
@@ -619,9 +622,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 
   if (TimePassesIsEnabled) {
     NamedRegionTimer T("DAG Legalization", GroupName);
-    CurDAG->Legalize(DisableLegalizeTypes);
+    CurDAG->Legalize(DisableLegalizeTypes, OptLevel);
   } else {
-    CurDAG->Legalize(DisableLegalizeTypes);
+    CurDAG->Legalize(DisableLegalizeTypes, OptLevel);
   }
   
   DOUT << "Legalized selection DAG:\n";
@@ -632,9 +635,9 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   // Run the DAG combiner in post-legalize mode.
   if (TimePassesIsEnabled) {
     NamedRegionTimer T("DAG Combining 2", GroupName);
-    CurDAG->Combine(NoIllegalOperations, *AA, Fast);
+    CurDAG->Combine(NoIllegalOperations, *AA, OptLevel);
   } else {
-    CurDAG->Combine(NoIllegalOperations, *AA, Fast);
+    CurDAG->Combine(NoIllegalOperations, *AA, OptLevel);
   }
   
   DOUT << "Optimized legalized selection DAG:\n";
@@ -642,7 +645,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 
   if (ViewISelDAGs) CurDAG->viewGraph("isel input for " + BlockName);
   
-  if (!Fast && EnableValueProp)
+  if (OptLevel != CodeGenOpt::None)
     ComputeLiveOutVRegInfo();
 
   // Third, instruction select all of the operations to machine code, adding the
@@ -660,12 +663,12 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   if (ViewSchedDAGs) CurDAG->viewGraph("scheduler input for " + BlockName);
 
   // Schedule machine code.
-  ScheduleDAG *Scheduler;
+  ScheduleDAGSDNodes *Scheduler = CreateScheduler();
   if (TimePassesIsEnabled) {
     NamedRegionTimer T("Instruction Scheduling", GroupName);
-    Scheduler = Schedule();
+    Scheduler->Run(CurDAG, BB, BB->end());
   } else {
-    Scheduler = Schedule();
+    Scheduler->Run(CurDAG, BB, BB->end());
   }
 
   if (ViewSUnitDAGs) Scheduler->viewGraph();
@@ -824,6 +827,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
               R = FuncInfo->CreateRegForValue(BI);
           }
 
+          SDL->setCurDebugLoc(FastIS->getCurDebugLoc());
           SelectBasicBlock(LLVMBB, BI, next(BI));
           // If the instruction was codegen'd with multiple blocks,
           // inform the FastISel object where to resume inserting.
@@ -850,8 +854,12 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
     // Run SelectionDAG instruction selection on the remainder of the block
     // not handled by FastISel. If FastISel is not run, this is the entire
     // block.
-    if (BI != End)
+    if (BI != End) {
+      // If FastISel is run and it has known DebugLoc then use it.
+      if (FastIS && !FastIS->getCurDebugLoc().isUnknown())
+        SDL->setCurDebugLoc(FastIS->getCurDebugLoc());
       SelectBasicBlock(LLVMBB, BI, End);
+    }
 
     FinishBasicBlock();
   }
@@ -1062,10 +1070,11 @@ SelectionDAGISel::FinishBasicBlock() {
 }
 
 
-/// Schedule - Pick a safe ordering for instructions for each
-/// target node in the graph.
+/// Create the scheduler. If a specific scheduler was specified
+/// via the SchedulerRegistry, use it, otherwise select the
+/// one preferred by the target.
 ///
-ScheduleDAG *SelectionDAGISel::Schedule() {
+ScheduleDAGSDNodes *SelectionDAGISel::CreateScheduler() {
   RegisterScheduler::FunctionPassCtor Ctor = RegisterScheduler::getDefault();
   
   if (!Ctor) {
@@ -1073,12 +1082,8 @@ ScheduleDAG *SelectionDAGISel::Schedule() {
     RegisterScheduler::setDefault(Ctor);
   }
   
-  ScheduleDAG *Scheduler = Ctor(this, Fast);
-  Scheduler->Run(CurDAG, BB, BB->end(), BB->end());
-
-  return Scheduler;
+  return Ctor(this, OptLevel);
 }
-
 
 ScheduleHazardRecognizer *SelectionDAGISel::CreateTargetHazardRecognizer() {
   return new ScheduleHazardRecognizer();
@@ -1171,10 +1176,12 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
     unsigned Flags = cast<ConstantSDNode>(InOps[i])->getZExtValue();
     if ((Flags & 7) != 4 /*MEM*/) {
       // Just skip over this operand, copying the operands verbatim.
-      Ops.insert(Ops.end(), InOps.begin()+i, InOps.begin()+i+(Flags >> 3) + 1);
-      i += (Flags >> 3) + 1;
+      Ops.insert(Ops.end(), InOps.begin()+i,
+                 InOps.begin()+i+InlineAsm::getNumOperandRegisters(Flags) + 1);
+      i += InlineAsm::getNumOperandRegisters(Flags) + 1;
     } else {
-      assert((Flags >> 3) == 1 && "Memory operand with multiple values?");
+      assert(InlineAsm::getNumOperandRegisters(Flags) == 1 &&
+             "Memory operand with multiple values?");
       // Otherwise, this is a memory operand.  Ask the target to select it.
       std::vector<SDValue> SelOps;
       if (SelectInlineAsmMemoryOperand(InOps[i+1], 'm', SelOps)) {

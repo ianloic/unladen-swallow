@@ -15,9 +15,8 @@
 #include "clang/AST/Type.h"
 #include "clang/AST/Decl.h"
 #include "clang/Basic/IdentifierTable.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
-#include "llvm/Bitcode/Serialize.h"
-#include "llvm/Bitcode/Deserialize.h"
 using namespace clang;
 
 namespace clang {
@@ -60,19 +59,27 @@ bool operator<(DeclarationName LHS, DeclarationName RHS) {
 } // end namespace clang
 
 DeclarationName::DeclarationName(Selector Sel) {
+  if (!Sel.getAsOpaquePtr()) {
+    Ptr = StoredObjCZeroArgSelector;
+    return;
+  }
+
   switch (Sel.getNumArgs()) {
   case 0:
     Ptr = reinterpret_cast<uintptr_t>(Sel.getAsIdentifierInfo());
+    assert((Ptr & PtrMask) == 0 && "Improperly aligned IdentifierInfo");
     Ptr |= StoredObjCZeroArgSelector;
     break;
 
   case 1:
     Ptr = reinterpret_cast<uintptr_t>(Sel.getAsIdentifierInfo());
+    assert((Ptr & PtrMask) == 0 && "Improperly aligned IdentifierInfo");
     Ptr |= StoredObjCOneArgSelector;
     break;
 
   default:
     Ptr = Sel.InfoPtr & ~Selector::ArgFlags;
+    assert((Ptr & PtrMask) == 0 && "Improperly aligned MultiKeywordSelector");
     Ptr |= StoredDeclarationNameExtra;
     break;
   }
@@ -95,10 +102,13 @@ DeclarationName::NameKind DeclarationName::getNameKind() const {
     case DeclarationNameExtra::CXXConversionFunction: 
       return CXXConversionFunctionName;
 
+    case DeclarationNameExtra::CXXUsingDirective:
+      return CXXUsingDirective;
+
     default:
       // Check if we have one of the CXXOperator* enumeration values.
       if (getExtra()->ExtraKindOrNumArgs < 
-            DeclarationNameExtra::NUM_EXTRA_KINDS)
+            DeclarationNameExtra::CXXUsingDirective)
         return CXXOperatorName;
 
       return ObjCMultiArgSelector;
@@ -107,6 +117,7 @@ DeclarationName::NameKind DeclarationName::getNameKind() const {
   }
 
   // Can't actually get here.
+  assert(0 && "This should be unreachable!");
   return Identifier;
 }
 
@@ -165,6 +176,8 @@ std::string DeclarationName::getAsString() const {
       Result += Type.getAsString();
     return Result;
   }
+  case CXXUsingDirective:
+    return "<using-directive>";
   }
 
   assert(false && "Unexpected declaration name kind");
@@ -246,6 +259,17 @@ void DeclarationName::setFETokenInfo(void *T) {
   }
 }
 
+DeclarationName DeclarationName::getUsingDirectiveName() {
+  // Single instance of DeclarationNameExtra for using-directive
+  static DeclarationNameExtra UDirExtra =
+    { DeclarationNameExtra::CXXUsingDirective };
+
+  uintptr_t Ptr = reinterpret_cast<uintptr_t>(&UDirExtra);
+  Ptr |= StoredDeclarationNameExtra;
+
+  return DeclarationName(Ptr);
+}
+
 DeclarationNameTable::DeclarationNameTable() {
   CXXSpecialNamesImpl = new llvm::FoldingSet<CXXSpecialName>;
 
@@ -286,7 +310,7 @@ DeclarationNameTable::getCXXSpecialName(DeclarationName::NameKind Kind,
   switch (Kind) {
   case DeclarationName::CXXConstructorName: 
     EKind = DeclarationNameExtra::CXXConstructor;
-    assert(Ty.getCVRQualifiers() == 0 && "Constructor type must be unqualified");
+    assert(Ty.getCVRQualifiers() == 0 &&"Constructor type must be unqualified");
     break;
   case DeclarationName::CXXDestructorName:
     EKind = DeclarationNameExtra::CXXDestructor;

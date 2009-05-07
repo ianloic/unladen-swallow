@@ -1,4 +1,5 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
+
 void f(int i, int j, int k = 3);
 void f(int i, int j, int k);
 void f(int i, int j = 2, int k);
@@ -97,7 +98,7 @@ int Y::mem4(int i = a) // expected-error{{invalid use of nonstatic data member '
 // constructors.
 class Z {
 public:
-  Z(Z&, int i = 17); // expected-note{{candidate function}}
+  Z(Z&, int i = 17); // expected-note 2 {{candidate function}}
 
   void f(Z& z) { 
     Z z2;    // expected-error{{no matching constructor for initialization}}

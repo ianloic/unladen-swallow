@@ -1,14 +1,12 @@
-// RUN: clang -verify %s
+// RUN: clang-cc -verify %s
 
 @protocol P
 @end
 
 @interface INTF<P>
 - (void)IMeth;
- - (void) Meth;
 @end
 
 @implementation INTF
-- (void)IMeth { [(id<P>)self Meth]; }  // expected-warning {{method '-Meth' not found in protocol (return type defaults to 'id')}}
-- (void) Meth {}
+- (void)IMeth { [(id<P>)self Meth]; }  // expected-warning {{method '-Meth' not found (return type defaults to 'id')}}
 @end

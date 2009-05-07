@@ -197,8 +197,8 @@ void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
             // FP args go into f8..f15 as needed: (hence the ++)
             argPreg[count] = args_FP[used_FPArgs++];
             argOpc[count] = IA64::FMOV;
-            argt = newroot = DAG.getCopyFromReg(DAG.getRoot(), argVreg[count],
-                                                MVT::f64);
+            argt = newroot = DAG.getCopyFromReg(DAG.getRoot(), dl,
+                                                argVreg[count], MVT::f64);
             if (I->getType() == Type::FloatTy)
               argt = DAG.getNode(ISD::FP_ROUND, dl, MVT::f32, argt,
                                  DAG.getIntPtrConstant(0));
@@ -217,7 +217,7 @@ void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
             argPreg[count] = args_int[count];
             argOpc[count] = IA64::MOV;
             argt = newroot =
-              DAG.getCopyFromReg(DAG.getRoot(), argVreg[count], MVT::i64);
+              DAG.getCopyFromReg(DAG.getRoot(), dl, argVreg[count], MVT::i64);
             if ( getValueType(I->getType()) != MVT::i64)
               argt = DAG.getNode(ISD::TRUNCATE, dl, getValueType(I->getType()),
                   newroot);
@@ -243,7 +243,7 @@ void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
   // Create a vreg to hold the output of (what will become)
   // the "alloc" instruction
   VirtGPR = MF.getRegInfo().createVirtualRegister(getRegClassFor(MVT::i64));
-  BuildMI(&BB, TII->get(IA64::PSEUDO_ALLOC), VirtGPR);
+  BuildMI(&BB, dl, TII->get(IA64::PSEUDO_ALLOC), VirtGPR);
   // we create a PSEUDO_ALLOC (pseudo)instruction for now
 /*
   BuildMI(&BB, IA64::IDEF, 0, IA64::r1);
@@ -273,14 +273,14 @@ void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
   // here we actually do the moving of args, and store them to the stack
   // too if this is a varargs function:
   for (int i = 0; i < count && i < 8; ++i) {
-    BuildMI(&BB, TII->get(argOpc[i]), argVreg[i]).addReg(argPreg[i]);
+    BuildMI(&BB, dl, TII->get(argOpc[i]), argVreg[i]).addReg(argPreg[i]);
     if(F.isVarArg()) {
       // if this is a varargs function, we copy the input registers to the stack
       int FI = MFI->CreateFixedObject(8, tempOffset);
       tempOffset+=8;   //XXX: is it safe to use r22 like this?
-      BuildMI(&BB, TII->get(IA64::MOV), IA64::r22).addFrameIndex(FI);
+      BuildMI(&BB, dl, TII->get(IA64::MOV), IA64::r22).addFrameIndex(FI);
       // FIXME: we should use st8.spill here, one day
-      BuildMI(&BB, TII->get(IA64::ST8), IA64::r22).addReg(argPreg[i]);
+      BuildMI(&BB, dl, TII->get(IA64::ST8), IA64::r22).addReg(argPreg[i]);
     }
   }
 
@@ -423,13 +423,16 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
   SDValue InFlag;
   
   // save the current GP, SP and RP : FIXME: do we need to do all 3 always?
-  SDValue GPBeforeCall = DAG.getCopyFromReg(Chain, IA64::r1, MVT::i64, InFlag);
+  SDValue GPBeforeCall = DAG.getCopyFromReg(Chain, dl, IA64::r1, 
+                                            MVT::i64, InFlag);
   Chain = GPBeforeCall.getValue(1);
   InFlag = Chain.getValue(2);
-  SDValue SPBeforeCall = DAG.getCopyFromReg(Chain, IA64::r12, MVT::i64, InFlag);
+  SDValue SPBeforeCall = DAG.getCopyFromReg(Chain, dl, IA64::r12, 
+                                            MVT::i64, InFlag);
   Chain = SPBeforeCall.getValue(1);
   InFlag = Chain.getValue(2);
-  SDValue RPBeforeCall = DAG.getCopyFromReg(Chain, IA64::rp, MVT::i64, InFlag);
+  SDValue RPBeforeCall = DAG.getCopyFromReg(Chain, dl, IA64::rp, 
+                                            MVT::i64, InFlag);
   Chain = RPBeforeCall.getValue(1);
   InFlag = Chain.getValue(2);
 
@@ -444,8 +447,8 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
   unsigned seenConverts = 0;
   for (unsigned i = 0, e = RegValuesToPass.size(); i != e; ++i) {
     if(RegValuesToPass[i].getValueType().isFloatingPoint()) {
-      Chain = DAG.getCopyToReg(Chain, IntArgRegs[i], Converts[seenConverts++], 
-                               InFlag);
+      Chain = DAG.getCopyToReg(Chain, dl, IntArgRegs[i], 
+                               Converts[seenConverts++], InFlag);
       InFlag = Chain.getValue(1);
     }
   }
@@ -453,7 +456,7 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
   // next copy args into the usual places, these are flagged
   unsigned usedFPArgs = 0;
   for (unsigned i = 0, e = RegValuesToPass.size(); i != e; ++i) {
-    Chain = DAG.getCopyToReg(Chain,
+    Chain = DAG.getCopyToReg(Chain, dl,
       RegValuesToPass[i].getValueType().isInteger() ?
         IntArgRegs[i] : FPArgRegs[usedFPArgs++], RegValuesToPass[i], InFlag);
     InFlag = Chain.getValue(1);
@@ -486,11 +489,11 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
   InFlag = Chain.getValue(1);
 
   // restore the GP, SP and RP after the call  
-  Chain = DAG.getCopyToReg(Chain, IA64::r1, GPBeforeCall, InFlag);
+  Chain = DAG.getCopyToReg(Chain, dl, IA64::r1, GPBeforeCall, InFlag);
   InFlag = Chain.getValue(1);
-  Chain = DAG.getCopyToReg(Chain, IA64::r12, SPBeforeCall, InFlag);
+  Chain = DAG.getCopyToReg(Chain, dl, IA64::r12, SPBeforeCall, InFlag);
   InFlag = Chain.getValue(1);
-  Chain = DAG.getCopyToReg(Chain, IA64::rp, RPBeforeCall, InFlag);
+  Chain = DAG.getCopyToReg(Chain, dl, IA64::rp, RPBeforeCall, InFlag);
   InFlag = Chain.getValue(1);
  
   std::vector<MVT> RetVals;
@@ -505,10 +508,12 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
     case MVT::i1: { // bools are just like other integers (returned in r8)
       // we *could* fall through to the truncate below, but this saves a
       // few redundant predicate ops
-      SDValue boolInR8 = DAG.getCopyFromReg(Chain, IA64::r8, MVT::i64,InFlag);
+      SDValue boolInR8 = DAG.getCopyFromReg(Chain, dl, IA64::r8, 
+                                            MVT::i64,InFlag);
       InFlag = boolInR8.getValue(2);
       Chain = boolInR8.getValue(1);
-      SDValue zeroReg = DAG.getCopyFromReg(Chain, IA64::r0, MVT::i64, InFlag);
+      SDValue zeroReg = DAG.getCopyFromReg(Chain, dl, IA64::r0, 
+                                           MVT::i64, InFlag);
       InFlag = zeroReg.getValue(2);
       Chain = zeroReg.getValue(1);
       
@@ -518,7 +523,7 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
     case MVT::i8:
     case MVT::i16:
     case MVT::i32:
-      RetVal = DAG.getCopyFromReg(Chain, IA64::r8, MVT::i64, InFlag);
+      RetVal = DAG.getCopyFromReg(Chain, dl, IA64::r8, MVT::i64, InFlag);
       Chain = RetVal.getValue(1);
       
       // keep track of whether it is sign or zero extended (todo: bools?)
@@ -529,18 +534,18 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
       RetVal = DAG.getNode(ISD::TRUNCATE, dl, RetTyVT, RetVal);
       break;
     case MVT::i64:
-      RetVal = DAG.getCopyFromReg(Chain, IA64::r8, MVT::i64, InFlag);
+      RetVal = DAG.getCopyFromReg(Chain, dl, IA64::r8, MVT::i64, InFlag);
       Chain = RetVal.getValue(1);
       InFlag = RetVal.getValue(2); // XXX dead
       break;
     case MVT::f32:
-      RetVal = DAG.getCopyFromReg(Chain, IA64::F8, MVT::f64, InFlag);
+      RetVal = DAG.getCopyFromReg(Chain, dl, IA64::F8, MVT::f64, InFlag);
       Chain = RetVal.getValue(1);
       RetVal = DAG.getNode(ISD::FP_ROUND, dl, MVT::f32, RetVal,
                            DAG.getIntPtrConstant(0));
       break;
     case MVT::f64:
-      RetVal = DAG.getCopyFromReg(Chain, IA64::F8, MVT::f64, InFlag);
+      RetVal = DAG.getCopyFromReg(Chain, dl, IA64::F8, MVT::f64, InFlag);
       Chain = RetVal.getValue(1);
       InFlag = RetVal.getValue(2); // XXX dead
       break;
@@ -554,6 +559,7 @@ IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
 
 SDValue IA64TargetLowering::
 LowerOperation(SDValue Op, SelectionDAG &DAG) {
+  DebugLoc dl = Op.getDebugLoc();
   switch (Op.getOpcode()) {
   default: assert(0 && "Should not custom lower this!");
   case ISD::GlobalTLSAddress:
@@ -566,21 +572,21 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) {
       assert(0 && "Do not know how to return this many arguments!");
       abort();
     case 1: 
-      AR_PFSVal = DAG.getCopyFromReg(Op.getOperand(0), VirtGPR, MVT::i64);
-      AR_PFSVal = DAG.getCopyToReg(AR_PFSVal.getValue(1), IA64::AR_PFS, 
+      AR_PFSVal = DAG.getCopyFromReg(Op.getOperand(0), dl, VirtGPR, MVT::i64);
+      AR_PFSVal = DAG.getCopyToReg(AR_PFSVal.getValue(1), dl, IA64::AR_PFS, 
                                    AR_PFSVal);
-      return DAG.getNode(IA64ISD::RET_FLAG, MVT::Other, AR_PFSVal);
+      return DAG.getNode(IA64ISD::RET_FLAG, dl, MVT::Other, AR_PFSVal);
     case 3: {
       // Copy the result into the output register & restore ar.pfs
       MVT ArgVT = Op.getOperand(1).getValueType();
       unsigned ArgReg = ArgVT.isInteger() ? IA64::r8 : IA64::F8;
 
-      AR_PFSVal = DAG.getCopyFromReg(Op.getOperand(0), VirtGPR, MVT::i64);
-      Copy = DAG.getCopyToReg(AR_PFSVal.getValue(1), ArgReg, Op.getOperand(1),
-                              SDValue());
-      AR_PFSVal = DAG.getCopyToReg(Copy.getValue(0), IA64::AR_PFS, AR_PFSVal,
-                                   Copy.getValue(1));
-      return DAG.getNode(IA64ISD::RET_FLAG, MVT::Other,
+      AR_PFSVal = DAG.getCopyFromReg(Op.getOperand(0), dl, VirtGPR, MVT::i64);
+      Copy = DAG.getCopyToReg(AR_PFSVal.getValue(1), dl, ArgReg, 
+                              Op.getOperand(1), SDValue());
+      AR_PFSVal = DAG.getCopyToReg(Copy.getValue(0), dl, 
+                                   IA64::AR_PFS, AR_PFSVal, Copy.getValue(1));
+      return DAG.getNode(IA64ISD::RET_FLAG, dl, MVT::Other,
                          AR_PFSVal, AR_PFSVal.getValue(1));
     }
     }
@@ -589,24 +595,24 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) {
   case ISD::VAARG: {
     MVT VT = getPointerTy();
     const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
-    SDValue VAList = DAG.getLoad(VT, Op.getOperand(0), Op.getOperand(1), 
+    SDValue VAList = DAG.getLoad(VT, dl, Op.getOperand(0), Op.getOperand(1), 
                                    SV, 0);
     // Increment the pointer, VAList, to the next vaarg
-    SDValue VAIncr = DAG.getNode(ISD::ADD, VT, VAList, 
+    SDValue VAIncr = DAG.getNode(ISD::ADD, dl, VT, VAList, 
                                    DAG.getConstant(VT.getSizeInBits()/8,
                                                    VT));
     // Store the incremented VAList to the legalized pointer
-    VAIncr = DAG.getStore(VAList.getValue(1), VAIncr,
+    VAIncr = DAG.getStore(VAList.getValue(1), dl, VAIncr,
                           Op.getOperand(1), SV, 0);
     // Load the actual argument out of the pointer VAList
-    return DAG.getLoad(Op.getValueType(), VAIncr, VAList, NULL, 0);
+    return DAG.getLoad(Op.getValueType(), dl, VAIncr, VAList, NULL, 0);
   }
   case ISD::VASTART: {
     // vastart just stores the address of the VarArgsFrameIndex slot into the
     // memory location argument.
     SDValue FR = DAG.getFrameIndex(VarArgsFrameIndex, MVT::i64);
     const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
-    return DAG.getStore(Op.getOperand(0), FR, Op.getOperand(1), SV, 0);
+    return DAG.getStore(Op.getOperand(0), dl, FR, Op.getOperand(1), SV, 0);
   }
   // Frame & Return address.  Currently unimplemented
   case ISD::RETURNADDR:         break;

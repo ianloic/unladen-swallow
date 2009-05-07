@@ -1,4 +1,4 @@
-// RUN: clang -emit-llvm -o %t %s &&
+// RUN: clang-cc -emit-llvm -o %t %s &&
 // RUN: not grep __builtin %t
 
 #include <stdio.h>
@@ -77,9 +77,18 @@ int main() {
   Q(powif, (1.2f, N));
   Q(powil, (1.2f, N));
 
-  // Object size checking
+  // Lib functions
   int a, b, n = random(); // Avoid optimizing out.
   char s0[10], s1[] = "Hello";
+  V(strcat, (s0, s1));
+  V(strcmp, (s0, s1));
+  V(strncat, (s0, s1, n));
+  V(strchr, (s0, s1[0]));
+  V(strrchr, (s0, s1[0]));
+  V(strcpy, (s0, s1));
+  V(strncpy, (s0, s1, n));
+  
+  // Object size checking
   V(__memset_chk, (s0, 0, sizeof s0, n));
   V(__memcpy_chk, (s0, s1, sizeof s0, n));
   V(__memmove_chk, (s0, s1, sizeof s0, n));
@@ -100,7 +109,16 @@ int main() {
   // FIXME
   // V(clear_cache, (&N, &N+1));
   V(trap, ());
+  P(extract_return_addr, (&N));
 
   return 0;
+}
+
+
+
+void strcat() {}
+
+void foo() {
+ __builtin_strcat(0, 0);
 }
 

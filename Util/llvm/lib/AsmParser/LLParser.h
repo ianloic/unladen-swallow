@@ -27,6 +27,8 @@ namespace llvm {
   class Instruction;
   class Constant;
   class GlobalValue;
+  class MDString;
+  class MDNode;
   struct ValID;
 
   class LLParser {
@@ -139,10 +141,10 @@ namespace llvm {
     bool ParseAlias(const std::string &Name, LocTy Loc, unsigned Visibility);
 
     // Type Parsing.
-    bool ParseType(PATypeHolder &Result);
-    bool ParseType(PATypeHolder &Result, LocTy &Loc) {
+    bool ParseType(PATypeHolder &Result, bool AllowVoid = false);
+    bool ParseType(PATypeHolder &Result, LocTy &Loc, bool AllowVoid = false) {
       Loc = Lex.getLoc();
-      return ParseType(Result);
+      return ParseType(Result, AllowVoid);
     }
     bool ParseTypeRec(PATypeHolder &H);
     bool ParseStructType(PATypeHolder &H, bool Packed);
@@ -156,6 +158,7 @@ namespace llvm {
     bool ParseGlobalValue(const Type *Ty, Constant *&V);
     bool ParseGlobalTypeAndValue(Constant *&V);
     bool ParseGlobalValueVector(SmallVectorImpl<Constant*> &Elts);
+    bool ParseMDNodeVector(SmallVectorImpl<Constant*> &);
 
 
     // Function Semantic Analysis.

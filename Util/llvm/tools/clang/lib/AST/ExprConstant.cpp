@@ -42,18 +42,15 @@ struct EvalInfo {
   /// EvalResult - Contains information about the evaluation.
   Expr::EvalResult &EvalResult;
 
-  /// ShortCircuit - will be greater than zero if the current subexpression has
-  /// will not be evaluated because it's short-circuited (according to C rules).
-  unsigned ShortCircuit;
-
   EvalInfo(ASTContext &ctx, Expr::EvalResult& evalresult) : Ctx(ctx), 
-           EvalResult(evalresult), ShortCircuit(0) {}
+           EvalResult(evalresult) {}
 };
 
 
 static bool EvaluateLValue(const Expr *E, APValue &Result, EvalInfo &Info);
 static bool EvaluatePointer(const Expr *E, APValue &Result, EvalInfo &Info);
 static bool EvaluateInteger(const Expr *E, APSInt  &Result, EvalInfo &Info);
+static bool EvaluateIntegerOrLValue(const Expr *E, APValue  &Result, EvalInfo &Info);
 static bool EvaluateFloat(const Expr *E, APFloat &Result, EvalInfo &Info);
 static bool EvaluateComplex(const Expr *E, APValue &Result, EvalInfo &Info);
 
@@ -74,13 +71,25 @@ static bool HandleConversionToBool(Expr* E, bool& Result, EvalInfo &Info) {
       return false;
     Result = !FloatResult.isZero();
     return true;
-  } else if (E->getType()->isPointerType()) {
+  } else if (E->getType()->hasPointerRepresentation()) {
     APValue PointerResult;
     if (!EvaluatePointer(E, PointerResult, Info))
       return false;
     // FIXME: Is this accurate for all kinds of bases?  If not, what would
     // the check look like?
     Result = PointerResult.getLValueBase() || PointerResult.getLValueOffset();
+    return true;
+  } else if (E->getType()->isAnyComplexType()) {
+    APValue ComplexResult;
+    if (!EvaluateComplex(E, ComplexResult, Info))
+      return false;
+    if (ComplexResult.isComplexFloat()) {
+      Result = !ComplexResult.getComplexFloatReal().isZero() ||
+               !ComplexResult.getComplexFloatImag().isZero();
+    } else {
+      Result = ComplexResult.getComplexIntReal().getBoolValue() ||
+               ComplexResult.getComplexIntImag().getBoolValue();
+    }
     return true;
   }
 
@@ -142,21 +151,24 @@ public:
   LValueExprEvaluator(EvalInfo &info) : Info(info) {}
 
   APValue VisitStmt(Stmt *S) {
-#if 0
-    // FIXME: Remove this when we support more expressions.
-    printf("Unhandled pointer statement\n");
-    S->dump();  
-#endif
     return APValue();
   }
 
   APValue VisitParenExpr(ParenExpr *E) { return Visit(E->getSubExpr()); }
   APValue VisitDeclRefExpr(DeclRefExpr *E);
+  APValue VisitBlockExpr(BlockExpr *E);
   APValue VisitPredefinedExpr(PredefinedExpr *E) { return APValue(E, 0); }
   APValue VisitCompoundLiteralExpr(CompoundLiteralExpr *E);
   APValue VisitMemberExpr(MemberExpr *E);
   APValue VisitStringLiteral(StringLiteral *E) { return APValue(E, 0); }
+  APValue VisitObjCEncodeExpr(ObjCEncodeExpr *E) { return APValue(E, 0); }
   APValue VisitArraySubscriptExpr(ArraySubscriptExpr *E);
+  APValue VisitUnaryDeref(UnaryOperator *E);
+  APValue VisitUnaryExtension(const UnaryOperator *E)
+    { return Visit(E->getSubExpr()); }
+  APValue VisitChooseExpr(const ChooseExpr *E)
+    { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+  // FIXME: Missing: __real__, __imag__
 };
 } // end anonymous namespace
 
@@ -171,6 +183,14 @@ APValue LValueExprEvaluator::VisitDeclRefExpr(DeclRefExpr *E)
     return APValue();
   
   return APValue(E, 0); 
+}
+
+APValue LValueExprEvaluator::VisitBlockExpr(BlockExpr *E)
+{ 
+  if (E->hasBlockDeclRefExprs())
+    return APValue();
+    
+  return APValue(E, 0);
 }
 
 APValue LValueExprEvaluator::VisitCompoundLiteralExpr(CompoundLiteralExpr *E) {
@@ -202,8 +222,8 @@ APValue LValueExprEvaluator::VisitMemberExpr(MemberExpr *E) {
     
   // FIXME: This is linear time.
   unsigned i = 0;
-  for (RecordDecl::field_iterator Field = RD->field_begin(),
-                               FieldEnd = RD->field_end();
+  for (RecordDecl::field_iterator Field = RD->field_begin(Info.Ctx),
+                               FieldEnd = RD->field_end(Info.Ctx);
        Field != FieldEnd; (void)++Field, ++i) {
     if (*Field == FD)
       break;
@@ -234,6 +254,14 @@ APValue LValueExprEvaluator::VisitArraySubscriptExpr(ArraySubscriptExpr *E)
   return Result;
 }
 
+APValue LValueExprEvaluator::VisitUnaryDeref(UnaryOperator *E)
+{
+  APValue Result;
+  if (!EvaluatePointer(E->getSubExpr(), Result, Info))
+    return APValue();
+  return Result;
+}
+
 //===----------------------------------------------------------------------===//
 // Pointer Evaluation
 //===----------------------------------------------------------------------===//
@@ -254,18 +282,30 @@ public:
 
   APValue VisitBinaryOperator(const BinaryOperator *E);
   APValue VisitCastExpr(const CastExpr* E);
-  APValue VisitUnaryOperator(const UnaryOperator *E);
+  APValue VisitUnaryExtension(const UnaryOperator *E)
+      { return Visit(E->getSubExpr()); }
+  APValue VisitUnaryAddrOf(const UnaryOperator *E);
   APValue VisitObjCStringLiteral(ObjCStringLiteral *E)
       { return APValue(E, 0); }
   APValue VisitAddrLabelExpr(AddrLabelExpr *E)
       { return APValue(E, 0); }
   APValue VisitCallExpr(CallExpr *E);
+  APValue VisitBlockExpr(BlockExpr *E) {
+    if (!E->hasBlockDeclRefExprs())
+      return APValue(E, 0);
+    return APValue();
+  }
+  APValue VisitImplicitValueInitExpr(ImplicitValueInitExpr *E)
+      { return APValue((Expr*)0, 0); }
   APValue VisitConditionalOperator(ConditionalOperator *E);
+  APValue VisitChooseExpr(ChooseExpr *E)
+    { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+  // FIXME: Missing: @protocol, @selector
 };
 } // end anonymous namespace
 
 static bool EvaluatePointer(const Expr* E, APValue& Result, EvalInfo &Info) {
-  if (!E->getType()->isPointerType())
+  if (!E->getType()->hasPointerRepresentation())
     return false;
   Result = PointerExprEvaluator(Info).Visit(const_cast<Expr*>(E));
   return Result.isLValue();
@@ -290,7 +330,13 @@ APValue PointerExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
     return APValue();
 
   QualType PointeeType = PExp->getType()->getAsPointerType()->getPointeeType();
-  uint64_t SizeOfPointee = Info.Ctx.getTypeSize(PointeeType) / 8;
+  uint64_t SizeOfPointee;
+  
+  // Explicitly handle GNU void* and function pointer arithmetic extensions.
+  if (PointeeType->isVoidType() || PointeeType->isFunctionType())
+    SizeOfPointee = 1;
+  else
+    SizeOfPointee = Info.Ctx.getTypeSize(PointeeType) / 8;
 
   uint64_t Offset = ResultLValue.getLValueOffset();
 
@@ -302,18 +348,10 @@ APValue PointerExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   return APValue(ResultLValue.getLValueBase(), Offset);
 }
 
-APValue PointerExprEvaluator::VisitUnaryOperator(const UnaryOperator *E) {
-  if (E->getOpcode() == UnaryOperator::Extension) {
-    // FIXME: Deal with warnings?
-    return Visit(E->getSubExpr());
-  }
-
-  if (E->getOpcode() == UnaryOperator::AddrOf) {
-    APValue result;
-    if (EvaluateLValue(E->getSubExpr(), result, Info))
-      return result;
-  }
-
+APValue PointerExprEvaluator::VisitUnaryAddrOf(const UnaryOperator *E) {
+  APValue result;
+  if (EvaluateLValue(E->getSubExpr(), result, Info))
+    return result;
   return APValue();
 }
   
@@ -330,14 +368,21 @@ APValue PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
   }
   
   if (SubExpr->getType()->isIntegralType()) {
-    llvm::APSInt Result(32);
-    if (EvaluateInteger(SubExpr, Result, Info)) {
-      Result.extOrTrunc((unsigned)Info.Ctx.getTypeSize(E->getType()));
-      return APValue(0, Result.getZExtValue());
+    APValue Result;
+    if (!EvaluateIntegerOrLValue(SubExpr, Result, Info))
+      return APValue();
+
+    if (Result.isInt()) {
+      Result.getInt().extOrTrunc((unsigned)Info.Ctx.getTypeSize(E->getType()));
+      return APValue(0, Result.getInt().getZExtValue());
     }
+    
+    // Cast is of an lvalue, no need to change value.
+    return Result;
   }
 
   if (SubExpr->getType()->isFunctionType() ||
+      SubExpr->getType()->isBlockPointerType() ||
       SubExpr->getType()->isArrayType()) {
     APValue Result;
     if (EvaluateLValue(SubExpr, Result, Info))
@@ -345,12 +390,12 @@ APValue PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
     return APValue();
   }
 
-  //assert(0 && "Unhandled cast");
   return APValue();
 }  
 
 APValue PointerExprEvaluator::VisitCallExpr(CallExpr *E) {
-  if (E->isBuiltinCall() == Builtin::BI__builtin___CFStringMakeConstantString)
+  if (E->isBuiltinCall(Info.Ctx) == 
+        Builtin::BI__builtin___CFStringMakeConstantString)
     return APValue(E, 0);
   return APValue();
 }
@@ -376,6 +421,7 @@ namespace {
   class VISIBILITY_HIDDEN VectorExprEvaluator
   : public StmtVisitor<VectorExprEvaluator, APValue> {
     EvalInfo &Info;
+    APValue GetZeroVector(QualType VecType);
   public:
     
     VectorExprEvaluator(EvalInfo &info) : Info(info) {}
@@ -384,10 +430,28 @@ namespace {
       return APValue();
     }
     
-    APValue VisitParenExpr(ParenExpr *E) { return Visit(E->getSubExpr()); }
+    APValue VisitParenExpr(ParenExpr *E)
+        { return Visit(E->getSubExpr()); }
+    APValue VisitUnaryExtension(const UnaryOperator *E)
+      { return Visit(E->getSubExpr()); }
+    APValue VisitUnaryPlus(const UnaryOperator *E)
+      { return Visit(E->getSubExpr()); }
+    APValue VisitUnaryReal(const UnaryOperator *E)
+      { return Visit(E->getSubExpr()); }
+    APValue VisitImplicitValueInitExpr(const ImplicitValueInitExpr *E)
+      { return GetZeroVector(E->getType()); }
     APValue VisitCastExpr(const CastExpr* E);
     APValue VisitCompoundLiteralExpr(const CompoundLiteralExpr *E);
     APValue VisitInitListExpr(const InitListExpr *E);
+    APValue VisitConditionalOperator(const ConditionalOperator *E);
+    APValue VisitChooseExpr(const ChooseExpr *E)
+      { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+    APValue VisitUnaryImag(const UnaryOperator *E);
+    // FIXME: Missing: unary -, unary ~, binary add/sub/mul/div,
+    //                 binary comparisons, binary and/or/xor,
+    //                 shufflevector, ExtVectorElementExpr
+    //        (Note that these require implementing conversions
+    //         between vector types.)
   };
 } // end anonymous namespace
 
@@ -417,27 +481,67 @@ APValue
 VectorExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
   const VectorType *VT = E->getType()->getAsVectorType();
   unsigned NumInits = E->getNumInits();
-
-  if (!VT || VT->getNumElements() != NumInits)
-    return APValue();
+  unsigned NumElements = VT->getNumElements();
   
   QualType EltTy = VT->getElementType();
   llvm::SmallVector<APValue, 4> Elements;
 
-  for (unsigned i = 0; i < NumInits; i++) {
+  for (unsigned i = 0; i < NumElements; i++) {
     if (EltTy->isIntegerType()) {
       llvm::APSInt sInt(32);
-      if (!EvaluateInteger(E->getInit(i), sInt, Info))
-        return APValue();
+      if (i < NumInits) {
+        if (!EvaluateInteger(E->getInit(i), sInt, Info))
+          return APValue();
+      } else {
+        sInt = Info.Ctx.MakeIntValue(0, EltTy);
+      }
       Elements.push_back(APValue(sInt));
     } else {
       llvm::APFloat f(0.0);
-      if (!EvaluateFloat(E->getInit(i), f, Info))
-        return APValue();
+      if (i < NumInits) {
+        if (!EvaluateFloat(E->getInit(i), f, Info))
+          return APValue();
+      } else {
+        f = APFloat::getZero(Info.Ctx.getFloatTypeSemantics(EltTy));
+      }
       Elements.push_back(APValue(f));
     }
   }
   return APValue(&Elements[0], Elements.size());
+}
+
+APValue 
+VectorExprEvaluator::GetZeroVector(QualType T) {
+  const VectorType *VT = T->getAsVectorType();
+  QualType EltTy = VT->getElementType();
+  APValue ZeroElement;
+  if (EltTy->isIntegerType())
+    ZeroElement = APValue(Info.Ctx.MakeIntValue(0, EltTy));
+  else
+    ZeroElement =
+        APValue(APFloat::getZero(Info.Ctx.getFloatTypeSemantics(EltTy)));
+
+  llvm::SmallVector<APValue, 4> Elements(VT->getNumElements(), ZeroElement);
+  return APValue(&Elements[0], Elements.size());
+}
+
+APValue VectorExprEvaluator::VisitConditionalOperator(const ConditionalOperator *E) {
+  bool BoolResult;
+  if (!HandleConversionToBool(E->getCond(), BoolResult, Info))
+    return APValue();
+
+  Expr* EvalExpr = BoolResult ? E->getTrueExpr() : E->getFalseExpr();
+
+  APValue Result;
+  if (EvaluateVector(EvalExpr, Result, Info))
+    return Result;
+  return APValue();
+}
+
+APValue VectorExprEvaluator::VisitUnaryImag(const UnaryOperator *E) {
+  if (!E->getSubExpr()->isEvaluatable(Info.Ctx))
+    Info.EvalResult.HasSideEffects = true;
+  return GetZeroVector(E->getType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -448,33 +552,37 @@ namespace {
 class VISIBILITY_HIDDEN IntExprEvaluator
   : public StmtVisitor<IntExprEvaluator, bool> {
   EvalInfo &Info;
-  APSInt &Result;
+  APValue &Result;
 public:
-  IntExprEvaluator(EvalInfo &info, APSInt &result)
+  IntExprEvaluator(EvalInfo &info, APValue &result)
     : Info(info), Result(result) {}
 
-  unsigned getIntTypeSizeInBits(QualType T) const {
-    return (unsigned)Info.Ctx.getIntWidth(T);
+  bool Success(const llvm::APSInt &SI, const Expr *E) {
+    assert(E->getType()->isIntegralType() && "Invalid evaluation result.");
+    assert(SI.isSigned() == E->getType()->isSignedIntegerType() &&
+           "Invalid evaluation result.");
+    assert(SI.getBitWidth() == Info.Ctx.getIntWidth(E->getType()) &&
+           "Invalid evaluation result.");
+    Result = APValue(SI);
+    return true;
   }
-  
-  bool Extension(SourceLocation L, diag::kind D, const Expr *E) {
-    Info.EvalResult.DiagLoc = L;
-    Info.EvalResult.Diag = D;
-    Info.EvalResult.DiagExpr = E;
-    return true;  // still a constant.
+
+  bool Success(const llvm::APInt &I, const Expr *E) {
+    assert(E->getType()->isIntegralType() && "Invalid evaluation result.");
+    assert(I.getBitWidth() == Info.Ctx.getIntWidth(E->getType()) &&
+           "Invalid evaluation result.");
+    Result = APValue(APSInt(I));
+    Result.getInt().setIsUnsigned(E->getType()->isUnsignedIntegerType());
+    return true;
   }
-    
+
+  bool Success(uint64_t Value, const Expr *E) {
+    assert(E->getType()->isIntegralType() && "Invalid evaluation result.");
+    Result = APValue(Info.Ctx.MakeIntValue(Value, E->getType()));
+    return true;
+  }
+
   bool Error(SourceLocation L, diag::kind D, const Expr *E) {
-    // If this is in an unevaluated portion of the subexpression, ignore the
-    // error.
-    if (Info.ShortCircuit) {
-      // If error is ignored because the value isn't evaluated, get the real
-      // type at least to prevent errors downstream.
-      Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-      Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-      return true;
-    }
-    
     // Take the first error.
     if (Info.EvalResult.Diag == 0) {
       Info.EvalResult.DiagLoc = L;
@@ -500,26 +608,20 @@ public:
   bool VisitParenExpr(ParenExpr *E) { return Visit(E->getSubExpr()); }
 
   bool VisitIntegerLiteral(const IntegerLiteral *E) {
-    Result = E->getValue();
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    return Success(E->getValue(), E);
   }
   bool VisitCharacterLiteral(const CharacterLiteral *E) {
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    Result = E->getValue();
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    return Success(E->getValue(), E);
   }
   bool VisitTypesCompatibleExpr(const TypesCompatibleExpr *E) {
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
     // Per gcc docs "this built-in function ignores top level
     // qualifiers".  We need to use the canonical version to properly
     // be able to strip CRV qualifiers from the type.
     QualType T0 = Info.Ctx.getCanonicalType(E->getArgType1());
     QualType T1 = Info.Ctx.getCanonicalType(E->getArgType2());
-    Result = Info.Ctx.typesAreCompatible(T0.getUnqualifiedType(), 
-                                         T1.getUnqualifiedType());
-    return true;
+    return Success(Info.Ctx.typesAreCompatible(T0.getUnqualifiedType(), 
+                                               T1.getUnqualifiedType()),
+                   E);
   }
   bool VisitDeclRefExpr(const DeclRefExpr *E);
   bool VisitCallExpr(const CallExpr *E);
@@ -531,50 +633,76 @@ public:
   bool VisitSizeOfAlignOfExpr(const SizeOfAlignOfExpr *E);
 
   bool VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr *E) {
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    Result = E->getValue();
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    return Success(E->getValue(), E);
   }
   
   bool VisitGNUNullExpr(const GNUNullExpr *E) {
-    Result = APSInt::getNullValue(getIntTypeSizeInBits(E->getType()));
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    return Success(0, E);
   }
     
   bool VisitCXXZeroInitValueExpr(const CXXZeroInitValueExpr *E) {
-    Result = APSInt::getNullValue(getIntTypeSizeInBits(E->getType()));
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    return Success(0, E);
+  }
+
+  bool VisitImplicitValueInitExpr(const ImplicitValueInitExpr *E) {
+    return Success(0, E);
   }
 
   bool VisitUnaryTypeTraitExpr(const UnaryTypeTraitExpr *E) {
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    Result = E->Evaluate();
-    return true;
+    return Success(E->EvaluateTrait(), E);
   }
+
+  bool VisitChooseExpr(const ChooseExpr *E) {
+    return Visit(E->getChosenSubExpr(Info.Ctx));
+  }
+
+  bool VisitUnaryReal(const UnaryOperator *E);
+  bool VisitUnaryImag(const UnaryOperator *E);
 
 private:
   unsigned GetAlignOfExpr(const Expr *E);
   unsigned GetAlignOfType(QualType T);
+  // FIXME: Missing: array subscript of vector, member of vector
 };
 } // end anonymous namespace
 
-static bool EvaluateInteger(const Expr* E, APSInt &Result, EvalInfo &Info) {
+static bool EvaluateIntegerOrLValue(const Expr* E, APValue &Result, EvalInfo &Info) {
+  if (!E->getType()->isIntegralType())
+    return false;
+  
   return IntExprEvaluator(Info, Result).Visit(const_cast<Expr*>(E));
+}
+
+static bool EvaluateInteger(const Expr* E, APSInt &Result, EvalInfo &Info) {
+  APValue Val;
+  if (!EvaluateIntegerOrLValue(E, Val, Info) || !Val.isInt())
+    return false;
+  Result = Val.getInt();
+  return true;
 }
 
 bool IntExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
   // Enums are integer constant exprs.
   if (const EnumConstantDecl *D = dyn_cast<EnumConstantDecl>(E->getDecl())) {
-    Result = D->getInitVal();
     // FIXME: This is an ugly hack around the fact that enums don't set their
-    // signedness consistently; see PR3173
-    Result.setIsUnsigned(!E->getType()->isSignedIntegerType());
-    return true;
+    // signedness consistently; see PR3173.
+    APSInt SI = D->getInitVal();
+    SI.setIsUnsigned(!E->getType()->isSignedIntegerType());
+    // FIXME: This is an ugly hack around the fact that enums don't
+    // set their width (!?!) consistently; see PR3173.
+    SI.extOrTrunc(Info.Ctx.getIntWidth(E->getType()));
+    return Success(SI, E);
   }
-  
+
+  // In C++, const, non-volatile integers initialized with ICEs are ICEs.
+  // In C, they can also be folded, although they are not ICEs.
+  if (E->getType().getCVRQualifiers() == QualType::Const) {
+    if (const VarDecl *D = dyn_cast<VarDecl>(E->getDecl())) {
+      if (const Expr *Init = D->getInit())
+        return Visit(const_cast<Expr*>(Init));
+    }
+  }
+
   // Otherwise, random variable references are not constants.
   return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
 }
@@ -583,6 +711,7 @@ bool IntExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
 /// as GCC.
 static int EvaluateBuiltinClassifyType(const CallExpr *E) {
   // The following enum mimics the values returned by GCC.
+  // FIXME: Does GCC differ between lvalue and rvalue references here?
   enum gcc_type_class {
     no_type_class = -1,
     void_type_class, integer_type_class, char_type_class,
@@ -635,21 +764,16 @@ static int EvaluateBuiltinClassifyType(const CallExpr *E) {
 }
 
 bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
-  Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-  
-  switch (E->isBuiltinCall()) {
+  switch (E->isBuiltinCall(Info.Ctx)) {
   default:
     return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
   case Builtin::BI__builtin_classify_type:
-    Result.setIsSigned(true);
-    Result = EvaluateBuiltinClassifyType(E);
-    return true;
+    return Success(EvaluateBuiltinClassifyType(E), E);
     
   case Builtin::BI__builtin_constant_p:
     // __builtin_constant_p always has one operand: it returns true if that
     // operand can be folded, false otherwise.
-    Result = E->getArg(0)->isEvaluatable(Info.Ctx);
-    return true;
+    return Success(E->getArg(0)->isEvaluatable(Info.Ctx), E);
   }
 }
 
@@ -658,14 +782,10 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
     if (!Visit(E->getRHS()))
       return false;
 
-    if (!Info.ShortCircuit) {
-      // If we can't evaluate the LHS, it must be because it has 
-      // side effects.
-      if (!E->getLHS()->isEvaluatable(Info.Ctx))
-        Info.EvalResult.HasSideEffects = true;
-      
-      return Extension(E->getOperatorLoc(), diag::note_comma_in_ice, E);
-    }
+    // If we can't evaluate the LHS, it might have side effects;
+    // conservatively mark it.
+    if (!E->getLHS()->isEvaluatable(Info.Ctx))
+      Info.EvalResult.HasSideEffects = true;
 
     return true;
   }
@@ -678,32 +798,14 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
     if (HandleConversionToBool(E->getLHS(), lhsResult, Info)) {
       // We were able to evaluate the LHS, see if we can get away with not
       // evaluating the RHS: 0 && X -> 0, 1 || X -> 1
-      if (lhsResult == (E->getOpcode() == BinaryOperator::LOr) || 
-          !lhsResult == (E->getOpcode() == BinaryOperator::LAnd)) {
-        Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-        Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-        Result = lhsResult;
-        
-        Info.ShortCircuit++;
-        bool rhsEvaluated = HandleConversionToBool(E->getRHS(), rhsResult, Info);
-        Info.ShortCircuit--;
-        
-        if (rhsEvaluated)
-          return true;
-        
-        // FIXME: Return an extension warning saying that the RHS could not be
-        // evaluated.
-        return true;
-      }
+      if (lhsResult == (E->getOpcode() == BinaryOperator::LOr))
+        return Success(lhsResult, E);
 
       if (HandleConversionToBool(E->getRHS(), rhsResult, Info)) {
-        Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-        Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
         if (E->getOpcode() == BinaryOperator::LOr)
-          Result = lhsResult || rhsResult;
+          return Success(lhsResult || rhsResult, E);
         else
-          Result = lhsResult && rhsResult;
-        return true;
+          return Success(lhsResult && rhsResult, E);
       }
     } else {
       if (HandleConversionToBool(E->getRHS(), rhsResult, Info)) {
@@ -711,15 +813,11 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
         // is determined by the RHS: X && 0 -> 0, X || 1 -> 1.
         if (rhsResult == (E->getOpcode() == BinaryOperator::LOr) || 
             !rhsResult == (E->getOpcode() == BinaryOperator::LAnd)) {
-          Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-          Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-          Result = rhsResult;
-          
-          // Since we werent able to evaluate the left hand side, it
+          // Since we weren't able to evaluate the left hand side, it
           // must have had side effects.
           Info.EvalResult.HasSideEffects = true;
-          
-          return true;
+
+          return Success(rhsResult, E);
         }
       }
     }
@@ -746,31 +844,27 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
       APFloat::cmpResult CR_i = 
         LHS.getComplexFloatImag().compare(RHS.getComplexFloatImag());
 
-      Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
       if (E->getOpcode() == BinaryOperator::EQ)
-        Result = (CR_r == APFloat::cmpEqual &&
-                  CR_i == APFloat::cmpEqual);
-      else if (E->getOpcode() == BinaryOperator::NE)
-        Result = ((CR_r == APFloat::cmpGreaterThan || 
-                   CR_r == APFloat::cmpLessThan) &&
-                  (CR_i == APFloat::cmpGreaterThan || 
-                   CR_i == APFloat::cmpLessThan));
-      else
-        assert(0 && "Invalid complex compartison.");
-      Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-      return true;
+        return Success((CR_r == APFloat::cmpEqual &&
+                        CR_i == APFloat::cmpEqual), E);
+      else {
+        assert(E->getOpcode() == BinaryOperator::NE &&
+               "Invalid complex comparison.");
+        return Success(((CR_r == APFloat::cmpGreaterThan || 
+                         CR_r == APFloat::cmpLessThan) &&
+                        (CR_i == APFloat::cmpGreaterThan || 
+                         CR_i == APFloat::cmpLessThan)), E);
+      }
     } else {
-      Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
       if (E->getOpcode() == BinaryOperator::EQ)
-        Result = (LHS.getComplexIntReal() == RHS.getComplexIntReal() &&
-                  LHS.getComplexIntImag() == RHS.getComplexIntImag());
-      else if (E->getOpcode() == BinaryOperator::NE)
-        Result = (LHS.getComplexIntReal() != RHS.getComplexIntReal() ||
-                  LHS.getComplexIntImag() != RHS.getComplexIntImag());
-      else
-        assert(0 && "Invalid complex compartison.");
-      Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-      return true;
+        return Success((LHS.getComplexIntReal() == RHS.getComplexIntReal() &&
+                        LHS.getComplexIntImag() == RHS.getComplexIntImag()), E);
+      else {
+        assert(E->getOpcode() == BinaryOperator::NE &&
+               "Invalid compex comparison.");
+        return Success((LHS.getComplexIntReal() != RHS.getComplexIntReal() ||
+                        LHS.getComplexIntImag() != RHS.getComplexIntImag()), E);
+      }
     }
   }
   
@@ -786,146 +880,136 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
     
     APFloat::cmpResult CR = LHS.compare(RHS);
 
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-
     switch (E->getOpcode()) {
     default:
       assert(0 && "Invalid binary operator!");
     case BinaryOperator::LT:
-      Result = CR == APFloat::cmpLessThan;
-      break;
+      return Success(CR == APFloat::cmpLessThan, E);
     case BinaryOperator::GT:
-      Result = CR == APFloat::cmpGreaterThan;
-      break;
+      return Success(CR == APFloat::cmpGreaterThan, E);
     case BinaryOperator::LE:
-      Result = CR == APFloat::cmpLessThan || CR == APFloat::cmpEqual;
-      break;
+      return Success(CR == APFloat::cmpLessThan || CR == APFloat::cmpEqual, E);
     case BinaryOperator::GE:
-      Result = CR == APFloat::cmpGreaterThan || CR == APFloat::cmpEqual;
-      break;
+      return Success(CR == APFloat::cmpGreaterThan || CR == APFloat::cmpEqual, 
+                     E);
     case BinaryOperator::EQ:
-      Result = CR == APFloat::cmpEqual;
-      break;
+      return Success(CR == APFloat::cmpEqual, E);
     case BinaryOperator::NE:
-      Result = CR == APFloat::cmpGreaterThan || CR == APFloat::cmpLessThan;
-      break;
+      return Success(CR == APFloat::cmpGreaterThan 
+                     || CR == APFloat::cmpLessThan, E);
     }
-    
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
   }
   
-  if (E->getOpcode() == BinaryOperator::Sub) {
-    if (LHSTy->isPointerType() && RHSTy->isPointerType()) {
+  if (LHSTy->isPointerType() && RHSTy->isPointerType()) {
+    if (E->getOpcode() == BinaryOperator::Sub || E->isEqualityOp()) {
       APValue LHSValue;
       if (!EvaluatePointer(E->getLHS(), LHSValue, Info))
         return false;
-      
+
       APValue RHSValue;
       if (!EvaluatePointer(E->getRHS(), RHSValue, Info))
         return false;
-      
-      // FIXME: Is this correct? What if only one of the operands has a base?
+
+      // Reject any bases; this is conservative, but good enough for
+      // common uses
       if (LHSValue.getLValueBase() || RHSValue.getLValueBase())
         return false;
-      
-      const QualType Type = E->getLHS()->getType();
-      const QualType ElementType = Type->getAsPointerType()->getPointeeType();
 
-      uint64_t D = LHSValue.getLValueOffset() - RHSValue.getLValueOffset();
-      D /= Info.Ctx.getTypeSize(ElementType) / 8;
-      
-      Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-      Result = D;
-      Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    
-      return true;
+      if (E->getOpcode() == BinaryOperator::Sub) {
+        const QualType Type = E->getLHS()->getType();
+        const QualType ElementType = Type->getAsPointerType()->getPointeeType();
+
+        uint64_t D = LHSValue.getLValueOffset() - RHSValue.getLValueOffset();
+        D /= Info.Ctx.getTypeSize(ElementType) / 8;
+
+        return Success(D, E);
+      }
+      bool Result;
+      if (E->getOpcode() == BinaryOperator::EQ) {
+        Result = LHSValue.getLValueOffset() == RHSValue.getLValueOffset();
+      } else {
+        Result = LHSValue.getLValueOffset() != RHSValue.getLValueOffset();
+      }
+      return Success(Result, E);
     }
   }
   if (!LHSTy->isIntegralType() ||
       !RHSTy->isIntegralType()) {
     // We can't continue from here for non-integral types, and they
     // could potentially confuse the following operations.
-    // FIXME: Deal with EQ and friends.
     return false;
   }
 
   // The LHS of a constant expr is always evaluated and needed.
-  llvm::APSInt RHS(32);
-  if (!Visit(E->getLHS())) {
+  if (!Visit(E->getLHS()))
     return false; // error in subexpression.
+
+  APValue RHSVal;
+  if (!EvaluateIntegerOrLValue(E->getRHS(), RHSVal, Info))
+    return false;
+
+  // Handle cases like (unsigned long)&a + 4.
+  if (E->isAdditiveOp() && Result.isLValue() && RHSVal.isInt()) {
+    uint64_t offset = Result.getLValueOffset();
+    if (E->getOpcode() == BinaryOperator::Add)
+      offset += RHSVal.getInt().getZExtValue();
+    else
+      offset -= RHSVal.getInt().getZExtValue();
+    Result = APValue(Result.getLValueBase(), offset);
+    return true;
   }
 
+  // Handle cases like 4 + (unsigned long)&a
+  if (E->getOpcode() == BinaryOperator::Add &&
+        RHSVal.isLValue() && Result.isInt()) {
+    uint64_t offset = RHSVal.getLValueOffset();
+    offset += Result.getInt().getZExtValue();
+    Result = APValue(RHSVal.getLValueBase(), offset);
+    return true;
+  }
 
-  // FIXME Maybe we want to succeed even where we can't evaluate the
-  // right side of LAnd/LOr?
-  // For example, see http://llvm.org/bugs/show_bug.cgi?id=2525 
-  if (!EvaluateInteger(E->getRHS(), RHS, Info))
+  // All the following cases expect both operands to be an integer
+  if (!Result.isInt() || !RHSVal.isInt())
     return false;
+
+  APSInt& RHS = RHSVal.getInt();
 
   switch (E->getOpcode()) {
   default:
     return Error(E->getOperatorLoc(), diag::note_invalid_subexpr_in_ice, E);
-  case BinaryOperator::Mul: Result *= RHS; return true;
-  case BinaryOperator::Add: Result += RHS; return true;
-  case BinaryOperator::Sub: Result -= RHS; return true;
-  case BinaryOperator::And: Result &= RHS; return true;
-  case BinaryOperator::Xor: Result ^= RHS; return true;
-  case BinaryOperator::Or:  Result |= RHS; return true;
+  case BinaryOperator::Mul: return Success(Result.getInt() * RHS, E);
+  case BinaryOperator::Add: return Success(Result.getInt() + RHS, E);
+  case BinaryOperator::Sub: return Success(Result.getInt() - RHS, E);
+  case BinaryOperator::And: return Success(Result.getInt() & RHS, E);
+  case BinaryOperator::Xor: return Success(Result.getInt() ^ RHS, E);
+  case BinaryOperator::Or:  return Success(Result.getInt() | RHS, E);
   case BinaryOperator::Div:
     if (RHS == 0)
       return Error(E->getOperatorLoc(), diag::note_expr_divide_by_zero, E);
-    Result /= RHS;
-    break;
+    return Success(Result.getInt() / RHS, E);
   case BinaryOperator::Rem:
     if (RHS == 0)
       return Error(E->getOperatorLoc(), diag::note_expr_divide_by_zero, E);
-    Result %= RHS;
-    break;
-  case BinaryOperator::Shl:
+    return Success(Result.getInt() % RHS, E);
+  case BinaryOperator::Shl: {
     // FIXME: Warn about out of range shift amounts!
-    Result <<= (unsigned)RHS.getLimitedValue(Result.getBitWidth()-1);
-    break;
-  case BinaryOperator::Shr:
-    Result >>= (unsigned)RHS.getLimitedValue(Result.getBitWidth()-1);
-    break;
-      
-  case BinaryOperator::LT:
-    Result = Result < RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::GT:
-    Result = Result > RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::LE:
-    Result = Result <= RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::GE:
-    Result = Result >= RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::EQ:
-    Result = Result == RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::NE:
-    Result = Result != RHS;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::LAnd:
-    Result = Result != 0 && RHS != 0;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
-  case BinaryOperator::LOr:
-    Result = Result != 0 || RHS != 0;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    break;
+    unsigned SA = 
+      (unsigned) RHS.getLimitedValue(Result.getInt().getBitWidth()-1);
+    return Success(Result.getInt() << SA, E);
   }
-
-  Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-  return true;
+  case BinaryOperator::Shr: {
+    unsigned SA = 
+      (unsigned) RHS.getLimitedValue(Result.getInt().getBitWidth()-1);
+    return Success(Result.getInt() >> SA, E);
+  }
+      
+  case BinaryOperator::LT: return Success(Result.getInt() < RHS, E);
+  case BinaryOperator::GT: return Success(Result.getInt() > RHS, E);
+  case BinaryOperator::LE: return Success(Result.getInt() <= RHS, E);
+  case BinaryOperator::GE: return Success(Result.getInt() >= RHS, E);
+  case BinaryOperator::EQ: return Success(Result.getInt() == RHS, E);
+  case BinaryOperator::NE: return Success(Result.getInt() != RHS, E);
+  }
 }
 
 bool IntExprEvaluator::VisitConditionalOperator(const ConditionalOperator *E) {
@@ -937,32 +1021,11 @@ bool IntExprEvaluator::VisitConditionalOperator(const ConditionalOperator *E) {
 }
 
 unsigned IntExprEvaluator::GetAlignOfType(QualType T) {
-  const Type *Ty = Info.Ctx.getCanonicalType(T).getTypePtr();
-  
-  // __alignof__(void) = 1 as a gcc extension.
-  if (Ty->isVoidType())
-    return 1;
-  
-  // GCC extension: alignof(function) = 4.
-  // FIXME: AlignOf shouldn't be unconditionally 4!  It should listen to the
-  // attribute(align) directive.
-  if (Ty->isFunctionType())
-    return 4;
-  
-  if (const ASQualType *ASQT = dyn_cast<ASQualType>(Ty))
-    return GetAlignOfType(QualType(ASQT->getBaseType(), 0));
-
-  // alignof VLA/incomplete array.
-  if (const ArrayType *VAT = dyn_cast<ArrayType>(Ty))
-    return GetAlignOfType(VAT->getElementType());
-  
-  // sizeof (objc class)?
-  if (isa<ObjCInterfaceType>(Ty))
-    return 1;  // FIXME: This probably isn't right.
-
   // Get information about the alignment.
   unsigned CharSize = Info.Ctx.Target.getCharWidth();
-  return Info.Ctx.getTypeAlign(Ty) / CharSize;
+
+  // FIXME: Why do we ask for the preferred alignment?
+  return Info.Ctx.getPreferredTypeAlign(T.getTypePtr()) / CharSize;
 }
 
 unsigned IntExprEvaluator::GetAlignOfExpr(const Expr *E) {
@@ -971,10 +1034,10 @@ unsigned IntExprEvaluator::GetAlignOfExpr(const Expr *E) {
   // alignof decl is always accepted, even if it doesn't make sense: we default
   // to 1 in those cases. 
   if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E))
-    return Info.Ctx.getDeclAlign(DRE->getDecl());
-    
+    return Info.Ctx.getDeclAlignInBytes(DRE->getDecl());
+
   if (const MemberExpr *ME = dyn_cast<MemberExpr>(E))
-    return Info.Ctx.getDeclAlign(ME->getMemberDecl());
+    return Info.Ctx.getDeclAlignInBytes(ME->getMemberDecl());
 
   return GetAlignOfType(E->getType());
 }
@@ -984,60 +1047,43 @@ unsigned IntExprEvaluator::GetAlignOfExpr(const Expr *E) {
 /// expression's type.
 bool IntExprEvaluator::VisitSizeOfAlignOfExpr(const SizeOfAlignOfExpr *E) {
   QualType DstTy = E->getType();
-  // Return the result in the right width.
-  Result.zextOrTrunc(getIntTypeSizeInBits(DstTy));
-  Result.setIsUnsigned(DstTy->isUnsignedIntegerType());
 
   // Handle alignof separately.
   if (!E->isSizeOf()) {
     if (E->isArgumentType())
-      Result = GetAlignOfType(E->getArgumentType());
+      return Success(GetAlignOfType(E->getArgumentType()), E);
     else
-      Result = GetAlignOfExpr(E->getArgumentExpr());
-    return true;
+      return Success(GetAlignOfExpr(E->getArgumentExpr()), E);
   }
-  
+
   QualType SrcTy = E->getTypeOfArgument();
 
-  // sizeof(void) and __alignof__(void) = 1 as a gcc extension.
-  if (SrcTy->isVoidType()) {
-    Result = 1;
-    return true;
-  }
-  
+  // sizeof(void), __alignof__(void), sizeof(function) = 1 as a gcc
+  // extension.
+  if (SrcTy->isVoidType() || SrcTy->isFunctionType())
+    return Success(1, E);
+
   // sizeof(vla) is not a constantexpr: C99 6.5.3.4p2.
   if (!SrcTy->isConstantSizeType())
     return false;
-  
-  // GCC extension: sizeof(function) = 1.
-  if (SrcTy->isFunctionType()) {
-    Result = 1;
-    return true;
-  }
-
-  if (SrcTy->isObjCInterfaceType()) {
-    // Slightly unusual case: the size of an ObjC interface type is the
-    // size of the class.  This code intentionally falls through to the normal
-    // case.
-    ObjCInterfaceDecl *OI = SrcTy->getAsObjCInterfaceType()->getDecl();
-    RecordDecl *RD = const_cast<RecordDecl*>(Info.Ctx.addRecordToClass(OI));
-    SrcTy = Info.Ctx.getTagDeclType(static_cast<TagDecl*>(RD));
-  }
 
   // Get information about the size.
-  unsigned CharSize = Info.Ctx.Target.getCharWidth();
-  Result = Info.Ctx.getTypeSize(SrcTy) / CharSize;
-  return true;
+  unsigned BitWidth = Info.Ctx.getTypeSize(SrcTy);
+  return Success(BitWidth / Info.Ctx.Target.getCharWidth(), E);
 }
 
 bool IntExprEvaluator::VisitUnaryOperator(const UnaryOperator *E) {
   // Special case unary operators that do not need their subexpression
   // evaluated.  offsetof/sizeof/alignof are all special.
   if (E->isOffsetOfOp()) {
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    Result = E->evaluateOffsetOf(Info.Ctx);
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    return true;
+    // The AST for offsetof is defined in such a way that we can just
+    // directly Evaluate it as an l-value.
+    APValue LV;
+    if (!EvaluateLValue(E->getSubExpr(), LV, Info))
+      return false;
+    if (LV.getLValueBase())
+      return false;
+    return Success(LV.getLValueOffset(), E);
   }
 
   if (E->getOpcode() == UnaryOperator::LNot) {
@@ -1045,11 +1091,12 @@ bool IntExprEvaluator::VisitUnaryOperator(const UnaryOperator *E) {
     bool bres;
     if (!HandleConversionToBool(E->getSubExpr(), bres, Info))
       return false;
-    Result.zextOrTrunc(getIntTypeSizeInBits(E->getType()));
-    Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-    Result = !bres;
-    return true;
+    return Success(!bres, E);
   }
+
+  // Only handle integral operations...
+  if (!E->getSubExpr()->getType()->isIntegralType())
+    return false;
 
   // Get the operand value into 'Result'.
   if (!Visit(E->getSubExpr()))
@@ -1063,19 +1110,17 @@ bool IntExprEvaluator::VisitUnaryOperator(const UnaryOperator *E) {
   case UnaryOperator::Extension:
     // FIXME: Should extension allow i-c-e extension expressions in its scope?
     // If so, we could clear the diagnostic ID.
+    return true;
   case UnaryOperator::Plus:
     // The result is always just the subexpr. 
-    break;
+    return true;
   case UnaryOperator::Minus:
-    Result = -Result;
-    break;
+    if (!Result.isInt()) return false;
+    return Success(-Result.getInt(), E);
   case UnaryOperator::Not:
-    Result = ~Result;
-    break;
+    if (!Result.isInt()) return false;
+    return Success(~Result.getInt(), E);
   }
-
-  Result.setIsUnsigned(E->getType()->isUnsignedIntegerType());
-  return true;
 }
   
 /// HandleCast - This is used to evaluate implicit or explicit casts where the
@@ -1083,52 +1128,108 @@ bool IntExprEvaluator::VisitUnaryOperator(const UnaryOperator *E) {
 bool IntExprEvaluator::VisitCastExpr(CastExpr *E) {
   Expr *SubExpr = E->getSubExpr();
   QualType DestType = E->getType();
-
-  unsigned DestWidth = getIntTypeSizeInBits(DestType);
+  QualType SrcType = SubExpr->getType();
 
   if (DestType->isBooleanType()) {
     bool BoolResult;
     if (!HandleConversionToBool(SubExpr, BoolResult, Info))
       return false;
-    Result.zextOrTrunc(DestWidth);
-    Result.setIsUnsigned(DestType->isUnsignedIntegerType());
-    Result = BoolResult;
-    return true;
+    return Success(BoolResult, E);
   }
 
   // Handle simple integer->integer casts.
-  if (SubExpr->getType()->isIntegralType()) {
+  if (SrcType->isIntegralType()) {
     if (!Visit(SubExpr))
       return false;
 
-    Result = HandleIntToIntCast(DestType, SubExpr->getType(), Result, Info.Ctx);
-    return true;
+    if (!Result.isInt()) {
+      // Only allow casts of lvalues if they are lossless.
+      return Info.Ctx.getTypeSize(DestType) == Info.Ctx.getTypeSize(SrcType);
+    }
+
+    return Success(HandleIntToIntCast(DestType, SrcType,
+                                      Result.getInt(), Info.Ctx), E);
   }
   
   // FIXME: Clean this up!
-  if (SubExpr->getType()->isPointerType()) {
+  if (SrcType->isPointerType()) {
     APValue LV;
     if (!EvaluatePointer(SubExpr, LV, Info))
       return false;
 
-    if (LV.getLValueBase())
+    if (LV.getLValueBase()) {
+      // Only allow based lvalue casts if they are lossless.
+      if (Info.Ctx.getTypeSize(DestType) != Info.Ctx.getTypeSize(SrcType))
+        return false;
+
+      Result = LV;
+      return true;
+    }
+
+    APSInt AsInt = Info.Ctx.MakeIntValue(LV.getLValueOffset(), SrcType);
+    return Success(HandleIntToIntCast(DestType, SrcType, AsInt, Info.Ctx), E);
+  }
+
+  if (SrcType->isArrayType() || SrcType->isFunctionType()) {
+    // This handles double-conversion cases, where there's both
+    // an l-value promotion and an implicit conversion to int.
+    APValue LV;
+    if (!EvaluateLValue(SubExpr, LV, Info))
       return false;
 
-    Result.extOrTrunc(DestWidth);
-    Result = LV.getLValueOffset();
-    Result.setIsUnsigned(DestType->isUnsignedIntegerType());
+    if (Info.Ctx.getTypeSize(DestType) != Info.Ctx.getTypeSize(Info.Ctx.VoidPtrTy))
+      return false;
+
+    Result = LV;
     return true;
   }
 
-  if (!SubExpr->getType()->isRealFloatingType())
+  if (SrcType->isAnyComplexType()) {
+    APValue C;
+    if (!EvaluateComplex(SubExpr, C, Info))
+      return false;
+    if (C.isComplexFloat())
+      return Success(HandleFloatToIntCast(DestType, SrcType,
+                                          C.getComplexFloatReal(), Info.Ctx),
+                     E);
+    else
+      return Success(HandleIntToIntCast(DestType, SrcType,
+                                        C.getComplexIntReal(), Info.Ctx), E);
+  }
+  // FIXME: Handle vectors
+
+  if (!SrcType->isRealFloatingType())
     return Error(E->getExprLoc(), diag::note_invalid_subexpr_in_ice, E);
 
   APFloat F(0.0);
   if (!EvaluateFloat(SubExpr, F, Info))
     return Error(E->getExprLoc(), diag::note_invalid_subexpr_in_ice, E);
   
-  Result = HandleFloatToIntCast(DestType, SubExpr->getType(), F, Info.Ctx);
-  return true;
+  return Success(HandleFloatToIntCast(DestType, SrcType, F, Info.Ctx), E);
+}
+
+bool IntExprEvaluator::VisitUnaryReal(const UnaryOperator *E) {
+  if (E->getSubExpr()->getType()->isAnyComplexType()) {
+    APValue LV;
+    if (!EvaluateComplex(E->getSubExpr(), LV, Info) || !LV.isComplexInt())
+      return Error(E->getExprLoc(), diag::note_invalid_subexpr_in_ice, E);
+    return Success(LV.getComplexIntReal(), E);
+  }
+
+  return Visit(E->getSubExpr());
+}
+
+bool IntExprEvaluator::VisitUnaryImag(const UnaryOperator *E) {
+  if (E->getSubExpr()->getType()->isComplexIntegerType()) {
+    APValue LV;
+    if (!EvaluateComplex(E->getSubExpr(), LV, Info) || !LV.isComplexInt())
+      return Error(E->getExprLoc(), diag::note_invalid_subexpr_in_ice, E);
+    return Success(LV.getComplexIntImag(), E);
+  }
+
+  if (!E->getSubExpr()->isEvaluatable(Info.Ctx))
+    Info.EvalResult.HasSideEffects = true;
+  return Success(0, E);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1156,6 +1257,15 @@ public:
   bool VisitFloatingLiteral(const FloatingLiteral *E);
   bool VisitCastExpr(CastExpr *E);
   bool VisitCXXZeroInitValueExpr(CXXZeroInitValueExpr *E);
+
+  bool VisitChooseExpr(const ChooseExpr *E)
+    { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+  bool VisitUnaryExtension(const UnaryOperator *E)
+    { return Visit(E->getSubExpr()); }
+
+  // FIXME: Missing: __real__/__imag__, array subscript of vector,
+  //                 member of vector, ImplicitValueInitExpr,
+  //                 conditional ?:, comma
 };
 } // end anonymous namespace
 
@@ -1164,7 +1274,7 @@ static bool EvaluateFloat(const Expr* E, APFloat& Result, EvalInfo &Info) {
 }
 
 bool FloatExprEvaluator::VisitCallExpr(const CallExpr *E) {
-  switch (E->isBuiltinCall()) {
+  switch (E->isBuiltinCall(Info.Ctx)) {
   default: return false;
   case Builtin::BI__builtin_huge_val:
   case Builtin::BI__builtin_huge_valf:
@@ -1257,9 +1367,6 @@ bool FloatExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   case BinaryOperator::Div:
     Result.divide(RHS, APFloat::rmNearestTiesToEven);
     return true;
-  case BinaryOperator::Rem:
-    Result.mod(RHS, APFloat::rmNearestTiesToEven);
-    return true;
   }
 }
 
@@ -1273,7 +1380,7 @@ bool FloatExprEvaluator::VisitCastExpr(CastExpr *E) {
   
   if (SubExpr->getType()->isIntegralType()) {
     APSInt IntResult;
-    if (!EvaluateInteger(E, IntResult, Info))
+    if (!EvaluateInteger(SubExpr, IntResult, Info))
       return false;
     Result = HandleIntToFloatCast(E->getType(), SubExpr->getType(), 
                                   IntResult, Info.Ctx);
@@ -1286,6 +1393,7 @@ bool FloatExprEvaluator::VisitCastExpr(CastExpr *E) {
                                     Result, Info.Ctx);
     return true;
   }
+  // FIXME: Handle complex types
 
   return false;
 }
@@ -1349,28 +1457,41 @@ public:
 
     if (SubType->isRealFloatingType()) {
       APFloat Result(0.0);
-                     
+
       if (!EvaluateFloat(SubExpr, Result, Info))
         return APValue();
-      
-      // Apply float conversion if necessary.
-      Result = HandleFloatToFloatCast(EltType, SubType, Result, Info.Ctx);
-      return APValue(Result, 
-                     APFloat(Result.getSemantics(), APFloat::fcZero, false));
+
+      if (EltType->isRealFloatingType()) {
+        Result = HandleFloatToFloatCast(EltType, SubType, Result, Info.Ctx);
+        return APValue(Result, 
+                       APFloat(Result.getSemantics(), APFloat::fcZero, false));
+      } else {
+        llvm::APSInt IResult;
+        IResult = HandleFloatToIntCast(EltType, SubType, Result, Info.Ctx);
+        llvm::APSInt Zero(IResult.getBitWidth(), !IResult.isSigned());
+        Zero = 0;
+        return APValue(IResult, Zero);
+      }
     } else if (SubType->isIntegerType()) {
       APSInt Result;
-                     
+
       if (!EvaluateInteger(SubExpr, Result, Info))
         return APValue();
 
-      // Apply integer conversion if necessary.
-      Result = HandleIntToIntCast(EltType, SubType, Result, Info.Ctx);
-      llvm::APSInt Zero(Result.getBitWidth(), !Result.isSigned());
-      Zero = 0;
-      return APValue(Result, Zero);
+      if (EltType->isRealFloatingType()) {
+        APFloat FResult =
+            HandleIntToFloatCast(EltType, SubType, Result, Info.Ctx);
+        return APValue(FResult, 
+                       APFloat(FResult.getSemantics(), APFloat::fcZero, false));
+      } else {
+        Result = HandleIntToIntCast(EltType, SubType, Result, Info.Ctx);
+        llvm::APSInt Zero(Result.getBitWidth(), !Result.isSigned());
+        Zero = 0;
+        return APValue(Result, Zero);
+      }
     } else if (const ComplexType *CT = SubType->getAsComplexType()) {
       APValue Src;
-                     
+
       if (!EvaluateComplex(SubExpr, Src, Info))
         return APValue();
 
@@ -1417,7 +1538,12 @@ public:
   }
   
   APValue VisitBinaryOperator(const BinaryOperator *E);
-
+  APValue VisitChooseExpr(const ChooseExpr *E)
+    { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+  APValue VisitUnaryExtension(const UnaryOperator *E)
+    { return Visit(E->getSubExpr()); }
+  // FIXME Missing: unary +/-/~, binary div, ImplicitValueInitExpr,
+  //                conditional ?:, comma
 };
 } // end anonymous namespace
 
@@ -1518,12 +1644,9 @@ bool Expr::Evaluate(EvalResult &Result, ASTContext &Ctx) const {
     if (!EvaluateVector(this, Result.Val, Info))
       return false;
   } else if (getType()->isIntegerType()) {
-    llvm::APSInt sInt(32);
-    if (!EvaluateInteger(this, sInt, Info))
+    if (!IntExprEvaluator(Info, Result.Val).Visit(const_cast<Expr*>(this)))
       return false;
-    
-    Result.Val = APValue(sInt);
-  } else if (getType()->isPointerType()) {
+  } else if (getType()->hasPointerRepresentation()) {
     if (!EvaluatePointer(this, Result.Val, Info))
       return false;
   } else if (getType()->isRealFloatingType()) {
@@ -1539,6 +1662,12 @@ bool Expr::Evaluate(EvalResult &Result, ASTContext &Ctx) const {
     return false;
 
   return true;
+}
+
+bool Expr::EvaluateAsLValue(EvalResult &Result, ASTContext &Ctx) const {
+  EvalInfo Info(Ctx, Result);
+
+  return EvaluateLValue(this, Result.Val, Info) && !Result.HasSideEffects;
 }
 
 /// isEvaluatable - Call Evaluate to see if this expression can be constant

@@ -1,4 +1,6 @@
-// RUN: clang %s -verify -fsyntax-only
+// RUN: clang-cc %s -verify -fsyntax-only
+
+#include <stdint.h>
 
 typedef void (* fp)(void);
 void foo(void);
@@ -18,7 +20,7 @@ int *h = &x;
 int test() {
 int a[10];
 int b[10] = a; // expected-error {{initialization with '{...}' expected}}
-int +; // expected-error {{expected identifier or '('}} expected-error {{parse error}}
+int +; // expected-error {{expected identifier or '('}} expected-error {{expected ';' at end of declaration}}
 }
 
 
@@ -100,9 +102,23 @@ struct {
 int bbb[10];
 
 struct foo2 {
-   unsigned a;
+   uintptr_t a;
 };
 
 struct foo2 bar2[] = {
-   { (int)bbb }
+   { (intptr_t)bbb }
 };
+
+struct foo2 bar3 = { 1, 2 }; // expected-warning{{excess elements in struct initializer}}
+
+int* ptest1 = __builtin_choose_expr(1, (int*)0, (int*)0);
+
+typedef int32_t ivector4 __attribute((vector_size(16)));
+ivector4 vtest1 = 1 ? (ivector4){1} : (ivector4){1};
+ivector4 vtest2 = __builtin_choose_expr(1, (ivector4){1}, (ivector4){1});
+ivector4 vtest3 = __real__ (ivector4){1};
+ivector4 vtest4 = __imag__ (ivector4){1};
+
+uintptr_t ptrasintadd1 = (uintptr_t)&a - 4;
+uintptr_t ptrasintadd2 = (uintptr_t)&a + 4;
+uintptr_t ptrasintadd3 = 4 + (uintptr_t)&a;

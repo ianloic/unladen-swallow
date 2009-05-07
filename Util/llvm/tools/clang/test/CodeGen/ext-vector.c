@@ -1,4 +1,4 @@
-// RUN: clang -emit-llvm %s -o %t
+// RUN: clang-cc -emit-llvm %s -o %t
 
 typedef __attribute__(( ext_vector_type(4) )) float float4;
 typedef __attribute__(( ext_vector_type(2) )) float float2;
@@ -74,14 +74,17 @@ void test6(float4 *ap, float4 *bp, float c) {
   a *= c;
   a /= c;
 
+  // Vector comparisons can sometimes crash the x86 backend: rdar://6326239,
+  // reject them until the implementation is stable.
+#if 0
   int4 cmp;
-
   cmp = a < b;
   cmp = a <= b;
   cmp = a < b;
   cmp = a >= b;
   cmp = a == b;
   cmp = a != b;
+#endif
 }
 
 void test7(int4 *ap, int4 *bp, int c) {
@@ -112,12 +115,15 @@ void test7(int4 *ap, int4 *bp, int c) {
   a /= c;
   a %= c;
 
+  // Vector comparisons can sometimes crash the x86 backend: rdar://6326239,
+  // reject them until the implementation is stable.
+#if 0
   int4 cmp;
-
   cmp = a < b;
   cmp = a <= b;
   cmp = a < b;
   cmp = a >= b;
   cmp = a == b;
   cmp = a != b;
+#endif
 }

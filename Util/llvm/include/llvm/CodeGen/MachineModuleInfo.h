@@ -37,6 +37,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/GlobalValue.h"
@@ -53,25 +54,6 @@ class MachineFunction;
 class Module;
 class PointerType;
 class StructType;
-
-//===----------------------------------------------------------------------===//
-/// SourceLineInfo - This class is used to record source line correspondence.
-///
-class SourceLineInfo {
-  unsigned Line;                        // Source line number.
-  unsigned Column;                      // Source column.
-  unsigned SourceID;                    // Source ID number.
-  unsigned LabelID;                     // Label in code ID number.
-public:
-  SourceLineInfo(unsigned L, unsigned C, unsigned S, unsigned I)
-  : Line(L), Column(C), SourceID(S), LabelID(I) {}
-  
-  // Accessors
-  unsigned getLine()     const { return Line; }
-  unsigned getColumn()   const { return Column; }
-  unsigned getSourceID() const { return SourceID; }
-  unsigned getLabelID()  const { return LabelID; }
-};
 
 //===----------------------------------------------------------------------===//
 /// LandingPadInfo - This structure is used to retain landing pad info for
@@ -99,9 +81,6 @@ struct LandingPadInfo {
 ///
 class MachineModuleInfo : public ImmutablePass {
 private:
-  // Lines - List of of source line correspondence.
-  std::vector<SourceLineInfo> Lines;
-  
   // LabelIDList - One entry per assigned label.  Normally the entry is equal to
   // the list index(+1).  If the entry is zero then the label has been deleted.
   // Any other value indicates the label has been deleted by is mapped to
@@ -136,6 +115,9 @@ private:
   // UsedFunctions - the functions in the llvm.used list in a more easily
   // searchable format.
   SmallPtrSet<const Function *, 32> UsedFunctions;
+
+  /// UsedDbgLabels - labels are used by debug info entries.
+  SmallSet<unsigned, 8> UsedDbgLabels;
 
   bool CallsEHReturn;
   bool CallsUnwindInit;
@@ -188,11 +170,6 @@ public:
     return ID;
   }
   
-  /// RecordSourceLine - Records location information and associates it with a
-  /// label.  Returns a unique label ID used to generate a label and 
-  /// provide correspondence to the source line list.
-  unsigned RecordSourceLine(unsigned Line, unsigned Column, unsigned Source);
-  
   /// InvalidateLabel - Inhibit use of the specified label # from
   /// MachineModuleInfo, for example because the code was deleted.
   void InvalidateLabel(unsigned LabelID) {
@@ -217,12 +194,19 @@ public:
     return LabelID ? LabelIDList[LabelID - 1] : 0;
   }
 
-  /// getSourceLines - Return a vector of source lines.
-  ///
-  const std::vector<SourceLineInfo> &getSourceLines() const {
-    return Lines;
+  /// isDbgLabelUsed - Return true if label with LabelID is used by
+  /// DwarfWriter.
+  bool isDbgLabelUsed(unsigned LabelID) {
+    return UsedDbgLabels.count(LabelID);
   }
   
+  /// RecordUsedDbgLabel - Mark label with LabelID as used. This is used
+  /// by DwarfWriter to inform DebugLabelFolder that certain labels are
+  /// not to be deleted.
+  void RecordUsedDbgLabel(unsigned LabelID) {
+    UsedDbgLabels.insert(LabelID);
+  }
+
   /// getFrameMoves - Returns a reference to a list of moves done in the current
   /// function's prologue.  Used to construct frame maps for debug and exception
   /// handling comsumers.

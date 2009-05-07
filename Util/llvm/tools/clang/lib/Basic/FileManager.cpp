@@ -19,8 +19,7 @@
 
 #include "clang/Basic/FileManager.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/Bitcode/Serialize.h"
-#include "llvm/Bitcode/Deserialize.h"
+#include "llvm/System/Path.h"
 #include "llvm/Support/Streams.h"
 #include "llvm/Config/config.h"
 using namespace clang;
@@ -122,7 +121,8 @@ public:
     return
       const_cast<FileEntry&>(
                     *UniqueFiles.insert(FileEntry(StatBuf.st_dev,
-                                                  StatBuf.st_ino)).first);
+                                                  StatBuf.st_ino,
+                                                  StatBuf.st_mode)).first);
   }
 
   size_t size() { return UniqueFiles.size(); }
@@ -134,10 +134,10 @@ public:
 // Common logic.
 //===----------------------------------------------------------------------===//
 
-FileManager::FileManager() : UniqueDirs(*new UniqueDirContainer),
-                             UniqueFiles(*new UniqueFileContainer),
-                             DirEntries(64), FileEntries(64), NextFileUID(0)
-{
+FileManager::FileManager()
+  : UniqueDirs(*new UniqueDirContainer),
+    UniqueFiles(*new UniqueFileContainer),
+    DirEntries(64), FileEntries(64), NextFileUID(0) {
   NumDirLookups = NumFileLookups = 0;
   NumDirCacheMisses = NumFileCacheMisses = 0;
 }
@@ -146,7 +146,6 @@ FileManager::~FileManager() {
   delete &UniqueDirs;
   delete &UniqueFiles;
 }
-
 
 /// getDirectory - Lookup, cache, and verify the specified directory.  This
 /// returns null if the directory doesn't exist.
@@ -173,7 +172,7 @@ const DirectoryEntry *FileManager::getDirectory(const char *NameStart,
   
   // Check to see if the directory exists.
   struct stat StatBuf;
-  if (stat(InterndDirName, &StatBuf) ||   // Error stat'ing.
+  if (stat_cached(InterndDirName, &StatBuf) ||   // Error stat'ing.
       !S_ISDIR(StatBuf.st_mode))          // Not a directory?
     return 0;
 
@@ -246,8 +245,8 @@ const FileEntry *FileManager::getFile(const char *NameStart,
   // Nope, there isn't.  Check to see if the file exists.
   struct stat StatBuf;
   //llvm::cerr << "STATING: " << Filename;
-  if (stat(InterndFileName, &StatBuf) ||   // Error stat'ing.
-      S_ISDIR(StatBuf.st_mode)) {           // A directory?
+  if (stat_cached(InterndFileName, &StatBuf) ||   // Error stat'ing.
+        S_ISDIR(StatBuf.st_mode)) {           // A directory?
     // If this file doesn't exist, we leave a null in FileEntries for this path.
     //llvm::cerr << ": Not existing\n";
     return 0;
@@ -283,4 +282,21 @@ void FileManager::PrintStats() const {
              << NumFileCacheMisses << " file cache misses.\n";
   
   //llvm::cerr << PagesMapped << BytesOfPagesMapped << FSLookups;
+}
+
+int MemorizeStatCalls::stat(const char *path, struct stat *buf) {
+  int result = ::stat(path, buf);
+    
+  if (result != 0) { 
+    // Cache failed 'stat' results.
+    struct stat empty;
+    StatCalls[path] = StatResult(result, empty);
+  }
+  else if (!S_ISDIR(buf->st_mode) || llvm::sys::Path(path).isAbsolute()) {
+    // Cache file 'stat' results and directories with absolutely
+    // paths.
+    StatCalls[path] = StatResult(result, *buf);
+  }
+    
+  return result;  
 }

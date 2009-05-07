@@ -1,6 +1,8 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 extern char version[];
+
+@protocol P;
 
 class C {
 public:
@@ -19,3 +21,12 @@ void t1(D *d)
   [d g:10, version];
 }
 
+void t2(D *d, id p)
+{
+  [d g:10, p];
+}
+
+void t3(D *d, id<P> p)
+{
+  [d g:10, p];
+}

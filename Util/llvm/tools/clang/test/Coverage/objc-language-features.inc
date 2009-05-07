@@ -34,9 +34,7 @@
   const char *s1 = __FUNCTION__;
   const char *s2 = __PRETTY_FUNCTION__;
   [super im0];
-#ifndef IRGENABLE
   int x = super.p0;
-#endif
 }
 -(void) im1: (int) x, ... {
 }
@@ -51,19 +49,25 @@
 @implementation A (Cat)
 @end
 
+@interface B
+@end
+
 int f0(id x) {
 #ifndef IRGENABLE_GNU
-#ifndef IRGENABLE
   @synchronized(x) {
   }
-#endif
 #endif
 
 #ifndef IRGENABLE_GNU
   @try {
     @throw x;
+
   } @catch(A *e) {
     @throw;
+
+    // @catch param doesn't require name.
+  } @catch(B *) {
+
   } @finally {
     ;
   }
@@ -74,6 +78,8 @@ int f0(id x) {
 #endif
 }
 
+#ifndef __OBJC2__
 struct s0 {
   @defs(A);
 };
+#endif

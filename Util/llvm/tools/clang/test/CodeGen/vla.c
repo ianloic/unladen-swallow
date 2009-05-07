@@ -1,4 +1,4 @@
-// RUN: clang %s -emit-llvm -o %t
+// RUN: clang-cc %s -emit-llvm -o %t
 
 int b(char* x);
 
@@ -12,4 +12,20 @@ void a(int x) {
 int c(int n)
 {
   return sizeof(int[n]);
+}
+
+int f0(int x) {
+  int vla[x];
+  return vla[x-1];
+}
+
+void
+f(int count)
+{
+ int a[count];
+
+  do {  } while (0);
+
+  if (a[0] != 3) {
+  }
 }

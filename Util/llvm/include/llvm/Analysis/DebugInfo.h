@@ -15,6 +15,7 @@
 #ifndef LLVM_ANALYSIS_DEBUGINFO_H
 #define LLVM_ANALYSIS_DEBUGINFO_H
 
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Dwarf.h"
@@ -27,8 +28,8 @@ namespace llvm {
   class Module;
   class Type;
   class Value;
-  class DbgStopPointInst;
-  class DbgDeclareInst;
+  struct DbgStopPointInst;
+  struct DbgDeclareInst;
   class Instruction;
 
   class DIDescriptor {
@@ -40,7 +41,7 @@ namespace llvm {
     /// not, the debug info is corrupt and we ignore it.
     DIDescriptor(GlobalVariable *GV, unsigned RequiredTag);
 
-    std::string getStringField(unsigned Elt) const;
+    const std::string &getStringField(unsigned Elt, std::string &Result) const;
     unsigned getUnsignedField(unsigned Elt) const {
       return (unsigned)getUInt64Field(Elt);
     }
@@ -70,6 +71,11 @@ namespace llvm {
       return getUnsignedField(0) & ~LLVMDebugVersionMask;
     }
 
+    /// ValidDebugInfo - Return true if V represents valid debug info value.
+    static bool ValidDebugInfo(Value *V, CodeGenOpt::Level OptLevel);
+
+    /// dump - print descriptor.
+    void dump() const;
   };
 
   /// DIAnchor - A wrapper for various anchor descriptors.
@@ -106,9 +112,15 @@ namespace llvm {
     explicit DICompileUnit(GlobalVariable *GV = 0);
 
     unsigned getLanguage() const     { return getUnsignedField(2); }
-    std::string getFilename() const  { return getStringField(3); }
-    std::string getDirectory() const { return getStringField(4); }
-    std::string getProducer() const  { return getStringField(5); }
+    const std::string &getFilename(std::string &F) const {
+      return getStringField(3, F);
+    }
+    const std::string &getDirectory(std::string &F) const {
+      return getStringField(4, F);
+    }
+    const std::string &getProducer(std::string &F) const {
+      return getStringField(5, F);
+    }
     
     /// isMain - Each input file is encoded as a separate compile unit in LLVM
     /// debugging information output. However, many target specific tool chains
@@ -118,9 +130,13 @@ namespace llvm {
     /// code generator accepts maximum one main compile unit per module. If a
     /// module does not contain any main compile unit then the code generator 
     /// will emit multiple compile units in the output object file.
-    bool isMain() const             { return getUnsignedField(6); }
-    bool isOptimized() const         { return getUnsignedField(7); }
-    std::string getFlags() const     { return getStringField(8); }
+
+    bool isMain() const                { return getUnsignedField(6); }
+    bool isOptimized() const           { return getUnsignedField(7); }
+    const std::string &getFlags(std::string &F) const {
+      return getStringField(8, F);
+    }
+    unsigned getRunTimeVersion() const { return getUnsignedField(9); }
 
     /// Verify - Verify that a compile unit is well formed.
     bool Verify() const;
@@ -136,7 +152,9 @@ namespace llvm {
   public:
     explicit DIEnumerator(GlobalVariable *GV = 0);
 
-    std::string getName() const  { return getStringField(1); }
+    const std::string &getName(std::string &F) const {
+      return getStringField(1, F);
+    }
     uint64_t getEnumValue() const { return getUInt64Field(2); }
   };
 
@@ -180,7 +198,9 @@ namespace llvm {
     virtual ~DIType() {}
 
     DIDescriptor getContext() const     { return getDescriptorField(1); }
-    std::string getName() const         { return getStringField(2); }
+    const std::string &getName(std::string &F) const {
+      return getStringField(2, F);
+    }
     DICompileUnit getCompileUnit() const{ return getFieldAs<DICompileUnit>(3); }
     unsigned getLineNumber() const      { return getUnsignedField(4); }
     uint64_t getSizeInBits() const      { return getUInt64Field(5); }
@@ -217,6 +237,9 @@ namespace llvm {
     explicit DIDerivedType(GlobalVariable *GV);
     DIType getTypeDerivedFrom() const { return getFieldAs<DIType>(9); }
 
+    /// getOriginalTypeSize - If this type is derived from a base type then
+    /// return base type size.
+    uint64_t getOriginalTypeSize() const;
     /// dump - print derived type.
     void dump() const;
   };
@@ -228,6 +251,7 @@ namespace llvm {
   public:
     explicit DICompositeType(GlobalVariable *GV);
     DIArray getTypeArray() const { return getFieldAs<DIArray>(10); }
+    unsigned getRunTimeLang() const { return getUnsignedField(11); }
 
     /// Verify - Verify that a composite type descriptor is well formed.
     bool Verify() const;
@@ -258,9 +282,15 @@ namespace llvm {
     virtual ~DIGlobal() {}
 
     DIDescriptor getContext() const     { return getDescriptorField(2); }
-    std::string getName() const         { return getStringField(3); }
-    std::string getDisplayName() const  { return getStringField(4); }
-    std::string getLinkageName() const  { return getStringField(5); }
+    const std::string &getName(std::string &F) const {
+      return getStringField(3, F);
+    }
+    const std::string &getDisplayName(std::string &F) const {
+      return getStringField(4, F);
+    }
+    const std::string &getLinkageName(std::string &F) const {
+      return getStringField(5, F);
+    }
     DICompileUnit getCompileUnit() const{ return getFieldAs<DICompileUnit>(6); }
     unsigned getLineNumber() const      { return getUnsignedField(7); }
     DIType getType() const              { return getFieldAs<DIType>(8); }
@@ -285,6 +315,10 @@ namespace llvm {
 
     /// dump - print subprogram.
     void dump() const;
+
+    /// describes - Return true if this subprogram provides debugging
+    /// information for the function F.
+    bool describes(const Function *F);
   };
 
   /// DIGlobalVariable - This is a wrapper for a global variable.
@@ -307,7 +341,9 @@ namespace llvm {
     explicit DIVariable(GlobalVariable *GV = 0);
 
     DIDescriptor getContext() const { return getDescriptorField(1); }
-    std::string getName() const { return getStringField(2); }
+    const std::string &getName(std::string &F) const {
+      return getStringField(2, F);
+    }
     DICompileUnit getCompileUnit() const{ return getFieldAs<DICompileUnit>(3); }
     unsigned getLineNumber() const      { return getUnsignedField(4); }
     DIType getType() const              { return getFieldAs<DIType>(5); }
@@ -378,7 +414,8 @@ namespace llvm {
                                     const std::string &Producer,
                                     bool isMain = false,
                                     bool isOptimized = false,
-                                    const char *Flags = "");
+                                    const char *Flags = "",
+                                    unsigned RunTimeVer = 0);
 
     /// CreateEnumerator - Create a single enumerator value.
     DIEnumerator CreateEnumerator(const std::string &Name, uint64_t Val);
@@ -409,7 +446,8 @@ namespace llvm {
                                         uint64_t AlignInBits,
                                         uint64_t OffsetInBits, unsigned Flags,
                                         DIType DerivedFrom,
-                                        DIArray Elements);
+                                        DIArray Elements,
+                                        unsigned RunTimeLang = 0);
 
     /// CreateSubprogram - Create a new descriptor for the specified subprogram.
     /// See comments in DISubprogram for descriptions of these fields.
@@ -479,6 +517,12 @@ namespace llvm {
   /// Finds the dbg.declare intrinsic corresponding to this value if any.
   /// It looks through pointer casts too.
   const DbgDeclareInst *findDbgDeclare(const Value *V, bool stripCasts = true);
+
+  /// Find the debug info descriptor corresponding to this global variable.
+  Value *findDbgGlobalDeclare(GlobalVariable *V);
+
+  bool getLocationInfo(const Value *V, std::string &DisplayName, std::string &Type, 
+                       unsigned &LineNo, std::string &File, std::string &Dir); 
 } // end namespace llvm
 
 #endif

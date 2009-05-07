@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-/// @file This file contains the declarations for the Module class.
+/// @file
+/// Module.h This file contains the declarations for the Module class.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,30 +28,32 @@ class FunctionType;
 
 template<> struct ilist_traits<Function>
   : public SymbolTableListTraits<Function, Module> {
-  // createSentinel is used to create a node that marks the end of the list.
-  static Function *createSentinel();
-  static void destroySentinel(Function *F) { delete F; }
-  static iplist<Function> &getList(Module *M);
-  static inline ValueSymbolTable *getSymTab(Module *M);
-  static int getListOffset();
+
+  // createSentinel is used to get hold of the node that marks the end of the
+  // list... (same trick used here as in ilist_traits<Instruction>)
+  Function *createSentinel() const {
+    return static_cast<Function*>(&Sentinel);
+  }
+  static void destroySentinel(Function*) {}
+
+  Function *provideInitialHead() const { return createSentinel(); }
+  Function *ensureHead(Function*) const { return createSentinel(); }
+  static void noteHead(Function*, Function*) {}
+
+private:
+  mutable ilist_node<Function> Sentinel;
 };
 template<> struct ilist_traits<GlobalVariable>
   : public SymbolTableListTraits<GlobalVariable, Module> {
   // createSentinel is used to create a node that marks the end of the list.
   static GlobalVariable *createSentinel();
   static void destroySentinel(GlobalVariable *GV) { delete GV; }
-  static iplist<GlobalVariable> &getList(Module *M);
-  static inline ValueSymbolTable *getSymTab(Module *M);
-  static int getListOffset();
 };
 template<> struct ilist_traits<GlobalAlias>
   : public SymbolTableListTraits<GlobalAlias, Module> {
   // createSentinel is used to create a node that marks the end of the list.
   static GlobalAlias *createSentinel();
   static void destroySentinel(GlobalAlias *GA) { delete GA; }
-  static iplist<GlobalAlias> &getList(Module *M);
-  static inline ValueSymbolTable *getSymTab(Module *M);
-  static int getListOffset();
 };
 
 /// A Module instance is used to store all the information related to an
@@ -182,6 +185,16 @@ public:
   }
 
 /// @}
+/// @name Generic Value Accessors
+/// @{
+
+  /// getNamedValue - Return the first global value in the module with
+  /// the specified name, of arbitrary type.  This method returns null
+  /// if a global with the specified name is not found.
+  GlobalValue *getNamedValue(const std::string &Name) const;
+  GlobalValue *getNamedValue(const char *Name) const;
+
+/// @}
 /// @name Function Accessors
 /// @{
 public:
@@ -213,6 +226,10 @@ public:
   Constant *getOrInsertFunction(const std::string &Name, const Type *RetTy, ...)
     END_WITH_NULL;
 
+  Constant *getOrInsertTargetIntrinsic(const std::string &Name,
+                                       const FunctionType *Ty,
+                                       AttrListPtr AttributeList);
+  
   /// getFunction - Look up the specified function in the module symbol table.
   /// If it does not exist, return null.
   Function *getFunction(const std::string &Name) const;
@@ -279,14 +296,23 @@ public:
   const GlobalListType   &getGlobalList() const       { return GlobalList; }
   /// Get the Module's list of global variables.
   GlobalListType         &getGlobalList()             { return GlobalList; }
+  static iplist<GlobalVariable> Module::*getSublistAccess(GlobalVariable*) {
+    return &Module::GlobalList;
+  }
   /// Get the Module's list of functions (constant).
   const FunctionListType &getFunctionList() const     { return FunctionList; }
   /// Get the Module's list of functions.
   FunctionListType       &getFunctionList()           { return FunctionList; }
+  static iplist<Function> Module::*getSublistAccess(Function*) {
+    return &Module::FunctionList;
+  }
   /// Get the Module's list of aliases (constant).
   const AliasListType    &getAliasList() const        { return AliasList; }
   /// Get the Module's list of aliases.
   AliasListType          &getAliasList()              { return AliasList; }
+  static iplist<GlobalAlias> Module::*getSublistAccess(GlobalAlias*) {
+    return &Module::AliasList;
+  }
   /// Get the symbol table of global variable and function identifiers
   const ValueSymbolTable &getValueSymbolTable() const { return *ValSymTab; }
   /// Get the Module's symbol table of global variable and function identifiers.
@@ -380,19 +406,6 @@ public:
   /// that has "dropped all references", except operator delete.
   void dropAllReferences();
 /// @}
-
-  static unsigned getFunctionListOffset() {
-    Module *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->FunctionList));
-  }
-  static unsigned getGlobalVariableListOffset() {
-    Module *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->GlobalList));
-  }
-  static unsigned getAliasListOffset() {
-    Module *Obj = 0;
-    return unsigned(reinterpret_cast<uintptr_t>(&Obj->AliasList));
-  }
 };
 
 /// An iostream inserter for modules.
@@ -403,37 +416,6 @@ inline std::ostream &operator<<(std::ostream &O, const Module &M) {
 inline raw_ostream &operator<<(raw_ostream &O, const Module &M) {
   M.print(O, 0);
   return O;
-}
-  
-
-inline ValueSymbolTable *
-ilist_traits<Function>::getSymTab(Module *M) {
-  return M ? &M->getValueSymbolTable() : 0;
-}
-
-inline ValueSymbolTable *
-ilist_traits<GlobalVariable>::getSymTab(Module *M) {
-  return M ? &M->getValueSymbolTable() : 0;
-}
-
-inline ValueSymbolTable *
-ilist_traits<GlobalAlias>::getSymTab(Module *M) {
-  return M ? &M->getValueSymbolTable() : 0;
-}
-
-inline int
-ilist_traits<Function>::getListOffset() {
-  return Module::getFunctionListOffset();
-}
-
-inline int
-ilist_traits<GlobalVariable>::getListOffset() {
-  return Module::getGlobalVariableListOffset();
-}
-
-inline int
-ilist_traits<GlobalAlias>::getListOffset() {
-  return Module::getAliasListOffset();
 }
 
 } // End llvm namespace

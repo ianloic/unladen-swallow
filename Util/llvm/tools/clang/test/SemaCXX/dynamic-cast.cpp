@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 struct A {};
 struct B : A {};
@@ -8,7 +8,7 @@ struct D : private A {};
 struct E : A {};
 struct F : B, E {};
 
-struct Incomplete; // expected-note{{forward declaration of 'struct Incomplete'}}
+struct Incomplete; // expected-note 2 {{forward declaration of 'struct Incomplete'}}
 
 struct Poly
 {

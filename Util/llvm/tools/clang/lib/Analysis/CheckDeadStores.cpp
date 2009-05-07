@@ -17,9 +17,11 @@
 #include "clang/Analysis/Visitors/CFGRecStmtVisitor.h"
 #include "clang/Analysis/PathSensitive/BugReporter.h"
 #include "clang/Analysis/PathSensitive/GRExprEngine.h"
+#include "clang/Analysis/Visitors/CFGRecStmtDeclVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ParentMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Compiler.h"
 
 using namespace clang;
@@ -30,19 +32,20 @@ class VISIBILITY_HIDDEN DeadStoreObs : public LiveVariables::ObserverTy {
   ASTContext &Ctx;
   BugReporter& BR;
   ParentMap& Parents;
+  llvm::SmallPtrSet<VarDecl*, 20> Escaped;
   
   enum DeadStoreKind { Standard, Enclosing, DeadIncrement, DeadInit };
     
 public:
-  DeadStoreObs(ASTContext &ctx, BugReporter& br, ParentMap& parents)
-    : Ctx(ctx), BR(br), Parents(parents) {}
+  DeadStoreObs(ASTContext &ctx, BugReporter& br, ParentMap& parents,
+               llvm::SmallPtrSet<VarDecl*, 20> &escaped)
+    : Ctx(ctx), BR(br), Parents(parents), Escaped(escaped) {}
   
   virtual ~DeadStoreObs() {}
-  
-  bool isConsumedExpr(Expr* E) const;
-  
-  
+
   void Report(VarDecl* V, DeadStoreKind dsk, SourceLocation L, SourceRange R) {
+    if (Escaped.count(V))
+      return;
 
     std::string name = V->getNameAsString();
     
@@ -54,27 +57,27 @@ public:
         assert(false && "Impossible dead store type.");
         
       case DeadInit:
-        BugType = "dead initialization";
+        BugType = "Dead initialization";
         msg = "Value stored to '" + name +
           "' during its initialization is never read";
         break;
         
       case DeadIncrement:
-        BugType = "dead increment";
+        BugType = "Dead increment";
       case Standard:
-        if (!BugType) BugType = "dead assignment";
+        if (!BugType) BugType = "Dead assignment";
         msg = "Value stored to '" + name + "' is never read";
         break;
         
       case Enclosing:
-        BugType = "dead nested assignment";
+        BugType = "Dead nested assignment";
         msg = "Although the value stored to '" + name +
           "' is used in the enclosing expression, the value is never actually"
           " read from '" + name + "'";
         break;
     }
       
-    BR.EmitBasicReport(BugType, "Dead Store", msg.c_str(), L, R);      
+    BR.EmitBasicReport(BugType, "Dead store", msg.c_str(), L, R);      
   }
   
   void CheckVarDecl(VarDecl* VD, Expr* Ex, Expr* Val,
@@ -148,7 +151,7 @@ public:
               return;
             
           // Otherwise, issue a warning.
-          DeadStoreKind dsk = isConsumedExpr(B)
+          DeadStoreKind dsk = Parents.isConsumedExpr(B)
                               ? Enclosing 
                               : (isIncrement(VD,B) ? DeadIncrement : Standard);
           
@@ -163,7 +166,7 @@ public:
       //  about preincrements to dead variables when the preincrement occurs
       //  as a subexpression.  This can lead to false negatives, e.g. "(++x);"
       //  A generalized dead code checker should find such issues.
-      if (U->isPrefix() && isConsumedExpr(U))
+      if (U->isPrefix() && Parents.isConsumedExpr(U))
         return;
 
       Expr *Ex = U->getSubExpr()->IgnoreParenCasts();
@@ -195,8 +198,21 @@ public:
               // If x is EVER assigned a new value later, don't issue
               // a warning.  This is because such initialization can be
               // due to defensive programming.
-              if (!E->isConstantInitializer(Ctx))
-                Report(V, DeadInit, V->getLocation(), E->getSourceRange());
+              if (E->isConstantInitializer(Ctx))
+                return;
+              
+              // Special case: check for initializations from constant
+              //  variables.
+              //
+              //  e.g. extern const int MyConstant;
+              //       int x = MyConstant;
+              //
+              if (DeclRefExpr *DRE=dyn_cast<DeclRefExpr>(E->IgnoreParenCasts()))
+                if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+                  if (VD->hasGlobalStorage() &&
+                      VD->getType().isConstQualified()) return;
+              
+              Report(V, DeadInit, V->getLocation(), E->getSourceRange());
             }
           }
       }
@@ -205,48 +221,39 @@ public:
   
 } // end anonymous namespace
 
-bool DeadStoreObs::isConsumedExpr(Expr* E) const {
-  Stmt *P = Parents.getParent(E);
-  Stmt *DirectChild = E;
-  
-  // Ignore parents that are parentheses or casts.
-  while (P && (isa<ParenExpr>(E) || isa<CastExpr>(E))) {
-    DirectChild = P;
-    P = Parents.getParent(P);
-  }
-  
-  if (!P)
-    return false;
-  
-  switch (P->getStmtClass()) {
-    default:
-      return isa<Expr>(P);
-    case Stmt::BinaryOperatorClass: {
-      BinaryOperator *BE = cast<BinaryOperator>(P);
-      return BE->getOpcode()==BinaryOperator::Comma && DirectChild==BE->getLHS();
-    }
-    case Stmt::ForStmtClass:
-      return DirectChild == cast<ForStmt>(P)->getCond();
-    case Stmt::WhileStmtClass:
-      return DirectChild == cast<WhileStmt>(P)->getCond();      
-    case Stmt::DoStmtClass:
-      return DirectChild == cast<DoStmt>(P)->getCond();
-    case Stmt::IfStmtClass:
-      return DirectChild == cast<IfStmt>(P)->getCond();
-    case Stmt::IndirectGotoStmtClass:
-      return DirectChild == cast<IndirectGotoStmt>(P)->getTarget();
-    case Stmt::SwitchStmtClass:
-      return DirectChild == cast<SwitchStmt>(P)->getCond();
-    case Stmt::ReturnStmtClass:
-      return true;
-  }
-}
-
 //===----------------------------------------------------------------------===//
 // Driver function to invoke the Dead-Stores checker on a CFG.
 //===----------------------------------------------------------------------===//
 
-void clang::CheckDeadStores(LiveVariables& L, BugReporter& BR) {  
-  DeadStoreObs A(BR.getContext(), BR, BR.getParentMap());
+namespace {
+class VISIBILITY_HIDDEN FindEscaped : public CFGRecStmtDeclVisitor<FindEscaped>{
+  CFG *cfg;
+public:
+  FindEscaped(CFG *c) : cfg(c) {}
+  
+  CFG& getCFG() { return *cfg; }
+  
+  llvm::SmallPtrSet<VarDecl*, 20> Escaped;
+
+  void VisitUnaryOperator(UnaryOperator* U) {
+    // Check for '&'.  Any VarDecl whose value has its address-taken we
+    // treat as escaped.
+    Expr* E = U->getSubExpr()->IgnoreParenCasts();
+    if (U->getOpcode() == UnaryOperator::AddrOf)
+      if (DeclRefExpr* DR = dyn_cast<DeclRefExpr>(E))
+        if (VarDecl* VD = dyn_cast<VarDecl>(DR->getDecl())) {
+          Escaped.insert(VD);
+          return;
+        }
+    Visit(E);
+  }
+};
+} // end anonymous namespace
+  
+
+void clang::CheckDeadStores(LiveVariables& L, BugReporter& BR) {
+  FindEscaped FS(BR.getCFG());
+  FS.getCFG().VisitBlockStmts(FS);  
+  DeadStoreObs A(BR.getContext(), BR, BR.getParentMap(), FS.Escaped);
   L.runOnAllBlocks(*BR.getCFG(), &A);
 }

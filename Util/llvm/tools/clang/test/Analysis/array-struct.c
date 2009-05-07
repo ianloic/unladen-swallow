@@ -1,6 +1,10 @@
-// RUN: clang -analyze -checker-simple -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-simple -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s
+
+// RegionStore now has an infinite recursion with this test case.
+// NOWORK: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// NOWORK: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
 struct s {
   int data;
@@ -94,4 +98,37 @@ void f11() {
   g(&a);
   if (a.data == 0) // no-warning
     a.data = 1;
+}
+
+// Convert unsigned offset to signed when creating ElementRegion from 
+// SymbolicRegion.
+void f12(int *list) {
+  unsigned i = 0;
+  list[i] = 1;
+}
+
+struct s1 {
+  struct s2 {
+    int d;
+  } e;
+};
+
+// The binding of a.e.d should not be removed. Test recursive subregion map
+// building: a->e, e->d. Only then 'a' could be added to live region roots.
+void f13(double timeout) {
+  struct s1 a;
+  a.e.d = (long) timeout;
+  if (a.e.d == 10)
+    a.e.d = 4;
+}
+
+struct s3 {
+  int a[2];
+};
+
+static struct s3 opt;
+
+// Test if the embedded array is retrieved correctly.
+void f14() {
+  struct s3 my_opt = opt;
 }

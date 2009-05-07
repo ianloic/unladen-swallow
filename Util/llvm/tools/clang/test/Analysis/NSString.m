@@ -1,5 +1,9 @@
-// RUN: clang -analyze -checker-cfref -analyzer-store-basic -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s
+
+
+// NOTWORK: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// NOTWORK: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
 //===----------------------------------------------------------------------===//
 // The following code is reduced using delta-debugging from
@@ -10,11 +14,13 @@
 // both svelte and portable to non-Mac platforms.
 //===----------------------------------------------------------------------===//
 
+typedef int int32_t;
 typedef const void * CFTypeRef;
 typedef const struct __CFString * CFStringRef;
 typedef const struct __CFAllocator * CFAllocatorRef;
 extern const CFAllocatorRef kCFAllocatorDefault;
 extern CFTypeRef CFRetain(CFTypeRef cf);
+void CFRelease(CFTypeRef cf);
 typedef const struct __CFDictionary * CFDictionaryRef;
 const void *CFDictionaryGetValue(CFDictionaryRef theDict, const void *key);
 extern CFStringRef CFStringCreateWithFormat(CFAllocatorRef alloc, CFDictionaryRef formatOptions, CFStringRef format, ...);
@@ -68,6 +74,7 @@ typedef NSUInteger NSStringCompareOptions;
 - (NSComparisonResult)compare:(NSString *)string options:(NSStringCompareOptions)mask range:(NSRange)compareRange locale:(id)locale;
 - (NSComparisonResult)caseInsensitiveCompare:(NSString *)string;
 - (NSArray *)componentsSeparatedByCharactersInSet:(NSCharacterSet *)separator;
++ (id)stringWithFormat:(NSString *)format, ... __attribute__((format(__NSString__, 1, 2)));
 @end
 @interface NSSimpleCString : NSString {} @end
 @interface NSConstantString : NSSimpleCString @end
@@ -109,12 +116,12 @@ NSArray *f6(NSString* s) {
 NSString* f7(NSString* s1, NSString* s2, NSString* s3) {
 
   NSString* s4 = (NSString*)
-    CFStringCreateWithFormat(kCFAllocatorDefault, 0,
+    CFStringCreateWithFormat(kCFAllocatorDefault, 0,  // expected-warning{{leak}}
                              (CFStringRef) __builtin___CFStringMakeConstantString("%@ %@ (%@)"), 
                              s1, s2, s3);
 
   CFRetain(s4);
-  return s4; // expected-warning{{leak}}
+  return s4;
 }
 
 NSMutableArray* f8() {
@@ -152,13 +159,19 @@ NSString* f11(CFDictionaryRef dict, const char* key) {
 }
 
 // Test case for passing a tracked object by-reference to a function we
-// don't undersand.
+// don't understand.
 void unknown_function_f12(NSString** s);
 void f12() {
   NSString *string = [[NSString alloc] init];
   unknown_function_f12(&string); // no-warning
 }
 
+// Test double release of CFString (PR 4014).
+void f13(void) {
+  CFStringRef ref = CFStringCreateWithFormat(kCFAllocatorDefault, ((void*)0), ((CFStringRef) __builtin___CFStringMakeConstantString ("" "%d" "")), 100);
+  CFRelease(ref);
+  CFRelease(ref); // expected-warning{{Reference-counted object is used after it is released}}
+}
 
 @interface C1 : NSObject {}
 - (NSString*) getShared;
@@ -194,7 +207,7 @@ void f12() {
 }
 
 - (id)notShared {
-  return [[SharedClass alloc] _init]; // expected-warning{{[naming convention] leak of returned object}}
+  return [[SharedClass alloc] _init]; // expected-warning{{leak}}
 }
 
 + (id)sharedInstance {
@@ -210,3 +223,76 @@ id testSharedClassFromFunction() {
   return [[SharedClass alloc] _init]; // no-warning
 }
 
+// Test OSCompareAndSwap
+_Bool OSAtomicCompareAndSwapPtr( void *__oldValue, void *__newValue, void * volatile *__theValue );
+_Bool OSAtomicCompareAndSwap32Barrier( int32_t __oldValue, int32_t __newValue, volatile int32_t *__theValue );
+extern BOOL objc_atomicCompareAndSwapPtr(id predicate, id replacement, volatile id *objectLocation);
+
+void testOSCompareAndSwap() {
+  NSString *old = 0;
+  NSString *s = [[NSString alloc] init]; // no-warning
+  if (!OSAtomicCompareAndSwapPtr(0, s, (void**) &old))
+    [s release];
+  else    
+    [old release];
+}
+
+void testOSCompareAndSwap32Barrier() {
+  NSString *old = 0;
+  NSString *s = [[NSString alloc] init]; // no-warning
+  if (!OSAtomicCompareAndSwap32Barrier((int32_t) 0, (int32_t) s, (int32_t*) &old))
+    [s release];
+  else    
+    [old release];
+}
+
+void test_objc_atomicCompareAndSwap() {
+  NSString *old = 0;
+  NSString *s = [[NSString alloc] init]; // no-warning
+  if (!objc_atomicCompareAndSwapPtr(0, s, &old))
+    [s release];
+  else    
+    [old release];
+}
+
+// Test stringWithFormat (<rdar://problem/6815234>)
+void test_stringWithFormat() {  
+  NSString *string = [[NSString stringWithFormat:@"%ld", (long) 100] retain];
+  [string release];
+  [string release]; // expected-warning{{Incorrect decrement of the reference count}}
+}
+
+// Test isTrackedObjectType().
+typedef NSString* WonkyTypedef;
+@interface TestIsTracked
++ (WonkyTypedef)newString;
+@end
+
+void test_isTrackedObjectType(void) {
+  NSString *str = [TestIsTracked newString]; // expected-warning{{Potential leak}}
+}
+
+// Test isTrackedCFObjectType().
+@interface TestIsCFTracked
++ (CFStringRef) badNewCFString;
++ (CFStringRef) newCFString;
+@end
+
+@implementation TestIsCFTracked
++ (CFStringRef) newCFString {
+  return CFStringCreateWithFormat(kCFAllocatorDefault, ((void*)0), ((CFStringRef) __builtin___CFStringMakeConstantString ("" "%d" "")), 100); // no-warning
+}
++ (CFStringRef) badNewCFString {
+  return CFStringCreateWithFormat(kCFAllocatorDefault, ((void*)0), ((CFStringRef) __builtin___CFStringMakeConstantString ("" "%d" "")), 100); // expected-warning{{leak}}
+}
+
+
+
+// Test @synchronized
+void test_synchronized(id x) {
+  @synchronized(x) {
+    NSString *string = [[NSString stringWithFormat:@"%ld", (long) 100] retain]; // expected-warning {{leak}}
+  }
+}
+
+// Test return from method starting with 'new' or 'copy'

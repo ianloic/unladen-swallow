@@ -19,15 +19,12 @@
 #include "clang/Analysis/PathSensitive/Environment.h"
 #include "clang/Analysis/PathSensitive/Store.h"
 #include "clang/Analysis/PathSensitive/ConstraintManager.h"
-#include "clang/Analysis/PathSensitive/MemRegion.h"
-#include "clang/Analysis/PathSensitive/SVals.h"
-#include "clang/Analysis/PathSensitive/BasicValueFactory.h"
+#include "clang/Analysis/PathSensitive/ValueManager.h"
 #include "clang/Analysis/PathSensitive/GRCoreEngine.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
-
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/APSInt.h"
@@ -262,10 +259,7 @@ private:
   llvm::FoldingSet<GRState> StateSet;
 
   /// ValueMgr - Object that manages the data for all created SVals.
-  BasicValueFactory BasicVals;
-
-  /// SymMgr - Object that manages the symbol information.
-  SymbolManager SymMgr;
+  ValueManager ValueMgr;
 
   /// Alloc - A BumpPtrAllocator to allocate states.
   llvm::BumpPtrAllocator& Alloc;
@@ -309,8 +303,7 @@ public:
   : EnvMgr(alloc),
     ISetFactory(alloc),
     GDMFactory(alloc),
-    BasicVals(Ctx, alloc),
-    SymMgr(Ctx, alloc),
+    ValueMgr(alloc, Ctx),
     Alloc(alloc),
     cfg(c),
     codedecl(cd),
@@ -323,16 +316,41 @@ public:
 
   const GRState* getInitialState();
         
-  ASTContext& getContext() { return BasicVals.getContext(); }
-  const Decl& getCodeDecl() { return codedecl; }
+  ASTContext &getContext() { return ValueMgr.getContext(); }
+  const ASTContext &getContext() const { return ValueMgr.getContext(); }               
+                 
+  const Decl &getCodeDecl() { return codedecl; }
   GRTransferFuncs& getTransferFuncs() { return *TF; }
-  BasicValueFactory& getBasicVals() { return BasicVals; }
-  const BasicValueFactory& getBasicVals() const { return BasicVals; }
-  SymbolManager& getSymbolManager() { return SymMgr; }
+
+  BasicValueFactory &getBasicVals() {
+    return ValueMgr.getBasicValueFactory();
+  }
+  const BasicValueFactory& getBasicVals() const {
+    return ValueMgr.getBasicValueFactory();
+  }
+                 
+  SymbolManager &getSymbolManager() {
+    return ValueMgr.getSymbolManager();
+  }
+  const SymbolManager &getSymbolManager() const {
+    return ValueMgr.getSymbolManager();
+  }
+  
+  ValueManager &getValueManager() { return ValueMgr; }
+  const ValueManager &getValueManager() const { return ValueMgr; }
+  
   LiveVariables& getLiveVariables() { return Liveness; }
   llvm::BumpPtrAllocator& getAllocator() { return Alloc; }
-  MemRegionManager& getRegionManager() { return StoreMgr->getRegionManager(); }
+
+  MemRegionManager& getRegionManager() {
+    return ValueMgr.getRegionManager();
+  }
+  const MemRegionManager& getRegionManager() const {
+    return ValueMgr.getRegionManager();
+  }
+  
   StoreManager& getStoreManager() { return *StoreMgr; }
+  ConstraintManager& getConstraintManager() { return *ConstraintMgr; }
 
   const GRState* BindDecl(const GRState* St, const VarDecl* VD, SVal IVal) {
     // Store manager should return a persistent state.
@@ -398,23 +416,36 @@ public:
   }
   
   // Get the lvalue for an array index.
-  SVal GetLValue(const GRState* St, SVal Base, SVal Idx) {
-    return StoreMgr->getLValueElement(St, Base, Idx);
+  SVal GetLValue(const GRState* St, QualType ElementType, SVal Base, SVal Idx) {
+    return StoreMgr->getLValueElement(St, ElementType, Base, Idx);
   }  
 
   // Methods that query & manipulate the Environment.
   
   SVal GetSVal(const GRState* St, Stmt* Ex) {
-    return St->getEnvironment().GetSVal(Ex, BasicVals);
+    return St->getEnvironment().GetSVal(Ex, getBasicVals());
   }
+  
+  SVal GetSValAsScalarOrLoc(const GRState* state, const Stmt *S) {
+    if (const Expr *Ex = dyn_cast<Expr>(S)) {
+      QualType T = Ex->getType();
+      if (Loc::IsLocType(T) || T->isIntegerType())
+        return GetSVal(state, S);
+    }
+    
+    return UnknownVal();
+  }
+    
 
   SVal GetSVal(const GRState* St, const Stmt* Ex) {
-    return St->getEnvironment().GetSVal(const_cast<Stmt*>(Ex), BasicVals);
+    return St->getEnvironment().GetSVal(const_cast<Stmt*>(Ex), getBasicVals());
   }
   
   SVal GetBlkExprSVal(const GRState* St, Stmt* Ex) {
-    return St->getEnvironment().GetBlkExprSVal(Ex, BasicVals);
+    return St->getEnvironment().GetBlkExprSVal(Ex, getBasicVals());
   }
+  
+  
   
   const GRState* BindExpr(const GRState* St, Stmt* Ex, SVal V,
                           bool isBlkExpr, bool Invalidate) {
@@ -447,7 +478,7 @@ public:
     return BindExpr(St, Ex, V, isBlkExpr, Invalidate);
   }
 
-  SVal ArrayToPointer(SVal Array) {
+  SVal ArrayToPointer(Loc Array) {
     return StoreMgr->ArrayToPointer(Array);
   }
   
@@ -473,6 +504,22 @@ public:
   SVal GetSVal(const GRState* state, const MemRegion* R) {
     return StoreMgr->Retrieve(state, loc::MemRegionVal(R));
   }  
+
+  SVal GetSValAsScalarOrLoc(const GRState* state, const MemRegion *R) {
+    // We only want to do fetches from regions that we can actually bind
+    // values.  For example, SymbolicRegions of type 'id<...>' cannot
+    // have direct bindings (but their can be bindings on their subregions).
+    if (!R->isBoundable(getContext()))
+      return UnknownVal();
+    
+    if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
+      QualType T = TR->getRValueType(getContext());
+      if (Loc::IsLocType(T) || T->isIntegerType())
+        return GetSVal(state, R);
+    }
+  
+    return UnknownVal();
+  }
   
   const GRState* BindLoc(const GRState* St, Loc LV, SVal V) {
     return StoreMgr->Bind(St, LV, V);
@@ -610,6 +657,9 @@ public:
   void EndPath(const GRState* St) {
     ConstraintMgr->EndPath(St);
   }
+
+  bool scanReachableSymbols(SVal val, const GRState* state,
+                            SymbolVisitor& visitor);
 };
   
 //===----------------------------------------------------------------------===//
@@ -634,6 +684,10 @@ public:
     return Mgr->GetBlkExprSVal(St, Ex);
   }
   
+  SVal GetSValAsScalarOrLoc(const Expr *Ex) {
+    return Mgr->GetSValAsScalarOrLoc(St, Ex);
+  }
+
   SVal GetSVal(Loc LV, QualType T = QualType()) {
     return Mgr->GetSVal(St, LV, T);
   }
@@ -642,6 +696,10 @@ public:
     return Mgr->GetSVal(St, R);
   }
   
+  SVal GetSValAsScalarOrLoc(const MemRegion *R) {
+    return Mgr->GetSValAsScalarOrLoc(St, R);
+  }
+
   GRStateRef BindExpr(Stmt* Ex, SVal V, bool isBlkExpr, bool Invalidate) {
     return GRStateRef(Mgr->BindExpr(St, Ex, V, isBlkExpr, Invalidate), *Mgr);
   }
@@ -731,6 +789,16 @@ public:
   GRStateRef Assume(SVal Cond, bool Assumption, bool& isFeasible) {
     return GRStateRef(Mgr->Assume(St, Cond, Assumption, isFeasible), *Mgr);  
   }
+  
+  template <typename CB>
+  CB scanReachableSymbols(SVal val) {
+    CB cb(*this);
+    Mgr->scanReachableSymbols(val, St, cb);
+    return cb;
+  }
+  
+  SymbolManager& getSymbolManager() { return Mgr->getSymbolManager(); }
+  BasicValueFactory& getBasicVals() { return Mgr->getBasicVals(); }
   
   // Pretty-printing.
   void print(std::ostream& Out, const char* nl = "\n",

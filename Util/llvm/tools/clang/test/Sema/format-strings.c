@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify -Wformat-nonliteral %s
 
 // Define this to get vasprintf on Linux
 #define _GNU_SOURCE
@@ -29,6 +29,14 @@ void check_string_literal( FILE* fp, const char* s, char *buf, ... ) {
   vsnprintf(buf,2,global_fmt,ap); // expected-warning {{format string is not a string literal}}
   __builtin___vsnprintf_chk(buf,2,0,-1,s,ap); // no-warning
   __builtin___vsnprintf_chk(buf,2,0,-1,global_fmt,ap); // expected-warning {{format string is not a string literal}}
+
+  // rdar://6079877
+  printf("abc"
+         "%*d", (unsigned) 1, 1); // expected-warning {{field width should have type 'int'}}
+  printf("abc\
+def"
+         "%*d", (unsigned) 1, 1); // expected-warning {{field width should have type 'int'}}
+  
 }
 
 void check_conditional_literal(const char* s, int i) {
@@ -84,4 +92,36 @@ void check_asterisk_precision_width(int x) {
   printf("%*d",12,x); // no-warning
   printf("%*d","foo",x); // expected-warning {{field width should have type 'int', but argument has type 'char *'}}
   printf("%.*d","foo",x); // expected-warning {{field precision should have type 'int', but argument has type 'char *'}}
+}
+
+void __attribute__((format(printf,1,3))) myprintf(const char*, int blah, ...);
+
+void test_myprintf() {
+  myprintf("%d", 17, 18); // okay
+}
+
+void test_constant_bindings(void) {
+  const char * const s1 = "hello";
+  const char s2[] = "hello";
+  const char *s3 = "hello";
+  char * const s4 = "hello";
+  extern const char s5[];
+  
+  printf(s1); // no-warning
+  printf(s2); // no-warning
+  printf(s3); // expected-warning{{not a string literal}}
+  printf(s4); // expected-warning{{not a string literal}}
+  printf(s5); // expected-warning{{not a string literal}}
+}
+
+
+// Test what happens when -Wformat-security only.
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#pragma GCC diagnostic warning "-Wformat-security"
+
+void test9(char *P) {
+  int x;
+  printf(P);   // expected-warning {{format string is not a string literal (potentially insecure)}}
+  printf(P, 42);
+  printf("%n", &x); // expected-warning {{use of '%n' in format string discouraged }}
 }

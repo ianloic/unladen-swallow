@@ -18,75 +18,14 @@
 #include "llvm/ADT/SmallVector.h"
 
 namespace clang {
+
+class ClassTemplateDecl;
 class CXXRecordDecl;
 class CXXConstructorDecl;
 class CXXDestructorDecl;
 class CXXConversionDecl;
 class CXXMethodDecl;
-
-/// TemplateTypeParmDecl - Declaration of a template type parameter,
-/// e.g., "T" in
-/// @code
-/// template<typename T> class vector;
-/// @endcode
-class TemplateTypeParmDecl : public TypeDecl {
-  /// Typename - Whether this template type parameter was declaration
-  /// with the 'typename' keyword. If false, it was declared with the
-  /// 'class' keyword.
-  bool Typename : 1;
-
-  TemplateTypeParmDecl(DeclContext *DC, SourceLocation L,
-                       IdentifierInfo *Id, bool Typename)
-    : TypeDecl(TemplateTypeParm, DC, L, Id), Typename(Typename) { }
-
-public:
-  static TemplateTypeParmDecl *Create(ASTContext &C, DeclContext *DC,
-                                      SourceLocation L, IdentifierInfo *Id,
-                                      bool Typename);
-
-  /// wasDeclarationWithTypename - Whether this template type
-  /// parameter was declared with the 'typename' keyword. If not, it
-  /// was declared with the 'class' keyword.
-  bool wasDeclaredWithTypename() const { return Typename; }
-
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Decl *D) { 
-    return D->getKind() == TemplateTypeParm; 
-  }
-  static bool classof(const TemplateTypeParmDecl *D) { return true; }
-
-protected:
-  /// EmitImpl - Serialize this TemplateTypeParmDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a TemplateTypeParmDecl.  Called by Decl::Create.
-  static TemplateTypeParmDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);  
-};
-
-/// NonTypeTemplateParmDecl - Declares a non-type template parameter,
-/// e.g., "Size" in 
-/// @code
-/// template<int Size> class array { };
-/// @endcode
-class NonTypeTemplateParmDecl : public VarDecl {
-  NonTypeTemplateParmDecl(DeclContext *DC, SourceLocation L, 
-                          IdentifierInfo *Id, QualType T,
-                          SourceLocation TSSL = SourceLocation())
-    : VarDecl(NonTypeTemplateParm, DC, L, Id, T, VarDecl::None, TSSL) { }
-
-public:
-  static NonTypeTemplateParmDecl *
-  Create(ASTContext &C, DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
-         QualType T, SourceLocation TypeSpecStartLoc = SourceLocation());
-
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Decl *D) {
-    return D->getKind() == NonTypeTemplateParm;
-  }
-  static bool classof(const NonTypeTemplateParmDecl *D) { return true; }
-};
+class ClassTemplateSpecializationDecl;
 
 /// OverloadedFunctionDecl - An instance of this class represents a
 /// set of overloaded functions. All of the functions have the same
@@ -105,7 +44,11 @@ protected:
   /// Functions - the set of overloaded functions contained in this
   /// overload set.
   llvm::SmallVector<FunctionDecl *, 4> Functions;
-  
+
+  // FIXME: This should go away when we stop using
+  // OverloadedFunctionDecl to store conversions in CXXRecordDecl.
+  friend class CXXRecordDecl;
+
 public:
   typedef llvm::SmallVector<FunctionDecl *, 4>::iterator function_iterator;
   typedef llvm::SmallVector<FunctionDecl *, 4>::const_iterator
@@ -158,18 +101,6 @@ public:
     return D->getKind() == OverloadedFunction; 
   }
   static bool classof(const OverloadedFunctionDecl *D) { return true; }
-
-protected:
-  /// EmitImpl - Serialize this FunctionDecl.  Called by Decl::Emit.
-  virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize an OverloadedFunctionDecl.  Called by
-  /// Decl::Create.
-  static OverloadedFunctionDecl* CreateImpl(llvm::Deserializer& D, 
-                                            ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
-  friend class CXXRecordDecl;
 };
 
 /// CXXBaseSpecifier - A base class of a C++ class.
@@ -282,6 +213,16 @@ class CXXRecordDecl : public RecordDecl {
   /// virtual member or derives from a polymorphic class.
   bool Polymorphic : 1;
 
+  /// Abstract - True when this class is abstract, i.e. has at least one
+  /// pure virtual function, (that can come from a base class).
+  bool Abstract : 1;
+  
+  /// HasTrivialConstructor - True when this class has a trivial constructor
+  bool HasTrivialConstructor : 1;
+  
+  /// HasTrivialDestructor - True when this class has a trivial destructor
+  bool HasTrivialDestructor : 1;
+  
   /// Bases - Base classes of this class.
   /// FIXME: This is wasted space for a union.
   CXXBaseSpecifier *Bases;
@@ -295,7 +236,18 @@ class CXXRecordDecl : public RecordDecl {
   /// CXXConversionDecl.
   OverloadedFunctionDecl Conversions;
 
-  CXXRecordDecl(TagKind TK, DeclContext *DC,
+  /// \brief The template or declaration that is declaration is
+  /// instantiated from.
+  /// 
+  /// For non-templates, this value will be NULL. For record
+  /// declarations that describe a class template, this will be a
+  /// pointer to a ClassTemplateDecl. For member
+  /// classes of class template specializations, this will be the
+  /// RecordDecl from which the member class was instantiated.
+  llvm::PointerUnion<ClassTemplateDecl*, CXXRecordDecl*>TemplateOrInstantiation;
+
+protected:
+  CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
                 SourceLocation L, IdentifierInfo *Id);
 
   ~CXXRecordDecl();
@@ -352,7 +304,7 @@ public:
 
   /// addedAssignmentOperator - Notify the class that another assignment
   /// operator has been added. This routine helps maintain information about the
-  /// class based on which operators have been added.
+   /// class based on which operators have been added.
   void addedAssignmentOperator(ASTContext &Context, CXXMethodDecl *OpDecl);
 
   /// hasUserDeclaredCopyAssignment - Whether this class has a
@@ -370,7 +322,7 @@ public:
   /// setUserDeclaredDestructor - Set whether this class has a
   /// user-declared destructor. If not set by the time the class is
   /// fully defined, a destructor will be implicitly declared.
-  void setUserDeclaredDestructor(bool UCD = true) { 
+  void setUserDeclaredDestructor(bool UCD) { 
     UserDeclaredDestructor = UCD; 
   }
 
@@ -414,30 +366,90 @@ public:
   /// [class.virtual]).
   void setPolymorphic(bool Poly) { Polymorphic = Poly; }
 
+  /// isAbstract - Whether this class is abstract (C++ [class.abstract]),
+  /// which means that the class contains or inherits a pure virtual function.
+  bool isAbstract() const { return Abstract; }
+  
+  /// setAbstract - Set whether this class is abstract (C++ [class.abstract])
+  void setAbstract(bool Abs) { Abstract = Abs; }
+  
+  // hasTrivialConstructor - Whether this class has a trivial constructor
+  // (C++ [class.ctor]p5)
+  bool hasTrivialConstructor() const { return HasTrivialConstructor; }
+  
+  // setHasTrivialConstructor - Set whether this class has a trivial constructor
+  // (C++ [class.ctor]p5)
+  void setHasTrivialConstructor(bool TC) { HasTrivialConstructor = TC; }
+  
+  // hasTrivialDestructor - Whether this class has a trivial destructor
+  // (C++ [class.dtor]p3)
+  bool hasTrivialDestructor() const { return HasTrivialDestructor; }
+  
+  // setHasTrivialDestructor - Set whether this class has a trivial destructor
+  // (C++ [class.dtor]p3)
+  void setHasTrivialDestructor(bool TC) { HasTrivialDestructor = TC; }
+  
+  /// \brief If this record is an instantiation of a member class,
+  /// retrieves the member class from which it was instantiated.
+  ///
+  /// This routine will return non-NULL for (non-templated) member
+  /// classes of class templates. For example, given:
+  ///
+  /// \code
+  /// template<typename T>
+  /// struct X {
+  ///   struct A { };
+  /// };
+  /// \endcode
+  ///
+  /// The declaration for X<int>::A is a (non-templated) CXXRecordDecl
+  /// whose parent is the class template specialization X<int>. For
+  /// this declaration, getInstantiatedFromMemberClass() will return
+  /// the CXXRecordDecl X<T>::A. When a complete definition of
+  /// X<int>::A is required, it will be instantiated from the
+  /// declaration returned by getInstantiatedFromMemberClass().
+  CXXRecordDecl *getInstantiatedFromMemberClass() {
+    return TemplateOrInstantiation.dyn_cast<CXXRecordDecl*>();
+  }
+
+  /// \brief Specify that this record is an instantiation of the
+  /// member class RD.
+  void setInstantiationOfMemberClass(CXXRecordDecl *RD) { 
+    TemplateOrInstantiation = RD;
+  }
+
+  /// \brief Retrieves the class template that is described by this
+  /// class declaration.
+  ///
+  /// Every class template is represented as a ClassTemplateDecl and a
+  /// CXXRecordDecl. The former contains template properties (such as
+  /// the template parameter lists) while the latter contains the
+  /// actual description of the template's
+  /// contents. ClassTemplateDecl::getTemplatedDecl() retrieves the
+  /// CXXRecordDecl that from a ClassTemplateDecl, while
+  /// getDescribedClassTemplate() retrieves the ClassTemplateDecl from
+  /// a CXXRecordDecl.
+  ClassTemplateDecl *getDescribedClassTemplate() {
+    return TemplateOrInstantiation.dyn_cast<ClassTemplateDecl*>();
+  }
+
+  void setDescribedClassTemplate(ClassTemplateDecl *Template) {
+    TemplateOrInstantiation = Template;
+  }
+
   /// viewInheritance - Renders and displays an inheritance diagram
   /// for this C++ class and all of its base classes (transitively) using
   /// GraphViz.
   void viewInheritance(ASTContext& Context) const;
 
-  static bool classof(const Decl *D) { return D->getKind() == CXXRecord; }
+  static bool classof(const Decl *D) { 
+    return D->getKind() == CXXRecord || 
+           D->getKind() == ClassTemplateSpecialization; 
+  }
   static bool classof(const CXXRecordDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const CXXRecordDecl *D) {
-    return static_cast<DeclContext *>(const_cast<CXXRecordDecl*>(D));
+  static bool classof(const ClassTemplateSpecializationDecl *D) { 
+    return true; 
   }
-  static CXXRecordDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<CXXRecordDecl *>(const_cast<DeclContext*>(DC));
-  }
-
-protected:
-  /// EmitImpl - Serialize this CXXRecordDecl.  Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXRecordDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXRecordDecl* CreateImpl(Kind DK, llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXMethodDecl - Represents a static or instance method of a
@@ -481,7 +493,7 @@ public:
   QualType getThisType(ASTContext &C) const;
 
   unsigned getTypeQualifiers() const {
-    return getType()->getAsFunctionTypeProto()->getTypeQuals();
+    return getType()->getAsFunctionProtoType()->getTypeQuals();
   }
 
   // Implement isa/cast/dyncast/etc.
@@ -489,23 +501,6 @@ public:
     return D->getKind() >= CXXMethod && D->getKind() <= CXXConversion;
   }
   static bool classof(const CXXMethodDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const CXXMethodDecl *D) {
-    return static_cast<DeclContext *>(const_cast<CXXMethodDecl*>(D));
-  }
-  static CXXMethodDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<CXXMethodDecl *>(const_cast<DeclContext*>(DC));
-  }
-
-protected:
-  /// EmitImpl - Serialize this CXXMethodDecl.  Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXMethodDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXMethodDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-  
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXBaseOrMemberInitializer - Represents a C++ base or member
@@ -651,8 +646,8 @@ public:
   /// defined. If false, then this constructor was defined by the
   /// user. This operation can only be invoked if the constructor has
   /// already been defined.
-  bool isImplicitlyDefined() const { 
-    assert(getBody() != 0 && 
+  bool isImplicitlyDefined(ASTContext &C) const { 
+    assert(isThisDeclarationADefinition() && 
            "Can only get the implicit-definition flag once the constructor has been defined");
     return ImplicitlyDefined; 
   }
@@ -660,7 +655,7 @@ public:
   /// setImplicitlyDefined - Set whether this constructor was
   /// implicitly defined or not.
   void setImplicitlyDefined(bool ID) { 
-    assert(getBody() != 0 && 
+    assert(isThisDeclarationADefinition() && 
            "Can only set the implicit-definition flag once the constructor has been defined");
     ImplicitlyDefined = ID; 
   }
@@ -702,19 +697,6 @@ public:
     return D->getKind() == CXXConstructor;
   }
   static bool classof(const CXXConstructorDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const CXXConstructorDecl *D) {
-    return static_cast<DeclContext *>(const_cast<CXXConstructorDecl*>(D));
-  }
-  static CXXConstructorDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<CXXConstructorDecl *>(const_cast<DeclContext*>(DC));
-  }
-  /// EmitImpl - Serialize this CXXConstructorDecl.  Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXConstructorDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXConstructorDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXDestructorDecl - Represents a C++ destructor within a
@@ -754,7 +736,7 @@ public:
   /// user. This operation can only be invoked if the destructor has
   /// already been defined.
   bool isImplicitlyDefined() const { 
-    assert(getBody() != 0 && 
+    assert(isThisDeclarationADefinition() && 
            "Can only get the implicit-definition flag once the destructor has been defined");
     return ImplicitlyDefined; 
   }
@@ -762,7 +744,7 @@ public:
   /// setImplicitlyDefined - Set whether this destructor was
   /// implicitly defined or not.
   void setImplicitlyDefined(bool ID) { 
-    assert(getBody() != 0 && 
+    assert(isThisDeclarationADefinition() && 
            "Can only set the implicit-definition flag once the destructor has been defined");
     ImplicitlyDefined = ID; 
   }
@@ -772,19 +754,6 @@ public:
     return D->getKind() == CXXDestructor;
   }
   static bool classof(const CXXDestructorDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const CXXDestructorDecl *D) {
-    return static_cast<DeclContext *>(const_cast<CXXDestructorDecl*>(D));
-  }
-  static CXXDestructorDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<CXXDestructorDecl *>(const_cast<DeclContext*>(DC));
-  }
-  /// EmitImpl - Serialize this CXXDestructorDecl.  Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXDestructorDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXDestructorDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
 /// CXXConversionDecl - Represents a C++ conversion function within a
@@ -830,79 +799,8 @@ public:
     return D->getKind() == CXXConversion;
   }
   static bool classof(const CXXConversionDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const CXXConversionDecl *D) {
-    return static_cast<DeclContext *>(const_cast<CXXConversionDecl*>(D));
-  }
-  static CXXConversionDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<CXXConversionDecl *>(const_cast<DeclContext*>(DC));
-  }
-  /// EmitImpl - Serialize this CXXConversionDecl.  Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXConversionDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXConversionDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
 };
 
-/// CXXClassVarDecl - Represents a static data member of a struct/union/class.
-class CXXClassVarDecl : public VarDecl {
-
-  CXXClassVarDecl(CXXRecordDecl *RD, SourceLocation L,
-              IdentifierInfo *Id, QualType T)
-    : VarDecl(CXXClassVar, RD, L, Id, T, None) {}
-public:
-  static CXXClassVarDecl *Create(ASTContext &C, CXXRecordDecl *RD,
-                             SourceLocation L,IdentifierInfo *Id,
-                             QualType T);
-  
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Decl *D) { return D->getKind() == CXXClassVar; }
-  static bool classof(const CXXClassVarDecl *D) { return true; }
-  
-protected:
-  /// EmitImpl - Serialize this CXXClassVarDecl. Called by Decl::Emit.
-  // FIXME: Implement this.
-  //virtual void EmitImpl(llvm::Serializer& S) const;
-  
-  /// CreateImpl - Deserialize a CXXClassVarDecl.  Called by Decl::Create.
-  // FIXME: Implement this.
-  static CXXClassVarDecl* CreateImpl(llvm::Deserializer& D, ASTContext& C);
-
-  friend Decl* Decl::Create(llvm::Deserializer& D, ASTContext& C);
-};
-
-
-/// CXXClassMemberWrapper - A wrapper class for C++ class member decls.
-/// Common functions like set/getAccess are included here to avoid bloating
-/// the interface of non-C++ specific decl classes, like NamedDecl.
-/// FIXME: Doug would like to remove this class.
-class CXXClassMemberWrapper {
-  Decl *MD;
-
-public:
-  CXXClassMemberWrapper(Decl *D) : MD(D) {
-    assert(isMember(D) && "Not a C++ class member!");
-  }
-
-  AccessSpecifier getAccess() const {
-    return AccessSpecifier(MD->Access);
-  }
-
-  void setAccess(AccessSpecifier AS) {
-    assert(AS != AS_none && "Access must be specified.");
-    MD->Access = AS;
-  }
-
-  CXXRecordDecl *getParent() const {
-    return dyn_cast<CXXRecordDecl>(MD->getDeclContext());
-  }
-
-  static bool isMember(Decl *D) {
-    return isa<CXXRecordDecl>(D->getDeclContext());
-  }
-};
-  
 /// LinkageSpecDecl - This represents a linkage specification.  For example:
 ///   extern "C" void foo();
 ///
@@ -942,40 +840,187 @@ public:
     return D->getKind() == LinkageSpec;
   }
   static bool classof(const LinkageSpecDecl *D) { return true; }
-  
-protected:
-  void EmitInRec(llvm::Serializer& S) const;
-  void ReadInRec(llvm::Deserializer& D, ASTContext& C);
+  static DeclContext *castToDeclContext(const LinkageSpecDecl *D) {
+    return static_cast<DeclContext *>(const_cast<LinkageSpecDecl*>(D));
+  }
+  static LinkageSpecDecl *castFromDeclContext(const DeclContext *DC) {
+    return static_cast<LinkageSpecDecl *>(const_cast<DeclContext*>(DC));
+  }
 };
 
-/// TemplateParameterList - Stores a list of template parameters. 
-class TemplateParameterList {
-  /// NumParams - The number of template parameters in this template
-  /// parameter list. 
-  unsigned NumParams;
+/// UsingDirectiveDecl - Represents C++ using-directive. For example:
+///
+///    using namespace std;
+///
+// NB: UsingDirectiveDecl should be Decl not NamedDecl, but we provide
+// artificial name, for all using-directives in order to store
+// them in DeclContext effectively.
+class UsingDirectiveDecl : public NamedDecl {
 
-  TemplateParameterList(Decl **Params, unsigned NumParams);
+  /// SourceLocation - Location of 'namespace' token.
+  SourceLocation NamespaceLoc;
+
+  /// IdentLoc - Location of nominated namespace-name identifier.
+  // FIXME: We don't store location of scope specifier.
+  SourceLocation IdentLoc;
+
+  /// NominatedNamespace - Namespace nominated by using-directive.
+  NamespaceDecl *NominatedNamespace;
+
+  /// Enclosing context containing both using-directive and nomintated
+  /// namespace.
+  DeclContext *CommonAncestor;
+
+  /// getUsingDirectiveName - Returns special DeclarationName used by
+  /// using-directives. This is only used by DeclContext for storing
+  /// UsingDirectiveDecls in its lookup structure.
+  static DeclarationName getName() {
+    return DeclarationName::getUsingDirectiveName();
+  }
+
+  UsingDirectiveDecl(DeclContext *DC, SourceLocation L,
+                     SourceLocation NamespcLoc,
+                     SourceLocation IdentLoc,
+                     NamespaceDecl *Nominated,
+                     DeclContext *CommonAncestor)
+    : NamedDecl(Decl::UsingDirective, DC, L, getName()),
+      NamespaceLoc(NamespcLoc), IdentLoc(IdentLoc),
+      NominatedNamespace(Nominated? Nominated->getOriginalNamespace() : 0),
+      CommonAncestor(CommonAncestor) {
+  }
 
 public:
-  static TemplateParameterList *Create(ASTContext &C, Decl **Params, 
-                                       unsigned NumParams);
+  /// getNominatedNamespace - Returns namespace nominated by using-directive.
+  NamespaceDecl *getNominatedNamespace() { return NominatedNamespace; }
 
-  /// iterator - Iterates through the template parameters in this list.
-  typedef Decl** iterator;
-
-  /// const_iterator - Iterates through the template parameters in this list.
-  typedef Decl* const* const_iterator;
-
-  iterator begin() { return reinterpret_cast<Decl **>(this + 1); }
-  const_iterator begin() const { 
-    return reinterpret_cast<Decl * const *>(this + 1); 
+  const NamespaceDecl *getNominatedNamespace() const {
+    return const_cast<UsingDirectiveDecl*>(this)->getNominatedNamespace();
   }
-  iterator end() { return begin() + NumParams; }
-  const_iterator end() const { return begin() + NumParams; }
 
-  unsigned size() const { return NumParams; }
+  /// getCommonAncestor - returns common ancestor context of using-directive,
+  /// and nominated by it namespace.
+  DeclContext *getCommonAncestor() { return CommonAncestor; }
+  const DeclContext *getCommonAncestor() const { return CommonAncestor; }
+
+  /// getNamespaceKeyLocation - Returns location of namespace keyword.
+  SourceLocation getNamespaceKeyLocation() const { return NamespaceLoc; }
+
+  /// getIdentLocation - Returns location of identifier.
+  SourceLocation getIdentLocation() const { return IdentLoc; }
+
+  static UsingDirectiveDecl *Create(ASTContext &C, DeclContext *DC,
+                                    SourceLocation L,
+                                    SourceLocation NamespaceLoc,
+                                    SourceLocation IdentLoc,
+                                    NamespaceDecl *Nominated,
+                                    DeclContext *CommonAncestor);
+
+  static bool classof(const Decl *D) {
+    return D->getKind() == Decl::UsingDirective;
+  }
+  static bool classof(const UsingDirectiveDecl *D) { return true; }
+
+  // Friend for getUsingDirectiveName.
+  friend class DeclContext;
 };
 
+/// NamespaceAliasDecl - Represents a C++ namespace alias. For example:
+///
+/// @code
+/// namespace Foo = Bar;
+/// @endcode
+class NamespaceAliasDecl : public NamedDecl {
+  SourceLocation AliasLoc;
+  
+  /// IdentLoc - Location of namespace identifier.
+  /// FIXME: We don't store location of scope specifier.
+  SourceLocation IdentLoc;
+  
+  /// Namespace - The Decl that this alias points to. Can either be a 
+  /// NamespaceDecl or a NamespaceAliasDecl.
+  NamedDecl *Namespace;
+  
+  NamespaceAliasDecl(DeclContext *DC, SourceLocation L, 
+                     SourceLocation AliasLoc, IdentifierInfo *Alias, 
+                     SourceLocation IdentLoc, NamedDecl *Namespace)
+    : NamedDecl(Decl::NamespaceAlias, DC, L, Alias), AliasLoc(AliasLoc), 
+      IdentLoc(IdentLoc), Namespace(Namespace) { }
+
+public:
+
+  NamespaceDecl *getNamespace() {
+    if (NamespaceAliasDecl *AD = dyn_cast<NamespaceAliasDecl>(Namespace))
+      return AD->getNamespace();
+
+    return cast<NamespaceDecl>(Namespace);
+  }
+  
+  const NamespaceDecl *getNamespace() const {
+    return const_cast<NamespaceAliasDecl*>(this)->getNamespace();
+  }
+  
+  static NamespaceAliasDecl *Create(ASTContext &C, DeclContext *DC, 
+                                    SourceLocation L, SourceLocation AliasLoc, 
+                                    IdentifierInfo *Alias, 
+                                    SourceLocation IdentLoc, 
+                                    NamedDecl *Namespace);
+  
+  static bool classof(const Decl *D) {
+    return D->getKind() == Decl::NamespaceAlias;
+  }
+  static bool classof(const NamespaceAliasDecl *D) { return true; }
+};
+  
+/// StaticAssertDecl - Represents a C++0x static_assert declaration.
+class StaticAssertDecl : public Decl {
+  Expr *AssertExpr;
+  StringLiteral *Message;
+
+  StaticAssertDecl(DeclContext *DC, SourceLocation L, 
+                   Expr *assertexpr, StringLiteral *message)
+  : Decl(StaticAssert, DC, L), AssertExpr(assertexpr), Message(message) { }
+  
+public:
+  static StaticAssertDecl *Create(ASTContext &C, DeclContext *DC,
+                                  SourceLocation L, Expr *AssertExpr,
+                                  StringLiteral *Message);
+  
+  Expr *getAssertExpr() { return AssertExpr; }
+  const Expr *getAssertExpr() const { return AssertExpr; }
+  
+  StringLiteral *getMessage() { return Message; }
+  const StringLiteral *getMessage() const { return Message; }
+  
+  virtual ~StaticAssertDecl();
+  virtual void Destroy(ASTContext& C);
+
+  static bool classof(const Decl *D) {
+    return D->getKind() == Decl::StaticAssert;
+  }
+  static bool classof(StaticAssertDecl *D) { return true; }
+};
+
+/// CXXTempVarDecl - Represents an implicit C++ temporary variable declaration.
+class CXXTempVarDecl : public VarDecl {
+protected:
+  CXXTempVarDecl(DeclContext *DC, QualType T) 
+    : VarDecl(CXXTempVar, DC, SourceLocation(), 0, T, None) {}
+
+public:
+  static CXXTempVarDecl *Create(ASTContext &C, DeclContext *DC,
+                                QualType T);
+  
+  static bool classof(const Decl *D) {
+    return D->getKind() == Decl::CXXTempVar;
+  }
+  static bool classof(CXXTempVarDecl *D) { return true; }
+};
+
+/// Insertion operator for diagnostics.  This allows sending AccessSpecifier's
+/// into a diagnostic with <<.
+const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                    AccessSpecifier AS);
+  
 } // end namespace clang
 
 #endif

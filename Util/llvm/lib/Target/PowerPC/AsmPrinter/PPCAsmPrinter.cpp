@@ -49,13 +49,16 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  struct VISIBILITY_HIDDEN PPCAsmPrinter : public AsmPrinter {
+  class VISIBILITY_HIDDEN PPCAsmPrinter : public AsmPrinter {
+  protected:
     StringSet<> FnStubs, GVStubs, HiddenGVStubs;
     const PPCSubtarget &Subtarget;
-
-    PPCAsmPrinter(raw_ostream &O, TargetMachine &TM, const TargetAsmInfo *T)
-      : AsmPrinter(O, TM, T), Subtarget(TM.getSubtarget<PPCSubtarget>()) {
-    }
+  public:
+    explicit PPCAsmPrinter(raw_ostream &O, TargetMachine &TM,
+                           const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                           bool V)
+      : AsmPrinter(O, TM, T, OL, V),
+        Subtarget(TM.getSubtarget<PPCSubtarget>()) {}
 
     virtual const char *getPassName() const {
       return "PowerPC Assembly Printer";
@@ -291,14 +294,14 @@ namespace {
   };
 
   /// PPCLinuxAsmPrinter - PowerPC assembly printer, customized for Linux
-  struct VISIBILITY_HIDDEN PPCLinuxAsmPrinter : public PPCAsmPrinter {
+  class VISIBILITY_HIDDEN PPCLinuxAsmPrinter : public PPCAsmPrinter {
     DwarfWriter *DW;
     MachineModuleInfo *MMI;
-
-    PPCLinuxAsmPrinter(raw_ostream &O, PPCTargetMachine &TM,
-                    const TargetAsmInfo *T)
-      : PPCAsmPrinter(O, TM, T), DW(0), MMI(0) {
-    }
+  public:
+    explicit PPCLinuxAsmPrinter(raw_ostream &O, PPCTargetMachine &TM,
+                                const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                                bool V)
+      : PPCAsmPrinter(O, TM, T, OL, V), DW(0), MMI(0) {}
 
     virtual const char *getPassName() const {
       return "Linux PPC Assembly Printer";
@@ -320,15 +323,15 @@ namespace {
 
   /// PPCDarwinAsmPrinter - PowerPC assembly printer, customized for Darwin/Mac
   /// OS X
-  struct VISIBILITY_HIDDEN PPCDarwinAsmPrinter : public PPCAsmPrinter {
-
+  class VISIBILITY_HIDDEN PPCDarwinAsmPrinter : public PPCAsmPrinter {
     DwarfWriter *DW;
     MachineModuleInfo *MMI;
     raw_ostream &OS;
-    PPCDarwinAsmPrinter(raw_ostream &O, PPCTargetMachine &TM,
-                        const TargetAsmInfo *T)
-      : PPCAsmPrinter(O, TM, T), DW(0), MMI(0), OS(O) {
-    }
+  public:
+    explicit PPCDarwinAsmPrinter(raw_ostream &O, PPCTargetMachine &TM,
+                                 const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                                 bool V)
+      : PPCAsmPrinter(O, TM, T, OL, V), DW(0), MMI(0), OS(O) {}
 
     virtual const char *getPassName() const {
       return "Darwin PPC Assembly Printer";
@@ -388,7 +391,7 @@ void PPCAsmPrinter::printOp(const MachineOperand &MO) {
 
     // External or weakly linked global variables need non-lazily-resolved stubs
     if (TM.getRelocationModel() != Reloc::Static) {
-      if (GV->isDeclaration() || GV->mayBeOverridden()) {
+      if (GV->isDeclaration() || GV->isWeakForLinker()) {
         if (GV->hasHiddenVisibility()) {
           if (!GV->isDeclaration() && !GV->hasCommonLinkage())
             O << Name;
@@ -423,7 +426,8 @@ void PPCAsmPrinter::printOp(const MachineOperand &MO) {
 /// EmitExternalGlobal - In this case we need to use the indirect symbol.
 ///
 void PPCAsmPrinter::EmitExternalGlobal(const GlobalVariable *GV) {
-  std::string Name = getGlobalLinkName(GV);
+  std::string Name;
+  getGlobalLinkName(GV, Name);
   if (TM.getRelocationModel() != Reloc::Static) {
     if (GV->hasHiddenVisibility())
       HiddenGVStubs.insert(Name);
@@ -571,6 +575,7 @@ void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
 /// method to print assembly for each instruction.
 ///
 bool PPCLinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
 
   SetupMachineFunction(MF);
   O << "\n\n";
@@ -591,8 +596,10 @@ bool PPCLinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     O << "\t.global\t" << CurrentFnName << '\n'
       << "\t.type\t" << CurrentFnName << ", @function\n";
     break;
-  case Function::WeakLinkage:
-  case Function::LinkOnceLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
     O << "\t.global\t" << CurrentFnName << '\n';
     O << "\t.weak\t" << CurrentFnName << '\n';
     break;
@@ -656,7 +663,7 @@ bool PPCLinuxAsmPrinter::doInitialization(Module &M) {
 }
 
 /// PrintUnmangledNameSafely - Print out the printable characters in the name.
-/// Don't print things like \n or \0.
+/// Don't print things like \\n or \\0.
 static void PrintUnmangledNameSafely(const Value *V, raw_ostream &OS) {
   for (const char *Name = V->getNameStart(), *E = Name+V->getNameLen();
        Name != E; ++Name)
@@ -688,7 +695,7 @@ void PPCLinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (C->isNullValue() && /* FIXME: Verify correct */
       !GVar->hasSection() &&
       (GVar->hasLocalLinkage() || GVar->hasExternalLinkage() ||
-       GVar->mayBeOverridden())) {
+       GVar->isWeakForLinker())) {
       if (Size == 0) Size = 1;   // .comm Foo, 0 is undefined, avoid it.
 
       if (GVar->hasExternalLinkage()) {
@@ -701,15 +708,20 @@ void PPCLinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
       } else {
         O << ".comm " << name << ',' << Size;
       }
-      O << "\t\t" << TAI->getCommentString() << " '";
-      PrintUnmangledNameSafely(GVar, O);
-      O << "'\n";
+      if (VerboseAsm) {
+        O << "\t\t" << TAI->getCommentString() << " '";
+        PrintUnmangledNameSafely(GVar, O);
+        O << "'";
+      }
+      O << '\n';
       return;
   }
 
   switch (GVar->getLinkage()) {
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage:
+   case GlobalValue::WeakODRLinkage:
    case GlobalValue::CommonLinkage:
     O << "\t.global " << name << '\n'
       << "\t.type " << name << ", @object\n"
@@ -732,9 +744,13 @@ void PPCLinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   }
 
   EmitAlignment(Align, GVar);
-  O << name << ":\t\t\t\t" << TAI->getCommentString() << " '";
-  PrintUnmangledNameSafely(GVar, O);
-  O << "'\n";
+  O << name << ":";
+  if (VerboseAsm) {
+    O << "\t\t\t\t" << TAI->getCommentString() << " '";
+    PrintUnmangledNameSafely(GVar, O);
+    O << "'";
+  }
+  O << '\n';
 
   // If the initializer is a extern weak symbol, remember to emit the weak
   // reference!
@@ -764,6 +780,8 @@ bool PPCLinuxAsmPrinter::doFinalization(Module &M) {
 /// method to print assembly for each instruction.
 ///
 bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  this->MF = &MF;
+
   SetupMachineFunction(MF);
   O << "\n\n";
 
@@ -782,8 +800,10 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   case Function::ExternalLinkage:
     O << "\t.globl\t" << CurrentFnName << '\n';
     break;
-  case Function::WeakLinkage:
-  case Function::LinkOnceLinkage:
+  case Function::WeakAnyLinkage:
+  case Function::WeakODRLinkage:
+  case Function::LinkOnceAnyLinkage:
+  case Function::LinkOnceODRLinkage:
     O << "\t.globl\t" << CurrentFnName << '\n';
     O << "\t.weak_definition\t" << CurrentFnName << '\n';
     break;
@@ -810,7 +830,7 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
        I != E; ++I) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
-      printBasicBlockLabel(I, true, true);
+      printBasicBlockLabel(I, true, true, VerboseAsm);
       O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
@@ -915,7 +935,8 @@ void PPCDarwinAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (C->isNullValue() && /* FIXME: Verify correct */
       !GVar->hasSection() &&
       (GVar->hasLocalLinkage() || GVar->hasExternalLinkage() ||
-       GVar->mayBeOverridden())) {
+       GVar->isWeakForLinker()) &&
+      TAI->SectionKindForGlobal(GVar) != SectionKind::RODataMergeStr) {
     if (Size == 0) Size = 1;   // .comm Foo, 0 is undefined, avoid it.
 
     if (GVar->hasExternalLinkage()) {
@@ -928,8 +949,11 @@ void PPCDarwinAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
       O << "\t.globl " << name << '\n'
         << TAI->getWeakDefDirective() << name << '\n';
       EmitAlignment(Align, GVar);
-      O << name << ":\t\t\t\t" << TAI->getCommentString() << " ";
-      PrintUnmangledNameSafely(GVar, O);
+      O << name << ":";
+      if (VerboseAsm) {
+        O << "\t\t\t\t" << TAI->getCommentString() << " ";
+        PrintUnmangledNameSafely(GVar, O);
+      }
       O << '\n';
       EmitGlobalConstant(C);
       return;
@@ -939,15 +963,20 @@ void PPCDarwinAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
       if (Subtarget.isDarwin9())
         O << ',' << Align;
     }
-    O << "\t\t" << TAI->getCommentString() << " '";
-    PrintUnmangledNameSafely(GVar, O);
-    O << "'\n";
+    if (VerboseAsm) {
+      O << "\t\t" << TAI->getCommentString() << " '";
+      PrintUnmangledNameSafely(GVar, O);
+      O << "'";
+    }
+    O << '\n';
     return;
   }
 
   switch (GVar->getLinkage()) {
-   case GlobalValue::LinkOnceLinkage:
-   case GlobalValue::WeakLinkage:
+   case GlobalValue::LinkOnceAnyLinkage:
+   case GlobalValue::LinkOnceODRLinkage:
+   case GlobalValue::WeakAnyLinkage:
+   case GlobalValue::WeakODRLinkage:
    case GlobalValue::CommonLinkage:
     O << "\t.globl " << name << '\n'
       << "\t.weak_definition " << name << '\n';
@@ -968,9 +997,13 @@ void PPCDarwinAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   }
 
   EmitAlignment(Align, GVar);
-  O << name << ":\t\t\t\t" << TAI->getCommentString() << " '";
-  PrintUnmangledNameSafely(GVar, O);
-  O << "'\n";
+  O << name << ":";
+  if (VerboseAsm) {
+    O << "\t\t\t\t" << TAI->getCommentString() << " '";
+    PrintUnmangledNameSafely(GVar, O);
+    O << "'";
+  }
+  O << '\n';
 
   // If the initializer is a extern weak symbol, remember to emit the weak
   // reference!
@@ -1145,13 +1178,17 @@ bool PPCDarwinAsmPrinter::doFinalization(Module &M) {
 /// Darwin assembler can deal with.
 ///
 FunctionPass *llvm::createPPCAsmPrinterPass(raw_ostream &o,
-                                            PPCTargetMachine &tm) {
+                                            PPCTargetMachine &tm,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool verbose) {
   const PPCSubtarget *Subtarget = &tm.getSubtarget<PPCSubtarget>();
 
   if (Subtarget->isDarwin()) {
-    return new PPCDarwinAsmPrinter(o, tm, tm.getTargetAsmInfo());
+    return new PPCDarwinAsmPrinter(o, tm, tm.getTargetAsmInfo(),
+                                   OptLevel, verbose);
   } else {
-    return new PPCLinuxAsmPrinter(o, tm, tm.getTargetAsmInfo());
+    return new PPCLinuxAsmPrinter(o, tm, tm.getTargetAsmInfo(),
+                                  OptLevel, verbose);
   }
 }
 

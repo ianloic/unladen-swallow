@@ -21,12 +21,12 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/DwarfWriter.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetLowering.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -35,13 +35,23 @@
 #include <cerrno>
 using namespace llvm;
 
+static cl::opt<cl::boolOrDefault>
+AsmVerbose("asm-verbose", cl::desc("Add comments to directives."),
+           cl::init(cl::BOU_UNSET));
+
 char AsmPrinter::ID = 0;
 AsmPrinter::AsmPrinter(raw_ostream &o, TargetMachine &tm,
-                       const TargetAsmInfo *T)
-  : MachineFunctionPass(&ID), FunctionNumber(0), O(o),
+                       const TargetAsmInfo *T, CodeGenOpt::Level OL, bool VDef)
+  : MachineFunctionPass(&ID), FunctionNumber(0), OptLevel(OL), O(o),
     TM(tm), TAI(T), TRI(tm.getRegisterInfo()),
     IsInTextSection(false)
-{}
+{
+  switch (AsmVerbose) {
+  case cl::BOU_UNSET: VerboseAsm = VDef;  break;
+  case cl::BOU_TRUE:  VerboseAsm = true;  break;
+  case cl::BOU_FALSE: VerboseAsm = false; break;
+  }
+}
 
 AsmPrinter::~AsmPrinter() {
   for (gcp_iterator I = GCMetadataPrinters.begin(),
@@ -175,11 +185,8 @@ bool AsmPrinter::doFinalization(Module &M) {
       SwitchToDataSection("");
 
     for (std::set<const GlobalValue*>::iterator i = ExtWeakSymbols.begin(),
-         e = ExtWeakSymbols.end(); i != e; ++i) {
-      const GlobalValue *GV = *i;
-      std::string Name = Mang->getValueName(GV);
-      O << TAI->getWeakRefDirective() << Name << '\n';
-    }
+         e = ExtWeakSymbols.end(); i != e; ++i)
+      O << TAI->getWeakRefDirective() << Mang->getValueName(*i) << '\n';
   }
 
   if (TAI->getSetDirective()) {
@@ -205,16 +212,6 @@ bool AsmPrinter::doFinalization(Module &M) {
       printVisibility(Name, I->getVisibility());
 
       O << TAI->getSetDirective() << ' ' << Name << ", " << Target << '\n';
-
-      // If the aliasee has external weak linkage it can be referenced only by
-      // alias itself. In this case it can be not in ExtWeakSymbols list. Emit
-      // weak reference in such case.
-      if (GV->hasExternalWeakLinkage()) {
-        if (TAI->getWeakRefDirective())
-          O << TAI->getWeakRefDirective() << Target << '\n';
-        else
-          O << "\t.globl\t" << Target << '\n';
-      }
     }
   }
 
@@ -235,19 +232,32 @@ bool AsmPrinter::doFinalization(Module &M) {
   return false;
 }
 
-std::string AsmPrinter::getCurrentFunctionEHName(const MachineFunction *MF) {
+const std::string &
+AsmPrinter::getCurrentFunctionEHName(const MachineFunction *MF,
+                                     std::string &Name) const {
   assert(MF && "No machine function?");
-  std::string Name = MF->getFunction()->getName();
+  Name = MF->getFunction()->getName();
   if (Name.empty())
     Name = Mang->getValueName(MF->getFunction());
-  return Mang->makeNameProper(TAI->getEHGlobalPrefix() +
+  Name = Mang->makeNameProper(TAI->getEHGlobalPrefix() +
                               Name + ".eh", TAI->getGlobalPrefix());
+  return Name;
 }
 
 void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   // What's my mangled name?
   CurrentFnName = Mang->getValueName(MF.getFunction());
   IncrementFunctionNumber();
+}
+
+namespace {
+  // SectionCPs - Keep track the alignment, constpool entries per Section.
+  struct SectionCPs {
+    const Section *S;
+    unsigned Alignment;
+    SmallVector<unsigned, 4> CPEs;
+    SectionCPs(const Section *s, unsigned a) : S(s), Alignment(a) {};
+  };
 }
 
 /// EmitConstantPool - Print to the current output stream assembly
@@ -261,48 +271,60 @@ void AsmPrinter::EmitConstantPool(MachineConstantPool *MCP) {
 
   // Calculate sections for constant pool entries. We collect entries to go into
   // the same section together to reduce amount of section switch statements.
-  typedef
-    std::multimap<const Section*,
-                  std::pair<MachineConstantPoolEntry, unsigned> > CPMap;
-  CPMap  CPs;
-  SmallPtrSet<const Section*, 5> Sections;
-
+  SmallVector<SectionCPs, 4> CPSections;
   for (unsigned i = 0, e = CP.size(); i != e; ++i) {
     MachineConstantPoolEntry CPE = CP[i];
+    unsigned Align = CPE.getAlignment();
     const Section* S = TAI->SelectSectionForMachineConst(CPE.getType());
-    CPs.insert(std::make_pair(S, std::make_pair(CPE, i)));
-    Sections.insert(S);
+    // The number of sections are small, just do a linear search from the
+    // last section to the first.
+    bool Found = false;
+    unsigned SecIdx = CPSections.size();
+    while (SecIdx != 0) {
+      if (CPSections[--SecIdx].S == S) {
+        Found = true;
+        break;
+      }
+    }
+    if (!Found) {
+      SecIdx = CPSections.size();
+      CPSections.push_back(SectionCPs(S, Align));
+    }
+
+    if (Align > CPSections[SecIdx].Alignment)
+      CPSections[SecIdx].Alignment = Align;
+    CPSections[SecIdx].CPEs.push_back(i);
   }
 
   // Now print stuff into the calculated sections.
-  for (SmallPtrSet<const Section*, 5>::iterator IS = Sections.begin(),
-         ES = Sections.end(); IS != ES; ++IS) {
-    SwitchToSection(*IS);
-    EmitAlignment(MCP->getConstantPoolAlignment());
+  for (unsigned i = 0, e = CPSections.size(); i != e; ++i) {
+    SwitchToSection(CPSections[i].S);
+    EmitAlignment(Log2_32(CPSections[i].Alignment));
 
-    std::pair<CPMap::iterator, CPMap::iterator> II = CPs.equal_range(*IS);
-    for (CPMap::iterator I = II.first, E = II.second; I != E; ++I) {
-      CPMap::iterator J = next(I);
-      MachineConstantPoolEntry Entry = I->second.first;
-      unsigned index = I->second.second;
-
-      O << TAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber() << '_'
-        << index << ":\t\t\t\t\t";
-    // O << TAI->getCommentString() << ' ' << 
-    //      WriteTypeSymbolic(O, CP[i].first.getType(), 0);
-      O << '\n';
-      if (Entry.isMachineConstantPoolEntry())
-        EmitMachineConstantPoolValue(Entry.Val.MachineCPVal);
-      else
-        EmitGlobalConstant(Entry.Val.ConstVal);
+    unsigned Offset = 0;
+    for (unsigned j = 0, ee = CPSections[i].CPEs.size(); j != ee; ++j) {
+      unsigned CPI = CPSections[i].CPEs[j];
+      MachineConstantPoolEntry CPE = CP[CPI];
 
       // Emit inter-object padding for alignment.
-      if (J != E) {
-        const Type *Ty = Entry.getType();
-        unsigned EntSize = TM.getTargetData()->getTypePaddedSize(Ty);
-        unsigned ValEnd = Entry.getOffset() + EntSize;
-        EmitZeros(J->second.first.getOffset()-ValEnd);
+      unsigned AlignMask = CPE.getAlignment() - 1;
+      unsigned NewOffset = (Offset + AlignMask) & ~AlignMask;
+      EmitZeros(NewOffset - Offset);
+
+      const Type *Ty = CPE.getType();
+      Offset = NewOffset + TM.getTargetData()->getTypePaddedSize(Ty);
+
+      O << TAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber() << '_'
+        << CPI << ":\t\t\t\t\t";
+      if (VerboseAsm) {
+        O << TAI->getCommentString() << ' ';
+        WriteTypeSymbolic(O, CPE.getType(), 0);
       }
+      O << '\n';
+      if (CPE.isMachineConstantPoolEntry())
+        EmitMachineConstantPoolValue(CPE.Val.MachineCPVal);
+      else
+        EmitGlobalConstant(CPE.Val.ConstVal);
     }
   }
 }
@@ -420,7 +442,9 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
   }
 
   // Ignore debug and non-emitted data.
-  if (GV->getSection() == "llvm.metadata") return true;
+  if (GV->getSection() == "llvm.metadata" ||
+      GV->hasAvailableExternallyLinkage())
+    return true;
   
   if (!GV->hasAppendingLinkage()) return false;
 
@@ -428,14 +452,14 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
   
   const TargetData *TD = TM.getTargetData();
   unsigned Align = Log2_32(TD->getPointerPrefAlignment());
-  if (GV->getName() == "llvm.global_ctors" && GV->use_empty()) {
+  if (GV->getName() == "llvm.global_ctors") {
     SwitchToDataSection(TAI->getStaticCtorsSection());
     EmitAlignment(Align, 0);
     EmitXXStructorList(GV->getInitializer());
     return true;
   } 
   
-  if (GV->getName() == "llvm.global_dtors" && GV->use_empty()) {
+  if (GV->getName() == "llvm.global_dtors") {
     SwitchToDataSection(TAI->getStaticDtorsSection());
     EmitAlignment(Align, 0);
     EmitXXStructorList(GV->getInitializer());
@@ -512,9 +536,8 @@ void AsmPrinter::EmitXXStructorList(Constant *List) {
 /// getGlobalLinkName - Returns the asm/link name of of the specified
 /// global variable.  Should be overridden by each target asm printer to
 /// generate the appropriate value.
-const std::string AsmPrinter::getGlobalLinkName(const GlobalVariable *GV) const{
-  std::string LinkName;
-  
+const std::string &AsmPrinter::getGlobalLinkName(const GlobalVariable *GV,
+                                                 std::string &LinkName) const {
   if (isa<Function>(GV)) {
     LinkName += TAI->getFunctionAddrPrefix();
     LinkName += Mang->getValueName(GV);
@@ -531,7 +554,8 @@ const std::string AsmPrinter::getGlobalLinkName(const GlobalVariable *GV) const{
 /// EmitExternalGlobal - Emit the external reference to a global variable.
 /// Should be overridden if an indirect reference should be used.
 void AsmPrinter::EmitExternalGlobal(const GlobalVariable *GV) {
-  O << getGlobalLinkName(GV);
+  std::string GLN;
+  O << getGlobalLinkName(GV, GLN);
 }
 
 
@@ -676,7 +700,7 @@ static inline char toOctal(int X) {
 
 /// printStringChar - Print a char, escaped if necessary.
 ///
-static void printStringChar(raw_ostream &O, char C) {
+static void printStringChar(raw_ostream &O, unsigned char C) {
   if (C == '"') {
     O << "\\\"";
   } else if (C == '\\') {
@@ -704,16 +728,18 @@ static void printStringChar(raw_ostream &O, char C) {
 /// Special characters are emitted properly.
 /// \literal (Eg. '\t') \endliteral
 void AsmPrinter::EmitString(const std::string &String) const {
+  EmitString(String.c_str(), String.size());
+}
+
+void AsmPrinter::EmitString(const char *String, unsigned Size) const {
   const char* AscizDirective = TAI->getAscizDirective();
   if (AscizDirective)
     O << AscizDirective;
   else
     O << TAI->getAsciiDirective();
   O << '\"';
-  for (unsigned i = 0, N = String.size(); i < N; ++i) {
-    unsigned char C = String[i];
-    printStringChar(O, C);
-  }
+  for (unsigned i = 0; i < Size; ++i)
+    printStringChar(O, String[i]);
   if (AscizDirective)
     O << '\"';
   else
@@ -724,10 +750,8 @@ void AsmPrinter::EmitString(const std::string &String) const {
 /// EmitFile - Emit a .file directive.
 void AsmPrinter::EmitFile(unsigned Number, const std::string &Name) const {
   O << "\t.file\t" << Number << " \"";
-  for (unsigned i = 0, N = Name.size(); i < N; ++i) {
-    unsigned char C = Name[i];
-    printStringChar(O, C);
-  }
+  for (unsigned i = 0, N = Name.size(); i < N; ++i)
+    printStringChar(O, Name[i]);
   O << '\"';
 }
 
@@ -815,6 +839,12 @@ void AsmPrinter::EmitConstantValueOnly(const Constant *CV) {
       SmallVector<Value*, 8> idxVec(CE->op_begin()+1, CE->op_end());
       if (int64_t Offset = TD->getIndexedOffset(ptrVal->getType(), &idxVec[0],
                                                 idxVec.size())) {
+        // Truncate/sext the offset to the pointer size.
+        if (TD->getPointerSizeInBits() != 64) {
+          int SExtAmount = 64-TD->getPointerSizeInBits();
+          Offset = (Offset << SExtAmount) >> SExtAmount;
+        }
+        
         if (Offset)
           O << '(';
         EmitConstantValueOnly(ptrVal);
@@ -940,12 +970,13 @@ void AsmPrinter::EmitString(const ConstantArray *CVA) const {
   O << '\n';
 }
 
-void AsmPrinter::EmitGlobalConstantArray(const ConstantArray *CVA) {
+void AsmPrinter::EmitGlobalConstantArray(const ConstantArray *CVA,
+                                         unsigned AddrSpace) {
   if (CVA->isString()) {
     EmitString(CVA);
   } else { // Not a string.  Print the values in successive locations
     for (unsigned i = 0, e = CVA->getNumOperands(); i != e; ++i)
-      EmitGlobalConstant(CVA->getOperand(i));
+      EmitGlobalConstant(CVA->getOperand(i), AddrSpace);
   }
 }
 
@@ -992,30 +1023,42 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
   if (CFP->getType() == Type::DoubleTy) {
     double Val = CFP->getValueAPF().convertToDouble();  // for comment only
     uint64_t i = CFP->getValueAPF().bitcastToAPInt().getZExtValue();
-    if (TAI->getData64bitsDirective(AddrSpace))
-      O << TAI->getData64bitsDirective(AddrSpace) << i << '\t'
-        << TAI->getCommentString() << " double value: " << Val << '\n';
-    else if (TD->isBigEndian()) {
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i >> 32)
-        << '\t' << TAI->getCommentString()
-        << " double most significant word " << Val << '\n';
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i)
-        << '\t' << TAI->getCommentString()
-        << " double least significant word " << Val << '\n';
+    if (TAI->getData64bitsDirective(AddrSpace)) {
+      O << TAI->getData64bitsDirective(AddrSpace) << i;
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString() << " double value: " << Val;
+      O << '\n';
+    } else if (TD->isBigEndian()) {
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " double most significant word " << Val;
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " double least significant word " << Val;
+      O << '\n';
     } else {
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i)
-        << '\t' << TAI->getCommentString()
-        << " double least significant word " << Val << '\n';
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i >> 32)
-        << '\t' << TAI->getCommentString()
-        << " double most significant word " << Val << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " double least significant word " << Val;
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(i >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " double most significant word " << Val;
+      O << '\n';
     }
     return;
   } else if (CFP->getType() == Type::FloatTy) {
     float Val = CFP->getValueAPF().convertToFloat();  // for comment only
     O << TAI->getData32bitsDirective(AddrSpace)
-      << CFP->getValueAPF().bitcastToAPInt().getZExtValue()
-      << '\t' << TAI->getCommentString() << " float " << Val << '\n';
+      << CFP->getValueAPF().bitcastToAPInt().getZExtValue();
+    if (VerboseAsm)
+      O << '\t' << TAI->getCommentString() << " float " << Val;
+    O << '\n';
     return;
   } else if (CFP->getType() == Type::X86_FP80Ty) {
     // all long double variants are printed as hex
@@ -1028,39 +1071,56 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
     DoubleVal.convert(APFloat::IEEEdouble, APFloat::rmNearestTiesToEven,
                       &ignored);
     if (TD->isBigEndian()) {
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 48)
-        << '\t' << TAI->getCommentString()
-        << " long double most significant halfword of ~"
-        << DoubleVal.convertToDouble() << '\n';
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 16)
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0])
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[1])
-        << '\t' << TAI->getCommentString()
-        << " long double least significant halfword\n";
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[1]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double most significant halfword of ~"
+          << DoubleVal.convertToDouble();
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 48);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString() << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString() << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 16);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString() << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double least significant halfword";
+      O << '\n';
      } else {
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[1])
-        << '\t' << TAI->getCommentString()
-        << " long double least significant halfword of ~"
-        << DoubleVal.convertToDouble() << '\n';
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0])
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 16)
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double next halfword\n";
-      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 48)
-        << '\t' << TAI->getCommentString()
-        << " long double most significant halfword\n";
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double least significant halfword of ~"
+          << DoubleVal.convertToDouble();
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 16);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[0] >> 48);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next halfword";
+      O << '\n';
+      O << TAI->getData16bitsDirective(AddrSpace) << uint16_t(p[1]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double most significant halfword";
+      O << '\n';
     }
     EmitZeros(TD->getTypePaddedSize(Type::X86_FP80Ty) -
               TD->getTypeStoreSize(Type::X86_FP80Ty), AddrSpace);
@@ -1071,31 +1131,47 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
     APInt api = CFP->getValueAPF().bitcastToAPInt();
     const uint64_t *p = api.getRawData();
     if (TD->isBigEndian()) {
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double most significant word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0])
-        << '\t' << TAI->getCommentString()
-        << " long double next word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double next word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1])
-        << '\t' << TAI->getCommentString()
-        << " long double least significant word\n";
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double most significant word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0]);
+      if (VerboseAsm)      
+        O << '\t' << TAI->getCommentString()
+        << " long double next word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double least significant word";
+      O << '\n';
      } else {
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1])
-        << '\t' << TAI->getCommentString()
-        << " long double least significant word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double next word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0])
-        << '\t' << TAI->getCommentString()
-        << " long double next word\n";
-      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0] >> 32)
-        << '\t' << TAI->getCommentString()
-        << " long double most significant word\n";
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double least significant word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[1] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0]);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double next word";
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << uint32_t(p[0] >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " long double most significant word";
+      O << '\n';
     }
     return;
   } else assert(0 && "Floating point constant type not handled");
@@ -1122,19 +1198,27 @@ void AsmPrinter::EmitGlobalConstantLargeInt(const ConstantInt *CI,
     if (TAI->getData64bitsDirective(AddrSpace))
       O << TAI->getData64bitsDirective(AddrSpace) << Val << '\n';
     else if (TD->isBigEndian()) {
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val >> 32)
-        << '\t' << TAI->getCommentString()
-        << " Double-word most significant word " << Val << '\n';
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val)
-        << '\t' << TAI->getCommentString()
-        << " Double-word least significant word " << Val << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " Double-word most significant word " << Val;
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " Double-word least significant word " << Val;
+      O << '\n';
     } else {
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val)
-        << '\t' << TAI->getCommentString()
-        << " Double-word least significant word " << Val << '\n';
-      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val >> 32)
-        << '\t' << TAI->getCommentString()
-        << " Double-word most significant word " << Val << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " Double-word least significant word " << Val;
+      O << '\n';
+      O << TAI->getData32bitsDirective(AddrSpace) << unsigned(Val >> 32);
+      if (VerboseAsm)
+        O << '\t' << TAI->getCommentString()
+          << " Double-word most significant word " << Val;
+      O << '\n';
     }
   }
 }
@@ -1149,7 +1233,7 @@ void AsmPrinter::EmitGlobalConstant(const Constant *CV, unsigned AddrSpace) {
     EmitZeros(Size, AddrSpace);
     return;
   } else if (const ConstantArray *CVA = dyn_cast<ConstantArray>(CV)) {
-    EmitGlobalConstantArray(CVA);
+    EmitGlobalConstantArray(CVA , AddrSpace);
     return;
   } else if (const ConstantStruct *CVS = dyn_cast<ConstantStruct>(CV)) {
     EmitGlobalConstantStruct(CVS, AddrSpace);
@@ -1170,10 +1254,12 @@ void AsmPrinter::EmitGlobalConstant(const Constant *CV, unsigned AddrSpace) {
 
   printDataDirective(type, AddrSpace);
   EmitConstantValueOnly(CV);
-  if (const ConstantInt *CI = dyn_cast<ConstantInt>(CV)) {
-    SmallString<40> S;
-    CI->getValue().toStringUnsigned(S, 16);
-    O << "\t\t\t" << TAI->getCommentString() << " 0x" << S.c_str();
+  if (VerboseAsm) {
+    if (const ConstantInt *CI = dyn_cast<ConstantInt>(CV)) {
+      SmallString<40> S;
+      CI->getValue().toStringUnsigned(S, 16);
+      O << "\t\t\t" << TAI->getCommentString() << " 0x" << S.c_str();
+    }
   }
   O << '\n';
 }
@@ -1189,11 +1275,12 @@ void AsmPrinter::EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
 /// or other bits of target-specific knowledge into the asmstrings.  The
 /// syntax used is ${:comment}.  Targets can override this to add support
 /// for their own strange codes.
-void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) {
+void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) const {
   if (!strcmp(Code, "private")) {
     O << TAI->getPrivateGlobalPrefix();
   } else if (!strcmp(Code, "comment")) {
-    O << TAI->getCommentString();
+    if (VerboseAsm)
+      O << TAI->getCommentString();
   } else if (!strcmp(Code, "uid")) {
     // Assign a unique ID to this machine instruction.
     static const MachineInstr *LastMI = 0;
@@ -1311,6 +1398,25 @@ void AsmPrinter::printInlineAsm(const MachineInstr *MI) const {
         HasCurlyBraces = true;
       }
       
+      // If we have ${:foo}, then this is not a real operand reference, it is a
+      // "magic" string reference, just like in .td files.  Arrange to call
+      // PrintSpecial.
+      if (HasCurlyBraces && *LastEmitted == ':') {
+        ++LastEmitted;
+        const char *StrStart = LastEmitted;
+        const char *StrEnd = strchr(StrStart, '}');
+        if (StrEnd == 0) {
+          cerr << "Unterminated ${:foo} operand in inline asm string: '" 
+               << AsmStr << "'\n";
+          exit(1);
+        }
+        
+        std::string Val(StrStart, StrEnd);
+        PrintSpecial(MI, Val.c_str());
+        LastEmitted = StrEnd+1;
+        break;
+      }
+            
       const char *IDStart = LastEmitted;
       char *IDEnd;
       errno = 0;
@@ -1364,7 +1470,7 @@ void AsmPrinter::printInlineAsm(const MachineInstr *MI) const {
         for (; Val; --Val) {
           if (OpNo >= MI->getNumOperands()) break;
           unsigned OpFlags = MI->getOperand(OpNo).getImm();
-          OpNo += (OpFlags >> 3) + 1;
+          OpNo += InlineAsm::getNumOperandRegisters(OpFlags) + 1;
         }
 
         if (OpNo >= MI->getNumOperands()) {
@@ -1404,8 +1510,9 @@ void AsmPrinter::printInlineAsm(const MachineInstr *MI) const {
 /// printImplicitDef - This method prints the specified machine instruction
 /// that is an implicit def.
 void AsmPrinter::printImplicitDef(const MachineInstr *MI) const {
-  O << '\t' << TAI->getCommentString() << " implicit-def: "
-    << TRI->getAsmName(MI->getOperand(0).getReg()) << '\n';
+  if (VerboseAsm)
+    O << '\t' << TAI->getCommentString() << " implicit-def: "
+      << TRI->getAsmName(MI->getOperand(0).getReg()) << '\n';
 }
 
 /// printLabel - This method prints a local label used by debug and
@@ -1425,7 +1532,7 @@ void AsmPrinter::printLabel(unsigned Id) const {
 void AsmPrinter::printDeclare(const MachineInstr *MI) const {
   unsigned FI = MI->getOperand(0).getIndex();
   GlobalValue *GV = MI->getOperand(1).getGlobal();
-  DW->RecordVariable(cast<GlobalVariable>(GV), FI);
+  DW->RecordVariable(cast<GlobalVariable>(GV), FI, MI);
 }
 
 /// PrintAsmOperand - Print the specified operand of MI, an INLINEASM

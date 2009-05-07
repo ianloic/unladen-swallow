@@ -15,7 +15,6 @@
 
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/AST/Type.h"
-#include "llvm/Bitcode/SerializationFwd.h"
 
 namespace llvm {
   template <typename T> struct DenseMapInfo;
@@ -27,6 +26,7 @@ namespace clang {
   class DeclarationNameExtra;
   class IdentifierInfo;
   class MultiKeywordSelector;
+  class UsingDirectiveDecl;
 
 /// DeclarationName - The name of a declaration. In the common case,
 /// this just stores an IdentifierInfo pointer to a normal
@@ -45,7 +45,8 @@ public:
     CXXConstructorName,
     CXXDestructorName,
     CXXConversionFunctionName,
-    CXXOperatorName
+    CXXOperatorName,
+    CXXUsingDirective
   };
 
 private:
@@ -102,16 +103,14 @@ private:
     if (getNameKind() >= CXXConstructorName && 
         getNameKind() <= CXXConversionFunctionName)
       return reinterpret_cast<CXXSpecialName *>(Ptr & ~PtrMask);
-    else
-      return 0;
+    return 0;
   }
 
   /// getAsCXXOperatorIdName
   CXXOperatorIdName *getAsCXXOperatorIdName() const {
     if (getNameKind() == CXXOperatorName)
       return reinterpret_cast<CXXOperatorIdName *>(Ptr & ~PtrMask);
-    else
-      return 0;
+    return 0;
   }
 
   // Construct a declaration name from the name of a C++ constructor,
@@ -130,30 +129,11 @@ private:
     Ptr |= StoredDeclarationNameExtra;
   }
 
-  // Construct a declaration name from a zero- or one-argument
-  // Objective-C selector.
-  DeclarationName(IdentifierInfo *II, unsigned numArgs) 
-    : Ptr(reinterpret_cast<uintptr_t>(II)) {
-    assert((Ptr & PtrMask) == 0 && "Improperly aligned IdentifierInfo");
-    assert(numArgs < 2 && "Use MultiKeywordSelector for >= 2 arguments");
-    if (numArgs == 0)
-      Ptr |= StoredObjCZeroArgSelector;
-    else
-      Ptr |= StoredObjCOneArgSelector;
-  }
-
-  // Construct a declaration name from an Objective-C multiple-keyword
-  // selector.
-  DeclarationName(MultiKeywordSelector *SI)
-    : Ptr(reinterpret_cast<uintptr_t>(SI)) {
-    assert((Ptr & PtrMask) == 0 && "Improperly aligned MultiKeywordSelector");
-    Ptr |= StoredDeclarationNameExtra;
-  }
-
   /// Construct a declaration name from a raw pointer.
   DeclarationName(uintptr_t Ptr) : Ptr(Ptr) { }
 
   friend class DeclarationNameTable;
+  friend class NamedDecl;
 
   /// getFETokenInfoAsVoid - Retrieves the front end-specified pointer
   /// for this name as a void pointer.
@@ -164,12 +144,16 @@ public:
   DeclarationName() : Ptr(0) { }
 
   // Construct a declaration name from an IdentifierInfo *.
-  DeclarationName(IdentifierInfo *II) : Ptr(reinterpret_cast<uintptr_t>(II)) { 
+  DeclarationName(const IdentifierInfo *II) 
+    : Ptr(reinterpret_cast<uintptr_t>(II)) { 
     assert((Ptr & PtrMask) == 0 && "Improperly aligned IdentifierInfo");
   }
 
   // Construct a declaration name from an Objective-C selector.
   DeclarationName(Selector Sel);
+
+  /// getUsingDirectiveName - Return name for all using-directives.
+  static DeclarationName getUsingDirectiveName();
 
   // operator bool() - Evaluates true when this declaration name is
   // non-empty.
@@ -178,8 +162,18 @@ public:
            (reinterpret_cast<IdentifierInfo *>(Ptr & ~PtrMask));
   }
 
+  /// Predicate functions for querying what type of name this is.
+  bool isIdentifier() const { return getStoredNameKind() == StoredIdentifier; }
+  bool isObjCZeroArgSelector() const {
+    return getStoredNameKind() == StoredObjCZeroArgSelector;
+  }
+  bool isObjCOneArgSelector() const {
+    return getStoredNameKind() == StoredObjCOneArgSelector;
+  }
+  
   /// getNameKind - Determine what kind of name this is.
   NameKind getNameKind() const;
+  
 
   /// getName - Retrieve the human-readable string for this name.
   std::string getAsString() const;
@@ -188,10 +182,9 @@ public:
   /// this declaration name, or NULL if this declaration name isn't a
   /// simple identifier.
   IdentifierInfo *getAsIdentifierInfo() const { 
-    if (getNameKind() == Identifier)
+    if (isIdentifier())
       return reinterpret_cast<IdentifierInfo *>(Ptr);
-    else
-      return 0;
+    return 0;
   }
 
   /// getAsOpaqueInteger - Get the representation of this declaration

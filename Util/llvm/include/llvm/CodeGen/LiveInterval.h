@@ -25,6 +25,7 @@
 #include "llvm/Support/Allocator.h"
 #include <iosfwd>
 #include <cassert>
+#include <climits>
 
 namespace llvm {
   class MachineInstr;
@@ -115,7 +116,7 @@ namespace llvm {
     LiveInterval(unsigned Reg, float Weight, bool IsSS = false)
       : reg(Reg), weight(Weight), preference(0)  {
       if (IsSS)
-        reg = reg | (1U << (sizeof(unsigned)*8-1));
+        reg = reg | (1U << (sizeof(unsigned)*CHAR_BIT-1));
     }
 
     typedef Ranges::iterator iterator;
@@ -159,14 +160,14 @@ namespace llvm {
     /// isStackSlot - Return true if this is a stack slot interval.
     ///
     bool isStackSlot() const {
-      return reg & (1U << (sizeof(unsigned)*8-1));
+      return reg & (1U << (sizeof(unsigned)*CHAR_BIT-1));
     }
 
     /// getStackSlotIndex - Return stack slot index if this is a stack slot
     /// interval.
     int getStackSlotIndex() const {
       assert(isStackSlot() && "Interval is not a stack slot interval!");
-      return reg & ~(1U << (sizeof(unsigned)*8-1));
+      return reg & ~(1U << (sizeof(unsigned)*CHAR_BIT-1));
     }
 
     bool hasAtLeastOneValue() const { return !valnos.empty(); }
@@ -296,6 +297,11 @@ namespace llvm {
     void MergeInClobberRanges(const LiveInterval &Clobbers,
                               BumpPtrAllocator &VNInfoAllocator);
 
+    /// MergeInClobberRange - Same as MergeInClobberRanges except it merge in a
+    /// single LiveRange only.
+    void MergeInClobberRange(unsigned Start, unsigned End,
+                             BumpPtrAllocator &VNInfoAllocator);
+
     /// MergeValueInAsValue - Merge all of the live ranges of a specific val#
     /// in RHS into this live interval as the specified value number.
     /// The LiveRanges in RHS are allowed to overlap with LiveRanges in the
@@ -368,6 +374,10 @@ namespace llvm {
     bool overlaps(const LiveInterval& other) const {
       return overlapsFrom(other, other.begin());
     }
+
+    /// overlaps - Return true if the live interval overlaps a range specified
+    /// by [Start, End).
+    bool overlaps(unsigned Start, unsigned End) const;
 
     /// overlapsFrom - Return true if the intersection of the two live intervals
     /// is not empty.  The specified iterator is a hint that we can begin

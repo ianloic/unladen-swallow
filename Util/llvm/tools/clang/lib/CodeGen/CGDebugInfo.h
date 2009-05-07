@@ -24,6 +24,7 @@
 
 namespace clang {
   class VarDecl;
+  class ObjCInterfaceDecl;
 
 namespace CodeGen {
   class CodeGenModule;
@@ -33,12 +34,13 @@ namespace CodeGen {
 /// the backend.
 class CGDebugInfo {
   CodeGenModule *M;
+  bool isMainCompileUnitCreated;
   llvm::DIFactory DebugFactory;
   
   SourceLocation CurLoc, PrevLoc;
 
   /// CompileUnitCache - Cache of previously constructed CompileUnits.
-  llvm::DenseMap<const FileEntry*, llvm::DICompileUnit> CompileUnitCache;
+  llvm::DenseMap<unsigned, llvm::DICompileUnit> CompileUnitCache;
 
   /// TypeCache - Cache of previously constructed Types.
   // FIXME: Eliminate this map.  Be careful of iterator invalidation.
@@ -48,12 +50,14 @@ class CGDebugInfo {
 
   /// Helper functions for getOrCreateType.
   llvm::DIType CreateType(const BuiltinType *Ty, llvm::DICompileUnit U);
+  llvm::DIType CreateType(const ComplexType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateCVRType(QualType Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const TypedefType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const PointerType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const FunctionType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const TagType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const RecordType *Ty, llvm::DICompileUnit U);
+  llvm::DIType CreateType(const ObjCInterfaceType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const EnumType *Ty, llvm::DICompileUnit U);
   llvm::DIType CreateType(const ArrayType *Ty, llvm::DICompileUnit U);
 
@@ -94,8 +98,10 @@ public:
   
   /// EmitGlobalVariable - Emit information about a global variable.
   void EmitGlobalVariable(llvm::GlobalVariable *GV, const VarDecl *Decl);
- 
-  
+
+  /// EmitGlobalVariable - Emit information about an objective-c interface.
+  void EmitGlobalVariable(llvm::GlobalVariable *GV, ObjCInterfaceDecl *Decl);
+   
 private:
   /// EmitDeclare - Emit call to llvm.dbg.declare for a variable declaration.
   void EmitDeclare(const VarDecl *decl, unsigned Tag, llvm::Value *AI,

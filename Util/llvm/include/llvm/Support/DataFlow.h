@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file defines specializations of GraphTraits that allows Use-Def and 
+// This file defines specializations of GraphTraits that allows Use-Def and
 // Def-Use relations to be treated as proper graphs for generic algorithms.
 //===----------------------------------------------------------------------===//
 
@@ -20,14 +20,14 @@
 namespace llvm {
 
 //===----------------------------------------------------------------------===//
-// Provide specializations of GraphTraits to be able to treat def-use/use-def 
+// Provide specializations of GraphTraits to be able to treat def-use/use-def
 // chains as graphs
 
-template <> struct GraphTraits<const User*> {
+template <> struct GraphTraits<const Value*> {
   typedef const Value NodeType;
   typedef Value::use_const_iterator ChildIteratorType;
 
-  static NodeType *getEntryNode(const User *G) {
+  static NodeType *getEntryNode(const Value *G) {
     return G;
   }
 
@@ -40,11 +40,11 @@ template <> struct GraphTraits<const User*> {
   }
 };
 
-template <> struct GraphTraits<User*> {
+template <> struct GraphTraits<Value*> {
   typedef Value NodeType;
   typedef Value::use_iterator ChildIteratorType;
 
-  static NodeType *getEntryNode(User *G) {
+  static NodeType *getEntryNode(Value *G) {
     return G;
   }
 

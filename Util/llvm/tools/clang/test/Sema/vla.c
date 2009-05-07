@@ -1,4 +1,4 @@
-// RUN: clang %s -verify -fsyntax-only
+// RUN: clang-cc %s -verify -fsyntax-only -pedantic
 
 int test1() {
   typedef int x[test1()];  // vla
@@ -19,9 +19,9 @@ int x = sizeof(struct{char qq[x];}); // expected-error {{fields must have a cons
 // PR2352
 void f2(unsigned int m)
 {
-  extern int e[2][m]; // expected-error {{variable length array declaration can not have 'extern' linkage}}
+  extern int e1[2][m]; // expected-error {{variable length array declaration can not have 'extern' linkage}}
 
-  e[0][0] = 0;
+  e1[0][0] = 0;
   
 }
 
@@ -37,7 +37,12 @@ void f3()
   static int a[i]; // expected-error {{variable length array declaration can not have 'static' storage duration}}
   extern int b[i]; // expected-error {{variable length array declaration can not have 'extern' linkage}}
 
-  extern int (*c)[i]; // expected-error {{variably modified type declaration can not have 'extern' linkage}}
+  extern int (*c1)[i]; // expected-error {{variably modified type declaration can not have 'extern' linkage}}
   static int (*d)[i];
 }
 
+// PR3663
+static const unsigned array[((2 * (int)((((4) / 2) + 1.0/3.0) * (4) - 1e-8)) + 1)]; // expected-warning {{size of static array must be an integer constant expression}}
+
+int a[*]; // expected-error {{star modifier used outside of function prototype}}
+int f4(int a[*][*]);

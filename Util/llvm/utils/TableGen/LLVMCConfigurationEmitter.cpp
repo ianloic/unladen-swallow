@@ -1265,7 +1265,6 @@ StrVector::const_iterator SubstituteSpecialCommands
   assert(Leftover.at(0) == ')');
   if (Leftover.size() != 1)
     O << " + std::string(\"" << (Leftover.c_str() + 1) << "\")";
-  O << ')';
 
   return Pos;
 }
@@ -1284,6 +1283,7 @@ void EmitCmdLineVecFill(const Init* CmdLine, const std::string& ToolName,
   StrVector::const_iterator I = StrVec.begin(), E = StrVec.end();
 
   // If there is a hook invocation on the place of the first command, skip it.
+  assert(!StrVec[0].empty());
   if (StrVec[0][0] == '$') {
     while (I != E && (*I)[0] != ')' )
       ++I;
@@ -1297,7 +1297,7 @@ void EmitCmdLineVecFill(const Init* CmdLine, const std::string& ToolName,
 
   for (; I != E; ++I) {
     const std::string& cmd = *I;
-    //    std::cerr << cmd;
+    assert(!cmd.empty());
     O << IndentLevel;
     if (cmd.at(0) == '$') {
       if (cmd == "$INFILE") {
@@ -1422,7 +1422,12 @@ class EmitActionHandler {
     if (ActionName == "append_cmd") {
       checkNumberOfArguments(&Dag, 1);
       const std::string& Cmd = InitPtrToString(Dag.getArg(0));
-      O << IndentLevel << "vec.push_back(\"" << Cmd << "\");\n";
+      StrVector Out;
+      llvm::SplitString(Cmd, Out);
+
+      for (StrVector::const_iterator B = Out.begin(), E = Out.end();
+           B != E; ++B)
+        O << IndentLevel << "vec.push_back(\"" << *B << "\");\n";
     }
     else if (ActionName == "error") {
       O << IndentLevel << "throw std::runtime_error(\"" <<

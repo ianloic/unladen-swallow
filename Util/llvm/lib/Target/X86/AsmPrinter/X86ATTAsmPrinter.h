@@ -28,14 +28,15 @@ namespace llvm {
 
 struct MachineJumpTableInfo;
 
-struct VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
+class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   DwarfWriter *DW;
   MachineModuleInfo *MMI;
   const X86Subtarget *Subtarget;
-
-  X86ATTAsmPrinter(raw_ostream &O, X86TargetMachine &TM,
-                   const TargetAsmInfo *T)
-    : AsmPrinter(O, TM, T), DW(0), MMI(0) {
+ public:
+  explicit X86ATTAsmPrinter(raw_ostream &O, X86TargetMachine &TM,
+                            const TargetAsmInfo *T, CodeGenOpt::Level OL,
+                            bool V)
+    : AsmPrinter(O, TM, T, OL, V), DW(0), MMI(0) {
     Subtarget = &TM.getSubtarget<X86Subtarget>();
   }
 
@@ -93,8 +94,14 @@ struct VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printf128mem(const MachineInstr *MI, unsigned OpNo) {
     printMemReference(MI, OpNo);
   }
+  void printlea32mem(const MachineInstr *MI, unsigned OpNo) {
+    printLeaMemReference(MI, OpNo);
+  }
+  void printlea64mem(const MachineInstr *MI, unsigned OpNo) {
+    printLeaMemReference(MI, OpNo);
+  }
   void printlea64_32mem(const MachineInstr *MI, unsigned OpNo) {
-    printMemReference(MI, OpNo, "subreg64");
+    printLeaMemReference(MI, OpNo, "subreg64");
   }
 
   bool printAsmMRegister(const MachineOperand &MO, const char Mode);
@@ -106,7 +113,9 @@ struct VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printMachineInstruction(const MachineInstr *MI);
   void printSSECC(const MachineInstr *MI, unsigned Op);
   void printMemReference(const MachineInstr *MI, unsigned Op,
-                         const char *Modifier=NULL);
+                         const char *Modifier=NULL, bool NotRIPRel = false);
+  void printLeaMemReference(const MachineInstr *MI, unsigned Op,
+                            const char *Modifier=NULL, bool NotRIPRel = false);
   void printPICJumpTableSetLabel(unsigned uid,
                                  const MachineBasicBlock *MBB) const;
   void printPICJumpTableSetLabel(unsigned uid, unsigned uid2,

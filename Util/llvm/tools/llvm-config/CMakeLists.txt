@@ -68,7 +68,7 @@ if( NOT NM_PATH )
 endif()
 
 add_custom_command(OUTPUT ${LIBDEPS_TMP}
-  COMMAND ${PERL_EXECUTABLE} ${LLVM_MAIN_SRC_DIR}/utils/GenLibDeps.pl -flat ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY} ${NM_PATH} > ${LIBDEPS_TMP}
+  COMMAND ${PERL_EXECUTABLE} ${LLVM_MAIN_SRC_DIR}/utils/GenLibDeps.pl -flat ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR} ${NM_PATH} > ${LIBDEPS_TMP}
   DEPENDS ${llvm_libs}
   COMMENT "Regenerating ${LIBDEPS_TMP}")
 
@@ -82,14 +82,19 @@ add_custom_command(OUTPUT ${FINAL_LIBDEPS}
   DEPENDS ${LIBDEPS}
   COMMENT "Checking for cyclic dependencies between LLVM libraries.")
 
+string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
+set(C_FLGS "${CMAKE_C_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
+set(CXX_FLGS "${CMAKE_CXX_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
+set(CPP_FLGS "${CMAKE_CPP_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
+
 add_custom_command(OUTPUT ${LLVM_CONFIG}
-  COMMAND echo 's,@LLVM_CPPFLAGS@,${CMAKE_CPP_FLAGS},' > temp.sed
-  COMMAND echo 's,@LLVM_CFLAGS@,${CMAKE_C_FLAGS},' >> temp.sed
-  COMMAND echo 's,@LLVM_CXXFLAGS@,${CMAKE_CXX_FLAGS},' >> temp.sed
-  # TODO: Use general flags for linking, not just for shared libs:
-  COMMAND echo 's,@LLVM_LDFLAGS@,${CMAKE_SHARED_LINKER_FLAGS},' >> temp.sed
-  COMMAND echo 's,@LIBS@,,' >> temp.sed                    # TODO: System libs
-  COMMAND echo 's,@LLVM_BUILDMODE@,${CMAKE_BUILD_TYPE},' >> temp.sed
+  COMMAND echo 's!@LLVM_CPPFLAGS@!${CPP_FLGS}!' > temp.sed
+  COMMAND echo 's!@LLVM_CFLAGS@!${C_FLGS}!' >> temp.sed
+  COMMAND echo 's!@LLVM_CXXFLAGS@!${CXX_FLGS}!' >> temp.sed
+  # TODO: Use general flags for linking! not just for shared libs:
+  COMMAND echo 's!@LLVM_LDFLAGS@!${CMAKE_SHARED_LINKER_FLAGS}!' >> temp.sed
+  COMMAND echo 's!@LIBS@!!' >> temp.sed                    # TODO: System libs
+  COMMAND echo 's!@LLVM_BUILDMODE@!${CMAKE_BUILD_TYPE}!' >> temp.sed
   COMMAND sed -f temp.sed < ${LLVM_CONFIG_IN} > ${LLVM_CONFIG}
   COMMAND ${CMAKE_COMMAND} -E remove -f temp.sed
   COMMAND cat ${FINAL_LIBDEPS} >> ${LLVM_CONFIG}

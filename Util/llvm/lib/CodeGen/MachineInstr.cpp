@@ -11,8 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Constants.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/Constants.h"
+#include "llvm/InlineAsm.h"
 #include "llvm/Value.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -21,6 +22,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetInstrDesc.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/LeakDetector.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Streams.h"
@@ -65,6 +67,21 @@ void MachineOperand::AddRegOperandToRegInfo(MachineRegisterInfo *RegInfo) {
   
   Contents.Reg.Prev = Head;
   *Head = this;
+}
+
+/// RemoveRegOperandFromRegInfo - Remove this register operand from the
+/// MachineRegisterInfo it is linked with.
+void MachineOperand::RemoveRegOperandFromRegInfo() {
+  assert(isOnRegUseList() && "Reg operand is not on a use list");
+  // Unlink this from the doubly linked list of operands.
+  MachineOperand *NextOp = Contents.Reg.Next;
+  *Contents.Reg.Prev = NextOp; 
+  if (NextOp) {
+    assert(NextOp->getReg() == getReg() && "Corrupt reg use/def chain!");
+    NextOp->Contents.Reg.Prev = Contents.Reg.Prev;
+  }
+  Contents.Reg.Prev = 0;
+  Contents.Reg.Next = 0;
 }
 
 void MachineOperand::setReg(unsigned Reg) {
@@ -607,8 +624,8 @@ unsigned MachineInstr::getNumExplicitOperands() const {
   if (!TID->isVariadic())
     return NumOperands;
 
-  for (unsigned e = getNumOperands(); NumOperands != e; ++NumOperands) {
-    const MachineOperand &MO = getOperand(NumOperands);
+  for (unsigned i = NumOperands, e = getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = getOperand(i);
     if (!MO.isReg() || !MO.isImplicit())
       NumOperands++;
   }
@@ -689,18 +706,104 @@ int MachineInstr::findFirstPredOperandIdx() const {
   return -1;
 }
   
-/// isRegReDefinedByTwoAddr - Given the index of a register def operand,
-/// check if the register def is a re-definition due to two addr elimination.
-bool MachineInstr::isRegReDefinedByTwoAddr(unsigned DefIdx) const{
-  assert(getOperand(DefIdx).isDef() && "DefIdx is not a def!");
+/// isRegTiedToUseOperand - Given the index of a register def operand,
+/// check if the register def is tied to a source operand, due to either
+/// two-address elimination or inline assembly constraints. Returns the
+/// first tied use operand index by reference is UseOpIdx is not null.
+bool MachineInstr::
+isRegTiedToUseOperand(unsigned DefOpIdx, unsigned *UseOpIdx) const {
+  if (getOpcode() == TargetInstrInfo::INLINEASM) {
+    assert(DefOpIdx >= 2);
+    const MachineOperand &MO = getOperand(DefOpIdx);
+    if (!MO.isReg() || !MO.isDef() || MO.getReg() == 0)
+      return false;
+    // Determine the actual operand no corresponding to this index.
+    unsigned DefNo = 0;
+    for (unsigned i = 1, e = getNumOperands(); i < e; ) {
+      const MachineOperand &FMO = getOperand(i);
+      assert(FMO.isImm());
+      // Skip over this def.
+      i += InlineAsm::getNumOperandRegisters(FMO.getImm()) + 1;
+      if (i > DefOpIdx)
+        break;
+      ++DefNo;
+    }
+    for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
+      const MachineOperand &FMO = getOperand(i);
+      if (!FMO.isImm())
+        continue;
+      if (i+1 >= e || !getOperand(i+1).isReg() || !getOperand(i+1).isUse())
+        continue;
+      unsigned Idx;
+      if (InlineAsm::isUseOperandTiedToDef(FMO.getImm(), Idx) && 
+          Idx == DefNo) {
+        if (UseOpIdx)
+          *UseOpIdx = (unsigned)i + 1;
+        return true;
+      }
+    }
+  }
+
+  assert(getOperand(DefOpIdx).isDef() && "DefOpIdx is not a def!");
   const TargetInstrDesc &TID = getDesc();
   for (unsigned i = 0, e = TID.getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = getOperand(i);
     if (MO.isReg() && MO.isUse() &&
-        TID.getOperandConstraint(i, TOI::TIED_TO) == (int)DefIdx)
+        TID.getOperandConstraint(i, TOI::TIED_TO) == (int)DefOpIdx) {
+      if (UseOpIdx)
+        *UseOpIdx = (unsigned)i;
       return true;
+    }
   }
   return false;
+}
+
+/// isRegTiedToDefOperand - Return true if the operand of the specified index
+/// is a register use and it is tied to an def operand. It also returns the def
+/// operand index by reference.
+bool MachineInstr::
+isRegTiedToDefOperand(unsigned UseOpIdx, unsigned *DefOpIdx) const {
+  if (getOpcode() == TargetInstrInfo::INLINEASM) {
+    const MachineOperand &MO = getOperand(UseOpIdx);
+    if (!MO.isReg() || !MO.isUse() || MO.getReg() == 0)
+      return false;
+    assert(UseOpIdx > 0);
+    const MachineOperand &UFMO = getOperand(UseOpIdx-1);
+    if (!UFMO.isImm())
+      return false;  // Must be physreg uses.
+    unsigned DefNo;
+    if (InlineAsm::isUseOperandTiedToDef(UFMO.getImm(), DefNo)) {
+      if (!DefOpIdx)
+        return true;
+
+      unsigned DefIdx = 1;
+      // Remember to adjust the index. First operand is asm string, then there
+      // is a flag for each.
+      while (DefNo) {
+        const MachineOperand &FMO = getOperand(DefIdx);
+        assert(FMO.isImm());
+        // Skip over this def.
+        DefIdx += InlineAsm::getNumOperandRegisters(FMO.getImm()) + 1;
+        --DefNo;
+      }
+      *DefOpIdx = DefIdx+1;
+      return true;
+    }
+    return false;
+  }
+
+  const TargetInstrDesc &TID = getDesc();
+  if (UseOpIdx >= TID.getNumOperands())
+    return false;
+  const MachineOperand &MO = getOperand(UseOpIdx);
+  if (!MO.isReg() || !MO.isUse())
+    return false;
+  int DefIdx = TID.getOperandConstraint(UseOpIdx, TOI::TIED_TO);
+  if (DefIdx == -1)
+    return false;
+  if (DefOpIdx)
+    *DefOpIdx = (unsigned)DefIdx;
+  return true;
 }
 
 /// copyKillDeadInfo - Copies kill / dead operand properties from MI.
@@ -872,6 +975,17 @@ void MachineInstr::print(raw_ostream &OS, const TargetMachine *TM) const {
 
       OS << " + " << MRO.getOffset() << "]";
     }
+  }
+
+  if (!debugLoc.isUnknown()) {
+    const MachineFunction *MF = getParent()->getParent();
+    DebugLocTuple DLT = MF->getDebugLocTuple(debugLoc);
+    DICompileUnit CU(DLT.CompileUnit);
+    std::string Dir, Fn;
+    OS << " [dbg: "
+       << CU.getDirectory(Dir) << '/' << CU.getFilename(Fn) << ","
+       << DLT.Line << ","
+       << DLT.Col  << "]";
   }
 
   OS << "\n";

@@ -1,4 +1,4 @@
-// RUN: clang %s -verify -fsyntax-only
+// RUN: clang-cc %s -verify -fsyntax-only
 
 void c1(int *a);
 
@@ -24,8 +24,17 @@ struct s {
 };
 
 void c2();
+void c3(struct s a);
 
 void t2()
 {
     int v1 __attribute__((cleanup(c2))); // expected-error {{'cleanup' function 'c2' must take 1 parameter}}
+    int v2 __attribute__((cleanup(c3))); // expected-error {{'cleanup' function 'c3' parameter has type 'struct s' which is incompatible with type 'int *'}}
 }
+
+// This is a manufactured testcase, but gcc accepts it...
+void c4(_Bool a);
+void t4() {
+  __attribute((cleanup(c4))) void* g;
+}
+

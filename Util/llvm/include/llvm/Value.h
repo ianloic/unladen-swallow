@@ -34,9 +34,12 @@ class InlineAsm;
 class ValueSymbolTable;
 class TypeSymbolTable;
 template<typename ValueTy> class StringMapEntry;
+template <typename ValueTy = Value>
+class AssertingVH;
 typedef StringMapEntry<Value*> ValueName;
 class raw_ostream;
 class AssemblyAnnotationWriter;
+class ValueHandleBase;
 
 //===----------------------------------------------------------------------===//
 //                                 Value Class
@@ -50,10 +53,14 @@ class AssemblyAnnotationWriter;
 /// automatically updates the module's symbol table.
 ///
 /// Every value has a "use list" that keeps track of which other Values are
-/// using this Value.
+/// using this Value.  A Value can also have an arbitrary number of ValueHandle
+/// objects that watch it and listen to RAUW and Destroy events see
+/// llvm/Support/ValueHandle.h for details.
+///
 /// @brief LLVM Value Representation
 class Value {
-  const unsigned short SubclassID;   // Subclass identifier (for isa/dyn_cast)
+  const unsigned char SubclassID;   // Subclass identifier (for isa/dyn_cast)
+  unsigned char HasValueHandle : 1; // Has a ValueHandle pointing to this?
 protected:
   /// SubclassData - This member is defined by this class, but is not used for
   /// anything.  Subclasses can use it to hold whatever state they find useful.
@@ -65,6 +72,7 @@ private:
 
   friend class ValueSymbolTable; // Allow ValueSymbolTable to directly mod Name.
   friend class SymbolTable;      // Allow SymbolTable to directly poke Name.
+  friend class ValueHandleBase;
   ValueName *Name;
 
   void operator=(const Value &);     // Do not implement
@@ -195,13 +203,15 @@ public:
     ConstantStructVal,        // This is an instance of ConstantStruct
     ConstantVectorVal,        // This is an instance of ConstantVector
     ConstantPointerNullVal,   // This is an instance of ConstantPointerNull
+    MDStringVal,              // This is an instance of MDString
+    MDNodeVal,                // This is an instance of MDNode
     InlineAsmVal,             // This is an instance of InlineAsm
     PseudoSourceValueVal,     // This is an instance of PseudoSourceValue
     InstructionVal,           // This is an instance of Instruction
     
     // Markers:
     ConstantFirstVal = FunctionVal,
-    ConstantLastVal  = ConstantPointerNullVal
+    ConstantLastVal  = MDNodeVal
   };
 
   /// getValueID - Return an ID for the concrete type of this object.  This is
@@ -303,6 +313,19 @@ template <> inline bool isa_impl<GlobalValue, Value>(const Value &Val) {
   return isa<GlobalVariable>(Val) || isa<Function>(Val) ||
          isa<GlobalAlias>(Val);
 }
+  
+  
+// Value* is only 4-byte aligned.
+template<>
+class PointerLikeTypeTraits<Value*> {
+  typedef Value* PT;
+public:
+  static inline void *getAsVoidPointer(PT P) { return P; }
+  static inline PT getFromVoidPointer(void *P) {
+    return static_cast<PT>(P);
+  }
+  enum { NumLowBitsAvailable = 2 };
+};
 
 } // End llvm namespace
 

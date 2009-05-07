@@ -31,6 +31,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PluginLoader.h"
+#include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/RegistryParser.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Analysis/Verifier.h"
@@ -54,8 +55,14 @@ OutputFilename("o", cl::desc("Output filename"), cl::value_desc("filename"));
 
 static cl::opt<bool> Force("f", cl::desc("Overwrite output files"));
 
-static cl::opt<bool> Fast("fast",
-      cl::desc("Generate code quickly, potentially sacrificing code quality"));
+// Determine optimization level.
+static cl::opt<char>
+OptLevel("O",
+         cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
+                  "(default = '-O2')"),
+         cl::Prefix,
+         cl::ZeroOrMore,
+         cl::init(' '));
 
 static cl::opt<std::string>
 TargetTriple("mtriple", cl::desc("Override target triple for module"));
@@ -192,9 +199,10 @@ static raw_ostream *GetOutputStream(const char *ProgName) {
 // main - Entry point for the llc compiler.
 //
 int main(int argc, char **argv) {
-  llvm_shutdown_obj X;  // Call llvm_shutdown() on exit.
-  cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
   sys::PrintStackTraceOnErrorSignal();
+  PrettyStackTraceProgram X(argc, argv);
+  llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
+  cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
 
   // Load the module to be compiled...
   std::string ErrorMessage;
@@ -246,6 +254,18 @@ int main(int argc, char **argv) {
   raw_ostream *Out = GetOutputStream(argv[0]);
   if (Out == 0) return 1;
 
+  CodeGenOpt::Level OLvl = CodeGenOpt::Default;
+  switch (OptLevel) {
+  default:
+    std::cerr << argv[0] << ": invalid optimization level.\n";
+    return 1;
+  case ' ': break;
+  case '0': OLvl = CodeGenOpt::None; break;
+  case '1':
+  case '2': OLvl = CodeGenOpt::Default; break;
+  case '3': OLvl = CodeGenOpt::Aggressive; break;
+  }
+
   // If this target requires addPassesToEmitWholeFile, do it now.  This is
   // used by strange things like the C backend.
   if (Target.WantsWholeFile()) {
@@ -255,7 +275,7 @@ int main(int argc, char **argv) {
       PM.add(createVerifierPass());
 
     // Ask the target to add backend passes as necessary.
-    if (Target.addPassesToEmitWholeFile(PM, *Out, FileType, Fast)) {
+    if (Target.addPassesToEmitWholeFile(PM, *Out, FileType, OLvl)) {
       std::cerr << argv[0] << ": target does not support generation of this"
                 << " file type!\n";
       if (Out != &outs()) delete Out;
@@ -278,7 +298,10 @@ int main(int argc, char **argv) {
     // Ask the target to add backend passes as necessary.
     MachineCodeEmitter *MCE = 0;
 
-    switch (Target.addPassesToEmitFile(Passes, *Out, FileType, Fast)) {
+    // Override default to generate verbose assembly.
+    Target.setAsmVerbosityDefault(true);
+
+    switch (Target.addPassesToEmitFile(Passes, *Out, FileType, OLvl)) {
     default:
       assert(0 && "Invalid file model!");
       return 1;
@@ -299,7 +322,7 @@ int main(int argc, char **argv) {
       break;
     }
 
-    if (Target.addPassesToEmitFileFinish(Passes, MCE, Fast)) {
+    if (Target.addPassesToEmitFileFinish(Passes, MCE, OLvl)) {
       std::cerr << argv[0] << ": target does not support generation of this"
                 << " file type!\n";
       if (Out != &outs()) delete Out;

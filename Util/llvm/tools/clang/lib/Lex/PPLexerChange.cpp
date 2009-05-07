@@ -18,7 +18,6 @@
 #include "clang/Lex/LexDiagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/MemoryBuffer.h"
-
 using namespace clang;
 
 PPCallbacks::~PPCallbacks() {}
@@ -127,15 +126,16 @@ void Preprocessor::EnterSourceFileWithPTH(PTHLexer *PL,
 
 /// EnterMacro - Add a Macro to the top of the include stack and start lexing
 /// tokens from it instead of the current buffer.
-void Preprocessor::EnterMacro(Token &Tok, MacroArgs *Args) {
+void Preprocessor::EnterMacro(Token &Tok, SourceLocation ILEnd,
+                              MacroArgs *Args) {
   PushIncludeMacroStack();
   CurDirLookup = 0;
   
   if (NumCachedTokenLexers == 0) {
-    CurTokenLexer.reset(new TokenLexer(Tok, Args, *this));
+    CurTokenLexer.reset(new TokenLexer(Tok, ILEnd, Args, *this));
   } else {
     CurTokenLexer.reset(TokenLexerCache[--NumCachedTokenLexers]);
-    CurTokenLexer->Init(Tok, Args);
+    CurTokenLexer->Init(Tok, ILEnd, Args);
   }
 }
 
@@ -179,7 +179,7 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
   if (CurPPLexer) {  // Not ending a macro, ignore it.
     if (const IdentifierInfo *ControllingMacro = 
           CurPPLexer->MIOpt.GetControllingMacroAtEndOfFile()) {
-      // Okay, this has a controlling macro, remember in PerFileInfo.
+      // Okay, this has a controlling macro, remember in HeaderFileInfo.
       if (const FileEntry *FE = 
             SourceMgr.getFileEntryForID(CurPPLexer->getFileID()))
         HeaderInfo.SetFileControllingMacro(FE, ControllingMacro);
@@ -227,8 +227,8 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
     
     // We're done with the #included file.
     CurLexer.reset();
-  }
-  else {
+  } else {
+    assert(CurPTHLexer && "Got EOF but no current lexer set!");
     CurPTHLexer->getEOF(Result);
     CurPTHLexer.reset();
   }
@@ -237,12 +237,11 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
 
   // This is the end of the top-level file.  If the diag::pp_macro_not_used
   // diagnostic is enabled, look for macros that have not been used.
-  if (Diags.getDiagnosticLevel(diag::pp_macro_not_used) != Diagnostic::Ignored){
-    for (llvm::DenseMap<IdentifierInfo*, MacroInfo*>::iterator I =
-         Macros.begin(), E = Macros.end(); I != E; ++I) {
+  if (getDiagnostics().getDiagnosticLevel(diag::pp_macro_not_used) != 
+        Diagnostic::Ignored) {
+    for (macro_iterator I = macro_begin(), E = macro_end(); I != E; ++I)
       if (!I->second->isUsed())
         Diag(I->second->getDefinitionLoc(), diag::pp_macro_not_used);
-    }
   }
   return true;
 }

@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "pre-RA-sched"
-#include "llvm/CodeGen/ScheduleDAGSDNodes.h"
+#include "ScheduleDAGSDNodes.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
@@ -26,6 +26,14 @@ ScheduleDAGSDNodes::ScheduleDAGSDNodes(MachineFunction &mf)
   : ScheduleDAG(mf) {
 }
 
+/// Run - perform scheduling.
+///
+void ScheduleDAGSDNodes::Run(SelectionDAG *dag, MachineBasicBlock *bb,
+                             MachineBasicBlock::iterator insertPos) {
+  DAG = dag;
+  ScheduleDAG::Run(bb, insertPos);
+}
+
 SUnit *ScheduleDAGSDNodes::Clone(SUnit *Old) {
   SUnit *SU = NewSUnit(Old->getNode());
   SU->OrigNode = Old->OrigNode;
@@ -33,6 +41,7 @@ SUnit *ScheduleDAGSDNodes::Clone(SUnit *Old) {
   SU->isTwoAddress = Old->isTwoAddress;
   SU->isCommutable = Old->isCommutable;
   SU->hasPhysRegDefs = Old->hasPhysRegDefs;
+  SU->hasPhysRegClobbers = Old->hasPhysRegClobbers;
   Old->isCloned = true;
   return SU;
 }
@@ -97,18 +106,15 @@ void ScheduleDAGSDNodes::BuildSchedUnits() {
     
     // See if anything is flagged to this node, if so, add them to flagged
     // nodes.  Nodes can have at most one flag input and one flag output.  Flags
-    // are required the be the last operand and result of a node.
+    // are required to be the last operand and result of a node.
     
     // Scan up to find flagged preds.
     SDNode *N = NI;
-    if (N->getNumOperands() &&
-        N->getOperand(N->getNumOperands()-1).getValueType() == MVT::Flag) {
-      do {
-        N = N->getOperand(N->getNumOperands()-1).getNode();
-        assert(N->getNodeId() == -1 && "Node already inserted!");
-        N->setNodeId(NodeSUnit->NodeNum);
-      } while (N->getNumOperands() &&
-               N->getOperand(N->getNumOperands()-1).getValueType()== MVT::Flag);
+    while (N->getNumOperands() &&
+           N->getOperand(N->getNumOperands()-1).getValueType() == MVT::Flag) {
+      N = N->getOperand(N->getNumOperands()-1).getNode();
+      assert(N->getNodeId() == -1 && "Node already inserted!");
+      N->setNodeId(NodeSUnit->NodeNum);
     }
     
     // Scan down to find any flagged succs.
@@ -167,9 +173,14 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
     // Find all predecessors and successors of the group.
     for (SDNode *N = SU->getNode(); N; N = N->getFlaggedNode()) {
       if (N->isMachineOpcode() &&
-          TII->get(N->getMachineOpcode()).getImplicitDefs() &&
-          CountResults(N) > TII->get(N->getMachineOpcode()).getNumDefs())
-        SU->hasPhysRegDefs = true;
+          TII->get(N->getMachineOpcode()).getImplicitDefs()) {
+        SU->hasPhysRegClobbers = true;
+        unsigned NumUsed = CountResults(N);
+        while (NumUsed != 0 && !N->hasAnyUseOfValue(NumUsed - 1))
+          --NumUsed;    // Skip over unused values at the end.
+        if (NumUsed > TII->get(N->getMachineOpcode()).getNumDefs())
+          SU->hasPhysRegDefs = true;
+      }
       
       for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
         SDNode *OpN = N->getOperand(i).getNode();

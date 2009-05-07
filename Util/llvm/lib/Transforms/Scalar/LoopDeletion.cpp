@@ -53,6 +53,7 @@ namespace {
       AU.addPreserved<LoopInfo>();
       AU.addPreservedID(LoopSimplifyID);
       AU.addPreservedID(LCSSAID);
+      AU.addPreserved<DominanceFrontier>();
     }
   };
 }
@@ -189,7 +190,7 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   // Don't remove loops for which we can't solve the trip count.
   // They could be infinite, in which case we'd be changing program behavior.
   ScalarEvolution& SE = getAnalysis<ScalarEvolution>();
-  SCEVHandle S = SE.getIterationCount(L);
+  SCEVHandle S = SE.getBackedgeTakenCount(L);
   if (isa<SCEVCouldNotCompute>(S))
     return false;
   
@@ -228,6 +229,7 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   // Update the dominator tree and remove the instructions and blocks that will
   // be deleted from the reference counting scheme.
   DominatorTree& DT = getAnalysis<DominatorTree>();
+  DominanceFrontier* DF = getAnalysisIfAvailable<DominanceFrontier>();
   SmallPtrSet<DomTreeNode*, 8> ChildNodes;
   for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
        LI != LE; ++LI) {
@@ -235,24 +237,25 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
     // allows us to remove the domtree entry for the block.
     ChildNodes.insert(DT[*LI]->begin(), DT[*LI]->end());
     for (SmallPtrSet<DomTreeNode*, 8>::iterator DI = ChildNodes.begin(),
-         DE = ChildNodes.end(); DI != DE; ++DI)
+         DE = ChildNodes.end(); DI != DE; ++DI) {
       DT.changeImmediateDominator(*DI, DT[preheader]);
+      if (DF) DF->changeImmediateDominator((*DI)->getBlock(), preheader, &DT);
+    }
     
     ChildNodes.clear();
     DT.eraseNode(*LI);
-    
-    // Remove instructions that we're deleting from ScalarEvolution.
-    for (BasicBlock::iterator BI = (*LI)->begin(), BE = (*LI)->end();
-         BI != BE; ++BI)
-      SE.deleteValueFromRecords(BI);
-    
-    SE.deleteValueFromRecords(*LI);
-    
+    if (DF) DF->removeBlock(*LI);
+
     // Remove the block from the reference counting scheme, so that we can
     // delete it freely later.
     (*LI)->dropAllReferences();
   }
   
+  // Tell ScalarEvolution that the loop is deleted. Do this before
+  // deleting the loop so that ScalarEvolution can look at the loop
+  // to determine what it needs to clean up.
+  SE.forgetLoopBackedgeTakenCount(L);
+
   // Erase the instructions and the blocks without having to worry
   // about ordering because we already dropped the references.
   // NOTE: This iteration is safe because erasing the block does not remove its
@@ -260,7 +263,7 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
        LI != LE; ++LI)
     (*LI)->eraseFromParent();
-  
+
   // Finally, the blocks from loopinfo.  This has to happen late because
   // otherwise our loop iterators won't work.
   LoopInfo& loopInfo = getAnalysis<LoopInfo>();

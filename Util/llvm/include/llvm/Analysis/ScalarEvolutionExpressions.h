@@ -20,6 +20,7 @@ namespace llvm {
   class ConstantInt;
   class ConstantRange;
   class APInt;
+  class DominatorTree;
 
   enum SCEVTypes {
     // These should be ordered in terms of increasing complexity to make the
@@ -58,8 +59,11 @@ namespace llvm {
       return this;
     }
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    bool dominates(BasicBlock *BB, DominatorTree *DT) const {
+      return true;
+    }
+
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVConstant *S) { return true; }
@@ -69,16 +73,16 @@ namespace llvm {
   };
 
   //===--------------------------------------------------------------------===//
-  /// SCEVTruncateExpr - This class represents a truncation of an integer value
-  /// to a smaller integer value.
+  /// SCEVCastExpr - This is the base class for unary cast operator classes.
   ///
-  class SCEVTruncateExpr : public SCEV {
-    friend class ScalarEvolution;
-
+  class SCEVCastExpr : public SCEV {
+  protected:
     SCEVHandle Op;
     const Type *Ty;
-    SCEVTruncateExpr(const SCEVHandle &op, const Type *ty);
-    virtual ~SCEVTruncateExpr();
+
+    SCEVCastExpr(unsigned SCEVTy, const SCEVHandle &op, const Type *ty);
+    virtual ~SCEVCastExpr();
+
   public:
     const SCEVHandle &getOperand() const { return Op; }
     virtual const Type *getType() const { return Ty; }
@@ -91,6 +95,28 @@ namespace llvm {
       return Op->hasComputableLoopEvolution(L);
     }
 
+    virtual bool dominates(BasicBlock *BB, DominatorTree *DT) const;
+
+    /// Methods for support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const SCEVCastExpr *S) { return true; }
+    static inline bool classof(const SCEV *S) {
+      return S->getSCEVType() == scTruncate ||
+             S->getSCEVType() == scZeroExtend ||
+             S->getSCEVType() == scSignExtend;
+    }
+  };
+
+  //===--------------------------------------------------------------------===//
+  /// SCEVTruncateExpr - This class represents a truncation of an integer value
+  /// to a smaller integer value.
+  ///
+  class SCEVTruncateExpr : public SCEVCastExpr {
+    friend class ScalarEvolution;
+
+    SCEVTruncateExpr(const SCEVHandle &op, const Type *ty);
+    virtual ~SCEVTruncateExpr();
+
+  public:
     SCEVHandle replaceSymbolicValuesWithConcrete(const SCEVHandle &Sym,
                                                  const SCEVHandle &Conc,
                                                  ScalarEvolution &SE) const {
@@ -100,8 +126,7 @@ namespace llvm {
       return SE.getTruncateExpr(H, Ty);
     }
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVTruncateExpr *S) { return true; }
@@ -114,25 +139,13 @@ namespace llvm {
   /// SCEVZeroExtendExpr - This class represents a zero extension of a small
   /// integer value to a larger integer value.
   ///
-  class SCEVZeroExtendExpr : public SCEV {
+  class SCEVZeroExtendExpr : public SCEVCastExpr {
     friend class ScalarEvolution;
 
-    SCEVHandle Op;
-    const Type *Ty;
     SCEVZeroExtendExpr(const SCEVHandle &op, const Type *ty);
     virtual ~SCEVZeroExtendExpr();
+
   public:
-    const SCEVHandle &getOperand() const { return Op; }
-    virtual const Type *getType() const { return Ty; }
-
-    virtual bool isLoopInvariant(const Loop *L) const {
-      return Op->isLoopInvariant(L);
-    }
-
-    virtual bool hasComputableLoopEvolution(const Loop *L) const {
-      return Op->hasComputableLoopEvolution(L);
-    }
-
     SCEVHandle replaceSymbolicValuesWithConcrete(const SCEVHandle &Sym,
                                                  const SCEVHandle &Conc,
                                                  ScalarEvolution &SE) const {
@@ -142,8 +155,7 @@ namespace llvm {
       return SE.getZeroExtendExpr(H, Ty);
     }
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVZeroExtendExpr *S) { return true; }
@@ -156,25 +168,13 @@ namespace llvm {
   /// SCEVSignExtendExpr - This class represents a sign extension of a small
   /// integer value to a larger integer value.
   ///
-  class SCEVSignExtendExpr : public SCEV {
+  class SCEVSignExtendExpr : public SCEVCastExpr {
     friend class ScalarEvolution;
 
-    SCEVHandle Op;
-    const Type *Ty;
     SCEVSignExtendExpr(const SCEVHandle &op, const Type *ty);
     virtual ~SCEVSignExtendExpr();
+
   public:
-    const SCEVHandle &getOperand() const { return Op; }
-    virtual const Type *getType() const { return Ty; }
-
-    virtual bool isLoopInvariant(const Loop *L) const {
-      return Op->isLoopInvariant(L);
-    }
-
-    virtual bool hasComputableLoopEvolution(const Loop *L) const {
-      return Op->hasComputableLoopEvolution(L);
-    }
-
     SCEVHandle replaceSymbolicValuesWithConcrete(const SCEVHandle &Sym,
                                                  const SCEVHandle &Conc,
                                                  ScalarEvolution &SE) const {
@@ -184,8 +184,7 @@ namespace llvm {
       return SE.getSignExtendExpr(H, Ty);
     }
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVSignExtendExpr *S) { return true; }
@@ -200,8 +199,6 @@ namespace llvm {
   /// operators.
   ///
   class SCEVCommutativeExpr : public SCEV {
-    friend class ScalarEvolution;
-
     std::vector<SCEVHandle> Operands;
 
   protected:
@@ -250,11 +247,12 @@ namespace llvm {
                                                  const SCEVHandle &Conc,
                                                  ScalarEvolution &SE) const;
 
+    bool dominates(BasicBlock *BB, DominatorTree *DT) const;
+
     virtual const char *getOperationStr() const = 0;
 
     virtual const Type *getType() const { return getOperand(0)->getType(); }
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVCommutativeExpr *S) { return true; }
@@ -343,11 +341,11 @@ namespace llvm {
         return SE.getUDivExpr(L, R);
     }
 
+    bool dominates(BasicBlock *BB, DominatorTree *DT) const;
 
     virtual const Type *getType() const;
 
-    void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVUDivExpr *S) { return true; }
@@ -359,7 +357,10 @@ namespace llvm {
 
   //===--------------------------------------------------------------------===//
   /// SCEVAddRecExpr - This node represents a polynomial recurrence on the trip
-  /// count of the specified loop.
+  /// count of the specified loop.  This is the primary focus of the
+  /// ScalarEvolution framework; all the other SCEV subclasses are mostly just
+  /// supporting infrastructure to allow SCEVAddRecExpr expressions to be
+  /// created and analyzed.
   ///
   /// All operands of an AddRec are required to be loop invariant.
   ///
@@ -437,8 +438,9 @@ namespace llvm {
                                                  const SCEVHandle &Conc,
                                                  ScalarEvolution &SE) const;
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    bool dominates(BasicBlock *BB, DominatorTree *DT) const;
+
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVAddRecExpr *S) { return true; }
@@ -518,10 +520,11 @@ namespace llvm {
       return this;
     }
 
+    bool dominates(BasicBlock *BB, DominatorTree *DT) const;
+
     virtual const Type *getType() const;
 
-    virtual void print(std::ostream &OS) const;
-    void print(std::ostream *OS) const { if (OS) print(*OS); }
+    virtual void print(raw_ostream &OS) const;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const SCEVUnknown *S) { return true; }
@@ -534,39 +537,39 @@ namespace llvm {
   /// for various SCEV analysis purposes.
   template<typename SC, typename RetVal=void>
   struct SCEVVisitor {
-    RetVal visit(SCEV *S) {
+    RetVal visit(const SCEV *S) {
       switch (S->getSCEVType()) {
       case scConstant:
-        return ((SC*)this)->visitConstant((SCEVConstant*)S);
+        return ((SC*)this)->visitConstant((const SCEVConstant*)S);
       case scTruncate:
-        return ((SC*)this)->visitTruncateExpr((SCEVTruncateExpr*)S);
+        return ((SC*)this)->visitTruncateExpr((const SCEVTruncateExpr*)S);
       case scZeroExtend:
-        return ((SC*)this)->visitZeroExtendExpr((SCEVZeroExtendExpr*)S);
+        return ((SC*)this)->visitZeroExtendExpr((const SCEVZeroExtendExpr*)S);
       case scSignExtend:
-        return ((SC*)this)->visitSignExtendExpr((SCEVSignExtendExpr*)S);
+        return ((SC*)this)->visitSignExtendExpr((const SCEVSignExtendExpr*)S);
       case scAddExpr:
-        return ((SC*)this)->visitAddExpr((SCEVAddExpr*)S);
+        return ((SC*)this)->visitAddExpr((const SCEVAddExpr*)S);
       case scMulExpr:
-        return ((SC*)this)->visitMulExpr((SCEVMulExpr*)S);
+        return ((SC*)this)->visitMulExpr((const SCEVMulExpr*)S);
       case scUDivExpr:
-        return ((SC*)this)->visitUDivExpr((SCEVUDivExpr*)S);
+        return ((SC*)this)->visitUDivExpr((const SCEVUDivExpr*)S);
       case scAddRecExpr:
-        return ((SC*)this)->visitAddRecExpr((SCEVAddRecExpr*)S);
+        return ((SC*)this)->visitAddRecExpr((const SCEVAddRecExpr*)S);
       case scSMaxExpr:
-        return ((SC*)this)->visitSMaxExpr((SCEVSMaxExpr*)S);
+        return ((SC*)this)->visitSMaxExpr((const SCEVSMaxExpr*)S);
       case scUMaxExpr:
-        return ((SC*)this)->visitUMaxExpr((SCEVUMaxExpr*)S);
+        return ((SC*)this)->visitUMaxExpr((const SCEVUMaxExpr*)S);
       case scUnknown:
-        return ((SC*)this)->visitUnknown((SCEVUnknown*)S);
+        return ((SC*)this)->visitUnknown((const SCEVUnknown*)S);
       case scCouldNotCompute:
-        return ((SC*)this)->visitCouldNotCompute((SCEVCouldNotCompute*)S);
+        return ((SC*)this)->visitCouldNotCompute((const SCEVCouldNotCompute*)S);
       default:
         assert(0 && "Unknown SCEV type!");
         abort();
       }
     }
 
-    RetVal visitCouldNotCompute(SCEVCouldNotCompute *S) {
+    RetVal visitCouldNotCompute(const SCEVCouldNotCompute *S) {
       assert(0 && "Invalid use of SCEVCouldNotCompute!");
       abort();
       return RetVal();

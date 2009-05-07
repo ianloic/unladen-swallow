@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 typedef int i16_1 __attribute((mode(HI)));
 int i16_1_test[sizeof(i16_1) == 2 ? 1 : -1];
@@ -15,3 +15,8 @@ typedef struct {int i,j,k;} invalid_4 __attribute((mode(SI))); // expected-error
 typedef float invalid_5 __attribute((mode(SI))); // expected-error{{type of machine mode does not match type of base type}}
 
 int **__attribute((mode(QI)))* i32;  // expected-error{{mode attribute}}
+
+typedef _Complex double c32 __attribute((mode(SC)));
+int c32_test[sizeof(c32) == 8 ? 1 : -1];
+typedef _Complex float c64 __attribute((mode(DC)));
+typedef _Complex float c80 __attribute((mode(XC)));

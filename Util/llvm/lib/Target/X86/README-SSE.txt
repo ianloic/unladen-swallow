@@ -841,42 +841,6 @@ _t:
 	movaps	%xmm0, 0
 
 //===---------------------------------------------------------------------===//
-rdar://6037315
-
-llvm-gcc-4.2 does the following for uint32_t -> float conversions on i386:
-
-	uint32_t x;
-	float y = (float)x;
-
-becomes:
-
-movl	%eax,		-8(%ebp)	// write x to the stack
-movl	$0x3ff00000,	-4(%ebp)	// 2^52 + x as a double at -4(%ebp)
-movsd	-8(%ebp),		%xmm0
-subsd	[2^52 double], 	%xmm0	// subtract 2^52 -- this is exact
-cvtsd2ss %xmm0,		%xmm0	// convert to single -- rounding happens here
-
-On merom/yonah, this takes a substantial stall.  The following is a much 
-better option:
-
-movd	%eax,		%xmm0	// load x into low word of xmm0
-movsd	[2^52 double],	%xmm1 	// load 2^52 into xmm1
-orpd	%xmm1,		%xmm0	// 2^52 + x in double precision
-subsd	%xmm1,		%xmm0	// x in double precision
-cvtsd2ss %xmm0,		%xmm0	// x rounded to single precision
-
-IF we don't already need PIC, then the following is even faster still, at a 
-small cost to code size:
-
-movl		$0x3ff00000,	%ecx		// conjure high word of 2^52
-movd		%ecx,		%xmm1
-movss	%eax,		%xmm0	// load x into low word of xmm0
-psllq		$32,			%xmm1	// 2^52
-orpd		%xmm1,		%xmm0	// 2^52 + x in double precision
-subsd		%xmm1,		%xmm0	// x in double precision
-cvtsd2ss	%xmm0,		%xmm0	// x in single precision
-
-//===---------------------------------------------------------------------===//
 rdar://5907648
 
 This function:
@@ -912,3 +876,43 @@ since we know the stack slot is already zext'd.
 Consider using movlps instead of movsd to implement (scalar_to_vector (loadf64))
 when code size is critical. movlps is slower than movsd on core2 but it's one
 byte shorter.
+
+//===---------------------------------------------------------------------===//
+
+We should use a dynamic programming based approach to tell when using FPStack
+operations is cheaper than SSE.  SciMark montecarlo contains code like this
+for example:
+
+double MonteCarlo_num_flops(int Num_samples) {
+    return ((double) Num_samples)* 4.0;
+}
+
+In fpstack mode, this compiles into:
+
+LCPI1_0:					
+	.long	1082130432	## float 4.000000e+00
+_MonteCarlo_num_flops:
+	subl	$4, %esp
+	movl	8(%esp), %eax
+	movl	%eax, (%esp)
+	fildl	(%esp)
+	fmuls	LCPI1_0
+	addl	$4, %esp
+	ret
+        
+in SSE mode, it compiles into significantly slower code:
+
+_MonteCarlo_num_flops:
+	subl	$12, %esp
+	cvtsi2sd	16(%esp), %xmm0
+	mulsd	LCPI1_0, %xmm0
+	movsd	%xmm0, (%esp)
+	fldl	(%esp)
+	addl	$12, %esp
+	ret
+
+There are also other cases in scimark where using fpstack is better, it is
+cheaper to do fld1 than load from a constant pool for example, so
+"load, add 1.0, store" is better done in the fp stack, etc.
+
+//===---------------------------------------------------------------------===//

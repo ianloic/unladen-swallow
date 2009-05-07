@@ -1,6 +1,10 @@
-// RUN: clang -analyze -warn-objc-missing-dealloc '-DIBOutlet=__attribute__((iboutlet))' %s --verify
+// RUN: clang-cc -analyze -warn-objc-missing-dealloc '-DIBOutlet=__attribute__((iboutlet))' %s --verify
 typedef signed char BOOL;
-@protocol NSObject  - (BOOL)isEqual:(id)object; @end
+@protocol NSObject
+- (BOOL)isEqual:(id)object;
+- (Class)class;
+@end
+
 @interface NSObject <NSObject> {}
 - (void)dealloc;
 - (id)init;
@@ -63,3 +67,51 @@ IBOutlet NSWindow *window;
 @implementation HasOutlet // no-warning
 @end
 
+//===------------------------------------------------------------------------===
+// <rdar://problem/6380411>
+// Was bogus warning: "The '_myproperty' instance variable was not retained by a
+//  synthesized property but was released in 'dealloc'"
+
+@interface MyObject_rdar6380411 : NSObject {
+    id _myproperty;
+}
+@property(assign) id myproperty;
+@end
+
+@implementation MyObject_rdar6380411
+@synthesize myproperty=_myproperty;
+- (void)dealloc {
+    // Don't claim that myproperty is released since it the property
+    // has the 'assign' attribute.
+    self.myproperty = 0; // no-warning
+    [super dealloc];
+}
+@end
+
+//===------------------------------------------------------------------------===
+// PR 3187: http://llvm.org/bugs/show_bug.cgi?id=3187
+// - Disable the missing -dealloc check for classes that subclass SenTestCase
+
+@class NSString;
+
+@interface SenTestCase : NSObject {}
+@end
+
+@interface MyClassTest : SenTestCase {
+  NSString *resourcePath;
+}
+@end
+
+@interface NSBundle : NSObject {}
++ (NSBundle *)bundleForClass:(Class)aClass;
+- (NSString *)resourcePath;
+@end
+
+@implementation MyClassTest
+- (void)setUp {
+  resourcePath = [[NSBundle bundleForClass:[self class]] resourcePath];
+}
+- (void)testXXX {
+  // do something which uses resourcepath
+}
+@end

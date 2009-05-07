@@ -18,15 +18,19 @@
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeclCXX.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Target/TargetData.h"
 using namespace clang;
 using namespace CodeGen;
 
 CodeGenFunction::CodeGenFunction(CodeGenModule &cgm) 
-  : CGM(cgm), Target(CGM.getContext().Target), SwitchInsn(NULL), 
-    CaseRangeBlock(NULL) {
-    LLVMIntTy = ConvertType(getContext().IntTy);
-    LLVMPointerWidth = Target.getPointerWidth(0);
+  : BlockFunction(cgm, *this, Builder), CGM(cgm),
+    Target(CGM.getContext().Target),
+    DebugInfo(0), SwitchInsn(0), CaseRangeBlock(0), InvokeDest(0), 
+    CXXThisDecl(0) {
+  LLVMIntTy = ConvertType(getContext().IntTy);
+  LLVMPointerWidth = Target.getPointerWidth(0);
 }
 
 ASTContext &CodeGenFunction::getContext() const {
@@ -42,30 +46,29 @@ llvm::BasicBlock *CodeGenFunction::getBasicBlockForLabel(const LabelStmt *S) {
   return BB = createBasicBlock(S->getName());
 }
 
-llvm::Constant *
-CodeGenFunction::GetAddrOfStaticLocalVar(const VarDecl *BVD) {
-  return cast<llvm::Constant>(LocalDeclMap[BVD]);
+llvm::Value *CodeGenFunction::GetAddrOfLocalVar(const VarDecl *VD) {
+  llvm::Value *Res = LocalDeclMap[VD];
+  assert(Res && "Invalid argument to GetAddrOfLocalVar(), no decl!");
+  return Res;
 }
 
-llvm::Value *CodeGenFunction::GetAddrOfLocalVar(const VarDecl *VD)
-{
-  return LocalDeclMap[VD];
+llvm::Constant *
+CodeGenFunction::GetAddrOfStaticLocalVar(const VarDecl *BVD) {
+  return cast<llvm::Constant>(GetAddrOfLocalVar(BVD));
+}
+
+const llvm::Type *CodeGenFunction::ConvertTypeForMem(QualType T) {
+  return CGM.getTypes().ConvertTypeForMem(T);
 }
 
 const llvm::Type *CodeGenFunction::ConvertType(QualType T) {
   return CGM.getTypes().ConvertType(T);
 }
 
-bool CodeGenFunction::isObjCPointerType(QualType T) {
-  // All Objective-C types are pointers.
-  return T->isObjCInterfaceType() ||
-    T->isObjCQualifiedInterfaceType() || T->isObjCQualifiedIdType();
-}
-
 bool CodeGenFunction::hasAggregateLLVMType(QualType T) {
   // FIXME: Use positive checks instead of negative ones to be more
   // robust in the face of extension.
-  return !isObjCPointerType(T) &&!T->isRealType() && !T->isPointerLikeType() &&
+  return !T->hasPointerRepresentation() &&!T->isRealType() &&
     !T->isVoidType() && !T->isVectorType() && !T->isFunctionType() && 
     !T->isBlockPointerType();
 }
@@ -115,12 +118,16 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
 
   assert(BreakContinueStack.empty() &&
          "mismatched push/pop in break/continue stack!");
-
+  assert(BlockScopes.empty() &&
+         "did not remove all blocks from block scope map!");
+  assert(CleanupEntries.empty() &&
+         "mismatched push/pop in cleanup stack!");
+  
   // Emit function epilog (to return). 
   EmitReturnBlock();
 
   // Emit debug descriptor for function end.
-  if (CGDebugInfo *DI = CGM.getDebugInfo()) {
+  if (CGDebugInfo *DI = getDebugInfo()) {
     DI->setLocation(EndLoc);
     DI->EmitRegionEnd(CurFn, Builder);
   }
@@ -128,15 +135,17 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   EmitFunctionEpilog(*CurFnInfo, ReturnValue);
 
   // Remove the AllocaInsertPt instruction, which is just a convenience for us.
-  AllocaInsertPt->eraseFromParent();
+  llvm::Instruction *Ptr = AllocaInsertPt;
   AllocaInsertPt = 0;
+  Ptr->eraseFromParent();
 }
 
 void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy, 
                                     llvm::Function *Fn,
                                     const FunctionArgList &Args,
                                     SourceLocation StartLoc) {
-  CurFuncDecl = D;
+  DidCallStackSave = false;
+  CurCodeDecl = CurFuncDecl = D;
   FnRetTy = RetTy;
   CurFn = Fn;
   assert(CurFn->isDeclaration() && "Function already has body?");
@@ -147,9 +156,11 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
   // later.  Don't create this with the builder, because we don't want it
   // folded.
   llvm::Value *Undef = llvm::UndefValue::get(llvm::Type::Int32Ty);
-  AllocaInsertPt = new llvm::BitCastInst(Undef, llvm::Type::Int32Ty, "allocapt",
+  AllocaInsertPt = new llvm::BitCastInst(Undef, llvm::Type::Int32Ty, "",
                                          EntryBB);
-
+  if (Builder.isNamePreserving())
+    AllocaInsertPt->setName("allocapt");
+  
   ReturnBlock = createBasicBlock("return");
   ReturnValue = 0;
   if (!RetTy->isVoidType())
@@ -159,11 +170,10 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
   
   // Emit subprogram debug descriptor.
   // FIXME: The cast here is a huge hack.
-  if (CGDebugInfo *DI = CGM.getDebugInfo()) {
+  if (CGDebugInfo *DI = getDebugInfo()) {
     DI->setLocation(StartLoc);
     if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
-      DI->EmitFunctionStart(FD->getIdentifier()->getName(),
-                            RetTy, CurFn, Builder);
+      DI->EmitFunctionStart(CGM.getMangledName(FD), RetTy, CurFn, Builder);
     } else {
       // Just use LLVM function name.
       DI->EmitFunctionStart(Fn->getName().c_str(), 
@@ -188,9 +198,26 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
 
 void CodeGenFunction::GenerateCode(const FunctionDecl *FD,
                                    llvm::Function *Fn) {
+  // Check if we should generate debug info for this function.
+  if (CGM.getDebugInfo() && !FD->hasAttr<NodebugAttr>())
+    DebugInfo = CGM.getDebugInfo();
+  
   FunctionArgList Args;
+  
+  if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD)) {
+    if (MD->isInstance()) {
+      // Create the implicit 'this' decl.
+      // FIXME: I'm not entirely sure I like using a fake decl just for code
+      // generation. Maybe we can come up with a better way?
+      CXXThisDecl = ImplicitParamDecl::Create(getContext(), 0, SourceLocation(),
+                                              &getContext().Idents.get("this"), 
+                                              MD->getThisType(getContext()));
+      Args.push_back(std::make_pair(CXXThisDecl, CXXThisDecl->getType()));
+    }
+  }
+  
   if (FD->getNumParams()) {
-    const FunctionTypeProto* FProto = FD->getType()->getAsFunctionTypeProto();
+    const FunctionProtoType* FProto = FD->getType()->getAsFunctionProtoType();
     assert(FProto && "Function def must have prototype!");
 
     for (unsigned i = 0, e = FD->getNumParams(); i != e; ++i)
@@ -198,17 +225,16 @@ void CodeGenFunction::GenerateCode(const FunctionDecl *FD,
                                     FProto->getArgType(i)));
   }
 
-  StartFunction(FD, FD->getResultType(), Fn, Args,
-                cast<CompoundStmt>(FD->getBody())->getLBracLoc());
-
-  EmitStmt(FD->getBody());
-  
-  const CompoundStmt *S = dyn_cast<CompoundStmt>(FD->getBody());
-  if (S) {
+  // FIXME: Support CXXTryStmt here, too.
+  if (const CompoundStmt *S = FD->getCompoundBody(getContext())) {
+    StartFunction(FD, FD->getResultType(), Fn, Args, S->getLBracLoc());
+    EmitStmt(S);
     FinishFunction(S->getRBracLoc());
-  } else {
-    FinishFunction();
   }
+
+  // Destroy the 'this' declaration.
+  if (CXXThisDecl)
+    CXXThisDecl->Destroy(getContext());
 }
 
 /// ContainsLabel - Return true if the statement contains a label in it.  If
@@ -371,8 +397,7 @@ unsigned CodeGenFunction::GetIDForAddrOfLabel(const LabelStmt *L) {
   return LabelIDs.insert(std::make_pair(L, LabelIDs.size())).first->second;
 }
 
-void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty)
-{
+void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty) {
   const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
   if (DestPtr->getType() != BP)
     DestPtr = Builder.CreateBitCast(DestPtr, BP, "tmp");
@@ -380,6 +405,10 @@ void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty)
   // Get size and alignment info for this aggregate.
   std::pair<uint64_t, unsigned> TypeInfo = getContext().getTypeInfo(Ty);
 
+  // Don't bother emitting a zero-byte memset.
+  if (TypeInfo.first == 0)
+    return;
+  
   // FIXME: Handle variable sized types.
   const llvm::Type *IntPtr = llvm::IntegerType::get(LLVMPointerWidth);
 
@@ -420,41 +449,6 @@ void CodeGenFunction::EmitIndirectSwitches() {
   }         
 }
 
-llvm::Value *CodeGenFunction::EmitVAArg(llvm::Value *VAListAddr, QualType Ty)
-{
-  // FIXME: This entire method is hardcoded for 32-bit X86.
-  
-  const char *TargetPrefix = getContext().Target.getTargetPrefix();
-  
-  if (strcmp(TargetPrefix, "x86") != 0 ||
-      getContext().Target.getPointerWidth(0) != 32)
-    return 0;
-  
-  const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
-  const llvm::Type *BPP = llvm::PointerType::getUnqual(BP);
-
-  llvm::Value *VAListAddrAsBPP = Builder.CreateBitCast(VAListAddr, BPP, 
-                                                       "ap");
-  llvm::Value *Addr = Builder.CreateLoad(VAListAddrAsBPP, "ap.cur");
-  llvm::Value *AddrTyped = 
-    Builder.CreateBitCast(Addr, 
-                          llvm::PointerType::getUnqual(ConvertType(Ty)));
-  
-  uint64_t SizeInBytes = getContext().getTypeSize(Ty) / 8;
-  const unsigned ArgumentSizeInBytes = 4;
-  if (SizeInBytes < ArgumentSizeInBytes)
-    SizeInBytes = ArgumentSizeInBytes;
-
-  llvm::Value *NextAddr = 
-    Builder.CreateGEP(Addr, 
-                      llvm::ConstantInt::get(llvm::Type::Int32Ty, SizeInBytes),
-                      "ap.next");
-  Builder.CreateStore(NextAddr, VAListAddrAsBPP);
-
-  return AddrTyped;
-}
-
-
 llvm::Value *CodeGenFunction::GetVLASize(const VariableArrayType *VAT)
 {
   llvm::Value *&SizeEntry = VLASizeMap[VAT];
@@ -476,18 +470,19 @@ llvm::Value *CodeGenFunction::EmitVLASize(QualType Ty)
       llvm::Value *ElemSize;
     
       QualType ElemTy = VAT->getElementType();
-    
+
+      const llvm::Type *SizeTy = ConvertType(getContext().getSizeType());
+                                             
       if (ElemTy->isVariableArrayType())
         ElemSize = EmitVLASize(ElemTy);
       else {
-        // FIXME: We use Int32Ty here because the alloca instruction takes a
-        // 32-bit integer. What should we do about overflow?
-        ElemSize = llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+        ElemSize = llvm::ConstantInt::get(SizeTy,
                                           getContext().getTypeSize(ElemTy) / 8);
       }
     
       llvm::Value *NumElements = EmitScalarExpr(VAT->getSizeExpr());
-    
+      NumElements = Builder.CreateIntCast(NumElements, SizeTy, false, "tmp");
+      
       SizeEntry = Builder.CreateMul(ElemSize, NumElements);
     }
     
@@ -506,4 +501,206 @@ llvm::Value* CodeGenFunction::EmitVAListRef(const Expr* E) {
     return EmitScalarExpr(E);
   }
   return EmitLValue(E).getAddress();
+}
+
+void CodeGenFunction::PushCleanupBlock(llvm::BasicBlock *CleanupBlock)
+{
+  CleanupEntries.push_back(CleanupEntry(CleanupBlock));
+}
+
+void CodeGenFunction::EmitCleanupBlocks(size_t OldCleanupStackSize)
+{
+  assert(CleanupEntries.size() >= OldCleanupStackSize && 
+         "Cleanup stack mismatch!");
+  
+  while (CleanupEntries.size() > OldCleanupStackSize)
+    EmitCleanupBlock();
+}
+
+CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock()
+{
+  CleanupEntry &CE = CleanupEntries.back();
+  
+  llvm::BasicBlock *CleanupBlock = CE.CleanupBlock;
+  
+  std::vector<llvm::BasicBlock *> Blocks;
+  std::swap(Blocks, CE.Blocks);
+  
+  std::vector<llvm::BranchInst *> BranchFixups;
+  std::swap(BranchFixups, CE.BranchFixups);
+  
+  CleanupEntries.pop_back();
+
+  // Check if any branch fixups pointed to the scope we just popped. If so,
+  // we can remove them.
+  for (size_t i = 0, e = BranchFixups.size(); i != e; ++i) {
+    llvm::BasicBlock *Dest = BranchFixups[i]->getSuccessor(0);
+    BlockScopeMap::iterator I = BlockScopes.find(Dest);
+      
+    if (I == BlockScopes.end())
+      continue;
+      
+    assert(I->second <= CleanupEntries.size() && "Invalid branch fixup!");
+      
+    if (I->second == CleanupEntries.size()) {
+      // We don't need to do this branch fixup.
+      BranchFixups[i] = BranchFixups.back();
+      BranchFixups.pop_back();
+      i--;
+      e--;
+      continue;
+    }
+  }
+  
+  llvm::BasicBlock *SwitchBlock = 0;
+  llvm::BasicBlock *EndBlock = 0;
+  if (!BranchFixups.empty()) {
+    SwitchBlock = createBasicBlock("cleanup.switch");
+    EndBlock = createBasicBlock("cleanup.end");
+    
+    llvm::BasicBlock *CurBB = Builder.GetInsertBlock();
+    
+    Builder.SetInsertPoint(SwitchBlock);
+
+    llvm::Value *DestCodePtr = CreateTempAlloca(llvm::Type::Int32Ty, 
+                                                "cleanup.dst");
+    llvm::Value *DestCode = Builder.CreateLoad(DestCodePtr, "tmp");
+    
+    // Create a switch instruction to determine where to jump next.
+    llvm::SwitchInst *SI = Builder.CreateSwitch(DestCode, EndBlock, 
+                                                BranchFixups.size());
+
+    // Restore the current basic block (if any)
+    if (CurBB) {
+      Builder.SetInsertPoint(CurBB);
+      
+      // If we had a current basic block, we also need to emit an instruction
+      // to initialize the cleanup destination.
+      Builder.CreateStore(llvm::Constant::getNullValue(llvm::Type::Int32Ty),
+                          DestCodePtr);
+    } else
+      Builder.ClearInsertionPoint();
+
+    for (size_t i = 0, e = BranchFixups.size(); i != e; ++i) {
+      llvm::BranchInst *BI = BranchFixups[i];
+      llvm::BasicBlock *Dest = BI->getSuccessor(0);
+      
+      // Fixup the branch instruction to point to the cleanup block.
+      BI->setSuccessor(0, CleanupBlock);
+      
+      if (CleanupEntries.empty()) {
+        llvm::ConstantInt *ID;
+        
+        // Check if we already have a destination for this block.
+        if (Dest == SI->getDefaultDest())
+          ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 0);
+        else {
+          ID = SI->findCaseDest(Dest);
+          if (!ID) {
+            // No code found, get a new unique one by using the number of
+            // switch successors.
+            ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+                                        SI->getNumSuccessors());
+            SI->addCase(ID, Dest);
+          }
+        }
+        
+        // Store the jump destination before the branch instruction.
+        new llvm::StoreInst(ID, DestCodePtr, BI);
+      } else {
+        // We need to jump through another cleanup block. Create a pad block
+        // with a branch instruction that jumps to the final destination and
+        // add it as a branch fixup to the current cleanup scope.
+        
+        // Create the pad block.
+        llvm::BasicBlock *CleanupPad = createBasicBlock("cleanup.pad", CurFn);
+
+        // Create a unique case ID.
+        llvm::ConstantInt *ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+                                                       SI->getNumSuccessors());
+
+        // Store the jump destination before the branch instruction.
+        new llvm::StoreInst(ID, DestCodePtr, BI);
+
+        // Add it as the destination.
+        SI->addCase(ID, CleanupPad);
+        
+        // Create the branch to the final destination.
+        llvm::BranchInst *BI = llvm::BranchInst::Create(Dest);
+        CleanupPad->getInstList().push_back(BI);
+        
+        // And add it as a branch fixup.
+        CleanupEntries.back().BranchFixups.push_back(BI);
+      }
+    }
+  }
+  
+  // Remove all blocks from the block scope map.
+  for (size_t i = 0, e = Blocks.size(); i != e; ++i) {
+    assert(BlockScopes.count(Blocks[i]) &&
+           "Did not find block in scope map!");
+    
+    BlockScopes.erase(Blocks[i]);
+  }
+  
+  return CleanupBlockInfo(CleanupBlock, SwitchBlock, EndBlock);
+}
+
+void CodeGenFunction::EmitCleanupBlock()
+{
+  CleanupBlockInfo Info = PopCleanupBlock();
+  
+  EmitBlock(Info.CleanupBlock);
+  
+  if (Info.SwitchBlock)
+    EmitBlock(Info.SwitchBlock);
+  if (Info.EndBlock)
+    EmitBlock(Info.EndBlock);
+}
+
+void CodeGenFunction::AddBranchFixup(llvm::BranchInst *BI)
+{
+  assert(!CleanupEntries.empty() && 
+         "Trying to add branch fixup without cleanup block!");
+  
+  // FIXME: We could be more clever here and check if there's already a 
+  // branch fixup for this destination and recycle it.
+  CleanupEntries.back().BranchFixups.push_back(BI);
+}
+
+void CodeGenFunction::EmitBranchThroughCleanup(llvm::BasicBlock *Dest)
+{
+  if (!HaveInsertPoint())
+    return;
+  
+  llvm::BranchInst* BI = Builder.CreateBr(Dest);
+  
+  Builder.ClearInsertionPoint();
+  
+  // The stack is empty, no need to do any cleanup.
+  if (CleanupEntries.empty())
+    return;
+  
+  if (!Dest->getParent()) {
+    // We are trying to branch to a block that hasn't been inserted yet.
+    AddBranchFixup(BI);
+    return;
+  }
+  
+  BlockScopeMap::iterator I = BlockScopes.find(Dest);
+  if (I == BlockScopes.end()) {
+    // We are trying to jump to a block that is outside of any cleanup scope.
+    AddBranchFixup(BI);
+    return;
+  }
+  
+  assert(I->second < CleanupEntries.size() &&
+         "Trying to branch into cleanup region");
+  
+  if (I->second == CleanupEntries.size() - 1) {
+    // We have a branch to a block in the same scope.
+    return;
+  }
+  
+  AddBranchFixup(BI);
 }

@@ -16,6 +16,7 @@
 #define LLVM_ADT_SPARSEBITVECTOR_H
 
 #include <cassert>
+#include <climits>
 #include <cstring>
 #include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -44,7 +45,7 @@ struct SparseBitVectorElement
 public:
   typedef unsigned long BitWord;
   enum {
-    BITWORD_SIZE = sizeof(BitWord) * 8,
+    BITWORD_SIZE = sizeof(BitWord) * CHAR_BIT,
     BITWORDS_PER_ELEMENT = (ElementSize + BITWORD_SIZE - 1) / BITWORD_SIZE,
     BITS_PER_ELEMENT = ElementSize
   };
@@ -460,6 +461,11 @@ public:
     CurrElementIter = Elements.begin ();
   }
 
+  // Clear.
+  void clear() {
+    Elements.clear();
+  }
+
   // Assignment
   SparseBitVector& operator=(const SparseBitVector& RHS) {
     Elements.clear();
@@ -836,7 +842,36 @@ inline bool operator &=(SparseBitVector<ElementSize> *LHS,
 template <unsigned ElementSize>
 inline bool operator &=(SparseBitVector<ElementSize> &LHS,
                         const SparseBitVector<ElementSize> *RHS) {
-  return LHS &= (*RHS);
+  return LHS &= *RHS;
+}
+
+// Convenience functions for infix union, intersection, difference operators.
+
+template <unsigned ElementSize>
+inline SparseBitVector<ElementSize>
+operator|(const SparseBitVector<ElementSize> &LHS,
+          const SparseBitVector<ElementSize> &RHS) {
+  SparseBitVector<ElementSize> Result(LHS);
+  Result |= RHS;
+  return Result;
+}
+
+template <unsigned ElementSize>
+inline SparseBitVector<ElementSize>
+operator&(const SparseBitVector<ElementSize> &LHS,
+          const SparseBitVector<ElementSize> &RHS) {
+  SparseBitVector<ElementSize> Result(LHS);
+  Result &= RHS;
+  return Result;
+}
+
+template <unsigned ElementSize>
+inline SparseBitVector<ElementSize>
+operator-(const SparseBitVector<ElementSize> &LHS,
+          const SparseBitVector<ElementSize> &RHS) {
+  SparseBitVector<ElementSize> Result;
+  Result.intersectWithComplement(LHS, RHS);
+  return Result;
 }
 
 
@@ -849,10 +884,8 @@ void dump(const SparseBitVector<ElementSize> &LHS, llvm::OStream &out) {
   for (bi = LHS.begin(); bi != LHS.end(); ++bi) {
     out << *bi << " ";
   }
-    out << " ]\n";
+  out << " ]\n";
 }
-}
-
-
+} // end namespace llvm
 
 #endif

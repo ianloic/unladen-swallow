@@ -36,8 +36,12 @@ namespace llvm {
       Unknown = 0,      ///< Custom section
       Text,             ///< Text section
       Data,             ///< Data section
+      DataRel,          ///< Contains data that has relocations
+      DataRelLocal,     ///< Contains data that has only local relocations
       BSS,              ///< BSS section
       ROData,           ///< Readonly data section
+      DataRelRO,        ///< Contains data that is otherwise readonly
+      DataRelROLocal,   ///< Contains r/o data with only local relocations
       RODataMergeStr,   ///< Readonly data section (mergeable strings)
       RODataMergeConst, ///< Readonly data section (mergeable constants)
       SmallData,        ///< Small data section
@@ -105,12 +109,14 @@ namespace llvm {
   class Section {
     friend class TargetAsmInfo;
     friend class StringMapEntry<Section>;
+    friend class StringMap<Section>;
 
     std::string Name;
     unsigned Flags;
-
     explicit Section(unsigned F = SectionFlags::Invalid):Flags(F) { }
+
   public:
+    
     bool isNamed() const { return Flags & SectionFlags::Named; }
     unsigned getEntitySize() const { return (Flags >> 24) & 0xFF; }
 
@@ -378,6 +384,11 @@ namespace llvm {
     /// GlobalDirective - This is the directive used to declare a global entity.
     ///
     const char *GlobalDirective;          // Defaults to NULL.
+
+    /// ExternDirective - This is the directive used to declare external 
+    /// globals.
+    ///
+    const char *ExternDirective;          // Defaults to NULL.
     
     /// SetDirective - This is the name of a directive that can be used to tell
     /// the assembler to set the value of a variable to some expression.
@@ -457,6 +468,10 @@ namespace llvm {
     ///
     bool DwarfRequiresFrameSection; // Defaults to true.
 
+    /// DwarfUsesInlineInfoSection - True if DwarfDebugInlineSection is used to
+    /// encode inline subroutine information.
+    bool DwarfUsesInlineInfoSection; // Defaults to false.
+
     /// SupportsMacInfo - true if the Dwarf output supports macro information
     ///
     bool SupportsMacInfoSection;            // Defaults to true
@@ -500,7 +515,11 @@ namespace llvm {
     /// DwarfPubTypesSection - Section directive for Dwarf info.
     ///
     const char *DwarfPubTypesSection; // Defaults to ".debug_pubtypes".
-    
+
+    /// DwarfDebugInlineSection - Section directive for inline info.
+    ///
+    const char *DwarfDebugInlineSection; // Defaults to ".debug_inlined"
+
     /// DwarfStrSection - Section directive for Dwarf info.
     ///
     const char *DwarfStrSection; // Defaults to ".debug_str".
@@ -575,6 +594,12 @@ namespace llvm {
     virtual SectionKind::Kind
     SectionKindForGlobal(const GlobalValue *GV) const;
 
+    /// RelocBehaviour - Describes how relocations should be treated when
+    /// selecting sections. Reloc::Global bit should be set if global
+    /// relocations should force object to be placed in read-write
+    /// sections. Reloc::Local bit should be set if local relocations should
+    /// force object to be placed in read-write sections.
+    virtual unsigned RelocBehaviour() const;
 
     /// SectionFlagsForGlobal - This hook allows the target to select proper
     /// section flags either for given global or for section.
@@ -781,6 +806,9 @@ namespace llvm {
     const char *getGlobalDirective() const {
       return GlobalDirective;
     }
+    const char *getExternDirective() const {
+      return ExternDirective;
+    }
     const char *getSetDirective() const {
       return SetDirective;
     }
@@ -835,6 +863,9 @@ namespace llvm {
     bool doesDwarfRequireFrameSection() const {
       return DwarfRequiresFrameSection;
     }
+    bool doesDwarfUsesInlineInfoSection() const {
+      return DwarfUsesInlineInfoSection;
+    }
     bool doesSupportMacInfoSection() const {
       return SupportsMacInfoSection;
     }
@@ -867,6 +898,9 @@ namespace llvm {
     }
     const char *getDwarfPubTypesSection() const {
       return DwarfPubTypesSection;
+    }
+    const char *getDwarfDebugInlineSection() const {
+      return DwarfDebugInlineSection;
     }
     const char *getDwarfStrSection() const {
       return DwarfStrSection;

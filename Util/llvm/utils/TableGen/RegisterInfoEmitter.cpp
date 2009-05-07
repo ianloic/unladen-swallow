@@ -240,7 +240,84 @@ void RegisterInfoEmitter::run(std::ostream &OS) {
          << RegisterClasses[i].getName() << "RegClass;\n";
          
     std::map<unsigned, std::set<unsigned> > SuperClassMap;
+    std::map<unsigned, std::set<unsigned> > SuperRegClassMap;
     OS << "\n";
+
+    // Emit the sub-register classes for each RegisterClass
+    for (unsigned rc = 0, e = RegisterClasses.size(); rc != e; ++rc) {
+      const CodeGenRegisterClass &RC = RegisterClasses[rc];
+
+      // Give the register class a legal C name if it's anonymous.
+      std::string Name = RC.TheDef->getName();
+
+      OS << "  // " << Name
+         << " Sub-register Classes...\n"
+         << "  static const TargetRegisterClass* const "
+         << Name << "SubRegClasses [] = {\n    ";
+
+      bool Empty = true;
+
+      for (unsigned subrc = 0, subrcMax = RC.SubRegClasses.size();
+            subrc != subrcMax; ++subrc) {
+        unsigned rc2 = 0, e2 = RegisterClasses.size();
+        for (; rc2 != e2; ++rc2) {
+          const CodeGenRegisterClass &RC2 =  RegisterClasses[rc2];
+          if (RC.SubRegClasses[subrc]->getName() == RC2.getName()) {
+            if (!Empty)
+              OS << ", ";
+            OS << "&" << getQualifiedName(RC2.TheDef) << "RegClass";
+            Empty = false;
+
+            std::map<unsigned, std::set<unsigned> >::iterator SCMI =
+              SuperRegClassMap.find(rc2);
+            if (SCMI == SuperRegClassMap.end()) {
+              SuperRegClassMap.insert(std::make_pair(rc2,
+                                                     std::set<unsigned>()));
+              SCMI = SuperRegClassMap.find(rc2);
+            }
+            SCMI->second.insert(rc);
+            break;
+          }
+        }
+        if (rc2 == e2)
+          throw "Register Class member '" +
+            RC.SubRegClasses[subrc]->getName() +
+            "' is not a valid RegisterClass!";
+      }
+
+      OS << (!Empty ? ", " : "") << "NULL";
+      OS << "\n  };\n\n";
+    }
+
+    // Emit the super-register classes for each RegisterClass
+    for (unsigned rc = 0, e = RegisterClasses.size(); rc != e; ++rc) {
+      const CodeGenRegisterClass &RC = RegisterClasses[rc];
+
+      // Give the register class a legal C name if it's anonymous.
+      std::string Name = RC.TheDef->getName();
+
+      OS << "  // " << Name
+         << " Super-register Classes...\n"
+         << "  static const TargetRegisterClass* const "
+         << Name << "SuperRegClasses [] = {\n    ";
+
+      bool Empty = true;
+      std::map<unsigned, std::set<unsigned> >::iterator I =
+        SuperRegClassMap.find(rc);
+      if (I != SuperRegClassMap.end()) {
+        for (std::set<unsigned>::iterator II = I->second.begin(),
+               EE = I->second.end(); II != EE; ++II) {
+          const CodeGenRegisterClass &RC2 = RegisterClasses[*II];
+          if (!Empty)
+            OS << ", ";
+          OS << "&" << getQualifiedName(RC2.TheDef) << "RegClass";
+          Empty = false;
+        }
+      }
+
+      OS << (!Empty ? ", " : "") << "NULL";
+      OS << "\n  };\n\n";
+    }
 
     // Emit the sub-classes array for each RegisterClass
     for (unsigned rc = 0, e = RegisterClasses.size(); rc != e; ++rc) {
@@ -263,8 +340,21 @@ void RegisterInfoEmitter::run(std::ostream &OS) {
       bool Empty = true;
       for (unsigned rc2 = 0, e2 = RegisterClasses.size(); rc2 != e2; ++rc2) {
         const CodeGenRegisterClass &RC2 = RegisterClasses[rc2];
+
+        // RC2 is a sub-class of RC if it is a valid replacement for any
+        // instruction operand where an RC register is required. It must satisfy
+        // these conditions:
+        //
+        // 1. All RC2 registers are also in RC.
+        // 2. The RC2 spill size must not be smaller that the RC spill size.
+        // 3. RC2 spill alignment must be compatible with RC.
+        //
+        // Sub-classes are used to determine if a virtual register can be used
+        // as an instruction operand, or if it must be copied first.
+
         if (rc == rc2 || RC2.Elements.size() > RC.Elements.size() ||
-            RC.SpillSize != RC2.SpillSize || !isSubRegisterClass(RC2, RegSet))
+            (RC.SpillAlignment && RC2.SpillAlignment % RC.SpillAlignment) ||
+            RC.SpillSize > RC2.SpillSize || !isSubRegisterClass(RC2, RegSet))
           continue;
       
         if (!Empty) OS << ", ";
@@ -319,9 +409,12 @@ void RegisterInfoEmitter::run(std::ostream &OS) {
       OS << RC.getName() << "Class::" << RC.getName() 
          << "Class()  : TargetRegisterClass("
          << RC.getName() + "RegClassID" << ", "
+         << '\"' << RC.getName() << "\", "
          << RC.getName() + "VTs" << ", "
          << RC.getName() + "Subclasses" << ", "
          << RC.getName() + "Superclasses" << ", "
+         << RC.getName() + "SubRegClasses" << ", "
+         << RC.getName() + "SuperRegClasses" << ", "
          << RC.SpillSize/8 << ", "
          << RC.SpillAlignment/8 << ", "
          << RC.CopyCost << ", "
@@ -462,6 +555,159 @@ void RegisterInfoEmitter::run(std::ostream &OS) {
   
   delete [] SubregHashTable;
 
+
+  // Print the SuperregHashTable, a simple quadratically probed
+  // hash table for determining if a register is a super-register
+  // of another register.
+  unsigned NumSupRegs = 0;
+  RegNo.clear();
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    RegNo[Regs[i].TheDef] = i;
+    NumSupRegs += RegisterSuperRegs[Regs[i].TheDef].size();
+  }
+  
+  unsigned SuperregHashTableSize = 2 * NextPowerOf2(2 * NumSupRegs);
+  unsigned* SuperregHashTable = new unsigned[2 * SuperregHashTableSize];
+  std::fill(SuperregHashTable, SuperregHashTable + 2 * SuperregHashTableSize, ~0U);
+  
+  hashMisses = 0;
+  
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    Record* R = Regs[i].TheDef;
+    for (std::set<Record*>::iterator I = RegisterSuperRegs[R].begin(),
+         E = RegisterSuperRegs[R].end(); I != E; ++I) {
+      Record* RJ = *I;
+      // We have to increase the indices of both registers by one when
+      // computing the hash because, in the generated code, there
+      // will be an extra empty slot at register 0.
+      size_t index = ((i+1) + (RegNo[RJ]+1) * 37) & (SuperregHashTableSize-1);
+      unsigned ProbeAmt = 2;
+      while (SuperregHashTable[index*2] != ~0U &&
+             SuperregHashTable[index*2+1] != ~0U) {
+        index = (index + ProbeAmt) & (SuperregHashTableSize-1);
+        ProbeAmt += 2;
+        
+        hashMisses++;
+      }
+      
+      SuperregHashTable[index*2] = i;
+      SuperregHashTable[index*2+1] = RegNo[RJ];
+    }
+  }
+  
+  OS << "\n\n  // Number of hash collisions: " << hashMisses << "\n";
+  
+  if (SuperregHashTableSize) {
+    std::string Namespace = Regs[0].TheDef->getValueAsString("Namespace");
+    
+    OS << "  const unsigned SuperregHashTable[] = { ";
+    for (unsigned i = 0; i < SuperregHashTableSize - 1; ++i) {
+      if (i != 0)
+        // Insert spaces for nice formatting.
+        OS << "                                       ";
+      
+      if (SuperregHashTable[2*i] != ~0U) {
+        OS << getQualifiedName(Regs[SuperregHashTable[2*i]].TheDef) << ", "
+           << getQualifiedName(Regs[SuperregHashTable[2*i+1]].TheDef) << ", \n";
+      } else {
+        OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister, \n";
+      }
+    }
+    
+    unsigned Idx = SuperregHashTableSize*2-2;
+    if (SuperregHashTable[Idx] != ~0U) {
+      OS << "                                       "
+         << getQualifiedName(Regs[SuperregHashTable[Idx]].TheDef) << ", "
+         << getQualifiedName(Regs[SuperregHashTable[Idx+1]].TheDef) << " };\n";
+    } else {
+      OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister };\n";
+    }
+    
+    OS << "  const unsigned SuperregHashTableSize = "
+       << SuperregHashTableSize << ";\n";
+  } else {
+    OS << "  const unsigned SuperregHashTable[] = { ~0U, ~0U };\n"
+       << "  const unsigned SuperregHashTableSize = 1;\n";
+  }
+  
+  delete [] SuperregHashTable;
+
+
+  // Print the AliasHashTable, a simple quadratically probed
+  // hash table for determining if a register aliases another register.
+  unsigned NumAliases = 0;
+  RegNo.clear();
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    RegNo[Regs[i].TheDef] = i;
+    NumAliases += RegisterAliases[Regs[i].TheDef].size();
+  }
+  
+  unsigned AliasesHashTableSize = 2 * NextPowerOf2(2 * NumAliases);
+  unsigned* AliasesHashTable = new unsigned[2 * AliasesHashTableSize];
+  std::fill(AliasesHashTable, AliasesHashTable + 2 * AliasesHashTableSize, ~0U);
+  
+  hashMisses = 0;
+  
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    Record* R = Regs[i].TheDef;
+    for (std::set<Record*>::iterator I = RegisterAliases[R].begin(),
+         E = RegisterAliases[R].end(); I != E; ++I) {
+      Record* RJ = *I;
+      // We have to increase the indices of both registers by one when
+      // computing the hash because, in the generated code, there
+      // will be an extra empty slot at register 0.
+      size_t index = ((i+1) + (RegNo[RJ]+1) * 37) & (AliasesHashTableSize-1);
+      unsigned ProbeAmt = 2;
+      while (AliasesHashTable[index*2] != ~0U &&
+             AliasesHashTable[index*2+1] != ~0U) {
+        index = (index + ProbeAmt) & (AliasesHashTableSize-1);
+        ProbeAmt += 2;
+        
+        hashMisses++;
+      }
+      
+      AliasesHashTable[index*2] = i;
+      AliasesHashTable[index*2+1] = RegNo[RJ];
+    }
+  }
+  
+  OS << "\n\n  // Number of hash collisions: " << hashMisses << "\n";
+  
+  if (AliasesHashTableSize) {
+    std::string Namespace = Regs[0].TheDef->getValueAsString("Namespace");
+    
+    OS << "  const unsigned AliasesHashTable[] = { ";
+    for (unsigned i = 0; i < AliasesHashTableSize - 1; ++i) {
+      if (i != 0)
+        // Insert spaces for nice formatting.
+        OS << "                                       ";
+      
+      if (AliasesHashTable[2*i] != ~0U) {
+        OS << getQualifiedName(Regs[AliasesHashTable[2*i]].TheDef) << ", "
+           << getQualifiedName(Regs[AliasesHashTable[2*i+1]].TheDef) << ", \n";
+      } else {
+        OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister, \n";
+      }
+    }
+    
+    unsigned Idx = AliasesHashTableSize*2-2;
+    if (AliasesHashTable[Idx] != ~0U) {
+      OS << "                                       "
+         << getQualifiedName(Regs[AliasesHashTable[Idx]].TheDef) << ", "
+         << getQualifiedName(Regs[AliasesHashTable[Idx+1]].TheDef) << " };\n";
+    } else {
+      OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister };\n";
+    }
+    
+    OS << "  const unsigned AliasesHashTableSize = "
+       << AliasesHashTableSize << ";\n";
+  } else {
+    OS << "  const unsigned AliasesHashTable[] = { ~0U, ~0U };\n"
+       << "  const unsigned AliasesHashTableSize = 1;\n";
+  }
+  
+  delete [] AliasesHashTable;
+
   if (!RegisterAliases.empty())
     OS << "\n\n  // Register Alias Sets...\n";
 
@@ -598,7 +844,9 @@ void RegisterInfoEmitter::run(std::ostream &OS) {
      << "  : TargetRegisterInfo(RegisterDescriptors, " << Registers.size()+1
      << ", RegisterClasses, RegisterClasses+" << RegisterClasses.size() <<",\n "
      << "                 CallFrameSetupOpcode, CallFrameDestroyOpcode,\n"
-     << "                 SubregHashTable, SubregHashTableSize) {\n"
+     << "                 SubregHashTable, SubregHashTableSize,\n"
+     << "                 SuperregHashTable, SuperregHashTableSize,\n"
+     << "                 AliasesHashTable, AliasesHashTableSize) {\n"
      << "}\n\n";
 
   // Collect all information about dwarf register numbers

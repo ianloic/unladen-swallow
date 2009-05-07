@@ -1,6 +1,8 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify -fmath-errno=0 %s
 
 int foo(int X, int Y);
+
+double sqrt(double X);  // implicitly const because of -fno-math-errno!
 
 void bar(volatile int *VP, int *P, int A,
          _Complex double C, volatile _Complex double VC) {
@@ -19,9 +21,11 @@ void bar(volatile int *VP, int *P, int A,
   P[4];                // expected-warning {{expression result unused}}
   VP[4];               // no warning.
 
-  // FIXME: SEMA explodes on these.
-  //__real__ C;
-  //__real__ VC;
+  __real__ C;          // expected-warning {{expression result unused}}
+  __real__ VC;
+  
+  // We know this can't change errno because of -fno-math-errno.
+  sqrt(A);  // expected-warning {{expression result unused}}
 }
 
 extern void t1();

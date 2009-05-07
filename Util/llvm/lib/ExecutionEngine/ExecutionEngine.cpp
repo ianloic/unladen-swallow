@@ -42,6 +42,7 @@ ExecutionEngine::ExecutionEngine(ModuleProvider *P) : LazyFunctionCreator(0) {
   LazyCompilationDisabled = false;
   GVCompilationDisabled   = false;
   SymbolSearchingDisabled = false;
+  DlsymStubsEnabled       = false;
   Modules.push_back(P);
   assert(P && "ModuleProvider is null?");
 }
@@ -347,7 +348,7 @@ int ExecutionEngine::runFunctionAsMain(Function *Fn,
    }
    // FALLS THROUGH
   case 0:
-   if (FTy->getReturnType() != Type::Int32Ty &&
+   if (!isa<IntegerType>(FTy->getReturnType()) &&
        FTy->getReturnType() != Type::VoidTy) {
      cerr << "Invalid return type of main() supplied\n";
      abort();
@@ -382,7 +383,7 @@ int ExecutionEngine::runFunctionAsMain(Function *Fn,
 ExecutionEngine *ExecutionEngine::create(ModuleProvider *MP,
                                          bool ForceInterpreter,
                                          std::string *ErrorStr,
-                                         bool Fast) {
+                                         CodeGenOpt::Level OptLevel) {
   ExecutionEngine *EE = 0;
 
   // Make sure we can resolve symbols in the program as well. The zero arg
@@ -392,11 +393,11 @@ ExecutionEngine *ExecutionEngine::create(ModuleProvider *MP,
 
   // Unless the interpreter was explicitly selected, try making a JIT.
   if (!ForceInterpreter && JITCtor)
-    EE = JITCtor(MP, ErrorStr, Fast);
+    EE = JITCtor(MP, ErrorStr, OptLevel);
 
   // If we can't make a JIT, make an interpreter instead.
   if (EE == 0 && InterpCtor)
-    EE = InterpCtor(MP, ErrorStr, Fast);
+    EE = InterpCtor(MP, ErrorStr, OptLevel);
 
   return EE;
 }
@@ -747,17 +748,9 @@ void ExecutionEngine::StoreValueToMemory(const GenericValue &Val,
   case Type::DoubleTyID:
     *((double*)Ptr) = Val.DoubleVal;
     break;
-  case Type::X86_FP80TyID: {
-      uint16_t *Dest = (uint16_t*)Ptr;
-      const uint16_t *Src = (uint16_t*)Val.IntVal.getRawData();
-      // This is endian dependent, but it will only work on x86 anyway.
-      Dest[0] = Src[4];
-      Dest[1] = Src[0];
-      Dest[2] = Src[1];
-      Dest[3] = Src[2];
-      Dest[4] = Src[3];
-      break;
-    }
+  case Type::X86_FP80TyID:
+    memcpy(Ptr, Val.IntVal.getRawData(), 10);
+    break;
   case Type::PointerTyID:
     // Ensure 64 bit target pointers are fully initialized on 32 bit hosts.
     if (StoreBytes != sizeof(PointerTy))
@@ -834,16 +827,8 @@ void ExecutionEngine::LoadValueFromMemory(GenericValue &Result,
   case Type::X86_FP80TyID: {
     // This is endian dependent, but it will only work on x86 anyway.
     // FIXME: Will not trap if loading a signaling NaN.
-    uint16_t *p = (uint16_t*)Ptr;
-    union {
-      uint16_t x[8];
-      uint64_t y[2];
-    };
-    x[0] = p[1];
-    x[1] = p[2];
-    x[2] = p[3];
-    x[3] = p[4];
-    x[4] = p[0];
+    uint64_t y[2];
+    memcpy(y, Ptr, 10);
     Result.IntVal = APInt(80, 2, y);
     break;
   }

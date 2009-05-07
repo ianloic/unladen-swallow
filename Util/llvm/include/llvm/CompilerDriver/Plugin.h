@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-//  Plugin support for llvmc2.
+//  Plugin support for llvmc.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TOOLS_LLVMC2_PLUGIN_H
-#define LLVM_TOOLS_LLVMC2_PLUGIN_H
+#ifndef LLVM_INCLUDE_COMPILER_DRIVER_PLUGIN_H
+#define LLVM_INCLUDE_COMPILER_DRIVER_PLUGIN_H
 
 #include "llvm/Support/Registry.h"
 
@@ -27,7 +27,7 @@ namespace llvmc {
     /// Priority - Plugin priority, useful for handling dependencies
     /// between plugins. Plugins with lower priorities are loaded
     /// first.
-    virtual int Priority() const = 0;
+    virtual int Priority() const { return 0; }
 
     /// PopulateLanguageMap - The auto-generated function that fills in
     /// the language map (map from file extensions to language names).
@@ -76,4 +76,4 @@ namespace llvmc {
 
 }
 
-#endif // LLVM_TOOLS_LLVMC2_PLUGIN_H
+#endif // LLVM_INCLUDE_COMPILER_DRIVER_PLUGIN_H

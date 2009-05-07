@@ -118,24 +118,24 @@ namespace llvm {
       /// X86 bit-test instructions.
       BT,
 
-      /// X86 SetCC. Operand 1 is condition code, and operand 2 is the flag
+      /// X86 SetCC. Operand 0 is condition code, and operand 1 is the flag
       /// operand produced by a CMP instruction.
       SETCC,
 
-      /// X86 conditional moves. Operand 1 and operand 2 are the two values
-      /// to select from (operand 1 is a R/W operand). Operand 3 is the
-      /// condition code, and operand 4 is the flag operand produced by a CMP
-      /// or TEST instruction. It also writes a flag result.
+      /// X86 conditional moves. Operand 0 and operand 1 are the two values
+      /// to select from. Operand 2 is the condition code, and operand 3 is the
+      /// flag operand produced by a CMP or TEST instruction. It also writes a
+      /// flag result.
       CMOV,
 
-      /// X86 conditional branches. Operand 1 is the chain operand, operand 2
-      /// is the block to branch if condition is true, operand 3 is the
-      /// condition code, and operand 4 is the flag operand produced by a CMP
+      /// X86 conditional branches. Operand 0 is the chain operand, operand 1
+      /// is the block to branch if condition is true, operand 2 is the
+      /// condition code, and operand 3 is the flag operand produced by a CMP
       /// or TEST instruction.
       BRCOND,
 
-      /// Return with a flag operand. Operand 1 is the chain operand, operand
-      /// 2 is the number of bytes of stack to pop.
+      /// Return with a flag operand. Operand 0 is the chain operand, operand
+      /// 1 is the number of bytes of stack to pop.
       RET_FLAG,
 
       /// REP_STOS - Repeat fill, corresponds to X86::REP_STOSx.
@@ -176,6 +176,9 @@ namespace llvm {
       /// corresponds to X86::PINSRW.
       PINSRW,
 
+      /// PSHUFB - Shuffle 16 8-bit values within a vector.
+      PSHUFB,
+
       /// FMAX, FMIN - Floating point max and min.
       ///
       FMAX, FMIN,
@@ -185,8 +188,11 @@ namespace llvm {
       /// in order to obtain suitable precision.
       FRSQRT, FRCP,
 
-      // TLSADDR, THREAD_POINTER - Thread Local Storage.
-      TLSADDR, THREAD_POINTER,
+      // TLSADDR - Thread Local Storage.
+      TLSADDR,
+
+      // SegmentBaseAddress - The address segment:0
+      SegmentBaseAddress,
 
       // EH_RETURN - Exception Handling helpers.
       EH_RETURN,
@@ -224,7 +230,8 @@ namespace llvm {
 
       // VSHL, VSRL - Vector logical left / right shift.
       VSHL, VSRL,
-      
+
+      // CMPPD, CMPPS - Vector double/float comparison.
       // CMPPD, CMPPS - Vector double/float comparison.
       CMPPD, CMPPS,
       
@@ -232,9 +239,12 @@ namespace llvm {
       PCMPEQB, PCMPEQW, PCMPEQD, PCMPEQQ,
       PCMPGTB, PCMPGTW, PCMPGTD, PCMPGTQ,
 
-      // ADD, SUB, SMUL, UMUL - Arithmetic operations with overflow/carry
-      // intrinsics.
-      ADD, SUB, SMUL, UMUL
+      // ADD, SUB, SMUL, UMUL, etc. - Arithmetic operations with FLAGS results.
+      ADD, SUB, SMUL, UMUL,
+      INC, DEC,
+
+      // MUL_IMM - X86 specific multiply by immediate.
+      MUL_IMM
     };
   }
 
@@ -242,80 +252,72 @@ namespace llvm {
   namespace X86 {
     /// isPSHUFDMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to PSHUFD.
-    bool isPSHUFDMask(SDNode *N);
+    bool isPSHUFDMask(ShuffleVectorSDNode *N);
 
     /// isPSHUFHWMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to PSHUFD.
-    bool isPSHUFHWMask(SDNode *N);
+    bool isPSHUFHWMask(ShuffleVectorSDNode *N);
 
     /// isPSHUFLWMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to PSHUFD.
-    bool isPSHUFLWMask(SDNode *N);
+    bool isPSHUFLWMask(ShuffleVectorSDNode *N);
 
     /// isSHUFPMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to SHUFP*.
-    bool isSHUFPMask(SDNode *N);
+    bool isSHUFPMask(ShuffleVectorSDNode *N);
 
     /// isMOVHLPSMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to MOVHLPS.
-    bool isMOVHLPSMask(SDNode *N);
+    bool isMOVHLPSMask(ShuffleVectorSDNode *N);
 
     /// isMOVHLPS_v_undef_Mask - Special case of isMOVHLPSMask for canonical form
     /// of vector_shuffle v, v, <2, 3, 2, 3>, i.e. vector_shuffle v, undef,
     /// <2, 3, 2, 3>
-    bool isMOVHLPS_v_undef_Mask(SDNode *N);
+    bool isMOVHLPS_v_undef_Mask(ShuffleVectorSDNode *N);
 
     /// isMOVLPMask - Return true if the specified VECTOR_SHUFFLE operand
-    /// specifies a shuffle of elements that is suitable for input to MOVLP{S|D}.
-    bool isMOVLPMask(SDNode *N);
+    /// specifies a shuffle of elements that is suitable for MOVLP{S|D}.
+    bool isMOVLPMask(ShuffleVectorSDNode *N);
 
     /// isMOVHPMask - Return true if the specified VECTOR_SHUFFLE operand
-    /// specifies a shuffle of elements that is suitable for input to MOVHP{S|D}
+    /// specifies a shuffle of elements that is suitable for MOVHP{S|D}.
     /// as well as MOVLHPS.
-    bool isMOVHPMask(SDNode *N);
+    bool isMOVHPMask(ShuffleVectorSDNode *N);
 
     /// isUNPCKLMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to UNPCKL.
-    bool isUNPCKLMask(SDNode *N, bool V2IsSplat = false);
+    bool isUNPCKLMask(ShuffleVectorSDNode *N, bool V2IsSplat = false);
 
     /// isUNPCKHMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to UNPCKH.
-    bool isUNPCKHMask(SDNode *N, bool V2IsSplat = false);
+    bool isUNPCKHMask(ShuffleVectorSDNode *N, bool V2IsSplat = false);
 
     /// isUNPCKL_v_undef_Mask - Special case of isUNPCKLMask for canonical form
     /// of vector_shuffle v, v, <0, 4, 1, 5>, i.e. vector_shuffle v, undef,
     /// <0, 0, 1, 1>
-    bool isUNPCKL_v_undef_Mask(SDNode *N);
+    bool isUNPCKL_v_undef_Mask(ShuffleVectorSDNode *N);
 
     /// isUNPCKH_v_undef_Mask - Special case of isUNPCKHMask for canonical form
     /// of vector_shuffle v, v, <2, 6, 3, 7>, i.e. vector_shuffle v, undef,
     /// <2, 2, 3, 3>
-    bool isUNPCKH_v_undef_Mask(SDNode *N);
+    bool isUNPCKH_v_undef_Mask(ShuffleVectorSDNode *N);
 
     /// isMOVLMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to MOVSS,
     /// MOVSD, and MOVD, i.e. setting the lowest element.
-    bool isMOVLMask(SDNode *N);
+    bool isMOVLMask(ShuffleVectorSDNode *N);
 
     /// isMOVSHDUPMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to MOVSHDUP.
-    bool isMOVSHDUPMask(SDNode *N);
+    bool isMOVSHDUPMask(ShuffleVectorSDNode *N);
 
     /// isMOVSLDUPMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to MOVSLDUP.
-    bool isMOVSLDUPMask(SDNode *N);
-
-    /// isSplatMask - Return true if the specified VECTOR_SHUFFLE operand
-    /// specifies a splat of a single element.
-    bool isSplatMask(SDNode *N);
-
-    /// isSplatLoMask - Return true if the specified VECTOR_SHUFFLE operand
-    /// specifies a splat of zero element.
-    bool isSplatLoMask(SDNode *N);
+    bool isMOVSLDUPMask(ShuffleVectorSDNode *N);
 
     /// isMOVDDUPMask - Return true if the specified VECTOR_SHUFFLE operand
     /// specifies a shuffle of elements that is suitable for input to MOVDDUP.
-    bool isMOVDDUPMask(SDNode *N);
+    bool isMOVDDUPMask(ShuffleVectorSDNode *N);
 
     /// getShuffleSHUFImmediate - Return the appropriate immediate to shuffle
     /// the specified isShuffleMask VECTOR_SHUFFLE mask with PSHUF* and SHUFP*
@@ -392,7 +394,7 @@ namespace llvm {
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                        MachineBasicBlock *MBB);
+                                                  MachineBasicBlock *MBB) const;
 
  
     /// getTargetNodeName - This method returns the name of a target specific
@@ -452,19 +454,31 @@ namespace llvm {
     /// register EAX to i16 by referencing its sub-register AX.
     virtual bool isTruncateFree(const Type *Ty1, const Type *Ty2) const;
     virtual bool isTruncateFree(MVT VT1, MVT VT2) const;
-  
+
+    /// isZExtFree - Return true if any actual instruction that defines a
+    /// value of type Ty1 implicit zero-extends the value to Ty2 in the result
+    /// register. This does not necessarily include registers defined in
+    /// unknown ways, such as incoming arguments, or copies from unknown
+    /// virtual registers. Also, if isTruncateFree(Ty2, Ty1) is true, this
+    /// does not necessarily apply to truncate instructions. e.g. on x86-64,
+    /// all instructions that define 32-bit values implicit zero-extend the
+    /// result out to 64 bits.
+    virtual bool isZExtFree(const Type *Ty1, const Type *Ty2) const;
+    virtual bool isZExtFree(MVT VT1, MVT VT2) const;
+
     /// isShuffleMaskLegal - Targets can use this to indicate that they only
     /// support *some* VECTOR_SHUFFLE operations, those with specific masks.
     /// By default, if a target supports the VECTOR_SHUFFLE node, all mask
     /// values are assumed to be legal.
-    virtual bool isShuffleMaskLegal(SDValue Mask, MVT VT) const;
+    virtual bool isShuffleMaskLegal(const SmallVectorImpl<int> &Mask,
+                                    MVT VT) const;
 
     /// isVectorClearMaskLegal - Similar to isShuffleMaskLegal. This is
     /// used by Targets can use this to indicate if there is a suitable
     /// VECTOR_SHUFFLE that can be used to replace a VAND with a constant
     /// pool entry.
-    virtual bool isVectorClearMaskLegal(const std::vector<SDValue> &BVOps,
-                                        MVT EVT, SelectionDAG &DAG) const;
+    virtual bool isVectorClearMaskLegal(const SmallVectorImpl<int> &Mask,
+                                        MVT VT) const;
 
     /// ShouldShrinkFPConstant - If true, then instruction selection should
     /// seek to shrink the FP constant of the specified type to a smaller type
@@ -549,7 +563,7 @@ namespace llvm {
     bool CallRequiresFnAddressInReg(bool Is64Bit, bool IsTailCall);
     SDValue EmitTailCallLoadRetAddr(SelectionDAG &DAG, SDValue &OutRetAddr,
                                 SDValue Chain, bool IsTailCall, bool Is64Bit,
-                                int FPDiff);
+                                int FPDiff, DebugLoc dl);
 
     CCAssignFn *CCAssignFnForNode(unsigned CallingConv) const;
     NameDecorationStyle NameDecorationForFORMAL_ARGUMENTS(SDValue Op);
@@ -566,8 +580,8 @@ namespace llvm {
     SDValue LowerINSERT_VECTOR_ELT_SSE4(SDValue Op, SelectionDAG &DAG);
     SDValue LowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG);
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG);
-    SDValue LowerGlobalAddress(const GlobalValue *GV, int64_t Offset,
-                               SelectionDAG &DAG) const;
+    SDValue LowerGlobalAddress(const GlobalValue *GV, DebugLoc dl,
+                               int64_t Offset, SelectionDAG &DAG) const;
     SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG);
@@ -612,12 +626,12 @@ namespace llvm {
     void ReplaceATOMIC_BINARY_64(SDNode *N, SmallVectorImpl<SDValue> &Results,
                                  SelectionDAG &DAG, unsigned NewOp);
 
-    SDValue EmitTargetCodeForMemset(SelectionDAG &DAG,
+    SDValue EmitTargetCodeForMemset(SelectionDAG &DAG, DebugLoc dl,
                                     SDValue Chain,
                                     SDValue Dst, SDValue Src,
                                     SDValue Size, unsigned Align,
                                     const Value *DstSV, uint64_t DstSVOff);
-    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG,
+    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                                     SDValue Chain,
                                     SDValue Dst, SDValue Src,
                                     SDValue Size, unsigned Align,
@@ -639,7 +653,7 @@ namespace llvm {
                                                     unsigned notOpc,
                                                     unsigned EAXreg,
                                                     TargetRegisterClass *RC,
-                                                    bool invSrc = false);
+                                                    bool invSrc = false) const;
 
     MachineBasicBlock *EmitAtomicBit6432WithCustomInserter(
                                                     MachineInstr *BInstr,
@@ -648,14 +662,23 @@ namespace llvm {
                                                     unsigned regOpcH,
                                                     unsigned immOpcL,
                                                     unsigned immOpcH,
-                                                    bool invSrc = false);
+                                                    bool invSrc = false) const;
     
     /// Utility function to emit atomic min and max.  It takes the min/max
-    // instruction to expand, the associated basic block, and the associated
-    // cmov opcode for moving the min or max value.
+    /// instruction to expand, the associated basic block, and the associated
+    /// cmov opcode for moving the min or max value.
     MachineBasicBlock *EmitAtomicMinMaxWithCustomInserter(MachineInstr *BInstr,
                                                           MachineBasicBlock *BB,
-                                                          unsigned cmovOpc);
+                                                        unsigned cmovOpc) const;
+
+    /// Emit nodes that will be selected as "test Op0,Op0", or something
+    /// equivalent, for use with the given x86 condition code.
+    SDValue EmitTest(SDValue Op0, unsigned X86CC, SelectionDAG &DAG);
+
+    /// Emit nodes that will be selected as "cmp Op0,Op1", or something
+    /// equivalent, for use with the given x86 condition code.
+    SDValue EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
+                    SelectionDAG &DAG);
   };
 
   namespace X86 {

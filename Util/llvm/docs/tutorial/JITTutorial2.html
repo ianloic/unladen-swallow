@@ -51,12 +51,12 @@ unsigned gcd(unsigned x, unsigned y) {
 
 <div class="doc_code">
 <pre>
-#include &lt;llvm/Module.h&gt;
-#include &lt;llvm/Function.h&gt;
-#include &lt;llvm/PassManager.h&gt;
-#include &lt;llvm/Analysis/Verifier.h&gt;
-#include &lt;llvm/Assembly/PrintModulePass.h&gt;
-#include &lt;llvm/Support/IRBuilder.h&gt;
+#include "llvm/Module.h"
+#include "llvm/Function.h"
+#include "llvm/PassManager.h"
+#include "llvm/Analysis/Verifier.h"
+#include "llvm/Assembly/PrintModulePass.h"
+#include "llvm/Support/IRBuilder.h"
 
 using namespace llvm;
 
@@ -68,7 +68,7 @@ int main(int argc, char**argv) {
   verifyModule(*Mod, PrintMessageAction);
   
   PassManager PM;
-  PM.add(new PrintModulePass(&amp;llvm::cout));
+  PM.add(createPrintModulePass(&amp;llvm::cout));
   PM.run(*Mod);
 
   delete Mod;  
@@ -111,7 +111,7 @@ Module* makeLLVMModule() {
 
 <div class="doc_code">
 <pre>
-  IRBuilder builder(entry);
+  IRBuilder&lt;&gt; builder(entry);
   Value* xEqualsY = builder.CreateICmpEQ(x, y, &quot;tmp&quot;);
   builder.CreateCondBr(xEqualsY, ret, cond_false);
 </pre>

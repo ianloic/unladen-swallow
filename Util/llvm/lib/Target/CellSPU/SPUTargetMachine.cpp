@@ -81,15 +81,18 @@ SPUTargetMachine::SPUTargetMachine(const Module &M, const std::string &FS)
 //===----------------------------------------------------------------------===//
 
 bool
-SPUTargetMachine::addInstSelector(PassManagerBase &PM, bool Fast)
+SPUTargetMachine::addInstSelector(PassManagerBase &PM,
+                                  CodeGenOpt::Level OptLevel)
 {
   // Install an instruction selector.
   PM.add(createSPUISelDag(*this));
   return false;
 }
 
-bool SPUTargetMachine::addAssemblyEmitter(PassManagerBase &PM, bool Fast, 
+bool SPUTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel,
+                                          bool Verbose,
                                           raw_ostream &Out) {
-  PM.add(createSPUAsmPrinterPass(Out, *this));
+  PM.add(createSPUAsmPrinterPass(Out, *this, OptLevel, Verbose));
   return false;
 }

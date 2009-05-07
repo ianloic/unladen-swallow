@@ -533,23 +533,6 @@ void Emitter::emitInstruction(const MachineInstr &MI,
     case X86::DWARF_LOC:
     case X86::FP_REG_KILL:
       break;
-    case X86::TLS_tp: {
-      MCE.emitByte(BaseOpcode);
-      unsigned RegOpcodeField = getX86RegNum(MI.getOperand(0).getReg());
-      MCE.emitByte(ModRMByte(0, RegOpcodeField, 5));
-      emitConstant(0, 4);
-      break;
-    }
-    case X86::TLS_gs_ri: {
-      MCE.emitByte(BaseOpcode);
-      unsigned RegOpcodeField = getX86RegNum(MI.getOperand(0).getReg());
-      MCE.emitByte(ModRMByte(0, RegOpcodeField, 5));
-      GlobalValue* GV = MI.getOperand(1).getGlobal();
-      unsigned rt = Is64BitMode ? X86::reloc_pcrel_word
-        : (IsPIC ? X86::reloc_picrel_word : X86::reloc_absolute_word);
-      emitGlobalAddress(GV, rt);
-      break;
-    }
     case X86::MOVPC32r: {
       // This emits the "call" portion of this pseudo instruction.
       MCE.emitByte(BaseOpcode);
@@ -589,7 +572,13 @@ void Emitter::emitInstruction(const MachineInstr &MI,
       } else if (MO.isSymbol()) {
         emitExternalSymbolAddress(MO.getSymbolName(), X86::reloc_pcrel_word);
       } else if (MO.isImm()) {
-        emitConstant(MO.getImm(), X86InstrInfo::sizeOfImm(Desc));
+        if (Opcode == X86::CALLpcrel32 || Opcode == X86::CALL64pcrel32) {
+          // Fix up immediate operand for pc relative calls.
+          intptr_t Imm = (intptr_t)MO.getImm();
+          Imm = Imm - MCE.getCurrentPCValue() - 4;
+          emitConstant(Imm, X86InstrInfo::sizeOfImm(Desc));
+        } else
+          emitConstant(MO.getImm(), X86InstrInfo::sizeOfImm(Desc));
       } else {
         assert(0 && "Unknown RawFrm operand!");
       }
@@ -636,8 +625,10 @@ void Emitter::emitInstruction(const MachineInstr &MI,
   }
   case X86II::MRMDestMem: {
     MCE.emitByte(BaseOpcode);
-    emitMemModRMByte(MI, CurOp, getX86RegNum(MI.getOperand(CurOp+4).getReg()));
-    CurOp += 5;
+    emitMemModRMByte(MI, CurOp,
+                     getX86RegNum(MI.getOperand(CurOp + X86AddrNumOperands)
+                                  .getReg()));
+    CurOp +=  X86AddrNumOperands + 1;
     if (CurOp != NumOps)
       emitConstant(MI.getOperand(CurOp++).getImm(), X86InstrInfo::sizeOfImm(Desc));
     break;
@@ -653,12 +644,21 @@ void Emitter::emitInstruction(const MachineInstr &MI,
     break;
 
   case X86II::MRMSrcMem: {
-    intptr_t PCAdj = (CurOp+5 != NumOps) ? X86InstrInfo::sizeOfImm(Desc) : 0;
+    // FIXME: Maybe lea should have its own form?
+    int AddrOperands;
+    if (Opcode == X86::LEA64r || Opcode == X86::LEA64_32r ||
+        Opcode == X86::LEA16r || Opcode == X86::LEA32r)
+      AddrOperands = X86AddrNumOperands - 1; // No segment register
+    else
+      AddrOperands = X86AddrNumOperands;
+
+    intptr_t PCAdj = (CurOp + AddrOperands + 1 != NumOps) ?
+      X86InstrInfo::sizeOfImm(Desc) : 0;
 
     MCE.emitByte(BaseOpcode);
     emitMemModRMByte(MI, CurOp+1, getX86RegNum(MI.getOperand(CurOp).getReg()),
                      PCAdj);
-    CurOp += 5;
+    CurOp += AddrOperands + 1;
     if (CurOp != NumOps)
       emitConstant(MI.getOperand(CurOp++).getImm(), X86InstrInfo::sizeOfImm(Desc));
     break;
@@ -708,13 +708,13 @@ void Emitter::emitInstruction(const MachineInstr &MI,
   case X86II::MRM2m: case X86II::MRM3m:
   case X86II::MRM4m: case X86II::MRM5m:
   case X86II::MRM6m: case X86II::MRM7m: {
-    intptr_t PCAdj = (CurOp+4 != NumOps) ?
+    intptr_t PCAdj = (CurOp + X86AddrNumOperands != NumOps) ?
       (MI.getOperand(CurOp+4).isImm() ? X86InstrInfo::sizeOfImm(Desc) : 4) : 0;
 
     MCE.emitByte(BaseOpcode);
     emitMemModRMByte(MI, CurOp, (Desc->TSFlags & X86II::FormMask)-X86II::MRM0m,
                      PCAdj);
-    CurOp += 4;
+    CurOp += X86AddrNumOperands;
 
     if (CurOp != NumOps) {
       const MachineOperand &MO = MI.getOperand(CurOp++);

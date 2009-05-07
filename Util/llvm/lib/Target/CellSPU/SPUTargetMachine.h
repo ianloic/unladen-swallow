@@ -83,9 +83,11 @@ public:
   }
   
   // Pass Pipeline Configuration
-  virtual bool addInstSelector(PassManagerBase &PM, bool /*Fast*/);
-  virtual bool addAssemblyEmitter(PassManagerBase &PM, bool /*Fast*/, 
-                                  raw_ostream &Out);
+  virtual bool addInstSelector(PassManagerBase &PM,
+                               CodeGenOpt::Level OptLevel);
+  virtual bool addAssemblyEmitter(PassManagerBase &PM,
+                                  CodeGenOpt::Level OptLevel,
+                                  bool Verbose, raw_ostream &Out);
 };
 
 } // end namespace llvm

@@ -78,6 +78,10 @@ N: John T. Criswell
 E: criswell@uiuc.edu
 D: Original Autoconf support, documentation improvements, bug fixes
 
+N: Stefanus Du Toit
+E: stefanus.dutoit@rapidmind.com
+D: Bug fixes and minor improvements
+
 N: Rafael Avila de Espindola
 E: rafael.espindola@gmail.com
 D: The ARM backend
@@ -286,3 +290,4 @@ D: Machine LICM
 D: Darwin exception handling
 D: MMX & SSSE3 instructions
 D: SPEC2006 support
+

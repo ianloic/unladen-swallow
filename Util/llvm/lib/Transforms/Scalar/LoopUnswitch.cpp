@@ -430,15 +430,14 @@ bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val){
   initLoopData();
   Function *F = loopHeader->getParent();
 
-  // Do not unswitch if the function is optimized for size.
-  if (!F->isDeclaration() && F->hasFnAttr(Attribute::OptimizeForSize))
-    return false;
 
   // Check to see if it would be profitable to unswitch current loop.
   unsigned Cost = getLoopUnswitchCost(LoopCond);
 
   // Do not do non-trivial unswitch while optimizing for size.
   if (Cost && OptimizeForSize)
+    return false;
+  if (Cost && !F->isDeclaration() && F->hasFnAttr(Attribute::OptimizeForSize))
     return false;
 
   if (Cost > Threshold) {
@@ -578,7 +577,7 @@ void LoopUnswitch::SplitExitEdges(Loop *L,
       BasicBlock* EndBlock;
       if (NewExitBlock->getSinglePredecessor() == ExitBlock) {
         EndBlock = NewExitBlock;
-        NewExitBlock = EndBlock->getSinglePredecessor();;
+        NewExitBlock = EndBlock->getSinglePredecessor();
       } else {
         EndBlock = ExitBlock;
       }

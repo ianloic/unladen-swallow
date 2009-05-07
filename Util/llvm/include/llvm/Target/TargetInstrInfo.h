@@ -20,6 +20,7 @@
 namespace llvm {
 
 class TargetRegisterClass;
+class TargetRegisterInfo;
 class LiveVariables;
 class CalleeSavedInfo;
 class SDNode;
@@ -50,10 +51,39 @@ public:
     EH_LABEL = 3,
     GC_LABEL = 4,
     DECLARE = 5,
+
+    /// EXTRACT_SUBREG - This instruction takes two operands: a register
+    /// that has subregisters, and a subregister index. It returns the
+    /// extracted subregister value. This is commonly used to implement
+    /// truncation operations on target architectures which support it.
     EXTRACT_SUBREG = 6,
+
+    /// INSERT_SUBREG - This instruction takes three operands: a register
+    /// that has subregisters, a register providing an insert value, and a
+    /// subregister index. It returns the value of the first register with
+    /// the value of the second register inserted. The first register is
+    /// often defined by an IMPLICIT_DEF, as is commonly used to implement
+    /// anyext operations on target architectures which support it.
     INSERT_SUBREG = 7,
+
+    /// IMPLICIT_DEF - This is the MachineInstr-level equivalent of undef.
     IMPLICIT_DEF = 8,
-    SUBREG_TO_REG = 9
+
+    /// SUBREG_TO_REG - This instruction is similar to INSERT_SUBREG except
+    /// that the first operand is an immediate integer constant. This constant
+    /// is often zero, as is commonly used to implement zext operations on
+    /// target architectures which support it, such as with x86-64 (with
+    /// zext from i32 to i64 via implicit zero-extension).
+    SUBREG_TO_REG = 9,
+
+    /// COPY_TO_REGCLASS - This instruction is a placeholder for a plain
+    /// register-to-register copy into a specific register class. This is only
+    /// used between instruction selection and MachineInstr creation, before
+    /// virtual registers have been created for all the instructions, and it's
+    /// only needed in cases where the register classes implied by the
+    /// instructions are insufficient. The actual MachineInstrs to perform
+    /// the copy are emitted with the TargetInstrInfo::copyRegToReg hook.
+    COPY_TO_REGCLASS = 10
   };
 
   unsigned getNumOpcodes() const { return NumOpcodes; }
@@ -182,15 +212,15 @@ public:
   /// 2. If this block ends with only an unconditional branch, it sets TBB to be
   ///    the destination block.
   /// 3. If this block ends with an conditional branch and it falls through to
-  ///    an successor block, it sets TBB to be the branch destination block and a
-  ///    list of operands that evaluate the condition. These
+  ///    an successor block, it sets TBB to be the branch destination block and
+  ///    a list of operands that evaluate the condition. These
   ///    operands can be passed to other TargetInstrInfo methods to create new
   ///    branches.
   /// 4. If this block ends with an conditional branch and an unconditional
-  ///    block, it returns the 'true' destination in TBB, the 'false' destination
-  ///    in FBB, and a list of operands that evaluate the condition. These
-  ///    operands can be passed to other TargetInstrInfo methods to create new
-  ///    branches.
+  ///    block, it returns the 'true' destination in TBB, the 'false'
+  ///    destination in FBB, and a list of operands that evaluate the condition.
+  ///    These operands can be passed to other TargetInstrInfo methods to create
+  ///    new branches.
   ///
   /// Note that RemoveBranch and InsertBranch must be implemented to support
   /// cases where this method returns success.
@@ -219,6 +249,11 @@ public:
   /// returns success and when an unconditional branch (TBB is non-null, FBB is
   /// null, Cond is empty) needs to be inserted. It returns the number of
   /// instructions inserted.
+  ///
+  /// It is also invoked by tail merging to add unconditional branches in
+  /// cases where AnalyzeBranch doesn't apply because there was no original
+  /// branch to analyze.  At least this much must be implemented, else tail
+  /// merging needs to be disabled.
   virtual unsigned InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
                             MachineBasicBlock *FBB,
                             const SmallVectorImpl<MachineOperand> &Cond) const {
@@ -357,7 +392,7 @@ public:
   /// possible, returns true as well as the new instructions by reference.
   virtual bool unfoldMemoryOperand(MachineFunction &MF, MachineInstr *MI,
                                 unsigned Reg, bool UnfoldLoad, bool UnfoldStore,
-                                  SmallVectorImpl<MachineInstr*> &NewMIs) const{
+                                 SmallVectorImpl<MachineInstr*> &NewMIs) const{
     return false;
   }
 
@@ -431,19 +466,10 @@ public:
     return false;
   }
 
-  /// IgnoreRegisterClassBarriers - Returns true if pre-register allocation
-  /// live interval splitting pass should ignore barriers of the specified
-  /// register class.
-  virtual bool IgnoreRegisterClassBarriers(const TargetRegisterClass *RC) const{
+  /// isSafeToMoveRegClassDefs - Return true if it's safe to move a machine
+  /// instruction that defines the specified register class.
+  virtual bool isSafeToMoveRegClassDefs(const TargetRegisterClass *RC) const {
     return true;
-  }
-
-  /// getPointerRegClass - Returns a TargetRegisterClass used for pointer
-  /// values.
-  virtual const TargetRegisterClass *getPointerRegClass() const {
-    assert(0 && "Target didn't implement getPointerRegClass!");
-    abort();
-    return 0; // Must return a value in order to compile with VS 2005
   }
 
   /// GetInstSize - Returns the size of the specified Instruction.
@@ -479,6 +505,12 @@ public:
                              const MachineInstr *Orig) const;
   virtual unsigned GetFunctionSizeInBytes(const MachineFunction &MF) const;
 };
+
+/// getInstrOperandRegClass - Return register class of the operand of an
+/// instruction of the specified TargetInstrDesc.
+const TargetRegisterClass*
+getInstrOperandRegClass(const TargetRegisterInfo *TRI,
+                        const TargetInstrDesc &II, unsigned Op);
 
 } // End llvm namespace
 

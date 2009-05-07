@@ -47,6 +47,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/DebugLoc.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Target/TargetData.h"
@@ -57,11 +58,15 @@
 using namespace llvm;
 
 unsigned FastISel::getRegForValue(Value *V) {
-  MVT::SimpleValueType VT = TLI.getValueType(V->getType()).getSimpleVT();
+  MVT RealVT = TLI.getValueType(V->getType(), /*AllowUnknown=*/true);
+  // Don't handle non-simple values in FastISel.
+  if (!RealVT.isSimple())
+    return 0;
 
   // Ignore illegal types. We must do this before looking up the value
   // in ValueMap because Arguments are given virtual registers regardless
   // of whether FastISel can handle them.
+  MVT::SimpleValueType VT = RealVT.getSimpleVT();
   if (!TLI.isTypeLegal(VT)) {
     // Promote MVT::i1 to a legal type though, because it's common and easy.
     if (VT == MVT::i1)
@@ -145,16 +150,21 @@ unsigned FastISel::lookUpRegForValue(Value *V) {
 /// NOTE: This is only necessary because we might select a block that uses
 /// a value before we select the block that defines the value.  It might be
 /// possible to fix this by selecting blocks in reverse postorder.
-void FastISel::UpdateValueMap(Value* I, unsigned Reg) {
+unsigned FastISel::UpdateValueMap(Value* I, unsigned Reg) {
   if (!isa<Instruction>(I)) {
     LocalValueMap[I] = Reg;
-    return;
+    return Reg;
   }
-  if (!ValueMap.count(I))
-    ValueMap[I] = Reg;
-  else
-    TII.copyRegToReg(*MBB, MBB->end(), ValueMap[I],
-                     Reg, MRI.getRegClass(Reg), MRI.getRegClass(Reg));
+  
+  unsigned &AssignedReg = ValueMap[I];
+  if (AssignedReg == 0)
+    AssignedReg = Reg;
+  else if (Reg != AssignedReg) {
+    const TargetRegisterClass *RegClass = MRI.getRegClass(Reg);
+    TII.copyRegToReg(*MBB, MBB->end(), AssignedReg,
+                     Reg, RegClass, RegClass);
+  }
+  return AssignedReg;
 }
 
 unsigned FastISel::getRegForGEPIndex(Value *Idx) {
@@ -317,23 +327,19 @@ bool FastISel::SelectCall(User *I) {
   default: break;
   case Intrinsic::dbg_stoppoint: {
     DbgStopPointInst *SPI = cast<DbgStopPointInst>(I);
-    if (DW && DW->ValidDebugInfo(SPI->getContext())) {
+    if (DIDescriptor::ValidDebugInfo(SPI->getContext(), CodeGenOpt::None)) {
       DICompileUnit CU(cast<GlobalVariable>(SPI->getContext()));
-      unsigned SrcFile = DW->RecordSource(CU.getDirectory(),
-                                          CU.getFilename());
       unsigned Line = SPI->getLine();
       unsigned Col = SPI->getColumn();
-      unsigned ID = DW->RecordSourceLine(Line, Col, SrcFile);
-      unsigned Idx = MF.getOrCreateDebugLocID(SrcFile, Line, Col);
+      unsigned Idx = MF.getOrCreateDebugLocID(CU.getGV(), Line, Col);
       setCurDebugLoc(DebugLoc::get(Idx));
-      const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
-      BuildMI(MBB, DL, II).addImm(ID);
     }
     return true;
   }
   case Intrinsic::dbg_region_start: {
     DbgRegionStartInst *RSI = cast<DbgRegionStartInst>(I);
-    if (DW && DW->ValidDebugInfo(RSI->getContext())) {
+    if (DIDescriptor::ValidDebugInfo(RSI->getContext(), CodeGenOpt::None) &&
+        DW && DW->ShouldEmitDwarfDebug()) {
       unsigned ID = 
         DW->RecordRegionStart(cast<GlobalVariable>(RSI->getContext()));
       const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
@@ -343,37 +349,71 @@ bool FastISel::SelectCall(User *I) {
   }
   case Intrinsic::dbg_region_end: {
     DbgRegionEndInst *REI = cast<DbgRegionEndInst>(I);
-    if (DW && DW->ValidDebugInfo(REI->getContext())) {
-      unsigned ID = 
-        DW->RecordRegionEnd(cast<GlobalVariable>(REI->getContext()));
-      const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
-      BuildMI(MBB, DL, II).addImm(ID);
+    if (DIDescriptor::ValidDebugInfo(REI->getContext(), CodeGenOpt::None) &&
+        DW && DW->ShouldEmitDwarfDebug()) {
+     unsigned ID = 0;
+     DISubprogram Subprogram(cast<GlobalVariable>(REI->getContext()));
+     if (!Subprogram.isNull() && !Subprogram.describes(MF.getFunction())) {
+        // This is end of an inlined function.
+        const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
+        ID = DW->RecordInlinedFnEnd(Subprogram);
+        if (ID)
+          // Returned ID is 0 if this is unbalanced "end of inlined
+          // scope". This could happen if optimizer eats dbg intrinsics
+          // or "beginning of inlined scope" is not recoginized due to
+          // missing location info. In such cases, do ignore this region.end.
+          BuildMI(MBB, DL, II).addImm(ID);
+      } else {
+        const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
+        ID =  DW->RecordRegionEnd(cast<GlobalVariable>(REI->getContext()));
+        BuildMI(MBB, DL, II).addImm(ID);
+      }
     }
     return true;
   }
   case Intrinsic::dbg_func_start: {
-    if (!DW) return true;
     DbgFuncStartInst *FSI = cast<DbgFuncStartInst>(I);
     Value *SP = FSI->getSubprogram();
+    if (!DIDescriptor::ValidDebugInfo(SP, CodeGenOpt::None))
+      return true;
 
-    if (DW->ValidDebugInfo(SP)) {
-      // llvm.dbg.func.start implicitly defines a dbg_stoppoint which is what
-      // (most?) gdb expects.
-      DISubprogram Subprogram(cast<GlobalVariable>(SP));
-      DICompileUnit CompileUnit = Subprogram.getCompileUnit();
-      unsigned SrcFile = DW->RecordSource(CompileUnit.getDirectory(),
-                                          CompileUnit.getFilename());
+    // llvm.dbg.func.start implicitly defines a dbg_stoppoint which is what
+    // (most?) gdb expects.
+    DebugLoc PrevLoc = DL;
+    DISubprogram Subprogram(cast<GlobalVariable>(SP));
+    DICompileUnit CompileUnit = Subprogram.getCompileUnit();
 
-      // Record the source line but does not create a label for the normal
-      // function start. It will be emitted at asm emission time. However,
-      // create a label if this is a beginning of inlined function.
+    if (!Subprogram.describes(MF.getFunction())) {
+      // This is a beginning of an inlined function.
+
+      // If llvm.dbg.func.start is seen in a new block before any
+      // llvm.dbg.stoppoint intrinsic then the location info is unknown.
+      // FIXME : Why DebugLoc is reset at the beginning of each block ?
+      if (PrevLoc.isUnknown())
+        return true;
+      // Record the source line.
       unsigned Line = Subprogram.getLineNumber();
-      unsigned LabelID = DW->RecordSourceLine(Line, 0, SrcFile);
-      setCurDebugLoc(DebugLoc::get(MF.getOrCreateDebugLocID(SrcFile, Line, 0)));
+      setCurDebugLoc(DebugLoc::get(MF.getOrCreateDebugLocID(
+                                              CompileUnit.getGV(), Line, 0)));
 
-      if (DW->getRecordSourceLineCount() != 1) {
+      if (DW && DW->ShouldEmitDwarfDebug()) {
+        unsigned LabelID = MMI->NextLabelID();
         const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
         BuildMI(MBB, DL, II).addImm(LabelID);
+        DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
+        DW->RecordInlinedFnStart(FSI, Subprogram, LabelID,
+                                 DICompileUnit(PrevLocTpl.CompileUnit),
+                                 PrevLocTpl.Line,
+                                 PrevLocTpl.Col);
+      }
+    } else {
+      // Record the source line.
+      unsigned Line = Subprogram.getLineNumber();
+      MF.setDefaultDebugLoc(DebugLoc::get(MF.getOrCreateDebugLocID(
+                                              CompileUnit.getGV(), Line, 0)));
+      if (DW && DW->ShouldEmitDwarfDebug()) {
+        // llvm.dbg.func_start also defines beginning of function scope.
+        DW->RecordRegionStart(cast<GlobalVariable>(FSI->getSubprogram()));
       }
     }
 
@@ -382,17 +422,18 @@ bool FastISel::SelectCall(User *I) {
   case Intrinsic::dbg_declare: {
     DbgDeclareInst *DI = cast<DbgDeclareInst>(I);
     Value *Variable = DI->getVariable();
-    if (DW && DW->ValidDebugInfo(Variable)) {
+    if (DIDescriptor::ValidDebugInfo(Variable, CodeGenOpt::None) &&
+        DW && DW->ShouldEmitDwarfDebug()) {
       // Determine the address of the declared object.
       Value *Address = DI->getAddress();
       if (BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
         Address = BCI->getOperand(0);
       AllocaInst *AI = dyn_cast<AllocaInst>(Address);
-      // Don't handle byval struct arguments, for example.
+      // Don't handle byval struct arguments or VLAs, for example.
       if (!AI) break;
       DenseMap<const AllocaInst*, int>::iterator SI =
         StaticAllocaMap.find(AI);
-      assert(SI != StaticAllocaMap.end() && "Invalid dbg.declare!");
+      if (SI == StaticAllocaMap.end()) break; // VLAs.
       int FI = SI->second;
 
       // Determine the debug globalvariable.
@@ -400,7 +441,13 @@ bool FastISel::SelectCall(User *I) {
 
       // Build the DECLARE instruction.
       const TargetInstrDesc &II = TII.get(TargetInstrInfo::DECLARE);
-      BuildMI(MBB, DL, II).addFrameIndex(FI).addGlobalAddress(GV);
+      MachineInstr *DeclareMI 
+        = BuildMI(MBB, DL, II).addFrameIndex(FI).addGlobalAddress(GV);
+      DIVariable DV(cast<GlobalVariable>(GV));
+      if (!DV.isNull()) {
+        // This is a local variable
+        DW->RecordVariableScope(DV, DeclareMI);
+      }
     }
     return true;
   }
@@ -475,27 +522,42 @@ bool FastISel::SelectCast(User *I, ISD::NodeType Opcode) {
   MVT DstVT = TLI.getValueType(I->getType());
     
   if (SrcVT == MVT::Other || !SrcVT.isSimple() ||
-      DstVT == MVT::Other || !DstVT.isSimple() ||
-      !TLI.isTypeLegal(DstVT))
+      DstVT == MVT::Other || !DstVT.isSimple())
     // Unhandled type. Halt "fast" selection and bail.
     return false;
     
-  // Check if the source operand is legal. Or as a special case,
-  // it may be i1 if we're doing zero-extension because that's
-  // trivially easy and somewhat common.
-  if (!TLI.isTypeLegal(SrcVT)) {
-    if (SrcVT == MVT::i1 && Opcode == ISD::ZERO_EXTEND)
-      SrcVT = TLI.getTypeToTransformTo(SrcVT);
-    else
+  // Check if the destination type is legal. Or as a special case,
+  // it may be i1 if we're doing a truncate because that's
+  // easy and somewhat common.
+  if (!TLI.isTypeLegal(DstVT))
+    if (DstVT != MVT::i1 || Opcode != ISD::TRUNCATE)
       // Unhandled type. Halt "fast" selection and bail.
       return false;
-  }
-    
+
+  // Check if the source operand is legal. Or as a special case,
+  // it may be i1 if we're doing zero-extension because that's
+  // easy and somewhat common.
+  if (!TLI.isTypeLegal(SrcVT))
+    if (SrcVT != MVT::i1 || Opcode != ISD::ZERO_EXTEND)
+      // Unhandled type. Halt "fast" selection and bail.
+      return false;
+
   unsigned InputReg = getRegForValue(I->getOperand(0));
   if (!InputReg)
     // Unhandled operand.  Halt "fast" selection and bail.
     return false;
-    
+
+  // If the operand is i1, arrange for the high bits in the register to be zero.
+  if (SrcVT == MVT::i1) {
+   SrcVT = TLI.getTypeToTransformTo(SrcVT);
+   InputReg = FastEmitZExtFromI1(SrcVT.getSimpleVT(), InputReg);
+   if (!InputReg)
+     return false;
+  }
+  // If the result is i1, truncate to the target's type for i1 first.
+  if (DstVT == MVT::i1)
+    DstVT = TLI.getTypeToTransformTo(DstVT);
+
   unsigned ResultReg = FastEmit_r(SrcVT.getSimpleVT(),
                                   DstVT.getSimpleVT(),
                                   Opcode,
@@ -967,4 +1029,10 @@ unsigned FastISel::FastEmitInst_extractsubreg(MVT::SimpleValueType RetVT,
       ResultReg = 0;
   }
   return ResultReg;
+}
+
+/// FastEmitZExtFromI1 - Emit MachineInstrs to compute the value of Op
+/// with all but the least significant bit set to zero.
+unsigned FastISel::FastEmitZExtFromI1(MVT::SimpleValueType VT, unsigned Op) {
+  return FastEmit_ri(VT, VT, ISD::AND, Op, 1);
 }

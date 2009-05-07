@@ -16,8 +16,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Bitcode/Serialize.h"
-#include "llvm/Bitcode/Deserialize.h"
+#include <cstdio>
 
 using namespace clang;
 
@@ -43,6 +42,8 @@ IdentifierInfo::IdentifierInfo() {
 
 IdentifierInfoLookup::~IdentifierInfoLookup() {}
 
+ExternalIdentifierLookup::~ExternalIdentifierLookup() {}
+
 IdentifierTable::IdentifierTable(const LangOptions &LangOpts,
                                  IdentifierInfoLookup* externalLookup)
   : HashTable(8192), // Start with space for 8K identifiers.
@@ -53,13 +54,21 @@ IdentifierTable::IdentifierTable(const LangOptions &LangOpts,
   AddKeywords(LangOpts);
 }
 
-// This cstor is intended to be used only for serialization.
-IdentifierTable::IdentifierTable() 
-  : HashTable(8192), ExternalLookup(0) { }
-
 //===----------------------------------------------------------------------===//
 // Language Keyword Implementation
 //===----------------------------------------------------------------------===//
+
+// Constants for TokenKinds.def
+namespace {
+  enum {
+    KEYALL = 1,
+    KEYC99 = 2,
+    KEYCXX = 4,
+    KEYCXX0X = 8,
+    KEYGNU = 16,
+    KEYMS = 32
+  };
+}
 
 /// AddKeyword - This method is used to associate a token ID with specific
 /// identifiers because they are language keywords.  This causes the lexer to
@@ -70,39 +79,23 @@ IdentifierTable::IdentifierTable()
 /// in the specified language, and set to 2 if disabled in the
 /// specified language.
 static void AddKeyword(const char *Keyword, unsigned KWLen,
-                       tok::TokenKind TokenCode,
-                       int C90, int C99, int CXX, int CXX0x, int BoolSupport,
+                       tok::TokenKind TokenCode, unsigned Flags,
                        const LangOptions &LangOpts, IdentifierTable &Table) {
-  int Flags = 0;
-  if (BoolSupport != 0) {
-    Flags = LangOpts.CPlusPlus? 0 : LangOpts.Boolean ? BoolSupport : 2;
-  } else if (LangOpts.CPlusPlus) {
-    Flags = LangOpts.CPlusPlus0x ? CXX0x : CXX;
-  } else if (LangOpts.C99) {
-    Flags = C99;
-  } else {
-    Flags = C90;
-  }
-  
-  // Don't add this keyword if disabled in this language or if an extension
-  // and extensions are disabled.
-  if (Flags + LangOpts.NoExtensions >= 2) return;
-  
+  unsigned AddResult = 0;
+  if (Flags & KEYALL) AddResult = 2;
+  else if (LangOpts.CPlusPlus && (Flags & KEYCXX)) AddResult = 2;
+  else if (LangOpts.CPlusPlus0x && (Flags & KEYCXX0X)) AddResult = 2;
+  else if (LangOpts.C99 && (Flags & KEYC99)) AddResult = 2;
+  else if (LangOpts.GNUMode && (Flags & KEYGNU)) AddResult = 1;
+  else if (LangOpts.Microsoft && (Flags & KEYMS)) AddResult = 1;
+
+  // Don't add this keyword if disabled in this language.
+  if (AddResult == 0) return;
+
   IdentifierInfo &Info = Table.get(Keyword, Keyword+KWLen);
   Info.setTokenID(TokenCode);
-  Info.setIsExtensionToken(Flags == 1);
+  Info.setIsExtensionToken(AddResult == 1);
 }
-
-static void AddAlias(const char *Keyword, unsigned KWLen,
-                     tok::TokenKind AliaseeID,
-                     const char *AliaseeKeyword, unsigned AliaseeKWLen,
-                     const LangOptions &LangOpts, IdentifierTable &Table) {
-  IdentifierInfo &AliasInfo = Table.get(Keyword, Keyword+KWLen);
-  IdentifierInfo &AliaseeInfo = Table.get(AliaseeKeyword,
-                                          AliaseeKeyword+AliaseeKWLen);
-  AliasInfo.setTokenID(AliaseeID);
-  AliasInfo.setIsExtensionToken(AliaseeInfo.isExtensionToken());
-}  
 
 /// AddCXXOperatorKeyword - Register a C++ operator keyword alternative
 /// representations.
@@ -125,35 +118,13 @@ static void AddObjCKeyword(tok::ObjCKeywordKind ObjCID,
 /// AddKeywords - Add all keywords to the symbol table.
 ///
 void IdentifierTable::AddKeywords(const LangOptions &LangOpts) {
-  enum {
-    C90Shift = 0,
-    EXTC90   = 1 << C90Shift,
-    NOTC90   = 2 << C90Shift,
-    C99Shift = 2,
-    EXTC99   = 1 << C99Shift,
-    NOTC99   = 2 << C99Shift,
-    CPPShift = 4,
-    EXTCPP   = 1 << CPPShift,
-    NOTCPP   = 2 << CPPShift,
-    CPP0xShift = 6,
-    EXTCPP0x   = 1 << CPP0xShift,
-    NOTCPP0x   = 2 << CPP0xShift,
-    BoolShift = 8,
-    BOOLSUPPORT = 1 << BoolShift,
-    Mask     = 3
-  };
-  
   // Add keywords and tokens for the current language.
 #define KEYWORD(NAME, FLAGS) \
   AddKeyword(#NAME, strlen(#NAME), tok::kw_ ## NAME,  \
-             ((FLAGS) >> C90Shift) & Mask, \
-             ((FLAGS) >> C99Shift) & Mask, \
-             ((FLAGS) >> CPPShift) & Mask, \
-             ((FLAGS) >> CPP0xShift) & Mask, \
-             ((FLAGS) >> BoolShift) & Mask, LangOpts, *this);
-#define ALIAS(NAME, TOK) \
-  AddAlias(NAME, strlen(NAME), tok::kw_ ## TOK, #TOK, strlen(#TOK),  \
-           LangOpts, *this);
+             FLAGS, LangOpts, *this);
+#define ALIAS(NAME, TOK, FLAGS) \
+  AddKeyword(NAME, strlen(NAME), tok::kw_ ## TOK,  \
+             FLAGS, LangOpts, *this);
 #define CXX_KEYWORD_OPERATOR(NAME, ALIAS) \
   if (LangOpts.CXXOperatorNames)          \
     AddCXXOperatorKeyword(#NAME, strlen(#NAME), tok::ALIAS, *this);
@@ -206,6 +177,8 @@ tok::PPKeywordKind IdentifierInfo::getPPKeywordID() const {
 
   CASE( 8, 'u', 'a', unassert);
   CASE(12, 'i', 'c', include_next);
+      
+  CASE(16, '_', 'i', __include_macros);
 #undef CASE
 #undef HASH
   }
@@ -261,7 +234,6 @@ namespace clang {
 /// this class is provided strictly through Selector.
 class MultiKeywordSelector 
   : public DeclarationNameExtra, public llvm::FoldingSetNode {
-  friend SelectorTable* SelectorTable::CreateAndRegister(llvm::Deserializer&);
   MultiKeywordSelector(unsigned nKeys) {
     ExtraKindOrNumArgs = NUM_EXTRA_KINDS + nKeys;
   }
@@ -317,9 +289,9 @@ unsigned Selector::getNumArgs() const {
 }
 
 IdentifierInfo *Selector::getIdentifierInfoForSlot(unsigned argIndex) const {
-  if (IdentifierInfo *II = getAsIdentifierInfo()) {
+  if (getIdentifierInfoFlag()) {
     assert(argIndex == 0 && "illegal keyword index");
-    return II;
+    return getAsIdentifierInfo();
   }
   // We point to a MultiKeywordSelector (pointer doesn't contain any flags).
   MultiKeywordSelector *SI = reinterpret_cast<MultiKeywordSelector *>(InfoPtr);
@@ -348,11 +320,17 @@ std::string MultiKeywordSelector::getName() const {
 }
 
 std::string Selector::getAsString() const {
-  if (IdentifierInfo *II = getAsIdentifierInfo()) {
+  if (InfoPtr == 0)
+    return "<null selector>";
+
+  if (InfoPtr & ArgFlags) {
+    IdentifierInfo *II = getAsIdentifierInfo();
+    
+    // If the number of arguments is 0 then II is guaranteed to not be null.
     if (getNumArgs() == 0)
       return II->getName();
-    
-    std::string Res = II->getName();
+
+    std::string Res = II ? II->getName() : "";
     Res += ":";
     return Res;
   }
@@ -362,189 +340,49 @@ std::string Selector::getAsString() const {
 }
 
 
+namespace {
+  struct SelectorTableImpl {
+    llvm::FoldingSet<MultiKeywordSelector> Table;
+    llvm::BumpPtrAllocator Allocator;
+  };
+} // end anonymous namespace.
+
+static SelectorTableImpl &getSelectorTableImpl(void *P) {
+  return *static_cast<SelectorTableImpl*>(P);
+}
+
+
 Selector SelectorTable::getSelector(unsigned nKeys, IdentifierInfo **IIV) {
   if (nKeys < 2)
     return Selector(IIV[0], nKeys);
   
-  llvm::FoldingSet<MultiKeywordSelector> *SelTab;
-  
-  SelTab = static_cast<llvm::FoldingSet<MultiKeywordSelector> *>(Impl);
+  SelectorTableImpl &SelTabImpl = getSelectorTableImpl(Impl);
     
   // Unique selector, to guarantee there is one per name.
   llvm::FoldingSetNodeID ID;
   MultiKeywordSelector::Profile(ID, IIV, nKeys);
 
   void *InsertPos = 0;
-  if (MultiKeywordSelector *SI = SelTab->FindNodeOrInsertPos(ID, InsertPos))
+  if (MultiKeywordSelector *SI =
+        SelTabImpl.Table.FindNodeOrInsertPos(ID, InsertPos))
     return Selector(SI);
   
   // MultiKeywordSelector objects are not allocated with new because they have a
   // variable size array (for parameter types) at the end of them.
-  MultiKeywordSelector *SI = 
-    (MultiKeywordSelector*)malloc(sizeof(MultiKeywordSelector) + 
-                                  nKeys*sizeof(IdentifierInfo *));
+  unsigned Size = sizeof(MultiKeywordSelector) + nKeys*sizeof(IdentifierInfo *);
+  MultiKeywordSelector *SI =
+    (MultiKeywordSelector*)SelTabImpl.Allocator.Allocate(Size, 
+                                         llvm::alignof<MultiKeywordSelector>());
   new (SI) MultiKeywordSelector(nKeys, IIV);
-  SelTab->InsertNode(SI, InsertPos);
+  SelTabImpl.Table.InsertNode(SI, InsertPos);
   return Selector(SI);
 }
 
 SelectorTable::SelectorTable() {
-  Impl = new llvm::FoldingSet<MultiKeywordSelector>;
+  Impl = new SelectorTableImpl();
 }
 
 SelectorTable::~SelectorTable() {
-  delete static_cast<llvm::FoldingSet<MultiKeywordSelector> *>(Impl);
+  delete &getSelectorTableImpl(Impl);
 }
 
-//===----------------------------------------------------------------------===//
-// Serialization for IdentifierInfo and IdentifierTable.
-//===----------------------------------------------------------------------===//
-
-void IdentifierInfo::Emit(llvm::Serializer& S) const {
-  S.EmitInt(getTokenID());
-  S.EmitInt(getBuiltinID());
-  S.EmitInt(getObjCKeywordID());  
-  S.EmitBool(hasMacroDefinition());
-  S.EmitBool(isExtensionToken());
-  S.EmitBool(isPoisoned());
-  S.EmitBool(isCPlusPlusOperatorKeyword());
-  // FIXME: FETokenInfo
-}
-
-void IdentifierInfo::Read(llvm::Deserializer& D) {
-  setTokenID((tok::TokenKind) D.ReadInt());
-  setBuiltinID(D.ReadInt());  
-  setObjCKeywordID((tok::ObjCKeywordKind) D.ReadInt());  
-  setHasMacroDefinition(D.ReadBool());
-  setIsExtensionToken(D.ReadBool());
-  setIsPoisoned(D.ReadBool());
-  setIsCPlusPlusOperatorKeyword(D.ReadBool());
-  // FIXME: FETokenInfo
-}
-
-void IdentifierTable::Emit(llvm::Serializer& S) const {
-  S.EnterBlock();
-  
-  S.EmitPtr(this);
-  
-  for (iterator I=begin(), E=end(); I != E; ++I) {
-    const char* Key = I->getKeyData();
-    const IdentifierInfo* Info = I->getValue();
-    
-    bool KeyRegistered = S.isRegistered(Key);
-    bool InfoRegistered = S.isRegistered(Info);
-    
-    if (KeyRegistered || InfoRegistered) {
-      // These acrobatics are so that we don't incur the cost of registering
-      // a pointer with the backpatcher during deserialization if nobody
-      // references the object.
-      S.EmitPtr(InfoRegistered ? Info : NULL);
-      S.EmitPtr(KeyRegistered ? Key : NULL);
-      S.EmitCStr(Key);
-      S.Emit(*Info);
-    }
-  }
-  
-  S.ExitBlock();
-}
-
-IdentifierTable* IdentifierTable::CreateAndRegister(llvm::Deserializer& D) {
-  llvm::Deserializer::Location BLoc = D.getCurrentBlockLocation();
-
-  std::vector<char> buff;
-  buff.reserve(200);
-
-  IdentifierTable* t = new IdentifierTable();
-  D.RegisterPtr(t);  
-  
-  while (!D.FinishedBlock(BLoc)) {
-    llvm::SerializedPtrID InfoPtrID = D.ReadPtrID();
-    llvm::SerializedPtrID KeyPtrID = D.ReadPtrID();
-    
-    D.ReadCStr(buff);
-    IdentifierInfo *II = &t->get(&buff[0], &buff[0] + buff.size());
-    II->Read(D);
-    
-    if (InfoPtrID) D.RegisterRef(InfoPtrID, II);
-    if (KeyPtrID)  D.RegisterPtr(KeyPtrID, II->getName());
-  }
-  
-  return t;
-}
-
-//===----------------------------------------------------------------------===//
-// Serialization for Selector and SelectorTable.
-//===----------------------------------------------------------------------===//
-
-void Selector::Emit(llvm::Serializer& S) const {
-  S.EmitInt(getIdentifierInfoFlag());
-  S.EmitPtr(reinterpret_cast<void*>(InfoPtr & ~ArgFlags));
-}
-
-Selector Selector::ReadVal(llvm::Deserializer& D) {
-  unsigned flag = D.ReadInt();
-  
-  uintptr_t ptr;  
-  D.ReadUIntPtr(ptr,false); // No backpatching.
-  
-  return Selector(ptr | flag);
-}
-
-void SelectorTable::Emit(llvm::Serializer& S) const {
-  typedef llvm::FoldingSet<MultiKeywordSelector>::iterator iterator;
-  llvm::FoldingSet<MultiKeywordSelector> *SelTab;
-  SelTab = static_cast<llvm::FoldingSet<MultiKeywordSelector> *>(Impl);
-  
-  S.EnterBlock();
-  
-  S.EmitPtr(this);
-  
-  for (iterator I=SelTab->begin(), E=SelTab->end(); I != E; ++I) {
-    if (!S.isRegistered(&*I))
-      continue;
-    
-    S.FlushRecord(); // Start a new record.
-
-    S.EmitPtr(&*I);
-    S.EmitInt(I->getNumArgs());
-
-    for (MultiKeywordSelector::keyword_iterator KI = I->keyword_begin(),
-         KE = I->keyword_end(); KI != KE; ++KI)
-      S.EmitPtr(*KI);
-  }
-  
-  S.ExitBlock();
-}
-
-SelectorTable* SelectorTable::CreateAndRegister(llvm::Deserializer& D) {
-  llvm::Deserializer::Location BLoc = D.getCurrentBlockLocation();
-  
-  SelectorTable* t = new SelectorTable();
-  D.RegisterPtr(t);
-  
-  llvm::FoldingSet<MultiKeywordSelector>& SelTab =
-    *static_cast<llvm::FoldingSet<MultiKeywordSelector>*>(t->Impl);
-
-  while (!D.FinishedBlock(BLoc)) {
-
-    llvm::SerializedPtrID PtrID = D.ReadPtrID();
-    unsigned nKeys = D.ReadInt();
-    
-    MultiKeywordSelector *SI = 
-      (MultiKeywordSelector*)malloc(sizeof(MultiKeywordSelector) + 
-                                    nKeys*sizeof(IdentifierInfo *));
-
-    new (SI) MultiKeywordSelector(nKeys);
-    
-    D.RegisterPtr(PtrID,SI);
-
-    IdentifierInfo **KeyInfo = reinterpret_cast<IdentifierInfo **>(SI+1);
-
-    for (unsigned i = 0; i != nKeys; ++i)
-      D.ReadPtr(KeyInfo[i],false);
-    
-    SelTab.GetOrInsertNode(SI);
-  }
-  
-  return t;
-}

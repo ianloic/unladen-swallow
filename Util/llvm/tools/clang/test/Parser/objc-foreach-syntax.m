@@ -1,7 +1,26 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
-static int test_NSURLGetResourceValueForKey( id keys )
+
+
+@implementation MyList // expected-warning {{cannot find interface declaration for 'MyList'}}
+- (unsigned int)countByEnumeratingWithState:  (struct __objcFastEnumerationState *)state objects:  (id *)items count:(unsigned int)stackcount
 {
- for ( id key; in keys) {  // expected-error {{parse error}}
-  } 
+     return 0;
+}
+@end
+
+
+int LOOP();
+
+@implementation MyList (BasicTest) 
+- (void)compilerTestAgainst {
+MyList * el; 
+     for (el in @"foo") 
+	  { LOOP(); }
+}
+@end
+
+
+static int test7(id keys) {
+  for (id key; in keys) ;  // expected-error {{use of undeclared identifier 'in'}}
 }

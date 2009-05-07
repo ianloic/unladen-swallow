@@ -60,13 +60,60 @@ struct ilist_nextprev_traits {
   static void setNext(NodeTy *N, NodeTy *Next) { N->setNext(Next); }
 };
 
+template<typename NodeTy>
+struct ilist_traits;
+
 /// ilist_sentinel_traits - A fragment for template traits for intrusive list
 /// that provides default sentinel implementations for common operations.
 ///
+/// ilist_sentinel_traits implements a lazy dynamic sentinel allocation
+/// strategy. The sentinel is stored in the prev field of ilist's Head.
+///
 template<typename NodeTy>
 struct ilist_sentinel_traits {
+  /// createSentinel - create the dynamic sentinel
   static NodeTy *createSentinel() { return new NodeTy(); }
+
+  /// destroySentinel - deallocate the dynamic sentinel
   static void destroySentinel(NodeTy *N) { delete N; }
+
+  /// provideInitialHead - when constructing an ilist, provide a starting
+  /// value for its Head
+  /// @return null node to indicate that it needs to be allocated later
+  static NodeTy *provideInitialHead() { return 0; }
+
+  /// ensureHead - make sure that Head is either already
+  /// initialized or assigned a fresh sentinel
+  /// @return the sentinel
+  static NodeTy *ensureHead(NodeTy *&Head) {
+    if (!Head) {
+      Head = ilist_traits<NodeTy>::createSentinel();
+      ilist_traits<NodeTy>::noteHead(Head, Head);
+      ilist_traits<NodeTy>::setNext(Head, 0);
+      return Head;
+    }
+    return ilist_traits<NodeTy>::getPrev(Head);
+  }
+
+  /// noteHead - stash the sentinel into its default location
+  static void noteHead(NodeTy *NewHead, NodeTy *Sentinel) {
+    ilist_traits<NodeTy>::setPrev(NewHead, Sentinel);
+  }
+};
+
+/// ilist_node_traits - A fragment for template traits for intrusive list
+/// that provides default node related operations.
+///
+template<typename NodeTy>
+struct ilist_node_traits {
+  static NodeTy *createNode(const NodeTy &V) { return new NodeTy(V); }
+  static void deleteNode(NodeTy *V) { delete V; }
+
+  void addNodeToList(NodeTy *) {}
+  void removeNodeFromList(NodeTy *) {}
+  void transferNodesFromList(ilist_node_traits &    /*SrcTraits*/,
+                             ilist_iterator<NodeTy> /*first*/,
+                             ilist_iterator<NodeTy> /*last*/) {}
 };
 
 /// ilist_default_traits - Default template traits for intrusive list.
@@ -75,15 +122,8 @@ struct ilist_sentinel_traits {
 ///
 template<typename NodeTy>
 struct ilist_default_traits : ilist_nextprev_traits<NodeTy>,
-                              ilist_sentinel_traits<NodeTy> {
-  static NodeTy *createNode(const NodeTy &V) { return new NodeTy(V); }
-  static void deleteNode(NodeTy *V) { delete V; }
-
-  void addNodeToList(NodeTy *) {}
-  void removeNodeFromList(NodeTy *) {}
-  void transferNodesFromList(ilist_default_traits & /*SrcTraits*/,
-                             ilist_iterator<NodeTy> /*first*/,
-                             ilist_iterator<NodeTy> /*last*/) {}
+                              ilist_sentinel_traits<NodeTy>,
+                              ilist_node_traits<NodeTy> {
 };
 
 // Template traits for intrusive list.  By specializing this template class, you
@@ -170,7 +210,7 @@ public:
   // Increment and decrement operators...
   ilist_iterator &operator--() {      // predecrement - Back up
     NodePtr = Traits::getPrev(NodePtr);
-    assert(Traits::getNext(NodePtr) && "--'d off the beginning of an ilist!");
+    assert(NodePtr && "--'d off the beginning of an ilist!");
     return *this;
   }
   ilist_iterator &operator++() {      // preincrement - Advance
@@ -276,17 +316,14 @@ class iplist : public Traits {
   // circularly linked list where we snip the 'next' link from the sentinel node
   // back to the first node in the list (to preserve assertions about going off
   // the end of the list).
-  NodeTy *getTail() { return this->getPrev(Head); }
-  const NodeTy *getTail() const { return this->getPrev(Head); }
-  void setTail(NodeTy *N) const { this->setPrev(Head, N); }
+  NodeTy *getTail() { return this->ensureHead(Head); }
+  const NodeTy *getTail() const { return this->ensureHead(Head); }
+  void setTail(NodeTy *N) const { this->noteHead(Head, N); }
 
   /// CreateLazySentinel - This method verifies whether the sentinel for the
   /// list has been created and lazily makes it if not.
   void CreateLazySentinel() const {
-    if (Head != 0) return;
-    Head = Traits::createSentinel();
-    this->setNext(Head, 0);
-    setTail(Head);
+    this->Traits::ensureHead(Head);
   }
 
   static bool op_less(NodeTy &L, NodeTy &R) { return L < R; }
@@ -310,7 +347,7 @@ public:
   typedef std::reverse_iterator<const_iterator>  const_reverse_iterator;
   typedef std::reverse_iterator<iterator>  reverse_iterator;
 
-  iplist() : Head(0) {}
+  iplist() : Head(this->Traits::provideInitialHead()) {}
   ~iplist() {
     if (!Head) return;
     clear();
@@ -370,7 +407,8 @@ public:
   }
 
   iterator insert(iterator where, NodeTy *New) {
-    NodeTy *CurNode = where.getNodePtrUnchecked(), *PrevNode = this->getPrev(CurNode);
+    NodeTy *CurNode = where.getNodePtrUnchecked();
+    NodeTy *PrevNode = this->getPrev(CurNode);
     this->setNext(New, CurNode);
     this->setPrev(New, PrevNode);
 
@@ -385,7 +423,7 @@ public:
   }
 
   iterator insertAfter(iterator where, NodeTy *New) {
-    if (empty()) 
+    if (empty())
       return insert(begin(), New);
     else
       return insert(++where, New);
@@ -482,14 +520,7 @@ public:
 
   size_type size() const {
     if (Head == 0) return 0; // Don't require construction of sentinel if empty.
-#if __GNUC__ == 2
-    // GCC 2.95 has a broken std::distance
-    size_type Result = 0;
-    std::distance(begin(), end(), Result);
-    return Result;
-#else
     return std::distance(begin(), end());
-#endif
   }
 
   iterator erase(iterator first, iterator last) {
@@ -607,14 +638,10 @@ struct ilist : public iplist<NodeTy> {
     insert(this->begin(), first, last);
   }
 
-
-  // Forwarding functions: A workaround for GCC 2.95 which does not correctly
-  // support 'using' declarations to bring a hidden member into scope.
-  //
-  iterator insert(iterator a, NodeTy *b){ return iplist<NodeTy>::insert(a, b); }
-  void push_front(NodeTy *a) { iplist<NodeTy>::push_front(a); }
-  void push_back(NodeTy *a)  { iplist<NodeTy>::push_back(a); }
-
+  // bring hidden functions into scope
+  using iplist<NodeTy>::insert;
+  using iplist<NodeTy>::push_front;
+  using iplist<NodeTy>::push_back;
 
   // Main implementation here - Insert for a node passed by value...
   iterator insert(iterator where, const NodeTy &val) {

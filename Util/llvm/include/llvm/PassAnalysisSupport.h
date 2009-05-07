@@ -143,13 +143,17 @@ public:
     AnalysisImpls.push_back(pir);
   }
 
+  /// clearAnalysisImpls - Clear cache that is used to connect a pass to the
+  /// the analysis (PassInfo).
+  void clearAnalysisImpls() {
+    AnalysisImpls.clear();
+  }
+
   // getAnalysisIfAvailable - Return analysis result or null if it doesn't exist
   Pass *getAnalysisIfAvailable(AnalysisID ID, bool Direction) const;
 
   // AnalysisImpls - This keeps track of which passes implements the interfaces
   // that are required by the current pass (to implement getAnalysis()).
-  // NOTE : Remove AnalysisImpls from class Pass, when AnalysisResolver
-  // replaces AnalysisResolver
   std::vector<std::pair<const PassInfo*, Pass*> > AnalysisImpls;
 
 private:

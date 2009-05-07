@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s
+// RUN: clang-cc -fsyntax-only -verify %s
 
 struct A {};
 enum B { Dummy };
@@ -39,4 +39,91 @@ void f() {
 
   // Conversion to member of base.
   pdi1 = pdid; // expected-error {{incompatible type assigning 'int struct D::*', expected 'int struct A::*'}}
+}
+
+struct TheBase
+{
+  void d();
+};
+
+struct HasMembers : TheBase
+{
+  int i;
+  void f();
+
+  void g();
+  void g(int);
+  static void g(double);
+};
+
+namespace Fake
+{
+  int i;
+  void f();
+}
+
+void g() {
+  HasMembers hm;
+
+  int HasMembers::*pmi = &HasMembers::i;
+  int *pni = &Fake::i;
+  int *pmii = &hm.i;
+
+  void (HasMembers::*pmf)() = &HasMembers::f;
+  void (*pnf)() = &Fake::f;
+  &hm.f; // FIXME: needs diagnostic expected-warning{{result unused}}
+
+  void (HasMembers::*pmgv)() = &HasMembers::g;
+  void (HasMembers::*pmgi)(int) = &HasMembers::g;
+  void (*pmgd)(double) = &HasMembers::g;
+
+  void (HasMembers::*pmd)() = &HasMembers::d;
+}
+
+struct Incomplete; // expected-note{{forward declaration}}
+
+void h() {
+  HasMembers hm, *phm = &hm;
+
+  int HasMembers::*pi = &HasMembers::i;
+  hm.*pi = 0;
+  int i = phm->*pi;
+  (void)&(hm.*pi);
+  (void)&(phm->*pi);
+  (void)&((&hm)->*pi); // expected-error {{address expression must be an lvalue or a function designator}}
+
+  void (HasMembers::*pf)() = &HasMembers::f;
+  (hm.*pf)();
+  (phm->*pf)();
+
+  (void)(hm->*pi); // expected-error {{left hand operand to ->* must be a pointer to class compatible with the right hand operand, but is 'struct HasMembers'}}
+  (void)(phm.*pi); // expected-error {{left hand operand to .* must be a class compatible with the right hand operand, but is 'struct HasMembers *'}}
+  (void)(i.*pi); // expected-error {{left hand operand to .* must be a class compatible with the right hand operand, but is 'int'}}
+  int *ptr;
+  (void)(ptr->*pi); // expected-error {{left hand operand to ->* must be a pointer to class compatible with the right hand operand, but is 'int *'}}
+
+  int A::*pai = 0;
+  D d, *pd = &d;
+  (void)(d.*pai);
+  (void)(pd->*pai);
+  F f, *ptrf = &f;
+  (void)(f.*pai); // expected-error {{left hand operand to .* must be a class compatible with the right hand operand, but is 'struct F'}}
+  (void)(ptrf->*pai); // expected-error {{left hand operand to ->* must be a pointer to class compatible with the right hand operand, but is 'struct F *'}}
+
+  (void)(hm.*i); // expected-error {{pointer-to-member}}
+  (void)(phm->*i); // expected-error {{pointer-to-member}}
+
+  Incomplete *inc;
+  int Incomplete::*pii = 0;
+  (void)inc->*pii; // expected-error {{right hand operand is a pointer to member of incomplete type 'struct Incomplete'}}
+}
+
+struct OverloadsPtrMem
+{
+  int operator ->*(const char *);
+};
+
+void i() {
+  OverloadsPtrMem m;
+  int foo = m->*"Awesome!";
 }

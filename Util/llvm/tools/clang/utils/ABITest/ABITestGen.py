@@ -3,6 +3,7 @@
 from pprint import pprint
 import random, atexit, time
 from random import randrange
+import re
 
 from Enumeration import *
 from TypeGen import *
@@ -31,7 +32,9 @@ class TypePrinter:
         if self.writeBody:
             print >>self.output, '#include <stdio.h>\n'
             if self.outputTests:
-                print >>self.outputTests, '#include <stdio.h>\n'
+                print >>self.outputTests, '#include <stdio.h>'
+                print >>self.outputTests, '#include <string.h>'
+                print >>self.outputTests, '#include <assert.h>\n'
 
         if headerName:
             for f in (self.output,self.outputTests,self.outputDriver):
@@ -39,6 +42,7 @@ class TypePrinter:
                     print >>f, '#include "%s"\n'%(headerName,)
         
         if self.outputDriver:
+            print >>self.outputDriver, '#include <stdio.h>\n'
             print >>self.outputDriver, 'int main(int argc, char **argv) {'
             
     def finish(self):
@@ -50,6 +54,7 @@ class TypePrinter:
             print >>self.output, '}' 
 
         if self.outputDriver:
+            print >>self.outputDriver, '  printf("DONE\\n");'
             print >>self.outputDriver, '  return 0;'
             print >>self.outputDriver, '}'        
 
@@ -139,6 +144,7 @@ class TypePrinter:
                 print >>self.outputTests, '    %s = %s[i];'%(retvalName, retvalTests[0])
                 print >>self.outputTests, '    RV = %s(%s);'%(fnName, args)
                 self.printValueOfType('  %s_RV'%fnName, 'RV', FT.returnType, output=self.outputTests, indent=4)
+                self.checkTypeValues('RV', '%s[i]' % retvalTests[0], FT.returnType, output=self.outputTests, indent=4)
                 print >>self.outputTests, '  }'
             
             if tests:
@@ -270,6 +276,35 @@ class TypePrinter:
         else:
             raise NotImplementedError,'Cannot print value of type: "%s"'%(t,)
 
+    def checkTypeValues(self, nameLHS, nameRHS, t, output=None, indent=2):
+        prefix = 'foo'
+        if output is None:
+            output = self.output
+        if isinstance(t, BuiltinType):
+            print >>output, '%*sassert(%s == %s);' % (indent, '', nameLHS, nameRHS)
+        elif isinstance(t, RecordType):
+            for i,f in enumerate(t.fields):
+                self.checkTypeValues('%s.field%d'%(nameLHS,i), '%s.field%d'%(nameRHS,i), 
+                                     f, output=output, indent=indent)
+                if t.isUnion:
+                    break
+        elif isinstance(t, ComplexType):
+            self.checkTypeValues('(__real %s)'%nameLHS, '(__real %s)'%nameRHS, t.elementType, output=output,indent=indent)
+            self.checkTypeValues('(__imag %s)'%nameLHS, '(__imag %s)'%nameRHS, t.elementType, output=output,indent=indent)
+        elif isinstance(t, ArrayType):
+            for i in range(t.numElements):
+                # Access in this fashion as a hackish way to portably
+                # access vectors.
+                if t.isVector:
+                    self.checkTypeValues('((%s*) &%s)[%d]'%(t.elementType,nameLHS,i), 
+                                         '((%s*) &%s)[%d]'%(t.elementType,nameRHS,i), 
+                                         t.elementType, output=output,indent=indent)
+                else:
+                    self.checkTypeValues('%s[%d]'%(nameLHS,i), '%s[%d]'%(nameRHS,i), 
+                                         t.elementType, output=output,indent=indent)                    
+        else:
+            raise NotImplementedError,'Cannot print value of type: "%s"'%(t,)
+
 import sys
 
 def main():
@@ -368,9 +403,9 @@ def main():
     group.add_option("", "--no-function-return", dest="functionUseReturn",
                      help="do not generate return types for functions",
                      action="store_false", default=True)
-    group.add_option("", "--vector-sizes", dest="vectorSizes",
-                     help="comma separated list of sizes for vectors [default %default]",
-                     action="store", type=str, default='8,16', metavar="N")
+    group.add_option("", "--vector-types", dest="vectorTypes",
+                     help="comma separated list of vector types (e.g., v2i32) [default %default]",
+                     action="store", type=str, default='v2i16, v1i64, v2i32, v4i16, v8i8, v2f32, v2i64, v4i32, v8i16, v16i8, v2f64, v4f32, v16f32', metavar="N")
 
     group.add_option("", "--max-args", dest="functionMaxArgs",
                      help="maximum number of arguments per function [default %default]",
@@ -412,10 +447,13 @@ def main():
     if opts.useVoidPointer:  builtins.append(('void*',4))
 
     btg = FixedTypeGenerator([BuiltinType(n,s) for n,s in builtins])
-    sbtg = FixedTypeGenerator([BuiltinType('char',1),
-                               BuiltinType('int',4),
-                               BuiltinType('float',4),
-                               BuiltinType('double',8)])
+    charType = BuiltinType('char',1)
+    shortType = BuiltinType('short',2)
+    intType = BuiltinType('int',4)
+    longlongType = BuiltinType('long long',8)
+    floatType = BuiltinType('float',4)
+    doubleType = BuiltinType('double',8)
+    sbtg = FixedTypeGenerator([charType, intType, floatType, doubleType])
 
     atg = AnyTypeGenerator()
     artg = AnyTypeGenerator()
@@ -432,9 +470,25 @@ def main():
             assert subgen 
             atg.addGenerator(ArrayTypeGenerator(subgen, opts.arrayMaxSize))
         if opts.useVector:
-            atg.addGenerator(VectorTypeGenerator(sbtg, 
-                                                 map(int, opts.vectorSizes.split(','))))
-
+            vTypes = []
+            for i,t in enumerate(opts.vectorTypes.split(',')):
+                m = re.match('v([1-9][0-9]*)([if][1-9][0-9]*)', t.strip())
+                if not m:
+                    parser.error('Invalid vector type: %r' % t)
+                count,kind = m.groups()
+                count = int(count)
+                type = { 'i8'  : charType, 
+                         'i16' : shortType, 
+                         'i32' : intType, 
+                         'i64' : longlongType,
+                         'f32' : floatType, 
+                         'f64' : doubleType,
+                         }.get(kind)
+                if not type:
+                    parser.error('Invalid vector type: %r' % t)
+                vTypes.append(ArrayType(i, True, type, count * type.size))
+                
+            atg.addGenerator(FixedTypeGenerator(vTypes))
 
     if opts.recordMaxDepth is None: 
         # Fully recursive, just avoid top-level arrays.

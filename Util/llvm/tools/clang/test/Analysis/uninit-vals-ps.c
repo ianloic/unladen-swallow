@@ -1,5 +1,5 @@
-// RUN: clang -analyze -checker-cfref -verify %s &&
-// RUN: clang -analyze -checker-cfref -analyzer-store-region -verify %s
+// RUN: clang-cc -analyze -checker-cfref -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify %s
 
 struct FPRec {
   void (*my_func)(int * x);  
@@ -15,7 +15,7 @@ int f1_a(struct FPRec* foo) {
 
 int f1_b() {
   int x;
-  return bar(x)+1;  // expected-warning{{Pass-by-value argument in function is undefined.}}
+  return bar(x)+1;  // expected-warning{{Pass-by-value argument in function call is undefined.}}
 }
 
 int f2() {
@@ -41,6 +41,21 @@ int f3(void) {
     return 0;
   else
     return 1;
+}
+
+void f4_aux(float* x);
+float f4(void) {
+  float x;
+  f4_aux(&x);
+  return x;  // no-warning
+}
+
+struct f5_struct { int x; };
+void f5_aux(struct f5_struct* s);
+int f5(void) {
+  struct f5_struct s;
+  f5_aux(&s);
+  return s.x; // no-warning
 }
 
 int ret_uninit() {

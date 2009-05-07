@@ -1,4 +1,4 @@
-// RUN: clang -o %t --emit-llvm -g %s
+// RUN: clang-cc -o %t --emit-llvm -g %s
 
 // PR3023
 void convert(void) {
@@ -28,3 +28,10 @@ struct foo {
 	void *ptrs[];
 };
 struct foo bar;
+
+// PR4143
+struct foo2 {
+        enum bar *bar;
+};
+
+struct foo2 foo2;

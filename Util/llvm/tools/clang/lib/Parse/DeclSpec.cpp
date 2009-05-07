@@ -13,8 +13,10 @@
 
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/ParseDiagnostic.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/STLExtras.h"
+#include <cstring>
 using namespace clang;
 
 
@@ -23,25 +25,34 @@ static DiagnosticBuilder Diag(Diagnostic &D, SourceLocation Loc,
   return D.Report(FullSourceLoc(Loc, SrcMgr), DiagID);
 }
 
-
 /// DeclaratorChunk::getFunction - Return a DeclaratorChunk for a function.
 /// "TheDeclarator" is the declarator that this will be added to.
 DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
+                                             SourceLocation EllipsisLoc,
                                              ParamInfo *ArgInfo,
                                              unsigned NumArgs,
                                              unsigned TypeQuals,
+                                             bool hasExceptionSpec,
+                                             bool hasAnyExceptionSpec,
+                                             ActionBase::TypeTy **Exceptions,
+                                             unsigned NumExceptions,
                                              SourceLocation Loc,
                                              Declarator &TheDeclarator) {
   DeclaratorChunk I;
-  I.Kind             = Function;
-  I.Loc              = Loc;
-  I.Fun.hasPrototype = hasProto;
-  I.Fun.isVariadic   = isVariadic;
-  I.Fun.DeleteArgInfo = false;
-  I.Fun.TypeQuals    = TypeQuals;
-  I.Fun.NumArgs      = NumArgs;
-  I.Fun.ArgInfo      = 0;
-  
+  I.Kind                 = Function;
+  I.Loc                  = Loc;
+  I.Fun.hasPrototype     = hasProto;
+  I.Fun.isVariadic       = isVariadic;
+  I.Fun.EllipsisLoc      = EllipsisLoc.getRawEncoding();
+  I.Fun.DeleteArgInfo    = false;
+  I.Fun.TypeQuals        = TypeQuals;
+  I.Fun.NumArgs          = NumArgs;
+  I.Fun.ArgInfo          = 0;
+  I.Fun.hasExceptionSpec = hasExceptionSpec;
+  I.Fun.hasAnyExceptionSpec = hasAnyExceptionSpec;
+  I.Fun.NumExceptions    = NumExceptions;
+  I.Fun.Exceptions       = 0;
+
   // new[] an argument array if needed.
   if (NumArgs) {
     // If the 'InlineParams' in Declarator is unused and big enough, put our
@@ -59,10 +70,17 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
     }
     memcpy(I.Fun.ArgInfo, ArgInfo, sizeof(ArgInfo[0])*NumArgs);
   }
+  // new[] an exception array if needed
+  if (NumExceptions) {
+    I.Fun.Exceptions = new ActionBase::TypeTy*[NumExceptions];
+    memcpy(I.Fun.Exceptions, Exceptions,
+           sizeof(ActionBase::TypeTy*)*NumExceptions);
+  }
   return I;
 }
 
 /// getParsedSpecifiers - Return a bitmask of which flavors of specifiers this
+/// declaration specifier includes.
 ///
 unsigned DeclSpec::getParsedSpecifiers() const {
   unsigned Res = 0;
@@ -90,6 +108,7 @@ const char *DeclSpec::getSpecifierName(DeclSpec::SCS S) {
   case DeclSpec::SCS_static:      return "static";
   case DeclSpec::SCS_auto:        return "auto";
   case DeclSpec::SCS_register:    return "register";
+  case DeclSpec::SCS_private_extern: return "__private_extern__";
   case DeclSpec::SCS_mutable:     return "mutable";
   }
 }
@@ -146,7 +165,7 @@ const char *DeclSpec::getSpecifierName(DeclSpec::TST T) {
   case DeclSpec::TST_class:       return "class";
   case DeclSpec::TST_union:       return "union";
   case DeclSpec::TST_struct:      return "struct";
-  case DeclSpec::TST_typedef:     return "typedef";
+  case DeclSpec::TST_typename:    return "type-name";
   case DeclSpec::TST_typeofType:
   case DeclSpec::TST_typeofExpr:  return "typeof";
   }
@@ -222,12 +241,19 @@ bool DeclSpec::SetTypeSpecSign(TSS S, SourceLocation Loc,
 }
 
 bool DeclSpec::SetTypeSpecType(TST T, SourceLocation Loc,
-                               const char *&PrevSpec, Action::TypeTy *Rep) {
+                               const char *&PrevSpec, void *Rep) {
   if (TypeSpecType != TST_unspecified)
     return BadSpecifier((TST)TypeSpecType, PrevSpec);
   TypeSpecType = T;
   TypeRep = Rep;
   TSTLoc = Loc;
+  return false;
+}
+
+bool DeclSpec::SetTypeSpecError() {
+  TypeSpecType = TST_error;
+  TypeRep = 0;
+  TSTLoc = SourceLocation();
   return false;
 }
 
@@ -273,9 +299,9 @@ bool DeclSpec::SetFunctionSpecExplicit(SourceLocation Loc, const char *&PrevSpec
 /// "_Imaginary" (lacking an FP type).  This returns a diagnostic to issue or
 /// diag::NUM_DIAGNOSTICS if there is no error.  After calling this method,
 /// DeclSpec is guaranteed self-consistent, even if an error occurred.
-void DeclSpec::Finish(Diagnostic &D, SourceManager& SrcMgr, 
-                      const LangOptions &Lang) {
+void DeclSpec::Finish(Diagnostic &D, Preprocessor &PP) {
   // Check the type specifier components first.
+  SourceManager &SrcMgr = PP.getSourceManager();
 
   // signed/unsigned are only valid with int/char/wchar_t.
   if (TypeSpecSign != TSS_unspecified) {
@@ -320,7 +346,10 @@ void DeclSpec::Finish(Diagnostic &D, SourceManager& SrcMgr,
   // disallow their use.  Need information about the backend.
   if (TypeSpecComplex != TSC_unspecified) {
     if (TypeSpecType == TST_unspecified) {
-      Diag(D, TSCLoc, SrcMgr, diag::ext_plain_complex);
+      Diag(D, TSCLoc, SrcMgr, diag::ext_plain_complex)
+        << CodeModificationHint::CreateInsertion(
+                              PP.getLocForEndOfToken(getTypeSpecComplexLoc()),
+                                                 " double");
       TypeSpecType = TST_double;   // _Complex -> _Complex double.
     } else if (TypeSpecType == TST_int || TypeSpecType == TST_char) {
       // Note that this intentionally doesn't include _Complex _Bool.
@@ -329,18 +358,6 @@ void DeclSpec::Finish(Diagnostic &D, SourceManager& SrcMgr,
       Diag(D, TSCLoc, SrcMgr, diag::err_invalid_complex_spec)
         << getSpecifierName((TST)TypeSpecType);
       TypeSpecComplex = TSC_unspecified;
-    }
-  }
-  
-  // Verify __thread.
-  if (SCS_thread_specified) {
-    if (StorageClassSpec == SCS_unspecified) {
-      StorageClassSpec = SCS_extern; // '__thread int' -> 'extern __thread int'
-    } else if (StorageClassSpec != SCS_extern &&
-               StorageClassSpec != SCS_static) {
-      Diag(D, getStorageClassSpecLoc(), SrcMgr, diag::err_invalid_thread_spec)
-        << getSpecifierName((SCS)StorageClassSpec);
-      SCS_thread_specified = false;
     }
   }
 

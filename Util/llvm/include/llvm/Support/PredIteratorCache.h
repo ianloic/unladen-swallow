@@ -27,11 +27,12 @@ namespace llvm {
   class PredIteratorCache {
     /// BlockToPredsMap - Pointer to null-terminated list.
     DenseMap<BasicBlock*, BasicBlock**> BlockToPredsMap;
+    DenseMap<BasicBlock*, unsigned> BlockToPredCountMap;
 
     /// Memory - This is the space that holds cached preds.
     BumpPtrAllocator Memory;
   public:
-    
+
     /// GetPreds - Get a cached list for the null-terminated predecessor list of
     /// the specified block.  This can be used in a loop like this:
     ///   for (BasicBlock **PI = PredCache->GetPreds(BB); *PI; ++PI)
@@ -41,18 +42,26 @@ namespace llvm {
     BasicBlock **GetPreds(BasicBlock *BB) {
       BasicBlock **&Entry = BlockToPredsMap[BB];
       if (Entry) return Entry;
-      
+
       SmallVector<BasicBlock*, 32> PredCache(pred_begin(BB), pred_end(BB));
       PredCache.push_back(0); // null terminator.
       
+      BlockToPredCountMap[BB] = PredCache.size()-1;
+
       Entry = Memory.Allocate<BasicBlock*>(PredCache.size());
       std::copy(PredCache.begin(), PredCache.end(), Entry);
       return Entry;
     }
     
+    unsigned GetNumPreds(BasicBlock *BB) {
+      GetPreds(BB);
+      return BlockToPredCountMap[BB];
+    }
+
     /// clear - Remove all information.
     void clear() {
       BlockToPredsMap.clear();
+      BlockToPredCountMap.clear();
       Memory.Reset();
     }
   };

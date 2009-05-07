@@ -12,19 +12,20 @@ add_clang_library(clangAST
   DeclCXX.cpp
   DeclGroup.cpp
   DeclObjC.cpp
-  DeclSerialization.cpp
+  DeclTemplate.cpp
   ExprConstant.cpp
   Expr.cpp
   ExprCXX.cpp
   InheritViz.cpp
+  NestedNameSpecifier.cpp
   ParentMap.cpp
   Stmt.cpp
   StmtDumper.cpp
   StmtIterator.cpp
   StmtPrinter.cpp
-  StmtSerialization.cpp
   StmtViz.cpp
-  TranslationUnit.cpp
+  TemplateName.cpp
   Type.cpp
-  TypeSerialization.cpp
   )
+
+add_dependencies(clangAST ClangDiagnosticAST)

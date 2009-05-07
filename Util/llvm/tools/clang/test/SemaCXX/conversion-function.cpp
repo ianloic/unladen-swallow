@@ -1,4 +1,4 @@
-// RUN: clang -fsyntax-only -verify %s 
+// RUN: clang-cc -fsyntax-only -verify %s 
 class X { 
 public:
   operator bool();
@@ -9,7 +9,7 @@ public:
   }
 
   float g() {
-    return operator float(); // expected-error{{use of undeclared 'operator float'}}
+    return operator float(); // expected-error{{no matching function for call to 'operator float'}}
   }
 };
 
@@ -23,8 +23,11 @@ typedef int array_type[10];
 class Y {
 public:
   void operator bool(int, ...) const; // expected-error{{conversion function cannot have a return type}} \
-  // expected-error{{conversion function cannot have any parameters}} \
-  // expected-error{{conversion function cannot be variadic}}
+  // expected-error{{conversion function cannot have any parameters}}
+  
+  operator float(...) const;  // expected-error{{conversion function cannot be variadic}}
+  
+  
   operator func_type(); // expected-error{{conversion function cannot convert to a function type}}
   operator array_type(); // expected-error{{conversion function cannot convert to an array type}}
 };
@@ -50,3 +53,14 @@ public:
   operator const void() const; // expected-warning{{conversion function converting 'class B' to 'void const' will never be used}}
   operator const B(); // expected-warning{{conversion function converting 'class B' to itself will never be used}}
 };
+
+// This used to crash Clang.
+struct Flip;
+struct Flop {
+  Flop();
+  Flop(const Flip&);
+};
+struct Flip {
+  operator Flop() const;
+};
+Flop flop = Flip(); // expected-error {{cannot initialize 'flop' with an rvalue of type 'struct Flip'}}

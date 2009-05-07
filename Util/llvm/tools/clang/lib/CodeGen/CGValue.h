@@ -144,9 +144,17 @@ class LValue {
 
   // objective-c's ivar
   bool Ivar:1;
+  
+  // LValue is non-gc'able for any reason, including being a parameter or local
+  // variable.
+  bool NonGC: 1;
+
+  // Lvalue is a global reference of an objective-c object
+  bool GlobalObjCRef : 1;
 
   // objective-c's gc attributes
   unsigned ObjCType : 2;  
+
   
 
 private:
@@ -156,7 +164,7 @@ private:
     // FIXME: Convenient place to set objc flags to 0. This
     // should really be done in a user-defined constructor instead.
     R.ObjCType = None;
-    R.Ivar = false;
+    R.Ivar = R.NonGC = R.GlobalObjCRef = false;
   }
   
 public:
@@ -169,21 +177,35 @@ public:
 
   bool isVolatileQualified() const { return Volatile; }
   bool isRestrictQualified() const { return Restrict; }
+  unsigned getQualifiers() const {
+    return (Volatile ? QualType::Volatile : 0) | 
+           (Restrict ? QualType::Restrict : 0);
+  }
   
   bool isObjCIvar() const { return Ivar; }
+  bool isNonGC () const { return NonGC; }
+  bool isGlobalObjCRef() const { return GlobalObjCRef; }
   bool isObjCWeak() const { return ObjCType == Weak; }
   bool isObjCStrong() const { return ObjCType == Strong; }
   
   static void SetObjCIvar(LValue& R, bool iValue) {
     R.Ivar = iValue;
   }
-    
-  static void SetObjCType(bool isWeak, bool isStrong, LValue& R) {
-    assert(!(isWeak == true && isStrong == true));
-    if (isWeak)
+
+  static void SetGlobalObjCRef(LValue& R, bool iValue) {
+    R.GlobalObjCRef = iValue;
+  }
+  
+  static void SetObjCNonGC(LValue& R, bool iValue) {
+    R.NonGC = iValue;
+  }
+  static void SetObjCType(QualType::GCAttrTypes GCAttrs, LValue& R) {
+    if (GCAttrs == QualType::Weak)
       R.ObjCType = Weak;
-    else if (isStrong)
+    else if (GCAttrs == QualType::Strong)
       R.ObjCType = Strong;
+    else
+     R.ObjCType = None;
   }
   
   // simple lvalue
@@ -223,11 +245,13 @@ public:
     return KVCRefExpr;
   }
 
-  static LValue MakeAddr(llvm::Value *V, unsigned Qualifiers) {
+  static LValue MakeAddr(llvm::Value *V, unsigned Qualifiers,
+                         QualType::GCAttrTypes GCAttrs = QualType::GCNone) {
     LValue R;
     R.LVType = Simple;
     R.V = V;
     SetQualifiers(Qualifiers,R);
+    SetObjCType(GCAttrs, R);
     return R;
   }
   
@@ -275,8 +299,8 @@ public:
     SetQualifiers(Qualifiers,R);
     return R;
   }
-  static LValue MakeKVCRef(const ObjCKVCRefExpr *E,
-                                unsigned Qualifiers) {
+  
+  static LValue MakeKVCRef(const ObjCKVCRefExpr *E, unsigned Qualifiers) {
     LValue R;
     R.LVType = KVCRef;
     R.KVCRefExpr = E;

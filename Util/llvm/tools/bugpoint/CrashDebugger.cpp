@@ -21,6 +21,7 @@
 #include "llvm/Pass.h"
 #include "llvm/PassManager.h"
 #include "llvm/ValueSymbolTable.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Transforms/Scalar.h"
@@ -198,17 +199,16 @@ bool ReduceCrashingFunctions::TestFuncs(std::vector<Function*> &Funcs) {
     return false;
 
   // Clone the program to try hacking it apart...
-  Module *M = CloneModule(BD.getProgram());
+  DenseMap<const Value*, Value*> ValueMap;
+  Module *M = CloneModule(BD.getProgram(), ValueMap);
 
   // Convert list to set for fast lookup...
   std::set<Function*> Functions;
   for (unsigned i = 0, e = Funcs.size(); i != e; ++i) {
-    // FIXME: bugpoint should add names to all stripped symbols.
-    assert(!Funcs[i]->getName().empty() &&
-           "Bugpoint doesn't work on stripped modules yet PR718!");
-    Function *CMF = M->getFunction(Funcs[i]->getName());
+    Function *CMF = cast<Function>(ValueMap[Funcs[i]]);
     assert(CMF && "Function not in module?!");
     assert(CMF->getFunctionType() == Funcs[i]->getFunctionType() && "wrong ty");
+    assert(CMF->getName() == Funcs[i]->getName() && "wrong name");
     Functions.insert(CMF);
   }
 
@@ -264,23 +264,13 @@ namespace {
 
 bool ReduceCrashingBlocks::TestBlocks(std::vector<const BasicBlock*> &BBs) {
   // Clone the program to try hacking it apart...
-  Module *M = CloneModule(BD.getProgram());
+  DenseMap<const Value*, Value*> ValueMap;
+  Module *M = CloneModule(BD.getProgram(), ValueMap);
 
   // Convert list to set for fast lookup...
-  std::set<BasicBlock*> Blocks;
-  for (unsigned i = 0, e = BBs.size(); i != e; ++i) {
-    // Convert the basic block from the original module to the new module...
-    const Function *F = BBs[i]->getParent();
-    Function *CMF = M->getFunction(F->getName());
-    assert(CMF && "Function not in module?!");
-    assert(CMF->getFunctionType() == F->getFunctionType() && "wrong type?");
-
-    // Get the mapped basic block...
-    Function::iterator CBI = CMF->begin();
-    std::advance(CBI, std::distance(F->begin(),
-                                    Function::const_iterator(BBs[i])));
-    Blocks.insert(CBI);
-  }
+  SmallPtrSet<BasicBlock*, 8> Blocks;
+  for (unsigned i = 0, e = BBs.size(); i != e; ++i)
+    Blocks.insert(cast<BasicBlock>(ValueMap[BBs[i]]));
 
   std::cout << "Checking for crash with only these blocks:";
   unsigned NumPrint = Blocks.size();
@@ -319,8 +309,8 @@ bool ReduceCrashingBlocks::TestBlocks(std::vector<const BasicBlock*> &BBs) {
   // have to take.
   std::vector<std::pair<Function*, std::string> > BlockInfo;
 
-  for (std::set<BasicBlock*>::iterator I = Blocks.begin(), E = Blocks.end();
-       I != E; ++I)
+  for (SmallPtrSet<BasicBlock*, 8>::iterator I = Blocks.begin(),
+         E = Blocks.end(); I != E; ++I)
     BlockInfo.push_back(std::make_pair((*I)->getParent(), (*I)->getName()));
 
   // Now run the CFG simplify pass on the function...

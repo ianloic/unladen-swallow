@@ -17,17 +17,20 @@
 namespace clang {
   class Preprocessor;
   class ASTConsumer;
-  class TranslationUnit;
+  class ASTContext;
 
-  /// ParseAST - Parse the entire file specified, notifying the ASTConsumer as
+  /// \brief Parse the entire file specified, notifying the ASTConsumer as
   /// the file is parsed.
   ///
-  /// \param TU If 0, then memory used for AST elements will be allocated only
-  /// for the duration of the ParseAST() call. In this case, the client should
-  /// not access any AST elements after ParseAST() returns.
+  /// This operation inserts the parsed decls into the translation
+  /// unit held by Ctx.
+  ///
+  /// \param CompleteTranslationUnit When true, the parsed file is
+  /// considered to be a complete translation unit, and any
+  /// end-of-translation-unit wrapup will be performed.
   void ParseAST(Preprocessor &pp, ASTConsumer *C, 
-                TranslationUnit *TU = 0,
-                bool PrintStats = false);
+                ASTContext &Ctx, bool PrintStats = false,
+                bool CompleteTranslationUnit = true);
 
 }  // end namespace clang
 
