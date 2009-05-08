@@ -53,6 +53,13 @@ WIN32 is still required for the locale module.
 #define _CRT_NONSTDC_NO_DEPRECATE 1
 #endif
 
+/* clang defines __clang__
+   This needs to happen before #include <io.h> */
+#if defined(__clang__)
+#define __declspec(x) /* nothing */
+#define __int64       long long
+#endif
+
 /* Windows CE does not have these */
 #ifndef MS_WINCE
 #define HAVE_IO_H
