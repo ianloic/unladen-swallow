@@ -699,10 +699,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Include\ceval.h"
-				>
-			</File>
-			<File
 				RelativePath="..\Include\classobject.h"
 				>
 			</File>
@@ -1679,7 +1675,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\ceval.cc"
+				RelativePath="..\Python\eval.cc"
 				>
 			</File>
 			<File

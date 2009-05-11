@@ -203,7 +203,7 @@ If you get a warning for every file about the -Olimit option being no
 longer supported, you can ignore it.  There's no foolproof way to know
 whether this option is needed; all we can do is test whether it is
 accepted without error.  On some systems, e.g. older SGI compilers, it
-is essential for performance (specifically when compiling ceval.c,
+is essential for performance (specifically when compiling eval.cc,
 which has more basic blocks than the default limit of 1000).  If the
 warning bothers you, edit the Makefile to remove "-Olimit 1500" from
 the OPT variable.

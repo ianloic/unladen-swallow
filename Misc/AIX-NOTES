@@ -28,7 +28,7 @@ Date: Wed, 6 Aug 1997 11:41:00 +0200 (EET)
     numbers).  "LANG=C; export LANG" solves the problem, as does
     "LANG=C $(MAKE) ..." in the master Makefile.
 
-(3) The cc (or xlc) compiler considers "Python/ceval.c" too complex to
+(3) The cc (or xlc) compiler considers "Python/eval.cc" too complex to
     optimize, except when invoked with "-qmaxmem=4000"
 
 (4) Some problems (due to _AIX not being #defined) when python 1.0.0 was

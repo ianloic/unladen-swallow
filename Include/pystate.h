@@ -56,7 +56,7 @@ typedef int (*Py_tracefunc)(PyObject *, struct _frame *, int, PyObject *);
 #define PyTrace_C_RETURN 6
 
 typedef struct _ts {
-    /* See Python/ceval.c for comments explaining most fields */
+    /* See Python/eval.cc for comments explaining most fields */
 
     struct _ts *next;
     PyInterpreterState *interp;

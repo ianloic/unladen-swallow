@@ -37,7 +37,7 @@ using llvm::array_endof;
 
 namespace py {
 
-// These have the same meanings as the why_code enum in ceval.cc.
+// These have the same meanings as the why_code enum in eval.cc.
 enum UnwindReason {
     UNWIND_NOUNWIND,
     UNWIND_EXCEPTION,
@@ -514,7 +514,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_LASTI,
                                        "f_lasti"));
     // Each use of a YIELD_VALUE opcode will add a new case to this
-    // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
+    // switch.  eval.cc just assigns the new IP, allowing wild jumps,
     // but LLVM won't let us do that so we default to jumping to the
     // unreachable block.
     this->yield_resume_switch_ =
@@ -556,7 +556,7 @@ LlvmFunctionBuilder::FillPropagateExceptionBlock()
 void
 LlvmFunctionBuilder::FillUnwindBlock()
 {
-    // Handles, roughly, the ceval.cc JUMPTO macro.
+    // Handles, roughly, the eval.cc JUMPTO macro.
     BasicBlock *goto_unwind_target_block =
         BasicBlock::Create("goto_unwind_target", this->function_);
     this->builder_.SetInsertPoint(goto_unwind_target_block);
@@ -564,7 +564,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
         this->builder_.CreateLoad(this->unwind_target_index_addr_,
                                   "unwind_target_index");
     // Each call to AddUnwindTarget() will add a new case to this
-    // switch.  ceval.cc just assigns the new IP, allowing wild jumps,
+    // switch.  eval.cc just assigns the new IP, allowing wild jumps,
     // but LLVM won't let us do that so we default to jumping to the
     // unreachable block.
     this->unwind_target_switch_ = this->builder_.CreateSwitch(
@@ -645,7 +645,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
             ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
             this->unwind_reason_addr_);
         // Convert the return value to the unwind target. This is in keeping
-        // with ceval.cc. There's probably some LLVM magic that will allow
+        // with eval.cc. There's probably some LLVM magic that will allow
         // us to skip the boxing/unboxing, but this will work for now.
         Value *boxed_retval = this->builder_.CreateLoad(this->retval_addr_);
         Value *unbox_retval = this->builder_.CreateTrunc(
@@ -1331,7 +1331,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
 
-    // ceval.cc passes a copy of the stack pointer to _PyEval_CallFunction,
+    // eval.cc passes a copy of the stack pointer to _PyEval_CallFunction,
     // so we do the same thing.
     // XXX(twouters): find out if this is really necessary; we just end up
     // using the stack pointer anyway, even in the error case.
@@ -1353,7 +1353,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     this->Push(result);
 }
 
-// Keep this in sync with ceval.cc
+// Keep this in sync with eval.cc
 #define CALL_FLAG_VAR 1
 #define CALL_FLAG_KW 2
 
@@ -1452,7 +1452,7 @@ LlvmFunctionBuilder::STORE_DEREF(int index)
     Value *result = this->builder_.CreateCall2(
         pycell_set, cell, value, "STORE_DEREF_result");
     this->DecRef(value);
-    // ceval.c doesn't actually check the return value of this, I guess
+    // eval.cc doesn't actually check the return value of this, I guess
     // we are a little more likely to do things wrong.
     this->PropagateExceptionOnNonZero(result);
 }
@@ -1785,7 +1785,7 @@ LlvmFunctionBuilder::CONTINUE_LOOP(llvm::BasicBlock *target,
                                this->unwind_reason_addr_);
     Value *unwind_target = this->AddUnwindTarget(target);
     // Yes, store the unwind target in the return value slot. This is to
-    // keep the translation from ceval.cc as close as possible; deviation will
+    // keep the translation from eval.cc as close as possible; deviation will
     // only introduce bugs. The UNWIND_CONTINUE cases in the unwind block
     // (see FillUnwindBlock()) will pick this up and deal with it.
     Value *pytarget = this->builder_.CreateCall(
@@ -2570,7 +2570,7 @@ void
 LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
 {
     // TODO(twouters): we could speed up the common case quite a bit by
-    // doing the unpacking inline, like ceval.cc does; that would allow
+    // doing the unpacking inline, like eval.cc does; that would allow
     // LLVM to optimize the heck out of it as well. Then again, we could
     // do even better by combining this opcode and the STORE_* ones that
     // follow into a single block of code circumventing the stack
@@ -2594,7 +2594,7 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
     // Not setting the new stackpointer on failure does mean that if
     // _PyEval_UnpackIterable failed after pushing some values onto the
     // stack, and it didn't clean up after itself, we lose references.  This
-    // is what ceval.cc does as well.
+    // is what eval.cc does as well.
     this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
 }
 

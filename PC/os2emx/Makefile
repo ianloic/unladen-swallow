@@ -339,7 +339,7 @@ SRC.PYTHON=	$(addprefix $(TOP), \
 		Python/ast.c \
 		Python/bltinmodule.c \
 		Python/exceptions.c \
-		Python/ceval.c \
+		Python/eval.cc \
 		Python/compile.c \
 		Python/codecs.c \
 		Python/errors.c \

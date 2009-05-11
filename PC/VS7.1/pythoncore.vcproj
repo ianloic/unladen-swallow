@@ -458,7 +458,7 @@
 			RelativePath="..\..\Objects\cellobject.c">
 		</File>
 		<File
-			RelativePath="..\..\Python\ceval.c">
+			RelativePath="..\..\Python\eval.cc">
 		</File>
 		<File
 			RelativePath="..\..\Objects\classobject.c">

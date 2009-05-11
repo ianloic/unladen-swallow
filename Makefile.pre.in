@@ -270,7 +270,7 @@ PYTHON_OBJS=	\
 		Python/asdl.o \
 		Python/ast.o \
 		Python/bltinmodule.o \
-		Python/ceval.o \
+		Python/eval.o \
 		Python/compile.o \
 		Python/codecs.o \
 		Python/errors.o \
@@ -594,7 +594,7 @@ Objects/stringobject.o: $(srcdir)/Objects/stringobject.c \
 $(OPCODETARGETS_H): $(OPCODETARGETGEN_FILES)
 	$(OPCODETARGETGEN) $(OPCODETARGETS_H)
 
-Python/ceval.o: $(OPCODETARGETS_H)
+Python/eval.o: $(OPCODETARGETS_H)
 
 Python/formatter_unicode.o: $(srcdir)/Python/formatter_unicode.c \
 				$(STRINGLIB_HEADERS)
@@ -631,7 +631,6 @@ PYTHON_HEADERS= \
 		Include/bytesobject.h \
 		Include/bufferobject.h \
 		Include/cellobject.h \
-		Include/ceval.h \
 		Include/classobject.h \
 		Include/cobject.h \
 		Include/code.h \

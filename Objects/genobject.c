@@ -3,7 +3,7 @@
 #include "Python.h"
 #include "frameobject.h"
 #include "genobject.h"
-#include "ceval.h"
+#include "eval.h"
 #include "structmember.h"
 #include "opcode.h"
 

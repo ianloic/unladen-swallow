@@ -730,7 +730,7 @@ always available.
    Activate dumping of VM measurements using the Pentium timestamp counter, if
    *on_flag* is true. Deactivate these dumps if *on_flag* is off. The function is
    available only if Python was compiled with :option:`--with-tsc`. To understand
-   the output of this dump, read :file:`Python/ceval.c` in the Python sources.
+   the output of this dump, read :file:`Python/eval.cc` in the Python sources.
 
    .. versionadded:: 2.4
 

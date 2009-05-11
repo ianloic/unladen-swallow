@@ -253,7 +253,7 @@ SOURCE=..\..\Objects\cellobject.c
 # End Source File
 # Begin Source File
 
-SOURCE=..\..\Python\ceval.c
+SOURCE=..\..\Python\eval.cc
 # End Source File
 # Begin Source File
 

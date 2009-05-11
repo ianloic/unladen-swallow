@@ -834,7 +834,7 @@ except ImportError:
 
 
 def _after_fork():
-    # This function is called by Python/ceval.c:PyEval_ReInitThreads which
+    # This function is called by Python/eval.cc:PyEval_ReInitThreads which
     # is called from PyOS_AfterFork.  Here we cleanup threading module state
     # that should not exist after a fork.
 

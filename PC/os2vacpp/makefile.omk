@@ -350,7 +350,7 @@ depend:
 
 ### OPUS MKMF:  Do not remove this line!  Generated dependencies follow.
 
-_tkinter.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+_tkinter.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -358,7 +358,7 @@ _tkinter.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-almodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+almodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -366,7 +366,7 @@ almodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-arraymodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+arraymodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -374,7 +374,7 @@ arraymodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-audioop.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+audioop.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h mymath.h \
@@ -382,7 +382,7 @@ audioop.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-binascii.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+binascii.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -390,7 +390,7 @@ binascii.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-bsddbmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+bsddbmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -398,7 +398,7 @@ bsddbmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-cdmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cdmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -406,7 +406,7 @@ cdmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-cgensupport.obj: abstract.h ceval.h cgensupport.h classobject.h cobject.h \
+cgensupport.obj: abstract.h eval.h cgensupport.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -414,7 +414,7 @@ cgensupport.obj: abstract.h ceval.h cgensupport.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-clmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+clmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -422,7 +422,7 @@ clmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-cmathmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cmathmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h mymath.h \
@@ -430,7 +430,7 @@ cmathmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-cpickle.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cpickle.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h cstringio.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -438,7 +438,7 @@ cpickle.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-cryptmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cryptmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -446,7 +446,7 @@ cryptmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-cstringio.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cstringio.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h cstringio.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -454,7 +454,7 @@ cstringio.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-cursesmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+cursesmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -462,7 +462,7 @@ cursesmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-dbmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+dbmmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -470,7 +470,7 @@ dbmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-dlmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+dlmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -478,7 +478,7 @@ dlmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-errno.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+errno.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -486,7 +486,7 @@ errno.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-errnomodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+errnomodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -494,7 +494,7 @@ errnomodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-fcntlmodule.obj: abstract.h c:\mptn\include\sys\ioctl.h ceval.h \
+fcntlmodule.obj: abstract.h c:\mptn\include\sys\ioctl.h eval.h \
 	 classobject.h cobject.h complexobject.h pyconfig.h dictobject.h \
 	 fileobject.h floatobject.h funcobject.h import.h intobject.h \
 	 intrcheck.h listobject.h longobject.h methodobject.h modsupport.h \
@@ -502,7 +502,7 @@ fcntlmodule.obj: abstract.h c:\mptn\include\sys\ioctl.h ceval.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-flmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+flmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -510,7 +510,7 @@ flmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 structmember.h sysmodule.h traceback.h tupleobject.h
 
-fmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+fmmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -518,7 +518,7 @@ fmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-fpectlmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+fpectlmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -526,7 +526,7 @@ fpectlmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-fpetestmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+fpetestmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -534,7 +534,7 @@ fpetestmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-gdbmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+gdbmmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -544,7 +544,7 @@ gdbmmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 
 getbuildinfo.obj: pyconfig.h
 
-getpath.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+getpath.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -552,7 +552,7 @@ getpath.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 python.h pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-glmodule.obj: abstract.h ceval.h cgensupport.h classobject.h cobject.h \
+glmodule.obj: abstract.h eval.h cgensupport.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -560,7 +560,7 @@ glmodule.obj: abstract.h ceval.h cgensupport.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-grpmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+grpmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 grp.h import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -568,7 +568,7 @@ grpmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-imageop.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+imageop.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -576,7 +576,7 @@ imageop.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-imgfile.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+imgfile.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -584,7 +584,7 @@ imgfile.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-main.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+main.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -592,7 +592,7 @@ main.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-mathmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+mathmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h mymath.h \
@@ -602,7 +602,7 @@ mathmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 
 md5c.obj: pyconfig.h md5.h
 
-md5module.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+md5module.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h md5.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -610,7 +610,7 @@ md5module.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-mpzmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+mpzmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longintrepr.h longobject.h methodobject.h modsupport.h \
@@ -618,7 +618,7 @@ mpzmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-nismodule.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
+nismodule.obj: abstract.h c:\mptn\include\sys\time.h eval.h classobject.h \
 	 cobject.h complexobject.h pyconfig.h dictobject.h fileobject.h \
 	 floatobject.h funcobject.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -626,7 +626,7 @@ nismodule.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-operator.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+operator.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -634,7 +634,7 @@ operator.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-parsermodule.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+parsermodule.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h graminit.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -643,7 +643,7 @@ parsermodule.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 rangeobject.h sliceobject.h stringobject.h sysmodule.h token.h \
 	 traceback.h tupleobject.h
 
-pcremodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+pcremodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -651,7 +651,7 @@ pcremodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pyfpe.h pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-posix.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+posix.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -659,7 +659,7 @@ posix.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 python.h pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-posixmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+posixmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -667,7 +667,7 @@ posixmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 python.h pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-puremodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+puremodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -675,7 +675,7 @@ puremodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-pwdmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+pwdmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -683,7 +683,7 @@ pwdmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 python.h pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-pypcre.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+pypcre.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 graminit.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -691,7 +691,7 @@ pypcre.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-readline.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+readline.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -699,7 +699,7 @@ readline.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-resource.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
+resource.obj: abstract.h c:\mptn\include\sys\time.h eval.h classobject.h \
 	 cobject.h complexobject.h pyconfig.h dictobject.h fileobject.h \
 	 floatobject.h funcobject.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -707,7 +707,7 @@ resource.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-rgbimgmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+rgbimgmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -715,7 +715,7 @@ rgbimgmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-rotormodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+rotormodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h mymath.h \
@@ -723,7 +723,7 @@ rotormodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-selectmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+selectmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -731,7 +731,7 @@ selectmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-sgimodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+sgimodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -739,7 +739,7 @@ sgimodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-signalmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+signalmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -748,7 +748,7 @@ signalmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
 socketmodule.obj: abstract.h c:\mptn\include\netinet\in.h \
-	 c:\mptn\include\sys\socket.h ceval.h classobject.h cobject.h \
+	 c:\mptn\include\sys\socket.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -756,7 +756,7 @@ socketmodule.obj: abstract.h c:\mptn\include\netinet\in.h \
 	 pyfpe.h pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-soundex.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+soundex.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -764,7 +764,7 @@ soundex.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-stdwinmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+stdwinmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -772,7 +772,7 @@ stdwinmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-stropmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+stropmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -780,7 +780,7 @@ stropmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-structmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+structmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -788,7 +788,7 @@ structmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-sunaudiodev.obj: abstract.h c:\mptn\include\sys\ioctl.h ceval.h \
+sunaudiodev.obj: abstract.h c:\mptn\include\sys\ioctl.h eval.h \
 	 classobject.h cobject.h complexobject.h pyconfig.h dictobject.h \
 	 fileobject.h floatobject.h funcobject.h import.h intobject.h \
 	 intrcheck.h listobject.h longobject.h methodobject.h modsupport.h \
@@ -797,7 +797,7 @@ sunaudiodev.obj: abstract.h c:\mptn\include\sys\ioctl.h ceval.h \
 	 sliceobject.h stringobject.h structmember.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-svmodule.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
+svmodule.obj: abstract.h c:\mptn\include\sys\time.h eval.h classobject.h \
 	 cobject.h compile.h complexobject.h pyconfig.h dictobject.h \
 	 fileobject.h floatobject.h funcobject.h import.h intobject.h \
 	 intrcheck.h listobject.h longobject.h methodobject.h modsupport.h \
@@ -806,7 +806,7 @@ svmodule.obj: abstract.h c:\mptn\include\sys\time.h ceval.h classobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h \
 	 yuv.h
 
-syslogmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+syslogmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -814,7 +814,7 @@ syslogmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h syslog.h sysmodule.h traceback.h tupleobject.h
 
-termios.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+termios.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -822,7 +822,7 @@ termios.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-threadmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+threadmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -830,7 +830,7 @@ threadmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h thread.h traceback.h tupleobject.h
 
-timemodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+timemodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -838,7 +838,7 @@ timemodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 python.h pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-timingmodule.obj: abstract.h ceval.h classobject.h cobject.h \
+timingmodule.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -846,7 +846,7 @@ timingmodule.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h timing.h traceback.h tupleobject.h
 
-xxmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+xxmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -856,7 +856,7 @@ xxmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 
 yuvconvert.obj: yuv.h
 
-zlibmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+zlibmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -864,7 +864,7 @@ zlibmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-abstract.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+abstract.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -872,7 +872,7 @@ abstract.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-classobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+classobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -880,7 +880,7 @@ classobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 structmember.h sysmodule.h traceback.h tupleobject.h
 
-cobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+cobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -888,7 +888,7 @@ cobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-complexobject.obj: abstract.h ceval.h classobject.h cobject.h \
+complexobject.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -896,7 +896,7 @@ complexobject.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-dictobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+dictobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -904,7 +904,7 @@ dictobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-fileobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+fileobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -912,7 +912,7 @@ fileobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 structmember.h sysmodule.h traceback.h tupleobject.h
 
-floatobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+floatobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h mymath.h \
@@ -920,7 +920,7 @@ floatobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-frameobject.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+frameobject.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 frameobject.h funcobject.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -929,7 +929,7 @@ frameobject.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 rangeobject.h sliceobject.h stringobject.h structmember.h \
 	 sysmodule.h traceback.h tupleobject.h
 
-funcobject.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+funcobject.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -938,7 +938,7 @@ funcobject.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 stringobject.h structmember.h sysmodule.h traceback.h \
 	 tupleobject.h
 
-intobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+intobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -946,7 +946,7 @@ intobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-listobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+listobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -954,7 +954,7 @@ listobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-longobject.obj: abstract.h ceval.h classobject.h cobject.h \
+longobject.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longintrepr.h longobject.h methodobject.h modsupport.h \
@@ -963,7 +963,7 @@ longobject.obj: abstract.h ceval.h classobject.h cobject.h \
 	 rangeobject.h sliceobject.h stringobject.h sysmodule.h traceback.h \
 	 tupleobject.h
 
-methodobject.obj: abstract.h ceval.h classobject.h cobject.h \
+methodobject.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -971,7 +971,7 @@ methodobject.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h token.h traceback.h tupleobject.h
 
-moduleobject.obj: abstract.h ceval.h classobject.h cobject.h \
+moduleobject.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -979,7 +979,7 @@ moduleobject.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-object.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+object.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -987,7 +987,7 @@ object.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-rangeobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+rangeobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -995,7 +995,7 @@ rangeobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-sliceobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+sliceobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1003,7 +1003,7 @@ sliceobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-stringobject.obj: abstract.h ceval.h classobject.h cobject.h \
+stringobject.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -1011,7 +1011,7 @@ stringobject.obj: abstract.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-tupleobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+tupleobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1019,7 +1019,7 @@ tupleobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-typeobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+typeobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1027,7 +1027,7 @@ typeobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-xxobject.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+xxobject.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1082,7 +1082,7 @@ tokenizer.obj: pyconfig.h errcode.h mymalloc.h myproto.h pgenheaders.h \
 
 atof.obj: pyconfig.h
 
-bltinmodule.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+bltinmodule.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h eval.h fileobject.h \
 	 floatobject.h funcobject.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -1091,7 +1091,7 @@ bltinmodule.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-ceval.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+ceval.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h eval.h fileobject.h \
 	 floatobject.h frameobject.h funcobject.h import.h intobject.h \
 	 intrcheck.h listobject.h longobject.h methodobject.h modsupport.h \
@@ -1100,7 +1100,7 @@ ceval.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 rangeobject.h sliceobject.h stringobject.h sysmodule.h traceback.h \
 	 tupleobject.h
 
-compile.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+compile.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h graminit.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \
@@ -1109,7 +1109,7 @@ compile.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h \
 	 structmember.h sysmodule.h token.h traceback.h tupleobject.h
 
-errors.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+errors.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1119,7 +1119,7 @@ errors.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 
 fmod.obj: pyconfig.h mymath.h
 
-frozen.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+frozen.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1127,7 +1127,7 @@ frozen.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-frozenmain.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+frozenmain.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1135,7 +1135,7 @@ frozenmain.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-getargs.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+getargs.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1143,7 +1143,7 @@ getargs.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-getcompiler.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+getcompiler.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1151,7 +1151,7 @@ getcompiler.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-getcopyright.obj: abstract.h ceval.h classobject.h cobject.h \
+getcopyright.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -1161,7 +1161,7 @@ getcopyright.obj: abstract.h ceval.h classobject.h cobject.h \
 
 getmtime.obj: pyconfig.h
 
-getplatform.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+getplatform.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1169,7 +1169,7 @@ getplatform.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-getversion.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+getversion.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1182,7 +1182,7 @@ graminit.obj: bitset.h pyconfig.h grammar.h mymalloc.h myproto.h \
 
 hypot.obj: pyconfig.h mymath.h myproto.h
 
-import.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+import.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h errcode.h eval.h \
 	 fileobject.h floatobject.h funcobject.h import.h importdl.h \
 	 intobject.h intrcheck.h listobject.h longobject.h marshal.h \
@@ -1191,7 +1191,7 @@ import.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h token.h traceback.h tupleobject.h
 
-importdl.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+importdl.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h importdl.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -1199,7 +1199,7 @@ importdl.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-marshal.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+marshal.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longintrepr.h longobject.h marshal.h methodobject.h modsupport.h \
@@ -1207,7 +1207,7 @@ marshal.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
 	 pyerrors.h pyfpe.h pystate.h python.h pythonrun.h rangeobject.h \
 	 sliceobject.h stringobject.h sysmodule.h traceback.h tupleobject.h
 
-modsupport.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+modsupport.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1219,7 +1219,7 @@ mystrtoul.obj: pyconfig.h
 
 pyfpe.obj: pyconfig.h pyfpe.h
 
-pystate.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+pystate.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1227,8 +1227,8 @@ pystate.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 	 pythonrun.h rangeobject.h sliceobject.h stringobject.h sysmodule.h \
 	 traceback.h tupleobject.h
 
-pythonrun.obj: abstract.h bitset.h ceval.h classobject.h cobject.h \
-	 compile.h complexobject.h pyconfig.h dictobject.h errcode.h eval.h \
+pythonrun.obj: abstract.h bitset.h eval.h classobject.h cobject.h \
+	 compile.h complexobject.h pyconfig.h dictobject.h errcode.h \
 	 fileobject.h floatobject.h funcobject.h grammar.h import.h \
 	 intobject.h intrcheck.h listobject.h longobject.h marshal.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1236,7 +1236,7 @@ pythonrun.obj: abstract.h bitset.h ceval.h classobject.h cobject.h \
 	 pystate.h python.h pythonrun.h rangeobject.h sliceobject.h \
 	 stringobject.h sysmodule.h traceback.h tupleobject.h
 
-sigcheck.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+sigcheck.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1248,7 +1248,7 @@ strdup.obj: pyconfig.h mymalloc.h myproto.h
 
 strtod.obj: pyconfig.h
 
-structmember.obj: abstract.h ceval.h classobject.h cobject.h \
+structmember.obj: abstract.h eval.h classobject.h cobject.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 funcobject.h import.h intobject.h intrcheck.h listobject.h \
 	 longobject.h methodobject.h modsupport.h moduleobject.h mymalloc.h \
@@ -1257,7 +1257,7 @@ structmember.obj: abstract.h ceval.h classobject.h cobject.h \
 	 stringobject.h structmember.h sysmodule.h traceback.h \
 	 tupleobject.h
 
-sysmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
+sysmodule.obj: abstract.h eval.h classobject.h cobject.h complexobject.h \
 	 pyconfig.h dictobject.h fileobject.h floatobject.h funcobject.h \
 	 import.h intobject.h intrcheck.h listobject.h longobject.h \
 	 methodobject.h modsupport.h moduleobject.h mymalloc.h myproto.h \
@@ -1267,7 +1267,7 @@ sysmodule.obj: abstract.h ceval.h classobject.h cobject.h complexobject.h \
 
 thread.obj: pyconfig.h thread.h
 
-traceback.obj: abstract.h ceval.h classobject.h cobject.h compile.h \
+traceback.obj: abstract.h eval.h classobject.h cobject.h compile.h \
 	 complexobject.h pyconfig.h dictobject.h fileobject.h floatobject.h \
 	 frameobject.h funcobject.h import.h intobject.h intrcheck.h \
 	 listobject.h longobject.h methodobject.h modsupport.h \

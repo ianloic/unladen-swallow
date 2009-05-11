@@ -17,13 +17,13 @@ class StrTest(unittest.TestCase):
     def test_optimized_concat(self):
         x = 'x' * MAX_Py_ssize_t
         try:
-            x = x + '?'     # this statement uses a fast path in ceval.c
+            x = x + '?'     # this statement uses a fast path in eval.cc
         except OverflowError:
             pass
         else:
             self.fail("should have raised OverflowError")
         try:
-            x += '?'        # this statement uses a fast path in ceval.c
+            x += '?'        # this statement uses a fast path in eval.cc
         except OverflowError:
             pass
         else:

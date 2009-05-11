@@ -358,7 +358,7 @@ depend:
 
 ### OPUS MKMF:  Do not remove this line!  Generated dependencies follow.
 
-_tkinter.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+_tkinter.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -371,7 +371,7 @@ _tkinter.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-almodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+almodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -384,7 +384,7 @@ almodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-arraymodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+arraymodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -398,7 +398,7 @@ arraymodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-audioop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+audioop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -412,7 +412,7 @@ audioop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-binascii.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+binascii.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -425,7 +425,7 @@ binascii.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-bsddbmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+bsddbmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -439,7 +439,7 @@ bsddbmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-cdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+cdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -452,7 +452,7 @@ cdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-cgensupport.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+cgensupport.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_MODULES)\cgensupport.h $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h \
@@ -466,7 +466,7 @@ cgensupport.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-clmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+clmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -479,7 +479,7 @@ clmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-cmathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+cmathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -493,7 +493,7 @@ cmathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-cpickle.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+cpickle.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\cstringio.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -507,7 +507,7 @@ cpickle.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-cryptmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+cryptmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -521,7 +521,7 @@ cryptmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-cstringio.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+cstringio.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\cstringio.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -535,7 +535,7 @@ cstringio.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-cursesmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+cursesmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -549,7 +549,7 @@ cursesmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-dbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+dbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -562,7 +562,7 @@ dbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-dlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+dlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -575,7 +575,7 @@ dlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-errno.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+errno.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -588,7 +588,7 @@ errno.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobj
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-errnomodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+errnomodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -602,7 +602,7 @@ errnomodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-fcntlmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_INCLUDE)\ceval.h \
+fcntlmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -616,7 +616,7 @@ fcntlmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_I
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-flmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+flmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -630,7 +630,7 @@ flmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\structmember.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-fmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+fmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -643,7 +643,7 @@ fmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-fpectlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+fpectlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -657,7 +657,7 @@ fpectlmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-fpetestmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+fpetestmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -671,7 +671,7 @@ fpetestmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-gdbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+gdbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -686,7 +686,7 @@ gdbmmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 
 getbuildinfo.obj: pyconfig.h
 
-getpath.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+getpath.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -700,7 +700,7 @@ getpath.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-glmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_MODULES)\cgensupport.h \
+glmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_MODULES)\cgensupport.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -714,7 +714,7 @@ glmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_MODULES)\cgens
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-grpmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+grpmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(OS2TCPIP)\Include\grp.h $(PY_INCLUDE)\import.h \
@@ -728,7 +728,7 @@ grpmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-imageop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+imageop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -741,7 +741,7 @@ imageop.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-imgfile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+imgfile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -754,7 +754,7 @@ imgfile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-main.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+main.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -767,7 +767,7 @@ main.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobje
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-mathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+mathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -783,7 +783,7 @@ mathmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 
 md5c.obj: pyconfig.h $(PY_MODULES)\md5.h
 
-md5module.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+md5module.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -796,7 +796,7 @@ md5module.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-mpzmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+mpzmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -810,7 +810,7 @@ mpzmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-nismodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\ceval.h \
+nismodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -824,7 +824,7 @@ nismodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCL
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-operator.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+operator.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -837,7 +837,7 @@ operator.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-parsermodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+parsermodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h \
@@ -852,7 +852,7 @@ parsermodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\token.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-pcremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+pcremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -866,7 +866,7 @@ pcremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-posix.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+posix.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -880,7 +880,7 @@ posix.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobj
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-posixmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+posixmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -894,7 +894,7 @@ posixmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-puremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+puremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -907,7 +907,7 @@ puremodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-pwdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+pwdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -921,7 +921,7 @@ pwdmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-pypcre.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+pypcre.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\graminit.h $(PY_INCLUDE)\import.h \
@@ -935,7 +935,7 @@ pypcre.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classob
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-readline.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+readline.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -948,7 +948,7 @@ readline.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-resource.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\ceval.h \
+resource.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -962,7 +962,7 @@ resource.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLU
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-rgbimgmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+rgbimgmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -976,7 +976,7 @@ rgbimgmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-selectmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+selectmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -990,7 +990,7 @@ selectmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-sgimodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+sgimodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1003,7 +1003,7 @@ sgimodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-signalmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+signalmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1018,7 +1018,7 @@ signalmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
 socketmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\netinet\in.h \
-	 $(OS2TCPIP)\Include\sys\socket.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+	 $(OS2TCPIP)\Include\sys\socket.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1032,7 +1032,7 @@ socketmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\netinet\in.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-soundex.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+soundex.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1045,7 +1045,7 @@ soundex.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-stdwinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+stdwinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1059,7 +1059,7 @@ stdwinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-stropmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+stropmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1073,7 +1073,7 @@ stropmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-structmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+structmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1087,7 +1087,7 @@ structmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-sunaudiodev.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_INCLUDE)\ceval.h \
+sunaudiodev.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1101,7 +1101,7 @@ sunaudiodev.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\ioctl.h $(PY_I
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\structmember.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-svmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\ceval.h \
+svmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h \
@@ -1116,7 +1116,7 @@ svmodule.obj: $(PY_INCLUDE)\abstract.h $(OS2TCPIP)\Include\sys\time.h $(PY_INCLU
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h \
 	 $(PY_MODULES)\yuv.h
 
-syslogmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+syslogmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1130,7 +1130,7 @@ syslogmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(OS2TCPIP)\Include\syslog.h $(PY_INCLUDE)\sysmodule.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-termios.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+termios.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1143,7 +1143,7 @@ termios.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-threadmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+threadmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1157,7 +1157,7 @@ threadmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\thread.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-timemodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+timemodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1171,7 +1171,7 @@ timemodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-timingmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+timingmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1185,7 +1185,7 @@ timingmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_MODULES)\timing.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-xxmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+xxmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1200,7 +1200,7 @@ xxmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 
 yuvconvert.obj: $(PY_MODULES)\yuv.h
 
-zlibmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+zlibmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1213,7 +1213,7 @@ zlibmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-abstract.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+abstract.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1226,7 +1226,7 @@ abstract.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-classobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+classobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1240,7 +1240,7 @@ classobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\structmember.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-cobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+cobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1253,7 +1253,7 @@ cobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-complexobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+complexobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1267,7 +1267,7 @@ complexobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-dictobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+dictobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1280,7 +1280,7 @@ dictobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-fileobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+fileobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1294,7 +1294,7 @@ fileobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\structmember.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-floatobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+floatobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1308,7 +1308,7 @@ floatobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-frameobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+frameobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
@@ -1323,7 +1323,7 @@ frameobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\structmember.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-funcobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+funcobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1337,7 +1337,7 @@ funcobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\structmember.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-intobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+intobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1350,7 +1350,7 @@ intobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-listobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+listobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1363,7 +1363,7 @@ listobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-longobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+longobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1378,7 +1378,7 @@ longobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-methodobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+methodobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1392,7 +1392,7 @@ methodobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\token.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-moduleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+moduleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1406,7 +1406,7 @@ moduleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-object.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+object.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1419,7 +1419,7 @@ object.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classob
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-rangeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+rangeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1433,7 +1433,7 @@ rangeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-sliceobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+sliceobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1447,7 +1447,7 @@ sliceobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-stringobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+stringobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1461,7 +1461,7 @@ stringobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-tupleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+tupleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1475,7 +1475,7 @@ tupleobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-typeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+typeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1488,7 +1488,7 @@ typeobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-xxobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+xxobject.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1569,7 +1569,7 @@ tokenizer.obj: pyconfig.h $(PY_INCLUDE)\errcode.h $(PY_INCLUDE)\mymalloc.h \
 
 atof.obj: pyconfig.h
 
-bltinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+bltinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
@@ -1584,7 +1584,7 @@ bltinmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-ceval.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+ceval.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
@@ -1599,7 +1599,7 @@ ceval.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobj
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-compile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+compile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\graminit.h \
@@ -1615,7 +1615,7 @@ compile.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\token.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-errors.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+errors.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1630,7 +1630,7 @@ errors.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classob
 
 fmod.obj: pyconfig.h $(PY_INCLUDE)\mymath.h
 
-frozen.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+frozen.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1643,7 +1643,7 @@ frozen.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classob
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-frozenmain.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+frozenmain.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1656,7 +1656,7 @@ frozenmain.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\cla
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-getargs.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+getargs.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1669,7 +1669,7 @@ getargs.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-getcompiler.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+getcompiler.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1683,7 +1683,7 @@ getcompiler.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-getcopyright.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+getcopyright.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1699,7 +1699,7 @@ getcopyright.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 
 getmtime.obj: pyconfig.h
 
-getplatform.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+getplatform.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1713,7 +1713,7 @@ getplatform.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-getversion.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+getversion.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1733,7 +1733,7 @@ graminit.obj: $(PY_INCLUDE)\bitset.h pyconfig.h $(PY_INCLUDE)\grammar.h \
 
 hypot.obj: pyconfig.h $(PY_INCLUDE)\mymath.h $(PY_INCLUDE)\myproto.h
 
-import.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+import.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\errcode.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h \
@@ -1748,7 +1748,7 @@ import.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classob
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\token.h \
 	 $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-importdl.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+importdl.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_PYTHON)\importdl.h \
@@ -1762,7 +1762,7 @@ importdl.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\class
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-marshal.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+marshal.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1776,7 +1776,7 @@ marshal.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-modsupport.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+modsupport.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1793,7 +1793,7 @@ mystrtoul.obj: pyconfig.h
 
 pyfpe.obj: pyconfig.h $(PY_INCLUDE)\pyfpe.h
 
-pystate.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+pystate.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1806,7 +1806,7 @@ pystate.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classo
 	 $(PY_INCLUDE)\sliceobject.h $(PY_INCLUDE)\stringobject.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-pythonrun.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\bitset.h $(PY_INCLUDE)\ceval.h \
+pythonrun.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\bitset.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h \
 	 $(PY_INCLUDE)\complexobject.h pyconfig.h $(PY_INCLUDE)\dictobject.h \
 	 $(PY_INCLUDE)\errcode.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\fileobject.h \
@@ -1822,7 +1822,7 @@ pythonrun.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\bitset.h $(PY_INCLUDE)\cev
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h \
 	 $(PY_INCLUDE)\tupleobject.h
 
-sigcheck.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+sigcheck.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1839,7 +1839,7 @@ strdup.obj: pyconfig.h $(PY_INCLUDE)\mymalloc.h $(PY_INCLUDE)\myproto.h
 
 strtod.obj: pyconfig.h
 
-structmember.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
+structmember.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h \
 	 $(PY_INCLUDE)\classobject.h $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h \
@@ -1853,7 +1853,7 @@ structmember.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h \
 	 $(PY_INCLUDE)\stringobject.h $(PY_INCLUDE)\structmember.h \
 	 $(PY_INCLUDE)\sysmodule.h $(PY_INCLUDE)\traceback.h $(PY_INCLUDE)\tupleobject.h
 
-sysmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+sysmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\complexobject.h pyconfig.h \
 	 $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h $(PY_INCLUDE)\floatobject.h \
 	 $(PY_INCLUDE)\funcobject.h $(PY_INCLUDE)\import.h $(PY_INCLUDE)\intobject.h \
@@ -1869,7 +1869,7 @@ sysmodule.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\clas
 
 thread.obj: pyconfig.h $(PY_INCLUDE)\thread.h
 
-traceback.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\ceval.h $(PY_INCLUDE)\classobject.h \
+traceback.obj: $(PY_INCLUDE)\abstract.h $(PY_INCLUDE)\eval.h $(PY_INCLUDE)\classobject.h \
 	 $(PY_INCLUDE)\cobject.h $(PY_INCLUDE)\compile.h $(PY_INCLUDE)\complexobject.h \
 	 pyconfig.h $(PY_INCLUDE)\dictobject.h $(PY_INCLUDE)\fileobject.h \
 	 $(PY_INCLUDE)\floatobject.h $(PY_INCLUDE)\frameobject.h \

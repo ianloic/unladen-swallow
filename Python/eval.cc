@@ -3124,7 +3124,7 @@ fail: /* Jump here from prelude on failure */
   thread-safe, by introducing sys.exc_info() which gets it from tstate;
   but that's really a separate improvement.
 
-  The reset_exc_info() function in ceval.c restores the tstate->exc_ZZZ
+  The reset_exc_info() function in eval.cc restores the tstate->exc_ZZZ
   variables to what they were before the current frame was called.  The
   _PyEval_SetExcInfo() function saves them on the frame so that
   reset_exc_info() can restore them.  The invariant is that
@@ -4074,7 +4074,7 @@ do_call(PyObject *func, PyObject ***pp_stack, int na, int nk)
 #ifdef CALL_PROFILE
 	/* At this point, we have to look at the type of func to
 	   update the call stats properly.  Do it here so as to avoid
-	   exposing the call stats machinery outside ceval.c
+	   exposing the call stats machinery outside eval.cc.
 	*/
 	if (PyFunction_Check(func))
 		PCALL(PCALL_FUNCTION);
@@ -4162,7 +4162,7 @@ ext_do_call(PyObject *func, PyObject ***pp_stack, int flags, int na, int nk)
 #ifdef CALL_PROFILE
 	/* At this point, we have to look at the type of func to
 	   update the call stats properly.  Do it here so as to avoid
-	   exposing the call stats machinery outside ceval.c
+	   exposing the call stats machinery outside eval.cc.
 	*/
 	if (PyFunction_Check(func))
 		PCALL(PCALL_FUNCTION);

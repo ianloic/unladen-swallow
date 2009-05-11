@@ -21,7 +21,7 @@ PyAPI_DATA(int) Py_DivisionWarningFlag;
 PyAPI_DATA(int) Py_DontWriteBytecodeFlag;
 PyAPI_DATA(int) Py_NoUserSiteDirectory;
 /* _XXX Py_QnewFlag should go away in 3.0.  It's true iff -Qnew is passed,
-  on the command line, and is used in 2.2 by ceval.c to make all "/" divisions
+  on the command line, and is used in 2.2 by eval.cc to make all "/" divisions
   true divisions (which they will be in 3.0). */
 PyAPI_DATA(int) _Py_QnewFlag;
 /* Warn about 3.x issues */

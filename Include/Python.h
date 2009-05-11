@@ -124,15 +124,13 @@
 #include "pyarena.h"
 #include "modsupport.h"
 #include "pythonrun.h"
-#include "ceval.h"
+#include "compile.h"
+#include "eval.h"
 #include "sysmodule.h"
 #include "intrcheck.h"
 #include "import.h"
 
 #include "abstract.h"
-
-#include "compile.h"
-#include "eval.h"
 
 #include "pystrtod.h"
 #include "pystrcmp.h"

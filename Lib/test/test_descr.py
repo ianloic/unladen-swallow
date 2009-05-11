@@ -4277,7 +4277,7 @@ order (MRO) for bases """
                     check(iexpr, c, N2)
 
     def test_assign_slice(self):
-        # ceval.c's assign_slice used to check for
+        # eval.cc's _PyEval_AssignSlice() used to check for
         # tp->tp_as_sequence->sq_slice instead of
         # tp->tp_as_sequence->sq_ass_slice
 

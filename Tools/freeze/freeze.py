@@ -215,7 +215,7 @@ def main():
         prefix = sys.prefix
 
     # determine whether -p points to the Python source tree
-    ishome = os.path.exists(os.path.join(prefix, 'Python', 'ceval.c'))
+    ishome = os.path.exists(os.path.join(prefix, 'Python', 'eval.cc'))
 
     # locations derived from options
     version = sys.version[:3]
