@@ -706,7 +706,7 @@ PYTHON_HEADERS= \
 		Python/global_llvm_data.h \
 		Python/global_llvm_data_fwd.h \
 		Python/ll_compile.h \
-		Util/TypeBuilder.h \
+		Util/PyTypeBuilder.h \
 		pyconfig.h \
 		$(PARSER_HEADERS)
 

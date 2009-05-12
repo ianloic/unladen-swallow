@@ -13,7 +13,7 @@ typedef struct {
     int b_level;		/* value stack level to pop to */
 } PyTryBlock;
 
-/* Keep this in sync with Python/ll_compile.cc. */
+/* Keep this in sync with Util/PyTypeBuilder.h. */
 typedef struct _frame {
     PyObject_VAR_HEAD
     struct _frame *f_back;	/* previous frame, or NULL */

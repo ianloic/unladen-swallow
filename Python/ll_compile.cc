@@ -6,7 +6,7 @@
 #include "frameobject.h"
 
 #include "Python/global_llvm_data.h"
-#include "Util/TypeBuilder.h"
+#include "Util/PyTypeBuilder.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BasicBlock.h"
@@ -15,7 +15,6 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
-#include "llvm/Intrinsics.h"
 #include "llvm/Module.h"
 #include "llvm/Type.h"
 
@@ -28,9 +27,7 @@ using llvm::Constant;
 using llvm::ConstantInt;
 using llvm::Function;
 using llvm::FunctionType;
-using llvm::IntegerType;
 using llvm::Module;
-using llvm::PointerType;
 using llvm::Type;
 using llvm::Value;
 using llvm::array_endof;
@@ -47,328 +44,6 @@ enum UnwindReason {
     UNWIND_YIELD
 };
 
-#ifdef Py_TRACE_REFS
-#define OBJECT_HEAD_FIELDS \
-        FIELD_NEXT, \
-        FIELD_PREV, \
-        FIELD_REFCNT, \
-        FIELD_TYPE,
-#else
-#define OBJECT_HEAD_FIELDS \
-        FIELD_REFCNT, \
-        FIELD_TYPE,
-#endif
-
-template<> class TypeBuilder<PyObject> {
-public:
-    static const Type *cache(Module *module) {
-        // Clang's name for the PyObject struct.
-        return module->getTypeByName("struct._object");
-    }
-
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-    };
-};
-typedef TypeBuilder<PyObject> ObjectTy;
-
-template<> class TypeBuilder<PyTupleObject> {
-public:
-    static const Type *cache(Module *module) {
-        std::string pytupleobject_name("__pytupleobject");
-        const Type *result = module->getTypeByName(pytupleobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with tupleobject.h.
-        result = llvm::StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            TypeBuilder<PyObject>::cache(module),
-            // From PyObject_VAR_HEAD
-            TypeBuilder<ssize_t>::cache(module),
-            // From PyTupleObject
-            TypeBuilder<PyObject*[]>::cache(module),  // ob_item
-            NULL);
-
-        module->addTypeName(pytupleobject_name, result);
-        return result;
-    }
-
-    enum Fields {
-        FIELD_OBJECT,
-        FIELD_SIZE,
-        FIELD_ITEM,
-    };
-};
-typedef TypeBuilder<PyTupleObject> TupleTy;
-
-template<> class TypeBuilder<PyListObject> {
-public:
-    static const Type *cache(Module *module) {
-        std::string pylistobject_name("__pylistobject");
-        const Type *result = module->getTypeByName(pylistobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with listobject.h.
-        result = llvm::StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            TypeBuilder<PyObject>::cache(module),
-            // From PyObject_VAR_HEAD
-            TypeBuilder<ssize_t>::cache(module),
-            // From PyListObject
-            TypeBuilder<PyObject**>::cache(module),  // ob_item
-            TypeBuilder<Py_ssize_t>::cache(module),  // allocated
-            NULL);
-
-        module->addTypeName(pylistobject_name, result);
-        return result;
-    }
-
-    enum Fields {
-        FIELD_OBJECT,
-        FIELD_SIZE,
-        FIELD_ITEM,
-        FIELD_ALLOCATED,
-    };
-};
-typedef TypeBuilder<PyListObject> ListTy;
-
-template<> class TypeBuilder<PyTypeObject> {
-public:
-    static const Type *cache(Module *module) {
-        // Clang's name for the PyTypeObject struct.
-        return module->getTypeByName("struct._typeobject");
-    }
-
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-        FIELD_SIZE,
-        FIELD_NAME,
-        FIELD_BASICSIZE,
-        FIELD_ITEMSIZE,
-        FIELD_DEALLOC,
-        FIELD_PRINT,
-        FIELD_GETATTR,
-        FIELD_SETATTR,
-        FIELD_COMPARE,
-        FIELD_REPR,
-        FIELD_AS_NUMBER,
-        FIELD_AS_SEQUENCE,
-        FIELD_AS_MAPPING,
-        FIELD_HASH,
-        FIELD_CALL,
-        FIELD_STR,
-        FIELD_GETATTRO,
-        FIELD_SETATTRO,
-        FIELD_AS_BUFFER,
-        FIELD_FLAGS,
-        FIELD_DOC,
-        FIELD_TRAVERSE,
-        FIELD_CLEAR,
-        FIELD_RICHCOMPARE,
-        FIELD_WEAKLISTOFFSET,
-        FIELD_ITER,
-        FIELD_ITERNEXT,
-        FIELD_METHODS,
-        FIELD_MEMBERS,
-        FIELD_GETSET,
-        FIELD_BASE,
-        FIELD_DICT,
-        FIELD_DESCR_GET,
-        FIELD_DESCR_SET,
-        FIELD_DICTOFFSET,
-        FIELD_INIT,
-        FIELD_ALLOC,
-        FIELD_NEW,
-        FIELD_FREE,
-        FIELD_IS_GC,
-        FIELD_BASES,
-        FIELD_MRO,
-        FIELD_CACHE,
-        FIELD_SUBCLASSES,
-        FIELD_WEAKLIST,
-        FIELD_DEL,
-        FIELD_TP_VERSION_TAG,
-#ifdef COUNT_ALLOCS
-        FIELD_ALLOCS,
-        FIELD_FREES,
-        FIELD_MAXALLOC,
-        FIELD_PREV,
-        FIELD_NEXT,
-#endif
-    };
-};
-typedef TypeBuilder<PyTypeObject> TypeTy;
-
-template<> class TypeBuilder<PyCodeObject> {
-public:
-    static const Type *cache(Module *module) {
-        std::string pycodeobject_name("__pycodeobject");
-        const Type *result = module->getTypeByName(pycodeobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with code.h.
-        const Type *p_pyobject_type = TypeBuilder<PyObject*>::cache(module);
-        const Type *int_type = TypeBuilder<int>::cache(module);
-        result = llvm::StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            TypeBuilder<PyObject>::cache(module),
-            // From PyCodeObject
-            int_type,  // co_argcount
-            int_type,  // co_nlocals
-            int_type,  // co_stacksize
-            int_type,  // co_flags
-            p_pyobject_type,  // co_code
-            p_pyobject_type,  // co_consts
-            p_pyobject_type,  // co_names
-            p_pyobject_type,  // co_varnames
-            p_pyobject_type,  // co_freevars
-            p_pyobject_type,  // co_cellvars
-            //  Not bothering with defining the Inst struct.
-            TypeBuilder<char*>::cache(module),  // co_tcode
-            p_pyobject_type,  // co_filename
-            p_pyobject_type,  // co_name
-            int_type,  // co_firstlineno
-            p_pyobject_type,  // co_lnotab
-            TypeBuilder<char*>::cache(module),  //co_zombieframe
-            p_pyobject_type,  // co_llvm_function
-            NULL);
-
-        module->addTypeName(pycodeobject_name, result);
-        return result;
-    }
-
-    enum Fields {
-        FIELD_OBJECT,
-        FIELD_ARGCOUNT,
-        FIELD_NLOCALS,
-        FIELD_STACKSIZE,
-        FIELD_FLAGS,
-        FIELD_CODE,
-        FIELD_CONSTS,
-        FIELD_NAMES,
-        FIELD_VARNAMES,
-        FIELD_FREEVARS,
-        FIELD_CELLVARS,
-        FIELD_TCODE,
-        FIELD_FILENAME,
-        FIELD_NAME,
-        FIELD_FIRSTLINENO,
-        FIELD_LNOTAB,
-        FIELD_ZOMBIEFRAME,
-        FIELD_LLVM_FUNCTION,
-    };
-};
-typedef TypeBuilder<PyCodeObject> CodeTy;
-
-template<> class TypeBuilder<PyTryBlock> {
-public:
-    static const Type *cache(Module *module) {
-        const Type *int_type = TypeBuilder<int>::cache(module);
-        return llvm::StructType::get(
-            // b_type, b_handler, b_level
-            int_type, int_type, int_type, NULL);
-    }
-    enum Fields {
-        FIELD_TYPE,
-        FIELD_HANDLER,
-        FIELD_LEVEL,
-    };
-};
-
-template<> class TypeBuilder<PyFrameObject> {
-public:
-    static const Type *cache(Module *module) {
-        std::string pyframeobject_name("__pyframeobject");
-        const Type *result = module->getTypeByName(pyframeobject_name);
-        if (result != NULL)
-            return result;
-
-        // Keep this in sync with frameobject.h.
-        const Type *p_pyobject_type = TypeBuilder<PyObject*>::cache(module);
-        const Type *int_type = TypeBuilder<int>::cache(module);
-        result = llvm::StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            ObjectTy::cache(module),
-            // From PyObject_VAR_HEAD
-            TypeBuilder<ssize_t>::cache(module),
-            // From struct _frame
-            p_pyobject_type,  // f_back
-            TypeBuilder<PyCodeObject*>::cache(module),  // f_code
-            p_pyobject_type,  // f_builtins
-            p_pyobject_type,  // f_globals
-            p_pyobject_type,  // f_locals
-            TypeBuilder<PyObject**>::cache(module),  // f_valuestack
-            TypeBuilder<PyObject**>::cache(module),  // f_stacktop
-            p_pyobject_type,  // f_trace
-            p_pyobject_type,  // f_exc_type
-            p_pyobject_type,  // f_exc_value
-            p_pyobject_type,  // f_exc_traceback
-            // f_tstate; punt on the type:
-            TypeBuilder<char*>::cache(module),
-            int_type,  // f_lasti
-            int_type,  // f_lineno
-            TypeBuilder<unsigned char>::cache(module),  // f_throwflag
-            TypeBuilder<unsigned char>::cache(module),  // f_iblock
-            // f_blockstack:
-            TypeBuilder<PyTryBlock[CO_MAXBLOCKS]>::cache(module),
-            // f_localsplus, flexible array.
-            TypeBuilder<PyObject*[]>::cache(module),
-            NULL);
-
-        module->addTypeName(pyframeobject_name, result);
-        return result;
-    }
-
-    enum Fields {
-        FIELD_OBJECT_HEAD,
-        FIELD_OB_SIZE,
-        FIELD_BACK,
-        FIELD_CODE,
-        FIELD_BUILTINS,
-        FIELD_GLOBALS,
-        FIELD_LOCALS,
-        FIELD_VALUESTACK,
-        FIELD_STACKTOP,
-        FIELD_TRACE,
-        FIELD_EXC_TYPE,
-        FIELD_EXC_VALUE,
-        FIELD_EXC_TRACEBACK,
-        FIELD_TSTATE,
-        FIELD_LASTI,
-        FIELD_LINENO,
-        FIELD_THROWFLAG,
-        FIELD_IBLOCK,
-        FIELD_BLOCKSTACK,
-        FIELD_LOCALSPLUS,
-    };
-};
-typedef TypeBuilder<PyFrameObject> FrameTy;
-
-template<> class TypeBuilder<PyExcInfo> {
-public:
-    static const Type *cache(Module *module) {
-        // Clang's name for the PyExcInfo struct defined in
-        // llvm_inline_functions.c.
-        return module->getTypeByName("struct.PyExcInfo");
-    }
-    enum Fields {
-        FIELD_EXC,
-        FIELD_VAL,
-        FIELD_TB,
-    };
-};
-
 static const FunctionType *
 get_function_type(Module *module)
 {
@@ -379,7 +54,7 @@ get_function_type(Module *module)
     if (result != NULL)
         return result;
 
-    result = TypeBuilder<PyObject*(PyFrameObject*)>::cache(module);
+    result = PyTypeBuilder<PyObject*(PyFrameObject*)>::get();
     module->addTypeName(function_type_name, result);
     return result;
 }
@@ -414,10 +89,10 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     // any other instructions in the 'entry' block.
 
     this->stack_pointer_addr_ = this->builder_.CreateAlloca(
-        TypeBuilder<PyObject**>::cache(this->module_),
+        PyTypeBuilder<PyObject**>::get(),
         NULL, "stack_pointer_addr");
     this->retval_addr_ = this->builder_.CreateAlloca(
-        TypeBuilder<PyObject*>::cache(this->module_),
+        PyTypeBuilder<PyObject*>::get(),
         NULL, "retval_addr");
     this->unwind_reason_addr_ = this->builder_.CreateAlloca(
         Type::Int8Ty, NULL, "unwind_reason_addr");
@@ -437,7 +112,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                                this->stack_pointer_addr_);
     /* f_stacktop remains NULL unless yield suspends the frame. */
     this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject **>::cache(this->module_)),
+        Constant::getNullValue(PyTypeBuilder<PyObject **>::get()),
         f_stacktop);
 
     Value *code = this->builder_.CreateLoad(
@@ -450,14 +125,14 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         this->builder_.CreateBitCast(
             this->builder_.CreateLoad(
                 this->builder_.CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
-            TypeBuilder<PyTupleObject*>::cache(this->module_));
+            PyTypeBuilder<PyTupleObject*>::get());
     // Get the address of the const_tuple's first item, for convenient
     // indexing of all its items.
     this->consts_ = this->GetTupleItemSlot(consts_tuple, 0);
     Value *names_tuple = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
             this->builder_.CreateStructGEP(code, CodeTy::FIELD_NAMES)),
-        TypeBuilder<PyTupleObject*>::cache(this->module_),
+        PyTypeBuilder<PyTupleObject*>::get(),
         "names");
     // Get the address of the names_tuple's first item as well.
     this->names_ = this->GetTupleItemSlot(names_tuple, 0);
@@ -483,13 +158,13 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
             this->builder_.CreateLoad(
                 this->builder_.CreateStructGEP(this->frame_,
                                                FrameTy::FIELD_GLOBALS)),
-            TypeBuilder<PyObject *>::cache(this->module_));
+            PyTypeBuilder<PyObject *>::get());
     this->builtins_ =
         this->builder_.CreateBitCast(
             this->builder_.CreateLoad(
                 this->builder_.CreateStructGEP(this->frame_,
                                                FrameTy::FIELD_BUILTINS)),
-            TypeBuilder<PyObject *>::cache(this->module_));
+            PyTypeBuilder<PyObject *>::get());
 
     // Support generator.throw().  If frame->f_throwflag is set, the
     // caller has set an exception, and we're supposed to propagate
@@ -523,7 +198,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     BasicBlock *start = BasicBlock::Create("body_start", this->function_);
     this->yield_resume_switch_->addCase(
-        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_), -1),
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), -1),
         start);
 
     this->builder_.SetInsertPoint(this->unreachable_block_);
@@ -541,7 +216,7 @@ LlvmFunctionBuilder::FillPropagateExceptionBlock()
 {
     this->builder_.SetInsertPoint(this->propagate_exception_block_);
     this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
         this->retval_addr_);
     this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
@@ -603,15 +278,15 @@ LlvmFunctionBuilder::FillUnwindBlock()
                 this->frame_));
         Value *block_type = this->builder_.CreateExtractValue(
             popped_block,
-            TypeBuilder<PyTryBlock>::FIELD_TYPE,
+            PyTypeBuilder<PyTryBlock>::FIELD_TYPE,
             "block_type");
         Value *block_handler = this->builder_.CreateExtractValue(
             popped_block,
-            TypeBuilder<PyTryBlock>::FIELD_HANDLER,
+            PyTypeBuilder<PyTryBlock>::FIELD_HANDLER,
             "block_handler");
         Value *block_level = this->builder_.CreateExtractValue(
             popped_block,
-            TypeBuilder<PyTryBlock>::FIELD_LEVEL,
+            PyTypeBuilder<PyTryBlock>::FIELD_LEVEL,
             "block_level");
 
         // Handle SETUP_LOOP with UNWIND_CONTINUE.
@@ -708,7 +383,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
         // can return into it.  This alloca _won't_ be optimized by
         // mem2reg because its address is taken.
         Value *exc_info = this->CreateAllocaInEntryBlock(
-            TypeBuilder<PyExcInfo>::cache(this->module_), NULL, "exc_info");
+            PyTypeBuilder<PyExcInfo>::get(), NULL, "exc_info");
         this->builder_.CreateCall2(
             this->GetGlobalFunction<void(PyExcInfo*, int)>(
                 "_PyLlvm_WrapEnterExceptOrFinally"),
@@ -716,13 +391,15 @@ LlvmFunctionBuilder::FillUnwindBlock()
             block_type);
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<PyExcInfo>::FIELD_TB)));
+                           exc_info, PyTypeBuilder<PyExcInfo>::FIELD_TB)));
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<PyExcInfo>::FIELD_VAL)));
+                           exc_info,
+                           PyTypeBuilder<PyExcInfo>::FIELD_VAL)));
         this->Push(this->builder_.CreateLoad(
                        this->builder_.CreateStructGEP(
-                           exc_info, TypeBuilder<PyExcInfo>::FIELD_EXC)));
+                           exc_info,
+                           PyTypeBuilder<PyExcInfo>::FIELD_EXC)));
         this->builder_.CreateBr(goto_block_handler);
 
         this->builder_.SetInsertPoint(handle_finally);
@@ -757,7 +434,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
         Value *unwind_reason_as_pyint = this->builder_.CreateCall(
             this->GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
             this->builder_.CreateZExt(unwind_reason,
-                                      TypeBuilder<long>::cache(this->module_)),
+                                      PyTypeBuilder<long>::get()),
             "unwind_reason_as_pyint");
         this->Push(unwind_reason_as_pyint);
 
@@ -828,7 +505,7 @@ LlvmFunctionBuilder::SetLineNumber(int line)
     Value *f_lineno = this->builder_.CreateStructGEP(
         this->frame_, FrameTy::FIELD_LINENO, "f_lineno");
     this->builder_.CreateStore(
-        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_), line),
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), line),
         f_lineno);
 }
 
@@ -971,7 +648,7 @@ LlvmFunctionBuilder::LOAD_NAME(int index)
         this->GetGlobalFunction<PyObject *(PyFrameObject*, int)>(
             "_PyEval_LoadName"),
         this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+        ConstantInt::get(PyTypeBuilder<int>::get(), index));
     PropagateExceptionOnNull(result);
     Push(result);
 }
@@ -984,7 +661,7 @@ LlvmFunctionBuilder::STORE_NAME(int index)
         this->GetGlobalFunction<int(PyFrameObject*, int, PyObject*)>(
             "_PyEval_StoreName"),
         this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index),
+        ConstantInt::get(PyTypeBuilder<int>::get(), index),
         to_store);
     PropagateExceptionOnNonZero(err);
 }
@@ -996,7 +673,7 @@ LlvmFunctionBuilder::DELETE_NAME(int index)
         this->GetGlobalFunction<int(PyFrameObject*, int)>(
             "_PyEval_DeleteName"),
         this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+        ConstantInt::get(PyTypeBuilder<int>::get(), index));
     PropagateExceptionOnNonZero(err);
 }
 
@@ -1035,7 +712,7 @@ LlvmFunctionBuilder::DELETE_ATTR(int index)
     Value *attr = this->LookupName(index);
     Value *obj = this->Pop();
     Value *value =
-        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_));
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get());
     Function *pyobj_setattr = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
     Value *result = this->builder_.CreateCall3(
@@ -1064,7 +741,7 @@ LlvmFunctionBuilder::LOAD_FAST(int index)
             "_PyEval_RaiseForUnboundLocal");
     this->builder_.CreateCall2(
         do_raise, this->frame_,
-        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(),
                                index));
     this->PropagateException();
 
@@ -1099,16 +776,16 @@ LlvmFunctionBuilder::WITH_CLEANUP()
     */
 
     Value *exc_type = this->CreateAllocaInEntryBlock(
-        TypeBuilder<PyObject*>::cache(this->module_),
+        PyTypeBuilder<PyObject*>::get(),
         NULL, "WITH_CLEANUP_exc_type");
     Value *exc_value = this->CreateAllocaInEntryBlock(
-        TypeBuilder<PyObject*>::cache(this->module_),
+        PyTypeBuilder<PyObject*>::get(),
         NULL, "WITH_CLEANUP_exc_value");
     Value *exc_traceback = this->CreateAllocaInEntryBlock(
-        TypeBuilder<PyObject*>::cache(this->module_),
+        PyTypeBuilder<PyObject*>::get(),
         NULL, "WITH_CLEANUP_exc_traceback");
     Value *exit_func = this->CreateAllocaInEntryBlock(
-        TypeBuilder<PyObject*>::cache(this->module_),
+        PyTypeBuilder<PyObject*>::get(),
         NULL, "WITH_CLEANUP_exit_func");
 
     BasicBlock *handle_none =
@@ -1209,7 +886,7 @@ LlvmFunctionBuilder::WITH_CLEANUP()
     args.push_back(this->builder_.CreateLoad(exc_value));
     args.push_back(this->builder_.CreateLoad(exc_traceback));
     args.push_back(
-        Constant::getNullValue(TypeBuilder<PyObject *>::cache(this->module_)));
+        Constant::getNullValue(PyTypeBuilder<PyObject *>::get()));
     Value *ret = this->builder_.CreateCall(
         this->GetGlobalFunction<PyObject *(PyObject *, ...)>(
             "PyObject_CallFunctionObjArgs"),
@@ -1292,7 +969,7 @@ LlvmFunctionBuilder::MAKE_CLOSURE(int num_defaults)
                                                  this->function_);
 
         Value *tupsize = ConstantInt::get(
-            TypeBuilder<Py_ssize_t>::cache(this->module_), num_defaults);
+            PyTypeBuilder<Py_ssize_t>::get(), num_defaults);
         Function *pytuple_new =
             this->GetGlobalFunction<PyObject *(Py_ssize_t)>("PyTuple_New");
         Value *defaults = this->builder_.CreateCall(pytuple_new, tupsize,
@@ -1336,7 +1013,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     // XXX(twouters): find out if this is really necessary; we just end up
     // using the stack pointer anyway, even in the error case.
     Value *temp_stack_pointer_addr = this->CreateAllocaInEntryBlock(
-        TypeBuilder<PyObject**>::cache(this->module_),
+        PyTypeBuilder<PyObject**>::get(),
         0, "CALL_FUNCTION_stack_pointer_addr");
     this->builder_.CreateStore(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
@@ -1344,7 +1021,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     Value *result = this->builder_.CreateCall2(
         call_function,
         temp_stack_pointer_addr,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
+        ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
         "CALL_FUNCTION_result");
     this->builder_.CreateStore(
         this->builder_.CreateLoad(temp_stack_pointer_addr),
@@ -1369,8 +1046,8 @@ LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
     Value *result = this->builder_.CreateCall3(
         call_function,
         this->stack_pointer_addr_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), num_args),
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), call_flag),
+        ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
+        ConstantInt::get(PyTypeBuilder<int>::get(), call_flag),
         "CALL_FUNCTION_VAR_KW_result");
     this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
@@ -1431,7 +1108,7 @@ LlvmFunctionBuilder::LOAD_DEREF(int index)
             "_PyEval_RaiseForUnboundFreeVar");
     this->builder_.CreateCall2(
         do_raise, this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), index));
+        ConstantInt::get(PyTypeBuilder<int>::get(), index));
 
     this->FallThroughTo(error);
     this->PropagateException();
@@ -1545,13 +1222,13 @@ LlvmFunctionBuilder::DELETE_FAST(int index)
         void(PyFrameObject *, int)>("_PyEval_RaiseForUnboundLocal");
     this->builder_.CreateCall2(
         do_raise, this->frame_,
-        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(),
                                index));
     this->PropagateException();
 
     this->builder_.SetInsertPoint(success);
     this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject *>::cache(this->module_)),
+        Constant::getNullValue(PyTypeBuilder<PyObject *>::get()),
         local_slot);
     this->DecRef(orig_value);
 }
@@ -1583,7 +1260,7 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
     Value *iter_tp = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
             this->builder_.CreateStructGEP(iter, ObjectTy::FIELD_TYPE)),
-        TypeBuilder<PyTypeObject *>::cache(this->module_),
+        PyTypeBuilder<PyTypeObject *>::get(),
         "iter_type");
     Value *iternext = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(iter_tp, TypeTy::FIELD_ITERNEXT),
@@ -1637,8 +1314,8 @@ LlvmFunctionBuilder::POP_BLOCK()
             "PyFrame_BlockPop"),
         this->frame_);
     Value *pop_to_level = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(block_info,
-                                       TypeBuilder<PyTryBlock>::FIELD_LEVEL));
+        this->builder_.CreateStructGEP(
+            block_info, PyTypeBuilder<PyTryBlock>::FIELD_LEVEL));
     Value *pop_to_addr =
         this->builder_.CreateGEP(this->stack_bottom_, pop_to_level);
     this->PopAndDecrefTo(pop_to_addr);
@@ -1733,7 +1410,7 @@ LlvmFunctionBuilder::END_FINALLY()
     // This is a "re-raise" rather than a new exception, so we don't
     // jump to the propagate_exception_block_.
     this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
         this->retval_addr_);
     this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
@@ -1791,7 +1468,7 @@ LlvmFunctionBuilder::CONTINUE_LOOP(llvm::BasicBlock *target,
     Value *pytarget = this->builder_.CreateCall(
             this->GetGlobalFunction<PyObject *(long)>("PyInt_FromLong"),
             this->builder_.CreateZExt(unwind_target,
-                                      TypeBuilder<long>::cache(this->module_)));
+                                      PyTypeBuilder<long>::get()));
     this->builder_.CreateStore(pytarget, this->retval_addr_);
     this->builder_.CreateBr(this->unwind_block_);
 
@@ -1829,7 +1506,7 @@ LlvmFunctionBuilder::YIELD_VALUE()
     // one for the default target, and the other for the (-1=>start)
     // mapping we added in the entry block.
     ConstantInt *yield_number =
-        ConstantInt::getSigned(TypeBuilder<int>::cache(this->module_),
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(),
                                -this->yield_resume_switch_->getNumCases());
     this->yield_resume_switch_->addCase(yield_number, yield_resume);
 
@@ -1871,7 +1548,7 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
         ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
         this->unwind_reason_addr_);
     this->builder_.CreateStore(
-        Constant::getNullValue(TypeBuilder<PyObject*>::cache(this->module_)),
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
         this->retval_addr_);
 
     Function *do_raise = this->GetGlobalFunction<
@@ -1893,11 +1570,11 @@ void
 LlvmFunctionBuilder::RAISE_VARARGS_ZERO()
 {
     Value *exc_tb = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *exc_inst = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *exc_type = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
@@ -1905,9 +1582,9 @@ void
 LlvmFunctionBuilder::RAISE_VARARGS_ONE()
 {
     Value *exc_tb = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *exc_inst = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *exc_type = this->Pop();
     this->DoRaise(exc_type, exc_inst, exc_tb);
 }
@@ -1916,7 +1593,7 @@ void
 LlvmFunctionBuilder::RAISE_VARARGS_TWO()
 {
     Value *exc_tb = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *exc_inst = this->Pop();
     Value *exc_type = this->Pop();
     this->DoRaise(exc_type, exc_inst, exc_tb);
@@ -2167,7 +1844,7 @@ LlvmFunctionBuilder::RichCompare(Value *lhs, Value *rhs, int cmp_op)
         PyObject *(PyObject *, PyObject *, int)>("PyObject_RichCompare");
     Value *result = this->builder_.CreateCall3(
         pyobject_richcompare, lhs, rhs,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), cmp_op),
+        ConstantInt::get(PyTypeBuilder<int>::get(), cmp_op),
         "COMPARE_OP_RichCompare_result");
     this->DecRef(lhs);
     this->DecRef(rhs);
@@ -2296,7 +1973,7 @@ Value *
 LlvmFunctionBuilder::GetListItemSlot(Value *lst, int idx)
 {
     Value *listobj = this->builder_.CreateBitCast(
-        lst, TypeBuilder<PyListObject *>::cache(this->module_));
+        lst, PyTypeBuilder<PyListObject *>::get());
     // Load the target of the ob_item PyObject** into list_items.
     Value *list_items = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(listobj, ListTy::FIELD_ITEM));
@@ -2310,7 +1987,7 @@ Value *
 LlvmFunctionBuilder::GetTupleItemSlot(Value *tup, int idx)
 {
     Value *tupobj = this->builder_.CreateBitCast(
-        tup, TypeBuilder<PyTupleObject*>::cache(this->module_));
+        tup, PyTypeBuilder<PyTupleObject*>::get());
     // Make CreateGEP perform &tup_item_indices[0].ob_item[idx].
     Value *tup_item_indices[] = {
         ConstantInt::get(Type::Int32Ty, 0),
@@ -2327,7 +2004,7 @@ LlvmFunctionBuilder::BuildSequenceLiteral(
     int size, const char *createname,
     Value *(LlvmFunctionBuilder::*getitemslot)(Value*, int))
 {
-    const Type *IntSsizeTy = TypeBuilder<Py_ssize_t>::cache(this->module_);
+    const Type *IntSsizeTy = PyTypeBuilder<Py_ssize_t>::get();
     Value *seqsize = ConstantInt::getSigned(IntSsizeTy, size);
 
     Function *create =
@@ -2361,7 +2038,7 @@ void
 LlvmFunctionBuilder::BUILD_MAP(int size)
 {
     Value *sizehint = ConstantInt::getSigned(
-        TypeBuilder<Py_ssize_t>::cache(this->module_), size);
+        PyTypeBuilder<Py_ssize_t>::get(), size);
     Function *create_dict = this->GetGlobalFunction<
         PyObject *(Py_ssize_t)>("_PyDict_NewPresized");
     Value *result = this->builder_.CreateCall(create_dict, sizehint,
@@ -2397,7 +2074,7 @@ void
 LlvmFunctionBuilder::SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = this->Pop();
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
@@ -2408,7 +2085,7 @@ LlvmFunctionBuilder::SLICE_RIGHT()
 {
     Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
 }
@@ -2417,9 +2094,9 @@ void
 LlvmFunctionBuilder::SLICE_NONE()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
 }
@@ -2454,7 +2131,7 @@ void
 LlvmFunctionBuilder::STORE_SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = this->Pop();
     Value *seq = this->Pop();
     Value *source = this->Pop();
@@ -2466,7 +2143,7 @@ LlvmFunctionBuilder::STORE_SLICE_RIGHT()
 {
     Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     Value *source = this->Pop();
     this->AssignSlice(seq, start, stop, source);
@@ -2476,9 +2153,9 @@ void
 LlvmFunctionBuilder::STORE_SLICE_NONE()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     Value *source = this->Pop();
     this->AssignSlice(seq, start, stop, source);
@@ -2491,7 +2168,7 @@ LlvmFunctionBuilder::DELETE_SLICE_BOTH()
     Value *start = this->Pop();
     Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     this->AssignSlice(seq, start, stop, source);
 }
 
@@ -2499,11 +2176,11 @@ void
 LlvmFunctionBuilder::DELETE_SLICE_LEFT()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = this->Pop();
     Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     this->AssignSlice(seq, start, stop, source);
 }
 
@@ -2512,10 +2189,10 @@ LlvmFunctionBuilder::DELETE_SLICE_RIGHT()
 {
     Value *stop = this->Pop();
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     this->AssignSlice(seq, start, stop, source);
 }
 
@@ -2523,12 +2200,12 @@ void
 LlvmFunctionBuilder::DELETE_SLICE_NONE()
 {
     Value *stop = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *start = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *seq = this->Pop();
     Value *source = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     this->AssignSlice(seq, start, stop, source);
 }
 
@@ -2536,7 +2213,7 @@ void
 LlvmFunctionBuilder::BUILD_SLICE_TWO()
 {
     Value *step = Constant::getNullValue(
-        TypeBuilder<PyObject *>::cache(this->module_));
+        PyTypeBuilder<PyObject *>::get());
     Value *stop = this->Pop();
     Value *start = this->Pop();
     Function *build_slice = this->GetGlobalFunction<
@@ -2581,11 +2258,11 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
         int(PyObject *, int, PyObject **)>("_PyEval_UnpackIterable");
     Value *new_stack_pointer = this->builder_.CreateGEP(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
-        ConstantInt::getSigned(TypeBuilder<Py_ssize_t>::cache(this->module_),
+        ConstantInt::getSigned(PyTypeBuilder<Py_ssize_t>::get(),
                                size));
     Value *result = this->builder_.CreateCall3(
         unpack_iterable, iterable,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), size, true),
+        ConstantInt::get(PyTypeBuilder<int>::get(), size, true),
         // _PyEval_UnpackIterable really takes the *new* stack pointer as
         // an argument, because it builds the result stack in reverse.
         new_stack_pointer);
@@ -2656,10 +2333,10 @@ LlvmFunctionBuilder::GetStackLevel()
     Value *level64 = this->builder_.CreateSDiv(
         difference,
         llvm::ConstantExpr::getSizeOf(
-            TypeBuilder<PyObject*>::cache(this->module_)));
+            PyTypeBuilder<PyObject*>::get()));
     // The stack level is stored as an int, not an int64.
     return this->builder_.CreateTrunc(level64,
-                                      TypeBuilder<int>::cache(this->module_),
+                                      PyTypeBuilder<int>::get(),
                                       "stack_level");
 }
 
@@ -2684,7 +2361,7 @@ LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler)
             "PyFrame_BlockSetup");
     this->builder_.CreateCall4(
         blocksetup, this->frame_,
-        ConstantInt::get(TypeBuilder<int>::cache(this->module_), block_type),
+        ConstantInt::get(PyTypeBuilder<int>::get(), block_type),
         unwind_target_index,
         stack_level);
 }
@@ -2730,14 +2407,14 @@ LlvmFunctionBuilder::GetGlobalFunction(const std::string &name)
 {
     return llvm::cast<Function>(
         this->module_->getOrInsertFunction(
-            name, TypeBuilder<FunctionType>::cache(this->module_)));
+            name, PyTypeBuilder<FunctionType>::get()));
 }
 
 template<typename VariableType> Constant *
 LlvmFunctionBuilder::GetGlobalVariable(const std::string &name)
 {
     return this->module_->getOrInsertGlobal(
-        name, TypeBuilder<VariableType>::cache(this->module_));
+        name, PyTypeBuilder<VariableType>::get());
 }
 
 Value *
@@ -2775,7 +2452,7 @@ LlvmFunctionBuilder::IsInstanceOfFlagClass(llvm::Value *value, int flag)
         this->builder_.CreateLoad(
             this->builder_.CreateStructGEP(value, ObjectTy::FIELD_TYPE),
             "type"),
-        TypeBuilder<PyTypeObject *>::cache(this->module_));
+        PyTypeBuilder<PyTypeObject *>::get());
     Value *type_flags = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(type, TypeTy::FIELD_FLAGS),
         "type_flags");

@@ -75,7 +75,7 @@ whose size is determined when the object is allocated.
 #endif
 
 /* PyObject_HEAD defines the initial segment of every PyObject.  Keep
-   this in sync with Python/ll_compile.cc. */
+   this in sync with Util/PyTypeBuilder.h. */
 #define PyObject_HEAD			\
 	_PyObject_HEAD_EXTRA		\
 	Py_ssize_t ob_refcnt;		\
