@@ -618,6 +618,7 @@ Python/initial_llvm_module.cc: Python/llvm_inline_functions.bc \
 
 # Since llc's output can have some unused variables, silence warnings
 # about them (for now.)
+# See <http://code.google.com/p/unladen-swallow/issues/detail?id=25>.
 Python/initial_llvm_module.o: Python/initial_llvm_module.cc
 	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -Wno-write-strings \
 		-Wno-unused -o $@ $<
