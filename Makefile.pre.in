@@ -616,6 +616,12 @@ Python/initial_llvm_module.cc: Python/llvm_inline_functions.bc \
 	cat $(srcdir)/Python/initial_llvm_module.cc.header $@.tmp > $@
 	rm $@.tmp
 
+# Since llc's output can have some unused variables, silence warnings
+# about them (for now.)
+Python/initial_llvm_module.o: Python/initial_llvm_module.cc
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -Wno-write-strings \
+		-Wno-unused -o $@ $<
+
 ############################################################################
 # Header files
 
@@ -1144,7 +1150,7 @@ config.status:	$(srcdir)/configure
 	$(CC) -c $(PY_CFLAGS) -o $@ $<
 
 .cc.o:
-	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -o $@ $<
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -Wno-write-strings -o $@ $<
 
 # Run reindent on the library
 reindent:

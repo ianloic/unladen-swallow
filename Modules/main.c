@@ -124,11 +124,14 @@ usage(int exitcode, char* program)
 	if (exitcode)
 		fprintf(f, "Try `python -h' for more information.\n");
 	else {
-		fprintf(f, usage_1);
-		fprintf(f, usage_2);
-		fprintf(f, usage_3);
-		fprintf(f, usage_4);
-		fprintf(f, usage_5);
+		/* Avoid calling fprintf() with a non-string-literal
+		   format and no other arguments, or some versions of gcc
+		   will complain. */
+		fprintf(f, "%s", usage_1);
+		fprintf(f, "%s", usage_2);
+		fprintf(f, "%s", usage_3);
+		fprintf(f, "%s", usage_4);
+		fprintf(f, "%s", usage_5);
 		fprintf(f, usage_6, DELIM);
 		fprintf(f, usage_7, DELIM, PYTHONHOMEHELP);
 	}

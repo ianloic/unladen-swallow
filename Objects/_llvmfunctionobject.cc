@@ -131,7 +131,7 @@ func_get_module(PyLlvmFunctionObject *op)
 
 static PyGetSetDef llvmfunction_getsetlist[] = {
     {"module", (getter)func_get_module, NULL},
-    NULL
+    {NULL, NULL, NULL},
 };
 
 // PyType_Ready is called on this in global_llvm_data.cc:_PyLlvm_Init().
