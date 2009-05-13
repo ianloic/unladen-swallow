@@ -244,7 +244,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
 {
     llvm::OwningPtr<BytecodeWalker> walker(BytecodeWalker::Create(code));
     int is_err;
-    if (walker == NULL)
+    if (walker.get() == NULL)
         return NULL;
     while ((is_err = walker->NextOpcode()) > 0) {
         BasicBlock *target, *fallthrough;
