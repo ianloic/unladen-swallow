@@ -25,6 +25,7 @@ public:
 
     llvm::Function *function() { return function_; }
     llvm::IRBuilder<>& builder() { return builder_; }
+    llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
     /// Sets the current line number being executed.  This is
     /// currently used to make tracebacks correct and will be used to

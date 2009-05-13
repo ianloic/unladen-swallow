@@ -1565,8 +1565,15 @@ LlvmFunctionBuilder::BREAK_LOOP()
 void
 LlvmFunctionBuilder::RETURN_VALUE()
 {
+    // Accept code after a return statement, even though it's never executed.
+    // Otherwise, CPython's willingness to insert code after block
+    // terminators causes problems.
+    BasicBlock *dead_code = BasicBlock::Create("dead_code", this->function_);
+
     Value *retval = this->Pop();
     this->Return(retval);
+
+    this->builder_.SetInsertPoint(dead_code);
 }
 
 void
