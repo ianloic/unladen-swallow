@@ -850,25 +850,16 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 	if (co->co_use_llvm || Py_LlvmEverythingFlag >= 0) {
 		int target_optimization_level = 0;
-		if (co->co_llvm_function == NULL) {
-			PyErr_Format(PyExc_SystemError,
-				     "Requested execution of %s at %s:%d but"
-				     " it has no LLVM function object"
-				     " attached, probably because it was"
-				     " loaded from a .pyc file.",
-				     PyString_AsString(co->co_name),
-				     PyString_AsString(co->co_filename),
-				     co->co_firstlineno);
-			retval = NULL;
-			goto exit_eval_frame;
-		}
 		if (target_optimization_level < Py_LlvmEverythingFlag)
 			target_optimization_level = Py_LlvmEverythingFlag;
 		if (co->co_optimization < target_optimization_level) {
-			// Always optimize code to level 0 before
-			// JITting it, since that speeds up the JIT.
-			// If Py_LlvmEverythingFlag is set to a higher
-			// number, optimize to that level instead.
+			// Always optimize code to level 0 before JITting
+			// it, since that speeds up the JIT.  Also, if
+			// the LLVM version of the function wasn't
+			// created yet, setting the optimization level
+			// will create it.  If Py_LlvmEverythingFlag is
+			// set to a higher number, optimize to that level
+			// instead.
 			PyObject *opt_level =
 			    PyInt_FromLong(target_optimization_level);
 			if (opt_level == NULL) {
