@@ -150,9 +150,6 @@ PyAPI_FUNC(void) PyEval_ReInitThreads(void);
 
 #endif /* !WITH_THREAD */
 
-PyAPI_FUNC(void) _PyEval_SetExcInfo(PyThreadState *tstate, PyObject *type,
-				    PyObject *value, PyObject *tb);
-
 PyAPI_FUNC(PyObject *) PyEval_EvalCode(PyCodeObject *, PyObject *, PyObject *);
 
 PyAPI_FUNC(PyObject *) PyEval_EvalCodeEx(PyCodeObject *co,
@@ -167,6 +164,10 @@ PyAPI_FUNC(PyObject *) _PyEval_CallTracing(PyObject *func, PyObject *args);
 
 
 /* Helper functions shared by the bytecode and LLVM implementations. */
+
+PyAPI_FUNC(void) _PyEval_SetExcInfo(PyThreadState *tstate, PyObject *type,
+				    PyObject *value, PyObject *tb);
+PyAPI_FUNC(void) _PyEval_ResetExcInfo(PyThreadState *);
 
 PyAPI_FUNC(void) _PyEval_RaiseForUnboundLocal(struct _frame *frame,
                                               int var_index);

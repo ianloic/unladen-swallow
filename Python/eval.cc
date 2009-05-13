@@ -115,7 +115,6 @@ static int maybe_call_line_trace(Py_tracefunc, PyObject *,
 				  PyFrameObject *, int *, int *, int *);
 
 static PyObject * cmp_outcome(int, PyObject *, PyObject *);
-static void reset_exc_info(PyThreadState *);
 static void format_exc_check_arg(PyObject *, char *, PyObject *);
 static PyObject * string_concatenate(PyObject *, PyObject *,
 				    PyFrameObject *, unsigned char *);
@@ -2807,7 +2806,7 @@ fast_yield:
 	}
 
 	if (tstate->frame->f_exc_type != NULL)
-		reset_exc_info(tstate);
+		_PyEval_ResetExcInfo(tstate);
 	else {
 		assert(tstate->frame->f_exc_value == NULL);
 		assert(tstate->frame->f_exc_traceback == NULL);
@@ -3074,7 +3073,7 @@ fail: /* Jump here from prelude on failure */
 }
 
 
-/* Implementation notes for _PyEval_SetExcInfo() and reset_exc_info():
+/* Implementation notes for _PyEval_SetExcInfo() and _PyEval_ResetExcInfo():
 
 - Below, 'exc_ZZZ' stands for 'exc_type', 'exc_value' and
   'exc_traceback'.  These always travel together.
@@ -3124,15 +3123,15 @@ fail: /* Jump here from prelude on failure */
   thread-safe, by introducing sys.exc_info() which gets it from tstate;
   but that's really a separate improvement.
 
-  The reset_exc_info() function in eval.cc restores the tstate->exc_ZZZ
-  variables to what they were before the current frame was called.  The
-  _PyEval_SetExcInfo() function saves them on the frame so that
-  reset_exc_info() can restore them.  The invariant is that
-  frame->f_exc_ZZZ is NULL iff the current frame never caught an
-  exception (where "catching" an exception applies only to successful
-  except clauses); and if the current frame ever caught an exception,
-  frame->f_exc_ZZZ is the exception that was stored in tstate->exc_ZZZ
-  at the start of the current frame.
+  The _PyEval_ResetExcInfo() function in eval.cc restores the
+  tstate->exc_ZZZ variables to what they were before the current frame
+  was called.  The _PyEval_SetExcInfo() function saves them on the
+  frame so that _PyEval_ResetExcInfo() can restore them.  The
+  invariant is that frame->f_exc_ZZZ is NULL iff the current frame
+  never caught an exception (where "catching" an exception applies
+  only to successful except clauses); and if the current frame ever
+  caught an exception, frame->f_exc_ZZZ is the exception that was
+  stored in tstate->exc_ZZZ at the start of the current frame.
 
 */
 
@@ -3181,8 +3180,8 @@ _PyEval_SetExcInfo(PyThreadState *tstate,
 	PySys_SetObject("exc_traceback", tb);
 }
 
-static void
-reset_exc_info(PyThreadState *tstate)
+void
+_PyEval_ResetExcInfo(PyThreadState *tstate)
 {
 	PyFrameObject *frame;
 	PyObject *tmp_type, *tmp_value, *tmp_tb;

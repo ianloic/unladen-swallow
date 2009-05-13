@@ -115,6 +115,77 @@ class ExceptionTests(unittest.TestCase):
         try: x = 1/0
         except Exception, e: pass
 
+    def testExcInfoUnaffectedByNestedFunction(self):
+        def raise_and_catch():
+            try:
+                raise IndexError("inner exception")
+            except IndexError:
+                pass
+        try:
+            raise ValueError("outer exception")
+        except ValueError:
+            exc, val, tb = sys.exc_info()
+            self.assertEquals(exc, ValueError)
+            self.assertEquals(val.args, ("outer exception",))
+            raise_and_catch()  # Risk clobbering sys.exc_info().
+            self.assertEquals(sys.exc_info(), (exc, val, tb))
+
+    def testExcInfoUnaffectedByGenerator(self):
+        def raising_generator():
+            try:
+                raise IndexError("inner exception")
+            except IndexError:
+                yield 3
+
+        try:
+            raise ValueError("outer exception")
+        except ValueError:
+            exc, val, tb = sys.exc_info()
+            self.assertEquals(exc, ValueError)
+            self.assertEquals(val.args, ("outer exception",))
+            g = raising_generator()
+            self.assertEquals(g.next(), 3)  # Risk clobbering sys.exc_info().
+            self.assertEquals(sys.exc_info(), (exc, val, tb))
+            self.assertRaises(StopIteration, g.next)
+            self.assertEquals(sys.exc_info(), (exc, val, tb))
+
+    def testExcInfoInGeneratorClobberedByYield(self):
+        def raising_generator():
+            try:
+                raise IndexError("inner exception")
+            except IndexError:
+                exc, val, tb = sys.exc_info()
+                self.assertEquals(exc, IndexError)
+                self.assertEquals(val.args, ("inner exception",))
+                yield 3
+                # The next line ought to be the assertion, but
+                # Python 2.6 resets the exception from the calling
+                # function, so we test bug-for-bug compatibility
+                # within the 2.6 series.
+                #
+                # self.assertEquals(sys.exc_info(), (exc, val, tb))
+                self.assertEquals(sys.exc_info(), (None, None, None))
+
+        for i in raising_generator():
+            pass
+
+    def testExcInfoVisibleInNestedFunction(self):
+        def check_exc_info(exc, val, tb):
+            self.assertEquals(sys.exc_info(), (exc, val, tb))
+            try:
+                raise IndexError("inner exception")
+            except IndexError:
+                pass
+            exc3, val3, tb3 = sys.exc_info()
+            self.assertEquals(exc3, IndexError)
+            self.assertEquals(val3.args, ("inner exception",))
+            self.assertNotEquals(tb3, tb)
+
+        try:
+            raise ValueError("outer exception")
+        except ValueError:
+            check_exc_info(*sys.exc_info())
+
     def testSyntaxErrorMessage(self):
         # make sure the right exception message is raised for each of
         # these code fragments

@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 /* Bytecode object.  Keep this in sync with Util/PyTypeBuilder.h. */
-typedef struct {
+typedef struct PyCodeObject {
     PyObject_HEAD
     int co_argcount;		/* #arguments, except *args */
     int co_nlocals;		/* #local variables */

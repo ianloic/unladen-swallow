@@ -83,6 +83,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->propagate_exception_block_ =
         BasicBlock::Create("propagate_exception", this->function_);
     this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
+    this->do_return_block_ = BasicBlock::Create("do_return", this->function_);
 
     this->builder_.SetInsertPoint(entry);
     // CreateAllocaInEntryBlock will insert alloca's here, before
@@ -99,6 +100,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->unwind_target_index_addr_ = this->builder_.CreateAlloca(
         Type::Int32Ty, NULL, "unwind_target_index_addr");
 
+    this->tstate_ = this->builder_.CreateCall(
+        this->GetGlobalFunction<PyThreadState*()>(
+            "_PyLlvm_WrapPyThreadState_GET"));
     this->stack_bottom_ = this->builder_.CreateLoad(
         this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
         "stack_bottom");
@@ -251,8 +255,8 @@ LlvmFunctionBuilder::FillUnwindBlock()
     Value *unwind_reason =
         this->builder_.CreateLoad(this->unwind_reason_addr_, "unwind_reason");
 
-    BasicBlock *do_return =
-        BasicBlock::Create("do_return", this->function_);
+    BasicBlock *pop_remaining_objects =
+        BasicBlock::Create("pop_remaining_objects", this->function_);
     {  // Implements the fast_block_end loop toward the end of
        // PyEval_EvalFrame().  This pops blocks off the block-stack
        // and values off the value-stack until it finds a block that
@@ -268,7 +272,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
             this->builder_.CreateStructGEP(this->frame_,
                                            FrameTy::FIELD_IBLOCK));
         this->builder_.CreateCondBr(this->IsPositive(blocks_left),
-                                    unwind_loop_body, do_return);
+                                    unwind_loop_body, pop_remaining_objects);
 
         this->builder_.SetInsertPoint(unwind_loop_body);
         Value *popped_block = this->builder_.CreateLoad(
@@ -458,8 +462,77 @@ LlvmFunctionBuilder::FillUnwindBlock()
     // If we fall off the end of the unwind loop, there are no blocks
     // left and it's time to pop the rest of the value stack and
     // return.
-    this->builder_.SetInsertPoint(do_return);
+    this->builder_.SetInsertPoint(pop_remaining_objects);
     this->PopAndDecrefTo(this->stack_bottom_);
+
+    // Unless we're returning (or yielding which comes into the
+    // do_return_block_ through another path), the retval should be
+    // NULL.
+    BasicBlock *reset_retval =
+        BasicBlock::Create("reset_retval", this->function_);
+    Value *unwinding_for_return =
+        this->builder_.CreateICmpEQ(
+            unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_RETURN));
+    this->builder_.CreateCondBr(unwinding_for_return,
+                                this->do_return_block_, reset_retval);
+
+    this->builder_.SetInsertPoint(reset_retval);
+    this->builder_.CreateStore(
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
+        this->retval_addr_);
+    this->builder_.CreateBr(this->do_return_block_);
+
+    this->builder_.SetInsertPoint(this->do_return_block_);
+    // If this frame raised and caught an exception, it saved it into
+    // sys.exc_info(). The calling frame may also be in the process of
+    // handling an exception, in which case we don't want to clobber
+    // its sys.exc_info().  See eval.cc's _PyEval_ResetExcInfo for
+    // details.
+    BasicBlock *have_frame_exception =
+        BasicBlock::Create("have_frame_exception", this->function_);
+    BasicBlock *no_frame_exception =
+        BasicBlock::Create("no_frame_exception", this->function_);
+    BasicBlock *finish_return =
+        BasicBlock::Create("finish_return", this->function_);
+    Value *tstate_frame = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(this->tstate_,
+                                       ThreadStateTy::FIELD_FRAME),
+        "tstate->frame");
+    Value *f_exc_type = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(tstate_frame,
+                                       FrameTy::FIELD_EXC_TYPE),
+        "tstate->frame->f_exc_type");
+    this->builder_.CreateCondBr(this->IsNull(f_exc_type),
+                                no_frame_exception, have_frame_exception);
+
+    this->builder_.SetInsertPoint(have_frame_exception);
+    // The frame did have an exception, so un-clobber the caller's exception.
+    this->builder_.CreateCall(this->GetGlobalFunction<void(PyThreadState*)>(
+                                  "_PyEval_ResetExcInfo"),
+                              this->tstate_);
+    this->builder_.CreateBr(finish_return);
+
+    this->builder_.SetInsertPoint(no_frame_exception);
+    // The frame did not have an exception.  In debug mode, check for
+    // consistency.
+#ifndef NDEBUG
+    Value *f_exc_value = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(tstate_frame,
+                                       FrameTy::FIELD_EXC_VALUE),
+        "tstate->frame->f_exc_value");
+    Value *f_exc_traceback = this->builder_.CreateLoad(
+        this->builder_.CreateStructGEP(tstate_frame,
+                                       FrameTy::FIELD_EXC_TRACEBACK),
+        "tstate->frame->f_exc_traceback");
+    this->Assert(this->IsNull(f_exc_value),
+                 "Frame's exc_type was null but exc_value wasn't");
+    this->Assert(this->IsNull(f_exc_traceback),
+                 "Frame's exc_type was null but exc_traceback wasn't");
+#endif
+    this->builder_.CreateBr(finish_return);
+
+    this->builder_.SetInsertPoint(finish_return);
+    // Grab the return value and return it.
     Value *retval = this->builder_.CreateLoad(this->retval_addr_, "retval");
     this->builder_.CreateRet(retval);
 }
@@ -1524,10 +1597,11 @@ LlvmFunctionBuilder::YIELD_VALUE()
     this->builder_.CreateStore(yield_number, f_lasti);
 
     // Yields return from the current function without unwinding the
-    // stack.  TODO(jyasskin): They _are_ supposed to trace the return
-    // and call reset_exc_info like everything else, so add those back
-    // in when everything else does them.
-    this->builder_.CreateRet(retval);
+    // stack.  They do trace the return and call _PyEval_ResetExcInfo
+    // like everything else, so we jump to the common return block
+    // instead of returning directly.
+    this->builder_.CreateStore(retval, this->retval_addr_);
+    this->builder_.CreateBr(this->do_return_block_);
 
     // Continue inserting code inside the resume block.
     this->builder_.SetInsertPoint(yield_resume);
@@ -2470,7 +2544,7 @@ LlvmFunctionBuilder::PropagateExceptionOnNull(Value *value)
                            this->function_);
     BasicBlock *pass =
         BasicBlock::Create("PropagateExceptionOnNull_pass", this->function_);
-    this->builder_.CreateCondBr(IsNull(value), propagate, pass);
+    this->builder_.CreateCondBr(this->IsNull(value), propagate, pass);
 
     this->builder_.SetInsertPoint(propagate);
     this->PropagateException();

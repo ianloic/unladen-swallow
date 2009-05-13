@@ -352,6 +352,7 @@ private:
     // entry block. They're constant after construction.
     llvm::Value *frame_;
 
+    llvm::Value *tstate_;
     llvm::Value *stack_bottom_;
     llvm::Value *stack_pointer_addr_;
     llvm::Value *varnames_;
@@ -377,6 +378,7 @@ private:
     // Stores one of the UNWIND_XXX constants defined at the top of
     // ll_compile.cc
     llvm::Value *unwind_reason_addr_;
+    llvm::BasicBlock *do_return_block_;
     llvm::Value *retval_addr_;
 };
 

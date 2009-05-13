@@ -4,6 +4,7 @@
    module. */
 
 #include "Python.h"
+#include "frameobject.h"
 #include "opcode.h"
 
 int
@@ -77,4 +78,10 @@ _PyLlvm_WrapEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
        END_FINALLY will restore the
        exception if necessary. */
     PyErr_Clear();
+}
+
+PyThreadState *
+_PyLlvm_WrapPyThreadState_GET()
+{
+    return PyThreadState_GET();
 }

@@ -187,12 +187,15 @@ public:
 template<> class TypeBuilder<PyCodeObject, false> {
 public:
     static const Type *get() {
-        static const Type *const result = Create();
+        static const Type *const result =
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyCodeObject struct.
+                "struct.PyCodeObject");
         return result;
     }
 
     enum Fields {
-        FIELD_OBJECT,
+        OBJECT_HEAD_FIELDS
         FIELD_ARGCOUNT,
         FIELD_NLOCALS,
         FIELD_STACKSIZE,
@@ -210,40 +213,12 @@ public:
         FIELD_LNOTAB,
         FIELD_ZOMBIEFRAME,
         FIELD_LLVM_FUNCTION,
+        FIELD_USE_LLVM,
+        FIELD_PADDING1,  // Clang inserts 3 bytes of padding because
+        FIELD_PADDING2,  // co_use_llvm is a char followed by an int.
+        FIELD_PADDING3,
+        FIELD_OPTIMIZATION,
     };
-
-private:
-    static const Type *Create() {
-        // Keep this in sync with code.h.
-        const Type *p_pyobject_type =
-            PyTypeBuilder<PyObject*>::get();
-        const Type *int_type = PyTypeBuilder<int>::get();
-        return StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            PyTypeBuilder<PyObject>::get(),
-            // From PyCodeObject
-            int_type,  // co_argcount
-            int_type,  // co_nlocals
-            int_type,  // co_stacksize
-            int_type,  // co_flags
-            p_pyobject_type,  // co_code
-            p_pyobject_type,  // co_consts
-            p_pyobject_type,  // co_names
-            p_pyobject_type,  // co_varnames
-            p_pyobject_type,  // co_freevars
-            p_pyobject_type,  // co_cellvars
-            //  Not bothering with defining the Inst struct.
-            PyTypeBuilder<char*>::get(),  // co_tcode
-            p_pyobject_type,  // co_filename
-            p_pyobject_type,  // co_name
-            int_type,  // co_firstlineno
-            p_pyobject_type,  // co_lnotab
-            PyTypeBuilder<char*>::get(),  //co_zombieframe
-            p_pyobject_type,  // co_llvm_function
-            NULL);
-    }
 };
 
 template<> class TypeBuilder<PyTryBlock, false> {
@@ -270,12 +245,14 @@ private:
 template<> class TypeBuilder<PyFrameObject, false> {
 public:
     static const Type *get() {
-        static const Type *const result = Create();
+        static const Type *const result =
+            // Clang's name for the PyFrameObject struct.
+            PyGlobalLlvmData::Get()->module()->getTypeByName("struct._frame");
         return result;
     }
 
     enum Fields {
-        FIELD_OBJECT_HEAD,
+        OBJECT_HEAD_FIELDS
         FIELD_OB_SIZE,
         FIELD_BACK,
         FIELD_CODE,
@@ -293,46 +270,17 @@ public:
         FIELD_LINENO,
         FIELD_THROWFLAG,
         FIELD_IBLOCK,
+        FIELD_PADDING1,
+        FIELD_PADDING2,
         FIELD_BLOCKSTACK,
+#if SIZEOF_VOID_P == 8
+        FIELD_PADDING3,
+        FIELD_PADDING4,
+        FIELD_PADDING5,
+        FIELD_PADDING6,
+#endif
         FIELD_LOCALSPLUS,
     };
-
-private:
-    static const Type *Create() {
-        // Keep this in sync with frameobject.h.
-        const Type *p_pyobject_type = PyTypeBuilder<PyObject*>::get();
-        const Type *int_type = PyTypeBuilder<int>::get();
-        return StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            PyTypeBuilder<PyObject>::get(),
-            // From PyObject_VAR_HEAD
-            PyTypeBuilder<ssize_t>::get(),
-            // From PyFrameObject
-            p_pyobject_type,  // f_back
-            PyTypeBuilder<PyCodeObject*>::get(),  // f_code
-            p_pyobject_type,  // f_builtins
-            p_pyobject_type,  // f_globals
-            p_pyobject_type,  // f_locals
-            PyTypeBuilder<PyObject**>::get(),  // f_valuestack
-            PyTypeBuilder<PyObject**>::get(),  // f_stacktop
-            p_pyobject_type,  // f_trace
-            p_pyobject_type,  // f_exc_type
-            p_pyobject_type,  // f_exc_value
-            p_pyobject_type,  // f_exc_traceback
-            // f_tstate; punt on the type:
-            PyTypeBuilder<char*>::get(),
-            int_type,  // f_lasti
-            int_type,  // f_lineno
-            PyTypeBuilder<unsigned char>::get(),  // f_throwflag
-            PyTypeBuilder<unsigned char>::get(),  // f_iblock
-            // f_blockstack:
-            PyTypeBuilder<PyTryBlock[CO_MAXBLOCKS]>::get(),
-            // f_localsplus, flexible array.
-            PyTypeBuilder<PyObject*[]>::get(),
-            NULL);
-    }
 };
 
 template<> class TypeBuilder<PyExcInfo, false> {
@@ -352,6 +300,40 @@ public:
     };
 };
 
+template<> class TypeBuilder<PyThreadState, false> {
+public:
+    static const Type *get() {
+        static const Type *const result =
+            // Clang's name for the PyThreadState struct.
+            PyGlobalLlvmData::Get()->module()->getTypeByName("struct._ts");
+        return result;
+    }
+
+    enum Fields {
+        FIELD_NEXT,
+        FIELD_INTERP,
+        FIELD_FRAME,
+        FIELD_RECURSION_DEPTH,
+        FIELD_TRACING,
+        FIELD_USE_TRACING,
+        FIELD_C_PROFILEFUNC,
+        FIELD_C_TRACEFUNC,
+        FIELD_C_PROFILEOBJ,
+        FIELD_C_TRACEOBJ,
+        FIELD_CUREXC_TYPE,
+        FIELD_CUREXC_VALUE,
+        FIELD_CUREXC_TRACEBACK,
+        FIELD_EXC_TYPE,
+        FIELD_EXC_VALUE,
+        FIELD_EXC_TRACEBACK,
+        FIELD_DICT,
+        FIELD_TICK_COUNTER,
+        FIELD_GILSTATE_COUNTER,
+        FIELD_ASYNC_EXC,
+        FIELD_THREAD_ID,
+    };
+};
+
 #undef OBJECT_HEAD_FIELDS
 
 }  // namespace llvm
@@ -363,6 +345,7 @@ typedef PyTypeBuilder<PyListObject> ListTy;
 typedef PyTypeBuilder<PyTypeObject> TypeTy;
 typedef PyTypeBuilder<PyCodeObject> CodeTy;
 typedef PyTypeBuilder<PyFrameObject> FrameTy;
+typedef PyTypeBuilder<PyThreadState> ThreadStateTy;
 }  // namespace py
 
 #endif  // UTIL_PYTYPEBUILDER_H
