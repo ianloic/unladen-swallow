@@ -6,6 +6,7 @@
 #include "global_llvm_data.h"
 #include "opcode.h"
 
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/BasicBlock.h"
 
@@ -241,10 +242,7 @@ BytecodeWalker::InsertBlockHere(const char *name)
 extern "C" PyObject *
 _PyCode_To_Llvm(PyCodeObject *code)
 {
-    // TODO(twouters): make this an std::auto_ptr or llvm::OwningPtr
-    // when we decide on what to use.
-    BytecodeWalker *walker = BytecodeWalker::Create(code);
-    PyObject *llvm_function = NULL;
+    llvm::OwningPtr<BytecodeWalker> walker(BytecodeWalker::Create(code));
     int is_err;
     if (walker == NULL)
         return NULL;
@@ -269,11 +267,11 @@ opcode_dispatch:
             target = walker->GetBlockForRelativeTarget(
                 walker->oparg, "FOR_ITER_target");
             if (target == NULL)
-                goto error;
+                return NULL;
             fallthrough = walker->GetBlockForRelativeTarget(
                 0, "FOR_ITER_fallthrough");
             if (fallthrough == NULL)
-                goto error;
+                return NULL;
             walker->fbuilder->FOR_ITER(target, fallthrough);
             break;
 
@@ -396,11 +394,11 @@ opcode_dispatch:
         target = walker->GetBlockForAbsoluteTarget(			\
             walker->oparg, #opname "_target");				\
         if (target == NULL)						\
-            goto error;							\
+            return NULL;						\
         fallthrough = walker->GetBlockForRelativeTarget(		\
             0, #opname "_fallthrough");					\
         if (fallthrough == NULL)					\
-            goto error;							\
+            return NULL;						\
         walker->fbuilder->opname(target, fallthrough);			\
         break;
 
@@ -417,11 +415,11 @@ opcode_dispatch:
         target = walker->GetBlockForRelativeTarget(			\
             walker->oparg, #opname "_target");				\
         if (target == NULL)						\
-            goto error;							\
+            return NULL;						\
         fallthrough = walker->GetBlockForRelativeTarget(		\
             0, #opname "_fallthrough"); 				\
         if (fallthrough == NULL)					\
-            goto error;							\
+            return NULL;						\
         walker->fbuilder->opname(target, fallthrough);			\
         break;
 
@@ -435,21 +433,18 @@ opcode_dispatch:
             PyErr_Format(PyExc_SystemError,
                          "Invalid opcode %d in LLVM IR generation",
                          walker->opcode);
-            goto error;
+            return NULL;
         }
     }
     if (is_err < 0)
-        goto error;
+        return NULL;
     // Make sure the last block has a terminator, even though it should
     // be unreachable.
     walker->fbuilder->FallThroughTo(walker->fbuilder->unreachable_block());
     if (llvm::verifyFunction(*walker->fbuilder->function(),
                              llvm::PrintMessageAction)) {
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
-        goto error;
+        return NULL;
     }
-    llvm_function = _PyLlvmFunction_FromPtr(walker->fbuilder->function());
-error:
-    delete walker;
-    return llvm_function;
+    return _PyLlvmFunction_FromPtr(walker->fbuilder->function());
 }
