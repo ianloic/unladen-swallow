@@ -53,17 +53,6 @@ class LlvmTests(ExtraAssertsTestCase):
         self.assertRaises(TypeError, _llvm._function)
 
     @at_each_optimization_level
-    def test_llvm_compile(self, level):
-        # Makes no sense at level None
-        if level is None:
-            return
-        def f(x):
-            pass
-        f = _llvm.compile(f.func_code, level)
-        self.assertTrue(isinstance(f, _llvm._function))
-        self.assertRaises(TypeError, _llvm.compile, f, level)
-
-    @at_each_optimization_level
     def test_run_simple_function(self, level):
         foo = compile_for_llvm("foo", """
 def foo():

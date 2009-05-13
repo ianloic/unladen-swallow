@@ -1,6 +1,5 @@
 #include "Python.h"
 #include "code.h"
-#include "llvm_compile.h"
 #include "structmember.h"
 #include "Python/global_llvm_data_fwd.h"
 
@@ -156,8 +155,6 @@ code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 			     new_opt_level);
 		return -1;
 	}
-	if (code->co_llvm_function == NULL)
-        	code->co_llvm_function = _PyCode_To_Llvm(code);
 	global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;
 	while (code->co_optimization < new_opt_level) {
 		int next_level = code->co_optimization + 1;

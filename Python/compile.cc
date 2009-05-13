@@ -21,9 +21,14 @@
  * objects.
  */
 
+
 #include "Python.h"
 
 #include "Python-ast.h"
+#undef Assert  // Macros that break LLVM or our code.
+#undef Module
+#undef Pass
+#undef Return
 #include "node.h"
 #include "pyarena.h"
 #include "ast.h"
@@ -31,6 +36,21 @@
 #include "compile.h"
 #include "symtable.h"
 #include "opcode.h"
+#include "_llvmfunctionobject.h"
+
+#include "Python/global_llvm_data.h"
+#include "Python/ll_compile.h"
+
+#include "llvm/Analysis/Verifier.h"
+#include "llvm/BasicBlock.h"
+#include "llvm/DerivedTypes.h"
+#include "llvm/Function.h"
+#include "llvm/Module.h"
+#include "llvm/Support/IRBuilder.h"
+#include "llvm/Type.h"
+
+#include <string>
+#include <vector>
 
 int Py_OptimizeFlag = 0;
 
@@ -71,6 +91,8 @@ typedef struct basicblock_ {
 	int b_startdepth;
 	/* instruction offset for block, computed by assemble_jump_offsets() */
 	int b_offset;
+
+	llvm::BasicBlock *b_llvm_block;
 } basicblock;
 
 /* fblockinfo tracks the current frame block.
@@ -120,6 +142,9 @@ struct compiler_unit {
 	int u_lineno;	   /* the lineno for the current stmt */
 	bool u_lineno_set; /* boolean to indicate whether instr
 			      has been generated with current lineno */
+
+	py::LlvmFunctionBuilder *fb; /* Short name because we'll be
+					calling into this a lot. */
 };
 
 /* This struct captures the global state of a compilation.  
@@ -142,16 +167,26 @@ struct compiler {
 	PyObject *c_stack;	 /* Python list holding compiler_unit ptrs */
 	char *c_encoding;	 /* source encoding (a borrowed reference) */
 	PyArena *c_arena;	 /* pointer to memory allocation arena */
+
+	PyGlobalLlvmData *c_llvm;  /* Cached from the interpreter state. */
 };
 
 static int compiler_enter_scope(struct compiler *, identifier, void *, int);
 static void compiler_free(struct compiler *);
 static basicblock *compiler_new_block(struct compiler *);
 static int compiler_next_instr(struct compiler *, basicblock *);
-static int compiler_addop(struct compiler *, int);
-static int compiler_addop_o(struct compiler *, int, PyObject *, PyObject *);
-static int compiler_addop_i(struct compiler *, int, int);
-static int compiler_addop_j(struct compiler *, int, basicblock *, int);
+static int compiler_addop(struct compiler *, int,
+			  void (py::LlvmFunctionBuilder::*)());
+static int compiler_addop_o(struct compiler *, int,
+			    void (py::LlvmFunctionBuilder::*)(int),
+			    PyObject *, PyObject *);
+static int compiler_addop_i(struct compiler *, int,
+			    void (py::LlvmFunctionBuilder::*)(int), int);
+static int compiler_addop_j(
+	struct compiler *, int,
+	void (py::LlvmFunctionBuilder::*)(llvm::BasicBlock *,
+					  llvm::BasicBlock *),
+	basicblock *, int);
 static basicblock *compiler_use_new_block(struct compiler *);
 static int compiler_error(struct compiler *, const char *);
 static int compiler_nameop(struct compiler *, identifier, expr_context_ty);
@@ -172,13 +207,23 @@ static void compiler_pop_fblock(struct compiler *, enum fblocktype,
 /* Returns true if there is a loop on the fblock stack. */
 static int compiler_in_loop(struct compiler *);
 
-static int inplace_binop(struct compiler *, operator_ty);
+static int add_inplace_binop(struct compiler *, operator_ty);
 static int expr_constant(expr_ty e);
 
 static int compiler_with(struct compiler *, stmt_ty);
 
 static PyCodeObject *assemble(struct compiler *, int addNone);
 static PyObject *__doc__;
+
+static std::string
+pystring_to_std_string(PyObject *str)
+{
+	if (!PyString_Check(str)) {
+		return "<not a string>";
+	}
+	return std::string(PyString_AS_STRING(str),
+			   PyString_GET_SIZE(str));
+}
 
 PyObject *
 _Py_Mangle(PyObject *privateobj, PyObject *ident)
@@ -285,6 +330,8 @@ PyAST_Compile(mod_ty mod, const char *filename, PyCompilerFlags *flags,
 
 	/* XXX initialize to NULL for now, need to handle */
 	c.c_encoding = NULL;
+
+	c.c_llvm = PyGlobalLlvmData::Get();
 
 	co = compiler_mod(&c, mod);
 
@@ -434,6 +481,7 @@ compiler_unit_free(struct compiler_unit *u)
 	Py_CLEAR(u->u_freevars);
 	Py_CLEAR(u->u_cellvars);
 	Py_CLEAR(u->u_private);
+	delete u->fb;
 	PyObject_Free(u);
 }
 
@@ -488,6 +536,9 @@ compiler_enter_scope(struct compiler *c, identifier name, void *key,
 		compiler_unit_free(u);
 		return 0;
 	}
+
+	u->fb = new py::LlvmFunctionBuilder(c->c_llvm,
+					    pystring_to_std_string(name));
 
 	u->u_private = NULL;
 
@@ -565,6 +616,7 @@ compiler_new_block(struct compiler *c)
 		return NULL;
 	}
 	memset((void *)b, 0, sizeof(basicblock));
+	b->b_llvm_block = llvm::BasicBlock::Create("L", u->fb->function());
 	/* Extend the singly linked list of blocks with new block. */
 	b->b_list = u->u_blocks;
 	u->u_blocks = b;
@@ -578,6 +630,8 @@ compiler_use_new_block(struct compiler *c)
 	if (block == NULL)
 		return NULL;
 	c->u->u_curblock = block;
+	c->u->fb->builder().CreateBr(block->b_llvm_block);
+	c->u->fb->builder().SetInsertPoint(block->b_llvm_block);
 	return block;
 }
 
@@ -585,6 +639,8 @@ static basicblock *
 compiler_use_next_block(struct compiler *c, basicblock *block)
 {
 	assert(block != NULL);
+
+	c->u->fb->FallThroughTo(block->b_llvm_block);
 
 	c->u->u_curblock->b_next = block;
 	c->u->u_curblock = block;
@@ -600,6 +656,7 @@ compiler_next_block(struct compiler *c)
 
         return compiler_use_next_block(c, block);
 }
+
 /* Returns the offset of the next instruction in the current block's
    b_instr array.  Resizes the b_instr as necessary.
    Returns -1 on failure.
@@ -669,6 +726,7 @@ compiler_set_lineno(struct compiler *c, int off)
 	c->u->u_lineno_set = true;
 	b = c->u->u_curblock;
 	b->b_instr[off].i_lineno = c->u->u_lineno;
+	c->u->fb->SetLineNumber(c->u->u_lineno);
 }
 
 static int
@@ -880,12 +938,13 @@ opcode_stack_effect(int opcode, int oparg)
 	return 0; /* not reachable */
 }
 
-/* Add an opcode with no argument.
-   Returns 0 on failure, 1 on success.
+/* Add an opcode with no argument.  We use method to add the opcode to
+   the LLVM IR.  Returns 0 on failure, 1 on success.
 */
 
 static int
-compiler_addop(struct compiler *c, int opcode)
+compiler_addop(struct compiler *c, int opcode,
+	       void (py::LlvmFunctionBuilder::*method)())
 {
 	basicblock *b;
 	struct instr *i;
@@ -900,6 +959,7 @@ compiler_addop(struct compiler *c, int opcode)
 	if (opcode == RETURN_VALUE)
 		b->b_return = 1;
 	compiler_set_lineno(c, off);
+	(c->u->fb->*method)();
 	return 1;
 }
 
@@ -989,26 +1049,28 @@ compiler_add_o(struct compiler *c, PyObject *dict, PyObject *o)
 	return arg;
 }
 
-/* Adds opcode(o) as the next instruction in the current basic block.
-   Because opcodes only take integer arguments, we give 'o' a number
-   unique within 'dict' and store the mapping in 'dict'.  'dict' is one
-   of c->u->u_{consts,names,varnames} and must match the code::co_list
-   that 'opcode' looks in.
-*/
+// Adds opcode(o) as the next instruction in the current basic block.
+// Because opcodes only take integer arguments, we give 'o' a number
+// unique within 'dict' and store the mapping in 'dict'.  We also call
+// 'method()' to add the same opcode to the LLVM function.  'dict' is
+// one of c->u->u_{consts,names,varnames} and must match the
+// code::co_list that 'opcode' looks in.
 static int
-compiler_addop_o(struct compiler *c, int opcode, PyObject *dict,
-		 PyObject *o)
+compiler_addop_o(struct compiler *c, int opcode,
+		 void (py::LlvmFunctionBuilder::*method)(int),
+		 PyObject *dict, PyObject *o)
 {
     int arg = compiler_add_o(c, dict, o);
     if (arg < 0)
 	return 0;
-    return compiler_addop_i(c, opcode, arg);
+    return compiler_addop_i(c, opcode, method, arg);
 }
 
-/* Like compiler_addop_o, but name-mangles 'o' if appropriate. */
+// Mangles 'o' and then behaves like compiler_addop_o.
 static int
-compiler_addop_name(struct compiler *c, int opcode, PyObject *dict,
-		    PyObject *o)
+compiler_addop_name(struct compiler *c, int opcode,
+		    void (py::LlvmFunctionBuilder::*method)(int),
+		    PyObject *dict, PyObject *o)
 {
     int arg;
     PyObject *mangled = _Py_Mangle(c->u->u_private, o);
@@ -1018,15 +1080,18 @@ compiler_addop_name(struct compiler *c, int opcode, PyObject *dict,
     Py_DECREF(mangled);
     if (arg < 0)
 	return 0;
-    return compiler_addop_i(c, opcode, arg);
+    return compiler_addop_i(c, opcode, method, arg);
 }
 
-/* Add an opcode with an integer argument.
-   Returns 0 on failure, 1 on success.
+/* Add an opcode with an integer argument. We also call 'method' to
+   add the same opcode to the LLVM function.  Returns 0 on failure, 1
+   on success.
 */
 
 static int
-compiler_addop_i(struct compiler *c, int opcode, int oparg)
+compiler_addop_i(struct compiler *c, int opcode,
+		 void (py::LlvmFunctionBuilder::*method)(int),
+		 int oparg)
 {
 	struct instr *i;
 	int off;
@@ -1038,14 +1103,21 @@ compiler_addop_i(struct compiler *c, int opcode, int oparg)
 	i->i_oparg = oparg;
 	i->i_hasarg = 1;
 	compiler_set_lineno(c, off);
+	(c->u->fb->*method)(oparg);
 	return 1;
 }
 
-/* Adds a jump opcode whose target is 'b'. This works for both
-   conditional and unconditional jumps.
-*/
+// Adds a jump opcode whose target is 'b'. This works for both
+// conditional and unconditional jumps.  Because LLVM requires that
+// every jump instruction, including conditional ones, terminate its
+// basic block, this function creates a block for the fallthrough path
+// and automatically switches to it.
 static int
-compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
+compiler_addop_j(struct compiler *c, int opcode,
+		 void (py::LlvmFunctionBuilder::*method)(
+			 llvm::BasicBlock *target,
+			 llvm::BasicBlock *fallthrough),
+		 basicblock *b, int absolute)
 {
 	struct instr *i;
 	int off;
@@ -1063,6 +1135,9 @@ compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
 	else
 		i->i_jrel = 1;
 	compiler_set_lineno(c, off);
+	basicblock *fallthrough = compiler_new_block(c);
+	(c->u->fb->*method)(b->b_llvm_block, fallthrough->b_llvm_block);
+	compiler_use_next_block(c, fallthrough);
 	return 1;
 }
 
@@ -1075,46 +1150,49 @@ compiler_addop_j(struct compiler *c, int opcode, basicblock *b, int absolute)
    created in the local function.  Local objects should use the arena.
 */
 
-
 #define NEXT_BLOCK(C) { \
 	if (compiler_next_block((C)) == NULL) \
 		return 0; \
 }
 
 #define ADDOP(C, OP) { \
-	if (!compiler_addop((C), (OP))) \
+	if (!compiler_addop((C), (OP), &py::LlvmFunctionBuilder::OP)) \
 		return 0; \
 }
 
 #define ADDOP_IN_SCOPE(C, OP) { \
-	if (!compiler_addop((C), (OP))) { \
+	if (!compiler_addop((C), (OP), &py::LlvmFunctionBuilder::OP)) { \
 		compiler_exit_scope(c); \
 		return 0; \
 	} \
 }
 
 #define ADDOP_O(C, OP, O, TYPE) { \
-	if (!compiler_addop_o((C), (OP), (C)->u->u_ ## TYPE, (O))) \
+	if (!compiler_addop_o((C), (OP), &py::LlvmFunctionBuilder::OP, \
+			      (C)->u->u_ ## TYPE, (O))) \
 		return 0; \
 }
 
 #define ADDOP_NAME(C, OP, O, TYPE) { \
-	if (!compiler_addop_name((C), (OP), (C)->u->u_ ## TYPE, (O))) \
+	if (!compiler_addop_name((C), (OP), &py::LlvmFunctionBuilder::OP, \
+				 (C)->u->u_ ## TYPE, (O))) \
 		return 0; \
 }
 
 #define ADDOP_I(C, OP, O) { \
-	if (!compiler_addop_i((C), (OP), (O))) \
+	if (!compiler_addop_i((C), (OP), &py::LlvmFunctionBuilder::OP, (O))) \
 		return 0; \
 }
 
 #define ADDOP_JABS(C, OP, O) { \
-	if (!compiler_addop_j((C), (OP), (O), 1)) \
+	if (!compiler_addop_j((C), (OP), &py::LlvmFunctionBuilder::OP, \
+			      (O), 1)) \
 		return 0; \
 }
 
 #define ADDOP_JREL(C, OP, O) { \
-	if (!compiler_addop_j((C), (OP), (O), 0)) \
+	if (!compiler_addop_j((C), (OP), &py::LlvmFunctionBuilder::OP, \
+			      (O), 0)) \
 		return 0; \
 }
 
@@ -2155,8 +2233,6 @@ static int
 compiler_visit_stmt(struct compiler *c, stmt_ty s)
 {
 	int i, n;
-	const int raise_varargs[] = { RAISE_VARARGS_ZERO, RAISE_VARARGS_ONE,
-				      RAISE_VARARGS_TWO, RAISE_VARARGS_THREE };
 
 	/* Always assign a lineno to the next instruction for a stmt. */
 	c->u->u_lineno = s->lineno;
@@ -2173,9 +2249,11 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 		if (s->v.Return.value) {
 			VISIT(c, expr, s->v.Return.value);
 		}
-		else
+		else {
 			ADDOP_O(c, LOAD_CONST, Py_None, consts);
+		}
 		ADDOP(c, RETURN_VALUE);
+		NEXT_BLOCK(c);
 		break;
 	case Delete_kind:
 		VISIT_SEQ(c, expr, s->v.Delete.targets)
@@ -2214,7 +2292,16 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 				}
 			}
 		}
-		ADDOP(c, raise_varargs[n]);
+		switch(n) {
+		case 0:
+			ADDOP(c, RAISE_VARARGS_ZERO); break;
+		case 1:
+			ADDOP(c, RAISE_VARARGS_ONE); break;
+		case 2:
+			ADDOP(c, RAISE_VARARGS_TWO); break;
+		case 3:
+			ADDOP(c, RAISE_VARARGS_THREE); break;
+		}
 		break;
 	case TryExcept_kind:
 		return compiler_try_except(c, s);
@@ -2260,17 +2347,17 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 }
 
 static int
-unaryop(unaryop_ty op)
+add_unaryop(struct compiler *c, unaryop_ty op)
 {
 	switch (op) {
 	case Invert:
-		return UNARY_INVERT;
+		ADDOP(c, UNARY_INVERT); return 1;
 	case Not:
-		return UNARY_NOT;
+		ADDOP(c, UNARY_NOT); return 1;
 	case UAdd:
-		return UNARY_POSITIVE;
+		ADDOP(c, UNARY_POSITIVE); return 1;
 	case USub:
-		return UNARY_NEGATIVE;
+		ADDOP(c, UNARY_NEGATIVE); return 1;
 	default:
 		PyErr_Format(PyExc_SystemError,
 			"unary op %d should not be possible", op);
@@ -2279,36 +2366,38 @@ unaryop(unaryop_ty op)
 }
 
 static int
-binop(struct compiler *c, operator_ty op)
+add_binop(struct compiler *c, operator_ty op)
 {
 	switch (op) {
 	case Add:
-		return BINARY_ADD;
+		ADDOP(c, BINARY_ADD); return 1;
 	case Sub:
-		return BINARY_SUBTRACT;
+		ADDOP(c, BINARY_SUBTRACT); return 1;
 	case Mult:
-		return BINARY_MULTIPLY;
+		ADDOP(c, BINARY_MULTIPLY); return 1;
 	case Div:
-		if (c->c_flags && c->c_flags->cf_flags & CO_FUTURE_DIVISION)
-			return BINARY_TRUE_DIVIDE;
-		else
-			return BINARY_DIVIDE;
+		if (c->c_flags && c->c_flags->cf_flags & CO_FUTURE_DIVISION) {
+			ADDOP(c, BINARY_TRUE_DIVIDE); return 1;
+		}
+		else {
+			ADDOP(c, BINARY_DIVIDE); return 1;
+		}
 	case Mod:
-		return BINARY_MODULO;
+		ADDOP(c, BINARY_MODULO); return 1;
 	case Pow:
-		return BINARY_POWER;
+		ADDOP(c, BINARY_POWER); return 1;
 	case LShift:
-		return BINARY_LSHIFT;
+		ADDOP(c, BINARY_LSHIFT); return 1;
 	case RShift:
-		return BINARY_RSHIFT;
+		ADDOP(c, BINARY_RSHIFT); return 1;
 	case BitOr:
-		return BINARY_OR;
+		ADDOP(c, BINARY_OR); return 1;
 	case BitXor:
-		return BINARY_XOR;
+		ADDOP(c, BINARY_XOR); return 1;
 	case BitAnd:
-		return BINARY_AND;
+		ADDOP(c, BINARY_AND); return 1;
 	case FloorDiv:
-		return BINARY_FLOOR_DIVIDE;
+		ADDOP(c, BINARY_FLOOR_DIVIDE); return 1;
 	default:
 		PyErr_Format(PyExc_SystemError,
 			"binary op %d should not be possible", op);
@@ -2346,36 +2435,38 @@ cmpop(cmpop_ty op)
 }
 
 static int
-inplace_binop(struct compiler *c, operator_ty op)
+add_inplace_binop(struct compiler *c, operator_ty op)
 {
 	switch (op) {
 	case Add:
-		return INPLACE_ADD;
+		ADDOP(c, INPLACE_ADD); return 1;
 	case Sub:
-		return INPLACE_SUBTRACT;
+		ADDOP(c, INPLACE_SUBTRACT); return 1;
 	case Mult:
-		return INPLACE_MULTIPLY;
+		ADDOP(c, INPLACE_MULTIPLY); return 1;
 	case Div:
-		if (c->c_flags && c->c_flags->cf_flags & CO_FUTURE_DIVISION)
-			return INPLACE_TRUE_DIVIDE;
-		else
-			return INPLACE_DIVIDE;
+		if (c->c_flags && c->c_flags->cf_flags & CO_FUTURE_DIVISION) {
+			ADDOP(c, INPLACE_TRUE_DIVIDE); return 1;
+		}
+		else {
+			ADDOP(c, INPLACE_DIVIDE); return 1;
+		}
 	case Mod:
-		return INPLACE_MODULO;
+		ADDOP(c, INPLACE_MODULO); return 1;
 	case Pow:
-		return INPLACE_POWER;
+		ADDOP(c, INPLACE_POWER); return 1;
 	case LShift:
-		return INPLACE_LSHIFT;
+		ADDOP(c, INPLACE_LSHIFT); return 1;
 	case RShift:
-		return INPLACE_RSHIFT;
+		ADDOP(c, INPLACE_RSHIFT); return 1;
 	case BitOr:
-		return INPLACE_OR;
+		ADDOP(c, INPLACE_OR); return 1;
 	case BitXor:
-		return INPLACE_XOR;
+		ADDOP(c, INPLACE_XOR); return 1;
 	case BitAnd:
-		return INPLACE_AND;
+		ADDOP(c, INPLACE_AND); return 1;
 	case FloorDiv:
-		return INPLACE_FLOOR_DIVIDE;
+		ADDOP(c, INPLACE_FLOOR_DIVIDE); return 1;
 	default:
 		PyErr_Format(PyExc_SystemError,
 			"inplace binary op %d should not be possible", op);
@@ -2471,7 +2562,25 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
 					"param invalid for local variable");
 			return 0;
 		}
-		ADDOP_O(c, op, mangled, varnames);
+		// This switch is equivalent to ADDOP_O(c, op,
+		// mangled, varnames) but allows the preprocessor to
+		// construct &py::LlvmFunctionBuilder::LOAD_FAST
+		// instead of ...::op.
+		switch (op) {
+		case LOAD_FAST:
+			ADDOP_O(c, LOAD_FAST, mangled, varnames);
+			break;
+		case STORE_FAST:
+			ADDOP_O(c, STORE_FAST, mangled, varnames);
+			break;
+		case DELETE_FAST:
+			ADDOP_O(c, DELETE_FAST, mangled, varnames);
+			break;
+		default:
+			PyErr_SetString(PyExc_SystemError,
+					"Unexpected opcode");
+			return 0;
+		}
 		Py_DECREF(mangled);
 		return 1;
 	case OP_GLOBAL:
@@ -2511,7 +2620,25 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
 	Py_DECREF(mangled);
 	if (arg < 0)
 		return 0;
-	return compiler_addop_i(c, op, arg);
+	switch(op) {
+#define CASE_OP(OP) \
+	case OP: \
+		ADDOP_I(c, OP, arg); \
+		return 1
+
+		CASE_OP(LOAD_DEREF);
+		CASE_OP(STORE_DEREF);
+		CASE_OP(LOAD_GLOBAL);
+		CASE_OP(STORE_GLOBAL);
+		CASE_OP(DELETE_GLOBAL);
+		CASE_OP(LOAD_NAME);
+		CASE_OP(STORE_NAME);
+		CASE_OP(DELETE_NAME);
+#undef CASE_OP
+	}
+	PyErr_SetString(PyExc_SystemError,
+			"Unexpected opcode");
+	return 0;
 }
 
 static int
@@ -2529,7 +2656,8 @@ compiler_load_global(struct compiler *c, const char *global_name)
     	compiler_exit_scope(c);
     	return 0;
     }
-    if (!compiler_addop_i(c, LOAD_GLOBAL, arg)) {
+    if (!compiler_addop_i(c, LOAD_GLOBAL,
+			  &py::LlvmFunctionBuilder::LOAD_GLOBAL, arg)) {
     	compiler_exit_scope(c);
     	return 0;
     }
@@ -3036,11 +3164,11 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
 	case BinOp_kind:
 		VISIT(c, expr, e->v.BinOp.left);
 		VISIT(c, expr, e->v.BinOp.right);
-		ADDOP(c, binop(c, e->v.BinOp.op));
+		add_binop(c, e->v.BinOp.op);
 		break;
 	case UnaryOp_kind:
 		VISIT(c, expr, e->v.UnaryOp.operand);
-		ADDOP(c, unaryop(e->v.UnaryOp.op));
+		add_unaryop(c, e->v.UnaryOp.op);
 		break;
 	case Lambda_kind:
 		return compiler_lambda(c, e);
@@ -3168,7 +3296,7 @@ compiler_augassign(struct compiler *c, stmt_ty s)
 		    return 0;
 		VISIT(c, expr, auge);
 		VISIT(c, expr, s->v.AugAssign.value);
-		ADDOP(c, inplace_binop(c, s->v.AugAssign.op));
+		add_inplace_binop(c, s->v.AugAssign.op);
 		auge->v.Attribute.ctx = AugStore;
 		VISIT(c, expr, auge);
 		break;
@@ -3179,7 +3307,7 @@ compiler_augassign(struct compiler *c, stmt_ty s)
 		    return 0;
 		VISIT(c, expr, auge);
 		VISIT(c, expr, s->v.AugAssign.value);
-		ADDOP(c, inplace_binop(c, s->v.AugAssign.op));
+		add_inplace_binop(c, s->v.AugAssign.op);
 		auge->v.Subscript.ctx = AugStore;
 		VISIT(c, expr, auge);
 		break;
@@ -3187,7 +3315,7 @@ compiler_augassign(struct compiler *c, stmt_ty s)
 		if (!compiler_nameop(c, e->v.Name.id, Load))
 		    return 0;
 		VISIT(c, expr, s->v.AugAssign.value);
-		ADDOP(c, inplace_binop(c, s->v.AugAssign.op));
+		add_inplace_binop(c, s->v.AugAssign.op);
 		return compiler_nameop(c, e->v.Name.id, Store);
 	default:
 		PyErr_Format(PyExc_SystemError, 
@@ -3267,28 +3395,25 @@ static int
 compiler_handle_subscr(struct compiler *c, const char *kind, 
 		       expr_context_ty ctx) 
 {
-	int op = 0;
-
-	/* XXX this code is duplicated */
-	switch (ctx) {
-		case AugLoad: /* fall through to Load */
-		case Load:    op = BINARY_SUBSCR; break;
-		case AugStore:/* fall through to Store */
-		case Store:   op = STORE_SUBSCR; break;
-		case Del:     op = DELETE_SUBSCR; break;
-		case Param:
-			PyErr_Format(PyExc_SystemError, 
-				     "invalid %s kind %d in subscript\n", 
-				     kind, ctx);
-			return 0;
-	}
 	if (ctx == AugLoad) {
 		ADDOP(c, DUP_TOP_TWO);
 	}
 	else if (ctx == AugStore) {
 		ADDOP(c, ROT_THREE);
 	}
-	ADDOP(c, op);
+	/* XXX this code is duplicated */
+	switch (ctx) {
+		case AugLoad: /* fall through to Load */
+		case Load:    ADDOP(c, BINARY_SUBSCR); break;
+		case AugStore:/* fall through to Store */
+		case Store:   ADDOP(c, STORE_SUBSCR); break;
+		case Del:     ADDOP(c, DELETE_SUBSCR); break;
+		case Param:
+			PyErr_Format(PyExc_SystemError, 
+				     "invalid %s kind %d in subscript\n", 
+				     kind, ctx);
+			return 0;
+	}
 	return 1;
 }
 
@@ -3317,7 +3442,12 @@ compiler_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 		slice_has_three_args = 1;
 		VISIT(c, expr, s->v.Slice.step);
 	}
-	ADDOP(c, slice_has_three_args ? BUILD_SLICE_THREE : BUILD_SLICE_TWO);
+	if (slice_has_three_args) {
+		ADDOP(c, BUILD_SLICE_THREE);
+	}
+	else {
+		ADDOP(c, BUILD_SLICE_TWO);
+	}
 	return 1;
 }
 
@@ -3374,7 +3504,24 @@ compiler_simple_slice(struct compiler *c, slice_ty s, expr_context_ty ctx)
 		return 0;
 	}
 
-	ADDOP(c, op_array[slice_offset]);
+	switch(op_array[slice_offset]) {
+#define CASE_OP(OP) case OP: ADDOP(c, OP); break
+		CASE_OP(SLICE_NONE);
+		CASE_OP(SLICE_LEFT);
+		CASE_OP(SLICE_RIGHT);
+		CASE_OP(SLICE_BOTH);
+		CASE_OP(STORE_SLICE_NONE);
+		CASE_OP(STORE_SLICE_LEFT);
+		CASE_OP(STORE_SLICE_RIGHT);
+		CASE_OP(STORE_SLICE_BOTH);
+		CASE_OP(DELETE_SLICE_NONE);
+		CASE_OP(DELETE_SLICE_LEFT);
+		CASE_OP(DELETE_SLICE_RIGHT);
+		CASE_OP(DELETE_SLICE_BOTH);
+#undef CASE_OP
+	default:
+		PyErr_SetString(PyExc_SystemError, "Unexpected opcode");
+	}
 	return 1;
 }
 
@@ -3909,6 +4056,7 @@ makecode(struct compiler *c, struct assembler *a)
 	PyObject *freevars = NULL;
 	PyObject *cellvars = NULL;
 	PyObject *bytecode = NULL;
+	PyObject *llvm_function = NULL;
 	int nlocals, flags;
 
 	tmp = dict_keys_inorder(c->u->u_consts, 0);
@@ -3941,6 +4089,10 @@ makecode(struct compiler *c, struct assembler *a)
 	if (!bytecode)
 		goto error;
 
+	llvm_function = _PyLlvmFunction_FromPtr(c->u->fb->function());
+	if (!llvm_function)
+		goto error;
+
 	tmp = PyList_AsTuple(consts); /* PyCode_New requires a tuple */
 	if (!tmp)
 		goto error;
@@ -3953,6 +4105,10 @@ makecode(struct compiler *c, struct assembler *a)
 			filename, c->u->u_name,
 			c->u->u_firstlineno,
 			a->a_lnotab);
+	if (co != NULL) {
+		co->co_llvm_function = llvm_function;
+		llvm_function = NULL;
+	}
  error:
 	Py_XDECREF(consts);
 	Py_XDECREF(names);
@@ -3962,6 +4118,7 @@ makecode(struct compiler *c, struct assembler *a)
 	Py_XDECREF(freevars);
 	Py_XDECREF(cellvars);
 	Py_XDECREF(bytecode);
+	Py_XDECREF(llvm_function);
 	return co;
 }
 
@@ -4017,6 +4174,12 @@ assemble(struct compiler *c, int addNone)
 		if (addNone)
 			ADDOP_O(c, LOAD_CONST, Py_None, consts);
 		ADDOP(c, RETURN_VALUE);
+	}
+
+	if (llvm::verifyFunction(*c->u->fb->function(),
+				 llvm::PrintMessageAction)) {
+		PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
+		return NULL;
 	}
 
 	nblocks = 0;
