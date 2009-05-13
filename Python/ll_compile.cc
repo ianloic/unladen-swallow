@@ -104,10 +104,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         this->GetGlobalFunction<PyThreadState*()>(
             "_PyLlvm_WrapPyThreadState_GET"));
     this->stack_bottom_ = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_VALUESTACK),
+        FrameTy::f_valuestack(this->builder_, this->frame_),
         "stack_bottom");
-    Value *f_stacktop = this->builder_.CreateStructGEP(
-        this->frame_, FrameTy::FIELD_STACKTOP, "f_stacktop");
+    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
     Value *initial_stack_pointer =
         this->builder_.CreateLoad(
             f_stacktop,
@@ -120,22 +119,22 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         f_stacktop);
 
     Value *code = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_CODE),
+        FrameTy::f_code(this->builder_, this->frame_),
         "co");
     this->varnames_ = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(code, CodeTy::FIELD_VARNAMES),
+        CodeTy::co_varnames(this->builder_, code),
         "varnames");
     Value *consts_tuple =  // (PyTupleObject*)code->co_consts
         this->builder_.CreateBitCast(
             this->builder_.CreateLoad(
-                this->builder_.CreateStructGEP(code, CodeTy::FIELD_CONSTS)),
+                CodeTy::co_consts(this->builder_, code)),
             PyTypeBuilder<PyTupleObject*>::get());
     // Get the address of the const_tuple's first item, for convenient
     // indexing of all its items.
     this->consts_ = this->GetTupleItemSlot(consts_tuple, 0);
     Value *names_tuple = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
-            this->builder_.CreateStructGEP(code, CodeTy::FIELD_NAMES)),
+            CodeTy::co_names(this->builder_, code)),
         PyTypeBuilder<PyTupleObject*>::get(),
         "names");
     // Get the address of the names_tuple's first item as well.
@@ -143,31 +142,23 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     // The next GEP-magic assigns this->fastlocals_ to
     // &frame_[0].f_localsplus[0].
-    Value* fastlocals_indices[] = {
-        ConstantInt::get(Type::Int32Ty, 0),
-        ConstantInt::get(Type::Int32Ty, FrameTy::FIELD_LOCALSPLUS),
-        ConstantInt::get(Type::Int32Ty, 0),
-    };
-    this->fastlocals_ = this->builder_.CreateGEP(
-        this->frame_,
-        fastlocals_indices, array_endof(fastlocals_indices),
-        "fastlocals");
+    Value *localsplus = FrameTy::f_localsplus(this->builder_, this->frame_);
+    this->fastlocals_ = this->builder_.CreateStructGEP(
+        localsplus, 0, "fastlocals");
     Value *nlocals = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(code, CodeTy::FIELD_NLOCALS), "nlocals");
+        CodeTy::co_nlocals(this->builder_, code), "nlocals");
 
     this->freevars_ =
         this->builder_.CreateGEP(this->fastlocals_, nlocals, "freevars");
     this->globals_ =
         this->builder_.CreateBitCast(
             this->builder_.CreateLoad(
-                this->builder_.CreateStructGEP(this->frame_,
-                                               FrameTy::FIELD_GLOBALS)),
+                FrameTy::f_globals(this->builder_, this->frame_)),
             PyTypeBuilder<PyObject *>::get());
     this->builtins_ =
         this->builder_.CreateBitCast(
             this->builder_.CreateLoad(
-                this->builder_.CreateStructGEP(this->frame_,
-                                               FrameTy::FIELD_BUILTINS)),
+                FrameTy::f_builtins(this->builder_,this->frame_)),
             PyTypeBuilder<PyObject *>::get());
 
     // Support generator.throw().  If frame->f_throwflag is set, the
@@ -179,7 +170,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         BasicBlock::Create("continue_generator_or_start_func", this->function_);
 
     Value *throwflag = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_THROWFLAG),
+        FrameTy::f_throwflag(this->builder_, this->frame_),
         "f_throwflag");
     this->builder_.CreateCondBr(
         this->IsNonZero(throwflag),
@@ -190,8 +181,8 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     this->builder_.SetInsertPoint(continue_generator_or_start_func);
     this->resume_block_ = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(this->frame_, FrameTy::FIELD_LASTI,
-                                       "f_lasti"));
+        FrameTy::f_lasti(this->builder_, this->frame_),
+        "resume_block");
     // Each use of a YIELD_VALUE opcode will add a new case to this
     // switch.  eval.cc just assigns the new IP, allowing wild jumps,
     // but LLVM won't let us do that so we default to jumping to the
@@ -269,28 +260,25 @@ LlvmFunctionBuilder::FillUnwindBlock()
         this->FallThroughTo(unwind_loop_header);
         // Continue looping if frame->f_iblock > 0.
         Value *blocks_left = this->builder_.CreateLoad(
-            this->builder_.CreateStructGEP(this->frame_,
-                                           FrameTy::FIELD_IBLOCK));
+            FrameTy::f_iblock(this->builder_, this->frame_));
         this->builder_.CreateCondBr(this->IsPositive(blocks_left),
                                     unwind_loop_body, pop_remaining_objects);
 
         this->builder_.SetInsertPoint(unwind_loop_body);
-        Value *popped_block = this->builder_.CreateLoad(
-            this->builder_.CreateCall(
-                this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
-                    "PyFrame_BlockPop"),
-                this->frame_));
-        Value *block_type = this->builder_.CreateExtractValue(
-            popped_block,
-            PyTypeBuilder<PyTryBlock>::FIELD_TYPE,
+        Value *popped_block = this->builder_.CreateCall(
+            this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
+                "PyFrame_BlockPop"),
+            this->frame_);
+        Value *block_type = this->builder_.CreateLoad(
+            PyTypeBuilder<PyTryBlock>::b_type(this->builder_, popped_block),
             "block_type");
-        Value *block_handler = this->builder_.CreateExtractValue(
-            popped_block,
-            PyTypeBuilder<PyTryBlock>::FIELD_HANDLER,
+        Value *block_handler = this->builder_.CreateLoad(
+            PyTypeBuilder<PyTryBlock>::b_handler(this->builder_,
+                                                     popped_block),
             "block_handler");
-        Value *block_level = this->builder_.CreateExtractValue(
-            popped_block,
-            PyTypeBuilder<PyTryBlock>::FIELD_LEVEL,
+        Value *block_level = this->builder_.CreateLoad(
+            PyTypeBuilder<PyTryBlock>::b_level(this->builder_,
+                                                   popped_block),
             "block_level");
 
         // Handle SETUP_LOOP with UNWIND_CONTINUE.
@@ -495,12 +483,10 @@ LlvmFunctionBuilder::FillUnwindBlock()
     BasicBlock *finish_return =
         BasicBlock::Create("finish_return", this->function_);
     Value *tstate_frame = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(this->tstate_,
-                                       ThreadStateTy::FIELD_FRAME),
+        ThreadStateTy::frame(this->builder_, this->tstate_),
         "tstate->frame");
     Value *f_exc_type = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(tstate_frame,
-                                       FrameTy::FIELD_EXC_TYPE),
+        FrameTy::f_exc_type(this->builder_, tstate_frame),
         "tstate->frame->f_exc_type");
     this->builder_.CreateCondBr(this->IsNull(f_exc_type),
                                 no_frame_exception, have_frame_exception);
@@ -517,12 +503,10 @@ LlvmFunctionBuilder::FillUnwindBlock()
     // consistency.
 #ifndef NDEBUG
     Value *f_exc_value = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(tstate_frame,
-                                       FrameTy::FIELD_EXC_VALUE),
+        FrameTy::f_exc_value(this->builder_, tstate_frame),
         "tstate->frame->f_exc_value");
     Value *f_exc_traceback = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(tstate_frame,
-                                       FrameTy::FIELD_EXC_TRACEBACK),
+        FrameTy::f_exc_traceback(this->builder_, tstate_frame),
         "tstate->frame->f_exc_traceback");
     this->Assert(this->IsNull(f_exc_value),
                  "Frame's exc_type was null but exc_value wasn't");
@@ -575,8 +559,7 @@ LlvmFunctionBuilder::CreateAllocaInEntryBlock(
 void
 LlvmFunctionBuilder::SetLineNumber(int line)
 {
-    Value *f_lineno = this->builder_.CreateStructGEP(
-        this->frame_, FrameTy::FIELD_LINENO, "f_lineno");
+    Value *f_lineno = FrameTy::f_lineno(this->builder_, this->frame_);
     this->builder_.CreateStore(
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), line),
         f_lineno);
@@ -1332,11 +1315,11 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
     Value *iter = this->Pop();
     Value *iter_tp = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
-            this->builder_.CreateStructGEP(iter, ObjectTy::FIELD_TYPE)),
+            ObjectTy::ob_type(this->builder_, iter)),
         PyTypeBuilder<PyTypeObject *>::get(),
         "iter_type");
     Value *iternext = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(iter_tp, TypeTy::FIELD_ITERNEXT),
+        TypeTy::tp_iternext(this->builder_, iter_tp),
         "iternext");
     Value *next = this->builder_.CreateCall(iternext, iter, "next");
     BasicBlock *got_next = BasicBlock::Create("got_next", this->function_);
@@ -1387,8 +1370,7 @@ LlvmFunctionBuilder::POP_BLOCK()
             "PyFrame_BlockPop"),
         this->frame_);
     Value *pop_to_level = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(
-            block_info, PyTypeBuilder<PyTryBlock>::FIELD_LEVEL));
+        PyTypeBuilder<PyTryBlock>::b_level(this->builder_, block_info));
     Value *pop_to_addr =
         this->builder_.CreateGEP(this->stack_bottom_, pop_to_level);
     this->PopAndDecrefTo(pop_to_addr);
@@ -1594,13 +1576,11 @@ LlvmFunctionBuilder::YIELD_VALUE()
 
     // Save the current stack pointer into the frame.
     Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
-    Value *f_stacktop = this->builder_.CreateStructGEP(
-        this->frame_, FrameTy::FIELD_STACKTOP, "f_stacktop");
+    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
     this->builder_.CreateStore(stack_pointer, f_stacktop);
 
     // Save the right block to jump back to when we resume this generator.
-    Value *f_lasti = this->builder_.CreateStructGEP(
-        this->frame_, FrameTy::FIELD_LASTI, "f_lasti");
+    Value *f_lasti = FrameTy::f_lasti(this->builder_, this->frame_);
     this->builder_.CreateStore(yield_number, f_lasti);
 
     // Yields return from the current function without unwinding the
@@ -2036,7 +2016,7 @@ LlvmFunctionBuilder::STORE_MAP()
     Value *dict = this->Pop();
     this->Push(dict);
     Value *dict_type = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(dict, ObjectTy::FIELD_TYPE));
+        ObjectTy::ob_type(this->builder_, dict));
     Value *is_exact_dict = this->builder_.CreateICmpEQ(
         dict_type, GetGlobalVariable<PyTypeObject>("PyDict_Type"));
     this->Assert(is_exact_dict,
@@ -2057,7 +2037,7 @@ LlvmFunctionBuilder::GetListItemSlot(Value *lst, int idx)
         lst, PyTypeBuilder<PyListObject *>::get());
     // Load the target of the ob_item PyObject** into list_items.
     Value *list_items = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(listobj, ListTy::FIELD_ITEM));
+        ListTy::ob_item(this->builder_, listobj));
     // GEP the list_items PyObject* up to the desired item
     return this->builder_.CreateGEP(list_items,
                                     ConstantInt::get(Type::Int32Ty, idx),
@@ -2070,14 +2050,9 @@ LlvmFunctionBuilder::GetTupleItemSlot(Value *tup, int idx)
     Value *tupobj = this->builder_.CreateBitCast(
         tup, PyTypeBuilder<PyTupleObject*>::get());
     // Make CreateGEP perform &tup_item_indices[0].ob_item[idx].
-    Value *tup_item_indices[] = {
-        ConstantInt::get(Type::Int32Ty, 0),
-        ConstantInt::get(Type::Int32Ty, TupleTy::FIELD_ITEM),
-        ConstantInt::get(Type::Int32Ty, idx),
-    };
-    return this->builder_.CreateGEP(tupobj, tup_item_indices,
-                                    array_endof(tup_item_indices),
-                                    "tuple_item_slot");
+    Value *tuple_items = TupleTy::ob_item(this->builder_, tupobj);
+    return this->builder_.CreateStructGEP(tuple_items, idx,
+                                          "tuple_item_slot");
 }
 
 void
@@ -2531,11 +2506,11 @@ LlvmFunctionBuilder::IsInstanceOfFlagClass(llvm::Value *value, int flag)
 {
     Value *type = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
-            this->builder_.CreateStructGEP(value, ObjectTy::FIELD_TYPE),
+            ObjectTy::ob_type(this->builder_, value),
             "type"),
         PyTypeBuilder<PyTypeObject *>::get());
     Value *type_flags = this->builder_.CreateLoad(
-        this->builder_.CreateStructGEP(type, TypeTy::FIELD_FLAGS),
+        TypeTy::tp_flags(this->builder_, type),
         "type_flags");
     Value *is_instance = this->builder_.CreateAnd(
         type_flags,

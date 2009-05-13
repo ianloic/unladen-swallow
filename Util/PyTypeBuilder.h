@@ -8,14 +8,15 @@
 
 #include "Python.h"
 #include "code.h"
+#include "frameobject.h"
 
 #include "Python/global_llvm_data.h"
 
-#include "llvm/Support/TypeBuilder.h"
 #include "llvm/Module.h"
+#include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/TypeBuilder.h"
 
 struct PyExcInfo;
-typedef struct _frame PyFrameObject;
 
 // llvm::TypeBuilder requires a boolean parameter specifying whether
 // the type needs to be cross-compilable.  In Python, we don't need
@@ -25,51 +26,77 @@ typedef struct _frame PyFrameObject;
 template<typename T>
 class PyTypeBuilder : public llvm::TypeBuilder<T, false> {};
 
+// This function uses the JIT compiler's TargetData object to convert
+// from a byte offset inside a type to a GEP index referring to the
+// field of the type.  This should be called like
+//   _PyTypeBuilder_GetFieldIndexFromOffset(
+//       PyTypeBuilder<PySomethingType>::get(),
+//       offsetof(PySomethingType, field));
+// It will only work if PySomethingType is a POD type.
+PyAPI_FUNC(unsigned int)
+_PyTypeBuilder_GetFieldIndexFromOffset(
+    const llvm::StructType *type, size_t offset);
+
 // Enter the LLVM namespace in order to add specializations of
 // llvm::TypeBuilder.
 namespace llvm {
 
+// Defines a static member function FIELD_NAME(ir_builder, ptr) to
+// access TYPE::FIELD_NAME inside ptr.  GetElementPtr instructions
+// require the index of the field within the type, but padding makes
+// it hard to predict that index from the list of fields in the type.
+// Because the compiler building this file knows the byte offset of
+// the field, we can use llvm::TargetData to compute the index.  This
+// has the extra benefit that it's more resilient to changes in the
+// set or order of fields in a type.
+#define DEFINE_FIELD(TYPE, FIELD_NAME) \
+    static Value *FIELD_NAME(IRBuilder<> &builder, Value *ptr) { \
+        assert(ptr->getType() == PyTypeBuilder<TYPE*>::get() && \
+               "*ptr must be of type " #TYPE); \
+        static const unsigned int index = \
+            _PyTypeBuilder_GetFieldIndexFromOffset( \
+                PyTypeBuilder<TYPE>::get(), \
+                offsetof(TYPE, FIELD_NAME)); \
+        return builder.CreateStructGEP(ptr, index, #FIELD_NAME); \
+    }
+
 #ifdef Py_TRACE_REFS
-#define OBJECT_HEAD_FIELDS \
-        FIELD_NEXT, \
-        FIELD_PREV, \
-        FIELD_REFCNT, \
-        FIELD_TYPE,
+#define DEFINE_OBJECT_HEAD_FIELDS(TYPE) \
+    DEFINE_FIELD(TYPE, _ob_next) \
+    DEFINE_FIELD(TYPE, _ob_prev) \
+    DEFINE_FIELD(TYPE, ob_refcnt) \
+    DEFINE_FIELD(TYPE, ob_type)
 #else
-#define OBJECT_HEAD_FIELDS \
-        FIELD_REFCNT, \
-        FIELD_TYPE,
+#define DEFINE_OBJECT_HEAD_FIELDS(TYPE) \
+    DEFINE_FIELD(TYPE, ob_refcnt) \
+    DEFINE_FIELD(TYPE, ob_type)
 #endif
 
 template<> class TypeBuilder<PyObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            // Clang's name for the PyObject struct.
-            PyGlobalLlvmData::Get()->module()->getTypeByName("struct._object");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyObject struct.
+                                 "struct._object"));
         return result;
     }
 
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-    };
+    DEFINE_OBJECT_HEAD_FIELDS(PyObject)
 };
 
 template<> class TypeBuilder<PyTupleObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result = Create();
+    static const StructType *get() {
+        static const StructType *const result = Create();
         return result;
     }
 
-    enum Fields {
-        FIELD_OBJECT,
-        FIELD_SIZE,
-        FIELD_ITEM,
-    };
+    DEFINE_FIELD(PyTupleObject, ob_size)
+    DEFINE_FIELD(PyTupleObject, ob_item)
 
 private:
-    static const Type *Create() {
+    static const StructType *Create() {
         // Keep this in sync with tupleobject.h.
         return StructType::get(
             // From PyObject_HEAD. In C these are directly nested
@@ -86,20 +113,17 @@ private:
 
 template<> class TypeBuilder<PyListObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result = Create();
+    static const StructType *get() {
+        static const StructType *const result = Create();
         return result;
     }
 
-    enum Fields {
-        FIELD_OBJECT,
-        FIELD_SIZE,
-        FIELD_ITEM,
-        FIELD_ALLOCATED,
-    };
+    DEFINE_FIELD(PyListObject, ob_size)
+    DEFINE_FIELD(PyListObject, ob_item)
+    DEFINE_FIELD(PyListObject, allocated)
 
 private:
-    static const Type *Create() {
+    static const StructType *Create() {
         // Keep this in sync with listobject.h.
         return StructType::get(
             // From PyObject_HEAD. In C these are directly nested
@@ -117,124 +141,114 @@ private:
 
 template<> class TypeBuilder<PyTypeObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            PyGlobalLlvmData::Get()->module()->getTypeByName(
-                // Clang's name for the PyTypeObject struct.
-                "struct._typeobject");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTypeObject struct.
+                                 "struct._typeobject"));
         return result;
     }
 
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-        FIELD_SIZE,
-        FIELD_NAME,
-        FIELD_BASICSIZE,
-        FIELD_ITEMSIZE,
-        FIELD_DEALLOC,
-        FIELD_PRINT,
-        FIELD_GETATTR,
-        FIELD_SETATTR,
-        FIELD_COMPARE,
-        FIELD_REPR,
-        FIELD_AS_NUMBER,
-        FIELD_AS_SEQUENCE,
-        FIELD_AS_MAPPING,
-        FIELD_HASH,
-        FIELD_CALL,
-        FIELD_STR,
-        FIELD_GETATTRO,
-        FIELD_SETATTRO,
-        FIELD_AS_BUFFER,
-        FIELD_FLAGS,
-        FIELD_DOC,
-        FIELD_TRAVERSE,
-        FIELD_CLEAR,
-        FIELD_RICHCOMPARE,
-        FIELD_WEAKLISTOFFSET,
-        FIELD_ITER,
-        FIELD_ITERNEXT,
-        FIELD_METHODS,
-        FIELD_MEMBERS,
-        FIELD_GETSET,
-        FIELD_BASE,
-        FIELD_DICT,
-        FIELD_DESCR_GET,
-        FIELD_DESCR_SET,
-        FIELD_DICTOFFSET,
-        FIELD_INIT,
-        FIELD_ALLOC,
-        FIELD_NEW,
-        FIELD_FREE,
-        FIELD_IS_GC,
-        FIELD_BASES,
-        FIELD_MRO,
-        FIELD_CACHE,
-        FIELD_SUBCLASSES,
-        FIELD_WEAKLIST,
-        FIELD_DEL,
-        FIELD_TP_VERSION_TAG,
+    DEFINE_OBJECT_HEAD_FIELDS(PyTypeObject)
+    DEFINE_FIELD(PyTypeObject, ob_size)
+    DEFINE_FIELD(PyTypeObject, tp_name)
+    DEFINE_FIELD(PyTypeObject, tp_basicsize)
+    DEFINE_FIELD(PyTypeObject, tp_itemsize)
+    DEFINE_FIELD(PyTypeObject, tp_dealloc)
+    DEFINE_FIELD(PyTypeObject, tp_print)
+    DEFINE_FIELD(PyTypeObject, tp_getattr)
+    DEFINE_FIELD(PyTypeObject, tp_setattr)
+    DEFINE_FIELD(PyTypeObject, tp_compare)
+    DEFINE_FIELD(PyTypeObject, tp_repr)
+    DEFINE_FIELD(PyTypeObject, tp_as_number)
+    DEFINE_FIELD(PyTypeObject, tp_as_sequence)
+    DEFINE_FIELD(PyTypeObject, tp_as_mapping)
+    DEFINE_FIELD(PyTypeObject, tp_hash)
+    DEFINE_FIELD(PyTypeObject, tp_call)
+    DEFINE_FIELD(PyTypeObject, tp_str)
+    DEFINE_FIELD(PyTypeObject, tp_getattro)
+    DEFINE_FIELD(PyTypeObject, tp_setattro)
+    DEFINE_FIELD(PyTypeObject, tp_as_buffer)
+    DEFINE_FIELD(PyTypeObject, tp_flags)
+    DEFINE_FIELD(PyTypeObject, tp_doc)
+    DEFINE_FIELD(PyTypeObject, tp_traverse)
+    DEFINE_FIELD(PyTypeObject, tp_clear)
+    DEFINE_FIELD(PyTypeObject, tp_richcompare)
+    DEFINE_FIELD(PyTypeObject, tp_weaklistoffset)
+    DEFINE_FIELD(PyTypeObject, tp_iter)
+    DEFINE_FIELD(PyTypeObject, tp_iternext)
+    DEFINE_FIELD(PyTypeObject, tp_methods)
+    DEFINE_FIELD(PyTypeObject, tp_members)
+    DEFINE_FIELD(PyTypeObject, tp_getset)
+    DEFINE_FIELD(PyTypeObject, tp_base)
+    DEFINE_FIELD(PyTypeObject, tp_dict)
+    DEFINE_FIELD(PyTypeObject, tp_descr_get)
+    DEFINE_FIELD(PyTypeObject, tp_descr_set)
+    DEFINE_FIELD(PyTypeObject, tp_dictoffset)
+    DEFINE_FIELD(PyTypeObject, tp_init)
+    DEFINE_FIELD(PyTypeObject, tp_alloc)
+    DEFINE_FIELD(PyTypeObject, tp_new)
+    DEFINE_FIELD(PyTypeObject, tp_free)
+    DEFINE_FIELD(PyTypeObject, tp_is_gc)
+    DEFINE_FIELD(PyTypeObject, tp_bases)
+    DEFINE_FIELD(PyTypeObject, tp_mro)
+    DEFINE_FIELD(PyTypeObject, tp_cache)
+    DEFINE_FIELD(PyTypeObject, tp_subclasses)
+    DEFINE_FIELD(PyTypeObject, tp_weaklist)
+    DEFINE_FIELD(PyTypeObject, tp_del)
+    DEFINE_FIELD(PyTypeObject, tp_version_tag)
 #ifdef COUNT_ALLOCS
-        FIELD_ALLOCS,
-        FIELD_FREES,
-        FIELD_MAXALLOC,
-        FIELD_PREV,
-        FIELD_NEXT,
+    DEFINE_FIELD(PyTypeObject, tp_allocs)
+    DEFINE_FIELD(PyTypeObject, tp_frees)
+    DEFINE_FIELD(PyTypeObject, tp_maxalloc)
+    DEFINE_FIELD(PyTypeObject, tp_prev)
+    DEFINE_FIELD(PyTypeObject, tp_next)
 #endif
-    };
 };
 
 template<> class TypeBuilder<PyCodeObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            PyGlobalLlvmData::Get()->module()->getTypeByName(
-                // Clang's name for the PyCodeObject struct.
-                "struct.PyCodeObject");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyCodeObject struct.
+                                 "struct.PyCodeObject"));
         return result;
     }
 
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-        FIELD_ARGCOUNT,
-        FIELD_NLOCALS,
-        FIELD_STACKSIZE,
-        FIELD_FLAGS,
-        FIELD_CODE,
-        FIELD_CONSTS,
-        FIELD_NAMES,
-        FIELD_VARNAMES,
-        FIELD_FREEVARS,
-        FIELD_CELLVARS,
-        FIELD_TCODE,
-        FIELD_FILENAME,
-        FIELD_NAME,
-        FIELD_FIRSTLINENO,
-        FIELD_LNOTAB,
-        FIELD_ZOMBIEFRAME,
-        FIELD_LLVM_FUNCTION,
-        FIELD_USE_LLVM,
-        FIELD_PADDING1,  // Clang inserts 3 bytes of padding because
-        FIELD_PADDING2,  // co_use_llvm is a char followed by an int.
-        FIELD_PADDING3,
-        FIELD_OPTIMIZATION,
-    };
+    DEFINE_OBJECT_HEAD_FIELDS(PyCodeObject)
+    DEFINE_FIELD(PyCodeObject, co_argcount)
+    DEFINE_FIELD(PyCodeObject, co_nlocals)
+    DEFINE_FIELD(PyCodeObject, co_stacksize)
+    DEFINE_FIELD(PyCodeObject, co_flags)
+    DEFINE_FIELD(PyCodeObject, co_code)
+    DEFINE_FIELD(PyCodeObject, co_consts)
+    DEFINE_FIELD(PyCodeObject, co_names)
+    DEFINE_FIELD(PyCodeObject, co_varnames)
+    DEFINE_FIELD(PyCodeObject, co_freevars)
+    DEFINE_FIELD(PyCodeObject, co_cellvars)
+    DEFINE_FIELD(PyCodeObject, co_filename)
+    DEFINE_FIELD(PyCodeObject, co_name)
+    DEFINE_FIELD(PyCodeObject, co_firstlineno)
+    DEFINE_FIELD(PyCodeObject, co_lnotab)
+    DEFINE_FIELD(PyCodeObject, co_zombieframe)
+    DEFINE_FIELD(PyCodeObject, co_llvm_function)
+    DEFINE_FIELD(PyCodeObject, co_use_llvm)
+    DEFINE_FIELD(PyCodeObject, co_optimization)
 };
 
 template<> class TypeBuilder<PyTryBlock, false> {
 public:
-    static const Type *get() {
-        static const Type *const result = Create();
+    static const StructType *get() {
+        static const StructType *const result = Create();
         return result;
     }
-    enum Fields {
-        FIELD_TYPE,
-        FIELD_HANDLER,
-        FIELD_LEVEL,
-    };
+    DEFINE_FIELD(PyTryBlock, b_type)
+    DEFINE_FIELD(PyTryBlock, b_handler)
+    DEFINE_FIELD(PyTryBlock, b_level)
 
 private:
-    static const Type *Create() {
+    static const StructType *Create() {
         const Type *int_type = PyTypeBuilder<int>::get();
         return StructType::get(
             // b_type, b_handler, b_level
@@ -244,55 +258,48 @@ private:
 
 template<> class TypeBuilder<PyFrameObject, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            // Clang's name for the PyFrameObject struct.
-            PyGlobalLlvmData::Get()->module()->getTypeByName("struct._frame");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyFrameObject struct.
+                                 "struct._frame"));
         return result;
     }
 
-    enum Fields {
-        OBJECT_HEAD_FIELDS
-        FIELD_OB_SIZE,
-        FIELD_BACK,
-        FIELD_CODE,
-        FIELD_BUILTINS,
-        FIELD_GLOBALS,
-        FIELD_LOCALS,
-        FIELD_VALUESTACK,
-        FIELD_STACKTOP,
-        FIELD_TRACE,
-        FIELD_EXC_TYPE,
-        FIELD_EXC_VALUE,
-        FIELD_EXC_TRACEBACK,
-        FIELD_TSTATE,
-        FIELD_LASTI,
-        FIELD_LINENO,
-        FIELD_THROWFLAG,
-        FIELD_IBLOCK,
-        FIELD_PADDING1,
-        FIELD_PADDING2,
-        FIELD_BLOCKSTACK,
-#if SIZEOF_VOID_P == 8
-        FIELD_PADDING3,
-        FIELD_PADDING4,
-        FIELD_PADDING5,
-        FIELD_PADDING6,
-#endif
-        FIELD_LOCALSPLUS,
-    };
+    DEFINE_OBJECT_HEAD_FIELDS(PyFrameObject)
+    DEFINE_FIELD(PyFrameObject, ob_size)
+    DEFINE_FIELD(PyFrameObject, f_back)
+    DEFINE_FIELD(PyFrameObject, f_code)
+    DEFINE_FIELD(PyFrameObject, f_builtins)
+    DEFINE_FIELD(PyFrameObject, f_globals)
+    DEFINE_FIELD(PyFrameObject, f_locals)
+    DEFINE_FIELD(PyFrameObject, f_valuestack)
+    DEFINE_FIELD(PyFrameObject, f_stacktop)
+    DEFINE_FIELD(PyFrameObject, f_trace)
+    DEFINE_FIELD(PyFrameObject, f_exc_type)
+    DEFINE_FIELD(PyFrameObject, f_exc_value)
+    DEFINE_FIELD(PyFrameObject, f_exc_traceback)
+    DEFINE_FIELD(PyFrameObject, f_tstate)
+    DEFINE_FIELD(PyFrameObject, f_lasti)
+    DEFINE_FIELD(PyFrameObject, f_lineno)
+    DEFINE_FIELD(PyFrameObject, f_throwflag)
+    DEFINE_FIELD(PyFrameObject, f_iblock)
+    DEFINE_FIELD(PyFrameObject, f_blockstack)
+    DEFINE_FIELD(PyFrameObject, f_localsplus)
 };
 
 template<> class TypeBuilder<PyExcInfo, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            PyGlobalLlvmData::Get()->module()->getTypeByName(
-                // Clang's name for the PyExcInfo struct defined in
-                // llvm_inline_functions.c.
-                "struct.PyExcInfo");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyExcInfo struct
+                                 // defined in llvm_inline_functions.c.
+                                 "struct.PyExcInfo"));
         return result;
     }
+
+    // We use an enum here because PyExcInfo isn't defined in a header.
     enum Fields {
         FIELD_EXC,
         FIELD_VAL,
@@ -302,39 +309,39 @@ public:
 
 template<> class TypeBuilder<PyThreadState, false> {
 public:
-    static const Type *get() {
-        static const Type *const result =
-            // Clang's name for the PyThreadState struct.
-            PyGlobalLlvmData::Get()->module()->getTypeByName("struct._ts");
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyThreadState struct.
+                                 "struct._ts"));
         return result;
     }
 
-    enum Fields {
-        FIELD_NEXT,
-        FIELD_INTERP,
-        FIELD_FRAME,
-        FIELD_RECURSION_DEPTH,
-        FIELD_TRACING,
-        FIELD_USE_TRACING,
-        FIELD_C_PROFILEFUNC,
-        FIELD_C_TRACEFUNC,
-        FIELD_C_PROFILEOBJ,
-        FIELD_C_TRACEOBJ,
-        FIELD_CUREXC_TYPE,
-        FIELD_CUREXC_VALUE,
-        FIELD_CUREXC_TRACEBACK,
-        FIELD_EXC_TYPE,
-        FIELD_EXC_VALUE,
-        FIELD_EXC_TRACEBACK,
-        FIELD_DICT,
-        FIELD_TICK_COUNTER,
-        FIELD_GILSTATE_COUNTER,
-        FIELD_ASYNC_EXC,
-        FIELD_THREAD_ID,
-    };
+    DEFINE_FIELD(PyThreadState, next)
+    DEFINE_FIELD(PyThreadState, interp)
+    DEFINE_FIELD(PyThreadState, frame)
+    DEFINE_FIELD(PyThreadState, recursion_depth)
+    DEFINE_FIELD(PyThreadState, tracing)
+    DEFINE_FIELD(PyThreadState, use_tracing)
+    DEFINE_FIELD(PyThreadState, c_profilefunc)
+    DEFINE_FIELD(PyThreadState, c_tracefunc)
+    DEFINE_FIELD(PyThreadState, c_profileobj)
+    DEFINE_FIELD(PyThreadState, c_traceobj)
+    DEFINE_FIELD(PyThreadState, curexc_type)
+    DEFINE_FIELD(PyThreadState, curexc_value)
+    DEFINE_FIELD(PyThreadState, curexc_traceback)
+    DEFINE_FIELD(PyThreadState, exc_type)
+    DEFINE_FIELD(PyThreadState, exc_value)
+    DEFINE_FIELD(PyThreadState, exc_traceback)
+    DEFINE_FIELD(PyThreadState, dict)
+    DEFINE_FIELD(PyThreadState, tick_counter)
+    DEFINE_FIELD(PyThreadState, gilstate_counter)
+    DEFINE_FIELD(PyThreadState, async_exc)
+    DEFINE_FIELD(PyThreadState, thread_id)
 };
 
-#undef OBJECT_HEAD_FIELDS
+#undef DEFINE_OBJECT_HEAD_FIELDS
+#undef DEFINE_FIELD
 
 }  // namespace llvm
 

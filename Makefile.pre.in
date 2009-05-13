@@ -312,7 +312,8 @@ PYTHON_OBJS=	\
 		Python/$(DYNLOADFILE) \
 		$(LIBOBJS) \
 		$(MACHDEP_OBJS) \
-		$(THREADOBJ)
+		$(THREADOBJ) \
+                Util/PyTypeBuilder.o
 
 
 ##########################################################################

@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PyTryBlock {
     int b_type;			/* what kind of block this is */
     int b_handler;		/* where to jump to find handler */
     int b_level;		/* value stack level to pop to */
