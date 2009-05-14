@@ -287,7 +287,7 @@ PYTHON_OBJS=	\
 		Python/graminit.o \
 		Python/import.o \
 		Python/importdl.o \
-		Python/ll_compile.o \
+		Python/llvm_fbuilder.o \
 		Python/llvm_compile.o \
 		Python/initial_llvm_module.o \
 		Python/marshal.o \
@@ -707,7 +707,7 @@ PYTHON_HEADERS= \
 		Include/_llvmfunctionobject.h \
 		Python/global_llvm_data.h \
 		Python/global_llvm_data_fwd.h \
-		Python/ll_compile.h \
+		Python/llvm_fbuilder.h \
 		Include/llvm_compile.h \
 		Util/PyTypeBuilder.h \
 		pyconfig.h \

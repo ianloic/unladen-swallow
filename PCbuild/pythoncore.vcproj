@@ -1775,11 +1775,11 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\ll_compile.cc"
+				RelativePath="..\Python\llvm_fbuilder.cc"
 				>
 			</File>
 			<File
-				RelativePath="..\Python\ll_compile.h"
+				RelativePath="..\Python\llvm_fbuilder.h"
 				>
 			</File>
 			<File

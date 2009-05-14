@@ -1,6 +1,6 @@
 // -*- C++ -*-
-#ifndef PYTHON_LL_COMPILE_H
-#define PYTHON_LL_COMPILE_H
+#ifndef PYTHON_LLVM_FBUILDER_H
+#define PYTHON_LLVM_FBUILDER_H
 
 #ifndef __cplusplus
 #error This header expects to be included only in C++ source
@@ -377,7 +377,7 @@ private:
     llvm::Value *unwind_target_index_addr_;
     llvm::SwitchInst *unwind_target_switch_;
     // Stores one of the UNWIND_XXX constants defined at the top of
-    // ll_compile.cc
+    // llvm_fbuilder.cc
     llvm::Value *unwind_reason_addr_;
     llvm::BasicBlock *do_return_block_;
     llvm::Value *retval_addr_;
@@ -385,4 +385,4 @@ private:
 
 }  // namespace py
 
-#endif  // PYTHON_LL_COMPILE_H
+#endif  // PYTHON_LLVM_FBUILDER_H

@@ -98,7 +98,7 @@ static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
 
-/* Keep this in sync with ll_compile.cc */
+/* Keep this in sync with llvm_fbuilder.cc */
 #define CALL_FLAG_VAR 1
 #define CALL_FLAG_KW 2
 
@@ -2702,7 +2702,7 @@ fast_block_end:
 				if (why == WHY_EXCEPTION) {
 					/* Keep this in sync with
 					   _PyLlvm_WrapEnterExceptOrFinally
-					   in ll_compile.cc. */
+					   in llvm_fbuilder.cc. */
 					PyObject *exc, *val, *tb;
 					PyErr_Fetch(&exc, &val, &tb);
 					if (val == NULL) {
@@ -3324,8 +3324,8 @@ do_raise(PyObject *type, PyObject *value, PyObject *tb)
 	return WHY_EXCEPTION;
 }
 
-/* Expose do_raise with a slightly different return value for ll_compile.cc;
-   return 1 for WHY_RERAISE, 0 for WHY_EXCEPTION */
+/* Expose do_raise with a slightly different return value for
+   llvm_fbuilder.cc; return 1 for WHY_RERAISE, 0 for WHY_EXCEPTION */
 int
 _PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
 {
