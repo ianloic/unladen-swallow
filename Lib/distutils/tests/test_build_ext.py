@@ -11,6 +11,10 @@ from distutils import sysconfig
 import unittest
 from test import test_support
 
+# http://bugs.python.org/issue4373
+# Don't load the xx module more than once.
+ALREADY_TESTED = False
+
 def _get_source_filename():
     srcdir = sysconfig.get_config_var('srcdir')
     return os.path.join(srcdir, 'Modules', 'xxmodule.c')
@@ -25,6 +29,7 @@ class BuildExtTestCase(unittest.TestCase):
         shutil.copy(_get_source_filename(), self.tmp_dir)
 
     def test_build_ext(self):
+        global ALREADY_TESTED
         xx_c = os.path.join(self.tmp_dir, 'xxmodule.c')
         xx_ext = Extension('xx', [xx_c])
         dist = Distribution({'name': 'xx', 'ext_modules': [xx_ext]})
@@ -46,6 +51,11 @@ class BuildExtTestCase(unittest.TestCase):
             cmd.run()
         finally:
             sys.stdout = old_stdout
+
+        if ALREADY_TESTED:
+            return
+        else:
+            ALREADY_TESTED = True
 
         import xx
 
