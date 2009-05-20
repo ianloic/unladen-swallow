@@ -772,25 +772,18 @@ if test -z "$OPT"
 then
     case $GCC in
     yes)
-        if test "$CC" != 'g++' ; then
-	    STRICT_PROTO="-Wstrict-prototypes"
-	fi
-        # For gcc 4.x we need to use -fwrapv so lets check if its supported
-        if "$CC" -v --help 2>/dev/null |grep -- -fwrapv > /dev/null; then
-           WRAP="-fwrapv"
-        fi
 	case $ac_cv_prog_cc_g in
 	yes)
 	    if test "$Py_DEBUG" = 'true' ; then
 		# Optimization messes up debuggers, so turn it off for
 		# debug builds.
-		OPT="-g -Wall $STRICT_PROTO"
+		OPT="-g"
 	    else
-		OPT="-g $WRAP -O3 -Wall $STRICT_PROTO"
+		OPT="-g -O3"
 	    fi
 	    ;;
 	*)
-	    OPT="-O3 -Wall $STRICT_PROTO"
+	    OPT="-O3"
 	    ;;
 	esac
 	case $ac_sys_system in
@@ -838,6 +831,29 @@ yes)
     if test $ac_cv_no_strict_aliasing_ok = yes
     then
       BASECFLAGS="$BASECFLAGS -fno-strict-aliasing"
+    fi
+
+    # Python violates C99 rules by treating signed overflow as
+    # 2s-compliment. GCC 4+ can generate bad code because of that, so
+    # use -fwrapv if it's supported
+    AC_MSG_CHECKING(whether $CC accepts -fwrapv)
+     ac_save_cc="$CC"
+     CC="$CC -fwrapv"
+     AC_TRY_RUN([int main() { return 0; }],
+     ac_cv_fwrapv_ok=yes,
+     ac_cv_fwrapv_ok=no,
+     ac_cv_fwrapv_ok=no)
+     CC="$ac_save_cc"
+    AC_MSG_RESULT($ac_cv_fwrapv_ok)
+    if test $ac_cv_fwrapv_ok = yes
+    then
+      BASECFLAGS="$BASECFLAGS -fwrapv"
+    fi
+
+    BASECFLAGS="$BASECFLAGS -Wall"
+
+    if test "$CC" != 'g++' ; then
+        STRICT_PROTO="-Wstrict-prototypes"
     fi
 
     # if using gcc on alpha, use -mieee to get (near) full IEEE 754
@@ -1516,6 +1532,12 @@ case $ac_sys_system/$ac_sys_release in
 	AC_MSG_RESULT(no)
 	;;
 esac
+
+AC_SUBST(BASECXXFLAGS)
+# Only add -Wstrict-prototypes to the C flags, not C++.  We do this
+# after BASECFLAGS is fully set up.
+BASECXXFLAGS="$BASECFLAGS"
+BASECFLAGS="$BASECFLAGS $STRICT_PROTO"
 
 # Set info about shared libraries.
 AC_SUBST(SO)
@@ -2212,7 +2234,7 @@ yes
 				ipv6type=$i
 				ipv6lib=inet6
 				ipv6libdir=/usr/inet6/lib
-				BASECFLAGS="-I/usr/inet6/include $BASECFLAGS"
+				CPPFLAGS="-I/usr/inet6/include $CPPFLAGS"
 			fi
 			;;
 		solaris)
@@ -2242,7 +2264,7 @@ yes
 				[ipv6type=$i;
 				ipv6lib=v6;
 				ipv6libdir=/usr/local/v6/lib;
-				BASECFLAGS="-I/usr/local/v6/include $BASECFLAGS"])
+				CPPFLAGS="-I/usr/local/v6/include $CPPFLAGS"])
 			;;
 		zeta)
 			AC_EGREP_CPP(yes, [

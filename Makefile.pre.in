@@ -56,7 +56,9 @@ MAKESETUP=      $(srcdir)/Modules/makesetup
 # Compiler options
 OPT=		@OPT@
 BASECFLAGS=	@BASECFLAGS@
+BASECXXFLAGS=	@BASECXXFLAGS@
 CFLAGS=		$(BASECFLAGS) $(OPT) $(EXTRA_CFLAGS)
+CXXFLAGS=	$(BASECXXFLAGS) $(OPT) $(EXTRA_CXXFLAGS)
 # Both CPPFLAGS and LDFLAGS need to contain the shell's value for setup.py to
 # be able to build extension modules using the directories specified in the
 # environment variables
@@ -70,6 +72,7 @@ LINKFORSHARED=	@LINKFORSHARED@
 CFLAGSFORSHARED=@CFLAGSFORSHARED@
 # C flags used for building the interpreter object files
 PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
+PY_CXXFLAGS=	$(CXXFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE -Wno-sign-compare -Wno-write-strings
 
 # LLVM flags extracted from llvm-config jit bitreader x86
 LLVMCXXFLAGS=	-IUtil/llvm/include -I$(srcdir)/Util/llvm/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
@@ -622,8 +625,7 @@ Python/initial_llvm_module.cc: Python/llvm_inline_functions.bc \
 # about them (for now.)
 # See <http://code.google.com/p/unladen-swallow/issues/detail?id=25>.
 Python/initial_llvm_module.o: Python/initial_llvm_module.cc
-	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -Wno-write-strings \
-		-Wno-unused -o $@ $<
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -Wno-unused -o $@ $<
 
 ############################################################################
 # Header files
@@ -1154,7 +1156,7 @@ config.status:	$(srcdir)/configure
 	$(CC) -c $(PY_CFLAGS) -o $@ $<
 
 .cc.o:
-	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CFLAGS) -Wno-write-strings -o $@ $<
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -o $@ $<
 
 # Run reindent on the library
 reindent:
