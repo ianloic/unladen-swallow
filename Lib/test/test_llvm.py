@@ -1240,9 +1240,9 @@ def generator(obj):
 def make_closure(a, level):
     b = 5
     c = 3
-    def inner(d):
+    def inner(d, e=5):
         c = d + 1
-        return a, b, c, d
+        return a, b, c, d, e
     if level is not None:
         inner.__code__.__use_llvm__ = True
         inner.__code__.co_optimization = level
@@ -1250,7 +1250,7 @@ def make_closure(a, level):
     return inner
 ''', level)
         inner = make_closure(1, level)
-        self.assertEquals(inner(4), (1, 2, 5, 4))
+        self.assertEquals(inner(4), (1, 2, 5, 4, 5))
         self.assertRaises(TypeError, inner, "5")
 
     @at_each_optimization_level

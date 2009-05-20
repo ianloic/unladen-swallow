@@ -1049,6 +1049,7 @@ LlvmFunctionBuilder::MAKE_CLOSURE(int num_defaults)
         Value *setdefaults_result = this->builder_.CreateCall2(
             pyfunction_setdefaults, func_object, defaults,
             "MAKE_CLOSURE_setdefaults_result");
+        this->DecRef(defaults);
         this->PropagateExceptionOnNonZero(setdefaults_result);
     }
     this->Push(func_object);
