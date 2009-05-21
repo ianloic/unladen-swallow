@@ -20,264 +20,266 @@ pystring_to_std_string(PyObject *str)
     return std::string(PyString_AS_STRING(str), PyString_GET_SIZE(str));
 }
 
-class BytecodeWalker {
+class BytecodeIterator {
 public:
-    // Explicit create method instead of constructor so we don't have to
-    // resort to C++ exceptions to propagate Python exceptions.
-    static BytecodeWalker *Create(PyCodeObject *code);
-    ~BytecodeWalker();
+    // Initializes the iterator to point to the first opcode in the
+    // bytecode string.
+    BytecodeIterator(PyObject *bytecode_string);
+    // Allow the default copy operations.
 
-    // Calculate the current line number from the bytecode offset and the
-    // code object's lnotab, and call LlvmFunctionBuilder::SetLineNumber.
-    void SetLineNumber();
-    // Decode two code bytes into a single integer opcode argument,
-    // and returns it. Does not do bounds checking.
-    int DecodeOparg();
-    // Move the walker to the next opcode.
-    // Return 0 for end of iteration, -1 for error, 1 otherwise.
-    int NextOpcode();
-    // Get the next opcode without touching cur_instr_, so that jumps do
-    // not end up between the EXTENDED_ARG opcode and its companion. 
-    // Returns -1 on error, 0 othwerise.
-    int HandleExtendedArgument();
+    int Opcode() const { return this->opcode_; }
+    int Oparg() const { return this->oparg_; }
+    int CurIndex() const { return this->cur_index_; }
+    int NextIndex() const { return this->next_index_; }
+    bool Done() const { return this->cur_index_ == this->bytecode_size_; }
+    bool Error() const { return this->error_; }
 
-    // Get the right insert block for the given target, or create it if
-    // necessary.  Because we'll only actually use blocks for
-    // instructions later than the current insert point, it refuses to
-    // insert new blocks "in the past" -- but using an existing one from
-    // there is fine.  This restriction works out alright for everything
-    // but FOR_ITER, which the caller specialcases (below).  If bytecode
-    // ever changes in a way that requires jumps detected too late, we
-    // should build a mapping from bytecode-offset to LLVM Instruction,
-    // and use BasicBlock::splitBasicBlock to create the necessary new
-    // blocks "in the past".
-    BasicBlock *GetBlockForAbsoluteTarget(Py_ssize_t idx, const char *name);
-    // A version of GetBlockForAbsoluteTarget, but for relative jumps.
-    // In Python bytecode, relative jumps count from the instruction
-    // *following* the jump instruction (i.e., this->next_instr_).
-    BasicBlock *GetBlockForRelativeTarget(Py_ssize_t idx, const char *name);
-    // Insert a new block at the start of the current instruction, and
-    // select it as the current insertion point. The caller should not
-    // emit any LLVM IR for the current instruction before calling this,
-    // or jumps to this instruction will not be handled right.
-    void InsertBlockHere(const char *name);
-
-    py::LlvmFunctionBuilder *fbuilder;
-    // Actual opcode we are currently handling, and its argument.
-    int opcode;
-    int oparg;
+    // Advances the iterator by one opcode, including the effect of
+    // any EXTENDED_ARG opcode in the way.  If there is an
+    // EXTENDED_ARG, this->CurIndex() will point to it rather than the
+    // actual opcode, since that's where jumps land.  If the bytecode
+    // is malformed, this will set a Python error and cause
+    // this->Error() to return true.
+    void Advance();
 
 private:
-    BytecodeWalker();
-    PyCodeObject *code_;
-    const unsigned char *codestring_;
-    // Both the size of the codestring_ and the size of the blocks_ array.
-    Py_ssize_t codesize_;
-    BasicBlock **blocks_;
-    // Index in codestring to the first byte that is part of the
-    // current instruction (either the opcode or EXTENDED_ARG.)
-    Py_ssize_t cur_instr_;
-    // Index in codestring to the first byte of the next instruction.
-    Py_ssize_t next_instr_;
-    // For line-tracing, the upper bound instruction offset for
-    // the current line.
-    Py_ssize_t instr_upper_bound_;
+    int opcode_;
+    int oparg_;
+    int cur_index_;
+    int next_index_;
+    bool error_;
+    const unsigned char *const bytecode_str_;
+    const int bytecode_size_;
 };
 
-BytecodeWalker::BytecodeWalker()
+BytecodeIterator::BytecodeIterator(PyObject *bytecode_string)
+    : error_(false),
+      bytecode_str_((unsigned char *)PyString_AS_STRING(bytecode_string)),
+      bytecode_size_(PyString_GET_SIZE(bytecode_string))
 {
-    this->blocks_ = NULL;
-    this->fbuilder = NULL;
-}
-
-BytecodeWalker::~BytecodeWalker()
-{
-    if (this->blocks_)
-        PyObject_Free(this->blocks_);
-    if (this->fbuilder)
-        delete this->fbuilder;
-}
-
-BytecodeWalker *
-BytecodeWalker::Create(PyCodeObject *code)
-{
-    if (!PyString_Check(code->co_code)) {
-        // TODO(twouters): use the buffer protocol for the codestring,
-        // since it can be any valid ReadBuffer.
-        PyErr_SetString(PyExc_SystemError,
-                        "non-string codestring in code object");
-        return NULL;
-    }
-    BytecodeWalker *walker = new BytecodeWalker();
-    walker->code_ = code;
-    walker->fbuilder = new py::LlvmFunctionBuilder(
-        PyGlobalLlvmData::Get(), pystring_to_std_string(code->co_name));
-    walker->codestring_ =
-        (const unsigned char *)PyString_AS_STRING(code->co_code);
-    walker->codesize_ = PyString_GET_SIZE(code->co_code);
-    walker->blocks_ =
-        (BasicBlock **)PyObject_Malloc(
-            sizeof(BasicBlock *) * walker->codesize_);
-    if (walker->blocks_ == NULL) {
-        delete walker;
-        return NULL;
-    }
-    memset((void *)walker->blocks_, 0,
-           sizeof(BasicBlock *) * walker->codesize_);
-    walker->cur_instr_ = 0;
-    walker->next_instr_ = 0;
-    walker->SetLineNumber();
-    return walker;
+    assert(PyString_Check(bytecode_string) &&
+           "Argument to BytecodeIterator() must be a Python string.");
+    this->next_index_ = 0;
+    // Take advantage of the implementation of Advance() to fill in
+    // the other fields.
+    this->Advance();
 }
 
 void
-BytecodeWalker::SetLineNumber()
+BytecodeIterator::Advance()
 {
-    PyAddrPair bounds;
-    // TODO(twouters): refactor PyCode_CheckLineNumber so we can reuse
-    // its logic without having it re-scan the lnotab at each call.
-    int line = PyCode_CheckLineNumber(this->code_, this->cur_instr_, &bounds);
-    if (line >= 0) {
-        this->fbuilder->SetLineNumber(line);
+    this->cur_index_ = this->next_index_;
+    if (this->Done()) {
+        return;
     }
-    this->instr_upper_bound_ = bounds.ap_upper;
-}
-
-int
-BytecodeWalker::DecodeOparg()
-{
-    int new_oparg = (this->codestring_[this->next_instr_] |
-                     this->codestring_[this->next_instr_ + 1] << 8);
-    this->next_instr_ += 2;
-    return new_oparg;
-}
-
-int
-BytecodeWalker::NextOpcode()
-{
-    if (this->next_instr_ >= this->codesize_)
-        return 0;
-    this->cur_instr_ = this->next_instr_++;
-    this->opcode = this->codestring_[this->cur_instr_];
-    if (this->opcode >= HAVE_ARGUMENT) {
-        if (this->next_instr_ + 1 >= this->codesize_) {
+    this->opcode_ = this->bytecode_str_[this->cur_index_];
+    this->next_index_++;
+    if (HAS_ARG(this->opcode_)) {
+        if (this->next_index_ + 1 >= this->bytecode_size_) {
             PyErr_SetString(PyExc_SystemError,
-                            "Unexpected end of bytecode");
+                            "Argument fell off the end of the bytecode");
+            this->error_ = true;
+            return;
+        }
+        this->oparg_ = (this->bytecode_str_[this->next_index_] |
+                        this->bytecode_str_[this->next_index_ + 1] << 8);
+        this->next_index_ += 2;
+        if (this->opcode_ == EXTENDED_ARG) {
+            if (this->next_index_ + 2 >= this->bytecode_size_) {
+                PyErr_SetString(
+                    PyExc_SystemError,
+                    "EXTENDED_ARG fell off the end of the bytecode");
+                this->error_ = true;
+                return;
+            }
+            this->opcode_ = this->bytecode_str_[this->next_index_];
+            if (!HAS_ARG(this->opcode_)) {
+                PyErr_SetString(PyExc_SystemError,
+                                "Opcode after EXTENDED_ARG must take argument");
+                this->error_ = true;
+                return;
+            }
+            this->oparg_ <<= 16;
+            this->oparg_ |= (this->bytecode_str_[this->next_index_ + 1] |
+                             this->bytecode_str_[this->next_index_ + 2] << 8);
+            this->next_index_ += 3;
+        }
+    }
+}
+
+struct InstrInfo {
+    InstrInfo() : line_number_(0), block_(NULL) {}
+    // The line this instruction falls on.
+    int line_number_;
+    // If this instruction starts a new basic block, this is the
+    // LLVM block it starts.
+    BasicBlock *block_;
+};
+
+// Uses *code to fill line numbers into instr_info.  Assumes that
+// instr_info[*].line_number was initialized to 0.  Returns -1 on
+// error, or 0 on success.
+static int
+set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
+{
+    assert(PyString_Check(code->co_code));
+    assert(instr_info.size() == PyString_GET_SIZE(code->co_code) &&
+           "instr_info indices must match bytecode indices.");
+    // First, assign each address's "line number" to the change in the
+    // line number that applies at that address.
+    int addr = 0;
+    const unsigned char *const lnotab_str =
+        (unsigned char *)PyString_AS_STRING(code->co_lnotab);
+    const int lnotab_size = PyString_GET_SIZE(code->co_lnotab);
+    for (int i = 0; i + 1 < lnotab_size; i += 2) {
+        addr += lnotab_str[i];
+        if (addr >= instr_info.size()) {
+            PyErr_Format(PyExc_SystemError,
+                         "lnotab referred to addr %d, which is outside of"
+                         " bytecode string of length %zd.",
+                         addr, instr_info.size());
             return -1;
         }
-        this->oparg = this->DecodeOparg();
+        // Use += instead of = to handle line number jumps of more than 255.
+        instr_info[addr].line_number_ += lnotab_str[i + 1];
     }
-    if (this->blocks_[this->cur_instr_] != NULL)
-        this->fbuilder->FallThroughTo(this->blocks_[this->cur_instr_]);
-    // Must call SetLineNumber *after* selecting the new insert block
-    // (above), or the line-number-setting LLVM IR might get added after
-    // a block terminator in the previous block.
-    if (this->cur_instr_ >= this->instr_upper_bound_)
-        this->SetLineNumber();
-    return 1;
-}
 
-int
-BytecodeWalker::HandleExtendedArgument()
-{
-    if (this->blocks_[this->next_instr_] != NULL) {
-        PyErr_SetString(PyExc_SystemError,
-                        "invalid jump in bytecode (inbetween opcodes)");
-        return -1;
+    // Second, add up the line number deltas and store the total line
+    // number back into instr_info.
+    int line = code->co_firstlineno;
+    for (int i = 0; i < instr_info.size(); ++i) {
+        line += instr_info[i].line_number_;
+        instr_info[i].line_number_ = line;
     }
-    if (this->next_instr_ + 2 >= this->codesize_) {
-        PyErr_SetString(PyExc_SystemError, "Unexpected end of bytecode");
-        return -1;
-    }
-    this->opcode = this->codestring_[this->next_instr_++];
-    if (this->opcode < HAVE_ARGUMENT) {
-        PyErr_SetString(PyExc_SystemError,
-                        "invalid opcode after EXTENDED_ARG");
-        return -1;
-    }
-    this->oparg = this->oparg << 16 | this->DecodeOparg();
     return 0;
 }
 
-BasicBlock *
-BytecodeWalker::GetBlockForAbsoluteTarget(Py_ssize_t idx, const char *name)
+// Uses the jump instructions in the bytecode string to identify basic
+// blocks, and creates new llvm::BasicBlocks inside *function
+// accordingly into instr_info.  Returns -1 on error, or 0 on success.
+static int
+find_basic_blocks(PyObject *bytecode, llvm::Function *function,
+                  std::vector<InstrInfo>& instr_info)
 {
-    if (idx < 0 || idx >= this->codesize_) {
-        PyErr_SetString(PyExc_SystemError,
-                        "invalid jump in bytecode (past bytecode)");
-        return NULL;
-    }
-    if (this->blocks_[idx] == NULL) {
-        if (idx <= this->cur_instr_) {
-            PyErr_SetString(PyExc_SystemError,
-                            "invalid jump in bytecode (no jump target)");
-            return NULL;
+    assert(PyString_Check(bytecode) && "Expected bytecode string");
+    assert(instr_info.size() == PyString_GET_SIZE(bytecode) &&
+           "instr_info indices must match bytecode indices.");
+    BytecodeIterator iter(bytecode);
+    for (; !iter.Done() && !iter.Error(); iter.Advance()) {
+        int target_index;
+        const char *target_name;
+        const char *fallthrough_name;
+        switch (iter.Opcode()) {
+#define OPCODE_JABS(opname) \
+            case opname: \
+                target_index = iter.Oparg(); \
+                target_name = #opname "_target"; \
+                fallthrough_name = #opname "_fallthrough"; \
+                break;
+
+        OPCODE_JABS(JUMP_IF_FALSE_OR_POP)
+        OPCODE_JABS(JUMP_IF_TRUE_OR_POP)
+        OPCODE_JABS(JUMP_ABSOLUTE)
+        OPCODE_JABS(POP_JUMP_IF_FALSE)
+        OPCODE_JABS(POP_JUMP_IF_TRUE)
+        OPCODE_JABS(CONTINUE_LOOP)
+#undef OPCODE_JABS
+
+#define OPCODE_JREL(opname) \
+            case opname: \
+                target_index = iter.NextIndex() + iter.Oparg(); \
+                target_name = #opname "_target"; \
+                fallthrough_name = #opname "_fallthrough"; \
+                break;
+
+        OPCODE_JREL(FOR_ITER)
+        OPCODE_JREL(JUMP_FORWARD)
+        OPCODE_JREL(SETUP_LOOP)
+        OPCODE_JREL(SETUP_EXCEPT)
+        OPCODE_JREL(SETUP_FINALLY)
+#undef OPCODE_JREL
+
+        default:
+            // This isn't a jump, so we don't need any new blocks for it.
+            continue;
         }
-        this->blocks_[idx] =
-            BasicBlock::Create(name, this->fbuilder->function());
-    }
-    return this->blocks_[idx];
-}
 
-BasicBlock *
-BytecodeWalker::GetBlockForRelativeTarget(Py_ssize_t idx, const char *name)
-{
-    return this->GetBlockForAbsoluteTarget(this->next_instr_ + idx, name);
-}
-
-void
-BytecodeWalker::InsertBlockHere(const char *name)
-{
-    if (this->blocks_[this->cur_instr_] != NULL) {
-        // NextOpcode will already have selected the current block for us.
-        assert(this->fbuilder->builder().GetInsertBlock()
-               == this->blocks_[this->cur_instr_]);
-        return;
+        // LLVM BasicBlocks can only have one terminator (jump or return) and
+        // only at the end of the block. This means we need to create two new
+        // blocks for any jump: one for the target instruction, and one for
+        // the instruction right after the jump. In either case, if a block
+        // for that instruction already exists, use the existing block.
+        if (iter.NextIndex() >= instr_info.size()) {
+            PyErr_SetString(PyExc_SystemError, "Fell through out of bytecode.");
+            return -1;
+        }
+        if (instr_info[iter.NextIndex()].block_ == NULL) {
+            instr_info[iter.NextIndex()].block_ =
+                BasicBlock::Create(fallthrough_name, function);
+        }
+        if (target_index < 0 || target_index >= instr_info.size()) {
+            PyErr_Format(PyExc_SystemError,
+                         "Jumped to index %d, which is outside of the"
+                         " bytecode string of length %zd.",
+                         target_index, instr_info.size());
+            return -1;
+        }
+        if (instr_info[target_index].block_ == NULL) {
+            instr_info[target_index].block_ =
+                BasicBlock::Create(target_name, function);
+        }
     }
-    this->blocks_[this->cur_instr_] =
-        BasicBlock::Create(name, this->fbuilder->function());
-    this->fbuilder->FallThroughTo(this->blocks_[this->cur_instr_]);
+    if (iter.Error()) {
+        return -1;
+    }
+    return 0;
 }
 
 extern "C" PyObject *
 _PyCode_To_Llvm(PyCodeObject *code)
 {
-    llvm::OwningPtr<BytecodeWalker> walker(BytecodeWalker::Create(code));
-    int is_err;
-    if (walker.get() == NULL)
+    if (!PyCode_Check(code)) {
+        PyErr_Format(PyExc_TypeError, "Expected code object, not '%.500s'",
+                     code->ob_type->tp_name);
         return NULL;
-    while ((is_err = walker->NextOpcode()) > 0) {
+    }
+    if (!PyString_Check(code->co_code)) {
+        PyErr_SetString(PyExc_SystemError,
+                        "non-string codestring in code object");
+        return NULL;
+    }
+    py::LlvmFunctionBuilder fbuilder(
+        PyGlobalLlvmData::Get(), pystring_to_std_string(code->co_name));
+    std::vector<InstrInfo> instr_info(PyString_GET_SIZE(code->co_code));
+    if (-1 == set_line_numbers(code, instr_info)) {
+        return NULL;
+    }
+    if (-1 == find_basic_blocks(code->co_code, fbuilder.function(),
+                                instr_info)) {
+        return NULL;
+    }
+    BytecodeIterator iter(code->co_code);
+    for (; !iter.Done() && !iter.Error(); iter.Advance()) {
+        if (instr_info[iter.CurIndex()].block_ != NULL) {
+            fbuilder.FallThroughTo(instr_info[iter.CurIndex()].block_);
+        }
+        // Must call SetLineNumber *after* selecting the new insert block
+        // (above), or the line-number-setting LLVM IR might get added after
+        // a block terminator in the previous block.
+        if (iter.CurIndex() == 0 ||
+            instr_info[iter.CurIndex()].line_number_ !=
+            instr_info[iter.CurIndex() - 1].line_number_) {
+            fbuilder.SetLineNumber(instr_info[iter.CurIndex()].line_number_);
+        }
+
         BasicBlock *target, *fallthrough;
-
-opcode_dispatch:
-        switch(walker->opcode) {
-
+        switch(iter.Opcode()) {
         case NOP:
-            break;
-
-        case EXTENDED_ARG:
-            walker->HandleExtendedArgument();
-            goto opcode_dispatch;
-
-        case FOR_ITER:
-            // Because FOR_ITER is a jump target itself (for CONTINUE_LOOP)
-            // we have to make sure we start a new block right here,
-            // separately from the target/fallthrough blocks.
-            walker->InsertBlockHere("FOR_ITER");
-            target = walker->GetBlockForRelativeTarget(
-                walker->oparg, "FOR_ITER_target");
-            if (target == NULL)
-                return NULL;
-            fallthrough = walker->GetBlockForRelativeTarget(
-                0, "FOR_ITER_fallthrough");
-            if (fallthrough == NULL)
-                return NULL;
-            walker->fbuilder->FOR_ITER(target, fallthrough);
             break;
 
 #define OPCODE(opname)					\
     case opname:					\
-        walker->fbuilder->opname();			\
+        fbuilder.opname();				\
         break;
 
         OPCODE(POP_TOP)
@@ -352,7 +354,7 @@ opcode_dispatch:
 
 #define OPCODE_WITH_ARG(opname)				\
     case opname:					\
-        walker->fbuilder->opname(walker->oparg);	\
+        fbuilder.opname(iter.Oparg());			\
         break;
 
         OPCODE_WITH_ARG(STORE_NAME)
@@ -383,23 +385,13 @@ opcode_dispatch:
         OPCODE_WITH_ARG(CALL_FUNCTION_VAR_KW)
 #undef OPCODE_WITH_ARG
 
-
-// LLVM BasicBlocks can only have one terminator (jump or return) and
-// only at the end of the block. This means we need to create two new
-// blocks for any jump: one for the target instruction, and one for
-// the instruction right after the jump. In either case, if a block
-// for that instruction already exists, use the existing block.
-#define OPCODE_JABS(opname)						\
-    case opname:							\
-        target = walker->GetBlockForAbsoluteTarget(			\
-            walker->oparg, #opname "_target");				\
-        if (target == NULL)						\
-            return NULL;						\
-        fallthrough = walker->GetBlockForRelativeTarget(		\
-            0, #opname "_fallthrough");					\
-        if (fallthrough == NULL)					\
-            return NULL;						\
-        walker->fbuilder->opname(target, fallthrough);			\
+#define OPCODE_JABS(opname) \
+    case opname: \
+        target = instr_info[iter.Oparg()].block_; \
+        fallthrough = instr_info[iter.NextIndex()].block_; \
+        assert(target != NULL && "Missing target block"); \
+        assert(fallthrough != NULL && "Missing fallthrough block"); \
+        fbuilder.opname(target, fallthrough); \
         break;
 
         OPCODE_JABS(JUMP_IF_FALSE_OR_POP)
@@ -410,41 +402,40 @@ opcode_dispatch:
         OPCODE_JABS(CONTINUE_LOOP)
 #undef OPCODE_JABS
 
-#define OPCODE_JREL(opname)						\
-    case opname:							\
-        target = walker->GetBlockForRelativeTarget(			\
-            walker->oparg, #opname "_target");				\
-        if (target == NULL)						\
-            return NULL;						\
-        fallthrough = walker->GetBlockForRelativeTarget(		\
-            0, #opname "_fallthrough"); 				\
-        if (fallthrough == NULL)					\
-            return NULL;						\
-        walker->fbuilder->opname(target, fallthrough);			\
+#define OPCODE_JREL(opname) \
+    case opname: \
+        target = instr_info[iter.NextIndex() + iter.Oparg()].block_; \
+        fallthrough = instr_info[iter.NextIndex()].block_; \
+        assert(target != NULL && "Missing target block"); \
+        assert(fallthrough != NULL && "Missing fallthrough block"); \
+        fbuilder.opname(target, fallthrough); \
         break;
 
         OPCODE_JREL(JUMP_FORWARD)
+        OPCODE_JREL(FOR_ITER)
         OPCODE_JREL(SETUP_LOOP)
         OPCODE_JREL(SETUP_EXCEPT)
         OPCODE_JREL(SETUP_FINALLY)
 #undef OPCODE_JREL
 
+        case EXTENDED_ARG:
+            // Already handled by the iterator.
         default:
             PyErr_Format(PyExc_SystemError,
                          "Invalid opcode %d in LLVM IR generation",
-                         walker->opcode);
+                         iter.Opcode());
             return NULL;
         }
     }
-    if (is_err < 0)
+    if (iter.Error()) {
         return NULL;
+    }
     // Make sure the last block has a terminator, even though it should
     // be unreachable.
-    walker->fbuilder->FallThroughTo(walker->fbuilder->unreachable_block());
-    if (llvm::verifyFunction(*walker->fbuilder->function(),
-                             llvm::PrintMessageAction)) {
+    fbuilder.FallThroughTo(fbuilder.unreachable_block());
+    if (llvm::verifyFunction(*fbuilder.function(), llvm::PrintMessageAction)) {
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
         return NULL;
     }
-    return _PyLlvmFunction_FromPtr(walker->fbuilder->function());
+    return _PyLlvmFunction_FromPtr(fbuilder.function());
 }
