@@ -1234,6 +1234,26 @@ def generator(obj):
         self.assertRaises(StopIteration, g.next)
         self.assertEquals({"finally": 1}, obj)
 
+    def test_toggle_generator(self):
+        # Toggling between native code and the interpreter between yields used
+        # to cause crashes because f_lasti doesn't get translated between the
+        # scheme used for LLVM and the scheme used for the interpreter. For now
+        # these assignments are no-ops for the lifetime of the generator
+        # object, but do take effect when a new generator instance is created.
+        def generator(obj):
+            yield 1
+            generator.func_code.__use_llvm__ = True
+            yield 2
+            # We iterate over the generator while the first instance is still
+            # running. This is to test that the modification to the shared
+            # code object above takes effect. We don't have any way of
+            # checking whether LLVM is really being used, but the important
+            # thing is that it doesn't crash.
+            list(obj)
+            generator.func_code.__use_llvm__ = False
+            yield 3
+        self.assertEqual(list(generator(generator([]))), [1, 2, 3])
+
     @at_each_optimization_level
     def test_closure(self, level):
         make_closure = compile_for_llvm('make_closure', '''

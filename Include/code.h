@@ -29,7 +29,9 @@ typedef struct PyCodeObject {
        http://code.google.com/p/unladen-swallow/wiki/FunctionCallingConvention
        for the calling convention. */
     PyObject *co_llvm_function;
-    /* True if interpretation will be done through the LLVM JIT. */
+    /* True if interpretation will be done through the LLVM JIT. This exists
+       only for ease of testing; the flag that matters is f_use_llvm on the
+       frame object, which is influenced by co_use_llvm. */
     char co_use_llvm;
     /* Stores which optimizations have been applied to this code
        object.  Each level corresponds to an argument to

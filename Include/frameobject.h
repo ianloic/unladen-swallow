@@ -49,6 +49,12 @@ typedef struct _frame {
        meaningless), f_lineno is correct.  f_lasti is initialized to
        -1 when a function is first entered. */
     int f_lasti;
+
+    /* At frame creation-time, we snapshot the state of f_code->co_use_llvm.
+       Without this, Python code can cause active generators to flip between
+       LLVM and the interpreter at will, which is a bad idea. */
+    int f_use_llvm;
+
     /* Call PyFrame_GetLineNumber() instead of reading this field
        directly.  As of Unladen Swallow 2009Q2 f_lineno is valid when
        tracing is active (i.e. when f_trace is set) and when f_lasti

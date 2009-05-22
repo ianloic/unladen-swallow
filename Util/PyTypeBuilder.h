@@ -281,6 +281,7 @@ public:
     DEFINE_FIELD(PyFrameObject, f_exc_traceback)
     DEFINE_FIELD(PyFrameObject, f_tstate)
     DEFINE_FIELD(PyFrameObject, f_lasti)
+    DEFINE_FIELD(PyFrameObject, f_use_llvm)
     DEFINE_FIELD(PyFrameObject, f_lineno)
     DEFINE_FIELD(PyFrameObject, f_throwflag)
     DEFINE_FIELD(PyFrameObject, f_iblock)

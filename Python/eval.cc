@@ -847,7 +847,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	co = f->f_code;
 	tstate->frame = f;
 
-	if (co->co_use_llvm || Py_LlvmEverythingFlag >= 0) {
+	if (f->f_use_llvm) {
 		int target_optimization_level = 0;
 		if (target_optimization_level < Py_LlvmEverythingFlag)
 			target_optimization_level = Py_LlvmEverythingFlag;
