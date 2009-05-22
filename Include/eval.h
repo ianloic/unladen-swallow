@@ -201,6 +201,13 @@ PyAPI_FUNC(PyObject *) _PyEval_LoadName(struct _frame *, int);
 PyAPI_FUNC(int) _PyEval_StoreName(struct _frame *, int, PyObject *);
 PyAPI_FUNC(int) _PyEval_DeleteName(struct _frame *, int);
 
+PyAPI_FUNC(int) _PyEval_CallTrace(Py_tracefunc, PyObject *, struct _frame *,
+                                  int, PyObject *);
+PyAPI_FUNC(void) _PyEval_CallExcTrace(PyThreadState *, struct _frame *);
+PyAPI_FUNC(int) _PyEval_TraceEnterFunction(PyThreadState *, struct _frame *);
+PyAPI_FUNC(int) _PyEval_TraceLeaveFunction(PyThreadState *, struct _frame *,
+                                           PyObject *, char, char);
+
 #ifdef __cplusplus
 }
 #endif

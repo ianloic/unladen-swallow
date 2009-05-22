@@ -27,10 +27,24 @@ public:
     llvm::IRBuilder<>& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
-    /// Sets the current line number being executed.  This is
-    /// currently used to make tracebacks correct and will be used to
-    /// get tracing to fire in the right places.
+    /// Sets the current instruction index.  This is only put into the
+    /// frame object when tracing.
+    void SetLasti(int current_instruction_index);
+
+    /// Sets the current line number being executed.  This is used to
+    /// make tracebacks correct and to get tracing to fire in the
+    /// right places.
     void SetLineNumber(int line);
+
+    /// Emits code into backedge_landing to call the line tracing
+    /// function and then branch to target.  We need to re-set the
+    /// line number in this function because the target may be in the
+    /// middle of a different line than the source.  This function
+    /// leaves the insert point in backedge_landing which is probably
+    /// not where the caller wants it.
+    void TraceBackedgeLanding(llvm::BasicBlock *backedge_landing,
+                              llvm::BasicBlock *target,
+                              int line_number);
 
     /// Sets the insert point to next_block, inserting an
     /// unconditional branch to there if the current block doesn't yet
@@ -64,7 +78,7 @@ public:
     void POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
                           llvm::BasicBlock *fallthrough);
     void JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
-                             llvm::BasicBlock *fallthrough);
+                              llvm::BasicBlock *fallthrough);
     void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
     void CONTINUE_LOOP(llvm::BasicBlock *target,
@@ -262,6 +276,10 @@ private:
     // appropriate unwind reason set.
     void PropagateException();
 
+    // Only for use in the constructor: Fills in the block that
+    // handles jumping from a trace function to a particular line
+    // boundary.
+    void FillGotoLineBlock();
     // Only for use in the constructor: Fills in the block that starts
     // propagating an exception.  Jump to this block when you want to
     // add a traceback entry for the current line.  Don't jump to this
@@ -271,6 +289,9 @@ private:
     void FillPropagateExceptionBlock();
     // Only for use in the constructor: Fills in the unwind block.
     void FillUnwindBlock();
+    // Only for use in the constructor: Fills in the block that
+    // actually handles returning from the function.
+    void FillDoReturnBlock();
 
     // Create an alloca in the entry block, so that LLVM can optimize
     // it more easily, and return the resulting address. The signature
@@ -344,10 +365,19 @@ private:
     // stack pointer.
     void CallVarKwFunction(int num_args, int call_flag);
 
+    /// Emits code to conditionally call the line tracing function
+    /// when such a function is installed.  If the line tracing
+    /// function is not called or doesn't change the current execution
+    /// point, execution will continue at fallthrough_block.
+    void MaybeCallLineTrace(llvm::BasicBlock *fallthrough_block);
+
     PyGlobalLlvmData *const llvm_data_;
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;
+
+    // The most recent index we've started emitting an instruction for.
+    int f_lasti_;
 
     // The following pointers hold values created in the function's
     // entry block. They're constant after construction.
@@ -363,6 +393,7 @@ private:
     llvm::Value *consts_;
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
+    llvm::Value *f_lineno_addr_;
 
     llvm::BasicBlock *unreachable_block_;
 
@@ -371,6 +402,10 @@ private:
     // it's always 0.
     llvm::Value *resume_block_;
     llvm::SwitchInst *yield_resume_switch_;
+
+    llvm::BasicBlock *goto_line_block_;
+    llvm::Value *line_target_addr_;
+    llvm::SwitchInst *line_starts_switch_;
 
     llvm::BasicBlock *propagate_exception_block_;
     llvm::BasicBlock *unwind_block_;

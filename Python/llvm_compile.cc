@@ -108,12 +108,16 @@ BytecodeIterator::Advance()
 }
 
 struct InstrInfo {
-    InstrInfo() : line_number_(0), block_(NULL) {}
+    InstrInfo() : line_number_(0), block_(NULL), backedge_block_(NULL) {}
     // The line this instruction falls on.
     int line_number_;
     // If this instruction starts a new basic block, this is the
     // LLVM block it starts.
     BasicBlock *block_;
+    // If this instruction is the target of a backedge in the
+    // control flow graph, this block implements the necessary
+    // line tracing and then branches to the main block.
+    BasicBlock *backedge_block_;
 };
 
 // Uses *code to fill line numbers into instr_info.  Assumes that
@@ -155,8 +159,9 @@ set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
 }
 
 // Uses the jump instructions in the bytecode string to identify basic
-// blocks, and creates new llvm::BasicBlocks inside *function
-// accordingly into instr_info.  Returns -1 on error, or 0 on success.
+// blocks and backedges, and creates new llvm::BasicBlocks inside
+// *function accordingly into instr_info.  Returns -1 on error, or 0
+// on success.
 static int
 find_basic_blocks(PyObject *bytecode, llvm::Function *function,
                   std::vector<InstrInfo>& instr_info)
@@ -169,12 +174,14 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
         int target_index;
         const char *target_name;
         const char *fallthrough_name;
+        const char *backedge_name;
         switch (iter.Opcode()) {
 #define OPCODE_JABS(opname) \
             case opname: \
                 target_index = iter.Oparg(); \
                 target_name = #opname "_target"; \
                 fallthrough_name = #opname "_fallthrough"; \
+                backedge_name = #opname "_backedge"; \
                 break;
 
         OPCODE_JABS(JUMP_IF_FALSE_OR_POP)
@@ -190,6 +197,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
                 target_index = iter.NextIndex() + iter.Oparg(); \
                 target_name = #opname "_target"; \
                 fallthrough_name = #opname "_fallthrough"; \
+                backedge_name = #opname "_backedge"; \
                 break;
 
         OPCODE_JREL(FOR_ITER)
@@ -228,6 +236,11 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
             instr_info[target_index].block_ =
                 BasicBlock::Create(target_name, function);
         }
+        if (target_index < iter.NextIndex() &&  // This is a backedge.
+            instr_info[target_index].backedge_block_ == NULL) {
+            instr_info[target_index].backedge_block_ =
+                BasicBlock::Create(backedge_name, function);
+        }
     }
     if (iter.Error()) {
         return -1;
@@ -260,6 +273,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
     }
     BytecodeIterator iter(code->co_code);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
+        fbuilder.SetLasti(iter.CurIndex());
         if (instr_info[iter.CurIndex()].block_ != NULL) {
             fbuilder.FallThroughTo(instr_info[iter.CurIndex()].block_);
         }
@@ -387,7 +401,11 @@ _PyCode_To_Llvm(PyCodeObject *code)
 
 #define OPCODE_JABS(opname) \
     case opname: \
-        target = instr_info[iter.Oparg()].block_; \
+        if (iter.Oparg() < iter.NextIndex()) { \
+            target = instr_info[iter.Oparg()].backedge_block_; \
+        } else { \
+            target = instr_info[iter.Oparg()].block_; \
+        } \
         fallthrough = instr_info[iter.NextIndex()].block_; \
         assert(target != NULL && "Missing target block"); \
         assert(fallthrough != NULL && "Missing fallthrough block"); \
@@ -404,6 +422,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
 
 #define OPCODE_JREL(opname) \
     case opname: \
+        /* Relative jumps only go forward, so they can't have a backedge. */ \
         target = instr_info[iter.NextIndex() + iter.Oparg()].block_; \
         fallthrough = instr_info[iter.NextIndex()].block_; \
         assert(target != NULL && "Missing target block"); \
@@ -433,6 +452,30 @@ _PyCode_To_Llvm(PyCodeObject *code)
     // Make sure the last block has a terminator, even though it should
     // be unreachable.
     fbuilder.FallThroughTo(fbuilder.unreachable_block());
+
+    for (int i = 0; i < instr_info.size(); ++i) {
+        const InstrInfo &info = instr_info[i];
+        if (info.backedge_block_ != NULL) {
+            assert(info.block_ != NULL &&
+                   "We expect that any backedge is to the beginning"
+                   " of a basic block.");
+            if (i == 0 || instr_info[i - 1].line_number_ != info.line_number_) {
+                // If the backedge lands at a line boundary, the line
+                // boundary will take care of calling the trace
+                // function, so we don't want to insert extra tracing
+                // code.  Just branch directly from the backedge_block
+                // to the normal execution block.
+                llvm::BranchInst::Create(
+                    /*target=*/info.block_,
+                    /*inserted into=*/info.backedge_block_);
+            } else {
+                fbuilder.SetLasti(i);
+                fbuilder.TraceBackedgeLanding(info.backedge_block_, info.block_,
+                                              info.line_number_);
+            }
+        }
+    }
+
     if (llvm::verifyFunction(*fbuilder.function(), llvm::PrintMessageAction)) {
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
         return NULL;

@@ -391,6 +391,7 @@ class RaisingTraceFuncTestCase(unittest.TestCase):
     def trace(self, frame, event, arg):
         """A trace function that raises an exception in response to a
         specific trace event."""
+        self.output.append(event)
         if event == self.raiseOnEvent:
             raise ValueError # just something that isn't RuntimeError
         else:
@@ -405,12 +406,13 @@ class RaisingTraceFuncTestCase(unittest.TestCase):
         else:
             return 1
 
-    def run_test_for_event(self, event):
+    def run_test_for_event(self, event, expected_events):
         """Tests that an exception raised in response to the given event is
         handled OK."""
         self.raiseOnEvent = event
         try:
             for i in xrange(sys.getrecursionlimit() + 1):
+                self.output = []
                 sys.settrace(self.trace)
                 try:
                     self.f()
@@ -418,18 +420,20 @@ class RaisingTraceFuncTestCase(unittest.TestCase):
                     pass
                 else:
                     self.fail("exception not thrown!")
+                self.assertEquals(self.output, expected_events)
         except RuntimeError:
             self.fail("recursion counter not reset")
 
     # Test the handling of exceptions raised by each kind of trace event.
     def test_call(self):
-        self.run_test_for_event('call')
+        self.run_test_for_event('call', ['call'])
     def test_line(self):
-        self.run_test_for_event('line')
+        self.run_test_for_event('line', ['call', 'line'])
     def test_return(self):
-        self.run_test_for_event('return')
+        self.run_test_for_event('return', ['call', 'line', 'line', 'return'])
     def test_exception(self):
-        self.run_test_for_event('exception')
+        self.run_test_for_event('exception',
+                                ['call', 'line', 'line', 'line', 'exception'])
 
     def test_trash_stack(self):
         def f():
@@ -739,6 +743,46 @@ class JumpTestCase(unittest.TestCase):
         self.run_test(no_jump_to_non_integers)
     def test_19_no_jump_without_trace_function(self):
         no_jump_without_trace_function()
+
+    def test_no_jump_out_of_finally_after_backedge(self):
+        def loop_in_finally(output):
+            a = 1  # 1
+            try:  # 2
+                if a == 1:  # 3
+                    try:  # 4
+                        output.append(5)
+                    finally:  # 6
+                        while a == 1:  #7
+                            a = 2  # 8
+                output.append(9)
+            except ValueError, e:
+                output.append('finally' in str(e))
+        # We hit line 7 twice in the above code, once from the top as
+        # we enter the finally block, and again from the bottom as the
+        # loop iterates.  The back-edge that keeps the loop iterating
+        # jumps to halfway into the line, so it doesn't get any code
+        # that exists on line entry.  In one version of the LLVM
+        # tracing implementation, this made the block checking
+        # algorithm in set_f_lineno() fail.
+        class SecondJumpTracer:
+            times_hit = 0
+            def trace(self, frame, event, arg):
+                if frame.f_code == loop_in_finally.func_code:
+                    firstLine = frame.f_code.co_firstlineno
+                    if frame.f_lineno == firstLine + 7:
+                        self.times_hit += 1
+                        if self.times_hit == 2:
+                            # Should raise about jumping out of a finally
+                            # block.  The resulting ValueError is caught in
+                            # loop_in_finally().
+                            frame.f_lineno = firstLine + 3
+                return self.trace
+        tracer = SecondJumpTracer()
+        output = []
+        sys.settrace(tracer.trace)
+        loop_in_finally(output)
+        sys.settrace(None)
+        self.compare_jump_output([5, True], output)
 
 def test_main():
     test_support.run_unittest(

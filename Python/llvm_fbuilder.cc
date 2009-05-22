@@ -80,6 +80,8 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     BasicBlock *entry = BasicBlock::Create("entry", this->function_);
     this->unreachable_block_ =
         BasicBlock::Create("unreachable", this->function_);
+    this->goto_line_block_ =
+        BasicBlock::Create("goto_line", this->function_);
     this->propagate_exception_block_ =
         BasicBlock::Create("propagate_exception", this->function_);
     this->unwind_block_ = BasicBlock::Create("unwind_block", this->function_);
@@ -103,6 +105,32 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->tstate_ = this->builder_.CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
             "_PyLlvm_WrapPyThreadState_GET"));
+
+    Value *use_tracing = this->builder_.CreateLoad(
+        ThreadStateTy::use_tracing(this->builder_, this->tstate_),
+        "use_tracing");
+    BasicBlock *trace_enter_function =
+        BasicBlock::Create("trace_enter_function", this->function_);
+    BasicBlock *continue_entry =
+        BasicBlock::Create("continue_entry", this->function_);
+    this->builder_.CreateCondBr(this->IsNonZero(use_tracing),
+                                trace_enter_function, continue_entry);
+
+    this->builder_.SetInsertPoint(trace_enter_function);
+    Value *trace_entry_result = this->builder_.CreateCall2(
+        this->GetGlobalFunction<int(PyThreadState*, PyFrameObject*)>(
+            "_PyEval_TraceEnterFunction"),
+        this->tstate_, this->frame_);
+    // If the trace function fails, return NULL.
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+                               this->unwind_reason_addr_);
+    this->builder_.CreateStore(
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
+        this->retval_addr_);
+    this->builder_.CreateCondBr(this->IsNonZero(trace_entry_result),
+                                this->do_return_block_, continue_entry);
+
+    this->builder_.SetInsertPoint(continue_entry);
     this->stack_bottom_ = this->builder_.CreateLoad(
         FrameTy::f_valuestack(this->builder_, this->frame_),
         "stack_bottom");
@@ -160,6 +188,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
             this->builder_.CreateLoad(
                 FrameTy::f_builtins(this->builder_,this->frame_)),
             PyTypeBuilder<PyObject *>::get());
+    this->f_lineno_addr_ = FrameTy::f_lineno(this->builder_, this->frame_);
 
     // Support generator.throw().  If frame->f_throwflag is set, the
     // caller has set an exception, and we're supposed to propagate
@@ -200,10 +229,23 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->Abort("Jumped to unreachable code.");
     this->builder_.CreateUnreachable();
 
+    FillGotoLineBlock();
     FillPropagateExceptionBlock();
     FillUnwindBlock();
+    FillDoReturnBlock();
 
     this->builder_.SetInsertPoint(start);
+}
+
+void
+LlvmFunctionBuilder::FillGotoLineBlock()
+{
+    this->builder_.SetInsertPoint(this->goto_line_block_);
+    this->line_target_addr_ = this->CreateAllocaInEntryBlock(
+        PyTypeBuilder<int>::get(), NULL, "line_target_addr");
+    Value *line_target = this->builder_.CreateLoad(this->line_target_addr_);
+    this->line_starts_switch_ = this->builder_.CreateSwitch(
+        line_target, this->unreachable_block_);
 }
 
 void
@@ -218,8 +260,18 @@ LlvmFunctionBuilder::FillPropagateExceptionBlock()
     this->builder_.CreateCall(this->GetGlobalFunction<int(PyFrameObject*)>(
                                   "PyTraceBack_Here"),
                               this->frame_);
-    // TODO(jyasskin): Arrange to call the appropriate trace function
-    // if tracing is turned on.
+    BasicBlock *call_exc_trace =
+        BasicBlock::Create("call_exc_trace", this->function_);
+    Value *tracefunc = this->builder_.CreateLoad(
+        ThreadStateTy::c_tracefunc(this->builder_, this->tstate_));
+    this->builder_.CreateCondBr(this->IsNull(tracefunc),
+                                this->unwind_block_, call_exc_trace);
+
+    this->builder_.SetInsertPoint(call_exc_trace);
+    this->builder_.CreateCall2(
+        this->GetGlobalFunction<void(PyThreadState *, PyFrameObject *)>(
+            "_PyEval_CallExcTrace"),
+        this->tstate_, this->frame_);
     this->builder_.CreateBr(this->unwind_block_);
 }
 
@@ -469,8 +521,65 @@ LlvmFunctionBuilder::FillUnwindBlock()
         Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
         this->retval_addr_);
     this->builder_.CreateBr(this->do_return_block_);
+}
 
+void
+LlvmFunctionBuilder::FillDoReturnBlock()
+{
     this->builder_.SetInsertPoint(this->do_return_block_);
+    BasicBlock *check_frame_exception =
+        BasicBlock::Create("check_frame_exception", this->function_);
+    BasicBlock *trace_leave_function =
+        BasicBlock::Create("trace_leave_function", this->function_);
+    BasicBlock *tracer_raised =
+        BasicBlock::Create("tracer_raised", this->function_);
+
+    // Trace exiting from this function, if tracing is turned on.
+    Value *use_tracing = this->builder_.CreateLoad(
+        ThreadStateTy::use_tracing(this->builder_, this->tstate_));
+    this->builder_.CreateCondBr(this->IsNonZero(use_tracing),
+                                trace_leave_function, check_frame_exception);
+
+    this->builder_.SetInsertPoint(trace_leave_function);
+    Value *unwind_reason =
+        this->builder_.CreateLoad(this->unwind_reason_addr_);
+    Value *is_return = this->builder_.CreateICmpEQ(
+        unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_RETURN),
+        "is_return");
+    Value *is_yield = this->builder_.CreateICmpEQ(
+        unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_YIELD),
+        "is_yield");
+    Value *is_exception = this->builder_.CreateICmpEQ(
+        unwind_reason, ConstantInt::get(Type::Int8Ty, UNWIND_EXCEPTION),
+        "is_exception");
+    Value *is_yield_or_return = this->builder_.CreateOr(is_return, is_yield);
+    Value *traced_retval = this->builder_.CreateLoad(this->retval_addr_);
+    Value *trace_args[] = {
+        this->tstate_,
+        this->frame_,
+        traced_retval,
+        this->builder_.CreateIntCast(
+            is_yield_or_return, PyTypeBuilder<char>::get(),
+            false /* unsigned */),
+        this->builder_.CreateIntCast(
+            is_exception, PyTypeBuilder<char>::get(), false /* unsigned */)
+    };
+    Value *trace_result = this->builder_.CreateCall(
+        this->GetGlobalFunction<int(PyThreadState *, struct _frame *,
+                                    PyObject *, char, char)>(
+                                        "_PyEval_TraceLeaveFunction"),
+        trace_args, array_endof(trace_args));
+    this->builder_.CreateCondBr(this->IsNonZero(trace_result),
+                                tracer_raised, check_frame_exception);
+
+    this->builder_.SetInsertPoint(tracer_raised);
+    this->XDecRef(traced_retval);
+    this->builder_.CreateStore(
+        Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
+        this->retval_addr_);
+    this->builder_.CreateBr(check_frame_exception);
+
+    this->builder_.SetInsertPoint(check_frame_exception);
     // If this frame raised and caught an exception, it saved it into
     // sys.exc_info(). The calling frame may also be in the process of
     // handling an exception, in which case we don't want to clobber
@@ -557,12 +666,75 @@ LlvmFunctionBuilder::CreateAllocaInEntryBlock(
 }
 
 void
+LlvmFunctionBuilder::SetLasti(int current_instruction_index)
+{
+    this->f_lasti_ = current_instruction_index;
+}
+
+void
 LlvmFunctionBuilder::SetLineNumber(int line)
 {
-    Value *f_lineno = FrameTy::f_lineno(this->builder_, this->frame_);
+    BasicBlock *this_line = BasicBlock::Create("line_start", this->function_);
+    this->line_starts_switch_->addCase(
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), line),
+        this_line);
+
     this->builder_.CreateStore(
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), line),
-        f_lineno);
+        this->f_lineno_addr_);
+
+    this->MaybeCallLineTrace(this_line);
+
+    // We have to start the line's block after calling the tracing
+    // function or tracing will be called an extra time after a jump.
+    // Because we set f_lineno above, and we only jump to this block
+    // based on the value of f_lineno, we don't need to set f_lineno
+    // again inside the block.
+    this->builder_.SetInsertPoint(this_line);
+}
+
+void
+LlvmFunctionBuilder::TraceBackedgeLanding(BasicBlock *backedge_landing,
+                                          BasicBlock *target,
+                                          int line_number)
+{
+    this->builder_.SetInsertPoint(backedge_landing);
+    this->builder_.CreateStore(
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), line_number),
+        this->f_lineno_addr_);
+    this->MaybeCallLineTrace(target);
+}
+
+void
+LlvmFunctionBuilder::MaybeCallLineTrace(BasicBlock *fallthrough_block)
+{
+    BasicBlock *call_trace = BasicBlock::Create("call_trace", this->function_);
+
+    Value *tracing_possible = this->builder_.CreateLoad(
+        this->GetGlobalVariable<int>("_Py_TracingPossible"));
+    this->builder_.CreateCondBr(this->IsNonZero(tracing_possible),
+                                call_trace, fallthrough_block);
+
+    this->builder_.SetInsertPoint(call_trace);
+    this->builder_.CreateStore(
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), this->f_lasti_),
+        FrameTy::f_lasti(this->builder_, this->frame_));
+    Value *line_trace_result = this->builder_.CreateCall3(
+        this->GetGlobalFunction<int(PyThreadState *, PyFrameObject *,
+                                    PyObject ***)>("_PyLlvm_CallLineTrace"),
+        this->tstate_,
+        this->frame_,
+        this->stack_pointer_addr_);
+    // In case the tracing function asked to jump, save its jump target.
+    this->builder_.CreateStore(line_trace_result, this->line_target_addr_);
+    llvm::SwitchInst *line_trace_switch = this->builder_.CreateSwitch(
+        line_trace_result, this->goto_line_block_, 3);
+    line_trace_switch->addCase(
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), -2),
+        this->propagate_exception_block_);
+    line_trace_switch->addCase(
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), -1),
+        fallthrough_block);
 }
 
 void
@@ -1589,6 +1761,8 @@ LlvmFunctionBuilder::YIELD_VALUE()
     // like everything else, so we jump to the common return block
     // instead of returning directly.
     this->builder_.CreateStore(retval, this->retval_addr_);
+    this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_YIELD),
+                               this->unwind_reason_addr_);
     this->builder_.CreateBr(this->do_return_block_);
 
     // Continue inserting code inside the resume block.

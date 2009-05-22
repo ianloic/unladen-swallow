@@ -85,3 +85,41 @@ _PyLlvm_WrapPyThreadState_GET()
 {
     return PyThreadState_GET();
 }
+
+/* Returns -2 if the trace function raises an exception, -1 if the
+   trace function did not try to change the current execution
+   position, or the line number at which to continue execution. */
+int
+_PyLlvm_CallLineTrace(PyThreadState *tstate, PyFrameObject *f,
+                      PyObject ***stack_pointer_addr)
+{
+    int err;
+    if (tstate->c_tracefunc != NULL && !tstate->tracing) {
+        int initial_lasti = f->f_lasti;
+        int final_lasti;
+        /* see maybe_call_line_trace
+           for expository comments */
+        f->f_stacktop = *stack_pointer_addr;
+
+        err = _PyEval_CallTrace(tstate->c_tracefunc, tstate->c_traceobj,
+                                f, PyTrace_LINE, Py_None);
+        /* Reload possibly changed frame fields */
+        if (f->f_stacktop != NULL) {
+            *stack_pointer_addr = f->f_stacktop;
+            f->f_stacktop = NULL;
+        }
+        if (err) {
+            /* trace function raised an exception */
+            return -2;
+        }
+        final_lasti = f->f_lasti;
+        /* Signal PyFrame_GetLineNumber that llvm is updating f_lineno. */
+        f->f_lasti = -1;
+        if (final_lasti != initial_lasti) {
+            /* When a trace function sets the line number,
+               frame_set_lineno sets f->lasti. */
+            return f->f_lineno;
+        }
+    }
+    return -1;
+}
