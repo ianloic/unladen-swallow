@@ -505,7 +505,7 @@ static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
    is 0, we know we don't have to check this thread's c_tracefunc.
    This speeds up the if statement in PyEval_EvalFrame() after
    fast_next_opcode*/
-int _Py_TracingPossible = 0;
+extern "C" PyAPI_DATA(int) _Py_TracingPossible = 0;
 
 /* for manipulating the thread switch and periodic "stuff" - used to be
    per thread, now just a pair o' globals */

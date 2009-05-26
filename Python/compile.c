@@ -2091,8 +2091,8 @@ compiler_from_import(struct compiler *c, stmt_ty s)
 	ADDOP_O(c, LOAD_CONST, s->v.ImportFrom.module, consts);
 	ADDOP_I(c, CALL_FUNCTION, 3);
 	for (i = 0; i < n; i++) {
-		alias = (alias_ty)asdl_seq_GET(s->v.ImportFrom.names, i);
 		identifier store_name;
+		alias = (alias_ty)asdl_seq_GET(s->v.ImportFrom.names, i);
 
 		/* The DUP_TOP_TWO ends up duplicating [#@import_from, module],
 		where module is the return value from #@import_name. */

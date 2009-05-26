@@ -799,6 +799,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Include\llvm_compile.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Include\longintrepr.h"
 				>
 			</File>
@@ -1783,6 +1787,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Python\llvm_compile.cc"
+				>
+			</File>
+			<File
 				RelativePath="..\Python\llvm_inline_functions.c"
 				>
 				<FileConfiguration
@@ -1950,6 +1958,18 @@
 			>
 			<File
 				RelativePath="..\PC\python_nt.rc"
+				>
+			</File>
+		</Filter>
+		<Filter
+			Name="Util"
+			>
+			<File
+				RelativePath="..\Util\PyTypeBuilder.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\PyTypeBuilder.h"
 				>
 			</File>
 		</Filter>
