@@ -3522,36 +3522,31 @@ _PyEval_CallTracing(PyObject *func, PyObject *args)
 	return result;
 }
 
-/* Returns nonzero on exception. */
+/* See Objects/lnotab_notes.txt for a description of how tracing
+   works.  Returns nonzero on exception. */
 static int
 maybe_call_line_trace(Py_tracefunc func, PyObject *obj,
 		      PyFrameObject *frame, int *instr_lb, int *instr_ub,
 		      int *instr_prev)
 {
 	int result = 0;
+	int line = frame->f_lineno;
 
         /* If the last instruction executed isn't in the current
-           instruction window, reset the window.  If the last
-           instruction happens to fall at the start of a line or if it
-           represents a jump backwards, call the trace function.
+           instruction window, reset the window.
         */
-	if ((frame->f_lasti < *instr_lb || frame->f_lasti >= *instr_ub)) {
-		int line;
+	if (frame->f_lasti < *instr_lb || frame->f_lasti >= *instr_ub) {
 		PyAddrPair bounds;
-
-		/* PyCode_CheckLineNumber returns -1 if f_lasti is not
-		   at the start of a line. */
-		line = PyCode_CheckLineNumber(frame->f_code, frame->f_lasti,
-					      &bounds);
-		if (line >= 0) {
-			frame->f_lineno = line;
-			result = _PyEval_CallTrace(func, obj, frame,
-						   PyTrace_LINE, Py_None);
-		}
+		line = _PyCode_CheckLineNumber(frame->f_code, frame->f_lasti,
+					       &bounds);
 		*instr_lb = bounds.ap_lower;
 		*instr_ub = bounds.ap_upper;
 	}
-	else if (frame->f_lasti <= *instr_prev) {
+	/* If the last instruction falls at the start of a line or if
+           it represents a jump backwards, update the frame's line
+           number and call the trace function. */
+	if (frame->f_lasti == *instr_lb || frame->f_lasti < *instr_prev) {
+		frame->f_lineno = line;
 		result = _PyEval_CallTrace(func, obj, frame,
 					   PyTrace_LINE, Py_None);
 	}
