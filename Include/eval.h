@@ -8,6 +8,12 @@
 extern "C" {
 #endif
 
+/* Records whether tracing is on for any thread.  Counts the number of
+ * threads for which tstate->c_tracefunc is non-NULL, so if the value
+ * is 0, we know we don't have to check this thread's c_tracefunc.
+ * This speeds up the if statement in PyEval_EvalFrame() after
+ * fast_next_opcode. This is initialized by _PyEval_Init() below. */
+PyAPI_DATA(int) _Py_TracingPossible;
 
 PyAPI_FUNC(PyObject *) PyEval_CallObjectWithKeywords(
 	PyObject *, PyObject *, PyObject *);

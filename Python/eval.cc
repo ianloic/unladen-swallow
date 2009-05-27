@@ -98,6 +98,8 @@ static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
 
+int _Py_TracingPossible = 0;
+
 /* Keep this in sync with llvm_fbuilder.cc */
 #define CALL_FLAG_VAR 1
 #define CALL_FLAG_KW 2
@@ -499,13 +501,6 @@ enum why_code {
 };
 
 static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
-
-/* Records whether tracing is on for any thread.  Counts the number of
-   threads for which tstate->c_tracefunc is non-NULL, so if the value
-   is 0, we know we don't have to check this thread's c_tracefunc.
-   This speeds up the if statement in PyEval_EvalFrame() after
-   fast_next_opcode*/
-extern "C" PyAPI_DATA(int) _Py_TracingPossible = 0;
 
 /* for manipulating the thread switch and periodic "stuff" - used to be
    per thread, now just a pair o' globals */
