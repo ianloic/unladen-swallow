@@ -8,13 +8,6 @@
 extern "C" {
 #endif
 
-/* Records whether tracing is on for any thread.  Counts the number of
- * threads for which tstate->c_tracefunc is non-NULL, so if the value
- * is 0, we know we don't have to check this thread's c_tracefunc.
- * This speeds up the if statement in PyEval_EvalFrame() after
- * fast_next_opcode. This is initialized by _PyEval_Init() below. */
-PyAPI_DATA(int) _Py_TracingPossible;
-
 PyAPI_FUNC(PyObject *) PyEval_CallObjectWithKeywords(
 	PyObject *, PyObject *, PyObject *);
 
@@ -169,7 +162,8 @@ PyAPI_FUNC(PyObject *) PyEval_EvalCodeEx(PyCodeObject *co,
 PyAPI_FUNC(PyObject *) _PyEval_CallTracing(PyObject *func, PyObject *args);
 
 
-/* Helper functions shared by the bytecode and LLVM implementations. */
+/* Helper functions and objects shared by the bytecode and LLVM
+   implementations. */
 
 PyAPI_FUNC(void) _PyEval_SetExcInfo(PyThreadState *tstate, PyObject *type,
 				    PyObject *value, PyObject *tb);
@@ -206,6 +200,13 @@ PyAPI_FUNC(int) _PyEval_UnpackIterable(PyObject *, int, PyObject **);
 PyAPI_FUNC(PyObject *) _PyEval_LoadName(struct _frame *, int);
 PyAPI_FUNC(int) _PyEval_StoreName(struct _frame *, int, PyObject *);
 PyAPI_FUNC(int) _PyEval_DeleteName(struct _frame *, int);
+
+/* Records whether tracing is on for any thread.  Counts the number of
+ * threads for which tstate->c_tracefunc is non-NULL, so if the value
+ * is 0, we know we don't have to check this thread's c_tracefunc.
+ * This speeds up the if statement in PyEval_EvalFrame() after
+ * fast_next_opcode. */
+PyAPI_DATA(int) _Py_TracingPossible;
 
 PyAPI_FUNC(int) _PyEval_CallTrace(Py_tracefunc, PyObject *, struct _frame *,
                                   int, PyObject *);
