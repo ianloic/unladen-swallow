@@ -2,7 +2,9 @@
 
 #include "Python.h"
 
+#include "Util/SingleFunctionInliner.h"
 #include "_llvmfunctionobject.h"
+
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
@@ -88,11 +90,15 @@ PyGlobalLlvmData::InitializeOptimizations()
     // function that runs a few times but don't take too long
     // themselves.
 
+    optimizations_1_.add(PyCreateSingleFunctionInliningPass());
     // Lw: br %cond Lx, Ly ; Lx: br %cond Lz, Lv  --> Lw: br %cond Lz, Ly
     optimizations_1_.add(llvm::createJumpThreadingPass());
     // -> SSA form.
     optimizations_1_.add(llvm::createPromoteMemoryToRegisterPass());
     optimizations_1_.add(llvm::createInstructionCombiningPass());
+    // Add CFG Simplification again because inlining produces
+    // superfluous blocks.
+    optimizations_1_.add(llvm::createCFGSimplificationPass());
 
     // optimizations_2_ consists of all optimizations that improve
     // the code at all.  We don't yet use any profiling data for this,

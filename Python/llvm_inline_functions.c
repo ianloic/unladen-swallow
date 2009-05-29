@@ -7,31 +7,31 @@
 #include "frameobject.h"
 #include "opcode.h"
 
-int
+int __attribute__((always_inline))
 _PyLlvm_WrapIntCheck(PyObject *obj)
 {
     return PyInt_Check(obj);
 }
 
-void
+void __attribute__((always_inline))
 _PyLlvm_WrapIncref(PyObject *obj)
 {
     Py_INCREF(obj);
 }
 
-void
+void __attribute__((always_inline))
 _PyLlvm_WrapDecref(PyObject *obj)
 {
     Py_DECREF(obj);
 }
 
-void
+void __attribute__((always_inline))
 _PyLlvm_WrapXDecref(PyObject *obj)
 {
     Py_XDECREF(obj);
 }
 
-int
+int __attribute__((always_inline))
 _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
 {
     return PyExceptionClass_Check(obj) || PyString_Check(obj);
@@ -80,7 +80,7 @@ _PyLlvm_WrapEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
     PyErr_Clear();
 }
 
-PyThreadState *
+PyThreadState * __attribute__((always_inline))
 _PyLlvm_WrapPyThreadState_GET()
 {
     return PyThreadState_GET();
