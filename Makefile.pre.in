@@ -75,9 +75,15 @@ PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
 PY_CXXFLAGS=	$(CXXFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE -Wno-sign-compare -Wno-write-strings
 
 # LLVM flags extracted from llvm-config jit bitreader x86
-LLVMCXXFLAGS=	-IUtil/llvm/include -I$(srcdir)/Util/llvm/include -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
-LLVM_LIB_DIR=	Util/llvm/@LLVM_OBJ_DIR@/lib
-LLVM_BIN_DIR=	Util/llvm/@LLVM_OBJ_DIR@/bin
+LLVMBASEFLAGS=	-D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
+ifeq (@BUILD_LLVM@, 1)
+	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ -I$(srcdir)/@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
+else
+	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
+endif
+LLVM_INC_DIR=	@LLVM_INC_DIR@
+LLVM_LIB_DIR=	@LLVM_PATH@/lib
+LLVM_BIN_DIR=	@LLVM_PATH@/bin
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
 LLVMLDFLAGS+=	-lLLVMBitReader $(LLVM_LIB_DIR)/LLVMX86AsmPrinter.o $(LLVM_LIB_DIR)/LLVMX86CodeGen.o -lLLVMSelectionDAG -lLLVMAsmPrinter $(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
 
@@ -405,11 +411,19 @@ coverage:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS) -O0 -pg -fprofile-arcs -ftest-coverage" LIBS="$(LIBS) -lgcov"
 
+# Only build LLVM if we need to.
 llvm:
-	$(MAKE) -C Util/llvm libs-only
+	@case @BUILD_LLVM@ in \
+	0) echo "Skipping building llvm" && mkdir -p Util;; \
+	1) $(MAKE) -C Util/llvm libs-only;; \
+	esac
 
+# Only build clang and llc if we need to.
 llvm_tools: llvm
-	$(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc"
+	@case @BUILD_LLVM@ in \
+	0) echo "Skipping building clang and llc";; \
+	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
+	esac
 
 
 # Build the interpreter

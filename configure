@@ -641,8 +641,10 @@ ac_includes_default="\
 enable_option_checking=no
 ac_subst_vars='LTLIBOBJS
 SRCDIRS
+LLVM_INC_DIR
+LLVM_PATH
+BUILD_LLVM
 subdirs
-LLVM_OBJ_DIR
 THREADHEADERS
 UNICODE_OBJS
 LIBC
@@ -793,6 +795,7 @@ with_libc
 enable_unicode
 with_py3k_warnings
 with_computed_gotos
+with_llvm
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1473,6 +1476,7 @@ Optional Packages:
                           Enabled by default.
   --with-computed-gotos   Use computed gotos / threaded dispatch in evaluation
                           loops (not available on all compilers)
+  --with-llvm=DIRECTORY   build against a preinstalled LLVM
 
 Some influential environment variables:
   CC          C compiler command
@@ -25696,28 +25700,116 @@ fi
 { $as_echo "$as_me:$LINENO: result: $with_computed_gotos" >&5
 $as_echo "$with_computed_gotos" >&6; }
 
+# Check for --with-llvm.
+{ $as_echo "$as_me:$LINENO: checking for --with-llvm" >&5
+$as_echo_n "checking for --with-llvm... " >&6; }
 
-
-# Re-assigning $ac_configure_args is a hack to pass different
-# arguments to LLVM's configure script due to a limitation in
-# AC_CONFIG_SUBDIRS.  Since AC_CONFIG_SUBDIRS only runs the configure
-# script inside of AC_OUTPUT, we can't re-assign the old configure
-# arguments at any time it would make a difference.  The practical
-# effect is that config.status passes some extra arguments when it
-# re-runs the Python configure script.
-ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
-if test "$Py_DEBUG" = 'true' ; then
-    ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
-    LLVM_OBJ_DIR=Debug
+# Check whether --with-llvm was given.
+if test "${with_llvm+set}" = set; then
+  withval=$with_llvm;
+if test "$withval" != no
+then
+    { $as_echo "$as_me:$LINENO: result: $withval" >&5
+$as_echo "$withval" >&6; };
+    LLVM_PATH=$withval
+    as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/clang"" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for \"$LLVM_PATH/bin/clang\"" >&5
+$as_echo_n "checking for \"$LLVM_PATH/bin/clang\"... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
 else
-    ac_configure_args="$ac_configure_args --enable-optimized --disable-assertions"
-    LLVM_OBJ_DIR=Release-Asserts
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r ""$LLVM_PATH/bin/clang""; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  :
+else
+  echo "Did not find clang in the expected path"; exit 1
+fi
+
+    as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/llc"" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for \"$LLVM_PATH/bin/llc\"" >&5
+$as_echo_n "checking for \"$LLVM_PATH/bin/llc\"... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r ""$LLVM_PATH/bin/llc""; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  :
+else
+  echo "Did not find llc in the expected path"; exit 1
+fi
+
+else { $as_echo "$as_me:$LINENO: result: built-in" >&5
+$as_echo "built-in" >&6; }; LLVM_PATH="";
+fi
+else
+  { $as_echo "$as_me:$LINENO: result: built-in" >&5
+$as_echo "built-in" >&6; }
 fi
 
 
 
+
+
+if test "$LLVM_PATH" != ""
+then
+    echo "Using preinstalled LLVM: $LLVM_PATH"
+    BUILD_LLVM=0
+    LLVM_INC_DIR="$LLVM_PATH/include"
+else
+    BUILD_LLVM=1
+    LLVM_BASE="Util/llvm"
+    # Re-assigning $ac_configure_args is a hack to pass different
+    # arguments to LLVM's configure script due to a limitation in
+    # AC_CONFIG_SUBDIRS.  Since AC_CONFIG_SUBDIRS only runs the configure
+    # script inside of AC_OUTPUT, we can't re-assign the old configure
+    # arguments at any time it would make a difference.  The practical
+    # effect is that config.status passes some extra arguments when it
+    # re-runs the Python configure script.
+    ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
+    if test "$Py_DEBUG" = 'true' ; then
+        ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
+        LLVM_PATH="$LLVM_BASE/Debug"
+    else
+        ac_configure_args="$ac_configure_args --enable-optimized --disable-assertions"
+        LLVM_PATH="$LLVM_BASE/Release-Asserts"
+    fi
+    LLVM_INC_DIR="$LLVM_BASE/include"
+    echo "Will build LLVM in $LLVM_BASE"
+
+
 subdirs="$subdirs Util/llvm"
 
+fi
 
 for h in `(cd $srcdir;echo Python/thread_*.h)`
 do
