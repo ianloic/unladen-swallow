@@ -386,6 +386,11 @@ private:
     llvm::Value *tstate_;
     llvm::Value *stack_bottom_;
     llvm::Value *stack_pointer_addr_;
+    // The tmp_stack_pointer is used when we need to have another
+    // function update the stack pointer.  Passing the stack pointer
+    // directly would prevent mem2reg from working on it, so we copy
+    // it to and from the tmp_stack_pointer around the call.
+    llvm::Value *tmp_stack_pointer_addr_;
     llvm::Value *varnames_;
     llvm::Value *names_;
     llvm::Value *globals_;

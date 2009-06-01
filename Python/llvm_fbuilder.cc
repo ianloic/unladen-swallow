@@ -94,6 +94,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->stack_pointer_addr_ = this->builder_.CreateAlloca(
         PyTypeBuilder<PyObject**>::get(),
         NULL, "stack_pointer_addr");
+    this->tmp_stack_pointer_addr_ = this->builder_.CreateAlloca(
+        PyTypeBuilder<PyObject**>::get(),
+        NULL, "tmp_stack_pointer_addr");
     this->retval_addr_ = this->builder_.CreateAlloca(
         PyTypeBuilder<PyObject*>::get(),
         NULL, "retval_addr");
@@ -719,11 +722,17 @@ LlvmFunctionBuilder::MaybeCallLineTrace(BasicBlock *fallthrough_block)
     this->builder_.CreateStore(
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), this->f_lasti_),
         FrameTy::f_lasti(this->builder_, this->frame_));
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(this->stack_pointer_addr_),
+        this->tmp_stack_pointer_addr_);
     Value *line_trace_result = this->builder_.CreateCall3(
         this->GetGlobalFunction<int(PyThreadState *, PyFrameObject *,
                                     PyObject ***)>("_PyLlvm_CallLineTrace"),
         this->tstate_,
         this->frame_,
+        this->tmp_stack_pointer_addr_);
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(this->tmp_stack_pointer_addr_),
         this->stack_pointer_addr_);
     // In case the tracing function asked to jump, save its jump target.
     this->builder_.CreateStore(line_trace_result, this->line_target_addr_);
@@ -1237,23 +1246,16 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
     Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
 
-    // eval.cc passes a copy of the stack pointer to _PyEval_CallFunction,
-    // so we do the same thing.
-    // XXX(twouters): find out if this is really necessary; we just end up
-    // using the stack pointer anyway, even in the error case.
-    Value *temp_stack_pointer_addr = this->CreateAllocaInEntryBlock(
-        PyTypeBuilder<PyObject**>::get(),
-        0, "CALL_FUNCTION_stack_pointer_addr");
     this->builder_.CreateStore(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
-        temp_stack_pointer_addr);
+        this->tmp_stack_pointer_addr_);
     Value *result = this->builder_.CreateCall2(
         call_function,
-        temp_stack_pointer_addr,
+        this->tmp_stack_pointer_addr_,
         ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
         "CALL_FUNCTION_result");
     this->builder_.CreateStore(
-        this->builder_.CreateLoad(temp_stack_pointer_addr),
+        this->builder_.CreateLoad(this->tmp_stack_pointer_addr_),
         this->stack_pointer_addr_);
     this->PropagateExceptionOnNull(result);
     this->Push(result);
@@ -1272,12 +1274,18 @@ LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
 #endif
     Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int, int)>("_PyEval_CallFunctionVarKw");
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(this->stack_pointer_addr_),
+        this->tmp_stack_pointer_addr_);
     Value *result = this->builder_.CreateCall3(
         call_function,
-        this->stack_pointer_addr_,
+        this->tmp_stack_pointer_addr_,
         ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
         ConstantInt::get(PyTypeBuilder<int>::get(), call_flag),
         "CALL_FUNCTION_VAR_KW_result");
+    this->builder_.CreateStore(
+        this->builder_.CreateLoad(this->tmp_stack_pointer_addr_),
+        this->stack_pointer_addr_);
     this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
 }

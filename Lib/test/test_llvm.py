@@ -83,6 +83,16 @@ def foo():
         self.assertEquals("Hello", foo1("Hello"))
         self.assertEquals(7, foo2())
 
+    def test_stack_pointer_optimized_to_register(self):
+        def test_func():
+            # We may have to add opcode uses to here as we find things
+            # that break the stack pointer optimization.
+            return sum(range(*[1, 10, 3]))
+        # Run mem2reg.
+        test_func.__code__.co_optimization = 1
+        self.assertFalse("%stack_pointer_addr = alloca"
+                         in str(test_func.__code__.co_llvm))
+
     @at_each_optimization_level
     def test_return_arg(self, level):
         foo = compile_for_llvm("foo", """
