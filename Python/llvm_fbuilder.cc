@@ -24,6 +24,7 @@ struct PyExcInfo;
 
 using llvm::BasicBlock;
 using llvm::Constant;
+using llvm::ConstantExpr;
 using llvm::ConstantInt;
 using llvm::Function;
 using llvm::FunctionType;
@@ -44,6 +45,13 @@ enum UnwindReason {
     UNWIND_YIELD
 };
 
+static std::string
+pystring_to_std_string(PyObject *str)
+{
+    assert(PyString_Check(str) && "code->co_name must be PyString");
+    return std::string(PyString_AS_STRING(str), PyString_GET_SIZE(str));
+}
+
 static const FunctionType *
 get_function_type(Module *module)
 {
@@ -60,16 +68,18 @@ get_function_type(Module *module)
 }
 
 LlvmFunctionBuilder::LlvmFunctionBuilder(
-    PyGlobalLlvmData *llvm_data, const std::string& name)
+    PyGlobalLlvmData *llvm_data, PyCodeObject *code_object)
     : llvm_data_(llvm_data),
+      code_object_(code_object),
       module_(this->llvm_data_->module()),
       function_(Function::Create(
                     get_function_type(this->module_),
                     llvm::GlobalValue::ExternalLinkage,
                     // Prefix names with #u# to avoid collisions
                     // with runtime functions.
-                    "#u#" + name,
-                    this->module_))
+                    "#u#" + pystring_to_std_string(code_object->co_name),
+                    this->module_)),
+      is_generator_(code_object->co_flags & CO_GENERATOR)
 {
     Function::arg_iterator args = this->function_->arg_begin();
     this->frame_ = args++;
@@ -138,12 +148,21 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         FrameTy::f_valuestack(this->builder_, this->frame_),
         "stack_bottom");
     Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
-    Value *initial_stack_pointer =
-        this->builder_.CreateLoad(
-            f_stacktop,
-            "initial_stack_pointer");
-    this->builder_.CreateStore(initial_stack_pointer,
-                               this->stack_pointer_addr_);
+    if (this->is_generator_) {
+      // When we're re-entering a generator, we have to read the top of
+      // the stack from the frame.
+      Value *initial_stack_pointer =
+          this->builder_.CreateLoad(
+              f_stacktop,
+              "initial_stack_pointer");
+      this->builder_.CreateStore(initial_stack_pointer,
+                                 this->stack_pointer_addr_);
+    } else {
+      // If this isn't a generator, the stack pointer always starts at
+      // the bottom of the stack.
+      this->builder_.CreateStore(this->stack_bottom_,
+                                 this->stack_pointer_addr_);
+    }
     /* f_stacktop remains NULL unless yield suspends the frame. */
     this->builder_.CreateStore(
         Constant::getNullValue(PyTypeBuilder<PyObject **>::get()),
@@ -152,6 +171,20 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     Value *code = this->builder_.CreateLoad(
         FrameTy::f_code(this->builder_, this->frame_),
         "co");
+#ifndef NDEBUG
+    // Assert that the code object we pull out of the frame is the
+    // same as the one passed into this object.  TODO(jyasskin):
+    // Create an LLVM constant GlobalVariable to store the passed-in
+    // code object instead of pulling it out of the frame.  We'll have
+    // to check that there aren't any lifetime issues with the
+    // GlobalVariable outliving the Function or codeobject.
+    Value *passed_in_code_object = ConstantExpr::getIntToPtr(
+        ConstantInt::get(Type::Int64Ty,
+                         reinterpret_cast<uintptr_t>(this->code_object_)),
+        PyTypeBuilder<PyCodeObject*>::get());
+    this->Assert(this->builder_.CreateICmpEQ(code, passed_in_code_object),
+                 "Called with unexpected code object.");
+#endif  // NDEBUG
     this->varnames_ = this->builder_.CreateLoad(
         CodeTy::co_varnames(this->builder_, code),
         "varnames");
@@ -192,41 +225,46 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                 FrameTy::f_builtins(this->builder_,this->frame_)),
             PyTypeBuilder<PyObject *>::get());
     this->f_lineno_addr_ = FrameTy::f_lineno(this->builder_, this->frame_);
-
-    // Support generator.throw().  If frame->f_throwflag is set, the
-    // caller has set an exception, and we're supposed to propagate
-    // it.
-    BasicBlock *propagate_generator_throw =
-        BasicBlock::Create("propagate_generator_throw", this->function_);
-    BasicBlock *continue_generator_or_start_func =
-        BasicBlock::Create("continue_generator_or_start_func", this->function_);
-
-    Value *throwflag = this->builder_.CreateLoad(
-        FrameTy::f_throwflag(this->builder_, this->frame_),
-        "f_throwflag");
-    this->builder_.CreateCondBr(
-        this->IsNonZero(throwflag),
-        propagate_generator_throw, continue_generator_or_start_func);
-
-    this->builder_.SetInsertPoint(propagate_generator_throw);
-    PropagateException();
-
-    this->builder_.SetInsertPoint(continue_generator_or_start_func);
-    this->resume_block_ = this->builder_.CreateLoad(
-        FrameTy::f_lasti(this->builder_, this->frame_),
-        "resume_block");
-    // Each use of a YIELD_VALUE opcode will add a new case to this
-    // switch.  eval.cc just assigns the new IP, allowing wild jumps,
-    // but LLVM won't let us do that so we default to jumping to the
-    // unreachable block.
-    this->yield_resume_switch_ =
-        this->builder_.CreateSwitch(this->resume_block_,
-                                    this->unreachable_block_);
+    this->f_lasti_addr_ = FrameTy::f_lasti(this->builder_, this->frame_);
 
     BasicBlock *start = BasicBlock::Create("body_start", this->function_);
-    this->yield_resume_switch_->addCase(
-        ConstantInt::getSigned(PyTypeBuilder<int>::get(), -1),
-        start);
+    if (this->is_generator_) {
+      // Support generator.throw().  If frame->f_throwflag is set, the
+      // caller has set an exception, and we're supposed to propagate
+      // it.
+      BasicBlock *propagate_generator_throw =
+          BasicBlock::Create("propagate_generator_throw", this->function_);
+      BasicBlock *continue_generator_or_start_func =
+          BasicBlock::Create("continue_generator_or_start_func",
+                             this->function_);
+
+      Value *throwflag = this->builder_.CreateLoad(
+          FrameTy::f_throwflag(this->builder_, this->frame_),
+          "f_throwflag");
+      this->builder_.CreateCondBr(
+          this->IsNonZero(throwflag),
+          propagate_generator_throw, continue_generator_or_start_func);
+
+      this->builder_.SetInsertPoint(propagate_generator_throw);
+      PropagateException();
+
+      this->builder_.SetInsertPoint(continue_generator_or_start_func);
+      Value *resume_block = this->builder_.CreateLoad(
+          this->f_lasti_addr_, "resume_block");
+      // Each use of a YIELD_VALUE opcode will add a new case to this
+      // switch.  eval.cc just assigns the new IP, allowing wild jumps,
+      // but LLVM won't let us do that so we default to jumping to the
+      // unreachable block.
+      this->yield_resume_switch_ =
+          this->builder_.CreateSwitch(resume_block, this->unreachable_block_);
+
+      this->yield_resume_switch_->addCase(
+          ConstantInt::getSigned(PyTypeBuilder<int>::get(), -1),
+          start);
+    } else {
+      // This function is not a generator, so we just jump to the start.
+      this->builder_.CreateBr(start);
+    }
 
     this->builder_.SetInsertPoint(this->unreachable_block_);
     this->Abort("Jumped to unreachable code.");
@@ -721,7 +759,7 @@ LlvmFunctionBuilder::MaybeCallLineTrace(BasicBlock *fallthrough_block)
     this->builder_.SetInsertPoint(call_trace);
     this->builder_.CreateStore(
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), this->f_lasti_),
-        FrameTy::f_lasti(this->builder_, this->frame_));
+        this->f_lasti_addr_);
     this->builder_.CreateStore(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
         this->tmp_stack_pointer_addr_);
@@ -1742,6 +1780,7 @@ LlvmFunctionBuilder::RETURN_VALUE()
 void
 LlvmFunctionBuilder::YIELD_VALUE()
 {
+    assert(this->is_generator_ && "yield in non-generator!");
     BasicBlock *yield_resume =
         BasicBlock::Create("yield_resume", this->function_);
     // Make sure f_lasti is negative when running through LLVM to
@@ -1761,8 +1800,7 @@ LlvmFunctionBuilder::YIELD_VALUE()
     this->builder_.CreateStore(stack_pointer, f_stacktop);
 
     // Save the right block to jump back to when we resume this generator.
-    Value *f_lasti = FrameTy::f_lasti(this->builder_, this->frame_);
-    this->builder_.CreateStore(yield_number, f_lasti);
+    this->builder_.CreateStore(yield_number, this->f_lasti_addr_);
 
     // Yields return from the current function without unwinding the
     // stack.  They do trace the return and call _PyEval_ResetExcInfo

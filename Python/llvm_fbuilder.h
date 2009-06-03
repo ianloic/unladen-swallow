@@ -9,6 +9,7 @@
 #include "llvm/Support/IRBuilder.h"
 #include <string>
 
+struct PyCodeObject;
 struct PyGlobalLlvmData;
 
 namespace py {
@@ -21,7 +22,7 @@ class LlvmFunctionBuilder {
     void operator=(const LlvmFunctionBuilder &);  // Not implemented.
 
 public:
-    LlvmFunctionBuilder(PyGlobalLlvmData *global_data, const std::string& name);
+    LlvmFunctionBuilder(PyGlobalLlvmData *global_data, PyCodeObject *code);
 
     llvm::Function *function() { return function_; }
     llvm::IRBuilder<>& builder() { return builder_; }
@@ -372,9 +373,14 @@ private:
     void MaybeCallLineTrace(llvm::BasicBlock *fallthrough_block);
 
     PyGlobalLlvmData *const llvm_data_;
+    // The code object is used for looking up peripheral information
+    // about the function.  It's not used to examine the bytecode
+    // string.
+    PyCodeObject *const code_object_;
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;
+    const bool is_generator_;
 
     // The most recent index we've started emitting an instruction for.
     int f_lasti_;
@@ -399,13 +405,12 @@ private:
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
     llvm::Value *f_lineno_addr_;
+    llvm::Value *f_lasti_addr_;
 
     llvm::BasicBlock *unreachable_block_;
 
-    // The block index that the function will resume execution at.
-    // This is only useful for generators; for all other functions
-    // it's always 0.
-    llvm::Value *resume_block_;
+    // In generators, we use this switch to jump back to the most
+    // recently executed yield instruction.
     llvm::SwitchInst *yield_resume_switch_;
 
     llvm::BasicBlock *goto_line_block_;

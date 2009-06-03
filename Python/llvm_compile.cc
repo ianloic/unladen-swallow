@@ -13,13 +13,6 @@
 
 using llvm::BasicBlock;
 
-static std::string
-pystring_to_std_string(PyObject *str)
-{
-    assert(PyString_Check(str) && "code->co_name must be PyString");
-    return std::string(PyString_AS_STRING(str), PyString_GET_SIZE(str));
-}
-
 class BytecodeIterator {
 public:
     // Initializes the iterator to point to the first opcode in the
@@ -261,8 +254,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
                         "non-string codestring in code object");
         return NULL;
     }
-    py::LlvmFunctionBuilder fbuilder(
-        PyGlobalLlvmData::Get(), pystring_to_std_string(code->co_name));
+    py::LlvmFunctionBuilder fbuilder(PyGlobalLlvmData::Get(), code);
     std::vector<InstrInfo> instr_info(PyString_GET_SIZE(code->co_code));
     if (-1 == set_line_numbers(code, instr_info)) {
         return NULL;
