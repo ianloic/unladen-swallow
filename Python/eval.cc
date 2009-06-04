@@ -15,13 +15,16 @@
 #include "frameobject.h"
 #include "eval.h"
 #include "global_llvm_data.h"
+#include "llvm_compile.h"
 #include "opcode.h"
 #include "structmember.h"
 #include "_llvmfunctionobject.h"
 
 #include "llvm/Function.h"
+#include "llvm/Support/ManagedStatic.h"
 
 #include <ctype.h>
+#include <set>
 
 #ifndef WITH_TSC
 
@@ -77,6 +80,63 @@ void dump_tsc(int opcode, int ticked, uint64 inst0, uint64 inst1,
 }
 
 #endif
+
+/* Simple function for determinining when we should (re)optimize a function
+   with the given call count. The threshold value of 10000 is arbitrary. This
+   function is very simple, and should only be taken as a baseline for future
+   improvements.
+   TODO(collinwinter): tune this. */
+#define Py_HOT_OR_NOT(call_count) ((call_count) % 10000 == 0)
+
+/* #define Py_PROFILE_HOTNESS
+   Define this if you want stats on how many pure-Python functions were judged
+   hot. This will keep track of how many times each hot function (as determined
+   by Py_HOT_OR_NOT) was called; cold functions will not be counted. The sorted
+   breakdown will be shown at interpreter-shutdown.
+   TODO(collinwinter): add hotness stats over time.
+   */
+#ifdef Py_PROFILE_HOTNESS
+class HotnessTracker {
+	// llvm::DenseSet or llvm::SmallPtrSet may be better, but as of this
+	// writing, they don't seem to work with std::vector.
+	std::set<PyCodeObject*> hot_code_;
+public:
+	~HotnessTracker();
+
+	void AddHotCode(PyCodeObject *code_obj) {
+		// This will prevent the code object from ever being
+		// deleted.
+		Py_INCREF(code_obj);
+		this->hot_code_.insert(code_obj);
+	}
+};
+
+static bool
+compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
+{
+	return first->co_callcount > second->co_callcount;
+}
+
+HotnessTracker::~HotnessTracker() {
+	printf("%d code objects deemed hot\n", this->hot_code_.size());
+
+	printf("Code call counts:\n");
+	std::vector<PyCodeObject*> to_sort(this->hot_code_.begin(),
+					   this->hot_code_.end());
+	std::sort(to_sort.begin(), to_sort.end(), compare_hotness);
+	for (std::vector<PyCodeObject*>::iterator co = to_sort.begin();
+	     co != to_sort.end(); ++co) {
+		printf("%s:%d (%s)\t%d\n",
+			PyString_AsString((*co)->co_filename),
+			(*co)->co_firstlineno,
+			PyString_AsString((*co)->co_name),
+			(*co)->co_callcount);
+	}
+}
+
+static llvm::ManagedStatic<HotnessTracker> hot_code;
+#endif
+
 
 /* Turn this on if your compiler chokes on the big switch: */
 /* #define CASE_TOO_BIG 1 */
@@ -840,31 +900,12 @@ PyEval_EvalFrame(PyFrameObject *f)
 	tstate->frame = f;
 
 	if (f->f_use_llvm) {
-		int target_optimization_level = 0;
-		if (target_optimization_level < Py_LlvmEverythingFlag)
-			target_optimization_level = Py_LlvmEverythingFlag;
-		if (co->co_optimization < target_optimization_level) {
-			// Always optimize code to level 0 before JITting
-			// it, since that speeds up the JIT.  Also, if
-			// the LLVM version of the function wasn't
-			// created yet, setting the optimization level
-			// will create it.  If Py_LlvmEverythingFlag is
-			// set to a higher number, optimize to that level
-			// instead.
-			PyObject *opt_level =
-			    PyInt_FromLong(target_optimization_level);
-			if (opt_level == NULL) {
+		if (co->co_llvm_function == NULL) {
+			co->co_llvm_function = _PyCode_To_Llvm(co);
+			if (co->co_llvm_function == NULL) {
 				retval = NULL;
 				goto exit_eval_frame;
 			}
-			if (PyObject_SetAttrString((PyObject *)co,
-						   "co_optimization",
-						   opt_level) == -1) {
-				Py_DECREF(opt_level);
-				retval = NULL;
-				goto exit_eval_frame;
-			}
-			Py_DECREF(opt_level);
 		}
 		retval = _PyLlvmFunction_Eval(
 			(PyLlvmFunctionObject *)co->co_llvm_function, f);
@@ -2780,6 +2821,25 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 	f = PyFrame_New(tstate, co, globals, locals);
 	if (f == NULL)
 		return NULL;
+
+	/* This is where a code object is considered "called". Doing it here
+	 * instead of PyEval_EvalFrame() makes support for generators somewhat
+	 * cleaner. */
+	if (Py_HOT_OR_NOT(++co->co_callcount)) {
+		co->co_use_llvm = f->f_use_llvm = 1;
+#ifdef Py_PROFILE_HOTNESS
+		hot_code->AddHotCode(co);
+#endif
+		if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
+			// If the LLVM version of the function wasn't
+			// created yet, setting the optimization level
+			// will create it.
+			if (_PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL) < 0) {
+				Py_DECREF(f);
+				return NULL;
+			}
+		}
+	}
 
 	fastlocals = f->f_localsplus;
 	freevars = f->f_localsplus + co->co_nlocals;

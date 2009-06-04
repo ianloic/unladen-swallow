@@ -16,6 +16,9 @@
 
 #include <string>
 
+#define Py_MIN_LLVM_OPT_LEVEL 0
+#define Py_MAX_LLVM_OPT_LEVEL 2
+
 namespace llvm {
 class ExecutionEngine;
 class ExistingModuleProvider;

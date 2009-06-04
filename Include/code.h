@@ -39,6 +39,9 @@ typedef struct PyCodeObject {
        PyGlobalLlvmData::Optimize().  Starts at -1 for unoptimized
        code. */
     int co_optimization;
+    /* Number of times this code has been executed. This is used to decide
+       which code objects are worth sending through LLVM. */
+    int co_callcount;
 } PyCodeObject;
 
 /* Masks for co_flags above */
@@ -108,6 +111,11 @@ PyAPI_FUNC(int) _PyCode_CheckLineNumber(PyCodeObject* co,
 
 PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
                                       PyObject *names, PyObject *lineno_obj);
+
+/* Returns -1 on error, 0 on success.
+   Currently this doesn't actually recompile things. See
+   http://code.google.com/p/unladen-swallow/issues/detail?id=41. */
+PyAPI_FUNC(int) _PyCode_Recompile(PyCodeObject *code, int new_opt_level);
 
 #ifdef __cplusplus
 }

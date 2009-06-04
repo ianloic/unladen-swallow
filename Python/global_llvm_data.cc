@@ -132,7 +132,7 @@ PyGlobalLlvmData::~PyGlobalLlvmData()
 int
 PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
 {
-    if (level < 0 || level > 2)
+    if (level < Py_MIN_LLVM_OPT_LEVEL || level > Py_MAX_LLVM_OPT_LEVEL)
         return -1;
     llvm::FunctionPassManager *optimizations;
     switch (level) {

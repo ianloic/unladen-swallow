@@ -708,8 +708,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	}
 	f->f_tstate = tstate;
 
-	/* Allow the -L option to override per-code object settings. */
-	f->f_use_llvm = code->co_use_llvm || (Py_LlvmEverythingFlag >= 0);
+	f->f_use_llvm = code->co_use_llvm;
 	f->f_lasti = -1;
 	f->f_lineno = code->co_firstlineno;
 	f->f_iblock = 0;

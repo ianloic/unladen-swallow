@@ -8,11 +8,21 @@ import unittest
 import __future__
 
 
+# Calculate default LLVM optimization level.
+def _foo():
+    pass
+DEFAULT_OPT_LEVEL = _foo.__code__.co_optimization
+del _foo
+
+
 def at_each_optimization_level(func):
     """Decorator for test functions, to run them at each optimization level."""
+    levels = [None, -1, 0, 1, 2]
+    if DEFAULT_OPT_LEVEL != -1:
+        levels = [level for level in levels if level >= DEFAULT_OPT_LEVEL]
     @functools.wraps(func)
     def result(self):
-        for level in (None, -1, 0, 1, 2):
+        for level in levels:
             func(self, level)
     return result
 
@@ -30,7 +40,8 @@ def compile_for_llvm(function_name, def_string, optimization_level=-1):
     exec def_string in namespace
     func = namespace[function_name]
     if optimization_level is not None:
-        func.__code__.co_optimization = optimization_level
+        if optimization_level >= DEFAULT_OPT_LEVEL:
+            func.__code__.co_optimization = optimization_level
         func.__code__.__use_llvm__ = True
     return func
 
@@ -51,6 +62,14 @@ class LlvmTests(ExtraAssertsTestCase):
     def test_uncreatable(self):
         # Functions can only be created by their static factories.
         self.assertRaises(TypeError, _llvm._function)
+
+    def test_use_llvm(self):
+        # Regression test: setting __use_llvm__ without setting an optimization
+        # level used to segfault when the function was called.
+        def foo():
+            return 5
+        foo.__code__.__use_llvm__ = True
+        foo()
 
     @at_each_optimization_level
     def test_llvm_compile(self, level):
@@ -89,7 +108,7 @@ def foo():
             # that break the stack pointer optimization.
             return sum(range(*[1, 10, 3]))
         # Run mem2reg.
-        test_func.__code__.co_optimization = 1
+        test_func.__code__.co_optimization = 2
         self.assertFalse("%stack_pointer_addr = alloca"
                          in str(test_func.__code__.co_llvm))
 
@@ -2186,9 +2205,34 @@ def unpack(x):
         self.assertRaises(TypeError, f2, {})
 
 
+class OptimizationTests(unittest.TestCase):
+
+    def test_hotness(self):
+        def foo():
+            pass
+        iterations = 11000  # Threshold is 10000.
+        l = [foo() for _ in xrange(iterations)]
+        self.assertEqual(foo.__code__.co_callcount, iterations)
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+        self.assertEqual(foo.__code__.co_optimization, 2)
+
+    def test_generator_hotness(self):
+        def foo():
+            yield 5
+            yield 6
+        iterations = 11000  # Threshold is 10000.
+        l = [foo() for _ in xrange(iterations)]
+        self.assertEqual(foo.__code__.co_callcount, iterations)
+
+        l = map(list, l)
+        self.assertEqual(foo.__code__.co_callcount, iterations)
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+        self.assertEqual(foo.__code__.co_optimization, 2)
+
+
 def test_main():
     run_unittest(LoopExceptionInteractionTests, LlvmTests, OperatorTests,
-                 LiteralsTests)
+                 LiteralsTests, OptimizationTests)
 
 
 if __name__ == "__main__":

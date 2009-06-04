@@ -235,6 +235,7 @@ public:
     DEFINE_FIELD(PyCodeObject, co_llvm_function)
     DEFINE_FIELD(PyCodeObject, co_use_llvm)
     DEFINE_FIELD(PyCodeObject, co_optimization)
+    DEFINE_FIELD(PyCodeObject, co_callcount)
 };
 
 template<> class TypeBuilder<PyTryBlock, false> {

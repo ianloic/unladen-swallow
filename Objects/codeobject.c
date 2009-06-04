@@ -106,8 +106,17 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
 		co->co_llvm_function = NULL;
-		co->co_use_llvm = 0;
+		/* Py_LlvmEverythingFlag defaults to -1. */
+		co->co_use_llvm = (Py_LlvmEverythingFlag >= 0);
 		co->co_optimization = -1;
+		co->co_callcount = 0;
+		if (co->co_use_llvm) {
+			/* Implictly updates co->co_optimization. */
+			if (_PyCode_Recompile(co, Py_LlvmEverythingFlag) < 0) {
+				Py_DECREF(co);
+				return NULL;
+			}
+		}
 	}
 	return co;
 }
@@ -131,6 +140,7 @@ static PyMemberDef code_memberlist[] = {
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
 	{"co_llvm",	T_OBJECT,	OFF(co_llvm_function),	READONLY},
+	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 	{NULL}	/* Sentinel */
 };
@@ -183,6 +193,18 @@ static PyGetSetDef code_getsetlist[] = {
 	{NULL} /* Sentinel */
 };
 
+int
+_PyCode_Recompile(PyCodeObject *self, int new_opt_level)
+{
+	int retcode;
+	PyObject *level = PyInt_FromLong(new_opt_level);
+	if (level == NULL)
+		return -1;
+
+	retcode = code_set_optimization(self, level);
+	Py_DECREF(level);
+	return retcode;
+}
 
 /* Helper for code_new: return a shallow copy of a tuple that is
    guaranteed to contain exact strings, by converting string subclasses
