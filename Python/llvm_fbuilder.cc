@@ -267,7 +267,11 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     }
 
     this->builder_.SetInsertPoint(this->unreachable_block_);
+#ifndef NDEBUG
+    // In debug mode, die when we get to unreachable code.  In
+    // optimized mode, let the LLVM optimizers get rid of it.
     this->Abort("Jumped to unreachable code.");
+#endif  // NDEBUG
     this->builder_.CreateUnreachable();
 
     FillGotoLineBlock();
