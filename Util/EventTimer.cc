@@ -13,6 +13,8 @@
 #include <utility>
 
 
+#ifdef WITH_TSC
+
 static llvm::ManagedStatic< _PyEventTimer > event_timer;
 
 // XXX(rnk): I have only tested this on x86_64.  It needs to be tested on i386
@@ -102,3 +104,5 @@ _PyEventTimer::~_PyEventTimer() {
         }
     }
 }
+
+#endif  // WITH_TSC

@@ -1,6 +1,6 @@
 // -*- C++ -*-
-#ifndef UTIL_TIMERS_H
-#define UTIL_TIMERS_H
+#ifndef UTIL_EVENTTIMER_H
+#define UTIL_EVENTTIMER_H
 
 #ifndef __cplusplus
 #error This header expects to be included only in C++ source
@@ -17,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+
+#ifdef WITH_TSC
 
 /// Timer class used to measure times between various events, such as the time
 /// between a CALL_FUNCTION opcode start and the execution of the function.
@@ -64,11 +66,13 @@ extern "C" void _PyLogEvent(_PyEventTimer::Event event);
 
 /// Simple macro that wraps up the ifdef WITH_TSC check so that callers don't
 /// have to spell it out in their code.
-#ifdef WITH_TSC
 #define PY_LOG_EVENT(event) _PyLogEvent(event)
+
 #else
+
 #define PY_LOG_EVENT(event)
-#endif
+
+#endif  // WITH_TSC
 
 
-#endif  // UTIL_TIMERS_H
+#endif  // UTIL_EVENTTIMER_H
