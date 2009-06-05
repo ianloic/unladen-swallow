@@ -361,6 +361,11 @@ private:
     void AssignSlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop,
                      llvm::Value *source);
 
+    // Helper method for CALL_FUNCTION_(VAR|KW|VAR_KW).  If TSC is enabled,
+    // this method builds LLVM code to call a C function that logs and times
+    // the CALL_FUNCTION* event.
+    void LogCallStart();
+
     // Helper method for CALL_FUNCTION_(VAR|KW|VAR_KW); calls
     // _PyEval_CallFunctionVarKw() with the given flags and the current
     // stack pointer.

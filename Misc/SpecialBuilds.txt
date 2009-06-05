@@ -255,8 +255,8 @@ settscdump(bool)
     processor's time-stamp counter.
 
 This build option requires a small amount of platform specific code.
-Currently this code is present for linux/x86 and any PowerPC platform
-that uses GCC (i.e. OS X and linux/ppc).
+Currently this code is present for linux/x86 or x86_64 and any PowerPC
+platform that uses GCC (i.e. OS X and linux/ppc).
 
 On the PowerPC the rate at which the time base register is incremented
 is not defined by the architecture specification, so you'll need to
@@ -267,3 +267,6 @@ and 750FX (all sold as the G3) we find:
     one-fourth that of the bus clock.
 
 This build is enabled by the --with-tsc flag to configure.
+
+To do something useful with the event timings, run the Misc/tsc_stats.py
+script on the output.

@@ -323,6 +323,7 @@ PYTHON_OBJS=	\
 		$(MACHDEP_OBJS) \
 		$(THREADOBJ) \
 		Util/PyTypeBuilder.o \
+		Util/EventTimer.o \
 		Util/SingleFunctionInliner.o
 
 
@@ -728,6 +729,7 @@ PYTHON_HEADERS= \
 		Python/llvm_fbuilder.h \
 		Include/llvm_compile.h \
 		Util/PyTypeBuilder.h \
+		Util/EventTimer.h \
 		Util/SingleFunctionInliner.h \
 		pyconfig.h \
 		$(PARSER_HEADERS)

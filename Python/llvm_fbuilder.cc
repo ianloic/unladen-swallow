@@ -6,6 +6,8 @@
 #include "frameobject.h"
 
 #include "Python/global_llvm_data.h"
+
+#include "Util/EventTimer.h"
 #include "Util/PyTypeBuilder.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -114,6 +116,15 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         Type::Int8Ty, NULL, "unwind_reason_addr");
     this->unwind_target_index_addr_ = this->builder_.CreateAlloca(
         Type::Int32Ty, NULL, "unwind_target_index_addr");
+
+#ifdef WITH_TSC
+    Function *timer_function = this->GetGlobalFunction<void (int)>(
+            "_PyLogEvent");
+    this->builder_.CreateCall(
+            timer_function,
+            ConstantInt::get(PyTypeBuilder<int>::get(),
+                _PyEventTimer::CALL_ENTER_LLVM));
+#endif
 
     this->tstate_ = this->builder_.CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
@@ -1279,18 +1290,27 @@ LlvmFunctionBuilder::MAKE_CLOSURE(int num_defaults)
 }
 
 void
+LlvmFunctionBuilder::LogCallStart() {
+#ifdef WITH_TSC
+    Function *timer_function = this->GetGlobalFunction<void (int)>(
+            "_PyLogEvent");
+    // Type::Int8Ty doesn't seem to work here, so we use PyTypeBuilder<int>
+    // instead.
+    Value *enum_ir = ConstantInt::get(Type::Int32Ty,
+                                      _PyEventTimer::CALL_START_LLVM);
+    this->builder_.CreateCall(timer_function, enum_ir);
+#endif
+}
+
+void
 LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
 {
-#ifdef WITH_TSC
-// XXX(twouters): figure out how to support WITH_TSC in LLVM.
-#error WITH_TSC builds are unsupported at this time.
-#endif
-    Function *call_function = this->GetGlobalFunction<
-        PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
-
+    this->LogCallStart();
     this->builder_.CreateStore(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
         this->tmp_stack_pointer_addr_);
+    Function *call_function = this->GetGlobalFunction<
+        PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
     Value *result = this->builder_.CreateCall2(
         call_function,
         this->tmp_stack_pointer_addr_,
@@ -1310,10 +1330,7 @@ LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
 void
 LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
 {
-#ifdef WITH_TSC
-// XXX(twouters): figure out how to support WITH_TSC in LLVM.
-#error WITH_TSC builds are unsupported at this time.
-#endif
+    this->LogCallStart();
     Function *call_function = this->GetGlobalFunction<
         PyObject *(PyObject ***, int, int)>("_PyEval_CallFunctionVarKw");
     this->builder_.CreateStore(
@@ -1335,18 +1352,21 @@ LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
 void
 LlvmFunctionBuilder::CALL_FUNCTION_VAR(int num_args)
 {
+    this->LogCallStart();
     this->CallVarKwFunction(num_args, CALL_FLAG_VAR);
 }
 
 void
 LlvmFunctionBuilder::CALL_FUNCTION_KW(int num_args)
 {
+    this->LogCallStart();
     this->CallVarKwFunction(num_args, CALL_FLAG_KW);
 }
 
 void
 LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
 {
+    this->LogCallStart();
     this->CallVarKwFunction(num_args, CALL_FLAG_KW | CALL_FLAG_VAR);
 }
 

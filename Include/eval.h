@@ -179,15 +179,8 @@ PyAPI_FUNC(int) _PyEval_SliceIndex(PyObject *, Py_ssize_t *);
 PyAPI_FUNC(void) _PyEval_RaiseForGlobalNameError(PyObject *name);
 PyAPI_FUNC(void) _PyEval_RaiseForUnboundFreeVar(struct _frame *, int);
 
-#ifdef WITH_TSC
-PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int,
-                                            uint64*, uint64*);
-PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int,
-                                          uint64*, uint64*);
-#else
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject ***, int);
 PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int, int);
-#endif
 
 PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(int) _PyEval_AssignSlice(PyObject *, PyObject *,

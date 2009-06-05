@@ -20,66 +20,28 @@
 #include "structmember.h"
 #include "_llvmfunctionobject.h"
 
+#include "Util/EventTimer.h"
+
 #include "llvm/Function.h"
 #include "llvm/Support/ManagedStatic.h"
 
 #include <ctype.h>
 #include <set>
 
-#ifndef WITH_TSC
 
-#define READ_TIMESTAMP(var)
-
-#else
-
-typedef unsigned long long uint64;
-
-#if defined(__ppc__) /* <- Don't know if this is the correct symbol; this
-			   section should work for GCC on any PowerPC
-			   platform, irrespective of OS.
-			   POWER?  Who knows :-) */
-
-#define READ_TIMESTAMP(var) ppc_getcounter(&var)
-
-static void
-ppc_getcounter(uint64 *v)
+// Make a call to stop the call overhead timer before going through to
+// PyObject_Call.
+static inline PyObject *
+_PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
 {
-	register unsigned long tbu, tb, tbu2;
-
-  loop:
-	asm volatile ("mftbu %0" : "=r" (tbu) );
-	asm volatile ("mftb  %0" : "=r" (tb)  );
-	asm volatile ("mftbu %0" : "=r" (tbu2));
-	if (__builtin_expect(tbu != tbu2, 0)) goto loop;
-
-	/* The slightly peculiar way of writing the next lines is
-	   compiled better by GCC than any other way I tried. */
-	((long*)(v))[0] = tbu;
-	((long*)(v))[1] = tb;
+	// If we're calling a compiled C function with *args or **kwargs, then
+	// this enum should be CALL_ENTER_C.  However, most calls to C
+	// functions are simple and are fast-tracked through the CALL_FUNCTION
+	// opcode.
+	PY_LOG_EVENT(_PyEventTimer::CALL_ENTER_PYOBJ_CALL);
+	return PyObject_Call(func, arg, kw);
 }
 
-#else /* this is for linux/x86 (and probably any other GCC/x86 combo) */
-
-#define READ_TIMESTAMP(val) \
-     __asm__ __volatile__("rdtsc" : "=A" (val))
-
-#endif
-
-void dump_tsc(int opcode, int ticked, uint64 inst0, uint64 inst1,
-	      uint64 loop0, uint64 loop1, uint64 intr0, uint64 intr1)
-{
-	uint64 intr, inst, loop;
-	PyThreadState *tstate = PyThreadState_Get();
-	if (!tstate->interp->tscdump)
-		return;
-	intr = intr1 - intr0;
-	inst = inst1 - inst0 - intr;
-	loop = loop1 - loop0 - intr;
-	fprintf(stderr, "opcode=%03d t=%d inst=%06lld loop=%06lld\n",
-		opcode, ticked, inst, loop);
-}
-
-#endif
 
 /* Simple function for determinining when we should (re)optimize a function
    with the given call count. The threshold value of 10000 is arbitrary. This
@@ -749,44 +711,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 #define GETITEM(v, i) PyTuple_GetItem((v), (i))
 #endif
 
-#ifdef WITH_TSC
-/* Use Pentium timestamp counter to mark certain events:
-   inst0 -- beginning of switch statement for opcode dispatch
-   inst1 -- end of switch statement (may be skipped)
-   loop0 -- the top of the mainloop
-   loop1 -- place where control returns again to top of mainloop
-            (may be skipped)
-   intr1 -- beginning of long interruption
-   intr2 -- end of long interruption
-
-   Many opcodes call out to helper C functions.  In some cases, the
-   time in those functions should be counted towards the time for the
-   opcode, but not in all cases.  For example, a CALL_FUNCTION opcode
-   calls another Python function; there's no point in charge all the
-   bytecode executed by the called function to the caller.
-
-   It's hard to make a useful judgement statically.  In the presence
-   of operator overloading, it's impossible to tell if a call will
-   execute new Python code or not.
-
-   It's a case-by-case judgement.  I'll use intr1 for the following
-   case:
-
-   CALL_FUNCTION (and friends)
-
- */
-	uint64 inst0, inst1, loop0, loop1, intr0 = 0, intr1 = 0;
-	int ticked = 0;
-
-	READ_TIMESTAMP(inst0);
-	READ_TIMESTAMP(inst1);
-	READ_TIMESTAMP(loop0);
-	READ_TIMESTAMP(loop1);
-
-	/* shut up the compiler */
-	opcode = 0;
-#endif
-
 /* Code access macros */
 
 #define INSTR_OFFSET()	((int)(next_instr - first_instr))
@@ -908,6 +832,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 		goto exit_eval_frame;
 	}
 
+	// Note that this goes after the LLVM handling code so we don't log
+	// this event when calling LLVM functions.
+	PY_LOG_EVENT(_PyEventTimer::CALL_ENTER_EVAL);
+
 	if (tstate->use_tracing) {
 		if (_PyEval_TraceEnterFunction(tstate, f)) {
 			/* Trace or profile function raised an error. */
@@ -958,23 +886,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 	}
 
 	for (;;) {
-#ifdef WITH_TSC
-		if (inst1 == 0) {
-			/* Almost surely, the opcode executed a break
-			   or a continue, preventing inst1 from being set
-			   on the way out of the loop.
-			*/
-			READ_TIMESTAMP(inst1);
-			loop1 = inst1;
-		}
-		dump_tsc(opcode, ticked, inst0, inst1, loop0, loop1,
-			 intr0, intr1);
-		ticked = 0;
-		inst1 = 0;
-		intr0 = 0;
-		intr1 = 0;
-		READ_TIMESTAMP(loop0);
-#endif
 		assert(stack_pointer >= f->f_valuestack); /* else underflow */
 		assert(STACK_LEVEL() <= co->co_stacksize);  /* else overflow */
 
@@ -994,9 +905,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			_Py_Ticker = _Py_CheckInterval;
 			tstate->tick_counter++;
-#ifdef WITH_TSC
-			ticked = 1;
-#endif
 			if (things_to_do) {
 				if (Py_MakePendingCalls() < 0) {
 					why = WHY_EXCEPTION;
@@ -1097,7 +1005,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 #endif
 
 		/* Main switch on opcode */
-		READ_TIMESTAMP(inst0);
 
 		assert(why == WHY_NOT);
 		/* XXX(jyasskin): Add an assertion under CHECKEXC that
@@ -2474,14 +2381,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(CALL_FUNCTION)
 		{
+			PY_LOG_EVENT(_PyEventTimer::CALL_START_EVAL);
 			PyObject **sp;
 			PCALL(PCALL_ALL);
 			sp = stack_pointer;
-#ifdef WITH_TSC
-			x = _PyEval_CallFunction(&sp, oparg, &intr0, &intr1);
-#else
 			x = _PyEval_CallFunction(&sp, oparg);
-#endif
 			stack_pointer = sp;
 			PUSH(x);
 			if (x == NULL) {
@@ -2492,6 +2396,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		}
 
 		TARGET(CALL_FUNCTION_VAR)
+			PY_LOG_EVENT(_PyEventTimer::CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
 			                                CALL_FLAG_VAR);
 			if (err < 0) {
@@ -2501,8 +2406,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(CALL_FUNCTION_KW)
+			PY_LOG_EVENT(_PyEventTimer::CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-			                                CALL_FLAG_KW);
+							CALL_FLAG_KW);
 			if (err < 0) {
 				why = WHY_EXCEPTION;
 				break;
@@ -2510,8 +2416,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(CALL_FUNCTION_VAR_KW)
+			PY_LOG_EVENT(_PyEventTimer::CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-					        CALL_FLAG_VAR | CALL_FLAG_KW);
+						CALL_FLAG_VAR | CALL_FLAG_KW);
 			if (err < 0) {
 				why = WHY_EXCEPTION;
 				break;
@@ -2614,8 +2521,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 	    on_error:
 
-		READ_TIMESTAMP(inst1);
-
 		/* Quickly continue if no error occurred */
 
 		if (why == WHY_NOT) {
@@ -2628,7 +2533,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			else {
 #endif
-				READ_TIMESTAMP(loop1);
 				continue; /* Normal, fast path */
 #ifdef CHECKEXC
 			}
@@ -2750,7 +2654,6 @@ fast_block_end:
 
 		if (why != WHY_NOT)
 			break;
-		READ_TIMESTAMP(loop1);
 
 	} /* main loop */
 
@@ -3554,7 +3457,7 @@ _PyEval_CallTracing(PyObject *func, PyObject *args)
 	tstate->tracing = 0;
 	tstate->use_tracing = ((tstate->c_tracefunc != NULL)
 			       || (tstate->c_profilefunc != NULL));
-	result = PyObject_Call(func, args, NULL);
+	result = _PyObject_Call(func, args, NULL);
 	tstate->tracing = save_tracing;
 	tstate->use_tracing = save_use_tracing;
 	return result;
@@ -3746,7 +3649,7 @@ PyEval_CallObjectWithKeywords(PyObject *func, PyObject *arg, PyObject *kw)
 		return NULL;
 	}
 
-	result = PyObject_Call(func, arg, kw);
+	result = _PyObject_Call(func, arg, kw);
 	Py_DECREF(arg);
 	return result;
 }
@@ -3820,21 +3723,29 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 			// If the LLVM version of the function wasn't
 			// created yet, setting the optimization level
 			// will create it.
-			if (_PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL) < 0)
+			int r;
+			PY_LOG_EVENT(_PyEventTimer::LLVM_COMPILE_START);
+			r = _PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL);
+			PY_LOG_EVENT(_PyEventTimer::LLVM_COMPILE_END);
+			if (r < 0)
 				return -1;
 		}
 	}
 	if (co->co_use_llvm && co->co_native_function == NULL) {
 		// To build the native eval function, we need an IR function.
 		if (co->co_llvm_function == NULL) {
+			PY_LOG_EVENT(_PyEventTimer::LLVM_COMPILE_START);
 			co->co_llvm_function = _PyCode_To_Llvm(co);
+			PY_LOG_EVENT(_PyEventTimer::LLVM_COMPILE_END);
 			if (co->co_llvm_function == NULL) {
 				return -1;
 			}
 		}
 		// Now try to JIT the IR function to machine code.
+		PY_LOG_EVENT(_PyEventTimer::JIT_START);
 		co->co_native_function = _PyLlvmFunction_Jit(
 			(PyLlvmFunctionObject *)co->co_llvm_function);
+		PY_LOG_EVENT(_PyEventTimer::JIT_END);
 		if (co->co_native_function == NULL) {
 			return -1;
 		}
@@ -3851,6 +3762,7 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 		x = NULL; \
 	} \
 	else { \
+		PY_LOG_EVENT(_PyEventTimer::CALL_ENTER_C); \
 		x = call; \
 		if (tstate->c_profilefunc != NULL) { \
 			if (x == NULL) { \
@@ -3871,15 +3783,12 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 		} \
 	} \
 } else { \
+	PY_LOG_EVENT(_PyEventTimer::CALL_ENTER_C); \
 	x = call; \
 	}
 
 PyObject *
-_PyEval_CallFunction(PyObject ***pp_stack, int oparg
-#ifdef WITH_TSC
-		, uint64* pintr0, uint64* pintr1
-#endif
-		)
+_PyEval_CallFunction(PyObject ***pp_stack, int oparg)
 {
 	int na = oparg & 0xff;
 	int nk = (oparg>>8) & 0xff;
@@ -3915,9 +3824,7 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg
 		else {
 			PyObject *callargs;
 			callargs = load_args(pp_stack, na);
-			READ_TIMESTAMP(*pintr0);
 			C_TRACE(x, PyCFunction_Call(func,callargs,NULL));
-			READ_TIMESTAMP(*pintr1);
 			Py_XDECREF(callargs);
 		}
 	} else {
@@ -3935,12 +3842,10 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg
 			n++;
 		} else
 			Py_INCREF(func);
-		READ_TIMESTAMP(*pintr0);
 		if (PyFunction_Check(func))
 			x = fast_function(func, pp_stack, n, na, nk);
 		else
 			x = do_call(func, pp_stack, na, nk);
-		READ_TIMESTAMP(*pintr1);
 		Py_DECREF(func);
 	}
 
@@ -3960,14 +3865,8 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg
    pushes the result of the call onto the stack, and it's apparently okay
    for it to modify the stack pointer directly. Does return -1 on failure, 0
    on success. */
-#ifdef WITH_TSC
-int
-_PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg,
-                          uint64* pintr0, uint64* pintr1)
-#else
 int
 _PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg, int flags)
-#endif
 {
 	PyObject **pfunc, *func, **sp, *result;
 	/* oparg is the number of positional arguments and the number of
@@ -3998,9 +3897,7 @@ _PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg, int flags)
 	else
 		Py_INCREF(func);
 	sp = *stack_pointer;
-	READ_TIMESTAMP(*pintr0);
 	result = ext_do_call(func, &sp, flags, num_posargs, num_kwargs);
-	READ_TIMESTAMP(*pintr1);
 	*stack_pointer = sp;
 	Py_DECREF(func);
 	while (*stack_pointer > pfunc) {
@@ -4188,7 +4085,7 @@ do_call(PyObject *func, PyObject ***pp_stack, int na, int nk)
 	else
 		PCALL(PCALL_OTHER);
 #endif
-	result = PyObject_Call(func, callargs, kwdict);
+	result = _PyObject_Call(func, callargs, kwdict);
  call_fail:
 	Py_XDECREF(callargs);
 	Py_XDECREF(kwdict);
@@ -4276,7 +4173,7 @@ ext_do_call(PyObject *func, PyObject ***pp_stack, int flags, int na, int nk)
 	else
 		PCALL(PCALL_OTHER);
 #endif
-	result = PyObject_Call(func, callargs, kwdict);
+	result = _PyObject_Call(func, callargs, kwdict);
 ext_call_fail:
 	Py_XDECREF(callargs);
 	Py_XDECREF(kwdict);
