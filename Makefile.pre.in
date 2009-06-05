@@ -419,6 +419,7 @@ llvm:
 	0) echo "Skipping building llvm" && mkdir -p Util;; \
 	1) $(MAKE) -C Util/llvm libs-only;; \
 	esac
+	touch llvm
 
 # Only build clang and llc if we need to.
 llvm_tools: llvm
@@ -426,6 +427,7 @@ llvm_tools: llvm
 	0) echo "Skipping building clang and llc";; \
 	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
 	esac
+	touch llvm_tools
 
 
 # Build the interpreter
@@ -1216,6 +1218,8 @@ clean: pycremoval
 	find . -name '*.s[ol]' -exec rm -f {} ';'
 	find $(srcdir)/build -name 'fficonfig.h' -exec rm -f {} ';' || true
 	find $(srcdir)/build -name 'fficonfig.py' -exec rm -f {} ';' || true
+	rm -f llvm
+	rm -f llvm_tools
 
 profile-removal:
 	find . -name '*.gc??' -exec rm -f {} ';'
@@ -1288,6 +1292,6 @@ Python/thread.o: @THREADHEADERS@
 .PHONY: frameworkinstall frameworkinstallframework frameworkinstallstructure
 .PHONY: frameworkinstallmaclib frameworkinstallapps frameworkinstallunixtools
 .PHONY: frameworkaltinstallunixtools recheck autoconf clean clobber distclean 
-.PHONY: smelly funny patchcheck llvm
+.PHONY: smelly funny patchcheck
 
 # IF YOU PUT ANYTHING HERE IT WILL GO AWAY
