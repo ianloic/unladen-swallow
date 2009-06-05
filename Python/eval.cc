@@ -150,6 +150,7 @@ static llvm::ManagedStatic<HotnessTracker> hot_code;
 typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
 /* Forward declarations */
+static int mark_called_and_maybe_compile(PyCodeObject *co);
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
 static PyObject * ext_do_call(PyObject *, PyObject ***, int, int, int);
@@ -900,15 +901,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 	tstate->frame = f;
 
 	if (f->f_use_llvm) {
-		if (co->co_llvm_function == NULL) {
-			co->co_llvm_function = _PyCode_To_Llvm(co);
-			if (co->co_llvm_function == NULL) {
-				retval = NULL;
-				goto exit_eval_frame;
-			}
-		}
-		retval = _PyLlvmFunction_Eval(
-			(PyLlvmFunctionObject *)co->co_llvm_function, f);
+		assert(co->co_native_function != NULL &&
+		       "mark_called_and_maybe_compile was supposed to ensure"
+		       " that co_native_function exists");
+		retval = co->co_native_function(f);
 		goto exit_eval_frame;
 	}
 
@@ -2816,30 +2812,17 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 		return NULL;
 	}
 
+	/* This is where a code object is considered "called". Doing it here
+	 * instead of PyEval_EvalFrame() makes support for generators somewhat
+	 * cleaner. */
+	if (mark_called_and_maybe_compile(co) == -1)
+		return NULL;
+
 	assert(tstate != NULL);
 	assert(globals != NULL);
 	f = PyFrame_New(tstate, co, globals, locals);
 	if (f == NULL)
 		return NULL;
-
-	/* This is where a code object is considered "called". Doing it here
-	 * instead of PyEval_EvalFrame() makes support for generators somewhat
-	 * cleaner. */
-	if (Py_HOT_OR_NOT(++co->co_callcount)) {
-		co->co_use_llvm = f->f_use_llvm = 1;
-#ifdef Py_PROFILE_HOTNESS
-		hot_code->AddHotCode(co);
-#endif
-		if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
-			// If the LLVM version of the function wasn't
-			// created yet, setting the optimization level
-			// will create it.
-			if (_PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL) < 0) {
-				Py_DECREF(f);
-				return NULL;
-			}
-		}
-	}
 
 	fastlocals = f->f_localsplus;
 	freevars = f->f_localsplus + co->co_nlocals;
@@ -3820,6 +3803,45 @@ err_args(PyObject *func, int flags, int nargs)
 			     nargs);
 }
 
+// Increments co's call counter and, if it has passed the hotness
+// threshold, compiles the bytecode to native code.  If the code
+// object was marked as needing to be run through LLVM, also compiles
+// the bytecode to native code, even if the code object isn't hot yet.
+// Returns 0 on success or -1 on failure.
+static int
+mark_called_and_maybe_compile(PyCodeObject *co)
+{
+	if (Py_HOT_OR_NOT(++co->co_callcount)) {
+		co->co_use_llvm = 1;
+#ifdef Py_PROFILE_HOTNESS
+		hot_code->AddHotCode(co);
+#endif
+		if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
+			// If the LLVM version of the function wasn't
+			// created yet, setting the optimization level
+			// will create it.
+			if (_PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL) < 0)
+				return -1;
+		}
+	}
+	if (co->co_use_llvm && co->co_native_function == NULL) {
+		// To build the native eval function, we need an IR function.
+		if (co->co_llvm_function == NULL) {
+			co->co_llvm_function = _PyCode_To_Llvm(co);
+			if (co->co_llvm_function == NULL) {
+				return -1;
+			}
+		}
+		// Now try to JIT the IR function to machine code.
+		co->co_native_function = _PyLlvmFunction_Jit(
+			(PyLlvmFunctionObject *)co->co_llvm_function);
+		if (co->co_native_function == NULL) {
+			return -1;
+		}
+	}
+	return 0;
+}
+
 #define C_TRACE(x, call) \
 if (tstate->use_tracing && tstate->c_profilefunc) { \
 	if (_PyEval_CallTrace(tstate->c_profilefunc, \
@@ -4021,6 +4043,9 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 		int i;
 
 		PCALL(PCALL_FASTER_FUNCTION);
+		if (mark_called_and_maybe_compile(co) == -1)
+			return NULL;
+
 		assert(globals != NULL);
 		/* XXX Perhaps we should create a specialized
 		   PyFrame_New() that doesn't take locals, but does

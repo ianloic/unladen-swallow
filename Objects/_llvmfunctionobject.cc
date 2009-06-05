@@ -50,8 +50,8 @@ _PyLlvmFunction_GetFunction(PyLlvmFunctionObject *llvm_function)
     return llvm_function->the_function;
 }
 
-PyObject *
-_PyLlvmFunction_Eval(PyLlvmFunctionObject *function_obj, PyFrameObject *frame)
+PyEvalFrameFunction
+_PyLlvmFunction_Jit(PyLlvmFunctionObject *function_obj)
 {
     if (!PyLlvmFunction_Check(function_obj)) {
         PyErr_Format(PyExc_TypeError,
@@ -62,11 +62,8 @@ _PyLlvmFunction_Eval(PyLlvmFunctionObject *function_obj, PyFrameObject *frame)
     llvm::Function *function = function_obj->the_function;
     PyGlobalLlvmData *global_llvm_data =
         PyThreadState_GET()->interp->global_llvm_data;
-    typedef PyObject *(*NativeFunction)(PyFrameObject *);
     llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
-    NativeFunction native =
-        (NativeFunction)engine->getPointerToFunction(function);
-    return native(frame);
+    return (PyEvalFrameFunction)engine->getPointerToFunction(function);
 }
 
 PyDoc_STRVAR(llvmfunction_doc,

@@ -106,6 +106,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
 		co->co_llvm_function = NULL;
+		co->co_native_function = NULL;
 		/* Py_LlvmEverythingFlag defaults to -1. */
 		co->co_use_llvm = (Py_LlvmEverythingFlag >= 0);
 		co->co_optimization = -1;
@@ -347,6 +348,7 @@ code_dealloc(PyCodeObject *co)
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
         Py_XDECREF(co->co_llvm_function);
+        // co_native_function is destroyed by co_llvm_function.
 	PyObject_DEL(co);
 }
 

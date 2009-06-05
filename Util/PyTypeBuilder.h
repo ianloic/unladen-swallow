@@ -233,6 +233,7 @@ public:
     DEFINE_FIELD(PyCodeObject, co_lnotab)
     DEFINE_FIELD(PyCodeObject, co_zombieframe)
     DEFINE_FIELD(PyCodeObject, co_llvm_function)
+    DEFINE_FIELD(PyCodeObject, co_native_function)
     DEFINE_FIELD(PyCodeObject, co_use_llvm)
     DEFINE_FIELD(PyCodeObject, co_optimization)
     DEFINE_FIELD(PyCodeObject, co_callcount)

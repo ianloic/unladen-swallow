@@ -25,9 +25,12 @@ PyAPI_FUNC(PyObject *) _PyLlvmFunction_FromPtr(void *llvm_function);
 PyAPI_FUNC(void *) _PyLlvmFunction_GetFunction(
     PyLlvmFunctionObject *llvm_function);
 
-/* JIT compiles and executes the llvm function. */
-PyAPI_FUNC(PyObject *) _PyLlvmFunction_Eval(
-    PyLlvmFunctionObject *llvm_function, struct _frame *frame);
+/* JIT compiles the llvm function.  Note that once the function has
+   been translated to machine code once, it will never be
+   re-translated even if the underlying IR function changes. */
+typedef PyObject *(*PyEvalFrameFunction)(struct _frame *);
+PyAPI_FUNC(PyEvalFrameFunction) _PyLlvmFunction_Jit(
+    PyLlvmFunctionObject *llvm_function);
 
 #ifdef __cplusplus
 }
