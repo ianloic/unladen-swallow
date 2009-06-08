@@ -111,11 +111,12 @@ class TimeAnalyzer(object):
 
     def print_deltas(self, deltas):
         print "occurences:", len(deltas)
-        print "median delta:", median(deltas)
-        print "mean delta:", mean(deltas)
-        print "min delta:", min(deltas)
-        print "max delta:", max(deltas)
-        print "stddev:", stddev(deltas)
+        if deltas:
+                print "median delta:", median(deltas)
+                print "mean delta:", mean(deltas)
+                print "min delta:", min(deltas)
+                print "max delta:", max(deltas)
+                print "stddev:", stddev(deltas)
 
     def print_analysis(self):
         print ("All times are in time stamp counter units, which are related "
