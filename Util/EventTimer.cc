@@ -11,6 +11,9 @@
 #include <numeric>
 #include <time.h>
 #include <utility>
+#if defined(_M_IX86) || defined(_M_X64) /* x86 or x64 on MSVC */
+#include <intrin.h>  /* for __rdtsc() */
+#endif
 
 
 #ifdef WITH_TSC
@@ -19,9 +22,9 @@ static llvm::ManagedStatic< _PyEventTimer > event_timer;
 
 // XXX(rnk): I have only tested this on x86_64.  It needs to be tested on i386
 // and PPC.
-static inline uint64_t
+static inline tsc_t
 read_tsc() {
-        uint64_t time;
+        tsc_t time;
 
 #if defined(__ppc__) /* <- Don't know if this is the correct symbol; this
 			   section should work for GCC on any PowerPC
@@ -49,6 +52,10 @@ read_tsc() {
 #elif defined(__i386__)
 
         asm volatile("rdtsc" : "=A" (time));
+
+#elif defined(_M_IX86) || defined(_M_X64) /* x86 or x64 on MSVC */
+
+	time = __rdtsc();
 
 #endif
 
@@ -87,7 +94,7 @@ _PyEventTimer::LogEvent(Event event) {
     // XXX(rnk): This probably has more overhead than we'd like.
     PyThreadState *tstate = PyThreadState_Get();
     if (tstate->interp->tscdump) {
-        uint64_t time = read_tsc();
+        tsc_t time = read_tsc();
         llvm::MutexGuard locked(this->lock_);
         this->data_.push_back(std::make_pair(event, time));
     }
@@ -100,7 +107,7 @@ _PyEventTimer::~_PyEventTimer() {
         for (EventVector::iterator it = this->data_.begin();
              it != this->data_.end(); ++it) {
             const char * const str_name = this->EventToString(it->first);
-            fprintf(stderr, "%s\t%ld\n", str_name, it->second);
+            fprintf(stderr, "%s\t%llu\n", str_name, it->second);
         }
     }
 }

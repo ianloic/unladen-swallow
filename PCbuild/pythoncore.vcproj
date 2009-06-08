@@ -1961,6 +1961,14 @@
 			Name="Util"
 			>
 			<File
+				RelativePath="..\Util\EventTimer.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\EventTimer.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Util\PyTypeBuilder.cc"
 				>
 			</File>

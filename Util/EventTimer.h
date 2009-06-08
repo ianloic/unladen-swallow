@@ -12,13 +12,14 @@
 #include "llvm/System/Mutex.h"
 
 #include <map>
-#include <pthread.h>
 #include <time.h>
 #include <utility>
 #include <vector>
 
 
 #ifdef WITH_TSC
+
+typedef unsigned PY_LONG_LONG tsc_t;
 
 /// Timer class used to measure times between various events, such as the time
 /// between a CALL_FUNCTION opcode start and the execution of the function.
@@ -46,7 +47,7 @@ public:
 
     static const char * const EventToString(Event event);
 
-    typedef std::vector< std::pair<Event, uint64_t> > EventVector;
+    typedef std::vector< std::pair<Event, tsc_t> > EventVector;
 
     void LogEvent(Event event);
 
