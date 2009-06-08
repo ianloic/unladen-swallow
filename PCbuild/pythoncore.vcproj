@@ -43,7 +43,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -121,7 +121,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -202,7 +202,7 @@
 				Optimization="0"
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
@@ -283,7 +283,7 @@
 				Optimization="0"
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
@@ -360,7 +360,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -438,7 +438,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -516,7 +516,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -594,7 +594,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
-				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
@@ -1775,10 +1775,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\initial_llvm_module.cc.header"
-				>
-			</File>
-			<File
 				RelativePath="..\Python\llvm_fbuilder.cc"
 				>
 			</File>
@@ -1798,10 +1794,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1809,10 +1805,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1820,10 +1816,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1831,10 +1827,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1842,10 +1838,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1853,10 +1849,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) &quot;$(InputDir)&quot; $(InputFileName) $(InputName).bc initial_llvm_module.cc &quot;$(IntDir)\initial_llvm_module.cc.dep&quot;&#x0D;&#x0A;"
-						AdditionalDependencies="$(InputDir)\initial_llvm_module.cc.header;$(InputDir)\initial_llvm_module.cc.dep"
-						Outputs="$(InputDir)\initial_llvm_module.cc;$(IntDir)\initial_llvm_module.cc.dep"
+						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						AdditionalDependencies=""
+						Outputs="$(IntDir)\initial_llvm_module_body.cc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1970,6 +1966,14 @@
 			</File>
 			<File
 				RelativePath="..\Util\PyTypeBuilder.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\SingleFunctionInliner.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\SingleFunctionInliner.h"
 				>
 			</File>
 		</Filter>
