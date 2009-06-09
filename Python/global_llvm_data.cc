@@ -67,6 +67,12 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
+    // When we ask to JIT a function, we should also JIT other
+    // functions that function depends on.  This lets us JIT in a
+    // background thread to avoid blocking the main thread during
+    // codegen, and (once the GIL is gone) JITting lazily is
+    // thread-unsafe anyway.
+    engine_->DisableLazyCompilation();
 
     FillInitialGlobalModule(this->module_);
 
