@@ -7,6 +7,8 @@
 #include "frameobject.h"
 #include "opcode.h"
 
+#include "Util/EventTimer.h"
+
 int __attribute__((always_inline))
 _PyLlvm_WrapIntCheck(PyObject *obj)
 {
@@ -68,6 +70,7 @@ _PyLlvm_WrapEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
             &exc_info->exc, &exc_info->val, &exc_info->tb);
         _PyEval_SetExcInfo(tstate,
                            exc_info->exc, exc_info->val, exc_info->tb);
+        PY_LOG_EVENT(EXCEPT_CATCH_LLVM);
     }
     if (exc_info->tb == NULL) {
         Py_INCREF(Py_None);

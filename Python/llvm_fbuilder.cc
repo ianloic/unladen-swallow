@@ -123,7 +123,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->builder_.CreateCall(
             timer_function,
             ConstantInt::get(PyTypeBuilder<int>::get(),
-                _PyEventTimer::CALL_ENTER_LLVM));
+                             CALL_ENTER_LLVM));
 #endif
 
     this->tstate_ = this->builder_.CreateCall(
@@ -1294,10 +1294,8 @@ LlvmFunctionBuilder::LogCallStart() {
 #ifdef WITH_TSC
     Function *timer_function = this->GetGlobalFunction<void (int)>(
             "_PyLogEvent");
-    // Type::Int8Ty doesn't seem to work here, so we use PyTypeBuilder<int>
-    // instead.
-    Value *enum_ir = ConstantInt::get(Type::Int32Ty,
-                                      _PyEventTimer::CALL_START_LLVM);
+    // Int8Ty doesn't seem to work here, so we use Int32Ty instead.
+    Value *enum_ir = ConstantInt::get(Type::Int32Ty, CALL_START_LLVM);
     this->builder_.CreateCall(timer_function, enum_ir);
 #endif
 }

@@ -62,15 +62,17 @@ class TimeAnalyzer(object):
         self.jits = []
 
     def analyze(self):
-        self.input.next()  # Skip the CSV header
         compile_started = False
         compile_start = 0
         jit_started = False
         jit_start = 0
         call_start_event = None
         call_start = 0
+        raise_event = None
+        raise_start = 0
         for line in self.input:
-            (event, time) = line.strip().split("\t")
+            # TODO(rnk): Keep things thread local.
+            (thread, event, time) = line.strip().split("\t")
             time = int(time)
             if event.startswith("CALL_START_"):
                 if call_start_event:
@@ -81,12 +83,25 @@ class TimeAnalyzer(object):
                 if not call_start_event:
                     self.missed_events.append((event, time))
                     continue
-                end = event
                 delta = time - call_start
-                key = (call_start_event, end)
+                key = (call_start_event, event)
                 self.delta_dict.setdefault(key, []).append(delta)
                 call_start_event = None
                 call_start = 0
+            elif event.startswith("EXCEPT_RAISE_"):
+                if raise_event:
+                    self.missed_events.append((call_start_event, call_start))
+                raise_event = event
+                raise_start = time
+            elif event.startswith("EXCEPT_CATCH_"):
+                if not raise_event:
+                    self.missed_events.append((event, time))
+                    continue
+                delta = time - raise_start
+                key = (raise_event, event)
+                self.delta_dict.setdefault(key, []).append(delta)
+                raise_event = None
+                raise_start = 0
             elif event == "LLVM_COMPILE_START":
                 compile_started = True
                 compile_start = time
@@ -97,15 +112,19 @@ class TimeAnalyzer(object):
                 # overhead.
                 if call_start_event:
                     call_start += compile_time
+                if raise_event:
+                    raise_start += compile_time
             elif event == "JIT_START":
                 jit_started = True
                 jit_start = time
             elif event == "JIT_END" and jit_started:
                 jit_time = time - jit_start
                 self.jits.append(jit_time)
-                # Fudge the call_start_event time to erase the JIT overhead.
+                # Fudge call_start and raise_time to erase the JIT overhead.
                 if call_start_event:
                     call_start += jit_time
+                if raise_event:
+                    raise_start += jit_time
             else:
                 self.missed_events.append((event, time))
 
@@ -123,14 +142,11 @@ class TimeAnalyzer(object):
                "to your CPU frequency.")
         print
         total_deltas = []
-        for ((start, end), deltas) in self.delta_dict.iteritems():
+        for ((start, end), deltas) in sorted(self.delta_dict.iteritems()):
             total_deltas.extend(deltas)
             print "for transitions from %s to %s:" % (start, end)
             self.print_deltas(deltas)
             print
-        print ("Overall mean time between starting to call a function and"
-               " entering it:"), mean(total_deltas)
-        print
         print "LLVM function builder:"
         self.print_deltas(self.compiles)
         print

@@ -3,6 +3,7 @@
 #include "Python.h"
 
 #include "Include/pystate.h"
+#include "Include/pythread.h"
 
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MutexGuard.h"
@@ -11,12 +12,47 @@
 #include <numeric>
 #include <time.h>
 #include <utility>
+#include <vector>
 #if defined(_M_IX86) || defined(_M_X64) /* x86 or x64 on MSVC */
 #include <intrin.h>  /* for __rdtsc() */
 #endif
 
 
+#define PY_EVENT_BUFFER_SIZE 10000
+
+
 #ifdef WITH_TSC
+
+
+/// Timer class used to measure times between various events, such as the time
+/// between a CALL_FUNCTION opcode start and the execution of the function.
+/// At Python-shutdown, the event log is printed to stderr.  This class is
+/// declared here instead of in the header so that the header can be included
+/// by straight C files.
+
+class _PyEventTimer {
+
+public:
+    ~_PyEventTimer();
+
+    static const char * const EventToString(_PyEventId event);
+
+    typedef std::vector< _PyEvent > EventVector;
+
+    void LogEvent(_PyEventId event);
+
+    void PrintData();
+
+private:
+    // Serialize mutations of this->data_.
+    llvm::sys::Mutex lock_;
+
+    // Central respository for all the data. This maps (Label, Label) pairs
+    // to a vector of times in nanoseconds (based on clock_gettime()).
+    EventVector data_;
+
+};
+
 
 static llvm::ManagedStatic< _PyEventTimer > event_timer;
 
@@ -65,7 +101,7 @@ read_tsc() {
 /// _PyEventTimer
 
 void
-_PyLogEvent(_PyEventTimer::Event event) {
+_PyLogEvent(_PyEventId event) {
     event_timer->LogEvent(event);
 }
 
@@ -82,34 +118,49 @@ static const char * const event_names[] = {
     "LLVM_COMPILE_END",
     "JIT_START",
     "JIT_END",
+    "EXCEPT_RAISE_EVAL",
+    "EXCEPT_RAISE_LLVM",
+    "EXCEPT_CATCH_EVAL",
+    "EXCEPT_CATCH_LLVM",
 };
 
 const char * const
-_PyEventTimer::EventToString(Event event) {
-    return event_names[(int)event];
+_PyEventTimer::EventToString(_PyEventId event_id) {
+    return event_names[(int)event_id];
 }
 
 void
-_PyEventTimer::LogEvent(Event event) {
+_PyEventTimer::LogEvent(_PyEventId event_id) {
     // XXX(rnk): This probably has more overhead than we'd like.
-    PyThreadState *tstate = PyThreadState_Get();
+    PyThreadState *tstate = PyThreadState_GET();
     if (tstate->interp->tscdump) {
-        tsc_t time = read_tsc();
+        _PyEvent event;
+        event.thread_id = PyThread_get_thread_ident();
+        event.event_id = event_id;
+        event.time = read_tsc();
         llvm::MutexGuard locked(this->lock_);
-        this->data_.push_back(std::make_pair(event, time));
-    }
-}
-
-_PyEventTimer::~_PyEventTimer() {
-    // Print the data to stderr as a tab separated file.
-    if (this->data_.size() > 0) {
-        fprintf(stderr, "event\ttime\n");
-        for (EventVector::iterator it = this->data_.begin();
-             it != this->data_.end(); ++it) {
-            const char * const str_name = this->EventToString(it->first);
-            fprintf(stderr, "%s\t%llu\n", str_name, it->second);
+        this->data_.push_back(event);
+        if (this->data_.size() > PY_EVENT_BUFFER_SIZE) {
+            this->PrintData();
         }
     }
 }
+
+void
+_PyEventTimer::PrintData() {
+    // Print the data to stderr as a tab separated file.
+    for (EventVector::iterator it = this->data_.begin();
+         it != this->data_.end(); ++it) {
+        const char * const str_name = this->EventToString(it->event_id);
+        fprintf(stderr, "%ld\t%s\t%llu\n",
+                it->thread_id, str_name, it->time);
+    }
+    this->data_.clear();
+}
+
+_PyEventTimer::~_PyEventTimer() {
+    this->PrintData();
+}
+
 
 #endif  // WITH_TSC
