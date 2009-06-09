@@ -110,7 +110,7 @@ class TimeAnalyzer(object):
                 self.missed_events.append((event, time))
 
     def print_deltas(self, deltas):
-        print "occurences:", len(deltas)
+        print "occurrences:", len(deltas)
         if deltas:
                 print "median delta:", median(deltas)
                 print "mean delta:", mean(deltas)
