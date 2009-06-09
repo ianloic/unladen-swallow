@@ -58,6 +58,7 @@ class TimeAnalyzer(object):
         self.input = input
         self.missed_events = []
         self.delta_dict = {}
+        self.aggregate_deltas = {}
         self.compiles = []
         self.jits = []
 
@@ -86,11 +87,13 @@ class TimeAnalyzer(object):
                 delta = time - call_start
                 key = (call_start_event, event)
                 self.delta_dict.setdefault(key, []).append(delta)
+                generic_key = ("CALL_START_*", "CALL_ENTER_*")
+                self.aggregate_deltas.setdefault(generic_key, []).append(delta)
                 call_start_event = None
                 call_start = 0
             elif event.startswith("EXCEPT_RAISE_"):
                 if raise_event:
-                    self.missed_events.append((call_start_event, call_start))
+                    self.missed_events.append((raise_event, raise_start))
                 raise_event = event
                 raise_start = time
             elif event.startswith("EXCEPT_CATCH_"):
@@ -100,6 +103,8 @@ class TimeAnalyzer(object):
                 delta = time - raise_start
                 key = (raise_event, event)
                 self.delta_dict.setdefault(key, []).append(delta)
+                generic_key = ("EXCEPT_RAISE_*", "EXCEPT_CATCH_*")
+                self.aggregate_deltas.setdefault(generic_key, []).append(delta)
                 raise_event = None
                 raise_start = 0
             elif event == "LLVM_COMPILE_START":
@@ -141,6 +146,10 @@ class TimeAnalyzer(object):
         print ("All times are in time stamp counter units, which are related "
                "to your CPU frequency.")
         print
+        for ((start, end), deltas) in self.aggregate_deltas.iteritems():
+            print "for transitions from %s to %s:" % (start, end)
+            self.print_deltas(deltas)
+            print
         total_deltas = []
         for ((start, end), deltas) in sorted(self.delta_dict.iteritems()):
             total_deltas.extend(deltas)
