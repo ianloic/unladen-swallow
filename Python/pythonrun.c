@@ -87,6 +87,7 @@ int _Py_QnewFlag = 0;
 int Py_NoUserSiteDirectory = 0; /* for -s and site.py */
 int Py_ShowRefcountFlag = 0; /* For -R */
 int Py_LlvmEverythingFlag = -1; /* For -L */
+Py_JitOpts Py_JitControl = PY_JIT_WHENHOT; /* For -j */
 
 /* PyModule_GetWarningsModule is no longer necessary as of 2.6
 since _warnings is builtin.  This API should not be used. */
@@ -237,7 +238,7 @@ Py_InitializeEx(int install_sigs)
 
 	if (install_sigs)
 		initsigs(); /* Signal handling stuff, including initintr() */
-		
+
 	/* Initialize warnings. */
 	_PyWarnings_Init();
 	if (PySys_HasWarnOptions()) {

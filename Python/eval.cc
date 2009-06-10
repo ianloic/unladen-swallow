@@ -3719,20 +3719,22 @@ static int
 mark_called_and_maybe_compile(PyCodeObject *co)
 {
 	if (Py_HOT_OR_NOT(++co->co_callcount)) {
-		co->co_use_llvm = 1;
 #ifdef Py_PROFILE_HOTNESS
 		hot_code->AddHotCode(co);
 #endif
-		if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
-			// If the LLVM version of the function wasn't
-			// created yet, setting the optimization level
-			// will create it.
-			int r;
-			PY_LOG_EVENT(LLVM_COMPILE_START);
-			r = _PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL);
-			PY_LOG_EVENT(LLVM_COMPILE_END);
-			if (r < 0)
-				return -1;
+		if (Py_JitControl == PY_JIT_WHENHOT) {
+			co->co_use_llvm = 1;
+			if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
+				// If the LLVM version of the function wasn't
+				// created yet, setting the optimization level
+				// will create it.
+				int r;
+				PY_LOG_EVENT(LLVM_COMPILE_START);
+				r = _PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL);
+				PY_LOG_EVENT(LLVM_COMPILE_END);
+				if (r < 0)
+					return -1;
+			}
 		}
 	}
 	if (co->co_use_llvm && co->co_native_function == NULL) {

@@ -15,15 +15,15 @@ import zipfile
 verbose = test.test_support.verbose
 
 # XXX ncoghlan: Should we consider moving these to test_support?
-from test_cmd_line import _spawn_python, _kill_python
+from test_cmd_line import _spawn_python, _exhaust_python
 
 def _run_python(*args):
     if __debug__:
         p = _spawn_python(*args)
     else:
         p = _spawn_python('-O', *args)
-    stdout_data = _kill_python(p)
-    return p.wait(), stdout_data
+    stdout_data, return_code = _exhaust_python(p)
+    return return_code, stdout_data
 
 @contextlib.contextmanager
 def temp_dir():

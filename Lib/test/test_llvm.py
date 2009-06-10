@@ -2231,8 +2231,15 @@ class OptimizationTests(unittest.TestCase):
 
 
 def test_main():
-    run_unittest(LoopExceptionInteractionTests, LlvmTests, OperatorTests,
-                 LiteralsTests, OptimizationTests)
+    tests = [LoopExceptionInteractionTests, LlvmTests, OperatorTests,
+             LiteralsTests]
+    if sys.flags.jit_control == "never":
+        print >>sys.stderr, "test_llvm -- skipping some tests due to -j never."
+        sys.stderr.flush()
+    else:
+        tests.append(OptimizationTests)
+
+    run_unittest(*tests)
 
 
 if __name__ == "__main__":

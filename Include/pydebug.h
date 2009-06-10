@@ -34,6 +34,15 @@ PyAPI_DATA(int) Py_ShowRefcountFlag;
    level indicated by the value of the flag. */
 PyAPI_DATA(int) Py_LlvmEverythingFlag;
 
+/* Control when/how to JIT-compile Python functions to machine code. */
+typedef enum {
+    PY_JIT_NEVER,  /* Force use of the eval loop for all functions. */
+    PY_JIT_WHENHOT,   /* JIT-compile hot function, optimizing heavily. */
+} Py_JitOpts;
+
+/* Defaults to PY_JIT_ONCE. */
+PyAPI_DATA(Py_JitOpts) Py_JitControl;
+
 /* this is a wrapper around getenv() that pays attention to
    Py_IgnoreEnvironmentFlag.  It should be used for getting variables like
    PYTHONPATH and PYTHONHOME from the environment */

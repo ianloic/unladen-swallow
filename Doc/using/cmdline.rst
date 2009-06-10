@@ -206,6 +206,14 @@ Miscellaneous options
    raises an exception.  See also :envvar:`PYTHONINSPECT`.
 
 
+.. cmdoption:: -j <arg>
+
+   Control how Python compiles to machine code. ``-j never`` completely
+   disables automatic compilation to machine code. The default is
+   ``-j whenhot``, which optimizes hot functions only once, but optimizes the
+   function as much as possible.
+
+
 .. cmdoption:: -L <arg>
 
    Run all Python code through the LLVM JIT compiler, optimized to level

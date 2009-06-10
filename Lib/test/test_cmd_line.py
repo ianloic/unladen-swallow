@@ -12,19 +12,20 @@ def _spawn_python(*args):
     return subprocess.Popen(cmd_line, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
-def _kill_python(p):
+def _exhaust_python(p):
     p.stdin.close()
     data = p.stdout.read()
     p.stdout.close()
+    p.wait()
     # try to cleanup the child so we don't appear to leak when running
     # with regrtest -R.  This should be a no-op on Windows.
     subprocess._cleanup()
-    return data
+    return data, p.returncode
 
 class CmdLineTest(unittest.TestCase):
     def start_python(self, *args):
         p = _spawn_python(*args)
-        return _kill_python(p)
+        return _exhaust_python(p)
 
     def exit_code(self, *args):
         cmd_line = [sys.executable, '-E']
@@ -36,10 +37,12 @@ class CmdLineTest(unittest.TestCase):
         self.assertNotEqual(self.exit_code('.'), 0)
         self.assertNotEqual(self.exit_code('< .'), 0)
 
-    def verify_valid_flag(self, cmd_line):
-        data = self.start_python(cmd_line)
+    def verify_valid_flag(self, *flags):
+        cmd_line = flags + ('-c', 'import sys; sys.exit()')
+        data, returncode = self.start_python(*cmd_line)
         self.assertTrue(data == '' or data.endswith('\n'))
         self.assertTrue('Traceback' not in data)
+        self.assertEqual(returncode, 0)
 
     def test_optimize(self):
         self.verify_valid_flag('-O')
@@ -51,15 +54,23 @@ class CmdLineTest(unittest.TestCase):
         self.verify_valid_flag('-Qwarn')
         self.verify_valid_flag('-Qwarnall')
 
+    def test_jit_flag(self):
+        self.verify_valid_flag('-j', 'never')
+        self.verify_valid_flag('-j', 'whenhot')
+
     def test_site_flag(self):
         self.verify_valid_flag('-S')
 
     def test_usage(self):
-        self.assertTrue('usage' in self.start_python('-h'))
+        data, returncode = self.start_python('-h')
+        self.assertTrue('usage' in data)
+        self.assertEqual(returncode, 0)
 
     def test_version(self):
         version = 'Python %d.%d' % sys.version_info[:2]
-        self.assertTrue(self.start_python('-V').startswith(version))
+        data, returncode = self.start_python('-V')
+        self.assertTrue(data.startswith(version), data)
+        self.assertEqual(returncode, 0)
 
     def test_run_module(self):
         # Test expected operation of the '-m' switch
@@ -86,9 +97,10 @@ class CmdLineTest(unittest.TestCase):
         p = _spawn_python('-i', '-m', 'timeit', '-n', '1')
         p.stdin.write('Timer\n')
         p.stdin.write('exit()\n')
-        data = _kill_python(p)
+        data, returncode = _exhaust_python(p)
         self.assertTrue(data.startswith('1 loop'))
         self.assertTrue('__main__.Timer' in data)
+        self.assertEqual(returncode, 0)
 
     def test_run_code(self):
         # Test expected operation of the '-c' switch

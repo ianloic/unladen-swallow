@@ -40,7 +40,7 @@ static char **orig_argv;
 static int  orig_argc;
 
 /* command line options */
-#define BASE_OPTS "3RbBc:dEhiJL:m:OQ:sStuUvVW:xX?"
+#define BASE_OPTS "3RbBc:dEhij:JL:m:OQ:sStuUvVW:xX?"
 
 #ifndef RISCOS
 #define PROGRAM_OPTS BASE_OPTS
@@ -65,6 +65,7 @@ Options and arguments (and corresponding environment variables):\n\
 -E     : ignore PYTHON* environment variables (such as PYTHONPATH)\n\
 -h     : print this help message and exit (also --help)\n\
 -i     : inspect interactively after running script; forces a prompt even\n\
+-j arg : control JIT compilation: -j once (default), -j never.\n\
 ";
 static char *usage_2 = "\
          if stdin does not appear to be a terminal; also PYTHONINSPECT=x\n\
@@ -380,6 +381,21 @@ Py_Main(int argc, char **argv)
 			Py_InspectFlag++;
 			Py_InteractiveFlag++;
 			break;
+
+                case 'j':
+                        if (strcmp(_PyOS_optarg, "whenhot") == 0) {
+                                Py_JitControl = PY_JIT_WHENHOT;
+                                break;
+                        }
+                        if (strcmp(_PyOS_optarg, "never") == 0) {
+                                Py_JitControl = PY_JIT_NEVER;
+                                break;
+                        }
+			fprintf(stderr,
+				"-j option should be `-j once', or "
+				"`-j never' only\n");
+			return usage(2, argv[0]);
+			/* NOTREACHED */
 
 		/* case 'J': reserved for Jython */
 

@@ -1223,8 +1223,9 @@ static PyStructSequence_Field flags_fields[] = {
 	/* {"unbuffered",		"-u"}, */
 	{"unicode",		"-U"},
 	/* {"skip_first",		"-x"}, */
-	{"bytes_warning", "-b"},
+	{"bytes_warning",	"-b"},
 	{"llvm_everything",	"-L"},
+	{"jit_control",		"-j"},
 	{0}
 };
 
@@ -1233,9 +1234,9 @@ static PyStructSequence_Desc flags_desc = {
 	flags__doc__,	/* doc */
 	flags_fields,	/* fields */
 #ifdef RISCOS
-	17
+	18
 #else
-	16
+	17
 #endif
 };
 
@@ -1243,7 +1244,7 @@ static PyObject*
 make_flags(void)
 {
 	int pos = 0;
-	PyObject *seq;
+	PyObject *seq, *flag;
 
 	seq = PyStructSequence_New(&FlagsType);
 	if (seq == NULL)
@@ -1274,6 +1275,15 @@ make_flags(void)
 	SetFlag(Py_BytesWarningFlag);
 	SetFlag(Py_LlvmEverythingFlag);
 #undef SetFlag
+	if (Py_JitControl == PY_JIT_WHENHOT) {
+		flag = PyString_FromString("whenhot");
+	} else if (Py_JitControl == PY_JIT_NEVER) {
+		flag = PyString_FromString("never");
+	} else {
+		Py_FatalError("Invalid value for Py_JitControl");
+		return NULL; /* Never reached. */
+	}
+	PyStructSequence_SET_ITEM(seq, pos++, flag);
 
 	if (PyErr_Occurred()) {
 		return NULL;
