@@ -26,19 +26,19 @@ typedef enum {
     EXCEPT_CATCH_LLVM,      // Exception caught in LLVM
 } _PyEventId;
 
+typedef unsigned PY_LONG_LONG tsc_t;
+
 typedef struct {
     long thread_id;
     _PyEventId event_id;
-    PY_LONG_LONG time;
+    tsc_t time;
 } _PyEvent;
-
-typedef unsigned PY_LONG_LONG tsc_t;
 
 /// Log an event and the TSC when it occurred.
 #ifdef __cplusplus
-extern "C" void _PyLogEvent(_PyEventId event);
+extern "C" PyAPI_FUNC(void) _PyLogEvent(_PyEventId event);
 #else
-extern void _PyLogEvent(_PyEventId event);
+extern PyAPI_FUNC(void) _PyLogEvent(_PyEventId event);
 #endif
 
 /// Simple macro that wraps up the ifdef WITH_TSC check so that callers don't
