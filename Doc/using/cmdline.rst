@@ -211,7 +211,7 @@ Miscellaneous options
    Control how Python compiles to machine code. ``-j never`` completely
    disables automatic compilation to machine code. The default is
    ``-j whenhot``, which optimizes hot functions only once, but optimizes the
-   function as much as possible.
+   function as much as possible. See also :envvar:`PYTHONJITCONTROL`.
 
 
 .. cmdoption:: -L <arg>
@@ -469,6 +469,12 @@ These environment variables influence Python's behavior.
 
    This variable can also be modified by Python code using :data:`os.environ`
    to force inspect mode on program termination.
+
+
+.. envvar:: PYTHONJITCONTROL
+
+   If this option is set to either ``never`` or ``whenhot``, it is equivalent
+   to passing :option:`-j` on the command line with that value.
 
 
 .. envvar:: PYTHONLLVMEVERYTHING

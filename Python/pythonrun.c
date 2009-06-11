@@ -167,6 +167,12 @@ Py_InitializeEx(int install_sigs)
 		Py_DontWriteBytecodeFlag = add_flag(Py_DontWriteBytecodeFlag, p);
 	if ((p = Py_GETENV("PYTHONLLVMEVERYTHING")) && *p != '\0')
 		Py_LlvmEverythingFlag = add_flag(Py_LlvmEverythingFlag, p);
+	if ((p = Py_GETENV("PYTHONJITCONTROL")) && *p != '\0') {
+		if (strcmp(p, "never") == 0)
+			Py_JitControl = PY_JIT_NEVER;
+		else if (strcmp(p, "whenhot") == 0)
+			Py_JitControl = PY_JIT_WHENHOT;
+	}
 
 	interp = PyInterpreterState_New();
 	if (interp == NULL)
