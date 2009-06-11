@@ -2211,8 +2211,12 @@ class OptimizationTests(unittest.TestCase):
         def foo():
             pass
         iterations = 11000  # Threshold is 10000.
+        # Because code objects are stored in the co_consts array, the
+        # callcount will increase by `iterations` every time this test is run,
+        # which breaks regrtest.py.
+        base_count = foo.__code__.co_callcount
         l = [foo() for _ in xrange(iterations)]
-        self.assertEqual(foo.__code__.co_callcount, iterations)
+        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, 2)
 
@@ -2221,11 +2225,15 @@ class OptimizationTests(unittest.TestCase):
             yield 5
             yield 6
         iterations = 11000  # Threshold is 10000.
+        # Because code objects are stored in the co_consts array, the
+        # callcount will increase by `iterations` every time this test is run,
+        # which breaks regrtest.py.
+        base_count = foo.__code__.co_callcount
         l = [foo() for _ in xrange(iterations)]
-        self.assertEqual(foo.__code__.co_callcount, iterations)
+        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
 
         l = map(list, l)
-        self.assertEqual(foo.__code__.co_callcount, iterations)
+        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, 2)
 
