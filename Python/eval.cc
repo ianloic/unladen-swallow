@@ -818,7 +818,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		return NULL;
 
 	/* push frame */
-	if (Py_EnterRecursiveCall(""))
+	if (f->f_bailed_from_llvm == _PYFRAME_NO_BAIL &&
+	    Py_EnterRecursiveCall(""))
 		return NULL;
 
 	co = f->f_code;
@@ -836,11 +837,18 @@ PyEval_EvalFrame(PyFrameObject *f)
 	// this event when calling LLVM functions.
 	PY_LOG_EVENT(CALL_ENTER_EVAL);
 
-	if (tstate->use_tracing) {
+	if ((f->f_bailed_from_llvm == _PYFRAME_NO_BAIL ||
+	     f->f_bailed_from_llvm == _PYFRAME_TRACE_ON_ENTRY) &&
+	    tstate->use_tracing) {
 		if (_PyEval_TraceEnterFunction(tstate, f)) {
 			/* Trace or profile function raised an error. */
 			goto exit_eval_frame;
 		}
+	}
+	if (f->f_bailed_from_llvm == _PYFRAME_BACKEDGE_TRACE) {
+		/* If we bailed because of a backedge, set instr_prev
+		   to ensure a line trace call. */
+		instr_prev = INT_MAX;
 	}
 
 	names = co->co_names;
@@ -2691,8 +2699,11 @@ fast_yield:
 
 	/* pop frame */
 exit_eval_frame:
-	Py_LeaveRecursiveCall();
-	tstate->frame = f->f_back;
+	if (f->f_bailed_from_llvm == _PYFRAME_NO_BAIL) {
+		Py_LeaveRecursiveCall();
+		tstate->frame = f->f_back;
+	}
+	f->f_bailed_from_llvm = _PYFRAME_NO_BAIL;
 
 	return retval;
 }

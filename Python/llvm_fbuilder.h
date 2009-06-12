@@ -278,9 +278,11 @@ private:
     void PropagateException();
 
     // Only for use in the constructor: Fills in the block that
-    // handles jumping from a trace function to a particular line
-    // boundary.
-    void FillGotoLineBlock();
+    // handles bailing out of JITted code back to the interpreter
+    // loop.  Code jumping to this block must first:
+    //  1) Set frame->f_lasti to the current opcode index.
+    //  2) Set frame->f_bailed_from_llvm to a reason.
+    void FillBailToInterpreterBlock();
     // Only for use in the constructor: Fills in the block that starts
     // propagating an exception.  Jump to this block when you want to
     // add a traceback entry for the current line.  Don't jump to this
@@ -371,11 +373,13 @@ private:
     // stack pointer.
     void CallVarKwFunction(int num_args, int call_flag);
 
-    /// Emits code to conditionally call the line tracing function
-    /// when such a function is installed.  If the line tracing
-    /// function is not called or doesn't change the current execution
-    /// point, execution will continue at fallthrough_block.
-    void MaybeCallLineTrace(llvm::BasicBlock *fallthrough_block);
+    /// Emits code to conditionally bail out to the interpreter loop
+    /// if a line tracing function is installed.  If the line tracing
+    /// function is not installed, execution will continue at
+    /// fallthrough_block.  direction should be _PYFRAME_LINE_TRACE or
+    /// _PYFRAME_BACKEDGE_TRACE.
+    void MaybeCallLineTrace(llvm::BasicBlock *fallthrough_block,
+                            char direction);
 
     PyGlobalLlvmData *const llvm_data_;
     // The code object is used for looking up peripheral information
@@ -418,9 +422,7 @@ private:
     // recently executed yield instruction.
     llvm::SwitchInst *yield_resume_switch_;
 
-    llvm::BasicBlock *goto_line_block_;
-    llvm::Value *line_target_addr_;
-    llvm::SwitchInst *line_starts_switch_;
+    llvm::BasicBlock *bail_to_interpreter_block_;
 
     llvm::BasicBlock *propagate_exception_block_;
     llvm::BasicBlock *unwind_block_;

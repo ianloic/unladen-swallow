@@ -713,6 +713,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	f->f_lineno = code->co_firstlineno;
 	f->f_iblock = 0;
 	f->f_throwflag = 0;
+	f->f_bailed_from_llvm = _PYFRAME_NO_BAIL;
 
 	_PyObject_GC_TRACK(f);
 	return f;

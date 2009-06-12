@@ -287,6 +287,7 @@ public:
     DEFINE_FIELD(PyFrameObject, f_lineno)
     DEFINE_FIELD(PyFrameObject, f_throwflag)
     DEFINE_FIELD(PyFrameObject, f_iblock)
+    DEFINE_FIELD(PyFrameObject, f_bailed_from_llvm)
     DEFINE_FIELD(PyFrameObject, f_blockstack)
     DEFINE_FIELD(PyFrameObject, f_localsplus)
 };

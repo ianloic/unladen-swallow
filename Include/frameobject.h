@@ -63,10 +63,20 @@ typedef struct _frame {
     int f_lineno;		/* Current line number */
     unsigned char f_throwflag;	/* true if generator.throw() was called */
     unsigned char f_iblock;	/* index in f_blockstack */
+    /* Holds a value from _PyFrameBailReason describing if we've
+       bailed back from JITted code to the interpreter loop and
+       why. */
+    unsigned char f_bailed_from_llvm;
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
     PyObject *f_localsplus[1];	/* locals+stack, dynamically sized */
 } PyFrameObject;
 
+enum _PyFrameBailReason {
+    _PYFRAME_NO_BAIL,
+    _PYFRAME_TRACE_ON_ENTRY,
+    _PYFRAME_LINE_TRACE,
+    _PYFRAME_BACKEDGE_TRACE,
+};
 
 /* Standard object interface */
 

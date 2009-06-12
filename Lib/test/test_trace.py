@@ -386,6 +386,31 @@ class TraceTestCase(unittest.TestCase):
              (257, 'line'),
              (257, 'return')])
 
+    def test_tracing_turned_on_inside_generator(self):
+        def gen():
+            yield 1  # Tracing starts on the re-entry from this yield.
+            yield 2
+        tracer = Tracer()
+        g = gen()
+        v1 = g.next()
+        sys.settrace(tracer.trace)
+        v2 = g.next()
+        try:
+            g.next()
+        except StopIteration:
+            pass
+        else:
+            self.fail('Expected StopIteration')
+        sys.settrace(None)
+        self.compare_events(gen.func_code.co_firstlineno,
+                            tracer.events,
+                            [(1, 'call'),
+                             (2, 'line'),
+                             (2, 'return'),
+                             (2, 'call'),
+                             (2, 'return')])
+        self.assertEquals((v1, v2), (1, 2))
+
 
 class RaisingTraceFuncTestCase(unittest.TestCase):
     def trace(self, frame, event, arg):
