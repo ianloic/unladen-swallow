@@ -151,6 +151,9 @@ PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
     case 2:
         optimizations = &this->optimizations_2_;
         break;
+    default:
+        Py_FatalError("Unrecognized optimization level");
+        return -1; // Not reached.
     }
     assert(module_ == f.getParent() &&
            "We assume that all functions belong to the same module.");
