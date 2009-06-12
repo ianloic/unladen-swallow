@@ -358,10 +358,11 @@ class SysModuleTest(unittest.TestCase):
         attrs = ("debug", "py3k_warning", "division_warning", "division_new",
                  "inspect", "interactive", "optimize", "dont_write_bytecode",
                  "no_site", "ignore_environment", "tabcheck", "verbose",
-                 "unicode", "bytes_warning", "llvm_everything")
+                 "unicode", "bytes_warning")
         for attr in attrs:
             self.assert_(hasattr(sys.flags, attr), attr)
             self.assertEqual(type(getattr(sys.flags, attr)), int, attr)
+        self.assert_(hasattr(sys.flags, "jit_control"))
         self.assert_(repr(sys.flags))
 
     def test_clear_type_cache(self):

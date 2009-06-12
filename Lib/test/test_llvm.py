@@ -1,11 +1,11 @@
 # Tests for our minimal LLVM wrappers
+import __future__
 
 from test.test_support import run_unittest, findfile
 import _llvm
 import functools
 import sys
 import unittest
-import __future__
 
 
 # Calculate default LLVM optimization level.
@@ -2205,6 +2205,7 @@ def unpack(x):
         self.assertRaises(TypeError, f2, {})
 
 
+# These tests are skipped when -j never or -j always is passed to Python.
 class OptimizationTests(unittest.TestCase):
 
     def test_hotness(self):
@@ -2241,8 +2242,8 @@ class OptimizationTests(unittest.TestCase):
 def test_main():
     tests = [LoopExceptionInteractionTests, LlvmTests, OperatorTests,
              LiteralsTests]
-    if sys.flags.jit_control == "never":
-        print >>sys.stderr, "test_llvm -- skipping some tests due to -j never."
+    if sys.flags.jit_control != "whenhot":
+        print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()
     else:
         tests.append(OptimizationTests)

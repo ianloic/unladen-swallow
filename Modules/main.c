@@ -40,7 +40,7 @@ static char **orig_argv;
 static int  orig_argc;
 
 /* command line options */
-#define BASE_OPTS "3RbBc:dEhij:JL:m:O*Q:sStuUvVW:xX?"
+#define BASE_OPTS "3RbBc:dEhij:Jm:O*Q:sStuUvVW:xX?"
 
 #ifndef RISCOS
 #define PROGRAM_OPTS BASE_OPTS
@@ -65,11 +65,10 @@ Options and arguments (and corresponding environment variables):\n\
 -E     : ignore PYTHON* environment variables (such as PYTHONPATH)\n\
 -h     : print this help message and exit (also --help)\n\
 -i     : inspect interactively after running script; forces a prompt even\n\
--j arg : control JIT compilation: -j once (default), -j never.\n\
+-j arg : control JIT compilation: -j whenhot (default), -j never, -j always.\n\
 ";
 static char *usage_2 = "\
          if stdin does not appear to be a terminal; also PYTHONINSPECT=x\n\
--L#    : execute all code with LLVM, optimized to level # (0, 1, or 2)\n\
 -m mod : run library module as a script (terminates option list)\n\
 -O#    : optimize generated code; also PYTHONOPTIMIZE=x\n\
 -Q arg : division options: -Qold (default), -Qwarn, -Qwarnall, -Qnew\n\
@@ -213,7 +212,7 @@ static int RunMainFromImporter(char *filename)
 {
 	PyObject *argv0 = NULL, *importer = NULL;
 
-	if ((argv0 = PyString_FromString(filename)) && 
+	if ((argv0 = PyString_FromString(filename)) &&
 	    (importer = PyImport_GetImporter(argv0)) &&
 	    (importer->ob_type != &PyNullImporter_Type))
 	{
@@ -390,9 +389,13 @@ Py_Main(int argc, char **argv)
                                 Py_JitControl = PY_JIT_NEVER;
                                 break;
                         }
+                        if (strcmp(_PyOS_optarg, "always") == 0) {
+                                Py_JitControl = PY_JIT_ALWAYS;
+                                break;
+                        }
 			fprintf(stderr,
-				"-j option should be `-j once', or "
-				"`-j never' only\n");
+				"-j option should be `-j whenhot', "
+				"`-j always`, or `-j never' only\n");
 			return usage(2, argv[0]);
 			/* NOTREACHED */
 
@@ -478,20 +481,6 @@ Py_Main(int argc, char **argv)
 		case 'W':
 			PySys_AddWarnOption(_PyOS_optarg);
 			break;
-
-		case 'L': {
-			unsigned int optimization_level = _PyOS_optarg[0] - '0';
-			if (_PyOS_optarg[0] == '\0' ||
-			    _PyOS_optarg[1] != '\0' ||
-			    optimization_level > 2) {
-				fprintf(stderr,
-					"-L option should be `-L0', `-L1',"
-					" or `-L2'");
-				return usage(2, argv[0]);
-			}
-			Py_LlvmEverythingFlag = optimization_level;
-			break;
-		}
 
 		/* This space reserved for other options */
 

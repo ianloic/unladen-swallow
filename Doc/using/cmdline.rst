@@ -21,7 +21,7 @@ Command line
 
 When invoking Python, you may specify any of these options::
 
-    python [-dEijLOQsStuUvxX3?] [-c command | -m module-name | script | - ] [args]
+    python [-dEijOQsStuUvxX3?] [-c command | -m module-name | script | - ] [args]
 
 The most common use case is, of course, a simple invocation of a script::
 
@@ -209,18 +209,10 @@ Miscellaneous options
 .. cmdoption:: -j <arg>
 
    Control how Python compiles to machine code. ``-j never`` completely
-   disables automatic compilation to machine code. The default is
+   disables automatic compilation to machine code. ``-j always`` forces
+   machine code compilation for all functions defined. The default is
    ``-j whenhot``, which optimizes hot functions only once, but optimizes the
    function as much as possible. See also :envvar:`PYTHONJITCONTROL`.
-
-
-.. cmdoption:: -L <arg>
-
-   Run all Python code through the LLVM JIT compiler, optimized to level
-   ``<arg>``, which must be ``0``, ``1``, or ``2``.  By default, we run most
-   code through the bytecode interpreter and only compile hot code to a
-   dynamically-chosen optimization level.  See also
-   :envvar:`PYTHONLLVMEVERYTHING`.
 
 
 .. cmdoption:: -O <arg>
@@ -473,14 +465,8 @@ These environment variables influence Python's behavior.
 
 .. envvar:: PYTHONJITCONTROL
 
-   If this option is set to either ``never`` or ``whenhot``, it is equivalent
-   to passing :option:`-j` on the command line with that value.
-
-
-.. envvar:: PYTHONLLVMEVERYTHING
-
-   If this option is set to an integer ``<N>``, it is equivalent to passing
-   :option:`-L` ``<N>`` on the command line.
+   If this option is set to either ``never``, ``whenhot``, or ``always`` it is
+   equivalent to passing :option:`-j` on the command line with that value.
 
 
 .. envvar:: PYTHONUNBUFFERED

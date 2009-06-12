@@ -87,7 +87,6 @@ int Py_IgnoreEnvironmentFlag; /* e.g. PYTHONPATH, PYTHONHOME */
 int _Py_QnewFlag = 0;
 int Py_NoUserSiteDirectory = 0; /* for -s and site.py */
 int Py_ShowRefcountFlag = 0; /* For -R */
-int Py_LlvmEverythingFlag = -1; /* For -L */
 Py_JitOpts Py_JitControl = PY_JIT_WHENHOT; /* For -j */
 
 /* PyModule_GetWarningsModule is no longer necessary as of 2.6
@@ -166,13 +165,13 @@ Py_InitializeEx(int install_sigs)
 		Py_OptimizeFlag = add_flag(Py_OptimizeFlag, p);
 	if ((p = Py_GETENV("PYTHONDONTWRITEBYTECODE")) && *p != '\0')
 		Py_DontWriteBytecodeFlag = add_flag(Py_DontWriteBytecodeFlag, p);
-	if ((p = Py_GETENV("PYTHONLLVMEVERYTHING")) && *p != '\0')
-		Py_LlvmEverythingFlag = add_flag(Py_LlvmEverythingFlag, p);
 	if ((p = Py_GETENV("PYTHONJITCONTROL")) && *p != '\0') {
 		if (strcmp(p, "never") == 0)
 			Py_JitControl = PY_JIT_NEVER;
 		else if (strcmp(p, "whenhot") == 0)
 			Py_JitControl = PY_JIT_WHENHOT;
+		else if (strcmp(p, "always") == 0)
+			Py_JitControl = PY_JIT_ALWAYS;
 	}
 
 	interp = PyInterpreterState_New();

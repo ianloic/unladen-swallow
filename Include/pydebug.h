@@ -28,19 +28,15 @@ PyAPI_DATA(int) _Py_QnewFlag;
 PyAPI_DATA(int) Py_Py3kWarningFlag;
 /* Show the total reference count after each execution. */
 PyAPI_DATA(int) Py_ShowRefcountFlag;
-/* Defaults to -1.  If -1, we default to running through the bytecode
-   interpreter unless the code object has __use_llvm__ set.  If
-   higher, we run every function through LLVM and optimize it to the
-   level indicated by the value of the flag. */
-PyAPI_DATA(int) Py_LlvmEverythingFlag;
 
 /* Control when/how to JIT-compile Python functions to machine code. */
 typedef enum {
-    PY_JIT_NEVER,  /* Force use of the eval loop for all functions. */
-    PY_JIT_WHENHOT,   /* JIT-compile hot function, optimizing heavily. */
+    PY_JIT_NEVER,    /* Force use of the eval loop for all functions. */
+    PY_JIT_WHENHOT,  /* JIT-compile hot function, optimizing heavily. */
+    PY_JIT_ALWAYS,   /* Force use of LLVM for all functions. */
 } Py_JitOpts;
 
-/* Defaults to PY_JIT_ONCE. */
+/* Defaults to PY_JIT_WHENHOT. */
 PyAPI_DATA(Py_JitOpts) Py_JitControl;
 
 /* this is a wrapper around getenv() that pays attention to

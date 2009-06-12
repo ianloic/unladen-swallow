@@ -107,13 +107,13 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
                 co->co_zombieframe = NULL;
 		co->co_llvm_function = NULL;
 		co->co_native_function = NULL;
-		/* Py_LlvmEverythingFlag defaults to -1. */
-		co->co_use_llvm = (Py_LlvmEverythingFlag >= 0);
+		/* Py_JitControl defaults to PY_JIT_WHENHOT. */
+		co->co_use_llvm = (Py_JitControl == PY_JIT_ALWAYS);
 		co->co_optimization = -1;
 		co->co_callcount = 0;
 		if (co->co_use_llvm) {
 			/* Implictly updates co->co_optimization. */
-			if (_PyCode_Recompile(co, Py_LlvmEverythingFlag) < 0) {
+			if (_PyCode_Recompile(co, Py_OptimizeFlag) < 0) {
 				Py_DECREF(co);
 				return NULL;
 			}

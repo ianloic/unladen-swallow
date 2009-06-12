@@ -1224,7 +1224,6 @@ static PyStructSequence_Field flags_fields[] = {
 	{"unicode",		"-U"},
 	/* {"skip_first",		"-x"}, */
 	{"bytes_warning",	"-b"},
-	{"llvm_everything",	"-L"},
 	{"jit_control",		"-j"},
 	{0}
 };
@@ -1234,9 +1233,9 @@ static PyStructSequence_Desc flags_desc = {
 	flags__doc__,	/* doc */
 	flags_fields,	/* fields */
 #ifdef RISCOS
-	18
-#else
 	17
+#else
+	16
 #endif
 };
 
@@ -1273,12 +1272,13 @@ make_flags(void)
 	SetFlag(Py_UnicodeFlag);
 	/* SetFlag(skipfirstline); */
 	SetFlag(Py_BytesWarningFlag);
-	SetFlag(Py_LlvmEverythingFlag);
 #undef SetFlag
 	if (Py_JitControl == PY_JIT_WHENHOT) {
 		flag = PyString_FromString("whenhot");
 	} else if (Py_JitControl == PY_JIT_NEVER) {
 		flag = PyString_FromString("never");
+	} else if (Py_JitControl == PY_JIT_ALWAYS) {
+		flag = PyString_FromString("always");
 	} else {
 		Py_FatalError("Invalid value for Py_JitControl");
 		return NULL; /* Never reached. */
