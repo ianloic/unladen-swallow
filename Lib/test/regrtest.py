@@ -362,6 +362,7 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
         import trace
         tracer = trace.Trace(ignoredirs=[sys.prefix, sys.exec_prefix],
                              trace=False, count=True)
+    print "Testing with flags:", sys.flags
     test_times = []
     test_support.verbose = verbose      # Tell tests to be moderately quiet
     test_support.use_resources = use_resources
