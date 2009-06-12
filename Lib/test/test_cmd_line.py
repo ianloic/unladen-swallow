@@ -44,9 +44,21 @@ class CmdLineTest(unittest.TestCase):
         self.assertTrue('Traceback' not in data)
         self.assertEqual(returncode, 0)
 
+    def verify_invalid_flag(self, *flags):
+        cmd_line = flags + ('-c', 'import sys; sys.exit()')
+        data, returncode = self.start_python(*cmd_line)
+        self.assertTrue('usage:' in data)
+        self.assertEqual(returncode, 2)
+
     def test_optimize(self):
-        self.verify_valid_flag('-O')
-        self.verify_valid_flag('-OO')
+        # Ordered by how much optimization results: O0, O, O1, OO, O2.
+        # -OO is supported for backwards compatibility.
+        self.verify_valid_flag('-O0')  # Oh zero.
+        self.verify_valid_flag('-O')   # Same as -O1
+        self.verify_valid_flag('-O1')
+        self.verify_valid_flag('-OO')  # Oh oh. Same as -O2
+        self.verify_valid_flag('-O2')
+        self.verify_invalid_flag('-O128')
 
     def test_q(self):
         self.verify_valid_flag('-Qold')

@@ -74,8 +74,7 @@ int _PyOS_GetOpt(int argc, char **argv, char *optstring)
 			return 'V';
 		}
 
-
-		opt_ptr = &argv[_PyOS_optind++][1]; 
+		opt_ptr = &argv[_PyOS_optind++][1];
 	}
 
 	if ( (option = *opt_ptr++) == '\0')
@@ -99,7 +98,15 @@ int _PyOS_GetOpt(int argc, char **argv, char *optstring)
 		return '_';
 	}
 
-	if (*(ptr + 1) == ':') {
+	/* The * modifier says that this option _can_ take an argument, but
+	   not necessarily (unlike :, which requires the argument). If no
+	   argument was passed, _PyOS_optarg will be \0. The * modifier
+	   requires the option's argument to be cuddled up to the flag, for
+	   example: -O2 is legal, -O 2 is not. */
+	if (*(ptr + 1) == '*') {
+		_PyOS_optarg = opt_ptr;
+		opt_ptr = "";
+	} else if (*(ptr + 1) == ':') {
 		if (*opt_ptr != '\0') {
 			_PyOS_optarg  = opt_ptr;
 			opt_ptr = "";

@@ -223,16 +223,16 @@ Miscellaneous options
    :envvar:`PYTHONLLVMEVERYTHING`.
 
 
-.. cmdoption:: -O
+.. cmdoption:: -O <arg>
 
-   Turn on basic optimizations.  This changes the filename extension for
-   compiled (:term:`bytecode`) files from ``.pyc`` to ``.pyo``.  See also
-   :envvar:`PYTHONOPTIMIZE`.
+   Control how much time to spend optimizing the generated code.  Valid
+   arguments are ``0``, ``1`` and ``2``, where ``0`` indicates no optimization
+   and ``2`` is the maximum optimization level. If the argument is omitted, it
+   is equivalent to ``-O1``. For backwards compatibility, you can specify
+   ``-OO``, which is equal to ``-O2``.
 
-
-.. cmdoption:: -OO
-
-   Discard docstrings in addition to the :option:`-O` optimizations.
+   This changes the filename extension for compiled (:term:`bytecode`) files
+   from ``.pyc`` to ``.pyo``.  See also :envvar:`PYTHONOPTIMIZE`.
 
 
 .. cmdoption:: -Q <arg>
