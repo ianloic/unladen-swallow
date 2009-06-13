@@ -2,11 +2,12 @@
 
 #ifndef Py_CODE_H
 #define Py_CODE_H
+
+#include "_llvmfunctionobject.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef PyObject *(*PyEvalFrameFunction)(struct _frame *);
 
 /* Bytecode object.  Keep this in sync with Util/PyTypeBuilder.h. */
 typedef struct PyCodeObject {
@@ -28,10 +29,10 @@ typedef struct PyCodeObject {
     PyObject *co_lnotab;	/* string (encoding addr<->lineno mapping) See
 				   Objects/lnotab_notes.txt for details. */
     void *co_zombieframe;     /* for optimization only (see frameobject.c) */
-    /* PyLlvmFunctionObject. See
+    /* See
        http://code.google.com/p/unladen-swallow/wiki/FunctionCallingConvention
        for the calling convention. */
-    PyObject *co_llvm_function;
+    _LlvmFunction *co_llvm_function;
     PyEvalFrameFunction co_native_function;
     /* True if interpretation will be done through the LLVM JIT. This exists
        only for ease of testing; the flag that matters is f_use_llvm on the

@@ -45,14 +45,14 @@ optimization level.");
 static PyObject *
 llvm_compile(PyObject *self, PyObject *args)
 {
-    PyObject *code;
+    PyObject *obj;
+    PyCodeObject *code;
     long opt_level;
     long i;
     struct PyGlobalLlvmData *global_llvm_data;
-    PyObject *llvm_function;
 
     if (!PyArg_ParseTuple(args, "O!l:compile",
-                          &PyCode_Type, &code, &opt_level))
+                          &PyCode_Type, &obj, &opt_level))
         return NULL;
 
     if (opt_level < -1 || opt_level > 2) {
@@ -60,20 +60,24 @@ llvm_compile(PyObject *self, PyObject *args)
         return NULL;
     }
 
-    llvm_function = _PyCode_To_Llvm((PyCodeObject *)code);
-    if (llvm_function == NULL)
+    code = (PyCodeObject *)obj;
+	if (code->co_llvm_function)
+		_LlvmFunction_Dealloc(code->co_llvm_function);
+    code->co_llvm_function = _PyCode_To_Llvm(code);
+    if (code->co_llvm_function == NULL)
         return NULL;
     global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;
     for (i = 0; i <= opt_level; i++) {
         if (PyGlobalLlvmData_Optimize(global_llvm_data,
-                                      llvm_function, i) < 0) {
+                                      code->co_llvm_function, i) < 0) {
             PyErr_Format(PyExc_ValueError,
                          "Failed to optimize to level %ld", i);
-            Py_DECREF(llvm_function);
+            _LlvmFunction_Dealloc(code->co_llvm_function);
             return NULL;
         }
     }
-    return llvm_function;
+
+    return _PyLlvmFunction_FromCodeObject((PyObject *)code);
 }
 
 static struct PyMethodDef llvm_methods[] = {

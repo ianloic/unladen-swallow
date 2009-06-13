@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 
-PyAPI_FUNC(PyObject *) _PyCode_To_Llvm(PyCodeObject *code);
+PyAPI_FUNC(_LlvmFunction *) _PyCode_To_Llvm(PyCodeObject *code);
 
 #ifdef __cplusplus
 }

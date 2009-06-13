@@ -3760,8 +3760,7 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 		}
 		// Now try to JIT the IR function to machine code.
 		PY_LOG_EVENT(JIT_START);
-		co->co_native_function = _PyLlvmFunction_Jit(
-			(PyLlvmFunctionObject *)co->co_llvm_function);
+		co->co_native_function = _LlvmFunction_Jit(co->co_llvm_function);
 		PY_LOG_EVENT(JIT_END);
 		if (co->co_native_function == NULL) {
 			return -1;

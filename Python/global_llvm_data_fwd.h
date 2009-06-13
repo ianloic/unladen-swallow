@@ -15,7 +15,7 @@ void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
 
 PyAPI_FUNC(int) PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *,
-                                          PyObject *, int);
+                                          _LlvmFunction *, int);
 
 /* Initializes LLVM and all of the LLVM wrapper types. */
 int _PyLlvm_Init(void);

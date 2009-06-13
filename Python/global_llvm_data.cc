@@ -163,16 +163,10 @@ PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
 
 int
 PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *global_data,
-                          PyObject *llvm_function, int level)
+                          _LlvmFunction *llvm_function, int level)
 {
-    if (!PyLlvmFunction_Check(llvm_function)) {
-        PyErr_Format(PyExc_TypeError, "Expected LLVM Function object; got %s.",
-                     llvm_function->ob_type->tp_name);
-        return -1;
-    }
-    PyLlvmFunctionObject *function = (PyLlvmFunctionObject *)llvm_function;
     return global_data->Optimize(
-        *(llvm::Function *)_PyLlvmFunction_GetFunction(function),
+        *(llvm::Function *)llvm_function->lf_function,
         level);
 }
 

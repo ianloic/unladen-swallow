@@ -13,57 +13,63 @@
 #include "llvm/Support/raw_ostream.h"
 #include <sstream>
 
+void
+_LlvmFunction_Dealloc(_LlvmFunction *functionobj)
+{
+    llvm::Function *function = (llvm::Function *)functionobj->lf_function;
+    // Allow global optimizations to destroy the function.
+    function->setLinkage(llvm::GlobalValue::InternalLinkage);
+    if (function->use_empty()) {
+        // Delete the function if it's already unused.
+        // Free the machine code for the function first, or LLVM will try to
+        // reuse it later.  This is probably a bug in LLVM. TODO(twouters):
+        // fix the bug in LLVM and remove this workaround.
+        PyGlobalLlvmData *global_llvm_data =
+            PyThreadState_GET()->interp->global_llvm_data;
+        llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+        engine->freeMachineCodeForFunction(function);
+        function->eraseFromParent();
+    }
+    delete functionobj;
+}
+
+PyEvalFrameFunction
+_LlvmFunction_Jit(_LlvmFunction *function_obj)
+{
+    llvm::Function *function = (llvm::Function *)function_obj->lf_function;
+    PyGlobalLlvmData *global_llvm_data =
+        PyThreadState_GET()->interp->global_llvm_data;
+    llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+    return (PyEvalFrameFunction)engine->getPointerToFunction(function);
+}
+
+
+// Python-level wrapper.
 struct PyLlvmFunctionObject {
 public:
     PyObject_HEAD
-    // TODO(jyasskin): Make this a WeakVH when we import llvm's
-    // Support/ValueHandle.h.
-    llvm::Function *the_function;
+    PyCodeObject *code_object;  // Hold a reference to the PyCodeObject.
 };
 
-static llvm::Function *
-get_function(PyLlvmFunctionObject *obj)
-{
-    return (llvm::Function *)obj->the_function;
-}
-
 PyObject *
-_PyLlvmFunction_FromPtr(void *llvm_function)
+_PyLlvmFunction_FromCodeObject(PyObject *co)
 {
     PyLlvmFunctionObject *result =
         PyObject_NEW(PyLlvmFunctionObject, &PyLlvmFunction_Type);
     if (result == NULL) {
         return NULL;
     }
-    llvm::Function *function = (llvm::Function *)llvm_function;
-    result->the_function = function;
-
-    // Make sure the function survives global optimizations.
-    function->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    Py_INCREF(co);
+    result->code_object = (PyCodeObject *)co;
 
     return (PyObject *)result;
 }
 
-void *
+static llvm::Function *
 _PyLlvmFunction_GetFunction(PyLlvmFunctionObject *llvm_function)
 {
-    return llvm_function->the_function;
-}
-
-PyEvalFrameFunction
-_PyLlvmFunction_Jit(PyLlvmFunctionObject *function_obj)
-{
-    if (!PyLlvmFunction_Check(function_obj)) {
-        PyErr_Format(PyExc_TypeError,
-                     "Expected PyLlvmFunctionObject; got %s",
-                     Py_TYPE(function_obj)->tp_name);
-        return NULL;
-    }
-    llvm::Function *function = function_obj->the_function;
-    PyGlobalLlvmData *global_llvm_data =
-        PyThreadState_GET()->interp->global_llvm_data;
-    llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
-    return (PyEvalFrameFunction)engine->getPointerToFunction(function);
+    PyCodeObject *code = llvm_function->code_object;
+    return (llvm::Function *)code->co_llvm_function->lf_function;
 }
 
 PyDoc_STRVAR(llvmfunction_doc,
@@ -75,26 +81,13 @@ existing _llvmmodule objects.");
 static void
 llvmfunction_dealloc(PyLlvmFunctionObject *functionobj)
 {
-    llvm::Function *function = functionobj->the_function;
-    // Allow global optimizations to destroy the function.
-    function->setLinkage(llvm::GlobalValue::InternalLinkage);
-    if (function->use_empty()) {
-        // Delete the function if it's already unused.
-        // Free the machine code for the function first, or LLVM will try to
-        // reuse it later.  This is probably a bug in LLVM. TODO(twouters):
-        // fix the bug in LLVM and remove this workaround.
-        PyGlobalLlvmData *global_llvm_data =
-	    PyThreadState_GET()->interp->global_llvm_data;
-        llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
-        engine->freeMachineCodeForFunction(function);
-        function->eraseFromParent();
-    }
+    Py_DECREF(functionobj->code_object);
 }
 
 static PyObject *
 llvmfunction_str(PyLlvmFunctionObject *functionobj)
 {
-    llvm::Function *const function = get_function(functionobj);
+    llvm::Function *const function = _PyLlvmFunction_GetFunction(functionobj);
     if (function == NULL) {
         PyErr_BadInternalCall();
         return NULL;
@@ -111,7 +104,7 @@ llvmfunction_str(PyLlvmFunctionObject *functionobj)
 static PyObject *
 func_get_module(PyLlvmFunctionObject *op)
 {
-    llvm::Module *module = op->the_function->getParent();
+    llvm::Module *module = _PyLlvmFunction_GetFunction(op)->getParent();
     if (module == NULL) {
         PyErr_BadInternalCall();
         return NULL;
@@ -137,7 +130,7 @@ PyTypeObject PyLlvmFunction_Type = {
 	"_llvmfunction",
 	sizeof(PyLlvmFunctionObject),
 	0,
-	(destructor)llvmfunction_dealloc,	/* tp_dealloc */
+	(destructor)llvmfunction_dealloc,   /* tp_dealloc */
 	0,				/* tp_print */
 	0, 				/* tp_getattr */
 	0,				/* tp_setattr */

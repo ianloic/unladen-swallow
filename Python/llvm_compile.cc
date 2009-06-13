@@ -241,7 +241,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
     return 0;
 }
 
-extern "C" PyObject *
+extern "C" _LlvmFunction *
 _PyCode_To_Llvm(PyCodeObject *code)
 {
     if (!PyCode_Check(code)) {
@@ -472,5 +472,11 @@ _PyCode_To_Llvm(PyCodeObject *code)
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
         return NULL;
     }
-    return _PyLlvmFunction_FromPtr(fbuilder.function());
+
+    // Make sure the function survives global optimizations.
+    fbuilder.function()->setLinkage(llvm::GlobalValue::ExternalLinkage);
+
+    _LlvmFunction *wrapper = new _LlvmFunction();
+    wrapper->lf_function = fbuilder.function();
+    return wrapper;
 }

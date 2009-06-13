@@ -140,7 +140,6 @@ static PyMemberDef code_memberlist[] = {
 	{"co_name",	T_OBJECT,	OFF(co_name),		READONLY},
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
-	{"co_llvm",	T_OBJECT,	OFF(co_llvm_function),	READONLY},
 	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 	{NULL}	/* Sentinel */
@@ -188,9 +187,20 @@ code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 	return 0;
 }
 
+static PyObject *
+code_get_co_llvm(PyCodeObject *code)
+{
+	if (code->co_llvm_function == NULL)
+		Py_RETURN_NONE;
+
+	return _PyLlvmFunction_FromCodeObject((PyObject *)code);
+}
+
+
 static PyGetSetDef code_getsetlist[] = {
 	{"co_optimization", (getter)code_get_optimization,
 	 (setter)code_set_optimization},
+	{"co_llvm", (getter)code_get_co_llvm, (setter)NULL},
 	{NULL} /* Sentinel */
 };
 
@@ -347,7 +357,10 @@ code_dealloc(PyCodeObject *co)
 	Py_XDECREF(co->co_lnotab);
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
-        Py_XDECREF(co->co_llvm_function);
+	if (co->co_llvm_function) {
+		_LlvmFunction_Dealloc(co->co_llvm_function);
+		co->co_llvm_function = NULL;
+	}
         // co_native_function is destroyed by co_llvm_function.
 	PyObject_DEL(co);
 }
