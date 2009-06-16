@@ -1,3 +1,4 @@
+import sys
 import types
 import unittest
 import warnings
@@ -1906,17 +1907,20 @@ order (MRO) for bases """
         else:
             self.fail("expected ZeroDivisionError from bad property")
 
-        class E(object):
-            def getter(self):
-                "getter method"
-                return 0
-            def setter(self_, value):
-                "setter method"
-                pass
-            prop = property(getter)
-            self.assertEqual(prop.__doc__, "getter method")
-            prop2 = property(fset=setter)
-            self.assertEqual(prop2.__doc__, None)
+        # Docstrings are omitted with -O2 and above, so these tests don't make
+        # any sense.
+        if sys.flags.optimize <= 1:
+            class E(object):
+                def getter(self):
+                    "getter method"
+                    return 0
+                def setter(self_, value):
+                    "setter method"
+                    pass
+                prop = property(getter)
+                self.assertEqual(prop.__doc__, "getter method")
+                prop2 = property(fset=setter)
+                self.assertEqual(prop2.__doc__, None)
 
         # this segfaulted in 2.5b2
         try:
@@ -4391,6 +4395,9 @@ class PTypesLongInitTest(unittest.TestCase):
 
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_descr -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     # Run all local test cases, with PTypesLongInitTest first.
     test_support.run_unittest(PTypesLongInitTest, OperatorsTest,
                               ClassPropertiesAndMethods, DictProxyTests)

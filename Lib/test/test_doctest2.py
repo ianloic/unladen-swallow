@@ -12,6 +12,7 @@ the example.  It should be ignored:
 
 """
 
+import sys
 from test import test_support
 
 class C(object):
@@ -106,7 +107,13 @@ class C(object):
 
 def test_main():
     from test import test_doctest2
-    EXPECTED = 19
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_doctest2 --",
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
+        EXPECTED = 3
+    else:
+        EXPECTED = 19
     f, t = test_support.run_doctest(test_doctest2)
     if t != EXPECTED:
         raise test_support.TestFailed("expected %d tests to run, not %d" %

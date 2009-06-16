@@ -1,4 +1,4 @@
-import unittest, doctest
+import unittest, doctest, sys
 from test import test_support
 from collections import namedtuple
 import pickle, cPickle, copy
@@ -15,7 +15,10 @@ class TestNamedTuple(unittest.TestCase):
     def test_factory(self):
         Point = namedtuple('Point', 'x y')
         self.assertEqual(Point.__name__, 'Point')
-        self.assertEqual(Point.__doc__, 'Point(x, y)')
+        # Docstrings are omitted with -O2 and above, so this test doesn't make
+        # any sense.
+        if sys.flags.optimize <= 1:
+            self.assertEqual(Point.__doc__, 'Point(x, y)')
         self.assertEqual(Point.__slots__, ())
         self.assertEqual(Point.__module__, __name__)
         self.assertEqual(Point.__getitem__, tuple.__getitem__)
@@ -349,6 +352,9 @@ class TestCollectionABCs(unittest.TestCase):
 import doctest, collections
 
 def test_main(verbose=None):
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_collections -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     NamedTupleDocs = doctest.DocTestSuite(module=collections)
     test_classes = [TestNamedTuple, NamedTupleDocs, TestOneTrickPonyABCs, TestCollectionABCs]
     test_support.run_unittest(*test_classes)

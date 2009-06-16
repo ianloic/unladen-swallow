@@ -98,7 +98,10 @@ class ContextManagerTestCase(unittest.TestCase):
             """Whee!"""
         self.assertEqual(baz.__name__,'baz')
         self.assertEqual(baz.foo, 'bar')
-        self.assertEqual(baz.__doc__, "Whee!")
+        # Docstrings are omitted with -O2 and above, so this test doesn't make
+        # any sense.
+        if sys.flags.optimize <= 1:
+            self.assertEqual(baz.__doc__, "Whee!")
 
 class NestedTestCase(unittest.TestCase):
 
@@ -331,6 +334,9 @@ class LockContextTestCase(unittest.TestCase):
 
 # This is needed to make the test actually run under regrtest.py!
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_contextlib -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     test_support.run_unittest(__name__)
 
 if __name__ == "__main__":

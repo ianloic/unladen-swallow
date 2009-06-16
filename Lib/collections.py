@@ -14,8 +14,6 @@ def namedtuple(typename, field_names, verbose=False):
     """Returns a new subclass of tuple with named fields.
 
     >>> Point = namedtuple('Point', 'x y')
-    >>> Point.__doc__                   # docstring for the new class
-    'Point(x, y)'
     >>> p = Point(11, y=22)             # instantiate with positional args or keywords
     >>> p[0] + p[1]                     # indexable like a plain tuple
     33
