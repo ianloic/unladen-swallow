@@ -209,26 +209,29 @@ def print_diffs(text1, text2):
 
 class PyDocDocTest(unittest.TestCase):
 
-    def test_html_doc(self):
-        result, doc_loc = get_pydoc_html(pydoc_mod)
-        mod_file = inspect.getabsfile(pydoc_mod)
-        if sys.platform == 'win32':
-            import nturl2path
-            mod_url = nturl2path.pathname2url(mod_file)
-        else:
-            mod_url = mod_file
-        expected_html = expected_html_pattern % (mod_url, mod_file, doc_loc)
-        if result != expected_html:
-            print_diffs(expected_html, result)
-            self.fail("outputs are not equal, see diff above")
+    # These two tests rely on docstrings, which are not present when -OO is
+    # passed.
+    if sys.flags.optimize <= 1:
+        def test_html_doc(self):
+            result, doc_loc = get_pydoc_html(pydoc_mod)
+            mod_file = inspect.getabsfile(pydoc_mod)
+            if sys.platform == 'win32':
+                import nturl2path
+                mod_url = nturl2path.pathname2url(mod_file)
+            else:
+                mod_url = mod_file
+            expected_html = expected_html_pattern % (mod_url, mod_file, doc_loc)
+            if result != expected_html:
+                print_diffs(expected_html, result)
+                self.fail("outputs are not equal, see diff above")
 
-    def test_text_doc(self):
-        result, doc_loc = get_pydoc_text(pydoc_mod)
-        expected_text = expected_text_pattern % \
-                        (inspect.getabsfile(pydoc_mod), doc_loc)
-        if result != expected_text:
-            print_diffs(expected_text, result)
-            self.fail("outputs are not equal, see diff above")
+        def test_text_doc(self):
+            result, doc_loc = get_pydoc_text(pydoc_mod)
+            expected_text = expected_text_pattern % \
+                            (inspect.getabsfile(pydoc_mod), doc_loc)
+            if result != expected_text:
+                print_diffs(expected_text, result)
+                self.fail("outputs are not equal, see diff above")
 
     def test_not_here(self):
         missing_module = "test.i_am_not_here"
@@ -265,6 +268,9 @@ class TestDescriptions(unittest.TestCase):
 
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_pydoc -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     test.test_support.run_unittest(PyDocDocTest,
                                    TestDescriptions)
 

@@ -1,4 +1,5 @@
 import functools
+import sys
 import unittest
 from test import test_support
 from weakref import proxy
@@ -177,8 +178,9 @@ class TestUpdateWrapper(unittest.TestCase):
         functools.update_wrapper(wrapper, f)
         self.check_wrapper(wrapper, f)
         self.assertEqual(wrapper.__name__, 'f')
-        self.assertEqual(wrapper.__doc__, 'This is a test')
         self.assertEqual(wrapper.attr, 'This is also a test')
+        if sys.flags.optimize <= 1:
+            self.assertEqual(wrapper.__doc__, 'This is a test')
 
     def test_no_update(self):
         def f():
@@ -230,8 +232,9 @@ class TestWraps(TestUpdateWrapper):
             pass
         self.check_wrapper(wrapper, f)
         self.assertEqual(wrapper.__name__, 'f')
-        self.assertEqual(wrapper.__doc__, 'This is a test')
         self.assertEqual(wrapper.attr, 'This is also a test')
+        if sys.flags.optimize <= 1:
+            self.assertEqual(wrapper.__doc__, 'This is a test')
 
     def test_no_update(self):
         def f():
@@ -311,7 +314,6 @@ class TestReduce(unittest.TestCase):
 
 
 def test_main(verbose=None):
-    import sys
     test_classes = (
         TestPartial,
         TestPartialSubclass,
@@ -320,6 +322,10 @@ def test_main(verbose=None):
         TestWraps,
         TestReduce,
     )
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_functools --",
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
     test_support.run_unittest(*test_classes)
 
     # verify reference counting

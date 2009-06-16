@@ -9,6 +9,7 @@ Still need testing:
 from test import test_support
 import unittest
 from unittest import TestCase
+import sys
 import types
 
 ### Support code
@@ -2223,28 +2224,30 @@ class Test_TestCase(TestCase, TestEquality, TestHashing):
 
         self.assertEqual(Foo().shortDescription(), None)
 
-    # "Returns a one-line description of the test, or None if no description
-    # has been provided. The default implementation of this method returns
-    # the first line of the test method's docstring, if available, or None."
-    def test_shortDescription__singleline_docstring(self):
-        class Foo(unittest.TestCase):
-            def runTest(self):
-                "this tests foo"
-                pass
+    # The following two tests rely on docstrings, which are omitted with -OO.
+    if sys.flags.optimize <= 1:
+        # "Returns a one-line description of the test, or None if no description
+        # has been provided. The default implementation of this method returns
+        # the first line of the test method's docstring, if available, or None."
+        def test_shortDescription__singleline_docstring(self):
+            class Foo(unittest.TestCase):
+                def runTest(self):
+                    "this tests foo"
+                    pass
 
-        self.assertEqual(Foo().shortDescription(), "this tests foo")
+            self.assertEqual(Foo().shortDescription(), "this tests foo")
 
-    # "Returns a one-line description of the test, or None if no description
-    # has been provided. The default implementation of this method returns
-    # the first line of the test method's docstring, if available, or None."
-    def test_shortDescription__multiline_docstring(self):
-        class Foo(unittest.TestCase):
-            def runTest(self):
-                """this tests foo
-                blah, bar and baz are also tested"""
-                pass
+        # "Returns a one-line description of the test, or None if no description
+        # has been provided. The default implementation of this method returns
+        # the first line of the test method's docstring, if available, or None."
+        def test_shortDescription__multiline_docstring(self):
+            class Foo(unittest.TestCase):
+                def runTest(self):
+                    """this tests foo
+                    blah, bar and baz are also tested"""
+                    pass
 
-        self.assertEqual(Foo().shortDescription(), "this tests foo")
+            self.assertEqual(Foo().shortDescription(), "this tests foo")
 
     # "If result is omitted or None, a temporary result object is created
     # and used, but is not made available to the caller"
@@ -2289,6 +2292,10 @@ class Test_Assertions(TestCase):
 ######################################################################
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_unittest --",
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
     test_support.run_unittest(Test_TestCase, Test_TestLoader,
         Test_TestSuite, Test_TestResult, Test_FunctionTestCase,
         Test_Assertions)

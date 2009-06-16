@@ -6,6 +6,7 @@ be run.
 """
 
 import json.tests
+import sys
 import test.test_support
 
 
@@ -14,4 +15,7 @@ def test_main():
 
 
 if __name__ == "__main__":
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_json -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     test_main()

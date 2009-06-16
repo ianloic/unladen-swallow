@@ -135,24 +135,26 @@ class TestRefactoringTool(unittest.TestCase):
         finally:
             open(test_file, "w").write(old_contents)
 
-    def test_refactor_docstring(self):
-        rt = self.rt()
+    # Docstrings are omitted when Python is passed -OO, so skip this test.
+    if sys.flags.optimize <= 1:
+        def test_refactor_docstring(self):
+            rt = self.rt()
 
-        def example():
-            """
-            >>> example()
-            42
-            """
-        out = rt.refactor_docstring(example.__doc__, "<test>")
-        self.assertEqual(out, example.__doc__)
+            def example():
+                """
+                >>> example()
+                42
+                """
+            out = rt.refactor_docstring(example.__doc__, "<test>")
+            self.assertEqual(out, example.__doc__)
 
-        def parrot():
-            """
-            >>> def parrot():
-            ...      return 43
-            """
-        out = rt.refactor_docstring(parrot.__doc__, "<test>")
-        self.assertNotEqual(out, parrot.__doc__)
+            def parrot():
+                """
+                >>> def parrot():
+                ...      return 43
+                """
+            out = rt.refactor_docstring(parrot.__doc__, "<test>")
+            self.assertNotEqual(out, parrot.__doc__)
 
     def test_explicit(self):
         from myfixes.fix_explicit import FixExplicit

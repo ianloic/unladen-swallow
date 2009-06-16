@@ -102,7 +102,8 @@ class Test(unittest.TestCase):
         self.mkhier(hier)
 
         import t2
-        self.assertEqual(t2.__doc__, "doc for t2")
+        if sys.flags.optimize <= 1:
+            self.assertEqual(t2.__doc__, "doc for t2")
 
         import t2.sub
         import t2.sub.subsub
@@ -276,6 +277,9 @@ class Test(unittest.TestCase):
 
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_pkg -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     test_support.run_unittest(__name__)
 
 

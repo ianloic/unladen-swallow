@@ -1,6 +1,7 @@
 # Test case for property
 # more tests are in test_descr
 
+import sys
 import unittest
 from test.test_support import run_unittest
 
@@ -75,7 +76,8 @@ class PropertyTests(unittest.TestCase):
         base.spam = 20
         self.assertEqual(base.spam, 20)
         self.assertEqual(base._spam, 20)
-        self.assertEqual(base.__class__.spam.__doc__, "BaseClass.getter")
+        if sys.flags.optimize <= 1:
+            self.assertEqual(base.__class__.spam.__doc__, "BaseClass.getter")
 
     def test_property_decorator_subclass(self):
         # see #1620
@@ -83,7 +85,8 @@ class PropertyTests(unittest.TestCase):
         self.assertRaises(PropertyGet, getattr, sub, "spam")
         self.assertRaises(PropertySet, setattr, sub, "spam", None)
         self.assertRaises(PropertyDel, delattr, sub, "spam")
-        self.assertEqual(sub.__class__.spam.__doc__, "SubClass.getter")
+        if sys.flags.optimize <= 1:
+            self.assertEqual(sub.__class__.spam.__doc__, "SubClass.getter")
 
     def test_property_decorator_doc(self):
         base = PropertyDocBase()
@@ -92,6 +95,10 @@ class PropertyTests(unittest.TestCase):
         self.assertEqual(sub.__class__.spam.__doc__, "spam spam spam")
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_property --",
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
     run_unittest(PropertyTests)
 
 if __name__ == '__main__':

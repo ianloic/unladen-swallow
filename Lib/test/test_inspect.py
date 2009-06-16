@@ -178,12 +178,14 @@ class TestRetrievingSourceCode(GetSourceBase):
         self.assertEqual(functions, [('eggs', mod.eggs),
                                      ('spam', mod.spam)])
 
-    def test_getdoc(self):
-        self.assertEqual(inspect.getdoc(mod), 'A module docstring.')
-        self.assertEqual(inspect.getdoc(mod.StupidGit),
-                         'A longer,\n\nindented\n\ndocstring.')
-        self.assertEqual(inspect.getdoc(git.abuse),
-                         'Another\n\ndocstring\n\ncontaining\n\ntabs')
+    # This test depends on docstrings, which are omitted with -OO.
+    if sys.flags.optimize <= 1:
+        def test_getdoc(self):
+            self.assertEqual(inspect.getdoc(mod), 'A module docstring.')
+            self.assertEqual(inspect.getdoc(mod.StupidGit),
+                             'A longer,\n\nindented\n\ndocstring.')
+            self.assertEqual(inspect.getdoc(git.abuse),
+                             'Another\n\ndocstring\n\ncontaining\n\ntabs')
 
     def test_cleandoc(self):
         self.assertEqual(inspect.cleandoc('An\n    indented\n    docstring.'),
@@ -490,6 +492,10 @@ class TestClassesAndFunctions(unittest.TestCase):
         self.assert_(('datablob', 'data', A) in attrs, 'missing data')
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_inspect --"
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
     run_unittest(TestDecorators, TestRetrievingSourceCode, TestOneliners,
                  TestBuggyCases,
                  TestInterpreterStack, TestClassesAndFunctions, TestPredicates)

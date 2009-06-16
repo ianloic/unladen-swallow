@@ -4,6 +4,7 @@ from test import test_support
 import threading
 import weakref
 import gc
+import sys
 
 class Weak(object):
     pass
@@ -70,7 +71,12 @@ class ThreadingLocalTest(unittest.TestCase):
 
 def test_main():
     suite = unittest.TestSuite()
-    suite.addTest(DocTestSuite('_threading_local'))
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_threading_local --",
+        print >>sys.stderr, "skipping some tests due to -O flag."
+        sys.stderr.flush()
+    else:
+        suite.addTest(DocTestSuite('_threading_local'))
     suite.addTest(unittest.makeSuite(ThreadingLocalTest))
 
     try:
@@ -78,15 +84,16 @@ def test_main():
     except ImportError:
         pass
     else:
-        import _threading_local
-        local_orig = _threading_local.local
-        def setUp(test):
-            _threading_local.local = _local
-        def tearDown(test):
-            _threading_local.local = local_orig
-        suite.addTest(DocTestSuite('_threading_local',
-                                   setUp=setUp, tearDown=tearDown)
-                      )
+        if sys.flags.optimize <= 1:
+            import _threading_local
+            local_orig = _threading_local.local
+            def setUp(test):
+                _threading_local.local = _local
+            def tearDown(test):
+                _threading_local.local = local_orig
+            suite.addTest(DocTestSuite('_threading_local',
+                                       setUp=setUp, tearDown=tearDown)
+                          )
 
     test_support.run_unittest(suite)
 

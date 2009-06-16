@@ -21,8 +21,10 @@ def additional_tests():
     import json.encoder
     import json.decoder
     suite = unittest.TestSuite()
-    for mod in (json, json.encoder, json.decoder):
-        suite.addTest(doctest.DocTestSuite(mod))
+    # These tests depend on docstrings, which are omitted when -OO is given.
+    if sys.flags.optimize <= 1:
+        for mod in (json, json.encoder, json.decoder):
+            suite.addTest(doctest.DocTestSuite(mod))
     return suite
 
 def main():

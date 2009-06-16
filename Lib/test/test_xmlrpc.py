@@ -417,17 +417,21 @@ class SimpleServerTestCase(unittest.TestCase):
                 # protocol error; provide additional information in test output
                 self.fail("%s\n%s" % (e, getattr(e, "headers", "")))
 
-    def test_introspection3(self):
-        try:
-            # test native doc
-            p = xmlrpclib.ServerProxy('http://localhost:%d' % PORT)
-            myfunction = p.system.methodHelp('my_function')
-            self.assertEqual(myfunction, 'This is my function')
-        except (xmlrpclib.ProtocolError, socket.error), e:
-            # ignore failures due to non-blocking socket 'unavailable' errors
-            if not is_unavailable_exception(e):
-                # protocol error; provide additional information in test output
-                self.fail("%s\n%s" % (e, getattr(e, "headers", "")))
+    # This test relies on docstrings, which are omitted when -OO is passed.
+    if sys.flags.optimize <= 1:
+        def test_introspection3(self):
+            try:
+                # test native doc
+                p = xmlrpclib.ServerProxy('http://localhost:%d' % PORT)
+                myfunction = p.system.methodHelp('my_function')
+                self.assertEqual(myfunction, 'This is my function')
+            except (xmlrpclib.ProtocolError, socket.error), e:
+                # ignore failures due to non-blocking socket 'unavailable'
+                # errors
+                if not is_unavailable_exception(e):
+                    # protocol error; provide additional information in test
+                    # output
+                    self.fail("%s\n%s" % (e, getattr(e, "headers", "")))
 
     def test_introspection4(self):
         # the SimpleXMLRPCServer doesn't support signatures, but
@@ -640,6 +644,9 @@ class CGIHandlerTestCase(unittest.TestCase):
         os.remove(test_support.TESTFN)
 
 def test_main():
+    if sys.flags.optimize >= 2:
+        print >>sys.stderr, "test_xmlrpc -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     xmlrpc_tests = [XMLRPCTestCase, HelperTestCase, DateTimeTestCase,
          BinaryTestCase, FaultTestCase]
 
