@@ -416,18 +416,16 @@ coverage:
 # Only build LLVM if we need to.
 llvm:
 	@case @BUILD_LLVM@ in \
-	0) echo "Skipping building llvm" && mkdir -p Util;; \
+	0) touch llvm && echo "Skipping building llvm" && mkdir -p Util;; \
 	1) $(MAKE) -C Util/llvm libs-only;; \
 	esac
-	touch llvm
 
 # Only build clang and llc if we need to.
 llvm_tools: llvm
 	@case @BUILD_LLVM@ in \
-	0) echo "Skipping building clang and llc";; \
+	0) touch llvm_tools && echo "Skipping building clang and llc";; \
 	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
 	esac
-	touch llvm_tools
 
 
 # Build the interpreter

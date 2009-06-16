@@ -3723,7 +3723,9 @@ then
         [], [echo "Did not find clang in the expected path"; exit 1])
     AC_CHECK_FILE("$LLVM_PATH/bin/llc",
         [], [echo "Did not find llc in the expected path"; exit 1])
-else AC_MSG_RESULT(built-in); LLVM_PATH="";
+else
+    AC_MSG_RESULT(built-in)
+    LLVM_PATH=""
 fi],
 [AC_MSG_RESULT(built-in)])
 
@@ -3738,6 +3740,10 @@ then
 else
     BUILD_LLVM=1
     LLVM_BASE="Util/llvm"
+    # llvm and llvm_tools are empty make targets that touch these files so they
+    # won't be rerun every time.  However, if the user uses the built-in version
+    # of LLVM, we need those targets to run, so we need to remove those files.
+    rm -f llvm llvm_tools
     # Re-assigning $ac_configure_args is a hack to pass different
     # arguments to LLVM's configure script due to a limitation in
     # AC_CONFIG_SUBDIRS.  Since AC_CONFIG_SUBDIRS only runs the configure

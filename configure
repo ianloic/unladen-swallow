@@ -25768,8 +25768,10 @@ else
   echo "Did not find llc in the expected path"; exit 1
 fi
 
-else { $as_echo "$as_me:$LINENO: result: built-in" >&5
-$as_echo "built-in" >&6; }; LLVM_PATH="";
+else
+    { $as_echo "$as_me:$LINENO: result: built-in" >&5
+$as_echo "built-in" >&6; }
+    LLVM_PATH=""
 fi
 else
   { $as_echo "$as_me:$LINENO: result: built-in" >&5
@@ -25788,6 +25790,10 @@ then
 else
     BUILD_LLVM=1
     LLVM_BASE="Util/llvm"
+    # llvm and llvm_tools are empty make targets that touch these files so they
+    # won't be rerun every time.  However, if the user uses the built-in version
+    # of LLVM, we need those targets to run, so we need to remove those files.
+    rm -f llvm llvm_tools
     # Re-assigning $ac_configure_args is a hack to pass different
     # arguments to LLVM's configure script due to a limitation in
     # AC_CONFIG_SUBDIRS.  Since AC_CONFIG_SUBDIRS only runs the configure
@@ -25795,6 +25801,7 @@ else
     # arguments at any time it would make a difference.  The practical
     # effect is that config.status passes some extra arguments when it
     # re-runs the Python configure script.
+    # Keep these arguments in sync with Util/llvm/install-llvm.sh.
     ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
     if test "$Py_DEBUG" = 'true' ; then
         ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
@@ -25810,6 +25817,9 @@ else
 subdirs="$subdirs Util/llvm"
 
 fi
+
+
+
 
 for h in `(cd $srcdir;echo Python/thread_*.h)`
 do
