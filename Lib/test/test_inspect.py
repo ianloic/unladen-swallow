@@ -493,7 +493,7 @@ class TestClassesAndFunctions(unittest.TestCase):
 
 def test_main():
     if sys.flags.optimize >= 2:
-        print >>sys.stderr, "test_inspect --"
+        print >>sys.stderr, "test_inspect --",
         print >>sys.stderr, "skipping some tests due to -O flag."
         sys.stderr.flush()
     run_unittest(TestDecorators, TestRetrievingSourceCode, TestOneliners,
