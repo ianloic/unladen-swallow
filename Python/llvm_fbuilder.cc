@@ -118,15 +118,6 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->unwind_target_index_addr_ = this->builder_.CreateAlloca(
         Type::Int32Ty, NULL, "unwind_target_index_addr");
 
-#ifdef WITH_TSC
-    Function *timer_function = this->GetGlobalFunction<void (int)>(
-            "_PyLogEvent");
-    this->builder_.CreateCall(
-            timer_function,
-            ConstantInt::get(PyTypeBuilder<int>::get(),
-                             CALL_ENTER_LLVM));
-#endif
-
     this->tstate_ = this->builder_.CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
             "_PyLlvm_WrapPyThreadState_GET"));
@@ -277,6 +268,14 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     FillDoReturnBlock();
 
     this->builder_.SetInsertPoint(start);
+#ifdef WITH_TSC
+    Function *timer_function = this->GetGlobalFunction<void (int)>(
+            "_PyLogEvent");
+    this->builder_.CreateCall(
+            timer_function,
+            ConstantInt::get(PyTypeBuilder<int>::get(),
+                             CALL_ENTER_LLVM));
+#endif
 }
 
 void

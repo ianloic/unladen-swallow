@@ -833,10 +833,6 @@ PyEval_EvalFrame(PyFrameObject *f)
 		goto exit_eval_frame;
 	}
 
-	// Note that this goes after the LLVM handling code so we don't log
-	// this event when calling LLVM functions.
-	PY_LOG_EVENT(CALL_ENTER_EVAL);
-
 	if ((f->f_bailed_from_llvm == _PYFRAME_NO_BAIL ||
 	     f->f_bailed_from_llvm == _PYFRAME_TRACE_ON_ENTRY) &&
 	    tstate->use_tracing) {
@@ -887,6 +883,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 	why = WHY_NOT;
 	w = NULL;
+
+	// Note that this goes after the LLVM handling code so we don't log
+	// this event when calling LLVM functions. Do this before the throwflag
+	// check below to avoid mismatched enter/exit events in the log.
+	PY_LOG_EVENT(CALL_ENTER_EVAL);
 
 	if (f->f_throwflag) { /* support for generator.throw() */
 		why = WHY_EXCEPTION;
