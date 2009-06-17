@@ -242,20 +242,15 @@ public:
 template<> class TypeBuilder<PyTryBlock, false> {
 public:
     static const StructType *get() {
-        static const StructType *const result = Create();
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTryBlock struct.
+                                 "struct.PyTryBlock"));
         return result;
     }
     DEFINE_FIELD(PyTryBlock, b_type)
     DEFINE_FIELD(PyTryBlock, b_handler)
     DEFINE_FIELD(PyTryBlock, b_level)
-
-private:
-    static const StructType *Create() {
-        const Type *int_type = PyTypeBuilder<int>::get();
-        return StructType::get(
-            // b_type, b_handler, b_level
-            int_type, int_type, int_type, NULL);
-    }
 };
 
 template<> class TypeBuilder<PyFrameObject, false> {

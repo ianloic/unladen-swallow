@@ -205,6 +205,14 @@ private:
     /// until it gets there, decref'ing as it goes.
     void PopAndDecrefTo(llvm::Value *target_stack_pointer);
 
+    /// The PyFrameObject holds several values, like the block stack
+    /// and stack pointer, that we store in allocas inside this
+    /// function.  When we suspend or resume a generator, or bail out
+    /// to the interpreter, we need to transfer those values between
+    /// the frame and the allocas.
+    void CopyToFrameObject();
+    void CopyFromFrameObject();
+
     /// Returns the difference between the current stack pointer and
     /// the base of the stack.
     llvm::Value *GetStackLevel();
@@ -244,6 +252,9 @@ private:
     // function will be looked up in Python's C runtime.
     template<typename T>
     llvm::Function *GetGlobalFunction(const std::string &name);
+
+    // Copies the elements from array[0] to array[N-1] to target, bytewise.
+    void MemCpy(llvm::Value *target, llvm::Value *array, llvm::Value *N);
 
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
@@ -414,6 +425,11 @@ private:
     llvm::Value *freevars_;
     llvm::Value *f_lineno_addr_;
     llvm::Value *f_lasti_addr_;
+    // These two fields correspond to the f_blockstack and f_iblock
+    // fields in the frame object.  They get explicitly copied back
+    // and forth when the frame escapes.
+    llvm::Value *blockstack_addr_;
+    llvm::Value *num_blocks_addr_;
 
     llvm::BasicBlock *unreachable_block_;
 

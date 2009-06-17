@@ -17,6 +17,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
+#include "llvm/Intrinsics.h"
 #include "llvm/Module.h"
 #include "llvm/Type.h"
 
@@ -24,6 +25,7 @@
 
 struct PyExcInfo;
 
+namespace Intrinsic = llvm::Intrinsic;
 using llvm::BasicBlock;
 using llvm::CallInst;
 using llvm::Constant;
@@ -117,6 +119,12 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         Type::Int8Ty, NULL, "unwind_reason_addr");
     this->unwind_target_index_addr_ = this->builder_.CreateAlloca(
         Type::Int32Ty, NULL, "unwind_target_index_addr");
+    this->blockstack_addr_ = this->builder_.CreateAlloca(
+        PyTypeBuilder<PyTryBlock>::get(),
+        ConstantInt::get(Type::Int32Ty, CO_MAXBLOCKS),
+        "blockstack_addr");
+    this->num_blocks_addr_ = this->builder_.CreateAlloca(
+        PyTypeBuilder<char>::get(), NULL, "num_blocks_addr");
 
     this->tstate_ = this->builder_.CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
@@ -124,26 +132,24 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->stack_bottom_ = this->builder_.CreateLoad(
         FrameTy::f_valuestack(this->builder_, this->frame_),
         "stack_bottom");
-    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
     if (this->is_generator_) {
-      // When we're re-entering a generator, we have to read the top of
-      // the stack from the frame.
-      Value *initial_stack_pointer =
-          this->builder_.CreateLoad(
-              f_stacktop,
-              "initial_stack_pointer");
-      this->builder_.CreateStore(initial_stack_pointer,
-                                 this->stack_pointer_addr_);
+        // When we're re-entering a generator, we have to copy the stack
+        // pointer and block stack from the frame.
+        this->CopyFromFrameObject();
     } else {
-      // If this isn't a generator, the stack pointer always starts at
-      // the bottom of the stack.
-      this->builder_.CreateStore(this->stack_bottom_,
-                                 this->stack_pointer_addr_);
+        // If this isn't a generator, the stack pointer always starts at
+        // the bottom of the stack.
+        this->builder_.CreateStore(this->stack_bottom_,
+                                   this->stack_pointer_addr_);
+        /* f_stacktop remains NULL unless yield suspends the frame. */
+        this->builder_.CreateStore(
+            Constant::getNullValue(PyTypeBuilder<PyObject **>::get()),
+            FrameTy::f_stacktop(this->builder_, this->frame_));
+
+        this->builder_.CreateStore(
+            ConstantInt::get(PyTypeBuilder<char>::get(), 0),
+            this->num_blocks_addr_);
     }
-    /* f_stacktop remains NULL unless yield suspends the frame. */
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject **>::get()),
-        f_stacktop);
 
     Value *use_tracing = this->builder_.CreateLoad(
         ThreadStateTy::use_tracing(this->builder_, this->tstate_),
@@ -340,17 +346,17 @@ LlvmFunctionBuilder::FillUnwindBlock()
             BasicBlock::Create("unwind_loop_body", this->function_);
 
         this->FallThroughTo(unwind_loop_header);
-        // Continue looping if frame->f_iblock > 0.
-        Value *blocks_left = this->builder_.CreateLoad(
-            FrameTy::f_iblock(this->builder_, this->frame_));
+        // Continue looping if we still have blocks left on the blockstack.
+        Value *blocks_left = this->builder_.CreateLoad(this->num_blocks_addr_);
         this->builder_.CreateCondBr(this->IsPositive(blocks_left),
                                     unwind_loop_body, pop_remaining_objects);
 
         this->builder_.SetInsertPoint(unwind_loop_body);
-        Value *popped_block = this->builder_.CreateCall(
-            this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
-                "PyFrame_BlockPop"),
-            this->frame_);
+        Value *popped_block = this->builder_.CreateCall2(
+            this->GetGlobalFunction<PyTryBlock *(PyTryBlock *, char *)>(
+                "_PyLlvm_Frame_BlockPop"),
+            this->blockstack_addr_,
+            this->num_blocks_addr_);
         Value *block_type = this->builder_.CreateLoad(
             PyTypeBuilder<PyTryBlock>::b_type(this->builder_, popped_block),
             "block_type");
@@ -383,13 +389,17 @@ LlvmFunctionBuilder::FillUnwindBlock()
         this->builder_.SetInsertPoint(unwind_continue);
         // Put the loop block back on the stack, clear the unwind reason,
         // then jump to the proper FOR_ITER.
-        this->builder_.CreateCall4(
-            this->GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
-                "PyFrame_BlockSetup"),
-            this->frame_,
+        Value *args[] = {
+            this->blockstack_addr_,
+            this->num_blocks_addr_,
             block_type,
             block_handler,
-            block_level);
+            block_level
+        };
+        this->builder_.CreateCall(
+            this->GetGlobalFunction<void(PyTryBlock *, char *, int, int, int)>(
+                "_PyLlvm_Frame_BlockSetup"),
+            args, array_endof(args));
         this->builder_.CreateStore(
             ConstantInt::get(Type::Int8Ty, UNWIND_NOUNWIND),
             this->unwind_reason_addr_);
@@ -670,10 +680,8 @@ LlvmFunctionBuilder::FillBailToInterpreterBlock()
     this->builder_.CreateStore(
         ConstantInt::get(PyTypeBuilder<int>::get(), 0),
         FrameTy::f_use_llvm(this->builder_, this->frame_));
-    // Save the stack pointer.
-    this->builder_.CreateStore(
-        this->builder_.CreateLoad(this->stack_pointer_addr_),
-        FrameTy::f_stacktop(this->builder_, this->frame_));
+    // Fill the frame object with any information that was in allocas here.
+    this->CopyToFrameObject();
 
     // Tail-call back to the interpreter.  As of 2009-06-12 this isn't
     // codegen'ed as a tail call
@@ -719,6 +727,65 @@ LlvmFunctionBuilder::CreateAllocaInEntryBlock(
     // in the block.
     return new llvm::AllocaInst(alloca_type, array_size, name,
                                 this->function_->begin()->begin());
+}
+
+void
+LlvmFunctionBuilder::MemCpy(llvm::Value *target,
+                            llvm::Value *array, llvm::Value *N)
+{
+    const Type *len_type[] = { Type::Int64Ty };
+    Value *memcpy = Intrinsic::getDeclaration(
+        this->module_, Intrinsic::memcpy, len_type, 1);
+    assert(target->getType() == array->getType() &&
+           "memcpy's source and destination should have the same type.");
+    // Calculate the length as int64_t(&array_type(NULL)[N]).
+    Value *length = this->builder_.CreatePtrToInt(
+        this->builder_.CreateGEP(Constant::getNullValue(array->getType()), N),
+        Type::Int64Ty);
+    this->builder_.CreateCall4(
+        memcpy,
+        this->builder_.CreateBitCast(target, PyTypeBuilder<char*>::get()),
+        this->builder_.CreateBitCast(array, PyTypeBuilder<char*>::get()),
+        length,
+        // Unknown alignment.
+        ConstantInt::get(Type::Int32Ty, 0));
+}
+
+void
+LlvmFunctionBuilder::CopyToFrameObject()
+{
+    // Save the current stack pointer into the frame.
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
+    this->builder_.CreateStore(stack_pointer, f_stacktop);
+    Value *num_blocks = this->builder_.CreateLoad(this->num_blocks_addr_);
+    this->builder_.CreateStore(num_blocks,
+                               FrameTy::f_iblock(this->builder_, this->frame_));
+    this->MemCpy(this->builder_.CreateStructGEP(
+                     FrameTy::f_blockstack(this->builder_, this->frame_), 0),
+                 this->blockstack_addr_, num_blocks);
+}
+
+void
+LlvmFunctionBuilder::CopyFromFrameObject()
+{
+    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
+    Value *stack_pointer =
+        this->builder_.CreateLoad(f_stacktop,
+                                  "stack_pointer_from_frame");
+    this->builder_.CreateStore(stack_pointer, this->stack_pointer_addr_);
+    /* f_stacktop remains NULL unless yield suspends the frame. */
+    this->builder_.CreateStore(
+        Constant::getNullValue(PyTypeBuilder<PyObject **>::get()),
+        f_stacktop);
+
+    Value *num_blocks = this->builder_.CreateLoad(
+        FrameTy::f_iblock(this->builder_, this->frame_));
+    this->builder_.CreateStore(num_blocks, this->num_blocks_addr_);
+    this->MemCpy(this->blockstack_addr_,
+                 this->builder_.CreateStructGEP(
+                     FrameTy::f_blockstack(this->builder_, this->frame_), 0),
+                 num_blocks);
 }
 
 void
@@ -1589,10 +1656,11 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
 void
 LlvmFunctionBuilder::POP_BLOCK()
 {
-    Value *block_info = this->builder_.CreateCall(
-        this->GetGlobalFunction<PyTryBlock *(PyFrameObject *)>(
-            "PyFrame_BlockPop"),
-        this->frame_);
+    Value *block_info = this->builder_.CreateCall2(
+        this->GetGlobalFunction<PyTryBlock *(PyTryBlock *, char *)>(
+            "_PyLlvm_Frame_BlockPop"),
+        this->blockstack_addr_,
+        this->num_blocks_addr_);
     Value *pop_to_level = this->builder_.CreateLoad(
         PyTypeBuilder<PyTryBlock>::b_level(this->builder_, block_info));
     Value *pop_to_addr =
@@ -1796,12 +1864,11 @@ LlvmFunctionBuilder::YIELD_VALUE()
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), this->f_lasti_);
     this->yield_resume_switch_->addCase(yield_number, yield_resume);
 
-    Value *retval = Pop();
+    Value *retval = this->Pop();
 
-    // Save the current stack pointer into the frame.
-    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
-    Value *f_stacktop = FrameTy::f_stacktop(this->builder_, this->frame_);
-    this->builder_.CreateStore(stack_pointer, f_stacktop);
+    // Save everything to the frame object so it'll be there when we
+    // resume from the yield.
+    this->CopyToFrameObject();
 
     // Save the right block to jump back to when we resume this generator.
     this->builder_.CreateStore(yield_number, this->f_lasti_addr_);
@@ -2643,13 +2710,15 @@ LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler)
     Value *stack_level = this->GetStackLevel();
     Value *unwind_target_index = this->AddUnwindTarget(handler);
     Function *blocksetup =
-        this->GetGlobalFunction<void(PyFrameObject *, int, int, int)>(
-            "PyFrame_BlockSetup");
-    this->builder_.CreateCall4(
-        blocksetup, this->frame_,
+        this->GetGlobalFunction<void(PyTryBlock *, char *, int, int, int)>(
+            "_PyLlvm_Frame_BlockSetup");
+    Value *args[] = {
+        this->blockstack_addr_, this->num_blocks_addr_,
         ConstantInt::get(PyTypeBuilder<int>::get(), block_type),
         unwind_target_index,
-        stack_level);
+        stack_level
+    };
+    this->builder_.CreateCall(blocksetup, args, array_endof(args));
 }
 
 void

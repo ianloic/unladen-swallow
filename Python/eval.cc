@@ -971,10 +971,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 						    &instr_prev);
 			/* Reload possibly changed frame fields */
 			JUMPTO(f->f_lasti);
-			if (f->f_stacktop != NULL) {
-				stack_pointer = f->f_stacktop;
-				f->f_stacktop = NULL;
-			}
+			assert(f->f_stacktop != NULL);
+			stack_pointer = f->f_stacktop;
+			f->f_stacktop = NULL;
 			if (err) {
 				/* trace function raised an exception */
 				why = WHY_EXCEPTION;

@@ -719,7 +719,8 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	return f;
 }
 
-/* Block management */
+/* Block management. Keep these in sync with the definitions in
+   Python/llvm_inline_functions.c. */
 
 void
 PyFrame_BlockSetup(PyFrameObject *f, int type, int handler, int level)

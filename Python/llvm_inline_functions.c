@@ -88,3 +88,30 @@ _PyLlvm_WrapPyThreadState_GET()
 {
     return PyThreadState_GET();
 }
+
+/* Keep these in sync with the definitions of PyFrame_Block{Setup,Pop}
+   in frameobject.c. */
+void __attribute__((always_inline))
+_PyLlvm_Frame_BlockSetup(PyTryBlock *blocks, char *num_blocks,
+                         int type, int handler, int level)
+{
+    PyTryBlock *b;
+    if (*num_blocks >= CO_MAXBLOCKS)
+        Py_FatalError("XXX block stack overflow");
+    b = &blocks[*num_blocks];
+    b->b_type = type;
+    b->b_level = level;
+    b->b_handler = handler;
+    ++*num_blocks;
+}
+
+PyTryBlock * __attribute__((always_inline))
+_PyLlvm_Frame_BlockPop(PyTryBlock *blocks, char *num_blocks)
+{
+    PyTryBlock *b;
+    if (*num_blocks <= 0)
+        Py_FatalError("XXX block stack underflow");
+    --*num_blocks;
+    b = &blocks[*num_blocks];
+    return b;
+}
