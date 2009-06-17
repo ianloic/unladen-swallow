@@ -192,14 +192,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->varnames_ = this->builder_.CreateLoad(
         CodeTy::co_varnames(this->builder_, code),
         "varnames");
-    Value *consts_tuple =  // (PyTupleObject*)code->co_consts
-        this->builder_.CreateBitCast(
-            this->builder_.CreateLoad(
-                CodeTy::co_consts(this->builder_, code)),
-            PyTypeBuilder<PyTupleObject*>::get());
-    // Get the address of the const_tuple's first item, for convenient
-    // indexing of all its items.
-    this->consts_ = this->GetTupleItemSlot(consts_tuple, 0);
+
     Value *names_tuple = this->builder_.CreateBitCast(
         this->builder_.CreateLoad(
             CodeTy::co_names(this->builder_, code)),
@@ -824,9 +817,16 @@ LlvmFunctionBuilder::PropagateException()
 void
 LlvmFunctionBuilder::LOAD_CONST(int index)
 {
-    Value *const_ = this->builder_.CreateLoad(
-        this->builder_.CreateGEP(this->consts_,
-                                 ConstantInt::get(Type::Int32Ty, index)));
+    PyObject *co_consts = this->code_object_->co_consts;
+    // TODO(jyasskin): we'll eventually want to represent these with
+    // llvm::ConstantStructs so that LLVM has more information about them.
+    // Casting the pointers to ints makes the structs opaque, which hinders
+    // constant propagation, etc.
+    Value *const_ = ConstantExpr::getIntToPtr(
+        ConstantInt::get(
+            Type::Int64Ty,
+            reinterpret_cast<uintptr_t>(PyTuple_GET_ITEM(co_consts, index))),
+        PyTypeBuilder<PyObject*>::get());
     this->IncRef(const_);
     this->Push(const_);
 }

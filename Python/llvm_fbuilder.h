@@ -410,7 +410,6 @@ private:
     llvm::Value *names_;
     llvm::Value *globals_;
     llvm::Value *builtins_;
-    llvm::Value *consts_;
     llvm::Value *fastlocals_;
     llvm::Value *freevars_;
     llvm::Value *f_lineno_addr_;
