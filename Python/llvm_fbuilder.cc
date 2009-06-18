@@ -2280,7 +2280,8 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
         this->RichCompare(lhs, rhs, cmp_op);
         return;
     default:
-        Py_FatalError("unknown COMPARE_OP oparg");;
+        Py_FatalError("unknown COMPARE_OP oparg");
+        return;  // Not reached.
     }
     Value *value = this->builder_.CreateSelect(
         result,
