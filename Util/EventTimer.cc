@@ -35,11 +35,11 @@ class _PyEventTimer {
 public:
     ~_PyEventTimer();
 
-    static const char * const EventToString(_PyEventId event);
+    static const char * const EventToString(_PyTscEventId event);
 
-    typedef std::vector< _PyEvent > EventVector;
+    typedef std::vector<_PyTscEvent> EventVector;
 
-    void LogEvent(_PyEventId event);
+    void LogEvent(_PyTscEventId event);
 
     void PrintData();
 
@@ -101,11 +101,11 @@ read_tsc() {
 /// _PyEventTimer
 
 void
-_PyLogEvent(_PyEventId event) {
+_PyLog_TscEvent(_PyTscEventId event) {
     event_timer->LogEvent(event);
 }
 
-// This must be kept in sync with the Event enum in EventTimer.h
+// This must be kept in sync with the _PyTscEventId enum in EventTimer.h
 static const char * const event_names[] = {
     "CALL_START_EVAL",
     "CALL_START_LLVM",
@@ -125,16 +125,16 @@ static const char * const event_names[] = {
 };
 
 const char * const
-_PyEventTimer::EventToString(_PyEventId event_id) {
+_PyEventTimer::EventToString(_PyTscEventId event_id) {
     return event_names[(int)event_id];
 }
 
 void
-_PyEventTimer::LogEvent(_PyEventId event_id) {
+_PyEventTimer::LogEvent(_PyTscEventId event_id) {
     // XXX(rnk): This probably has more overhead than we'd like.
     PyThreadState *tstate = PyThreadState_GET();
     if (tstate->interp->tscdump) {
-        _PyEvent event;
+        _PyTscEvent event;
         event.thread_id = PyThread_get_thread_ident();
         event.event_id = event_id;
         event.time = read_tsc();

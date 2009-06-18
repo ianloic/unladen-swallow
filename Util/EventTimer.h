@@ -24,30 +24,30 @@ typedef enum {
     EXCEPT_RAISE_LLVM,      // Exception raised in LLVM
     EXCEPT_CATCH_EVAL,      // Exception caught in eval loop
     EXCEPT_CATCH_LLVM,      // Exception caught in LLVM
-} _PyEventId;
+} _PyTscEventId;
 
 typedef unsigned PY_LONG_LONG tsc_t;
 
 typedef struct {
     long thread_id;
-    _PyEventId event_id;
+    _PyTscEventId event_id;
     tsc_t time;
-} _PyEvent;
+} _PyTscEvent;
 
 /// Log an event and the TSC when it occurred.
 #ifdef __cplusplus
-extern "C" PyAPI_FUNC(void) _PyLogEvent(_PyEventId event);
+extern "C" PyAPI_FUNC(void) _PyLog_TscEvent(_PyTscEventId event);
 #else
-extern PyAPI_FUNC(void) _PyLogEvent(_PyEventId event);
+extern PyAPI_FUNC(void) _PyLog_TscEvent(_PyTscEventId event);
 #endif
 
 /// Simple macro that wraps up the ifdef WITH_TSC check so that callers don't
 /// have to spell it out in their code.
-#define PY_LOG_EVENT(event) _PyLogEvent(event)
+#define PY_LOG_TSC_EVENT(event) _PyLog_TscEvent(event)
 
 #else
 
-#define PY_LOG_EVENT(event)
+#define PY_LOG_TSC_EVENT(event)
 
 #endif  // WITH_TSC
 

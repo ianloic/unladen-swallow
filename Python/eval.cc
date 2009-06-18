@@ -38,7 +38,7 @@ _PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	// this enum should be CALL_ENTER_C.  However, most calls to C
 	// functions are simple and are fast-tracked through the CALL_FUNCTION
 	// opcode.
-	PY_LOG_EVENT(CALL_ENTER_PYOBJ_CALL);
+	PY_LOG_TSC_EVENT(CALL_ENTER_PYOBJ_CALL);
 	return PyObject_Call(func, arg, kw);
 }
 
@@ -887,7 +887,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	// Note that this goes after the LLVM handling code so we don't log
 	// this event when calling LLVM functions. Do this before the throwflag
 	// check below to avoid mismatched enter/exit events in the log.
-	PY_LOG_EVENT(CALL_ENTER_EVAL);
+	PY_LOG_TSC_EVENT(CALL_ENTER_EVAL);
 
 	if (f->f_throwflag) { /* support for generator.throw() */
 		why = WHY_EXCEPTION;
@@ -1771,7 +1771,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			v = POP();
 			w = POP();
 		_raise_varargs_common:
-                        PY_LOG_EVENT(EXCEPT_RAISE_EVAL);
+                        PY_LOG_TSC_EVENT(EXCEPT_RAISE_EVAL);
 			why = do_raise(w, v, u);
 			break;
 
@@ -2390,7 +2390,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(CALL_FUNCTION)
 		{
-			PY_LOG_EVENT(CALL_START_EVAL);
+			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			PyObject **sp;
 			PCALL(PCALL_ALL);
 			sp = stack_pointer;
@@ -2405,7 +2405,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		}
 
 		TARGET(CALL_FUNCTION_VAR)
-			PY_LOG_EVENT(CALL_START_EVAL);
+			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
 			                                CALL_FLAG_VAR);
 			if (err < 0) {
@@ -2415,7 +2415,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(CALL_FUNCTION_KW)
-			PY_LOG_EVENT(CALL_START_EVAL);
+			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
 							CALL_FLAG_KW);
 			if (err < 0) {
@@ -2425,7 +2425,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(CALL_FUNCTION_VAR_KW)
-			PY_LOG_EVENT(CALL_START_EVAL);
+			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
 						CALL_FLAG_VAR | CALL_FLAG_KW);
 			if (err < 0) {
@@ -2633,7 +2633,7 @@ fast_block_end:
 							&exc, &val, &tb);
 						_PyEval_SetExcInfo(tstate,
 							     exc, val, tb);
-                                                PY_LOG_EVENT(
+                                                PY_LOG_TSC_EVENT(
                                                         EXCEPT_CATCH_EVAL);
 					}
 					if (tb == NULL) {
@@ -3232,7 +3232,7 @@ do_raise(PyObject *type, PyObject *value, PyObject *tb)
 int
 _PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
 {
-        PY_LOG_EVENT(EXCEPT_RAISE_LLVM);
+        PY_LOG_TSC_EVENT(EXCEPT_RAISE_LLVM);
 	enum why_code reason = do_raise(type, value, tb);
 	switch (reason) {
 	case WHY_EXCEPTION:
@@ -3740,9 +3740,9 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 				// created yet, setting the optimization level
 				// will create it.
 				int r;
-				PY_LOG_EVENT(LLVM_COMPILE_START);
+				PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
 				r = _PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL);
-				PY_LOG_EVENT(LLVM_COMPILE_END);
+				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
 				if (r < 0)
 					return -1;
 			}
@@ -3751,17 +3751,17 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 	if (co->co_use_llvm && co->co_native_function == NULL) {
 		// To build the native eval function, we need an IR function.
 		if (co->co_llvm_function == NULL) {
-			PY_LOG_EVENT(LLVM_COMPILE_START);
+			PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
 			co->co_llvm_function = _PyCode_To_Llvm(co);
-			PY_LOG_EVENT(LLVM_COMPILE_END);
+			PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
 			if (co->co_llvm_function == NULL) {
 				return -1;
 			}
 		}
 		// Now try to JIT the IR function to machine code.
-		PY_LOG_EVENT(JIT_START);
+		PY_LOG_TSC_EVENT(JIT_START);
 		co->co_native_function = _LlvmFunction_Jit(co->co_llvm_function);
-		PY_LOG_EVENT(JIT_END);
+		PY_LOG_TSC_EVENT(JIT_END);
 		if (co->co_native_function == NULL) {
 			return -1;
 		}
@@ -3778,7 +3778,7 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 		x = NULL; \
 	} \
 	else { \
-		PY_LOG_EVENT(CALL_ENTER_C); \
+		PY_LOG_TSC_EVENT(CALL_ENTER_C); \
 		x = call; \
 		if (tstate->c_profilefunc != NULL) { \
 			if (x == NULL) { \
@@ -3799,7 +3799,7 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 		} \
 	} \
 } else { \
-	PY_LOG_EVENT(CALL_ENTER_C); \
+	PY_LOG_TSC_EVENT(CALL_ENTER_C); \
 	x = call; \
 	}
 

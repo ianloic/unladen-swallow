@@ -70,7 +70,7 @@ _PyLlvm_WrapEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
             &exc_info->exc, &exc_info->val, &exc_info->tb);
         _PyEval_SetExcInfo(tstate,
                            exc_info->exc, exc_info->val, exc_info->tb);
-        PY_LOG_EVENT(EXCEPT_CATCH_LLVM);
+        PY_LOG_TSC_EVENT(EXCEPT_CATCH_LLVM);
     }
     if (exc_info->tb == NULL) {
         Py_INCREF(Py_None);
