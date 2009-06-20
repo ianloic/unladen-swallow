@@ -322,8 +322,9 @@ PYTHON_OBJS=	\
 		$(LIBOBJS) \
 		$(MACHDEP_OBJS) \
 		$(THREADOBJ) \
-		Util/PyTypeBuilder.o \
 		Util/EventTimer.o \
+		Util/PyAliasAnalysis.o \
+		Util/PyTypeBuilder.o \
 		Util/SingleFunctionInliner.o
 
 

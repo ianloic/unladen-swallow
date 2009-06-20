@@ -2,6 +2,7 @@
 
 #include "Python.h"
 
+#include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
 #include "_llvmfunctionobject.h"
 
@@ -109,9 +110,13 @@ PyGlobalLlvmData::InitializeOptimizations()
     // optimizations_2_ consists of all optimizations that improve
     // the code at all.  We don't yet use any profiling data for this,
     // though.
+
+    // Provide Python-specific alias information.
     optimizations_2_.add(llvm::createScalarReplAggregatesPass());
+    optimizations_2_.add(CreatePyAliasAnalysis());
     optimizations_2_.add(llvm::createLICMPass());
     optimizations_2_.add(llvm::createCondPropagationPass());
+    optimizations_2_.add(CreatePyAliasAnalysis());
     optimizations_2_.add(llvm::createGVNPass());
     optimizations_2_.add(llvm::createSCCPPass());
     optimizations_2_.add(llvm::createAggressiveDCEPass());
