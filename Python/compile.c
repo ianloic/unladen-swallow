@@ -78,11 +78,12 @@ It's called a frame block to distinguish it from a basic block in the
 compiler IR.
 */
 
-enum fblocktype { LOOP, EXCEPT, FINALLY_TRY, FINALLY_END };
+enum fblocktype { FOR_LOOP, WHILE_LOOP, EXCEPT, FINALLY_TRY, FINALLY_END };
 
 struct fblockinfo {
 	enum fblocktype fb_type;
 	basicblock *fb_block;
+	basicblock *fb_target;
 };
 
 /* The following items change on entry and exit of code blocks.
@@ -163,10 +164,13 @@ static int compiler_augassign(struct compiler *, stmt_ty);
 static int compiler_visit_slice(struct compiler *, slice_ty,
 				expr_context_ty);
 
+/* top is the basic block representing the top of the loop or try. target
+   is really only relevant for loops, and indicates where a break instruction
+   should jump to. */
 static int compiler_push_fblock(struct compiler *, enum fblocktype,
-				basicblock *);
+				basicblock *top, basicblock *target);
 static void compiler_pop_fblock(struct compiler *, enum fblocktype,
-				basicblock *);
+				basicblock *top, basicblock *target);
 /* Returns true if there is a loop on the fblock stack. */
 static int compiler_in_loop(struct compiler *);
 
@@ -1667,8 +1671,9 @@ compiler_for(struct compiler *c, stmt_ty s)
 	end = compiler_new_block(c);
 	if (start == NULL || end == NULL || cleanup == NULL)
 		return 0;
-	ADDOP_JREL(c, SETUP_LOOP, end);
-	if (!compiler_push_fblock(c, LOOP, start))
+	if (c->u->u_ste->ste_blockstack)
+		ADDOP_JREL(c, SETUP_LOOP, end);
+	if (!compiler_push_fblock(c, FOR_LOOP, start, end))
 		return 0;
 	VISIT(c, expr, s->v.For.iter);
 	ADDOP(c, GET_ITER);
@@ -1678,8 +1683,9 @@ compiler_for(struct compiler *c, stmt_ty s)
 	VISIT_SEQ(c, stmt, s->v.For.body);
 	ADDOP_JABS(c, JUMP_ABSOLUTE, start);
 	compiler_use_next_block(c, cleanup);
-	ADDOP(c, POP_BLOCK);
-	compiler_pop_fblock(c, LOOP, start);
+	if (c->u->u_ste->ste_blockstack)
+		ADDOP(c, POP_BLOCK);
+	compiler_pop_fblock(c, FOR_LOOP, start, end);
 	VISIT_SEQ(c, stmt, s->v.For.orelse);
 	compiler_use_next_block(c, end);
 	return 1;
@@ -1713,9 +1719,10 @@ compiler_while(struct compiler *c, stmt_ty s)
 	else
 		orelse = NULL;
 
-	ADDOP_JREL(c, SETUP_LOOP, end);
+	if (c->u->u_ste->ste_blockstack)
+		ADDOP_JREL(c, SETUP_LOOP, end);
 	compiler_use_next_block(c, loop);
-	if (!compiler_push_fblock(c, LOOP, loop))
+	if (!compiler_push_fblock(c, WHILE_LOOP, loop, end))
 		return 0;
 	if (constant == -1) {
 		VISIT(c, expr, s->v.While.test);
@@ -1730,9 +1737,10 @@ compiler_while(struct compiler *c, stmt_ty s)
 
 	if (constant == -1) {
 		compiler_use_next_block(c, anchor);
-		ADDOP(c, POP_BLOCK);
+		if (c->u->u_ste->ste_blockstack)
+			ADDOP(c, POP_BLOCK);
 	}
-	compiler_pop_fblock(c, LOOP, loop);
+	compiler_pop_fblock(c, WHILE_LOOP, loop, end);
 	if (orelse != NULL) { /* what if orelse is just pass? */
 		compiler_use_next_block(c, orelse);
 		VISIT_SEQ(c, stmt, s->v.While.orelse);
@@ -1743,10 +1751,30 @@ compiler_while(struct compiler *c, stmt_ty s)
 }
 
 static int
+compiler_break(struct compiler *c)
+{
+	if (!compiler_in_loop(c))
+		return compiler_error(c, "'break' outside loop");
+	if (c->u->u_ste->ste_blockstack) {
+		ADDOP(c, BREAK_LOOP);
+	} else {
+		int top = c->u->u_nfblocks - 1;
+		assert(c->u->u_fblock[top].fb_target);
+		if (c->u->u_fblock[top].fb_type == FOR_LOOP) {
+			ADDOP(c, POP_TOP);
+		} else {
+			assert(c->u->u_fblock[top].fb_type == WHILE_LOOP);
+		}
+		ADDOP_JABS(c, JUMP_ABSOLUTE, c->u->u_fblock[top].fb_target);
+	}
+	return 1;
+}
+
+static int
 compiler_continue(struct compiler *c)
 {
 	static const char LOOP_ERROR_MSG[] = "'continue' not properly in loop";
-	static const char IN_FINALLY_ERROR_MSG[] = 
+	static const char IN_FINALLY_ERROR_MSG[] =
 			"'continue' not supported inside 'finally' clause";
 	int i;
 
@@ -1754,12 +1782,14 @@ compiler_continue(struct compiler *c)
 		return compiler_error(c, LOOP_ERROR_MSG);
 	i = c->u->u_nfblocks - 1;
 	switch (c->u->u_fblock[i].fb_type) {
-	case LOOP:
+	case FOR_LOOP:
+	case WHILE_LOOP:
 		ADDOP_JABS(c, JUMP_ABSOLUTE, c->u->u_fblock[i].fb_block);
 		break;
 	case EXCEPT:
 	case FINALLY_TRY:
-		while (--i >= 0 && c->u->u_fblock[i].fb_type != LOOP) {
+		while (--i >= 0 && !(c->u->u_fblock[i].fb_type == FOR_LOOP ||
+		                     c->u->u_fblock[i].fb_type == WHILE_LOOP)) {
 			/* Prevent continue anywhere under a finally
 			      even if hidden in a sub-try or except. */
 			if (c->u->u_fblock[i].fb_type == FINALLY_END)
@@ -1820,19 +1850,19 @@ compiler_try_finally(struct compiler *c, stmt_ty s)
 
 	ADDOP_JREL(c, SETUP_FINALLY, end);
 	compiler_use_next_block(c, body);
-	if (!compiler_push_fblock(c, FINALLY_TRY, body))
+	if (!compiler_push_fblock(c, FINALLY_TRY, body, end))
 		return 0;
 	VISIT_SEQ(c, stmt, s->v.TryFinally.body);
 	ADDOP(c, POP_BLOCK);
-	compiler_pop_fblock(c, FINALLY_TRY, body);
+	compiler_pop_fblock(c, FINALLY_TRY, body, end);
 
 	ADDOP_O(c, LOAD_CONST, Py_None, consts);
 	compiler_use_next_block(c, end);
-	if (!compiler_push_fblock(c, FINALLY_END, end))
+	if (!compiler_push_fblock(c, FINALLY_END, end, NULL))
 		return 0;
 	VISIT_SEQ(c, stmt, s->v.TryFinally.finalbody);
 	ADDOP(c, END_FINALLY);
-	compiler_pop_fblock(c, FINALLY_END, end);
+	compiler_pop_fblock(c, FINALLY_END, end, NULL);
 
 	return 1;
 }
@@ -1882,11 +1912,11 @@ compiler_try_except(struct compiler *c, stmt_ty s)
 		return 0;
 	ADDOP_JREL(c, SETUP_EXCEPT, except);
 	compiler_use_next_block(c, body);
-	if (!compiler_push_fblock(c, EXCEPT, body))
+	if (!compiler_push_fblock(c, EXCEPT, body, except))
 		return 0;
 	VISIT_SEQ(c, stmt, s->v.TryExcept.body);
 	ADDOP(c, POP_BLOCK);
-	compiler_pop_fblock(c, EXCEPT, body);
+	compiler_pop_fblock(c, EXCEPT, body, except);
 	ADDOP_JREL(c, JUMP_FORWARD, orelse);
 	n = asdl_seq_LEN(s->v.TryExcept.handlers);
 	compiler_use_next_block(c, except);
@@ -2239,10 +2269,7 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
 	case Pass_kind:
 		break;
 	case Break_kind:
-		if (!compiler_in_loop(c))
-			return compiler_error(c, "'break' outside loop");
-		ADDOP(c, BREAK_LOOP);
-		break;
+		return compiler_break(c);
 	case Continue_kind:
 		return compiler_continue(c);
 	case With_kind:
@@ -2769,8 +2796,9 @@ compiler_genexp_generator(struct compiler *c,
 		return 0;
 
 	ge = (comprehension_ty)asdl_seq_GET(generators, gen_index);
-	ADDOP_JREL(c, SETUP_LOOP, end);
-	if (!compiler_push_fblock(c, LOOP, start))
+	if (c->u->u_ste->ste_blockstack)
+		ADDOP_JREL(c, SETUP_LOOP, end);
+	if (!compiler_push_fblock(c, FOR_LOOP, start, end))
 		return 0;
 
 	if (gen_index == 0) {
@@ -2810,8 +2838,9 @@ compiler_genexp_generator(struct compiler *c,
 	compiler_use_next_block(c, if_cleanup);
 	ADDOP_JABS(c, JUMP_ABSOLUTE, start);
 	compiler_use_next_block(c, anchor);
-	ADDOP(c, POP_BLOCK);
-	compiler_pop_fblock(c, LOOP, start);
+	if (c->u->u_ste->ste_blockstack)
+		ADDOP(c, POP_BLOCK);
+	compiler_pop_fblock(c, FOR_LOOP, start, end);
 	compiler_use_next_block(c, end);
 
 	return 1;
@@ -2975,7 +3004,7 @@ compiler_with(struct compiler *c, stmt_ty s)
     ADDOP_JREL(c, SETUP_FINALLY, finally);
 
     compiler_use_next_block(c, block);
-    if (!compiler_push_fblock(c, FINALLY_TRY, block)) {
+    if (!compiler_push_fblock(c, FINALLY_TRY, block, finally)) {
 	return 0;
     }
 
@@ -2992,11 +3021,11 @@ compiler_with(struct compiler *c, stmt_ty s)
 
     /* End of try block; start the finally block */
     ADDOP(c, POP_BLOCK);
-    compiler_pop_fblock(c, FINALLY_TRY, block);
+    compiler_pop_fblock(c, FINALLY_TRY, block, finally);
 
     ADDOP_O(c, LOAD_CONST, Py_None, consts);
     compiler_use_next_block(c, finally);
-    if (!compiler_push_fblock(c, FINALLY_END, finally))
+    if (!compiler_push_fblock(c, FINALLY_END, finally, NULL))
 	return 0;
 
     /* Finally block starts; context.__exit__ is on the stack under
@@ -3006,7 +3035,7 @@ compiler_with(struct compiler *c, stmt_ty s)
 
     /* Finally block ends. */
     ADDOP(c, END_FINALLY);
-    compiler_pop_fblock(c, FINALLY_END, finally);
+    compiler_pop_fblock(c, FINALLY_END, finally, NULL);
     return 1;
 }
 
@@ -3191,7 +3220,8 @@ compiler_augassign(struct compiler *c, stmt_ty s)
 }
 
 static int
-compiler_push_fblock(struct compiler *c, enum fblocktype t, basicblock *b)
+compiler_push_fblock(struct compiler *c, enum fblocktype t,
+                     basicblock *b, basicblock *target)
 {
 	struct fblockinfo *f;
 	if (c->u->u_nfblocks >= CO_MAXBLOCKS) {
@@ -3202,25 +3232,30 @@ compiler_push_fblock(struct compiler *c, enum fblocktype t, basicblock *b)
 	f = &c->u->u_fblock[c->u->u_nfblocks++];
 	f->fb_type = t;
 	f->fb_block = b;
+	f->fb_target = target;
 	return 1;
 }
 
 static void
-compiler_pop_fblock(struct compiler *c, enum fblocktype t, basicblock *b)
+compiler_pop_fblock(struct compiler *c, enum fblocktype t,
+                    basicblock *b, basicblock *target)
 {
 	struct compiler_unit *u = c->u;
 	assert(u->u_nfblocks > 0);
 	u->u_nfblocks--;
 	assert(u->u_fblock[u->u_nfblocks].fb_type == t);
 	assert(u->u_fblock[u->u_nfblocks].fb_block == b);
+	assert(u->u_fblock[u->u_nfblocks].fb_target == target);
 }
 
 static int
-compiler_in_loop(struct compiler *c) {
+compiler_in_loop(struct compiler *c)
+{
 	int i;
 	struct compiler_unit *u = c->u;
 	for (i = 0; i < u->u_nfblocks; ++i) {
-		if (u->u_fblock[i].fb_type == LOOP)
+		enum fblocktype block_type = u->u_fblock[i].fb_type;
+		if (block_type == FOR_LOOP || block_type == WHILE_LOOP)
 			return 1;
 	}
 	return 0;
@@ -3827,6 +3862,8 @@ compute_code_flags(struct compiler *c)
 		flags |= CO_VARKEYWORDS;
 	if (ste->ste_generator)
 		flags |= CO_GENERATOR;
+	if (ste->ste_blockstack)
+		flags |= CO_BLOCKSTACK;
 
 	/* (Only) inherit compilerflags in PyCF_MASK */
 	flags |= (c->c_flags->cf_flags & PyCF_MASK);

@@ -29,20 +29,18 @@ def bug708901():
         pass
 
 dis_bug708901 = """\
- %-4d         0 SETUP_LOOP              23 (to 26)
-              3 LOAD_GLOBAL              0 (range)
-              6 LOAD_CONST               1 (1)
+ %-4d         0 LOAD_GLOBAL              0 (range)
+              3 LOAD_CONST               1 (1)
 
- %-4d         9 LOAD_CONST               2 (10)
-             12 CALL_FUNCTION            2
-             15 GET_ITER
-        >>   16 FOR_ITER                 6 (to 25)
-             19 STORE_FAST               0 (res)
+ %-4d         6 LOAD_CONST               2 (10)
+              9 CALL_FUNCTION            2
+             12 GET_ITER
+        >>   13 FOR_ITER                 6 (to 22)
+             16 STORE_FAST               0 (res)
 
- %-4d        22 JUMP_ABSOLUTE           16
-        >>   25 POP_BLOCK
-        >>   26 LOAD_CONST               0 (None)
-             29 RETURN_VALUE
+ %-4d        19 JUMP_ABSOLUTE           13
+        >>   22 LOAD_CONST               0 (None)
+             25 RETURN_VALUE
 """%(bug708901.func_code.co_firstlineno + 1,
      bug708901.func_code.co_firstlineno + 2,
      bug708901.func_code.co_firstlineno + 3)

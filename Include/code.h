@@ -49,11 +49,13 @@ typedef struct PyCodeObject {
 } PyCodeObject;
 
 /* Masks for co_flags above */
-#define CO_OPTIMIZED	0x0001
-#define CO_NEWLOCALS	0x0002
-#define CO_VARARGS	0x0004
-#define CO_VARKEYWORDS	0x0008
+#define CO_OPTIMIZED    0x0001
+#define CO_NEWLOCALS    0x0002
+#define CO_VARARGS      0x0004
+#define CO_VARKEYWORDS  0x0008
+/* Is this a nested function? */
 #define CO_NESTED       0x0010
+/* Is this function a generator? (aka, does it have a yield?) */
 #define CO_GENERATOR    0x0020
 /* The CO_NOFREE flag is set if there are no free or cell variables.
    This information is redundant, but it allows a single flag test
@@ -61,6 +63,13 @@ typedef struct PyCodeObject {
    call frame is setup.
 */
 #define CO_NOFREE       0x0040
+/* The CO_BLOCKSTACK flag is set if there are try/except blocks or with stmts.
+   If there aren't any of these constructs, we can omit all block stack
+   operations, which saves on codesize and JITting time. LLVM's optimizers can
+   usually eliminate all of this code if it's not needed, but we'd like to
+   avoid even generating the LLVM IR if possible.
+*/
+#define CO_BLOCKSTACK   0x0080
 
 #if 0
 /* This is no longer used.  Stopped defining in 2.5, do not re-use. */

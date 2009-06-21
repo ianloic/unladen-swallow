@@ -37,6 +37,7 @@ typedef struct _symtable_entry {
 	unsigned ste_child_free : 1;  /* true if a child block has free vars,
 				         including free refs to globals */
 	unsigned ste_generator : 1;   /* true if namespace is a generator */
+	unsigned ste_blockstack : 1;   /* true if the blockstack is required */
 	unsigned ste_varargs : 1;     /* true if block has varargs */
 	unsigned ste_varkeywords : 1; /* true if block has varkeywords */
 	unsigned ste_returns_value : 1;  /* true if namespace uses return with
@@ -53,7 +54,7 @@ PyAPI_DATA(PyTypeObject) PySTEntry_Type;
 
 PyAPI_FUNC(int) PyST_GetScope(PySTEntryObject *, PyObject *);
 
-PyAPI_FUNC(struct symtable *) PySymtable_Build(mod_ty, const char *, 
+PyAPI_FUNC(struct symtable *) PySymtable_Build(mod_ty, const char *,
 					      PyFutureFeatures *);
 PyAPI_FUNC(PySTEntryObject *) PySymtable_Lookup(struct symtable *, void *);
 

@@ -69,11 +69,12 @@ ste_new(struct symtable *st, identifier name, _Py_block_ty block,
 		ste->ste_nested = 1;
 	ste->ste_child_free = 0;
 	ste->ste_generator = 0;
+	ste->ste_blockstack = 0;
 	ste->ste_returns_value = 0;
 
 	if (PyDict_SetItem(st->st_symbols, ste->ste_id, (PyObject *)ste) < 0)
 	    goto fail;
-	
+
 	return ste;
  fail:
 	Py_XDECREF(ste);
@@ -1025,11 +1026,13 @@ symtable_visit_stmt(struct symtable *st, stmt_ty s)
 		}
 		break;
         case TryExcept_kind:
+		st->st_cur->ste_blockstack = 1;
 		VISIT_SEQ(st, stmt, s->v.TryExcept.body);
 		VISIT_SEQ(st, stmt, s->v.TryExcept.orelse);
 		VISIT_SEQ(st, excepthandler, s->v.TryExcept.handlers);
 		break;
         case TryFinally_kind:
+		st->st_cur->ste_blockstack = 1;
 		VISIT_SEQ(st, stmt, s->v.TryFinally.body);
 		VISIT_SEQ(st, stmt, s->v.TryFinally.finalbody);
 		break;
@@ -1059,7 +1062,7 @@ symtable_visit_stmt(struct symtable *st, stmt_ty s)
 		if (s->v.Exec.globals) {
 			st->st_cur->ste_unoptimized |= OPT_EXEC;
 			VISIT(st, expr, s->v.Exec.globals);
-			if (s->v.Exec.locals) 
+			if (s->v.Exec.locals)
 				VISIT(st, expr, s->v.Exec.locals);
 		} else {
 			st->st_cur->ste_unoptimized |= OPT_BARE_EXEC;
@@ -1101,6 +1104,7 @@ symtable_visit_stmt(struct symtable *st, stmt_ty s)
 		/* nothing to do here */
 		break;
         case With_kind:
+		st->st_cur->ste_blockstack = 1;
 		if (!symtable_new_tmpname(st))
 			return 0;
                 VISIT(st, expr, s->v.With.context_expr);

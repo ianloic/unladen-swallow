@@ -621,6 +621,15 @@ hello world
             result.append(x)
         self.assertEqual(result, [1, 2, 3])
 
+    def testNestedFor(self):
+        def foo():
+            for x in range(3):
+                for y in range(4, 8):
+                    break
+                continue
+            return x, y
+        self.assertEqual(foo(), (2, 4))
+
     def testTry(self):
         ### try_stmt: 'try' ':' suite (except_clause ':' suite)+ ['else' ':' suite]
         ###         | 'try' ':' suite 'finally' ':' suite
