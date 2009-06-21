@@ -420,9 +420,13 @@ Py_Main(int argc, char **argv)
 					Py_OptimizeFlag = 2;
 					break;
 				}
+				if (_PyOS_optarg[0] == '3') {
+					Py_OptimizeFlag = 3;
+					break;
+				}
 			}
 			fprintf(stderr,
-				"-O argument should be 0, 1 or 2\n");
+				"-O argument should be 0, 1, 2, or 3\n");
 			return usage(2, argv[0]);
 			/* NOTREACHED */
 
@@ -728,4 +732,3 @@ Py_GetArgcArgv(int *argc, char ***argv)
 #ifdef __cplusplus
 }
 #endif
-

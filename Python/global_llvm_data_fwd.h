@@ -14,6 +14,11 @@ struct PyGlobalLlvmData *PyGlobalLlvmData_New(void);
 void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
 
+#define Py_MIN_LLVM_OPT_LEVEL 0
+#define Py_DEFAULT_JIT_OPT_LEVEL 2
+#define Py_MAX_LLVM_OPT_LEVEL 3
+
+/* See global_llvm_data.h:PyGlobalLlvmData::Optimize for documentation. */
 PyAPI_FUNC(int) PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *,
                                           _LlvmFunction *, int);
 

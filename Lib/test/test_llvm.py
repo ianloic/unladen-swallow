@@ -15,9 +15,12 @@ DEFAULT_OPT_LEVEL = _foo.__code__.co_optimization
 del _foo
 
 
+JIT_OPT_LEVEL = sys.flags.optimize if sys.flags.optimize > 2 else 2
+
+
 def at_each_optimization_level(func):
     """Decorator for test functions, to run them at each optimization level."""
-    levels = [None, -1, 0, 1, 2]
+    levels = [None, -1, 0, 1, 2, 3]
     if DEFAULT_OPT_LEVEL != -1:
         levels = [level for level in levels if level >= DEFAULT_OPT_LEVEL]
     @functools.wraps(func)
@@ -2226,7 +2229,7 @@ class OptimizationTests(unittest.TestCase):
         l = [foo() for _ in xrange(iterations)]
         self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
         self.assertEqual(foo.__code__.__use_llvm__, True)
-        self.assertEqual(foo.__code__.co_optimization, 2)
+        self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
 
     def test_generator_hotness(self):
         def foo():
@@ -2243,7 +2246,7 @@ class OptimizationTests(unittest.TestCase):
         l = map(list, l)
         self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
         self.assertEqual(foo.__code__.__use_llvm__, True)
-        self.assertEqual(foo.__code__.co_optimization, 2)
+        self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
 
 
 def test_main():

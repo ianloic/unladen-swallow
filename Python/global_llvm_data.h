@@ -16,9 +16,6 @@
 
 #include <string>
 
-#define Py_MIN_LLVM_OPT_LEVEL 0
-#define Py_MAX_LLVM_OPT_LEVEL 2
-
 namespace llvm {
 class ExecutionEngine;
 class ExistingModuleProvider;
@@ -35,9 +32,8 @@ public:
     PyGlobalLlvmData();
     ~PyGlobalLlvmData();
 
-    // Optimize f at a particular level. Currently, levels from 0 to 2
-    // are valid. This function assumes that callers optimize any
-    // particular function through each level in sequence.
+    // Optimize f to a particular level. Currently, levels from 0 to 3
+    // are valid.
     //
     // Returns 0 on success or -1 on failure (if level is out of
     // range, for example).
@@ -65,9 +61,7 @@ private:
 
     llvm::ExecutionEngine *engine_;  // Not modified after the constructor.
 
-    llvm::FunctionPassManager optimizations_0_;
-    llvm::FunctionPassManager optimizations_1_;
-    llvm::FunctionPassManager optimizations_2_;
+    std::vector<llvm::FunctionPassManager *> optimizations_;
 
     // Cached data in module_.  TODO(jyasskin): Make this hold WeakVHs
     // or other ValueHandles when we import them from LLVM trunk.

@@ -154,37 +154,10 @@ code_get_optimization(PyCodeObject *code)
 static int
 code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 {
-	struct PyGlobalLlvmData *global_llvm_data;
 	long new_opt_level = PyInt_AsLong(new_opt_level_obj);
 	if (new_opt_level == -1 && PyErr_Occurred())
 		return -1;
-	if (new_opt_level < code->co_optimization) {
-		PyErr_Format(PyExc_ValueError,
-			     "Cannot reduce optimization level of code object"
-			     " from %d to %ld",
-			     code->co_optimization,
-			     new_opt_level);
-		return -1;
-	}
-	if (code->co_llvm_function == NULL) {
-		code->co_llvm_function = _PyCode_To_Llvm(code);
-		if (code->co_llvm_function == NULL)
-			return -1;
-	}
-	global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;
-	while (code->co_optimization < new_opt_level) {
-		int next_level = code->co_optimization + 1;
-		if (PyGlobalLlvmData_Optimize(global_llvm_data,
-					      code->co_llvm_function,
-					      next_level) < 0) {
-			PyErr_Format(PyExc_ValueError,
-				     "Failed to optimize to level %d",
-				     next_level);
-			return -1;
-		}
-		code->co_optimization++;
-	}
-	return 0;
+	return _PyCode_Recompile(code, new_opt_level);
 }
 
 static PyObject *
@@ -205,16 +178,34 @@ static PyGetSetDef code_getsetlist[] = {
 };
 
 int
-_PyCode_Recompile(PyCodeObject *self, int new_opt_level)
+_PyCode_Recompile(PyCodeObject *code, int new_opt_level)
 {
-	int retcode;
-	PyObject *level = PyInt_FromLong(new_opt_level);
-	if (level == NULL)
+	struct PyGlobalLlvmData *global_llvm_data;
+	if (new_opt_level < code->co_optimization) {
+		PyErr_Format(PyExc_ValueError,
+			     "Cannot reduce optimization level of code object"
+			     " from %d to %d",
+			     code->co_optimization,
+			     new_opt_level);
 		return -1;
-
-	retcode = code_set_optimization(self, level);
-	Py_DECREF(level);
-	return retcode;
+	}
+	if (code->co_llvm_function == NULL) {
+		code->co_llvm_function = _PyCode_To_Llvm(code);
+		if (code->co_llvm_function == NULL)
+			return -1;
+	}
+	global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;
+	if (code->co_optimization < new_opt_level &&
+	    PyGlobalLlvmData_Optimize(global_llvm_data,
+				      code->co_llvm_function,
+				      new_opt_level) < 0) {
+		PyErr_Format(PyExc_SystemError,
+			     "Failed to optimize to level %d",
+			     new_opt_level);
+		return -1;
+	}
+	code->co_optimization = new_opt_level;
+	return 0;
 }
 
 /* Helper for code_new: return a shallow copy of a tuple that is

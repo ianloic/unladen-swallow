@@ -22,6 +22,7 @@
 // Declare the function from initial_llvm_module.cc.
 llvm::Module* FillInitialGlobalModule(llvm::Module*);
 
+using llvm::FunctionPassManager;
 using llvm::Module;
 
 PyGlobalLlvmData *
@@ -51,9 +52,7 @@ PyGlobalLlvmData::Get()
 PyGlobalLlvmData::PyGlobalLlvmData()
     : module_(new Module("<main>")),
       module_provider_(new llvm::ExistingModuleProvider(module_)),
-      optimizations_0_(module_provider_),
-      optimizations_1_(module_provider_),
-      optimizations_2_(module_provider_)
+      optimizations_(4, (FunctionPassManager*)NULL)
 {
     std::string error;
     engine_ = llvm::ExecutionEngine::create(
@@ -83,92 +82,131 @@ PyGlobalLlvmData::PyGlobalLlvmData()
 void
 PyGlobalLlvmData::InitializeOptimizations()
 {
-    optimizations_0_.add(new llvm::TargetData(*engine_->getTargetData()));
-    optimizations_1_.add(new llvm::TargetData(*engine_->getTargetData()));
-    optimizations_2_.add(new llvm::TargetData(*engine_->getTargetData()));
+    optimizations_[0] = new FunctionPassManager(this->module_provider_);
 
-    // optimizations_0_ only consists of optimizations that speed up
-    // a function that only runs once.
+    FunctionPassManager *quick =
+        new FunctionPassManager(this->module_provider_);
+    optimizations_[1] = quick;
+    quick->add(new llvm::TargetData(*engine_->getTargetData()));
+    quick->add(llvm::createPromoteMemoryToRegisterPass());
+    quick->add(llvm::createInstructionCombiningPass());
+    quick->add(llvm::createCFGSimplificationPass());
+    quick->add(llvm::createVerifierPass());
 
-    // Lw: ...1; br Lx ; Lx: ...2  --> Lw: ...1 ...2
-    optimizations_0_.add(llvm::createCFGSimplificationPass());
+    // This is the default optimization used by the JIT. Higher levels
+    // are for experimentation.
+    FunctionPassManager *O2 =
+        new FunctionPassManager(this->module_provider_);
+    optimizations_[2] = O2;
+    O2->add(new llvm::TargetData(*engine_->getTargetData()));
+    O2->add(llvm::createCFGSimplificationPass());
+    O2->add(PyCreateSingleFunctionInliningPass());
+    O2->add(llvm::createJumpThreadingPass());
+    O2->add(llvm::createPromoteMemoryToRegisterPass());
+    O2->add(llvm::createInstructionCombiningPass());
+    O2->add(llvm::createCFGSimplificationPass());
+    O2->add(llvm::createScalarReplAggregatesPass());
+    O2->add(CreatePyAliasAnalysis());
+    O2->add(llvm::createLICMPass());
+    O2->add(llvm::createCondPropagationPass());
+    O2->add(CreatePyAliasAnalysis());
+    O2->add(llvm::createGVNPass());
+    O2->add(llvm::createSCCPPass());
+    O2->add(llvm::createAggressiveDCEPass());
+    O2->add(llvm::createCFGSimplificationPass());
+    O2->add(llvm::createVerifierPass());
 
-    // optimizations_1_ consists of optimizations that speed up a
-    // function that runs a few times but don't take too long
-    // themselves.
 
-    optimizations_1_.add(PyCreateSingleFunctionInliningPass());
-    // Lw: br %cond Lx, Ly ; Lx: br %cond Lz, Lv  --> Lw: br %cond Lz, Ly
-    optimizations_1_.add(llvm::createJumpThreadingPass());
-    // -> SSA form.
-    optimizations_1_.add(llvm::createPromoteMemoryToRegisterPass());
-    optimizations_1_.add(llvm::createInstructionCombiningPass());
-    // Add CFG Simplification again because inlining produces
-    // superfluous blocks.
-    optimizations_1_.add(llvm::createCFGSimplificationPass());
+    // This is the list used by LLVM's opt tool's -O3 option.
+    FunctionPassManager *optO3 =
+        new FunctionPassManager(this->module_provider_);
+    optimizations_[3] = optO3;
+    optO3->add(new llvm::TargetData(*engine_->getTargetData()));
 
-    // optimizations_2_ consists of all optimizations that improve
-    // the code at all.  We don't yet use any profiling data for this,
-    // though.
+    using namespace llvm;
+    // Commented lines are SCC or ModulePasses, which means they can't
+    // be added to our FunctionPassManager.  TODO: Figure out how to
+    // run them on a function at a time anyway.
+    optO3->add(createCFGSimplificationPass());
+    optO3->add(createScalarReplAggregatesPass());
+    optO3->add(createInstructionCombiningPass());
+    //optO3->add(createRaiseAllocationsPass());   // call %malloc -> malloc inst
+    optO3->add(createCFGSimplificationPass());       // Clean up disgusting code
+    optO3->add(createPromoteMemoryToRegisterPass()); // Kill useless allocas
+    //optO3->add(createGlobalOptimizerPass());       // OptLevel out global vars
+    //optO3->add(createGlobalDCEPass());          // Remove unused fns and globs
+    //optO3->add(createIPConstantPropagationPass()); // IP Constant Propagation
+    //optO3->add(createDeadArgEliminationPass());   // Dead argument elimination
+    optO3->add(createInstructionCombiningPass());   // Clean up after IPCP & DAE
+    optO3->add(createCFGSimplificationPass());      // Clean up after IPCP & DAE
+    //optO3->add(createPruneEHPass());               // Remove dead EH info
+    //optO3->add(createFunctionAttrsPass());         // Deduce function attrs
+    optO3->add(PyCreateSingleFunctionInliningPass());
+    //optO3->add(createFunctionInliningPass());      // Inline small functions
+    //optO3->add(createArgumentPromotionPass());  // Scalarize uninlined fn args
+    optO3->add(createSimplifyLibCallsPass());    // Library Call Optimizations
+    optO3->add(createInstructionCombiningPass());  // Cleanup for scalarrepl.
+    optO3->add(createJumpThreadingPass());         // Thread jumps.
+    optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
+    optO3->add(createScalarReplAggregatesPass());  // Break up aggregate allocas
+    optO3->add(createInstructionCombiningPass());  // Combine silly seq's
+    optO3->add(createCondPropagationPass());       // Propagate conditionals
+    optO3->add(createTailCallEliminationPass());   // Eliminate tail calls
+    optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
+    optO3->add(createReassociatePass());           // Reassociate expressions
+    optO3->add(createLoopRotatePass());            // Rotate Loop
+    optO3->add(createLICMPass());                  // Hoist loop invariants
+    optO3->add(createLoopUnswitchPass());
+    optO3->add(createLoopIndexSplitPass());        // Split loop index
+    optO3->add(createInstructionCombiningPass());
+    optO3->add(createIndVarSimplifyPass());        // Canonicalize indvars
+    optO3->add(createLoopDeletionPass());          // Delete dead loops
+    optO3->add(createLoopUnrollPass());          // Unroll small loops
+    optO3->add(createInstructionCombiningPass()); // Clean up after the unroller
+    optO3->add(createGVNPass());                   // Remove redundancies
+    optO3->add(createMemCpyOptPass());            // Remove memcpy / form memset
+    optO3->add(createSCCPPass());                  // Constant prop with SCCP
 
-    // Provide Python-specific alias information.
-    optimizations_2_.add(llvm::createScalarReplAggregatesPass());
-    optimizations_2_.add(CreatePyAliasAnalysis());
-    optimizations_2_.add(llvm::createLICMPass());
-    optimizations_2_.add(llvm::createCondPropagationPass());
-    optimizations_2_.add(CreatePyAliasAnalysis());
-    optimizations_2_.add(llvm::createGVNPass());
-    optimizations_2_.add(llvm::createSCCPPass());
-    optimizations_2_.add(llvm::createAggressiveDCEPass());
-    optimizations_2_.add(llvm::createCFGSimplificationPass());
+    // Run instcombine after redundancy elimination to exploit opportunities
+    // opened up by them.
+    optO3->add(createInstructionCombiningPass());
+    optO3->add(createCondPropagationPass());       // Propagate conditionals
+    optO3->add(createDeadStoreEliminationPass());  // Delete dead stores
+    optO3->add(createAggressiveDCEPass());   // Delete dead instructions
+    optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
 
-    // TODO(jyasskin): Figure out how to run Module passes over a
-    // single function at a time.
-    //
-    // optimizations_2_.add(llvm::createConstantMergePass());
-    // optimizations_2_.add(llvm::createGlobalOptimizerPass());
-    // optimizations_2_.add(llvm::createFunctionInliningPass());
+    //optO3->add(createStripDeadPrototypesPass()); // Get rid of dead prototypes
+    //optO3->add(createDeadTypeEliminationPass());   // Eliminate dead types
 
-    // Make sure the output is still good, for every optimization level.
-    optimizations_0_.add(llvm::createVerifierPass());
-    optimizations_1_.add(llvm::createVerifierPass());
-    optimizations_2_.add(llvm::createVerifierPass());
+    //optO3->add(createConstantMergePass());       // Merge dup global constants
+    optO3->add(llvm::createVerifierPass());
 }
 
 PyGlobalLlvmData::~PyGlobalLlvmData()
 {
+    for (size_t i = 0; i < this->optimizations_.size(); ++i) {
+        delete this->optimizations_[i];
+    }
     delete engine_;
 }
 
 int
 PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
 {
-    if (level < Py_MIN_LLVM_OPT_LEVEL || level > Py_MAX_LLVM_OPT_LEVEL)
+    if (level < 0 || level > this->optimizations_.size())
         return -1;
-    llvm::FunctionPassManager *optimizations;
-    switch (level) {
-    case 0:
-        optimizations = &this->optimizations_0_;
-        break;
-    case 1:
-        optimizations = &this->optimizations_1_;
-        break;
-    case 2:
-        optimizations = &this->optimizations_2_;
-        break;
-    default:
-        Py_FatalError("Unrecognized optimization level");
-        return -1; // Not reached.
-    }
-    assert(module_ == f.getParent() &&
+    FunctionPassManager *opts_pm = this->optimizations_[level];
+    assert(opts_pm != NULL && "Optimization was NULL");
+    assert(this->module_ == f.getParent() &&
            "We assume that all functions belong to the same module.");
-    optimizations->run(f);
+    opts_pm->run(f);
     return 0;
 }
 
 int
 PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *global_data,
-                          _LlvmFunction *llvm_function, int level)
+                          _LlvmFunction *llvm_function,
+                          int level)
 {
     return global_data->Optimize(
         *(llvm::Function *)llvm_function->lf_function,

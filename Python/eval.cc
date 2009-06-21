@@ -3735,13 +3735,16 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 #endif
 		if (Py_JitControl == PY_JIT_WHENHOT) {
 			co->co_use_llvm = 1;
-			if (co->co_optimization < Py_MAX_LLVM_OPT_LEVEL) {
+			int target_optimization =
+				std::max(Py_DEFAULT_JIT_OPT_LEVEL,
+					 Py_OptimizeFlag);
+			if (co->co_optimization < target_optimization) {
 				// If the LLVM version of the function wasn't
 				// created yet, setting the optimization level
 				// will create it.
 				int r;
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
-				r = _PyCode_Recompile(co, Py_MAX_LLVM_OPT_LEVEL);
+				r = _PyCode_Recompile(co, target_optimization);
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
 				if (r < 0)
 					return -1;
