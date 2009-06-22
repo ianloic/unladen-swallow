@@ -25713,19 +25713,19 @@ if test "${with_instrumentation+set}" = set; then
 fi
 
 
-if test -z "$with_instrumentation"
-then with_instrumentation="yes"
-fi
-if test "$with_instrumentation" != no
+if test "$with_instrumentation" == yes
 then
 
 cat >>confdefs.h <<\_ACEOF
 #define Py_WITH_INSTRUMENTATION 1
 _ACEOF
 
+	{ $as_echo "$as_me:$LINENO: result: yes" >&5
+$as_echo "yes" >&6; };
+else
+	{ $as_echo "$as_me:$LINENO: result: no" >&5
+$as_echo "no" >&6; };
 fi
-{ $as_echo "$as_me:$LINENO: result: $with_instrumentation" >&5
-$as_echo "$with_instrumentation" >&6; }
 
 # Check for --with-llvm.
 { $as_echo "$as_me:$LINENO: checking for --with-llvm" >&5

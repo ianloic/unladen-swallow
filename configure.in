@@ -3716,16 +3716,15 @@ AC_ARG_WITH(instrumentation,
                            Compile in a bunch of runtime instrumentation useful
                            for optimizing Python itself.))
 
-if test -z "$with_instrumentation"
-then with_instrumentation="yes"
-fi
-if test "$with_instrumentation" != no
+if test "$with_instrumentation" == yes
 then
     AC_DEFINE(Py_WITH_INSTRUMENTATION, 1,
         [Compile in a bunch of runtime instrumentation useful for optimizing
          Python itself.])
+	AC_MSG_RESULT(yes);
+else
+	AC_MSG_RESULT(no);
 fi
-AC_MSG_RESULT($with_instrumentation)
 
 # Check for --with-llvm.
 AC_MSG_CHECKING(for --with-llvm)
