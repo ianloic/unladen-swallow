@@ -732,6 +732,7 @@ PYTHON_HEADERS= \
 		Util/PyTypeBuilder.h \
 		Util/EventTimer.h \
 		Util/SingleFunctionInliner.h \
+		Util/Stats.h \
 		pyconfig.h \
 		$(PARSER_HEADERS)
 

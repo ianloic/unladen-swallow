@@ -795,6 +795,7 @@ with_libc
 enable_unicode
 with_py3k_warnings
 with_computed_gotos
+with_instrumentation
 with_llvm
 '
       ac_precious_vars='build_alias
@@ -1476,6 +1477,8 @@ Optional Packages:
                           Enabled by default.
   --with-computed-gotos   Use computed gotos / threaded dispatch in evaluation
                           loops (not available on all compilers)
+  --with-instrumentation  Compile in a bunch of runtime instrumentation useful
+                          for optimizing Python itself.
   --with-llvm=DIRECTORY   build against a preinstalled LLVM
 
 Some influential environment variables:
@@ -25699,6 +25702,30 @@ _ACEOF
 fi
 { $as_echo "$as_me:$LINENO: result: $with_computed_gotos" >&5
 $as_echo "$with_computed_gotos" >&6; }
+
+# Check for --with-instrumentation
+{ $as_echo "$as_me:$LINENO: checking for --with-instrumentation" >&5
+$as_echo_n "checking for --with-instrumentation... " >&6; }
+
+# Check whether --with-instrumentation was given.
+if test "${with_instrumentation+set}" = set; then
+  withval=$with_instrumentation;
+fi
+
+
+if test -z "$with_instrumentation"
+then with_instrumentation="yes"
+fi
+if test "$with_instrumentation" != no
+then
+
+cat >>confdefs.h <<\_ACEOF
+#define Py_WITH_INSTRUMENTATION 1
+_ACEOF
+
+fi
+{ $as_echo "$as_me:$LINENO: result: $with_instrumentation" >&5
+$as_echo "$with_instrumentation" >&6; }
 
 # Check for --with-llvm.
 { $as_echo "$as_me:$LINENO: checking for --with-llvm" >&5

@@ -6,6 +6,16 @@ It is best to define these options in the EXTRA_CFLAGS make variable;
 
 
 ---------------------------------------------------------------------------
+Py_WITH_INSTRUMENTATION                introduced in Unladen Swallow 2009Q2
+
+If you pass --with-instrumentation to ./configure, Python will collect a
+range of runtime data useful for optimizing Python itself. Data currently
+collected:
+- Stats on the size of generated LLVM IR.
+- Stats on the size of emitted machine code.
+
+This data will be printed to stderr at interpreter-shutdown.
+---------------------------------------------------------------------------
 Py_PROFILE_HOTNESS                     introduced in Unladen Swallow 2009Q2
 
 Define this if you want stats on how many pure-Python functions were judged

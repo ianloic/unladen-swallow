@@ -6,12 +6,54 @@
 #include "frameobject.h"
 #include "structmember.h"
 #include "Python/global_llvm_data.h"
+#include "Util/Stats.h"
 
 #include "llvm/Function.h"
 #include "llvm/Module.h"
+#include "llvm/CodeGen/MachineCodeInfo.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
+
 #include <sstream>
+#include <string>
+#include <vector>
+
+#ifdef Py_WITH_INSTRUMENTATION
+// Collect statistics about the number of lines of LLVM IR we're writing,
+// and the amount of native code that translates to. Even if we're not changing
+// the amount of generated native code, reducing the number of LLVM IR lines
+// helps compilation time.
+class NativeSizeStats : public DataVectorStats<size_t> {
+public:
+    NativeSizeStats() : DataVectorStats<size_t>("Native code size in bytes") {}
+};
+
+class LlvmIrSizeStats : public DataVectorStats<size_t> {
+public:
+    LlvmIrSizeStats() : DataVectorStats<size_t>("LLVM IR size in lines") {}
+};
+
+// Count the number of non-blank lines of LLVM IR for the given function.
+static size_t
+count_ir_lines(llvm::Function *const function)
+{
+    size_t result = 1;  // Function's 'define' line.
+    for (llvm::Function::iterator bb = function->begin(),
+         bb_end = function->end(); bb != bb_end; ++bb) {
+        ++result;  // 'bb_name:' line.
+        for (llvm::BasicBlock::iterator inst = bb->begin(),
+             inst_end = bb->end(); inst != inst_end; ++inst) {
+            ++result;
+        }
+    }
+    return result;
+}
+
+static llvm::ManagedStatic<NativeSizeStats> native_size_stats;
+static llvm::ManagedStatic<LlvmIrSizeStats> llvm_ir_size_stats;
+#endif  // Py_WITH_INSTRUMENTATION
+
 
 void
 _LlvmFunction_Dealloc(_LlvmFunction *functionobj)
@@ -40,7 +82,21 @@ _LlvmFunction_Jit(_LlvmFunction *function_obj)
     PyGlobalLlvmData *global_llvm_data =
         PyThreadState_GET()->interp->global_llvm_data;
     llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+
+#ifdef Py_WITH_INSTRUMENTATION
+    llvm::MachineCodeInfo code_info;
+    engine->runJITOnFunction(function, &code_info);
+    native_size_stats->RecordDataPoint(code_info.size());
+
+    size_t llvm_ir_lines = count_ir_lines(function);
+    llvm_ir_size_stats->RecordDataPoint(llvm_ir_lines);
+    // TODO(jyasskin): code_info.address() doesn't work for some reason.
+    void *func = engine->getPointerToGlobalIfAvailable(function);
+    assert(func && "function not installed in the globals");
+    return (PyEvalFrameFunction)func;
+#else
     return (PyEvalFrameFunction)engine->getPointerToFunction(function);
+#endif
 }
 
 

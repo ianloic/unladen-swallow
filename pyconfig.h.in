@@ -863,6 +863,10 @@
 /* Define if you want to have a Unicode type. */
 #undef Py_USING_UNICODE
 
+/* Compile in a bunch of runtime instrumentation useful for optimizing Python
+   itself. */
+#undef Py_WITH_INSTRUMENTATION
+
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE
 

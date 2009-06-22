@@ -3709,6 +3709,24 @@ then
 fi
 AC_MSG_RESULT($with_computed_gotos)
 
+# Check for --with-instrumentation
+AC_MSG_CHECKING(for --with-instrumentation)
+AC_ARG_WITH(instrumentation,
+            AC_HELP_STRING(--with-instrumentation,
+                           Compile in a bunch of runtime instrumentation useful
+                           for optimizing Python itself.))
+
+if test -z "$with_instrumentation"
+then with_instrumentation="yes"
+fi
+if test "$with_instrumentation" != no
+then
+    AC_DEFINE(Py_WITH_INSTRUMENTATION, 1,
+        [Compile in a bunch of runtime instrumentation useful for optimizing
+         Python itself.])
+fi
+AC_MSG_RESULT($with_instrumentation)
+
 # Check for --with-llvm.
 AC_MSG_CHECKING(for --with-llvm)
 AC_ARG_WITH(llvm, 
