@@ -2391,11 +2391,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(CALL_FUNCTION)
 		{
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
-			PyObject **sp;
 			PCALL(PCALL_ALL);
-			sp = stack_pointer;
-			x = _PyEval_CallFunction(&sp, oparg);
-			stack_pointer = sp;
+			int num_args = oparg & 0xff;
+			int num_kwargs = (oparg>>8) & 0xff;
+			x = _PyEval_CallFunction(stack_pointer,
+						 num_args, num_kwargs);
+			// +1 for the actual function object.
+			int num_stack_slots = num_args + 2 * num_kwargs + 1;
+			// Clear the stack of the function object and arguments.
+			stack_pointer -= num_stack_slots;
 			PUSH(x);
 			if (x == NULL) {
 				why = WHY_EXCEPTION;
@@ -3806,13 +3810,15 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 	x = call; \
 	}
 
+/* Consumes a reference to each of the arguments and the called function,
+   but the caller must adjust the stack pointer down by (na + 2*nk + 1).
+   We put the stack change in the caller so that LLVM's optimizers can
+   see it. */
 PyObject *
-_PyEval_CallFunction(PyObject ***pp_stack, int oparg)
+_PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 {
-	int na = oparg & 0xff;
-	int nk = (oparg>>8) & 0xff;
 	int n = na + 2 * nk;
-	PyObject **pfunc = (*pp_stack) - n - 1;
+	PyObject **pfunc = stack_pointer - n - 1;
 	PyObject *func = *pfunc;
 	PyObject *x, *w;
 
@@ -3831,7 +3837,7 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg)
 				C_TRACE(x, (*meth)(self,NULL));
 			}
 			else if (flags & METH_O && na == 1) {
-				PyObject *arg = EXT_POP(*pp_stack);
+				PyObject *arg = EXT_POP(stack_pointer);
 				C_TRACE(x, (*meth)(self,arg));
 				Py_DECREF(arg);
 			}
@@ -3842,7 +3848,7 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg)
 		}
 		else {
 			PyObject *callargs;
-			callargs = load_args(pp_stack, na);
+			callargs = load_args(&stack_pointer, na);
 			C_TRACE(x, PyCFunction_Call(func,callargs,NULL));
 			Py_XDECREF(callargs);
 		}
@@ -3862,9 +3868,9 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg)
 		} else
 			Py_INCREF(func);
 		if (PyFunction_Check(func))
-			x = fast_function(func, pp_stack, n, na, nk);
+			x = fast_function(func, &stack_pointer, n, na, nk);
 		else
-			x = do_call(func, pp_stack, na, nk);
+			x = do_call(func, &stack_pointer, na, nk);
 		Py_DECREF(func);
 	}
 
@@ -3872,8 +3878,8 @@ _PyEval_CallFunction(PyObject ***pp_stack, int oparg)
            the arguments in case they weren't consumed already
            (fast_function() and err_args() leave them on the stack).
 	 */
-	while ((*pp_stack) > pfunc) {
-		w = EXT_POP(*pp_stack);
+	while (stack_pointer > pfunc) {
+		w = EXT_POP(stack_pointer);
 		Py_DECREF(w);
 		PCALL(PCALL_POP);
 	}

@@ -1351,22 +1351,25 @@ LlvmFunctionBuilder::LogCallStart() {
 }
 
 void
-LlvmFunctionBuilder::CALL_FUNCTION(int num_args)
+LlvmFunctionBuilder::CALL_FUNCTION(int oparg)
 {
     this->LogCallStart();
-    this->builder_.CreateStore(
-        this->builder_.CreateLoad(this->stack_pointer_addr_),
-        this->tmp_stack_pointer_addr_);
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    int num_args = oparg & 0xff;
+    int num_kwargs = (oparg>>8) & 0xff;
     Function *call_function = this->GetGlobalFunction<
-        PyObject *(PyObject ***, int)>("_PyEval_CallFunction");
-    Value *result = this->builder_.CreateCall2(
+        PyObject *(PyObject **, int, int)>("_PyEval_CallFunction");
+    Value *result = this->builder_.CreateCall3(
         call_function,
-        this->tmp_stack_pointer_addr_,
+        stack_pointer,
         ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
+        ConstantInt::get(PyTypeBuilder<int>::get(), num_kwargs),
         "CALL_FUNCTION_result");
-    this->builder_.CreateStore(
-        this->builder_.CreateLoad(this->tmp_stack_pointer_addr_),
-        this->stack_pointer_addr_);
+    Value *new_stack_pointer = this->builder_.CreateGEP(
+        stack_pointer,
+        ConstantInt::getSigned(Type::Int64Ty,
+                               -num_args - 2*num_kwargs - 1));
+    this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
     this->PropagateExceptionOnNull(result);
     this->Push(result);
 }
