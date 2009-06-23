@@ -44,7 +44,7 @@ PyAPI_DATA(Py_JitOpts) Py_JitControl;
    PYTHONPATH and PYTHONHOME from the environment */
 #define Py_GETENV(s) (Py_IgnoreEnvironmentFlag ? NULL : getenv(s))
 
-PyAPI_FUNC(void) Py_FatalError(const char *message);
+PyAPI_FUNC(void) Py_GCC_ATTRIBUTE((noreturn)) Py_FatalError(const char *msg);
 
 #ifdef __cplusplus
 }
