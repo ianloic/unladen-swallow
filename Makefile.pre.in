@@ -624,27 +624,6 @@ Python/formatter_unicode.o: $(srcdir)/Python/formatter_unicode.c \
 Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 				$(STRINGLIB_HEADERS)
 
-Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_tools
-	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
-
-# TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
-# less than other parts of LLVM.  If it breaks us more than a couple
-# times, we should try to run parts of LLVM's standard test suite
-# through it.
-#
-# We generate this into Include/ because under MSVC the objdir is
-# flat, so #includes of generated files with a path don't work.
-Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc llvm_tools
-	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
-		-cppfname=FillInitialGlobalModule -o $@ -f
-
-# Since llc's output can have some unused variables, silence warnings
-# about them (for now.)
-# See <http://code.google.com/p/unladen-swallow/issues/detail?id=25>.
-Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
-		Include/initial_llvm_module_body.cc
-	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -Wno-unused -o $@ $<
-
 ############################################################################
 # Header files
 
@@ -737,6 +716,32 @@ PYTHON_HEADERS= \
 		$(PARSER_HEADERS)
 
 $(LIBRARY_OBJS) $(MODOBJS) Modules/python.o: $(PYTHON_HEADERS)
+
+
+######################################################################
+
+# LLVM-related generated files
+
+Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_tools $(PYTHON_HEADERS)
+	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
+
+# TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
+# less than other parts of LLVM.  If it breaks us more than a couple
+# times, we should try to run parts of LLVM's standard test suite
+# through it.
+#
+# We generate this into Include/ because under MSVC the objdir is
+# flat, so #includes of generated files with a path don't work.
+Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc llvm_tools
+	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
+		-cppfname=FillInitialGlobalModule -o $@ -f
+
+# Since llc's output can have some unused variables, silence warnings
+# about them (for now.)
+# See <http://code.google.com/p/unladen-swallow/issues/detail?id=25>.
+Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
+		Include/initial_llvm_module_body.cc
+	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -Wno-unused -o $@ $<
 
 
 ######################################################################
@@ -1218,6 +1223,8 @@ clean: pycremoval
 	find . -name '*.s[ol]' -exec rm -f {} ';'
 	find $(srcdir)/build -name 'fficonfig.h' -exec rm -f {} ';' || true
 	find $(srcdir)/build -name 'fficonfig.py' -exec rm -f {} ';' || true
+	rm -f Include/initial_llvm_module_body.cc
+	rm -f Python/llvm_inline_functions.bc
 	rm -f llvm
 	rm -f llvm_tools
 
