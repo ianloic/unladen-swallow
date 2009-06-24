@@ -115,12 +115,14 @@ def foo():
         self.assertFalse("%stack_pointer_addr = alloca"
                          in str(test_func.__code__.co_llvm))
 
-    def test_fetch_unset_co_llvm(self):
-        def test_func():
-            pass
-        test_func.__code__.__use_llvm__ = True
-        # Just setting __use_llvm__ doesn't force code generation.
-        self.assertEqual(str(test_func.__code__.co_llvm), "None")
+    # -j always will cause this test to always fail.
+    if sys.flags.jit_control != "always":
+        def test_fetch_unset_co_llvm(self):
+            def test_func():
+                pass
+            test_func.__code__.__use_llvm__ = True
+            # Just setting __use_llvm__ doesn't force code generation.
+            self.assertEqual(str(test_func.__code__.co_llvm), "None")
 
     @at_each_optimization_level
     def test_return_arg(self, level):
