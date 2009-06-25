@@ -256,6 +256,34 @@ private:
     // Copies the elements from array[0] to array[N-1] to target, bytewise.
     void MemCpy(llvm::Value *target, llvm::Value *array, llvm::Value *N);
 
+    // These are just like the CreateCall* calls on IRBuilder, except they also
+    // apply callee's calling convention and attributes to the call site.
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               const char *name = "");
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               llvm::Value *arg1,
+                               const char *name = "");
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               llvm::Value *arg1,
+                               llvm::Value *arg2,
+                               const char *name = "");
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               llvm::Value *arg1,
+                               llvm::Value *arg2,
+                               llvm::Value *arg3,
+                               const char *name = "");
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               llvm::Value *arg1,
+                               llvm::Value *arg2,
+                               llvm::Value *arg3,
+                               llvm::Value *arg4,
+                               const char *name = "");
+    template<typename InputIterator>
+    llvm::CallInst *CreateCall(llvm::Value *callee,
+                               InputIterator begin,
+                               InputIterator end,
+                               const char *name = "");
+
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
     // Returns an i1, true if value is a negative integer.

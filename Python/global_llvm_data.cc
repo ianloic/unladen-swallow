@@ -7,6 +7,7 @@
 #include "_llvmfunctionobject.h"
 
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/ExecutionEngine/JIT.h"
@@ -74,9 +75,22 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     // thread-unsafe anyway.
     engine_->DisableLazyCompilation();
 
+    this->InstallInitialModule();
+
+    this->InitializeOptimizations();
+}
+
+void
+PyGlobalLlvmData::InstallInitialModule()
+{
     FillInitialGlobalModule(this->module_);
 
-    InitializeOptimizations();
+    for (llvm::Module::iterator it = this->module_->begin();
+         it != this->module_->end(); ++it) {
+        if (it->getName().find("_PyLlvm_Fast") == 0) {
+            it->setCallingConv(llvm::CallingConv::Fast);
+        }
+    }
 }
 
 void

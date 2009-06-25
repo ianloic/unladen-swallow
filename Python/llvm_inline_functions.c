@@ -1,7 +1,12 @@
 /* This file defines several functions that we want to be able to
    inline into the LLVM IR we generate.  We compile it with clang and
    llc to produce a C++ function that inserts these definitions into a
-   module. */
+   module. 
+
+   PyGlobalLlvmData::InstallInitialModule() will apply LLVM's fastcc calling
+   convention to all functions defined in this module that start with
+   _PyLlvm_Fast.
+*/
 
 #include "Python.h"
 #include "frameobject.h"
@@ -52,7 +57,7 @@ struct PyExcInfo {
 /* Copied from the SETUP_FINALLY && WHY_EXCEPTION block in
    fast_block_end in PyEval_EvalFrame(). */
 void
-_PyLlvm_WrapEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
+_PyLlvm_FastEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
 {
     PyThreadState *tstate = PyThreadState_GET();
     PyErr_Fetch(&exc_info->exc, &exc_info->val, &exc_info->tb);

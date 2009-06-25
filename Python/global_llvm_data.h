@@ -51,6 +51,11 @@ public:
     llvm::Value *GetGlobalStringPtr(const std::string &value);
 
 private:
+    // We use Clang to compile a number of C functions to LLVM IR. Install
+    // those functions and set up any special calling conventions or attributes
+    // we may want.
+    void InstallInitialModule();
+
     void InitializeOptimizations();
 
     // We have a single global module that holds all compiled code.
