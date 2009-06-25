@@ -395,8 +395,6 @@ try:
 except NameError:
     pass
 else:
-    import UserDict
-
     # Fake unsetenv() for Windows
     # not sure about os2 here but
     # I'm guessing they are the same.
@@ -410,6 +408,7 @@ else:
         from riscosenviron import _Environ
     elif name in ('os2', 'nt'):  # Where Env Var Names Must Be UPPERCASE
         # But we store them as upper case
+        import UserDict
         class _Environ(UserDict.IterableUserDict):
             def __init__(self, environ):
                 UserDict.UserDict.__init__(self)
@@ -463,13 +462,10 @@ else:
                 return dict(self)
 
     else:  # Where Env Var Names Can Be Mixed Case
-        class _Environ(UserDict.IterableUserDict):
-            def __init__(self, environ):
-                UserDict.UserDict.__init__(self)
-                self.data = environ
+        class _Environ(dict):
             def __setitem__(self, key, item):
                 putenv(key, item)
-                self.data[key] = item
+                super(_Environ, self).__setitem__(key, item)
             def update(self,  dict=None, **kwargs):
                 if dict:
                     try:
@@ -493,14 +489,14 @@ else:
             else:
                 def __delitem__(self, key):
                     unsetenv(key)
-                    del self.data[key]
+                    super(_Environ, self).__delitem__(key)
                 def clear(self):
-                    for key in self.data.keys():
+                    for key in self.keys():
                         unsetenv(key)
-                        del self.data[key]
+                        del self[key]
                 def pop(self, key, *args):
                     unsetenv(key)
-                    return self.data.pop(key, *args)
+                    return super(_Environ, self).pop(key, *args)
             def copy(self):
                 return dict(self)
 

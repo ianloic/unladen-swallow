@@ -6,11 +6,7 @@ one of the other *util.py modules.
 
 __revision__ = "$Id: util.py 63955 2008-06-05 12:58:24Z ronald.oussoren $"
 
-import sys, os, string, re
-from distutils.errors import DistutilsPlatformError
-from distutils.dep_util import newer
-from distutils.spawn import spawn
-from distutils import log
+import sys, os, re
 
 def get_platform ():
     """Return a string that identifies the current platform.  This is used
@@ -39,10 +35,10 @@ def get_platform ():
     if os.name == 'nt':
         # sniff sys.version for architecture.
         prefix = " bit ("
-        i = string.find(sys.version, prefix)
+        i = sys.version.find(prefix)
         if i == -1:
             return sys.platform
-        j = string.find(sys.version, ")", i)
+        j = sys.version.find(")", i)
         look = sys.version[i+len(prefix):j].lower()
         if look=='amd64':
             return 'win-amd64'
@@ -61,10 +57,10 @@ def get_platform ():
 
     # Convert the OS name to lowercase, remove '/' characters
     # (to accommodate BSD/OS), and translate spaces (for "Power Macintosh")
-    osname = string.lower(osname)
-    osname = string.replace(osname, '/', '')
-    machine = string.replace(machine, ' ', '_')
-    machine = string.replace(machine, '/', '-')
+    osname = osname.lower()
+    osname = osname.replace('/', '')
+    machine = machine.replace(' ', '_')
+    machine = machine.replace('/', '-')
 
     if osname[:5] == "linux":
         # At least on Linux/Intel, 'machine' is the processor --
@@ -165,7 +161,7 @@ def convert_path (pathname):
     if pathname[-1] == '/':
         raise ValueError, "path '%s' cannot end with '/'" % pathname
 
-    paths = string.split(pathname, '/')
+    paths = pathname.split('/')
     while '.' in paths:
         paths.remove('.')
     if not paths:
@@ -204,11 +200,13 @@ def change_root (new_root, pathname):
             return os.path.join(new_root, pathname)
         else:
             # Chop off volume name from start of path
-            elements = string.split(pathname, ":", 1)
+            elements = pathname.split(":", 1)
             pathname = ":" + elements[1]
             return os.path.join(new_root, pathname)
 
     else:
+        # Delay import to improve startup time.
+        from distutils.errors import DistutilsPlatformError
         raise DistutilsPlatformError, \
               "nothing known about platform '%s'" % os.name
 
@@ -287,6 +285,7 @@ def grok_environment_error (exc, prefix="error: "):
 _wordchars_re = _squote_re = _dquote_re = None
 def _init_regex():
     global _wordchars_re, _squote_re, _dquote_re
+    import string
     _wordchars_re = re.compile(r'[^\\\'\"%s ]*' % string.whitespace)
     _squote_re = re.compile(r"'(?:[^'\\]|\\.)*'")
     _dquote_re = re.compile(r'"(?:[^"\\]|\\.)*"')
@@ -301,13 +300,14 @@ def split_quoted (s):
     characters are stripped from any quoted string.  Returns a list of
     words.
     """
+    import string
 
     # This is a nice algorithm for splitting up a single string, since it
     # doesn't require character-by-character examination.  It was a little
     # bit of a brain-bender to get it working right, though...
     if _wordchars_re is None: _init_regex()
 
-    s = string.strip(s)
+    s = s.strip()
     words = []
     pos = 0
 
@@ -363,6 +363,8 @@ def execute (func, args, msg=None, verbose=0, dry_run=0):
     "external action" being performed), and an optional message to
     print.
     """
+    # Delay import to improve startup time.
+    from distutils import log
     if msg is None:
         msg = "%s%r" % (func.__name__, args)
         if msg[-2:] == ',)':        # correct for singleton tuple
@@ -380,7 +382,7 @@ def strtobool (val):
     are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
     'val' is anything else.
     """
-    val = string.lower(val)
+    val = val.lower()
     if val in ('y', 'yes', 't', 'true', 'on', '1'):
         return 1
     elif val in ('n', 'no', 'f', 'false', 'off', '0'):
@@ -423,6 +425,9 @@ def byte_compile (py_files,
     it set to None.
     """
 
+    # Delay import to improve startup time.
+    from distutils import log
+    from distutils.dep_util import newer
     # First, if the caller didn't force us into direct or indirect mode,
     # figure out which mode we should be in.  We take a conservative
     # approach: choose direct mode *only* if the current interpreter is
@@ -471,7 +476,7 @@ files = [
             #if prefix:
             #    prefix = os.path.abspath(prefix)
 
-            script.write(string.join(map(repr, py_files), ",\n") + "]\n")
+            script.write(",\n".join(map(repr, py_files)) + "]\n")
             script.write("""
 byte_compile(files, optimize=%r, force=%r,
              prefix=%r, base_dir=%r,
@@ -486,6 +491,9 @@ byte_compile(files, optimize=%r, force=%r,
             cmd.insert(1, "-O")
         elif optimize == 2:
             cmd.insert(1, "-OO")
+
+        # Delay import to improve startup time.
+        from distutils.spawn import spawn
         spawn(cmd, dry_run=dry_run)
         execute(os.remove, (script_name,), "removing %s" % script_name,
                 dry_run=dry_run)
@@ -533,7 +541,7 @@ def rfc822_escape (header):
     """Return a version of the string escaped for inclusion in an
     RFC-822 header, by ensuring there are 8 spaces space after each newline.
     """
-    lines = string.split(header, '\n')
-    lines = map(string.strip, lines)
-    header = string.join(lines, '\n' + 8*' ')
+    lines = header.split('\n')
+    lines = [line.strip() for line in lines]
+    header = ('\n' + 8*' ').join(lines)
     return header

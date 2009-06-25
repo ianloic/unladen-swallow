@@ -13,10 +13,7 @@ __revision__ = "$Id: sysconfig.py 63955 2008-06-05 12:58:24Z ronald.oussoren $"
 
 import os
 import re
-import string
 import sys
-
-from distutils.errors import DistutilsPlatformError
 
 # These are needed in a couple of spots, so just compute them once.
 PREFIX = os.path.normpath(sys.prefix)
@@ -95,6 +92,8 @@ def get_python_inc(plat_specific=0, prefix=None):
     elif os.name == "os2":
         return os.path.join(prefix, "Include")
     else:
+        # Delay import to improve interpreter-startup time.
+        from distutils.errors import DistutilsPlatformError
         raise DistutilsPlatformError(
             "I don't know where Python installs its C header files "
             "on platform '%s'" % os.name)
@@ -153,6 +152,8 @@ def get_python_lib(plat_specific=0, standard_lib=0, prefix=None):
             return os.path.join(PREFIX, "Lib", "site-packages")
 
     else:
+        # Delay import to improve interpreter-startup time.
+        from distutils.errors import DistutilsPlatformError
         raise DistutilsPlatformError(
             "I don't know where Python installs its library "
             "on platform '%s'" % os.name)
@@ -291,7 +292,7 @@ def parse_makefile(fn, g=None):
         m = _variable_rx.match(line)
         if m:
             n, v = m.group(1, 2)
-            v = string.strip(v)
+            v = v.strip()
             if "$" in v:
                 notdone[n] = v
             else:
@@ -325,7 +326,7 @@ def parse_makefile(fn, g=None):
                     else:
                         try: value = int(value)
                         except ValueError:
-                            done[name] = string.strip(value)
+                            done[name] = value.strip()
                         else:
                             done[name] = value
                         del notdone[name]
@@ -379,6 +380,8 @@ def _init_posix():
         if hasattr(msg, "strerror"):
             my_msg = my_msg + " (%s)" % msg.strerror
 
+        # Delay import to improve interpreter-startup time.
+        from distutils.errors import DistutilsPlatformError
         raise DistutilsPlatformError(my_msg)
 
     # load the installed pyconfig.h:
@@ -390,6 +393,8 @@ def _init_posix():
         if hasattr(msg, "strerror"):
             my_msg = my_msg + " (%s)" % msg.strerror
 
+        # Delay import to improve interpreter-startup time.
+        from distutils.errors import DistutilsPlatformError
         raise DistutilsPlatformError(my_msg)
 
     # On MacOSX we need to check the setting of the environment variable
@@ -405,6 +410,8 @@ def _init_posix():
         elif map(int, cfg_target.split('.')) > map(int, cur_target.split('.')):
             my_msg = ('$MACOSX_DEPLOYMENT_TARGET mismatch: now "%s" but "%s" during configure'
                 % (cur_target, cfg_target))
+            # Delay import to improve interpreter-startup time.
+            from distutils.errors import DistutilsPlatformError
             raise DistutilsPlatformError(my_msg)
 
     # On AIX, there are wrong paths to the linker scripts in the Makefile
@@ -429,7 +436,7 @@ def _init_posix():
             # relative to the srcdir, which after installation no longer makes
             # sense.
             python_lib = get_python_lib(standard_lib=1)
-            linkerscript_path = string.split(g['LDSHARED'])[0]
+            linkerscript_path = g['LDSHARED'].split()[0]
             linkerscript_name = os.path.basename(linkerscript_path)
             linkerscript = os.path.join(python_lib, 'config',
                                         linkerscript_name)

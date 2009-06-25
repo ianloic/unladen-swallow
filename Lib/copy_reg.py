@@ -4,7 +4,10 @@ This is only useful to add pickle support for extension types defined in
 C, not for instances of user-defined classes.
 """
 
-from types import ClassType as _ClassType
+# Avoid importing the types module to speed up interpreter startup.
+class _C: pass
+_ClassType = type(_C)
+del _C
 
 __all__ = ["pickle", "constructor",
            "add_extension", "remove_extension", "clear_extension_cache"]

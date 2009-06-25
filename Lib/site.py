@@ -111,6 +111,10 @@ def removeduppaths():
 def addbuilddir():
     """Append ./build/lib.<platform> in case we're running in the build dir
     (especially for Guido :-)"""
+    # TODO(collinwinter): we know this at setup.py-time. We should just dump
+    # this directory name to a file so that we don't have to parse the
+    # Makefile just to figure out the platform name. Parsing the Makefile
+    # brings in distutils, which brings in re, which brings in ..., etc.
     from distutils.util import get_platform
     s = "build/lib.%s-%.3s" % (get_platform(), sys.version)
     if hasattr(sys, 'gettotalrefcount'):

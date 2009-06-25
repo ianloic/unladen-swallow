@@ -9,7 +9,6 @@ timestamp dependency analysis."""
 __revision__ = "$Id: dep_util.py 58049 2007-09-08 00:34:17Z skip.montanaro $"
 
 import os
-from distutils.errors import DistutilsFileError
 
 
 def newer (source, target):
@@ -19,6 +18,8 @@ def newer (source, target):
     Raise DistutilsFileError if 'source' does not exist.
     """
     if not os.path.exists(source):
+        # Delay import to speed up interpreter startup.
+        from distutils.errors import DistutilsFileError
         raise DistutilsFileError, ("file '%s' does not exist" %
                                    os.path.abspath(source))
     if not os.path.exists(target):
