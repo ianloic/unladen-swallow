@@ -111,16 +111,20 @@ def removeduppaths():
 def addbuilddir():
     """Append ./build/lib.<platform> in case we're running in the build dir
     (especially for Guido :-)"""
-    # TODO(collinwinter): we know this at setup.py-time. We should just dump
-    # this directory name to a file so that we don't have to parse the
-    # Makefile just to figure out the platform name. Parsing the Makefile
-    # brings in distutils, which brings in re, which brings in ..., etc.
-    from distutils.util import get_platform
-    s = "build/lib.%s-%.3s" % (get_platform(), sys.version)
+    # setup.py writes the relative path to the build directory into a file
+    # called build_dir in the same directory as the python executable. The
+    # build_dir file includes the Python version but not whether this is a
+    # --with-pydebug build.
+    build_dir_file = os.path.join(os.path.dirname(sys.executable), "build_dir")
+    try:
+        with open(build_dir_file) as f:
+            build_dir = f.read().strip()
+    except IOError:
+        return
     if hasattr(sys, 'gettotalrefcount'):
-        s += '-pydebug'
-    s = os.path.join(os.path.dirname(sys.path[-1]), s)
-    sys.path.append(s)
+        build_dir += '-pydebug'
+    build_dir = os.path.join(os.path.dirname(sys.path[-1]), build_dir)
+    sys.path.append(build_dir)
 
 
 def _init_pathinfo():

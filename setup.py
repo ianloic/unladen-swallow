@@ -15,9 +15,21 @@ from distutils.core import Extension, setup
 from distutils.command.build_ext import build_ext
 from distutils.command.install import install
 from distutils.command.install_lib import install_lib
+from distutils.util import get_platform
 
 # This global variable is used to hold the list of modules to be disabled.
 disabled_module_list = []
+
+def record_build_dir():
+    """Record the relative path to the build diretory for site.py."""
+    build_dir = "build/lib.%s-%.3s" % (get_platform(), sys.version)
+
+    build_dir_file = os.path.join(os.path.dirname(sys.executable), "build_dir")
+    f = open(build_dir_file, "w")
+    try:
+        f.write(build_dir)
+    finally:
+        f.close()
 
 def add_dir_to_list(dirlist, dir):
     """Add the directory 'dir' to the list 'dirlist' (at the front) if
@@ -1893,6 +1905,7 @@ def main():
     # turn off warnings when deprecated modules are imported
     import warnings
     warnings.filterwarnings("ignore",category=DeprecationWarning)
+    record_build_dir()
     setup(# PyPI Metadata (PEP 301)
           name = "Python",
           version = sys.version.split()[0],
