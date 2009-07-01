@@ -2604,16 +2604,13 @@ LlvmFunctionBuilder::BUILD_SLICE_THREE()
 void
 LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
 {
-    // TODO(twouters): we could speed up the common case quite a bit by
-    // doing the unpacking inline, like eval.cc does; that would allow
-    // LLVM to optimize the heck out of it as well. Then again, we could
-    // do even better by combining this opcode and the STORE_* ones that
-    // follow into a single block of code circumventing the stack
-    // altogether. And omitting the horrible external stack munging that
+    // TODO(twouters): We could do even better by combining this opcode and the
+    // STORE_* ones that follow into a single block of code circumventing the
+    // stack altogether. And omitting the horrible external stack munging that
     // UnpackIterable does.
     Value *iterable = this->Pop();
     Function *unpack_iterable = this->GetGlobalFunction<
-        int(PyObject *, int, PyObject **)>("_PyEval_UnpackIterable");
+        int(PyObject *, int, PyObject **)>("_PyLlvm_FastUnpackIterable");
     Value *new_stack_pointer = this->builder_.CreateGEP(
         this->builder_.CreateLoad(this->stack_pointer_addr_),
         ConstantInt::getSigned(PyTypeBuilder<Py_ssize_t>::get(),
@@ -2621,13 +2618,13 @@ LlvmFunctionBuilder::UNPACK_SEQUENCE(int size)
     Value *result = this->CreateCall(
         unpack_iterable, iterable,
         ConstantInt::get(PyTypeBuilder<int>::get(), size, true),
-        // _PyEval_UnpackIterable really takes the *new* stack pointer as
+        // _PyLlvm_FastUnpackIterable really takes the *new* stack pointer as
         // an argument, because it builds the result stack in reverse.
         new_stack_pointer);
     this->DecRef(iterable);
     this->PropagateExceptionOnNonZero(result);
     // Not setting the new stackpointer on failure does mean that if
-    // _PyEval_UnpackIterable failed after pushing some values onto the
+    // _PyLlvm_FastUnpackIterable failed after pushing some values onto the
     // stack, and it didn't clean up after itself, we lose references.  This
     // is what eval.cc does as well.
     this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);

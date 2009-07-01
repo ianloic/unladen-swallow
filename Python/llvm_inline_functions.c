@@ -44,6 +44,39 @@ _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
     return PyExceptionClass_Check(obj) || PyString_Check(obj);
 }
 
+
+/* TODO(collinwinter): move this special-casing into a common function that
+   we can share with eval.cc. */
+int
+_PyLlvm_FastUnpackIterable(PyObject *iter, int argcount,
+                           PyObject **stack_pointer) {
+    /* TODO(collinwinter): we could reduce the amount of generated code by
+       using &PyTuple_GET_ITEM(iter, 0) and &PyList_GET_ITEM(iter, 0) to find
+       the beginning of the items lists, and then having a single loop to copy
+       that into the stack. */
+    if (PyTuple_Check(iter) && PyTuple_GET_SIZE(iter) == argcount) {
+        int i;
+        for (i = 0; i < argcount; i++) {
+            PyObject *item = PyTuple_GET_ITEM(iter, i);
+            Py_INCREF(item);
+            *--stack_pointer = item;
+        }
+        return 0;
+    }
+    else if (PyList_Check(iter) && PyList_GET_SIZE(iter) == argcount) {
+        int i;
+        for (i = 0; i < argcount; i++) {
+            PyObject *item = PyList_GET_ITEM(iter, i);
+            Py_INCREF(item);
+            *--stack_pointer = item;
+        }
+        return 0;
+    }
+    else {
+        return _PyEval_UnpackIterable(iter, argcount, stack_pointer);
+    }
+}
+
 /* This type collects the set of three values that constitute an
    exception.  So far, it's only used for
    _PyLlvm_WrapEnterExceptOrFinally().  If we use it for more, we
