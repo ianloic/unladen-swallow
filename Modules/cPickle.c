@@ -861,51 +861,97 @@ _Unpickler_SetStringInput(Unpicklerobject *self, PyObject *input)
 	return self->input_len;
 }
 
-/* Returns -1 (with an exception set) on failure. */
+static const Py_ssize_t READ_WHOLE_LINE = -1;
+
+/* If reading from a file, we need to only pull the bytes we need, since there
+   may be multiple pickle objects arranged contiguously in the same input
+   buffer.
+
+   If `n` is READ_WHOLE_LINE, read a whole line. Otherwise, read up to `n`
+   bytes from the input stream/buffer.
+
+   Update the unpickler's input buffer with the newly-read data. Returns -1 on
+   failure; on success, returns the number of bytes read from the file.
+
+   On success, self->input_len will be 0; this is intentional so that when
+   unpickling from a file, the "we've run out of data" code paths will trigger,
+   causing the Unpickler to go back to the file for more data. Use the returned
+   size to tell you how much data you can process.
+ */
 static Py_ssize_t
-_Unpickler_ReadFromFile(Unpicklerobject *self)
+_Unpickler_ReadFromFile(Unpicklerobject *self, Py_ssize_t n)
 {
 	PyObject *data;
 	Py_ssize_t read_size;
 
 	assert(self->file != NULL);
+	assert(self->next_read_idx == 0);
 
-	/* N.B. The blow-up factor from unpickling the objects is fairly large
-	   (~10x), so reading the whole file at once is fine; not great, but
-	   fine. The common case for pickling/unpickling in the wild is
-	   operating on strings that are already in memory, and we
-	   optimize for that here. Slurping the whole file at once makes this
-	   code far, far simpler. */
-	data = PyObject_CallMethod(self->file, "read", NULL);
+	if (n == READ_WHOLE_LINE)
+		data = PyObject_CallMethod(self->file, "readline", NULL);
+	else
+		data = PyObject_CallMethod(self->file, "read", "n", n);
 	if (data == NULL)
 		return -1;
 
 	read_size = _Unpickler_SetStringInput(self, data);
+	self->input_len = 0;
 	Py_DECREF(data);
 	return read_size;
 }
 
-/* Returns -1 (with an exception set) on failure. On success, return the
+/* Read `n` bytes from the unpickler's data source, storing the result in `*s`.
+
+   This should be used for all data reads, rather than accessing the unpickler's
+   input buffer directly. This method deals correctly with reading from input
+   streams, which the input buffer doesn't deal with.
+
+   Note that when reading from a file-like object, self->next_read_idx won't
+   be updated (it should remain at 0 for the entire unpickling process). You
+   should use this function's return value to know how many bytes you can
+   consume.
+
+   Returns -1 (with an exception set) on failure. On success, return the
    number of chars read. */
 static Py_ssize_t
 _Unpickler_Read(Unpicklerobject *self, char **s, Py_ssize_t n)
 {
+	if (n == 0)
+		return 0;
+
+	/* This condition will always be true if self->file. */
 	if (self->next_read_idx + n > self->input_len) {
+		if (self->file) {
+			assert(self->next_read_idx == self->input_len);
+			n = _Unpickler_ReadFromFile(self, n);
+			if (n < 0)
+				return -1;
+			if (n > 0) {
+				*s = self->input_buffer;
+				return n;
+			}
+		}
 		PyErr_Format(PyExc_RuntimeError, "Ran out of input");
 		return -1;
 	}
+	assert(self->file == NULL);
 	*s = &self->input_buffer[self->next_read_idx];
 	self->next_read_idx += n;
 	return n;
 }
 
-/* Returns the number of chars read. */
+/* Read a line from the input stream/buffer. If we run off the end of the input
+   before hitting \n, return the data we found.
+
+   Returns the number of chars read, or -1 on failure. */
 static Py_ssize_t
 _Unpickler_Readline(Unpicklerobject *self, char **s)
 {
 	Py_ssize_t i, num_read;
 
+	/* This loop will never be entered if self->file. */
 	for (i = self->next_read_idx; i < self->input_len; i++) {
+		assert(self->file == NULL);
 		if (self->input_buffer[i] == '\n') {
 			*s = &self->input_buffer[self->next_read_idx];
 			num_read = i - self->next_read_idx + 1;
@@ -913,10 +959,17 @@ _Unpickler_Readline(Unpicklerobject *self, char **s)
 			return num_read;
 		}
 	}
+	if (self->file) {
+		assert(self->next_read_idx == self->input_len);
+		num_read = _Unpickler_ReadFromFile(self, READ_WHOLE_LINE);
+		if (num_read < 0)
+			return -1;
+		*s = self->input_buffer;
+		return num_read;
+	}
 
-	/* If we get here, we've run out of input. Return the remaining string
-	   and let the caller figure it out. (Since we've already slurped in
-	   the whole input, there's no way to go back for more.) */
+	/* If we get here, we've run off the end of the input string. Return the
+	   remaining string and let the caller figure it out. */
 	*s = &self->input_buffer[self->next_read_idx];
 	num_read = i - self->next_read_idx;
 	self->next_read_idx = i;
@@ -3524,7 +3577,8 @@ load_int(Unpicklerobject *self)
 {
 	PyObject *py_int = 0;
 	char *endptr, *s;
-	int len, res = -1;
+	Py_ssize_t len;
+	int res = -1;
 	long l;
 
 	if ((len = _Unpickler_Readline(self, &s)) < 0) return -1;
@@ -5581,28 +5635,11 @@ noload(Unpicklerobject *self)
 }
 
 
-static PyObject *
-Unpickler_load(Unpicklerobject *self, PyObject *unused)
-{
-	if (_Unpickler_ReadFromFile(self) < 0)
-		return NULL;
-	return load(self);
-}
-
-static PyObject *
-Unpickler_noload(Unpicklerobject *self, PyObject *unused)
-{
-	if (_Unpickler_ReadFromFile(self) < 0)
-		return NULL;
-	return noload(self);
-}
-
-
 static struct PyMethodDef Unpickler_methods[] = {
-  {"load",         (PyCFunction)Unpickler_load,   METH_NOARGS,
+  {"load",         (PyCFunction)load,   METH_NOARGS,
    PyDoc_STR("load() -- Load a pickle")
   },
-  {"noload",         (PyCFunction)Unpickler_noload,   METH_NOARGS,
+  {"noload",         (PyCFunction)noload,   METH_NOARGS,
    PyDoc_STR(
    "noload() -- not load a pickle, but go through most of the motions\n"
    "\n"
@@ -5634,6 +5671,9 @@ newUnpicklerobject(PyObject *file)
 	self->find_class = NULL;
 	self->py_input = NULL;
 	self->input_buffer = NULL;
+	/* input_len and next_read_idx will never be changed if reading from a
+	   file. This ensures that the relevant paths in _Unpickler_Read() and
+	   _Unpickler_Readline() will always trigger. */
 	self->input_len = 0;
 	self->next_read_idx = 0;
 
@@ -5998,14 +6038,10 @@ cpm_load(PyObject *self, PyObject *ob)
 
 	unpickler = newUnpicklerobject(ob);
 	if (unpickler == NULL)
-		goto finally;
+		return NULL;
 
-	if (_Unpickler_ReadFromFile(unpickler) < 0)
-		goto finally;
 	res = load(unpickler);
-
-finally:
-	Py_XDECREF(unpickler);
+	Py_DECREF(unpickler);
 	return res;
 }
 

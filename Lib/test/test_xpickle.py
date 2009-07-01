@@ -42,6 +42,12 @@ class DumpCPickle_LoadPickle(AbstractPickleTests):
         # Ignore fast
         return pickle.loads(buf)
 
+    def dump(self, arg, buf, proto=0):
+        cPickle.dump(arg, buf, proto)
+
+    def load(self, buf):
+        return pickle.load(buf)
+
 class DumpPickle_LoadCPickle(AbstractPickleTests):
 
     error = cPickle.BadPickleGet
@@ -53,6 +59,12 @@ class DumpPickle_LoadCPickle(AbstractPickleTests):
     def loads(self, buf):
         # Ignore fast
         return cPickle.loads(buf)
+
+    def dump(self, arg, buf, proto=0):
+        pickle.dump(arg, buf, proto)
+
+    def load(self, buf):
+        return cPickle.load(buf)
 
 def have_python_version(name):
     """Check whether the given name is a valid Python binary.
@@ -111,6 +123,13 @@ class AbstractCompatTests(AbstractPickleTests):
 
     def loads(self, input):
         return cPickle.loads(input)
+
+    def dump(self, arg, buf, proto=0, fast=False):
+        data = self.dumps(arg, proto)
+        buf.write(data)
+
+    def load(self, buf):
+        return cPickle.load(buf)
 
     # These tests are disabled because they require some special setup
     # on the worker that's hard to keep in sync.

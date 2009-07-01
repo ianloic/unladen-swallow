@@ -9,56 +9,58 @@ class cPickleTests(AbstractPickleTests, AbstractPickleModuleTests):
     def setUp(self):
         self.dumps = cPickle.dumps
         self.loads = cPickle.loads
+        self.load = cPickle.load
+        self.dump = cPickle.dump
 
     error = cPickle.BadPickleGet
     module = cPickle
 
-class cPicklePicklerTests(AbstractPickleTests):
+class cPickleAbstractPicklerTests(AbstractPickleTests):
 
-    def dumps(self, arg, proto=0):
-        f = StringIO()
-        p = cPickle.Pickler(f, proto)
-        p.dump(arg)
-        f.seek(0)
-        return f.read()
+    """Common methods for TestCase classes testing cPickle.Pickler variants."""
+
+    error = cPickle.BadPickleGet
 
     def loads(self, buf):
         f = StringIO(buf)
         p = cPickle.Unpickler(f)
         return p.load()
 
-    error = cPickle.BadPickleGet
+    def load(self, buf):
+        p = cPickle.Unpickler(buf)
+        return p.load()
 
-class cPickleListPicklerTests(AbstractPickleTests):
+class cPickleFilePicklerTests(cPickleAbstractPicklerTests):
+
+    """Test pickling to a file"""
+
+    def dumps(self, arg, proto=0):
+        f = StringIO()
+        p = cPickle.Pickler(f, proto)
+        p.dump(arg)
+        f.seek(0)
+        return f.read()
+
+class cPickleInternalBufferPicklerTests(cPickleAbstractPicklerTests):
+
+    """Test pickling to the Pickler's internal buffer."""
 
     def dumps(self, arg, proto=0):
         p = cPickle.Pickler(proto)
         p.dump(arg)
         return p.getvalue()
 
-    def loads(self, *args):
-        f = StringIO(args[0])
-        p = cPickle.Unpickler(f)
-        return p.load()
+class cPickleFastPicklerTests(cPickleAbstractPicklerTests):
 
-    error = cPickle.BadPickleGet
-
-class cPickleFastPicklerTests(AbstractPickleTests):
+    """Test pickling in fast mode (ie, no recursive data structures)."""
 
     def dumps(self, arg, proto=0):
         f = StringIO()
         p = cPickle.Pickler(f, proto)
-        p.fast = 1
+        p.fast = True
         p.dump(arg)
         f.seek(0)
         return f.read()
-
-    def loads(self, *args):
-        f = StringIO(args[0])
-        p = cPickle.Unpickler(f)
-        return p.load()
-
-    error = cPickle.BadPickleGet
 
     def test_recursive_list(self):
         self.assertRaises(ValueError,
@@ -123,8 +125,8 @@ class cPickleDeepRecursive(unittest.TestCase):
 def test_main():
     test_support.run_unittest(
         cPickleTests,
-        cPicklePicklerTests,
-        cPickleListPicklerTests,
+        cPickleFilePicklerTests,
+        cPickleInternalBufferPicklerTests,
         cPickleFastPicklerTests,
         cPickleDeepRecursive,
         cPicklePicklerUnpicklerObjectTests,

@@ -403,6 +403,10 @@ class AbstractPickleTests(unittest.TestCase):
     def setUp(self):
         pass
 
+    def dump(self, arg, buf, proto=0):
+        data = self.dumps(arg, proto)
+        buf.write(data)
+
     def test_misc(self):
         # test various datatypes not tested by testdata
         for proto in protocols:
@@ -918,6 +922,17 @@ class AbstractPickleTests(unittest.TestCase):
             self.assertEqual(loaded, obj,
                              "Failed protocol %d: %r != %r"
                              % (proto, obj, loaded))
+
+    def test_unpickle_multiple_objs_from_same_file(self):
+        data1 = ["abcdefg", "abcdefg", 44]
+        data2 = range(10)
+        f = cStringIO.StringIO()
+        self.dump(data1, f)
+        self.dump(data2, f)
+        f.seek(0)
+
+        self.assertEqual(self.load(f), data1)
+        self.assertEqual(self.load(f), data2)
 
 
 # Test classes for reduce_ex
