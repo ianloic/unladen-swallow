@@ -931,7 +931,7 @@ _Unpickler_Read(Unpicklerobject *self, char **s, Py_ssize_t n)
 				return n;
 			}
 		}
-		PyErr_Format(PyExc_RuntimeError, "Ran out of input");
+		PyErr_Format(PyExc_EOFError, "Ran out of input");
 		return -1;
 	}
 	assert(self->file == NULL);
@@ -3115,8 +3115,13 @@ Pickler_dump(Picklerobject *self, PyObject *args)
 		return NULL;
 	if (dump(self, ob) < 0)
 		return NULL;
-	if (_Pickler_Optimize(self) < 0)
-		return NULL;
+	/* Do not call _Pickler_Optimize() to optimize these pickles. Doing so
+	   would remove PUT opcodes if *this particular pickle* doesn't ever
+	   GET out of the unpickler memo. We can only remove these
+	   opcodes if the user has no expectation that the Pickler maintains
+	   state between dump() requests (which it does, if you're manipulating
+	   a Pickler object directly. Accordingly, we can only strip these
+	   opcodes if cPickle.dump[s]() was called. */
 
 	if (self->file && _Pickler_FlushToFile(self) < 0)
 		return NULL;
@@ -3307,11 +3312,81 @@ pmp_clear(PicklerMemoProxyObject *self)
 	Py_RETURN_NONE;
 }
 
-PyDoc_STRVAR(clear__doc__,
+PyDoc_STRVAR(pmp_clear__doc__,
 "memo.clear() -> None.  Remove all items from memo.");
 
+static PyObject *
+pmp_copy(PicklerMemoProxyObject *self)
+{
+	Py_ssize_t i;
+	PyMemoTable *memo;
+	PyObject *new_memo = PyDict_New();
+	if (new_memo == NULL)
+		return NULL;
+
+	memo = self->pickler->memo;
+	for (i = 0; i < memo->mt_allocated; ++i) {
+		PyMemoEntry entry = memo->mt_table[i];
+		if (entry.me_key != NULL) {
+			PyObject *val, *key;
+			int res;
+			key = PyLong_FromVoidPtr(entry.me_key);
+			val = PyLong_FromLong(entry.me_value);
+			if (key == NULL || val == NULL)
+				goto failure;
+			res = PyDict_SetItem(new_memo, key, val);
+			Py_DECREF(key);
+			Py_DECREF(val);
+			if (res < 0)
+				goto failure;
+		}
+	}
+	return new_memo;
+
+failure:
+	Py_DECREF(new_memo);
+	return NULL;
+}
+
+PyDoc_STRVAR(pmp_copy__doc__,
+"memo.copy() -> new_memo.  Copy the memo to a new object.");
+
+static PyObject *
+pmp_reduce(PicklerMemoProxyObject *self, PyObject *args)
+{
+	PyObject *reduction, *dict_args;
+	PyObject *contents = pmp_copy(self);
+	if (contents == NULL)
+		return NULL;
+
+	reduction = PyTuple_New(2);
+	if (reduction == NULL)
+		goto failure;
+	dict_args = PyTuple_New(1);
+	if (dict_args == NULL) {
+		Py_DECREF(contents);
+		Py_DECREF(reduction);
+		return NULL;
+	}
+	PyTuple_SET_ITEM(dict_args, 0, contents);
+	Py_INCREF((PyObject *)&PyDict_Type);
+	PyTuple_SET_ITEM(reduction, 0, (PyObject *)&PyDict_Type);
+	PyTuple_SET_ITEM(reduction, 1, dict_args);
+	return reduction;
+
+failure:
+	Py_DECREF(contents);
+	return NULL;
+}
+
+PyDoc_STRVAR(pmp_reduce__doc__,
+"memo.__reduce__(). Convert the memo to something pickleable.");
+
 static PyMethodDef picklerproxy_methods[] = {
-	{"clear",	(PyCFunction)pmp_clear, METH_NOARGS, clear__doc__},
+	{"clear",	(PyCFunction)pmp_clear, METH_NOARGS, pmp_clear__doc__},
+	{"copy",	(PyCFunction)pmp_copy, METH_NOARGS, pmp_copy__doc__},
+	{"__reduce__",	(PyCFunction)pmp_reduce, METH_VARARGS,
+	 pmp_reduce__doc__},
 	{NULL,		NULL}	/* sentinel */
 };
 
@@ -3393,28 +3468,48 @@ Pickler_get_memo(Picklerobject *p)
 }
 
 static int
-Pickler_set_memo(Picklerobject *p, PyObject *pyvalue)
+Pickler_set_memo(Picklerobject *p, PyObject *pymemo)
 {
-	PicklerMemoProxyObject *value;
+	if (Py_TYPE(pymemo) == &PicklerMemoProxyType) {
+		PicklerMemoProxyObject *value;
+		value = (PicklerMemoProxyObject *)pymemo;
 
-	if (Py_TYPE(pyvalue) != &PicklerMemoProxyType) {
+		if (p->memo != NULL) {
+			PyMemoTable_Del(p->memo);
+			p->memo = NULL;
+		}
+
+		p->memo = PyMemoTable_Copy(value->pickler->memo);
+		if (p->memo == NULL)
+			return -1;
+
+		return 0;
+	}
+	else if (PyDict_Check(pymemo)) {
+		PyObject *pykey, *pyval;
+		Py_ssize_t i = 0;
+
+		if (p->memo != NULL)
+			PyMemoTable_Del(p->memo);
+		p->memo = PyMemoTable_New();
+
+		while (PyDict_Next(pymemo, &i, &pykey, &pyval)) {
+			long val;
+			void *key = (void *)PyLong_AsLong(pykey);
+			val = PyLong_AsLong(pyval);
+			if (PyMemoTable_Set(p->memo, key, val) < 0)
+				return -1;
+		}
+
+		return 0;
+	}
+	else {
 		PyErr_Format(PyExc_TypeError,
 			     "'memo' attribute must be a PicklerMemoProxy "
-			     "object, not %.200s", Py_TYPE(pyvalue)->tp_name);
+			     "object or dict, not %.200s",
+			     Py_TYPE(pymemo)->tp_name);
 		return -1;
 	}
-	value = (PicklerMemoProxyObject *)pyvalue;
-
-	if (p->memo != NULL) {
-		PyMemoTable_Del(p->memo);
-		p->memo = NULL;
-	}
-
-	p->memo = PyMemoTable_Copy(value->pickler->memo);
-	if (p->memo == NULL)
-		return -1;
-
-	return 0;
 }
 
 static PyObject *
@@ -5773,6 +5868,9 @@ Unpickler_clear(Unpicklerobject *self)
  * Is this a good idea? Not really, but we don't want to break code that uses
  * it. Note that we don't implement the entire mapping API here. This is
  * intentional, as these should be treated as black-box implementation details.
+ *
+ * We do, however, have to implement pickling/unpickling support because of
+ * real-world code like cvs2svn. 
  */
 
 typedef struct {
@@ -5793,8 +5891,74 @@ ump_clear(UnpicklerMemoProxyObject *self)
 PyDoc_STRVAR(ump_clear__doc__,
 "memo.clear() -> None.  Remove all items from memo.");
 
+static PyObject *
+ump_copy(UnpicklerMemoProxyObject *self)
+{
+	Py_ssize_t i;
+	PyObject *new_memo = PyDict_New();
+	if (new_memo == NULL)
+		return NULL;
+
+	for (i = 0; i < self->unpickler->memo_size; ++i) {
+		int res;
+		PyObject *key, *val;
+		val = self->unpickler->memo[i];
+		if (val == NULL)
+			continue;
+
+		key = PyLong_FromSsize_t(i);
+		if (key == NULL)
+			goto failure;
+		res = PyDict_SetItem(new_memo, key, val);
+		Py_DECREF(key);
+		if (res < 0)
+			goto failure;
+	}
+	return new_memo;
+
+failure:
+	Py_DECREF(new_memo);
+	return NULL;
+}
+
+PyDoc_STRVAR(ump_copy__doc__,
+"memo.copy() -> new_memo.  Copy the memo to a new object.");
+
+static PyObject *
+ump_reduce(UnpicklerMemoProxyObject *self, PyObject *args)
+{
+	PyObject *reduction, *constructor_args;
+	PyObject *contents = ump_copy(self);
+	if (contents == NULL)
+		return NULL;
+
+	reduction = PyTuple_New(2);
+	if (reduction == NULL) {
+		Py_DECREF(contents);
+		return NULL;
+	}
+	constructor_args = PyTuple_New(1);
+	if (constructor_args == NULL) {
+		Py_DECREF(contents);
+		Py_DECREF(reduction);
+		return NULL;
+	}
+	PyTuple_SET_ITEM(constructor_args, 0, contents);
+	Py_INCREF((PyObject *)&PyDict_Type);
+	PyTuple_SET_ITEM(reduction, 0, (PyObject *)&PyDict_Type);
+	PyTuple_SET_ITEM(reduction, 1, constructor_args);
+	return reduction;
+}
+
+PyDoc_STRVAR(ump_reduce__doc__,
+"memo.__reduce__(). Convert the memo to something pickleable.");
+
+
 static PyMethodDef unpicklerproxy_methods[] = {
 	{"clear",	(PyCFunction)ump_clear, METH_NOARGS, ump_clear__doc__},
+	{"copy",	(PyCFunction)ump_copy, METH_NOARGS, ump_copy__doc__},
+	{"__reduce__",	(PyCFunction)ump_reduce, METH_VARARGS,
+	 ump_reduce__doc__},
 	{NULL,		NULL}	/* sentinel */
 };
 
@@ -5933,27 +6097,49 @@ Unpickler_setattr(Unpicklerobject *self, char *name, PyObject *value)
 
 	if (!strcmp(name, "memo")) {
 		PyObject **new_memo;
-		Unpicklerobject *unpickler;
 		Py_ssize_t i;
 
-		if (Py_TYPE(value) != &UnpicklerMemoProxyType) {
+		if (Py_TYPE(value) == &UnpicklerMemoProxyType) {
+			Unpicklerobject *unpickler =
+				((UnpicklerMemoProxyObject *)value)->unpickler;
+			new_memo = _Unpickler_NewMemo(unpickler->memo_size);
+			if (new_memo == NULL)
+				return -1;
+			_Unpickler_MemoCleanup(self);
+			self->memo_size = unpickler->memo_size;
+			self->memo = new_memo;
+			for (i = 0; i < self->memo_size; i++) {
+				Py_XINCREF(unpickler->memo[i]);
+				self->memo[i] = unpickler->memo[i];
+			}
+		}
+		else if (PyDict_Check(value)) {
+			Py_ssize_t i = 0;
+			PyObject *pykey, *pyval;
+
+			new_memo = _Unpickler_NewMemo(PyDict_Size(value));
+			if (new_memo == NULL)
+				return -1;
+			_Unpickler_MemoCleanup(self);
+			self->memo_size = PyDict_Size(value);
+			self->memo = new_memo;
+
+			while (PyDict_Next(value, &i, &pykey, &pyval)) {
+				int res;
+				Py_ssize_t idx = PyLong_AsSsize_t(pykey);
+				Py_INCREF(pyval);
+				res = _Unpickler_MemoPut(self, idx, pyval);
+				if (res < 0)
+					return -1;
+			}
+		}
+		else {
 			PyErr_Format(PyExc_TypeError,
 				     "'memo' attribute must be an "
-				     "UnpicklerMemoProxy object, not %.200s",
+				     "UnpicklerMemoProxy object or dict, "
+				     "not %.200s",
 				     Py_TYPE(value)->tp_name);
 			return -1;
-		}
-
-		unpickler = ((UnpicklerMemoProxyObject *)value)->unpickler;
-		new_memo = _Unpickler_NewMemo(unpickler->memo_size);
-		if (new_memo == NULL)
-			return -1;
-		_Unpickler_MemoCleanup(self);
-		self->memo_size = unpickler->memo_size;
-		self->memo = new_memo;
-		for (i = 0; i < self->memo_size; i++) {
-			Py_XINCREF(unpickler->memo[i]);
-			self->memo[i] = unpickler->memo[i];
 		}
 		return 0;
 	}
@@ -6183,6 +6369,7 @@ init_stuff(PyObject *module_dict)
 	INIT_STR(readline);
 	INIT_STR(copyreg);
 	INIT_STR(dispatch_table);
+#undef INIT_STR
 
 	if (!( copyreg = PyImport_ImportModule("copy_reg")))
 		return -1;

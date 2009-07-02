@@ -820,6 +820,9 @@ class AbstractPickleTests(unittest.TestCase):
             else:
                 self.failUnless(num_setitems >= 2)
 
+    def test_load_empty_string(self):
+        self.assertRaises(EOFError, self.loads, "")
+
     def test_simple_newobj(self):
         x = object.__new__(SimpleNewObj)  # avoid __init__
         x.abc = 666
@@ -1102,6 +1105,16 @@ class AbstractPicklerUnpicklerObjectTests(unittest.TestCase):
         assert self.pickler_class
         assert self.unpickler_class
 
+    def dumps(self, obj, proto=0):
+        buf = cStringIO.StringIO()
+        pickler = self.pickler_class(buf, proto)
+        pickler.dump(obj)
+        return buf.getvalue()
+
+    def loads(self, input):
+        unpickler = self.unpickler_class(cStringIO.StringIO(input))
+        return unpickler.load()
+
     def test_clear_pickler_memo(self):
         # To test whether clear_memo() has any effect, we pickle an object,
         # then pickle it again without clearing the memo; the two serialized
@@ -1207,3 +1220,120 @@ class AbstractPicklerUnpicklerObjectTests(unittest.TestCase):
         f.write(pickled2)
         f.seek(0)
         self.assertEqual(unpickler.load(), data2)
+
+    def test_pickle_multiple_objects_to_the_same_stream(self):
+        # Test that we don't optimize out necessary PUT opcodes from the first
+        # pickle. Even though *that individual pickle* may not need the memo
+        # state, subsequent pickles written with the same Pickler object are
+        # relying on the memo state.
+        val1 = "this is a string"
+        data = [(val1, 1), (val1, 2), (val1, 3)]
+
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+        for obj in data:
+            pickler.dump(obj)
+
+        f.seek(0)
+
+        unpickler = self.unpickler_class(f)
+        for obj in data:
+            got_obj = unpickler.load()
+            self.assertEqual(obj, got_obj)
+
+    def test_copy_pickler_memo(self):
+        pickler = self.pickler_class(cStringIO.StringIO())
+        pickler.dump("abadsfasd")
+        memo = pickler.memo.copy()
+        pickler.memo.clear()
+        self.assertEqual(len(memo), 1)
+
+    def test_copy_unpickler_memo(self):
+        string = "abasdfasdf"
+        sample_data = self.dumps([string, string])
+        unpickler = self.unpickler_class(cStringIO.StringIO(sample_data))
+        unpickler.load()
+        memo = unpickler.memo.copy()
+        self.assertTrue(string in memo.values(), memo)
+        unpickler.memo.clear()
+        self.assertTrue(string in memo.values(), memo)
+        # Make sure we can call copy() and that the unpickler accepts the
+        # returned object.
+        unpickler.memo = memo.copy()
+
+    def test_priming_picklers_unpicklers(self):
+        # This test is distilled from the cvs2svn tool. In order to save space
+        # in their pickle database, cvs2svn "primes" the pickler/unpickler memos
+        # with common objects so that these objects are represented by GET
+        # opcodes in the pickles, rather than the much longer sequences they
+        # would otherwise generate. In order to make use of the priming memos,
+        # the memos themselves are pickled to the front of the data stream.
+        # We simulate this process here. Consider this a large integration test,
+        # while the tests above are intended to be more fine-grained.
+
+        # Objects we want to share between pickles.
+        common1 = "asdfasdfasdfa"
+        common2 = "asdfadfadfshdifu"
+        common3 = (5, 6)
+        common_objects = [common1, common2, common3]
+
+        # Combinations of the above objects. These will be sent through
+        # the data stream.
+        combo1 = (common1, common2)
+        combo2 = (6, common3)
+        combo3 = (common1, common2, common3)
+
+        data_stream = cStringIO.StringIO()
+
+        # 1. Pickle the common objects, extract the Pickler's memo.
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+        pickler.dump(common_objects)
+        pickler_memo = pickler.memo.copy()
+        priming_data = f.getvalue()
+
+        # 2. Unpickle the common objects, extract the Unpickler's memo.
+        unpickler = self.unpickler_class(cStringIO.StringIO(priming_data))
+        unpickler.load()
+        unpickler_memo = unpickler.memo.copy()
+
+        # 3. Write the pickler and unpickler memos to the data stream. These
+        # will be used to retrieve data from the stream.
+        pickler = self.pickler_class(data_stream)
+        pickler.dump(pickler_memo)
+        pickler.dump(unpickler_memo)
+
+        # 4. Pickle some more data to the data stream, using the priming memos.
+        # cvs2svn resets the memo before every object.
+        pickler = self.pickler_class(data_stream)
+        pickler.memo = pickler_memo.copy()
+        pickler.dump(combo1)
+        pickler.memo = pickler_memo.copy()
+        pickler.dump(combo2)
+
+        # 5. Now start reading the data. We read the priming memos first.
+        data_stream.seek(0)
+        unpickler = self.unpickler_class(data_stream)
+        recv_pickler_memo = unpickler.load()
+        recv_unpickler_memo = unpickler.load()
+        self.assertEqual(recv_pickler_memo, pickler_memo)
+        self.assertEqual(recv_unpickler_memo, unpickler_memo)
+
+        # 6. Using the received unpickling primer memo, unpickle the rest of
+        # the data stream. cvs2svn resets the memo before every object.
+        unpickler = self.unpickler_class(data_stream)
+        unpickler.memo = recv_unpickler_memo.copy()
+        self.assertEqual(unpickler.load(), combo1)
+        unpickler.memo = recv_unpickler_memo.copy()
+        self.assertEqual(unpickler.load(), combo2)
+
+        # 7. Pickle something using the received pickler memo, then unpickle it
+        # to make sure that the pickler memo works.
+        f = cStringIO.StringIO()
+        pickler = self.pickler_class(f)
+        pickler.memo = recv_pickler_memo.copy()
+        pickler.dump(combo3)
+        f.seek(0)
+        unpickler = self.unpickler_class(f)
+        unpickler.memo = recv_unpickler_memo.copy()
+        self.assertEqual(unpickler.load(), combo3)
