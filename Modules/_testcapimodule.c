@@ -779,55 +779,67 @@ static PyObject *
 test_memotable(PyObject *self)
 {
 	PyMemoTable *memo, *copy;
-	long i;
+	PyObject *five, *three;
+	long i, refcnt;
 
 #define ASSERT_EQ(a, b, msg) if ((a) != (b)) { \
 	return raiseTestError("test_memotable", #a " != " #b ": " msg); }
 
 	memo = PyMemoTable_New();
 	ASSERT_EQ(PyMemoTable_Size(memo), 0, "Non-zero empty size");
-	ASSERT_EQ(PyMemoTable_Get(memo, (void *)5), NULL, "Got invalid entry");
+	five = PyInt_FromLong(5);
+	assert(five && "Failed to get 5");
+	ASSERT_EQ(PyMemoTable_Get(memo, five), NULL, "Got invalid entry");
 
-	PyMemoTable_Set(memo, (void *)5, 7);
+	refcnt = Py_REFCNT(five);
+	PyMemoTable_Set(memo, five, 7);
 	ASSERT_EQ(PyMemoTable_Size(memo), 1, "Bad memo size");
-	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 7, "Failed to get entry");
+	ASSERT_EQ(*PyMemoTable_Get(memo, five), 7, "Failed to get entry");
+	ASSERT_EQ(Py_REFCNT(five), refcnt + 1, "Failed to incref key");
 
 	/* Update an existing entry */
-	PyMemoTable_Set(memo, (void *)5, 9);
+	PyMemoTable_Set(memo, five, 9);
 	ASSERT_EQ(PyMemoTable_Size(memo), 1, "Bad memo size");
-	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 9, "Failed to get entry");
-
-	/* Force a hash collision */
-	PyMemoTable_Set(memo, (void *)21, 11);
-	ASSERT_EQ(PyMemoTable_Size(memo), 2, "Bad memo size");
-	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)5), 9, "Failed to get entry");
-	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)21), 11,
-		  "Failed to get entry");
+	ASSERT_EQ(*PyMemoTable_Get(memo, five), 9, "Failed to get entry");
+	ASSERT_EQ(Py_REFCNT(five), refcnt + 1, "Incorrectly increfed key");
 
 	/* Clear the memo */
 	PyMemoTable_Clear(memo);
 	ASSERT_EQ(PyMemoTable_Size(memo), 0, "Non-zero empty size");
-	ASSERT_EQ(PyMemoTable_Get(memo, (void *)5), NULL, "Got invalid entry");
-	ASSERT_EQ(PyMemoTable_Get(memo, (void *)21), NULL,
-		  "Got invalid entry");
+	ASSERT_EQ(PyMemoTable_Get(memo, five), NULL, "Got invalid entry");
+	Py_DECREF(five);
 
-	/* Insert enough entries to trigger a resize. */
-	for (i = 1; i < 12; i++)
-		PyMemoTable_Set(memo, (void *)i, i);
+	/* Insert enough entries to trigger a resize. These tests rely on the
+	   fact that Python caches small ints so that we end up with the same
+	   object in each of the two loops below. */
+	for (i = 1; i < 12; i++) {
+		PyObject *obj = PyInt_FromLong(i);
+		assert(obj && "Failed to create an int");
+		PyMemoTable_Set(memo, obj, i);
+		Py_DECREF(obj);
+	}
 	ASSERT_EQ(PyMemoTable_Size(memo), 11, "Bad memo size");
 	ASSERT_EQ(memo->mt_allocated, 32, "Allocated less/more than expected");
-	for (i = 1; i < 12; i++)
-		ASSERT_EQ(*PyMemoTable_Get(memo, (void *)i), i, "Wrong value");
+	for (i = 1; i < 12; i++) {
+		PyObject *obj = PyInt_FromLong(i);
+		assert(obj && "Failed to create an int");
+		ASSERT_EQ(*PyMemoTable_Get(memo, obj), i, "Wrong value");
+		Py_DECREF(obj);
+	}
 
 	/* Copy the memo, and verify that the copy is independent. */
 	copy = PyMemoTable_Copy(memo);
-	PyMemoTable_Set(copy, (void *)3, 777);
-	ASSERT_EQ(*PyMemoTable_Get(memo, (void *)3), 3, "Wrong value");
-	ASSERT_EQ(*PyMemoTable_Get(copy, (void *)3), 777, "Wrong value");
+	three = PyInt_FromLong(3);
+	assert(three && "Failed to create an int");
+	PyMemoTable_Set(copy, three, 777);
+	ASSERT_EQ(*PyMemoTable_Get(memo, three), 3, "Wrong value");
+	ASSERT_EQ(*PyMemoTable_Get(copy, three), 777, "Wrong value");
+	Py_DECREF(three);
 
 	PyMemoTable_Del(memo);
 	PyMemoTable_Del(copy);
 	Py_RETURN_NONE;
+#undef ASSERT_EQ
 }
 
 /* End of tests for the PyMemoTable object in cPickle.c */

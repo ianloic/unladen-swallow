@@ -351,6 +351,7 @@ PyMemoTable_New(void)
 STATIC_MEMOTABLE PyMemoTable *
 PyMemoTable_Copy(PyMemoTable *self)
 {
+	Py_ssize_t i;
 	PyMemoTable *new = PyMemoTable_New();
 	if (new == NULL)
 		return NULL;
@@ -366,6 +367,9 @@ PyMemoTable_Copy(PyMemoTable *self)
 		PyMem_FREE(new);
 		return NULL;
 	}
+	for (i = 0; i < self->mt_allocated; i++) {
+		Py_XINCREF(self->mt_table[i].me_key);
+	}
 	memcpy(new->mt_table, self->mt_table,
 	       sizeof(PyMemoEntry) * self->mt_allocated);
 
@@ -375,6 +379,8 @@ PyMemoTable_Copy(PyMemoTable *self)
 STATIC_MEMOTABLE void
 PyMemoTable_Del(PyMemoTable *self)
 {
+	PyMemoTable_Clear(self);
+
 	PyMem_FREE(self->mt_table);
 	PyMem_FREE(self);
 }
@@ -388,6 +394,11 @@ PyMemoTable_Size(PyMemoTable *self)
 STATIC_MEMOTABLE int
 PyMemoTable_Clear(PyMemoTable *self)
 {
+	Py_ssize_t i;
+	for (i = 0; i < self->mt_allocated; i++) {
+		Py_XDECREF(self->mt_table[i].me_key);
+	}
+
 	self->mt_used = 0;
 	memset(self->mt_table, 0, self->mt_allocated * sizeof(PyMemoEntry));
 	return 0;
@@ -396,7 +407,7 @@ PyMemoTable_Clear(PyMemoTable *self)
 /* Since entries cannot be deleted from this hashtable, _PyMemoTable_Lookup()
    can be considerably simpler than dictobject.c's lookdict(). */
 static PyMemoEntry *
-_PyMemoTable_Lookup(PyMemoTable *self, void *key)
+_PyMemoTable_Lookup(PyMemoTable *self, PyObject *key)
 {
 	size_t i;
 	size_t perturb;
@@ -477,7 +488,7 @@ _PyMemoTable_ResizeTable(PyMemoTable *self, Py_ssize_t min_size)
 
 /* Returns NULL on failure, a pointer to the value otherwise. */
 STATIC_MEMOTABLE long *
-PyMemoTable_Get(PyMemoTable *self, void *key)
+PyMemoTable_Get(PyMemoTable *self, PyObject *key)
 {
 	PyMemoEntry *entry = _PyMemoTable_Lookup(self, key);
 	if (entry->me_key == NULL)
@@ -487,7 +498,7 @@ PyMemoTable_Get(PyMemoTable *self, void *key)
 
 /* Returns -1 on failure, 0 on success. */
 STATIC_MEMOTABLE int
-PyMemoTable_Set(PyMemoTable *self, void *key, long value)
+PyMemoTable_Set(PyMemoTable *self, PyObject *key, long value)
 {
 	PyMemoEntry *entry;
 
@@ -498,6 +509,7 @@ PyMemoTable_Set(PyMemoTable *self, void *key, long value)
 		entry->me_value = value;
 		return 0;
 	}
+	Py_INCREF(key);
 	entry->me_key = key;
 	entry->me_value = value;
 	self->mt_used++;
@@ -1066,7 +1078,7 @@ pystrndup(const char *s, int n)
 
 
 static int
-get(Picklerobject *self, void *id)
+get(Picklerobject *self, PyObject *id)
 {
 	long *value;
 	char s[30];
@@ -1074,7 +1086,7 @@ get(Picklerobject *self, void *id)
 
 	value = PyMemoTable_Get(self->memo, id);
 	if (value == NULL)  {
-		PyErr_SetObject(PyExc_KeyError, PyLong_FromVoidPtr(id));
+		PyErr_SetObject(PyExc_KeyError, PyLong_FromVoidPtr((void *)id));
 		return -1;
 	}
 
@@ -1129,7 +1141,7 @@ put2(Picklerobject *self, PyObject *ob)
 
 	/* PyMemoTable_{Get,Set} doesn't accept null pointers as keys. */
 	p = PyMemoTable_Size(self->memo) + 1;
-	if (PyMemoTable_Set(self->memo, (void *)ob, p) < 0)
+	if (PyMemoTable_Set(self->memo, ob, p) < 0)
 		return -1;
 
 	if (!self->bin) {
@@ -3494,10 +3506,8 @@ Pickler_set_memo(Picklerobject *p, PyObject *pymemo)
 		p->memo = PyMemoTable_New();
 
 		while (PyDict_Next(pymemo, &i, &pykey, &pyval)) {
-			long val;
-			void *key = (void *)PyLong_AsLong(pykey);
-			val = PyLong_AsLong(pyval);
-			if (PyMemoTable_Set(p->memo, key, val) < 0)
+			long val = PyLong_AsLong(pyval);
+			if (PyMemoTable_Set(p->memo, pykey, val) < 0)
 				return -1;
 		}
 
