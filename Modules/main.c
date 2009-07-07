@@ -586,6 +586,7 @@ Py_Main(int argc, char **argv)
 	    (command == NULL && filename == NULL && module == NULL && stdin_is_interactive)) {
 		fprintf(stderr, "Python %s on %s\n",
 			Py_GetVersion(), Py_GetPlatform());
+		fprintf(stderr, "[Unladen Swallow %s]\n", UNLADEN_VERSION);
  		if (!Py_NoSiteFlag)
  			fprintf(stderr, "%s\n", COPYRIGHT);
 	}

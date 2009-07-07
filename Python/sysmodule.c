@@ -1049,6 +1049,7 @@ maxunicode -- the largest supported character\n\
 builtin_module_names -- tuple of module names built into this interpreter\n\
 version -- the version of this interpreter as a string\n\
 version_info -- version information as a tuple\n\
+unladen_swallow -- which version of Unladen Swallow this is\n\
 hexversion -- version information encoded as a single integer\n\
 copyright -- copyright notice pertaining to this interpreter\n\
 platform -- platform identifier\n\
@@ -1354,6 +1355,8 @@ _PySys_Init(void)
 			     PyString_FromString(Py_GetVersion()));
 	SET_SYS_FROM_STRING("hexversion",
 			     PyInt_FromLong(PY_VERSION_HEX));
+	SET_SYS_FROM_STRING("unladen_swallow",
+			     PyString_FromString(UNLADEN_VERSION));
 	svnversion_init();
 	SET_SYS_FROM_STRING("subversion",
 			     Py_BuildValue("(ssz)", "CPython", branch,
