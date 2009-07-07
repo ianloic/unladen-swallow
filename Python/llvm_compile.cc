@@ -451,20 +451,12 @@ _PyCode_To_Llvm(PyCodeObject *code)
             assert(info.block_ != NULL &&
                    "We expect that any backedge is to the beginning"
                    " of a basic block.");
-            if (i == 0 || instr_info[i - 1].line_number_ != info.line_number_) {
-                // If the backedge lands at a line boundary, the line
-                // boundary will take care of calling the trace
-                // function, so we don't want to insert extra tracing
-                // code.  Just branch directly from the backedge_block
-                // to the normal execution block.
-                llvm::BranchInst::Create(
-                    /*target=*/info.block_,
-                    /*inserted into=*/info.backedge_block_);
-            } else {
-                fbuilder.SetLasti(i);
-                fbuilder.TraceBackedgeLanding(info.backedge_block_, info.block_,
-                                              info.line_number_);
-            }
+            fbuilder.SetLasti(i);
+            bool backedge_is_to_start_of_line =
+                i == 0 || instr_info[i - 1].line_number_ != info.line_number_;
+            fbuilder.FillBackedgeLanding(info.backedge_block_, info.block_,
+                                         backedge_is_to_start_of_line,
+                                         info.line_number_);
         }
     }
 

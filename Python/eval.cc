@@ -912,46 +912,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 				   a try: finally: block uninterruptable. */
 				goto fast_next_opcode;
 			}
-			_Py_Ticker = _Py_CheckInterval;
-			tstate->tick_counter++;
-			if (things_to_do) {
-				if (Py_MakePendingCalls() < 0) {
-					why = WHY_EXCEPTION;
-					goto on_error;
-				}
-				if (things_to_do)
-					/* MakePendingCalls() didn't succeed.
-					   Force early re-execution of this
-					   "periodic" code, possibly after
-					   a thread switch */
-					_Py_Ticker = 0;
+			if (_PyEval_HandlePyTickerExpired(tstate) == -1) {
+				why = WHY_EXCEPTION;
+				goto on_error;
 			}
-#ifdef WITH_THREAD
-			if (interpreter_lock) {
-				/* Give another thread a chance */
-
-				if (PyThreadState_Swap(NULL) != tstate)
-					Py_FatalError("ceval: tstate mix-up");
-				PyThread_release_lock(interpreter_lock);
-
-				/* Other threads may run now */
-
-				PyThread_acquire_lock(interpreter_lock, 1);
-				if (PyThreadState_Swap(tstate) != NULL)
-					Py_FatalError("ceval: orphan tstate");
-
-				/* Check for thread interrupts */
-
-				if (tstate->async_exc != NULL) {
-					x = tstate->async_exc;
-					tstate->async_exc = NULL;
-					PyErr_SetNone(x);
-					Py_DECREF(x);
-					why = WHY_EXCEPTION;
-					goto on_error;
-				}
-			}
-#endif
 		}
 
 	fast_next_opcode:
@@ -3300,6 +3264,50 @@ Error:
 	return -1;
 }
 
+int
+_PyEval_HandlePyTickerExpired(PyThreadState *tstate)
+{
+	_Py_Ticker = _Py_CheckInterval;
+	tstate->tick_counter++;
+	if (things_to_do) {
+		if (Py_MakePendingCalls() < 0) {
+			return -1;
+		}
+		if (things_to_do) {
+			/* MakePendingCalls() didn't succeed.
+			   Force early re-execution of this
+			   "periodic" code, possibly after
+			   a thread switch */
+			_Py_Ticker = 0;
+		}
+	}
+#ifdef WITH_THREAD
+	if (interpreter_lock) {
+		/* Give another thread a chance */
+
+		if (PyThreadState_Swap(NULL) != tstate)
+			Py_FatalError("ceval: tstate mix-up");
+		PyThread_release_lock(interpreter_lock);
+
+		/* Other threads may run now */
+
+		PyThread_acquire_lock(interpreter_lock, 1);
+		if (PyThreadState_Swap(tstate) != NULL)
+			Py_FatalError("ceval: orphan tstate");
+
+		/* Check for thread interrupts */
+
+		if (tstate->async_exc != NULL) {
+			PyObject *x = tstate->async_exc;
+			tstate->async_exc = NULL;
+			PyErr_SetNone(x);
+			Py_DECREF(x);
+			return -1;
+		}
+	}
+#endif
+	return 0;
+}
 
 #ifdef LLTRACE
 static int

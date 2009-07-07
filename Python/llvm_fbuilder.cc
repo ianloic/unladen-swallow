@@ -810,15 +810,36 @@ LlvmFunctionBuilder::SetLineNumber(int line)
 }
 
 void
-LlvmFunctionBuilder::TraceBackedgeLanding(BasicBlock *backedge_landing,
-                                          BasicBlock *target,
-                                          int line_number)
+LlvmFunctionBuilder::FillBackedgeLanding(BasicBlock *backedge_landing,
+                                         BasicBlock *target,
+                                         bool to_start_of_line,
+                                         int line_number)
 {
+    BasicBlock *continue_backedge = NULL;
+    if (to_start_of_line) {
+        continue_backedge = target;
+    }
+    else {
+        continue_backedge = BasicBlock::Create(
+            backedge_landing->getName() + ".cont", this->function_);
+    }
+
     this->builder_.SetInsertPoint(backedge_landing);
-    this->builder_.CreateStore(
-        ConstantInt::getSigned(PyTypeBuilder<int>::get(), line_number),
-        this->f_lineno_addr_);
-    this->MaybeCallLineTrace(target, _PYFRAME_BACKEDGE_TRACE);
+    this->CheckPyTicker(continue_backedge);
+
+    if (!to_start_of_line) {
+        continue_backedge->moveAfter(backedge_landing);
+        this->builder_.SetInsertPoint(continue_backedge);
+        // Record the new line number.  This is after _Py_Ticker, so
+        // exceptions from signals will appear to come from the source of
+        // the backedge.
+        this->builder_.CreateStore(
+            ConstantInt::getSigned(PyTypeBuilder<int>::get(), line_number),
+            this->f_lineno_addr_);
+
+        // If tracing has been turned on, jump back to the interpreter.
+        this->MaybeCallLineTrace(target, _PYFRAME_BACKEDGE_TRACE);
+    }
 }
 
 void
@@ -1373,6 +1394,9 @@ LlvmFunctionBuilder::CALL_FUNCTION(int oparg)
     this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
     this->PropagateExceptionOnNull(result);
     this->Push(result);
+
+    // Check signals and maybe switch threads after each function call.
+    this->CheckPyTicker();
 }
 
 // Keep this in sync with eval.cc
@@ -1399,6 +1423,9 @@ LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
         this->stack_pointer_addr_);
     this->PropagateExceptionOnNonZero(result);
     // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
+
+    // Check signals and maybe switch threads after each function call.
+    this->CheckPyTicker();
 }
 
 void
@@ -2721,6 +2748,22 @@ LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler)
         stack_level
     };
     this->CreateCall(blocksetup, args, array_endof(args));
+}
+
+void
+LlvmFunctionBuilder::CheckPyTicker(BasicBlock *next_block)
+{
+    if (next_block == NULL) {
+        next_block = BasicBlock::Create("ticker_dec_end", this->function_);
+    }
+    Value *pyticker_result = this->builder_.CreateCall(
+        this->GetGlobalFunction<int(PyThreadState*)>(
+            "_PyLlvm_DecAndCheckPyTicker"),
+        this->tstate_);
+    this->builder_.CreateCondBr(this->IsNegative(pyticker_result),
+                                this->propagate_exception_block_,
+                                next_block);
+    this->builder_.SetInsertPoint(next_block);
 }
 
 void

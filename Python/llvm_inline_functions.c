@@ -121,6 +121,15 @@ _PyLlvm_FastEnterExceptOrFinally(struct PyExcInfo *exc_info, int block_type)
     PyErr_Clear();
 }
 
+int __attribute__((always_inline))
+_PyLlvm_DecAndCheckPyTicker(PyThreadState *tstate)
+{
+    if (--_Py_Ticker < 0) {
+        return _PyEval_HandlePyTickerExpired(tstate);
+    }
+    return 0;
+}
+
 PyThreadState * __attribute__((always_inline))
 _PyLlvm_WrapPyThreadState_GET()
 {

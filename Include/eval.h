@@ -194,6 +194,8 @@ PyAPI_FUNC(PyObject *) _PyEval_LoadName(struct _frame *, int);
 PyAPI_FUNC(int) _PyEval_StoreName(struct _frame *, int, PyObject *);
 PyAPI_FUNC(int) _PyEval_DeleteName(struct _frame *, int);
 
+PyAPI_FUNC(int) _PyEval_HandlePyTickerExpired(PyThreadState *tstate);
+
 /* Records whether tracing is on for any thread.  Counts the number of
  * threads for which tstate->c_tracefunc is non-NULL, so if the value
  * is 0, we know we don't have to check this thread's c_tracefunc.

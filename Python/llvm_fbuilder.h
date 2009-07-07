@@ -37,15 +37,17 @@ public:
     /// right places.
     void SetLineNumber(int line);
 
-    /// Emits code into backedge_landing to call the line tracing
-    /// function and then branch to target.  We need to re-set the
-    /// line number in this function because the target may be in the
-    /// middle of a different line than the source.  This function
-    /// leaves the insert point in backedge_landing which is probably
-    /// not where the caller wants it.
-    void TraceBackedgeLanding(llvm::BasicBlock *backedge_landing,
-                              llvm::BasicBlock *target,
-                              int line_number);
+    /// This function fills the block that handles a backedge.  Each
+    /// backedge needs to check if it needs to handle signals or
+    /// switch threads.  If the backedge doesn't land at the start of
+    /// a line, it also needs to update the line number and check
+    /// whether line tracing has been turned on.  This function leaves
+    /// the insert point in a block with a terminator already added,
+    /// so the caller should re-set the insert point.
+    void FillBackedgeLanding(llvm::BasicBlock *backedge_landing,
+                             llvm::BasicBlock *target,
+                             bool to_start_of_line,
+                             int line_number);
 
     /// Sets the insert point to next_block, inserting an
     /// unconditional branch to there if the current block doesn't yet
@@ -255,6 +257,11 @@ private:
 
     // Copies the elements from array[0] to array[N-1] to target, bytewise.
     void MemCpy(llvm::Value *target, llvm::Value *array, llvm::Value *N);
+
+    // Emits code to decrement _Py_Ticker and handle signals and
+    // thread-switching when it expires.  Falls through to next_block (or a
+    // new block if it's NULL) and leaves the insertion point there.
+    void CheckPyTicker(llvm::BasicBlock *next_block = NULL);
 
     // These are just like the CreateCall* calls on IRBuilder, except they also
     // apply callee's calling convention and attributes to the call site.
