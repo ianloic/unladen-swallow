@@ -2177,6 +2177,7 @@ batch_dict_exact(Picklerobject *self, PyObject *obj)
 	int i;
 	Py_ssize_t dict_size, ppos = 0;
 
+	static const char setitem = SETITEM;
 	static const char setitems = SETITEMS;
 
 	assert(obj != NULL);
@@ -2184,6 +2185,19 @@ batch_dict_exact(Picklerobject *self, PyObject *obj)
 	assert(PyDict_CheckExact(obj));
 
 	dict_size = PyDict_Size(obj);
+
+	 /* Special-case len(d) == 1 to save space. */
+	if (dict_size == 1) {
+		PyDict_Next(obj, &ppos, &key, &value);
+		if (save(self, key, 0) < 0)
+			return -1;
+		if (save(self, value, 0) < 0)
+			return -1;
+		if (_Pickler_Write(self, &setitem, 1) < 0)
+			return -1;
+		return 0;
+	}
+
 	/* Write in batches of BATCHSIZE. */
 	do {
 		i = 0;
