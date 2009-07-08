@@ -1404,49 +1404,58 @@ LlvmFunctionBuilder::CALL_FUNCTION(int oparg)
 #define CALL_FLAG_KW 2
 
 void
-LlvmFunctionBuilder::CallVarKwFunction(int num_args, int call_flag)
+LlvmFunctionBuilder::CallVarKwFunction(int oparg, int call_flag)
 {
     this->LogCallStart();
+    Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
+    int num_args = oparg & 0xff;
+    int num_kwargs = (oparg>>8) & 0xff;
     Function *call_function = this->GetGlobalFunction<
-        PyObject *(PyObject ***, int, int)>("_PyEval_CallFunctionVarKw");
-    this->builder_.CreateStore(
-        this->builder_.CreateLoad(this->stack_pointer_addr_),
-        this->tmp_stack_pointer_addr_);
+        PyObject *(PyObject **, int, int, int)>("_PyEval_CallFunctionVarKw");
     Value *result = this->CreateCall(
         call_function,
-        this->tmp_stack_pointer_addr_,
+        stack_pointer,
         ConstantInt::get(PyTypeBuilder<int>::get(), num_args),
+        ConstantInt::get(PyTypeBuilder<int>::get(), num_kwargs),
         ConstantInt::get(PyTypeBuilder<int>::get(), call_flag),
         "CALL_FUNCTION_VAR_KW_result");
-    this->builder_.CreateStore(
-        this->builder_.CreateLoad(this->tmp_stack_pointer_addr_),
-        this->stack_pointer_addr_);
-    this->PropagateExceptionOnNonZero(result);
-    // _PyEval_CallFunctionVarKw() already pushed the result onto our stack.
+    int stack_items = num_args + 2 * num_kwargs + 1;
+    if (call_flag & CALL_FLAG_VAR) {
+        ++stack_items;
+    }
+    if (call_flag & CALL_FLAG_KW) {
+        ++stack_items;
+    }
+    Value *new_stack_pointer = this->builder_.CreateGEP(
+        stack_pointer,
+        ConstantInt::getSigned(Type::Int64Ty, -stack_items));
+    this->builder_.CreateStore(new_stack_pointer, this->stack_pointer_addr_);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
 
     // Check signals and maybe switch threads after each function call.
     this->CheckPyTicker();
 }
 
 void
-LlvmFunctionBuilder::CALL_FUNCTION_VAR(int num_args)
+LlvmFunctionBuilder::CALL_FUNCTION_VAR(int oparg)
 {
     this->LogCallStart();
-    this->CallVarKwFunction(num_args, CALL_FLAG_VAR);
+    this->CallVarKwFunction(oparg, CALL_FLAG_VAR);
 }
 
 void
-LlvmFunctionBuilder::CALL_FUNCTION_KW(int num_args)
+LlvmFunctionBuilder::CALL_FUNCTION_KW(int oparg)
 {
     this->LogCallStart();
-    this->CallVarKwFunction(num_args, CALL_FLAG_KW);
+    this->CallVarKwFunction(oparg, CALL_FLAG_KW);
 }
 
 void
-LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int num_args)
+LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int oparg)
 {
     this->LogCallStart();
-    this->CallVarKwFunction(num_args, CALL_FLAG_KW | CALL_FLAG_VAR);
+    this->CallVarKwFunction(oparg, CALL_FLAG_KW | CALL_FLAG_VAR);
 }
 
 #undef CALL_FLAG_VAR

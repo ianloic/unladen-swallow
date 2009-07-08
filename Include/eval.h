@@ -180,7 +180,7 @@ PyAPI_FUNC(void) _PyEval_RaiseForGlobalNameError(PyObject *name);
 PyAPI_FUNC(void) _PyEval_RaiseForUnboundFreeVar(struct _frame *, int);
 
 PyAPI_FUNC(PyObject *) _PyEval_CallFunction(PyObject **, int, int);
-PyAPI_FUNC(int) _PyEval_CallFunctionVarKw(PyObject ***, int, int);
+PyAPI_FUNC(PyObject *) _PyEval_CallFunctionVarKw(PyObject **, int, int, int);
 
 PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(int) _PyEval_AssignSlice(PyObject *, PyObject *,

@@ -601,7 +601,7 @@ PyEval_EvalFrame(PyFrameObject *f)
    (http://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html).
 
    The traditional bytecode evaluation loop uses a "switch" statement, which
-   decent compilers will optimize as a single indirect branch instruction 
+   decent compilers will optimize as a single indirect branch instruction
    combined with a lookup table of jump addresses. However, since the
    indirect jump instruction is shared by all opcodes, the CPU will have a
    hard time making the right prediction for where to jump next (actually,
@@ -616,7 +616,7 @@ PyEval_EvalFrame(PyFrameObject *f)
    a much better chance to turn out valid, especially in small bytecode loops.
 
    A mispredicted branch on a modern CPU flushes the whole pipeline and
-   can cost several CPU cycles (depending on the pipeline depth), 
+   can cost several CPU cycles (depending on the pipeline depth),
    and potentially many more instructions (depending on the pipeline width).
    A correctly predicted branch, however, is nearly free.
 
@@ -2354,14 +2354,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(CALL_FUNCTION)
 		{
+			int num_args, num_kwargs, num_stack_slots;
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			PCALL(PCALL_ALL);
-			int num_args = oparg & 0xff;
-			int num_kwargs = (oparg>>8) & 0xff;
+			num_args = oparg & 0xff;
+			num_kwargs = (oparg>>8) & 0xff;
 			x = _PyEval_CallFunction(stack_pointer,
 						 num_args, num_kwargs);
 			// +1 for the actual function object.
-			int num_stack_slots = num_args + 2 * num_kwargs + 1;
+			num_stack_slots = num_args + 2 * num_kwargs + 1;
 			// Clear the stack of the function object and arguments.
 			stack_pointer -= num_stack_slots;
 			PUSH(x);
@@ -2372,35 +2373,43 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 		}
 
-		TARGET(CALL_FUNCTION_VAR)
+		TARGET_WITH_IMPL(CALL_FUNCTION_VAR, _call_function_var_kw)
+		TARGET_WITH_IMPL(CALL_FUNCTION_KW, _call_function_var_kw)
+		TARGET_WITH_IMPL(CALL_FUNCTION_VAR_KW, _call_function_var_kw)
+		_call_function_var_kw:
+		{
+			int num_args, num_kwargs, num_stack_slots, flags;
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
-			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-			                                CALL_FLAG_VAR);
-			if (err < 0) {
+			num_args = oparg & 0xff;
+			num_kwargs = (oparg>>8) & 0xff;
+			num_stack_slots = num_args + 2 * num_kwargs + 1;
+			switch (opcode) {
+			case CALL_FUNCTION_VAR:
+				flags = CALL_FLAG_VAR;
+				num_stack_slots += 1;
+				break;
+			case CALL_FUNCTION_KW:
+				flags = CALL_FLAG_KW;
+				num_stack_slots += 1;
+				break;
+			case CALL_FUNCTION_VAR_KW:
+				flags = CALL_FLAG_VAR | CALL_FLAG_KW;
+				num_stack_slots += 2;
+				break;
+			default:
+				Py_FatalError(
+					"Bad opcode in CALL_FUNCTION_VAR/KW");
+			}
+			x = _PyEval_CallFunctionVarKw(stack_pointer, num_args,
+						      num_kwargs, flags);
+			stack_pointer -= num_stack_slots;
+			PUSH(x);
+			if (x == NULL) {
 				why = WHY_EXCEPTION;
 				break;
 			}
 			DISPATCH();
-
-		TARGET(CALL_FUNCTION_KW)
-			PY_LOG_TSC_EVENT(CALL_START_EVAL);
-			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-							CALL_FLAG_KW);
-			if (err < 0) {
-				why = WHY_EXCEPTION;
-				break;
-			}
-			DISPATCH();
-
-		TARGET(CALL_FUNCTION_VAR_KW)
-			PY_LOG_TSC_EVENT(CALL_START_EVAL);
-			err = _PyEval_CallFunctionVarKw(&stack_pointer, oparg,
-						CALL_FLAG_VAR | CALL_FLAG_KW);
-			if (err < 0) {
-				why = WHY_EXCEPTION;
-				break;
-			}
-			DISPATCH();
+		}
 
 		TARGET(MAKE_CLOSURE)
 		{
@@ -3894,25 +3903,22 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 	return x;
 }
 
-/* In spite of the name, not much like _PyEval_CallFunction, because it
-   pushes the result of the call onto the stack, and it's apparently okay
-   for it to modify the stack pointer directly. Does return -1 on failure, 0
-   on success. */
-int
-_PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg, int flags)
+/* Consumes a reference to each of the arguments and the called function, but
+   the caller must adjust the stack pointer down by (na + 2*nk + 1) + 1 for a
+   *args call + 1 for a **kwargs call.  We put the stack change in the caller
+   so that LLVM's optimizers can see it. */
+PyObject *
+_PyEval_CallFunctionVarKw(PyObject **stack_pointer, int num_posargs,
+                          int num_kwargs, int flags)
 {
-	PyObject **pfunc, *func, **sp, *result;
-	/* oparg is the number of positional arguments and the number of
-	   keyword arguments bitpacked into one int. */
-	int num_posargs = oparg & 0xff;
-	int num_kwargs = (oparg >> 8) & 0xff;
+	PyObject **pfunc, *func, *result;
 	int num_stackitems = num_posargs + 2 * num_kwargs;
 	PCALL(PCALL_ALL);
 	if (flags & CALL_FLAG_VAR)
 		num_stackitems++;
 	if (flags & CALL_FLAG_KW)
 		num_stackitems++;
-	pfunc = *stack_pointer - num_stackitems - 1;
+	pfunc = stack_pointer - num_stackitems - 1;
 	func  = *pfunc;
 	if (PyMethod_Check(func) && PyMethod_GET_SELF(func) != NULL) {
 		/* If func is a bound method object, replace func on the
@@ -3929,19 +3935,13 @@ _PyEval_CallFunctionVarKw(PyObject ***stack_pointer, int oparg, int flags)
 	}
 	else
 		Py_INCREF(func);
-	sp = *stack_pointer;
-	result = ext_do_call(func, &sp, flags, num_posargs, num_kwargs);
-	*stack_pointer = sp;
+	result = ext_do_call(func, &stack_pointer, flags, num_posargs, num_kwargs);
 	Py_DECREF(func);
-	while (*stack_pointer > pfunc) {
-		PyObject *item = EXT_POP(*stack_pointer);
+	while (stack_pointer > pfunc) {
+		PyObject *item = EXT_POP(stack_pointer);
 		Py_DECREF(item);
 	}
-	EXT_PUSH(result, *stack_pointer);
-	if (result == NULL)
-		return -1;
-	else
-		return 0;
+	return result;
 }
 
 /* The fast_function() function optimize calls for which no argument
