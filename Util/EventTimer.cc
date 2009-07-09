@@ -44,6 +44,12 @@ public:
     void PrintData();
 
 private:
+    // Map a system thread id (a long that takes 11 chars to print, usually)
+    // to a much shorter thread id (ideally 1 char). This is used to cut the
+    // output size by 30%, which dramatically speeds up analysis.
+    // This is not thread-safe.
+    long GetDenseThreadId(long thread_id);
+
     // Serialize mutations of this->data_.
     llvm::sys::Mutex lock_;
 
@@ -51,6 +57,10 @@ private:
     // to a vector of times in nanoseconds (based on clock_gettime()).
     EventVector data_;
 
+    // Map Python thread ids to our much shorter ids. The index in the vector
+    // is the new thread id. A linear search is fine since there will generally
+    // only be a few threads.
+    std::vector<long> thread_id_;
 };
 
 
@@ -129,16 +139,29 @@ _PyEventTimer::EventToString(_PyTscEventId event_id) {
     return event_names[(int)event_id];
 }
 
+long
+_PyEventTimer::GetDenseThreadId(long sys_thread_id) {
+    for (long idx = 0; idx < this->thread_id_.size(); idx++) {
+        if (this->thread_id_[idx] == sys_thread_id)
+            return idx;
+    }
+    long dense_id = this->thread_id_.size();
+    this->thread_id_.push_back(sys_thread_id);
+    return dense_id;
+}
+
 void
 _PyEventTimer::LogEvent(_PyTscEventId event_id) {
     // XXX(rnk): This probably has more overhead than we'd like.
+    tsc_t tsc_time = read_tsc();
     PyThreadState *tstate = PyThreadState_GET();
     if (tstate->interp->tscdump) {
         _PyTscEvent event;
-        event.thread_id = PyThread_get_thread_ident();
+        long thread_id = PyThread_get_thread_ident();
         event.event_id = event_id;
-        event.time = read_tsc();
+        event.time = tsc_time;
         llvm::MutexGuard locked(this->lock_);
+        event.thread_id = this->GetDenseThreadId(thread_id);
         this->data_.push_back(event);
         if (this->data_.size() > PY_EVENT_BUFFER_SIZE) {
             this->PrintData();
