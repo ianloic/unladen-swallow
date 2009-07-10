@@ -11,6 +11,7 @@
 
 #include "Python/global_llvm_data_fwd.h"
 
+#include "llvm/LLVMContext.h"
 #include "llvm/PassManager.h"
 #include "llvm/ADT/StringMap.h"
 
@@ -40,6 +41,11 @@ public:
     int Optimize(llvm::Function &f, int level);
 
     llvm::ExecutionEngine *getExecutionEngine() { return this->engine_; }
+
+    // Use this accessor for the LLVMContext rather than
+    // getGlobalContext() directly so that we can more easily add new
+    // contexts later.
+    llvm::LLVMContext &context() { return llvm::getGlobalContext(); }
 
     llvm::Module *module() { return this->module_; }
 

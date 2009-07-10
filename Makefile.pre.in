@@ -85,7 +85,7 @@ LLVM_INC_DIR=	@LLVM_INC_DIR@
 LLVM_LIB_DIR=	@LLVM_PATH@/lib
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
-LLVMLDFLAGS+=	-lLLVMBitReader $(LLVM_LIB_DIR)/LLVMX86AsmPrinter.o $(LLVM_LIB_DIR)/LLVMX86CodeGen.o -lLLVMSelectionDAG -lLLVMAsmPrinter $(LLVM_LIB_DIR)/LLVMExecutionEngine.o $(LLVM_LIB_DIR)/LLVMJIT.o -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
+LLVMLDFLAGS+=	-lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMMC -lLLVMAsmPrinter -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
 
 
 # Machine-dependent subdirectories

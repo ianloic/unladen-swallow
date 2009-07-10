@@ -18,6 +18,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
 
 // Declare the function from initial_llvm_module.cc.
@@ -51,11 +52,12 @@ PyGlobalLlvmData::Get()
 }
 
 PyGlobalLlvmData::PyGlobalLlvmData()
-    : module_(new Module("<main>")),
+    : module_(new Module("<main>", this->context())),
       module_provider_(new llvm::ExistingModuleProvider(module_)),
       optimizations_(4, (FunctionPassManager*)NULL)
 {
     std::string error;
+    llvm::InitializeNativeTarget();
     engine_ = llvm::ExecutionEngine::create(
         module_provider_,
         // Don't force the interpreter (use JIT if possible).
@@ -236,12 +238,12 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
     if (the_string == NULL) {
         llvm::Constant *str_const = llvm::ConstantArray::get(value, true);
         the_string = new llvm::GlobalVariable(
+            *this->module_,
             str_const->getType(),
             true,  // Is constant.
             llvm::GlobalValue::InternalLinkage,
             str_const,
             value,  // Name.
-            this->module_,
             false);  // Not thread-local.
     }
 

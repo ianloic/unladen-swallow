@@ -85,6 +85,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                     // with runtime functions.
                     "#u#" + pystring_to_std_string(code_object->co_name),
                     this->module_)),
+      builder_(llvm_data->context()),
       is_generator_(code_object->co_flags & CO_GENERATOR)
 {
     Function::arg_iterator args = this->function_->arg_begin();
@@ -437,14 +438,16 @@ LlvmFunctionBuilder::FillUnwindBlock()
 
         llvm::SwitchInst *block_type_switch = this->builder_.CreateSwitch(
             block_type, this->unreachable_block_, 3);
+        const llvm::IntegerType *block_type_type =
+            llvm::cast<llvm::IntegerType>(block_type->getType());
         block_type_switch->addCase(
-            ConstantInt::get(block_type->getType(), ::SETUP_LOOP),
+            ConstantInt::get(block_type_type, ::SETUP_LOOP),
             handle_loop);
         block_type_switch->addCase(
-            ConstantInt::get(block_type->getType(), ::SETUP_EXCEPT),
+            ConstantInt::get(block_type_type, ::SETUP_EXCEPT),
             handle_except);
         block_type_switch->addCase(
-            ConstantInt::get(block_type->getType(), ::SETUP_FINALLY),
+            ConstantInt::get(block_type_type, ::SETUP_FINALLY),
             handle_finally);
 
         this->builder_.SetInsertPoint(handle_loop);
