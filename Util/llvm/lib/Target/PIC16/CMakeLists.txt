@@ -12,9 +12,11 @@ tablegen(PIC16GenSubtarget.inc -gen-subtarget)
 
 add_llvm_target(PIC16
   PIC16AsmPrinter.cpp
+  PIC16DebugInfo.cpp
   PIC16InstrInfo.cpp
   PIC16ISelDAGToDAG.cpp
   PIC16ISelLowering.cpp
+  PIC16MemSelOpt.cpp
   PIC16RegisterInfo.cpp
   PIC16Subtarget.cpp
   PIC16TargetAsmInfo.cpp

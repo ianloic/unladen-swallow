@@ -30,7 +30,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/CodeGen/DebugLoc.h"
+#include "llvm/Support/DebugLoc.h"
 #include "llvm/Target/TargetMachine.h"
 #include <climits>
 #include <map>
@@ -173,14 +173,18 @@ public:
     /// ValueTypeActions - This is a bitvector that contains two bits for each
     /// value type, where the two bits correspond to the LegalizeAction enum.
     /// This can be queried with "getTypeAction(VT)".
-    uint32_t ValueTypeActions[2];
+    /// dimension by (MVT::MAX_ALLOWED_VALUETYPE/32) * 2
+    uint32_t ValueTypeActions[(MVT::MAX_ALLOWED_VALUETYPE/32)*2];
   public:
     ValueTypeActionImpl() {
       ValueTypeActions[0] = ValueTypeActions[1] = 0;
+      ValueTypeActions[2] = ValueTypeActions[3] = 0;
     }
     ValueTypeActionImpl(const ValueTypeActionImpl &RHS) {
       ValueTypeActions[0] = RHS.ValueTypeActions[0];
       ValueTypeActions[1] = RHS.ValueTypeActions[1];
+      ValueTypeActions[2] = RHS.ValueTypeActions[2];
+      ValueTypeActions[3] = RHS.ValueTypeActions[3];
     }
     
     LegalizeAction getTypeAction(MVT VT) const {
@@ -252,7 +256,7 @@ public:
         return getTypeAction(NVT) == Promote ? getTypeToTransformTo(NVT) : NVT;
     }
     assert(0 && "Unsupported extended type!");
-    return MVT(); // Not reached
+    return MVT(MVT::Other); // Not reached
   }
 
   /// getTypeToExpandTo - For types supported by the target, this is an
@@ -349,10 +353,13 @@ public:
   /// for it.
   LegalizeAction getOperationAction(unsigned Op, MVT VT) const {
     if (VT.isExtended()) return Expand;
-    assert(Op < array_lengthof(OpActions) &&
-           (unsigned)VT.getSimpleVT() < sizeof(OpActions[0])*4 &&
+    assert(Op < array_lengthof(OpActions[0]) &&
+           (unsigned)VT.getSimpleVT() < sizeof(OpActions[0][0])*8 &&
            "Table isn't big enough!");
-    return (LegalizeAction)((OpActions[Op] >> (2*VT.getSimpleVT())) & 3);
+    unsigned I = (unsigned) VT.getSimpleVT();
+    unsigned J = I & 31;
+    I = I >> 5;
+    return (LegalizeAction)((OpActions[I][Op] >> (J*2) ) & 3);
   }
 
   /// isOperationLegalOrCustom - Return true if the specified operation is
@@ -417,11 +424,10 @@ public:
   /// for it.
   LegalizeAction
   getIndexedLoadAction(unsigned IdxMode, MVT VT) const {
-    assert(IdxMode < array_lengthof(IndexedModeActions[0]) &&
-           (unsigned)VT.getSimpleVT() < sizeof(IndexedModeActions[0][0])*4 &&
+    assert( IdxMode < array_lengthof(IndexedModeActions[0][0]) &&
+           ((unsigned)VT.getSimpleVT()) < MVT::LAST_VALUETYPE &&
            "Table isn't big enough!");
-    return (LegalizeAction)((IndexedModeActions[0][IdxMode] >>
-                             (2*VT.getSimpleVT())) & 3);
+    return (LegalizeAction)((IndexedModeActions[(unsigned)VT.getSimpleVT()][0][IdxMode]));
   }
 
   /// isIndexedLoadLegal - Return true if the specified indexed load is legal
@@ -438,11 +444,10 @@ public:
   /// for it.
   LegalizeAction
   getIndexedStoreAction(unsigned IdxMode, MVT VT) const {
-    assert(IdxMode < array_lengthof(IndexedModeActions[1]) &&
-           (unsigned)VT.getSimpleVT() < sizeof(IndexedModeActions[1][0])*4 &&
+    assert(IdxMode < array_lengthof(IndexedModeActions[0][1]) &&
+           (unsigned)VT.getSimpleVT() < MVT::LAST_VALUETYPE &&
            "Table isn't big enough!");
-    return (LegalizeAction)((IndexedModeActions[1][IdxMode] >>
-                             (2*VT.getSimpleVT())) & 3);
+    return (LegalizeAction)((IndexedModeActions[(unsigned)VT.getSimpleVT()][1][IdxMode]));
   }  
 
   /// isIndexedStoreLegal - Return true if the specified indexed load is legal
@@ -552,7 +557,7 @@ public:
       return getRegisterType(getTypeToTransformTo(VT));
     }
     assert(0 && "Unsupported extended type!");
-    return MVT(); // Not reached
+    return MVT(MVT::Other); // Not reached
   }
 
   /// getNumRegisters - Return the number of registers that this ValueType will
@@ -620,12 +625,20 @@ public:
     return allowUnalignedMemoryAccesses;
   }
 
+  /// This function returns true if the target would benefit from code placement
+  /// optimization.
+  /// @brief Determine if the target should perform code placement optimization.
+  bool shouldOptimizeCodePlacement() const {
+    return benefitFromCodePlacementOpt;
+  }
+
   /// getOptimalMemOpType - Returns the target specific optimal type for load
   /// and store operations as a result of memset, memcpy, and memmove lowering.
   /// It returns MVT::iAny if SelectionDAG should be responsible for
   /// determining it.
   virtual MVT getOptimalMemOpType(uint64_t Size, unsigned Align,
-                                  bool isSrcConst, bool isSrcStr) const {
+                                  bool isSrcConst, bool isSrcStr,
+                                  SelectionDAG &DAG) const {
     return MVT::iAny;
   }
   
@@ -723,6 +736,9 @@ public:
   /// PIC relocation models.
   virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
 
+  /// getFunctionAlignment - Return the Log2 alignment of this function.
+  virtual unsigned getFunctionAlignment(const Function *) const = 0;
+
   //===--------------------------------------------------------------------===//
   // TargetLowering Optimization Methods
   //
@@ -818,11 +834,11 @@ public:
   virtual bool
   isGAPlusOffset(SDNode *N, GlobalValue* &GA, int64_t &Offset) const;
 
-  /// isConsecutiveLoad - Return true if LD (which must be a LoadSDNode) is
-  /// loading 'Bytes' bytes from a location that is 'Dist' units away from the
-  /// location that the 'Base' load is loading from.
-  bool isConsecutiveLoad(SDNode *LD, SDNode *Base, unsigned Bytes, int Dist,
-                         const MachineFrameInfo *MFI) const;
+  /// isConsecutiveLoad - Return true if LD is loading 'Bytes' bytes from a 
+  /// location that is 'Dist' units away from the location that the 'Base' load 
+  /// is loading from.
+  bool isConsecutiveLoad(LoadSDNode *LD, LoadSDNode *Base, unsigned Bytes,
+                         int Dist, const MachineFrameInfo *MFI) const;
 
   /// PerformDAGCombine - This method will be invoked for all target nodes and
   /// for any target-independent nodes that the target has registered with
@@ -934,10 +950,13 @@ protected:
   /// with the specified type and indicate what to do about it.
   void setOperationAction(unsigned Op, MVT VT,
                           LegalizeAction Action) {
-    assert((unsigned)VT.getSimpleVT() < sizeof(OpActions[0])*4 &&
-           Op < array_lengthof(OpActions) && "Table isn't big enough!");
-    OpActions[Op] &= ~(uint64_t(3UL) << VT.getSimpleVT()*2);
-    OpActions[Op] |= (uint64_t)Action << VT.getSimpleVT()*2;
+    assert((unsigned)VT.getSimpleVT() < sizeof(OpActions[0][0])*8 &&
+           Op < array_lengthof(OpActions[0]) && "Table isn't big enough!");
+    unsigned I = (unsigned) VT.getSimpleVT();
+    unsigned J = I & 31;
+    I = I >> 5;
+    OpActions[I][Op] &= ~(uint64_t(3UL) << (J*2));
+    OpActions[I][Op] |= (uint64_t)Action << (J*2);
   }
   
   /// setLoadExtAction - Indicate that the specified load with extension does
@@ -970,11 +989,10 @@ protected:
   /// TargetLowering.cpp
   void setIndexedLoadAction(unsigned IdxMode, MVT VT,
                             LegalizeAction Action) {
-    assert((unsigned)VT.getSimpleVT() < sizeof(IndexedModeActions[0])*4 &&
-           IdxMode < array_lengthof(IndexedModeActions[0]) &&
+    assert((unsigned)VT.getSimpleVT() < MVT::LAST_VALUETYPE &&
+           IdxMode < array_lengthof(IndexedModeActions[0][0]) &&
            "Table isn't big enough!");
-    IndexedModeActions[0][IdxMode] &= ~(uint64_t(3UL) << VT.getSimpleVT()*2);
-    IndexedModeActions[0][IdxMode] |= (uint64_t)Action << VT.getSimpleVT()*2;
+    IndexedModeActions[(unsigned)VT.getSimpleVT()][0][IdxMode] = (uint8_t)Action;
   }
   
   /// setIndexedStoreAction - Indicate that the specified indexed store does or
@@ -983,11 +1001,10 @@ protected:
   /// TargetLowering.cpp
   void setIndexedStoreAction(unsigned IdxMode, MVT VT,
                              LegalizeAction Action) {
-    assert((unsigned)VT.getSimpleVT() < sizeof(IndexedModeActions[1][0])*4 &&
-           IdxMode < array_lengthof(IndexedModeActions[1]) &&
+    assert((unsigned)VT.getSimpleVT() < MVT::LAST_VALUETYPE &&
+           IdxMode < array_lengthof(IndexedModeActions[0][1] ) &&
            "Table isn't big enough!");
-    IndexedModeActions[1][IdxMode] &= ~(uint64_t(3UL) << VT.getSimpleVT()*2);
-    IndexedModeActions[1][IdxMode] |= (uint64_t)Action << VT.getSimpleVT()*2;
+    IndexedModeActions[(unsigned)VT.getSimpleVT()][1][IdxMode] = (uint8_t)Action;
   }
   
   /// setConvertAction - Indicate that the specified conversion does or does
@@ -1105,9 +1122,9 @@ public:
   typedef std::vector<ArgListEntry> ArgListTy;
   virtual std::pair<SDValue, SDValue>
   LowerCallTo(SDValue Chain, const Type *RetTy, bool RetSExt, bool RetZExt,
-              bool isVarArg, bool isInreg, unsigned CallingConv, 
-              bool isTailCall, SDValue Callee, ArgListTy &Args, 
-              SelectionDAG &DAG, DebugLoc dl);
+              bool isVarArg, bool isInreg, unsigned NumFixedArgs,
+              unsigned CallingConv, bool isTailCall, SDValue Callee,
+              ArgListTy &Args, SelectionDAG &DAG, DebugLoc dl);
 
   /// EmitTargetCodeForMemcpy - Emit target-specific code that performs a
   /// memcpy. This can be used by targets to provide code sequences for cases
@@ -1381,6 +1398,8 @@ public:
   
   /// isLegalAddressingMode - Return true if the addressing mode represented by
   /// AM is legal for this target, for a load/store of the specified type.
+  /// The type may be VoidTy, in which case only return true if the addressing
+  /// mode is legal for a load/store of any legal type.
   /// TODO: Handle pre/postinc as well.
   virtual bool isLegalAddressingMode(const AddrMode &AM, const Type *Ty) const;
 
@@ -1408,6 +1427,13 @@ public:
   }
 
   virtual bool isZExtFree(MVT VT1, MVT VT2) const {
+    return false;
+  }
+
+  /// isNarrowingProfitable - Return true if it's profitable to narrow
+  /// operations of type VT1 to VT2. e.g. on x86, it's profitable to narrow
+  /// from i32 to i8 but not from i32 to i16.
+  virtual bool isNarrowingProfitable(MVT VT1, MVT VT2) const {
     return false;
   }
 
@@ -1553,7 +1579,9 @@ private:
   /// Most operations are Legal (aka, supported natively by the target), but
   /// operations that are not should be described.  Note that operations on
   /// non-legal value types are not described here.
-  uint64_t OpActions[ISD::BUILTIN_OP_END];
+  /// This array is accessed using VT.getSimpleVT(), so it is subject to
+  /// the MVT::MAX_ALLOWED_VALUETYPE * 2 bits.
+  uint64_t OpActions[MVT::MAX_ALLOWED_VALUETYPE/(sizeof(uint64_t)*4)][ISD::BUILTIN_OP_END];
   
   /// LoadExtActions - For each load of load extension type and each value type,
   /// keep a LegalizeAction that indicates how instruction selection should deal
@@ -1564,10 +1592,13 @@ private:
   /// indicates how instruction selection should deal with the store.
   uint64_t TruncStoreActions[MVT::LAST_VALUETYPE];
 
-  /// IndexedModeActions - For each indexed mode and each value type, keep a
-  /// pair of LegalizeAction that indicates how instruction selection should
-  /// deal with the load / store.
-  uint64_t IndexedModeActions[2][ISD::LAST_INDEXED_MODE];
+  /// IndexedModeActions - For each indexed mode and each value type,
+  /// keep a pair of LegalizeAction that indicates how instruction
+  /// selection should deal with the load / store.  The first
+  /// dimension is now the value_type for the reference.  The second
+  /// dimension is the load [0] vs. store[1].  The third dimension
+  /// represents the various modes for load store.
+  uint8_t IndexedModeActions[MVT::LAST_VALUETYPE][2][ISD::LAST_INDEXED_MODE];
   
   /// ConvertActions - For each conversion from source type to destination type,
   /// keep a LegalizeAction that indicates how instruction selection should
@@ -1650,6 +1681,10 @@ protected:
   /// operations when copying small arrays and other similar tasks.
   /// @brief Indicate whether the target permits unaligned memory accesses.
   bool allowUnalignedMemoryAccesses;
+
+  /// This field specifies whether the target can benefit from code placement
+  /// optimization.
+  bool benefitFromCodePlacementOpt;
 };
 } // end llvm namespace
 

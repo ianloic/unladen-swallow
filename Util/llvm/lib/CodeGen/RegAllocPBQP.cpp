@@ -33,7 +33,7 @@
 
 #include "PBQP.h"
 #include "VirtRegMap.h"
-#include "Spiller.h"
+#include "VirtRegRewriter.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -651,7 +651,7 @@ void PBQPRegAlloc::addStackInterval(const LiveInterval *spilled,
   if (stackInterval.getNumValNums() != 0)
     vni = stackInterval.getValNumInfo(0);
   else
-    vni = stackInterval.getNextValue(-0U, 0, lss->getVNInfoAllocator());
+    vni = stackInterval.getNextValue(0, 0, false, lss->getVNInfoAllocator());
 
   LiveInterval &rhsInterval = lis->getInterval(spilled->reg);
   stackInterval.MergeRangesInAsValue(rhsInterval, vni);
@@ -729,12 +729,11 @@ void PBQPRegAlloc::finalizeAlloc() const {
 
   // First allocate registers for the empty intervals.
   for (LiveIntervalSet::const_iterator
-	 itr = emptyVRegIntervals.begin(), end = emptyVRegIntervals.end();
+         itr = emptyVRegIntervals.begin(), end = emptyVRegIntervals.end();
          itr != end; ++itr) {
     LiveInterval *li = *itr;
 
-    unsigned physReg = li->preference;
-
+    unsigned physReg = vrm->getRegAllocPref(li->reg);
     if (physReg == 0) {
       const TargetRegisterClass *liRC = mri->getRegClass(li->reg);
       physReg = *liRC->allocation_order_begin(*mf);
@@ -762,6 +761,11 @@ void PBQPRegAlloc::finalizeAlloc() const {
     }
     else {
       // Ranges which are assigned a stack slot only are ignored.
+      continue;
+    }
+
+    // Ignore unallocated vregs:
+    if (reg == 0) {
       continue;
     }
 
@@ -850,9 +854,10 @@ bool PBQPRegAlloc::runOnMachineFunction(MachineFunction &MF) {
 
   DOUT << "Post alloc VirtRegMap:\n" << *vrm << "\n";
 
-  // Run spiller
-  std::auto_ptr<Spiller> spiller(createSpiller());
-  spiller->runOnMachineFunction(*mf, *vrm, lis);
+  // Run rewriter
+  std::auto_ptr<VirtRegRewriter> rewriter(createVirtRegRewriter());
+
+  rewriter->runOnMachineFunction(*mf, *vrm, lis);
 
   return true;
 }

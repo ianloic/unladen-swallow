@@ -8,7 +8,9 @@
 //===----------------------------------------------------------------------===//
 //
 // This file defines a bunch of datatypes that are useful for creating and
-// walking debug info in LLVM IR form.
+// walking debug info in LLVM IR form. They essentially provide wrappers around
+// the information in the global variables that's needed when constructing the
+// DWARF information.
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,6 +20,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Dwarf.h"
 
 namespace llvm {
@@ -30,11 +33,17 @@ namespace llvm {
   class Value;
   struct DbgStopPointInst;
   struct DbgDeclareInst;
+  struct DbgFuncStartInst;
+  struct DbgRegionStartInst;
+  struct DbgRegionEndInst;
+  class DebugLoc;
+  class DebugLocTracker;
   class Instruction;
+  class LLVMContext;
 
   class DIDescriptor {
   protected:    
-    GlobalVariable *GV;
+    GlobalVariable *DbgGV;
 
     /// DIDescriptor constructor.  If the specified GV is non-null, this checks
     /// to make sure that the tag in the descriptor matches 'RequiredTag'.  If
@@ -56,12 +65,12 @@ namespace llvm {
     GlobalVariable *getGlobalVariableField(unsigned Elt) const;
 
   public:
-    explicit DIDescriptor() : GV(0) {}
-    explicit DIDescriptor(GlobalVariable *gv) : GV(gv) {}
+    explicit DIDescriptor() : DbgGV(0) {}
+    explicit DIDescriptor(GlobalVariable *GV) : DbgGV(GV) {}
 
-    bool isNull() const { return GV == 0; }
+    bool isNull() const { return DbgGV == 0; }
 
-    GlobalVariable *getGV() const { return GV; }
+    GlobalVariable *getGV() const { return DbgGV; }
 
     unsigned getVersion() const {
       return getUnsignedField(0) & LLVMDebugVersionMask;
@@ -78,18 +87,11 @@ namespace llvm {
     void dump() const;
   };
 
-  /// DIAnchor - A wrapper for various anchor descriptors.
-  class DIAnchor : public DIDescriptor {
-  public:
-    explicit DIAnchor(GlobalVariable *GV = 0);
-
-    unsigned getAnchorTag() const { return getUnsignedField(1); }
-  };
-
   /// DISubrange - This is used to represent ranges, for array bounds.
   class DISubrange : public DIDescriptor {
   public:
-    explicit DISubrange(GlobalVariable *GV = 0);
+    explicit DISubrange(GlobalVariable *GV = 0)
+      : DIDescriptor(GV, dwarf::DW_TAG_subrange_type) {}
 
     int64_t getLo() const { return (int64_t)getUInt64Field(1); }
     int64_t getHi() const { return (int64_t)getUInt64Field(2); }
@@ -109,7 +111,8 @@ namespace llvm {
   /// DICompileUnit - A wrapper for a compile unit.
   class DICompileUnit : public DIDescriptor {
   public:
-    explicit DICompileUnit(GlobalVariable *GV = 0);
+    explicit DICompileUnit(GlobalVariable *GV = 0)
+      : DIDescriptor(GV, dwarf::DW_TAG_compile_unit) {}
 
     unsigned getLanguage() const     { return getUnsignedField(2); }
     const std::string &getFilename(std::string &F) const {
@@ -150,7 +153,8 @@ namespace llvm {
   /// type/precision or a file/line pair for location info.
   class DIEnumerator : public DIDescriptor {
   public:
-    explicit DIEnumerator(GlobalVariable *GV = 0);
+    explicit DIEnumerator(GlobalVariable *GV = 0)
+      : DIDescriptor(GV, dwarf::DW_TAG_enumerator) {}
 
     const std::string &getName(std::string &F) const {
       return getStringField(1, F);
@@ -220,7 +224,9 @@ namespace llvm {
   /// DIBasicType - A basic type, like 'int' or 'float'.
   class DIBasicType : public DIType {
   public:
-    explicit DIBasicType(GlobalVariable *GV);
+    explicit DIBasicType(GlobalVariable *GV)
+      : DIType(GV, dwarf::DW_TAG_base_type) {}
+
     unsigned getEncoding() const { return getUnsignedField(9); }
 
     /// dump - print basic type.
@@ -234,7 +240,12 @@ namespace llvm {
     explicit DIDerivedType(GlobalVariable *GV, bool, bool)
       : DIType(GV, true, true) {}
   public:
-    explicit DIDerivedType(GlobalVariable *GV);
+    explicit DIDerivedType(GlobalVariable *GV)
+      : DIType(GV, true, true) {
+      if (GV && !isDerivedType(getTag()))
+        DbgGV = 0;
+    }
+
     DIType getTypeDerivedFrom() const { return getFieldAs<DIType>(9); }
 
     /// getOriginalTypeSize - If this type is derived from a base type then
@@ -249,7 +260,12 @@ namespace llvm {
   /// FIXME: Why is this a DIDerivedType??
   class DICompositeType : public DIDerivedType {
   public:
-    explicit DICompositeType(GlobalVariable *GV);
+    explicit DICompositeType(GlobalVariable *GV)
+      : DIDerivedType(GV, true, true) {
+      if (GV && !isCompositeType(getTag()))
+        DbgGV = 0;
+    }
+
     DIArray getTypeArray() const { return getFieldAs<DIArray>(10); }
     unsigned getRunTimeLang() const { return getUnsignedField(11); }
 
@@ -307,8 +323,23 @@ namespace llvm {
   /// DISubprogram - This is a wrapper for a subprogram (e.g. a function).
   class DISubprogram : public DIGlobal {
   public:
-    explicit DISubprogram(GlobalVariable *GV = 0);
+    explicit DISubprogram(GlobalVariable *GV = 0)
+      : DIGlobal(GV, dwarf::DW_TAG_subprogram) {}
+
     DICompositeType getType() const { return getFieldAs<DICompositeType>(8); }
+
+    /// getReturnTypeName - Subprogram return types are encoded either as
+    /// DIType or as DICompositeType.
+    const std::string &getReturnTypeName(std::string &F) const {
+      DICompositeType DCT(getFieldAs<DICompositeType>(8));
+      if (!DCT.isNull()) {
+        DIArray A = DCT.getTypeArray();
+        DIType T(A.getElement(0).getGV());
+        return T.getName(F);
+      }
+      DIType T(getFieldAs<DIType>(8));
+      return T.getName(F);
+    }
 
     /// Verify - Verify that a subprogram descriptor is well formed.
     bool Verify() const;
@@ -324,7 +355,9 @@ namespace llvm {
   /// DIGlobalVariable - This is a wrapper for a global variable.
   class DIGlobalVariable : public DIGlobal {
   public:
-    explicit DIGlobalVariable(GlobalVariable *GV = 0);
+    explicit DIGlobalVariable(GlobalVariable *GV = 0)
+      : DIGlobal(GV, dwarf::DW_TAG_variable) {}
+
     GlobalVariable *getGlobal() const { return getGlobalVariableField(11); }
 
     /// Verify - Verify that a global variable descriptor is well formed.
@@ -338,7 +371,11 @@ namespace llvm {
   /// global etc).
   class DIVariable : public DIDescriptor {
   public:
-    explicit DIVariable(GlobalVariable *GV = 0);
+    explicit DIVariable(GlobalVariable *GV = 0)
+      : DIDescriptor(GV) {
+      if (GV && !isVariable(getTag()))
+        DbgGV = 0;
+    }
 
     DIDescriptor getContext() const { return getDescriptorField(1); }
     const std::string &getName(std::string &F) const {
@@ -361,8 +398,9 @@ namespace llvm {
   /// DIBlock - This is a wrapper for a block (e.g. a function, scope, etc).
   class DIBlock : public DIDescriptor {
   public:
-    explicit DIBlock(GlobalVariable *GV = 0);
-    
+    explicit DIBlock(GlobalVariable *GV = 0)
+      : DIDescriptor(GV, dwarf::DW_TAG_lexical_block) {}
+
     DIDescriptor getContext() const { return getDescriptorField(1); }
   };
 
@@ -370,8 +408,9 @@ namespace llvm {
   /// descriptors.
   class DIFactory {
     Module &M;
+    LLVMContext& VMContext;
+    
     // Cached values for uniquing and faster lookups.
-    DIAnchor CompileUnitAnchor, SubProgramAnchor, GlobalVariableAnchor;
     const Type *EmptyStructPtr; // "{}*".
     Function *StopPointFn;   // llvm.dbg.stoppoint
     Function *FuncStartFn;   // llvm.dbg.func.start
@@ -385,18 +424,6 @@ namespace llvm {
     void operator=(const DIFactory&); // DO NOT IMPLEMENT
   public:
     explicit DIFactory(Module &m);
-
-    /// GetOrCreateCompileUnitAnchor - Return the anchor for compile units,
-    /// creating a new one if there isn't already one in the module.
-    DIAnchor GetOrCreateCompileUnitAnchor();
-
-    /// GetOrCreateSubprogramAnchor - Return the anchor for subprograms,
-    /// creating a new one if there isn't already one in the module.
-    DIAnchor GetOrCreateSubprogramAnchor();
-
-    /// GetOrCreateGlobalVariableAnchor - Return the anchor for globals,
-    /// creating a new one if there isn't already one in the module.
-    DIAnchor GetOrCreateGlobalVariableAnchor();
 
     /// GetOrCreateArray - Create an descriptor for an array of descriptors. 
     /// This implicitly uniques the arrays created.
@@ -500,7 +527,6 @@ namespace llvm {
   private:
     Constant *GetTagConstant(unsigned TAG);
     Constant *GetStringConstant(const std::string &String);
-    DIAnchor GetOrCreateAnchor(unsigned TAG, const char *Name);
 
     /// getCastToEmpty - Return the descriptor as a Constant* with type '{}*'.
     Constant *getCastToEmpty(DIDescriptor D);
@@ -523,6 +549,54 @@ namespace llvm {
 
   bool getLocationInfo(const Value *V, std::string &DisplayName, std::string &Type, 
                        unsigned &LineNo, std::string &File, std::string &Dir); 
+
+  /// CollectDebugInfoAnchors - Collect debugging information anchors.
+  void CollectDebugInfoAnchors(Module &M,
+                               SmallVector<GlobalVariable *, 2> &CompileUnits,
+                               SmallVector<GlobalVariable *, 4> &GlobalVars,
+                               SmallVector<GlobalVariable *, 4> &Subprograms);
+
+  /// isValidDebugInfoIntrinsic - Return true if SPI is a valid debug 
+  /// info intrinsic.
+  bool isValidDebugInfoIntrinsic(DbgStopPointInst &SPI, 
+                                 CodeGenOpt::Level OptLev);
+
+  /// isValidDebugInfoIntrinsic - Return true if FSI is a valid debug 
+  /// info intrinsic.
+  bool isValidDebugInfoIntrinsic(DbgFuncStartInst &FSI,
+                                 CodeGenOpt::Level OptLev);
+
+  /// isValidDebugInfoIntrinsic - Return true if RSI is a valid debug 
+  /// info intrinsic.
+  bool isValidDebugInfoIntrinsic(DbgRegionStartInst &RSI,
+                                 CodeGenOpt::Level OptLev);
+
+  /// isValidDebugInfoIntrinsic - Return true if REI is a valid debug 
+  /// info intrinsic.
+  bool isValidDebugInfoIntrinsic(DbgRegionEndInst &REI,
+                                 CodeGenOpt::Level OptLev);
+
+  /// isValidDebugInfoIntrinsic - Return true if DI is a valid debug 
+  /// info intrinsic.
+  bool isValidDebugInfoIntrinsic(DbgDeclareInst &DI,
+                                 CodeGenOpt::Level OptLev);
+
+  /// ExtractDebugLocation - Extract debug location information 
+  /// from llvm.dbg.stoppoint intrinsic.
+  DebugLoc ExtractDebugLocation(DbgStopPointInst &SPI,
+                                DebugLocTracker &DebugLocInfo);
+
+  /// ExtractDebugLocation - Extract debug location information 
+  /// from llvm.dbg.func_start intrinsic.
+  DebugLoc ExtractDebugLocation(DbgFuncStartInst &FSI,
+                                DebugLocTracker &DebugLocInfo);
+
+  /// isInlinedFnStart - Return true if FSI is starting an inlined function.
+  bool isInlinedFnStart(DbgFuncStartInst &FSI, const Function *CurrentFn);
+
+  /// isInlinedFnEnd - Return true if REI is ending an inlined function.
+  bool isInlinedFnEnd(DbgRegionEndInst &REI, const Function *CurrentFn);
+
 } // end namespace llvm
 
 #endif

@@ -1,0 +1,9 @@
+set(LLVM_LINK_COMPONENTS support MC)
+
+add_llvm_tool(llvm-mc
+  llvm-mc.cpp
+  AsmExpr.cpp
+  AsmLexer.cpp
+  AsmParser.cpp
+  MC-X86Specific.cpp
+  )

@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-def Trigraphs : DiagGroup<"trigraphs">;
-
 def ImplicitFunctionDeclare : DiagGroup<"implicit-function-declaration">;
 def ImplicitInt : DiagGroup<"implicit-int">;
 
@@ -32,22 +30,18 @@ def : DiagGroup<"conversion">;
 def : DiagGroup<"declaration-after-statement">;
 def : DiagGroup<"disabled-optimization">;
 def : DiagGroup<"discard-qual">;
+def : DiagGroup<"div-by-zero">;
+def EmptyBody : DiagGroup<"empty-body">;
 def ExtraTokens : DiagGroup<"extra-tokens">;
 
 def FormatExtraArgs : DiagGroup<"format-extra-args">;
 def FormatZeroLength : DiagGroup<"format-zero-length">;
 
-def Format : DiagGroup<"format", [FormatExtraArgs, FormatZeroLength]>;
-def FormatSecurity : DiagGroup<"format-security", [Format]>;
-def FormatNonLiteral : DiagGroup<"format-nonliteral", [FormatSecurity]>;
-def FormatY2K : DiagGroup<"format-y2k", [Format]>;
-def Format2 : DiagGroup<"format=2",
-                        [FormatNonLiteral, FormatSecurity, FormatY2K]>;
-
 def FourByteMultiChar : DiagGroup<"four-char-constants">;
 def : DiagGroup<"init-self">;
 def : DiagGroup<"inline">;
 def : DiagGroup<"int-to-pointer-cast">;
+def : DiagGroup<"invalid-pch">;
 def : DiagGroup<"missing-braces">;
 def : DiagGroup<"missing-declarations">;
 def : DiagGroup<"missing-format-attribute">;
@@ -56,7 +50,9 @@ def MultiChar : DiagGroup<"multichar">;
 def : DiagGroup<"nested-externs">;
 def : DiagGroup<"newline-eof">;
 def : DiagGroup<"long-long">;
+def MismatchedTags : DiagGroup<"mismatched-tags">;
 def : DiagGroup<"missing-field-initializers">;
+def NonNull : DiagGroup<"nonnull">;
 def : DiagGroup<"nonportable-cfstrings">;
 def : DiagGroup<"old-style-definition">;
 def : DiagGroup<"packed">;
@@ -86,14 +82,19 @@ def InvalidOffsetof : DiagGroup<"invalid-offsetof">;
 def : DiagGroup<"strict-prototypes">;
 def : DiagGroup<"strict-selector-match">;
 def Switch         : DiagGroup<"switch">;
+def Trigraphs : DiagGroup<"trigraphs">;
+
 def : DiagGroup<"type-limits">;
 def Uninitialized  : DiagGroup<"uninitialized">;
 def UnknownPragmas : DiagGroup<"unknown-pragmas">;
-def : DiagGroup<"unused-function">;
-def : DiagGroup<"unused-label">;
-def : DiagGroup<"unused-parameter">;
+def UnusedArgument : DiagGroup<"unused-argument">;
+def UnusedFunction : DiagGroup<"unused-function">;
+def UnusedLabel : DiagGroup<"unused-label">;
+def UnusedParameter : DiagGroup<"unused-parameter">;
 def UnusedValue    : DiagGroup<"unused-value">;
 def UnusedVariable : DiagGroup<"unused-variable">;
+def ReadOnlySetterAttrs : DiagGroup<"readonly-setter-attrs">;
+def UndeclaredSelector : DiagGroup<"undeclared-selector">;
 def : DiagGroup<"variadic-macros">;
 def VectorConversions : DiagGroup<"vector-conversions">;      // clang specific
 def VolatileRegisterVar : DiagGroup<"volatile-register-var">;
@@ -101,12 +102,29 @@ def : DiagGroup<"write-strings">;
 
 // Aggregation warning settings.
 
-def Extra : DiagGroup<"extra">;
+
+def Unused : DiagGroup<"unused",
+                       [UnusedArgument, UnusedFunction, UnusedLabel,
+                        UnusedParameter, UnusedValue, UnusedVariable]>;
+
+// Format settings.
+def Format : DiagGroup<"format", [FormatExtraArgs, FormatZeroLength, NonNull]>;
+def FormatSecurity : DiagGroup<"format-security", [Format]>;
+def FormatNonLiteral : DiagGroup<"format-nonliteral", [FormatSecurity]>;
+def FormatY2K : DiagGroup<"format-y2k", [Format]>;
+def Format2 : DiagGroup<"format=2",
+                        [FormatNonLiteral, FormatSecurity, FormatY2K]>;
+
+
+def Extra : DiagGroup<"extra", [
+    UnusedParameter
+  ]>;
 
 def Most : DiagGroup<"most", [
     Comment,
     Format,
     Implicit,
+    MismatchedTags,
     MultiChar,
     Switch,
     Trigraphs,
@@ -115,7 +133,9 @@ def Most : DiagGroup<"most", [
     UnusedValue,
     UnusedVariable,
     VectorConversions,
-    VolatileRegisterVar
+    VolatileRegisterVar,
+    ReadOnlySetterAttrs,
+    UndeclaredSelector
  ]>;
 
 // -Wall is -Wmost -Wparentheses

@@ -29,13 +29,14 @@ class Constant;
 class Function;
 class GlobalVariable;
 class GlobalValue;
-class Module;
-class ModuleProvider;
-class TargetData;
-class Type;
-class MutexGuard;
+class JITEventListener;
 class JITMemoryManager;
 class MachineCodeInfo;
+class Module;
+class ModuleProvider;
+class MutexGuard;
+class TargetData;
+class Type;
 
 class ExecutionEngineState {
 private:
@@ -86,7 +87,8 @@ protected:
   // libraries, the JIT and Interpreter set these functions to ctor pointers
   // at startup time if they are linked in.
   typedef ExecutionEngine *(*EECtorFn)(ModuleProvider*, std::string*,
-                                       CodeGenOpt::Level OptLevel);
+                                       CodeGenOpt::Level OptLevel,
+                                       bool GVsWithCode);
   static EECtorFn JITCtor, InterpCtor;
 
   /// LazyFunctionCreator - If an unknown function is needed, this function
@@ -117,8 +119,18 @@ public:
                                  bool ForceInterpreter = false,
                                  std::string *ErrorStr = 0,
                                  CodeGenOpt::Level OptLevel =
-                                   CodeGenOpt::Default);
-  
+                                   CodeGenOpt::Default,
+                                 // Allocating globals with code breaks
+                                 // freeMachineCodeForFunction and is probably
+                                 // unsafe and bad for performance.  However,
+                                 // we have clients who depend on this
+                                 // behavior, so we must support it.
+                                 // Eventually, when we're willing to break
+                                 // some backwards compatability, this flag
+                                 // should be flipped to false, so that by
+                                 // default freeMachineCodeForFunction works.
+                                 bool GVsWithCode = true);
+
   /// create - This is the factory method for creating an execution engine which
   /// is appropriate for the current machine.  This takes ownership of the
   /// module.
@@ -131,7 +143,8 @@ public:
                                     std::string *ErrorStr = 0,
                                     JITMemoryManager *JMM = 0,
                                     CodeGenOpt::Level OptLevel =
-                                      CodeGenOpt::Default);
+                                      CodeGenOpt::Default,
+                                    bool GVsWithCode = true);
 
   /// addModuleProvider - Add a ModuleProvider to the list of modules that we
   /// can JIT from.  Note that this takes ownership of the ModuleProvider: when
@@ -243,7 +256,7 @@ public:
   }
 
   // The JIT overrides a version that actually does this.
-  virtual void runJITOnFunction(Function *F, MachineCodeInfo *MCI = 0) { }
+  virtual void runJITOnFunction(Function *, MachineCodeInfo * = 0) { }
 
   /// getGlobalValueAtAddress - Return the LLVM global value object that starts
   /// at the specified address.
@@ -276,7 +289,14 @@ public:
   virtual void *getOrEmitGlobalVariable(const GlobalVariable *GV) {
     return getPointerToGlobal((GlobalValue*)GV);
   }
-  
+
+  /// Registers a listener to be called back on various events within
+  /// the JIT.  See JITEventListener.h for more details.  Does not
+  /// take ownership of the argument.  The argument may be NULL, in
+  /// which case these functions do nothing.
+  virtual void RegisterJITEventListener(JITEventListener *) {}
+  virtual void UnregisterJITEventListener(JITEventListener *) {}
+
   /// DisableLazyCompilation - If called, the JIT will abort if lazy compilation
   /// is ever attempted.
   void DisableLazyCompilation(bool Disabled = true) {

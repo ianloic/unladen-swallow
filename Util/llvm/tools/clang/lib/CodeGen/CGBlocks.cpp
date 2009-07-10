@@ -16,15 +16,9 @@
 #include "clang/AST/DeclObjC.h"
 #include "llvm/Module.h"
 #include "llvm/Target/TargetData.h"
-
 #include <algorithm>
-
 using namespace clang;
 using namespace CodeGen;
-
-// Temporary code to enable testing of __block variables
-// #include "clang/Frontend/CompileOptions.h"
-#include "llvm/Support/CommandLine.h"
 
 llvm::Constant *CodeGenFunction::
 BuildDescriptorBlockDecl(bool BlockHasCopyDispose, uint64_t Size,
@@ -56,41 +50,23 @@ BuildDescriptorBlockDecl(bool BlockHasCopyDispose, uint64_t Size,
 
   C = llvm::ConstantStruct::get(Elts);
 
-  C = new llvm::GlobalVariable(C->getType(), true,
+  C = new llvm::GlobalVariable(CGM.getModule(), C->getType(), true,
                                llvm::GlobalValue::InternalLinkage,
-                               C, "__block_descriptor_tmp", &CGM.getModule());
+                               C, "__block_descriptor_tmp");
   return C;
 }
 
 llvm::Constant *BlockModule::getNSConcreteGlobalBlock() {
-  if (NSConcreteGlobalBlock)
-    return NSConcreteGlobalBlock;
-
-  // FIXME: We should have a CodeGenModule::AddRuntimeVariable that does the
-  // same thing as CreateRuntimeFunction if there's already a variable with the
-  // same name.
-  NSConcreteGlobalBlock
-    = new llvm::GlobalVariable(PtrToInt8Ty, false,
-                               llvm::GlobalValue::ExternalLinkage,
-                               0, "_NSConcreteGlobalBlock",
-                               &getModule());
-
+  if (NSConcreteGlobalBlock == 0)
+    NSConcreteGlobalBlock = CGM.CreateRuntimeVariable(PtrToInt8Ty, 
+                                                      "_NSConcreteGlobalBlock");
   return NSConcreteGlobalBlock;
 }
 
 llvm::Constant *BlockModule::getNSConcreteStackBlock() {
-  if (NSConcreteStackBlock)
-    return NSConcreteStackBlock;
-
-  // FIXME: We should have a CodeGenModule::AddRuntimeVariable that does the
-  // same thing as CreateRuntimeFunction if there's already a variable with the
-  // same name.
-  NSConcreteStackBlock
-    = new llvm::GlobalVariable(PtrToInt8Ty, false,
-                               llvm::GlobalValue::ExternalLinkage,
-                               0, "_NSConcreteStackBlock",
-                               &getModule());
-
+  if (NSConcreteStackBlock == 0)
+    NSConcreteStackBlock = CGM.CreateRuntimeVariable(PtrToInt8Ty, 
+                                                     "_NSConcreteStackBlock");
   return NSConcreteStackBlock;
 }
 
@@ -115,8 +91,7 @@ static void CollectBlockDeclRefInfo(const Stmt *S,
 
 /// CanBlockBeGlobal - Given a BlockInfo struct, determines if a block can be
 /// declared as a global variable instead of on the stack.
-static bool CanBlockBeGlobal(const CodeGenFunction::BlockInfo &Info)
-{
+static bool CanBlockBeGlobal(const CodeGenFunction::BlockInfo &Info) {
   return Info.ByRefDeclRefs.empty() && Info.ByCopyDeclRefs.empty();
 }
 
@@ -158,8 +133,8 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
     BlockHasCopyDispose |= subBlockHasCopyDispose;
     Elts[3] = Fn;
 
-    // FIXME: Don't use BlockHasCopyDispose, it is set more often then necessary, for
-    // example: { ^{ __block int i; ^{ i = 1; }(); }(); }
+    // FIXME: Don't use BlockHasCopyDispose, it is set more often then
+    // necessary, for example: { ^{ __block int i; ^{ i = 1; }(); }(); }
     if (subBlockHasCopyDispose)
       flags |= BLOCK_HAS_COPY_DISPOSE;
 
@@ -190,9 +165,9 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
 
       char Name[32];
       sprintf(Name, "__block_holder_tmp_%d", CGM.getGlobalUniqueCount());
-      C = new llvm::GlobalVariable(C->getType(), true,
+      C = new llvm::GlobalVariable(CGM.getModule(), C->getType(), true,
                                    llvm::GlobalValue::InternalLinkage,
-                                   C, Name, &CGM.getModule());
+                                   C, Name);
       QualType BPT = BE->getType();
       C = llvm::ConstantExpr::getBitCast(C, ConvertType(BPT));
       return C;
@@ -538,10 +513,9 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
     llvm::ConstantStruct::get(&DescriptorFields[0], 2);
 
   llvm::GlobalVariable *Descriptor =
-    new llvm::GlobalVariable(DescriptorStruct->getType(), true,
+    new llvm::GlobalVariable(getModule(), DescriptorStruct->getType(), true,
                              llvm::GlobalVariable::InternalLinkage,
-                             DescriptorStruct, "__block_descriptor_global",
-                             &getModule());
+                             DescriptorStruct, "__block_descriptor_global");
 
   // Generate the constants for the block literal.
   llvm::Constant *LiteralFields[5];
@@ -580,10 +554,9 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
     llvm::ConstantStruct::get(&LiteralFields[0], 5);
 
   llvm::GlobalVariable *BlockLiteral =
-    new llvm::GlobalVariable(BlockLiteralStruct->getType(), true,
+    new llvm::GlobalVariable(getModule(), BlockLiteralStruct->getType(), true,
                              llvm::GlobalVariable::InternalLinkage,
-                             BlockLiteralStruct, "__block_literal_global",
-                             &getModule());
+                             BlockLiteralStruct, "__block_literal_global");
 
   return BlockLiteral;
 }
@@ -749,6 +722,8 @@ GenerateCopyHelperFunction(bool BlockHasCopyDispose, const llvm::StructType *T,
   const CGFunctionInfo &FI =
     CGM.getTypes().getFunctionInfo(R, Args);
 
+  // FIXME: We'd like to put these into a mergable by content, with
+  // internal linkage.
   std::string Name = std::string("__copy_helper_block_");
   CodeGenTypes &Types = CGM.getTypes();
   const llvm::FunctionType *LTy = Types.GetFunctionType(FI, false);
@@ -828,6 +803,8 @@ GenerateDestroyHelperFunction(bool BlockHasCopyDispose,
   const CGFunctionInfo &FI =
     CGM.getTypes().getFunctionInfo(R, Args);
 
+  // FIXME: We'd like to put these into a mergable by content, with
+  // internal linkage.
   std::string Name = std::string("__destroy_helper_block_");
   CodeGenTypes &Types = CGM.getTypes();
   const llvm::FunctionType *LTy = Types.GetFunctionType(FI, false);
@@ -914,6 +891,8 @@ GeneratebyrefCopyHelperFunction(const llvm::Type *T, int flag) {
   CodeGenTypes &Types = CGM.getTypes();
   const llvm::FunctionType *LTy = Types.GetFunctionType(FI, false);
 
+  // FIXME: We'd like to put these into a mergable by content, with
+  // internal linkage.
   llvm::Function *Fn =
     llvm::Function::Create(LTy, llvm::GlobalValue::InternalLinkage,
                            Name,
@@ -975,6 +954,8 @@ BlockFunction::GeneratebyrefDestroyHelperFunction(const llvm::Type *T,
   CodeGenTypes &Types = CGM.getTypes();
   const llvm::FunctionType *LTy = Types.GetFunctionType(FI, false);
 
+  // FIXME: We'd like to put these into a mergable by content, with
+  // internal linkage.
   llvm::Function *Fn =
     llvm::Function::Create(LTy, llvm::GlobalValue::InternalLinkage,
                            Name,
@@ -1005,13 +986,36 @@ BlockFunction::GeneratebyrefDestroyHelperFunction(const llvm::Type *T,
 }
 
 llvm::Constant *BlockFunction::BuildbyrefCopyHelper(const llvm::Type *T,
-                                                    int flag) {
-  return CodeGenFunction(CGM).GeneratebyrefCopyHelperFunction(T, flag);
+                                                    int flag, unsigned Align) {
+  // All alignments below that of pointer alignment collpase down to just
+  // pointer alignment, as we always have at least that much alignment to begin
+  // with.
+  Align /= unsigned(CGF.Target.getPointerAlign(0)/8);
+  // As an optimization, we only generate a single function of each kind we
+  // might need.  We need a different one for each alignment and for each
+  // setting of flags.  We mix Align and flag to get the kind.
+  uint64_t kind = (uint64_t)Align*BLOCK_BYREF_CURRENT_MAX + flag;
+  llvm::Constant *& Entry = CGM.AssignCache[kind];
+  if (Entry)
+    return Entry;
+  return Entry=CodeGenFunction(CGM).GeneratebyrefCopyHelperFunction(T, flag);
 }
 
 llvm::Constant *BlockFunction::BuildbyrefDestroyHelper(const llvm::Type *T,
-                                                       int flag) {
-  return CodeGenFunction(CGM).GeneratebyrefDestroyHelperFunction(T, flag);
+                                                       int flag,
+                                                       unsigned Align) {
+  // All alignments below that of pointer alignment collpase down to just
+  // pointer alignment, as we always have at least that much alignment to begin
+  // with.
+  Align /= unsigned(CGF.Target.getPointerAlign(0)/8);
+  // As an optimization, we only generate a single function of each kind we
+  // might need.  We need a different one for each alignment and for each
+  // setting of flags.  We mix Align and flag to get the kind.
+  uint64_t kind = (uint64_t)Align*BLOCK_BYREF_CURRENT_MAX + flag;
+  llvm::Constant *& Entry = CGM.DestroyCache[kind];
+  if (Entry)
+    return Entry;
+  return Entry=CodeGenFunction(CGM).GeneratebyrefDestroyHelperFunction(T, flag);
 }
 
 llvm::Value *BlockFunction::getBlockObjectDispose() {

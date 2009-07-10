@@ -37,6 +37,10 @@ namespace {
   KeepMain("keep-main",
            cl::desc("Force function reduction to keep main"),
            cl::init(false));
+  cl::opt<bool>
+  NoGlobalRM ("disable-global-remove",
+         cl::desc("Do not remove global variables"),
+         cl::init(false));
 }
 
 namespace llvm {
@@ -69,7 +73,7 @@ ReducePassList::doTest(std::vector<const PassInfo*> &Prefix,
     PrefixOutput.set(PfxOutput);
     OrigProgram = BD.Program;
 
-    BD.Program = ParseInputFile(PrefixOutput.toString());
+    BD.Program = ParseInputFile(PrefixOutput.toString(), BD.getContext());
     if (BD.Program == 0) {
       std::cerr << BD.getToolName() << ": Error reading bitcode file '"
                 << PrefixOutput << "'!\n";
@@ -146,7 +150,7 @@ ReduceCrashingGlobalVariables::TestGlobalVariables(
   // playing with...
   for (Module::global_iterator I = M->global_begin(), E = M->global_end();
        I != E; ++I)
-    if (I->hasInitializer()) {
+    if (I->hasInitializer() && !GVSet.count(I)) {
       I->setInitializer(0);
       I->setLinkage(GlobalValue::ExternalLinkage);
     }
@@ -338,13 +342,90 @@ bool ReduceCrashingBlocks::TestBlocks(std::vector<const BasicBlock*> &BBs) {
   return false;
 }
 
+namespace {
+  /// ReduceCrashingInstructions reducer - This works by removing the specified
+  /// non-terminator instructions and replacing them with undef.
+  ///
+  class ReduceCrashingInstructions : public ListReducer<const Instruction*> {
+    BugDriver &BD;
+    bool (*TestFn)(BugDriver &, Module *);
+  public:
+    ReduceCrashingInstructions(BugDriver &bd, bool (*testFn)(BugDriver &,
+                                                             Module *))
+      : BD(bd), TestFn(testFn) {}
+
+    virtual TestResult doTest(std::vector<const Instruction*> &Prefix,
+                              std::vector<const Instruction*> &Kept) {
+      if (!Kept.empty() && TestInsts(Kept))
+        return KeepSuffix;
+      if (!Prefix.empty() && TestInsts(Prefix))
+        return KeepPrefix;
+      return NoFailure;
+    }
+
+    bool TestInsts(std::vector<const Instruction*> &Prefix);
+  };
+}
+
+bool ReduceCrashingInstructions::TestInsts(std::vector<const Instruction*>
+                                           &Insts) {
+  // Clone the program to try hacking it apart...
+  DenseMap<const Value*, Value*> ValueMap;
+  Module *M = CloneModule(BD.getProgram(), ValueMap);
+
+  // Convert list to set for fast lookup...
+  SmallPtrSet<Instruction*, 64> Instructions;
+  for (unsigned i = 0, e = Insts.size(); i != e; ++i) {
+    assert(!isa<TerminatorInst>(Insts[i]));
+    Instructions.insert(cast<Instruction>(ValueMap[Insts[i]]));
+  }
+
+  std::cout << "Checking for crash with only " << Instructions.size();
+  if (Instructions.size() == 1)
+    std::cout << " instruction: ";
+  else
+    std::cout << " instructions: ";
+
+  for (Module::iterator MI = M->begin(), ME = M->end(); MI != ME; ++MI)
+    for (Function::iterator FI = MI->begin(), FE = MI->end(); FI != FE; ++FI)
+      for (BasicBlock::iterator I = FI->begin(), E = FI->end(); I != E;) {
+        Instruction *Inst = I++;
+        if (!Instructions.count(Inst) && !isa<TerminatorInst>(Inst)) {
+          if (Inst->getType() != Type::VoidTy)
+            Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
+          Inst->eraseFromParent();
+        }
+      }
+
+  // Verify that this is still valid.
+  PassManager Passes;
+  Passes.add(createVerifierPass());
+  Passes.run(*M);
+
+  // Try running on the hacked up program...
+  if (TestFn(BD, M)) {
+    BD.setNewProgram(M);      // It crashed, keep the trimmed version...
+
+    // Make sure to use instruction pointers that point into the now-current
+    // module, and that they don't include any deleted blocks.
+    Insts.clear();
+    for (SmallPtrSet<Instruction*, 64>::const_iterator I = Instructions.begin(),
+             E = Instructions.end(); I != E; ++I)
+      Insts.push_back(*I);
+    return true;
+  }
+  delete M;  // It didn't crash, try something else.
+  return false;
+}
+
 /// DebugACrash - Given a predicate that determines whether a component crashes
 /// on a program, try to destructively reduce the program while still keeping
 /// the predicate true.
 static bool DebugACrash(BugDriver &BD,  bool (*TestFn)(BugDriver &, Module *)) {
   // See if we can get away with nuking some of the global variable initializers
   // in the program...
-  if (BD.getProgram()->global_begin() != BD.getProgram()->global_end()) {
+  if (!NoGlobalRM &&
+      BD.getProgram()->global_begin() != BD.getProgram()->global_end()) {
     // Now try to reduce the number of global variable initializers in the
     // module to something small.
     Module *M = CloneModule(BD.getProgram());
@@ -421,7 +502,26 @@ static bool DebugACrash(BugDriver &BD,  bool (*TestFn)(BugDriver &, Module *)) {
            E = BD.getProgram()->end(); I != E; ++I)
       for (Function::const_iterator FI = I->begin(), E = I->end(); FI !=E; ++FI)
         Blocks.push_back(FI);
+    unsigned OldSize = Blocks.size();
     ReduceCrashingBlocks(BD, TestFn).reduceList(Blocks);
+    if (Blocks.size() < OldSize)
+      BD.EmitProgressBitcode("reduced-blocks");
+  }
+
+  // Attempt to delete instructions using bisection. This should help out nasty
+  // cases with large basic blocks where the problem is at one end.
+  if (!BugpointIsInterrupted) {
+    std::vector<const Instruction*> Insts;
+    for (Module::const_iterator MI = BD.getProgram()->begin(),
+           ME = BD.getProgram()->end(); MI != ME; ++MI)
+      for (Function::const_iterator FI = MI->begin(), FE = MI->end(); FI != FE;
+           ++FI)
+        for (BasicBlock::const_iterator I = FI->begin(), E = FI->end();
+             I != E; ++I)
+          if (!isa<TerminatorInst>(I))
+            Insts.push_back(I);
+
+    ReduceCrashingInstructions(BD, TestFn).reduceList(Insts);
   }
 
   // FIXME: This should use the list reducer to converge faster by deleting

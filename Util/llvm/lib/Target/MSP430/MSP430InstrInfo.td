@@ -107,6 +107,10 @@ def ADJCALLSTACKUP   : Pseudo<(outs), (ins i16imm:$amt1, i16imm:$amt2),
 }
 
 let usesCustomDAGSchedInserter = 1 in {
+  def Select8  : Pseudo<(outs GR8:$dst), (ins GR8:$src1, GR8:$src2, i8imm:$cc),
+                        "# Select8 PSEUDO",
+                        [(set GR8:$dst,
+                          (MSP430selectcc GR8:$src1, GR8:$src2, imm:$cc))]>;
   def Select16 : Pseudo<(outs GR16:$dst), (ins GR16:$src1, GR16:$src2, i8imm:$cc),
                         "# Select16 PSEUDO",
                         [(set GR16:$dst,
@@ -620,12 +624,12 @@ def SHL16r1 : Pseudo<(outs GR16:$dst), (ins GR16:$src),
                       (implicit SRW)]>;
 
 def SAR8r1c  : Pseudo<(outs GR8:$dst), (ins GR8:$src),
-                      "clrc\n"
+                      "clrc\n\t"
                       "rrc.b\t$dst",
                       [(set GR8:$dst, (MSP430rrc GR8:$src)),
                        (implicit SRW)]>;
 def SAR16r1c : Pseudo<(outs GR16:$dst), (ins GR16:$src),
-                      "clrc\n"
+                      "clrc\n\t"
                       "rrc.w\t$dst",
                       [(set GR16:$dst, (MSP430rrc GR16:$src)),
                        (implicit SRW)]>;
@@ -703,6 +707,20 @@ def CMP8rr  : Pseudo<(outs), (ins GR8:$src1, GR8:$src2),
 def CMP16rr : Pseudo<(outs), (ins GR16:$src1, GR16:$src2),
                      "cmp.w\t{$src1, $src2}",
                      [(MSP430cmp GR16:$src1, GR16:$src2), (implicit SRW)]>;
+
+def CMP8ir  : Pseudo<(outs), (ins i8imm:$src1, GR8:$src2),
+                   "cmp.b\t{$src1, $src2}",
+                   [(MSP430cmp imm:$src1, GR8:$src2), (implicit SRW)]>;
+def CMP16ir : Pseudo<(outs), (ins i16imm:$src1, GR16:$src2),
+                     "cmp.w\t{$src1, $src2}",
+                     [(MSP430cmp imm:$src1, GR16:$src2), (implicit SRW)]>;
+
+def CMP8im  : Pseudo<(outs), (ins i8imm:$src1, memsrc:$src2),
+                     "cmp.b\t{$src1, $src2}",
+                      [(MSP430cmp (i8 imm:$src1), (load addr:$src2)), (implicit SRW)]>;
+def CMP16im : Pseudo<(outs), (ins i16imm:$src1, memsrc:$src2),
+                     "cmp.w\t{$src1, $src2}",
+                      [(MSP430cmp (i16 imm:$src1), (load addr:$src2)), (implicit SRW)]>;
 
 // FIXME: imm is allowed only on src operand, not on dst.
 

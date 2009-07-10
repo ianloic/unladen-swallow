@@ -101,8 +101,11 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
 
   // Standard binary operators...
   case Add: return "add";
+  case FAdd: return "fadd";
   case Sub: return "sub";
+  case FSub: return "fsub";
   case Mul: return "mul";
+  case FMul: return "fmul";
   case UDiv: return "udiv";
   case SDiv: return "sdiv";
   case FDiv: return "fdiv";
@@ -140,8 +143,6 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   // Other instructions...
   case ICmp:           return "icmp";
   case FCmp:           return "fcmp";
-  case VICmp:          return "vicmp";
-  case VFCmp:          return "vfcmp";
   case PHI:            return "phi";
   case Select:         return "select";
   case Call:           return "call";
@@ -215,9 +216,12 @@ bool Instruction::isIdenticalTo(const Instruction *I) const {
 }
 
 // isSameOperationAs
+// This should be kept in sync with isEquivalentOperation in
+// lib/Transforms/IPO/MergeFunctions.cpp.
 bool Instruction::isSameOperationAs(const Instruction *I) const {
-  if (getOpcode() != I->getOpcode() || getType() != I->getType() ||
-      getNumOperands() != I->getNumOperands())
+  if (getOpcode() != I->getOpcode() ||
+      getNumOperands() != I->getNumOperands() ||
+      getType() != I->getType())
     return false;
 
   // We have two instructions of identical opcode and #operands.  Check to see
@@ -320,21 +324,23 @@ bool Instruction::mayWriteToMemory() const {
   }
 }
 
+/// mayThrow - Return true if this instruction may throw an exception.
+///
+bool Instruction::mayThrow() const {
+  if (const CallInst *CI = dyn_cast<CallInst>(this))
+    return !CI->doesNotThrow();
+  return false;
+}
+
 /// isAssociative - Return true if the instruction is associative:
 ///
-///   Associative operators satisfy:  x op (y op z) === (x op y) op z)
+///   Associative operators satisfy:  x op (y op z) === (x op y) op z
 ///
-/// In LLVM, the Add, Mul, And, Or, and Xor operators are associative, when not
-/// applied to floating point types.
+/// In LLVM, the Add, Mul, And, Or, and Xor operators are associative.
 ///
 bool Instruction::isAssociative(unsigned Opcode, const Type *Ty) {
-  if (Opcode == And || Opcode == Or || Opcode == Xor)
-    return true;
-
-  // Add/Mul reassociate unless they are FP or FP vectors.
-  if (Opcode == Add || Opcode == Mul)
-    return !Ty->isFPOrFPVector();
-  return 0;
+  return Opcode == And || Opcode == Or || Opcode == Xor ||
+         Opcode == Add || Opcode == Mul;
 }
 
 /// isCommutative - Return true if the instruction is commutative:
@@ -347,7 +353,9 @@ bool Instruction::isAssociative(unsigned Opcode, const Type *Ty) {
 bool Instruction::isCommutative(unsigned op) {
   switch (op) {
   case Add:
+  case FAdd:
   case Mul:
+  case FMul:
   case And:
   case Or:
   case Xor:

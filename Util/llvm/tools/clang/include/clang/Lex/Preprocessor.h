@@ -19,12 +19,14 @@
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/TokenLexer.h"
 #include "clang/Lex/PTHManager.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/Support/Allocator.h"
+#include <vector>
 
 namespace clang {
   
@@ -34,6 +36,7 @@ class FileEntry;
 class HeaderSearch;
 class PragmaNamespace;
 class PragmaHandler;
+class CommentHandler;
 class ScratchBuffer;
 class TargetInfo;
 class PPCallbacks;
@@ -69,6 +72,8 @@ class Preprocessor {
   IdentifierInfo *Ident__TIMESTAMP__;              // __TIMESTAMP__
   IdentifierInfo *Ident__COUNTER__;                // __COUNTER__
   IdentifierInfo *Ident_Pragma, *Ident__VA_ARGS__; // _Pragma, __VA_ARGS__
+  IdentifierInfo *Ident__has_feature;              // __has_feature
+  IdentifierInfo *Ident__has_builtin;              // __has_builtin
   
   SourceLocation DATELoc, TIMELoc;
   unsigned CounterValue;  // Next __COUNTER__ value.
@@ -99,9 +104,16 @@ class Preprocessor {
   /// the lifetime fo the preprocessor.
   SelectorTable Selectors;
 
+  /// BuiltinInfo - Information about builtins.
+  Builtin::Context BuiltinInfo;
+  
   /// PragmaHandlers - This tracks all of the pragmas that the client registered
   /// with this preprocessor.
   PragmaNamespace *PragmaHandlers;
+  
+  /// \brief Tracks all of the comment handlers that the client registered 
+  /// with this preprocessor.
+  std::vector<CommentHandler *> CommentHandlers;
   
   /// CurLexer - This is the current top of the stack that we're lexing from if
   /// not expanding a macro and we are lexing directly from source code.
@@ -194,14 +206,13 @@ private:  // Cached tokens state.
 public:
   Preprocessor(Diagnostic &diags, const LangOptions &opts, TargetInfo &target,
                SourceManager &SM, HeaderSearch &Headers,
-               IdentifierInfoLookup* IILookup = 0);
+               IdentifierInfoLookup *IILookup = 0);
 
   ~Preprocessor();
 
   Diagnostic &getDiagnostics() const { return *Diags; }
   void setDiagnostics(Diagnostic &D) { Diags = &D; }
 
-  
   const LangOptions &getLangOptions() const { return Features; }
   TargetInfo &getTargetInfo() const { return Target; }
   FileManager &getFileManager() const { return FileMgr; }
@@ -210,6 +221,7 @@ public:
 
   IdentifierTable &getIdentifierTable() { return Identifiers; }
   SelectorTable &getSelectorTable() { return Selectors; }
+  Builtin::Context &getBuiltinInfo() { return BuiltinInfo; }
   llvm::BumpPtrAllocator &getPreprocessorAllocator() { return BP; }
     
   void setPTHManager(PTHManager* pm);
@@ -295,6 +307,14 @@ public:
   /// to remove a handler that has not been registered.
   void RemovePragmaHandler(const char *Namespace, PragmaHandler *Handler);
 
+  /// \brief Add the specified comment handler to the preprocessor.
+  void AddCommentHandler(CommentHandler *Handler);
+  
+  /// \brief Remove the specified comment handler.
+  ///
+  /// It is an error to remove a handler that has not been registered.
+  void RemoveCommentHandler(CommentHandler *Handler);
+  
   /// EnterMainSourceFile - Enter the specified FileID as the main source file,
   /// which implicitly adds the builtin defines etc.
   void EnterMainSourceFile();  
@@ -667,7 +687,6 @@ private:
   /// RegisterBuiltinMacros - Register builtin macros, such as __LINE__ with the
   /// identifier table.
   void RegisterBuiltinMacros();
-  IdentifierInfo *RegisterBuiltinMacro(const char *Name);
   
   /// HandleMacroExpandedIdentifier - If an identifier token is read that is to
   /// be expanded as a macro, handle it and return the next token as 'Tok'.  If
@@ -786,6 +805,7 @@ public:
   void HandlePragmaSystemHeader(Token &SysHeaderTok);
   void HandlePragmaDependency(Token &DependencyTok);
   void HandlePragmaComment(Token &CommentTok);
+  void HandleComment(SourceRange Comment);
 };
 
 /// PreprocessorFactory - A generic factory interface for lazily creating
@@ -794,6 +814,15 @@ class PreprocessorFactory {
 public:
   virtual ~PreprocessorFactory();
   virtual Preprocessor* CreatePreprocessor() = 0;  
+};
+  
+/// \brief Abstract base class that describes a handler that will receive 
+/// source ranges for each of the comments encountered in the source file.
+class CommentHandler {
+public:
+  virtual ~CommentHandler();
+  
+  virtual void HandleComment(Preprocessor &PP, SourceRange Comment) = 0;
 };
   
 }  // end namespace clang

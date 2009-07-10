@@ -55,6 +55,9 @@ namespace llvm {
       // Floating Point Compare
       FPCmp,
 
+      // Floating Point Rounding
+      FPRound,
+
       // Return 
       Ret
     };
@@ -65,8 +68,6 @@ namespace llvm {
   //===--------------------------------------------------------------------===//
   class MipsTargetLowering : public TargetLowering 
   {
-    // FrameIndex for return slot.
-    int ReturnAddrIndex;
   public:
 
     explicit MipsTargetLowering(MipsTargetMachine &TM);
@@ -81,6 +82,8 @@ namespace llvm {
     /// getSetCCResultType - get the ISD::SETCC result ValueType
     MVT getSetCCResultType(MVT VT) const;
 
+    /// getFunctionAlignment - Return the Log2 alignment of this function.
+    virtual unsigned getFunctionAlignment(const Function *F) const;
   private:
     // Subtarget Info
     const MipsSubtarget *Subtarget;
@@ -98,6 +101,7 @@ namespace llvm {
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG);
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFORMAL_ARGUMENTS(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG);

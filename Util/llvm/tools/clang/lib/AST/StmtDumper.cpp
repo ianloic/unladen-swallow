@@ -15,6 +15,7 @@
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/Compiler.h"
 #include <cstdio>
@@ -39,6 +40,7 @@ namespace  {
     /// out so that we can print out deltas from then on out.
     const char *LastLocFilename;
     unsigned LastLocLine;
+
   public:
     StmtDumper(SourceManager *sm, FILE *f, unsigned maxDepth)
       : SM(sm), F(f), IndentLevel(0-1), MaxDepth(maxDepth) {
@@ -223,7 +225,8 @@ void StmtDumper::DumpDeclarator(Decl *D) {
     }
     
     std::string Name = VD->getNameAsString();
-    VD->getType().getAsStringInternal(Name);
+    VD->getType().getAsStringInternal(Name, 
+                          PrintingPolicy(VD->getASTContext().getLangOptions()));
     fprintf(F, "%s", Name.c_str());
     
     // If this is a vardecl with an initializer, emit it.

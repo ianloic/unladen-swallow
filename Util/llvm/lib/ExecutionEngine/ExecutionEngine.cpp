@@ -22,6 +22,7 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MutexGuard.h"
 #include "llvm/System/DynamicLibrary.h"
 #include "llvm/System/Host.h"
@@ -55,7 +56,7 @@ ExecutionEngine::~ExecutionEngine() {
 
 char* ExecutionEngine::getMemoryForGV(const GlobalVariable* GV) {
   const Type *ElTy = GV->getType()->getElementType();
-  size_t GVSize = (size_t)getTargetData()->getTypePaddedSize(ElTy);
+  size_t GVSize = (size_t)getTargetData()->getTypeAllocSize(ElTy);
   return new char[GVSize];
 }
 
@@ -383,7 +384,8 @@ int ExecutionEngine::runFunctionAsMain(Function *Fn,
 ExecutionEngine *ExecutionEngine::create(ModuleProvider *MP,
                                          bool ForceInterpreter,
                                          std::string *ErrorStr,
-                                         CodeGenOpt::Level OptLevel) {
+                                         CodeGenOpt::Level OptLevel,
+                                         bool GVsWithCode) {
   ExecutionEngine *EE = 0;
 
   // Make sure we can resolve symbols in the program as well. The zero arg
@@ -393,11 +395,11 @@ ExecutionEngine *ExecutionEngine::create(ModuleProvider *MP,
 
   // Unless the interpreter was explicitly selected, try making a JIT.
   if (!ForceInterpreter && JITCtor)
-    EE = JITCtor(MP, ErrorStr, OptLevel);
+    EE = JITCtor(MP, ErrorStr, OptLevel, GVsWithCode);
 
   // If we can't make a JIT, make an interpreter instead.
   if (EE == 0 && InterpCtor)
-    EE = InterpCtor(MP, ErrorStr, OptLevel);
+    EE = InterpCtor(MP, ErrorStr, OptLevel, GVsWithCode);
 
   return EE;
 }
@@ -573,8 +575,11 @@ GenericValue ExecutionEngine::getConstantValue(const Constant *C) {
       return GV;
     }
     case Instruction::Add:
+    case Instruction::FAdd:
     case Instruction::Sub:
+    case Instruction::FSub:
     case Instruction::Mul:
+    case Instruction::FMul:
     case Instruction::UDiv:
     case Instruction::SDiv:
     case Instruction::URem:
@@ -605,11 +610,11 @@ GenericValue ExecutionEngine::getConstantValue(const Constant *C) {
       case Type::FloatTyID:
         switch (CE->getOpcode()) {
           default: assert(0 && "Invalid float opcode"); abort();
-          case Instruction::Add:  
+          case Instruction::FAdd:
             GV.FloatVal = LHS.FloatVal + RHS.FloatVal; break;
-          case Instruction::Sub:  
+          case Instruction::FSub:
             GV.FloatVal = LHS.FloatVal - RHS.FloatVal; break;
-          case Instruction::Mul:  
+          case Instruction::FMul:
             GV.FloatVal = LHS.FloatVal * RHS.FloatVal; break;
           case Instruction::FDiv: 
             GV.FloatVal = LHS.FloatVal / RHS.FloatVal; break;
@@ -620,11 +625,11 @@ GenericValue ExecutionEngine::getConstantValue(const Constant *C) {
       case Type::DoubleTyID:
         switch (CE->getOpcode()) {
           default: assert(0 && "Invalid double opcode"); abort();
-          case Instruction::Add:  
+          case Instruction::FAdd:
             GV.DoubleVal = LHS.DoubleVal + RHS.DoubleVal; break;
-          case Instruction::Sub:  
+          case Instruction::FSub:
             GV.DoubleVal = LHS.DoubleVal - RHS.DoubleVal; break;
-          case Instruction::Mul:  
+          case Instruction::FMul:
             GV.DoubleVal = LHS.DoubleVal * RHS.DoubleVal; break;
           case Instruction::FDiv: 
             GV.DoubleVal = LHS.DoubleVal / RHS.DoubleVal; break;
@@ -637,16 +642,16 @@ GenericValue ExecutionEngine::getConstantValue(const Constant *C) {
       case Type::FP128TyID: {
         APFloat apfLHS = APFloat(LHS.IntVal);
         switch (CE->getOpcode()) {
-          default: assert(0 && "Invalid long double opcode"); abort();
-          case Instruction::Add:  
+          default: assert(0 && "Invalid long double opcode");llvm_unreachable();
+          case Instruction::FAdd:
             apfLHS.add(APFloat(RHS.IntVal), APFloat::rmNearestTiesToEven);
             GV.IntVal = apfLHS.bitcastToAPInt();
             break;
-          case Instruction::Sub:  
+          case Instruction::FSub:
             apfLHS.subtract(APFloat(RHS.IntVal), APFloat::rmNearestTiesToEven);
             GV.IntVal = apfLHS.bitcastToAPInt();
             break;
-          case Instruction::Mul:  
+          case Instruction::FMul:
             apfLHS.multiply(APFloat(RHS.IntVal), APFloat::rmNearestTiesToEven);
             GV.IntVal = apfLHS.bitcastToAPInt();
             break;
@@ -848,16 +853,16 @@ void ExecutionEngine::InitializeMemory(const Constant *Init, void *Addr) {
     return;
   } else if (const ConstantVector *CP = dyn_cast<ConstantVector>(Init)) {
     unsigned ElementSize =
-      getTargetData()->getTypePaddedSize(CP->getType()->getElementType());
+      getTargetData()->getTypeAllocSize(CP->getType()->getElementType());
     for (unsigned i = 0, e = CP->getNumOperands(); i != e; ++i)
       InitializeMemory(CP->getOperand(i), (char*)Addr+i*ElementSize);
     return;
   } else if (isa<ConstantAggregateZero>(Init)) {
-    memset(Addr, 0, (size_t)getTargetData()->getTypePaddedSize(Init->getType()));
+    memset(Addr, 0, (size_t)getTargetData()->getTypeAllocSize(Init->getType()));
     return;
   } else if (const ConstantArray *CPA = dyn_cast<ConstantArray>(Init)) {
     unsigned ElementSize =
-      getTargetData()->getTypePaddedSize(CPA->getType()->getElementType());
+      getTargetData()->getTypeAllocSize(CPA->getType()->getElementType());
     for (unsigned i = 0, e = CPA->getNumOperands(); i != e; ++i)
       InitializeMemory(CPA->getOperand(i), (char*)Addr+i*ElementSize);
     return;
@@ -950,9 +955,8 @@ void ExecutionEngine::emitGlobals() {
             sys::DynamicLibrary::SearchForAddressOfSymbol(I->getName().c_str()))
           addGlobalMapping(I, SymAddr);
         else {
-          cerr << "Could not resolve external global address: "
-               << I->getName() << "\n";
-          abort();
+          llvm_report_error("Could not resolve external global address: "
+                            +I->getName());
         }
       }
     }
@@ -1004,7 +1008,7 @@ void ExecutionEngine::EmitGlobalVariable(const GlobalVariable *GV) {
     InitializeMemory(GV->getInitializer(), GA);
   
   const Type *ElTy = GV->getType()->getElementType();
-  size_t GVSize = (size_t)getTargetData()->getTypePaddedSize(ElTy);
+  size_t GVSize = (size_t)getTargetData()->getTypeAllocSize(ElTy);
   NumInitBytes += (unsigned)GVSize;
   ++NumGlobals;
 }

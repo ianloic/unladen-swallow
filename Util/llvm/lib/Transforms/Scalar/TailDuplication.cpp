@@ -258,7 +258,7 @@ void TailDup::eliminateUnconditionalBranch(BranchInst *Branch) {
     while (!isa<TerminatorInst>(BBI)) {
       Instruction *I = BBI++;
 
-      bool CanHoist = !I->isTrapping() && !I->mayWriteToMemory();
+      bool CanHoist = !I->isTrapping() && !I->mayHaveSideEffects();
       if (CanHoist) {
         for (unsigned op = 0, e = I->getNumOperands(); op != e; ++op)
           if (Instruction *OpI = dyn_cast<Instruction>(I->getOperand(op)))
@@ -317,9 +317,12 @@ void TailDup::eliminateUnconditionalBranch(BranchInst *Branch) {
   //
   BI = Branch; ++BI;  // Get an iterator to the first new instruction
   for (; BI != SourceBlock->end(); ++BI)
-    for (unsigned i = 0, e = BI->getNumOperands(); i != e; ++i)
-      if (Value *Remapped = ValueMapping[BI->getOperand(i)])
-        BI->setOperand(i, Remapped);
+    for (unsigned i = 0, e = BI->getNumOperands(); i != e; ++i) {
+      std::map<Value*, Value*>::const_iterator I =
+        ValueMapping.find(BI->getOperand(i));
+      if (I != ValueMapping.end())
+        BI->setOperand(i, I->second);
+    }
 
   // Next we check to see if any of the successors of DestBlock had PHI nodes.
   // If so, we need to add entries to the PHI nodes for SourceBlock now.
@@ -333,8 +336,9 @@ void TailDup::eliminateUnconditionalBranch(BranchInst *Branch) {
       Value *IV = PN->getIncomingValueForBlock(DestBlock);
 
       // Remap the value if necessary...
-      if (Value *MappedIV = ValueMapping[IV])
-        IV = MappedIV;
+      std::map<Value*, Value*>::const_iterator I = ValueMapping.find(IV);
+      if (I != ValueMapping.end())
+        IV = I->second;
       PN->addIncoming(IV, SourceBlock);
     }
   }
@@ -354,7 +358,7 @@ void TailDup::eliminateUnconditionalBranch(BranchInst *Branch) {
       Instruction *Inst = BI++;
       if (isInstructionTriviallyDead(Inst))
         Inst->eraseFromParent();
-      else if (Constant *C = ConstantFoldInstruction(Inst)) {
+      else if (Constant *C = ConstantFoldInstruction(Inst, Context)) {
         Inst->replaceAllUsesWith(C);
         Inst->eraseFromParent();
       }

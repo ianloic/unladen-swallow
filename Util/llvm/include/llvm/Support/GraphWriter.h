@@ -29,6 +29,7 @@
 #include "llvm/System/Path.h"
 #include <fstream>
 #include <vector>
+#include <cassert>
 
 namespace llvm {
 
@@ -66,12 +67,13 @@ namespace DOT {  // Private functions...
   }
 }
 
-void DisplayGraph(const sys::Path& Filename);
+void DisplayGraph(const sys::Path& Filename, bool wait=true);
 
 template<typename GraphType>
 class GraphWriter {
   std::ostream &O;
   const GraphType &G;
+  bool ShortNames;
 
   typedef DOTGraphTraits<GraphType>           DOTTraits;
   typedef GraphTraits<GraphType>              GTraits;
@@ -79,7 +81,8 @@ class GraphWriter {
   typedef typename GTraits::nodes_iterator    node_iterator;
   typedef typename GTraits::ChildIteratorType child_iterator;
 public:
-  GraphWriter(std::ostream &o, const GraphType &g) : O(o), G(g) {}
+  GraphWriter(std::ostream &o, const GraphType &g, bool SN) :
+    O(o), G(g), ShortNames(SN) {}
 
   void writeHeader(const std::string &Name) {
     std::string GraphName = DOTTraits::getGraphName(G);
@@ -130,7 +133,7 @@ public:
     O << "label=\"{";
 
     if (!DOTTraits::renderGraphFromBottomUp()) {
-      O << DOT::EscapeString(DOTTraits::getNodeLabel(Node, G));
+      O << DOT::EscapeString(DOTTraits::getNodeLabel(Node, G, ShortNames));
 
       // If we should include the address of the node in the label, do so now.
       if (DOTTraits::hasNodeAddressLabel(Node, G))
@@ -156,7 +159,7 @@ public:
     }
 
     if (DOTTraits::renderGraphFromBottomUp()) {
-      O << DOT::EscapeString(DOTTraits::getNodeLabel(Node, G));
+      O << DOT::EscapeString(DOTTraits::getNodeLabel(Node, G, ShortNames));
 
       // If we should include the address of the node in the label, do so now.
       if (DOTTraits::hasNodeAddressLabel(Node, G))
@@ -250,10 +253,11 @@ public:
 
 template<typename GraphType>
 std::ostream &WriteGraph(std::ostream &O, const GraphType &G,
+                         bool ShortNames = false,
                          const std::string &Name = "",
                          const std::string &Title = "") {
   // Start the graph emission process...
-  GraphWriter<GraphType> W(O, G);
+  GraphWriter<GraphType> W(O, G, ShortNames);
 
   // Output the header for the graph...
   W.writeHeader(Title);
@@ -272,6 +276,7 @@ std::ostream &WriteGraph(std::ostream &O, const GraphType &G,
 template<typename GraphType>
 sys::Path WriteGraph(const GraphType &G,
                      const std::string& Name,
+                     bool ShortNames = false,
                      const std::string& Title = "") {
   std::string ErrMsg;
   sys::Path Filename = sys::Path::GetTemporaryDirectory(&ErrMsg);
@@ -290,7 +295,7 @@ sys::Path WriteGraph(const GraphType &G,
   std::ofstream O(Filename.c_str());
 
   if (O.good()) {
-    WriteGraph(O, G, Name, Title);
+    WriteGraph(O, G, ShortNames, Name, Title);
     cerr << " done. \n";
 
     O.close();
@@ -308,8 +313,9 @@ sys::Path WriteGraph(const GraphType &G,
 template<typename GraphType>
 void ViewGraph(const GraphType& G,
                const std::string& Name,
+               bool ShortNames = false,
                const std::string& Title = "") {
-  sys::Path Filename =  WriteGraph(G, Name, Title);
+  sys::Path Filename =  WriteGraph(G, Name, ShortNames, Title);
 
   if (Filename.isEmpty()) {
     return;

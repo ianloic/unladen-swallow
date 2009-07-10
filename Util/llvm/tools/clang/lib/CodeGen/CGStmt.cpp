@@ -58,7 +58,7 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
     // Must be an expression in a stmt context.  Emit the value (to get
     // side-effects) and ignore the result.
     if (const Expr *E = dyn_cast<Expr>(S)) {
-      EmitAnyExpr(E);
+      EmitAnyExpr(E, 0, false, true);
     } else {
       ErrorUnsupported(S, "statement");
     }
@@ -498,6 +498,10 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
       EmitAnyExpr(RV);
   } else if (RV == 0) {
     // Do nothing (return value is left uninitialized)
+  } else if (FnRetTy->isReferenceType()) {
+    // If this function returns a reference, take the address of the expression
+    // rather than the value.
+    Builder.CreateStore(EmitLValue(RV).getAddress(), ReturnValue);
   } else if (!hasAggregateLLVMType(RV->getType())) {
     Builder.CreateStore(EmitScalarExpr(RV), ReturnValue);
   } else if (RV->getType()->isAnyComplexType()) {
@@ -801,7 +805,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
   for (unsigned i = 0, e = S.getNumInputs(); i != e; i++) {
     TargetInfo::ConstraintInfo Info(S.getInputConstraint(i),
                                     S.getInputName(i));
-    bool result = Target.validateInputConstraint(&OutputConstraintInfos[0],
+    bool result = Target.validateInputConstraint(OutputConstraintInfos.data(),
                                                  S.getNumOutputs(),
                                                  Info); result=result;
     assert(result && "Failed to parse input constraint");

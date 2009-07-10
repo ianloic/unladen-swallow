@@ -18,9 +18,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Streams.h"
 #include <algorithm>
 #include <deque>
+#include <iostream>
 using namespace llvm;
 
 namespace {
@@ -269,7 +269,7 @@ bool DisablePatternForFastISel(TreePatternNode *N, CodeGenDAGPatterns &CGP) {
 //===----------------------------------------------------------------------===//
 // Node Transformation emitter implementation.
 //
-void DAGISelEmitter::EmitNodeTransforms(std::ostream &OS) {
+void DAGISelEmitter::EmitNodeTransforms(raw_ostream &OS) {
   // Walk the pattern fragments, adding them to a map, which sorts them by
   // name.
   typedef std::map<std::string, CodeGenDAGPatterns::NodeXForm> NXsByNameTy;
@@ -303,7 +303,7 @@ void DAGISelEmitter::EmitNodeTransforms(std::ostream &OS) {
 // Predicate emitter implementation.
 //
 
-void DAGISelEmitter::EmitPredicateFunctions(std::ostream &OS) {
+void DAGISelEmitter::EmitPredicateFunctions(raw_ostream &OS) {
   OS << "\n// Predicate functions.\n";
 
   // Walk the pattern fragments, adding them to a map, which sorts them by
@@ -751,7 +751,7 @@ public:
         } else {
 #ifndef NDEBUG
           Child->dump();
-          cerr << " ";
+          errs() << " ";
 #endif
           assert(0 && "Unknown leaf type!");
         }
@@ -795,7 +795,7 @@ public:
       std::string Val = VariableMap[VarName];
       bool ModifiedVal = false;
       if (Val.empty()) {
-        cerr << "Variable '" << VarName << " referenced but not defined "
+        errs() << "Variable '" << VarName << " referenced but not defined "
              << "and not caught earlier!\n";
         abort();
       }
@@ -813,7 +813,7 @@ public:
         std::string TmpVar =  "Tmp" + utostr(ResNo);
         switch (N->getTypeNum(0)) {
         default:
-          cerr << "Cannot handle " << getEnumName(N->getTypeNum(0))
+          errs() << "Cannot handle " << getEnumName(N->getTypeNum(0))
                << " type as an immediate constant. Aborting\n";
           abort();
         case MVT::i1:  CastType = "bool"; break;
@@ -1351,7 +1351,7 @@ public:
     }
 
     N->dump();
-    cerr << "\n";
+    errs() << "\n";
     throw std::string("Unknown node in result pattern!");
   }
 
@@ -1537,7 +1537,7 @@ static bool EraseCodeLine(std::vector<std::pair<const PatternToMatch*,
 void DAGISelEmitter::EmitPatterns(std::vector<std::pair<const PatternToMatch*, 
                               std::vector<std::pair<unsigned, std::string> > > >
                                   &Patterns, unsigned Indent,
-                                  std::ostream &OS) {
+                                  raw_ostream &OS) {
   typedef std::pair<unsigned, std::string> CodeLine;
   typedef std::vector<CodeLine> CodeList;
   typedef std::vector<std::pair<const PatternToMatch*, CodeList> > PatternList;
@@ -1652,7 +1652,7 @@ static std::string getLegalCName(std::string OpName) {
   return OpName;
 }
 
-void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
+void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
   const CodeGenTarget &Target = CGP.getTargetInfo();
   
   // Get the namespace to insert instructions into.
@@ -1684,10 +1684,10 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
                     &Pattern);
         }
       } else {
-        cerr << "Unrecognized opcode '";
+        errs() << "Unrecognized opcode '";
         Node->dump();
-        cerr << "' on tree pattern '";
-        cerr << Pattern.getDstPattern()->getOperator()->getName() << "'!\n";
+        errs() << "' on tree pattern '";
+        errs() << Pattern.getDstPattern()->getOperator()->getName() << "'!\n";
         exit(1);
       }
     }
@@ -1884,9 +1884,9 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
         // If this pattern definitely matches, and if it isn't the last one, the
         // patterns after it CANNOT ever match.  Error out.
         if (mightNotMatch == false && i != CodeForPatterns.size()-1) {
-          cerr << "Pattern '";
-          CodeForPatterns[i].first->getSrcPattern()->print(*cerr.stream());
-          cerr << "' is impossible to select!\n";
+          errs() << "Pattern '";
+          CodeForPatterns[i].first->getSrcPattern()->print(errs());
+          errs() << "' is impossible to select!\n";
           exit(1);
         }
       }
@@ -2025,6 +2025,14 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
       OpcodeVTMap.find(OpName);
     std::vector<std::string> &OpVTs = OpVTI->second;
     OS << "  case " << OpName << ": {\n";
+    // If we have only one variant and it's the default, elide the
+    // switch.  Marginally faster, and makes MSVC happier.
+    if (OpVTs.size()==1 && OpVTs[0].empty()) {
+      OS << "    return Select_" << getLegalCName(OpName) << "(N);\n";
+      OS << "    break;\n";
+      OS << "  }\n";
+      continue;
+    }
     // Keep track of whether we see a pattern that has an iPtr result.
     bool HasPtrPattern = false;
     bool HasDefaultPattern = false;
@@ -2075,24 +2083,23 @@ void DAGISelEmitter::EmitInstructionSelector(std::ostream &OS) {
      << "}\n\n";
 
   OS << "void CannotYetSelect(SDValue N) DISABLE_INLINE {\n"
-     << "  cerr << \"Cannot yet select: \";\n"
-     << "  N.getNode()->dump(CurDAG);\n"
-     << "  cerr << '\\n';\n"
-     << "  abort();\n"
+     << "  std::string msg;\n"
+     << "  raw_string_ostream Msg(msg);\n"
+     << "  Msg << \"Cannot yet select: \";\n"
+     << "  N.getNode()->print(Msg, CurDAG);\n"
+     << "  llvm_report_error(Msg.str());\n"
      << "}\n\n";
 
   OS << "void CannotYetSelectIntrinsic(SDValue N) DISABLE_INLINE {\n"
      << "  cerr << \"Cannot yet select: \";\n"
      << "  unsigned iid = cast<ConstantSDNode>(N.getOperand("
      << "N.getOperand(0).getValueType() == MVT::Other))->getZExtValue();\n"
-     << "  cerr << \"intrinsic %\"<< "
-     << "Intrinsic::getName((Intrinsic::ID)iid);\n"
-     << "  cerr << '\\n';\n"
-     << "  abort();\n"
+     << " llvm_report_error(\"Cannot yet select: intrinsic %\" +\n"
+     << "Intrinsic::getName((Intrinsic::ID)iid));\n"
      << "}\n\n";
 }
 
-void DAGISelEmitter::run(std::ostream &OS) {
+void DAGISelEmitter::run(raw_ostream &OS) {
   EmitSourceFileHeader("DAG Instruction Selector for the " +
                        CGP.getTargetInfo().getName() + " target", OS);
   

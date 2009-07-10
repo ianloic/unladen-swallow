@@ -35,18 +35,25 @@ CXXRecordDecl::CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
 
 CXXRecordDecl *CXXRecordDecl::Create(ASTContext &C, TagKind TK, DeclContext *DC,
                                      SourceLocation L, IdentifierInfo *Id,
-                                     CXXRecordDecl* PrevDecl) {
+                                     CXXRecordDecl* PrevDecl,
+                                     bool DelayTypeCreation) {
   CXXRecordDecl* R = new (C) CXXRecordDecl(CXXRecord, TK, DC, L, Id);
-  C.getTypeDeclType(R, PrevDecl);  
+  if (!DelayTypeCreation)
+    C.getTypeDeclType(R, PrevDecl);  
   return R;
 }
 
 CXXRecordDecl::~CXXRecordDecl() {
-  delete [] Bases;
+}
+
+void CXXRecordDecl::Destroy(ASTContext &C) {
+  C.Deallocate(Bases);
+  this->RecordDecl::Destroy(C);
 }
 
 void 
-CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases, 
+CXXRecordDecl::setBases(ASTContext &C,
+                        CXXBaseSpecifier const * const *Bases, 
                         unsigned NumBases) {
   // C++ [dcl.init.aggr]p1: 
   //   An aggregate is an array or a class (clause 9) with [...]
@@ -54,31 +61,38 @@ CXXRecordDecl::setBases(CXXBaseSpecifier const * const *Bases,
   Aggregate = false;
 
   if (this->Bases)
-    delete [] this->Bases;
+    C.Deallocate(this->Bases);
 
-  // FIXME: allocate using the ASTContext
-  this->Bases = new CXXBaseSpecifier[NumBases];
+  this->Bases = new(C) CXXBaseSpecifier [NumBases];
   this->NumBases = NumBases;
   for (unsigned i = 0; i < NumBases; ++i)
     this->Bases[i] = *Bases[i];
 }
 
 bool CXXRecordDecl::hasConstCopyConstructor(ASTContext &Context) const {
+  return getCopyConstructor(Context, QualType::Const) != 0;
+}
+
+CXXConstructorDecl *CXXRecordDecl::getCopyConstructor(ASTContext &Context, 
+                                                      unsigned TypeQuals) const{
   QualType ClassType
     = Context.getTypeDeclType(const_cast<CXXRecordDecl*>(this));
   DeclarationName ConstructorName 
     = Context.DeclarationNames.getCXXConstructorName(
-                                           Context.getCanonicalType(ClassType));
-  unsigned TypeQuals;
+                                          Context.getCanonicalType(ClassType));
+  unsigned FoundTQs;
   DeclContext::lookup_const_iterator Con, ConEnd;
-  for (llvm::tie(Con, ConEnd) = this->lookup(Context, ConstructorName);
+  for (llvm::tie(Con, ConEnd) = this->lookup(ConstructorName);
        Con != ConEnd; ++Con) {
-    if (cast<CXXConstructorDecl>(*Con)->isCopyConstructor(Context, TypeQuals) &&
-        (TypeQuals & QualType::Const) != 0)
-      return true;
+    if (cast<CXXConstructorDecl>(*Con)->isCopyConstructor(Context, 
+                                                          FoundTQs)) {
+      if (((TypeQuals & QualType::Const) == (FoundTQs & QualType::Const)) ||
+          (!(TypeQuals & QualType::Const) && (FoundTQs & QualType::Const)))
+        return cast<CXXConstructorDecl>(*Con);
+      
+    }
   }
-
-  return false;
+  return 0;
 }
 
 bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context) const {
@@ -87,7 +101,7 @@ bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context) const {
   DeclarationName OpName =Context.DeclarationNames.getCXXOperatorName(OO_Equal);
 
   DeclContext::lookup_const_iterator Op, OpEnd;
-  for (llvm::tie(Op, OpEnd) = this->lookup(Context, OpName);
+  for (llvm::tie(Op, OpEnd) = this->lookup(OpName);
        Op != OpEnd; ++Op) {
     // C++ [class.copy]p9:
     //   A user-declared copy assignment operator is a non-static non-template
@@ -126,36 +140,33 @@ bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context) const {
 void
 CXXRecordDecl::addedConstructor(ASTContext &Context, 
                                 CXXConstructorDecl *ConDecl) {
-  if (!ConDecl->isImplicit()) {
-    // Note that we have a user-declared constructor.
-    UserDeclaredConstructor = true;
+  assert(!ConDecl->isImplicit() && "addedConstructor - not for implicit decl");
+  // Note that we have a user-declared constructor.
+  UserDeclaredConstructor = true;
 
-    // C++ [dcl.init.aggr]p1: 
-    //   An aggregate is an array or a class (clause 9) with no
-    //   user-declared constructors (12.1) [...].
-    Aggregate = false;
+  // C++ [dcl.init.aggr]p1: 
+  //   An aggregate is an array or a class (clause 9) with no
+  //   user-declared constructors (12.1) [...].
+  Aggregate = false;
 
-    // C++ [class]p4:
-    //   A POD-struct is an aggregate class [...]
-    PlainOldData = false;
+  // C++ [class]p4:
+  //   A POD-struct is an aggregate class [...]
+  PlainOldData = false;
 
-    // C++ [class.ctor]p5:
-    //   A constructor is trivial if it is an implicitly-declared default
-    //   constructor.
-    HasTrivialConstructor = false;
+  // C++ [class.ctor]p5:
+  //   A constructor is trivial if it is an implicitly-declared default
+  //   constructor.
+  HasTrivialConstructor = false;
     
-    // Note when we have a user-declared copy constructor, which will
-    // suppress the implicit declaration of a copy constructor.
-    if (ConDecl->isCopyConstructor(Context))
-      UserDeclaredCopyConstructor = true;
-  }
+  // Note when we have a user-declared copy constructor, which will
+  // suppress the implicit declaration of a copy constructor.
+  if (ConDecl->isCopyConstructor(Context))
+    UserDeclaredCopyConstructor = true;
 }
 
 void CXXRecordDecl::addedAssignmentOperator(ASTContext &Context,
                                             CXXMethodDecl *OpDecl) {
   // We're interested specifically in copy assignment operators.
-  // Unlike addedConstructor, this method is not called for implicit
-  // declarations.
   const FunctionProtoType *FnType = OpDecl->getType()->getAsFunctionProtoType();
   assert(FnType && "Overloaded operator has no proto function type.");
   assert(FnType->getNumArgs() == 1 && !FnType->isVariadic());
@@ -185,11 +196,87 @@ void CXXRecordDecl::addConversionFunction(ASTContext &Context,
   Conversions.addOverload(ConvDecl);
 }
 
+
+CXXConstructorDecl *
+CXXRecordDecl::getDefaultConstructor(ASTContext &Context) {
+  QualType ClassType = Context.getTypeDeclType(this);
+  DeclarationName ConstructorName
+    = Context.DeclarationNames.getCXXConstructorName(
+                      Context.getCanonicalType(ClassType.getUnqualifiedType()));
+  
+  DeclContext::lookup_const_iterator Con, ConEnd;
+  for (llvm::tie(Con, ConEnd) = lookup(ConstructorName);
+       Con != ConEnd; ++Con) {
+    CXXConstructorDecl *Constructor = cast<CXXConstructorDecl>(*Con);
+    if (Constructor->isDefaultConstructor())
+      return Constructor;
+  }
+  return 0;
+}
+
+const CXXDestructorDecl *
+CXXRecordDecl::getDestructor(ASTContext &Context) {
+  QualType ClassType = Context.getTypeDeclType(this);
+  
+  DeclarationName Name 
+    = Context.DeclarationNames.getCXXDestructorName(ClassType);
+
+  DeclContext::lookup_iterator I, E;
+  llvm::tie(I, E) = lookup(Name); 
+  assert(I != E && "Did not find a destructor!");
+  
+  const CXXDestructorDecl *Dtor = cast<CXXDestructorDecl>(*I);
+  assert(++I == E && "Found more than one destructor!");
+  
+  return Dtor;
+}
+
 CXXMethodDecl *
 CXXMethodDecl::Create(ASTContext &C, CXXRecordDecl *RD,
                       SourceLocation L, DeclarationName N,
                       QualType T, bool isStatic, bool isInline) {
   return new (C) CXXMethodDecl(CXXMethod, RD, L, N, T, isStatic, isInline);
+}
+
+
+typedef llvm::DenseMap<const CXXMethodDecl*, 
+                       std::vector<const CXXMethodDecl *> *> 
+                       OverriddenMethodsMapTy;
+
+static OverriddenMethodsMapTy *OverriddenMethods = 0;
+
+void CXXMethodDecl::addOverriddenMethod(const CXXMethodDecl *MD) {
+  // FIXME: The CXXMethodDecl dtor needs to remove and free the entry.
+  
+  if (!OverriddenMethods)
+    OverriddenMethods = new OverriddenMethodsMapTy();
+  
+  std::vector<const CXXMethodDecl *> *&Methods = (*OverriddenMethods)[this];
+  if (!Methods)
+    Methods = new std::vector<const CXXMethodDecl *>;
+  
+  Methods->push_back(MD);
+}
+
+CXXMethodDecl::method_iterator CXXMethodDecl::begin_overridden_methods() const {
+  if (!OverriddenMethods)
+    return 0;
+  
+  OverriddenMethodsMapTy::iterator it = OverriddenMethods->find(this);
+  if (it == OverriddenMethods->end())
+    return 0;
+  return &(*it->second)[0];
+}
+
+CXXMethodDecl::method_iterator CXXMethodDecl::end_overridden_methods() const {
+  if (!OverriddenMethods)
+    return 0;
+  
+  OverriddenMethodsMapTy::iterator it = OverriddenMethods->find(this);
+  if (it == OverriddenMethods->end())
+    return 0;
+
+  return &(*it->second)[it->second->size()];
 }
 
 QualType CXXMethodDecl::getThisType(ASTContext &C) const {
@@ -200,14 +287,20 @@ QualType CXXMethodDecl::getThisType(ASTContext &C) const {
   // the type of this is const volatile X*.
 
   assert(isInstance() && "No 'this' for static methods!");
-  QualType ClassTy = C.getTagDeclType(const_cast<CXXRecordDecl*>(getParent()));
+
+  QualType ClassTy;
+  if (ClassTemplateDecl *TD = getParent()->getDescribedClassTemplate())
+    ClassTy = TD->getInjectedClassNameType(C);
+  else
+    ClassTy = C.getTagDeclType(const_cast<CXXRecordDecl*>(getParent()));
   ClassTy = ClassTy.getWithAdditionalQualifiers(getTypeQualifiers());
   return C.getPointerType(ClassTy).withConst();
 }
 
 CXXBaseOrMemberInitializer::
-CXXBaseOrMemberInitializer(QualType BaseType, Expr **Args, unsigned NumArgs) 
-  : Args(0), NumArgs(0) {
+CXXBaseOrMemberInitializer(QualType BaseType, Expr **Args, unsigned NumArgs,
+                           SourceLocation L) 
+  : Args(0), NumArgs(0), IdLoc(L) {
   BaseOrMember = reinterpret_cast<uintptr_t>(BaseType.getTypePtr());
   assert((BaseOrMember & 0x01) == 0 && "Invalid base class type pointer");
   BaseOrMember |= 0x01;
@@ -221,8 +314,9 @@ CXXBaseOrMemberInitializer(QualType BaseType, Expr **Args, unsigned NumArgs)
 }
 
 CXXBaseOrMemberInitializer::
-CXXBaseOrMemberInitializer(FieldDecl *Member, Expr **Args, unsigned NumArgs)
-  : Args(0), NumArgs(0) {
+CXXBaseOrMemberInitializer(FieldDecl *Member, Expr **Args, unsigned NumArgs,
+                           SourceLocation L)
+  : Args(0), NumArgs(0), IdLoc(L) {
   BaseOrMember = reinterpret_cast<uintptr_t>(Member);
   assert((BaseOrMember & 0x01) == 0 && "Invalid member pointer");  
 
@@ -266,7 +360,7 @@ CXXConstructorDecl::isCopyConstructor(ASTContext &Context,
   //   const volatile X&, and either there are no other parameters
   //   or else all other parameters have default arguments (8.3.6).
   if ((getNumParams() < 1) ||
-      (getNumParams() > 1 && getParamDecl(1)->getDefaultArg() == 0))
+      (getNumParams() > 1 && !getParamDecl(1)->hasDefaultArg()))
     return false;
 
   const ParmVarDecl *Param = getParamDecl(0);
@@ -303,7 +397,7 @@ bool CXXConstructorDecl::isConvertingConstructor() const {
   return (getNumParams() == 0 && 
           getType()->getAsFunctionProtoType()->isVariadic()) ||
          (getNumParams() == 1) ||
-         (getNumParams() > 1 && getParamDecl(1)->getDefaultArg() != 0);
+         (getNumParams() > 1 && getParamDecl(1)->hasDefaultArg());
 }
 
 CXXDestructorDecl *
@@ -315,6 +409,26 @@ CXXDestructorDecl::Create(ASTContext &C, CXXRecordDecl *RD,
          "Name must refer to a destructor");
   return new (C) CXXDestructorDecl(RD, L, N, T, isInline, 
                                    isImplicitlyDeclared);
+}
+
+void
+CXXConstructorDecl::setBaseOrMemberInitializers(
+                                    ASTContext &C,
+                                    CXXBaseOrMemberInitializer **Initializers,
+                                    unsigned NumInitializers) {
+  if (NumInitializers > 0) {
+    NumBaseOrMemberInitializers = NumInitializers;
+    BaseOrMemberInitializers = 
+      new (C) CXXBaseOrMemberInitializer*[NumInitializers]; 
+    for (unsigned Idx = 0; Idx < NumInitializers; ++Idx)
+      BaseOrMemberInitializers[Idx] = Initializers[Idx];
+  }
+}
+
+void
+CXXConstructorDecl::Destroy(ASTContext& C) {
+  C.Deallocate(BaseOrMemberInitializers);
+  CXXMethodDecl::Destroy(C);
 }
 
 CXXConversionDecl *
@@ -332,6 +446,44 @@ OverloadedFunctionDecl::Create(ASTContext &C, DeclContext *DC,
   return new (C) OverloadedFunctionDecl(DC, N);
 }
 
+void OverloadedFunctionDecl::addOverload(AnyFunctionDecl F) {
+  Functions.push_back(F);
+  this->setLocation(F.get()->getLocation());
+}
+
+OverloadIterator::reference OverloadIterator::operator*() const {
+  if (FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+    return FD;
+  
+  if (FunctionTemplateDecl *FTD = dyn_cast<FunctionTemplateDecl>(D))
+    return FTD;
+  
+  assert(isa<OverloadedFunctionDecl>(D));
+  return *Iter;
+}
+
+OverloadIterator &OverloadIterator::operator++() {
+  if (isa<FunctionDecl>(D) || isa<FunctionTemplateDecl>(D)) {
+    D = 0;
+    return *this;
+  }
+  
+  if (++Iter == cast<OverloadedFunctionDecl>(D)->function_end())
+    D = 0;
+  
+  return *this;
+}
+
+bool OverloadIterator::Equals(const OverloadIterator &Other) const {
+  if (!D || !Other.D)
+    return D == Other.D;
+  
+  if (D != Other.D)
+    return false;
+  
+  return !isa<OverloadedFunctionDecl>(D) || Iter == Other.Iter;
+}
+
 LinkageSpecDecl *LinkageSpecDecl::Create(ASTContext &C,
                                          DeclContext *DC, 
                                          SourceLocation L,
@@ -342,21 +494,33 @@ LinkageSpecDecl *LinkageSpecDecl::Create(ASTContext &C,
 UsingDirectiveDecl *UsingDirectiveDecl::Create(ASTContext &C, DeclContext *DC,
                                                SourceLocation L,
                                                SourceLocation NamespaceLoc,
+                                               SourceRange QualifierRange,
+                                               NestedNameSpecifier *Qualifier,
                                                SourceLocation IdentLoc,
                                                NamespaceDecl *Used,
                                                DeclContext *CommonAncestor) {
-  return new (C) UsingDirectiveDecl(DC, L, NamespaceLoc, IdentLoc,
-                                    Used, CommonAncestor);
+  return new (C) UsingDirectiveDecl(DC, L, NamespaceLoc, QualifierRange, 
+                                    Qualifier, IdentLoc, Used, CommonAncestor);
 }
 
 NamespaceAliasDecl *NamespaceAliasDecl::Create(ASTContext &C, DeclContext *DC, 
                                                SourceLocation L, 
                                                SourceLocation AliasLoc, 
                                                IdentifierInfo *Alias, 
+                                               SourceRange QualifierRange,
+                                               NestedNameSpecifier *Qualifier,
                                                SourceLocation IdentLoc, 
                                                NamedDecl *Namespace) {
-  return new (C) NamespaceAliasDecl(DC, L, AliasLoc, Alias, IdentLoc, 
-                                    Namespace);
+  return new (C) NamespaceAliasDecl(DC, L, AliasLoc, Alias, QualifierRange, 
+                                    Qualifier, IdentLoc, Namespace);
+}
+
+UsingDecl *UsingDecl::Create(ASTContext &C, DeclContext *DC,
+      SourceLocation L, SourceRange NNR, SourceLocation TargetNL,
+      SourceLocation UL, NamedDecl* Target,
+      NestedNameSpecifier* TargetNNS, bool IsTypeNameArg) {
+  return new (C) UsingDecl(DC, L, NNR, TargetNL, UL, Target,
+      TargetNNS, IsTypeNameArg);
 }
 
 StaticAssertDecl *StaticAssertDecl::Create(ASTContext &C, DeclContext *DC,
@@ -373,15 +537,6 @@ void StaticAssertDecl::Destroy(ASTContext& C) {
 }
 
 StaticAssertDecl::~StaticAssertDecl() {
-}
-
-CXXTempVarDecl *CXXTempVarDecl::Create(ASTContext &C, DeclContext *DC,
-                                       QualType T) {
-  assert((T->isDependentType() || 
-          isa<CXXRecordDecl>(T->getAsRecordType()->getDecl())) &&
-         "CXXTempVarDecl must either have a dependent type "
-         "or a C++ record type!");
-  return new (C) CXXTempVarDecl(DC, T);
 }
 
 static const char *getAccessName(AccessSpecifier AS) {

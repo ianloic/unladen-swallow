@@ -71,10 +71,9 @@ ifeq ($(MAKECMDGOALS),unittests)
   OPTIONAL_DIRS :=
 endif
 
-# Don't install utils, examples, or projects they are only used to
-# build LLVM.
+# Use NO_INSTALL define of the Makefile of each directory for deciding
+# if the directory is installed or not
 ifeq ($(MAKECMDGOALS),install)
-  DIRS := $(filter-out utils, $(DIRS))
   OPTIONAL_DIRS := $(filter bindings, $(OPTIONAL_DIRS))
 endif
 
@@ -135,6 +134,8 @@ install-libs: install
 #------------------------------------------------------------------------
 FilesToConfig := \
   include/llvm/Config/config.h \
+  include/llvm/Config/Targets.def \
+	include/llvm/Config/AsmPrinters.def \
   include/llvm/Support/DataTypes.h \
   include/llvm/ADT/iterator.h
 FilesToConfigPATH  := $(addprefix $(LLVM_OBJ_ROOT)/,$(FilesToConfig))

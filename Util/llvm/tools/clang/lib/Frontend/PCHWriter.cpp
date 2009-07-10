@@ -33,6 +33,7 @@
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/System/Path.h"
 #include <cstdio>
 using namespace clang;
 
@@ -123,6 +124,23 @@ void PCHTypeWriter::VisitConstantArrayType(const ConstantArrayType *T) {
   Code = pch::TYPE_CONSTANT_ARRAY;
 }
 
+void PCHTypeWriter
+::VisitConstantArrayWithExprType(const ConstantArrayWithExprType *T) {
+  VisitArrayType(T);
+  Writer.AddSourceLocation(T->getLBracketLoc(), Record);
+  Writer.AddSourceLocation(T->getRBracketLoc(), Record);
+  Writer.AddAPInt(T->getSize(), Record);
+  Writer.AddStmt(T->getSizeExpr());
+  Code = pch::TYPE_CONSTANT_ARRAY_WITH_EXPR;
+}
+
+void PCHTypeWriter
+::VisitConstantArrayWithoutExprType(const ConstantArrayWithoutExprType *T) {
+  VisitArrayType(T);
+  Writer.AddAPInt(T->getSize(), Record);
+  Code = pch::TYPE_CONSTANT_ARRAY_WITHOUT_EXPR;
+}
+
 void PCHTypeWriter::VisitIncompleteArrayType(const IncompleteArrayType *T) {
   VisitArrayType(T);
   Code = pch::TYPE_INCOMPLETE_ARRAY;
@@ -130,6 +148,8 @@ void PCHTypeWriter::VisitIncompleteArrayType(const IncompleteArrayType *T) {
 
 void PCHTypeWriter::VisitVariableArrayType(const VariableArrayType *T) {
   VisitArrayType(T);
+  Writer.AddSourceLocation(T->getLBracketLoc(), Record);
+  Writer.AddSourceLocation(T->getRBracketLoc(), Record);
   Writer.AddStmt(T->getSizeExpr());
   Code = pch::TYPE_VARIABLE_ARRAY;
 }
@@ -184,6 +204,11 @@ void PCHTypeWriter::VisitTypeOfType(const TypeOfType *T) {
   Code = pch::TYPE_TYPEOF;
 }
 
+void PCHTypeWriter::VisitDecltypeType(const DecltypeType *T) {
+  Writer.AddStmt(T->getUnderlyingExpr());
+  Code = pch::TYPE_DECLTYPE;
+}
+
 void PCHTypeWriter::VisitTagType(const TagType *T) {
   Writer.AddDeclRef(T->getDecl(), Record);
   assert(!T->isBeingDefined() && 
@@ -222,16 +247,20 @@ PCHTypeWriter::VisitObjCQualifiedInterfaceType(
                                       const ObjCQualifiedInterfaceType *T) {
   VisitObjCInterfaceType(T);
   Record.push_back(T->getNumProtocols());
-  for (unsigned I = 0, N = T->getNumProtocols(); I != N; ++I)
-    Writer.AddDeclRef(T->getProtocol(I), Record);
+  for (ObjCInterfaceType::qual_iterator I = T->qual_begin(),
+       E = T->qual_end(); I != E; ++I)
+    Writer.AddDeclRef(*I, Record);
   Code = pch::TYPE_OBJC_QUALIFIED_INTERFACE;
 }
 
-void PCHTypeWriter::VisitObjCQualifiedIdType(const ObjCQualifiedIdType *T) {
+void
+PCHTypeWriter::VisitObjCObjectPointerType(const ObjCObjectPointerType *T) {
+  Writer.AddDeclRef(T->getDecl(), Record);
   Record.push_back(T->getNumProtocols());
-  for (unsigned I = 0, N = T->getNumProtocols(); I != N; ++I)
-    Writer.AddDeclRef(T->getProtocols(I), Record);
-  Code = pch::TYPE_OBJC_QUALIFIED_ID;
+  for (ObjCInterfaceType::qual_iterator I = T->qual_begin(),
+       E = T->qual_end(); I != E; ++I)
+    Writer.AddDeclRef(*I, Record);
+  Code = pch::TYPE_OBJC_OBJECT_POINTER;
 }
 
 //===----------------------------------------------------------------------===//
@@ -344,6 +373,7 @@ void PCHWriter::WriteBlockInfoBlock() {
  
   // PCH Top-Level Block.
   BLOCK(PCH_BLOCK);
+  RECORD(ORIGINAL_FILE_NAME);
   RECORD(TYPE_OFFSET);
   RECORD(DECL_OFFSET);
   RECORD(LANGUAGE_OPTIONS);
@@ -363,7 +393,8 @@ void PCHWriter::WriteBlockInfoBlock() {
   RECORD(STAT_CACHE);
   RECORD(EXT_VECTOR_DECLS);
   RECORD(OBJC_CATEGORY_IMPLEMENTATIONS);
-
+  RECORD(COMMENT_RANGES);
+  
   // SourceManager Block.
   BLOCK(SOURCE_MANAGER_BLOCK);
   RECORD(SM_SLOC_FILE_ENTRY);
@@ -403,7 +434,7 @@ void PCHWriter::WriteBlockInfoBlock() {
   RECORD(TYPE_ENUM);
   RECORD(TYPE_OBJC_INTERFACE);
   RECORD(TYPE_OBJC_QUALIFIED_INTERFACE);
-  RECORD(TYPE_OBJC_QUALIFIED_ID);
+  RECORD(TYPE_OBJC_OBJECT_POINTER);
   // Statements and Exprs can occur in the Types block.
   AddStmtsExprs(Stream, Record);
 
@@ -445,27 +476,95 @@ void PCHWriter::WriteBlockInfoBlock() {
   Stream.ExitBlock();
 }
 
+/// \brief Adjusts the given filename to only write out the portion of the
+/// filename that is not part of the system root directory.
+/// 
+/// \param Filename the file name to adjust.
+///
+/// \param isysroot When non-NULL, the PCH file is a relocatable PCH file and
+/// the returned filename will be adjusted by this system root.
+///
+/// \returns either the original filename (if it needs no adjustment) or the
+/// adjusted filename (which points into the @p Filename parameter).
+static const char * 
+adjustFilenameForRelocatablePCH(const char *Filename, const char *isysroot) {
+  assert(Filename && "No file name to adjust?");
+  
+  if (!isysroot)
+    return Filename;
+  
+  // Verify that the filename and the system root have the same prefix.
+  unsigned Pos = 0;
+  for (; Filename[Pos] && isysroot[Pos]; ++Pos)
+    if (Filename[Pos] != isysroot[Pos])
+      return Filename; // Prefixes don't match.
+  
+  // We hit the end of the filename before we hit the end of the system root.
+  if (!Filename[Pos])
+    return Filename;
+  
+  // If the file name has a '/' at the current position, skip over the '/'.
+  // We distinguish sysroot-based includes from absolute includes by the
+  // absence of '/' at the beginning of sysroot-based includes.
+  if (Filename[Pos] == '/')
+    ++Pos;
+  
+  return Filename + Pos;
+}
 
 /// \brief Write the PCH metadata (e.g., i686-apple-darwin9).
-void PCHWriter::WriteMetadata(const TargetInfo &Target) {
+void PCHWriter::WriteMetadata(ASTContext &Context, const char *isysroot) {
   using namespace llvm;
-  BitCodeAbbrev *Abbrev = new BitCodeAbbrev();
-  Abbrev->Add(BitCodeAbbrevOp(pch::METADATA));
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // PCH major
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // PCH minor
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang major
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang minor
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // Target triple
-  unsigned AbbrevCode = Stream.EmitAbbrev(Abbrev);
 
+  // Metadata
+  const TargetInfo &Target = Context.Target;
+  BitCodeAbbrev *MetaAbbrev = new BitCodeAbbrev();
+  MetaAbbrev->Add(BitCodeAbbrevOp(pch::METADATA));
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // PCH major
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // PCH minor
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang major
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang minor
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Relocatable
+  MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // Target triple
+  unsigned MetaAbbrevCode = Stream.EmitAbbrev(MetaAbbrev);
+  
   RecordData Record;
   Record.push_back(pch::METADATA);
   Record.push_back(pch::VERSION_MAJOR);
   Record.push_back(pch::VERSION_MINOR);
   Record.push_back(CLANG_VERSION_MAJOR);
   Record.push_back(CLANG_VERSION_MINOR);
+  Record.push_back(isysroot != 0);
   const char *Triple = Target.getTargetTriple();
-  Stream.EmitRecordWithBlob(AbbrevCode, Record, Triple, strlen(Triple));
+  Stream.EmitRecordWithBlob(MetaAbbrevCode, Record, Triple, strlen(Triple));
+  
+  // Original file name
+  SourceManager &SM = Context.getSourceManager();
+  if (const FileEntry *MainFile = SM.getFileEntryForID(SM.getMainFileID())) {
+    BitCodeAbbrev *FileAbbrev = new BitCodeAbbrev();
+    FileAbbrev->Add(BitCodeAbbrevOp(pch::ORIGINAL_FILE_NAME));
+    FileAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // File name
+    unsigned FileAbbrevCode = Stream.EmitAbbrev(FileAbbrev);
+
+    llvm::sys::Path MainFilePath(MainFile->getName());
+    std::string MainFileName;
+  
+    if (!MainFilePath.isAbsolute()) {
+      llvm::sys::Path P = llvm::sys::Path::GetCurrentDirectory();
+      P.appendComponent(MainFilePath.toString());
+      MainFileName = P.toString();
+    } else {
+      MainFileName = MainFilePath.toString();
+    }
+
+    const char *MainFileNameStr = MainFileName.c_str();
+    MainFileNameStr = adjustFilenameForRelocatablePCH(MainFileNameStr, 
+                                                      isysroot);
+    RecordData Record;
+    Record.push_back(pch::ORIGINAL_FILE_NAME);
+    Stream.EmitRecordWithBlob(FileAbbrevCode, Record, MainFileNameStr,
+                              strlen(MainFileNameStr));
+  }
 }
 
 /// \brief Write the LangOptions structure.
@@ -492,6 +591,7 @@ void PCHWriter::WriteLanguageOptions(const LangOptions &LangOpts) {
   Record.push_back(LangOpts.PascalStrings);  // Allow Pascal strings
   Record.push_back(LangOpts.WritableStrings);  // Allow writable strings
   Record.push_back(LangOpts.LaxVectorConversions);
+  Record.push_back(LangOpts.AltiVec);
   Record.push_back(LangOpts.Exceptions);  // Support exception handling.
 
   Record.push_back(LangOpts.NeXTRuntime); // Use NeXT runtime.
@@ -522,9 +622,14 @@ void PCHWriter::WriteLanguageOptions(const LangOptions &LangOpts) {
   Record.push_back(LangOpts.GNUInline); // Should GNU inline semantics be
                                   // used (instead of C99 semantics).
   Record.push_back(LangOpts.NoInline); // Should __NO_INLINE__ be defined.
+  Record.push_back(LangOpts.AccessControl); // Whether C++ access control should
+                                            // be enabled.
+  Record.push_back(LangOpts.CharIsSigned); // Whether char is a signed or
+                                           // unsigned type
   Record.push_back(LangOpts.getGCMode());
   Record.push_back(LangOpts.getVisibilityMode());
   Record.push_back(LangOpts.InstantiationDepth);
+  Record.push_back(LangOpts.OpenCL);
   Stream.EmitRecord(pch::LANGUAGE_OPTIONS, Record);
 }
 
@@ -584,15 +689,19 @@ public:
 } // end anonymous namespace
 
 /// \brief Write the stat() system call cache to the PCH file.
-void PCHWriter::WriteStatCache(MemorizeStatCalls &StatCalls) {
+void PCHWriter::WriteStatCache(MemorizeStatCalls &StatCalls,
+                               const char *isysroot) {
   // Build the on-disk hash table containing information about every
   // stat() call.
   OnDiskChainedHashTableGenerator<PCHStatCacheTrait> Generator;
   unsigned NumStatEntries = 0;
   for (MemorizeStatCalls::iterator Stat = StatCalls.begin(), 
                                 StatEnd = StatCalls.end();
-       Stat != StatEnd; ++Stat, ++NumStatEntries)
-    Generator.insert(Stat->first(), Stat->second);
+       Stat != StatEnd; ++Stat, ++NumStatEntries) {
+    const char *Filename = Stat->first();
+    Filename = adjustFilenameForRelocatablePCH(Filename, isysroot);
+    Generator.insert(Filename, Stat->second);
+  }
   
   // Create the on-disk hash table in a buffer.
   llvm::SmallVector<char, 4096> StatCacheData; 
@@ -688,7 +797,8 @@ static unsigned CreateSLocInstantiationAbbrev(llvm::BitstreamWriter &Stream) {
 /// errors), we probably won't have to create file entries for any of
 /// the files in the AST.
 void PCHWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
-                                        const Preprocessor &PP) {
+                                        const Preprocessor &PP,
+                                        const char *isysroot) {
   RecordData Record;
 
   // Enter the source manager block.
@@ -709,6 +819,7 @@ void PCHWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
     for (unsigned I = 0, N = LineTable.getNumFilenames(); I != N; ++I) {
       // Emit the file name
       const char *Filename = LineTable.getFilename(I);
+      Filename = adjustFilenameForRelocatablePCH(Filename, isysroot);
       unsigned FilenameLen = Filename? strlen(Filename) : 0;
       Record.push_back(FilenameLen);
       if (FilenameLen)
@@ -732,8 +843,8 @@ void PCHWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
         Record.push_back((unsigned)LE->FileKind);
         Record.push_back(LE->IncludeOffset);
       }
-      Stream.EmitRecord(pch::SM_LINE_TABLE, Record);
     }
+    Stream.EmitRecord(pch::SM_LINE_TABLE, Record);
   }
 
   // Write out entries for all of the header files we know about.
@@ -785,9 +896,21 @@ void PCHWriter::WriteSourceManagerBlock(SourceManager &SourceMgr,
       if (Content->Entry) {
         // The source location entry is a file. The blob associated
         // with this entry is the file name.
-        Stream.EmitRecordWithBlob(SLocFileAbbrv, Record,
-                             Content->Entry->getName(),
-                             strlen(Content->Entry->getName()));
+        
+        // Turn the file name into an absolute path, if it isn't already.
+        const char *Filename = Content->Entry->getName();
+        llvm::sys::Path FilePath(Filename, strlen(Filename));
+        std::string FilenameStr;
+        if (!FilePath.isAbsolute()) {
+          llvm::sys::Path P = llvm::sys::Path::GetCurrentDirectory();
+          P.appendComponent(FilePath.toString());
+          FilenameStr = P.toString();
+          Filename = FilenameStr.c_str();
+        }
+        
+        Filename = adjustFilenameForRelocatablePCH(Filename, isysroot);
+        Stream.EmitRecordWithBlob(SLocFileAbbrv, Record, Filename, 
+                                  strlen(Filename));
 
         // FIXME: For now, preload all file source locations, so that
         // we get the appropriate File entries in the reader. This is
@@ -944,6 +1067,24 @@ void PCHWriter::WritePreprocessor(const Preprocessor &PP) {
   Stream.ExitBlock();
 }
 
+void PCHWriter::WriteComments(ASTContext &Context) {
+  using namespace llvm;
+  
+  if (Context.Comments.empty())
+    return;
+  
+  BitCodeAbbrev *CommentAbbrev = new BitCodeAbbrev();
+  CommentAbbrev->Add(BitCodeAbbrevOp(pch::COMMENT_RANGES));
+  CommentAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
+  unsigned CommentCode = Stream.EmitAbbrev(CommentAbbrev);
+  
+  RecordData Record;
+  Record.push_back(pch::COMMENT_RANGES);
+  Stream.EmitRecordWithBlob(CommentCode, Record, 
+                            (const char*)&Context.Comments[0],
+                            Context.Comments.size() * sizeof(SourceRange));
+}
+
 //===----------------------------------------------------------------------===//
 // Type Serialization
 //===----------------------------------------------------------------------===//
@@ -1019,14 +1160,13 @@ void PCHWriter::WriteTypesBlock(ASTContext &Context) {
 /// bistream, or 0 if no block was written.
 uint64_t PCHWriter::WriteDeclContextLexicalBlock(ASTContext &Context, 
                                                  DeclContext *DC) {
-  if (DC->decls_empty(Context))
+  if (DC->decls_empty())
     return 0;
 
   uint64_t Offset = Stream.GetCurrentBitNo();
   RecordData Record;
-  for (DeclContext::decl_iterator D = DC->decls_begin(Context),
-                               DEnd = DC->decls_end(Context);
-       D != DEnd; ++D)
+  for (DeclContext::decl_iterator D = DC->decls_begin(), DEnd = DC->decls_end();
+         D != DEnd; ++D)
     AddDeclRef(*D, Record);
 
   ++NumLexicalDeclContexts;
@@ -1052,7 +1192,7 @@ uint64_t PCHWriter::WriteDeclContextVisibleBlock(ASTContext &Context,
     return 0;
 
   // Force the DeclContext to build a its name-lookup table.
-  DC->lookup(Context, DeclarationName());
+  DC->lookup(DeclarationName());
 
   // Serialize the contents of the mapping used for lookup. Note that,
   // although we have two very different code paths, the serialized
@@ -1532,6 +1672,19 @@ void PCHWriter::WriteAttributeRecord(const Attr *Attr) {
       break;
     }
 
+    case Attr::FormatArg: {
+      const FormatArgAttr *Format = cast<FormatArgAttr>(Attr);
+      Record.push_back(Format->getFormatIdx());
+      break;
+    }
+
+    case Attr::Sentinel : {
+      const SentinelAttr *Sentinel = cast<SentinelAttr>(Attr);
+      Record.push_back(Sentinel->getSentinel());
+      Record.push_back(Sentinel->getNullPos());
+      break;
+    }
+        
     case Attr::GNUInline:
     case Attr::IBOutletKind:
     case Attr::NoReturn:
@@ -1549,13 +1702,8 @@ void PCHWriter::WriteAttributeRecord(const Attr *Attr) {
 
     case Attr::ObjCException:
     case Attr::ObjCNSObject:
-    case Attr::CFOwnershipRelease:
-    case Attr::CFOwnershipRetain:
-    case Attr::CFOwnershipReturns:
-    case Attr::NSOwnershipAutorelease:
-    case Attr::NSOwnershipRelease:
-    case Attr::NSOwnershipRetain:
-    case Attr::NSOwnershipReturns:
+    case Attr::CFReturnsRetained:
+    case Attr::NSReturnsRetained:
     case Attr::Overloadable:
       break;
 
@@ -1568,6 +1716,12 @@ void PCHWriter::WriteAttributeRecord(const Attr *Attr) {
 
     case Attr::Regparm:
       Record.push_back(cast<RegparmAttr>(Attr)->getNumParams());
+      break;
+        
+    case Attr::ReqdWorkGroupSize:
+      Record.push_back(cast<ReqdWorkGroupSizeAttr>(Attr)->getXDim());
+      Record.push_back(cast<ReqdWorkGroupSizeAttr>(Attr)->getYDim());
+      Record.push_back(cast<ReqdWorkGroupSizeAttr>(Attr)->getZDim());
       break;
 
     case Attr::Section:
@@ -1620,7 +1774,8 @@ PCHWriter::PCHWriter(llvm::BitstreamWriter &Stream)
     NumStatements(0), NumMacros(0), NumLexicalDeclContexts(0),
     NumVisibleDeclContexts(0) { }
 
-void PCHWriter::WritePCH(Sema &SemaRef, MemorizeStatCalls *StatCalls) {
+void PCHWriter::WritePCH(Sema &SemaRef, MemorizeStatCalls *StatCalls,
+                         const char *isysroot) {
   using namespace llvm;
 
   ASTContext &Context = SemaRef.Context;
@@ -1682,13 +1837,14 @@ void PCHWriter::WritePCH(Sema &SemaRef, MemorizeStatCalls *StatCalls) {
   // Write the remaining PCH contents.
   RecordData Record;
   Stream.EnterSubblock(pch::PCH_BLOCK_ID, 4);
-  WriteMetadata(Context.Target);
+  WriteMetadata(Context, isysroot);
   WriteLanguageOptions(Context.getLangOptions());
-  if (StatCalls)
-    WriteStatCache(*StatCalls);
-  WriteSourceManagerBlock(Context.getSourceManager(), PP);
+  if (StatCalls && !isysroot)
+    WriteStatCache(*StatCalls, isysroot);
+  WriteSourceManagerBlock(Context.getSourceManager(), PP, isysroot);
   WritePreprocessor(PP);
-
+  WriteComments(Context);  
+  
   // Keep writing types and declarations until all types and
   // declarations have been written.
   do {
@@ -1736,6 +1892,7 @@ void PCHWriter::WritePCH(Sema &SemaRef, MemorizeStatCalls *StatCalls) {
   AddTypeRef(Context.getObjCClassType(), Record);
   AddTypeRef(Context.getRawCFConstantStringType(), Record);
   AddTypeRef(Context.getRawObjCFastEnumerationStateType(), Record);
+  AddTypeRef(Context.getFILEType(), Record);
   Stream.EmitRecord(pch::SPECIAL_TYPES, Record);
 
   // Write the record containing external, unnamed definitions.
@@ -1847,8 +2004,12 @@ void PCHWriter::AddTypeRef(QualType T, RecordData &Record) {
     case BuiltinType::Float:      ID = pch::PREDEF_TYPE_FLOAT_ID;      break;
     case BuiltinType::Double:     ID = pch::PREDEF_TYPE_DOUBLE_ID;     break;
     case BuiltinType::LongDouble: ID = pch::PREDEF_TYPE_LONGDOUBLE_ID; break;
+    case BuiltinType::NullPtr:    ID = pch::PREDEF_TYPE_NULLPTR_ID;    break;
     case BuiltinType::Overload:   ID = pch::PREDEF_TYPE_OVERLOAD_ID;   break;
     case BuiltinType::Dependent:  ID = pch::PREDEF_TYPE_DEPENDENT_ID;  break;
+    case BuiltinType::UndeducedAuto:
+      assert(0 && "Should not see undeduced auto here");
+      break;
     }
 
     Record.push_back((ID << 3) | T.getCVRQualifiers());

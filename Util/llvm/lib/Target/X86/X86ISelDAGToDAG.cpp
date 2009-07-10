@@ -35,8 +35,10 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Streams.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
@@ -65,7 +67,6 @@ namespace {
       int FrameIndex;
     } Base;
 
-    bool isRIPRel;     // RIP as base?
     unsigned Scale;
     SDValue IndexReg; 
     int32_t Disp;
@@ -75,14 +76,34 @@ namespace {
     const char *ES;
     int JT;
     unsigned Align;    // CP alignment.
+    unsigned char SymbolFlags;  // X86II::MO_*
 
     X86ISelAddressMode()
-      : BaseType(RegBase), isRIPRel(false), Scale(1), IndexReg(), Disp(0),
-        Segment(), GV(0), CP(0), ES(0), JT(-1), Align(0) {
+      : BaseType(RegBase), Scale(1), IndexReg(), Disp(0),
+        Segment(), GV(0), CP(0), ES(0), JT(-1), Align(0), SymbolFlags(0) {
     }
 
     bool hasSymbolicDisplacement() const {
       return GV != 0 || CP != 0 || ES != 0 || JT != -1;
+    }
+    
+    bool hasBaseOrIndexReg() const {
+      return IndexReg.getNode() != 0 || Base.Reg.getNode() != 0;
+    }
+    
+    /// isRIPRelative - Return true if this addressing mode is already RIP
+    /// relative.
+    bool isRIPRelative() const {
+      if (BaseType != RegBase) return false;
+      if (RegisterSDNode *RegNode =
+            dyn_cast_or_null<RegisterSDNode>(Base.Reg.getNode()))
+        return RegNode->getReg() == X86::RIP;
+      return false;
+    }
+    
+    void setBaseReg(SDValue Reg) {
+      BaseType = RegBase;
+      Base.Reg = Reg;
     }
 
     void dump() {
@@ -91,7 +112,7 @@ namespace {
               if (Base.Reg.getNode() != 0) Base.Reg.getNode()->dump(); 
               else cerr << "nul";
       cerr << " Base.FrameIndex " << Base.FrameIndex << "\n";
-      cerr << "isRIPRel " << isRIPRel << " Scale" << Scale << "\n";
+      cerr << " Scale" << Scale << "\n";
       cerr << "IndexReg ";
               if (IndexReg.getNode() != 0) IndexReg.getNode()->dump();
               else cerr << "nul"; 
@@ -113,10 +134,6 @@ namespace {
   /// SelectionDAG operations.
   ///
   class VISIBILITY_HIDDEN X86DAGToDAGISel : public SelectionDAGISel {
-    /// TM - Keep a reference to X86TargetMachine.
-    ///
-    X86TargetMachine &TM;
-
     /// X86Lowering - This object fully describes how to lower LLVM code to an
     /// X86-specific SelectionDAG.
     X86TargetLowering &X86Lowering;
@@ -136,8 +153,8 @@ namespace {
   public:
     explicit X86DAGToDAGISel(X86TargetMachine &tm, CodeGenOpt::Level OptLevel)
       : SelectionDAGISel(tm, OptLevel),
-        TM(tm), X86Lowering(*TM.getTargetLowering()),
-        Subtarget(&TM.getSubtarget<X86Subtarget>()),
+        X86Lowering(*tm.getTargetLowering()),
+        Subtarget(&tm.getSubtarget<X86Subtarget>()),
         OptForSize(false) {}
 
     virtual const char *getPassName() const {
@@ -171,6 +188,8 @@ namespace {
                     SDValue &Segment);
     bool SelectLEAAddr(SDValue Op, SDValue N, SDValue &Base,
                        SDValue &Scale, SDValue &Index, SDValue &Disp);
+    bool SelectTLSADDRAddr(SDValue Op, SDValue N, SDValue &Base,
+                       SDValue &Scale, SDValue &Index, SDValue &Disp);
     bool SelectScalarSSELoad(SDValue Op, SDValue Pred,
                              SDValue N, SDValue &Base, SDValue &Scale,
                              SDValue &Index, SDValue &Disp,
@@ -202,14 +221,15 @@ namespace {
       // These are 32-bit even in 64-bit mode since RIP relative offset
       // is 32-bit.
       if (AM.GV)
-        Disp = CurDAG->getTargetGlobalAddress(AM.GV, MVT::i32, AM.Disp);
+        Disp = CurDAG->getTargetGlobalAddress(AM.GV, MVT::i32, AM.Disp,
+                                              AM.SymbolFlags);
       else if (AM.CP)
         Disp = CurDAG->getTargetConstantPool(AM.CP, MVT::i32,
-                                             AM.Align, AM.Disp);
+                                             AM.Align, AM.Disp, AM.SymbolFlags);
       else if (AM.ES)
-        Disp = CurDAG->getTargetExternalSymbol(AM.ES, MVT::i32);
+        Disp = CurDAG->getTargetExternalSymbol(AM.ES, MVT::i32, AM.SymbolFlags);
       else if (AM.JT != -1)
-        Disp = CurDAG->getTargetJumpTable(AM.JT, MVT::i32);
+        Disp = CurDAG->getTargetJumpTable(AM.JT, MVT::i32, AM.SymbolFlags);
       else
         Disp = CurDAG->getTargetConstant(AM.Disp, MVT::i32);
 
@@ -243,64 +263,22 @@ namespace {
     ///
     SDNode *getGlobalBaseReg();
 
+    /// getTargetMachine - Return a reference to the TargetMachine, casted
+    /// to the target-specific type.
+    const X86TargetMachine &getTargetMachine() {
+      return static_cast<const X86TargetMachine &>(TM);
+    }
+
+    /// getInstrInfo - Return a reference to the TargetInstrInfo, casted
+    /// to the target-specific type.
+    const X86InstrInfo *getInstrInfo() {
+      return getTargetMachine().getInstrInfo();
+    }
+
 #ifndef NDEBUG
     unsigned Indent;
 #endif
   };
-}
-
-/// findFlagUse - Return use of MVT::Flag value produced by the specified
-/// SDNode.
-///
-static SDNode *findFlagUse(SDNode *N) {
-  unsigned FlagResNo = N->getNumValues()-1;
-  for (SDNode::use_iterator I = N->use_begin(), E = N->use_end(); I != E; ++I) {
-    SDUse &Use = I.getUse();
-    if (Use.getResNo() == FlagResNo)
-      return Use.getUser();
-  }
-  return NULL;
-}
-
-/// findNonImmUse - Return true if "Use" is a non-immediate use of "Def".
-/// This function recursively traverses up the operand chain, ignoring
-/// certain nodes.
-static bool findNonImmUse(SDNode *Use, SDNode* Def, SDNode *ImmedUse,
-                          SDNode *Root,
-                          SmallPtrSet<SDNode*, 16> &Visited) {
-  if (Use->getNodeId() < Def->getNodeId() ||
-      !Visited.insert(Use))
-    return false;
-
-  for (unsigned i = 0, e = Use->getNumOperands(); i != e; ++i) {
-    SDNode *N = Use->getOperand(i).getNode();
-    if (N == Def) {
-      if (Use == ImmedUse || Use == Root)
-        continue;  // We are not looking for immediate use.
-      assert(N != Root);
-      return true;
-    }
-
-    // Traverse up the operand chain.
-    if (findNonImmUse(N, Def, ImmedUse, Root, Visited))
-      return true;
-  }
-  return false;
-}
-
-/// isNonImmUse - Start searching from Root up the DAG to check is Def can
-/// be reached. Return true if that's the case. However, ignore direct uses
-/// by ImmedUse (which would be U in the example illustrated in
-/// IsLegalAndProfitableToFold) and by Root (which can happen in the store
-/// case).
-/// FIXME: to be really generic, we should allow direct use by any node
-/// that is being folded. But realisticly since we only fold loads which
-/// have one non-chain use, we only need to watch out for load/op/store
-/// and load/op/cmp case where the root (store / cmp) may reach the load via
-/// its chain operand.
-static inline bool isNonImmUse(SDNode *Root, SDNode *Def, SDNode *ImmedUse) {
-  SmallPtrSet<SDNode*, 16> Visited;
-  return findNonImmUse(Root, Def, ImmedUse, Root, Visited);
 }
 
 
@@ -351,58 +329,8 @@ bool X86DAGToDAGISel::IsLegalAndProfitableToFold(SDNode *N, SDNode *U,
     }
     }
 
-  // If Root use can somehow reach N through a path that that doesn't contain
-  // U then folding N would create a cycle. e.g. In the following
-  // diagram, Root can reach N through X. If N is folded into into Root, then
-  // X is both a predecessor and a successor of U.
-  //
-  //          [N*]           //
-  //         ^   ^           //
-  //        /     \          //
-  //      [U*]    [X]?       //
-  //        ^     ^          //
-  //         \   /           //
-  //          \ /            //
-  //         [Root*]         //
-  //
-  // * indicates nodes to be folded together.
-  //
-  // If Root produces a flag, then it gets (even more) interesting. Since it
-  // will be "glued" together with its flag use in the scheduler, we need to
-  // check if it might reach N.
-  //
-  //          [N*]           //
-  //         ^   ^           //
-  //        /     \          //
-  //      [U*]    [X]?       //
-  //        ^       ^        //
-  //         \       \       //
-  //          \      |       //
-  //         [Root*] |       //
-  //          ^      |       //
-  //          f      |       //
-  //          |      /       //
-  //         [Y]    /        //
-  //           ^   /         //
-  //           f  /          //
-  //           | /           //
-  //          [FU]           //
-  //
-  // If FU (flag use) indirectly reaches N (the load), and Root folds N
-  // (call it Fold), then X is a predecessor of FU and a successor of
-  // Fold. But since Fold and FU are flagged together, this will create
-  // a cycle in the scheduling graph.
-
-  MVT VT = Root->getValueType(Root->getNumValues()-1);
-  while (VT == MVT::Flag) {
-    SDNode *FU = findFlagUse(Root);
-    if (FU == NULL)
-      break;
-    Root = FU;
-    VT = Root->getValueType(Root->getNumValues()-1);
-  }
-
-  return !isNonImmUse(Root, N, U);
+  // Proceed to 'generic' cycle finder code
+  return SelectionDAGISel::IsLegalAndProfitableToFold(N, U, Root);
 }
 
 /// MoveBelowTokenFactor - Replace TokenFactor operand with load's chain operand
@@ -777,59 +705,80 @@ bool X86DAGToDAGISel::MatchLoad(SDValue N, X86ISelAddressMode &AM) {
   return true;
 }
 
+/// MatchWrapper - Try to match X86ISD::Wrapper and X86ISD::WrapperRIP nodes
+/// into an addressing mode.  These wrap things that will resolve down into a
+/// symbol reference.  If no match is possible, this returns true, otherwise it
+/// returns false.  
 bool X86DAGToDAGISel::MatchWrapper(SDValue N, X86ISelAddressMode &AM) {
-  bool is64Bit = Subtarget->is64Bit();
-  DOUT << "Wrapper: 64bit " << is64Bit;
-  DOUT << " AM "; DEBUG(AM.dump()); DOUT << "\n";
-
-  // Under X86-64 non-small code model, GV (and friends) are 64-bits.
-  if (is64Bit && (TM.getCodeModel() != CodeModel::Small))
-    return true;
-
-  // Base and index reg must be 0 in order to use rip as base.
-  bool canUsePICRel = !AM.Base.Reg.getNode() && !AM.IndexReg.getNode();
-  if (is64Bit && !canUsePICRel && TM.symbolicAddressesAreRIPRel())
-    return true;
-
+  // If the addressing mode already has a symbol as the displacement, we can
+  // never match another symbol.
   if (AM.hasSymbolicDisplacement())
     return true;
-  // If value is available in a register both base and index components have
-  // been picked, we can't fit the result available in the register in the
-  // addressing mode. Duplicate GlobalAddress or ConstantPool as displacement.
 
   SDValue N0 = N.getOperand(0);
-  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(N0)) {
-    uint64_t Offset = G->getOffset();
-    if (!is64Bit || isInt32(AM.Disp + Offset)) {
-      GlobalValue *GV = G->getGlobal();
-      bool isRIPRel = TM.symbolicAddressesAreRIPRel();
-      if (N0.getOpcode() == llvm::ISD::TargetGlobalTLSAddress) {
-        TLSModel::Model model =
-          getTLSModel (GV, TM.getRelocationModel());
-        if (is64Bit && model == TLSModel::InitialExec)
-          isRIPRel = true;
-      }
-      AM.GV = GV;
-      AM.Disp += Offset;
-      AM.isRIPRel = isRIPRel;
-      return false;
-    }
-  } else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(N0)) {
-    uint64_t Offset = CP->getOffset();
-    if (!is64Bit || isInt32(AM.Disp + Offset)) {
+  
+  // Handle X86-64 rip-relative addresses.  We check this before checking direct
+  // folding because RIP is preferable to non-RIP accesses.
+  if (Subtarget->is64Bit() &&
+      // Under X86-64 non-small code model, GV (and friends) are 64-bits, so
+      // they cannot be folded into immediate fields.
+      // FIXME: This can be improved for kernel and other models?
+      TM.getCodeModel() == CodeModel::Small &&
+      
+      // Base and index reg must be 0 in order to use %rip as base and lowering
+      // must allow RIP.
+      !AM.hasBaseOrIndexReg() && N.getOpcode() == X86ISD::WrapperRIP) {
+  
+    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(N0)) {
+      int64_t Offset = AM.Disp + G->getOffset();
+      if (!isInt32(Offset)) return true;
+      AM.GV = G->getGlobal();
+      AM.Disp = Offset;
+      AM.SymbolFlags = G->getTargetFlags();
+    } else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(N0)) {
+      int64_t Offset = AM.Disp + CP->getOffset();
+      if (!isInt32(Offset)) return true;
       AM.CP = CP->getConstVal();
       AM.Align = CP->getAlignment();
-      AM.Disp += Offset;
-      AM.isRIPRel = TM.symbolicAddressesAreRIPRel();
-      return false;
+      AM.Disp = Offset;
+      AM.SymbolFlags = CP->getTargetFlags();
+    } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(N0)) {
+      AM.ES = S->getSymbol();
+      AM.SymbolFlags = S->getTargetFlags();
+    } else {
+      JumpTableSDNode *J = cast<JumpTableSDNode>(N0);
+      AM.JT = J->getIndex();
+      AM.SymbolFlags = J->getTargetFlags();
     }
-  } else if (ExternalSymbolSDNode *S =dyn_cast<ExternalSymbolSDNode>(N0)) {
-    AM.ES = S->getSymbol();
-    AM.isRIPRel = TM.symbolicAddressesAreRIPRel();
+  
+    if (N.getOpcode() == X86ISD::WrapperRIP)
+      AM.setBaseReg(CurDAG->getRegister(X86::RIP, MVT::i64));
     return false;
-  } else if (JumpTableSDNode *J = dyn_cast<JumpTableSDNode>(N0)) {
-    AM.JT = J->getIndex();
-    AM.isRIPRel = TM.symbolicAddressesAreRIPRel();
+  }
+
+  // Handle the case when globals fit in our immediate field: This is true for
+  // X86-32 always and X86-64 when in -static -mcmodel=small mode.  In 64-bit
+  // mode, this results in a non-RIP-relative computation.
+  if (!Subtarget->is64Bit() ||
+      (TM.getCodeModel() == CodeModel::Small &&
+       TM.getRelocationModel() == Reloc::Static)) {
+    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(N0)) {
+      AM.GV = G->getGlobal();
+      AM.Disp += G->getOffset();
+      AM.SymbolFlags = G->getTargetFlags();
+    } else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(N0)) {
+      AM.CP = CP->getConstVal();
+      AM.Align = CP->getAlignment();
+      AM.Disp += CP->getOffset();
+      AM.SymbolFlags = CP->getTargetFlags();
+    } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(N0)) {
+      AM.ES = S->getSymbol();
+      AM.SymbolFlags = S->getTargetFlags();
+    } else {
+      JumpTableSDNode *J = cast<JumpTableSDNode>(N0);
+      AM.JT = J->getIndex();
+      AM.SymbolFlags = J->getTargetFlags();
+    }
     return false;
   }
 
@@ -848,12 +797,19 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
   if (Depth > 5)
     return MatchAddressBase(N, AM);
   
+  // If this is already a %rip relative address, we can only merge immediates
+  // into it.  Instead of handling this in every case, we handle it here.
   // RIP relative addressing: %rip + 32-bit displacement!
-  if (AM.isRIPRel) {
-    if (!AM.ES && AM.JT != -1 && N.getOpcode() == ISD::Constant) {
-      uint64_t Val = cast<ConstantSDNode>(N)->getSExtValue();
-      if (!is64Bit || isInt32(AM.Disp + Val)) {
-        AM.Disp += Val;
+  if (AM.isRIPRelative()) {
+    // FIXME: JumpTable and ExternalSymbol address currently don't like
+    // displacements.  It isn't very important, but this should be fixed for
+    // consistency.
+    if (!AM.ES && AM.JT != -1) return true;
+    
+    if (ConstantSDNode *Cst = dyn_cast<ConstantSDNode>(N)) {
+      int64_t Val = AM.Disp + Cst->getSExtValue();
+      if (isInt32(Val)) {
+        AM.Disp = Val;
         return false;
       }
     }
@@ -877,6 +833,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
     break;
 
   case X86ISD::Wrapper:
+  case X86ISD::WrapperRIP:
     if (!MatchWrapper(N, AM))
       return false;
     break;
@@ -896,7 +853,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
     break;
 
   case ISD::SHL:
-    if (AM.IndexReg.getNode() != 0 || AM.Scale != 1 || AM.isRIPRel)
+    if (AM.IndexReg.getNode() != 0 || AM.Scale != 1)
       break;
       
     if (ConstantSDNode
@@ -937,8 +894,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
     // X*[3,5,9] -> X+X*[2,4,8]
     if (AM.BaseType == X86ISelAddressMode::RegBase &&
         AM.Base.Reg.getNode() == 0 &&
-        AM.IndexReg.getNode() == 0 &&
-        !AM.isRIPRel) {
+        AM.IndexReg.getNode() == 0) {
       if (ConstantSDNode
             *CN = dyn_cast<ConstantSDNode>(N.getNode()->getOperand(1)))
         if (CN->getZExtValue() == 3 || CN->getZExtValue() == 5 ||
@@ -972,6 +928,76 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
     }
     break;
 
+  case ISD::SUB: {
+    // Given A-B, if A can be completely folded into the address and
+    // the index field with the index field unused, use -B as the index.
+    // This is a win if a has multiple parts that can be folded into
+    // the address. Also, this saves a mov if the base register has
+    // other uses, since it avoids a two-address sub instruction, however
+    // it costs an additional mov if the index register has other uses.
+
+    // Test if the LHS of the sub can be folded.
+    X86ISelAddressMode Backup = AM;
+    if (MatchAddress(N.getNode()->getOperand(0), AM, Depth+1)) {
+      AM = Backup;
+      break;
+    }
+    // Test if the index field is free for use.
+    if (AM.IndexReg.getNode() || AM.isRIPRelative()) {
+      AM = Backup;
+      break;
+    }
+    int Cost = 0;
+    SDValue RHS = N.getNode()->getOperand(1);
+    // If the RHS involves a register with multiple uses, this
+    // transformation incurs an extra mov, due to the neg instruction
+    // clobbering its operand.
+    if (!RHS.getNode()->hasOneUse() ||
+        RHS.getNode()->getOpcode() == ISD::CopyFromReg ||
+        RHS.getNode()->getOpcode() == ISD::TRUNCATE ||
+        RHS.getNode()->getOpcode() == ISD::ANY_EXTEND ||
+        (RHS.getNode()->getOpcode() == ISD::ZERO_EXTEND &&
+         RHS.getNode()->getOperand(0).getValueType() == MVT::i32))
+      ++Cost;
+    // If the base is a register with multiple uses, this
+    // transformation may save a mov.
+    if ((AM.BaseType == X86ISelAddressMode::RegBase &&
+         AM.Base.Reg.getNode() &&
+         !AM.Base.Reg.getNode()->hasOneUse()) ||
+        AM.BaseType == X86ISelAddressMode::FrameIndexBase)
+      --Cost;
+    // If the folded LHS was interesting, this transformation saves
+    // address arithmetic.
+    if ((AM.hasSymbolicDisplacement() && !Backup.hasSymbolicDisplacement()) +
+        ((AM.Disp != 0) && (Backup.Disp == 0)) +
+        (AM.Segment.getNode() && !Backup.Segment.getNode()) >= 2)
+      --Cost;
+    // If it doesn't look like it may be an overall win, don't do it.
+    if (Cost >= 0) {
+      AM = Backup;
+      break;
+    }
+
+    // Ok, the transformation is legal and appears profitable. Go for it.
+    SDValue Zero = CurDAG->getConstant(0, N.getValueType());
+    SDValue Neg = CurDAG->getNode(ISD::SUB, dl, N.getValueType(), Zero, RHS);
+    AM.IndexReg = Neg;
+    AM.Scale = 1;
+
+    // Insert the new nodes into the topological ordering.
+    if (Zero.getNode()->getNodeId() == -1 ||
+        Zero.getNode()->getNodeId() > N.getNode()->getNodeId()) {
+      CurDAG->RepositionNode(N.getNode(), Zero.getNode());
+      Zero.getNode()->setNodeId(N.getNode()->getNodeId());
+    }
+    if (Neg.getNode()->getNodeId() == -1 ||
+        Neg.getNode()->getNodeId() > N.getNode()->getNodeId()) {
+      CurDAG->RepositionNode(N.getNode(), Neg.getNode());
+      Neg.getNode()->setNodeId(N.getNode()->getNodeId());
+    }
+    return false;
+  }
+
   case ISD::ADD: {
     X86ISelAddressMode Backup = AM;
     if (!MatchAddress(N.getNode()->getOperand(0), AM, Depth+1) &&
@@ -988,8 +1014,7 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
     // the add.
     if (AM.BaseType == X86ISelAddressMode::RegBase &&
         !AM.Base.Reg.getNode() &&
-        !AM.IndexReg.getNode() &&
-        !AM.isRIPRel) {
+        !AM.IndexReg.getNode()) {
       AM.Base.Reg = N.getNode()->getOperand(0);
       AM.IndexReg = N.getNode()->getOperand(1);
       AM.Scale = 1;
@@ -1027,9 +1052,6 @@ bool X86DAGToDAGISel::MatchAddress(SDValue N, X86ISelAddressMode &AM,
 
     // Scale must not be used already.
     if (AM.IndexReg.getNode() != 0 || AM.Scale != 1) break;
-
-    // Not when RIP is used as the base.
-    if (AM.isRIPRel) break;
 
     SDValue X = Shift.getOperand(0);
     ConstantSDNode *C2 = dyn_cast<ConstantSDNode>(N.getOperand(1));
@@ -1152,7 +1174,7 @@ bool X86DAGToDAGISel::MatchAddressBase(SDValue N, X86ISelAddressMode &AM) {
   // Is the base register already occupied?
   if (AM.BaseType != X86ISelAddressMode::RegBase || AM.Base.Reg.getNode()) {
     // If so, check to see if the scale index register is set.
-    if (AM.IndexReg.getNode() == 0 && !AM.isRIPRel) {
+    if (AM.IndexReg.getNode() == 0) {
       AM.IndexReg = N;
       AM.Scale = 1;
       return false;
@@ -1179,7 +1201,7 @@ bool X86DAGToDAGISel::SelectAddr(SDValue Op, SDValue N, SDValue &Base,
   if (AvoidDupAddrCompute && !N.hasOneUse()) {
     unsigned Opcode = N.getOpcode();
     if (Opcode != ISD::Constant && Opcode != ISD::FrameIndex &&
-        Opcode != X86ISD::Wrapper) {
+        Opcode != X86ISD::Wrapper && Opcode != X86ISD::WrapperRIP) {
       // If we are able to fold N into addressing mode, then we'll allow it even
       // if N has multiple uses. In general, addressing computation is used as
       // addresses by all of its uses. But watch out for CopyToReg uses, that
@@ -1317,6 +1339,33 @@ bool X86DAGToDAGISel::SelectLEAAddr(SDValue Op, SDValue N,
   return false;
 }
 
+/// SelectTLSADDRAddr - This is only run on TargetGlobalTLSAddress nodes.
+bool X86DAGToDAGISel::SelectTLSADDRAddr(SDValue Op, SDValue N, SDValue &Base,
+                                        SDValue &Scale, SDValue &Index,
+                                        SDValue &Disp) {
+  assert(Op.getOpcode() == X86ISD::TLSADDR);
+  assert(N.getOpcode() == ISD::TargetGlobalTLSAddress);
+  const GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(N);
+  
+  X86ISelAddressMode AM;
+  AM.GV = GA->getGlobal();
+  AM.Disp += GA->getOffset();
+  AM.Base.Reg = CurDAG->getRegister(0, N.getValueType());
+  AM.SymbolFlags = GA->getTargetFlags();
+
+  if (N.getValueType() == MVT::i32) {
+    AM.Scale = 1;
+    AM.IndexReg = CurDAG->getRegister(X86::EBX, MVT::i32);
+  } else {
+    AM.IndexReg = CurDAG->getRegister(0, MVT::i64);
+  }
+  
+  SDValue Segment;
+  getAddressOperands(AM, Base, Scale, Index, Disp, Segment);
+  return true;
+}
+
+
 bool X86DAGToDAGISel::TryFoldLoad(SDValue P, SDValue N,
                                   SDValue &Base, SDValue &Scale,
                                   SDValue &Index, SDValue &Disp,
@@ -1334,7 +1383,7 @@ bool X86DAGToDAGISel::TryFoldLoad(SDValue P, SDValue N,
 ///
 SDNode *X86DAGToDAGISel::getGlobalBaseReg() {
   MachineFunction *MF = CurBB->getParent();
-  unsigned GlobalBaseReg = TM.getInstrInfo()->getGlobalBaseReg(MF);
+  unsigned GlobalBaseReg = getInstrInfo()->getGlobalBaseReg(MF);
   return CurDAG->getRegister(GlobalBaseReg, TLI.getPointerTy()).getNode();
 }
 
@@ -1683,7 +1732,8 @@ SDNode *X86DAGToDAGISel::Select(SDValue N) {
       
       // If N2 is not Wrapper(decriptor) then the llvm.declare is mangled
       // somehow, just ignore it.
-      if (N2.getOpcode() != X86ISD::Wrapper) {
+      if (N2.getOpcode() != X86ISD::Wrapper &&
+          N2.getOpcode() != X86ISD::WrapperRIP) {
         ReplaceUses(N.getValue(0), Chain);
         return NULL;
       }

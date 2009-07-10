@@ -128,7 +128,7 @@ static void ComputeValueVTs(const TargetLowering &TLI, const Type *Ty,
   // Given an array type, recursively traverse the elements.
   if (const ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
     const Type *EltTy = ATy->getElementType();
-    uint64_t EltSize = TLI.getTargetData()->getTypePaddedSize(EltTy);
+    uint64_t EltSize = TLI.getTargetData()->getTypeAllocSize(EltTy);
     for (unsigned i = 0, e = ATy->getNumElements(); i != e; ++i)
       ComputeValueVTs(TLI, EltTy, ValueVTs, Offsets,
                       StartingOffset + i * EltSize);
@@ -294,7 +294,7 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
     if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
       if (ConstantInt *CUI = dyn_cast<ConstantInt>(AI->getArraySize())) {
         const Type *Ty = AI->getAllocatedType();
-        uint64_t TySize = TLI.getTargetData()->getTypePaddedSize(Ty);
+        uint64_t TySize = TLI.getTargetData()->getTypeAllocSize(Ty);
         unsigned Align =
           std::max((unsigned)TLI.getTargetData()->getPrefTypeAlignment(Ty),
                    AI->getAlignment());
@@ -332,30 +332,14 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
           default: break;
           case Intrinsic::dbg_stoppoint: {
             DbgStopPointInst *SPI = cast<DbgStopPointInst>(I);
-
-            if (DIDescriptor::ValidDebugInfo(SPI->getContext(),
-                                             CodeGenOpt::Default)) {
-              DICompileUnit CU(cast<GlobalVariable>(SPI->getContext()));
-              unsigned idx = MF->getOrCreateDebugLocID(CU.getGV(),
-                                                       SPI->getLine(),
-                                                       SPI->getColumn());
-              DL = DebugLoc::get(idx);
-            }
-
+            if (isValidDebugInfoIntrinsic(*SPI, CodeGenOpt::Default)) 
+              DL = ExtractDebugLocation(*SPI, MF->getDebugLocInfo());
             break;
           }
           case Intrinsic::dbg_func_start: {
             DbgFuncStartInst *FSI = cast<DbgFuncStartInst>(I);
-            Value *SP = FSI->getSubprogram();
-
-            if (DIDescriptor::ValidDebugInfo(SP, CodeGenOpt::Default)) {
-              DISubprogram Subprogram(cast<GlobalVariable>(SP));
-              DICompileUnit CU(Subprogram.getCompileUnit());
-              unsigned Line = Subprogram.getLineNumber();
-              DL = DebugLoc::get(MF->getOrCreateDebugLocID(CU.getGV(),
-                                                           Line, 0));
-            }
-
+            if (isValidDebugInfoIntrinsic(*FSI, CodeGenOpt::Default)) 
+              DL = ExtractDebugLocation(*FSI, MF->getDebugLocInfo());
             break;
           }
           }
@@ -426,7 +410,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, DebugLoc dl,
 
   if (NumParts > 1) {
     // Assemble the value from multiple parts.
-    if (!ValueVT.isVector()) {
+    if (!ValueVT.isVector() && ValueVT.isInteger()) {
       unsigned PartBits = PartVT.getSizeInBits();
       unsigned ValueBits = ValueVT.getSizeInBits();
 
@@ -438,9 +422,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, DebugLoc dl,
         ValueVT : MVT::getIntegerVT(RoundBits);
       SDValue Lo, Hi;
 
-      MVT HalfVT = ValueVT.isInteger() ?
-        MVT::getIntegerVT(RoundBits/2) :
-        MVT::getFloatingPointVT(RoundBits/2);
+      MVT HalfVT = MVT::getIntegerVT(RoundBits/2);
 
       if (RoundParts > 2) {
         Lo = getCopyFromParts(DAG, dl, Parts, RoundParts/2, PartVT, HalfVT);
@@ -473,7 +455,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, DebugLoc dl,
         Lo = DAG.getNode(ISD::ZERO_EXTEND, dl, TotalVT, Lo);
         Val = DAG.getNode(ISD::OR, dl, TotalVT, Lo, Hi);
       }
-    } else {
+    } else if (ValueVT.isVector()) {
       // Handle a multi-element vector.
       MVT IntermediateVT, RegisterVT;
       unsigned NumIntermediates;
@@ -510,6 +492,22 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, DebugLoc dl,
       Val = DAG.getNode(IntermediateVT.isVector() ?
                         ISD::CONCAT_VECTORS : ISD::BUILD_VECTOR, dl,
                         ValueVT, &Ops[0], NumIntermediates);
+    } else if (PartVT.isFloatingPoint()) {
+      // FP split into multiple FP parts (for ppcf128)
+      assert(ValueVT == MVT(MVT::ppcf128) && PartVT == MVT(MVT::f64) &&
+             "Unexpected split");
+      SDValue Lo, Hi;
+      Lo = DAG.getNode(ISD::BIT_CONVERT, dl, MVT(MVT::f64), Parts[0]);
+      Hi = DAG.getNode(ISD::BIT_CONVERT, dl, MVT(MVT::f64), Parts[1]);
+      if (TLI.isBigEndian())
+        std::swap(Lo, Hi);
+      Val = DAG.getNode(ISD::BUILD_PAIR, dl, ValueVT, Lo, Hi);
+    } else {
+      // FP split into integer parts (soft fp)
+      assert(ValueVT.isFloatingPoint() && PartVT.isInteger() &&
+             !PartVT.isVector() && "Unexpected split");
+      MVT IntVT = MVT::getIntegerVT(ValueVT.getSizeInBits());
+      Val = getCopyFromParts(DAG, dl, Parts, NumParts, PartVT, IntVT);
     }
   }
 
@@ -826,20 +824,6 @@ void SelectionDAGLowering::visit(unsigned Opcode, User &I) {
   case Instruction::OPCODE:return visit##OPCODE((CLASS&)I);
 #include "llvm/Instruction.def"
   }
-}
-
-void SelectionDAGLowering::visitAdd(User &I) {
-  if (I.getType()->isFPOrFPVector())
-    visitBinary(I, ISD::FADD);
-  else
-    visitBinary(I, ISD::ADD);
-}
-
-void SelectionDAGLowering::visitMul(User &I) {
-  if (I.getType()->isFPOrFPVector())
-    visitBinary(I, ISD::FMUL);
-  else
-    visitBinary(I, ISD::MUL);
 }
 
 SDValue SelectionDAGLowering::getValue(const Value *V) {
@@ -1923,6 +1907,10 @@ bool SelectionDAGLowering::handleBitTestsSwitchCase(CaseRec& CR,
   // inserting any additional MBBs necessary to represent the switch.
   MachineFunction *CurMF = CurMBB->getParent();
 
+  // If target does not have legal shift left, do not emit bit tests at all.
+  if (!TLI.isOperationLegal(ISD::SHL, TLI.getPointerTy()))
+    return false;
+
   size_t numCmps = 0;
   for (CaseItr I = CR.Range.first, E = CR.Range.second;
        I!=E; ++I) {
@@ -2143,37 +2131,33 @@ void SelectionDAGLowering::visitSwitch(SwitchInst &SI) {
 }
 
 
-void SelectionDAGLowering::visitSub(User &I) {
+void SelectionDAGLowering::visitFSub(User &I) {
   // -0.0 - X --> fneg
   const Type *Ty = I.getType();
   if (isa<VectorType>(Ty)) {
     if (ConstantVector *CV = dyn_cast<ConstantVector>(I.getOperand(0))) {
       const VectorType *DestTy = cast<VectorType>(I.getType());
       const Type *ElTy = DestTy->getElementType();
-      if (ElTy->isFloatingPoint()) {
-        unsigned VL = DestTy->getNumElements();
-        std::vector<Constant*> NZ(VL, ConstantFP::getNegativeZero(ElTy));
-        Constant *CNZ = ConstantVector::get(&NZ[0], NZ.size());
-        if (CV == CNZ) {
-          SDValue Op2 = getValue(I.getOperand(1));
-          setValue(&I, DAG.getNode(ISD::FNEG, getCurDebugLoc(),
-                                   Op2.getValueType(), Op2));
-          return;
-        }
-      }
-    }
-  }
-  if (Ty->isFloatingPoint()) {
-    if (ConstantFP *CFP = dyn_cast<ConstantFP>(I.getOperand(0)))
-      if (CFP->isExactlyValue(ConstantFP::getNegativeZero(Ty)->getValueAPF())) {
+      unsigned VL = DestTy->getNumElements();
+      std::vector<Constant*> NZ(VL, ConstantFP::getNegativeZero(ElTy));
+      Constant *CNZ = ConstantVector::get(&NZ[0], NZ.size());
+      if (CV == CNZ) {
         SDValue Op2 = getValue(I.getOperand(1));
         setValue(&I, DAG.getNode(ISD::FNEG, getCurDebugLoc(),
                                  Op2.getValueType(), Op2));
         return;
       }
+    }
   }
+  if (ConstantFP *CFP = dyn_cast<ConstantFP>(I.getOperand(0)))
+    if (CFP->isExactlyValue(ConstantFP::getNegativeZero(Ty)->getValueAPF())) {
+      SDValue Op2 = getValue(I.getOperand(1));
+      setValue(&I, DAG.getNode(ISD::FNEG, getCurDebugLoc(),
+                               Op2.getValueType(), Op2));
+      return;
+    }
 
-  visitBinary(I, Ty->isFPOrFPVector() ? ISD::FSUB : ISD::SUB);
+  visitBinary(I, ISD::FSUB);
 }
 
 void SelectionDAGLowering::visitBinary(User &I, unsigned OpCode) {
@@ -2225,7 +2209,9 @@ void SelectionDAGLowering::visitICmp(User &I) {
   SDValue Op1 = getValue(I.getOperand(0));
   SDValue Op2 = getValue(I.getOperand(1));
   ISD::CondCode Opcode = getICmpCondCode(predicate);
-  setValue(&I, DAG.getSetCC(getCurDebugLoc(),MVT::i1, Op1, Op2, Opcode));
+  
+  MVT DestVT = TLI.getValueType(I.getType());
+  setValue(&I, DAG.getSetCC(getCurDebugLoc(), DestVT, Op1, Op2, Opcode));
 }
 
 void SelectionDAGLowering::visitFCmp(User &I) {
@@ -2237,34 +2223,8 @@ void SelectionDAGLowering::visitFCmp(User &I) {
   SDValue Op1 = getValue(I.getOperand(0));
   SDValue Op2 = getValue(I.getOperand(1));
   ISD::CondCode Condition = getFCmpCondCode(predicate);
-  setValue(&I, DAG.getSetCC(getCurDebugLoc(), MVT::i1, Op1, Op2, Condition));
-}
-
-void SelectionDAGLowering::visitVICmp(User &I) {
-  ICmpInst::Predicate predicate = ICmpInst::BAD_ICMP_PREDICATE;
-  if (VICmpInst *IC = dyn_cast<VICmpInst>(&I))
-    predicate = IC->getPredicate();
-  else if (ConstantExpr *IC = dyn_cast<ConstantExpr>(&I))
-    predicate = ICmpInst::Predicate(IC->getPredicate());
-  SDValue Op1 = getValue(I.getOperand(0));
-  SDValue Op2 = getValue(I.getOperand(1));
-  ISD::CondCode Opcode = getICmpCondCode(predicate);
-  setValue(&I, DAG.getVSetCC(getCurDebugLoc(), Op1.getValueType(),
-                             Op1, Op2, Opcode));
-}
-
-void SelectionDAGLowering::visitVFCmp(User &I) {
-  FCmpInst::Predicate predicate = FCmpInst::BAD_FCMP_PREDICATE;
-  if (VFCmpInst *FC = dyn_cast<VFCmpInst>(&I))
-    predicate = FC->getPredicate();
-  else if (ConstantExpr *FC = dyn_cast<ConstantExpr>(&I))
-    predicate = FCmpInst::Predicate(FC->getPredicate());
-  SDValue Op1 = getValue(I.getOperand(0));
-  SDValue Op2 = getValue(I.getOperand(1));
-  ISD::CondCode Condition = getFCmpCondCode(predicate);
   MVT DestVT = TLI.getValueType(I.getType());
-
-  setValue(&I, DAG.getVSetCC(getCurDebugLoc(), DestVT, Op1, Op2, Condition));
+  setValue(&I, DAG.getSetCC(getCurDebugLoc(), DestVT, Op1, Op2, Condition));
 }
 
 void SelectionDAGLowering::visitSelect(User &I) {
@@ -2696,7 +2656,7 @@ void SelectionDAGLowering::visitGetElementPtr(User &I) {
       if (ConstantInt *CI = dyn_cast<ConstantInt>(Idx)) {
         if (CI->getZExtValue() == 0) continue;
         uint64_t Offs =
-            TD->getTypePaddedSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
+            TD->getTypeAllocSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
         SDValue OffsVal;
         unsigned PtrBits = TLI.getPointerTy().getSizeInBits();
         if (PtrBits < 64) {
@@ -2711,7 +2671,7 @@ void SelectionDAGLowering::visitGetElementPtr(User &I) {
       }
 
       // N = N + Idx * ElementSize;
-      uint64_t ElementSize = TD->getTypePaddedSize(Ty);
+      uint64_t ElementSize = TD->getTypeAllocSize(Ty);
       SDValue IdxN = getValue(Idx);
 
       // If the index is smaller or larger than intptr_t, truncate or extend
@@ -2752,7 +2712,7 @@ void SelectionDAGLowering::visitAlloca(AllocaInst &I) {
     return;   // getValue will auto-populate this.
 
   const Type *Ty = I.getAllocatedType();
-  uint64_t TySize = TLI.getTargetData()->getTypePaddedSize(Ty);
+  uint64_t TySize = TLI.getTargetData()->getTypeAllocSize(Ty);
   unsigned Align =
     std::max((unsigned)TLI.getTargetData()->getPrefTypeAlignment(Ty),
              I.getAlignment());
@@ -3887,13 +3847,11 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
   }
   case Intrinsic::dbg_stoppoint: {
     DbgStopPointInst &SPI = cast<DbgStopPointInst>(I);
-    if (DIDescriptor::ValidDebugInfo(SPI.getContext(), OptLevel)) {
+    if (isValidDebugInfoIntrinsic(SPI, CodeGenOpt::Default)) {
       MachineFunction &MF = DAG.getMachineFunction();
-      DICompileUnit CU(cast<GlobalVariable>(SPI.getContext()));
-      DebugLoc Loc = DebugLoc::get(MF.getOrCreateDebugLocID(CU.getGV(),
-                                              SPI.getLine(), SPI.getColumn()));
+      DebugLoc Loc = ExtractDebugLocation(SPI, MF.getDebugLocInfo());
       setCurDebugLoc(Loc);
-      
+
       if (OptLevel == CodeGenOpt::None)
         DAG.setRoot(DAG.getDbgStopPoint(Loc, getRoot(),
                                         SPI.getLine(),
@@ -3905,148 +3863,108 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
   case Intrinsic::dbg_region_start: {
     DwarfWriter *DW = DAG.getDwarfWriter();
     DbgRegionStartInst &RSI = cast<DbgRegionStartInst>(I);
-
-    if (DIDescriptor::ValidDebugInfo(RSI.getContext(), OptLevel) &&
-        DW && DW->ShouldEmitDwarfDebug()) {
+    if (isValidDebugInfoIntrinsic(RSI, OptLevel) && DW
+        && DW->ShouldEmitDwarfDebug()) {
       unsigned LabelID =
         DW->RecordRegionStart(cast<GlobalVariable>(RSI.getContext()));
       DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(),
                                getRoot(), LabelID));
     }
-
     return 0;
   }
   case Intrinsic::dbg_region_end: {
     DwarfWriter *DW = DAG.getDwarfWriter();
     DbgRegionEndInst &REI = cast<DbgRegionEndInst>(I);
 
-    if (DIDescriptor::ValidDebugInfo(REI.getContext(), OptLevel) &&
-        DW && DW->ShouldEmitDwarfDebug()) {
-      MachineFunction &MF = DAG.getMachineFunction();
-      DISubprogram Subprogram(cast<GlobalVariable>(REI.getContext()));
-      std::string SPName;
-      Subprogram.getLinkageName(SPName);
-      if (!SPName.empty() 
-          && strcmp(SPName.c_str(), MF.getFunction()->getNameStart())) {
-          // This is end of inlined function. Debugging information for
-          // inlined function is not handled yet (only supported by FastISel).
-        if (OptLevel == CodeGenOpt::None) {
-          unsigned ID = DW->RecordInlinedFnEnd(Subprogram);
-          if (ID != 0)
-            // Returned ID is 0 if this is unbalanced "end of inlined
-            // scope". This could happen if optimizer eats dbg intrinsics
-            // or "beginning of inlined scope" is not recoginized due to
-            // missing location info. In such cases, do ignore this region.end.
-            DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(), 
-                                     getRoot(), ID));
-        }
-        return 0;
+    if (!isValidDebugInfoIntrinsic(REI, OptLevel) || !DW
+        || !DW->ShouldEmitDwarfDebug()) 
+      return 0;
+
+    MachineFunction &MF = DAG.getMachineFunction();
+    DISubprogram Subprogram(cast<GlobalVariable>(REI.getContext()));
+    
+    if (isInlinedFnEnd(REI, MF.getFunction())) {
+      // This is end of inlined function. Debugging information for inlined
+      // function is not handled yet (only supported by FastISel).
+      if (OptLevel == CodeGenOpt::None) {
+        unsigned ID = DW->RecordInlinedFnEnd(Subprogram);
+        if (ID != 0)
+          // Returned ID is 0 if this is unbalanced "end of inlined
+          // scope". This could happen if optimizer eats dbg intrinsics or
+          // "beginning of inlined scope" is not recoginized due to missing
+          // location info. In such cases, do ignore this region.end.
+          DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(), 
+                                   getRoot(), ID));
       }
+      return 0;
+    } 
 
-      unsigned LabelID =
-        DW->RecordRegionEnd(cast<GlobalVariable>(REI.getContext()));
-      DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(),
-                               getRoot(), LabelID));
-    }
-
+    unsigned LabelID =
+      DW->RecordRegionEnd(cast<GlobalVariable>(REI.getContext()));
+    DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(),
+                             getRoot(), LabelID));
     return 0;
   }
   case Intrinsic::dbg_func_start: {
     DwarfWriter *DW = DAG.getDwarfWriter();
     DbgFuncStartInst &FSI = cast<DbgFuncStartInst>(I);
-    Value *SP = FSI.getSubprogram();
-    if (!DIDescriptor::ValidDebugInfo(SP, OptLevel))
+    if (!isValidDebugInfoIntrinsic(FSI, CodeGenOpt::None) || !DW
+        || !DW->ShouldEmitDwarfDebug()) 
       return 0;
 
     MachineFunction &MF = DAG.getMachineFunction();
-    if (OptLevel == CodeGenOpt::None) {
-      // llvm.dbg.func.start implicitly defines a dbg_stoppoint which is what
-      // (most?) gdb expects.
-      DebugLoc PrevLoc = CurDebugLoc;
-      DISubprogram Subprogram(cast<GlobalVariable>(SP));
-      DICompileUnit CompileUnit = Subprogram.getCompileUnit();
-
-      if (!Subprogram.describes(MF.getFunction())) {
-        // This is a beginning of an inlined function.
-
-        // If llvm.dbg.func.start is seen in a new block before any
-        // llvm.dbg.stoppoint intrinsic then the location info is unknown.
-        // FIXME : Why DebugLoc is reset at the beginning of each block ?
-        if (PrevLoc.isUnknown())
-          return 0;
-
-        // Record the source line.
-        unsigned Line = Subprogram.getLineNumber();
-        setCurDebugLoc(DebugLoc::get(
-                     MF.getOrCreateDebugLocID(CompileUnit.getGV(), Line, 0)));
-
-        if (DW && DW->ShouldEmitDwarfDebug()) {
-          unsigned LabelID = DAG.getMachineModuleInfo()->NextLabelID();
-          DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(),
-                                   getRoot(), LabelID));
-          DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
-          DW->RecordInlinedFnStart(&FSI, Subprogram, LabelID,
-                                   DICompileUnit(PrevLocTpl.CompileUnit),
-                                   PrevLocTpl.Line,
-                                   PrevLocTpl.Col);
-        }
-      } else {
-        // Record the source line.
-        unsigned Line = Subprogram.getLineNumber();
-        MF.setDefaultDebugLoc(DebugLoc::get(
-                     MF.getOrCreateDebugLocID(CompileUnit.getGV(), Line, 0)));
-        if (DW && DW->ShouldEmitDwarfDebug()) {
-          // llvm.dbg.func_start also defines beginning of function scope.
-          DW->RecordRegionStart(cast<GlobalVariable>(FSI.getSubprogram()));
-        }
-      }
-    } else {
-      DISubprogram Subprogram(cast<GlobalVariable>(SP));
-
-      std::string SPName;
-      Subprogram.getLinkageName(SPName);
-      if (!SPName.empty()
-          && strcmp(SPName.c_str(), MF.getFunction()->getNameStart())) {
-        // This is beginning of inlined function. Debugging information for
-        // inlined function is not handled yet (only supported by FastISel).
+    // This is a beginning of an inlined function.
+    if (isInlinedFnStart(FSI, MF.getFunction())) {
+      if (OptLevel != CodeGenOpt::None)
+        // FIXME: Debugging informaation for inlined function is only
+        // supported at CodeGenOpt::Node.
         return 0;
-      }
-
-      // llvm.dbg.func.start implicitly defines a dbg_stoppoint which is
-      // what (most?) gdb expects.
-      DICompileUnit CompileUnit = Subprogram.getCompileUnit();
-
-      // Record the source line but does not create a label for the normal
-      // function start. It will be emitted at asm emission time. However,
-      // create a label if this is a beginning of inlined function.
-      unsigned Line = Subprogram.getLineNumber();
-      setCurDebugLoc(DebugLoc::get(
-                     MF.getOrCreateDebugLocID(CompileUnit.getGV(), Line, 0)));
-      // FIXME -  Start new region because llvm.dbg.func_start also defines
-      // beginning of function scope.
+      
+      DebugLoc PrevLoc = CurDebugLoc;
+      // If llvm.dbg.func.start is seen in a new block before any
+      // llvm.dbg.stoppoint intrinsic then the location info is unknown.
+      // FIXME : Why DebugLoc is reset at the beginning of each block ?
+      if (PrevLoc.isUnknown())
+        return 0;
+      
+      // Record the source line.
+      setCurDebugLoc(ExtractDebugLocation(FSI, MF.getDebugLocInfo()));
+      
+      DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
+      DISubprogram SP(cast<GlobalVariable>(FSI.getSubprogram()));
+      DICompileUnit CU(PrevLocTpl.CompileUnit);
+      unsigned LabelID = DW->RecordInlinedFnStart(SP, CU,
+                                                  PrevLocTpl.Line,
+                                                  PrevLocTpl.Col);
+      DAG.setRoot(DAG.getLabel(ISD::DBG_LABEL, getCurDebugLoc(),
+                               getRoot(), LabelID));
+      return 0;
     }
 
+    // This is a beginning of a new function.
+    MF.setDefaultDebugLoc(ExtractDebugLocation(FSI, MF.getDebugLocInfo()));
+                    
+    // llvm.dbg.func_start also defines beginning of function scope.
+    DW->RecordRegionStart(cast<GlobalVariable>(FSI.getSubprogram()));
     return 0;
   }
   case Intrinsic::dbg_declare: {
-    if (OptLevel == CodeGenOpt::None) {
-      DbgDeclareInst &DI = cast<DbgDeclareInst>(I);
-      Value *Variable = DI.getVariable();
-      if (DIDescriptor::ValidDebugInfo(Variable, OptLevel))
-        DAG.setRoot(DAG.getNode(ISD::DECLARE, dl, MVT::Other, getRoot(),
-                                getValue(DI.getAddress()), getValue(Variable)));
-    } else {
-      // FIXME: Do something sensible here when we support debug declare.
-    }
+    if (OptLevel != CodeGenOpt::None) 
+      // FIXME: Variable debug info is not supported here.
+      return 0;
+
+    DbgDeclareInst &DI = cast<DbgDeclareInst>(I);
+    if (!isValidDebugInfoIntrinsic(DI, CodeGenOpt::None))
+      return 0;
+
+    Value *Variable = DI.getVariable();
+    DAG.setRoot(DAG.getNode(ISD::DECLARE, dl, MVT::Other, getRoot(),
+                            getValue(DI.getAddress()), getValue(Variable)));
     return 0;
   }
   case Intrinsic::eh_exception: {
-    if (!CurMBB->isLandingPad()) {
-      // FIXME: Mark exception register as live in.  Hack for PR1508.
-      unsigned Reg = TLI.getExceptionAddressRegister();
-      if (Reg) CurMBB->addLiveIn(Reg);
-    }
     // Insert the EXCEPTIONADDR instruction.
+    assert(CurMBB->isLandingPad() &&"Call to eh.exception not in landing pad!");
     SDVTList VTs = DAG.getVTList(TLI.getPointerTy(), MVT::Other);
     SDValue Ops[1];
     Ops[0] = DAG.getRoot();
@@ -4474,7 +4392,7 @@ void SelectionDAGLowering::LowerCallTo(CallSite CS, SDValue Callee,
     TLI.LowerCallTo(getRoot(), CS.getType(),
                     CS.paramHasAttr(0, Attribute::SExt),
                     CS.paramHasAttr(0, Attribute::ZExt), FTy->isVarArg(),
-                    CS.paramHasAttr(0, Attribute::InReg),
+                    CS.paramHasAttr(0, Attribute::InReg), FTy->getNumParams(),
                     CS.getCallingConv(),
                     IsTailCall && PerformTailCallOpt,
                     Callee, Args, DAG, getCurDebugLoc());
@@ -5199,7 +5117,7 @@ void SelectionDAGLowering::visitInlineAsm(CallSite CS) {
         // Otherwise, create a stack slot and emit a store to it before the
         // asm.
         const Type *Ty = OpVal->getType();
-        uint64_t TySize = TLI.getTargetData()->getTypePaddedSize(Ty);
+        uint64_t TySize = TLI.getTargetData()->getTypeAllocSize(Ty);
         unsigned Align  = TLI.getTargetData()->getPrefTypeAlignment(Ty);
         MachineFunction &MF = DAG.getMachineFunction();
         int SSFI = MF.getFrameInfo()->CreateStackObject(TySize, Align);
@@ -5325,6 +5243,12 @@ void SelectionDAGLowering::visitInlineAsm(CallSite CS) {
         if ((OpFlag & 7) == 2 /*REGDEF*/
             || (OpFlag & 7) == 6 /* EARLYCLOBBER REGDEF */) {
           // Add (OpFlag&0xffff)>>3 registers to MatchedRegs.
+          if (OpInfo.isIndirect) {
+            cerr << "llvm: error: "
+                    "Don't know how to handle tied indirect "
+                    "register inputs yet!\n";
+            exit(1);
+          }
           RegsForValue MatchedRegs;
           MatchedRegs.TLI = &TLI;
           MatchedRegs.ValueVTs.push_back(InOperandVal.getValueType());
@@ -5500,7 +5424,7 @@ void SelectionDAGLowering::visitMalloc(MallocInst &I) {
   // i32-ness of the optimizer: we do not want to promote to i64 and then
   // multiply on 64-bit targets.
   // FIXME: Malloc inst should go away: PR715.
-  uint64_t ElementSize = TD->getTypePaddedSize(I.getType()->getElementType());
+  uint64_t ElementSize = TD->getTypeAllocSize(I.getType()->getElementType());
   if (ElementSize != 1)
     Src = DAG.getNode(ISD::MUL, getCurDebugLoc(), Src.getValueType(),
                       Src, DAG.getConstant(ElementSize, Src.getValueType()));
@@ -5520,7 +5444,7 @@ void SelectionDAGLowering::visitMalloc(MallocInst &I) {
 
   std::pair<SDValue,SDValue> Result =
     TLI.LowerCallTo(getRoot(), I.getType(), false, false, false, false,
-                    CallingConv::C, PerformTailCallOpt,
+                    0, CallingConv::C, PerformTailCallOpt,
                     DAG.getExternalSymbol("malloc", IntPtr),
                     Args, DAG, getCurDebugLoc());
   setValue(&I, Result.first);  // Pointers always fit in registers
@@ -5536,7 +5460,7 @@ void SelectionDAGLowering::visitFree(FreeInst &I) {
   MVT IntPtr = TLI.getPointerTy();
   std::pair<SDValue,SDValue> Result =
     TLI.LowerCallTo(getRoot(), Type::VoidTy, false, false, false, false,
-                    CallingConv::C, PerformTailCallOpt,
+                    0, CallingConv::C, PerformTailCallOpt,
                     DAG.getExternalSymbol("free", IntPtr), Args, DAG,
                     getCurDebugLoc());
   DAG.setRoot(Result.second);
@@ -5614,7 +5538,7 @@ void TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
         const PointerType *Ty = cast<PointerType>(I->getType());
         const Type *ElementTy = Ty->getElementType();
         unsigned FrameAlign = getByValTypeAlignment(ElementTy);
-        unsigned FrameSize  = getTargetData()->getTypePaddedSize(ElementTy);
+        unsigned FrameSize  = getTargetData()->getTypeAllocSize(ElementTy);
         // For ByVal, alignment should be passed from FE.  BE will guess if
         // this info is not there but there are cases it cannot get right.
         if (F.getParamAlignment(j))
@@ -5709,7 +5633,7 @@ void TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
 std::pair<SDValue, SDValue>
 TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
                             bool RetSExt, bool RetZExt, bool isVarArg,
-                            bool isInreg,
+                            bool isInreg, unsigned NumFixedArgs,
                             unsigned CallingConv, bool isTailCall,
                             SDValue Callee,
                             ArgListTy &Args, SelectionDAG &DAG, DebugLoc dl) {
@@ -5747,7 +5671,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
         const PointerType *Ty = cast<PointerType>(Args[i].Ty);
         const Type *ElementTy = Ty->getElementType();
         unsigned FrameAlign = getByValTypeAlignment(ElementTy);
-        unsigned FrameSize  = getTargetData()->getTypePaddedSize(ElementTy);
+        unsigned FrameSize  = getTargetData()->getTypeAllocSize(ElementTy);
         // For ByVal, alignment should come from FE.  BE will guess if this
         // info is not there but there are cases it cannot get right.
         if (Args[i].Alignment)
@@ -5807,7 +5731,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
                             isVarArg, isTailCall, isInreg,
                             DAG.getVTList(&LoweredRetTys[0],
                                           LoweredRetTys.size()),
-                            &Ops[0], Ops.size()
+                            &Ops[0], Ops.size(), NumFixedArgs
                             );
   Chain = Res.getValue(LoweredRetTys.size() - 1);
 

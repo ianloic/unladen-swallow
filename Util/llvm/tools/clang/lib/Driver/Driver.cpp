@@ -217,6 +217,54 @@ Compilation *Driver::BuildCompilation(int argc, const char **argv) {
   return C;
 }
 
+int Driver::ExecuteCompilation(const Compilation &C) const {
+  // Just print if -### was present.
+  if (C.getArgs().hasArg(options::OPT__HASH_HASH_HASH)) {
+    C.PrintJob(llvm::errs(), C.getJobs(), "\n", true);
+    return 0;
+  }
+
+  // If there were errors building the compilation, quit now.
+  if (getDiags().getNumErrors())
+    return 1;
+
+  const Command *FailingCommand = 0;
+  int Res = C.ExecuteJob(C.getJobs(), FailingCommand);
+  
+  // Remove temp files.
+  C.CleanupFileList(C.getTempFiles());
+
+  // If the compilation failed, remove result files as well.
+  if (Res != 0 && !C.getArgs().hasArg(options::OPT_save_temps))
+    C.CleanupFileList(C.getResultFiles(), true);
+
+  // Print extra information about abnormal failures, if possible.
+  if (Res) {
+    // This is ad-hoc, but we don't want to be excessively noisy. If the result
+    // status was 1, assume the command failed normally. In particular, if it
+    // was the compiler then assume it gave a reasonable error code. Failures in
+    // other tools are less common, and they generally have worse diagnostics,
+    // so always print the diagnostic there.
+    const Action &Source = FailingCommand->getSource();
+    bool IsFriendlyTool = (isa<PreprocessJobAction>(Source) ||
+                           isa<PrecompileJobAction>(Source) ||
+                           isa<AnalyzeJobAction>(Source) ||
+                           isa<CompileJobAction>(Source));
+
+    if (!IsFriendlyTool || Res != 1) {
+      // FIXME: See FIXME above regarding result code interpretation.
+      if (Res < 0)
+        Diag(clang::diag::err_drv_command_signalled) 
+          << Source.getClassName() << -Res;
+      else
+        Diag(clang::diag::err_drv_command_failed) 
+          << Source.getClassName() << Res;
+    }
+  }
+
+  return Res;
+}
+
 void Driver::PrintOptions(const ArgList &Args) const {
   unsigned i = 0;
   for (ArgList::const_iterator it = Args.begin(), ie = Args.end(); 
@@ -356,10 +404,15 @@ void Driver::PrintVersion(const Compilation &C) const {
   // don't know what the client would like to do.
 
   llvm::errs() << "clang version " CLANG_VERSION_STRING " (" 
-               << vers << " " << revision << ")" << "\n";
+               << vers << " " << revision << ")" << '\n';
 
   const ToolChain &TC = C.getDefaultToolChain();
   llvm::errs() << "Target: " << TC.getTripleString() << '\n';
+
+  // Print the threading model.
+  //
+  // FIXME: Implement correctly.
+  llvm::errs() << "Thread model: " << "posix" << '\n';
 }
 
 bool Driver::HandleImmediateArgs(const Compilation &C) {
@@ -426,6 +479,47 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
 
   if (C.getArgs().hasArg(options::OPT_print_libgcc_file_name)) {
     llvm::outs() << GetFilePath("libgcc.a", TC).toString() << "\n";
+    return false;
+  }
+
+  if (C.getArgs().hasArg(options::OPT_print_multi_lib)) {
+    // FIXME: We need tool chain support for this.
+    llvm::outs() << ".;\n";
+
+    switch (C.getDefaultToolChain().getTriple().getArch()) {
+    default:
+      break;
+      
+    case llvm::Triple::x86_64:
+      llvm::outs() << "x86_64;@m64" << "\n";
+      break;
+
+    case llvm::Triple::ppc64:
+      llvm::outs() << "ppc64;@m64" << "\n";
+      break;
+    }
+    return false;
+  }
+
+  // FIXME: What is the difference between print-multi-directory and
+  // print-multi-os-directory?
+  if (C.getArgs().hasArg(options::OPT_print_multi_directory) ||
+      C.getArgs().hasArg(options::OPT_print_multi_os_directory)) {
+    switch (C.getDefaultToolChain().getTriple().getArch()) {
+    default:
+    case llvm::Triple::x86:
+    case llvm::Triple::ppc:
+      llvm::outs() << "." << "\n";
+      break;
+      
+    case llvm::Triple::x86_64:
+      llvm::outs() << "x86_64" << "\n";
+      break;
+
+    case llvm::Triple::ppc64:
+      llvm::outs() << "ppc64" << "\n";
+      break;
+    }
     return false;
   }
 
@@ -595,12 +689,11 @@ void Driver::BuildActions(const ArgList &Args, ActionList &Actions) const {
             Ty = types::TY_Object;
         }
 
-        // -ObjC and -ObjC++ override the default language, but only
-        // -for "source files". We just treat everything that isn't a
-        // -linker input as a source file.
+        // -ObjC and -ObjC++ override the default language, but only for "source
+        // files". We just treat everything that isn't a linker input as a
+        // source file.
         // 
-        // FIXME: Clean this up if we move the phase sequence into the
-        // type.
+        // FIXME: Clean this up if we move the phase sequence into the type.
         if (Ty != types::TY_Object) {
           if (Args.hasArg(options::OPT_ObjC))
             Ty = types::TY_ObjC;
@@ -661,7 +754,8 @@ void Driver::BuildActions(const ArgList &Args, ActionList &Actions) const {
     
     // -{fsyntax-only,-analyze,emit-llvm,S} only run up to the compiler.
   } else if ((FinalPhaseArg = Args.getLastArg(options::OPT_fsyntax_only)) ||
-             (FinalPhaseArg = Args.getLastArg(options::OPT__analyze)) ||
+             (FinalPhaseArg = Args.getLastArg(options::OPT__analyze,
+                                              options::OPT__analyze_auto)) ||
              (FinalPhaseArg = Args.getLastArg(options::OPT_S))) {
     FinalPhase = phases::Compile;
 
@@ -762,7 +856,7 @@ Action *Driver::ConstructPhaseAction(const ArgList &Args, phases::ID Phase,
   case phases::Compile: {
     if (Args.hasArg(options::OPT_fsyntax_only)) {
       return new CompileJobAction(Input, types::TY_Nothing);
-    } else if (Args.hasArg(options::OPT__analyze)) {
+    } else if (Args.hasArg(options::OPT__analyze, options::OPT__analyze_auto)) {
       return new AnalyzeJobAction(Input, types::TY_Plist);
     } else if (Args.hasArg(options::OPT_emit_llvm) ||
                Args.hasArg(options::OPT_flto) ||
@@ -917,8 +1011,11 @@ void Driver::BuildJobsForAction(Compilation &C,
 
   if (const BindArchAction *BAA = dyn_cast<BindArchAction>(A)) {
     const char *ArchName = BAA->getArchName();
-    if (!ArchName)
-      ArchName = C.getDefaultToolChain().getArchName().c_str();
+    std::string Arch;
+    if (!ArchName) {
+      Arch = C.getDefaultToolChain().getArchName();
+      ArchName = Arch.c_str();
+    }
     BuildJobsForAction(C,
                        *BAA->begin(), 
                        Host->getToolChain(C.getArgs(), ArchName),
@@ -1133,48 +1230,38 @@ std::string Driver::GetTemporaryPath(const char *Suffix) const {
   return P.toString();
 }
 
-const HostInfo *Driver::GetHostInfo(const char *Triple) const {
+const HostInfo *Driver::GetHostInfo(const char *TripleStr) const {
   llvm::PrettyStackTraceString CrashInfo("Constructing host");
-  // Dice into arch, platform, and OS. This matches 
-  //  arch,platform,os = '(.*?)-(.*?)-(.*?)'
-  // and missing fields are left empty.
-  std::string Arch, Platform, OS;
-
-  if (const char *ArchEnd = strchr(Triple, '-')) {
-    Arch = std::string(Triple, ArchEnd);
-
-    if (const char *PlatformEnd = strchr(ArchEnd+1, '-')) {
-      Platform = std::string(ArchEnd+1, PlatformEnd);
-      OS = PlatformEnd+1;
-    } else
-      Platform = ArchEnd+1;
-  } else
-    Arch = Triple;
+  llvm::Triple Triple(TripleStr);
 
   // Normalize Arch a bit. 
   //
-  // FIXME: This is very incomplete.
-  if (Arch == "i686") 
-    Arch = "i386";
-  else if (Arch == "amd64")
-    Arch = "x86_64";
-  else if (Arch == "ppc" || Arch == "Power Macintosh")
-    Arch = "powerpc";
-  else if (Arch == "ppc64")
-    Arch = "powerpc64";
-  
-  if (memcmp(&OS[0], "darwin", 6) == 0)
-    return createDarwinHostInfo(*this, Arch.c_str(), Platform.c_str(), 
-                                OS.c_str());
-  if (memcmp(&OS[0], "freebsd", 7) == 0)
-    return createFreeBSDHostInfo(*this, Arch.c_str(), Platform.c_str(), 
-                                 OS.c_str());
-  if (memcmp(&OS[0], "dragonfly", 9) == 0)
-    return createDragonFlyHostInfo(*this, Arch.c_str(), Platform.c_str(),
-                                 OS.c_str());    
+  // FIXME: We shouldn't need to do this once everything goes through the triple
+  // interface.
+  if (Triple.getArchName() == "i686") 
+    Triple.setArchName("i386");
+  else if (Triple.getArchName() == "amd64")
+    Triple.setArchName("x86_64");
+  else if (Triple.getArchName() == "ppc" || 
+           Triple.getArchName() == "Power Macintosh")
+    Triple.setArchName("powerpc");
+  else if (Triple.getArchName() == "ppc64")
+    Triple.setArchName("powerpc64");
 
-  return createUnknownHostInfo(*this, Arch.c_str(), Platform.c_str(), 
-                               OS.c_str());
+  switch (Triple.getOS()) {
+  case llvm::Triple::Darwin:
+    return createDarwinHostInfo(*this, Triple);
+  case llvm::Triple::DragonFly:
+    return createDragonFlyHostInfo(*this, Triple);
+  case llvm::Triple::OpenBSD:
+    return createOpenBSDHostInfo(*this, Triple);
+  case llvm::Triple::FreeBSD:
+    return createFreeBSDHostInfo(*this, Triple);
+  case llvm::Triple::Linux:
+    return createLinuxHostInfo(*this, Triple);
+  default:
+    return createUnknownHostInfo(*this, Triple);
+  }
 }
 
 bool Driver::ShouldUseClangCompiler(const Compilation &C, const JobAction &JA,

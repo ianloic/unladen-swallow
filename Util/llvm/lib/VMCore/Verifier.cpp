@@ -45,6 +45,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/MDNode.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/Pass.h"
@@ -61,6 +62,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <sstream>
@@ -92,7 +94,7 @@ namespace {  // Anonymous namespace for class
       }
 
       if (Broken)
-        abort();
+        llvm_report_error("Broken module, no Basic Block terminator!");
 
       return false;
     }
@@ -210,6 +212,7 @@ namespace {
       case AbortProcessAction:
         msgs << "compilation aborted!\n";
         cerr << msgs.str();
+        // Client should choose different reaction if abort is not desired
         abort();
       case PrintMessageAction:
         msgs << "verification continues.\n";
@@ -275,8 +278,8 @@ namespace {
                           int VT, unsigned ArgNo, std::string &Suffix);
     void VerifyIntrinsicPrototype(Intrinsic::ID ID, Function *F,
                                   unsigned RetNum, unsigned ParamNum, ...);
-    void VerifyAttrs(Attributes Attrs, const Type *Ty,
-                     bool isReturnValue, const Value *V);
+    void VerifyParameterAttrs(Attributes Attrs, const Type *Ty,
+                              bool isReturnValue, const Value *V);
     void VerifyFunctionAttrs(const FunctionType *FT, const AttrListPtr &Attrs,
                              const Value *V);
 
@@ -338,37 +341,6 @@ static RegisterPass<Verifier> X("verify", "Module Verifier");
 #define Assert4(C, M, V1, V2, V3, V4) \
   do { if (!(C)) { CheckFailed(M, V1, V2, V3, V4); return; } } while (0)
 
-/// Check whether or not a Value is metadata or made up of a constant
-/// expression involving metadata.
-static bool isMetadata(Value *X) {
-  SmallPtrSet<Value *, 8> Visited;
-  SmallVector<Value *, 8> Queue;
-  Queue.push_back(X);
-
-  while (!Queue.empty()) {
-    Value *V = Queue.back();
-    Queue.pop_back();
-    if (!Visited.insert(V))
-      continue;
-
-    if (isa<MDString>(V) || isa<MDNode>(V))
-      return true;
-    if (!isa<ConstantExpr>(V))
-      continue;
-    ConstantExpr *CE = cast<ConstantExpr>(V);
-
-    if (CE->getType() != Type::EmptyStructTy)
-      continue;
-
-    // The only constant expression that works on metadata type is select.
-    if (CE->getOpcode() != Instruction::Select) return false;
-
-    Queue.push_back(CE->getOperand(1));
-    Queue.push_back(CE->getOperand(2));
-  }
-  return false;
-}
-
 void Verifier::visit(Instruction &I) {
   for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i)
     Assert1(I.getOperand(i) != 0, "Operand is null", &I);
@@ -405,6 +377,28 @@ void Verifier::visitGlobalVariable(GlobalVariable &GV) {
     Assert1(GV.getInitializer()->getType() == GV.getType()->getElementType(),
             "Global variable initializer type does not match global "
             "variable type!", &GV);
+
+    // Verify that any metadata used in a global initializer points only to
+    // other globals.
+    if (MDNode *FirstNode = dyn_cast<MDNode>(GV.getInitializer())) {
+      SmallVector<const MDNode *, 4> NodesToAnalyze;
+      NodesToAnalyze.push_back(FirstNode);
+      while (!NodesToAnalyze.empty()) {
+        const MDNode *N = NodesToAnalyze.back();
+        NodesToAnalyze.pop_back();
+
+        for (MDNode::const_elem_iterator I = N->elem_begin(),
+               E = N->elem_end(); I != E; ++I)
+          if (const Value *V = *I) {
+            if (const MDNode *Next = dyn_cast<MDNode>(V))
+              NodesToAnalyze.push_back(Next);
+            else
+              Assert3(isa<Constant>(V),
+                      "reference to instruction from global metadata node",
+                      &GV, N, V);
+          }
+      }
+    }
   } else {
     Assert1(GV.hasExternalLinkage() || GV.hasDLLImportLinkage() ||
             GV.hasExternalWeakLinkage(),
@@ -445,22 +439,23 @@ void Verifier::visitGlobalAlias(GlobalAlias &GA) {
 void Verifier::verifyTypeSymbolTable(TypeSymbolTable &ST) {
 }
 
-// VerifyAttrs - Check the given parameter attributes for an argument or return
+// VerifyParameterAttrs - Check the given attributes for an argument or return
 // value of the specified type.  The value V is printed in error messages.
-void Verifier::VerifyAttrs(Attributes Attrs, const Type *Ty, 
-                           bool isReturnValue, const Value *V) {
+void Verifier::VerifyParameterAttrs(Attributes Attrs, const Type *Ty,
+                                    bool isReturnValue, const Value *V) {
   if (Attrs == Attribute::None)
     return;
+
+  Attributes FnCheckAttr = Attrs & Attribute::FunctionOnly;
+  Assert1(!FnCheckAttr, "Attribute " + Attribute::getAsString(FnCheckAttr) +
+          " only applies to the function!", V);
 
   if (isReturnValue) {
     Attributes RetI = Attrs & Attribute::ParameterOnly;
     Assert1(!RetI, "Attribute " + Attribute::getAsString(RetI) +
             " does not apply to return values!", V);
   }
-  Attributes FnCheckAttr = Attrs & Attribute::FunctionOnly;
-  Assert1(!FnCheckAttr, "Attribute " + Attribute::getAsString(FnCheckAttr) +
-          " only applies to functions!", V);
-  
+
   for (unsigned i = 0;
        i < array_lengthof(Attribute::MutuallyIncompatible); ++i) {
     Attributes MutI = Attrs & Attribute::MutuallyIncompatible[i];
@@ -503,9 +498,9 @@ void Verifier::VerifyFunctionAttrs(const FunctionType *FT,
     else if (Attr.Index-1 < FT->getNumParams())
       Ty = FT->getParamType(Attr.Index-1);
     else
-      break;  // VarArgs attributes, don't verify.
-    
-    VerifyAttrs(Attr.Attrs, Ty, Attr.Index == 0, V);
+      break;  // VarArgs attributes, verified elsewhere.
+
+    VerifyParameterAttrs(Attr.Attrs, Ty, Attr.Index == 0, V);
 
     if (Attr.Attrs & Attribute::Nest) {
       Assert1(!SawNest, "More than one parameter has attribute nest!", V);
@@ -517,10 +512,10 @@ void Verifier::VerifyFunctionAttrs(const FunctionType *FT,
   }
 
   Attributes FAttrs = Attrs.getFnAttributes();
-  Assert1(!(FAttrs & (~Attribute::FunctionOnly)),
-          "Attribute " + Attribute::getAsString(FAttrs) +
-          " does not apply to function!", V);
-      
+  Attributes NotFn = FAttrs & (~Attribute::FunctionOnly);
+  Assert1(!NotFn, "Attribute " + Attribute::getAsString(NotFn) +
+          " does not apply to the function!", V);
+
   for (unsigned i = 0;
        i < array_lengthof(Attribute::MutuallyIncompatible); ++i) {
     Attributes MutI = FAttrs & Attribute::MutuallyIncompatible[i];
@@ -582,6 +577,12 @@ void Verifier::visitFunction(Function &F) {
     break;
   }
   
+  bool isLLVMdotName = F.getName().size() >= 5 &&
+                       F.getName().substr(0, 5) == "llvm.";
+  if (!isLLVMdotName)
+    Assert1(F.getReturnType() != Type::MetadataTy,
+            "Function may not return metadata unless it's an intrinsic", &F);
+
   // Check that the argument values match the function type for this function...
   unsigned i = 0;
   for (Function::arg_iterator I = F.arg_begin(), E = F.arg_end();
@@ -591,6 +592,9 @@ void Verifier::visitFunction(Function &F) {
             I, FT->getParamType(i));
     Assert1(I->getType()->isFirstClassType(),
             "Function arguments must have first-class types!", I);
+    if (!isLLVMdotName)
+      Assert2(I->getType() != Type::MetadataTy,
+              "Function takes metadata but isn't an intrinsic", I, &F);
   }
 
   if (F.isDeclaration()) {
@@ -600,9 +604,7 @@ void Verifier::visitFunction(Function &F) {
   } else {
     // Verify that this function (which has a body) is not named "llvm.*".  It
     // is not legal to define intrinsics.
-    if (F.getName().size() >= 5)
-      Assert1(F.getName().substr(0, 5) != "llvm.",
-              "llvm intrinsics cannot be defined!", &F);
+    Assert1(!isLLVMdotName, "llvm intrinsics cannot be defined!", &F);
     
     // Check the entry node
     BasicBlock *Entry = &F.getEntryBlock();
@@ -681,7 +683,6 @@ void Verifier::visitReturnInst(ReturnInst &RI) {
             "Found return instr that returns non-void in Function of void "
             "return type!", &RI, F->getReturnType());
   else if (N == 1 && F->getReturnType() == RI.getOperand(0)->getType()) {
-    Assert1(!isMetadata(RI.getOperand(0)), "Invalid use of metadata!", &RI);
     // Exactly one return value and it matches the return type. Good.
   } else if (const StructType *STy = dyn_cast<StructType>(F->getReturnType())) {
     // The return type is a struct; check for multiple return values.
@@ -729,8 +730,6 @@ void Verifier::visitSelectInst(SelectInst &SI) {
 
   Assert1(SI.getTrueValue()->getType() == SI.getType(),
           "Select values must have same type as select instruction!", &SI);
-  Assert1(!isMetadata(SI.getOperand(1)) && !isMetadata(SI.getOperand(2)),
-          "Invalid use of metadata!", &SI);
   visitInstruction(SI);
 }
 
@@ -748,8 +747,8 @@ void Verifier::visitTruncInst(TruncInst &I) {
   const Type *DestTy = I.getType();
 
   // Get the size of the types in bits, we'll need this later
-  unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
-  unsigned DestBitSize = DestTy->getPrimitiveSizeInBits();
+  unsigned SrcBitSize = SrcTy->getScalarSizeInBits();
+  unsigned DestBitSize = DestTy->getScalarSizeInBits();
 
   Assert1(SrcTy->isIntOrIntVector(), "Trunc only operates on integer", &I);
   Assert1(DestTy->isIntOrIntVector(), "Trunc only produces integer", &I);
@@ -770,8 +769,8 @@ void Verifier::visitZExtInst(ZExtInst &I) {
   Assert1(DestTy->isIntOrIntVector(), "ZExt only produces an integer", &I);
   Assert1(isa<VectorType>(SrcTy) == isa<VectorType>(DestTy),
           "zext source and destination must both be a vector or neither", &I);
-  unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
-  unsigned DestBitSize = DestTy->getPrimitiveSizeInBits();
+  unsigned SrcBitSize = SrcTy->getScalarSizeInBits();
+  unsigned DestBitSize = DestTy->getScalarSizeInBits();
 
   Assert1(SrcBitSize < DestBitSize,"Type too small for ZExt", &I);
 
@@ -784,8 +783,8 @@ void Verifier::visitSExtInst(SExtInst &I) {
   const Type *DestTy = I.getType();
 
   // Get the size of the types in bits, we'll need this later
-  unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
-  unsigned DestBitSize = DestTy->getPrimitiveSizeInBits();
+  unsigned SrcBitSize = SrcTy->getScalarSizeInBits();
+  unsigned DestBitSize = DestTy->getScalarSizeInBits();
 
   Assert1(SrcTy->isIntOrIntVector(), "SExt only operates on integer", &I);
   Assert1(DestTy->isIntOrIntVector(), "SExt only produces an integer", &I);
@@ -801,8 +800,8 @@ void Verifier::visitFPTruncInst(FPTruncInst &I) {
   const Type *SrcTy = I.getOperand(0)->getType();
   const Type *DestTy = I.getType();
   // Get the size of the types in bits, we'll need this later
-  unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
-  unsigned DestBitSize = DestTy->getPrimitiveSizeInBits();
+  unsigned SrcBitSize = SrcTy->getScalarSizeInBits();
+  unsigned DestBitSize = DestTy->getScalarSizeInBits();
 
   Assert1(SrcTy->isFPOrFPVector(),"FPTrunc only operates on FP", &I);
   Assert1(DestTy->isFPOrFPVector(),"FPTrunc only produces an FP", &I);
@@ -819,8 +818,8 @@ void Verifier::visitFPExtInst(FPExtInst &I) {
   const Type *DestTy = I.getType();
 
   // Get the size of the types in bits, we'll need this later
-  unsigned SrcBitSize = SrcTy->getPrimitiveSizeInBits();
-  unsigned DestBitSize = DestTy->getPrimitiveSizeInBits();
+  unsigned SrcBitSize = SrcTy->getScalarSizeInBits();
+  unsigned DestBitSize = DestTy->getScalarSizeInBits();
 
   Assert1(SrcTy->isFPOrFPVector(),"FPExt only operates on FP", &I);
   Assert1(DestTy->isFPOrFPVector(),"FPExt only produces an FP", &I);
@@ -986,13 +985,6 @@ void Verifier::visitPHINode(PHINode &PN) {
     Assert1(PN.getType() == PN.getIncomingValue(i)->getType(),
             "PHI node operands are not the same type as the result!", &PN);
 
-  // Check that it's not a PHI of metadata.
-  if (PN.getType() == Type::EmptyStructTy) {
-    for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i)
-      Assert1(!isMetadata(PN.getIncomingValue(i)),
-              "Invalid use of metadata!", &PN);
-  }
-
   // All other PHI node constraints are checked in the visitBasicBlock method.
 
   visitInstruction(PN);
@@ -1023,14 +1015,6 @@ void Verifier::VerifyCallSite(CallSite CS) {
             "Call parameter type does not match function signature!",
             CS.getArgument(i), FTy->getParamType(i), I);
 
-  if (CS.getCalledValue()->getNameLen() < 5 ||
-      strncmp(CS.getCalledValue()->getNameStart(), "llvm.", 5) != 0) {
-    // Verify that none of the arguments are metadata...
-    for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i)
-      Assert2(!isMetadata(CS.getArgument(i)), "Invalid use of metadata!",
-              CS.getArgument(i), I);
-  }
-
   const AttrListPtr &Attrs = CS.getAttributes();
 
   Assert1(VerifyAttributeCount(Attrs, CS.arg_size()),
@@ -1044,12 +1028,23 @@ void Verifier::VerifyCallSite(CallSite CS) {
     for (unsigned Idx = 1 + FTy->getNumParams(); Idx <= CS.arg_size(); ++Idx) {
       Attributes Attr = Attrs.getParamAttributes(Idx);
 
-      VerifyAttrs(Attr, CS.getArgument(Idx-1)->getType(), false, I);
+      VerifyParameterAttrs(Attr, CS.getArgument(Idx-1)->getType(), false, I);
 
       Attributes VArgI = Attr & Attribute::VarArgsIncompatible;
       Assert1(!VArgI, "Attribute " + Attribute::getAsString(VArgI) +
               " cannot be used for vararg call arguments!", I);
     }
+
+  // Verify that there's no metadata unless it's a direct call to an intrinsic.
+  if (!CS.getCalledFunction() || CS.getCalledFunction()->getName().size() < 5 ||
+      CS.getCalledFunction()->getName().substr(0, 5) != "llvm.") {
+    Assert1(FTy->getReturnType() != Type::MetadataTy,
+            "Only intrinsics may return metadata", I);
+    for (FunctionType::param_iterator PI = FTy->param_begin(),
+           PE = FTy->param_end(); PI != PE; ++PI)
+      Assert1(PI->get() != Type::MetadataTy, "Function has metadata parameter "
+              "but isn't an intrinsic", I);
+  }
 
   visitInstruction(*I);
 }
@@ -1074,13 +1069,40 @@ void Verifier::visitBinaryOperator(BinaryOperator &B) {
           "Both operands to a binary operator are not of the same type!", &B);
 
   switch (B.getOpcode()) {
+  // Check that integer arithmetic operators are only used with
+  // integral operands.
+  case Instruction::Add:
+  case Instruction::Sub:
+  case Instruction::Mul:
+  case Instruction::SDiv:
+  case Instruction::UDiv:
+  case Instruction::SRem:
+  case Instruction::URem:
+    Assert1(B.getType()->isIntOrIntVector(),
+            "Integer arithmetic operators only work with integral types!", &B);
+    Assert1(B.getType() == B.getOperand(0)->getType(),
+            "Integer arithmetic operators must have same type "
+            "for operands and result!", &B);
+    break;
+  // Check that floating-point arithmetic operators are only used with
+  // floating-point operands.
+  case Instruction::FAdd:
+  case Instruction::FSub:
+  case Instruction::FMul:
+  case Instruction::FDiv:
+  case Instruction::FRem:
+    Assert1(B.getType()->isFPOrFPVector(),
+            "Floating-point arithmetic operators only work with "
+            "floating-point types!", &B);
+    Assert1(B.getType() == B.getOperand(0)->getType(),
+            "Floating-point arithmetic operators must have same type "
+            "for operands and result!", &B);
+    break;
   // Check that logical operators are only used with integral operands.
   case Instruction::And:
   case Instruction::Or:
   case Instruction::Xor:
-    Assert1(B.getType()->isInteger() ||
-            (isa<VectorType>(B.getType()) && 
-             cast<VectorType>(B.getType())->getElementType()->isInteger()),
+    Assert1(B.getType()->isIntOrIntVector(),
             "Logical operators only work with integral types!", &B);
     Assert1(B.getType() == B.getOperand(0)->getType(),
             "Logical operators must have same type for operands and result!",
@@ -1089,22 +1111,13 @@ void Verifier::visitBinaryOperator(BinaryOperator &B) {
   case Instruction::Shl:
   case Instruction::LShr:
   case Instruction::AShr:
-    Assert1(B.getType()->isInteger() ||
-            (isa<VectorType>(B.getType()) && 
-             cast<VectorType>(B.getType())->getElementType()->isInteger()),
+    Assert1(B.getType()->isIntOrIntVector(),
             "Shifts only work with integral types!", &B);
     Assert1(B.getType() == B.getOperand(0)->getType(),
             "Shift return type must be same as operands!", &B);
-    /* FALL THROUGH */
-  default:
-    // Arithmetic operators only work on integer or fp values
-    Assert1(B.getType() == B.getOperand(0)->getType(),
-            "Arithmetic operators must have same type for operands and result!",
-            &B);
-    Assert1(B.getType()->isInteger() || B.getType()->isFloatingPoint() ||
-            isa<VectorType>(B.getType()),
-            "Arithmetic operators must have integer, fp, or vector type!", &B);
     break;
+  default:
+    assert(0 && "Unknown BinaryOperator opcode!");
   }
 
   visitInstruction(B);
@@ -1119,6 +1132,7 @@ void Verifier::visitICmpInst(ICmpInst& IC) {
   // Check that the operands are the right type
   Assert1(Op0Ty->isIntOrIntVector() || isa<PointerType>(Op0Ty),
           "Invalid operand types for ICmp instruction", &IC);
+
   visitInstruction(IC);
 }
 
@@ -1194,6 +1208,7 @@ void Verifier::visitLoadInst(LoadInst &LI) {
     cast<PointerType>(LI.getOperand(0)->getType())->getElementType();
   Assert2(ElTy == LI.getType(),
           "Load result type does not match pointer operand type!", &LI, ElTy);
+  Assert1(ElTy != Type::MetadataTy, "Can't load metadata!", &LI);
   visitInstruction(LI);
 }
 
@@ -1202,7 +1217,7 @@ void Verifier::visitStoreInst(StoreInst &SI) {
     cast<PointerType>(SI.getOperand(1)->getType())->getElementType();
   Assert2(ElTy == SI.getOperand(0)->getType(),
           "Stored value type does not match pointer operand type!", &SI, ElTy);
-  Assert1(!isMetadata(SI.getOperand(0)), "Invalid use of metadata!", &SI);
+  Assert1(ElTy != Type::MetadataTy, "Can't store metadata!", &SI);
   visitInstruction(SI);
 }
 
@@ -1243,8 +1258,7 @@ void Verifier::visitInstruction(Instruction &I) {
   if (!isa<PHINode>(I)) {   // Check that non-phi nodes are not self referential
     for (Value::use_iterator UI = I.use_begin(), UE = I.use_end();
          UI != UE; ++UI)
-      Assert1(*UI != (User*)&I ||
-              !DT->dominates(&BB->getParent()->getEntryBlock(), BB),
+      Assert1(*UI != (User*)&I || !DT->isReachableFromEntry(BB),
               "Only PHI nodes may reference their own value!", &I);
   }
   
@@ -1263,6 +1277,17 @@ void Verifier::visitInstruction(Instruction &I) {
           || ((isa<CallInst>(I) || isa<InvokeInst>(I)) 
               && isa<StructType>(I.getType())),
           "Instruction returns a non-scalar type!", &I);
+
+  // Check that the instruction doesn't produce metadata or metadata*. Calls
+  // all already checked against the callee type.
+  Assert1(I.getType() != Type::MetadataTy ||
+          isa<CallInst>(I) || isa<InvokeInst>(I),
+          "Invalid use of metadata!", &I);
+
+  if (const PointerType *PTy = dyn_cast<PointerType>(I.getType()))
+    Assert1(PTy->getElementType() != Type::MetadataTy,
+            "Instructions may not produce pointer to metadata.", &I);
+
 
   // Check that all uses of the instruction, if they are instructions
   // themselves, actually have parent basic blocks.  If the use is not an
@@ -1284,6 +1309,11 @@ void Verifier::visitInstruction(Instruction &I) {
     if (!I.getOperand(i)->getType()->isFirstClassType()) {
       Assert1(0, "Instruction operands must be first-class values!", &I);
     }
+
+    if (const PointerType *PTy =
+            dyn_cast<PointerType>(I.getOperand(i)->getType()))
+      Assert1(PTy->getElementType() != Type::MetadataTy,
+              "Invalid use of metadata pointer.", &I);
     
     if (Function *F = dyn_cast<Function>(I.getOperand(i))) {
       // Check to make sure that the "address of" an intrinsic function is never
@@ -1305,67 +1335,67 @@ void Verifier::visitInstruction(Instruction &I) {
       BasicBlock *OpBlock = Op->getParent();
 
       // Check that a definition dominates all of its uses.
-      if (!isa<PHINode>(I)) {
+      if (InvokeInst *II = dyn_cast<InvokeInst>(Op)) {
         // Invoke results are only usable in the normal destination, not in the
         // exceptional destination.
-        if (InvokeInst *II = dyn_cast<InvokeInst>(Op)) {
-          OpBlock = II->getNormalDest();
-          
-          Assert2(OpBlock != II->getUnwindDest(),
-                  "No uses of invoke possible due to dominance structure!",
-                  Op, II);
-          
+        BasicBlock *NormalDest = II->getNormalDest();
+
+        Assert2(NormalDest != II->getUnwindDest(),
+                "No uses of invoke possible due to dominance structure!",
+                Op, &I);
+
+        // PHI nodes differ from other nodes because they actually "use" the
+        // value in the predecessor basic blocks they correspond to.
+        BasicBlock *UseBlock = BB;
+        if (isa<PHINode>(I))
+          UseBlock = cast<BasicBlock>(I.getOperand(i+1));
+
+        if (isa<PHINode>(I) && UseBlock == OpBlock) {
+          // Special case of a phi node in the normal destination or the unwind
+          // destination.
+          Assert2(BB == NormalDest || !DT->isReachableFromEntry(UseBlock),
+                  "Invoke result not available in the unwind destination!",
+                  Op, &I);
+        } else {
+          Assert2(DT->dominates(NormalDest, UseBlock) ||
+                  !DT->isReachableFromEntry(UseBlock),
+                  "Invoke result does not dominate all uses!", Op, &I);
+
           // If the normal successor of an invoke instruction has multiple
-          // predecessors, then the normal edge from the invoke is critical, so
-          // the invoke value can only be live if the destination block
-          // dominates all of it's predecessors (other than the invoke) or if
-          // the invoke value is only used by a phi in the successor.
-          if (!OpBlock->getSinglePredecessor() &&
-              DT->dominates(&BB->getParent()->getEntryBlock(), BB)) {
-            // The first case we allow is if the use is a PHI operand in the
-            // normal block, and if that PHI operand corresponds to the invoke's
-            // block.
-            bool Bad = true;
-            if (PHINode *PN = dyn_cast<PHINode>(&I))
-              if (PN->getParent() == OpBlock &&
-                  PN->getIncomingBlock(i/2) == Op->getParent())
-                Bad = false;
-            
+          // predecessors, then the normal edge from the invoke is critical,
+          // so the invoke value can only be live if the destination block
+          // dominates all of it's predecessors (other than the invoke).
+          if (!NormalDest->getSinglePredecessor() &&
+              DT->isReachableFromEntry(UseBlock))
             // If it is used by something non-phi, then the other case is that
-            // 'OpBlock' dominates all of its predecessors other than the
+            // 'NormalDest' dominates all of its predecessors other than the
             // invoke.  In this case, the invoke value can still be used.
-            if (Bad) {
-              Bad = false;
-              for (pred_iterator PI = pred_begin(OpBlock),
-                   E = pred_end(OpBlock); PI != E; ++PI) {
-                if (*PI != II->getParent() && !DT->dominates(OpBlock, *PI)) {
-                  Bad = true;
-                  break;
-                }
+            for (pred_iterator PI = pred_begin(NormalDest),
+                 E = pred_end(NormalDest); PI != E; ++PI)
+              if (*PI != II->getParent() && !DT->dominates(NormalDest, *PI) &&
+                  DT->isReachableFromEntry(*PI)) {
+                CheckFailed("Invoke result does not dominate all uses!", Op,&I);
+                return;
               }
-            }
-            Assert2(!Bad,
-                    "Invoke value defined on critical edge but not dead!", &I,
-                    Op);
-          }
-        } else if (OpBlock == BB) {
+        }
+      } else if (isa<PHINode>(I)) {
+        // PHI nodes are more difficult than other nodes because they actually
+        // "use" the value in the predecessor basic blocks they correspond to.
+        BasicBlock *PredBB = cast<BasicBlock>(I.getOperand(i+1));
+        Assert2(DT->dominates(OpBlock, PredBB) ||
+                !DT->isReachableFromEntry(PredBB),
+                "Instruction does not dominate all uses!", Op, &I);
+      } else {
+        if (OpBlock == BB) {
           // If they are in the same basic block, make sure that the definition
           // comes before the use.
-          Assert2(InstsInThisBlock.count(Op) ||
-                  !DT->dominates(&BB->getParent()->getEntryBlock(), BB),
+          Assert2(InstsInThisBlock.count(Op) || !DT->isReachableFromEntry(BB),
                   "Instruction does not dominate all uses!", Op, &I);
         }
 
         // Definition must dominate use unless use is unreachable!
         Assert2(InstsInThisBlock.count(Op) || DT->dominates(Op, &I) ||
-                !DT->dominates(&BB->getParent()->getEntryBlock(), BB),
-                "Instruction does not dominate all uses!", Op, &I);
-      } else {
-        // PHI nodes are more difficult than other nodes because they actually
-        // "use" the value in the predecessor basic blocks they correspond to.
-        BasicBlock *PredBB = cast<BasicBlock>(I.getOperand(i+1));
-        Assert2(DT->dominates(OpBlock, PredBB) ||
-                !DT->dominates(&BB->getParent()->getEntryBlock(), PredBB),
+                !DT->isReachableFromEntry(BB),
                 "Instruction does not dominate all uses!", Op, &I);
       }
     } else if (isa<InlineAsm>(I.getOperand(i))) {
@@ -1395,7 +1425,7 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
   switch (ID) {
   default:
     break;
-  case Intrinsic::dbg_declare:		// llvm.dbg.declare
+  case Intrinsic::dbg_declare:  // llvm.dbg.declare
     if (Constant *C = dyn_cast<Constant>(CI.getOperand(1)))
       Assert1(C && !isa<ConstantPointerNull>(C),
               "invalid llvm.dbg.declare intrinsic call", &CI);

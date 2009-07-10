@@ -30,6 +30,11 @@ class ARMFunctionInfo : public MachineFunctionInfo {
   /// Used to initialized Align, so must precede it.
   bool isThumb;
 
+  /// hasThumb2 - True if the target architecture supports Thumb2. Do not use
+  /// to determine if function is compiled under Thumb mode, for that use
+  /// 'isThumb'.
+  bool hasThumb2;
+
   /// Align - required alignment.  ARM functions and Thumb functions with
   /// constant pools require 4-byte alignment; other Thumb functions
   /// require only 2-byte alignment.
@@ -91,7 +96,8 @@ class ARMFunctionInfo : public MachineFunctionInfo {
 
 public:
   ARMFunctionInfo() :
-    isThumb(false), 
+    isThumb(false),
+    hasThumb2(false),
     Align(2U),
     VarArgsRegSaveSize(0), HasStackFrame(false),
     LRSpilledForFarJump(false), R3IsLiveIn(false),
@@ -100,8 +106,9 @@ public:
     GPRCS1Frames(0), GPRCS2Frames(0), DPRCSFrames(0),
     JumpTableUId(0), ConstPoolEntryUId(0) {}
 
-  ARMFunctionInfo(MachineFunction &MF) :
+  explicit ARMFunctionInfo(MachineFunction &MF) :
     isThumb(MF.getTarget().getSubtarget<ARMSubtarget>().isThumb()),
+    hasThumb2(MF.getTarget().getSubtarget<ARMSubtarget>().hasThumb2()),
     Align(isThumb ? 1U : 2U),
     VarArgsRegSaveSize(0), HasStackFrame(false),
     LRSpilledForFarJump(false), R3IsLiveIn(false),
@@ -112,6 +119,8 @@ public:
     JumpTableUId(0), ConstPoolEntryUId(0) {}
 
   bool isThumbFunction() const { return isThumb; }
+  bool isThumb1OnlyFunction() const { return isThumb && !hasThumb2; }
+  bool isThumb2Function() const { return isThumb && hasThumb2; }
 
   unsigned getAlign() const { return Align; }
   void setAlign(unsigned a) { Align = a; }

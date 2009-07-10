@@ -16,8 +16,10 @@
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Type.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/GlobalVariable.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -347,7 +349,6 @@ static Value *GetIfCondition(BasicBlock *BB,
   return 0;
 }
 
-
 /// DominatesMergePoint - If we have a merge point of an "if condition" as
 /// accepted above, return true if the specified value dominates the block.  We
 /// don't handle the true generality of domination here, just a special case
@@ -393,7 +394,13 @@ static bool DominatesMergePoint(Value *V, BasicBlock *BB,
         if (!isa<AllocaInst>(I->getOperand(0)) &&
             !isa<Constant>(I->getOperand(0)))
           return false;
-
+        // External weak globals may have address 0, so we can't load them.
+        Value *V2 = I->getOperand(0)->getUnderlyingObject();
+        if (V2) {
+          GlobalVariable* GV = dyn_cast<GlobalVariable>(V2);
+          if (GV && GV->hasExternalWeakLinkage())
+            return false;
+        }
         // Finally, we have to check to make sure there are no instructions
         // before the load in its basic block, as we are going to hoist the loop
         // out to its predecessor.
@@ -413,9 +420,6 @@ static bool DominatesMergePoint(Value *V, BasicBlock *BB,
       case Instruction::LShr:
       case Instruction::AShr:
       case Instruction::ICmp:
-      case Instruction::FCmp:
-        if (I->getOperand(0)->getType()->isFPOrFPVector())
-          return false;  // FP arithmetic might trap.
         break;   // These are all cheap and non-trapping instructions.
       }
 
@@ -742,8 +746,7 @@ static bool FoldValueComparisonIntoPredecessors(TerminatorInst *TI) {
 
   SmallVector<BasicBlock*, 16> Preds(pred_begin(BB), pred_end(BB));
   while (!Preds.empty()) {
-    BasicBlock *Pred = Preds.back();
-    Preds.pop_back();
+    BasicBlock *Pred = Preds.pop_back_val();
 
     // See if the predecessor is a comparison with the same value.
     TerminatorInst *PTI = Pred->getTerminator();
@@ -857,6 +860,26 @@ static bool FoldValueComparisonIntoPredecessors(TerminatorInst *TI) {
   return Changed;
 }
 
+// isSafeToHoistInvoke - If we would need to insert a select that uses the
+// value of this invoke (comments in HoistThenElseCodeToIf explain why we
+// would need to do this), we can't hoist the invoke, as there is nowhere
+// to put the select in this case.
+static bool isSafeToHoistInvoke(BasicBlock *BB1, BasicBlock *BB2,
+                                Instruction *I1, Instruction *I2) {
+  for (succ_iterator SI = succ_begin(BB1), E = succ_end(BB1); SI != E; ++SI) {
+    PHINode *PN;
+    for (BasicBlock::iterator BBI = SI->begin();
+         (PN = dyn_cast<PHINode>(BBI)); ++BBI) {
+      Value *BB1V = PN->getIncomingValueForBlock(BB1);
+      Value *BB2V = PN->getIncomingValueForBlock(BB2);
+      if (BB1V != BB2V && (BB1V==I1 || BB2V==I2)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 /// HoistThenElseCodeToIf - Given a conditional branch that goes to BB1 and
 /// BB2, hoist any common code in the two blocks up into the branch block.  The
 /// caller of this function guarantees that BI's block dominates BB1 and BB2.
@@ -877,8 +900,9 @@ static bool HoistThenElseCodeToIf(BranchInst *BI) {
     I1 = BB1_Itr++;
   while (isa<DbgInfoIntrinsic>(I2))
     I2 = BB2_Itr++;
-  if (I1->getOpcode() != I2->getOpcode() || isa<PHINode>(I1) || 
-      isa<InvokeInst>(I1) || !I1->isIdenticalTo(I2))
+  if (I1->getOpcode() != I2->getOpcode() || isa<PHINode>(I1) ||
+      !I1->isIdenticalTo(I2) ||
+      (isa<InvokeInst>(I1) && !isSafeToHoistInvoke(BB1, BB2, I1, I2)))
     return false;
 
   // If we get here, we can hoist at least one instruction.
@@ -909,6 +933,10 @@ static bool HoistThenElseCodeToIf(BranchInst *BI) {
   return true;
 
 HoistTerminator:
+  // It may not be possible to hoist an invoke.
+  if (isa<InvokeInst>(I1) && !isSafeToHoistInvoke(BB1, BB2, I1, I2))
+    return true;
+
   // Okay, it is safe to hoist the terminator.
   Instruction *NT = I1->clone();
   BIParent->getInstList().insert(BI, NT);
@@ -1007,9 +1035,8 @@ static bool SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *BB1) {
   default: return false;  // Not safe / profitable to hoist.
   case Instruction::Add:
   case Instruction::Sub:
-    // FP arithmetic might trap. Not worth doing for vector ops.
-    if (HInst->getType()->isFloatingPoint() 
-        || isa<VectorType>(HInst->getType()))
+    // Not worth doing for vector ops.
+    if (isa<VectorType>(HInst->getType()))
       return false;
     break;
   case Instruction::And:
@@ -1151,6 +1178,7 @@ static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
 /// ultimate destination.
 static bool FoldCondBranchOnPHI(BranchInst *BI) {
   BasicBlock *BB = BI->getParent();
+  LLVMContext *Context = BB->getContext();
   PHINode *PN = dyn_cast<PHINode>(BI->getCondition());
   // NOTE: we currently cannot transform this case if the PHI node is used
   // outside of the block.
@@ -1216,7 +1244,7 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
           }
           
           // Check for trivial simplification.
-          if (Constant *C = ConstantFoldInstruction(N)) {
+          if (Constant *C = ConstantFoldInstruction(N, Context)) {
             TranslateMap[BBI] = C;
             delete N;   // Constant folded away, don't need actual inst
           } else {
@@ -1248,6 +1276,8 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
 /// FoldTwoEntryPHINode - Given a BB that starts with the specified two-entry
 /// PHI node, see if we can eliminate it.
 static bool FoldTwoEntryPHINode(PHINode *PN) {
+  LLVMContext *Context = PN->getParent()->getContext();
+  
   // Ok, this is a two entry PHI node.  Check to see if this is a simple "if
   // statement", which has a very simple dominance structure.  Basically, we
   // are trying to find the condition that is being branched on, which
@@ -1285,7 +1315,7 @@ static bool FoldTwoEntryPHINode(PHINode *PN) {
       if (PN->getIncomingValue(0) != PN)
         PN->replaceAllUsesWith(PN->getIncomingValue(0));
       else
-        PN->replaceAllUsesWith(UndefValue::get(PN->getType()));
+        PN->replaceAllUsesWith(Context->getUndef(PN->getType()));
     } else if (!DominatesMergePoint(PN->getIncomingValue(0), BB,
                                     &AggressiveInsts) ||
                !DominatesMergePoint(PN->getIncomingValue(1), BB,
@@ -1466,7 +1496,7 @@ static bool SimplifyCondBranchToTwoReturns(BranchInst *BI) {
 /// and if a predecessor branches to us and one of our successors, fold the
 /// setcc into the predecessor and use logical operations to pick the right
 /// destination.
-static bool FoldBranchToCommonDest(BranchInst *BI) {
+bool llvm::FoldBranchToCommonDest(BranchInst *BI) {
   BasicBlock *BB = BI->getParent();
   Instruction *Cond = dyn_cast<Instruction>(BI->getCondition());
   if (Cond == 0) return false;
@@ -1579,6 +1609,7 @@ static bool FoldBranchToCommonDest(BranchInst *BI) {
 static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
   assert(PBI->isConditional() && BI->isConditional());
   BasicBlock *BB = BI->getParent();
+  LLVMContext *Context = BB->getContext();
   
   // If this block ends with a branch instruction, and if there is a
   // predecessor that ends on a branch of the same condition, make 
@@ -1590,7 +1621,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
     if (BB->getSinglePredecessor()) {
       // Turn this into a branch on constant.
       bool CondIsTrue = PBI->getSuccessor(0) == BB;
-      BI->setCondition(ConstantInt::get(Type::Int1Ty, CondIsTrue));
+      BI->setCondition(Context->getConstantInt(Type::Int1Ty, CondIsTrue));
       return true;  // Nuke the branch on constant.
     }
     
@@ -1610,7 +1641,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
             PBI->getCondition() == BI->getCondition() &&
             PBI->getSuccessor(0) != PBI->getSuccessor(1)) {
           bool CondIsTrue = PBI->getSuccessor(0) == BB;
-          NewPN->addIncoming(ConstantInt::get(Type::Int1Ty, 
+          NewPN->addIncoming(Context->getConstantInt(Type::Int1Ty, 
                                               CondIsTrue), *PI);
         } else {
           NewPN->addIncoming(BI->getCondition(), *PI);
@@ -1805,10 +1836,9 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
       // If we found some, do the transformation!
       if (!UncondBranchPreds.empty()) {
         while (!UncondBranchPreds.empty()) {
-          BasicBlock *Pred = UncondBranchPreds.back();
+          BasicBlock *Pred = UncondBranchPreds.pop_back_val();
           DOUT << "FOLDING: " << *BB
                << "INTO UNCOND BRANCH PRED: " << *Pred;
-          UncondBranchPreds.pop_back();
           Instruction *UncondBranch = Pred->getTerminator();
           // Clone the return and add it to the end of the predecessor.
           Instruction *NewRet = RI->clone();
@@ -1847,8 +1877,7 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
       // instruction.  If any of them just select between returns, change the
       // branch itself into a select/return pair.
       while (!CondBranchPreds.empty()) {
-        BranchInst *BI = CondBranchPreds.back();
-        CondBranchPreds.pop_back();
+        BranchInst *BI = CondBranchPreds.pop_back_val();
 
         // Check to see if the non-BB successor is also a return block.
         if (isa<ReturnInst>(BI->getSuccessor(0)->getTerminator()) &&

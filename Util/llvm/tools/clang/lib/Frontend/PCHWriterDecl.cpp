@@ -82,6 +82,7 @@ void PCHDeclWriter::VisitDecl(Decl *D) {
   Record.push_back(D->isInvalidDecl());
   Record.push_back(D->hasAttrs());
   Record.push_back(D->isImplicit());
+  Record.push_back(D->isUsed());
   Record.push_back(D->getAccess());
 }
 
@@ -116,6 +117,7 @@ void PCHDeclWriter::VisitTagDecl(TagDecl *D) {
 void PCHDeclWriter::VisitEnumDecl(EnumDecl *D) {
   VisitTagDecl(D);
   Writer.AddTypeRef(D->getIntegerType(), Record);
+  // FIXME: C++ InstantiatedFrom
   Code = pch::DECL_ENUM;
 }
 
@@ -123,6 +125,7 @@ void PCHDeclWriter::VisitRecordDecl(RecordDecl *D) {
   VisitTagDecl(D);
   Record.push_back(D->hasFlexibleArrayMember());
   Record.push_back(D->isAnonymousStructOrUnion());
+  Record.push_back(D->hasObjectMember());
   Code = pch::DECL_RECORD;
 }
 
@@ -144,17 +147,19 @@ void PCHDeclWriter::VisitFunctionDecl(FunctionDecl *D) {
   VisitValueDecl(D);
   Record.push_back(D->isThisDeclarationADefinition());
   if (D->isThisDeclarationADefinition())
-    Writer.AddStmt(D->getBody(Context));
+    Writer.AddStmt(D->getBody());
   Writer.AddDeclRef(D->getPreviousDeclaration(), Record);
   Record.push_back(D->getStorageClass()); // FIXME: stable encoding
   Record.push_back(D->isInline());
   Record.push_back(D->isC99InlineDefinition());
-  Record.push_back(D->isVirtual());
+  Record.push_back(D->isVirtualAsWritten());
   Record.push_back(D->isPure());
-  Record.push_back(D->inheritedPrototype());
-  Record.push_back(D->hasPrototype() && !D->inheritedPrototype());
+  Record.push_back(D->hasInheritedPrototype());
+  Record.push_back(D->hasWrittenPrototype());
   Record.push_back(D->isDeleted());
   Writer.AddSourceLocation(D->getTypeSpecStartLoc(), Record);
+  Writer.AddSourceLocation(D->getLocEnd(), Record);
+  // FIXME: C++ TemplateOrInstantiation
   Record.push_back(D->param_size());
   for (FunctionDecl::param_iterator P = D->param_begin(), PEnd = D->param_end();
        P != PEnd; ++P)
@@ -168,7 +173,7 @@ void PCHDeclWriter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
   // Unlike C/C++, method bodies will never be in header files. 
   Record.push_back(D->getBody() != 0);
   if (D->getBody() != 0) {
-    Writer.AddStmt(D->getBody(Context));
+    Writer.AddStmt(D->getBody());
     Writer.AddDeclRef(D->getSelfDecl(), Record);
     Writer.AddDeclRef(D->getCmdDecl(), Record);
   }
@@ -358,6 +363,7 @@ void PCHDeclWriter::VisitParmVarDecl(ParmVarDecl *D) {
   // know are true of all PARM_VAR_DECLs.
   if (!D->hasAttrs() &&
       !D->isImplicit() &&
+      !D->isUsed() &&
       D->getAccess() == AS_none &&
       D->getStorageClass() == 0 &&
       !D->hasCXXDirectInitializer() && // Can params have this ever?
@@ -432,6 +438,7 @@ void PCHWriter::WriteDeclsBlockAbbrevs() {
   Abv->Add(BitCodeAbbrevOp(0));                       // isInvalidDecl (!?)
   Abv->Add(BitCodeAbbrevOp(0));                       // HasAttrs
   Abv->Add(BitCodeAbbrevOp(0));                       // isImplicit
+  Abv->Add(BitCodeAbbrevOp(0));                       // isUsed
   Abv->Add(BitCodeAbbrevOp(AS_none));                 // C++ AccessSpecifier
   
   // NamedDecl
@@ -483,7 +490,7 @@ void PCHWriter::WriteDeclsBlock(ASTContext &Context) {
     }
 
     // Determine the ID for this declaration
-    pch::DeclID ID = DeclIDs[D];
+    pch::DeclID &ID = DeclIDs[D];
     if (ID == 0)
       ID = DeclIDs.size();
 

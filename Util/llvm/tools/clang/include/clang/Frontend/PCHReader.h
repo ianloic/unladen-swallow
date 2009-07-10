@@ -30,6 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitstreamReader.h"
 #include "llvm/Support/DataTypes.h"
+#include <deque>
 #include <map>
 #include <string>
 #include <utility>
@@ -53,6 +54,82 @@ class NamedDecl;
 class Preprocessor;
 class Sema;
 class SwitchCase;
+class PCHReader;
+class HeaderFileInfo;
+
+/// \brief Abstract interface for callback invocations by the PCHReader.
+///
+/// While reading a PCH file, the PCHReader will call the methods of the
+/// listener to pass on specific information. Some of the listener methods can
+/// return true to indicate to the PCHReader that the information (and
+/// consequently the PCH file) is invalid.
+class PCHReaderListener {
+public:
+  virtual ~PCHReaderListener();
+  
+  /// \brief Receives the language options.
+  ///
+  /// \returns true to indicate the options are invalid or false otherwise.
+  virtual bool ReadLanguageOptions(const LangOptions &LangOpts) {
+    return false;
+  }
+  
+  /// \brief Receives the target triple.
+  ///
+  /// \returns true to indicate the target triple is invalid or false otherwise.
+  virtual bool ReadTargetTriple(const std::string &Triple) {
+    return false;
+  }
+  
+  /// \brief Receives the contents of the predefines buffer.
+  ///
+  /// \param PCHPredef The start of the predefines buffer in the PCH
+  /// file.
+  ///
+  /// \param PCHPredefLen The length of the predefines buffer in the PCH
+  /// file.
+  ///
+  /// \param PCHBufferID The FileID for the PCH predefines buffer.
+  ///
+  /// \param SuggestedPredefines If necessary, additional definitions are added
+  /// here.
+  ///
+  /// \returns true to indicate the predefines are invalid or false otherwise.
+  virtual bool ReadPredefinesBuffer(const char *PCHPredef, 
+                                    unsigned PCHPredefLen,
+                                    FileID PCHBufferID,
+                                    std::string &SuggestedPredefines) {
+    return false;
+  }
+  
+  /// \brief Receives a HeaderFileInfo entry.
+  virtual void ReadHeaderFileInfo(const HeaderFileInfo &HFI) {}
+  
+  /// \brief Receives __COUNTER__ value.
+  virtual void ReadCounter(unsigned Value) {}
+};
+
+/// \brief PCHReaderListener implementation to validate the information of
+/// the PCH file against an initialized Preprocessor.
+class PCHValidator : public PCHReaderListener {
+  Preprocessor &PP;
+  PCHReader &Reader;
+  
+  unsigned NumHeaderInfos;
+  
+public:
+  PCHValidator(Preprocessor &PP, PCHReader &Reader)
+    : PP(PP), Reader(Reader), NumHeaderInfos(0) {}
+  
+  virtual bool ReadLanguageOptions(const LangOptions &LangOpts);
+  virtual bool ReadTargetTriple(const std::string &Triple);
+  virtual bool ReadPredefinesBuffer(const char *PCHPredef, 
+                                    unsigned PCHPredefLen,
+                                    FileID PCHBufferID,
+                                    std::string &SuggestedPredefines);
+  virtual void ReadHeaderFileInfo(const HeaderFileInfo &HFI);
+  virtual void ReadCounter(unsigned Value);
+};
 
 /// \brief Reads a precompiled head containing the contents of a
 /// translation unit.
@@ -75,12 +152,19 @@ public:
   enum PCHReadResult { Success, Failure, IgnorePCH };
 
 private:
+  /// \ brief The receiver of some callbacks invoked by PCHReader.
+  llvm::OwningPtr<PCHReaderListener> Listener;
+  
+  SourceManager &SourceMgr;
+  FileManager &FileMgr;
+  Diagnostic &Diags;
+  
   /// \brief The semantic analysis object that will be processing the
   /// PCH file and the translation unit that uses it.
   Sema *SemaObj;
 
   /// \brief The preprocessor that will be loading the source file.
-  Preprocessor &PP;
+  Preprocessor *PP;
 
   /// \brief The AST context into which we'll read the PCH file.
   ASTContext *Context;
@@ -196,6 +280,12 @@ private:
   /// been loaded.
   llvm::SmallVector<Selector, 16> SelectorsLoaded;
 
+  /// \brief A sorted array of source ranges containing comments.
+  SourceRange *Comments;
+      
+  /// \brief The number of source ranges in the Comments array.
+  unsigned NumComments;
+      
   /// \brief The set of external definitions stored in the the PCH
   /// file.
   llvm::SmallVector<uint64_t, 16> ExternalDefinitions;
@@ -216,6 +306,17 @@ private:
   /// the PCH file.
   llvm::SmallVector<uint64_t, 4> ObjCCategoryImpls;
 
+  /// \brief The original file name that was used to build the PCH
+  /// file.
+  std::string OriginalFileName;
+
+  /// \brief Whether this precompiled header is a relocatable PCH file.
+  bool RelocatablePCH;
+  
+  /// \brief The system include root to be used when loading the 
+  /// precompiled header.
+  const char *isysroot;
+      
   /// \brief Mapping from switch-case IDs in the PCH file to
   /// switch-case statements.
   std::map<unsigned, SwitchCase *> SwitchCaseStmts;
@@ -268,7 +369,41 @@ private:
 
   /// Number of visible decl contexts read/total.
   unsigned NumVisibleDeclContextsRead, TotalVisibleDeclContexts;
-
+      
+  /// \brief When a type or declaration is being loaded from the PCH file, an 
+  /// instantance of this RAII object will be available on the stack to 
+  /// indicate when we are in a recursive-loading situation.
+  class LoadingTypeOrDecl {
+    PCHReader &Reader;
+    LoadingTypeOrDecl *Parent;
+    
+    LoadingTypeOrDecl(const LoadingTypeOrDecl&); // do not implement
+    LoadingTypeOrDecl &operator=(const LoadingTypeOrDecl&); // do not implement
+    
+  public:
+    explicit LoadingTypeOrDecl(PCHReader &Reader);
+    ~LoadingTypeOrDecl();
+  };
+  friend class LoadingTypeOrDecl;
+  
+  /// \brief If we are currently loading a type or declaration, points to the
+  /// most recent LoadingTypeOrDecl object on the stack.
+  LoadingTypeOrDecl *CurrentlyLoadingTypeOrDecl;
+  
+  /// \brief An IdentifierInfo that has been loaded but whose top-level 
+  /// declarations of the same name have not (yet) been loaded.
+  struct PendingIdentifierInfo {
+    IdentifierInfo *II;
+    llvm::SmallVector<uint32_t, 4> DeclIDs;
+  };
+      
+  /// \brief The set of identifiers that were read while the PCH reader was
+  /// (recursively) loading declarations. 
+  /// 
+  /// The declarations on the identifier chain for these identifiers will be
+  /// loaded once the recursive loading has completed.
+  std::deque<PendingIdentifierInfo> PendingIdentifierInfos;
+      
   /// \brief FIXME: document!
   llvm::SmallVector<uint64_t, 4> SpecialTypes;
 
@@ -300,10 +435,13 @@ private:
   /// predefines buffer may contain additional definitions.
   std::string SuggestedPredefines;
   
+  void MaybeAddSystemRootToFilename(std::string &Filename);
+      
   PCHReadResult ReadPCHBlock();
   bool CheckPredefinesBuffer(const char *PCHPredef, 
                              unsigned PCHPredefLen,
                              FileID PCHBufferID);
+  bool ParseLineTable(llvm::SmallVectorImpl<uint64_t> &Record);
   PCHReadResult ReadSourceManagerBlock();
   PCHReadResult ReadSLocEntryRecord(unsigned ID);
   
@@ -320,20 +458,82 @@ private:
 
   PCHReader(const PCHReader&); // do not implement
   PCHReader &operator=(const PCHReader &); // do not implement
-
 public:
   typedef llvm::SmallVector<uint64_t, 64> RecordData;
 
-  explicit PCHReader(Preprocessor &PP, ASTContext *Context);
+  /// \brief Load the PCH file and validate its contents against the given
+  /// Preprocessor.
+  ///
+  /// \param PP the preprocessor associated with the context in which this
+  /// precompiled header will be loaded.
+  ///
+  /// \param Context the AST context that this precompiled header will be
+  /// loaded into.
+  ///
+  /// \param isysroot If non-NULL, the system include path specified by the
+  /// user. This is only used with relocatable PCH files. If non-NULL,
+  /// a relocatable PCH file will use the default path "/".
+  PCHReader(Preprocessor &PP, ASTContext *Context, const char *isysroot = 0);
+  
+  /// \brief Load the PCH file without using any pre-initialized Preprocessor.
+  ///
+  /// The necessary information to initialize a Preprocessor later can be
+  /// obtained by setting a PCHReaderListener.
+  ///
+  /// \param SourceMgr the source manager into which the precompiled header
+  /// will be loaded.
+  ///
+  /// \param FileMgr the file manager into which the precompiled header will
+  /// be loaded.
+  ///
+  /// \param Diags the diagnostics system to use for reporting errors and
+  /// warnings relevant to loading the precompiled header.
+  ///
+  /// \param isysroot If non-NULL, the system include path specified by the
+  /// user. This is only used with relocatable PCH files. If non-NULL,
+  /// a relocatable PCH file will use the default path "/".
+      PCHReader(SourceManager &SourceMgr, FileManager &FileMgr, 
+                Diagnostic &Diags, const char *isysroot = 0);
   ~PCHReader();
 
+  /// \brief Load the precompiled header designated by the given file
+  /// name.
   PCHReadResult ReadPCH(const std::string &FileName);
+  
+  /// \brief Set the PCH callbacks listener.
+  void setListener(PCHReaderListener *listener) {
+    Listener.reset(listener);
+  }
+  
+  /// \brief Set the Preprocessor to use.
+  void setPreprocessor(Preprocessor &pp) {
+    PP = &pp;
+  }
+  
+  /// \brief Sets and initializes the given Context.
+  void InitializeContext(ASTContext &Context);
+
+  /// \brief Retrieve the name of the original source file name 
+  const std::string &getOriginalSourceFile() { return OriginalFileName; }
+
+  /// \brief Retrieve the name of the original source file name
+  /// directly from the PCH file, without actually loading the PCH
+  /// file.
+  static std::string getOriginalSourceFile(const std::string &PCHFileName);
 
   /// \brief Returns the suggested contents of the predefines buffer,
   /// which contains a (typically-empty) subset of the predefines
   /// build prior to including the precompiled header.
   const std::string &getSuggestedPredefines() { return SuggestedPredefines; }
 
+  /// \brief Reads the source ranges that correspond to comments from
+  /// an external AST source.
+  ///
+  /// \param Comments the contents of this vector will be
+  /// replaced with the sorted set of source ranges corresponding to
+  /// comments in the source code.
+  virtual void ReadComments(std::vector<SourceRange> &Comments);
+      
   /// \brief Resolve a type ID into a type, potentially building a new
   /// type.
   virtual QualType GetType(pch::TypeID ID);
@@ -423,7 +623,10 @@ public:
     ReadMethodPool(Selector Sel);
 
   void SetIdentifierInfo(unsigned ID, IdentifierInfo *II);
-
+  void SetGloballyVisibleDecls(IdentifierInfo *II, 
+                               const llvm::SmallVectorImpl<uint32_t> &DeclIDs,
+                               bool Nonrecursive = false);
+      
   /// \brief Report a diagnostic.
   DiagnosticBuilder Diag(unsigned DiagID);
 

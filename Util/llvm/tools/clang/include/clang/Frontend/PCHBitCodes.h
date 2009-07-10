@@ -29,7 +29,7 @@ namespace clang {
     /// incompatible with previous versions (such that a reader
     /// designed for the previous version could not support reading
     /// the new version), this number should be increased.
-    const unsigned VERSION_MAJOR = 1;
+    const unsigned VERSION_MAJOR = 2;
 
     /// \brief PCH minor version number supported by this version of
     /// Clang.
@@ -214,7 +214,15 @@ namespace clang {
 
       /// \brief Record code for the set of Objective-C category
       /// implementations.
-      OBJC_CATEGORY_IMPLEMENTATIONS = 19
+      OBJC_CATEGORY_IMPLEMENTATIONS = 19,
+
+      /// \brief Record code for the original file that was used to
+      /// generate the precompiled header.
+      ORIGINAL_FILE_NAME = 20,
+      
+      /// \brief Record code for the sorted array of source ranges where
+      /// comments were encountered in the source code.
+      COMMENT_RANGES = 21
     };
 
     /// \brief Record types used within a source manager block.
@@ -319,7 +327,9 @@ namespace clang {
       /// \brief The '__uint128_t' type.
       PREDEF_TYPE_UINT128_ID    = 21,
       /// \brief The '__int128_t' type.
-      PREDEF_TYPE_INT128_ID     = 22
+      PREDEF_TYPE_INT128_ID     = 22,
+      /// \brief The type of 'nullptr'.
+      PREDEF_TYPE_NULLPTR_ID    = 23
     };
 
     /// \brief The number of predefined type IDs that are reserved for
@@ -380,8 +390,14 @@ namespace clang {
       TYPE_OBJC_INTERFACE           = 21,
       /// \brief An ObjCQualifiedInterfaceType record.
       TYPE_OBJC_QUALIFIED_INTERFACE = 22,
-      /// \brief An ObjCQualifiedIdType record.
-      TYPE_OBJC_QUALIFIED_ID        = 23
+      /// \brief An ObjCObjectPointerType record.
+      TYPE_OBJC_OBJECT_POINTER      = 23,
+      /// \brief a DecltypeType record.
+      TYPE_DECLTYPE                 = 24,
+      /// \brief A ConstantArrayWithExprType record.
+      TYPE_CONSTANT_ARRAY_WITH_EXPR = 25,
+      /// \brief A ConstantArrayWithoutExprType record.
+      TYPE_CONSTANT_ARRAY_WITHOUT_EXPR = 26
     };
 
     /// \brief The type IDs for special types constructed by semantic
@@ -403,7 +419,9 @@ namespace clang {
       /// \brief CFConstantString type
       SPECIAL_TYPE_CF_CONSTANT_STRING          = 5,
       /// \brief Objective-C fast enumeration state type
-      SPECIAL_TYPE_OBJC_FAST_ENUMERATION_STATE = 6
+      SPECIAL_TYPE_OBJC_FAST_ENUMERATION_STATE = 6,
+      /// \brief C FILE typedef type
+      SPECIAL_TYPE_FILE                        = 7
     };
 
     /// \brief Record codes for each kind of declaration.

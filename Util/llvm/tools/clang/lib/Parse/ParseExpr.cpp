@@ -24,7 +24,6 @@
 #include "clang/Parse/Scope.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "ExtensionRAIIObject.h"
-#include "AstGuard.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallString.h"
 using namespace clang;
@@ -201,10 +200,7 @@ static prec::Level getBinOpPrecedence(tok::TokenKind Kind,
 ///         expression ',' assignment-expression
 ///
 Parser::OwningExprResult Parser::ParseExpression() {
-  if (Tok.is(tok::kw_throw))
-    return ParseThrowExpression();
-
-  OwningExprResult LHS(ParseCastExpression(false));
+  OwningExprResult LHS(ParseAssignmentExpression());
   if (LHS.isInvalid()) return move(LHS);
 
   return ParseRHSOfBinaryExpression(move(LHS), prec::Comma);
@@ -228,12 +224,14 @@ Parser::ParseExpressionWithLeadingAt(SourceLocation AtLoc) {
 /// process of disambiguating between an expression and a declaration.
 Parser::OwningExprResult
 Parser::ParseExpressionWithLeadingExtension(SourceLocation ExtLoc) {
-  // FIXME: The handling for throw is almost certainly wrong.
-  if (Tok.is(tok::kw_throw))
-    return ParseThrowExpression();
+  OwningExprResult LHS(Actions, true);
+  {
+    // Silence extension warnings in the sub-expression
+    ExtensionRAIIObject O(Diags);
 
-  OwningExprResult LHS(ParseCastExpression(false));
-  if (LHS.isInvalid()) return move(LHS);
+    LHS = ParseCastExpression(false);
+    if (LHS.isInvalid()) return move(LHS);
+  }
 
   LHS = Actions.ActOnUnaryOp(CurScope, ExtLoc, tok::kw___extension__,
                              move(LHS));
@@ -278,6 +276,12 @@ Parser::ParseAssignmentExprWithObjCMessageExprStart(SourceLocation LBracLoc,
 
 
 Parser::OwningExprResult Parser::ParseConstantExpression() {
+  // C++ [basic.def.odr]p2:
+  //   An expression is potentially evaluated unless it appears where an 
+  //   integral constant expression is required (see 5.19) [...].
+  EnterExpressionEvaluationContext Unevaluated(Actions,
+                                               Action::Unevaluated);
+  
   OwningExprResult LHS(ParseCastExpression(false));
   if (LHS.isInvalid()) return move(LHS);
 
@@ -402,6 +406,23 @@ Parser::ParseRHSOfBinaryExpression(OwningExprResult LHS, unsigned MinPrec) {
 /// id-expression that is the operand of address-of gets special treatment
 /// due to member pointers.
 ///
+Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
+                                                     bool isAddressOfOperand) {
+  bool NotCastExpr;
+  OwningExprResult Res = ParseCastExpression(isUnaryExpression,
+                                             isAddressOfOperand,
+                                             NotCastExpr);
+  if (NotCastExpr)
+    Diag(Tok, diag::err_expected_expression);
+  return move(Res);
+}
+
+/// ParseCastExpression - Parse a cast-expression, or, if isUnaryExpression is
+/// true, parse a unary-expression. isAddressOfOperand exists because an
+/// id-expression that is the operand of address-of gets special treatment
+/// due to member pointers. NotCastExpr is set to true if the token is not the
+/// start of a cast-expression, and no diagnostic is emitted in this case.
+///
 ///       cast-expression: [C99 6.5.4]
 ///         unary-expression
 ///         '(' type-name ')' cast-expression
@@ -430,6 +451,7 @@ Parser::ParseRHSOfBinaryExpression(OwningExprResult LHS, unsigned MinPrec) {
 ///         constant
 ///         string-literal
 /// [C++]   boolean-literal  [C++ 2.13.5]
+/// [C++0x] 'nullptr'        [C++0x 2.14.7]
 ///         '(' expression ')'
 ///         '__func__'        [C99 6.4.2.2]
 /// [GNU]   '__FUNCTION__'
@@ -507,9 +529,11 @@ Parser::ParseRHSOfBinaryExpression(OwningExprResult LHS, unsigned MinPrec) {
 ///                   '__is_base_of'                          [TODO]
 ///
 Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
-                                                     bool isAddressOfOperand) {
+                                                     bool isAddressOfOperand,
+                                                     bool &NotCastExpr) {
   OwningExprResult Res(Actions);
   tok::TokenKind SavedKind = Tok.getKind();
+  NotCastExpr = false;
   
   // This handles all of cast-expression, unary-expression, postfix-expression,
   // and primary-expression.  We handle them together like this for efficiency
@@ -530,7 +554,8 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     TypeTy *CastTy;
     SourceLocation LParenLoc = Tok.getLocation();
     SourceLocation RParenLoc;
-    Res = ParseParenExpression(ParenExprType, CastTy, RParenLoc);
+    Res = ParseParenExpression(ParenExprType, false/*stopIfCastExr*/,
+                               CastTy, RParenLoc);
     if (Res.isInvalid()) return move(Res);
     
     switch (ParenExprType) {
@@ -541,12 +566,8 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
       // postfix-expression exist, parse them now.
       break;
     case CastExpr:
-      // We parsed '(' type-name ')' and the thing after it wasn't a '{'.  Parse
-      // the cast-expression that follows it next.
-      // TODO: For cast expression with CastTy.
-      Res = ParseCastExpression(false);
-      if (!Res.isInvalid())
-        Res = Actions.ActOnCastExpr(LParenLoc, CastTy, RParenLoc, move(Res));
+      // We have parsed the cast-expression and no postfix-expr pieces are
+      // following.
       return move(Res);
     }
 
@@ -568,6 +589,9 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   case tok::kw_true:
   case tok::kw_false:
     return ParseCXXBoolLiteral();
+
+  case tok::kw_nullptr:
+    return Actions.ActOnCXXNullPtrLiteral(ConsumeToken());
 
   case tok::identifier: {      // primary-expression: identifier
                                // unqualified-id: identifier
@@ -731,7 +755,13 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
       Diag(Tok, diag::err_expected_expression);
       return ExprError();
     }
-    
+
+    if (SavedKind == tok::kw_typename) {
+      // postfix-expression: typename-specifier '(' expression-list[opt] ')'
+      if (!TryAnnotateTypeOrScopeToken())
+        return ExprError();
+    }
+
     // postfix-expression: simple-type-specifier '(' expression-list[opt] ')'
     //
     DeclSpec DS;
@@ -747,7 +777,7 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
 
   case tok::annot_cxxscope: // [C++] id-expression: qualified-id
   case tok::kw_operator: // [C++] id-expression: operator/conversion-function-id
-                         //                      template-id
+  case tok::annot_template_id: // [C++]          template-id
     Res = ParseCXXIdExpression(isAddressOfOperand);
     return ParsePostfixExpressionSuffix(move(Res));
 
@@ -798,7 +828,7 @@ Parser::OwningExprResult Parser::ParseCastExpression(bool isUnaryExpression,
       return ParsePostfixExpressionSuffix(ParseObjCMessageExpression());
     // FALL THROUGH.      
   default:
-    Diag(Tok, diag::err_expected_expression);
+    NotCastExpr = true;
     return ExprError();
   }
 
@@ -873,7 +903,7 @@ Parser::ParsePostfixExpressionSuffix(OwningExprResult LHS) {
         assert((ArgExprs.size() == 0 || ArgExprs.size()-1 == CommaLocs.size())&&
                "Unexpected number of commas!");
         LHS = Actions.ActOnCallExpr(CurScope, move(LHS), Loc,
-                                    move_arg(ArgExprs), &CommaLocs[0],
+                                    move_arg(ArgExprs), CommaLocs.data(),
                                     Tok.getLocation());
       }
       
@@ -911,6 +941,90 @@ Parser::ParsePostfixExpressionSuffix(OwningExprResult LHS) {
   }
 }
 
+/// ParseExprAfterTypeofSizeofAlignof - We parsed a typeof/sizeof/alignof and
+/// we are at the start of an expression or a parenthesized type-id.
+/// OpTok is the operand token (typeof/sizeof/alignof). Returns the expression
+/// (isCastExpr == false) or the type (isCastExpr == true).
+///
+///       unary-expression:  [C99 6.5.3]
+///         'sizeof' unary-expression
+///         'sizeof' '(' type-name ')'
+/// [GNU]   '__alignof' unary-expression
+/// [GNU]   '__alignof' '(' type-name ')'
+/// [C++0x] 'alignof' '(' type-id ')'
+///
+/// [GNU]   typeof-specifier:
+///           typeof ( expressions )
+///           typeof ( type-name )
+/// [GNU/C++] typeof unary-expression
+///
+Parser::OwningExprResult
+Parser::ParseExprAfterTypeofSizeofAlignof(const Token &OpTok,
+                                          bool &isCastExpr,
+                                          TypeTy *&CastTy,
+                                          SourceRange &CastRange) {
+  
+  assert((OpTok.is(tok::kw_typeof)    || OpTok.is(tok::kw_sizeof) || 
+          OpTok.is(tok::kw___alignof) || OpTok.is(tok::kw_alignof)) &&
+          "Not a typeof/sizeof/alignof expression!");
+
+  OwningExprResult Operand(Actions);
+  
+  // If the operand doesn't start with an '(', it must be an expression.
+  if (Tok.isNot(tok::l_paren)) {
+    isCastExpr = false;
+    if (OpTok.is(tok::kw_typeof) && !getLang().CPlusPlus) {
+      Diag(Tok,diag::err_expected_lparen_after_id) << OpTok.getIdentifierInfo();
+      return ExprError();
+    }
+    
+    // C++0x [expr.sizeof]p1:
+    //   [...] The operand is either an expression, which is an unevaluated 
+    //   operand (Clause 5) [...]
+    //
+    // The GNU typeof and alignof extensions also behave as unevaluated
+    // operands.
+    EnterExpressionEvaluationContext Unevaluated(Actions,
+                                                 Action::Unevaluated);
+    Operand = ParseCastExpression(true/*isUnaryExpression*/);
+  } else {
+    // If it starts with a '(', we know that it is either a parenthesized
+    // type-name, or it is a unary-expression that starts with a compound
+    // literal, or starts with a primary-expression that is a parenthesized
+    // expression.
+    ParenParseOption ExprType = CastExpr;
+    SourceLocation LParenLoc = Tok.getLocation(), RParenLoc;
+    
+    // C++0x [expr.sizeof]p1:
+    //   [...] The operand is either an expression, which is an unevaluated 
+    //   operand (Clause 5) [...]
+    //
+    // The GNU typeof and alignof extensions also behave as unevaluated
+    // operands.
+    EnterExpressionEvaluationContext Unevaluated(Actions,
+                                                 Action::Unevaluated);
+    Operand = ParseParenExpression(ExprType, true/*stopIfCastExpr*/,
+                                   CastTy, RParenLoc);
+    CastRange = SourceRange(LParenLoc, RParenLoc);
+
+    // If ParseParenExpression parsed a '(typename)' sequence only, then this is
+    // a type.
+    if (ExprType == CastExpr) {
+      isCastExpr = true;
+      return ExprEmpty();
+    }
+
+    // If this is a parenthesized expression, it is the start of a 
+    // unary-expression, but doesn't include any postfix pieces.  Parse these
+    // now if present.
+    Operand = ParsePostfixExpressionSuffix(move(Operand));
+  }
+
+  // If we get here, the operand to the typeof/sizeof/alignof was an expresion.
+  isCastExpr = false;
+  return move(Operand);
+}
+
 
 /// ParseSizeofAlignofExpression - Parse a sizeof or alignof expression.
 ///       unary-expression:  [C99 6.5.3]
@@ -926,40 +1040,26 @@ Parser::OwningExprResult Parser::ParseSizeofAlignofExpression() {
   Token OpTok = Tok;
   ConsumeToken();
   
-  // If the operand doesn't start with an '(', it must be an expression.
-  OwningExprResult Operand(Actions);
-  if (Tok.isNot(tok::l_paren)) {
-    Operand = ParseCastExpression(true);
-  } else {
-    // If it starts with a '(', we know that it is either a parenthesized
-    // type-name, or it is a unary-expression that starts with a compound
-    // literal, or starts with a primary-expression that is a parenthesized
-    // expression.
-    ParenParseOption ExprType = CastExpr;
-    TypeTy *CastTy;
-    SourceLocation LParenLoc = Tok.getLocation(), RParenLoc;
-    Operand = ParseParenExpression(ExprType, CastTy, RParenLoc);
+  bool isCastExpr;
+  TypeTy *CastTy;
+  SourceRange CastRange;
+  OwningExprResult Operand = ParseExprAfterTypeofSizeofAlignof(OpTok,
+                                                               isCastExpr,
+                                                               CastTy,
+                                                               CastRange);
 
-    // If ParseParenExpression parsed a '(typename)' sequence only, the this is
-    // sizeof/alignof a type.  Otherwise, it is sizeof/alignof an expression.
-    if (ExprType == CastExpr)
-      return Actions.ActOnSizeOfAlignOfExpr(OpTok.getLocation(),
-                                            OpTok.is(tok::kw_sizeof),
-                                            /*isType=*/true, CastTy,
-                                            SourceRange(LParenLoc, RParenLoc));
-
-    // If this is a parenthesized expression, it is the start of a 
-    // unary-expression, but doesn't include any postfix pieces.  Parse these
-    // now if present.
-    Operand = ParsePostfixExpressionSuffix(move(Operand));
-  }
+  if (isCastExpr)
+    return Actions.ActOnSizeOfAlignOfExpr(OpTok.getLocation(),
+                                          OpTok.is(tok::kw_sizeof),
+                                          /*isType=*/true, CastTy,
+                                          CastRange);
 
   // If we get here, the operand to the sizeof/alignof was an expresion.
   if (!Operand.isInvalid())
     Operand = Actions.ActOnSizeOfAlignOfExpr(OpTok.getLocation(),
                                              OpTok.is(tok::kw_sizeof),
                                              /*isType=*/false,
-                                             Operand.release(), SourceRange());
+                                             Operand.release(), CastRange);
   return move(Operand);
 }
 
@@ -1072,17 +1172,18 @@ Parser::OwningExprResult Parser::ParseBuiltinPrimaryExpression() {
 
         Comps.back().LocEnd =
           MatchRHSPunctuation(tok::r_square, Comps.back().LocStart);
-      } else if (Tok.is(tok::r_paren)) {
-        if (Ty.isInvalid())
+      } else {
+        if (Tok.isNot(tok::r_paren)) {
+          MatchRHSPunctuation(tok::r_paren, LParenLoc);
           Res = ExprError();
-        else
+        } else if (Ty.isInvalid()) {
+          Res = ExprError();
+        } else {
           Res = Actions.ActOnBuiltinOffsetOf(CurScope, StartLoc, TypeLoc, 
                                              Ty.get(), &Comps[0], 
                                              Comps.size(), ConsumeParen());
+        }
         break;
-      } else {
-        // Error occurred.
-        return ExprError();
       }
     }
     break;
@@ -1145,7 +1246,8 @@ Parser::OwningExprResult Parser::ParseBuiltinPrimaryExpression() {
 
 /// ParseParenExpression - This parses the unit that starts with a '(' token,
 /// based on what is allowed by ExprType.  The actual thing parsed is returned
-/// in ExprType.
+/// in ExprType. If stopIfCastExpr is true, it will only return the parsed type,
+/// not the parsed cast-expression.
 ///
 ///       primary-expression: [C99 6.5.1]
 ///         '(' expression ')'
@@ -1157,12 +1259,13 @@ Parser::OwningExprResult Parser::ParseBuiltinPrimaryExpression() {
 ///         '(' type-name ')' cast-expression
 ///
 Parser::OwningExprResult
-Parser::ParseParenExpression(ParenParseOption &ExprType,
+Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
                              TypeTy *&CastTy, SourceLocation &RParenLoc) {
   assert(Tok.is(tok::l_paren) && "Not a paren expr!");
   GreaterThanIsOperatorScope G(GreaterThanIsOperator, true);
   SourceLocation OpenLoc = ConsumeParen();
   OwningExprResult Result(Actions, true);
+  bool isAmbiguousTypeId;
   CastTy = 0;
 
   if (ExprType >= CompoundStmt && Tok.is(tok::l_brace)) {
@@ -1174,8 +1277,20 @@ Parser::ParseParenExpression(ParenParseOption &ExprType,
     if (!Stmt.isInvalid() && Tok.is(tok::r_paren))
       Result = Actions.ActOnStmtExpr(OpenLoc, move(Stmt), Tok.getLocation());
 
-  } else if (ExprType >= CompoundLiteral && isTypeIdInParens()) {
+  } else if (ExprType >= CompoundLiteral &&
+             isTypeIdInParens(isAmbiguousTypeId)) {
+    
     // Otherwise, this is a compound literal expression or cast expression.
+    
+    // In C++, if the type-id is ambiguous we disambiguate based on context.
+    // If stopIfCastExpr is true the context is a typeof/sizeof/alignof
+    // in which case we should treat it as type-id.
+    // if stopIfCastExpr is false, we need to determine the context past the
+    // parens, so we defer to ParseCXXAmbiguousParenExpression for that.
+    if (isAmbiguousTypeId && !stopIfCastExpr)
+      return ParseCXXAmbiguousParenExpression(ExprType, CastTy,
+                                              OpenLoc, RParenLoc);
+    
     TypeResult Ty = ParseTypeName();
 
     // Match the ')'.
@@ -1185,26 +1300,30 @@ Parser::ParseParenExpression(ParenParseOption &ExprType,
       MatchRHSPunctuation(tok::r_paren, OpenLoc);
 
     if (Tok.is(tok::l_brace)) {
-      if (!getLang().C99)   // Compound literals don't exist in C90.
-        Diag(OpenLoc, diag::ext_c99_compound_literal);
-      Result = ParseInitializer();
       ExprType = CompoundLiteral;
-      if (!Result.isInvalid() && !Ty.isInvalid())
-        return Actions.ActOnCompoundLiteral(OpenLoc, Ty.get(), RParenLoc,
-                                            move(Result));
-      return move(Result);
+      return ParseCompoundLiteralExpression(Ty.get(), OpenLoc, RParenLoc);
     }
 
     if (ExprType == CastExpr) {
-      // Note that this doesn't parse the subsequent cast-expression, it just
-      // returns the parsed type to the callee.
-      ExprType = CastExpr;
+      // We parsed '(' type-name ')' and the thing after it wasn't a '{'.
 
       if (Ty.isInvalid())
         return ExprError();
 
       CastTy = Ty.get();
-      return OwningExprResult(Actions);
+
+      if (stopIfCastExpr) {
+        // Note that this doesn't parse the subsequent cast-expression, it just
+        // returns the parsed type to the callee.
+        return OwningExprResult(Actions);
+      }
+
+      // Parse the cast-expression that follows it next.
+      // TODO: For cast expression with CastTy.
+      Result = ParseCastExpression(false);
+      if (!Result.isInvalid())
+        Result = Actions.ActOnCastExpr(OpenLoc, CastTy, RParenLoc,move(Result));
+      return move(Result);
     }
 
     Diag(Tok, diag::err_expected_lbrace_in_compound_literal);
@@ -1227,6 +1346,26 @@ Parser::ParseParenExpression(ParenParseOption &ExprType,
   else
     MatchRHSPunctuation(tok::r_paren, OpenLoc);
 
+  return move(Result);
+}
+
+/// ParseCompoundLiteralExpression - We have parsed the parenthesized type-name
+/// and we are at the left brace.
+///
+///       postfix-expression: [C99 6.5.2]
+///         '(' type-name ')' '{' initializer-list '}'
+///         '(' type-name ')' '{' initializer-list ',' '}'
+///
+Parser::OwningExprResult
+Parser::ParseCompoundLiteralExpression(TypeTy *Ty,
+                                       SourceLocation LParenLoc,
+                                       SourceLocation RParenLoc) {
+  assert(Tok.is(tok::l_brace) && "Not a compound literal!");
+  if (!getLang().C99)   // Compound literals don't exist in C90.
+    Diag(LParenLoc, diag::ext_c99_compound_literal);
+  OwningExprResult Result = ParseInitializer();
+  if (!Result.isInvalid() && Ty)
+    return Actions.ActOnCompoundLiteral(LParenLoc, Ty, RParenLoc, move(Result));
   return move(Result);
 }
 
@@ -1372,7 +1511,8 @@ Parser::OwningExprResult Parser::ParseBlockLiteralExpression() {
     ParamInfo.AddTypeInfo(DeclaratorChunk::getFunction(true, false, 
                                                        SourceLocation(),
                                                        0, 0, 0,
-                                                       false, false, 0, 0,
+                                                       false, SourceLocation(),
+                                                       false, 0, 0, 0,
                                                        CaretLoc, ParamInfo),
                           CaretLoc);
 

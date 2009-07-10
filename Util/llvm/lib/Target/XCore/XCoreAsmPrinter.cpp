@@ -32,6 +32,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -58,9 +59,8 @@ namespace {
     const XCoreSubtarget &Subtarget;
   public:
     explicit XCoreAsmPrinter(raw_ostream &O, XCoreTargetMachine &TM,
-                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                             bool V)
-      : AsmPrinter(O, TM, T, OL, V), DW(0),
+                             const TargetAsmInfo *T, bool V)
+      : AsmPrinter(O, TM, T, V), DW(0),
         Subtarget(*TM.getSubtargetImpl()) {}
 
     virtual const char *getPassName() const {
@@ -106,9 +106,8 @@ namespace {
 ///
 FunctionPass *llvm::createXCoreCodePrinterPass(raw_ostream &o,
                                                XCoreTargetMachine &tm,
-                                               CodeGenOpt::Level OptLevel,
                                                bool verbose) {
-  return new XCoreAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
+  return new XCoreAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
 }
 
 // PrintEscapedString - Print each character of the specified string, escaping
@@ -188,8 +187,7 @@ emitGlobal(const GlobalVariable *GV)
 
     switch (GV->getLinkage()) {
     case GlobalValue::AppendingLinkage:
-      cerr << "AppendingLinkage is not supported by this target!\n";
-      abort();
+      llvm_report_error("AppendingLinkage is not supported by this target!");
     case GlobalValue::LinkOnceAnyLinkage:
     case GlobalValue::LinkOnceODRLinkage:
     case GlobalValue::WeakAnyLinkage:
@@ -206,21 +204,18 @@ emitGlobal(const GlobalVariable *GV)
     case GlobalValue::PrivateLinkage:
       break;
     case GlobalValue::GhostLinkage:
-      cerr << "Should not have any unmaterialized functions!\n";
-      abort();
+      LLVM_UNREACHABLE("Should not have any unmaterialized functions!");
     case GlobalValue::DLLImportLinkage:
-      cerr << "DLLImport linkage is not supported by this target!\n";
-      abort();
+      LLVM_UNREACHABLE("DLLImport linkage is not supported by this target!");
     case GlobalValue::DLLExportLinkage:
-      cerr << "DLLExport linkage is not supported by this target!\n";
-      abort();
+      LLVM_UNREACHABLE("DLLExport linkage is not supported by this target!");
     default:
-      assert(0 && "Unknown linkage type!");
+      LLVM_UNREACHABLE("Unknown linkage type!");
     }
 
     EmitAlignment(Align, GV, 2);
     
-    unsigned Size = TD->getTypePaddedSize(C->getType());
+    unsigned Size = TD->getTypeAllocSize(C->getType());
     if (GV->isThreadLocal()) {
       Size *= MaxThreads;
     }
@@ -244,9 +239,6 @@ emitGlobal(const GlobalVariable *GV)
     
     // Mark the end of the global
     O << "\t.cc_bottom " << name << ".data\n";
-  } else {
-    if (GV->hasExternalWeakLinkage())
-      ExtWeakSymbols.insert(GV);
   }
 }
 
@@ -280,7 +272,7 @@ emitFunctionStart(MachineFunction &MF)
     break;
   }
   // (1 << 1) byte aligned
-  EmitAlignment(1, F, 1);
+  EmitAlignment(MF.getAlignment(), F, 1);
   if (TAI->hasDotTypeDotSizeDirective()) {
     O << "\t.type " << CurrentFnName << ",@function\n";
   }
@@ -375,12 +367,7 @@ void XCoreAsmPrinter::printOperand(const MachineInstr *MI, int opNum) {
     printBasicBlockLabel(MO.getMBB());
     break;
   case MachineOperand::MO_GlobalAddress:
-    {
-      const GlobalValue *GV = MO.getGlobal();
-      O << Mang->getValueName(GV);
-      if (GV->hasExternalWeakLinkage())
-        ExtWeakSymbols.insert(GV);
-    }
+    O << Mang->getValueName(MO.getGlobal());
     break;
   case MachineOperand::MO_ExternalSymbol:
     O << MO.getSymbolName();
@@ -428,32 +415,11 @@ void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
 
 bool XCoreAsmPrinter::doInitialization(Module &M) {
   bool Result = AsmPrinter::doInitialization(M);
-  
-  if (!FileDirective.empty()) {
-    emitFileDirective(FileDirective);
-  }
-  
-  // Print out type strings for external functions here
-  for (Module::const_iterator I = M.begin(), E = M.end();
-       I != E; ++I) {
-    if (I->isDeclaration() && !I->isIntrinsic()) {
-      switch (I->getLinkage()) {
-      default:
-        assert(0 && "Unexpected linkage");
-      case Function::ExternalWeakLinkage:
-        ExtWeakSymbols.insert(I);
-        // fallthrough
-      case Function::ExternalLinkage:
-        break;
-      }
-    }
-  }
-
-  // Emit initial debug information.
   DW = getAnalysisIfAvailable<DwarfWriter>();
-  assert(DW && "Dwarf Writer is not available");
-  DW->BeginModule(&M, getAnalysisIfAvailable<MachineModuleInfo>(),
-                  O, this, TAI);
+  
+  if (!FileDirective.empty())
+    emitFileDirective(FileDirective);
+
   return Result;
 }
 
@@ -465,8 +431,5 @@ bool XCoreAsmPrinter::doFinalization(Module &M) {
     emitGlobal(I);
   }
   
-  // Emit final debug information.
-  DW->EndModule();
-
   return AsmPrinter::doFinalization(M);
 }

@@ -20,6 +20,19 @@
 #include "ParsePragma.h"
 using namespace clang;
 
+/// \brief A comment handler that passes comments found by the preprocessor
+/// to the parser action.
+class ActionCommentHandler : public CommentHandler {
+  Action &Actions;
+  
+public:
+  explicit ActionCommentHandler(Action &Actions) : Actions(Actions) { }
+  
+  virtual void HandleComment(Preprocessor &PP, SourceRange Comment) {
+    Actions.ActOnComment(Comment);
+  }
+};
+
 Parser::Parser(Preprocessor &pp, Action &actions)
   : CrashInfo(*this), PP(pp), Actions(actions), Diags(PP.getDiagnostics()), 
     GreaterThanIsOperator(true) {
@@ -40,8 +53,12 @@ Parser::Parser(Preprocessor &pp, Action &actions)
                               *this));
   PP.AddPragmaHandler(0, UnusedHandler.get());
 
-  // Instantiate a LexedMethodsForTopClass for all the non-nested classes.
-  PushTopClassStack();
+  WeakHandler.reset(new
+          PragmaWeakHandler(&PP.getIdentifierTable().get("weak"), actions));
+  PP.AddPragmaHandler(0, WeakHandler.get());
+      
+  CommentHandler.reset(new ActionCommentHandler(actions));
+  PP.AddCommentHandler(CommentHandler.get());    
 }
 
 /// If a crash happens while the parser is active, print out a line indicating
@@ -291,6 +308,9 @@ Parser::~Parser() {
   PackHandler.reset();
   PP.RemovePragmaHandler(0, UnusedHandler.get());
   UnusedHandler.reset();
+  PP.RemovePragmaHandler(0, WeakHandler.get());
+  WeakHandler.reset();
+  PP.RemoveCommentHandler(CommentHandler.get());
 }
 
 /// Initialize - Warm up the parser.
@@ -437,6 +457,29 @@ Parser::DeclGroupPtrTy Parser::ParseExternalDeclaration() {
   return Actions.ConvertDeclToDeclGroup(SingleDecl);
 }
 
+/// \brief Determine whether the current token, if it occurs after a
+/// declarator, continues a declaration or declaration list.
+bool Parser::isDeclarationAfterDeclarator() {
+  return Tok.is(tok::equal) ||      // int X()=  -> not a function def
+    Tok.is(tok::comma) ||           // int X(),  -> not a function def
+    Tok.is(tok::semi)  ||           // int X();  -> not a function def
+    Tok.is(tok::kw_asm) ||          // int X() __asm__ -> not a function def
+    Tok.is(tok::kw___attribute) ||  // int X() __attr__ -> not a function def
+    (getLang().CPlusPlus &&
+     Tok.is(tok::l_paren));         // int X(0) -> not a function def [C++]
+}
+
+/// \brief Determine whether the current token, if it occurs after a
+/// declarator, indicates the start of a function definition.
+bool Parser::isStartOfFunctionDefinition() {
+  return Tok.is(tok::l_brace) ||    // int X() {}
+    (!getLang().CPlusPlus && 
+     isDeclarationSpecifier()) ||   // int X(f) int f; {}
+    (getLang().CPlusPlus &&
+     (Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
+      Tok.is(tok::kw_try)));        // X() try { ... }
+}
+
 /// ParseDeclarationOrFunctionDefinition - Parse either a function-definition or
 /// a declaration.  We can't tell which we have until we read up to the
 /// compound-statement in function-definition. TemplateParams, if
@@ -454,12 +497,10 @@ Parser::DeclGroupPtrTy Parser::ParseExternalDeclaration() {
 /// [OMP]   threadprivate-directive                              [TODO]
 ///
 Parser::DeclGroupPtrTy
-Parser::ParseDeclarationOrFunctionDefinition(
-                                  TemplateParameterLists *TemplateParams,
-                                  AccessSpecifier AS) {
+Parser::ParseDeclarationOrFunctionDefinition(AccessSpecifier AS) {
   // Parse the common declaration-specifiers piece.
   DeclSpec DS;
-  ParseDeclarationSpecifiers(DS, TemplateParams, AS);
+  ParseDeclarationSpecifiers(DS, ParsedTemplateInfo(), AS);
 
   // C99 6.7.2.3p6: Handle "struct-or-union identifier;", "enum { X };"
   // declaration-specifiers init-declarator-list[opt] ';'
@@ -514,14 +555,8 @@ Parser::ParseDeclarationOrFunctionDefinition(
     return DeclGroupPtrTy();
   }
 
-  // If the declarator is the start of a function definition, handle it.
-  if (Tok.is(tok::equal) ||           // int X()=  -> not a function def
-      Tok.is(tok::comma) ||           // int X(),  -> not a function def
-      Tok.is(tok::semi)  ||           // int X();  -> not a function def
-      Tok.is(tok::kw_asm) ||          // int X() __asm__ -> not a function def
-      Tok.is(tok::kw___attribute) ||  // int X() __attr__ -> not a function def
-      (getLang().CPlusPlus &&
-       Tok.is(tok::l_paren))) {       // int X(0) -> not a function def [C++]
+  // If we have a declaration or declarator list, handle it.
+  if (isDeclarationAfterDeclarator()) {
     // Parse the init-declarator-list for a normal declaration.
     DeclGroupPtrTy DG =
       ParseInitDeclaratorListAfterFirstDeclarator(DeclaratorInfo);
@@ -530,14 +565,8 @@ Parser::ParseDeclarationOrFunctionDefinition(
     return DG;
   }
   
-  
   if (DeclaratorInfo.isFunctionDeclarator() &&
-             (Tok.is(tok::l_brace) ||             // int X() {}
-              (!getLang().CPlusPlus &&
-               isDeclarationSpecifier()) ||   // int X(f) int f; {}
-              (getLang().CPlusPlus &&
-               (Tok.is(tok::colon) ||     // X() : Base() {} (used for ctors)
-                Tok.is(tok::kw_try))))) { // X() try { ... }
+      isStartOfFunctionDefinition()) {
     if (DS.getStorageClassSpec() == DeclSpec::SCS_typedef) {
       Diag(Tok, diag::err_function_declared_typedef);
 
@@ -578,7 +607,8 @@ Parser::ParseDeclarationOrFunctionDefinition(
 /// [C++] function-definition: [C++ 8.4]
 ///         decl-specifier-seq[opt] declarator function-try-block
 ///
-Parser::DeclPtrTy Parser::ParseFunctionDefinition(Declarator &D) {
+Parser::DeclPtrTy Parser::ParseFunctionDefinition(Declarator &D,
+                                     const ParsedTemplateInfo &TemplateInfo) {
   const DeclaratorChunk &FnTypeInfo = D.getTypeObject(0);
   assert(FnTypeInfo.Kind == DeclaratorChunk::Function &&
          "This isn't a function declarator!");
@@ -620,7 +650,13 @@ Parser::DeclPtrTy Parser::ParseFunctionDefinition(Declarator &D) {
 
   // Tell the actions module that we have entered a function definition with the
   // specified Declarator for the function.
-  DeclPtrTy Res = Actions.ActOnStartOfFunctionDef(CurScope, D);
+  DeclPtrTy Res = TemplateInfo.TemplateParams? 
+      Actions.ActOnStartOfFunctionTemplateDef(CurScope,
+                              Action::MultiTemplateParamsArg(Actions,
+                                          TemplateInfo.TemplateParams->data(),
+                                         TemplateInfo.TemplateParams->size()),
+                                              D)
+    : Actions.ActOnStartOfFunctionDef(CurScope, D);
 
   if (Tok.is(tok::kw_try))
     return ParseFunctionTryBlock(Res);
@@ -820,7 +856,8 @@ Parser::OwningExprResult Parser::ParseSimpleAsm(SourceLocation *EndLoc) {
 /// specifier, and another one to get the actual type inside
 /// ParseDeclarationSpecifiers).
 ///
-/// This returns true if the token was annotated.
+/// This returns true if the token was annotated or an unrecoverable error
+/// occurs.
 /// 
 /// Note that this routine emits an error if you call it with ::new or ::delete
 /// as the current tokens, so only call it in contexts where these are invalid.
@@ -915,7 +952,12 @@ bool Parser::TryAnnotateTypeOrScopeToken() {
       if (TemplateNameKind TNK 
             = Actions.isTemplateName(*Tok.getIdentifierInfo(),
                                      CurScope, Template, &SS))
-        AnnotateTemplateIdToken(Template, TNK, &SS);
+        if (AnnotateTemplateIdToken(Template, TNK, &SS)) {
+          // If an unrecoverable error occurred, we need to return true here,
+          // because the token stream is in a damaged state.  We may not return
+          // a valid identifier.
+          return Tok.isNot(tok::identifier);
+        }
     }
 
     // The current token, which is either an identifier or a
@@ -938,7 +980,7 @@ bool Parser::TryAnnotateTypeOrScopeToken() {
   }
 
   if (SS.isEmpty())
-    return false;
+    return Tok.isNot(tok::identifier) && Tok.isNot(tok::coloncolon);
   
   // A C++ scope specifier that isn't followed by a typename.
   // Push the current token back into the token stream (or revert it if it is
@@ -959,7 +1001,8 @@ bool Parser::TryAnnotateTypeOrScopeToken() {
 
 /// TryAnnotateScopeToken - Like TryAnnotateTypeOrScopeToken but only
 /// annotates C++ scope specifiers and template-ids.  This returns
-/// true if the token was annotated.
+/// true if the token was annotated or there was an error that could not be
+/// recovered from.
 /// 
 /// Note that this routine emits an error if you call it with ::new or ::delete
 /// as the current tokens, so only call it in contexts where these are invalid.

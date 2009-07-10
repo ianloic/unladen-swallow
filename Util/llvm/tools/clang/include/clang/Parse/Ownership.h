@@ -14,6 +14,7 @@
 #ifndef LLVM_CLANG_PARSE_OWNERSHIP_H
 #define LLVM_CLANG_PARSE_OWNERSHIP_H
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/PointerIntPair.h"
 
 //===----------------------------------------------------------------------===//
@@ -573,6 +574,19 @@ namespace clang {
 #if !defined(DISABLE_SMART_POINTERS)
     friend class moving::ASTMultiMover<Destroyer>;
 
+#if defined(_MSC_VER)
+    //  Last tested with Visual Studio 2008.
+    //  Visual C++ appears to have a bug where it does not recognise
+    //  the return value from ASTMultiMover<Destroyer>::opeator-> as
+    //  being a pointer to ASTMultiPtr.  However, the diagnostics
+    //  suggest it has the right name, simply that the pointer type
+    //  is not convertible to itself.
+    //  Either way, a classic C-style hard cast resolves any issue.
+     static ASTMultiPtr* hack(moving::ASTMultiMover<Destroyer> & source) {
+       return (ASTMultiPtr*)source.operator->();
+	}
+#endif
+
     ASTMultiPtr(ASTMultiPtr&); // DO NOT IMPLEMENT
     // Reference member prevents copy assignment.
 
@@ -593,7 +607,13 @@ namespace clang {
       : Actions(actions), Nodes(nodes), Count(count) {}
     /// Move constructor
     ASTMultiPtr(moving::ASTMultiMover<Destroyer> mover)
+#if defined(_MSC_VER)
+    //  Apply the visual C++ hack supplied above.  
+    //  Last tested with Visual Studio 2008.
+      : Actions(hack(mover)->Actions), Nodes(hack(mover)->Nodes), Count(hack(mover)->Count) {
+#else
       : Actions(mover->Actions), Nodes(mover->Nodes), Count(mover->Count) {
+#endif
       mover.release();
     }
 #else
@@ -721,6 +741,63 @@ namespace clang {
       return Args;
     }
   };
+
+  /// \brief A small vector that owns a set of AST nodes.
+  template <ASTDestroyer Destroyer, unsigned N = 8>
+  class ASTOwningVector : public llvm::SmallVector<void *, N> {
+#if !defined(DISABLE_SMART_POINTERS)
+    ActionBase &Actions;
+    bool Owned;
+#endif
+
+    ASTOwningVector(ASTOwningVector &); // do not implement
+    ASTOwningVector &operator=(ASTOwningVector &); // do not implement
+
+  public:
+    explicit ASTOwningVector(ActionBase &Actions) 
+#if !defined(DISABLE_SMART_POINTERS)
+      : Actions(Actions), Owned(true)
+#endif
+    { }
+
+#if !defined(DISABLE_SMART_POINTERS)
+    ~ASTOwningVector() {
+      if (!Owned)
+        return;
+
+      for (unsigned I = 0, Last = this->size(); I != Last; ++I)
+        (Actions.*Destroyer)((*this)[I]);
+    }
+#endif
+
+    void **take() {
+#if !defined(DISABLE_SMART_POINTERS)
+      Owned = false;
+#endif
+      return &this->front();
+    }
+
+    template<typename T> T **takeAs() { return (T**)take(); }
+
+#if !defined(DISABLE_SMART_POINTERS)
+    ActionBase &getActions() const { return Actions; }
+#endif
+  };
+
+  /// A SmallVector of statements, with stack size 32 (as that is the only one
+  /// used.)
+  typedef ASTOwningVector<&ActionBase::DeleteStmt, 32> StmtVector;
+  /// A SmallVector of expressions, with stack size 12 (the maximum used.)
+  typedef ASTOwningVector<&ActionBase::DeleteExpr, 12> ExprVector;
+
+  template <ASTDestroyer Destroyer, unsigned N> inline
+  ASTMultiPtr<Destroyer> move_arg(ASTOwningVector<Destroyer, N> &vec) {
+#if !defined(DISABLE_SMART_POINTERS)
+    return ASTMultiPtr<Destroyer>(vec.getActions(), vec.take(), vec.size());
+#else
+    return ASTMultiPtr<Destroyer>(vec.take(), vec.size());
+#endif
+  }
 
 #if !defined(DISABLE_SMART_POINTERS)
 

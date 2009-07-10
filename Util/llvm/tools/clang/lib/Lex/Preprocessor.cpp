@@ -51,7 +51,7 @@ Preprocessor::Preprocessor(Diagnostic &diags, const LangOptions &opts,
                            IdentifierInfoLookup* IILookup)
   : Diags(&diags), Features(opts), Target(target),FileMgr(Headers.getFileMgr()),
     SourceMgr(SM), HeaderInfo(Headers), Identifiers(opts, IILookup),
-    CurPPLexer(0), CurDirLookup(0), Callbacks(0) {
+    BuiltinInfo(Target), CurPPLexer(0), CurDirLookup(0), Callbacks(0) {
   ScratchBuf = new ScratchBuffer(SourceMgr);
   CounterValue = 0; // __COUNTER__ starts at 0.
       
@@ -476,3 +476,26 @@ void Preprocessor::HandleIdentifier(Token &Identifier) {
   if (II.isExtensionToken() && !DisableMacroExpansion)
     Diag(Identifier, diag::ext_token_used);
 }
+
+void Preprocessor::AddCommentHandler(CommentHandler *Handler) {
+  assert(Handler && "NULL comment handler");
+  assert(std::find(CommentHandlers.begin(), CommentHandlers.end(), Handler) ==
+         CommentHandlers.end() && "Comment handler already registered");
+  CommentHandlers.push_back(Handler);
+}
+
+void Preprocessor::RemoveCommentHandler(CommentHandler *Handler) {
+  std::vector<CommentHandler *>::iterator Pos
+  = std::find(CommentHandlers.begin(), CommentHandlers.end(), Handler);
+  assert(Pos != CommentHandlers.end() && "Comment handler not registered");
+  CommentHandlers.erase(Pos);
+}
+
+void Preprocessor::HandleComment(SourceRange Comment) {
+  for (std::vector<CommentHandler *>::iterator H = CommentHandlers.begin(),
+       HEnd = CommentHandlers.end();
+       H != HEnd; ++H)
+    (*H)->HandleComment(*this, Comment);
+}
+
+CommentHandler::~CommentHandler() { }

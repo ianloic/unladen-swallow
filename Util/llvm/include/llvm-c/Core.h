@@ -47,6 +47,11 @@ extern "C" {
 /* Opaque types. */
 
 /**
+ * The top-level container for all LLVM global data.  See the LLVMContext class.
+ */
+typedef struct LLVMCtxt *LLVMContextRef;
+
+/**
  * The top-level container for all other LLVM Intermediate Representation (IR)
  * objects. See the llvm::Module class.
  */
@@ -188,9 +193,16 @@ void LLVMDisposeMessage(char *Message);
 
 /*===-- Modules -----------------------------------------------------------===*/
 
+/* Create and destroy contexts. */
+LLVMContextRef LLVMContextCreate();
+LLVMContextRef LLVMGetGlobalContext();
+void LLVMContextDispose(LLVMContextRef C);
+
 /* Create and destroy modules. */ 
 /** See llvm::Module::Module. */
 LLVMModuleRef LLVMModuleCreateWithName(const char *ModuleID);
+LLVMModuleRef LLVMModuleCreateWithNameInContext(const char *ModuleID,
+                                                LLVMContextRef C);
 
 /** See llvm::Module::~Module. */
 void LLVMDisposeModule(LLVMModuleRef M);
@@ -206,6 +218,7 @@ void LLVMSetTarget(LLVMModuleRef M, const char *Triple);
 /** See Module::addTypeName. */
 int LLVMAddTypeName(LLVMModuleRef M, const char *Name, LLVMTypeRef Ty);
 void LLVMDeleteTypeName(LLVMModuleRef M, const char *Name);
+LLVMTypeRef LLVMGetTypeByName(LLVMModuleRef M, const char *Name);
 
 /** See Module::dump. */
 void LLVMDumpModule(LLVMModuleRef M);
@@ -328,8 +341,6 @@ void LLVMDisposeTypeHandle(LLVMTypeHandleRef TypeHandle);
       macro(CmpInst)                        \
       macro(FCmpInst)                       \
       macro(ICmpInst)                       \
-      macro(VFCmpInst)                      \
-      macro(VICmpInst)                      \
       macro(ExtractElementInst)             \
       macro(GetElementPtrInst)              \
       macro(InsertElementInst)              \
@@ -386,6 +397,7 @@ LLVMValueRef LLVMGetUndef(LLVMTypeRef Ty);
 int LLVMIsConstant(LLVMValueRef Val);
 int LLVMIsNull(LLVMValueRef Val);
 int LLVMIsUndef(LLVMValueRef Val);
+LLVMValueRef LLVMConstPointerNull(LLVMTypeRef Ty);
 
 /* Operations on scalar constants */
 LLVMValueRef LLVMConstInt(LLVMTypeRef IntTy, unsigned long long N,
@@ -504,6 +516,8 @@ unsigned LLVMGetFunctionCallConv(LLVMValueRef Fn);
 void LLVMSetFunctionCallConv(LLVMValueRef Fn, unsigned CC);
 const char *LLVMGetGC(LLVMValueRef Fn);
 void LLVMSetGC(LLVMValueRef Fn, const char *Name);
+void LLVMAddFunctionAttr(LLVMValueRef Fn, LLVMAttribute PA);
+void LLVMRemoveFunctionAttr(LLVMValueRef Fn, LLVMAttribute PA);
 
 /* Operations on parameters */
 unsigned LLVMCountParams(LLVMValueRef Fn);
@@ -813,6 +827,7 @@ namespace llvm {
   DEFINE_SIMPLE_CONVERSION_FUNCTIONS(PATypeHolder,       LLVMTypeHandleRef    )
   DEFINE_SIMPLE_CONVERSION_FUNCTIONS(ModuleProvider,     LLVMModuleProviderRef)
   DEFINE_SIMPLE_CONVERSION_FUNCTIONS(MemoryBuffer,       LLVMMemoryBufferRef  )
+  DEFINE_SIMPLE_CONVERSION_FUNCTIONS(LLVMContext,        LLVMContextRef       )
   DEFINE_STDCXX_CONVERSION_FUNCTIONS(PassManagerBase,    LLVMPassManagerRef   )
   
   #undef DEFINE_STDCXX_CONVERSION_FUNCTIONS

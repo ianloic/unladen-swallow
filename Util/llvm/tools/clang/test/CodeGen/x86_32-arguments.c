@@ -47,12 +47,10 @@ void f8_2(struct s8 a0) {
 
 // This should be passed just as s8.
 
-// FIXME: This is wrong, but we want the coverage of the other
-// tests. This should be the same as @f8_1.
-// RUN: grep 'define void @f9_1(%.truct.s9\* noalias sret %agg.result)' %t &&
+// RUN: grep 'define i64 @f9_1()' %t &&
 
-// FIXME: This is wrong, but we want the coverage of the other
-// tests. This should be the same as @f8_2.
+// FIXME: llvm-gcc expands this, this may have some value for the
+// backend in terms of optimization but doesn't change the ABI.
 // RUN: grep 'define void @f9_2(%.truct.s9\* byval %a0)' %t &&
 struct s9 {
   int a : 17;
@@ -96,11 +94,11 @@ T16 f16(void) {}
 // 128-bits).
 
 // RUN: grep 'i32 @f17()' %t &&
-// RUN: grep -F 'void @f18(%3* noalias sret %agg.result)' %t &&
-// RUN: grep -F 'void @f19(%4* noalias sret %agg.result)' %t &&
-// RUN: grep -F 'void @f20(%5* noalias sret %agg.result)' %t &&
-// RUN: grep -F 'void @f21(%6* noalias sret %agg.result)' %t &&
-// RUN: grep -F 'void @f22(%7* noalias sret %agg.result)' %t &&
+// RUN: grep -F 'void @f18(%2* noalias sret %agg.result)' %t &&
+// RUN: grep -F 'void @f19(%3* noalias sret %agg.result)' %t &&
+// RUN: grep -F 'void @f20(%4* noalias sret %agg.result)' %t &&
+// RUN: grep -F 'void @f21(%5* noalias sret %agg.result)' %t &&
+// RUN: grep -F 'void @f22(%6* noalias sret %agg.result)' %t &&
 struct { T11 a; } f17(void) {}
 struct { T12 a; } f18(void) {}
 struct { T13 a; } f19(void) {}
@@ -120,10 +118,45 @@ struct { struct {} a; struct { float a[1]; } b; } f25(void) {}
 // Small structures are handled recursively
 // RUN: grep -F 'i32 @f26()' %t &&
 // RUN: grep 'void @f27(%.truct.s27\* noalias sret %agg.result)' %t &&
-struct s26 { struct { char a, b; } a; struct { char a, b } b; } f26(void) {}
-struct s27 { struct { char a, b, c; } a; struct { char a } b; } f27(void) {}
+struct s26 { struct { char a, b; } a; struct { char a, b; } b; } f26(void) {}
+struct s27 { struct { char a, b, c; } a; struct { char a; } b; } f27(void) {}
 
 // RUN: grep 'void @f28(%.truct.s28\* noalias sret %agg.result)' %t &&
-struct s28 { int a; int b[] } f28(void) {}
+struct s28 { int a; int b[]; } f28(void) {}
+
+// RUN: grep 'define i16 @f29()' %t &&
+struct s29 { struct { } a[1]; char b; char c; } f29(void) {}
+
+// RUN: grep 'define i16 @f30()' %t &&
+struct s30 { char a; char b : 4; } f30(void) {}
+
+// RUN: grep 'define float @f31()' %t &&
+struct s31 { char : 0; float b; char : 0; } f31(void) {}
+
+// RUN: grep 'define i32 @f32()' %t &&
+struct s32 { char a; unsigned : 0; } f32(void) {}
+
+// RUN: grep 'define float @f33()' %t &&
+struct s33 { float a; long long : 0; } f33(void) {}
+
+// RUN: grep 'define float @f34()' %t &&
+struct s34 { struct { int : 0; } a; float b; } f34(void) {}
+
+// RUN: grep 'define i16 @f35()' %t &&
+struct s35 { struct { int : 0; } a; char b; char c; } f35(void) {}
+
+// RUN: grep 'define i16 @f36()' %t &&
+struct s36 { struct { int : 0; } a[2][10]; char b; char c; } f36(void) {}
+
+// RUN: grep 'define float @f37()' %t &&
+struct s37 { float c[1][1]; } f37(void) {}
+
+// RUN: grep 'define void @f38(.struct.s38. noalias sret .agg.result)' %t &&
+struct s38 { char a[3]; short b; } f38(void) {}
+
+// RUN: grep 'define void @f39(.struct.s39. byval align 16 .x)' %t &&
+typedef int v39 __attribute((vector_size(16)));
+struct s39 { v39 x; };
+void f39(struct s39 x) {}
 
 // RUN: true

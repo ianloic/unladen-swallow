@@ -100,10 +100,18 @@ def err_expected_comma : Error<"expected ','">;
 def err_expected_lbrace_in_compound_literal : Error<
   "expected '{' in compound literal">;
 def err_expected_while : Error<"expected 'while' in do/while loop">;
+
 def err_expected_semi_after : Error<"expected ';' after %0">;
+def err_expected_semi_after_stmt : Error<"expected ';' after %0 statement">;
 def err_expected_semi_after_expr : Error<"expected ';' after expression">;
 def err_expected_semi_after_method_proto : Error<
   "expected ';' after method prototype">;
+def err_expected_semi_after_namespace_name : Error<
+  "expected ';' after namespace name">;
+def err_unexpected_namespace_attributes_alias : Error<
+  "attributes can not be specified on namespace alias">;
+def err_expected_semi_after_attribute_list : Error<
+  "expected ';' after attribute list">;
 def err_expected_semi_after_static_assert : Error<
   "expected ';' after static_assert">;
 def err_expected_semi_for : Error<"expected ';' in 'for' statement specifier">;
@@ -146,6 +154,10 @@ def err_unknown_typename : Error<
   "unknown type name %0">;
 def err_use_of_tag_name_without_tag : Error<
   "use of tagged type %0 without '%1' tag">;
+def err_expected_ident_in_using : Error<
+  "expected an identifier in using directive">;
+def err_unexpected_template_spec_in_using : Error<
+  "use of template specialization in using directive not allowed">;
 
 
 /// Objective-C parser diagnostics
@@ -206,6 +218,8 @@ def ext_ellipsis_exception_spec : Extension<
   "exception specification of '...' is a Microsoft extension">;
 def err_expected_catch : Error<"expected catch">;
 def err_expected_lbrace_or_comma : Error<"expected '{' or ','">;
+def err_using_namespace_in_class : Error<
+  "'using namespace' in class not allowed">;
 
 // C++ derived classes
 def err_dup_virtual : Error<"duplicate 'virtual' in base specifier">;
@@ -240,6 +254,14 @@ def err_two_right_angle_brackets_need_space : Error<
 def warn_cxx0x_right_shift_in_template_arg : Warning<
   "use of right-shift operator ('>>') in template argument will require "
   "parentheses in C++0x">;
+def err_multiple_template_declarators : Error<
+    "%select{|a template declaration|an explicit template specialization|"
+    "an explicit template instantiation}0 can "
+    "only %select{|declare|declare|instantiate}0 a single entity">;
+def err_explicit_instantiation_with_definition : Error<
+    "explicit template instantiation cannot have a definition; if this "
+    "definition is meant to be an explicit specialization, add '<>' after the "
+    "'template' keyword">;
 
 def err_expected_qualified_after_typename : Error<
   "expected a qualified name after 'typename'">;
@@ -247,6 +269,9 @@ def err_typename_refers_to_non_type_template : Error<
   "typename specifier refers to a non-template">;
 def err_expected_type_name_after_typename : Error<
   "expected an identifier or template-id after '::'">;
+
+def err_variadic_templates : Error<
+  "variadic templates are only allowed in C++0x">;
 
 // Language specific pragmas
 // - Generic warnings
@@ -256,6 +281,8 @@ def warn_pragma_expected_rparen : Warning<
   "missing ')' after '#pragma %0' - ignoring">;
 def warn_pragma_expected_identifier : Warning<
   "expected identifier in '#pragma %0' - ignored">;  
+def warn_pragma_extra_tokens_at_eol : Warning<
+  "extra tokens at end of '#pragma %0' - ignored">; 
 // - #pragma pack
 def warn_pragma_pack_invalid_action : Warning<
   "unknown action for '#pragma pack' - ignored">;
@@ -268,5 +295,5 @@ def warn_pragma_unused_expected_var : Warning<
   "expected '#pragma unused' argument to be a variable name">;
 def warn_pragma_unused_expected_punc : Warning<
   "expected ')' or ',' in '#pragma unused'">;
-  
+
 } // end of Parser diagnostics

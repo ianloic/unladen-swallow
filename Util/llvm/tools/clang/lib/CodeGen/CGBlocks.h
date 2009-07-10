@@ -98,6 +98,9 @@ public:
   llvm::Value *BlockObjectDispose;
   const llvm::Type *PtrToInt8Ty;
 
+  std::map<uint64_t, llvm::Constant *> AssignCache;
+  std::map<uint64_t, llvm::Constant *> DestroyCache;
+
   BlockModule(ASTContext &C, llvm::Module &M, const llvm::TargetData &TD,
               CodeGenTypes &T, CodeGenModule &CodeGen)
     : Context(C), TheModule(M), TheTargetData(TD), Types(T),
@@ -131,8 +134,9 @@ public:
                                       variable */
     BLOCK_FIELD_IS_WEAK     = 16,  /* declared __weak, only used in byref copy
                                       helpers */
-    BLOCK_BYREF_CALLER      = 128  /* called from __block (byref) copy/dispose
+    BLOCK_BYREF_CALLER      = 128,  /* called from __block (byref) copy/dispose
                                       support routines */
+    BLOCK_BYREF_CURRENT_MAX = 256
   };
 
   /// BlockInfo - Information to generate a block literal.
@@ -140,7 +144,7 @@ public:
     /// BlockLiteralTy - The type of the block literal.
     const llvm::Type *BlockLiteralTy;
 
-    /// Name - the name of the function this block was created for, if any
+    /// Name - the name of the function this block was created for, if any.
     const char *Name;
 
     /// ByCopyDeclRefs - Variables from parent scopes that have been imported
@@ -152,7 +156,11 @@ public:
     llvm::SmallVector<const BlockDeclRefExpr *, 8> ByRefDeclRefs;
     
     BlockInfo(const llvm::Type *blt, const char *n)
-      : BlockLiteralTy(blt), Name(n) {}
+      : BlockLiteralTy(blt), Name(n) {
+      // Skip asm prefix, if any.
+      if (Name && Name[0] == '\01')
+        ++Name;
+    }
   };
 
   CGBuilderTy &Builder;
@@ -195,8 +203,10 @@ public:
   llvm::Constant *GeneratebyrefCopyHelperFunction(const llvm::Type *, int flag);
   llvm::Constant *GeneratebyrefDestroyHelperFunction(const llvm::Type *T, int);
 
-  llvm::Constant *BuildbyrefCopyHelper(const llvm::Type *T, int flag);
-  llvm::Constant *BuildbyrefDestroyHelper(const llvm::Type *T, int flag);
+  llvm::Constant *BuildbyrefCopyHelper(const llvm::Type *T, int flag,
+                                       unsigned Align);
+  llvm::Constant *BuildbyrefDestroyHelper(const llvm::Type *T, int flag,
+                                          unsigned Align);
 
   llvm::Value *getBlockObjectAssign();
   llvm::Value *getBlockObjectDispose();

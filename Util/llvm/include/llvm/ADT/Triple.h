@@ -49,9 +49,12 @@ public:
   enum OSType {
     UnknownOS,
 
+    AuroraUX,
     Darwin,
+    DragonFly,
     FreeBSD,
-    Linux
+    Linux,
+    OpenBSD
   };
   
 private:
@@ -75,6 +78,13 @@ public:
   
   Triple() : Data(""), Arch(InvalidArch) {}
   explicit Triple(const char *Str) : Data(Str), Arch(InvalidArch) {}
+  explicit Triple(const char *ArchStr, const char *VendorStr, const char *OSStr)
+    : Data(ArchStr), Arch(InvalidArch) {
+    Data += '-';
+    Data += VendorStr;
+    Data += '-';
+    Data += OSStr;
+  }
 
   /// @}
   /// @name Typed Component Access

@@ -81,7 +81,9 @@ class Parser {
 
   llvm::OwningPtr<PragmaHandler> PackHandler;
   llvm::OwningPtr<PragmaHandler> UnusedHandler;
-
+  llvm::OwningPtr<PragmaHandler> WeakHandler;
+  llvm::OwningPtr<clang::CommentHandler> CommentHandler;
+  
   /// Whether the '>' token acts as an operator or not. This will be
   /// true except when we are parsing an expression within a C++
   /// template argument list, where the '>' closes the template
@@ -103,7 +105,7 @@ class Parser {
       GreaterThanIsOperator = OldGreaterThanIsOperator;
     }
   };
-
+  
 public:
   Parser(Preprocessor &PP, Action &Actions);
   ~Parser();
@@ -141,6 +143,7 @@ public:
 
   typedef Action::ExprArg ExprArg;
   typedef Action::MultiStmtArg MultiStmtArg;
+  typedef Action::FullExprArg FullExprArg;
 
   /// Adorns a ExprResult with Actions to make it an OwningExprResult
   OwningExprResult Owned(ExprResult res) {
@@ -156,6 +159,8 @@ public:
 
   OwningExprResult ExprError(const DiagnosticBuilder &) { return ExprError(); }
   OwningStmtResult StmtError(const DiagnosticBuilder &) { return StmtError(); }
+
+  OwningExprResult ExprEmpty() { return OwningExprResult(Actions, false); }
 
   // Parsing methods.
   
@@ -509,11 +514,26 @@ private:
   /// nested classes are lexed and stored here.
   typedef std::list<LexedMethod> LexedMethodsForTopClass;
 
+  /// \brief Representation of a class that has been parsed, including
+  /// any member function declarations or definitions that need to be
+  /// parsed after the corresponding top-level class is complete.
+  struct ParsingClass {
+    ParsingClass(DeclPtrTy TagOrTemplate, bool TopLevelClass) 
+      : TopLevelClass(TopLevelClass), TemplateScope(false), 
+        TagOrTemplate(TagOrTemplate) { }
 
-  /// TopClass - Contains information about parts of the top
-  /// (non-nested) C++ class that will need to be parsed after the
-  /// class is fully defined.
-  struct TopClass {
+    /// \brief Whether this is a "top-level" class, meaning that it is
+    /// not nested within another class.
+    bool TopLevelClass : 1;
+
+    /// \brief Whether this class had an associated template
+    /// scope. When true, TagOrTemplate is a template declaration;
+    /// othewise, it is a tag declaration.
+    bool TemplateScope : 1;
+
+    /// \brief The class or class template whose definition we are parsing.
+    DeclPtrTy TagOrTemplate;
+
     /// MethodDecls - Method declarations that contain pieces whose
     /// parsing will be delayed until the class is fully defined.
     LateParsedMethodDecls MethodDecls;
@@ -521,40 +541,104 @@ private:
     /// MethodDefs - Methods whose definitions will be parsed once the
     /// class has been fully defined.
     LexedMethodsForTopClass MethodDefs;
+
+    /// \brief Nested classes inside this class.
+    llvm::SmallVector<ParsingClass*, 4> NestedClasses;
   };
 
-  /// TopClassStacks - This is initialized with one TopClass used
-  /// for lexing all top classes, until a local class in an inline method is
-  /// encountered, at which point a new TopClass is pushed here
-  /// and used until the parsing of that local class is finished.
-  std::stack<TopClass> TopClassStacks;
+  /// \brief The stack of classes that is currently being
+  /// parsed. Nested and local classes will be pushed onto this stack
+  /// when they are parsed, and removed afterward.
+  std::stack<ParsingClass *> ClassStack;
 
-  TopClass &getCurTopClassStack() {
-    assert(!TopClassStacks.empty() && "No lexed method stacks!");
-    return TopClassStacks.top();
+  ParsingClass &getCurrentClass() {
+    assert(!ClassStack.empty() && "No lexed method stacks!");
+    return *ClassStack.top();
   }
 
-  void PushTopClassStack() {
-    TopClassStacks.push(TopClass());
-  }
-  void PopTopClassStack() { TopClassStacks.pop(); }
+  /// \brief RAII object used to 
+  class ParsingClassDefinition {
+    Parser &P;
+    bool Popped;
+
+  public:
+    ParsingClassDefinition(Parser &P, DeclPtrTy TagOrTemplate, bool TopLevelClass) 
+      : P(P), Popped(false) { 
+      P.PushParsingClass(TagOrTemplate, TopLevelClass);
+    }
+
+    /// \brief Pop this class of the stack.
+    void Pop() { 
+      assert(!Popped && "Nested class has already been popped");
+      Popped = true;
+      P.PopParsingClass();
+    }
+
+    ~ParsingClassDefinition() { 
+      if (!Popped)
+        P.PopParsingClass(); 
+    }
+  };
+
+  void PushParsingClass(DeclPtrTy TagOrTemplate, bool TopLevelClass);
+  void DeallocateParsedClasses(ParsingClass *Class);
+  void PopParsingClass();
 
   DeclPtrTy ParseCXXInlineMethodDef(AccessSpecifier AS, Declarator &D);
-  void ParseLexedMethodDeclarations();
-  void ParseLexedMethodDefs();
+  void ParseLexedMethodDeclarations(ParsingClass &Class);
+  void ParseLexedMethodDefs(ParsingClass &Class);
   bool ConsumeAndStoreUntil(tok::TokenKind T1, tok::TokenKind T2, 
                             CachedTokens &Toks,
                             tok::TokenKind EarlyAbortIf = tok::unknown,
                             bool ConsumeFinalToken = true);
 
+  /// \brief Contains information about any template-specific
+  /// information that has been parsed prior to parsing declaration
+  /// specifiers.
+  struct ParsedTemplateInfo {
+    ParsedTemplateInfo() 
+      : Kind(NonTemplate), TemplateParams(0), TemplateLoc() { }
+
+    ParsedTemplateInfo(TemplateParameterLists *TemplateParams,
+                       bool isSpecialization)
+      : Kind(isSpecialization? ExplicitSpecialization : Template),
+        TemplateParams(TemplateParams) { }
+
+    explicit ParsedTemplateInfo(SourceLocation TemplateLoc)
+      : Kind(ExplicitInstantiation), TemplateParams(0), 
+        TemplateLoc(TemplateLoc) { }
+
+    /// \brief The kind of template we are parsing.
+    enum {
+      /// \brief We are not parsing a template at all.
+      NonTemplate = 0,
+      /// \brief We are parsing a template declaration.
+      Template,
+      /// \brief We are parsing an explicit specialization.
+      ExplicitSpecialization,
+      /// \brief We are parsing an explicit instantiation.
+      ExplicitInstantiation
+    } Kind;
+
+    /// \brief The template parameter lists, for template declarations
+    /// and explicit specializations.
+    TemplateParameterLists *TemplateParams;
+
+    /// \brief The location of the 'template' keyword, for an explicit
+    /// instantiation.
+    SourceLocation TemplateLoc;
+  };
+
   //===--------------------------------------------------------------------===//
   // C99 6.9: External Definitions.
   DeclGroupPtrTy ParseExternalDeclaration();
+  bool isDeclarationAfterDeclarator();
+  bool isStartOfFunctionDefinition();
   DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
-            TemplateParameterLists *TemplateParams = 0,
             AccessSpecifier AS = AS_none);
                                                
-  DeclPtrTy ParseFunctionDefinition(Declarator &D);
+  DeclPtrTy ParseFunctionDefinition(Declarator &D,
+                 const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo());
   void ParseKNRParamDeclarations(Declarator &D);
   // EndLoc, if non-NULL, is filled with the location of the last token of
   // the simple-asm.
@@ -620,10 +704,18 @@ private:
   OwningExprResult ParseRHSOfBinaryExpression(OwningExprResult LHS,
                                               unsigned MinPrec);
   OwningExprResult ParseCastExpression(bool isUnaryExpression,
+                                       bool isAddressOfOperand,
+                                       bool &NotCastExpr);
+  OwningExprResult ParseCastExpression(bool isUnaryExpression,
                                        bool isAddressOfOperand = false);
   OwningExprResult ParsePostfixExpressionSuffix(OwningExprResult LHS);
   OwningExprResult ParseSizeofAlignofExpression();
   OwningExprResult ParseBuiltinPrimaryExpression();
+  
+  OwningExprResult ParseExprAfterTypeofSizeofAlignof(const Token &OpTok,
+                                                     bool &isCastExpr,
+                                                     TypeTy *&CastTy,
+                                                     SourceRange &CastRange);
 
   static const unsigned ExprListSize = 12;
   typedef llvm::SmallVector<ExprTy*, ExprListSize> ExprListTy;
@@ -640,18 +732,18 @@ private:
     CastExpr         // Also allow '(' type-name ')' <anything>
   };
   OwningExprResult ParseParenExpression(ParenParseOption &ExprType,
+                                        bool stopIfCastExpr,
                                         TypeTy *&CastTy,
                                         SourceLocation &RParenLoc);
-
-  OwningExprResult ParseSimpleParenExpression() {  // Parse SimpleExpr only.
-    SourceLocation RParenLoc;
-    return ParseSimpleParenExpression(RParenLoc);
-  }
-  OwningExprResult ParseSimpleParenExpression(SourceLocation &RParenLoc) {
-    ParenParseOption Op = SimpleExpr;
-    TypeTy *CastTy;
-    return ParseParenExpression(Op, CastTy, RParenLoc);
-  }
+  
+  OwningExprResult ParseCXXAmbiguousParenExpression(ParenParseOption &ExprType,
+                                                    TypeTy *&CastTy,
+                                                    SourceLocation LParenLoc,
+                                                    SourceLocation &RParenLoc);
+  
+  OwningExprResult ParseCompoundLiteralExpression(TypeTy *Ty,
+                                                  SourceLocation LParenLoc,
+                                                  SourceLocation RParenLoc);
   
   OwningExprResult ParseStringLiteralExpression();
 
@@ -683,7 +775,8 @@ private:
   OwningExprResult ParseThrowExpression();
   // EndLoc is filled with the location of the last token of the specification.
   bool ParseExceptionSpecification(SourceLocation &EndLoc,
-                                   std::vector<TypeTy*> &Exceptions,
+                                   llvm::SmallVector<TypeTy*, 2> &Exceptions,
+                                   llvm::SmallVector<SourceRange, 2> &Ranges,
                                    bool &hasAnyExceptionSpec);
 
   //===--------------------------------------------------------------------===//
@@ -777,7 +870,9 @@ private:
   OwningStmtResult ParseCompoundStatement(bool isStmtExpr = false);
   OwningStmtResult ParseCompoundStatementBody(bool isStmtExpr = false);
   bool ParseParenExprOrCondition(OwningExprResult &CondExp,
-                                 bool OnlyAllowCondition = false);
+                                 bool OnlyAllowCondition = false,
+                                 SourceLocation *LParenLoc = 0,
+                                 SourceLocation *RParenLoc = 0);
   OwningStmtResult ParseIfStatement();
   OwningStmtResult ParseSwitchStatement();
   OwningStmtResult ParseWhileStatement();
@@ -816,19 +911,22 @@ private:
   DeclGroupPtrTy ParseSimpleDeclaration(unsigned Context,
                                         SourceLocation &DeclEnd,
                                         bool RequireSemi = true);
+  DeclPtrTy ParseDeclarationAfterDeclarator(Declarator &D,
+               const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo());
   DeclGroupPtrTy ParseInitDeclaratorListAfterFirstDeclarator(Declarator &D);
   DeclPtrTy ParseFunctionStatementBody(DeclPtrTy Decl);
   DeclPtrTy ParseFunctionTryBlock(DeclPtrTy Decl);
 
   bool ParseImplicitInt(DeclSpec &DS, CXXScopeSpec *SS,
-                        TemplateParameterLists *TemplateParams,
+                        const ParsedTemplateInfo &TemplateInfo,
                         AccessSpecifier AS);
   void ParseDeclarationSpecifiers(DeclSpec &DS, 
-                                  TemplateParameterLists *TemplateParams = 0,
+                const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo(),
                                   AccessSpecifier AS = AS_none);
   bool ParseOptionalTypeSpecifier(DeclSpec &DS, int &isInvalid, 
                                   const char *&PrevSpec,
-                                  TemplateParameterLists *TemplateParams = 0);
+               const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo());
+
   void ParseSpecifierQualifierList(DeclSpec &DS);
   
   void ParseObjCTypeQualifierList(ObjCDeclSpec &DS);
@@ -875,10 +973,15 @@ private:
   /// isTypeIdInParens - Assumes that a '(' was parsed and now we want to know
   /// whether the parens contain an expression or a type-id.
   /// Returns true for a type-id and false for an expression.
-  bool isTypeIdInParens() {
+  bool isTypeIdInParens(bool &isAmbiguous) {
     if (getLang().CPlusPlus)
-      return isCXXTypeId(TypeIdInParens);
+      return isCXXTypeId(TypeIdInParens, isAmbiguous);
+    isAmbiguous = false;
     return isTypeSpecifierQualifier();
+  }
+  bool isTypeIdInParens() {
+    bool isAmbiguous;
+    return isTypeIdInParens(isAmbiguous);
   }
 
   /// isCXXDeclarationStatement - C++-specialized function that disambiguates
@@ -908,7 +1011,11 @@ private:
   /// the function returns true to let the declaration parsing code handle it.
   bool isCXXConditionDeclaration();
 
-  bool isCXXTypeId(TentativeCXXTypeIdContext Context);
+  bool isCXXTypeId(TentativeCXXTypeIdContext Context, bool &isAmbiguous);
+  bool isCXXTypeId(TentativeCXXTypeIdContext Context) {
+    bool isAmbiguous;
+    return isCXXTypeId(Context, isAmbiguous);
+  }
 
   /// TPResult - Used as the result value for functions whose purpose is to
   /// disambiguate C++ constructs by "tentatively parsing" them.
@@ -957,13 +1064,15 @@ private:
   TPResult TryParseFunctionDeclarator();
   TPResult TryParseBracketDeclarator();
 
-  TypeResult ParseTypeName();
+  TypeResult ParseTypeName(SourceRange *Range = 0);
   void ParseBlockId();
   // EndLoc, if non-NULL, is filled with the location of the last token of
   // the attribute list.
   AttributeList *ParseAttributes(SourceLocation *EndLoc = 0);
-  void FuzzyParseMicrosoftDeclSpec();
+  AttributeList *ParseMicrosoftDeclSpec(AttributeList* CurrAttr = 0);
+  AttributeList *ParseMicrosoftTypeAttributes(AttributeList* CurrAttr = 0);
   void ParseTypeofSpecifier(DeclSpec &DS);
+  void ParseDecltypeSpecifier(DeclSpec &DS);
 
   /// DeclaratorScopeObj - RAII object used in Parser::ParseDirectDeclarator to
   /// enter a new C++ declarator scope and exit it when the function is
@@ -1023,7 +1132,7 @@ private:
                             const CXXScopeSpec *SS = 0);
   void ParseClassSpecifier(tok::TokenKind TagTokKind, SourceLocation TagLoc,
                            DeclSpec &DS, 
-                           TemplateParameterLists *TemplateParams = 0,
+                const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo(),
                            AccessSpecifier AS = AS_none);
   void ParseCXXMemberSpecification(SourceLocation StartLoc, unsigned TagType,
                                    DeclPtrTy TagDecl);
@@ -1049,9 +1158,17 @@ private:
   typedef llvm::SmallVector<DeclPtrTy, 4> TemplateParameterList;
 
   // C++ 14.1: Template Parameters [temp.param]
+  DeclPtrTy ParseDeclarationStartingWithTemplate(unsigned Context,
+                                                 SourceLocation &DeclEnd,
+                                                 AccessSpecifier AS = AS_none);
   DeclPtrTy ParseTemplateDeclarationOrSpecialization(unsigned Context,
                                                      SourceLocation &DeclEnd,
-                                                   AccessSpecifier AS=AS_none);
+                                                     AccessSpecifier AS);
+  DeclPtrTy ParseSingleDeclarationAfterTemplate(
+                                       unsigned Context,
+                                       const ParsedTemplateInfo &TemplateInfo,
+                                       SourceLocation &DeclEnd,
+                                       AccessSpecifier AS=AS_none);
   bool ParseTemplateParameters(unsigned Depth, 
                                TemplateParameterList &TemplateParams,
                                SourceLocation &LAngleLoc, 
@@ -1077,7 +1194,7 @@ private:
                                TemplateArgLocationList &TemplateArgLocations,
                                         SourceLocation &RAngleLoc);
 
-  void AnnotateTemplateIdToken(TemplateTy Template, TemplateNameKind TNK,
+  bool AnnotateTemplateIdToken(TemplateTy Template, TemplateNameKind TNK,
                                const CXXScopeSpec *SS,
                                SourceLocation TemplateKWLoc = SourceLocation(),
                                bool AllowTypeAnnotation = true);
@@ -1086,6 +1203,8 @@ private:
                                  TemplateArgIsTypeList &TemplateArgIsType,
                                  TemplateArgLocationList &TemplateArgLocations);
   void *ParseTemplateArgument(bool &ArgIsType);
+  DeclPtrTy ParseExplicitInstantiation(SourceLocation TemplateLoc, 
+                                       SourceLocation &DeclEnd);
 
   //===--------------------------------------------------------------------===//
   // GNU G++: Type Traits [Type-Traits.html in the GCC manual]

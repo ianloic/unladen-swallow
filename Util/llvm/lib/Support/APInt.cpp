@@ -675,12 +675,11 @@ static inline uint32_t hashword(const uint64_t *k64, size_t length)
     }
 
   /*------------------------------------------- handle the last 3 uint32_t's */
-  switch(length)                     /* all the case statements fall through */
-    {
-    case 3 : c+=k[2];
-    case 2 : b+=k[1];
-    case 1 : a+=k[0];
-      final(a,b,c);
+  switch (length) {                  /* all the case statements fall through */
+  case 3 : c+=k[2];
+  case 2 : b+=k[1];
+  case 1 : a+=k[0];
+    final(a,b,c);
     case 0:     /* case 0: nothing left to add */
       break;
     }
@@ -2180,6 +2179,12 @@ void APInt::print(raw_ostream &OS, bool isSigned) const {
   OS << S.c_str();
 }
 
+std::ostream &llvm::operator<<(std::ostream &o, const APInt &I) {
+  raw_os_ostream OS(o);
+  OS << I;
+  return o;
+}
+
 // This implements a variety of operations on a representation of
 // arbitrary precision, two's-complement, bignum integer values.
 
@@ -2361,7 +2366,7 @@ APInt::tcMSB(const integerPart *parts, unsigned int n)
    the least significant bit of DST.  All high bits above srcBITS in
    DST are zero-filled.  */
 void
-APInt::tcExtract(integerPart *dst, unsigned int dstCount, const integerPart *src,
+APInt::tcExtract(integerPart *dst, unsigned int dstCount,const integerPart *src,
                  unsigned int srcBits, unsigned int srcLSB)
 {
   unsigned int firstSrcPart, dstParts, shift, n;

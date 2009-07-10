@@ -74,8 +74,8 @@ bool X86Subtarget::GVRequiresExtraLoad(const GlobalValue* GV,
 /// cases where GVRequiresExtraLoad is true.  Some variations of PIC require
 /// a register, but not an extra load.
 bool X86Subtarget::GVRequiresRegister(const GlobalValue *GV,
-                                       const TargetMachine& TM,
-                                       bool isDirectCall) const
+                                      const TargetMachine& TM,
+                                      bool isDirectCall) const
 {
   if (GVRequiresExtraLoad(GV, TM, isDirectCall))
     return true;
@@ -97,6 +97,14 @@ const char *X86Subtarget::getBZeroEntry() const {
     return "__bzero";
 
   return 0;
+}
+
+/// IsLegalToCallImmediateAddr - Return true if the subtarget allows calls
+/// to immediate address.
+bool X86Subtarget::IsLegalToCallImmediateAddr(const TargetMachine &TM) const {
+  if (Is64Bit)
+    return false;
+  return isTargetELF() || TM.getRelocationModel() == Reloc::Static;
 }
 
 /// getSpecialAddressLatency - For targets where it is beneficial to
@@ -199,6 +207,10 @@ void X86Subtarget::AutoDetectSubtargetFeatures() {
 
   bool IsIntel = memcmp(text.c, "GenuineIntel", 12) == 0;
   bool IsAMD   = !IsIntel && memcmp(text.c, "AuthenticAMD", 12) == 0;
+
+  HasFMA3 = IsIntel && ((ECX >> 12) & 0x1);
+  HasAVX = ((ECX >> 28) & 0x1);
+
   if (IsIntel || IsAMD) {
     // Determine if bit test memory instructions are slow.
     unsigned Family = 0;
@@ -208,6 +220,8 @@ void X86Subtarget::AutoDetectSubtargetFeatures() {
 
     X86::GetCpuIDAndInfo(0x80000001, &EAX, &EBX, &ECX, &EDX);
     HasX86_64 = (EDX >> 29) & 0x1;
+    HasSSE4A = IsAMD && ((ECX >> 6) & 0x1);
+    HasFMA4 = IsAMD && ((ECX >> 16) & 0x1);
   }
 }
 
@@ -221,6 +235,7 @@ static const char *GetCurrentX86CPU() {
 
   X86::GetCpuIDAndInfo(0x80000001, &EAX, &EBX, &ECX, &EDX);
   bool Em64T = (EDX >> 29) & 0x1;
+  bool HasSSE3 = (ECX & 0x1);
 
   union {
     unsigned u[3];
@@ -303,10 +318,20 @@ static const char *GetCurrentX86CPU() {
         default: return "athlon";
         }
       case 15:
+        if (HasSSE3) {
+          switch (Model) {
+          default: return "k8-sse3";
+          }
+        } else {
+          switch (Model) {
+          case 1:  return "opteron";
+          case 5:  return "athlon-fx"; // also opteron
+          default: return "athlon64";
+          }
+        }
+      case 16:
         switch (Model) {
-        case 1:  return "opteron";
-        case 5:  return "athlon-fx"; // also opteron
-        default: return "athlon64";
+        default: return "amdfam10";
         }
     default:
       return "generic";
@@ -322,6 +347,10 @@ X86Subtarget::X86Subtarget(const Module &M, const std::string &FS, bool is64Bit)
   , X86SSELevel(NoMMXSSE)
   , X863DNowLevel(NoThreeDNow)
   , HasX86_64(false)
+  , HasSSE4A(false)
+  , HasAVX(false)
+  , HasFMA3(false)
+  , HasFMA4(false)
   , IsBTMemSlow(false)
   , DarwinVers(0)
   , IsLinux(false)
@@ -330,6 +359,10 @@ X86Subtarget::X86Subtarget(const Module &M, const std::string &FS, bool is64Bit)
   , MaxInlineSizeThreshold(128)
   , Is64Bit(is64Bit)
   , TargetType(isELF) { // Default to ELF unless otherwise specified.
+
+  // default to hard float ABI
+  if (FloatABIType == FloatABI::Default)
+    FloatABIType = FloatABI::Hard;
     
   // Determine default and user specified characteristics
   if (!FS.empty()) {

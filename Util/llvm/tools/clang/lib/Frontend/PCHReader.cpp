@@ -36,19 +36,340 @@
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
+// PCH reader validator implementation
+//===----------------------------------------------------------------------===//
+
+PCHReaderListener::~PCHReaderListener() {}
+
+bool
+PCHValidator::ReadLanguageOptions(const LangOptions &LangOpts) {
+  const LangOptions &PPLangOpts = PP.getLangOptions();
+#define PARSE_LANGOPT_BENIGN(Option)
+#define PARSE_LANGOPT_IMPORTANT(Option, DiagID)                    \
+  if (PPLangOpts.Option != LangOpts.Option) {                      \
+    Reader.Diag(DiagID) << LangOpts.Option << PPLangOpts.Option;   \
+    return true;                                                   \
+  }
+
+  PARSE_LANGOPT_BENIGN(Trigraphs);
+  PARSE_LANGOPT_BENIGN(BCPLComment);
+  PARSE_LANGOPT_BENIGN(DollarIdents);
+  PARSE_LANGOPT_BENIGN(AsmPreprocessor);
+  PARSE_LANGOPT_IMPORTANT(GNUMode, diag::warn_pch_gnu_extensions);
+  PARSE_LANGOPT_BENIGN(ImplicitInt);
+  PARSE_LANGOPT_BENIGN(Digraphs);
+  PARSE_LANGOPT_BENIGN(HexFloats);
+  PARSE_LANGOPT_IMPORTANT(C99, diag::warn_pch_c99);
+  PARSE_LANGOPT_IMPORTANT(Microsoft, diag::warn_pch_microsoft_extensions);
+  PARSE_LANGOPT_IMPORTANT(CPlusPlus, diag::warn_pch_cplusplus);
+  PARSE_LANGOPT_IMPORTANT(CPlusPlus0x, diag::warn_pch_cplusplus0x);
+  PARSE_LANGOPT_BENIGN(CXXOperatorName);
+  PARSE_LANGOPT_IMPORTANT(ObjC1, diag::warn_pch_objective_c);
+  PARSE_LANGOPT_IMPORTANT(ObjC2, diag::warn_pch_objective_c2);
+  PARSE_LANGOPT_IMPORTANT(ObjCNonFragileABI, diag::warn_pch_nonfragile_abi);
+  PARSE_LANGOPT_BENIGN(PascalStrings);
+  PARSE_LANGOPT_BENIGN(WritableStrings);
+  PARSE_LANGOPT_IMPORTANT(LaxVectorConversions, 
+                          diag::warn_pch_lax_vector_conversions);
+  PARSE_LANGOPT_IMPORTANT(AltiVec, diag::warn_pch_altivec);
+  PARSE_LANGOPT_IMPORTANT(Exceptions, diag::warn_pch_exceptions);
+  PARSE_LANGOPT_IMPORTANT(NeXTRuntime, diag::warn_pch_objc_runtime);
+  PARSE_LANGOPT_IMPORTANT(Freestanding, diag::warn_pch_freestanding);
+  PARSE_LANGOPT_IMPORTANT(NoBuiltin, diag::warn_pch_builtins);
+  PARSE_LANGOPT_IMPORTANT(ThreadsafeStatics, 
+                          diag::warn_pch_thread_safe_statics);
+  PARSE_LANGOPT_IMPORTANT(Blocks, diag::warn_pch_blocks);
+  PARSE_LANGOPT_BENIGN(EmitAllDecls);
+  PARSE_LANGOPT_IMPORTANT(MathErrno, diag::warn_pch_math_errno);
+  PARSE_LANGOPT_IMPORTANT(OverflowChecking, diag::warn_pch_overflow_checking);
+  PARSE_LANGOPT_IMPORTANT(HeinousExtensions, 
+                          diag::warn_pch_heinous_extensions);
+  // FIXME: Most of the options below are benign if the macro wasn't
+  // used. Unfortunately, this means that a PCH compiled without
+  // optimization can't be used with optimization turned on, even
+  // though the only thing that changes is whether __OPTIMIZE__ was
+  // defined... but if __OPTIMIZE__ never showed up in the header, it
+  // doesn't matter. We could consider making this some special kind
+  // of check.
+  PARSE_LANGOPT_IMPORTANT(Optimize, diag::warn_pch_optimize);
+  PARSE_LANGOPT_IMPORTANT(OptimizeSize, diag::warn_pch_optimize_size);
+  PARSE_LANGOPT_IMPORTANT(Static, diag::warn_pch_static);
+  PARSE_LANGOPT_IMPORTANT(PICLevel, diag::warn_pch_pic_level);
+  PARSE_LANGOPT_IMPORTANT(GNUInline, diag::warn_pch_gnu_inline);
+  PARSE_LANGOPT_IMPORTANT(NoInline, diag::warn_pch_no_inline);
+  PARSE_LANGOPT_IMPORTANT(AccessControl, diag::warn_pch_access_control);
+  PARSE_LANGOPT_IMPORTANT(CharIsSigned, diag::warn_pch_char_signed);
+  if ((PPLangOpts.getGCMode() != 0) != (LangOpts.getGCMode() != 0)) {
+    Reader.Diag(diag::warn_pch_gc_mode) 
+      << LangOpts.getGCMode() << PPLangOpts.getGCMode();
+    return true;
+  }
+  PARSE_LANGOPT_BENIGN(getVisibilityMode());
+  PARSE_LANGOPT_BENIGN(InstantiationDepth);
+  PARSE_LANGOPT_IMPORTANT(OpenCL, diag::warn_pch_opencl);
+#undef PARSE_LANGOPT_IRRELEVANT
+#undef PARSE_LANGOPT_BENIGN
+
+  return false;
+}
+
+bool PCHValidator::ReadTargetTriple(const std::string &Triple) {
+  if (Triple != PP.getTargetInfo().getTargetTriple()) {
+    Reader.Diag(diag::warn_pch_target_triple)
+      << Triple << PP.getTargetInfo().getTargetTriple();
+    return true;
+  }
+  return false;
+}
+
+/// \brief Split the given string into a vector of lines, eliminating
+/// any empty lines in the process.
+///
+/// \param Str the string to split.
+/// \param Len the length of Str.
+/// \param KeepEmptyLines true if empty lines should be included
+/// \returns a vector of lines, with the line endings removed
+static std::vector<std::string> splitLines(const char *Str, unsigned Len,
+                                           bool KeepEmptyLines = false) {
+  std::vector<std::string> Lines;
+  for (unsigned LineStart = 0; LineStart < Len; ++LineStart) {
+    unsigned LineEnd = LineStart;
+    while (LineEnd < Len && Str[LineEnd] != '\n')
+      ++LineEnd;
+    if (LineStart != LineEnd || KeepEmptyLines)
+      Lines.push_back(std::string(&Str[LineStart], &Str[LineEnd]));
+    LineStart = LineEnd;
+  }
+  return Lines;
+}
+
+/// \brief Determine whether the string Haystack starts with the
+/// substring Needle.
+static bool startsWith(const std::string &Haystack, const char *Needle) {
+  for (unsigned I = 0, N = Haystack.size(); Needle[I] != 0; ++I) {
+    if (I == N)
+      return false;
+    if (Haystack[I] != Needle[I])
+      return false;
+  }
+
+  return true;
+}
+
+/// \brief Determine whether the string Haystack starts with the
+/// substring Needle.
+static inline bool startsWith(const std::string &Haystack,
+                              const std::string &Needle) {
+  return startsWith(Haystack, Needle.c_str());
+}
+
+bool PCHValidator::ReadPredefinesBuffer(const char *PCHPredef, 
+                                        unsigned PCHPredefLen,
+                                        FileID PCHBufferID,
+                                        std::string &SuggestedPredefines) {
+  const char *Predef = PP.getPredefines().c_str();
+  unsigned PredefLen = PP.getPredefines().size();
+
+  // If the two predefines buffers compare equal, we're done!
+  if (PredefLen == PCHPredefLen && 
+      strncmp(Predef, PCHPredef, PCHPredefLen) == 0)
+    return false;
+
+  SourceManager &SourceMgr = PP.getSourceManager();
+  
+  // The predefines buffers are different. Determine what the
+  // differences are, and whether they require us to reject the PCH
+  // file.
+  std::vector<std::string> CmdLineLines = splitLines(Predef, PredefLen);
+  std::vector<std::string> PCHLines = splitLines(PCHPredef, PCHPredefLen);
+
+  // Sort both sets of predefined buffer lines, since 
+  std::sort(CmdLineLines.begin(), CmdLineLines.end());
+  std::sort(PCHLines.begin(), PCHLines.end());
+
+  // Determine which predefines that where used to build the PCH file
+  // are missing from the command line.
+  std::vector<std::string> MissingPredefines;
+  std::set_difference(PCHLines.begin(), PCHLines.end(),
+                      CmdLineLines.begin(), CmdLineLines.end(),
+                      std::back_inserter(MissingPredefines));
+
+  bool MissingDefines = false;
+  bool ConflictingDefines = false;
+  for (unsigned I = 0, N = MissingPredefines.size(); I != N; ++I) {
+    const std::string &Missing = MissingPredefines[I];
+    if (!startsWith(Missing, "#define ") != 0) {
+      Reader.Diag(diag::warn_pch_compiler_options_mismatch);
+      return true;
+    }
+    
+    // This is a macro definition. Determine the name of the macro
+    // we're defining.
+    std::string::size_type StartOfMacroName = strlen("#define ");
+    std::string::size_type EndOfMacroName 
+      = Missing.find_first_of("( \n\r", StartOfMacroName);
+    assert(EndOfMacroName != std::string::npos &&
+           "Couldn't find the end of the macro name");
+    std::string MacroName = Missing.substr(StartOfMacroName,
+                                           EndOfMacroName - StartOfMacroName);
+
+    // Determine whether this macro was given a different definition
+    // on the command line.
+    std::string MacroDefStart = "#define " + MacroName;
+    std::string::size_type MacroDefLen = MacroDefStart.size();
+    std::vector<std::string>::iterator ConflictPos
+      = std::lower_bound(CmdLineLines.begin(), CmdLineLines.end(),
+                         MacroDefStart);
+    for (; ConflictPos != CmdLineLines.end(); ++ConflictPos) {
+      if (!startsWith(*ConflictPos, MacroDefStart)) {
+        // Different macro; we're done.
+        ConflictPos = CmdLineLines.end();
+        break; 
+      }
+      
+      assert(ConflictPos->size() > MacroDefLen && 
+             "Invalid #define in predefines buffer?");
+      if ((*ConflictPos)[MacroDefLen] != ' ' && 
+          (*ConflictPos)[MacroDefLen] != '(')
+        continue; // Longer macro name; keep trying.
+      
+      // We found a conflicting macro definition.
+      break;
+    }
+    
+    if (ConflictPos != CmdLineLines.end()) {
+      Reader.Diag(diag::warn_cmdline_conflicting_macro_def)
+          << MacroName;
+
+      // Show the definition of this macro within the PCH file.
+      const char *MissingDef = strstr(PCHPredef, Missing.c_str());
+      unsigned Offset = MissingDef - PCHPredef;
+      SourceLocation PCHMissingLoc
+        = SourceMgr.getLocForStartOfFile(PCHBufferID)
+            .getFileLocWithOffset(Offset);
+      Reader.Diag(PCHMissingLoc, diag::note_pch_macro_defined_as)
+        << MacroName;
+
+      ConflictingDefines = true;
+      continue;
+    }
+    
+    // If the macro doesn't conflict, then we'll just pick up the
+    // macro definition from the PCH file. Warn the user that they
+    // made a mistake.
+    if (ConflictingDefines)
+      continue; // Don't complain if there are already conflicting defs
+    
+    if (!MissingDefines) {
+      Reader.Diag(diag::warn_cmdline_missing_macro_defs);
+      MissingDefines = true;
+    }
+
+    // Show the definition of this macro within the PCH file.
+    const char *MissingDef = strstr(PCHPredef, Missing.c_str());
+    unsigned Offset = MissingDef - PCHPredef;
+    SourceLocation PCHMissingLoc
+      = SourceMgr.getLocForStartOfFile(PCHBufferID)
+      .getFileLocWithOffset(Offset);
+    Reader.Diag(PCHMissingLoc, diag::note_using_macro_def_from_pch);
+  }
+  
+  if (ConflictingDefines)
+    return true;
+  
+  // Determine what predefines were introduced based on command-line
+  // parameters that were not present when building the PCH
+  // file. Extra #defines are okay, so long as the identifiers being
+  // defined were not used within the precompiled header.
+  std::vector<std::string> ExtraPredefines;
+  std::set_difference(CmdLineLines.begin(), CmdLineLines.end(),
+                      PCHLines.begin(), PCHLines.end(),
+                      std::back_inserter(ExtraPredefines));  
+  for (unsigned I = 0, N = ExtraPredefines.size(); I != N; ++I) {
+    const std::string &Extra = ExtraPredefines[I];
+    if (!startsWith(Extra, "#define ") != 0) {
+      Reader.Diag(diag::warn_pch_compiler_options_mismatch);
+      return true;
+    }
+
+    // This is an extra macro definition. Determine the name of the
+    // macro we're defining.
+    std::string::size_type StartOfMacroName = strlen("#define ");
+    std::string::size_type EndOfMacroName 
+      = Extra.find_first_of("( \n\r", StartOfMacroName);
+    assert(EndOfMacroName != std::string::npos &&
+           "Couldn't find the end of the macro name");
+    std::string MacroName = Extra.substr(StartOfMacroName,
+                                         EndOfMacroName - StartOfMacroName);
+
+    // Check whether this name was used somewhere in the PCH file. If
+    // so, defining it as a macro could change behavior, so we reject
+    // the PCH file.
+    if (IdentifierInfo *II = Reader.get(MacroName.c_str(),
+                                 MacroName.c_str() + MacroName.size())) {
+      Reader.Diag(diag::warn_macro_name_used_in_pch)
+        << II;
+      return true;
+    }
+
+    // Add this definition to the suggested predefines buffer.
+    SuggestedPredefines += Extra;
+    SuggestedPredefines += '\n';
+  }
+
+  // If we get here, it's because the predefines buffer had compatible
+  // contents. Accept the PCH file.
+  return false;
+}
+
+void PCHValidator::ReadHeaderFileInfo(const HeaderFileInfo &HFI) {
+  PP.getHeaderSearchInfo().setHeaderFileInfoForUID(HFI, NumHeaderInfos++);
+}
+
+void PCHValidator::ReadCounter(unsigned Value) {
+  PP.setCounterValue(Value);
+}
+
+
+
+//===----------------------------------------------------------------------===//
 // PCH reader implementation
 //===----------------------------------------------------------------------===//
 
-PCHReader::PCHReader(Preprocessor &PP, ASTContext *Context) 
-  : SemaObj(0), PP(PP), Context(Context), Consumer(0),
+PCHReader::PCHReader(Preprocessor &PP, ASTContext *Context, 
+                     const char *isysroot) 
+  : Listener(new PCHValidator(PP, *this)), SourceMgr(PP.getSourceManager()),
+    FileMgr(PP.getFileManager()), Diags(PP.getDiagnostics()),
+    SemaObj(0), PP(&PP), Context(Context), Consumer(0),
     IdentifierTableData(0), IdentifierLookupTable(0),
     IdentifierOffsets(0),
     MethodPoolLookupTable(0), MethodPoolLookupTableData(0),
     TotalSelectorsInMethodPool(0), SelectorOffsets(0),
-    TotalNumSelectors(0), NumStatHits(0), NumStatMisses(0), 
+    TotalNumSelectors(0), Comments(0), NumComments(0), isysroot(isysroot),
+    NumStatHits(0), NumStatMisses(0), 
     NumSLocEntriesRead(0), NumStatementsRead(0), 
     NumMacrosRead(0), NumMethodPoolSelectorsRead(0), NumMethodPoolMisses(0),
-    NumLexicalDeclContextsRead(0), NumVisibleDeclContextsRead(0) { }
+    NumLexicalDeclContextsRead(0), NumVisibleDeclContextsRead(0),
+    CurrentlyLoadingTypeOrDecl(0) { 
+  RelocatablePCH = false;
+}
+
+PCHReader::PCHReader(SourceManager &SourceMgr, FileManager &FileMgr,
+                     Diagnostic &Diags, const char *isysroot) 
+  : SourceMgr(SourceMgr), FileMgr(FileMgr), Diags(Diags),
+    SemaObj(0), PP(0), Context(0), Consumer(0),
+    IdentifierTableData(0), IdentifierLookupTable(0),
+    IdentifierOffsets(0),
+    MethodPoolLookupTable(0), MethodPoolLookupTableData(0),
+    TotalSelectorsInMethodPool(0), SelectorOffsets(0),
+    TotalNumSelectors(0), Comments(0), NumComments(0), isysroot(isysroot),
+    NumStatHits(0), NumStatMisses(0), 
+    NumSLocEntriesRead(0), NumStatementsRead(0), 
+    NumMacrosRead(0), NumMethodPoolSelectorsRead(0), NumMethodPoolMisses(0),
+    NumLexicalDeclContextsRead(0), NumVisibleDeclContextsRead(0),
+    CurrentlyLoadingTypeOrDecl(0) { 
+  RelocatablePCH = false;
+}
 
 PCHReader::~PCHReader() {}
 
@@ -117,7 +438,7 @@ public:
     for (unsigned I = 1; I != N; ++I)
       Args.push_back(Reader.DecodeIdentifierInfo(ReadUnalignedLE32(d)));
 
-    return SelTable.getSelector(N, &Args[0]);
+    return SelTable.getSelector(N, Args.data());
   }
     
   data_type ReadData(Selector, const unsigned char* d, unsigned DataLen) {
@@ -281,26 +602,14 @@ public:
 
     // Read all of the declarations visible at global scope with this
     // name.
-    Sema *SemaObj = Reader.getSema();
     if (Reader.getContext() == 0) return II;
-    
-    while (DataLen > 0) {
-      NamedDecl *D = cast<NamedDecl>(Reader.GetDecl(ReadUnalignedLE32(d)));
-      if (SemaObj) {
-        // Introduce this declaration into the translation-unit scope
-        // and add it to the declaration chain for this identifier, so
-        // that (unqualified) name lookup will find it.
-        SemaObj->TUScope->AddDecl(Action::DeclPtrTy::make(D));
-        SemaObj->IdResolver.AddDeclToIdentifierChain(II, D);
-      } else {
-        // Queue this declaration so that it will be added to the
-        // translation unit scope and identifier's declaration chain
-        // once a Sema object is known.
-        Reader.PreloadedDecls.push_back(D);
-      }
-
-      DataLen -= 4;
+    if (DataLen > 0) {
+      llvm::SmallVector<uint32_t, 4> DeclIDs;
+      for (; DataLen > 0; DataLen -= 4)
+        DeclIDs.push_back(ReadUnalignedLE32(d));
+      Reader.SetGloballyVisibleDecls(II, DeclIDs);
     }
+    
     return II;
   }
 };
@@ -312,53 +621,10 @@ public:
 typedef OnDiskChainedHashTable<PCHIdentifierLookupTrait> 
   PCHIdentifierLookupTable;
 
-// FIXME: use the diagnostics machinery
 bool PCHReader::Error(const char *Msg) {
-  Diagnostic &Diags = PP.getDiagnostics();
   unsigned DiagID = Diags.getCustomDiagID(Diagnostic::Fatal, Msg);
   Diag(DiagID);
   return true;
-}
-
-/// \brief Split the given string into a vector of lines, eliminating
-/// any empty lines in the process.
-///
-/// \param Str the string to split.
-/// \param Len the length of Str.
-/// \param KeepEmptyLines true if empty lines should be included
-/// \returns a vector of lines, with the line endings removed
-std::vector<std::string> splitLines(const char *Str, unsigned Len,
-                                    bool KeepEmptyLines = false) {
-  std::vector<std::string> Lines;
-  for (unsigned LineStart = 0; LineStart < Len; ++LineStart) {
-    unsigned LineEnd = LineStart;
-    while (LineEnd < Len && Str[LineEnd] != '\n')
-      ++LineEnd;
-    if (LineStart != LineEnd || KeepEmptyLines)
-      Lines.push_back(std::string(&Str[LineStart], &Str[LineEnd]));
-    LineStart = LineEnd;
-  }
-  return Lines;
-}
-
-/// \brief Determine whether the string Haystack starts with the
-/// substring Needle.
-static bool startsWith(const std::string &Haystack, const char *Needle) {
-  for (unsigned I = 0, N = Haystack.size(); Needle[I] != 0; ++I) {
-    if (I == N)
-      return false;
-    if (Haystack[I] != Needle[I])
-      return false;
-  }
-
-  return true;
-}
-
-/// \brief Determine whether the string Haystack starts with the
-/// substring Needle.
-static inline bool startsWith(const std::string &Haystack,
-                              const std::string &Needle) {
-  return startsWith(Haystack, Needle.c_str());
 }
 
 /// \brief Check the contents of the predefines buffer against the
@@ -381,158 +647,9 @@ static inline bool startsWith(const std::string &Haystack,
 bool PCHReader::CheckPredefinesBuffer(const char *PCHPredef, 
                                       unsigned PCHPredefLen,
                                       FileID PCHBufferID) {
-  const char *Predef = PP.getPredefines().c_str();
-  unsigned PredefLen = PP.getPredefines().size();
-
-  // If the two predefines buffers compare equal, we're done!
-  if (PredefLen == PCHPredefLen && 
-      strncmp(Predef, PCHPredef, PCHPredefLen) == 0)
-    return false;
-
-  SourceManager &SourceMgr = PP.getSourceManager();
-  
-  // The predefines buffers are different. Determine what the
-  // differences are, and whether they require us to reject the PCH
-  // file.
-  std::vector<std::string> CmdLineLines = splitLines(Predef, PredefLen);
-  std::vector<std::string> PCHLines = splitLines(PCHPredef, PCHPredefLen);
-
-  // Sort both sets of predefined buffer lines, since 
-  std::sort(CmdLineLines.begin(), CmdLineLines.end());
-  std::sort(PCHLines.begin(), PCHLines.end());
-
-  // Determine which predefines that where used to build the PCH file
-  // are missing from the command line.
-  std::vector<std::string> MissingPredefines;
-  std::set_difference(PCHLines.begin(), PCHLines.end(),
-                      CmdLineLines.begin(), CmdLineLines.end(),
-                      std::back_inserter(MissingPredefines));
-
-  bool MissingDefines = false;
-  bool ConflictingDefines = false;
-  for (unsigned I = 0, N = MissingPredefines.size(); I != N; ++I) {
-    const std::string &Missing = MissingPredefines[I];
-    if (!startsWith(Missing, "#define ") != 0) {
-      Diag(diag::warn_pch_compiler_options_mismatch);
-      return true;
-    }
-    
-    // This is a macro definition. Determine the name of the macro
-    // we're defining.
-    std::string::size_type StartOfMacroName = strlen("#define ");
-    std::string::size_type EndOfMacroName 
-      = Missing.find_first_of("( \n\r", StartOfMacroName);
-    assert(EndOfMacroName != std::string::npos &&
-           "Couldn't find the end of the macro name");
-    std::string MacroName = Missing.substr(StartOfMacroName,
-                                           EndOfMacroName - StartOfMacroName);
-
-    // Determine whether this macro was given a different definition
-    // on the command line.
-    std::string MacroDefStart = "#define " + MacroName;
-    std::string::size_type MacroDefLen = MacroDefStart.size();
-    std::vector<std::string>::iterator ConflictPos
-      = std::lower_bound(CmdLineLines.begin(), CmdLineLines.end(),
-                         MacroDefStart);
-    for (; ConflictPos != CmdLineLines.end(); ++ConflictPos) {
-      if (!startsWith(*ConflictPos, MacroDefStart)) {
-        // Different macro; we're done.
-        ConflictPos = CmdLineLines.end();
-        break; 
-      }
-      
-      assert(ConflictPos->size() > MacroDefLen && 
-             "Invalid #define in predefines buffer?");
-      if ((*ConflictPos)[MacroDefLen] != ' ' && 
-          (*ConflictPos)[MacroDefLen] != '(')
-        continue; // Longer macro name; keep trying.
-      
-      // We found a conflicting macro definition.
-      break;
-    }
-    
-    if (ConflictPos != CmdLineLines.end()) {
-      Diag(diag::warn_cmdline_conflicting_macro_def)
-          << MacroName;
-
-      // Show the definition of this macro within the PCH file.
-      const char *MissingDef = strstr(PCHPredef, Missing.c_str());
-      unsigned Offset = MissingDef - PCHPredef;
-      SourceLocation PCHMissingLoc
-        = SourceMgr.getLocForStartOfFile(PCHBufferID)
-            .getFileLocWithOffset(Offset);
-      Diag(PCHMissingLoc, diag::note_pch_macro_defined_as)
-        << MacroName;
-
-      ConflictingDefines = true;
-      continue;
-    }
-    
-    // If the macro doesn't conflict, then we'll just pick up the
-    // macro definition from the PCH file. Warn the user that they
-    // made a mistake.
-    if (ConflictingDefines)
-      continue; // Don't complain if there are already conflicting defs
-    
-    if (!MissingDefines) {
-      Diag(diag::warn_cmdline_missing_macro_defs);
-      MissingDefines = true;
-    }
-
-    // Show the definition of this macro within the PCH file.
-    const char *MissingDef = strstr(PCHPredef, Missing.c_str());
-    unsigned Offset = MissingDef - PCHPredef;
-    SourceLocation PCHMissingLoc
-      = SourceMgr.getLocForStartOfFile(PCHBufferID)
-      .getFileLocWithOffset(Offset);
-    Diag(PCHMissingLoc, diag::note_using_macro_def_from_pch);
-  }
-  
-  if (ConflictingDefines)
-    return true;
-  
-  // Determine what predefines were introduced based on command-line
-  // parameters that were not present when building the PCH
-  // file. Extra #defines are okay, so long as the identifiers being
-  // defined were not used within the precompiled header.
-  std::vector<std::string> ExtraPredefines;
-  std::set_difference(CmdLineLines.begin(), CmdLineLines.end(),
-                      PCHLines.begin(), PCHLines.end(),
-                      std::back_inserter(ExtraPredefines));  
-  for (unsigned I = 0, N = ExtraPredefines.size(); I != N; ++I) {
-    const std::string &Extra = ExtraPredefines[I];
-    if (!startsWith(Extra, "#define ") != 0) {
-      Diag(diag::warn_pch_compiler_options_mismatch);
-      return true;
-    }
-
-    // This is an extra macro definition. Determine the name of the
-    // macro we're defining.
-    std::string::size_type StartOfMacroName = strlen("#define ");
-    std::string::size_type EndOfMacroName 
-      = Extra.find_first_of("( \n\r", StartOfMacroName);
-    assert(EndOfMacroName != std::string::npos &&
-           "Couldn't find the end of the macro name");
-    std::string MacroName = Extra.substr(StartOfMacroName,
-                                         EndOfMacroName - StartOfMacroName);
-
-    // Check whether this name was used somewhere in the PCH file. If
-    // so, defining it as a macro could change behavior, so we reject
-    // the PCH file.
-    if (IdentifierInfo *II = get(MacroName.c_str(),
-                                 MacroName.c_str() + MacroName.size())) {
-      Diag(diag::warn_macro_name_used_in_pch)
-        << II;
-      return true;
-    }
-
-    // Add this definition to the suggested predefines buffer.
-    SuggestedPredefines += Extra;
-    SuggestedPredefines += '\n';
-  }
-
-  // If we get here, it's because the predefines buffer had compatible
-  // contents. Accept the PCH file.
+  if (Listener)
+    return Listener->ReadPredefinesBuffer(PCHPredef, PCHPredefLen, PCHBufferID,
+                                          SuggestedPredefines);
   return false;
 }
 
@@ -542,8 +659,7 @@ bool PCHReader::CheckPredefinesBuffer(const char *PCHPredef,
 
 /// \brief Read the line table in the source manager block.
 /// \returns true if ther was an error.
-static bool ParseLineTable(SourceManager &SourceMgr, 
-                           llvm::SmallVectorImpl<uint64_t> &Record) {
+bool PCHReader::ParseLineTable(llvm::SmallVectorImpl<uint64_t> &Record) {
   unsigned Idx = 0;
   LineTableInfo &LineTable = SourceMgr.getLineTable();
 
@@ -554,6 +670,7 @@ static bool ParseLineTable(SourceManager &SourceMgr,
     unsigned FilenameLen = Record[Idx++];
     std::string Filename(&Record[Idx], &Record[Idx] + FilenameLen);
     Idx += FilenameLen;
+    MaybeAddSystemRootToFilename(Filename);
     FileIDs[I] = LineTable.getLineTableFilenameID(Filename.c_str(), 
                                                   Filename.size());
   }
@@ -714,9 +831,7 @@ PCHReader::PCHReadResult PCHReader::ReadSourceManagerBlock() {
     return Failure;
   }
 
-  SourceManager &SourceMgr = PP.getSourceManager();
   RecordData Record;
-  unsigned NumHeaderInfos = 0;
   while (true) {
     unsigned Code = SLocEntryCursor.ReadCode();
     if (Code == llvm::bitc::END_BLOCK) {
@@ -751,7 +866,7 @@ PCHReader::PCHReadResult PCHReader::ReadSourceManagerBlock() {
       break;
 
     case pch::SM_LINE_TABLE:
-      if (ParseLineTable(SourceMgr, Record))
+      if (ParseLineTable(Record))
         return Failure;
       break;
 
@@ -761,7 +876,8 @@ PCHReader::PCHReadResult PCHReader::ReadSourceManagerBlock() {
       HFI.DirInfo = Record[1];
       HFI.NumIncludes = Record[2];
       HFI.ControllingMacroID = Record[3];
-      PP.getHeaderSearchInfo().setHeaderFileInfoForUID(HFI, NumHeaderInfos++);
+      if (Listener)
+        Listener->ReadHeaderFileInfo(HFI);
       break;
     }
 
@@ -794,7 +910,6 @@ PCHReader::PCHReadResult PCHReader::ReadSLocEntryRecord(unsigned ID) {
     return Failure;
   }
 
-  SourceManager &SourceMgr = PP.getSourceManager();
   RecordData Record;
   const char *BlobStart;
   unsigned BlobLen;
@@ -804,9 +919,17 @@ PCHReader::PCHReadResult PCHReader::ReadSLocEntryRecord(unsigned ID) {
     return Failure;
 
   case pch::SM_SLOC_FILE_ENTRY: {
-    const FileEntry *File 
-      = PP.getFileManager().getFile(BlobStart, BlobStart + BlobLen);
-    // FIXME: Error recovery if file cannot be found.
+    std::string Filename(BlobStart, BlobStart + BlobLen);
+    MaybeAddSystemRootToFilename(Filename);
+    const FileEntry *File = FileMgr.getFile(Filename);
+    if (File == 0) {
+      std::string ErrorStr = "could not find file '";
+      ErrorStr += Filename;
+      ErrorStr += "' referenced by PCH file";
+      Error(ErrorStr.c_str());
+      return Failure;
+    }
+    
     FileID FID = SourceMgr.createFileID(File,
                                 SourceLocation::getFromRawEncoding(Record[1]),
                                        (SrcMgr::CharacteristicKind)Record[2],
@@ -879,6 +1002,8 @@ bool PCHReader::ReadBlockAbbrevs(llvm::BitstreamCursor &Cursor,
 }
 
 void PCHReader::ReadMacroRecord(uint64_t Offset) {
+  assert(PP && "Forgot to set Preprocessor ?");
+  
   // Keep track of where we are in the stream, then jump back there
   // after reading this macro.
   SavedStreamPosition SavedPosition(Stream);
@@ -930,7 +1055,7 @@ void PCHReader::ReadMacroRecord(uint64_t Offset) {
       SourceLocation Loc = SourceLocation::getFromRawEncoding(Record[1]);
       bool isUsed = Record[2];
       
-      MacroInfo *MI = PP.AllocateMacroInfo(Loc);
+      MacroInfo *MI = PP->AllocateMacroInfo(Loc);
       MI->setIsUsed(isUsed);
       
       if (RecType == pch::PP_MACRO_FUNCTION_LIKE) {
@@ -946,12 +1071,12 @@ void PCHReader::ReadMacroRecord(uint64_t Offset) {
         MI->setIsFunctionLike();
         if (isC99VarArgs) MI->setIsC99Varargs();
         if (isGNUVarArgs) MI->setIsGNUVarargs();
-        MI->setArgumentList(&MacroArgs[0], MacroArgs.size(),
-                            PP.getPreprocessorAllocator());
+        MI->setArgumentList(MacroArgs.data(), MacroArgs.size(),
+                            PP->getPreprocessorAllocator());
       }
 
       // Finally, install the macro.
-      PP.setMacroInfo(II, MI);
+      PP->setMacroInfo(II, MI);
 
       // Remember that we saw this macro last so that we add the tokens that
       // form its body to it.
@@ -978,6 +1103,32 @@ void PCHReader::ReadMacroRecord(uint64_t Offset) {
     }
   }
   }
+}
+
+/// \brief If we are loading a relocatable PCH file, and the filename is
+/// not an absolute path, add the system root to the beginning of the file
+/// name.
+void PCHReader::MaybeAddSystemRootToFilename(std::string &Filename) {
+  // If this is not a relocatable PCH file, there's nothing to do.
+  if (!RelocatablePCH)
+    return;
+  
+  if (Filename.empty() || Filename[0] == '/' || Filename[0] == '<')
+    return;
+
+  std::string FIXME = Filename;
+  
+  if (isysroot == 0) {
+    // If no system root was given, default to '/'
+    Filename.insert(Filename.begin(), '/');
+    return;
+  }
+  
+  unsigned Length = strlen(isysroot);
+  if (isysroot[Length - 1] != '/')
+    Filename.insert(Filename.begin(), '/');
+    
+  Filename.insert(Filename.begin(), isysroot, isysroot + Length);
 }
 
 PCHReader::PCHReadResult 
@@ -1092,11 +1243,11 @@ PCHReader::ReadPCHBlock() {
         return IgnorePCH;
       }
 
-      std::string TargetTriple(BlobStart, BlobLen);
-      if (TargetTriple != PP.getTargetInfo().getTargetTriple()) {
-        Diag(diag::warn_pch_target_triple)
-          << TargetTriple << PP.getTargetInfo().getTargetTriple();
-        return IgnorePCH;
+      RelocatablePCH = Record[4];
+      if (Listener) {
+        std::string TargetTriple(BlobStart, BlobLen);
+        if (Listener->ReadTargetTriple(TargetTriple))
+          return IgnorePCH;
       }
       break;
     }
@@ -1109,7 +1260,8 @@ PCHReader::ReadPCHBlock() {
                         (const unsigned char *)IdentifierTableData + Record[0],
                         (const unsigned char *)IdentifierTableData, 
                         PCHIdentifierLookupTrait(*this));
-        PP.getIdentifierTable().setExternalIdentifierLookup(this);
+        if (PP)
+          PP->getIdentifierTable().setExternalIdentifierLookup(this);
       }
       break;
 
@@ -1120,7 +1272,8 @@ PCHReader::ReadPCHBlock() {
       }
       IdentifierOffsets = (const uint32_t *)BlobStart;
       IdentifiersLoaded.resize(Record[0]);
-      PP.getHeaderSearchInfo().SetExternalLookup(this);
+      if (PP)
+        PP->getHeaderSearchInfo().SetExternalLookup(this);
       break;
 
     case pch::EXTERNAL_DEFINITIONS:
@@ -1176,14 +1329,14 @@ PCHReader::ReadPCHBlock() {
       break;
 
     case pch::PP_COUNTER_VALUE:
-      if (!Record.empty())
-        PP.setCounterValue(Record[0]);
+      if (!Record.empty() && Listener)
+        Listener->ReadCounter(Record[0]);
       break;
 
     case pch::SOURCE_LOCATION_OFFSETS:
       SLocOffsets = (const uint32_t *)BlobStart;
       TotalNumSLocEntries = Record[0];
-      PP.getSourceManager().PreallocateSLocEntries(this, 
+      SourceMgr.PreallocateSLocEntries(this, 
                                                    TotalNumSLocEntries, 
                                                    Record[1]);
       break;
@@ -1197,7 +1350,7 @@ PCHReader::ReadPCHBlock() {
       break;
 
     case pch::STAT_CACHE:
-      PP.getFileManager().setStatCache(
+      FileMgr.setStatCache(
                   new PCHStatCache((const unsigned char *)BlobStart + Record[0],
                                    (const unsigned char *)BlobStart,
                                    NumStatHits, NumStatMisses));
@@ -1217,6 +1370,16 @@ PCHReader::ReadPCHBlock() {
         return Failure;
       }
       ObjCCategoryImpls.swap(Record);
+      break;
+
+    case pch::ORIGINAL_FILE_NAME:
+      OriginalFileName.assign(BlobStart, BlobLen);
+      MaybeAddSystemRootToFilename(OriginalFileName);
+      break;
+        
+    case pch::COMMENT_RANGES:
+      Comments = (SourceRange *)BlobStart;
+      NumComments = BlobLen / sizeof(SourceRange);
       break;
     }
   }
@@ -1283,10 +1446,10 @@ PCHReader::PCHReadResult PCHReader::ReadPCH(const std::string &FileName) {
 
         // Clear out any preallocated source location entries, so that
         // the source manager does not try to resolve them later.
-        PP.getSourceManager().ClearPreallocatedSLocEntries();
+        SourceMgr.ClearPreallocatedSLocEntries();
 
         // Remove the stat cache.
-        PP.getFileManager().setStatCache(0);
+        FileMgr.setStatCache(0);
 
         return IgnorePCH;
       }
@@ -1299,69 +1462,172 @@ PCHReader::PCHReadResult PCHReader::ReadPCH(const std::string &FileName) {
       break;
     }
   }  
-
-  // Load the translation unit declaration
-  if (Context)
-    ReadDeclRecord(DeclOffsets[0], 0);
   
   // Check the predefines buffer.
   if (CheckPredefinesBuffer(PCHPredefines, PCHPredefinesLen, 
                             PCHPredefinesBufferID))
     return IgnorePCH;
   
-  // Initialization of builtins and library builtins occurs before the
-  // PCH file is read, so there may be some identifiers that were
-  // loaded into the IdentifierTable before we intercepted the
-  // creation of identifiers. Iterate through the list of known
-  // identifiers and determine whether we have to establish
-  // preprocessor definitions or top-level identifier declaration
-  // chains for those identifiers.
-  //
-  // We copy the IdentifierInfo pointers to a small vector first,
-  // since de-serializing declarations or macro definitions can add
-  // new entries into the identifier table, invalidating the
-  // iterators.
-  llvm::SmallVector<IdentifierInfo *, 128> Identifiers;
-  for (IdentifierTable::iterator Id = PP.getIdentifierTable().begin(),
-                              IdEnd = PP.getIdentifierTable().end();
-       Id != IdEnd; ++Id)
-    Identifiers.push_back(Id->second);
-  PCHIdentifierLookupTable *IdTable 
-    = (PCHIdentifierLookupTable *)IdentifierLookupTable;
-  for (unsigned I = 0, N = Identifiers.size(); I != N; ++I) {
-    IdentifierInfo *II = Identifiers[I];
-    // Look in the on-disk hash table for an entry for
-    PCHIdentifierLookupTrait Info(*this, II);
-    std::pair<const char*, unsigned> Key(II->getName(), II->getLength());
-    PCHIdentifierLookupTable::iterator Pos = IdTable->find(Key, &Info);
-    if (Pos == IdTable->end())
-      continue;
-
-    // Dereferencing the iterator has the effect of populating the
-    // IdentifierInfo node with the various declarations it needs.
-    (void)*Pos;
+  if (PP) {
+    // Initialization of builtins and library builtins occurs before the
+    // PCH file is read, so there may be some identifiers that were
+    // loaded into the IdentifierTable before we intercepted the
+    // creation of identifiers. Iterate through the list of known
+    // identifiers and determine whether we have to establish
+    // preprocessor definitions or top-level identifier declaration
+    // chains for those identifiers.
+    //
+    // We copy the IdentifierInfo pointers to a small vector first,
+    // since de-serializing declarations or macro definitions can add
+    // new entries into the identifier table, invalidating the
+    // iterators.
+    llvm::SmallVector<IdentifierInfo *, 128> Identifiers;
+    for (IdentifierTable::iterator Id = PP->getIdentifierTable().begin(),
+                                IdEnd = PP->getIdentifierTable().end();
+         Id != IdEnd; ++Id)
+      Identifiers.push_back(Id->second);
+    PCHIdentifierLookupTable *IdTable 
+      = (PCHIdentifierLookupTable *)IdentifierLookupTable;
+    for (unsigned I = 0, N = Identifiers.size(); I != N; ++I) {
+      IdentifierInfo *II = Identifiers[I];
+      // Look in the on-disk hash table for an entry for
+      PCHIdentifierLookupTrait Info(*this, II);
+      std::pair<const char*, unsigned> Key(II->getName(), II->getLength());
+      PCHIdentifierLookupTable::iterator Pos = IdTable->find(Key, &Info);
+      if (Pos == IdTable->end())
+        continue;
+  
+      // Dereferencing the iterator has the effect of populating the
+      // IdentifierInfo node with the various declarations it needs.
+      (void)*Pos;
+    }
   }
 
-  // Load the special types.
-  if (Context) {
-    Context->setBuiltinVaListType(
-      GetType(SpecialTypes[pch::SPECIAL_TYPE_BUILTIN_VA_LIST]));
-    if (unsigned Id = SpecialTypes[pch::SPECIAL_TYPE_OBJC_ID])
-      Context->setObjCIdType(GetType(Id));
-    if (unsigned Sel = SpecialTypes[pch::SPECIAL_TYPE_OBJC_SELECTOR])
-      Context->setObjCSelType(GetType(Sel));
-    if (unsigned Proto = SpecialTypes[pch::SPECIAL_TYPE_OBJC_PROTOCOL])
-      Context->setObjCProtoType(GetType(Proto));
-    if (unsigned Class = SpecialTypes[pch::SPECIAL_TYPE_OBJC_CLASS])
-      Context->setObjCClassType(GetType(Class));
-    if (unsigned String = SpecialTypes[pch::SPECIAL_TYPE_CF_CONSTANT_STRING])
-      Context->setCFConstantStringType(GetType(String));
-    if (unsigned FastEnum 
-          = SpecialTypes[pch::SPECIAL_TYPE_OBJC_FAST_ENUMERATION_STATE])
-      Context->setObjCFastEnumerationStateType(GetType(FastEnum));
-  }
+  if (Context)
+    InitializeContext(*Context);
 
   return Success;
+}
+
+void PCHReader::InitializeContext(ASTContext &Ctx) {
+  Context = &Ctx;
+  assert(Context && "Passed null context!");
+
+  assert(PP && "Forgot to set Preprocessor ?");
+  PP->getIdentifierTable().setExternalIdentifierLookup(this);
+  PP->getHeaderSearchInfo().SetExternalLookup(this);
+  
+  // Load the translation unit declaration
+  ReadDeclRecord(DeclOffsets[0], 0);
+
+  // Load the special types.
+  Context->setBuiltinVaListType(
+    GetType(SpecialTypes[pch::SPECIAL_TYPE_BUILTIN_VA_LIST]));
+  if (unsigned Id = SpecialTypes[pch::SPECIAL_TYPE_OBJC_ID])
+    Context->setObjCIdType(GetType(Id));
+  if (unsigned Sel = SpecialTypes[pch::SPECIAL_TYPE_OBJC_SELECTOR])
+    Context->setObjCSelType(GetType(Sel));
+  if (unsigned Proto = SpecialTypes[pch::SPECIAL_TYPE_OBJC_PROTOCOL])
+    Context->setObjCProtoType(GetType(Proto));
+  if (unsigned Class = SpecialTypes[pch::SPECIAL_TYPE_OBJC_CLASS])
+    Context->setObjCClassType(GetType(Class));
+  if (unsigned String = SpecialTypes[pch::SPECIAL_TYPE_CF_CONSTANT_STRING])
+    Context->setCFConstantStringType(GetType(String));
+  if (unsigned FastEnum 
+        = SpecialTypes[pch::SPECIAL_TYPE_OBJC_FAST_ENUMERATION_STATE])
+    Context->setObjCFastEnumerationStateType(GetType(FastEnum));
+  if (unsigned File = SpecialTypes[pch::SPECIAL_TYPE_FILE]) {
+    QualType FileType = GetType(File);
+    assert(!FileType.isNull() && "FILE type is NULL");
+    if (const TypedefType *Typedef = FileType->getAsTypedefType())
+      Context->setFILEDecl(Typedef->getDecl());
+    else {
+      const TagType *Tag = FileType->getAsTagType();
+      assert(Tag && "Invalid FILE type in PCH file");
+      Context->setFILEDecl(Tag->getDecl());
+    }
+  }
+}
+
+/// \brief Retrieve the name of the original source file name
+/// directly from the PCH file, without actually loading the PCH
+/// file.
+std::string PCHReader::getOriginalSourceFile(const std::string &PCHFileName) {
+  // Open the PCH file.
+  std::string ErrStr;
+  llvm::OwningPtr<llvm::MemoryBuffer> Buffer;
+  Buffer.reset(llvm::MemoryBuffer::getFile(PCHFileName.c_str(), &ErrStr));
+  if (!Buffer) {
+    fprintf(stderr, "error: %s\n", ErrStr.c_str());
+    return std::string();
+  }
+
+  // Initialize the stream
+  llvm::BitstreamReader StreamFile;
+  llvm::BitstreamCursor Stream;
+  StreamFile.init((const unsigned char *)Buffer->getBufferStart(), 
+                  (const unsigned char *)Buffer->getBufferEnd());
+  Stream.init(StreamFile);
+
+  // Sniff for the signature.
+  if (Stream.Read(8) != 'C' ||
+      Stream.Read(8) != 'P' ||
+      Stream.Read(8) != 'C' ||
+      Stream.Read(8) != 'H') {
+    fprintf(stderr, 
+            "error: '%s' does not appear to be a precompiled header file\n",
+            PCHFileName.c_str());
+    return std::string();
+  }
+
+  RecordData Record;
+  while (!Stream.AtEndOfStream()) {
+    unsigned Code = Stream.ReadCode();
+    
+    if (Code == llvm::bitc::ENTER_SUBBLOCK) {
+      unsigned BlockID = Stream.ReadSubBlockID();
+      
+      // We only know the PCH subblock ID.
+      switch (BlockID) {
+      case pch::PCH_BLOCK_ID:
+        if (Stream.EnterSubBlock(pch::PCH_BLOCK_ID)) {
+          fprintf(stderr, "error: malformed block record in PCH file\n");
+          return std::string();
+        }
+        break;
+        
+      default:
+        if (Stream.SkipBlock()) {
+          fprintf(stderr, "error: malformed block record in PCH file\n");
+          return std::string();
+        }
+        break;
+      }
+      continue;
+    }
+
+    if (Code == llvm::bitc::END_BLOCK) {
+      if (Stream.ReadBlockEnd()) {
+        fprintf(stderr, "error: error at end of module block in PCH file\n");
+        return std::string();
+      }
+      continue;
+    }
+
+    if (Code == llvm::bitc::DEFINE_ABBREV) {
+      Stream.ReadAbbrevRecord();
+      continue;
+    }
+
+    Record.clear();
+    const char *BlobStart = 0;
+    unsigned BlobLen = 0;
+    if (Stream.ReadRecord(Code, Record, &BlobStart, &BlobLen) 
+          == pch::ORIGINAL_FILE_NAME)
+      return std::string(BlobStart, BlobLen);
+  }  
+
+  return std::string();
 }
 
 /// \brief Parse the record that corresponds to a LangOptions data
@@ -1380,73 +1646,70 @@ PCHReader::PCHReadResult PCHReader::ReadPCH(const std::string &FileName) {
 /// \returns true if the PCH file is unacceptable, false otherwise.
 bool PCHReader::ParseLanguageOptions(
                              const llvm::SmallVectorImpl<uint64_t> &Record) {
-  const LangOptions &LangOpts = PP.getLangOptions();
-#define PARSE_LANGOPT_BENIGN(Option) ++Idx
-#define PARSE_LANGOPT_IMPORTANT(Option, DiagID)                 \
-  if (Record[Idx] != LangOpts.Option) {                         \
-    Diag(DiagID) << (unsigned)Record[Idx] << LangOpts.Option;   \
-    return true;                                                \
-  }                                                             \
-  ++Idx
+  if (Listener) {
+    LangOptions LangOpts;
+    
+  #define PARSE_LANGOPT(Option)                  \
+      LangOpts.Option = Record[Idx];             \
+      ++Idx
+    
+    unsigned Idx = 0;
+    PARSE_LANGOPT(Trigraphs);
+    PARSE_LANGOPT(BCPLComment);
+    PARSE_LANGOPT(DollarIdents);
+    PARSE_LANGOPT(AsmPreprocessor);
+    PARSE_LANGOPT(GNUMode);
+    PARSE_LANGOPT(ImplicitInt);
+    PARSE_LANGOPT(Digraphs);
+    PARSE_LANGOPT(HexFloats);
+    PARSE_LANGOPT(C99);
+    PARSE_LANGOPT(Microsoft);
+    PARSE_LANGOPT(CPlusPlus);
+    PARSE_LANGOPT(CPlusPlus0x);
+    PARSE_LANGOPT(CXXOperatorNames);
+    PARSE_LANGOPT(ObjC1);
+    PARSE_LANGOPT(ObjC2);
+    PARSE_LANGOPT(ObjCNonFragileABI);
+    PARSE_LANGOPT(PascalStrings);
+    PARSE_LANGOPT(WritableStrings);
+    PARSE_LANGOPT(LaxVectorConversions);
+    PARSE_LANGOPT(AltiVec);
+    PARSE_LANGOPT(Exceptions);
+    PARSE_LANGOPT(NeXTRuntime);
+    PARSE_LANGOPT(Freestanding);
+    PARSE_LANGOPT(NoBuiltin);
+    PARSE_LANGOPT(ThreadsafeStatics);
+    PARSE_LANGOPT(Blocks);
+    PARSE_LANGOPT(EmitAllDecls);
+    PARSE_LANGOPT(MathErrno);
+    PARSE_LANGOPT(OverflowChecking);
+    PARSE_LANGOPT(HeinousExtensions);
+    PARSE_LANGOPT(Optimize);
+    PARSE_LANGOPT(OptimizeSize);
+    PARSE_LANGOPT(Static);
+    PARSE_LANGOPT(PICLevel);
+    PARSE_LANGOPT(GNUInline);
+    PARSE_LANGOPT(NoInline);
+    PARSE_LANGOPT(AccessControl);
+    PARSE_LANGOPT(CharIsSigned);
+    LangOpts.setGCMode((LangOptions::GCMode)Record[Idx]);
+    ++Idx;
+    LangOpts.setVisibilityMode((LangOptions::VisibilityMode)Record[Idx]);
+    ++Idx;
+    PARSE_LANGOPT(InstantiationDepth);
+    PARSE_LANGOPT(OpenCL);
+  #undef PARSE_LANGOPT
 
-  unsigned Idx = 0;
-  PARSE_LANGOPT_BENIGN(Trigraphs);
-  PARSE_LANGOPT_BENIGN(BCPLComment);
-  PARSE_LANGOPT_BENIGN(DollarIdents);
-  PARSE_LANGOPT_BENIGN(AsmPreprocessor);
-  PARSE_LANGOPT_IMPORTANT(GNUMode, diag::warn_pch_gnu_extensions);
-  PARSE_LANGOPT_BENIGN(ImplicitInt);
-  PARSE_LANGOPT_BENIGN(Digraphs);
-  PARSE_LANGOPT_BENIGN(HexFloats);
-  PARSE_LANGOPT_IMPORTANT(C99, diag::warn_pch_c99);
-  PARSE_LANGOPT_IMPORTANT(Microsoft, diag::warn_pch_microsoft_extensions);
-  PARSE_LANGOPT_IMPORTANT(CPlusPlus, diag::warn_pch_cplusplus);
-  PARSE_LANGOPT_IMPORTANT(CPlusPlus0x, diag::warn_pch_cplusplus0x);
-  PARSE_LANGOPT_BENIGN(CXXOperatorName);
-  PARSE_LANGOPT_IMPORTANT(ObjC1, diag::warn_pch_objective_c);
-  PARSE_LANGOPT_IMPORTANT(ObjC2, diag::warn_pch_objective_c2);
-  PARSE_LANGOPT_IMPORTANT(ObjCNonFragileABI, diag::warn_pch_nonfragile_abi);
-  PARSE_LANGOPT_BENIGN(PascalStrings);
-  PARSE_LANGOPT_BENIGN(WritableStrings);
-  PARSE_LANGOPT_IMPORTANT(LaxVectorConversions, 
-                          diag::warn_pch_lax_vector_conversions);
-  PARSE_LANGOPT_IMPORTANT(Exceptions, diag::warn_pch_exceptions);
-  PARSE_LANGOPT_IMPORTANT(NeXTRuntime, diag::warn_pch_objc_runtime);
-  PARSE_LANGOPT_IMPORTANT(Freestanding, diag::warn_pch_freestanding);
-  PARSE_LANGOPT_IMPORTANT(NoBuiltin, diag::warn_pch_builtins);
-  PARSE_LANGOPT_IMPORTANT(ThreadsafeStatics, 
-                          diag::warn_pch_thread_safe_statics);
-  PARSE_LANGOPT_IMPORTANT(Blocks, diag::warn_pch_blocks);
-  PARSE_LANGOPT_BENIGN(EmitAllDecls);
-  PARSE_LANGOPT_IMPORTANT(MathErrno, diag::warn_pch_math_errno);
-  PARSE_LANGOPT_IMPORTANT(OverflowChecking, diag::warn_pch_overflow_checking);
-  PARSE_LANGOPT_IMPORTANT(HeinousExtensions, 
-                          diag::warn_pch_heinous_extensions);
-  // FIXME: Most of the options below are benign if the macro wasn't
-  // used. Unfortunately, this means that a PCH compiled without
-  // optimization can't be used with optimization turned on, even
-  // though the only thing that changes is whether __OPTIMIZE__ was
-  // defined... but if __OPTIMIZE__ never showed up in the header, it
-  // doesn't matter. We could consider making this some special kind
-  // of check.
-  PARSE_LANGOPT_IMPORTANT(Optimize, diag::warn_pch_optimize);
-  PARSE_LANGOPT_IMPORTANT(OptimizeSize, diag::warn_pch_optimize_size);
-  PARSE_LANGOPT_IMPORTANT(Static, diag::warn_pch_static);
-  PARSE_LANGOPT_IMPORTANT(PICLevel, diag::warn_pch_pic_level);
-  PARSE_LANGOPT_IMPORTANT(GNUInline, diag::warn_pch_gnu_inline);
-  PARSE_LANGOPT_IMPORTANT(NoInline, diag::warn_pch_no_inline);
-  if ((LangOpts.getGCMode() != 0) != (Record[Idx] != 0)) {
-    Diag(diag::warn_pch_gc_mode) 
-      << (unsigned)Record[Idx] << LangOpts.getGCMode();
-    return true;
+    return Listener->ReadLanguageOptions(LangOpts);
   }
-  ++Idx;
-  PARSE_LANGOPT_BENIGN(getVisibilityMode());
-  PARSE_LANGOPT_BENIGN(InstantiationDepth);
-#undef PARSE_LANGOPT_IRRELEVANT
-#undef PARSE_LANGOPT_BENIGN
 
   return false;
+}
+
+void PCHReader::ReadComments(std::vector<SourceRange> &Comments) {
+  Comments.resize(NumComments);
+  std::copy(this->Comments, this->Comments + NumComments,
+            Comments.begin());
 }
 
 /// \brief Read and return the type at the given offset.
@@ -1459,6 +1722,9 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
   // after reading this type.
   SavedStreamPosition SavedPosition(Stream);
 
+  // Note that we are loading a type record.
+  LoadingTypeOrDecl Loading(*this);
+  
   Stream.JumpToBit(Offset);
   RecordData Record;
   unsigned Code = Stream.ReadCode();
@@ -1526,7 +1792,32 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     unsigned IndexTypeQuals = Record[2];
     unsigned Idx = 3;
     llvm::APInt Size = ReadAPInt(Record, Idx);
-    return Context->getConstantArrayType(ElementType, Size, ASM,IndexTypeQuals);
+    return Context->getConstantArrayType(ElementType, Size,
+                                         ASM, IndexTypeQuals);
+  }
+
+  case pch::TYPE_CONSTANT_ARRAY_WITH_EXPR: {
+    QualType ElementType = GetType(Record[0]);
+    ArrayType::ArraySizeModifier ASM = (ArrayType::ArraySizeModifier)Record[1];
+    unsigned IndexTypeQuals = Record[2];
+    SourceLocation LBLoc = SourceLocation::getFromRawEncoding(Record[3]);
+    SourceLocation RBLoc = SourceLocation::getFromRawEncoding(Record[4]);
+    unsigned Idx = 5;
+    llvm::APInt Size = ReadAPInt(Record, Idx);
+    return Context->getConstantArrayWithExprType(ElementType,
+                                                 Size, ReadTypeExpr(),
+                                                 ASM, IndexTypeQuals,
+                                                 SourceRange(LBLoc, RBLoc));
+  }
+
+  case pch::TYPE_CONSTANT_ARRAY_WITHOUT_EXPR: {
+    QualType ElementType = GetType(Record[0]);
+    ArrayType::ArraySizeModifier ASM = (ArrayType::ArraySizeModifier)Record[1];
+    unsigned IndexTypeQuals = Record[2];
+    unsigned Idx = 3;
+    llvm::APInt Size = ReadAPInt(Record, Idx);
+    return Context->getConstantArrayWithoutExprType(ElementType, Size,
+                                                    ASM, IndexTypeQuals);
   }
 
   case pch::TYPE_INCOMPLETE_ARRAY: {
@@ -1540,8 +1831,11 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     QualType ElementType = GetType(Record[0]);
     ArrayType::ArraySizeModifier ASM = (ArrayType::ArraySizeModifier)Record[1];
     unsigned IndexTypeQuals = Record[2];
+    SourceLocation LBLoc = SourceLocation::getFromRawEncoding(Record[3]);
+    SourceLocation RBLoc = SourceLocation::getFromRawEncoding(Record[4]);
     return Context->getVariableArrayType(ElementType, ReadTypeExpr(),
-                                         ASM, IndexTypeQuals);
+                                         ASM, IndexTypeQuals,
+                                         SourceRange(LBLoc, RBLoc));
   }
 
   case pch::TYPE_VECTOR: {
@@ -1590,10 +1884,10 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     llvm::SmallVector<QualType, 2> Exceptions;
     for (unsigned I = 0; I != NumExceptions; ++I)
       Exceptions.push_back(GetType(Record[Idx++]));
-    return Context->getFunctionType(ResultType, &ParamTypes[0], NumParams,
+    return Context->getFunctionType(ResultType, ParamTypes.data(), NumParams,
                                     isVariadic, Quals, hasExceptionSpec,
                                     hasAnyExceptionSpec, NumExceptions,
-                                    &Exceptions[0]);
+                                    Exceptions.data());
   }
 
   case pch::TYPE_TYPEDEF:
@@ -1611,7 +1905,10 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     QualType UnderlyingType = GetType(Record[0]);
     return Context->getTypeOfType(UnderlyingType);
   }
-    
+   
+  case pch::TYPE_DECLTYPE:
+    return Context->getDecltypeType(ReadTypeExpr());
+
   case pch::TYPE_RECORD:
     assert(Record.size() == 1 && "incorrect encoding of record type");
     return Context->getTypeDeclType(cast<RecordDecl>(GetDecl(Record[0])));
@@ -1632,16 +1929,18 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     llvm::SmallVector<ObjCProtocolDecl*, 4> Protos;
     for (unsigned I = 0; I != NumProtos; ++I)
       Protos.push_back(cast<ObjCProtocolDecl>(GetDecl(Record[Idx++])));
-    return Context->getObjCQualifiedInterfaceType(ItfD, &Protos[0], NumProtos);
+    return Context->getObjCQualifiedInterfaceType(ItfD, Protos.data(), NumProtos);
   }
 
-  case pch::TYPE_OBJC_QUALIFIED_ID: {
+  case pch::TYPE_OBJC_OBJECT_POINTER: {
     unsigned Idx = 0;
+    ObjCInterfaceDecl *ItfD = 
+      cast_or_null<ObjCInterfaceDecl>(GetDecl(Record[Idx++]));
     unsigned NumProtos = Record[Idx++];
     llvm::SmallVector<ObjCProtocolDecl*, 4> Protos;
     for (unsigned I = 0; I != NumProtos; ++I)
       Protos.push_back(cast<ObjCProtocolDecl>(GetDecl(Record[Idx++])));
-    return Context->getObjCQualifiedIdType(&Protos[0], NumProtos);
+    return Context->getObjCObjectPointerType(ItfD, Protos.data(), NumProtos);
   }
   }
   // Suppress a GCC warning
@@ -1684,6 +1983,7 @@ QualType PCHReader::GetType(pch::TypeID ID) {
     case pch::PREDEF_TYPE_LONGDOUBLE_ID: T = Context->LongDoubleTy;       break;
     case pch::PREDEF_TYPE_OVERLOAD_ID:   T = Context->OverloadTy;         break;
     case pch::PREDEF_TYPE_DEPENDENT_ID:  T = Context->DependentTy;        break;
+    case pch::PREDEF_TYPE_NULLPTR_ID:    T = Context->NullPtrTy;          break;
     }
 
     assert(!T.isNull() && "Unknown predefined type");
@@ -1959,6 +2259,52 @@ void PCHReader::SetIdentifierInfo(unsigned ID, IdentifierInfo *II) {
   IdentifiersLoaded[ID - 1] = II;
 }
 
+/// \brief Set the globally-visible declarations associated with the given
+/// identifier.
+///
+/// If the PCH reader is currently in a state where the given declaration IDs
+/// cannot safely be resolved, they are queued until it is safe to resolve 
+/// them.
+///
+/// \param II an IdentifierInfo that refers to one or more globally-visible
+/// declarations.
+///
+/// \param DeclIDs the set of declaration IDs with the name @p II that are
+/// visible at global scope.
+///
+/// \param Nonrecursive should be true to indicate that the caller knows that
+/// this call is non-recursive, and therefore the globally-visible declarations
+/// will not be placed onto the pending queue.
+void 
+PCHReader::SetGloballyVisibleDecls(IdentifierInfo *II, 
+                              const llvm::SmallVectorImpl<uint32_t> &DeclIDs,
+                                   bool Nonrecursive) {
+  if (CurrentlyLoadingTypeOrDecl && !Nonrecursive) {
+    PendingIdentifierInfos.push_back(PendingIdentifierInfo());
+    PendingIdentifierInfo &PII = PendingIdentifierInfos.back();
+    PII.II = II;
+    for (unsigned I = 0, N = DeclIDs.size(); I != N; ++I)
+      PII.DeclIDs.push_back(DeclIDs[I]);
+    return;
+  }
+      
+  for (unsigned I = 0, N = DeclIDs.size(); I != N; ++I) {
+    NamedDecl *D = cast<NamedDecl>(GetDecl(DeclIDs[I]));
+    if (SemaObj) {
+      // Introduce this declaration into the translation-unit scope
+      // and add it to the declaration chain for this identifier, so
+      // that (unqualified) name lookup will find it.
+      SemaObj->TUScope->AddDecl(Action::DeclPtrTy::make(D));
+      SemaObj->IdResolver.AddDeclToIdentifierChain(II, D);
+    } else {
+      // Queue this declaration so that it will be added to the
+      // translation unit scope and identifier's declaration chain
+      // once a Sema object is known.
+      PreloadedDecls.push_back(D);
+    }
+  }
+}
+
 IdentifierInfo *PCHReader::DecodeIdentifierInfo(unsigned ID) {
   if (ID == 0)
     return 0;
@@ -1968,6 +2314,7 @@ IdentifierInfo *PCHReader::DecodeIdentifierInfo(unsigned ID) {
     return 0;
   }
   
+  assert(PP && "Forgot to set Preprocessor ?");
   if (!IdentifiersLoaded[ID - 1]) {
     uint32_t Offset = IdentifierOffsets[ID - 1];
     const char *Str = IdentifierTableData + Offset;
@@ -1979,7 +2326,7 @@ IdentifierInfo *PCHReader::DecodeIdentifierInfo(unsigned ID) {
     unsigned StrLen = (((unsigned) StrLenPtr[0])
                        | (((unsigned) StrLenPtr[1]) << 8)) - 1;
     IdentifiersLoaded[ID - 1] 
-      = &PP.getIdentifierTable().get(Str, Str + StrLen);
+      = &PP->getIdentifierTable().get(Str, Str + StrLen);
   }
   
   return IdentifiersLoaded[ID - 1];
@@ -2072,7 +2419,7 @@ llvm::APFloat PCHReader::ReadAPFloat(const RecordData &Record, unsigned &Idx) {
 // \brief Read a string
 std::string PCHReader::ReadString(const RecordData &Record, unsigned &Idx) {
   unsigned Len = Record[Idx++];
-  std::string Result(&Record[Idx], &Record[Idx] + Len);
+  std::string Result(Record.data() + Idx, Record.data() + Idx + Len);
   Idx += Len;
   return Result;
 }
@@ -2082,15 +2429,14 @@ DiagnosticBuilder PCHReader::Diag(unsigned DiagID) {
 }
 
 DiagnosticBuilder PCHReader::Diag(SourceLocation Loc, unsigned DiagID) {
-  return PP.getDiagnostics().Report(FullSourceLoc(Loc,
-                                                  PP.getSourceManager()),
-                                    DiagID);
+  return Diags.Report(FullSourceLoc(Loc, SourceMgr), DiagID);
 }
 
 /// \brief Retrieve the identifier table associated with the
 /// preprocessor.
 IdentifierTable &PCHReader::getIdentifierTable() {
-  return PP.getIdentifierTable();
+  assert(PP && "Forgot to set Preprocessor ?");
+  return PP->getIdentifierTable();
 }
 
 /// \brief Record that the given ID maps to the given switch-case
@@ -2170,4 +2516,25 @@ void PCHReader::SetLabelOf(AddrLabelExpr *S, unsigned ID) {
     // expression to the set of unresolved label-address expressions.
     UnresolvedAddrLabelExprs.insert(std::make_pair(ID, S));
   }
+}
+
+
+PCHReader::LoadingTypeOrDecl::LoadingTypeOrDecl(PCHReader &Reader) 
+  : Reader(Reader), Parent(Reader.CurrentlyLoadingTypeOrDecl) {
+  Reader.CurrentlyLoadingTypeOrDecl = this;
+}
+
+PCHReader::LoadingTypeOrDecl::~LoadingTypeOrDecl() {
+  if (!Parent) {
+    // If any identifiers with corresponding top-level declarations have
+    // been loaded, load those declarations now.
+    while (!Reader.PendingIdentifierInfos.empty()) {
+      Reader.SetGloballyVisibleDecls(Reader.PendingIdentifierInfos.front().II,
+                                 Reader.PendingIdentifierInfos.front().DeclIDs,
+                                     true);
+      Reader.PendingIdentifierInfos.pop_front();
+    }
+  }
+
+  Reader.CurrentlyLoadingTypeOrDecl = Parent;  
 }

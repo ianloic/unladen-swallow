@@ -24,9 +24,15 @@ namespace clang {
 }
 
 
-// Defined in ASTContext.cpp
+// Defined in ASTContext.h
 void *operator new(size_t Bytes, clang::ASTContext &C,
                    size_t Alignment = 16) throw ();
+
+// It is good practice to pair new/delete operators.  Also, MSVC gives many
+// warnings if a matching delete overload is not declared, even though the
+// throw() spec guarantees it will not be implicitly called.
+void operator delete(void *Ptr, clang::ASTContext &C, size_t)
+              throw ();
 
 namespace clang {
 
@@ -50,6 +56,7 @@ public:
     Destructor,
     FastCall,    
     Format,
+    FormatArg,
     GNUInline,
     IBOutletKind, // Clang-specific.  Use "Kind" suffix to not conflict with
     NoReturn,
@@ -59,18 +66,15 @@ public:
     NonNull,
     ObjCException,
     ObjCNSObject,
-    CFOwnershipRelease,       // Clang/Checker-specific.
-    CFOwnershipRetain,        // Clang/Checker-specific.
-    CFOwnershipReturns,       // Clang/Checker-specific.
-    NSOwnershipAutorelease,   // Clang/Checker-specific.
-    NSOwnershipRelease,         // Clang/Checker-specific.
-    NSOwnershipRetain,          // Clang/Checker-specific.
-    NSOwnershipReturns,         // Clang/Checker-specific.
+    CFReturnsRetained,   // Clang/Checker-specific.
+    NSReturnsRetained,   // Clang/Checker-specific.
     Overloadable, // Clang-specific
     Packed,
     Pure,
     Regparm,
+    ReqdWorkGroupSize,   // OpenCL-specific
     Section,
+    Sentinel,
     StdCall,
     TransparentUnion,
     Unavailable,
@@ -364,6 +368,38 @@ public:
   static bool classof(const FormatAttr *A) { return true; }
 };
 
+class FormatArgAttr : public Attr {
+  int formatIdx;
+public:
+  FormatArgAttr(int idx) : Attr(FormatArg), formatIdx(idx) {}
+  int getFormatIdx() const { return formatIdx; }
+
+  virtual Attr *clone(ASTContext &C) const {
+    return ::new (C) FormatArgAttr(formatIdx);
+  }
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) { return A->getKind() == FormatArg; }
+  static bool classof(const FormatArgAttr *A) { return true; }
+};
+
+class SentinelAttr : public Attr {
+  int sentinel, NullPos;
+public:
+  SentinelAttr(int sentinel_val, int nullPos) : Attr(Sentinel),
+               sentinel(sentinel_val), NullPos(nullPos) {}
+  int getSentinel() const { return sentinel; }
+  int getNullPos() const { return NullPos; }
+
+  virtual Attr *clone(ASTContext &C) const {
+    return ::new (C) SentinelAttr(sentinel, NullPos);
+  }
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) { return A->getKind() == Sentinel; }
+  static bool classof(const SentinelAttr *A) { return true; }
+};
+
 class VisibilityAttr : public Attr {
 public:
   /// @brief An enumeration for the kinds of visibility of symbols.
@@ -466,14 +502,30 @@ public:
   static bool classof(const RegparmAttr *A) { return true; }
 };
 
+class ReqdWorkGroupSizeAttr : public Attr {
+  unsigned X, Y, Z;
+public:
+  ReqdWorkGroupSizeAttr(unsigned X, unsigned Y, unsigned Z)
+  : Attr(ReqdWorkGroupSize), X(X), Y(Y), Z(Z) {}
+
+  unsigned getXDim() const { return X; }
+  unsigned getYDim() const { return Y; }
+  unsigned getZDim() const { return Z; }
+
+  virtual Attr *clone(ASTContext &C) const { 
+    return ::new (C) ReqdWorkGroupSizeAttr(X, Y, Z); 
+  }
+  
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    return A->getKind() == ReqdWorkGroupSize;
+  }
+  static bool classof(const ReqdWorkGroupSizeAttr *A) { return true; }
+};
+  
 // Checker-specific attributes.
-DEF_SIMPLE_ATTR(CFOwnershipRelease);
-DEF_SIMPLE_ATTR(CFOwnershipRetain);
-DEF_SIMPLE_ATTR(CFOwnershipReturns);
-DEF_SIMPLE_ATTR(NSOwnershipRelease);
-DEF_SIMPLE_ATTR(NSOwnershipRetain);
-DEF_SIMPLE_ATTR(NSOwnershipAutorelease);
-DEF_SIMPLE_ATTR(NSOwnershipReturns);
+DEF_SIMPLE_ATTR(CFReturnsRetained);
+DEF_SIMPLE_ATTR(NSReturnsRetained);
 
 #undef DEF_SIMPLE_ATTR
   

@@ -19,13 +19,15 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/Instructions.h"
 #include "llvm/ModuleProvider.h"
-#include "llvm/CodeGen/MachineCodeEmitter.h"
-#include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/CodeGen/JITCodeEmitter.h"
 #include "llvm/CodeGen/MachineCodeInfo.h"
+#include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetJITInfo.h"
 #include "llvm/Support/Dwarf.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MutexGuard.h"
 #include "llvm/System/DynamicLibrary.h"
 #include "llvm/Config/config.h"
@@ -60,9 +62,7 @@ static struct RegisterJIT {
 
 }
 
-namespace llvm {
-  void LinkInJIT() {
-  }
+extern "C" void LLVMLinkInJIT() {
 }
 
 
@@ -197,8 +197,10 @@ void DarwinRegisterFrame(void* FrameBegin) {
 ExecutionEngine *ExecutionEngine::createJIT(ModuleProvider *MP,
                                             std::string *ErrorStr,
                                             JITMemoryManager *JMM,
-                                            CodeGenOpt::Level OptLevel) {
-  ExecutionEngine *EE = JIT::createJIT(MP, ErrorStr, JMM, OptLevel);
+                                            CodeGenOpt::Level OptLevel,
+                                            bool GVsWithCode) {
+  ExecutionEngine *EE = JIT::createJIT(MP, ErrorStr, JMM, OptLevel,
+                                       GVsWithCode);
   if (!EE) return 0;
   
   // Make sure we can resolve symbols in the program as well. The zero arg
@@ -208,14 +210,14 @@ ExecutionEngine *ExecutionEngine::createJIT(ModuleProvider *MP,
 }
 
 JIT::JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
-         JITMemoryManager *JMM, CodeGenOpt::Level OptLevel)
-  : ExecutionEngine(MP), TM(tm), TJI(tji) {
+         JITMemoryManager *JMM, CodeGenOpt::Level OptLevel, bool GVsWithCode)
+  : ExecutionEngine(MP), TM(tm), TJI(tji), AllocateGVsWithCode(GVsWithCode) {
   setTargetData(TM.getTargetData());
 
   jitstate = new JITState(MP);
 
-  // Initialize MCE
-  MCE = createEmitter(*this, JMM);
+  // Initialize JCE
+  JCE = createEmitter(*this, JMM);
 
   // Add target data
   MutexGuard locked(lock);
@@ -224,7 +226,7 @@ JIT::JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
 
   // Turn the machine code intermediate representation into bytes in memory that
   // may be executed.
-  if (TM.addPassesToEmitMachineCode(PM, *MCE, OptLevel)) {
+  if (TM.addPassesToEmitMachineCode(PM, *JCE, OptLevel)) {
     cerr << "Target does not support machine code emission!\n";
     abort();
   }
@@ -253,7 +255,7 @@ JIT::JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
 
 JIT::~JIT() {
   delete jitstate;
-  delete MCE;
+  delete JCE;
   delete &TM;
 }
 
@@ -273,7 +275,7 @@ void JIT::addModuleProvider(ModuleProvider *MP) {
 
     // Turn the machine code intermediate representation into bytes in memory
     // that may be executed.
-    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
+    if (TM.addPassesToEmitMachineCode(PM, *JCE, CodeGenOpt::Default)) {
       cerr << "Target does not support machine code emission!\n";
       abort();
     }
@@ -306,7 +308,7 @@ Module *JIT::removeModuleProvider(ModuleProvider *MP, std::string *E) {
     
     // Turn the machine code intermediate representation into bytes in memory
     // that may be executed.
-    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
+    if (TM.addPassesToEmitMachineCode(PM, *JCE, CodeGenOpt::Default)) {
       cerr << "Target does not support machine code emission!\n";
       abort();
     }
@@ -338,7 +340,7 @@ void JIT::deleteModuleProvider(ModuleProvider *MP, std::string *E) {
     
     // Turn the machine code intermediate representation into bytes in memory
     // that may be executed.
-    if (TM.addPassesToEmitMachineCode(PM, *MCE, CodeGenOpt::Default)) {
+    if (TM.addPassesToEmitMachineCode(PM, *JCE, CodeGenOpt::Default)) {
       cerr << "Target does not support machine code emission!\n";
       abort();
     }
@@ -454,7 +456,7 @@ GenericValue JIT::runFunction(Function *F,
   // arguments.  Make this function and return.
 
   // First, create the function.
-  FunctionType *STy=FunctionType::get(RetTy, std::vector<const Type*>(), false);
+  FunctionType *STy=FunctionType::get(RetTy, false);
   Function *Stub = Function::Create(STy, Function::InternalLinkage, "",
                                     F->getParent());
 
@@ -509,6 +511,40 @@ GenericValue JIT::runFunction(Function *F,
   return runFunction(Stub, std::vector<GenericValue>());
 }
 
+void JIT::RegisterJITEventListener(JITEventListener *L) {
+  if (L == NULL)
+    return;
+  MutexGuard locked(lock);
+  EventListeners.push_back(L);
+}
+void JIT::UnregisterJITEventListener(JITEventListener *L) {
+  if (L == NULL)
+    return;
+  MutexGuard locked(lock);
+  std::vector<JITEventListener*>::reverse_iterator I=
+      std::find(EventListeners.rbegin(), EventListeners.rend(), L);
+  if (I != EventListeners.rend()) {
+    std::swap(*I, EventListeners.back());
+    EventListeners.pop_back();
+  }
+}
+void JIT::NotifyFunctionEmitted(
+    const Function &F,
+    void *Code, size_t Size,
+    const JITEvent_EmittedFunctionDetails &Details) {
+  MutexGuard locked(lock);
+  for (unsigned I = 0, S = EventListeners.size(); I < S; ++I) {
+    EventListeners[I]->NotifyFunctionEmitted(F, Code, Size, Details);
+  }
+}
+
+void JIT::NotifyFreeingMachineCode(const Function &F, void *OldPtr) {
+  MutexGuard locked(lock);
+  for (unsigned I = 0, S = EventListeners.size(); I < S; ++I) {
+    EventListeners[I]->NotifyFreeingMachineCode(F, OldPtr);
+  }
+}
+
 /// runJITOnFunction - Run the FunctionPassManager full of
 /// just-in-time compilation passes on F, hopefully filling in
 /// GlobalAddress[F] with the address of F's machine code.
@@ -516,11 +552,23 @@ GenericValue JIT::runFunction(Function *F,
 void JIT::runJITOnFunction(Function *F, MachineCodeInfo *MCI) {
   MutexGuard locked(lock);
 
-  registerMachineCodeInfo(MCI);
+  class MCIListener : public JITEventListener {
+    MachineCodeInfo *const MCI;
+   public:
+    MCIListener(MachineCodeInfo *mci) : MCI(mci) {}
+    virtual void NotifyFunctionEmitted(const Function &,
+                                       void *Code, size_t Size,
+                                       const EmittedFunctionDetails &) {
+      MCI->setAddress(Code);
+      MCI->setSize(Size);
+    }
+  };
+  MCIListener MCIL(MCI);
+  RegisterJITEventListener(&MCIL);
 
   runJITOnFunctionUnlocked(F, locked);
 
-  registerMachineCodeInfo(0);
+  UnregisterJITEventListener(&MCIL);
 }
 
 void JIT::runJITOnFunctionUnlocked(Function *F, const MutexGuard &locked) {
@@ -563,6 +611,11 @@ void *JIT::getPointerToFunction(Function *F) {
     return Addr;   // Check if function already code gen'd
 
   MutexGuard locked(lock);
+  
+  // Now that this thread owns the lock, check if another thread has already
+  // code gen'd the function.
+  if (void *Addr = getPointerToGlobalIfAvailable(F))
+    return Addr;  
 
   // Make sure we read in the function if it exists in this Module.
   if (F->hasNotBeenReadFromBitcode()) {
@@ -621,43 +674,16 @@ void *JIT::getOrEmitGlobalVariable(const GlobalVariable *GV) {
 #endif
     Ptr = sys::DynamicLibrary::SearchForAddressOfSymbol(GV->getName().c_str());
     if (Ptr == 0 && !areDlsymStubsEnabled()) {
-      cerr << "Could not resolve external global address: "
-           << GV->getName() << "\n";
-      abort();
+      llvm_report_error("Could not resolve external global address: "
+                        +GV->getName());
     }
     addGlobalMapping(GV, Ptr);
   } else {
-    // GlobalVariable's which are not "constant" will cause trouble in a server
-    // situation. It's returned in the same block of memory as code which may
-    // not be writable.
-    if (isGVCompilationDisabled() && !GV->isConstant()) {
-      cerr << "Compilation of non-internal GlobalValue is disabled!\n";
-      abort();
-    }
     // If the global hasn't been emitted to memory yet, allocate space and
-    // emit it into memory.  It goes in the same array as the generated
-    // code, jump tables, etc.
-    const Type *GlobalType = GV->getType()->getElementType();
-    size_t S = getTargetData()->getTypePaddedSize(GlobalType);
-    size_t A = getTargetData()->getPreferredAlignment(GV);
-    if (GV->isThreadLocal()) {
-      MutexGuard locked(lock);
-      Ptr = TJI.allocateThreadLocalMemory(S);
-    } else if (TJI.allocateSeparateGVMemory()) {
-      if (A <= 8) {
-        Ptr = malloc(S);
-      } else {
-        // Allocate S+A bytes of memory, then use an aligned pointer within that
-        // space.
-        Ptr = malloc(S+A);
-        unsigned MisAligned = ((intptr_t)Ptr & (A-1));
-        Ptr = (char*)Ptr + (MisAligned ? (A-MisAligned) : 0);
-      }
-    } else {
-      Ptr = MCE->allocateSpace(S, A);
-    }
+    // emit it into memory.
+    Ptr = getMemoryForGV(GV);
     addGlobalMapping(GV, Ptr);
-    EmitGlobalVariable(GV);
+    EmitGlobalVariable(GV);  // Initialize the variable.
   }
   return Ptr;
 }
@@ -692,17 +718,48 @@ void *JIT::recompileAndRelinkFunction(Function *F) {
 /// on the target.
 ///
 char* JIT::getMemoryForGV(const GlobalVariable* GV) {
-  const Type *ElTy = GV->getType()->getElementType();
-  size_t GVSize = (size_t)getTargetData()->getTypePaddedSize(ElTy);
+  char *Ptr;
+
+  // GlobalVariable's which are not "constant" will cause trouble in a server
+  // situation. It's returned in the same block of memory as code which may
+  // not be writable.
+  if (isGVCompilationDisabled() && !GV->isConstant()) {
+    cerr << "Compilation of non-internal GlobalValue is disabled!\n";
+    abort();
+  }
+
+  // Some applications require globals and code to live together, so they may
+  // be allocated into the same buffer, but in general globals are allocated
+  // through the memory manager which puts them near the code but not in the
+  // same buffer.
+  const Type *GlobalType = GV->getType()->getElementType();
+  size_t S = getTargetData()->getTypeAllocSize(GlobalType);
+  size_t A = getTargetData()->getPreferredAlignment(GV);
   if (GV->isThreadLocal()) {
     MutexGuard locked(lock);
-    return TJI.allocateThreadLocalMemory(GVSize);
+    Ptr = TJI.allocateThreadLocalMemory(S);
+  } else if (TJI.allocateSeparateGVMemory()) {
+    if (A <= 8) {
+      Ptr = (char*)malloc(S);
+    } else {
+      // Allocate S+A bytes of memory, then use an aligned pointer within that
+      // space.
+      Ptr = (char*)malloc(S+A);
+      unsigned MisAligned = ((intptr_t)Ptr & (A-1));
+      Ptr = Ptr + (MisAligned ? (A-MisAligned) : 0);
+    }
+  } else if (AllocateGVsWithCode) {
+    Ptr = (char*)JCE->allocateSpace(S, A);
   } else {
-    return new char[GVSize];
+    Ptr = (char*)JCE->allocateGlobal(S, A);
   }
+  return Ptr;
 }
 
 void JIT::addPendingFunction(Function *F) {
   MutexGuard locked(lock);
   jitstate->getPendingFunctions(locked).push_back(F);
 }
+
+
+JITEventListener::~JITEventListener() {}

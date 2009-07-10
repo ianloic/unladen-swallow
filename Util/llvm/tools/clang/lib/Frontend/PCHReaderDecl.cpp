@@ -82,6 +82,7 @@ void PCHDeclReader::VisitDecl(Decl *D) {
   if (Record[Idx++])
     D->addAttr(Reader.ReadAttributes());
   D->setImplicit(Record[Idx++]);
+  D->setUsed(Record[Idx++]);
   D->setAccess((AccessSpecifier)Record[Idx++]);
 }
 
@@ -120,12 +121,14 @@ void PCHDeclReader::VisitTagDecl(TagDecl *TD) {
 void PCHDeclReader::VisitEnumDecl(EnumDecl *ED) {
   VisitTagDecl(ED);
   ED->setIntegerType(Reader.GetType(Record[Idx++]));
+  // FIXME: C++ InstantiatedFrom
 }
 
 void PCHDeclReader::VisitRecordDecl(RecordDecl *RD) {
   VisitTagDecl(RD);
   RD->setHasFlexibleArrayMember(Record[Idx++]);
   RD->setAnonymousStructOrUnion(Record[Idx++]);
+  RD->setHasObjectMember(Record[Idx++]);
 }
 
 void PCHDeclReader::VisitValueDecl(ValueDecl *VD) {
@@ -149,18 +152,20 @@ void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   FD->setStorageClass((FunctionDecl::StorageClass)Record[Idx++]);
   FD->setInline(Record[Idx++]);
   FD->setC99InlineDefinition(Record[Idx++]);
-  FD->setVirtual(Record[Idx++]);
+  FD->setVirtualAsWritten(Record[Idx++]);
   FD->setPure(Record[Idx++]);
-  FD->setInheritedPrototype(Record[Idx++]);
-  FD->setHasPrototype(Record[Idx++]);
+  FD->setHasInheritedPrototype(Record[Idx++]);
+  FD->setHasWrittenPrototype(Record[Idx++]);
   FD->setDeleted(Record[Idx++]);
   FD->setTypeSpecStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  FD->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  // FIXME: C++ TemplateOrInstantiation
   unsigned NumParams = Record[Idx++];
   llvm::SmallVector<ParmVarDecl *, 16> Params;
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(cast<ParmVarDecl>(Reader.GetDecl(Record[Idx++])));
-  FD->setParams(*Reader.getContext(), &Params[0], NumParams);
+  FD->setParams(*Reader.getContext(), Params.data(), NumParams);
 }
 
 void PCHDeclReader::VisitObjCMethodDecl(ObjCMethodDecl *MD) {
@@ -184,7 +189,7 @@ void PCHDeclReader::VisitObjCMethodDecl(ObjCMethodDecl *MD) {
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(cast<ParmVarDecl>(Reader.GetDecl(Record[Idx++])));
-  MD->setMethodParams(*Reader.getContext(), &Params[0], NumParams);
+  MD->setMethodParams(*Reader.getContext(), Params.data(), NumParams);
 }
 
 void PCHDeclReader::VisitObjCContainerDecl(ObjCContainerDecl *CD) {
@@ -202,13 +207,13 @@ void PCHDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
   Protocols.reserve(NumProtocols);
   for (unsigned I = 0; I != NumProtocols; ++I)
     Protocols.push_back(cast<ObjCProtocolDecl>(Reader.GetDecl(Record[Idx++])));
-  ID->setProtocolList(&Protocols[0], NumProtocols, *Reader.getContext());
+  ID->setProtocolList(Protocols.data(), NumProtocols, *Reader.getContext());
   unsigned NumIvars = Record[Idx++];
   llvm::SmallVector<ObjCIvarDecl *, 16> IVars;
   IVars.reserve(NumIvars);
   for (unsigned I = 0; I != NumIvars; ++I)
     IVars.push_back(cast<ObjCIvarDecl>(Reader.GetDecl(Record[Idx++])));
-  ID->setIVarList(&IVars[0], NumIvars, *Reader.getContext());
+  ID->setIVarList(IVars.data(), NumIvars, *Reader.getContext());
   ID->setCategoryList(
                cast_or_null<ObjCCategoryDecl>(Reader.GetDecl(Record[Idx++])));
   ID->setForwardDecl(Record[Idx++]);
@@ -232,7 +237,7 @@ void PCHDeclReader::VisitObjCProtocolDecl(ObjCProtocolDecl *PD) {
   ProtoRefs.reserve(NumProtoRefs);
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoRefs.push_back(cast<ObjCProtocolDecl>(Reader.GetDecl(Record[Idx++])));
-  PD->setProtocolList(&ProtoRefs[0], NumProtoRefs, *Reader.getContext());
+  PD->setProtocolList(ProtoRefs.data(), NumProtoRefs, *Reader.getContext());
 }
 
 void PCHDeclReader::VisitObjCAtDefsFieldDecl(ObjCAtDefsFieldDecl *FD) {
@@ -246,7 +251,7 @@ void PCHDeclReader::VisitObjCClassDecl(ObjCClassDecl *CD) {
   ClassRefs.reserve(NumClassRefs);
   for (unsigned I = 0; I != NumClassRefs; ++I)
     ClassRefs.push_back(cast<ObjCInterfaceDecl>(Reader.GetDecl(Record[Idx++])));
-  CD->setClassList(*Reader.getContext(), &ClassRefs[0], NumClassRefs);
+  CD->setClassList(*Reader.getContext(), ClassRefs.data(), NumClassRefs);
 }
 
 void PCHDeclReader::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *FPD) {
@@ -256,7 +261,7 @@ void PCHDeclReader::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *FPD) {
   ProtoRefs.reserve(NumProtoRefs);
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoRefs.push_back(cast<ObjCProtocolDecl>(Reader.GetDecl(Record[Idx++])));
-  FPD->setProtocolList(&ProtoRefs[0], NumProtoRefs, *Reader.getContext());
+  FPD->setProtocolList(ProtoRefs.data(), NumProtoRefs, *Reader.getContext());
 }
 
 void PCHDeclReader::VisitObjCCategoryDecl(ObjCCategoryDecl *CD) {
@@ -267,7 +272,7 @@ void PCHDeclReader::VisitObjCCategoryDecl(ObjCCategoryDecl *CD) {
   ProtoRefs.reserve(NumProtoRefs);
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoRefs.push_back(cast<ObjCProtocolDecl>(Reader.GetDecl(Record[Idx++])));
-  CD->setProtocolList(&ProtoRefs[0], NumProtoRefs, *Reader.getContext());
+  CD->setProtocolList(ProtoRefs.data(), NumProtoRefs, *Reader.getContext());
   CD->setNextClassCategory(cast_or_null<ObjCCategoryDecl>(Reader.GetDecl(Record[Idx++])));
   CD->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
 }
@@ -341,7 +346,7 @@ void PCHDeclReader::VisitVarDecl(VarDecl *VD) {
                          cast_or_null<VarDecl>(Reader.GetDecl(Record[Idx++])));
   VD->setTypeSpecStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   if (Record[Idx++])
-    VD->setInit(Reader.ReadDeclExpr());
+    VD->setInit(*Reader.getContext(), Reader.ReadDeclExpr());
 }
 
 void PCHDeclReader::VisitImplicitParamDecl(ImplicitParamDecl *PD) {
@@ -372,7 +377,7 @@ void PCHDeclReader::VisitBlockDecl(BlockDecl *BD) {
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(cast<ParmVarDecl>(Reader.GetDecl(Record[Idx++])));
-  BD->setParams(*Reader.getContext(), &Params[0], NumParams);  
+  BD->setParams(*Reader.getContext(), Params.data(), NumParams);  
 }
 
 std::pair<uint64_t, uint64_t> 
@@ -452,6 +457,19 @@ Attr *PCHReader::ReadAttributes() {
       New = ::new (*Context) FormatAttr(Type, FormatIdx, FirstArg);
       break;
     }
+        
+    case Attr::FormatArg: {
+      unsigned FormatIdx = Record[Idx++];
+      New = ::new (*Context) FormatArgAttr(FormatIdx);
+      break;
+    }
+        
+    case Attr::Sentinel: {
+      int sentinel = Record[Idx++];
+      int nullPos = Record[Idx++];
+      New = ::new (*Context) SentinelAttr(sentinel, nullPos);
+      break;
+    }
 
     SIMPLE_ATTR(GNUInline);
     
@@ -469,19 +487,22 @@ Attr *PCHReader::ReadAttributes() {
       llvm::SmallVector<unsigned, 16> ArgNums;
       ArgNums.insert(ArgNums.end(), &Record[Idx], &Record[Idx] + Size);
       Idx += Size;
-      New = ::new (*Context) NonNullAttr(&ArgNums[0], Size);
+      New = ::new (*Context) NonNullAttr(ArgNums.data(), Size);
+      break;
+    }
+        
+    case Attr::ReqdWorkGroupSize: {
+      unsigned X = Record[Idx++];
+      unsigned Y = Record[Idx++];
+      unsigned Z = Record[Idx++];
+      New = ::new (*Context) ReqdWorkGroupSizeAttr(X, Y, Z);
       break;
     }
 
     SIMPLE_ATTR(ObjCException);
     SIMPLE_ATTR(ObjCNSObject);
-    SIMPLE_ATTR(CFOwnershipRelease);
-    SIMPLE_ATTR(CFOwnershipRetain);
-    SIMPLE_ATTR(CFOwnershipReturns);
-    SIMPLE_ATTR(NSOwnershipAutorelease);
-    SIMPLE_ATTR(NSOwnershipRelease);
-    SIMPLE_ATTR(NSOwnershipRetain);
-    SIMPLE_ATTR(NSOwnershipReturns);
+    SIMPLE_ATTR(CFReturnsRetained);
+    SIMPLE_ATTR(NSReturnsRetained);
     SIMPLE_ATTR(Overloadable);
     UNSIGNED_ATTR(Packed);
     SIMPLE_ATTR(Pure);
@@ -561,6 +582,9 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
   // after reading this declaration.
   SavedStreamPosition SavedPosition(DeclsCursor);
 
+  // Note that we are loading a declaration record.
+  LoadingTypeOrDecl Loading(*this);
+  
   DeclsCursor.JumpToBit(Offset);
   RecordData Record;
   unsigned Code = DeclsCursor.ReadCode();

@@ -133,7 +133,7 @@ namespace llvm {
       if (!li_->hasInterval(Reg))
         return 0;
       return li_->getApproximateInstructionCount(li_->getInterval(Reg)) *
-             LiveIntervals::InstrSlots::NUM;
+             LiveInterval::InstrSlots::NUM;
     }
 
     /// print - Implement the dump method.
@@ -219,10 +219,10 @@ namespace llvm {
     bool CanCoalesceWithImpDef(MachineInstr *CopyMI,
                                LiveInterval &li, LiveInterval &ImpLi) const;
 
-    /// RemoveCopiesFromValNo - The specified value# is defined by an implicit
-    /// def and it is being removed. Turn all copies from this value# into
-    /// identity copies so they will be removed.
-    void RemoveCopiesFromValNo(LiveInterval &li, VNInfo *VNI);
+    /// TurnCopiesFromValNoToImpDefs - The specified value# is defined by an
+    /// implicit_def and it is being removed. Turn all copies from this value#
+    /// into implicit_defs.
+    void TurnCopiesFromValNoToImpDefs(LiveInterval &li, VNInfo *VNI);
 
     /// isWinToJoinVRWithSrcPhysReg - Return true if it's worth while to join a
     /// a virtual destination register with physical source register.

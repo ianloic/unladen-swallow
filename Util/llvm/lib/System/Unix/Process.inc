@@ -27,6 +27,9 @@
 #ifdef HAVE_SYS_IOCTL_H
 #  include <sys/ioctl.h>
 #endif
+#ifdef HAVE_TERMIOS_H
+#  include <termios.h>
+#endif
 
 //===----------------------------------------------------------------------===//
 //=== WARNING: Implementation here must contain only generic UNIX code that
@@ -39,7 +42,12 @@ using namespace sys;
 unsigned 
 Process::GetPageSize() 
 {
-#if defined(HAVE_GETPAGESIZE)
+#if defined(__CYGWIN__)
+  // On Cygwin, getpagesize() returns 64k but the page size for the purposes of
+  // memory protection and mmap() is 4k.
+  // See http://www.cygwin.com/ml/cygwin/2009-01/threads.html#00492
+  static const int page_size = 0x1000;
+#elif defined(HAVE_GETPAGESIZE)
   static const int page_size = ::getpagesize();
 #elif defined(HAVE_SYSCONF)
   static long page_size = ::sysconf(_SC_PAGE_SIZE);
@@ -204,7 +212,7 @@ static unsigned getColumns(int FileID) {
 
   unsigned Columns = 0;
 
-#ifdef HAVE_SYS_IOCTL_H
+#if defined(HAVE_SYS_IOCTL_H) && defined(HAVE_TERMIOS_H)
   // Try to determine the width of the terminal.
   struct winsize ws;
   if (ioctl(FileID, TIOCGWINSZ, &ws) == 0)
@@ -226,4 +234,63 @@ unsigned Process::StandardErrColumns() {
     return 0;
 
   return getColumns(2);
+}
+
+static bool terminalHasColors() {
+  if (const char *term = std::getenv("TERM")) {
+    // Most modern terminals support ANSI escape sequences for colors.
+    // We could check terminfo, or have a list of known terms that support
+    // colors, but that would be overkill.
+    // The user can always ask for no colors by setting TERM to dumb, or
+    // using a commandline flag.
+    return strcmp(term, "dumb") != 0;
+  }
+  return false;
+}
+
+bool Process::StandardOutHasColors() {
+  if (!StandardOutIsDisplayed())
+    return false;
+  return terminalHasColors();
+}
+
+bool Process::StandardErrHasColors() {
+  if (!StandardErrIsDisplayed())
+    return false;
+  return terminalHasColors();
+}
+
+bool Process::ColorNeedsFlush() {
+  // No, we use ANSI escape sequences.
+  return false;
+}
+
+#define COLOR(FGBG, CODE, BOLD) "\033[0;" BOLD FGBG CODE "m"
+
+#define ALLCOLORS(FGBG,BOLD) {\
+    COLOR(FGBG, "0", BOLD),\
+    COLOR(FGBG, "1", BOLD),\
+    COLOR(FGBG, "2", BOLD),\
+    COLOR(FGBG, "3", BOLD),\
+    COLOR(FGBG, "4", BOLD),\
+    COLOR(FGBG, "5", BOLD),\
+    COLOR(FGBG, "6", BOLD),\
+    COLOR(FGBG, "7", BOLD)\
+  }
+
+static const char* colorcodes[2][2][8] = {
+ { ALLCOLORS("3",""), ALLCOLORS("3","1;") },
+ { ALLCOLORS("4",""), ALLCOLORS("4","1;") }
+};
+
+const char *Process::OutputColor(char code, bool bold, bool bg) {
+  return colorcodes[bg?1:0][bold?1:0][code&7];
+}
+
+const char *Process::OutputBold(bool bg) {
+  return "\033[1m";
+}
+
+const char *Process::ResetColor() {
+  return "\033[0m";
 }

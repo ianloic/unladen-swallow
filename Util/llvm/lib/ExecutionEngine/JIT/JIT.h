@@ -20,10 +20,11 @@
 namespace llvm {
 
 class Function;
-class TargetMachine;
-class TargetJITInfo;
+class JITEvent_EmittedFunctionDetails;
 class MachineCodeEmitter;
 class MachineCodeInfo;
+class TargetJITInfo;
+class TargetMachine;
 
 class JITState {
 private:
@@ -51,12 +52,19 @@ public:
 class JIT : public ExecutionEngine {
   TargetMachine &TM;       // The current target we are compiling to
   TargetJITInfo &TJI;      // The JITInfo for the target we are compiling to
-  MachineCodeEmitter *MCE; // MCE object
+  JITCodeEmitter *JCE;     // JCE object
+  std::vector<JITEventListener*> EventListeners;
+
+  /// AllocateGVsWithCode - Some applications require that global variables and
+  /// code be allocated into the same region of memory, in which case this flag
+  /// should be set to true.  Doing so breaks freeMachineCodeForFunction.
+  bool AllocateGVsWithCode;
 
   JITState *jitstate;
 
-  JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji, 
-      JITMemoryManager *JMM, CodeGenOpt::Level OptLevel);
+  JIT(ModuleProvider *MP, TargetMachine &tm, TargetJITInfo &tji,
+      JITMemoryManager *JMM, CodeGenOpt::Level OptLevel,
+      bool AllocateGVsWithCode);
 public:
   ~JIT();
 
@@ -73,8 +81,9 @@ public:
   ///
   static ExecutionEngine *create(ModuleProvider *MP, std::string *Err,
                                  CodeGenOpt::Level OptLevel =
-                                   CodeGenOpt::Default) {
-    return createJIT(MP, Err, 0, OptLevel);
+                                   CodeGenOpt::Default,
+                                 bool AllocateGVsWithCode = true) {
+    return createJIT(MP, Err, 0, OptLevel, AllocateGVsWithCode);
   }
 
   virtual void addModuleProvider(ModuleProvider *MP);
@@ -147,19 +156,30 @@ public:
   void addPendingFunction(Function *F);
   
   /// getCodeEmitter - Return the code emitter this JIT is emitting into.
-  MachineCodeEmitter *getCodeEmitter() const { return MCE; }
+  JITCodeEmitter *getCodeEmitter() const { return JCE; }
   
-  static ExecutionEngine *createJIT(ModuleProvider *MP, std::string *Err,
+  static ExecutionEngine *createJIT(ModuleProvider *MP,
+                                    std::string *Err,
                                     JITMemoryManager *JMM,
-                                    CodeGenOpt::Level OptLevel);
+                                    CodeGenOpt::Level OptLevel,
+                                    bool AllocateGVsWithCode);
 
 
   // Run the JIT on F and return information about the generated code
   void runJITOnFunction(Function *F, MachineCodeInfo *MCI = 0);
 
+  virtual void RegisterJITEventListener(JITEventListener *L);
+  virtual void UnregisterJITEventListener(JITEventListener *L);
+  /// These functions correspond to the methods on JITEventListener.  They
+  /// iterate over the registered listeners and call the corresponding method on
+  /// each.
+  void NotifyFunctionEmitted(
+      const Function &F, void *Code, size_t Size,
+      const JITEvent_EmittedFunctionDetails &Details);
+  void NotifyFreeingMachineCode(const Function &F, void *OldPtr);
+
 private:
-  static MachineCodeEmitter *createEmitter(JIT &J, JITMemoryManager *JMM);
-  void registerMachineCodeInfo(MachineCodeInfo *MCI);
+  static JITCodeEmitter *createEmitter(JIT &J, JITMemoryManager *JMM);
   void runJITOnFunctionUnlocked(Function *F, const MutexGuard &locked);
   void updateFunctionStub(Function *F);
   void updateDlsymStubTable();

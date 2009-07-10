@@ -39,8 +39,11 @@ int ARMTargetMachineModule = 0;
 static RegisterTarget<ARMTargetMachine>   X("arm",   "ARM");
 static RegisterTarget<ThumbTargetMachine> Y("thumb", "Thumb");
 
+// Force static initialization.
+extern "C" void LLVMInitializeARMTarget() { }
+
 // No assembler printer by default
-ARMTargetMachine::AsmPrinterCtorFn ARMTargetMachine::AsmPrinterCtor = 0;
+ARMBaseTargetMachine::AsmPrinterCtorFn ARMBaseTargetMachine::AsmPrinterCtor = 0;
 
 /// ThumbTargetMachine - Create an Thumb architecture model.
 ///
@@ -71,31 +74,39 @@ unsigned ThumbTargetMachine::getModuleMatchQuality(const Module &M) {
   return getJITMatchQuality()/2;
 }
 
-ThumbTargetMachine::ThumbTargetMachine(const Module &M, const std::string &FS)
-  : ARMTargetMachine(M, FS, true) {
-}
-
 /// TargetMachine ctor - Create an ARM architecture model.
 ///
-ARMTargetMachine::ARMTargetMachine(const Module &M, const std::string &FS,
-                                   bool isThumb)
+ARMBaseTargetMachine::ARMBaseTargetMachine(const Module &M,
+                                           const std::string &FS,
+                                           bool isThumb)
   : Subtarget(M, FS, isThumb),
-    DataLayout(Subtarget.isAPCS_ABI() ?
-               // APCS ABI
-          (isThumb ?
-           std::string("e-p:32:32-f64:32:32-i64:32:32-"
-                       "i16:16:32-i8:8:32-i1:8:32-a:0:32") :
-           std::string("e-p:32:32-f64:32:32-i64:32:32")) :
-               // AAPCS ABI
-          (isThumb ?
-           std::string("e-p:32:32-f64:64:64-i64:64:64-"
-                       "i16:16:32-i8:8:32-i1:8:32-a:0:32") :
-           std::string("e-p:32:32-f64:64:64-i64:64:64"))),
-    InstrInfo(Subtarget),
     FrameInfo(Subtarget),
     JITInfo(),
-    TLInfo(*this) {
+    InstrItins(Subtarget.getInstrItineraryData()) {
   DefRelocModel = getRelocationModel();
+}
+
+ARMTargetMachine::ARMTargetMachine(const Module &M, const std::string &FS)
+  : ARMBaseTargetMachine(M, FS, false), InstrInfo(Subtarget),
+    DataLayout(Subtarget.isAPCS_ABI() ?
+               std::string("e-p:32:32-f64:32:32-i64:32:32") :
+               std::string("e-p:32:32-f64:64:64-i64:64:64")),
+    TLInfo(*this) {
+}
+
+ThumbTargetMachine::ThumbTargetMachine(const Module &M, const std::string &FS)
+  : ARMBaseTargetMachine(M, FS, true),
+    DataLayout(Subtarget.isAPCS_ABI() ?
+               std::string("e-p:32:32-f64:32:32-i64:32:32-"
+                           "i16:16:32-i8:8:32-i1:8:32-a:0:32") :
+               std::string("e-p:32:32-f64:64:64-i64:64:64-"
+                           "i16:16:32-i8:8:32-i1:8:32-a:0:32")),
+    TLInfo(*this) {
+  // Create the approriate type of Thumb InstrInfo
+  if (Subtarget.hasThumb2())
+    InstrInfo = new Thumb2InstrInfo(Subtarget);
+  else
+    InstrInfo = new Thumb1InstrInfo(Subtarget);
 }
 
 unsigned ARMTargetMachine::getJITMatchQuality() {
@@ -125,7 +136,7 @@ unsigned ARMTargetMachine::getModuleMatchQuality(const Module &M) {
 }
 
 
-const TargetAsmInfo *ARMTargetMachine::createTargetAsmInfo() const {
+const TargetAsmInfo *ARMBaseTargetMachine::createTargetAsmInfo() const {
   switch (Subtarget.TargetType) {
    case ARMSubtarget::isDarwin:
     return new ARMDarwinTargetAsmInfo(*this);
@@ -138,14 +149,22 @@ const TargetAsmInfo *ARMTargetMachine::createTargetAsmInfo() const {
 
 
 // Pass Pipeline Configuration
-bool ARMTargetMachine::addInstSelector(PassManagerBase &PM,
-                                       CodeGenOpt::Level OptLevel) {
+bool ARMBaseTargetMachine::addInstSelector(PassManagerBase &PM,
+                                           CodeGenOpt::Level OptLevel) {
   PM.add(createARMISelDag(*this));
   return false;
 }
 
-bool ARMTargetMachine::addPreEmitPass(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel) {
+bool ARMBaseTargetMachine::addPreRegAlloc(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel) {
+  // FIXME: temporarily disabling load / store optimization pass for Thumb mode.
+  if (OptLevel != CodeGenOpt::None && !DisableLdStOpti && !Subtarget.isThumb())
+    PM.add(createARMLoadStoreOptimizationPass(true));
+  return true;
+}
+
+bool ARMBaseTargetMachine::addPreEmitPass(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel) {
   // FIXME: temporarily disabling load / store optimization pass for Thumb mode.
   if (OptLevel != CodeGenOpt::None && !DisableLdStOpti && !Subtarget.isThumb())
     PM.add(createARMLoadStoreOptimizationPass());
@@ -158,23 +177,23 @@ bool ARMTargetMachine::addPreEmitPass(PassManagerBase &PM,
   return true;
 }
 
-bool ARMTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
-                                          CodeGenOpt::Level OptLevel,
-                                          bool Verbose,
-                                          raw_ostream &Out) {
+bool ARMBaseTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
+                                              CodeGenOpt::Level OptLevel,
+                                              bool Verbose,
+                                              raw_ostream &Out) {
   // Output assembly language.
   assert(AsmPrinterCtor && "AsmPrinter was not linked in");
   if (AsmPrinterCtor)
-    PM.add(AsmPrinterCtor(Out, *this, OptLevel, Verbose));
+    PM.add(AsmPrinterCtor(Out, *this, Verbose));
 
   return false;
 }
 
 
-bool ARMTargetMachine::addCodeEmitter(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel,
-                                      bool DumpAsm,
-                                      MachineCodeEmitter &MCE) {
+bool ARMBaseTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel,
+                                          bool DumpAsm,
+                                          MachineCodeEmitter &MCE) {
   // FIXME: Move this to TargetJITInfo!
   if (DefRelocModel == Reloc::Default)
     setRelocationModel(Reloc::Static);
@@ -184,23 +203,92 @@ bool ARMTargetMachine::addCodeEmitter(PassManagerBase &PM,
   if (DumpAsm) {
     assert(AsmPrinterCtor && "AsmPrinter was not linked in");
     if (AsmPrinterCtor)
-      PM.add(AsmPrinterCtor(errs(), *this, OptLevel, true));
+      PM.add(AsmPrinterCtor(errs(), *this, true));
   }
 
   return false;
 }
 
-bool ARMTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
-                                            CodeGenOpt::Level OptLevel,
-                                            bool DumpAsm,
-                                            MachineCodeEmitter &MCE) {
+bool ARMBaseTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel,
+                                          bool DumpAsm,
+                                          JITCodeEmitter &JCE) {
+  // FIXME: Move this to TargetJITInfo!
+  if (DefRelocModel == Reloc::Default)
+    setRelocationModel(Reloc::Static);
+
+  // Machine code emitter pass for ARM.
+  PM.add(createARMJITCodeEmitterPass(*this, JCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool ARMBaseTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel,
+                                          bool DumpAsm,
+                                          ObjectCodeEmitter &OCE) {
+  // FIXME: Move this to TargetJITInfo!
+  if (DefRelocModel == Reloc::Default)
+    setRelocationModel(Reloc::Static);
+
+  // Machine code emitter pass for ARM.
+  PM.add(createARMObjectCodeEmitterPass(*this, OCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool ARMBaseTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                                CodeGenOpt::Level OptLevel,
+                                                bool DumpAsm,
+                                                MachineCodeEmitter &MCE) {
   // Machine code emitter pass for ARM.
   PM.add(createARMCodeEmitterPass(*this, MCE));
   if (DumpAsm) {
     assert(AsmPrinterCtor && "AsmPrinter was not linked in");
     if (AsmPrinterCtor)
-      PM.add(AsmPrinterCtor(errs(), *this, OptLevel, true));
+      PM.add(AsmPrinterCtor(errs(), *this, true));
   }
 
   return false;
 }
+
+bool ARMBaseTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                                CodeGenOpt::Level OptLevel,
+                                                bool DumpAsm,
+                                                JITCodeEmitter &JCE) {
+  // Machine code emitter pass for ARM.
+  PM.add(createARMJITCodeEmitterPass(*this, JCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool ARMBaseTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool DumpAsm,
+                                            ObjectCodeEmitter &OCE) {
+  // Machine code emitter pass for ARM.
+  PM.add(createARMObjectCodeEmitterPass(*this, OCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+

@@ -14,15 +14,25 @@
 #ifndef ELFWRITER_H
 #define ELFWRITER_H
 
+#include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include <list>
 #include <map>
 
 namespace llvm {
+  class BinaryObject;
+  class Constant;
+  class ConstantStruct;
+  class ELFCodeEmitter;
+  class ELFRelocation;
+  class ELFSection;
+  class ELFSym;
   class GlobalVariable;
   class Mangler;
   class MachineCodeEmitter;
-  class ELFCodeEmitter;
+  class ObjectCodeEmitter;
+  class TargetAsmInfo;
+  class TargetELFWriterInfo;
   class raw_ostream;
 
   /// ELFWriter - This class implements the common target-independent code for
@@ -34,46 +44,38 @@ namespace llvm {
   public:
     static char ID;
 
-    MachineCodeEmitter &getMachineCodeEmitter() const {
-      return *(MachineCodeEmitter*)MCE;
+    /// Return the ELFCodeEmitter as an instance of ObjectCodeEmitter
+    ObjectCodeEmitter *getObjectCodeEmitter() {
+      return reinterpret_cast<ObjectCodeEmitter*>(ElfCE);
     }
 
     ELFWriter(raw_ostream &O, TargetMachine &TM);
     ~ELFWriter();
 
-    typedef std::vector<unsigned char> DataBuffer;
-
   protected:
     /// Output stream to send the resultant object file to.
-    ///
     raw_ostream &O;
 
     /// Target machine description.
-    ///
     TargetMachine &TM;
 
+    /// Target Elf Writer description.
+    const TargetELFWriterInfo *TEW;
+
     /// Mang - The object used to perform name mangling for this module.
-    ///
     Mangler *Mang;
 
     /// MCE - The MachineCodeEmitter object that we are exposing to emit machine
     /// code for functions to the .o file.
-    ELFCodeEmitter *MCE;
+    ELFCodeEmitter *ElfCE;
 
-    //===------------------------------------------------------------------===//
-    // Properties to be set by the derived class ctor, used to configure the
-    // ELFWriter.
-
-    // e_machine - This field is the target specific value to emit as the
-    // e_machine member of the ELF header.
-    unsigned short e_machine;
-
-    // e_flags - The machine flags for the target.  This defaults to zero.
-    unsigned e_flags;
+    /// TAI - Target Asm Info, provide information about section names for
+    /// globals and other target specific stuff.
+    const TargetAsmInfo *TAI;
 
     //===------------------------------------------------------------------===//
     // Properties inferred automatically from the target machine.
-    //
+    //===------------------------------------------------------------------===//
 
     /// is64Bit/isLittleEndian - This information is inferred from the target
     /// machine directly, indicating whether to emit a 32- or 64-bit ELF file.
@@ -82,66 +84,15 @@ namespace llvm {
     /// doInitialization - Emit the file header and all of the global variables
     /// for the module to the ELF file.
     bool doInitialization(Module &M);
-
     bool runOnMachineFunction(MachineFunction &MF);
-
 
     /// doFinalization - Now that the module has been completely processed, emit
     /// the ELF file to 'O'.
     bool doFinalization(Module &M);
 
   private:
-    // The buffer we accumulate the file header into.  Note that this should be
-    // changed into something much more efficient later (and the bitcode writer
-    // as well!).
-    DataBuffer FileHeader;
-
-    /// ELFSection - This struct contains information about each section that is
-    /// emitted to the file.  This is eventually turned into the section header
-    /// table at the end of the file.
-    struct ELFSection {
-      std::string Name;       // Name of the section.
-      unsigned NameIdx;       // Index in .shstrtab of name, once emitted.
-      unsigned Type;
-      unsigned Flags;
-      uint64_t Addr;
-      unsigned Offset;
-      unsigned Size;
-      unsigned Link;
-      unsigned Info;
-      unsigned Align;
-      unsigned EntSize;
-
-      /// SectionIdx - The number of the section in the Section Table.
-      ///
-      unsigned short SectionIdx;
-
-      /// SectionData - The actual data for this section which we are building
-      /// up for emission to the file.
-      DataBuffer SectionData;
-
-      enum { SHT_NULL = 0, SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3,
-             SHT_RELA = 4, SHT_HASH = 5, SHT_DYNAMIC = 6, SHT_NOTE = 7,
-             SHT_NOBITS = 8, SHT_REL = 9, SHT_SHLIB = 10, SHT_DYNSYM = 11 };
-      enum { SHN_UNDEF = 0, SHN_ABS = 0xFFF1, SHN_COMMON = 0xFFF2 };
-      enum {   // SHF - ELF Section Header Flags
-        SHF_WRITE            = 1 << 0, // Writable
-        SHF_ALLOC            = 1 << 1, // Mapped into the process addr space
-        SHF_EXECINSTR        = 1 << 2, // Executable
-        SHF_MERGE            = 1 << 4, // Might be merged if equal
-        SHF_STRINGS          = 1 << 5, // Contains null-terminated strings
-        SHF_INFO_LINK        = 1 << 6, // 'sh_info' contains SHT index
-        SHF_LINK_ORDER       = 1 << 7, // Preserve order after combining
-        SHF_OS_NONCONFORMING = 1 << 8, // nonstandard OS support required
-        SHF_GROUP            = 1 << 9, // Section is a member of a group
-        SHF_TLS              = 1 << 10 // Section holds thread-local data
-      };
-
-      ELFSection(const std::string &name)
-        : Name(name), Type(0), Flags(0), Addr(0), Offset(0), Size(0),
-          Link(0), Info(0), Align(0), EntSize(0) {
-      }
-    };
+    /// Blob containing the Elf header
+    BinaryObject ElfHdr;
 
     /// SectionList - This is the list of sections that we have emitted to the
     /// file.  Once the file has been completely built, the section header table
@@ -153,76 +104,146 @@ namespace llvm {
     /// the SectionList.
     std::map<std::string, ELFSection*> SectionLookup;
 
+    /// GblSymLookup - This is a mapping from global value to a symbol index
+    /// in the symbol table. This is useful since relocations symbol references
+    /// must be quickly mapped to a symbol table index
+    std::map<const GlobalValue*, uint32_t> GblSymLookup;
+
+    /// SymbolList - This is the list of symbols emitted to the symbol table
+    /// Local symbols go to the front and Globals to the back.
+    std::list<ELFSym> SymbolList;
+
+    /// PendingGlobals - List of externally defined symbols that we have been
+    /// asked to emit, but have not seen a reference to.  When a reference
+    /// is seen, the symbol will move from this list to the SymbolList.
+    SetVector<GlobalValue*> PendingGlobals;
+
+    // Remove tab from section name prefix. This is necessary becase TAI 
+    // sometimes return a section name prefixed with a "\t" char. This is
+    // a little bit dirty. FIXME: find a better approach, maybe add more
+    // methods to TAI to get the clean name?
+    void fixNameForSection(std::string &Name) {
+      size_t Pos = Name.find("\t");
+      if (Pos != std::string::npos)
+        Name.erase(Pos, 1);
+
+      Pos = Name.find(".section ");
+      if (Pos != std::string::npos)
+        Name.erase(Pos, 9);
+
+      Pos = Name.find("\n");
+      if (Pos != std::string::npos)
+        Name.erase(Pos, 1);
+    }
+
     /// getSection - Return the section with the specified name, creating a new
     /// section if one does not already exist.
-    ELFSection &getSection(const std::string &Name,
-                           unsigned Type, unsigned Flags = 0) {
-      ELFSection *&SN = SectionLookup[Name];
+    ELFSection &getSection(const std::string &Name, unsigned Type,
+                           unsigned Flags = 0, unsigned Align = 0) {
+      std::string SectionName(Name);
+      fixNameForSection(SectionName);
+
+      ELFSection *&SN = SectionLookup[SectionName];
       if (SN) return *SN;
 
-      SectionList.push_back(Name);
+      SectionList.push_back(ELFSection(SectionName, isLittleEndian, is64Bit));
       SN = &SectionList.back();
       SN->SectionIdx = NumSections++;
       SN->Type = Type;
       SN->Flags = Flags;
+      SN->Link = ELFSection::SHN_UNDEF;
+      SN->Align = Align;
       return *SN;
+    }
+
+    /// TODO: support mangled names here to emit the right .text section
+    /// for c++ object files.
+    ELFSection &getTextSection() {
+      return getSection(".text", ELFSection::SHT_PROGBITS,
+                        ELFSection::SHF_EXECINSTR | ELFSection::SHF_ALLOC);
+    }
+
+    /// Get jump table section on the section name returned by TAI
+    ELFSection &getJumpTableSection(std::string SName, unsigned Align) {
+      return getSection(SName, ELFSection::SHT_PROGBITS,
+                        ELFSection::SHF_ALLOC, Align);
+    }
+
+    /// Get a constant pool section based on the section name returned by TAI
+    ELFSection &getConstantPoolSection(std::string SName, unsigned Align) {
+      return getSection(SName, ELFSection::SHT_PROGBITS,
+                        ELFSection::SHF_MERGE | ELFSection::SHF_ALLOC, Align);
+    }
+
+    /// Return the relocation section of section 'S'. 'RelA' is true
+    /// if the relocation section contains entries with addends.
+    ELFSection &getRelocSection(std::string SName, bool RelA, unsigned Align) {
+      std::string RelSName(".rel");
+      unsigned SHdrTy = RelA ? ELFSection::SHT_RELA : ELFSection::SHT_REL;
+
+      if (RelA) RelSName.append("a");
+      RelSName.append(SName);
+
+      return getSection(RelSName, SHdrTy, 0, Align);
+    }
+
+    ELFSection &getNonExecStackSection() {
+      return getSection(".note.GNU-stack", ELFSection::SHT_PROGBITS, 0, 1);
+    }
+
+    ELFSection &getSymbolTableSection() {
+      return getSection(".symtab", ELFSection::SHT_SYMTAB, 0);
+    }
+
+    ELFSection &getStringTableSection() {
+      return getSection(".strtab", ELFSection::SHT_STRTAB, 0, 1);
+    }
+
+    ELFSection &getSectionHeaderStringTableSection() {
+      return getSection(".shstrtab", ELFSection::SHT_STRTAB, 0, 1);
     }
 
     ELFSection &getDataSection() {
       return getSection(".data", ELFSection::SHT_PROGBITS,
-                        ELFSection::SHF_WRITE | ELFSection::SHF_ALLOC);
+                        ELFSection::SHF_WRITE | ELFSection::SHF_ALLOC, 4);
     }
+
     ELFSection &getBSSSection() {
       return getSection(".bss", ELFSection::SHT_NOBITS,
-                        ELFSection::SHF_WRITE | ELFSection::SHF_ALLOC);
+                        ELFSection::SHF_WRITE | ELFSection::SHF_ALLOC, 4);
     }
 
-    /// ELFSym - This struct contains information about each symbol that is
-    /// added to logical symbol table for the module.  This is eventually
-    /// turned into a real symbol table in the file.
-    struct ELFSym {
-      const GlobalValue *GV;    // The global value this corresponds to.
-      unsigned NameIdx;         // Index in .strtab of name, once emitted.
-      uint64_t Value;
-      unsigned Size;
-      unsigned char Info;
-      unsigned char Other;
-      unsigned short SectionIdx;
+    ELFSection &getNullSection() {
+      return getSection("", ELFSection::SHT_NULL, 0);
+    }
 
-      enum { STB_LOCAL = 0, STB_GLOBAL = 1, STB_WEAK = 2 };
-      enum { STT_NOTYPE = 0, STT_OBJECT = 1, STT_FUNC = 2, STT_SECTION = 3,
-             STT_FILE = 4 };
-      ELFSym(const GlobalValue *gv) : GV(gv), Value(0), Size(0), Info(0),
-                                      Other(0), SectionIdx(0) {}
-
-      void SetBind(unsigned X) {
-        assert(X == (X & 0xF) && "Bind value out of range!");
-        Info = (Info & 0x0F) | (X << 4);
-      }
-      void SetType(unsigned X) {
-        assert(X == (X & 0xF) && "Type value out of range!");
-        Info = (Info & 0xF0) | X;
-      }
-    };
-
-    /// SymbolTable - This is the list of symbols we have emitted to the file.
-    /// This actually gets rearranged before emission to the file (to put the
-    /// local symbols first in the list).
-    std::vector<ELFSym> SymbolTable;
+    // Helpers for obtaining ELF specific info.
+    unsigned getGlobalELFLinkage(const GlobalValue *GV);
+    unsigned getGlobalELFVisibility(const GlobalValue *GV);
+    unsigned getElfSectionFlags(unsigned Flags);
 
     // As we complete the ELF file, we need to update fields in the ELF header
     // (e.g. the location of the section table).  These members keep track of
     // the offset in ELFHeader of these various pieces to update and other
     // locations in the file.
-    unsigned ELFHeader_e_shoff_Offset;     // e_shoff    in ELF header.
-    unsigned ELFHeader_e_shstrndx_Offset;  // e_shstrndx in ELF header.
-    unsigned ELFHeader_e_shnum_Offset;     // e_shnum    in ELF header.
+    unsigned ELFHdr_e_shoff_Offset;     // e_shoff    in ELF header.
+    unsigned ELFHdr_e_shstrndx_Offset;  // e_shstrndx in ELF header.
+    unsigned ELFHdr_e_shnum_Offset;     // e_shnum    in ELF header.
+
   private:
-    void EmitGlobal(GlobalVariable *GV);
-
-    void EmitSymbolTable();
-
+    void EmitFunctionDeclaration(const Function *F);
+    void EmitGlobalVar(const GlobalVariable *GV);
+    void EmitGlobalConstant(const Constant *C, ELFSection &GblS);
+    void EmitGlobalConstantStruct(const ConstantStruct *CVS,
+                                  ELFSection &GblS);
+    ELFSection &getGlobalSymELFSection(const GlobalVariable *GV, ELFSym &Sym);
+    void EmitRelocations();
+    void EmitRelocation(BinaryObject &RelSec, ELFRelocation &Rel, bool HasRelA);
+    void EmitSectionHeader(BinaryObject &SHdrTab, const ELFSection &SHdr);
     void EmitSectionTableStringTable();
+    void EmitSymbol(BinaryObject &SymbolTable, ELFSym &Sym);
+    void EmitSymbolTable();
+    void EmitStringTable();
     void OutputSectionsAndSectionTable();
   };
 }

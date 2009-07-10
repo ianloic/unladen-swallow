@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/ADT/VectorExtras.h"
 using namespace llvm;
 
@@ -73,6 +74,10 @@ MSP430TargetLowering::MSP430TargetLowering(MSP430TargetMachine &tm) :
   setOperationAction(ISD::SRA,              MVT::i16,   Custom);
   setOperationAction(ISD::SHL,              MVT::i16,   Custom);
   setOperationAction(ISD::SRL,              MVT::i16,   Custom);
+  setOperationAction(ISD::ROTL,             MVT::i8,    Expand);
+  setOperationAction(ISD::ROTR,             MVT::i8,    Expand);
+  setOperationAction(ISD::ROTL,             MVT::i16,   Expand);
+  setOperationAction(ISD::ROTR,             MVT::i16,   Expand);
   setOperationAction(ISD::RET,              MVT::Other, Custom);
   setOperationAction(ISD::GlobalAddress,    MVT::i16,   Custom);
   setOperationAction(ISD::ExternalSymbol,   MVT::i16,   Custom);
@@ -98,8 +103,10 @@ MSP430TargetLowering::MSP430TargetLowering(MSP430TargetMachine &tm) :
 
   setOperationAction(ISD::UDIV,             MVT::i16,   Expand);
   setOperationAction(ISD::UDIVREM,          MVT::i16,   Expand);
+  setOperationAction(ISD::UREM,             MVT::i16,   Expand);
   setOperationAction(ISD::SDIV,             MVT::i16,   Expand);
   setOperationAction(ISD::SDIVREM,          MVT::i16,   Expand);
+  setOperationAction(ISD::SREM,             MVT::i16,   Expand);
 }
 
 SDValue MSP430TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) {
@@ -119,6 +126,11 @@ SDValue MSP430TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) {
     assert(0 && "unimplemented operand");
     return SDValue();
   }
+}
+
+/// getFunctionAlignment - Return the Log2 alignment of this function.
+unsigned MSP430TargetLowering::getFunctionAlignment(const Function *F) const {
+  return F->hasFnAttr(Attribute::OptimizeForSize) ? 1 : 4;
 }
 
 //===----------------------------------------------------------------------===//
@@ -179,11 +191,14 @@ SDValue MSP430TargetLowering::LowerCCCArguments(SDValue Op,
       // Arguments passed in registers
       MVT RegVT = VA.getLocVT();
       switch (RegVT.getSimpleVT()) {
-      default:
-        cerr << "LowerFORMAL_ARGUMENTS Unhandled argument type: "
-             << RegVT.getSimpleVT()
-             << "\n";
-        abort();
+      default: 
+        {
+#ifndef NDEBUG
+          cerr << "LowerFORMAL_ARGUMENTS Unhandled argument type: "
+               << RegVT.getSimpleVT() << "\n";
+#endif
+          llvm_unreachable();
+        }
       case MVT::i16:
         unsigned VReg =
           RegInfo.createVirtualRegister(MSP430::GR16RegisterClass);
@@ -466,7 +481,7 @@ SDValue MSP430TargetLowering::LowerShifts(SDValue Op,
   }
 
   while (ShiftAmount--)
-    Victim = DAG.getNode((Opc == ISD::SRA ? MSP430ISD::RRA : MSP430ISD::RLA),
+    Victim = DAG.getNode((Opc == ISD::SHL ? MSP430ISD::RLA : MSP430ISD::RRA),
                          dl, VT, Victim);
 
   return Victim;
@@ -608,7 +623,8 @@ MSP430TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
                                                   MachineBasicBlock *BB) const {
   const TargetInstrInfo &TII = *getTargetMachine().getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
-  assert((MI->getOpcode() == MSP430::Select16) &&
+  assert((MI->getOpcode() == MSP430::Select16 ||
+          MI->getOpcode() == MSP430::Select8) &&
          "Unexpected instr type to insert");
 
   // To "insert" a SELECT instruction, we actually have to insert the diamond

@@ -33,6 +33,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/Dominators.h"
@@ -149,7 +150,16 @@ void LCSSA::ProcessInstruction(Instruction *Instr,
   // Keep track of the blocks that have the value available already.
   DenseMap<DomTreeNode*, Value*> Phis;
 
-  DomTreeNode *InstrNode = DT->getNode(Instr->getParent());
+  BasicBlock *DomBB = Instr->getParent();
+
+  // Invoke instructions are special in that their result value is not available
+  // along their unwind edge. The code below tests to see whether DomBB dominates
+  // the value, so adjust DomBB to the normal destination block, which is
+  // effectively where the value is first usable.
+  if (InvokeInst *Inv = dyn_cast<InvokeInst>(Instr))
+    DomBB = Inv->getNormalDest();
+
+  DomTreeNode *DomNode = DT->getNode(DomBB);
 
   // Insert the LCSSA phi's into the exit blocks (dominated by the value), and
   // add them to the Phi's map.
@@ -158,7 +168,7 @@ void LCSSA::ProcessInstruction(Instruction *Instr,
     BasicBlock *BB = *BBI;
     DomTreeNode *ExitBBNode = DT->getNode(BB);
     Value *&Phi = Phis[ExitBBNode];
-    if (!Phi && DT->dominates(InstrNode, ExitBBNode)) {
+    if (!Phi && DT->dominates(DomNode, ExitBBNode)) {
       PHINode *PN = PHINode::Create(Instr->getType(), Instr->getName()+".lcssa",
                                     BB->begin());
       PN->reserveOperandSpace(PredCache.GetNumPreds(BB));
@@ -233,7 +243,7 @@ Value *LCSSA::GetValueForBlock(DomTreeNode *BB, Instruction *OrigInst,
                                DenseMap<DomTreeNode*, Value*> &Phis) {
   // If there is no dominator info for this BB, it is unreachable.
   if (BB == 0)
-    return UndefValue::get(OrigInst->getType());
+    return Context->getUndef(OrigInst->getType());
                                  
   // If we have already computed this value, return the previously computed val.
   if (Phis.count(BB)) return Phis[BB];

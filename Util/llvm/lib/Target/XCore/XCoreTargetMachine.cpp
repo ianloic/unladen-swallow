@@ -31,6 +31,9 @@ namespace {
   RegisterTarget<XCoreTargetMachine> X("xcore", "XCore");
 }
 
+// Force static initialization.
+extern "C" void LLVMInitializeXCoreTarget() { }
+
 const TargetAsmInfo *XCoreTargetMachine::createTargetAsmInfo() const {
   return new XCoreTargetAsmInfo(*this);
 }
@@ -66,6 +69,6 @@ bool XCoreTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
                                             bool Verbose,
                                             raw_ostream &Out) {
   // Output assembly language.
-  PM.add(createXCoreCodePrinterPass(Out, *this, OptLevel, Verbose));
+  PM.add(createXCoreCodePrinterPass(Out, *this, Verbose));
   return false;
 }

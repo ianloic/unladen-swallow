@@ -19,6 +19,7 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
+#include "llvm/MDNode.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
@@ -29,6 +30,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmInfo.h"
@@ -49,9 +51,8 @@ namespace {
     std::set<std::string> FnStubs, GVStubs;
   public:
     explicit SPUAsmPrinter(raw_ostream &O, TargetMachine &TM,
-                           const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                           bool V) :
-      AsmPrinter(O, TM, T, OL, V) {}
+                           const TargetAsmInfo *T, bool V) :
+      AsmPrinter(O, TM, T, V) {}
 
     virtual const char *getPassName() const {
       return "STI CBEA SPU Assembly Printer";
@@ -287,12 +288,10 @@ namespace {
   /// LinuxAsmPrinter - SPU assembly printer, customized for Linux
   class VISIBILITY_HIDDEN LinuxAsmPrinter : public SPUAsmPrinter {
     DwarfWriter *DW;
-    MachineModuleInfo *MMI;
   public:
     explicit LinuxAsmPrinter(raw_ostream &O, SPUTargetMachine &TM,
-                             const TargetAsmInfo *T, CodeGenOpt::Level F,
-                             bool V)
-      : SPUAsmPrinter(O, TM, T, F, V), DW(0), MMI(0) {}
+                             const TargetAsmInfo *T, bool V)
+      : SPUAsmPrinter(O, TM, T, V), DW(0) {}
 
     virtual const char *getPassName() const {
       return "STI CBEA SPU Assembly Printer";
@@ -321,8 +320,7 @@ namespace {
 void SPUAsmPrinter::printOp(const MachineOperand &MO) {
   switch (MO.getType()) {
   case MachineOperand::MO_Immediate:
-    cerr << "printOp() does not handle immediate values\n";
-    abort();
+    llvm_report_error("printOp() does not handle immediate values");
     return;
 
   case MachineOperand::MO_MachineBasicBlock:
@@ -362,9 +360,6 @@ void SPUAsmPrinter::printOp(const MachineOperand &MO) {
       }
     }
     O << Name;
-
-    if (GV->hasExternalWeakLinkage())
-      ExtWeakSymbols.insert(GV);
     return;
   }
 
@@ -436,7 +431,7 @@ LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
   const Function *F = MF.getFunction();
 
   SwitchToSection(TAI->SectionForGlobal(F));
-  EmitAlignment(3, F);
+  EmitAlignment(MF.getAlignment(), F);
 
   switch (F->getLinkage()) {
   default: assert(0 && "Unknown linkage type!");
@@ -490,12 +485,8 @@ LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
 
 bool LinuxAsmPrinter::doInitialization(Module &M) {
   bool Result = AsmPrinter::doInitialization(M);
-  SwitchToTextSection("\t.text");
-  // Emit initial debug information.
   DW = getAnalysisIfAvailable<DwarfWriter>();
-  assert(DW && "Dwarf Writer is not available");
-  MMI = getAnalysisIfAvailable<MachineModuleInfo>();
-  DW->BeginModule(&M, MMI, O, this, TAI);
+  SwitchToTextSection("\t.text");
   return Result;
 }
 
@@ -529,8 +520,10 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   printVisibility(name, GVar->getVisibility());
 
   Constant *C = GVar->getInitializer();
+  if (isa<MDNode>(C) || isa<MDString>(C))
+    return;
   const Type *Type = C->getType();
-  unsigned Size = TD->getTypePaddedSize(Type);
+  unsigned Size = TD->getTypeAllocSize(Type);
   unsigned Align = TD->getPreferredAlignmentLog(GVar);
 
   SwitchToSection(TAI->SectionForGlobal(GVar));
@@ -580,20 +573,13 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
    case GlobalValue::InternalLinkage:
     break;
    default:
-    cerr << "Unknown linkage type!";
-    abort();
+    llvm_report_error("Unknown linkage type!");
   }
 
   EmitAlignment(Align, GVar);
   O << name << ":\t\t\t\t" << TAI->getCommentString() << " '";
   PrintUnmangledNameSafely(GVar, O);
   O << "'\n";
-
-  // If the initializer is a extern weak symbol, remember to emit the weak
-  // reference!
-  if (const GlobalValue *GV = dyn_cast<GlobalValue>(C))
-    if (GV->hasExternalWeakLinkage())
-      ExtWeakSymbols.insert(GV);
 
   EmitGlobalConstant(C);
   O << '\n';
@@ -605,9 +591,6 @@ bool LinuxAsmPrinter::doFinalization(Module &M) {
        I != E; ++I)
     printModuleLevelGV(I);
 
-  // Emit initial debug information.
-  DW->EndModule();
-
   return AsmPrinter::doFinalization(M);
 }
 
@@ -617,7 +600,17 @@ bool LinuxAsmPrinter::doFinalization(Module &M) {
 ///
 FunctionPass *llvm::createSPUAsmPrinterPass(raw_ostream &o,
                                             SPUTargetMachine &tm,
-                                            CodeGenOpt::Level OptLevel,
                                             bool verbose) {
-  return new LinuxAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
+  return new LinuxAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
+}
+
+// Force static initialization.
+extern "C" void LLVMInitializeCellSPUAsmPrinter() { }
+
+namespace {
+  static struct Register {
+    Register() {
+      SPUTargetMachine::registerAsmPrinter(createSPUAsmPrinterPass);
+    }
+  } Registrator;
 }

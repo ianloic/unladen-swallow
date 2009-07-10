@@ -20,7 +20,6 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/Basic/LangOptions.h"
-#include <sstream>
 
 using namespace clang;
 
@@ -60,9 +59,6 @@ void clang::CheckObjCUnusedIvar(ObjCImplementationDecl* D, BugReporter& BR) {
   ObjCInterfaceDecl* ID = D->getClassInterface();
   IvarUsageMap M;
 
-
-  ASTContext &Ctx = BR.getContext();
-
   // Iterate over the ivars.
   for (ObjCInterfaceDecl::ivar_iterator I=ID->ivar_begin(), E=ID->ivar_end();
        I!=E; ++I) {
@@ -84,21 +80,21 @@ void clang::CheckObjCUnusedIvar(ObjCImplementationDecl* D, BugReporter& BR) {
     return;
   
   // Now scan the methods for accesses.
-  for (ObjCImplementationDecl::instmeth_iterator I = D->instmeth_begin(Ctx),
-       E = D->instmeth_end(Ctx); I!=E; ++I)
-    Scan(M, (*I)->getBody(Ctx));
+  for (ObjCImplementationDecl::instmeth_iterator I = D->instmeth_begin(),
+       E = D->instmeth_end(); I!=E; ++I)
+    Scan(M, (*I)->getBody());
   
   // Scan for @synthesized property methods that act as setters/getters
   // to an ivar.
-  for (ObjCImplementationDecl::propimpl_iterator I = D->propimpl_begin(Ctx),
-       E = D->propimpl_end(Ctx); I!=E; ++I)
+  for (ObjCImplementationDecl::propimpl_iterator I = D->propimpl_begin(),
+       E = D->propimpl_end(); I!=E; ++I)
     Scan(M, *I);  
   
   // Find ivars that are unused.
   for (IvarUsageMap::iterator I = M.begin(), E = M.end(); I!=E; ++I)
     if (I->second == Unused) {
-      
-      std::ostringstream os;
+      std::string sbuf;
+      llvm::raw_string_ostream os(sbuf);
       os << "Instance variable '" << I->first->getNameAsString()
          << "' in class '" << ID->getNameAsString() 
          << "' is never used by the methods in its @implementation "

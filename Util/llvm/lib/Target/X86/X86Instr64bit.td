@@ -19,6 +19,14 @@
 
 // 64-bits but only 32 bits are significant.
 def i64i32imm  : Operand<i64>;
+
+// 64-bits but only 32 bits are significant, and those bits are treated as being
+// pc relative.
+def i64i32imm_pcrel : Operand<i64> {
+  let PrintMethod = "print_pcrel_imm";
+}
+
+
 // 64-bits but only 8 bits are significant.
 def i64i8imm   : Operand<i64>;
 
@@ -29,6 +37,7 @@ def lea64mem : Operand<i64> {
 
 def lea64_32mem : Operand<i32> {
   let PrintMethod = "printlea64_32mem";
+  let AsmOperandLowerMethod = "lower_lea64_32mem";
   let MIOperandInfo = (ops GR32, i8imm, GR32, i32imm);
 }
 
@@ -36,8 +45,12 @@ def lea64_32mem : Operand<i32> {
 // Complex Pattern Definitions.
 //
 def lea64addr : ComplexPattern<i64, 4, "SelectLEAAddr",
-                        [add, mul, X86mul_imm, shl, or, frameindex, X86Wrapper],
+                        [add, mul, X86mul_imm, shl, or, frameindex, X86Wrapper,
+                         X86WrapperRIP],
                         []>;
+
+def tls64addr : ComplexPattern<i64, 4, "SelectTLSADDRAddr",
+                               [tglobaltlsaddr], []>;
 
 //===----------------------------------------------------------------------===//
 // Pattern fragments.
@@ -113,9 +126,9 @@ let isCall = 1 in
     // NOTE: this pattern doesn't match "X86call imm", because we do not know
     // that the offset between an arbitrary immediate and the call will fit in
     // the 32-bit pcrel field that we have.
-    def CALL64pcrel32 : I<0xE8, RawFrm,
-                          (outs), (ins i64i32imm:$dst, variable_ops),
-                          "call\t${dst:call}", []>,
+    def CALL64pcrel32 : Ii32<0xE8, RawFrm,
+                          (outs), (ins i64i32imm_pcrel:$dst, variable_ops),
+                          "call\t$dst", []>,
                         Requires<[In64BitMode]>;
     def CALL64r       : I<0xFF, MRM2r, (outs), (ins GR64:$dst, variable_ops),
                           "call\t{*}$dst", [(X86call GR64:$dst)]>;
@@ -175,6 +188,15 @@ def POP64r   : I<0x58, AddRegFrm,
 let mayStore = 1 in
 def PUSH64r  : I<0x50, AddRegFrm,
                  (outs), (ins GR64:$reg), "push{q}\t$reg", []>;
+}
+
+let Defs = [RSP], Uses = [RSP], neverHasSideEffects = 1, mayStore = 1 in {
+def PUSH64i8   : Ii8<0x6a, RawFrm, (outs), (ins i8imm:$imm), 
+                     "push{q}\t$imm", []>;
+def PUSH64i16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm), 
+                      "push{q}\t$imm", []>;
+def PUSH64i32  : Ii32<0x68, RawFrm, (outs), (ins i32imm:$imm), 
+                      "push{q}\t$imm", []>;
 }
 
 let Defs = [RSP, EFLAGS], Uses = [RSP], mayLoad = 1 in
@@ -1312,13 +1334,13 @@ let Defs = [RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11,
             XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7,
             XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15, EFLAGS],
     Uses = [RSP] in
-def TLS_addr64 : I<0, Pseudo, (outs), (ins i64imm:$sym),
+def TLS_addr64 : I<0, Pseudo, (outs), (ins lea64mem:$sym),
                    ".byte\t0x66; "
-                   "leaq\t${sym:mem}(%rip), %rdi; "
+                   "leaq\t$sym(%rip), %rdi; "
                    ".word\t0x6666; "
                    "rex64; "
                    "call\t__tls_get_addr@PLT",
-                  [(X86tlsaddr tglobaltlsaddr:$sym)]>,
+                  [(X86tlsaddr tls64addr:$sym)]>,
                   Requires<[In64BitMode]>;
 
 let AddedComplexity = 5 in
@@ -1397,6 +1419,9 @@ def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri texternalsym:$dst)>, Requires<[NotSmallCode]>;
 
+// If we have small model and -static mode, it is safe to store global addresses
+// directly as immediates.  FIXME: This is really a hack, the 'imm' predicate
+// should handle this sort of thing.
 def : Pat<(store (i64 (X86Wrapper tconstpool:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tconstpool:$src)>,
           Requires<[SmallCode, IsStatic]>;
@@ -1409,6 +1434,23 @@ def : Pat<(store (i64 (X86Wrapper tglobaladdr:$src)), addr:$dst),
 def : Pat<(store (i64 (X86Wrapper texternalsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, texternalsym:$src)>,
           Requires<[SmallCode, IsStatic]>;
+
+// If we have small model and -static mode, it is safe to store global addresses
+// directly as immediates.  FIXME: This is really a hack, the 'imm' predicate
+// should handle this sort of thing.
+def : Pat<(store (i64 (X86WrapperRIP tconstpool:$src)), addr:$dst),
+          (MOV64mi32 addr:$dst, tconstpool:$src)>,
+          Requires<[SmallCode, IsStatic]>;
+def : Pat<(store (i64 (X86WrapperRIP tjumptable:$src)), addr:$dst),
+          (MOV64mi32 addr:$dst, tjumptable:$src)>,
+          Requires<[SmallCode, IsStatic]>;
+def : Pat<(store (i64 (X86WrapperRIP tglobaladdr:$src)), addr:$dst),
+          (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
+          Requires<[SmallCode, IsStatic]>;
+def : Pat<(store (i64 (X86WrapperRIP texternalsym:$src)), addr:$dst),
+          (MOV64mi32 addr:$dst, texternalsym:$src)>,
+          Requires<[SmallCode, IsStatic]>;
+
 
 // Calls
 // Direct PC relative function call for small code model. 32-bit displacement
@@ -1588,11 +1630,11 @@ def : Pat<(i8 (trunc GR16:$src)),
       Requires<[In64BitMode]>;
 
 // h-register tricks.
-// For now, be conservative and only the extract if the value is immediately
-// zero-extended or stored, which are somewhat common cases. This uses a bunch
-// of code to prevent a register requiring a REX prefix from being allocated in
-// the same instruction as the h register, as there's currently no way to
-// describe this requirement to the register allocator.
+// For now, be conservative on x86-64 and use an h-register extract only if the
+// value is immediately zero-extended or stored, which are somewhat common
+// cases. This uses a bunch of code to prevent a register requiring a REX prefix
+// from being allocated in the same instruction as the h register, as there's
+// currently no way to describe this requirement to the register allocator.
 
 // h-register extract and zero-extend.
 def : Pat<(and (srl_su GR64:$src, (i8 8)), (i64 255)),
@@ -1614,6 +1656,18 @@ def : Pat<(srl_su GR16:$src, (i8 8)),
                               x86_subreg_8bit_hi)),
             x86_subreg_16bit)>,
       Requires<[In64BitMode]>;
+def : Pat<(i32 (zext (srl_su GR16:$src, (i8 8)))),
+          (MOVZX32_NOREXrr8
+            (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
+                            x86_subreg_8bit_hi))>,
+      Requires<[In64BitMode]>;
+def : Pat<(i64 (zext (srl_su GR16:$src, (i8 8)))),
+          (SUBREG_TO_REG
+            (i64 0),
+            (MOVZX32_NOREXrr8
+              (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
+                              x86_subreg_8bit_hi)),
+            x86_subreg_32bit)>;
 
 // h-register extract and store.
 def : Pat<(store (i8 (trunc_su (srl_su GR64:$src, (i8 8)))), addr:$dst),

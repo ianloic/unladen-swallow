@@ -41,6 +41,7 @@
           <li><a href="#t_floating">Floating Point Types</a></li>
           <li><a href="#t_void">Void Type</a></li>
           <li><a href="#t_label">Label Type</a></li>
+          <li><a href="#t_metadata">Metadata Type</a></li>
         </ol>
       </li>
       <li><a href="#t_derived">Derived Types</a>
@@ -88,8 +89,11 @@
       <li><a href="#binaryops">Binary Operations</a>
         <ol>
           <li><a href="#i_add">'<tt>add</tt>' Instruction</a></li>
+          <li><a href="#i_fadd">'<tt>fadd</tt>' Instruction</a></li>
           <li><a href="#i_sub">'<tt>sub</tt>' Instruction</a></li>
+          <li><a href="#i_fsub">'<tt>fsub</tt>' Instruction</a></li>
           <li><a href="#i_mul">'<tt>mul</tt>' Instruction</a></li>
+          <li><a href="#i_fmul">'<tt>fmul</tt>' Instruction</a></li>
           <li><a href="#i_udiv">'<tt>udiv</tt>' Instruction</a></li>
           <li><a href="#i_sdiv">'<tt>sdiv</tt>' Instruction</a></li>
           <li><a href="#i_fdiv">'<tt>fdiv</tt>' Instruction</a></li>
@@ -151,8 +155,6 @@
         <ol>
           <li><a href="#i_icmp">'<tt>icmp</tt>' Instruction</a></li>
           <li><a href="#i_fcmp">'<tt>fcmp</tt>' Instruction</a></li>
-          <li><a href="#i_vicmp">'<tt>vicmp</tt>' Instruction</a></li>
-          <li><a href="#i_vfcmp">'<tt>vfcmp</tt>' Instruction</a></li>
           <li><a href="#i_phi">'<tt>phi</tt>'   Instruction</a></li>
           <li><a href="#i_select">'<tt>select</tt>' Instruction</a></li>
           <li><a href="#i_call">'<tt>call</tt>'  Instruction</a></li>
@@ -1061,23 +1063,24 @@ unwind or exceptional control flow.  If the function does unwind, its runtime
 behavior is undefined.</dd>
 
 <dt><tt>readnone</tt></dt>
-<dd>This attribute indicates that the function computes its result (or the
-exception it throws) based strictly on its arguments, without dereferencing any
+<dd>This attribute indicates that the function computes its result (or decides to
+unwind an exception) based strictly on its arguments, without dereferencing any
 pointer arguments or otherwise accessing any mutable state (e.g. memory, control
 registers, etc) visible to caller functions.  It does not write through any
 pointer arguments (including <tt><a href="#byval">byval</a></tt> arguments) and
-never changes any state visible to callers.  readnone functions may not throw
-an exception that escapes into the caller.</dd>
+never changes any state visible to callers.  This means that it cannot unwind
+exceptions by calling the <tt>C++</tt> exception throwing methods, but could
+use the <tt>unwind</tt> instruction.</dd>
 
 <dt><tt><a name="readonly">readonly</a></tt></dt>
 <dd>This attribute indicates that the function does not write through any
 pointer arguments (including <tt><a href="#byval">byval</a></tt> arguments)
 or otherwise modify any state (e.g. memory, control registers, etc) visible to
 caller functions.  It may dereference pointer arguments and read state that may
-be set in the caller.  A readonly function always returns the same value when
-called with the same set of arguments and global
-state.  readonly functions may not throw an exception that escapes into the
-caller.</dd>
+be set in the caller.  A readonly function always returns the same value (or
+unwinds an exception identically) when called with the same set of arguments
+and global state.  It cannot unwind an exception by calling the <tt>C++</tt>
+exception throwing methods, but may use the <tt>unwind</tt> instruction.</dd>
 
 <dt><tt><a name="ssp">ssp</a></tt></dt>
 <dd>This attribute indicates that the function should emit a stack smashing
@@ -1086,19 +1089,28 @@ stack before the local variables that's checked upon return from the function to
 see if it has been overwritten. A heuristic is used to determine if a function
 needs stack protectors or not.
 
-<p>If a function that has an <tt>ssp</tt> attribute is inlined into a function
+<br><br>If a function that has an <tt>ssp</tt> attribute is inlined into a function
 that doesn't have an <tt>ssp</tt> attribute, then the resulting function will
-have an <tt>ssp</tt> attribute.</p></dd>
+have an <tt>ssp</tt> attribute.</dd>
 
 <dt><tt>sspreq</tt></dt>
 <dd>This attribute indicates that the function should <em>always</em> emit a
 stack smashing protector. This overrides the <tt><a href="#ssp">ssp</a></tt>
 function attribute.
 
-<p>If a function that has an <tt>sspreq</tt> attribute is inlined into a
+If a function that has an <tt>sspreq</tt> attribute is inlined into a
 function that doesn't have an <tt>sspreq</tt> attribute or which has
 an <tt>ssp</tt> attribute, then the resulting function will have
-an <tt>sspreq</tt> attribute.</p></dd>
+an <tt>sspreq</tt> attribute.</dd>
+
+<dt><tt>noredzone</tt></dt>
+<dd>This attribute indicates that the code generator should not use a
+red zone, even if the target-specific ABI normally permits it.
+</dd>
+
+<dt><tt>noimplicitfloat</tt></dt>
+<dd>This attributes disables implicit floating point instructions.</dd>
+
 </dl>
 
 </div>
@@ -1172,6 +1184,9 @@ aspect of the data layout.  The specifications accepted are as follows: </p>
   <dt><tt>a<i>size</i>:<i>abi</i>:<i>pref</i></tt></dt>
   <dd>This specifies the alignment for an aggregate type of a given bit
   <i>size</i>.</dd>
+  <dt><tt>s<i>size</i>:<i>abi</i>:<i>pref</i></tt></dt>
+  <dd>This specifies the alignment for a stack object of a given bit
+  <i>size</i>.</dd>
 </dl>
 <p>When constructing the data layout for a given target, LLVM starts with a
 default set of specifications which are then (possibly) overriden by the
@@ -1191,6 +1206,7 @@ are given in this list:</p>
   <li><tt>v64:64:64</tt> - 64-bit vector is 64-bit aligned</li>
   <li><tt>v128:128:128</tt> - 128-bit vector is 128-bit aligned</li>
   <li><tt>a0:0:1</tt> - aggregates are 8-bit aligned</li>
+  <li><tt>s0:64:64</tt> - stack objects are 64-bit aligned</li>
 </ul>
 <p>When LLVM is determining the alignment for a given type, it uses the 
 following rules:</p>
@@ -1253,14 +1269,16 @@ classifications:</p>
           <a href="#t_vector">vector</a>,
           <a href="#t_struct">structure</a>,
           <a href="#t_array">array</a>,
-          <a href="#t_label">label</a>.
+          <a href="#t_label">label</a>,
+          <a href="#t_metadata">metadata</a>.
       </td>
     </tr>
     <tr>
       <td><a href="#t_primitive">primitive</a></td>
       <td><a href="#t_label">label</a>,
           <a href="#t_void">void</a>,
-          <a href="#t_floating">floating point</a>.</td>
+          <a href="#t_floating">floating point</a>,
+          <a href="#t_metadata">metadata</a>.</td>
     </tr>
     <tr>
       <td><a href="#t_derived">derived</a></td>
@@ -1336,6 +1354,22 @@ system.</p>
 </pre>
 </div>
 
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"> <a name="t_metadata">Metadata Type</a> </div>
+
+<div class="doc_text">
+<h5>Overview:</h5>
+<p>The metadata type represents embedded metadata. The only derived type that
+may contain metadata is <tt>metadata*</tt> or a function type that returns or
+takes metadata typed parameters, but not pointer to metadata types.</p>
+
+<h5>Syntax:</h5>
+
+<pre>
+  metadata
+</pre>
+</div>
+
 
 <!-- ======================================================================= -->
 <div class="doc_subsection"> <a name="t_derived">Derived Types</a> </div>
@@ -1370,18 +1404,18 @@ value.</p>
 
 <h5>Examples:</h5>
 <table class="layout">
-  <tbody>
-  <tr>
-    <td><tt>i1</tt></td>
-    <td>a single-bit integer.</td>
-  </tr><tr>
-    <td><tt>i32</tt></td>
-    <td>a 32-bit integer.</td>
-  </tr><tr>
-    <td><tt>i1942652</tt></td>
-    <td>a really big integer of over 1 million bits.</td>
+  <tr class="layout">
+    <td class="left"><tt>i1</tt></td>
+    <td class="left">a single-bit integer.</td>
   </tr>
-  </tbody>
+  <tr class="layout">
+    <td class="left"><tt>i32</tt></td>
+    <td class="left">a 32-bit integer.</td>
+  </tr>
+  <tr class="layout">
+    <td class="left"><tt>i1942652</tt></td>
+    <td class="left">a really big integer of over 1 million bits.</td>
+  </tr>
 </table>
 
 <p>Note that the code generator does not yet support large integer types
@@ -1864,10 +1898,11 @@ constants and smaller complex constants.</p>
 
   <dt><b>Metadata node</b></dt>
 
-  <dd>A metadata node is a structure-like constant with the type of an empty
-  struct.  For example: "<tt>{ } !{ i32 0, { } !"test" }</tt>". Unlike other
-  constants that are meant to be interpreted as part of the instruction stream,
-  metadata is a place to attach additional information such as debug info.
+  <dd>A metadata node is a structure-like constant with
+  <a href="#t_metadata">metadata type</a>.  For example:
+  "<tt>metadata !{ i32 0, metadata !"test" }</tt>".  Unlike other constants
+  that are meant to be interpreted as part of the instruction stream, metadata
+  is a place to attach additional information such as debug info.
   </dd>
 </dl>
 
@@ -2005,12 +2040,6 @@ following is the syntax for constant expressions:</p>
   <dt><b><tt>fcmp COND ( VAL1, VAL2 )</tt></b></dt>
   <dd>Performs the <a href="#i_fcmp">fcmp operation</a> on constants.</dd>
 
-  <dt><b><tt>vicmp COND ( VAL1, VAL2 )</tt></b></dt>
-  <dd>Performs the <a href="#i_vicmp">vicmp operation</a> on constants.</dd>
-
-  <dt><b><tt>vfcmp COND ( VAL1, VAL2 )</tt></b></dt>
-  <dd>Performs the <a href="#i_vfcmp">vfcmp operation</a> on constants.</dd>
-
   <dt><b><tt>extractelement ( VAL, IDX )</tt></b></dt>
 
   <dd>Perform the <a href="#i_extractelement">extractelement
@@ -2045,9 +2074,9 @@ following is the syntax for constant expressions:</p>
 
 <p>Embedded metadata provides a way to attach arbitrary data to the
 instruction stream without affecting the behaviour of the program.  There are
-two metadata primitives, strings and nodes. All metadata has the type of an
-empty struct and is identified in syntax by a preceding exclamation point
-('<tt>!</tt>').
+two metadata primitives, strings and nodes. All metadata has the
+<tt>metadata</tt> type and is identified in syntax by a preceding exclamation
+point ('<tt>!</tt>').
 </p>
 
 <p>A metadata string is a string surrounded by double quotes.  It can contain
@@ -2057,8 +2086,12 @@ the two digit hex code.  For example: "<tt>!"test\00"</tt>".
 
 <p>Metadata nodes are represented with notation similar to structure constants
 (a comma separated list of elements, surrounded by braces and preceeded by an
-exclamation point).  For example: "<tt>!{ { } !"test\00", i32 10}</tt>".
+exclamation point).  For example: "<tt>!{ metadata !"test\00", i32 10}</tt>".
 </p>
+
+<p>A metadata node will attempt to track changes to the values it holds. In
+the event that a value is deleted, it will be replaced with a typeless
+"<tt>null</tt>", such as "<tt>metadata !{null, i32 10}</tt>".</p> 
 
 <p>Optimizations may rely on metadata to provide additional information about
 the program that isn't available in the instructions, or that isn't easily
@@ -2239,7 +2272,7 @@ argument is evaluated.  If the value is <tt>true</tt>, control flows
 to the '<tt>iftrue</tt>' <tt>label</tt> argument.  If "cond" is <tt>false</tt>,
 control flows to the '<tt>iffalse</tt>' <tt>label</tt> argument.</p>
 <h5>Example:</h5>
-<pre>Test:<br>  %cond = <a href="#i_icmp">icmp</a> eq, i32 %a, %b<br>  br i1 %cond, label %IfEqual, label %IfUnequal<br>IfEqual:<br>  <a
+<pre>Test:<br>  %cond = <a href="#i_icmp">icmp</a> eq i32 %a, %b<br>  br i1 %cond, label %IfEqual, label %IfUnequal<br>IfEqual:<br>  <a
  href="#i_ret">ret</a> i32 1<br>IfUnequal:<br>  <a href="#i_ret">ret</a> i32 0<br></pre>
 </div>
 <!-- _______________________________________________________________________ -->
@@ -2378,6 +2411,11 @@ cleanup is performed in the case of either a <tt>longjmp</tt> or a thrown
 exception.  Additionally, this is important for implementation of
 '<tt>catch</tt>' clauses in high-level languages that support them.</p>
 
+<p>For the purposes of the SSA form, the definition of the value
+returned by the '<tt>invoke</tt>' instruction is deemed to occur on
+the edge from the current block to the "normal" label. If the callee
+unwinds then no return value is available.</p>
+
 <h5>Example:</h5>
 <pre>
   %retval = invoke i32 @Test(i32 15) to label %Continue
@@ -2473,16 +2511,15 @@ The result value has the same type as its operands.</p>
 <h5>Arguments:</h5>
 
 <p>The two arguments to the '<tt>add</tt>' instruction must be <a
- href="#t_integer">integer</a>, <a href="#t_floating">floating point</a>, or
- <a href="#t_vector">vector</a> values. Both arguments must have identical
- types.</p>
+ href="#t_integer">integer</a> or
+ <a href="#t_vector">vector</a> of integer values. Both arguments must
+ have identical types.</p>
 
 <h5>Semantics:</h5>
 
-<p>The value produced is the integer or floating point sum of the two
-operands.</p>
+<p>The value produced is the integer sum of the two operands.</p>
 
-<p>If an integer sum has unsigned overflow, the result returned is the
+<p>If the sum has unsigned overflow, the result returned is the
 mathematical result modulo 2<sup>n</sup>, where n is the bit width of
 the result.</p>
 
@@ -2493,6 +2530,39 @@ instruction is appropriate for both signed and unsigned integers.</p>
 
 <pre>
   &lt;result&gt; = add i32 4, %var          <i>; yields {i32}:result = 4 + %var</i>
+</pre>
+</div>
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="i_fadd">'<tt>fadd</tt>' Instruction</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+
+<pre>
+  &lt;result&gt; = fadd &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;   <i>; yields {ty}:result</i>
+</pre>
+
+<h5>Overview:</h5>
+
+<p>The '<tt>fadd</tt>' instruction returns the sum of its two operands.</p>
+
+<h5>Arguments:</h5>
+
+<p>The two arguments to the '<tt>fadd</tt>' instruction must be
+<a href="#t_floating">floating point</a> or <a href="#t_vector">vector</a> of
+floating point values. Both arguments must have identical types.</p>
+
+<h5>Semantics:</h5>
+
+<p>The value produced is the floating point sum of the two operands.</p>
+
+<h5>Example:</h5>
+
+<pre>
+  &lt;result&gt; = fadd float 4.0, %var          <i>; yields {float}:result = 4.0 + %var</i>
 </pre>
 </div>
 <!-- _______________________________________________________________________ -->
@@ -2520,16 +2590,14 @@ representations.</p>
 <h5>Arguments:</h5>
 
 <p>The two arguments to the '<tt>sub</tt>' instruction must be <a
- href="#t_integer">integer</a>, <a href="#t_floating">floating point</a>,
- or <a href="#t_vector">vector</a> values.  Both arguments must have identical
- types.</p>
+ href="#t_integer">integer</a> or <a href="#t_vector">vector</a> of
+ integer values.  Both arguments must have identical types.</p>
 
 <h5>Semantics:</h5>
 
-<p>The value produced is the integer or floating point difference of
-the two operands.</p>
+<p>The value produced is the integer difference of the two operands.</p>
 
-<p>If an integer difference has unsigned overflow, the result returned is the
+<p>If the difference has unsigned overflow, the result returned is the
 mathematical result modulo 2<sup>n</sup>, where n is the bit width of
 the result.</p>
 
@@ -2540,6 +2608,45 @@ instruction is appropriate for both signed and unsigned integers.</p>
 <pre>
   &lt;result&gt; = sub i32 4, %var          <i>; yields {i32}:result = 4 - %var</i>
   &lt;result&gt; = sub i32 0, %val          <i>; yields {i32}:result = -%var</i>
+</pre>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+   <a name="i_fsub">'<tt>fsub</tt>' Instruction</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+
+<pre>
+  &lt;result&gt; = fsub &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;   <i>; yields {ty}:result</i>
+</pre>
+
+<h5>Overview:</h5>
+
+<p>The '<tt>fsub</tt>' instruction returns the difference of its two
+operands.</p>
+
+<p>Note that the '<tt>fsub</tt>' instruction is used to represent the
+'<tt>fneg</tt>' instruction present in most other intermediate
+representations.</p>
+
+<h5>Arguments:</h5>
+
+<p>The two arguments to the '<tt>fsub</tt>' instruction must be <a
+ <a href="#t_floating">floating point</a> or <a href="#t_vector">vector</a>
+ of floating point values.  Both arguments must have identical types.</p>
+
+<h5>Semantics:</h5>
+
+<p>The value produced is the floating point difference of the two operands.</p>
+
+<h5>Example:</h5>
+<pre>
+  &lt;result&gt; = fsub float 4.0, %var           <i>; yields {float}:result = 4.0 - %var</i>
+  &lt;result&gt; = fsub float -0.0, %val          <i>; yields {float}:result = -%var</i>
 </pre>
 </div>
 
@@ -2560,16 +2667,14 @@ operands.</p>
 <h5>Arguments:</h5>
 
 <p>The two arguments to the '<tt>mul</tt>' instruction must be <a
-href="#t_integer">integer</a>, <a href="#t_floating">floating point</a>,
-or <a href="#t_vector">vector</a> values.  Both arguments must have identical
-types.</p>
+href="#t_integer">integer</a> or <a href="#t_vector">vector</a> of integer
+values.  Both arguments must have identical types.</p>
  
 <h5>Semantics:</h5>
 
-<p>The value produced is the integer or floating point product of the
-two operands.</p>
+<p>The value produced is the integer product of the two operands.</p>
 
-<p>If the result of an integer multiplication has unsigned overflow,
+<p>If the result of the multiplication has unsigned overflow,
 the result returned is the mathematical result modulo 
 2<sup>n</sup>, where n is the bit width of the result.</p>
 <p>Because LLVM integers use a two's complement representation, and the
@@ -2580,6 +2685,35 @@ should be sign-extended or zero-extended as appropriate to the
 width of the full product.</p>
 <h5>Example:</h5>
 <pre>  &lt;result&gt; = mul i32 4, %var          <i>; yields {i32}:result = 4 * %var</i>
+</pre>
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="i_fmul">'<tt>fmul</tt>' Instruction</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+<pre>  &lt;result&gt; = fmul &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;   <i>; yields {ty}:result</i>
+</pre>
+<h5>Overview:</h5>
+<p>The  '<tt>fmul</tt>' instruction returns the product of its two
+operands.</p>
+
+<h5>Arguments:</h5>
+
+<p>The two arguments to the '<tt>fmul</tt>' instruction must be
+<a href="#t_floating">floating point</a> or <a href="#t_vector">vector</a>
+of floating point values.  Both arguments must have identical types.</p>
+
+<h5>Semantics:</h5>
+
+<p>The value produced is the floating point product of the two operands.</p>
+
+<h5>Example:</h5>
+<pre>  &lt;result&gt; = fmul float 4.0, %var          <i>; yields {float}:result = 4.0 * %var</i>
 </pre>
 </div>
 
@@ -3390,9 +3524,10 @@ address space (address space zero).</p>
 bytes of memory from the operating system and returns a pointer of the
 appropriate type to the program.  If "NumElements" is specified, it is the
 number of elements allocated, otherwise "NumElements" is defaulted to be one.
-If a constant alignment is specified, the value result of the allocation is guaranteed to
-be aligned to at least that boundary.  If not specified, or if zero, the target can
-choose to align the allocation on any convenient boundary.</p>
+If a constant alignment is specified, the value result of the allocation is
+guaranteed to be aligned to at least that boundary.  If not specified, or if
+zero, the target can choose to align the allocation on any convenient boundary
+compatible with the type.</p>
 
 <p>'<tt>type</tt>' must be a sized type.</p>
 
@@ -3483,15 +3618,16 @@ space (address space zero).</p>
 bytes of memory on the runtime stack, returning a pointer of the
 appropriate type to the program.  If "NumElements" is specified, it is the
 number of elements allocated, otherwise "NumElements" is defaulted to be one.
-If a constant alignment is specified, the value result of the allocation is guaranteed
-to be aligned to at least that boundary.  If not specified, or if zero, the target
-can choose to align the allocation on any convenient boundary.</p>
+If a constant alignment is specified, the value result of the allocation is
+guaranteed to be aligned to at least that boundary.  If not specified, or if
+zero, the target can choose to align the allocation on any convenient boundary
+compatible with the type.</p>
 
 <p>'<tt>type</tt>' may be any sized type.</p>
 
 <h5>Semantics:</h5>
 
-<p>Memory is allocated; a pointer is returned.  The operation is undefiend if
+<p>Memory is allocated; a pointer is returned.  The operation is undefined if
 there is insufficient stack space for the allocation.  '<tt>alloca</tt>'d
 memory is automatically released when the function returns.  The '<tt>alloca</tt>'
 instruction is commonly used to represent automatic variables that must
@@ -4362,109 +4498,6 @@ always yields an <a href="#t_primitive">i1</a> result, as follows:</p>
 
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsubsection">
-  <a name="i_vicmp">'<tt>vicmp</tt>' Instruction</a>
-</div>
-<div class="doc_text">
-<h5>Syntax:</h5>
-<pre>  &lt;result&gt; = vicmp &lt;cond&gt; &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;   <i>; yields {ty}:result</i>
-</pre>
-<h5>Overview:</h5>
-<p>The '<tt>vicmp</tt>' instruction returns an integer vector value based on
-element-wise comparison of its two integer vector operands.</p>
-<h5>Arguments:</h5>
-<p>The '<tt>vicmp</tt>' instruction takes three operands. The first operand is
-the condition code indicating the kind of comparison to perform. It is not
-a value, just a keyword. The possible condition code are:</p>
-<ol>
-  <li><tt>eq</tt>: equal</li>
-  <li><tt>ne</tt>: not equal </li>
-  <li><tt>ugt</tt>: unsigned greater than</li>
-  <li><tt>uge</tt>: unsigned greater or equal</li>
-  <li><tt>ult</tt>: unsigned less than</li>
-  <li><tt>ule</tt>: unsigned less or equal</li>
-  <li><tt>sgt</tt>: signed greater than</li>
-  <li><tt>sge</tt>: signed greater or equal</li>
-  <li><tt>slt</tt>: signed less than</li>
-  <li><tt>sle</tt>: signed less or equal</li>
-</ol>
-<p>The remaining two arguments must be <a href="#t_vector">vector</a> or
-<a href="#t_integer">integer</a> typed. They must also be identical types.</p>
-<h5>Semantics:</h5>
-<p>The '<tt>vicmp</tt>' instruction compares <tt>op1</tt> and <tt>op2</tt>
-according to the condition code given as <tt>cond</tt>. The comparison yields a 
-<a href="#t_vector">vector</a> of <a href="#t_integer">integer</a> result, of
-identical type as the values being compared.  The most significant bit in each
-element is 1 if the element-wise comparison evaluates to true, and is 0
-otherwise.  All other bits of the result are undefined.  The condition codes
-are evaluated identically to the <a href="#i_icmp">'<tt>icmp</tt>'
-instruction</a>.</p>
-
-<h5>Example:</h5>
-<pre>
-  &lt;result&gt; = vicmp eq &lt;2 x i32&gt; &lt; i32 4, i32 0&gt;, &lt; i32 5, i32 0&gt;   <i>; yields: result=&lt;2 x i32&gt; &lt; i32 0, i32 -1 &gt;</i>
-  &lt;result&gt; = vicmp ult &lt;2 x i8 &gt; &lt; i8 1, i8 2&gt;, &lt; i8 2, i8 2 &gt;        <i>; yields: result=&lt;2 x i8&gt; &lt; i8 -1, i8 0 &gt;</i>
-</pre>
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsubsection">
-  <a name="i_vfcmp">'<tt>vfcmp</tt>' Instruction</a>
-</div>
-<div class="doc_text">
-<h5>Syntax:</h5>
-<pre>  &lt;result&gt; = vfcmp &lt;cond&gt; &lt;ty&gt; &lt;op1&gt;, &lt;op2&gt;</pre>
-<h5>Overview:</h5>
-<p>The '<tt>vfcmp</tt>' instruction returns an integer vector value based on
-element-wise comparison of its two floating point vector operands.  The output
-elements have the same width as the input elements.</p>
-<h5>Arguments:</h5>
-<p>The '<tt>vfcmp</tt>' instruction takes three operands. The first operand is
-the condition code indicating the kind of comparison to perform. It is not
-a value, just a keyword. The possible condition code are:</p>
-<ol>
-  <li><tt>false</tt>: no comparison, always returns false</li>
-  <li><tt>oeq</tt>: ordered and equal</li>
-  <li><tt>ogt</tt>: ordered and greater than </li>
-  <li><tt>oge</tt>: ordered and greater than or equal</li>
-  <li><tt>olt</tt>: ordered and less than </li>
-  <li><tt>ole</tt>: ordered and less than or equal</li>
-  <li><tt>one</tt>: ordered and not equal</li>
-  <li><tt>ord</tt>: ordered (no nans)</li>
-  <li><tt>ueq</tt>: unordered or equal</li>
-  <li><tt>ugt</tt>: unordered or greater than </li>
-  <li><tt>uge</tt>: unordered or greater than or equal</li>
-  <li><tt>ult</tt>: unordered or less than </li>
-  <li><tt>ule</tt>: unordered or less than or equal</li>
-  <li><tt>une</tt>: unordered or not equal</li>
-  <li><tt>uno</tt>: unordered (either nans)</li>
-  <li><tt>true</tt>: no comparison, always returns true</li>
-</ol>
-<p>The remaining two arguments must be <a href="#t_vector">vector</a> of 
-<a href="#t_floating">floating point</a> typed. They must also be identical
-types.</p>
-<h5>Semantics:</h5>
-<p>The '<tt>vfcmp</tt>' instruction compares <tt>op1</tt> and <tt>op2</tt>
-according to  the condition code given as <tt>cond</tt>. The comparison yields a 
-<a href="#t_vector">vector</a> of <a href="#t_integer">integer</a> result, with
-an identical number of elements as the values being compared, and each element
-having identical with to the width of the floating point elements. The most 
-significant bit in each element is 1 if the element-wise comparison evaluates to
-true, and is 0 otherwise.  All other bits of the result are undefined.  The
-condition codes are evaluated identically to the 
-<a href="#i_fcmp">'<tt>fcmp</tt>' instruction</a>.</p>
-
-<h5>Example:</h5>
-<pre>
-  <i>; yields: result=&lt;2 x i32&gt; &lt; i32 0, i32 -1 &gt;</i>
-  &lt;result&gt; = vfcmp oeq &lt;2 x float&gt; &lt; float 4, float 0 &gt;, &lt; float 5, float 0 &gt;
-  
-  <i>; yields: result=&lt;2 x i64&gt; &lt; i64 -1, i64 0 &gt;</i>
-  &lt;result&gt; = vfcmp ult &lt;2 x double&gt; &lt; double 1, double 2 &gt;, &lt; double 2, double 2&gt;
-</pre>
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsubsection">
   <a name="i_phi">'<tt>phi</tt>' Instruction</a>
 </div>
 
@@ -4488,6 +4521,11 @@ may be used as the label arguments.</p>
 <p>There must be no non-phi instructions between the start of a basic
 block and the PHI instructions: i.e. PHI instructions must be first in
 a basic block.</p>
+
+<p>For the purposes of the SSA form, the use of each incoming value is
+deemed to occur on the edge from the corresponding predecessor block
+to the current block (but after any definition of an '<tt>invoke</tt>'
+instruction's return value on the same edge).</p>
 
 <h5>Semantics:</h5>
 
@@ -6282,9 +6320,6 @@ on any integer bit width.</p>
 
 <h5>Overview:</h5>
 
-<p><i><b>Warning:</b> '<tt>llvm.umul.with.overflow</tt>' is badly broken. It is
-actively being fixed, but it should not currently be used!</i></p>
-
 <p>The '<tt>llvm.umul.with.overflow</tt>' family of intrinsic functions perform
 a unsigned multiplication of the two arguments, and indicate whether an overflow
 occurred during the unsigned multiplication.</p>
@@ -7075,7 +7110,7 @@ declare void @llvm.stackprotector( i8* &lt;guard&gt;, i8** &lt;slot&gt; )
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-05-03 12:06:00 -0700 (Sun, 03 May 2009) $
+  Last modified: $Date: 2009-07-07 20:04:38 -0700 (Tue, 07 Jul 2009) $
 </address>
 
 </body>

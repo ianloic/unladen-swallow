@@ -23,6 +23,7 @@
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/System/Mutex.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
 #include <algorithm>
@@ -58,7 +59,7 @@ StructLayout::StructLayout(const StructType *ST, const TargetData &TD) {
     StructAlignment = std::max(TyAlign, StructAlignment);
 
     MemberOffsets[i] = StructSize;
-    StructSize += TD.getTypePaddedSize(Ty); // Consume space for this data item
+    StructSize += TD.getTypeAllocSize(Ty); // Consume space for this data item
   }
 
   // Empty structures have alignment of 1 byte.
@@ -345,11 +346,13 @@ typedef DenseMap<LayoutKey, StructLayout*, DenseMapLayoutKeyInfo> LayoutInfoTy;
 }
 
 static ManagedStatic<LayoutInfoTy> LayoutInfo;
+static ManagedStatic<sys::SmartMutex<true> > LayoutLock;
 
 TargetData::~TargetData() {
   if (!LayoutInfo.isConstructed())
     return;
   
+  sys::SmartScopedLock<true> Lock(*LayoutLock);
   // Remove any layouts for this TD.
   LayoutInfoTy &TheMap = *LayoutInfo;
   for (LayoutInfoTy::iterator I = TheMap.begin(), E = TheMap.end(); I != E; ) {
@@ -366,6 +369,7 @@ TargetData::~TargetData() {
 const StructLayout *TargetData::getStructLayout(const StructType *Ty) const {
   LayoutInfoTy &TheMap = *LayoutInfo;
   
+  sys::SmartScopedLock<true> Lock(*LayoutLock);
   StructLayout *&SL = TheMap[LayoutKey(this, Ty)];
   if (SL) return SL;
 
@@ -390,6 +394,7 @@ const StructLayout *TargetData::getStructLayout(const StructType *Ty) const {
 void TargetData::InvalidateStructLayoutInfo(const StructType *Ty) const {
   if (!LayoutInfo.isConstructed()) return;  // No cache.
   
+  sys::SmartScopedLock<true> Lock(*LayoutLock);
   LayoutInfoTy::iterator I = LayoutInfo->find(LayoutKey(this, Ty));
   if (I == LayoutInfo->end()) return;
   
@@ -425,7 +430,7 @@ uint64_t TargetData::getTypeSizeInBits(const Type *Ty) const {
     return getPointerSizeInBits();
   case Type::ArrayTyID: {
     const ArrayType *ATy = cast<ArrayType>(Ty);
-    return getTypePaddedSizeInBits(ATy->getElementType())*ATy->getNumElements();
+    return getTypeAllocSizeInBits(ATy->getElementType())*ATy->getNumElements();
   }
   case Type::StructTyID:
     // Get the layout annotation... which is lazily created on demand.
@@ -535,7 +540,7 @@ unsigned char TargetData::getPreferredTypeAlignmentShift(const Type *Ty) const {
 
 /// getIntPtrType - Return an unsigned integer type that is the same size or
 /// greater to the host pointer size.
-const Type *TargetData::getIntPtrType() const {
+const IntegerType *TargetData::getIntPtrType() const {
   return IntegerType::get(getPointerSizeInBits());
 }
 
@@ -568,7 +573,7 @@ uint64_t TargetData::getIndexedOffset(const Type *ptrTy, Value* const* Indices,
 
       // Get the array index and the size of each array element.
       int64_t arrayIdx = cast<ConstantInt>(Indices[CurIDX])->getSExtValue();
-      Result += arrayIdx * (int64_t)getTypePaddedSize(Ty);
+      Result += arrayIdx * (int64_t)getTypeAllocSize(Ty);
     }
   }
 

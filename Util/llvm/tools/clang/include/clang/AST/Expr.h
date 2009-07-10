@@ -41,6 +41,7 @@ namespace clang {
 class Expr : public Stmt {
   QualType TR;
 
+protected:
   /// TypeDependent - Whether this expression is type-dependent 
   /// (C++ [temp.dep.expr]).
   bool TypeDependent : 1;
@@ -49,7 +50,6 @@ class Expr : public Stmt {
   /// (C++ [temp.dep.constexpr]).
   bool ValueDependent : 1;
 
-protected:
   // FIXME: Eventually, this constructor should go away and we should
   // require every subclass to provide type/value-dependence
   // information.
@@ -182,6 +182,10 @@ public:
   /// declaration of that bit-field.
   FieldDecl *getBitField();
 
+  const FieldDecl *getBitField() const {
+    return const_cast<Expr*>(this)->getBitField();
+  }
+  
   /// isIntegerConstantExpr - Return true if this expression is a valid integer
   /// constant expression, and, if so, return its value in Result.  If not a
   /// valid i-c-e, return false and fill in Loc (if specified) with the location
@@ -250,7 +254,7 @@ public:
 
   /// isOBJCGCCandidate - Return true if this expression may be used in a read/
   /// write barrier. 
-  bool isOBJCGCCandidate() const;
+  bool isOBJCGCCandidate(ASTContext &Ctx) const;
   
   /// IgnoreParens - Ignore parentheses.  If this Expr is a ParenExpr, return
   ///  its subexpression.  If that subexpression is also a ParenExpr, 
@@ -361,6 +365,8 @@ public:
   explicit PredefinedExpr(EmptyShell Empty) 
     : Expr(PredefinedExprClass, Empty) { }
 
+  PredefinedExpr* Clone(ASTContext &C) const;
+
   IdentType getIdentType() const { return Type; }
   void setIdentType(IdentType IT) { Type = IT; }
 
@@ -433,6 +439,8 @@ public:
   /// \brief Construct an empty character literal.
   CharacterLiteral(EmptyShell Empty) : Expr(CharacterLiteralClass, Empty) { }
 
+  CharacterLiteral* Clone(ASTContext &C) const;
+
   SourceLocation getLoc() const { return Loc; }
   bool isWide() const { return IsWide; }
   
@@ -459,13 +467,15 @@ class FloatingLiteral : public Expr {
   bool IsExact : 1;
   SourceLocation Loc;
 public:
-  FloatingLiteral(const llvm::APFloat &V, bool* isexact, 
+  FloatingLiteral(const llvm::APFloat &V, bool isexact, 
                   QualType Type, SourceLocation L)
-    : Expr(FloatingLiteralClass, Type), Value(V), IsExact(*isexact), Loc(L) {} 
+    : Expr(FloatingLiteralClass, Type), Value(V), IsExact(isexact), Loc(L) {} 
 
   /// \brief Construct an empty floating-point literal.
-  FloatingLiteral(EmptyShell Empty) 
+  explicit FloatingLiteral(EmptyShell Empty) 
     : Expr(FloatingLiteralClass, Empty), Value(0.0) { }
+
+  FloatingLiteral* Clone(ASTContext &C) const;
 
   const llvm::APFloat &getValue() const { return Value; }
   void setValue(const llvm::APFloat &Val) { Value = Val; }
@@ -516,6 +526,8 @@ public:
   const Expr *getSubExpr() const { return cast<Expr>(Val); }
   Expr *getSubExpr() { return cast<Expr>(Val); }
   void setSubExpr(Expr *E) { Val = E; }
+
+  ImaginaryLiteral* Clone(ASTContext &C) const;
 
   virtual SourceRange getSourceRange() const { return Val->getSourceRange(); }
   static bool classof(const Stmt *T) { 
@@ -933,12 +945,6 @@ class CallExpr : public Expr {
   unsigned NumArgs;
   SourceLocation RParenLoc;
   
-  // This version of the ctor is for deserialization.
-  CallExpr(StmtClass SC, Stmt** subexprs, unsigned numargs, QualType t, 
-           SourceLocation rparenloc)
-  : Expr(SC,t), SubExprs(subexprs), 
-    NumArgs(numargs), RParenLoc(rparenloc) {}
-
 protected:
   // This version of the constructor is for derived classes.
   CallExpr(ASTContext& C, StmtClass SC, Expr *fn, Expr **args, unsigned numargs,
@@ -1000,6 +1006,11 @@ public:
   /// not, return 0.
   unsigned isBuiltinCall(ASTContext &Context) const;
   
+  /// getCallReturnType - Get the return type of the call expr. This is not 
+  /// always the type of the expr itself, if the return type is a reference 
+  /// type.
+  QualType getCallReturnType() const;
+  
   SourceLocation getRParenLoc() const { return RParenLoc; }
   void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
@@ -1040,7 +1051,8 @@ class MemberExpr : public Expr {
 public:
   MemberExpr(Expr *base, bool isarrow, NamedDecl *memberdecl, SourceLocation l,
              QualType ty) 
-    : Expr(MemberExprClass, ty),
+    : Expr(MemberExprClass, ty, 
+           base->isTypeDependent(), base->isValueDependent()),
       Base(base), MemberDecl(memberdecl), MemberLoc(l), IsArrow(isarrow) {}
 
   /// \brief Build an empty member reference expression.
@@ -1607,7 +1619,7 @@ public:
   virtual child_iterator child_end();
 };
 
-/// TypesCompatibleExpr - GNU builtin-in function __builtin_type_compatible_p.
+/// TypesCompatibleExpr - GNU builtin-in function __builtin_types_compatible_p.
 /// This AST node represents a function that returns 1 if two *types* (not
 /// expressions) are compatible. The result of this built-in function can be
 /// used in integer constant expressions.
@@ -1804,6 +1816,8 @@ public:
 
   /// \brief Build an empty GNU __null expression.
   explicit GNUNullExpr(EmptyShell Empty) : Expr(GNUNullExprClass, Empty) { }
+
+  GNUNullExpr* Clone(ASTContext &C) const;
 
   /// getTokenLocation - The location of the __null token.
   SourceLocation getTokenLocation() const { return TokenLoc; }
@@ -2059,7 +2073,8 @@ private:
   DesignatedInitExpr(QualType Ty, unsigned NumDesignators, 
                      const Designator *Designators,
                      SourceLocation EqualOrColonLoc, bool GNUSyntax,
-                     unsigned NumSubExprs);
+                     Expr **IndexExprs, unsigned NumIndexExprs,
+                     Expr *Init);
 
   explicit DesignatedInitExpr(unsigned NumSubExprs)
     : Expr(DesignatedInitExprClass, EmptyShell()),
@@ -2322,6 +2337,8 @@ public:
     return SourceRange();
   }
 
+  ImplicitValueInitExpr *Clone(ASTContext &C) const;
+
   // Iterators
   virtual child_iterator child_begin();
   virtual child_iterator child_end(); 
@@ -2416,9 +2433,6 @@ public:
   const Stmt *getBody() const;
   Stmt *getBody();
 
-  const Stmt *getBody(ASTContext &C) const { return getBody(); }
-  Stmt *getBody(ASTContext &C) { return getBody(); }
-
   virtual SourceRange getSourceRange() const {
     return SourceRange(getCaretLocation(), getBody()->getLocEnd());
   }
@@ -2446,10 +2460,13 @@ public:
 class BlockDeclRefExpr : public Expr {
   ValueDecl *D; 
   SourceLocation Loc;
-  bool IsByRef;
+  bool IsByRef : 1;
+  bool ConstQualAdded : 1;
 public:
-  BlockDeclRefExpr(ValueDecl *d, QualType t, SourceLocation l, bool ByRef) : 
-       Expr(BlockDeclRefExprClass, t), D(d), Loc(l), IsByRef(ByRef) {}
+  BlockDeclRefExpr(ValueDecl *d, QualType t, SourceLocation l, bool ByRef, 
+                   bool constAdded = false) :
+       Expr(BlockDeclRefExprClass, t), D(d), Loc(l), IsByRef(ByRef),
+                                       ConstQualAdded(constAdded) {}
 
   // \brief Build an empty reference to a declared variable in a
   // block.
@@ -2467,6 +2484,9 @@ public:
   
   bool isByRef() const { return IsByRef; }
   void setByRef(bool BR) { IsByRef = BR; }
+  
+  bool isConstQualAdded() const { return ConstQualAdded; }
+  void setConstQualAdded(bool C) { ConstQualAdded = C; }
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == BlockDeclRefExprClass; 

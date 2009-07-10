@@ -19,6 +19,7 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/Support/Casting.h"
 #include <cassert>
 #include <utility>
 
@@ -39,8 +40,9 @@ public:
               PostStoreKind = 0x9,
               PostPurgeDeadSymbolsKind = 0x10,
               PostStmtCustomKind = 0x11,
+              PostLValueKind = 0x12,
               MinPostStmtKind = PostStmtKind,
-              MaxPostStmtKind = PostStmtCustomKind };
+              MaxPostStmtKind = PostLValueKind };
 
 private:
   enum { TwoPointers = 0x1, Custom = 0x2, Mask = 0x3 };
@@ -130,7 +132,8 @@ public:
                
 class BlockEntrance : public ProgramPoint {
 public:
-  BlockEntrance(const CFGBlock* B) : ProgramPoint(B, BlockEntranceKind) {}
+  BlockEntrance(const CFGBlock* B, const void *tag = 0)
+    : ProgramPoint(B, BlockEntranceKind, tag) {}
     
   CFGBlock* getBlock() const {
     return reinterpret_cast<CFGBlock*>(getData1NoMask());
@@ -180,8 +183,10 @@ public:
   PostStmt(const Stmt* S, const void *tag = 0)
     : ProgramPoint(S, PostStmtKind, tag) {}
 
-      
   Stmt* getStmt() const { return (Stmt*) getData1(); }
+  
+  template<typename T>
+  T* getStmtAs() const { return llvm::dyn_cast<T>(getStmt()); }
 
   static bool classof(const ProgramPoint* Location) {
     unsigned k = Location->getKind();
@@ -269,6 +274,16 @@ public:
     return Location->getKind() == PostStoreKind;
   }
 };
+
+class PostLValue : public PostStmt {
+public:
+  PostLValue(const Stmt* S, const void *tag = 0)
+  : PostStmt(S, PostLValueKind, tag) {}
+  
+  static bool classof(const ProgramPoint* Location) {
+    return Location->getKind() == PostLValueKind;
+  }
+};  
   
 class PostPurgeDeadSymbols : public PostStmt {
 public:

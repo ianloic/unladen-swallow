@@ -21,15 +21,14 @@
 
 using namespace llvm;
 
-/// AlphaTargetMachineModule - Note that this is used on hosts that cannot link
-/// in a library unless there are references into the library.  In particular,
-/// it seems that it is not possible to get things to work on Win32 without
-/// this.  Though it is unused, do not remove it.
-extern "C" int AlphaTargetMachineModule;
-int AlphaTargetMachineModule = 0;
-
 // Register the targets
 static RegisterTarget<AlphaTargetMachine> X("alpha", "Alpha [experimental]");
+
+// No assembler printer by default
+AlphaTargetMachine::AsmPrinterCtorFn AlphaTargetMachine::AsmPrinterCtor = 0;
+
+// Force static initialization.
+extern "C" void LLVMInitializeAlphaTarget() { }
 
 const TargetAsmInfo *AlphaTargetMachine::createTargetAsmInfo() const {
   return new AlphaTargetAsmInfo(*this);
@@ -92,15 +91,43 @@ bool AlphaTargetMachine::addAssemblyEmitter(PassManagerBase &PM,
                                             bool Verbose,
                                             raw_ostream &Out) {
   PM.add(createAlphaLLRPPass(*this));
-  PM.add(createAlphaCodePrinterPass(Out, *this, OptLevel, Verbose));
+  // Output assembly language.
+  assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+  if (AsmPrinterCtor)
+    PM.add(AsmPrinterCtor(Out, *this, Verbose));
   return false;
 }
 bool AlphaTargetMachine::addCodeEmitter(PassManagerBase &PM,
                                         CodeGenOpt::Level OptLevel,
                                         bool DumpAsm, MachineCodeEmitter &MCE) {
   PM.add(createAlphaCodeEmitterPass(*this, MCE));
-  if (DumpAsm)
-    PM.add(createAlphaCodePrinterPass(errs(), *this, OptLevel, true));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+  return false;
+}
+bool AlphaTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel,
+                                        bool DumpAsm, JITCodeEmitter &JCE) {
+  PM.add(createAlphaJITCodeEmitterPass(*this, JCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+  return false;
+}
+bool AlphaTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel,
+                                        bool DumpAsm, ObjectCodeEmitter &OCE) {
+  PM.add(createAlphaObjectCodeEmitterPass(*this, OCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
   return false;
 }
 bool AlphaTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
@@ -109,3 +136,16 @@ bool AlphaTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
                                               MachineCodeEmitter &MCE) {
   return addCodeEmitter(PM, OptLevel, DumpAsm, MCE);
 }
+bool AlphaTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                              CodeGenOpt::Level OptLevel,
+                                              bool DumpAsm,
+                                              JITCodeEmitter &JCE) {
+  return addCodeEmitter(PM, OptLevel, DumpAsm, JCE);
+}
+bool AlphaTargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                              CodeGenOpt::Level OptLevel,
+                                              bool DumpAsm,
+                                              ObjectCodeEmitter &OCE) {
+  return addCodeEmitter(PM, OptLevel, DumpAsm, OCE);
+}
+

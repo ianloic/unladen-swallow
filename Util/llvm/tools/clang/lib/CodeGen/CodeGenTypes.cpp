@@ -353,7 +353,7 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     return T;
   }
       
-  case Type::ObjCQualifiedId:
+  case Type::ObjCObjectPointer:
     // Protocols don't influence the LLVM type.
     return ConvertTypeRecursive(Context.getObjCIdType());
 
@@ -385,12 +385,19 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     return llvm::PointerType::get(PointeeType, FTy.getAddressSpace());
   }
 
-  case Type::MemberPointer:
-    // FIXME: Implement C++ pointer-to-member. The GCC representation is
-    // documented here:
-    // http://gcc.gnu.org/onlinedocs/gccint/Type-Layout.html#Type-Layout
-    assert(0 && "FIXME: We can't handle member pointers yet.");
-    return llvm::OpaqueType::get();
+  case Type::MemberPointer: {
+    // FIXME: This is ABI dependent. We use the Itanium C++ ABI.
+    // http://www.codesourcery.com/public/cxx-abi/abi.html#member-pointers
+    // If we ever want to support other ABIs this needs to be abstracted.
+
+    QualType ETy = cast<MemberPointerType>(Ty).getPointeeType();
+    if (ETy->isFunctionType()) {
+      return llvm::StructType::get(ConvertType(Context.getPointerDiffType()), 
+                                   ConvertType(Context.getPointerDiffType()),
+                                   NULL);
+    } else
+      return ConvertType(Context.getPointerDiffType());
+  }
 
   case Type::TemplateSpecialization:
     assert(false && "Dependent types can't get here");
@@ -442,7 +449,7 @@ const llvm::Type *CodeGenTypes::ConvertTagDeclType(const TagDecl *TD) {
   const RecordDecl *RD = cast<const RecordDecl>(TD);
 
   // There isn't any extra information for empty structures/unions.
-  if (RD->field_empty(getContext())) {
+  if (RD->field_empty()) {
     ResultType = llvm::StructType::get(std::vector<const llvm::Type*>());
   } else {
     // Layout fields.
@@ -525,12 +532,12 @@ void RecordOrganizer::layoutStructFields(const ASTRecordLayout &RL) {
   std::vector<const llvm::Type*> LLVMFields;
 
   unsigned curField = 0;
-  for (RecordDecl::field_iterator Field = RD.field_begin(CGT.getContext()),
-                               FieldEnd = RD.field_end(CGT.getContext());
+  for (RecordDecl::field_iterator Field = RD.field_begin(),
+                               FieldEnd = RD.field_end();
        Field != FieldEnd; ++Field) {
     uint64_t offset = RL.getFieldOffset(curField);
     const llvm::Type *Ty = CGT.ConvertTypeForMemRecursive(Field->getType());
-    uint64_t size = CGT.getTargetData().getTypePaddedSizeInBits(Ty);
+    uint64_t size = CGT.getTargetData().getTypeAllocSizeInBits(Ty);
 
     if (Field->isBitField()) {
       uint64_t BitFieldSize =
@@ -563,7 +570,7 @@ void RecordOrganizer::layoutStructFields(const ASTRecordLayout &RL) {
   }
 
   STy = llvm::StructType::get(LLVMFields, true);
-  assert(CGT.getTargetData().getTypePaddedSizeInBits(STy) == RL.getSize());
+  assert(CGT.getTargetData().getTypeAllocSizeInBits(STy) == RL.getSize());
 }
 
 /// layoutUnionFields - Do the actual work and lay out all fields. Create
@@ -571,8 +578,8 @@ void RecordOrganizer::layoutStructFields(const ASTRecordLayout &RL) {
 /// all fields are added.
 void RecordOrganizer::layoutUnionFields(const ASTRecordLayout &RL) {
   unsigned curField = 0;
-  for (RecordDecl::field_iterator Field = RD.field_begin(CGT.getContext()),
-                               FieldEnd = RD.field_end(CGT.getContext());
+  for (RecordDecl::field_iterator Field = RD.field_begin(),
+                               FieldEnd = RD.field_end();
        Field != FieldEnd; ++Field) {
     // The offset should usually be zero, but bitfields could be strange
     uint64_t offset = RL.getFieldOffset(curField);
@@ -603,5 +610,5 @@ void RecordOrganizer::layoutUnionFields(const ASTRecordLayout &RL) {
   LLVMFields.push_back(llvm::ArrayType::get(llvm::Type::Int8Ty,
                                             RL.getSize() / 8));
   STy = llvm::StructType::get(LLVMFields, true);
-  assert(CGT.getTargetData().getTypePaddedSizeInBits(STy) == RL.getSize());
+  assert(CGT.getTargetData().getTypeAllocSizeInBits(STy) == RL.getSize());
 }

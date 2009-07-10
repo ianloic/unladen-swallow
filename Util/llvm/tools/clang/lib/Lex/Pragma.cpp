@@ -19,6 +19,7 @@
 #include "clang/Lex/LexDiagnostic.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
+#include <algorithm>
 using namespace clang;
 
 // Out-of-line destructor to provide a home for the class.
@@ -93,7 +94,7 @@ void Preprocessor::HandlePragmaDirective() {
   PragmaHandlers->HandlePragma(*this, Tok);
   
   // If the pragma handler didn't read the rest of the line, consume it now.
-  if (CurPPLexer->ParsingPreprocessorDirective)
+  if (CurPPLexer && CurPPLexer->ParsingPreprocessorDirective)
     DiscardUntilEndOfDirective();
 }
 
@@ -195,8 +196,10 @@ void Preprocessor::HandlePragmaOnce(Token &OnceTok) {
 
 void Preprocessor::HandlePragmaMark() {
   assert(CurPPLexer && "No current lexer?");
-  if (CurLexer) CurLexer->ReadToEndOfLine();
-  else CurPTHLexer->DiscardToEndOfLine();
+  if (CurLexer)
+    CurLexer->ReadToEndOfLine();
+  else
+    CurPTHLexer->DiscardToEndOfLine();
 }
 
 
@@ -253,6 +256,18 @@ void Preprocessor::HandlePragmaSystemHeader(Token &SysHeaderTok) {
   
   // Mark the file as a system header.
   HeaderInfo.MarkFileSystemHeader(TheLexer->getFileEntry());
+  
+  
+  PresumedLoc PLoc = SourceMgr.getPresumedLoc(SysHeaderTok.getLocation());
+  unsigned FilenameLen = strlen(PLoc.getFilename());
+  unsigned FilenameID = SourceMgr.getLineTableFilenameID(PLoc.getFilename(),
+                                                         FilenameLen);
+  
+  // Emit a line marker.  This will change any source locations from this point
+  // forward to realize they are in a system header.
+  // Create a line note with this information.
+  SourceMgr.AddLineNote(SysHeaderTok.getLocation(), PLoc.getLine(), FilenameID,
+                        false, false, true, false);
   
   // Notify the client, if desired, that we are in a new source file.
   if (Callbacks)
@@ -666,6 +681,8 @@ struct PragmaSTDC_UnknownHandler : public PragmaHandler {
 void Preprocessor::RegisterBuiltinPragmas() {
   AddPragmaHandler(0, new PragmaOnceHandler(getIdentifierInfo("once")));
   AddPragmaHandler(0, new PragmaMarkHandler(getIdentifierInfo("mark")));
+  
+  // #pragma GCC ...
   AddPragmaHandler("GCC", new PragmaPoisonHandler(getIdentifierInfo("poison")));
   AddPragmaHandler("GCC", new PragmaSystemHeaderHandler(
                                           getIdentifierInfo("system_header")));
@@ -673,7 +690,16 @@ void Preprocessor::RegisterBuiltinPragmas() {
                                           getIdentifierInfo("dependency")));
   AddPragmaHandler("GCC", new PragmaDiagnosticHandler(
                                               getIdentifierInfo("diagnostic")));
-  
+  // #pragma clang ...
+  AddPragmaHandler("clang", new PragmaPoisonHandler(
+                                          getIdentifierInfo("poison")));
+  AddPragmaHandler("clang", new PragmaSystemHeaderHandler(
+                                          getIdentifierInfo("system_header")));
+  AddPragmaHandler("clang", new PragmaDependencyHandler(
+                                          getIdentifierInfo("dependency")));
+  AddPragmaHandler("clang", new PragmaDiagnosticHandler(
+                                          getIdentifierInfo("diagnostic")));
+
   AddPragmaHandler("STDC", new PragmaSTDC_FP_CONTRACTHandler(
                                              getIdentifierInfo("FP_CONTRACT")));
   AddPragmaHandler("STDC", new PragmaSTDC_FENV_ACCESSHandler(

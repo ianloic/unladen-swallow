@@ -19,6 +19,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
 using namespace llvm;
@@ -107,6 +109,10 @@ IA64TargetLowering::IA64TargetLowering(TargetMachine &TM)
   // VASTART needs to be custom lowered to use the VarArgsFrameIndex
   setOperationAction(ISD::VAARG             , MVT::Other, Custom);
   setOperationAction(ISD::VASTART           , MVT::Other, Custom);
+
+  // FIXME: These should be legal
+  setOperationAction(ISD::BIT_CONVERT, MVT::i64, Expand);
+  setOperationAction(ISD::BIT_CONVERT, MVT::f64, Expand);
   
   // Use the default implementation.
   setOperationAction(ISD::VACOPY            , MVT::Other, Expand);
@@ -142,6 +148,11 @@ const char *IA64TargetLowering::getTargetNodeName(unsigned Opcode) const {
   
 MVT IA64TargetLowering::getSetCCResultType(MVT VT) const {
   return MVT::i1;
+}
+
+/// getFunctionAlignment - Return the Log2 alignment of this function.
+unsigned IA64TargetLowering::getFunctionAlignment(const Function *) const {
+  return 5;
 }
 
 void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
@@ -306,7 +317,8 @@ void IA64TargetLowering::LowerArguments(Function &F, SelectionDAG &DAG,
 std::pair<SDValue, SDValue>
 IA64TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
                                 bool RetSExt, bool RetZExt, bool isVarArg,
-                                bool isInreg, unsigned CallingConv, 
+                                bool isInreg, unsigned NumFixedArgs,
+                                unsigned CallingConv, 
                                 bool isTailCall, SDValue Callee, 
                                 ArgListTy &Args, SelectionDAG &DAG,
                                 DebugLoc dl) {
@@ -569,8 +581,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) {
     
     switch(Op.getNumOperands()) {
      default:
-      assert(0 && "Do not know how to return this many arguments!");
-      abort();
+      LLVM_UNREACHABLE("Do not know how to return this many arguments!");
     case 1: 
       AR_PFSVal = DAG.getCopyFromReg(Op.getOperand(0), dl, VirtGPR, MVT::i64);
       AR_PFSVal = DAG.getCopyToReg(AR_PFSVal.getValue(1), dl, IA64::AR_PFS, 

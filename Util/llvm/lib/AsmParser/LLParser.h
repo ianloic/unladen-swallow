@@ -15,6 +15,7 @@
 #define LLVM_ASMPARSER_LLPARSER_H
 
 #include "LLLexer.h"
+#include "llvm/Module.h"
 #include "llvm/Type.h"
 #include <map>
 
@@ -35,7 +36,7 @@ namespace llvm {
   public:
     typedef LLLexer::LocTy LocTy;
   private:
-
+    LLVMContext& Context;
     LLLexer Lex;
     Module *M;
 
@@ -43,6 +44,9 @@ namespace llvm {
     std::map<std::string, std::pair<PATypeHolder, LocTy> > ForwardRefTypes;
     std::map<unsigned, std::pair<PATypeHolder, LocTy> > ForwardRefTypeIDs;
     std::vector<PATypeHolder> NumberedTypes;
+    /// MetadataCache - This map keeps track of parsed metadata constants.
+    std::map<unsigned, Constant *> MetadataCache;
+    std::map<unsigned, std::pair<Constant *, LocTy> > ForwardRefMDNodes;
 
     struct UpRefRecord {
       /// Loc - This is the location of the upref.
@@ -71,8 +75,11 @@ namespace llvm {
     std::map<unsigned, std::pair<GlobalValue*, LocTy> > ForwardRefValIDs;
     std::vector<GlobalValue*> NumberedVals;
   public:
-    LLParser(MemoryBuffer *F, ParseError &Err, Module *m) : Lex(F, Err), M(m) {}
+    LLParser(MemoryBuffer *F, SourceMgr &SM, SMDiagnostic &Err, Module *m) : 
+      Context(m->getContext()), Lex(F, SM, Err, m->getContext()), M(m) {}
     bool Run();
+
+    LLVMContext& getContext() { return Context; }
 
   private:
 
@@ -139,6 +146,7 @@ namespace llvm {
     bool ParseGlobal(const std::string &Name, LocTy Loc, unsigned Linkage,
                      bool HasLinkage, unsigned Visibility);
     bool ParseAlias(const std::string &Name, LocTy Loc, unsigned Visibility);
+    bool ParseStandaloneMetadata();
 
     // Type Parsing.
     bool ParseType(PATypeHolder &Result, bool AllowVoid = false);
@@ -158,7 +166,7 @@ namespace llvm {
     bool ParseGlobalValue(const Type *Ty, Constant *&V);
     bool ParseGlobalTypeAndValue(Constant *&V);
     bool ParseGlobalValueVector(SmallVectorImpl<Constant*> &Elts);
-    bool ParseMDNodeVector(SmallVectorImpl<Constant*> &);
+    bool ParseMDNodeVector(SmallVectorImpl<Value*> &);
 
 
     // Function Semantic Analysis.

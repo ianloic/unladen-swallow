@@ -18,14 +18,15 @@
 #include "llvm/Constants.h"
 #include "llvm/Module.h"
 #include "llvm/DerivedTypes.h"
-#include "llvm/CodeGen/MachineCodeEmitter.h"
+#include "llvm/CodeGen/JITCodeEmitter.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRelocation.h"
-#include "llvm/ExecutionEngine/JITMemoryManager.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/ExecutionEngine/JITEventListener.h"
+#include "llvm/ExecutionEngine/JITMemoryManager.h"
 #include "llvm/CodeGen/MachineCodeInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetJITInfo.h"
@@ -411,147 +412,17 @@ void *JITResolver::JITCompilerFn(void *Stub) {
 }
 
 //===----------------------------------------------------------------------===//
-// Function Index Support
-
-// On MacOS we generate an index of currently JIT'd functions so that
-// performance tools can determine a symbol name and accurate code range for a
-// PC value.  Because performance tools are generally asynchronous, the code
-// below is written with the hope that it could be interrupted at any time and
-// have useful answers.  However, we don't go crazy with atomic operations, we
-// just do a "reasonable effort".
-#ifdef __APPLE__ 
-#define ENABLE_JIT_SYMBOL_TABLE 0
-#endif
-
-/// JitSymbolEntry - Each function that is JIT compiled results in one of these
-/// being added to an array of symbols.  This indicates the name of the function
-/// as well as the address range it occupies.  This allows the client to map
-/// from a PC value to the name of the function.
-struct JitSymbolEntry {
-  const char *FnName;   // FnName - a strdup'd string.
-  void *FnStart;
-  intptr_t FnSize;
-};
-
-
-struct JitSymbolTable {
-  /// NextPtr - This forms a linked list of JitSymbolTable entries.  This
-  /// pointer is not used right now, but might be used in the future.  Consider
-  /// it reserved for future use.
-  JitSymbolTable *NextPtr;
-  
-  /// Symbols - This is an array of JitSymbolEntry entries.  Only the first
-  /// 'NumSymbols' symbols are valid.
-  JitSymbolEntry *Symbols;
-  
-  /// NumSymbols - This indicates the number entries in the Symbols array that
-  /// are valid.
-  unsigned NumSymbols;
-  
-  /// NumAllocated - This indicates the amount of space we have in the Symbols
-  /// array.  This is a private field that should not be read by external tools.
-  unsigned NumAllocated;
-};
-
-#if ENABLE_JIT_SYMBOL_TABLE 
-JitSymbolTable *__jitSymbolTable;
-#endif
-
-static void AddFunctionToSymbolTable(const char *FnName, 
-                                     void *FnStart, intptr_t FnSize) {
-  assert(FnName != 0 && FnStart != 0 && "Bad symbol to add");
-  JitSymbolTable **SymTabPtrPtr = 0;
-#if !ENABLE_JIT_SYMBOL_TABLE
-  return;
-#else
-  SymTabPtrPtr = &__jitSymbolTable;
-#endif
-  
-  // If this is the first entry in the symbol table, add the JitSymbolTable
-  // index.
-  if (*SymTabPtrPtr == 0) {
-    JitSymbolTable *New = new JitSymbolTable();
-    New->NextPtr = 0;
-    New->Symbols = 0;
-    New->NumSymbols = 0;
-    New->NumAllocated = 0;
-    *SymTabPtrPtr = New;
-  }
-  
-  JitSymbolTable *SymTabPtr = *SymTabPtrPtr;
-  
-  // If we have space in the table, reallocate the table.
-  if (SymTabPtr->NumSymbols >= SymTabPtr->NumAllocated) {
-    // If we don't have space, reallocate the table.
-    unsigned NewSize = std::max(64U, SymTabPtr->NumAllocated*2);
-    JitSymbolEntry *NewSymbols = new JitSymbolEntry[NewSize];
-    JitSymbolEntry *OldSymbols = SymTabPtr->Symbols;
-    
-    // Copy the old entries over.
-    memcpy(NewSymbols, OldSymbols, SymTabPtr->NumSymbols*sizeof(OldSymbols[0]));
-    
-    // Swap the new symbols in, delete the old ones.
-    SymTabPtr->Symbols = NewSymbols;
-    SymTabPtr->NumAllocated = NewSize;
-    delete [] OldSymbols;
-  }
-  
-  // Otherwise, we have enough space, just tack it onto the end of the array.
-  JitSymbolEntry &Entry = SymTabPtr->Symbols[SymTabPtr->NumSymbols];
-  Entry.FnName = strdup(FnName);
-  Entry.FnStart = FnStart;
-  Entry.FnSize = FnSize;
-  ++SymTabPtr->NumSymbols;
-}
-
-static void RemoveFunctionFromSymbolTable(void *FnStart) {
-  assert(FnStart && "Invalid function pointer");
-  JitSymbolTable **SymTabPtrPtr = 0;
-#if !ENABLE_JIT_SYMBOL_TABLE
-  return;
-#else
-  SymTabPtrPtr = &__jitSymbolTable;
-#endif
-  
-  JitSymbolTable *SymTabPtr = *SymTabPtrPtr;
-  JitSymbolEntry *Symbols = SymTabPtr->Symbols;
-  
-  // Scan the table to find its index.  The table is not sorted, so do a linear
-  // scan.
-  unsigned Index;
-  for (Index = 0; Symbols[Index].FnStart != FnStart; ++Index)
-    assert(Index != SymTabPtr->NumSymbols && "Didn't find function!");
-  
-  // Once we have an index, we know to nuke this entry, overwrite it with the
-  // entry at the end of the array, making the last entry redundant.
-  const char *OldName = Symbols[Index].FnName;
-  Symbols[Index] = Symbols[SymTabPtr->NumSymbols-1];
-  free((void*)OldName);
-  
-  // Drop the number of symbols in the table.
-  --SymTabPtr->NumSymbols;
-
-  // Finally, if we deleted the final symbol, deallocate the table itself.
-  if (SymTabPtr->NumSymbols != 0) 
-    return;
-  
-  *SymTabPtrPtr = 0;
-  delete [] Symbols;
-  delete SymTabPtr;
-}
-
-//===----------------------------------------------------------------------===//
 // JITEmitter code.
 //
 namespace {
   /// JITEmitter - The JIT implementation of the MachineCodeEmitter, which is
   /// used to output functions to memory for execution.
-  class JITEmitter : public MachineCodeEmitter {
+  class JITEmitter : public JITCodeEmitter {
     JITMemoryManager *MemMgr;
 
     // When outputting a function stub in the context of some other function, we
     // save BufferBegin/BufferEnd/CurBufferPtr here.
-    unsigned char *SavedBufferBegin, *SavedBufferEnd, *SavedCurBufferPtr;
+    uint8_t *SavedBufferBegin, *SavedBufferEnd, *SavedCurBufferPtr;
 
     /// Relocations - These are the relocations that the function needs, as
     /// emitted.
@@ -616,11 +487,8 @@ namespace {
     // in the JITResolver's ExternalFnToStubMap.
     StringMap<void *> ExtFnStubs;
 
-    // MCI - A pointer to a MachineCodeInfo object to update with information.
-    MachineCodeInfo *MCI;
-
   public:
-    JITEmitter(JIT &jit, JITMemoryManager *JMM) : Resolver(jit), CurFn(0), MCI(0) {
+    JITEmitter(JIT &jit, JITMemoryManager *JMM) : Resolver(jit), CurFn(0) {
       MemMgr = JMM ? JMM : JITMemoryManager::CreateDefaultMemManager();
       if (jit.getJITInfo().needsGOT()) {
         MemMgr->AllocateGOT();
@@ -658,6 +526,11 @@ namespace {
     /// allocateSpace - Reserves space in the current block if any, or
     /// allocate a new one of the given size.
     virtual void *allocateSpace(uintptr_t Size, unsigned Alignment);
+
+    /// allocateGlobal - Allocate memory for a global.  Unlike allocateSpace,
+    /// this method does not allocate memory in the current output buffer,
+    /// because a global may live longer than the current function.
+    virtual void *allocateGlobal(uintptr_t Size, unsigned Alignment);
 
     virtual void addRelocation(const MachineRelocation &MR) {
       Relocations.push_back(MR);
@@ -715,10 +588,6 @@ namespace {
     }
     
     JITMemoryManager *getMemMgr(void) const { return MemMgr; }
-
-    void setMachineCodeInfo(MachineCodeInfo *mci) {
-      MCI = mci;
-    }
 
   private:
     void *getPointerToGlobal(GlobalValue *GV, void *Reference, bool NoNeedStub);
@@ -817,7 +686,7 @@ static unsigned GetConstantPoolSizeInBytes(MachineConstantPool *MCP,
     unsigned AlignMask = CPE.getAlignment() - 1;
     Size = (Size + AlignMask) & ~AlignMask;
     const Type *Ty = CPE.getType();
-    Size += TD->getTypePaddedSize(Ty);
+    Size += TD->getTypeAllocSize(Ty);
   }
   return Size;
 }
@@ -846,7 +715,7 @@ static uintptr_t RoundUpToAlign(uintptr_t Size, unsigned Alignment) {
 
 unsigned JITEmitter::addSizeOfGlobal(const GlobalVariable *GV, unsigned Size) {
   const Type *ElTy = GV->getType()->getElementType();
-  size_t GVSize = (size_t)TheJIT->getTargetData()->getTypePaddedSize(ElTy);
+  size_t GVSize = (size_t)TheJIT->getTargetData()->getTypeAllocSize(ElTy);
   size_t GVAlign = 
       (size_t)TheJIT->getTargetData()->getPreferredAlignment(GV);
   DOUT << "JIT: Adding in size " << GVSize << " alignment " << GVAlign;
@@ -891,8 +760,11 @@ unsigned JITEmitter::addSizeOfGlobalsInConstantVal(const Constant *C,
       break;
     }
     case Instruction::Add:
+    case Instruction::FAdd:
     case Instruction::Sub:
+    case Instruction::FSub:
     case Instruction::Mul:
+    case Instruction::FMul:
     case Instruction::UDiv:
     case Instruction::SDiv:
     case Instruction::URem:
@@ -1056,11 +928,11 @@ bool JITEmitter::finishFunction(MachineFunction &F) {
   
   // FnStart is the start of the text, not the start of the constant pool and
   // other per-function data.
-  unsigned char *FnStart =
-    (unsigned char *)TheJIT->getPointerToGlobalIfAvailable(F.getFunction());
+  uint8_t *FnStart =
+    (uint8_t *)TheJIT->getPointerToGlobalIfAvailable(F.getFunction());
 
   // FnEnd is the end of the function's machine code.
-  unsigned char *FnEnd = CurBufferPtr;
+  uint8_t *FnEnd = CurBufferPtr;
 
   if (!Relocations.empty()) {
     CurFn = F.getFunction();
@@ -1154,20 +1026,15 @@ bool JITEmitter::finishFunction(MachineFunction &F) {
 
   // Invalidate the icache if necessary.
   sys::Memory::InvalidateInstructionCache(FnStart, FnEnd-FnStart);
-  
-  // Add it to the JIT symbol table if the host wants it.
-  AddFunctionToSymbolTable(F.getFunction()->getNameStart(),
-                           FnStart, FnEnd-FnStart);
+
+  JITEvent_EmittedFunctionDetails Details;
+  TheJIT->NotifyFunctionEmitted(*F.getFunction(), FnStart, FnEnd-FnStart,
+                                Details);
 
   DOUT << "JIT: Finished CodeGen of [" << (void*)FnStart
        << "] Function: " << F.getFunction()->getName()
        << ": " << (FnEnd-FnStart) << " bytes of text, "
        << Relocations.size() << " relocations\n";
-
-  if (MCI) {
-    MCI->setAddress(FnStart);
-    MCI->setSize(FnEnd-FnStart);
-  }
 
   Relocations.clear();
   ConstPoolAddresses.clear();
@@ -1183,7 +1050,7 @@ bool JITEmitter::finishFunction(MachineFunction &F) {
     } else {
       DOUT << "JIT: Binary code:\n";
       DOUT << std::hex;
-      unsigned char* q = FnStart;
+      uint8_t* q = FnStart;
       for (int i = 0; q < FnEnd; q += 4, ++i) {
         if (i == 4)
           i = 0;
@@ -1221,7 +1088,7 @@ bool JITEmitter::finishFunction(MachineFunction &F) {
     BufferBegin = CurBufferPtr = MemMgr->startExceptionTable(F.getFunction(),
                                                              ActualSize);
     BufferEnd = BufferBegin+ActualSize;
-    unsigned char* FrameRegister = DE->EmitDwarfTable(F, *this, FnStart, FnEnd);
+    uint8_t* FrameRegister = DE->EmitDwarfTable(F, *this, FnStart, FnEnd);
     MemMgr->endExceptionTable(F.getFunction(), BufferBegin, CurBufferPtr,
                               FrameRegister);
     BufferBegin = SavedBufferBegin;
@@ -1289,7 +1156,7 @@ void JITEmitter::deallocateMemForFunction(Function *F) {
 
 void* JITEmitter::allocateSpace(uintptr_t Size, unsigned Alignment) {
   if (BufferBegin)
-    return MachineCodeEmitter::allocateSpace(Size, Alignment);
+    return JITCodeEmitter::allocateSpace(Size, Alignment);
 
   // create a new memory block if there is no active one.
   // care must be taken so that BufferBegin is invalidated when a
@@ -1297,6 +1164,11 @@ void* JITEmitter::allocateSpace(uintptr_t Size, unsigned Alignment) {
   BufferBegin = CurBufferPtr = MemMgr->allocateSpace(Size, Alignment);
   BufferEnd = BufferBegin+Size;
   return CurBufferPtr;
+}
+
+void* JITEmitter::allocateGlobal(uintptr_t Size, unsigned Alignment) {
+  // Delegate this call through the memory manager.
+  return MemMgr->allocateGlobal(Size, Alignment);
 }
 
 void JITEmitter::emitConstantPool(MachineConstantPool *MCP) {
@@ -1336,7 +1208,7 @@ void JITEmitter::emitConstantPool(MachineConstantPool *MCP) {
          << std::hex << CAddr << std::dec << "]\n";
 
     const Type *Ty = CPE.Val.ConstVal->getType();
-    Offset += TheJIT->getTargetData()->getTypePaddedSize(Ty);
+    Offset += TheJIT->getTargetData()->getTypeAllocSize(Ty);
   }
 }
 
@@ -1416,7 +1288,7 @@ void JITEmitter::startGVStub(const GlobalValue* GV, void *Buffer,
   SavedBufferEnd = BufferEnd;
   SavedCurBufferPtr = CurBufferPtr;
   
-  BufferBegin = CurBufferPtr = (unsigned char *)Buffer;
+  BufferBegin = CurBufferPtr = (uint8_t *)Buffer;
   BufferEnd = BufferBegin+StubSize+1;
 }
 
@@ -1460,7 +1332,7 @@ uintptr_t JITEmitter::getJumpTableEntryAddress(unsigned Index) const {
 //  Public interface to this file
 //===----------------------------------------------------------------------===//
 
-MachineCodeEmitter *JIT::createEmitter(JIT &jit, JITMemoryManager *JMM) {
+JITCodeEmitter *JIT::createEmitter(JIT &jit, JITMemoryManager *JMM) {
   return new JITEmitter(jit, JMM);
 }
 
@@ -1487,21 +1359,14 @@ void *JIT::getPointerToFunctionOrStub(Function *F) {
     return Addr;
   
   // Get a stub if the target supports it.
-  assert(isa<JITEmitter>(MCE) && "Unexpected MCE?");
+  assert(isa<JITEmitter>(JCE) && "Unexpected MCE?");
   JITEmitter *JE = cast<JITEmitter>(getCodeEmitter());
   return JE->getJITResolver().getFunctionStub(F);
 }
 
-void JIT::registerMachineCodeInfo(MachineCodeInfo *mc) {
-  assert(isa<JITEmitter>(MCE) && "Unexpected MCE?");
-  JITEmitter *JE = cast<JITEmitter>(getCodeEmitter());
-
-  JE->setMachineCodeInfo(mc);
-}
-
 void JIT::updateFunctionStub(Function *F) {
   // Get the empty stub we generated earlier.
-  assert(isa<JITEmitter>(MCE) && "Unexpected MCE?");
+  assert(isa<JITEmitter>(JCE) && "Unexpected MCE?");
   JITEmitter *JE = cast<JITEmitter>(getCodeEmitter());
   void *Stub = JE->getJITResolver().getFunctionStub(F);
 
@@ -1515,7 +1380,7 @@ void JIT::updateFunctionStub(Function *F) {
 /// that were emitted during code generation.
 ///
 void JIT::updateDlsymStubTable() {
-  assert(isa<JITEmitter>(MCE) && "Unexpected MCE?");
+  assert(isa<JITEmitter>(JCE) && "Unexpected MCE?");
   JITEmitter *JE = cast<JITEmitter>(getCodeEmitter());
   
   SmallVector<GlobalValue*, 8> GVs;
@@ -1553,11 +1418,11 @@ void JIT::updateDlsymStubTable() {
   JE->startGVStub(0, offset, 4);
   
   // Emit the number of records
-  MCE->emitInt32(nStubs);
+  JE->emitInt32(nStubs);
   
   // Emit the string offsets
   for (unsigned i = 0; i != nStubs; ++i)
-    MCE->emitInt32(Offsets[i]);
+    JE->emitInt32(Offsets[i]);
   
   // Emit the pointers.  Verify that they are at least 2-byte aligned, and set
   // the low bit to 0 == GV, 1 == Function, so that the client code doing the
@@ -1571,26 +1436,26 @@ void JIT::updateDlsymStubTable() {
       Ptr |= (intptr_t)1;
            
     if (sizeof(Ptr) == 8)
-      MCE->emitInt64(Ptr);
+      JE->emitInt64(Ptr);
     else
-      MCE->emitInt32(Ptr);
+      JE->emitInt32(Ptr);
   }
   for (StringMapConstIterator<void*> i = ExtFns.begin(), e = ExtFns.end(); 
        i != e; ++i) {
     intptr_t Ptr = (intptr_t)i->second | 1;
 
     if (sizeof(Ptr) == 8)
-      MCE->emitInt64(Ptr);
+      JE->emitInt64(Ptr);
     else
-      MCE->emitInt32(Ptr);
+      JE->emitInt32(Ptr);
   }
   
   // Emit the strings.
   for (unsigned i = 0; i != GVs.size(); ++i)
-    MCE->emitString(GVs[i]->getName());
+    JE->emitString(GVs[i]->getName());
   for (StringMapConstIterator<void*> i = ExtFns.begin(), e = ExtFns.end(); 
        i != e; ++i)
-    MCE->emitString(i->first());
+    JE->emitString(i->first());
   
   // Tell the JIT memory manager where it is.  The JIT Memory Manager will
   // deallocate space for the old one, if one existed.
@@ -1606,10 +1471,9 @@ void JIT::freeMachineCodeForFunction(Function *F) {
   void *OldPtr = updateGlobalMapping(F, 0);
 
   if (OldPtr)
-    RemoveFunctionFromSymbolTable(OldPtr);
+    TheJIT->NotifyFreeingMachineCode(*F, OldPtr);
 
   // Free the actual memory for the function body and related stuff.
-  assert(isa<JITEmitter>(MCE) && "Unexpected MCE?");
-  cast<JITEmitter>(MCE)->deallocateMemForFunction(F);
+  assert(isa<JITEmitter>(JCE) && "Unexpected MCE?");
+  cast<JITEmitter>(JCE)->deallocateMemForFunction(F);
 }
-

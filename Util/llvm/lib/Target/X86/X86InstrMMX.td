@@ -258,7 +258,7 @@ defm MMX_PMINSW  : MMXI_binop_rm_int<0xEA, "pminsw", int_x86_mmx_pmins_w, 1>;
 defm MMX_PMAXUB  : MMXI_binop_rm_int<0xDE, "pmaxub", int_x86_mmx_pmaxu_b, 1>;
 defm MMX_PMAXSW  : MMXI_binop_rm_int<0xEE, "pmaxsw", int_x86_mmx_pmaxs_w, 1>;
 
-defm MMX_PSADBW  : MMXI_binop_rm_int<0xE0, "psadbw", int_x86_mmx_psad_bw, 1>;
+defm MMX_PSADBW  : MMXI_binop_rm_int<0xF6, "psadbw", int_x86_mmx_psad_bw, 1>;
 
 // Logical Instructions
 defm MMX_PAND : MMXI_binop_rm_v1i64<0xDB, "pand", and, 1>;
@@ -481,11 +481,11 @@ def MMX_PMOVMSKBrr : MMXI<0xD7, MRMSrcReg, (outs GR32:$dst), (ins VR64:$src),
 
 // Misc.
 let Uses = [EDI] in
-def MMX_MASKMOVQ : MMXI<0xF7, MRMDestMem, (outs), (ins VR64:$src, VR64:$mask),
+def MMX_MASKMOVQ : MMXI<0xF7, MRMSrcReg, (outs), (ins VR64:$src, VR64:$mask),
                         "maskmovq\t{$mask, $src|$src, $mask}",
                         [(int_x86_mmx_maskmovq VR64:$src, VR64:$mask, EDI)]>;
 let Uses = [RDI] in
-def MMX_MASKMOVQ64: MMXI64<0xF7, MRMDestMem, (outs), (ins VR64:$src, VR64:$mask),
+def MMX_MASKMOVQ64: MMXI64<0xF7, MRMSrcReg, (outs), (ins VR64:$src, VR64:$mask),
                            "maskmovq\t{$mask, $src|$src, $mask}",
                            [(int_x86_mmx_maskmovq VR64:$src, VR64:$mask, RDI)]>;
 
@@ -577,40 +577,16 @@ def : Pat<(f64 (bitconvert (v4i16 VR64:$src))),
 def : Pat<(f64 (bitconvert (v8i8 VR64:$src))),
           (MMX_MOVQ2FR64rr VR64:$src)>;
 
-// Move scalar to MMX zero-extended
-// movd to MMX register zero-extends
-let AddedComplexity = 15 in {
-  def : Pat<(v8i8 (X86vzmovl (bc_v8i8 (v2i32 (scalar_to_vector GR32:$src))))),
-           (MMX_MOVZDI2PDIrr GR32:$src)>; 
-  def : Pat<(v4i16 (X86vzmovl (bc_v4i16 (v2i32 (scalar_to_vector GR32:$src))))),
-           (MMX_MOVZDI2PDIrr GR32:$src)>; 
-}
-
 let AddedComplexity = 20 in {
-  def : Pat<(v8i8 (X86vzmovl (bc_v8i8 (load_mmx addr:$src)))),
-            (MMX_MOVZDI2PDIrm addr:$src)>; 
-  def : Pat<(v4i16 (X86vzmovl (bc_v4i16 (load_mmx addr:$src)))),
-            (MMX_MOVZDI2PDIrm addr:$src)>; 
   def : Pat<(v2i32 (X86vzmovl (bc_v2i32 (load_mmx addr:$src)))),
             (MMX_MOVZDI2PDIrm addr:$src)>; 
 }
 
 // Clear top half.
 let AddedComplexity = 15 in {
-  def : Pat<(v8i8 (X86vzmovl VR64:$src)),
-            (MMX_PUNPCKLDQrr VR64:$src, (MMX_V_SET0))>;
-  def : Pat<(v4i16 (X86vzmovl VR64:$src)),
-            (MMX_PUNPCKLDQrr VR64:$src, (MMX_V_SET0))>;
   def : Pat<(v2i32 (X86vzmovl VR64:$src)),
             (MMX_PUNPCKLDQrr VR64:$src, (MMX_V_SET0))>;
 }
-
-// Scalar to v4i16 / v8i8. The source may be a GR32, but only the lower
-// 8 or 16-bits matter.
-def : Pat<(bc_v8i8  (v2i32 (scalar_to_vector GR32:$src))),
-          (MMX_MOVD64rr GR32:$src)>;
-def : Pat<(bc_v4i16 (v2i32 (scalar_to_vector GR32:$src))),
-          (MMX_MOVD64rr GR32:$src)>;
 
 // Patterns to perform canonical versions of vector shuffling.
 let AddedComplexity = 10 in {

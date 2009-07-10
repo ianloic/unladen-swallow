@@ -129,7 +129,7 @@ unsigned PCHStmtReader::VisitCompoundStmt(CompoundStmt *S) {
   VisitStmt(S);
   unsigned NumStmts = Record[Idx++];
   S->setStmts(*Reader.getContext(), 
-              &StmtStack[StmtStack.size() - NumStmts], NumStmts);
+              StmtStack.data() + StmtStack.size() - NumStmts, NumStmts);
   S->setLBracLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   S->setRBracLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return NumStmts;
@@ -147,6 +147,8 @@ unsigned PCHStmtReader::VisitCaseStmt(CaseStmt *S) {
   S->setRHS(cast_or_null<Expr>(StmtStack[StmtStack.size() - 2]));
   S->setSubStmt(StmtStack.back());
   S->setCaseLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setEllipsisLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setColonLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 3;
 }
 
@@ -154,6 +156,7 @@ unsigned PCHStmtReader::VisitDefaultStmt(DefaultStmt *S) {
   VisitSwitchCase(S);
   S->setSubStmt(StmtStack.back());
   S->setDefaultLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setColonLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 1;
 }
 
@@ -172,6 +175,7 @@ unsigned PCHStmtReader::VisitIfStmt(IfStmt *S) {
   S->setThen(StmtStack[StmtStack.size() - 2]);
   S->setElse(StmtStack[StmtStack.size() - 1]);
   S->setIfLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setElseLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 3;
 }
 
@@ -205,6 +209,8 @@ unsigned PCHStmtReader::VisitDoStmt(DoStmt *S) {
   S->setCond(cast_or_null<Expr>(StmtStack[StmtStack.size() - 2]));
   S->setBody(StmtStack.back());
   S->setDoLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setWhileLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 2;
 }
 
@@ -215,6 +221,8 @@ unsigned PCHStmtReader::VisitForStmt(ForStmt *S) {
   S->setInc(cast_or_null<Expr>(StmtStack[StmtStack.size() - 2]));
   S->setBody(StmtStack.back());
   S->setForLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setLParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 4;
 }
 
@@ -229,6 +237,7 @@ unsigned PCHStmtReader::VisitGotoStmt(GotoStmt *S) {
 unsigned PCHStmtReader::VisitIndirectGotoStmt(IndirectGotoStmt *S) {
   VisitStmt(S);
   S->setGotoLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  S->setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   S->setTarget(cast_or_null<Expr>(StmtStack.back()));
   return 1;
 }
@@ -266,7 +275,8 @@ unsigned PCHStmtReader::VisitDeclStmt(DeclStmt *S) {
     for (unsigned N = Record.size(); Idx != N; ++Idx)
       Decls.push_back(Reader.GetDecl(Record[Idx]));
     S->setDeclGroup(DeclGroupRef(DeclGroup::Create(*Reader.getContext(),
-                                                   &Decls[0], Decls.size())));
+                                                   Decls.data(),
+                                                   Decls.size())));
   }
   return 0;
 }
@@ -295,13 +305,13 @@ unsigned PCHStmtReader::VisitAsmStmt(AsmStmt *S) {
     Exprs.push_back(StmtStack[StackIdx++]);
   }
   S->setOutputsAndInputs(NumOutputs, NumInputs,
-                         &Names[0], &Constraints[0], &Exprs[0]);
+                         Names.data(), Constraints.data(), Exprs.data());
 
   // Constraints
   llvm::SmallVector<StringLiteral*, 16> Clobbers;
   for (unsigned I = 0; I != NumClobbers; ++I)
     Clobbers.push_back(cast_or_null<StringLiteral>(StmtStack[StackIdx++]));
-  S->setClobbers(&Clobbers[0], NumClobbers);
+  S->setClobbers(Clobbers.data(), NumClobbers);
 
   assert(StackIdx == StmtStack.size() && "Error deserializing AsmStmt");
   return NumOutputs*2 + NumInputs*2 + NumClobbers + 1;
@@ -361,7 +371,7 @@ unsigned PCHStmtReader::VisitStringLiteral(StringLiteral *E) {
 
   // Read string data  
   llvm::SmallVector<char, 16> Str(&Record[Idx], &Record[Idx] + Len);
-  E->setStrData(*Reader.getContext(), &Str[0], Len);
+  E->setStrData(*Reader.getContext(), Str.data(), Len);
   Idx += Len;
 
   // Read source locations
@@ -577,7 +587,7 @@ unsigned PCHStmtReader::VisitDesignatedInitExpr(DesignatedInitExpr *E) {
     }
     }
   }
-  E->setDesignators(&Designators[0], Designators.size());
+  E->setDesignators(Designators.data(), Designators.size());
 
   return NumSubExprs;
 }
@@ -657,6 +667,7 @@ unsigned PCHStmtReader::VisitBlockDeclRefExpr(BlockDeclRefExpr *E) {
   E->setDecl(cast<ValueDecl>(Reader.GetDecl(Record[Idx++])));
   E->setLocation(SourceLocation::getFromRawEncoding(Record[Idx++]));
   E->setByRef(Record[Idx++]);
+  E->setConstQualAdded(Record[Idx++]);
   return 0;
 }
 
@@ -1122,6 +1133,5 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     StmtStack.push_back(S);
   }
   assert(StmtStack.size() == 1 && "Extra expressions on stack!");
-  SwitchCaseStmts.clear();
   return StmtStack.back();
 }

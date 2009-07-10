@@ -26,7 +26,6 @@
 #include "llvm/OperandTraits.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
@@ -103,25 +102,38 @@ public:
     return CreateTrueFalseVals(false);
   }
 
-  /// Return a ConstantInt with the specified value for the specified type. The
-  /// value V will be canonicalized to an unsigned APInt. Accessing it with
-  /// either getSExtValue() or getZExtValue() will yield a correctly sized and
-  /// signed value for the type Ty.
+  /// Return a ConstantInt with the specified integer value for the specified
+  /// type. If the type is wider than 64 bits, the value will be zero-extended
+  /// to fit the type, unless isSigned is true, in which case the value will
+  /// be interpreted as a 64-bit signed integer and sign-extended to fit
+  /// the type.
   /// @brief Get a ConstantInt for a specific value.
-  static ConstantInt *get(const Type *Ty, uint64_t V, bool isSigned = false);
+  static ConstantInt *get(const IntegerType *Ty,
+                          uint64_t V, bool isSigned = false);
+
+  /// If Ty is a vector type, return a Constant with a splat of the given
+  /// value. Otherwise return a ConstantInt for the given value.
+  static Constant *get(const Type *Ty, uint64_t V, bool isSigned = false);
 
   /// Return a ConstantInt with the specified value for the specified type. The
   /// value V will be canonicalized to a an unsigned APInt. Accessing it with
   /// either getSExtValue() or getZExtValue() will yield a correctly sized and
   /// signed value for the type Ty.
   /// @brief Get a ConstantInt for a specific signed value.
-  static ConstantInt *getSigned(const Type *Ty, int64_t V) {
+  static ConstantInt *getSigned(const IntegerType *Ty, int64_t V) {
+    return get(Ty, V, true);
+  }
+  static Constant *getSigned(const Type *Ty, int64_t V) {
     return get(Ty, V, true);
   }
 
   /// Return a ConstantInt with the specified value and an implied Type. The
   /// type is the integer type that corresponds to the bit width of the value.
   static ConstantInt *get(const APInt &V);
+
+  /// If Ty is a vector type, return a Constant with a splat of the given
+  /// value. Otherwise return a ConstantInt for the given value.
+  static Constant *get(const Type *Ty, const APInt &V);
 
   /// getType - Specialize the getType() method to always return an IntegerType,
   /// which reduces the amount of casting needed in parts of the compiler.
@@ -249,10 +261,11 @@ public:
   /// get() - Static factory methods - Return objects of the specified value
   static ConstantFP *get(const APFloat &V);
 
-  /// get() - This returns a constant fp for the specified value in the
-  /// specified type.  This should only be used for simple constant values like
-  /// 2.0/1.0 etc, that are known-valid both as double and as the target format.
-  static ConstantFP *get(const Type *Ty, double V);
+  /// get() - This returns a ConstantFP, or a vector containing a splat of a
+  /// ConstantFP, for the specified value in the specified type.  This should
+  /// only be used for simple constant values like 2.0/1.0 etc, that are
+  /// known-valid both as host double and as the target format.
+  static Constant *get(const Type *Ty, double V);
 
   /// isValueValidForType - return true if Ty is big enough to represent V.
   static bool isValueValidForType(const Type *Ty, const APFloat& V);
@@ -681,6 +694,12 @@ public:
     return getSelectTy(V1->getType(), C, V1, V2);
   }
 
+  /// getAlignOf constant expr - computes the alignment of a type in a target
+  /// independent way (Note: the return type is an i32; Note: assumes that i8
+  /// is byte aligned).
+  ///
+  static Constant *getAlignOf(const Type *Ty);
+
   /// getSizeOf constant expr - computes the size of a type in a target
   /// independent way (Note: the return type is an i64).
   ///
@@ -691,18 +710,21 @@ public:
   ///
   static Constant *get(unsigned Opcode, Constant *C1, Constant *C2);
 
-  /// @brief Return an ICmp, FCmp, VICmp, or VFCmp comparison operator constant
-  /// expression.
+  /// @brief Return an ICmp or FCmp comparison operator constant expression.
   static Constant *getCompare(unsigned short pred, Constant *C1, Constant *C2);
 
   /// ConstantExpr::get* - Return some common constants without having to
   /// specify the full Instruction::OPCODE identifier.
   ///
   static Constant *getNeg(Constant *C);
+  static Constant *getFNeg(Constant *C);
   static Constant *getNot(Constant *C);
   static Constant *getAdd(Constant *C1, Constant *C2);
+  static Constant *getFAdd(Constant *C1, Constant *C2);
   static Constant *getSub(Constant *C1, Constant *C2);
+  static Constant *getFSub(Constant *C1, Constant *C2);
   static Constant *getMul(Constant *C1, Constant *C2);
+  static Constant *getFMul(Constant *C1, Constant *C2);
   static Constant *getUDiv(Constant *C1, Constant *C2);
   static Constant *getSDiv(Constant *C1, Constant *C2);
   static Constant *getFDiv(Constant *C1, Constant *C2);
@@ -714,8 +736,6 @@ public:
   static Constant *getXor(Constant *C1, Constant *C2);
   static Constant *getICmp(unsigned short pred, Constant *LHS, Constant *RHS);
   static Constant *getFCmp(unsigned short pred, Constant *LHS, Constant *RHS);
-  static Constant *getVICmp(unsigned short pred, Constant *LHS, Constant *RHS);
-  static Constant *getVFCmp(unsigned short pred, Constant *LHS, Constant *RHS);
   static Constant *getShl(Constant *C1, Constant *C2);
   static Constant *getLShr(Constant *C1, Constant *C2);
   static Constant *getAShr(Constant *C1, Constant *C2);
@@ -842,6 +862,7 @@ public:
   /// get() - Static factory methods - Return objects of the specified value.
   ///
   static MDString *get(const char *StrBegin, const char *StrEnd);
+  static MDString *get(const std::string &Str);
 
   /// size() - The length of this string.
   ///
@@ -855,10 +876,10 @@ public:
   ///
   const char *end() const { return StrEnd; }
 
-  /// getType() specialization - Type is always an empty struct.
+  /// getType() specialization - Type is always MetadataTy.
   ///
   inline const Type *getType() const {
-    return Type::EmptyStructTy;
+    return Type::MetadataTy;
   }
 
   /// isNullValue - Return true if this is the value that would be returned by
@@ -876,55 +897,6 @@ public:
     return V->getValueID() == MDStringVal;
   }
 };
-
-//===----------------------------------------------------------------------===//
-/// MDNode - a tuple of other values.
-/// These contain a list of the Constants that represent the metadata.
-///
-class MDNode : public Constant, public FoldingSetNode {
-  MDNode(const MDNode &);      // DO NOT IMPLEMENT
-protected:
-  explicit MDNode(Constant*const* Vals, unsigned NumVals);
-public:
-  /// get() - Static factory methods - Return objects of the specified value.
-  ///
-  static MDNode *get(Constant*const* Vals, unsigned NumVals);
-
-  // Transparently provide more efficient getOperand methods.
-  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Constant);
-
-  /// getType() specialization - Type is always an empty struct.
-  ///
-  inline const Type *getType() const {
-    return Type::EmptyStructTy;
-  }
-
-  /// isNullValue - Return true if this is the value that would be returned by
-  /// getNullValue.  This always returns false because getNullValue will never
-  /// produce metadata.
-  virtual bool isNullValue() const {
-    return false;
-  }
-
-  /// Profile - calculate a unique identifier for this MDNode to collapse
-  /// duplicates
-  void Profile(FoldingSetNodeID &ID);
-
-  virtual void destroyConstant();
-  virtual void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U);
-
-  /// Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const MDNode *) { return true; }
-  static bool classof(const Value *V) {
-    return V->getValueID() == MDNodeVal;
-  }
-};
-
-template <>
-struct OperandTraits<MDNode> : VariadicOperandTraits<> {
-};
-
-DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(MDNode, Constant)
 
 } // End llvm namespace
 

@@ -1,9 +1,12 @@
-// RUN: clang-cc -analyze -checker-cfref -verify -fobjc-gc-only %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -verify -fobjc-gc-only %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -verify -fobjc-gc-only %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -fobjc-gc-only -verify %s
 
 //===----------------------------------------------------------------------===//
 // Header stuff.
 //===----------------------------------------------------------------------===//
+
+typedef struct objc_class *Class;
 
 typedef unsigned int __darwin_natural_t;
 typedef struct {} div_t;
@@ -56,6 +59,7 @@ typedef struct _NSZone NSZone;
 @end  @protocol NSCoding  - (void)encodeWithCoder:(NSCoder *)aCoder;
 @end
 @interface NSObject <NSObject> {}
+- (Class)class;
 + (id)alloc;
 + (id)allocWithZone:(NSZone *)zone;
 @end   typedef float CGFloat;
@@ -101,6 +105,11 @@ extern DADissenterRef DADissenterCreate( CFAllocatorRef allocator, DAReturn stat
 
 CFTypeRef CFMakeCollectable(CFTypeRef cf) ;
 
+static __inline__ __attribute__((always_inline)) id NSMakeCollectable(CFTypeRef 
+cf) {
+    return cf ? (id)CFMakeCollectable(cf) : ((void*)0);
+}
+
 //===----------------------------------------------------------------------===//
 // Test cases.
 //===----------------------------------------------------------------------===//
@@ -124,17 +133,78 @@ void f3() {
   CFRetain(A);
 }
 
+void f3b() {
+  CFMutableArrayRef A = CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // no-warning
+  CFMakeCollectable(A);
+}
+
+
+void f4() {
+  CFMutableArrayRef A = CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // expected-warning{{leak}}
+  NSMakeCollectable(A);
+  CFRetain(A);
+}
+
+void f4b() {
+  CFMutableArrayRef A = CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // no-warning
+  NSMakeCollectable(A);
+}
+
+void f5() {
+  id x = [NSMakeCollectable(CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks)) autorelease]; // no-warning
+}
+
+void f5b() {
+  id x = [(id) CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks) autorelease]; // expected-warning{{leak}}
+}
+
+// Test return of non-owned objects in contexts where an owned object
+// is expected.
+@interface TestReturnNotOwnedWhenExpectedOwned
+- (NSString*)newString;
+- (CFMutableArrayRef)newArray;
+@end
+
+@implementation TestReturnNotOwnedWhenExpectedOwned
+- (NSString*)newString {
+  NSString *s = [NSString stringWithUTF8String:"hello"]; // expected-warning{{Potential leak (when using garbage collection) of an object allocated}}
+  CFRetain(s);
+  return s;
+}
+- (CFMutableArrayRef)newArray{
+   return CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // no-warning
+}
+@end
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/6948053> False positive: object substitution during -init*
+//   methods warns about returning +0 when using -fobjc-gc-only
+//===----------------------------------------------------------------------===//
+
+@interface MyClassRdar6948053 : NSObject
+- (id) init;
++ (id) shared;
+@end
+
+@implementation MyClassRdar6948053
++(id) shared {
+  return (id) 0;
+}
+- (id) init
+{
+  Class myClass = [self class];  
+  [self release];
+  return [[myClass shared] retain]; // no-warning
+}
+@end
+
 //===----------------------------------------------------------------------===//
 // Tests of ownership attributes.
 //===----------------------------------------------------------------------===//
 
 @interface TestOwnershipAttr : NSObject
-- (NSString*) returnsAnOwnedString __attribute__((ns_returns_owned));
-- (NSString*) returnsAnOwnedCFString  __attribute__((cf_returns_owned));
-- (void) myRetain:(id)__attribute__((ns_retains))obj;
-- (void) myCFRetain:(id)__attribute__((cf_retains))obj;
-- (void) myRelease:(id)__attribute__((ns_releases))obj;
-- (void) myCFRelease:(id)__attribute__((cf_releases))obj;
+- (NSString*) returnsAnOwnedString __attribute__((ns_returns_retained));
+- (NSString*) returnsAnOwnedCFString  __attribute__((cf_returns_retained));
 @end
 
 void test_attr_1(TestOwnershipAttr *X) {
@@ -145,61 +215,27 @@ void test_attr_1b(TestOwnershipAttr *X) {
   NSString *str = [X returnsAnOwnedCFString]; // expected-warning{{leak}}
 }
 
-void test_attr_2(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-warning
-  [X myRetain:str];
-  [str release];
+@interface MyClassTestCFAttr : NSObject {}
+- (NSDate*) returnsCFRetained __attribute__((cf_returns_retained));
+- (NSDate*) alsoReturnsRetained;
+- (NSDate*) returnsNSRetained __attribute__((ns_returns_retained));
+@end
+
+__attribute__((cf_returns_retained))
+CFDateRef returnsRetainedCFDate()  {
+  return CFDateCreate(0, CFAbsoluteTimeGetCurrent());
 }
 
-void test_attr_2b(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedCFString]; // expected-warning{{leak}}
-  [X myRetain:str];
-  [str release];
+@implementation MyClassTestCFAttr
+- (NSDate*) returnsCFRetained {
+  return (NSDate*) returnsRetainedCFDate(); // No leak.
 }
 
-void test_attr_3(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // expected-warning{{leak}}
-  [X myCFRetain:str];
-  [str release];
+- (NSDate*) alsoReturnsRetained {
+  return (NSDate*) returnsRetainedCFDate(); // expected-warning{{leak}}
 }
 
-void test_attr_4a(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-warning
+- (NSDate*) returnsNSRetained {
+  return (NSDate*) returnsRetainedCFDate(); // expected-warning{{leak}}
 }
-
-void test_attr_4b(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-warning
-  [X myRelease:str];
-}
-
-void test_attr_4c(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-warning
-  [X myRetain:str];
-  [X myRelease:str];
-}
-
-void test_attr_5a(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-waring
-}
-
-void test_attr_5b(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString];
-  [X myCFRelease:str];  // expected-warning{{Incorrect decrement of the reference count of an object is not owned at this point by the caller}}
-}
-
-void test_attr_5c(TestOwnershipAttr *X) {
-  NSString *str = [X returnsAnOwnedString]; // no-warning
-  [X myCFRetain:str];
-  [X myCFRelease:str];
-}
-
-void test_attr_6a(TestOwnershipAttr *X) {
-  CFMutableArrayRef A = CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // expected-warning{{leak}}
-}
-
-void test_attr_6b(TestOwnershipAttr *X) {
-  CFMutableArrayRef A = CFArrayCreateMutable(0, 10, &kCFTypeArrayCallBacks); // no-warning
-  CFMakeCollectable(A);
-}
-
-
+@end

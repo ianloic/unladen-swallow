@@ -55,6 +55,9 @@ int MSILTargetMachineModule = 0;
 
 static RegisterTarget<MSILTarget> X("msil", "MSIL backend");
 
+// Force static initialization.
+extern "C" void LLVMInitializeMSILTarget() { }
+
 bool MSILModule::runOnModule(Module &M) {
   ModulePtr = &M;
   TD = &getAnalysis<TargetData>();
@@ -385,7 +388,7 @@ std::string MSILWriter::getTypePostfix(const Type* Ty, bool Expand,
   case Type::DoubleTyID:
     return "r8";
   case Type::PointerTyID:
-    return "i"+utostr(TD->getTypePaddedSize(Ty));
+    return "i"+utostr(TD->getTypeAllocSize(Ty));
   default:
     cerr << "TypeID = " << Ty->getTypeID() << '\n';
     assert(0 && "Invalid type in TypeToPostfix()");
@@ -695,14 +698,14 @@ void MSILWriter::printGepInstruction(const Value* V, gep_type_iterator I,
       uint64_t FieldIndex = cast<ConstantInt>(IndexValue)->getZExtValue();
       // Offset is the sum of all previous structure fields.
       for (uint64_t F = 0; F<FieldIndex; ++F)
-        Size += TD->getTypePaddedSize(StrucTy->getContainedType((unsigned)F));
+        Size += TD->getTypeAllocSize(StrucTy->getContainedType((unsigned)F));
       printPtrLoad(Size);
       printSimpleInstruction("add");
       continue;
     } else if (const SequentialType* SeqTy = dyn_cast<SequentialType>(*I)) {
-      Size = TD->getTypePaddedSize(SeqTy->getElementType());
+      Size = TD->getTypeAllocSize(SeqTy->getElementType());
     } else {
-      Size = TD->getTypePaddedSize(*I);
+      Size = TD->getTypeAllocSize(*I);
     }
     // Add offset of current element to stack top.
     if (!isZeroValue(IndexValue)) {
@@ -1027,7 +1030,7 @@ void MSILWriter::printVAArgInstruction(const VAArgInst* Inst) {
 
 
 void MSILWriter::printAllocaInstruction(const AllocaInst* Inst) {
-  uint64_t Size = TD->getTypePaddedSize(Inst->getAllocatedType());
+  uint64_t Size = TD->getTypeAllocSize(Inst->getAllocatedType());
   // Constant optimization.
   if (const ConstantInt* CInt = dyn_cast<ConstantInt>(Inst->getOperand(0))) {
     printPtrLoad(CInt->getZExtValue()*Size);
@@ -1060,12 +1063,15 @@ void MSILWriter::printInstruction(const Instruction* Inst) {
     break;
   // Binary
   case Instruction::Add:
+  case Instruction::FAdd:
     printBinaryInstruction("add",Left,Right);
     break;
   case Instruction::Sub:
+  case Instruction::FSub:
     printBinaryInstruction("sub",Left,Right);
     break;
-  case Instruction::Mul:  
+  case Instruction::Mul:
+  case Instruction::FMul:
     printBinaryInstruction("mul",Left,Right);
     break;
   case Instruction::UDiv:
@@ -1322,12 +1328,15 @@ void MSILWriter::printConstantExpr(const ConstantExpr* CE) {
     printSelectInstruction(CE->getOperand(0),CE->getOperand(1),CE->getOperand(2));
     break;
   case Instruction::Add:
+  case Instruction::FAdd:
     printBinaryInstruction("add",left,right);
     break;
   case Instruction::Sub:
+  case Instruction::FSub:
     printBinaryInstruction("sub",left,right);
     break;
   case Instruction::Mul:
+  case Instruction::FMul:
     printBinaryInstruction("mul",left,right);
     break;
   case Instruction::UDiv:
@@ -1443,7 +1452,7 @@ void MSILWriter::printDeclarations(const TypeSymbolTable& ST) {
     // Print not duplicated type
     if (Printed.insert(Ty).second) {
       Out << ".class value explicit ansi sealed '" << Name << "'";
-      Out << " { .pack " << 1 << " .size " << TD->getTypePaddedSize(Ty);
+      Out << " { .pack " << 1 << " .size " << TD->getTypeAllocSize(Ty);
       Out << " }\n\n";
     }
   }
@@ -1473,7 +1482,7 @@ void MSILWriter::printStaticConstant(const Constant* C, uint64_t& Offset) {
   const Type* Ty = C->getType();
   // Print zero initialized constant.
   if (isa<ConstantAggregateZero>(C) || C->isNullValue()) {
-    TySize = TD->getTypePaddedSize(C->getType());
+    TySize = TD->getTypeAllocSize(C->getType());
     Offset += TySize;
     Out << "int8 (0) [" << TySize << "]";
     return;
@@ -1481,14 +1490,14 @@ void MSILWriter::printStaticConstant(const Constant* C, uint64_t& Offset) {
   // Print constant initializer
   switch (Ty->getTypeID()) {
   case Type::IntegerTyID: {
-    TySize = TD->getTypePaddedSize(Ty);
+    TySize = TD->getTypeAllocSize(Ty);
     const ConstantInt* Int = cast<ConstantInt>(C);
     Out << getPrimitiveTypeName(Ty,true) << "(" << Int->getSExtValue() << ")";
     break;
   }
   case Type::FloatTyID:
   case Type::DoubleTyID: {
-    TySize = TD->getTypePaddedSize(Ty);
+    TySize = TD->getTypeAllocSize(Ty);
     const ConstantFP* FP = cast<ConstantFP>(C);
     if (Ty->getTypeID() == Type::FloatTyID)
       Out << "int32 (" << 
@@ -1507,7 +1516,7 @@ void MSILWriter::printStaticConstant(const Constant* C, uint64_t& Offset) {
     }
     break;
   case Type::PointerTyID:
-    TySize = TD->getTypePaddedSize(C->getType());
+    TySize = TD->getTypeAllocSize(C->getType());
     // Initialize with global variable address
     if (const GlobalVariable *G = dyn_cast<GlobalVariable>(C)) {
       std::string name = getValueName(G);

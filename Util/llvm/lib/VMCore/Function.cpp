@@ -14,9 +14,13 @@
 #include "llvm/Module.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/LeakDetector.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/StringPool.h"
+#include "llvm/System/RWMutex.h"
+#include "llvm/System/Threading.h"
 #include "SymbolTableListTraitsImpl.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
@@ -110,6 +114,12 @@ void Argument::removeAttr(Attributes attr) {
 //===----------------------------------------------------------------------===//
 // Helper Methods in Function
 //===----------------------------------------------------------------------===//
+
+LLVMContext *Function::getContext() const {
+  const Module* M = getParent();
+  if (M) return &M->getContext();
+  return 0;
+}
 
 const FunctionType *Function::getFunctionType() const {
   return cast<FunctionType>(getType()->getElementType());
@@ -230,17 +240,21 @@ void Function::removeAttribute(unsigned i, Attributes attr) {
 // use GC.
 static DenseMap<const Function*,PooledStringPtr> *GCNames;
 static StringPool *GCNamePool;
+static ManagedStatic<sys::SmartRWMutex<true> > GCLock;
 
 bool Function::hasGC() const {
+  sys::SmartScopedReader<true> Reader(*GCLock);
   return GCNames && GCNames->count(this);
 }
 
 const char *Function::getGC() const {
   assert(hasGC() && "Function has no collector");
+  sys::SmartScopedReader<true> Reader(*GCLock);
   return *(*GCNames)[this];
 }
 
 void Function::setGC(const char *Str) {
+  sys::SmartScopedWriter<true> Writer(*GCLock);
   if (!GCNamePool)
     GCNamePool = new StringPool();
   if (!GCNames)
@@ -249,6 +263,7 @@ void Function::setGC(const char *Str) {
 }
 
 void Function::clearGC() {
+  sys::SmartScopedWriter<true> Writer(*GCLock);
   if (GCNames) {
     GCNames->erase(this);
     if (GCNames->empty()) {
@@ -322,7 +337,8 @@ std::string Intrinsic::getName(ID id, const Type **Tys, unsigned numTys) {
   return Result;
 }
 
-const FunctionType *Intrinsic::getType(ID id, const Type **Tys, 
+const FunctionType *Intrinsic::getType(LLVMContext &Context,
+                                       ID id, const Type **Tys, 
                                        unsigned numTys) {
   const Type *ResultTy = NULL;
   std::vector<const Type*> ArgTys;
@@ -332,7 +348,7 @@ const FunctionType *Intrinsic::getType(ID id, const Type **Tys,
 #include "llvm/Intrinsics.gen"
 #undef GET_INTRINSIC_GENERATOR
 
-  return FunctionType::get(ResultTy, ArgTys, IsVarArg); 
+  return Context.getFunctionType(ResultTy, ArgTys, IsVarArg); 
 }
 
 bool Intrinsic::isOverloaded(ID id) {
@@ -356,12 +372,24 @@ Function *Intrinsic::getDeclaration(Module *M, ID id, const Type **Tys,
   // because intrinsics must be a specific type.
   return
     cast<Function>(M->getOrInsertFunction(getName(id, Tys, numTys),
-                                          getType(id, Tys, numTys)));
+                                          getType(M->getContext(),
+                                                  id, Tys, numTys)));
 }
 
 // This defines the "Intrinsic::getIntrinsicForGCCBuiltin()" method.
 #define GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
 #include "llvm/Intrinsics.gen"
 #undef GET_LLVM_INTRINSIC_FOR_GCC_BUILTIN
+
+  /// hasAddressTaken - returns true if there are any uses of this function
+  /// other than direct calls or invokes to it.
+bool Function::hasAddressTaken() const {
+  for (Value::use_const_iterator I = use_begin(), E = use_end(); I != E; ++I) {
+    if (I.getOperandNo() != 0 ||
+        (!isa<CallInst>(*I) && !isa<InvokeInst>(*I)))
+      return true;
+  }
+  return false;
+}
 
 // vim: sw=2 ai

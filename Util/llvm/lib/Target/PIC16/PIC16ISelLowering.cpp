@@ -23,16 +23,108 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include <cstdio>
+#include "llvm/Support/ErrorHandling.h"
 
 
 using namespace llvm;
 
+static const char *getIntrinsicName(unsigned opcode) {
+  std::string Basename;
+  switch(opcode) {
+  default: assert (0 && "do not know intrinsic name");
+  // Arithmetic Right shift for integer types.
+  case PIC16ISD::SRA_I8: Basename = "sra.i8"; break;
+  case RTLIB::SRA_I16: Basename = "sra.i16"; break;
+  case RTLIB::SRA_I32: Basename = "sra.i32"; break;
+
+  // Left shift for integer types.
+  case PIC16ISD::SLL_I8: Basename = "sll.i8"; break;
+  case RTLIB::SHL_I16: Basename = "sll.i16"; break;
+  case RTLIB::SHL_I32: Basename = "sll.i32"; break;
+
+  // Logical Right Shift for integer types.
+  case PIC16ISD::SRL_I8: Basename = "srl.i8"; break;
+  case RTLIB::SRL_I16: Basename = "srl.i16"; break;
+  case RTLIB::SRL_I32: Basename = "srl.i32"; break;
+
+  // Multiply for integer types.
+  case PIC16ISD::MUL_I8: Basename = "mul.i8"; break;
+  case RTLIB::MUL_I16: Basename = "mul.i16"; break;
+  case RTLIB::MUL_I32: Basename = "mul.i32"; break;
+
+  // Signed division for integers.
+  case RTLIB::SDIV_I16: Basename = "sdiv.i16"; break;
+  case RTLIB::SDIV_I32: Basename = "sdiv.i32"; break;
+
+  // Unsigned division for integers.
+  case RTLIB::UDIV_I16: Basename = "udiv.i16"; break;
+  case RTLIB::UDIV_I32: Basename = "udiv.i32"; break;
+
+  // Signed Modulas for integers.
+  case RTLIB::SREM_I16: Basename = "srem.i16"; break;
+  case RTLIB::SREM_I32: Basename = "srem.i32"; break;
+
+  // Unsigned Modulas for integers.
+  case RTLIB::UREM_I16: Basename = "urem.i16"; break;
+  case RTLIB::UREM_I32: Basename = "urem.i32"; break;
+
+  //////////////////////
+  // LIBCALLS FOR FLOATS
+  //////////////////////
+
+  // Float to signed integrals
+  case RTLIB::FPTOSINT_F32_I8: Basename = "f32_to_si32"; break;
+  case RTLIB::FPTOSINT_F32_I16: Basename = "f32_to_si32"; break;
+  case RTLIB::FPTOSINT_F32_I32: Basename = "f32_to_si32"; break;
+
+  // Signed integrals to float. char and int are first sign extended to i32 
+  // before being converted to float, so an I8_F32 or I16_F32 isn't required.
+  case RTLIB::SINTTOFP_I32_F32: Basename = "si32_to_f32"; break;
+
+  // Float to Unsigned conversions.
+  // Signed conversion can be used for unsigned conversion as well.
+  // In signed and unsigned versions only the interpretation of the 
+  // MSB is different. Bit representation remains the same. 
+  case RTLIB::FPTOUINT_F32_I8: Basename = "f32_to_si32"; break;
+  case RTLIB::FPTOUINT_F32_I16: Basename = "f32_to_si32"; break;
+  case RTLIB::FPTOUINT_F32_I32: Basename = "f32_to_si32"; break;
+
+  // Unsigned to Float conversions. char and int are first zero extended 
+  // before being converted to float.
+  case RTLIB::UINTTOFP_I32_F32: Basename = "ui32_to_f32"; break;
+               
+  // Floating point add, sub, mul, div.
+  case RTLIB::ADD_F32: Basename = "add.f32"; break;
+  case RTLIB::SUB_F32: Basename = "sub.f32"; break;
+  case RTLIB::MUL_F32: Basename = "mul.f32"; break;
+  case RTLIB::DIV_F32: Basename = "div.f32"; break;
+
+  // Floating point comparison
+  case RTLIB::O_F32: Basename = "unordered.f32"; break;
+  case RTLIB::UO_F32: Basename = "unordered.f32"; break;
+  case RTLIB::OLE_F32: Basename = "le.f32"; break;
+  case RTLIB::OGE_F32: Basename = "ge.f32"; break;
+  case RTLIB::OLT_F32: Basename = "lt.f32"; break;
+  case RTLIB::OGT_F32: Basename = "gt.f32"; break;
+  case RTLIB::OEQ_F32: Basename = "eq.f32"; break;
+  case RTLIB::UNE_F32: Basename = "neq.f32"; break;
+  }
+  
+  std::string prefix = PAN::getTagName(PAN::PREFIX_SYMBOL);
+  std::string tagname = PAN::getTagName(PAN::LIBCALL);
+  std::string Fullname = prefix + tagname + Basename; 
+
+  // The name has to live through program life.
+  char *tmp = new char[Fullname.size() + 1];
+  strcpy (tmp, Fullname.c_str());
+  
+  return tmp;
+}
 
 // PIC16TargetLowering Constructor.
 PIC16TargetLowering::PIC16TargetLowering(PIC16TargetMachine &TM)
   : TargetLowering(TM), TmpSize(0) {
-  
+ 
   Subtarget = &TM.getSubtarget<PIC16Subtarget>();
 
   addRegisterClass(MVT::i8, PIC16::GPRRegisterClass);
@@ -41,24 +133,89 @@ PIC16TargetLowering::PIC16TargetLowering(PIC16TargetMachine &TM)
   setShiftAmountFlavor(Extend);
 
   // SRA library call names
-  setPIC16LibcallName(PIC16ISD::SRA_I8, "__intrinsics.sra.i8");
-  setLibcallName(RTLIB::SRA_I16, "__intrinsics.sra.i16");
-  setLibcallName(RTLIB::SRA_I32, "__intrinsics.sra.i32");
+  setPIC16LibcallName(PIC16ISD::SRA_I8, getIntrinsicName(PIC16ISD::SRA_I8));
+  setLibcallName(RTLIB::SRA_I16, getIntrinsicName(RTLIB::SRA_I16));
+  setLibcallName(RTLIB::SRA_I32, getIntrinsicName(RTLIB::SRA_I32));
 
   // SHL library call names
-  setPIC16LibcallName(PIC16ISD::SLL_I8, "__intrinsics.sll.i8");
-  setLibcallName(RTLIB::SHL_I16, "__intrinsics.sll.i16");
-  setLibcallName(RTLIB::SHL_I32, "__intrinsics.sll.i32");
+  setPIC16LibcallName(PIC16ISD::SLL_I8, getIntrinsicName(PIC16ISD::SLL_I8));
+  setLibcallName(RTLIB::SHL_I16, getIntrinsicName(RTLIB::SHL_I16));
+  setLibcallName(RTLIB::SHL_I32, getIntrinsicName(RTLIB::SHL_I32));
 
   // SRL library call names
-  setPIC16LibcallName(PIC16ISD::SRL_I8, "__intrinsics.srl.i8");
-  setLibcallName(RTLIB::SRL_I16, "__intrinsics.srl.i16");
-  setLibcallName(RTLIB::SRL_I32, "__intrinsics.srl.i32");
+  setPIC16LibcallName(PIC16ISD::SRL_I8, getIntrinsicName(PIC16ISD::SRL_I8));
+  setLibcallName(RTLIB::SRL_I16, getIntrinsicName(RTLIB::SRL_I16));
+  setLibcallName(RTLIB::SRL_I32, getIntrinsicName(RTLIB::SRL_I32));
 
   // MUL Library call names
-  setPIC16LibcallName(PIC16ISD::MUL_I8, "__intrinsics.mul.i8");
-  setLibcallName(RTLIB::MUL_I16, "__intrinsics.mul.i16");
-  setLibcallName(RTLIB::MUL_I32, "__intrinsics.mul.i32");
+  setPIC16LibcallName(PIC16ISD::MUL_I8, getIntrinsicName(PIC16ISD::MUL_I8));
+  setLibcallName(RTLIB::MUL_I16, getIntrinsicName(RTLIB::MUL_I16));
+  setLibcallName(RTLIB::MUL_I32, getIntrinsicName(RTLIB::MUL_I32));
+
+  // Signed division lib call names
+  setLibcallName(RTLIB::SDIV_I16, getIntrinsicName(RTLIB::SDIV_I16));
+  setLibcallName(RTLIB::SDIV_I32, getIntrinsicName(RTLIB::SDIV_I32));
+
+  // Unsigned division lib call names
+  setLibcallName(RTLIB::UDIV_I16, getIntrinsicName(RTLIB::UDIV_I16));
+  setLibcallName(RTLIB::UDIV_I32, getIntrinsicName(RTLIB::UDIV_I32));
+
+  // Signed remainder lib call names
+  setLibcallName(RTLIB::SREM_I16, getIntrinsicName(RTLIB::SREM_I16));
+  setLibcallName(RTLIB::SREM_I32, getIntrinsicName(RTLIB::SREM_I32));
+
+  // Unsigned remainder lib call names
+  setLibcallName(RTLIB::UREM_I16, getIntrinsicName(RTLIB::UREM_I16));
+  setLibcallName(RTLIB::UREM_I32, getIntrinsicName(RTLIB::UREM_I32));
+ 
+  // Floating point to signed int conversions.
+  setLibcallName(RTLIB::FPTOSINT_F32_I8, 
+                 getIntrinsicName(RTLIB::FPTOSINT_F32_I8));
+  setLibcallName(RTLIB::FPTOSINT_F32_I16, 
+                 getIntrinsicName(RTLIB::FPTOSINT_F32_I16));
+  setLibcallName(RTLIB::FPTOSINT_F32_I32, 
+                 getIntrinsicName(RTLIB::FPTOSINT_F32_I32));
+
+  // Signed int to floats.
+  setLibcallName(RTLIB::SINTTOFP_I32_F32, 
+                 getIntrinsicName(RTLIB::SINTTOFP_I32_F32));
+
+  // Floating points to unsigned ints.
+  setLibcallName(RTLIB::FPTOUINT_F32_I8, 
+                 getIntrinsicName(RTLIB::FPTOUINT_F32_I8));
+  setLibcallName(RTLIB::FPTOUINT_F32_I16, 
+                 getIntrinsicName(RTLIB::FPTOUINT_F32_I16));
+  setLibcallName(RTLIB::FPTOUINT_F32_I32, 
+                 getIntrinsicName(RTLIB::FPTOUINT_F32_I32));
+
+  // Unsigned int to floats.
+  setLibcallName(RTLIB::UINTTOFP_I32_F32, 
+                 getIntrinsicName(RTLIB::UINTTOFP_I32_F32));
+
+  // Floating point add, sub, mul ,div.
+  setLibcallName(RTLIB::ADD_F32, getIntrinsicName(RTLIB::ADD_F32));
+  setLibcallName(RTLIB::SUB_F32, getIntrinsicName(RTLIB::SUB_F32));
+  setLibcallName(RTLIB::MUL_F32, getIntrinsicName(RTLIB::MUL_F32));
+  setLibcallName(RTLIB::DIV_F32, getIntrinsicName(RTLIB::DIV_F32));
+
+  // Floationg point comparison
+  setLibcallName(RTLIB::UO_F32, getIntrinsicName(RTLIB::UO_F32));
+  setLibcallName(RTLIB::OLE_F32, getIntrinsicName(RTLIB::OLE_F32));
+  setLibcallName(RTLIB::OGE_F32, getIntrinsicName(RTLIB::OGE_F32));
+  setLibcallName(RTLIB::OLT_F32, getIntrinsicName(RTLIB::OLT_F32));
+  setLibcallName(RTLIB::OGT_F32, getIntrinsicName(RTLIB::OGT_F32));
+  setLibcallName(RTLIB::OEQ_F32, getIntrinsicName(RTLIB::OEQ_F32));
+  setLibcallName(RTLIB::UNE_F32, getIntrinsicName(RTLIB::UNE_F32));
+
+  // Return value comparisons of floating point calls. 
+  setCmpLibcallCC(RTLIB::OEQ_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::UNE_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::OLT_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::OLE_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::OGE_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::OGT_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::UO_F32, ISD::SETNE);
+  setCmpLibcallCC(RTLIB::O_F32, ISD::SETEQ);
 
   setOperationAction(ISD::GlobalAddress, MVT::i16, Custom);
   setOperationAction(ISD::ExternalSymbol, MVT::i16, Custom);
@@ -75,6 +232,7 @@ PIC16TargetLowering::PIC16TargetLowering(PIC16TargetMachine &TM)
   setOperationAction(ISD::ADDC,    MVT::i8,  Custom);
   setOperationAction(ISD::SUBE,    MVT::i8,  Custom);
   setOperationAction(ISD::SUBC,    MVT::i8,  Custom);
+  setOperationAction(ISD::SUB,    MVT::i8,  Custom);
   setOperationAction(ISD::ADD,    MVT::i8,  Custom);
   setOperationAction(ISD::ADD,    MVT::i16, Custom);
 
@@ -242,7 +400,7 @@ PIC16TargetLowering::MakePIC16Libcall(PIC16ISD::PIC16Libcall Call,
    const Type *RetTy = RetVT.getTypeForMVT();
    std::pair<SDValue,SDValue> CallInfo = 
      LowerCallTo(DAG.getEntryNode(), RetTy, isSigned, !isSigned, false,
-                 false, CallingConv::C, false, Callee, Args, DAG, dl);
+                 false, 0, CallingConv::C, false, Callee, Args, DAG, dl);
 
   return CallInfo.first;
 }
@@ -324,15 +482,18 @@ SDValue PIC16TargetLowering::ExpandFrameIndex(SDNode *N, SelectionDAG &DAG) {
   FrameIndexSDNode *FR = dyn_cast<FrameIndexSDNode>(SDValue(N,0));
   // FIXME there isn't really debug info here
   DebugLoc dl = FR->getDebugLoc();
-  int Index = FR->getIndex();
 
   // Expand FrameIndex like GlobalAddress and ExternalSymbol
   // Also use Offset field for lo and hi parts. The default 
   // offset is zero.
-  SDValue Offset = DAG.getConstant(0, MVT::i8);
-  SDValue FI = DAG.getTargetFrameIndex(Index, MVT::i8);
-  SDValue Lo = DAG.getNode(PIC16ISD::Lo, dl, MVT::i8, FI, Offset);
-  SDValue Hi = DAG.getNode(PIC16ISD::Hi, dl, MVT::i8, FI, Offset);
+
+  SDValue ES;
+  int FrameOffset;
+  SDValue FI = SDValue(N,0);
+  LegalizeFrameIndex(FI, DAG, ES, FrameOffset);
+  SDValue Offset = DAG.getConstant(FrameOffset, MVT::i8);
+  SDValue Lo = DAG.getNode(PIC16ISD::Lo, dl, MVT::i8, ES, Offset);
+  SDValue Hi = DAG.getNode(PIC16ISD::Hi, dl, MVT::i8, ES, Offset);
   return DAG.getNode(ISD::BUILD_PAIR, dl, N->getValueType(0), Lo, Hi);
 }
 
@@ -505,7 +666,7 @@ void PIC16TargetLowering::GetExpandedParts(SDValue Op, SelectionDAG &DAG,
   // Extract the lo component.
   Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, NewVT, Op,
                    DAG.getConstant(0, MVT::i8));
-		   
+
   // extract the hi component
   Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, NewVT, Op,
                    DAG.getConstant(1, MVT::i8));
@@ -529,9 +690,9 @@ PIC16TargetLowering::LegalizeFrameIndex(SDValue Op, SelectionDAG &DAG,
   // with, we need to traverse all the FrameIndices available earlier in 
   // the list and add their requested size.
   unsigned FIndex = FR->getIndex();
-  char *tmpName = new char [strlen(Name.c_str()) +  8];
+  const char *tmpName;
   if (FIndex < ReservedFrameCount) {
-    sprintf(tmpName, "%s.frame", Name.c_str());
+    tmpName = createESName(PAN::getFrameLabel(Name));
     ES = DAG.getTargetExternalSymbol(tmpName, MVT::i8);
     Offset = 0;
     for (unsigned i=0; i<FIndex ; ++i) {
@@ -539,7 +700,7 @@ PIC16TargetLowering::LegalizeFrameIndex(SDValue Op, SelectionDAG &DAG,
     }
   } else {
    // FrameIndex has been made for some temporary storage 
-    sprintf(tmpName, "%s.tmp", Name.c_str());
+    tmpName = createESName(PAN::getTempdataLabel(Name));
     ES = DAG.getTargetExternalSymbol(tmpName, MVT::i8);
     Offset = GetTmpOffsetForFI(FIndex, MFI->getObjectSize(FIndex));
   }
@@ -571,10 +732,12 @@ void PIC16TargetLowering::LegalizeAddress(SDValue Ptr, SelectionDAG &DAG,
   if (Ptr.getOpcode() == ISD::ADD) {
     SDValue OperLeft = Ptr.getOperand(0);
     SDValue OperRight = Ptr.getOperand(1);
-    if (OperLeft.getOpcode() == ISD::Constant) {
+    if ((OperLeft.getOpcode() == ISD::Constant) &&
+        (dyn_cast<ConstantSDNode>(OperLeft)->getZExtValue() < 32 )) {
       Offset = dyn_cast<ConstantSDNode>(OperLeft)->getZExtValue();
       Ptr = OperRight;
-    } else if (OperRight.getOpcode() == ISD::Constant) {
+    } else if ((OperRight.getOpcode() == ISD::Constant)  &&
+               (dyn_cast<ConstantSDNode>(OperRight)->getZExtValue() < 32 )){
       Offset = dyn_cast<ConstantSDNode>(OperRight)->getZExtValue();
       Ptr = OperLeft;
     }
@@ -596,11 +759,21 @@ void PIC16TargetLowering::LegalizeAddress(SDValue Ptr, SelectionDAG &DAG,
   // Expansion of FrameIndex has Lo/Hi parts
   if (isDirectAddress(Ptr)) { 
       SDValue TFI = Ptr.getOperand(0).getOperand(0); 
+      int FrameOffset;
       if (TFI.getOpcode() == ISD::TargetFrameIndex) {
-        int FrameOffset;
         LegalizeFrameIndex(TFI, DAG, Lo, FrameOffset);
         Hi = DAG.getConstant(1, MVT::i8);
         Offset += FrameOffset; 
+        return;
+      } else if (TFI.getOpcode() == ISD::TargetExternalSymbol) {
+        // FrameIndex has already been expanded.
+        // Now just make use of its expansion
+        Lo = TFI;
+        Hi = DAG.getConstant(1, MVT::i8);
+        SDValue FOffset = Ptr.getOperand(0).getOperand(1);
+        assert (FOffset.getOpcode() == ISD::Constant && 
+                          "Invalid operand of PIC16ISD::Lo");
+        Offset += dyn_cast<ConstantSDNode>(FOffset)->getZExtValue();
         return;
       }
   }
@@ -669,12 +842,16 @@ SDValue PIC16TargetLowering::ExpandLoad(SDNode *N, SelectionDAG &DAG) {
     // i.e. without any extension
     MVT MemVT = LD->getMemoryVT();
     unsigned MemBytes = MemVT.getSizeInBits() / 8;
+    // if MVT::i1 is extended to MVT::i8 then MemBytes will be zero
+    // So set it to one
+    if (MemBytes == 0) MemBytes = 1;
+    
     unsigned ExtdBytes = VT.getSizeInBits() / 8;
     Offset = DAG.getConstant(LoadOffset, MVT::i8);
 
     Tys = DAG.getVTList(MVT::i8, MVT::Other); 
     // For MemBytes generate PIC16Load with proper offset
-    for (iter=0; iter<MemBytes; ++iter) {
+    for (iter=0; iter < MemBytes; ++iter) {
       // Add the pointer offset if any
       Offset = DAG.getConstant(iter + LoadOffset, MVT::i8);
       Load = DAG.getNode(PIC16ISD::PIC16Load, dl, Tys, Chain, PtrLo, PtrHi,
@@ -691,7 +868,8 @@ SDValue PIC16TargetLowering::ExpandLoad(SDNode *N, SelectionDAG &DAG) {
       for (iter=MemBytes; iter<ExtdBytes; ++iter) { 
         PICLoads.push_back(SRA);
       }
-    } else if (ISD::isZEXTLoad(N)) {
+    } else if (ISD::isZEXTLoad(N) || ISD::isEXTLoad(N)) {
+    //} else if (ISD::isZEXTLoad(N)) {
       // ZeroExtendedLoad -- For all ExtdBytes use constant 0
       SDValue ConstZero = DAG.getConstant(0, MVT::i8);
       for (iter=MemBytes; iter<ExtdBytes; ++iter) { 
@@ -845,12 +1023,11 @@ SDValue PIC16TargetLowering::ConvertToMemOperand(SDValue Op,
   const Function *Func = MF.getFunction();
   const std::string FuncName = Func->getName();
 
-  char *tmpName = new char [strlen(FuncName.c_str()) +  8];
 
   // Put the value on stack.
   // Get a stack slot index and convert to es.
   int FI = MF.getFrameInfo()->CreateStackObject(1, 1);
-  sprintf(tmpName, "%s.tmp", FuncName.c_str());
+  const char *tmpName = createESName(PAN::getTempdataLabel(FuncName));
   SDValue ES = DAG.getTargetExternalSymbol(tmpName, MVT::i8);
 
   // Store the value to ES.
@@ -1051,8 +1228,7 @@ SDValue PIC16TargetLowering::LowerRET(SDValue Op, SelectionDAG &DAG) {
 
   // return should have odd number of operands
   if ((Op.getNumOperands() % 2) == 0 ) {
-    assert(0 && "Do not know how to return this many arguments!");
-    abort();
+    LLVM_UNREACHABLE("Do not know how to return this many arguments!");
   }
   
   // Number of values to return 
@@ -1064,8 +1240,7 @@ SDValue PIC16TargetLowering::LowerRET(SDValue Op, SelectionDAG &DAG) {
   const Function *F = MF.getFunction();
   std::string FuncName = F->getName();
 
-  char *tmpName = new char [strlen(FuncName.c_str()) +  8];
-  sprintf(tmpName, "%s.frame", FuncName.c_str());
+  const char *tmpName = createESName(PAN::getFrameLabel(FuncName));
   SDVTList VTs  = DAG.getVTList (MVT::i8, MVT::Other);
   SDValue ES = DAG.getTargetExternalSymbol(tmpName, MVT::i8);
   SDValue BS = DAG.getConstant(1, MVT::i8);
@@ -1131,7 +1306,8 @@ SDValue PIC16TargetLowering::LegalizeCALL(SDValue Op, SelectionDAG &DAG) {
    // Generate new call with all the operands legal
    return DAG.getCall(TheCall->getCallingConv(), dl,
                       TheCall->isVarArg(), TheCall->isTailCall(),
-                      TheCall->isInreg(), VTs, &Ops[0], Ops.size());
+                      TheCall->isInreg(), VTs, &Ops[0], Ops.size(),
+                      TheCall->getNumFixedArgs());
 }
 
 void PIC16TargetLowering::
@@ -1151,10 +1327,14 @@ GetDataAddress(DebugLoc dl, SDValue Callee, SDValue &Chain,
 
    SDValue Data_Lo, Data_Hi;
    SDVTList Tys = DAG.getVTList(MVT::i8, MVT::Other, MVT::Flag);
-   Hi = DAG.getNode(PIC16ISD::MTPCLATH, dl, MVT::i8, Hi);
-   // Subtract 2 from Lo to get the Lower part of DataAddress. 
-   Data_Lo = DAG.getNode(ISD::SUB, dl, MVT::i8, Lo, DAG.getConstant(2, MVT::i8));
-   Callee = DAG.getNode(PIC16ISD::PIC16Connect, dl, MVT::i8, Data_Lo, Hi);
+   // Subtract 2 from Address to get the Lower part of DataAddress.
+   SDVTList VTList = DAG.getVTList(MVT::i8, MVT::Flag);
+   Data_Lo = DAG.getNode(ISD::SUBC, dl, VTList, Lo, 
+                         DAG.getConstant(2, MVT::i8));
+   SDValue Ops[3] = { Hi, DAG.getConstant(0, MVT::i8), Data_Lo.getValue(1)};
+   Data_Hi = DAG.getNode(ISD::SUBE, dl, VTList, Ops, 3);
+   SDValue PCLATH = DAG.getNode(PIC16ISD::MTPCLATH, dl, MVT::i8, Data_Hi);
+   Callee = DAG.getNode(PIC16ISD::PIC16Connect, dl, MVT::i8, Data_Lo, PCLATH);
    SDValue Call = DAG.getNode(PIC16ISD::CALLW, dl, Tys, Chain, Callee,
                               OperFlag);
    Chain = getChain(Call);
@@ -1172,10 +1352,15 @@ GetDataAddress(DebugLoc dl, SDValue Callee, SDValue &Chain,
    Chain = getChain(SeqStart);
    OperFlag = getOutFlag(SeqStart); // To manage the data dependency
 
-   // Subtract 1 to Lo part for the second code word.
-   Data_Lo = DAG.getNode(ISD::SUB, dl, MVT::i8, Lo, DAG.getConstant(1, MVT::i8));
+   // Subtract 1 from Address to get high part of data address.
+   Data_Lo = DAG.getNode(ISD::SUBC, dl, VTList, Lo, 
+                         DAG.getConstant(1, MVT::i8));
+   SDValue HiOps[3] = { Hi, DAG.getConstant(0, MVT::i8), Data_Lo.getValue(1)};
+   Data_Hi = DAG.getNode(ISD::SUBE, dl, VTList, HiOps, 3);
+   PCLATH = DAG.getNode(PIC16ISD::MTPCLATH, dl, MVT::i8, Data_Hi);
+
    // Use new Lo to make another CALLW
-   Callee = DAG.getNode(PIC16ISD::PIC16Connect, dl, MVT::i8, Data_Lo, Hi);
+   Callee = DAG.getNode(PIC16ISD::PIC16Connect, dl, MVT::i8, Data_Lo, PCLATH);
    Call = DAG.getNode(PIC16ISD::CALLW, dl, Tys, Chain, Callee, OperFlag);
    Chain = getChain(Call);
    OperFlag = getOutFlag(Call);
@@ -1249,13 +1434,11 @@ SDValue PIC16TargetLowering::LowerCALL(SDValue Op, SelectionDAG &DAG) {
        }
 
        // Label for argument passing
-       char *argFrame = new char [strlen(Name.c_str()) +  8];
-       sprintf(argFrame, "%s.args", Name.c_str());
+       const char *argFrame = createESName(PAN::getArgsLabel(Name));
        ArgLabel = DAG.getTargetExternalSymbol(argFrame, MVT::i8);
 
        // Label for reading return value
-       char *retName = new char [strlen(Name.c_str()) +  8];
-       sprintf(retName, "%s.retval", Name.c_str());
+       const char *retName = createESName(PAN::getRetvalLabel(Name));
        RetLabel = DAG.getTargetExternalSymbol(retName, MVT::i8);
     } else {
        // if indirect call
@@ -1374,10 +1557,10 @@ SDValue PIC16TargetLowering::LowerADD(SDValue Op, SelectionDAG &DAG) {
     // Put one value on stack.
     SDValue NewVal = ConvertToMemOperand (Op.getOperand(MemOp), DAG, dl);
     
-    // ADDC and ADDE produces two results.
+    // ADDC and ADDE produce two results.
     SDVTList Tys = DAG.getVTList(MVT::i8, MVT::Flag);
 
-    // ADDE has three operands, the last one is a flag.
+    // ADDE has three operands, the last one is the carry bit.
     if (Op.getOpcode() == ISD::ADDE)
       return DAG.getNode(Op.getOpcode(), dl, Tys, Op.getOperand(MemOp ^ 1),
                          NewVal, Op.getOperand(2));
@@ -1390,10 +1573,8 @@ SDValue PIC16TargetLowering::LowerADD(SDValue Op, SelectionDAG &DAG) {
       return DAG.getNode(Op.getOpcode(), dl, MVT::i8, Op.getOperand(MemOp ^ 1),
                          NewVal);
   }
-  else if (Op.getOpcode() == ISD::ADD)
-    return Op;
   else
-    return SDValue();
+    return Op;
 }
 
 SDValue PIC16TargetLowering::LowerSUB(SDValue Op, SelectionDAG &DAG) {
@@ -1404,7 +1585,7 @@ SDValue PIC16TargetLowering::LowerSUB(SDValue Op, SelectionDAG &DAG) {
   // Nothing to do if the first operand is already a direct load and it has
   // only one use.
   if (isDirectLoad(Op.getOperand(0)) && Op.getOperand(0).hasOneUse())
-    return SDValue();
+    return Op;
 
   // Put first operand on stack.
   SDValue NewVal = ConvertToMemOperand (Op.getOperand(0), DAG, dl);
@@ -1451,8 +1632,7 @@ SDValue PIC16TargetLowering::LowerFORMAL_ARGUMENTS(SDValue Op,
   InitReservedFrameCount(F);
 
   // Create the <fname>.args external symbol.
-  char *tmpName = new char [strlen(FuncName.c_str()) +  6];
-  sprintf(tmpName, "%s.args", FuncName.c_str());
+  const char *tmpName = createESName(PAN::getArgsLabel(FuncName));
   SDValue ES = DAG.getTargetExternalSymbol(tmpName, MVT::i8);
 
   // Load arg values from the label + offset.
@@ -1525,8 +1705,8 @@ static PIC16CC::CondCodes IntCCToPIC16CC(ISD::CondCode CC) {
   case ISD::SETLT:  return PIC16CC::LT;
   case ISD::SETLE:  return PIC16CC::LE;
   case ISD::SETULT: return PIC16CC::ULT;
-  case ISD::SETULE: return PIC16CC::LE;
-  case ISD::SETUGE: return PIC16CC::GE;
+  case ISD::SETULE: return PIC16CC::ULE;
+  case ISD::SETUGE: return PIC16CC::UGE;
   case ISD::SETUGT: return PIC16CC::UGT;
   }
 }

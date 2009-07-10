@@ -9,7 +9,7 @@ void f() {
   T(a)->m = 7;
   int(a)++; // expected-error {{expression is not assignable}}
   __extension__ int(a)++; // expected-error {{expression is not assignable}}
-  typeof(int)(a,5)<<a; // expected-error {{function-style cast to a builtin type can only take one argument}}
+  __typeof(int)(a,5)<<a; // expected-error {{function-style cast to a builtin type can only take one argument}}
   void(a), ++a; // expected-warning {{expression result unused}}
   if (int(a)+1) {}
   for (int(a)+1;;) {}
@@ -19,7 +19,7 @@ void f() {
   (int(1)); // expected-warning {{expression result unused}}
 
   // type-id
-  (int())1; // expected-error {{used type 'int (void)' where arithmetic or pointer type is required}}
+  (int())1; // expected-error {{used type 'int ()' where arithmetic or pointer type is required}}
 
   // Declarations.
   int fd(T(a)); // expected-warning {{parentheses were disambiguated as a function declarator}}

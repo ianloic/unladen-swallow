@@ -14,7 +14,6 @@
 
 #include "clang/Parse/Parser.h"
 #include "ExtensionRAIIObject.h"
-#include "AstGuard.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
 #include "clang/Basic/Diagnostic.h"
@@ -121,7 +120,7 @@ Parser::ParseStatementOrDeclaration(bool OnlyStatement) {
     }
     // Otherwise, eat the semicolon.
     ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
-    return Actions.ActOnExprStmt(move(Expr));
+    return Actions.ActOnExprStmt(Actions.FullExpr(Expr));
   }
 
   case tok::kw_case:                // C99 6.8.1: labeled-statement
@@ -143,33 +142,33 @@ Parser::ParseStatementOrDeclaration(bool OnlyStatement) {
     return ParseWhileStatement();
   case tok::kw_do:                  // C99 6.8.5.2: do-statement
     Res = ParseDoStatement();
-    SemiError = "do/while loop";
+    SemiError = "do/while";
     break;
   case tok::kw_for:                 // C99 6.8.5.3: for-statement
     return ParseForStatement();
 
   case tok::kw_goto:                // C99 6.8.6.1: goto-statement
     Res = ParseGotoStatement();
-    SemiError = "goto statement";
+    SemiError = "goto";
     break;
   case tok::kw_continue:            // C99 6.8.6.2: continue-statement
     Res = ParseContinueStatement();
-    SemiError = "continue statement";
+    SemiError = "continue";
     break;
   case tok::kw_break:               // C99 6.8.6.3: break-statement
     Res = ParseBreakStatement();
-    SemiError = "break statement";
+    SemiError = "break";
     break;
   case tok::kw_return:              // C99 6.8.6.4: return-statement
     Res = ParseReturnStatement();
-    SemiError = "return statement";
+    SemiError = "return";
     break;
 
   case tok::kw_asm: {
     bool msAsm = false;
     Res = ParseAsmStatement(msAsm);
     if (msAsm) return move(Res);
-    SemiError = "asm statement";
+    SemiError = "asm";
     break;
   }
 
@@ -181,10 +180,14 @@ Parser::ParseStatementOrDeclaration(bool OnlyStatement) {
   if (Tok.is(tok::semi)) {
     ConsumeToken();
   } else if (!Res.isInvalid()) {
-    Diag(Tok, diag::err_expected_semi_after) << SemiError;
+    // If the result was valid, then we do want to diagnose this.  Use
+    // ExpectAndConsume to emit the diagnostic, even though we know it won't
+    // succeed.
+    ExpectAndConsume(tok::semi, diag::err_expected_semi_after_stmt, SemiError);
     // Skip until we see a } or ;, but don't eat it.
     SkipUntil(tok::r_brace, true, true);
   }
+  
   return move(Res);
 }
 
@@ -435,13 +438,13 @@ Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
       SourceLocation ExtLoc = ConsumeToken();
       while (Tok.is(tok::kw___extension__))
         ConsumeToken();
-      
-      // __extension__ silences extension warnings in the subexpression.
-      ExtensionRAIIObject O(Diags);  // Use RAII to do this.
 
       // If this is the start of a declaration, parse it as such.
       if (isDeclarationStatement()) {
+        // __extension__ silences extension warnings in the subdeclaration.
         // FIXME: Save the __extension__ on the decl as a node somehow?
+        ExtensionRAIIObject O(Diags);
+
         SourceLocation DeclStart = Tok.getLocation(), DeclEnd;
         DeclGroupPtrTy Res = ParseDeclaration(Declarator::BlockContext,DeclEnd);
         R = Actions.ActOnDeclStmt(Res, DeclStart, DeclEnd);
@@ -457,7 +460,7 @@ Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
         // Eat the semicolon at the end of stmt and convert the expr into a
         // statement.
         ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
-        R = Actions.ActOnExprStmt(move(Res));
+        R = Actions.ActOnExprStmt(Actions.FullExpr(Res));
       }
     }
 
@@ -488,8 +491,11 @@ Parser::OwningStmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
 /// successfully parsed.  Note that a successful parse can still have semantic
 /// errors in the condition.
 bool Parser::ParseParenExprOrCondition(OwningExprResult &CondExp,
-                                       bool OnlyAllowCondition) {
+                                       bool OnlyAllowCondition,
+                                       SourceLocation *LParenLocPtr,
+                                       SourceLocation *RParenLocPtr) {
   SourceLocation LParenLoc = ConsumeParen();
+  if (LParenLocPtr) *LParenLocPtr = LParenLoc;
   
   if (getLang().CPlusPlus)
     CondExp = ParseCXXCondition();
@@ -508,7 +514,8 @@ bool Parser::ParseParenExprOrCondition(OwningExprResult &CondExp,
   }
   
   // Otherwise the condition is valid or the rparen is present.
-  MatchRHSPunctuation(tok::r_paren, LParenLoc);
+  SourceLocation RPLoc = MatchRHSPunctuation(tok::r_paren, LParenLoc);
+  if (RParenLocPtr) *RParenLocPtr = RPLoc;
   return false;
 }
 
@@ -551,6 +558,8 @@ Parser::OwningStmtResult Parser::ParseIfStatement() {
   if (ParseParenExprOrCondition(CondExp))
     return StmtError();
 
+  FullExprArg FullCondExp(Actions.FullExpr(CondExp));
+  
   // C99 6.8.4p3 - In C99, the body of the if statement is a scope, even if
   // there is no compound stmt.  C90 does not have this clause.  We only do this
   // if the body isn't a compound statement to avoid push/pop in common cases.
@@ -632,7 +641,7 @@ Parser::OwningStmtResult Parser::ParseIfStatement() {
   if (ElseStmt.isInvalid())
     ElseStmt = Actions.ActOnNullStmt(ElseStmtLoc);
 
-  return Actions.ActOnIfStmt(IfLoc, move(CondExp), move(ThenStmt),
+  return Actions.ActOnIfStmt(IfLoc, FullCondExp, move(ThenStmt), 
                              ElseLoc, move(ElseStmt));
 }
 
@@ -753,6 +762,8 @@ Parser::OwningStmtResult Parser::ParseWhileStatement() {
   if (ParseParenExprOrCondition(Cond))
     return StmtError();
 
+  FullExprArg FullCond(Actions.FullExpr(Cond));
+  
   // C99 6.8.5p5 - In C99, the body of the if statement is a scope, even if
   // there is no compound stmt.  C90 does not have this clause.  We only do this
   // if the body isn't a compound statement to avoid push/pop in common cases.
@@ -777,7 +788,7 @@ Parser::OwningStmtResult Parser::ParseWhileStatement() {
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnWhileStmt(WhileLoc, move(Cond), move(Body));
+  return Actions.ActOnWhileStmt(WhileLoc, FullCond, move(Body));
 }
 
 /// ParseDoStatement
@@ -834,14 +845,16 @@ Parser::OwningStmtResult Parser::ParseDoStatement() {
 
   // Parse the parenthesized condition.
   OwningExprResult Cond(Actions);
-  ParseParenExprOrCondition(Cond, true);
+  SourceLocation LPLoc, RPLoc;
+  ParseParenExprOrCondition(Cond, true, &LPLoc, &RPLoc);
   
   DoScope.Exit();
 
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnDoStmt(DoLoc, move(Body), WhileLoc, move(Cond));
+  return Actions.ActOnDoStmt(DoLoc, move(Body), WhileLoc, LPLoc,
+                             move(Cond), RPLoc);
 }
 
 /// ParseForStatement
@@ -929,7 +942,7 @@ Parser::OwningStmtResult Parser::ParseForStatement() {
 
     // Turn the expression into a stmt.
     if (!Value.isInvalid())
-      FirstPart = Actions.ActOnExprStmt(move(Value));
+      FirstPart = Actions.ActOnExprStmt(Actions.FullExpr(Value));
 
     if (Tok.is(tok::semi)) {
       ConsumeToken();
@@ -1072,7 +1085,7 @@ Parser::OwningStmtResult Parser::ParseReturnStatement() {
       return StmtError();
     }
   }
-  return Actions.ActOnReturnStmt(ReturnLoc, move(R));
+  return Actions.ActOnReturnStmt(ReturnLoc, Actions.FullExpr(R));
 }
 
 /// FuzzyParseMicrosoftAsmStatement. When -fms-extensions is enabled, this
@@ -1210,7 +1223,7 @@ Parser::OwningStmtResult Parser::ParseAsmStatement(bool &msAsm) {
   }
 
   return Actions.ActOnAsmStmt(AsmLoc, isSimple, isVolatile,
-                              NumOutputs, NumInputs, &Names[0],
+                              NumOutputs, NumInputs, Names.data(),
                               move_arg(Constraints), move_arg(Exprs),
                               move(AsmString), move_arg(Clobbers),
                               RParenLoc);

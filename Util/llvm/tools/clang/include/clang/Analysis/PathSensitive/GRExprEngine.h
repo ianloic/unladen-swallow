@@ -20,6 +20,7 @@
 #include "clang/Analysis/PathSensitive/GRState.h"
 #include "clang/Analysis/PathSensitive/GRSimpleAPICheck.h"
 #include "clang/Analysis/PathSensitive/GRTransferFuncs.h"
+#include "clang/Analysis/PathSensitive/SValuator.h"
 #include "clang/Analysis/PathSensitive/BugReporter.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/ExprObjC.h"
@@ -66,6 +67,9 @@ protected:
   
   /// ValMgr - Object that manages/creates SVals.
   ValueManager &ValMgr;
+  
+  /// SVator - SValuator object that creates SVals from expressions.
+  llvm::OwningPtr<SValuator> SVator;
   
   /// EntryNode - The immediate predecessor node.
   NodeTy* EntryNode;
@@ -453,7 +457,7 @@ public:
   }
   
   GRStateManager& getStateManager() { return StateMgr; }
-  const GRStateManager& getStateManger() const { return StateMgr; }
+  const GRStateManager& getStateManager() const { return StateMgr; }
 
   StoreManager& getStoreManager() { return StateMgr.getStoreManager(); }
   
@@ -477,68 +481,10 @@ public:
   const SymbolManager& getSymbolManager() const { return SymMgr; }
   
 protected:
-  
   const GRState* GetState(NodeTy* N) {
     return N == EntryNode ? CleanedState : N->getState();
   }
   
-public:
-  
-  const GRState* BindExpr(const GRState* St, Expr* Ex, SVal V) {
-    return StateMgr.BindExpr(St, Ex, V);
-  }
-  
-  const GRState* BindExpr(const GRState* St, const Expr* Ex, SVal V) {
-    return BindExpr(St, const_cast<Expr*>(Ex), V);
-  }
-    
-protected:
- 
-  const GRState* BindBlkExpr(const GRState* St, Expr* Ex, SVal V) {
-    return StateMgr.BindExpr(St, Ex, V, true, false);
-  }
-  
-  const GRState* BindLoc(const GRState* St, Loc LV, SVal V) {
-    return StateMgr.BindLoc(St, LV, V);
-  }
-
-  SVal GetSVal(const GRState* St, Stmt* Ex) {
-    return StateMgr.GetSVal(St, Ex);
-  }
-    
-  SVal GetSVal(const GRState* St, const Stmt* Ex) {
-    return GetSVal(St, const_cast<Stmt*>(Ex));
-  }
-  
-  SVal GetBlkExprSVal(const GRState* St, Stmt* Ex) {
-    return StateMgr.GetBlkExprSVal(St, Ex);
-  }
-    
-  SVal GetSVal(const GRState* St, Loc LV, QualType T = QualType()) {    
-    return StateMgr.GetSVal(St, LV, T);
-  }
-  
-  inline NonLoc MakeConstantVal(uint64_t X, Expr* Ex) {
-    return NonLoc::MakeVal(getBasicVals(), X, Ex->getType());
-  }
-  
-  /// Assume - Create new state by assuming that a given expression
-  ///  is true or false.
-  const GRState* Assume(const GRState* St, SVal Cond, bool Assumption,
-                           bool& isFeasible) {
-    return StateMgr.Assume(St, Cond, Assumption, isFeasible);
-  }
-  
-  const GRState* Assume(const GRState* St, Loc Cond, bool Assumption,
-                           bool& isFeasible) {
-    return StateMgr.Assume(St, Cond, Assumption, isFeasible);
-  }
-
-  const GRState* AssumeInBound(const GRState* St, SVal Idx, SVal UpperBound,
-                               bool Assumption, bool& isFeasible) {
-    return StateMgr.AssumeInBound(St, Idx, UpperBound, Assumption, isFeasible);
-  }
-
 public:
   NodeTy* MakeNode(NodeSet& Dst, Stmt* S, NodeTy* Pred, const GRState* St,
                    ProgramPoint::Kind K = ProgramPoint::PostStmtKind,
@@ -661,40 +607,32 @@ protected:
       return X;
     
     if (isa<Loc>(X))
-      return getTF().EvalCast(*this, cast<Loc>(X), CastT);
+      return SVator->EvalCast(cast<Loc>(X), CastT);
     else
-      return getTF().EvalCast(*this, cast<NonLoc>(X), CastT);
+      return SVator->EvalCast(cast<NonLoc>(X), CastT);
   }
   
-  SVal EvalMinus(UnaryOperator* U, SVal X) {
-    return X.isValid() ? getTF().EvalMinus(*this, U, cast<NonLoc>(X)) : X;
+  SVal EvalMinus(SVal X) {
+    return X.isValid() ? SVator->EvalMinus(cast<NonLoc>(X)) : X;
   }
   
   SVal EvalComplement(SVal X) {
-    return X.isValid() ? getTF().EvalComplement(*this, cast<NonLoc>(X)) : X;
+    return X.isValid() ? SVator->EvalComplement(cast<NonLoc>(X)) : X;
   }
   
 public:
   
-  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, NonLoc R, QualType T) {
-    return R.isValid() ? getTF().DetermEvalBinOpNN(*this, Op, L, R, T)
-                       : R;
+  SVal EvalBinOp(BinaryOperator::Opcode op, NonLoc L, NonLoc R, QualType T) {
+    return SVator->EvalBinOpNN(op, L, R, T);
   }
 
-  SVal EvalBinOp(BinaryOperator::Opcode Op, NonLoc L, SVal R, QualType T) {
-    return R.isValid() ? getTF().DetermEvalBinOpNN(*this, Op, L,
-                                                   cast<NonLoc>(R), T) : R;
+  SVal EvalBinOp(BinaryOperator::Opcode op, NonLoc L, SVal R, QualType T) {
+    return R.isValid() ? SVator->EvalBinOpNN(op, L, cast<NonLoc>(R), T) : R;
   }
   
-  void EvalBinOp(ExplodedNodeSet<GRState>& Dst, Expr* Ex,
-                 BinaryOperator::Opcode Op, NonLoc L, NonLoc R,
-                 ExplodedNode<GRState>* Pred, QualType T);
-  
-  void EvalBinOp(GRStateSet& OStates, const GRState* St, Expr* Ex,
-                 BinaryOperator::Opcode Op, NonLoc L, NonLoc R, QualType T);  
-  
-  SVal EvalBinOp(BinaryOperator::Opcode Op, SVal L, SVal R, QualType T);
-  
+  SVal EvalBinOp(const GRState *state, BinaryOperator::Opcode op,
+                 SVal lhs, SVal rhs, QualType T);
+
 protected:
   
   void EvalCall(NodeSet& Dst, CallExpr* CE, SVal L, NodeTy* Pred);

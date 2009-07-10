@@ -52,22 +52,16 @@ td {
   </ul>
 </li>
 <li><a href="#cxx">C++ Language Features</a>
-  <ul>
-  <li>...</li>
-  </ul>
 </li>
 <li><a href="#objcxx">Objective C++ Language Features</a>
-  <ul>
-  <li>...</li>
-  </ul>
 </li>
 <li><a href="#target_features">Target-Specific Features and Limitations</a>
   <ul>
   <li><a href="#target_arch">CPU Architectures Features and Limitations</a>
     <ul>
     <li><a href="#target_arch_x86">X86</a></li>
-    <li>PPC</li>
-    <li>ARM</li>
+    <li><a href="#target_arch_arm">ARM</a></li>
+    <li><a href="#target_arch_other">Other platforms</a></li>
     </ul>
   </li>
   <li><a href="#target_os">Operating System Features and Limitations</a>
@@ -431,53 +425,90 @@ headers vary between compilers, precompiled headers have been shown to be a
 highly effective at speeding up program compilation on systems with very large
 system headers (e.g., Mac OS/X).</p>
 
-<p>Clang supports an implementation of precompiled headers known as
-<em>pre-tokenized headers</em> (PTH). Clang's pre-tokenized headers support most
-of same interfaces as GCC's pre-compiled headers (as well as others) but are
-completely different in their implementation.  If you are interested in how
-PTH is implemented, please see the <a href="PTHInternals.html">PTH Internals
- document</a>.</p>
+<h4>Generating a PCH File</h4>
 
-<h4>Generating a PTH File</h4>
-
-<p>To generate a PTH file using Clang, one invokes Clang with
+<p>To generate a PCH file using Clang, one invokes Clang with
 the <b><tt>-x <i>&lt;language&gt;</i>-header</tt></b> option. This mirrors the
 interface in GCC for generating PCH files:</p>
 
 <pre>
   $ gcc -x c-header test.h -o test.h.gch
-  $ clang -x c-header test.h -o test.h.pth
+  $ clang -x c-header test.h -o test.h.pch
 </pre>
 
-<h4>Using a PTH File</h4>
+<h4>Using a PCH File</h4>
 
-<p>A PTH file can then be used as a prefix header when a
+<p>A PCH file can then be used as a prefix header when a
 <b><tt>-include</tt></b> option is passed to <tt>clang</tt>:</p>
 
 <pre>
   $ clang -include test.h test.c -o test
 </pre>
 
-<p>The <tt>clang</tt> driver will first check if a PTH file for <tt>test.h</tt>
+<p>The <tt>clang</tt> driver will first check if a PCH file for <tt>test.h</tt>
 is available; if so, the contents of <tt>test.h</tt> (and the files it includes)
-will be processed from the PTH file. Otherwise, Clang falls back to
+will be processed from the PCH file. Otherwise, Clang falls back to
 directly processing the content of <tt>test.h</tt>. This mirrors the behavior of
 GCC.</p>
 
-<p><b>NOTE:</b> Clang does <em>not</em> automatically use PTH files
+<p><b>NOTE:</b> Clang does <em>not</em> automatically use PCH files
 for headers that are directly included within a source file. For example:</p>
 
 <pre>
-  $ clang -x c-header test.h -o test.h.pth
+  $ clang -x c-header test.h -o test.h.pch
   $ cat test.c
   #include "test.h"
   $ clang test.c -o test
 </pre>
 
-<p>In this example, <tt>clang</tt> will not automatically use the PTH file for
+<p>In this example, <tt>clang</tt> will not automatically use the PCH file for
 <tt>test.h</tt> since <tt>test.h</tt> was included directly in the source file
 and not specified on the command line using <tt>-include</tt>.</p>
 
+<h4>Relocatable PCH Files</h4>
+<p>It is sometimes necessary to build a precompiled header from headers that
+are not yet in their final, installed locations. For example, one might build a
+precompiled header within the build tree that is then meant to be installed
+alongside the headers. Clang permits the creation of "relocatable" precompiled
+headers, which are built with a given path (into the build directory) and can 
+later be used from an installed location.</p>
+
+<p>To build a relocatable precompiled header, place your headers into a
+subdirectory whose structure mimics the installed location. For example, if you
+want to build a precompiled header for the header <code>mylib.h</code> that
+will be installed into <code>/usr/include</code>, create a subdirectory 
+<code>build/usr/include</code> and place the header <code>mylib.h</code> into
+that subdirectory. If <code>mylib.h</code> depends on other headers, then 
+they can be stored within <code>build/usr/include</code> in a way that mimics
+the installed location.</p>
+
+<p>Building a relocatable precompiled header requires two additional arguments.
+First, pass the <code>--relocatable-pch</code> flag to indicate that the
+resulting PCH file should be relocatable. Second, pass 
+<code>-isysroot /path/to/build</code>, which makes all includes for your
+library relative to the build directory. For example:</p>
+
+<pre>
+  # clang -x c-header --relocatable-pch -isysroot /path/to/build /path/to/build/mylib.h mylib.h.pch
+</pre>
+
+<p>When loading the relocatable PCH file, the various headers used in the PCH
+file are found from the system header root. For example, <code>mylib.h</code>
+can be found in <code>/usr/include/mylib.h</code>. If the headers are installed
+in some other system root, the <code>-isysroot</code> option can be used provide
+a different system root from which the headers will be based. For example,
+<code>-isysroot /Developer/SDKs/MacOSX10.4u.sdk</code> will look for 
+<code>mylib.h</code> in 
+<code>/Developer/SDKs/MacOSX10.4u.sdk/usr/include/mylib.h</code>.</p>
+
+<p>Relocatable precompiled headers are intended to be used in a limited number
+of cases where the compilation environment is tightly controlled and the
+precompiled header cannot be generated after headers have been installed. 
+Relocatable precompiled headers also have some performance impact, because
+the difference in location between the header locations at PCH build time vs. 
+at the time of PCH use requires one of the PCH optimizations,
+<code>stat()</code> caching, to be disabled. However, this change is only 
+likely to affect PCH files that reference a large number of headers.</p>
 
 <!-- ======================================================================= -->
 <h2 id="c">C Language Features</h2>
@@ -504,12 +535,15 @@ for those modes.  If no -std option is specified, clang defaults to gnu99 mode.
 <p>Differences between all c* and gnu* modes:</p>
 <ul>
 <li>c* modes define "__STRICT_ANSI__".</li>
-<li>Target-specific defines not prefixed by underscores, like "linux", are defined
-in gnu* modes.</li>
+<li>Target-specific defines not prefixed by underscores, like "linux", are
+defined in gnu* modes.</li>
 <li>Trigraphs default to being off in gnu* modes; they can be enabled by the
 -trigraphs option.</li>
 <li>The parser recognizes "asm" and "typeof" as keywords in gnu* modes; the
 variants "__asm__" and "__typeof__" are recognized in all modes.</li>
+<li>The Apple "blocks" extension is recognized by default in gnu* modes
+on some platforms; it can be enabled in any mode with the "-fblocks"
+option.</li>
 <li>Some warnings are different.</li>
 </ul>
 
@@ -518,15 +552,15 @@ variants "__asm__" and "__typeof__" are recognized in all modes.</li>
 <li>The *99 modes default to implementing "inline" as specified in C99, while
 the *89 modes implement the GNU version.  This can be overridden for individual
 functions with the __gnu_inline__ attribute.</li>
-<li>Digraphs are enabled in the *99 modes.</li>
+<li>Digraphs are not recognized in c89 mode.</li>
 <li>The scope of names defined inside a "for", "if", "switch", "while", or "do"
 statement is different. (example: "if ((struct x {int x;}*)0) {}".)</li>
 <li>__STDC_VERSION__ is not defined in *89 modes.</li>
-<li>"inline" and "restrict" are not recognized as keywords in c89 mode.</li>
+<li>"inline" is not recognized as a keyword in c89 mode.</li>
+<li>"restrict" is not recognized as a keyword in *89 modes.</li>
 <li>Commas are allowed in integer constant expressions in *99 modes.</li>
 <li>Arrays which are not lvalues are not implicitly promoted to pointers in
 *89 modes.</li>
-<li>Constructs like "&*X" are always allowed in *99 modes.</li>
 <li>Some warnings are different.</li>
 </ul>
 
@@ -552,24 +586,19 @@ a relatively important feature, so it is likely to be implemented relatively
 soon.</li>
 
 <li>clang does not support #pragma weak
-(<a href="http://llvm.org/bugs/show_bug.cgi?id=2461">bug 3679</a>). Due to
+(<a href="http://llvm.org/bugs/show_bug.cgi?id=3679">bug 3679</a>). Due to
 the uses described in the bug, this is likely to be implemented at some
 point, at least partially.</li>
 
 <li>clang does not support #pragma align
-(<a href="http://llvm.org/bugs/show_bug.cgi?id=2461">bug 3811</a>). This is a
+(<a href="http://llvm.org/bugs/show_bug.cgi?id=3811">bug 3811</a>). This is a
 relatively small feature, so it is likely to be implemented relatively
 soon.</li>
 
-<li>clang does not implement overloads for the __sync_* builtins
-(<a href="http://llvm.org/bugs/show_bug.cgi?id=2461">bug 3824</a>). The
-builtins only currently work with 32-bit types. This is a relatively
-small feature, so it is likely to be implemented relatively soon.</li>
-
-<li>clang does not support code generation for variables pinned to registers
-(<a href="http://llvm.org/bugs/show_bug.cgi?id=3933">bug 3933</a>).  This
-is a relatively small feature, so it is likely to be implemented relatively
-soon.</li>
+<li>clang does not support code generation for local variables pinned to
+registers (<a href="http://llvm.org/bugs/show_bug.cgi?id=3933">bug 3933</a>).
+This is a relatively small feature, so it is likely to be implemented
+relatively soon.</li>
 
 <li>clang does not support decimal floating point types (_Decimal32 and
 friends) or fixed-point types (_Fract and friends); nobody has expressed
@@ -579,9 +608,24 @@ implemented.</li>
 <li>clang does not support nested functions; this is a complex feature which
 is infrequently used, so it is unlikely to be implemented anytime soon.</li>
 
-<li>clang does not support __builtin_apply and friends; this extension requires
-complex code generator support that does not currently exist in LLVM, and there
-is very little demand, so it is unlikely to be implemented anytime soon.</li>
+<li>clang does not support global register variables, this is unlikely
+to be implemented soon because it requires additional LLVM backend support.
+</li>
+
+<li>clang does not support static initialization of flexible array
+members. This appears to be a rarely used extension, but could be
+implemented pending user demand.</li>
+
+<li>clang does not support __builtin_va_arg_pack/__builtin_va_arg_pack_len. 
+This is used rarely, but in some potentially interesting places, like the
+glibc headers, so it may be implemented pending user demand.  Note that
+because clang pretends to be like GCC 4.2, and this extension was introduced
+in 4.3, the glibc headers will not try to use this extension with clang at
+the moment.</li>
+
+<li>clang does not support the gcc extension for forward-declaring function
+parameters; this has not showed up in any real-world code yet, though, so it
+might never be implemented.</li>
 
 </ul>
 
@@ -597,10 +641,32 @@ bug-reporting guidelines somewhere?).</p>
 <h3 id="c_unsupp_gcc">Intentionally unsupported GCC extensions</h3>
 <!-- = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = -->
 
-<p>clang does not support the gcc extension that allows variable-length arrays
+<ul>
+
+<li>clang does not support the gcc extension that allows variable-length arrays
 in structures.  This is for a few of reasons: one, it is tricky
 to implement, two, the extension is completely undocumented, and three, the
-extension appears to be very rarely used.</p>
+extension appears to be rarely used.</li>
+
+<li>clang does not support duplicate definitions of a function where one is
+inline. This complicates clients of the AST which normally can expect there is
+at most one definition for each function. Source code using this feature should
+be changed to define the inline and out-of-line definitions in separate
+translation units.</li>
+
+<li>clang does not have an equivalent to gcc's "fold"; this means that
+clang doesn't accept some constructs gcc might accept in contexts where a
+constant expression is required, like "x-x" where x is a variable, or calls
+to C library functions like strlen.</li>
+
+<li>clang does not support multiple alternative constraints in inline asm; this
+is an extremely obscure feature which would be complicated to implement
+correctly.</li>
+
+<li>clang does not support __builtin_apply and friends; this extension is
+extremely obscure and difficult to implement reliably.</li>
+
+</ul>
 
 <!-- = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = -->
 <h3 id="c_ms">Microsoft extensions</h3>
@@ -608,9 +674,18 @@ extension appears to be very rarely used.</p>
 
 <p>clang has some experimental support for extensions from
 Microsoft Visual C++; to enable it, use the -fms-extensions command-line
-option.  Eventually, this will be the default for Windows targets.
-These extensions are not anywhere near complete, so please do not
-file bugs; patches are welcome, though.</p>
+option.  This is the default for Windows targets.  Note that the
+support is incomplete; enabling Microsoft extensions will silently drop
+certain constructs (including __declspec and Microsoft-style asm statements).
+</p>
+
+<li>clang does not support the Microsoft extension where anonymous
+record members can be declared using user defined typedefs.</li>
+
+<li>clang supports the Microsoft "#pragma pack" feature for
+controlling record layout. GCC also contains support for this feature,
+however where MSVC and GCC are incompatible clang follows the MSVC
+definition.</li>
 
 <!-- ======================================================================= -->
 <h2 id="objc">Objective-C Language Features</h2>
@@ -658,7 +733,37 @@ more information.</p>
 <!-- ======================== -->
 <h4 id="target_arch_x86">X86</h4>
 <!-- ======================== -->
+<p>The support for X86 (both 32-bit and 64-bit) is considered stable
+on Darwin (Mac OS/X), Linux, FreeBSD, and Dragonfly BSD: it has been tested to
+correctly compile large C and Objective-C codebases. (FIXME: Anything specific
+we want to say here? Possibly mention some LLVM x86 limitations?)
 
+<!-- ======================== -->
+<h4 id="target_arch_arm">ARM</h4>
+<!-- ======================== -->
+ARM support is mostly feature-complete, but still experimental; it hasn't
+undergone significant testing.
+
+<!-- ======================== -->
+<h4 id="target_arch_other">Other platforms</h4>
+<!-- ======================== -->
+clang currently contains some support for PPC and Sparc; however, significant
+pieces of code generation are still missing, and they haven't undergone
+significant testing.
+
+<p>clang contains some support for the embedded PIC16 processor
+(FIXME: I haven't been keeping track of this; what should this say?).
+
+<p>clang contains limited support for the MSP430 embedded processor, but both
+the clang support and the LLVM backend support are highly experimental.
+
+<p>Other platforms are completely unsupported at the moment.  Adding the
+minimal support needed for parsing and semantic analysis on a new platform
+is quite easy; see lib/Basic/Targets.cpp in the clang source tree. This level
+of support is also sufficient for conversion to LLVM IR for simple programs.
+Proper support for conversion to LLVM IR requires adding code to
+lib/CodeGen/CGCall.cpp at the moment; this is likely to change soon, though.
+Generating assembly requires a suitable LLVM backend. 
 
 <!-- = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = -->
 <h3 id="target_os">Operating System Features and Limitations</h3>

@@ -49,8 +49,10 @@ struct X86AddressMode {
   unsigned IndexReg;
   unsigned Disp;
   GlobalValue *GV;
+  unsigned GVOpFlags;
 
-  X86AddressMode() : BaseType(RegBase), Scale(1), IndexReg(0), Disp(0), GV(0) {
+  X86AddressMode()
+    : BaseType(RegBase), Scale(1), IndexReg(0), Disp(0), GV(0), GVOpFlags(0) {
     Base.Reg = 0;
   }
 };
@@ -83,13 +85,13 @@ inline const MachineInstrBuilder &addOffset(const MachineInstrBuilder &MIB,
 inline const MachineInstrBuilder &addRegOffset(const MachineInstrBuilder &MIB,
                                                unsigned Reg, bool isKill,
                                                int Offset) {
-  return addOffset(MIB.addReg(Reg, false, false, isKill), Offset);
+  return addOffset(MIB.addReg(Reg, getKillRegState(isKill)), Offset);
 }
 
 inline const MachineInstrBuilder &addLeaRegOffset(const MachineInstrBuilder &MIB,
                                                   unsigned Reg, bool isKill,
                                                   int Offset) {
-  return addLeaOffset(MIB.addReg(Reg, false, false, isKill), Offset);
+  return addLeaOffset(MIB.addReg(Reg, getKillRegState(isKill)), Offset);
 }
 
 /// addRegReg - This function is used to add a memory reference of the form:
@@ -97,8 +99,8 @@ inline const MachineInstrBuilder &addLeaRegOffset(const MachineInstrBuilder &MIB
 inline const MachineInstrBuilder &addRegReg(const MachineInstrBuilder &MIB,
                                             unsigned Reg1, bool isKill1,
                                             unsigned Reg2, bool isKill2) {
-  return MIB.addReg(Reg1, false, false, isKill1).addImm(1)
-    .addReg(Reg2, false, false, isKill2).addImm(0);
+  return MIB.addReg(Reg1, getKillRegState(isKill1)).addImm(1)
+    .addReg(Reg2, getKillRegState(isKill2)).addImm(0);
 }
 
 inline const MachineInstrBuilder &addLeaAddress(const MachineInstrBuilder &MIB,
@@ -113,7 +115,7 @@ inline const MachineInstrBuilder &addLeaAddress(const MachineInstrBuilder &MIB,
     assert (0);
   MIB.addImm(AM.Scale).addReg(AM.IndexReg);
   if (AM.GV)
-    return MIB.addGlobalAddress(AM.GV, AM.Disp);
+    return MIB.addGlobalAddress(AM.GV, AM.Disp, AM.GVOpFlags);
   else
     return MIB.addImm(AM.Disp);
 }
@@ -157,10 +159,10 @@ addFrameReference(const MachineInstrBuilder &MIB, int FI, int Offset = 0) {
 ///
 inline const MachineInstrBuilder &
 addConstantPoolReference(const MachineInstrBuilder &MIB, unsigned CPI,
-                         unsigned GlobalBaseReg = 0) {
+                         unsigned GlobalBaseReg, unsigned char OpFlags) {
   //FIXME: factor this
   return MIB.addReg(GlobalBaseReg).addImm(1).addReg(0)
-    .addConstantPoolIndex(CPI).addReg(0);
+    .addConstantPoolIndex(CPI, 0, OpFlags).addReg(0);
 }
 
 } // End llvm namespace

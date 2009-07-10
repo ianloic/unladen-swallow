@@ -417,6 +417,9 @@ static inline PostStmt GetPostLoc(Stmt* S, ProgramPoint::Kind K,
     case ProgramPoint::PostStoreKind:
       return PostStore(S, tag);
       
+    case ProgramPoint::PostLValueKind:
+      return PostLValue(S, tag);
+      
     case ProgramPoint::PostPurgeDeadSymbolsKind:
       return PostPurgeDeadSymbols(S, tag);
   }
@@ -552,19 +555,19 @@ GREndPathNodeBuilderImpl::~GREndPathNodeBuilderImpl() {
   if (!HasGeneratedNode) generateNodeImpl(Pred->State);
 }
 
-ExplodedNodeImpl* GREndPathNodeBuilderImpl::generateNodeImpl(const void* State){
-  HasGeneratedNode = true;
-    
+ExplodedNodeImpl*
+GREndPathNodeBuilderImpl::generateNodeImpl(const void* State,
+                                           const void *tag,
+                                           ExplodedNodeImpl* P) {
+  HasGeneratedNode = true;    
   bool IsNew;
   
   ExplodedNodeImpl* Node =
-    Eng.G->getNodeImpl(BlockEntrance(&B), State, &IsNew);
+    Eng.G->getNodeImpl(BlockEntrance(&B, tag), State, &IsNew);
   
-
-  Node->addPredecessor(Pred);
+  Node->addPredecessor(P ? P : Pred);
   
   if (IsNew) {
-    Node->markAsSink();
     Eng.G->addEndOfPath(Node);
     return Node;
   }

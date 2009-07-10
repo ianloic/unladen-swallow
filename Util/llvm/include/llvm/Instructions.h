@@ -51,7 +51,7 @@ public:
   ///
   bool isArrayAllocation() const;
 
-  /// getArraySize - Get the number of element allocated, for a simple
+  /// getArraySize - Get the number of elements allocated. For a simple
   /// allocation of a single element, this will return a constant 1 value.
   ///
   const Value *getArraySize() const { return getOperand(0); }
@@ -862,118 +862,6 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
-//                               VICmpInst Class
-//===----------------------------------------------------------------------===//
-
-/// This instruction compares its operands according to the predicate given
-/// to the constructor. It only operates on vectors of integers.
-/// The operands must be identical types.
-/// @brief Represents a vector integer comparison operator.
-class VICmpInst: public CmpInst {
-public:
-  /// @brief Constructor with insert-before-instruction semantics.
-  VICmpInst(
-    Predicate pred,  ///< The predicate to use for the comparison
-    Value *LHS,      ///< The left-hand-side of the expression
-    Value *RHS,      ///< The right-hand-side of the expression
-    const std::string &NameStr = "",  ///< Name of the instruction
-    Instruction *InsertBefore = 0  ///< Where to insert
-  ) : CmpInst(LHS->getType(), Instruction::VICmp, pred, LHS, RHS, NameStr,
-              InsertBefore) {
-    assert(pred >= CmpInst::FIRST_ICMP_PREDICATE &&
-           pred <= CmpInst::LAST_ICMP_PREDICATE &&
-           "Invalid VICmp predicate value");
-    assert(getOperand(0)->getType() == getOperand(1)->getType() &&
-          "Both operands to VICmp instruction are not of the same type!");
-  }
-
-  /// @brief Constructor with insert-at-block-end semantics.
-  VICmpInst(
-    Predicate pred, ///< The predicate to use for the comparison
-    Value *LHS,     ///< The left-hand-side of the expression
-    Value *RHS,     ///< The right-hand-side of the expression
-    const std::string &NameStr,  ///< Name of the instruction
-    BasicBlock *InsertAtEnd   ///< Block to insert into.
-  ) : CmpInst(LHS->getType(), Instruction::VICmp, pred, LHS, RHS, NameStr,
-              InsertAtEnd) {
-    assert(pred >= CmpInst::FIRST_ICMP_PREDICATE &&
-           pred <= CmpInst::LAST_ICMP_PREDICATE &&
-           "Invalid VICmp predicate value");
-    assert(getOperand(0)->getType() == getOperand(1)->getType() &&
-          "Both operands to VICmp instruction are not of the same type!");
-  }
-
-  /// @brief Return the predicate for this instruction.
-  Predicate getPredicate() const { return Predicate(SubclassData); }
-
-  virtual VICmpInst *clone() const;
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const VICmpInst *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::VICmp;
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-};
-
-//===----------------------------------------------------------------------===//
-//                               VFCmpInst Class
-//===----------------------------------------------------------------------===//
-
-/// This instruction compares its operands according to the predicate given
-/// to the constructor. It only operates on vectors of floating point values.
-/// The operands must be identical types.
-/// @brief Represents a vector floating point comparison operator.
-class VFCmpInst: public CmpInst {
-public:
-  /// @brief Constructor with insert-before-instruction semantics.
-  VFCmpInst(
-    Predicate pred,  ///< The predicate to use for the comparison
-    Value *LHS,      ///< The left-hand-side of the expression
-    Value *RHS,      ///< The right-hand-side of the expression
-    const std::string &NameStr = "",  ///< Name of the instruction
-    Instruction *InsertBefore = 0  ///< Where to insert
-  ) : CmpInst(VectorType::getInteger(cast<VectorType>(LHS->getType())),
-              Instruction::VFCmp, pred, LHS, RHS, NameStr, InsertBefore) {
-    assert(pred <= CmpInst::LAST_FCMP_PREDICATE &&
-           "Invalid VFCmp predicate value");
-    assert(getOperand(0)->getType() == getOperand(1)->getType() &&
-           "Both operands to VFCmp instruction are not of the same type!");
-  }
-
-  /// @brief Constructor with insert-at-block-end semantics.
-  VFCmpInst(
-    Predicate pred, ///< The predicate to use for the comparison
-    Value *LHS,     ///< The left-hand-side of the expression
-    Value *RHS,     ///< The right-hand-side of the expression
-    const std::string &NameStr,  ///< Name of the instruction
-    BasicBlock *InsertAtEnd   ///< Block to insert into.
-  ) : CmpInst(VectorType::getInteger(cast<VectorType>(LHS->getType())),
-              Instruction::VFCmp, pred, LHS, RHS, NameStr, InsertAtEnd) {
-    assert(pred <= CmpInst::LAST_FCMP_PREDICATE &&
-           "Invalid VFCmp predicate value");
-    assert(getOperand(0)->getType() == getOperand(1)->getType() &&
-           "Both operands to VFCmp instruction are not of the same type!");
-  }
-
-  /// @brief Return the predicate for this instruction.
-  Predicate getPredicate() const { return Predicate(SubclassData); }
-
-  virtual VFCmpInst *clone() const;
-
-  /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const VFCmpInst *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::VFCmp;
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-};
-
-//===----------------------------------------------------------------------===//
 //                                 CallInst Class
 //===----------------------------------------------------------------------===//
 /// CallInst - This class represents a function call, abstracting a target
@@ -1616,11 +1504,6 @@ public:
 
   virtual ExtractValueInst *clone() const;
 
-  // getType - Overload to return most specific pointer type...
-  const PointerType *getType() const {
-    return reinterpret_cast<const PointerType*>(Instruction::getType());
-  }
-
   /// getIndexedType - Returns the type of the element that would be extracted
   /// with an extractvalue instruction with the specified parameters.
   ///
@@ -1793,11 +1676,6 @@ public:
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-
-  // getType - Overload to return most specific pointer type...
-  const PointerType *getType() const {
-    return reinterpret_cast<const PointerType*>(Instruction::getType());
-  }
 
   typedef const unsigned* idx_iterator;
   inline idx_iterator idx_begin() const { return Indices.begin(); }

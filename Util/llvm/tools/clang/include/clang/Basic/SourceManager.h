@@ -68,7 +68,12 @@ namespace SrcMgr {
     /// NumLines - The number of lines in this ContentCache.  This is only valid
     /// if SourceLineCache is non-null.
     unsigned NumLines;
-    
+
+    /// FirstFID - First FileID that was created for this ContentCache.
+    /// Represents the first source inclusion of the file associated with this
+    /// ContentCache.
+    mutable FileID FirstFID;
+
     /// getBuffer - Returns the memory buffer for the associated content.
     const llvm::MemoryBuffer *getBuffer() const;
     
@@ -320,6 +325,11 @@ class SourceManager {
 
   // Statistics for -print-stats.
   mutable unsigned NumLinearScans, NumBinaryProbes;
+  
+  // Cache results for the isBeforeInTranslationUnit method.
+  mutable FileID LastLFIDForBeforeTUCheck;
+  mutable FileID LastRFIDForBeforeTUCheck;
+  mutable bool   LastResForBeforeTUCheck;
   
   // SourceManager doesn't support copy construction.
   explicit SourceManager(const SourceManager&);
@@ -593,6 +603,12 @@ public:
     return getFileCharacteristic(Loc) != SrcMgr::C_User;
   }
   
+  /// isInExternCSystemHeader - Returns if a SourceLocation is in an "extern C"
+  /// system header.
+  bool isInExternCSystemHeader(SourceLocation Loc) const {
+    return getFileCharacteristic(Loc) == SrcMgr::C_ExternCSystem;
+  }
+  
   //===--------------------------------------------------------------------===//
   // Line Table Manipulation Routines
   //===--------------------------------------------------------------------===//
@@ -618,7 +634,19 @@ public:
   //===--------------------------------------------------------------------===//
   // Other miscellaneous methods.
   //===--------------------------------------------------------------------===//
+
+  /// \brief Get the source location for the given file:line:col triplet.
+  ///
+  /// If the source file is included multiple times, the source location will
+  /// be based upon the first inclusion.
+  SourceLocation getLocation(const FileEntry *SourceFile,
+                             unsigned Line, unsigned Col) const;
   
+  /// \brief Determines the order of 2 source locations in the translation unit.
+  ///
+  /// \returns true if LHS source location comes before RHS, false otherwise.
+  bool isBeforeInTranslationUnit(SourceLocation LHS, SourceLocation RHS) const;
+
   // Iterators over FileInfos.
   typedef llvm::DenseMap<const FileEntry*, SrcMgr::ContentCache*>
       ::const_iterator fileinfo_iterator;

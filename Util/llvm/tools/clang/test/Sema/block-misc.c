@@ -10,7 +10,7 @@ int test1() {
   if (PFR == II)	// OK
     donotwarn();
 
-  if (PFR == IFP) // expected-error {{comparison of distinct block types}}
+  if (PFR == IFP) // OK
     donotwarn();
 
   if (PFR == (int (^) (int))IFP) // OK
@@ -25,7 +25,7 @@ int test1() {
   if (!PFR)	// OK
     donotwarn();
 
-  return PFR != IFP;	// expected-error {{comparison of distinct block types}}
+  return PFR != IFP;	// OK
 }
 
 int test2(double (^S)()) {
@@ -155,4 +155,33 @@ void test16(__block int i) { // expected-error {{__block attribute not allowed, 
   static __block char * pch; // expected-error {{__block attribute not allowed, only allowed on local variables}}
   __block int a[size]; // expected-error {{__block attribute not allowed on declaration with a variably modified type}}
   __block int (*ap)[size]; // expected-error {{__block attribute not allowed on declaration with a variably modified type}}
+}
+
+void test17() {
+  void (^bp)(int);
+  void (*rp)(int);
+  void (^bp1)();
+  void *vp = bp;
+
+  f(1 ? bp : vp);
+  f(1 ? vp : bp);
+  f(1 ? bp : bp1);
+  (void)(bp > rp); // expected-error {{invalid operands}}
+  (void)(bp > 0); // expected-error {{invalid operands}}
+  (void)(bp > bp); // expected-error {{invalid operands}}
+  (void)(bp > vp); // expected-error {{invalid operands}}
+  f(1 ? bp : rp); // expected-error {{incompatible operand types ('void (^)(int)' and 'void (*)(int)')}}
+  (void)(bp == 1); // expected-error {{invalid operands to binary expression}}
+  (void)(bp == 0);
+  (void)(1 == bp); // expected-error {{invalid operands to binary expression}}
+  (void)(0 == bp);
+  (void)(bp < 1); // expected-error {{invalid operands to binary expression}}
+  (void)(bp < 0); // expected-error {{invalid operands to binary expression}}
+  (void)(1 < bp); // expected-error {{invalid operands to binary expression}}
+  (void)(0 < bp); // expected-error {{invalid operands to binary expression}}
+}
+
+void test18() {
+  void (^const  blockA)(void) = ^{ };
+  blockA = ^{ }; // expected-error {{read-only variable is not assignable}}
 }

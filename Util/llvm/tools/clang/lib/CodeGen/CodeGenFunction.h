@@ -37,6 +37,7 @@ namespace llvm {
 
 namespace clang {
   class ASTContext;
+  class CXXDestructorDecl;
   class Decl;
   class EnumConstantDecl;
   class FunctionDecl;
@@ -159,6 +160,20 @@ public:
   /// this behavior for branches?
   void EmitBranchThroughCleanup(llvm::BasicBlock *Dest);
 
+  /// PushConditionalTempDestruction - Should be called before a conditional 
+  /// part of an expression is emitted. For example, before the RHS of the
+  /// expression below is emitted:
+  /// 
+  /// b && f(T());
+  ///
+  /// This is used to make sure that any temporaryes created in the conditional
+  /// branch are only destroyed if the branch is taken.
+  void PushConditionalTempDestruction();
+  
+  /// PopConditionalTempDestruction - Should be called after a conditional 
+  /// part of an expression has been emitted.
+  void PopConditionalTempDestruction();
+  
 private:
   CGDebugInfo* DebugInfo;
 
@@ -237,6 +252,36 @@ private:
   /// CXXThisDecl - When parsing an C++ function, this will hold the implicit
   /// 'this' declaration.
   ImplicitParamDecl *CXXThisDecl;
+  
+  /// CXXLiveTemporaryInfo - Holds information about a live C++ temporary.
+  struct CXXLiveTemporaryInfo {
+    /// Temporary - The live temporary.
+    const CXXTemporary *Temporary;
+    
+    /// ThisPtr - The pointer to the temporary.
+    llvm::Value *ThisPtr;
+    
+    /// DtorBlock - The destructor block.
+    llvm::BasicBlock *DtorBlock;
+    
+    /// CondPtr - If this is a conditional temporary, this is the pointer to
+    /// the condition variable that states whether the destructor should be
+    /// called or not.
+    llvm::Value *CondPtr;
+    
+    CXXLiveTemporaryInfo(const CXXTemporary *temporary,
+                         llvm::Value *thisptr, llvm::BasicBlock *dtorblock,
+                         llvm::Value *condptr)
+      : Temporary(temporary), ThisPtr(thisptr), DtorBlock(dtorblock), 
+      CondPtr(condptr) { }
+  };
+  
+  llvm::SmallVector<CXXLiveTemporaryInfo, 4> LiveTemporaries;
+
+  /// ConditionalTempDestructionStack - Contains the number of live temporaries 
+  /// when PushConditionalTempDestruction was called. This is used so that
+  /// we know how many temporaries were created by a certain expression.
+  llvm::SmallVector<size_t, 4> ConditionalTempDestructionStack;
   
 public:
   CodeGenFunction(CodeGenModule &cgm);
@@ -407,8 +452,10 @@ public:
   /// any type.  The result is returned as an RValue struct.  If this is an
   /// aggregate expression, the aggloc/agglocvolatile arguments indicate where
   /// the result should be returned.
+  ///
+  /// \param IgnoreResult - True if the resulting value isn't used.
   RValue EmitAnyExpr(const Expr *E, llvm::Value *AggLoc = 0,
-                     bool isAggLocVolatile = false);
+                     bool isAggLocVolatile = false, bool IgnoreResult = false);
 
   // EmitVAListRef - Emit a "reference" to a va_list; this is either the address
   // or the value of the expression, depending on how va_list is defined.
@@ -419,8 +466,12 @@ public:
   RValue EmitAnyExprToTemp(const Expr *E, llvm::Value *AggLoc = 0,
                            bool isAggLocVolatile = false);
 
+  /// EmitAggregateCopy - Emit an aggrate copy.
+  ///
+  /// \param isVolatile - True iff either the source or the destination is
+  /// volatile.
   void EmitAggregateCopy(llvm::Value *DestPtr, llvm::Value *SrcPtr,
-                         QualType EltTy);
+                         QualType EltTy, bool isVolatile=false);
 
   void EmitAggregateClear(llvm::Value *DestPtr, QualType Ty);
 
@@ -470,6 +521,14 @@ public:
                               CallExpr::const_arg_iterator ArgBeg,
                               CallExpr::const_arg_iterator ArgEnd);
 
+  void EmitCXXDestructorCall(const CXXDestructorDecl *D, CXXDtorType Type,
+                             llvm::Value *This);
+  
+  void PushCXXTemporary(const CXXTemporary *Temporary, llvm::Value *Ptr);
+  void PopCXXTemporary();
+  
+  llvm::Value *EmitCXXNewExpr(const CXXNewExpr *E);
+  
   //===--------------------------------------------------------------------===//
   //                            Declaration Emission
   //===--------------------------------------------------------------------===//
@@ -580,7 +639,7 @@ public:
   /// care to appropriately convert from the memory representation to
   /// the LLVM value representation.
   void EmitStoreOfScalar(llvm::Value *Value, llvm::Value *Addr,
-                         bool Volatile);
+                         bool Volatile, QualType Ty);
 
   /// EmitLoadOfLValue - Given an expression that represents a value lvalue,
   /// this method emits the address of the lvalue, then loads the result as an
@@ -643,7 +702,9 @@ public:
   LValue EmitBlockDeclRefLValue(const BlockDeclRefExpr *E);
 
   LValue EmitCXXConditionDeclLValue(const CXXConditionDeclExpr *E);
-
+  LValue EmitCXXConstructLValue(const CXXConstructExpr *E);
+  LValue EmitCXXBindTemporaryLValue(const CXXBindTemporaryExpr *E);
+  
   LValue EmitObjCMessageExprLValue(const ObjCMessageExpr *E);
   LValue EmitObjCIvarRefLValue(const ObjCIvarRefExpr *E);
   LValue EmitObjCPropertyRefLValue(const ObjCPropertyRefExpr *E);
@@ -666,15 +727,23 @@ public:
                   llvm::Value *Callee,
                   const CallArgList &Args,
                   const Decl *TargetDecl = 0);
-
+  
+  RValue EmitCall(llvm::Value *Callee, QualType FnType,
+                  CallExpr::const_arg_iterator ArgBeg,
+                  CallExpr::const_arg_iterator ArgEnd,
+                  const Decl *TargetDecl = 0);
   RValue EmitCallExpr(const CallExpr *E);
+  
+  RValue EmitCXXMemberCall(const CXXMethodDecl *MD,
+                           llvm::Value *Callee,
+                           llvm::Value *This,
+                           CallExpr::const_arg_iterator ArgBeg,
+                           CallExpr::const_arg_iterator ArgEnd);
   RValue EmitCXXMemberCallExpr(const CXXMemberCallExpr *E);
 
-  RValue EmitCallExpr(llvm::Value *Callee, QualType FnType,
-                      CallExpr::const_arg_iterator ArgBeg,
-                      CallExpr::const_arg_iterator ArgEnd,
-                      const Decl *TargetDecl = 0);
-
+  RValue EmitCXXOperatorMemberCallExpr(const CXXOperatorCallExpr *E,
+                                       const CXXMethodDecl *MD);
+  
   RValue EmitBuiltinExpr(const FunctionDecl *FD, 
                          unsigned BuiltinID, const CallExpr *E);
 
@@ -701,6 +770,10 @@ public:
   void EmitObjCSuperPropertySet(const Expr *E, const Selector &S, RValue Src);
 
 
+  /// EmitReferenceBindingToExpr - Emits a reference binding to the passed in
+  /// expression. Will emit a temporary variable if E is not an LValue.
+  RValue EmitReferenceBindingToExpr(const Expr* E, QualType DestType);
+  
   //===--------------------------------------------------------------------===//
   //                           Expression Emission
   //===--------------------------------------------------------------------===//
@@ -709,7 +782,7 @@ public:
 
   /// EmitScalarExpr - Emit the computation of the specified expression of LLVM
   /// scalar type, returning the result.
-  llvm::Value *EmitScalarExpr(const Expr *E);
+  llvm::Value *EmitScalarExpr(const Expr *E , bool IgnoreResultAssign=false);
 
   /// EmitScalarConversion - Emit a conversion from the specified type to the
   /// specified destination type, both of which are LLVM scalar types.
@@ -726,11 +799,20 @@ public:
   /// EmitAggExpr - Emit the computation of the specified expression of
   /// aggregate type.  The result is computed into DestPtr.  Note that if
   /// DestPtr is null, the value of the aggregate expression is not needed.
-  void EmitAggExpr(const Expr *E, llvm::Value *DestPtr, bool VolatileDest);
+  void EmitAggExpr(const Expr *E, llvm::Value *DestPtr, bool VolatileDest,
+                   bool IgnoreResult = false);
+
+  /// EmitGCMemmoveCollectable - Emit special API for structs with object
+  /// pointers.
+  void EmitGCMemmoveCollectable(llvm::Value *DestPtr, llvm::Value *SrcPtr,
+                                unsigned long);
 
   /// EmitComplexExpr - Emit the computation of the specified expression of
   /// complex type, returning the result.
-  ComplexPairTy EmitComplexExpr(const Expr *E);
+  ComplexPairTy EmitComplexExpr(const Expr *E, bool IgnoreReal = false,
+                                bool IgnoreImag = false,
+                                bool IgnoreRealAssign = false,
+                                bool IgnoreImagAssign = false);
 
   /// EmitComplexExprIntoAddr - Emit the computation of the specified expression
   /// of complex type, storing into the specified Value*.
@@ -757,6 +839,10 @@ public:
 
   void EmitCXXConstructExpr(llvm::Value *Dest, const CXXConstructExpr *E);
   
+  RValue EmitCXXExprWithTemporaries(const CXXExprWithTemporaries *E,
+                                    llvm::Value *AggLoc = 0, 
+                                    bool isAggLocVolatile = false);
+                                  
   //===--------------------------------------------------------------------===//
   //                             Internal Helpers
   //===--------------------------------------------------------------------===//

@@ -33,7 +33,7 @@ example, as a build tool for game resources.
 Because LLVMC employs TableGen_ as its configuration language, you
 need to be familiar with it to customize LLVMC.
 
-.. _TableGen: http://llvm.cs.uiuc.edu/docs/TableGenFundamentals.html
+.. _TableGen: http://llvm.org/docs/TableGenFundamentals.html
 
 
 Compiling with LLVMC
@@ -48,12 +48,12 @@ you shouldn't be able to notice them::
      $ ./a.out
      hello
 
-One nice feature of LLVMC is that one doesn't have to distinguish
-between different compilers for different languages (think ``g++`` and
-``gcc``) - the right toolchain is chosen automatically based on input
-language names (which are, in turn, determined from file
-extensions). If you want to force files ending with ".c" to compile as
-C++, use the ``-x`` option, just like you would do it with ``gcc``::
+One nice feature of LLVMC is that one doesn't have to distinguish between
+different compilers for different languages (think ``g++`` vs.  ``gcc``) - the
+right toolchain is chosen automatically based on input language names (which
+are, in turn, determined from file extensions). If you want to force files
+ending with ".c" to compile as C++, use the ``-x`` option, just like you would
+do it with ``gcc``::
 
       $ # hello.c is really a C++ file
       $ llvmc -x c++ hello.c
@@ -71,9 +71,8 @@ impossible for LLVMC to choose the right linker in that case::
     $ ./a.out
     hello
 
-By default, LLVMC uses ``llvm-gcc`` to compile the source code. It is
-also possible to choose the work-in-progress ``clang`` compiler with
-the ``-clang`` option.
+By default, LLVMC uses ``llvm-gcc`` to compile the source code. It is also
+possible to choose the ``clang`` compiler with the ``-clang`` option.
 
 
 Predefined options
@@ -92,11 +91,17 @@ configuration libraries:
 
 * ``-v`` - Enable verbose mode, i.e. print out all executed commands.
 
+* ``--save-temps`` - Write temporary files to the current directory and do not
+  delete them on exit. This option can also take an argument: the
+  ``--save-temps=obj`` switch will write files into the directory specified with
+  the ``-o`` option. The ``--save-temps=cwd`` and ``--save-temps`` switches are
+  both synonyms for the default behaviour.
+
 * ``--check-graph`` - Check the compilation for common errors like mismatched
   output/input language names, multiple default edges and cycles. Because of
-  plugins, these checks can't be performed at compile-time. Exit with code zero if
-  no errors were found, and return the number of found errors otherwise. Hidden
-  option, useful for debugging LLVMC plugins.
+  plugins, these checks can't be performed at compile-time. Exit with code zero
+  if no errors were found, and return the number of found errors
+  otherwise. Hidden option, useful for debugging LLVMC plugins.
 
 * ``--view-graph`` - Show a graphical representation of the compilation graph
   and exit. Requires that you have ``dot`` and ``gv`` programs installed. Hidden
@@ -104,15 +109,12 @@ configuration libraries:
 
 * ``--write-graph`` - Write a ``compilation-graph.dot`` file in the current
   directory with the compilation graph description in Graphviz format (identical
-  to the file used by the ``--view-graph`` option). The ``-o`` option can be used
-  to set the output file name. Hidden option, useful for debugging LLVMC plugins.
-
-* ``--save-temps`` - Write temporary files to the current directory
-  and do not delete them on exit. Hidden option, useful for debugging.
+  to the file used by the ``--view-graph`` option). The ``-o`` option can be
+  used to set the output file name. Hidden option, useful for debugging LLVMC
+  plugins.
 
 * ``--help``, ``--help-hidden``, ``--version`` - These options have
   their standard meaning.
-
 
 Compiling LLVMC plugins
 =======================
@@ -146,29 +148,55 @@ generic::
 
    $ mv Simple.td MyPlugin.td
 
-Note that the plugin source directory must be placed under
-``$LLVMC_DIR/plugins`` to make use of the existing build
-infrastructure. To build a version of the LLVMC executable called
-``mydriver`` with your plugin compiled in, use the following command::
-
-   $ cd $LLVMC_DIR
-   $ make BUILTIN_PLUGINS=MyPlugin DRIVER_NAME=mydriver
-
 To build your plugin as a dynamic library, just ``cd`` to its source
 directory and run ``make``. The resulting file will be called
-``LLVMC$(LLVMC_PLUGIN).$(DLL_EXTENSION)`` (in our case,
-``LLVMCMyPlugin.so``). This library can be then loaded in with the
+``plugin_llvmc_$(LLVMC_PLUGIN).$(DLL_EXTENSION)`` (in our case,
+``plugin_llvmc_MyPlugin.so``). This library can be then loaded in with the
 ``-load`` option. Example::
 
     $ cd $LLVMC_DIR/plugins/Simple
     $ make
-    $ llvmc -load $LLVM_DIR/Release/lib/LLVMCSimple.so
+    $ llvmc -load $LLVM_DIR/Release/lib/plugin_llvmc_Simple.so
+
+Compiling standalone LLVMC-based drivers
+========================================
+
+By default, the ``llvmc`` executable consists of a driver core plus several
+statically linked plugins (``Base`` and ``Clang`` at the moment). You can
+produce a standalone LLVMC-based driver executable by linking the core with your
+own plugins. The recommended way to do this is by starting with the provided
+``Skeleton`` example (``$LLVMC_DIR/example/Skeleton``)::
+
+    $ cd $LLVMC_DIR/example/
+    $ cp -r Skeleton mydriver
+    $ cd mydriver
+    $ vim Makefile
+    [...]
+    $ make
+
+If you're compiling LLVM with different source and object directories, then you
+must perform the following additional steps before running ``make``::
+
+    # LLVMC_SRC_DIR = $LLVM_SRC_DIR/tools/llvmc/
+    # LLVMC_OBJ_DIR = $LLVM_OBJ_DIR/tools/llvmc/
+    $ cp $LLVMC_SRC_DIR/example/mydriver/Makefile \
+      $LLVMC_OBJ_DIR/example/mydriver/
+    $ cd $LLVMC_OBJ_DIR/example/mydriver
+    $ make
+
+Another way to do the same thing is by using the following command::
+
+    $ cd $LLVMC_DIR
+    $ make LLVMC_BUILTIN_PLUGINS=MyPlugin LLVMC_BASED_DRIVER_NAME=mydriver
+
+This works with both srcdir == objdir and srcdir != objdir, but assumes that the
+plugin source directory was placed under ``$LLVMC_DIR/plugins``.
 
 Sometimes, you will want a 'bare-bones' version of LLVMC that has no
 built-in plugins. It can be compiled with the following command::
 
     $ cd $LLVMC_DIR
-    $ make BUILTIN_PLUGINS=""
+    $ make LLVMC_BUILTIN_PLUGINS=""
 
 
 Customizing LLVMC: the compilation graph
@@ -319,6 +347,12 @@ separate option groups syntactically.
      3))``. Only list options can have this attribute; you can, however, use
      the ``one_or_more`` and ``zero_or_one`` properties.
 
+   - ``init`` - this option has a default value, either a string (if it is a
+     parameter), or a boolean (if it is a switch; boolean constants are called
+     ``true`` and ``false``). List options can't have this attribute. Usage
+     examples: ``(switch_option "foo", (init true))``; ``(prefix_option "bar",
+     (init "baz"))``.
+
    - ``extern`` - this option is defined in some other plugin, see below.
 
 External options
@@ -334,7 +368,8 @@ for. Example::
      (switch_option "E", (extern))
      ...
 
-See also the section on plugin `priorities`__.
+If an external option has additional attributes besides 'extern', they are
+ignored. See also the section on plugin `priorities`__.
 
 __ priorities_
 
@@ -529,7 +564,7 @@ The list of all possible actions follows.
 
    - ``forward_as`` - Change the name of an option, but forward the
      argument unchanged.
-     Example: ``(forward_as "O0" "--disable-optimization")``.
+     Example: ``(forward_as "O0", "--disable-optimization")``.
 
    - ``output_suffix`` - modify the output suffix of this
      tool.
@@ -648,6 +683,28 @@ errors as its status code.
 
 .. _Graphviz: http://www.graphviz.org/
 .. _Ghostview: http://pages.cs.wisc.edu/~ghost/
+
+Conditioning on the executable name
+-----------------------------------
+
+For now, the executable name (the value passed to the driver in ``argv[0]``) is
+accessible only in the C++ code (i.e. hooks). Use the following code::
+
+    namespace llvmc {
+    extern const char* ProgramName;
+    }
+
+    std::string MyHook() {
+    //...
+    if (strcmp(ProgramName, "mydriver") == 0) {
+       //...
+
+    }
+
+In general, you're encouraged not to make the behaviour dependent on the
+executable file name, and use command-line switches instead. See for example how
+the ``Base`` plugin behaves when it needs to choose the correct linker options
+(think ``g++`` vs. ``gcc``).
 
 .. raw:: html
 

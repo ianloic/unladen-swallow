@@ -1,7 +1,9 @@
 add_llvm_library(LLVMSystem
   Alarm.cpp
+  Atomic.cpp
   Disassembler.cpp
   DynamicLibrary.cpp
+  Errno.cpp
   Host.cpp
   IncludeFile.cpp
   Memory.cpp
@@ -9,8 +11,11 @@ add_llvm_library(LLVMSystem
   Path.cpp
   Process.cpp
   Program.cpp
+  RWMutex.cpp
   Signals.cpp
+  Threading.cpp
   TimeValue.cpp
+  ThreadLocal.cpp
   )
 
 if( BUILD_SHARED_LIBS AND NOT WIN32 )

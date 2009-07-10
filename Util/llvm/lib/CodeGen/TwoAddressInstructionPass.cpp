@@ -316,7 +316,7 @@ bool TwoAddressInstructionPass::NoUseAfterLastDef(unsigned Reg,
 MachineInstr *TwoAddressInstructionPass::FindLastUseInMBB(unsigned Reg,
                                                          MachineBasicBlock *MBB,
                                                          unsigned Dist) {
-  unsigned LastUseDist = Dist;
+  unsigned LastUseDist = 0;
   MachineInstr *LastUse = 0;
   for (MachineRegisterInfo::reg_iterator I = MRI->reg_begin(Reg),
          E = MRI->reg_end(); I != E; ++I) {
@@ -327,7 +327,10 @@ MachineInstr *TwoAddressInstructionPass::FindLastUseInMBB(unsigned Reg,
     DenseMap<MachineInstr*, unsigned>::iterator DI = DistanceMap.find(MI);
     if (DI == DistanceMap.end())
       continue;
-    if (MO.isUse() && DI->second < LastUseDist) {
+    if (DI->second >= Dist)
+      continue;
+
+    if (MO.isUse() && DI->second > LastUseDist) {
       LastUse = DI->first;
       LastUseDist = DI->second;
     }
@@ -858,6 +861,12 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &MF) {
                     }
                   }
                 }
+
+                // We're really going to nuke the old inst. If regB was marked
+                // as a kill we need to update its Kills list.
+                if (mi->getOperand(si).isKill())
+                  LV->removeVirtualRegisterKilled(regB, mi);
+
                 mbbi->erase(mi); // Nuke the old inst.
                 mi = nmi;
                 ++NumDeletes;
@@ -935,6 +944,7 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &MF) {
             ++NumReMats;
           } else {
             bool Emitted = TII->copyRegToReg(*mbbi, mi, regA, regB, rc, rc);
+            (void)Emitted;
             assert(Emitted && "Unable to issue a copy instruction!\n");
           }
 

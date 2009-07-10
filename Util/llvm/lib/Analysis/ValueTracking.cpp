@@ -17,6 +17,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/MathExtras.h"
@@ -48,14 +49,16 @@ static unsigned getOpcode(const Value *V) {
 void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
                              APInt &KnownZero, APInt &KnownOne,
                              TargetData *TD, unsigned Depth) {
+  const unsigned MaxDepth = 6;
   assert(V && "No Value?");
-  assert(Depth <= 6 && "Limit Search Depth");
+  assert(Depth <= MaxDepth && "Limit Search Depth");
   unsigned BitWidth = Mask.getBitWidth();
-  assert((V->getType()->isInteger() || isa<PointerType>(V->getType())) &&
+  assert((V->getType()->isIntOrIntVector() || isa<PointerType>(V->getType())) &&
          "Not integer or pointer type!");
-  assert((!TD || TD->getTypeSizeInBits(V->getType()) == BitWidth) &&
-         (!isa<IntegerType>(V->getType()) ||
-          V->getType()->getPrimitiveSizeInBits() == BitWidth) &&
+  assert((!TD ||
+          TD->getTypeSizeInBits(V->getType()->getScalarType()) == BitWidth) &&
+         (!V->getType()->isIntOrIntVector() ||
+          V->getType()->getScalarSizeInBits() == BitWidth) &&
          KnownZero.getBitWidth() == BitWidth && 
          KnownOne.getBitWidth() == BitWidth &&
          "V, Mask, KnownOne and KnownZero should have same BitWidth");
@@ -66,10 +69,24 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     KnownZero = ~KnownOne & Mask;
     return;
   }
-  // Null is all-zeros.
-  if (isa<ConstantPointerNull>(V)) {
+  // Null and aggregate-zero are all-zeros.
+  if (isa<ConstantPointerNull>(V) ||
+      isa<ConstantAggregateZero>(V)) {
     KnownOne.clear();
     KnownZero = Mask;
+    return;
+  }
+  // Handle a constant vector by taking the intersection of the known bits of
+  // each element.
+  if (ConstantVector *CV = dyn_cast<ConstantVector>(V)) {
+    KnownZero.set(); KnownOne.set();
+    for (unsigned i = 0, e = CV->getNumOperands(); i != e; ++i) {
+      APInt KnownZero2(BitWidth, 0), KnownOne2(BitWidth, 0);
+      ComputeMaskedBits(CV->getOperand(i), Mask, KnownZero2, KnownOne2,
+                        TD, Depth);
+      KnownZero &= KnownZero2;
+      KnownOne &= KnownOne2;
+    }
     return;
   }
   // The address of an aligned GlobalValue has trailing zeros.
@@ -88,7 +105,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
 
   KnownZero.clear(); KnownOne.clear();   // Start out not knowing anything.
 
-  if (Depth == 6 || Mask == 0)
+  if (Depth == MaxDepth || Mask == 0)
     return;  // Limit search depth.
 
   User *I = dyn_cast<User>(V);
@@ -217,7 +234,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     const Type *SrcTy = I->getOperand(0)->getType();
     unsigned SrcBitWidth = TD ?
       TD->getTypeSizeInBits(SrcTy) :
-      SrcTy->getPrimitiveSizeInBits();
+      SrcTy->getScalarSizeInBits();
     APInt MaskIn(Mask);
     MaskIn.zextOrTrunc(SrcBitWidth);
     KnownZero.zextOrTrunc(SrcBitWidth);
@@ -233,7 +250,10 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
   }
   case Instruction::BitCast: {
     const Type *SrcTy = I->getOperand(0)->getType();
-    if (SrcTy->isInteger() || isa<PointerType>(SrcTy)) {
+    if ((SrcTy->isInteger() || isa<PointerType>(SrcTy)) &&
+        // TODO: For now, not handling conversions like:
+        // (bitcast i64 %x to <2 x i32>)
+        !isa<VectorType>(I->getType())) {
       ComputeMaskedBits(I->getOperand(0), Mask, KnownZero, KnownOne, TD,
                         Depth+1);
       return;
@@ -342,22 +362,43 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
   }
   // fall through
   case Instruction::Add: {
-    // Output known-0 bits are known if clear or set in both the low clear bits
-    // common to both LHS & RHS.  For example, 8+(X<<3) is known to have the
-    // low 3 bits clear.
-    APInt Mask2 = APInt::getLowBitsSet(BitWidth, Mask.countTrailingOnes());
-    ComputeMaskedBits(I->getOperand(0), Mask2, KnownZero2, KnownOne2, TD,
+    // If one of the operands has trailing zeros, than the bits that the
+    // other operand has in those bit positions will be preserved in the
+    // result. For an add, this works with either operand. For a subtract,
+    // this only works if the known zeros are in the right operand.
+    APInt LHSKnownZero(BitWidth, 0), LHSKnownOne(BitWidth, 0);
+    APInt Mask2 = APInt::getLowBitsSet(BitWidth,
+                                       BitWidth - Mask.countLeadingZeros());
+    ComputeMaskedBits(I->getOperand(0), Mask2, LHSKnownZero, LHSKnownOne, TD,
                       Depth+1);
-    assert((KnownZero2 & KnownOne2) == 0 && "Bits known to be one AND zero?"); 
-    unsigned KnownZeroOut = KnownZero2.countTrailingOnes();
+    assert((LHSKnownZero & LHSKnownOne) == 0 &&
+           "Bits known to be one AND zero?");
+    unsigned LHSKnownZeroOut = LHSKnownZero.countTrailingOnes();
 
     ComputeMaskedBits(I->getOperand(1), Mask2, KnownZero2, KnownOne2, TD, 
                       Depth+1);
     assert((KnownZero2 & KnownOne2) == 0 && "Bits known to be one AND zero?"); 
-    KnownZeroOut = std::min(KnownZeroOut, 
-                            KnownZero2.countTrailingOnes());
+    unsigned RHSKnownZeroOut = KnownZero2.countTrailingOnes();
 
-    KnownZero |= APInt::getLowBitsSet(BitWidth, KnownZeroOut);
+    // Determine which operand has more trailing zeros, and use that
+    // many bits from the other operand.
+    if (LHSKnownZeroOut > RHSKnownZeroOut) {
+      if (getOpcode(I) == Instruction::Add) {
+        APInt Mask = APInt::getLowBitsSet(BitWidth, LHSKnownZeroOut);
+        KnownZero |= KnownZero2 & Mask;
+        KnownOne  |= KnownOne2 & Mask;
+      } else {
+        // If the known zeros are in the left operand for a subtract,
+        // fall back to the minimum known zeros in both operands.
+        KnownZero |= APInt::getLowBitsSet(BitWidth,
+                                          std::min(LHSKnownZeroOut,
+                                                   RHSKnownZeroOut));
+      }
+    } else if (RHSKnownZeroOut >= LHSKnownZeroOut) {
+      APInt Mask = APInt::getLowBitsSet(BitWidth, RHSKnownZeroOut);
+      KnownZero |= LHSKnownZero & Mask;
+      KnownOne  |= LHSKnownOne & Mask;
+    }
     return;
   }
   case Instruction::SRem:
@@ -458,8 +499,8 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
         // Handle array index arithmetic.
         const Type *IndexedTy = GTI.getIndexedType();
         if (!IndexedTy->isSized()) return;
-        unsigned GEPOpiBits = Index->getType()->getPrimitiveSizeInBits();
-        uint64_t TypeSize = TD ? TD->getTypePaddedSize(IndexedTy) : 1;
+        unsigned GEPOpiBits = Index->getType()->getScalarSizeInBits();
+        uint64_t TypeSize = TD ? TD->getTypeAllocSize(IndexedTy) : 1;
         LocalMask = APInt::getAllOnesValue(GEPOpiBits);
         LocalKnownZero = LocalKnownOne = APInt(GEPOpiBits, 0);
         ComputeMaskedBits(Index, LocalMask,
@@ -522,6 +563,30 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
         }
       }
     }
+
+    // Otherwise take the unions of the known bit sets of the operands,
+    // taking conservative care to avoid excessive recursion.
+    if (Depth < MaxDepth - 1 && !KnownZero && !KnownOne) {
+      KnownZero = APInt::getAllOnesValue(BitWidth);
+      KnownOne = APInt::getAllOnesValue(BitWidth);
+      for (unsigned i = 0, e = P->getNumIncomingValues(); i != e; ++i) {
+        // Skip direct self references.
+        if (P->getIncomingValue(i) == P) continue;
+
+        KnownZero2 = APInt(BitWidth, 0);
+        KnownOne2 = APInt(BitWidth, 0);
+        // Recurse, but cap the recursion to one level, because we don't
+        // want to waste time spinning around in loops.
+        ComputeMaskedBits(P->getIncomingValue(i), KnownZero | KnownOne,
+                          KnownZero2, KnownOne2, TD, MaxDepth-1);
+        KnownZero &= KnownZero2;
+        KnownOne &= KnownOne2;
+        // If all bits have been ruled out, there's no need to check
+        // more operands.
+        if (!KnownZero && !KnownOne)
+          break;
+      }
+    }
     break;
   }
   case Instruction::Call:
@@ -563,8 +628,12 @@ bool llvm::MaskedValueIsZero(Value *V, const APInt &Mask,
 /// 'Op' must have a scalar integer type.
 ///
 unsigned llvm::ComputeNumSignBits(Value *V, TargetData *TD, unsigned Depth) {
-  const IntegerType *Ty = cast<IntegerType>(V->getType());
-  unsigned TyBits = Ty->getBitWidth();
+  assert((TD || V->getType()->isIntOrIntVector()) &&
+         "ComputeNumSignBits requires a TargetData object to operate "
+         "on non-integer values!");
+  const Type *Ty = V->getType();
+  unsigned TyBits = TD ? TD->getTypeSizeInBits(V->getType()->getScalarType()) :
+                         Ty->getScalarSizeInBits();
   unsigned Tmp, Tmp2;
   unsigned FirstAnswer = 1;
 
@@ -725,7 +794,7 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
   if (I == 0) return false;
   
   // (add x, 0.0) is guaranteed to return +0.0, not -0.0.
-  if (I->getOpcode() == Instruction::Add &&
+  if (I->getOpcode() == Instruction::FAdd &&
       isa<ConstantFP>(I->getOperand(1)) && 
       cast<ConstantFP>(I->getOperand(1))->isNullValue())
     return true;
@@ -766,6 +835,7 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
 Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
                                  SmallVector<unsigned, 10> &Idxs,
                                  unsigned IdxSkip,
+                                 LLVMContext *Context,
                                  Instruction *InsertBefore) {
   const llvm::StructType *STy = llvm::dyn_cast<llvm::StructType>(IndexedType);
   if (STy) {
@@ -777,7 +847,7 @@ Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
       Idxs.push_back(i);
       Value *PrevTo = To;
       To = BuildSubAggregate(From, To, STy->getElementType(i), Idxs, IdxSkip,
-                             InsertBefore);
+                             Context, InsertBefore);
       Idxs.pop_back();
       if (!To) {
         // Couldn't find any inserted value for this index? Cleanup
@@ -800,7 +870,7 @@ Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
   // we might be able to find the complete struct somewhere.
   
   // Find the value that is at that particular spot
-  Value *V = FindInsertedValue(From, Idxs.begin(), Idxs.end());
+  Value *V = FindInsertedValue(From, Idxs.begin(), Idxs.end(), Context);
 
   if (!V)
     return NULL;
@@ -823,16 +893,18 @@ Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
 //
 // All inserted insertvalue instructions are inserted before InsertBefore
 Value *BuildSubAggregate(Value *From, const unsigned *idx_begin,
-                         const unsigned *idx_end, Instruction *InsertBefore) {
+                         const unsigned *idx_end, LLVMContext *Context,
+                         Instruction *InsertBefore) {
   assert(InsertBefore && "Must have someplace to insert!");
   const Type *IndexedType = ExtractValueInst::getIndexedType(From->getType(),
                                                              idx_begin,
                                                              idx_end);
-  Value *To = UndefValue::get(IndexedType);
+  Value *To = Context->getUndef(IndexedType);
   SmallVector<unsigned, 10> Idxs(idx_begin, idx_end);
   unsigned IdxSkip = Idxs.size();
 
-  return BuildSubAggregate(From, To, IndexedType, Idxs, IdxSkip, InsertBefore);
+  return BuildSubAggregate(From, To, IndexedType, Idxs, IdxSkip,
+                           Context, InsertBefore);
 }
 
 /// FindInsertedValue - Given an aggregrate and an sequence of indices, see if
@@ -842,7 +914,8 @@ Value *BuildSubAggregate(Value *From, const unsigned *idx_begin,
 /// If InsertBefore is not null, this function will duplicate (modified)
 /// insertvalues when a part of a nested struct is extracted.
 Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
-                         const unsigned *idx_end, Instruction *InsertBefore) {
+                         const unsigned *idx_end, LLVMContext *Context,
+                         Instruction *InsertBefore) {
   // Nothing to index? Just return V then (this is useful at the end of our
   // recursion)
   if (idx_begin == idx_end)
@@ -853,20 +926,20 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
   assert(ExtractValueInst::getIndexedType(V->getType(), idx_begin, idx_end)
          && "Invalid indices for type?");
   const CompositeType *PTy = cast<CompositeType>(V->getType());
-  
+
   if (isa<UndefValue>(V))
-    return UndefValue::get(ExtractValueInst::getIndexedType(PTy,
+    return Context->getUndef(ExtractValueInst::getIndexedType(PTy,
                                                               idx_begin,
                                                               idx_end));
   else if (isa<ConstantAggregateZero>(V))
-    return Constant::getNullValue(ExtractValueInst::getIndexedType(PTy, 
-                                                                     idx_begin,
-                                                                     idx_end));
+    return Context->getNullValue(ExtractValueInst::getIndexedType(PTy, 
+                                                                  idx_begin,
+                                                                  idx_end));
   else if (Constant *C = dyn_cast<Constant>(V)) {
     if (isa<ConstantArray>(C) || isa<ConstantStruct>(C))
       // Recursively process this constant
-      return FindInsertedValue(C->getOperand(*idx_begin), idx_begin + 1, idx_end,
-                               InsertBefore);
+      return FindInsertedValue(C->getOperand(*idx_begin), idx_begin + 1,
+                               idx_end, Context, InsertBefore);
   } else if (InsertValueInst *I = dyn_cast<InsertValueInst>(V)) {
     // Loop the indices for the insertvalue instruction in parallel with the
     // requested indices
@@ -885,7 +958,8 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
           // %C = insertvalue {i32, i32 } %A, i32 11, 1
           // which allows the unused 0,0 element from the nested struct to be
           // removed.
-          return BuildSubAggregate(V, idx_begin, req_idx, InsertBefore);
+          return BuildSubAggregate(V, idx_begin, req_idx,
+                                   Context, InsertBefore);
         else
           // We can't handle this without inserting insertvalues
           return 0;
@@ -896,13 +970,13 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
       // looking for, then.
       if (*req_idx != *i)
         return FindInsertedValue(I->getAggregateOperand(), idx_begin, idx_end,
-                                 InsertBefore);
+                                 Context, InsertBefore);
     }
     // If we end up here, the indices of the insertvalue match with those
     // requested (though possibly only partially). Now we recursively look at
     // the inserted value, passing any remaining indices.
     return FindInsertedValue(I->getInsertedValueOperand(), req_idx, idx_end,
-                             InsertBefore);
+                             Context, InsertBefore);
   } else if (ExtractValueInst *I = dyn_cast<ExtractValueInst>(V)) {
     // If we're extracting a value from an aggregrate that was extracted from
     // something else, we can extract from that something else directly instead.
@@ -926,7 +1000,7 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
            && "Number of indices added not correct?");
     
     return FindInsertedValue(I->getAggregateOperand(), Idxs.begin(), Idxs.end(),
-                             InsertBefore);
+                             Context, InsertBefore);
   }
   // Otherwise, we don't know (such as, extracting from a function return value
   // or load instruction)

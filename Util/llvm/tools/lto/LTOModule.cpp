@@ -14,6 +14,8 @@
 
 #include "LTOModule.h"
 
+#include "llvm/Constants.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/ADT/OwningPtr.h"
@@ -66,7 +68,8 @@ bool LTOModule::isBitcodeFileForTarget(const char* path,
 // takes ownership of buffer
 bool LTOModule::isTargetMatch(MemoryBuffer* buffer, const char* triplePrefix)
 {
-    OwningPtr<ModuleProvider> mp(getBitcodeModuleProvider(buffer));
+    OwningPtr<ModuleProvider> mp(getBitcodeModuleProvider(buffer,
+                                                          getGlobalContext()));
     // on success, mp owns buffer and both are deleted at end of this method
     if ( !mp ) {
         delete buffer;
@@ -83,7 +86,8 @@ LTOModule::LTOModule(Module* m, TargetMachine* t)
 {
 }
 
-LTOModule* LTOModule::makeLTOModule(const char* path, std::string& errMsg)
+LTOModule* LTOModule::makeLTOModule(const char* path,
+                                    std::string& errMsg)
 {
     OwningPtr<MemoryBuffer> buffer(MemoryBuffer::getFile(path, &errMsg));
     if ( !buffer )
@@ -135,10 +139,11 @@ std::string getFeatureString(const char *TargetTriple) {
   return Features.getString();
 }
 
-LTOModule* LTOModule::makeLTOModule(MemoryBuffer* buffer, std::string& errMsg)
+LTOModule* LTOModule::makeLTOModule(MemoryBuffer* buffer,
+                                    std::string& errMsg)
 {
     // parse bitcode buffer
-    OwningPtr<Module> m(ParseBitcodeFile(buffer, &errMsg));
+    OwningPtr<Module> m(ParseBitcodeFile(buffer, getGlobalContext(), &errMsg));
     if ( !m )
         return NULL;
     // find machine architecture for this module
@@ -176,10 +181,140 @@ void LTOModule::addDefinedFunctionSymbol(Function* f, Mangler &mangler)
     }
 }
 
-void LTOModule::addDefinedDataSymbol(GlobalValue* v, Mangler &mangler)
+// get string that data pointer points to 
+bool LTOModule::objcClassNameFromExpression(Constant* c, std::string& name)
+{
+    if (ConstantExpr* ce = dyn_cast<ConstantExpr>(c)) {
+        Constant* op = ce->getOperand(0);
+        if (GlobalVariable* gvn = dyn_cast<GlobalVariable>(op)) {
+            Constant* cn = gvn->getInitializer(); 
+            if (ConstantArray* ca = dyn_cast<ConstantArray>(cn)) {
+                if ( ca->isCString() ) {
+                    name = ".objc_class_name_" + ca->getAsString();
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// parse i386/ppc ObjC class data structure 
+void LTOModule::addObjCClass(GlobalVariable* clgv)
+{
+    if (ConstantStruct* c = dyn_cast<ConstantStruct>(clgv->getInitializer())) {
+        // second slot in __OBJC,__class is pointer to superclass name
+        std::string superclassName;
+        if ( objcClassNameFromExpression(c->getOperand(1), superclassName) ) {
+            NameAndAttributes info;
+            if ( _undefines.find(superclassName.c_str()) == _undefines.end() ) {
+                const char* symbolName = ::strdup(superclassName.c_str());
+                info.name = ::strdup(symbolName);
+                info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
+                // string is owned by _undefines
+                _undefines[info.name] = info;
+            }
+        }
+        // third slot in __OBJC,__class is pointer to class name
+        std::string className;
+         if ( objcClassNameFromExpression(c->getOperand(2), className) ) {
+            const char* symbolName = ::strdup(className.c_str());
+            NameAndAttributes info;
+            info.name = symbolName;
+            info.attributes = (lto_symbol_attributes)
+                (LTO_SYMBOL_PERMISSIONS_DATA |
+                 LTO_SYMBOL_DEFINITION_REGULAR | 
+                 LTO_SYMBOL_SCOPE_DEFAULT);
+            _symbols.push_back(info);
+            _defines[info.name] = 1;
+         }
+    }
+}
+
+
+// parse i386/ppc ObjC category data structure 
+void LTOModule::addObjCCategory(GlobalVariable* clgv)
+{
+    if (ConstantStruct* c = dyn_cast<ConstantStruct>(clgv->getInitializer())) {
+        // second slot in __OBJC,__category is pointer to target class name
+        std::string targetclassName;
+        if ( objcClassNameFromExpression(c->getOperand(1), targetclassName) ) {
+            NameAndAttributes info;
+            if ( _undefines.find(targetclassName.c_str()) == _undefines.end() ){
+                const char* symbolName = ::strdup(targetclassName.c_str());
+                info.name = ::strdup(symbolName);
+                info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
+                // string is owned by _undefines
+               _undefines[info.name] = info;
+            }
+        }
+    }
+}
+
+
+// parse i386/ppc ObjC class list data structure 
+void LTOModule::addObjCClassRef(GlobalVariable* clgv)
+{
+    std::string targetclassName;
+    if ( objcClassNameFromExpression(clgv->getInitializer(), targetclassName) ){
+        NameAndAttributes info;
+        if ( _undefines.find(targetclassName.c_str()) == _undefines.end() ) {
+            const char* symbolName = ::strdup(targetclassName.c_str());
+            info.name = ::strdup(symbolName);
+            info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
+            // string is owned by _undefines
+            _undefines[info.name] = info;
+        }
+    }
+}
+
+
+void LTOModule::addDefinedDataSymbol(GlobalValue* v, Mangler& mangler)
 {    
     // add to list of defined symbols
     addDefinedSymbol(v, mangler, false); 
+
+    // Special case i386/ppc ObjC data structures in magic sections:
+    // The issue is that the old ObjC object format did some strange 
+    // contortions to avoid real linker symbols.  For instance, the 
+    // ObjC class data structure is allocated statically in the executable 
+    // that defines that class.  That data structures contains a pointer to
+    // its superclass.  But instead of just initializing that part of the 
+    // struct to the address of its superclass, and letting the static and 
+    // dynamic linkers do the rest, the runtime works by having that field
+    // instead point to a C-string that is the name of the superclass. 
+    // At runtime the objc initialization updates that pointer and sets 
+    // it to point to the actual super class.  As far as the linker
+    // knows it is just a pointer to a string.  But then someone wanted the 
+    // linker to issue errors at build time if the superclass was not found.  
+    // So they figured out a way in mach-o object format to use an absolute 
+    // symbols (.objc_class_name_Foo = 0) and a floating reference 
+    // (.reference .objc_class_name_Bar) to cause the linker into erroring when
+    // a class was missing.   
+    // The following synthesizes the implicit .objc_* symbols for the linker
+    // from the ObjC data structures generated by the front end.
+    if ( v->hasSection() /* && isTargetDarwin */ ) {
+        // special case if this data blob is an ObjC class definition
+        if ( v->getSection().compare(0, 15, "__OBJC,__class,") == 0 ) {
+            if (GlobalVariable* gv = dyn_cast<GlobalVariable>(v)) {
+                addObjCClass(gv);
+            }
+        }                        
+    
+        // special case if this data blob is an ObjC category definition
+        else if ( v->getSection().compare(0, 18, "__OBJC,__category,") == 0 ) {
+            if (GlobalVariable* gv = dyn_cast<GlobalVariable>(v)) {
+                addObjCCategory(gv);
+            }
+        }                        
+        
+        // special case if this data blob is the list of referenced classes
+        else if ( v->getSection().compare(0, 18, "__OBJC,__cls_refs,") == 0 ) {
+            if (GlobalVariable* gv = dyn_cast<GlobalVariable>(v)) {
+                addObjCClassRef(gv);
+            }
+        }                        
+    }
 
     // add external symbols referenced by this data.
     for (unsigned count = 0, total = v->getNumOperands();
@@ -192,9 +327,13 @@ void LTOModule::addDefinedDataSymbol(GlobalValue* v, Mangler &mangler)
 void LTOModule::addDefinedSymbol(GlobalValue* def, Mangler &mangler, 
                                 bool isFunction)
 {    
+    // ignore all llvm.* symbols
+    if ( strncmp(def->getNameStart(), "llvm.", 5) == 0 )
+        return;
+
     // string is owned by _defines
     const char* symbolName = ::strdup(mangler.getValueName(def).c_str());
-    
+
     // set alignment part log2() can have rounding errors
     uint32_t align = def->getAlignment();
     uint32_t attr = align ? CountTrailingZeros_32(def->getAlignment()) : 0;
@@ -241,25 +380,28 @@ void LTOModule::addDefinedSymbol(GlobalValue* def, Mangler &mangler,
 }
 
 void LTOModule::addAsmGlobalSymbol(const char *name) {
-  // string is owned by _defines
-  const char *symbolName = ::strdup(name);
-  uint32_t attr = LTO_SYMBOL_DEFINITION_REGULAR;
-  attr |= LTO_SYMBOL_SCOPE_DEFAULT;
-
-  // add to table of symbols
-  NameAndAttributes info;
-  info.name = symbolName;
-  info.attributes = (lto_symbol_attributes)attr;
-  _symbols.push_back(info);
-  _defines[info.name] = 1;
+    // only add new define if not already defined
+    if ( _defines.count(name, &name[strlen(name)+1]) == 0 ) 
+        return;
+        
+    // string is owned by _defines
+    const char *symbolName = ::strdup(name);
+    uint32_t attr = LTO_SYMBOL_DEFINITION_REGULAR;
+    attr |= LTO_SYMBOL_SCOPE_DEFAULT;
+    NameAndAttributes info;
+    info.name = symbolName;
+    info.attributes = (lto_symbol_attributes)attr;
+    _symbols.push_back(info);
+    _defines[info.name] = 1;
 }
 
 void LTOModule::addPotentialUndefinedSymbol(GlobalValue* decl, Mangler &mangler)
 {   
-   const char* name = mangler.getValueName(decl).c_str();
     // ignore all llvm.* symbols
-    if ( strncmp(name, "llvm.", 5) == 0 )
-      return;
+    if ( strncmp(decl->getNameStart(), "llvm.", 5) == 0 )
+        return;
+
+    const char* name = mangler.getValueName(decl).c_str();
 
     // we already have the symbol
     if (_undefines.find(name) != _undefines.end())
@@ -306,6 +448,14 @@ void LTOModule::lazyParseSymbols()
         
         // Use mangler to add GlobalPrefix to names to match linker names.
         Mangler mangler(*_module, _target->getTargetAsmInfo()->getGlobalPrefix());
+        // add chars used in ObjC method names so method names aren't mangled
+        mangler.markCharAcceptable('[');
+        mangler.markCharAcceptable(']');
+        mangler.markCharAcceptable('(');
+        mangler.markCharAcceptable(')');
+        mangler.markCharAcceptable('-');
+        mangler.markCharAcceptable('+');
+        mangler.markCharAcceptable(' ');
 
         // add functions
         for (Module::iterator f = _module->begin(); f != _module->end(); ++f) {

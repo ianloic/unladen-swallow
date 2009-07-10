@@ -47,7 +47,6 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/DebugLoc.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Target/TargetData.h"
@@ -285,7 +284,7 @@ bool FastISel::SelectGetElementPtr(User *I) {
       if (ConstantInt *CI = dyn_cast<ConstantInt>(Idx)) {
         if (CI->getZExtValue() == 0) continue;
         uint64_t Offs = 
-          TD.getTypePaddedSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
+          TD.getTypeAllocSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
         N = FastEmit_ri_(VT, ISD::ADD, N, Offs, VT);
         if (N == 0)
           // Unhandled operand. Halt "fast" selection and bail.
@@ -294,7 +293,7 @@ bool FastISel::SelectGetElementPtr(User *I) {
       }
       
       // N = N + Idx * ElementSize;
-      uint64_t ElementSize = TD.getTypePaddedSize(Ty);
+      uint64_t ElementSize = TD.getTypeAllocSize(Ty);
       unsigned IdxN = getRegForGEPIndex(Idx);
       if (IdxN == 0)
         // Unhandled operand. Halt "fast" selection and bail.
@@ -327,19 +326,14 @@ bool FastISel::SelectCall(User *I) {
   default: break;
   case Intrinsic::dbg_stoppoint: {
     DbgStopPointInst *SPI = cast<DbgStopPointInst>(I);
-    if (DIDescriptor::ValidDebugInfo(SPI->getContext(), CodeGenOpt::None)) {
-      DICompileUnit CU(cast<GlobalVariable>(SPI->getContext()));
-      unsigned Line = SPI->getLine();
-      unsigned Col = SPI->getColumn();
-      unsigned Idx = MF.getOrCreateDebugLocID(CU.getGV(), Line, Col);
-      setCurDebugLoc(DebugLoc::get(Idx));
-    }
+    if (isValidDebugInfoIntrinsic(*SPI, CodeGenOpt::None))
+      setCurDebugLoc(ExtractDebugLocation(*SPI, MF.getDebugLocInfo()));
     return true;
   }
   case Intrinsic::dbg_region_start: {
     DbgRegionStartInst *RSI = cast<DbgRegionStartInst>(I);
-    if (DIDescriptor::ValidDebugInfo(RSI->getContext(), CodeGenOpt::None) &&
-        DW && DW->ShouldEmitDwarfDebug()) {
+    if (isValidDebugInfoIntrinsic(*RSI, CodeGenOpt::None) && DW
+        && DW->ShouldEmitDwarfDebug()) {
       unsigned ID = 
         DW->RecordRegionStart(cast<GlobalVariable>(RSI->getContext()));
       const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
@@ -349,11 +343,11 @@ bool FastISel::SelectCall(User *I) {
   }
   case Intrinsic::dbg_region_end: {
     DbgRegionEndInst *REI = cast<DbgRegionEndInst>(I);
-    if (DIDescriptor::ValidDebugInfo(REI->getContext(), CodeGenOpt::None) &&
-        DW && DW->ShouldEmitDwarfDebug()) {
+    if (isValidDebugInfoIntrinsic(*REI, CodeGenOpt::None) && DW
+        && DW->ShouldEmitDwarfDebug()) {
      unsigned ID = 0;
      DISubprogram Subprogram(cast<GlobalVariable>(REI->getContext()));
-     if (!Subprogram.isNull() && !Subprogram.describes(MF.getFunction())) {
+     if (isInlinedFnEnd(*REI, MF.getFunction())) {
         // This is end of an inlined function.
         const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
         ID = DW->RecordInlinedFnEnd(Subprogram);
@@ -361,7 +355,7 @@ bool FastISel::SelectCall(User *I) {
           // Returned ID is 0 if this is unbalanced "end of inlined
           // scope". This could happen if optimizer eats dbg intrinsics
           // or "beginning of inlined scope" is not recoginized due to
-          // missing location info. In such cases, do ignore this region.end.
+          // missing location info. In such cases, ignore this region.end.
           BuildMI(MBB, DL, II).addImm(ID);
       } else {
         const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
@@ -373,82 +367,67 @@ bool FastISel::SelectCall(User *I) {
   }
   case Intrinsic::dbg_func_start: {
     DbgFuncStartInst *FSI = cast<DbgFuncStartInst>(I);
-    Value *SP = FSI->getSubprogram();
-    if (!DIDescriptor::ValidDebugInfo(SP, CodeGenOpt::None))
+    if (!isValidDebugInfoIntrinsic(*FSI, CodeGenOpt::None) || !DW
+        || !DW->ShouldEmitDwarfDebug()) 
       return true;
 
-    // llvm.dbg.func.start implicitly defines a dbg_stoppoint which is what
-    // (most?) gdb expects.
-    DebugLoc PrevLoc = DL;
-    DISubprogram Subprogram(cast<GlobalVariable>(SP));
-    DICompileUnit CompileUnit = Subprogram.getCompileUnit();
-
-    if (!Subprogram.describes(MF.getFunction())) {
+    if (isInlinedFnStart(*FSI, MF.getFunction())) {
       // This is a beginning of an inlined function.
-
+      
       // If llvm.dbg.func.start is seen in a new block before any
       // llvm.dbg.stoppoint intrinsic then the location info is unknown.
       // FIXME : Why DebugLoc is reset at the beginning of each block ?
+      DebugLoc PrevLoc = DL;
       if (PrevLoc.isUnknown())
         return true;
       // Record the source line.
-      unsigned Line = Subprogram.getLineNumber();
-      setCurDebugLoc(DebugLoc::get(MF.getOrCreateDebugLocID(
-                                              CompileUnit.getGV(), Line, 0)));
-
-      if (DW && DW->ShouldEmitDwarfDebug()) {
-        unsigned LabelID = MMI->NextLabelID();
-        const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
-        BuildMI(MBB, DL, II).addImm(LabelID);
-        DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
-        DW->RecordInlinedFnStart(FSI, Subprogram, LabelID,
-                                 DICompileUnit(PrevLocTpl.CompileUnit),
-                                 PrevLocTpl.Line,
-                                 PrevLocTpl.Col);
-      }
-    } else {
-      // Record the source line.
-      unsigned Line = Subprogram.getLineNumber();
-      MF.setDefaultDebugLoc(DebugLoc::get(MF.getOrCreateDebugLocID(
-                                              CompileUnit.getGV(), Line, 0)));
-      if (DW && DW->ShouldEmitDwarfDebug()) {
-        // llvm.dbg.func_start also defines beginning of function scope.
-        DW->RecordRegionStart(cast<GlobalVariable>(FSI->getSubprogram()));
-      }
+      setCurDebugLoc(ExtractDebugLocation(*FSI, MF.getDebugLocInfo()));
+      
+      DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
+      DISubprogram SP(cast<GlobalVariable>(FSI->getSubprogram()));
+      unsigned LabelID = DW->RecordInlinedFnStart(SP,
+                                                  DICompileUnit(PrevLocTpl.CompileUnit),
+                                                  PrevLocTpl.Line,
+                                                  PrevLocTpl.Col);
+      const TargetInstrDesc &II = TII.get(TargetInstrInfo::DBG_LABEL);
+      BuildMI(MBB, DL, II).addImm(LabelID);
+      return true;
     }
-
+    
+    // This is a beginning of a new function.
+    MF.setDefaultDebugLoc(ExtractDebugLocation(*FSI, MF.getDebugLocInfo()));
+    
+    // llvm.dbg.func_start also defines beginning of function scope.
+    DW->RecordRegionStart(cast<GlobalVariable>(FSI->getSubprogram()));
     return true;
   }
   case Intrinsic::dbg_declare: {
     DbgDeclareInst *DI = cast<DbgDeclareInst>(I);
+    if (!isValidDebugInfoIntrinsic(*DI, CodeGenOpt::None) || !DW
+        || !DW->ShouldEmitDwarfDebug())
+      return true;
+
     Value *Variable = DI->getVariable();
-    if (DIDescriptor::ValidDebugInfo(Variable, CodeGenOpt::None) &&
-        DW && DW->ShouldEmitDwarfDebug()) {
-      // Determine the address of the declared object.
-      Value *Address = DI->getAddress();
-      if (BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
-        Address = BCI->getOperand(0);
-      AllocaInst *AI = dyn_cast<AllocaInst>(Address);
-      // Don't handle byval struct arguments or VLAs, for example.
-      if (!AI) break;
-      DenseMap<const AllocaInst*, int>::iterator SI =
-        StaticAllocaMap.find(AI);
-      if (SI == StaticAllocaMap.end()) break; // VLAs.
-      int FI = SI->second;
-
-      // Determine the debug globalvariable.
-      GlobalValue *GV = cast<GlobalVariable>(Variable);
-
-      // Build the DECLARE instruction.
-      const TargetInstrDesc &II = TII.get(TargetInstrInfo::DECLARE);
-      MachineInstr *DeclareMI 
-        = BuildMI(MBB, DL, II).addFrameIndex(FI).addGlobalAddress(GV);
-      DIVariable DV(cast<GlobalVariable>(GV));
-      if (!DV.isNull()) {
-        // This is a local variable
-        DW->RecordVariableScope(DV, DeclareMI);
-      }
-    }
+    Value *Address = DI->getAddress();
+    if (BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
+      Address = BCI->getOperand(0);
+    AllocaInst *AI = dyn_cast<AllocaInst>(Address);
+    // Don't handle byval struct arguments or VLAs, for example.
+    if (!AI) break;
+    DenseMap<const AllocaInst*, int>::iterator SI =
+      StaticAllocaMap.find(AI);
+    if (SI == StaticAllocaMap.end()) break; // VLAs.
+    int FI = SI->second;
+    
+    // Determine the debug globalvariable.
+    GlobalValue *GV = cast<GlobalVariable>(Variable);
+    
+    // Build the DECLARE instruction.
+    const TargetInstrDesc &II = TII.get(TargetInstrInfo::DECLARE);
+    MachineInstr *DeclareMI 
+      = BuildMI(MBB, DL, II).addFrameIndex(FI).addGlobalAddress(GV);
+    DIVariable DV(cast<GlobalVariable>(GV));
+    DW->RecordVariableScope(DV, DeclareMI);
     return true;
   }
   case Intrinsic::eh_exception: {
@@ -456,11 +435,7 @@ bool FastISel::SelectCall(User *I) {
     switch (TLI.getOperationAction(ISD::EXCEPTIONADDR, VT)) {
     default: break;
     case TargetLowering::Expand: {
-      if (!MBB->isLandingPad()) {
-        // FIXME: Mark exception register as live in.  Hack for PR1508.
-        unsigned Reg = TLI.getExceptionAddressRegister();
-        if (Reg) MBB->addLiveIn(Reg);
-      }
+      assert(MBB->isLandingPad() && "Call to eh.exception not in landing pad!");
       unsigned Reg = TLI.getExceptionAddressRegister();
       const TargetRegisterClass *RC = TLI.getRegClassFor(VT);
       unsigned ResultReg = createResultReg(RC);
@@ -644,18 +619,18 @@ FastISel::FastEmitBranch(MachineBasicBlock *MSucc) {
 bool
 FastISel::SelectOperator(User *I, unsigned Opcode) {
   switch (Opcode) {
-  case Instruction::Add: {
-    ISD::NodeType Opc = I->getType()->isFPOrFPVector() ? ISD::FADD : ISD::ADD;
-    return SelectBinaryOp(I, Opc);
-  }
-  case Instruction::Sub: {
-    ISD::NodeType Opc = I->getType()->isFPOrFPVector() ? ISD::FSUB : ISD::SUB;
-    return SelectBinaryOp(I, Opc);
-  }
-  case Instruction::Mul: {
-    ISD::NodeType Opc = I->getType()->isFPOrFPVector() ? ISD::FMUL : ISD::MUL;
-    return SelectBinaryOp(I, Opc);
-  }
+  case Instruction::Add:
+    return SelectBinaryOp(I, ISD::ADD);
+  case Instruction::FAdd:
+    return SelectBinaryOp(I, ISD::FADD);
+  case Instruction::Sub:
+    return SelectBinaryOp(I, ISD::SUB);
+  case Instruction::FSub:
+    return SelectBinaryOp(I, ISD::FSUB);
+  case Instruction::Mul:
+    return SelectBinaryOp(I, ISD::MUL);
+  case Instruction::FMul:
+    return SelectBinaryOp(I, ISD::FMUL);
   case Instruction::SDiv:
     return SelectBinaryOp(I, ISD::SDIV);
   case Instruction::UDiv:

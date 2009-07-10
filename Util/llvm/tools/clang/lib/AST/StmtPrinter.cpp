@@ -28,15 +28,23 @@ using namespace clang;
 namespace  {
   class VISIBILITY_HIDDEN StmtPrinter : public StmtVisitor<StmtPrinter> {
     llvm::raw_ostream &OS;
+    ASTContext &Context;
     unsigned IndentLevel;
-    bool NoIndent;
     clang::PrinterHelper* Helper;
+    PrintingPolicy Policy;
+
   public:
-    StmtPrinter(llvm::raw_ostream &os, PrinterHelper* helper, unsigned I=0,
-                bool noIndent=false) :
-      OS(os), IndentLevel(I), NoIndent(noIndent), Helper(helper) {}
+    StmtPrinter(llvm::raw_ostream &os, ASTContext &C, PrinterHelper* helper, 
+                const PrintingPolicy &Policy,
+                unsigned Indentation = 0)
+      : OS(os), Context(C), IndentLevel(Indentation), Helper(helper),
+        Policy(Policy) {}
     
-    void PrintStmt(Stmt *S, int SubIndent = 1) {
+    void PrintStmt(Stmt *S) {
+      PrintStmt(S, Policy.Indentation);
+    }
+
+    void PrintStmt(Stmt *S, int SubIndent) {
       IndentLevel += SubIndent;
       if (S && isa<Expr>(S)) {
         // If this is an expr used in a stmt context, indent and newline it.
@@ -50,11 +58,10 @@ namespace  {
       }
       IndentLevel -= SubIndent;
     }
-    
+
     void PrintRawCompoundStmt(CompoundStmt *S);
     void PrintRawDecl(Decl *D);
     void PrintRawDeclStmt(DeclStmt *S);
-    void PrintFieldDecl(FieldDecl *FD);
     void PrintRawIfStmt(IfStmt *If);
     void PrintRawCXXCatchStmt(CXXCatchStmt *Catch);
     
@@ -66,10 +73,8 @@ namespace  {
     }
     
     llvm::raw_ostream &Indent(int Delta = 0) {
-      if (!NoIndent) {
-        for (int i = 0, e = IndentLevel+Delta; i < e; ++i)
-          OS << "  ";
-      } else NoIndent = false;
+      for (int i = 0, e = IndentLevel+Delta; i < e; ++i)
+        OS << "  ";
       return OS;
     }
     
@@ -109,68 +114,16 @@ void StmtPrinter::PrintRawCompoundStmt(CompoundStmt *Node) {
 }
 
 void StmtPrinter::PrintRawDecl(Decl *D) {
-  // FIXME: Need to complete/beautify this... this code simply shows the
-  // nodes are where they need to be.
-  if (TypedefDecl *localType = dyn_cast<TypedefDecl>(D)) {
-    OS << "typedef " << localType->getUnderlyingType().getAsString();
-    OS << " " << localType->getNameAsString();
-  } else if (ValueDecl *VD = dyn_cast<ValueDecl>(D)) {
-    // Emit storage class for vardecls.
-    if (VarDecl *V = dyn_cast<VarDecl>(VD)) {
-      if (V->getStorageClass() != VarDecl::None)
-        OS << VarDecl::getStorageClassSpecifierString(V->getStorageClass()) 
-           << ' ';
-    }
-    
-    std::string Name = VD->getNameAsString();
-    VD->getType().getAsStringInternal(Name);
-    OS << Name;
-    
-    // If this is a vardecl with an initializer, emit it.
-    if (VarDecl *V = dyn_cast<VarDecl>(VD)) {
-      if (V->getInit()) {
-        OS << " = ";
-        PrintExpr(V->getInit());
-      }
-    }
-  } else if (TagDecl *TD = dyn_cast<TagDecl>(D)) {
-    // print a free standing tag decl (e.g. "struct x;"). 
-    OS << TD->getKindName();
-    OS << " ";
-    if (const IdentifierInfo *II = TD->getIdentifier())
-      OS << II->getName();
-    if (RecordDecl *RD = dyn_cast<RecordDecl>(TD)) {
-      OS << "{\n";
-      IndentLevel += 1;
-      // FIXME: The context passed to field_begin/field_end should
-      // never be NULL!
-      ASTContext *Context = 0;
-      for (RecordDecl::field_iterator i = RD->field_begin(*Context);
-           i != RD->field_end(*Context); ++i) {
-        PrintFieldDecl(*i);
-      IndentLevel -= 1;
-      }
-    }
-  } else {
-    assert(0 && "Unexpected decl");
-  }
-}
-
-void StmtPrinter::PrintFieldDecl(FieldDecl *FD) {
-  Indent() << FD->getNameAsString() << "\n";
+  D->print(OS, Policy, IndentLevel);
 }
 
 void StmtPrinter::PrintRawDeclStmt(DeclStmt *S) {
-  bool isFirst = true;
-  
-  for (DeclStmt::decl_iterator I = S->decl_begin(), E = S->decl_end();
-       I != E; ++I) {
-    
-    if (!isFirst) OS << ", ";
-    else isFirst = false;
-    
-    PrintRawDecl(*I);
-  }
+  DeclStmt::decl_iterator Begin = S->decl_begin(), End = S->decl_end();
+  llvm::SmallVector<Decl*, 2> Decls;
+  for ( ; Begin != End; ++Begin) 
+    Decls.push_back(*Begin);
+
+  Decl::printGroup(Decls.data(), Decls.size(), OS, Policy, IndentLevel);
 }
 
 void StmtPrinter::VisitNullStmt(NullStmt *Node) {
@@ -178,12 +131,9 @@ void StmtPrinter::VisitNullStmt(NullStmt *Node) {
 }
 
 void StmtPrinter::VisitDeclStmt(DeclStmt *Node) {
-  for (DeclStmt::decl_iterator I = Node->decl_begin(), E = Node->decl_end();
-       I!=E; ++I) {    
-    Indent();
-    PrintRawDecl(*I);
-    OS << ";\n";
-  }
+  Indent();
+  PrintRawDeclStmt(Node);
+  OS << ";\n";
 }
 
 void StmtPrinter::VisitCompoundStmt(CompoundStmt *Node) {
@@ -289,9 +239,9 @@ void StmtPrinter::VisitDoStmt(DoStmt *Node) {
     Indent();
   }
   
-  OS << "while ";
+  OS << "while (";
   PrintExpr(Node->getCond());
-  OS << ";\n";
+  OS << ");\n";
 }
 
 void StmtPrinter::VisitForStmt(ForStmt *Node) {
@@ -531,13 +481,25 @@ void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
 void StmtPrinter::VisitQualifiedDeclRefExpr(QualifiedDeclRefExpr *Node) {  
   NamedDecl *D = Node->getDecl();
 
-  Node->getQualifier()->print(OS);
+  Node->getQualifier()->print(OS, Policy);
   OS << D->getNameAsString();
 }
 
 void StmtPrinter::VisitUnresolvedDeclRefExpr(UnresolvedDeclRefExpr *Node) {  
-  Node->getQualifier()->print(OS);
+  Node->getQualifier()->print(OS, Policy);
   OS << Node->getDeclName().getAsString();
+}
+
+void StmtPrinter::VisitTemplateIdRefExpr(TemplateIdRefExpr *Node) {
+  if (Node->getQualifier())
+    Node->getQualifier()->print(OS, Policy);
+  Node->getTemplateName().print(OS, Policy, true);
+  OS << '<';
+  OS << TemplateSpecializationType::PrintTemplateArgumentList(
+                                                      Node->getTemplateArgs(),
+                                                   Node->getNumTemplateArgs(),
+                                                              Policy);
+  OS << '>';
 }
 
 void StmtPrinter::VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node) {
@@ -692,13 +654,19 @@ void StmtPrinter::VisitUnaryOperator(UnaryOperator *Node) {
   if (!Node->isPostfix()) {
     OS << UnaryOperator::getOpcodeStr(Node->getOpcode());
     
-    // Print a space if this is an "identifier operator" like __real.
+    // Print a space if this is an "identifier operator" like __real, or if
+    // it might be concatenated incorrectly like '+'.
     switch (Node->getOpcode()) {
     default: break;
     case UnaryOperator::Real:
     case UnaryOperator::Imag:
     case UnaryOperator::Extension:
       OS << ' ';
+      break;
+    case UnaryOperator::Plus:
+    case UnaryOperator::Minus:
+      if (isa<UnaryOperator>(Node->getSubExpr()))
+        OS << ' ';
       break;
     }
   }
@@ -812,7 +780,7 @@ void StmtPrinter::VisitConditionalOperator(ConditionalOperator *Node) {
     PrintExpr(Node->getLHS());
     OS << " : ";
   }
-  else { // Handle GCC extention where LHS can be NULL.
+  else { // Handle GCC extension where LHS can be NULL.
     OS << " ?: ";
   }
   
@@ -861,6 +829,11 @@ void StmtPrinter::VisitShuffleVectorExpr(ShuffleVectorExpr *Node) {
 }
 
 void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
+  if (Node->getSyntacticForm()) {
+    Visit(Node->getSyntacticForm());
+    return;
+  }
+
   OS << "{ ";
   for (unsigned i = 0, e = Node->getNumInits(); i != e; ++i) {
     if (i) OS << ", ";
@@ -899,11 +872,19 @@ void StmtPrinter::VisitDesignatedInitExpr(DesignatedInitExpr *Node) {
 }
 
 void StmtPrinter::VisitImplicitValueInitExpr(ImplicitValueInitExpr *Node) {
-  OS << "/*implicit*/" << Node->getType().getAsString() << "()";
+  if (Policy.LangOpts.CPlusPlus)
+    OS << "/*implicit*/" << Node->getType().getAsString(Policy) << "()";
+  else {
+    OS << "/*implicit*/(" << Node->getType().getAsString(Policy) << ")";
+    if (Node->getType()->isRecordType())
+      OS << "{}";
+    else
+      OS << 0;
+  }
 }
 
 void StmtPrinter::VisitVAArgExpr(VAArgExpr *Node) {
-  OS << "va_arg(";
+  OS << "__builtin_va_arg(";
   PrintExpr(Node->getSubExpr());
   OS << ", ";
   OS << Node->getType().getAsString();
@@ -996,6 +977,10 @@ void StmtPrinter::VisitCXXBoolLiteralExpr(CXXBoolLiteralExpr *Node) {
   OS << (Node->getValue() ? "true" : "false");
 }
 
+void StmtPrinter::VisitCXXNullPtrLiteralExpr(CXXNullPtrLiteralExpr *Node) {
+  OS << "nullptr";
+}
+
 void StmtPrinter::VisitCXXThisExpr(CXXThisExpr *Node) {
   OS << "this";
 }
@@ -1018,6 +1003,10 @@ void StmtPrinter::VisitCXXFunctionalCastExpr(CXXFunctionalCastExpr *Node) {
   OS << "(";
   PrintExpr(Node->getSubExpr());
   OS << ")";
+}
+
+void StmtPrinter::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *Node) {
+  PrintExpr(Node->getSubExpr());
 }
 
 void StmtPrinter::VisitCXXTemporaryObjectExpr(CXXTemporaryObjectExpr *Node) {
@@ -1061,11 +1050,11 @@ void StmtPrinter::VisitCXXNewExpr(CXXNewExpr *E) {
   std::string TypeS;
   if (Expr *Size = E->getArraySize()) {
     llvm::raw_string_ostream s(TypeS);
-    Size->printPretty(s);
+    Size->printPretty(s, Context, Helper, Policy);
     s.flush();
     TypeS = "[" + TypeS + "]";
   }
-  E->getAllocatedType().getAsStringInternal(TypeS);
+  E->getAllocatedType().getAsStringInternal(TypeS, Policy);
   OS << TypeS;
   if (E->isParenTypeId())
     OS << ")";
@@ -1104,6 +1093,27 @@ void StmtPrinter::VisitCXXConstructExpr(CXXConstructExpr *E) {
 void StmtPrinter::VisitCXXExprWithTemporaries(CXXExprWithTemporaries *E) {
   // Just forward to the sub expression.
   PrintExpr(E->getSubExpr());
+}
+
+void 
+StmtPrinter::VisitCXXUnresolvedConstructExpr(
+                                           CXXUnresolvedConstructExpr *Node) {
+  OS << Node->getTypeAsWritten().getAsString();
+  OS << "(";
+  for (CXXUnresolvedConstructExpr::arg_iterator Arg = Node->arg_begin(),
+                                             ArgEnd = Node->arg_end(); 
+       Arg != ArgEnd; ++Arg) {
+    if (Arg != Node->arg_begin())
+      OS << ", ";
+    PrintExpr(*Arg);
+  }
+  OS << ")";
+}
+
+void StmtPrinter::VisitCXXUnresolvedMemberExpr(CXXUnresolvedMemberExpr *Node) {
+  PrintExpr(Node->getBase());
+  OS << (Node->isArrow() ? "->" : ".");
+  OS << Node->getMember().getAsString();
 }
 
 static const char *getTypeTraitName(UnaryTypeTrait UTT) {
@@ -1196,7 +1206,7 @@ void StmtPrinter::VisitBlockExpr(BlockExpr *Node) {
          E = BD->param_end(); AI != E; ++AI) {
       if (AI != BD->param_begin()) OS << ", ";
       ParamStr = (*AI)->getNameAsString();
-      (*AI)->getType().getAsStringInternal(ParamStr);
+      (*AI)->getType().getAsStringInternal(ParamStr, Policy);
       OS << ParamStr;
     }
     
@@ -1216,18 +1226,26 @@ void StmtPrinter::VisitBlockDeclRefExpr(BlockDeclRefExpr *Node) {
 // Stmt method implementations
 //===----------------------------------------------------------------------===//
 
-void Stmt::dumpPretty() const {
-  printPretty(llvm::errs());
+void Stmt::dumpPretty(ASTContext& Context) const {
+  printPretty(llvm::errs(), Context, 0,
+              PrintingPolicy(Context.getLangOptions()));
 }
 
-void Stmt::printPretty(llvm::raw_ostream &OS, PrinterHelper* Helper,
-                       unsigned I, bool NoIndent) const {
+void Stmt::printPretty(llvm::raw_ostream &OS, ASTContext& Context,
+                       PrinterHelper* Helper,
+                       const PrintingPolicy &Policy,
+                       unsigned Indentation) const {
   if (this == 0) {
     OS << "<NULL>";
     return;
   }
 
-  StmtPrinter P(OS, Helper, I, NoIndent);
+  if (Policy.Dump) {
+    dump();
+    return;
+  }
+  
+  StmtPrinter P(OS, Context, Helper, Policy, Indentation);
   P.Visit(const_cast<Stmt*>(this));
 }
 

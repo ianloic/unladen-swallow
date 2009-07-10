@@ -17,6 +17,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
 #include "clang/Basic/SourceLocation.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/StmtIterator.h"
 #include "clang/AST/DeclGroup.h"
 #include "llvm/ADT/SmallVector.h"
@@ -35,7 +36,6 @@ namespace clang {
   class SourceManager;
   class StringLiteral;
   class SwitchStmt;
-  class PrinterHelper;
   
   //===----------------------------------------------------------------------===//
   // ExprIterator - Iterators for iterating over Stmt* arrays that contain
@@ -186,9 +186,16 @@ public:
 
   /// dumpPretty/printPretty - These two methods do a "pretty print" of the AST
   /// back to its original source language syntax.
-  void dumpPretty() const;
-  void printPretty(llvm::raw_ostream &OS, PrinterHelper* = NULL, unsigned = 0,
-                   bool NoIndent=false) const;
+  void dumpPretty(ASTContext& Context) const;
+  void printPretty(llvm::raw_ostream &OS, PrinterHelper *Helper, 
+                   const PrintingPolicy &Policy,
+                   unsigned Indentation = 0) const {
+    printPretty(OS, *(ASTContext*)0, Helper, Policy, Indentation);
+  }
+  void printPretty(llvm::raw_ostream &OS, ASTContext &Context,
+                   PrinterHelper *Helper, 
+                   const PrintingPolicy &Policy,
+                   unsigned Indentation = 0) const;
   
   /// viewAST - Visualize an AST rooted at this Stmt* using GraphViz.  Only
   ///   works on systems with GraphViz (Mac OS X) or dot+gv installed.
@@ -289,6 +296,8 @@ public:
 
   /// \brief Build an empty null statement.
   explicit NullStmt(EmptyShell Empty) : Stmt(NullStmtClass, Empty) { }
+
+  NullStmt* Clone(ASTContext &C) const;
 
   SourceLocation getSemiLoc() const { return SemiLoc; }
   void setSemiLoc(SourceLocation L) { SemiLoc = L; }
@@ -415,14 +424,20 @@ class CaseStmt : public SwitchCase {
   Stmt* SubExprs[END_EXPR];  // The expression for the RHS is Non-null for 
                              // GNU "case 1 ... 4" extension
   SourceLocation CaseLoc;
+  SourceLocation EllipsisLoc;
+  SourceLocation ColonLoc;
+
   virtual Stmt* v_getSubStmt() { return getSubStmt(); }
 public:
-  CaseStmt(Expr *lhs, Expr *rhs, SourceLocation caseLoc) 
+  CaseStmt(Expr *lhs, Expr *rhs, SourceLocation caseLoc,
+           SourceLocation ellipsisLoc, SourceLocation colonLoc) 
     : SwitchCase(CaseStmtClass) {
     SubExprs[SUBSTMT] = 0;
     SubExprs[LHS] = reinterpret_cast<Stmt*>(lhs);
     SubExprs[RHS] = reinterpret_cast<Stmt*>(rhs);
     CaseLoc = caseLoc;
+    EllipsisLoc = ellipsisLoc;
+    ColonLoc = colonLoc;
   }
 
   /// \brief Build an empty switch case statement.
@@ -430,6 +445,10 @@ public:
 
   SourceLocation getCaseLoc() const { return CaseLoc; }
   void setCaseLoc(SourceLocation L) { CaseLoc = L; }
+  SourceLocation getEllipsisLoc() const { return EllipsisLoc; }
+  void setEllipsisLoc(SourceLocation L) { EllipsisLoc = L; }
+  SourceLocation getColonLoc() const { return ColonLoc; }
+  void setColonLoc(SourceLocation L) { ColonLoc = L; }
 
   Expr *getLHS() { return reinterpret_cast<Expr*>(SubExprs[LHS]); }
   Expr *getRHS() { return reinterpret_cast<Expr*>(SubExprs[RHS]); }
@@ -469,10 +488,12 @@ public:
 class DefaultStmt : public SwitchCase {
   Stmt* SubStmt;
   SourceLocation DefaultLoc;
+  SourceLocation ColonLoc;
   virtual Stmt* v_getSubStmt() { return getSubStmt(); }
 public:
-  DefaultStmt(SourceLocation DL, Stmt *substmt) : 
-    SwitchCase(DefaultStmtClass), SubStmt(substmt), DefaultLoc(DL) {}
+  DefaultStmt(SourceLocation DL, SourceLocation CL, Stmt *substmt) : 
+    SwitchCase(DefaultStmtClass), SubStmt(substmt), DefaultLoc(DL),
+    ColonLoc(CL) {}
 
   /// \brief Build an empty default statement.
   explicit DefaultStmt(EmptyShell) : SwitchCase(DefaultStmtClass) { }
@@ -483,6 +504,8 @@ public:
 
   SourceLocation getDefaultLoc() const { return DefaultLoc; }
   void setDefaultLoc(SourceLocation L) { DefaultLoc = L; }
+  SourceLocation getColonLoc() const { return ColonLoc; }
+  void setColonLoc(SourceLocation L) { ColonLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(DefaultLoc, SubStmt->getLocEnd()); 
@@ -538,13 +561,16 @@ class IfStmt : public Stmt {
   enum { COND, THEN, ELSE, END_EXPR };
   Stmt* SubExprs[END_EXPR];
   SourceLocation IfLoc;
+  SourceLocation ElseLoc;
 public:
-  IfStmt(SourceLocation IL, Expr *cond, Stmt *then, Stmt *elsev = 0) 
+  IfStmt(SourceLocation IL, Expr *cond, Stmt *then, 
+         SourceLocation EL = SourceLocation(), Stmt *elsev = 0) 
     : Stmt(IfStmtClass)  {
     SubExprs[COND] = reinterpret_cast<Stmt*>(cond);
     SubExprs[THEN] = then;
     SubExprs[ELSE] = elsev;
     IfLoc = IL;
+    ElseLoc = EL;
   }
   
   /// \brief Build an empty if/then/else statement
@@ -563,6 +589,8 @@ public:
 
   SourceLocation getIfLoc() const { return IfLoc; }
   void setIfLoc(SourceLocation L) { IfLoc = L; }
+  SourceLocation getElseLoc() const { return ElseLoc; }
+  void setElseLoc(SourceLocation L) { ElseLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     if (SubExprs[ELSE])
@@ -680,12 +708,15 @@ class DoStmt : public Stmt {
   enum { COND, BODY, END_EXPR };
   Stmt* SubExprs[END_EXPR];
   SourceLocation DoLoc;
+  SourceLocation WhileLoc;
+  SourceLocation RParenLoc;  // Location of final ')' in do stmt condition.
+
 public:
-  DoStmt(Stmt *body, Expr *cond, SourceLocation DL) 
-    : Stmt(DoStmtClass), DoLoc(DL) {
+  DoStmt(Stmt *body, Expr *cond, SourceLocation DL, SourceLocation WL,
+         SourceLocation RP)
+    : Stmt(DoStmtClass), DoLoc(DL), WhileLoc(WL), RParenLoc(RP) {
     SubExprs[COND] = reinterpret_cast<Stmt*>(cond);
     SubExprs[BODY] = body;
-    DoLoc = DL;
   }  
 
   /// \brief Build an empty do-while statement.
@@ -700,9 +731,14 @@ public:
 
   SourceLocation getDoLoc() const { return DoLoc; }
   void setDoLoc(SourceLocation L) { DoLoc = L; }
+  SourceLocation getWhileLoc() const { return WhileLoc; }
+  void setWhileLoc(SourceLocation L) { WhileLoc = L; }
+
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
-    return SourceRange(DoLoc, SubExprs[BODY]->getLocEnd()); 
+    return SourceRange(DoLoc, RParenLoc); 
   }
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == DoStmtClass; 
@@ -723,14 +759,19 @@ class ForStmt : public Stmt {
   enum { INIT, COND, INC, BODY, END_EXPR };
   Stmt* SubExprs[END_EXPR]; // SubExprs[INIT] is an expression or declstmt.
   SourceLocation ForLoc;
+  SourceLocation LParenLoc, RParenLoc;
+
 public:
-  ForStmt(Stmt *Init, Expr *Cond, Expr *Inc, Stmt *Body, SourceLocation FL) 
+  ForStmt(Stmt *Init, Expr *Cond, Expr *Inc, Stmt *Body, SourceLocation FL,
+          SourceLocation LP, SourceLocation RP) 
     : Stmt(ForStmtClass) {
     SubExprs[INIT] = Init;
     SubExprs[COND] = reinterpret_cast<Stmt*>(Cond);
     SubExprs[INC] = reinterpret_cast<Stmt*>(Inc);
     SubExprs[BODY] = Body;
     ForLoc = FL;
+    LParenLoc = LP;
+    RParenLoc = RP;
   }
   
   /// \brief Build an empty for statement.
@@ -753,6 +794,10 @@ public:
 
   SourceLocation getForLoc() const { return ForLoc; }
   void setForLoc(SourceLocation L) { ForLoc = L; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  void setLParenLoc(SourceLocation L) { LParenLoc = L; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
   virtual SourceRange getSourceRange() const { 
     return SourceRange(ForLoc, SubExprs[BODY]->getLocEnd()); 
@@ -805,10 +850,13 @@ public:
 ///
 class IndirectGotoStmt : public Stmt {
   SourceLocation GotoLoc;
+  SourceLocation StarLoc;
   Stmt *Target;
 public:
-  IndirectGotoStmt(SourceLocation gotoLoc, Expr *target)
-    : Stmt(IndirectGotoStmtClass), GotoLoc(gotoLoc), Target((Stmt*)target) {}
+  IndirectGotoStmt(SourceLocation gotoLoc, SourceLocation starLoc, 
+                   Expr *target)
+    : Stmt(IndirectGotoStmtClass), GotoLoc(gotoLoc), StarLoc(starLoc),
+      Target((Stmt*)target) {}
 
   /// \brief Build an empty indirect goto statement.
   explicit IndirectGotoStmt(EmptyShell Empty) 
@@ -816,6 +864,8 @@ public:
   
   void setGotoLoc(SourceLocation L) { GotoLoc = L; }
   SourceLocation getGotoLoc() const { return GotoLoc; }
+  void setStarLoc(SourceLocation L) { StarLoc = L; }
+  SourceLocation getStarLoc() const { return StarLoc; }
   
   Expr *getTarget();
   const Expr *getTarget() const;
@@ -852,6 +902,9 @@ public:
   virtual SourceRange getSourceRange() const { 
     return SourceRange(ContinueLoc); 
   }
+
+  ContinueStmt* Clone(ASTContext &C) const;
+
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ContinueStmtClass; 
   }
@@ -876,6 +929,8 @@ public:
   void setBreakLoc(SourceLocation L) { BreakLoc = L; }
 
   virtual SourceRange getSourceRange() const { return SourceRange(BreakLoc); }
+
+  BreakStmt* Clone(ASTContext &C) const;
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == BreakStmtClass; 
@@ -1116,30 +1171,39 @@ public:
   typedef ConstExprIterator const_inputs_iterator;
   
   inputs_iterator begin_inputs() {
-    return &Exprs[0] + NumOutputs;
+    return Exprs.data() + NumOutputs;
   }
   
   inputs_iterator end_inputs() {
-    return  &Exprs[0] + NumOutputs + NumInputs;
+    return Exprs.data() + NumOutputs + NumInputs;
   }
   
   const_inputs_iterator begin_inputs() const {
-    return &Exprs[0] + NumOutputs;
+    return Exprs.data() + NumOutputs;
   }
   
   const_inputs_iterator end_inputs() const {
-    return  &Exprs[0] + NumOutputs + NumInputs;}
+    return Exprs.data() + NumOutputs + NumInputs;
+  }
   
   // Output expr iterators.
   
   typedef ExprIterator outputs_iterator;
   typedef ConstExprIterator const_outputs_iterator;
   
-  outputs_iterator begin_outputs() { return &Exprs[0]; }
-  outputs_iterator end_outputs() { return &Exprs[0] + NumOutputs; }
+  outputs_iterator begin_outputs() {
+    return Exprs.data();
+  }
+  outputs_iterator end_outputs() {
+    return Exprs.data() + NumOutputs;
+  }
   
-  const_outputs_iterator begin_outputs() const { return &Exprs[0]; }
-  const_outputs_iterator end_outputs() const { return &Exprs[0] + NumOutputs; }
+  const_outputs_iterator begin_outputs() const {
+    return Exprs.data();
+  }
+  const_outputs_iterator end_outputs() const {
+    return Exprs.data() + NumOutputs;
+  }
   
   // Input name iterator.
   

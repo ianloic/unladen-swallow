@@ -736,12 +736,14 @@ def MOVHPSmr : PSI<0x17, MRMDestMem, (outs), (ins f64mem:$dst, VR128:$src),
 
 let Constraints = "$src1 = $dst" in {
 let AddedComplexity = 20 in {
-def MOVLHPSrr : PSI<0x16, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+def MOVLHPSrr : PSI<0x16, MRMSrcReg, (outs VR128:$dst),
+                                     (ins VR128:$src1, VR128:$src2),
                     "movlhps\t{$src2, $dst|$dst, $src2}",
                     [(set VR128:$dst,
                       (v4f32 (movhp VR128:$src1, VR128:$src2)))]>;
 
-def MOVHLPSrr : PSI<0x12, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+def MOVHLPSrr : PSI<0x12, MRMSrcReg, (outs VR128:$dst),
+                                     (ins VR128:$src1, VR128:$src2),
                     "movhlps\t{$src2, $dst|$dst, $src2}",
                     [(set VR128:$dst,
                       (v4f32 (movhlps VR128:$src1, VR128:$src2)))]>;
@@ -951,7 +953,7 @@ let Constraints = "$src1 = $dst" in {
 def MOVMSKPSrr : PSI<0x50, MRMSrcReg, (outs GR32:$dst), (ins VR128:$src),
                      "movmskps\t{$src, $dst|$dst, $src}",
                      [(set GR32:$dst, (int_x86_sse_movmsk_ps VR128:$src))]>;
-def MOVMSKPDrr : PSI<0x50, MRMSrcReg, (outs GR32:$dst), (ins VR128:$src),
+def MOVMSKPDrr : PDI<0x50, MRMSrcReg, (outs GR32:$dst), (ins VR128:$src),
                      "movmskpd\t{$src, $dst|$dst, $src}",
                      [(set GR32:$dst, (int_x86_sse2_movmsk_pd VR128:$src))]>;
 
@@ -971,7 +973,7 @@ def MOVNTPSmr : PSI<0x2B, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
                     [(int_x86_sse_movnt_ps addr:$dst, VR128:$src)]>;
 
 // Load, store, and memory fence
-def SFENCE : PSI<0xAE, MRM7m, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>;
+def SFENCE : PSI<0xAE, MRM7r, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>;
 
 // MXCSR register
 def LDMXCSR : PSI<0xAE, MRM2m, (outs), (ins i32mem:$src),
@@ -1906,7 +1908,7 @@ defm PMINUB : PDI_binop_rm_int<0xDA, "pminub", int_x86_sse2_pminu_b, 1>;
 defm PMINSW : PDI_binop_rm_int<0xEA, "pminsw", int_x86_sse2_pmins_w, 1>;
 defm PMAXUB : PDI_binop_rm_int<0xDE, "pmaxub", int_x86_sse2_pmaxu_b, 1>;
 defm PMAXSW : PDI_binop_rm_int<0xEE, "pmaxsw", int_x86_sse2_pmaxs_w, 1>;
-defm PSADBW : PDI_binop_rm_int<0xE0, "psadbw", int_x86_sse2_psad_bw, 1>;
+defm PSADBW : PDI_binop_rm_int<0xF6, "psadbw", int_x86_sse2_psad_bw, 1>;
 
 
 defm PSLLW : PDI_binop_rmi_int<0xF1, 0x71, MRM6r, "psllw",
@@ -2502,9 +2504,9 @@ let Constraints = "$src1 = $dst" in {
 }
 
 // Thread synchronization
-def MONITOR : I<0xC8, RawFrm, (outs), (ins), "monitor",
+def MONITOR : I<0x01, MRM1r, (outs), (ins), "monitor",
                 [(int_x86_sse3_monitor EAX, ECX, EDX)]>,TB, Requires<[HasSSE3]>;
-def MWAIT   : I<0xC9, RawFrm, (outs), (ins), "mwait",
+def MWAIT   : I<0x01, MRM1r, (outs), (ins), "mwait",
                 [(int_x86_sse3_mwait ECX, EAX)]>, TB, Requires<[HasSSE3]>;
 
 // vector_shuffle v1, <undef> <1, 1, 3, 3>
@@ -2756,7 +2758,7 @@ defm PSIGNB      : SS3I_binop_rm_int_8 <0x08, "psignb",
 defm PSIGNW      : SS3I_binop_rm_int_16<0x09, "psignw",
                                         int_x86_ssse3_psign_w,
                                         int_x86_ssse3_psign_w_128>;
-defm PSIGND      : SS3I_binop_rm_int_32<0x09, "psignd",
+defm PSIGND      : SS3I_binop_rm_int_32<0x0A, "psignd",
                                         int_x86_ssse3_psign_d,
                                         int_x86_ssse3_psign_d_128>;
 
@@ -3024,6 +3026,12 @@ def : Pat<(v4f32 (movlp VR128:$src1, VR128:$src2)),
 def : Pat<(v4i32 (movlp VR128:$src1, VR128:$src2)),
           (MOVLPDrr VR128:$src1, VR128:$src2)>, Requires<[HasSSE2]>;
 }
+
+// vector_shuffle v1, v2 <4, 5, 2, 3> using SHUFPSrri (we prefer movsd, but
+// fall back to this for SSE1)
+def : Pat<(v4f32 (movlp:$src3 VR128:$src1, (v4f32 VR128:$src2))),
+          (SHUFPSrri VR128:$src2, VR128:$src1, 
+                     (SHUFFLE_get_shuf_imm VR128:$src3))>, Requires<[HasSSE1]>;
 
 // Set lowest element and zero upper elements.
 let AddedComplexity = 15 in
@@ -3445,7 +3453,7 @@ multiclass SS41I_binop_rm_int2<bits<8> opc, string OpcodeStr, Intrinsic IntId> {
 }
 
 defm PMOVSXBQ   : SS41I_binop_rm_int2<0x22, "pmovsxbq", int_x86_sse41_pmovsxbq>;
-defm PMOVZXBQ   : SS41I_binop_rm_int2<0x32, "pmovsxbq", int_x86_sse41_pmovzxbq>;
+defm PMOVZXBQ   : SS41I_binop_rm_int2<0x32, "pmovzxbq", int_x86_sse41_pmovzxbq>;
 
 // Common patterns involving scalar load
 def : Pat<(int_x86_sse41_pmovsxbq

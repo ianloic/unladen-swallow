@@ -17,9 +17,12 @@
 #include "llvm/Support/Timer.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Streams.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/System/Mutex.h"
+#include "llvm/System/Threading.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm-c/Core.h"
 #include <algorithm>
@@ -43,7 +46,12 @@ enum PassDebugLevel {
   None, Arguments, Structure, Executions, Details
 };
 
+// Always verify dominfo if expensive checking is enabled.
+#ifdef XDEBUG
+bool VerifyDomInfo = true;
+#else
 bool VerifyDomInfo = false;
+#endif
 static cl::opt<bool,true>
 VerifyDomInfoX("verify-dom-info", cl::location(VerifyDomInfo),
                cl::desc("Verify dominator info (time consuming)"));
@@ -158,11 +166,13 @@ namespace llvm {
 class FunctionPassManagerImpl : public Pass,
                                 public PMDataManager,
                                 public PMTopLevelManager {
+private:
+  bool wasRun;
 public:
   static char ID;
   explicit FunctionPassManagerImpl(int Depth) : 
     Pass(&ID), PMDataManager(Depth), 
-    PMTopLevelManager(TLM_Function) { }
+    PMTopLevelManager(TLM_Function), wasRun(false) { }
 
   /// add - Add a pass to the queue of passes to run.  This passes ownership of
   /// the Pass to the PassManager.  When the PassManager is destroyed, the pass
@@ -172,6 +182,10 @@ public:
     schedulePass(P);
   }
  
+  // Prepare for running an on the fly pass, freeing memory if needed
+  // from a previous run.
+  void releaseMemoryOnTheFly();
+
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool run(Function &F);
@@ -265,8 +279,10 @@ public:
     for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
       ModulePass *MP = getContainedPass(Index);
       MP->dumpPassStructure(Offset + 1);
-      if (FunctionPassManagerImpl *FPP = OnTheFlyManagers[MP])
-        FPP->dumpPassStructure(Offset + 2);
+      std::map<Pass *, FunctionPassManagerImpl *>::const_iterator I =
+        OnTheFlyManagers.find(MP);
+      if (I != OnTheFlyManagers.end())
+        I->second->dumpPassStructure(Offset + 2);
       dumpLastUses(MP, Offset+1);
     }
   }
@@ -350,6 +366,9 @@ namespace {
 /// amount of time each pass takes to execute.  This only happens when
 /// -time-passes is enabled on the command line.
 ///
+
+static ManagedStatic<sys::SmartMutex<true> > TimingInfoMutex;
+
 class VISIBILITY_HIDDEN TimingInfo {
   std::map<Pass*, Timer> TimingData;
   TimerGroup TG;
@@ -374,15 +393,18 @@ public:
     if (dynamic_cast<PMDataManager *>(P)) 
       return;
 
+    sys::SmartScopedLock<true> Lock(*TimingInfoMutex);
     std::map<Pass*, Timer>::iterator I = TimingData.find(P);
     if (I == TimingData.end())
       I=TimingData.insert(std::make_pair(P, Timer(P->getPassName(), TG))).first;
     I->second.startTimer();
   }
+  
   void passEnded(Pass *P) {
     if (dynamic_cast<PMDataManager *>(P)) 
       return;
 
+    sys::SmartScopedLock<true> Lock(*TimingInfoMutex);
     std::map<Pass*, Timer>::iterator I = TimingData.find(P);
     assert(I != TimingData.end() && "passStarted/passEnded not nested right!");
     I->second.stopTimer();
@@ -1227,8 +1249,7 @@ void FunctionPassManager::add(Pass *P) {
 bool FunctionPassManager::run(Function &F) {
   std::string errstr;
   if (MP->materializeFunction(&F, &errstr)) {
-    cerr << "Error reading bitcode file: " << errstr << "\n";
-    abort();
+    llvm_report_error("Error reading bitcode file: " + errstr);
   }
   return FPM->run(F);
 }
@@ -1277,6 +1298,18 @@ void FPPassManager::cleanup() {
  }
 }
 
+void FunctionPassManagerImpl::releaseMemoryOnTheFly() {
+  if (!wasRun)
+    return;
+  for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
+    FPPassManager *FPPM = getContainedManager(Index);
+    for (unsigned Index = 0; Index < FPPM->getNumContainedPasses(); ++Index) {
+      FPPM->getContainedPass(Index)->releaseMemory();
+    }
+  }
+  wasRun = false;
+}
+
 // Execute all the passes managed by this top level manager.
 // Return true if any function is modified by a pass.
 bool FunctionPassManagerImpl::run(Function &F) {
@@ -1293,6 +1326,7 @@ bool FunctionPassManagerImpl::run(Function &F) {
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index)
     getContainedManager(Index)->cleanup();
 
+  wasRun = true;
   return Changed;
 }
 
@@ -1391,6 +1425,14 @@ bool
 MPPassManager::runOnModule(Module &M) {
   bool Changed = false;
 
+  // Initialize on-the-fly passes
+  for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
+       I = OnTheFlyManagers.begin(), E = OnTheFlyManagers.end();
+       I != E; ++I) {
+    FunctionPassManagerImpl *FPP = I->second;
+    Changed |= FPP->doInitialization(M);
+  }
+
   for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
     ModulePass *MP = getContainedPass(Index);
 
@@ -1416,6 +1458,17 @@ MPPassManager::runOnModule(Module &M) {
     removeNotPreservedAnalysis(MP);
     recordAvailableAnalysis(MP);
     removeDeadPasses(MP, M.getModuleIdentifier().c_str(), ON_MODULE_MSG);
+  }
+
+  // Finalize on-the-fly passes
+  for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
+       I = OnTheFlyManagers.begin(), E = OnTheFlyManagers.end();
+       I != E; ++I) {
+    FunctionPassManagerImpl *FPP = I->second;
+    // We don't know when is the last time an on-the-fly pass is run,
+    // so we need to releaseMemory / finalize here
+    FPP->releaseMemoryOnTheFly();
+    Changed |= FPP->doFinalization(M);
   }
   return Changed;
 }
@@ -1453,6 +1506,7 @@ Pass* MPPassManager::getOnTheFlyPass(Pass *MP, const PassInfo *PI, Function &F){
   FunctionPassManagerImpl *FPP = OnTheFlyManagers[MP];
   assert(FPP && "Unable to find on the fly pass");
   
+  FPP->releaseMemoryOnTheFly();
   FPP->run(F);
   return (dynamic_cast<PMTopLevelManager *>(FPP))->findAnalysisPass(PI);
 }

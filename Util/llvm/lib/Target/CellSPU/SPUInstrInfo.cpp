@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/Support/Streams.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -313,14 +314,13 @@ SPUInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   } else if (RC == SPU::VECREGRegisterClass) {
     opc = (isValidFrameIdx) ? SPU::STQDv16i8 : SPU::STQXv16i8;
   } else {
-    assert(0 && "Unknown regclass!");
-    abort();
+    LLVM_UNREACHABLE("Unknown regclass!");
   }
 
   DebugLoc DL = DebugLoc::getUnknownLoc();
   if (MI != MBB.end()) DL = MI->getDebugLoc();
   addFrameReference(BuildMI(MBB, MI, DL, get(opc))
-                    .addReg(SrcReg, false, false, isKill), FrameIdx);
+                    .addReg(SrcReg, getKillRegState(isKill)), FrameIdx);
 }
 
 void SPUInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
@@ -328,8 +328,7 @@ void SPUInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
                                   SmallVectorImpl<MachineOperand> &Addr,
                                   const TargetRegisterClass *RC,
                                   SmallVectorImpl<MachineInstr*> &NewMIs) const {
-  cerr << "storeRegToAddr() invoked!\n";
-  abort();
+  llvm_report_error("storeRegToAddr() invoked!");
 
   if (Addr[0].isFI()) {
     /* do what storeRegToStackSlot does here */
@@ -348,12 +347,11 @@ void SPUInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
     } else if (RC == SPU::VECREGRegisterClass) {
       /* Opc = PPC::STVX; */
     } else {
-      assert(0 && "Unknown regclass!");
-      abort();
+      LLVM_UNREACHABLE("Unknown regclass!");
     }
     DebugLoc DL = DebugLoc::getUnknownLoc();
     MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc))
-      .addReg(SrcReg, false, false, isKill);
+      .addReg(SrcReg, getKillRegState(isKill));
     for (unsigned i = 0, e = Addr.size(); i != e; ++i)
       MIB.addOperand(Addr[i]);
     NewMIs.push_back(MIB);
@@ -385,13 +383,12 @@ SPUInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   } else if (RC == SPU::VECREGRegisterClass) {
     opc = (isValidFrameIdx) ? SPU::LQDv16i8 : SPU::LQXv16i8;
   } else {
-    assert(0 && "Unknown regclass in loadRegFromStackSlot!");
-    abort();
+    LLVM_UNREACHABLE("Unknown regclass in loadRegFromStackSlot!");
   }
 
   DebugLoc DL = DebugLoc::getUnknownLoc();
   if (MI != MBB.end()) DL = MI->getDebugLoc();
-  addFrameReference(BuildMI(MBB, MI, DL, get(opc)).addReg(DestReg), FrameIdx);
+  addFrameReference(BuildMI(MBB, MI, DL, get(opc), DestReg), FrameIdx);
 }
 
 /*!
@@ -402,8 +399,7 @@ void SPUInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
                                    const TargetRegisterClass *RC,
                                    SmallVectorImpl<MachineInstr*> &NewMIs)
     const {
-  cerr << "loadRegToAddr() invoked!\n";
-  abort();
+  llvm_report_error("loadRegToAddr() invoked!");
 
   if (Addr[0].isFI()) {
     /* do what loadRegFromStackSlot does here... */
@@ -424,8 +420,7 @@ void SPUInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
     } else if (RC == SPU::GPRCRegisterClass) {
       /* Opc = something else! */
     } else {
-      assert(0 && "Unknown regclass!");
-      abort();
+      LLVM_UNREACHABLE("Unknown regclass!");
     }
     DebugLoc DL = DebugLoc::getUnknownLoc();
     MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc), DestReg);
@@ -491,19 +486,22 @@ SPUInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     if (OpNum == 0) {  // move -> store
       unsigned InReg = MI->getOperand(1).getReg();
       bool isKill = MI->getOperand(1).isKill();
+      bool isUndef = MI->getOperand(1).isUndef();
       if (FrameIndex < SPUFrameInfo::maxFrameOffset()) {
         MachineInstrBuilder MIB = BuildMI(MF, MI->getDebugLoc(),
                                           get(SPU::STQDr32));
 
-        MIB.addReg(InReg, false, false, isKill);
+        MIB.addReg(InReg, getKillRegState(isKill) | getUndefRegState(isUndef));
         NewMI = addFrameReference(MIB, FrameIndex);
       }
     } else {           // move -> load
       unsigned OutReg = MI->getOperand(0).getReg();
       bool isDead = MI->getOperand(0).isDead();
+      bool isUndef = MI->getOperand(0).isUndef();
       MachineInstrBuilder MIB = BuildMI(MF, MI->getDebugLoc(), get(Opc));
 
-      MIB.addReg(OutReg, true, false, false, isDead);
+      MIB.addReg(OutReg, RegState::Define | getDeadRegState(isDead) |
+                 getUndefRegState(isUndef));
       Opc = (FrameIndex < SPUFrameInfo::maxFrameOffset())
         ? SPU::STQDr32 : SPU::STQXr32;
       NewMI = addFrameReference(MIB, FrameIndex);

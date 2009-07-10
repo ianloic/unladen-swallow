@@ -54,6 +54,7 @@
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/Dominators.h"
@@ -258,6 +259,9 @@ bool LoopIndexSplit::runOnLoop(Loop *IncomingLoop, LPPassManager &LPM_Ref) {
     IVExitValue = ExitCondition->getOperand(0);
   if (!L->isLoopInvariant(IVExitValue))
     return false;
+  if (!IVBasedValues.count(
+        ExitCondition->getOperand(IVExitValue == ExitCondition->getOperand(0))))
+    return false;
 
   // If start value is more then exit value where induction variable
   // increments by 1 then we are potentially dealing with an infinite loop.
@@ -289,14 +293,16 @@ static bool isUsedOutsideLoop(Value *V, Loop *L) {
 }
 
 // Return V+1
-static Value *getPlusOne(Value *V, bool Sign, Instruction *InsertPt) {
-  ConstantInt *One = ConstantInt::get(V->getType(), 1, Sign);
+static Value *getPlusOne(Value *V, bool Sign, Instruction *InsertPt, 
+                         LLVMContext *Context) {
+  Constant *One = Context->getConstantInt(V->getType(), 1, Sign);
   return BinaryOperator::CreateAdd(V, One, "lsp", InsertPt);
 }
 
 // Return V-1
-static Value *getMinusOne(Value *V, bool Sign, Instruction *InsertPt) {
-  ConstantInt *One = ConstantInt::get(V->getType(), 1, Sign);
+static Value *getMinusOne(Value *V, bool Sign, Instruction *InsertPt,
+                          LLVMContext *Context) {
+  Constant *One = Context->getConstantInt(V->getType(), 1, Sign);
   return BinaryOperator::CreateSub(V, One, "lsp", InsertPt);
 }
 
@@ -349,11 +355,8 @@ bool LoopIndexSplit::processOneIterationLoop() {
   // If BR operands are not IV or not loop invariants then skip this loop.
   Value *OPV = SplitCondition->getOperand(0);
   Value *SplitValue = SplitCondition->getOperand(1);
-  if (!L->isLoopInvariant(SplitValue)) {
-    Value *T = SplitValue;
-    SplitValue = OPV;
-    OPV = T;
-  }
+  if (!L->isLoopInvariant(SplitValue))
+    std::swap(OPV, SplitValue);
   if (!L->isLoopInvariant(SplitValue))
     return false;
   Instruction *OPI = dyn_cast<Instruction>(OPV);
@@ -494,16 +497,16 @@ bool LoopIndexSplit::restrictLoopBound(ICmpInst &Op) {
   if (Value *V = IVisLT(Op)) {
     // Restrict upper bound.
     if (IVisLE(*ExitCondition)) 
-      V = getMinusOne(V, Sign, PHTerm);
+      V = getMinusOne(V, Sign, PHTerm, Context);
     NUB = getMin(V, IVExitValue, Sign, PHTerm);
   } else if (Value *V = IVisLE(Op)) {
     // Restrict upper bound.
     if (IVisLT(*ExitCondition)) 
-      V = getPlusOne(V, Sign, PHTerm);
+      V = getPlusOne(V, Sign, PHTerm, Context);
     NUB = getMin(V, IVExitValue, Sign, PHTerm);
   } else if (Value *V = IVisGT(Op)) {
     // Restrict lower bound.
-    V = getPlusOne(V, Sign, PHTerm);
+    V = getPlusOne(V, Sign, PHTerm, Context);
     NLB = getMax(V, IVStartValue, Sign, PHTerm);
   } else if (Value *V = IVisGE(Op))
     // Restrict lower bound.
@@ -783,25 +786,23 @@ void LoopIndexSplit::moveExitCondition(BasicBlock *CondBB, BasicBlock *ActiveBB,
   // ExitBB is now dominated by CondBB
   DT->changeImmediateDominator(ExitBB, CondBB);
   DF->changeImmediateDominator(ExitBB, CondBB, DT);
-  
-  // Basicblocks dominated by ActiveBB may have ExitingBB or
-  // a basic block outside the loop in their DF list. If so,
-  // replace it with CondBB.
-  DomTreeNode *Node = DT->getNode(ActiveBB);
-  for (df_iterator<DomTreeNode *> DI = df_begin(Node), DE = df_end(Node);
-       DI != DE; ++DI) {
-    BasicBlock *BB = DI->getBlock();
-    DominanceFrontier::iterator BBDF = DF->find(BB);
+
+  // Blocks outside the loop may have been in the dominance frontier of blocks
+  // inside the condition; this is now impossible because the blocks inside the
+  // condition no loger dominate the exit.  Remove the relevant blocks from
+  // the dominance frontiers.
+  for (Loop::block_iterator I = LP->block_begin(), E = LP->block_end();
+       I != E; ++I) {
+    if (*I == CondBB || !DT->dominates(CondBB, *I)) continue;
+    DominanceFrontier::iterator BBDF = DF->find(*I);
     DominanceFrontier::DomSetType::iterator DomSetI = BBDF->second.begin();
     DominanceFrontier::DomSetType::iterator DomSetE = BBDF->second.end();
     while (DomSetI != DomSetE) {
       DominanceFrontier::DomSetType::iterator CurrentItr = DomSetI;
       ++DomSetI;
       BasicBlock *DFBB = *CurrentItr;
-      if (DFBB == ExitingBB || !L->contains(DFBB)) {
+      if (!LP->contains(DFBB))
         BBDF->second.erase(DFBB);
-        BBDF->second.insert(CondBB);
-      }
     }
   }
 }
@@ -966,18 +967,18 @@ bool LoopIndexSplit::splitLoop() {
       /* Do nothing */
     }
     else if (IVisLE(*SplitCondition)) {
-      AEV = getPlusOne(SplitValue, Sign, PHTerm);
-      BSV = getPlusOne(SplitValue, Sign, PHTerm);
+      AEV = getPlusOne(SplitValue, Sign, PHTerm, Context);
+      BSV = getPlusOne(SplitValue, Sign, PHTerm, Context);
     } else {
       assert (0 && "Unexpected split condition!");
     }
   }
   else if (IVisLE(*ExitCondition)) {
     if (IVisLT(*SplitCondition)) {
-      AEV = getMinusOne(SplitValue, Sign, PHTerm);
+      AEV = getMinusOne(SplitValue, Sign, PHTerm, Context);
     }
     else if (IVisLE(*SplitCondition)) {
-      BSV = getPlusOne(SplitValue, Sign, PHTerm);
+      BSV = getPlusOne(SplitValue, Sign, PHTerm, Context);
     } else {
       assert (0 && "Unexpected split condition!");
     }
@@ -1148,7 +1149,7 @@ bool LoopIndexSplit::cleanBlock(BasicBlock *BB) {
         || isa<DbgInfoIntrinsic>(I))
       continue;
 
-    if (I->mayWriteToMemory())
+    if (I->mayHaveSideEffects())
       return false;
 
     // I is used only inside this block then it is OK.

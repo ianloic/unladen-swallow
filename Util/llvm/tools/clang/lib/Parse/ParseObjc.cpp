@@ -14,7 +14,6 @@
 #include "clang/Parse/Parser.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
-#include "AstGuard.h"
 #include "clang/Parse/ParseDiagnostic.h"
 #include "llvm/ADT/SmallVector.h"
 using namespace clang;
@@ -158,10 +157,13 @@ Parser::DeclPtrTy Parser::ParseObjCAtInterfaceDeclaration(
     if (attrList) // categories don't support attributes.
       Diag(Tok, diag::err_objc_no_attributes_on_category);
     
-    DeclPtrTy CategoryType = Actions.ActOnStartCategoryInterface(atLoc, 
-                                     nameId, nameLoc, categoryId, categoryLoc,
-                                     &ProtocolRefs[0], ProtocolRefs.size(),
-                                     EndProtoLoc);
+    DeclPtrTy CategoryType =
+      Actions.ActOnStartCategoryInterface(atLoc, 
+                                          nameId, nameLoc,
+                                          categoryId, categoryLoc,
+                                          ProtocolRefs.data(),
+                                          ProtocolRefs.size(),
+                                          EndProtoLoc);
     
     ParseObjCInterfaceDeclList(CategoryType, tok::objc_not_keyword);
     return CategoryType;
@@ -189,7 +191,7 @@ Parser::DeclPtrTy Parser::ParseObjCAtInterfaceDeclaration(
   DeclPtrTy ClsType = 
     Actions.ActOnStartClassInterface(atLoc, nameId, nameLoc, 
                                      superClassId, superClassLoc,
-                                     &ProtocolRefs[0], ProtocolRefs.size(),
+                                     ProtocolRefs.data(), ProtocolRefs.size(),
                                      EndProtoLoc, attrList);
             
   if (Tok.is(tok::l_brace))
@@ -358,9 +360,9 @@ void Parser::ParseObjCInterfaceDeclList(DeclPtrTy interfaceDecl,
   // Insert collected methods declarations into the @interface object.
   // This passes in an invalid SourceLocation for AtEndLoc when EOF is hit.
   Actions.ActOnAtEnd(AtEndLoc, interfaceDecl,
-                     &allMethods[0], allMethods.size(), 
-                     &allProperties[0], allProperties.size(),
-                     &allTUVariables[0], allTUVariables.size());
+                     allMethods.data(), allMethods.size(), 
+                     allProperties.data(), allProperties.size(),
+                     allTUVariables.data(), allTUVariables.size());
 }
 
 ///   Parse property attribute declarations.
@@ -769,10 +771,12 @@ Parser::DeclPtrTy Parser::ParseObjCMethodDecl(SourceLocation mLoc,
   if (getLang().ObjC2 && Tok.is(tok::kw___attribute)) 
     MethodAttrs = ParseAttributes();
   
+  if (KeyIdents.size() == 0)
+    return DeclPtrTy();
   Selector Sel = PP.getSelectorTable().getSelector(KeyIdents.size(),
                                                    &KeyIdents[0]);
   return Actions.ActOnMethodDeclaration(mLoc, Tok.getLocation(),
-                                        mType, IDecl, DSRet, ReturnType, Sel, 
+                                        mType, IDecl, DSRet, ReturnType, Sel,
                                         &ArgInfos[0], CargNames, MethodAttrs,
                                         MethodImplKind, isVariadic);
 }
@@ -889,6 +893,7 @@ void Parser::ParseObjCClassInstanceVariables(DeclPtrTy interfaceDecl,
       // Install the declarator into interfaceDecl.
       DeclPtrTy Field = Actions.ActOnIvar(CurScope,
                                           DS.getSourceRange().getBegin(),
+                                          interfaceDecl,
                                           FD.D, FD.BitfieldSize, visibility);
       AllIvarDecls.push_back(Field);
     }
@@ -905,7 +910,7 @@ void Parser::ParseObjCClassInstanceVariables(DeclPtrTy interfaceDecl,
   // Call ActOnFields() even if we don't have any decls. This is useful
   // for code rewriting tools that need to be aware of the empty list.
   Actions.ActOnFields(CurScope, atLoc, interfaceDecl,
-                      &AllIvarDecls[0], AllIvarDecls.size(),
+                      AllIvarDecls.data(), AllIvarDecls.size(),
                       LBraceLoc, RBraceLoc, 0);
   return;
 }
@@ -986,7 +991,8 @@ Parser::DeclPtrTy Parser::ParseObjCAtProtocolDeclaration(SourceLocation AtLoc,
   
   DeclPtrTy ProtoType =
     Actions.ActOnStartProtocolInterface(AtLoc, protocolName, nameLoc,
-                                        &ProtocolRefs[0], ProtocolRefs.size(),
+                                        ProtocolRefs.data(),
+                                        ProtocolRefs.size(),
                                         EndProtoLoc, attrList);
   ParseObjCInterfaceDeclList(ProtoType, tok::objc_protocol);
   return ProtoType;
@@ -1408,7 +1414,7 @@ Parser::OwningStmtResult Parser::ParseObjCAtStatement(SourceLocation AtLoc) {
   }
   // Otherwise, eat the semicolon.
   ExpectAndConsume(tok::semi, diag::err_expected_semi_after_expr);
-  return Actions.ActOnExprStmt(move(Res));
+  return Actions.ActOnExprStmt(Actions.FullExpr(Res));
 }
 
 Parser::OwningExprResult Parser::ParseObjCAtExpression(SourceLocation AtLoc) {

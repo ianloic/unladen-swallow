@@ -71,7 +71,7 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::SDIV_I32] = "__divsi3";
   Names[RTLIB::SDIV_I64] = "__divdi3";
   Names[RTLIB::SDIV_I128] = "__divti3";
-  Names[RTLIB::UDIV_I32] = "__udivhi3";
+  Names[RTLIB::UDIV_I16] = "__udivhi3";
   Names[RTLIB::UDIV_I32] = "__udivsi3";
   Names[RTLIB::UDIV_I64] = "__udivdi3";
   Names[RTLIB::UDIV_I128] = "__udivti3";
@@ -171,6 +171,8 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::FPROUND_PPCF128_F32] = "__trunctfsf2";
   Names[RTLIB::FPROUND_F80_F64] = "__truncxfdf2";
   Names[RTLIB::FPROUND_PPCF128_F64] = "__trunctfdf2";
+  Names[RTLIB::FPTOSINT_F32_I8] = "__fixsfi8";
+  Names[RTLIB::FPTOSINT_F32_I16] = "__fixsfi16";
   Names[RTLIB::FPTOSINT_F32_I32] = "__fixsfsi";
   Names[RTLIB::FPTOSINT_F32_I64] = "__fixsfdi";
   Names[RTLIB::FPTOSINT_F32_I128] = "__fixsfti";
@@ -183,6 +185,8 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::FPTOSINT_PPCF128_I32] = "__fixtfsi";
   Names[RTLIB::FPTOSINT_PPCF128_I64] = "__fixtfdi";
   Names[RTLIB::FPTOSINT_PPCF128_I128] = "__fixtfti";
+  Names[RTLIB::FPTOUINT_F32_I8] = "__fixunssfi8";
+  Names[RTLIB::FPTOUINT_F32_I16] = "__fixunssfi16";
   Names[RTLIB::FPTOUINT_F32_I32] = "__fixunssfsi";
   Names[RTLIB::FPTOUINT_F32_I64] = "__fixunssfdi";
   Names[RTLIB::FPTOUINT_F32_I128] = "__fixunssfti";
@@ -235,6 +239,7 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::UO_F64] = "__unorddf2";
   Names[RTLIB::O_F32] = "__unordsf2";
   Names[RTLIB::O_F64] = "__unorddf2";
+  Names[RTLIB::UNWIND_RESUME] = "_Unwind_Resume";
 }
 
 /// getFPEXT - Return the FPEXT_*_* value for the given types, or
@@ -270,6 +275,10 @@ RTLIB::Libcall RTLIB::getFPROUND(MVT OpVT, MVT RetVT) {
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getFPTOSINT(MVT OpVT, MVT RetVT) {
   if (OpVT == MVT::f32) {
+    if (RetVT == MVT::i8)
+      return FPTOSINT_F32_I8;
+    if (RetVT == MVT::i16)
+      return FPTOSINT_F32_I16;
     if (RetVT == MVT::i32)
       return FPTOSINT_F32_I32;
     if (RetVT == MVT::i64)
@@ -305,6 +314,10 @@ RTLIB::Libcall RTLIB::getFPTOSINT(MVT OpVT, MVT RetVT) {
 /// UNKNOWN_LIBCALL if there is none.
 RTLIB::Libcall RTLIB::getFPTOUINT(MVT OpVT, MVT RetVT) {
   if (OpVT == MVT::f32) {
+    if (RetVT == MVT::i8)
+      return FPTOUINT_F32_I8;
+    if (RetVT == MVT::i16)
+      return FPTOUINT_F32_I16;
     if (RetVT == MVT::i32)
       return FPTOUINT_F32_I32;
     if (RetVT == MVT::i64)
@@ -483,6 +496,7 @@ TargetLowering::TargetLowering(TargetMachine &tm)
   memset(TargetDAGCombineArray, 0, array_lengthof(TargetDAGCombineArray));
   maxStoresPerMemset = maxStoresPerMemcpy = maxStoresPerMemmove = 8;
   allowUnalignedMemoryAccesses = false;
+  benefitFromCodePlacementOpt = false;
   UseUnderscoreSetJmp = false;
   UseUnderscoreLongJmp = false;
   SelectIsExpensive = false;
@@ -513,7 +527,7 @@ TargetLowering::~TargetLowering() {}
 /// computeRegisterProperties - Once all of the register classes are added,
 /// this allows us to compute derived properties we expose.
 void TargetLowering::computeRegisterProperties() {
-  assert(MVT::LAST_VALUETYPE <= 32 &&
+  assert(MVT::LAST_VALUETYPE <= MVT::MAX_ALLOWED_VALUETYPE &&
          "Too many value types for ValueTypeActions to hold!");
 
   // Everything defaults to needing one register.
@@ -2068,13 +2082,13 @@ bool TargetLowering::isGAPlusOffset(SDNode *N, GlobalValue* &GA,
 }
 
 
-/// isConsecutiveLoad - Return true if LD (which must be a LoadSDNode) is
-/// loading 'Bytes' bytes from a location that is 'Dist' units away from the
-/// location that the 'Base' load is loading from.
-bool TargetLowering::isConsecutiveLoad(SDNode *LD, SDNode *Base,
-                                       unsigned Bytes, int Dist,
+/// isConsecutiveLoad - Return true if LD is loading 'Bytes' bytes from a 
+/// location that is 'Dist' units away from the location that the 'Base' load 
+/// is loading from.
+bool TargetLowering::isConsecutiveLoad(LoadSDNode *LD, LoadSDNode *Base, 
+                                       unsigned Bytes, int Dist, 
                                        const MachineFrameInfo *MFI) const {
-  if (LD->getOperand(0).getNode() != Base->getOperand(0).getNode())
+  if (LD->getChain() != Base->getChain())
     return false;
   MVT VT = LD->getValueType(0);
   if (VT.getSizeInBits() / 8 != Bytes)
@@ -2091,6 +2105,11 @@ bool TargetLowering::isConsecutiveLoad(SDNode *LD, SDNode *Base,
     int BFS = MFI->getObjectSize(BFI);
     if (FS != BFS || FS != (int)Bytes) return false;
     return MFI->getObjectOffset(FI) == (MFI->getObjectOffset(BFI) + Dist*Bytes);
+  }
+  if (Loc.getOpcode() == ISD::ADD && Loc.getOperand(0) == BaseLoc) {
+    ConstantSDNode *V = dyn_cast<ConstantSDNode>(Loc.getOperand(1));
+    if (V && (V->getSExtValue() == Dist*Bytes))
+      return true;
   }
 
   GlobalValue *GV1 = NULL;
@@ -2386,11 +2405,24 @@ void TargetLowering::ComputeConstraintToUse(AsmOperandInfo &OpInfo,
   
   // 'X' matches anything.
   if (OpInfo.ConstraintCode == "X" && OpInfo.CallOperandVal) {
+    // Look through bitcasts over functions.  In the context of an asm
+    // argument we don't care about bitcasting function types; the parameters
+    // to the function, if any, will have been handled elsewhere.
+    Value *v = OpInfo.CallOperandVal;
+    ConstantExpr *CE = NULL;
+    while ((CE = dyn_cast<ConstantExpr>(v)) &&
+           CE->getOpcode()==Instruction::BitCast)
+      v = CE->getOperand(0);
+    if (!isa<Function>(v))
+      v = OpInfo.CallOperandVal;
     // Labels and constants are handled elsewhere ('X' is the only thing
-    // that matches labels).
-    if (isa<BasicBlock>(OpInfo.CallOperandVal) ||
-        isa<ConstantInt>(OpInfo.CallOperandVal))
+    // that matches labels).  For Functions, the type here is the type of
+    // the result, which is not what we want to look at; leave them alone
+    // (minus any bitcasts).
+    if (isa<BasicBlock>(v) || isa<ConstantInt>(v) || isa<Function>(v)) {
+      OpInfo.CallOperandVal = v;
       return;
+    }
     
     // Otherwise, try to resolve it to something we know about by looking at
     // the actual operand type.
@@ -2577,8 +2609,12 @@ bool TargetLowering::CheckTailCallReturnConstraints(CallSDNode *TheCall,
   // Check that operand of the RET node sources from the CALL node. The RET node
   // has at least two operands. Operand 0 holds the chain. Operand 1 holds the
   // value.
+  // Also we need to check that there is no code in between the call and the
+  // return. Hence we also check that the incomming chain to the return sources
+  // from the outgoing chain of the call.
   if (NumOps > 1 &&
-      IgnoreHarmlessInstructions(Ret.getOperand(1)) == SDValue(TheCall,0))
+      IgnoreHarmlessInstructions(Ret.getOperand(1)) == SDValue(TheCall,0) &&
+      Ret.getOperand(0) == SDValue(TheCall, TheCall->getNumValues()-1))
     return true;
   // void return: The RET node  has the chain result value of the CALL node as
   // input.

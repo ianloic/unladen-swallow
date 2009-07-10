@@ -24,6 +24,9 @@ def warn_fixit_no_changes : Note<
     "FIX-IT detected errors it could not fix; no output will be generated">;
 
 // PCH reader
+def err_relocatable_without_without_isysroot : Error<
+    "must specify system root with -isysroot when building a relocatable "
+    "PCH file">;
 def warn_pch_target_triple : Error<
     "PCH file was compiled for the target '%0' but the current translation "
     "unit is being compiled for target '%1'">;
@@ -60,6 +63,12 @@ def warn_pch_heinous_extensions : Error<
 def warn_pch_lax_vector_conversions : Error<
     "lax vector conversions were %select{disabled|enabled}0 in PCH file but "
     "are currently %select{disabled|enabled}1">;
+def warn_pch_altivec : Error<
+    "AltiVec initializers were %select{disabled|enabled}0 in PCH file but "
+    "are currently %select{disabled|enabled}1">;
+def warn_pch_opencl : Error<
+    "OpenCL language extensions were %select{disabled|enabled}0 in PCH file "
+    "but are currently %select{disabled|enabled}1">;
 def warn_pch_exceptions : Error<
     "exceptions were %select{disabled|enabled}0 in PCH file but "
     "are currently %select{disabled|enabled}1">;
@@ -127,6 +136,16 @@ def warn_macro_name_used_in_pch : Error<
 def warn_pch_compiler_options_mismatch : Error<
     "compiler options used when building the precompiled header differ from "
     "the options used when using the precompiled header">;
+def warn_pch_access_control : Error<
+    "C++ access control was %select{disabled|enabled}0 in the PCH file but "
+    "is currently %select{disabled|enabled}1">;
+def warn_pch_char_signed : Error<
+    "char was %select{unsigned|signed}0 in the PCH file but "
+    "is currently %select{unsigned|signed}1">;
+
 def err_not_a_pch_file : Error<
     "'%0' does not appear to be a precompiled header file">, DefaultFatal;
+def warn_unknown_warning_option : Warning<
+    "unknown warning option '%0'">,
+    InGroup<DiagGroup<"unknown-warning-option"> >;
 }

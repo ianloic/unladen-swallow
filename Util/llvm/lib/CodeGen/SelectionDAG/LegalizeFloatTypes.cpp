@@ -491,7 +491,7 @@ SDValue DAGTypeLegalizer::SoftenFloatRes_VAARG(SDNode *N) {
 
   SDValue NewVAARG;
   NewVAARG = DAG.getVAArg(NVT, dl, Chain, Ptr, N->getOperand(2));
-  
+
   // Legalized the chain result - switch anything that used the old chain to
   // use the new one.
   ReplaceValueWith(SDValue(N, 1), NewVAARG.getValue(1));
@@ -772,7 +772,7 @@ void DAGTypeLegalizer::ExpandFloatResult(SDNode *N, unsigned ResNo) {
   Lo = Hi = SDValue();
 
   // See if the target wants to custom expand this node.
-  if (CustomLowerResults(N, N->getValueType(ResNo), true))
+  if (CustomLowerNode(N, N->getValueType(ResNo), true))
     return;
 
   switch (N->getOpcode()) {

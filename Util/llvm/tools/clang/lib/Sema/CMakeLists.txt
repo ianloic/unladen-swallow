@@ -23,9 +23,11 @@ add_clang_library(clangSema
   SemaOverload.cpp
   SemaStmt.cpp
   SemaTemplate.cpp
+  SemaTemplateDeduction.cpp
   SemaTemplateInstantiate.cpp
   SemaTemplateInstantiateDecl.cpp
   SemaTemplateInstantiateExpr.cpp
+  SemaTemplateInstantiateStmt.cpp
   SemaType.cpp
   )
 

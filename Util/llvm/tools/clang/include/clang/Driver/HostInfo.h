@@ -11,6 +11,7 @@
 #define CLANG_DRIVER_HOSTINFO_H_
 
 #include "clang/Driver/Types.h"
+#include "llvm/ADT/Triple.h"
 #include <string>
 
 namespace clang {
@@ -27,20 +28,21 @@ namespace driver {
 /// being run from. For testing purposes, the HostInfo used by the
 /// driver may differ from the actual host.
 class HostInfo {
-  const Driver &TheDriver;
-  std::string Arch, Platform, OS;
-
 protected:
-  HostInfo(const Driver &D, const char *Arch, 
-           const char *Platform, const char *OS);
+  const Driver &TheDriver;
+  const llvm::Triple Triple;
+
+  HostInfo(const Driver &D, const llvm::Triple &_Triple);
 
 public:
   virtual ~HostInfo();
 
   const Driver &getDriver() const { return TheDriver; }
-  const std::string &getArchName() const { return Arch; }
-  const std::string &getPlatformName() const { return Platform; }
-  const std::string &getOSName() const { return OS; }
+  
+  const llvm::Triple& getTriple() const { return Triple; }
+  std::string getArchName() const { return Triple.getArchName(); }
+  std::string getPlatformName() const { return Triple.getVendorName(); }
+  std::string getOSName() const { return Triple.getOSName(); }
 
   /// useDriverDriver - Whether the driver should act as a driver
   /// driver for this host and support -arch, -Xarch, etc.
@@ -65,14 +67,18 @@ public:
                                   const char *ArchName=0) const = 0;
 };
 
-const HostInfo *createDarwinHostInfo(const Driver &D, const char *Arch, 
-                                     const char *Platform, const char *OS);
-const HostInfo *createFreeBSDHostInfo(const Driver &D, const char *Arch, 
-                                      const char *Platform, const char *OS);
-const HostInfo *createDragonFlyHostInfo(const Driver &D, const char *Arch,
-                                      const char *Platform, const char *OS);
-const HostInfo *createUnknownHostInfo(const Driver &D, const char *Arch, 
-                                      const char *Platform, const char *OS);
+const HostInfo *createDarwinHostInfo(const Driver &D, 
+                                     const llvm::Triple& Triple);
+const HostInfo *createOpenBSDHostInfo(const Driver &D, 
+                                      const llvm::Triple& Triple);
+const HostInfo *createFreeBSDHostInfo(const Driver &D, 
+                                      const llvm::Triple& Triple);
+const HostInfo *createDragonFlyHostInfo(const Driver &D, 
+                                        const llvm::Triple& Triple);
+const HostInfo *createLinuxHostInfo(const Driver &D, 
+                                    const llvm::Triple& Triple);
+const HostInfo *createUnknownHostInfo(const Driver &D, 
+                                      const llvm::Triple& Triple);
 
 } // end namespace driver
 } // end namespace clang

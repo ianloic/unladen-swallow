@@ -138,6 +138,12 @@ void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang) {
         false);
     AddPath("/usr/include/c++/4.1.3/backward", System, true, false, false);
 
+    // Ubuntu 9.04
+    AddPath("/usr/include/c++/4.3.3", System, true, false, false);
+    AddPath("/usr/include/c++/4.3.3/x86_64-linux-gnu/", System, true, false,
+        false);
+    AddPath("/usr/include/c++/4.3.3/backward", System, true, false, false);
+
     // Fedora 8
     AddPath("/usr/include/c++/4.1.2", System, true, false, false);
     AddPath("/usr/include/c++/4.1.2/i386-redhat-linux", System, true, false,
@@ -170,6 +176,14 @@ void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang) {
     AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.1.2/include/g++-v4/"
             "i686-pc-linux-gnu", System, true, false, false);
     AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.1.2/include/g++-v4/backward",
+            System, true, false, false);
+
+    // Gentoo amd64 stable
+    AddPath("/usr/lib/gcc/x86_64-pc-linux-gnu/4.1.2/include/g++-v4", System,
+            true, false, false);
+    AddPath("/usr/lib/gcc/x86_64-pc-linux-gnu/4.1.2/include/g++-v4/"
+            "i686-pc-linux-gnu", System, true, false, false);
+    AddPath("/usr/lib/gcc/x86_64-pc-linux-gnu/4.1.2/include/g++-v4/backward",
             System, true, false, false);
 
     // DragonFly

@@ -73,11 +73,13 @@ namespace llvm {
   /// target FP instructions.
   extern bool UseSoftFloat;
 
-  /// NoImplicitFloat - This flag is enabled when the -no-implicit-float flag is
-  /// specified on the command line.  When this flag is on, the code generator
-  /// won't generate any implicit floating point instructions. I.e., no XMM or
-  /// x87 or vectorized memcpy/memmove instructions. This is for X86 only.
-  extern bool NoImplicitFloat;
+  /// FloatABIType - This setting is set by -float-abi=xxx option is specfied
+  /// on the command line. This setting may either be Default, Soft, or Hard.
+  /// Default selects the target's default behavior. Soft selects the ABI for
+  /// UseSoftFloat, but does not inidcate that FP hardware may not be used.
+  /// Such a combination is unfortunately popular (e.g. arm-apple-darwin).
+  /// Hard presumes that the normal FP ABI is used.
+  extern FloatABI::ABIType FloatABIType;
 
   /// NoZerosInBSS - By default some codegens place zero-initialized data to
   /// .bss section. This flag disables such behaviour (necessary, e.g. for
@@ -116,10 +118,6 @@ namespace llvm {
   /// StrongPHIElim - This flag enables more aggressive PHI elimination
   /// wth earlier copy coalescing.
   extern bool StrongPHIElim;
-
-  /// DisableRedZone - This flag disables use of the "Red Zone" on
-  /// targets which would otherwise have one.
-  extern bool DisableRedZone;
 
 } // End llvm namespace
 

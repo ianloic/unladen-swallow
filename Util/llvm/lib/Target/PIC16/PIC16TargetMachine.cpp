@@ -37,6 +37,9 @@ X("pic16", "PIC16 14-bit [experimental].");
 static RegisterTarget<CooperTargetMachine> 
 Y("cooper", "PIC16 Cooper [experimental].");
 
+// Force static initialization.
+extern "C" void LLVMInitializePIC16Target() { }
+
 // PIC16TargetMachine - Traditional PIC16 Machine.
 PIC16TargetMachine::PIC16TargetMachine(const Module &M, const std::string &FS,
                                        bool Cooper)
@@ -62,12 +65,18 @@ bool PIC16TargetMachine::addInstSelector(PassManagerBase &PM,
   return false;
 }
 
-bool PIC16TargetMachine::
-addAssemblyEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
-                   bool Verbose, raw_ostream &Out) {
+bool PIC16TargetMachine::addAssemblyEmitter(PassManagerBase &PM, 
+                                            CodeGenOpt::Level OptLevel,
+                                            bool Verbose, raw_ostream &Out) {
   // Output assembly language.
-  PM.add(createPIC16CodePrinterPass(Out, *this, OptLevel, Verbose));
+  PM.add(createPIC16CodePrinterPass(Out, *this, Verbose));
   return false;
+}
+
+bool PIC16TargetMachine::addPostRegAlloc(PassManagerBase &PM, 
+                                         CodeGenOpt::Level OptLevel) {
+  PM.add(createPIC16MemSelOptimizerPass());
+  return true;  // -print-machineinstr should print after this.
 }
 
 

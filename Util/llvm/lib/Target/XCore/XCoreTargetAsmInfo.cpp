@@ -24,6 +24,7 @@ using namespace llvm;
 XCoreTargetAsmInfo::XCoreTargetAsmInfo(const XCoreTargetMachine &TM)
   : ELFTargetAsmInfo(TM),
     Subtarget(TM.getSubtargetImpl()) {
+  SupportsDebugInformation = true;
   TextSection = getUnnamedSection("\t.text", SectionFlags::Code);
   DataSection = getNamedSection("\t.dp.data", SectionFlags::Writeable |
                                 SectionFlags::Small);
@@ -64,7 +65,7 @@ XCoreTargetAsmInfo::XCoreTargetAsmInfo(const XCoreTargetMachine &TM)
   DwarfLocSection = "\t.section\t.debug_loc,\"\",@progbits";
   DwarfARangesSection = "\t.section\t.debug_aranges,\"\",@progbits";
   DwarfRangesSection = "\t.section\t.debug_ranges,\"\",@progbits";
-  DwarfMacInfoSection = "\t.section\t.debug_macinfo,\"\",@progbits";
+  DwarfMacroInfoSection = "\t.section\t.debug_macinfo,\"\",@progbits";
 }
 
 const Section*
@@ -106,7 +107,7 @@ inline const Section*
 XCoreTargetAsmInfo::MergeableConstSection(const Type *Ty) const {
   const TargetData *TD = TM.getTargetData();
 
-  unsigned Size = TD->getTypePaddedSize(Ty);
+  unsigned Size = TD->getTypeAllocSize(Ty);
   if (Size == 4 || Size == 8 || Size == 16) {
     std::string Name =  ".cp.const" + utostr(Size);
 

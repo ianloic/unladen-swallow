@@ -13,10 +13,13 @@
 
 #include "Alpha.h"
 #include "AlphaInstrInfo.h"
+#include "AlphaMachineFunctionInfo.h"
 #include "AlphaGenInstrInfo.inc"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
 using namespace llvm;
 
 AlphaInstrInfo::AlphaInstrInfo()
@@ -187,18 +190,18 @@ AlphaInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
 
   if (RC == Alpha::F4RCRegisterClass)
     BuildMI(MBB, MI, DL, get(Alpha::STS))
-      .addReg(SrcReg, false, false, isKill)
+      .addReg(SrcReg, getKillRegState(isKill))
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::F8RCRegisterClass)
     BuildMI(MBB, MI, DL, get(Alpha::STT))
-      .addReg(SrcReg, false, false, isKill)
+      .addReg(SrcReg, getKillRegState(isKill))
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else if (RC == Alpha::GPRCRegisterClass)
     BuildMI(MBB, MI, DL, get(Alpha::STQ))
-      .addReg(SrcReg, false, false, isKill)
+      .addReg(SrcReg, getKillRegState(isKill))
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else
-    abort();
+    LLVM_UNREACHABLE("Unhandled register class");
 }
 
 void AlphaInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
@@ -214,10 +217,10 @@ void AlphaInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
   else if (RC == Alpha::GPRCRegisterClass)
     Opc = Alpha::STQ;
   else
-    abort();
+    LLVM_UNREACHABLE("Unhandled register class");
   DebugLoc DL = DebugLoc::getUnknownLoc();
   MachineInstrBuilder MIB = 
-    BuildMI(MF, DL, get(Opc)).addReg(SrcReg, false, false, isKill);
+    BuildMI(MF, DL, get(Opc)).addReg(SrcReg, getKillRegState(isKill));
   for (unsigned i = 0, e = Addr.size(); i != e; ++i)
     MIB.addOperand(Addr[i]);
   NewMIs.push_back(MIB);
@@ -243,7 +246,7 @@ AlphaInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     BuildMI(MBB, MI, DL, get(Alpha::LDQ), DestReg)
       .addFrameIndex(FrameIdx).addReg(Alpha::F31);
   else
-    abort();
+    LLVM_UNREACHABLE("Unhandled register class");
 }
 
 void AlphaInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
@@ -258,7 +261,7 @@ void AlphaInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
   else if (RC == Alpha::GPRCRegisterClass)
     Opc = Alpha::LDQ;
   else
-    abort();
+    LLVM_UNREACHABLE("Unhandled register class");
   DebugLoc DL = DebugLoc::getUnknownLoc();
   MachineInstrBuilder MIB = 
     BuildMI(MF, DL, get(Opc), DestReg);
@@ -287,19 +290,22 @@ MachineInstr *AlphaInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
        if (Ops[0] == 0) {  // move -> store
          unsigned InReg = MI->getOperand(1).getReg();
          bool isKill = MI->getOperand(1).isKill();
+         bool isUndef = MI->getOperand(1).isUndef();
          Opc = (Opc == Alpha::BISr) ? Alpha::STQ : 
            ((Opc == Alpha::CPYSS) ? Alpha::STS : Alpha::STT);
          NewMI = BuildMI(MF, MI->getDebugLoc(), get(Opc))
-           .addReg(InReg, false, false, isKill)
+           .addReg(InReg, getKillRegState(isKill) | getUndefRegState(isUndef))
            .addFrameIndex(FrameIndex)
            .addReg(Alpha::F31);
        } else {           // load -> move
          unsigned OutReg = MI->getOperand(0).getReg();
          bool isDead = MI->getOperand(0).isDead();
+         bool isUndef = MI->getOperand(0).isUndef();
          Opc = (Opc == Alpha::BISr) ? Alpha::LDQ : 
            ((Opc == Alpha::CPYSS) ? Alpha::LDS : Alpha::LDT);
          NewMI = BuildMI(MF, MI->getDebugLoc(), get(Opc))
-           .addReg(OutReg, true, false, false, isDead)
+           .addReg(OutReg, RegState::Define | getDeadRegState(isDead) |
+                   getUndefRegState(isUndef))
            .addFrameIndex(FrameIndex)
            .addReg(Alpha::F31);
        }
@@ -448,3 +454,56 @@ ReverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const {
   return false;
 }
 
+/// getGlobalBaseReg - Return a virtual register initialized with the
+/// the global base register value. Output instructions required to
+/// initialize the register in the function entry block, if necessary.
+///
+unsigned AlphaInstrInfo::getGlobalBaseReg(MachineFunction *MF) const {
+  AlphaMachineFunctionInfo *AlphaFI = MF->getInfo<AlphaMachineFunctionInfo>();
+  unsigned GlobalBaseReg = AlphaFI->getGlobalBaseReg();
+  if (GlobalBaseReg != 0)
+    return GlobalBaseReg;
+
+  // Insert the set of GlobalBaseReg into the first MBB of the function
+  MachineBasicBlock &FirstMBB = MF->front();
+  MachineBasicBlock::iterator MBBI = FirstMBB.begin();
+  MachineRegisterInfo &RegInfo = MF->getRegInfo();
+  const TargetInstrInfo *TII = MF->getTarget().getInstrInfo();
+
+  GlobalBaseReg = RegInfo.createVirtualRegister(&Alpha::GPRCRegClass);
+  bool Ok = TII->copyRegToReg(FirstMBB, MBBI, GlobalBaseReg, Alpha::R29,
+                              &Alpha::GPRCRegClass, &Alpha::GPRCRegClass);
+  assert(Ok && "Couldn't assign to global base register!");
+  Ok = Ok; // Silence warning when assertions are turned off.
+  RegInfo.addLiveIn(Alpha::R29);
+
+  AlphaFI->setGlobalBaseReg(GlobalBaseReg);
+  return GlobalBaseReg;
+}
+
+/// getGlobalRetAddr - Return a virtual register initialized with the
+/// the global base register value. Output instructions required to
+/// initialize the register in the function entry block, if necessary.
+///
+unsigned AlphaInstrInfo::getGlobalRetAddr(MachineFunction *MF) const {
+  AlphaMachineFunctionInfo *AlphaFI = MF->getInfo<AlphaMachineFunctionInfo>();
+  unsigned GlobalRetAddr = AlphaFI->getGlobalRetAddr();
+  if (GlobalRetAddr != 0)
+    return GlobalRetAddr;
+
+  // Insert the set of GlobalRetAddr into the first MBB of the function
+  MachineBasicBlock &FirstMBB = MF->front();
+  MachineBasicBlock::iterator MBBI = FirstMBB.begin();
+  MachineRegisterInfo &RegInfo = MF->getRegInfo();
+  const TargetInstrInfo *TII = MF->getTarget().getInstrInfo();
+
+  GlobalRetAddr = RegInfo.createVirtualRegister(&Alpha::GPRCRegClass);
+  bool Ok = TII->copyRegToReg(FirstMBB, MBBI, GlobalRetAddr, Alpha::R26,
+                              &Alpha::GPRCRegClass, &Alpha::GPRCRegClass);
+  assert(Ok && "Couldn't assign to global return address register!");
+  Ok = Ok; // Silence warning when assertions are turned off.
+  RegInfo.addLiveIn(Alpha::R26);
+
+  AlphaFI->setGlobalRetAddr(GlobalRetAddr);
+  return GlobalRetAddr;
+}

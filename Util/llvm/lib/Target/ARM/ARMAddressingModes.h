@@ -248,11 +248,98 @@ namespace ARM_AM {
     return V == 0;
   }
 
+  /// getThumbImm16ValShift - Try to handle Imm with a 16-bit immediate followed
+  /// by a left shift. Returns the shift amount to use.
+  static inline unsigned getThumbImm16ValShift(unsigned Imm) {
+    // 16-bit (or less) immediates are trivially immediate operand with a shift
+    // of zero.
+    if ((Imm & ~65535U) == 0) return 0;
+
+    // Use CTZ to compute the shift amount.
+    return CountTrailingZeros_32(Imm);
+  }
+
+  /// isThumbImm16ShiftedVal - Return true if the specified value can be 
+  /// obtained by left shifting a 16-bit immediate.
+  static inline bool isThumbImm16ShiftedVal(unsigned V) {
+    // If this can be handled with 
+    V = (~65535U << getThumbImm16ValShift(V)) & V;
+    return V == 0;
+  }
+
   /// getThumbImmNonShiftedVal - If V is a value that satisfies
   /// isThumbImmShiftedVal, return the non-shiftd value.
   static inline unsigned getThumbImmNonShiftedVal(unsigned V) {
     return V >> getThumbImmValShift(V);
   }
+
+  /// getT2SOImmValSplat - Return the 12-bit encoded representation
+  /// if the specified value can be obtained by splatting the low 8 bits
+  /// into every other byte or every byte of a 32-bit value. i.e.,
+  ///     00000000 00000000 00000000 abcdefgh    control = 0
+  ///     00000000 abcdefgh 00000000 abcdefgh    control = 1
+  ///     abcdefgh 00000000 abcdefgh 00000000    control = 2
+  ///     abcdefgh abcdefgh abcdefgh abcdefgh    control = 3
+  /// Return -1 if none of the above apply.
+  /// See ARM Reference Manual A6.3.2.
+  static inline int getT2SOImmValSplat(unsigned V) {
+    unsigned u, Vs, Imm;
+    // control = 0
+    if ((V & 0xffffff00) == 0) 
+      return V;
+    
+    // If the value is zeroes in the first byte, just shift those off
+    Vs = ((V & 0xff) == 0) ? V >> 8 : V;
+    // Any passing value only has 8 bits of payload, splatted across the word
+    Imm = Vs & 0xff;
+    // Likewise, any passing values have the payload splatted into the 3rd byte
+    u = Imm | (Imm << 16);
+
+    // control = 1 or 2
+    if (Vs == u)
+      return (((Vs == V) ? 1 : 2) << 8) | Imm;
+
+    // control = 3
+    if (Vs == (u | (u << 8)))
+      return (3 << 8) | Imm;
+
+    return -1;
+  }
+
+  /// getT2SOImmValRotate - Return the 12-bit encoded representation if the
+  /// specified value is a rotated 8-bit value. Return -1 if no rotation
+  /// encoding is possible.
+  /// See ARM Reference Manual A6.3.2.
+  static inline int getT2SOImmValRotate (unsigned V) {
+    unsigned RotAmt = CountLeadingZeros_32(V);
+    if (RotAmt >= 24)
+      return -1;
+
+    // If 'Arg' can be handled with a single shifter_op return the value.
+    if ((rotr32(0xff000000U, RotAmt) & V) == V)
+      return (rotr32(V, 24 - RotAmt) & 0x7f) | ((RotAmt + 8) << 7);
+
+    return -1;
+  }
+
+  /// getT2SOImmVal - Given a 32-bit immediate, if it is something that can fit
+  /// into a Thumb-2 shifter_operand immediate operand, return the 12-bit 
+  /// encoding for it.  If not, return -1.
+  /// See ARM Reference Manual A6.3.2.
+  static inline int getT2SOImmVal(unsigned Arg) {
+    // If 'Arg' is an 8-bit splat, then get the encoded value.
+    int Splat = getT2SOImmValSplat(Arg);
+    if (Splat != -1)
+      return Splat;
+    
+    // If 'Arg' can be handled with a single shifter_op return the value.
+    int Rot = getT2SOImmValRotate(Arg);
+    if (Rot != -1)
+      return Rot;
+
+    return -1;
+  }
+  
 
   //===--------------------------------------------------------------------===//
   // Addressing Mode #2
@@ -349,13 +436,13 @@ namespace ARM_AM {
   //
   // addrmode5 := reg +/- imm8*4
   //
-  // The first operand is always a Reg.  The third field encodes the operation
-  // in bit 8, the immediate in bits 0-7.
+  // The first operand is always a Reg.  The second operand encodes the
+  // operation in bit 8 and the immediate in bits 0-7.
   //
-  // This can also be used for FP load/store multiple ops. The third field encodes
-  // writeback mode in bit 8, the number of registers (or 2 times the number of
-  // registers for DPR ops) in bits 0-7. In addition, bit 9-11 encodes one of the
-  // following two sub-modes:
+  // This is also used for FP load/store multiple ops. The second operand
+  // encodes the writeback mode in bit 8 and the number of registers (or 2
+  // times the number of registers for DPR ops) in bits 0-7. In addition,
+  // bits 9-11 encode one of the following two sub-modes:
   //
   //    IA - Increment after
   //    DB - Decrement before
@@ -386,7 +473,29 @@ namespace ARM_AM {
   static inline bool getAM5WBFlag(unsigned AM5Opc) {
     return ((AM5Opc >> 8) & 1);
   }
-  
+
+  //===--------------------------------------------------------------------===//
+  // Addressing Mode #6
+  //===--------------------------------------------------------------------===//
+  //
+  // This is used for NEON load / store instructions.
+  //
+  // addrmode6 := reg with optional writeback
+  //
+  // This is stored in three operands [regaddr, regupdate, opc].  The first is
+  // the address register.  The second register holds the value of a post-access
+  // increment for writeback or reg0 if no writeback or if the writeback
+  // increment is the size of the memory access.  The third operand encodes
+  // whether there is writeback to the address register.
+
+  static inline unsigned getAM6Opc(bool WB = false) {
+    return (int)WB;
+  }
+
+  static inline bool getAM6WBFlag(unsigned Mode) {
+    return Mode & 1;
+  }
+
 } // end namespace ARM_AM
 } // end namespace llvm
 

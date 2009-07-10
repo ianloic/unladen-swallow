@@ -300,7 +300,18 @@ Sema::IsOverload(FunctionDecl *New, Decl* OldD,
 
     // This function overloads every function in the overload set.
     return true;
-  } else if (FunctionDecl* Old = dyn_cast<FunctionDecl>(OldD)) {
+  } else if (FunctionTemplateDecl *Old = dyn_cast<FunctionTemplateDecl>(OldD))
+    return IsOverload(New, Old->getTemplatedDecl(), MatchedDecl);
+  else if (FunctionDecl* Old = dyn_cast<FunctionDecl>(OldD)) {
+    FunctionTemplateDecl *OldTemplate = Old->getDescribedFunctionTemplate();
+    FunctionTemplateDecl *NewTemplate = New->getDescribedFunctionTemplate(); 
+    
+    // C++ [temp.fct]p2:
+    //   A function template can be overloaded with other function templates
+    //   and with normal (non-template) functions.
+    if ((OldTemplate == 0) != (NewTemplate == 0))
+      return true;
+
     // Is the function New an overload of the function Old?
     QualType OldQType = Context.getCanonicalType(Old->getType());
     QualType NewQType = Context.getCanonicalType(New->getType());
@@ -315,8 +326,8 @@ Sema::IsOverload(FunctionDecl *New, Decl* OldD,
         isa<FunctionNoProtoType>(NewQType.getTypePtr()))
       return false;
 
-    FunctionProtoType* OldType = cast<FunctionProtoType>(OldQType.getTypePtr());
-    FunctionProtoType* NewType = cast<FunctionProtoType>(NewQType.getTypePtr());
+    FunctionProtoType* OldType = cast<FunctionProtoType>(OldQType);
+    FunctionProtoType* NewType = cast<FunctionProtoType>(NewQType);
 
     // The signature of a function includes the types of its
     // parameters (C++ 1.3.10), which includes the presence or absence
@@ -328,6 +339,22 @@ Sema::IsOverload(FunctionDecl *New, Decl* OldD,
                      NewType->arg_type_begin())))
       return true;
 
+    // C++ [temp.over.link]p4:
+    //   The signature of a function template consists of its function 
+    //   signature, its return type and its template parameter list. The names
+    //   of the template parameters are significant only for establishing the
+    //   relationship between the template parameters and the rest of the 
+    //   signature.
+    //
+    // We check the return type and template parameter lists for function
+    // templates first; the remaining checks follow.
+    if (NewTemplate &&
+        (!TemplateParameterListsAreEqual(NewTemplate->getTemplateParameters(), 
+                                         OldTemplate->getTemplateParameters(), 
+                                         false, false, SourceLocation()) ||
+         OldType->getResultType() != NewType->getResultType()))
+      return true;
+    
     // If the function is a class member, its signature includes the
     // cv-qualifiers (if any) on the function itself.
     //
@@ -621,7 +648,8 @@ Sema::IsStandardConversion(Expr* From, QualType ToType,
             FromType->isEnumeralType() ||
             FromType->isPointerType() ||
             FromType->isBlockPointerType() ||
-            FromType->isMemberPointerType())) {
+            FromType->isMemberPointerType() ||
+            FromType->isNullPtrType())) {
     SCS.Second = ICK_Boolean_Conversion;
     FromType = Context.BoolTy;
   }
@@ -744,8 +772,8 @@ bool Sema::IsIntegralPromotion(Expr *From, QualType FromType, QualType ToType)
   // the bit-field is larger yet, no integral promotion applies to
   // it. If the bit-field has an enumerated type, it is treated as any
   // other value of that type for promotion purposes (C++ 4.5p3).
-  // FIXME: We should delay checking of bit-fields until we actually
-  // perform the conversion.
+  // FIXME: We should delay checking of bit-fields until we actually perform the
+  // conversion.
   using llvm::APSInt;
   if (From)
     if (FieldDecl *MemberDecl = From->getBitField()) {
@@ -894,6 +922,13 @@ bool Sema::IsPointerConversion(Expr *From, QualType FromType, QualType ToType,
   // Blocks: A null pointer constant can be converted to a block
   // pointer type.
   if (ToType->isBlockPointerType() && From->isNullPointerConstant(Context)) {
+    ConvertedType = ToType;
+    return true;
+  }
+
+  // If the left-hand-side is nullptr_t, the right side can be a null
+  // pointer constant.
+  if (ToType->isNullPtrType() && From->isNullPointerConstant(Context)) {
     ConvertedType = ToType;
     return true;
   }
@@ -1133,8 +1168,8 @@ bool Sema::CheckPointerConversion(Expr *From, QualType ToType) {
                ToPointeeType   = ToPtrType->getPointeeType();
 
       // Objective-C++ conversions are always okay.
-      // FIXME: We should have a different class of conversions for
-      // the Objective-C++ implicit conversions.
+      // FIXME: We should have a different class of conversions for the
+      // Objective-C++ implicit conversions.
       if (Context.isObjCIdStructType(FromPointeeType) || 
           Context.isObjCIdStructType(ToPointeeType) ||
           Context.isObjCClassStructType(FromPointeeType) ||
@@ -1340,7 +1375,7 @@ bool Sema::IsUserDefinedConversion(Expr *From, QualType ToType,
                           Context.getCanonicalType(ToType).getUnqualifiedType());
       DeclContext::lookup_iterator Con, ConEnd;
       for (llvm::tie(Con, ConEnd) 
-             = ToRecordDecl->lookup(Context, ConstructorName);
+             = ToRecordDecl->lookup(ConstructorName);
            Con != ConEnd; ++Con) {
         CXXConstructorDecl *Constructor = cast<CXXConstructorDecl>(*Con);
         if (Constructor->isConvertingConstructor())
@@ -1371,7 +1406,7 @@ bool Sema::IsUserDefinedConversion(Expr *From, QualType ToType,
   }
 
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, From->getLocStart(), Best)) {
     case OR_Success:
       // Record the standard conversion we used and the conversion function.
       if (CXXConstructorDecl *Constructor 
@@ -2040,7 +2075,9 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
   assert(Proto && "Functions without a prototype cannot be overloaded");
   assert(!isa<CXXConversionDecl>(Function) && 
          "Use AddConversionCandidate for conversion functions");
-
+  assert(!Function->getDescribedFunctionTemplate() && 
+         "Use AddTemplateOverloadCandidate for function templates");
+  
   if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(Function)) {
     if (!isa<CXXConstructorDecl>(Method)) {
       // If we get here, it's because we're calling a member function
@@ -2124,9 +2161,16 @@ void Sema::AddFunctionCandidates(const FunctionSet &Functions,
                                  bool SuppressUserConversions) {
   for (FunctionSet::const_iterator F = Functions.begin(), 
                                 FEnd = Functions.end();
-       F != FEnd; ++F)
-    AddOverloadCandidate(*F, Args, NumArgs, CandidateSet, 
-                         SuppressUserConversions);
+       F != FEnd; ++F) {
+    if (FunctionDecl *FD = dyn_cast<FunctionDecl>(*F))
+      AddOverloadCandidate(FD, Args, NumArgs, CandidateSet, 
+                           SuppressUserConversions);
+    else
+      AddTemplateOverloadCandidate(cast<FunctionTemplateDecl>(*F),
+                                   /*FIXME: explicit args */false, 0, 0,
+                                   Args, NumArgs, CandidateSet, 
+                                   SuppressUserConversions);
+  }
 }
 
 /// AddMethodCandidate - Adds the given C++ member function to the set
@@ -2225,6 +2269,46 @@ Sema::AddMethodCandidate(CXXMethodDecl *Method, Expr *Object,
   }
 }
 
+/// \brief Add a C++ function template as a candidate in the candidate set,
+/// using template argument deduction to produce an appropriate function
+/// template specialization.
+void 
+Sema::AddTemplateOverloadCandidate(FunctionTemplateDecl *FunctionTemplate,
+                                   bool HasExplicitTemplateArgs,
+                                 const TemplateArgument *ExplicitTemplateArgs,
+                                   unsigned NumExplicitTemplateArgs,
+                                   Expr **Args, unsigned NumArgs,
+                                   OverloadCandidateSet& CandidateSet,
+                                   bool SuppressUserConversions,
+                                   bool ForceRValue) {
+  // C++ [over.match.funcs]p7:
+  //   In each case where a candidate is a function template, candidate 
+  //   function template specializations are generated using template argument
+  //   deduction (14.8.3, 14.8.2). Those candidates are then handled as 
+  //   candidate functions in the usual way.113) A given name can refer to one
+  //   or more function templates and also to a set of overloaded non-template
+  //   functions. In such a case, the candidate functions generated from each
+  //   function template are combined with the set of non-template candidate
+  //   functions.
+  TemplateDeductionInfo Info(Context);
+  FunctionDecl *Specialization = 0;
+  if (TemplateDeductionResult Result
+        = DeduceTemplateArguments(FunctionTemplate, HasExplicitTemplateArgs,
+                                  ExplicitTemplateArgs, NumExplicitTemplateArgs,
+                                  Args, NumArgs, Specialization, Info)) {
+    // FIXME: Record what happened with template argument deduction, so
+    // that we can give the user a beautiful diagnostic.
+    (void)Result;
+    return;
+  }
+                            
+  // Add the function template specialization produced by template argument
+  // deduction as a candidate.
+  assert(Specialization && "Missing function template specialization?");
+  AddOverloadCandidate(Specialization, Args, NumArgs, CandidateSet,
+                       SuppressUserConversions, ForceRValue);
+}
+  
 /// AddConversionCandidate - Add a C++ conversion function as a
 /// candidate in the candidate set (C++ [over.match.conv], 
 /// C++ [over.match.copy]). From is the expression we're converting from,
@@ -2377,9 +2461,9 @@ void Sema::AddSurrogateCandidate(CXXConversionDecl *Conversion,
   }
 }
 
-// FIXME: This will eventually be removed, once we've migrated all of
-// the operator overloading logic over to the scheme used by binary
-// operators, which works for template instantiation.
+// FIXME: This will eventually be removed, once we've migrated all of the
+// operator overloading logic over to the scheme used by binary operators, which
+// works for template instantiation.
 void Sema::AddOperatorCandidates(OverloadedOperatorKind Op, Scope *S,
                                  SourceLocation OpLoc,
                                  Expr **Args, unsigned NumArgs,
@@ -2394,7 +2478,8 @@ void Sema::AddOperatorCandidates(OverloadedOperatorKind Op, Scope *S,
     T2 = Args[1]->getType();
 
   DeclarationName OpName = Context.DeclarationNames.getCXXOperatorName(Op);
-  LookupOverloadedOperatorName(Op, S, T1, T2, Functions);
+  if (S)
+    LookupOverloadedOperatorName(Op, S, T1, T2, Functions);
   ArgumentDependentLookup(OpName, Args, NumArgs, Functions);
   AddFunctionCandidates(Functions, Args, NumArgs, CandidateSet);
   AddMemberOperatorCandidates(Op, OpLoc, Args, NumArgs, CandidateSet, OpRange);
@@ -2436,7 +2521,7 @@ void Sema::AddMemberOperatorCandidates(OverloadedOperatorKind Op,
   // FIXME: Lookup in base classes, too!
   if (const RecordType *T1Rec = T1->getAsRecordType()) {
     DeclContext::lookup_const_iterator Oper, OperEnd;
-    for (llvm::tie(Oper, OperEnd) = T1Rec->getDecl()->lookup(Context, OpName);
+    for (llvm::tie(Oper, OperEnd) = T1Rec->getDecl()->lookup(OpName);
          Oper != OperEnd; ++Oper)
       AddMethodCandidate(cast<CXXMethodDecl>(*Oper), Args[0], 
                          Args+1, NumArgs - 1, CandidateSet,
@@ -2572,8 +2657,8 @@ BuiltinCandidateTypeSet::AddPointerWithMoreQualifiedTypeVariants(QualType Ty) {
     QualType PointeeTy = PointerTy->getPointeeType();
     // FIXME: Optimize this so that we don't keep trying to add the same types.
 
-    // FIXME: Do we have to add CVR qualifiers at *all* levels to deal
-    // with all pointer conversions that don't cast away constness?
+    // FIXME: Do we have to add CVR qualifiers at *all* levels to deal with all
+    // pointer conversions that don't cast away constness?
     if (!PointeeTy.isConstQualified())
       AddPointerWithMoreQualifiedTypeVariants
         (Context.getPointerType(PointeeTy.withConst()));
@@ -3331,8 +3416,11 @@ Sema::AddArgumentDependentLookupCandidates(DeclarationName Name,
   for (OverloadCandidateSet::iterator Cand = CandidateSet.begin(),
                                    CandEnd = CandidateSet.end();
        Cand != CandEnd; ++Cand)
-    if (Cand->Function)
+    if (Cand->Function) {
       Functions.insert(Cand->Function);
+      if (FunctionTemplateDecl *FunTmpl = Cand->Function->getPrimaryTemplate())
+        Functions.insert(FunTmpl);
+    }
 
   ArgumentDependentLookup(Name, Args, NumArgs, Functions);
 
@@ -3341,15 +3429,24 @@ Sema::AddArgumentDependentLookupCandidates(DeclarationName Name,
   for (OverloadCandidateSet::iterator Cand = CandidateSet.begin(),
                                    CandEnd = CandidateSet.end();
        Cand != CandEnd; ++Cand)
-    if (Cand->Function)
+    if (Cand->Function) {
       Functions.erase(Cand->Function);
+      if (FunctionTemplateDecl *FunTmpl = Cand->Function->getPrimaryTemplate())
+        Functions.erase(FunTmpl);
+    }
 
   // For each of the ADL candidates we found, add it to the overload
   // set.
   for (FunctionSet::iterator Func = Functions.begin(),
                           FuncEnd = Functions.end();
-       Func != FuncEnd; ++Func)
-    AddOverloadCandidate(*Func, Args, NumArgs, CandidateSet);
+       Func != FuncEnd; ++Func) {
+    if (FunctionDecl *FD = dyn_cast<FunctionDecl>(*Func))
+      AddOverloadCandidate(FD, Args, NumArgs, CandidateSet);
+    else
+      AddTemplateOverloadCandidate(cast<FunctionTemplateDecl>(*Func),  
+                                   /*FIXME: explicit args */false, 0, 0,
+                                   Args, NumArgs, CandidateSet);
+  }
 }
 
 /// isBetterOverloadCandidate - Determines whether the first overload
@@ -3375,10 +3472,10 @@ Sema::isBetterOverloadCandidate(const OverloadCandidate& Cand1,
   if (Cand1.IgnoreObjectArgument || Cand2.IgnoreObjectArgument)
     StartArg = 1;
 
-  // (C++ 13.3.3p1): a viable function F1 is defined to be a better
-  // function than another viable function F2 if for all arguments i,
-  // ICSi(F1) is not a worse conversion sequence than ICSi(F2), and
-  // then...
+  // C++ [over.match.best]p1:
+  //   A viable function F1 is defined to be a better function than another 
+  //   viable function F2 if for all arguments i, ICSi(F1) is not a worse 
+  //   conversion sequence than ICSi(F2), and then...
   unsigned NumArgs = Cand1.Conversions.size();
   assert(Cand2.Conversions.size() == NumArgs && "Overload candidate mismatch");
   bool HasBetterConversion = false;
@@ -3400,14 +3497,24 @@ Sema::isBetterOverloadCandidate(const OverloadCandidate& Cand1,
     }
   }
 
+  //    -- for some argument j, ICSj(F1) is a better conversion sequence than 
+  //       ICSj(F2), or, if not that,
   if (HasBetterConversion)
     return true;
 
-  // FIXME: Several other bullets in (C++ 13.3.3p1) need to be
-  // implemented, but they require template support.
+  //     - F1 is a non-template function and F2 is a function template 
+  //       specialization, or, if not that,
+  if (Cand1.Function && !Cand1.Function->getPrimaryTemplate() &&
+      Cand2.Function && Cand2.Function->getPrimaryTemplate())
+    return true;
+  
+  //   -- F1 and F2 are function template specializations, and the function 
+  //      template for F1 is more specialized than the template for F2 
+  //      according to the partial ordering rules described in 14.5.5.2, or, 
+  //      if not that,
+  
+  // FIXME: Implement partial ordering of function templates.
 
-  // C++ [over.match.best]p1b4:
-  //
   //   -- the context is an initialization by user-defined conversion
   //      (see 8.5, 13.3.1.5) and the standard conversion sequence
   //      from the return type of F1 to the destination type (i.e.,
@@ -3436,14 +3543,21 @@ Sema::isBetterOverloadCandidate(const OverloadCandidate& Cand1,
   return false;
 }
 
-/// BestViableFunction - Computes the best viable function (C++ 13.3.3) 
-/// within an overload candidate set. If overloading is successful,
-/// the result will be OR_Success and Best will be set to point to the
-/// best viable function within the candidate set. Otherwise, one of
-/// several kinds of errors will be returned; see
-/// Sema::OverloadingResult.
+/// \brief Computes the best viable function (C++ 13.3.3) 
+/// within an overload candidate set.
+///
+/// \param CandidateSet the set of candidate functions.
+///
+/// \param Loc the location of the function name (or operator symbol) for
+/// which overload resolution occurs.
+///
+/// \param Best f overload resolution was successful or found a deleted 
+/// function, Best points to the candidate function found.
+///
+/// \returns The result of overload resolution.
 Sema::OverloadingResult 
 Sema::BestViableFunction(OverloadCandidateSet& CandidateSet,
+                         SourceLocation Loc,
                          OverloadCandidateSet::iterator& Best)
 {
   // Find the best viable function.
@@ -3478,9 +3592,14 @@ Sema::BestViableFunction(OverloadCandidateSet& CandidateSet,
        Best->Function->getAttr<UnavailableAttr>()))
     return OR_Deleted;
 
-  // If Best refers to a function that is either deleted (C++0x) or
-  // unavailable (Clang extension) report an error.
-
+  // C++ [basic.def.odr]p2:
+  //   An overloaded function is used if it is selected by overload resolution
+  //   when referred to from a potentially-evaluated expression. [Note: this 
+  //   covers calls to named functions (5.2.2), operator overloading 
+  //   (clause 13), user-defined conversions (12.3.2), allocation function for
+  //   placement new (5.3.4), as well as non-default initialization (8.5).
+  if (Best->Function)
+    MarkDeclarationReferenced(Loc, Best->Function);
   return OR_Success;
 }
 
@@ -3538,8 +3657,8 @@ Sema::PrintOverloadCandidates(OverloadCandidateSet& CandidateSet,
           << FnType;
       } else {
         // FIXME: We need to get the identifier in here
-        // FIXME: Do we want the error message to point at the 
-        // operator? (built-ins won't have a location)
+        // FIXME: Do we want the error message to point at the operator?
+        // (built-ins won't have a location)
         QualType FnType 
           = Context.getFunctionType(Cand->BuiltinTypes.ResultTy,
                                     Cand->BuiltinTypes.ParamTypes,
@@ -3583,7 +3702,8 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
   }
 
   // We only look at pointers or references to functions.
-  if (!FunctionType->isFunctionType()) 
+  FunctionType = Context.getCanonicalType(FunctionType.getUnqualifiedType());
+  if (!FunctionType->isFunctionType())
     return 0;
 
   // Find the actual overloaded function declaration.
@@ -3603,27 +3723,69 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
   }
 
   // Try to dig out the overloaded function.
-  if (DeclRefExpr *DR = dyn_cast<DeclRefExpr>(OvlExpr))
+  FunctionTemplateDecl *FunctionTemplate = 0;
+  if (DeclRefExpr *DR = dyn_cast<DeclRefExpr>(OvlExpr)) {
     Ovl = dyn_cast<OverloadedFunctionDecl>(DR->getDecl());
+    FunctionTemplate = dyn_cast<FunctionTemplateDecl>(DR->getDecl());
+  }
 
-  // If there's no overloaded function declaration, we're done.
-  if (!Ovl)
+  // If there's no overloaded function declaration or function template, 
+  // we're done.
+  if (!Ovl && !FunctionTemplate)
     return 0;
  
+  OverloadIterator Fun;
+  if (Ovl)
+    Fun = Ovl;
+  else
+    Fun = FunctionTemplate;
+  
   // Look through all of the overloaded functions, searching for one
   // whose type matches exactly.
-  // FIXME: When templates or using declarations come along, we'll actually
-  // have to deal with duplicates, partial ordering, etc. For now, we 
-  // can just do a simple search.
-  FunctionType = Context.getCanonicalType(FunctionType.getUnqualifiedType());
-  for (OverloadedFunctionDecl::function_iterator Fun = Ovl->function_begin();
-       Fun != Ovl->function_end(); ++Fun) {
+  llvm::SmallPtrSet<FunctionDecl *, 4> Matches;
+  
+  bool FoundNonTemplateFunction = false;
+  for (OverloadIterator FunEnd; Fun != FunEnd; ++Fun) {
     // C++ [over.over]p3:
     //   Non-member functions and static member functions match
     //   targets of type "pointer-to-function" or "reference-to-function."
     //   Nonstatic member functions match targets of
     //   type "pointer-to-member-function."
     // Note that according to DR 247, the containing class does not matter.
+
+    if (FunctionTemplateDecl *FunctionTemplate 
+          = dyn_cast<FunctionTemplateDecl>(*Fun)) {
+      if (CXXMethodDecl *Method 
+            = dyn_cast<CXXMethodDecl>(FunctionTemplate->getTemplatedDecl())) {
+        // Skip non-static function templates when converting to pointer, and 
+        // static when converting to member pointer.
+        if (Method->isStatic() == IsMember)
+          continue;
+      } else if (IsMember)
+        continue;
+      
+      // C++ [over.over]p2:
+      //   If the name is a function template, template argument deduction is 
+      //   done (14.8.2.2), and if the argument deduction succeeds, the 
+      //   resulting template argument list is used to generate a single 
+      //   function template specialization, which is added to the set of 
+      //   overloaded functions considered.
+      FunctionDecl *Specialization = 0;
+      TemplateDeductionInfo Info(Context);
+      if (TemplateDeductionResult Result
+            = DeduceTemplateArguments(FunctionTemplate, /*FIXME*/false,
+                                      /*FIXME:*/0, /*FIXME:*/0,
+                                      FunctionType, Specialization, Info)) {
+        // FIXME: make a note of the failed deduction for diagnostics.
+        (void)Result;
+      } else {
+        assert(FunctionType 
+                 == Context.getCanonicalType(Specialization->getType()));
+        Matches.insert(
+                cast<FunctionDecl>(Context.getCanonicalDecl(Specialization)));
+      }
+    }
+    
     if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(*Fun)) {
       // Skip non-static functions when converting to pointer, and static
       // when converting to member pointer.
@@ -3632,10 +3794,51 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
     } else if (IsMember)
       continue;
 
-    if (FunctionType == Context.getCanonicalType((*Fun)->getType()))
-      return *Fun;
+    if (FunctionDecl *FunDecl = dyn_cast<FunctionDecl>(*Fun)) {
+      if (FunctionType == Context.getCanonicalType(FunDecl->getType())) {
+        Matches.insert(cast<FunctionDecl>(Context.getCanonicalDecl(*Fun)));
+        FoundNonTemplateFunction = true;
+      }
+    } 
   }
 
+  // If there were 0 or 1 matches, we're done.
+  if (Matches.empty())
+    return 0;
+  else if (Matches.size() == 1)
+    return *Matches.begin();
+
+  // C++ [over.over]p4:
+  //   If more than one function is selected, [...]
+  llvm::SmallVector<FunctionDecl *, 4> RemainingMatches;
+  if (FoundNonTemplateFunction) {
+    // [...] any function template specializations in the set are eliminated 
+    // if the set also contains a non-template function, [...]
+    for (llvm::SmallPtrSet<FunctionDecl *, 4>::iterator M = Matches.begin(),
+                                                     MEnd = Matches.end();
+         M != MEnd; ++M)
+      if ((*M)->getPrimaryTemplate() == 0)
+        RemainingMatches.push_back(*M);
+  } else {
+    // [...] and any given function template specialization F1 is eliminated 
+    // if the set contains a second function template specialization whose 
+    // function template is more specialized than the function template of F1 
+    // according to the partial ordering rules of 14.5.5.2.
+    // FIXME: Implement this!
+    RemainingMatches.append(Matches.begin(), Matches.end());
+  }
+  
+  // [...] After such eliminations, if any, there shall remain exactly one 
+  // selected function.
+  if (RemainingMatches.size() == 1)
+    return RemainingMatches.front();
+  
+  // FIXME: We should probably return the same thing that BestViableFunction
+  // returns (even if we issue the diagnostics here).
+  Diag(From->getLocStart(), diag::err_addr_ovl_ambiguous)
+    << RemainingMatches[0]->getDeclName();
+  for (unsigned I = 0, N = RemainingMatches.size(); I != N; ++I)
+    Diag(RemainingMatches[I]->getLocation(), diag::err_ovl_candidate);
   return 0;
 }
 
@@ -3648,6 +3851,9 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
 /// arguments and Fn, and returns NULL.
 FunctionDecl *Sema::ResolveOverloadedCallFn(Expr *Fn, NamedDecl *Callee,
                                             DeclarationName UnqualifiedName,
+                                            bool HasExplicitTemplateArgs,
+                                 const TemplateArgument *ExplicitTemplateArgs,
+                                            unsigned NumExplicitTemplateArgs,
                                             SourceLocation LParenLoc,
                                             Expr **Args, unsigned NumArgs,
                                             SourceLocation *CommaLocs, 
@@ -3678,29 +3884,54 @@ FunctionDecl *Sema::ResolveOverloadedCallFn(Expr *Fn, NamedDecl *Callee,
     for (OverloadedFunctionDecl::function_iterator Func = Ovl->function_begin(),
                                                 FuncEnd = Ovl->function_end();
          Func != FuncEnd; ++Func) {
-      AddOverloadCandidate(*Func, Args, NumArgs, CandidateSet);
+      DeclContext *Ctx = 0;
+      if (FunctionDecl *FunDecl = dyn_cast<FunctionDecl>(*Func)) {
+        if (HasExplicitTemplateArgs)
+          continue;
+        
+        AddOverloadCandidate(FunDecl, Args, NumArgs, CandidateSet);
+        Ctx = FunDecl->getDeclContext();
+      } else {
+        FunctionTemplateDecl *FunTmpl = cast<FunctionTemplateDecl>(*Func);
+        AddTemplateOverloadCandidate(FunTmpl, HasExplicitTemplateArgs,
+                                     ExplicitTemplateArgs,
+                                     NumExplicitTemplateArgs,
+                                     Args, NumArgs, CandidateSet);
+        Ctx = FunTmpl->getDeclContext();
+      }
 
-      if ((*Func)->getDeclContext()->isRecord() ||
-          (*Func)->getDeclContext()->isFunctionOrMethod())
+
+      if (Ctx->isRecord() || Ctx->isFunctionOrMethod())
         ArgumentDependentLookup = false;
     }
   } else if (FunctionDecl *Func = dyn_cast_or_null<FunctionDecl>(Callee)) {
+    assert(!HasExplicitTemplateArgs && "Explicit template arguments?");
     AddOverloadCandidate(Func, Args, NumArgs, CandidateSet);
 
     if (Func->getDeclContext()->isRecord() ||
         Func->getDeclContext()->isFunctionOrMethod())
       ArgumentDependentLookup = false;
-  } 
+  } else if (FunctionTemplateDecl *FuncTemplate 
+               = dyn_cast_or_null<FunctionTemplateDecl>(Callee)) {
+    AddTemplateOverloadCandidate(FuncTemplate, HasExplicitTemplateArgs,
+                                 ExplicitTemplateArgs,
+                                 NumExplicitTemplateArgs, 
+                                 Args, NumArgs, CandidateSet);
+
+    if (FuncTemplate->getDeclContext()->isRecord())
+      ArgumentDependentLookup = false;
+  }
 
   if (Callee)
     UnqualifiedName = Callee->getDeclName();
 
+  // FIXME: Pass explicit template arguments through for ADL
   if (ArgumentDependentLookup)
     AddArgumentDependentLookupCandidates(UnqualifiedName, Args, NumArgs,
                                          CandidateSet);
 
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, Fn->getLocStart(), Best)) {
   case OR_Success:
     return Best->Function;
 
@@ -3806,7 +4037,7 @@ Sema::OwningExprResult Sema::CreateOverloadedUnaryOp(SourceLocation OpLoc,
 
   // Perform overload resolution.
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, OpLoc, Best)) {
   case OR_Success: {
     // We found a built-in operator or an overloaded operator.
     FunctionDecl *FnDecl = Best->Function;
@@ -3959,7 +4190,7 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
 
   // Perform overload resolution.
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, OpLoc, Best)) {
     case OR_Success: {
       // We found a built-in operator or an overloaded operator.
       FunctionDecl *FnDecl = Best->Function;
@@ -4011,6 +4242,15 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
     }
 
     case OR_No_Viable_Function:
+      // For class as left operand for assignment or compound assigment operator
+      // do not fall through to handling in built-in, but report that no overloaded
+      // assignment operator found
+      if (LHS->getType()->isRecordType() && Opc >= BinaryOperator::Assign && Opc <= BinaryOperator::OrAssign) {
+        Diag(OpLoc,  diag::err_ovl_no_viable_oper)
+             << BinaryOperator::getOpcodeStr(Opc)
+             << LHS->getSourceRange() << RHS->getSourceRange();
+        return ExprError();
+      }
       // No viable function; fall through to handling this as a
       // built-in operator, which will produce an error message for us.
       break;
@@ -4076,7 +4316,7 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
     }
 
     OverloadCandidateSet::iterator Best;
-    switch (BestViableFunction(CandidateSet, Best)) {
+    switch (BestViableFunction(CandidateSet, MemExpr->getLocStart(), Best)) {
     case OR_Success:
       Method = cast<CXXMethodDecl>(Best->Function);
       break;
@@ -4157,7 +4397,7 @@ Sema::BuildCallToObjectOfClassType(Scope *S, Expr *Object,
   OverloadCandidateSet CandidateSet;
   DeclarationName OpName = Context.DeclarationNames.getCXXOperatorName(OO_Call);
   DeclContext::lookup_const_iterator Oper, OperEnd;
-  for (llvm::tie(Oper, OperEnd) = Record->getDecl()->lookup(Context, OpName);
+  for (llvm::tie(Oper, OperEnd) = Record->getDecl()->lookup(OpName);
        Oper != OperEnd; ++Oper)
     AddMethodCandidate(cast<CXXMethodDecl>(*Oper), Object, Args, NumArgs, 
                        CandidateSet, /*SuppressUserConversions=*/false);
@@ -4201,7 +4441,7 @@ Sema::BuildCallToObjectOfClassType(Scope *S, Expr *Object,
 
   // Perform overload resolution.
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, Object->getLocStart(), Best)) {
   case OR_Success:
     // Overload resolution succeeded; we'll build the appropriate call
     // below.
@@ -4361,8 +4601,7 @@ Sema::BuildOverloadedArrowExpr(Scope *S, Expr *Base, SourceLocation OpLoc,
   
   DeclContext::lookup_const_iterator Oper, OperEnd;
   for (llvm::tie(Oper, OperEnd) 
-         = BaseRecord->getDecl()->lookup(Context, OpName);
-       Oper != OperEnd; ++Oper)
+         = BaseRecord->getDecl()->lookup(OpName); Oper != OperEnd; ++Oper)
     AddMethodCandidate(cast<CXXMethodDecl>(*Oper), Base, 0, 0, CandidateSet,
                        /*SuppressUserConversions=*/false);
 
@@ -4370,7 +4609,7 @@ Sema::BuildOverloadedArrowExpr(Scope *S, Expr *Base, SourceLocation OpLoc,
 
   // Perform overload resolution.
   OverloadCandidateSet::iterator Best;
-  switch (BestViableFunction(CandidateSet, Best)) {
+  switch (BestViableFunction(CandidateSet, OpLoc, Best)) {
   case OR_Success:
     // Overload resolution succeeded; we'll build the call below.
     break;
@@ -4452,8 +4691,9 @@ void Sema::FixOverloadedFunctionReference(Expr *E, FunctionDecl *Fn) {
     FixOverloadedFunctionReference(UnOp->getSubExpr(), Fn);
     E->setType(Context.getPointerType(UnOp->getSubExpr()->getType()));
   } else if (DeclRefExpr *DR = dyn_cast<DeclRefExpr>(E)) {
-    assert(isa<OverloadedFunctionDecl>(DR->getDecl()) && 
-           "Expected overloaded function");
+    assert((isa<OverloadedFunctionDecl>(DR->getDecl()) ||
+            isa<FunctionTemplateDecl>(DR->getDecl())) && 
+           "Expected overloaded function or function template");
     DR->setDecl(Fn);
     E->setType(Fn->getType());
   } else if (MemberExpr *MemExpr = dyn_cast<MemberExpr>(E)) {

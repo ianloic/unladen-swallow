@@ -77,6 +77,7 @@ namespace {
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
       (void) llvm::createLiveValuesPass();
+      (void) llvm::createLoopDependenceAnalysisPass();
       (void) llvm::createLoopExtractorPass();
       (void) llvm::createLoopSimplifyPass();
       (void) llvm::createLoopStrengthReducePass();
@@ -127,6 +128,8 @@ namespace {
       (void) llvm::createPrintModulePass(0);
       (void) llvm::createPrintFunctionPass("", 0);
       (void) llvm::createDbgInfoPrinterPass();
+      (void) llvm::createPartialInliningPass();
+      (void) llvm::createSSIPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::FindUsedTypes();

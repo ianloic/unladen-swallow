@@ -41,13 +41,13 @@ void BasePaths::ComputeDeclsFound() {
   std::copy(Decls.begin(), Decls.end(), DeclsFound);
 }
 
-NamedDecl **BasePaths::found_decls_begin() {
+BasePaths::decl_iterator BasePaths::found_decls_begin() {
   if (NumDeclsFound == 0)
     ComputeDeclsFound();
   return DeclsFound;
 }
 
-NamedDecl **BasePaths::found_decls_end() {
+BasePaths::decl_iterator BasePaths::found_decls_end() {
   if (NumDeclsFound == 0)
     ComputeDeclsFound();
   return DeclsFound + NumDeclsFound;
@@ -138,6 +138,12 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
     // Find the record of the base class subobjects for this type.
     QualType BaseType = Context.getCanonicalType(BaseSpec->getType());
     BaseType = BaseType.getUnqualifiedType();
+
+    // If a base class of the class template depends on a template-parameter, 
+    // the base class scope is not examined during unqualified name lookup.
+    // [temp.dep]p3.
+    if (BaseType->isDependentType())
+      continue;
     
     // Determine whether we need to visit this base class at all,
     // updating the count of subobjects appropriately.
@@ -175,11 +181,13 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
     // type to see if we've found a member that meets the search
     // criteria.
     bool FoundPathToThisBase = false;
-    if (Criteria.LookupBase) {
+    switch (Criteria.Kind) {
+    case MemberLookupCriteria::LK_Base:
       FoundPathToThisBase 
         = (Context.getCanonicalType(BaseSpec->getType()) == Criteria.Base);
-    } else {
-      Paths.ScratchPath.Decls = BaseRecord->lookup(Context, Criteria.Name);
+      break;
+    case MemberLookupCriteria::LK_NamedMember:
+      Paths.ScratchPath.Decls = BaseRecord->lookup(Criteria.Name);
       while (Paths.ScratchPath.Decls.first != Paths.ScratchPath.Decls.second) {
         if (isAcceptableLookupResult(*Paths.ScratchPath.Decls.first,
                                      Criteria.NameKind, Criteria.IDNS)) {
@@ -188,6 +196,24 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
         }
         ++Paths.ScratchPath.Decls.first;
       }
+      break;
+    case MemberLookupCriteria::LK_OverriddenMember:
+      Paths.ScratchPath.Decls = 
+        BaseRecord->lookup(Criteria.Method->getDeclName());
+      while (Paths.ScratchPath.Decls.first != Paths.ScratchPath.Decls.second) {
+        if (CXXMethodDecl *MD = 
+              dyn_cast<CXXMethodDecl>(*Paths.ScratchPath.Decls.first)) {
+          OverloadedFunctionDecl::function_iterator MatchedDecl;
+          if (MD->isVirtual() && 
+              !IsOverload(Criteria.Method, MD, MatchedDecl)) {
+            FoundPathToThisBase = true;
+            break;
+          }
+        }
+        
+        ++Paths.ScratchPath.Decls.first;
+      }
+      break;
     }
 
     if (FoundPathToThisBase) {
@@ -236,9 +262,12 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
 /// otherwise. Loc is the location where this routine should point to
 /// if there is an error, and Range is the source range to highlight
 /// if there is an error.
-bool 
+bool
 Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
-                                   SourceLocation Loc, SourceRange Range) {
+                                   unsigned InaccessibleBaseID,
+                                   unsigned AmbigiousBaseConvID,
+                                   SourceLocation Loc, SourceRange Range,
+                                   DeclarationName Name) {
   // First, determine whether the path from Derived to Base is
   // ambiguous. This is slightly more expensive than checking whether
   // the Derived to Base conversion exists, because here we need to
@@ -252,7 +281,8 @@ Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
 
   if (!Paths.isAmbiguous(Context.getCanonicalType(Base).getUnqualifiedType())) {
     // Check that the base class can be accessed.
-    return CheckBaseClassAccess(Derived, Base, Paths, Loc);
+    return CheckBaseClassAccess(Derived, Base, InaccessibleBaseID, Paths, Loc,
+                                Name);
   }
 
   // We know that the derived-to-base conversion is ambiguous, and
@@ -273,10 +303,20 @@ Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
   // to each base class subobject.
   std::string PathDisplayStr = getAmbiguousPathsDisplayString(Paths);
   
-  Diag(Loc, diag::err_ambiguous_derived_to_base_conv)
-    << Derived << Base << PathDisplayStr << Range;
+  Diag(Loc, AmbigiousBaseConvID)
+    << Derived << Base << PathDisplayStr << Range << Name;
   return true;
 }
+
+bool 
+Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
+                                   SourceLocation Loc, SourceRange Range) {
+  return CheckDerivedToBaseConversion(Derived, Base, 
+                                      diag::err_conv_to_inaccessible_base,
+                                      diag::err_ambiguous_derived_to_base_conv,
+                                      Loc, Range, DeclarationName());
+}
+                                      
 
 /// @brief Builds a string representing ambiguous paths from a
 /// specific derived class to different subobjects of the same base

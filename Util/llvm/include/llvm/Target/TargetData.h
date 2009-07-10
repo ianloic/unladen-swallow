@@ -29,6 +29,7 @@ namespace llvm {
 
 class Value;
 class Type;
+class IntegerType;
 class StructType;
 class StructLayout;
 class GlobalVariable;
@@ -155,6 +156,23 @@ public:
   /// Target pointer size, in bits
   unsigned char getPointerSizeInBits()   const { return 8*PointerMemSize; }
 
+  /// Size examples:
+  ///
+  /// Type        SizeInBits  StoreSizeInBits  AllocSizeInBits[*]
+  /// ----        ----------  ---------------  ---------------
+  ///  i1            1           8                8
+  ///  i8            8           8                8
+  ///  i19          19          24               32
+  ///  i32          32          32               32
+  ///  i100        100         104              128
+  ///  i128        128         128              128
+  ///  Float        32          32               32
+  ///  Double       64          64               64
+  ///  X86_FP80     80          80               96
+  ///
+  /// [*] The alloc size depends on the alignment, and thus on the target.
+  ///     These values are for x86-32 linux.
+
   /// getTypeSizeInBits - Return the number of bits necessary to hold the
   /// specified type.  For example, returns 36 for i36 and 80 for x86_fp80.
   uint64_t getTypeSizeInBits(const Type* Ty) const;
@@ -173,21 +191,21 @@ public:
     return 8*getTypeStoreSize(Ty);
   }
 
-  /// getTypePaddedSize - Return the offset in bytes between successive objects
+  /// getTypeAllocSize - Return the offset in bytes between successive objects
   /// of the specified type, including alignment padding.  This is the amount
   /// that alloca reserves for this type.  For example, returns 12 or 16 for
   /// x86_fp80, depending on alignment.
-  uint64_t getTypePaddedSize(const Type* Ty) const {
+  uint64_t getTypeAllocSize(const Type* Ty) const {
     // Round up to the next alignment boundary.
     return RoundUpAlignment(getTypeStoreSize(Ty), getABITypeAlignment(Ty));
   }
 
-  /// getTypePaddedSizeInBits - Return the offset in bits between successive
+  /// getTypeAllocSizeInBits - Return the offset in bits between successive
   /// objects of the specified type, including alignment padding; always a
   /// multiple of 8.  This is the amount that alloca reserves for this type.
   /// For example, returns 96 or 128 for x86_fp80, depending on alignment.
-  uint64_t getTypePaddedSizeInBits(const Type* Ty) const {
-    return 8*getTypePaddedSize(Ty);
+  uint64_t getTypeAllocSizeInBits(const Type* Ty) const {
+    return 8*getTypeAllocSize(Ty);
   }
 
   /// getABITypeAlignment - Return the minimum ABI-required alignment for the
@@ -211,7 +229,7 @@ public:
   /// getIntPtrType - Return an unsigned integer type that is the same size or
   /// greater to the host pointer size.
   ///
-  const Type *getIntPtrType() const;
+  const IntegerType *getIntPtrType() const;
 
   /// getIndexedOffset - return the offset from the beginning of the type for
   /// the specified indices.  This is used to implement getelementptr.
@@ -275,7 +293,7 @@ public:
     return StructAlignment;
   }
 
-  /// getElementContainingOffset - Given a valid offset into the structure,
+  /// getElementContainingOffset - Given a valid byte offset into the structure,
   /// return the structure index that contains it.
   ///
   unsigned getElementContainingOffset(uint64_t Offset) const;

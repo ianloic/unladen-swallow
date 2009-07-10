@@ -34,6 +34,7 @@
 #include "llvm/ExecutionEngine/JIT.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Target/TargetSelect.h"
 #include <fstream>
 #include <iostream>
 using namespace llvm;
@@ -85,6 +86,8 @@ void addMainFunction(Module *mod) {
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, " BrainF compiler\n");
 
+  LLVMContext Context;
+
   if (InputFilename == "") {
     std::cerr<<"Error: You must specify the filename of the program to "
     "be compiled.  Use --help to see the options.\n";
@@ -123,7 +126,7 @@ int main(int argc, char **argv) {
 
   //Read the BrainF program
   BrainF bf;
-  Module *mod = bf.parse(in, 65536, cf); //64 KiB
+  Module *mod = bf.parse(in, 65536, cf, Context); //64 KiB
   if (in != &std::cin) {delete in;}
   addMainFunction(mod);
 
@@ -135,6 +138,8 @@ int main(int argc, char **argv) {
 
   //Write it out
   if (JIT) {
+    InitializeNativeTarget();
+
     std::cout << "------- Running JIT -------\n";
     ExistingModuleProvider *mp = new ExistingModuleProvider(mod);
     ExecutionEngine *ee = ExecutionEngine::create(mp, false);

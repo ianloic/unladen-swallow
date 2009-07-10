@@ -23,6 +23,7 @@ namespace llvm {
 class ConstantFP;
 class MachineBasicBlock;
 class GlobalValue;
+class MDNode;
 class MachineInstr;
 class TargetMachine;
 class MachineRegisterInfo;
@@ -33,21 +34,29 @@ class raw_ostream;
 class MachineOperand {
 public:
   enum MachineOperandType {
-    MO_Register,                ///< Register operand.
-    MO_Immediate,               ///< Immediate operand
-    MO_FPImmediate,             ///< Floating-point immediate operand
-    MO_MachineBasicBlock,       ///< MachineBasicBlock reference
-    MO_FrameIndex,              ///< Abstract Stack Frame Index
-    MO_ConstantPoolIndex,       ///< Address of indexed Constant in Constant Pool
-    MO_JumpTableIndex,          ///< Address of indexed Jump Table for switch
-    MO_ExternalSymbol,          ///< Name of external global symbol
-    MO_GlobalAddress            ///< Address of a global value
+    MO_Register,               ///< Register operand.
+    MO_Immediate,              ///< Immediate operand
+    MO_FPImmediate,            ///< Floating-point immediate operand
+    MO_MachineBasicBlock,      ///< MachineBasicBlock reference
+    MO_FrameIndex,             ///< Abstract Stack Frame Index
+    MO_ConstantPoolIndex,      ///< Address of indexed Constant in Constant Pool
+    MO_JumpTableIndex,         ///< Address of indexed Jump Table for switch
+    MO_ExternalSymbol,         ///< Name of external global symbol
+    MO_GlobalAddress,          ///< Address of a global value
+    MO_Metadata                ///< Metadata info
   };
 
 private:
   /// OpKind - Specify what kind of operand this is.  This discriminates the
   /// union.
-  MachineOperandType OpKind : 8;
+  unsigned char OpKind; // MachineOperandType
+  
+  /// SubReg - Subregister number, only valid for MO_Register.  A value of 0
+  /// indicates the MO_Register has no subReg.
+  unsigned char SubReg;
+  
+  /// TargetFlags - This is a set of target-specific operand flags.
+  unsigned char TargetFlags;
   
   /// IsDef/IsImp/IsKill/IsDead flags - These are only valid for MO_Register
   /// operands.
@@ -68,15 +77,15 @@ private:
   /// This is only valid on definitions of registers.
   bool IsDead : 1;
 
+  /// IsUndef - True if this is a register def / use of "undef", i.e. register
+  /// defined by an IMPLICIT_DEF. This is only valid on registers.
+  bool IsUndef : 1;
+
   /// IsEarlyClobber - True if this MO_Register 'def' operand is written to
   /// by the MachineInstr before all input registers are read.  This is used to
   /// model the GCC inline asm '&' constraint modifier.
   bool IsEarlyClobber : 1;
 
-  /// SubReg - Subregister number, only valid for MO_Register.  A value of 0
-  /// indicates the MO_Register has no subReg.
-  unsigned char SubReg;
-  
   /// ParentMI - This is the instruction that this operand is embedded into. 
   /// This is valid for all operand types, when the operand is in an instr.
   MachineInstr *ParentMI;
@@ -100,12 +109,15 @@ private:
         int Index;                // For MO_*Index - The index itself.
         const char *SymbolName;   // For MO_ExternalSymbol.
         GlobalValue *GV;          // For MO_GlobalAddress.
+        MDNode *Node;             // For MO_Metadata.
       } Val;
       int64_t Offset;   // An offset from the object.
     } OffsetedInfo;
   } Contents;
   
-  explicit MachineOperand(MachineOperandType K) : OpKind(K), ParentMI(0) {}
+  explicit MachineOperand(MachineOperandType K) : OpKind(K), ParentMI(0) {
+    TargetFlags = 0;
+  }
 public:
   MachineOperand(const MachineOperand &M) {
     *this = M;
@@ -115,7 +127,12 @@ public:
   
   /// getType - Returns the MachineOperandType for this operand.
   ///
-  MachineOperandType getType() const { return OpKind; }
+  MachineOperandType getType() const { return (MachineOperandType)OpKind; }
+  
+  unsigned char getTargetFlags() const { return TargetFlags; }
+  void setTargetFlags(unsigned char F) { TargetFlags = F; }
+  void addTargetFlag(unsigned char F) { TargetFlags |= F; }
+  
 
   /// getParent - Return the instruction that this operand belongs to.
   ///
@@ -147,6 +164,8 @@ public:
   bool isGlobal() const { return OpKind == MO_GlobalAddress; }
   /// isSymbol - Tests if this is a MO_ExternalSymbol operand.
   bool isSymbol() const { return OpKind == MO_ExternalSymbol; }
+  /// isMetadata - Tests if this is a MO_Metadata operand.
+  bool isMetadata() const { return OpKind == MO_Metadata; }
 
   //===--------------------------------------------------------------------===//
   // Accessors for Register Operands
@@ -186,6 +205,11 @@ public:
   bool isKill() const {
     assert(isReg() && "Wrong MachineOperand accessor");
     return IsKill;
+  }
+  
+  bool isUndef() const {
+    assert(isReg() && "Wrong MachineOperand accessor");
+    return IsUndef;
   }
   
   bool isEarlyClobber() const {
@@ -238,6 +262,11 @@ public:
     IsDead = Val;
   }
 
+  void setIsUndef(bool Val = true) {
+    assert(isReg() && "Wrong MachineOperand accessor");
+    IsUndef = Val;
+  }
+  
   void setIsEarlyClobber(bool Val = true) {
     assert(isReg() && IsDef && "Wrong MachineOperand accessor");
     IsEarlyClobber = Val;
@@ -273,6 +302,10 @@ public:
     return Contents.OffsetedInfo.Val.GV;
   }
   
+  MDNode *getMDNode() const {
+    return Contents.OffsetedInfo.Val.Node;
+  }
+  
   int64_t getOffset() const {
     assert((isGlobal() || isSymbol() || isCPI()) &&
            "Wrong MachineOperand accessor");
@@ -294,7 +327,7 @@ public:
   }
 
   void setOffset(int64_t Offset) {
-    assert((isGlobal() || isSymbol() || isCPI()) &&
+    assert((isGlobal() || isSymbol() || isCPI() || isMetadata()) &&
         "Wrong MachineOperand accessor");
     Contents.OffsetedInfo.Offset = Offset;
   }
@@ -327,7 +360,8 @@ public:
   /// the specified value.  If an operand is known to be an register already,
   /// the setReg method should be used.
   void ChangeToRegister(unsigned Reg, bool isDef, bool isImp = false,
-                        bool isKill = false, bool isDead = false);
+                        bool isKill = false, bool isDead = false,
+                        bool isUndef = false);
   
   //===--------------------------------------------------------------------===//
   // Construction methods.
@@ -347,13 +381,15 @@ public:
   
   static MachineOperand CreateReg(unsigned Reg, bool isDef, bool isImp = false,
                                   bool isKill = false, bool isDead = false,
-                                  unsigned SubReg = 0,
-                                  bool isEarlyClobber = false) {
+                                  bool isUndef = false,
+                                  bool isEarlyClobber = false,
+                                  unsigned SubReg = 0) {
     MachineOperand Op(MachineOperand::MO_Register);
     Op.IsDef = isDef;
     Op.IsImp = isImp;
     Op.IsKill = isKill;
     Op.IsDead = isDead;
+    Op.IsUndef = isUndef;
     Op.IsEarlyClobber = isEarlyClobber;
     Op.Contents.Reg.RegNo = Reg;
     Op.Contents.Reg.Prev = 0;
@@ -361,9 +397,11 @@ public:
     Op.SubReg = SubReg;
     return Op;
   }
-  static MachineOperand CreateMBB(MachineBasicBlock *MBB) {
+  static MachineOperand CreateMBB(MachineBasicBlock *MBB,
+                                  unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_MachineBasicBlock);
     Op.setMBB(MBB);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
   static MachineOperand CreateFI(unsigned Idx) {
@@ -371,27 +409,43 @@ public:
     Op.setIndex(Idx);
     return Op;
   }
-  static MachineOperand CreateCPI(unsigned Idx, int Offset) {
+  static MachineOperand CreateCPI(unsigned Idx, int Offset,
+                                  unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_ConstantPoolIndex);
     Op.setIndex(Idx);
     Op.setOffset(Offset);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  static MachineOperand CreateJTI(unsigned Idx) {
+  static MachineOperand CreateJTI(unsigned Idx,
+                                  unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_JumpTableIndex);
     Op.setIndex(Idx);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  static MachineOperand CreateGA(GlobalValue *GV, int64_t Offset) {
+  static MachineOperand CreateGA(GlobalValue *GV, int64_t Offset,
+                                 unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_GlobalAddress);
     Op.Contents.OffsetedInfo.Val.GV = GV;
     Op.setOffset(Offset);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  static MachineOperand CreateES(const char *SymName, int64_t Offset = 0) {
+  static MachineOperand CreateMDNode(MDNode *N, int64_t Offset,
+                                     unsigned char TargetFlags = 0) {
+    MachineOperand Op(MachineOperand::MO_Metadata);
+    Op.Contents.OffsetedInfo.Val.Node = N;
+    Op.setOffset(Offset);
+    Op.setTargetFlags(TargetFlags);
+    return Op;
+  }
+  static MachineOperand CreateES(const char *SymName, int64_t Offset = 0,
+                                 unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_ExternalSymbol);
     Op.Contents.OffsetedInfo.Val.SymbolName = SymName;
     Op.setOffset(Offset);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
   const MachineOperand &operator=(const MachineOperand &MO) {
@@ -400,10 +454,12 @@ public:
     IsImp    = MO.IsImp;
     IsKill   = MO.IsKill;
     IsDead   = MO.IsDead;
+    IsUndef  = MO.IsUndef;
     IsEarlyClobber = MO.IsEarlyClobber;
     SubReg   = MO.SubReg;
     ParentMI = MO.ParentMI;
     Contents = MO.Contents;
+    TargetFlags = MO.TargetFlags;
     return *this;
   }
 

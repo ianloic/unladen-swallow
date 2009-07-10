@@ -17,12 +17,11 @@
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/AST/Attr.h"
-#include "clang/AST/Builtins.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
-#include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/OwningPtr.h"
@@ -55,6 +54,8 @@ namespace clang {
   class ObjCIvarRefExpr;
   class ObjCIvarDecl;
   
+  namespace Builtin { class Context; }
+  
 /// ASTContext - This class holds long-lived AST nodes (such as types and
 /// decls) that can be referred to throughout the semantic analysis of a file.
 class ASTContext {  
@@ -70,6 +71,7 @@ class ASTContext {
   llvm::FoldingSet<IncompleteArrayType> IncompleteArrayTypes;
   std::vector<VariableArrayType*> VariableArrayTypes;
   std::vector<DependentSizedArrayType*> DependentSizedArrayTypes;
+  std::vector<DependentSizedExtVectorType*> DependentSizedExtVectorTypes;
   llvm::FoldingSet<VectorType> VectorTypes;
   llvm::FoldingSet<FunctionNoProtoType> FunctionNoProtoTypes;
   llvm::FoldingSet<FunctionProtoType> FunctionProtoTypes;
@@ -78,7 +80,7 @@ class ASTContext {
   llvm::FoldingSet<QualifiedNameType> QualifiedNameTypes;
   llvm::FoldingSet<TypenameType> TypenameTypes;
   llvm::FoldingSet<ObjCQualifiedInterfaceType> ObjCQualifiedInterfaceTypes;
-  llvm::FoldingSet<ObjCQualifiedIdType> ObjCQualifiedIdTypes;
+  llvm::FoldingSet<ObjCObjectPointerType> ObjCObjectPointerTypes;
 
   llvm::FoldingSet<QualifiedTemplateName> QualifiedTemplateNames;
   llvm::FoldingSet<DependentTemplateName> DependentTemplateNames;
@@ -102,7 +104,7 @@ class ASTContext {
   /// This is initially null and set by Sema::LazilyCreateBuiltin when
   /// a builtin that takes a valist is encountered.
   QualType BuiltinVaListType;
-  
+
   /// ObjCIdType - a pseudo built-in typedef type (set by Sema).
   QualType ObjCIdType;
   const RecordType *IdStructType;
@@ -124,6 +126,15 @@ class ASTContext {
 
   RecordDecl *ObjCFastEnumerationStateTypeDecl;
   
+  /// \brief The type for the C FILE type.
+  TypeDecl *FILEDecl;
+  
+  /// \brief Keeps track of all declaration attributes. 
+  ///
+  /// Since so few decls have attrs, we keep them in a hash map instead of
+  /// wasting space in the Decl class.
+  llvm::DenseMap<const Decl*, Attr*> DeclAttrs;
+  
   TranslationUnitDecl *TUDecl;
 
   /// SourceMgr - The associated SourceManager object.
@@ -133,17 +144,32 @@ class ASTContext {
   ///  this ASTContext object.
   LangOptions LangOpts;
 
+  /// \brief Whether we have already loaded comment source ranges from an
+  /// external source.
+  bool LoadedExternalComments;
+  
   /// MallocAlloc/BumpAlloc - The allocator objects used to create AST objects.
   bool FreeMemory;
   llvm::MallocAllocator MallocAlloc;
   llvm::BumpPtrAllocator BumpAlloc;
+  
+  /// \brief Mapping from declarations to their comments, once we have
+  /// already looked up the comment associated with a given declaration.
+  llvm::DenseMap<const Decl *, std::string> DeclComments;
+  
 public:  
   TargetInfo &Target;
   IdentifierTable &Idents;
   SelectorTable &Selectors;
+  Builtin::Context &BuiltinInfo;
   DeclarationNameTable DeclarationNames;
   llvm::OwningPtr<ExternalASTSource> ExternalSource;
+  clang::PrintingPolicy PrintingPolicy;
 
+  /// \brief Source ranges for all of the comments in the source file,
+  /// sorted in order of appearance in the translation unit.
+  std::vector<SourceRange> Comments;
+  
   SourceManager& getSourceManager() { return SourceMgr; }
   const SourceManager& getSourceManager() const { return SourceMgr; }
   void *Allocate(unsigned Size, unsigned Align = 8) {
@@ -160,10 +186,16 @@ public:
     return FullSourceLoc(Loc,SourceMgr);
   }
 
+  /// \brief Retrieve the attributes for the given declaration.
+  Attr*& getDeclAttrs(const Decl *D) { return DeclAttrs[D]; }
+  
+  /// \brief Erase the attributes corresponding to the given declaration.
+  void eraseDeclAttrs(const Decl *D) { DeclAttrs.erase(D); }
+  
   TranslationUnitDecl *getTranslationUnitDecl() const { return TUDecl; }
 
-  Builtin::Context BuiltinInfo;
-
+  const char *getCommentForDecl(const Decl *D);
+  
   // Builtin Types.
   QualType VoidTy;
   QualType BoolTy;
@@ -174,25 +206,17 @@ public:
   QualType UnsignedLongLongTy, UnsignedInt128Ty;
   QualType FloatTy, DoubleTy, LongDoubleTy;
   QualType FloatComplexTy, DoubleComplexTy, LongDoubleComplexTy;
-  QualType VoidPtrTy;
+  QualType VoidPtrTy, NullPtrTy;
   QualType OverloadTy;
   QualType DependentTy;
+  QualType UndeducedAutoTy;
 
   ASTContext(const LangOptions& LOpts, SourceManager &SM, TargetInfo &t,
-             IdentifierTable &idents, SelectorTable &sels, 
-             bool FreeMemory = true, unsigned size_reserve=0,
-             bool InitializeBuiltins = true);
+             IdentifierTable &idents, SelectorTable &sels,
+             Builtin::Context &builtins,
+             bool FreeMemory = true, unsigned size_reserve=0);
 
   ~ASTContext();
-
-  /// \brief Initialize builtins.
-  ///
-  /// Typically, this routine will be called automatically by the
-  /// constructor. However, in certain cases (e.g., when there is a
-  /// PCH file to be loaded), the constructor does not perform
-  /// initialization for builtins. This routine can be called to
-  /// perform the initialization.
-  void InitializeBuiltins(IdentifierTable &idents);
 
   /// \brief Attach an external AST source to the AST context.
   ///
@@ -207,7 +231,7 @@ public:
 
   void PrintStats() const;
   const std::vector<Type*>& getTypes() const { return Types; }
-  
+
   //===--------------------------------------------------------------------===//
   //                           Type Constructors
   //===--------------------------------------------------------------------===//
@@ -253,7 +277,8 @@ public:
   /// variable array of the specified element type.
   QualType getVariableArrayType(QualType EltTy, Expr *NumElts,
                                 ArrayType::ArraySizeModifier ASM,
-                                unsigned EltTypeQuals);
+                                unsigned EltTypeQuals,
+                                SourceRange Brackets);
   
   /// getDependentSizedArrayType - Returns a non-unique reference to
   /// the type for a dependently-sized array of the specified element
@@ -261,7 +286,8 @@ public:
   /// comparable, at some point.
   QualType getDependentSizedArrayType(QualType EltTy, Expr *NumElts,
                                       ArrayType::ArraySizeModifier ASM,
-                                      unsigned EltTypeQuals);
+                                      unsigned EltTypeQuals,
+                                      SourceRange Brackets);
 
   /// getIncompleteArrayType - Returns a unique reference to the type for a
   /// incomplete array of the specified element type.
@@ -274,7 +300,23 @@ public:
   QualType getConstantArrayType(QualType EltTy, const llvm::APInt &ArySize,
                                 ArrayType::ArraySizeModifier ASM,
                                 unsigned EltTypeQuals);
-                        
+
+  /// getConstantArrayWithExprType - Return a reference to the type for a
+  /// constant array of the specified element type.
+  QualType getConstantArrayWithExprType(QualType EltTy,
+                                        const llvm::APInt &ArySize,
+                                        Expr *ArySizeExpr,
+                                        ArrayType::ArraySizeModifier ASM,
+                                        unsigned EltTypeQuals,
+                                        SourceRange Brackets);
+
+  /// getConstantArrayWithoutExprType - Return a reference to the type
+  /// for a constant array of the specified element type.
+  QualType getConstantArrayWithoutExprType(QualType EltTy,
+                                           const llvm::APInt &ArySize,
+                                           ArrayType::ArraySizeModifier ASM,
+                                           unsigned EltTypeQuals);
+
   /// getVectorType - Return the unique reference to a vector type of
   /// the specified element type and size. VectorType must be a built-in type.
   QualType getVectorType(QualType VectorType, unsigned NumElts);
@@ -283,6 +325,14 @@ public:
   /// of the specified element type and size.  VectorType must be a built-in
   /// type.
   QualType getExtVectorType(QualType VectorType, unsigned NumElts);
+
+  /// getDependentSizedExtVectorType - Returns a non-unique reference to
+  /// the type for a dependently-sized vector of the specified element
+  /// type. FIXME: We will need these to be uniqued, or at least
+  /// comparable, at some point.
+  QualType getDependentSizedExtVectorType(QualType VectorType, 
+                                          Expr *SizeExpr,
+                                          SourceLocation AttrLoc);
 
   /// getFunctionNoProtoType - Return a K&R style C function type like 'int()'.
   ///
@@ -306,6 +356,7 @@ public:
   QualType getObjCInterfaceType(const ObjCInterfaceDecl *Decl);
 
   QualType getTemplateTypeParmType(unsigned Depth, unsigned Index, 
+                                   bool ParameterPack,
                                    IdentifierInfo *Name = 0);
 
   QualType getTemplateSpecializationType(TemplateName T,
@@ -322,6 +373,12 @@ public:
                            const TemplateSpecializationType *TemplateId,
                            QualType Canon = QualType());
 
+  /// getObjCObjectPointerType - Return a ObjCObjectPointerType type for the
+  /// given interface decl and the conforming protocol list.
+  QualType getObjCObjectPointerType(ObjCInterfaceDecl *Decl,
+                                    ObjCProtocolDecl **ProtocolList = 0,
+                                    unsigned NumProtocols = 0);
+  
   /// getObjCQualifiedInterfaceType - Return a 
   /// ObjCQualifiedInterfaceType type for the given interface decl and
   /// the conforming protocol list.
@@ -329,15 +386,12 @@ public:
                                          ObjCProtocolDecl **ProtocolList,
                                          unsigned NumProtocols);
   
-  /// getObjCQualifiedIdType - Return an ObjCQualifiedIdType for a 
-  /// given 'id' and conforming protocol list.
-  QualType getObjCQualifiedIdType(ObjCProtocolDecl **ProtocolList, 
-                                  unsigned NumProtocols);
-                                  
-
   /// getTypeOfType - GCC extension.
   QualType getTypeOfExprType(Expr *e);
   QualType getTypeOfType(QualType t);
+  
+  /// getDecltypeType - C++0x decltype.
+  QualType getDecltypeType(Expr *e);
   
   /// getTagDeclType - Return the unique reference to the type for the
   /// specified TagDecl (struct/union/class/enum) decl.
@@ -396,6 +450,16 @@ public:
 
   void setObjCFastEnumerationStateType(QualType T);
 
+  /// \brief Set the type for the C FILE type.
+  void setFILEDecl(TypeDecl *FILEDecl) { this->FILEDecl = FILEDecl; }
+  
+  /// \brief Retrieve the C FILE type.
+  QualType getFILEType() { 
+    if (FILEDecl) 
+      return getTypeDeclType(FILEDecl);
+    return QualType();
+  }
+                       
   /// getObjCEncodingForType - Emit the ObjC type encoding for the
   /// given type into \arg S. If \arg NameFields is specified then
   /// record field names are also encoded.
@@ -423,7 +487,7 @@ public:
   /// getObjCEncodingTypeSize returns size of type for objective-c encoding
   /// purpose.
   int getObjCEncodingTypeSize(QualType t);
-    
+
   /// This setter/getter represents the ObjC 'id' type. It is setup lazily, by
   /// Sema.  id is always a (typedef for a) pointer type, a pointer to a struct.
   QualType getObjCIdType() const { return ObjCIdType; }
@@ -453,6 +517,14 @@ public:
   TemplateName getDependentTemplateName(NestedNameSpecifier *NNS, 
                                         const IdentifierInfo *Name);
 
+  enum GetBuiltinTypeError {
+    GE_None,        //< No error
+    GE_Missing_FILE //< Missing the FILE type from <stdio.h>
+  };
+  
+  /// GetBuiltinType - Return the type for the specified builtin.
+  QualType GetBuiltinType(unsigned ID, GetBuiltinTypeError &Error);
+  
 private:
   QualType getFromTargetType(unsigned Type) const;
 
@@ -538,6 +610,16 @@ public:
   void CollectObjCIvars(const ObjCInterfaceDecl *OI,
                         llvm::SmallVectorImpl<FieldDecl*> &Fields);
 
+  void ShallowCollectObjCIvars(const ObjCInterfaceDecl *OI,
+                               llvm::SmallVectorImpl<ObjCIvarDecl*> &Ivars,
+                               bool CollectSynthesized = true);
+  void CollectSynthesizedIvars(const ObjCInterfaceDecl *OI,
+                               llvm::SmallVectorImpl<ObjCIvarDecl*> &Ivars);
+  void CollectProtocolSynthesizedIvars(const ObjCProtocolDecl *PD,
+                               llvm::SmallVectorImpl<ObjCIvarDecl*> &Ivars);
+  unsigned CountSynthesizedIvars(const ObjCInterfaceDecl *OI);
+  unsigned CountProtocolSynthesizedIvars(const ObjCProtocolDecl *PD);
+
   //===--------------------------------------------------------------------===//
   //                            Type Operators
   //===--------------------------------------------------------------------===//
@@ -566,6 +648,9 @@ public:
     return T1.getUnqualifiedType() == T2.getUnqualifiedType();
   }
 
+  /// \brief Retrieves the "canonical" declaration of the given declaration.
+  Decl *getCanonicalDecl(Decl *D);
+
   /// \brief Retrieves the "canonical" declaration of the given tag
   /// declaration.
   ///
@@ -573,10 +658,10 @@ public:
   /// either the definition of the tag (if it is a complete type) or
   /// the first declaration of that tag.
   TagDecl *getCanonicalDecl(TagDecl *Tag) {
-    QualType T = getTagDeclType(Tag);
-    return cast<TagDecl>(cast<TagType>(T.getTypePtr()->CanonicalType)
-                           ->getDecl());
+    return cast<TagDecl>(getCanonicalDecl((Decl *)Tag));
   }
+
+  /// \brief Retrieves the "canonical" declaration of 
 
   /// \brief Retrieves the "canonical" nested name specifier for a
   /// given nested name specifier.
@@ -603,6 +688,26 @@ public:
   /// the template type parameter 'T' is template-param-0-0.
   NestedNameSpecifier *
   getCanonicalNestedNameSpecifier(NestedNameSpecifier *NNS);
+
+  /// \brief Retrieves the "canonical" template name that refers to a
+  /// given template.
+  ///
+  /// The canonical template name is the simplest expression that can
+  /// be used to refer to a given template. For most templates, this
+  /// expression is just the template declaration itself. For example,
+  /// the template std::vector can be referred to via a variety of
+  /// names---std::vector, ::std::vector, vector (if vector is in
+  /// scope), etc.---but all of these names map down to the same
+  /// TemplateDecl, which is used to form the canonical template name.
+  ///
+  /// Dependent template names are more interesting. Here, the
+  /// template name could be something like T::template apply or
+  /// std::allocator<T>::template rebind, where the nested name
+  /// specifier itself is dependent. In this case, the canonical
+  /// template name uses the shortest form of the dependent
+  /// nested-name-specifier, which itself contains all canonical
+  /// types, values, and templates.
+  TemplateName getCanonicalTemplateName(TemplateName Name);
 
   /// Type Query functions.  If the type is an instance of the specified class,
   /// return the Type pointer for the underlying maximally pretty type.  This
@@ -661,7 +766,6 @@ public:
                                              
   /// Compatibility predicates used to check assignment expressions.
   bool typesAreCompatible(QualType, QualType); // C99 6.2.7p1
-  bool typesAreBlockCompatible(QualType lhs, QualType rhs);
   
   bool isObjCIdType(QualType T) const {
     return T == ObjCIdType;

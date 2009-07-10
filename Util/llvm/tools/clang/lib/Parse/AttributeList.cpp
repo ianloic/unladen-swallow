@@ -18,9 +18,9 @@ using namespace clang;
 AttributeList::AttributeList(IdentifierInfo *aName, SourceLocation aLoc,
                              IdentifierInfo *pName, SourceLocation pLoc,
                              ActionBase::ExprTy **ExprList, unsigned numArgs,
-                             AttributeList *n)
+                             AttributeList *n, bool declspec)
   : AttrName(aName), AttrLoc(aLoc), ParmName(pName), ParmLoc(pLoc),
-    NumArgs(numArgs), Next(n) {
+    NumArgs(numArgs), Next(n), DeclspecAttribute(declspec) {
   
   if (numArgs == 0)
     Args = 0;
@@ -103,19 +103,14 @@ AttributeList::Kind AttributeList::getKind(const IdentifierInfo *Name) {
     if (!memcmp(Str, "deprecated", 10)) return AT_deprecated;
     if (!memcmp(Str, "visibility", 10)) return AT_visibility;
     if (!memcmp(Str, "destructor", 10)) return AT_destructor;
-    if (!memcmp(Str, "format_arg", 10))
-      return IgnoredAttribute; // FIXME: printf format string checking.
+    if (!memcmp(Str, "format_arg", 10)) return AT_format_arg; 
     if (!memcmp(Str, "gnu_inline", 10)) return AT_gnu_inline;
-    if (!memcmp(Str, "cf_retains", 10)) return AT_cf_retains;
-    if (!memcmp(Str, "ns_retains", 10)) return AT_ns_retains;      
     break;
   case 11:
     if (!memcmp(Str, "weak_import", 11)) return AT_weak_import;
     if (!memcmp(Str, "vector_size", 11)) return AT_vector_size;
     if (!memcmp(Str, "constructor", 11)) return AT_constructor;
     if (!memcmp(Str, "unavailable", 11)) return AT_unavailable;
-    if (!memcmp(Str, "cf_releases", 11)) return AT_cf_releases;
-    if (!memcmp(Str, "ns_releases", 11)) return AT_ns_releases;      
     break;
   case 12:
     if (!memcmp(Str, "overloadable", 12)) return AT_overloadable;
@@ -123,18 +118,14 @@ AttributeList::Kind AttributeList::getKind(const IdentifierInfo *Name) {
   case 13:
     if (!memcmp(Str, "address_space", 13)) return AT_address_space;
     if (!memcmp(Str, "always_inline", 13)) return AT_always_inline;
+    if (!memcmp(Str, "vec_type_hint", 13)) return IgnoredAttribute;
     break;
   case 14:
     if (!memcmp(Str, "objc_exception", 14)) return AT_objc_exception;
     break;
   case 15:
     if (!memcmp(Str, "ext_vector_type", 15)) return AT_ext_vector_type;
-    if (!memcmp(Str, "ns_autoreleases", 15)) return AT_ns_autoreleases;
     break;
-  case 16:
-    if (!memcmp(Str, "ns_returns_owned", 16)) return AT_ns_returns_owned;
-    if (!memcmp(Str, "cf_returns_owned", 16)) return AT_cf_returns_owned;
-    break;      
   case 17:
     if (!memcmp(Str, "transparent_union", 17)) return AT_transparent_union;
     if (!memcmp(Str, "analyzer_noreturn", 17)) return AT_analyzer_noreturn;
@@ -142,6 +133,12 @@ AttributeList::Kind AttributeList::getKind(const IdentifierInfo *Name) {
   case 18:
     if (!memcmp(Str, "warn_unused_result", 18)) return AT_warn_unused_result;
     break;
+  case 19:
+    if (!memcmp(Str, "ns_returns_retained", 19)) return AT_ns_returns_retained;
+    if (!memcmp(Str, "cf_returns_retained", 19)) return AT_cf_returns_retained;
+    break;            
+  case 20:
+    if (!memcmp(Str, "reqd_work_group_size", 20)) return AT_reqd_wg_size;
   case 22:
     if (!memcmp(Str, "no_instrument_function", 22))
       return AT_no_instrument_function;

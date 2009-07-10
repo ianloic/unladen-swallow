@@ -52,6 +52,15 @@ def Feature64Bit   : SubtargetFeature<"64bit", "HasX86_64", "true",
                                       "Support 64-bit instructions">;
 def FeatureSlowBTMem : SubtargetFeature<"slow-bt-mem", "IsBTMemSlow", "true",
                                        "Bit testing of memory is slow">;
+def FeatureSSE4A   : SubtargetFeature<"sse4a", "HasSSE4A", "true",
+                                      "Support SSE 4a instructions">;
+
+def FeatureAVX     : SubtargetFeature<"avx", "HasAVX", "true",
+                                      "Enable AVX instructions">;
+def FeatureFMA3    : SubtargetFeature<"fma3", "HasFMA3", "true",
+                                      "Enable three-operand fused multiple-add">;
+def FeatureFMA4    : SubtargetFeature<"fma4", "HasFMA4", "true",
+                                      "Enable four-operand fused multiple-add">;
 
 //===----------------------------------------------------------------------===//
 // X86 processors supported.
@@ -80,6 +89,9 @@ def : Proc<"core2",           [FeatureSSSE3,  Feature64Bit, FeatureSlowBTMem]>;
 def : Proc<"penryn",          [FeatureSSE41,  Feature64Bit, FeatureSlowBTMem]>;
 def : Proc<"atom",            [FeatureSSE3,   Feature64Bit, FeatureSlowBTMem]>;
 def : Proc<"corei7",          [FeatureSSE42,  Feature64Bit, FeatureSlowBTMem]>;
+def : Proc<"nehalem",         [FeatureSSE42,  Feature64Bit, FeatureSlowBTMem]>;
+// Sandy Bridge does not have FMA
+def : Proc<"sandybridge",     [FeatureSSE42,  FeatureAVX,   Feature64Bit]>;
 
 def : Proc<"k6",              [FeatureMMX]>;
 def : Proc<"k6-2",            [FeatureMMX,    Feature3DNow]>;
@@ -97,6 +109,20 @@ def : Proc<"athlon64",        [FeatureSSE2,   Feature3DNowA, Feature64Bit,
                                FeatureSlowBTMem]>;
 def : Proc<"athlon-fx",       [FeatureSSE2,   Feature3DNowA, Feature64Bit,
                                FeatureSlowBTMem]>;
+def : Proc<"k8-sse3",         [FeatureSSE3,   Feature3DNowA, Feature64Bit,
+                               FeatureSlowBTMem]>;
+def : Proc<"opteron-sse3",    [FeatureSSE3,   Feature3DNowA, Feature64Bit,
+                               FeatureSlowBTMem]>;
+def : Proc<"athlon64-sse3",   [FeatureSSE3,   Feature3DNowA, Feature64Bit,
+                               FeatureSlowBTMem]>;
+def : Proc<"amdfam10",        [FeatureSSE3,   FeatureSSE4A,
+                               Feature3DNowA, Feature64Bit, FeatureSlowBTMem]>;
+def : Proc<"barcelona",       [FeatureSSE3,   FeatureSSE4A,
+                               Feature3DNowA, Feature64Bit, FeatureSlowBTMem]>;
+def : Proc<"istanbul",        [Feature3DNowA, Feature64Bit, FeatureSSE4A,
+                               Feature3DNowA]>;
+def : Proc<"shanghai",        [Feature3DNowA, Feature64Bit, FeatureSSE4A,
+                               Feature3DNowA]>;
 
 def : Proc<"winchip-c6",      [FeatureMMX]>;
 def : Proc<"winchip2",        [FeatureMMX, Feature3DNow]>;

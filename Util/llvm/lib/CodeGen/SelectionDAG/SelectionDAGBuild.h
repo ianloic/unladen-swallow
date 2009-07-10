@@ -75,8 +75,6 @@ class TruncInst;
 class UIToFPInst;
 class UnreachableInst;
 class UnwindInst;
-class VICmpInst;
-class VFCmpInst;
 class VAArgInst;
 class ZExtInst;
 
@@ -469,9 +467,12 @@ private:
 
   void visitBinary(User &I, unsigned OpCode);
   void visitShift(User &I, unsigned Opcode);
-  void visitAdd(User &I);
-  void visitSub(User &I);
-  void visitMul(User &I);
+  void visitAdd(User &I)  { visitBinary(I, ISD::ADD); }
+  void visitFAdd(User &I) { visitBinary(I, ISD::FADD); }
+  void visitSub(User &I)  { visitBinary(I, ISD::SUB); }
+  void visitFSub(User &I);
+  void visitMul(User &I)  { visitBinary(I, ISD::MUL); }
+  void visitFMul(User &I) { visitBinary(I, ISD::FMUL); }
   void visitURem(User &I) { visitBinary(I, ISD::UREM); }
   void visitSRem(User &I) { visitBinary(I, ISD::SREM); }
   void visitFRem(User &I) { visitBinary(I, ISD::FREM); }
@@ -486,8 +487,6 @@ private:
   void visitAShr(User &I) { visitShift(I, ISD::SRA); }
   void visitICmp(User &I);
   void visitFCmp(User &I);
-  void visitVICmp(User &I);
-  void visitVFCmp(User &I);
   // Visit the conversion instructions
   void visitTrunc(User &I);
   void visitZExt(User &I);

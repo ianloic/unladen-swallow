@@ -19,6 +19,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/Instructions.h"
+#include "llvm/MDNode.h"
 #include "llvm/Module.h"
 #include "llvm/TypeSymbolTable.h"
 #include "llvm/ValueSymbolTable.h"
@@ -76,9 +77,12 @@ static unsigned GetEncodedCastOpcode(unsigned Opcode) {
 static unsigned GetEncodedBinaryOpcode(unsigned Opcode) {
   switch (Opcode) {
   default: assert(0 && "Unknown binary instruction!");
-  case Instruction::Add:  return bitc::BINOP_ADD;
-  case Instruction::Sub:  return bitc::BINOP_SUB;
-  case Instruction::Mul:  return bitc::BINOP_MUL;
+  case Instruction::Add:
+  case Instruction::FAdd: return bitc::BINOP_ADD;
+  case Instruction::Sub:
+  case Instruction::FSub: return bitc::BINOP_SUB;
+  case Instruction::Mul:
+  case Instruction::FMul: return bitc::BINOP_MUL;
   case Instruction::UDiv: return bitc::BINOP_UDIV;
   case Instruction::FDiv:
   case Instruction::SDiv: return bitc::BINOP_SDIV;
@@ -205,6 +209,7 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
     case Type::PPC_FP128TyID: Code = bitc::TYPE_CODE_PPC_FP128; break;
     case Type::LabelTyID:  Code = bitc::TYPE_CODE_LABEL;  break;
     case Type::OpaqueTyID: Code = bitc::TYPE_CODE_OPAQUE; break;
+    case Type::MetadataTyID: Code = bitc::TYPE_CODE_METADATA; break;
     case Type::IntegerTyID:
       // INTEGER: [width]
       Code = bitc::TYPE_CODE_INTEGER;
@@ -678,16 +683,7 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
         break;
       case Instruction::ICmp:
       case Instruction::FCmp:
-      case Instruction::VICmp:
-      case Instruction::VFCmp:
-        if (isa<VectorType>(C->getOperand(0)->getType())
-            && (CE->getOpcode() == Instruction::ICmp
-                || CE->getOpcode() == Instruction::FCmp)) {
-          // compare returning vector of Int1Ty
-          assert(0 && "Unsupported constant!");
-        } else {
-          Code = bitc::CST_CODE_CE_CMP;
-        }
+        Code = bitc::CST_CODE_CE_CMP;
         Record.push_back(VE.getTypeID(C->getOperand(0)->getType()));
         Record.push_back(VE.getValueID(C->getOperand(0)));
         Record.push_back(VE.getValueID(C->getOperand(1)));
@@ -706,9 +702,14 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
       }
     } else if (const MDNode *N = dyn_cast<MDNode>(C)) {
       Code = bitc::CST_CODE_MDNODE;
-      for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
-        Record.push_back(VE.getTypeID(N->getOperand(i)->getType()));
-        Record.push_back(VE.getValueID(N->getOperand(i)));
+      for (unsigned i = 0, e = N->getNumElements(); i != e; ++i) {
+        if (N->getElement(i)) {
+          Record.push_back(VE.getTypeID(N->getElement(i)->getType()));
+          Record.push_back(VE.getValueID(N->getElement(i)));
+        } else {
+          Record.push_back(VE.getTypeID(Type::VoidTy));
+          Record.push_back(0);
+        }
       }
     } else {
       assert(0 && "Unknown constant!");
@@ -825,15 +826,8 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     break;
   case Instruction::ICmp:
   case Instruction::FCmp:
-  case Instruction::VICmp:
-  case Instruction::VFCmp:
-    if (I.getOpcode() == Instruction::ICmp
-        || I.getOpcode() == Instruction::FCmp) {
-      // compare returning Int1Ty or vector of Int1Ty
-      Code = bitc::FUNC_CODE_INST_CMP2;
-    } else {
-      Code = bitc::FUNC_CODE_INST_CMP;
-    }
+    // compare returning Int1Ty or vector of Int1Ty
+    Code = bitc::FUNC_CODE_INST_CMP2;
     PushValueAndType(I.getOperand(0), InstID, Vals, VE);
     Vals.push_back(VE.getValueID(I.getOperand(1)));
     Vals.push_back(cast<CmpInst>(I).getPredicate());
@@ -1297,16 +1291,6 @@ static void WriteModule(const Module *M, BitstreamWriter &Stream) {
   
   // Emit constants.
   WriteModuleConstants(VE, Stream);
-  
-  // If we have any aggregate values in the value table, purge them - these can
-  // only be used to initialize global variables.  Doing so makes the value
-  // namespace smaller for code in functions.
-  int NumNonAggregates = VE.PurgeAggregateValues();
-  if (NumNonAggregates != -1) {
-    SmallVector<unsigned, 1> Vals;
-    Vals.push_back(NumNonAggregates);
-    Stream.EmitRecord(bitc::MODULE_CODE_PURGEVALS, Vals);
-  }
   
   // Emit function bodies.
   for (Module::const_iterator I = M->begin(), E = M->end(); I != E; ++I)

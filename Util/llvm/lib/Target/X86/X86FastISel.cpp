@@ -171,8 +171,6 @@ CCAssignFn *X86FastISel::CCAssignFnForCall(unsigned CC, bool isTaillCall) {
   if (Subtarget->is64Bit()) {
     if (Subtarget->isTargetWin64())
       return CC_X86_Win64_C;
-    else if (CC == CallingConv::Fast && isTaillCall)
-      return CC_X86_64_TailCall;
     else
       return CC_X86_64_C;
   }
@@ -321,7 +319,7 @@ bool X86FastISel::X86FastEmitExtend(ISD::NodeType Opc, MVT DstVT,
 /// X86SelectAddress - Attempt to fill in an address from the given value.
 ///
 bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
-  User *U;
+  User *U = NULL;
   unsigned Opcode = Instruction::UserOp1;
   if (Instruction *I = dyn_cast<Instruction>(V)) {
     Opcode = I->getOpcode();
@@ -393,13 +391,12 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
         unsigned Idx = cast<ConstantInt>(Op)->getZExtValue();
         Disp += SL->getElementOffset(Idx);
       } else {
-        uint64_t S = TD.getTypePaddedSize(GTI.getIndexedType());
+        uint64_t S = TD.getTypeAllocSize(GTI.getIndexedType());
         if (ConstantInt *CI = dyn_cast<ConstantInt>(Op)) {
           // Constant-offset addressing.
           Disp += CI->getSExtValue() * S;
         } else if (IndexReg == 0 &&
-                   (!AM.GV ||
-                    !getTargetMachine()->symbolicAddressesAreRIPRel()) &&
+                   (!AM.GV || !Subtarget->isPICStyleRIPRel()) &&
                    (S == 1 || S == 2 || S == 4 || S == 8)) {
           // Scaled-index addressing.
           Scale = S;
@@ -434,7 +431,7 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
       return false;
 
     // RIP-relative addresses can't have additional register operands.
-    if (getTargetMachine()->symbolicAddressesAreRIPRel() &&
+    if (Subtarget->isPICStyleRIPRel() &&
         (AM.Base.Reg != 0 || AM.IndexReg != 0))
       return false;
 
@@ -445,6 +442,7 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
 
     // Set up the basic address.
     AM.GV = GV;
+    
     if (!isCall &&
         TM.getRelocationModel() == Reloc::PIC_ &&
         !Subtarget->is64Bit())
@@ -454,25 +452,38 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
     if (Subtarget->GVRequiresExtraLoad(GV, TM, isCall)) {
       // Check to see if we've already materialized this
       // value in a register in this block.
-      if (unsigned Reg = LocalValueMap[V]) {
-        AM.Base.Reg = Reg;
+      DenseMap<const Value *, unsigned>::iterator I = LocalValueMap.find(V);
+      if (I != LocalValueMap.end() && I->second != 0) {
+        AM.Base.Reg = I->second;
         AM.GV = 0;
         return true;
       }
-      // Issue load from stub if necessary.
+      
+      // Issue load from stub.
       unsigned Opc = 0;
       const TargetRegisterClass *RC = NULL;
-      if (TLI.getPointerTy() == MVT::i32) {
-        Opc = X86::MOV32rm;
-        RC  = X86::GR32RegisterClass;
-      } else {
-        Opc = X86::MOV64rm;
-        RC  = X86::GR64RegisterClass;
-      }
-
       X86AddressMode StubAM;
       StubAM.Base.Reg = AM.Base.Reg;
       StubAM.GV = AM.GV;
+      
+      if (TLI.getPointerTy() == MVT::i32) {
+        Opc = X86::MOV32rm;
+        RC  = X86::GR32RegisterClass;
+        
+        if (Subtarget->isPICStyleGOT() &&
+            TM.getRelocationModel() == Reloc::PIC_)
+          StubAM.GVOpFlags = X86II::MO_GOT;
+        
+      } else {
+        Opc = X86::MOV64rm;
+        RC  = X86::GR64RegisterClass;
+        
+        if (TM.getRelocationModel() != Reloc::Static) {
+          StubAM.GVOpFlags = X86II::MO_GOTPCREL;
+          StubAM.Base.Reg = X86::RIP;
+        }
+      }
+
       unsigned ResultReg = createResultReg(RC);
       addFullAddress(BuildMI(MBB, DL, TII.get(Opc), ResultReg), StubAM);
 
@@ -483,12 +494,16 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM, bool isCall) {
 
       // Prevent loading GV stub multiple times in same MBB.
       LocalValueMap[V] = AM.Base.Reg;
+    } else if (Subtarget->isPICStyleRIPRel()) {
+      // Use rip-relative addressing if we can.
+      AM.Base.Reg = X86::RIP;
     }
+    
     return true;
   }
 
   // If all else fails, try to materialize the value in a register.
-  if (!AM.GV || !getTargetMachine()->symbolicAddressesAreRIPRel()) {
+  if (!AM.GV || !Subtarget->isPICStyleRIPRel()) {
     if (AM.Base.Reg == 0) {
       AM.Base.Reg = getRegForValue(V);
       return AM.Base.Reg != 0;
@@ -1142,12 +1157,10 @@ bool X86FastISel::X86SelectCall(Instruction *I) {
     return false;
   unsigned CalleeOp = 0;
   GlobalValue *GV = 0;
-  if (CalleeAM.Base.Reg != 0) {
-    assert(CalleeAM.GV == 0);
-    CalleeOp = CalleeAM.Base.Reg;
-  } else if (CalleeAM.GV != 0) {
-    assert(CalleeAM.GV != 0);
+  if (CalleeAM.GV != 0) {
     GV = CalleeAM.GV;
+  } else if (CalleeAM.Base.Reg != 0) {
+    CalleeOp = CalleeAM.Base.Reg;
   } else
     return false;
 
@@ -1490,20 +1503,29 @@ unsigned X86FastISel::TargetMaterializeConstant(Constant *C) {
   unsigned Align = TD.getPrefTypeAlignment(C->getType());
   if (Align == 0) {
     // Alignment of vector types.  FIXME!
-    Align = TD.getTypePaddedSize(C->getType());
+    Align = TD.getTypeAllocSize(C->getType());
   }
   
   // x86-32 PIC requires a PIC base register for constant pools.
   unsigned PICBase = 0;
-  if (TM.getRelocationModel() == Reloc::PIC_ &&
-      !Subtarget->is64Bit())
-    PICBase = getInstrInfo()->getGlobalBaseReg(&MF);
+  unsigned char OpFlag = 0;
+  if (TM.getRelocationModel() == Reloc::PIC_) {
+    if (Subtarget->isPICStyleStub()) {
+      OpFlag = X86II::MO_PIC_BASE_OFFSET;
+      PICBase = getInstrInfo()->getGlobalBaseReg(&MF);
+    } else if (Subtarget->isPICStyleGOT()) {
+      OpFlag = X86II::MO_GOTOFF;
+      PICBase = getInstrInfo()->getGlobalBaseReg(&MF);
+    } else if (Subtarget->isPICStyleRIPRel() &&
+               TM.getCodeModel() == CodeModel::Small)
+      PICBase = X86::RIP;
+  }
 
   // Create the load from the constant pool.
   unsigned MCPOffset = MCP.getConstantPoolIndex(C, Align);
   unsigned ResultReg = createResultReg(RC);
-  addConstantPoolReference(BuildMI(MBB, DL, TII.get(Opc), ResultReg), MCPOffset,
-                           PICBase);
+  addConstantPoolReference(BuildMI(MBB, DL, TII.get(Opc), ResultReg),
+                           MCPOffset, PICBase, OpFlag);
 
   return ResultReg;
 }

@@ -30,6 +30,7 @@ class BasicValueFactory;
 class MemRegion;
 class MemRegionManager;
 class GRStateManager;
+class ValueManager;
   
 class SVal {
 public:
@@ -90,6 +91,9 @@ public:
   
   bool isZeroConstant() const;
 
+  /// hasConjuredSymbol - If this SVal wraps a conjured symbol, return true;
+  bool hasConjuredSymbol() const;
+
   /// getAsFunctionDecl - If this SVal is a MemRegionVal and wraps a
   /// CodeTextRegion wrapping a FunctionDecl, return that FunctionDecl. 
   /// Otherwise return 0.
@@ -106,8 +110,9 @@ public:
   /// getAsSymbolicExpression - If this Sval wraps a symbolic expression then
   ///  return that expression.  Otherwise return NULL.
   const SymExpr *getAsSymbolicExpression() const;
+
+  const MemRegion *getAsRegion() const;
   
-  void print(std::ostream& OS) const;
   void print(llvm::raw_ostream& OS) const;
   void printStdErr() const;
 
@@ -168,28 +173,6 @@ protected:
 public:
   void print(llvm::raw_ostream& Out) const;
   
-  // Utility methods to create NonLocs.
-
-  static NonLoc MakeIntVal(BasicValueFactory& BasicVals, uint64_t X, 
-                           bool isUnsigned);
-
-  static NonLoc MakeVal(BasicValueFactory& BasicVals, uint64_t X, 
-                        unsigned BitWidth, bool isUnsigned);
-
-  static NonLoc MakeVal(BasicValueFactory& BasicVals, uint64_t X, QualType T);
-  
-  static NonLoc MakeVal(BasicValueFactory& BasicVals, IntegerLiteral* I);
-
-  static NonLoc MakeVal(BasicValueFactory& BasicVals, const llvm::APInt& I,
-                        bool isUnsigned);
-
-  static NonLoc MakeVal(BasicValueFactory& BasicVals, const llvm::APSInt& I);
-    
-  static NonLoc MakeIntTruthVal(BasicValueFactory& BasicVals, bool b);
-
-  static NonLoc MakeCompoundVal(QualType T, llvm::ImmutableList<SVal> Vals,
-                                BasicValueFactory& BasicVals);
-
   // Implement isa<T> support.
   static inline bool classof(const SVal* V) {
     return V->getBaseKind() == NonLocKind;
@@ -207,12 +190,6 @@ public:
   Loc(const Loc& X) : SVal(X.Data, true, X.getSubKind()) {}
   Loc& operator=(const Loc& X) { memcpy(this, &X, sizeof(Loc)); return *this; }
     
-  static Loc MakeVal(const MemRegion* R);
-    
-  static Loc MakeVal(AddrLabelExpr* E);
-
-  static Loc MakeNull(BasicValueFactory &BasicVals);
-  
   // Implement isa<T> support.
   static inline bool classof(const SVal* V) {
     return V->getBaseKind() == LocKind;
@@ -279,12 +256,12 @@ public:
   }
   
   // Transfer functions for binary/unary operations on ConcreteInts.
-  SVal EvalBinOp(BasicValueFactory& BasicVals, BinaryOperator::Opcode Op,
+  SVal evalBinOp(ValueManager &ValMgr, BinaryOperator::Opcode Op,
                  const ConcreteInt& R) const;
   
-  ConcreteInt EvalComplement(BasicValueFactory& BasicVals) const;
+  ConcreteInt evalComplement(ValueManager &ValMgr) const;
   
-  ConcreteInt EvalMinus(BasicValueFactory& BasicVals, UnaryOperator* U) const;
+  ConcreteInt evalMinus(ValueManager &ValMgr) const;
   
   // Implement isa<T> support.
   static inline bool classof(const SVal* V) {
@@ -298,6 +275,8 @@ public:
 };
   
 class LocAsInteger : public NonLoc {
+  friend class clang::ValueManager;
+
   LocAsInteger(const std::pair<SVal, uintptr_t>& data) :
     NonLoc(LocAsIntegerKind, &data) {
       assert (isa<Loc>(data.first));
@@ -327,12 +306,10 @@ public:
   static inline bool classof(const NonLoc* V) {
     return V->getSubKind() == LocAsIntegerKind;
   }
-  
-  static LocAsInteger Make(BasicValueFactory& Vals, Loc V, unsigned Bits);
 };
 
 class CompoundVal : public NonLoc {
-  friend class NonLoc;
+  friend class clang::ValueManager;
 
   CompoundVal(const CompoundValData* D) : NonLoc(CompoundValKind, D) {}
 

@@ -48,6 +48,7 @@ getTargetNodeName(unsigned Opcode) const
     case MipsISD::FPSelectCC : return "MipsISD::FPSelectCC";
     case MipsISD::FPBrcond   : return "MipsISD::FPBrcond";
     case MipsISD::FPCmp      : return "MipsISD::FPCmp";
+    case MipsISD::FPRound    : return "MipsISD::FPRound";
     default                  : return NULL;
   }
 }
@@ -94,10 +95,13 @@ MipsTargetLowering(MipsTargetMachine &TM): TargetLowering(TM)
   setOperationAction(ISD::JumpTable,          MVT::i32,   Custom);
   setOperationAction(ISD::ConstantPool,       MVT::i32,   Custom);
   setOperationAction(ISD::SELECT,             MVT::f32,   Custom);
+  setOperationAction(ISD::SELECT,             MVT::f64,   Custom);
   setOperationAction(ISD::SELECT,             MVT::i32,   Custom);
   setOperationAction(ISD::SETCC,              MVT::f32,   Custom);
+  setOperationAction(ISD::SETCC,              MVT::f64,   Custom);
   setOperationAction(ISD::BRCOND,             MVT::Other, Custom);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32,   Custom);
+  setOperationAction(ISD::FP_TO_SINT,         MVT::i32,   Custom);
 
   // We custom lower AND/OR to handle the case where the DAG contain 'ands/ors' 
   // with operands comming from setcc fp comparions. This is necessary since 
@@ -119,6 +123,7 @@ MipsTargetLowering(MipsTargetMachine &TM): TargetLowering(TM)
   setOperationAction(ISD::SRA_PARTS,         MVT::i32,   Expand);
   setOperationAction(ISD::SRL_PARTS,         MVT::i32,   Expand);
   setOperationAction(ISD::FCOPYSIGN,         MVT::f32,   Expand);
+  setOperationAction(ISD::FCOPYSIGN,         MVT::f64,   Expand);
 
   // We don't have line number support yet.
   setOperationAction(ISD::DBG_STOPPOINT,     MVT::Other, Expand);
@@ -149,11 +154,14 @@ MipsTargetLowering(MipsTargetMachine &TM): TargetLowering(TM)
   computeRegisterProperties();
 }
 
-
 MVT MipsTargetLowering::getSetCCResultType(MVT VT) const {
   return MVT::i32;
 }
 
+/// getFunctionAlignment - Return the Log2 alignment of this function.
+unsigned MipsTargetLowering::getFunctionAlignment(const Function *) const {
+  return 2;
+}
 
 SDValue MipsTargetLowering::
 LowerOperation(SDValue Op, SelectionDAG &DAG) 
@@ -166,6 +174,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG)
     case ISD::ConstantPool:       return LowerConstantPool(Op, DAG);
     case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
     case ISD::FORMAL_ARGUMENTS:   return LowerFORMAL_ARGUMENTS(Op, DAG);
+    case ISD::FP_TO_SINT:         return LowerFP_TO_SINT(Op, DAG);
     case ISD::GlobalAddress:      return LowerGlobalAddress(Op, DAG);
     case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
     case ISD::JumpTable:          return LowerJumpTable(Op, DAG);
@@ -210,7 +219,7 @@ bool MipsTargetLowering::IsGlobalInSmallSection(GlobalValue *GV)
     return false;
   
   const Type *Ty = GV->getType()->getElementType();
-  unsigned Size = TD->getTypePaddedSize(Ty);
+  unsigned Size = TD->getTypeAllocSize(Ty);
 
   // if this is a internal constant string, there is a special
   // section for it, but not in small data/bss.
@@ -357,6 +366,39 @@ MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 //===----------------------------------------------------------------------===//
 //  Misc Lower Operation implementation
 //===----------------------------------------------------------------------===//
+
+SDValue MipsTargetLowering::
+LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG)
+{
+  if (!Subtarget->isMips1())
+    return Op;
+
+  MachineFunction &MF = DAG.getMachineFunction();
+  unsigned CCReg = AddLiveIn(MF, Mips::FCR31, Mips::CCRRegisterClass);
+
+  SDValue Chain = DAG.getEntryNode();
+  DebugLoc dl = Op.getDebugLoc();
+  SDValue Src = Op.getOperand(0);
+
+  // Set the condition register
+  SDValue CondReg = DAG.getCopyFromReg(Chain, dl, CCReg, MVT::i32);
+  CondReg = DAG.getCopyToReg(Chain, dl, Mips::AT, CondReg);
+  CondReg = DAG.getCopyFromReg(CondReg, dl, Mips::AT, MVT::i32);
+
+  SDValue Cst = DAG.getConstant(3, MVT::i32);
+  SDValue Or = DAG.getNode(ISD::OR, dl, MVT::i32, CondReg, Cst);
+  Cst = DAG.getConstant(2, MVT::i32);
+  SDValue Xor = DAG.getNode(ISD::XOR, dl, MVT::i32, Or, Cst);
+
+  SDValue InFlag(0, 0);
+  CondReg = DAG.getCopyToReg(Chain, dl, Mips::FCR31, Xor, InFlag);
+
+  // Emit the round instruction and bit convert to integer
+  SDValue Trunc = DAG.getNode(MipsISD::FPRound, dl, MVT::f32,
+                              Src, CondReg.getValue(1));
+  SDValue BitCvt = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i32, Trunc);
+  return BitCvt;
+}
 
 SDValue MipsTargetLowering::
 LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG)
@@ -551,7 +593,7 @@ LowerConstantPool(SDValue Op, SelectionDAG &DAG)
   // hacking it. This feature should come soon so we can uncomment the 
   // stuff below.
   //if (!Subtarget->hasABICall() &&  
-  //    IsInSmallSection(getTargetData()->getTypePaddedSize(C->getType()))) {
+  //    IsInSmallSection(getTargetData()->getTypeAllocSize(C->getType()))) {
   //  SDValue GPRelNode = DAG.getNode(MipsISD::GPRel, MVT::i32, CP);
   //  SDValue GOT = DAG.getGLOBAL_OFFSET_TABLE(MVT::i32);
   //  ResNode = DAG.getNode(ISD::ADD, MVT::i32, GOT, GPRelNode); 
@@ -903,9 +945,6 @@ LowerFORMAL_ARGUMENTS(SDValue Op, SelectionDAG &DAG)
   unsigned CC = DAG.getMachineFunction().getFunction()->getCallingConv();
 
   unsigned StackReg = MF.getTarget().getRegisterInfo()->getFrameRegister(MF);
-
-  // GP must be live into PIC and non-PIC call target.
-  AddLiveIn(MF, Mips::GP, Mips::CPURegsRegisterClass);
 
   // Assign locations to all of the incoming arguments.
   SmallVector<CCValAssign, 16> ArgLocs;

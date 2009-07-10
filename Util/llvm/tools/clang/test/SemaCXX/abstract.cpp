@@ -82,3 +82,47 @@ namespace N {
 class Abstract {
  virtual void f() = 0; // expected-note {{pure virtual function 'f'}}
 };
+
+// <rdar://problem/6854087>
+class foo {
+public:
+	virtual foo *getFoo() = 0;
+};
+
+class bar : public foo {
+public:
+	virtual bar *getFoo();
+};
+
+bar x;
+
+// <rdar://problem/6902298>
+class A
+{
+public:
+	virtual void release() = 0;
+	virtual void release(int count) = 0;
+	virtual void retain() = 0;
+};
+
+class B : public A
+{
+public:
+	virtual void release();
+	virtual void release(int count);
+	virtual void retain();
+};
+
+void foo(void)
+{
+	B b;
+}
+
+struct K {
+ int f;
+ virtual ~K();
+};
+
+struct L : public K {
+ void f();
+};

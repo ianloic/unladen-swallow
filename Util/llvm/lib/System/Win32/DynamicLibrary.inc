@@ -88,32 +88,8 @@ extern "C" {
   }
 }
 
-DynamicLibrary::DynamicLibrary() : handle(0) {
-  handle = GetModuleHandle(NULL);
-  OpenedHandles.push_back((HMODULE)handle);
-}
-
-DynamicLibrary::~DynamicLibrary() {
-  if (handle == 0)
-    return;
-
-  // GetModuleHandle() does not increment the ref count, so we must not free
-  // the handle to the executable.
-  if (handle != GetModuleHandle(NULL))
-    FreeLibrary((HMODULE)handle);
-  handle = 0;
-
-  for (std::vector<HMODULE>::iterator I = OpenedHandles.begin(),
-       E = OpenedHandles.end(); I != E; ++I) {
-    if (*I == handle) {
-      // Note: don't use the swap/pop_back trick here. Order is important.
-      OpenedHandles.erase(I);
-    }
-  }
-}
- 
 bool DynamicLibrary::LoadLibraryPermanently(const char *filename,
-                                            std::string *ErrMsg) {
+                                            std::string *ErrMsg) {                                            
   if (filename) {
     HMODULE a_handle = LoadLibrary(filename);
 
@@ -166,16 +142,21 @@ bool DynamicLibrary::LoadLibraryPermanently(const char *filename,
 
 void* DynamicLibrary::SearchForAddressOfSymbol(const char* symbolName) {
   // First check symbols added via AddSymbol().
-  std::map<std::string, void *>::iterator I = g_symbols().find(symbolName);
-  if (I != g_symbols().end())
-    return I->second;
+  if (ExplicitSymbols) {
+    std::map<std::string, void *>::iterator I = 
+      ExplicitSymbols->find(symbolName);
+    std::map<std::string, void *>::iterator E = ExplicitSymbols->end();
+    if (I != E)
+      return I->second;
+  }
 
   // Now search the libraries.
   for (std::vector<HMODULE>::iterator I = OpenedHandles.begin(),
        E = OpenedHandles.end(); I != E; ++I) {
     FARPROC ptr = GetProcAddress((HMODULE)*I, symbolName);
-    if (ptr)
+    if (ptr) {
       return (void *) ptr;
+    }
   }
 
 #if defined(__MINGW32__)

@@ -17,7 +17,6 @@
 
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/Target/TargetMachine.h"
@@ -220,6 +219,19 @@ public:
   /// the graph.
   void Legalize(bool TypesNeedLegalizing, CodeGenOpt::Level OptLevel);
 
+  /// LegalizeVectors - This transforms the SelectionDAG into a SelectionDAG
+  /// that only uses vector math operations supported by the target.  This is
+  /// necessary as a separate step from Legalize because unrolling a vector
+  /// operation can introduce illegal types, which requires running
+  /// LegalizeTypes again.
+  ///
+  /// This returns true if it made any changes; in that case, LegalizeTypes
+  /// is called again before Legalize.
+  ///
+  /// Note that this is an involved process that may invalidate pointers into
+  /// the graph.
+  bool LegalizeVectors();
+
   /// RemoveDeadNodes - This method deletes all unreachable nodes in the
   /// SelectionDAG.
   void RemoveDeadNodes();
@@ -265,31 +277,37 @@ public:
     return getConstantFP(Val, VT, true);
   }
   SDValue getGlobalAddress(const GlobalValue *GV, MVT VT,
-                           int64_t offset = 0, bool isTargetGA = false);
+                           int64_t offset = 0, bool isTargetGA = false,
+                           unsigned char TargetFlags = 0);
   SDValue getTargetGlobalAddress(const GlobalValue *GV, MVT VT,
-                                 int64_t offset = 0) {
-    return getGlobalAddress(GV, VT, offset, true);
+                                 int64_t offset = 0,
+                                 unsigned char TargetFlags = 0) {
+    return getGlobalAddress(GV, VT, offset, true, TargetFlags);
   }
   SDValue getFrameIndex(int FI, MVT VT, bool isTarget = false);
   SDValue getTargetFrameIndex(int FI, MVT VT) {
     return getFrameIndex(FI, VT, true);
   }
-  SDValue getJumpTable(int JTI, MVT VT, bool isTarget = false);
-  SDValue getTargetJumpTable(int JTI, MVT VT) {
-    return getJumpTable(JTI, VT, true);
+  SDValue getJumpTable(int JTI, MVT VT, bool isTarget = false,
+                       unsigned char TargetFlags = 0);
+  SDValue getTargetJumpTable(int JTI, MVT VT, unsigned char TargetFlags = 0) {
+    return getJumpTable(JTI, VT, true, TargetFlags);
   }
   SDValue getConstantPool(Constant *C, MVT VT,
-                            unsigned Align = 0, int Offs = 0, bool isT=false);
+                          unsigned Align = 0, int Offs = 0, bool isT=false,
+                          unsigned char TargetFlags = 0);
   SDValue getTargetConstantPool(Constant *C, MVT VT,
-                                  unsigned Align = 0, int Offset = 0) {
-    return getConstantPool(C, VT, Align, Offset, true);
+                                unsigned Align = 0, int Offset = 0,
+                                unsigned char TargetFlags = 0) {
+    return getConstantPool(C, VT, Align, Offset, true, TargetFlags);
   }
   SDValue getConstantPool(MachineConstantPoolValue *C, MVT VT,
-                            unsigned Align = 0, int Offs = 0, bool isT=false);
+                          unsigned Align = 0, int Offs = 0, bool isT=false,
+                          unsigned char TargetFlags = 0);
   SDValue getTargetConstantPool(MachineConstantPoolValue *C,
                                   MVT VT, unsigned Align = 0,
-                                  int Offset = 0) {
-    return getConstantPool(C, VT, Align, Offset, true);
+                                  int Offset = 0, unsigned char TargetFlags=0) {
+    return getConstantPool(C, VT, Align, Offset, true, TargetFlags);
   }
   // When generating a branch to a BB, we don't in general know enough
   // to provide debug info for the BB at that time, so keep this one around.
@@ -297,8 +315,8 @@ public:
   SDValue getBasicBlock(MachineBasicBlock *MBB, DebugLoc dl);
   SDValue getExternalSymbol(const char *Sym, MVT VT);
   SDValue getExternalSymbol(const char *Sym, DebugLoc dl, MVT VT);
-  SDValue getTargetExternalSymbol(const char *Sym, MVT VT);
-  SDValue getTargetExternalSymbol(const char *Sym, DebugLoc dl, MVT VT);
+  SDValue getTargetExternalSymbol(const char *Sym, MVT VT,
+                                  unsigned char TargetFlags = 0);
   SDValue getArgFlags(ISD::ArgFlagsTy Flags);
   SDValue getValueType(MVT);
   SDValue getRegister(unsigned Reg, MVT VT);
@@ -316,7 +334,7 @@ public:
   // indicates that there is potentially an incoming flag value (if Flag is not
   // null) and that there should be a flag result.
   SDValue getCopyToReg(SDValue Chain, DebugLoc dl, unsigned Reg, SDValue N,
-                         SDValue Flag) {
+                       SDValue Flag) {
     SDVTList VTs = getVTList(MVT::Other, MVT::Flag);
     SDValue Ops[] = { Chain, getRegister(Reg, N.getValueType()), N, Flag };
     return getNode(ISD::CopyToReg, dl, VTs, Ops, Flag.getNode() ? 4 : 3);
@@ -518,7 +536,8 @@ public:
   ///
   SDValue getCall(unsigned CallingConv, DebugLoc dl, bool IsVarArgs,
                   bool IsTailCall, bool isInreg, SDVTList VTs,
-                  const SDValue *Operands, unsigned NumOperands);
+                  const SDValue *Operands, unsigned NumOperands,
+                  unsigned NumFixedArgs);
 
   /// getLoad - Loads are not normal binary operators: their result type is not
   /// determined by their operands, and they produce a value AND a token chain.
@@ -849,7 +868,8 @@ private:
   std::vector<SDNode*> ValueTypeNodes;
   std::map<MVT, SDNode*, MVT::compareRawBits> ExtendedValueTypeNodes;
   StringMap<SDNode*> ExternalSymbols;
-  StringMap<SDNode*> TargetExternalSymbols;
+  
+  std::map<std::pair<std::string, unsigned char>,SDNode*> TargetExternalSymbols;
 };
 
 template <> struct GraphTraits<SelectionDAG*> : public GraphTraits<SDNode*> {

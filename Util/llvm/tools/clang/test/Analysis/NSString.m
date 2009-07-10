@@ -1,9 +1,11 @@
-// RUN: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
-// RUN: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s
+// RUN: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s &&
+// RUN: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=range -verify %s
 
 
-// NOTWORK: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
-// NOTWORK: clang-cc -arch i386 -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
+// NOTWORK: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// NOTWORK: clang-cc -triple i386-pc-linux-gnu -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
 //===----------------------------------------------------------------------===//
 // The following code is reduced using delta-debugging from
@@ -36,6 +38,7 @@ typedef struct _NSZone NSZone;
 - (BOOL)isEqual:(id)object;
 - (oneway void)release;
 - (id)retain;
+- (id)autorelease;
 @end
 @protocol NSCopying
 - (id)copyWithZone:(NSZone *)zone;
@@ -173,6 +176,44 @@ void f13(void) {
   CFRelease(ref); // expected-warning{{Reference-counted object is used after it is released}}
 }
 
+// Test regular use of -autorelease
+@interface TestAutorelease
+-(NSString*) getString;
+@end
+@implementation TestAutorelease
+-(NSString*) getString {
+  NSString *str = [[NSString alloc] init];
+  return [str autorelease]; // no-warning
+}
+- (void)m1
+{
+ NSString *s = [[NSString alloc] init]; // expected-warning{{leak}}
+ [s retain];
+ [s autorelease];
+}
+- (void)m2
+{
+ NSString *s = [[[NSString alloc] init] autorelease]; // expected-warning{{leak}}
+ [s retain];
+}
+- (void)m3
+{
+ NSString *s = [[[NSString alloc] init] autorelease];
+ [s retain];
+ [s autorelease];
+}
+- (void)m4
+{
+ NSString *s = [[NSString alloc] init]; // expected-warning{{leak}}
+ [s retain];
+}
+- (void)m5
+{
+ NSString *s = [[NSString alloc] init];
+ [s autorelease];
+}
+@end
+
 @interface C1 : NSObject {}
 - (NSString*) getShared;
 + (C1*) sharedInstance;
@@ -286,8 +327,6 @@ void test_isTrackedObjectType(void) {
   return CFStringCreateWithFormat(kCFAllocatorDefault, ((void*)0), ((CFStringRef) __builtin___CFStringMakeConstantString ("" "%d" "")), 100); // expected-warning{{leak}}
 }
 
-
-
 // Test @synchronized
 void test_synchronized(id x) {
   @synchronized(x) {
@@ -295,4 +334,4 @@ void test_synchronized(id x) {
   }
 }
 
-// Test return from method starting with 'new' or 'copy'
+

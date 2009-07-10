@@ -19,6 +19,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -67,6 +68,9 @@ namespace {
     void mangleExpression(Expr *E);
     void mangleCXXCtorType(CXXCtorType T);
     void mangleCXXDtorType(CXXDtorType T);
+    
+    void mangleTemplateArgumentList(const TemplateArgumentList &L);
+    void mangleTemplateArgument(const TemplateArgument &A);
   };
 }
 
@@ -83,18 +87,20 @@ static bool isInCLinkageSpecification(const Decl *D) {
 bool CXXNameMangler::mangleFunctionDecl(const FunctionDecl *FD) {
   // Clang's "overloadable" attribute extension to C/C++ implies
   // name mangling (always).
-  if (FD->hasAttr<OverloadableAttr>()) {
-    ; // fall into mangling code unconditionally.
-  } else if (// C functions are not mangled
-             !Context.getLangOptions().CPlusPlus ||
-             // "main" is not mangled in C++
-             FD->isMain() ||
-             // No mangling in an "implicit extern C" header.
-             Context.getSourceManager().getFileCharacteristic(FD->getLocation())
-               == SrcMgr::C_ExternCSystem ||
-             // No name mangling in a C linkage specification.
-             isInCLinkageSpecification(FD))
-    return false;
+  if (!FD->hasAttr<OverloadableAttr>()) {
+    // C functions are not mangled, and "main" is never mangled.
+    if (!Context.getLangOptions().CPlusPlus || FD->isMain())
+      return false;
+    
+    // No mangling in an "implicit extern C" header. 
+    if (FD->getLocation().isValid() &&
+        Context.getSourceManager().isInExternCSystemHeader(FD->getLocation()))
+      return false;
+    
+    // No name mangling in a C linkage specification.
+    if (isInCLinkageSpecification(FD))
+      return false;
+  }
 
   // If we get here, mangle the decl name!
   Out << "_Z";
@@ -164,7 +170,29 @@ void CXXNameMangler::mangleGuardVariable(const VarDecl *D)
 void CXXNameMangler::mangleFunctionEncoding(const FunctionDecl *FD) {
   // <encoding> ::= <function name> <bare-function-type>
   mangleName(FD);
-  mangleBareFunctionType(FD->getType()->getAsFunctionType(), false);
+  
+  // Whether the mangling of a function type includes the return type depends 
+  // on the context and the nature of the function. The rules for deciding 
+  // whether the return type is included are:
+  // 
+  //   1. Template functions (names or types) have return types encoded, with
+  //   the exceptions listed below.
+  //   2. Function types not appearing as part of a function name mangling, 
+  //   e.g. parameters, pointer types, etc., have return type encoded, with the
+  //   exceptions listed below.
+  //   3. Non-template function names do not have return types encoded.
+  //
+  // The exceptions mentioned in (1) and (2) above, for which the return 
+  // type is never included, are
+  //   1. Constructors.
+  //   2. Destructors.
+  //   3. Conversion operator functions, e.g. operator int.
+  bool MangleReturnType = false;
+  if (FD->getPrimaryTemplate() &&
+      !(isa<CXXConstructorDecl>(FD) || isa<CXXDestructorDecl>(FD) ||
+        isa<CXXConversionDecl>(FD)))
+    MangleReturnType = true;
+  mangleBareFunctionType(FD->getType()->getAsFunctionType(), MangleReturnType);
 }
 
 static bool isStdNamespace(const DeclContext *DC) {
@@ -247,6 +275,12 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND) {
     assert(false && "Can't mangle a using directive name!");
     break;
   }
+  
+  if (const FunctionDecl *Function = dyn_cast<FunctionDecl>(ND)) {
+    if (const TemplateArgumentList *TemplateArgs 
+          = Function->getTemplateSpecializationArgs())
+      mangleTemplateArgumentList(*TemplateArgs);
+  }
 }
 
 void CXXNameMangler::mangleSourceName(const IdentifierInfo *II) {
@@ -290,8 +324,13 @@ void CXXNameMangler::manglePrefix(const DeclContext *DC) {
 
   if (const NamespaceDecl *Namespace = dyn_cast<NamespaceDecl>(DC))
     mangleSourceName(Namespace->getIdentifier());
-  else if (const RecordDecl *Record = dyn_cast<RecordDecl>(DC))
-    mangleSourceName(Record->getIdentifier());
+  else if (const RecordDecl *Record = dyn_cast<RecordDecl>(DC)) {
+    if (const ClassTemplateSpecializationDecl *D = 
+        dyn_cast<ClassTemplateSpecializationDecl>(Record)) {
+      mangleType(QualType(D->getTypeForDecl(), 0));
+    } else
+      mangleSourceName(Record->getIdentifier());
+  }
 }
 
 void 
@@ -499,6 +538,8 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   // UNSUPPORTED:    ::= Di # char32_t
   // UNSUPPORTED:    ::= Ds # char16_t
   //                 ::= u <source-name>    # vendor extended type
+  // From our point of view, std::nullptr_t is a builtin, but as far as mangling
+  // is concerned, it's a type called std::nullptr_t.
   switch (T->getKind()) {
   case BuiltinType::Void: Out << 'v'; break;
   case BuiltinType::Bool: Out << 'b'; break;
@@ -519,11 +560,15 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   case BuiltinType::Float: Out << 'f'; break;
   case BuiltinType::Double: Out << 'd'; break;
   case BuiltinType::LongDouble: Out << 'e'; break;
+  case BuiltinType::NullPtr: Out << "St9nullptr_t"; break;
 
   case BuiltinType::Overload:
   case BuiltinType::Dependent:
     assert(false && 
            "Overloaded and dependent types shouldn't get to name mangling");
+    break;
+  case BuiltinType::UndeducedAuto:
+    assert(0 && "Should not see undeduced auto here");
     break;
   }
 }
@@ -531,8 +576,8 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
 void CXXNameMangler::mangleType(const FunctionType *T) {
   // <function-type> ::= F [Y] <bare-function-type> E
   Out << 'F';
-  // FIXME: We don't have enough information in the AST to produce the
-  // 'Y' encoding for extern "C" function types.
+  // FIXME: We don't have enough information in the AST to produce the 'Y'
+  // encoding for extern "C" function types.
   mangleBareFunctionType(T, /*MangleReturnType=*/true);
   Out << 'E';
 }
@@ -568,6 +613,12 @@ void CXXNameMangler::mangleType(const TagType *T) {
     mangleName(T->getDecl()->getTypedefForAnonDecl());
   else
     mangleName(T->getDecl());
+  
+  // If this is a class template specialization, mangle the template
+  // arguments.
+  if (ClassTemplateSpecializationDecl *Spec 
+      = dyn_cast<ClassTemplateSpecializationDecl>(T->getDecl()))
+    mangleTemplateArgumentList(Spec->getTemplateArgs());
 }
 
 void CXXNameMangler::mangleType(const ArrayType *T) {
@@ -590,7 +641,12 @@ void CXXNameMangler::mangleType(const MemberPointerType *T) {
   //  <pointer-to-member-type> ::= M <class type> <member type>
   Out << 'M';
   mangleType(QualType(T->getClass(), 0));
-  mangleType(T->getPointeeType());
+  QualType PointeeType = T->getPointeeType();
+  if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(PointeeType)) {
+    mangleCVQualifiers(FPT->getTypeQuals());
+    mangleType(FPT);
+  } else 
+    mangleType(PointeeType);
 }
 
 void CXXNameMangler::mangleType(const TemplateTypeParmType *T) {
@@ -642,6 +698,53 @@ void CXXNameMangler::mangleCXXDtorType(CXXDtorType T) {
     break;
   case Dtor_Base:
     Out << "D2";
+    break;
+  }
+}
+
+void CXXNameMangler::mangleTemplateArgumentList(const TemplateArgumentList &L) {
+  // <template-args> ::= I <template-arg>+ E
+  Out << "I";
+  
+  for (unsigned i = 0, e = L.size(); i != e; ++i) {
+    const TemplateArgument &A = L[i];
+  
+    mangleTemplateArgument(A);
+  }
+  
+  Out << "E";
+}
+
+void CXXNameMangler::mangleTemplateArgument(const TemplateArgument &A) {
+  // <template-arg> ::= <type>			        # type or template
+  //                ::= X <expression> E    # expression
+  //                ::= <expr-primary>      # simple expressions
+  //                ::= I <template-arg>* E # argument pack
+  //                ::= sp <expression>     # pack expansion of (C++0x)
+  switch (A.getKind()) {
+  default:
+    assert(0 && "Unknown template argument kind!");
+  case TemplateArgument::Type:
+    mangleType(A.getAsType());
+    break;
+  case TemplateArgument::Integral:
+    //  <expr-primary> ::= L <type> <value number> E # integer literal
+
+    Out << 'L';
+    
+    mangleType(A.getIntegralType());
+    
+    const llvm::APSInt *Integral = A.getAsIntegral();
+    if (A.getIntegralType()->isBooleanType()) {
+      // Boolean values are encoded as 0/1.
+      Out << (Integral->getBoolValue() ? '1' : '0');
+    } else {
+      if (Integral->isNegative())
+        Out << 'n';
+      Integral->abs().print(Out, false);
+    }
+      
+    Out << 'E';
     break;
   }
 }

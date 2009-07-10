@@ -206,6 +206,7 @@ public:
   }
   
   NodeTy* generateNode(PostStmt PP, const StateTy* St, NodeTy* Pred) {
+    HasGeneratedNode = true;
     return static_cast<NodeTy*>(NB.generateNodeImpl(PP, St, Pred));
   }
   
@@ -539,7 +540,9 @@ public:
     return getBlockCounter().getNumVisited(B.getBlockID());
   }  
   
-  ExplodedNodeImpl* generateNodeImpl(const void* State);
+  ExplodedNodeImpl* generateNodeImpl(const void* State,
+                                     const void *tag = 0,
+                                     ExplodedNodeImpl *P = 0);
     
   CFGBlock* getBlock() const { return &B; }
 };
@@ -571,9 +574,13 @@ public:
     return getPredecessor()->getState();
   }
   
-  NodeTy* MakeNode(const StateTy* St) {  
-    return static_cast<NodeTy*>(NB.generateNodeImpl(St));
+  NodeTy* MakeNode(const StateTy* St, const void *tag = 0) {  
+    return static_cast<NodeTy*>(NB.generateNodeImpl(St, tag));
   }
+  
+  NodeTy *generateNode(const StateTy *St, NodeTy *Pred, const void *tag = 0) {
+    return static_cast<NodeTy*>(NB.generateNodeImpl(St, tag, Pred));
+  }                                
 };
 
   

@@ -65,7 +65,7 @@ static void print(llvm::raw_ostream& os, const SymSymExpr *SE) {
 static void print(llvm::raw_ostream& os, const SymExpr *SE) {
   switch (SE->getKind()) {
     case SymExpr::BEGIN_SYMBOLS:
-    case SymExpr::RegionRValue:
+    case SymExpr::RegionValueKind:
     case SymExpr::ConjuredKind:
     case SymExpr::END_SYMBOLS:
       os << '$' << cast<SymbolData>(SE)->getSymbolID();
@@ -85,26 +85,20 @@ llvm::raw_ostream& llvm::operator<<(llvm::raw_ostream& os, const SymExpr *SE) {
   return os;
 }
 
-std::ostream& std::operator<<(std::ostream& os, const SymExpr *SE) {
-  llvm::raw_os_ostream O(os);
-  print(O, SE);
-  return os;
-}
-
-const SymbolRegionRValue* 
-SymbolManager::getRegionRValueSymbol(const MemRegion* R) {
+const SymbolRegionValue* 
+SymbolManager::getRegionValueSymbol(const MemRegion* R, QualType T) {
   llvm::FoldingSetNodeID profile;
-  SymbolRegionRValue::Profile(profile, R);
+  SymbolRegionValue::Profile(profile, R, T);
   void* InsertPos;  
   SymExpr *SD = DataSet.FindNodeOrInsertPos(profile, InsertPos);    
   if (!SD) {  
-    SD = (SymExpr*) BPAlloc.Allocate<SymbolRegionRValue>();
-    new (SD) SymbolRegionRValue(SymbolCounter, R);  
+    SD = (SymExpr*) BPAlloc.Allocate<SymbolRegionValue>();
+    new (SD) SymbolRegionValue(SymbolCounter, R, T);  
     DataSet.InsertNode(SD, InsertPos);
     ++SymbolCounter;
   }
   
-  return cast<SymbolRegionRValue>(SD);
+  return cast<SymbolRegionValue>(SD);
 }
 
 const SymbolConjured*
@@ -165,9 +159,12 @@ QualType SymbolConjured::getType(ASTContext&) const {
   return T;
 }
 
-QualType SymbolRegionRValue::getType(ASTContext& C) const {
+QualType SymbolRegionValue::getType(ASTContext& C) const {
+  if (!T.isNull())
+    return T;
+
   if (const TypedRegion* TR = dyn_cast<TypedRegion>(R))
-    return TR->getRValueType(C);
+    return TR->getValueType(C);
   
   return QualType();
 }
@@ -197,7 +194,7 @@ bool SymbolReaper::isLive(SymbolRef sym) {
   
   // Interogate the symbol.  It may derive from an input value to
   // the analyzed function/method.
-  return isa<SymbolRegionRValue>(sym);
+  return isa<SymbolRegionValue>(sym);
 }
 
 SymbolVisitor::~SymbolVisitor() {}

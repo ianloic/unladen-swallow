@@ -82,6 +82,8 @@ public:
     TST_typename,     // Typedef, C++ class-name or enum name, etc.
     TST_typeofType,
     TST_typeofExpr,
+    TST_decltype,     // C++0x decltype
+    TST_auto,         // C++0x auto
     TST_error         // erroneous type
   };
   
@@ -114,7 +116,8 @@ private:
   /*TSC*/unsigned TypeSpecComplex : 2;
   /*TSS*/unsigned TypeSpecSign : 2;
   /*TST*/unsigned TypeSpecType : 5;
-  
+  bool TypeSpecOwned : 1;
+
   // type-qualifiers
   unsigned TypeQualifiers : 3;  // Bitwise OR of TQ.
   
@@ -123,10 +126,13 @@ private:
   bool FS_virtual_specified : 1;
   bool FS_explicit_specified : 1;
   
+  // friend-specifier
+  bool Friend_specified : 1;
+  
   /// TypeRep - This contains action-specific information about a specific TST.
   /// For example, for a typedef or struct, it might contain the declaration for
   /// these.
-  ActionBase::TypeTy *TypeRep;  
+  void *TypeRep;  
   
   // attributes.
   AttributeList *AttrList;
@@ -145,6 +151,7 @@ private:
   SourceLocation TSWLoc, TSCLoc, TSSLoc, TSTLoc;
   SourceLocation TQ_constLoc, TQ_restrictLoc, TQ_volatileLoc;
   SourceLocation FS_inlineLoc, FS_virtualLoc, FS_explicitLoc;
+  SourceLocation FriendLoc;
   
   bool BadSpecifier(TST T, const char *&PrevSpec);
   bool BadSpecifier(TQ T, const char *&PrevSpec);
@@ -164,10 +171,12 @@ public:
       TypeSpecComplex(TSC_unspecified),
       TypeSpecSign(TSS_unspecified),
       TypeSpecType(TST_unspecified),
+      TypeSpecOwned(false),
       TypeQualifiers(TSS_unspecified),
       FS_inline_specified(false),
       FS_virtual_specified(false),
       FS_explicit_specified(false),
+      Friend_specified(false),
       TypeRep(0),
       AttrList(0),
       ProtocolQualifiers(0),
@@ -196,6 +205,7 @@ public:
   TSC getTypeSpecComplex() const { return (TSC)TypeSpecComplex; }
   TSS getTypeSpecSign() const { return (TSS)TypeSpecSign; }
   TST getTypeSpecType() const { return (TST)TypeSpecType; }
+  bool isTypeSpecOwned() const { return TypeSpecOwned; }
   void *getTypeRep() const { return TypeRep; }
   
   const SourceRange &getSourceRange() const { return Range; }
@@ -267,7 +277,7 @@ public:
   bool SetTypeSpecComplex(TSC C, SourceLocation Loc, const char *&PrevSpec);
   bool SetTypeSpecSign(TSS S, SourceLocation Loc, const char *&PrevSpec);
   bool SetTypeSpecType(TST T, SourceLocation Loc, const char *&PrevSpec,
-                       void *Rep = 0);
+                       void *Rep = 0, bool Owned = false);
   bool SetTypeSpecError();
 
   bool SetTypeQual(TQ T, SourceLocation Loc, const char *&PrevSpec,
@@ -277,6 +287,10 @@ public:
   bool SetFunctionSpecVirtual(SourceLocation Loc, const char *&PrevSpec);
   bool SetFunctionSpecExplicit(SourceLocation Loc, const char *&PrevSpec);
   
+  bool SetFriendSpec(SourceLocation Loc, const char *&PrevSpec);
+  bool isFriendSpecified() const { return Friend_specified; }
+  SourceLocation getFriendSpecLoc() const { return FriendLoc; }
+
   /// AddAttributes - contatenates two attribute lists. 
   /// The GCC attribute syntax allows for the following:
   ///
@@ -443,6 +457,8 @@ struct DeclaratorChunk {
 
   /// Loc - The place where this type was defined.
   SourceLocation Loc;
+  /// EndLoc - If valid, the place where this chunck ends.
+  SourceLocation EndLoc;
   
   struct PointerTypeInfo {
     /// The type qualifiers: const/volatile/restrict.
@@ -506,7 +522,12 @@ struct DeclaratorChunk {
       : Ident(ident), IdentLoc(iloc), Param(param), 
         DefaultArgTokens(DefArgTokens) {}
   };
-  
+
+  struct TypeAndRange {
+    ActionBase::TypeTy *Ty;
+    SourceRange Range;
+  };
+
   struct FunctionTypeInfo {
     /// hasPrototype - This is true if the function had at least one typed
     /// argument.  If the function is () or (a,b,c), then it has no prototype,
@@ -542,14 +563,19 @@ struct DeclaratorChunk {
     /// the function has one.
     unsigned NumExceptions;
 
+    /// ThrowLoc - When hasExceptionSpec is true, the location of the throw
+    /// keyword introducing the spec.
+    unsigned ThrowLoc;
+
     /// ArgInfo - This is a pointer to a new[]'d array of ParamInfo objects that
     /// describe the arguments for this function declarator.  This is null if
     /// there are no arguments specified.
     ParamInfo *ArgInfo;
 
-    /// Exceptions - This is a pointer to a new[]'d array of TypeTy pointers
-    /// that contains the types in the function's exception specification.
-    ActionBase::TypeTy **Exceptions;
+    /// Exceptions - This is a pointer to a new[]'d array of TypeAndRange
+    /// objects that contain the types in the function's exception
+    /// specification and their locations.
+    TypeAndRange *Exceptions;
 
     /// freeArgs - reset the argument list to having zero arguments.  This is
     /// used in various places for error recovery.
@@ -569,6 +595,9 @@ struct DeclaratorChunk {
 
     SourceLocation getEllipsisLoc() const {
       return SourceLocation::getFromRawEncoding(EllipsisLoc);
+    }
+    SourceLocation getThrowLoc() const {
+      return SourceLocation::getFromRawEncoding(ThrowLoc);
     }
   };
 
@@ -669,10 +698,11 @@ struct DeclaratorChunk {
   ///
   static DeclaratorChunk getArray(unsigned TypeQuals, bool isStatic,
                                   bool isStar, void *NumElts,
-                                  SourceLocation Loc) {
+                                  SourceLocation LBLoc, SourceLocation RBLoc) {
     DeclaratorChunk I;
     I.Kind          = Array;
-    I.Loc           = Loc;
+    I.Loc           = LBLoc;
+    I.EndLoc        = RBLoc;
     I.Arr.TypeQuals = TypeQuals;
     I.Arr.hasStatic = isStatic;
     I.Arr.isStar    = isStar;
@@ -686,8 +716,10 @@ struct DeclaratorChunk {
                                      SourceLocation EllipsisLoc,
                                      ParamInfo *ArgInfo, unsigned NumArgs,
                                      unsigned TypeQuals, bool hasExceptionSpec,
+                                     SourceLocation ThrowLoc,
                                      bool hasAnyExceptionSpec,
                                      ActionBase::TypeTy **Exceptions,
+                                     SourceRange *ExceptionRanges,
                                      unsigned NumExceptions, SourceLocation Loc,
                                      Declarator &TheDeclarator);
   

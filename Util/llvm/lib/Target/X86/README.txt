@@ -2,6 +2,8 @@
 // Random ideas for the X86 backend.
 //===---------------------------------------------------------------------===//
 
+We should add support for the "movbe" instruction, which does a byte-swapping
+copy (3-addr bswap + memory support?)  This is available on Atom processors.
 
 //===---------------------------------------------------------------------===//
 
@@ -480,35 +482,6 @@ _usesbb:
 
 //===---------------------------------------------------------------------===//
 
-Currently we don't have elimination of redundant stack manipulations. Consider
-the code:
-
-int %main() {
-entry:
-	call fastcc void %test1( )
-	call fastcc void %test2( sbyte* cast (void ()* %test1 to sbyte*) )
-	ret int 0
-}
-
-declare fastcc void %test1()
-
-declare fastcc void %test2(sbyte*)
-
-
-This currently compiles to:
-
-	subl $16, %esp
-	call _test5
-	addl $12, %esp
-	subl $16, %esp
-	movl $_test5, (%esp)
-	call _test6
-	addl $12, %esp
-
-The add\sub pair is really unneeded here.
-
-//===---------------------------------------------------------------------===//
-
 Consider the expansion of:
 
 define i32 @test3(i32 %X) {
@@ -897,34 +870,6 @@ __Z11no_overflowjj:
 
 Re-materialize MOV32r0 etc. with xor instead of changing them to moves if the
 condition register is dead. xor reg reg is shorter than mov reg, #0.
-
-//===---------------------------------------------------------------------===//
-
-We aren't matching RMW instructions aggressively
-enough.  Here's a reduced testcase (more in PR1160):
-
-define void @test(i32* %huge_ptr, i32* %target_ptr) {
-        %A = load i32* %huge_ptr                ; <i32> [#uses=1]
-        %B = load i32* %target_ptr              ; <i32> [#uses=1]
-        %C = or i32 %A, %B              ; <i32> [#uses=1]
-        store i32 %C, i32* %target_ptr
-        ret void
-}
-
-$ llvm-as < t.ll | llc -march=x86-64
-
-_test:
-        movl (%rdi), %eax
-        orl (%rsi), %eax
-        movl %eax, (%rsi)
-        ret
-
-That should be something like:
-
-_test:
-        movl (%rdi), %eax
-        orl %eax, (%rsi)
-        ret
 
 //===---------------------------------------------------------------------===//
 
@@ -1879,5 +1824,111 @@ _foo:
 
 On Nehalem, it may even be cheaper to just use movups when unaligned than to
 fall back to lower-granularity chunks.
+
+//===---------------------------------------------------------------------===//
+
+Implement processor-specific optimizations for parity with GCC on these
+processors.  GCC does two optimizations:
+
+1. ix86_pad_returns inserts a noop before ret instructions if immediately
+   preceeded by a conditional branch or is the target of a jump.
+2. ix86_avoid_jump_misspredicts inserts noops in cases where a 16-byte block of
+   code contains more than 3 branches.
+   
+The first one is done for all AMDs, Core2, and "Generic"
+The second one is done for: Atom, Pentium Pro, all AMDs, Pentium 4, Nocona,
+  Core 2, and "Generic"
+
+//===---------------------------------------------------------------------===//
+
+Testcase:
+int a(int x) { return (x & 127) > 31; }
+
+Current output:
+	movl	4(%esp), %eax
+	andl	$127, %eax
+	cmpl	$31, %eax
+	seta	%al
+	movzbl	%al, %eax
+	ret
+
+Ideal output:
+	xorl	%eax, %eax
+	testl	$96, 4(%esp)
+	setne	%al
+	ret
+
+This should definitely be done in instcombine, canonicalizing the range
+condition into a != condition.  We get this IR:
+
+define i32 @a(i32 %x) nounwind readnone {
+entry:
+	%0 = and i32 %x, 127		; <i32> [#uses=1]
+	%1 = icmp ugt i32 %0, 31		; <i1> [#uses=1]
+	%2 = zext i1 %1 to i32		; <i32> [#uses=1]
+	ret i32 %2
+}
+
+Instcombine prefers to strength reduce relational comparisons to equality
+comparisons when possible, this should be another case of that.  This could
+be handled pretty easily in InstCombiner::visitICmpInstWithInstAndIntCst, but it
+looks like InstCombiner::visitICmpInstWithInstAndIntCst should really already
+be redesigned to use ComputeMaskedBits and friends.
+
+
+//===---------------------------------------------------------------------===//
+Testcase:
+int x(int a) { return (a&0xf0)>>4; }
+
+Current output:
+	movl	4(%esp), %eax
+	shrl	$4, %eax
+	andl	$15, %eax
+	ret
+
+Ideal output:
+	movzbl	4(%esp), %eax
+	shrl	$4, %eax
+	ret
+
+//===---------------------------------------------------------------------===//
+
+Testcase:
+int x(int a) { return (a & 0x80) ? 0x100 : 0; }
+int y(int a) { return (a & 0x80) *2; }
+
+Current:
+	testl	$128, 4(%esp)
+	setne	%al
+	movzbl	%al, %eax
+	shll	$8, %eax
+	ret
+
+Better:
+	movl	4(%esp), %eax
+	addl	%eax, %eax
+	andl	$256, %eax
+	ret
+
+This is another general instcombine transformation that is profitable on all
+targets.  In LLVM IR, these functions look like this:
+
+define i32 @x(i32 %a) nounwind readnone {
+entry:
+	%0 = and i32 %a, 128
+	%1 = icmp eq i32 %0, 0
+	%iftmp.0.0 = select i1 %1, i32 0, i32 256
+	ret i32 %iftmp.0.0
+}
+
+define i32 @y(i32 %a) nounwind readnone {
+entry:
+	%0 = shl i32 %a, 1
+	%1 = and i32 %0, 256
+	ret i32 %1
+}
+
+Replacing an icmp+select with a shift should always be considered profitable in
+instcombine.
 
 //===---------------------------------------------------------------------===//

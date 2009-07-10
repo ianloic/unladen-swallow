@@ -24,6 +24,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CallSite.h"
@@ -175,15 +176,8 @@ bool DAE::DeleteDeadVarargs(Function &Fn) {
   if (Fn.isDeclaration() || !Fn.hasLocalLinkage()) return false;
 
   // Ensure that the function is only directly called.
-  for (Value::use_iterator I = Fn.use_begin(), E = Fn.use_end(); I != E; ++I) {
-    // If this use is anything other than a call site, give up.
-    CallSite CS = CallSite::get(*I);
-    Instruction *TheCall = CS.getInstruction();
-    if (!TheCall) return false;   // Not a direct call site?
-
-    // The addr of this function is passed to the call.
-    if (!CS.isCallee(I)) return false;
-  }
+  if (Fn.hasAddressTaken())
+    return false;
 
   // Okay, we know we can transform this function if safe.  Scan its body
   // looking for calls to llvm.vastart.
@@ -203,7 +197,8 @@ bool DAE::DeleteDeadVarargs(Function &Fn) {
   // the old function, but doesn't have isVarArg set.
   const FunctionType *FTy = Fn.getFunctionType();
   std::vector<const Type*> Params(FTy->param_begin(), FTy->param_end());
-  FunctionType *NFTy = FunctionType::get(FTy->getReturnType(), Params, false);
+  FunctionType *NFTy = Context->getFunctionType(FTy->getReturnType(),
+                                                Params, false);
   unsigned NumArgs = Params.size();
 
   // Create the new function body and insert it into the module...
@@ -640,7 +635,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
       // something and {} into void.
       // Make the new struct packed if we used to return a packed struct
       // already.
-      NRetTy = StructType::get(RetTypes, STy->isPacked());
+      NRetTy = Context->getStructType(RetTypes, STy->isPacked());
     else if (RetTypes.size() == 1)
       // One return type? Just a simple value then, but only if we didn't use to
       // return a struct with that simple value before.
@@ -708,7 +703,8 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
   }
 
   // Create the new function type based on the recomputed parameters.
-  FunctionType *NFTy = FunctionType::get(NRetTy, Params, FTy->isVarArg());
+  FunctionType *NFTy = Context->getFunctionType(NRetTy, Params,
+                                                FTy->isVarArg());
 
   // No change?
   if (NFTy == FTy)
@@ -757,7 +753,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
       }
 
     if (ExtraArgHack)
-      Args.push_back(UndefValue::get(Type::Int32Ty));
+      Args.push_back(Context->getUndef(Type::Int32Ty));
 
     // Push any varargs arguments on the list. Don't forget their attributes.
     for (CallSite::arg_iterator E = CS.arg_end(); I != E; ++I, ++i) {
@@ -796,7 +792,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
       } else if (New->getType() == Type::VoidTy) {
         // Our return value has uses, but they will get removed later on.
         // Replace by null for now.
-        Call->replaceAllUsesWith(Constant::getNullValue(Call->getType()));
+        Call->replaceAllUsesWith(Context->getNullValue(Call->getType()));
       } else {
         assert(isa<StructType>(RetTy) &&
                "Return type changed, but not into a void. The old return type"
@@ -813,7 +809,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
         // extract/insertvalue chaining and let instcombine clean that up.
         //
         // Start out building up our return value from undef
-        Value *RetVal = llvm::UndefValue::get(RetTy);
+        Value *RetVal = Context->getUndef(RetTy);
         for (unsigned i = 0; i != RetCount; ++i)
           if (NewRetIdxs[i] != -1) {
             Value *V;
@@ -859,7 +855,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
     } else {
       // If this argument is dead, replace any uses of it with null constants
       // (these are guaranteed to become unused later on).
-      I->replaceAllUsesWith(Constant::getNullValue(I->getType()));
+      I->replaceAllUsesWith(Context->getNullValue(I->getType()));
     }
 
   // If we change the return value of the function we must rewrite any return
@@ -880,7 +876,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
           // clean that up.
           Value *OldRet = RI->getOperand(0);
           // Start out building up our return value from undef
-          RetVal = llvm::UndefValue::get(NRetTy);
+          RetVal = Context->getUndef(NRetTy);
           for (unsigned i = 0; i != RetCount; ++i)
             if (NewRetIdxs[i] != -1) {
               ExtractValueInst *EV = ExtractValueInst::Create(OldRet, i,

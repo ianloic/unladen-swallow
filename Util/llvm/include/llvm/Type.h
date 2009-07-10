@@ -14,6 +14,7 @@
 #include "llvm/AbstractTypeUser.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DataTypes.h"
+#include "llvm/System/Atomic.h"
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/iterator.h"
 #include <string>
@@ -75,16 +76,17 @@ public:
     FP128TyID,       ///<  4: 128 bit floating point type (112-bit mantissa)
     PPC_FP128TyID,   ///<  5: 128 bit floating point type (two 64-bits)
     LabelTyID,       ///<  6: Labels
+    MetadataTyID,    ///<  7: Metadata
 
     // Derived types... see DerivedTypes.h file...
     // Make sure FirstDerivedTyID stays up to date!!!
-    IntegerTyID,     ///<  7: Arbitrary bit width integers
-    FunctionTyID,    ///<  8: Functions
-    StructTyID,      ///<  9: Structures
-    ArrayTyID,       ///< 10: Arrays
-    PointerTyID,     ///< 11: Pointers
-    OpaqueTyID,      ///< 12: Opaque: type with unknown structure
-    VectorTyID,      ///< 13: SIMD 'packed' format, or other vector type
+    IntegerTyID,     ///<  8: Arbitrary bit width integers
+    FunctionTyID,    ///<  9: Functions
+    StructTyID,      ///< 10: Structures
+    ArrayTyID,       ///< 11: Arrays
+    PointerTyID,     ///< 12: Pointers
+    OpaqueTyID,      ///< 13: Opaque: type with unknown structure
+    VectorTyID,      ///< 14: SIMD 'packed' format, or other vector type
 
     NumTypeIDs,                         // Must remain as last defined ID
     LastPrimitiveTyID = LabelTyID,
@@ -101,7 +103,7 @@ private:
   /// has no AbstractTypeUsers, the type is deleted.  This is only sensical for
   /// derived types.
   ///
-  mutable unsigned RefCount;
+  mutable sys::cas_flag RefCount;
 
   const Type *getForwardedTypeInternal() const;
 
@@ -189,7 +191,7 @@ public:
   ///
   bool isIntOrIntVector() const;
   
-  /// isFloatingPoint - Return true if this is one of the two floating point
+  /// isFloatingPoint - Return true if this is one of the five floating point
   /// types
   bool isFloatingPoint() const { return ID == FloatTyID || ID == DoubleTyID ||
       ID == X86_FP80TyID || ID == FP128TyID || ID == PPC_FP128TyID; }
@@ -204,7 +206,7 @@ public:
   inline bool isAbstract() const { return Abstract; }
 
   /// canLosslesslyBitCastTo - Return true if this type could be converted 
-  /// with a lossless BitCast to type 'Ty'. For example, uint to int. BitCasts 
+  /// with a lossless BitCast to type 'Ty'. For example, i8* to i32*. BitCasts 
   /// are valid for types of the same size only where no re-interpretation of 
   /// the bits is done.
   /// @brief Determine if this type could be losslessly bitcast to Ty
@@ -267,19 +269,16 @@ public:
   /// primitive type.
   ///
   unsigned getPrimitiveSizeInBits() const;
-  
+
+  /// getScalarSizeInBits - If this is a vector type, return the
+  /// getPrimitiveSizeInBits value for the element type. Otherwise return the
+  /// getPrimitiveSizeInBits value for this type.
+  unsigned getScalarSizeInBits() const;
+
   /// getFPMantissaWidth - Return the width of the mantissa of this type.  This
-  /// is only valid on scalar floating point types.  If the FP type does not
+  /// is only valid on floating point types.  If the FP type does not
   /// have a stable mantissa (e.g. ppc long double), this method returns -1.
-  int getFPMantissaWidth() const {
-    assert(isFloatingPoint() && "Not a floating point type!");
-    if (ID == FloatTyID) return 24;
-    if (ID == DoubleTyID) return 53;
-    if (ID == X86_FP80TyID) return 64;
-    if (ID == FP128TyID) return 113;
-    assert(ID == PPC_FP128TyID && "unknown fp type");
-    return -1;
-  }
+  int getFPMantissaWidth() const;
 
   /// getForwardedType - Return the type that this type has been resolved to if
   /// it has been resolved to anything.  This is used to implement the
@@ -294,6 +293,10 @@ public:
   /// will be promoted to if passed through a variable argument
   /// function.
   const Type *getVAArgsPromotedType() const; 
+
+  /// getScalarType - If this is a vector type, return the element type,
+  /// otherwise return this.
+  const Type *getScalarType() const;
 
   //===--------------------------------------------------------------------===//
   // Type Iteration support
@@ -326,7 +329,7 @@ public:
   //===--------------------------------------------------------------------===//
   // These are the builtin types that are always available...
   //
-  static const Type *VoidTy, *LabelTy, *FloatTy, *DoubleTy, *EmptyStructTy;
+  static const Type *VoidTy, *LabelTy, *FloatTy, *DoubleTy, *MetadataTy;
   static const Type *X86_FP80Ty, *FP128Ty, *PPC_FP128Ty;
   static const IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
 
@@ -335,7 +338,7 @@ public:
 
   void addRef() const {
     assert(isAbstract() && "Cannot add a reference to a non-abstract type!");
-    ++RefCount;
+    sys::AtomicIncrement(&RefCount);
   }
 
   void dropRef() const {
@@ -344,17 +347,15 @@ public:
 
     // If this is the last PATypeHolder using this object, and there are no
     // PATypeHandles using it, the type is dead, delete it now.
-    if (--RefCount == 0 && AbstractTypeUsers.empty())
+    sys::cas_flag OldCount = sys::AtomicDecrement(&RefCount);
+    if (OldCount == 0 && AbstractTypeUsers.empty())
       this->destroy();
   }
   
   /// addAbstractTypeUser - Notify an abstract type that there is a new user of
   /// it.  This function is called primarily by the PATypeHandle class.
   ///
-  void addAbstractTypeUser(AbstractTypeUser *U) const {
-    assert(isAbstract() && "addAbstractTypeUser: Current type not abstract!");
-    AbstractTypeUsers.push_back(U);
-  }
+  void addAbstractTypeUser(AbstractTypeUser *U) const;
   
   /// removeAbstractTypeUser - Notify an abstract type that a user of the class
   /// no longer has a handle to the type.  This function is called primarily by

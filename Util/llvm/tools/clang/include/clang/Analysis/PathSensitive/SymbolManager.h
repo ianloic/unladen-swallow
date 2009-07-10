@@ -38,7 +38,7 @@ namespace clang {
   
 class SymExpr : public llvm::FoldingSetNode {
 public:
-  enum Kind { BEGIN_SYMBOLS, RegionRValue, ConjuredKind, END_SYMBOLS,
+  enum Kind { BEGIN_SYMBOLS, RegionValueKind, ConjuredKind, END_SYMBOLS,
               SymIntKind, SymSymKind };
 private:
   Kind K;
@@ -81,28 +81,34 @@ public:
 
 typedef const SymbolData* SymbolRef;
   
-class SymbolRegionRValue : public SymbolData {
+class SymbolRegionValue : public SymbolData {
   const MemRegion *R;
+  // We may cast the region to another type, so the expected type of the symbol
+  // may be different from the region's original type.
+  QualType T;
+
 public:
-  SymbolRegionRValue(SymbolID sym, const MemRegion *r)
-    : SymbolData(RegionRValue, sym), R(r) {}
+  SymbolRegionValue(SymbolID sym, const MemRegion *r, QualType t = QualType())
+    : SymbolData(RegionValueKind, sym), R(r), T(t) {}
   
   const MemRegion* getRegion() const { return R; }
 
-  static void Profile(llvm::FoldingSetNodeID& profile, const MemRegion* R) {
-    profile.AddInteger((unsigned) RegionRValue);
+  static void Profile(llvm::FoldingSetNodeID& profile, const MemRegion* R,
+		      QualType T) {
+    profile.AddInteger((unsigned) RegionValueKind);
     profile.AddPointer(R);
+    T.Profile(profile);
   }
   
   virtual void Profile(llvm::FoldingSetNodeID& profile) {
-    Profile(profile, R);
+    Profile(profile, R, T);
   }
   
   QualType getType(ASTContext&) const;
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr* SE) {
-    return SE->getKind() == RegionRValue;
+    return SE->getKind() == RegionValueKind;
   }
 };
 
@@ -204,7 +210,7 @@ public:
   QualType getType(ASTContext& C) const { return T; }
 
   static void Profile(llvm::FoldingSetNodeID& ID, const SymExpr *lhs,
-                      BinaryOperator::Opcode op, const SymExpr *rhs, QualType t) {
+                    BinaryOperator::Opcode op, const SymExpr *rhs, QualType t) {
     ID.AddInteger((unsigned) SymSymKind);
     ID.AddPointer(lhs);
     ID.AddInteger(op);
@@ -240,7 +246,8 @@ public:
   static bool canSymbolicate(QualType T);
 
   /// Make a unique symbol for MemRegion R according to its kind.
-  const SymbolRegionRValue* getRegionRValueSymbol(const MemRegion* R);
+  const SymbolRegionValue* getRegionValueSymbol(const MemRegion* R, 
+						QualType T = QualType());
   const SymbolConjured* getConjuredSymbol(const Stmt* E, QualType T,
                                           unsigned VisitCount,
                                           const void* SymbolTag = 0);
@@ -250,7 +257,7 @@ public:
     return getConjuredSymbol(E, E->getType(), VisitCount, SymbolTag);
   }
 
-  const SymIntExpr *getSymIntExpr(const SymExpr *lhs, BinaryOperator::Opcode op, 
+  const SymIntExpr *getSymIntExpr(const SymExpr *lhs, BinaryOperator::Opcode op,
                                   const llvm::APSInt& rhs, QualType t);
   
   const SymIntExpr *getSymIntExpr(const SymExpr &lhs, BinaryOperator::Opcode op,
@@ -321,9 +328,4 @@ namespace llvm {
   llvm::raw_ostream& operator<<(llvm::raw_ostream& Out,
                                 const clang::SymExpr *SE);
 }
-namespace std {
-  std::ostream& operator<<(std::ostream& Out,
-                           const clang::SymExpr *SE);
-}
-
 #endif

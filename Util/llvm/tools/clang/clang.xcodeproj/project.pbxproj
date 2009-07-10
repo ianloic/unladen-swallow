@@ -8,12 +8,33 @@
 
 /* Begin PBXBuildFile section */
 		03F50AC60D416EAA00B9CF60 /* Targets.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 03F50AC50D416EAA00B9CF60 /* Targets.cpp */; };
+		1A14D3A70FD78A3F00DA2835 /* DeclPrinter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A14D3A60FD78A3F00DA2835 /* DeclPrinter.cpp */; };
 		1A2193CE0F45EEB700C0713D /* Mangle.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2193CC0F45EEB700C0713D /* Mangle.cpp */; };
+		1A2A54B50FD1DD1C00F4CE45 /* AnalysisConsumer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A40FD1DD1C00F4CE45 /* AnalysisConsumer.cpp */; };
+		1A2A54B60FD1DD1C00F4CE45 /* ASTConsumers.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A50FD1DD1C00F4CE45 /* ASTConsumers.cpp */; };
+		1A2A54B70FD1DD1C00F4CE45 /* Backend.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A60FD1DD1C00F4CE45 /* Backend.cpp */; };
+		1A2A54B80FD1DD1C00F4CE45 /* CacheTokens.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A70FD1DD1C00F4CE45 /* CacheTokens.cpp */; };
+		1A2A54B90FD1DD1C00F4CE45 /* DependencyFile.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A80FD1DD1C00F4CE45 /* DependencyFile.cpp */; };
+		1A2A54BA0FD1DD1C00F4CE45 /* DiagChecker.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54A90FD1DD1C00F4CE45 /* DiagChecker.cpp */; };
+		1A2A54BB0FD1DD1C00F4CE45 /* DocumentXML.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AA0FD1DD1C00F4CE45 /* DocumentXML.cpp */; };
+		1A2A54BC0FD1DD1C00F4CE45 /* GeneratePCH.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AB0FD1DD1C00F4CE45 /* GeneratePCH.cpp */; };
+		1A2A54BD0FD1DD1C00F4CE45 /* HTMLPrint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AC0FD1DD1C00F4CE45 /* HTMLPrint.cpp */; };
+		1A2A54BE0FD1DD1C00F4CE45 /* PrintParserCallbacks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AD0FD1DD1C00F4CE45 /* PrintParserCallbacks.cpp */; };
+		1A2A54BF0FD1DD1C00F4CE45 /* PrintPreprocessedOutput.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AE0FD1DD1C00F4CE45 /* PrintPreprocessedOutput.cpp */; };
+		1A2A54C00FD1DD1C00F4CE45 /* RewriteBlocks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54AF0FD1DD1C00F4CE45 /* RewriteBlocks.cpp */; };
+		1A2A54C10FD1DD1C00F4CE45 /* RewriteMacros.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54B00FD1DD1C00F4CE45 /* RewriteMacros.cpp */; };
+		1A2A54C20FD1DD1C00F4CE45 /* RewriteObjC.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54B10FD1DD1C00F4CE45 /* RewriteObjC.cpp */; };
+		1A2A54C30FD1DD1C00F4CE45 /* RewriteTest.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54B20FD1DD1C00F4CE45 /* RewriteTest.cpp */; };
+		1A2A54C40FD1DD1C00F4CE45 /* StmtXML.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54B30FD1DD1C00F4CE45 /* StmtXML.cpp */; };
+		1A2A54C50FD1DD1C00F4CE45 /* Warnings.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A2A54B40FD1DD1C00F4CE45 /* Warnings.cpp */; };
 		1A30A9E90B93A4C800201A91 /* ExprCXX.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 1A30A9E80B93A4C800201A91 /* ExprCXX.h */; };
 		1A32C17F0E1C87AD00A6B483 /* ExprConstant.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A32C17E0E1C87AD00A6B483 /* ExprConstant.cpp */; };
 		1A376A2D0D4AED9B002A1C52 /* CGExprConstant.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A376A2C0D4AED9B002A1C52 /* CGExprConstant.cpp */; };
+		1A410F850FBCE51100351440 /* SemaTemplateInstantiateExpr.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A410F840FBCE51100351440 /* SemaTemplateInstantiateExpr.cpp */; };
 		1A471AB50F437BC500753CE8 /* CGBlocks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A471AB40F437BC500753CE8 /* CGBlocks.cpp */; };
+		1A5119C40FBDF71000A1FF22 /* SemaTemplateInstantiateStmt.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A5119C30FBDF71000A1FF22 /* SemaTemplateInstantiateStmt.cpp */; };
 		1A5D5E580E5E81010023C059 /* CGCXX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A5D5E570E5E81010023C059 /* CGCXX.cpp */; };
+		1A6FE7090FD6F85800E00CA9 /* CGCXXTemp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A6FE7080FD6F85800E00CA9 /* CGCXXTemp.cpp */; };
 		1A701B640F7C8FE400FEC4D1 /* SemaAccess.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A701B630F7C8FE400FEC4D1 /* SemaAccess.cpp */; };
 		1A7342480C7B57D500122F56 /* CGObjC.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A7342470C7B57D500122F56 /* CGObjC.cpp */; };
 		1A869A700BA2164C008DA07A /* LiteralSupport.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 1A869A6E0BA2164C008DA07A /* LiteralSupport.h */; };
@@ -85,6 +106,7 @@
 		84D9A8880C1A57E100AC7ABC /* AttributeList.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 84D9A8870C1A57E100AC7ABC /* AttributeList.cpp */; };
 		84D9A88C0C1A581300AC7ABC /* AttributeList.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 84D9A88B0C1A581300AC7ABC /* AttributeList.h */; };
 		906BF4B00F83BA2E001071FA /* ConvertUTF.c in Sources */ = {isa = PBXBuildFile; fileRef = 906BF4AF0F83BA2E001071FA /* ConvertUTF.c */; };
+		BDF87CF70FD746F300BBF872 /* SemaTemplateDeduction.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BDF87CF60FD746F300BBF872 /* SemaTemplateDeduction.cpp */; };
 		DE01DA490B12ADA300AC22CE /* PPCallbacks.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DE01DA480B12ADA300AC22CE /* PPCallbacks.h */; };
 		DE06756C0C051CFE00EBBFD8 /* ParseExprCXX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE06756B0C051CFE00EBBFD8 /* ParseExprCXX.cpp */; };
 		DE06B73E0A8307640050E87E /* LangOptions.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DE06B73D0A8307640050E87E /* LangOptions.h */; };
@@ -116,6 +138,7 @@
 		DE3461270AFE68BE00DBC861 /* MinimalAction.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE3461260AFE68BE00DBC861 /* MinimalAction.cpp */; };
 		DE34621D0AFEB19B00DBC861 /* StmtPrinter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE34621C0AFEB19B00DBC861 /* StmtPrinter.cpp */; };
 		DE3464220B03040900DBC861 /* Type.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DE3464210B03040900DBC861 /* Type.h */; };
+		DE37252E0FE481AD00CF2CC2 /* Builtins.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE37252D0FE481AD00CF2CC2 /* Builtins.cpp */; };
 		DE38CD500D794D0100A273B6 /* CGObjCGNU.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE38CD4F0D794D0100A273B6 /* CGObjCGNU.cpp */; };
 		DE38CF270D8C9E6C00A273B6 /* DeclObjC.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DE38CF260D8C9E6C00A273B6 /* DeclObjC.cpp */; };
 		DE3986F00CB8D4B300223765 /* IdentifierTable.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DE3986EF0CB8D4B300223765 /* IdentifierTable.h */; };
@@ -178,9 +201,6 @@
 		DECB78170FA5882F00F5FBC7 /* PCHWriterStmt.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DECB78160FA5882F00F5FBC7 /* PCHWriterStmt.cpp */; };
 		DED626C90AE0C065001E80A4 /* TargetInfo.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DED626C80AE0C065001E80A4 /* TargetInfo.cpp */; };
 		DED62ABB0AE2EDF1001E80A4 /* Decl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DED62ABA0AE2EDF1001E80A4 /* Decl.cpp */; };
-		DED676D10B6C786700AAD4A3 /* Builtins.def in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED676D00B6C786700AAD4A3 /* Builtins.def */; };
-		DED676FA0B6C797B00AAD4A3 /* Builtins.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED676F90B6C797B00AAD4A3 /* Builtins.h */; };
-		DED677C90B6C854100AAD4A3 /* Builtins.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DED677C80B6C854100AAD4A3 /* Builtins.cpp */; };
 		DED7D7410A524295003AD0FB /* Diagnostic.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED7D7310A524295003AD0FB /* Diagnostic.h */; };
 		DED7D7430A524295003AD0FB /* FileManager.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED7D7330A524295003AD0FB /* FileManager.h */; };
 		DED7D7450A524295003AD0FB /* SourceLocation.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED7D7350A524295003AD0FB /* SourceLocation.h */; };
@@ -204,20 +224,6 @@
 		DED7D9180A52518C003AD0FB /* ScratchBuffer.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = DED7D9170A52518C003AD0FB /* ScratchBuffer.h */; };
 		DED7D9E50A5257F6003AD0FB /* ScratchBuffer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DED7D9E40A5257F6003AD0FB /* ScratchBuffer.cpp */; };
 		DEDFE5CF0F7206E40035BD10 /* NestedNameSpecifier.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE5CE0F7206E40035BD10 /* NestedNameSpecifier.cpp */; };
-		DEDFE6350F7B3B180035BD10 /* Warnings.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6220F7B3B180035BD10 /* Warnings.cpp */; };
-		DEDFE6370F7B3B180035BD10 /* RewriteTest.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6240F7B3B180035BD10 /* RewriteTest.cpp */; };
-		DEDFE6380F7B3B180035BD10 /* DependencyFile.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6250F7B3B180035BD10 /* DependencyFile.cpp */; };
-		DEDFE6390F7B3B180035BD10 /* HTMLPrint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6260F7B3B180035BD10 /* HTMLPrint.cpp */; };
-		DEDFE63A0F7B3B180035BD10 /* Backend.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6270F7B3B180035BD10 /* Backend.cpp */; };
-		DEDFE63B0F7B3B180035BD10 /* PrintParserCallbacks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6280F7B3B180035BD10 /* PrintParserCallbacks.cpp */; };
-		DEDFE63C0F7B3B180035BD10 /* RewriteBlocks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6290F7B3B180035BD10 /* RewriteBlocks.cpp */; };
-		DEDFE63E0F7B3B180035BD10 /* AnalysisConsumer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE62D0F7B3B180035BD10 /* AnalysisConsumer.cpp */; };
-		DEDFE63F0F7B3B180035BD10 /* ASTConsumers.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE62E0F7B3B180035BD10 /* ASTConsumers.cpp */; };
-		DEDFE6400F7B3B180035BD10 /* RewriteObjC.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE62F0F7B3B180035BD10 /* RewriteObjC.cpp */; };
-		DEDFE6410F7B3B180035BD10 /* PrintPreprocessedOutput.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6300F7B3B180035BD10 /* PrintPreprocessedOutput.cpp */; };
-		DEDFE6420F7B3B180035BD10 /* RewriteMacros.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6310F7B3B180035BD10 /* RewriteMacros.cpp */; };
-		DEDFE6430F7B3B180035BD10 /* DiagChecker.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6320F7B3B180035BD10 /* DiagChecker.cpp */; };
-		DEDFE6440F7B3B180035BD10 /* CacheTokens.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6330F7B3B180035BD10 /* CacheTokens.cpp */; };
 		DEDFE6460F7B3B4E0035BD10 /* driver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6450F7B3B4E0035BD10 /* driver.cpp */; };
 		DEDFE65A0F7B3B830035BD10 /* Types.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE6480F7B3B830035BD10 /* Types.cpp */; };
 		DEDFE65B0F7B3B830035BD10 /* Tools.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEDFE64A0F7B3B830035BD10 /* Tools.cpp */; };
@@ -240,7 +246,6 @@
 		DEEBC3BC0C2363BC00A9FE82 /* CodeGenTypes.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEEBC3BB0C2363BC00A9FE82 /* CodeGenTypes.cpp */; };
 		DEF165710F8FB34D0098507F /* PCHWriter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEF165700F8FB34D0098507F /* PCHWriter.cpp */; };
 		DEF165750F8FB3510098507F /* PCHReader.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEF165740F8FB3510098507F /* PCHReader.cpp */; };
-		DEF165900F8FB3FC0098507F /* GeneratePCH.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEF1658F0F8FB3FC0098507F /* GeneratePCH.cpp */; };
 		DEF168400F9548DC0098507F /* FixItRewriter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEF1683F0F9548DC0098507F /* FixItRewriter.cpp */; };
 		DEF2E95F0C5FBD74000C4259 /* InternalsManual.html in CopyFiles */ = {isa = PBXBuildFile; fileRef = DEF2E95E0C5FBD74000C4259 /* InternalsManual.html */; };
 		DEF2EDA70C6A4252000C4259 /* StmtDumper.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DEF2EDA60C6A4252000C4259 /* StmtDumper.cpp */; };
@@ -289,8 +294,6 @@
 				DE75ED290B044DC90020CF81 /* ASTContext.h in CopyFiles */,
 				DE1733700B068DC60080B521 /* DeclSpec.h in CopyFiles */,
 				DE01DA490B12ADA300AC22CE /* PPCallbacks.h in CopyFiles */,
-				DED676D10B6C786700AAD4A3 /* Builtins.def in CopyFiles */,
-				DED676FA0B6C797B00AAD4A3 /* Builtins.h in CopyFiles */,
 				1A30A9E90B93A4C800201A91 /* ExprCXX.h in CopyFiles */,
 				1A869A700BA2164C008DA07A /* LiteralSupport.h in CopyFiles */,
 				DE67E7150C020EDF00F66BC5 /* Sema.h in CopyFiles */,
@@ -316,19 +319,37 @@
 /* Begin PBXFileReference section */
 		035611470DA6A45C00D2EF2A /* DeclBase.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = DeclBase.h; path = clang/AST/DeclBase.h; sourceTree = "<group>"; tabWidth = 2; };
 		03F50AC50D416EAA00B9CF60 /* Targets.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; path = Targets.cpp; sourceTree = "<group>"; tabWidth = 2; };
+		1A14D3A60FD78A3F00DA2835 /* DeclPrinter.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = DeclPrinter.cpp; path = lib/AST/DeclPrinter.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A2193CB0F45EEB700C0713D /* ABIInfo.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = ABIInfo.h; path = lib/CodeGen/ABIInfo.h; sourceTree = "<group>"; tabWidth = 2; };
 		1A2193CC0F45EEB700C0713D /* Mangle.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = Mangle.cpp; path = lib/CodeGen/Mangle.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A2193CD0F45EEB700C0713D /* Mangle.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = Mangle.h; path = lib/CodeGen/Mangle.h; sourceTree = "<group>"; tabWidth = 2; };
+		1A2A54A40FD1DD1C00F4CE45 /* AnalysisConsumer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = AnalysisConsumer.cpp; path = lib/Frontend/AnalysisConsumer.cpp; sourceTree = "<group>"; };
+		1A2A54A50FD1DD1C00F4CE45 /* ASTConsumers.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = ASTConsumers.cpp; path = lib/Frontend/ASTConsumers.cpp; sourceTree = "<group>"; };
+		1A2A54A60FD1DD1C00F4CE45 /* Backend.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = Backend.cpp; path = lib/Frontend/Backend.cpp; sourceTree = "<group>"; };
+		1A2A54A70FD1DD1C00F4CE45 /* CacheTokens.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = CacheTokens.cpp; path = lib/Frontend/CacheTokens.cpp; sourceTree = "<group>"; };
+		1A2A54A80FD1DD1C00F4CE45 /* DependencyFile.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = DependencyFile.cpp; path = lib/Frontend/DependencyFile.cpp; sourceTree = "<group>"; };
+		1A2A54A90FD1DD1C00F4CE45 /* DiagChecker.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = DiagChecker.cpp; path = lib/Frontend/DiagChecker.cpp; sourceTree = "<group>"; };
+		1A2A54AA0FD1DD1C00F4CE45 /* DocumentXML.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = DocumentXML.cpp; path = lib/Frontend/DocumentXML.cpp; sourceTree = "<group>"; };
+		1A2A54AB0FD1DD1C00F4CE45 /* GeneratePCH.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = GeneratePCH.cpp; path = lib/Frontend/GeneratePCH.cpp; sourceTree = "<group>"; };
+		1A2A54AC0FD1DD1C00F4CE45 /* HTMLPrint.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = HTMLPrint.cpp; path = lib/Frontend/HTMLPrint.cpp; sourceTree = "<group>"; };
+		1A2A54AD0FD1DD1C00F4CE45 /* PrintParserCallbacks.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = PrintParserCallbacks.cpp; path = lib/Frontend/PrintParserCallbacks.cpp; sourceTree = "<group>"; };
+		1A2A54AE0FD1DD1C00F4CE45 /* PrintPreprocessedOutput.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = PrintPreprocessedOutput.cpp; path = lib/Frontend/PrintPreprocessedOutput.cpp; sourceTree = "<group>"; };
+		1A2A54AF0FD1DD1C00F4CE45 /* RewriteBlocks.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteBlocks.cpp; path = lib/Frontend/RewriteBlocks.cpp; sourceTree = "<group>"; };
+		1A2A54B00FD1DD1C00F4CE45 /* RewriteMacros.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteMacros.cpp; path = lib/Frontend/RewriteMacros.cpp; sourceTree = "<group>"; };
+		1A2A54B10FD1DD1C00F4CE45 /* RewriteObjC.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteObjC.cpp; path = lib/Frontend/RewriteObjC.cpp; sourceTree = "<group>"; };
+		1A2A54B20FD1DD1C00F4CE45 /* RewriteTest.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteTest.cpp; path = lib/Frontend/RewriteTest.cpp; sourceTree = "<group>"; };
+		1A2A54B30FD1DD1C00F4CE45 /* StmtXML.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = StmtXML.cpp; path = lib/Frontend/StmtXML.cpp; sourceTree = "<group>"; };
+		1A2A54B40FD1DD1C00F4CE45 /* Warnings.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = Warnings.cpp; path = lib/Frontend/Warnings.cpp; sourceTree = "<group>"; };
 		1A30A9E80B93A4C800201A91 /* ExprCXX.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = ExprCXX.h; path = clang/AST/ExprCXX.h; sourceTree = "<group>"; tabWidth = 2; };
 		1A32C17E0E1C87AD00A6B483 /* ExprConstant.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = ExprConstant.cpp; path = lib/AST/ExprConstant.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A376A2C0D4AED9B002A1C52 /* CGExprConstant.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGExprConstant.cpp; path = lib/CodeGen/CGExprConstant.cpp; sourceTree = "<group>"; tabWidth = 2; };
+		1A410F840FBCE51100351440 /* SemaTemplateInstantiateExpr.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = SemaTemplateInstantiateExpr.cpp; path = lib/Sema/SemaTemplateInstantiateExpr.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A471AB40F437BC500753CE8 /* CGBlocks.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGBlocks.cpp; path = lib/CodeGen/CGBlocks.cpp; sourceTree = "<group>"; tabWidth = 2; };
+		1A5119C30FBDF71000A1FF22 /* SemaTemplateInstantiateStmt.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = SemaTemplateInstantiateStmt.cpp; path = lib/Sema/SemaTemplateInstantiateStmt.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A5D5E570E5E81010023C059 /* CGCXX.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGCXX.cpp; path = lib/CodeGen/CGCXX.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A649E1D0F9599D9005B965E /* CGBlocks.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = CGBlocks.h; path = lib/CodeGen/CGBlocks.h; sourceTree = "<group>"; };
 		1A649E1E0F9599DA005B965E /* CGCXX.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = CGCXX.h; path = lib/CodeGen/CGCXX.h; sourceTree = "<group>"; };
-		1A68BC110D0CADDD001A28C8 /* PPCBuiltins.def */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = text; name = PPCBuiltins.def; path = clang/AST/PPCBuiltins.def; sourceTree = "<group>"; tabWidth = 2; };
-		1A68BC120D0CADDD001A28C8 /* TargetBuiltins.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = TargetBuiltins.h; path = clang/AST/TargetBuiltins.h; sourceTree = "<group>"; tabWidth = 2; };
-		1A68BC130D0CADDD001A28C8 /* X86Builtins.def */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = text; name = X86Builtins.def; path = clang/AST/X86Builtins.def; sourceTree = "<group>"; tabWidth = 2; };
+		1A6FE7080FD6F85800E00CA9 /* CGCXXTemp.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGCXXTemp.cpp; path = lib/CodeGen/CGCXXTemp.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1A7019E90F79BC1100FEC4D1 /* DiagnosticAnalysisKinds.td */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = DiagnosticAnalysisKinds.td; sourceTree = "<group>"; };
 		1A7019EA0F79BC1100FEC4D1 /* DiagnosticASTKinds.td */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = DiagnosticASTKinds.td; sourceTree = "<group>"; };
 		1A7019EB0F79BC1100FEC4D1 /* DiagnosticCommonKinds.td */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = DiagnosticCommonKinds.td; sourceTree = "<group>"; };
@@ -345,7 +366,6 @@
 		1ABC36930C7A4BDC006DB0AB /* CGBuiltin.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGBuiltin.cpp; path = lib/CodeGen/CGBuiltin.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1ADF47AE0F782C3200E48A8A /* SemaTemplateInstantiateDecl.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = SemaTemplateInstantiateDecl.cpp; path = lib/Sema/SemaTemplateInstantiateDecl.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		1AFEF4050F8A6B2300476F2B /* clang-cc.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = "clang-cc.cpp"; path = "tools/clang-cc/clang-cc.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		1AFEF4060F8A6B2300476F2B /* clang-cc.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = "clang-cc.h"; path = "tools/clang-cc/clang-cc.h"; sourceTree = "<group>"; tabWidth = 2; };
 		3507E4C10E27FE2D00FB7B57 /* CheckObjCInstMethSignature.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = CheckObjCInstMethSignature.cpp; path = lib/Analysis/CheckObjCInstMethSignature.cpp; sourceTree = "<group>"; };
 		352246E10F5C6BE000D0D279 /* HTMLDiagnostics.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = HTMLDiagnostics.cpp; path = lib/Frontend/HTMLDiagnostics.cpp; sourceTree = "<group>"; };
 		352246E20F5C6BE000D0D279 /* InitHeaderSearch.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = InitHeaderSearch.cpp; path = lib/Frontend/InitHeaderSearch.cpp; sourceTree = "<group>"; };
@@ -367,7 +387,6 @@
 		3537AA0D0ECD08A4008F7CDC /* PreprocessorLexer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = PreprocessorLexer.cpp; sourceTree = "<group>"; };
 		3538FDB60ED24A2C005EC283 /* DeclarationName.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = DeclarationName.h; path = clang/AST/DeclarationName.h; sourceTree = "<group>"; tabWidth = 2; };
 		3538FDB70ED24A4E005EC283 /* DeclarationName.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = DeclarationName.cpp; path = lib/AST/DeclarationName.cpp; sourceTree = "<group>"; };
-		353959D30EE5F88A00E82461 /* AstGuard.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = AstGuard.h; path = lib/Parse/AstGuard.h; sourceTree = "<group>"; tabWidth = 2; };
 		353959D40EE5F88A00E82461 /* ParseTemplate.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = ParseTemplate.cpp; path = lib/Parse/ParseTemplate.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		3547129D0C88881300B3E1D5 /* PrettyPrinter.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = PrettyPrinter.h; path = clang/AST/PrettyPrinter.h; sourceTree = "<group>"; tabWidth = 2; };
 		35475B1F0E79973F0000BFE4 /* CGCall.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGCall.cpp; path = lib/CodeGen/CGCall.cpp; sourceTree = "<group>"; tabWidth = 2; };
@@ -466,6 +485,7 @@
 		90FB99DE0F98FB1D008F9415 /* DeclContextInternals.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = DeclContextInternals.h; path = clang/AST/DeclContextInternals.h; sourceTree = "<group>"; };
 		90FB99DF0F98FB1D008F9415 /* DeclVisitor.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = DeclVisitor.h; path = clang/AST/DeclVisitor.h; sourceTree = "<group>"; };
 		90FB99E00F98FB1D008F9415 /* ExternalASTSource.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ExternalASTSource.h; path = clang/AST/ExternalASTSource.h; sourceTree = "<group>"; };
+		BDF87CF60FD746F300BBF872 /* SemaTemplateDeduction.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = SemaTemplateDeduction.cpp; path = lib/Sema/SemaTemplateDeduction.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DE01DA480B12ADA300AC22CE /* PPCallbacks.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = PPCallbacks.h; sourceTree = "<group>"; };
 		DE06756B0C051CFE00EBBFD8 /* ParseExprCXX.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = ParseExprCXX.cpp; path = lib/Parse/ParseExprCXX.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DE06B73D0A8307640050E87E /* LangOptions.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; path = LangOptions.h; sourceTree = "<group>"; tabWidth = 2; };
@@ -498,6 +518,12 @@
 		DE3461260AFE68BE00DBC861 /* MinimalAction.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = MinimalAction.cpp; path = lib/Parse/MinimalAction.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DE34621C0AFEB19B00DBC861 /* StmtPrinter.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = StmtPrinter.cpp; path = lib/AST/StmtPrinter.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DE3464210B03040900DBC861 /* Type.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = Type.h; path = clang/AST/Type.h; sourceTree = "<group>"; tabWidth = 2; };
+		DE37251C0FE4818000CF2CC2 /* Builtins.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Builtins.h; sourceTree = "<group>"; };
+		DE37252A0FE4818F00CF2CC2 /* Builtins.def */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = Builtins.def; sourceTree = "<group>"; };
+		DE37252D0FE481AD00CF2CC2 /* Builtins.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Builtins.cpp; sourceTree = "<group>"; };
+		DE3725310FE4822800CF2CC2 /* TargetBuiltins.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = TargetBuiltins.h; sourceTree = "<group>"; };
+		DE3725320FE4826C00CF2CC2 /* BuiltinsX86.def */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = BuiltinsX86.def; sourceTree = "<group>"; };
+		DE3725330FE4827200CF2CC2 /* BuiltinsPPC.def */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = BuiltinsPPC.def; sourceTree = "<group>"; };
 		DE38CD4E0D794CF900A273B6 /* CGObjCRuntime.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = CGObjCRuntime.h; path = lib/CodeGen/CGObjCRuntime.h; sourceTree = "<group>"; tabWidth = 2; };
 		DE38CD4F0D794D0100A273B6 /* CGObjCGNU.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CGObjCGNU.cpp; path = lib/CodeGen/CGObjCGNU.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DE38CF260D8C9E6C00A273B6 /* DeclObjC.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = DeclObjC.cpp; path = lib/AST/DeclObjC.cpp; sourceTree = "<group>"; tabWidth = 2; };
@@ -572,7 +598,7 @@
 		DEAEE98A0A5A2B970045101B /* MultipleIncludeOpt.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = MultipleIncludeOpt.h; sourceTree = "<group>"; };
 		DEAEED4A0A5AF89A0045101B /* NOTES.txt */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = text; path = NOTES.txt; sourceTree = "<group>"; };
 		DEB076C90F3A221200F5A2BE /* DeclTemplate.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = DeclTemplate.h; path = clang/AST/DeclTemplate.h; sourceTree = "<group>"; tabWidth = 2; };
-		DEB076CE0F3A222200F5A2BE /* DeclTemplate.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = DeclTemplate.cpp; path = lib/AST/DeclTemplate.cpp; sourceTree = "<group>"; };
+		DEB076CE0F3A222200F5A2BE /* DeclTemplate.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = DeclTemplate.cpp; path = lib/AST/DeclTemplate.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DEB077930F44F96000F5A2BE /* TokenConcatenation.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = TokenConcatenation.h; sourceTree = "<group>"; };
 		DEB077980F44F97800F5A2BE /* TokenConcatenation.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = TokenConcatenation.cpp; sourceTree = "<group>"; };
 		DEB07AC70F4A427E00F5A2BE /* SemaAttr.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = SemaAttr.cpp; path = lib/Sema/SemaAttr.cpp; sourceTree = "<group>"; tabWidth = 2; };
@@ -582,7 +608,7 @@
 		DEC8D9900A9433CD00353FCA /* Decl.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = Decl.h; path = clang/AST/Decl.h; sourceTree = "<group>"; tabWidth = 2; };
 		DEC8D9A30A94346E00353FCA /* AST.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = AST.h; path = clang/AST/AST.h; sourceTree = "<group>"; tabWidth = 2; };
 		DECAB0CF0DB3C84200E13CCB /* RewriteRope.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteRope.cpp; path = lib/Rewrite/RewriteRope.cpp; sourceTree = "<group>"; };
-		DECB6D640F9AE26600F5FBC7 /* JumpDiagnostics.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = JumpDiagnostics.cpp; path = lib/Sema/JumpDiagnostics.cpp; sourceTree = "<group>"; };
+		DECB6D640F9AE26600F5FBC7 /* JumpDiagnostics.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = JumpDiagnostics.cpp; path = lib/Sema/JumpDiagnostics.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DECB6F030F9D939A00F5FBC7 /* InitPreprocessor.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = InitPreprocessor.h; path = clang/Frontend/InitPreprocessor.h; sourceTree = "<group>"; };
 		DECB6F060F9D93A800F5FBC7 /* InitPreprocessor.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = InitPreprocessor.cpp; path = lib/Frontend/InitPreprocessor.cpp; sourceTree = "<group>"; };
 		DECB734E0FA3ED8400F5FBC7 /* StmtObjC.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = StmtObjC.h; path = clang/AST/StmtObjC.h; sourceTree = "<group>"; };
@@ -594,9 +620,6 @@
 		DECB78540FA58F5500F5FBC7 /* AccessSpecifier.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AccessSpecifier.h; path = clang/Parse/AccessSpecifier.h; sourceTree = "<group>"; };
 		DED626C80AE0C065001E80A4 /* TargetInfo.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; path = TargetInfo.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DED62ABA0AE2EDF1001E80A4 /* Decl.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = Decl.cpp; path = lib/AST/Decl.cpp; sourceTree = "<group>"; tabWidth = 2; usesTabs = 0; };
-		DED676D00B6C786700AAD4A3 /* Builtins.def */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = text; name = Builtins.def; path = clang/AST/Builtins.def; sourceTree = "<group>"; tabWidth = 2; };
-		DED676F90B6C797B00AAD4A3 /* Builtins.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = Builtins.h; path = clang/AST/Builtins.h; sourceTree = "<group>"; tabWidth = 2; };
-		DED677C80B6C854100AAD4A3 /* Builtins.cpp */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = Builtins.cpp; path = lib/AST/Builtins.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DED7D7310A524295003AD0FB /* Diagnostic.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; path = Diagnostic.h; sourceTree = "<group>"; tabWidth = 2; };
 		DED7D7330A524295003AD0FB /* FileManager.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; path = FileManager.h; sourceTree = "<group>"; tabWidth = 2; };
 		DED7D7350A524295003AD0FB /* SourceLocation.h */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 2; lastKnownFileType = sourcecode.c.h; path = SourceLocation.h; sourceTree = "<group>"; tabWidth = 2; };
@@ -622,22 +645,6 @@
 		DEDFE5270F63A9230035BD10 /* DeclNodes.def */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = text; name = DeclNodes.def; path = clang/AST/DeclNodes.def; sourceTree = "<group>"; tabWidth = 2; };
 		DEDFE5CB0F7206CC0035BD10 /* NestedNameSpecifier.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = NestedNameSpecifier.h; path = clang/AST/NestedNameSpecifier.h; sourceTree = "<group>"; };
 		DEDFE5CE0F7206E40035BD10 /* NestedNameSpecifier.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = NestedNameSpecifier.cpp; path = lib/AST/NestedNameSpecifier.cpp; sourceTree = "<group>"; };
-		DEDFE6220F7B3B180035BD10 /* Warnings.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = Warnings.cpp; path = "tools/clang-cc/Warnings.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6240F7B3B180035BD10 /* RewriteTest.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteTest.cpp; path = "tools/clang-cc/RewriteTest.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6250F7B3B180035BD10 /* DependencyFile.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = DependencyFile.cpp; path = "tools/clang-cc/DependencyFile.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6260F7B3B180035BD10 /* HTMLPrint.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = HTMLPrint.cpp; path = "tools/clang-cc/HTMLPrint.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6270F7B3B180035BD10 /* Backend.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = Backend.cpp; path = "tools/clang-cc/Backend.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6280F7B3B180035BD10 /* PrintParserCallbacks.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = PrintParserCallbacks.cpp; path = "tools/clang-cc/PrintParserCallbacks.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6290F7B3B180035BD10 /* RewriteBlocks.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteBlocks.cpp; path = "tools/clang-cc/RewriteBlocks.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE62C0F7B3B180035BD10 /* Analyses.def */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = text; name = Analyses.def; path = "tools/clang-cc/Analyses.def"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE62D0F7B3B180035BD10 /* AnalysisConsumer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = AnalysisConsumer.cpp; path = "tools/clang-cc/AnalysisConsumer.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE62E0F7B3B180035BD10 /* ASTConsumers.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = ASTConsumers.cpp; path = "tools/clang-cc/ASTConsumers.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE62F0F7B3B180035BD10 /* RewriteObjC.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteObjC.cpp; path = "tools/clang-cc/RewriteObjC.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6300F7B3B180035BD10 /* PrintPreprocessedOutput.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = PrintPreprocessedOutput.cpp; path = "tools/clang-cc/PrintPreprocessedOutput.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6310F7B3B180035BD10 /* RewriteMacros.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = RewriteMacros.cpp; path = "tools/clang-cc/RewriteMacros.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6320F7B3B180035BD10 /* DiagChecker.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = DiagChecker.cpp; path = "tools/clang-cc/DiagChecker.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6330F7B3B180035BD10 /* CacheTokens.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = CacheTokens.cpp; path = "tools/clang-cc/CacheTokens.cpp"; sourceTree = "<group>"; tabWidth = 2; };
-		DEDFE6340F7B3B180035BD10 /* ASTConsumers.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.c.h; name = ASTConsumers.h; path = "tools/clang-cc/ASTConsumers.h"; sourceTree = "<group>"; tabWidth = 2; };
 		DEDFE6450F7B3B4E0035BD10 /* driver.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = driver.cpp; path = tools/driver/driver.cpp; sourceTree = "<group>"; };
 		DEDFE6480F7B3B830035BD10 /* Types.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = Types.cpp; path = lib/Driver/Types.cpp; sourceTree = "<group>"; };
 		DEDFE6490F7B3B830035BD10 /* Tools.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = Tools.h; path = lib/Driver/Tools.h; sourceTree = "<group>"; };
@@ -687,12 +694,11 @@
 		DEF165220F8D46980098507F /* Util.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = Util.h; path = clang/Driver/Util.h; sourceTree = "<group>"; };
 		DEF165230F8D46980098507F /* Phases.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = Phases.h; path = clang/Driver/Phases.h; sourceTree = "<group>"; };
 		DEF165240F8D46980098507F /* DriverDiagnostic.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = DriverDiagnostic.h; path = clang/Driver/DriverDiagnostic.h; sourceTree = "<group>"; };
-		DEF165700F8FB34D0098507F /* PCHWriter.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = PCHWriter.cpp; path = lib/Frontend/PCHWriter.cpp; sourceTree = "<group>"; };
-		DEF165740F8FB3510098507F /* PCHReader.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = PCHReader.cpp; path = lib/Frontend/PCHReader.cpp; sourceTree = "<group>"; };
+		DEF165700F8FB34D0098507F /* PCHWriter.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = PCHWriter.cpp; path = lib/Frontend/PCHWriter.cpp; sourceTree = "<group>"; tabWidth = 2; };
+		DEF165740F8FB3510098507F /* PCHReader.cpp */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; name = PCHReader.cpp; path = lib/Frontend/PCHReader.cpp; sourceTree = "<group>"; tabWidth = 2; };
 		DEF165780F8FB3690098507F /* PCHWriter.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = PCHWriter.h; path = clang/Frontend/PCHWriter.h; sourceTree = "<group>"; };
 		DEF1657B0F8FB36E0098507F /* PCHReader.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = PCHReader.h; path = clang/Frontend/PCHReader.h; sourceTree = "<group>"; };
 		DEF1657E0F8FB3730098507F /* PCHBitCodes.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = PCHBitCodes.h; path = clang/Frontend/PCHBitCodes.h; sourceTree = "<group>"; };
-		DEF1658F0F8FB3FC0098507F /* GeneratePCH.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = GeneratePCH.cpp; path = "tools/clang-cc/GeneratePCH.cpp"; sourceTree = "<group>"; };
 		DEF1683F0F9548DC0098507F /* FixItRewriter.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = FixItRewriter.cpp; path = lib/Frontend/FixItRewriter.cpp; sourceTree = "<group>"; };
 		DEF168620F9549250098507F /* FixItRewriter.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = FixItRewriter.h; path = clang/Frontend/FixItRewriter.h; sourceTree = "<group>"; };
 		DEF169220F9645960098507F /* FrontendDiagnostic.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = FrontendDiagnostic.h; path = clang/Frontend/FrontendDiagnostic.h; sourceTree = "<group>"; };
@@ -811,8 +817,17 @@
 		352246E00F5C6BC000D0D279 /* Frontend */ = {
 			isa = PBXGroup;
 			children = (
+				1A2A54A40FD1DD1C00F4CE45 /* AnalysisConsumer.cpp */,
+				1A2A54A50FD1DD1C00F4CE45 /* ASTConsumers.cpp */,
+				1A2A54A60FD1DD1C00F4CE45 /* Backend.cpp */,
+				1A2A54A70FD1DD1C00F4CE45 /* CacheTokens.cpp */,
+				1A2A54A80FD1DD1C00F4CE45 /* DependencyFile.cpp */,
+				1A2A54A90FD1DD1C00F4CE45 /* DiagChecker.cpp */,
+				1A2A54AA0FD1DD1C00F4CE45 /* DocumentXML.cpp */,
 				DEF1683F0F9548DC0098507F /* FixItRewriter.cpp */,
+				1A2A54AB0FD1DD1C00F4CE45 /* GeneratePCH.cpp */,
 				352246E10F5C6BE000D0D279 /* HTMLDiagnostics.cpp */,
+				1A2A54AC0FD1DD1C00F4CE45 /* HTMLPrint.cpp */,
 				352246E20F5C6BE000D0D279 /* InitHeaderSearch.cpp */,
 				DECB6F060F9D93A800F5FBC7 /* InitPreprocessor.cpp */,
 				352246E30F5C6BE000D0D279 /* ManagerRegistry.cpp */,
@@ -823,8 +838,16 @@
 				DECB77F60FA5850200F5FBC7 /* PCHWriterDecl.cpp */,
 				DECB78160FA5882F00F5FBC7 /* PCHWriterStmt.cpp */,
 				352246E40F5C6BE000D0D279 /* PlistDiagnostics.cpp */,
+				1A2A54AD0FD1DD1C00F4CE45 /* PrintParserCallbacks.cpp */,
+				1A2A54AE0FD1DD1C00F4CE45 /* PrintPreprocessedOutput.cpp */,
 				352246E50F5C6BE000D0D279 /* TextDiagnosticBuffer.cpp */,
 				352246E60F5C6BE000D0D279 /* TextDiagnosticPrinter.cpp */,
+				1A2A54AF0FD1DD1C00F4CE45 /* RewriteBlocks.cpp */,
+				1A2A54B00FD1DD1C00F4CE45 /* RewriteMacros.cpp */,
+				1A2A54B10FD1DD1C00F4CE45 /* RewriteObjC.cpp */,
+				1A2A54B20FD1DD1C00F4CE45 /* RewriteTest.cpp */,
+				1A2A54B30FD1DD1C00F4CE45 /* StmtXML.cpp */,
+				1A2A54B40FD1DD1C00F4CE45 /* Warnings.cpp */,
 			);
 			name = Frontend;
 			sourceTree = "<group>";
@@ -964,7 +987,6 @@
 		DE1F22600A7D8C9B00FBF588 /* Parse */ = {
 			isa = PBXGroup;
 			children = (
-				353959D30EE5F88A00E82461 /* AstGuard.h */,
 				84D9A8870C1A57E100AC7ABC /* AttributeList.cpp */,
 				DE17336D0B068DC20080B521 /* DeclSpec.cpp */,
 				DE3B90DE0EAC5EF200D01046 /* ExtensionRAIIObject.h */,
@@ -1041,8 +1063,11 @@
 				35585DBF0EAFBC4500D0A97A /* SemaOverload.h */,
 				DE67E70C0C020ECA00F66BC5 /* SemaStmt.cpp */,
 				3591853E0EFB1088000039AF /* SemaTemplate.cpp */,
+				BDF87CF60FD746F300BBF872 /* SemaTemplateDeduction.cpp */,
 				35544B8B0F5C803200D92AA9 /* SemaTemplateInstantiate.cpp */,
 				1ADF47AE0F782C3200E48A8A /* SemaTemplateInstantiateDecl.cpp */,
+				1A410F840FBCE51100351440 /* SemaTemplateInstantiateExpr.cpp */,
+				1A5119C30FBDF71000A1FF22 /* SemaTemplateInstantiateStmt.cpp */,
 				DE67E70A0C020EC500F66BC5 /* SemaType.cpp */,
 			);
 			name = Sema;
@@ -1071,6 +1096,7 @@
 				35475B220E7997680000BFE4 /* CGCall.h */,
 				1A5D5E570E5E81010023C059 /* CGCXX.cpp */,
 				1A649E1E0F9599DA005B965E /* CGCXX.h */,
+				1A6FE7080FD6F85800E00CA9 /* CGCXXTemp.cpp */,
 				35A3E7000DD3874400757F74 /* CGDebugInfo.cpp */,
 				35A3E7010DD3874400757F74 /* CGDebugInfo.h */,
 				DE4264FB0C113592005A861D /* CGDecl.cpp */,
@@ -1116,13 +1142,9 @@
 				DE75ED280B044DC90020CF81 /* ASTContext.h */,
 				DEA09A6E0F31756F000C2258 /* ASTDiagnostic.h */,
 				1A72BEAC0D641E9400B085E9 /* Attr.h */,
-				DED676D00B6C786700AAD4A3 /* Builtins.def */,
-				DED676F90B6C797B00AAD4A3 /* Builtins.h */,
 				90FB99DE0F98FB1D008F9415 /* DeclContextInternals.h */,
 				90FB99DF0F98FB1D008F9415 /* DeclVisitor.h */,
 				90FB99E00F98FB1D008F9415 /* ExternalASTSource.h */,
-				1A68BC110D0CADDD001A28C8 /* PPCBuiltins.def */,
-				1A68BC130D0CADDD001A28C8 /* X86Builtins.def */,
 				DEC63B1B0C7B940600DBF169 /* CFG.h */,
 				DEC8D9900A9433CD00353FCA /* Decl.h */,
 				3538FDB60ED24A2C005EC283 /* DeclarationName.h */,
@@ -1146,7 +1168,6 @@
 				DE345C190AFC658B00DBC861 /* StmtVisitor.h */,
 				35847BE30CC7DB9000C40FFF /* StmtIterator.h */,
 				35CFFE010CA1CBDD00E6F2BE /* StmtGraphTraits.h */,
-				1A68BC120D0CADDD001A28C8 /* TargetBuiltins.h */,
 				DEDFF87F0F848CE30035BD10 /* TemplateName.h */,
 				DEF16BE40FA13A5B0098507F /* TypeNodes.def */,
 				DEF16BE50FA13A650098507F /* TypeOrdering.h */,
@@ -1161,13 +1182,13 @@
 				DE8823CA0ED0046600CBC30A /* APValue.cpp */,
 				35BB2D7E0D19954000944DB5 /* ASTConsumer.cpp */,
 				DE1732FF0B068B700080B521 /* ASTContext.cpp */,
-				DED677C80B6C854100AAD4A3 /* Builtins.cpp */,
 				DEC63B190C7B940200DBF169 /* CFG.cpp */,
 				35FE6BCE0DF6EE1F00739712 /* DeclBase.cpp */,
 				DED62ABA0AE2EDF1001E80A4 /* Decl.cpp */,
 				3538FDB70ED24A4E005EC283 /* DeclarationName.cpp */,
 				35EE48AF0E0C4CCA00715C54 /* DeclCXX.cpp */,
 				358D230A0E8BEB9D0003DDCC /* DeclGroup.cpp */,
+				1A14D3A60FD78A3F00DA2835 /* DeclPrinter.cpp */,
 				DE38CF260D8C9E6C00A273B6 /* DeclObjC.cpp */,
 				DEB076CE0F3A222200F5A2BE /* DeclTemplate.cpp */,
 				DE0FCB330A9C21F100248FD5 /* Expr.cpp */,
@@ -1207,6 +1228,10 @@
 		DED7D7300A524295003AD0FB /* Basic */ = {
 			isa = PBXGroup;
 			children = (
+				DE37251C0FE4818000CF2CC2 /* Builtins.h */,
+				DE37252A0FE4818F00CF2CC2 /* Builtins.def */,
+				DE3725330FE4827200CF2CC2 /* BuiltinsPPC.def */,
+				DE3725320FE4826C00CF2CC2 /* BuiltinsX86.def */,
 				906BF4AE0F83BA16001071FA /* ConvertUTF.h */,
 				DED7D7310A524295003AD0FB /* Diagnostic.h */,
 				DEDFFF070F959EE60035BD10 /* Diagnostic.td */,
@@ -1229,10 +1254,11 @@
 				DED7D7350A524295003AD0FB /* SourceLocation.h */,
 				DED7D7360A524295003AD0FB /* SourceManager.h */,
 				9063F2290F9E911F002F7251 /* SourceManagerInternals.h */,
+				DE3725310FE4822800CF2CC2 /* TargetBuiltins.h */,
 				DE46BF270AE0A82D00CC047C /* TargetInfo.h */,
 				9063F22A0F9E911F002F7251 /* TemplateKinds.h */,
-				DED7D7370A524295003AD0FB /* TokenKinds.def */,
 				DED7D7380A524295003AD0FB /* TokenKinds.h */,
+				DED7D7370A524295003AD0FB /* TokenKinds.def */,
 				DEB089EE0F12F1D900522C07 /* TypeTraits.h */,
 			);
 			name = Basic;
@@ -1268,6 +1294,7 @@
 		DED7D7500A5242C7003AD0FB /* Basic */ = {
 			isa = PBXGroup;
 			children = (
+				DE37252D0FE481AD00CF2CC2 /* Builtins.cpp */,
 				906BF4AF0F83BA2E001071FA /* ConvertUTF.c */,
 				DED7D75D0A5242C7003AD0FB /* Diagnostic.cpp */,
 				DED7D75E0A5242C7003AD0FB /* FileManager.cpp */,
@@ -1321,25 +1348,7 @@
 		DEDFE6200F7B3AE90035BD10 /* clang-cc */ = {
 			isa = PBXGroup;
 			children = (
-				DEDFE62C0F7B3B180035BD10 /* Analyses.def */,
-				DEDFE62D0F7B3B180035BD10 /* AnalysisConsumer.cpp */,
-				DEDFE6340F7B3B180035BD10 /* ASTConsumers.h */,
-				DEDFE62E0F7B3B180035BD10 /* ASTConsumers.cpp */,
-				DEDFE6270F7B3B180035BD10 /* Backend.cpp */,
-				DEDFE6330F7B3B180035BD10 /* CacheTokens.cpp */,
-				DEDFE6250F7B3B180035BD10 /* DependencyFile.cpp */,
-				DEDFE6320F7B3B180035BD10 /* DiagChecker.cpp */,
-				DEDFE6260F7B3B180035BD10 /* HTMLPrint.cpp */,
-				DEF1658F0F8FB3FC0098507F /* GeneratePCH.cpp */,
-				DEDFE6280F7B3B180035BD10 /* PrintParserCallbacks.cpp */,
-				DEDFE6300F7B3B180035BD10 /* PrintPreprocessedOutput.cpp */,
-				DEDFE6290F7B3B180035BD10 /* RewriteBlocks.cpp */,
-				DEDFE6310F7B3B180035BD10 /* RewriteMacros.cpp */,
-				DEDFE62F0F7B3B180035BD10 /* RewriteObjC.cpp */,
-				DEDFE6240F7B3B180035BD10 /* RewriteTest.cpp */,
-				DEDFE6220F7B3B180035BD10 /* Warnings.cpp */,
 				1AFEF4050F8A6B2300476F2B /* clang-cc.cpp */,
-				1AFEF4060F8A6B2300476F2B /* clang-cc.h */,
 			);
 			name = "clang-cc";
 			sourceTree = "<group>";
@@ -1513,7 +1522,6 @@
 				DE75EDF10B06880E0020CF81 /* Type.cpp in Sources */,
 				DE1733000B068B700080B521 /* ASTContext.cpp in Sources */,
 				DE17336E0B068DC20080B521 /* DeclSpec.cpp in Sources */,
-				DED677C90B6C854100AAD4A3 /* Builtins.cpp in Sources */,
 				1A869AA80BA21ABA008DA07A /* LiteralSupport.cpp in Sources */,
 				DE67E70B0C020EC500F66BC5 /* SemaType.cpp in Sources */,
 				DE67E70D0C020ECA00F66BC5 /* SemaStmt.cpp in Sources */,
@@ -1635,20 +1643,6 @@
 				35544B8C0F5C803200D92AA9 /* SemaTemplateInstantiate.cpp in Sources */,
 				DEDFE5CF0F7206E40035BD10 /* NestedNameSpecifier.cpp in Sources */,
 				1ADF47AF0F782C3200E48A8A /* SemaTemplateInstantiateDecl.cpp in Sources */,
-				DEDFE6350F7B3B180035BD10 /* Warnings.cpp in Sources */,
-				DEDFE6370F7B3B180035BD10 /* RewriteTest.cpp in Sources */,
-				DEDFE6380F7B3B180035BD10 /* DependencyFile.cpp in Sources */,
-				DEDFE6390F7B3B180035BD10 /* HTMLPrint.cpp in Sources */,
-				DEDFE63A0F7B3B180035BD10 /* Backend.cpp in Sources */,
-				DEDFE63B0F7B3B180035BD10 /* PrintParserCallbacks.cpp in Sources */,
-				DEDFE63C0F7B3B180035BD10 /* RewriteBlocks.cpp in Sources */,
-				DEDFE63E0F7B3B180035BD10 /* AnalysisConsumer.cpp in Sources */,
-				DEDFE63F0F7B3B180035BD10 /* ASTConsumers.cpp in Sources */,
-				DEDFE6400F7B3B180035BD10 /* RewriteObjC.cpp in Sources */,
-				DEDFE6410F7B3B180035BD10 /* PrintPreprocessedOutput.cpp in Sources */,
-				DEDFE6420F7B3B180035BD10 /* RewriteMacros.cpp in Sources */,
-				DEDFE6430F7B3B180035BD10 /* DiagChecker.cpp in Sources */,
-				DEDFE6440F7B3B180035BD10 /* CacheTokens.cpp in Sources */,
 				DEDFE6460F7B3B4E0035BD10 /* driver.cpp in Sources */,
 				DEDFE65A0F7B3B830035BD10 /* Types.cpp in Sources */,
 				DEDFE65B0F7B3B830035BD10 /* Tools.cpp in Sources */,
@@ -1671,7 +1665,6 @@
 				1AFEF4070F8A6B2300476F2B /* clang-cc.cpp in Sources */,
 				DEF165710F8FB34D0098507F /* PCHWriter.cpp in Sources */,
 				DEF165750F8FB3510098507F /* PCHReader.cpp in Sources */,
-				DEF165900F8FB3FC0098507F /* GeneratePCH.cpp in Sources */,
 				DEF168400F9548DC0098507F /* FixItRewriter.cpp in Sources */,
 				DECB6D650F9AE26600F5FBC7 /* JumpDiagnostics.cpp in Sources */,
 				DECB6F070F9D93A800F5FBC7 /* InitPreprocessor.cpp in Sources */,
@@ -1679,6 +1672,29 @@
 				DECB77790FA579B000F5FBC7 /* PCHReaderDecl.cpp in Sources */,
 				DECB77F70FA5850200F5FBC7 /* PCHWriterDecl.cpp in Sources */,
 				DECB78170FA5882F00F5FBC7 /* PCHWriterStmt.cpp in Sources */,
+				1A410F850FBCE51100351440 /* SemaTemplateInstantiateExpr.cpp in Sources */,
+				1A5119C40FBDF71000A1FF22 /* SemaTemplateInstantiateStmt.cpp in Sources */,
+				1A2A54B50FD1DD1C00F4CE45 /* AnalysisConsumer.cpp in Sources */,
+				1A2A54B60FD1DD1C00F4CE45 /* ASTConsumers.cpp in Sources */,
+				1A2A54B70FD1DD1C00F4CE45 /* Backend.cpp in Sources */,
+				1A2A54B80FD1DD1C00F4CE45 /* CacheTokens.cpp in Sources */,
+				1A2A54B90FD1DD1C00F4CE45 /* DependencyFile.cpp in Sources */,
+				1A2A54BA0FD1DD1C00F4CE45 /* DiagChecker.cpp in Sources */,
+				1A2A54BB0FD1DD1C00F4CE45 /* DocumentXML.cpp in Sources */,
+				1A2A54BC0FD1DD1C00F4CE45 /* GeneratePCH.cpp in Sources */,
+				1A2A54BD0FD1DD1C00F4CE45 /* HTMLPrint.cpp in Sources */,
+				1A2A54BE0FD1DD1C00F4CE45 /* PrintParserCallbacks.cpp in Sources */,
+				1A2A54BF0FD1DD1C00F4CE45 /* PrintPreprocessedOutput.cpp in Sources */,
+				1A2A54C00FD1DD1C00F4CE45 /* RewriteBlocks.cpp in Sources */,
+				1A2A54C10FD1DD1C00F4CE45 /* RewriteMacros.cpp in Sources */,
+				1A2A54C20FD1DD1C00F4CE45 /* RewriteObjC.cpp in Sources */,
+				1A2A54C30FD1DD1C00F4CE45 /* RewriteTest.cpp in Sources */,
+				1A2A54C40FD1DD1C00F4CE45 /* StmtXML.cpp in Sources */,
+				1A2A54C50FD1DD1C00F4CE45 /* Warnings.cpp in Sources */,
+				1A6FE7090FD6F85800E00CA9 /* CGCXXTemp.cpp in Sources */,
+				BDF87CF70FD746F300BBF872 /* SemaTemplateDeduction.cpp in Sources */,
+				1A14D3A70FD78A3F00DA2835 /* DeclPrinter.cpp in Sources */,
+				DE37252E0FE481AD00CF2CC2 /* Builtins.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

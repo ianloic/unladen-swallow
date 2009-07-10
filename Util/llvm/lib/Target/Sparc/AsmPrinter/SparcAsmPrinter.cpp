@@ -15,17 +15,18 @@
 #define DEBUG_TYPE "asm-printer"
 #include "Sparc.h"
 #include "SparcInstrInfo.h"
+#include "SparcTargetMachine.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
+#include "llvm/MDNode.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/Target/TargetAsmInfo.h"
-#include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/Statistic.h"
@@ -47,11 +48,11 @@ namespace {
     ///
     typedef std::map<const Value *, unsigned> ValueMapTy;
     ValueMapTy NumberForBB;
+    unsigned BBNumber;
   public:
     explicit SparcAsmPrinter(raw_ostream &O, TargetMachine &TM,
-                             const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                             bool V)
-      : AsmPrinter(O, TM, T, OL, V) {}
+                             const TargetAsmInfo *T, bool V)
+      : AsmPrinter(O, TM, T, V), BBNumber(0) {}
 
     virtual const char *getPassName() const {
       return "Sparc Assembly Printer";
@@ -83,10 +84,10 @@ namespace {
 ///
 FunctionPass *llvm::createSparcCodePrinterPass(raw_ostream &o,
                                                TargetMachine &tm,
-                                               CodeGenOpt::Level OptLevel,
                                                bool verbose) {
-  return new SparcAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
+  return new SparcAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
 }
+
 
 /// runOnMachineFunction - This uses the printInstruction()
 /// method to print assembly for each instruction.
@@ -101,14 +102,13 @@ bool SparcAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   // BBNumber is used here so that a given Printer will never give two
   // BBs the same name. (If you have a better way, please let me know!)
-  static unsigned BBNumber = 0;
 
   O << "\n\n";
 
   // Print out the label for the function.
   const Function *F = MF.getFunction();
   SwitchToSection(TAI->SectionForGlobal(F));
-  EmitAlignment(4, F);
+  EmitAlignment(MF.getAlignment(), F);
   O << "\t.globl\t" << CurrentFnName << '\n';
 
   printVisibility(CurrentFnName, F->getVisibility());
@@ -185,7 +185,7 @@ void SparcAsmPrinter::printOperand(const MachineInstr *MI, int opNum) {
       << MO.getIndex();
     break;
   default:
-    O << "<unknown operand type>"; abort (); break;
+    LLVM_UNREACHABLE("<unknown operand type>");
   }
   if (CloseParen) O << ")";
 }
@@ -253,7 +253,9 @@ void SparcAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   O << "\n\n";
   std::string name = Mang->getValueName(GVar);
   Constant *C = GVar->getInitializer();
-  unsigned Size = TD->getTypePaddedSize(C->getType());
+  if (isa<MDNode>(C) || isa<MDString>(C))
+    return;
+  unsigned Size = TD->getTypeAllocSize(C->getType());
   unsigned Align = TD->getPreferredAlignment(GVar);
 
   printVisibility(name, GVar->getVisibility());
@@ -297,16 +299,13 @@ void SparcAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
    case GlobalValue::InternalLinkage:
     break;
    case GlobalValue::GhostLinkage:
-    cerr << "Should not have any unmaterialized functions!\n";
-    abort();
+    LLVM_UNREACHABLE("Should not have any unmaterialized functions!");
    case GlobalValue::DLLImportLinkage:
-    cerr << "DLLImport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLImport linkage is not supported by this target!");
    case GlobalValue::DLLExportLinkage:
-    cerr << "DLLExport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLExport linkage is not supported by this target!");
    default:
-    assert(0 && "Unknown linkage type!");
+    LLVM_UNREACHABLE("Unknown linkage type!");
   }
 
   EmitAlignment(Align, GVar);
@@ -353,3 +352,14 @@ bool SparcAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 
   return false;
 }
+
+namespace {
+  static struct Register {
+    Register() {
+      SparcTargetMachine::registerAsmPrinter(createSparcCodePrinterPass);
+    }
+  } Registrator;
+}
+
+// Force static initialization.
+extern "C" void LLVMInitializeSparcAsmPrinter() { }

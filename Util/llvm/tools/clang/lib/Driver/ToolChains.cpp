@@ -27,11 +27,10 @@ using namespace clang::driver::toolchains;
 
 /// Darwin_X86 - Darwin tool chain for i386 and x86_64.
 
-Darwin_X86::Darwin_X86(const HostInfo &Host, const char *Arch, 
-                       const char *Platform, const char *OS, 
+Darwin_X86::Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple,
                        const unsigned (&_DarwinVersion)[3],
                        const unsigned (&_GCCVersion)[3])
-  : ToolChain(Host, Arch, Platform, OS) {
+  : ToolChain(Host, Triple) {
   DarwinVersion[0] = _DarwinVersion[0];
   DarwinVersion[1] = _DarwinVersion[1];
   DarwinVersion[2] = _DarwinVersion[2];
@@ -309,9 +308,8 @@ const char *Darwin_X86::GetForcedPicModel() const {
 /// all subcommands; this relies on gcc translating the majority of
 /// command line options.
 
-Generic_GCC::Generic_GCC(const HostInfo &Host, const char *Arch, 
-                         const char *Platform, const char *OS)
-  : ToolChain(Host, Arch, Platform, OS) 
+Generic_GCC::Generic_GCC(const HostInfo &Host, const llvm::Triple& Triple)
+  : ToolChain(Host, Triple) 
 {
   std::string Path(getHost().getDriver().Dir);
   Path += "/../libexec";
@@ -386,11 +384,40 @@ DerivedArgList *Generic_GCC::TranslateArgs(InputArgList &Args) const {
   return new DerivedArgList(Args, true);
 }
 
+/// OpenBSD - OpenBSD tool chain which can call as(1) and ld(1) directly.
+
+OpenBSD::OpenBSD(const HostInfo &Host, const llvm::Triple& Triple)
+  : Generic_GCC(Host, Triple) {
+  getFilePaths().push_back(getHost().getDriver().Dir + "/../lib");
+  getFilePaths().push_back("/usr/lib");
+}
+
+Tool &OpenBSD::SelectTool(const Compilation &C, const JobAction &JA) const {
+  Action::ActionClass Key;
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+    Key = Action::AnalyzeJobClass;
+  else
+    Key = JA.getKind();
+
+  Tool *&T = Tools[Key];
+  if (!T) {
+    switch (Key) {
+    case Action::AssembleJobClass:
+      T = new tools::openbsd::Assemble(*this); break;
+    case Action::LinkJobClass:
+      T = new tools::openbsd::Link(*this); break;
+    default:
+      T = &Generic_GCC::SelectTool(C, JA);
+    }
+  }
+
+  return *T;
+}
+
 /// FreeBSD - FreeBSD tool chain which can call as(1) and ld(1) directly.
 
-FreeBSD::FreeBSD(const HostInfo &Host, const char *Arch, 
-                 const char *Platform, const char *OS, bool Lib32)
-  : Generic_GCC(Host, Arch, Platform, OS) {
+FreeBSD::FreeBSD(const HostInfo &Host, const llvm::Triple& Triple, bool Lib32)
+  : Generic_GCC(Host, Triple) {
   if (Lib32) {
     getFilePaths().push_back(getHost().getDriver().Dir + "/../lib32");
     getFilePaths().push_back("/usr/lib32");
@@ -422,11 +449,26 @@ Tool &FreeBSD::SelectTool(const Compilation &C, const JobAction &JA) const {
   return *T;
 }
 
+/// Linux toolchain (very bare-bones at the moment).
+
+Linux::Linux(const HostInfo &Host, const llvm::Triple& Triple)
+  : Generic_GCC(Host, Triple) {
+  getFilePaths().push_back(getHost().getDriver().Dir + "/../lib/clang/1.0/");
+  getFilePaths().push_back("/lib/");
+  getFilePaths().push_back("/usr/lib/");
+  // FIXME: Figure out some way to get gcc's libdir
+  // (e.g. /usr/lib/gcc/i486-linux-gnu/4.3/ for Ubuntu 32-bit); we need
+  // crtbegin.o/crtend.o/etc., and want static versions of various
+  // libraries. If we had our own crtbegin.o/crtend.o/etc, we could probably
+  // get away with using shared versions in /usr/lib, though.
+  // We could fall back to the approach we used for includes (a massive
+  // list), but that's messy at best.
+}
+
 /// DragonFly - DragonFly tool chain which can call as(1) and ld(1) directly.
 
-DragonFly::DragonFly(const HostInfo &Host, const char *Arch, 
-                 const char *Platform, const char *OS)
-  : Generic_GCC(Host, Arch, Platform, OS) {
+DragonFly::DragonFly(const HostInfo &Host, const llvm::Triple& Triple)
+  : Generic_GCC(Host, Triple) {
 
   // Path mangling to find libexec
   std::string Path(getHost().getDriver().Dir);

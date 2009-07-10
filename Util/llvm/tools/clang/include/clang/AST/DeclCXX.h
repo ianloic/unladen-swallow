@@ -27,6 +27,62 @@ class CXXConversionDecl;
 class CXXMethodDecl;
 class ClassTemplateSpecializationDecl;
 
+/// \brief Represents any kind of function declaration, whether it is a 
+/// concrete function or a function template.
+class AnyFunctionDecl {
+  NamedDecl *Function;
+  
+  AnyFunctionDecl(NamedDecl *ND) : Function(ND) { }
+  
+public:
+  AnyFunctionDecl(FunctionDecl *FD) : Function(FD) { }
+  AnyFunctionDecl(FunctionTemplateDecl *FTD);
+  
+  /// \brief Implicily converts any function or function template into a 
+  /// named declaration.
+  operator NamedDecl *() const { return Function; }
+  
+  /// \brief Retrieve the underlying function or function template.
+  NamedDecl *get() const { return Function; }
+  
+  static AnyFunctionDecl getFromNamedDecl(NamedDecl *ND) { 
+    return AnyFunctionDecl(ND);
+  }
+};
+  
+} // end namespace clang
+
+namespace llvm {
+  /// Implement simplify_type for AnyFunctionDecl, so that we can dyn_cast from 
+  /// AnyFunctionDecl to any function or function template declaration.
+  template<> struct simplify_type<const ::clang::AnyFunctionDecl> {
+    typedef ::clang::NamedDecl* SimpleType;
+    static SimpleType getSimplifiedValue(const ::clang::AnyFunctionDecl &Val) {
+      return Val;
+    }
+  };
+  template<> struct simplify_type< ::clang::AnyFunctionDecl>
+  : public simplify_type<const ::clang::AnyFunctionDecl> {};
+  
+  // Provide PointerLikeTypeTraits for non-cvr pointers.
+  template<>
+  class PointerLikeTypeTraits< ::clang::AnyFunctionDecl> {
+  public:
+    static inline void *getAsVoidPointer(::clang::AnyFunctionDecl F) {
+      return F.get(); 
+    }
+    static inline ::clang::AnyFunctionDecl getFromVoidPointer(void *P) {
+      return ::clang::AnyFunctionDecl::getFromNamedDecl(
+                                      static_cast< ::clang::NamedDecl*>(P));
+    }
+    
+    enum { NumLowBitsAvailable = 2 };
+  };
+  
+} // end namespace llvm
+
+namespace clang {
+  
 /// OverloadedFunctionDecl - An instance of this class represents a
 /// set of overloaded functions. All of the functions have the same
 /// name and occur within the same scope.
@@ -43,58 +99,32 @@ protected:
 
   /// Functions - the set of overloaded functions contained in this
   /// overload set.
-  llvm::SmallVector<FunctionDecl *, 4> Functions;
+  llvm::SmallVector<AnyFunctionDecl, 4> Functions;
 
   // FIXME: This should go away when we stop using
   // OverloadedFunctionDecl to store conversions in CXXRecordDecl.
   friend class CXXRecordDecl;
 
 public:
-  typedef llvm::SmallVector<FunctionDecl *, 4>::iterator function_iterator;
-  typedef llvm::SmallVector<FunctionDecl *, 4>::const_iterator
+  typedef llvm::SmallVector<AnyFunctionDecl, 4>::iterator function_iterator;
+  typedef llvm::SmallVector<AnyFunctionDecl, 4>::const_iterator
     function_const_iterator;
 
   static OverloadedFunctionDecl *Create(ASTContext &C, DeclContext *DC,
                                         DeclarationName N);
 
-  /// addOverload - Add an overloaded function FD to this set of
-  /// overloaded functions.
-  void addOverload(FunctionDecl *FD) {
-    assert((FD->getDeclName() == getDeclName() ||
-            isa<CXXConversionDecl>(FD) || isa<CXXConstructorDecl>(FD)) &&
-           "Overloaded functions must have the same name");
-    Functions.push_back(FD);
-
-    // An overloaded function declaration always has the location of
-    // the most-recently-added function declaration.
-    if (FD->getLocation().isValid())
-      this->setLocation(FD->getLocation());
-  }
+  /// \brief Add a new overloaded function or function template to the set
+  /// of overloaded function templates.
+  void addOverload(AnyFunctionDecl F);
 
   function_iterator function_begin() { return Functions.begin(); }
   function_iterator function_end() { return Functions.end(); }
   function_const_iterator function_begin() const { return Functions.begin(); }
   function_const_iterator function_end() const { return Functions.end(); }
 
-  /// getNumFunctions - the number of overloaded functions stored in
+  /// \brief Returns the number of overloaded functions stored in
   /// this set.
-  unsigned getNumFunctions() const { return Functions.size(); }
-
-  /// getFunction - retrieve the ith function in the overload set.
-  const FunctionDecl *getFunction(unsigned i) const {
-    assert(i < getNumFunctions() && "Illegal function #");
-    return Functions[i];
-  }
-  FunctionDecl *getFunction(unsigned i) {
-    assert(i < getNumFunctions() && "Illegal function #");
-    return Functions[i];
-  }
-
-  // getDeclContext - Get the context of these overloaded functions.
-  DeclContext *getDeclContext() {
-    assert(getNumFunctions() > 0 && "Context of an empty overload set");
-    return getFunction(0)->getDeclContext();
-  }
+  unsigned size() const { return Functions.size(); }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { 
@@ -102,6 +132,56 @@ public:
   }
   static bool classof(const OverloadedFunctionDecl *D) { return true; }
 };
+  
+/// \brief Provides uniform iteration syntax for an overload set, function, 
+/// or function template.
+class OverloadIterator {
+  /// \brief An overloaded function set, function declaration, or
+  /// function template declaration.
+  NamedDecl *D;
+  
+  /// \brief If the declaration is an overloaded function set, this is the
+  /// iterator pointing to the current position within that overloaded
+  /// function set.
+  OverloadedFunctionDecl::function_iterator Iter;
+  
+public:
+  typedef AnyFunctionDecl value_type;
+  typedef value_type      reference;
+  typedef NamedDecl      *pointer;
+  typedef int             difference_type;
+  typedef std::forward_iterator_tag iterator_category;
+  
+  OverloadIterator() : D(0) { }
+  
+  OverloadIterator(FunctionDecl *FD) : D(FD) { }
+  OverloadIterator(FunctionTemplateDecl *FTD) 
+    : D(reinterpret_cast<NamedDecl*>(FTD)) { }
+  OverloadIterator(OverloadedFunctionDecl *Ovl) 
+    : D(Ovl), Iter(Ovl->function_begin()) { }
+  
+  reference operator*() const;
+  
+  pointer operator->() const { return (**this).get(); }
+  
+  OverloadIterator &operator++();
+  
+  OverloadIterator operator++(int) {
+    OverloadIterator Temp(*this);
+    ++(*this);
+    return Temp;
+  }
+  
+  bool Equals(const OverloadIterator &Other) const;
+};
+  
+inline bool operator==(const OverloadIterator &X, const OverloadIterator &Y) {
+  return X.Equals(Y);
+}
+
+inline bool operator!=(const OverloadIterator &X, const OverloadIterator &Y) {
+  return !(X == Y);
+}
 
 /// CXXBaseSpecifier - A base class of a C++ class.
 ///
@@ -236,15 +316,16 @@ class CXXRecordDecl : public RecordDecl {
   /// CXXConversionDecl.
   OverloadedFunctionDecl Conversions;
 
-  /// \brief The template or declaration that is declaration is
-  /// instantiated from.
+  /// \brief The template or declaration that this declaration
+  /// describes or was instantiated from, respectively.
   /// 
   /// For non-templates, this value will be NULL. For record
   /// declarations that describe a class template, this will be a
   /// pointer to a ClassTemplateDecl. For member
   /// classes of class template specializations, this will be the
   /// RecordDecl from which the member class was instantiated.
-  llvm::PointerUnion<ClassTemplateDecl*, CXXRecordDecl*>TemplateOrInstantiation;
+  llvm::PointerUnion<ClassTemplateDecl*, CXXRecordDecl*>
+    TemplateOrInstantiation;
 
 protected:
   CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
@@ -263,10 +344,14 @@ public:
 
   static CXXRecordDecl *Create(ASTContext &C, TagKind TK, DeclContext *DC,
                                SourceLocation L, IdentifierInfo *Id,
-                               CXXRecordDecl* PrevDecl=0);
+                               CXXRecordDecl* PrevDecl=0,
+                               bool DelayTypeCreation = false);
+  
+  virtual void Destroy(ASTContext& C);
   
   /// setBases - Sets the base classes of this struct or class.
-  void setBases(CXXBaseSpecifier const * const *Bases, unsigned NumBases);
+  void setBases(ASTContext &C,
+                CXXBaseSpecifier const * const *Bases, unsigned NumBases);
 
   /// getNumBases - Retrieves the number of base classes of this
   /// class.
@@ -280,6 +365,10 @@ public:
   /// hasConstCopyConstructor - Determines whether this class has a
   /// copy constructor that accepts a const-qualified argument.
   bool hasConstCopyConstructor(ASTContext &Context) const;
+
+  /// getCopyConstructor - Returns the copy constructor for this class
+  CXXConstructorDecl *getCopyConstructor(ASTContext &Context, 
+                                         unsigned TypeQuals) const;
 
   /// hasConstCopyAssignment - Determines whether this class has a
   /// copy assignment operator that accepts a const-qualified argument.
@@ -408,7 +497,7 @@ public:
   /// the CXXRecordDecl X<T>::A. When a complete definition of
   /// X<int>::A is required, it will be instantiated from the
   /// declaration returned by getInstantiatedFromMemberClass().
-  CXXRecordDecl *getInstantiatedFromMemberClass() {
+  CXXRecordDecl *getInstantiatedFromMemberClass() const {
     return TemplateOrInstantiation.dyn_cast<CXXRecordDecl*>();
   }
 
@@ -429,7 +518,7 @@ public:
   /// CXXRecordDecl that from a ClassTemplateDecl, while
   /// getDescribedClassTemplate() retrieves the ClassTemplateDecl from
   /// a CXXRecordDecl.
-  ClassTemplateDecl *getDescribedClassTemplate() {
+  ClassTemplateDecl *getDescribedClassTemplate() const {
     return TemplateOrInstantiation.dyn_cast<ClassTemplateDecl*>();
   }
 
@@ -437,6 +526,21 @@ public:
     TemplateOrInstantiation = Template;
   }
 
+  /// getDefaultConstructor - Returns the default constructor for this class
+  CXXConstructorDecl *getDefaultConstructor(ASTContext &Context);
+  
+  /// getDestructor - Returns the destructor decl for this class.
+  const CXXDestructorDecl *getDestructor(ASTContext &Context);
+  
+  /// isLocalClass - If the class is a local class [class.local], returns
+  /// the enclosing function declaration.
+  const FunctionDecl *isLocalClass() const {
+    if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(getDeclContext()))
+      return RD->isLocalClass();
+    
+    return dyn_cast<FunctionDecl>(getDeclContext());
+  }
+  
   /// viewInheritance - Renders and displays an inheritance diagram
   /// for this C++ class and all of its base classes (transitively) using
   /// GraphViz.
@@ -444,7 +548,8 @@ public:
 
   static bool classof(const Decl *D) { 
     return D->getKind() == CXXRecord || 
-           D->getKind() == ClassTemplateSpecialization; 
+           D->getKind() == ClassTemplateSpecialization ||
+           D->getKind() == ClassTemplatePartialSpecialization; 
   }
   static bool classof(const CXXRecordDecl *D) { return true; }
   static bool classof(const ClassTemplateSpecializationDecl *D) { 
@@ -471,10 +576,19 @@ public:
   bool isStatic() const { return getStorageClass() == Static; }
   bool isInstance() const { return !isStatic(); }
 
-  bool isOutOfLineDefinition() const {
-    return getLexicalDeclContext() != getDeclContext();
+  bool isVirtual() const { 
+    return isVirtualAsWritten() ||
+      (begin_overridden_methods() != end_overridden_methods());
   }
 
+  /// 
+  void addOverriddenMethod(const CXXMethodDecl *MD);
+  
+  typedef const CXXMethodDecl ** method_iterator;
+  
+  method_iterator begin_overridden_methods() const;
+  method_iterator end_overridden_methods() const;
+  
   /// getParent - Returns the parent of this method declaration, which
   /// is the class in which this method is defined.
   const CXXRecordDecl *getParent() const { 
@@ -516,6 +630,7 @@ public:
 /// public:
 ///   B(A& a) : A(a), f(3.14159) { }
 /// };
+/// @endcode
 class CXXBaseOrMemberInitializer {
   /// BaseOrMember - This points to the entity being initialized,
   /// which is either a base class (a Type) or a non-static data
@@ -526,15 +641,20 @@ class CXXBaseOrMemberInitializer {
   /// Args - The arguments used to initialize the base or member.
   Expr **Args;
   unsigned NumArgs;
+  
+  /// IdLoc - Location of the id in ctor-initializer list.
+  SourceLocation IdLoc;
 
 public:
   /// CXXBaseOrMemberInitializer - Creates a new base-class initializer.
   explicit 
-  CXXBaseOrMemberInitializer(QualType BaseType, Expr **Args, unsigned NumArgs);
+  CXXBaseOrMemberInitializer(QualType BaseType, Expr **Args, unsigned NumArgs,
+                             SourceLocation L);
 
   /// CXXBaseOrMemberInitializer - Creates a new member initializer.
   explicit 
-  CXXBaseOrMemberInitializer(FieldDecl *Member, Expr **Args, unsigned NumArgs);
+  CXXBaseOrMemberInitializer(FieldDecl *Member, Expr **Args, unsigned NumArgs,
+                             SourceLocation L);
 
   /// ~CXXBaseOrMemberInitializer - Destroy the base or member initializer.
   ~CXXBaseOrMemberInitializer();
@@ -547,6 +667,10 @@ public:
   /// arguments.
   typedef Expr * const * arg_const_iterator;
 
+  /// getBaseOrMember - get the generic 'member' representing either the field
+  /// or a base class.
+  void* getBaseOrMember() const { return reinterpret_cast<void*>(BaseOrMember); }
+  
   /// isBaseInitializer - Returns true when this initializer is
   /// initializing a base class.
   bool isBaseInitializer() const { return (BaseOrMember & 0x1) != 0; }
@@ -587,6 +711,8 @@ public:
       return 0;
   }
 
+  SourceLocation getSourceLocation() const { return IdLoc; }
+  
   /// begin() - Retrieve an iterator to the first initializer argument.
   arg_iterator       begin()       { return Args; }
   /// begin() - Retrieve an iterator to the first initializer argument.
@@ -622,17 +748,23 @@ class CXXConstructorDecl : public CXXMethodDecl {
   /// explicitly defaulted (i.e., defined with " = default") will have
   /// @c !Implicit && ImplicitlyDefined.
   bool ImplicitlyDefined : 1;
-
-  /// FIXME: Add support for base and member initializers.
-
+  
+  /// Support for base and member initializers.
+  /// BaseOrMemberInitializers - The arguments used to initialize the base 
+  /// or member.
+  CXXBaseOrMemberInitializer **BaseOrMemberInitializers;
+  unsigned NumBaseOrMemberInitializers;
+  
   CXXConstructorDecl(CXXRecordDecl *RD, SourceLocation L,
                      DeclarationName N, QualType T,
                      bool isExplicit, bool isInline, bool isImplicitlyDeclared)
     : CXXMethodDecl(CXXConstructor, RD, L, N, T, false, isInline),
-      Explicit(isExplicit), ImplicitlyDefined(false) { 
+      Explicit(isExplicit), ImplicitlyDefined(false),
+      BaseOrMemberInitializers(0), NumBaseOrMemberInitializers(0) { 
     setImplicit(isImplicitlyDeclared);
   }
-
+  virtual void Destroy(ASTContext& C);
+  
 public:
   static CXXConstructorDecl *Create(ASTContext &C, CXXRecordDecl *RD,
                                     SourceLocation L, DeclarationName N,
@@ -648,7 +780,8 @@ public:
   /// already been defined.
   bool isImplicitlyDefined(ASTContext &C) const { 
     assert(isThisDeclarationADefinition() && 
-           "Can only get the implicit-definition flag once the constructor has been defined");
+           "Can only get the implicit-definition flag once the "
+           "constructor has been defined");
     return ImplicitlyDefined; 
   }
 
@@ -656,10 +789,41 @@ public:
   /// implicitly defined or not.
   void setImplicitlyDefined(bool ID) { 
     assert(isThisDeclarationADefinition() && 
-           "Can only set the implicit-definition flag once the constructor has been defined");
+           "Can only set the implicit-definition flag once the constructor "
+           "has been defined");
     ImplicitlyDefined = ID; 
   }
-
+  
+  /// init_iterator - Iterates through the member/base initializer list.
+  typedef CXXBaseOrMemberInitializer **init_iterator;
+  
+  /// init_const_iterator - Iterates through the memberbase initializer list.
+  typedef CXXBaseOrMemberInitializer * const * init_const_iterator;
+  
+  /// init_begin() - Retrieve an iterator to the first initializer.
+  init_iterator       init_begin()       { return BaseOrMemberInitializers; }
+  /// begin() - Retrieve an iterator to the first initializer.
+  init_const_iterator init_begin() const { return BaseOrMemberInitializers; }
+  
+  /// init_end() - Retrieve an iterator past the last initializer.
+  init_iterator       init_end()       { 
+    return BaseOrMemberInitializers + NumBaseOrMemberInitializers; 
+  }
+  /// end() - Retrieve an iterator past the last initializer.
+  init_const_iterator init_end() const { 
+    return BaseOrMemberInitializers + NumBaseOrMemberInitializers; 
+  }
+  
+  /// getNumArgs - Determine the number of arguments used to
+  /// initialize the member or base.
+  unsigned getNumBaseOrMemberInitializers() const { 
+      return NumBaseOrMemberInitializers; 
+  }
+  
+  void setBaseOrMemberInitializers(ASTContext &C,
+                                   CXXBaseOrMemberInitializer **Initializers,
+                                   unsigned NumInitializers);
+  
   /// isDefaultConstructor - Whether this constructor is a default
   /// constructor (C++ [class.ctor]p5), which can be used to
   /// default-initialize a class of this type.
@@ -860,6 +1024,14 @@ class UsingDirectiveDecl : public NamedDecl {
   /// SourceLocation - Location of 'namespace' token.
   SourceLocation NamespaceLoc;
 
+  /// \brief The source range that covers the nested-name-specifier
+  /// preceding the namespace name.
+  SourceRange QualifierRange;
+
+  /// \brief The nested-name-specifier that precedes the namespace
+  /// name, if any.
+  NestedNameSpecifier *Qualifier;
+
   /// IdentLoc - Location of nominated namespace-name identifier.
   // FIXME: We don't store location of scope specifier.
   SourceLocation IdentLoc;
@@ -880,16 +1052,27 @@ class UsingDirectiveDecl : public NamedDecl {
 
   UsingDirectiveDecl(DeclContext *DC, SourceLocation L,
                      SourceLocation NamespcLoc,
+                     SourceRange QualifierRange,
+                     NestedNameSpecifier *Qualifier,
                      SourceLocation IdentLoc,
                      NamespaceDecl *Nominated,
                      DeclContext *CommonAncestor)
     : NamedDecl(Decl::UsingDirective, DC, L, getName()),
-      NamespaceLoc(NamespcLoc), IdentLoc(IdentLoc),
+      NamespaceLoc(NamespcLoc), QualifierRange(QualifierRange), 
+      Qualifier(Qualifier), IdentLoc(IdentLoc), 
       NominatedNamespace(Nominated? Nominated->getOriginalNamespace() : 0),
       CommonAncestor(CommonAncestor) {
   }
 
 public:
+  /// \brief Retrieve the source range of the nested-name-specifier
+  /// that qualifiers the namespace name.
+  SourceRange getQualifierRange() const { return QualifierRange; }
+
+  /// \brief Retrieve the nested-name-specifier that qualifies the
+  /// name of the namespace.
+  NestedNameSpecifier *getQualifier() const { return Qualifier; }
+
   /// getNominatedNamespace - Returns namespace nominated by using-directive.
   NamespaceDecl *getNominatedNamespace() { return NominatedNamespace; }
 
@@ -911,6 +1094,8 @@ public:
   static UsingDirectiveDecl *Create(ASTContext &C, DeclContext *DC,
                                     SourceLocation L,
                                     SourceLocation NamespaceLoc,
+                                    SourceRange QualifierRange,
+                                    NestedNameSpecifier *Qualifier,
                                     SourceLocation IdentLoc,
                                     NamespaceDecl *Nominated,
                                     DeclContext *CommonAncestor);
@@ -931,9 +1116,16 @@ public:
 /// @endcode
 class NamespaceAliasDecl : public NamedDecl {
   SourceLocation AliasLoc;
+
+  /// \brief The source range that covers the nested-name-specifier
+  /// preceding the namespace name.
+  SourceRange QualifierRange;
+
+  /// \brief The nested-name-specifier that precedes the namespace
+  /// name, if any.
+  NestedNameSpecifier *Qualifier;
   
   /// IdentLoc - Location of namespace identifier.
-  /// FIXME: We don't store location of scope specifier.
   SourceLocation IdentLoc;
   
   /// Namespace - The Decl that this alias points to. Can either be a 
@@ -942,11 +1134,21 @@ class NamespaceAliasDecl : public NamedDecl {
   
   NamespaceAliasDecl(DeclContext *DC, SourceLocation L, 
                      SourceLocation AliasLoc, IdentifierInfo *Alias, 
+                     SourceRange QualifierRange,
+                     NestedNameSpecifier *Qualifier,
                      SourceLocation IdentLoc, NamedDecl *Namespace)
     : NamedDecl(Decl::NamespaceAlias, DC, L, Alias), AliasLoc(AliasLoc), 
+      QualifierRange(QualifierRange), Qualifier(Qualifier),
       IdentLoc(IdentLoc), Namespace(Namespace) { }
 
 public:
+  /// \brief Retrieve the source range of the nested-name-specifier
+  /// that qualifiers the namespace name.
+  SourceRange getQualifierRange() const { return QualifierRange; }
+
+  /// \brief Retrieve the nested-name-specifier that qualifies the
+  /// name of the namespace.
+  NestedNameSpecifier *getQualifier() const { return Qualifier; }
 
   NamespaceDecl *getNamespace() {
     if (NamespaceAliasDecl *AD = dyn_cast<NamespaceAliasDecl>(Namespace))
@@ -958,10 +1160,16 @@ public:
   const NamespaceDecl *getNamespace() const {
     return const_cast<NamespaceAliasDecl*>(this)->getNamespace();
   }
-  
+
+  /// \brief Retrieve the namespace that this alias refers to, which
+  /// may either be a NamespaceDecl or a NamespaceAliasDecl.
+  NamedDecl *getAliasedNamespace() const { return Namespace; }
+
   static NamespaceAliasDecl *Create(ASTContext &C, DeclContext *DC, 
                                     SourceLocation L, SourceLocation AliasLoc, 
                                     IdentifierInfo *Alias, 
+                                    SourceRange QualifierRange,
+                                    NestedNameSpecifier *Qualifier,
                                     SourceLocation IdentLoc, 
                                     NamedDecl *Namespace);
   
@@ -969,6 +1177,69 @@ public:
     return D->getKind() == Decl::NamespaceAlias;
   }
   static bool classof(const NamespaceAliasDecl *D) { return true; }
+};
+
+/// UsingDecl - Represents a C++ using-declaration. For example:
+///    using someNameSpace::someIdentifier;
+class UsingDecl : public NamedDecl {
+
+  /// \brief The source range that covers the nested-name-specifier
+  /// preceding the declaration name.
+  SourceRange NestedNameRange;
+  /// \brief The source location of the target declaration name.
+  SourceLocation TargetNameLocation;
+  /// \brief The source location of the "using" location itself.
+  SourceLocation UsingLocation;
+  /// \brief Target declaration.
+  NamedDecl* TargetDecl;
+  /// \brief Target declaration.
+  NestedNameSpecifier* TargetNestedNameDecl;
+
+  // Had 'typename' keyword.
+  bool IsTypeName;
+
+  UsingDecl(DeclContext *DC, SourceLocation L, SourceRange NNR,
+            SourceLocation TargetNL, SourceLocation UL, NamedDecl* Target,
+            NestedNameSpecifier* TargetNNS, bool IsTypeNameArg)
+    : NamedDecl(Decl::Using, DC, L, Target->getDeclName()),
+      NestedNameRange(NNR), TargetNameLocation(TargetNL),
+      UsingLocation(UL), TargetDecl(Target),
+      TargetNestedNameDecl(TargetNNS), IsTypeName(IsTypeNameArg) { 
+    this->IdentifierNamespace = TargetDecl->getIdentifierNamespace();
+  }
+
+public:
+  /// \brief Returns the source range that covers the nested-name-specifier
+  /// preceding the namespace name.
+  SourceRange getNestedNameRange() { return NestedNameRange; }
+  
+  /// \brief Returns the source location of the target declaration name.
+  SourceLocation getTargetNameLocation() { return TargetNameLocation; }
+  
+  /// \brief Returns the source location of the "using" location itself.
+  SourceLocation getUsingLocation() { return UsingLocation; }
+  
+  /// \brief getTargetDecl - Returns target specified by using-decl.
+  NamedDecl *getTargetDecl() { return TargetDecl; }
+  const NamedDecl *getTargetDecl() const { return TargetDecl; }
+  
+  /// \brief Get target nested name declaration.
+  NestedNameSpecifier* getTargetNestedNameDecl() { 
+    return TargetNestedNameDecl; 
+  }
+  
+  /// isTypeName - Return true if using decl had 'typename'.
+  bool isTypeName() const { return IsTypeName; }
+
+  static UsingDecl *Create(ASTContext &C, DeclContext *DC,
+      SourceLocation L, SourceRange NNR, SourceLocation TargetNL,
+      SourceLocation UL, NamedDecl* Target,
+      NestedNameSpecifier* TargetNNS, bool IsTypeNameArg);
+
+  static bool classof(const Decl *D) {
+    return D->getKind() == Decl::Using;
+  }
+  static bool classof(const UsingDecl *D) { return true; }
 };
   
 /// StaticAssertDecl - Represents a C++0x static_assert declaration.
@@ -998,22 +1269,6 @@ public:
     return D->getKind() == Decl::StaticAssert;
   }
   static bool classof(StaticAssertDecl *D) { return true; }
-};
-
-/// CXXTempVarDecl - Represents an implicit C++ temporary variable declaration.
-class CXXTempVarDecl : public VarDecl {
-protected:
-  CXXTempVarDecl(DeclContext *DC, QualType T) 
-    : VarDecl(CXXTempVar, DC, SourceLocation(), 0, T, None) {}
-
-public:
-  static CXXTempVarDecl *Create(ASTContext &C, DeclContext *DC,
-                                QualType T);
-  
-  static bool classof(const Decl *D) {
-    return D->getKind() == Decl::CXXTempVar;
-  }
-  static bool classof(CXXTempVarDecl *D) { return true; }
 };
 
 /// Insertion operator for diagnostics.  This allows sending AccessSpecifier's

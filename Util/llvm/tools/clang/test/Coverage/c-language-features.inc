@@ -87,6 +87,7 @@ void f4(int a0, int a1, int a2, va_list ap) {
   int t0 = a0 ? a1 : a2;
   float t1 = (float) a0;
   ipair t2 = {1, 2};
+  ipair t2a = { .second = 2 };
   int t3 = sizeof(ipair);
   ipair t4;
   t4 = (ipair) {1, 2};
@@ -137,6 +138,9 @@ void f4(int a0, int a1, int a2, va_list ap) {
   _Complex float t32_a, t32_b;
   int t32_cond;
   int t32 = __real (t32_cond ? t32_a : t32_b);
+
+  struct { int x, y; } t33, *t34, t35[12], t36(int, float);
+  float t37, *t38, t39[9], t40(double);
 }
 
 // Extended vectors

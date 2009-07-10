@@ -30,10 +30,9 @@ using namespace llvm;
 
 /// EmitCopyFromReg - Generate machine code for an CopyFromReg node or an
 /// implicit physical register output.
-void ScheduleDAGSDNodes::EmitCopyFromReg(SDNode *Node, unsigned ResNo,
-                                         bool IsClone, bool IsCloned,
-                                         unsigned SrcReg,
-                                         DenseMap<SDValue, unsigned> &VRBaseMap) {
+void ScheduleDAGSDNodes::
+EmitCopyFromReg(SDNode *Node, unsigned ResNo, bool IsClone, bool IsCloned,
+                unsigned SrcReg, DenseMap<SDValue, unsigned> &VRBaseMap) {
   unsigned VRBase = 0;
   if (TargetRegisterInfo::isVirtualRegister(SrcReg)) {
     // Just use the input register directly!
@@ -119,6 +118,7 @@ void ScheduleDAGSDNodes::EmitCopyFromReg(SDNode *Node, unsigned ResNo,
                                      DstRC, SrcRC);
 
     assert(Emitted && "Unable to issue a copy instruction!\n");
+    (void) Emitted;
   }
 
   SDValue Op(Node, ResNo);
@@ -254,6 +254,7 @@ ScheduleDAGSDNodes::AddRegisterOperand(MachineInstr *MI, SDValue Op,
       bool Emitted = TII->copyRegToReg(*BB, InsertPos, NewVReg, VReg,
                                        DstRC, SrcRC);
       assert(Emitted && "Unable to issue a copy instruction!\n");
+      (void) Emitted;
       VReg = NewVReg;
     }
   }
@@ -279,13 +280,15 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
   } else if (RegisterSDNode *R = dyn_cast<RegisterSDNode>(Op)) {
     MI->addOperand(MachineOperand::CreateReg(R->getReg(), false));
   } else if (GlobalAddressSDNode *TGA = dyn_cast<GlobalAddressSDNode>(Op)) {
-    MI->addOperand(MachineOperand::CreateGA(TGA->getGlobal(),TGA->getOffset()));
+    MI->addOperand(MachineOperand::CreateGA(TGA->getGlobal(), TGA->getOffset(),
+                                            TGA->getTargetFlags()));
   } else if (BasicBlockSDNode *BBNode = dyn_cast<BasicBlockSDNode>(Op)) {
     MI->addOperand(MachineOperand::CreateMBB(BBNode->getBasicBlock()));
   } else if (FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Op)) {
     MI->addOperand(MachineOperand::CreateFI(FI->getIndex()));
   } else if (JumpTableSDNode *JT = dyn_cast<JumpTableSDNode>(Op)) {
-    MI->addOperand(MachineOperand::CreateJTI(JT->getIndex()));
+    MI->addOperand(MachineOperand::CreateJTI(JT->getIndex(),
+                                             JT->getTargetFlags()));
   } else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(Op)) {
     int Offset = CP->getOffset();
     unsigned Align = CP->getAlignment();
@@ -295,7 +298,7 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
       Align = TM.getTargetData()->getPrefTypeAlignment(Type);
       if (Align == 0) {
         // Alignment of vector types.  FIXME!
-        Align = TM.getTargetData()->getTypePaddedSize(Type);
+        Align = TM.getTargetData()->getTypeAllocSize(Type);
       }
     }
     
@@ -304,9 +307,11 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
       Idx = ConstPool->getConstantPoolIndex(CP->getMachineCPVal(), Align);
     else
       Idx = ConstPool->getConstantPoolIndex(CP->getConstVal(), Align);
-    MI->addOperand(MachineOperand::CreateCPI(Idx, Offset));
+    MI->addOperand(MachineOperand::CreateCPI(Idx, Offset,
+                                             CP->getTargetFlags()));
   } else if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Op)) {
-    MI->addOperand(MachineOperand::CreateES(ES->getSymbol()));
+    MI->addOperand(MachineOperand::CreateES(ES->getSymbol(), 0,
+                                            ES->getTargetFlags()));
   } else {
     assert(Op.getValueType() != MVT::Other &&
            Op.getValueType() != MVT::Flag &&
@@ -333,7 +338,7 @@ getSuperRegisterRegClass(const TargetRegisterClass *TRC,
 /// EmitSubregNode - Generate machine code for subreg nodes.
 ///
 void ScheduleDAGSDNodes::EmitSubregNode(SDNode *Node, 
-                                        DenseMap<SDValue, unsigned> &VRBaseMap) {
+                                        DenseMap<SDValue, unsigned> &VRBaseMap){
   unsigned VRBase = 0;
   unsigned Opc = Node->getMachineOpcode();
   
@@ -445,6 +450,7 @@ ScheduleDAGSDNodes::EmitCopyToRegClassNode(SDNode *Node,
                                    DstRC, SrcRC);
   assert(Emitted &&
          "Unable to issue a copy instruction for a COPY_TO_REGCLASS node!\n");
+  (void) Emitted;
 
   SDValue Op(Node, 0);
   bool isNew = VRBaseMap.insert(std::make_pair(Op, NewVReg)).second;
@@ -568,6 +574,7 @@ void ScheduleDAGSDNodes::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
     bool Emitted = TII->copyRegToReg(*BB, InsertPos, DestReg, SrcReg,
                                      DstTRC, SrcTRC);
     assert(Emitted && "Unable to issue a copy instruction!\n");
+    (void) Emitted;
     break;
   }
   case ISD::CopyFromReg: {
@@ -610,7 +617,7 @@ void ScheduleDAGSDNodes::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
         for (; NumVals; --NumVals, ++i) {
           unsigned Reg = cast<RegisterSDNode>(Node->getOperand(i))->getReg();
           MI->addOperand(MachineOperand::CreateReg(Reg, true, false, false, 
-                                                   false, 0, true));
+                                                   false, false, true));
         }
         break;
       case 1:  // Use of register.

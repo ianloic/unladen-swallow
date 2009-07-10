@@ -25,17 +25,12 @@ using namespace llvm;
 ///
 FunctionPass *llvm::createX86CodePrinterPass(raw_ostream &o,
                                              X86TargetMachine &tm,
-                                             CodeGenOpt::Level OptLevel,
                                              bool verbose) {
   const X86Subtarget *Subtarget = &tm.getSubtarget<X86Subtarget>();
 
-  if (Subtarget->isFlavorIntel()) {
-    return new X86IntelAsmPrinter(o, tm, tm.getTargetAsmInfo(),
-                                  OptLevel, verbose);
-  } else {
-    return new X86ATTAsmPrinter(o, tm, tm.getTargetAsmInfo(),
-                                OptLevel, verbose);
-  }
+  if (Subtarget->isFlavorIntel())
+    return new X86IntelAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
+  return new X86ATTAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
 }
 
 namespace {
@@ -48,3 +43,6 @@ namespace {
 
 extern "C" int X86AsmPrinterForceLink;
 int X86AsmPrinterForceLink = 0;
+
+// Force static initialization.
+extern "C" void LLVMInitializeX86AsmPrinter() { }

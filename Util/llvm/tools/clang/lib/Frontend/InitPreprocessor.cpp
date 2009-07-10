@@ -23,8 +23,8 @@ namespace clang {
 // Append a #define line to Buf for Macro.  Macro should be of the form XXX,
 // in which case we emit "#define XXX 1" or "XXX=Y z W" in which case we emit
 // "#define XXX Y z W".  To get a #define with no value, use "XXX=".
-static void DefineBuiltinMacro(std::vector<char> &Buf, const char *Macro,
-                               const char *Command = "#define ") {
+static void DefineBuiltinMacro(std::vector<char> &Buf, const char *Macro) {
+  const char *Command = "#define ";
   Buf.insert(Buf.end(), Command, Command+strlen(Command));
   if (const char *Equal = strchr(Macro, '=')) {
     // Turn the = into ' '.
@@ -48,6 +48,16 @@ static void DefineBuiltinMacro(std::vector<char> &Buf, const char *Macro,
     Buf.push_back(' ');
     Buf.push_back('1');
   }
+  Buf.push_back('\n');
+}
+
+// Append a #undef line to Buf for Macro.  Macro should be of the form XXX
+// and we emit "#undef XXX".
+static void UndefineBuiltinMacro(std::vector<char> &Buf, const char *Macro) {
+  // Push "macroname".
+  const char *Command = "#undef ";
+  Buf.insert(Buf.end(), Command, Command+strlen(Command));
+  Buf.insert(Buf.end(), Macro, Macro+strlen(Macro));
   Buf.push_back('\n');
 }
 
@@ -117,15 +127,18 @@ static void AddImplicitIncludePTH(std::vector<char> &Buf, Preprocessor &PP,
 /// specified FP model.
 template <typename T>
 static T PickFP(const llvm::fltSemantics *Sem, T IEEESingleVal,
-                T IEEEDoubleVal, T X87DoubleExtendedVal, T PPCDoubleDoubleVal) {
-  if (Sem == &llvm::APFloat::IEEEsingle)
+                T IEEEDoubleVal, T X87DoubleExtendedVal, T PPCDoubleDoubleVal,
+                T IEEEQuadVal) {
+  if (Sem == (const llvm::fltSemantics*)&llvm::APFloat::IEEEsingle)
     return IEEESingleVal;
-  if (Sem == &llvm::APFloat::IEEEdouble)
+  if (Sem == (const llvm::fltSemantics*)&llvm::APFloat::IEEEdouble)
     return IEEEDoubleVal;
-  if (Sem == &llvm::APFloat::x87DoubleExtended)
+  if (Sem == (const llvm::fltSemantics*)&llvm::APFloat::x87DoubleExtended)
     return X87DoubleExtendedVal;
-  assert(Sem == &llvm::APFloat::PPCDoubleDouble);
-  return PPCDoubleDoubleVal;
+  if (Sem == (const llvm::fltSemantics*)&llvm::APFloat::PPCDoubleDouble)
+    return PPCDoubleDoubleVal;
+  assert(Sem == (const llvm::fltSemantics*)&llvm::APFloat::IEEEquad);
+  return IEEEQuadVal;
 }
 
 static void DefineFloatMacros(std::vector<char> &Buf, const char *Prefix,
@@ -133,25 +146,29 @@ static void DefineFloatMacros(std::vector<char> &Buf, const char *Prefix,
   const char *DenormMin, *Epsilon, *Max, *Min;
   DenormMin = PickFP(Sem, "1.40129846e-45F", "4.9406564584124654e-324", 
                      "3.64519953188247460253e-4951L",
-                     "4.94065645841246544176568792868221e-324L");
-  int Digits = PickFP(Sem, 6, 15, 18, 31);
+                     "4.94065645841246544176568792868221e-324L",
+                     "6.47517511943802511092443895822764655e-4966L");
+  int Digits = PickFP(Sem, 6, 15, 18, 31, 33);
   Epsilon = PickFP(Sem, "1.19209290e-7F", "2.2204460492503131e-16",
                    "1.08420217248550443401e-19L",
-                   "4.94065645841246544176568792868221e-324L");
+                   "4.94065645841246544176568792868221e-324L",
+                   "1.92592994438723585305597794258492732e-34L");
   int HasInifinity = 1, HasQuietNaN = 1;
-  int MantissaDigits = PickFP(Sem, 24, 53, 64, 106);
-  int Min10Exp = PickFP(Sem, -37, -307, -4931, -291);
-  int Max10Exp = PickFP(Sem, 38, 308, 4932, 308);
-  int MinExp = PickFP(Sem, -125, -1021, -16381, -968);
-  int MaxExp = PickFP(Sem, 128, 1024, 16384, 1024);
+  int MantissaDigits = PickFP(Sem, 24, 53, 64, 106, 113);
+  int Min10Exp = PickFP(Sem, -37, -307, -4931, -291, -4931);
+  int Max10Exp = PickFP(Sem, 38, 308, 4932, 308, 4932);
+  int MinExp = PickFP(Sem, -125, -1021, -16381, -968, -16381);
+  int MaxExp = PickFP(Sem, 128, 1024, 16384, 1024, 16384);
   Min = PickFP(Sem, "1.17549435e-38F", "2.2250738585072014e-308",
                "3.36210314311209350626e-4932L",
-               "2.00416836000897277799610805135016e-292L");
+               "2.00416836000897277799610805135016e-292L",
+               "3.36210314311209350626267781732175260e-4932L");
   Max = PickFP(Sem, "3.40282347e+38F", "1.7976931348623157e+308",
                "1.18973149535723176502e+4932L",
-               "1.79769313486231580793728971405301e+308L");
+               "1.79769313486231580793728971405301e+308L",
+               "1.18973149535723176508575932662800702e+4932L");
   
-  char MacroBuf[60];
+  char MacroBuf[100];
   sprintf(MacroBuf, "__%s_DENORM_MIN__=%s", Prefix, DenormMin);
   DefineBuiltinMacro(Buf, MacroBuf);
   sprintf(MacroBuf, "__%s_DIG__=%d", Prefix, Digits);
@@ -215,7 +232,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   DefineBuiltinMacro(Buf, "__clang__=1");  // Clang Frontend
   
   // Currently claim to be compatible with GCC 4.2.1-5621.
-  DefineBuiltinMacro(Buf, "__APPLE_CC__=5621");
   DefineBuiltinMacro(Buf, "__GNUC_MINOR__=2");
   DefineBuiltinMacro(Buf, "__GNUC_PATCHLEVEL__=1");
   DefineBuiltinMacro(Buf, "__GNUC__=4");
@@ -270,6 +286,9 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   if (LangOpts.ObjC2)
     DefineBuiltinMacro(Buf, "OBJC_NEW_PROPERTIES");
 
+  if (LangOpts.ObjCSenderDispatch)
+    DefineBuiltinMacro(Buf, "__OBJC_SENDER_AWARE_DISPATCH__");
+
   if (LangOpts.PascalStrings)
     DefineBuiltinMacro(Buf, "__PASCAL_STRINGS__");
 
@@ -290,7 +309,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   // Filter out some microsoft extensions when trying to parse in ms-compat
   // mode. 
   if (LangOpts.Microsoft) {
-    DefineBuiltinMacro(Buf, "_cdecl=__cdecl");
     DefineBuiltinMacro(Buf, "__int8=__INT8_TYPE__");
     DefineBuiltinMacro(Buf, "__int16=__INT16_TYPE__");
     DefineBuiltinMacro(Buf, "__int32=__INT32_TYPE__");
@@ -347,7 +365,7 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   sprintf(MacroBuf, "__POINTER_WIDTH__=%d", (int)TI.getPointerWidth(0));
   DefineBuiltinMacro(Buf, MacroBuf);
   
-  if (!TI.isCharSigned())
+  if (!LangOpts.CharIsSigned)
     DefineBuiltinMacro(Buf, "__CHAR_UNSIGNED__");  
 
   // Define fixed-sized integer types for stdint.h
@@ -365,7 +383,7 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   
   // 16-bit targets doesn't necessarily have a 64-bit type.
   if (TI.getLongLongWidth() == 64)
-    DefineBuiltinMacro(Buf, "__INT64_TYPE__=long long");
+    DefineType("__INT64_TYPE__", TI.getInt64Type(), Buf);
   
   // Add __builtin_va_list typedef.
   {
@@ -382,11 +400,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   // Build configuration options.  FIXME: these should be controlled by
   // command line options or something.
   DefineBuiltinMacro(Buf, "__FINITE_MATH_ONLY__=0");
-
-  if (LangOpts.Static)
-    DefineBuiltinMacro(Buf, "__STATIC__=1");
-  else
-    DefineBuiltinMacro(Buf, "__DYNAMIC__=1");
 
   if (LangOpts.GNUInline)
     DefineBuiltinMacro(Buf, "__GNUC_GNU_INLINE__=1");
@@ -408,9 +421,14 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   DefineBuiltinMacro(Buf, "__FLT_EVAL_METHOD__=0");
   DefineBuiltinMacro(Buf, "__FLT_RADIX__=2");
   sprintf(MacroBuf, "__DECIMAL_DIG__=%d",
-          PickFP(&TI.getLongDoubleFormat(), -1/*FIXME*/, 17, 21, 33));
+          PickFP(&TI.getLongDoubleFormat(), -1/*FIXME*/, 17, 21, 33, 36));
   DefineBuiltinMacro(Buf, MacroBuf);
-  
+
+  if (LangOpts.getStackProtectorMode() == LangOptions::SSPOn)
+    DefineBuiltinMacro(Buf, "__SSP__=1");
+  else if (LangOpts.getStackProtectorMode() == LangOptions::SSPReq)
+    DefineBuiltinMacro(Buf, "__SSP_ALL__=2");
+
   // Get other target #defines.
   TI.getTargetDefines(LangOpts, Buf);
 }
@@ -419,7 +437,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
 /// environment ready to process a single file. This returns true on error.
 ///
 bool InitializePreprocessor(Preprocessor &PP,
-                            const std::string &InFile,
                             const PreprocessorInitOptions& InitOpts) {
   std::vector<char> PredefineBuffer;
   
@@ -441,7 +458,7 @@ bool InitializePreprocessor(Preprocessor &PP,
   for (PreprocessorInitOptions::macro_iterator I = InitOpts.macro_begin(),
        E = InitOpts.macro_end(); I != E; ++I) {
     if (I->second)  // isUndef
-      DefineBuiltinMacro(PredefineBuffer, I->first.c_str(), "#undef ");
+      UndefineBuiltinMacro(PredefineBuffer, I->first.c_str());
     else
       DefineBuiltinMacro(PredefineBuffer, I->first.c_str());
   }
@@ -459,11 +476,7 @@ bool InitializePreprocessor(Preprocessor &PP,
       AddImplicitIncludePTH(PredefineBuffer, PP, I->first);
     else
       AddImplicitInclude(PredefineBuffer, I->first);
- }
-
-  LineDirective = "# 2 \"<built-in>\" 2 3\n";
-  PredefineBuffer.insert(PredefineBuffer.end(),
-                         LineDirective, LineDirective+strlen(LineDirective));
+  }
 
   // Null terminate PredefinedBuffer and add it.
   PredefineBuffer.push_back(0);

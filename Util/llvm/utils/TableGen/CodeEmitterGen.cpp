@@ -75,7 +75,7 @@ int CodeEmitterGen::getVariableBit(const std::string &VarName,
 } 
 
 
-void CodeEmitterGen::run(std::ostream &o) {
+void CodeEmitterGen::run(raw_ostream &o) {
   CodeGenTarget Target;
   std::vector<Record*> Insts = Records.getAllDerivedDefinitions("Instruction");
   
@@ -243,8 +243,10 @@ void CodeEmitterGen::run(std::ostream &o) {
 
   // Default case: unhandled opcode
   o << "  default:\n"
-    << "    cerr << \"Not supported instr: \" << MI << \"\\n\";\n"
-    << "    abort();\n"
+    << "    std::string msg;\n"
+    << "    raw_string_ostream Msg(msg);\n"
+    << "    Msg << \"Not supported instr: \" << MI;\n"
+    << "    llvm_report_error(Msg.str());\n"
     << "  }\n"
     << "  return Value;\n"
     << "}\n\n";

@@ -287,7 +287,9 @@ bool Parser::isCXXConditionDeclaration() {
   /// type-id:
   ///   type-specifier-seq abstract-declarator[opt]
   ///
-bool Parser::isCXXTypeId(TentativeCXXTypeIdContext Context) {
+bool Parser::isCXXTypeId(TentativeCXXTypeIdContext Context, bool &isAmbiguous) {
+  
+  isAmbiguous = false;
 
   // C++ 8.2p2:
   // The ambiguity arising from the similarity between a function-style cast and
@@ -326,16 +328,20 @@ bool Parser::isCXXTypeId(TentativeCXXTypeIdContext Context) {
   if (TPR == TPResult::Ambiguous()) {
     // We are supposed to be inside parens, so if after the abstract declarator
     // we encounter a ')' this is a type-id, otherwise it's an expression.
-    if (Context == TypeIdInParens && Tok.is(tok::r_paren))
+    if (Context == TypeIdInParens && Tok.is(tok::r_paren)) {
       TPR = TPResult::True();
+      isAmbiguous = true;
+
     // We are supposed to be inside a template argument, so if after
     // the abstract declarator we encounter a '>', '>>' (in C++0x), or
     // ',', this is a type-id. Otherwise, it's an expression.
-    else if (Context == TypeIdAsTemplateArgument &&
-             (Tok.is(tok::greater) || Tok.is(tok::comma) ||
-              (getLang().CPlusPlus0x && Tok.is(tok::greatergreater))))
+    } else if (Context == TypeIdAsTemplateArgument &&
+               (Tok.is(tok::greater) || Tok.is(tok::comma) ||
+                (getLang().CPlusPlus0x && Tok.is(tok::greatergreater)))) {
       TPR = TPResult::True();
-    else
+      isAmbiguous = true;
+
+    } else
       TPR = TPResult::False();
   }
 
@@ -537,6 +543,7 @@ Parser::TPResult Parser::TryParseDeclarator(bool mayBeAbstract,
 /// [GNU]     typeof-specifier
 /// [GNU]     '_Complex'
 /// [C++0x]   'auto'                                                [TODO]
+/// [C++0x]   'decltype' ( expression )
 ///
 ///         type-name:
 ///           class-name
@@ -649,7 +656,10 @@ Parser::TPResult Parser::isCXXDeclarationSpecifier() {
   case tok::kw___cdecl:
   case tok::kw___stdcall:
   case tok::kw___fastcall:
-    return PP.getLangOptions().Microsoft ? TPResult::True() : TPResult::False();
+  case tok::kw___w64:
+  case tok::kw___ptr64:
+  case tok::kw___forceinline:
+    return TPResult::True();
 
     // The ambiguity resides in a simple-type-specifier/typename-specifier
     // followed by a '('. The '(' could either be the start of:
@@ -686,7 +696,7 @@ Parser::TPResult Parser::isCXXDeclarationSpecifier() {
 
     return TPResult::True();
 
-    // GNU typeof support.
+  // GNU typeof support.
   case tok::kw_typeof: {
     if (NextToken().isNot(tok::l_paren))
       return TPResult::True();
@@ -706,6 +716,10 @@ Parser::TPResult Parser::isCXXDeclarationSpecifier() {
 
     return TPResult::True();
   }
+
+  // C++0x decltype support.
+  case tok::kw_decltype:
+    return TPResult::True();
 
   default:
     return TPResult::False();

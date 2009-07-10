@@ -24,6 +24,8 @@
 #include "llvm/Module.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 /// AddLiveIn - This helper function adds the specified physical register to the
@@ -39,7 +41,7 @@ static unsigned AddLiveIn(MachineFunction &MF, unsigned PReg,
 
 AlphaTargetLowering::AlphaTargetLowering(TargetMachine &TM) : TargetLowering(TM) {
   // Set up the TargetLowering object.
-  //I am having problems with shr n ubyte 1
+  //I am having problems with shr n i8 1
   setShiftAmountType(MVT::i64);
   setBooleanContents(ZeroOrOneBooleanContent);
   
@@ -181,6 +183,11 @@ const char *AlphaTargetLowering::getTargetNodeName(unsigned Opcode) const {
   }
 }
 
+/// getFunctionAlignment - Return the Log2 alignment of this function.
+unsigned AlphaTargetLowering::getFunctionAlignment(const Function *F) const {
+  return 4;
+}
+
 static SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) {
   MVT PtrVT = Op.getValueType();
   JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
@@ -222,9 +229,6 @@ static SDValue LowerFORMAL_ARGUMENTS(SDValue Op, SelectionDAG &DAG,
   std::vector<SDValue> ArgValues;
   SDValue Root = Op.getOperand(0);
   DebugLoc dl = Op.getDebugLoc();
-
-  AddLiveIn(MF, Alpha::R29, &Alpha::GPRCRegClass); //GP
-  AddLiveIn(MF, Alpha::R26, &Alpha::GPRCRegClass); //RA
 
   unsigned args_int[] = {
     Alpha::R16, Alpha::R17, Alpha::R18, Alpha::R19, Alpha::R20, Alpha::R21};
@@ -310,8 +314,7 @@ static SDValue LowerRET(SDValue Op, SelectionDAG &DAG) {
                                     SDValue());
   switch (Op.getNumOperands()) {
   default:
-    assert(0 && "Do not know how to return this many arguments!");
-    abort();
+    LLVM_UNREACHABLE("Do not know how to return this many arguments!");
   case 1: 
     break;
     //return SDValue(); // ret void is legal
@@ -363,7 +366,8 @@ static SDValue LowerRET(SDValue Op, SelectionDAG &DAG) {
 std::pair<SDValue, SDValue>
 AlphaTargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy, 
                                  bool RetSExt, bool RetZExt, bool isVarArg,
-                                 bool isInreg, unsigned CallingConv, 
+                                 bool isInreg, unsigned NumFixedArgs,
+                                 unsigned CallingConv, 
                                  bool isTailCall, SDValue Callee, 
                                  ArgListTy &Args, SelectionDAG &DAG,
                                  DebugLoc dl) {

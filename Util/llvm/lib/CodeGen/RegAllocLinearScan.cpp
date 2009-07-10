@@ -13,6 +13,7 @@
 
 #define DEBUG_TYPE "regalloc"
 #include "VirtRegMap.h"
+#include "VirtRegRewriter.h"
 #include "Spiller.h"
 #include "llvm/Function.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
@@ -39,6 +40,7 @@
 #include <queue>
 #include <memory>
 #include <cmath>
+
 using namespace llvm;
 
 STATISTIC(NumIters     , "Number of iterations performed");
@@ -54,6 +56,11 @@ NewHeuristic("new-spilling-heuristic",
 static cl::opt<bool>
 PreSplitIntervals("pre-alloc-split",
                   cl::desc("Pre-register allocation live interval splitting"),
+                  cl::init(false), cl::Hidden);
+
+static cl::opt<bool>
+NewSpillFramework("new-spill-framework",
+                  cl::desc("New spilling framework"),
                   cl::init(false), cl::Hidden);
 
 static RegisterRegAlloc
@@ -124,6 +131,8 @@ namespace {
 
     /// vrm_ - Tracks register assignments.
     VirtRegMap* vrm_;
+
+    std::auto_ptr<VirtRegRewriter> rewriter_;
 
     std::auto_ptr<Spiller> spiller_;
 
@@ -272,7 +281,8 @@ namespace {
     /// getFreePhysReg - return a free physical register for this virtual
     /// register interval if we have one, otherwise return 0.
     unsigned getFreePhysReg(LiveInterval* cur);
-    unsigned getFreePhysReg(const TargetRegisterClass *RC,
+    unsigned getFreePhysReg(LiveInterval* cur,
+                            const TargetRegisterClass *RC,
                             unsigned MaxInactiveCount,
                             SmallVector<unsigned, 256> &inactiveCounts,
                             bool SkipDGRegs);
@@ -343,38 +353,54 @@ void RALinScan::ComputeRelatedRegClasses() {
 /// different register classes or because the coalescer was overly
 /// conservative.
 unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
-  if ((cur.preference && cur.preference == Reg) || !cur.containsOneValue())
+  unsigned Preference = vrm_->getRegAllocPref(cur.reg);
+  if ((Preference && Preference == Reg) || !cur.containsOneValue())
     return Reg;
 
   VNInfo *vni = cur.begin()->valno;
-  if (!vni->def || vni->def == ~1U || vni->def == ~0U)
+  if (!vni->def || vni->isUnused() || !vni->isDefAccurate())
     return Reg;
   MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
-  unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
+  unsigned SrcReg, DstReg, SrcSubReg, DstSubReg, PhysReg;
   if (!CopyMI ||
       !tii_->isMoveInstr(*CopyMI, SrcReg, DstReg, SrcSubReg, DstSubReg))
     return Reg;
+  PhysReg = SrcReg;
   if (TargetRegisterInfo::isVirtualRegister(SrcReg)) {
     if (!vrm_->isAssignedReg(SrcReg))
       return Reg;
-    else
-      SrcReg = vrm_->getPhys(SrcReg);
+    PhysReg = vrm_->getPhys(SrcReg);
   }
-  if (Reg == SrcReg)
+  if (Reg == PhysReg)
     return Reg;
 
   const TargetRegisterClass *RC = mri_->getRegClass(cur.reg);
-  if (!RC->contains(SrcReg))
+  if (!RC->contains(PhysReg))
     return Reg;
 
   // Try to coalesce.
-  if (!li_->conflictsWithPhysRegDef(cur, *vrm_, SrcReg)) {
-    DOUT << "Coalescing: " << cur << " -> " << tri_->getName(SrcReg)
+  if (!li_->conflictsWithPhysRegDef(cur, *vrm_, PhysReg)) {
+    DOUT << "Coalescing: " << cur << " -> " << tri_->getName(PhysReg)
          << '\n';
     vrm_->clearVirt(cur.reg);
-    vrm_->assignVirt2Phys(cur.reg, SrcReg);
+    vrm_->assignVirt2Phys(cur.reg, PhysReg);
+
+    // Remove unnecessary kills since a copy does not clobber the register.
+    if (li_->hasInterval(SrcReg)) {
+      LiveInterval &SrcLI = li_->getInterval(SrcReg);
+      for (MachineRegisterInfo::reg_iterator I = mri_->reg_begin(cur.reg),
+             E = mri_->reg_end(); I != E; ++I) {
+        MachineOperand &O = I.getOperand();
+        if (!O.isUse() || !O.isKill())
+          continue;
+        MachineInstr *MI = &*I;
+        if (SrcLI.liveAt(li_->getDefIndex(li_->getInstructionIndex(MI))))
+          O.setIsKill(false);
+      }
+    }
+
     ++NumCoalesce;
-    return SrcReg;
+    return PhysReg;
   }
 
   return Reg;
@@ -404,14 +430,18 @@ bool RALinScan::runOnMachineFunction(MachineFunction &fn) {
   initRegUses();
 
   vrm_ = &getAnalysis<VirtRegMap>();
-  if (!spiller_.get()) spiller_.reset(createSpiller());
-
+  if (!rewriter_.get()) rewriter_.reset(createVirtRegRewriter());
+  
+  if (NewSpillFramework) {
+    spiller_.reset(createSpiller(mf_, li_, ls_, vrm_));
+  }
+  
   initIntervalSets();
 
   linearScan();
 
   // Rewrite spill code and update the PhysRegsUsed set.
-  spiller_->runOnMachineFunction(*mf_, *vrm_, li_);
+  rewriter_->runOnMachineFunction(*mf_, *vrm_, li_);
 
   assert(unhandled_.empty() && "Unhandled live intervals remain!");
 
@@ -424,6 +454,7 @@ bool RALinScan::runOnMachineFunction(MachineFunction &fn) {
   NextReloadMap.clear();
   DowngradedRegs.clear();
   DowngradeMap.clear();
+  spiller_.reset(0);
 
   return true;
 }
@@ -513,13 +544,17 @@ void RALinScan::linearScan()
     // Ignore splited live intervals.
     if (!isPhys && vrm_->getPreSplitReg(cur.reg))
       continue;
+
     for (LiveInterval::Ranges::const_iterator I = cur.begin(), E = cur.end();
          I != E; ++I) {
       const LiveRange &LR = *I;
       if (li_->findLiveInMBBs(LR.start, LR.end, LiveInMBBs)) {
         for (unsigned i = 0, e = LiveInMBBs.size(); i != e; ++i)
-          if (LiveInMBBs[i] != EntryMBB)
+          if (LiveInMBBs[i] != EntryMBB) {
+            assert(TargetRegisterInfo::isPhysicalRegister(Reg) &&
+                   "Adding a virtual register to livein set?");
             LiveInMBBs[i]->addLiveIn(Reg);
+          }
         LiveInMBBs.clear();
       }
     }
@@ -531,7 +566,7 @@ void RALinScan::linearScan()
   // register allocator had to spill other registers in its register class.
   if (ls_->getNumIntervals() == 0)
     return;
-  if (!vrm_->FindUnusedRegisters(tri_, li_))
+  if (!vrm_->FindUnusedRegisters(li_))
     return;
 }
 
@@ -690,7 +725,7 @@ static void addStackInterval(LiveInterval *cur, LiveStacks *ls_,
   if (SI.hasAtLeastOneValue())
     VNI = SI.getValNumInfo(0);
   else
-    VNI = SI.getNextValue(~0U, 0, ls_->getVNInfoAllocator());
+    VNI = SI.getNextValue(0, 0, false, ls_->getVNInfoAllocator());
 
   LiveInterval &RI = li_->getInterval(cur->reg);
   // FIXME: This may be overly conservative.
@@ -844,7 +879,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
   // This is an implicitly defined live interval, just assign any register.
   const TargetRegisterClass *RC = mri_->getRegClass(cur->reg);
   if (cur->empty()) {
-    unsigned physReg = cur->preference;
+    unsigned physReg = vrm_->getRegAllocPref(cur->reg);
     if (!physReg)
       physReg = *RC->allocation_order_begin(*mf_);
     DOUT <<  tri_->getName(physReg) << '\n';
@@ -864,9 +899,9 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
   // register class, then we should try to assign it the same register.
   // This can happen when the move is from a larger register class to a smaller
   // one, e.g. X86::mov32to32_. These move instructions are not coalescable.
-  if (!cur->preference && cur->hasAtLeastOneValue()) {
+  if (!vrm_->getRegAllocPref(cur->reg) && cur->hasAtLeastOneValue()) {
     VNInfo *vni = cur->begin()->valno;
-    if (vni->def && vni->def != ~1U && vni->def != ~0U) {
+    if (vni->def && !vni->isUnused() && vni->isDefAccurate()) {
       MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
       unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
       if (CopyMI &&
@@ -882,7 +917,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
           if (DstSubReg)
             Reg = tri_->getMatchingSuperReg(Reg, DstSubReg, RC);
           if (Reg && allocatableRegs_[Reg] && RC->contains(Reg))
-            cur->preference = Reg;
+            mri_->setRegAllocationHint(cur->reg, 0, Reg);
         }
       }
     }
@@ -991,7 +1026,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
     if (LiveInterval *NextReloadLI = hasNextReloadInterval(cur)) {
       // "Downgrade" physReg to try to keep physReg from being allocated until
       // the next reload from the same SS is allocated. 
-      NextReloadLI->preference = physReg;
+      mri_->setRegAllocationHint(NextReloadLI->reg, 0, physReg);
       DowngradeRegister(cur, physReg);
     }
     return;
@@ -1018,7 +1053,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
 
   // Find a register to spill.
   float minWeight = HUGE_VALF;
-  unsigned minReg = 0; /*cur->preference*/;  // Try the pref register first.
+  unsigned minReg = 0;
 
   bool Found = false;
   std::vector<std::pair<unsigned,float> > RegsWeights;
@@ -1093,8 +1128,14 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
   if (cur->weight != HUGE_VALF && cur->weight <= minWeight) {
     DOUT << "\t\t\tspilling(c): " << *cur << '\n';
     SmallVector<LiveInterval*, 8> spillIs;
-    std::vector<LiveInterval*> added =
-      li_->addIntervalsForSpills(*cur, spillIs, loopInfo, *vrm_);
+    std::vector<LiveInterval*> added;
+    
+    if (!NewSpillFramework) {
+      added = li_->addIntervalsForSpills(*cur, spillIs, loopInfo, *vrm_);
+    } else {
+      added = spiller_->spill(cur); 
+    }
+
     std::sort(added.begin(), added.end(), LISorter());
     addStackInterval(cur, ls_, li_, mri_, *vrm_);
     if (added.empty())
@@ -1155,7 +1196,8 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
 
   // The earliest start of a Spilled interval indicates up to where
   // in handled we need to roll back
-  unsigned earliestStart = cur->beginNumber();
+  
+  LiveInterval *earliestStartInterval = cur;
 
   // Spill live intervals of virtual regs mapped to the physical register we
   // want to clear (and its aliases).  We only spill those that overlap with the
@@ -1164,16 +1206,30 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
   // mark our rollback point.
   std::vector<LiveInterval*> added;
   while (!spillIs.empty()) {
+    bool epicFail = false;
     LiveInterval *sli = spillIs.back();
     spillIs.pop_back();
     DOUT << "\t\t\tspilling(a): " << *sli << '\n';
-    earliestStart = std::min(earliestStart, sli->beginNumber());
-    std::vector<LiveInterval*> newIs =
-      li_->addIntervalsForSpills(*sli, spillIs, loopInfo, *vrm_);
+    earliestStartInterval =
+      (earliestStartInterval->beginNumber() < sli->beginNumber()) ?
+         earliestStartInterval : sli;
+       
+    std::vector<LiveInterval*> newIs;
+    if (!NewSpillFramework) {
+      newIs = li_->addIntervalsForSpills(*sli, spillIs, loopInfo, *vrm_);
+    } else {
+      newIs = spiller_->spill(sli);
+    }
     addStackInterval(sli, ls_, li_, mri_, *vrm_);
     std::copy(newIs.begin(), newIs.end(), std::back_inserter(added));
     spilled.insert(sli->reg);
+
+    if (epicFail) {
+      //abort();
+    }
   }
+
+  unsigned earliestStart = earliestStartInterval->beginNumber();
 
   DOUT << "\t\trolling back to: " << earliestStart << '\n';
 
@@ -1216,7 +1272,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
       // It interval has a preference, it must be defined by a copy. Clear the
       // preference now since the source interval allocation may have been
       // undone as well.
-      i->preference = 0;
+      mri_->setRegAllocationHint(i->reg, 0, 0);
     else {
       UpgradeRegister(ii->second);
     }
@@ -1272,15 +1328,23 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur)
   }
 }
 
-unsigned RALinScan::getFreePhysReg(const TargetRegisterClass *RC,
+unsigned RALinScan::getFreePhysReg(LiveInterval* cur,
+                                   const TargetRegisterClass *RC,
                                    unsigned MaxInactiveCount,
                                    SmallVector<unsigned, 256> &inactiveCounts,
                                    bool SkipDGRegs) {
   unsigned FreeReg = 0;
   unsigned FreeRegInactiveCount = 0;
 
-  TargetRegisterClass::iterator I = RC->allocation_order_begin(*mf_);
-  TargetRegisterClass::iterator E = RC->allocation_order_end(*mf_);
+  std::pair<unsigned, unsigned> Hint = mri_->getRegAllocationHint(cur->reg);
+  // Resolve second part of the hint (if possible) given the current allocation.
+  unsigned physReg = Hint.second;
+  if (physReg &&
+      TargetRegisterInfo::isVirtualRegister(physReg) && vrm_->hasPhys(physReg))
+    physReg = vrm_->getPhys(physReg);
+
+  TargetRegisterClass::iterator I, E;
+  tie(I, E) = tri_->getAllocationOrder(RC, Hint.first, physReg, *mf_);
   assert(I != E && "No allocatable register in this register class!");
 
   // Scan for the first available register.
@@ -1303,7 +1367,7 @@ unsigned RALinScan::getFreePhysReg(const TargetRegisterClass *RC,
   // return this register.
   if (FreeReg == 0 || FreeRegInactiveCount == MaxInactiveCount)
     return FreeReg;
-  
+ 
   // Continue scanning the registers, looking for the one with the highest
   // inactive count.  Alkis found that this reduced register pressure very
   // slightly on X86 (in rev 1.94 of this file), though this should probably be
@@ -1354,20 +1418,21 @@ unsigned RALinScan::getFreePhysReg(LiveInterval *cur) {
 
   // If copy coalescer has assigned a "preferred" register, check if it's
   // available first.
-  if (cur->preference) {
-    DOUT << "(preferred: " << tri_->getName(cur->preference) << ") ";
-    if (isRegAvail(cur->preference) && 
-        RC->contains(cur->preference))
-      return cur->preference;
+  unsigned Preference = vrm_->getRegAllocPref(cur->reg);
+  if (Preference) {
+    DOUT << "(preferred: " << tri_->getName(Preference) << ") ";
+    if (isRegAvail(Preference) && 
+        RC->contains(Preference))
+      return Preference;
   }
 
   if (!DowngradedRegs.empty()) {
-    unsigned FreeReg = getFreePhysReg(RC, MaxInactiveCount, inactiveCounts,
+    unsigned FreeReg = getFreePhysReg(cur, RC, MaxInactiveCount, inactiveCounts,
                                       true);
     if (FreeReg)
       return FreeReg;
   }
-  return getFreePhysReg(RC, MaxInactiveCount, inactiveCounts, false);
+  return getFreePhysReg(cur, RC, MaxInactiveCount, inactiveCounts, false);
 }
 
 FunctionPass* llvm::createLinearScanRegisterAllocator() {

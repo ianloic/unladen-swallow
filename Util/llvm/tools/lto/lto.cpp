@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/lto.h"
+#include "llvm-c/Core.h"
 
 #include "LTOModule.h"
 #include "LTOCodeGenerator.h"
@@ -154,7 +155,7 @@ lto_symbol_attributes lto_module_get_symbol_attribute(lto_module_t mod,
 // instantiates a code generator
 // returns NULL if there is an error
 //
-lto_code_gen_t lto_codegen_create()
+lto_code_gen_t lto_codegen_create(void)
 {
      return new LTOCodeGenerator();
 }
@@ -198,7 +199,7 @@ bool lto_codegen_set_debug_model(lto_code_gen_t cg, lto_debug_model debug)
 //
 bool lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model model)
 {
-    return cg->setCodePICModel(model, sLastErrorString);
+  return cg->setCodePICModel(model, sLastErrorString);
 }
 
 //
@@ -206,7 +207,15 @@ bool lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model model)
 //
 void lto_codegen_set_gcc_path(lto_code_gen_t cg, const char* path)
 {
-    cg->setGccPath(path);
+  cg->setGccPath(path);
+}
+
+//
+// sets the path to the assembler tool
+//
+void lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path)
+{
+    cg->setAssemblerPath(path);
 }
 
 //
@@ -216,7 +225,7 @@ void lto_codegen_set_gcc_path(lto_code_gen_t cg, const char* path)
 //
 void lto_codegen_add_must_preserve_symbol(lto_code_gen_t cg, const char* symbol)
 {
-    cg->addMustPreserveSymbol(symbol);
+  cg->addMustPreserveSymbol(symbol);
 }
 
 
@@ -227,7 +236,7 @@ void lto_codegen_add_must_preserve_symbol(lto_code_gen_t cg, const char* symbol)
 //
 bool lto_codegen_write_merged_modules(lto_code_gen_t cg, const char* path)
 {
-   return cg->writeMergedModules(path, sLastErrorString);
+  return cg->writeMergedModules(path, sLastErrorString);
 }
 
 
@@ -242,7 +251,7 @@ bool lto_codegen_write_merged_modules(lto_code_gen_t cg, const char* path)
 extern const void*
 lto_codegen_compile(lto_code_gen_t cg, size_t* length)
 {
-    return cg->compile(length, sLastErrorString);
+  return cg->compile(length, sLastErrorString);
 }
 
 
@@ -254,6 +263,3 @@ lto_codegen_debug_options(lto_code_gen_t cg, const char * opt)
 {
   cg->setCodeGenDebugOptions(opt);
 }
-
-
-

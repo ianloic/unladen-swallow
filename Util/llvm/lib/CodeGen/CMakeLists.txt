@@ -1,6 +1,9 @@
 add_llvm_library(LLVMCodeGen
   BranchFolding.cpp
+  CodePlacementOpt.cpp
   DeadMachineInstructionElim.cpp
+  DwarfEHPrepare.cpp
+  ELFCodeEmitter.cpp
   ELFWriter.cpp
   GCMetadata.cpp
   GCMetadataPrinter.cpp
@@ -9,12 +12,13 @@ add_llvm_library(LLVMCodeGen
   IntrinsicLowering.cpp
   LLVMTargetMachine.cpp
   LatencyPriorityQueue.cpp
+  LazyLiveness.cpp
   LiveInterval.cpp
   LiveIntervalAnalysis.cpp
   LiveStackAnalysis.cpp
   LiveVariables.cpp
-  LoopAligner.cpp
   LowerSubregs.cpp
+  MachOCodeEmitter.cpp
   MachOWriter.cpp
   MachineBasicBlock.cpp
   MachineDominators.cpp
@@ -26,6 +30,8 @@ add_llvm_library(LLVMCodeGen
   MachinePassRegistry.cpp
   MachineRegisterInfo.cpp
   MachineSink.cpp
+  MachineVerifier.cpp
+  ObjectCodeEmitter.cpp
   OcamlGC.cpp
   PBQP.cpp
   PHIElimination.cpp
@@ -46,6 +52,7 @@ add_llvm_library(LLVMCodeGen
   ScheduleDAGInstrs.cpp
   ScheduleDAGPrinter.cpp
   ShadowStackGC.cpp
+  ShrinkWrapping.cpp
   SimpleRegisterCoalescing.cpp
   Spiller.cpp
   StackProtector.cpp
@@ -55,4 +62,7 @@ add_llvm_library(LLVMCodeGen
   TwoAddressInstructionPass.cpp
   UnreachableBlockElim.cpp
   VirtRegMap.cpp
+  VirtRegRewriter.cpp
   )
+
+target_link_libraries (LLVMCodeGen LLVMCore LLVMScalarOpts)

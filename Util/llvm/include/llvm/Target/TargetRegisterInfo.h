@@ -284,10 +284,10 @@ protected:
                      int CallFrameDestroyOpcode = -1,
                      const unsigned* subregs = 0,
                      const unsigned subregsize = 0,
-		     const unsigned* superregs = 0,
-		     const unsigned superregsize = 0,
-		     const unsigned* aliases = 0,
-		     const unsigned aliasessize = 0);
+                     const unsigned* superregs = 0,
+                     const unsigned superregsize = 0,
+                     const unsigned* aliases = 0,
+                     const unsigned aliasessize = 0);
   virtual ~TargetRegisterInfo();
 public:
 
@@ -392,9 +392,9 @@ public:
     size_t index = (regA + regB * 37) & (AliasesHashSize-1);
     unsigned ProbeAmt = 0;
     while (AliasesHash[index*2] != 0 &&
-	   AliasesHash[index*2+1] != 0) {
+           AliasesHash[index*2+1] != 0) {
       if (AliasesHash[index*2] == regA && AliasesHash[index*2+1] == regB)
-	return true;
+        return true;
 
       index = (index + ProbeAmt) & (AliasesHashSize-1);
       ProbeAmt += 2;
@@ -517,6 +517,36 @@ public:
   virtual const TargetRegisterClass *
   getCrossCopyRegClass(const TargetRegisterClass *RC) const {
     return NULL;
+  }
+
+  /// getAllocationOrder - Returns the register allocation order for a specified
+  /// register class in the form of a pair of TargetRegisterClass iterators.
+  virtual std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
+  getAllocationOrder(const TargetRegisterClass *RC,
+                     unsigned HintType, unsigned HintReg,
+                     const MachineFunction &MF) const {
+    return std::make_pair(RC->allocation_order_begin(MF),
+                          RC->allocation_order_end(MF));
+  }
+
+  /// ResolveRegAllocHint - Resolves the specified register allocation hint
+  /// to a physical register. Returns the physical register if it is successful.
+  virtual unsigned ResolveRegAllocHint(unsigned Type, unsigned Reg,
+                                       const MachineFunction &MF) const {
+    if (Type == 0 && Reg && isPhysicalRegister(Reg))
+      return Reg;
+    return 0;
+  }
+
+  /// UpdateRegAllocHint - A callback to allow target a chance to update
+  /// register allocation hints when a register is "changed" (e.g. coalesced)
+  /// to another register. e.g. On ARM, some virtual registers should target
+  /// register pairs, if one of pair is coalesced to another register, the
+  /// allocation hint of the other half of the pair should be changed to point
+  /// to the new register.
+  virtual void UpdateRegAllocHint(unsigned Reg, unsigned NewReg,
+                                  MachineFunction &MF) const {
+    // Do nothing.
   }
 
   /// targetHandlesStackFrameRounding - Returns true if the target is

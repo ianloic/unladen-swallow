@@ -116,7 +116,7 @@ void DAGTypeLegalizer::PerformExpensiveChecks() {
           cerr << "Unprocessed value in a map!";
           Failed = true;
         }
-      } else if (isTypeLegal(Res.getValueType())) {
+      } else if (isTypeLegal(Res.getValueType()) || IgnoreNodeResults(I)) {
         if (Mapped > 1) {
           cerr << "Value with legal type was transformed!";
           Failed = true;
@@ -732,6 +732,8 @@ void DAGTypeLegalizer::ReplaceValueWith(SDValue From, SDValue To) {
 }
 
 void DAGTypeLegalizer::SetPromotedInteger(SDValue Op, SDValue Result) {
+  assert(Result.getValueType() == TLI.getTypeToTransformTo(Op.getValueType()) &&
+         "Invalid type for promoted integer");
   AnalyzeNewValue(Result);
 
   SDValue &OpEntry = PromotedIntegers[Op];
@@ -740,6 +742,8 @@ void DAGTypeLegalizer::SetPromotedInteger(SDValue Op, SDValue Result) {
 }
 
 void DAGTypeLegalizer::SetSoftenedFloat(SDValue Op, SDValue Result) {
+  assert(Result.getValueType() == TLI.getTypeToTransformTo(Op.getValueType()) &&
+         "Invalid type for softened float");
   AnalyzeNewValue(Result);
 
   SDValue &OpEntry = SoftenedFloats[Op];
@@ -748,6 +752,8 @@ void DAGTypeLegalizer::SetSoftenedFloat(SDValue Op, SDValue Result) {
 }
 
 void DAGTypeLegalizer::SetScalarizedVector(SDValue Op, SDValue Result) {
+  assert(Result.getValueType() == Op.getValueType().getVectorElementType() &&
+         "Invalid type for scalarized vector");
   AnalyzeNewValue(Result);
 
   SDValue &OpEntry = ScalarizedVectors[Op];
@@ -767,6 +773,9 @@ void DAGTypeLegalizer::GetExpandedInteger(SDValue Op, SDValue &Lo,
 
 void DAGTypeLegalizer::SetExpandedInteger(SDValue Op, SDValue Lo,
                                           SDValue Hi) {
+  assert(Lo.getValueType() == TLI.getTypeToTransformTo(Op.getValueType()) &&
+         Hi.getValueType() == Lo.getValueType() &&
+         "Invalid type for expanded integer");
   // Lo/Hi may have been newly allocated, if so, add nodeid's as relevant.
   AnalyzeNewValue(Lo);
   AnalyzeNewValue(Hi);
@@ -790,6 +799,9 @@ void DAGTypeLegalizer::GetExpandedFloat(SDValue Op, SDValue &Lo,
 
 void DAGTypeLegalizer::SetExpandedFloat(SDValue Op, SDValue Lo,
                                         SDValue Hi) {
+  assert(Lo.getValueType() == TLI.getTypeToTransformTo(Op.getValueType()) &&
+         Hi.getValueType() == Lo.getValueType() &&
+         "Invalid type for expanded float");
   // Lo/Hi may have been newly allocated, if so, add nodeid's as relevant.
   AnalyzeNewValue(Lo);
   AnalyzeNewValue(Hi);
@@ -813,6 +825,12 @@ void DAGTypeLegalizer::GetSplitVector(SDValue Op, SDValue &Lo,
 
 void DAGTypeLegalizer::SetSplitVector(SDValue Op, SDValue Lo,
                                       SDValue Hi) {
+  assert(Lo.getValueType().getVectorElementType() ==
+         Op.getValueType().getVectorElementType() &&
+         2*Lo.getValueType().getVectorNumElements() ==
+         Op.getValueType().getVectorNumElements() &&
+         Hi.getValueType() == Lo.getValueType() &&
+         "Invalid type for split vector");
   // Lo/Hi may have been newly allocated, if so, add nodeid's as relevant.
   AnalyzeNewValue(Lo);
   AnalyzeNewValue(Hi);
@@ -825,6 +843,8 @@ void DAGTypeLegalizer::SetSplitVector(SDValue Op, SDValue Lo,
 }
 
 void DAGTypeLegalizer::SetWidenedVector(SDValue Op, SDValue Result) {
+  assert(Result.getValueType() == TLI.getTypeToTransformTo(Op.getValueType()) &&
+         "Invalid type for widened vector");
   AnalyzeNewValue(Result);
 
   SDValue &OpEntry = WidenedVectors[Op];
@@ -867,7 +887,7 @@ SDValue DAGTypeLegalizer::CreateStackStoreLoad(SDValue Op,
   return DAG.getLoad(DestVT, dl, Store, StackPtr, NULL, 0);
 }
 
-/// CustomLowerResults - Replace the node's results with custom code provided
+/// CustomLowerNode - Replace the node's results with custom code provided
 /// by the target and return "true", or do nothing and return "false".
 /// The last parameter is FALSE if we are dealing with a node with legal
 /// result types and illegal operand. The second parameter denotes the type of
@@ -875,8 +895,7 @@ SDValue DAGTypeLegalizer::CreateStackStoreLoad(SDValue Op,
 /// The last parameter being TRUE means we are dealing with a
 /// node with illegal result types. The second parameter denotes the type of
 /// illegal ResNo in that case.
-bool DAGTypeLegalizer::CustomLowerResults(SDNode *N, MVT VT,
-                                          bool LegalizeResult) {
+bool DAGTypeLegalizer::CustomLowerNode(SDNode *N, MVT VT, bool LegalizeResult) {
   // See if the target wants to custom lower this node.
   if (TLI.getOperationAction(N->getOpcode(), VT) != TargetLowering::Custom)
     return false;
@@ -902,20 +921,13 @@ bool DAGTypeLegalizer::CustomLowerResults(SDNode *N, MVT VT,
 /// GetSplitDestVTs - Compute the VTs needed for the low/hi parts of a type
 /// which is split into two not necessarily identical pieces.
 void DAGTypeLegalizer::GetSplitDestVTs(MVT InVT, MVT &LoVT, MVT &HiVT) {
+  // Currently all types are split in half.
   if (!InVT.isVector()) {
     LoVT = HiVT = TLI.getTypeToTransformTo(InVT);
   } else {
-    MVT NewEltVT = InVT.getVectorElementType();
     unsigned NumElements = InVT.getVectorNumElements();
-    if ((NumElements & (NumElements-1)) == 0) {  // Simple power of two vector.
-      NumElements >>= 1;
-      LoVT = HiVT =  MVT::getVectorVT(NewEltVT, NumElements);
-    } else {                                     // Non-power-of-two vectors.
-      unsigned NewNumElts_Lo = 1 << Log2_32(NumElements);
-      unsigned NewNumElts_Hi = NumElements - NewNumElts_Lo;
-      LoVT = MVT::getVectorVT(NewEltVT, NewNumElts_Lo);
-      HiVT = MVT::getVectorVT(NewEltVT, NewNumElts_Hi);
-    }
+    assert(!(NumElements & 1) && "Splitting vector, but not in half!");
+    LoVT = HiVT = MVT::getVectorVT(InVT.getVectorElementType(), NumElements/2);
   }
 }
 
@@ -1007,7 +1019,7 @@ SDValue DAGTypeLegalizer::MakeLibCall(RTLIB::Libcall LC, MVT RetVT,
   const Type *RetTy = RetVT.getTypeForMVT();
   std::pair<SDValue,SDValue> CallInfo =
     TLI.LowerCallTo(DAG.getEntryNode(), RetTy, isSigned, !isSigned, false,
-                    false, CallingConv::C, false, Callee, Args, DAG, dl);
+                    false, 0, CallingConv::C, false, Callee, Args, DAG, dl);
   return CallInfo.first;
 }
 

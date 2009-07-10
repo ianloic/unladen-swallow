@@ -16,8 +16,11 @@
 #ifndef LTO_H
 #define LTO_H  1
 
+#include "llvm-c/Core.h"
 #include <stdbool.h>
 #include <stddef.h>
+
+#define LTO_API_VERSION 3
 
 typedef enum {
     LTO_SYMBOL_ALIGNMENT_MASK         = 0x0000001F,    /* log2 of alignment */
@@ -56,7 +59,6 @@ typedef struct LTOModule*         lto_module_t;
 /** opaque reference to a code generator */
 typedef struct LTOCodeGenerator*  lto_code_gen_t;
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -73,7 +75,6 @@ lto_get_version(void);
  */
 extern const char*
 lto_get_error_message(void);
-
 
 /**
  * Checks if a file is a loadable object file.
@@ -205,6 +206,14 @@ lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model);
  */
 extern void
 lto_codegen_set_gcc_path(lto_code_gen_t cg, const char* path);
+
+
+/**
+ * Sets the location of the assembler tool to run. If not set, libLTO
+ * will use gcc to invoke the assembler.
+ */
+extern void
+lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path);
 
 
 /**

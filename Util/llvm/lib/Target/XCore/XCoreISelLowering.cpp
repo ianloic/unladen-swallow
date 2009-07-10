@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/ADT/VectorExtras.h"
 #include <queue>
 #include <set>
@@ -187,6 +188,12 @@ void XCoreTargetLowering::ReplaceNodeResults(SDNode *N,
   }
 }
 
+/// getFunctionAlignment - Return the Log2 alignment of this function.
+unsigned XCoreTargetLowering::
+getFunctionAlignment(const Function *) const {
+  return 1;
+}
+
 //===----------------------------------------------------------------------===//
 //  Misc Lower Operation implementation
 //===----------------------------------------------------------------------===//
@@ -264,13 +271,15 @@ LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG)
   }
   const Type *Ty = cast<PointerType>(GV->getType())->getElementType();
   if (!Ty->isSized() || isZeroLengthArray(Ty)) {
+#ifndef NDEBUG
     cerr << "Size of thread local object " << GVar->getName()
-         << " is unknown\n";
-    abort();
+        << " is unknown\n";
+#endif
+    llvm_unreachable();
   }
   SDValue base = getGlobalAddressWrapper(GA, GV, DAG);
   const TargetData *TD = TM.getTargetData();
-  unsigned Size = TD->getTypePaddedSize(Ty);
+  unsigned Size = TD->getTypeAllocSize(Ty);
   SDValue offset = DAG.getNode(ISD::MUL, dl, MVT::i32, BuildGetId(DAG, dl),
                        DAG.getConstant(Size, MVT::i32));
   return DAG.getNode(ISD::ADD, dl, MVT::i32, base, offset);
@@ -640,10 +649,13 @@ LowerCCCArguments(SDValue Op, SelectionDAG &DAG)
       MVT RegVT = VA.getLocVT();
       switch (RegVT.getSimpleVT()) {
       default:
-        cerr << "LowerFORMAL_ARGUMENTS Unhandled argument type: "
-             << RegVT.getSimpleVT()
-             << "\n";
-        abort();
+        {
+#ifndef NDEBUG
+          cerr << "LowerFORMAL_ARGUMENTS Unhandled argument type: "
+               << RegVT.getSimpleVT() << "\n";
+#endif
+          llvm_unreachable();
+        }
       case MVT::i32:
         unsigned VReg = RegInfo.createVirtualRegister(
                           XCore::GRRegsRegisterClass);

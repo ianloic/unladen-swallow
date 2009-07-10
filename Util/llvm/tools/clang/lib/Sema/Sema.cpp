@@ -38,7 +38,7 @@ static void ConvertArgToStringFn(Diagnostic::ArgumentKind Kind, intptr_t Val,
     QualType Ty(QualType::getFromOpaquePtr(reinterpret_cast<void*>(Val)));
 
     // FIXME: Playing with std::string is really slow.
-    S = Ty.getAsString();
+    S = Ty.getAsString(Context.PrintingPolicy);
     
     // If this is a sugared type (like a typedef, typeof, etc), then unwrap one
     // level of the sugar so that the type is more obvious to the user.
@@ -60,7 +60,7 @@ static void ConvertArgToStringFn(Diagnostic::ArgumentKind Kind, intptr_t Val,
         // Not va_list.
         Ty.getUnqualifiedType() != Context.getBuiltinVaListType()) {
       S = "'"+S+"' (aka '";
-      S += DesugaredTy.getAsString();
+      S += DesugaredTy.getAsString(Context.PrintingPolicy);
       S += "')";
       Output.append(S.begin(), S.end());
       return;
@@ -125,6 +125,7 @@ void Sema::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
   
   if (!PP.getLangOptions().ObjC1) return;
   
+  // Built-in ObjC types may already be set by PCHReader (hence isNull checks).
   if (Context.getObjCSelType().isNull()) {
     // Synthesize "typedef struct objc_selector *SEL;"
     RecordDecl *SelTag = CreateStructDecl(Context, "objc_selector");
@@ -163,7 +164,7 @@ void Sema::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
   // Synthesize "typedef struct objc_object { Class isa; } *id;"
   if (Context.getObjCIdType().isNull()) {
     RecordDecl *ObjectTag = CreateStructDecl(Context, "objc_object");
-    
+
     QualType ObjT = Context.getPointerType(Context.getTagDeclType(ObjectTag));
     PushOnScopeChains(ObjectTag, TUScope);
     TypedefDecl *IdTypedef = TypedefDecl::Create(Context, CurContext,
@@ -181,8 +182,9 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     Diags(PP.getDiagnostics()), SourceMgr(PP.getSourceManager()), 
     ExternalSource(0), CurContext(0), PreDeclaratorDC(0),
     CurBlock(0), PackContext(0), IdResolver(pp.getLangOptions()),
-    GlobalNewDeleteDeclared(false), 
-    CompleteTranslationUnit(CompleteTranslationUnit) {
+    GlobalNewDeleteDeclared(false), ExprEvalContext(PotentiallyEvaluated),
+    CompleteTranslationUnit(CompleteTranslationUnit),
+    NumSFINAEErrors(0), CurrentInstantiationScope(0) {
   
   StdNamespace = 0;
   TUScope = 0;
@@ -233,6 +235,18 @@ void Sema::DeleteStmt(StmtTy *S) {
 /// translation unit when EOF is reached and all but the top-level scope is
 /// popped.
 void Sema::ActOnEndOfTranslationUnit() {
+  // C++: Perform implicit template instantiations.
+  //
+  // FIXME: When we perform these implicit instantiations, we do not carefully
+  // keep track of the point of instantiation (C++ [temp.point]). This means
+  // that name lookup that occurs within the template instantiation will
+  // always happen at the end of the translation unit, so it will find
+  // some names that should not be found. Although this is common behavior 
+  // for C++ compilers, it is technically wrong. In the future, we either need
+  // to be able to filter the results of name lookup or we need to perform
+  // template instantiations earlier.
+  PerformPendingImplicitInstantiations();
+  
   if (!CompleteTranslationUnit)
     return;
 
@@ -268,8 +282,8 @@ void Sema::ActOnEndOfTranslationUnit() {
         llvm::APInt One(Context.getTypeSize(Context.getSizeType()), 
                         true);
         QualType T 
-          = Context.getConstantArrayType(ArrayT->getElementType(),
-                                         One, ArrayType::Normal, 0);
+          = Context.getConstantArrayWithoutExprType(ArrayT->getElementType(),
+                                                    One, ArrayType::Normal, 0);
         VD->setType(T);
       }
     } else if (RequireCompleteType(VD->getLocation(), VD->getType(), 
@@ -315,7 +329,8 @@ NamedDecl *Sema::getCurFunctionOrMethodDecl() {
 }
 
 Sema::SemaDiagnosticBuilder::~SemaDiagnosticBuilder() {
-  this->Emit();
+  if (!this->Emit())
+    return;
   
   // If this is not a note, and we're in a template instantiation
   // that is different from the last template instantiation where
@@ -329,4 +344,8 @@ Sema::SemaDiagnosticBuilder::~SemaDiagnosticBuilder() {
     SemaRef.LastTemplateInstantiationErrorContext 
       = SemaRef.ActiveTemplateInstantiations.back();
   }
+}
+
+void Sema::ActOnComment(SourceRange Comment) {
+  Context.Comments.push_back(Comment);
 }

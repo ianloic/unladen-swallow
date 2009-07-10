@@ -132,7 +132,7 @@ include "PIC16InstrFormats.td"
 //===----------------------------------------------------------------------===//
 
 // W = W Op F : Load the value from F and do Op to W.
-let isTwoAddress = 1 in
+let isTwoAddress = 1, mayLoad = 1 in
 class BinOpFW<bits<6> OpCode, string OpcStr, SDNode OpNode>:
   ByteFormat<OpCode, (outs GPR:$dst),
              (ins GPR:$src, i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -145,6 +145,7 @@ class BinOpFW<bits<6> OpCode, string OpcStr, SDNode OpNode>:
 // This insn class is not marked as TwoAddress because the reg is
 // being used as a source operand only. (Remember a TwoAddress insn
 // needs a copyRegToReg.)
+let mayStore = 1 in
 class BinOpWF<bits<6> OpCode, string OpcStr, SDNode OpNode>:
   ByteFormat<OpCode, (outs),
              (ins GPR:$src, i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -188,22 +189,22 @@ def movlw : BitFormat<12, (outs GPR:$dst), (ins i8imm:$src),
 
 // Move a Lo(TGA) to W.
 def movlw_lo_1 : BitFormat<12, (outs GPR:$dst), (ins i8imm:$src, i8imm:$src2),
-                      "movlw LOW(${src}) + ${src2}",
+                      "movlw LOW(${src} + ${src2})",
                       [(set GPR:$dst, (PIC16Lo tglobaladdr:$src, imm:$src2 ))]>;
 
 // Move a Lo(TES) to W.
 def movlw_lo_2 : BitFormat<12, (outs GPR:$dst), (ins i8imm:$src, i8imm:$src2),
-                      "movlw LOW(${src}) + ${src2}",
+                      "movlw LOW(${src} + ${src2})",
                       [(set GPR:$dst, (PIC16Lo texternalsym:$src, imm:$src2 ))]>;
 
 // Move a Hi(TGA) to W.
 def movlw_hi_1 : BitFormat<12, (outs GPR:$dst), (ins i8imm:$src, i8imm:$src2),
-                      "movlw HIGH(${src}) + ${src2}",
+                      "movlw HIGH(${src} + ${src2})",
                       [(set GPR:$dst, (PIC16Hi tglobaladdr:$src, imm:$src2))]>;
 
 // Move a Hi(TES) to W.
 def movlw_hi_2 : BitFormat<12, (outs GPR:$dst), (ins i8imm:$src, i8imm:$src2),
-                      "movlw HIGH(${src}) + ${src2}",
+                      "movlw HIGH(${src} + ${src2})",
                       [(set GPR:$dst, (PIC16Hi texternalsym:$src, imm:$src2))]>;
 }
 
@@ -266,6 +267,7 @@ def restore_fsr1: RESTORE_FSR<"restore_fsr1">;
 
 // Direct store.
 // Input operands are: val = W, ptrlo = GA, offset = offset, ptrhi = banksel.
+let mayStore = 1 in
 class MOVWF_INSN<bits<6> OpCode, SDNode OpNodeDest, SDNode Op>:
   ByteFormat<0, (outs), 
              (ins GPR:$val, i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -297,6 +299,7 @@ def store_indirect :
 // Direct load.
 // Input Operands are: ptrlo = GA, offset = offset, ptrhi = banksel.
 // Output: dst = W
+let Defs = [STATUS], mayLoad = 1 in
 class MOVF_INSN<bits<6> OpCode, SDNode OpNodeSrc, SDNode Op>:
   ByteFormat<0, (outs GPR:$dst), 
              (ins i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -357,7 +360,7 @@ def addwfc: BinOpWF<0, "addwfc", adde>;  // With Carry.
 }
 
 // W -= [F] ; load from F and sub the value from W.
-let isTwoAddress = 1 in
+let isTwoAddress = 1, mayLoad = 1 in
 class SUBFW<bits<6> OpCode, string OpcStr, SDNode OpNode>:
   ByteFormat<OpCode, (outs GPR:$dst),
              (ins GPR:$src, i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -372,10 +375,12 @@ def subfw_2: SUBFW<0, "subwf", subc>;
 let Uses = [STATUS] in
 def subfwb: SUBFW<0, "subwfb", sube>;  // With Borrow.
 
-def subfw_cc: SUBFW<0, "subwf", PIC16Subcc>;
 }
+let Defs = [STATUS], isTerminator = 1 in
+def subfw_cc: SUBFW<0, "subwf", PIC16Subcc>;
 
 // [F] -= W ; 
+let mayStore = 1 in
 class SUBWF<bits<6> OpCode, string OpcStr, SDNode OpNode>:
   ByteFormat<OpCode, (outs),
              (ins GPR:$src, i8imm:$offset, i8mem:$ptrlo, i8imm:$ptrhi),
@@ -421,8 +426,9 @@ class SUBLW<bits<6> opcode, SDNode OpNode> :
 let Defs = [STATUS] in {
 def sublw_1 : SUBLW<0, sub>;
 def sublw_2 : SUBLW<0, subc>;
-def sublw_cc : SUBLW<0, PIC16Subcc>;
 }
+let Defs = [STATUS], isTerminator = 1 in 
+def sublw_cc : SUBLW<0, PIC16Subcc>;
 
 // Call instruction.
 let isCall = 1,
@@ -448,12 +454,13 @@ let isCall = 1,
             [(set GPR:$dest, (PIC16callw (PIC16Connect GPR:$func, PCLATHR:$pc)))]>;
 }
 
-let Uses = [STATUS] in
+let Uses = [STATUS], isBranch = 1, isTerminator = 1, hasDelaySlot = 0 in
 def pic16brcond: ControlFormat<0x0, (outs), (ins brtarget:$dst, CCOp:$cc),
                           "b$cc $dst",
                           [(PIC16Brcond bb:$dst, imm:$cc)]>;
 
 // Unconditional branch.
+let isBranch = 1, isTerminator = 1, hasDelaySlot = 0 in
 def br_uncond: ControlFormat<0x0, (outs), (ins brtarget:$dst),
                           "goto $dst",
                           [(br bb:$dst)]>;
@@ -470,13 +477,18 @@ let usesCustomDAGSchedInserter = 1 in {   // Expanded by the scheduler.
 
 
 // Banksel.
-let isReMaterializable = 1 in {
 def banksel : 
-  Pseudo<(outs BSR:$dst),
+  Pseudo<(outs),
          (ins i8mem:$ptr),
          "banksel $ptr",
-         [(set BSR:$dst, (Banksel tglobaladdr:$ptr))]>;
-}
+         []>;
+
+def pagesel : 
+  Pseudo<(outs),
+         (ins i8mem:$ptr),
+         "movlp $ptr",
+         []>;
+
 
 // Return insn.
 def Return : 

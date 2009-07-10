@@ -36,6 +36,9 @@ X("x86",    "32-bit X86: Pentium-Pro and above");
 static RegisterTarget<X86_64TargetMachine>
 Y("x86-64", "64-bit X86: EM64T and AMD64");
 
+// Force static initialization.
+extern "C" void LLVMInitializeX86Target() { }
+
 // No assembler printer by default
 X86TargetMachine::AsmPrinterCtorFn X86TargetMachine::AsmPrinterCtor = 0;
 
@@ -116,7 +119,7 @@ unsigned X86_64TargetMachine::getModuleMatchQuality(const Module &M) {
   return getJITMatchQuality()/2;
 }
 
-X86_32TargetMachine::X86_32TargetMachine(const Module &M, const std::string &FS) 
+X86_32TargetMachine::X86_32TargetMachine(const Module &M, const std::string &FS)
   : X86TargetMachine(M, FS, false) {
 }
 
@@ -133,7 +136,7 @@ X86TargetMachine::X86TargetMachine(const Module &M, const std::string &FS,
     DataLayout(Subtarget.getDataLayout()),
     FrameInfo(TargetFrameInfo::StackGrowsDown,
               Subtarget.getStackAlignment(), Subtarget.is64Bit() ? -8 : -4),
-    InstrInfo(*this), JITInfo(*this), TLInfo(*this) {
+    InstrInfo(*this), JITInfo(*this), TLInfo(*this), ELFWriterInfo(*this) {
   DefRelocModel = getRelocationModel();
   // FIXME: Correctly select PIC model for Win64 stuff
   if (getRelocationModel() == Reloc::Default) {
@@ -213,15 +216,24 @@ bool X86TargetMachine::addAssemblyEmitter(PassManagerBase &PM,
                                           CodeGenOpt::Level OptLevel,
                                           bool Verbose,
                                           raw_ostream &Out) {
+  // FIXME: Move this somewhere else!
+  // On Darwin, override 64-bit static relocation to pic_ since the
+  // assembler doesn't support it.
+  if (DefRelocModel == Reloc::Static &&
+      Subtarget.isTargetDarwin() && Subtarget.is64Bit() &&
+      getCodeModel() == CodeModel::Small)
+    setRelocationModel(Reloc::PIC_);
+
   assert(AsmPrinterCtor && "AsmPrinter was not linked in");
   if (AsmPrinterCtor)
-    PM.add(AsmPrinterCtor(Out, *this, OptLevel, Verbose));
+    PM.add(AsmPrinterCtor(Out, *this, Verbose));
   return false;
 }
 
 bool X86TargetMachine::addCodeEmitter(PassManagerBase &PM,
                                       CodeGenOpt::Level OptLevel,
-                                      bool DumpAsm, MachineCodeEmitter &MCE) {
+                                      bool DumpAsm, 
+                                      MachineCodeEmitter &MCE) {
   // FIXME: Move this to TargetJITInfo!
   // On Darwin, do not override 64-bit setting made in X86TargetMachine().
   if (DefRelocModel == Reloc::Default && 
@@ -242,7 +254,67 @@ bool X86TargetMachine::addCodeEmitter(PassManagerBase &PM,
   if (DumpAsm) {
     assert(AsmPrinterCtor && "AsmPrinter was not linked in");
     if (AsmPrinterCtor)
-      PM.add(AsmPrinterCtor(errs(), *this, OptLevel, true));
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool X86TargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                      CodeGenOpt::Level OptLevel,
+                                      bool DumpAsm,
+                                      JITCodeEmitter &JCE) {
+  // FIXME: Move this to TargetJITInfo!
+  // On Darwin, do not override 64-bit setting made in X86TargetMachine().
+  if (DefRelocModel == Reloc::Default && 
+        (!Subtarget.isTargetDarwin() || !Subtarget.is64Bit()))
+    setRelocationModel(Reloc::Static);
+  
+  // 64-bit JIT places everything in the same buffer except external functions.
+  // On Darwin, use small code model but hack the call instruction for 
+  // externals.  Elsewhere, do not assume globals are in the lower 4G.
+  if (Subtarget.is64Bit()) {
+    if (Subtarget.isTargetDarwin())
+      setCodeModel(CodeModel::Small);
+    else
+      setCodeModel(CodeModel::Large);
+  }
+
+  PM.add(createX86JITCodeEmitterPass(*this, JCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool X86TargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                      CodeGenOpt::Level OptLevel,
+                                      bool DumpAsm,
+                                      ObjectCodeEmitter &OCE) {
+  // FIXME: Move this to TargetJITInfo!
+  // On Darwin, do not override 64-bit setting made in X86TargetMachine().
+  if (DefRelocModel == Reloc::Default && 
+        (!Subtarget.isTargetDarwin() || !Subtarget.is64Bit()))
+    setRelocationModel(Reloc::Static);
+  
+  // 64-bit JIT places everything in the same buffer except external functions.
+  // On Darwin, use small code model but hack the call instruction for 
+  // externals.  Elsewhere, do not assume globals are in the lower 4G.
+  if (Subtarget.is64Bit()) {
+    if (Subtarget.isTargetDarwin())
+      setCodeModel(CodeModel::Small);
+    else
+      setCodeModel(CodeModel::Large);
+  }
+
+  PM.add(createX86ObjectCodeEmitterPass(*this, OCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
   }
 
   return false;
@@ -256,17 +328,36 @@ bool X86TargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
   if (DumpAsm) {
     assert(AsmPrinterCtor && "AsmPrinter was not linked in");
     if (AsmPrinterCtor)
-      PM.add(AsmPrinterCtor(errs(), *this, OptLevel, true));
+      PM.add(AsmPrinterCtor(errs(), *this, true));
   }
 
   return false;
 }
 
-/// symbolicAddressesAreRIPRel - Return true if symbolic addresses are
-/// RIP-relative on this machine, taking into consideration the relocation
-/// model and subtarget. RIP-relative addresses cannot have a separate
-/// base or index register.
-bool X86TargetMachine::symbolicAddressesAreRIPRel() const {
-  return getRelocationModel() != Reloc::Static &&
-         Subtarget.isPICStyleRIPRel();
+bool X86TargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool DumpAsm,
+                                            JITCodeEmitter &JCE) {
+  PM.add(createX86JITCodeEmitterPass(*this, JCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
+}
+
+bool X86TargetMachine::addSimpleCodeEmitter(PassManagerBase &PM,
+                                            CodeGenOpt::Level OptLevel,
+                                            bool DumpAsm,
+                                            ObjectCodeEmitter &OCE) {
+  PM.add(createX86ObjectCodeEmitterPass(*this, OCE));
+  if (DumpAsm) {
+    assert(AsmPrinterCtor && "AsmPrinter was not linked in");
+    if (AsmPrinterCtor)
+      PM.add(AsmPrinterCtor(errs(), *this, true));
+  }
+
+  return false;
 }

@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/iterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <set>
 #include <stack>
 #include <vector>
@@ -39,9 +40,9 @@ public:
 };
 
 template<class GraphT,
-         class SetType = std::set<typename GraphTraits<GraphT>::NodeType*>,
-         bool ExtStorage = false,
-         class GT = GraphTraits<GraphT> >
+  class SetType = llvm::SmallPtrSet<typename GraphTraits<GraphT>::NodeType*, 8>,
+  bool ExtStorage = false,
+  class GT = GraphTraits<GraphT> >
 class po_iterator : public forward_iterator<typename GT::NodeType, ptrdiff_t>,
                     public po_iterator_storage<SetType, ExtStorage> {
   typedef forward_iterator<typename GT::NodeType, ptrdiff_t> super;
@@ -70,7 +71,7 @@ class po_iterator : public forward_iterator<typename GT::NodeType, ptrdiff_t>,
   inline po_iterator() {} // End is when stack is empty.
 
   inline po_iterator(NodeType *BB, SetType &S) :
-    po_iterator_storage<SetType, ExtStorage>(&S) {
+    po_iterator_storage<SetType, ExtStorage>(S) {
     if(!S.count(BB)) {
       this->Visited.insert(BB);
       VisitStack.push(std::make_pair(BB, GT::child_begin(BB)));
@@ -79,7 +80,7 @@ class po_iterator : public forward_iterator<typename GT::NodeType, ptrdiff_t>,
   }
 
   inline po_iterator(SetType &S) :
-      po_iterator_storage<SetType, ExtStorage>(&S) {
+      po_iterator_storage<SetType, ExtStorage>(S) {
   } // End is when stack is empty.
 public:
   typedef typename super::pointer pointer;

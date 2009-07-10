@@ -50,6 +50,10 @@ protected:
   ///
   void dropAllTypeUses();
 
+  /// unlockedRefineAbstractTypeTo - Internal version of refineAbstractTypeTo
+  /// that performs no locking.  Only used for internal recursion.
+  void unlockedRefineAbstractTypeTo(const Type *NewType);
+  
 public:
 
   //===--------------------------------------------------------------------===//
@@ -155,9 +159,22 @@ public:
     bool isVarArg  ///< Whether this is a variable argument length function
   );
 
+  /// FunctionType::get - Create a FunctionType taking no parameters.
+  ///
+  static FunctionType *get(
+    const Type *Result, ///< The result type
+    bool isVarArg  ///< Whether this is a variable argument length function
+  ) {
+    return get(Result, std::vector<const Type *>(), isVarArg);
+  }
+
   /// isValidReturnType - Return true if the specified type is valid as a return
   /// type.
   static bool isValidReturnType(const Type *RetTy);
+
+  /// isValidArgumentType - Return true if the specified type is valid as an
+  /// argument type.
+  static bool isValidArgumentType(const Type *ArgTy);
 
   inline bool isVarArg() const { return isVarArgs; }
   inline const Type *getReturnType() const { return ContainedTys[0]; }
@@ -226,11 +243,21 @@ public:
   static StructType *get(const std::vector<const Type*> &Params,
                          bool isPacked=false);
 
+  /// StructType::get - Create an empty structure type.
+  ///
+  static StructType *get(bool isPacked=false) {
+    return get(std::vector<const Type*>(), isPacked);
+  }
+
   /// StructType::get - This static method is a convenience method for
   /// creating structure types by specifying the elements as arguments.
   /// Note that this method always returns a non-packed struct.  To get
   /// an empty struct, pass NULL, NULL.
   static StructType *get(const Type *type, ...) END_WITH_NULL;
+
+  /// isValidElementType - Return true if the specified type is valid as a
+  /// element type.
+  static bool isValidElementType(const Type *ElemTy);
 
   // Iterator access to the elements
   typedef Type::subtype_iterator element_iterator;
@@ -331,6 +358,10 @@ public:
   ///
   static ArrayType *get(const Type *ElementType, uint64_t NumElements);
 
+  /// isValidElementType - Return true if the specified type is valid as a
+  /// element type.
+  static bool isValidElementType(const Type *ElemTy);
+
   inline uint64_t getNumElements() const { return NumElements; }
 
   // Implement the AbstractTypeUser interface.
@@ -391,6 +422,10 @@ public:
     return VectorType::get(EltTy, VTy->getNumElements());
   }
 
+  /// isValidElementType - Return true if the specified type is valid as a
+  /// element type.
+  static bool isValidElementType(const Type *ElemTy);
+
   /// @brief Return the number of elements in the Vector type.
   inline unsigned getNumElements() const { return NumElements; }
 
@@ -430,6 +465,10 @@ public:
   static PointerType *getUnqual(const Type *ElementType) {
     return PointerType::get(ElementType, 0);
   }
+
+  /// isValidElementType - Return true if the specified type is valid as a
+  /// element type.
+  static bool isValidElementType(const Type *ElemTy);
 
   /// @brief Return the address space of the Pointer type.
   inline unsigned getAddressSpace() const { return AddressSpace; }

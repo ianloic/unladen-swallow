@@ -20,6 +20,20 @@
 #include <algorithm>
 using namespace clang;
 
+static const enum llvm::raw_ostream::Colors noteColor =
+  llvm::raw_ostream::BLACK;
+static const enum llvm::raw_ostream::Colors fixitColor =
+  llvm::raw_ostream::GREEN;
+static const enum llvm::raw_ostream::Colors caretColor =
+  llvm::raw_ostream::GREEN;
+static const enum llvm::raw_ostream::Colors warningColor =
+  llvm::raw_ostream::MAGENTA;
+static const enum llvm::raw_ostream::Colors errorColor = llvm::raw_ostream::RED;
+static const enum llvm::raw_ostream::Colors fatalColor = llvm::raw_ostream::RED;
+// used for changing only the bold attribute
+static const enum llvm::raw_ostream::Colors savedColor =
+  llvm::raw_ostream::SAVEDCOLOR;
+
 /// \brief Number of spaces to indent when word-wrapping.
 const unsigned WordWrapIndentation = 6;
 
@@ -160,10 +174,12 @@ static void SelectInterestingSourceRegion(std::string &SourceLine,
 
   // If the end of the interesting region comes before we run out of
   // space in the terminal, start at the beginning of the line.
-  if (CaretEnd < Columns - 3)
+  if (Columns > 3 && CaretEnd < Columns - 3)
     CaretStart = 0;
 
-  unsigned TargetColumns = Columns - 8; // Give us extra room for the ellipses.
+  unsigned TargetColumns = Columns;
+  if (TargetColumns > 8)
+    TargetColumns -= 8; // Give us extra room for the ellipses.
   unsigned SourceLength = SourceLine.size();
   while ((CaretEnd - CaretStart) < TargetColumns) {
     bool ExpandedRegion = false;
@@ -202,11 +218,11 @@ static void SelectInterestingSourceRegion(std::string &SourceLine,
 
       // Skip over any whitespace we see here; we're looking for
       // another bit of interesting text.
-      while (CaretEnd != SourceLength && isspace(SourceLine[NewEnd - 1]))
+      while (NewEnd != SourceLength && isspace(SourceLine[NewEnd - 1]))
         ++NewEnd;
         
       // Skip over this bit of "interesting" text.
-      while (CaretEnd != SourceLength && !isspace(SourceLine[NewEnd - 1]))
+      while (NewEnd != SourceLength && !isspace(SourceLine[NewEnd - 1]))
         ++NewEnd;
 
       if (NewEnd - CaretStart <= TargetColumns) {
@@ -243,7 +259,6 @@ void TextDiagnosticPrinter::EmitCaretDiagnostic(SourceLocation Loc,
                                                 SourceManager &SM,
                                           const CodeModificationHint *Hints,
                                                 unsigned NumHints,
-                                                unsigned AvoidColumn,
                                                 unsigned Columns) {
   assert(!Loc.isInvalid() && "must have a valid source location here");
 
@@ -253,8 +268,7 @@ void TextDiagnosticPrinter::EmitCaretDiagnostic(SourceLocation Loc,
   if (!Loc.isFileID()) {
     SourceLocation OneLevelUp = SM.getImmediateInstantiationRange(Loc).first;
     // FIXME: Map ranges?
-    EmitCaretDiagnostic(OneLevelUp, Ranges, NumRanges, SM, 0, 0, AvoidColumn,
-                        Columns);
+    EmitCaretDiagnostic(OneLevelUp, Ranges, NumRanges, SM, 0, 0, Columns);
 
     Loc = SM.getImmediateSpellingLoc(Loc);
     
@@ -278,7 +292,7 @@ void TextDiagnosticPrinter::EmitCaretDiagnostic(SourceLocation Loc,
     }
     OS << "note: instantiated from:\n";
     
-    EmitCaretDiagnostic(Loc, Ranges, NumRanges, SM, Hints, NumHints, 0,Columns);
+    EmitCaretDiagnostic(Loc, Ranges, NumRanges, SM, Hints, NumHints, Columns);
     return;
   }
   
@@ -390,32 +404,28 @@ void TextDiagnosticPrinter::EmitCaretDiagnostic(SourceLocation Loc,
     SelectInterestingSourceRegion(SourceLine, CaretLine, FixItInsertionLine,
                                   CaretEndColNo, Columns);
 
-  // AvoidColumn tells us which column we should avoid when printing
-  // the source line. If the source line would start at or near that
-  // column, add another line of whitespace before printing the source
-  // line. Otherwise, the source line and the diagnostic text can get
-  // jumbled together.
-  unsigned StartCol = 0;
-  for (unsigned N = SourceLine.size(); StartCol != N; ++StartCol)
-    if (!isspace(SourceLine[StartCol]))
-      break;
-  
-  if (StartCol != SourceLine.size() &&
-      abs((int)StartCol - (int)AvoidColumn) <= 2)
-    OS << '\n';
-
   // Finally, remove any blank spaces from the end of CaretLine.
   while (CaretLine[CaretLine.size()-1] == ' ')
     CaretLine.erase(CaretLine.end()-1);
   
   // Emit what we have computed.
   OS << SourceLine << '\n';
+
+  if (UseColors)
+    OS.changeColor(caretColor, true);
   OS << CaretLine << '\n';
+  if (UseColors)
+    OS.resetColor();
 
   if (!FixItInsertionLine.empty()) {
+    if (UseColors)
+      // Print fixit line in color
+      OS.changeColor(fixitColor, false);
     if (PrintRangeInfo) 
       OS << ' ';
     OS << FixItInsertionLine << '\n';
+    if (UseColors)
+      OS.resetColor();
   }
 }
 
@@ -612,6 +622,8 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
     
     // Compute the column number.
     if (ShowLocation) {
+      if (UseColors)
+        OS.changeColor(savedColor, true);
       OS << PLoc.getFilename() << ':' << LineNo << ':';
       if (ShowColumn)
         if (unsigned ColNo = PLoc.getColumn())
@@ -628,9 +640,18 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
 
           SourceLocation B = Info.getRange(i).getBegin();
           SourceLocation E = Info.getRange(i).getEnd();
-          std::pair<FileID, unsigned> BInfo=SM.getDecomposedInstantiationLoc(B);
-          
+          B = SM.getInstantiationLoc(B);
           E = SM.getInstantiationLoc(E);
+          
+          // If the End location and the start location are the same and are a
+          // macro location, then the range was something that came from a macro
+          // expansion or _Pragma.  If this is an object-like macro, the best we
+          // can do is to highlight the range.  If this is a function-like
+          // macro, we'd also like to highlight the arguments.
+          if (B == E && Info.getRange(i).getEnd().isMacroID())
+            E = SM.getInstantiationRange(Info.getRange(i).getEnd()).second;
+
+          std::pair<FileID, unsigned> BInfo = SM.getDecomposedLoc(B);
           std::pair<FileID, unsigned> EInfo = SM.getDecomposedLoc(E);
           
           // If the start or end of the range is in another file, just discard
@@ -652,6 +673,19 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
           OS << ':';
       }
       OS << ' ';
+      if (UseColors)
+        OS.resetColor();
+    }
+  }
+
+  if (UseColors) {
+    // Print diagnostic category in bold and color
+    switch (Level) {
+    case Diagnostic::Ignored: assert(0 && "Invalid diagnostic type");
+    case Diagnostic::Note:    OS.changeColor(noteColor, true); break;
+    case Diagnostic::Warning: OS.changeColor(warningColor, true); break;
+    case Diagnostic::Error:   OS.changeColor(errorColor, true); break;
+    case Diagnostic::Fatal:   OS.changeColor(fatalColor, true); break;
     }
   }
   
@@ -662,7 +696,10 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
   case Diagnostic::Error:   OS << "error: "; break;
   case Diagnostic::Fatal:   OS << "fatal error: "; break;
   }
-  
+
+  if (UseColors)
+    OS.resetColor();
+
   llvm::SmallString<100> OutStr;
   Info.FormatDiagnostic(OutStr);
   
@@ -673,17 +710,28 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
       OutStr += ']';
     }
   
-  bool WordWrapped = false;
+  if (UseColors) {
+    // Print warnings, errors and fatal errors in bold, no color
+    switch (Level) {
+    case Diagnostic::Warning: OS.changeColor(savedColor, true); break;
+    case Diagnostic::Error:   OS.changeColor(savedColor, true); break;
+    case Diagnostic::Fatal:   OS.changeColor(savedColor, true); break;
+    default: break; //don't bold notes
+    }
+  }
+
   if (MessageLength) {
     // We will be word-wrapping the error message, so compute the
     // column number where we currently are (after printing the
     // location information).
     unsigned Column = OS.tell() - StartOfLocationInfo;
-    WordWrapped = PrintWordWrapped(OS, OutStr, MessageLength, Column);
+    PrintWordWrapped(OS, OutStr, MessageLength, Column);
   } else {
     OS.write(OutStr.begin(), OutStr.size());
   }
   OS << '\n';
+  if (UseColors)
+    OS.resetColor();
   
   // If caret diagnostics are enabled and we have location, we want to
   // emit the caret.  However, we only do this if the location moved
@@ -718,7 +766,6 @@ void TextDiagnosticPrinter::HandleDiagnostic(Diagnostic::Level Level,
     EmitCaretDiagnostic(LastLoc, Ranges, NumRanges, LastLoc.getManager(),
                         Info.getCodeModificationHints(),
                         Info.getNumCodeModificationHints(),
-                        WordWrapped? WordWrapIndentation : 0,
                         MessageLength);
   }
   

@@ -22,6 +22,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -37,6 +38,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include <cstdio>
 using namespace llvm;
 
@@ -48,7 +50,7 @@ STATISTIC(NumPRELoad,   "Number of loads PRE'd");
 
 static cl::opt<bool> EnablePRE("enable-pre",
                                cl::init(true), cl::Hidden);
-cl::opt<bool> EnableLoadPRE("enable-load-pre"/*, cl::init(true)*/);
+static cl::opt<bool> EnableLoadPRE("enable-load-pre", cl::init(true));
 
 //===----------------------------------------------------------------------===//
 //                         ValueTable Class
@@ -59,7 +61,8 @@ cl::opt<bool> EnableLoadPRE("enable-load-pre"/*, cl::init(true)*/);
 /// two values.
 namespace {
   struct VISIBILITY_HIDDEN Expression {
-    enum ExpressionOpcode { ADD, SUB, MUL, UDIV, SDIV, FDIV, UREM, SREM, 
+    enum ExpressionOpcode { ADD, FADD, SUB, FSUB, MUL, FMUL,
+                            UDIV, SDIV, FDIV, UREM, SREM,
                             FREM, SHL, LSHR, ASHR, AND, OR, XOR, ICMPEQ, 
                             ICMPNE, ICMPUGT, ICMPUGE, ICMPULT, ICMPULE, 
                             ICMPSGT, ICMPSGE, ICMPSLT, ICMPSLE, FCMPOEQ, 
@@ -200,8 +203,11 @@ Expression::ExpressionOpcode ValueTable::getOpcode(BinaryOperator* BO) {
   default: // THIS SHOULD NEVER HAPPEN
     assert(0 && "Binary operator with unknown opcode?");
   case Instruction::Add:  return Expression::ADD;
+  case Instruction::FAdd: return Expression::FADD;
   case Instruction::Sub:  return Expression::SUB;
+  case Instruction::FSub: return Expression::FSUB;
   case Instruction::Mul:  return Expression::MUL;
+  case Instruction::FMul: return Expression::FMUL;
   case Instruction::UDiv: return Expression::UDIV;
   case Instruction::SDiv: return Expression::SDIV;
   case Instruction::FDiv: return Expression::FDIV;
@@ -218,7 +224,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(BinaryOperator* BO) {
 }
 
 Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
-  if (isa<ICmpInst>(C) || isa<VICmpInst>(C)) {
+  if (isa<ICmpInst>(C)) {
     switch (C->getPredicate()) {
     default:  // THIS SHOULD NEVER HAPPEN
       assert(0 && "Comparison with unknown predicate?");
@@ -233,25 +239,25 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
     case ICmpInst::ICMP_SLT: return Expression::ICMPSLT;
     case ICmpInst::ICMP_SLE: return Expression::ICMPSLE;
     }
-  }
-  assert((isa<FCmpInst>(C) || isa<VFCmpInst>(C)) && "Unknown compare");
-  switch (C->getPredicate()) {
-  default: // THIS SHOULD NEVER HAPPEN
-    assert(0 && "Comparison with unknown predicate?");
-  case FCmpInst::FCMP_OEQ: return Expression::FCMPOEQ;
-  case FCmpInst::FCMP_OGT: return Expression::FCMPOGT;
-  case FCmpInst::FCMP_OGE: return Expression::FCMPOGE;
-  case FCmpInst::FCMP_OLT: return Expression::FCMPOLT;
-  case FCmpInst::FCMP_OLE: return Expression::FCMPOLE;
-  case FCmpInst::FCMP_ONE: return Expression::FCMPONE;
-  case FCmpInst::FCMP_ORD: return Expression::FCMPORD;
-  case FCmpInst::FCMP_UNO: return Expression::FCMPUNO;
-  case FCmpInst::FCMP_UEQ: return Expression::FCMPUEQ;
-  case FCmpInst::FCMP_UGT: return Expression::FCMPUGT;
-  case FCmpInst::FCMP_UGE: return Expression::FCMPUGE;
-  case FCmpInst::FCMP_ULT: return Expression::FCMPULT;
-  case FCmpInst::FCMP_ULE: return Expression::FCMPULE;
-  case FCmpInst::FCMP_UNE: return Expression::FCMPUNE;
+  } else {
+    switch (C->getPredicate()) {
+    default: // THIS SHOULD NEVER HAPPEN
+      assert(0 && "Comparison with unknown predicate?");
+    case FCmpInst::FCMP_OEQ: return Expression::FCMPOEQ;
+    case FCmpInst::FCMP_OGT: return Expression::FCMPOGT;
+    case FCmpInst::FCMP_OGE: return Expression::FCMPOGE;
+    case FCmpInst::FCMP_OLT: return Expression::FCMPOLT;
+    case FCmpInst::FCMP_OLE: return Expression::FCMPOLE;
+    case FCmpInst::FCMP_ONE: return Expression::FCMPONE;
+    case FCmpInst::FCMP_ORD: return Expression::FCMPORD;
+    case FCmpInst::FCMP_UNO: return Expression::FCMPUNO;
+    case FCmpInst::FCMP_UEQ: return Expression::FCMPUEQ;
+    case FCmpInst::FCMP_UGT: return Expression::FCMPUGT;
+    case FCmpInst::FCMP_UGE: return Expression::FCMPUGE;
+    case FCmpInst::FCMP_ULT: return Expression::FCMPULT;
+    case FCmpInst::FCMP_ULE: return Expression::FCMPULE;
+    case FCmpInst::FCMP_UNE: return Expression::FCMPUNE;
+    }
   }
 }
 
@@ -790,7 +796,7 @@ Value *GVN::GetValueForBlock(BasicBlock *BB, Instruction* orig,
   // If the block is unreachable, just return undef, since this path
   // can't actually occur at runtime.
   if (!DT->isReachableFromEntry(BB))
-    return Phis[BB] = UndefValue::get(orig->getType());
+    return Phis[BB] = Context->getUndef(orig->getType());
   
   if (BasicBlock *Pred = BB->getSinglePredecessor()) {
     Value *ret = GetValueForBlock(Pred, orig, Phis);
@@ -948,8 +954,14 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
 
   // If we had a phi translation failure, we'll have a single entry which is a
   // clobber in the current block.  Reject this early.
-  if (Deps.size() == 1 && Deps[0].second.isClobber())
+  if (Deps.size() == 1 && Deps[0].second.isClobber()) {
+    DEBUG(
+      DOUT << "GVN: non-local load ";
+      WriteAsOperand(*DOUT.stream(), LI);
+      DOUT << " is clobbered by " << *Deps[0].second.getInst();
+    );
     return false;
+  }
   
   // Filter out useless results (non-locals, etc).  Keep track of the blocks
   // where we have a value available in repl, also keep track of whether we see
@@ -972,7 +984,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     // Loading the allocation -> undef.
     if (isa<AllocationInst>(DepInst)) {
       ValuesPerBlock.push_back(std::make_pair(DepBB, 
-                                              UndefValue::get(LI->getType())));
+                                            Context->getUndef(LI->getType())));
       continue;
     }
   
@@ -1055,11 +1067,32 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   // that we only have to insert *one* load (which means we're basically moving
   // the load, not inserting a new one).
   
-  // Everything we do here is based on local predecessors of LI's block.  If it
-  // only has one predecessor, bail now.
+  SmallPtrSet<BasicBlock *, 4> Blockers;
+  for (unsigned i = 0, e = UnavailableBlocks.size(); i != e; ++i)
+    Blockers.insert(UnavailableBlocks[i]);
+
+  // Lets find first basic block with more than one predecessor.  Walk backwards
+  // through predecessors if needed.
   BasicBlock *LoadBB = LI->getParent();
-  if (LoadBB->getSinglePredecessor())
-    return false;
+  BasicBlock *TmpBB = LoadBB;
+
+  bool isSinglePred = false;
+  bool allSingleSucc = true;
+  while (TmpBB->getSinglePredecessor()) {
+    isSinglePred = true;
+    TmpBB = TmpBB->getSinglePredecessor();
+    if (!TmpBB) // If haven't found any, bail now.
+      return false;
+    if (TmpBB == LoadBB) // Infinite (unreachable) loop.
+      return false;
+    if (Blockers.count(TmpBB))
+      return false;
+    if (TmpBB->getTerminator()->getNumSuccessors() != 1)
+      allSingleSucc = false;
+  }
+  
+  assert(TmpBB);
+  LoadBB = TmpBB;
   
   // If we have a repl set with LI itself in it, this means we have a loop where
   // at least one of the values is LI.  Since this means that we won't be able
@@ -1069,6 +1102,23 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     if (ValuesPerBlock[i].second == LI)
       return false;
   
+  if (isSinglePred) {
+    bool isHot = false;
+    for (unsigned i = 0, e = ValuesPerBlock.size(); i != e; ++i)
+      if (Instruction *I = dyn_cast<Instruction>(ValuesPerBlock[i].second))
+	// "Hot" Instruction is in some loop (because it dominates its dep. 
+	// instruction).
+	if (DT->dominates(LI, I)) { 
+	  isHot = true;
+	  break;
+	}
+
+    // We are interested only in "hot" instructions. We don't want to do any
+    // mis-optimizations here.
+    if (!isHot)
+      return false;
+  }
+
   // Okay, we have some hope :).  Check to see if the loaded value is fully
   // available in all but one predecessor.
   // FIXME: If we could restructure the CFG, we could make a common pred with
@@ -1115,7 +1165,20 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
                 << UnavailablePred->getName() << "': " << *LI);
     return false;
   }
-  
+
+  // Make sure it is valid to move this load here.  We have to watch out for:
+  //  @1 = getelementptr (i8* p, ...
+  //  test p and branch if == 0
+  //  load @1
+  // It is valid to have the getelementptr before the test, even if p can be 0,
+  // as getelementptr only does address arithmetic.
+  // If we are not pushing the value through any multiple-successor blocks
+  // we do not have this case.  Otherwise, check that the load is safe to
+  // put anywhere; this can be improved, but should be conservatively safe.
+  if (!allSingleSucc &&
+      !isSafeToLoadUnconditionally(LoadPtr, UnavailablePred->getTerminator()))
+    return false;
+
   // Okay, we can eliminate this load by inserting a reload in the predecessor
   // and using PHI construction to get the value in the other predecessors, do
   // it.
@@ -1124,6 +1187,11 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   Value *NewLoad = new LoadInst(LoadPtr, LI->getName()+".pre", false,
                                 LI->getAlignment(),
                                 UnavailablePred->getTerminator());
+  
+  SmallPtrSet<Instruction*, 4> &p = phiMap[LI->getPointerOperand()];
+  for (SmallPtrSet<Instruction*, 4>::iterator I = p.begin(), E = p.end();
+       I != E; ++I)
+    ValuesPerBlock.push_back(std::make_pair((*I)->getParent(), *I));
   
   DenseMap<BasicBlock*, Value*> BlockReplValues;
   BlockReplValues.insert(ValuesPerBlock.begin(), ValuesPerBlock.end());
@@ -1153,8 +1221,16 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
   MemDepResult dep = MD->getDependency(L);
   
   // If the value isn't available, don't do anything!
-  if (dep.isClobber())
+  if (dep.isClobber()) {
+    DEBUG(
+      // fast print dep, using operator<< on instruction would be too slow
+      DOUT << "GVN: load ";
+      WriteAsOperand(*DOUT.stream(), L);
+      Instruction *I = dep.getInst();
+      DOUT << " is clobbered by " << *I;
+    );
     return false;
+  }
 
   // If it is defined in another block, try harder.
   if (dep.isNonLocal())
@@ -1195,7 +1271,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
   // undef value.  This can happen when loading for a fresh allocation with no
   // intervening stores, for example.
   if (isa<AllocationInst>(DepInst)) {
-    L->replaceAllUsesWith(UndefValue::get(L->getType()));
+    L->replaceAllUsesWith(Context->getUndef(L->getType()));
     toErase.push_back(L);
     NumGVNLoad++;
     return true;
@@ -1307,9 +1383,9 @@ bool GVN::processInstruction(Instruction *I,
     BasicBlock* falseSucc = BI->getSuccessor(1);
     
     if (trueSucc->getSinglePredecessor())
-      localAvail[trueSucc]->table[condVN] = ConstantInt::getTrue();
+      localAvail[trueSucc]->table[condVN] = Context->getConstantIntTrue();
     if (falseSucc->getSinglePredecessor())
-      localAvail[falseSucc]->table[condVN] = ConstantInt::getFalse();
+      localAvail[falseSucc]->table[condVN] = Context->getConstantIntFalse();
 
     return false;
     
@@ -1479,13 +1555,13 @@ bool GVN::performPRE(Function& F) {
     for (BasicBlock::iterator BI = CurrentBlock->begin(),
          BE = CurrentBlock->end(); BI != BE; ) {
       Instruction *CurInst = BI++;
-      
+
       if (isa<AllocationInst>(CurInst) || isa<TerminatorInst>(CurInst) ||
           isa<PHINode>(CurInst) || (CurInst->getType() == Type::VoidTy) ||
-          CurInst->mayReadFromMemory() || CurInst->mayWriteToMemory() ||
+          CurInst->mayReadFromMemory() || CurInst->mayHaveSideEffects() ||
           isa<DbgInfoIntrinsic>(CurInst))
         continue;
-      
+
       uint32_t valno = VN.lookup(CurInst);
       
       // Look for the predecessors for PRE opportunities.  We're

@@ -220,12 +220,21 @@ void TokenLexer::ExpandFunctionArguments() {
       
       ResultToks.append(ArgToks, ArgToks+NumToks);
       
-      // If the next token was supposed to get leading whitespace, ensure it has
-      // it now.
-      if (CurTok.hasLeadingSpace() || NextTokGetsSpace) {
+      // If this token (the macro argument) was supposed to get leading
+      // whitespace, transfer this information onto the first token of the
+      // expansion.
+      //
+      // Do not do this if the paste operator occurs before the macro argument,
+      // as in "A ## MACROARG".  In valid code, the first token will get
+      // smooshed onto the preceding one anyway (forming AMACROARG).  In
+      // assembler-with-cpp mode, invalid pastes are allowed through: in this
+      // case, we do not want the extra whitespace to be added.  For example,
+      // we want ". ## foo" -> ".foo" not ". foo".
+      if ((CurTok.hasLeadingSpace() || NextTokGetsSpace) &&
+          !PasteBefore)
         ResultToks[ResultToks.size()-NumToks].setFlag(Token::LeadingSpace);
-        NextTokGetsSpace = false;
-      }
+      
+      NextTokGetsSpace = false;
       continue;
     }
     
@@ -342,9 +351,10 @@ void TokenLexer::Lex(Token &Tok) {
   }
   
   // Handle recursive expansion!
-  if (IdentifierInfo *II = Tok.getIdentifierInfo()) {
+  if (!Tok.isAnnotation() && Tok.getIdentifierInfo() != 0) {
     // Change the kind of this identifier to the appropriate token kind, e.g.
     // turning "for" into a keyword.
+    IdentifierInfo *II = Tok.getIdentifierInfo();
     Tok.setKind(II->getTokenID());
     
     // If this identifier was poisoned and from a paste, emit an error.  This
@@ -461,9 +471,16 @@ bool TokenLexer::PasteTokens(Token &Tok) {
         }
       
         // Do not emit the warning when preprocessing assembler code.
-        if (!PP.getLangOptions().AsmPreprocessor)
-          PP.Diag(PasteOpLoc, diag::err_pp_bad_paste)
-            << std::string(Buffer.begin(), Buffer.end()-1);
+        if (!PP.getLangOptions().AsmPreprocessor) {
+          // Explicitly convert the token location to have proper instantiation
+          // information so that the user knows where it came from.
+          SourceManager &SM = PP.getSourceManager();
+          SourceLocation Loc =
+            SM.createInstantiationLoc(PasteOpLoc, InstantiateLocStart,
+                                      InstantiateLocEnd, 2);
+          PP.Diag(Loc, diag::err_pp_bad_paste)
+            << std::string(Buffer.begin(), Buffer.end());
+        }
         
         // Do not consume the RHS.
         --CurToken;

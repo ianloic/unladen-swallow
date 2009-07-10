@@ -26,7 +26,9 @@ namespace clang {
 class ASTContext;
 class NamespaceDecl;
 class IdentifierInfo;
+class PrintingPolicy;
 class Type;
+class LangOptions;
 
 /// \brief Represents a C++ nested name specifier, such as
 /// "::std::vector<int>::".
@@ -163,7 +165,7 @@ public:
 
   /// \brief Print this nested name specifier to the given output
   /// stream.
-  void print(llvm::raw_ostream &OS) const;
+  void print(llvm::raw_ostream &OS, const PrintingPolicy &Policy) const;
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
     ID.AddPointer(Prefix.getOpaqueValue());
@@ -174,7 +176,7 @@ public:
 
   /// \brief Dump the nested name specifier to standard output to aid
   /// in debugging.
-  void dump();
+  void dump(const LangOptions &LO);
 };
 
 }

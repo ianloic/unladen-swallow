@@ -26,6 +26,7 @@ module TypeKind = struct
   | Fp128
   | Ppc_fp128
   | Label
+  | Metadata
   | Integer
   | Function
   | Struct
@@ -62,6 +63,21 @@ module CallConv = struct
   let cold = 9
   let x86_stdcall = 64
   let x86_fastcall = 65
+end
+
+module Attribute = struct
+  type t =
+  | Zext
+  | Sext
+  | Noreturn
+  | Inreg
+  | Structret
+  | Nounwind
+  | Noalias
+  | Byval
+  | Nest
+  | Readnone
+  | Readonly
 end
 
 module Icmp = struct
@@ -234,6 +250,7 @@ external const_packed_struct : llvalue array -> llvalue
 external const_vector : llvalue array -> llvalue = "llvm_const_vector"
 
 (*--... Constant expressions ...............................................--*)
+external align_of : lltype -> llvalue = "LLVMAlignOf"
 external size_of : lltype -> llvalue = "LLVMSizeOf"
 external const_neg : llvalue -> llvalue = "LLVMConstNeg"
 external const_not : llvalue -> llvalue = "LLVMConstNot"
@@ -418,7 +435,10 @@ let rec fold_right_function_range f i e init =
 let fold_right_functions f m init =
   fold_right_function_range f (function_end m) (At_start m) init
 
-(* TODO: param attrs *)
+external add_function_attr : llvalue -> Attribute.t -> unit
+                           = "llvm_add_function_attr"
+external remove_function_attr : llvalue -> Attribute.t -> unit
+                              = "llvm_remove_function_attr"
 
 (*--... Operations on params ...............................................--*)
 external params : llvalue -> llvalue array = "llvm_params"
@@ -468,6 +488,13 @@ let rec fold_right_param_range f init i e =
 
 let fold_right_params f fn init =
   fold_right_param_range f init (param_end fn) (At_start fn)
+
+external add_param_attr : llvalue -> Attribute.t -> unit
+                        = "llvm_add_param_attr"
+external remove_param_attr : llvalue -> Attribute.t -> unit
+                           = "llvm_remove_param_attr"
+external set_param_alignment : llvalue -> int -> unit
+                             = "llvm_set_param_alignment"
 
 (*--... Operations on basic blocks .........................................--*)
 external value_of_block : llbasicblock -> llvalue = "LLVMBasicBlockAsValue"
@@ -586,6 +613,10 @@ external instruction_call_conv: llvalue -> int
                               = "llvm_instruction_call_conv"
 external set_instruction_call_conv: int -> llvalue -> unit
                                   = "llvm_set_instruction_call_conv"
+external add_instruction_param_attr : llvalue -> int -> Attribute.t -> unit
+                                    = "llvm_add_instruction_param_attr"
+external remove_instruction_param_attr : llvalue -> int -> Attribute.t -> unit
+                                       = "llvm_remove_instruction_param_attr"
 
 (*--... Operations on call instructions (only) .............................--*)
 external is_tail_call : llvalue -> bool = "llvm_is_tail_call"
@@ -810,3 +841,4 @@ let rec string_of_lltype ty =
   | TypeKind.Double -> "double"
   | TypeKind.Float -> "float"
   | TypeKind.Void -> "void"
+  | TypeKind.Metadata -> "metadata"

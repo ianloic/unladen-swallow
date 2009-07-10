@@ -65,6 +65,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/System/Atomic.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/DenseSet.h"
@@ -210,7 +211,7 @@ namespace {
     // for each location equivalent Node.
     struct Node {
     private:
-      static unsigned Counter;
+      static volatile sys::cas_flag Counter;
 
     public:
       Value *Val;
@@ -284,7 +285,8 @@ namespace {
 
       // Timestamp a node (used for work list prioritization)
       void Stamp() {
-        Timestamp = Counter++;
+        Timestamp = sys::AtomicIncrement(&Counter);
+        --Timestamp;
       }
 
       bool isRep() const {
@@ -616,7 +618,7 @@ X("anders-aa", "Andersen's Interprocedural Alias Analysis", false, true);
 static RegisterAnalysisGroup<AliasAnalysis> Y(X);
 
 // Initialize Timestamp Counter (static).
-unsigned Andersens::Node::Counter = 0;
+volatile llvm::sys::cas_flag Andersens::Node::Counter = 0;
 
 ModulePass *llvm::createAndersensPass() { return new Andersens(); }
 

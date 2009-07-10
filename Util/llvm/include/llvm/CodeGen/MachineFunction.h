@@ -19,7 +19,7 @@
 #define LLVM_CODEGEN_MACHINEFUNCTION_H
 
 #include "llvm/ADT/ilist.h"
-#include "llvm/CodeGen/DebugLoc.h"
+#include "llvm/Support/DebugLoc.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/Support/Annotation.h"
 #include "llvm/Support/Allocator.h"
@@ -111,6 +111,9 @@ class MachineFunction : private Annotation {
   // Tracks debug locations.
   DebugLocTracker DebugLocInfo;
 
+  // The alignment of the function.
+  unsigned Alignment;
+
 public:
   MachineFunction(const Function *Fn, const TargetMachine &TM);
   ~MachineFunction();
@@ -148,6 +151,14 @@ public:
   MachineConstantPool *getConstantPool() { return ConstantPool; }
   const MachineConstantPool *getConstantPool() const { return ConstantPool; }
 
+  /// getAlignment - Return the alignment (log2, not bytes) of the function.
+  ///
+  unsigned getAlignment() const { return Alignment; }
+
+  /// setAlignment - Set the alignment (log2, not bytes) of the function.
+  ///
+  void setAlignment(unsigned A) { Alignment = A; }
+
   /// MachineFunctionInfo - Keep track of various per-function pieces of
   /// information for backends that would like to do so.
   ///
@@ -176,7 +187,7 @@ public:
   /// basic block can be found by using the MBB::getBlockNumber method, this
   /// method provides the inverse mapping.
   ///
-  MachineBasicBlock *getBlockNumbered(unsigned N) {
+  MachineBasicBlock *getBlockNumbered(unsigned N) const {
     assert(N < MBBNumbering.size() && "Illegal block number");
     assert(MBBNumbering[N] && "Block was removed from the machine function!");
     return MBBNumbering[N];
@@ -345,6 +356,9 @@ public:
   /// setDefaultDebugLoc - Get the default debug location for the machine
   /// function.
   void setDefaultDebugLoc(DebugLoc DL) { DefaultDebugLoc = DL; }
+
+  /// getDebugLocInfo - Get the debug info location tracker.
+  DebugLocTracker &getDebugLocInfo() { return DebugLocInfo; }
 };
 
 //===--------------------------------------------------------------------===//

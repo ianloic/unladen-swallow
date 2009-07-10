@@ -1,4 +1,5 @@
-// RUN: clang-cc -triple i386-apple-darwin9 -analyze -checker-cfref -analyzer-constraints=basic -analyzer-store=basic %s -verify
+// RUN: clang-cc -triple i386-apple-darwin9 -analyze -checker-cfref -analyzer-constraints=basic -analyzer-store=basic %s -verify &&
+// RUN: clang-cc -triple i386-apple-darwin9 -analyze -checker-cfref -analyzer-constraints=basic -analyzer-store=basic-new-cast %s -verify
 
 @interface MyClass {}
 - (void *)voidPtrM;
@@ -31,7 +32,8 @@ void createFoo2() {
 }
 
 void createFoo3() {
-  MyClass *obj = 0;  
+  MyClass *obj;
+  obj = 0;  
   
   long long ll = [obj longlongM]; // expected-warning{{The receiver in the message expression is 'nil' and results in the returned value}}
 }

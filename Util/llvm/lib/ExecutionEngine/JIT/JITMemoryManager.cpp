@@ -251,15 +251,18 @@ namespace {
   /// middle of emitting a function, and we don't know how large the function we
   /// are emitting is.
   class VISIBILITY_HIDDEN DefaultJITMemoryManager : public JITMemoryManager {
+    bool PoisonMemory;  // Whether to poison freed memory.
+
     std::vector<sys::MemoryBlock> Blocks; // Memory blocks allocated by the JIT
     FreeRangeHeader *FreeMemoryList;      // Circular list of free blocks.
     
     // When emitting code into a memory block, this is the block.
     MemoryRangeHeader *CurBlock;
     
-    unsigned char *CurStubPtr, *StubBase;
-    unsigned char *GOTBase;      // Target Specific reserved memory
-    void *DlsymTable;            // Stub external symbol information
+    uint8_t *CurStubPtr, *StubBase;
+    uint8_t *CurGlobalPtr, *GlobalEnd;
+    uint8_t *GOTBase;     // Target Specific reserved memory
+    void *DlsymTable;     // Stub external symbol information
 
     // Centralize memory block allocation.
     sys::MemoryBlock getNewMemoryBlock(unsigned size);
@@ -273,12 +276,12 @@ namespace {
     void AllocateGOT();
     void SetDlsymTable(void *);
     
-    unsigned char *allocateStub(const GlobalValue* F, unsigned StubSize,
-                                unsigned Alignment);
+    uint8_t *allocateStub(const GlobalValue* F, unsigned StubSize,
+                          unsigned Alignment);
     
     /// startFunctionBody - When a function starts, allocate a block of free
     /// executable memory, returning a pointer to it and its actual size.
-    unsigned char *startFunctionBody(const Function *F, uintptr_t &ActualSize) {
+    uint8_t *startFunctionBody(const Function *F, uintptr_t &ActualSize) {
       
       FreeRangeHeader* candidateBlock = FreeMemoryList;
       FreeRangeHeader* head = FreeMemoryList;
@@ -301,18 +304,18 @@ namespace {
       // Allocate the entire memory block.
       FreeMemoryList = candidateBlock->AllocateBlock();
       ActualSize = CurBlock->BlockSize-sizeof(MemoryRangeHeader);
-      return (unsigned char *)(CurBlock+1);
+      return (uint8_t *)(CurBlock+1);
     }
     
     /// endFunctionBody - The function F is now allocated, and takes the memory
     /// in the range [FunctionStart,FunctionEnd).
-    void endFunctionBody(const Function *F, unsigned char *FunctionStart,
-                         unsigned char *FunctionEnd) {
+    void endFunctionBody(const Function *F, uint8_t *FunctionStart,
+                         uint8_t *FunctionEnd) {
       assert(FunctionEnd > FunctionStart);
-      assert(FunctionStart == (unsigned char *)(CurBlock+1) &&
+      assert(FunctionStart == (uint8_t *)(CurBlock+1) &&
              "Mismatched function start/end!");
 
-      uintptr_t BlockSize = FunctionEnd - (unsigned char *)CurBlock;
+      uintptr_t BlockSize = FunctionEnd - (uint8_t *)CurBlock;
       FunctionBlocks[F] = CurBlock;
 
       // Release the memory at the end of this block that isn't needed.
@@ -320,46 +323,68 @@ namespace {
     }
 
     /// allocateSpace - Allocate a memory block of the given size.
-    unsigned char *allocateSpace(intptr_t Size, unsigned Alignment) {
+    uint8_t *allocateSpace(intptr_t Size, unsigned Alignment) {
       CurBlock = FreeMemoryList;
       FreeMemoryList = FreeMemoryList->AllocateBlock();
 
-      unsigned char *result = (unsigned char *)CurBlock+1;
+      uint8_t *result = (uint8_t *)(CurBlock + 1);
 
       if (Alignment == 0) Alignment = 1;
-      result = (unsigned char*)(((intptr_t)result+Alignment-1) &
+      result = (uint8_t*)(((intptr_t)result+Alignment-1) &
                ~(intptr_t)(Alignment-1));
 
-      uintptr_t BlockSize = result + Size - (unsigned char *)CurBlock;
+      uintptr_t BlockSize = result + Size - (uint8_t *)CurBlock;
       FreeMemoryList =CurBlock->TrimAllocationToSize(FreeMemoryList, BlockSize);
 
       return result;
     }
 
+    /// allocateGlobal - Allocate memory for a global.  Unlike allocateSpace,
+    /// this method does not touch the current block and can be called at any
+    /// time.
+    uint8_t *allocateGlobal(uintptr_t Size, unsigned Alignment) {
+      uint8_t *Result = CurGlobalPtr;
+
+      // Align the pointer.
+      if (Alignment == 0) Alignment = 1;
+      Result = (uint8_t*)(((uintptr_t)Result + Alignment-1) &
+                          ~(uintptr_t)(Alignment-1));
+
+      // Move the current global pointer forward.
+      CurGlobalPtr += Result - CurGlobalPtr + Size;
+
+      // Check for overflow.
+      if (CurGlobalPtr > GlobalEnd) {
+        // FIXME: Allocate more memory.
+        fprintf(stderr, "JIT ran out of memory for globals!\n");
+        abort();
+      }
+
+      return Result;
+    }
+
     /// startExceptionTable - Use startFunctionBody to allocate memory for the 
     /// function's exception table.
-    unsigned char* startExceptionTable(const Function* F, 
-                                       uintptr_t &ActualSize) {
+    uint8_t* startExceptionTable(const Function* F, uintptr_t &ActualSize) {
       return startFunctionBody(F, ActualSize);
     }
 
     /// endExceptionTable - The exception table of F is now allocated, 
     /// and takes the memory in the range [TableStart,TableEnd).
-    void endExceptionTable(const Function *F, unsigned char *TableStart,
-                           unsigned char *TableEnd, 
-                           unsigned char* FrameRegister) {
+    void endExceptionTable(const Function *F, uint8_t *TableStart,
+                           uint8_t *TableEnd, uint8_t* FrameRegister) {
       assert(TableEnd > TableStart);
-      assert(TableStart == (unsigned char *)(CurBlock+1) &&
+      assert(TableStart == (uint8_t *)(CurBlock+1) &&
              "Mismatched table start/end!");
       
-      uintptr_t BlockSize = TableEnd - (unsigned char *)CurBlock;
+      uintptr_t BlockSize = TableEnd - (uint8_t *)CurBlock;
       TableBlocks[F] = CurBlock;
 
       // Release the memory at the end of this block that isn't needed.
       FreeMemoryList =CurBlock->TrimAllocationToSize(FreeMemoryList, BlockSize);
     }
     
-    unsigned char *getGOTBase() const {
+    uint8_t *getGOTBase() const {
       return GOTBase;
     }
     
@@ -377,12 +402,12 @@ namespace {
       // Find the block that is allocated for this function.
       MemoryRangeHeader *MemRange = I->second;
       assert(MemRange->ThisAllocated && "Block isn't allocated!");
-      
+
       // Fill the buffer with garbage!
-#ifndef NDEBUG
-      memset(MemRange+1, 0xCD, MemRange->BlockSize-sizeof(*MemRange));
-#endif
-      
+      if (PoisonMemory) {
+        memset(MemRange+1, 0xCD, MemRange->BlockSize-sizeof(*MemRange));
+      }
+
       // Free the memory.
       FreeMemoryList = MemRange->FreeBlock(FreeMemoryList);
       
@@ -395,12 +420,12 @@ namespace {
       // Find the block that is allocated for this function.
       MemRange = I->second;
       assert(MemRange->ThisAllocated && "Block isn't allocated!");
-      
+
       // Fill the buffer with garbage!
-#ifndef NDEBUG
-      memset(MemRange+1, 0xCD, MemRange->BlockSize-sizeof(*MemRange));
-#endif
-      
+      if (PoisonMemory) {
+        memset(MemRange+1, 0xCD, MemRange->BlockSize-sizeof(*MemRange));
+      }
+
       // Free the memory.
       FreeMemoryList = MemRange->FreeBlock(FreeMemoryList);
       
@@ -422,10 +447,22 @@ namespace {
       for (unsigned i = 0, e = Blocks.size(); i != e; ++i)
         sys::Memory::setExecutable(Blocks[i]);
     }
+
+    /// setPoisonMemory - Controls whether we write garbage over freed memory.
+    ///
+    void setPoisonMemory(bool poison) {
+      PoisonMemory = poison;
+    }
   };
 }
 
 DefaultJITMemoryManager::DefaultJITMemoryManager() {
+#ifdef NDEBUG
+  PoisonMemory = true;
+#else
+  PoisonMemory = false;
+#endif
+
   // Allocate a 16M block of memory for functions.
 #if defined(__APPLE__) && defined(__arm__)
   sys::MemoryBlock MemBlock = getNewMemoryBlock(4 << 20);
@@ -433,13 +470,15 @@ DefaultJITMemoryManager::DefaultJITMemoryManager() {
   sys::MemoryBlock MemBlock = getNewMemoryBlock(16 << 20);
 #endif
 
-  unsigned char *MemBase = static_cast<unsigned char*>(MemBlock.base());
+  uint8_t *MemBase = static_cast<uint8_t*>(MemBlock.base());
 
-  // Allocate stubs backwards from the base, allocate functions forward
-  // from the base.
+  // Allocate stubs backwards to the base, globals forward from the stubs, and
+  // functions forward after globals.
   StubBase   = MemBase;
   CurStubPtr = MemBase + 512*1024; // Use 512k for stubs, working backwards.
-  
+  CurGlobalPtr = CurStubPtr;       // Use 2M for globals, working forwards.
+  GlobalEnd = CurGlobalPtr + 2*1024*1024;
+
   // We set up the memory chunk with 4 mem regions, like this:
   //  [ START
   //    [ Free      #0 ] -> Large space to allocate functions from.
@@ -476,7 +515,7 @@ DefaultJITMemoryManager::DefaultJITMemoryManager() {
   // Add a FreeRangeHeader to the start of the function body region, indicating
   // that the space is free.  Mark the previous block allocated so we never look
   // at it.
-  FreeRangeHeader *Mem0 = (FreeRangeHeader*)CurStubPtr;
+  FreeRangeHeader *Mem0 = (FreeRangeHeader*)GlobalEnd;
   Mem0->ThisAllocated = 0;
   Mem0->PrevAllocated = 1;
   Mem0->BlockSize = (char*)Mem1-(char*)Mem0;
@@ -492,7 +531,7 @@ DefaultJITMemoryManager::DefaultJITMemoryManager() {
 
 void DefaultJITMemoryManager::AllocateGOT() {
   assert(GOTBase == 0 && "Cannot allocate the got multiple times");
-  GOTBase = new unsigned char[sizeof(void*) * 8192];
+  GOTBase = new uint8_t[sizeof(void*) * 8192];
   HasGOT = true;
 }
 
@@ -508,12 +547,12 @@ DefaultJITMemoryManager::~DefaultJITMemoryManager() {
   Blocks.clear();
 }
 
-unsigned char *DefaultJITMemoryManager::allocateStub(const GlobalValue* F,
+uint8_t *DefaultJITMemoryManager::allocateStub(const GlobalValue* F,
                                                      unsigned StubSize,
                                                      unsigned Alignment) {
   CurStubPtr -= StubSize;
-  CurStubPtr = (unsigned char*)(((intptr_t)CurStubPtr) &
-                                ~(intptr_t)(Alignment-1));
+  CurStubPtr = (uint8_t*)(((intptr_t)CurStubPtr) &
+                          ~(intptr_t)(Alignment-1));
   if (CurStubPtr < StubBase) {
     // FIXME: allocate a new block
     fprintf(stderr, "JIT ran out of memory for function stubs!\n");
@@ -524,7 +563,7 @@ unsigned char *DefaultJITMemoryManager::allocateStub(const GlobalValue* F,
 
 sys::MemoryBlock DefaultJITMemoryManager::getNewMemoryBlock(unsigned size) {
   // Allocate a new block close to the last one.
-  const sys::MemoryBlock *BOld = Blocks.empty() ? 0 : &Blocks.front();
+  const sys::MemoryBlock *BOld = Blocks.empty() ? 0 : &Blocks.back();
   std::string ErrMsg;
   sys::MemoryBlock B = sys::Memory::AllocateRWX(size, BOld, &ErrMsg);
   if (B.base() == 0) {

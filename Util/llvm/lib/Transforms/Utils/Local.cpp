@@ -14,11 +14,13 @@
 
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Constants.h"
+#include "llvm/GlobalAlias.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -26,6 +28,50 @@
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/MathExtras.h"
 using namespace llvm;
+
+//===----------------------------------------------------------------------===//
+//  Local analysis.
+//
+
+/// isSafeToLoadUnconditionally - Return true if we know that executing a load
+/// from this value cannot trap.  If it is not obviously safe to load from the
+/// specified pointer, we do a quick local scan of the basic block containing
+/// ScanFrom, to determine if the address is already accessed.
+bool llvm::isSafeToLoadUnconditionally(Value *V, Instruction *ScanFrom) {
+  // If it is an alloca it is always safe to load from.
+  if (isa<AllocaInst>(V)) return true;
+
+  // If it is a global variable it is mostly safe to load from.
+  if (const GlobalValue *GV = dyn_cast<GlobalVariable>(V))
+    // Don't try to evaluate aliases.  External weak GV can be null.
+    return !isa<GlobalAlias>(GV) && !GV->hasExternalWeakLinkage();
+
+  // Otherwise, be a little bit agressive by scanning the local block where we
+  // want to check to see if the pointer is already being loaded or stored
+  // from/to.  If so, the previous load or store would have already trapped,
+  // so there is no harm doing an extra load (also, CSE will later eliminate
+  // the load entirely).
+  BasicBlock::iterator BBI = ScanFrom, E = ScanFrom->getParent()->begin();
+
+  while (BBI != E) {
+    --BBI;
+
+    // If we see a free or a call which may write to memory (i.e. which might do
+    // a free) the pointer could be marked invalid.
+    if (isa<FreeInst>(BBI) || 
+        (isa<CallInst>(BBI) && BBI->mayWriteToMemory() &&
+         !isa<DbgInfoIntrinsic>(BBI)))
+      return false;
+
+    if (LoadInst *LI = dyn_cast<LoadInst>(BBI)) {
+      if (LI->getOperand(0) == V) return true;
+    } else if (StoreInst *SI = dyn_cast<StoreInst>(BBI)) {
+      if (SI->getOperand(1) == V) return true;
+    }
+  }
+  return false;
+}
+
 
 //===----------------------------------------------------------------------===//
 //  Local constant propagation.
@@ -164,17 +210,15 @@ bool llvm::isInstructionTriviallyDead(Instruction *I) {
 
   // We don't want debug info removed by anything this general.
   if (isa<DbgInfoIntrinsic>(I)) return false;
-    
-  if (!I->mayWriteToMemory())
-    return true;
 
-  // Special case intrinsics that "may write to memory" but can be deleted when
-  // dead.
+  if (!I->mayHaveSideEffects()) return true;
+
+  // Special case intrinsics that "may have side effects" but can be deleted
+  // when dead.
   if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I))
     // Safe to delete llvm.stacksave if dead.
     if (II->getIntrinsicID() == Intrinsic::stacksave)
       return true;
-  
   return false;
 }
 
@@ -190,8 +234,7 @@ void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V) {
   DeadInsts.push_back(I);
   
   while (!DeadInsts.empty()) {
-    I = DeadInsts.back();
-    DeadInsts.pop_back();
+    I = DeadInsts.pop_back_val();
 
     // Null out all of the instruction's operands to see if any operand becomes
     // dead as we go.
@@ -220,7 +263,8 @@ void llvm::RecursivelyDeleteTriviallyDeadInstructions(Value *V) {
 /// too, recursively.
 void
 llvm::RecursivelyDeleteDeadPHINode(PHINode *PN) {
-
+  LLVMContext *Context = PN->getParent()->getContext();
+  
   // We can remove a PHI if it is on a cycle in the def-use graph
   // where each node in the cycle has degree one, i.e. only one use,
   // and is an instruction with no side effects.
@@ -230,14 +274,14 @@ llvm::RecursivelyDeleteDeadPHINode(PHINode *PN) {
   SmallPtrSet<PHINode *, 4> PHIs;
   PHIs.insert(PN);
   for (Instruction *J = cast<Instruction>(*PN->use_begin());
-       J->hasOneUse() && !J->mayWriteToMemory();
+       J->hasOneUse() && !J->mayHaveSideEffects();
        J = cast<Instruction>(*J->use_begin()))
     // If we find a PHI more than once, we're on a cycle that
     // won't prove fruitful.
     if (PHINode *JP = dyn_cast<PHINode>(J))
       if (!PHIs.insert(cast<PHINode>(JP))) {
         // Break the cycle and delete the PHI and its operands.
-        JP->replaceAllUsesWith(UndefValue::get(JP->getType()));
+        JP->replaceAllUsesWith(Context->getUndef(JP->getType()));
         RecursivelyDeleteTriviallyDeadInstructions(JP);
         break;
       }
@@ -257,7 +301,7 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB) {
   while (PHINode *PN = dyn_cast<PHINode>(DestBB->begin())) {
     Value *NewVal = PN->getIncomingValue(0);
     // Replace self referencing PHI with undef, it must be dead.
-    if (NewVal == PN) NewVal = UndefValue::get(PN->getType());
+    if (NewVal == PN) NewVal = DestBB->getContext()->getUndef(PN->getType());
     PN->replaceAllUsesWith(NewVal);
     PN->eraseFromParent();
   }
@@ -298,44 +342,3 @@ bool llvm::OnlyUsedByDbgInfoIntrinsics(Instruction *I,
   return true;
 }
 
-/// UserIsDebugInfo - Return true if U is a constant expr used by 
-/// llvm.dbg.variable or llvm.dbg.global_variable
-bool llvm::UserIsDebugInfo(User *U) {
-  ConstantExpr *CE = dyn_cast<ConstantExpr>(U);
-
-  if (!CE || CE->getNumUses() != 1)
-    return false;
-
-  Constant *Init = dyn_cast<Constant>(CE->use_back());
-  if (!Init || Init->getNumUses() != 1)
-    return false;
-
-  GlobalVariable *GV = dyn_cast<GlobalVariable>(Init->use_back());
-  if (!GV || !GV->hasInitializer() || GV->getInitializer() != Init)
-    return false;
-
-  DIVariable DV(GV);
-  if (!DV.isNull()) 
-    return true; // User is llvm.dbg.variable
-
-  DIGlobalVariable DGV(GV);
-  if (!DGV.isNull())
-    return true; // User is llvm.dbg.global_variable
-
-  return false;
-}
-
-/// RemoveDbgInfoUser - Remove an User which is representing debug info.
-void llvm::RemoveDbgInfoUser(User *U) {
-  assert (UserIsDebugInfo(U) && "Unexpected User!");
-  ConstantExpr *CE = cast<ConstantExpr>(U);
-  while (!CE->use_empty()) {
-    Constant *C = cast<Constant>(CE->use_back());
-    while (!C->use_empty()) {
-      GlobalVariable *GV = cast<GlobalVariable>(C->use_back());
-      GV->eraseFromParent();
-    }
-    C->destroyConstant();
-  }
-  CE->destroyConstant();
-}

@@ -1,5 +1,5 @@
-// RUN: clang-cc -analyze -checker-simple -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify %s
 
 #include <stdlib.h>
@@ -24,7 +24,7 @@ int* f3(int x, int *y) {
 
 void* compound_literal(int x, int y) {
   if (x)
-    return &(unsigned short){((unsigned short)0x22EF)}; // expected-warning{{Address of stack memory}} expected-warning{{braces around scalar initializer}}
+    return &(unsigned short){((unsigned short)0x22EF)}; // expected-warning{{Address of stack memory}}
 
   int* array[] = {};
   struct s { int z; double y; int w; };
@@ -42,3 +42,19 @@ void* alloca_test() {
   return p; // expected-warning{{Address of stack memory}}
 }
 
+int array_test(int x[2]) {
+  return x[0]; // no-warning
+}
+
+struct baz {
+  int x;
+  int y[2];
+};
+
+int struct_test(struct baz byVal, int flag) {
+  if (flag)  
+    return byVal.x; // no-warning
+  else {
+    return byVal.y[0]; // no-warning
+  }
+}

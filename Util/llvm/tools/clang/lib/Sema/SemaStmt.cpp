@@ -21,8 +21,8 @@
 #include "clang/Basic/TargetInfo.h"
 using namespace clang;
 
-Sema::OwningStmtResult Sema::ActOnExprStmt(ExprArg expr) {
-  Expr *E = expr.takeAs<Expr>();
+Sema::OwningStmtResult Sema::ActOnExprStmt(FullExprArg expr) {
+  Expr *E = expr->takeAs<Expr>();
   assert(E && "ActOnExprStmt(): missing expression");
 
   // C99 6.8.3p2: The expression in an expression statement is evaluated as a
@@ -102,13 +102,15 @@ Sema::ActOnCaseStmt(SourceLocation CaseLoc, ExprArg lhsval,
   // C99 6.8.4.2p3: The expression shall be an integer constant.
   // However, GCC allows any evaluatable integer expression. 
   Expr *LHSVal = static_cast<Expr*>(lhsval.get());
-  if (VerifyIntegerConstantExpression(LHSVal))
+  if (!LHSVal->isTypeDependent() && !LHSVal->isValueDependent() && 
+      VerifyIntegerConstantExpression(LHSVal))
     return StmtError();
 
   // GCC extension: The expression shall be an integer constant.
 
   Expr *RHSVal = static_cast<Expr*>(rhsval.get());
-  if (RHSVal && VerifyIntegerConstantExpression(RHSVal)) {
+  if (RHSVal && !RHSVal->isTypeDependent() && !RHSVal->isValueDependent() &&
+      VerifyIntegerConstantExpression(RHSVal)) {
     RHSVal = 0;  // Recover by just forgetting about it.
     rhsval = 0;
   }
@@ -121,7 +123,8 @@ Sema::ActOnCaseStmt(SourceLocation CaseLoc, ExprArg lhsval,
   // Only now release the smart pointers.
   lhsval.release();
   rhsval.release();
-  CaseStmt *CS = new (Context) CaseStmt(LHSVal, RHSVal, CaseLoc);
+  CaseStmt *CS = new (Context) CaseStmt(LHSVal, RHSVal, CaseLoc, DotDotDotLoc,
+                                        ColonLoc);
   getSwitchStack().back()->addSwitchCase(CS);
   return Owned(CS);
 }
@@ -143,7 +146,7 @@ Sema::ActOnDefaultStmt(SourceLocation DefaultLoc, SourceLocation ColonLoc,
     return Owned(SubStmt);
   }
 
-  DefaultStmt *DS = new (Context) DefaultStmt(DefaultLoc, SubStmt);
+  DefaultStmt *DS = new (Context) DefaultStmt(DefaultLoc, ColonLoc, SubStmt);
   getSwitchStack().back()->addSwitchCase(DS);
   return Owned(DS);
 }
@@ -177,24 +180,29 @@ Sema::ActOnLabelStmt(SourceLocation IdentLoc, IdentifierInfo *II,
 }
 
 Action::OwningStmtResult
-Sema::ActOnIfStmt(SourceLocation IfLoc, ExprArg CondVal,
+Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal,
                   StmtArg ThenVal, SourceLocation ElseLoc,
                   StmtArg ElseVal) {
-  Expr *condExpr = CondVal.takeAs<Expr>();
+  OwningExprResult CondResult(CondVal.release());
+  
+  Expr *condExpr = CondResult.takeAs<Expr>();
 
   assert(condExpr && "ActOnIfStmt(): missing expression");
 
-  DefaultFunctionArrayConversion(condExpr);
-  // Take ownership again until we're past the error checking.
-  CondVal = condExpr;
-  QualType condType = condExpr->getType();
-
-  if (getLangOptions().CPlusPlus) {
-    if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-      return StmtError();
-  } else if (!condType->isScalarType()) // C99 6.8.4.1p1
-    return StmtError(Diag(IfLoc, diag::err_typecheck_statement_requires_scalar)
-      << condType << condExpr->getSourceRange());
+  if (!condExpr->isTypeDependent()) {
+    DefaultFunctionArrayConversion(condExpr);
+    // Take ownership again until we're past the error checking.
+    CondResult = condExpr;
+    QualType condType = condExpr->getType();
+    
+    if (getLangOptions().CPlusPlus) {
+      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
+        return StmtError();
+    } else if (!condType->isScalarType()) // C99 6.8.4.1p1
+      return StmtError(Diag(IfLoc, 
+                            diag::err_typecheck_statement_requires_scalar)
+                       << condType << condExpr->getSourceRange());
+  }
 
   Stmt *thenStmt = ThenVal.takeAs<Stmt>();
 
@@ -207,9 +215,9 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, ExprArg CondVal,
       Diag(stmt->getSemiLoc(), diag::warn_empty_if_body);
   }
 
-  CondVal.release();
+  CondResult.release();
   return Owned(new (Context) IfStmt(IfLoc, condExpr, thenStmt,
-                                    ElseVal.takeAs<Stmt>()));
+                                    ElseLoc, ElseVal.takeAs<Stmt>()));
 }
 
 Action::OwningStmtResult
@@ -224,17 +232,18 @@ Sema::ActOnStartOfSwitchStmt(ExprArg cond) {
     // converted by calling that conversion function, and the result of the
     // conversion is used in place of the original condition for the remainder
     // of this section. Integral promotions are performed.
-
-    QualType Ty = Cond->getType();
-
-    // FIXME: Handle class types.
-
-    // If the type is wrong a diagnostic will be emitted later at
-    // ActOnFinishSwitchStmt.
-    if (Ty->isIntegralType() || Ty->isEnumeralType()) {
-      // Integral promotions are performed.
-      // FIXME: Integral promotions for C++ are not complete.
-      UsualUnaryConversions(Cond);
+    if (!Cond->isTypeDependent()) {
+      QualType Ty = Cond->getType();
+      
+      // FIXME: Handle class types.
+      
+      // If the type is wrong a diagnostic will be emitted later at
+      // ActOnFinishSwitchStmt.
+      if (Ty->isIntegralType() || Ty->isEnumeralType()) {
+        // Integral promotions are performed.
+        // FIXME: Integral promotions for C++ are not complete.
+        UsualUnaryConversions(Cond);
+      }
     }
   } else {
     // C99 6.8.4.2p5 - Integer promotions are performed on the controlling expr.
@@ -335,7 +344,8 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
   Expr *CondExpr = SS->getCond();
   QualType CondType = CondExpr->getType();
 
-  if (!CondType->isIntegerType()) { // C99 6.8.4.2p1
+  if (!CondExpr->isTypeDependent() && 
+      !CondType->isIntegerType()) { // C99 6.8.4.2p1
     Diag(SwitchLoc, diag::err_typecheck_statement_requires_integer)
       << CondType << CondExpr->getSourceRange();
     return StmtError();
@@ -343,7 +353,11 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
 
   // Get the bitwidth of the switched-on value before promotions.  We must
   // convert the integer case values to this width before comparison.
-  unsigned CondWidth = static_cast<unsigned>(Context.getTypeSize(CondType));
+  bool HasDependentValue 
+    = CondExpr->isTypeDependent() || CondExpr->isValueDependent();
+  unsigned CondWidth 
+    = HasDependentValue? 0
+                       : static_cast<unsigned>(Context.getTypeSize(CondType));
   bool CondIsSigned = CondType->isSignedIntegerType();
   
   // Accumulate all of the case values in a vector so that we can sort them
@@ -359,7 +373,7 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
   
   bool CaseListIsErroneous = false;
   
-  for (SwitchCase *SC = SS->getSwitchCaseList(); SC;
+  for (SwitchCase *SC = SS->getSwitchCaseList(); SC && !HasDependentValue;
        SC = SC->getNextSwitchCase()) {
     
     if (DefaultStmt *DS = dyn_cast<DefaultStmt>(SC)) {
@@ -368,9 +382,9 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
         Diag(TheDefaultStmt->getDefaultLoc(), diag::note_duplicate_case_prev);
 
         // FIXME: Remove the default statement from the switch block so that
-        // we'll return a valid AST.  This requires recursing down the
-        // AST and finding it, not something we are set up to do right now.  For
-        // now, just lop the entire switch stmt out of the AST.
+        // we'll return a valid AST.  This requires recursing down the AST and
+        // finding it, not something we are set up to do right now.  For now,
+        // just lop the entire switch stmt out of the AST.
         CaseListIsErroneous = true;
       }
       TheDefaultStmt = DS;
@@ -381,6 +395,12 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
       // We already verified that the expression has a i-c-e value (C99
       // 6.8.4.2p3) - get that value now.
       Expr *Lo = CS->getLHS();
+
+      if (Lo->isTypeDependent() || Lo->isValueDependent()) {
+        HasDependentValue = true;
+        break;
+      }
+        
       llvm::APSInt LoVal = Lo->EvaluateAsInt(Context);
       
       // Convert the value to the same width/sign as the condition.
@@ -394,115 +414,124 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
       CS->setLHS(Lo);
       
       // If this is a case range, remember it in CaseRanges, otherwise CaseVals.
-      if (CS->getRHS())
+      if (CS->getRHS()) {
+        if (CS->getRHS()->isTypeDependent() || 
+            CS->getRHS()->isValueDependent()) {
+          HasDependentValue = true;
+          break;
+        }
         CaseRanges.push_back(std::make_pair(LoVal, CS));
-      else 
+      } else 
         CaseVals.push_back(std::make_pair(LoVal, CS));
     }
   }
+
+  if (!HasDependentValue) {
+    // Sort all the scalar case values so we can easily detect duplicates.
+    std::stable_sort(CaseVals.begin(), CaseVals.end(), CmpCaseVals);
+
+    if (!CaseVals.empty()) {
+      for (unsigned i = 0, e = CaseVals.size()-1; i != e; ++i) {
+        if (CaseVals[i].first == CaseVals[i+1].first) {
+          // If we have a duplicate, report it.
+          Diag(CaseVals[i+1].second->getLHS()->getLocStart(),
+               diag::err_duplicate_case) << CaseVals[i].first.toString(10);
+          Diag(CaseVals[i].second->getLHS()->getLocStart(), 
+               diag::note_duplicate_case_prev);
+          // FIXME: We really want to remove the bogus case stmt from the
+          // substmt, but we have no way to do this right now.
+          CaseListIsErroneous = true;
+        }
+      }
+    }
   
-  // Sort all the scalar case values so we can easily detect duplicates.
-  std::stable_sort(CaseVals.begin(), CaseVals.end(), CmpCaseVals);
-  
-  if (!CaseVals.empty()) {
-    for (unsigned i = 0, e = CaseVals.size()-1; i != e; ++i) {
-      if (CaseVals[i].first == CaseVals[i+1].first) {
-        // If we have a duplicate, report it.
-        Diag(CaseVals[i+1].second->getLHS()->getLocStart(),
-             diag::err_duplicate_case) << CaseVals[i].first.toString(10);
-        Diag(CaseVals[i].second->getLHS()->getLocStart(), 
-             diag::note_duplicate_case_prev);
-        // FIXME: We really want to remove the bogus case stmt from the substmt,
-        // but we have no way to do this right now.
-        CaseListIsErroneous = true;
+    // Detect duplicate case ranges, which usually don't exist at all in
+    // the first place.
+    if (!CaseRanges.empty()) {
+      // Sort all the case ranges by their low value so we can easily detect
+      // overlaps between ranges.
+      std::stable_sort(CaseRanges.begin(), CaseRanges.end());
+      
+      // Scan the ranges, computing the high values and removing empty ranges.
+      std::vector<llvm::APSInt> HiVals;
+      for (unsigned i = 0, e = CaseRanges.size(); i != e; ++i) {
+        CaseStmt *CR = CaseRanges[i].second;
+        Expr *Hi = CR->getRHS();
+        llvm::APSInt HiVal = Hi->EvaluateAsInt(Context);
+        
+        // Convert the value to the same width/sign as the condition.
+        ConvertIntegerToTypeWarnOnOverflow(HiVal, CondWidth, CondIsSigned,
+                                           CR->getRHS()->getLocStart(),
+                                           diag::warn_case_value_overflow);
+        
+        // If the LHS is not the same type as the condition, insert an implicit
+        // cast.
+        ImpCastExprToType(Hi, CondType);
+        CR->setRHS(Hi);
+        
+        // If the low value is bigger than the high value, the case is empty.
+        if (CaseRanges[i].first > HiVal) {
+          Diag(CR->getLHS()->getLocStart(), diag::warn_case_empty_range)
+            << SourceRange(CR->getLHS()->getLocStart(),
+                           CR->getRHS()->getLocEnd());
+          CaseRanges.erase(CaseRanges.begin()+i);
+          --i, --e;
+          continue;
+        }
+        HiVals.push_back(HiVal);
+      }
+      
+      // Rescan the ranges, looking for overlap with singleton values and other
+      // ranges.  Since the range list is sorted, we only need to compare case
+      // ranges with their neighbors.
+      for (unsigned i = 0, e = CaseRanges.size(); i != e; ++i) {
+        llvm::APSInt &CRLo = CaseRanges[i].first;
+        llvm::APSInt &CRHi = HiVals[i];
+        CaseStmt *CR = CaseRanges[i].second;
+        
+        // Check to see whether the case range overlaps with any
+        // singleton cases.
+        CaseStmt *OverlapStmt = 0;
+        llvm::APSInt OverlapVal(32);
+        
+        // Find the smallest value >= the lower bound.  If I is in the
+        // case range, then we have overlap.
+        CaseValsTy::iterator I = std::lower_bound(CaseVals.begin(),
+                                                  CaseVals.end(), CRLo,
+                                                  CaseCompareFunctor());
+        if (I != CaseVals.end() && I->first < CRHi) {
+          OverlapVal  = I->first;   // Found overlap with scalar.
+          OverlapStmt = I->second;
+        }
+        
+        // Find the smallest value bigger than the upper bound.
+        I = std::upper_bound(I, CaseVals.end(), CRHi, CaseCompareFunctor());
+        if (I != CaseVals.begin() && (I-1)->first >= CRLo) {
+          OverlapVal  = (I-1)->first;      // Found overlap with scalar.
+          OverlapStmt = (I-1)->second;
+        }
+        
+        // Check to see if this case stmt overlaps with the subsequent
+        // case range.
+        if (i && CRLo <= HiVals[i-1]) {
+          OverlapVal  = HiVals[i-1];       // Found overlap with range.
+          OverlapStmt = CaseRanges[i-1].second;
+        }
+        
+        if (OverlapStmt) {
+          // If we have a duplicate, report it.
+          Diag(CR->getLHS()->getLocStart(), diag::err_duplicate_case)
+            << OverlapVal.toString(10);
+          Diag(OverlapStmt->getLHS()->getLocStart(), 
+               diag::note_duplicate_case_prev);
+          // FIXME: We really want to remove the bogus case stmt from the
+          // substmt, but we have no way to do this right now.
+          CaseListIsErroneous = true;
+        }
       }
     }
   }
-  
-  // Detect duplicate case ranges, which usually don't exist at all in the first
-  // place.
-  if (!CaseRanges.empty()) {
-    // Sort all the case ranges by their low value so we can easily detect
-    // overlaps between ranges.
-    std::stable_sort(CaseRanges.begin(), CaseRanges.end());
-    
-    // Scan the ranges, computing the high values and removing empty ranges.
-    std::vector<llvm::APSInt> HiVals;
-    for (unsigned i = 0, e = CaseRanges.size(); i != e; ++i) {
-      CaseStmt *CR = CaseRanges[i].second;
-      Expr *Hi = CR->getRHS();
-      llvm::APSInt HiVal = Hi->EvaluateAsInt(Context);
 
-      // Convert the value to the same width/sign as the condition.
-      ConvertIntegerToTypeWarnOnOverflow(HiVal, CondWidth, CondIsSigned,
-                                         CR->getRHS()->getLocStart(),
-                                         diag::warn_case_value_overflow);
-      
-      // If the LHS is not the same type as the condition, insert an implicit
-      // cast.
-      ImpCastExprToType(Hi, CondType);
-      CR->setRHS(Hi);
-      
-      // If the low value is bigger than the high value, the case is empty.
-      if (CaseRanges[i].first > HiVal) {
-        Diag(CR->getLHS()->getLocStart(), diag::warn_case_empty_range)
-          << SourceRange(CR->getLHS()->getLocStart(),
-                         CR->getRHS()->getLocEnd());
-        CaseRanges.erase(CaseRanges.begin()+i);
-        --i, --e;
-        continue;
-      }
-      HiVals.push_back(HiVal);
-    }
-
-    // Rescan the ranges, looking for overlap with singleton values and other
-    // ranges.  Since the range list is sorted, we only need to compare case
-    // ranges with their neighbors.
-    for (unsigned i = 0, e = CaseRanges.size(); i != e; ++i) {
-      llvm::APSInt &CRLo = CaseRanges[i].first;
-      llvm::APSInt &CRHi = HiVals[i];
-      CaseStmt *CR = CaseRanges[i].second;
-      
-      // Check to see whether the case range overlaps with any singleton cases.
-      CaseStmt *OverlapStmt = 0;
-      llvm::APSInt OverlapVal(32);
-      
-      // Find the smallest value >= the lower bound.  If I is in the case range,
-      // then we have overlap.
-      CaseValsTy::iterator I = std::lower_bound(CaseVals.begin(),
-                                                CaseVals.end(), CRLo,
-                                                CaseCompareFunctor());
-      if (I != CaseVals.end() && I->first < CRHi) {
-        OverlapVal  = I->first;   // Found overlap with scalar.
-        OverlapStmt = I->second;
-      }
-
-      // Find the smallest value bigger than the upper bound.
-      I = std::upper_bound(I, CaseVals.end(), CRHi, CaseCompareFunctor());
-      if (I != CaseVals.begin() && (I-1)->first >= CRLo) {
-        OverlapVal  = (I-1)->first;      // Found overlap with scalar.
-        OverlapStmt = (I-1)->second;
-      }
-
-      // Check to see if this case stmt overlaps with the subsequent case range.
-      if (i && CRLo <= HiVals[i-1]) {
-        OverlapVal  = HiVals[i-1];       // Found overlap with range.
-        OverlapStmt = CaseRanges[i-1].second;
-      }
-      
-      if (OverlapStmt) {
-        // If we have a duplicate, report it.
-        Diag(CR->getLHS()->getLocStart(), diag::err_duplicate_case)
-          << OverlapVal.toString(10);
-        Diag(OverlapStmt->getLHS()->getLocStart(), 
-             diag::note_duplicate_case_prev);
-        // FIXME: We really want to remove the bogus case stmt from the substmt,
-        // but we have no way to do this right now.
-        CaseListIsErroneous = true;
-      }
-    }
-  }
-  
   // FIXME: If the case list was broken is some way, we don't have a good system
   // to patch it up.  Instead, just return the whole substmt as broken.
   if (CaseListIsErroneous)
@@ -513,46 +542,54 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
 }
 
 Action::OwningStmtResult
-Sema::ActOnWhileStmt(SourceLocation WhileLoc, ExprArg Cond, StmtArg Body) {
-  Expr *condExpr = Cond.takeAs<Expr>();
+Sema::ActOnWhileStmt(SourceLocation WhileLoc, FullExprArg Cond, StmtArg Body) {
+  ExprArg CondArg(Cond.release());
+  Expr *condExpr = CondArg.takeAs<Expr>();
   assert(condExpr && "ActOnWhileStmt(): missing expression");
 
-  DefaultFunctionArrayConversion(condExpr);
-  Cond = condExpr;
-  QualType condType = condExpr->getType();
+  if (!condExpr->isTypeDependent()) {
+    DefaultFunctionArrayConversion(condExpr);
+    CondArg = condExpr;
+    QualType condType = condExpr->getType();
+    
+    if (getLangOptions().CPlusPlus) {
+      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
+        return StmtError();
+    } else if (!condType->isScalarType()) // C99 6.8.5p2
+      return StmtError(Diag(WhileLoc,
+                            diag::err_typecheck_statement_requires_scalar)
+                       << condType << condExpr->getSourceRange());
+  }
 
-  if (getLangOptions().CPlusPlus) {
-    if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-      return StmtError();
-  } else if (!condType->isScalarType()) // C99 6.8.5p2
-    return StmtError(Diag(WhileLoc,
-      diag::err_typecheck_statement_requires_scalar)
-      << condType << condExpr->getSourceRange());
-
-  Cond.release();
+  CondArg.release();
   return Owned(new (Context) WhileStmt(condExpr, Body.takeAs<Stmt>(), 
                                        WhileLoc));
 }
 
 Action::OwningStmtResult
 Sema::ActOnDoStmt(SourceLocation DoLoc, StmtArg Body,
-                  SourceLocation WhileLoc, ExprArg Cond) {
+                  SourceLocation WhileLoc, SourceLocation CondLParen,
+                  ExprArg Cond, SourceLocation CondRParen) {
   Expr *condExpr = Cond.takeAs<Expr>();
   assert(condExpr && "ActOnDoStmt(): missing expression");
 
-  DefaultFunctionArrayConversion(condExpr);
-  Cond = condExpr;
-  QualType condType = condExpr->getType();
-
-  if (getLangOptions().CPlusPlus) {
-    if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-      return StmtError();
-  } else if (!condType->isScalarType()) // C99 6.8.5p2
-    return StmtError(Diag(DoLoc, diag::err_typecheck_statement_requires_scalar)
-      << condType << condExpr->getSourceRange());
+  if (!condExpr->isTypeDependent()) {
+    DefaultFunctionArrayConversion(condExpr);
+    Cond = condExpr;
+    QualType condType = condExpr->getType();
+    
+    if (getLangOptions().CPlusPlus) {
+      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
+        return StmtError();
+    } else if (!condType->isScalarType()) // C99 6.8.5p2
+      return StmtError(Diag(DoLoc, 
+                            diag::err_typecheck_statement_requires_scalar)
+                       << condType << condExpr->getSourceRange());
+  }
 
   Cond.release();
-  return Owned(new (Context) DoStmt(Body.takeAs<Stmt>(), condExpr, DoLoc));
+  return Owned(new (Context) DoStmt(Body.takeAs<Stmt>(), condExpr, DoLoc,
+                                    WhileLoc, CondRParen));
 }
 
 Action::OwningStmtResult
@@ -580,7 +617,7 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
       }
     }
   }
-  if (Second) {
+  if (Second && !Second->isTypeDependent()) {
     DefaultFunctionArrayConversion(Second);
     QualType SecondType = Second->getType();
 
@@ -596,7 +633,8 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
   second.release();
   third.release();
   body.release();
-  return Owned(new (Context) ForStmt(First, Second, Third, Body, ForLoc));
+  return Owned(new (Context) ForStmt(First, Second, Third, Body, ForLoc,
+                                     LParenLoc, RParenLoc));
 }
 
 Action::OwningStmtResult
@@ -671,13 +709,15 @@ Sema::ActOnIndirectGotoStmt(SourceLocation GotoLoc, SourceLocation StarLoc,
                             ExprArg DestExp) {
   // Convert operand to void*
   Expr* E = DestExp.takeAs<Expr>();
-  QualType ETy = E->getType();
-  AssignConvertType ConvTy =
-        CheckSingleAssignmentConstraints(Context.VoidPtrTy, E);
-  if (DiagnoseAssignmentResult(ConvTy, StarLoc, Context.VoidPtrTy, ETy,
-                               E, "passing"))
-    return StmtError();
-  return Owned(new (Context) IndirectGotoStmt(GotoLoc, E));
+  if (!E->isTypeDependent()) {
+    QualType ETy = E->getType();
+    AssignConvertType ConvTy =
+      CheckSingleAssignmentConstraints(Context.VoidPtrTy, E);
+    if (DiagnoseAssignmentResult(ConvTy, StarLoc, Context.VoidPtrTy, ETy,
+                                 E, "passing"))
+      return StmtError();
+  }
+  return Owned(new (Context) IndirectGotoStmt(GotoLoc, StarLoc, E));
 }
 
 Action::OwningStmtResult
@@ -708,16 +748,23 @@ Action::OwningStmtResult
 Sema::ActOnBlockReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
   // If this is the first return we've seen in the block, infer the type of
   // the block from it.
-  if (CurBlock->ReturnType == 0) {
+  if (CurBlock->ReturnType.isNull()) {
     if (RetValExp) {
       // Don't call UsualUnaryConversions(), since we don't want to do
       // integer promotions here.
       DefaultFunctionArrayConversion(RetValExp);
-      CurBlock->ReturnType = RetValExp->getType().getTypePtr();
+      CurBlock->ReturnType = RetValExp->getType();
+      if (BlockDeclRefExpr *CDRE = dyn_cast<BlockDeclRefExpr>(RetValExp)) {
+        // We have to remove a 'const' added to copied-in variable which was
+        // part of the implementation spec. and not the actual qualifier for
+        // the variable.
+        if (CDRE->isConstQualAdded())
+           CurBlock->ReturnType.removeConst();
+      }
     } else
-      CurBlock->ReturnType = Context.VoidTy.getTypePtr();
+      CurBlock->ReturnType = Context.VoidTy;
   }
-  QualType FnRetType = QualType(CurBlock->ReturnType, 0);
+  QualType FnRetType = CurBlock->ReturnType;
 
   if (CurBlock->TheDecl->hasAttr<NoReturnAttr>()) {
     Diag(ReturnLoc, diag::err_noreturn_block_has_return_expr)
@@ -787,19 +834,17 @@ static bool IsReturnCopyElidable(ASTContext &Ctx, QualType RetType,
 }
 
 Action::OwningStmtResult
-Sema::ActOnReturnStmt(SourceLocation ReturnLoc, ExprArg rex) {
-  Expr *RetValExp = rex.takeAs<Expr>();
+Sema::ActOnReturnStmt(SourceLocation ReturnLoc, FullExprArg rex) {
+  Expr *RetValExp = rex->takeAs<Expr>();
   if (CurBlock)
     return ActOnBlockReturnStmt(ReturnLoc, RetValExp);
 
   QualType FnRetType;
   if (const FunctionDecl *FD = getCurFunctionDecl()) {
     FnRetType = FD->getResultType();
-    if (FD->hasAttr<NoReturnAttr>()) {
-      Diag(ReturnLoc, diag::err_noreturn_function_has_return_expr)
+    if (FD->hasAttr<NoReturnAttr>())
+      Diag(ReturnLoc, diag::warn_noreturn_function_has_return_expr)
         << getCurFunctionOrMethodDecl()->getDeclName();
-      return StmtError();
-    }
   } else if (ObjCMethodDecl *MD = getCurMethodDecl())
     FnRetType = MD->getResultType();
   else // If we don't have a function/method context, bail.
@@ -823,7 +868,7 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, ExprArg rex) {
     return Owned(new (Context) ReturnStmt(ReturnLoc, RetValExp));
   }
 
-  if (!RetValExp) {
+  if (!RetValExp && !FnRetType->isDependentType()) {
     unsigned DiagID = diag::warn_return_missing_expr;  // C90 6.6.6.4p4
     // C99 6.8.6.4p1 (ext_ since GCC warns)
     if (getLangOptions().C99) DiagID = diag::ext_return_missing_expr;
@@ -961,7 +1006,7 @@ Sema::OwningStmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc,
     TargetInfo::ConstraintInfo Info(Literal->getStrData(), 
                                     Literal->getByteLength(),
                                     Names[i]);
-    if (!Context.Target.validateInputConstraint(&OutputConstraintInfos[0],
+    if (!Context.Target.validateInputConstraint(OutputConstraintInfos.data(),
                                                 NumOutputs, Info)) {
       return StmtError(Diag(Literal->getLocStart(),
                             diag::err_asm_invalid_input_constraint)

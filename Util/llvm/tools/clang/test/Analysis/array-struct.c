@@ -1,10 +1,11 @@
-// RUN: clang-cc -analyze -checker-simple -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=range -verify %s
 
 // RegionStore now has an infinite recursion with this test case.
-// NOWORK: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
-// NOWORK: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
+// RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
 struct s {
   int data;
@@ -15,6 +16,7 @@ typedef struct {
   int data;
 } STYPE;
 
+void g(char *p);
 void g1(struct s* p);
 
 // Array to pointer conversion. Array in the struct field.
@@ -62,7 +64,12 @@ void f5() {
 void f6() {
   char *p;
   p = __builtin_alloca(10); 
+  g(p);
+  char c = *p;
   p[1] = 'a';
+  // Test if RegionStore::EvalBinOp converts the alloca region to element
+  // region.
+  p += 2;
 }
 
 struct s2;
@@ -95,7 +102,7 @@ void f10() {
 // Retrieve the default value of element/field region.
 void f11() {
   struct s a;
-  g(&a);
+  g1(&a);
   if (a.data == 0) // no-warning
     a.data = 1;
 }
@@ -131,4 +138,47 @@ static struct s3 opt;
 // Test if the embedded array is retrieved correctly.
 void f14() {
   struct s3 my_opt = opt;
+}
+
+void bar(int*);
+
+// Test if the array is correctly invalidated.
+void f15() {
+  int a[10];
+  bar(a);
+  if (a[1]) // no-warning
+    1;
+}
+
+struct s3 p[1];
+
+// Code from postgresql.
+// Current cast logic of region store mistakenly leaves the final result region
+// an ElementRegion of type 'char'. Then load a nonloc::SymbolVal from it and
+// assigns to 'a'. 
+void f16(struct s3 *p) {
+  struct s3 a = *((struct s3*) ((char*) &p[0]));
+}
+
+void inv(struct s1 *);
+
+// Invalidate the struct field.
+void f17() {
+  struct s1 t;
+  int x;
+  inv(&t);
+  if (t.e.d)
+    x = 1;
+}
+
+void read(char*);
+
+void f18() {
+  char *q;
+  char *p = (char *) __builtin_alloca(10);
+  read(p);
+  q = p;
+  q++;
+  if (*q) { // no-warning
+  }
 }

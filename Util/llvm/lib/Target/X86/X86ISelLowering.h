@@ -378,8 +378,9 @@ namespace llvm {
     /// determining it.
     virtual
     MVT getOptimalMemOpType(uint64_t Size, unsigned Align,
-                            bool isSrcConst, bool isSrcStr) const;
-    
+                            bool isSrcConst, bool isSrcStr,
+                            SelectionDAG &DAG) const;
+
     /// LowerOperation - Provide custom lowering hooks for some operations.
     ///
     virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG);
@@ -466,6 +467,11 @@ namespace llvm {
     virtual bool isZExtFree(const Type *Ty1, const Type *Ty2) const;
     virtual bool isZExtFree(MVT VT1, MVT VT2) const;
 
+    /// isNarrowingProfitable - Return true if it's profitable to narrow
+    /// operations of type VT1 to VT2. e.g. on x86, it's profitable to narrow
+    /// from i32 to i8 but not from i32 to i16.
+    virtual bool isNarrowingProfitable(MVT VT1, MVT VT2) const;
+
     /// isShuffleMaskLegal - Targets can use this to indicate that they only
     /// support *some* VECTOR_SHUFFLE operations, those with specific masks.
     /// By default, if a target supports the VECTOR_SHUFFLE node, all mask
@@ -527,7 +533,10 @@ namespace llvm {
                    , SmallSet<Instruction*, 8> &
 #endif
                    );
-    
+
+    /// getFunctionAlignment - Return the Log2 alignment of this function.
+    virtual unsigned getFunctionAlignment(const Function *F) const;
+
   private:
     /// Subtarget - Keep a pointer to the X86Subtarget around so that we can
     /// make the right decision when generating code for different targets.
@@ -569,8 +578,8 @@ namespace llvm {
     NameDecorationStyle NameDecorationForFORMAL_ARGUMENTS(SDValue Op);
     unsigned GetAlignedArgumentStackSize(unsigned StackSize, SelectionDAG &DAG);
 
-    std::pair<SDValue,SDValue> FP_TO_SINTHelper(SDValue Op, 
-                                                    SelectionDAG &DAG);
+    std::pair<SDValue,SDValue> FP_TO_INTHelper(SDValue Op, SelectionDAG &DAG,
+                                               bool isSigned);
     
     SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG);
     SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG);
@@ -586,11 +595,14 @@ namespace llvm {
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG);
     SDValue LowerShift(SDValue Op, SelectionDAG &DAG);
+    SDValue BuildFILD(SDValue Op, MVT SrcVT, SDValue Chain, SDValue StackSlot,
+                      SelectionDAG &DAG);
     SDValue LowerSINT_TO_FP(SDValue Op, SelectionDAG &DAG);
     SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG);
     SDValue LowerUINT_TO_FP_i64(SDValue Op, SelectionDAG &DAG);
     SDValue LowerUINT_TO_FP_i32(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerFP_TO_UINT(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFABS(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFNEG(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG);

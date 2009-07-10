@@ -15,11 +15,11 @@
 #include "AlphaJITInfo.h"
 #include "AlphaRelocations.h"
 #include "llvm/Function.h"
-#include "llvm/CodeGen/MachineCodeEmitter.h"
+#include "llvm/CodeGen/JITCodeEmitter.h"
 #include "llvm/Config/alloca.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cstdlib>
-#include <map>
 using namespace llvm;
 
 #define BUILD_OFormatI(Op, RA, LIT, FUN, RC) \
@@ -185,23 +185,22 @@ extern "C" {
       );
 #else
   void AlphaCompilationCallback() {
-    cerr << "Cannot call AlphaCompilationCallback() on a non-Alpha arch!\n";
-    abort();
+    LLVM_UNREACHABLE("Cannot call AlphaCompilationCallback() on a non-Alpha arch!");
   }
 #endif
 }
 
 void *AlphaJITInfo::emitFunctionStub(const Function* F, void *Fn,
-                                     MachineCodeEmitter &MCE) {
+                                     JITCodeEmitter &JCE) {
   //assert(Fn == AlphaCompilationCallback && "Where are you going?\n");
   //Do things in a stupid slow way!
-  MCE.startGVStub(F, 19*4);
-  void* Addr = (void*)(intptr_t)MCE.getCurrentPCValue();
+  JCE.startGVStub(F, 19*4);
+  void* Addr = (void*)(intptr_t)JCE.getCurrentPCValue();
   for (int x = 0; x < 19; ++ x)
-    MCE.emitWordLE(0);
+    JCE.emitWordLE(0);
   EmitBranchToAt(Addr, Fn);
   DOUT << "Emitting Stub to " << Fn << " at [" << Addr << "]\n";
-  return MCE.finishGVStub(F);
+  return JCE.finishGVStub(F);
 }
 
 TargetJITInfo::LazyResolverFn
@@ -237,11 +236,6 @@ static long getLower16(long l)
 
 void AlphaJITInfo::relocate(void *Function, MachineRelocation *MR,
                             unsigned NumRelocs, unsigned char* GOTBase) {
-  //because gpdist are paired and relative to the pc of the first inst,
-  //we need to have some state
-
-  static std::map<std::pair<void*, int>, void*> gpdistmap;
-
   for (unsigned i = 0; i != NumRelocs; ++i, ++MR) {
     unsigned *RelocPos = (unsigned*)Function + MR->getMachineCodeOffset()/4;
     long idx = 0;

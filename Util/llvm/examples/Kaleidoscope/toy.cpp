@@ -1,10 +1,12 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/PassManager.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Support/IRBuilder.h"
 #include <cstdio>
@@ -602,7 +604,7 @@ static PrototypeAST *ParseExtern() {
 //===----------------------------------------------------------------------===//
 
 static Module *TheModule;
-static IRBuilder<> Builder;
+static IRBuilder<> Builder(getGlobalContext());
 static std::map<std::string, AllocaInst*> NamedValues;
 static FunctionPassManager *TheFPM;
 
@@ -1081,6 +1083,9 @@ double printd(double X) {
 //===----------------------------------------------------------------------===//
 
 int main() {
+  InitializeNativeTarget();
+  LLVMContext Context;
+  
   // Install standard binary operators.
   // 1 is lowest precedence.
   BinopPrecedence['='] = 2;
@@ -1094,7 +1099,7 @@ int main() {
   getNextToken();
 
   // Make the module, which holds all the code.
-  TheModule = new Module("my cool jit");
+  TheModule = new Module("my cool jit", Context);
   
   // Create the JIT.
   TheExecutionEngine = ExecutionEngine::create(TheModule);

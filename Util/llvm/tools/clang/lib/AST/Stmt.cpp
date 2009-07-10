@@ -78,6 +78,7 @@ void Stmt::PrintStats() {
   sum = 0;
   for (int i = 0; i != Stmt::lastExprConstant+1; i++) {
     if (StmtClassInfo[i].Name == 0) continue;
+    if (StmtClassInfo[i].Counter == 0) continue;
     fprintf(stderr, "    %d %s, %d each (%d bytes)\n",
             StmtClassInfo[i].Counter, StmtClassInfo[i].Name,
             StmtClassInfo[i].Size,
@@ -96,6 +97,18 @@ static bool StatSwitch = false;
 bool Stmt::CollectingStats(bool enable) {
   if (enable) StatSwitch = true;
   return StatSwitch;
+}
+
+NullStmt* NullStmt::Clone(ASTContext &C) const {
+  return new (C) NullStmt(SemiLoc);
+}
+
+ContinueStmt* ContinueStmt::Clone(ASTContext &C) const {
+  return new (C) ContinueStmt(ContinueLoc);
+}
+
+BreakStmt* BreakStmt::Clone(ASTContext &C) const {
+  return new (C) BreakStmt(BreakLoc);
 }
 
 void CompoundStmt::setStmts(ASTContext &C, Stmt **Stmts, unsigned NumStmts) {
@@ -552,7 +565,7 @@ Stmt::child_iterator CXXCatchStmt::child_end() {
 
 QualType CXXCatchStmt::getCaughtType() {
   if (ExceptionDecl)
-    return llvm::cast<VarDecl>(ExceptionDecl)->getType();
+    return ExceptionDecl->getType();
   return QualType();
 }
 

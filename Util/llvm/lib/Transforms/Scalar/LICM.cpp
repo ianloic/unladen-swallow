@@ -36,6 +36,7 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
@@ -482,7 +483,7 @@ void LICM::sink(Instruction &I) {
       // Instruction is not used, just delete it.
       CurAST->deleteValue(&I);
       if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
-        I.replaceAllUsesWith(UndefValue::get(I.getType()));
+        I.replaceAllUsesWith(Context->getUndef(I.getType()));
       I.eraseFromParent();
     } else {
       // Move the instruction to the start of the exit block, after any PHI
@@ -496,7 +497,7 @@ void LICM::sink(Instruction &I) {
     // The instruction is actually dead if there ARE NO exit blocks.
     CurAST->deleteValue(&I);
     if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
-      I.replaceAllUsesWith(UndefValue::get(I.getType()));
+      I.replaceAllUsesWith(Context->getUndef(I.getType()));
     I.eraseFromParent();
   } else {
     // Otherwise, if we have multiple exits, use the PromoteMem2Reg function to
@@ -592,7 +593,7 @@ void LICM::sink(Instruction &I) {
     if (AI) {
       std::vector<AllocaInst*> Allocas;
       Allocas.push_back(AI);
-      PromoteMemToReg(Allocas, *DT, *DF, CurAST);
+      PromoteMemToReg(Allocas, *DT, *DF, Context, CurAST);
     }
   }
 }
@@ -772,7 +773,7 @@ void LICM::PromoteValuesInLoop() {
   PromotedAllocas.reserve(PromotedValues.size());
   for (unsigned i = 0, e = PromotedValues.size(); i != e; ++i)
     PromotedAllocas.push_back(PromotedValues[i].first);
-  PromoteMemToReg(PromotedAllocas, *DT, *DF, CurAST);
+  PromoteMemToReg(PromotedAllocas, *DT, *DF, Context, CurAST);
 }
 
 /// FindPromotableValuesInLoop - Check the current loop for stores to definite

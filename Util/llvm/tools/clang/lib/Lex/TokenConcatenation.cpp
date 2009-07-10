@@ -193,7 +193,7 @@ bool TokenConcatenation::AvoidConcat(const Token &PrevTok,
     FirstChar == '+' || FirstChar == '-' || FirstChar == '.';
   case tok::period:          // ..., .*, .1234
     return FirstChar == '.' || isdigit(FirstChar) ||
-    (FirstChar == '*' && PP.getLangOptions().CPlusPlus);
+    (PP.getLangOptions().CPlusPlus && FirstChar == '*');
   case tok::amp:             // &&
     return FirstChar == '&';
   case tok::plus:            // ++
@@ -209,14 +209,13 @@ bool TokenConcatenation::AvoidConcat(const Token &PrevTok,
   case tok::pipe:            // ||
     return FirstChar == '|';
   case tok::percent:         // %>, %:
-    return (FirstChar == '>' || FirstChar == ':') &&
-    PP.getLangOptions().Digraphs;
+    return FirstChar == '>' || FirstChar == ':';
   case tok::colon:           // ::, :>
-    return (FirstChar == ':' && PP.getLangOptions().CPlusPlus) ||
-    (FirstChar == '>' && PP.getLangOptions().Digraphs);
+    return FirstChar == '>' ||
+    (PP.getLangOptions().CPlusPlus && FirstChar == ':');
   case tok::hash:            // ##, #@, %:%:
     return FirstChar == '#' || FirstChar == '@' || FirstChar == '%';
   case tok::arrow:           // ->*
-    return FirstChar == '*';
+    return PP.getLangOptions().CPlusPlus && FirstChar == '*';
   }
 }

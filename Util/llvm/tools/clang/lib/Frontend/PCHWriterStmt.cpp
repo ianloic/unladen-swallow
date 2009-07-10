@@ -23,7 +23,6 @@ using namespace clang;
 
 namespace {
   class PCHStmtWriter : public StmtVisitor<PCHStmtWriter, void> {
-
     PCHWriter &Writer;
     PCHWriter::RecordData &Record;
 
@@ -140,6 +139,8 @@ void PCHStmtWriter::VisitCaseStmt(CaseStmt *S) {
   Writer.WriteSubStmt(S->getRHS());
   Writer.WriteSubStmt(S->getSubStmt());
   Writer.AddSourceLocation(S->getCaseLoc(), Record);
+  Writer.AddSourceLocation(S->getEllipsisLoc(), Record);
+  Writer.AddSourceLocation(S->getColonLoc(), Record);
   Code = pch::STMT_CASE;
 }
 
@@ -147,6 +148,7 @@ void PCHStmtWriter::VisitDefaultStmt(DefaultStmt *S) {
   VisitSwitchCase(S);
   Writer.WriteSubStmt(S->getSubStmt());
   Writer.AddSourceLocation(S->getDefaultLoc(), Record);
+  Writer.AddSourceLocation(S->getColonLoc(), Record);
   Code = pch::STMT_DEFAULT;
 }
 
@@ -165,6 +167,7 @@ void PCHStmtWriter::VisitIfStmt(IfStmt *S) {
   Writer.WriteSubStmt(S->getThen());
   Writer.WriteSubStmt(S->getElse());
   Writer.AddSourceLocation(S->getIfLoc(), Record);
+  Writer.AddSourceLocation(S->getElseLoc(), Record);
   Code = pch::STMT_IF;
 }
 
@@ -192,6 +195,8 @@ void PCHStmtWriter::VisitDoStmt(DoStmt *S) {
   Writer.WriteSubStmt(S->getCond());
   Writer.WriteSubStmt(S->getBody());
   Writer.AddSourceLocation(S->getDoLoc(), Record);
+  Writer.AddSourceLocation(S->getWhileLoc(), Record);
+  Writer.AddSourceLocation(S->getRParenLoc(), Record);
   Code = pch::STMT_DO;
 }
 
@@ -202,6 +207,8 @@ void PCHStmtWriter::VisitForStmt(ForStmt *S) {
   Writer.WriteSubStmt(S->getInc());
   Writer.WriteSubStmt(S->getBody());
   Writer.AddSourceLocation(S->getForLoc(), Record);
+  Writer.AddSourceLocation(S->getLParenLoc(), Record);
+  Writer.AddSourceLocation(S->getRParenLoc(), Record);
   Code = pch::STMT_FOR;
 }
 
@@ -216,6 +223,7 @@ void PCHStmtWriter::VisitGotoStmt(GotoStmt *S) {
 void PCHStmtWriter::VisitIndirectGotoStmt(IndirectGotoStmt *S) {
   VisitStmt(S);
   Writer.AddSourceLocation(S->getGotoLoc(), Record);
+  Writer.AddSourceLocation(S->getStarLoc(), Record);
   Writer.WriteSubStmt(S->getTarget());
   Code = pch::STMT_INDIRECT_GOTO;
 }
@@ -594,6 +602,7 @@ void PCHStmtWriter::VisitBlockDeclRefExpr(BlockDeclRefExpr *E) {
   Writer.AddDeclRef(E->getDecl(), Record);
   Writer.AddSourceLocation(E->getLocation(), Record);
   Record.push_back(E->isByRef());
+  Record.push_back(E->isConstQualAdded());
   Code = pch::EXPR_BLOCK_DECL_REF;
 }
 
@@ -817,5 +826,4 @@ void PCHWriter::FlushStmts() {
   }
   
   StmtsToEmit.clear();
-  SwitchCaseIDs.clear();
 }

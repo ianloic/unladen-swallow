@@ -90,8 +90,9 @@ namespace bitc {
     // binary compatibility.
     TYPE_CODE_X86_FP80 = 13,   // X86 LONG DOUBLE
     TYPE_CODE_FP128    = 14,   // LONG DOUBLE (112 bit mantissa)
-    TYPE_CODE_PPC_FP128= 15    // PPC LONG DOUBLE (2 doubles)
-    // Any other type code is assumed to be an unknown type.
+    TYPE_CODE_PPC_FP128= 15,   // PPC LONG DOUBLE (2 doubles)
+
+    TYPE_CODE_METADATA = 16    // METADATA
   };
 
   // The type symbol table only has one code (TST_ENTRY_CODE).
@@ -209,7 +210,8 @@ namespace bitc {
     FUNC_CODE_INST_GETRESULT   = 25, // GETRESULT:  [ty, opval, n]
     FUNC_CODE_INST_EXTRACTVAL  = 26, // EXTRACTVAL: [n x operands]
     FUNC_CODE_INST_INSERTVAL   = 27, // INSERTVAL:  [n x operands]
-    // fcmp/icmp returning Int1TY or vector of Int1Ty, NOT for vicmp/vfcmp
+    // fcmp/icmp returning Int1TY or vector of Int1Ty. Same as CMP, exists to
+    // support legacy vicmp/vfcmp instructions.
     FUNC_CODE_INST_CMP2        = 28, // CMP2:       [opty, opval, opval, pred]
     // new select on i1 or [N x i1]
     FUNC_CODE_INST_VSELECT     = 29  // VSELECT:    [ty,opval,opval,predty,pred]

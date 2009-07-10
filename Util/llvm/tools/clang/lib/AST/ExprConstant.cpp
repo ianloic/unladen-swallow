@@ -16,8 +16,12 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/ASTDiagnostic.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/TargetInfo.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Compiler.h"
+#include <cstring>
+
 using namespace clang;
 using llvm::APSInt;
 using llvm::APFloat;
@@ -58,6 +62,13 @@ static bool EvaluateComplex(const Expr *E, APValue &Result, EvalInfo &Info);
 // Misc utilities
 //===----------------------------------------------------------------------===//
 
+static bool EvalPointerValueAsBool(APValue& Value, bool& Result) {
+  // FIXME: Is this accurate for all kinds of bases?  If not, what would
+  // the check look like?
+  Result = Value.getLValueBase() || Value.getLValueOffset();
+  return true;
+}
+
 static bool HandleConversionToBool(Expr* E, bool& Result, EvalInfo &Info) {
   if (E->getType()->isIntegralType()) {
     APSInt IntResult;
@@ -75,10 +86,7 @@ static bool HandleConversionToBool(Expr* E, bool& Result, EvalInfo &Info) {
     APValue PointerResult;
     if (!EvaluatePointer(E, PointerResult, Info))
       return false;
-    // FIXME: Is this accurate for all kinds of bases?  If not, what would
-    // the check look like?
-    Result = PointerResult.getLValueBase() || PointerResult.getLValueOffset();
-    return true;
+    return EvalPointerValueAsBool(PointerResult, Result);
   } else if (E->getType()->isAnyComplexType()) {
     APValue ComplexResult;
     if (!EvaluateComplex(E, ComplexResult, Info))
@@ -178,11 +186,20 @@ static bool EvaluateLValue(const Expr* E, APValue& Result, EvalInfo &Info) {
 }
 
 APValue LValueExprEvaluator::VisitDeclRefExpr(DeclRefExpr *E)
-{ 
+{
   if (!E->hasGlobalStorage())
     return APValue();
-  
-  return APValue(E, 0); 
+
+  if (isa<FunctionDecl>(E->getDecl())) {
+    return APValue(E, 0);
+  } else if (VarDecl* VD = dyn_cast<VarDecl>(E->getDecl())) {
+    if (!VD->getType()->isReferenceType())
+      return APValue(E, 0);
+    if (VD->getInit())
+      return Visit(VD->getInit());
+  }
+
+  return APValue();
 }
 
 APValue LValueExprEvaluator::VisitBlockExpr(BlockExpr *E)
@@ -219,11 +236,14 @@ APValue LValueExprEvaluator::VisitMemberExpr(MemberExpr *E) {
   FieldDecl *FD = dyn_cast<FieldDecl>(E->getMemberDecl());
   if (!FD) // FIXME: deal with other kinds of member expressions
     return APValue();
-    
+
+  if (FD->getType()->isReferenceType())
+    return APValue();
+
   // FIXME: This is linear time.
   unsigned i = 0;
-  for (RecordDecl::field_iterator Field = RD->field_begin(Info.Ctx),
-                               FieldEnd = RD->field_end(Info.Ctx);
+  for (RecordDecl::field_iterator Field = RD->field_begin(),
+                               FieldEnd = RD->field_end();
        Field != FieldEnd; (void)++Field, ++i) {
     if (*Field == FD)
       break;
@@ -299,7 +319,9 @@ public:
       { return APValue((Expr*)0, 0); }
   APValue VisitConditionalOperator(ConditionalOperator *E);
   APValue VisitChooseExpr(ChooseExpr *E)
-    { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+      { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+  APValue VisitCXXNullPtrLiteralExpr(CXXNullPtrLiteralExpr *E)
+      { return APValue((Expr*)0, 0); }
   // FIXME: Missing: @protocol, @selector
 };
 } // end anonymous namespace
@@ -463,13 +485,76 @@ static bool EvaluateVector(const Expr* E, APValue& Result, EvalInfo &Info) {
 }
 
 APValue VectorExprEvaluator::VisitCastExpr(const CastExpr* E) {
+  const VectorType *VTy = E->getType()->getAsVectorType();
+  QualType EltTy = VTy->getElementType();
+  unsigned NElts = VTy->getNumElements();
+  unsigned EltWidth = Info.Ctx.getTypeSize(EltTy);
+  
   const Expr* SE = E->getSubExpr();
+  QualType SETy = SE->getType();
+  APValue Result = APValue();
 
-  // Check for vector->vector bitcast.
-  if (SE->getType()->isVectorType())
+  // Check for vector->vector bitcast and scalar->vector splat.
+  if (SETy->isVectorType()) {
     return this->Visit(const_cast<Expr*>(SE));
+  } else if (SETy->isIntegerType()) {
+    APSInt IntResult;
+    if (!EvaluateInteger(SE, IntResult, Info))
+      return APValue();
+    Result = APValue(IntResult);
+  } else if (SETy->isRealFloatingType()) {
+    APFloat F(0.0);
+    if (!EvaluateFloat(SE, F, Info))
+      return APValue();
+    Result = APValue(F);
+  } else
+    return APValue();
 
-  return APValue();
+  // For casts of a scalar to ExtVector, convert the scalar to the element type
+  // and splat it to all elements.
+  if (E->getType()->isExtVectorType()) {
+    if (EltTy->isIntegerType() && Result.isInt())
+      Result = APValue(HandleIntToIntCast(EltTy, SETy, Result.getInt(),
+                                          Info.Ctx));
+    else if (EltTy->isIntegerType())
+      Result = APValue(HandleFloatToIntCast(EltTy, SETy, Result.getFloat(),
+                                            Info.Ctx));
+    else if (EltTy->isRealFloatingType() && Result.isInt())
+      Result = APValue(HandleIntToFloatCast(EltTy, SETy, Result.getInt(),
+                                            Info.Ctx));
+    else if (EltTy->isRealFloatingType())
+      Result = APValue(HandleFloatToFloatCast(EltTy, SETy, Result.getFloat(),
+                                              Info.Ctx));
+    else
+      return APValue();
+
+    // Splat and create vector APValue.
+    llvm::SmallVector<APValue, 4> Elts(NElts, Result);
+    return APValue(&Elts[0], Elts.size());
+  }
+
+  // For casts of a scalar to regular gcc-style vector type, bitcast the scalar
+  // to the vector. To construct the APValue vector initializer, bitcast the
+  // initializing value to an APInt, and shift out the bits pertaining to each
+  // element.
+  APSInt Init;
+  Init = Result.isInt() ? Result.getInt() : Result.getFloat().bitcastToAPInt();
+  
+  llvm::SmallVector<APValue, 4> Elts;
+  for (unsigned i = 0; i != NElts; ++i) {
+    APSInt Tmp = Init;
+    Tmp.extOrTrunc(EltWidth);
+    
+    if (EltTy->isIntegerType())
+      Elts.push_back(APValue(Tmp));
+    else if (EltTy->isRealFloatingType())
+      Elts.push_back(APValue(APFloat(Tmp)));
+    else
+      return APValue();
+
+    Init >>= EltWidth;
+  }
+  return APValue(&Elts[0], Elts.size());
 }
 
 APValue 
@@ -698,8 +783,17 @@ bool IntExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
   // In C, they can also be folded, although they are not ICEs.
   if (E->getType().getCVRQualifiers() == QualType::Const) {
     if (const VarDecl *D = dyn_cast<VarDecl>(E->getDecl())) {
-      if (const Expr *Init = D->getInit())
-        return Visit(const_cast<Expr*>(Init));
+      if (APValue *V = D->getEvaluatedValue())
+        return Success(V->getInt(), E);
+      if (const Expr *Init = D->getInit()) {
+        if (Visit(const_cast<Expr*>(Init))) {
+          // Cache the evaluated value in the variable declaration.
+          D->setEvaluatedValue(Info.Ctx, Result);
+          return true;
+        }
+
+        return false;
+      }
     }
   }
 
@@ -910,17 +1004,35 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
       if (!EvaluatePointer(E->getRHS(), RHSValue, Info))
         return false;
 
-      // Reject any bases; this is conservative, but good enough for
-      // common uses
-      if (LHSValue.getLValueBase() || RHSValue.getLValueBase())
-        return false;
+      // Reject any bases from the normal codepath; we special-case comparisons
+      // to null.
+      if (LHSValue.getLValueBase()) {
+        if (!E->isEqualityOp())
+          return false;
+        if (RHSValue.getLValueBase() || RHSValue.getLValueOffset())
+          return false;
+        bool bres;
+        if (!EvalPointerValueAsBool(LHSValue, bres))
+          return false;
+        return Success(bres ^ (E->getOpcode() == BinaryOperator::EQ), E);
+      } else if (RHSValue.getLValueBase()) {
+        if (!E->isEqualityOp())
+          return false;
+        if (LHSValue.getLValueBase() || LHSValue.getLValueOffset())
+          return false;
+        bool bres;
+        if (!EvalPointerValueAsBool(RHSValue, bres))
+          return false;
+        return Success(bres ^ (E->getOpcode() == BinaryOperator::EQ), E);
+      }
 
       if (E->getOpcode() == BinaryOperator::Sub) {
         const QualType Type = E->getLHS()->getType();
         const QualType ElementType = Type->getAsPointerType()->getPointeeType();
 
         uint64_t D = LHSValue.getLValueOffset() - RHSValue.getLValueOffset();
-        D /= Info.Ctx.getTypeSize(ElementType) / 8;
+        if (!ElementType->isVoidType() && !ElementType->isFunctionType())
+          D /= Info.Ctx.getTypeSize(ElementType) / 8;
 
         return Success(D, E);
       }
@@ -1024,7 +1136,7 @@ unsigned IntExprEvaluator::GetAlignOfType(QualType T) {
   // Get information about the alignment.
   unsigned CharSize = Info.Ctx.Target.getCharWidth();
 
-  // FIXME: Why do we ask for the preferred alignment?
+  // __alignof is defined to return the preferred alignment.
   return Info.Ctx.getPreferredTypeAlign(T.getTypePtr()) / CharSize;
 }
 
@@ -1291,14 +1403,23 @@ bool FloatExprEvaluator::VisitCallExpr(const CallExpr *E) {
   case Builtin::BI__builtin_nan:
   case Builtin::BI__builtin_nanf:
   case Builtin::BI__builtin_nanl:
-    // If this is __builtin_nan("") turn this into a simple nan, otherwise we
+    // If this is __builtin_nan() turn this into a nan, otherwise we
     // can't constant fold it.
     if (const StringLiteral *S = 
         dyn_cast<StringLiteral>(E->getArg(0)->IgnoreParenCasts())) {
-      if (!S->isWide() && S->getByteLength() == 0) { // empty string.
+      if (!S->isWide()) {
         const llvm::fltSemantics &Sem =
           Info.Ctx.getFloatTypeSemantics(E->getType());
-        Result = llvm::APFloat::getNaN(Sem);
+        llvm::SmallString<16> s;
+        s.append(S->getStrData(), S->getStrData() + S->getByteLength());
+        s += '\0';
+        long l;
+        char *endp;
+        l = strtol(&s[0], &endp, 0);
+        if (endp != s.end()-1)
+          return false;
+        unsigned type = (unsigned int)l;;
+        Result = llvm::APFloat::getNaN(Sem, false, type);
         return true;
       }
     }

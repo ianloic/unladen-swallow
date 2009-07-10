@@ -19,6 +19,7 @@ namespace llvm {
 
 class User;
 class BasicBlock;
+class BranchInst;
 class Instruction;
 class Value;
 class Pass;
@@ -30,6 +31,16 @@ struct DbgInfoIntrinsic;
 
 template<typename T> class SmallVectorImpl;
   
+//===----------------------------------------------------------------------===//
+//  Local analysis.
+//
+
+/// isSafeToLoadUnconditionally - Return true if we know that executing a load
+/// from this value cannot trap.  If it is not obviously safe to load from the
+/// specified pointer, we do a quick local scan of the basic block containing
+/// ScanFrom, to determine if the address is already accessed.
+bool isSafeToLoadUnconditionally(Value *V, Instruction *ScanFrom);
+
 //===----------------------------------------------------------------------===//
 //  Local constant propagation.
 //
@@ -84,6 +95,12 @@ void MergeBasicBlockIntoOnlyPred(BasicBlock *BB);
 ///
 bool SimplifyCFG(BasicBlock *BB);
 
+/// FoldBranchToCommonDest - If this basic block is ONLY a setcc and a branch,
+/// and if a predecessor branches to us and one of our successors, fold the
+/// setcc into the predecessor and use logical operations to pick the right
+/// destination.
+bool FoldBranchToCommonDest(BranchInst *BI);
+
 /// DemoteRegToStack - This function takes a virtual register computed by an
 /// Instruction and replaces it with a slot in the stack frame, allocated via
 /// alloca.  This allows the CFG to be changed around without fear of
@@ -103,13 +120,6 @@ AllocaInst *DemotePHIToStack(PHINode *P, Instruction *AllocaPoint = 0);
 /// with DbgInfoIntrinsic that use the instruction I.
 bool OnlyUsedByDbgInfoIntrinsics(Instruction *I, 
                            SmallVectorImpl<DbgInfoIntrinsic *> *DbgInUses = 0);
-
-/// UserIsDebugInfo - Return true if U is a constant expr used by 
-/// llvm.dbg.variable or llvm.dbg.global_variable
-bool UserIsDebugInfo(User *U);
-
-/// RemoveDbgInfoUser - Remove an User which is representing debug info.
-void RemoveDbgInfoUser(User *U);
 
 } // End llvm namespace
 

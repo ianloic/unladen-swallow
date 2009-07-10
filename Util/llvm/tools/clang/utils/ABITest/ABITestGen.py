@@ -44,12 +44,17 @@ class TypePrinter:
         if self.outputDriver:
             print >>self.outputDriver, '#include <stdio.h>\n'
             print >>self.outputDriver, 'int main(int argc, char **argv) {'
+            print >>self.outputDriver, '  int index = -1;'
+            print >>self.outputDriver, '  if (argc > 1) index = atoi(argv[1]);'
             
     def finish(self):
         if self.layoutTests:
             print >>self.output, 'int main(int argc, char **argv) {'
-            for f in self.layoutTests:
-                print >>self.output, '  %s();' % f
+            print >>self.output, '  int index = -1;'
+            print >>self.output, '  if (argc > 1) index = atoi(argv[1]);'
+            for i,f in self.layoutTests:
+                print >>self.output, '  if (index == -1 || index == %d)' % i
+                print >>self.output, '    %s();' % f
             print >>self.output, '  return 0;'
             print >>self.output, '}' 
 
@@ -87,7 +92,7 @@ class TypePrinter:
         print >>self.output,'}'
         print >>self.output
         
-        self.layoutTests.append(fnName)
+        self.layoutTests.append((i,fnName))
         
     def writeFunction(self, i, FT):
         args = ', '.join(['%s arg%d'%(self.getTypeName(t),i) for i,t in enumerate(FT.argTypes)])
@@ -123,7 +128,10 @@ class TypePrinter:
         print >>self.output
 
         if self.outputDriver:
-            print >>self.outputDriver, '  { extern void test_%s(void); test_%s(); }\n'%(fnName,fnName,)
+            print >>self.outputDriver, '  if (index == -1 || index == %d) {' % i
+            print >>self.outputDriver, '    extern void test_%s(void);' % fnName
+            print >>self.outputDriver, '    test_%s();' % fnName
+            print >>self.outputDriver, '   }'
             
         if self.outputTests:
             if self.outputHeader:
@@ -199,21 +207,27 @@ class TypePrinter:
                 yield '(%s) -1'%(t.name,)
                 yield '(%s) 1'%(t.name,)
         elif isinstance(t, RecordType):
-            if not t.fields:
+            nonPadding = [f for f in t.fields 
+                          if not f.isPaddingBitField()]
+
+            if not nonPadding:
                 yield '{ }'
                 return
+
             # FIXME: Use designated initializers to access non-first
             # fields of unions.
             if t.isUnion:
-                for v in self.getTestValues(t.fields[0]):
+                for v in self.getTestValues(nonPadding[0]):
                     yield '{ %s }' % v
                 return
-            fieldValues = [list(self.getTestValues(f)) for f in t.fields]
+
+            fieldValues = map(list, map(self.getTestValues, nonPadding))
             for i,values in enumerate(fieldValues):
                 for v in values:
                     elements = map(random.choice,fieldValues)
                     elements[i] = v
                     yield '{ %s }'%(', '.join(elements))
+
         elif isinstance(t, ComplexType):
             for t in self.getTestValues(t.elementType):
                 yield '%s + %s * 1i'%(t,t)
@@ -230,14 +244,16 @@ class TypePrinter:
             raise NotImplementedError,'Cannot make tests values of type: "%s"'%(t,)
 
     def printSizeOfType(self, prefix, name, t, output=None, indent=2):
-        print >>output, '%*sprintf("%s: sizeof(%s) = %%ld\\n", sizeof(%s));'%(indent, '', prefix, name, name) 
+        print >>output, '%*sprintf("%s: sizeof(%s) = %%ld\\n", (long)sizeof(%s));'%(indent, '', prefix, name, name) 
     def printAlignOfType(self, prefix, name, t, output=None, indent=2):
-        print >>output, '%*sprintf("%s: __alignof__(%s) = %%ld\\n", __alignof__(%s));'%(indent, '', prefix, name, name) 
+        print >>output, '%*sprintf("%s: __alignof__(%s) = %%ld\\n", (long)__alignof__(%s));'%(indent, '', prefix, name, name) 
     def printOffsetsOfType(self, prefix, name, t, output=None, indent=2):
         if isinstance(t, RecordType):
             for i,f in enumerate(t.fields):
+                if f.isBitField():
+                    continue
                 fname = 'field%d' % i
-                print >>output, '%*sprintf("%s: __builtin_offsetof(%s, %s) = %%ld\\n", __builtin_offsetof(%s, %s));'%(indent, '', prefix, name, fname, name, fname) 
+                print >>output, '%*sprintf("%s: __builtin_offsetof(%s, %s) = %%ld\\n", (long)__builtin_offsetof(%s, %s));'%(indent, '', prefix, name, fname, name, fname) 
                 
     def printValueOfType(self, prefix, name, t, output=None, indent=2):
         if output is None:
@@ -260,6 +276,8 @@ class TypePrinter:
             if not t.fields:
                 print >>output, '%*sprintf("%s: %s (empty)\\n");'%(indent, '', prefix, name) 
             for i,f in enumerate(t.fields):
+                if f.isPaddingBitField():
+                    continue
                 fname = '%s.field%d'%(name,i)
                 self.printValueOfType(prefix, fname, f, output=output, indent=indent)
         elif isinstance(t, ComplexType):
@@ -284,6 +302,8 @@ class TypePrinter:
             print >>output, '%*sassert(%s == %s);' % (indent, '', nameLHS, nameRHS)
         elif isinstance(t, RecordType):
             for i,f in enumerate(t.fields):
+                if f.isPaddingBitField():
+                    continue
                 self.checkTypeValues('%s.field%d'%(nameLHS,i), '%s.field%d'%(nameRHS,i), 
                                      f, output=output, indent=indent)
                 if t.isUnion:
@@ -398,6 +418,12 @@ def main():
     group.add_option("", "--no-vector", dest="useVector",
                      help="do not generate vector types",
                      action="store_false", default=True)
+    group.add_option("", "--no-bit-field", dest="useBitField",
+                     help="do not generate bit-field record members",
+                     action="store_false", default=True)
+    group.add_option("", "--no-builtins", dest="useBuiltins",
+                     help="do not use any types",
+                     action="store_false", default=True)
 
     # Tuning 
     group.add_option("", "--no-function-return", dest="functionUseReturn",
@@ -406,7 +432,9 @@ def main():
     group.add_option("", "--vector-types", dest="vectorTypes",
                      help="comma separated list of vector types (e.g., v2i32) [default %default]",
                      action="store", type=str, default='v2i16, v1i64, v2i32, v4i16, v8i8, v2f32, v2i64, v4i32, v8i16, v16i8, v2f64, v4f32, v16f32', metavar="N")
-
+    group.add_option("", "--bit-fields", dest="bitFields",
+                     help="comma separated list 'type:width' bit-field specifiers [default %default]",
+                     action="store", type=str, default="char:0,char:4,unsigned:0,unsigned:4,unsigned:13,unsigned:24")
     group.add_option("", "--max-args", dest="functionMaxArgs",
                      help="maximum number of arguments per function [default %default]",
                      action="store", type=int, default=4, metavar="N")
@@ -427,26 +455,36 @@ def main():
 
     # Contruct type generator
     builtins = []
-    ints = []
-    if opts.useChar: ints.append(('char',1))
-    if opts.useShort: ints.append(('short',2))
-    if opts.useInt: ints.append(('int',4))
-    # FIXME: Wrong size.
-    if opts.useLong: ints.append(('long',4))
-    if opts.useLongLong: ints.append(('long long',8))
-    if opts.useUnsigned: 
-        ints = ([('unsigned %s'%i,s) for i,s in ints] + 
-                [('signed %s'%i,s) for i,s in ints])
-    builtins.extend(ints)
+    if opts.useBuiltins:
+        ints = []
+        if opts.useChar: ints.append(('char',1))
+        if opts.useShort: ints.append(('short',2))
+        if opts.useInt: ints.append(('int',4))
+        # FIXME: Wrong size.
+        if opts.useLong: ints.append(('long',4))
+        if opts.useLongLong: ints.append(('long long',8))
+        if opts.useUnsigned: 
+            ints = ([('unsigned %s'%i,s) for i,s in ints] + 
+                    [('signed %s'%i,s) for i,s in ints])
+        builtins.extend(ints)
 
-    if opts.useBool: builtins.append(('_Bool',1))
-    if opts.useFloat: builtins.append(('float',4))
-    if opts.useDouble: builtins.append(('double',8))
-    if opts.useLongDouble: builtins.append(('long double',16))
-    # FIXME: Wrong size.
-    if opts.useVoidPointer:  builtins.append(('void*',4))
+        if opts.useBool: builtins.append(('_Bool',1))
+        if opts.useFloat: builtins.append(('float',4))
+        if opts.useDouble: builtins.append(('double',8))
+        if opts.useLongDouble: builtins.append(('long double',16))
+        # FIXME: Wrong size.
+        if opts.useVoidPointer:  builtins.append(('void*',4))
 
     btg = FixedTypeGenerator([BuiltinType(n,s) for n,s in builtins])
+
+    bitfields = []
+    for specifier in opts.bitFields.split(','):
+        if not specifier.strip():
+            continue
+        name,width = specifier.strip().split(':', 1)
+        bitfields.append(BuiltinType(name,None,int(width)))
+    bftg = FixedTypeGenerator(bitfields)
+
     charType = BuiltinType('char',1)
     shortType = BuiltinType('short',2)
     intType = BuiltinType('int',4)
@@ -457,11 +495,13 @@ def main():
 
     atg = AnyTypeGenerator()
     artg = AnyTypeGenerator()
-    def makeGenerator(atg, subgen, useRecord, useArray):
+    def makeGenerator(atg, subgen, subfieldgen, useRecord, useArray, useBitField):
         atg.addGenerator(btg)
+        if useBitField and opts.useBitField:
+            atg.addGenerator(bftg)
         if useRecord and opts.useRecord:
             assert subgen 
-            atg.addGenerator(RecordTypeGenerator(subgen, opts.recordUseUnion, 
+            atg.addGenerator(RecordTypeGenerator(subfieldgen, opts.recordUseUnion, 
                                                  opts.recordMaxSize))
         if opts.useComplex:
             # FIXME: Allow overriding builtins here
@@ -492,21 +532,28 @@ def main():
 
     if opts.recordMaxDepth is None: 
         # Fully recursive, just avoid top-level arrays.
+        subFTG = AnyTypeGenerator()
         subTG = AnyTypeGenerator()
         atg = AnyTypeGenerator()
-        makeGenerator(subTG, atg, True, True)
-        makeGenerator(atg, subTG, True, False)
+        makeGenerator(subFTG, atg, atg, True, True, True)
+        makeGenerator(subTG, atg, subFTG, True, True, False)
+        makeGenerator(atg, subTG, subFTG, True, False, False)
     else:
         # Make a chain of type generators, each builds smaller
         # structures.
         base = AnyTypeGenerator()
-        makeGenerator(base, None, False, False)
+        fbase = AnyTypeGenerator()
+        makeGenerator(base, None, None, False, False, False)
+        makeGenerator(fbase, None, None, False, False, True)
         for i in range(opts.recordMaxDepth):
             n = AnyTypeGenerator()
-            makeGenerator(n, base, True, True)
+            fn = AnyTypeGenerator()
+            makeGenerator(n, base, fbase, True, True, False)
+            makeGenerator(fn, base, fbase, True, True, True)
             base = n
+            fbase = fn
         atg = AnyTypeGenerator()
-        makeGenerator(atg, base, True, False)
+        makeGenerator(atg, base, fbase, True, False, False)
 
     if opts.testLayout:
         ftg = atg

@@ -30,6 +30,31 @@ using llvm::APSInt;
 // Utility methods.
 //===----------------------------------------------------------------------===//
 
+bool SVal::hasConjuredSymbol() const {
+  if (const nonloc::SymbolVal* SV = dyn_cast<nonloc::SymbolVal>(this)) {
+    SymbolRef sym = SV->getSymbol();
+    if (isa<SymbolConjured>(sym))
+      return true;
+  }
+
+  if (const loc::MemRegionVal *RV = dyn_cast<loc::MemRegionVal>(this)) {
+    const MemRegion *R = RV->getRegion();
+    if (const SymbolicRegion *SR = dyn_cast<SymbolicRegion>(R)) {
+      SymbolRef sym = SR->getSymbol();
+      if (isa<SymbolConjured>(sym))
+        return true;
+    } else if (const CodeTextRegion *CTR = dyn_cast<CodeTextRegion>(R)) {
+      if (CTR->isSymbolic()) {
+        SymbolRef sym = CTR->getSymbol();
+        if (isa<SymbolConjured>(sym))
+          return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 const FunctionDecl* SVal::getAsFunctionDecl() const {
   if (const loc::MemRegionVal* X = dyn_cast<loc::MemRegionVal>(this)) {
     const MemRegion* R = X->getRegion();
@@ -87,6 +112,13 @@ const SymExpr *SVal::getAsSymbolicExpression() const {
     return X->getSymbolicExpression();
   
   return getAsSymbol();
+}
+
+const MemRegion *SVal::getAsRegion() const {
+  if (const loc::MemRegionVal *X = dyn_cast<loc::MemRegionVal>(this))
+    return X->getRegion();
+
+  return 0;
 }
 
 bool SVal::symbol_iterator::operator==(const symbol_iterator &X) const {
@@ -163,12 +195,11 @@ bool SVal::isZeroConstant() const {
 // Transfer function dispatch for Non-Locs.
 //===----------------------------------------------------------------------===//
 
-SVal nonloc::ConcreteInt::EvalBinOp(BasicValueFactory& BasicVals,
-                                     BinaryOperator::Opcode Op,
-                                     const nonloc::ConcreteInt& R) const {
-  
+SVal nonloc::ConcreteInt::evalBinOp(ValueManager &ValMgr,
+                                    BinaryOperator::Opcode Op,
+                                    const nonloc::ConcreteInt& R) const {  
   const llvm::APSInt* X =
-    BasicVals.EvaluateAPSInt(Op, getValue(), R.getValue());
+    ValMgr.getBasicValueFactory().EvaluateAPSInt(Op, getValue(), R.getValue());
   
   if (X)
     return nonloc::ConcreteInt(*X);
@@ -176,20 +207,13 @@ SVal nonloc::ConcreteInt::EvalBinOp(BasicValueFactory& BasicVals,
     return UndefinedVal();
 }
 
-  // Bitwise-Complement.
-
 nonloc::ConcreteInt
-nonloc::ConcreteInt::EvalComplement(BasicValueFactory& BasicVals) const {
-  return BasicVals.getValue(~getValue()); 
+nonloc::ConcreteInt::evalComplement(ValueManager &ValMgr) const {
+  return ValMgr.makeIntVal(~getValue());
 }
 
-  // Unary Minus.
-
-nonloc::ConcreteInt
-nonloc::ConcreteInt::EvalMinus(BasicValueFactory& BasicVals, UnaryOperator* U) const {
-  assert (U->getType() == U->getSubExpr()->getType());  
-  assert (U->getType()->isIntegerType());  
-  return BasicVals.getValue(-getValue()); 
+nonloc::ConcreteInt nonloc::ConcreteInt::evalMinus(ValueManager &ValMgr) const {
+  return ValMgr.makeIntVal(-getValue());
 }
 
 //===----------------------------------------------------------------------===//
@@ -212,186 +236,10 @@ SVal loc::ConcreteInt::EvalBinOp(BasicValueFactory& BasicVals,
 }
 
 //===----------------------------------------------------------------------===//
-// Utility methods for constructing SVals.
-//===----------------------------------------------------------------------===//
-
-SVal ValueManager::makeZeroVal(QualType T) {
-  if (Loc::IsLocType(T))
-    return Loc::MakeNull(BasicVals);
-
-  if (T->isIntegerType())
-    return NonLoc::MakeVal(BasicVals, 0, T);
-  
-  // FIXME: Handle floats.
-  // FIXME: Handle structs.
-  return UnknownVal();  
-}
-
-SVal ValueManager::makeZeroArrayIndex() {
-  return nonloc::ConcreteInt(BasicVals.getZeroWithPtrWidth(false));
-}
-
-//===----------------------------------------------------------------------===//
-// Utility methods for constructing Non-Locs.
-//===----------------------------------------------------------------------===//
-
-NonLoc ValueManager::makeNonLoc(SymbolRef sym) {
-  return nonloc::SymbolVal(sym);
-}
-
-NonLoc ValueManager::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
-                                const APSInt& v, QualType T) {
-  // The Environment ensures we always get a persistent APSInt in
-  // BasicValueFactory, so we don't need to get the APSInt from
-  // BasicValueFactory again.
-  assert(!Loc::IsLocType(T));
-  return nonloc::SymExprVal(SymMgr.getSymIntExpr(lhs, op, v, T));
-}
-
-NonLoc ValueManager::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
-                                const SymExpr *rhs, QualType T) {
-  assert(SymMgr.getType(lhs) == SymMgr.getType(rhs));
-  assert(!Loc::IsLocType(T));
-  return nonloc::SymExprVal(SymMgr.getSymSymExpr(lhs, op, rhs, T));
-}
-
-NonLoc NonLoc::MakeIntVal(BasicValueFactory& BasicVals, uint64_t X, 
-                          bool isUnsigned) {
-  return nonloc::ConcreteInt(BasicVals.getIntValue(X, isUnsigned));
-}
-
-NonLoc NonLoc::MakeVal(BasicValueFactory& BasicVals, uint64_t X, 
-                       unsigned BitWidth, bool isUnsigned) {
-  return nonloc::ConcreteInt(BasicVals.getValue(X, BitWidth, isUnsigned));
-}
-
-NonLoc NonLoc::MakeVal(BasicValueFactory& BasicVals, uint64_t X, QualType T) {  
-  return nonloc::ConcreteInt(BasicVals.getValue(X, T));
-}
-
-NonLoc NonLoc::MakeVal(BasicValueFactory& BasicVals, IntegerLiteral* I) {
-
-  return nonloc::ConcreteInt(BasicVals.getValue(APSInt(I->getValue(),
-                              I->getType()->isUnsignedIntegerType())));
-}
-
-NonLoc NonLoc::MakeVal(BasicValueFactory& BasicVals, const llvm::APInt& I,
-                       bool isUnsigned) {
-  return nonloc::ConcreteInt(BasicVals.getValue(I, isUnsigned));
-}
-
-NonLoc NonLoc::MakeVal(BasicValueFactory& BasicVals, const llvm::APSInt& I) {
-  return nonloc::ConcreteInt(BasicVals.getValue(I));
-}
-
-NonLoc NonLoc::MakeIntTruthVal(BasicValueFactory& BasicVals, bool b) {
-  return nonloc::ConcreteInt(BasicVals.getTruthValue(b));
-}
-
-NonLoc ValueManager::makeTruthVal(bool b, QualType T) {
-  return nonloc::ConcreteInt(BasicVals.getTruthValue(b, T));
-}
-
-NonLoc NonLoc::MakeCompoundVal(QualType T, llvm::ImmutableList<SVal> Vals,
-                               BasicValueFactory& BasicVals) {
-  return nonloc::CompoundVal(BasicVals.getCompoundValData(T, Vals));
-}
-
-SVal ValueManager::getRValueSymbolVal(const MemRegion* R) {
-  SymbolRef sym = SymMgr.getRegionRValueSymbol(R);
-                                
-  if (const TypedRegion* TR = dyn_cast<TypedRegion>(R)) {
-    QualType T = TR->getRValueType(SymMgr.getContext());
-
-    // If T is of function pointer type, create a CodeTextRegion wrapping a
-    // symbol.
-    if (T->isFunctionPointerType()) {
-      return Loc::MakeVal(MemMgr.getCodeTextRegion(sym, T));
-    }
-    
-    if (Loc::IsLocType(T))
-      return Loc::MakeVal(MemMgr.getSymbolicRegion(sym));
-  
-    // Only handle integers for now.
-    if (T->isIntegerType() && T->isScalarType())
-      return makeNonLoc(sym);
-  }
-
-  return UnknownVal();
-}
-
-SVal ValueManager::getConjuredSymbolVal(const Expr* E, unsigned Count) {
-  QualType T = E->getType();
-  SymbolRef sym = SymMgr.getConjuredSymbol(E, Count);
-
-  // If T is of function pointer type, create a CodeTextRegion wrapping a
-  // symbol.
-  if (T->isFunctionPointerType()) {
-    return Loc::MakeVal(MemMgr.getCodeTextRegion(sym, T));
-  }
-
-  if (Loc::IsLocType(T))
-    return Loc::MakeVal(MemMgr.getSymbolicRegion(sym));
-
-  if (T->isIntegerType() && T->isScalarType())
-    return makeNonLoc(sym);
-
-  return UnknownVal();
-}
-
-SVal ValueManager::getConjuredSymbolVal(const Expr* E, QualType T,
-                                        unsigned Count) {
-
-  SymbolRef sym = SymMgr.getConjuredSymbol(E, T, Count);
-
-  // If T is of function pointer type, create a CodeTextRegion wrapping a
-  // symbol.
-  if (T->isFunctionPointerType()) {
-    return Loc::MakeVal(MemMgr.getCodeTextRegion(sym, T));
-  }
-
-  if (Loc::IsLocType(T))
-    return Loc::MakeVal(MemMgr.getSymbolicRegion(sym));
-
-  if (T->isIntegerType() && T->isScalarType())
-    return makeNonLoc(sym);
-
-  return UnknownVal();
-}
-
-SVal ValueManager::getFunctionPointer(const FunctionDecl* FD) {
-  CodeTextRegion* R 
-    = MemMgr.getCodeTextRegion(FD, Context.getPointerType(FD->getType()));
-  return loc::MemRegionVal(R);
-}
-
-nonloc::LocAsInteger nonloc::LocAsInteger::Make(BasicValueFactory& Vals, Loc V,
-                                                unsigned Bits) {
-  return LocAsInteger(Vals.getPersistentSValWithData(V, Bits));
-}
-
-//===----------------------------------------------------------------------===//
-// Utility methods for constructing Locs.
-//===----------------------------------------------------------------------===//
-
-Loc Loc::MakeVal(const MemRegion* R) { return loc::MemRegionVal(R); }
-
-Loc Loc::MakeVal(AddrLabelExpr* E) { return loc::GotoLabel(E->getLabel()); }
-
-Loc Loc::MakeNull(BasicValueFactory &BasicVals) {
-  return loc::ConcreteInt(BasicVals.getZeroWithPtrWidth());
-}
-
-//===----------------------------------------------------------------------===//
 // Pretty-Printing.
 //===----------------------------------------------------------------------===//
 
 void SVal::printStdErr() const { print(llvm::errs()); }
-
-void SVal::print(std::ostream& Out) const {
-  llvm::raw_os_ostream out(Out);
-  print(out);
-}
 
 void SVal::print(llvm::raw_ostream& Out) const {
 

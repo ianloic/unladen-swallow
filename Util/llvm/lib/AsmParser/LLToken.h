@@ -60,7 +60,9 @@ namespace lltok {
     kw_gc,
     kw_c,
 
-    kw_cc, kw_ccc, kw_fastcc, kw_coldcc, kw_x86_stdcallcc, kw_x86_fastcallcc,
+    kw_cc, kw_ccc, kw_fastcc, kw_coldcc,
+    kw_x86_stdcallcc, kw_x86_fastcallcc,
+    kw_arm_apcscc, kw_arm_aapcscc, kw_arm_aapcs_vfpcc,
 
     kw_signext,
     kw_zeroext,
@@ -80,6 +82,8 @@ namespace lltok {
     kw_optsize,
     kw_ssp,
     kw_sspreq,
+    kw_noredzone,
+    kw_noimplicitfloat,
 
     kw_type,
     kw_opaque,
@@ -89,9 +93,10 @@ namespace lltok {
     kw_ueq, kw_une,
 
     // Instruction Opcodes (Opcode in UIntVal).
-    kw_add,  kw_sub,  kw_mul,  kw_udiv, kw_sdiv, kw_fdiv,
+    kw_add,  kw_fadd, kw_sub,  kw_fsub, kw_mul,  kw_fmul,
+    kw_udiv, kw_sdiv, kw_fdiv,
     kw_urem, kw_srem, kw_frem, kw_shl,  kw_lshr, kw_ashr,
-    kw_and,  kw_or,   kw_xor,  kw_icmp, kw_fcmp, kw_vicmp, kw_vfcmp,
+    kw_and,  kw_or,   kw_xor,  kw_icmp, kw_fcmp,
 
     kw_phi, kw_call,
     kw_trunc, kw_zext, kw_sext, kw_fptrunc, kw_fpext, kw_uitofp, kw_sitofp,

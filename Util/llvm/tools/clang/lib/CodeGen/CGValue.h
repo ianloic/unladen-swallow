@@ -38,14 +38,15 @@ class RValue {
   // return-by-value.
   enum { Scalar, Complex, Aggregate } Flavor;
   
-  // FIXME: Aggregate rvalues need to retain information about whether they are
-  // volatile or not.
+  bool Volatile:1;
 public:
   
   bool isScalar() const { return Flavor == Scalar; }
   bool isComplex() const { return Flavor == Complex; }
   bool isAggregate() const { return Flavor == Aggregate; }
   
+  bool isVolatileQualified() const { return Volatile; }
+
   /// getScalar() - Return the Value* of this scalar value.
   llvm::Value *getScalarVal() const {
     assert(isScalar() && "Not a scalar!");
@@ -68,6 +69,7 @@ public:
     RValue ER;
     ER.V1 = V;
     ER.Flavor = Scalar;
+    ER.Volatile = false;
     return ER;
   }
   static RValue getComplex(llvm::Value *V1, llvm::Value *V2) {
@@ -75,6 +77,7 @@ public:
     ER.V1 = V1;
     ER.V2 = V2;
     ER.Flavor = Complex;
+    ER.Volatile = false;
     return ER;
   }
   static RValue getComplex(const std::pair<llvm::Value *, llvm::Value *> &C) {
@@ -82,12 +85,17 @@ public:
     ER.V1 = C.first;
     ER.V2 = C.second;
     ER.Flavor = Complex;
+    ER.Volatile = false;
     return ER;
   }
-  static RValue getAggregate(llvm::Value *V) {
+  // FIXME: Aggregate rvalues need to retain information about whether they are
+  // volatile or not.  Remove default to find all places that probably get this
+  // wrong.
+  static RValue getAggregate(llvm::Value *V, bool Vol = false) {
     RValue ER;
     ER.V1 = V;
     ER.Flavor = Aggregate;
+    ER.Volatile = Vol;
     return ER;
   }
 };
@@ -161,8 +169,8 @@ private:
   static void SetQualifiers(unsigned Qualifiers, LValue& R) {
     R.Volatile = (Qualifiers&QualType::Volatile)!=0;
     R.Restrict = (Qualifiers&QualType::Restrict)!=0;
-    // FIXME: Convenient place to set objc flags to 0. This
-    // should really be done in a user-defined constructor instead.
+    // FIXME: Convenient place to set objc flags to 0. This should really be
+    // done in a user-defined constructor instead.
     R.ObjCType = None;
     R.Ivar = R.NonGC = R.GlobalObjCRef = false;
   }
@@ -288,9 +296,9 @@ public:
     return R;
   }
 
-  // FIXME: It is probably bad that we aren't emitting the target when
-  // we build the lvalue. However, this complicates the code a bit,
-  // and I haven't figured out how to make it go wrong yet.
+  // FIXME: It is probably bad that we aren't emitting the target when we build
+  // the lvalue. However, this complicates the code a bit, and I haven't figured
+  // out how to make it go wrong yet.
   static LValue MakePropertyRef(const ObjCPropertyRefExpr *E,
                                 unsigned Qualifiers) {
     LValue R;

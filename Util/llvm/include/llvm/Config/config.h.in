@@ -279,11 +279,17 @@
 /* Define to have the %a format string */
 #undef HAVE_PRINTF_A
 
+/* Have pthread_getspecific */
+#undef HAVE_PTHREAD_GETSPECIFIC
+
 /* Define to 1 if you have the <pthread.h> header file. */
 #undef HAVE_PTHREAD_H
 
 /* Have pthread_mutex_lock */
 #undef HAVE_PTHREAD_MUTEX_LOCK
+
+/* Have pthread_rwlock_init */
+#undef HAVE_PTHREAD_RWLOCK_INIT
 
 /* Define to 1 if srand48/lrand48/drand48 exist in <stdlib.h> */
 #undef HAVE_RAND48
@@ -363,6 +369,9 @@
 /* Define to 1 if you have the `strerror_r' function. */
 #undef HAVE_STRERROR_R
 
+/* Define to 1 if you have the `strerror_s' function. */
+#undef HAVE_STRERROR_S
+
 /* Define to 1 if you have the <strings.h> header file. */
 #undef HAVE_STRINGS_H
 
@@ -419,6 +428,9 @@
 /* Define to 1 if you have <sys/wait.h> that is POSIX.1 compatible. */
 #undef HAVE_SYS_WAIT_H
 
+/* Define to 1 if you have the <termios.h> header file. */
+#undef HAVE_TERMIOS_H
+
 /* Define to 1 if the system has the type `uint64_t'. */
 #undef HAVE_UINT64_T
 
@@ -466,6 +478,12 @@
 
 /* Installation directory for man pages */
 #undef LLVM_MANDIR
+
+/* Build multithreading support into LLVM */
+#undef LLVM_MULTITHREADED
+
+/* LLVM architecture name for the native architecture, if available */
+#undef LLVM_NATIVE_ARCH
 
 /* Define if this is Unixish platform */
 #undef LLVM_ON_UNIX

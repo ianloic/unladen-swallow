@@ -242,20 +242,6 @@ void LiveVariables::HandlePhysRegUse(unsigned Reg, MachineInstr *MI) {
     }
   }
 
-  // There was an earlier def of a super-register. Add implicit def to that MI.
-  //
-  //   A: EAX = ...
-  //   B: ... = AX
-  //
-  // Add implicit def to A if there isn't a use of AX (or EAX) before B.
-  if (!PhysRegUse[Reg]) {
-    MachineInstr *Def = PhysRegDef[Reg];
-    if (Def && !Def->modifiesRegister(Reg))
-      Def->addOperand(MachineOperand::CreateReg(Reg,
-                                                true  /*IsDef*/,
-                                                true  /*IsImp*/));
-  }
-  
   // Remember this use.
   PhysRegUse[Reg]  = MI;
   for (const unsigned *SubRegs = TRI->getSubRegisters(Reg);
@@ -373,25 +359,33 @@ bool LiveVariables::HandlePhysRegKill(unsigned Reg, MachineInstr *MI) {
     // That is, unless we are currently processing the last reference itself.
     LastRefOrPartRef->addRegisterDead(Reg, TRI, true);
 
-  /* Partial uses. Mark register def dead and add implicit def of
-     sub-registers which are used.
-    FIXME: LiveIntervalAnalysis can't handle this yet!
-    EAX<dead>  = op  AL<imp-def>
-    That is, EAX def is dead but AL def extends pass it.
-    Enable this after live interval analysis is fixed to improve codegen!
+  // Partial uses. Mark register def dead and add implicit def of
+  // sub-registers which are used.
+  // EAX<dead>  = op  AL<imp-def>
+  // That is, EAX def is dead but AL def extends pass it.
+  // Enable this after live interval analysis is fixed to improve codegen!
   else if (!PhysRegUse[Reg]) {
     PhysRegDef[Reg]->addRegisterDead(Reg, TRI, true);
     for (const unsigned *SubRegs = TRI->getSubRegisters(Reg);
          unsigned SubReg = *SubRegs; ++SubRegs) {
       if (PartUses.count(SubReg)) {
-        PhysRegDef[Reg]->addOperand(MachineOperand::CreateReg(SubReg,
-                                                              true, true));
+        bool NeedDef = true;
+        if (PhysRegDef[Reg] == PhysRegDef[SubReg]) {
+          MachineOperand *MO = PhysRegDef[Reg]->findRegisterDefOperand(SubReg);
+          if (MO) {
+            NeedDef = false;
+            assert(!MO->isDead());
+          }
+        }
+        if (NeedDef)
+          PhysRegDef[Reg]->addOperand(MachineOperand::CreateReg(SubReg,
+                                                                true, true));
         LastRefOrPartRef->addRegisterKilled(SubReg, TRI, true);
         for (const unsigned *SS = TRI->getSubRegisters(SubReg); *SS; ++SS)
           PartUses.erase(*SS);
       }
     }
-  } */
+  }
   else
     LastRefOrPartRef->addRegisterKilled(Reg, TRI, true);
   return true;

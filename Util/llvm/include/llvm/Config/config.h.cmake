@@ -18,17 +18,17 @@
 #undef ENABLE_CBE_PRINTF_A
 
 /* Define if position independent code is enabled */
-#undef ENABLE_PIC
+#cmakedefine ENABLE_PIC ${ENABLE_PIC}
 
 /* Define if threads enabled */
 #cmakedefine ENABLE_THREADS ${ENABLE_THREADS}
 
 /* Define to 1 if you have `alloca', as a function or macro. */
-#undef HAVE_ALLOCA
+#cmakedefine HAVE_ALLOCA ${HAVE_ALLOCA}
 
 /* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
    */
-#undef HAVE_ALLOCA_H
+#cmakedefine HAVE_ALLOCA_H ${HAVE_ALLOCA_H}
 
 /* Define to 1 if you have the `argz_append' function. */
 #undef HAVE_ARGZ_APPEND
@@ -194,7 +194,7 @@
 #cmakedefine HAVE_LIBPSAPI ${HAVE_LIBPSAPI}
 
 /* Define to 1 if you have the `pthread' library (-lpthread). */
-#undef HAVE_LIBPTHREAD
+#cmakedefine HAVE_LIBPTHREAD ${HAVE_LIBPTHREAD}
 
 /* Define to 1 if you have the `udis86' library (-ludis86). */
 #undef HAVE_LIBUDIS86
@@ -228,7 +228,7 @@
 #cmakedefine HAVE_MALLOC_MALLOC_H ${HAVE_MALLOC_MALLOC_H}
 
 /* Define to 1 if you have the `malloc_zone_statistics' function. */
-#undef HAVE_MALLOC_ZONE_STATISTICS
+#cmakedefine HAVE_MALLOC_ZONE_STATISTICS ${HAVE_MALLOC_ZONE_STATISTICS}
 
 /* Define to 1 if you have the `memcpy' function. */
 #undef HAVE_MEMCPY
@@ -276,8 +276,17 @@
 /* Define to have the %a format string */
 #undef HAVE_PRINTF_A
 
+/* Have pthread.h */
+#cmakedefine HAVE_PTHREAD_H ${HAVE_PTHREAD_H}
+
 /* Have pthread_mutex_lock */
 #cmakedefine HAVE_PTHREAD_MUTEX_LOCK ${HAVE_PTHREAD_MUTEX_LOCK}
+
+/* Have pthread_rwlock_init */
+#cmakedefine HAVE_PTHREAD_RWLOCK_INIT ${HAVE_PTHREAD_RWLOCK_INIT}
+
+/* Have pthread_getspecific */
+#cmakedefine HAVE_PTHREAD_GETSPECIFIC ${HAVE_PTHREAD_GETSPECIFIC}
 
 /* Define to 1 if srand48/lrand48/drand48 exist in <stdlib.h> */
 #undef HAVE_RAND48
@@ -355,10 +364,13 @@
 #undef HAVE_STRDUP
 
 /* Define to 1 if you have the `strerror' function. */
-#undef HAVE_STRERROR
+#cmakedefine HAVE_STRERROR ${HAVE_STRERROR}
 
 /* Define to 1 if you have the `strerror_r' function. */
-#undef HAVE_STRERROR_R
+#cmakedefine HAVE_STRERROR_R ${HAVE_STRERROR_R}
+
+/* Define to 1 if you have the `strerror_s' function. */
+#cmakedefine HAVE_STRERROR_S ${HAVE_STRERROR_S}
 
 /* Define to 1 if you have the <strings.h> header file. */
 #undef HAVE_STRINGS_H
@@ -411,10 +423,13 @@
 #cmakedefine HAVE_SYS_TYPES_H ${HAVE_SYS_TYPES_H}
 
 /* Define to 1 if you have <sys/wait.h> that is POSIX.1 compatible. */
-#undef HAVE_SYS_WAIT_H
+#cmakedefine HAVE_SYS_WAIT_H ${HAVE_SYS_WAIT_H}
 
 /* Define to 1 if the system has the type `uint64_t'. */
 #undef HAVE_UINT64_T
+
+/* Define to 1 if you have the <termios.h> header file. */
+#cmakedefine HAVE_TERMIOS_H ${HAVE_TERMIOS_H}
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #cmakedefine HAVE_UNISTD_H ${HAVE_UNISTD_H}
@@ -574,3 +589,6 @@
 
 /* Define to a function implementing strdup */
 #cmakedefine strdup ${strdup}
+
+/* Native LLVM architecture */
+#cmakedefine LLVM_NATIVE_ARCH ${LLVM_NATIVE_ARCH}Target

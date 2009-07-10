@@ -27,13 +27,13 @@ namespace llvm {
   namespace ARMISD {
     // ARM Specific DAG Nodes
     enum NodeType {
-      // Start the numbering where the builting ops and target ops leave off.
+      // Start the numbering where the builtin ops and target ops leave off.
       FIRST_NUMBER = ISD::BUILTIN_OP_END,
 
       Wrapper,      // Wrapper - A wrapper node for TargetConstantPool,
                     // TargetExternalSymbol, and TargetGlobalAddress.
       WrapperJT,    // WrapperJT - A wrapper node for TargetJumpTable
-      
+
       CALL,         // Function call.
       CALL_PRED,    // Function call that's predicable.
       CALL_NOLINK,  // Function call with branch not branch-and-link.
@@ -45,13 +45,13 @@ namespace llvm {
       PIC_ADD,      // Add with a PC operand and a PIC label.
 
       CMP,          // ARM compare instructions.
-      CMPNZ,        // ARM compare that uses only N or Z flags.
+      CMPZ,         // ARM compare that sets only Z flag.
       CMPFP,        // ARM VFP compare instruction, sets FPSCR.
       CMPFPw0,      // ARM VFP compare against zero instruction, sets FPSCR.
       FMSTAT,       // ARM fmstat instruction.
       CMOV,         // ARM conditional move instructions.
       CNEG,         // ARM conditional negate instructions.
-      
+
       FTOSI,        // FP to sint within a FP register.
       FTOUI,        // FP to uint within a FP register.
       SITOF,        // sint to FP within a FP register.
@@ -60,17 +60,75 @@ namespace llvm {
       SRL_FLAG,     // V,Flag = srl_flag X -> srl X, 1 + save carry out.
       SRA_FLAG,     // V,Flag = sra_flag X -> sra X, 1 + save carry out.
       RRX,          // V = RRX X, Flag     -> srl X, 1 + shift in carry flag.
-      
-      FMRRD,        // double to two gprs.
-      FMDRR,         // Two gprs to double.
 
-      THREAD_POINTER
+      FMRRD,        // double to two gprs.
+      FMDRR,        // Two gprs to double.
+
+      EH_SJLJ_SETJMP,    // SjLj exception handling setjmp
+      EH_SJLJ_LONGJMP,   // SjLj exception handling longjmp
+
+      THREAD_POINTER,
+
+      VCEQ,         // Vector compare equal.
+      VCGE,         // Vector compare greater than or equal.
+      VCGEU,        // Vector compare unsigned greater than or equal.
+      VCGT,         // Vector compare greater than.
+      VCGTU,        // Vector compare unsigned greater than.
+      VTST,         // Vector test bits.
+
+      // Vector shift by immediate:
+      VSHL,         // ...left
+      VSHRs,        // ...right (signed)
+      VSHRu,        // ...right (unsigned)
+      VSHLLs,       // ...left long (signed)
+      VSHLLu,       // ...left long (unsigned)
+      VSHLLi,       // ...left long (with maximum shift count)
+      VSHRN,        // ...right narrow
+
+      // Vector rounding shift by immediate:
+      VRSHRs,       // ...right (signed)
+      VRSHRu,       // ...right (unsigned)
+      VRSHRN,       // ...right narrow
+
+      // Vector saturating shift by immediate:
+      VQSHLs,       // ...left (signed)
+      VQSHLu,       // ...left (unsigned)
+      VQSHLsu,      // ...left (signed to unsigned)
+      VQSHRNs,      // ...right narrow (signed)
+      VQSHRNu,      // ...right narrow (unsigned)
+      VQSHRNsu,     // ...right narrow (signed to unsigned)
+
+      // Vector saturating rounding shift by immediate:
+      VQRSHRNs,     // ...right narrow (signed)
+      VQRSHRNu,     // ...right narrow (unsigned)
+      VQRSHRNsu,    // ...right narrow (signed to unsigned)
+
+      // Vector shift and insert:
+      VSLI,         // ...left
+      VSRI,         // ...right
+
+      // Vector get lane (VMOV scalar to ARM core register)
+      // (These are used for 8- and 16-bit element types only.)
+      VGETLANEu,    // zero-extend vector extract element
+      VGETLANEs,    // sign-extend vector extract element
+
+      // Vector duplicate lane (128-bit result only; 64-bit is a shuffle)
+      VDUPLANEQ     // splat a lane from a 64-bit vector to a 128-bit vector
     };
   }
 
-  //===----------------------------------------------------------------------===//
+  /// Define some predicates that are used for node matching.
+  namespace ARM {
+    /// getVMOVImm - If this is a build_vector of constants which can be
+    /// formed by using a VMOV instruction of the specified element size,
+    /// return the constant being splatted.  The ByteSize field indicates the
+    /// number of bytes of each element [1248].
+    SDValue getVMOVImm(SDNode *N, unsigned ByteSize, SelectionDAG &DAG);
+  }
+
+  //===--------------------------------------------------------------------===//
   //  ARMTargetLowering - ARM Implementation of the TargetLowering interface
-  
+
   class ARMTargetLowering : public TargetLowering {
     int VarArgsFrameIndex;            // FrameIndex for start of varargs area.
   public:
@@ -85,7 +143,7 @@ namespace llvm {
                                     SelectionDAG &DAG);
 
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
-    
+
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
@@ -94,7 +152,7 @@ namespace llvm {
     /// isLegalAddressingMode - Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
     virtual bool isLegalAddressingMode(const AddrMode &AM, const Type *Ty)const;
-    
+
     /// getPreIndexedAddressParts - returns true by value, base pointer and
     /// offset pointer and addressing mode by reference if the node's address
     /// can be legally represented as pre-indexed load / store address.
@@ -113,12 +171,12 @@ namespace llvm {
 
     virtual void computeMaskedBitsForTargetNode(const SDValue Op,
                                                 const APInt &Mask,
-                                                APInt &KnownZero, 
+                                                APInt &KnownZero,
                                                 APInt &KnownOne,
                                                 const SelectionDAG &DAG,
                                                 unsigned Depth) const;
     ConstraintType getConstraintType(const std::string &Constraint) const;
-    std::pair<unsigned, const TargetRegisterClass*> 
+    std::pair<unsigned, const TargetRegisterClass*>
       getRegForInlineAsmConstraint(const std::string &Constraint,
                                    MVT VT) const;
     std::vector<unsigned>
@@ -134,10 +192,13 @@ namespace llvm {
                                               bool hasMemory,
                                               std::vector<SDValue> &Ops,
                                               SelectionDAG &DAG) const;
-    
+
     virtual const ARMSubtarget* getSubtarget() {
       return Subtarget;
     }
+
+    /// getFunctionAlignment - Return the Log2 alignment of this function.
+    virtual unsigned getFunctionAlignment(const Function *F) const;
 
   private:
     /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can
@@ -148,12 +209,29 @@ namespace llvm {
     ///
     unsigned ARMPCLabelIndex;
 
+    void addTypeForNEON(MVT VT, MVT PromotedLdStVT, MVT PromotedBitwiseVT);
+    void addDRTypeForNEON(MVT VT);
+    void addQRTypeForNEON(MVT VT);
+
+    typedef SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPassVector;
+    void PassF64ArgInRegs(CallSDNode *TheCall, SelectionDAG &DAG,
+                          SDValue Chain, SDValue &Arg,
+                          RegsToPassVector &RegsToPass,
+                          CCValAssign &VA, CCValAssign &NextVA,
+                          SDValue &StackPtr,
+                          SmallVector<SDValue, 8> &MemOpChains,
+                          ISD::ArgFlagsTy Flags);
+    SDValue GetF64FormalArgument(CCValAssign &VA, CCValAssign &NextVA,
+                                 SDValue &Root, SelectionDAG &DAG, DebugLoc dl);
+
+    CCAssignFn *CCAssignFnForNode(unsigned CC, bool Return) const;
     SDValue LowerMemOpCallTo(CallSDNode *TheCall, SelectionDAG &DAG,
                              const SDValue &StackPtr, const CCValAssign &VA,
                              SDValue Chain, SDValue Arg, ISD::ArgFlagsTy Flags);
     SDNode *LowerCallResult(SDValue Chain, SDValue InFlag, CallSDNode *TheCall,
                             unsigned CallingConv, SelectionDAG &DAG);
     SDValue LowerCALL(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG);
     SDValue LowerRET(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddressDarwin(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddressELF(SDValue Op, SelectionDAG &DAG);
@@ -165,6 +243,7 @@ namespace llvm {
     SDValue LowerGLOBAL_OFFSET_TABLE(SDValue Op, SelectionDAG &DAG);
     SDValue LowerFORMAL_ARGUMENTS(SDValue Op, SelectionDAG &DAG);
     SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG);
 
     SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                                       SDValue Chain,

@@ -2,8 +2,7 @@
 
 // Errors
 export class foo { };   // expected-error {{expected template}}
-template  x;            // expected-error {{expected '<' after 'template'}} \
-// expected-error {{C++ requires a type specifier for all declarations}}
+template  x;            // expected-error {{C++ requires a type specifier for all declarations}}
 export template x;      // expected-error {{expected '<' after 'template'}} \
                         // expected-note {{exported templates are unsupported}} \
 // expected-error {{C++ requires a type specifier for all declarations}}
@@ -34,11 +33,11 @@ template <typename = int> class X2;
 // Forward declarations w/template template parameters
 template <template <typename> class T> class TTP1;
 template <template <typename> class> class TTP2;
-template <template <typename> class T = foo> class TTP3; // FIXME:expected-error{{template argument for template template parameter must be a template}}
-template <template <typename> class = foo> class TTP3; // FIXME:expected-error{{template argument for template template parameter must be a template}}
+template <template <typename> class T = foo> class TTP3; // expected-error{{must be a class template}}
+template <template <typename> class = foo> class TTP3; // expected-error{{must be a class template}}
 template <template <typename X, typename Y> class T> class TTP5;
 
-// Forward declararations with non-type params
+// Forward declarations with non-type params
 template <int> class NTP0;
 template <int N> class NTP1;
 template <int N = 5> class NTP2;
@@ -67,6 +66,17 @@ class T { // expected-error{{declaration of 'T' shadows template parameter}}
 template<int Size> // expected-note{{template parameter is declared here}}
 void shadow3(int Size); // expected-error{{declaration of 'Size' shadows template parameter}}
 
+// <rdar://problem/6952203>
+template<typename T> // expected-note{{here}}
+struct shadow4 {
+  int T; // expected-error{{shadows}}
+};
+
+template<typename T> // expected-note{{here}}
+struct shadow5 {
+  int T(int, float); // expected-error{{shadows}}
+};
+
 // Non-type template parameters in scope
 template<int Size> 
 void f(int& i) {
@@ -76,3 +86,8 @@ void f(int& i) {
 
 template<typename T>
 const T& min(const T&, const T&);
+
+void f2() {
+  int x;
+  A< typeof(x>1) > a;
+}

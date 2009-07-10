@@ -43,9 +43,12 @@ const char *Triple::getOSTypeName(OSType Kind) {
   switch (Kind) {
   case UnknownOS: return "unknown";
 
+  case AuroraUX: return "auroraux";
   case Darwin: return "darwin";
+  case DragonFly: return "dragonfly";
   case FreeBSD: return "freebsd";
   case Linux: return "linux";
+  case OpenBSD: return "openbsd";
   }
 
   return "<invalid>";
@@ -78,12 +81,18 @@ void Triple::Parse() const {
     Vendor = UnknownVendor;
 
   std::string OSName = getOSName();
-  if (memcmp(&OSName[0], "darwin", 6) == 0)
+  if (memcmp(&OSName[0], "auroraux", 8) == 0)
+    OS = AuroraUX;
+  else if (memcmp(&OSName[0], "darwin", 6) == 0)
     OS = Darwin;
+  else if (memcmp(&OSName[0], "dragonfly", 9) == 0)
+    OS = DragonFly;
   else if (memcmp(&OSName[0], "freebsd", 7) == 0)
     OS = FreeBSD;
   else if (memcmp(&OSName[0], "linux", 5) == 0)
     OS = Linux;
+  else if (memcmp(&OSName[0], "openbsd", 7) == 0)
+    OS = OpenBSD;
   else
     OS = UnknownOS;
 

@@ -14,6 +14,8 @@
 #ifndef LLVM_CLANG_BASIC_TARGETINFO_H
 #define LLVM_CLANG_BASIC_TARGETINFO_H
 
+// FIXME: Daniel isn't smart enough to use a prototype for this.
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/DataTypes.h"
 #include <cassert>
 #include <vector>
@@ -36,7 +38,6 @@ class TargetInfo {
 protected:
   // Target values set by the ctor of the actual target implementation.  Default
   // values are specified by the TargetInfo constructor.
-  bool CharIsSigned;
   bool TLSSupported;
   unsigned char PointerWidth, PointerAlign;
   unsigned char WCharWidth, WCharAlign;
@@ -75,7 +76,8 @@ public:
     UnsignedLongLong
   };
 protected:
-  IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType;
+  IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType,
+          Int64Type;
 public:
   IntType getSizeType() const { return SizeType; }
   IntType getIntMaxType() const { return IntMaxType; }
@@ -85,12 +87,8 @@ public:
   }
   IntType getIntPtrType() const { return IntPtrType; }
   IntType getWCharType() const { return WCharType; }
+  IntType getInt64Type() const { return Int64Type; }
 
-  /// isCharSigned - Return true if 'char' is 'signed char' or false if it is
-  /// treated as 'unsigned char'.  This is implementation defined according to
-  /// C99 6.2.5p15.  In our implementation, this is target-specific.
-  bool isCharSigned() const { return CharIsSigned; }
-  
   /// getPointerWidth - Return the width of pointers on this target, for the
   /// specified address space.
   uint64_t getPointerWidth(unsigned AddrSpace) const {
@@ -334,22 +332,26 @@ public:
   /// options. 
   virtual void getDefaultLangOptions(LangOptions &Opts) {}
 
-  /// HandleTargetFeatures - Handle target-specific options like -mattr=+sse2
-  /// and friends.  An array of arguments is passed in: if they are all valid,
-  /// this should handle them and return -1.  If there is an error, the index of
-  /// the invalid argument should be returned along with an optional error
-  /// string.
+  /// getDefaultFeatures - Get the default set of target features for
+  /// the \args CPU; this should include all legal feature strings on
+  /// the target.
+  virtual void getDefaultFeatures(const std::string &CPU, 
+                                  llvm::StringMap<bool> &Features) const {
+  }
+
+  /// setFeatureEnabled - Enable or disable a specific target feature,
+  /// the feature name must be valid.
   ///
-  /// Note that the driver should have already consolidated all the
-  /// target-feature settings and passed them to us in the -mattr list.  The
-  /// -mattr list is treated by the code generator as a diff against the -mcpu
-  /// setting, but the driver should pass all enabled options as "+" settings.
-  /// This means that the target should only look at + settings.
-  virtual int HandleTargetFeatures(std::string *StrArray, unsigned NumStrs,
-                                   std::string &ErrorReason) {
-    if (NumStrs == 0)
-      return -1;
-    return 0;
+  /// \return - False on error (invalid feature name).
+  virtual bool setFeatureEnabled(llvm::StringMap<bool> &Features,
+                                 const std::string &Name,
+                                 bool Enabled) const {
+    return false;
+  }
+
+  /// HandleTargetOptions - Perform initialization based on the user
+  /// configured set of features.
+  virtual void HandleTargetFeatures(const llvm::StringMap<bool> &Features) {
   }
 
   // getRegParmMax - Returns maximal number of args passed in registers.

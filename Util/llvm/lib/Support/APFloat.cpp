@@ -598,12 +598,18 @@ APFloat::copySignificand(const APFloat &rhs)
 
 /* Make this number a NaN, with an arbitrary but deterministic value
    for the significand.  If double or longer, this is a signalling NaN,
-   which may not be ideal. */
+   which may not be ideal.  If float, this is QNaN(0).  */
 void
-APFloat::makeNaN(void)
+APFloat::makeNaN(unsigned type)
 {
   category = fcNaN;
-  APInt::tcSet(significandParts(), ~0U, partCount());
+  // FIXME: Add double and long double support for QNaN(0).
+  if (semantics->precision == 24 && semantics->maxExponent == 127) {
+    type |=  0x7fc00000U;
+    type &= ~0x80000000U;
+  } else
+    type = ~0U;
+  APInt::tcSet(significandParts(), type, partCount());
 }
 
 APFloat &
@@ -662,16 +668,16 @@ APFloat::APFloat(const fltSemantics &ourSemantics, integerPart value)
 }
 
 APFloat::APFloat(const fltSemantics &ourSemantics,
-                 fltCategory ourCategory, bool negative)
+                 fltCategory ourCategory, bool negative, unsigned type)
 {
   assertArithmeticOK(ourSemantics);
   initialize(&ourSemantics);
   category = ourCategory;
   sign = negative;
-  if(category == fcNormal)
+  if (category == fcNormal)
     category = fcZero;
   else if (ourCategory == fcNaN)
-    makeNaN();
+    makeNaN(type);
 }
 
 APFloat::APFloat(const fltSemantics &ourSemantics, const char *text)
@@ -1060,7 +1066,7 @@ APFloat::roundAwayFromZero(roundingMode rounding_mode,
   /* Current callers never pass this so we don't handle it.  */
   assert(lost_fraction != lfExactlyZero);
 
-  switch(rounding_mode) {
+  switch (rounding_mode) {
   default:
     assert(0);
 
@@ -1199,7 +1205,7 @@ APFloat::normalize(roundingMode rounding_mode,
 APFloat::opStatus
 APFloat::addOrSubtractSpecials(const APFloat &rhs, bool subtract)
 {
-  switch(convolve(category, rhs.category)) {
+  switch (convolve(category, rhs.category)) {
   default:
     assert(0);
 
@@ -1323,7 +1329,7 @@ APFloat::addOrSubtractSignificand(const APFloat &rhs, bool subtract)
 APFloat::opStatus
 APFloat::multiplySpecials(const APFloat &rhs)
 {
-  switch(convolve(category, rhs.category)) {
+  switch (convolve(category, rhs.category)) {
   default:
     assert(0);
 
@@ -1365,7 +1371,7 @@ APFloat::multiplySpecials(const APFloat &rhs)
 APFloat::opStatus
 APFloat::divideSpecials(const APFloat &rhs)
 {
-  switch(convolve(category, rhs.category)) {
+  switch (convolve(category, rhs.category)) {
   default:
     assert(0);
 
@@ -1407,7 +1413,7 @@ APFloat::divideSpecials(const APFloat &rhs)
 APFloat::opStatus
 APFloat::modSpecials(const APFloat &rhs)
 {
-  switch(convolve(category, rhs.category)) {
+  switch (convolve(category, rhs.category)) {
   default:
     assert(0);
 
@@ -1684,7 +1690,7 @@ APFloat::compare(const APFloat &rhs) const
   assertArithmeticOK(*semantics);
   assert(semantics == rhs.semantics);
 
-  switch(convolve(category, rhs.category)) {
+  switch (convolve(category, rhs.category)) {
   default:
     assert(0);
 

@@ -397,7 +397,7 @@ void XCoreInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   DebugLoc DL = DebugLoc::getUnknownLoc();
   if (I != MBB.end()) DL = I->getDebugLoc();
   BuildMI(MBB, I, DL, get(XCore::STWFI))
-    .addReg(SrcReg, false, false, isKill)
+    .addReg(SrcReg, getKillRegState(isKill))
     .addFrameIndex(FrameIndex)
     .addImm(0);
 }
@@ -431,8 +431,8 @@ void XCoreInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
 }
 
 bool XCoreInstrInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
-				MachineBasicBlock::iterator MI,
-			const std::vector<CalleeSavedInfo> &CSI) const
+                                               MachineBasicBlock::iterator MI,
+                                  const std::vector<CalleeSavedInfo> &CSI) const
 {
   if (CSI.empty()) {
     return true;

@@ -14,8 +14,10 @@
 #include "LLLexer.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instruction.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Assembly/Parser.h"
 #include <cstdlib>
@@ -23,23 +25,7 @@
 using namespace llvm;
 
 bool LLLexer::Error(LocTy ErrorLoc, const std::string &Msg) const {
-  // Scan backward to find the start of the line.
-  const char *LineStart = ErrorLoc;
-  while (LineStart != CurBuf->getBufferStart() &&
-         LineStart[-1] != '\n' && LineStart[-1] != '\r')
-    --LineStart;
-  // Get the end of the line.
-  const char *LineEnd = ErrorLoc;
-  while (LineEnd != CurBuf->getBufferEnd() &&
-         LineEnd[0] != '\n' && LineEnd[0] != '\r')
-    ++LineEnd;
-
-  unsigned LineNo = 1;
-  for (const char *FP = CurBuf->getBufferStart(); FP != ErrorLoc; ++FP)
-    if (*FP == '\n') ++LineNo;
-
-  std::string LineContents(LineStart, LineEnd);
-  ErrorInfo.setError(Msg, LineNo, ErrorLoc-LineStart, LineContents);
+  ErrorInfo = SM.GetMessage(ErrorLoc, Msg, "error");
   return true;
 }
 
@@ -195,8 +181,9 @@ static const char *isLabelTail(const char *CurPtr) {
 // Lexer definition.
 //===----------------------------------------------------------------------===//
 
-LLLexer::LLLexer(MemoryBuffer *StartBuf, ParseError &Err)
-  : CurBuf(StartBuf), ErrorInfo(Err), APFloatVal(0.0) {
+LLLexer::LLLexer(MemoryBuffer *StartBuf, SourceMgr &sm, SMDiagnostic &Err,
+                 LLVMContext &C)
+  : CurBuf(StartBuf), ErrorInfo(Err), SM(sm), Context(C), APFloatVal(0.0) {
   CurPtr = CurBuf->getBufferStart();
 }
 
@@ -467,7 +454,7 @@ lltok::Kind LLLexer::LexIdentifier() {
       Error("bitwidth for integer type out of range!");
       return lltok::Error;
     }
-    TyVal = IntegerType::get(NumBits);
+    TyVal = Context.getIntegerType(NumBits);
     return lltok::Type;
   }
 
@@ -526,6 +513,10 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(coldcc);
   KEYWORD(x86_stdcallcc);
   KEYWORD(x86_fastcallcc);
+  KEYWORD(arm_apcscc);
+  KEYWORD(arm_aapcscc);
+  KEYWORD(arm_aapcs_vfpcc);
+
   KEYWORD(cc);
   KEYWORD(c);
 
@@ -547,6 +538,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(optsize);
   KEYWORD(ssp);
   KEYWORD(sspreq);
+  KEYWORD(noredzone);
+  KEYWORD(noimplicitfloat);
 
   KEYWORD(type);
   KEYWORD(opaque);
@@ -570,6 +563,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   TYPEKEYWORD("fp128",     Type::FP128Ty);
   TYPEKEYWORD("ppc_fp128", Type::PPC_FP128Ty);
   TYPEKEYWORD("label",     Type::LabelTy);
+  TYPEKEYWORD("metadata",  Type::MetadataTy);
 #undef TYPEKEYWORD
 
   // Handle special forms for autoupgrading.  Drop these in LLVM 3.0.  This is
@@ -589,13 +583,14 @@ lltok::Kind LLLexer::LexIdentifier() {
   if (Len == strlen(#STR) && !memcmp(StartChar, #STR, strlen(#STR))) { \
     UIntVal = Instruction::Enum; return lltok::kw_##STR; }
 
-  INSTKEYWORD(add,   Add);  INSTKEYWORD(sub,   Sub);  INSTKEYWORD(mul,   Mul);
+  INSTKEYWORD(add,   Add);  INSTKEYWORD(fadd,   FAdd);
+  INSTKEYWORD(sub,   Sub);  INSTKEYWORD(fsub,   FSub);
+  INSTKEYWORD(mul,   Mul);  INSTKEYWORD(fmul,   FMul);
   INSTKEYWORD(udiv,  UDiv); INSTKEYWORD(sdiv,  SDiv); INSTKEYWORD(fdiv,  FDiv);
   INSTKEYWORD(urem,  URem); INSTKEYWORD(srem,  SRem); INSTKEYWORD(frem,  FRem);
   INSTKEYWORD(shl,   Shl);  INSTKEYWORD(lshr,  LShr); INSTKEYWORD(ashr,  AShr);
   INSTKEYWORD(and,   And);  INSTKEYWORD(or,    Or);   INSTKEYWORD(xor,   Xor);
   INSTKEYWORD(icmp,  ICmp); INSTKEYWORD(fcmp,  FCmp);
-  INSTKEYWORD(vicmp, VICmp); INSTKEYWORD(vfcmp, VFCmp);
 
   INSTKEYWORD(phi,         PHI);
   INSTKEYWORD(call,        Call);

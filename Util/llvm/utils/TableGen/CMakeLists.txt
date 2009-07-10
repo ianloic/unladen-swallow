@@ -17,7 +17,6 @@ add_executable(tblgen
   SubtargetEmitter.cpp
   TGLexer.cpp
   TGParser.cpp
-  TGSourceMgr.cpp
   TGValueTypes.cpp
   TableGen.cpp
   TableGenBackend.cpp
@@ -27,3 +26,6 @@ target_link_libraries(tblgen LLVMSupport LLVMSystem)
 if( MINGW )
   target_link_libraries(tblgen imagehlp psapi)
 endif( MINGW )
+if( LLVM_ENABLE_THREADS AND HAVE_LIBPTHREAD )
+  target_link_libraries(tblgen pthread)
+endif()

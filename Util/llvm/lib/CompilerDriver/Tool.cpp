@@ -11,15 +11,19 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CompilerDriver/BuiltinOptions.h"
 #include "llvm/CompilerDriver/Tool.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/System/Path.h"
-#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 using namespace llvmc;
 
-extern cl::opt<std::string> OutputFilename;
+// SplitString is used by derived Tool classes.
+typedef void (*SplitStringFunPtr)(const std::string&,
+                                  std::vector<std::string>&, const char*);
+SplitStringFunPtr ForceLinkageSplitString = &llvm::SplitString;
 
 namespace {
   sys::Path MakeTempFile(const sys::Path& TempDir, const std::string& BaseName,
@@ -39,7 +43,7 @@ namespace {
     // NOTE: makeUnique always *creates* a unique temporary file,
     // which is good, since there will be no races. However, some
     // tools do not like it when the output file already exists, so
-    // they have to be placated with -f or something like that.
+    // they need to be placated with -f or something like that.
     Out.makeUnique(true, NULL);
     return Out;
   }

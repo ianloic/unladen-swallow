@@ -14,10 +14,9 @@
 #ifndef LLVM_ANALYSIS_SCALAREVOLUTION_EXPANDER_H
 #define LLVM_ANALYSIS_SCALAREVOLUTION_EXPANDER_H
 
-#include "llvm/Instructions.h"
-#include "llvm/Type.h"
-#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/TargetFolder.h"
 
 namespace llvm {
   /// SCEVExpander - This class uses information about analyze scalars to
@@ -28,23 +27,63 @@ namespace llvm {
   /// memory.
   struct SCEVExpander : public SCEVVisitor<SCEVExpander, Value*> {
     ScalarEvolution &SE;
-    LoopInfo &LI;
-    std::map<SCEVHandle, Value*> InsertedExpressions;
+    std::map<std::pair<const SCEV *, Instruction *>, AssertingVH<Value> >
+      InsertedExpressions;
     std::set<Value*> InsertedValues;
 
-    BasicBlock::iterator InsertPt;
+    typedef IRBuilder<true, TargetFolder> BuilderType;
+    BuilderType Builder;
 
     friend struct SCEVVisitor<SCEVExpander, Value*>;
   public:
-    SCEVExpander(ScalarEvolution &se, LoopInfo &li)
-      : SE(se), LI(li) {}
-
-    LoopInfo &getLoopInfo() const { return LI; }
+    explicit SCEVExpander(ScalarEvolution &se)
+      : SE(se), Builder(*se.getContext(),
+                        TargetFolder(se.TD, se.getContext())) {}
 
     /// clear - Erase the contents of the InsertedExpressions map so that users
     /// trying to expand the same expression into multiple BasicBlocks or
     /// different places within the same BasicBlock can do so.
     void clear() { InsertedExpressions.clear(); }
+
+    /// getOrInsertCanonicalInductionVariable - This method returns the
+    /// canonical induction variable of the specified type for the specified
+    /// loop (inserting one if there is none).  A canonical induction variable
+    /// starts at zero and steps by one on each iteration.
+    Value *getOrInsertCanonicalInductionVariable(const Loop *L, const Type *Ty);
+
+    /// expandCodeFor - Insert code to directly compute the specified SCEV
+    /// expression into the program.  The inserted code is inserted into the
+    /// specified block.
+    Value *expandCodeFor(const SCEV *SH, const Type *Ty, Instruction *IP) {
+      Builder.SetInsertPoint(IP->getParent(), IP);
+      return expandCodeFor(SH, Ty);
+    }
+
+  private:
+    LLVMContext *getContext() const { return SE.getContext(); }
+    
+    /// InsertBinop - Insert the specified binary operator, doing a small amount
+    /// of work to avoid inserting an obviously redundant operation.
+    Value *InsertBinop(Instruction::BinaryOps Opcode, Value *LHS, Value *RHS);
+
+    /// InsertNoopCastOfTo - Insert a cast of V to the specified type,
+    /// which must be possible with a noop cast, doing what we can to
+    /// share the casts.
+    Value *InsertNoopCastOfTo(Value *V, const Type *Ty);
+
+    /// expandAddToGEP - Expand a SCEVAddExpr with a pointer type into a GEP
+    /// instead of using ptrtoint+arithmetic+inttoptr.
+    Value *expandAddToGEP(const SCEV *const *op_begin,
+                          const SCEV *const *op_end,
+                          const PointerType *PTy, const Type *Ty, Value *V);
+
+    Value *expand(const SCEV *S);
+
+    /// expandCodeFor - Insert code to directly compute the specified SCEV
+    /// expression into the program.  The inserted code is inserted into the
+    /// SCEVExpander's current insertion point. If a type is specified, the
+    /// result will be expanded to have that type, with a cast if necessary.
+    Value *expandCodeFor(const SCEV *SH, const Type *Ty = 0);
 
     /// isInsertedInstruction - Return true if the specified instruction was
     /// inserted by the code rewriter.  If so, the client should not modify the
@@ -52,65 +91,6 @@ namespace llvm {
     bool isInsertedInstruction(Instruction *I) const {
       return InsertedValues.count(I);
     }
-
-    /// isInsertedExpression - Return true if the the code rewriter has a
-    /// Value* recorded for the given expression.
-    bool isInsertedExpression(const SCEV *S) const {
-      return InsertedExpressions.count(S);
-    }
-
-    /// getOrInsertCanonicalInductionVariable - This method returns the
-    /// canonical induction variable of the specified type for the specified
-    /// loop (inserting one if there is none).  A canonical induction variable
-    /// starts at zero and steps by one on each iteration.
-    Value *getOrInsertCanonicalInductionVariable(const Loop *L, const Type *Ty){
-      assert(Ty->isInteger() && "Can only insert integer induction variables!");
-      SCEVHandle H = SE.getAddRecExpr(SE.getIntegerSCEV(0, Ty),
-                                      SE.getIntegerSCEV(1, Ty), L);
-      return expand(H);
-    }
-
-    /// addInsertedValue - Remember the specified instruction as being the
-    /// canonical form for the specified SCEV.
-    void addInsertedValue(Value *V, const SCEV *S) {
-      InsertedExpressions[S] = V;
-      InsertedValues.insert(V);
-    }
-
-    void setInsertionPoint(BasicBlock::iterator NewIP) { InsertPt = NewIP; }
-
-    BasicBlock::iterator getInsertionPoint() const { return InsertPt; }
-
-    /// expandCodeFor - Insert code to directly compute the specified SCEV
-    /// expression into the program.  The inserted code is inserted into the
-    /// SCEVExpander's current insertion point.
-    Value *expandCodeFor(SCEVHandle SH, const Type *Ty);
-
-    /// expandCodeFor - Insert code to directly compute the specified SCEV
-    /// expression into the program.  The inserted code is inserted into the
-    /// specified block.
-    Value *expandCodeFor(SCEVHandle SH, const Type *Ty,
-                         BasicBlock::iterator IP) {
-      setInsertionPoint(IP);
-      return expandCodeFor(SH, Ty);
-    }
-
-    /// InsertCastOfTo - Insert a cast of V to the specified type, doing what
-    /// we can to share the casts.
-    Value *InsertCastOfTo(Instruction::CastOps opcode, Value *V,
-                          const Type *Ty);
-
-    /// InsertNoopCastOfTo - Insert a cast of V to the specified type,
-    /// which must be possible with a noop cast.
-    Value *InsertNoopCastOfTo(Value *V, const Type *Ty);
-
-    /// InsertBinop - Insert the specified binary operator, doing a small amount
-    /// of work to avoid inserting an obviously redundant operation.
-    Value *InsertBinop(Instruction::BinaryOps Opcode, Value *LHS,
-                       Value *RHS, BasicBlock::iterator InsertPt);
-
-  private:
-    Value *expand(const SCEV *S);
 
     Value *visitConstant(const SCEVConstant *S) {
       return S->getValue();

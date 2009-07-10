@@ -226,7 +226,7 @@ namespace {
     unsigned getReg(MachineBasicBlock &MBB, MachineInstr *MI,
                     unsigned VirtReg, bool NoFree = false);
 
-    /// reloadVirtReg - This method transforms the specified specified virtual
+    /// reloadVirtReg - This method transforms the specified virtual
     /// register use to refer to a physical register.  This method may do this
     /// in one of several ways: if the register is available in a physical
     /// register already, it uses that physical register.  If the value is not
@@ -464,7 +464,7 @@ unsigned RALocal::getReg(MachineBasicBlock &MBB, MachineInstr *I,
 }
 
 
-/// reloadVirtReg - This method transforms the specified specified virtual
+/// reloadVirtReg - This method transforms the specified virtual
 /// register use to refer to a physical register.  This method may do this in
 /// one of several ways: if the register is available in a physical register
 /// already, it uses that physical register.  If the value is not in a physical
@@ -981,10 +981,12 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
       }
     }
     
-    // Finally, if this is a noop copy instruction, zap it.
+    // Finally, if this is a noop copy instruction, zap it.  (Except that if
+    // the copy is dead, it must be kept to avoid messing up liveness info for
+    // the register scavenger.  See pr4100.)
     unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
     if (TII->isMoveInstr(*MI, SrcReg, DstReg, SrcSubReg, DstSubReg) &&
-        SrcReg == DstReg)
+        SrcReg == DstReg && DeadDefs.empty())
       MBB.erase(MI);
   }
 

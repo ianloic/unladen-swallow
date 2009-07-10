@@ -644,17 +644,20 @@ static int mergeSPUpdates(MachineBasicBlock &MBB,
   return Offset;
 }
 
-void X86RegisterInfo::emitFrameMoves(MachineFunction &MF,
-                                     unsigned FrameLabelId,
-                                     unsigned ReadyLabelId) const {
+void X86RegisterInfo::emitCalleeSavedFrameMoves(MachineFunction &MF,
+                                                unsigned LabelId,
+                                                unsigned FramePtr) const {
   MachineFrameInfo *MFI = MF.getFrameInfo();
   MachineModuleInfo *MMI = MFI->getMachineModuleInfo();
-  if (!MMI)
-    return;
+  if (!MMI) return;
 
-  uint64_t StackSize = MFI->getStackSize();
+  // Add callee saved registers to move list.
+  const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
+  if (CSI.empty()) return;
+
   std::vector<MachineMove> &Moves = MMI->getFrameMoves();
   const TargetData *TD = MF.getTarget().getTargetData();
+  bool HasFP = hasFP(MF);
 
   // Calculate amount of bytes used for return address storing
   int stackGrowth =
@@ -662,61 +665,52 @@ void X86RegisterInfo::emitFrameMoves(MachineFunction &MF,
      TargetFrameInfo::StackGrowsUp ?
      TD->getPointerSize() : -TD->getPointerSize());
 
-  if (StackSize) {
-    // Show update of SP.
-    if (hasFP(MF)) {
-      // Adjust SP
-      MachineLocation SPDst(MachineLocation::VirtualFP);
-      MachineLocation SPSrc(MachineLocation::VirtualFP, 2*stackGrowth);
-      Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
-    } else {
-      MachineLocation SPDst(MachineLocation::VirtualFP);
-      MachineLocation SPSrc(MachineLocation::VirtualFP,
-                            -StackSize+stackGrowth);
-      Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
-    }
-  } else {
-    //FIXME: Verify & implement for FP
-    MachineLocation SPDst(StackPtr);
-    MachineLocation SPSrc(StackPtr, stackGrowth);
-    Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
-  }
-
-  // Add callee saved registers to move list.
-  const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
-
   // FIXME: This is dirty hack. The code itself is pretty mess right now.
   // It should be rewritten from scratch and generalized sometimes.
 
   // Determine maximum offset (minumum due to stack growth)
   int64_t MaxOffset = 0;
-  for (unsigned I = 0, E = CSI.size(); I!=E; ++I)
+  for (std::vector<CalleeSavedInfo>::const_iterator
+         I = CSI.begin(), E = CSI.end(); I != E; ++I)
     MaxOffset = std::min(MaxOffset,
-                         MFI->getObjectOffset(CSI[I].getFrameIdx()));
+                         MFI->getObjectOffset(I->getFrameIdx()));
 
-  // Calculate offsets
-  int64_t saveAreaOffset = (hasFP(MF) ? 3 : 2)*stackGrowth;
-  for (unsigned I = 0, E = CSI.size(); I!=E; ++I) {
-    int64_t Offset = MFI->getObjectOffset(CSI[I].getFrameIdx());
-    unsigned Reg = CSI[I].getReg();
-    Offset = (MaxOffset-Offset+saveAreaOffset);
+  // Calculate offsets.
+  int64_t saveAreaOffset = (HasFP ? 3 : 2) * stackGrowth;
+  for (std::vector<CalleeSavedInfo>::const_iterator
+         I = CSI.begin(), E = CSI.end(); I != E; ++I) {
+    int64_t Offset = MFI->getObjectOffset(I->getFrameIdx());
+    unsigned Reg = I->getReg();
+    Offset = MaxOffset - Offset + saveAreaOffset;
+
+    // Don't output a new machine move if we're re-saving the frame
+    // pointer. This happens when the PrologEpilogInserter has inserted an extra
+    // "PUSH" of the frame pointer -- the "emitPrologue" method automatically
+    // generates one when frame pointers are used. If we generate a "machine
+    // move" for this extra "PUSH", the linker will lose track of the fact that
+    // the frame pointer should have the value of the first "PUSH" when it's
+    // trying to unwind.
+    // 
+    // FIXME: This looks inelegant. It's possibly correct, but it's covering up
+    //        another bug. I.e., one where we generate a prolog like this:
+    //
+    //          pushl  %ebp
+    //          movl   %esp, %ebp
+    //          pushl  %ebp
+    //          pushl  %esi
+    //           ...
+    //
+    //        The immediate re-push of EBP is unnecessary. At the least, it's an
+    //        optimization bug. EBP can be used as a scratch register in certain
+    //        cases, but probably not when we have a frame pointer.
+    if (HasFP && FramePtr == Reg)
+      continue;
+
     MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
     MachineLocation CSSrc(Reg);
-    Moves.push_back(MachineMove(FrameLabelId, CSDst, CSSrc));
+    Moves.push_back(MachineMove(LabelId, CSDst, CSSrc));
   }
-
-  if (hasFP(MF)) {
-    // Save FP
-    MachineLocation FPDst(MachineLocation::VirtualFP, 2*stackGrowth);
-    MachineLocation FPSrc(FramePtr);
-    Moves.push_back(MachineMove(ReadyLabelId, FPDst, FPSrc));
-  }
-
-  MachineLocation FPDst(hasFP(MF) ? FramePtr : StackPtr);
-  MachineLocation FPSrc(MachineLocation::VirtualFP);
-  Moves.push_back(MachineMove(ReadyLabelId, FPDst, FPSrc));
 }
-
 
 void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
   MachineBasicBlock &MBB = MF.front();   // Prolog goes in entry BB
@@ -729,11 +723,8 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
   bool needsFrameMoves = (MMI && MMI->hasDebugInfo()) ||
                           !Fn->doesNotThrow() ||
                           UnwindTablesMandatory;
-  DebugLoc DL = (MBBI != MBB.end() ? MBBI->getDebugLoc() :
-                 DebugLoc::getUnknownLoc());
-
-  // Prepare for frame info.
-  unsigned FrameLabelId = 0;
+  bool HasFP = hasFP(MF);
+  DebugLoc DL;
 
   // Get the number of bytes to allocate from the FrameInfo.
   uint64_t StackSize = MFI->getStackSize();
@@ -751,12 +742,14 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
   // function, and use up to 128 bytes of stack space, don't have a frame
   // pointer, calls, or dynamic alloca then we do not need to adjust the
   // stack pointer (we fit in the Red Zone).
+  bool DisableRedZone = Fn->hasFnAttr(Attribute::NoRedZone);
   if (Is64Bit && !DisableRedZone &&
       !needsStackRealignment(MF) &&
       !MFI->hasVarSizedObjects() &&                // No dynamic alloca.
-      !MFI->hasCalls()) {                          // No calls.
+      !MFI->hasCalls() &&                          // No calls.
+      !Subtarget->isTargetWin64()) {               // Win64 has no Red Zone
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
-    if (hasFP(MF)) MinSize += SlotSize;
+    if (HasFP) MinSize += SlotSize;
     StackSize = std::max(MinSize,
                          StackSize > 128 ? StackSize - 128 : 0);
     MFI->setStackSize(StackSize);
@@ -773,8 +766,16 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
     MI->getOperand(3).setIsDead();
   }
 
+  //  uint64_t StackSize = MFI->getStackSize();
+  std::vector<MachineMove> &Moves = MMI->getFrameMoves();
+  const TargetData *TD = MF.getTarget().getTargetData();
+  int stackGrowth =
+    (MF.getTarget().getFrameInfo()->getStackGrowthDirection() ==
+     TargetFrameInfo::StackGrowsUp ?
+     TD->getPointerSize() : -TD->getPointerSize());
+
   uint64_t NumBytes = 0;
-  if (hasFP(MF)) {
+  if (HasFP) {
     // Calculate required stack adjustment
     uint64_t FrameSize = StackSize - SlotSize;
     if (needsStackRealignment(MF))
@@ -782,25 +783,54 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
 
     NumBytes = FrameSize - X86FI->getCalleeSavedFrameSize();
 
-    // Get the offset of the stack slot for the EBP register... which is
+    // Get the offset of the stack slot for the EBP register, which is
     // guaranteed to be the last slot by processFunctionBeforeFrameFinalized.
     // Update the frame offset adjustment.
     MFI->setOffsetAdjustment(-NumBytes);
 
-    // Save EBP into the appropriate stack slot...
+    // Save EBP/RBP into the appropriate stack slot...
     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
-      .addReg(FramePtr, /*isDef=*/false, /*isImp=*/false, /*isKill=*/true);
+      .addReg(FramePtr, RegState::Kill);
 
     if (needsFrameMoves) {
       // Mark effective beginning of when frame pointer becomes valid.
-      FrameLabelId = MMI->NextLabelID();
+      unsigned FrameLabelId = MMI->NextLabelID();
       BuildMI(MBB, MBBI, DL, TII.get(X86::DBG_LABEL)).addImm(FrameLabelId);
+
+      // Define the current CFA rule to use the provided offset.
+      if (StackSize) {
+        MachineLocation SPDst(MachineLocation::VirtualFP);
+        MachineLocation SPSrc(MachineLocation::VirtualFP,
+                              HasFP ? 2 * stackGrowth : 
+                                      -StackSize + stackGrowth);
+        Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+      } else {
+        // FIXME: Verify & implement for FP
+        MachineLocation SPDst(StackPtr);
+        MachineLocation SPSrc(StackPtr, stackGrowth);
+        Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+      }
+
+      // Change the rule for the FramePtr to be an "offset" rule.
+      MachineLocation FPDst(MachineLocation::VirtualFP, 2 * stackGrowth);
+      MachineLocation FPSrc(FramePtr);
+      Moves.push_back(MachineMove(FrameLabelId, FPDst, FPSrc));
     }
 
     // Update EBP with the new base value...
     BuildMI(MBB, MBBI, DL,
             TII.get(Is64Bit ? X86::MOV64rr : X86::MOV32rr), FramePtr)
         .addReg(StackPtr);
+
+    if (needsFrameMoves) {
+      unsigned FrameLabelId = MMI->NextLabelID();
+      BuildMI(MBB, MBBI, DL, TII.get(X86::DBG_LABEL)).addImm(FrameLabelId);
+
+      // Define the current CFA to use the EBP/RBP register.
+      MachineLocation FPDst(FramePtr);
+      MachineLocation FPSrc(MachineLocation::VirtualFP);
+      Moves.push_back(MachineMove(FrameLabelId, FPDst, FPSrc));
+    }
 
     // Mark the FramePtr as live-in in every block except the entry.
     for (MachineFunction::iterator I = next(MF.begin()), E = MF.end();
@@ -813,6 +843,7 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
         BuildMI(MBB, MBBI, DL,
                 TII.get(Is64Bit ? X86::AND64ri32 : X86::AND32ri),
                 StackPtr).addReg(StackPtr).addImm(-MaxAlign);
+
       // The EFLAGS implicit def is dead.
       MI->getOperand(3).setIsDead();
     }
@@ -820,75 +851,79 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
     NumBytes = StackSize - X86FI->getCalleeSavedFrameSize();
   }
 
-  unsigned ReadyLabelId = 0;
-  if (needsFrameMoves) {
-    // Mark effective beginning of when frame pointer is ready.
-    ReadyLabelId = MMI->NextLabelID();
-    BuildMI(MBB, MBBI, DL, TII.get(X86::DBG_LABEL)).addImm(ReadyLabelId);
-  }
-
   // Skip the callee-saved push instructions.
+  bool RegsSaved = false;
   while (MBBI != MBB.end() &&
          (MBBI->getOpcode() == X86::PUSH32r ||
-          MBBI->getOpcode() == X86::PUSH64r))
+          MBBI->getOpcode() == X86::PUSH64r)) {
+    RegsSaved = true;
     ++MBBI;
+  }
+
+  if (RegsSaved && needsFrameMoves) {
+    // Mark end of callee-saved push instructions.
+    unsigned LabelId = MMI->NextLabelID();
+    BuildMI(MBB, MBBI, DL, TII.get(X86::DBG_LABEL)).addImm(LabelId);
+
+    // Emit DWARF info specifying the offsets of the callee-saved registers.
+    emitCalleeSavedFrameMoves(MF, LabelId, FramePtr);
+  }
 
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
 
-  if (NumBytes) {   // adjust stack pointer: ESP -= numbytes
-    if (NumBytes >= 4096 && Subtarget->isTargetCygMing()) {
-      // Check, whether EAX is livein for this function
-      bool isEAXAlive = false;
-      for (MachineRegisterInfo::livein_iterator
+  // Adjust stack pointer: ESP -= numbytes.
+  if (NumBytes >= 4096 && Subtarget->isTargetCygMing()) {
+    // Check, whether EAX is livein for this function.
+    bool isEAXAlive = false;
+    for (MachineRegisterInfo::livein_iterator
            II = MF.getRegInfo().livein_begin(),
            EE = MF.getRegInfo().livein_end(); (II != EE) && !isEAXAlive; ++II) {
-        unsigned Reg = II->first;
-        isEAXAlive = (Reg == X86::EAX || Reg == X86::AX ||
-                      Reg == X86::AH || Reg == X86::AL);
-      }
-
-      // Function prologue calls _alloca to probe the stack when allocating
-      // more than 4k bytes in one go. Touching the stack at 4K increments is
-      // necessary to ensure that the guard pages used by the OS virtual memory
-      // manager are allocated in correct sequence.
-      if (!isEAXAlive) {
-        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-          .addImm(NumBytes);
-        BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
-          .addExternalSymbol("_alloca");
-      } else {
-        // Save EAX
-        BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
-          .addReg(X86::EAX, /*isDef=*/false, /*isImp=*/false, /*isKill=*/true);
-        // Allocate NumBytes-4 bytes on stack. We'll also use 4 already
-        // allocated bytes for EAX.
-        BuildMI(MBB, MBBI, DL, 
-                TII.get(X86::MOV32ri), X86::EAX).addImm(NumBytes-4);
-        BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
-          .addExternalSymbol("_alloca");
-        // Restore EAX
-        MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
-                                                X86::EAX),
-                                        StackPtr, false, NumBytes-4);
-        MBB.insert(MBBI, MI);
-      }
-    } else {
-      // If there is an SUB32ri of ESP immediately before this instruction,
-      // merge the two. This can be the case when tail call elimination is
-      // enabled and the callee has more arguments then the caller.
-      NumBytes -= mergeSPUpdates(MBB, MBBI, StackPtr, true);
-      // If there is an ADD32ri or SUB32ri of ESP immediately after this
-      // instruction, merge the two instructions.
-      mergeSPUpdatesDown(MBB, MBBI, StackPtr, &NumBytes);
-
-      if (NumBytes)
-        emitSPUpdate(MBB, MBBI, StackPtr, -(int64_t)NumBytes, Is64Bit, TII);
+      unsigned Reg = II->first;
+      isEAXAlive = (Reg == X86::EAX || Reg == X86::AX ||
+                    Reg == X86::AH || Reg == X86::AL);
     }
-  }
 
-  if (needsFrameMoves)
-    emitFrameMoves(MF, FrameLabelId, ReadyLabelId);
+    // Function prologue calls _alloca to probe the stack when allocating more
+    // than 4k bytes in one go. Touching the stack at 4K increments is necessary
+    // to ensure that the guard pages used by the OS virtual memory manager are
+    // allocated in correct sequence.
+    if (!isEAXAlive) {
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
+        .addImm(NumBytes);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
+        .addExternalSymbol("_alloca");
+    } else {
+      // Save EAX
+      BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
+        .addReg(X86::EAX, RegState::Kill);
+
+      // Allocate NumBytes-4 bytes on stack. We'll also use 4 already
+      // allocated bytes for EAX.
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
+        .addImm(NumBytes - 4);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
+        .addExternalSymbol("_alloca");
+
+      // Restore EAX
+      MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
+                                              X86::EAX),
+                                      StackPtr, false, NumBytes - 4);
+      MBB.insert(MBBI, MI);
+    }
+  } else if (NumBytes) {
+    // If there is an SUB32ri of ESP immediately before this instruction, merge
+    // the two. This can be the case when tail call elimination is enabled and
+    // the callee has more arguments then the caller.
+    NumBytes -= mergeSPUpdates(MBB, MBBI, StackPtr, true);
+
+    // If there is an ADD32ri or SUB32ri of ESP immediately after this
+    // instruction, merge the two instructions.
+    mergeSPUpdatesDown(MBB, MBBI, StackPtr, &NumBytes);
+
+    if (NumBytes)
+      emitSPUpdate(MBB, MBBI, StackPtr, -(int64_t)NumBytes, Is64Bit, TII);
+  }
 }
 
 void X86RegisterInfo::emitEpilogue(MachineFunction &MF,

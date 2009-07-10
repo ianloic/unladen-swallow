@@ -242,8 +242,6 @@ unsigned Lexer::MeasureTokenLength(SourceLocation Loc,
 // Character information.
 //===----------------------------------------------------------------------===//
 
-static unsigned char CharInfo[256];
-
 enum {
   CHAR_HORZ_WS  = 0x01,  // ' ', '\t', '\f', '\v'.  Note, no '\0'
   CHAR_VERT_WS  = 0x02,  // '\r', '\n'
@@ -253,24 +251,97 @@ enum {
   CHAR_PERIOD   = 0x20   // .
 };
 
+// Statically initialize CharInfo table based on ASCII character set
+// Reference: FreeBSD 7.2 /usr/share/misc/ascii
+static const unsigned char CharInfo[256] =
+{
+// 0 NUL         1 SOH         2 STX         3 ETX
+// 4 EOT         5 ENQ         6 ACK         7 BEL
+   0           , 0           , 0           , 0           ,
+   0           , 0           , 0           , 0           ,
+// 8 BS          9 HT         10 NL         11 VT
+//12 NP         13 CR         14 SO         15 SI
+   0           , CHAR_HORZ_WS, CHAR_VERT_WS, CHAR_HORZ_WS,
+   CHAR_HORZ_WS, CHAR_VERT_WS, 0           , 0           ,
+//16 DLE        17 DC1        18 DC2        19 DC3
+//20 DC4        21 NAK        22 SYN        23 ETB
+   0           , 0           , 0           , 0           ,
+   0           , 0           , 0           , 0           ,
+//24 CAN        25 EM         26 SUB        27 ESC
+//28 FS         29 GS         30 RS         31 US
+   0           , 0           , 0           , 0           ,
+   0           , 0           , 0           , 0           ,
+//32 SP         33  !         34  "         35  #
+//36  $         37  %         38  &         39  '
+   CHAR_HORZ_WS, 0           , 0           , 0           ,
+   0           , 0           , 0           , 0           ,
+//40  (         41  )         42  *         43  +
+//44  ,         45  -         46  .         47  /
+   0           , 0           , 0           , 0           ,
+   0           , 0           , CHAR_PERIOD , 0           ,
+//48  0         49  1         50  2         51  3
+//52  4         53  5         54  6         55  7
+   CHAR_NUMBER , CHAR_NUMBER , CHAR_NUMBER , CHAR_NUMBER ,
+   CHAR_NUMBER , CHAR_NUMBER , CHAR_NUMBER , CHAR_NUMBER ,
+//56  8         57  9         58  :         59  ;
+//60  <         61  =         62  >         63  ?
+   CHAR_NUMBER , CHAR_NUMBER , 0           , 0           ,
+   0           , 0           , 0           , 0           ,
+//64  @         65  A         66  B         67  C
+//68  D         69  E         70  F         71  G
+   0           , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//72  H         73  I         74  J         75  K
+//76  L         77  M         78  N         79  O
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//80  P         81  Q         82  R         83  S
+//84  T         85  U         86  V         87  W
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//88  X         89  Y         90  Z         91  [
+//92  \         93  ]         94  ^         95  _
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , 0           ,
+   0           , 0           , 0           , CHAR_UNDER  ,
+//96  `         97  a         98  b         99  c
+//100  d       101  e        102  f        103  g
+   0           , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//104  h       105  i        106  j        107  k
+//108  l       109  m        110  n        111  o
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//112  p       113  q        114  r        115  s
+//116  t       117  u        118  v        119  w
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
+//120  x       121  y        122  z        123  {
+//124  |        125  }        126  ~        127 DEL
+   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , 0           ,
+   0           , 0           , 0           , 0
+};
+
 static void InitCharacterInfo() {
   static bool isInited = false;
   if (isInited) return;
-  isInited = true;
-  
-  // Intiialize the CharInfo table.
-  // TODO: statically initialize this.
-  CharInfo[(int)' '] = CharInfo[(int)'\t'] = 
-  CharInfo[(int)'\f'] = CharInfo[(int)'\v'] = CHAR_HORZ_WS;
-  CharInfo[(int)'\n'] = CharInfo[(int)'\r'] = CHAR_VERT_WS;
-  
-  CharInfo[(int)'_'] = CHAR_UNDER;
-  CharInfo[(int)'.'] = CHAR_PERIOD;
-  for (unsigned i = 'a'; i <= 'z'; ++i)
-    CharInfo[i] = CharInfo[i+'A'-'a'] = CHAR_LETTER;
+  // check the statically-initialized CharInfo table
+  assert(CHAR_HORZ_WS == CharInfo[(int)' ']);
+  assert(CHAR_HORZ_WS == CharInfo[(int)'\t']);
+  assert(CHAR_HORZ_WS == CharInfo[(int)'\f']);
+  assert(CHAR_HORZ_WS == CharInfo[(int)'\v']);
+  assert(CHAR_VERT_WS == CharInfo[(int)'\n']);
+  assert(CHAR_VERT_WS == CharInfo[(int)'\r']);
+  assert(CHAR_UNDER   == CharInfo[(int)'_']);
+  assert(CHAR_PERIOD  == CharInfo[(int)'.']);
+  for (unsigned i = 'a'; i <= 'z'; ++i) {
+    assert(CHAR_LETTER == CharInfo[i]);
+    assert(CHAR_LETTER == CharInfo[i+'A'-'a']);
+  }
   for (unsigned i = '0'; i <= '9'; ++i)
-    CharInfo[i] = CHAR_NUMBER;
+    assert(CHAR_NUMBER == CharInfo[i]);
+  isInited = true;
 }
+
 
 /// isIdentifierBody - Return true if this is the body character of an
 /// identifier, which is [a-zA-Z0-9_].
@@ -473,13 +544,14 @@ Slash:
     // Common case, backslash-char where the char is not whitespace.
     if (!isWhitespace(Ptr[0])) return '\\';
     
-    // See if we have optional whitespace characters followed by a newline.
+    // See if we have optional whitespace characters between the slash and
+    // newline.
     if (unsigned EscapedNewLineSize = getEscapedNewLineSize(Ptr)) {
       // Remember that this token needs to be cleaned.
       if (Tok) Tok->setFlag(Token::NeedsCleaning);
 
       // Warn if there was whitespace between the backslash and newline.
-      if (EscapedNewLineSize != 1 && Tok && !isLexingRawMode())
+      if (Ptr[0] != '\n' && Ptr[0] != '\r' && Tok && !isLexingRawMode())
         Diag(Ptr, diag::backslash_newline_space);
         
       // Found backslash<whitespace><newline>.  Parse the char after it.
@@ -902,7 +974,10 @@ bool Lexer::SkipBCPLComment(Token &Result, const char *CurPtr) {
   } while (C != '\n' && C != '\r');
 
   // Found but did not consume the newline.
-    
+  if (PP)
+    PP->HandleComment(SourceRange(getSourceLocation(BufferPtr), 
+                                  getSourceLocation(CurPtr)));
+                   
   // If we are returning comments as tokens, return this comment as a token.
   if (inKeepCommentMode())
     return SaveBCPLComment(Result, CurPtr);
@@ -1145,6 +1220,10 @@ bool Lexer::SkipBlockComment(Token &Result, const char *CurPtr) {
     C = *CurPtr++;
   }
   
+  if (PP) 
+    PP->HandleComment(SourceRange(getSourceLocation(BufferPtr), 
+                                  getSourceLocation(CurPtr)));
+
   // If we are returning comments as tokens, return this comment as a token.
   if (inKeepCommentMode()) {
     FormTokenWithChars(Result, CurPtr, tok::comment);
@@ -1296,11 +1375,9 @@ unsigned Lexer::isNextPPTokenLParen() {
 
 /// LexTokenInternal - This implements a simple C family lexer.  It is an
 /// extremely performance critical piece of code.  This assumes that the buffer
-/// has a null character at the end of the file.  Return true if an error
-/// occurred and compilation should terminate, false if normal.  This returns a
-/// preprocessing token, not a normal token, as such, it is an internal
-/// interface.  It assumes that the Flags of result have been cleared before
-/// calling this.
+/// has a null character at the end of the file.  This returns a preprocessing
+/// token, not a normal token, as such, it is an internal interface.  It assumes
+/// that the Flags of result have been cleared before calling this.
 void Lexer::LexTokenInternal(Token &Result) {
 LexNextToken:
   // New token, can't need cleaning yet.
@@ -1631,7 +1708,7 @@ LexNextToken:
         // it's actually the start of a preprocessing directive.  Callback to
         // the preprocessor to handle it.
         // FIXME: -fpreprocessed mode??
-        if (Result.isAtStartOfLine() && !LexingRawMode) {
+        if (Result.isAtStartOfLine() && !LexingRawMode && !Is_PragmaLexer) {
           FormTokenWithChars(Result, CurPtr, tok::hash);
           PP->HandleDirective(Result);
           
@@ -1762,7 +1839,7 @@ LexNextToken:
       // it's actually the start of a preprocessing directive.  Callback to
       // the preprocessor to handle it.
       // FIXME: -fpreprocessed mode??
-      if (Result.isAtStartOfLine() && !LexingRawMode) {
+      if (Result.isAtStartOfLine() && !LexingRawMode && !Is_PragmaLexer) {
         FormTokenWithChars(Result, CurPtr, tok::hash);
         PP->HandleDirective(Result);
         

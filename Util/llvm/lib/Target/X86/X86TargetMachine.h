@@ -45,7 +45,6 @@ protected:
   // set this functions to ctor pointer at startup time if they are linked in.
   typedef FunctionPass *(*AsmPrinterCtorFn)(raw_ostream &o,
                                             X86TargetMachine &tm,
-                                            CodeGenOpt::Level OptLevel,
                                             bool verbose);
   static AsmPrinterCtorFn AsmPrinterCtor;
 
@@ -83,15 +82,19 @@ public:
                                   bool Verbose, raw_ostream &Out);
   virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
                               bool DumpAsm, MachineCodeEmitter &MCE);
+  virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
+                              bool DumpAsm, JITCodeEmitter &JCE);
+  virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
+                              bool DumpAsm, ObjectCodeEmitter &OCE);
   virtual bool addSimpleCodeEmitter(PassManagerBase &PM,
                                     CodeGenOpt::Level OptLevel,
                                     bool DumpAsm, MachineCodeEmitter &MCE);
-
-  /// symbolicAddressesAreRIPRel - Return true if symbolic addresses are
-  /// RIP-relative on this machine, taking into consideration the relocation
-  /// model and subtarget. RIP-relative addresses cannot have a separate
-  /// base or index register.
-  bool symbolicAddressesAreRIPRel() const;
+  virtual bool addSimpleCodeEmitter(PassManagerBase &PM,
+                                    CodeGenOpt::Level OptLevel,
+                                    bool DumpAsm, JITCodeEmitter &JCE);
+  virtual bool addSimpleCodeEmitter(PassManagerBase &PM,
+                                    CodeGenOpt::Level OptLevel,
+                                    bool DumpAsm, ObjectCodeEmitter &OCE);
 };
 
 /// X86_32TargetMachine - X86 32-bit target machine.

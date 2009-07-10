@@ -22,6 +22,7 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
+#include "llvm/MDNode.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -32,6 +33,7 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
@@ -50,9 +52,8 @@ namespace {
     const MipsSubtarget *Subtarget;
   public:
     explicit MipsAsmPrinter(raw_ostream &O, MipsTargetMachine &TM, 
-                            const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                            bool V)
-      : AsmPrinter(O, TM, T, OL, V) {
+                            const TargetAsmInfo *T, bool V)
+      : AsmPrinter(O, TM, T, V) {
       Subtarget = &TM.getSubtarget<MipsSubtarget>();
     }
 
@@ -92,9 +93,8 @@ namespace {
 /// regardless of whether the function is in SSA form.
 FunctionPass *llvm::createMipsCodePrinterPass(raw_ostream &o,
                                               MipsTargetMachine &tm,
-                                              CodeGenOpt::Level OptLevel,
                                               bool verbose) {
-  return new MipsAsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
+  return new MipsAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
 }
 
 //===----------------------------------------------------------------------===//
@@ -229,7 +229,7 @@ emitFunctionStart(MachineFunction &MF)
   SwitchToSection(TAI->SectionForGlobal(F));
 
   // 2 bits aligned
-  EmitAlignment(2, F);
+  EmitAlignment(MF.getAlignment(), F);
 
   O << "\t.globl\t"  << CurrentFnName << '\n';
   O << "\t.ent\t"    << CurrentFnName << '\n';
@@ -406,7 +406,7 @@ printOperand(const MachineInstr *MI, int opNum)
       break;
   
     default:
-      O << "<unknown operand type>"; abort (); break;
+      LLVM_UNREACHABLE("<unknown operand type>");
   }
 
   if (closeP) O << ")";
@@ -483,8 +483,10 @@ printModuleLevelGV(const GlobalVariable* GVar) {
   O << "\n\n";
   std::string name = Mang->getValueName(GVar);
   Constant *C = GVar->getInitializer();
+  if (isa<MDNode>(C) || isa<MDString>(C))
+    return;
   const Type *CTy = C->getType();
-  unsigned Size = TD->getTypePaddedSize(CTy);
+  unsigned Size = TD->getTypeAllocSize(CTy);
   const ConstantArray *CVA = dyn_cast<ConstantArray>(C);
   bool printSizeAndType = true;
 
@@ -543,16 +545,13 @@ printModuleLevelGV(const GlobalVariable* GVar) {
       printSizeAndType = false;
     break;
    case GlobalValue::GhostLinkage:
-    cerr << "Should not have any unmaterialized functions!\n";
-    abort();
+    LLVM_UNREACHABLE("Should not have any unmaterialized functions!");
    case GlobalValue::DLLImportLinkage:
-    cerr << "DLLImport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLImport linkage is not supported by this target!");
    case GlobalValue::DLLExportLinkage:
-    cerr << "DLLExport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLExport linkage is not supported by this target!");
    default:
-    assert(0 && "Unknown linkage type!");
+    LLVM_UNREACHABLE("Unknown linkage type!");
   }
 
   EmitAlignment(Align, GVar);
@@ -578,3 +577,14 @@ doFinalization(Module &M)
 
   return AsmPrinter::doFinalization(M);
 }
+
+namespace {
+  static struct Register {
+    Register() {
+      MipsTargetMachine::registerAsmPrinter(createMipsCodePrinterPass);
+    }
+  } Registrator;
+}
+
+// Force static initialization.
+extern "C" void LLVMInitializeMipsAsmPrinter() { }

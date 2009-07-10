@@ -28,6 +28,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Streams.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Config/config.h"
@@ -81,6 +82,9 @@ int CppBackendTargetMachineModule = 0;
 
 // Register the target.
 static RegisterTarget<CPPTargetMachine> X("cpp", "C++ backend");
+
+// Force static initialization.
+extern "C" void LLVMInitializeCppBackendTarget() { }
 
 namespace {
   typedef std::vector<const Type*> TypeList;
@@ -217,8 +221,7 @@ namespace {
   }
 
   void CppWriter::error(const std::string& msg) {
-    cerr << msg << "\n";
-    exit(2);
+    llvm_report_error(msg);
   }
 
   // printCFP - Print a floating point constant .. very carefully :)
@@ -865,8 +868,11 @@ namespace {
         Out << "Constant* " << constName << " = ConstantExpr::";
         switch (CE->getOpcode()) {
         case Instruction::Add:    Out << "getAdd(";  break;
+        case Instruction::FAdd:   Out << "getFAdd(";  break;
         case Instruction::Sub:    Out << "getSub("; break;
+        case Instruction::FSub:   Out << "getFSub("; break;
         case Instruction::Mul:    Out << "getMul("; break;
+        case Instruction::FMul:   Out << "getFMul("; break;
         case Instruction::UDiv:   Out << "getUDiv("; break;
         case Instruction::SDiv:   Out << "getSDiv("; break;
         case Instruction::FDiv:   Out << "getFDiv("; break;
@@ -996,6 +1002,7 @@ namespace {
       in(); nl(Out) << getCppName(GV);
     }
     Out << " = new GlobalVariable(";
+    nl(Out) << "*mod,";
     nl(Out) << "/*Type=*/";
     printCppName(GV->getType()->getElementType());
     Out << ",";
@@ -1010,8 +1017,7 @@ namespace {
     }
     nl(Out) << "/*Name=*/\"";
     printEscapedString(GV->getName());
-    Out << "\",";
-    nl(Out) << "mod);";
+    Out << "\");";
     nl(Out);
 
     if (GV->hasSection()) {
@@ -1159,8 +1165,11 @@ namespace {
       break;
     }
     case Instruction::Add:
+    case Instruction::FAdd:
     case Instruction::Sub:
+    case Instruction::FSub:
     case Instruction::Mul:
+    case Instruction::FMul:
     case Instruction::UDiv:
     case Instruction::SDiv:
     case Instruction::FDiv:
@@ -1176,8 +1185,11 @@ namespace {
       Out << "BinaryOperator* " << iName << " = BinaryOperator::Create(";
       switch (I->getOpcode()) {
       case Instruction::Add: Out << "Instruction::Add"; break;
+      case Instruction::FAdd: Out << "Instruction::FAdd"; break;
       case Instruction::Sub: Out << "Instruction::Sub"; break;
+      case Instruction::FSub: Out << "Instruction::FSub"; break;
       case Instruction::Mul: Out << "Instruction::Mul"; break;
+      case Instruction::FMul: Out << "Instruction::FMul"; break;
       case Instruction::UDiv:Out << "Instruction::UDiv"; break;
       case Instruction::SDiv:Out << "Instruction::SDiv"; break;
       case Instruction::FDiv:Out << "Instruction::FDiv"; break;
@@ -1822,7 +1834,9 @@ namespace {
                               const std::string& mName) {
     nl(Out) << "Module* " << fname << "() {";
     nl(Out,1) << "// Module Construction";
-    nl(Out) << "Module* mod = new Module(\"" << mName << "\");";
+    nl(Out) << "Module* mod = new Module(\"";
+    printEscapedString(mName);
+    Out << "\");";
     if (!TheModule->getTargetTriple().empty()) {
       nl(Out) << "mod->setDataLayout(\"" << TheModule->getDataLayout() << "\");";
     }
@@ -1855,7 +1869,9 @@ namespace {
   void CppWriter::printContents(const std::string& fname,
                                 const std::string& mName) {
     Out << "\nModule* " << fname << "(Module *mod) {\n";
-    Out << "\nmod->setModuleIdentifier(\"" << mName << "\");\n";
+    Out << "\nmod->setModuleIdentifier(\"";
+    printEscapedString(mName);
+    Out << "\");\n";
     printModuleBody();
     Out << "\nreturn mod;\n";
     Out << "\n}\n";

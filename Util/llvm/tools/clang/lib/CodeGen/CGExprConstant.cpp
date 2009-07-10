@@ -17,6 +17,7 @@
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/Builtins.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
 #include "llvm/GlobalVariable.h"
@@ -136,7 +137,7 @@ public:
     // Calculate information about the relevant field
     const llvm::Type* Ty = CI->getType();
     const llvm::TargetData &TD = CGM.getTypes().getTargetData();
-    unsigned size = TD.getTypePaddedSizeInBits(Ty);
+    unsigned size = TD.getTypeAllocSizeInBits(Ty);
     unsigned fieldOffset = CGM.getTypes().getLLVMFieldNo(Field) * size;
     CodeGenTypes::BitFieldInfo bitFieldInfo =
         CGM.getTypes().getBitFieldInfo(Field);
@@ -147,17 +148,17 @@ public:
     // FIXME: This won't work if the struct isn't completely packed!
     unsigned offset = 0, i = 0;
     while (offset < (fieldOffset & -8))
-      offset += TD.getTypePaddedSizeInBits(Elts[i++]->getType());
+      offset += TD.getTypeAllocSizeInBits(Elts[i++]->getType());
 
     // Advance over 0 sized elements (must terminate in bounds since
     // the bitfield must have a size).
-    while (TD.getTypePaddedSizeInBits(Elts[i]->getType()) == 0)
+    while (TD.getTypeAllocSizeInBits(Elts[i]->getType()) == 0)
       ++i;
 
     // Promote the size of V if necessary
-    // FIXME: This should never occur, but currently it can because
-    // initializer constants are cast to bool, and because clang is
-    // not enforcing bitfield width limits.
+    // FIXME: This should never occur, but currently it can because initializer
+    // constants are cast to bool, and because clang is not enforcing bitfield
+    // width limits.
     if (bitFieldInfo.Size > V.getBitWidth())
       V.zext(bitFieldInfo.Size);
 
@@ -197,16 +198,13 @@ public:
 
     // Copy initializer elements. Skip padding fields.
     unsigned EltNo = 0;  // Element no in ILE
-    int FieldNo = 0; // Field no in RecordDecl
     bool RewriteType = false;
-    for (RecordDecl::field_iterator Field = RD->field_begin(CGM.getContext()),
-                                 FieldEnd = RD->field_end(CGM.getContext());
+    for (RecordDecl::field_iterator Field = RD->field_begin(),
+                                 FieldEnd = RD->field_end();
          EltNo < ILE->getNumInits() && Field != FieldEnd; ++Field) {
-      FieldNo++;
-      if (!Field->getIdentifier())
-        continue;
-
       if (Field->isBitField()) {
+        if (!Field->getIdentifier())
+          continue;
         InsertBitfieldIntoStruct(Elts, *Field, ILE->getInit(EltNo));
       } else {
         unsigned FieldNo = CGM.getTypes().getLLVMFieldNo(*Field);
@@ -241,8 +239,8 @@ public:
     std::vector<const llvm::Type*> Types;
     Elts.push_back(C);
     Types.push_back(C->getType());
-    unsigned CurSize = CGM.getTargetData().getTypePaddedSize(C->getType());
-    unsigned TotalSize = CGM.getTargetData().getTypePaddedSize(Ty);
+    unsigned CurSize = CGM.getTargetData().getTypeAllocSize(C->getType());
+    unsigned TotalSize = CGM.getTargetData().getTypeAllocSize(Ty);
     while (CurSize < TotalSize) {
       Elts.push_back(llvm::Constant::getNullValue(llvm::Type::Int8Ty));
       Types.push_back(llvm::Type::Int8Ty);
@@ -265,8 +263,8 @@ public:
       // Make sure that it's really an empty and not a failure of
       // semantic analysis.
       RecordDecl *RD = ILE->getType()->getAsRecordType()->getDecl();
-      for (RecordDecl::field_iterator Field = RD->field_begin(CGM.getContext()),
-                                   FieldEnd = RD->field_end(CGM.getContext());
+      for (RecordDecl::field_iterator Field = RD->field_begin(),
+                                   FieldEnd = RD->field_end();
            Field != FieldEnd; ++Field)
         assert(Field->isUnnamedBitfield() && "Only unnamed bitfields allowed");
 #endif
@@ -275,7 +273,7 @@ public:
 
     if (curField->isBitField()) {
       // Create a dummy struct for bit-field insertion
-      unsigned NumElts = CGM.getTargetData().getTypePaddedSize(Ty) / 8;
+      unsigned NumElts = CGM.getTargetData().getTypeAllocSize(Ty);
       llvm::Constant* NV = llvm::Constant::getNullValue(llvm::Type::Int8Ty);
       std::vector<llvm::Constant*> Elts(NumElts, NV);
 
@@ -396,17 +394,17 @@ public:
       llvm::Constant* C = Visit(CLE->getInitializer());
       // FIXME: "Leaked" on failure.
       if (C)
-        C = new llvm::GlobalVariable(C->getType(),
+        C = new llvm::GlobalVariable(CGM.getModule(), C->getType(),
                                      E->getType().isConstQualified(), 
                                      llvm::GlobalValue::InternalLinkage,
-                                     C, ".compoundliteral", &CGM.getModule());
+                                     C, ".compoundliteral");
       return C;
     }
     case Expr::DeclRefExprClass: 
     case Expr::QualifiedDeclRefExprClass: {
       NamedDecl *Decl = cast<DeclRefExpr>(E)->getDecl();
       if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(Decl))
-        return CGM.GetAddrOfFunction(FD);
+        return CGM.GetAddrOfFunction(GlobalDecl(FD));
       if (const VarDecl* VD = dyn_cast<VarDecl>(Decl)) {
         // We can never refer to a variable with local storage.
         if (!VD->hasLocalStorage()) {          
@@ -478,21 +476,9 @@ llvm::Constant *CodeGenModule::EmitConstantExpr(const Expr *E,
   
   bool Success = false;
   
-  if (DestType->isReferenceType()) {
-    // If the destination type is a reference type, we need to evaluate it
-    // as an lvalue.
-    if (E->EvaluateAsLValue(Result, Context)) {
-      if (const Expr *LVBase = Result.Val.getLValueBase()) {
-        if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(LVBase)) {
-          const ValueDecl *VD = cast<ValueDecl>(DRE->getDecl());
-
-          // We can only initialize a reference with an lvalue if the lvalue
-          // is not a reference itself.
-          Success = !VD->getType()->isReferenceType();
-        }
-      }
-    }
-  } else 
+  if (DestType->isReferenceType())
+    Success = E->EvaluateAsLValue(Result, Context);
+  else 
     Success = E->Evaluate(Result, Context);
   
   if (Success) {

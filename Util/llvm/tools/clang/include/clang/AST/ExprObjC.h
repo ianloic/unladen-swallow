@@ -34,6 +34,8 @@ public:
   explicit ObjCStringLiteral(EmptyShell Empty)
     : Expr(ObjCStringLiteralClass, Empty) {}
 
+  ObjCStringLiteral* Clone(ASTContext &C) const;
+
   StringLiteral *getString() { return cast<StringLiteral>(String); }
   const StringLiteral *getString() const { return cast<StringLiteral>(String); }
   void setString(StringLiteral *S) { String = S; }
@@ -64,7 +66,8 @@ class ObjCEncodeExpr : public Expr {
 public:
   ObjCEncodeExpr(QualType T, QualType ET, 
                  SourceLocation at, SourceLocation rp)
-    : Expr(ObjCEncodeExprClass, T), EncType(ET), AtLoc(at), RParenLoc(rp) {}
+    : Expr(ObjCEncodeExprClass, T, ET->isDependentType(), 
+           ET->isDependentType()), EncType(ET), AtLoc(at), RParenLoc(rp) {}
   
   explicit ObjCEncodeExpr(EmptyShell Empty) : Expr(ObjCEncodeExprClass, Empty){}
 
@@ -103,6 +106,8 @@ public:
   explicit ObjCSelectorExpr(EmptyShell Empty)
    : Expr(ObjCSelectorExprClass, Empty) {}
 
+  ObjCSelectorExpr *Clone(ASTContext &C) const;
+  
   Selector getSelector() const { return SelName; }
   void setSelector(Selector S) { SelName = S; }
   
@@ -133,18 +138,20 @@ public:
 ///   obj conformsToProtocol:@protocol(foo)]
 /// The return type is "Protocol*".
 class ObjCProtocolExpr : public Expr {    
-  ObjCProtocolDecl *Protocol;    
+  ObjCProtocolDecl *TheProtocol;    
   SourceLocation AtLoc, RParenLoc;
 public:
   ObjCProtocolExpr(QualType T, ObjCProtocolDecl *protocol,
                    SourceLocation at, SourceLocation rp)
-  : Expr(ObjCProtocolExprClass, T), Protocol(protocol),
+  : Expr(ObjCProtocolExprClass, T), TheProtocol(protocol),
     AtLoc(at), RParenLoc(rp) {}
   explicit ObjCProtocolExpr(EmptyShell Empty)
     : Expr(ObjCProtocolExprClass, Empty) {}
 
-  ObjCProtocolDecl *getProtocol() const { return Protocol; }
-  void setProtocol(ObjCProtocolDecl *P) { Protocol = P; }
+  ObjCProtocolExpr *Clone(ASTContext &C) const;
+  
+  ObjCProtocolDecl *getProtocol() const { return TheProtocol; }
+  void setProtocol(ObjCProtocolDecl *P) { TheProtocol = P; }
     
   SourceLocation getAtLoc() const { return AtLoc; }
   SourceLocation getRParenLoc() const { return RParenLoc; }
@@ -343,14 +350,6 @@ class ObjCMessageExpr : public Expr {
   // Bit-swizzling flags.
   enum { IsInstMeth=0, IsClsMethDeclUnknown, IsClsMethDeclKnown, Flags=0x3 };
   unsigned getFlag() const { return (uintptr_t) SubExprs[RECEIVER] & Flags; }
-  
-  // constructor used during deserialization
-  ObjCMessageExpr(Selector selInfo, QualType retType,
-                  SourceLocation LBrac, SourceLocation RBrac,
-                  Stmt **subexprs, unsigned nargs)
-  : Expr(ObjCMessageExprClass, retType), SubExprs(subexprs),
-    NumArgs(nargs), SelName(selInfo), MethodProto(NULL),
-    LBracloc(LBrac), RBracloc(RBrac) {}
   
 public:
   /// This constructor is used to represent class messages where the

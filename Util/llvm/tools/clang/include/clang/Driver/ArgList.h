@@ -74,12 +74,17 @@ namespace driver {
     bool hasArg(options::ID Id, bool Claim=true) const { 
       return getLastArg(Id, Claim) != 0;
     }
+    bool hasArg(options::ID Id0, options::ID Id1, bool Claim=true) const { 
+      return getLastArg(Id0, Id1, Claim) != 0;
+    }
 
     /// getLastArg - Return the last argument matching \arg Id, or null.
     ///
     /// \arg Claim Whether the argument should be claimed, if it exists.
     Arg *getLastArg(options::ID Id, bool Claim=true) const;
     Arg *getLastArg(options::ID Id0, options::ID Id1, bool Claim=true) const;
+    Arg *getLastArg(options::ID Id0, options::ID Id1, options::ID Id2,
+                    bool Claim=true) const;
 
     /// getArgString - Return the input argument string at \arg Index.
     virtual const char *getArgString(unsigned Index) const = 0;

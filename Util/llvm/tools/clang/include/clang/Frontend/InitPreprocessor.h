@@ -50,7 +50,7 @@ public:
   macro_iterator macro_end() const { return Macros.end(); }
 
   typedef std::vector<std::pair<std::string,
-																bool> >::const_iterator include_iterator;
+                                bool> >::const_iterator include_iterator;
   include_iterator include_begin() const { return Includes.begin(); }
   include_iterator include_end() const { return Includes.end(); }
 
@@ -63,7 +63,6 @@ public:
 /// environment ready to process a single file. This returns true on error.
 ///
 bool InitializePreprocessor(Preprocessor &PP,
-                            const std::string &InFile,
                             const PreprocessorInitOptions& InitOptions);
 
 } // end namespace clang

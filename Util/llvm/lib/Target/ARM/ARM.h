@@ -20,15 +20,17 @@
 
 namespace llvm {
 
-class ARMTargetMachine;
+class ARMBaseTargetMachine;
 class FunctionPass;
 class MachineCodeEmitter;
+class JITCodeEmitter;
+class ObjectCodeEmitter;
 class raw_ostream;
 
 // Enums corresponding to ARM condition codes
 namespace ARMCC {
-  // The CondCodes constants map directly to the 4-bit encoding of the 
-  // condition field for predicated instructions. 
+  // The CondCodes constants map directly to the 4-bit encoding of the
+  // condition field for predicated instructions.
   enum CondCodes {
     EQ,
     NE,
@@ -46,7 +48,7 @@ namespace ARMCC {
     LE,
     AL
   };
-  
+
   inline static CondCodes getOppositeCondition(CondCodes CC){
     switch (CC) {
     default: assert(0 && "Unknown condition code");
@@ -89,14 +91,21 @@ inline static const char *ARMCondCodeToString(ARMCC::CondCodes CC) {
   }
 }
 
-FunctionPass *createARMISelDag(ARMTargetMachine &TM);
+FunctionPass *createARMISelDag(ARMBaseTargetMachine &TM);
 FunctionPass *createARMCodePrinterPass(raw_ostream &O,
-                                       ARMTargetMachine &TM,
-                                       CodeGenOpt::Level OptLevel,
+                                       ARMBaseTargetMachine &TM,
                                        bool Verbose);
-FunctionPass *createARMCodeEmitterPass(ARMTargetMachine &TM,
+FunctionPass *createARMCodeEmitterPass(ARMBaseTargetMachine &TM,
                                        MachineCodeEmitter &MCE);
-FunctionPass *createARMLoadStoreOptimizationPass();
+
+FunctionPass *createARMCodeEmitterPass(ARMBaseTargetMachine &TM,
+                                       MachineCodeEmitter &MCE);
+FunctionPass *createARMJITCodeEmitterPass(ARMBaseTargetMachine &TM,
+                                          JITCodeEmitter &JCE);
+FunctionPass *createARMObjectCodeEmitterPass(ARMBaseTargetMachine &TM, 
+                                             ObjectCodeEmitter &OCE);
+
+FunctionPass *createARMLoadStoreOptimizationPass(bool PreAlloc = false);
 FunctionPass *createARMConstantIslandPass();
 
 } // end namespace llvm;

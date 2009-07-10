@@ -35,6 +35,9 @@ int MSP430TargetMachineModule = 0;
 static RegisterTarget<MSP430TargetMachine>
 X("msp430", "MSP430 [experimental]");
 
+// Force static initialization.
+extern "C" void LLVMInitializeMSP430Target() { }
+
 MSP430TargetMachine::MSP430TargetMachine(const Module &M,
                                          const std::string &FS) :
   Subtarget(*this, M, FS),
@@ -59,7 +62,7 @@ bool MSP430TargetMachine::addAssemblyEmitter(PassManagerBase &PM,
                                              bool Verbose,
                                              raw_ostream &Out) {
   // Output assembly language.
-  PM.add(createMSP430CodePrinterPass(Out, *this, OptLevel, Verbose));
+  PM.add(createMSP430CodePrinterPass(Out, *this, Verbose));
   return false;
 }
 

@@ -15,12 +15,13 @@
 #ifndef RECORD_H
 #define RECORD_H
 
-#include "TGSourceMgr.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/DataTypes.h"
+#include "llvm/Support/raw_ostream.h"
 #include <map>
-#include <ostream>
 
 namespace llvm {
+class raw_ostream;
   
 // RecTy subclasses.
 class BitRecTy;
@@ -41,7 +42,9 @@ class IntInit;
 class StringInit;
 class CodeInit;
 class ListInit;
+class UnOpInit;
 class BinOpInit;
+class TernOpInit;
 class DefInit;
 class DagInit;
 class TypedInit;
@@ -63,7 +66,7 @@ struct RecTy {
   virtual ~RecTy() {}
 
   virtual std::string getAsString() const = 0;
-  void print(std::ostream &OS) const { OS << getAsString(); }
+  void print(raw_ostream &OS) const { OS << getAsString(); }
   void dump() const;
 
   /// typeIsConvertibleTo - Return true if all values of 'this' type can be
@@ -77,7 +80,13 @@ public:   // These methods should only be called from subclasses of Init
   virtual Init *convertValue(   IntInit *II) { return 0; }
   virtual Init *convertValue(StringInit *SI) { return 0; }
   virtual Init *convertValue(  ListInit *LI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) {
+    return convertValue((TypedInit*)UI);
+  }
   virtual Init *convertValue( BinOpInit *UI) {
+    return convertValue((TypedInit*)UI);
+  }
+  virtual Init *convertValue( TernOpInit *UI) {
     return convertValue((TypedInit*)UI);
   }
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
@@ -105,7 +114,7 @@ public:   // These methods should only be called by subclasses of RecTy.
   virtual bool baseClassOf(const RecordRecTy *RHS) const { return false; }
 };
 
-inline std::ostream &operator<<(std::ostream &OS, const RecTy &Ty) {
+inline raw_ostream &operator<<(raw_ostream &OS, const RecTy &Ty) {
   Ty.print(OS);
   return OS;
 }
@@ -125,7 +134,9 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return (Init*)VB; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -167,7 +178,9 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -205,7 +218,9 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -237,7 +252,10 @@ public:
   virtual Init *convertValue(   IntInit *II) { return 0; }
   virtual Init *convertValue(StringInit *SI) { return (Init*)SI; }
   virtual Init *convertValue(  ListInit *LI) { return 0; }
+  virtual Init *convertValue( UnOpInit *BO);
   virtual Init *convertValue( BinOpInit *BO);
+  virtual Init *convertValue( TernOpInit *BO) { return RecTy::convertValue(BO);}
+
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
@@ -284,7 +302,9 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -321,7 +341,9 @@ public:
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
   virtual Init *convertValue(   DagInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
   virtual Init *convertValue( FieldInit *FI) { return RecTy::convertValue(FI);}
@@ -354,7 +376,9 @@ public:
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
   virtual Init *convertValue(   DefInit *DI) { return 0; }
+  virtual Init *convertValue( UnOpInit *BO);
   virtual Init *convertValue( BinOpInit *BO);
+  virtual Init *convertValue( TernOpInit *BO) { return RecTy::convertValue(BO);}
   virtual Init *convertValue(   DagInit *CI) { return (Init*)CI; }
   virtual Init *convertValue( TypedInit *TI);
   virtual Init *convertValue(   VarInit *VI) { return RecTy::convertValue(VI);}
@@ -395,7 +419,9 @@ public:
   virtual Init *convertValue(  ListInit *LI) { return 0; }
   virtual Init *convertValue(  CodeInit *CI) { return 0; }
   virtual Init *convertValue(VarBitInit *VB) { return 0; }
+  virtual Init *convertValue( UnOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue( BinOpInit *UI) { return RecTy::convertValue(UI);}
+  virtual Init *convertValue( TernOpInit *UI) { return RecTy::convertValue(UI);}
   virtual Init *convertValue(   DefInit *DI);
   virtual Init *convertValue(   DagInit *DI) { return 0; }
   virtual Init *convertValue( TypedInit *VI);
@@ -417,7 +443,10 @@ public:
   virtual bool baseClassOf(const RecordRecTy *RHS) const;
 };
 
-
+/// resolveTypes - Find a common type that T1 and T2 convert to.  
+/// Return 0 if no such type exists.
+///
+RecTy *resolveTypes(RecTy *T1, RecTy *T2);
 
 //===----------------------------------------------------------------------===//
 //  Initializer Classes
@@ -431,13 +460,13 @@ struct Init {
   virtual bool isComplete() const { return true; }
 
   /// print - Print out this value.
-  void print(std::ostream &OS) const { OS << getAsString(); }
+  void print(raw_ostream &OS) const { OS << getAsString(); }
 
   /// getAsString - Convert this value to a string form.
   virtual std::string getAsString() const = 0;
 
   /// dump - Debugging method that may be called through a debugger, just
-  /// invokes print on cerr.
+  /// invokes print on stderr.
   void dump() const;
 
   /// convertInitializerTo - This virtual function is a simple call-back
@@ -488,9 +517,36 @@ struct Init {
   }
 };
 
-inline std::ostream &operator<<(std::ostream &OS, const Init &I) {
+inline raw_ostream &operator<<(raw_ostream &OS, const Init &I) {
   I.print(OS); return OS;
 }
+
+/// TypedInit - This is the common super-class of types that have a specific,
+/// explicit, type.
+///
+class TypedInit : public Init {
+  RecTy *Ty;
+public:
+  explicit TypedInit(RecTy *T) : Ty(T) {}
+
+  RecTy *getType() const { return Ty; }
+
+  virtual Init *convertInitializerBitRange(const std::vector<unsigned> &Bits);
+  virtual Init *convertInitListSlice(const std::vector<unsigned> &Elements);
+
+  /// resolveBitReference - This method is used to implement
+  /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
+  /// simply return the resolved value, otherwise we return null.
+  ///
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit) = 0;
+
+  /// resolveListElementReference - This method is used to implement
+  /// VarListElementInit::resolveReferences.  If the list element is resolvable
+  /// now, we return the resolved value, otherwise we return null.
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt) = 0;
+};
 
 
 /// UnsetInit - ? - Represents an uninitialized value
@@ -558,18 +614,18 @@ public:
 
   // printXX - Print this bitstream with the specified format, returning true if
   // it is not possible.
-  bool printInHex(std::ostream &OS) const;
-  bool printAsVariable(std::ostream &OS) const;
-  bool printAsUnset(std::ostream &OS) const;
+  bool printInHex(raw_ostream &OS) const;
+  bool printAsVariable(raw_ostream &OS) const;
+  bool printAsUnset(raw_ostream &OS) const;
 };
 
 
 /// IntInit - 7 - Represent an initalization by a literal integer value.
 ///
-class IntInit : public Init {
+class IntInit : public TypedInit {
   int64_t Value;
 public:
-  explicit IntInit(int64_t V) : Value(V) {}
+  explicit IntInit(int64_t V) : TypedInit(new IntRecTy), Value(V) {}
 
   int64_t getValue() const { return Value; }
 
@@ -579,15 +635,35 @@ public:
   virtual Init *convertInitializerBitRange(const std::vector<unsigned> &Bits);
 
   virtual std::string getAsString() const;
+
+  /// resolveBitReference - This method is used to implement
+  /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
+  /// simply return the resolved value, otherwise we return null.
+  ///
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit) {
+    assert(0 && "Illegal bit reference off int");
+    return 0;
+  }
+
+  /// resolveListElementReference - This method is used to implement
+  /// VarListElementInit::resolveReferences.  If the list element is resolvable
+  /// now, we return the resolved value, otherwise we return null.
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt) {
+    assert(0 && "Illegal element reference off int");
+    return 0;
+  }
 };
 
 
 /// StringInit - "foo" - Represent an initialization by a string value.
 ///
-class StringInit : public Init {
+class StringInit : public TypedInit {
   std::string Value;
 public:
-  explicit StringInit(const std::string &V) : Value(V) {}
+  explicit StringInit(const std::string &V)
+    : TypedInit(new StringRecTy), Value(V) {}
 
   const std::string &getValue() const { return Value; }
 
@@ -596,6 +672,25 @@ public:
   }
 
   virtual std::string getAsString() const { return "\"" + Value + "\""; }
+
+  /// resolveBitReference - This method is used to implement
+  /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
+  /// simply return the resolved value, otherwise we return null.
+  ///
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit) {
+    assert(0 && "Illegal bit reference off string");
+    return 0;
+  }
+
+  /// resolveListElementReference - This method is used to implement
+  /// VarListElementInit::resolveReferences.  If the list element is resolvable
+  /// now, we return the resolved value, otherwise we return null.
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt) {
+    assert(0 && "Illegal element reference off string");
+    return 0;
+  }
 };
 
 /// CodeInit - "[{...}]" - Represent a code fragment.
@@ -616,12 +711,18 @@ public:
 
 /// ListInit - [AL, AH, CL] - Represent a list of defs
 ///
-class ListInit : public Init {
+class ListInit : public TypedInit {
   std::vector<Init*> Values;
 public:
-  explicit ListInit(std::vector<Init*> &Vs) {
+  typedef std::vector<Init*>::iterator       iterator;
+  typedef std::vector<Init*>::const_iterator const_iterator;
+
+  explicit ListInit(std::vector<Init*> &Vs, RecTy *EltTy)
+    : TypedInit(new ListRecTy(EltTy)) {
     Values.swap(Vs);
   }
+  explicit ListInit(iterator Start, iterator End, RecTy *EltTy)
+      : TypedInit(new ListRecTy(EltTy)), Values(Start, End) {}
 
   unsigned getSize() const { return Values.size(); }
   Init *getElement(unsigned i) const {
@@ -646,9 +747,6 @@ public:
 
   virtual std::string getAsString() const;
 
-  typedef std::vector<Init*>::iterator       iterator;
-  typedef std::vector<Init*>::const_iterator const_iterator;
-
   inline iterator       begin()       { return Values.begin(); }
   inline const_iterator begin() const { return Values.begin(); }
   inline iterator       end  ()       { return Values.end();   }
@@ -656,57 +754,40 @@ public:
 
   inline size_t         size () const { return Values.size();  }
   inline bool           empty() const { return Values.empty(); }
-};
-
-
-/// TypedInit - This is the common super-class of types that have a specific,
-/// explicit, type.
-///
-class TypedInit : public Init {
-  RecTy *Ty;
-public:
-  explicit TypedInit(RecTy *T) : Ty(T) {}
-
-  RecTy *getType() const { return Ty; }
-
-  virtual Init *convertInitializerBitRange(const std::vector<unsigned> &Bits);
-  virtual Init *convertInitListSlice(const std::vector<unsigned> &Elements);
 
   /// resolveBitReference - This method is used to implement
   /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
   /// simply return the resolved value, otherwise we return null.
   ///
   virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
-                                    unsigned Bit) = 0;
+                                    unsigned Bit) {
+    assert(0 && "Illegal bit reference off list");
+    return 0;
+  }
 
   /// resolveListElementReference - This method is used to implement
   /// VarListElementInit::resolveReferences.  If the list element is resolvable
   /// now, we return the resolved value, otherwise we return null.
   virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
-                                            unsigned Elt) = 0;
+                                            unsigned Elt);
 };
 
 
-/// BinOpInit - !op (X, Y) - Combine two inits.
+/// OpInit - Base class for operators
 ///
-class BinOpInit : public TypedInit {
+class OpInit : public TypedInit {
 public:
-  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT, NAMECONCAT };
-private:
-  BinaryOp Opc;
-  Init *LHS, *RHS;
-public:
-  BinOpInit(BinaryOp opc, Init *lhs, Init *rhs, RecTy *Type) :
-      TypedInit(Type), Opc(opc), LHS(lhs), RHS(rhs) {
-  }
-  
-  BinaryOp getOpcode() const { return Opc; }
-  Init *getLHS() const { return LHS; }
-  Init *getRHS() const { return RHS; }
+  OpInit(RecTy *Type) : TypedInit(Type) {}
+
+  // Clone - Clone this operator, replacing arguments with the new list
+  virtual OpInit *clone(std::vector<Init *> &Operands) = 0;
+
+  virtual int getNumOperands(void) const = 0;
+  virtual Init *getOperand(int i) = 0;
 
   // Fold - If possible, fold this to a simpler init.  Return this if not
   // possible to fold.
-  Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
+  virtual Init *Fold(Record *CurRec, MultiClass *CurMultiClass) = 0;
 
   virtual Init *convertInitializerTo(RecTy *Ty) {
     return Ty->convertValue(this);
@@ -716,7 +797,142 @@ public:
                                     unsigned Bit);
   virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
                                             unsigned Elt);
+};
 
+
+/// UnOpInit - !op (X) - Transform an init.
+///
+class UnOpInit : public OpInit {
+public:
+  enum UnaryOp { CAST, CAR, CDR, LNULL };
+private:
+  UnaryOp Opc;
+  Init *LHS;
+public:
+  UnOpInit(UnaryOp opc, Init *lhs, RecTy *Type) :
+      OpInit(Type), Opc(opc), LHS(lhs) {
+  }
+
+  // Clone - Clone this operator, replacing arguments with the new list
+  virtual OpInit *clone(std::vector<Init *> &Operands) {
+    assert(Operands.size() == 1 &&
+           "Wrong number of operands for unary operation");
+    return new UnOpInit(getOpcode(), *Operands.begin(), getType());
+  }
+
+  int getNumOperands(void) const { return 1; }
+  Init *getOperand(int i) {
+    assert(i == 0 && "Invalid operand id for unary operator");
+    return getOperand();
+  }
+  
+  UnaryOp getOpcode() const { return Opc; }
+  Init *getOperand() const { return LHS; }
+
+  // Fold - If possible, fold this to a simpler init.  Return this if not
+  // possible to fold.
+  Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
+
+  virtual Init *resolveReferences(Record &R, const RecordVal *RV);
+  
+  /// getFieldType - This method is used to implement the FieldInit class.
+  /// Implementors of this method should return the type of the named field if
+  /// they are of record type.
+  ///
+  virtual RecTy *getFieldType(const std::string &FieldName) const;
+
+  virtual std::string getAsString() const;
+};
+
+/// BinOpInit - !op (X, Y) - Combine two inits.
+///
+class BinOpInit : public OpInit {
+public:
+  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT, NAMECONCAT };
+private:
+  BinaryOp Opc;
+  Init *LHS, *RHS;
+public:
+  BinOpInit(BinaryOp opc, Init *lhs, Init *rhs, RecTy *Type) :
+      OpInit(Type), Opc(opc), LHS(lhs), RHS(rhs) {
+  }
+  
+  // Clone - Clone this operator, replacing arguments with the new list
+  virtual OpInit *clone(std::vector<Init *> &Operands) {
+    assert(Operands.size() == 2 &&
+           "Wrong number of operands for binary operation");
+    return new BinOpInit(getOpcode(), Operands[0], Operands[1], getType());
+  }
+
+  int getNumOperands(void) const { return 2; }
+  Init *getOperand(int i) {
+    assert((i == 0 || i == 1) && "Invalid operand id for binary operator");
+    if (i == 0) {
+      return getLHS();
+    }
+    else {
+      return getRHS();
+    }
+  }
+
+  BinaryOp getOpcode() const { return Opc; }
+  Init *getLHS() const { return LHS; }
+  Init *getRHS() const { return RHS; }
+
+  // Fold - If possible, fold this to a simpler init.  Return this if not
+  // possible to fold.
+  Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
+
+  virtual Init *resolveReferences(Record &R, const RecordVal *RV);
+  
+  virtual std::string getAsString() const;
+};
+
+/// TernOpInit - !op (X, Y, Z) - Combine two inits.
+///
+class TernOpInit : public OpInit {
+public:
+  enum TernaryOp { SUBST, FOREACH, IF };
+private:
+  TernaryOp Opc;
+  Init *LHS, *MHS, *RHS;
+public:
+  TernOpInit(TernaryOp opc, Init *lhs, Init *mhs, Init *rhs, RecTy *Type) :
+      OpInit(Type), Opc(opc), LHS(lhs), MHS(mhs), RHS(rhs) {
+  }
+  
+  // Clone - Clone this operator, replacing arguments with the new list
+  virtual OpInit *clone(std::vector<Init *> &Operands) {
+    assert(Operands.size() == 3 &&
+           "Wrong number of operands for ternary operation");
+    return new TernOpInit(getOpcode(), Operands[0], Operands[1], Operands[2],
+                          getType());
+  }
+
+  int getNumOperands(void) const { return 3; }
+  Init *getOperand(int i) {
+    assert((i == 0 || i == 1 || i == 2) &&
+           "Invalid operand id for ternary operator");
+    if (i == 0) {
+      return getLHS();
+    }
+    else if (i == 1) {
+      return getMHS();
+    }
+    else {
+      return getRHS();
+    }
+  }
+
+  TernaryOp getOpcode() const { return Opc; }
+  Init *getLHS() const { return LHS; }
+  Init *getMHS() const { return MHS; }
+  Init *getRHS() const { return RHS; }
+
+  // Fold - If possible, fold this to a simpler init.  Return this if not
+  // possible to fold.
+  Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
+  
   virtual Init *resolveReferences(Record &R, const RecordVal *RV);
   
   virtual std::string getAsString() const;
@@ -814,10 +1030,10 @@ public:
 
 /// DefInit - AL - Represent a reference to a 'def' in the description
 ///
-class DefInit : public Init {
+class DefInit : public TypedInit {
   Record *Def;
 public:
-  explicit DefInit(Record *D) : Def(D) {}
+  explicit DefInit(Record *D) : TypedInit(new RecordRecTy(D)), Def(D) {}
 
   virtual Init *convertInitializerTo(RecTy *Ty) {
     return Ty->convertValue(this);
@@ -831,6 +1047,25 @@ public:
   virtual Init *getFieldInit(Record &R, const std::string &FieldName) const;
 
   virtual std::string getAsString() const;
+
+  /// resolveBitReference - This method is used to implement
+  /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
+  /// simply return the resolved value, otherwise we return null.
+  ///
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit) {
+    assert(0 && "Illegal bit reference off def");
+    return 0;
+  }
+
+  /// resolveListElementReference - This method is used to implement
+  /// VarListElementInit::resolveReferences.  If the list element is resolvable
+  /// now, we return the resolved value, otherwise we return null.
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt) {
+    assert(0 && "Illegal element reference off def");
+    return 0;
+  }
 };
 
 
@@ -865,7 +1100,7 @@ public:
 /// to have at least one value then a (possibly empty) list of arguments.  Each
 /// argument can have a name associated with it.
 ///
-class DagInit : public Init {
+class DagInit : public TypedInit {
   Init *Val;
   std::string ValName;
   std::vector<Init*> Args;
@@ -873,7 +1108,7 @@ class DagInit : public Init {
 public:
   DagInit(Init *V, std::string VN, 
           const std::vector<std::pair<Init*, std::string> > &args)
-    : Val(V), ValName(VN) {
+    : TypedInit(new DagRecTy), Val(V), ValName(VN) {
     Args.reserve(args.size());
     ArgNames.reserve(args.size());
     for (unsigned i = 0, e = args.size(); i != e; ++i) {
@@ -883,7 +1118,7 @@ public:
   }
   DagInit(Init *V, std::string VN, const std::vector<Init*> &args, 
           const std::vector<std::string> &argNames)
-  : Val(V), ValName(VN), Args(args), ArgNames(argNames) {
+  : TypedInit(new DagRecTy), Val(V), ValName(VN), Args(args), ArgNames(argNames) {
   }
   
   virtual Init *convertInitializerTo(RecTy *Ty) {
@@ -934,6 +1169,18 @@ public:
   inline size_t              name_size () const { return ArgNames.size();  }
   inline bool                name_empty() const { return ArgNames.empty(); }
 
+  virtual Init *resolveBitReference(Record &R, const RecordVal *RV,
+                                    unsigned Bit) {
+    assert(0 && "Illegal bit reference off dag");
+    return 0;
+  }
+  
+  virtual Init *resolveListElementReference(Record &R, const RecordVal *RV,
+                                            unsigned Elt) {
+    assert(0 && "Illegal element reference off dag");
+    return 0;
+  }
+  
 };
 
 //===----------------------------------------------------------------------===//
@@ -964,29 +1211,29 @@ public:
   }
 
   void dump() const;
-  void print(std::ostream &OS, bool PrintSem = true) const;
+  void print(raw_ostream &OS, bool PrintSem = true) const;
 };
 
-inline std::ostream &operator<<(std::ostream &OS, const RecordVal &RV) {
+inline raw_ostream &operator<<(raw_ostream &OS, const RecordVal &RV) {
   RV.print(OS << "  ");
   return OS;
 }
 
 class Record {
   std::string Name;
-  TGLoc Loc;
+  SMLoc Loc;
   std::vector<std::string> TemplateArgs;
   std::vector<RecordVal> Values;
   std::vector<Record*> SuperClasses;
 public:
 
-  explicit Record(const std::string &N, TGLoc loc) : Name(N), Loc(loc) {}
+  explicit Record(const std::string &N, SMLoc loc) : Name(N), Loc(loc) {}
   ~Record() {}
   
   const std::string &getName() const { return Name; }
   void setName(const std::string &Name);  // Also updates RecordKeeper.
   
-  TGLoc getLoc() const { return Loc; }
+  SMLoc getLoc() const { return Loc; }
   
   const std::vector<std::string> &getTemplateArgs() const {
     return TemplateArgs;
@@ -1132,7 +1379,7 @@ public:
   std::string getValueAsCode(const std::string &FieldName) const;
 };
 
-std::ostream &operator<<(std::ostream &OS, const Record &R);
+raw_ostream &operator<<(raw_ostream &OS, const Record &R);
 
 struct MultiClass {
   Record Rec;  // Placeholder for template args and Name.
@@ -1141,7 +1388,7 @@ struct MultiClass {
 
   void dump() const;
 
-  MultiClass(const std::string &Name, TGLoc Loc) : Rec(Name, Loc) {}
+  MultiClass(const std::string &Name, SMLoc Loc) : Rec(Name, Loc) {}
 };
 
 class RecordKeeper {
@@ -1221,21 +1468,21 @@ struct LessRecordFieldName {
 
 
 class TGError {
-  TGLoc Loc;
+  SMLoc Loc;
   std::string Message;
 public:
-  TGError(TGLoc loc, const std::string &message) : Loc(loc), Message(message) {}
+  TGError(SMLoc loc, const std::string &message) : Loc(loc), Message(message) {}
   
-  TGLoc getLoc() const { return Loc; }
+  SMLoc getLoc() const { return Loc; }
   const std::string &getMessage() const { return Message; }
 };
   
   
-std::ostream &operator<<(std::ostream &OS, const RecordKeeper &RK);
+raw_ostream &operator<<(raw_ostream &OS, const RecordKeeper &RK);
 
 extern RecordKeeper Records;
 
-void PrintError(TGLoc ErrorLoc, const std::string &Msg);
+void PrintError(SMLoc ErrorLoc, const std::string &Msg);
 
   
 } // End llvm namespace

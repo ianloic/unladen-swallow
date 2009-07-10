@@ -38,13 +38,14 @@ class AttributeList {
   ActionBase::ExprTy **Args;
   unsigned NumArgs;
   AttributeList *Next;
+  bool DeclspecAttribute;
   AttributeList(const AttributeList &); // DO NOT IMPLEMENT
   void operator=(const AttributeList &); // DO NOT IMPLEMENT
 public:
   AttributeList(IdentifierInfo *AttrName, SourceLocation AttrLoc,
                 IdentifierInfo *ParmName, SourceLocation ParmLoc,
                 ActionBase::ExprTy **args, unsigned numargs,
-                AttributeList *Next);
+                AttributeList *Next, bool declspec = false);
   ~AttributeList();
   
   enum Kind {              // Please keep this list alphabetized.
@@ -66,6 +67,7 @@ public:
     AT_ext_vector_type,
     AT_fastcall,
     AT_format,
+    AT_format_arg,
     AT_gnu_inline,
     AT_mode,
     AT_nodebug,
@@ -76,13 +78,8 @@ public:
     AT_nothrow,
     AT_nsobject,
     AT_objc_exception,
-    AT_cf_releases,        // Clang-specific.
-    AT_cf_retains,         // Clang-specific.
-    AT_cf_returns_owned,   // Clang-specific.
-    AT_ns_autoreleases,    // Clang-specific.
-    AT_ns_releases,        // Clang-specific.
-    AT_ns_retains,         // Clang-specific.
-    AT_ns_returns_owned,   // Clang-specific.
+    AT_cf_returns_retained,   // Clang-specific.
+    AT_ns_returns_retained,   // Clang-specific.
     AT_objc_gc,
     AT_overloadable,       // Clang-specific.
     AT_packed,
@@ -100,6 +97,7 @@ public:
     AT_warn_unused_result,
     AT_weak,
     AT_weak_import,
+    AT_reqd_wg_size,
     IgnoredAttribute,
     UnknownAttribute
   };
@@ -107,6 +105,7 @@ public:
   IdentifierInfo *getName() const { return AttrName; }
   SourceLocation getLoc() const { return AttrLoc; }
   IdentifierInfo *getParameterName() const { return ParmName; }
+  bool isDeclspecAttribute() const { return DeclspecAttribute; }
   
   Kind getKind() const { return getKind(getName()); }
   static Kind getKind(const IdentifierInfo *Name);

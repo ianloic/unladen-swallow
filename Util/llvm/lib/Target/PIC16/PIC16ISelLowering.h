@@ -49,7 +49,7 @@ namespace llvm {
       RRF,           // Rotate right through carry
       CALL,          // PIC16 Call instruction 
       CALLW,         // PIC16 CALLW instruction 
-      SUBCC,	     // Compare for equality or inequality.
+      SUBCC,         // Compare for equality or inequality.
       SELECT_ICC,    // Psuedo to be caught in schedular and expanded to brcond.
       BRCOND,        // Conditional branch.
       Dummy
@@ -61,7 +61,7 @@ namespace llvm {
       ROM_SPACE = 1    // ROM address space number is 1
     };
     enum PIC16Libcall {
-      MUL_I8,
+      MUL_I8 = RTLIB::UNKNOWN_LIBCALL + 1,
       SRA_I8,
       SLL_I8,
       SRL_I8,
@@ -145,6 +145,11 @@ namespace llvm {
     unsigned GetTmpSize() { return TmpSize; }
     void SetTmpSize(unsigned Size) { TmpSize = Size; }
 
+    /// getFunctionAlignment - Return the Log2 alignment of this function.
+    virtual unsigned getFunctionAlignment(const Function *) const {
+      // FIXME: The function never seems to be aligned.
+      return 1;
+    }
   private:
     // If the Node is a BUILD_PAIR representing a direct Address,
     // then this function will return true.

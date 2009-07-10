@@ -204,21 +204,30 @@ public:
                                    Instruction *InsertBefore = 0);
   static BinaryOperator *CreateNeg(Value *Op, const std::string &Name,
                                    BasicBlock *InsertAtEnd);
+  static BinaryOperator *CreateFNeg(Value *Op, const std::string &Name = "",
+                                    Instruction *InsertBefore = 0);
+  static BinaryOperator *CreateFNeg(Value *Op, const std::string &Name,
+                                    BasicBlock *InsertAtEnd);
   static BinaryOperator *CreateNot(Value *Op, const std::string &Name = "",
                                    Instruction *InsertBefore = 0);
   static BinaryOperator *CreateNot(Value *Op, const std::string &Name,
                                    BasicBlock *InsertAtEnd);
 
-  /// isNeg, isNot - Check if the given Value is a NEG or NOT instruction.
+  /// isNeg, isFNeg, isNot - Check if the given Value is a
+  /// NEG, FNeg, or NOT instruction.
   ///
   static bool isNeg(const Value *V);
+  static bool isFNeg(const Value *V);
   static bool isNot(const Value *V);
 
   /// getNegArgument, getNotArgument - Helper functions to extract the
-  ///     unary argument of a NEG or NOT operation implemented via Sub or Xor.
+  ///     unary argument of a NEG, FNEG or NOT operation implemented via
+  ///     Sub, FSub, or Xor.
   ///
   static const Value *getNegArgument(const Value *BinOp);
   static       Value *getNegArgument(      Value *BinOp);
+  static const Value *getFNegArgument(const Value *BinOp);
+  static       Value *getFNegArgument(      Value *BinOp);
   static const Value *getNotArgument(const Value *BinOp);
   static       Value *getNotArgument(      Value *BinOp);
 
@@ -646,14 +655,12 @@ public:
   static inline bool classof(const CmpInst *) { return true; }
   static inline bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::ICmp ||
-           I->getOpcode() == Instruction::FCmp ||
-           I->getOpcode() == Instruction::VICmp ||
-           I->getOpcode() == Instruction::VFCmp;
+           I->getOpcode() == Instruction::FCmp;
   }
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
   }
-  /// @brief Create a result type for fcmp/icmp (but not vicmp/vfcmp)
+  /// @brief Create a result type for fcmp/icmp
   static const Type* makeCmpResultType(const Type* opnd_type) {
     if (const VectorType* vt = dyn_cast<const VectorType>(opnd_type)) {
       return VectorType::get(Type::Int1Ty, vt->getNumElements());

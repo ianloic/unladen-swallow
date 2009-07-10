@@ -213,6 +213,16 @@ public:
           ExitBlocks.push_back(*I);
   }
 
+  /// getExitBlock - If getExitBlocks would return exactly one block,
+  /// return that block. Otherwise return null.
+  BlockT *getExitBlock() const {
+    SmallVector<BlockT*, 8> ExitBlocks;
+    getExitBlocks(ExitBlocks);
+    if (ExitBlocks.size() == 1)
+      return ExitBlocks[0];
+    return 0;
+  }
+
   /// getUniqueExitBlocks - Return all unique successor blocks of this loop. 
   /// These are the blocks _outside of the current loop_ which are branched to.
   /// This assumes that loop is in canonical form.
@@ -269,6 +279,16 @@ public:
         }
       }
     }
+  }
+
+  /// getUniqueExitBlock - If getUniqueExitBlocks would return exactly one
+  /// block, return that block. Otherwise return null.
+  BlockT *getUniqueExitBlock() const {
+    SmallVector<BlockT*, 8> UniqueExitBlocks;
+    getUniqueExitBlocks(UniqueExitBlocks);
+    if (UniqueExitBlocks.size() == 1)
+      return UniqueExitBlocks[0];
+    return 0;
   }
 
   /// getLoopPreheader - If there is a preheader for this loop, return it.  A
@@ -341,6 +361,9 @@ public:
   /// by one each time through the loop.  If so, return the phi node that
   /// corresponds to it.
   ///
+  /// The IndVarSimplify pass transforms loops to have a canonical induction
+  /// variable.
+  ///
   inline PHINode *getCanonicalInductionVariable() const {
     BlockT *H = getHeader();
 
@@ -395,6 +418,9 @@ public:
   /// times the loop will be executed.  Note that this means that the backedge
   /// of the loop executes N-1 times.  If the trip-count cannot be determined,
   /// this returns null.
+  ///
+  /// The IndVarSimplify pass transforms loops to have a form that this
+  /// function easily understands.
   ///
   inline Value *getTripCount() const {
     // Canonical loops will end with a 'cmp ne I, V', where I is the incremented
@@ -636,7 +662,9 @@ class LoopInfoBase {
   std::map<BlockT*, LoopBase<BlockT>*> BBMap;
   std::vector<LoopBase<BlockT>*> TopLevelLoops;
   friend class LoopBase<BlockT>;
-  
+
+  void operator=(const LoopInfoBase &); // do not implement
+  LoopInfoBase(const LoopInfo &);       // do not implement
 public:
   LoopInfoBase() { }
   ~LoopInfoBase() { releaseMemory(); }
@@ -936,61 +964,59 @@ public:
 };
 
 class LoopInfo : public FunctionPass {
-  LoopInfoBase<BasicBlock>* LI;
+  LoopInfoBase<BasicBlock> LI;
   friend class LoopBase<BasicBlock>;
-  
+
+  void operator=(const LoopInfo &); // do not implement
+  LoopInfo(const LoopInfo &);       // do not implement
 public:
   static char ID; // Pass identification, replacement for typeid
 
-  LoopInfo() : FunctionPass(&ID) {
-    LI = new LoopInfoBase<BasicBlock>();
-  }
-  
-  ~LoopInfo() { delete LI; }
+  LoopInfo() : FunctionPass(&ID) {}
 
-  LoopInfoBase<BasicBlock>& getBase() { return *LI; }
+  LoopInfoBase<BasicBlock>& getBase() { return LI; }
 
   /// iterator/begin/end - The interface to the top-level loops in the current
   /// function.
   ///
-  typedef std::vector<Loop*>::const_iterator iterator;
-  inline iterator begin() const { return LI->begin(); }
-  inline iterator end() const { return LI->end(); }
-  bool empty() const { return LI->empty(); }
+  typedef LoopInfoBase<BasicBlock>::iterator iterator;
+  inline iterator begin() const { return LI.begin(); }
+  inline iterator end() const { return LI.end(); }
+  bool empty() const { return LI.empty(); }
 
   /// getLoopFor - Return the inner most loop that BB lives in.  If a basic
   /// block is in no loop (for example the entry node), null is returned.
   ///
   inline Loop *getLoopFor(const BasicBlock *BB) const {
-    return LI->getLoopFor(BB);
+    return LI.getLoopFor(BB);
   }
 
   /// operator[] - same as getLoopFor...
   ///
   inline const Loop *operator[](const BasicBlock *BB) const {
-    return LI->getLoopFor(BB);
+    return LI.getLoopFor(BB);
   }
 
   /// getLoopDepth - Return the loop nesting level of the specified block.  A
   /// depth of 0 means the block is not inside any loop.
   ///
   inline unsigned getLoopDepth(const BasicBlock *BB) const {
-    return LI->getLoopDepth(BB);
+    return LI.getLoopDepth(BB);
   }
 
   // isLoopHeader - True if the block is a loop header node
   inline bool isLoopHeader(BasicBlock *BB) const {
-    return LI->isLoopHeader(BB);
+    return LI.isLoopHeader(BB);
   }
 
   /// runOnFunction - Calculate the natural loop information.
   ///
   virtual bool runOnFunction(Function &F);
 
-  virtual void releaseMemory() { LI->releaseMemory(); }
+  virtual void releaseMemory() { LI.releaseMemory(); }
 
   virtual void print(std::ostream &O, const Module* M = 0) const {
-    if (O) LI->print(O, M);
+    LI.print(O, M);
   }
 
   virtual void getAnalysisUsage(AnalysisUsage &AU) const;
@@ -998,32 +1024,32 @@ public:
   /// removeLoop - This removes the specified top-level loop from this loop info
   /// object.  The loop is not deleted, as it will presumably be inserted into
   /// another loop.
-  inline Loop *removeLoop(iterator I) { return LI->removeLoop(I); }
+  inline Loop *removeLoop(iterator I) { return LI.removeLoop(I); }
 
   /// changeLoopFor - Change the top-level loop that contains BB to the
   /// specified loop.  This should be used by transformations that restructure
   /// the loop hierarchy tree.
   inline void changeLoopFor(BasicBlock *BB, Loop *L) {
-    LI->changeLoopFor(BB, L);
+    LI.changeLoopFor(BB, L);
   }
 
   /// changeTopLevelLoop - Replace the specified loop in the top-level loops
   /// list with the indicated loop.
   inline void changeTopLevelLoop(Loop *OldLoop, Loop *NewLoop) {
-    LI->changeTopLevelLoop(OldLoop, NewLoop);
+    LI.changeTopLevelLoop(OldLoop, NewLoop);
   }
 
   /// addTopLevelLoop - This adds the specified loop to the collection of
   /// top-level loops.
   inline void addTopLevelLoop(Loop *New) {
-    LI->addTopLevelLoop(New);
+    LI.addTopLevelLoop(New);
   }
 
   /// removeBlock - This method completely removes BB from all data structures,
   /// including all of the Loop objects it is nested in and our mapping from
   /// BasicBlocks to loops.
   void removeBlock(BasicBlock *BB) {
-    LI->removeBlock(BB);
+    LI.removeBlock(BB);
   }
 };
 
@@ -1031,7 +1057,7 @@ public:
 // Allow clients to walk the list of nested loops...
 template <> struct GraphTraits<const Loop*> {
   typedef const Loop NodeType;
-  typedef std::vector<Loop*>::const_iterator ChildIteratorType;
+  typedef LoopInfo::iterator ChildIteratorType;
 
   static NodeType *getEntryNode(const Loop *L) { return L; }
   static inline ChildIteratorType child_begin(NodeType *N) {
@@ -1044,7 +1070,7 @@ template <> struct GraphTraits<const Loop*> {
 
 template <> struct GraphTraits<Loop*> {
   typedef Loop NodeType;
-  typedef std::vector<Loop*>::const_iterator ChildIteratorType;
+  typedef LoopInfo::iterator ChildIteratorType;
 
   static NodeType *getEntryNode(Loop *L) { return L; }
   static inline ChildIteratorType child_begin(NodeType *N) {

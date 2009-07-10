@@ -19,8 +19,6 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/Support/Streams.h"
-
 #include <algorithm>
 #include <cassert>
 #include <functional>
@@ -83,11 +81,10 @@ const DagInit& InitPtrToDag(const Init* ptr) {
 }
 
 // checkNumberOfArguments - Ensure that the number of args in d is
-// less than or equal to min_arguments, otherwise throw an exception.
+// greater than or equal to min_arguments, otherwise throw an exception.
 void checkNumberOfArguments (const DagInit* d, unsigned min_arguments) {
   if (!d || d->getNumArgs() < min_arguments)
-    throw "Property " + d->getOperator()->getAsString()
-      + " has too few arguments!";
+    throw d->getOperator()->getAsString() + ": too few arguments!";
 }
 
 // isDagEmpty - is this DAG marked with an empty marker?
@@ -141,20 +138,21 @@ void checkedIncrement(I& P, I E, S ErrorString) {
 /// OptionType - One of six different option types. See the
 /// documentation for detailed description of differences.
 namespace OptionType {
+
   enum OptionType { Alias, Switch, Parameter, ParameterList,
                     Prefix, PrefixList};
 
-bool IsList (OptionType t) {
-  return (t == ParameterList || t == PrefixList);
-}
+  bool IsList (OptionType t) {
+    return (t == ParameterList || t == PrefixList);
+  }
 
-bool IsSwitch (OptionType t) {
-  return (t == Switch);
-}
+  bool IsSwitch (OptionType t) {
+    return (t == Switch);
+  }
 
-bool IsParameter (OptionType t) {
-  return (t == Parameter || t == Prefix);
-}
+  bool IsParameter (OptionType t) {
+    return (t == Parameter || t == Prefix);
+  }
 
 }
 
@@ -189,11 +187,12 @@ struct OptionDescription {
   unsigned Flags;
   std::string Help;
   unsigned MultiVal;
+  Init* InitVal;
 
   OptionDescription(OptionType::OptionType t = OptionType::Switch,
                     const std::string& n = "",
                     const std::string& h = DefaultHelpString)
-    : Type(t), Name(n), Flags(0x0), Help(h), MultiVal(1)
+    : Type(t), Name(n), Flags(0x0), Help(h), MultiVal(1), InitVal(0)
   {}
 
   /// GenTypeDeclaration - Returns the C++ variable type of this
@@ -231,6 +230,15 @@ struct OptionDescription {
   bool isReallyHidden() const;
   void setReallyHidden();
 
+  bool isParameter() const
+  { return OptionType::IsParameter(this->Type); }
+
+  bool isSwitch() const
+  { return OptionType::IsSwitch(this->Type); }
+
+  bool isList() const
+  { return OptionType::IsList(this->Type); }
+
 };
 
 void OptionDescription::Merge (const OptionDescription& other)
@@ -241,7 +249,7 @@ void OptionDescription::Merge (const OptionDescription& other)
   if (Help == other.Help || Help == DefaultHelpString)
     Help = other.Help;
   else if (other.Help != DefaultHelpString) {
-    llvm::cerr << "Warning: several different help strings"
+    llvm::errs() << "Warning: several different help strings"
       " defined for option " + Name + "\n";
   }
 
@@ -440,6 +448,7 @@ public:
       AddHandler("extern", &CollectOptionProperties::onExtern);
       AddHandler("help", &CollectOptionProperties::onHelp);
       AddHandler("hidden", &CollectOptionProperties::onHidden);
+      AddHandler("init", &CollectOptionProperties::onInit);
       AddHandler("multi_val", &CollectOptionProperties::onMultiVal);
       AddHandler("one_or_more", &CollectOptionProperties::onOneOrMore);
       AddHandler("really_hidden", &CollectOptionProperties::onReallyHidden);
@@ -483,13 +492,27 @@ private:
     optDesc_.setRequired();
   }
 
+  void onInit (const DagInit* d) {
+    checkNumberOfArguments(d, 1);
+    Init* i = d->getArg(0);
+    const std::string& str = i->getAsString();
+
+    bool correct = optDesc_.isParameter() && dynamic_cast<StringInit*>(i);
+    correct |= (optDesc_.isSwitch() && (str == "true" || str == "false"));
+
+    if (!correct)
+      throw std::string("Incorrect usage of the 'init' option property!");
+
+    optDesc_.InitVal = i;
+  }
+
   void onOneOrMore (const DagInit* d) {
     checkNumberOfArguments(d, 0);
     if (optDesc_.isRequired() || optDesc_.isZeroOrOne())
       throw std::string("Only one of (required), (zero_or_one) or "
                         "(one_or_more) properties is allowed!");
     if (!OptionType::IsList(optDesc_.Type))
-      llvm::cerr << "Warning: specifying the 'one_or_more' property "
+      llvm::errs() << "Warning: specifying the 'one_or_more' property "
         "on a non-list option will have no effect.\n";
     optDesc_.setOneOrMore();
   }
@@ -500,7 +523,7 @@ private:
       throw std::string("Only one of (required), (zero_or_one) or "
                         "(one_or_more) properties is allowed!");
     if (!OptionType::IsList(optDesc_.Type))
-      llvm::cerr << "Warning: specifying the 'zero_or_one' property"
+      llvm::errs() << "Warning: specifying the 'zero_or_one' property"
         "on a non-list option will have no effect.\n";
     optDesc_.setZeroOrOne();
   }
@@ -947,7 +970,7 @@ void CheckForSuperfluousOptions (const RecordVector& Edges,
     const OptionDescription& Val = B->second;
     if (!nonSuperfluousOptions.count(Val.Name)
         && Val.Type != OptionType::Alias)
-      llvm::cerr << "Warning: option '-" << Val.Name << "' has no effect! "
+      llvm::errs() << "Warning: option '-" << Val.Name << "' has no effect! "
         "Probable cause: this option is specified only in the OptionList.\n";
   }
 }
@@ -957,13 +980,13 @@ void CheckForSuperfluousOptions (const RecordVector& Edges,
 bool EmitCaseTest1Arg(const std::string& TestName,
                       const DagInit& d,
                       const OptionDescriptions& OptDescs,
-                      std::ostream& O) {
+                      raw_ostream& O) {
   checkNumberOfArguments(&d, 1);
   const std::string& OptName = InitPtrToString(d.getArg(0));
 
   if (TestName == "switch_on") {
     const OptionDescription& OptDesc = OptDescs.FindOption(OptName);
-    if (!OptionType::IsSwitch(OptDesc.Type))
+    if (!OptDesc.isSwitch())
       throw OptName + ": incorrect option type - should be a switch!";
     O << OptDesc.GenVariableName();
     return true;
@@ -986,7 +1009,7 @@ bool EmitCaseTest1Arg(const std::string& TestName,
     }
     else {
       const OptionDescription& OptDesc = OptDescs.FindOption(OptName);
-      if (OptionType::IsSwitch(OptDesc.Type))
+      if (OptDesc.isSwitch())
         throw OptName
           + ": incorrect option type - should be a list or parameter!";
       O << Test << OptDesc.GenVariableName() << ".empty()";
@@ -1003,20 +1026,20 @@ bool EmitCaseTest2Args(const std::string& TestName,
                        const DagInit& d,
                        const char* IndentLevel,
                        const OptionDescriptions& OptDescs,
-                       std::ostream& O) {
+                       raw_ostream& O) {
   checkNumberOfArguments(&d, 2);
   const std::string& OptName = InitPtrToString(d.getArg(0));
   const std::string& OptArg = InitPtrToString(d.getArg(1));
   const OptionDescription& OptDesc = OptDescs.FindOption(OptName);
 
   if (TestName == "parameter_equals") {
-    if (!OptionType::IsParameter(OptDesc.Type))
+    if (!OptDesc.isParameter())
       throw OptName + ": incorrect option type - should be a parameter!";
     O << OptDesc.GenVariableName() << " == \"" << OptArg << "\"";
     return true;
   }
   else if (TestName == "element_in_list") {
-    if (!OptionType::IsList(OptDesc.Type))
+    if (!OptDesc.isList())
       throw OptName + ": incorrect option type - should be a list!";
     const std::string& VarName = OptDesc.GenVariableName();
     O << "std::find(" << VarName << ".begin(),\n"
@@ -1032,14 +1055,14 @@ bool EmitCaseTest2Args(const std::string& TestName,
 // EmitLogicalOperationTest and EmitCaseTest are mutually recursive.
 void EmitCaseTest(const DagInit& d, const char* IndentLevel,
                   const OptionDescriptions& OptDescs,
-                  std::ostream& O);
+                  raw_ostream& O);
 
 /// EmitLogicalOperationTest - Helper function used by
 /// EmitCaseConstructHandler.
 void EmitLogicalOperationTest(const DagInit& d, const char* LogicOp,
                               const char* IndentLevel,
                               const OptionDescriptions& OptDescs,
-                              std::ostream& O) {
+                              raw_ostream& O) {
   O << '(';
   for (unsigned j = 0, NumArgs = d.getNumArgs(); j < NumArgs; ++j) {
     const DagInit& InnerTest = InitPtrToDag(d.getArg(j));
@@ -1054,7 +1077,7 @@ void EmitLogicalOperationTest(const DagInit& d, const char* LogicOp,
 /// EmitCaseTest - Helper function used by EmitCaseConstructHandler.
 void EmitCaseTest(const DagInit& d, const char* IndentLevel,
                   const OptionDescriptions& OptDescs,
-                  std::ostream& O) {
+                  raw_ostream& O) {
   const std::string& TestName = d.getOperator()->getAsString();
 
   if (TestName == "and")
@@ -1072,12 +1095,12 @@ void EmitCaseTest(const DagInit& d, const char* IndentLevel,
 // Emit code that handles the 'case' construct.
 // Takes a function object that should emit code for every case clause.
 // Callback's type is
-// void F(Init* Statement, const char* IndentLevel, std::ostream& O).
+// void F(Init* Statement, const char* IndentLevel, raw_ostream& O).
 template <typename F>
 void EmitCaseConstructHandler(const Init* Dag, const char* IndentLevel,
                               F Callback, bool EmitElseIf,
                               const OptionDescriptions& OptDescs,
-                              std::ostream& O) {
+                              raw_ostream& O) {
   const DagInit* d = &InitPtrToDag(Dag);
   if (d->getOperator()->getAsString() != "case")
     throw std::string("EmitCaseConstructHandler should be invoked"
@@ -1132,12 +1155,14 @@ void TokenizeCmdline(const std::string& CmdLine, StrVector& Out) {
   enum TokenizerState
   { Normal, SpecialCommand, InsideSpecialCommand, InsideQuotationMarks }
   cur_st  = Normal;
+
+  if (CmdLine.empty())
+    return;
   Out.push_back("");
 
   std::string::size_type B = CmdLine.find_first_not_of(Delimiters),
     E = CmdLine.size();
-  if (B == std::string::npos)
-    throw "Empty command-line string!";
+
   for (; B != E; ++B) {
     char cur_ch = CmdLine[B];
 
@@ -1208,7 +1233,7 @@ void TokenizeCmdline(const std::string& CmdLine, StrVector& Out) {
 /// SubstituteSpecialCommands - Perform string substitution for $CALL
 /// and $ENV. Helper function used by EmitCmdLineVecFill().
 StrVector::const_iterator SubstituteSpecialCommands
-(StrVector::const_iterator Pos, StrVector::const_iterator End, std::ostream& O)
+(StrVector::const_iterator Pos, StrVector::const_iterator End, raw_ostream& O)
 {
 
   const std::string& cmd = *Pos;
@@ -1273,12 +1298,12 @@ StrVector::const_iterator SubstituteSpecialCommands
 /// vector. Helper function used by EmitGenerateActionMethod().
 void EmitCmdLineVecFill(const Init* CmdLine, const std::string& ToolName,
                         bool IsJoin, const char* IndentLevel,
-                        std::ostream& O) {
+                        raw_ostream& O) {
   StrVector StrVec;
   TokenizeCmdline(InitPtrToString(CmdLine), StrVec);
 
   if (StrVec.empty())
-    throw "Tool " + ToolName + " has empty command line!";
+    throw "Tool '" + ToolName + "' has empty command line!";
 
   StrVector::const_iterator I = StrVec.begin(), E = StrVec.end();
 
@@ -1342,7 +1367,7 @@ class EmitCmdLineVecFillCallback {
     : IsJoin(J), ToolName(TN) {}
 
   void operator()(const Init* Statement, const char* IndentLevel,
-                  std::ostream& O) const
+                  raw_ostream& O) const
   {
     EmitCmdLineVecFill(Statement, ToolName, IsJoin,
                        IndentLevel, O);
@@ -1355,7 +1380,7 @@ class EmitCmdLineVecFillCallback {
 void EmitForwardOptionPropertyHandlingCode (const OptionDescription& D,
                                             const char* Indent,
                                             const std::string& NewName,
-                                            std::ostream& O) {
+                                            raw_ostream& O) {
   const std::string& Name = NewName.empty()
     ? ("-" + D.Name)
     : NewName;
@@ -1414,7 +1439,7 @@ class EmitActionHandler {
   const OptionDescriptions& OptDescs;
 
   void processActionDag(const Init* Statement, const char* IndentLevel,
-                        std::ostream& O) const
+                        raw_ostream& O) const
   {
     const DagInit& Dag = InitPtrToDag(Statement);
     const std::string& ActionName = Dag.getOperator()->getAsString();
@@ -1444,7 +1469,7 @@ class EmitActionHandler {
     else if (ActionName == "forward_as") {
       checkNumberOfArguments(&Dag, 2);
       const std::string& Name = InitPtrToString(Dag.getArg(0));
-      const std::string& NewName = InitPtrToString(Dag.getArg(0));
+      const std::string& NewName = InitPtrToString(Dag.getArg(1));
       EmitForwardOptionPropertyHandlingCode(OptDescs.FindOption(Name),
                                             IndentLevel, NewName, O);
     }
@@ -1464,14 +1489,14 @@ class EmitActionHandler {
       if (D.isMultiVal())
         throw std::string("Can't use unpack_values with multi-valued options!");
 
-      if (OptionType::IsList(D.Type)) {
+      if (D.isList()) {
         O << IndentLevel << "for (" << D.GenTypeDeclaration()
           << "::iterator B = " << D.GenVariableName() << ".begin(),\n"
           << IndentLevel << "E = " << D.GenVariableName()
           << ".end(); B != E; ++B)\n"
           << IndentLevel << Indent1 << "llvm::SplitString(*B, vec, \",\");\n";
       }
-      else if (OptionType::IsParameter(D.Type)){
+      else if (D.isParameter()){
         O << Indent3 << "llvm::SplitString("
           << D.GenVariableName() << ", vec, \",\");\n";
       }
@@ -1489,7 +1514,7 @@ class EmitActionHandler {
     : OptDescs(OD) {}
 
   void operator()(const Init* Statement, const char* IndentLevel,
-                  std::ostream& O) const
+                  raw_ostream& O) const
   {
     if (typeid(*Statement) == typeid(ListInit)) {
       const ListInit& DagList = *static_cast<const ListInit*>(Statement);
@@ -1507,7 +1532,7 @@ class EmitActionHandler {
 // Tool::GenerateAction() method.
 void EmitGenerateActionMethod (const ToolDescription& D,
                                const OptionDescriptions& OptDescs,
-                               bool IsJoin, std::ostream& O) {
+                               bool IsJoin, raw_ostream& O) {
   if (IsJoin)
     O << Indent1 << "Action GenerateAction(const PathVector& inFiles,\n";
   else
@@ -1559,7 +1584,7 @@ void EmitGenerateActionMethod (const ToolDescription& D,
 /// a given Tool class.
 void EmitGenerateActionMethods (const ToolDescription& ToolDesc,
                                 const OptionDescriptions& OptDescs,
-                                std::ostream& O) {
+                                raw_ostream& O) {
   if (!ToolDesc.isJoin())
     O << Indent1 << "Action GenerateAction(const PathVector& inFiles,\n"
       << Indent2 << "bool HasChildren,\n"
@@ -1578,7 +1603,7 @@ void EmitGenerateActionMethods (const ToolDescription& ToolDesc,
 
 /// EmitInOutLanguageMethods - Emit the [Input,Output]Language()
 /// methods for a given Tool class.
-void EmitInOutLanguageMethods (const ToolDescription& D, std::ostream& O) {
+void EmitInOutLanguageMethods (const ToolDescription& D, raw_ostream& O) {
   O << Indent1 << "const char** InputLanguages() const {\n"
     << Indent2 << "return InputLanguages_;\n"
     << Indent1 << "}\n\n";
@@ -1592,7 +1617,7 @@ void EmitInOutLanguageMethods (const ToolDescription& D, std::ostream& O) {
 }
 
 /// EmitNameMethod - Emit the Name() method for a given Tool class.
-void EmitNameMethod (const ToolDescription& D, std::ostream& O) {
+void EmitNameMethod (const ToolDescription& D, raw_ostream& O) {
   O << Indent1 << "const char* Name() const {\n"
     << Indent2 << "return \"" << D.Name << "\";\n"
     << Indent1 << "}\n\n";
@@ -1600,7 +1625,7 @@ void EmitNameMethod (const ToolDescription& D, std::ostream& O) {
 
 /// EmitIsJoinMethod - Emit the IsJoin() method for a given Tool
 /// class.
-void EmitIsJoinMethod (const ToolDescription& D, std::ostream& O) {
+void EmitIsJoinMethod (const ToolDescription& D, raw_ostream& O) {
   O << Indent1 << "bool IsJoin() const {\n";
   if (D.isJoin())
     O << Indent2 << "return true;\n";
@@ -1611,7 +1636,7 @@ void EmitIsJoinMethod (const ToolDescription& D, std::ostream& O) {
 
 /// EmitStaticMemberDefinitions - Emit static member definitions for a
 /// given Tool class.
-void EmitStaticMemberDefinitions(const ToolDescription& D, std::ostream& O) {
+void EmitStaticMemberDefinitions(const ToolDescription& D, raw_ostream& O) {
   if (D.InLanguage.empty())
     throw "Tool " + D.Name + " has no 'in_language' property!";
 
@@ -1625,7 +1650,7 @@ void EmitStaticMemberDefinitions(const ToolDescription& D, std::ostream& O) {
 /// EmitToolClassDefinition - Emit a Tool class definition.
 void EmitToolClassDefinition (const ToolDescription& D,
                               const OptionDescriptions& OptDescs,
-                              std::ostream& O) {
+                              raw_ostream& O) {
   if (D.Name == "root")
     return;
 
@@ -1652,11 +1677,11 @@ void EmitToolClassDefinition (const ToolDescription& D,
 
 }
 
-/// EmitOptionDefintions - Iterate over a list of option descriptions
+/// EmitOptionDefinitions - Iterate over a list of option descriptions
 /// and emit registration code.
-void EmitOptionDefintions (const OptionDescriptions& descs,
-                           bool HasSink, bool HasExterns,
-                           std::ostream& O)
+void EmitOptionDefinitions (const OptionDescriptions& descs,
+                            bool HasSink, bool HasExterns,
+                            raw_ostream& O)
 {
   std::vector<OptionDescription> Aliases;
 
@@ -1681,21 +1706,21 @@ void EmitOptionDefintions (const OptionDescriptions& descs,
       continue;
     }
 
-    O << "(\"" << val.Name << '\"';
+    O << "(\"" << val.Name << "\"\n";
 
     if (val.Type == OptionType::Prefix || val.Type == OptionType::PrefixList)
       O << ", cl::Prefix";
 
     if (val.isRequired()) {
-      if (OptionType::IsList(val.Type) && !val.isMultiVal())
+      if (val.isList() && !val.isMultiVal())
         O << ", cl::OneOrMore";
       else
         O << ", cl::Required";
     }
-    else if (val.isOneOrMore() && OptionType::IsList(val.Type)) {
+    else if (val.isOneOrMore() && val.isList()) {
         O << ", cl::OneOrMore";
     }
-    else if (val.isZeroOrOne() && OptionType::IsList(val.Type)) {
+    else if (val.isZeroOrOne() && val.isList()) {
         O << ", cl::ZeroOrOne";
     }
 
@@ -1707,12 +1732,17 @@ void EmitOptionDefintions (const OptionDescriptions& descs,
     }
 
     if (val.MultiVal > 1)
-      O << ", cl::multi_val(" << val.MultiVal << ")";
+      O << ", cl::multi_val(" << val.MultiVal << ')';
+
+    if (val.InitVal) {
+      const std::string& str = val.InitVal->getAsString();
+      O << ", cl::init(" << str << ')';
+    }
 
     if (!val.Help.empty())
       O << ", cl::desc(\"" << val.Help << "\")";
 
-    O << ");\n";
+    O << ");\n\n";
   }
 
   // Emit the aliases (they should go after all the 'proper' options).
@@ -1740,7 +1770,7 @@ void EmitOptionDefintions (const OptionDescriptions& descs,
 }
 
 /// EmitPopulateLanguageMap - Emit the PopulateLanguageMap() function.
-void EmitPopulateLanguageMap (const RecordKeeper& Records, std::ostream& O)
+void EmitPopulateLanguageMap (const RecordKeeper& Records, raw_ostream& O)
 {
   // Generate code
   O << "void PopulateLanguageMapLocal(LanguageMap& langMap) {\n";
@@ -1774,7 +1804,7 @@ void EmitPopulateLanguageMap (const RecordKeeper& Records, std::ostream& O)
 /// IncDecWeight - Helper function passed to EmitCaseConstructHandler()
 /// by EmitEdgeClass().
 void IncDecWeight (const Init* i, const char* IndentLevel,
-                   std::ostream& O) {
+                   raw_ostream& O) {
   const DagInit& d = InitPtrToDag(i);
   const std::string& OpName = d.getOperator()->getAsString();
 
@@ -1806,7 +1836,7 @@ void IncDecWeight (const Init* i, const char* IndentLevel,
 /// EmitEdgeClass - Emit a single Edge# class.
 void EmitEdgeClass (unsigned N, const std::string& Target,
                     DagInit* Case, const OptionDescriptions& OptDescs,
-                    std::ostream& O) {
+                    raw_ostream& O) {
 
   // Class constructor.
   O << "class Edge" << N << ": public Edge {\n"
@@ -1828,7 +1858,7 @@ void EmitEdgeClass (unsigned N, const std::string& Target,
 /// EmitEdgeClasses - Emit Edge* classes that represent graph edges.
 void EmitEdgeClasses (const RecordVector& EdgeVector,
                       const OptionDescriptions& OptDescs,
-                      std::ostream& O) {
+                      raw_ostream& O) {
   int i = 0;
   for (RecordVector::const_iterator B = EdgeVector.begin(),
          E = EdgeVector.end(); B != E; ++B) {
@@ -1846,7 +1876,7 @@ void EmitEdgeClasses (const RecordVector& EdgeVector,
 /// function.
 void EmitPopulateCompilationGraph (const RecordVector& EdgeVector,
                                    const ToolDescriptions& ToolDescs,
-                                   std::ostream& O)
+                                   raw_ostream& O)
 {
   O << "void PopulateCompilationGraphLocal(CompilationGraph& G) {\n";
 
@@ -1945,7 +1975,7 @@ void FillInHookNames(const ToolDescriptions& ToolDescs,
 /// EmitHookDeclarations - Parse CmdLine fields of all the tool
 /// property records and emit hook function declaration for each
 /// instance of $CALL(HookName).
-void EmitHookDeclarations(const ToolDescriptions& ToolDescs, std::ostream& O) {
+void EmitHookDeclarations(const ToolDescriptions& ToolDescs, raw_ostream& O) {
   llvm::StringMap<unsigned> HookNames;
 
   FillInHookNames(ToolDescs, HookNames);
@@ -1967,7 +1997,7 @@ void EmitHookDeclarations(const ToolDescriptions& ToolDescs, std::ostream& O) {
 }
 
 /// EmitRegisterPlugin - Emit code to register this plugin.
-void EmitRegisterPlugin(int Priority, std::ostream& O) {
+void EmitRegisterPlugin(int Priority, raw_ostream& O) {
   O << "struct Plugin : public llvmc::BasePlugin {\n\n"
     << Indent1 << "int Priority() const { return " << Priority << "; }\n\n"
     << Indent1 << "void PopulateLanguageMap(LanguageMap& langMap) const\n"
@@ -1982,8 +2012,9 @@ void EmitRegisterPlugin(int Priority, std::ostream& O) {
 
 /// EmitIncludes - Emit necessary #include directives and some
 /// additional declarations.
-void EmitIncludes(std::ostream& O) {
+void EmitIncludes(raw_ostream& O) {
   O << "#include \"llvm/CompilerDriver/CompilationGraph.h\"\n"
+    << "#include \"llvm/CompilerDriver/ForceLinkageMacros.h\"\n"
     << "#include \"llvm/CompilerDriver/Plugin.h\"\n"
     << "#include \"llvm/CompilerDriver/Tool.h\"\n\n"
 
@@ -2076,12 +2107,12 @@ void CheckPluginData(PluginData& Data) {
 
 }
 
-void EmitPluginCode(const PluginData& Data, std::ostream& O) {
+void EmitPluginCode(const PluginData& Data, raw_ostream& O) {
   // Emit file header.
   EmitIncludes(O);
 
   // Emit global option registration code.
-  EmitOptionDefintions(Data.OptDescs, Data.HasSink, Data.HasExterns, O);
+  EmitOptionDefinitions(Data.OptDescs, Data.HasSink, Data.HasExterns, O);
 
   // Emit hook declarations.
   EmitHookDeclarations(Data.ToolDescs, O);
@@ -2106,7 +2137,13 @@ void EmitPluginCode(const PluginData& Data, std::ostream& O) {
   // Emit code for plugin registration.
   EmitRegisterPlugin(Data.Priority, O);
 
-  O << "} // End anonymous namespace.\n";
+  O << "} // End anonymous namespace.\n\n";
+
+  // Force linkage magic.
+  O << "namespace llvmc {\n";
+  O << "LLVMC_FORCE_LINKAGE_DECL(LLVMC_PLUGIN_NAME) {}\n";
+  O << "}\n";
+
   // EOF
 }
 
@@ -2115,7 +2152,7 @@ void EmitPluginCode(const PluginData& Data, std::ostream& O) {
 }
 
 /// run - The back-end entry point.
-void LLVMCConfigurationEmitter::run (std::ostream &O) {
+void LLVMCConfigurationEmitter::run (raw_ostream &O) {
   try {
   PluginData Data;
 

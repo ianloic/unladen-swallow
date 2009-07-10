@@ -33,8 +33,10 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
                                              unsigned NumArgs,
                                              unsigned TypeQuals,
                                              bool hasExceptionSpec,
+                                             SourceLocation ThrowLoc,
                                              bool hasAnyExceptionSpec,
                                              ActionBase::TypeTy **Exceptions,
+                                             SourceRange *ExceptionRanges,
                                              unsigned NumExceptions,
                                              SourceLocation Loc,
                                              Declarator &TheDeclarator) {
@@ -49,6 +51,7 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
   I.Fun.NumArgs          = NumArgs;
   I.Fun.ArgInfo          = 0;
   I.Fun.hasExceptionSpec = hasExceptionSpec;
+  I.Fun.ThrowLoc         = ThrowLoc.getRawEncoding();
   I.Fun.hasAnyExceptionSpec = hasAnyExceptionSpec;
   I.Fun.NumExceptions    = NumExceptions;
   I.Fun.Exceptions       = 0;
@@ -72,9 +75,11 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
   }
   // new[] an exception array if needed
   if (NumExceptions) {
-    I.Fun.Exceptions = new ActionBase::TypeTy*[NumExceptions];
-    memcpy(I.Fun.Exceptions, Exceptions,
-           sizeof(ActionBase::TypeTy*)*NumExceptions);
+    I.Fun.Exceptions = new DeclaratorChunk::TypeAndRange[NumExceptions];
+    for (unsigned i = 0; i != NumExceptions; ++i) {
+      I.Fun.Exceptions[i].Ty = Exceptions[i];
+      I.Fun.Exceptions[i].Range = ExceptionRanges[i];
+    }
   }
   return I;
 }
@@ -168,6 +173,7 @@ const char *DeclSpec::getSpecifierName(DeclSpec::TST T) {
   case DeclSpec::TST_typename:    return "type-name";
   case DeclSpec::TST_typeofType:
   case DeclSpec::TST_typeofExpr:  return "typeof";
+  case DeclSpec::TST_auto:       return "auto";
   }
 }
 
@@ -241,12 +247,14 @@ bool DeclSpec::SetTypeSpecSign(TSS S, SourceLocation Loc,
 }
 
 bool DeclSpec::SetTypeSpecType(TST T, SourceLocation Loc,
-                               const char *&PrevSpec, void *Rep) {
+                               const char *&PrevSpec, void *Rep,
+                               bool Owned) {
   if (TypeSpecType != TST_unspecified)
     return BadSpecifier((TST)TypeSpecType, PrevSpec);
   TypeSpecType = T;
   TypeRep = Rep;
   TSTLoc = Loc;
+  TypeSpecOwned = Owned;
   return false;
 }
 
@@ -294,6 +302,16 @@ bool DeclSpec::SetFunctionSpecExplicit(SourceLocation Loc, const char *&PrevSpec
   return false;
 }
 
+bool DeclSpec::SetFriendSpec(SourceLocation Loc, const char *&PrevSpec) {
+  if (Friend_specified) {
+    PrevSpec = "friend";
+    return true;
+  }
+  
+  Friend_specified = true;
+  FriendLoc = Loc;
+  return false;
+}
 
 /// Finish - This does final analysis of the declspec, rejecting things like
 /// "_Imaginary" (lacking an FP type).  This returns a diagnostic to issue or

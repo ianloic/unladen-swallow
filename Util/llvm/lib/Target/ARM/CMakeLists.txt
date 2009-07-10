@@ -12,6 +12,8 @@ tablegen(ARMGenCallingConv.inc -gen-callingconv)
 tablegen(ARMGenSubtarget.inc -gen-subtarget)
 
 add_llvm_target(ARMCodeGen
+  ARMBaseInstrInfo.cpp
+  ARMBaseRegisterInfo.cpp
   ARMCodeEmitter.cpp
   ARMConstantIslandPass.cpp
   ARMConstantPoolValue.cpp
@@ -24,4 +26,10 @@ add_llvm_target(ARMCodeGen
   ARMSubtarget.cpp
   ARMTargetAsmInfo.cpp
   ARMTargetMachine.cpp
+  Thumb1InstrInfo.cpp
+  Thumb1RegisterInfo.cpp
+  Thumb2InstrInfo.cpp
+  Thumb2RegisterInfo.cpp
   )
+
+target_link_libraries (LLVMARMCodeGen LLVMSelectionDAG)

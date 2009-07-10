@@ -59,7 +59,7 @@ static X86MachineFunctionInfo calculateFunctionInfo(const Function *F,
       Ty = cast<PointerType>(Ty)->getElementType();
 
     // Size should be aligned to DWORD boundary
-    Size += ((TD->getTypePaddedSize(Ty) + 3)/4)*4;
+    Size += ((TD->getTypeAllocSize(Ty) + 3)/4)*4;
   }
 
   // We're not supporting tooooo huge arguments :)
@@ -132,6 +132,7 @@ bool X86IntelAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   // Print out labels for the function.
   const Function *F = MF.getFunction();
   unsigned CC = F->getCallingConv();
+  unsigned FnAlign = MF.getAlignment();
 
   // Populate function information map.  Actually, We don't want to populate
   // non-stdcall or non-fastcall functions' information right now.
@@ -141,10 +142,6 @@ bool X86IntelAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   decorateName(CurrentFnName, F);
 
   SwitchToTextSection("_text", F);
-
-  unsigned FnAlign = 4;
-  if (F->hasFnAttr(Attribute::OptimizeForSize))
-    FnAlign = 1;
   switch (F->getLinkage()) {
   default: assert(0 && "Unsupported linkage type!");
   case Function::PrivateLinkage:
@@ -223,9 +220,6 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
   case MachineOperand::MO_Immediate:
     O << MO.getImm();
     return;
-  case MachineOperand::MO_MachineBasicBlock:
-    printBasicBlockLabel(MO.getMBB());
-    return;
   case MachineOperand::MO_JumpTableIndex: {
     bool isMemOp  = Modifier && !strcmp(Modifier, "mem");
     if (!isMemOp) O << "OFFSET ";
@@ -243,26 +237,25 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
     return;
   }
   case MachineOperand::MO_GlobalAddress: {
-    bool isCallOp = Modifier && !strcmp(Modifier, "call");
     bool isMemOp  = Modifier && !strcmp(Modifier, "mem");
     GlobalValue *GV = MO.getGlobal();
     std::string Name = Mang->getValueName(GV);
 
     decorateName(Name, GV);
 
-    if (!isMemOp && !isCallOp) O << "OFFSET ";
-    if (GV->hasDLLImportLinkage()) {
-      // FIXME: This should be fixed with full support of stdcall & fastcall
-      // CC's
+    if (!isMemOp) O << "OFFSET ";
+    
+    // Handle dllimport linkage.
+    // FIXME: This should be fixed with full support of stdcall & fastcall
+    // CC's
+    if (MO.getTargetFlags() == X86II::MO_DLLIMPORT)
       O << "__imp_";
-    }
+    
     O << Name;
     printOffset(MO.getOffset());
     return;
   }
   case MachineOperand::MO_ExternalSymbol: {
-    bool isCallOp = Modifier && !strcmp(Modifier, "call");
-    if (!isCallOp) O << "OFFSET ";
     O << TAI->getGlobalPrefix() << MO.getSymbolName();
     return;
   }
@@ -270,6 +263,39 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
     O << "<unknown operand type>"; return;
   }
 }
+
+void X86IntelAsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo){
+  const MachineOperand &MO = MI->getOperand(OpNo);
+  switch (MO.getType()) {
+  default: assert(0 && "Unknown pcrel immediate operand");
+  case MachineOperand::MO_Immediate:
+    O << MO.getImm();
+    return;
+  case MachineOperand::MO_MachineBasicBlock:
+    printBasicBlockLabel(MO.getMBB());
+    return;
+    
+  case MachineOperand::MO_GlobalAddress: {
+    GlobalValue *GV = MO.getGlobal();
+    std::string Name = Mang->getValueName(GV);
+    decorateName(Name, GV);
+    
+    // Handle dllimport linkage.
+    // FIXME: This should be fixed with full support of stdcall & fastcall
+    // CC's
+    if (MO.getTargetFlags() == X86II::MO_DLLIMPORT)
+      O << "__imp_";
+    O << Name;
+    printOffset(MO.getOffset());
+    return;
+  }
+
+  case MachineOperand::MO_ExternalSymbol:
+    O << TAI->getGlobalPrefix() << MO.getSymbolName();
+    return;
+  }
+}
+
 
 void X86IntelAsmPrinter::printLeaMemReference(const MachineInstr *MI,
                                               unsigned Op,
@@ -339,8 +365,8 @@ void X86IntelAsmPrinter::printPICJumpTableSetLabel(unsigned uid,
 }
 
 void X86IntelAsmPrinter::printPICLabel(const MachineInstr *MI, unsigned Op) {
-  O << "\"L" << getFunctionNumber() << "$pb\"\n";
-  O << "\"L" << getFunctionNumber() << "$pb\":";
+  O << "L" << getFunctionNumber() << "$pb\n";
+  O << "L" << getFunctionNumber() << "$pb:";
 }
 
 bool X86IntelAsmPrinter::printAsmMRegister(const MachineOperand &MO,
@@ -362,7 +388,7 @@ bool X86IntelAsmPrinter::printAsmMRegister(const MachineOperand &MO,
     break;
   }
 
-  O << '%' << TRI->getName(Reg);
+  O << TRI->getName(Reg);
   return false;
 }
 
@@ -414,7 +440,7 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
 
   Mang->markCharUnacceptable('.');
 
-  O << "\t.686\n\t.model flat\n\n";
+  O << "\t.686\n\t.MMX\n\t.XMM\n\t.model flat\n\n";
 
   // Emit declarations for external functions.
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
@@ -422,7 +448,7 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
       std::string Name = Mang->getValueName(I);
       decorateName(Name, I);
 
-      O << "\textern " ;
+      O << "\tEXTERN " ;
       if (I->hasDLLImportLinkage()) {
         O << "__imp_";
       }
@@ -436,7 +462,7 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
     if (I->isDeclaration()) {
       std::string Name = Mang->getValueName(I);
 
-      O << "\textern " ;
+      O << "\tEXTERN " ;
       if (I->hasDLLImportLinkage()) {
         O << "__imp_";
       }
@@ -471,14 +497,14 @@ bool X86IntelAsmPrinter::doFinalization(Module &M) {
     case GlobalValue::WeakAnyLinkage:
     case GlobalValue::WeakODRLinkage:
       SwitchToDataSection("");
-      O << name << "?\tsegment common 'COMMON'\n";
+      O << name << "?\tSEGEMNT PARA common 'COMMON'\n";
       bCustomSegment = true;
       // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
       // are also available.
       break;
     case GlobalValue::AppendingLinkage:
       SwitchToDataSection("");
-      O << name << "?\tsegment public 'DATA'\n";
+      O << name << "?\tSEGMENT PARA public 'DATA'\n";
       bCustomSegment = true;
       // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
       // are also available.

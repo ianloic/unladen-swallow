@@ -15,6 +15,7 @@
 #include "llvm/InstrTypes.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/LeakDetector.h"
@@ -30,8 +31,8 @@ using namespace llvm;
 //
 
 GlobalVariable *ilist_traits<GlobalVariable>::createSentinel() {
-  GlobalVariable *Ret = new GlobalVariable(Type::Int32Ty, false,
-                                           GlobalValue::ExternalLinkage);
+  GlobalVariable *Ret = new GlobalVariable(getGlobalContext(), Type::Int32Ty,
+                                           false, GlobalValue::ExternalLinkage);
   // This should not be garbage monitored.
   LeakDetector::removeGarbageObject(Ret);
   return Ret;
@@ -54,8 +55,8 @@ template class SymbolTableListTraits<GlobalAlias, Module>;
 // Primitive Module methods.
 //
 
-Module::Module(const std::string &MID)
-  : ModuleID(MID), DataLayout("") {
+Module::Module(const std::string &MID, LLVMContext& C)
+  : Context(C), ModuleID(MID), DataLayout("")  {
   ValSymTab = new ValueSymbolTable();
   TypeSymTab = new TypeSymbolTable();
 }
@@ -156,8 +157,8 @@ Constant *Module::getOrInsertFunction(const std::string &Name,
 
   // If the function exists but has the wrong type, return a bitcast to the
   // right type.
-  if (F->getType() != PointerType::getUnqual(Ty))
-    return ConstantExpr::getBitCast(F, PointerType::getUnqual(Ty));
+  if (F->getType() != Context.getPointerTypeUnqual(Ty))
+    return Context.getConstantExprBitCast(F, Context.getPointerTypeUnqual(Ty));
   
   // Otherwise, we just found the existing function or a prototype.
   return F;  
@@ -205,7 +206,8 @@ Constant *Module::getOrInsertFunction(const std::string &Name,
   va_end(Args);
 
   // Build the function type and chain to the other getOrInsertFunction...
-  return getOrInsertFunction(Name, FunctionType::get(RetTy, ArgTys, false),
+  return getOrInsertFunction(Name,
+                             Context.getFunctionType(RetTy, ArgTys, false),
                              AttributeList);
 }
 
@@ -222,7 +224,8 @@ Constant *Module::getOrInsertFunction(const std::string &Name,
   va_end(Args);
 
   // Build the function type and chain to the other getOrInsertFunction...
-  return getOrInsertFunction(Name, FunctionType::get(RetTy, ArgTys, false),
+  return getOrInsertFunction(Name, 
+                             Context.getFunctionType(RetTy, ArgTys, false),
                              AttrListPtr::get((AttributeWithIndex *)0, 0));
 }
 
@@ -269,15 +272,15 @@ Constant *Module::getOrInsertGlobal(const std::string &Name, const Type *Ty) {
   if (GV == 0) {
     // Nope, add it
     GlobalVariable *New =
-      new GlobalVariable(Ty, false, GlobalVariable::ExternalLinkage, 0, Name);
-    GlobalList.push_back(New);
-    return New;                    // Return the new declaration.
+      new GlobalVariable(*this, Ty, false, GlobalVariable::ExternalLinkage,
+                         0, Name);
+     return New;                    // Return the new declaration.
   }
 
   // If the variable exists but has the wrong type, return a bitcast to the
   // right type.
-  if (GV->getType() != PointerType::getUnqual(Ty))
-    return ConstantExpr::getBitCast(GV, PointerType::getUnqual(Ty));
+  if (GV->getType() != Context.getPointerTypeUnqual(Ty))
+    return Context.getConstantExprBitCast(GV, Context.getPointerTypeUnqual(Ty));
   
   // Otherwise, we just found the existing function or a prototype.
   return GV;

@@ -14,6 +14,7 @@
 
 #include "clang/Analysis/PathSensitive/BugReporter.h"
 #include "clang/Analysis/PathSensitive/GRExprEngine.h"
+#include "clang/Analysis/PathDiagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,31 +36,72 @@ ExplodedNode<GRState>* GetNode(GRExprEngine::undef_arg_iterator I) {
 }
 
 //===----------------------------------------------------------------------===//
+// Forward declarations for bug reporter visitors.
+//===----------------------------------------------------------------------===//
+
+static const Stmt *GetDerefExpr(const ExplodedNode<GRState> *N);
+static const Stmt *GetReceiverExpr(const ExplodedNode<GRState> *N);
+static const Stmt *GetDenomExpr(const ExplodedNode<GRState> *N);
+static const Stmt *GetCalleeExpr(const ExplodedNode<GRState> *N);
+static const Stmt *GetRetValExpr(const ExplodedNode<GRState> *N);
+
+static void registerTrackNullOrUndefValue(BugReporterContext& BRC,
+                                          const Stmt *ValExpr,
+                                          const ExplodedNode<GRState>* N);
+
+//===----------------------------------------------------------------------===//
 // Bug Descriptions.
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+class VISIBILITY_HIDDEN BuiltinBugReport : public RangedBugReport {
+public:
+  BuiltinBugReport(BugType& bt, const char* desc,
+                   ExplodedNode<GRState> *n)
+  : RangedBugReport(bt, desc, n) {}
+  
+  BuiltinBugReport(BugType& bt, const char *shortDesc, const char *desc,
+                   ExplodedNode<GRState> *n)
+  : RangedBugReport(bt, shortDesc, desc, n) {}  
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N);
+};  
+  
 class VISIBILITY_HIDDEN BuiltinBug : public BugType {
   GRExprEngine &Eng;
 protected:
   const std::string desc;
 public:
   BuiltinBug(GRExprEngine *eng, const char* n, const char* d)
-    : BugType(n, "Logic Errors"), Eng(*eng), desc(d) {}
+    : BugType(n, "Logic errors"), Eng(*eng), desc(d) {}
 
   BuiltinBug(GRExprEngine *eng, const char* n)
-    : BugType(n, "Logic Errors"), Eng(*eng), desc(n) {}
+    : BugType(n, "Logic errors"), Eng(*eng), desc(n) {}
   
   virtual void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) = 0;
 
   void FlushReports(BugReporter& BR) { FlushReportsImpl(BR, Eng); }
   
-  template <typename ITER>
-  void Emit(BugReporter& BR, ITER I, ITER E) {
-    for (; I != E; ++I) BR.EmitReport(new BugReport(*this, desc.c_str(),
-                                                     GetNode(I)));
-  }  
+  virtual void registerInitialVisitors(BugReporterContext& BRC,
+                                       const ExplodedNode<GRState>* N,
+                                       BuiltinBugReport *R) {}
+  
+  template <typename ITER> void Emit(BugReporter& BR, ITER I, ITER E);
 };
+  
+  
+template <typename ITER>
+void BuiltinBug::Emit(BugReporter& BR, ITER I, ITER E) {
+  for (; I != E; ++I) BR.EmitReport(new BuiltinBugReport(*this, desc.c_str(),
+                                                         GetNode(I)));
+}  
+
+void BuiltinBugReport::registerInitialVisitors(BugReporterContext& BRC,
+                                               const ExplodedNode<GRState>* N) {
+  static_cast<BuiltinBug&>(getBugType()).registerInitialVisitors(BRC, N, this);
+}  
   
 class VISIBILITY_HIDDEN NullDeref : public BuiltinBug {
 public:
@@ -69,16 +111,20 @@ public:
   void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     Emit(BR, Eng.null_derefs_begin(), Eng.null_derefs_end());
   }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetDerefExpr(N), N);
+  }
 };
   
-class VISIBILITY_HIDDEN NilReceiverStructRet : public BugType {
-  GRExprEngine &Eng;
+class VISIBILITY_HIDDEN NilReceiverStructRet : public BuiltinBug {
 public:
   NilReceiverStructRet(GRExprEngine* eng) :
-    BugType("'nil' receiver with struct return type", "Logic Errors"),  
-    Eng(*eng) {}
+    BuiltinBug(eng, "'nil' receiver with struct return type") {}
 
-  void FlushReports(BugReporter& BR) {
+  void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     for (GRExprEngine::nil_receiver_struct_ret_iterator
           I=Eng.nil_receiver_struct_ret_begin(),
           E=Eng.nil_receiver_struct_ret_end(); I!=E; ++I) {
@@ -92,22 +138,26 @@ public:
          << ME->getType().getAsString()
          << "') to be garbage or otherwise undefined.";
 
-      RangedBugReport *R = new RangedBugReport(*this, os.str().c_str(), *I);
+      BuiltinBugReport *R = new BuiltinBugReport(*this, os.str().c_str(), *I);
       R->addRange(ME->getReceiver()->getSourceRange());
       BR.EmitReport(R);
     }
   }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetReceiverExpr(N), N);
+  }
 };
 
-class VISIBILITY_HIDDEN NilReceiverLargerThanVoidPtrRet : public BugType {
-  GRExprEngine &Eng;
+class VISIBILITY_HIDDEN NilReceiverLargerThanVoidPtrRet : public BuiltinBug {
 public:
   NilReceiverLargerThanVoidPtrRet(GRExprEngine* eng) :
-  BugType("'nil' receiver with return type larger than sizeof(void *)", 
-          "Logic Errors"),  
-  Eng(*eng) {}
+    BuiltinBug(eng,
+               "'nil' receiver with return type larger than sizeof(void *)") {}
   
-  void FlushReports(BugReporter& BR) {
+  void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     for (GRExprEngine::nil_receiver_larger_than_voidptr_ret_iterator
          I=Eng.nil_receiver_larger_than_voidptr_ret_begin(),
          E=Eng.nil_receiver_larger_than_voidptr_ret_end(); I!=E; ++I) {
@@ -123,10 +173,15 @@ public:
       << Eng.getContext().getTypeSize(ME->getType()) / 8
       << " bytes) to be garbage or otherwise undefined.";
       
-      RangedBugReport *R = new RangedBugReport(*this, os.str().c_str(), *I);
+      BuiltinBugReport *R = new BuiltinBugReport(*this, os.str().c_str(), *I);
       R->addRange(ME->getReceiver()->getSourceRange());
       BR.EmitReport(R);
     }
+  }    
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetReceiverExpr(N), N);
   }
 };
   
@@ -138,6 +193,12 @@ public:
   void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     Emit(BR, Eng.undef_derefs_begin(), Eng.undef_derefs_end());
   }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetDerefExpr(N), N);
+  }
 };
 
 class VISIBILITY_HIDDEN DivZero : public BuiltinBug {
@@ -148,6 +209,12 @@ public:
   
   void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     Emit(BR, Eng.explicit_bad_divides_begin(), Eng.explicit_bad_divides_end());
+  }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetDenomExpr(N), N);
   }
 };
   
@@ -170,10 +237,31 @@ public:
   void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     Emit(BR, Eng.bad_calls_begin(), Eng.bad_calls_end());
   }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetCalleeExpr(N), N);
+  }
+};
+
+
+class VISIBILITY_HIDDEN ArgReport : public BuiltinBugReport {
+  const Stmt *Arg;
+public:
+  ArgReport(BugType& bt, const char* desc, ExplodedNode<GRState> *n,
+         const Stmt *arg)
+  : BuiltinBugReport(bt, desc, n), Arg(arg) {}
+  
+  ArgReport(BugType& bt, const char *shortDesc, const char *desc,
+                   ExplodedNode<GRState> *n, const Stmt *arg)
+  : BuiltinBugReport(bt, shortDesc, desc, n), Arg(arg) {}  
+  
+  const Stmt *getArg() const { return Arg; }    
 };
 
 class VISIBILITY_HIDDEN BadArg : public BuiltinBug {
-public:
+public:  
   BadArg(GRExprEngine* eng) : BuiltinBug(eng,"Uninitialized argument",  
     "Pass-by-value argument in function call is undefined.") {}
 
@@ -184,12 +272,19 @@ public:
     for (GRExprEngine::UndefArgsTy::iterator I = Eng.undef_arg_begin(),
          E = Eng.undef_arg_end(); I!=E; ++I) {
       // Generate a report for this bug.
-      RangedBugReport *report = new RangedBugReport(*this, desc.c_str(),
-                                                    I->first);
+      ArgReport *report = new ArgReport(*this, desc.c_str(), I->first,
+                                        I->second);
       report->addRange(I->second->getSourceRange());
       BR.EmitReport(report);
     }
   }
+
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, static_cast<ArgReport*>(R)->getArg(),
+                                  N);
+  }  
 };
   
 class VISIBILITY_HIDDEN BadMsgExprArg : public BadArg {
@@ -201,12 +296,12 @@ public:
     for (GRExprEngine::UndefArgsTy::iterator I=Eng.msg_expr_undef_arg_begin(),
          E = Eng.msg_expr_undef_arg_end(); I!=E; ++I) {      
       // Generate a report for this bug.
-      RangedBugReport *report = new RangedBugReport(*this, desc.c_str(),
-                                                    I->first);
+      ArgReport *report = new ArgReport(*this, desc.c_str(), I->first,
+                                        I->second);
       report->addRange(I->second->getSourceRange());
       BR.EmitReport(report);
     }    
-  }
+  } 
 };
   
 class VISIBILITY_HIDDEN BadReceiver : public BuiltinBug {
@@ -220,15 +315,21 @@ public:
          End = Eng.undef_receivers_end(); I!=End; ++I) {
       
       // Generate a report for this bug.
-      RangedBugReport *report = new RangedBugReport(*this, desc.c_str(), *I);
+      BuiltinBugReport *report = new BuiltinBugReport(*this, desc.c_str(), *I);
       ExplodedNode<GRState>* N = *I;
       Stmt *S = cast<PostStmt>(N->getLocation()).getStmt();
       Expr* E = cast<ObjCMessageExpr>(S)->getReceiver();
       assert (E && "Receiver cannot be NULL");
       report->addRange(E->getSourceRange());
       BR.EmitReport(report);
-    }    
+    }
   }
+
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetReceiverExpr(N), N);
+  } 
 };
 
 class VISIBILITY_HIDDEN RetStack : public BuiltinBug {
@@ -246,9 +347,7 @@ public:
       assert (E && "Return expression cannot be NULL");
       
       // Get the value associated with E.
-      loc::MemRegionVal V =
-        cast<loc::MemRegionVal>(Eng.getStateManager().GetSVal(N->getState(),
-                                                               E));
+      loc::MemRegionVal V = cast<loc::MemRegionVal>(N->getState()->getSVal(E));
       
       // Generate a report for this bug.
       std::string buf;
@@ -293,11 +392,17 @@ public:
 class VISIBILITY_HIDDEN RetUndef : public BuiltinBug {
 public:
   RetUndef(GRExprEngine* eng) : BuiltinBug(eng, "Uninitialized return value",
-              "Uninitialized or undefined return value returned to caller.") {}
+              "Uninitialized or undefined value returned to caller.") {}
   
   void FlushReportsImpl(BugReporter& BR, GRExprEngine& Eng) {
     Emit(BR, Eng.ret_undef_begin(), Eng.ret_undef_end());
   }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, GetRetValExpr(N), N);
+  }    
 };
 
 class VISIBILITY_HIDDEN UndefBranch : public BuiltinBug {
@@ -320,7 +425,7 @@ class VISIBILITY_HIDDEN UndefBranch : public BuiltinBug {
       return Ex;
     }
     
-    bool MatchesCriteria(Expr* Ex) { return VM.GetSVal(St, Ex).isUndef(); }
+    bool MatchesCriteria(Expr* Ex) { return St->getSVal(Ex).isUndef(); }
   };
   
 public:
@@ -361,10 +466,17 @@ public:
       FindUndefExpr FindIt(Eng.getStateManager(), St);
       Ex = FindIt.FindExpr(Ex);
 
-      RangedBugReport *R = new RangedBugReport(*this, desc.c_str(), *I);
+      ArgReport *R = new ArgReport(*this, desc.c_str(), *I, Ex);
       R->addRange(Ex->getSourceRange());
       BR.EmitReport(R);
     }
+  }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, static_cast<ArgReport*>(R)->getArg(),
+                                  N);
   }
 };
 
@@ -405,8 +517,7 @@ public:
             "variable-length array (VLA) '"
          << VD->getNameAsString() << "' evaluates to ";
       
-      bool isUndefined = Eng.getStateManager().GetSVal(N->getState(),
-                                                       SizeExpr).isUndef();
+      bool isUndefined = N->getState()->getSVal(SizeExpr).isUndef();
       
       if (isUndefined)
         os << "an undefined or garbage value.";
@@ -416,15 +527,22 @@ public:
       std::string shortBuf;
       llvm::raw_string_ostream os_short(shortBuf);
       os_short << "Variable-length array '" << VD->getNameAsString() << "' "
-               << (isUndefined ? " garbage value for array size"
-                   : " has zero elements (undefined behavior)");
+               << (isUndefined ? "garbage value for array size"
+                   : "has zero elements (undefined behavior)");
 
-      RangedBugReport *report = new RangedBugReport(*this,
-                                                    os_short.str().c_str(),
-                                                    os.str().c_str(), N);
+      ArgReport *report = new ArgReport(*this, os_short.str().c_str(),
+                                        os.str().c_str(), N, SizeExpr);
+
       report->addRange(SizeExpr->getSourceRange());
       BR.EmitReport(report);
     }
+  }
+  
+  void registerInitialVisitors(BugReporterContext& BRC,
+                               const ExplodedNode<GRState>* N,
+                               BuiltinBugReport *R) {
+    registerTrackNullOrUndefValue(BRC, static_cast<ArgReport*>(R)->getArg(),
+                                  N);
   }
 };
 
@@ -442,7 +560,7 @@ public:
     CallExpr* CE = cast<CallExpr>(cast<PostStmt>(N->getLocation()).getStmt());
     const GRState* state = N->getState();
     
-    SVal X = VMgr.GetSVal(state, CE->getCallee());
+    SVal X = state->getSVal(CE->getCallee());
 
     const FunctionDecl* FD = X.getAsFunctionDecl();
     if (!FD)
@@ -482,6 +600,318 @@ public:
   }
 };
 } // end anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Definitions for bug reporter visitors.
+//===----------------------------------------------------------------------===//
+
+static const Stmt *GetDerefExpr(const ExplodedNode<GRState> *N) {
+  // Pattern match for a few useful cases (do something smarter later):
+  //   a[0], p->f, *p
+  const Stmt *S = N->getLocationAs<PostStmt>()->getStmt();
+
+  if (const UnaryOperator *U = dyn_cast<UnaryOperator>(S)) {
+    if (U->getOpcode() == UnaryOperator::Deref)
+      return U->getSubExpr()->IgnoreParenCasts();
+  }
+  else if (const MemberExpr *ME = dyn_cast<MemberExpr>(S)) {
+    return ME->getBase()->IgnoreParenCasts();
+  }
+  else if (const ArraySubscriptExpr *AE = dyn_cast<ArraySubscriptExpr>(S)) {
+    // Retrieve the base for arrays since BasicStoreManager doesn't know how
+    // to reason about them.
+    return AE->getBase();
+  }
+    
+  return NULL;  
+}
+
+static const Stmt *GetReceiverExpr(const ExplodedNode<GRState> *N) {
+  const Stmt *S = N->getLocationAs<PostStmt>()->getStmt();
+  if (const ObjCMessageExpr *ME = dyn_cast<ObjCMessageExpr>(S))
+    return ME->getReceiver();
+  return NULL;
+}
+  
+static const Stmt *GetDenomExpr(const ExplodedNode<GRState> *N) {
+  const Stmt *S = N->getLocationAs<PostStmt>()->getStmt();
+  if (const BinaryOperator *BE = dyn_cast<BinaryOperator>(S))
+    return BE->getRHS();
+  return NULL;
+}
+  
+static const Stmt *GetCalleeExpr(const ExplodedNode<GRState> *N) {
+  const Stmt *S = N->getLocationAs<PostStmt>()->getStmt();
+  if (const CallExpr *CE = dyn_cast<CallExpr>(S))
+    return CE->getCallee();
+  return NULL;
+}
+  
+static const Stmt *GetRetValExpr(const ExplodedNode<GRState> *N) {
+  const Stmt *S = N->getLocationAs<PostStmt>()->getStmt();
+  if (const ReturnStmt *RS = dyn_cast<ReturnStmt>(S))
+    return RS->getRetValue();
+  return NULL;
+}
+
+namespace {
+class VISIBILITY_HIDDEN FindLastStoreBRVisitor : public BugReporterVisitor {
+  const MemRegion *R;
+  SVal V;
+  bool satisfied;
+  const ExplodedNode<GRState> *StoreSite;
+public:
+  FindLastStoreBRVisitor(SVal v, const MemRegion *r)
+    : R(r), V(v), satisfied(false), StoreSite(0) {}
+                         
+  PathDiagnosticPiece* VisitNode(const ExplodedNode<GRState> *N,
+                                 const ExplodedNode<GRState> *PrevN,
+                                 BugReporterContext& BRC) {
+        
+    if (satisfied)
+      return NULL;
+
+    if (!StoreSite) {      
+      const ExplodedNode<GRState> *Node = N, *Last = NULL;
+
+      for ( ; Node ; Last = Node, Node = Node->getFirstPred()) {
+        
+        if (const VarRegion *VR = dyn_cast<VarRegion>(R)) {
+          if (const PostStmt *P = Node->getLocationAs<PostStmt>())
+            if (const DeclStmt *DS = P->getStmtAs<DeclStmt>())
+              if (DS->getSingleDecl() == VR->getDecl()) {
+                Last = Node;
+                break;
+              }
+        }
+        
+        if (Node->getState()->getSVal(R) != V)
+          break;
+      }
+
+      if (!Node || !Last) {
+        satisfied = true;
+        return NULL;
+      }
+      
+      StoreSite = Last;
+    }
+    
+    if (StoreSite != N)
+      return NULL;
+
+    satisfied = true;
+    std::string sbuf;
+    llvm::raw_string_ostream os(sbuf);
+    
+    if (const PostStmt *PS = N->getLocationAs<PostStmt>()) {
+      if (const DeclStmt *DS = PS->getStmtAs<DeclStmt>()) {
+        
+        if (const VarRegion *VR = dyn_cast<VarRegion>(R)) {
+          os << "Variable '" << VR->getDecl()->getNameAsString() << "' ";
+        }
+        else
+          return NULL;
+            
+        if (isa<loc::ConcreteInt>(V)) {
+          bool b = false;
+          ASTContext &C = BRC.getASTContext();
+          if (R->isBoundable()) {
+            if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
+              if (C.isObjCObjectPointerType(TR->getValueType(C))) {
+                os << "initialized to nil";
+                b = true;
+              }
+            }
+          }
+          
+          if (!b)
+            os << "initialized to a null pointer value";
+        }
+        else if (isa<nonloc::ConcreteInt>(V)) {
+          os << "initialized to " << cast<nonloc::ConcreteInt>(V).getValue();
+        }
+        else if (V.isUndef()) {
+          if (isa<VarRegion>(R)) {
+            const VarDecl *VD = cast<VarDecl>(DS->getSingleDecl());
+            if (VD->getInit())
+              os << "initialized to a garbage value";
+            else
+              os << "declared without an initial value";              
+          }          
+        }
+      }
+    }
+
+    if (os.str().empty()) {            
+      if (isa<loc::ConcreteInt>(V)) {
+        bool b = false;
+        ASTContext &C = BRC.getASTContext();
+        if (R->isBoundable()) {
+          if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
+            if (C.isObjCObjectPointerType(TR->getValueType(C))) {
+              os << "nil object reference stored to ";
+              b = true;
+            }
+          }
+        }
+
+        if (!b)
+          os << "Null pointer value stored to ";
+      }
+      else if (V.isUndef()) {
+        os << "Uninitialized value stored to ";
+      }
+      else
+        return NULL;
+    
+      if (const VarRegion *VR = dyn_cast<VarRegion>(R)) {
+        os << '\'' << VR->getDecl()->getNameAsString() << '\'';
+      }
+      else
+        return NULL;
+    }
+      
+    // FIXME: Refactor this into BugReporterContext.
+    Stmt *S = 0;      
+    ProgramPoint P = N->getLocation();
+    
+    if (BlockEdge *BE = dyn_cast<BlockEdge>(&P)) {
+      CFGBlock *BSrc = BE->getSrc();
+      S = BSrc->getTerminatorCondition();
+    }
+    else if (PostStmt *PS = dyn_cast<PostStmt>(&P)) {
+      S = PS->getStmt();
+    }
+      
+    if (!S)
+      return NULL;
+    
+    // Construct a new PathDiagnosticPiece.
+    PathDiagnosticLocation L(S, BRC.getSourceManager());
+    return new PathDiagnosticEventPiece(L, os.str());
+  }
+};
+  
+  
+static void registerFindLastStore(BugReporterContext& BRC, const MemRegion *R,
+                                  SVal V) {
+  BRC.addVisitor(new FindLastStoreBRVisitor(V, R));
+}
+
+class VISIBILITY_HIDDEN TrackConstraintBRVisitor : public BugReporterVisitor {
+  SVal Constraint;
+  const bool Assumption;
+  bool isSatisfied;
+public:
+  TrackConstraintBRVisitor(SVal constraint, bool assumption)
+    : Constraint(constraint), Assumption(assumption), isSatisfied(false) {}
+    
+  PathDiagnosticPiece* VisitNode(const ExplodedNode<GRState> *N,
+                                 const ExplodedNode<GRState> *PrevN,
+                                 BugReporterContext& BRC) {
+    if (isSatisfied)
+      return NULL;
+    
+    // Check if in the previous state it was feasible for this constraint
+    // to *not* be true.
+    if (PrevN->getState()->assume(Constraint, !Assumption)) {
+
+      isSatisfied = true;
+      
+      // As a sanity check, make sure that the negation of the constraint
+      // was infeasible in the current state.  If it is feasible, we somehow
+      // missed the transition point.
+      if (N->getState()->assume(Constraint, !Assumption))
+        return NULL;
+      
+      // We found the transition point for the constraint.  We now need to
+      // pretty-print the constraint. (work-in-progress)      
+      std::string sbuf;
+      llvm::raw_string_ostream os(sbuf);
+      
+      if (isa<Loc>(Constraint)) {
+        os << "Assuming pointer value is ";
+        os << (Assumption ? "non-null" : "null");
+      }
+      
+      if (os.str().empty())
+        return NULL;
+      
+      // FIXME: Refactor this into BugReporterContext.
+      Stmt *S = 0;      
+      ProgramPoint P = N->getLocation();
+      
+      if (BlockEdge *BE = dyn_cast<BlockEdge>(&P)) {
+        CFGBlock *BSrc = BE->getSrc();
+        S = BSrc->getTerminatorCondition();
+      }
+      else if (PostStmt *PS = dyn_cast<PostStmt>(&P)) {
+        S = PS->getStmt();
+      }
+       
+      if (!S)
+        return NULL;
+      
+      // Construct a new PathDiagnosticPiece.
+      PathDiagnosticLocation L(S, BRC.getSourceManager());
+      return new PathDiagnosticEventPiece(L, os.str());
+    }
+    
+    return NULL;
+  }  
+};
+} // end anonymous namespace
+
+static void registerTrackConstraint(BugReporterContext& BRC, SVal Constraint,
+                                    bool Assumption) {
+  BRC.addVisitor(new TrackConstraintBRVisitor(Constraint, Assumption));  
+}
+
+static void registerTrackNullOrUndefValue(BugReporterContext& BRC,
+                                          const Stmt *S,
+                                          const ExplodedNode<GRState>* N) {
+  
+  if (!S)
+    return;
+
+  GRStateManager &StateMgr = BRC.getStateManager();
+  const GRState *state = N->getState();  
+  
+  if (const DeclRefExpr *DR = dyn_cast<DeclRefExpr>(S)) {        
+    if (const VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl())) {                
+      const VarRegion *R =
+        StateMgr.getRegionManager().getVarRegion(VD);
+
+      // What did we load?
+      SVal V = state->getSVal(S);
+        
+      if (isa<loc::ConcreteInt>(V) || isa<nonloc::ConcreteInt>(V) 
+          || V.isUndef()) {
+        registerFindLastStore(BRC, R, V);
+      }
+    }
+  }
+    
+  SVal V = state->getSValAsScalarOrLoc(S);
+  
+  // Uncomment this to find cases where we aren't properly getting the
+  // base value that was dereferenced.
+  // assert(!V.isUnknownOrUndef());
+  
+  // Is it a symbolic value?
+  if (loc::MemRegionVal *L = dyn_cast<loc::MemRegionVal>(&V)) {
+    const SubRegion *R = cast<SubRegion>(L->getRegion());
+    while (R && !isa<SymbolicRegion>(R)) {
+      R = dyn_cast<SubRegion>(R->getSuperRegion());
+    }
+    
+    if (R) {
+      assert(isa<SymbolicRegion>(R));
+      registerTrackConstraint(BRC, loc::MemRegionVal(R), false);
+    }
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // Check registration.

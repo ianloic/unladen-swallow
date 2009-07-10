@@ -112,7 +112,7 @@ ReduceMiscompilingPasses::doTest(std::vector<const PassInfo*> &Prefix,
   // Ok, so now we know that the prefix passes work, try running the suffix
   // passes on the result of the prefix passes.
   //
-  Module *PrefixOutput = ParseInputFile(BitcodeResult);
+  Module *PrefixOutput = ParseInputFile(BitcodeResult, BD.getContext());
   if (PrefixOutput == 0) {
     std::cerr << BD.getToolName() << ": Error reading bitcode file '"
               << BitcodeResult << "'!\n";
@@ -703,9 +703,9 @@ static void CleanupAndPrepareModules(BugDriver &BD, Module *&Test,
         // 1. Add a string constant with its name to the global file
         Constant *InitArray = ConstantArray::get(F->getName());
         GlobalVariable *funcName =
-          new GlobalVariable(InitArray->getType(), true /*isConstant*/,
+          new GlobalVariable(*Safe, InitArray->getType(), true /*isConstant*/,
                              GlobalValue::InternalLinkage, InitArray,
-                             F->getName() + "_name", Safe);
+                             F->getName() + "_name");
 
         // 2. Use `GetElementPtr *funcName, 0, 0' to convert the string to an
         // sbyte* so it matches the signature of the resolver function.
@@ -722,8 +722,9 @@ static void CleanupAndPrepareModules(BugDriver &BD, Module *&Test,
           // Create a new global to hold the cached function pointer.
           Constant *NullPtr = ConstantPointerNull::get(F->getType());
           GlobalVariable *Cache =
-            new GlobalVariable(F->getType(), false,GlobalValue::InternalLinkage,
-                               NullPtr,F->getName()+".fpcache", F->getParent());
+            new GlobalVariable(*F->getParent(), F->getType(), 
+                               false, GlobalValue::InternalLinkage,
+                               NullPtr,F->getName()+".fpcache");
 
           // Construct a new stub function that will re-route calls to F
           const FunctionType *FuncTy = F->getFunctionType();

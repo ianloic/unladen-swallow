@@ -22,12 +22,14 @@ namespace llvm {
 class X86TargetMachine;
 class FunctionPass;
 class MachineCodeEmitter;
+class JITCodeEmitter;
 class raw_ostream;
 
 /// createX86ISelDag - This pass converts a legalized DAG into a 
 /// X86-specific DAG, ready for instruction scheduling.
 ///
-FunctionPass *createX86ISelDag(X86TargetMachine &TM, CodeGenOpt::Level OptLevel);
+FunctionPass *createX86ISelDag(X86TargetMachine &TM,
+                               CodeGenOpt::Level OptLevel);
 
 /// createX86FloatingPointStackifierPass - This function returns a pass which
 /// converts floating point register references and pseudo instructions into
@@ -44,15 +46,18 @@ FunctionPass *createX87FPRegKillInserterPass();
 /// assembly code for a MachineFunction to the given output stream,
 /// using the given target machine description.
 ///
-FunctionPass *createX86CodePrinterPass(raw_ostream &o,
-                                       X86TargetMachine &tm,
-                                       CodeGenOpt::Level OptLevel,
+FunctionPass *createX86CodePrinterPass(raw_ostream &o, X86TargetMachine &tm,
                                        bool Verbose);
 
 /// createX86CodeEmitterPass - Return a pass that emits the collected X86 code
 /// to the specified MCE object.
-FunctionPass *createX86CodeEmitterPass(X86TargetMachine &TM,
+
+FunctionPass *createX86CodeEmitterPass(X86TargetMachine &TM, 
                                        MachineCodeEmitter &MCE);
+FunctionPass *createX86JITCodeEmitterPass(X86TargetMachine &TM,
+                                          JITCodeEmitter &JCE);
+FunctionPass *createX86ObjectCodeEmitterPass(X86TargetMachine &TM,
+                                             ObjectCodeEmitter &OCE);
 
 /// createX86EmitCodeToMemory - Returns a pass that converts a register
 /// allocated function into raw machine code in a dynamically
@@ -60,8 +65,8 @@ FunctionPass *createX86CodeEmitterPass(X86TargetMachine &TM,
 ///
 FunctionPass *createEmitX86CodeToMemory();
 
-/// createX86MaxStackAlignmentCalculatorPass - This function returns a pass which
-/// calculates maximal stack alignment required for function
+/// createX86MaxStackAlignmentCalculatorPass - This function returns a pass
+/// which calculates maximal stack alignment required for function
 ///
 FunctionPass *createX86MaxStackAlignmentCalculatorPass();
 

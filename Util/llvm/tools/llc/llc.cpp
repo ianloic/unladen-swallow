@@ -17,11 +17,13 @@
 #include "llvm/CodeGen/FileWriters.h"
 #include "llvm/CodeGen/LinkAllCodegenComponents.h"
 #include "llvm/CodeGen/LinkAllAsmWriterComponents.h"
+#include "llvm/CodeGen/ObjectCodeEmitter.h"
 #include "llvm/Target/SubtargetFeature.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetMachineRegistry.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/PassManager.h"
@@ -38,6 +40,7 @@
 #include "llvm/System/Signals.h"
 #include "llvm/Config/config.h"
 #include "llvm/LinkAllVMCore.h"
+#include "llvm/Target/TargetSelect.h"
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -99,6 +102,16 @@ FileType("filetype", cl::init(TargetMachine::AssemblyFile),
 cl::opt<bool> NoVerify("disable-verify", cl::Hidden,
                        cl::desc("Do not verify input module"));
 
+
+static cl::opt<bool>
+DisableRedZone("disable-red-zone",
+  cl::desc("Do not emit code that uses the red zone."),
+  cl::init(false));
+
+static cl::opt<bool>
+NoImplicitFloats("no-implicit-float",
+  cl::desc("Don't generate implicit floating point instructions (x86-only)"),
+  cl::init(false));
 
 // GetFileNameRoot - Helper function to get the basename of a filename.
 static inline std::string
@@ -201,9 +214,13 @@ static raw_ostream *GetOutputStream(const char *ProgName) {
 int main(int argc, char **argv) {
   sys::PrintStackTraceOnErrorSignal();
   PrettyStackTraceProgram X(argc, argv);
+  LLVMContext Context;
   llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
   cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
 
+  InitializeAllTargets();
+  InitializeAllAsmPrinters();
+  
   // Load the module to be compiled...
   std::string ErrorMessage;
   std::auto_ptr<Module> M;
@@ -211,7 +228,7 @@ int main(int argc, char **argv) {
   std::auto_ptr<MemoryBuffer> Buffer(
                    MemoryBuffer::getFileOrSTDIN(InputFilename, &ErrorMessage));
   if (Buffer.get())
-    M.reset(ParseBitcodeFile(Buffer.get(), &ErrorMessage));
+    M.reset(ParseBitcodeFile(Buffer.get(), Context, &ErrorMessage));
   if (M.get() == 0) {
     std::cerr << argv[0] << ": bitcode didn't read correctly.\n";
     std::cerr << "Reason: " << ErrorMessage << "\n";
@@ -296,7 +313,7 @@ int main(int argc, char **argv) {
 #endif
 
     // Ask the target to add backend passes as necessary.
-    MachineCodeEmitter *MCE = 0;
+    ObjectCodeEmitter *OCE = 0;
 
     // Override default to generate verbose assembly.
     Target.setAsmVerbosityDefault(true);
@@ -315,14 +332,14 @@ int main(int argc, char **argv) {
     case FileModel::AsmFile:
       break;
     case FileModel::MachOFile:
-      MCE = AddMachOWriter(Passes, *Out, Target);
+      OCE = AddMachOWriter(Passes, *Out, Target);
       break;
     case FileModel::ElfFile:
-      MCE = AddELFWriter(Passes, *Out, Target);
+      OCE = AddELFWriter(Passes, *Out, Target);
       break;
     }
 
-    if (Target.addPassesToEmitFileFinish(Passes, MCE, OLvl)) {
+    if (Target.addPassesToEmitFileFinish(Passes, OCE, OLvl)) {
       std::cerr << argv[0] << ": target does not support generation of this"
                 << " file type!\n";
       if (Out != &outs()) delete Out;
@@ -336,8 +353,13 @@ int main(int argc, char **argv) {
     // Run our queue of passes all at once now, efficiently.
     // TODO: this could lazily stream functions out of the module.
     for (Module::iterator I = mod.begin(), E = mod.end(); I != E; ++I)
-      if (!I->isDeclaration())
+      if (!I->isDeclaration()) {
+        if (DisableRedZone)
+          I->addFnAttr(Attribute::NoRedZone);
+        if (NoImplicitFloats)
+          I->addFnAttr(Attribute::NoImplicitFloat);
         Passes.run(*I);
+      }
 
     Passes.doFinalization();
   }

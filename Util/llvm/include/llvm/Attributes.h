@@ -54,13 +54,18 @@ const Attributes Alignment = 31<<16; ///< Alignment of parameter (5 bits)
                                      // stored as log2 of alignment with +1 bias
                                      // 0 means unaligned different from align 1
 const Attributes NoCapture = 1<<21; ///< Function creates no aliases of pointer
+const Attributes NoRedZone = 1<<22; /// disable redzone
+const Attributes NoImplicitFloat = 1<<23; /// disable implicit floating point
+                                          /// instructions.
 
 /// @brief Attributes that only apply to function parameters.
 const Attributes ParameterOnly = ByVal | Nest | StructRet | NoCapture;
 
-/// @brief Attributes that only apply to function.
+/// @brief Attributes that may be applied to the function itself.  These cannot
+/// be used on return values or function parameters.
 const Attributes FunctionOnly = NoReturn | NoUnwind | ReadNone | ReadOnly | 
-  NoInline | AlwaysInline | OptimizeForSize | StackProtect | StackProtectReq;
+  NoInline | AlwaysInline | OptimizeForSize | StackProtect | StackProtectReq |
+  NoRedZone | NoImplicitFloat;
 
 /// @brief Parameter attributes that do not apply to vararg call arguments.
 const Attributes VarArgsIncompatible = StructRet;
@@ -182,7 +187,7 @@ public:
 
   /// getFnAttributes - The function attributes are returned.
   Attributes getFnAttributes() const {
-    return getAttributes(~0);
+    return getAttributes(~0U);
   }
   
   /// paramHasAttr - Return true if the specified parameter index has the

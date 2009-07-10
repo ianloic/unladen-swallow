@@ -23,6 +23,19 @@ namespace llvm {
 
 class TargetInstrDesc;
 
+namespace RegState {
+  enum {
+    Define         = 0x2,
+    Implicit       = 0x4,
+    Kill           = 0x8,
+    Dead           = 0x10,
+    Undef          = 0x20,
+    EarlyClobber   = 0x40,
+    ImplicitDefine = Implicit | Define,
+    ImplicitKill   = Implicit | Kill
+  };
+}
+
 class MachineInstrBuilder {
   MachineInstr *MI;
 public:
@@ -36,12 +49,18 @@ public:
   /// addReg - Add a new virtual register operand...
   ///
   const
-  MachineInstrBuilder &addReg(unsigned RegNo, bool isDef = false, 
-                              bool isImp = false, bool isKill = false, 
-                              bool isDead = false, unsigned SubReg = 0,
-                              bool isEarlyClobber = false) const {
-    MI->addOperand(MachineOperand::CreateReg(RegNo, isDef, isImp, isKill,
-                                             isDead, SubReg, isEarlyClobber));
+  MachineInstrBuilder &addReg(unsigned RegNo, unsigned flags = 0,
+                              unsigned SubReg = 0) const {
+    assert((flags & 0x1) == 0 &&
+           "Passing in 'true' to addReg is forbidden! Use enums instead.");
+    MI->addOperand(MachineOperand::CreateReg(RegNo,
+                                             flags & RegState::Define,
+                                             flags & RegState::Implicit,
+                                             flags & RegState::Kill,
+                                             flags & RegState::Dead,
+                                             flags & RegState::Undef,
+                                             flags & RegState::EarlyClobber,
+                                             SubReg));
     return *this;
   }
 
@@ -57,8 +76,9 @@ public:
     return *this;
   }
 
-  const MachineInstrBuilder &addMBB(MachineBasicBlock *MBB) const {
-    MI->addOperand(MachineOperand::CreateMBB(MBB));
+  const MachineInstrBuilder &addMBB(MachineBasicBlock *MBB,
+                                    unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateMBB(MBB, TargetFlags));
     return *this;
   }
 
@@ -68,25 +88,36 @@ public:
   }
 
   const MachineInstrBuilder &addConstantPoolIndex(unsigned Idx,
-                                                  int Offset = 0) const {
-    MI->addOperand(MachineOperand::CreateCPI(Idx, Offset));
+                                                  int Offset = 0,
+                                          unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateCPI(Idx, Offset, TargetFlags));
     return *this;
   }
 
-  const MachineInstrBuilder &addJumpTableIndex(unsigned Idx) const {
-    MI->addOperand(MachineOperand::CreateJTI(Idx));
+  const MachineInstrBuilder &addJumpTableIndex(unsigned Idx,
+                                          unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateJTI(Idx, TargetFlags));
     return *this;
   }
 
   const MachineInstrBuilder &addGlobalAddress(GlobalValue *GV,
-                                              int64_t Offset = 0) const {
-    MI->addOperand(MachineOperand::CreateGA(GV, Offset));
+                                              int64_t Offset = 0,
+                                          unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateGA(GV, Offset, TargetFlags));
+    return *this;
+  }
+
+  const MachineInstrBuilder &addMetadata(MDNode *N,
+					 int64_t Offset = 0,
+					 unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateMDNode(N, Offset, TargetFlags));
     return *this;
   }
 
   const MachineInstrBuilder &addExternalSymbol(const char *FnName,
-                                               int64_t Offset = 0) const {
-    MI->addOperand(MachineOperand::CreateES(FnName, Offset));
+                                               int64_t Offset = 0,
+                                          unsigned char TargetFlags = 0) const {
+    MI->addOperand(MachineOperand::CreateES(FnName, Offset, TargetFlags));
     return *this;
   }
 
@@ -96,24 +127,7 @@ public:
   }
 
   const MachineInstrBuilder &addOperand(const MachineOperand &MO) const {
-    if (MO.isReg())
-      return addReg(MO.getReg(), MO.isDef(), MO.isImplicit(),
-                    MO.isKill(), MO.isDead(), MO.getSubReg(),
-                    MO.isEarlyClobber());
-    if (MO.isImm())
-      return addImm(MO.getImm());
-    if (MO.isFI())
-      return addFrameIndex(MO.getIndex());
-    if (MO.isGlobal())
-      return addGlobalAddress(MO.getGlobal(), MO.getOffset());
-    if (MO.isCPI())
-      return addConstantPoolIndex(MO.getIndex(), MO.getOffset());
-    if (MO.isSymbol())
-      return addExternalSymbol(MO.getSymbolName());
-    if (MO.isJTI())
-      return addJumpTableIndex(MO.getIndex());
-
-    assert(0 && "Unknown operand for MachineInstrBuilder::AddOperand!");
+    MI->addOperand(MO);
     return *this;
   }
 };
@@ -135,7 +149,7 @@ inline MachineInstrBuilder BuildMI(MachineFunction &MF,
                                    const TargetInstrDesc &TID,
                                    unsigned DestReg) {
   return MachineInstrBuilder(MF.CreateMachineInstr(TID, DL))
-           .addReg(DestReg, true);
+           .addReg(DestReg, RegState::Define);
 }
 
 /// BuildMI - This version of the builder inserts the newly-built
@@ -149,7 +163,7 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                                    unsigned DestReg) {
   MachineInstr *MI = BB.getParent()->CreateMachineInstr(TID, DL);
   BB.insert(I, MI);
-  return MachineInstrBuilder(MI).addReg(DestReg, true);
+  return MachineInstrBuilder(MI).addReg(DestReg, RegState::Define);
 }
 
 /// BuildMI - This version of the builder inserts the newly-built
@@ -184,6 +198,22 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
                                    const TargetInstrDesc &TID,
                                    unsigned DestReg) {
   return BuildMI(*BB, BB->end(), DL, TID, DestReg);
+}
+
+inline unsigned getDefRegState(bool B) {
+  return B ? RegState::Define : 0;
+}
+inline unsigned getImplRegState(bool B) {
+  return B ? RegState::Implicit : 0;
+}
+inline unsigned getKillRegState(bool B) {
+  return B ? RegState::Kill : 0;
+}
+inline unsigned getDeadRegState(bool B) {
+  return B ? RegState::Dead : 0;
+}
+inline unsigned getUndefRegState(bool B) {
+  return B ? RegState::Undef : 0;
 }
 
 } // End llvm namespace

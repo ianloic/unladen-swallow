@@ -24,7 +24,6 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
-#include <ostream>
 using namespace llvm;
 
 char LoopInfo::ID = 0;
@@ -40,7 +39,7 @@ X("loops", "Natural Loop Information", true, true);
 //
 bool LoopInfo::runOnFunction(Function &) {
   releaseMemory();
-  LI->Calculate(getAnalysis<DominatorTree>().getBase());    // Update
+  LI.Calculate(getAnalysis<DominatorTree>().getBase());    // Update
   return false;
 }
 

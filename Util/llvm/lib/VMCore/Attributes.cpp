@@ -59,6 +59,10 @@ std::string Attribute::getAsString(Attributes Attrs) {
     Result += "ssp ";
   if (Attrs & Attribute::StackProtectReq)
     Result += "sspreq ";
+  if (Attrs & Attribute::NoRedZone)
+    Result += "noredzone ";
+  if (Attrs & Attribute::NoImplicitFloat)
+    Result += "noimplicitfloat ";
   if (Attrs & Attribute::Alignment) {
     Result += "align ";
     Result += utostr(Attribute::getAlignmentFromAttrs(Attrs));
@@ -108,7 +112,7 @@ public:
   void DropRef() { if (--RefCount == 0) delete this; }
   
   void Profile(FoldingSetNodeID &ID) const {
-    Profile(ID, &Attrs[0], Attrs.size());
+    Profile(ID, Attrs.data(), Attrs.size());
   }
   static void Profile(FoldingSetNodeID &ID, const AttributeWithIndex *Attr,
                       unsigned NumAttrs) {
@@ -261,7 +265,7 @@ AttrListPtr AttrListPtr::addAttr(unsigned Idx, Attributes Attrs) const {
                        OldAttrList.begin()+i, OldAttrList.end());
   }
   
-  return get(&NewAttrList[0], NewAttrList.size());
+  return get(NewAttrList.data(), NewAttrList.size());
 }
 
 AttrListPtr AttrListPtr::removeAttr(unsigned Idx, Attributes Attrs) const {
@@ -296,7 +300,7 @@ AttrListPtr AttrListPtr::removeAttr(unsigned Idx, Attributes Attrs) const {
   NewAttrList.insert(NewAttrList.end(), 
                      OldAttrList.begin()+i, OldAttrList.end());
   
-  return get(&NewAttrList[0], NewAttrList.size());
+  return get(NewAttrList.data(), NewAttrList.size());
 }
 
 void AttrListPtr::dump() const {

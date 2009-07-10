@@ -61,6 +61,7 @@ module TypeKind : sig
   | Fp128
   | Ppc_fp128
   | Label
+  | Metadata
   | Integer
   | Function
   | Struct
@@ -109,6 +110,21 @@ module CallConv : sig
                               convention from C. *)
   val x86_fastcall : int  (** [x86_fastcall] is the familiar fastcall calling
                               convention from C. *)
+end
+
+module Attribute : sig
+  type t =
+  | Zext
+  | Sext
+  | Noreturn
+  | Inreg
+  | Structret
+  | Nounwind
+  | Noalias
+  | Byval
+  | Nest
+  | Readnone
+  | Readonly
 end
 
 (** The predicate for an integer comparison ([icmp]) instruction.
@@ -499,9 +515,15 @@ external const_vector : llvalue array -> llvalue = "llvm_const_vector"
 
 (** {7 Constant expressions} *)
 
+(** [align_of ty] returns the alignof constant for the type [ty]. This is
+    equivalent to [const_ptrtoint (const_gep (const_null (pointer_type {i8,ty}))
+    (const_int i32_type 0) (const_int i32_type 1)) i32_type], but considerably
+    more readable.  See the method [llvm::ConstantExpr::getAlignOf]. *)
+external align_of : lltype -> llvalue = "LLVMAlignOf"
+
 (** [size_of ty] returns the sizeof constant for the type [ty]. This is
     equivalent to [const_ptrtoint (const_gep (const_null (pointer_type ty))
-    (const_int i64_type 1)) i64_type], but considerably more readable.
+    (const_int i32_type 1)) i64_type], but considerably more readable.
     See the method [llvm::ConstantExpr::getSizeOf]. *)
 external size_of : lltype -> llvalue = "LLVMSizeOf"
 
@@ -931,6 +953,15 @@ external gc : llvalue -> string option = "llvm_gc"
     [gc]. See the method [llvm::Function::setGC]. *)
 external set_gc : string option -> llvalue -> unit = "llvm_set_gc"
 
+(** [add_function_attr f a] adds attribute [a] to the return type of function
+    [f]. *)
+external add_function_attr : llvalue -> Attribute.t -> unit
+                           = "llvm_add_function_attr"
+
+(** [remove_function_attr f a] removes attribute [a] from the return type of
+    function [f]. *)
+external remove_function_attr : llvalue -> Attribute.t -> unit
+                              = "llvm_remove_function_attr"
 
 (** {7 Operations on params} *)
 
@@ -984,6 +1015,16 @@ val rev_iter_params : (llvalue -> unit) -> llvalue -> unit
     [b1,...,bN] are the parameters of function [fn]. Tail recursive. *)
 val fold_right_params : (llvalue -> 'a -> 'a) -> llvalue -> 'a -> 'a
 
+(** [add_param p a] adds attribute [a] to parameter [p]. *)
+external add_param_attr : llvalue -> Attribute.t -> unit = "llvm_add_param_attr"
+
+(** [remove_param_attr p a] removes attribute [a] from parameter [p]. *)
+external remove_param_attr : llvalue -> Attribute.t -> unit
+                           = "llvm_remove_param_attr"
+
+(** [set_param_alignment p a] set the alignment of parameter [p] to [a]. *)
+external set_param_alignment : llvalue -> int -> unit
+                             = "llvm_set_param_alignment"
 
 (** {7 Operations on basic blocks} *)
 
@@ -1126,6 +1167,18 @@ external instruction_call_conv: llvalue -> int
     and [llvm::InvokeInst::setCallingConv]. *)
 external set_instruction_call_conv: int -> llvalue -> unit
                                   = "llvm_set_instruction_call_conv"
+
+(** [add_instruction_param_attr ci i a] adds attribute [a] to the [i]th
+    parameter of the call or invoke instruction [ci]. [i]=0 denotes the return
+    value. *)
+external add_instruction_param_attr : llvalue -> int -> Attribute.t -> unit
+  = "llvm_add_instruction_param_attr"
+
+(** [remove_instruction_param_attr ci i a] removes attribute [a] from the
+    [i]th parameter of the call or invoke instruction [ci]. [i]=0 denotes the
+    return value. *)
+external remove_instruction_param_attr : llvalue -> int -> Attribute.t -> unit
+  = "llvm_remove_instruction_param_attr"
 
 (** {Operations on call instructions (only)} *)
 

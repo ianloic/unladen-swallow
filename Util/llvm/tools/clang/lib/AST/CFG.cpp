@@ -22,9 +22,6 @@
 #include "llvm/Support/Compiler.h"
 #include <llvm/Support/Allocator.h>
 #include <llvm/Support/Format.h>
-#include <iomanip>
-#include <algorithm>
-#include <sstream>
 
 using namespace clang;
 
@@ -559,7 +556,7 @@ CFGBlock* CFGBuilder::VisitNullStmt(NullStmt* Statement) {
 
 CFGBlock* CFGBuilder::VisitCompoundStmt(CompoundStmt* C) {
   
-  CFGBlock* LastBlock = NULL;
+  CFGBlock* LastBlock = Block;
 
   for (CompoundStmt::reverse_body_iterator I=C->body_rbegin(), E=C->body_rend();
                                                                I != E; ++I ) {
@@ -937,7 +934,18 @@ CFGBlock* CFGBuilder::VisitObjCAtSynchronizedStmt(ObjCAtSynchronizedStmt* S) {
   // FIXME: Add locking 'primitives' to CFG for @synchronized.
   
   // Inline the body.
-  Visit(S->getSynchBody());
+  CFGBlock *SyncBlock = Visit(S->getSynchBody());
+  
+  // The sync body starts its own basic block.  This makes it a little easier
+  // for diagnostic clients.
+  if (SyncBlock) {
+    if (!FinishBlock(SyncBlock))
+      return 0;
+    
+    Block = 0;
+  }
+    
+  Succ = SyncBlock;
   
   // Inline the sync expression.
   return Visit(S->getSynchExpr());
@@ -1476,10 +1484,11 @@ class VISIBILITY_HIDDEN StmtPrinterHelper : public PrinterHelper  {
   StmtMapTy StmtMap;
   signed CurrentBlock;
   unsigned CurrentStmt;
-
+  const LangOptions &LangOpts;
 public:
 
-  StmtPrinterHelper(const CFG* cfg) : CurrentBlock(0), CurrentStmt(0) {
+  StmtPrinterHelper(const CFG* cfg, const LangOptions &LO)
+    : CurrentBlock(0), CurrentStmt(0), LangOpts(LO) {
     for (CFG::const_iterator I = cfg->begin(), E = cfg->end(); I != E; ++I ) {
       unsigned j = 1;
       for (CFGBlock::const_iterator BI = I->begin(), BEnd = I->end() ;
@@ -1490,6 +1499,7 @@ public:
             
   virtual ~StmtPrinterHelper() {}
   
+  const LangOptions &getLangOpts() const { return LangOpts; }
   void setBlockID(signed i) { CurrentBlock = i; }
   void setStmtID(unsigned i) { CurrentStmt = i; }
   
@@ -1508,29 +1518,35 @@ public:
     return true;
   }
 };
+} // end anonymous namespace
 
+
+namespace {
 class VISIBILITY_HIDDEN CFGBlockTerminatorPrint
   : public StmtVisitor<CFGBlockTerminatorPrint,void> {
   
   llvm::raw_ostream& OS;
   StmtPrinterHelper* Helper;
+  PrintingPolicy Policy;
+
 public:
-  CFGBlockTerminatorPrint(llvm::raw_ostream& os, StmtPrinterHelper* helper)
-    : OS(os), Helper(helper) {}
+  CFGBlockTerminatorPrint(llvm::raw_ostream& os, StmtPrinterHelper* helper,
+                          const PrintingPolicy &Policy)
+    : OS(os), Helper(helper), Policy(Policy) {}
   
   void VisitIfStmt(IfStmt* I) {
     OS << "if ";
-    I->getCond()->printPretty(OS,Helper);
+    I->getCond()->printPretty(OS,Helper,Policy);
   }
   
   // Default case.
-  void VisitStmt(Stmt* Terminator) { Terminator->printPretty(OS); }
+  void VisitStmt(Stmt* Terminator) { Terminator->printPretty(OS, Helper, Policy); }
   
   void VisitForStmt(ForStmt* F) {
     OS << "for (" ;
     if (F->getInit()) OS << "...";
     OS << "; ";
-    if (Stmt* C = F->getCond()) C->printPretty(OS,Helper);
+    if (Stmt* C = F->getCond()) C->printPretty(OS, Helper, Policy);
     OS << "; ";
     if (F->getInc()) OS << "...";
     OS << ")";
@@ -1538,33 +1554,33 @@ public:
   
   void VisitWhileStmt(WhileStmt* W) {
     OS << "while " ;
-    if (Stmt* C = W->getCond()) C->printPretty(OS,Helper);
+    if (Stmt* C = W->getCond()) C->printPretty(OS, Helper, Policy);
   }
   
   void VisitDoStmt(DoStmt* D) {
     OS << "do ... while ";
-    if (Stmt* C = D->getCond()) C->printPretty(OS,Helper);
+    if (Stmt* C = D->getCond()) C->printPretty(OS, Helper, Policy);
   }
   
   void VisitSwitchStmt(SwitchStmt* Terminator) {
     OS << "switch ";
-    Terminator->getCond()->printPretty(OS,Helper);
+    Terminator->getCond()->printPretty(OS, Helper, Policy);
   }
   
   void VisitConditionalOperator(ConditionalOperator* C) {
-    C->getCond()->printPretty(OS,Helper);
+    C->getCond()->printPretty(OS, Helper, Policy);
     OS << " ? ... : ...";  
   }
   
   void VisitChooseExpr(ChooseExpr* C) {
     OS << "__builtin_choose_expr( ";
-    C->getCond()->printPretty(OS,Helper);
+    C->getCond()->printPretty(OS, Helper, Policy);
     OS << " )";
   }
   
   void VisitIndirectGotoStmt(IndirectGotoStmt* I) {
     OS << "goto *";
-    I->getTarget()->printPretty(OS,Helper);
+    I->getTarget()->printPretty(OS, Helper, Policy);
   }
   
   void VisitBinaryOperator(BinaryOperator* B) {
@@ -1573,7 +1589,7 @@ public:
       return;
     }
     
-    B->getLHS()->printPretty(OS,Helper);
+    B->getLHS()->printPretty(OS, Helper, Policy);
     
     switch (B->getOpcode()) {
       case BinaryOperator::LOr:
@@ -1588,12 +1604,14 @@ public:
   }
   
   void VisitExpr(Expr* E) {
-    E->printPretty(OS,Helper);
+    E->printPretty(OS, Helper, Policy);
   }                                                       
 };
+} // end anonymous namespace
+
   
-  
-void print_stmt(llvm::raw_ostream&OS, StmtPrinterHelper* Helper, Stmt* Terminator) {    
+static void print_stmt(llvm::raw_ostream &OS, StmtPrinterHelper* Helper,
+                       Stmt* Terminator) {
   if (Helper) {
     // special printing for statement-expressions.
     if (StmtExpr* SE = dyn_cast<StmtExpr>(Terminator)) {
@@ -1618,14 +1636,15 @@ void print_stmt(llvm::raw_ostream&OS, StmtPrinterHelper* Helper, Stmt* Terminato
     }  
   }
   
-  Terminator->printPretty(OS, Helper);
+  Terminator->printPretty(OS, Helper, PrintingPolicy(Helper->getLangOpts()));
   
   // Expressions need a newline.
   if (isa<Expr>(Terminator)) OS << '\n';
 }
   
-void print_block(llvm::raw_ostream& OS, const CFG* cfg, const CFGBlock& B,
-                 StmtPrinterHelper* Helper, bool print_edges) {
+static void print_block(llvm::raw_ostream& OS, const CFG* cfg,
+                        const CFGBlock& B,
+                        StmtPrinterHelper* Helper, bool print_edges) {
  
   if (Helper) Helper->setBlockID(B.getBlockID());
   
@@ -1651,10 +1670,12 @@ void print_block(llvm::raw_ostream& OS, const CFG* cfg, const CFGBlock& B,
       OS << L->getName();
     else if (CaseStmt* C = dyn_cast<CaseStmt>(Terminator)) {
       OS << "case ";
-      C->getLHS()->printPretty(OS);
+      C->getLHS()->printPretty(OS, Helper,
+                               PrintingPolicy(Helper->getLangOpts()));
       if (C->getRHS()) {
         OS << " ... ";
-        C->getRHS()->printPretty(OS);
+        C->getRHS()->printPretty(OS, Helper,
+                                 PrintingPolicy(Helper->getLangOpts()));
       }
     }  
     else if (isa<DefaultStmt>(Terminator))
@@ -1692,7 +1713,8 @@ void print_block(llvm::raw_ostream& OS, const CFG* cfg, const CFGBlock& B,
     
     if (Helper) Helper->setBlockID(-1);
     
-    CFGBlockTerminatorPrint TPrinter(OS,Helper);
+    CFGBlockTerminatorPrint TPrinter(OS, Helper,
+                                     PrintingPolicy(Helper->getLangOpts()));
     TPrinter.Visit(const_cast<Stmt*>(B.getTerminator()));
     OS << '\n';
   }
@@ -1730,15 +1752,13 @@ void print_block(llvm::raw_ostream& OS, const CFG* cfg, const CFGBlock& B,
   }
 }                   
 
-} // end anonymous namespace
 
 /// dump - A simple pretty printer of a CFG that outputs to stderr.
-void CFG::dump() const { print(llvm::errs()); }
+void CFG::dump(const LangOptions &LO) const { print(llvm::errs(), LO); }
 
 /// print - A simple pretty printer of a CFG that outputs to an ostream.
-void CFG::print(llvm::raw_ostream& OS) const {
-  
-  StmtPrinterHelper Helper(this);
+void CFG::print(llvm::raw_ostream &OS, const LangOptions &LO) const {
+  StmtPrinterHelper Helper(this, LO);
   
   // Print the entry block.
   print_block(OS, this, getEntry(), &Helper, true);
@@ -1758,18 +1778,22 @@ void CFG::print(llvm::raw_ostream& OS) const {
 }  
 
 /// dump - A simply pretty printer of a CFGBlock that outputs to stderr.
-void CFGBlock::dump(const CFG* cfg) const { print(llvm::errs(), cfg); }
+void CFGBlock::dump(const CFG* cfg, const LangOptions &LO) const {
+  print(llvm::errs(), cfg, LO);
+}
 
 /// print - A simple pretty printer of a CFGBlock that outputs to an ostream.
 ///   Generally this will only be called from CFG::print.
-void CFGBlock::print(llvm::raw_ostream& OS, const CFG* cfg) const {
-  StmtPrinterHelper Helper(cfg);
+void CFGBlock::print(llvm::raw_ostream& OS, const CFG* cfg,
+                     const LangOptions &LO) const {
+  StmtPrinterHelper Helper(cfg, LO);
   print_block(OS, cfg, *this, &Helper, true);
 }
 
 /// printTerminator - A simple pretty printer of the terminator of a CFGBlock.
-void CFGBlock::printTerminator(llvm::raw_ostream& OS) const {  
-  CFGBlockTerminatorPrint TPrinter(OS,NULL);
+void CFGBlock::printTerminator(llvm::raw_ostream &OS,
+                               const LangOptions &LO) const {  
+  CFGBlockTerminatorPrint TPrinter(OS, NULL, PrintingPolicy(LO));
   TPrinter.Visit(const_cast<Stmt*>(getTerminator()));
 }
 
@@ -1861,9 +1885,9 @@ bool CFGBlock::hasBinaryBranchTerminator() const {
 static StmtPrinterHelper* GraphHelper;  
 #endif
 
-void CFG::viewCFG() const {
+void CFG::viewCFG(const LangOptions &LO) const {
 #ifndef NDEBUG
-  StmtPrinterHelper H(this);
+  StmtPrinterHelper H(this, LO);
   GraphHelper = &H;
   llvm::ViewGraph(this,"CFG");
   GraphHelper = NULL;
@@ -1873,7 +1897,8 @@ void CFG::viewCFG() const {
 namespace llvm {
 template<>
 struct DOTGraphTraits<const CFG*> : public DefaultDOTGraphTraits {
-  static std::string getNodeLabel(const CFGBlock* Node, const CFG* Graph) {
+  static std::string getNodeLabel(const CFGBlock* Node, const CFG* Graph,
+                                  bool ShortNames) {
 
 #ifndef NDEBUG
     std::string OutSStr;

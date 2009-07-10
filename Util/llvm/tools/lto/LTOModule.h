@@ -50,9 +50,10 @@ public:
     static bool              isBitcodeFileForTarget(const char* path, 
                                                     const char* triplePrefix);
 
-    static LTOModule*        makeLTOModule(const char* path, std::string& errMsg);
+    static LTOModule*        makeLTOModule(const char* path,
+                                          std::string& errMsg);
     static LTOModule*        makeLTOModule(const void* mem, size_t length,
-                                                            std::string& errMsg);
+                                           std::string& errMsg);
 
     const char*              getTargetTriple();
     uint32_t                 getSymbolCount();
@@ -77,13 +78,19 @@ private:
     void                    addDefinedDataSymbol(llvm::GlobalValue* v, 
                                                         llvm::Mangler &mangler);
     void                    addAsmGlobalSymbol(const char *);
-    static bool             isTargetMatch(llvm::MemoryBuffer* memBuffer, 
+    void                    addObjCClass(llvm::GlobalVariable* clgv);
+    void                    addObjCCategory(llvm::GlobalVariable* clgv);
+    void                    addObjCClassRef(llvm::GlobalVariable* clgv);
+    bool                    objcClassNameFromExpression(llvm::Constant* c, 
+                                                    std::string& name);
+
+    static bool             isTargetMatch(llvm::MemoryBuffer* memBuffer,
                                                     const char* triplePrefix);
-    
-    static LTOModule*       makeLTOModule(llvm::MemoryBuffer* buffer, 
+
+    static LTOModule*       makeLTOModule(llvm::MemoryBuffer* buffer,
                                                         std::string& errMsg);
-	static llvm::MemoryBuffer* makeBuffer(const void* mem, size_t length);
-                                                        
+    static llvm::MemoryBuffer* makeBuffer(const void* mem, size_t length);
+
     typedef llvm::StringMap<uint8_t> StringSet;
     
     struct NameAndAttributes { 

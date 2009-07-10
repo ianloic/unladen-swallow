@@ -20,11 +20,13 @@
 #include "IA64.h"
 #include "IA64TargetMachine.h"
 #include "llvm/Module.h"
+#include "llvm/MDNode.h"
 #include "llvm/Type.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/Statistic.h"
@@ -37,9 +39,8 @@ namespace {
     std::set<std::string> ExternalFunctionNames, ExternalObjectNames;
   public:
     explicit IA64AsmPrinter(raw_ostream &O, TargetMachine &TM,
-                            const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                            bool V)
-      : AsmPrinter(O, TM, T, OL, V) {}
+                            const TargetAsmInfo *T, bool V)
+      : AsmPrinter(O, TM, T, V) {}
 
     virtual const char *getPassName() const {
       return "IA64 Assembly Printer";
@@ -136,7 +137,7 @@ bool IA64AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   SwitchToSection(TAI->SectionForGlobal(F));
 
   // Print out labels for the function.
-  EmitAlignment(5);
+  EmitAlignment(MF.getAlignment());
   O << "\t.global\t" << CurrentFnName << '\n';
 
   printVisibility(CurrentFnName, F->getVisibility());
@@ -269,7 +270,9 @@ void IA64AsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   O << "\n\n";
   std::string name = Mang->getValueName(GVar);
   Constant *C = GVar->getInitializer();
-  unsigned Size = TD->getTypePaddedSize(C->getType());
+  if (isa<MDNode>(C) || isa<MDString>(C))
+    return;
+  unsigned Size = TD->getTypeAllocSize(C->getType());
   unsigned Align = TD->getPreferredAlignmentLog(GVar);
 
   printVisibility(name, GVar->getVisibility());
@@ -315,16 +318,13 @@ void IA64AsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
    case GlobalValue::PrivateLinkage:
     break;
    case GlobalValue::GhostLinkage:
-    cerr << "GhostLinkage cannot appear in IA64AsmPrinter!\n";
-    abort();
+    LLVM_UNREACHABLE("GhostLinkage cannot appear in IA64AsmPrinter!");
    case GlobalValue::DLLImportLinkage:
-    cerr << "DLLImport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLImport linkage is not supported by this target!");
    case GlobalValue::DLLExportLinkage:
-    cerr << "DLLExport linkage is not supported by this target!\n";
-    abort();
+    LLVM_UNREACHABLE("DLLExport linkage is not supported by this target!");
    default:
-    assert(0 && "Unknown linkage type!");
+    LLVM_UNREACHABLE("Unknown linkage type!");
   }
 
   EmitAlignment(Align, GVar);
@@ -370,7 +370,18 @@ bool IA64AsmPrinter::doFinalization(Module &M) {
 ///
 FunctionPass *llvm::createIA64CodePrinterPass(raw_ostream &o,
                                               IA64TargetMachine &tm,
-                                              CodeGenOpt::Level OptLevel,
                                               bool verbose) {
-  return new IA64AsmPrinter(o, tm, tm.getTargetAsmInfo(), OptLevel, verbose);
+  return new IA64AsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
 }
+
+namespace {
+  static struct Register {
+    Register() {
+      IA64TargetMachine::registerAsmPrinter(createIA64CodePrinterPass);
+    }
+  } Registrator;
+}
+
+
+// Force static initialization.
+extern "C" void LLVMInitializeIA64AsmPrinter() { }

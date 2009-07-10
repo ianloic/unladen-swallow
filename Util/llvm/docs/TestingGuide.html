@@ -36,7 +36,7 @@
   <li><a href="#testsuitestructure">Test suite structure</a></li>
   <li><a href="#testsuiterun">Running the test suite</a>
     <ul>
-      <li><a href="#testsuiteexternal">Configuring external tests</a></li>
+      <li><a href="#testsuiteexternal">Configuring External Tests</a></li>
       <li><a href="#testsuitetests">Running different tests</a></li>
       <li><a href="#testsuiteoutput">Generating test output</a></li>
       <li><a href="#testsuitecustom">Writing custom tests for llvm-test</a></li>
@@ -78,26 +78,7 @@ required to build LLVM, plus the following:</p>
 <dd>Expect is required by DejaGNU.</dd>
 <dt><a href="http://www.tcl.tk/software/tcltk/">tcl</a></dt>
 <dd>Tcl is required by DejaGNU. </dd>
-
-<ul>
-<li><tt>./configure --with-f2c=$DIR</tt><br>
-This will specify a new <tt>$DIR</tt> for the above-described search
-process.  This will only work if the binary, header, and library are in their
-respective subdirectories of <tt>$DIR</tt>.</li>
-
-<li><tt>./configure --with-f2c-bin=/binary/path --with-f2c-inc=/include/path
---with-f2c-lib=/lib/path</tt><br>
-This allows you to specify the F2C components separately.  Note: if you choose
-this route, you MUST specify all three components, and you need to only specify
-<em>directories</em> where the files are located; do NOT include the
-filenames themselves on the <tt>configure</tt> line.</li>
-</ul></dd>
 </dl>
-
-<p>Darwin (Mac OS X) developers can simplify the installation of Expect and tcl
-by using fink.  <tt>fink install expect</tt> will install both. Alternatively,
-Darwinports users can use <tt>sudo port install expect</tt> to install Expect
-and tcl.</p>
 
 </div>
 
@@ -122,14 +103,17 @@ tests" and are in the <tt>llvm</tt> module in subversion under the
 
 <div class="doc_text">
 
-<p>Code fragments are small pieces of code that test a specific feature of LLVM
-or trigger a specific bug in LLVM.  They are usually written in LLVM assembly
-language, but can be written in other languages if the test targets a particular
-language front end. These tests are driven by the DejaGNU testing framework,
-which is hidden behind a few simple makefiles.</p>
+<p>Code fragments are small pieces of code that test a specific
+feature of LLVM or trigger a specific bug in LLVM.  They are usually
+written in LLVM assembly language, but can be written in other
+languages if the test targets a particular language front end (and the
+appropriate <tt>--with-llvmgcc</tt> options were used
+at <tt>configure</tt> time of the <tt>llvm</tt> module). These tests
+are driven by the DejaGNU testing framework, which is hidden behind a
+few simple makefiles.</p>
 
-<p>These code fragments are not complete programs. The code generated from them is
-never executed to determine correct behavior.</p> 
+<p>These code fragments are not complete programs. The code generated
+from them is never executed to determine correct behavior.</p>
 
 <p>These code fragment tests are located in the <tt>llvm/test</tt>
 directory.</p>
@@ -251,9 +235,17 @@ programs), first checkout and setup the <tt>test-suite</tt> module:</p>
 % cd ..
 % ./configure --with-llvmgccdir=$LLVM_GCC_DIR
 </pre>
-<p>where <tt>$LLVM_GCC_DIR</tt> is the directory where you <em>installed</em>
-llvm-gcc, not it's src or obj dir.</p>
 </div>
+
+<p>where <tt>$LLVM_GCC_DIR</tt> is the directory where
+you <em>installed</em> llvm-gcc, not it's src or obj
+dir. The <tt>--with-llvmgccdir</tt> option assumes that
+the <tt>llvm-gcc-4.2</tt> module was configured with
+<tt>--program-prefix=llvm-</tt>, and therefore that the C and C++
+compiler drivers are called <tt>llvm-gcc</tt> and <tt>llvm-g++</tt>
+respectively.  If this is not the case,
+use <tt>--with-llvmgcc</tt>/<tt>--with-llvmgxx</tt> to specify each
+executable's location.</p>
 
 <p>Then, run the entire test suite by running make in the <tt>test-suite</tt>
 directory:</p>
@@ -447,6 +439,11 @@ that subdirectory.</p>
 ... | grep {i32\\*}
 </pre>
 </div>
+
+<p>If your system includes GNU <tt>grep</tt>, make sure
+that <tt>GREP_OPTIONS</tt> is not set in your environment. Otherwise,
+you may get invalid results (both false positives and false
+negatives).</p>
 
 </div>
 
@@ -665,7 +662,7 @@ go here.</p></li>
 <p>The External directory contains Makefiles for building code that is external
 to (i.e., not distributed with) LLVM.  The most prominent members of this
 directory are the SPEC 95 and SPEC 2000 benchmark suites. The <tt>External</tt>
-directory does not contain these actual tests,but only the Makefiles that know
+directory does not contain these actual tests, but only the Makefiles that know
 how to properly compile these programs from somewhere else. The presence and
 location of these external programs is configured by the llvm-test
 <tt>configure</tt> script.</p></li>
@@ -710,15 +707,20 @@ test suite creates temporary files during execution.</p>
 % svn co http://llvm.org/svn/llvm-project/test-suite/trunk test-suite
 </pre>
 </div>
-      <p>This will get the test suite into <tt>llvm/projects/test-suite</tt>.</p>
+    <p>This will get the test suite into <tt>llvm/projects/test-suite</tt>.</p>
   </li>
-  <li><p>Configure llvm from the top level of each build tree (LLVM object directory tree)
-  in which you want to run the test suite, just as you do before building LLVM.</p>
-  <p>When running configure, you must either: (1) have <tt>llvm-gcc</tt>
-  in your path, or (2) specify the directory where <tt>llvm-gcc</tt> is
-  installed using <tt>--with-llvmgccdir=$LLVM_GCC_DIR</tt>.</p>
-  <p>This step tells the configure machinery that the test suite
-  is now available so it can be configured for your build tree:</p>
+  <li><p>Configure and build <tt>llvm</tt>.</p></li>
+  <li><p>Configure and build <tt>llvm-gcc</tt>.</p></li>
+  <li><p>Install <tt>llvm-gcc</tt> somewhere.</p></li>
+  <li><p><em>Re-configure</em> <tt>llvm</tt> from the top level of
+      each build tree (LLVM object directory tree) in which you want
+      to run the test suite, just as you do before building LLVM.</p>
+    <p>During the <em>re-configuration</em>, you must either: (1)
+      have <tt>llvm-gcc</tt> you just built in your path, or (2)
+      specify the directory where your just-built <tt>llvm-gcc</tt> is
+      installed using <tt>--with-llvmgccdir=$LLVM_GCC_DIR</tt>.</p>
+    <p>You must also tell the configure machinery that the test suite
+      is available so it can be configured for your build tree:</p>
 <div class="doc_code">
 <pre>
 % cd $LLVM_OBJ_ROOT ; $LLVM_SRC_ROOT/configure [--with-llvmgccdir=$LLVM_GCC_DIR]
@@ -741,14 +743,20 @@ test suite creates temporary files during execution.</p>
 have the suite checked out and configured, you don't need to do it again (unless
 the test code or configure script changes).</p>
 
+</div>
+
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsection">
-<a name="testsuiteexternal">Configuring external tests</a></div>
+<a name="testsuiteexternal">Configuring External Tests</a></div>
 <!-- _______________________________________________________________________ -->
 
 <div class="doc_text">
-<p>Note, when configuring the <tt>test-suite</tt> module, you might want to
-specify the following configuration option:</p>
+<p>In order to run the External tests in the <tt>test-suite</tt>
+  module, you must specify <i>--with-externals</i>.  This
+  must be done during the <em>re-configuration</em> step (see above),
+  and the <tt>llvm</tt> re-configuration must recognize the
+  previously-built <tt>llvm-gcc</tt>.  If any of these is missing or
+  neglected, the External tests won't work.</p>
 <dl>
 <dt><i>--with-externals</i></dt>
 <dt><i>--with-externals=&lt;<tt>directory</tt>&gt;</i></dt>
@@ -774,7 +782,7 @@ specify the following configuration option:</p>
 <a name="testsuitetests">Running different tests</a></div>
 <!-- _______________________________________________________________________ -->
 <div class="doc_text">
-<p>In addition to the regular "whole program"  tests, the <tt>test-suite</tt>
+<p>In addition to the regular "whole program" tests, the <tt>test-suite</tt>
 module also provides a mechanism for compiling the programs in different ways.
 If the variable TEST is defined on the <tt>gmake</tt> command line, the test system will
 include a Makefile named <tt>TEST.&lt;value of TEST variable&gt;.Makefile</tt>.
@@ -966,7 +974,7 @@ know. Thanks!</p>
 
   John T. Criswell, Reid Spencer, and Tanya Lattner<br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-03-30 11:56:53 -0700 (Mon, 30 Mar 2009) $
+  Last modified: $Date: 2009-06-25 22:44:53 -0700 (Thu, 25 Jun 2009) $
 </address>
 </body>
 </html>

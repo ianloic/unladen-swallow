@@ -17,7 +17,9 @@
 #include "llvm-c/lto.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/System/Errno.h"
 #include "llvm/System/Path.h"
+#include "llvm/System/Program.h"
 
 #include <cerrno>
 #include <cstdlib>
@@ -44,7 +46,7 @@ namespace {
   int gold_version = 0;
 
   bool generate_api_file = false;
-  const char *gcc_path = NULL;
+  const char *as_path = NULL;
 
   struct claimed_file {
     lto_module_t M;
@@ -102,12 +104,12 @@ ld_plugin_status onload(ld_plugin_tv *tv) {
       case LDPT_OPTION:
         if (strcmp("generate-api-file", tv->tv_u.tv_string) == 0) {
           generate_api_file = true;
-        } else if (strncmp("gcc=", tv->tv_u.tv_string, 4) == 0) {
-          if (gcc_path) {
-            (*message)(LDPL_WARNING, "Path to gcc specified twice. "
+        } else if (strncmp("as=", tv->tv_u.tv_string, 3) == 0) {
+          if (as_path) {
+            (*message)(LDPL_WARNING, "Path to as specified twice. "
                        "Discarding %s", tv->tv_u.tv_string);
           } else {
-            gcc_path = strdup(tv->tv_u.tv_string + 4);
+            as_path = strdup(tv->tv_u.tv_string + 3);
           }
         } else {
           (*message)(LDPL_WARNING, "Ignoring flag %s", tv->tv_u.tv_string);
@@ -182,7 +184,7 @@ ld_plugin_status claim_file_hook(const ld_plugin_input_file *file,
       (*message)(LDPL_ERROR,
                  "Failed to seek to archive member of %s at offset %d: %s\n", 
                  file->name,
-                 file->offset, strerror(errno));
+                 file->offset, sys::StrError(errno).c_str());
       return LDPS_ERR;
     }
     buf = malloc(file->filesize);
@@ -197,7 +199,7 @@ ld_plugin_status claim_file_hook(const ld_plugin_input_file *file,
                  "Failed to read archive member of %s at offset %d: %s\n",
                  file->name,
                  file->offset,
-                 strerror(errno));
+                 sys::StrError(errno).c_str());
       free(buf);
       return LDPS_ERR;
     }
@@ -344,8 +346,10 @@ ld_plugin_status all_symbols_read_hook(void) {
 
   lto_codegen_set_pic_model(cg, output_type);
   lto_codegen_set_debug_model(cg, LTO_DEBUG_MODEL_DWARF);
-  if (gcc_path)
-    lto_codegen_set_gcc_path(cg, gcc_path);
+  if (as_path) {
+    sys::Path p = sys::Program::FindProgramByName(as_path);
+    lto_codegen_set_assembler_path(cg, p.c_str());
+  }
 
   size_t bufsize = 0;
   const char *buffer = static_cast<const char *>(lto_codegen_compile(cg,

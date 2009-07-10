@@ -2,6 +2,7 @@
 ; RUN: llvm-as < %s | llc -march=x86 -stats |& not grep {Number of available reloads turned into copies}
 ; RUN: llvm-as < %s | llc -march=x86 -stats |& grep {Number of machine instrs printed} | grep 39
 ; PR3495
+; The loop reversal kicks in once here, resulting in one fewer instruction.
 
 target triple = "i386-pc-linux-gnu"
 @x = external global [8 x i32], align 32		; <[8 x i32]*> [#uses=1]

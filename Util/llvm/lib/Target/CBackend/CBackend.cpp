@@ -35,6 +35,7 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/InstVisitor.h"
 #include "llvm/Support/Mangler.h"
@@ -58,6 +59,9 @@ int CBackendTargetMachineModule = 0;
 
 // Register the target.
 static RegisterTarget<CTargetMachine> X("c", "C backend");
+
+// Force static initialization.
+extern "C" void LLVMInitializeCBackendTarget() { }
 
 namespace {
   /// CBackendNameAllUsedStructsAndMergeFunctions - This pass inserts names for
@@ -97,12 +101,13 @@ namespace {
     std::set<Function*> intrinsicPrototypesAlreadyGenerated;
     std::set<const Argument*> ByValParams;
     unsigned FPCounter;
+    unsigned OpaqueCounter;
 
   public:
     static char ID;
     explicit CWriter(raw_ostream &o)
       : FunctionPass(&ID), Out(o), IL(0), Mang(0), LI(0), 
-        TheModule(0), TAsm(0), TD(0) {
+        TheModule(0), TAsm(0), TD(0), OpaqueCounter(0) {
       FPCounter = 0;
     }
 
@@ -317,8 +322,10 @@ namespace {
     void visitExtractValueInst(ExtractValueInst &I);
 
     void visitInstruction(Instruction &I) {
+#ifndef NDEBUG
       cerr << "C Writer does not know about " << I;
-      abort();
+#endif
+      llvm_unreachable();
     }
 
     void outputLValue(Instruction *I) {
@@ -497,12 +504,14 @@ CWriter::printSimpleType(raw_ostream &Out, const Type *Ty, bool isSigned,
     const VectorType *VTy = cast<VectorType>(Ty);
     return printSimpleType(Out, VTy->getElementType(), isSigned,
                      " __attribute__((vector_size(" +
-                     utostr(TD->getTypePaddedSize(VTy)) + " ))) " + NameSoFar);
+                     utostr(TD->getTypeAllocSize(VTy)) + " ))) " + NameSoFar);
   }
     
   default:
+#ifndef NDEBUG
     cerr << "Unknown primitive type: " << *Ty << "\n";
-    abort();
+#endif
+    llvm_unreachable();
   }
 }
 
@@ -542,12 +551,14 @@ CWriter::printSimpleType(std::ostream &Out, const Type *Ty, bool isSigned,
     const VectorType *VTy = cast<VectorType>(Ty);
     return printSimpleType(Out, VTy->getElementType(), isSigned,
                      " __attribute__((vector_size(" +
-                     utostr(TD->getTypePaddedSize(VTy)) + " ))) " + NameSoFar);
+                     utostr(TD->getTypeAllocSize(VTy)) + " ))) " + NameSoFar);
   }
     
   default:
+#ifndef NDEBUG
     cerr << "Unknown primitive type: " << *Ty << "\n";
-    abort();
+#endif
+    llvm_unreachable();
   }
 }
 
@@ -642,15 +653,13 @@ raw_ostream &CWriter::printType(raw_ostream &Out, const Type *Ty,
   }
 
   case Type::OpaqueTyID: {
-    static int Count = 0;
-    std::string TyName = "struct opaque_" + itostr(Count++);
+    std::string TyName = "struct opaque_" + itostr(OpaqueCounter++);
     assert(TypeNames.find(Ty) == TypeNames.end());
     TypeNames[Ty] = TyName;
     return Out << TyName << ' ' << NameSoFar;
   }
   default:
-    assert(0 && "Unhandled case in getTypeProps!");
-    abort();
+    LLVM_UNREACHABLE("Unhandled case in getTypeProps!");
   }
 
   return Out;
@@ -747,15 +756,13 @@ std::ostream &CWriter::printType(std::ostream &Out, const Type *Ty,
   }
 
   case Type::OpaqueTyID: {
-    static int Count = 0;
-    std::string TyName = "struct opaque_" + itostr(Count++);
+    std::string TyName = "struct opaque_" + itostr(OpaqueCounter++);
     assert(TypeNames.find(Ty) == TypeNames.end());
     TypeNames[Ty] = TyName;
     return Out << TyName << ' ' << NameSoFar;
   }
   default:
-    assert(0 && "Unhandled case in getTypeProps!");
-    abort();
+    LLVM_UNREACHABLE("Unhandled case in getTypeProps!");
   }
 
   return Out;
@@ -1000,8 +1007,11 @@ void CWriter::printConstant(Constant *CPV, bool Static) {
       Out << ')';
       return;
     case Instruction::Add:
+    case Instruction::FAdd:
     case Instruction::Sub:
+    case Instruction::FSub:
     case Instruction::Mul:
+    case Instruction::FMul:
     case Instruction::SDiv:
     case Instruction::UDiv:
     case Instruction::FDiv:
@@ -1020,9 +1030,12 @@ void CWriter::printConstant(Constant *CPV, bool Static) {
       bool NeedsClosingParens = printConstExprCast(CE, Static); 
       printConstantWithCast(CE->getOperand(0), CE->getOpcode());
       switch (CE->getOpcode()) {
-      case Instruction::Add: Out << " + "; break;
-      case Instruction::Sub: Out << " - "; break;
-      case Instruction::Mul: Out << " * "; break;
+      case Instruction::Add:
+      case Instruction::FAdd: Out << " + "; break;
+      case Instruction::Sub:
+      case Instruction::FSub: Out << " - "; break;
+      case Instruction::Mul:
+      case Instruction::FMul: Out << " * "; break;
       case Instruction::URem:
       case Instruction::SRem: 
       case Instruction::FRem: Out << " % "; break;
@@ -1096,9 +1109,11 @@ void CWriter::printConstant(Constant *CPV, bool Static) {
       return;
     }
     default:
+#ifndef NDEBUG
       cerr << "CWriter Error: Unhandled constant expression: "
            << *CE << "\n";
-      abort();
+#endif
+      llvm_unreachable();
     }
   } else if (isa<UndefValue>(CPV) && CPV->getType()->isSingleValueType()) {
     Out << "((";
@@ -1127,7 +1142,7 @@ void CWriter::printConstant(Constant *CPV, bool Static) {
         Out << CI->getZExtValue() << 'u';
       else
         Out << CI->getSExtValue();
-       Out << ')';
+      Out << ')';
     }
     return;
   } 
@@ -1304,8 +1319,10 @@ void CWriter::printConstant(Constant *CPV, bool Static) {
     }
     // FALL THROUGH
   default:
+#ifndef NDEBUG
     cerr << "Unknown constant type: " << *CPV << "\n";
-    abort();
+#endif
+    llvm_unreachable();
   }
 }
 
@@ -1322,8 +1339,6 @@ bool CWriter::printConstExprCast(const ConstantExpr* CE, bool Static) {
   case Instruction::Mul:
     // We need to cast integer arithmetic so that it is always performed
     // as unsigned, to avoid undefined behavior on overflow.
-    if (!Ty->isIntOrIntVector()) break;
-    // FALL THROUGH
   case Instruction::LShr:
   case Instruction::URem: 
   case Instruction::UDiv: NeedsExplicitCast = true; break;
@@ -1387,8 +1402,6 @@ void CWriter::printConstantWithCast(Constant* CPV, unsigned Opcode) {
     case Instruction::Mul:
       // We need to cast integer arithmetic so that it is always performed
       // as unsigned, to avoid undefined behavior on overflow.
-      if (!OpTy->isIntOrIntVector()) break;
-      // FALL THROUGH
     case Instruction::LShr:
     case Instruction::UDiv:
     case Instruction::URem:
@@ -1447,6 +1460,16 @@ std::string CWriter::GetValueName(const Value *Operand) {
 /// writeInstComputationInline - Emit the computation for the specified
 /// instruction inline, with no destination provided.
 void CWriter::writeInstComputationInline(Instruction &I) {
+  // We can't currently support integer types other than 1, 8, 16, 32, 64.
+  // Validate this.
+  const Type *Ty = I.getType();
+  if (Ty->isInteger() && (Ty!=Type::Int1Ty && Ty!=Type::Int8Ty &&
+        Ty!=Type::Int16Ty && Ty!=Type::Int32Ty && Ty!=Type::Int64Ty)) {
+      llvm_report_error("The C backend does not currently support integer "
+                        "types of widths other than 1, 8, 16, 32, 64.\n"
+                        "This is being tracked as PR 4158.");
+  }
+
   // If this is a non-trivial bool computation, make sure to truncate down to
   // a 1 bit value.  This is important because we want "add i1 x, y" to return
   // "0" when x and y are true, not "2" for example.
@@ -1505,8 +1528,6 @@ bool CWriter::writeInstructionCast(const Instruction &I) {
   case Instruction::Mul:
     // We need to cast integer arithmetic so that it is always performed
     // as unsigned, to avoid undefined behavior on overflow.
-    if (!Ty->isIntOrIntVector()) break;
-    // FALL THROUGH
   case Instruction::LShr:
   case Instruction::URem: 
   case Instruction::UDiv: 
@@ -1552,8 +1573,6 @@ void CWriter::writeOperandWithCast(Value* Operand, unsigned Opcode) {
     case Instruction::Mul:
       // We need to cast integer arithmetic so that it is always performed
       // as unsigned, to avoid undefined behavior on overflow.
-      if (!OpTy->isIntOrIntVector()) break;
-      // FALL THROUGH
     case Instruction::LShr:
     case Instruction::UDiv:
     case Instruction::URem: // Cast to unsigned first
@@ -2606,6 +2625,10 @@ void CWriter::visitBinaryOperator(Instruction &I) {
     Out << "-(";
     writeOperand(BinaryOperator::getNegArgument(cast<BinaryOperator>(&I)));
     Out << ")";
+  } else if (BinaryOperator::isFNeg(&I)) {
+    Out << "-(";
+    writeOperand(BinaryOperator::getFNegArgument(cast<BinaryOperator>(&I)));
+    Out << ")";
   } else if (I.getOpcode() == Instruction::FRem) {
     // Output a call to fmod/fmodf instead of emitting a%b
     if (I.getType() == Type::FloatTy)
@@ -2630,9 +2653,12 @@ void CWriter::visitBinaryOperator(Instruction &I) {
     writeOperandWithCast(I.getOperand(0), I.getOpcode());
 
     switch (I.getOpcode()) {
-    case Instruction::Add:  Out << " + "; break;
-    case Instruction::Sub:  Out << " - "; break;
-    case Instruction::Mul:  Out << " * "; break;
+    case Instruction::Add:
+    case Instruction::FAdd: Out << " + "; break;
+    case Instruction::Sub:
+    case Instruction::FSub: Out << " - "; break;
+    case Instruction::Mul:
+    case Instruction::FMul: Out << " * "; break;
     case Instruction::URem:
     case Instruction::SRem:
     case Instruction::FRem: Out << " % "; break;
@@ -2645,7 +2671,11 @@ void CWriter::visitBinaryOperator(Instruction &I) {
     case Instruction::Shl : Out << " << "; break;
     case Instruction::LShr:
     case Instruction::AShr: Out << " >> "; break;
-    default: cerr << "Invalid operator type!" << I; abort();
+    default: 
+#ifndef NDEBUG
+       cerr << "Invalid operator type!" << I;
+#endif
+       llvm_unreachable();
     }
 
     writeOperandWithCast(I.getOperand(1), I.getOpcode());
@@ -2682,7 +2712,11 @@ void CWriter::visitICmpInst(ICmpInst &I) {
   case ICmpInst::ICMP_SLT: Out << " < "; break;
   case ICmpInst::ICMP_UGT:
   case ICmpInst::ICMP_SGT: Out << " > "; break;
-  default: cerr << "Invalid icmp predicate!" << I; abort();
+  default:
+#ifndef NDEBUG
+    cerr << "Invalid icmp predicate!" << I; 
+#endif
+    llvm_unreachable();
   }
 
   writeOperandWithCast(I.getOperand(1), I);
@@ -3002,10 +3036,12 @@ bool CWriter::visitBuiltinCall(CallInst &I, Intrinsic::ID ID,
     Out << ", ";
     // Output the last argument to the enclosing function.
     if (I.getParent()->getParent()->arg_empty()) {
-      cerr << "The C backend does not currently support zero "
+      std::string msg;
+      raw_string_ostream Msg(msg);
+      Msg << "The C backend does not currently support zero "
            << "argument varargs functions, such as '"
-           << I.getParent()->getParent()->getName() << "'!\n";
-      abort();
+           << I.getParent()->getParent()->getName() << "'!";
+      llvm_report_error(Msg.str());
     }
     writeOperand(--I.getParent()->getParent()->arg_end());
     Out << ')';

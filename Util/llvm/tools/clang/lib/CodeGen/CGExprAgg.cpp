@@ -13,6 +13,7 @@
 
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
+#include "CGObjCRuntime.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtVisitor.h"
@@ -34,10 +35,13 @@ class VISIBILITY_HIDDEN AggExprEmitter : public StmtVisitor<AggExprEmitter> {
   CGBuilderTy &Builder;
   llvm::Value *DestPtr;
   bool VolatileDest;
+  bool IgnoreResult;
+
 public:
-  AggExprEmitter(CodeGenFunction &cgf, llvm::Value *destPtr, bool volatileDest)
+  AggExprEmitter(CodeGenFunction &cgf, llvm::Value *destPtr, bool v,
+                 bool ignore)
     : CGF(cgf), Builder(CGF.Builder),
-      DestPtr(destPtr), VolatileDest(volatileDest) {
+      DestPtr(destPtr), VolatileDest(v), IgnoreResult(ignore) {
   }
 
   //===--------------------------------------------------------------------===//
@@ -48,6 +52,10 @@ public:
   /// represents a value lvalue, this method emits the address of the lvalue,
   /// then loads the result into DestPtr.
   void EmitAggLoadOfLValue(const Expr *E);
+
+  /// EmitFinalDestCopy - Perform the final copy to DestPtr, if desired.
+  void EmitFinalDestCopy(const Expr *E, LValue Src, bool Ignore = false);
+  void EmitFinalDestCopy(const Expr *E, RValue Src, bool Ignore = false);
 
   //===--------------------------------------------------------------------===//
   //                            Visitor Methods
@@ -94,11 +102,15 @@ public:
   void VisitObjCKVCRefExpr(ObjCKVCRefExpr *E);
   
   void VisitConditionalOperator(const ConditionalOperator *CO);
+  void VisitChooseExpr(const ChooseExpr *CE);
   void VisitInitListExpr(InitListExpr *E);
   void VisitCXXDefaultArgExpr(CXXDefaultArgExpr *DAE) {
     Visit(DAE->getExpr());
   }
+  void VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *E);
   void VisitCXXConstructExpr(const CXXConstructExpr *E);
+  void VisitCXXExprWithTemporaries(CXXExprWithTemporaries *E);
+
   void VisitVAArgExpr(VAArgExpr *E);
 
   void EmitInitializationToLValue(Expr *E, LValue Address);
@@ -117,15 +129,37 @@ public:
 /// then loads the result into DestPtr.
 void AggExprEmitter::EmitAggLoadOfLValue(const Expr *E) {
   LValue LV = CGF.EmitLValue(E);
-  assert(LV.isSimple() && "Can't have aggregate bitfield, vector, etc");
-  llvm::Value *SrcPtr = LV.getAddress();
-  
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
-    return;
+  EmitFinalDestCopy(E, LV);
+}
 
-  CGF.EmitAggregateCopy(DestPtr, SrcPtr, E->getType());
+/// EmitFinalDestCopy - Perform the final copy to DestPtr, if desired.
+void AggExprEmitter::EmitFinalDestCopy(const Expr *E, RValue Src, bool Ignore) {
+  assert(Src.isAggregate() && "value must be aggregate value!");
+
+  // If the result is ignored, don't copy from the value.
+  if (DestPtr == 0) {
+    if (!Src.isVolatileQualified() || (IgnoreResult && Ignore))
+      return;
+    // If the source is volatile, we must read from it; to do that, we need
+    // some place to put it.
+    DestPtr = CGF.CreateTempAlloca(CGF.ConvertType(E->getType()), "agg.tmp");
+  }
+
+  // If the result of the assignment is used, copy the LHS there also.
+  // FIXME: Pass VolatileDest as well.  I think we also need to merge volatile
+  // from the source as well, as we can't eliminate it if either operand
+  // is volatile, unless copy has volatile for both source and destination..
+  CGF.EmitAggregateCopy(DestPtr, Src.getAggregateAddr(), E->getType(),
+                        VolatileDest|Src.isVolatileQualified());
+}
+
+/// EmitFinalDestCopy - Perform the final copy to DestPtr, if desired.
+void AggExprEmitter::EmitFinalDestCopy(const Expr *E, LValue Src, bool Ignore) {
+  assert(Src.isSimple() && "Can't have aggregate bitfield, vector, etc");
+
+  EmitFinalDestCopy(E, RValue::getAggregate(Src.getAddress(),
+                                            Src.isVolatileQualified()),
+                    Ignore);
 }
 
 //===----------------------------------------------------------------------===//
@@ -134,12 +168,12 @@ void AggExprEmitter::EmitAggLoadOfLValue(const Expr *E) {
 
 void AggExprEmitter::VisitCStyleCastExpr(CStyleCastExpr *E) {
   // GCC union extension
-  if (E->getType()->isUnionType()) {
-    RecordDecl *SD = E->getType()->getAsRecordType()->getDecl();
-    LValue FieldLoc = CGF.EmitLValueForField(DestPtr, 
-                                             *SD->field_begin(CGF.getContext()),
-                                             true, 0);
-    EmitInitializationToLValue(E->getSubExpr(), FieldLoc);
+  if (E->getSubExpr()->getType()->isScalarType()) {
+    QualType PtrTy =
+        CGF.getContext().getPointerType(E->getSubExpr()->getType());
+    llvm::Value *CastPtr = Builder.CreateBitCast(DestPtr,
+                                                 CGF.ConvertType(PtrTy));
+    EmitInitializationToLValue(E->getSubExpr(), LValue::MakeAddr(CastPtr, 0));
     return;
   }
 
@@ -147,64 +181,40 @@ void AggExprEmitter::VisitCStyleCastExpr(CStyleCastExpr *E) {
 }
 
 void AggExprEmitter::VisitImplicitCastExpr(ImplicitCastExpr *E) {
-  assert(CGF.getContext().typesAreCompatible(
-                          E->getSubExpr()->getType().getUnqualifiedType(),
-                          E->getType().getUnqualifiedType()) &&
+  assert(CGF.getContext().hasSameUnqualifiedType(E->getSubExpr()->getType(),
+                                                 E->getType()) &&
          "Implicit cast types must be compatible");
   Visit(E->getSubExpr());
 }
 
 void AggExprEmitter::VisitCallExpr(const CallExpr *E) {
-  RValue RV = CGF.EmitCallExpr(E);
-  assert(RV.isAggregate() && "Return value must be aggregate value!");
-  
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
+  if (E->getCallReturnType()->isReferenceType()) {
+    EmitAggLoadOfLValue(E);
     return;
+  }
   
-  CGF.EmitAggregateCopy(DestPtr, RV.getAggregateAddr(), E->getType());
+  RValue RV = CGF.EmitCallExpr(E);
+  EmitFinalDestCopy(E, RV);
 }
 
 void AggExprEmitter::VisitObjCMessageExpr(ObjCMessageExpr *E) {
   RValue RV = CGF.EmitObjCMessageExpr(E);
-  assert(RV.isAggregate() && "Return value must be aggregate value!");
-
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
-    return;
-  
-  CGF.EmitAggregateCopy(DestPtr, RV.getAggregateAddr(), E->getType());
+  EmitFinalDestCopy(E, RV);
 }
 
 void AggExprEmitter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
   RValue RV = CGF.EmitObjCPropertyGet(E);
-  assert(RV.isAggregate() && "Return value must be aggregate value!");
-  
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
-    return;
-  
-  CGF.EmitAggregateCopy(DestPtr, RV.getAggregateAddr(), E->getType());
+  EmitFinalDestCopy(E, RV);
 }
 
 void AggExprEmitter::VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
   RValue RV = CGF.EmitObjCPropertyGet(E);
-  assert(RV.isAggregate() && "Return value must be aggregate value!");
-  
-  // If the result is ignored, don't copy from the value.
-  if (DestPtr == 0)
-    // FIXME: If the source is volatile, we must read from it.
-    return;
-  
-  CGF.EmitAggregateCopy(DestPtr, RV.getAggregateAddr(), E->getType());
+  EmitFinalDestCopy(E, RV);
 }
 
 void AggExprEmitter::VisitBinComma(const BinaryOperator *E) {
-  CGF.EmitAnyExpr(E->getLHS());
-  CGF.EmitAggExpr(E->getRHS(), DestPtr, false);
+  CGF.EmitAnyExpr(E->getLHS(), 0, false, true);
+  CGF.EmitAggExpr(E->getRHS(), DestPtr, VolatileDest);
 }
 
 void AggExprEmitter::VisitStmtExpr(const StmtExpr *E) {
@@ -218,40 +228,43 @@ void AggExprEmitter::VisitBinaryOperator(const BinaryOperator *E) {
 void AggExprEmitter::VisitBinAssign(const BinaryOperator *E) {
   // For an assignment to work, the value on the right has
   // to be compatible with the value on the left.
-  assert(CGF.getContext().typesAreCompatible(
-             E->getLHS()->getType().getUnqualifiedType(),
-             E->getRHS()->getType().getUnqualifiedType())
+  assert(CGF.getContext().hasSameUnqualifiedType(E->getLHS()->getType(),
+                                                 E->getRHS()->getType())
          && "Invalid assignment");
   LValue LHS = CGF.EmitLValue(E->getLHS());
 
   // We have to special case property setters, otherwise we must have
   // a simple lvalue (no aggregates inside vectors, bitfields).
   if (LHS.isPropertyRef()) {
-    // FIXME: Volatility?
     llvm::Value *AggLoc = DestPtr;
     if (!AggLoc)
       AggLoc = CGF.CreateTempAlloca(CGF.ConvertType(E->getRHS()->getType()));
-    CGF.EmitAggExpr(E->getRHS(), AggLoc, false);
+    CGF.EmitAggExpr(E->getRHS(), AggLoc, VolatileDest);
     CGF.EmitObjCPropertySet(LHS.getPropertyRefExpr(), 
-                            RValue::getAggregate(AggLoc));
+                            RValue::getAggregate(AggLoc, VolatileDest));
   } 
   else if (LHS.isKVCRef()) {
-    // FIXME: Volatility?
     llvm::Value *AggLoc = DestPtr;
     if (!AggLoc)
       AggLoc = CGF.CreateTempAlloca(CGF.ConvertType(E->getRHS()->getType()));
-    CGF.EmitAggExpr(E->getRHS(), AggLoc, false);
+    CGF.EmitAggExpr(E->getRHS(), AggLoc, VolatileDest);
     CGF.EmitObjCPropertySet(LHS.getKVCRefExpr(), 
-                            RValue::getAggregate(AggLoc));
+                            RValue::getAggregate(AggLoc, VolatileDest));
   } else {
+    if (CGF.getContext().getLangOptions().NeXTRuntime) {
+      QualType LHSTy = E->getLHS()->getType();
+      if (const RecordType *FDTTy = LHSTy.getTypePtr()->getAsRecordType())
+        if (FDTTy->getDecl()->hasObjectMember()) {
+          LValue RHS = CGF.EmitLValue(E->getRHS());
+          CGF.CGM.getObjCRuntime().EmitGCMemmoveCollectable(CGF, LHS.getAddress(), 
+                                      RHS.getAddress(),
+                                      CGF.getContext().getTypeSize(LHSTy) / 8);
+          return;
+        }
+    }
     // Codegen the RHS so that it stores directly into the LHS.
-    CGF.EmitAggExpr(E->getRHS(), LHS.getAddress(), false /*FIXME: VOLATILE LHS*/);
-    
-    if (DestPtr == 0)
-      return;
-    
-    // If the result of the assignment is used, copy the RHS there also.
-    CGF.EmitAggregateCopy(DestPtr, LHS.getAddress(), E->getType());
+    CGF.EmitAggExpr(E->getRHS(), LHS.getAddress(), LHS.isVolatileQualified());
+    EmitFinalDestCopy(E, LHS, true);
   }
 }
 
@@ -263,20 +276,28 @@ void AggExprEmitter::VisitConditionalOperator(const ConditionalOperator *E) {
   llvm::Value *Cond = CGF.EvaluateExprAsBool(E->getCond());
   Builder.CreateCondBr(Cond, LHSBlock, RHSBlock);
   
+  CGF.PushConditionalTempDestruction();
   CGF.EmitBlock(LHSBlock);
   
   // Handle the GNU extension for missing LHS.
   assert(E->getLHS() && "Must have LHS for aggregate value");
 
   Visit(E->getLHS());
+  CGF.PopConditionalTempDestruction();
   CGF.EmitBranch(ContBlock);
   
+  CGF.PushConditionalTempDestruction();
   CGF.EmitBlock(RHSBlock);
   
   Visit(E->getRHS());
+  CGF.PopConditionalTempDestruction();
   CGF.EmitBranch(ContBlock);
   
   CGF.EmitBlock(ContBlock);
+}
+
+void AggExprEmitter::VisitChooseExpr(const ChooseExpr *CE) {
+  Visit(CE->getChosenSubExpr(CGF.getContext()));
 }
 
 void AggExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
@@ -288,19 +309,42 @@ void AggExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
     return;
   }
 
-  if (DestPtr)
-    // FIXME: volatility
-    CGF.EmitAggregateCopy(DestPtr, ArgPtr, VE->getType());
+  EmitFinalDestCopy(VE, LValue::MakeAddr(ArgPtr, 0));
+}
+
+void AggExprEmitter::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *E) {
+  llvm::Value *Val = DestPtr;
+  
+  if (!Val) {
+    // Create a temporary variable.
+    Val = CGF.CreateTempAlloca(CGF.ConvertTypeForMem(E->getType()), "tmp");
+
+    // FIXME: volatile
+    CGF.EmitAggExpr(E->getSubExpr(), Val, false);
+  } else 
+    Visit(E->getSubExpr());
+  
+  CGF.PushCXXTemporary(E->getTemporary(), Val);
 }
 
 void
 AggExprEmitter::VisitCXXConstructExpr(const CXXConstructExpr *E) {
-  assert(DestPtr && "Must have a dest to emit into!");
+  llvm::Value *Val = DestPtr;
   
-  CGF.EmitCXXConstructExpr(DestPtr, E);
+  if (!Val) {
+    // Create a temporary variable.
+    Val = CGF.CreateTempAlloca(CGF.ConvertTypeForMem(E->getType()), "tmp");
+  }
+
+  CGF.EmitCXXConstructExpr(Val, E);
+}
+
+void AggExprEmitter::VisitCXXExprWithTemporaries(CXXExprWithTemporaries *E) {
+  CGF.EmitCXXExprWithTemporaries(E, DestPtr, VolatileDest);
 }
 
 void AggExprEmitter::EmitInitializationToLValue(Expr* E, LValue LV) {
+  // FIXME: Ignore result?
   // FIXME: Are initializers affected by volatile?
   if (isa<ImplicitValueInitExpr>(E)) {
     EmitNullInitializationToLValue(LV, E->getType());
@@ -335,19 +379,18 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
   // FIXME: Disabled while we figure out what to do about 
   // test/CodeGen/bitfield.c
   //
-  // If we can, prefer a copy from a global; this is a lot less
-  // code for long globals, and it's easier for the current optimizers
-  // to analyze.
-  // FIXME: Should we really be doing this? Should we try to avoid
-  // cases where we emit a global with a lot of zeros?  Should
-  // we try to avoid short globals? 
+  // If we can, prefer a copy from a global; this is a lot less code for long
+  // globals, and it's easier for the current optimizers to analyze.
+  // FIXME: Should we really be doing this? Should we try to avoid cases where
+  // we emit a global with a lot of zeros?  Should we try to avoid short
+  // globals?
   if (E->isConstantInitializer(CGF.getContext(), 0)) {
     llvm::Constant* C = CGF.CGM.EmitConstantExpr(E, &CGF);
     llvm::GlobalVariable* GV =
     new llvm::GlobalVariable(C->getType(), true,
                              llvm::GlobalValue::InternalLinkage,
                              C, "", &CGF.CGM.getModule(), 0);
-    CGF.EmitAggregateCopy(DestPtr, GV, E->getType());
+    EmitFinalDestCopy(E, LValue::MakeAddr(GV, 0));
     return;
   }
 #endif
@@ -367,8 +410,7 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
     if (E->getNumInits() > 0) {
       QualType T1 = E->getType();
       QualType T2 = E->getInit(0)->getType();
-      if (CGF.getContext().getCanonicalType(T1).getUnqualifiedType() == 
-          CGF.getContext().getCanonicalType(T2).getUnqualifiedType()) {
+      if (CGF.getContext().hasSameUnqualifiedType(T1, T2)) {
         EmitAggLoadOfLValue(E->getInit(0));
         return;
       }
@@ -411,8 +453,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 #ifndef NDEBUG
       // Make sure that it's really an empty and not a failure of
       // semantic analysis.
-      for (RecordDecl::field_iterator Field = SD->field_begin(CGF.getContext()),
-                                   FieldEnd = SD->field_end(CGF.getContext());
+      for (RecordDecl::field_iterator Field = SD->field_begin(),
+                                   FieldEnd = SD->field_end();
            Field != FieldEnd; ++Field)
         assert(Field->isUnnamedBitfield() && "Only unnamed bitfields allowed");
 #endif
@@ -436,8 +478,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
   
   // Here we iterate over the fields; this makes it simpler to both
   // default-initialize fields and skip over unnamed fields.
-  for (RecordDecl::field_iterator Field = SD->field_begin(CGF.getContext()),
-                               FieldEnd = SD->field_end(CGF.getContext());
+  for (RecordDecl::field_iterator Field = SD->field_begin(),
+                               FieldEnd = SD->field_end();
        Field != FieldEnd; ++Field) {
     // We're done once we hit the flexible array member
     if (Field->getType()->isIncompleteArrayType())
@@ -448,6 +490,8 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 
     // FIXME: volatility
     LValue FieldLoc = CGF.EmitLValueForField(DestPtr, *Field, false, 0);
+    // We never generate write-barries for initialized fields.
+    LValue::SetObjCNonGC(FieldLoc, true);
     if (CurInitVal < NumInitElements) {
       // Store the initializer into the field
       EmitInitializationToLValue(E->getInit(CurInitVal++), FieldLoc);
@@ -462,15 +506,19 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 //                        Entry Points into this File
 //===----------------------------------------------------------------------===//
 
-/// EmitAggExpr - Emit the computation of the specified expression of
-/// aggregate type.  The result is computed into DestPtr.  Note that if
-/// DestPtr is null, the value of the aggregate expression is not needed.
+/// EmitAggExpr - Emit the computation of the specified expression of aggregate
+/// type.  The result is computed into DestPtr.  Note that if DestPtr is null,
+/// the value of the aggregate expression is not needed.  If VolatileDest is
+/// true, DestPtr cannot be 0.
 void CodeGenFunction::EmitAggExpr(const Expr *E, llvm::Value *DestPtr,
-                                  bool VolatileDest) {
+                                  bool VolatileDest, bool IgnoreResult) {
   assert(E && hasAggregateLLVMType(E->getType()) &&
          "Invalid aggregate expression to emit");
+  assert ((DestPtr != 0 || VolatileDest == false)
+          && "volatile aggregate can't be 0");
   
-  AggExprEmitter(*this, DestPtr, VolatileDest).Visit(const_cast<Expr*>(E));
+  AggExprEmitter(*this, DestPtr, VolatileDest, IgnoreResult)
+    .Visit(const_cast<Expr*>(E));
 }
 
 void CodeGenFunction::EmitAggregateClear(llvm::Value *DestPtr, QualType Ty) {
@@ -480,7 +528,8 @@ void CodeGenFunction::EmitAggregateClear(llvm::Value *DestPtr, QualType Ty) {
 }
 
 void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
-                                        llvm::Value *SrcPtr, QualType Ty) {
+                                        llvm::Value *SrcPtr, QualType Ty,
+                                        bool isVolatile) {
   assert(!Ty->isAnyComplexType() && "Shouldn't happen for complex");
   
   // Aggregate assignment turns into llvm.memcpy.  This is almost valid per
@@ -505,6 +554,18 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
   // FIXME: Handle variable sized types.
   const llvm::Type *IntPtr = llvm::IntegerType::get(LLVMPointerWidth);
   
+  // FIXME: If we have a volatile struct, the optimizer can remove what might
+  // appear to be `extra' memory ops:
+  //
+  // volatile struct { int i; } a, b;
+  //
+  // int main() {
+  //   a = b;
+  //   a = b;
+  // }
+  //
+  // we need to use a differnt call here.  We use isVolatile to indicate when
+  // either the source or the destination is volatile.
   Builder.CreateCall4(CGM.getMemCpyFn(),
                       DestPtr, SrcPtr,
                       // TypeInfo.first describes size in bits.

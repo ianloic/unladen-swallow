@@ -26,18 +26,23 @@
 
 namespace llvm {
 
-struct MachineJumpTableInfo;
+class MachineJumpTableInfo;
+class MCContext;
+class MCInst;
+class MCStreamer;
 
 class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
-  DwarfWriter *DW;
-  MachineModuleInfo *MMI;
   const X86Subtarget *Subtarget;
+  
+  MCContext *Context;
+  MCStreamer *Streamer;
  public:
   explicit X86ATTAsmPrinter(raw_ostream &O, X86TargetMachine &TM,
-                            const TargetAsmInfo *T, CodeGenOpt::Level OL,
-                            bool V)
-    : AsmPrinter(O, TM, T, OL, V), DW(0), MMI(0) {
+                            const TargetAsmInfo *T, bool V)
+    : AsmPrinter(O, TM, T, V) {
     Subtarget = &TM.getSubtarget<X86Subtarget>();
+    Context = 0;
+    Streamer = 0;
   }
 
   virtual const char *getPassName() const {
@@ -63,10 +68,62 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   /// machine instruction was sufficiently described to print it, otherwise it
   /// returns false.
   bool printInstruction(const MachineInstr *MI);
+  
+  
+  // New MCInst printing stuff.
+  bool printInstruction(const MCInst *MI);
+
+  void printOperand(const MCInst *MI, unsigned OpNo,
+                    const char *Modifier = 0);
+  void printMemReference(const MCInst *MI, unsigned Op);
+  void printLeaMemReference(const MCInst *MI, unsigned Op);
+  void printSSECC(const MCInst *MI, unsigned Op);
+  void printPICLabel(const MCInst *MI, unsigned Op);
+  void print_pcrel_imm(const MCInst *MI, unsigned OpNo);
+  
+  void printi8mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printi16mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printi32mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printi64mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printi128mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printf32mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printf64mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printf80mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printf128mem(const MCInst *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
+  void printlea32mem(const MCInst *MI, unsigned OpNo) {
+    printLeaMemReference(MI, OpNo);
+  }
+  void printlea64mem(const MCInst *MI, unsigned OpNo) {
+    printLeaMemReference(MI, OpNo);
+  }
+  void printlea64_32mem(const MCInst *MI, unsigned OpNo) {
+    printLeaMemReference(MI, OpNo);
+  }
+  
+  
 
   // These methods are used by the tablegen'erated instruction printer.
   void printOperand(const MachineInstr *MI, unsigned OpNo,
-                    const char *Modifier = 0, bool NotRIPRel = false);
+                    const char *Modifier = 0);
+  void print_pcrel_imm(const MachineInstr *MI, unsigned OpNo);
   void printi8mem(const MachineInstr *MI, unsigned OpNo) {
     printMemReference(MI, OpNo);
   }
@@ -82,6 +139,9 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printi128mem(const MachineInstr *MI, unsigned OpNo) {
     printMemReference(MI, OpNo);
   }
+  void printi256mem(const MachineInstr *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
   void printf32mem(const MachineInstr *MI, unsigned OpNo) {
     printMemReference(MI, OpNo);
   }
@@ -94,6 +154,9 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printf128mem(const MachineInstr *MI, unsigned OpNo) {
     printMemReference(MI, OpNo);
   }
+  void printf256mem(const MachineInstr *MI, unsigned OpNo) {
+    printMemReference(MI, OpNo);
+  }
   void printlea32mem(const MachineInstr *MI, unsigned OpNo) {
     printLeaMemReference(MI, OpNo);
   }
@@ -104,7 +167,7 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
     printLeaMemReference(MI, OpNo, "subreg64");
   }
 
-  bool printAsmMRegister(const MachineOperand &MO, const char Mode);
+  bool printAsmMRegister(const MachineOperand &MO, char Mode);
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        unsigned AsmVariant, const char *ExtraCode);
   bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
@@ -113,9 +176,9 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printMachineInstruction(const MachineInstr *MI);
   void printSSECC(const MachineInstr *MI, unsigned Op);
   void printMemReference(const MachineInstr *MI, unsigned Op,
-                         const char *Modifier=NULL, bool NotRIPRel = false);
+                         const char *Modifier=NULL);
   void printLeaMemReference(const MachineInstr *MI, unsigned Op,
-                            const char *Modifier=NULL, bool NotRIPRel = false);
+                            const char *Modifier=NULL);
   void printPICJumpTableSetLabel(unsigned uid,
                                  const MachineBasicBlock *MBB) const;
   void printPICJumpTableSetLabel(unsigned uid, unsigned uid2,
@@ -129,9 +192,8 @@ class VISIBILITY_HIDDEN X86ATTAsmPrinter : public AsmPrinter {
   void printPICLabel(const MachineInstr *MI, unsigned Op);
   void printModuleLevelGV(const GlobalVariable* GVar);
 
-  void printGVStub(const char *GV, const char *Prefix = NULL);
-  void printHiddenGVStub(const char *GV, const char *Prefix = NULL);
-
+  void PrintPICBaseSymbol() const;
+  
   bool runOnMachineFunction(MachineFunction &F);
 
   void emitFunctionHeader(const MachineFunction &MF);

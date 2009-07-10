@@ -56,6 +56,10 @@ static unsigned ProcessCharEscape(const char *&ThisTokBuf,
     PP.Diag(Loc, diag::ext_nonstandard_escape) << "e";
     ResultChar = 27;
     break;
+  case 'E':
+    PP.Diag(Loc, diag::ext_nonstandard_escape) << "E";
+    ResultChar = 27;
+    break;
   case 'f':
     ResultChar = 12;
     break;
@@ -135,7 +139,6 @@ static unsigned ProcessCharEscape(const char *&ThisTokBuf,
     PP.Diag(Loc, diag::ext_nonstandard_escape)
       << std::string()+(char)ResultChar;
     break;
-    // FALL THROUGH.
   default:
     if (isgraph(ThisTokBuf[0]))
       PP.Diag(Loc, diag::ext_unknown_escape) << std::string()+(char)ResultChar;
@@ -680,6 +683,7 @@ CharLiteralParser::CharLiteralParser(const char *begin, const char *end,
       PP.Diag(Loc, diag::ext_multichar_character_literal);
     else
       PP.Diag(Loc, diag::ext_four_char_character_literal);
+    IsMultiChar = true;
   }
 
   // Transfer the value from APInt to uint64_t
@@ -690,7 +694,7 @@ CharLiteralParser::CharLiteralParser(const char *begin, const char *end,
   // character constants are not sign extended in the this implementation:
   // '\xFF\xFF' = 65536 and '\x0\xFF' = 255, which matches GCC.
   if (!IsWide && NumCharsSoFar == 1 && (Value & 128) &&
-      PP.getTargetInfo().isCharSigned())
+      PP.getLangOptions().CharIsSigned)
     Value = (signed char)Value;
 }
 

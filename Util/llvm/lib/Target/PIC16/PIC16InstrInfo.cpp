@@ -76,15 +76,14 @@ void PIC16InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   const Function *Func = MBB.getParent()->getFunction();
   const std::string FuncName = Func->getName();
 
-  char *tmpName = new char [strlen(FuncName.c_str()) +  6];
-  sprintf(tmpName, "%s.tmp", FuncName.c_str());
+  const char *tmpName = createESName(PAN::getTempdataLabel(FuncName));
 
   // On the order of operands here: think "movwf SrcReg, tmp_slot, offset".
   if (RC == PIC16::GPRRegisterClass) {
     //MachineFunction &MF = *MBB.getParent();
     //MachineRegisterInfo &RI = MF.getRegInfo();
     BuildMI(MBB, I, DL, get(PIC16::movwf))
-      .addReg(SrcReg, false, false, isKill)
+      .addReg(SrcReg, getKillRegState(isKill))
       .addImm(PTLI->GetTmpOffsetForFI(FI, 1))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
@@ -99,7 +98,7 @@ void PIC16InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     unsigned opcode = (SrcReg == PIC16::FSR0) ? PIC16::save_fsr0 
                                                  : PIC16::save_fsr1;
     BuildMI(MBB, I, DL, get(opcode))
-      .addReg(SrcReg, false, false, isKill)
+      .addReg(SrcReg, getKillRegState(isKill))
       .addImm(PTLI->GetTmpOffsetForFI(FI, 3))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
@@ -119,8 +118,7 @@ void PIC16InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   const Function *Func = MBB.getParent()->getFunction();
   const std::string FuncName = Func->getName();
 
-  char *tmpName = new char [strlen(FuncName.c_str()) +  6];
-  sprintf(tmpName, "%s.tmp", FuncName.c_str());
+  const char *tmpName = createESName(PAN::getTempdataLabel(FuncName));
 
   // On the order of operands here: think "movf FrameIndex, W".
   if (RC == PIC16::GPRRegisterClass) {
@@ -186,3 +184,31 @@ bool PIC16InstrInfo::isMoveInstr(const MachineInstr &MI,
   return false;
 }
 
+/// InsertBranch - Insert a branch into the end of the specified
+/// MachineBasicBlock.  This operands to this method are the same as those
+/// returned by AnalyzeBranch.  This is invoked in cases where AnalyzeBranch
+/// returns success and when an unconditional branch (TBB is non-null, FBB is
+/// null, Cond is empty) needs to be inserted. It returns the number of
+/// instructions inserted.
+unsigned PIC16InstrInfo::
+InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB, 
+             MachineBasicBlock *FBB,
+             const SmallVectorImpl<MachineOperand> &Cond) const {
+  // Shouldn't be a fall through.
+  assert(TBB && "InsertBranch must not be told to insert a fallthrough");
+
+  if (FBB == 0) { // One way branch.
+    if (Cond.empty()) {
+      // Unconditional branch?
+      DebugLoc dl = DebugLoc::getUnknownLoc();
+      BuildMI(&MBB, dl, get(PIC16::br_uncond)).addMBB(TBB);
+    }
+    return 1;
+  }
+
+  // FIXME: If the there are some conditions specified then conditional branch
+  // should be generated.   
+  // For the time being no instruction is being generated therefore
+  // returning NULL.
+  return 0;
+}

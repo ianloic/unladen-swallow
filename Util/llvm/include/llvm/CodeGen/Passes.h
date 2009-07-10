@@ -146,9 +146,9 @@ namespace llvm {
   /// IfConverter Pass - This pass performs machine code if conversion.
   FunctionPass *createIfConverterPass();
 
-  /// LoopAligner Pass - This pass aligns loop headers to target specific
-  /// alignment boundary.
-  FunctionPass *createLoopAlignerPass();
+  /// Code Placement Pass - This pass optimize code placement and aligns loop
+  /// headers to target specific alignment boundary.
+  FunctionPass *createCodePlacementOptPass();
 
   /// DebugLabelFoldingPass - This pass prunes out redundant debug labels.  This
   /// allows a debug emitter to determine if the range of two labels is empty,
@@ -195,6 +195,17 @@ namespace llvm {
 
   /// createStackProtectorPass - This pass adds stack protectors to functions.
   FunctionPass *createStackProtectorPass(const TargetLowering *tli);
+
+  /// createMachineVerifierPass - This pass verifies cenerated machine code
+  /// instructions for correctness.
+  ///
+  /// @param allowPhysDoubleDefs ignore double definitions of
+  ///        registers. Useful before LiveVariables has run.
+  FunctionPass *createMachineVerifierPass(bool allowDoubleDefs);
+
+  /// createDwarfEHPass - This pass mulches exception handling code into a form
+  /// adapted to code generation.  Required if using dwarf exception handling.
+  FunctionPass *createDwarfEHPass(const TargetLowering *tli, bool fast);
 
 } // End llvm namespace
 

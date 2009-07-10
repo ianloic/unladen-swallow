@@ -15,7 +15,6 @@
 #include "Record.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/VectorExtras.h"
@@ -27,7 +26,7 @@ using namespace llvm;
 // Warning Tables (.inc file) generation.
 //===----------------------------------------------------------------------===//
 
-void ClangDiagsDefsEmitter::run(std::ostream &OS) {
+void ClangDiagsDefsEmitter::run(raw_ostream &OS) {
   // Write the #if guard
   if (!Component.empty()) {
     std::string ComponentName = UppercaseString(Component);
@@ -65,6 +64,12 @@ void ClangDiagsDefsEmitter::run(std::ostream &OS) {
     } else {
       OS << ", 0";
     }
+
+    // SFINAE bit
+    if (R.getValueAsBit("SFINAE"))
+      OS << ", true";
+    else
+      OS << ", false";
     OS << ")\n";
   }
 }
@@ -79,7 +84,7 @@ struct GroupInfo {
   unsigned IDNo;
 };
 
-void ClangDiagGroupsEmitter::run(std::ostream &OS) {
+void ClangDiagGroupsEmitter::run(raw_ostream &OS) {
   // Invert the 1-[0/1] mapping of diags to group into a one to many mapping of
   // groups to diags in the group.
   std::map<std::string, GroupInfo> DiagsInGroup;

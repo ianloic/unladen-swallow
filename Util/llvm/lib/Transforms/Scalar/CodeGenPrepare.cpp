@@ -21,6 +21,7 @@
 #include "llvm/InlineAsm.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetData.h"
@@ -401,8 +402,8 @@ static void SplitEdgeNicely(TerminatorInst *TI, unsigned SuccNum,
 
 
 /// OptimizeNoopCopyExpression - If the specified cast instruction is a noop
-/// copy (e.g. it's casting from one pointer type to another, int->uint, or
-/// int->sbyte on PPC), sink it into user blocks to reduce the number of virtual
+/// copy (e.g. it's casting from one pointer type to another, i32->i8 on PPC),
+/// sink it into user blocks to reduce the number of virtual
 /// registers that must be created and coalesced.
 ///
 /// Return true if any changes are made.
@@ -615,8 +616,8 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         V = new SExtInst(V, IntPtrTy, "sunkaddr", InsertPt);
       }
       if (AddrMode.Scale != 1)
-        V = BinaryOperator::CreateMul(V, ConstantInt::get(IntPtrTy,
-                                                          AddrMode.Scale),
+        V = BinaryOperator::CreateMul(V, Context->getConstantInt(IntPtrTy,
+                                                                AddrMode.Scale),
                                       "sunkaddr", InsertPt);
       Result = V;
     }
@@ -624,8 +625,11 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     // Add in the base register.
     if (AddrMode.BaseReg) {
       Value *V = AddrMode.BaseReg;
-      if (V->getType() != IntPtrTy)
+      if (isa<PointerType>(V->getType()))
         V = new PtrToIntInst(V, IntPtrTy, "sunkaddr", InsertPt);
+      if (V->getType() != IntPtrTy)
+        V = CastInst::CreateIntegerCast(V, IntPtrTy, /*isSigned=*/true,
+                                        "sunkaddr", InsertPt);
       if (Result)
         Result = BinaryOperator::CreateAdd(Result, V, "sunkaddr", InsertPt);
       else
@@ -644,7 +648,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
 
     // Add in the Base Offset if present.
     if (AddrMode.BaseOffs) {
-      Value *V = ConstantInt::get(IntPtrTy, AddrMode.BaseOffs);
+      Value *V = Context->getConstantInt(IntPtrTy, AddrMode.BaseOffs);
       if (Result)
         Result = BinaryOperator::CreateAdd(Result, V, "sunkaddr", InsertPt);
       else
@@ -652,7 +656,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     }
 
     if (Result == 0)
-      SunkAddr = Constant::getNullValue(Addr->getType());
+      SunkAddr = Context->getNullValue(Addr->getType());
     else
       SunkAddr = new IntToPtrInst(Result, Addr->getType(), "sunkaddr",InsertPt);
   }

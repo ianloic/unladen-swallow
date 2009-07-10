@@ -12,10 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "TGLexer.h"
-#include "TGSourceMgr.h"
-#include "llvm/Support/Streams.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <ostream>
 #include "llvm/Config/config.h"
 #include <cctype>
 #include <cstdio>
@@ -24,15 +22,15 @@
 #include <cerrno>
 using namespace llvm;
 
-TGLexer::TGLexer(TGSourceMgr &SM) : SrcMgr(SM) {
+TGLexer::TGLexer(SourceMgr &SM) : SrcMgr(SM) {
   CurBuffer = 0;
   CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
   CurPtr = CurBuf->getBufferStart();
   TokStart = 0;
 }
 
-TGLoc TGLexer::getLoc() const {
-  return TGLoc::getFromPointer(TokStart);
+SMLoc TGLexer::getLoc() const {
+  return SMLoc::getFromPointer(TokStart);
 }
 
 
@@ -45,11 +43,11 @@ tgtok::TokKind TGLexer::ReturnError(const char *Loc, const std::string &Msg) {
 
 
 void TGLexer::PrintError(const char *Loc, const std::string &Msg) const {
-  SrcMgr.PrintError(TGLoc::getFromPointer(Loc), Msg);
+  SrcMgr.PrintMessage(SMLoc::getFromPointer(Loc), Msg, "error");
 }
 
-void TGLexer::PrintError(TGLoc Loc, const std::string &Msg) const {
-  SrcMgr.PrintError(Loc, Msg);
+void TGLexer::PrintError(SMLoc Loc, const std::string &Msg) const {
+  SrcMgr.PrintMessage(Loc, Msg, "error");
 }
 
 
@@ -66,8 +64,8 @@ int TGLexer::getNextChar() {
     
     // If this is the end of an included file, pop the parent file off the
     // include stack.
-    TGLoc ParentIncludeLoc = SrcMgr.getParentIncludeLoc(CurBuffer);
-    if (ParentIncludeLoc != TGLoc()) {
+    SMLoc ParentIncludeLoc = SrcMgr.getParentIncludeLoc(CurBuffer);
+    if (ParentIncludeLoc != SMLoc()) {
       CurBuffer = SrcMgr.FindBufferContainingLoc(ParentIncludeLoc);
       CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
       CurPtr = ParentIncludeLoc.getPointer();
@@ -278,24 +276,15 @@ bool TGLexer::LexInclude() {
   // Get the string.
   std::string Filename = CurStrVal;
 
-  // Try to find the file.
-  MemoryBuffer *NewBuf = MemoryBuffer::getFile(Filename.c_str());
-
-  // If the file didn't exist directly, see if it's in an include path.
-  for (unsigned i = 0, e = IncludeDirectories.size(); i != e && !NewBuf; ++i) {
-    std::string IncFile = IncludeDirectories[i] + "/" + Filename;
-    NewBuf = MemoryBuffer::getFile(IncFile.c_str());
-  }
-    
-  if (NewBuf == 0) {
+  
+  CurBuffer = SrcMgr.AddIncludeFile(Filename, SMLoc::getFromPointer(CurPtr));
+  if (CurBuffer == -1) {
     PrintError(getLoc(), "Could not find include file '" + Filename + "'");
     return true;
   }
   
   // Save the line number and lex buffer of the includer.
-  CurBuffer = SrcMgr.AddNewSourceBuffer(NewBuf, TGLoc::getFromPointer(CurPtr));
-  
-  CurBuf = NewBuf;
+  CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
   CurPtr = CurBuf->getBufferStart();
   return false;
 }
@@ -362,19 +351,19 @@ tgtok::TokKind TGLexer::LexNumber() {
       
       // Requires at least one hex digit.
       if (CurPtr == NumStart)
-        return ReturnError(CurPtr-2, "Invalid hexadecimal number");
+        return ReturnError(TokStart, "Invalid hexadecimal number");
 
       errno = 0;
       CurIntVal = strtoll(NumStart, 0, 16);
       if (errno == EINVAL)
-        return ReturnError(CurPtr-2, "Invalid hexadecimal number");
+        return ReturnError(TokStart, "Invalid hexadecimal number");
       if (errno == ERANGE) {
         errno = 0;
         CurIntVal = (int64_t)strtoull(NumStart, 0, 16);
         if (errno == EINVAL)
-          return ReturnError(CurPtr-2, "Invalid hexadecimal number");
+          return ReturnError(TokStart, "Invalid hexadecimal number");
         if (errno == ERANGE)
-          return ReturnError(CurPtr-2, "Hexadecimal number out of range");
+          return ReturnError(TokStart, "Hexadecimal number out of range");
       }
       return tgtok::IntVal;
     } else if (CurPtr[0] == 'b') {
@@ -447,7 +436,14 @@ tgtok::TokKind TGLexer::LexExclaim() {
   if (Len == 3  && !memcmp(Start, "shl", 3)) return tgtok::XSHL;
   if (Len == 9  && !memcmp(Start, "strconcat", 9))   return tgtok::XStrConcat;
   if (Len == 10 && !memcmp(Start, "nameconcat", 10)) return tgtok::XNameConcat;
-  
+  if (Len == 5 && !memcmp(Start, "subst", 5)) return tgtok::XSubst;
+  if (Len == 7 && !memcmp(Start, "foreach", 7)) return tgtok::XForEach;
+  if (Len == 4 && !memcmp(Start, "cast", 4)) return tgtok::XCast;
+  if (Len == 3 && !memcmp(Start, "car", 3)) return tgtok::XCar;
+  if (Len == 3 && !memcmp(Start, "cdr", 3)) return tgtok::XCdr;
+  if (Len == 4 && !memcmp(Start, "null", 4)) return tgtok::XNull;
+  if (Len == 2 && !memcmp(Start, "if", 2)) return tgtok::XIf;
+
   return ReturnError(Start-1, "Unknown operator");
 }
 

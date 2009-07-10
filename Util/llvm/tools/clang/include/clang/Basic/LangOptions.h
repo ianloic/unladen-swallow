@@ -22,6 +22,7 @@ class LangOptions {
 public:
   unsigned Trigraphs         : 1;  // Trigraphs in source files.
   unsigned BCPLComment       : 1;  // BCPL-style '//' comments.
+  unsigned Bool              : 1;  // 'bool', 'true', 'false' keywords.
   unsigned DollarIdents      : 1;  // '$' allowed in identifiers.
   unsigned AsmPreprocessor   : 1;  // Preprocessor in asm mode.
   unsigned GNUMode           : 1;  // True in gnu99 mode false in c99 mode (etc)
@@ -36,14 +37,14 @@ public:
     
   unsigned ObjC1             : 1;  // Objective-C 1 support enabled.
   unsigned ObjC2             : 1;  // Objective-C 2 support enabled.
+  unsigned ObjCSenderDispatch: 1;  // Objective-C 2 three-dimensional dispatch
+                                   // enabled.
   unsigned ObjCNonFragileABI : 1;  // Objective-C modern abi enabled
-  unsigned ObjCTightLayout   : 1;  // Use tight interface layout, in
-                                   // which subclass ivars can be
-                                   // placed inside the superclass.
     
   unsigned PascalStrings     : 1;  // Allow Pascal strings
   unsigned WritableStrings   : 1;  // Allow writable strings
   unsigned LaxVectorConversions : 1;
+  unsigned AltiVec           : 1;  // Support AltiVec-style vector initializers.
   unsigned Exceptions        : 1;  // Support exception handling.
 
   unsigned NeXTRuntime       : 1; // Use NeXT runtime.
@@ -78,11 +79,22 @@ public:
   unsigned ObjCGCBitmapPrint : 1; // Enable printing of gc's bitmap layout
                                   // for __weak/__strong ivars.
 
+  unsigned AccessControl     : 1; // Whether C++ access control should 
+                                  // be enabled.
+  unsigned CharIsSigned      : 1; // Whether char is a signed or unsigned type
+
+  unsigned OpenCL            : 1; // OpenCL C99 language extensions.
+
 private:
-  unsigned GC : 2; // Objective-C Garbage Collection modes.  We declare
-                   // this enum as unsigned because MSVC insists on making enums
-                   // signed.  Set/Query this value using accessors.  
+  unsigned GC : 2;                // Objective-C Garbage Collection modes.  We
+                                  // declare this enum as unsigned because MSVC
+                                  // insists on making enums signed.  Set/Query
+                                  // this value using accessors.
   unsigned SymbolVisibility  : 3; // Symbol's visibility.
+  unsigned StackProtector    : 2; // Whether stack protectors are on. We declare
+                                  // this enum as unsigned because MSVC insists
+                                  // on making enums signed.  Set/Query this
+                                  // value using accessors.
 
   /// The user provided name for the "main file", if non-null. This is
   /// useful in situations where the input file name does not match
@@ -93,6 +105,7 @@ public:
   unsigned InstantiationDepth;    // Maximum template instantiation depth.
 
   enum GCMode { NonGC, GCOnly, HybridGC };
+  enum StackProtectorMode { SSPOff, SSPOn, SSPReq };
   enum VisibilityMode { 
     Default, 
     Protected, 
@@ -100,15 +113,16 @@ public:
   };
   
   LangOptions() {
-    Trigraphs = BCPLComment = DollarIdents = AsmPreprocessor = 0;
+    Trigraphs = BCPLComment = Bool = DollarIdents = AsmPreprocessor = 0;
     GNUMode = ImplicitInt = Digraphs = 0;
     HexFloats = 0;
-    GC = ObjC1 = ObjC2 = ObjCNonFragileABI = ObjCTightLayout = 0;
+    GC = ObjC1 = ObjC2 = ObjCNonFragileABI = 0;
     C99 = Microsoft = CPlusPlus = CPlusPlus0x = 0;
     CXXOperatorNames = PascalStrings = WritableStrings = 0;
     Exceptions = NeXTRuntime = Freestanding = NoBuiltin = 0;
     LaxVectorConversions = 1;
     HeinousExtensions = 0;
+    AltiVec = OpenCL = StackProtector = 0;
     
     SymbolVisibility = (unsigned) Default;
     
@@ -118,8 +132,12 @@ public:
     EmitAllDecls = 0;
     MathErrno = 1;
 
+    // FIXME: The default should be 1.
+    AccessControl = 0;
+    
     OverflowChecking = 0;
     ObjCGCBitmapPrint = 0;
+    ObjCSenderDispatch = 0;
 
     InstantiationDepth = 99;
     
@@ -132,11 +150,20 @@ public:
     GNUInline = 0;
     NoInline = 0;
 
+    CharIsSigned = 1;
+
     MainFileName = 0;
   }
   
   GCMode getGCMode() const { return (GCMode) GC; }
   void setGCMode(GCMode m) { GC = (unsigned) m; }
+
+  StackProtectorMode getStackProtectorMode() const {
+    return static_cast<StackProtectorMode>(StackProtector);
+  }
+  void setStackProtectorMode(StackProtectorMode m) {
+    StackProtector = static_cast<unsigned>(m);
+  }
 
   const char *getMainFileName() const { return MainFileName; }
   void setMainFileName(const char *Name) { MainFileName = Name; }

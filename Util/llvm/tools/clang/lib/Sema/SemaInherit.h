@@ -144,6 +144,7 @@ namespace clang {
 
   public:
     typedef std::list<BasePath>::const_iterator paths_iterator;
+    typedef NamedDecl **decl_iterator;
     
     /// BasePaths - Construct a new BasePaths structure to record the
     /// paths for a derived-to-base search.
@@ -163,8 +164,8 @@ namespace clang {
     BasePath&       front()       { return Paths.front(); }
     const BasePath& front() const { return Paths.front(); }
 
-    NamedDecl **found_decls_begin();
-    NamedDecl **found_decls_end();
+    decl_iterator found_decls_begin();
+    decl_iterator found_decls_end();
 
     bool isAmbiguous(QualType BaseType);
 
@@ -201,22 +202,33 @@ namespace clang {
   /// member of a C++ class. Objects of this type are used to direct
   /// Sema::LookupCXXClassMember.
   struct MemberLookupCriteria {
+    /// LookupKind - the kind of lookup we're doing.
+    enum LookupKind {
+      LK_Base,
+      LK_NamedMember,
+      LK_OverriddenMember
+    };
+    
     /// MemberLookupCriteria - Constructs member lookup criteria to
     /// search for a base class of type Base.
     explicit MemberLookupCriteria(QualType Base) 
-      : LookupBase(true), Base(Base) { }
+      : Kind(LK_Base), Base(Base) { }
 
     /// MemberLookupCriteria - Constructs member lookup criteria to
     /// search for a class member with the given Name.
     explicit MemberLookupCriteria(DeclarationName Name, 
                                   Sema::LookupNameKind NameKind,
                                   unsigned IDNS) 
-      : LookupBase(false), Name(Name), NameKind(NameKind), IDNS(IDNS) { }
+      : Kind(LK_NamedMember), Name(Name), NameKind(NameKind), IDNS(IDNS) { }
 
-    /// LookupBase - True if we are looking for a base class (whose
-    /// type is Base). If false, we are looking for a named member of
+    explicit MemberLookupCriteria(CXXMethodDecl *MD)
+      : Kind(LK_OverriddenMember), Method(MD) { }
+    
+    /// Kind - The kind of lookup we're doing.
+    /// LK_Base if we are looking for a base class (whose
+    /// type is Base). LK_NamedMember if we are looking for a named member of
     /// the class (with the name Name).
-    bool LookupBase;
+    LookupKind Kind;
 
     /// Base - The type of the base class we're searching for, if
     /// LookupBase is true.
@@ -228,6 +240,8 @@ namespace clang {
 
     Sema::LookupNameKind NameKind;
     unsigned IDNS;
+    
+    CXXMethodDecl *Method;
   };
 }
 

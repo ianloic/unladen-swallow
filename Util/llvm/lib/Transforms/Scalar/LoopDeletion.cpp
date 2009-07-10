@@ -136,11 +136,8 @@ bool LoopDeletion::IsLoopDead(Loop* L,
        LI != LE; ++LI) {
     for (BasicBlock::iterator BI = (*LI)->begin(), BE = (*LI)->end();
          BI != BE; ++BI) {
-      if (BI->mayWriteToMemory())
+      if (BI->mayHaveSideEffects())
         return false;
-      else if (LoadInst* L = dyn_cast<LoadInst>(BI))
-        if (L->isVolatile())
-          return false;
     }
   }
   
@@ -190,7 +187,7 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   // Don't remove loops for which we can't solve the trip count.
   // They could be infinite, in which case we'd be changing program behavior.
   ScalarEvolution& SE = getAnalysis<ScalarEvolution>();
-  SCEVHandle S = SE.getBackedgeTakenCount(L);
+  const SCEV *S = SE.getBackedgeTakenCount(L);
   if (isa<SCEVCouldNotCompute>(S))
     return false;
   
@@ -202,7 +199,12 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   // Because we're deleting a large chunk of code at once, the sequence in which
   // we remove things is very important to avoid invalidation issues.  Don't
   // mess with this unless you have good reason and know what you're doing.
-  
+
+  // Tell ScalarEvolution that the loop is deleted. Do this before
+  // deleting the loop so that ScalarEvolution can look at the loop
+  // to determine what it needs to clean up.
+  SE.forgetLoopBackedgeTakenCount(L);
+
   // Move simple loop-invariant expressions out of the loop, since they
   // might be needed by the exit phis.
   for (Loop::block_iterator LI = L->block_begin(), LE = L->block_end();
@@ -251,11 +253,6 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
     (*LI)->dropAllReferences();
   }
   
-  // Tell ScalarEvolution that the loop is deleted. Do this before
-  // deleting the loop so that ScalarEvolution can look at the loop
-  // to determine what it needs to clean up.
-  SE.forgetLoopBackedgeTakenCount(L);
-
   // Erase the instructions and the blocks without having to worry
   // about ordering because we already dropped the references.
   // NOTE: This iteration is safe because erasing the block does not remove its

@@ -1,37 +1,55 @@
 include(FindPerl)
 
+
+function(get_system_libs return_var)
+  # Returns in `return_var' a list of system libraries used by LLVM.
+  if( NOT MSVC )
+    if( MINGW )
+      set(system_libs ${system_libs} imagehlp psapi)
+    elseif( CMAKE_HOST_UNIX )
+      if( HAVE_LIBDL )
+	set(system_libs ${system_libs} dl)
+      endif()
+      if( LLVM_ENABLE_THREADS AND HAVE_LIBPTHREAD )
+	set(system_libs ${system_libs} pthread)
+      endif()
+    endif( MINGW )
+  endif( NOT MSVC )
+  set(${return_var} ${system_libs} PARENT_SCOPE)
+endfunction(get_system_libs)
+
+
 macro(llvm_config executable)
-  # extra args is the list of link components.
-  if( MSVC )
-    msvc_llvm_config(${executable} ${ARGN})
-  else( MSVC )
-    nix_llvm_config(${executable} ${ARGN})
-  endif( MSVC )
+  explicit_llvm_config(${executable} ${ARGN})
 endmacro(llvm_config)
 
 
-function(msvc_llvm_config executable)
+function(explicit_llvm_config executable)
   set( link_components ${ARGN} )
-  if( CMAKE_CL_64 )
-    set(include_lflag "/INCLUDE:")
-  else( CMAKE_CL_64 )
-    set(include_lflag "/INCLUDE:_")
-  endif()
-  foreach(c ${link_components})
-    if( c STREQUAL "jit" )
-      set(lfgs "${lfgs} ${include_lflag}X86TargetMachineModule")
-    endif( c STREQUAL "jit" )
-    list(FIND LLVM_TARGETS_TO_BUILD ${c} idx)
-    if( NOT idx LESS 0 )
-      set(lfgs "${lfgs} ${include_lflag}${c}TargetMachineModule")
-      list(FIND LLVM_ASMPRINTERS_FORCE_LINK ${c} idx)
-      if( NOT idx LESS 0 )
-	set(lfgs "${lfgs} ${include_lflag}${c}AsmPrinterForceLink")
-      endif()
-    endif()
-  endforeach(c)
 
-  msvc_map_components_to_libraries(LIBRARIES ${link_components})
+  set(lfgs)
+  if (MSVC)
+    if( CMAKE_CL_64 )
+      set(include_lflag "/INCLUDE:")
+    else( CMAKE_CL_64 )
+      set(include_lflag "/INCLUDE:_")
+    endif()
+    foreach(c ${link_components})
+      if( c STREQUAL "jit" )
+        set(lfgs "${lfgs} ${include_lflag}X86TargetMachineModule")
+      endif( c STREQUAL "jit" )
+      list(FIND LLVM_TARGETS_TO_BUILD ${c} idx)
+      if( NOT idx LESS 0 )
+        set(lfgs "${lfgs} ${include_lflag}${c}TargetMachineModule")
+        list(FIND LLVM_ASMPRINTERS_FORCE_LINK ${c} idx)
+        if( NOT idx LESS 0 )
+	  set(lfgs "${lfgs} ${include_lflag}${c}AsmPrinterForceLink")
+        endif()
+      endif()
+    endforeach(c)
+  endif ()
+
+  explicit_map_components_to_libraries(LIBRARIES ${link_components})
   target_link_libraries(${executable} ${LIBRARIES})
 
   if( lfgs )
@@ -39,10 +57,10 @@ function(msvc_llvm_config executable)
       PROPERTIES
       LINK_FLAGS ${lfgs})
   endif()
-endfunction(msvc_llvm_config)
+endfunction(explicit_llvm_config)
 
 
-function(msvc_map_components_to_libraries out_libs)
+function(explicit_map_components_to_libraries out_libs)
   set( link_components ${ARGN} )
   foreach(c ${link_components})
     # add codegen/asmprinter
@@ -102,46 +120,9 @@ function(msvc_map_components_to_libraries out_libs)
   endwhile( ${curr_idx} LESS ${lst_size} )
   list(REMOVE_DUPLICATES result)
   set(${out_libs} ${result} PARENT_SCOPE)
-endfunction(msvc_map_components_to_libraries)
+endfunction(explicit_map_components_to_libraries)
 
-
-macro(nix_llvm_config executable)
-  set(lc "")
-  foreach(c ${ARGN})
-    set(lc "${lc} ${c}")
-  endforeach(c)
-  if( NOT HAVE_LLVM_CONFIG )
-    target_link_libraries(${executable}
-      "`${LLVM_TOOLS_BINARY_DIR}/llvm-config --libs ${lc}`")
-  else( NOT HAVE_LLVM_CONFIG )
-    # tbi: Error handling.
-    if( NOT PERL_EXECUTABLE )
-      message(FATAL_ERROR "Perl required but not found!")
-    endif( NOT PERL_EXECUTABLE )
-    execute_process(
-      COMMAND sh -c "${PERL_EXECUTABLE} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/llvm-config --libs ${lc}"
-      RESULT_VARIABLE rv
-      OUTPUT_VARIABLE libs
-      OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(NOT rv EQUAL 0)
-      message(FATAL_ERROR "llvm-config failed for executable ${executable}")
-    endif(NOT rv EQUAL 0)
-    string(REPLACE " " ";" libs ${libs})
-    foreach(c ${libs})
-      if(c MATCHES ".*\\.o")
-	get_filename_component(fn ${c} NAME)
-	target_link_libraries(${executable}
-	  ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}/${fn})
-      else(c MATCHES ".*\\.o")
-	string(REPLACE "-l" "" fn ${c})
-	target_link_libraries(${executable} ${fn})
-      endif(c MATCHES ".*\\.o")
-    endforeach(c)
-  endif( NOT HAVE_LLVM_CONFIG )
-endmacro(nix_llvm_config)
-
-
-# This data is used on MSVC for stablishing executable/library
+# This data is used to establish executable/library
 # dependencies.  Comes from the llvm-config script, which is built and
 # installed on the bin directory for MinGW or Linux. At the end of the
 # script, you'll see lines like this:

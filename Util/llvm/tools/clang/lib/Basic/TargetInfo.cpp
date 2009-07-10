@@ -22,7 +22,6 @@ TargetInfo::TargetInfo(const std::string &T) : Triple(T) {
   // Set defaults.  Defaults are set for a 32-bit RISC platform,
   // like PPC or SPARC.
   // These should be overridden by concrete targets as needed.
-  CharIsSigned = true;
   TLSSupported = true;
   PointerWidth = PointerAlign = 32;
   WCharWidth = WCharAlign = 32;
@@ -42,6 +41,7 @@ TargetInfo::TargetInfo(const std::string &T) : Triple(T) {
   UIntMaxType = UnsignedLongLong;
   IntPtrType = SignedLong;
   WCharType = SignedInt;
+  Int64Type = SignedLongLong;
   FloatFormat = &llvm::APFloat::IEEEsingle;
   DoubleFormat = &llvm::APFloat::IEEEdouble;
   LongDoubleFormat = &llvm::APFloat::IEEEdouble;
@@ -264,8 +264,16 @@ bool TargetInfo::validateInputConstraint(ConstraintInfo *OutputConstraints,
       // FIXME: Fail if % is used with the last operand.
       break;
     case 'i': // immediate integer.
-    case 'I':
     case 'n': // immediate integer with a known value.
+      break;
+    case 'I':  // Various constant constraints with target-specific meanings.
+    case 'J':
+    case 'K':
+    case 'L':
+    case 'M':
+    case 'N':
+    case 'O':
+    case 'P':
       break;
     case 'r': // general register.
       Info.setAllowsRegister();

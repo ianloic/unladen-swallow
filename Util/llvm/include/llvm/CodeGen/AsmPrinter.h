@@ -18,7 +18,6 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Target/TargetMachine.h"
 #include <set>
@@ -34,6 +33,7 @@ namespace llvm {
   class GlobalVariable;
   class MachineConstantPoolEntry;
   class MachineConstantPoolValue;
+  class MachineModuleInfo;
   class DwarfWriter;
   class Mangler;
   class Section;
@@ -59,16 +59,12 @@ namespace llvm {
     gcp_map_type GCMetadataPrinters;
     
   protected:
-    /// DW -This is needed because printDeclare() has to insert
-    /// DbgVariable entries into the dwarf table. This is a short term hack
-    /// that ought be fixed soon.
+    /// MMI - If available, this is a pointer to the current MachineModuleInfo.
+    MachineModuleInfo *MMI;
+    
+    /// DW - If available, this is a pointer to the current dwarf writer.
     DwarfWriter *DW;
     
-    // Necessary for external weak linkage support
-    std::set<const GlobalValue*> ExtWeakSymbols;
-
-    /// OptLevel - Generating code at a specific optimization level.
-    CodeGenOpt::Level OptLevel;
   public:
     /// Output stream on which we're printing assembly code.
     ///
@@ -111,9 +107,18 @@ namespace llvm {
     ///
     bool VerboseAsm;
 
+    /// Private state for PrintSpecial()
+    // Assign a unique ID to this machine instruction.
+    mutable const MachineInstr *LastMI;
+    mutable const Function *LastFn;
+    mutable unsigned Counter;
+    
+    // Private state for processDebugLock()
+    mutable DebugLocTuple PrevDLT;
+
   protected:
     explicit AsmPrinter(raw_ostream &o, TargetMachine &TM,
-                        const TargetAsmInfo *T, CodeGenOpt::Level OL, bool V);
+                        const TargetAsmInfo *T, bool V);
     
   public:
     virtual ~AsmPrinter();
@@ -132,7 +137,8 @@ namespace llvm {
     ///
     /// This method is used when about to emit executable code.
     ///
-    void SwitchToTextSection(const char *NewSection, const GlobalValue *GV = NULL);
+    void SwitchToTextSection(const char *NewSection, 
+                             const GlobalValue *GV = NULL);
 
     /// SwitchToDataSection - Switch to the specified section of the executable
     /// if we are not already in it!  If GV is non-null and if the global has an
@@ -146,7 +152,8 @@ namespace llvm {
     /// is the same as the SwitchToTextSection method, but not all assemblers
     /// are the same.
     ///
-    void SwitchToDataSection(const char *NewSection, const GlobalValue *GV = NULL);
+    void SwitchToDataSection(const char *NewSection, 
+                             const GlobalValue *GV = NULL);
 
     /// SwitchToSection - Switch to the specified section of the executable if
     /// we are not already in it!
@@ -342,6 +349,10 @@ namespace llvm {
     void EmitGlobalConstant(const Constant* CV, unsigned AddrSpace = 0);
 
     virtual void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV);
+
+    /// processDebugLoc - Processes the debug information of each machine
+    /// instruction's DebugLoc.
+    void processDebugLoc(DebugLoc DL);
     
     /// printInlineAsm - This method formats and prints the specified machine
     /// instruction that is an inline asm.

@@ -34,6 +34,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
@@ -42,13 +43,19 @@
 #include "llvm/ExecutionEngine/JIT.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/Target/TargetSelect.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 int main() {
+  
+  InitializeNativeTarget();
+
+  LLVMContext Context;
+  
   // Create some module to put our function into it.
-  Module *M = new Module("test");
+  Module *M = new Module("test", Context);
 
   // Create the add1 function entry and insert this entry into module M.  The
   // function will have a return type of "int" and take an argument of "int".

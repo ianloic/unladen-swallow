@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/DwarfWriter.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -41,11 +42,12 @@ AsmVerbose("asm-verbose", cl::desc("Add comments to directives."),
 
 char AsmPrinter::ID = 0;
 AsmPrinter::AsmPrinter(raw_ostream &o, TargetMachine &tm,
-                       const TargetAsmInfo *T, CodeGenOpt::Level OL, bool VDef)
-  : MachineFunctionPass(&ID), FunctionNumber(0), OptLevel(OL), O(o),
+                       const TargetAsmInfo *T, bool VDef)
+  : MachineFunctionPass(&ID), FunctionNumber(0), O(o),
     TM(tm), TAI(T), TRI(tm.getRegisterInfo()),
-    IsInTextSection(false)
-{
+    IsInTextSection(false), LastMI(0), LastFn(0), Counter(~0U),
+    PrevDLT(0, ~0U, ~0U) {
+  DW = 0; MMI = 0;
   switch (AsmVerbose) {
   case cl::BOU_UNSET: VerboseAsm = VDef;  break;
   case cl::BOU_TRUE:  VerboseAsm = true;  break;
@@ -151,6 +153,9 @@ void AsmPrinter::getAnalysisUsage(AnalysisUsage &AU) const {
 bool AsmPrinter::doInitialization(Module &M) {
   Mang = new Mangler(M, TAI->getGlobalPrefix(), TAI->getPrivateGlobalPrefix());
   
+  if (TAI->doesAllowQuotesInName())
+    Mang->setUseQuotes(true);
+  
   GCModuleInfo *MI = getAnalysisIfAvailable<GCModuleInfo>();
   assert(MI && "AsmPrinter didn't require GCModuleInfo?");
 
@@ -173,20 +178,44 @@ bool AsmPrinter::doInitialization(Module &M) {
 
   SwitchToDataSection("");   // Reset back to no section.
   
-  MachineModuleInfo *MMI = getAnalysisIfAvailable<MachineModuleInfo>();
-  if (MMI) MMI->AnalyzeModule(M);
-  DW = getAnalysisIfAvailable<DwarfWriter>();
+  if (TAI->doesSupportDebugInformation() ||
+      TAI->doesSupportExceptionHandling()) {
+    MMI = getAnalysisIfAvailable<MachineModuleInfo>();
+    if (MMI)
+      MMI->AnalyzeModule(M);
+    DW = getAnalysisIfAvailable<DwarfWriter>();
+    if (DW)
+      DW->BeginModule(&M, MMI, O, this, TAI);
+  }
+
   return false;
 }
 
 bool AsmPrinter::doFinalization(Module &M) {
+  // Emit final debug information.
+  if (TAI->doesSupportDebugInformation() || TAI->doesSupportExceptionHandling())
+    DW->EndModule();
+  
+  // If the target wants to know about weak references, print them all.
   if (TAI->getWeakRefDirective()) {
-    if (!ExtWeakSymbols.empty())
-      SwitchToDataSection("");
+    // FIXME: This is not lazy, it would be nice to only print weak references
+    // to stuff that is actually used.  Note that doing so would require targets
+    // to notice uses in operands (due to constant exprs etc).  This should
+    // happen with the MC stuff eventually.
+    SwitchToDataSection("");
 
-    for (std::set<const GlobalValue*>::iterator i = ExtWeakSymbols.begin(),
-         e = ExtWeakSymbols.end(); i != e; ++i)
-      O << TAI->getWeakRefDirective() << Mang->getValueName(*i) << '\n';
+    // Print out module-level global variables here.
+    for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
+         I != E; ++I) {
+      if (I->hasExternalWeakLinkage())
+        O << TAI->getWeakRefDirective() << Mang->getValueName(I) << '\n';
+    }
+    
+    for (Module::const_iterator I = M.begin(), E = M.end();
+         I != E; ++I) {
+      if (I->hasExternalWeakLinkage())
+        O << TAI->getWeakRefDirective() << Mang->getValueName(I) << '\n';
+    }
   }
 
   if (TAI->getSetDirective()) {
@@ -195,7 +224,7 @@ bool AsmPrinter::doFinalization(Module &M) {
 
     O << '\n';
     for (Module::const_alias_iterator I = M.alias_begin(), E = M.alias_end();
-         I!=E; ++I) {
+         I != E; ++I) {
       std::string Name = Mang->getValueName(I);
       std::string Target;
 
@@ -223,12 +252,13 @@ bool AsmPrinter::doFinalization(Module &M) {
 
   // If we don't have any trampolines, then we don't require stack memory
   // to be executable. Some targets have a directive to declare this.
-  Function* InitTrampolineIntrinsic = M.getFunction("llvm.init.trampoline");
+  Function *InitTrampolineIntrinsic = M.getFunction("llvm.init.trampoline");
   if (!InitTrampolineIntrinsic || InitTrampolineIntrinsic->use_empty())
     if (TAI->getNonexecutableStackDirective())
       O << TAI->getNonexecutableStackDirective() << '\n';
 
   delete Mang; Mang = 0;
+  DW = 0; MMI = 0;
   return false;
 }
 
@@ -312,7 +342,7 @@ void AsmPrinter::EmitConstantPool(MachineConstantPool *MCP) {
       EmitZeros(NewOffset - Offset);
 
       const Type *Ty = CPE.getType();
-      Offset = NewOffset + TM.getTargetData()->getTypePaddedSize(Ty);
+      Offset = NewOffset + TM.getTargetData()->getTypeAllocSize(Ty);
 
       O << TAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber() << '_'
         << CPI << ":\t\t\t\t\t";
@@ -346,8 +376,9 @@ void AsmPrinter::EmitJumpTableInfo(MachineJumpTableInfo *MJTI,
   const char* JumpTableDataSection = TAI->getJumpTableDataSection();
   const Function *F = MF.getFunction();
   unsigned SectionFlags = TAI->SectionFlagsForGlobal(F);
+  bool JTInDiffSection = false;
   if ((IsPic && !(LoweringInfo && LoweringInfo->usesGlobalOffsetTable())) ||
-     !JumpTableDataSection ||
+      !JumpTableDataSection ||
       SectionFlags & SectionFlags::Linkonce) {
     // In PIC mode, we need to emit the jump table to the same section as the
     // function body itself, otherwise the label differences won't make sense.
@@ -356,6 +387,7 @@ void AsmPrinter::EmitJumpTableInfo(MachineJumpTableInfo *MJTI,
     SwitchToSection(TAI->SectionForGlobal(F));
   } else {
     SwitchToDataSection(JumpTableDataSection);
+    JTInDiffSection = true;
   }
   
   EmitAlignment(Log2_32(MJTI->getAlignment()));
@@ -379,8 +411,10 @@ void AsmPrinter::EmitJumpTableInfo(MachineJumpTableInfo *MJTI,
     // before each jump table.  The first label is never referenced, but tells
     // the assembler and linker the extents of the jump table object.  The
     // second label is actually referenced by the code.
-    if (const char *JTLabelPrefix = TAI->getJumpTableSpecialLabelPrefix())
-      O << JTLabelPrefix << "JTI" << getFunctionNumber() << '_' << i << ":\n";
+    if (JTInDiffSection) {
+      if (const char *JTLabelPrefix = TAI->getJumpTableSpecialLabelPrefix())
+        O << JTLabelPrefix << "JTI" << getFunctionNumber() << '_' << i << ":\n";
+    }
     
     O << TAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber() 
       << '_' << i << ":\n";
@@ -501,7 +535,7 @@ const GlobalValue * AsmPrinter::findGlobalValue(const Constant *CV) {
 void AsmPrinter::EmitLLVMUsedList(Constant *List) {
   const char *Directive = TAI->getUsedDirective();
 
-  // Should be an array of 'sbyte*'.
+  // Should be an array of 'i8*'.
   ConstantArray *InitList = dyn_cast<ConstantArray>(List);
   if (InitList == 0) return;
   
@@ -888,12 +922,12 @@ void AsmPrinter::EmitConstantValueOnly(const Constant *CV) {
 
       // We can emit the pointer value into this slot if the slot is an
       // integer slot greater or equal to the size of the pointer.
-      if (TD->getTypePaddedSize(Ty) >= TD->getTypePaddedSize(Op->getType()))
+      if (TD->getTypeAllocSize(Ty) >= TD->getTypeAllocSize(Op->getType()))
         return EmitConstantValueOnly(Op);
 
       O << "((";
       EmitConstantValueOnly(Op);
-      APInt ptrMask = APInt::getAllOnesValue(TD->getTypePaddedSizeInBits(Ty));
+      APInt ptrMask = APInt::getAllOnesValue(TD->getTypeAllocSizeInBits(Ty));
       
       SmallString<40> S;
       ptrMask.toStringUnsigned(S);
@@ -991,14 +1025,14 @@ void AsmPrinter::EmitGlobalConstantStruct(const ConstantStruct *CVS,
                                           unsigned AddrSpace) {
   // Print the fields in successive locations. Pad to align if needed!
   const TargetData *TD = TM.getTargetData();
-  unsigned Size = TD->getTypePaddedSize(CVS->getType());
+  unsigned Size = TD->getTypeAllocSize(CVS->getType());
   const StructLayout *cvsLayout = TD->getStructLayout(CVS->getType());
   uint64_t sizeSoFar = 0;
   for (unsigned i = 0, e = CVS->getNumOperands(); i != e; ++i) {
     const Constant* field = CVS->getOperand(i);
 
     // Check if padding is needed and insert one or more 0s.
-    uint64_t fieldSize = TD->getTypePaddedSize(field->getType());
+    uint64_t fieldSize = TD->getTypeAllocSize(field->getType());
     uint64_t padSize = ((i == e-1 ? Size : cvsLayout->getElementOffset(i+1))
                         - cvsLayout->getElementOffset(i)) - fieldSize;
     sizeSoFar += fieldSize + padSize;
@@ -1122,7 +1156,7 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
           << " long double most significant halfword";
       O << '\n';
     }
-    EmitZeros(TD->getTypePaddedSize(Type::X86_FP80Ty) -
+    EmitZeros(TD->getTypeAllocSize(Type::X86_FP80Ty) -
               TD->getTypeStoreSize(Type::X86_FP80Ty), AddrSpace);
     return;
   } else if (CFP->getType() == Type::PPC_FP128Ty) {
@@ -1227,7 +1261,7 @@ void AsmPrinter::EmitGlobalConstantLargeInt(const ConstantInt *CI,
 void AsmPrinter::EmitGlobalConstant(const Constant *CV, unsigned AddrSpace) {
   const TargetData *TD = TM.getTargetData();
   const Type *type = CV->getType();
-  unsigned Size = TD->getTypePaddedSize(type);
+  unsigned Size = TD->getTypeAllocSize(type);
 
   if (CV->isNullValue() || isa<UndefValue>(CV)) {
     EmitZeros(Size, AddrSpace);
@@ -1282,20 +1316,15 @@ void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) const {
     if (VerboseAsm)
       O << TAI->getCommentString();
   } else if (!strcmp(Code, "uid")) {
-    // Assign a unique ID to this machine instruction.
-    static const MachineInstr *LastMI = 0;
-    static const Function *F = 0;
-    static unsigned Counter = 0U-1;
-
     // Comparing the address of MI isn't sufficient, because machineinstrs may
     // be allocated to the same address across functions.
     const Function *ThisF = MI->getParent()->getParent()->getFunction();
     
-    // If this is a new machine instruction, bump the counter.
-    if (LastMI != MI || F != ThisF) {
+    // If this is a new LastFn instruction, bump the counter.
+    if (LastMI != MI || LastFn != ThisF) {
       ++Counter;
       LastMI = MI;
-      F = ThisF;
+      LastFn = ThisF;
     }
     O << Counter;
   } else {
@@ -1305,6 +1334,21 @@ void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) const {
   }    
 }
 
+/// processDebugLoc - Processes the debug information of each machine
+/// instruction's DebugLoc.
+void AsmPrinter::processDebugLoc(DebugLoc DL) {
+  if (TAI->doesSupportDebugInformation() && DW->ShouldEmitDwarfDebug()) {
+    if (!DL.isUnknown()) {
+      DebugLocTuple CurDLT = MF->getDebugLocTuple(DL);
+
+      if (CurDLT.CompileUnit != 0 && PrevDLT != CurDLT)
+        printLabel(DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,
+                                        DICompileUnit(CurDLT.CompileUnit)));
+
+      PrevDLT = CurDLT;
+    }
+  }
+}
 
 /// printInlineAsm - This method formats and prints the specified machine
 /// instruction that is an inline asm.

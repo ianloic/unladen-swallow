@@ -30,6 +30,8 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -142,9 +144,11 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
       
       if (!isU6 && !isImmU16(Amount)) {
         // FIX could emit multiple instructions in this case.
+#ifndef NDEBUG
         cerr << "eliminateCallFramePseudoInstr size too big: "
              << Amount << "\n";
-        abort();
+#endif
+        llvm_unreachable();
       }
 
       MachineInstr *New;
@@ -227,8 +231,10 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     MachineInstr *New = 0;
     if (!isUs) {
       if (!RS) {
-        cerr << "eliminateFrameIndex Frame size too big: " << Offset << "\n";
-        abort();
+        std::string msg;
+        raw_string_ostream Msg(msg);
+        Msg << "eliminateFrameIndex Frame size too big: " << Offset;
+        llvm_report_error(Msg.str());
       }
       unsigned ScratchReg = RS->scavengeRegister(XCore::GRRegsRegisterClass, II,
                                                  SPAdj);
@@ -237,18 +243,18 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       case XCore::LDWFI:
         New = BuildMI(MBB, II, dl, TII.get(XCore::LDW_3r), Reg)
               .addReg(FramePtr)
-              .addReg(ScratchReg, false, false, true);
+              .addReg(ScratchReg, RegState::Kill);
         break;
       case XCore::STWFI:
         New = BuildMI(MBB, II, dl, TII.get(XCore::STW_3r))
-              .addReg(Reg, false, false, isKill)
+              .addReg(Reg, getKillRegState(isKill))
               .addReg(FramePtr)
-              .addReg(ScratchReg, false, false, true);
+              .addReg(ScratchReg, RegState::Kill);
         break;
       case XCore::LDAWFI:
         New = BuildMI(MBB, II, dl, TII.get(XCore::LDAWF_l3r), Reg)
               .addReg(FramePtr)
-              .addReg(ScratchReg, false, false, true);
+              .addReg(ScratchReg, RegState::Kill);
         break;
       default:
         assert(0 && "Unexpected Opcode\n");
@@ -262,7 +268,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
         break;
       case XCore::STWFI:
         New = BuildMI(MBB, II, dl, TII.get(XCore::STW_2rus))
-              .addReg(Reg, false, false, isKill)
+              .addReg(Reg, getKillRegState(isKill))
               .addReg(FramePtr)
               .addImm(Offset);
         break;
@@ -278,9 +284,10 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   } else {
     bool isU6 = isImmU6(Offset);
     if (!isU6 && !isImmU16(Offset)) {
-      // FIXME could make this work for LDWSP, LDAWSP.
-      cerr << "eliminateFrameIndex Frame size too big: " << Offset << "\n";
-      abort();
+      std::string msg;
+      raw_string_ostream Msg(msg);
+      Msg << "eliminateFrameIndex Frame size too big: " << Offset;
+      llvm_report_error(Msg.str());
     }
 
     switch (MI.getOpcode()) {
@@ -293,7 +300,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     case XCore::STWFI:
       NewOpcode = (isU6) ? XCore::STWSP_ru6 : XCore::STWSP_lru6;
       BuildMI(MBB, II, dl, TII.get(NewOpcode))
-            .addReg(Reg, false, false, isKill)
+            .addReg(Reg, getKillRegState(isKill))
             .addImm(Offset);
       break;
     case XCore::LDAWFI:
@@ -354,8 +361,10 @@ loadConstant(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   // TODO use mkmsk if possible.
   if (!isImmU16(Value)) {
     // TODO use constant pool.
-    cerr << "loadConstant value too big " << Value << "\n";
-    abort();
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "loadConstant value too big " << Value;
+    llvm_report_error(Msg.str());
   }
   int Opcode = isImmU6(Value) ? XCore::LDC_ru6 : XCore::LDC_lru6;
   BuildMI(MBB, I, dl, TII.get(Opcode), DstReg).addImm(Value);
@@ -368,8 +377,10 @@ storeToStack(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   Offset/=4;
   bool isU6 = isImmU6(Offset);
   if (!isU6 && !isImmU16(Offset)) {
-    cerr << "storeToStack offset too big " << Offset << "\n";
-    abort();
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "storeToStack offset too big " << Offset;
+    llvm_report_error(Msg.str());
   }
   int Opcode = isU6 ? XCore::STWSP_ru6 : XCore::STWSP_lru6;
   BuildMI(MBB, I, dl, TII.get(Opcode))
@@ -384,8 +395,10 @@ loadFromStack(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   Offset/=4;
   bool isU6 = isImmU6(Offset);
   if (!isU6 && !isImmU16(Offset)) {
-    cerr << "loadFromStack offset too big " << Offset << "\n";
-    abort();
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "loadFromStack offset too big " << Offset;
+    llvm_report_error(Msg.str());
   }
   int Opcode = isU6 ? XCore::LDWSP_ru6 : XCore::LDWSP_lru6;
   BuildMI(MBB, I, dl, TII.get(Opcode), DstReg)
@@ -414,8 +427,10 @@ void XCoreRegisterInfo::emitPrologue(MachineFunction &MF) const {
 
   if (!isU6 && !isImmU16(FrameSize)) {
     // FIXME could emit multiple instructions.
-    cerr << "emitPrologue Frame size too big: " << FrameSize << "\n";
-    abort();
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "emitPrologue Frame size too big: " << FrameSize;
+    llvm_report_error(Msg.str());
   }
   bool emitFrameMoves = needsFrameMoves(MF);
 
@@ -538,8 +553,10 @@ void XCoreRegisterInfo::emitEpilogue(MachineFunction &MF,
 
   if (!isU6 && !isImmU16(FrameSize)) {
     // FIXME could emit multiple instructions.
-    cerr << "emitEpilogue Frame size too big: " << FrameSize << "\n";
-    abort();
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "emitEpilogue Frame size too big: " << FrameSize;
+    llvm_report_error(Msg.str());
   }
 
   if (FrameSize) {

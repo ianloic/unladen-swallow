@@ -1,12 +1,22 @@
 set(LLVM_NO_RTTI 1)
 
 add_clang_library(clangFrontend
+  AnalysisConsumer.cpp
+  ASTConsumers.cpp
+  ASTUnit.cpp
+  Backend.cpp
+  CacheTokens.cpp
+  DeclXML.cpp
+  DependencyFile.cpp
+  DiagChecker.cpp
+  DocumentXML.cpp
   FixItRewriter.cpp
+  GeneratePCH.cpp
   HTMLDiagnostics.cpp
+  HTMLPrint.cpp
   InitHeaderSearch.cpp
   InitPreprocessor.cpp
-  TextDiagnosticBuffer.cpp
-  TextDiagnosticPrinter.cpp
+  ManagerRegistry.cpp
   PCHReader.cpp
   PCHReaderDecl.cpp
   PCHReaderStmt.cpp
@@ -14,5 +24,20 @@ add_clang_library(clangFrontend
   PCHWriterDecl.cpp
   PCHWriterStmt.cpp
   PlistDiagnostics.cpp
-  ManagerRegistry.cpp
+  PrintParserCallbacks.cpp
+  PrintPreprocessedOutput.cpp
+  RewriteBlocks.cpp
+  RewriteMacros.cpp
+  RewriteObjC.cpp
+  RewriteTest.cpp
+  StmtXML.cpp
+  TextDiagnosticBuffer.cpp
+  TextDiagnosticPrinter.cpp
+  TypeXML.cpp
+  Warnings.cpp
   )
+
+add_dependencies(clangFrontend 
+  ClangDiagnosticFrontend 
+  ClangDiagnosticLex
+  ClangDiagnosticSema)

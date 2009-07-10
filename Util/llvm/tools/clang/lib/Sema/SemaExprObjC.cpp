@@ -92,6 +92,29 @@ Sema::ExprResult Sema::ParseObjCStringLiteral(SourceLocation *AtLocs,
   return new (Context) ObjCStringLiteral(S, Ty, AtLocs[0]);
 }
 
+Expr *Sema::BuildObjCEncodeExpression(SourceLocation AtLoc, 
+                                      QualType EncodedType,
+                                      SourceLocation RParenLoc) {
+  QualType StrTy;
+  if (EncodedType->isDependentType()) 
+    StrTy = Context.DependentTy;
+  else {
+    std::string Str;
+    Context.getObjCEncodingForType(EncodedType, Str);
+
+    // The type of @encode is the same as the type of the corresponding string,
+    // which is an array type.
+    StrTy = Context.CharTy;
+    // A C++ string literal has a const-qualified element type (C++ 2.13.4p1).
+    if (getLangOptions().CPlusPlus)
+      StrTy.addConst();
+    StrTy = Context.getConstantArrayType(StrTy, llvm::APInt(32, Str.size()+1),
+                                         ArrayType::Normal, 0);
+  }
+  
+  return new (Context) ObjCEncodeExpr(StrTy, EncodedType, AtLoc, RParenLoc);
+}
+
 Sema::ExprResult Sema::ParseObjCEncodeExpression(SourceLocation AtLoc,
                                                  SourceLocation EncodeLoc,
                                                  SourceLocation LParenLoc,
@@ -99,19 +122,7 @@ Sema::ExprResult Sema::ParseObjCEncodeExpression(SourceLocation AtLoc,
                                                  SourceLocation RParenLoc) {
   QualType EncodedType = QualType::getFromOpaquePtr(ty);
 
-  std::string Str;
-  Context.getObjCEncodingForType(EncodedType, Str);
-
-  // The type of @encode is the same as the type of the corresponding string,
-  // which is an array type.
-  QualType StrTy = Context.CharTy;
-  // A C++ string literal has a const-qualified element type (C++ 2.13.4p1).
-  if (getLangOptions().CPlusPlus)
-    StrTy.addConst();
-  StrTy = Context.getConstantArrayType(StrTy, llvm::APInt(32, Str.size()+1),
-                                       ArrayType::Normal, 0);
-  
-  return new (Context) ObjCEncodeExpr(StrTy, EncodedType, AtLoc, RParenLoc);
+  return BuildObjCEncodeExpression(AtLoc, EncodedType, RParenLoc);
 }
 
 Sema::ExprResult Sema::ParseObjCSelectorExpression(Selector Sel,
@@ -119,6 +130,14 @@ Sema::ExprResult Sema::ParseObjCSelectorExpression(Selector Sel,
                                                    SourceLocation SelLoc,
                                                    SourceLocation LParenLoc,
                                                    SourceLocation RParenLoc) {
+  ObjCMethodDecl *Method = LookupInstanceMethodInGlobalPool(Sel, 
+                             SourceRange(LParenLoc, RParenLoc));
+  if (!Method)
+    Method = LookupFactoryMethodInGlobalPool(Sel,
+                                          SourceRange(LParenLoc, RParenLoc));
+  if (!Method)
+    Diag(SelLoc, diag::warn_undeclared_selector) << Sel;
+
   QualType Ty = Context.getObjCSelType();
   return new (Context) ObjCSelectorExpr(Ty, Sel, AtLoc, RParenLoc);
 }
@@ -224,13 +243,13 @@ ObjCMethodDecl *Sema::LookupPrivateClassMethod(Selector Sel,
   while (ClassDecl && !Method) {
     if (ObjCImplementationDecl *ImpDecl 
           = LookupObjCImplementation(ClassDecl->getIdentifier()))
-      Method = ImpDecl->getClassMethod(Context, Sel);
+      Method = ImpDecl->getClassMethod(Sel);
     
     // Look through local category implementations associated with the class.
     if (!Method) {
       for (unsigned i = 0; i < ObjCCategoryImpls.size() && !Method; i++) {
         if (ObjCCategoryImpls[i]->getClassInterface() == ClassDecl)
-          Method = ObjCCategoryImpls[i]->getClassMethod(Context, Sel);
+          Method = ObjCCategoryImpls[i]->getClassMethod(Sel);
       }
     }
     
@@ -238,7 +257,7 @@ ObjCMethodDecl *Sema::LookupPrivateClassMethod(Selector Sel,
     // But only in the root. This matches gcc's behaviour and what the
     // runtime expects.
     if (!Method && !ClassDecl->getSuperClass()) {
-      Method = ClassDecl->lookupInstanceMethod(Context, Sel);
+      Method = ClassDecl->lookupInstanceMethod(Sel);
       // Look through local category implementations associated 
       // with the root class.
       if (!Method) 
@@ -257,13 +276,13 @@ ObjCMethodDecl *Sema::LookupPrivateInstanceMethod(Selector Sel,
     // If we have implementations in scope, check "private" methods.
     if (ObjCImplementationDecl *ImpDecl
           = LookupObjCImplementation(ClassDecl->getIdentifier()))
-      Method = ImpDecl->getInstanceMethod(Context, Sel);
+      Method = ImpDecl->getInstanceMethod(Sel);
     
     // Look through local category implementations associated with the class.
     if (!Method) {
       for (unsigned i = 0; i < ObjCCategoryImpls.size() && !Method; i++) {
         if (ObjCCategoryImpls[i]->getClassInterface() == ClassDecl)
-          Method = ObjCCategoryImpls[i]->getInstanceMethod(Context, Sel);
+          Method = ObjCCategoryImpls[i]->getInstanceMethod(Sel);
       }
     }
     ClassDecl = ClassDecl->getSuperClass();
@@ -282,7 +301,7 @@ Action::OwningExprResult Sema::ActOnClassPropertyRefExpr(
   // Search for a declared property first.
   
   Selector Sel = PP.getSelectorTable().getNullarySelector(&propertyName);
-  ObjCMethodDecl *Getter = IFace->lookupClassMethod(Context, Sel);
+  ObjCMethodDecl *Getter = IFace->lookupClassMethod(Sel);
 
   // If this reference is in an @implementation, check for 'private' methods.
   if (!Getter)
@@ -290,7 +309,7 @@ Action::OwningExprResult Sema::ActOnClassPropertyRefExpr(
       if (ObjCInterfaceDecl *ClassDecl = CurMeth->getClassInterface())
         if (ObjCImplementationDecl *ImpDecl
               = LookupObjCImplementation(ClassDecl->getIdentifier()))
-          Getter = ImpDecl->getClassMethod(Context, Sel);
+          Getter = ImpDecl->getClassMethod(Sel);
 
   if (Getter) {
     // FIXME: refactor/share with ActOnMemberReference().
@@ -304,7 +323,7 @@ Action::OwningExprResult Sema::ActOnClassPropertyRefExpr(
     SelectorTable::constructSetterName(PP.getIdentifierTable(), 
                                        PP.getSelectorTable(), &propertyName);
     
-  ObjCMethodDecl *Setter = IFace->lookupClassMethod(Context, SetterSel);
+  ObjCMethodDecl *Setter = IFace->lookupClassMethod(SetterSel);
   if (!Setter) {
     // If this reference is in an @implementation, also check for 'private'
     // methods.
@@ -312,13 +331,13 @@ Action::OwningExprResult Sema::ActOnClassPropertyRefExpr(
       if (ObjCInterfaceDecl *ClassDecl = CurMeth->getClassInterface())
         if (ObjCImplementationDecl *ImpDecl 
               = LookupObjCImplementation(ClassDecl->getIdentifier()))
-          Setter = ImpDecl->getClassMethod(Context, SetterSel);
+          Setter = ImpDecl->getClassMethod(SetterSel);
   }
   // Look through local category implementations associated with the class.
   if (!Setter) {
     for (unsigned i = 0; i < ObjCCategoryImpls.size() && !Setter; i++) {
       if (ObjCCategoryImpls[i]->getClassInterface() == IFace)
-        Setter = ObjCCategoryImpls[i]->getClassMethod(Context, SetterSel);
+        Setter = ObjCCategoryImpls[i]->getClassMethod(SetterSel);
     }
   }
 
@@ -422,7 +441,16 @@ Sema::ExprResult Sema::ActOnClassMessage(
   assert(ClassDecl && "missing interface declaration");
   ObjCMethodDecl *Method = 0;
   QualType returnType;
-  Method = ClassDecl->lookupClassMethod(Context, Sel);
+  if (ClassDecl->isForwardDecl()) {
+    // A forward class used in messaging is tread as a 'Class'
+    Diag(lbrac, diag::warn_receiver_forward_class) << ClassDecl->getDeclName();
+    Method = LookupFactoryMethodInGlobalPool(Sel, SourceRange(lbrac,rbrac));
+    if (Method)
+      Diag(Method->getLocation(), diag::note_method_sent_forward_class) 
+        << Method->getDeclName();
+  }
+  if (!Method)
+    Method = ClassDecl->lookupClassMethod(Sel);
   
   // If we have an implementation in scope, check "private" methods.
   if (!Method)
@@ -435,12 +463,14 @@ Sema::ExprResult Sema::ActOnClassMessage(
                                 lbrac, rbrac, returnType))
     return true;
 
-  // If we have the ObjCInterfaceDecl* for the class that is receiving
-  // the message, use that to construct the ObjCMessageExpr.  Otherwise
-  // pass on the IdentifierInfo* for the class.
-  // FIXME: need to do a better job handling 'super' usage within a class 
-  // For now, we simply pass the "super" identifier through (which isn't
-  // consistent with instance methods.
+  returnType = returnType.getNonReferenceType();
+  
+  // If we have the ObjCInterfaceDecl* for the class that is receiving the
+  // message, use that to construct the ObjCMessageExpr.  Otherwise pass on the
+  // IdentifierInfo* for the class.
+  // FIXME: need to do a better job handling 'super' usage within a class.  For
+  // now, we simply pass the "super" identifier through (which isn't consistent
+  // with instance methods.
   if (isSuper)
     return new (Context) ObjCMessageExpr(receiverName, Sel, returnType, Method,
                                          lbrac, rbrac, ArgExprs, NumArgs);
@@ -477,7 +507,7 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
       // If we have an interface in scope, check 'super' methods.
       if (ObjCInterfaceDecl *ClassDecl = CurMeth->getClassInterface())
         if (ObjCInterfaceDecl *SuperDecl = ClassDecl->getSuperClass()) {
-          Method = SuperDecl->lookupInstanceMethod(Context, Sel);
+          Method = SuperDecl->lookupInstanceMethod(Sel);
           
           if (!Method) 
             // If we have implementations in scope, check "private" methods.
@@ -491,13 +521,16 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     if (CheckMessageArgumentTypes(ArgExprs, NumArgs, Sel, Method, false,
                                   lbrac, rbrac, returnType))
       return true;
+    
+    returnType = returnType.getNonReferenceType();
     return new (Context) ObjCMessageExpr(RExpr, Sel, returnType, Method, lbrac,
                                          rbrac, ArgExprs, NumArgs);
   }
 
   // Handle messages to id.
   if (ReceiverCType == Context.getCanonicalType(Context.getObjCIdType()) ||
-      ReceiverCType->isBlockPointerType()) {
+      ReceiverCType->isBlockPointerType() ||
+      Context.isObjCNSObjectType(RExpr->getType())) {
     ObjCMethodDecl *Method = LookupInstanceMethodInGlobalPool(
                                Sel, SourceRange(lbrac,rbrac));
     if (!Method)
@@ -505,6 +538,7 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     if (CheckMessageArgumentTypes(ArgExprs, NumArgs, Sel, Method, false, 
                                   lbrac, rbrac, returnType))
       return true;
+    returnType = returnType.getNonReferenceType();
     return new (Context) ObjCMessageExpr(RExpr, Sel, returnType, Method, lbrac,
                                          rbrac, ArgExprs, NumArgs);
   }
@@ -516,7 +550,7 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     if (ObjCMethodDecl *CurMeth = getCurMethodDecl()) {
       if (ObjCInterfaceDecl *ClassDecl = CurMeth->getClassInterface()) {
         // First check the public methods in the class interface.
-        Method = ClassDecl->lookupClassMethod(Context, Sel);
+        Method = ClassDecl->lookupClassMethod(Sel);
         
         if (!Method)
           Method = LookupPrivateClassMethod(Sel, ClassDecl);
@@ -546,6 +580,7 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     if (CheckMessageArgumentTypes(ArgExprs, NumArgs, Sel, Method, false,
                                   lbrac, rbrac, returnType))
       return true;
+    returnType = returnType.getNonReferenceType();
     return new (Context) ObjCMessageExpr(RExpr, Sel, returnType, Method, lbrac,
                                          rbrac, ArgExprs, NumArgs);
   }
@@ -555,14 +590,16 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
   
   // We allow sending a message to a qualified ID ("id<foo>"), which is ok as 
   // long as one of the protocols implements the selector (if not, warn).
-  if (ObjCQualifiedIdType *QIT = dyn_cast<ObjCQualifiedIdType>(ReceiverCType)) {
+  if (const ObjCObjectPointerType *QIdTy = 
+        ReceiverCType->getAsObjCQualifiedIdType()) {
     // Search protocols for instance methods.
-    for (unsigned i = 0; i < QIT->getNumProtocols(); i++) {
-      ObjCProtocolDecl *PDecl = QIT->getProtocols(i);
-      if (PDecl && (Method = PDecl->lookupInstanceMethod(Context, Sel)))
+    for (ObjCObjectPointerType::qual_iterator I = QIdTy->qual_begin(),
+         E = QIdTy->qual_end(); I != E; ++I) {
+      ObjCProtocolDecl *PDecl = *I;
+      if (PDecl && (Method = PDecl->lookupInstanceMethod(Sel)))
         break;
       // Since we aren't supporting "Class<foo>", look for a class method.
-      if (PDecl && (Method = PDecl->lookupClassMethod(Context, Sel)))
+      if (PDecl && (Method = PDecl->lookupClassMethod(Sel)))
         break;
     }
   } else if (const ObjCInterfaceType *OCIType = 
@@ -571,15 +608,15 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     
     ClassDecl = OCIType->getDecl();
     // FIXME: consider using LookupInstanceMethodInGlobalPool, since it will be
-    // faster than the following method (which can do *many* linear searches). 
+    // faster than the following method (which can do *many* linear searches).
     // The idea is to add class info to InstanceMethodPool.
-    Method = ClassDecl->lookupInstanceMethod(Context, Sel);
+    Method = ClassDecl->lookupInstanceMethod(Sel);
     
     if (!Method) {
       // Search protocol qualifiers.
       for (ObjCQualifiedInterfaceType::qual_iterator QI = OCIType->qual_begin(),
            E = OCIType->qual_end(); QI != E; ++QI) {
-        if ((Method = (*QI)->lookupInstanceMethod(Context, Sel)))
+        if ((Method = (*QI)->lookupInstanceMethod(Sel)))
           break;
       }
     }
@@ -617,9 +654,12 @@ Sema::ExprResult Sema::ActOnInstanceMessage(ExprTy *receiver, Selector Sel,
     return true;
   }
   
+  if (Method)
+    DiagnoseSentinelCalls(Method, receiverLoc, ArgExprs, NumArgs);
   if (CheckMessageArgumentTypes(ArgExprs, NumArgs, Sel, Method, false,
                                 lbrac, rbrac, returnType))
     return true;
+  returnType = returnType.getNonReferenceType();
   return new (Context) ObjCMessageExpr(RExpr, Sel, returnType, Method, lbrac,
                                        rbrac, ArgExprs, NumArgs);
 }
@@ -657,12 +697,12 @@ static bool ClassImplementsProtocol(ObjCProtocolDecl *lProto,
        E = Protocols.end(); PI != E; ++PI) {
     if (ProtocolCompatibleWithProtocol(lProto, *PI))
       return true;
-    // This is dubious and is added to be compatible with gcc.
-    // In gcc, it is also allowed assigning a protocol-qualified 'id'
-    // type to a LHS object when protocol in qualified LHS is in list
-    // of protocols in the rhs 'id' object. This IMO, should be a bug.
-    // FIXME: Treat this as an extension, and flag this as an error when
-    //  GCC extensions are not enabled.
+    // This is dubious and is added to be compatible with gcc.  In gcc, it is
+    // also allowed assigning a protocol-qualified 'id' type to a LHS object
+    // when protocol in qualified LHS is in list of protocols in the rhs 'id'
+    // object. This IMO, should be a bug.
+    // FIXME: Treat this as an extension, and flag this as an error when GCC
+    // extensions are not enabled.
     if (RHSIsQualifiedID && ProtocolCompatibleWithProtocol(*PI, lProto))
       return true;
   }
@@ -686,6 +726,15 @@ static bool ClassImplementsProtocol(ObjCProtocolDecl *lProto,
   return false;
 }
 
+/// QualifiedIdConformsQualifiedId - compare id<p,...> with id<p1,...>
+/// return true if lhs's protocols conform to rhs's protocol; false
+/// otherwise.
+bool Sema::QualifiedIdConformsQualifiedId(QualType lhs, QualType rhs) {
+  if (lhs->isObjCQualifiedIdType() && rhs->isObjCQualifiedIdType())
+    return ObjCQualifiedIdTypesAreCompatible(lhs, rhs, false);
+  return false;
+}
+
 /// ObjCQualifiedIdTypesAreCompatible - We know that one of lhs/rhs is an
 /// ObjCQualifiedIDType.
 /// FIXME: Move to ASTContext::typesAreCompatible() and friends.
@@ -706,8 +755,8 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
       return true;
   }
   
-  if (const ObjCQualifiedIdType *lhsQID = lhs->getAsObjCQualifiedIdType()) {
-    const ObjCQualifiedIdType *rhsQID = rhs->getAsObjCQualifiedIdType();
+  if (const ObjCObjectPointerType *lhsQID = lhs->getAsObjCQualifiedIdType()) {
+    const ObjCObjectPointerType *rhsQID = rhs->getAsObjCQualifiedIdType();
     const ObjCQualifiedInterfaceType *rhsQI = 0;
     QualType rtype;
     
@@ -722,11 +771,12 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
         // make sure we check the class hierarchy.
         if (const ObjCInterfaceType *IT = rtype->getAsObjCInterfaceType()) {
           ObjCInterfaceDecl *rhsID = IT->getDecl();
-          for (unsigned i = 0; i != lhsQID->getNumProtocols(); ++i) {
+          for (ObjCObjectPointerType::qual_iterator I = lhsQID->qual_begin(),
+               E = lhsQID->qual_end(); I != E; ++I) {
             // when comparing an id<P> on lhs with a static type on rhs,
             // see if static class implements all of id's protocols, directly or
             // through its super class and categories.
-            if (!ClassImplementsProtocol(lhsQID->getProtocols(i), rhsID, true))
+            if (!ClassImplementsProtocol(*I, rhsID, true))
               return false;
           }
           return true;
@@ -734,7 +784,7 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
       }      
     }
     
-    ObjCQualifiedIdType::qual_iterator RHSProtoI, RHSProtoE;
+    ObjCObjectPointerType::qual_iterator RHSProtoI, RHSProtoE;
     if (rhsQI) { // We have a qualified interface (e.g. "NSObject<Proto> *").
       RHSProtoI = rhsQI->qual_begin();
       RHSProtoE = rhsQI->qual_end();
@@ -745,8 +795,9 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
       return false;
     }
     
-    for (unsigned i =0; i < lhsQID->getNumProtocols(); i++) {
-      ObjCProtocolDecl *lhsProto = lhsQID->getProtocols(i);
+    for (ObjCObjectPointerType::qual_iterator I = lhsQID->qual_begin(),
+         E = lhsQID->qual_end(); I != E; ++I) {
+      ObjCProtocolDecl *lhsProto = *I;
       bool match = false;
 
       // when comparing an id<P> on lhs with a static type on rhs,
@@ -765,11 +816,12 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
         // make sure we check the class hierarchy.
         if (const ObjCInterfaceType *IT = rtype->getAsObjCInterfaceType()) {
           ObjCInterfaceDecl *rhsID = IT->getDecl();
-          for (unsigned i = 0; i != lhsQID->getNumProtocols(); ++i) {
+          for (ObjCObjectPointerType::qual_iterator I = lhsQID->qual_begin(),
+               E = lhsQID->qual_end(); I != E; ++I) {
             // when comparing an id<P> on lhs with a static type on rhs,
             // see if static class implements all of id's protocols, directly or
             // through its super class and categories.
-            if (ClassImplementsProtocol(lhsQID->getProtocols(i), rhsID, true)) {
+            if (ClassImplementsProtocol(*I, rhsID, true)) {
               match = true;
               break;
             }
@@ -783,7 +835,7 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
     return true;
   }
   
-  const ObjCQualifiedIdType *rhsQID = rhs->getAsObjCQualifiedIdType();
+  const ObjCObjectPointerType *rhsQID = rhs->getAsObjCQualifiedIdType();
   assert(rhsQID && "One of the LHS/RHS should be id<x>");
     
   if (!lhs->isPointerType())
@@ -792,13 +844,14 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
   QualType ltype = lhs->getAsPointerType()->getPointeeType();
   if (const ObjCQualifiedInterfaceType *lhsQI =
          ltype->getAsObjCQualifiedInterfaceType()) {
-    ObjCQualifiedIdType::qual_iterator LHSProtoI = lhsQI->qual_begin();
-    ObjCQualifiedIdType::qual_iterator LHSProtoE = lhsQI->qual_end();
+    ObjCObjectPointerType::qual_iterator LHSProtoI = lhsQI->qual_begin();
+    ObjCObjectPointerType::qual_iterator LHSProtoE = lhsQI->qual_end();
     for (; LHSProtoI != LHSProtoE; ++LHSProtoI) {
       bool match = false;
       ObjCProtocolDecl *lhsProto = *LHSProtoI;
-      for (unsigned j = 0; j < rhsQID->getNumProtocols(); j++) {
-        ObjCProtocolDecl *rhsProto = rhsQID->getProtocols(j);
+      for (ObjCObjectPointerType::qual_iterator I = rhsQID->qual_begin(),
+           E = rhsQID->qual_end(); I != E; ++I) {
+        ObjCProtocolDecl *rhsProto = *I;
         if (ProtocolCompatibleWithProtocol(lhsProto, rhsProto) ||
             (compare && ProtocolCompatibleWithProtocol(rhsProto, lhsProto))) {
           match = true;
@@ -815,9 +868,9 @@ bool Sema::ObjCQualifiedIdTypesAreCompatible(QualType lhs, QualType rhs,
     // for static type vs. qualified 'id' type, check that class implements
     // all of 'id's protocols.
     ObjCInterfaceDecl *lhsID = IT->getDecl();
-    for (unsigned j = 0; j < rhsQID->getNumProtocols(); j++) {
-      ObjCProtocolDecl *rhsProto = rhsQID->getProtocols(j);
-      if (!ClassImplementsProtocol(rhsProto, lhsID, compare, true))
+    for (ObjCObjectPointerType::qual_iterator I = rhsQID->qual_begin(),
+         E = rhsQID->qual_end(); I != E; ++I) {
+      if (!ClassImplementsProtocol(*I, lhsID, compare, true))
         return false;
     }
     return true;

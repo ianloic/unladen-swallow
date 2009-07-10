@@ -8,6 +8,7 @@ add_llvm_library(LLVMSupport
   ConstantRange.cpp
   Debug.cpp
   Dwarf.cpp
+  ErrorHandling.cpp
   FileUtilities.cpp
   FoldingSet.cpp
   GraphWriter.cpp
@@ -19,6 +20,7 @@ add_llvm_library(LLVMSupport
   PrettyStackTrace.cpp
   SlowOperationInformer.cpp
   SmallPtrSet.cpp
+  SourceMgr.cpp
   Statistic.cpp
   Streams.cpp
   StringExtras.cpp
@@ -26,5 +28,8 @@ add_llvm_library(LLVMSupport
   StringPool.cpp
   SystemUtils.cpp
   Timer.cpp
+  Triple.cpp
   raw_ostream.cpp
   )
+
+target_link_libraries (LLVMSupport LLVMSystem)

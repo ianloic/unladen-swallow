@@ -1,4 +1,4 @@
-//= GRState*cpp - Path-Sens. "State" for tracking valuues -----*- C++ -*--=//
+//= GRState.cpp - Path-Sensitive "State" for tracking values -----*- C++ -*--=//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-//  This file defines SymbolRef, ExprBindKey, and GRState*
+//  This file implements GRState and GRStateManager.
 //
 //===----------------------------------------------------------------------===//
 
@@ -20,6 +20,7 @@
 using namespace clang;
 
 // Give the vtable for ConstraintManager somewhere to live.
+// FIXME: Move this elsewhere.
 ConstraintManager::~ConstraintManager() {}
 
 GRStateManager::~GRStateManager() {
@@ -56,21 +57,67 @@ GRStateManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
                                            SymReaper);
 }
 
-const GRState* GRStateManager::Unbind(const GRState* St, Loc LV) {
-  Store OldStore = St->getStore();
-  Store NewStore = StoreMgr->Remove(OldStore, LV);
+const GRState *GRState::unbindLoc(Loc LV) const {
+  Store OldStore = getStore();
+  Store NewStore = Mgr->StoreMgr->Remove(OldStore, LV);
   
   if (NewStore == OldStore)
-    return St;
+    return this;
   
-  GRState NewSt = *St;
+  GRState NewSt = *this;
   NewSt.St = NewStore;
-  return getPersistentState(NewSt);    
+  return Mgr->getPersistentState(NewSt);    
+}
+
+SVal GRState::getSValAsScalarOrLoc(const MemRegion *R) const {
+  // We only want to do fetches from regions that we can actually bind
+  // values.  For example, SymbolicRegions of type 'id<...>' cannot
+  // have direct bindings (but their can be bindings on their subregions).
+  if (!R->isBoundable())
+    return UnknownVal();
+
+  if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
+    QualType T = TR->getValueType(Mgr->getContext());
+    if (Loc::IsLocType(T) || T->isIntegerType())
+      return getSVal(R);
+  }
+
+  return UnknownVal();
+}
+
+
+const GRState *GRState::bindExpr(const Stmt* Ex, SVal V, bool isBlkExpr,
+                                 bool Invalidate) const {
+  
+  Environment NewEnv = Mgr->EnvMgr.BindExpr(Env, Ex, V, isBlkExpr, Invalidate);
+  
+  if (NewEnv == Env)
+    return this;
+  
+  GRState NewSt = *this;
+  NewSt.Env = NewEnv;
+  return Mgr->getPersistentState(NewSt);
+}
+
+const GRState *GRState::bindExpr(const Stmt* Ex, SVal V,
+                                 bool Invalidate) const {
+  
+  bool isBlkExpr = false;
+  
+  if (Ex == Mgr->CurrentStmt) {
+      // FIXME: Should this just be an assertion?  When would we want to set
+      // the value of a block-level expression if it wasn't CurrentStmt?
+    isBlkExpr = Mgr->cfg.isBlkExpr(Ex);
+    
+    if (!isBlkExpr)
+      return this;
+  }
+  
+  return bindExpr(Ex, V, isBlkExpr, Invalidate);
 }
 
 const GRState* GRStateManager::getInitialState() {
-
-  GRState StateImpl(EnvMgr.getInitialEnvironment(), 
+  GRState StateImpl(this, EnvMgr.getInitialEnvironment(), 
                     StoreMgr->getInitialStore(),
                     GDMFactory.GetEmptyMap());
 
@@ -92,25 +139,20 @@ const GRState* GRStateManager::getPersistentState(GRState& State) {
   return I;
 }
 
-const GRState* GRStateManager::MakeStateWithStore(const GRState* St, 
-                                                  Store store) {
-  GRState NewSt = *St;
+const GRState* GRState::makeWithStore(Store store) const {
+  GRState NewSt = *this;
   NewSt.St = store;
-  return getPersistentState(NewSt);
+  return Mgr->getPersistentState(NewSt);
 }
-
 
 //===----------------------------------------------------------------------===//
 //  State pretty-printing.
 //===----------------------------------------------------------------------===//
 
-void GRState::print(std::ostream& Out, StoreManager& StoreMgr,
-                    ConstraintManager& ConstraintMgr,
-                    Printer** Beg, Printer** End,
-                    const char* nl, const char* sep) const {
-  
+void GRState::print(llvm::raw_ostream& Out, const char* nl,
+                    const char* sep) const {  
   // Print the store.
-  StoreMgr.print(getStore(), Out, nl, sep);
+  Mgr->getStoreManager().print(getStore(), Out, nl, sep);
   
   // Print Subexpression bindings.
   bool isFirst = true;
@@ -124,9 +166,8 @@ void GRState::print(std::ostream& Out, StoreManager& StoreMgr,
     else { Out << nl; }
     
     Out << " (" << (void*) I.getKey() << ") ";
-    llvm::raw_os_ostream OutS(Out);
-    I.getKey()->printPretty(OutS);
-    OutS.flush();
+    LangOptions LO; // FIXME.
+    I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
     Out << " : ";
     I.getData().print(Out);
   }
@@ -143,31 +184,27 @@ void GRState::print(std::ostream& Out, StoreManager& StoreMgr,
     else { Out << nl; }
     
     Out << " (" << (void*) I.getKey() << ") ";
-    llvm::raw_os_ostream OutS(Out);
-    I.getKey()->printPretty(OutS);
-    OutS.flush();
+    LangOptions LO; // FIXME.
+    I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
     Out << " : ";
     I.getData().print(Out);
   }
   
-  ConstraintMgr.print(this, Out, nl, sep);
+  Mgr->getConstraintManager().print(this, Out, nl, sep);
   
-  // Print checker-specific data. 
-  for ( ; Beg != End ; ++Beg) (*Beg)->Print(Out, this, nl, sep);
+  // Print checker-specific data.
+  for (std::vector<Printer*>::iterator I = Mgr->Printers.begin(),
+                                       E = Mgr->Printers.end(); I != E; ++I) {
+    (*I)->Print(Out, this, nl, sep);
+  }
 }
 
-void GRStateRef::printDOT(std::ostream& Out) const {
+void GRState::printDOT(llvm::raw_ostream& Out) const {
   print(Out, "\\l", "\\|");
 }
 
-void GRStateRef::printStdErr() const {
-  print(*llvm::cerr);
-}  
-
-void GRStateRef::print(std::ostream& Out, const char* nl, const char* sep)const{
-  GRState::Printer **beg = Mgr->Printers.empty() ? 0 : &Mgr->Printers[0];
-  GRState::Printer **end = !beg ? 0 : beg + Mgr->Printers.size();  
-  St->print(Out, *Mgr->StoreMgr, *Mgr->ConstraintMgr, beg, end, nl, sep);
+void GRState::printStdErr() const {
+  print(llvm::errs());
 }
 
 //===----------------------------------------------------------------------===//
@@ -213,13 +250,13 @@ class VISIBILITY_HIDDEN ScanReachableSymbols : public SubRegionMap::Visitor  {
   typedef llvm::DenseSet<const MemRegion*> VisitedRegionsTy;
 
   VisitedRegionsTy visited;
-  GRStateRef state;
+  const GRState *state;
   SymbolVisitor &visitor;
   llvm::OwningPtr<SubRegionMap> SRM;
 public:
   
-  ScanReachableSymbols(GRStateManager* sm, const GRState *st, SymbolVisitor& v)
-    : state(st, *sm), visitor(v) {}
+  ScanReachableSymbols(const GRState *st, SymbolVisitor& v)
+    : state(st), visitor(v) {}
   
   bool scan(nonloc::CompoundVal val);
   bool scan(SVal val);
@@ -270,19 +307,18 @@ bool ScanReachableSymbols::scan(const MemRegion *R) {
       return false;
   
   // Now look at the binding to this region (if any).
-  if (!scan(state.GetSValAsScalarOrLoc(R)))
+  if (!scan(state->getSValAsScalarOrLoc(R)))
     return false;
   
   // Now look at the subregions.
   if (!SRM.get())
-   SRM.reset(state.getManager().getStoreManager().getSubRegionMap(state));
+   SRM.reset(state->getStateManager().getStoreManager().getSubRegionMap(state));
   
   return SRM->iterSubRegions(R, *this);
 }
 
-bool GRStateManager::scanReachableSymbols(SVal val, const GRState* state,
-                                          SymbolVisitor& visitor) {
-  ScanReachableSymbols S(this, state, visitor);
+bool GRState::scanReachableSymbols(SVal val, SymbolVisitor& visitor) const {
+  ScanReachableSymbols S(this, visitor);
   return S.scan(val);
 }
 
@@ -293,7 +329,7 @@ bool GRStateManager::scanReachableSymbols(SVal val, const GRState* state,
 bool GRStateManager::isEqual(const GRState* state, Expr* Ex,
                              const llvm::APSInt& Y) {
   
-  SVal V = GetSVal(state, Ex);
+  SVal V = state->getSVal(Ex);
   
   if (loc::ConcreteInt* X = dyn_cast<loc::ConcreteInt>(&V))
     return X->getValue() == Y;

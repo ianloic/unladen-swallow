@@ -1,15 +1,16 @@
 // RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=basic --verify -fblocks %s &&
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=range --verify -fblocks %s
-
-// NOWORK: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=basic --verify -fblocks %s &&
-// NOWORK: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=range --verify -fblocks %s
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic-new-cast -analyzer-constraints=basic --verify -fblocks %s &&
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=range --verify -fblocks %s &&
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic-new-cast -analyzer-constraints=range --verify -fblocks %s &&
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=basic --verify -fblocks %s &&
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=range --verify -fblocks %s
 
 typedef struct objc_selector *SEL;
 typedef signed char BOOL;
 typedef int NSInteger;
 typedef unsigned int NSUInteger;
 typedef struct _NSZone NSZone;
-@class NSInvocation, NSMethodSignature, NSCoder, NSString, NSEnumerator;
+@class NSInvocation, NSArray, NSMethodSignature, NSCoder, NSString, NSEnumerator;
 @protocol NSObject  - (BOOL)isEqual:(id)object; @end
 @protocol NSCopying  - (id)copyWithZone:(NSZone *)zone; @end
 @protocol NSMutableCopying  - (id)mutableCopyWithZone:(NSZone *)zone; @end
@@ -103,12 +104,12 @@ void check_zero_sized_VLA(int x) {
   if (x)
     return;
 
-  int vla[x]; // expected-warning{{VLAs with no elements have undefined behavior}}
+  int vla[x]; // expected-warning{{Variable-length array 'vla' has zero elements (undefined behavior)}}
 }
 
 void check_uninit_sized_VLA() {
   int x;
-  int vla[x]; // expected-warning{{The expression used to specify the number of elements in the variable-length array (VLA) 'vla' evaluates to an undefined or garbage value}}
+  int vla[x]; // expected-warning{{Variable-length array 'vla' garbage value for array size}}
 }
 
 // sizeof(void)
@@ -283,5 +284,43 @@ int test_invalidate_by_ref() {
   if (y) // no-warning
     return 1;
   return 0;  
+}
+
+// Test for <rdar://problem/7027684>.  This just tests that the CFG is
+// constructed correctly.  Previously, the successor block of the entrance
+// was the block containing the merge for '?', which would trigger an
+// assertion failure.
+int rdar_7027684_aux();
+int rdar_7027684_aux_2() __attribute__((noreturn));
+void rdar_7027684(int x, int y) {
+  {}; // this empty compound statement is critical.
+  (rdar_7027684_aux() ? rdar_7027684_aux_2() : (void) 0);
+}
+
+// Test that we handle casts of string literals to arbitrary types.
+unsigned const char *string_literal_test1() {
+  return (const unsigned char*) "hello";
+}
+
+const float *string_literal_test2() {
+  return (const float*) "hello";
+}
+
+// Test that we handle casts *from* incomplete struct types.
+extern const struct _FooAssertStruct _cmd;
+void test_cast_from_incomplete_struct_aux(volatile const void *x);
+void test_cast_from_incomplete_struct() {
+  test_cast_from_incomplete_struct_aux(&_cmd);
+}
+
+// Test for <rdar://problem/7034511> 
+//  "ValueManager::makeIntVal(uint64_t X, QualType T) should return a 'Loc' 
+//   when 'T' is a pointer"
+//
+// Previously this case would crash.
+void test_rdar_7034511(NSArray *y) {
+  NSObject *x;
+  for (x in y) {}
+  if (x == ((void*) 0)) {}
 }
 

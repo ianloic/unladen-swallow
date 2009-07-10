@@ -16,6 +16,7 @@
 #define LTO_CODE_GENERATOR_H
 
 #include "llvm/Linker.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -37,6 +38,7 @@ public:
     bool                setDebugInfo(lto_debug_model, std::string& errMsg);
     bool                setCodePICModel(lto_codegen_model, std::string& errMsg);
     void                setGccPath(const char* path);
+    void                setAssemblerPath(const char* path);
     void                addMustPreserveSymbol(const char* sym);
     bool                writeMergedModules(const char* path, 
                                                            std::string& errMsg);
@@ -52,6 +54,7 @@ private:
     
     typedef llvm::StringMap<uint8_t> StringSet;
 
+    llvm::LLVMContext&          _context;
     llvm::Linker                _linker;
     llvm::TargetMachine*        _target;
     bool                        _emitDwarfDebugInfo;
@@ -61,6 +64,7 @@ private:
     llvm::MemoryBuffer*         _nativeObjectFile;
     std::vector<const char*>    _codegenOptions;
     llvm::sys::Path*            _gccPath;
+    llvm::sys::Path*            _assemblerPath;
 };
 
 #endif // LTO_CODE_GENERATOR_H

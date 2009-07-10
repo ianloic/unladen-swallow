@@ -13,6 +13,7 @@
 
 #include "llvm/Support/Annotation.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/System/RWMutex.h"
 #include <map>
 #include <cstring>
 using namespace llvm;
@@ -38,36 +39,41 @@ namespace {
 }
 
 typedef std::map<const char*, unsigned, StrCmp> IDMapType;
-static unsigned IDCounter = 0;  // Unique ID counter
+static volatile sys::cas_flag IDCounter = 0;  // Unique ID counter
 
 // Static member to ensure initialiation on demand.
 static ManagedStatic<IDMapType> IDMap;
+static ManagedStatic<sys::SmartRWMutex<true> > AnnotationsLock;
 
 // On demand annotation creation support...
 typedef Annotation *(*AnnFactory)(AnnotationID, const Annotable *, void *);
 typedef std::map<unsigned, std::pair<AnnFactory,void*> > FactMapType;
 
-static FactMapType *TheFactMap = 0;
+static ManagedStatic<FactMapType> TheFactMap;
 static FactMapType &getFactMap() {
-  if (TheFactMap == 0)
-    TheFactMap = new FactMapType();
   return *TheFactMap;
 }
 
 static void eraseFromFactMap(unsigned ID) {
-  assert(TheFactMap && "No entries found!");
+  sys::SmartScopedWriter<true> Writer(*AnnotationsLock);
   TheFactMap->erase(ID);
-  if (TheFactMap->empty()) {   // Delete when empty
-    delete TheFactMap;
-    TheFactMap = 0;
-  }
 }
 
 AnnotationID AnnotationManager::getID(const char *Name) {  // Name -> ID
+  AnnotationsLock->reader_acquire();
   IDMapType::iterator I = IDMap->find(Name);
-  if (I == IDMap->end()) {
-    (*IDMap)[Name] = IDCounter++;   // Add a new element
-    return AnnotationID(IDCounter-1);
+  IDMapType::iterator E = IDMap->end();
+  AnnotationsLock->reader_release();
+  
+  if (I == E) {
+    sys::SmartScopedWriter<true> Writer(*AnnotationsLock);
+    I = IDMap->find(Name);
+    if (I == IDMap->end()) {
+      unsigned newCount = sys::AtomicIncrement(&IDCounter);
+      (*IDMap)[Name] = newCount-1;   // Add a new element
+      return AnnotationID(newCount-1);
+    } else
+      return AnnotationID(I->second);
   }
   return AnnotationID(I->second);
 }
@@ -85,6 +91,7 @@ AnnotationID AnnotationManager::getID(const char *Name, Factory Fact,
 // only be used for debugging.
 //
 const char *AnnotationManager::getName(AnnotationID ID) {  // ID -> Name
+  sys::SmartScopedReader<true> Reader(*AnnotationsLock);
   IDMapType &TheMap = *IDMap;
   for (IDMapType::iterator I = TheMap.begin(); ; ++I) {
     assert(I != TheMap.end() && "Annotation ID is unknown!");
@@ -98,10 +105,12 @@ const char *AnnotationManager::getName(AnnotationID ID) {  // ID -> Name
 //
 void AnnotationManager::registerAnnotationFactory(AnnotationID ID, AnnFactory F,
                                                   void *ExtraData) {
-  if (F)
+  if (F) {
+    sys::SmartScopedWriter<true> Writer(*AnnotationsLock);
     getFactMap()[ID.ID] = std::make_pair(F, ExtraData);
-  else
+  } else {
     eraseFromFactMap(ID.ID);
+  }
 }
 
 // createAnnotation - Create an annotation of the specified ID for the
@@ -109,7 +118,13 @@ void AnnotationManager::registerAnnotationFactory(AnnotationID ID, AnnFactory F,
 //
 Annotation *AnnotationManager::createAnnotation(AnnotationID ID,
                                                 const Annotable *Obj) {
+  AnnotationsLock->reader_acquire();
   FactMapType::iterator I = getFactMap().find(ID.ID);
-  if (I == getFactMap().end()) return 0;
+  if (I == getFactMap().end()) {
+    AnnotationsLock->reader_release();
+    return 0;
+  }
+  
+  AnnotationsLock->reader_release();
   return I->second.first(ID, Obj, I->second.second);
 }

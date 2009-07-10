@@ -38,22 +38,21 @@ class VISIBILITY_HIDDEN BasicStoreManager : public StoreManager {
   const MemRegion* SelfRegion;
   
 public:
-  BasicStoreManager(GRStateManager& mgr)
-    : StoreManager(mgr),
+  BasicStoreManager(GRStateManager& mgr, bool useNewCastRegion = false)
+    : StoreManager(mgr, useNewCastRegion),
       VBFactory(mgr.getAllocator()), 
       SelfRegion(0) {}
   
   ~BasicStoreManager() {}
 
-  SubRegionMap* getSubRegionMap(const GRState *state) {
+  SubRegionMap *getSubRegionMap(const GRState *state) {
     return new BasicStoreSubRegionMap();
   }
 
   SVal Retrieve(const GRState *state, Loc loc, QualType T = QualType());  
 
-  const GRState* Bind(const GRState* St, Loc L, SVal V) {
-    Store store = BindInternal(St->getStore(), L, V);
-    return StateMgr.MakeStateWithStore(St, store);
+  const GRState *Bind(const GRState *state, Loc L, SVal V) {
+    return state->makeWithStore(BindInternal(state->getStore(), L, V));
   }
 
   Store scanForIvars(Stmt *B, const Decl* SelfDecl, Store St);
@@ -64,22 +63,22 @@ public:
 
   // FIXME: Investigate what is using this. This method should be removed.
   virtual Loc getLoc(const VarDecl* VD) {
-    return Loc::MakeVal(MRMgr.getVarRegion(VD));
+    return ValMgr.makeLoc(MRMgr.getVarRegion(VD));
   }
   
-  const GRState* BindCompoundLiteral(const GRState* St, 
-                                     const CompoundLiteralExpr* CL,
-                                     SVal V) {
-    return St;
+  const GRState *BindCompoundLiteral(const GRState *state,
+                                     const CompoundLiteralExpr* cl,
+                                     SVal val) {
+    return state;
   }
   
-  SVal getLValueVar(const GRState* St, const VarDecl* VD);
-  SVal getLValueString(const GRState* St, const StringLiteral* S);
-  SVal getLValueCompoundLiteral(const GRState* St, 
+  SVal getLValueVar(const GRState *state, const VarDecl* VD);
+  SVal getLValueString(const GRState *state, const StringLiteral* S);
+  SVal getLValueCompoundLiteral(const GRState *state,
                                 const CompoundLiteralExpr* CL);
-  SVal getLValueIvar(const GRState* St, const ObjCIvarDecl* D, SVal Base);
-  SVal getLValueField(const GRState* St, SVal Base, const FieldDecl* D);  
-  SVal getLValueElement(const GRState* St, QualType elementType,
+  SVal getLValueIvar(const GRState *state, const ObjCIvarDecl* D, SVal Base);
+  SVal getLValueField(const GRState *state, SVal Base, const FieldDecl* D);  
+  SVal getLValueElement(const GRState *state, QualType elementType,
                         SVal Base, SVal Offset);
 
   /// ArrayToPointer - Used by GRExprEngine::VistCast to handle implicit
@@ -92,23 +91,19 @@ public:
   const MemRegion* getSelfRegion(Store) { return SelfRegion; }
     
   /// RemoveDeadBindings - Scans a BasicStore of 'state' for dead values.
-  ///  It returns a new Store with these values removed, and populates LSymbols
-  ///  and DSymbols with the known set of live and dead symbols respectively.
-  Store
-  RemoveDeadBindings(const GRState* state, Stmt* Loc,
+  ///  It returns a new Store with these values removed.
+  Store RemoveDeadBindings(const GRState *state, Stmt* Loc,
                      SymbolReaper& SymReaper,
                      llvm::SmallVectorImpl<const MemRegion*>& RegionRoots);
 
   void iterBindings(Store store, BindingsHandler& f);
 
-  const GRState* BindDecl(const GRState* St, const VarDecl* VD, SVal InitVal) {
-    Store store = BindDeclInternal(St->getStore(), VD, &InitVal);
-    return StateMgr.MakeStateWithStore(St, store);
+  const GRState *BindDecl(const GRState *state, const VarDecl* VD, SVal InitVal) {
+    return state->makeWithStore(BindDeclInternal(state->getStore(),VD, &InitVal));
   }
 
-  const GRState* BindDeclWithNoInit(const GRState* St, const VarDecl* VD) {
-    Store store = BindDeclInternal(St->getStore(), VD, 0);
-    return StateMgr.MakeStateWithStore(St, store);
+  const GRState *BindDeclWithNoInit(const GRState *state, const VarDecl* VD) {
+    return state->makeWithStore(BindDeclInternal(state->getStore(), VD, 0));
   }
 
   Store BindDeclInternal(Store store, const VarDecl* VD, SVal* InitVal);
@@ -117,7 +112,8 @@ public:
     return BindingsTy(static_cast<const BindingsTy::TreeTy*>(store));
   }
 
-  void print(Store store, std::ostream& Out, const char* nl, const char *sep);
+  void print(Store store, llvm::raw_ostream& Out, const char* nl,
+             const char *sep);
 
 private:
   ASTContext& getContext() { return StateMgr.getContext(); }
@@ -130,21 +126,25 @@ StoreManager* clang::CreateBasicStoreManager(GRStateManager& StMgr) {
   return new BasicStoreManager(StMgr);
 }
 
-SVal BasicStoreManager::getLValueVar(const GRState* St, const VarDecl* VD) {
-  return Loc::MakeVal(MRMgr.getVarRegion(VD));
+StoreManager* clang::CreateBasicStoreNewCastManager(GRStateManager& StMgr) {
+  return new BasicStoreManager(StMgr, true);
 }
 
-SVal BasicStoreManager::getLValueString(const GRState* St, 
+SVal BasicStoreManager::getLValueVar(const GRState *state, const VarDecl* VD) {
+  return ValMgr.makeLoc(MRMgr.getVarRegion(VD));
+}
+
+SVal BasicStoreManager::getLValueString(const GRState *state, 
                                         const StringLiteral* S) {
-  return Loc::MakeVal(MRMgr.getStringRegion(S));
+  return ValMgr.makeLoc(MRMgr.getStringRegion(S));
 }
 
-SVal BasicStoreManager::getLValueCompoundLiteral(const GRState* St,
+SVal BasicStoreManager::getLValueCompoundLiteral(const GRState *state,
                                                  const CompoundLiteralExpr* CL){
-  return Loc::MakeVal(MRMgr.getCompoundLiteralRegion(CL));
+  return ValMgr.makeLoc(MRMgr.getCompoundLiteralRegion(CL));
 }
 
-SVal BasicStoreManager::getLValueIvar(const GRState* St, const ObjCIvarDecl* D,
+SVal BasicStoreManager::getLValueIvar(const GRState *state, const ObjCIvarDecl* D,
                                       SVal Base) {
   
   if (Base.isUnknownOrUndef())
@@ -156,13 +156,13 @@ SVal BasicStoreManager::getLValueIvar(const GRState* St, const ObjCIvarDecl* D,
     const MemRegion *BaseR = cast<loc::MemRegionVal>(BaseL).getRegion();
 
     if (BaseR == SelfRegion)
-      return loc::MemRegionVal(MRMgr.getObjCIvarRegion(D, BaseR));
+      return ValMgr.makeLoc(MRMgr.getObjCIvarRegion(D, BaseR));
   }
   
   return UnknownVal();
 }
 
-SVal BasicStoreManager::getLValueField(const GRState* St, SVal Base,
+SVal BasicStoreManager::getLValueField(const GRState *state, SVal Base,
                                        const FieldDecl* D) {
 
   if (Base.isUnknownOrUndef())
@@ -191,10 +191,10 @@ SVal BasicStoreManager::getLValueField(const GRState* St, SVal Base,
       return Base;
   }
   
-  return Loc::MakeVal(MRMgr.getFieldRegion(D, BaseR));
+  return ValMgr.makeLoc(MRMgr.getFieldRegion(D, BaseR));
 }
 
-SVal BasicStoreManager::getLValueElement(const GRState* St,
+SVal BasicStoreManager::getLValueElement(const GRState *state,
                                          QualType elementType,
                                          SVal Base, SVal Offset) {
 
@@ -202,7 +202,7 @@ SVal BasicStoreManager::getLValueElement(const GRState* St,
     return Base;
   
   Loc BaseL = cast<Loc>(Base);  
-  const TypedRegion* BaseR = 0;
+  const MemRegion* BaseR = 0;
   
   switch(BaseL.getSubKind()) {
     case loc::GotoLabelKind:
@@ -220,15 +220,9 @@ SVal BasicStoreManager::getLValueElement(const GRState* St,
         return Base;
       }
       
-      
-      if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
-        BaseR = TR;
+      if (isa<TypedRegion>(R) || isa<SymbolicRegion>(R)) {
+        BaseR = R;
         break;
-      }
-      
-      if (const SymbolicRegion* SR = dyn_cast<SymbolicRegion>(R)) {
-        SymbolRef Sym = SR->getSymbol();
-        BaseR = MRMgr.getTypedViewRegion(Sym->getType(getContext()), SR);
       }
       
       break;
@@ -246,9 +240,10 @@ SVal BasicStoreManager::getLValueElement(const GRState* St,
       return Base;
   }
   
-  if (BaseR)  
-    return Loc::MakeVal(MRMgr.getElementRegion(elementType, UnknownVal(),
-                                               BaseR));
+  if (BaseR) { 
+    return ValMgr.makeLoc(MRMgr.getElementRegion(elementType, UnknownVal(),
+                                                 BaseR, getContext()));
+  }
   else
     return UnknownVal();
 }
@@ -274,7 +269,7 @@ static bool isHigherOrderRawPtr(QualType T, ASTContext &C) {
   }  
 }
  
-SVal BasicStoreManager::Retrieve(const GRState* state, Loc loc, QualType T) {
+SVal BasicStoreManager::Retrieve(const GRState *state, Loc loc, QualType T) {
   
   if (isa<UnknownVal>(loc))
     return UnknownVal();
@@ -290,7 +285,7 @@ SVal BasicStoreManager::Retrieve(const GRState* state, Loc loc, QualType T) {
         // Just support void**, void***, intptr_t*, intptr_t**, etc., for now.
         // This is needed to handle OSCompareAndSwapPtr() and friends.
         ASTContext &Ctx = StateMgr.getContext();
-        QualType T = ER->getLValueType(Ctx);
+        QualType T = ER->getLocationType(Ctx);
 
         if (!isHigherOrderRawPtr(T, Ctx))
           return UnknownVal();
@@ -323,54 +318,50 @@ SVal BasicStoreManager::Retrieve(const GRState* state, Loc loc, QualType T) {
 }
   
 Store BasicStoreManager::BindInternal(Store store, Loc loc, SVal V) {    
-  switch (loc.getSubKind()) {      
-    case loc::MemRegionKind: {
-      const MemRegion* R = cast<loc::MemRegionVal>(loc).getRegion();
-      ASTContext &C = StateMgr.getContext();
-      
-      // Special case: handle store of pointer values (Loc) to pointers via
-      // a cast to intXX_t*, void*, etc.  This is needed to handle
-      // OSCompareAndSwap32Barrier/OSCompareAndSwap64Barrier.
-      if (isa<Loc>(V) || isa<nonloc::LocAsInteger>(V))
-        if (const ElementRegion *ER = dyn_cast<ElementRegion>(R)) {
-          // FIXME: Should check for index 0.
-          QualType T = ER->getLValueType(C);
-        
-          if (isHigherOrderRawPtr(T, C))
-            R = ER->getSuperRegion();
-        }      
-      
-      if (!(isa<VarRegion>(R) || isa<ObjCIvarRegion>(R)))
-        return store;
-      
-      // We only track bindings to self.ivar.
-      if (const ObjCIvarRegion *IVR = dyn_cast<ObjCIvarRegion>(R))
-        if (IVR->getSuperRegion() != SelfRegion)
-          return store;
-      
-      if (nonloc::LocAsInteger *X = dyn_cast<nonloc::LocAsInteger>(&V)) {
-        // Only convert 'V' to a location iff the underlying region type
-        // is a location as well.
-        // FIXME: We are allowing a store of an arbitrary location to
-        // a pointer.  We may wish to flag a type error here if the types
-        // are incompatible.  This may also cause lots of breakage
-        // elsewhere. Food for thought.
-        if (const TypedRegion *TyR = dyn_cast<TypedRegion>(R)) {
-          if (TyR->isBoundable(C) &&
-              Loc::IsLocType(TyR->getRValueType(C)))              
-            V = X->getLoc();
-        }
-      }
+  if (isa<loc::ConcreteInt>(loc))
+    return store;
 
-      BindingsTy B = GetBindings(store);
-      return V.isUnknown()
-        ? VBFactory.Remove(B, R).getRoot()
-        : VBFactory.Add(B, R, V).getRoot();
-    }
-    default:
-      assert ("SetSVal for given Loc type not yet implemented.");
+  const MemRegion* R = cast<loc::MemRegionVal>(loc).getRegion();
+  ASTContext &C = StateMgr.getContext();
+      
+  // Special case: handle store of pointer values (Loc) to pointers via
+  // a cast to intXX_t*, void*, etc.  This is needed to handle
+  // OSCompareAndSwap32Barrier/OSCompareAndSwap64Barrier.
+  if (isa<Loc>(V) || isa<nonloc::LocAsInteger>(V))
+    if (const ElementRegion *ER = dyn_cast<ElementRegion>(R)) {
+      // FIXME: Should check for index 0.
+      QualType T = ER->getLocationType(C);
+        
+      if (isHigherOrderRawPtr(T, C))
+        R = ER->getSuperRegion();
+    }      
+      
+  if (!(isa<VarRegion>(R) || isa<ObjCIvarRegion>(R)))
+    return store;
+      
+  // We only track bindings to self.ivar.
+  if (const ObjCIvarRegion *IVR = dyn_cast<ObjCIvarRegion>(R))
+    if (IVR->getSuperRegion() != SelfRegion)
       return store;
+      
+  if (nonloc::LocAsInteger *X = dyn_cast<nonloc::LocAsInteger>(&V)) {
+    // Only convert 'V' to a location iff the underlying region type
+    // is a location as well.
+    // FIXME: We are allowing a store of an arbitrary location to
+    // a pointer.  We may wish to flag a type error here if the types
+    // are incompatible.  This may also cause lots of breakage
+    // elsewhere. Food for thought.
+    if (const TypedRegion *TyR = dyn_cast<TypedRegion>(R)) {
+      if (TyR->isBoundable() &&
+          Loc::IsLocType(TyR->getValueType(C)))              
+        V = X->getLoc();
+    }
   }
+
+  BindingsTy B = GetBindings(store);
+  return V.isUnknown()
+    ? VBFactory.Remove(B, R).getRoot()
+    : VBFactory.Add(B, R, V).getRoot();
 }
 
 Store BasicStoreManager::Remove(Store store, Loc loc) {
@@ -390,7 +381,7 @@ Store BasicStoreManager::Remove(Store store, Loc loc) {
 }
 
 Store
-BasicStoreManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
+BasicStoreManager::RemoveDeadBindings(const GRState *state, Stmt* Loc,
                                       SymbolReaper& SymReaper,
                           llvm::SmallVectorImpl<const MemRegion*>& RegionRoots)
 {
@@ -461,7 +452,7 @@ BasicStoreManager::RemoveDeadBindings(const GRState* state, Stmt* Loc,
     const MemRegion* R = I.getKey();
     
     if (!Marked.count(R)) {
-      store = Remove(store, Loc::MakeVal(R));
+      store = Remove(store, ValMgr.makeLoc(R));
       SVal X = I.getData();
       
       for (symbol_iterator SI=X.symbol_begin(), SE=X.symbol_end(); SI!=SE; ++SI)
@@ -487,8 +478,8 @@ Store BasicStoreManager::scanForIvars(Stmt *B, const Decl* SelfDecl, Store St) {
         if (DR->getDecl() == SelfDecl) {
           const MemRegion *IVR = MRMgr.getObjCIvarRegion(IV->getDecl(),
                                                          SelfRegion);          
-          SVal X = ValMgr.getRValueSymbolVal(IVR);          
-          St = BindInternal(St, Loc::MakeVal(IVR), X);
+          SVal X = ValMgr.getRegionValueSymbolVal(IVR);          
+          St = BindInternal(St, ValMgr.makeLoc(IVR), X);
         }
       }
     }
@@ -520,12 +511,12 @@ Store BasicStoreManager::getInitialStore() {
           SelfRegion = MRMgr.getObjCObjectRegion(MD->getClassInterface(),
                                                  MRMgr.getHeapRegion());
           
-          St = BindInternal(St, Loc::MakeVal(MRMgr.getVarRegion(PD)),
-                            Loc::MakeVal(SelfRegion));
+          St = BindInternal(St, ValMgr.makeLoc(MRMgr.getVarRegion(PD)),
+                            ValMgr.makeLoc(SelfRegion));
           
           // Scan the method for ivar references.  While this requires an
           // entire AST scan, the cost should not be high in practice.
-          St = scanForIvars(MD->getBody(getContext()), PD, St);
+          St = scanForIvars(MD->getBody(), PD, St);
         }
       }
     }
@@ -540,13 +531,12 @@ Store BasicStoreManager::getInitialStore() {
 
       // Initialize globals and parameters to symbolic values.
       // Initialize local variables to undefined.
-      const MemRegion *R = StateMgr.getRegion(VD);
-      SVal X = (VD->hasGlobalStorage() || isa<ParmVarDecl>(VD) ||
-                isa<ImplicitParamDecl>(VD))
-            ? ValMgr.getRValueSymbolVal(R)
-            : UndefinedVal();
+      const MemRegion *R = ValMgr.getRegionManager().getVarRegion(VD);
+      SVal X = R->hasGlobalsOrParametersStorage()
+               ? ValMgr.getRegionValueSymbolVal(R)
+               : UndefinedVal();
 
-      St = BindInternal(St, Loc::MakeVal(R), X);
+      St = BindInternal(St, ValMgr.makeLoc(R), X);
     }
   }
   return St;
@@ -598,7 +588,7 @@ Store BasicStoreManager::BindDeclInternal(Store store, const VarDecl* VD,
   } else {
     // Process local scalar variables.
     QualType T = VD->getType();
-    if (Loc::IsLocType(T) || T->isIntegerType()) {
+    if (ValMgr.getSymbolManager().canSymbolicate(T)) {
       SVal V = InitVal ? *InitVal : UndefinedVal();
       store = BindInternal(store, getLoc(VD), V);
     }
@@ -607,18 +597,19 @@ Store BasicStoreManager::BindDeclInternal(Store store, const VarDecl* VD,
   return store;
 }
 
-void BasicStoreManager::print(Store store, std::ostream& O,
+void BasicStoreManager::print(Store store, llvm::raw_ostream& Out,
                               const char* nl, const char *sep) {
       
-  llvm::raw_os_ostream Out(O);
   BindingsTy B = GetBindings(store);
   Out << "Variables:" << nl;
   
   bool isFirst = true;
   
   for (BindingsTy::iterator I=B.begin(), E=B.end(); I != E; ++I) {
-    if (isFirst) isFirst = false;
-    else Out << nl;
+    if (isFirst)
+      isFirst = false;
+    else
+      Out << nl;
     
     Out << ' ' << I.getKey() << " : ";
     I.getData().print(Out);

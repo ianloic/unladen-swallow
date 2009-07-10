@@ -40,6 +40,7 @@ class TextDiagnosticPrinter : public DiagnosticClient {
   bool PrintDiagnosticOption;
   bool PrintFixItInfo;
   unsigned MessageLength;
+  bool UseColors;
 
 public:
   TextDiagnosticPrinter(llvm::raw_ostream &os,
@@ -48,14 +49,16 @@ public:
                         bool printRangeInfo = true,
                         bool printDiagnosticOption = true,
                         bool printFixItInfo = true,
-			unsigned messageLength = 0)
+                        unsigned messageLength = 0,
+                        bool useColors = false)
     : OS(os), LangOpts(0),
       LastCaretDiagnosticWasNote(false), ShowColumn(showColumn), 
       CaretDiagnostics(caretDiagnistics), ShowLocation(showLocation),
       PrintRangeInfo(printRangeInfo),
       PrintDiagnosticOption(printDiagnosticOption),
       PrintFixItInfo(printFixItInfo),
-      MessageLength(messageLength) {}
+      MessageLength(messageLength),
+      UseColors(useColors) {}
 
   void setLangOptions(const LangOptions *LO) {
     LangOpts = LO;
@@ -74,7 +77,6 @@ public:
                            SourceManager &SM,
                            const CodeModificationHint *Hints,
                            unsigned NumHints,
-                           unsigned AvoidColumn,
                            unsigned Columns);
   
   virtual void HandleDiagnostic(Diagnostic::Level DiagLevel,

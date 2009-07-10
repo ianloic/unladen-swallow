@@ -1,4 +1,3 @@
-// RUN: clang-cc -analyze -checker-simple -analyzer-store=region -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify -triple x86_64-apple-darwin9 %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify -triple i686-apple-darwin9 %s
 
@@ -18,7 +17,7 @@ void f2() {
 // This test case checks if we get the right rvalue type of a TypedViewRegion.
 // The ElementRegion's type depends on the array region's rvalue type. If it was
 // a pointer type, we would get a loc::SymbolVal for '*p'.
-char* memchr();
+void* memchr();
 static int
 domain_port (const char *domain_b, const char *domain_e,
              const char **domain_e_ptr)
