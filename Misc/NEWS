@@ -7,7 +7,7 @@ Python News
 What's New in Unladen Swallow 2009Q2 (Python 2.6.1)
 ===================================================
 
-*Release date: 01-Jul-2009*
+*Release date: 13-Jul-2009*
 
 Core and Builtins
 -----------------
@@ -23,6 +23,18 @@ C-API
 
 - ceval.h and eval.h have been merged into eval.h. ceval.h now only includes
   eval.h, so any existing extension modules should continue to work.
+
+Known Problems
+--------------
+
+- It is not possible to generate more than 16MB of machine code. This will be
+  fixed in a subsequent revision. In practice, this should not be a problem,
+  though it does cause aborts when running regrtest.py under -j always.
+
+- test_import dies when run under -j always if built with --with-pydebug.
+
+- Memory usage has increased dramatically. Depending on the scope of the
+  necessary changes, this will be fixed in a subsequent revision or in 2009Q3.
 
 
 What's New in Unladen Swallow 2009Q1 (Python 2.6.1)
