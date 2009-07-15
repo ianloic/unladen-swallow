@@ -43,6 +43,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -105,6 +106,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -167,6 +169,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -230,6 +233,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -292,6 +296,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -355,6 +360,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -418,6 +424,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -481,6 +488,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				AdditionalIncludeDirectories="..;..\Util\llvm\include;..\Util\llvm\obj-x64\include"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"

@@ -19,7 +19,7 @@
 
 namespace llvm {
 class ExecutionEngine;
-class ExistingModuleProvider;
+struct ExistingModuleProvider;
 class GlobalVariable;
 class Module;
 class Value;

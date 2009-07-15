@@ -44,9 +44,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -122,9 +123,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -203,9 +205,10 @@
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -284,9 +287,10 @@
 				InlineFunctionExpansion="0"
 				EnableIntrinsicFunctions="false"
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -361,9 +365,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -439,9 +444,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -517,9 +523,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -595,9 +602,10 @@
 				Name="VCCLCompilerTool"
 				AdditionalOptions="/Zm200 "
 				AdditionalIncludeDirectories="..\Python;..\Modules\zlib;..;$(IntDir);..\Util\llvm\include;..\Util\llvm\obj\include"
-				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32"
+				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
+				DisableSpecificWarnings="4146;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -1969,6 +1977,14 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Util\PyAliasAnalysis.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\PyAliasAnalysis.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Util\PyTypeBuilder.cc"
 				>
 			</File>
@@ -1982,6 +1998,10 @@
 			</File>
 			<File
 				RelativePath="..\Util\SingleFunctionInliner.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\Stats.h"
 				>
 			</File>
 		</Filter>

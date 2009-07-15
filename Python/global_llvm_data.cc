@@ -209,7 +209,7 @@ PyGlobalLlvmData::~PyGlobalLlvmData()
 int
 PyGlobalLlvmData::Optimize(llvm::Function &f, int level)
 {
-    if (level < 0 || level > this->optimizations_.size())
+    if (level < 0 || (size_t)level >= this->optimizations_.size())
         return -1;
     FunctionPassManager *opts_pm = this->optimizations_[level];
     assert(opts_pm != NULL && "Optimization was NULL");

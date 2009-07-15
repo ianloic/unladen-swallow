@@ -22,8 +22,8 @@ public:
 
     int Opcode() const { return this->opcode_; }
     int Oparg() const { return this->oparg_; }
-    int CurIndex() const { return this->cur_index_; }
-    int NextIndex() const { return this->next_index_; }
+    size_t CurIndex() const { return this->cur_index_; }
+    size_t NextIndex() const { return this->next_index_; }
     bool Done() const { return this->cur_index_ == this->bytecode_size_; }
     bool Error() const { return this->error_; }
 
@@ -38,11 +38,11 @@ public:
 private:
     int opcode_;
     int oparg_;
-    int cur_index_;
-    int next_index_;
+    size_t cur_index_;
+    size_t next_index_;
     bool error_;
     const unsigned char *const bytecode_str_;
-    const int bytecode_size_;
+    const size_t bytecode_size_;
 };
 
 BytecodeIterator::BytecodeIterator(PyObject *bytecode_string)
@@ -124,7 +124,7 @@ set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
            "instr_info indices must match bytecode indices.");
     // First, assign each address's "line number" to the change in the
     // line number that applies at that address.
-    int addr = 0;
+    size_t addr = 0;
     const unsigned char *const lnotab_str =
         (unsigned char *)PyString_AS_STRING(code->co_lnotab);
     const int lnotab_size = PyString_GET_SIZE(code->co_lnotab);
@@ -132,8 +132,8 @@ set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
         addr += lnotab_str[i];
         if (addr >= instr_info.size()) {
             PyErr_Format(PyExc_SystemError,
-                         "lnotab referred to addr %d, which is outside of"
-                         " bytecode string of length %zd.",
+                         "lnotab referred to addr %zu, which is outside of"
+                         " bytecode string of length %zu.",
                          addr, instr_info.size());
             return -1;
         }
@@ -144,7 +144,7 @@ set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
     // Second, add up the line number deltas and store the total line
     // number back into instr_info.
     int line = code->co_firstlineno;
-    for (int i = 0; i < instr_info.size(); ++i) {
+    for (size_t i = 0; i < instr_info.size(); ++i) {
         line += instr_info[i].line_number_;
         instr_info[i].line_number_ = line;
     }
@@ -164,7 +164,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
            "instr_info indices must match bytecode indices.");
     BytecodeIterator iter(bytecode);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
-        int target_index;
+        size_t target_index;
         const char *target_name;
         const char *fallthrough_name;
         const char *backedge_name;
@@ -218,10 +218,10 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
             instr_info[iter.NextIndex()].block_ =
                 BasicBlock::Create(fallthrough_name, function);
         }
-        if (target_index < 0 || target_index >= instr_info.size()) {
+        if (target_index >= instr_info.size()) {
             PyErr_Format(PyExc_SystemError,
-                         "Jumped to index %d, which is outside of the"
-                         " bytecode string of length %zd.",
+                         "Jumped to index %zu, which is outside of the"
+                         " bytecode string of length %zu.",
                          target_index, instr_info.size());
             return -1;
         }
@@ -393,7 +393,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
 
 #define OPCODE_JABS(opname) \
     case opname: \
-        if (iter.Oparg() < iter.NextIndex()) { \
+        if ((size_t)iter.Oparg() < iter.NextIndex()) { \
             target = instr_info[iter.Oparg()].backedge_block_; \
         } else { \
             target = instr_info[iter.Oparg()].block_; \
@@ -445,7 +445,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
     // be unreachable.
     fbuilder.FallThroughTo(fbuilder.unreachable_block());
 
-    for (int i = 0; i < instr_info.size(); ++i) {
+    for (size_t i = 0; i < instr_info.size(); ++i) {
         const InstrInfo &info = instr_info[i];
         if (info.backedge_block_ != NULL) {
             assert(info.block_ != NULL &&
