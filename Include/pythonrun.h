@@ -73,7 +73,7 @@ PyAPI_FUNC(void) PyErr_Display(PyObject *, PyObject *, PyObject *);
 
 PyAPI_FUNC(int) Py_AtExit(void (*func)(void));
 
-PyAPI_FUNC(void) Py_Exit(int);
+PyAPI_FUNC(void) Py_GCC_ATTRIBUTE((noreturn)) Py_Exit(int);
 
 PyAPI_FUNC(int) Py_FdIsInteractive(FILE *, const char *);
 

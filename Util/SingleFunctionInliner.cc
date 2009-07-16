@@ -52,7 +52,7 @@ public:
         }
 
         // Actually inline the calls we found.
-        for (int i = 0; i != call_sites.size(); ++i) {
+        for (size_t i = 0; i != call_sites.size(); ++i) {
             changed |= InlineFunction(call_sites[i]);
         }
         return changed;

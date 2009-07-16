@@ -120,7 +120,7 @@ static int
 set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
 {
     assert(PyString_Check(code->co_code));
-    assert(instr_info.size() == PyString_GET_SIZE(code->co_code) &&
+    assert(instr_info.size() == (size_t)PyString_GET_SIZE(code->co_code) &&
            "instr_info indices must match bytecode indices.");
     // First, assign each address's "line number" to the change in the
     // line number that applies at that address.
@@ -160,7 +160,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
                   std::vector<InstrInfo>& instr_info)
 {
     assert(PyString_Check(bytecode) && "Expected bytecode string");
-    assert(instr_info.size() == PyString_GET_SIZE(bytecode) &&
+    assert(instr_info.size() == (size_t)PyString_GET_SIZE(bytecode) &&
            "instr_info indices must match bytecode indices.");
     BytecodeIterator iter(bytecode);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
