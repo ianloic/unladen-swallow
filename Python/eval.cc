@@ -1894,6 +1894,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(LOAD_GLOBAL)
+			PY_LOG_TSC_EVENT(LOAD_GLOBAL_ENTER_EVAL);
 			w = GETITEM(names, oparg);
 			if (PyString_CheckExact(w)) {
 				/* Inline the PyDict_GetItem() calls.
@@ -1913,6 +1914,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
+						PY_LOG_TSC_EVENT(
+							LOAD_GLOBAL_EXIT_EVAL);
 						DISPATCH();
 					}
 					d = (PyDictObject *)(f->f_builtins);
@@ -1925,6 +1928,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
+						PY_LOG_TSC_EVENT(
+							LOAD_GLOBAL_EXIT_EVAL);
 						DISPATCH();
 					}
 					goto load_global_error;
@@ -1943,6 +1948,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			Py_INCREF(x);
 			PUSH(x);
+			PY_LOG_TSC_EVENT(LOAD_GLOBAL_EXIT_EVAL);
 			DISPATCH();
 
 		TARGET(DELETE_FAST)

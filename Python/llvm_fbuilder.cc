@@ -277,12 +277,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
 
     this->builder_.SetInsertPoint(start);
 #ifdef WITH_TSC
-    Function *timer_function = this->GetGlobalFunction<void (int)>(
-            "_PyLog_TscEvent");
-    this->CreateCall(
-            timer_function,
-            ConstantInt::get(PyTypeBuilder<int>::get(),
-                             CALL_ENTER_LLVM));
+    this->LogTscEvent(CALL_ENTER_LLVM);
 #endif
 }
 
@@ -934,6 +929,9 @@ LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
     BasicBlock *builtin_success = BasicBlock::Create(
         "LOAD_GLOBAL_builtin_success", this->function_);
     BasicBlock *done = BasicBlock::Create("LOAD_GLOBAL_done", this->function_);
+#ifdef WITH_TSC
+    this->LogTscEvent(LOAD_GLOBAL_ENTER_LLVM);
+#endif
     Value *name = this->LookupName(name_index);
     Function *pydict_getitem = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *)>("PyDict_GetItem");
@@ -967,6 +965,9 @@ LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
     this->builder_.CreateBr(done);
 
     this->builder_.SetInsertPoint(done);
+#ifdef WITH_TSC
+    this->LogTscEvent(LOAD_GLOBAL_EXIT_LLVM);
+#endif
 }
 
 void
@@ -1364,21 +1365,23 @@ LlvmFunctionBuilder::MAKE_CLOSURE(int num_defaults)
     this->Push(func_object);
 }
 
-void
-LlvmFunctionBuilder::LogCallStart() {
 #ifdef WITH_TSC
+void
+LlvmFunctionBuilder::LogTscEvent(_PyTscEventId event_id) {
     Function *timer_function = this->GetGlobalFunction<void (int)>(
             "_PyLog_TscEvent");
     // Int8Ty doesn't seem to work here, so we use Int32Ty instead.
-    Value *enum_ir = ConstantInt::get(Type::Int32Ty, CALL_START_LLVM);
+    Value *enum_ir = ConstantInt::get(Type::Int32Ty, event_id);
     this->CreateCall(timer_function, enum_ir);
-#endif
 }
+#endif
 
 void
 LlvmFunctionBuilder::CALL_FUNCTION(int oparg)
 {
-    this->LogCallStart();
+#ifdef WITH_TSC
+    this->LogTscEvent(CALL_START_LLVM);
+#endif
     Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
     int num_args = oparg & 0xff;
     int num_kwargs = (oparg>>8) & 0xff;
@@ -1409,7 +1412,9 @@ LlvmFunctionBuilder::CALL_FUNCTION(int oparg)
 void
 LlvmFunctionBuilder::CallVarKwFunction(int oparg, int call_flag)
 {
-    this->LogCallStart();
+#ifdef WITH_TSC
+    this->LogTscEvent(CALL_START_LLVM);
+#endif
     Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
     int num_args = oparg & 0xff;
     int num_kwargs = (oparg>>8) & 0xff;
@@ -1443,21 +1448,27 @@ LlvmFunctionBuilder::CallVarKwFunction(int oparg, int call_flag)
 void
 LlvmFunctionBuilder::CALL_FUNCTION_VAR(int oparg)
 {
-    this->LogCallStart();
+#ifdef WITH_TSC
+    this->LogTscEvent(CALL_START_LLVM);
+#endif
     this->CallVarKwFunction(oparg, CALL_FLAG_VAR);
 }
 
 void
 LlvmFunctionBuilder::CALL_FUNCTION_KW(int oparg)
 {
-    this->LogCallStart();
+#ifdef WITH_TSC
+    this->LogTscEvent(CALL_START_LLVM);
+#endif
     this->CallVarKwFunction(oparg, CALL_FLAG_KW);
 }
 
 void
 LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int oparg)
 {
-    this->LogCallStart();
+#ifdef WITH_TSC
+    this->LogTscEvent(CALL_START_LLVM);
+#endif
     this->CallVarKwFunction(oparg, CALL_FLAG_KW | CALL_FLAG_VAR);
 }
 

@@ -71,6 +71,8 @@ class TimeAnalyzer(object):
         call_start = 0
         raise_event = None
         raise_start = 0
+        load_global_event = None
+        load_global_start = 0
         for line in self.input:
             # TODO(rnk): Keep things thread local.
             (thread, event, time) = line.strip().split("\t")
@@ -107,6 +109,23 @@ class TimeAnalyzer(object):
                 self.aggregate_deltas.setdefault(generic_key, []).append(delta)
                 raise_event = None
                 raise_start = 0
+            elif event.startswith("LOAD_GLOBAL_ENTER_"):
+                if load_global_event:
+                    self.missed_events.append((load_global_event,
+                                               load_global_start))
+                load_global_event = event
+                load_global_start = time
+            elif event.startswith("LOAD_GLOBAL_EXIT_"):
+                if not load_global_event:
+                    self.missed_events.append((event, time))
+                    continue
+                delta = time - load_global_start
+                key = (load_global_event, event)
+                self.delta_dict.setdefault(key, []).append(delta)
+                generic_key = ("LOAD_GLOBAL_ENTER_*", "LOAD_GLOBAL_EXIT_*")
+                self.aggregate_deltas.setdefault(generic_key, []).append(delta)
+                load_global_event = None
+                load_global_start = 0
             elif event == "LLVM_COMPILE_START":
                 compile_started = True
                 compile_start = time

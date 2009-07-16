@@ -132,6 +132,10 @@ static const char * const event_names[] = {
     "EXCEPT_RAISE_LLVM",
     "EXCEPT_CATCH_EVAL",
     "EXCEPT_CATCH_LLVM",
+    "LOAD_GLOBAL_ENTER_EVAL",
+    "LOAD_GLOBAL_EXIT_EVAL",
+    "LOAD_GLOBAL_ENTER_LLVM",
+    "LOAD_GLOBAL_EXIT_LLVM",
 };
 
 const char * const

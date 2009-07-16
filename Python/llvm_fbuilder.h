@@ -6,6 +6,7 @@
 #error This header expects to be included only in C++ source
 #endif
 
+#include "Util/EventTimer.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
 
@@ -409,10 +410,10 @@ private:
     void AssignSlice(llvm::Value *seq, llvm::Value *start, llvm::Value *stop,
                      llvm::Value *source);
 
-    // Helper method for CALL_FUNCTION_(VAR|KW|VAR_KW).  If TSC is enabled,
-    // this method builds LLVM code to call a C function that logs and times
-    // the CALL_FUNCTION* event.
-    void LogCallStart();
+#ifdef WITH_TSC
+    // Emit code to record a given event with the TSC EventTimer.h system.
+    void LogTscEvent(_PyTscEventId event_id);
+#endif
 
     // Helper method for CALL_FUNCTION_(VAR|KW|VAR_KW); calls
     // _PyEval_CallFunctionVarKw() with the given flags and the current

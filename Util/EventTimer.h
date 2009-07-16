@@ -24,6 +24,10 @@ typedef enum {
     EXCEPT_RAISE_LLVM,      // Exception raised in LLVM
     EXCEPT_CATCH_EVAL,      // Exception caught in eval loop
     EXCEPT_CATCH_LLVM,      // Exception caught in LLVM
+    LOAD_GLOBAL_ENTER_EVAL, // Start of a LOAD_GLOBAL opcode in the eval loop
+    LOAD_GLOBAL_EXIT_EVAL,  // End of a LOAD_GLOBAL opcode in the eval loop
+    LOAD_GLOBAL_ENTER_LLVM, // Start of a LOAD_GLOBAL opcode in LLVM
+    LOAD_GLOBAL_EXIT_LLVM,  // End of a LOAD_GLOBAL opcode in LLVM
 } _PyTscEventId;
 
 typedef unsigned PY_LONG_LONG tsc_t;
