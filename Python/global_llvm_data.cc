@@ -6,6 +6,7 @@
 #include "Util/SingleFunctionInliner.h"
 #include "_llvmfunctionobject.h"
 
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
@@ -54,6 +55,8 @@ PyGlobalLlvmData::Get()
 PyGlobalLlvmData::PyGlobalLlvmData()
     : module_(new Module("<main>", this->context())),
       module_provider_(new llvm::ExistingModuleProvider(module_)),
+      debug_info_(Py_GenerateDebugInfoFlag ? new llvm::DIFactory(*module_)
+                  : NULL),
       optimizations_(4, (FunctionPassManager*)NULL)
 {
     std::string error;

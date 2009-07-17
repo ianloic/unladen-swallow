@@ -14,15 +14,17 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/PassManager.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/OwningPtr.h"
 
 #include <string>
 
 namespace llvm {
+class DIFactory;
 class ExecutionEngine;
-struct ExistingModuleProvider;
 class GlobalVariable;
 class Module;
 class Value;
+struct ExistingModuleProvider;
 }
 
 struct PyGlobalLlvmData {
@@ -49,6 +51,9 @@ public:
 
     llvm::Module *module() { return this->module_; }
 
+    /// This will be NULL if debug info generation is turned off.
+    llvm::DIFactory *DebugInfo() { return this->debug_info_.get(); }
+
     // Helper functions for building functions in IR.
 
     // Returns an i8* pointing to a 0-terminated C string holding the
@@ -69,6 +74,7 @@ private:
     // stored in here.  These are owned by engine_.
     llvm::Module *const module_;
     llvm::ExistingModuleProvider *const module_provider_;
+    const llvm::OwningPtr<llvm::DIFactory> debug_info_;
 
     llvm::ExecutionEngine *engine_;  // Not modified after the constructor.
 

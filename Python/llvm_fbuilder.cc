@@ -86,7 +86,29 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                     "#u#" + pystring_to_std_string(code_object->co_name),
                     this->module_)),
       builder_(llvm_data->context()),
-      is_generator_(code_object->co_flags & CO_GENERATOR)
+      is_generator_(code_object->co_flags & CO_GENERATOR),
+      debug_info_(llvm_data->DebugInfo()),
+      debug_compile_unit_(this->debug_info_ == NULL ? llvm::DICompileUnit() :
+                          this->debug_info_->CreateCompileUnit(
+                              // 'py' in hex is 0x7079.
+                              llvm::dwarf::DW_LANG_lo_user + 0x7079,
+                              pystring_to_std_string(code_object->co_filename),
+                              "",  // Directory
+                              "Unladen Swallow 2.6.1",
+                              false, // Not main.
+                              false, // Not optimized
+                              "")),
+      debug_subprogram_(this->debug_info_ == NULL ? llvm::DISubprogram() :
+                        this->debug_info_->CreateSubprogram(
+                            debug_compile_unit_,
+                            function_->getName(),
+                            function_->getName(),
+                            function_->getName(),
+                            debug_compile_unit_,
+                            code_object->co_firstlineno,
+                            llvm::DIType(),
+                            false,  // Not local to unit.
+                            true))  // Is definition.
 {
     Function::arg_iterator args = this->function_->arg_begin();
     this->frame_ = args++;
@@ -127,6 +149,10 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         "blockstack_addr");
     this->num_blocks_addr_ = this->builder_.CreateAlloca(
         PyTypeBuilder<char>::get(), NULL, "num_blocks_addr");
+
+    if (this->debug_info_ != NULL)
+        this->debug_info_->InsertSubprogramStart(
+            debug_subprogram_, this->builder_.GetInsertBlock());
 
     this->tstate_ = this->CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
@@ -666,7 +692,7 @@ LlvmFunctionBuilder::FillDoReturnBlock()
     this->builder_.SetInsertPoint(finish_return);
     // Grab the return value and return it.
     Value *retval = this->builder_.CreateLoad(this->retval_addr_, "retval");
-    this->builder_.CreateRet(retval);
+    this->CreateRet(retval);
 }
 
 // Before jumping to this block, make sure frame->f_lasti points to
@@ -690,7 +716,7 @@ LlvmFunctionBuilder::FillBailToInterpreterBlock()
         this->GetGlobalFunction<PyObject*(PyFrameObject*)>("PyEval_EvalFrame"),
         this->frame_);
     bail->setTailCall(true);
-    this->builder_.CreateRet(bail);
+    this->CreateRet(bail);
 }
 
 void
@@ -801,6 +827,7 @@ LlvmFunctionBuilder::SetLineNumber(int line)
     this->builder_.CreateStore(
         ConstantInt::getSigned(PyTypeBuilder<int>::get(), line),
         this->f_lineno_addr_);
+    this->SetDebugStopPoint(line);
 
     this->MaybeCallLineTrace(this_line, _PYFRAME_LINE_TRACE);
 
@@ -834,6 +861,7 @@ LlvmFunctionBuilder::FillBackedgeLanding(BasicBlock *backedge_landing,
         this->builder_.CreateStore(
             ConstantInt::getSigned(PyTypeBuilder<int>::get(), line_number),
             this->f_lineno_addr_);
+        this->SetDebugStopPoint(line_number);
 
         // If tracing has been turned on, jump back to the interpreter.
         this->MaybeCallLineTrace(target, _PYFRAME_BACKEDGE_TRACE);
@@ -898,6 +926,16 @@ void
 LlvmFunctionBuilder::PropagateException()
 {
     this->builder_.CreateBr(this->propagate_exception_block_);
+}
+
+void
+LlvmFunctionBuilder::SetDebugStopPoint(int line_number)
+{
+    if (this->debug_info_ != NULL)
+        this->debug_info_->InsertStopPoint(this->debug_compile_unit_,
+                                           line_number,
+                                           0,
+                                           this->builder_.GetInsertBlock());
 }
 
 void
@@ -2905,6 +2943,15 @@ LlvmFunctionBuilder::CreateCall(llvm::Value *callee, InputIterator begin,
 {
     llvm::CallInst *call = this->builder_.CreateCall(callee, begin, end, name);
     return TransferAttributes(call, callee);
+}
+
+llvm::ReturnInst *
+LlvmFunctionBuilder::CreateRet(llvm::Value *retval)
+{
+    if (this->debug_info_ != NULL)
+        this->debug_info_->InsertRegionEnd(debug_subprogram_,
+                                           this->builder_.GetInsertBlock());
+    return this->builder_.CreateRet(retval);
 }
 
 Value *

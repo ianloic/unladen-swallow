@@ -195,6 +195,15 @@ Miscellaneous options
    .. versionadded:: 2.2
 
 
+.. cmdoption:: -g<arg>
+
+   Control how much extra debugging information to generate.  By
+   default or with -g0, JITted code is completely undebuggable.  With
+   -g or -g1 Python records line numbers that OProfile can use to
+   attribute samples.  So far, gdb doesn't pay attention to this.  See
+   also :envvar:`PYTHONDEBUGINFO`.
+
+
 .. cmdoption:: -i
 
    When a script is passed as first argument or the :option:`-c` option is used,
@@ -452,6 +461,13 @@ These environment variables influence Python's behavior.
    If this is set to a non-empty string it is equivalent to specifying the
    :option:`-d` option.  If set to an integer, it is equivalent to specifying
    :option:`-d` multiple times.
+
+
+.. envvar:: PYTHONDEBUGINFO
+   
+   If this is set to a non-empty string it is equivalent to specifying the
+   :option:`-g`1 option.  If set to an integer ``i``, it is equivalent to
+   specifying :option:`-g` ``i``.
 
 
 .. envvar:: PYTHONINSPECT

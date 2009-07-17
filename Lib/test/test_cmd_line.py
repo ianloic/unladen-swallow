@@ -72,6 +72,13 @@ class CmdLineTest(unittest.TestCase):
         self.verify_valid_flag('-j', 'whenhot')
         self.verify_valid_flag('-j', 'always')
 
+    def test_debug_info_flag(self):
+        self.verify_valid_flag('-g')
+        self.verify_valid_flag('-g0')
+        self.verify_valid_flag('-g1')
+        self.verify_valid_flag('-g73')
+        self.verify_invalid_flag('-ggdb')
+
     def test_site_flag(self):
         self.verify_valid_flag('-S')
 

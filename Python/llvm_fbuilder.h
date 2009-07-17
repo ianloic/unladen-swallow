@@ -7,6 +7,7 @@
 #endif
 
 #include "Util/EventTimer.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
 
@@ -37,6 +38,9 @@ public:
     /// make tracebacks correct and to get tracing to fire in the
     /// right places.
     void SetLineNumber(int line);
+
+    /// Inserts a call to llvm.dbg.stoppoint.
+    void SetDebugStopPoint(int line_number);
 
     /// This function fills the block that handles a backedge.  Each
     /// backedge needs to check if it needs to handle signals or
@@ -292,6 +296,9 @@ private:
                                InputIterator end,
                                const char *name = "");
 
+    /// Marks the end of the function and inserts a return instruction.
+    llvm::ReturnInst *CreateRet(llvm::Value *retval);
+
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
     // Returns an i1, true if value is a negative integer.
@@ -437,6 +444,9 @@ private:
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;
     const bool is_generator_;
+    llvm::DIFactory *const debug_info_;
+    const llvm::DICompileUnit debug_compile_unit_;
+    const llvm::DISubprogram debug_subprogram_;
 
     // The most recent index we've started emitting an instruction for.
     int f_lasti_;

@@ -88,6 +88,7 @@ int _Py_QnewFlag = 0;
 int Py_NoUserSiteDirectory = 0; /* for -s and site.py */
 int Py_ShowRefcountFlag = 0; /* For -R */
 Py_JitOpts Py_JitControl = PY_JIT_WHENHOT; /* For -j */
+int Py_GenerateDebugInfoFlag = 0; /* For -g */
 
 /* PyModule_GetWarningsModule is no longer necessary as of 2.6
 since _warnings is builtin.  This API should not be used. */
@@ -159,6 +160,9 @@ Py_InitializeEx(int install_sigs)
 
 	if ((p = Py_GETENV("PYTHONDEBUG")) && *p != '\0')
 		Py_DebugFlag = add_flag(Py_DebugFlag, p);
+	if ((p = Py_GETENV("PYTHONDEBUGINFO")) && *p != '\0')
+		Py_GenerateDebugInfoFlag =
+			add_flag(Py_GenerateDebugInfoFlag, p);
 	if ((p = Py_GETENV("PYTHONVERBOSE")) && *p != '\0')
 		Py_VerboseFlag = add_flag(Py_VerboseFlag, p);
 	if ((p = Py_GETENV("PYTHONOPTIMIZE")) && *p != '\0')

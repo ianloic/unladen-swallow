@@ -39,6 +39,9 @@ typedef enum {
 /* Defaults to PY_JIT_WHENHOT. */
 PyAPI_DATA(Py_JitOpts) Py_JitControl;
 
+/* How much debugging info to generate for JITted code. */
+PyAPI_DATA(int) Py_GenerateDebugInfoFlag;
+
 /* this is a wrapper around getenv() that pays attention to
    Py_IgnoreEnvironmentFlag.  It should be used for getting variables like
    PYTHONPATH and PYTHONHOME from the environment */
