@@ -29,7 +29,9 @@ PyAPI_DATA(int) Py_Py3kWarningFlag;
 /* Show the total reference count after each execution. */
 PyAPI_DATA(int) Py_ShowRefcountFlag;
 
-/* Control when/how to JIT-compile Python functions to machine code. */
+/* Control when/how to JIT-compile Python functions to machine code. Note that
+   if Python was configured with --without-llvm, Py_JitControl is hardwired to
+   PY_JIT_NEVER. */
 typedef enum {
     PY_JIT_NEVER,    /* Force use of the eval loop for all functions. */
     PY_JIT_WHENHOT,  /* JIT-compile hot function, optimizing heavily. */

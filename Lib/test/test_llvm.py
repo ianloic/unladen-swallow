@@ -1,7 +1,12 @@
 # Tests for our minimal LLVM wrappers
 import __future__
 
-from test.test_support import run_unittest, findfile
+from test.test_support import run_unittest, findfile, TestSkipped
+
+from distutils import sysconfig
+if not sysconfig.get_config_var("WITH_LLVM"):
+    raise TestSkipped("not built against LLVM")
+
 import _llvm
 import functools
 import sys

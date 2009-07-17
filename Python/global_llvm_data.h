@@ -9,6 +9,7 @@
 #error This header expects to be included only in C++ source
 #endif
 
+#ifdef WITH_LLVM
 #include "Python/global_llvm_data_fwd.h"
 
 #include "llvm/LLVMContext.h"
@@ -84,5 +85,6 @@ private:
     // or other ValueHandles when we import them from LLVM trunk.
     llvm::StringMap<llvm::GlobalVariable *> constant_strings_;
 };
+#endif  /* WITH_LLVM */
 
 #endif  /* PYTHON_GLOBAL_LLVM_DATA_H */

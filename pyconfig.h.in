@@ -999,6 +999,9 @@
 /* Define to 1 if libintl is needed for locale functions. */
 #undef WITH_LIBINTL
 
+/* Use LLVM for code generation. This makes things fast. */
+#undef WITH_LLVM
+
 /* Define if you want to produce an OpenStep/Rhapsody framework (shared
    library plus accessory files). */
 #undef WITH_NEXT_FRAMEWORK

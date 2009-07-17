@@ -87,8 +87,12 @@ int Py_IgnoreEnvironmentFlag; /* e.g. PYTHONPATH, PYTHONHOME */
 int _Py_QnewFlag = 0;
 int Py_NoUserSiteDirectory = 0; /* for -s and site.py */
 int Py_ShowRefcountFlag = 0; /* For -R */
-Py_JitOpts Py_JitControl = PY_JIT_WHENHOT; /* For -j */
 int Py_GenerateDebugInfoFlag = 0; /* For -g */
+#ifdef WITH_LLVM
+Py_JitOpts Py_JitControl = PY_JIT_WHENHOT; /* For -j */
+#else
+Py_JitOpts Py_JitControl = PY_JIT_NEVER;
+#endif  /* WITH_LLVM */
 
 /* PyModule_GetWarningsModule is no longer necessary as of 2.6
 since _warnings is builtin.  This API should not be used. */
@@ -198,8 +202,10 @@ Py_InitializeEx(int install_sigs)
 	if (!PyByteArray_Init())
 		Py_FatalError("Py_Initialize: can't init bytearray");
 
+#ifdef WITH_LLVM
         if (!_PyLlvm_Init())
 		Py_FatalError("Py_Initialize: can't init LLVM support");
+#endif
 
 	_PyFloat_Init();
 
@@ -520,7 +526,9 @@ Py_Finalize(void)
 	PyInt_Fini();
 	PyFloat_Fini();
 	PyDict_Fini();
+#ifdef WITH_LLVM
 	_PyLlvm_Fini();
+#endif
 
 #ifdef Py_USING_UNICODE
 	/* Cleanup Unicode implementation */

@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 
+#ifdef WITH_LLVM
 /* We store an _LlvmFunction in the PyCodeObject; these can be created without
    changing any Python reference counts, which would show up as reference leaks
    in a regrtest.py -R:: run. When the code object's co_llvm attribute is
@@ -41,6 +42,7 @@ PyAPI_DATA(PyTypeObject) PyLlvmFunction_Type;
 #define PyLlvmFunction_Check(op) (Py_TYPE(op) == &PyLlvmFunction_Type)
 
 PyAPI_DATA(PyObject *) _PyLlvmFunction_FromCodeObject(PyObject *);
+#endif  /* WITH_LLVM */
 
 #ifdef __cplusplus
 }

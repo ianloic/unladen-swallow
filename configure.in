@@ -2323,19 +2323,6 @@ fi
 AC_MSG_RESULT($with_doc_strings)
 
 # Check for Python-specific malloc support
-AC_MSG_CHECKING(for --with-tsc)
-AC_ARG_WITH(tsc,
-[  --with(out)-tsc         enable/disable timestamp counter profile], [
-if test "$withval" != no
-then 
-  AC_DEFINE(WITH_TSC, 1, 
-    [Define to profile with the Pentium timestamp counter]) 
-    AC_MSG_RESULT(yes)
-else AC_MSG_RESULT(no)
-fi],
-[AC_MSG_RESULT(no)])
-
-# Check for Python-specific malloc support
 AC_MSG_CHECKING(for --with-pymalloc)
 AC_ARG_WITH(pymalloc,
             AC_HELP_STRING(--with(out)-pymalloc, disable/enable specialized mallocs))
@@ -3709,53 +3696,51 @@ then
 fi
 AC_MSG_RESULT($with_computed_gotos)
 
-# Check for --with-instrumentation
-AC_MSG_CHECKING(for --with-instrumentation)
-AC_ARG_WITH(instrumentation,
-            AC_HELP_STRING(--with-instrumentation,
-                           Compile in a bunch of runtime instrumentation useful
-                           for optimizing Python itself.))
+# Check for --with-llvm=DIRECTORY or --without-llvm.
+#
+# Expected behaviour:
+#   - Omit --with-llvm: use in-tree LLVM
+#   - --with-llvm (no DIRECTORY): use in-tree LLVM
+#   - --with-llvm=DIRECTORY: use the LLVM installed in DIRECTORY
+#   - --without-llvm: disable everything that requires LLVM
+dnl quadrigraphs "@<:@" and "@:>@" produce "[" and "]" in the output
+AC_MSG_CHECKING(for --with(out)-llvm)
+AC_ARG_WITH(llvm, 
+            AC_HELP_STRING(--with(out)-llvm@<:@=DIRECTORY@:>@,
+                           build against a preinstalled LLVM
+                           or disable LLVM integration entirely. Note that
+                           Python built with --without-llvm cannot load
+                           extension modules built with --with-llvm or
+                           vice-versa.),
+            [with_llvm=$withval])
 
-if test "$with_instrumentation" == yes
+if test "$with_llvm" == "no"
 then
-    AC_DEFINE(Py_WITH_INSTRUMENTATION, 1,
-        [Compile in a bunch of runtime instrumentation useful for optimizing
-         Python itself.])
-	AC_MSG_RESULT(yes);
+    AC_MSG_RESULT(disabled)
+    BUILD_LLVM=disabled
 else
-	AC_MSG_RESULT(no);
+    if test -z "$with_llvm"
+    then
+        AC_MSG_RESULT(built-in)
+        LLVM_PATH=""
+        BUILD_LLVM=1
+    else
+        AC_MSG_RESULT($with_llvm); 
+        LLVM_PATH=$with_llvm
+        AC_CHECK_FILE("$LLVM_PATH/bin/clang",
+            [], [echo "Did not find clang in the expected path"; exit 1])
+        AC_CHECK_FILE("$LLVM_PATH/bin/llc",
+            [], [echo "Did not find llc in the expected path"; exit 1])
+        echo "Using preinstalled LLVM: $LLVM_PATH"
+        BUILD_LLVM=0
+        LLVM_INC_DIR="$LLVM_PATH/include"
+    fi
+    AC_DEFINE(WITH_LLVM, 1,
+        [Use LLVM for code generation. This makes things fast.])
 fi
 
-# Check for --with-llvm.
-AC_MSG_CHECKING(for --with-llvm)
-AC_ARG_WITH(llvm, 
-            AC_HELP_STRING(--with-llvm=DIRECTORY,
-                           build against a preinstalled LLVM),
-[
-if test "$withval" != no
-then 
-    AC_MSG_RESULT($withval); 
-    LLVM_PATH=$withval
-    AC_CHECK_FILE("$LLVM_PATH/bin/clang",
-        [], [echo "Did not find clang in the expected path"; exit 1])
-    AC_CHECK_FILE("$LLVM_PATH/bin/llc",
-        [], [echo "Did not find llc in the expected path"; exit 1])
-else
-    AC_MSG_RESULT(built-in)
-    LLVM_PATH=""
-fi],
-[AC_MSG_RESULT(built-in)])
-
-
-AC_SUBST(THREADHEADERS)
-
-if test "$LLVM_PATH" != ""
+if test "$BUILD_LLVM" == "1"
 then
-    echo "Using preinstalled LLVM: $LLVM_PATH"
-    BUILD_LLVM=0
-    LLVM_INC_DIR="$LLVM_PATH/include"
-else
-    BUILD_LLVM=1
     LLVM_BASE="Util/llvm"
     # llvm and llvm_tools are empty make targets that touch these files so they
     # won't be rerun every time.  However, if the user uses the built-in version
@@ -3785,6 +3770,46 @@ AC_SUBST(BUILD_LLVM)
 AC_SUBST(LLVM_PATH)
 AC_SUBST(LLVM_INC_DIR)
 
+# Check for --with-instrumentation
+AC_MSG_CHECKING(for --with-instrumentation)
+AC_ARG_WITH(instrumentation,
+            AC_HELP_STRING(--with-instrumentation,
+                           Compile in a bunch of runtime instrumentation useful
+                           for optimizing Python itself. Requires --with-llvm.))
+
+if test "$with_instrumentation" == yes
+then
+    AC_DEFINE(Py_WITH_INSTRUMENTATION, 1,
+        [Compile in a bunch of runtime instrumentation useful for optimizing
+         Python itself.])
+	AC_MSG_RESULT(yes);
+    if test "$BUILD_LLVM" == "disabled"
+	then
+		AC_MSG_ERROR([--with-instrumentation requires --with-llvm])
+	fi
+else
+	AC_MSG_RESULT(no);
+fi
+
+# Check fine-grained interpreter profiling using hardware counters.
+AC_MSG_CHECKING(for --with-tsc)
+AC_ARG_WITH(tsc,
+[  --with(out)-tsc         enable/disable timestamp counter profile], [
+if test "$withval" != no
+then
+	AC_DEFINE(WITH_TSC, 1, 
+	          [Define to profile with the Pentium timestamp counter]) 
+	AC_MSG_RESULT(yes)
+	if test "$BUILD_LLVM" == "disabled"
+	then
+		AC_MSG_ERROR([--with-tsc requires --with-llvm])
+	fi
+else AC_MSG_RESULT(no)
+fi],
+[AC_MSG_RESULT(no)])
+
+
+AC_SUBST(THREADHEADERS)
 for h in `(cd $srcdir;echo Python/thread_*.h)`
 do
   THREADHEADERS="$THREADHEADERS \$(srcdir)/$h"

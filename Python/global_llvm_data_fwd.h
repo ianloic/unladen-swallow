@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+#ifdef WITH_LLVM
 struct PyGlobalLlvmData *PyGlobalLlvmData_New(void);
 void PyGlobalLlvmData_Clear(struct PyGlobalLlvmData *);
 void PyGlobalLlvmData_Free(struct PyGlobalLlvmData *);
@@ -27,6 +28,7 @@ int _PyLlvm_Init(void);
 
 /* Finalizes LLVM. */
 void _PyLlvm_Fini(void);
+#endif  /* WITH_LLVM */
 
 #ifdef __cplusplus
 }

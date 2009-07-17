@@ -1,7 +1,7 @@
-#include "Python/global_llvm_data.h"
-
+/* Note: this file is not compiled if configured with --without-llvm. */
 #include "Python.h"
 
+#include "Python/global_llvm_data.h"
 #include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
 #include "_llvmfunctionobject.h"

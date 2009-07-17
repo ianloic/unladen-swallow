@@ -399,6 +399,7 @@ Py_Main(int argc, char **argv)
 			break;
 
                 case 'j':
+#ifdef WITH_LLVM
                         if (strcmp(_PyOS_optarg, "whenhot") == 0) {
                                 Py_JitControl = PY_JIT_WHENHOT;
                                 break;
@@ -414,6 +415,11 @@ Py_Main(int argc, char **argv)
 			fprintf(stderr,
 				"-j option should be `-j whenhot', "
 				"`-j always`, or `-j never' only\n");
+#else
+			fprintf(stderr,
+			        "-j option is disabled when configured with "
+			        "--without-llvm\n");
+#endif  /* WITH_LLVM */
 			return usage(2, argv[0]);
 			/* NOTREACHED */
 

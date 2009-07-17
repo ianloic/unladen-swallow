@@ -50,10 +50,12 @@ typedef struct _frame {
        -1 when a function is first entered. */
     int f_lasti;
 
+#ifdef WITH_LLVM
     /* At frame creation-time, we snapshot the state of f_code->co_use_llvm.
        Without this, Python code can cause active generators to flip between
        LLVM and the interpreter at will, which is a bad idea. */
     int f_use_llvm;
+#endif
 
     /* Call PyFrame_GetLineNumber() instead of reading this field
        directly.  As of Unladen Swallow 2009Q2 f_lineno is valid when
@@ -63,10 +65,14 @@ typedef struct _frame {
     int f_lineno;		/* Current line number */
     unsigned char f_throwflag;	/* true if generator.throw() was called */
     unsigned char f_iblock;	/* index in f_blockstack */
+
+#ifdef WITH_LLVM
     /* Holds a value from _PyFrameBailReason describing if we've
        bailed back from JITted code to the interpreter loop and
        why. */
     unsigned char f_bailed_from_llvm;
+#endif
+
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
     PyObject *f_localsplus[1];	/* locals+stack, dynamically sized */
 } PyFrameObject;

@@ -75,17 +75,23 @@ PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
 PY_CXXFLAGS=	$(CXXFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE -Wno-write-strings
 
 # LLVM flags extracted from llvm-config jit bitreader x86
+# These will be unused if BUILD_LLVM=disabled.
 LLVMBASEFLAGS=	-D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
-ifeq (@BUILD_LLVM@, 1)
-	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ -I$(srcdir)/@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
-else
+ifeq (@BUILD_LLVM@, 0)
 	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
+else
+	# If LLVM is disabled, we still need some of the utility headers from LLVM
+	# for things like managed statics and mutexes. Pull those in, but don't
+	# actually use LLVM for code generation.
+	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ -I$(srcdir)/@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
 endif
 LLVM_INC_DIR=	@LLVM_INC_DIR@
 LLVM_LIB_DIR=	@LLVM_PATH@/lib
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
-LLVMLDFLAGS+=	-lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMMC -lLLVMAsmPrinter -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
+ifneq (@BUILD_LLVM@, disabled)
+	LLVMLDFLAGS+=	-lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMMC -lLLVMAsmPrinter -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
+endif
 
 
 # Machine-dependent subdirectories
@@ -292,13 +298,9 @@ PYTHON_OBJS=	\
 		Python/getmtime.o \
 		Python/getplatform.o \
 		Python/getversion.o \
-		Python/global_llvm_data.o \
 		Python/graminit.o \
 		Python/import.o \
 		Python/importdl.o \
-		Python/llvm_fbuilder.o \
-		Python/llvm_compile.o \
-		Python/initial_llvm_module.o \
 		Python/marshal.o \
 		Python/modsupport.o \
 		Python/mystrtoul.o \
@@ -321,12 +323,19 @@ PYTHON_OBJS=	\
 		Python/$(DYNLOADFILE) \
 		$(LIBOBJS) \
 		$(MACHDEP_OBJS) \
-		$(THREADOBJ) \
+		$(THREADOBJ)
+
+ifneq (@BUILD_LLVM@, disabled)
+	PYTHON_OBJS +=	\
+		Python/global_llvm_data.o \
+		Python/initial_llvm_module.o \
+		Python/llvm_fbuilder.o \
+		Python/llvm_compile.o \
 		Util/EventTimer.o \
 		Util/PyAliasAnalysis.o \
 		Util/PyTypeBuilder.o \
 		Util/SingleFunctionInliner.o
-
+endif
 
 ##########################################################################
 # Objects
@@ -366,8 +375,12 @@ OBJECT_OBJS=	\
 		Objects/tupleobject.o \
 		Objects/typeobject.o \
 		Objects/weakrefobject.o \
-		Objects/_llvmfunctionobject.o \
 		$(UNICODE_OBJS)
+
+ifneq (@BUILD_LLVM@, disabled)
+	OBJECT_OBJS +=	\
+		Objects/_llvmfunctionobject.o
+endif
 
 
 ##########################################################################
@@ -419,6 +432,7 @@ llvm:
 	@case @BUILD_LLVM@ in \
 	0) touch llvm && echo "Skipping building llvm" && mkdir -p Util;; \
 	1) $(MAKE) -C Util/llvm libs-only;; \
+	disabled) echo "LLVM is disabled" ;; \
 	esac
 
 # Only build clang and llc if we need to.
@@ -426,6 +440,7 @@ llvm_tools: llvm
 	@case @BUILD_LLVM@ in \
 	0) touch llvm_tools && echo "Skipping building clang and llc";; \
 	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
+	disabled) echo "LLVM is disabled" ;; \
 	esac
 
 

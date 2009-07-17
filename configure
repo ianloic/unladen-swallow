@@ -641,11 +641,11 @@ ac_includes_default="\
 enable_option_checking=no
 ac_subst_vars='LTLIBOBJS
 SRCDIRS
+THREADHEADERS
 LLVM_INC_DIR
 LLVM_PATH
 BUILD_LLVM
 subdirs
-THREADHEADERS
 UNICODE_OBJS
 LIBC
 LIBM
@@ -786,7 +786,6 @@ with_thread
 with_pth
 enable_ipv6
 with_doc_strings
-with_tsc
 with_pymalloc
 with_wctype_functions
 with_fpectl
@@ -795,8 +794,9 @@ with_libc
 enable_unicode
 with_py3k_warnings
 with_computed_gotos
-with_instrumentation
 with_llvm
+with_instrumentation
+with_tsc
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1465,7 +1465,6 @@ Optional Packages:
                           deprecated; use --with(out)-threads
   --with-pth              use GNU pth threading libraries
   --with(out)-doc-strings disable/enable documentation strings
-  --with(out)-tsc         enable/disable timestamp counter profile
   --with(out)-pymalloc    disable/enable specialized mallocs
   --with-wctype-functions use wctype.h functions
   --with-fpectl           enable SIGFPE catching
@@ -1477,9 +1476,14 @@ Optional Packages:
                           Enabled by default.
   --with-computed-gotos   Use computed gotos / threaded dispatch in evaluation
                           loops (not available on all compilers)
+  --with(out)-llvm[=DIRECTORY]
+                          build against a preinstalled LLVM or disable LLVM
+                          integration entirely. Note that Python built with
+                          --without-llvm cannot load extension modules built
+                          with --with-llvm or vice-versa.
   --with-instrumentation  Compile in a bunch of runtime instrumentation useful
-                          for optimizing Python itself.
-  --with-llvm=DIRECTORY   build against a preinstalled LLVM
+                          for optimizing Python itself. Requires --with-llvm.
+  --with(out)-tsc         enable/disable timestamp counter profile
 
 Some influential environment variables:
   CC          C compiler command
@@ -16481,31 +16485,6 @@ fi
 $as_echo "$with_doc_strings" >&6; }
 
 # Check for Python-specific malloc support
-{ $as_echo "$as_me:$LINENO: checking for --with-tsc" >&5
-$as_echo_n "checking for --with-tsc... " >&6; }
-
-# Check whether --with-tsc was given.
-if test "${with_tsc+set}" = set; then
-  withval=$with_tsc;
-if test "$withval" != no
-then
-
-cat >>confdefs.h <<\_ACEOF
-#define WITH_TSC 1
-_ACEOF
-
-    { $as_echo "$as_me:$LINENO: result: yes" >&5
-$as_echo "yes" >&6; }
-else { $as_echo "$as_me:$LINENO: result: no" >&5
-$as_echo "no" >&6; }
-fi
-else
-  { $as_echo "$as_me:$LINENO: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-# Check for Python-specific malloc support
 { $as_echo "$as_me:$LINENO: checking for --with-pymalloc" >&5
 $as_echo_n "checking for --with-pymalloc... " >&6; }
 
@@ -25703,43 +25682,39 @@ fi
 { $as_echo "$as_me:$LINENO: result: $with_computed_gotos" >&5
 $as_echo "$with_computed_gotos" >&6; }
 
-# Check for --with-instrumentation
-{ $as_echo "$as_me:$LINENO: checking for --with-instrumentation" >&5
-$as_echo_n "checking for --with-instrumentation... " >&6; }
-
-# Check whether --with-instrumentation was given.
-if test "${with_instrumentation+set}" = set; then
-  withval=$with_instrumentation;
-fi
-
-
-if test "$with_instrumentation" == yes
-then
-
-cat >>confdefs.h <<\_ACEOF
-#define Py_WITH_INSTRUMENTATION 1
-_ACEOF
-
-	{ $as_echo "$as_me:$LINENO: result: yes" >&5
-$as_echo "yes" >&6; };
-else
-	{ $as_echo "$as_me:$LINENO: result: no" >&5
-$as_echo "no" >&6; };
-fi
-
-# Check for --with-llvm.
-{ $as_echo "$as_me:$LINENO: checking for --with-llvm" >&5
-$as_echo_n "checking for --with-llvm... " >&6; }
+# Check for --with-llvm=DIRECTORY or --without-llvm.
+#
+# Expected behaviour:
+#   - Omit --with-llvm: use in-tree LLVM
+#   - --with-llvm (no DIRECTORY): use in-tree LLVM
+#   - --with-llvm=DIRECTORY: use the LLVM installed in DIRECTORY
+#   - --without-llvm: disable everything that requires LLVM
+{ $as_echo "$as_me:$LINENO: checking for --with(out)-llvm" >&5
+$as_echo_n "checking for --with(out)-llvm... " >&6; }
 
 # Check whether --with-llvm was given.
 if test "${with_llvm+set}" = set; then
-  withval=$with_llvm;
-if test "$withval" != no
+  withval=$with_llvm; with_llvm=$withval
+fi
+
+
+if test "$with_llvm" == "no"
 then
-    { $as_echo "$as_me:$LINENO: result: $withval" >&5
-$as_echo "$withval" >&6; };
-    LLVM_PATH=$withval
-    as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/clang"" | $as_tr_sh`
+    { $as_echo "$as_me:$LINENO: result: disabled" >&5
+$as_echo "disabled" >&6; }
+    BUILD_LLVM=disabled
+else
+    if test -z "$with_llvm"
+    then
+        { $as_echo "$as_me:$LINENO: result: built-in" >&5
+$as_echo "built-in" >&6; }
+        LLVM_PATH=""
+        BUILD_LLVM=1
+    else
+        { $as_echo "$as_me:$LINENO: result: $with_llvm" >&5
+$as_echo "$with_llvm" >&6; };
+        LLVM_PATH=$with_llvm
+        as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/clang"" | $as_tr_sh`
 { $as_echo "$as_me:$LINENO: checking for \"$LLVM_PATH/bin/clang\"" >&5
 $as_echo_n "checking for \"$LLVM_PATH/bin/clang\"... " >&6; }
 if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
@@ -25767,7 +25742,7 @@ else
   echo "Did not find clang in the expected path"; exit 1
 fi
 
-    as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/llc"" | $as_tr_sh`
+        as_ac_File=`$as_echo "ac_cv_file_"$LLVM_PATH/bin/llc"" | $as_tr_sh`
 { $as_echo "$as_me:$LINENO: checking for \"$LLVM_PATH/bin/llc\"" >&5
 $as_echo_n "checking for \"$LLVM_PATH/bin/llc\"... " >&6; }
 if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
@@ -25795,27 +25770,19 @@ else
   echo "Did not find llc in the expected path"; exit 1
 fi
 
-else
-    { $as_echo "$as_me:$LINENO: result: built-in" >&5
-$as_echo "built-in" >&6; }
-    LLVM_PATH=""
+        echo "Using preinstalled LLVM: $LLVM_PATH"
+        BUILD_LLVM=0
+        LLVM_INC_DIR="$LLVM_PATH/include"
+    fi
+
+cat >>confdefs.h <<\_ACEOF
+#define WITH_LLVM 1
+_ACEOF
+
 fi
-else
-  { $as_echo "$as_me:$LINENO: result: built-in" >&5
-$as_echo "built-in" >&6; }
-fi
 
-
-
-
-
-if test "$LLVM_PATH" != ""
+if test "$BUILD_LLVM" == "1"
 then
-    echo "Using preinstalled LLVM: $LLVM_PATH"
-    BUILD_LLVM=0
-    LLVM_INC_DIR="$LLVM_PATH/include"
-else
-    BUILD_LLVM=1
     LLVM_BASE="Util/llvm"
     # llvm and llvm_tools are empty make targets that touch these files so they
     # won't be rerun every time.  However, if the user uses the built-in version
@@ -25843,6 +25810,69 @@ else
 
 subdirs="$subdirs Util/llvm"
 
+fi
+
+
+
+
+# Check for --with-instrumentation
+{ $as_echo "$as_me:$LINENO: checking for --with-instrumentation" >&5
+$as_echo_n "checking for --with-instrumentation... " >&6; }
+
+# Check whether --with-instrumentation was given.
+if test "${with_instrumentation+set}" = set; then
+  withval=$with_instrumentation;
+fi
+
+
+if test "$with_instrumentation" == yes
+then
+
+cat >>confdefs.h <<\_ACEOF
+#define Py_WITH_INSTRUMENTATION 1
+_ACEOF
+
+	{ $as_echo "$as_me:$LINENO: result: yes" >&5
+$as_echo "yes" >&6; };
+    if test "$BUILD_LLVM" == "disabled"
+	then
+		{ { $as_echo "$as_me:$LINENO: error: --with-instrumentation requires --with-llvm" >&5
+$as_echo "$as_me: error: --with-instrumentation requires --with-llvm" >&2;}
+   { (exit 1); exit 1; }; }
+	fi
+else
+	{ $as_echo "$as_me:$LINENO: result: no" >&5
+$as_echo "no" >&6; };
+fi
+
+# Check fine-grained interpreter profiling using hardware counters.
+{ $as_echo "$as_me:$LINENO: checking for --with-tsc" >&5
+$as_echo_n "checking for --with-tsc... " >&6; }
+
+# Check whether --with-tsc was given.
+if test "${with_tsc+set}" = set; then
+  withval=$with_tsc;
+if test "$withval" != no
+then
+
+cat >>confdefs.h <<\_ACEOF
+#define WITH_TSC 1
+_ACEOF
+
+	{ $as_echo "$as_me:$LINENO: result: yes" >&5
+$as_echo "yes" >&6; }
+	if test "$BUILD_LLVM" == "disabled"
+	then
+		{ { $as_echo "$as_me:$LINENO: error: --with-tsc requires --with-llvm" >&5
+$as_echo "$as_me: error: --with-tsc requires --with-llvm" >&2;}
+   { (exit 1); exit 1; }; }
+	fi
+else { $as_echo "$as_me:$LINENO: result: no" >&5
+$as_echo "no" >&6; }
+fi
+else
+  { $as_echo "$as_me:$LINENO: result: no" >&5
+$as_echo "no" >&6; }
 fi
 
 

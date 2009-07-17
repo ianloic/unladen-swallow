@@ -5,6 +5,7 @@
 import test.test_support, unittest
 import sys
 import subprocess
+from distutils import sysconfig
 
 def _spawn_python(*args):
     cmd_line = [sys.executable, '-E']
@@ -67,10 +68,11 @@ class CmdLineTest(unittest.TestCase):
         self.verify_valid_flag('-Qwarn')
         self.verify_valid_flag('-Qwarnall')
 
-    def test_jit_flag(self):
-        self.verify_valid_flag('-j', 'never')
-        self.verify_valid_flag('-j', 'whenhot')
-        self.verify_valid_flag('-j', 'always')
+    if sysconfig.get_config_var("WITH_LLVM"):
+        def test_jit_flag(self):
+            self.verify_valid_flag('-j', 'never')
+            self.verify_valid_flag('-j', 'whenhot')
+            self.verify_valid_flag('-j', 'always')
 
     def test_debug_info_flag(self):
         self.verify_valid_flag('-g')

@@ -15,6 +15,8 @@ collected:
 - Stats on the size of emitted machine code.
 
 This data will be printed to stderr at interpreter-shutdown.
+
+This build currently requires --with-llvm.
 ---------------------------------------------------------------------------
 Py_PROFILE_HOTNESS                     introduced in Unladen Swallow 2009Q2
 
@@ -276,7 +278,8 @@ and 750FX (all sold as the G3) we find:
     The time base counter is clocked at a frequency that is
     one-fourth that of the bus clock.
 
-This build is enabled by the --with-tsc flag to configure.
+This build is enabled by the --with-tsc flag to configure. This build currently
+requires --with-llvm.
 
 To do something useful with the event timings, run the Misc/tsc_stats.py
 script on the output.

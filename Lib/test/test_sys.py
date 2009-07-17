@@ -2,6 +2,7 @@
 import unittest, test.test_support
 import sys, cStringIO, os
 import struct
+from distutils import sysconfig
 
 class SysModuleTest(unittest.TestCase):
 
@@ -485,7 +486,10 @@ class SizeofTest(unittest.TestCase):
         # complex
         check(complex(0,1), size(h + '2d'))
         # code
-        check(get_cell().func_code, size(h + '4i8Pi4Pc2i'))
+        if sysconfig.get_config_var("WITH_LLVM"):
+            check(get_cell().func_code, size(h + '4i8Pi4Pc2i'))
+        else:
+            check(get_cell().func_code, size(h + '4i8Pi2P'))
         # BaseException
         check(BaseException(), size(h + '3P'))
         # UnicodeEncodeError
@@ -543,7 +547,10 @@ class SizeofTest(unittest.TestCase):
         nfrees = len(x.f_code.co_freevars)
         extras = x.f_code.co_stacksize + x.f_code.co_nlocals +\
                  ncells + nfrees - 1
-        check(x, size(vh + '12P4i' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
+        if sysconfig.get_config_var("WITH_LLVM"):
+            check(x, size(vh + '12P4i' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
+        else:
+            check(x, size(vh + '12P3i' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
         # function
         def func(): pass
         check(func, size(h + '9P'))

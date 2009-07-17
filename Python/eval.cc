@@ -14,16 +14,18 @@
 #include "code.h"
 #include "frameobject.h"
 #include "eval.h"
-#include "global_llvm_data.h"
 #include "llvm_compile.h"
 #include "opcode.h"
 #include "structmember.h"
-#include "_llvmfunctionobject.h"
 
 #include "Util/EventTimer.h"
 
+#ifdef WITH_LLVM
+#include "global_llvm_data.h"
+#include "_llvmfunctionobject.h"
 #include "llvm/Function.h"
 #include "llvm/Support/ManagedStatic.h"
+#endif
 
 #include <ctype.h>
 #include <set>
@@ -112,7 +114,9 @@ static llvm::ManagedStatic<HotnessTracker> hot_code;
 typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
 /* Forward declarations */
+#ifdef WITH_LLVM
 static int mark_called_and_maybe_compile(PyCodeObject *co);
+#endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
 static PyObject * ext_do_call(PyObject *, PyObject ***, int, int, int);
@@ -574,6 +578,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	register PyObject *u;
 	register PyObject *t;
 	register PyObject **fastlocals, **freevars;
+	_PyFrameBailReason bail_reason;
 	PyObject *retval = NULL;	/* Return value */
 	PyThreadState *tstate = PyThreadState_GET();
 	PyCodeObject *co;
@@ -817,14 +822,19 @@ PyEval_EvalFrame(PyFrameObject *f)
 	if (f == NULL)
 		return NULL;
 
+#ifdef WITH_LLVM
+    bail_reason = (_PyFrameBailReason)f->f_bailed_from_llvm;
+#else
+    bail_reason = _PYFRAME_NO_BAIL;
+#endif
 	/* push frame */
-	if (f->f_bailed_from_llvm == _PYFRAME_NO_BAIL &&
-	    Py_EnterRecursiveCall(""))
-		return NULL;
+    if (bail_reason == _PYFRAME_NO_BAIL && Py_EnterRecursiveCall(""))
+        return NULL;
 
 	co = f->f_code;
 	tstate->frame = f;
 
+#ifdef WITH_LLVM
 	if (f->f_use_llvm) {
 		assert(co->co_native_function != NULL &&
 		       "mark_called_and_maybe_compile was supposed to ensure"
@@ -832,16 +842,17 @@ PyEval_EvalFrame(PyFrameObject *f)
 		retval = co->co_native_function(f);
 		goto exit_eval_frame;
 	}
+#endif  /* WITH_LLVM */
 
-	if ((f->f_bailed_from_llvm == _PYFRAME_NO_BAIL ||
-	     f->f_bailed_from_llvm == _PYFRAME_TRACE_ON_ENTRY) &&
+	if ((bail_reason == _PYFRAME_NO_BAIL ||
+	     bail_reason == _PYFRAME_TRACE_ON_ENTRY) &&
 	    tstate->use_tracing) {
 		if (_PyEval_TraceEnterFunction(tstate, f)) {
 			/* Trace or profile function raised an error. */
 			goto exit_eval_frame;
 		}
 	}
-	if (f->f_bailed_from_llvm == _PYFRAME_BACKEDGE_TRACE) {
+	if (bail_reason == _PYFRAME_BACKEDGE_TRACE) {
 		/* If we bailed because of a backedge, set instr_prev
 		   to ensure a line trace call. */
 		instr_prev = INT_MAX;
@@ -2682,11 +2693,16 @@ fast_yield:
 
 	/* pop frame */
 exit_eval_frame:
+#ifdef WITH_LLVM
 	if (f->f_bailed_from_llvm == _PYFRAME_NO_BAIL) {
 		Py_LeaveRecursiveCall();
 		tstate->frame = f->f_back;
 	}
 	f->f_bailed_from_llvm = _PYFRAME_NO_BAIL;
+#else
+	Py_LeaveRecursiveCall();
+	tstate->frame = f->f_back;
+#endif  /* WITH_LLVM */
 
 	return retval;
 }
@@ -2712,11 +2728,13 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 		return NULL;
 	}
 
+#ifdef WITH_LLVM
 	/* This is where a code object is considered "called". Doing it here
 	 * instead of PyEval_EvalFrame() makes support for generators somewhat
 	 * cleaner. */
 	if (mark_called_and_maybe_compile(co) == -1)
 		return NULL;
+#endif
 
 	assert(tstate != NULL);
 	assert(globals != NULL);
@@ -3748,6 +3766,7 @@ err_args(PyObject *func, int flags, int nargs)
 			     nargs);
 }
 
+#ifdef WITH_LLVM
 // Increments co's call counter and, if it has passed the hotness
 // threshold, compiles the bytecode to native code.  If the code
 // object was marked as needing to be run through LLVM, also compiles
@@ -3798,6 +3817,7 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 	}
 	return 0;
 }
+#endif  /* WITH_LLVM */
 
 #define C_TRACE(x, call) \
 if (tstate->use_tracing && tstate->c_profilefunc) { \
@@ -3979,8 +3999,10 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 		int i;
 
 		PCALL(PCALL_FASTER_FUNCTION);
+#ifdef WITH_LLVM
 		if (mark_called_and_maybe_compile(co) == -1)
 			return NULL;
+#endif
 
 		assert(globals != NULL);
 		/* XXX Perhaps we should create a specialized

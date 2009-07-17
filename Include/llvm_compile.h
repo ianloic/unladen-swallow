@@ -6,7 +6,9 @@ extern "C" {
 #endif
 
 
+#ifdef WITH_LLVM
 PyAPI_FUNC(_LlvmFunction *) _PyCode_To_Llvm(PyCodeObject *code);
+#endif
 
 #ifdef __cplusplus
 }

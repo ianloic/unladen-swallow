@@ -29,6 +29,7 @@ typedef struct PyCodeObject {
     PyObject *co_lnotab;	/* string (encoding addr<->lineno mapping) See
 				   Objects/lnotab_notes.txt for details. */
     void *co_zombieframe;     /* for optimization only (see frameobject.c) */
+#ifdef WITH_LLVM
     /* See
        http://code.google.com/p/unladen-swallow/wiki/FunctionCallingConvention
        for the calling convention. */
@@ -46,6 +47,7 @@ typedef struct PyCodeObject {
     /* Number of times this code has been executed. This is used to decide
        which code objects are worth sending through LLVM. */
     int co_callcount;
+#endif
 } PyCodeObject;
 
 /* Masks for co_flags above */
@@ -125,10 +127,12 @@ PyAPI_FUNC(int) _PyCode_CheckLineNumber(PyCodeObject* co,
 PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
                                       PyObject *names, PyObject *lineno_obj);
 
+#ifdef WITH_LLVM
 /* Returns -1 on error, 0 on success.
    Currently this doesn't actually recompile things. See
    http://code.google.com/p/unladen-swallow/issues/detail?id=41. */
 PyAPI_FUNC(int) _PyCode_Recompile(PyCodeObject *code, int new_opt_level);
+#endif
 
 #ifdef __cplusplus
 }

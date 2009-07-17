@@ -105,6 +105,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		Py_INCREF(lnotab);
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
+#ifdef WITH_LLVM
 		co->co_llvm_function = NULL;
 		co->co_native_function = NULL;
 		/* Py_JitControl defaults to PY_JIT_WHENHOT. */
@@ -118,6 +119,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 				return NULL;
 			}
 		}
+#endif
 	}
 	return co;
 }
@@ -140,11 +142,14 @@ static PyMemberDef code_memberlist[] = {
 	{"co_name",	T_OBJECT,	OFF(co_name),		READONLY},
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
+#ifdef WITH_LLVM
 	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
+#endif
 	{NULL}	/* Sentinel */
 };
 
+#ifdef WITH_LLVM
 static PyObject *
 code_get_optimization(PyCodeObject *code)
 {
@@ -207,6 +212,11 @@ _PyCode_Recompile(PyCodeObject *code, int new_opt_level)
 	code->co_optimization = new_opt_level;
 	return 0;
 }
+#else
+static PyGetSetDef code_getsetlist[] = {
+	{NULL} /* Sentinel */
+};
+#endif  /* WITH_LLVM */
 
 /* Helper for code_new: return a shallow copy of a tuple that is
    guaranteed to contain exact strings, by converting string subclasses
@@ -348,11 +358,13 @@ code_dealloc(PyCodeObject *co)
 	Py_XDECREF(co->co_lnotab);
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
+#ifdef WITH_LLVM
 	if (co->co_llvm_function) {
 		_LlvmFunction_Dealloc(co->co_llvm_function);
 		co->co_llvm_function = NULL;
 	}
         // co_native_function is destroyed by co_llvm_function.
+#endif
 	PyObject_DEL(co);
 }
 
