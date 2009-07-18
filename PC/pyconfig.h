@@ -510,6 +510,9 @@ Py_NO_ENABLE_SHARED to find out.  Also support MS_NO_COREDLL for b/w compat */
 /* Define if you want documentation strings in extension modules */
 #define WITH_DOC_STRINGS 1
 
+/* Use LLVM for code generation. This makes things fast. */
+#define WITH_LLVM 1
+
 /* Define if you want to compile in rudimentary thread support */
 /* #undef WITH_THREAD */
 
