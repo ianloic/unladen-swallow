@@ -388,6 +388,40 @@ class SysModuleTest(unittest.TestCase):
         out = p.stdout.read().strip()
         self.assertEqual(out, '?')
 
+    if hasattr(sys, "setbailerror"):
+        def test_bailerror(self):
+            # sys.setbailerror() is used to raise an exception when native code
+            # bails to the interpreter. This is useful for testing native code
+            # generation/execution. configuring with --with-llvm is required
+            # to get sys.{set,get}bailerror().
+            tracer = sys.gettrace()
+            bail = sys.getbailerror()
+
+            def foo():
+                sys.settrace(lambda *args: None)
+            def bar():
+                sys.setbailerror(True)
+                foo()
+                return 7
+            bar.__code__.co_optimization = 2
+            bar.__code__.__use_llvm__ = True
+
+            def run_test():
+                try:
+                    bar()
+                except RuntimeError:
+                    pass
+                else:
+                    self.fail("Failed to raise RuntimeError")
+                finally:
+                    sys.settrace(tracer)
+                    sys.setbailerror(bail)
+            # Force use of the interpreter; otherwise we can't catch the
+            # RuntimeError if run with -j always (line tracing triggers on the
+            # except, raising another RuntimeError).
+            run_test.__code__.__use_llvm__ = False
+            run_test()
+
 
 class SizeofTest(unittest.TestCase):
 

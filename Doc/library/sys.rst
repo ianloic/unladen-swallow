@@ -341,6 +341,15 @@ always available.
    .. versionadded:: 2.6
 
 
+.. function:: getbailerror()
+
+   Return the whether bailing from LLVM-generated native code to the interpreter
+   raises an error; this requires the `--with-llvm` configure flag.
+   See also :func:`setbailerror`.
+
+   .. versionadded:: Unladen Swallow 2009Q3
+
+
 .. function:: getcheckinterval()
 
    Return the interpreter's "check interval"; see :func:`setcheckinterval`.
@@ -643,6 +652,15 @@ always available.
    generation.
 
    .. versionadded:: 2.6
+
+
+.. function:: setbailerror()
+
+   Set the whether bailing from LLVM-generated native code to the interpreter
+   should raise an error; this requires the `--with-llvm` configure flag.
+   See also :func:`getbailerror`.
+
+   .. versionadded:: Unladen Swallow 2009Q3
 
 
 .. function:: setcheckinterval(interval)

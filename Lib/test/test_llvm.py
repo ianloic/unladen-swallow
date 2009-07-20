@@ -66,7 +66,23 @@ class ExtraAssertsTestCase(unittest.TestCase):
         self.assertEquals(real_exception.args, expected_args)
 
 
-class LlvmTests(ExtraAssertsTestCase):
+class LlvmTestCase(unittest.TestCase):
+
+    """Common base class for LLVM-focused tests.
+
+    Features provided:
+        - Assert that the code doesn't bail to the interpreter.
+    """
+
+    def setUp(self):
+        sys.setbailerror(True)
+
+    def tearDown(self):
+        sys.setbailerror(False)
+
+
+class GeneralCompilationTests(ExtraAssertsTestCase, LlvmTestCase):
+
     def test_uncreatable(self):
         # Functions can only be created by their static factories.
         self.assertRaises(TypeError, _llvm._function)
@@ -1355,7 +1371,7 @@ def unbound_local(level):
             ("local variable 'b' referenced before assignment",), inner)
 
 
-class LoopExceptionInteractionTests(unittest.TestCase):
+class LoopExceptionInteractionTests(LlvmTestCase):
     @at_each_optimization_level
     def test_except_through_loop_caught(self, level):
         nested = compile_for_llvm('nested', '''
@@ -1730,7 +1746,7 @@ class RaisingOperand(object):
         raise OpExc('delslice', start, stop)
 
 
-class OperatorTests(ExtraAssertsTestCase):
+class OperatorTests(ExtraAssertsTestCase, LlvmTestCase):
     @at_each_optimization_level
     def test_basic_arithmetic(self, level):
         operators = {
@@ -2171,7 +2187,7 @@ def listcomp_exc(x):
         self.assertEquals(op._ops, [('add', 5)])
 
 
-class LiteralsTests(unittest.TestCase):
+class LiteralsTests(LlvmTestCase):
     @at_each_optimization_level
     def test_build_tuple(self, level):
         t1 = compile_for_llvm('t1', 'def t1(): return (1, 2, 3)', level)
@@ -2223,7 +2239,7 @@ def unpack(x):
 
 
 # These tests are skipped when -j never or -j always is passed to Python.
-class OptimizationTests(unittest.TestCase):
+class OptimizationTests(LlvmTestCase):
 
     def test_hotness(self):
         def foo():
@@ -2257,8 +2273,8 @@ class OptimizationTests(unittest.TestCase):
 
 
 def test_main():
-    tests = [LoopExceptionInteractionTests, LlvmTests, OperatorTests,
-             LiteralsTests]
+    tests = [LoopExceptionInteractionTests, GeneralCompilationTests,
+             OperatorTests, LiteralsTests]
     if sys.flags.jit_control != "whenhot":
         print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()

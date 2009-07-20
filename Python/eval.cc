@@ -534,6 +534,10 @@ static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
 int _Py_CheckInterval = 100;
 volatile int _Py_Ticker = 100;
 
+#ifdef WITH_LLVM
+int _Py_BailError = 0;
+#endif
+
 PyObject *
 PyEval_EvalCode(PyCodeObject *co, PyObject *globals, PyObject *locals)
 {
@@ -823,13 +827,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 		return NULL;
 
 #ifdef WITH_LLVM
-    bail_reason = (_PyFrameBailReason)f->f_bailed_from_llvm;
+	bail_reason = (_PyFrameBailReason)f->f_bailed_from_llvm;
 #else
-    bail_reason = _PYFRAME_NO_BAIL;
-#endif
+	bail_reason = _PYFRAME_NO_BAIL;
+#endif  /* WITH_LLVM */
 	/* push frame */
-    if (bail_reason == _PYFRAME_NO_BAIL && Py_EnterRecursiveCall(""))
-        return NULL;
+	if (bail_reason == _PYFRAME_NO_BAIL && Py_EnterRecursiveCall(""))
+		return NULL;
 
 	co = f->f_code;
 	tstate->frame = f;
@@ -856,6 +860,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 		/* If we bailed because of a backedge, set instr_prev
 		   to ensure a line trace call. */
 		instr_prev = INT_MAX;
+	}
+	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
+		PyErr_SetString(PyExc_RuntimeError,
+		                "bailed to the interpreter");
+		return NULL;
 	}
 
 	names = co->co_names;

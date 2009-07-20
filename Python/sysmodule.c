@@ -860,6 +860,33 @@ PyDoc_STRVAR(sys_clear_type_cache__doc__,
 Clear the internal type lookup cache.");
 
 
+#ifdef WITH_LLVM
+static PyObject *
+sys_getbailerror(PyObject *self, PyObject *args)
+{
+	return PyBool_FromLong(_Py_BailError);
+}
+
+PyDoc_STRVAR(getbailerror_doc,
+"getbailerror() -> bool\n\
+Is bailing from native code to the interpreter an error?");
+
+static PyObject *
+sys_setbailerror(PyObject *self, PyObject *arg)
+{
+	int bail_error = PyObject_IsTrue(arg);
+	if (bail_error < 0)
+		return NULL;
+	_Py_BailError = bail_error;
+	Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(setbailerror_doc,
+"setbailerror(bool)\n\
+Set whether bailing from native code to the interpreter should be an error.");
+#endif  /* WITH_LLVM */
+
+
 static PyMethodDef sys_methods[] = {
 	/* Might as well keep this in alphabetic order */
 	{"callstats", (PyCFunction)PyEval_GetCallStats, METH_NOARGS,
@@ -931,6 +958,10 @@ static PyMethodDef sys_methods[] = {
 #endif
 	{"settrace",	sys_settrace, METH_O, settrace_doc},
 	{"gettrace",	sys_gettrace, METH_NOARGS, gettrace_doc},
+#ifdef WITH_LLVM
+	{"getbailerror", sys_getbailerror, METH_NOARGS, getbailerror_doc},
+	{"setbailerror", sys_setbailerror, METH_O, setbailerror_doc},
+#endif
 	{"call_tracing", sys_call_tracing, METH_VARARGS, call_tracing_doc},
 	{NULL,		NULL}		/* sentinel */
 };

@@ -74,6 +74,12 @@ PyAPI_FUNC(PyObject *) PyEval_EvalFrameEx(struct _frame *f, int exc);
 PyAPI_DATA(volatile int) _Py_Ticker;
 PyAPI_DATA(int) _Py_CheckInterval;
 
+#ifdef WITH_LLVM
+/* Useful for debugging LLVM: if true, raise an exception if we bail from native
+   code back to the interpreter. */
+PyAPI_DATA(int) _Py_BailError;
+#endif
+
 /* Interface for threads.
 
    A module that plans to do a blocking system call (or something else
