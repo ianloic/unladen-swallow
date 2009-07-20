@@ -864,7 +864,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
 		PyErr_SetString(PyExc_RuntimeError,
 		                "bailed to the interpreter");
-		return NULL;
+		goto exit_eval_frame;
 	}
 
 	names = co->co_names;
