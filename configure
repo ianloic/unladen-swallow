@@ -25884,12 +25884,12 @@ do
 done
 
 
-SRCDIRS="Parser Grammar Objects Python Modules Mac"
+SRCDIRS="Parser Grammar Objects Python Modules Mac Unittests Util/googletest"
 { $as_echo "$as_me:$LINENO: checking for build directories" >&5
 $as_echo_n "checking for build directories... " >&6; }
 for dir in $SRCDIRS; do
     if test ! -d $dir; then
-        mkdir $dir
+        mkdir -p $dir
     fi
 done
 { $as_echo "$as_me:$LINENO: result: done" >&5

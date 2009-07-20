@@ -761,6 +761,18 @@ Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
 
 ######################################################################
 
+# Unit tests, using Googletest
+
+Util/googletest/gtest.o:
+	$(CXX) -c $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest -I$(srcdir)/Util/googletest/include -o $@ $(srcdir)/Util/googletest/src/gtest-all.cc
+
+Unittests/alltests: $(LIBRARY) Util/googletest/gtest.o \
+		$(srcdir)/Unittests/*Test.cc
+	$(CXX) $(LLVMCXXFLAGS) $(LLVMLDFLAGS) $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest/include -o $@ $^ $(srcdir)/Util/googletest/src/gtest_main.cc
+
+unittest: Unittests/alltests
+	Unittests/alltests
+
 # Test the interpreter (twice, once without .pyc files, once with)
 # In the past, we've had problems where bugs in the marshalling or
 # elsewhere caused bytecode read from .pyc files to behave differently
@@ -772,12 +784,12 @@ Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
 TESTOPTS=	-l $(EXTRATESTOPTS)
 TESTPROG=	$(srcdir)/Lib/test/regrtest.py
 TESTPYTHON=	$(RUNSHARED) ./$(BUILDPYTHON) -E -tt $(TESTPYOPTS)
-test:		all platform
+test:		all platform unittest
 		-find $(srcdir)/Lib -name '*.py[co]' -print | xargs rm -f
 		-$(TESTPYTHON) $(TESTPROG) $(TESTOPTS)
 		$(TESTPYTHON) $(TESTPROG) $(TESTOPTS)
 
-testall:	all platform
+testall:	all platform unittest
 		-find $(srcdir)/Lib -name '*.py[co]' -print | xargs rm -f
 		$(TESTPYTHON) $(srcdir)/Lib/compileall.py
 		-find $(srcdir)/Lib -name '*.py[co]' -print | xargs rm -f
@@ -786,7 +798,7 @@ testall:	all platform
 
 #  Run the unitests for both architectures in a Universal build on OSX
 #  Must be run on an Intel box.
-testuniversal:	all platform
+testuniversal:	all platform unittest
 		if [ `arch` != 'i386' ];then \
 			echo "This can only be used on OSX/i386" ;\
 			exit 1 ;\
@@ -799,7 +811,7 @@ testuniversal:	all platform
 
 # Like testall, but with a single pass only
 # run an optional script to include some information about the build environment
-buildbottest:	all platform
+buildbottest:	all platform unittest
 		-@if which pybuildbot.identify >/dev/null 2>&1; then \
 			pybuildbot.identify "CC='$(CC)'" "CXX='$(CXX)'"; \
 		fi
@@ -808,14 +820,14 @@ buildbottest:	all platform
 QUICKTESTOPTS=	$(TESTOPTS) -x test_thread test_signal test_strftime \
 		test_unicodedata test_re test_sre test_select test_poll \
 		test_linuxaudiodev test_struct test_sunaudiodev test_zlib
-quicktest:	all platform
+quicktest:	all platform unittest
 		-find $(srcdir)/Lib -name '*.py[co]' -print | xargs rm -f
 		-$(TESTPYTHON) $(TESTPROG) $(QUICKTESTOPTS)
 		$(TESTPYTHON) $(TESTPROG) $(QUICKTESTOPTS)
 
 MEMTESTOPTS=    $(QUICKTESTOPTS) -x test_dl test___all__ test_fork1 \
 		test_longexp
-memtest:	all platform
+memtest:	all platform unittest
 		-rm -f $(srcdir)/Lib/test/*.py[co]
 		-$(TESTPYTHON) $(TESTPROG) $(MEMTESTOPTS)
 		$(TESTPYTHON) $(TESTPROG) $(MEMTESTOPTS)
