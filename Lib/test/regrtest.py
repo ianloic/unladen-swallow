@@ -26,6 +26,7 @@ Command line options:
 -L: runleaks   -- run the leaks(1) command just before exit
 -R: huntrleaks -- search for reference leaks (needs debug build, v. slow)
 -M: memlimit   -- run very large memory-consuming tests
+--failfast     -- stop after a single test fails, rather than running all tests
 
 If non-option arguments are present, they are names for tests to run,
 unless -x is given, in which case they are names for tests not to run.
@@ -80,6 +81,10 @@ tax the machine. On the other hand, it is no use running these tests with a
 limit of less than 2.5Gb, and many require more than 20Gb. Tests that expect
 to use more than memlimit memory will be skipped. The big-memory tests
 generally run very, very long.
+
+--failfast causes regrtest.py to exit with status 1 as soon as the first test
+fails. This is useful in combination with --randseed for reproducing
+hard-to-trigger test failures.
 
 -u is used to specify which special resource intensive tests to run,
 such as those requiring large file support or network connectivity.
@@ -185,7 +190,7 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
          exclude=False, single=False, randomize=False, fromfile=None,
          findleaks=False, use_resources=None, trace=False, coverdir='coverage',
          runleaks=False, huntrleaks=False, verbose2=False, print_slow=False,
-         random_seed=None):
+         random_seed=None, failfast=False):
     """Execute a test suite.
 
     This also parses command-line options and modifies its behavior
@@ -204,7 +209,7 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
 
     The other default arguments (verbose, quiet, exclude,
     single, randomize, findleaks, use_resources, trace, coverdir, print_slow and
-    random_seed) allow programmers calling main() directly to set the
+    random_seed, failfast) allow programmers calling main() directly to set the
     values that would normally be set by flags on the command line.
     """
 
@@ -216,7 +221,7 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
                                     'findleaks', 'use=', 'threshold=', 'trace',
                                     'coverdir=', 'nocoverdir', 'runleaks',
                                     'huntrleaks=', 'verbose2', 'memlimit=',
-                                    'randseed='
+                                    'randseed=', 'failfast',
                                     ])
     except getopt.error, msg:
         usage(2, msg)
@@ -248,6 +253,8 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
             random_seed = int(a)
         elif o in ('-f', '--fromfile'):
             fromfile = a
+        elif o == '--failfast':
+            failfast = True
         elif o in ('-l', '--findleaks'):
             findleaks = True
         elif o in ('-L', '--runleaks'):
@@ -391,6 +398,8 @@ def main(tests=None, testdir=None, verbose=0, quiet=False,
                 good.append(test)
             elif ok == 0:
                 bad.append(test)
+                if failfast:
+                    break
             else:
                 skipped.append(test)
                 if ok == -2:
