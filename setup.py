@@ -641,7 +641,8 @@ class PyBuildExt(build_ext):
             (rel_llvm_inc_dir,) = sysconfig.get_config_vars('LLVM_INC_DIR')
             llvm_inc_dir = os.path.join(srcdir, rel_llvm_inc_dir)
             exts.append( Extension('_llvm', ['_llvm.cc'],
-                                   include_dirs=[llvm_inc_dir]) )
+                                   include_dirs=[rel_llvm_inc_dir,
+                                                 llvm_inc_dir]) )
         else:
             missing.append('_llvm')
 
