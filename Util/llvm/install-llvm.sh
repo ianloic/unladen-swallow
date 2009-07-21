@@ -17,6 +17,7 @@
 LLVM_ARGS="--enable-jit --enable-targets=x86,cpp --enable-bindings=none"
 DEBUG_ARGS="--disable-optimized --enable-debug-runtime --enable-assertions"
 RELEASE_ARGS="--enable-optimized --disable-assertions"
+LLVM_DIR=`dirname $0`
 
 case "$1" in
     "debug") LLVM_ARGS="$LLVM_ARGS $DEBUG_ARGS";;
@@ -26,4 +27,4 @@ case "$1" in
 esac
 
 shift  # Take the first argument off the front of $@.
-./configure $LLVM_ARGS $@ && make && make install
+$LLVM_DIR/configure $LLVM_ARGS $@ && make && make install
