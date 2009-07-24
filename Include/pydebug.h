@@ -35,7 +35,7 @@ PyAPI_DATA(int) Py_ShowRefcountFlag;
 typedef enum {
     PY_JIT_NEVER,    /* Force use of the eval loop for all functions. */
     PY_JIT_WHENHOT,  /* JIT-compile hot function, optimizing heavily. */
-    PY_JIT_ALWAYS,   /* Force use of LLVM for all functions. */
+    PY_JIT_ALWAYS,   /* Force use of LLVM for all functions that get run. */
 } Py_JitOpts;
 
 /* Defaults to PY_JIT_WHENHOT. */

@@ -108,17 +108,12 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 #ifdef WITH_LLVM
 		co->co_llvm_function = NULL;
 		co->co_native_function = NULL;
-		/* Py_JitControl defaults to PY_JIT_WHENHOT. */
+		/* Py_JitControl defaults to PY_JIT_WHENHOT. In the case of
+		   PY_JIT_ALWAYS, this code object will be compiled to LLVM IR
+		   and then to machine code when it is first invoked. */
 		co->co_use_llvm = (Py_JitControl == PY_JIT_ALWAYS);
 		co->co_optimization = -1;
 		co->co_callcount = 0;
-		if (co->co_use_llvm) {
-			/* Implictly updates co->co_optimization. */
-			if (_PyCode_Recompile(co, Py_OptimizeFlag) < 0) {
-				Py_DECREF(co);
-				return NULL;
-			}
-		}
 #endif
 	}
 	return co;

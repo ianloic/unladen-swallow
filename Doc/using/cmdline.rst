@@ -219,7 +219,7 @@ Miscellaneous options
 
    Control how Python compiles to machine code. ``-j never`` completely
    disables automatic compilation to machine code. ``-j always`` forces
-   machine code compilation for all functions defined. The default is
+   machine code compilation for all functions that get run. The default is
    ``-j whenhot``, which optimizes hot functions only once, but optimizes the
    function as much as possible. See also :envvar:`PYTHONJITCONTROL`.
 
