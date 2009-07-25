@@ -334,6 +334,7 @@ ifneq (@BUILD_LLVM@, disabled)
 		Util/EventTimer.o \
 		Util/PyAliasAnalysis.o \
 		Util/PyTypeBuilder.o \
+		Util/RuntimeFeedback.o \
 		Util/SingleFunctionInliner.o
 endif
 
@@ -725,6 +726,8 @@ PYTHON_HEADERS= \
 		Include/llvm_compile.h \
 		Util/PyTypeBuilder.h \
 		Util/EventTimer.h \
+		Util/RuntimeFeedback.h \
+		Util/RuntimeFeedback_fwd.h \
 		Util/SingleFunctionInliner.h \
 		Util/Stats.h \
 		pyconfig.h \

@@ -521,7 +521,7 @@ class SizeofTest(unittest.TestCase):
         check(complex(0,1), size(h + '2d'))
         # code
         if sysconfig.get_config_var("WITH_LLVM"):
-            check(get_cell().func_code, size(h + '4i8Pi4Pc2i'))
+            check(get_cell().func_code, size(h + '4i8Pi5Pc2i'))
         else:
             check(get_cell().func_code, size(h + '4i8Pi2P'))
         # BaseException

@@ -3,6 +3,7 @@
 #include "llvm_compile.h"
 #include "structmember.h"
 #include "Python/global_llvm_data_fwd.h"
+#include "Util/RuntimeFeedback_fwd.h"
 
 #define NAME_CHARS \
 	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
@@ -108,6 +109,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 #ifdef WITH_LLVM
 		co->co_llvm_function = NULL;
 		co->co_native_function = NULL;
+		co->co_runtime_feedback = PyFeedbackMap_New();
 		/* Py_JitControl defaults to PY_JIT_WHENHOT. In the case of
 		   PY_JIT_ALWAYS, this code object will be compiled to LLVM IR
 		   and then to machine code when it is first invoked. */
@@ -358,7 +360,8 @@ code_dealloc(PyCodeObject *co)
 		_LlvmFunction_Dealloc(co->co_llvm_function);
 		co->co_llvm_function = NULL;
 	}
-        // co_native_function is destroyed by co_llvm_function.
+	// co_native_function is destroyed by co_llvm_function.
+	PyFeedbackMap_Del(co->co_runtime_feedback);
 #endif
 	PyObject_DEL(co);
 }

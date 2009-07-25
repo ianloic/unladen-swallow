@@ -35,6 +35,7 @@ typedef struct PyCodeObject {
        for the calling convention. */
     _LlvmFunction *co_llvm_function;
     PyEvalFrameFunction co_native_function;
+    struct PyFeedbackMap *co_runtime_feedback;
     /* True if interpretation will be done through the LLVM JIT. This exists
        only for ease of testing; the flag that matters is f_use_llvm on the
        frame object, which is influenced by co_use_llvm. */

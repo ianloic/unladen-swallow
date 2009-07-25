@@ -19,6 +19,7 @@
 #include "structmember.h"
 
 #include "Util/EventTimer.h"
+#include "Util/RuntimeFeedback.h"
 
 #ifdef WITH_LLVM
 #include "global_llvm_data.h"
@@ -124,6 +125,8 @@ static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
 				      PyObject *);
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
+static void record_type(PyCodeObject *, int, int, int, PyObject *);
+static void inc_feedback_counter(PyCodeObject *, int, int, int);
 
 int _Py_TracingPossible = 0;
 
@@ -729,6 +732,17 @@ PyEval_EvalFrame(PyFrameObject *f)
 #define JUMPTO(x)	(next_instr = first_instr + (x))
 #define JUMPBY(x)	(next_instr += (x))
 
+/* Feedback-gathering macros */
+#define RECORD_TYPE(arg_index, obj) \
+	record_type(co, opcode, f->f_lasti, arg_index, obj)
+#define RECORD_TRUE() \
+	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_TRUE)
+#define RECORD_FALSE() \
+	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_FALSE)
+#define RECORD_NONBOOLEAN() \
+	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_NON_BOOLEAN)
+
+
 /* OpCode prediction macros
 	Some opcodes tend to come in pairs thus making it possible to
 	predict the second code when the first is run.  For example,
@@ -1099,6 +1113,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(UNARY_POSITIVE)
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyNumber_Positive(v);
 			Py_DECREF(v);
 			SET_TOP(x);
@@ -1110,6 +1125,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(UNARY_NEGATIVE)
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyNumber_Negative(v);
 			Py_DECREF(v);
 			SET_TOP(x);
@@ -1121,6 +1137,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(UNARY_NOT)
 			v = TOP();
+			RECORD_TYPE(0, v);
 			err = PyObject_IsTrue(v);
 			Py_DECREF(v);
 			if (err == 0) {
@@ -1139,6 +1156,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(UNARY_CONVERT)
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyObject_Repr(v);
 			Py_DECREF(v);
 			SET_TOP(x);
@@ -1150,6 +1168,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		TARGET(UNARY_INVERT)
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyNumber_Invert(v);
 			Py_DECREF(v);
 			SET_TOP(x);
@@ -1162,6 +1181,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_POWER)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Power(v, w, Py_None);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1175,6 +1196,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_MULTIPLY)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Multiply(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1189,6 +1212,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 			if (!_Py_QnewFlag) {
 				w = POP();
 				v = TOP();
+				RECORD_TYPE(0, v);
+				RECORD_TYPE(1, w);
 				x = PyNumber_Divide(v, w);
 				Py_DECREF(v);
 				Py_DECREF(w);
@@ -1206,6 +1231,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		_binary_true_divide:
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_TrueDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1219,6 +1246,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_FLOOR_DIVIDE)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_FloorDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1232,6 +1261,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_MODULO)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyString_CheckExact(v))
 				x = PyString_Format(v, w);
 			else
@@ -1248,6 +1279,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_ADD)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
 				/* INLINE: int + int */
 				register long a, b, i;
@@ -1281,6 +1314,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_SUBTRACT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
 				/* INLINE: int - int */
 				register long a, b, i;
@@ -1307,6 +1342,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_SUBSCR)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyList_CheckExact(v) && PyInt_CheckExact(w)) {
 				/* INLINE: list[int] */
 				Py_ssize_t i = PyInt_AsSsize_t(w);
@@ -1334,6 +1371,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_LSHIFT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Lshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1347,6 +1386,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_RSHIFT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Rshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1360,6 +1401,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_AND)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_And(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1373,6 +1416,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_XOR)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Xor(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1386,6 +1431,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BINARY_OR)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_Or(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1399,6 +1446,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(LIST_APPEND)
 			w = POP();
 			v = POP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			err = PyList_Append(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1412,6 +1461,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_POWER)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlacePower(v, w, Py_None);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1425,6 +1476,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_MULTIPLY)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceMultiply(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1439,6 +1492,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 			if (!_Py_QnewFlag) {
 				w = POP();
 				v = TOP();
+				RECORD_TYPE(0, v);
+				RECORD_TYPE(1, w);
 				x = PyNumber_InPlaceDivide(v, w);
 				Py_DECREF(v);
 				Py_DECREF(w);
@@ -1456,6 +1511,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		_inplace_true_divide:
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceTrueDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1469,6 +1526,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_FLOOR_DIVIDE)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceFloorDivide(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1482,6 +1541,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_MODULO)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceRemainder(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1495,6 +1556,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_ADD)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
 				/* INLINE: int + int */
 				register long a, b, i;
@@ -1528,6 +1591,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_SUBTRACT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyInt_CheckExact(v) && PyInt_CheckExact(w)) {
 				/* INLINE: int - int */
 				register long a, b, i;
@@ -1554,6 +1619,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_LSHIFT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceLshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1567,6 +1634,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_RSHIFT)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceRshift(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1580,6 +1649,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_AND)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceAnd(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1593,6 +1664,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_XOR)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceXor(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1606,6 +1679,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(INPLACE_OR)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			x = PyNumber_InPlaceOr(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1633,6 +1708,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			v = POP();
 		_slice_common:
 			u = TOP();
+			RECORD_TYPE(0, u);
+			RECORD_TYPE(1, v);
+			RECORD_TYPE(2, w);
 			x = _PyEval_ApplySlice(u, v, w);
 			Py_DECREF(u);
 			Py_XDECREF(v);
@@ -1662,6 +1740,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 		_store_slice_common:
 			u = POP();
 			t = POP();
+			RECORD_TYPE(0, u);
+			RECORD_TYPE(1, v);
+			RECORD_TYPE(2, w);
+			// Don't bother recording the assigned object.
 			err = _PyEval_AssignSlice(u, v, w, t); /* u[v:w] = t */
 			Py_DECREF(t);
 			Py_DECREF(u);
@@ -1691,6 +1773,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			goto _delete_slice_common;
 		_delete_slice_common:
 			u = POP();
+			RECORD_TYPE(0, u);
+			RECORD_TYPE(1, v);
+			RECORD_TYPE(2, w);
 			err = _PyEval_AssignSlice(u, v, w, (PyObject *)NULL);
 							/* del u[v:w] */
 			Py_DECREF(u);
@@ -1708,6 +1793,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			u = THIRD();
 			STACKADJ(-3);
 			/* v[w] = u */
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
+			// Don't bother recording the assigned object.
 			err = PyObject_SetItem(v, w, u);
 			Py_DECREF(u);
 			Py_DECREF(v);
@@ -1722,6 +1810,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 			w = TOP();
 			v = SECOND();
 			STACKADJ(-2);
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			/* del v[w] */
 			err = PyObject_DelItem(v, w);
 			Py_DECREF(v);
@@ -1756,6 +1846,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 			w = POP();
 		_raise_varargs_common:
                         PY_LOG_TSC_EVENT(EXCEPT_RAISE_EVAL);
+			RECORD_TYPE(0, w);
+			RECORD_TYPE(1, v);
+			RECORD_TYPE(2, u);
 			why = do_raise(w, v, u);
 			break;
 
@@ -1826,6 +1919,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		PREDICTED_WITH_ARG(UNPACK_SEQUENCE);
 		TARGET(UNPACK_SEQUENCE)
 			v = POP();
+			RECORD_TYPE(0, v);
 			if (PyTuple_CheckExact(v) &&
 			    PyTuple_GET_SIZE(v) == oparg) {
 				PyObject **items = \
@@ -1862,6 +1956,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			v = TOP();
 			u = SECOND();
 			STACKADJ(-2);
+			RECORD_TYPE(0, v);
 			err = PyObject_SetAttr(v, w, u); /* v.w = u */
 			Py_DECREF(v);
 			Py_DECREF(u);
@@ -1875,6 +1970,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			w = GETITEM(names, oparg);
 			v = POP();
 			/* del v.w */
+			RECORD_TYPE(0, v);
 			err = PyObject_SetAttr(v, w, (PyObject *)NULL);
 			Py_DECREF(v);
 			if (err != 0) {
@@ -2049,6 +2145,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			v = THIRD();   /* dict */
 			STACKADJ(-2);
 			assert (PyDict_CheckExact(v));
+			RECORD_TYPE(0, w);
 			err = PyDict_SetItem(v, w, u);  /* v[w] = u */
 			Py_DECREF(u);
 			Py_DECREF(w);
@@ -2061,6 +2158,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(LOAD_ATTR)
 			w = GETITEM(names, oparg);
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyObject_GetAttr(v, w);
 			Py_DECREF(v);
 			SET_TOP(x);
@@ -2073,6 +2171,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(COMPARE_OP)
 			w = POP();
 			v = TOP();
+			RECORD_TYPE(0, v);
+			RECORD_TYPE(1, w);
 			if (PyInt_CheckExact(w) && PyInt_CheckExact(v)) {
 				/* INLINE: cmp(int, int) */
 				register long a, b;
@@ -2116,10 +2216,12 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(POP_JUMP_IF_FALSE)
 			w = POP();
 			if (w == Py_True) {
+				RECORD_TRUE();
 				Py_DECREF(w);;
 				FAST_DISPATCH();
 			}
 			if (w == Py_False) {
+				RECORD_FALSE();
 				Py_DECREF(w);
 				JUMPTO(oparg);
 				FAST_DISPATCH();
@@ -2130,18 +2232,26 @@ PyEval_EvalFrame(PyFrameObject *f)
 				why = WHY_EXCEPTION;
 				break;
 			}
-			else if (err == 0)
+			else if (err == 0) {
+				RECORD_FALSE();
 				JUMPTO(oparg);
+			}
+			else {
+				RECORD_TRUE();
+			}
+			RECORD_NONBOOLEAN();
 			DISPATCH();
 
 		PREDICTED_WITH_ARG(POP_JUMP_IF_TRUE);
 		TARGET(POP_JUMP_IF_TRUE)
 			w = POP();
 			if (w == Py_False) {
+				RECORD_FALSE();
 				Py_DECREF(w);
 				FAST_DISPATCH();
 			}
 			if (w == Py_True) {
+				RECORD_TRUE();
 				Py_DECREF(w);
 				JUMPTO(oparg);
 				FAST_DISPATCH();
@@ -2153,18 +2263,25 @@ PyEval_EvalFrame(PyFrameObject *f)
 				break;
 			}
 			else if (err > 0) {
+				RECORD_TRUE();
 				JUMPTO(oparg);
 			}
+			else {
+				RECORD_FALSE();
+			}
+			RECORD_NONBOOLEAN();
 			DISPATCH();
 
 		TARGET(JUMP_IF_FALSE_OR_POP)
 			w = TOP();
 			if (w == Py_True) {
+				RECORD_TRUE();
 				STACKADJ(-1);
 				Py_DECREF(w);
 				FAST_DISPATCH();
 			}
 			if (w == Py_False) {
+				RECORD_FALSE();
 				JUMPTO(oparg);
 				FAST_DISPATCH();
 			}
@@ -2174,21 +2291,27 @@ PyEval_EvalFrame(PyFrameObject *f)
 				break;
 			}
 			else if (err > 0) {
+				RECORD_TRUE();
 				STACKADJ(-1);
 				Py_DECREF(w);
 			}
-			else
+			else {
+				RECORD_FALSE();
 				JUMPTO(oparg);
+			}
+			RECORD_NONBOOLEAN();
 			DISPATCH();
 
 		TARGET(JUMP_IF_TRUE_OR_POP)
 			w = TOP();
 			if (w == Py_False) {
+				RECORD_FALSE();
 				STACKADJ(-1);
 				Py_DECREF(w);
 				FAST_DISPATCH();
 			}
 			if (w == Py_True) {
+				RECORD_TRUE();
 				JUMPTO(oparg);
 				FAST_DISPATCH();
 			}
@@ -2198,12 +2321,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 				break;
 			}
 			else if (err > 0) {
+				RECORD_TRUE();
 				JUMPTO(oparg);
 			}
 			else {
+				RECORD_FALSE();
 				STACKADJ(-1);
 				Py_DECREF(w);
 			}
+			RECORD_NONBOOLEAN();
 			DISPATCH();
 
 		PREDICTED_WITH_ARG(JUMP_ABSOLUTE);
@@ -2225,6 +2351,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(GET_ITER)
 			/* before: [obj]; after [getiter(obj)] */
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = PyObject_GetIter(v);
 			Py_DECREF(v);
 			if (x == NULL) {
@@ -2240,6 +2367,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(FOR_ITER)
 			/* before: [iter]; after: [iter, iter()] *or* [] */
 			v = TOP();
+			RECORD_TYPE(0, v);
 			x = (*v->ob_type->tp_iternext)(v);
 			if (x != NULL) {
 				PUSH(x);
@@ -2383,6 +2511,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			int num_args, num_kwargs, num_stack_slots;
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			PCALL(PCALL_ALL);
+			// TODO(jyasskin): Add feedback gathering.
 			num_args = oparg & 0xff;
 			num_kwargs = (oparg>>8) & 0xff;
 			x = _PyEval_CallFunction(stack_pointer,
@@ -2406,6 +2535,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		{
 			int num_args, num_kwargs, num_stack_slots, flags;
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
+			// TODO(jyasskin): Add feedback gathering.
 			num_args = oparg & 0xff;
 			num_kwargs = (oparg>>8) & 0xff;
 			num_stack_slots = num_args + 2 * num_kwargs + 1;
@@ -4250,6 +4380,40 @@ ext_call_fail:
 	Py_XDECREF(stararg);
 	return result;
 }
+
+// Records the type of obj into the feedback array.
+void record_type(PyCodeObject *co, int expected_opcode,
+		 int opcode_index, int arg_index, PyObject *obj)
+{
+#ifdef WITH_LLVM
+	unsigned char actual_opcode =
+		PyString_AS_STRING(co->co_code)[opcode_index];
+	assert((actual_opcode == expected_opcode ||
+		actual_opcode == EXTENDED_ARG) &&
+	       "Mismatch between feedback and opcode array.");
+	PyRuntimeFeedback &feedback =
+		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
+			opcode_index, arg_index);
+	feedback.AddTypeSeen(obj);
+#endif
+}
+
+void inc_feedback_counter(PyCodeObject *co, int expected_opcode,
+			  int opcode_index, int counter_id)
+{
+#ifdef WITH_LLVM
+	unsigned char actual_opcode =
+		PyString_AS_STRING(co->co_code)[opcode_index];
+	assert((actual_opcode == expected_opcode ||
+		actual_opcode == EXTENDED_ARG) &&
+	       "Mismatch between feedback and opcode array.");
+	PyRuntimeFeedback &feedback =
+		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
+			opcode_index, 0);
+	feedback.IncCounter(counter_id);
+#endif
+}
+
 
 /* Extract a slice index from a PyInt or PyLong or an object with the
    nb_index slot defined, and store in *pi.
