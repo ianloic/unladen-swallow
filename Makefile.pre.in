@@ -197,6 +197,10 @@ UNICODE_OBJS=   @UNICODE_OBJS@
 PYTHON=		python$(EXE)
 BUILDPYTHON=	python$(BUILDEXE)
 
+# This goes at the end of a CC line intended to build an executable.
+EXECUTABLE_LINK_ARGS=	$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(LLVMLDFLAGS) \
+		$(SYSLIBS) $(LDLAST)
+
 # The task to run while instrument when building the profile-opt target
 PROFILE_TASK=	$(srcdir)/Tools/pybench/pybench.py -n 2 --with-gc --with-syscheck
 #PROFILE_TASK=	$(srcdir)/Lib/test/regrtest.py
@@ -448,9 +452,7 @@ llvm_tools: llvm
 # Build the interpreter
 $(BUILDPYTHON): llvm Modules/python.o $(LIBRARY) $(LDLIBRARY)
 		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
-			Modules/python.o \
-			$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(LLVMLDFLAGS) \
-			$(SYSLIBS) $(LDLAST)
+			Modules/python.o $(EXECUTABLE_LINK_ARGS)
 
 platform: $(BUILDPYTHON)
 	$(RUNSHARED) ./$(BUILDPYTHON) -E -c 'import sys ; from distutils.util import get_platform ; print get_platform()+"-"+sys.version[0:3]' >platform
@@ -769,9 +771,12 @@ Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
 Util/googletest/gtest.o:
 	$(CXX) -c $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest -I$(srcdir)/Util/googletest/include -o $@ $(srcdir)/Util/googletest/src/gtest-all.cc
 
-Unittests/alltests: $(LIBRARY) Util/googletest/gtest.o \
-		$(srcdir)/Unittests/*Test.cc
-	$(CXX) $(LLVMCXXFLAGS) $(LLVMLDFLAGS) $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest/include -o $@ $^ $(srcdir)/Util/googletest/src/gtest_main.cc
+Unittests/alltests: $(srcdir)/Unittests/*Test.cc \
+		$(LIBRARY) Util/googletest/gtest.o
+	$(CXX) $(LLVMCXXFLAGS) $(PY_CXXFLAGS) \
+		-I$(srcdir)/Util/googletest/include -o $@ \
+		$(srcdir)/Util/googletest/src/gtest_main.cc $^ \
+		$(EXECUTABLE_LINK_ARGS)
 
 unittest: Unittests/alltests
 	Unittests/alltests
