@@ -33,6 +33,7 @@
 class _PyEventTimer {
 
 public:
+    _PyEventTimer();
     ~_PyEventTimer();
 
     static const char * const EventToString(_PyTscEventId event);
@@ -66,49 +67,54 @@ private:
 
 static llvm::ManagedStatic< _PyEventTimer > event_timer;
 
-// XXX(rnk): I have only tested this on x86_64.  It needs to be tested on i386
-// and PPC.
 static inline tsc_t
 read_tsc() {
-        tsc_t time;
+    tsc_t time;
 
 #if defined(__ppc__) /* <- Don't know if this is the correct symbol; this
-			   section should work for GCC on any PowerPC
-			   platform, irrespective of OS.
-			   POWER?  Who knows :-) */
+                           section should work for GCC on any PowerPC platform,
+                           irrespective of OS.  POWER?  Who knows :-) */
 
-	register unsigned long tbu, tb, tbu2;
-  loop:
-	asm volatile ("mftbu %0" : "=r" (tbu) );
-	asm volatile ("mftb  %0" : "=r" (tb)  );
-	asm volatile ("mftbu %0" : "=r" (tbu2));
-	if (__builtin_expect(tbu != tbu2, 0)) goto loop;
+    register unsigned long tbu, tb, tbu2;
+loop:
+    asm volatile ("mftbu %0" : "=r" (tbu) );
+    asm volatile ("mftb  %0" : "=r" (tb)  );
+    asm volatile ("mftbu %0" : "=r" (tbu2));
+    if (__builtin_expect(tbu != tbu2, 0)) goto loop;
 
-	/* The slightly peculiar way of writing the next lines is
-	   compiled better by GCC than any other way I tried. */
-	((long*)(time))[0] = tbu;
-	((long*)(time))[1] = tb;
+    /* The slightly peculiar way of writing the next lines is
+       compiled better by GCC than any other way I tried. */
+    ((long*)(&time))[0] = tbu;
+    ((long*)(&time))[1] = tb;
 
 #elif defined(__x86_64__) || defined(__amd64__)
 
-	uint64_t low, high;
-	asm volatile ("rdtsc" : "=a" (low), "=d" (high));
-	time = (high << 32) | low;
+    uint64_t low, high;
+    asm volatile ("rdtsc" : "=a" (low), "=d" (high));
+    time = (high << 32) | low;
 
 #elif defined(__i386__)
 
-        asm volatile("rdtsc" : "=A" (time));
+    asm volatile("rdtsc" : "=A" (time));
 
 #elif defined(_M_IX86) || defined(_M_X64) /* x86 or x64 on MSVC */
 
-	time = __rdtsc();
+    time = __rdtsc();
 
 #endif
 
-        return time;
+    return time;
 }
 
 /// _PyEventTimer
+
+_PyEventTimer::_PyEventTimer() {
+    this->data_.reserve(PY_EVENT_BUFFER_SIZE);
+}
+
+_PyEventTimer::~_PyEventTimer() {
+    this->PrintData();
+}
 
 void
 _PyLog_TscEvent(_PyTscEventId event) {
@@ -136,6 +142,10 @@ static const char * const event_names[] = {
     "LOAD_GLOBAL_EXIT_EVAL",
     "LOAD_GLOBAL_ENTER_LLVM",
     "LOAD_GLOBAL_EXIT_LLVM",
+    "EVAL_COMPILE_START",
+    "EVAL_COMPILE_END",
+    "FLUSH_START",
+    "FLUSH_END",
 };
 
 const char * const
@@ -156,7 +166,8 @@ _PyEventTimer::GetDenseThreadId(long sys_thread_id) {
 
 void
 _PyEventTimer::LogEvent(_PyTscEventId event_id) {
-    // XXX(rnk): This probably has more overhead than we'd like.
+    // This needs to try to be really low overhead.  The lock acquire down
+    // there doesn't really help.
     tsc_t tsc_time = read_tsc();
     PyThreadState *tstate = PyThreadState_GET();
     if (tstate->interp->tscdump) {
@@ -167,8 +178,13 @@ _PyEventTimer::LogEvent(_PyTscEventId event_id) {
         llvm::MutexGuard locked(this->lock_);
         event.thread_id = this->GetDenseThreadId(thread_id);
         this->data_.push_back(event);
-        if (this->data_.size() > PY_EVENT_BUFFER_SIZE) {
+        // Don't flush if we're recording the flush start event, or we'll
+        // infinite loop.
+        if (this->data_.size() >= PY_EVENT_BUFFER_SIZE - 1 &&
+            event_id != FLUSH_START) {
+            this->LogEvent(FLUSH_START);
             this->PrintData();
+            this->LogEvent(FLUSH_END);
         }
     }
 }
@@ -184,10 +200,5 @@ _PyEventTimer::PrintData() {
     }
     this->data_.clear();
 }
-
-_PyEventTimer::~_PyEventTimer() {
-    this->PrintData();
-}
-
 
 #endif  // WITH_TSC

@@ -28,6 +28,10 @@ typedef enum {
     LOAD_GLOBAL_EXIT_EVAL,  // End of a LOAD_GLOBAL opcode in the eval loop
     LOAD_GLOBAL_ENTER_LLVM, // Start of a LOAD_GLOBAL opcode in LLVM
     LOAD_GLOBAL_EXIT_LLVM,  // End of a LOAD_GLOBAL opcode in LLVM
+    EVAL_COMPILE_START,     // Start of the entire compilation in eval loop
+    EVAL_COMPILE_END,       // End of the entire compilation in eval loop
+    FLUSH_START,            // Start of the TSC event flush
+    FLUSH_END,              // Enf of the TSC event flush
 } _PyTscEventId;
 
 typedef unsigned PY_LONG_LONG tsc_t;
