@@ -279,6 +279,7 @@ _PyCode_To_Llvm(PyCodeObject *code)
         }
 
         BasicBlock *target, *fallthrough;
+        int target_opindex;
         switch(iter.Opcode()) {
         case NOP:
             break;
@@ -391,43 +392,40 @@ _PyCode_To_Llvm(PyCodeObject *code)
         OPCODE_WITH_ARG(CALL_FUNCTION_VAR_KW)
 #undef OPCODE_WITH_ARG
 
-#define OPCODE_JABS(opname) \
+#define ABS iter.Oparg()
+#define REL iter.NextIndex() + iter.Oparg()
+#define NO_OPINDEX target
+#define NEED_OPINDEX target, target_opindex
+#define OPCODE_J(opname, OPINDEX_EXPR, TARGET_PARAM) \
     case opname: \
-        if ((size_t)iter.Oparg() < iter.NextIndex()) { \
-            target = instr_info[iter.Oparg()].backedge_block_; \
+        target_opindex = OPINDEX_EXPR; \
+        if ((size_t)target_opindex < iter.NextIndex()) { \
+            target = instr_info[target_opindex].backedge_block_; \
         } else { \
-            target = instr_info[iter.Oparg()].block_; \
+            target = instr_info[target_opindex].block_; \
         } \
         fallthrough = instr_info[iter.NextIndex()].block_; \
         assert(target != NULL && "Missing target block"); \
         assert(fallthrough != NULL && "Missing fallthrough block"); \
-        fbuilder.opname(target, fallthrough); \
+        fbuilder.opname(TARGET_PARAM, fallthrough); \
         break;
 
-        OPCODE_JABS(JUMP_IF_FALSE_OR_POP)
-        OPCODE_JABS(JUMP_IF_TRUE_OR_POP)
-        OPCODE_JABS(JUMP_ABSOLUTE)
-        OPCODE_JABS(POP_JUMP_IF_FALSE)
-        OPCODE_JABS(POP_JUMP_IF_TRUE)
-        OPCODE_JABS(CONTINUE_LOOP)
-#undef OPCODE_JABS
-
-#define OPCODE_JREL(opname) \
-    case opname: \
-        /* Relative jumps only go forward, so they can't have a backedge. */ \
-        target = instr_info[iter.NextIndex() + iter.Oparg()].block_; \
-        fallthrough = instr_info[iter.NextIndex()].block_; \
-        assert(target != NULL && "Missing target block"); \
-        assert(fallthrough != NULL && "Missing fallthrough block"); \
-        fbuilder.opname(target, fallthrough); \
-        break;
-
-        OPCODE_JREL(JUMP_FORWARD)
-        OPCODE_JREL(FOR_ITER)
-        OPCODE_JREL(SETUP_LOOP)
-        OPCODE_JREL(SETUP_EXCEPT)
-        OPCODE_JREL(SETUP_FINALLY)
-#undef OPCODE_JREL
+        OPCODE_J(JUMP_IF_FALSE_OR_POP, ABS, NO_OPINDEX)
+        OPCODE_J(JUMP_IF_TRUE_OR_POP, ABS, NO_OPINDEX)
+        OPCODE_J(JUMP_ABSOLUTE, ABS, NO_OPINDEX)
+        OPCODE_J(POP_JUMP_IF_FALSE, ABS, NO_OPINDEX)
+        OPCODE_J(POP_JUMP_IF_TRUE, ABS, NO_OPINDEX)
+        OPCODE_J(CONTINUE_LOOP, ABS, NEED_OPINDEX)
+        OPCODE_J(JUMP_FORWARD, REL, NO_OPINDEX)
+        OPCODE_J(FOR_ITER, REL, NO_OPINDEX)
+        OPCODE_J(SETUP_LOOP, REL, NEED_OPINDEX)
+        OPCODE_J(SETUP_EXCEPT, REL, NEED_OPINDEX)
+        OPCODE_J(SETUP_FINALLY, REL, NEED_OPINDEX)
+#undef OPCODE_J
+#undef ABS
+#undef REL
+#undef NO_OPINDEX
+#undef NEED_OPINDEX
 
         case EXTENDED_ARG:
             // Already handled by the iterator.

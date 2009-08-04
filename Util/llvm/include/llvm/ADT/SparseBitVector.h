@@ -21,7 +21,9 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/Streams.h"
 #include "llvm/ADT/ilist.h"
+#include "llvm/ADT/ilist_node.h"
 
 namespace llvm {
 

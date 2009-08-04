@@ -45,7 +45,7 @@ def compile_for_llvm(function_name, def_string, optimization_level=-1):
 
     """
     namespace = {}
-    exec def_string in namespace
+    exec def_string in globals(), namespace
     func = namespace[function_name]
     if optimization_level is not None:
         if optimization_level >= DEFAULT_OPT_LEVEL:
@@ -1456,6 +1456,38 @@ def break_one(x):
                                          "except": ZeroDivisionError})
 
 
+def cause_bail_on_next_line():
+    sys.settrace(lambda *args: None)
+
+
+class BailoutTests(ExtraAssertsTestCase):
+    @at_each_optimization_level
+    def test_bail_inside_loop(self, level):
+        # We had a bug where the block stack in the compiled version
+        # of the below function used contiguous small integers to
+        # identify block handlers.  When we bailed out to the
+        # interpreter, it expected an handler's identifier to be the
+        # index of the opcode that started the code for the handler.
+        # This mismatch caused a crash.
+        loop = compile_for_llvm("loop", """
+def loop():
+    for i in [1, 2]:
+        # Use try/finally to get "break" to emit a BREAK_LOOP opcode
+        # instead of just jumping out of the loop.
+        try:
+            cause_bail_on_next_line()
+            break
+        finally:
+            pass
+    return i
+""", level)
+        orig_trace = sys.gettrace()
+        try:
+            self.assertEquals(loop(), 1)
+        finally:
+            sys.settrace(orig_trace)
+
+
 # Tests for div/truediv won't work right if we enable true
 # division in this test.
 assert 1/2 == 0, "Do not run test_llvm with -Qnew"
@@ -2274,7 +2306,7 @@ class OptimizationTests(LlvmTestCase):
 
 def test_main():
     tests = [LoopExceptionInteractionTests, GeneralCompilationTests,
-             OperatorTests, LiteralsTests]
+             OperatorTests, LiteralsTests, BailoutTests]
     if sys.flags.jit_control != "whenhot":
         print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()

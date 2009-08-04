@@ -902,14 +902,16 @@ LlvmFunctionBuilder::FallThroughTo(BasicBlock *next_block)
 }
 
 ConstantInt *
-LlvmFunctionBuilder::AddUnwindTarget(llvm::BasicBlock *target)
+LlvmFunctionBuilder::AddUnwindTarget(llvm::BasicBlock *target,
+                                     int target_opindex)
 {
     // The size of the switch instruction will give us a small unique
     // number for each target block.
-    ConstantInt *target_index =
-        ConstantInt::get(Type::Int32Ty,
-                         this->unwind_target_switch_->getNumCases());
-    this->unwind_target_switch_->addCase(target_index, target);
+    ConstantInt *target_index = ConstantInt::get(Type::Int32Ty, target_opindex);
+    if (!this->existing_unwind_targets_.test(target_opindex)) {
+        this->unwind_target_switch_->addCase(target_index, target);
+        this->existing_unwind_targets_.set(target_opindex);
+    }
     return target_index;
 }
 
@@ -1674,9 +1676,10 @@ LlvmFunctionBuilder::DELETE_FAST(int index)
 
 void
 LlvmFunctionBuilder::SETUP_LOOP(llvm::BasicBlock *target,
+                                int target_opindex,
                                 llvm::BasicBlock *fallthrough)
 {
-    this->CallBlockSetup(::SETUP_LOOP, target);
+    this->CallBlockSetup(::SETUP_LOOP, target, target_opindex);
 }
 
 void
@@ -1762,16 +1765,18 @@ LlvmFunctionBuilder::POP_BLOCK()
 
 void
 LlvmFunctionBuilder::SETUP_EXCEPT(llvm::BasicBlock *target,
-                                   llvm::BasicBlock *fallthrough)
+                                  int target_opindex,
+                                  llvm::BasicBlock *fallthrough)
 {
-    this->CallBlockSetup(::SETUP_EXCEPT, target);
+    this->CallBlockSetup(::SETUP_EXCEPT, target, target_opindex);
 }
 
 void
 LlvmFunctionBuilder::SETUP_FINALLY(llvm::BasicBlock *target,
+                                   int target_opindex,
                                    llvm::BasicBlock *fallthrough)
 {
-    this->CallBlockSetup(::SETUP_FINALLY, target);
+    this->CallBlockSetup(::SETUP_FINALLY, target, target_opindex);
 }
 
 void
@@ -1891,6 +1896,7 @@ LlvmFunctionBuilder::END_FINALLY()
 
 void
 LlvmFunctionBuilder::CONTINUE_LOOP(llvm::BasicBlock *target,
+                                   int target_opindex,
                                    llvm::BasicBlock *fallthrough)
 {
     // Accept code after a continue statement, even though it's never executed.
@@ -1899,7 +1905,7 @@ LlvmFunctionBuilder::CONTINUE_LOOP(llvm::BasicBlock *target,
     BasicBlock *dead_code = BasicBlock::Create("dead_code", function());
     this->builder_.CreateStore(ConstantInt::get(Type::Int8Ty, UNWIND_CONTINUE),
                                this->unwind_reason_addr_);
-    Value *unwind_target = this->AddUnwindTarget(target);
+    Value *unwind_target = this->AddUnwindTarget(target, target_opindex);
     // Yes, store the unwind target in the return value slot. This is to
     // keep the translation from eval.cc as close as possible; deviation will
     // only introduce bugs. The UNWIND_CONTINUE cases in the unwind block
@@ -2795,10 +2801,12 @@ LlvmFunctionBuilder::SetLocal(int locals_index, llvm::Value *new_value)
 }
 
 void
-LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler)
+LlvmFunctionBuilder::CallBlockSetup(int block_type, llvm::BasicBlock *handler,
+                                    int handler_opindex)
 {
     Value *stack_level = this->GetStackLevel();
-    Value *unwind_target_index = this->AddUnwindTarget(handler);
+    Value *unwind_target_index =
+        this->AddUnwindTarget(handler, handler_opindex);
     Function *blocksetup =
         this->GetGlobalFunction<void(PyTryBlock *, char *, int, int, int)>(
             "_PyLlvm_Frame_BlockSetup");

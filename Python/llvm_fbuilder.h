@@ -7,6 +7,7 @@
 #endif
 
 #include "Util/EventTimer.h"
+#include "llvm/ADT/SparseBitVector.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
@@ -66,13 +67,16 @@ public:
     void STORE_FAST(int index);
     void DELETE_FAST(int index);
 
-    void SETUP_LOOP(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
+    void SETUP_LOOP(llvm::BasicBlock *target, int target_opindex,
+                    llvm::BasicBlock *fallthrough);
     void GET_ITER();
     void FOR_ITER(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
     void POP_BLOCK();
 
-    void SETUP_EXCEPT(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
-    void SETUP_FINALLY(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
+    void SETUP_EXCEPT(llvm::BasicBlock *target, int target_opindex,
+                      llvm::BasicBlock *fallthrough);
+    void SETUP_FINALLY(llvm::BasicBlock *target, int target_opindex,
+                       llvm::BasicBlock *fallthrough);
     void END_FINALLY();
     void WITH_CLEANUP();
 
@@ -90,6 +94,7 @@ public:
     void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
     void CONTINUE_LOOP(llvm::BasicBlock *target,
+                       int target_opindex,
                        llvm::BasicBlock *fallthrough);
 
     void BREAK_LOOP();
@@ -232,7 +237,8 @@ private:
     // Adds handler to the switch for unwind targets and then sets up
     // a call to PyFrame_BlockSetup() with the block type, handler
     // index, and current stack level.
-    void CallBlockSetup(int block_type, llvm::BasicBlock *handler);
+    void CallBlockSetup(int block_type,
+                        llvm::BasicBlock *handler, int handler_opindex);
 
     // Look up a name in the function's names list, returning the
     // PyStringObject for the name_index.
@@ -318,9 +324,10 @@ private:
     /// During stack unwinding it may be necessary to jump back into
     /// the function to handle a finally or except block.  Since LLVM
     /// doesn't allow us to directly store labels as data, we instead
-    /// add the label to a switch instruction and return the i32 that
-    /// will jump there.
-    llvm::ConstantInt *AddUnwindTarget(llvm::BasicBlock *target);
+    /// add the index->label mapping to a switch instruction and
+    /// return the i32 for the index.
+    llvm::ConstantInt *AddUnwindTarget(llvm::BasicBlock *target,
+                                       int target_opindex);
 
     // Inserts a jump to the return block, returning retval.  You
     // should _never_ call CreateRet directly from one of the opcode
@@ -488,6 +495,7 @@ private:
     llvm::BasicBlock *propagate_exception_block_;
     llvm::BasicBlock *unwind_block_;
     llvm::Value *unwind_target_index_addr_;
+    llvm::SparseBitVector<> existing_unwind_targets_;
     llvm::SwitchInst *unwind_target_switch_;
     // Stores one of the UNWIND_XXX constants defined at the top of
     // llvm_fbuilder.cc
