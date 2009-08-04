@@ -41,16 +41,6 @@ using llvm::array_endof;
 
 namespace py {
 
-// These have the same meanings as the why_code enum in eval.cc.
-enum UnwindReason {
-    UNWIND_NOUNWIND,
-    UNWIND_EXCEPTION,
-    UNWIND_RETURN,
-    UNWIND_BREAK,
-    UNWIND_CONTINUE,
-    UNWIND_YIELD
-};
-
 static std::string
 pystring_to_std_string(PyObject *str)
 {
@@ -2007,6 +1997,9 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
         Constant::getNullValue(PyTypeBuilder<PyObject*>::get()),
         this->retval_addr_);
 
+#ifdef WITH_TSC
+    this->LogTscEvent(EXCEPT_RAISE_LLVM);
+#endif
     Function *do_raise = this->GetGlobalFunction<
         int(PyObject*, PyObject *, PyObject *)>("_PyEval_DoRaise");
     // _PyEval_DoRaise eats references.
@@ -2016,7 +2009,9 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
     // If it's a new raise, we call PyTraceBack_Here from the
     // propagate_exception_block_.
     this->builder_.CreateCondBr(
-        this->IsNonZero(is_reraise),
+        this->builder_.CreateICmpEQ(
+            is_reraise,
+            ConstantInt::get(is_reraise->getType(), UNWIND_RERAISE)),
         this->unwind_block_, this->propagate_exception_block_);
 
     this->builder_.SetInsertPoint(dead_code);

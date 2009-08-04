@@ -1487,6 +1487,56 @@ def loop():
         finally:
             sys.settrace(orig_trace)
 
+    def test_use_correct_unwind_reason_when_bailing(self):
+        # Previously the LLVM-generated code and the eval loop were using
+        # different integers to indicate why we're popping the Python stack. In
+        # most cases these integers were invisible to the other side (eval loop
+        # vs machine code), but if we bail while unwinding the stack, the
+        # integers used by the machine code are exposed to the eval loop.
+        #
+        # Here's what's going on (use the dis module to follow along at home):
+        # 1. try: compiles to a SETUP_FINALLY that registers "len([])" as
+        #    the finally: handler.
+        # 2. "cause_bail()" will flip the thread-local tracing flags.
+        # 3. The "return" part of "return cause_bail()" sets the return value
+        #    and stack unwinding reason (UNWIND_RETURN), then jumps to the
+        #    unwinder.
+        # 4. The stack unwinder does its thing: it pushes the return value and
+        #    the unwinding reason (UNWIND_RETURN) onto the stack in that order,
+        #    then jumps to the finally: handler that SETUP_FINALLY registered
+        #    ("len([])").
+        # 5. LLVM emits a per-line prologue that checks the thread-local
+        #    tracing flag, and if that flag is true, bailing to the interpreter.
+        # 6. At this point, the LLVM version of UNWIND_RETURN is on top of the
+        #    Python stack. The eval loop will now continue where the native code
+        #    left off, executing len([]).
+        # 7. The END_FINALLY opcode that terminates the finally block kicks in
+        #    and starts trying to handle pending exceptions or return values. It
+        #    knows what to do by matching the top of the stack (the unwind
+        #    reason) against its own list of reasons. When the eval loop and
+        #    native code disagreed about the numerical values for these reasons,
+        #    LLVM's UNWIND_RETURN was the eval loop's UNWIND_EXCEPTION. This
+        #    would trigger a debugging assert in the eval loop, since
+        #    PyErr_Occurred() indicated that indeed *no* exception was live.
+        sys.setbailerror(False)
+        def cause_bail():
+            sys.settrace(lambda *args: None)
+
+        def foo():
+            try:
+                return cause_bail()
+            finally:
+                len([])  # This can be anything.
+        foo.__code__.__use_llvm__ = True
+
+        orig_func = sys.gettrace()
+        try:
+            foo()
+        finally:
+            sys.settrace(orig_func)
+        # Even though we bailed, the machine code is still valid.
+        self.assertTrue(foo.__code__.__use_llvm__)
+
 
 # Tests for div/truediv won't work right if we enable true
 # division in this test.

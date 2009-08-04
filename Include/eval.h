@@ -171,6 +171,17 @@ PyAPI_FUNC(PyObject *) _PyEval_CallTracing(PyObject *func, PyObject *args);
 /* Helper functions and objects shared by the bytecode and LLVM
    implementations. */
 
+/* Status code to indicate why the Python stack is being unwound. */
+enum _PyUnwindReason {
+    UNWIND_NOUNWIND  = 0x0001,	/* No error */
+    UNWIND_EXCEPTION = 0x0002,	/* Exception occurred */
+    UNWIND_RERAISE   = 0x0004,	/* Exception re-raised by 'finally' */
+    UNWIND_RETURN    = 0x0008,	/* 'return' statement */
+    UNWIND_BREAK     = 0x0010,	/* 'break' statement */
+    UNWIND_CONTINUE  = 0x0020,	/* 'continue' statement */
+    UNWIND_YIELD     = 0x0040	/* 'yield' operator */
+};
+
 PyAPI_FUNC(void) _PyEval_SetExcInfo(PyThreadState *tstate, PyObject *type,
 				    PyObject *value, PyObject *tb);
 PyAPI_FUNC(void) _PyEval_ResetExcInfo(PyThreadState *);
@@ -192,7 +203,8 @@ PyAPI_FUNC(PyObject *) _PyEval_ApplySlice(PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(int) _PyEval_AssignSlice(PyObject *, PyObject *,
                                     PyObject *, PyObject *);
 
-PyAPI_FUNC(int) _PyEval_DoRaise(PyObject *type, PyObject *val, PyObject *tb);
+PyAPI_FUNC(enum _PyUnwindReason) _PyEval_DoRaise(PyObject *type, PyObject *val,
+                                                 PyObject *tb);
 
 PyAPI_FUNC(int) _PyEval_UnpackIterable(PyObject *, int, PyObject **);
 

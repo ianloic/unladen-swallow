@@ -519,19 +519,6 @@ _PyEval_RaiseForUnboundLocal(PyFrameObject *frame, int var_index)
 		PyTuple_GetItem(frame->f_code->co_varnames, var_index));
 }
 
-/* Status code for main loop (reason for stack unwind) */
-enum why_code {
-		WHY_NOT =	0x0001,	/* No error */
-		WHY_EXCEPTION = 0x0002,	/* Exception occurred */
-		WHY_RERAISE =	0x0004,	/* Exception re-raised by 'finally' */
-		WHY_RETURN =	0x0008,	/* 'return' statement */
-		WHY_BREAK =	0x0010,	/* 'break' statement */
-		WHY_CONTINUE =	0x0020,	/* 'continue' statement */
-		WHY_YIELD =	0x0040	/* 'yield' operator */
-};
-
-static enum why_code do_raise(PyObject *, PyObject *, PyObject *);
-
 /* for manipulating the thread switch and periodic "stuff" - used to be
    per thread, now just a pair o' globals */
 int _Py_CheckInterval = 100;
@@ -577,7 +564,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	register unsigned char *next_instr;
 	register int opcode;	/* Current opcode */
 	register int oparg;	/* Current opcode argument, if any */
-	register enum why_code why; /* Reason for block stack unwind */
+	register enum _PyUnwindReason why; /* Reason for block stack unwind */
 	register int err;	/* Error status -- nonzero if error */
 	register PyObject *x;	/* Temporary objects popped off stack */
 	register PyObject *v;
@@ -915,7 +902,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	filename = PyString_AsString(co->co_filename);
 #endif
 
-	why = WHY_NOT;
+	why = UNWIND_NOUNWIND;
 	w = NULL;
 
 	// Note that this goes after the LLVM handling code so we don't log
@@ -924,7 +911,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 	PY_LOG_TSC_EVENT(CALL_ENTER_EVAL);
 
 	if (f->f_throwflag) { /* support for generator.throw() */
-		why = WHY_EXCEPTION;
+		why = UNWIND_EXCEPTION;
 		goto on_error;
 	}
 
@@ -947,7 +934,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				goto fast_next_opcode;
 			}
 			if (_PyEval_HandlePyTickerExpired(tstate) == -1) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				goto on_error;
 			}
 		}
@@ -974,7 +961,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			f->f_stacktop = NULL;
 			if (err) {
 				/* trace function raised an exception */
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				goto on_error;
 			}
 		}
@@ -1012,14 +999,14 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		/* Main switch on opcode */
 
-		assert(why == WHY_NOT);
+		assert(why == UNWIND_NOUNWIND);
 		/* XXX(jyasskin): Add an assertion under CHECKEXC that
 		   !PyErr_Occurred(). */
 		switch (opcode) {
 
 		/* BEWARE!
 		   It is essential that any operation that fails sets
-		   why to anything but WHY_NOT, and that no operation
+		   why to anything but UNWIND_NOUNWIND, and that no operation
 		   that succeeds does this! */
 
 		/* case STOP_CODE: this is an error! */
@@ -1035,7 +1022,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				FAST_DISPATCH();
 			}
 			_PyEval_RaiseForUnboundLocal(f, oparg);
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 			break;
 
 		TARGET(LOAD_CONST)
@@ -1118,7 +1105,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1130,7 +1117,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1151,7 +1138,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				DISPATCH();
 			}
 			STACKADJ(-1);
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 			break;
 
 		TARGET(UNARY_CONVERT)
@@ -1161,7 +1148,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1173,7 +1160,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1188,7 +1175,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1203,7 +1190,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1219,7 +1206,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				Py_DECREF(w);
 				SET_TOP(x);
 				if (x == NULL) {
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					break;
 				}
 				DISPATCH();
@@ -1238,7 +1225,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1253,7 +1240,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1271,7 +1258,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1306,7 +1293,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1334,7 +1321,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1363,7 +1350,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1378,7 +1365,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1393,7 +1380,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1408,7 +1395,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1423,7 +1410,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1438,7 +1425,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1452,7 +1439,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			PREDICT(JUMP_ABSOLUTE);
@@ -1468,7 +1455,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1483,7 +1470,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1499,7 +1486,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				Py_DECREF(w);
 				SET_TOP(x);
 				if (x == NULL) {
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					break;
 				}
 				DISPATCH();
@@ -1518,7 +1505,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1533,7 +1520,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1548,7 +1535,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1583,7 +1570,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1611,7 +1598,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1626,7 +1613,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1641,7 +1628,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1656,7 +1643,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1671,7 +1658,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1686,7 +1673,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1717,7 +1704,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_XDECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1750,7 +1737,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_XDECREF(v);
 			Py_XDECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1782,7 +1769,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_XDECREF(v);
 			Py_XDECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1801,7 +1788,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1817,7 +1804,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1849,18 +1836,18 @@ PyEval_EvalFrame(PyFrameObject *f)
 			RECORD_TYPE(0, w);
 			RECORD_TYPE(1, v);
 			RECORD_TYPE(2, u);
-			why = do_raise(w, v, u);
+			why = _PyEval_DoRaise(w, v, u);
 			break;
 
 		TARGET(RETURN_VALUE)
 			retval = POP();
-			why = WHY_RETURN;
+			why = UNWIND_RETURN;
 			goto fast_block_end;
 
 		TARGET(YIELD_VALUE)
 			retval = POP();
 			f->f_stacktop = stack_pointer;
-			why = WHY_YIELD;
+			why = UNWIND_YIELD;
 			goto fast_yield;
 
 		TARGET(POP_BLOCK)
@@ -1877,10 +1864,10 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(END_FINALLY)
 			v = POP();
 			if (PyInt_Check(v)) {
-				why = (enum why_code) PyInt_AS_LONG(v);
-				assert(why != WHY_YIELD);
-				if (why == WHY_RETURN ||
-				    why == WHY_CONTINUE)
+				why = (enum _PyUnwindReason) PyInt_AS_LONG(v);
+				assert(why != UNWIND_YIELD);
+				if (why == UNWIND_RETURN ||
+				    why == UNWIND_CONTINUE)
 					retval = POP();
 			}
 			else if (PyExceptionClass_Check(v) ||
@@ -1888,13 +1875,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 				w = POP();
 				u = POP();
 				PyErr_Restore(v, w, u);
-				why = WHY_RERAISE;
+				why = UNWIND_RERAISE;
 				break;
 			}
 			else if (v != Py_None) {
 				PyErr_SetString(PyExc_SystemError,
 					"'finally' pops bad exception");
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 			}
 			Py_DECREF(v);
 			break;
@@ -1903,7 +1890,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			x = POP();
 			err = _PyEval_StoreName(f, oparg, x);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1911,7 +1898,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(DELETE_NAME)
 			err = _PyEval_DeleteName(f, oparg);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1943,7 +1930,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				/* _PyEval_UnpackIterable() raised
 				   an exception */
 				Py_DECREF(v);
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			} else {
 				stack_pointer += oparg;
@@ -1961,7 +1948,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			Py_DECREF(u);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1974,7 +1961,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyObject_SetAttr(v, w, (PyObject *)NULL);
 			Py_DECREF(v);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1985,7 +1972,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyDict_SetItem(f->f_globals, w, v);
 			Py_DECREF(v);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -1995,7 +1982,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyDict_DelItem(f->f_globals, w);
 			if (err != 0) {
 				_PyEval_RaiseForGlobalNameError(w);
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2003,7 +1990,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(LOAD_NAME)
 			x = _PyEval_LoadName(f, oparg);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			PUSH(x);
@@ -2023,7 +2010,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 					d = (PyDictObject *)(f->f_globals);
 					e = d->ma_lookup(d, w, hash);
 					if (e == NULL) {
-						why = WHY_EXCEPTION;
+						why = UNWIND_EXCEPTION;
 						break;
 					}
 					x = e->me_value;
@@ -2037,7 +2024,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 					d = (PyDictObject *)(f->f_builtins);
 					e = d->ma_lookup(d, w, hash);
 					if (e == NULL) {
-						why = WHY_EXCEPTION;
+						why = UNWIND_EXCEPTION;
 						break;
 					}
 					x = e->me_value;
@@ -2058,7 +2045,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				if (x == NULL) {
 				  load_global_error:
 				  	_PyEval_RaiseForGlobalNameError(w);
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					break;
 				}
 			}
@@ -2074,7 +2061,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				DISPATCH();
 			}
 			_PyEval_RaiseForUnboundLocal(f, oparg);
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 			break;
 
 		TARGET(LOAD_CLOSURE)
@@ -2090,7 +2077,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				PUSH(w);
 				DISPATCH();
 			}
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 			/* Don't stomp existing exception */
 			if (PyErr_Occurred())
 				break;
@@ -2107,7 +2094,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BUILD_TUPLE)
 			x = PyTuple_New(oparg);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			for (; --oparg >= 0;) {
@@ -2120,7 +2107,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 		TARGET(BUILD_LIST)
 			x = PyList_New(oparg);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			for (; --oparg >= 0;) {
@@ -2134,7 +2121,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			x = _PyDict_NewPresized((Py_ssize_t)oparg);
 			PUSH(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2150,7 +2137,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(u);
 			Py_DECREF(w);
 			if (err != 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2163,7 +2150,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2201,7 +2188,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			PREDICT(POP_JUMP_IF_FALSE);
@@ -2229,7 +2216,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyObject_IsTrue(w);
 			Py_DECREF(w);
 			if (err < 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			else if (err == 0) {
@@ -2259,7 +2246,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			err = PyObject_IsTrue(w);
 			Py_DECREF(w);
 			if (err < 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			else if (err > 0) {
@@ -2287,7 +2274,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			err = PyObject_IsTrue(w);
 			if (err < 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			else if (err > 0) {
@@ -2317,7 +2304,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			err = PyObject_IsTrue(w);
 			if (err < 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			else if (err > 0) {
@@ -2356,7 +2343,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			if (x == NULL) {
 				STACKADJ(-1);
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			SET_TOP(x);
@@ -2378,7 +2365,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			if (PyErr_Occurred()) {
 				if (!PyErr_ExceptionMatches(
 						PyExc_StopIteration)) {
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					break;
 				}
 				PyErr_Clear();
@@ -2390,16 +2377,16 @@ PyEval_EvalFrame(PyFrameObject *f)
 			DISPATCH();
 
 		TARGET(BREAK_LOOP)
-			why = WHY_BREAK;
+			why = UNWIND_BREAK;
 			goto fast_block_end;
 
 		TARGET(CONTINUE_LOOP)
 			retval = PyInt_FromLong(oparg);
 			if (!retval) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
-			why = WHY_CONTINUE;
+			why = UNWIND_CONTINUE;
 			goto fast_block_end;
 
 		TARGET_WITH_IMPL(SETUP_LOOP, _setup_finally)
@@ -2420,8 +2407,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 			/* At the top of the stack are 1-3 values indicating
 			   how/why we entered the finally clause:
 			   - TOP = None
-			   - (TOP, SECOND) = (WHY_{RETURN,CONTINUE}), retval
-			   - TOP = WHY_*; no retval below it
+			   - (TOP, SECOND) = (UNWIND_{RETURN,CONTINUE}), retval
+			   - TOP = UNWIND_*; no retval below it
 			   - (TOP, SECOND, THIRD) = exc_info()
 			   Below them is EXIT, the context.__exit__ bound method.
 			   In the last case, we must call
@@ -2449,8 +2436,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			else if (PyInt_Check(u)) {
 				switch(PyInt_AS_LONG(u)) {
-				case WHY_RETURN:
-				case WHY_CONTINUE:
+				case UNWIND_RETURN:
+				case UNWIND_CONTINUE:
 					/* Retval in TOP. */
 					exit_func = SECOND();
 					SET_SECOND(TOP());
@@ -2476,7 +2463,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 							 NULL);
 			Py_DECREF(exit_func);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break; /* Go to error exit */
 			}
 
@@ -2487,7 +2474,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(x);
 
 			if (err < 0) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break; /* Go to error exit */
 			}
 			else if (err > 0) {
@@ -2522,7 +2509,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			stack_pointer -= num_stack_slots;
 			PUSH(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2561,7 +2548,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			stack_pointer -= num_stack_slots;
 			PUSH(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2572,7 +2559,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			v = POP(); /* code object */
 			x = PyFunction_New(v, f->f_globals);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			Py_DECREF(v);
@@ -2580,7 +2567,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				v = POP();
 				if (PyFunction_SetClosure(x, v) != 0) {
 					/* Can't happen unless bytecode is corrupt. */
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					Py_DECREF(x);
 					x = NULL;
 				}
@@ -2590,7 +2577,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				v = PyTuple_New(oparg);
 				if (v == NULL) {
 					Py_DECREF(x);
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					break;
 				}
 				while (--oparg >= 0) {
@@ -2600,7 +2587,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				if (PyFunction_SetDefaults(x, v) != 0) {
 					/* Can't happen unless
                                            PyFunction_SetDefaults changes. */
-					why = WHY_EXCEPTION;
+					why = UNWIND_EXCEPTION;
 					Py_DECREF(v);
 					break;
 				}
@@ -2618,7 +2605,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(v);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2633,7 +2620,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 			Py_DECREF(w);
 			SET_TOP(x);
 			if (x == NULL) {
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 				break;
 			}
 			DISPATCH();
@@ -2652,7 +2639,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 				PyFrame_GetLineNumber(f),
 				opcode);
 			PyErr_SetString(PyExc_SystemError, "unknown opcode");
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 			break;
 
 #ifdef CASE_TOO_BIG
@@ -2665,13 +2652,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		/* Quickly continue if no error occurred */
 
-		if (why == WHY_NOT) {
+		if (why == UNWIND_NOUNWIND) {
 #ifdef CHECKEXC
 			/* This check is expensive! */
 			if (PyErr_Occurred()) {
 				fprintf(stderr,
 					"XXX undetected error\n");
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 			}
 			else {
 #endif
@@ -2683,11 +2670,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		/* Double-check exception status */
 
-		if (why == WHY_EXCEPTION || why == WHY_RERAISE) {
+		if (why == UNWIND_EXCEPTION || why == UNWIND_RERAISE) {
 			if (!PyErr_Occurred()) {
 				PyErr_SetString(PyExc_SystemError,
 					"error return without exception set");
-				why = WHY_EXCEPTION;
+				why = UNWIND_EXCEPTION;
 			}
 		}
 #ifdef CHECKEXC
@@ -2704,31 +2691,31 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 		/* Log traceback info if this is a real exception */
 
-		if (why == WHY_EXCEPTION) {
+		if (why == UNWIND_EXCEPTION) {
 			PyTraceBack_Here(f);
 
 			if (tstate->c_tracefunc != NULL)
 				_PyEval_CallExcTrace(tstate, f);
 		}
 
-		/* For the rest, treat WHY_RERAISE as WHY_EXCEPTION */
+		/* For the rest, treat UNWIND_RERAISE as UNWIND_EXCEPTION */
 
-		if (why == WHY_RERAISE)
-			why = WHY_EXCEPTION;
+		if (why == UNWIND_RERAISE)
+			why = UNWIND_EXCEPTION;
 
 		/* Unwind stacks if a (pseudo) exception occurred */
 
 fast_block_end:
-		while (why != WHY_NOT && f->f_iblock > 0) {
+		while (why != UNWIND_NOUNWIND && f->f_iblock > 0) {
 			PyTryBlock *b = PyFrame_BlockPop(f);
 
-			assert(why != WHY_YIELD);
-			if (b->b_type == SETUP_LOOP && why == WHY_CONTINUE) {
+			assert(why != UNWIND_YIELD);
+			if (b->b_type == SETUP_LOOP && why == UNWIND_CONTINUE) {
 				/* For a continue inside a try block,
 				   don't pop the block for the loop. */
 				PyFrame_BlockSetup(f, b->b_type, b->b_handler,
 						   b->b_level);
-				why = WHY_NOT;
+				why = UNWIND_NOUNWIND;
 				JUMPTO(PyInt_AS_LONG(retval));
 				Py_DECREF(retval);
 				break;
@@ -2738,15 +2725,15 @@ fast_block_end:
 				v = POP();
 				Py_XDECREF(v);
 			}
-			if (b->b_type == SETUP_LOOP && why == WHY_BREAK) {
-				why = WHY_NOT;
+			if (b->b_type == SETUP_LOOP && why == UNWIND_BREAK) {
+				why = UNWIND_NOUNWIND;
 				JUMPTO(b->b_handler);
 				break;
 			}
 			if (b->b_type == SETUP_FINALLY ||
 			    (b->b_type == SETUP_EXCEPT &&
-			     why == WHY_EXCEPTION)) {
-				if (why == WHY_EXCEPTION) {
+			     why == UNWIND_EXCEPTION)) {
+				if (why == UNWIND_EXCEPTION) {
 					/* Keep this in sync with
 					   _PyLlvm_WrapEnterExceptOrFinally
 					   in llvm_fbuilder.cc. */
@@ -2783,12 +2770,12 @@ fast_block_end:
 					PyErr_Clear();
 				}
 				else {
-					if (why & (WHY_RETURN | WHY_CONTINUE))
+					if (why & (UNWIND_RETURN | UNWIND_CONTINUE))
 						PUSH(retval);
 					v = PyInt_FromLong((long)why);
 					PUSH(v);
 				}
-				why = WHY_NOT;
+				why = UNWIND_NOUNWIND;
 				JUMPTO(b->b_handler);
 				break;
 			}
@@ -2796,30 +2783,30 @@ fast_block_end:
 
 		/* End the loop if we still have an error (or return) */
 
-		if (why != WHY_NOT)
+		if (why != UNWIND_NOUNWIND)
 			break;
 
 	} /* main loop */
 
-	assert(why != WHY_YIELD);
+	assert(why != UNWIND_YIELD);
 	/* Pop remaining stack entries. */
 	while (!EMPTY()) {
 		v = POP();
 		Py_XDECREF(v);
 	}
 
-	if (why != WHY_RETURN)
+	if (why != UNWIND_RETURN)
 		retval = NULL;
 
 fast_yield:
 	if (tstate->use_tracing) {
 		if (_PyEval_TraceLeaveFunction(
 			    tstate, f, retval,
-			    why == WHY_RETURN || why == WHY_YIELD,
-			    why == WHY_EXCEPTION)) {
+			    why == UNWIND_RETURN || why == UNWIND_YIELD,
+			    why == UNWIND_EXCEPTION)) {
 			Py_XDECREF(retval);
 			retval = NULL;
-			why = WHY_EXCEPTION;
+			why = UNWIND_EXCEPTION;
 		}
 	}
 
@@ -3261,8 +3248,8 @@ _PyEval_ResetExcInfo(PyThreadState *tstate)
 
 /* Logic for the raise statement (too complicated for inlining).
    This *consumes* a reference count to each of its arguments. */
-static enum why_code
-do_raise(PyObject *type, PyObject *value, PyObject *tb)
+enum _PyUnwindReason
+_PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
 {
 	if (type == NULL) {
 		/* Reraise */
@@ -3357,34 +3344,14 @@ do_raise(PyObject *type, PyObject *value, PyObject *tb)
 
 	PyErr_Restore(type, value, tb);
 	if (tb == NULL)
-		return WHY_EXCEPTION;
+		return UNWIND_EXCEPTION;
 	else
-		return WHY_RERAISE;
+		return UNWIND_RERAISE;
  raise_error:
 	Py_XDECREF(value);
 	Py_XDECREF(type);
 	Py_XDECREF(tb);
-	return WHY_EXCEPTION;
-}
-
-/* Expose do_raise with a slightly different return value for
-   llvm_fbuilder.cc; return 1 for WHY_RERAISE, 0 for WHY_EXCEPTION */
-int
-_PyEval_DoRaise(PyObject *type, PyObject *value, PyObject *tb)
-{
-        PY_LOG_TSC_EVENT(EXCEPT_RAISE_LLVM);
-	enum why_code reason = do_raise(type, value, tb);
-	switch (reason) {
-	case WHY_EXCEPTION:
-		return 0;
-	case WHY_RERAISE:
-		return 1;
-	default:
-		PyErr_Format(PyExc_SystemError,
-			     "Unhandled why_code %d in _PyEval_DoRaise()",
-			     reason);
-		return 0;
-	}
+	return UNWIND_EXCEPTION;
 }
 
 /* Iterate iterable argcount times and store the results on the stack (by
