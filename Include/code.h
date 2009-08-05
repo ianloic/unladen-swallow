@@ -129,10 +129,12 @@ PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
                                       PyObject *names, PyObject *lineno_obj);
 
 #ifdef WITH_LLVM
-/* Returns -1 on error, 0 on success.
-   Currently this doesn't actually recompile things. See
+/* Compile a given function to LLVM IR, and apply a set of optimization passes.
+   Returns -1 on error, 0 on success.
+
+   This should eventually be able to *re*compile bytecode to LLVM IR. See
    http://code.google.com/p/unladen-swallow/issues/detail?id=41. */
-PyAPI_FUNC(int) _PyCode_Recompile(PyCodeObject *code, int new_opt_level);
+PyAPI_FUNC(int) _PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int opt_level);
 #endif
 
 #ifdef __cplusplus

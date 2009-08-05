@@ -844,6 +844,9 @@ PyEval_EvalFrame(PyFrameObject *f)
 		assert(co->co_native_function != NULL &&
 		       "mark_called_and_maybe_compile was supposed to ensure"
 		       " that co_native_function exists");
+		assert(co->co_use_llvm &&
+		       "a frame cannot use_llvm if the code object can't "
+		       "use_llvm");
 		retval = co->co_native_function(f);
 		goto exit_eval_frame;
 	}
@@ -3878,60 +3881,55 @@ err_args(PyObject *func, int flags, int nargs)
 // object was marked as needing to be run through LLVM, also compiles
 // the bytecode to native code, even if the code object isn't hot yet.
 // Returns 0 on success or -1 on failure.
+//
+// TODO(collinwinter): This function will need to take into account fatal guard
+// failures. Currently, there are only non-fatal guard failures: tracing is
+// inconvenient, but it doesn't invalidate the machine code. A fatal guard
+// failure, by contrast, indicates that the machine code is totally invalid and
+// needs to be recompiled. Until we can recompile LLVM IR, a single fatal guard
+// failure blocks all future recompilation of a given function to machine code.
+// Even once recompilation works, we should limit the number of times we're
+// willing to recompile a function in the face of repeated fatal guard failures.
 static int
 mark_called_and_maybe_compile(PyCodeObject *co)
 {
-	bool did_compilation = false;
 	if (Py_HOT_OR_NOT(++co->co_callcount)) {
 #ifdef Py_PROFILE_HOTNESS
 		hot_code->AddHotCode(co);
 #endif
-		if (Py_JitControl == PY_JIT_WHENHOT) {
+		if (Py_JitControl == PY_JIT_WHENHOT)
 			co->co_use_llvm = 1;
+	}
+	if (co->co_use_llvm) {
+		if (co->co_llvm_function == NULL) {
 			int target_optimization =
 				std::max(Py_DEFAULT_JIT_OPT_LEVEL,
 					 Py_OptimizeFlag);
 			if (co->co_optimization < target_optimization) {
 				PY_LOG_TSC_EVENT(EVAL_COMPILE_START);
-				did_compilation = true;
-
 				// If the LLVM version of the function wasn't
 				// created yet, setting the optimization level
 				// will create it.
 				int r;
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
-				r = _PyCode_Recompile(co, target_optimization);
+				r = _PyCode_ToOptimizedLlvmIr(
+					co, target_optimization);
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
 				if (r < 0)
 					return -1;
 			}
 		}
-	}
-	if (co->co_use_llvm && co->co_native_function == NULL) {
-		// To build the native eval function, we need an IR function.
-		if (co->co_llvm_function == NULL) {
-			// If we have to do this compilation, then we didn't
-			// do the compilation in the whenhot branch.
-			PY_LOG_TSC_EVENT(EVAL_COMPILE_START);
-			did_compilation = true;
-
-			PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
-			co->co_llvm_function = _PyCode_To_Llvm(co);
-			PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
-			if (co->co_llvm_function == NULL) {
+		if (co->co_native_function == NULL) {
+			// Now try to JIT the IR function to machine code.
+			PY_LOG_TSC_EVENT(JIT_START);
+			co->co_native_function =
+				_LlvmFunction_Jit(co->co_llvm_function);
+			PY_LOG_TSC_EVENT(JIT_END);
+			if (co->co_native_function == NULL) {
 				return -1;
 			}
 		}
-		// Now try to JIT the IR function to machine code.
-		PY_LOG_TSC_EVENT(JIT_START);
-		co->co_native_function = _LlvmFunction_Jit(co->co_llvm_function);
-		PY_LOG_TSC_EVENT(JIT_END);
-		if (co->co_native_function == NULL) {
-			return -1;
-		}
-	}
-	if (did_compilation) {
-		PY_LOG_TSC_EVENT(EVAL_COMPILE_END);
+		PY_LOG_TSC_EVENT(EVAL_COMPILE_END)
 	}
 	return 0;
 }

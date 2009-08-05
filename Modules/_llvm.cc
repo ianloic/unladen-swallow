@@ -62,7 +62,7 @@ llvm_compile(PyObject *self, PyObject *args)
     code = (PyCodeObject *)obj;
     if (code->co_llvm_function)
         _LlvmFunction_Dealloc(code->co_llvm_function);
-    code->co_llvm_function = _PyCode_To_Llvm(code);
+    code->co_llvm_function = _PyCode_ToLlvmIr(code);
     if (code->co_llvm_function == NULL)
         return NULL;
     global_llvm_data = PyThreadState_GET()->interp->global_llvm_data;

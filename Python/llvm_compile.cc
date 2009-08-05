@@ -242,7 +242,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
 }
 
 extern "C" _LlvmFunction *
-_PyCode_To_Llvm(PyCodeObject *code)
+_PyCode_ToLlvmIr(PyCodeObject *code)
 {
     if (!PyCode_Check(code)) {
         PyErr_Format(PyExc_TypeError, "Expected code object, not '%.500s'",

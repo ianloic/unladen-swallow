@@ -159,7 +159,7 @@ code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 	long new_opt_level = PyInt_AsLong(new_opt_level_obj);
 	if (new_opt_level == -1 && PyErr_Occurred())
 		return -1;
-	return _PyCode_Recompile(code, new_opt_level);
+	return _PyCode_ToOptimizedLlvmIr(code, new_opt_level);
 }
 
 static PyObject *
@@ -180,7 +180,7 @@ static PyGetSetDef code_getsetlist[] = {
 };
 
 int
-_PyCode_Recompile(PyCodeObject *code, int new_opt_level)
+_PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int new_opt_level)
 {
 	struct PyGlobalLlvmData *global_llvm_data;
 	if (new_opt_level < code->co_optimization) {
@@ -192,7 +192,7 @@ _PyCode_Recompile(PyCodeObject *code, int new_opt_level)
 		return -1;
 	}
 	if (code->co_llvm_function == NULL) {
-		code->co_llvm_function = _PyCode_To_Llvm(code);
+		code->co_llvm_function = _PyCode_ToLlvmIr(code);
 		if (code->co_llvm_function == NULL)
 			return -1;
 	}
