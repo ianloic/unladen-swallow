@@ -325,7 +325,7 @@ static PyObject *
 builtin_exec(PyObject *self, PyObject *args)
 {
 	int n;
-	PyObject *v, *prog, *globals, *locals, *builtins_dict;
+	PyObject *v, *prog, *globals = Py_None, *locals = Py_None, *builtins_dict;
 	PyFrameObject *f;
 	int plain = 0;
 
@@ -1276,6 +1276,12 @@ builtin_make_function(PyObject *self, PyObject *args)
 	code_obj = PyTuple_GetItem(args, 0);
 	if (code_obj == NULL)
 		return NULL;
+	if (!PyCode_Check(code_obj)) {
+		PyErr_Format(PyExc_TypeError,
+		             "first argument must be a code object, not %.200s",
+		             code_obj->ob_type->tp_name);
+		return NULL;
+	}
 	func = PyFunction_New(code_obj, frame->f_globals);
 	if (func == NULL)
 		return NULL;
