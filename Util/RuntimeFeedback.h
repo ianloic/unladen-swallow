@@ -55,7 +55,7 @@ private:
     void SetFlagBit(unsigned index, bool value);
     bool GetFlagBit(unsigned index) const;
 
-    static const int num_pointers_ = 3;
+    enum { NUM_POINTERS  = 3 };
     enum Bits {
     // We have 6 bits available here to use to store flags (we get 2
     // bits at the bottom of each pointer on 32-bit systems, where
@@ -74,7 +74,7 @@ private:
     // The pointers in this array start out NULL and are filled from
     // the lowest index as we see new types.
     llvm::PointerIntPair<PyObject*, /*bits used from bottom of pointer=*/2>
-        data_[num_pointers_];
+        data_[NUM_POINTERS];
 };
 
 class PyFullFeedback {

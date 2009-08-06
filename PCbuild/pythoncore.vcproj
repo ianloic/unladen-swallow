@@ -47,7 +47,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -126,7 +126,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -208,7 +208,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -290,7 +290,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="3"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -368,7 +368,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -447,7 +447,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -526,7 +526,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -605,7 +605,7 @@
 				PreprocessorDefinitions="_USRDLL;Py_BUILD_CORE;Py_ENABLE_SHARED;WIN32;_SCL_SECURE_NO_WARNINGS"
 				ExceptionHandling="1"
 				RuntimeLibrary="2"
-				DisableSpecificWarnings="4146;4355;4800"
+				DisableSpecificWarnings="4146;4351;4355;4800"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -1990,6 +1990,18 @@
 			</File>
 			<File
 				RelativePath="..\Util\PyTypeBuilder.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\RuntimeFeedback.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\RuntimeFeedback.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\RuntimeFeedback_fwd.h"
 				>
 			</File>
 			<File

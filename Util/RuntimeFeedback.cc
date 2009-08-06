@@ -11,8 +11,6 @@ using llvm::PointerLikeTypeTraits;
 using llvm::SmallPtrSet;
 using llvm::SmallVector;
 
-const int PyLimitedFeedback::num_pointers_;
-
 void
 PyLimitedFeedback::SetFlagBit(unsigned index, bool value)
 {
@@ -36,7 +34,7 @@ PyLimitedFeedback::GetFlagBit(unsigned index) const
 void
 PyLimitedFeedback::IncCounter(unsigned counter_id)
 {
-    assert(counter_id < (unsigned)PyLimitedFeedback::num_pointers_);
+    assert(counter_id < (unsigned)PyLimitedFeedback::NUM_POINTERS);
     uintptr_t old_value =
         reinterpret_cast<uintptr_t>(this->data_[counter_id].getPointer());
     uintptr_t shift = PointerLikeTypeTraits<PyObject*>::NumLowBitsAvailable;
@@ -64,7 +62,7 @@ PyLimitedFeedback::AddTypeSeen(PyObject *obj)
         return;
     }
     PyObject *type = (PyObject *)Py_TYPE(obj);
-    for (int i = 0; i < PyLimitedFeedback::num_pointers_; ++i) {
+    for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
         PyObject *value = data_[i].getPointer();
         if (value == (PyObject*)type)
             return;
@@ -86,7 +84,7 @@ PyLimitedFeedback::GetSeenTypesInto(
         // Saw a NULL value, so add NULL to the result.
         result.push_back(NULL);
     }
-    for (int i = 0; i < PyLimitedFeedback::num_pointers_; ++i) {
+    for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
         PyObject *value = data_[i].getPointer();
         if (value == NULL)
             return;
