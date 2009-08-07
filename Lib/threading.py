@@ -225,6 +225,16 @@ class _Condition(_Verbose):
         else:
             return True
 
+    def _reset_lock(self, lock=None):
+        """Throw away the old lock and replace it with this one."""
+        if lock is None:
+            lock = Lock()
+        self.__lock = lock
+        # Reset these exported bound methods.  If we don't do this, these
+        # bound methods will still refer to the old lock.
+        self.acquire = lock.acquire
+        self.release = lock.release
+
     def wait(self, timeout=None):
         if not self._is_owned():
             raise RuntimeError("cannot wait on un-aquired lock")
@@ -853,6 +863,10 @@ def _after_fork():
                 # its new value since it can have changed.
                 ident = _get_ident()
                 thread._Thread__ident = ident
+                # Any locks hanging off of the active thread may be in an
+                # invalid state, so we reset them.
+                thread._Thread__block._reset_lock()
+                thread._Thread__started._Event__cond._reset_lock()
                 new_active[ident] = thread
             else:
                 # All the others are already stopped.

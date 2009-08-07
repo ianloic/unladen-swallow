@@ -406,6 +406,95 @@ class ThreadJoinOnShutdown(unittest.TestCase):
         self._run_and_join(script)
 
 
+class ThreadAndForkTests(unittest.TestCase):
+
+    def test_join_fork_stop_deadlock(self):
+        # There used to be a possible deadlock when forking from a child
+        # thread.  See http://bugs.python.org/issue6643.
+
+        import os
+        if not hasattr(os, 'fork'):
+            return
+        # Skip platforms with known problems forking from a worker thread.
+        # See http://bugs.python.org/issue3863.
+        if sys.platform in ('freebsd4', 'freebsd5', 'freebsd6', 'os2emx'):
+            raise unittest.SkipTest('due to known OS bugs on ' + sys.platform)
+
+        # The script takes the following steps:
+        # - The main thread in the parent process starts a new thread and then
+        #   tries to join it.
+        # - The join operation acquires the Lock inside the thread's __block
+        #   Condition.  (See threading.py:Thread.join().)
+        # - We stub out the acquire method on the condition to force it to wait
+        #   until the child thread forks.  (See LOCK ACQUIRED HERE)
+        # - The child thread forks.  (See LOCK HELD and WORKER THREAD FORKS
+        #   HERE)
+        # - The main thread of the parent process enters Condition.wait(),
+        #   which releases the lock on the child thread.
+        # - The child process returns.  Without the necessary fix, when the
+        #   main thread of the child process (which used to be the child thread
+        #   in the parent process) attempts to exit, it will try to acquire the
+        #   lock in the Thread.__block Condition object and hang, because the
+        #   lock was held across the fork.
+
+        script = """if 1:
+            import os, sys, time, threading
+
+            finish_join = False
+            start_fork = False
+
+            def worker():
+                # Wait until this thread's lock is acquired before forking to
+                # create the deadlock.
+                global finish_join
+                while not start_fork:
+                    time.sleep(0.01)
+                # LOCK HELD: Main thread holds lock across this call.
+                childpid = os.fork()
+                finish_join = True
+                if childpid != 0:
+                    # Parent process just waits for child.
+                    os.waitpid(childpid, 0)
+                # Child process should just return.
+
+            w = threading.Thread(target=worker)
+
+            # Stub out the private condition variable's lock acquire method.
+            # This acquires the lock and then waits until the child has forked
+            # before returning, which will release the lock soon after.  If
+            # someone else tries to fix this test case by acquiring this lock
+            # before forking instead of reseting it, the test case will
+            # deadlock when it shouldn't.
+            condition = w._Thread__block
+            orig_acquire = condition.acquire
+            call_count_lock = threading.Lock()
+            call_count = 0
+            def my_acquire():
+                global call_count
+                global start_fork
+                orig_acquire()  # LOCK ACQUIRED HERE
+                start_fork = True
+                if call_count == 0:
+                    while not finish_join:
+                        time.sleep(0.01)  # WORKER THREAD FORKS HERE
+                with call_count_lock:
+                    call_count += 1
+            condition.acquire = my_acquire
+
+            w.start()
+            w.join()
+            print('end of main')
+            """
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", script],
+                             stdout=subprocess.PIPE)
+        rc = p.wait()
+        data = p.stdout.read().decode().replace('\r', '')
+        self.assertEqual(data, "end of main\n")
+        self.assertFalse(rc == 2, "interpreter was blocked")
+        self.assertTrue(rc == 0, "Unexpected error")
+
+
 class ThreadingExceptionTests(unittest.TestCase):
     # A RuntimeError should be raised if Thread.start() is called
     # multiple times.
@@ -448,6 +537,7 @@ def test_main():
     test.test_support.run_unittest(ThreadTests,
                                    ThreadJoinOnShutdown,
                                    ThreadingExceptionTests,
+                                   ThreadAndForkTests,
                                    )
 
 if __name__ == "__main__":
