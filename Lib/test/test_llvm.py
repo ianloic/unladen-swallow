@@ -743,12 +743,11 @@ def complex_if(x, y, z):
         self.assertEquals(complex_if(False, True, True), 3)
         self.assertRaises(ZeroDivisionError, complex_if, True, False, False)
 
-# TODO(twouters): assert needs LOAD_GLOBAL and RAISE_VARARGS
-##     @at_each_optimization_level
-##     def test_assert(self, level):
-##         f = comile_for_llvm("f", "def f(x): assert x", level)
-##         self.assertEquals(f(1), None)
-##         self.assertRaises(AssertionError, f, 0)
+    @at_each_optimization_level
+    def test_assert(self, level):
+        f = compile_for_llvm("f", "def f(x): assert x", level)
+        self.assertEquals(f(1), None)
+        self.assertRaises(AssertionError, f, 0)
 
     @at_each_optimization_level
     def test_and(self, level):
