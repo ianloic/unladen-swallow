@@ -743,11 +743,13 @@ def complex_if(x, y, z):
         self.assertEquals(complex_if(False, True, True), 3)
         self.assertRaises(ZeroDivisionError, complex_if, True, False, False)
 
-    @at_each_optimization_level
-    def test_assert(self, level):
-        f = compile_for_llvm("f", "def f(x): assert x", level)
-        self.assertEquals(f(1), None)
-        self.assertRaises(AssertionError, f, 0)
+    # Asserts aren't compiled when -O is passed.
+    if sys.flags.optimize < 1:
+        @at_each_optimization_level
+        def test_assert(self, level):
+            f = compile_for_llvm("f", "def f(x): assert x", level)
+            self.assertEquals(f(1), None)
+            self.assertRaises(AssertionError, f, 0)
 
     @at_each_optimization_level
     def test_and(self, level):
@@ -2356,6 +2358,9 @@ class OptimizationTests(LlvmTestCase):
 def test_main():
     tests = [LoopExceptionInteractionTests, GeneralCompilationTests,
              OperatorTests, LiteralsTests, BailoutTests]
+    if sys.flags.optimize >= 1:
+        print >>sys.stderr, "test_llvm -- skipping some tests due to -O flag."
+        sys.stderr.flush()
     if sys.flags.jit_control != "whenhot":
         print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()
