@@ -3882,6 +3882,11 @@ err_args(PyObject *func, int flags, int nargs)
 // the bytecode to native code, even if the code object isn't hot yet.
 // Returns 0 on success or -1 on failure.
 //
+// This function is performance-critical. If you're changing this function,
+// you should keep a close eye on the benchmarks, particularly call_simple.
+// In the past, seemingly-insignificant changes have produced 10-15% swings
+// in the macrobenchmarks. You've been warned.
+//
 // TODO(collinwinter): This function will need to take into account fatal guard
 // failures. Currently, there are only non-fatal guard failures: tracing is
 // inconvenient, but it doesn't invalidate the machine code. A fatal guard
