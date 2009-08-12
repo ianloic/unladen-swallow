@@ -2,7 +2,13 @@
 import unittest, test.test_support
 import sys, cStringIO, os
 import struct
-from distutils import sysconfig
+try:
+    import _llvm
+except ImportError:
+    WITH_LLVM = False
+else:
+    WITH_LLVM = True
+    del _llvm
 
 class SysModuleTest(unittest.TestCase):
 
@@ -520,7 +526,7 @@ class SizeofTest(unittest.TestCase):
         # complex
         check(complex(0,1), size(h + '2d'))
         # code
-        if sysconfig.get_config_var("WITH_LLVM"):
+        if WITH_LLVM:
             check(get_cell().func_code, size(h + '4i8Pi5Pc2i'))
         else:
             check(get_cell().func_code, size(h + '4i8Pi2P'))
@@ -581,7 +587,7 @@ class SizeofTest(unittest.TestCase):
         nfrees = len(x.f_code.co_freevars)
         extras = x.f_code.co_stacksize + x.f_code.co_nlocals +\
                  ncells + nfrees - 1
-        if sysconfig.get_config_var("WITH_LLVM"):
+        if WITH_LLVM:
             check(x, size(vh + '12P4i' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
         else:
             check(x, size(vh + '12P3i' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
