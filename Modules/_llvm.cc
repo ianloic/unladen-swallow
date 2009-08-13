@@ -10,6 +10,7 @@ LLVM-py.
 #include "_llvmfunctionobject.h"
 #include "llvm_compile.h"
 #include "Python/global_llvm_data_fwd.h"
+#include "Util/RuntimeFeedback_fwd.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -78,9 +79,40 @@ llvm_compile(PyObject *self, PyObject *args)
     return _PyLlvmFunction_FromCodeObject((PyObject *)code);
 }
 
+PyDoc_STRVAR(llvm_clear_feedback_doc,
+"clear_feedback(func)\n\
+\n\
+Clear the runtime feedback collected for the given function.");
+
+static PyObject *
+llvm_clear_feedback(PyObject *self, PyObject *obj)
+{
+    PyFunctionObject *func;
+    if (PyFunction_Check(obj)) {
+        func = (PyFunctionObject *)obj;
+    }
+    else if (PyMethod_Check(obj)) {
+        func = (PyFunctionObject *)((PyMethodObject *)obj)->im_func;
+    }
+    else {
+        PyErr_Format(PyExc_TypeError,
+                     "cannot clear feedback for %.100s objects",
+                     Py_TYPE(obj)->tp_name);
+        return NULL;
+    }
+
+    PyCodeObject *code = (PyCodeObject *)func->func_code;
+    if (code->co_runtime_feedback)
+        PyFeedbackMap_Clear(code->co_runtime_feedback);
+
+    Py_RETURN_NONE;
+}
+
 static struct PyMethodDef llvm_methods[] = {
-    {"set_debug",	(PyCFunction)llvm_setdebug,	METH_O, setdebug_doc},
-    {"compile",		llvm_compile,	METH_VARARGS, llvm_compile_doc},
+    {"set_debug", (PyCFunction)llvm_setdebug, METH_O, setdebug_doc},
+    {"compile", llvm_compile, METH_VARARGS, llvm_compile_doc},
+    {"clear_feedback", (PyCFunction)llvm_clear_feedback, METH_O,
+     llvm_clear_feedback_doc},
     { NULL, NULL }
 };
 
