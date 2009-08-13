@@ -643,8 +643,13 @@ class PyBuildExt(build_ext):
             exts.append( Extension('_llvm', ['_llvm.cc'],
                                    include_dirs=[rel_llvm_inc_dir,
                                                  llvm_inc_dir]) )
+            exts.append( Extension('_llvmre', ['_llvmre.cc'],
+                                   extra_compile_args=['-D__STDC_LIMIT_MACROS','-D__STDC_CONSTANT_MACROS','-Woverloaded-virtual'],
+                                   include_dirs=[rel_llvm_inc_dir,
+                                                 llvm_inc_dir]) )
         else:
             missing.append('_llvm')
+            missing.append('_llvmre')
 
         # socket(2)
         exts.append( Extension('_socket', ['socketmodule.c'],
