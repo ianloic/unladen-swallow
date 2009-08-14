@@ -130,3 +130,6 @@ class MatchObject(object):
 
 def compile(pattern, flags=0):
   return RegexObject(pattern, flags)
+
+def match(pattern, string, flags=0):
+  return compile(pattern, flags).match(string)
