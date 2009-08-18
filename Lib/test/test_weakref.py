@@ -558,25 +558,26 @@ class ReferencesTestCase(TestBase):
             def acallback(self, ignore):
                 alist.append(self.c)
 
-        c1, c2 = C(1), C(2)
+        common = C(0)
+        c1, c2 = C(common), C(common)
         c1.c = c2
         c2.c = c1
         c1.wr = weakref.ref(c2, c1.acallback)
         c2.wr = weakref.ref(c1, c2.acallback)
 
-        def C_went_away(ignore):
-            alist.append("C went away")
-        wr = weakref.ref(C, C_went_away)
+        def common_went_away(ignore):
+            alist.append("common went away")
+        wr = weakref.ref(common, common_went_away)
 
-        del c1, c2, C   # make them all trash
+        del c1, c2, common   # make them all trash
         self.assertEqual(alist, [])  # del isn't enough to reclaim anything
 
         gc.collect()
         # c1.wr and c2.wr were part of the cyclic trash, so should have
         # been cleared without their callbacks executing.  OTOH, the weakref
-        # to C is bound to a function local (wr), and wasn't trash, so that
-        # callback should have been invoked when C went away.
-        self.assertEqual(alist, ["C went away"])
+        # to common is bound to a function local (wr), and wasn't trash, so that
+        # callback should have been invoked when common went away.
+        self.assertEqual(alist, ["common went away"])
         # The remaining weakref should be dead now (its callback ran).
         self.assertEqual(wr(), None)
 

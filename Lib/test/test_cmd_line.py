@@ -5,7 +5,13 @@
 import test.test_support, unittest
 import sys
 import subprocess
-from distutils import sysconfig
+try:
+    import _llvm
+except ImportError:
+    WITH_LLVM = False
+else:
+    WITH_LLVM = True
+    del _llvm
 
 def _spawn_python(*args):
     cmd_line = [sys.executable, '-E']
@@ -68,7 +74,7 @@ class CmdLineTest(unittest.TestCase):
         self.verify_valid_flag('-Qwarn')
         self.verify_valid_flag('-Qwarnall')
 
-    if sysconfig.get_config_var("WITH_LLVM"):
+    if WITH_LLVM:
         def test_jit_flag(self):
             self.verify_valid_flag('-j', 'never')
             self.verify_valid_flag('-j', 'whenhot')
