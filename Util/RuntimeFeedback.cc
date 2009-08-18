@@ -11,6 +11,41 @@ using llvm::PointerLikeTypeTraits;
 using llvm::SmallPtrSet;
 using llvm::SmallVector;
 
+PyLimitedFeedback::PyLimitedFeedback()
+{
+}
+
+PyLimitedFeedback::PyLimitedFeedback(const PyLimitedFeedback &src)
+{
+    for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
+        if (src.InTypeMode()) {
+            PyObject *value = src.data_[i].getPointer();
+            Py_XINCREF(value);
+        }
+        this->data_[i] = src.data_[i];
+    }
+}
+
+PyLimitedFeedback::~PyLimitedFeedback()
+{
+    this->Clear();
+}
+
+PyLimitedFeedback &
+PyLimitedFeedback::operator=(const PyLimitedFeedback &rhs)
+{
+    if (this != &rhs) {
+        for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
+            if (this->InTypeMode())
+                Py_XDECREF(this->data_[i].getPointer());
+            if (rhs.InTypeMode())
+                Py_XINCREF(rhs.data_[i].getPointer());
+            this->data_[i] = rhs.data_[i];
+        }
+    }
+    return *this;
+}
+
 void
 PyLimitedFeedback::SetFlagBit(unsigned index, bool value)
 {
@@ -34,7 +69,10 @@ PyLimitedFeedback::GetFlagBit(unsigned index) const
 void
 PyLimitedFeedback::IncCounter(unsigned counter_id)
 {
+    assert(this->InCounterMode());
     assert(counter_id < (unsigned)PyLimitedFeedback::NUM_POINTERS);
+    this->SetFlagBit(COUNTER_MODE_BIT, true);
+
     uintptr_t old_value =
         reinterpret_cast<uintptr_t>(this->data_[counter_id].getPointer());
     uintptr_t shift = PointerLikeTypeTraits<PyObject*>::NumLowBitsAvailable;
@@ -49,14 +87,33 @@ PyLimitedFeedback::IncCounter(unsigned counter_id)
 uintptr_t
 PyLimitedFeedback::GetCounter(unsigned counter_id)
 {
+    assert(this->InCounterMode());
+    this->SetFlagBit(COUNTER_MODE_BIT, true);
+
     uintptr_t shift = PointerLikeTypeTraits<PyObject*>::NumLowBitsAvailable;
     PyObject *counter_as_pointer = this->data_[counter_id].getPointer();
     return reinterpret_cast<uintptr_t>(counter_as_pointer) >> shift;
 }
 
 void
+PyLimitedFeedback::Clear()
+{
+    bool in_type_mode = this->InTypeMode();
+
+    for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
+        if (in_type_mode)
+            Py_XDECREF(this->data_[i].getPointer());
+        this->data_[i].setPointer(NULL);
+        this->data_[i].setInt(0);
+    }
+}
+
+void
 PyLimitedFeedback::AddTypeSeen(PyObject *obj)
 {
+    assert(this->InTypeMode());
+    this->SetFlagBit(TYPE_MODE_BIT, true);
+
     if (obj == NULL) {
         SetFlagBit(SAW_A_NULL_OBJECT_BIT, true);
         return;
@@ -64,10 +121,11 @@ PyLimitedFeedback::AddTypeSeen(PyObject *obj)
     PyObject *type = (PyObject *)Py_TYPE(obj);
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
         PyObject *value = data_[i].getPointer();
-        if (value == (PyObject*)type)
+        if (value == type)
             return;
         if (value == NULL) {
-            data_[i].setPointer((PyObject*)type);
+            Py_INCREF(type);
+            data_[i].setPointer(type);
             return;
         }
     }
@@ -76,9 +134,11 @@ PyLimitedFeedback::AddTypeSeen(PyObject *obj)
 }
 
 void
-PyLimitedFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, 3> &result) const
+PyLimitedFeedback::GetSeenTypesInto(SmallVector<PyTypeObject*, 3> &result)
 {
+    assert(this->InTypeMode());
+    this->SetFlagBit(TYPE_MODE_BIT, true);
+
     result.clear();
     if (GetFlagBit(SAW_A_NULL_OBJECT_BIT)) {
         // Saw a NULL value, so add NULL to the result.
@@ -93,25 +153,84 @@ PyLimitedFeedback::GetSeenTypesInto(
 }
 
 PyFullFeedback::PyFullFeedback()
-    : counters_(/* Zero out the array. */)
+    : counters_(/* Zero out the array. */),
+      usage_(UnknownMode)
 {
+}
+
+PyFullFeedback::PyFullFeedback(const PyFullFeedback &src)
+{
+    this->usage_ = src.usage_;
+    for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
+        this->counters_[i] = src.counters_[i];
+    this->data_ = src.data_;
+    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
+            it != end; ++it) {
+        Py_XINCREF((PyObject *)*it);
+    }
+}
+
+PyFullFeedback::~PyFullFeedback()
+{
+    this->Clear();
+}
+
+PyFullFeedback &
+PyFullFeedback::operator=(const PyFullFeedback &rhs)
+{
+    if (this != &rhs) {
+        this->Clear();
+        for (TypeSet::iterator it = rhs.data_.begin(), end = rhs.data_.end();
+                it != end; ++it) {
+            Py_XINCREF((PyObject *)*it);
+        }
+        for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
+            this->counters_[i] = rhs.counters_[i];
+        this->data_ = rhs.data_;
+        this->usage_ = rhs.usage_;
+    }
+    return *this;
+}
+
+void
+PyFullFeedback::Clear()
+{
+    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
+            it != end; ++it) {
+        Py_XDECREF((PyObject *)*it);
+    }
+    this->data_.clear();
+    for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
+        this->counters_[i] = 0;
+    this->usage_ = UnknownMode;
 }
 
 void
 PyFullFeedback::AddTypeSeen(PyObject *obj)
 {
-    if (obj == NULL)
+    assert(this->usage_ == UnknownMode || this->usage_ == TypeMode);
+    this->usage_ = TypeMode;
+
+    if (obj == NULL) {
         this->data_.insert(NULL);
-    else
-        this->data_.insert(Py_TYPE(obj));
+        return;
+    }
+
+    PyTypeObject *type = Py_TYPE(obj);
+    if (!this->data_.count(type)) {
+        Py_INCREF((PyObject *)type);
+        this->data_.insert(type);
+    }
 }
 
 void
 PyFullFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, /*in-object elems=*/3> &result) const
+    SmallVector<PyTypeObject*, /*in-object elems=*/3> &result)
 {
+    assert(this->usage_ == UnknownMode || this->usage_ == TypeMode);
+    this->usage_ = TypeMode;
     result.clear();
-    for (SmallPtrSet<PyTypeObject*, 3>::const_iterator it = this->data_.begin(),
+    for (TypeSet::const_iterator it = this->data_.begin(),
              end = this->data_.end(); it != end; ++it) {
         result.push_back(*it);
     }
@@ -120,7 +239,9 @@ PyFullFeedback::GetSeenTypesInto(
 void
 PyFullFeedback::IncCounter(unsigned counter_id)
 {
+    assert(this->usage_ == UnknownMode || this->usage_ == CounterMode);
     assert(counter_id < llvm::array_lengthof(this->counters_));
+    this->usage_ = CounterMode;
     uintptr_t old_value = this->counters_[counter_id];
     uintptr_t new_value = old_value + 1;
     if (new_value > old_value) {
@@ -132,6 +253,8 @@ PyFullFeedback::IncCounter(unsigned counter_id)
 uintptr_t
 PyFullFeedback::GetCounter(unsigned counter_id)
 {
+    assert(this->usage_ == UnknownMode || this->usage_ == CounterMode);
+    this->usage_ = CounterMode;
     return this->counters_[counter_id];
 }
 
@@ -147,9 +270,24 @@ PyFeedbackMap_Del(PyFeedbackMap *map)
     delete map;
 }
 
+void
+PyFeedbackMap_Clear(PyFeedbackMap *map)
+{
+    map->Clear();
+}
+
 PyRuntimeFeedback &
 PyFeedbackMap::GetOrCreateFeedbackEntry(
     unsigned opcode_index, unsigned arg_index)
 {
     return this->entries_[std::make_pair(opcode_index, arg_index)];
+}
+
+void
+PyFeedbackMap::Clear()
+{
+    for (FeedbackMap::iterator it = this->entries_.begin(),
+            end = this->entries_.end(); it != end; ++it) {
+        it->second.Clear();
+    }
 }

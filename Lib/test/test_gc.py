@@ -3,6 +3,10 @@ from test.test_support import verbose, run_unittest
 import sys
 import gc
 import weakref
+try:
+    import _llvm
+except ImportError:
+    _llvm = None
 
 ### Support code
 ###############################################################################
@@ -102,6 +106,11 @@ class GCTests(unittest.TestCase):
         del a
         self.assertNotEqual(gc.collect(), 0)
         del B, C
+        # If we don't clear the feedback array, the FDO system will hold
+        # references to B and C, which prevent gc.collect() from collecting
+        # them.
+        if _llvm:
+            _llvm.clear_feedback(self.test_newinstance)
         self.assertNotEqual(gc.collect(), 0)
         A.a = A()
         del A

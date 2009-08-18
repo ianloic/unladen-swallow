@@ -3,11 +3,10 @@ import __future__
 
 from test.test_support import run_unittest, findfile, TestSkipped
 
-from distutils import sysconfig
-if not sysconfig.get_config_var("WITH_LLVM"):
+try:
+    import _llvm
+except ImportError:
     raise TestSkipped("not built against LLVM")
-
-import _llvm
 import functools
 import sys
 import unittest

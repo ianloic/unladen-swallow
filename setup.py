@@ -640,13 +640,15 @@ class PyBuildExt(build_ext):
         if sysconfig.get_config_var("WITH_LLVM"):
             (rel_llvm_inc_dir,) = sysconfig.get_config_vars('LLVM_INC_DIR')
             llvm_inc_dir = os.path.join(srcdir, rel_llvm_inc_dir)
+            macros = [('__STDC_LIMIT_MACROS', 1), ('__STDC_CONSTANT_MACROS', 1)]
             exts.append( Extension('_llvm', ['_llvm.cc'],
                                    include_dirs=[rel_llvm_inc_dir,
-                                                 llvm_inc_dir]) )
+                                                 llvm_inc_dir],
+                                   define_macros=macros) )
             exts.append( Extension('_llvmre', ['_llvmre.cc'],
-                                   extra_compile_args=['-D__STDC_LIMIT_MACROS','-D__STDC_CONSTANT_MACROS','-Woverloaded-virtual'],
                                    include_dirs=[rel_llvm_inc_dir,
-                                                 llvm_inc_dir]) )
+                                                 llvm_inc_dir],
+                                   define_macros=macros) )
         else:
             missing.append('_llvm')
             missing.append('_llvmre')
