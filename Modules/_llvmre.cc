@@ -165,8 +165,8 @@ class CompiledRegEx {
     BasicBlock* literal(BasicBlock* block, PyObject* arg, bool not_literal);
     BasicBlock* any(BasicBlock* block);
     BasicBlock* in(BasicBlock* block, PyObject* arg);
-    BasicBlock* max_repeat(BasicBlock* block, PyObject* arg, 
-        PyObject* seq, Py_ssize_t index);
+    BasicBlock* repeat(BasicBlock* block, PyObject* arg, PyObject* seq, 
+        Py_ssize_t index, bool is_greedy);
     BasicBlock* subpattern_begin(BasicBlock* block, PyObject* arg);
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
 
@@ -174,7 +174,8 @@ class CompiledRegEx {
     Value* loadOffset(BasicBlock* block);
     void storeOffset(BasicBlock* block, Value* value);
     BasicBlock* loadCharacter(BasicBlock* block);
-    Function* recursiveFunction(Function* repeat, Function* after);
+    Function* greedy(Function* repeat, Function* after);
+    Function* nongreedy(Function* repeat, Function* after);
     void testRange(BasicBlock* block, int from, int to, BasicBlock* member, BasicBlock* nonmember);
     bool testCategory(BasicBlock* block, const char* category, BasicBlock* member, BasicBlock* nonmember);
 
@@ -243,7 +244,7 @@ CompiledRegEx::loadCharacter(BasicBlock* block) {
 }
 
 Function*
-CompiledRegEx::recursiveFunction(Function* repeat, Function* after) 
+CompiledRegEx::greedy(Function* repeat, Function* after) 
 {
   // create the function
   std::vector<const Type*> args_type;
@@ -283,7 +284,6 @@ CompiledRegEx::recursiveFunction(Function* repeat, Function* after)
     BasicBlock::Create("return_not_found", function);
   ReturnInst::Create(regex.not_found, return_not_found);
 
-
   // call repeat
   std::vector<Value*> call_args;
   call_args.push_back(string);
@@ -322,6 +322,90 @@ CompiledRegEx::recursiveFunction(Function* repeat, Function* after)
 
   // return_offset
   ReturnInst::Create(recurse_result, return_offset);
+
+  optimize(function);
+
+  return function; 
+}
+
+Function*
+CompiledRegEx::nongreedy(Function* repeat, Function* after) 
+{
+  // create the function
+  std::vector<const Type*> args_type;
+  args_type.push_back(CHAR_POINTER_TYPE); // string
+  args_type.push_back(OFFSET_TYPE); // offset
+  args_type.push_back(OFFSET_TYPE); // end_offset
+  args_type.push_back(OFFSET_POINTER_TYPE); // groups
+  args_type.push_back(OFFSET_TYPE); // counter
+
+  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+
+  // FIXME: choose better function flags
+  Function* function = Function::Create(func_type, Function::ExternalLinkage,
+      "recurse", regex.module);
+
+  Function::arg_iterator args = function->arg_begin();
+  Value* string = args++;
+  string->setName("string");
+  Value* offset = args++;
+  offset->setName("offset");
+  Value* end_offset = args++;
+  end_offset->setName("end_offset");
+  Value* groups = args++;
+  groups->setName("groups");
+  Value* countdown = args++;
+  countdown->setName("countdown");
+
+  // create BasicBlocks
+  BasicBlock* call_after = BasicBlock::Create("call_after", function);
+  BasicBlock* call_repeat = BasicBlock::Create("call_repeat", function);
+  BasicBlock* count = BasicBlock::Create("count", function);
+  BasicBlock* recurse = BasicBlock::Create("recurse", function);
+  BasicBlock* return_after_result = BasicBlock::Create("return_after_result", function);
+
+  // set up BasicBlock to return not_found
+  BasicBlock* return_not_found = 
+    BasicBlock::Create("return_not_found", function);
+  ReturnInst::Create(regex.not_found, return_not_found);
+
+  // call after
+  std::vector<Value*> call_args;
+  call_args.push_back(string);
+  call_args.push_back(offset);
+  call_args.push_back(end_offset);
+  call_args.push_back(groups);
+  Value* after_result = CallInst::Create(after, call_args.begin(),
+      call_args.end(), "after_result", call_after);
+  Value* after_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
+      after_result, regex.not_found, "after_result_not_found", call_after);
+  BranchInst::Create(call_repeat, return_after_result, after_result_not_found,
+      call_after);
+
+  // call repeat
+  Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
+      call_args.end(), "repeat_result", call_repeat);
+  Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
+      repeat_result, regex.not_found, "repeat_result_not_found", call_repeat);
+  BranchInst::Create(return_not_found, count, repeat_result_not_found, 
+      call_repeat);
+
+  // count
+  Value* remaining = BinaryOperator::CreateSub(countdown,
+      ConstantInt::get(OFFSET_TYPE, 1), "remaining", count);
+  Value* stop_recursion = new ICmpInst(ICmpInst::ICMP_EQ, remaining,
+      ConstantInt::get(OFFSET_TYPE, 0), "stop_recursion", count);
+  BranchInst::Create(return_not_found, recurse, stop_recursion, count);
+
+  // recurse
+  call_args[1] = repeat_result;
+  call_args.push_back(remaining);
+  Value* recurse_result = CallInst::Create(function, call_args.begin(),
+      call_args.end(), "recurse_result", recurse);
+  ReturnInst::Create(recurse_result, recurse);
+
+  // return_after_result
+  ReturnInst::Create(after_result, return_after_result);
 
   optimize(function);
 
@@ -572,7 +656,9 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
     } else if (!strcmp(op_str, "in")) {
       last = in(block, arg);
     } else if (!strcmp(op_str, "max_repeat")) {
-      last = max_repeat(block, arg, seq, index);
+      last = repeat(block, arg, seq, index, true);
+    } else if (!strcmp(op_str, "min_repeat")) {
+      last = repeat(block, arg, seq, index, false);
     } else if (!strcmp(op_str, "subpattern_begin")) {
       last = subpattern_begin(block, arg);
     } else if (!strcmp(op_str, "subpattern_end")) {
@@ -772,8 +858,8 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::max_repeat(BasicBlock* block, PyObject* arg, PyObject* seq, 
-    Py_ssize_t index) {
+CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq, 
+    Py_ssize_t index, bool is_greedy) {
   // parse the arguments
   int min, max;
   PyObject* sub_pattern;
@@ -816,7 +902,12 @@ CompiledRegEx::max_repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     after->Compile(seq, index+1);
 
     // make a function for recursion
-    Function* recurse = recursiveFunction(repeated->function, after->function);
+    Function* recurse;
+    if (is_greedy) {
+      recurse = greedy(repeated->function, after->function);
+    } else {
+      recurse = nongreedy(repeated->function, after->function);
+    }
 
     // call it
     std::vector<Value*> args;
