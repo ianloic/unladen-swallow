@@ -64,11 +64,29 @@ class RegexObject(object):
   def split(self, string, maxsplit=0):
     raise NotImplementedError('RegexObject.split')
 
-  def findall(self, string, pos=0, endpos=-1):
-    raise NotImplementedError('RegexObject.findall')
+  def findall(self, string, pos=0, endpos=None):
+    if pos: _pos = pos
+    else: _pos = 0
+    if endpos: _endpos = endpos
+    else: _endpos = len(string)
+    results = []
+    while True:
+      groups = self.__re.find(unicode(string), _pos, _endpos)
+      if groups:
+        # add this match to the results
+        results.append(string[groups[0]:groups[1]])
+        # next time search after this result
+        if _pos == groups[1]:
+          _pos = groups[1] + 1
+        else:
+          _pos = groups[1]
+      else:
+        # no match, stop looking
+        break
+    return results
 
   def finditer(self, string, pos=0, endpos=-1):
-    raise NotImplementedError('RegexObject.finditer')
+    return iter(self.findall(string, pos, endpos))
 
   def sub(self, repl, string, count=0):
     raise NotImplementedError('RegexObject.sub')
@@ -148,3 +166,9 @@ def search(pattern, string, flags=0):
 
 def sub(pattern, repl, string, count=0):
   return compile(pattern, flags).sub(repl, string, count)
+
+def findall(pattern, pattern, string, flags=0):
+  return compile(pattern, flags).findall(string)
+
+def finditer(pattern, pattern, string, flags=0):
+  return compile(pattern, flags).finditer(string)
