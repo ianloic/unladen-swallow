@@ -89,10 +89,47 @@ class RegexObject(object):
     return iter(self.findall(string, pos, endpos))
 
   def sub(self, repl, string, count=0):
-    raise NotImplementedError('RegexObject.sub')
+    return self.subn(repl, string, count)[0]
 
   def subn(self, repl, string, count=0):
-    raise NotImplementedError('RegexObject.subn')
+    pos = 0
+    endpos = len(string)
+    result = ''
+    num = 0;
+    while True:
+      groups = self.__re.find(unicode(string), pos, endpos)
+      if groups:
+        # make a match object
+        mo = MatchObject(self, string, pos, endpos, groups, self.__parsed)
+        if callable(repl):
+          # repl is a function, call it with the match object
+          replacement = repl(mo)
+        else:
+          # repl is a string, use template expansion
+          replacement = mo.expand(repl)
+
+        # increment the counter
+        num = num + 1
+        # check the counter
+        if count and num > count:
+          num = num-1
+          break
+
+        # add the chars leading up to the match and the replacement
+        result = result + string[pos:mo.start()] + replacement
+
+        # next time search after this result
+        if pos == mo.end():
+          pos = mo.end() + 1
+        else:
+          pos = mo.end()
+
+      else:
+        # no match, stop looking
+        break
+    # add everything after the last match
+    result = result + string[pos:]
+    return (result, num)
 
 
 class MatchObject(object):
@@ -166,6 +203,9 @@ def search(pattern, string, flags=0):
 
 def sub(pattern, repl, string, count=0):
   return compile(pattern, flags).sub(repl, string, count)
+
+def subn(pattern, repl, string, count=0):
+  return compile(pattern, flags).subn(repl, string, count)
 
 def findall(pattern, string, flags=0):
   return compile(pattern, flags).findall(string)
