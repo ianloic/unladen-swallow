@@ -52,7 +52,8 @@ using llvm::ExecutionEngine;
 #define OFFSET_POINTER_TYPE PointerType::get(OFFSET_TYPE, 0)
 
 typedef int32_t ReOffset;
-typedef ReOffset (*CompiledFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*);
+typedef ReOffset (*MatchFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*);
+typedef ReOffset (*FindFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*, ReOffset*);
 
 class CompiledRegEx;
 
@@ -106,9 +107,13 @@ typedef struct {
   PyObject_HEAD
   /* Type-specific fields go here. */
   Module* module;
-  Function* function;
 
+  /* the compiled regular expression */
   CompiledRegEx* compiled;
+
+  /* a function to find the first instance of that compiled regular 
+   * expression */
+  Function* find;
 
   int flags;
   int groups;
@@ -1045,6 +1050,84 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   }
   Py_DECREF(seq);
 
+  // compile a new function to find rather than match
+ 
+  // function argument types
+  std::vector<const Type*> args_type;
+  args_type.push_back(CHAR_POINTER_TYPE); // string
+  args_type.push_back(OFFSET_TYPE); // offset
+  args_type.push_back(OFFSET_TYPE); // end_offset
+  args_type.push_back(OFFSET_POINTER_TYPE); // groups
+  args_type.push_back(OFFSET_POINTER_TYPE); // start_ptr
+  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+
+  // FIXME: choose better function flags
+  // create the find function
+  self->find = Function::Create(func_type, Function::ExternalLinkage, 
+      "find", self->module);
+  // get and name the arguments
+  Function::arg_iterator func_args = self->find->arg_begin();
+  Value* string = func_args++;
+  string->setName("string");
+  Value* offset = func_args++;
+  offset->setName("offset");
+  Value* end_offset = func_args++;
+  end_offset->setName("end_offset");
+  Value* groups_arg = func_args++;
+  groups_arg->setName("groups");
+  Value* start_ptr = func_args++;
+  start_ptr->setName("start_ptr");
+
+  // create basic blocks
+  BasicBlock* entry = BasicBlock::Create("entry", self->find);
+  BasicBlock* test_offset = BasicBlock::Create("test_offset", self->find);
+  BasicBlock* match = BasicBlock::Create("match", self->find);
+  BasicBlock* increment = BasicBlock::Create("increment", self->find);
+  BasicBlock* return_not_found = BasicBlock::Create("return_not_found", self->find);
+  BasicBlock* return_match_result = BasicBlock::Create("return_match_result", self->find);
+
+  // create the entry BasicBlock
+  Value* offset_ptr = new llvm::AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
+  new StoreInst(offset, offset_ptr, entry);
+  BranchInst::Create(test_offset, entry);
+
+  // create the test_offset BasicBlock
+  // get the current offset
+  offset = new LoadInst(offset_ptr, "offset", test_offset);
+  // make sure it's not past the end of the string
+  Value* ended = new ICmpInst(ICmpInst::ICMP_UGT, offset, end_offset, "ended",
+      test_offset);
+  BranchInst::Create(return_not_found, match, ended, test_offset);
+
+  // create the match BasicBlock
+  // call the recently compiled match function
+  std::vector<Value*> call_args;
+  call_args.push_back(string);
+  call_args.push_back(offset);
+  call_args.push_back(end_offset);
+  call_args.push_back(groups_arg);
+  Value* match_result = CallInst::Create(self->compiled->function,
+      call_args.begin(), call_args.end(), "match_result", match);
+  Value* match_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ, 
+      match_result, self->not_found, "match_result_not_found", match);
+  BranchInst::Create(increment, return_match_result, match_result_not_found, 
+      match);
+
+  // create the increment BasicBlock
+  offset = BinaryOperator::CreateAdd(offset, 
+      ConstantInt::get(OFFSET_TYPE, 1), "increment", increment);
+  new StoreInst(offset, offset_ptr, increment);
+  BranchInst::Create(test_offset, increment);
+
+  // create the return_not_found BasicBlock
+  ReturnInst::Create(self->not_found, return_not_found);
+
+  // create the return_match_result BasicBlock
+  // put the offset in our outparam
+  new StoreInst(new LoadInst(offset_ptr, "offset", return_match_result),
+      start_ptr, return_match_result);
+  ReturnInst::Create(match_result, return_match_result);
+
   return 0;
 }
 
@@ -1067,7 +1150,7 @@ RegEx_match(RegEx* self, PyObject* args) {
     PyThreadState_GET()->interp->global_llvm_data;
   ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
 
-  CompiledFunction func_ptr = (CompiledFunction)
+  MatchFunction func_ptr = (MatchFunction)
     engine->getPointerToFunction(self->compiled->function);
 
   ReOffset* groups = NULL;
@@ -1103,11 +1186,63 @@ RegEx_match(RegEx* self, PyObject* args) {
 }
 
 
+static PyObject*
+RegEx_find(RegEx* self, PyObject* args) {
+  Py_UNICODE* characters;
+  int length, pos, end;
+  if (!PyArg_ParseTuple(args, "u#ii", &characters, &length, &pos, &end)) {
+    return NULL;
+  }
+
+  PyGlobalLlvmData *global_llvm_data = 
+    PyThreadState_GET()->interp->global_llvm_data;
+  ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
+
+  FindFunction func_ptr = (FindFunction)
+    engine->getPointerToFunction(self->find);
+
+  ReOffset* groups = NULL;
+  if (self->groups) {
+    groups = new ReOffset[self->groups*2];
+  }
+
+  ReOffset start;
+
+  ReOffset result = (func_ptr)(characters, pos, end, groups, &start);
+
+  if (result >= 0) {
+    // matched, return a list of offsets
+    PyObject* groups_list = PyList_New(self->groups*2 + 2);
+    // r[0] - the start of the whole match
+    PyList_SetItem(groups_list, 0, PyInt_FromLong((long)start));
+    // r[0] - the end of the whole match
+    PyList_SetItem(groups_list, 1, PyInt_FromLong((long)result));
+    // for each group, the start and end offsets
+    if (self->groups) {
+      for (int i=0; i<self->groups*2; i++) {
+        PyList_SetItem(groups_list, i+2, PyInt_FromLong((long)groups[i]));
+      }
+      delete[] groups;
+    }
+
+    Py_INCREF(groups_list);
+
+    return groups_list;
+  } else {
+    // no match, return None
+    Py_INCREF(Py_None);
+    return Py_None;
+  }
+}
+
+
 static PyMethodDef RegEx_methods[] = {
   {"dump", (PyCFunction)RegEx_dump, METH_NOARGS,
    "Dump the LLVM code for the RegEx", },
   {"match", (PyCFunction)RegEx_match, METH_VARARGS,
-   "Match the pattern against a string", },
+   "Match the pattern against the start of a string", },
+  {"find", (PyCFunction)RegEx_find, METH_VARARGS,
+   "Find the pattern in a string", },
   {NULL}  /* Sentinel */
 };
   

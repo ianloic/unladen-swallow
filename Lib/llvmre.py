@@ -50,8 +50,16 @@ class RegexObject(object):
     else:
       return None
 
-  def search(self, string, pos=0, endpos=-1):
-    raise NotImplementedError('RegexObject.search')
+  def search(self, string, pos=0, endpos=None):
+    if pos: _pos = pos
+    else: _pos = 0
+    if endpos: _endpos = endpos
+    else: _endpos = len(string)
+    groups = self.__re.find(unicode(string), _pos, _endpos)
+    if groups:
+      return MatchObject(self, string, pos, endpos, groups, self.__parsed)
+    else:
+      return None
 
   def split(self, string, maxsplit=0):
     raise NotImplementedError('RegexObject.split')
@@ -134,6 +142,9 @@ def compile(pattern, flags=0):
 
 def match(pattern, string, flags=0):
   return compile(pattern, flags).match(string)
+
+def search(pattern, string, flags=0):
+  return compile(pattern, flags).find(string)
 
 def sub(pattern, repl, string, count=0):
   return compile(pattern, flags).sub(repl, string, count)
