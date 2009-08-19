@@ -167,8 +167,8 @@ def search(pattern, string, flags=0):
 def sub(pattern, repl, string, count=0):
   return compile(pattern, flags).sub(repl, string, count)
 
-def findall(pattern, pattern, string, flags=0):
+def findall(pattern, string, flags=0):
   return compile(pattern, flags).findall(string)
 
-def finditer(pattern, pattern, string, flags=0):
+def finditer(pattern, string, flags=0):
   return compile(pattern, flags).finditer(string)
