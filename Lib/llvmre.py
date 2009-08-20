@@ -85,7 +85,7 @@ class RegexObject(object):
         break
     return results
 
-  def finditer(self, string, pos=0, endpos=-1):
+  def finditer(self, string, pos=0, endpos=None):
     return iter(self.findall(string, pos, endpos))
 
   def sub(self, repl, string, count=0):
@@ -199,7 +199,7 @@ def match(pattern, string, flags=0):
   return compile(pattern, flags).match(string)
 
 def search(pattern, string, flags=0):
-  return compile(pattern, flags).find(string)
+  return compile(pattern, flags).search(string)
 
 def sub(pattern, repl, string, count=0):
   return compile(pattern, flags).sub(repl, string, count)
