@@ -35,6 +35,10 @@ class RegexObject(object):
       elif op == 'max_repeat' or op == 'min_repeat':
         min, max, pattern = av
         new_pattern.append((op, (min, max, self.__flatten_subpatterns(pattern))))
+
+      elif op == 'branch':
+        n, branches = av
+        new_pattern.append((op, (n, map(self.__flatten_subpatterns, branches))))
       else:
         new_pattern.append((op, av))
     return new_pattern
@@ -202,10 +206,10 @@ def search(pattern, string, flags=0):
   return compile(pattern, flags).search(string)
 
 def sub(pattern, repl, string, count=0):
-  return compile(pattern, flags).sub(repl, string, count)
+  return compile(pattern).sub(repl, string, count)
 
 def subn(pattern, repl, string, count=0):
-  return compile(pattern, flags).subn(repl, string, count)
+  return compile(pattern).subn(repl, string, count)
 
 def findall(pattern, string, flags=0):
   return compile(pattern, flags).findall(string)

@@ -174,6 +174,7 @@ class CompiledRegEx {
         Py_ssize_t index, bool is_greedy);
     BasicBlock* subpattern_begin(BasicBlock* block, PyObject* arg);
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
+    BasicBlock* branch(BasicBlock* block, PyObject* arg);
 
     // helpers to generate commonly used code
     Value* loadOffset(BasicBlock* block);
@@ -668,6 +669,8 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
       last = subpattern_begin(block, arg);
     } else if (!strcmp(op_str, "subpattern_end")) {
       last = subpattern_end(block, arg);
+    } else if (!strcmp(op_str, "branch")) {
+      last = branch(block, arg);
     } else {
       PyErr_Format(PyExc_ValueError, "Unsupported SRE code '%s'", op_str);
       Py_XDECREF(op);
@@ -859,6 +862,82 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
   
   // clear any Python exception state that we don't care about
   PyErr_Clear();
+  return matched;
+}
+
+BasicBlock*
+CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
+  // @arg is a tuple of (None, [branch1, branch2, branch3...])
+  if (!PyTuple_Check(arg)) {
+    PyErr_SetString(PyExc_TypeError, "Expected a tuple");
+    return NULL;
+  }
+
+  PyObject* branches = PyTuple_GetItem(arg, 1);
+  // branches should be a sequence
+  if (!PySequence_Check(branches)) {
+    PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+    return NULL;
+  }
+
+  Py_ssize_t num_branches = PySequence_Size(branches);
+  if (num_branches == -1) {
+    PyErr_SetString(PyExc_TypeError, "Failed to get sequence length");
+    return NULL;
+  }
+
+  // the basic block that we'll jump to when we've matched a branch
+  BasicBlock* matched = BasicBlock::Create("matched", function);
+
+  // prepare the arguments for the branches
+  std::vector<Value*> args;
+  args.push_back(string);
+  args.push_back(loadOffset(block));
+  args.push_back(end_offset);
+  args.push_back(groups);
+
+  for (Py_ssize_t i=0; i<num_branches; i++) {
+    // the block we'll go to if there's a match
+    BasicBlock* match =  BasicBlock::Create("match", function);
+    // the next basic block we'll branch from
+    BasicBlock* next = BasicBlock::Create("branch", function);
+
+    // get the branch sequence
+    PyObject* branch = PySequence_GetItem(branches, i);
+    if (branch == NULL) {
+      PyErr_SetString(PyExc_TypeError, "Failed to get branch");
+      return NULL;
+    }
+
+    // compile it to a function
+    CompiledRegEx compiled_branch(regex);
+    compiled_branch.Compile(branch, 0);
+    // done with the branch object
+    Py_XDECREF(branch);
+
+    // call it
+    Value* branch_result = CallInst::Create(compiled_branch.function, 
+        args.begin(), args.end(), "branch_result", block);
+    // check it
+    Value* branch_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ, 
+        branch_result, regex.not_found, "branch_result_not_found", block);
+    // no match means run the next check, otherwise go to match:
+    BranchInst::Create(next, match, branch_result_not_found, block);
+
+    // store the new offset, go to the final block
+    storeOffset(match, branch_result);
+    BranchInst::Create(matched, match);
+
+    // next becomes current
+    block = next;
+  }
+
+  // once we've tried all of the branches we've failed
+  BranchInst::Create(return_not_found, block);
+
+  // clear any Python exception state that we don't care about
+  PyErr_Clear();
+
   return matched;
 }
 
