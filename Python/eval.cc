@@ -763,8 +763,14 @@ PyEval_EvalFrame(PyFrameObject *f)
 #define PREDICTED_WITH_ARG(op)	PRED_##op:
 #else
 #define PREDICT(op)		if (*next_instr == op) goto PRED_##op
-#define PREDICTED(op)		PRED_##op: next_instr++
-#define PREDICTED_WITH_ARG(op)	PRED_##op: oparg = PEEKARG(); next_instr += 3
+#ifdef WITH_LLVM
+#define PREDICTED_COMMON(op)	f->f_lasti = INSTR_OFFSET(); opcode = op;
+#else
+#define PREDICTED_COMMON(op)	/* nothing */
+#endif
+#define PREDICTED(op)		PRED_##op: PREDICTED_COMMON(op) next_instr++
+#define PREDICTED_WITH_ARG(op)	PRED_##op: PREDICTED_COMMON(op) \
+				oparg = PEEKARG(); next_instr += 3
 #endif
 
 
