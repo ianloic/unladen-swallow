@@ -435,22 +435,21 @@ coverage:
 # Only build LLVM if we need to.
 llvm:
 	@case @BUILD_LLVM@ in \
-	0) touch llvm && echo "Skipping building llvm" && mkdir -p Util;; \
+	0) mkdir -p Util;; \
 	1) $(MAKE) -C Util/llvm libs-only;; \
-	disabled) echo "LLVM is disabled" ;; \
+	disabled) ;; \
 	esac
 
 # Only build clang and llc if we need to.
 llvm_tools: llvm
 	@case @BUILD_LLVM@ in \
-	0) touch llvm_tools && echo "Skipping building clang and llc";; \
+	0|disabled) ;; \
 	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
-	disabled) echo "LLVM is disabled" ;; \
 	esac
 
 
 # Build the interpreter
-$(BUILDPYTHON): llvm Modules/python.o $(LIBRARY) $(LDLIBRARY)
+$(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) | llvm
 		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
 			Modules/python.o $(EXECUTABLE_LINK_ARGS)
 
@@ -742,7 +741,8 @@ $(LIBRARY_OBJS) $(MODOBJS) Modules/python.o: $(PYTHON_HEADERS)
 
 # LLVM-related generated files
 
-Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_tools $(PYTHON_HEADERS)
+Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c \
+	$(PYTHON_HEADERS) | llvm_tools
 	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
 
 # TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
@@ -752,7 +752,8 @@ Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c llvm_t
 #
 # We generate this into Include/ because under MSVC the objdir is
 # flat, so #includes of generated files with a path don't work.
-Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc llvm_tools
+Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc
+	| llvm_tools
 	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
 		-cppfname=FillInitialGlobalModule -o $@ -f
 
@@ -1260,8 +1261,6 @@ clean: pycremoval
 	find $(srcdir)/build -name 'fficonfig.py' -exec rm -f {} ';' || true
 	rm -f Include/initial_llvm_module_body.cc
 	rm -f Python/llvm_inline_functions.bc
-	rm -f llvm
-	rm -f llvm_tools
 
 profile-removal:
 	find . -name '*.gc??' -exec rm -f {} ';'
@@ -1335,5 +1334,6 @@ Python/thread.o: @THREADHEADERS@
 .PHONY: frameworkinstallmaclib frameworkinstallapps frameworkinstallunixtools
 .PHONY: frameworkaltinstallunixtools recheck autoconf clean clobber distclean 
 .PHONY: smelly funny patchcheck
+.PHONY: llvm llvm_tools
 
 # IF YOU PUT ANYTHING HERE IT WILL GO AWAY
