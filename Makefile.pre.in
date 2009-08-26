@@ -752,7 +752,7 @@ Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c \
 #
 # We generate this into Include/ because under MSVC the objdir is
 # flat, so #includes of generated files with a path don't work.
-Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc
+Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc \
 	| llvm_tools
 	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
 		-cppfname=FillInitialGlobalModule -o $@ -f
