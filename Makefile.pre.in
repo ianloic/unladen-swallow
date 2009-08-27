@@ -335,6 +335,7 @@ ifneq (@BUILD_LLVM@, disabled)
 		Python/initial_llvm_module.o \
 		Python/llvm_fbuilder.o \
 		Python/llvm_compile.o \
+		Util/ConstantMirror.o \
 		Util/EventTimer.o \
 		Util/PyAliasAnalysis.o \
 		Util/PyTypeBuilder.o \
@@ -725,8 +726,9 @@ PYTHON_HEADERS= \
 		Python/global_llvm_data_fwd.h \
 		Python/llvm_fbuilder.h \
 		Include/llvm_compile.h \
-		Util/PyTypeBuilder.h \
+		Util/ConstantMirror.h \
 		Util/EventTimer.h \
+		Util/PyTypeBuilder.h \
 		Util/RuntimeFeedback.h \
 		Util/RuntimeFeedback_fwd.h \
 		Util/SingleFunctionInliner.h \

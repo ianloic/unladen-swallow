@@ -32,7 +32,7 @@ functions should be applied to nil objects.
    interning of any string.
    Together, these sped the interpreter by up to 20%. */
 
-typedef struct {
+typedef struct PyStringObject {
     PyObject_VAR_HEAD
     long ob_shash;
     int ob_sstate;

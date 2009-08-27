@@ -266,6 +266,13 @@ private:
     template<typename T>
     llvm::Function *GetGlobalFunction(const std::string &name);
 
+    // Returns a global variable that represents 'obj'.  These get
+    // cached in the ExecutionEngine's global mapping table, and they
+    // incref the object so its address doesn't get re-used while the
+    // GlobalVariable is still alive.  See Util/ConstantMirror.h for
+    // more details.
+    llvm::Constant *GetGlobalVariableFor(PyObject *obj);
+
     // Copies the elements from array[0] to array[N-1] to target, bytewise.
     void MemCpy(llvm::Value *target, llvm::Value *array, llvm::Value *N);
 

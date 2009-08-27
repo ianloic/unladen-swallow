@@ -187,30 +187,25 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->builder_.CreateBr(this->bail_to_interpreter_block_);
 
     this->builder_.SetInsertPoint(continue_entry);
-    Value *code = this->builder_.CreateLoad(
-        FrameTy::f_code(this->builder_, this->frame_),
-        "co");
 #ifndef NDEBUG
     // Assert that the code object we pull out of the frame is the
-    // same as the one passed into this object.  TODO(jyasskin):
-    // Create an LLVM constant GlobalVariable to store the passed-in
-    // code object instead of pulling it out of the frame.  We'll have
-    // to check that there aren't any lifetime issues with the
-    // GlobalVariable outliving the Function or codeobject.
-    Value *passed_in_code_object = ConstantExpr::getIntToPtr(
+    // same as the one passed into this object.
+    Value *frame_code = this->builder_.CreateLoad(
+        FrameTy::f_code(this->builder_, this->frame_),
+        "frame->f_code");
+    Value *passed_in_code_object =
         ConstantInt::get(Type::Int64Ty,
-                         reinterpret_cast<uintptr_t>(this->code_object_)),
-        PyTypeBuilder<PyCodeObject*>::get());
-    this->Assert(this->builder_.CreateICmpEQ(code, passed_in_code_object),
+                         reinterpret_cast<uintptr_t>(this->code_object_));
+    this->Assert(this->builder_.CreateICmpEQ(
+                     this->builder_.CreatePtrToInt(frame_code, Type::Int64Ty),
+                     passed_in_code_object),
                  "Called with unexpected code object.");
 #endif  // NDEBUG
-    this->varnames_ = this->builder_.CreateLoad(
-        CodeTy::co_varnames(this->builder_, code),
-        "varnames");
+    this->varnames_ = this->GetGlobalVariableFor(
+        this->code_object_->co_varnames);
 
     Value *names_tuple = this->builder_.CreateBitCast(
-        this->builder_.CreateLoad(
-            CodeTy::co_names(this->builder_, code)),
+        this->GetGlobalVariableFor(this->code_object_->co_names),
         PyTypeBuilder<PyTupleObject*>::get(),
         "names");
     // Get the address of the names_tuple's first item as well.
@@ -221,9 +216,8 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     Value *localsplus = FrameTy::f_localsplus(this->builder_, this->frame_);
     this->fastlocals_ = this->builder_.CreateStructGEP(
         localsplus, 0, "fastlocals");
-    Value *nlocals = this->builder_.CreateLoad(
-        CodeTy::co_nlocals(this->builder_, code), "nlocals");
-
+    Value *nlocals = ConstantInt::get(PyTypeBuilder<int>::get(),
+                                      this->code_object_->co_nlocals);
     this->freevars_ =
         this->builder_.CreateGEP(this->fastlocals_, nlocals, "freevars");
     this->globals_ =
@@ -934,14 +928,8 @@ void
 LlvmFunctionBuilder::LOAD_CONST(int index)
 {
     PyObject *co_consts = this->code_object_->co_consts;
-    // TODO(jyasskin): we'll eventually want to represent these with
-    // llvm::ConstantStructs so that LLVM has more information about them.
-    // Casting the pointers to ints makes the structs opaque, which hinders
-    // constant propagation, etc.
-    Value *const_ = ConstantExpr::getIntToPtr(
-        ConstantInt::get(
-            Type::Int64Ty,
-            reinterpret_cast<uintptr_t>(PyTuple_GET_ITEM(co_consts, index))),
+    Value *const_ = this->builder_.CreateBitCast(
+        this->GetGlobalVariableFor(PyTuple_GET_ITEM(co_consts, index)),
         PyTypeBuilder<PyObject*>::get());
     this->IncRef(const_);
     this->Push(const_);
@@ -2879,6 +2867,12 @@ LlvmFunctionBuilder::GetGlobalVariable(const std::string &name)
 {
     return this->module_->getOrInsertGlobal(
         name, PyTypeBuilder<VariableType>::get());
+}
+
+Constant *
+LlvmFunctionBuilder::GetGlobalVariableFor(PyObject *obj)
+{
+    return this->llvm_data_->constant_mirror().GetGlobalVariableFor(obj);
 }
 
 // For llvm::Functions, copy callee's calling convention and attributes to

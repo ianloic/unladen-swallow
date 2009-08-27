@@ -11,7 +11,7 @@ PyFloatObject represents a (double precision) floating point number.
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PyFloatObject {
     PyObject_HEAD
     double ob_fval;
 } PyFloatObject;

@@ -12,6 +12,8 @@
 #ifdef WITH_LLVM
 #include "Python/global_llvm_data_fwd.h"
 
+#include "Util/ConstantMirror.h"
+
 #include "llvm/LLVMContext.h"
 #include "llvm/PassManager.h"
 #include "llvm/ADT/StringMap.h"
@@ -52,6 +54,8 @@ public:
 
     llvm::Module *module() { return this->module_; }
 
+    PyConstantMirror &constant_mirror() { return *this->constant_mirror_; }
+
     /// This will be NULL if debug info generation is turned off.
     llvm::DIFactory *DebugInfo() { return this->debug_info_.get(); }
 
@@ -84,6 +88,8 @@ private:
     // Cached data in module_.  TODO(jyasskin): Make this hold WeakVHs
     // or other ValueHandles when we import them from LLVM trunk.
     llvm::StringMap<llvm::GlobalVariable *> constant_strings_;
+
+    llvm::OwningPtr<PyConstantMirror> constant_mirror_;
 };
 #endif  /* WITH_LLVM */
 

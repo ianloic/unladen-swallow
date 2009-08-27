@@ -171,8 +171,11 @@ void *ExecutionEngine::updateGlobalMapping(const GlobalValue *GV, void *Addr) {
       Map.erase(I); 
     }
     
-    if (!state.getGlobalAddressReverseMap(locked).empty())
-      state.getGlobalAddressReverseMap(locked).erase(Addr);
+    if (!state.getGlobalAddressReverseMap(locked).empty()) {
+      // Change backported from
+      // http://llvm.org/viewvc/llvm-project?view=rev&revision=78127.
+      state.getGlobalAddressReverseMap(locked).erase(OldVal);
+    }
     return OldVal;
   }
   
@@ -1000,6 +1003,7 @@ void ExecutionEngine::EmitGlobalVariable(const GlobalVariable *GV) {
   if (GA == 0) {
     // If it's not already specified, allocate memory for the global.
     GA = getMemoryForGV(GV);
+    assert(GA != NULL && "Failed to get memory for global");
     addGlobalMapping(GV, GA);
   }
   

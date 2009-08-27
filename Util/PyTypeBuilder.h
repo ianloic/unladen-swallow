@@ -9,6 +9,7 @@
 #include "Python.h"
 #include "code.h"
 #include "frameobject.h"
+#include "longintrepr.h"
 
 #include "Python/global_llvm_data.h"
 
@@ -85,30 +86,109 @@ public:
     DEFINE_OBJECT_HEAD_FIELDS(PyObject)
 };
 
-template<> class TypeBuilder<PyTupleObject, false> {
+template<> class TypeBuilder<PyStringObject, false> {
 public:
     static const StructType *get() {
-        static const StructType *const result = Create();
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyStringObject struct.
+                                 "struct.PyStringObject"));
         return result;
     }
 
+    DEFINE_OBJECT_HEAD_FIELDS(PyStringObject)
+    DEFINE_FIELD(PyStringObject, ob_size)
+    DEFINE_FIELD(PyStringObject, ob_shash)
+    DEFINE_FIELD(PyStringObject, ob_sstate)
+    DEFINE_FIELD(PyStringObject, ob_sval)
+};
+
+template<> class TypeBuilder<PyUnicodeObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyUnicodeObject struct.
+                                 "struct.PyUnicodeObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyUnicodeObject)
+    DEFINE_FIELD(PyUnicodeObject, length)
+    DEFINE_FIELD(PyUnicodeObject, str)
+    DEFINE_FIELD(PyUnicodeObject, hash)
+    DEFINE_FIELD(PyUnicodeObject, defenc)
+};
+
+template<> class TypeBuilder<PyIntObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyIntObject struct.
+                                 "struct.PyIntObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyIntObject)
+    DEFINE_FIELD(PyIntObject, ob_ival)
+};
+
+template<> class TypeBuilder<PyLongObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyLongObject struct.
+                                 "struct._longobject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyLongObject)
+    DEFINE_FIELD(PyLongObject, ob_digit)
+};
+
+template<> class TypeBuilder<PyFloatObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyFloatObject struct.
+                                 "struct.PyFloatObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyFloatObject)
+    DEFINE_FIELD(PyFloatObject, ob_fval)
+};
+
+template<> class TypeBuilder<PyComplexObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyFloatObject struct.
+                                 "struct.PyComplexObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyComplexObject)
+    DEFINE_FIELD(PyComplexObject, cval)
+};
+
+template<> class TypeBuilder<PyTupleObject, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTupleObject struct.
+                                 "struct.PyTupleObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyTupleObject)
     DEFINE_FIELD(PyTupleObject, ob_size)
     DEFINE_FIELD(PyTupleObject, ob_item)
-
-private:
-    static const StructType *Create() {
-        // Keep this in sync with tupleobject.h.
-        return StructType::get(
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            PyTypeBuilder<PyObject>::get(),
-            // From PyObject_VAR_HEAD
-            PyTypeBuilder<ssize_t>::get(),
-            // From PyTupleObject
-            PyTypeBuilder<PyObject*[]>::get(),  // ob_item
-            NULL);
-    }
 };
 
 template<> class TypeBuilder<PyListObject, false> {
@@ -204,6 +284,58 @@ public:
     DEFINE_FIELD(PyTypeObject, tp_prev)
     DEFINE_FIELD(PyTypeObject, tp_next)
 #endif
+};
+
+template<> class TypeBuilder<PyNumberMethods, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTypeObject struct.
+                                 "struct.PyNumberMethods"));
+        return result;
+    }
+
+    // No fields yet because we haven't needed them.
+};
+
+template<> class TypeBuilder<PySequenceMethods, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTypeObject struct.
+                                 "struct.PySequenceMethods"));
+        return result;
+    }
+
+    // No fields yet because we haven't needed them.
+};
+
+template<> class TypeBuilder<PyMappingMethods, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTypeObject struct.
+                                 "struct.PyMappingMethods"));
+        return result;
+    }
+
+    // No fields yet because we haven't needed them.
+};
+
+template<> class TypeBuilder<PyBufferProcs, false> {
+public:
+    static const StructType *get() {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyTypeObject struct.
+                                 "struct.PyBufferProcs"));
+        return result;
+    }
+
+    // No fields yet because we haven't needed them.
 };
 
 template<> class TypeBuilder<PyCodeObject, false> {
@@ -346,6 +478,8 @@ public:
 
 namespace py {
 typedef PyTypeBuilder<PyObject> ObjectTy;
+typedef PyTypeBuilder<PyStringObject> StringTy;
+typedef PyTypeBuilder<PyIntObject> IntTy;
 typedef PyTypeBuilder<PyTupleObject> TupleTy;
 typedef PyTypeBuilder<PyListObject> ListTy;
 typedef PyTypeBuilder<PyTypeObject> TypeTy;

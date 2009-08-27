@@ -69,7 +69,9 @@ PyGlobalLlvmData::PyGlobalLlvmData()
         // JIT slowly, to produce better machine code.  TODO: We'll
         // almost certainly want to make this configurable per
         // function.
-        llvm::CodeGenOpt::Default);
+        llvm::CodeGenOpt::Default,
+        // Allocate GlobalVariables separately from code.
+        false);
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
@@ -79,6 +81,8 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     // codegen, and (once the GIL is gone) JITting lazily is
     // thread-unsafe anyway.
     engine_->DisableLazyCompilation();
+
+    this->constant_mirror_.reset(new PyConstantMirror(this));
 
     this->InstallInitialModule();
 
@@ -95,6 +99,12 @@ PyGlobalLlvmData::InstallInitialModule()
         if (it->getName().find("_PyLlvm_Fast") == 0) {
             it->setCallingConv(llvm::CallingConv::Fast);
         }
+    }
+
+    // Fill the ExecutionEngine with the addresses of known global variables.
+    for (Module::global_iterator it = this->module_->global_begin();
+         it != this->module_->global_end(); ++it) {
+        this->engine_->getOrEmitGlobalVariable(it);
     }
 }
 
@@ -203,10 +213,11 @@ PyGlobalLlvmData::InitializeOptimizations()
 
 PyGlobalLlvmData::~PyGlobalLlvmData()
 {
+    this->constant_mirror_->python_shutting_down_ = true;
     for (size_t i = 0; i < this->optimizations_.size(); ++i) {
         delete this->optimizations_[i];
     }
-    delete engine_;
+    delete this->engine_;
 }
 
 int

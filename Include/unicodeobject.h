@@ -409,7 +409,7 @@ PyAPI_FUNC(int) PyUnicode_ClearFreeList(void);
 
 /* --- Unicode Type ------------------------------------------------------- */
 
-typedef struct {
+typedef struct PyUnicodeObject {
     PyObject_HEAD
     Py_ssize_t length;		/* Length of raw Unicode data in buffer */
     Py_UNICODE *str;		/* Raw Unicode buffer */

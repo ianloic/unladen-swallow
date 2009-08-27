@@ -113,6 +113,16 @@ def foo():
 """, level)
         self.assertEquals(None, foo())
 
+    @at_each_optimization_level
+    def test_constants(self, level):
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    if x: x[...]
+    return [1, 2L, 3.2, 7j, (), "Hello", u"Hello", None]
+""", level)
+        self.assertEquals([1, 2L, 3.2, 7j, (), "Hello", u"Hello", None],
+                          foo(False))
+
     def test_same_named_functions_coexist(self):
         foo1 = compile_for_llvm("foo", """
 def foo(a):
