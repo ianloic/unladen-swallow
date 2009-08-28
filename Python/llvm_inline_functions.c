@@ -164,21 +164,21 @@ _PyLlvm_Frame_BlockPop(PyTryBlock *blocks, char *num_blocks)
     return b;
 }
 
-/* Define a function using PyTupleObject so we can look it up from
+/* Define a global using PyTupleObject so we can look it up from
    TypeBuilder<PyTupleObject>. */
-void structTuple(PyTupleObject dummy) {}
+PyTupleObject *_dummy_TupleObject;
 /* Ditto for PyStringObject, */
-void structString(PyStringObject dummy) {}
+PyStringObject *_dummy_StringObject;
 /* PyUnicodeObject, */
-void structUnicode(PyUnicodeObject dummy) {}
+PyUnicodeObject *_dummy_UnicodeObject;
 /* PyIntObject, */
-void structInt(PyIntObject dummy) {}
+PyIntObject *_dummy_IntObject;
 /* PyLongObject, */
-void structLong(PyLongObject dummy) {}
+PyLongObject *_dummy_LongObject;
 /* PyFloatObject, */
-void structFloat(PyFloatObject dummy) {}
+PyFloatObject *_dummy_FloatObject;
 /* and PyComplexObject. */
-void structComplex(PyComplexObject dummy) {}
+PyComplexObject *_dummy_ComplexObject;
 
 /* Expose PyEllipsis to ConstantMirror. */
 PyObject* objectEllipsis() { return Py_Ellipsis; }
