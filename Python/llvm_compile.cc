@@ -254,6 +254,7 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
                         "non-string codestring in code object");
         return NULL;
     }
+
     py::LlvmFunctionBuilder fbuilder(PyGlobalLlvmData::Get(), code);
     std::vector<InstrInfo> instr_info(PyString_GET_SIZE(code->co_code));
     if (-1 == set_line_numbers(code, instr_info)) {
@@ -263,6 +264,7 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
                                 instr_info)) {
         return NULL;
     }
+
     BytecodeIterator iter(code->co_code);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
         fbuilder.SetLasti(iter.CurIndex());
@@ -461,6 +463,16 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
     if (llvm::verifyFunction(*fbuilder.function(), llvm::PrintMessageAction)) {
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
         return NULL;
+    }
+
+    /* If the code object doesn't need the LOAD_GLOBAL optimization, it should
+       not care whether the globals/builtins change. */
+    if (!fbuilder.UsesLoadGlobalOpt() && code->co_assumed_globals) {
+        code->co_flags &= ~CO_FDO_GLOBALS;
+        _PyDict_DropWatcher(code->co_assumed_globals, code);
+        _PyDict_DropWatcher(code->co_assumed_builtins, code);
+        code->co_assumed_globals = NULL;
+        code->co_assumed_builtins = NULL;
     }
 
     // Make sure the function survives global optimizations.

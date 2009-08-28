@@ -527,7 +527,7 @@ class SizeofTest(unittest.TestCase):
         check(complex(0,1), size(h + '2d'))
         # code
         if WITH_LLVM:
-            check(get_cell().func_code, size(h + '4i8Pi5Pc2i'))
+            check(get_cell().func_code, size(h + '4i8Pi5Pc3i2P'))
         else:
             check(get_cell().func_code, size(h + '4i8Pi2P'))
         # BaseException
@@ -556,9 +556,13 @@ class SizeofTest(unittest.TestCase):
         # method-wrapper (descriptor object)
         check({}.__iter__, size(h + '2P'))
         # dict
-        check({}, size(h + '3P2P' + 8*'P2P'))
+        dict_llvm_suffix = ''
+        if WITH_LLVM:
+            dict_llvm_suffix = 'P2i'
+        check({}, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix))
         x = {1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8}
-        check(x, size(h + '3P2P' + 8*'P2P') + 16*size('P2P'))
+        check(x, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix) + 16*size('P2P'))
+        del dict_llvm_suffix
         # dictionary-keyiterator
         check({}.iterkeys(), size(h + 'P2PPP'))
         # dictionary-valueiterator

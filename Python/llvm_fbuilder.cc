@@ -106,6 +106,8 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
            "Unexpected number of arguments");
     this->frame_->setName("frame");
 
+    this->uses_load_global_opt_ = false;
+
     BasicBlock *entry = BasicBlock::Create("entry", this->function_);
     this->unreachable_block_ =
         BasicBlock::Create("unreachable", this->function_);
@@ -187,12 +189,13 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
     this->builder_.CreateBr(this->bail_to_interpreter_block_);
 
     this->builder_.SetInsertPoint(continue_entry);
-#ifndef NDEBUG
-    // Assert that the code object we pull out of the frame is the
-    // same as the one passed into this object.
     Value *frame_code = this->builder_.CreateLoad(
         FrameTy::f_code(this->builder_, this->frame_),
         "frame->f_code");
+    this->use_llvm_addr_ = CodeTy::co_use_llvm(this->builder_, frame_code);
+#ifndef NDEBUG
+    // Assert that the code object we pull out of the frame is the
+    // same as the one passed into this object.
     Value *passed_in_code_object =
         ConstantInt::get(Type::Int64Ty,
                          reinterpret_cast<uintptr_t>(this->code_object_));
@@ -936,7 +939,7 @@ LlvmFunctionBuilder::LOAD_CONST(int index)
 }
 
 void
-LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
+LlvmFunctionBuilder::LOAD_GLOBAL_safe(int name_index)
 {
     BasicBlock *global_missing = BasicBlock::Create(
         "LOAD_GLOBAL_global_missing", this->function_);
@@ -986,6 +989,78 @@ LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
 #ifdef WITH_TSC
     this->LogTscEvent(LOAD_GLOBAL_EXIT_LLVM);
 #endif
+}
+
+void
+LlvmFunctionBuilder::LOAD_GLOBAL_fast(int name_index)
+{
+    PyCodeObject *code = this->code_object_;
+    PyObject *name = PyTuple_GET_ITEM(code->co_names, name_index);
+    PyObject *obj = PyDict_GetItem(code->co_assumed_globals, name);
+    if (obj == NULL) {
+        obj = PyDict_GetItem(code->co_assumed_builtins, name);
+        if (obj == NULL) {
+            /* This isn't necessarily an error: it's legal Python code to refer
+               to globals that aren't yet defined at compilation time. Is it a
+               bad idea? Almost certainly. Is it legal? Unfortunatley. */
+            this->LOAD_GLOBAL_safe(name_index);
+            return;
+        }
+    }
+    this->uses_load_global_opt_ = true;
+
+    BasicBlock *keep_going = BasicBlock::Create(
+        "LOAD_GLOBAL_keep_going", this->function_);
+    BasicBlock *invalid_assumptions = BasicBlock::Create(
+        "LOAD_GLOBAL_invalid_assumptions", this->function_);
+
+#ifdef WITH_TSC
+    this->LogTscEvent(LOAD_GLOBAL_ENTER_LLVM);
+#endif
+    Value *use_llvm = this->builder_.CreateLoad(this->use_llvm_addr_,
+                                                "co_use_llvm");
+    this->builder_.CreateCondBr(this->IsNonZero(use_llvm),
+                                keep_going,
+                                invalid_assumptions);
+
+    /* Our assumptions about the state of the globals/builtins no longer hold;
+       bail back to the interpreter. */
+    this->builder_.SetInsertPoint(invalid_assumptions);
+    this->builder_.CreateStore(
+        // -1 so that next_instr gets set right in EvalFrame.
+        ConstantInt::getSigned(PyTypeBuilder<int>::get(), this->f_lasti_ - 1),
+        this->f_lasti_addr_);
+    this->builder_.CreateStore(
+        ConstantInt::get(PyTypeBuilder<char>::get(), _PYFRAME_FATAL_GUARD_FAIL),
+        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
+    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+
+    /* Our assumptions are still valid; encode the result of the lookups as an
+       immediate in the IR. */
+    this->builder_.SetInsertPoint(keep_going);
+    Value *global = ConstantExpr::getIntToPtr(
+        ConstantInt::get(
+            Type::Int64Ty,
+            reinterpret_cast<uintptr_t>(obj)),
+        PyTypeBuilder<PyObject*>::get());
+    this->IncRef(global);
+    this->Push(global);
+
+#ifdef WITH_TSC
+    this->LogTscEvent(LOAD_GLOBAL_EXIT_LLVM);
+#endif
+}
+
+void
+LlvmFunctionBuilder::LOAD_GLOBAL(int name_index)
+{
+    // A code object might not have CO_FDO_GLOBALS set if
+    // a) it was compiled by setting co_optimization, or
+    // b) we couldn't watch the globals/builtins dicts.
+    if (this->code_object_->co_flags & CO_FDO_GLOBALS)
+        this->LOAD_GLOBAL_fast(name_index);
+    else
+        this->LOAD_GLOBAL_safe(name_index);
 }
 
 void

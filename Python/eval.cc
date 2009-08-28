@@ -19,13 +19,14 @@
 #include "structmember.h"
 
 #include "Util/EventTimer.h"
-#include "Util/RuntimeFeedback.h"
 
 #ifdef WITH_LLVM
 #include "global_llvm_data.h"
 #include "_llvmfunctionobject.h"
 #include "llvm/Function.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "Util/RuntimeFeedback.h"
+#include "Util/Stats.h"
 #endif
 
 #include <ctype.h>
@@ -82,7 +83,8 @@ compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
 	return first->co_callcount > second->co_callcount;
 }
 
-HotnessTracker::~HotnessTracker() {
+HotnessTracker::~HotnessTracker()
+{
 	printf("%d code objects deemed hot\n", this->hot_code_.size());
 
 	printf("Code call counts:\n");
@@ -102,6 +104,76 @@ HotnessTracker::~HotnessTracker() {
 static llvm::ManagedStatic<HotnessTracker> hot_code;
 #endif
 
+#ifdef Py_WITH_INSTRUMENTATION
+// Keep track of which functions failed fatal guards, but kept being called.
+// This can help gauge the efficacy of optimizations that involve fatal guards.
+class FatalBailTracker {
+public:
+	~FatalBailTracker() {
+		printf("\nCode objects that failed fatal guards:\n");
+		printf("\tfile:line (funcname) bail callcount -> final callcount\n");
+
+		for (TrackerData::const_iterator it = this->code_.begin();
+				it != this->code_.end(); ++it) {
+			PyCodeObject *code = it->first;
+			if (code->co_callcount == it->second)
+				continue;
+			printf("\t%s:%d (%s)\t%d -> %d\n",
+				PyString_AsString(code->co_filename),
+				code->co_firstlineno,
+				PyString_AsString(code->co_name),
+				it->second,
+				code->co_callcount);
+		}
+	}
+
+	void RecordFatalBail(PyCodeObject *code) {
+		Py_INCREF(code);
+		this->code_.push_back(std::make_pair(code, code->co_callcount));
+	}
+
+private:
+	// Keep a list of (code object, callcount) where callcount is the
+	// value of co_callcount when RecordFatalBail() was called. This is
+	// used to hide code objects whose machine code functions are
+	// invalidated during shutdown because their module dict has gone away;
+	// these code objects are uninteresting for our analysis.
+	typedef std::pair<PyCodeObject *, int> DataPoint;
+	typedef std::vector<DataPoint> TrackerData;
+
+	TrackerData code_;
+};
+
+
+static llvm::ManagedStatic<FatalBailTracker> fatal_bail_tracker;
+
+// C wrapper for FatalBailTracker::RecordFatalBail().
+void
+_PyEval_RecordFatalBail(PyCodeObject *code)
+{
+	fatal_bail_tracker->RecordFatalBail(code);
+}
+
+
+// Collect stats on how many watchers the globals/builtins dicts acculumate.
+// This currently records how many watchers the dict had when it changed, ie,
+// how many watchers it had to notify.
+class WatcherCountStats : public DataVectorStats<size_t> {
+public:
+	WatcherCountStats() :
+		DataVectorStats<size_t>("Number of watchers accumulated") {};
+};
+
+static llvm::ManagedStatic<WatcherCountStats> watcher_count_stats;
+
+void
+_PyEval_RecordWatcherCount(size_t watcher_count)
+{
+	watcher_count_stats->RecordDataPoint(watcher_count);
+}
+
+#endif  // Py_WITH_INSTRUMENTATION
+
 
 /* Turn this on if your compiler chokes on the big switch: */
 /* #define CASE_TOO_BIG 1 */
@@ -116,7 +188,9 @@ typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
 /* Forward declarations */
 #ifdef WITH_LLVM
-static int mark_called_and_maybe_compile(PyCodeObject *co);
+static int mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f);
+static void record_type(PyCodeObject *, int, int, int, PyObject *);
+static void inc_feedback_counter(PyCodeObject *, int, int, int);
 #endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
@@ -125,8 +199,6 @@ static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
 				      PyObject *);
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
-static void record_type(PyCodeObject *, int, int, int, PyObject *);
-static void inc_feedback_counter(PyCodeObject *, int, int, int);
 
 int _Py_TracingPossible = 0;
 
@@ -720,6 +792,7 @@ PyEval_EvalFrame(PyFrameObject *f)
 #define JUMPBY(x)	(next_instr += (x))
 
 /* Feedback-gathering macros */
+#ifdef WITH_LLVM
 #define RECORD_TYPE(arg_index, obj) \
 	record_type(co, opcode, f->f_lasti, arg_index, obj)
 #define RECORD_TRUE() \
@@ -728,6 +801,12 @@ PyEval_EvalFrame(PyFrameObject *f)
 	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_FALSE)
 #define RECORD_NONBOOLEAN() \
 	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_NON_BOOLEAN)
+#else
+#define RECORD_TYPE(arg_index, obj)
+#define RECORD_TRUE()
+#define RECORD_FALSE()
+#define RECORD_NONBOOLEAN()
+#endif  /* WITH_LLVM */
 
 
 /* OpCode prediction macros
@@ -847,14 +926,21 @@ PyEval_EvalFrame(PyFrameObject *f)
 
 #ifdef WITH_LLVM
 	if (f->f_use_llvm) {
+		assert(bail_reason == _PYFRAME_NO_BAIL);
 		assert(co->co_native_function != NULL &&
 		       "mark_called_and_maybe_compile was supposed to ensure"
 		       " that co_native_function exists");
-		assert(co->co_use_llvm &&
-		       "a frame cannot use_llvm if the code object can't "
-		       "use_llvm");
-		retval = co->co_native_function(f);
-		goto exit_eval_frame;
+		if (!co->co_use_llvm) {
+			// A frame cannot use_llvm if the underlying code object
+			// can't use_llvm. This comes up when a generator is
+			// invalidated while active.
+			f->f_use_llvm = 0;
+		}
+		else {
+			assert(co->co_fatalbailcount < PY_MAX_FATALBAILCOUNT);
+			retval = co->co_native_function(f);
+			goto exit_eval_frame;
+		}
 	}
 #endif  /* WITH_LLVM */
 
@@ -871,11 +957,13 @@ PyEval_EvalFrame(PyFrameObject *f)
 		   to ensure a line trace call. */
 		instr_prev = INT_MAX;
 	}
+#ifdef WITH_LLVM
 	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
 		PyErr_SetString(PyExc_RuntimeError,
 		                "bailed to the interpreter");
 		goto exit_eval_frame;
 	}
+#endif  /* WITH_LLVM */
 
 	names = co->co_names;
 	consts = co->co_consts;
@@ -2829,6 +2917,10 @@ fast_yield:
 	/* pop frame */
 exit_eval_frame:
 #ifdef WITH_LLVM
+	/* If we bailed, the C stack looks like PyEval_EvalFrame (start call)
+	   -> native code (body) -> PyEval_EvalFrame (currently active). In this
+	   case, the Py_LeaveRecursiveCall() will be handled by that first
+	   PyEval_EvalFrame() activation. */
 	if (f->f_bailed_from_llvm == _PYFRAME_NO_BAIL) {
 		Py_LeaveRecursiveCall();
 		tstate->frame = f->f_back;
@@ -2863,19 +2955,21 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 		return NULL;
 	}
 
-#ifdef WITH_LLVM
-	/* This is where a code object is considered "called". Doing it here
-	 * instead of PyEval_EvalFrame() makes support for generators somewhat
-	 * cleaner. */
-	if (mark_called_and_maybe_compile(co) == -1)
-		return NULL;
-#endif
-
 	assert(tstate != NULL);
 	assert(globals != NULL);
 	f = PyFrame_New(tstate, co, globals, locals);
 	if (f == NULL)
 		return NULL;
+
+#ifdef WITH_LLVM
+	/* This is where a code object is considered "called". Doing it here
+	 * instead of PyEval_EvalFrame() makes support for generators somewhat
+	 * cleaner. */
+	if (mark_called_and_maybe_compile(co, f) == -1) {
+		Py_DECREF(f);
+		return NULL;
+	}
+#endif
 
 	fastlocals = f->f_localsplus;
 	freevars = f->f_localsplus + co->co_nlocals;
@@ -3888,28 +3982,28 @@ err_args(PyObject *func, int flags, int nargs)
 // the bytecode to native code, even if the code object isn't hot yet.
 // Returns 0 on success or -1 on failure.
 //
+// If this code object has had too many fatal guard failures (see
+// PY_MAX_FATALBAILCOUNT), it is forced to use the eval loop forever.
+//
 // This function is performance-critical. If you're changing this function,
 // you should keep a close eye on the benchmarks, particularly call_simple.
 // In the past, seemingly-insignificant changes have produced 10-15% swings
 // in the macrobenchmarks. You've been warned.
-//
-// TODO(collinwinter): This function will need to take into account fatal guard
-// failures. Currently, there are only non-fatal guard failures: tracing is
-// inconvenient, but it doesn't invalidate the machine code. A fatal guard
-// failure, by contrast, indicates that the machine code is totally invalid and
-// needs to be recompiled. Until we can recompile LLVM IR, a single fatal guard
-// failure blocks all future recompilation of a given function to machine code.
-// Even once recompilation works, we should limit the number of times we're
-// willing to recompile a function in the face of repeated fatal guard failures.
 static int
-mark_called_and_maybe_compile(PyCodeObject *co)
+mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 {
-	if (Py_HOT_OR_NOT(++co->co_callcount)) {
+	++co->co_callcount;
+	if (co->co_fatalbailcount >= PY_MAX_FATALBAILCOUNT) {
+		co->co_use_llvm = f->f_use_llvm = 0;
+		return 0;
+	}
+
+	if (Py_HOT_OR_NOT(co->co_callcount)) {
 #ifdef Py_PROFILE_HOTNESS
 		hot_code->AddHotCode(co);
 #endif
 		if (Py_JitControl == PY_JIT_WHENHOT)
-			co->co_use_llvm = 1;
+			co->co_use_llvm = f->f_use_llvm = 1;
 	}
 	if (co->co_use_llvm) {
 		if (co->co_llvm_function == NULL) {
@@ -3923,6 +4017,10 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 				// will create it.
 				int r;
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_START);
+				if (_PyCode_WatchGlobals(co, f->f_globals,
+				                         f->f_builtins)) {
+					return -1;
+				}
 				r = _PyCode_ToOptimizedLlvmIr(
 					co, target_optimization);
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
@@ -3940,7 +4038,7 @@ mark_called_and_maybe_compile(PyCodeObject *co)
 				return -1;
 			}
 		}
-		PY_LOG_TSC_EVENT(EVAL_COMPILE_END)
+		PY_LOG_TSC_EVENT(EVAL_COMPILE_END);
 	}
 	return 0;
 }
@@ -4126,10 +4224,6 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 		int i;
 
 		PCALL(PCALL_FASTER_FUNCTION);
-#ifdef WITH_LLVM
-		if (mark_called_and_maybe_compile(co) == -1)
-			return NULL;
-#endif
 
 		assert(globals != NULL);
 		/* XXX Perhaps we should create a specialized
@@ -4140,6 +4234,12 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 		f = PyFrame_New(tstate, co, globals, NULL);
 		if (f == NULL)
 			return NULL;
+#ifdef WITH_LLVM
+		if (mark_called_and_maybe_compile(co, f) == -1) {
+			Py_DECREF(f);
+			return NULL;
+		}
+#endif
 
 		fastlocals = f->f_localsplus;
 		stack = (*pp_stack) - n;
@@ -4369,38 +4469,40 @@ ext_call_fail:
 	return result;
 }
 
+#ifdef WITH_LLVM
 // Records the type of obj into the feedback array.
 void record_type(PyCodeObject *co, int expected_opcode,
 		 int opcode_index, int arg_index, PyObject *obj)
 {
-#ifdef WITH_LLVM
+#ifndef NDEBUG
 	unsigned char actual_opcode =
 		PyString_AS_STRING(co->co_code)[opcode_index];
 	assert((actual_opcode == expected_opcode ||
 		actual_opcode == EXTENDED_ARG) &&
 	       "Mismatch between feedback and opcode array.");
+#endif  /* NDEBUG */
 	PyRuntimeFeedback &feedback =
 		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
 			opcode_index, arg_index);
 	feedback.AddTypeSeen(obj);
-#endif
 }
 
 void inc_feedback_counter(PyCodeObject *co, int expected_opcode,
 			  int opcode_index, int counter_id)
 {
-#ifdef WITH_LLVM
+#ifndef NDEBUG
 	unsigned char actual_opcode =
 		PyString_AS_STRING(co->co_code)[opcode_index];
 	assert((actual_opcode == expected_opcode ||
 		actual_opcode == EXTENDED_ARG) &&
 	       "Mismatch between feedback and opcode array.");
+#endif  /* NDEBUG */
 	PyRuntimeFeedback &feedback =
 		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
 			opcode_index, 0);
 	feedback.IncCounter(counter_id);
-#endif
 }
+#endif  /* WITH_LLVM */
 
 
 /* Extract a slice index from a PyInt or PyLong or an object with the

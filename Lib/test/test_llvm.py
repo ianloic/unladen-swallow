@@ -1,12 +1,15 @@
 # Tests for our minimal LLVM wrappers
 import __future__
 
-from test.test_support import run_unittest, findfile, TestSkipped
+from test import test_dynamic
+from test import test_support
 
 try:
     import _llvm
 except ImportError:
-    raise TestSkipped("not built against LLVM")
+    raise test_support.TestSkipped("not built against LLVM")
+
+import __builtin__
 import functools
 import sys
 import unittest
@@ -34,7 +37,8 @@ def at_each_optimization_level(func):
     return result
 
 
-def compile_for_llvm(function_name, def_string, optimization_level=-1):
+def compile_for_llvm(function_name, def_string, optimization_level=-1,
+                     globals_dict=None):
     """Compiles function_name, defined in def_string to be run through LLVM.
 
     Compiles and runs def_string in a temporary namespace, pulls the
@@ -44,7 +48,9 @@ def compile_for_llvm(function_name, def_string, optimization_level=-1):
 
     """
     namespace = {}
-    exec def_string in globals(), namespace
+    if globals_dict is None:
+        globals_dict = globals()
+    exec def_string in globals_dict, namespace
     func = namespace[function_name]
     if optimization_level is not None:
         if optimization_level >= DEFAULT_OPT_LEVEL:
@@ -595,11 +601,12 @@ def reuseit(x):
 
     @at_each_optimization_level
     def test_load_global(self, level):
+        our_globals = dict(globals())  # Isolate the test's global effects.
         testvalue = 'test global value'
         loadglobal = compile_for_llvm('loadglobal',
                                       'def loadglobal(): return testvalue',
-                                      level)
-        loadglobal.func_globals['testvalue'] = testvalue
+                                      level, our_globals)
+        our_globals['testvalue'] = testvalue
         self.assertEquals(loadglobal(), testvalue)
 
         loadbuiltin = compile_for_llvm('loadbuiltin',
@@ -615,44 +622,50 @@ def nosuchglobal():
 
     @at_each_optimization_level
     def test_store_global(self, level):
+        our_globals = dict(globals())  # Isolate the test's global effects.
         setglobal = compile_for_llvm('setglobal', '''
 def setglobal(x):
     global _test_global
     _test_global = x
-''', level)
+''', level, our_globals)
         testvalue = "test global value"
-        self.assertTrue('_test_global' not in setglobal.func_globals)
+        self.assertTrue('_test_global' not in our_globals)
         setglobal(testvalue)
-        self.assertTrue('_test_global' in setglobal.func_globals)
-        self.assertEquals(setglobal.func_globals['_test_global'], testvalue)
+        self.assertTrue('_test_global' in our_globals)
+        self.assertEquals(our_globals['_test_global'], testvalue)
 
+    @at_each_optimization_level
+    def test_delete_global(self, level):
+        our_globals = dict(globals())  # Isolate the test's global effects.
         delglobal = compile_for_llvm('delglobal', '''
 def delglobal():
     global _test_global
     del _test_global
-''', level)
-        delglobal.func_globals['_test_global'] = 'test global value'
-        self.assertTrue('_test_global' in delglobal.func_globals)
+''', level, our_globals)
+        our_globals['_test_global'] = 'test global value'
+        self.assertTrue('_test_global' in our_globals)
         delglobal()
-        self.assertTrue('_test_global' not in delglobal.func_globals)
+        self.assertTrue('_test_global' not in our_globals)
 
     @at_each_optimization_level
     def test_load_name(self, level):
+        our_globals = dict(globals())  # Isolate the test's global effects.
         testvalue = 'test name value'
         loadlocal = compile_for_llvm('loadlocal', '''
 def loadlocal():
     exec 'testvalue = "Hello"'
     return testvalue
-''', level)
-        loadlocal.func_globals['testvalue'] = testvalue
+''', level, our_globals)
+        our_globals['testvalue'] = testvalue
         self.assertEquals(loadlocal(), 'Hello')
 
+        our_globals = dict(globals())
         loadglobal = compile_for_llvm('loadglobal', '''
 def loadglobal():
     exec ''
     return testvalue
-''', level)
-        loadglobal.func_globals['testvalue'] = testvalue
+''', level, our_globals)
+        our_globals['testvalue'] = testvalue
         self.assertEquals(loadglobal(), testvalue)
 
         loadbuiltin = compile_for_llvm('loadbuiltin', '''
@@ -970,6 +983,22 @@ def f(x, args, kwargs):
             return args, kwargs
         self.assertEquals(f(receiver, (2, 3), {'e': 5, 'f': 6}),
                           ((1, 2, 3), {'d': 4, 'e': 5, 'f': 6}))
+
+    @at_each_optimization_level
+    def test_varargs_func(self, level):
+        f = compile_for_llvm("f", """
+def f(*args):
+    return zip(*args)
+""", level)
+        self.assertEqual(f([1], [2]), [(1, 2)])
+
+    @at_each_optimization_level
+    def test_kwargs_func(self, level):
+        f = compile_for_llvm("f", """
+def f(**kwargs):
+    return dict(**kwargs)
+""", level)
+        self.assertEqual(f(a=3), {"a": 3})
 
     @at_each_optimization_level
     def test_build_slice(self, level):
@@ -1306,25 +1335,29 @@ def generator(obj):
         self.assertRaises(StopIteration, g.next)
         self.assertEquals({"finally": 1}, obj)
 
-    def test_toggle_generator(self):
-        # Toggling between native code and the interpreter between yields used
-        # to cause crashes because f_lasti doesn't get translated between the
-        # scheme used for LLVM and the scheme used for the interpreter. For now
-        # these assignments are no-ops for the lifetime of the generator
-        # object, but do take effect when a new generator instance is created.
-        def generator(obj):
-            yield 1
-            generator.func_code.__use_llvm__ = True
-            yield 2
-            # We iterate over the generator while the first instance is still
-            # running. This is to test that the modification to the shared
-            # code object above takes effect. We don't have any way of
-            # checking whether LLVM is really being used, but the important
-            # thing is that it doesn't crash.
-            list(obj)
-            generator.func_code.__use_llvm__ = False
-            yield 3
-        self.assertEqual(list(generator(generator([]))), [1, 2, 3])
+    # Getting this to work under -j always is a pain in the ass, and not worth
+    # the effort IMHO.
+    if sys.flags.jit_control != "always":
+        def test_toggle_generator(self):
+            # Toggling between native code and the interpreter between yields
+            # used to cause crashes because f_lasti doesn't get translated
+            # between the scheme used for LLVM and the scheme used for the
+            # interpreter. For now these assignments are no-ops for the lifetime
+            # of the generator object, but do take effect when a new generator
+            # instance is created.
+            def generator(obj):
+                yield 1
+                generator.func_code.__use_llvm__ = True
+                yield 2
+                # We iterate over the generator while the first instance is
+                # still running. This is to test that the modification to the
+                # shared code object above takes effect. We don't have any way
+                # of checking whether LLVM is really being used, but the
+                # important thing is that it doesn't crash.
+                list(obj)
+                generator.func_code.__use_llvm__ = False
+                yield 3
+            self.assertEqual(list(generator(generator([]))), [1, 2, 3])
 
     @at_each_optimization_level
     def test_closure(self, level):
@@ -2334,8 +2367,8 @@ def unpack(x):
 class OptimizationTests(LlvmTestCase):
 
     def test_hotness(self):
-        def foo():
-            pass
+        foo = compile_for_llvm("foo", "def foo(): pass",
+                               optimization_level=None)
         iterations = 11000  # Threshold is 10000.
         # Because code objects are stored in the co_consts array, the
         # callcount will increase by `iterations` every time this test is run,
@@ -2347,9 +2380,11 @@ class OptimizationTests(LlvmTestCase):
         self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
 
     def test_generator_hotness(self):
-        def foo():
-            yield 5
-            yield 6
+        foo = compile_for_llvm("foo", """
+def foo():
+    yield 5
+    yield 6
+""", optimization_level=None)
         iterations = 11000  # Threshold is 10000.
         # Because code objects are stored in the co_consts array, the
         # callcount will increase by `iterations` every time this test is run,
@@ -2363,6 +2398,142 @@ class OptimizationTests(LlvmTestCase):
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
 
+    def test_fast_load_global(self):
+        # Make sure that hot functions use the optimized LOAD_GLOBAL
+        # implementation. We do this by asserting that if their assumptions
+        # about globals/builtins no longer hold, they bail.
+        with test_support.swap_attr(__builtin__, "len", len):
+            iterations = 11000
+            foo = compile_for_llvm("foo", """
+def foo(x, callback):
+    callback()
+    return len(x)
+""", optimization_level=None)
+
+            for _ in xrange(iterations):
+                foo([], lambda: None)
+            self.assertEqual(foo.__code__.__use_llvm__, True)
+
+            def change_builtins():
+                self.assertEqual(foo.__code__.__use_llvm__, True)
+                __builtin__.len = lambda x: 7
+
+            def run_test():
+                sys.setbailerror(True)
+                self.assertEqual(foo.__code__.__use_llvm__, True)
+                self.assertEqual(foo.__code__.co_fatalbailcount, 0)
+                try:
+                    self.assertRaises(RuntimeError, foo, [], change_builtins)
+                finally:
+                    sys.setbailerror(False)
+                self.assertEqual(foo.__code__.co_fatalbailcount, 1)
+                self.assertEqual(foo.__code__.__use_llvm__, False)
+            run_test()
+
+    def test_get_correct_globals(self):
+        # Extracted from test_math.MathTests.testFsum. Trigger the compilation
+        # of a hot function from another module; at one point in the
+        # optimization of LOAD_GLOBAL, this caused errors because we were using
+        # the wrong globals dictionary. We included it here as a simple
+        # regression test.
+        if "random" in sys.modules:
+            del sys.modules["random"]
+        from random import gauss  # A pure-Python function in another module.
+        def foo():
+            for _ in xrange(1000 * 200):
+                v = gauss(0, 0.7) ** 7
+        foo()
+        self.assertEquals(gauss.__code__.__use_llvm__, True)
+
+    def test_global_name_unknown_at_compilation_time(self):
+        # Extracted from Sympy: the global `match` is unknown when foo() becomes
+        # hot, but will be known by the time `trigger` becomes True. This used
+        # to raise a NameError while compiling foo() to LLVM IR.
+        foo = compile_for_llvm("foo", """
+def foo(trigger):
+    if trigger:
+        return match
+    else:
+        return 5
+""", optimization_level=None)
+        for _ in xrange(11000):  # Spin foo() until it becomes hot.
+            foo(False)
+        self.assertEquals(foo.__code__.__use_llvm__, True)
+        self.assertEquals(foo(False), 5)
+
+        # Set `match` so that we can run foo(True) and have it work correctly.
+        global match
+        match = 7
+        self.assertEquals(foo(True), 7)
+        # Looking up `match` doesn't depend on any pointers cached in the IR,
+        # so changing the globals didn't invalidate the code.
+        self.assertEquals(foo.__code__.__use_llvm__, True)
+        self.assertEquals(foo.__code__.co_fatalbailcount, 0)
+        del match
+
+
+class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
+
+    def configure_func(self, func, *args):
+        # Spin the function until it triggers as hot. Setting co_optimization
+        # doesn't trigger the full range of optimizations.
+        for _ in xrange(11000):
+            func(*args)
+
+    def test_changing_globals_invalidates_function(self):
+        foo = compile_for_llvm("foo", "def foo(): return len(range(3))",
+                               optimization_level=None)
+        self.configure_func(foo)
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+
+        with test_support.swap_item(globals(), "len", lambda x: 7):
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+
+    def test_changing_builtins_invalidates_function(self):
+        foo = compile_for_llvm("foo", "def foo(): return len(range(3))",
+                               optimization_level=None)
+        self.configure_func(foo)
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+
+        with test_support.swap_attr(__builtin__, "len", lambda x: 7):
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+
+    def test_guard_failure_blocks_native_code(self):
+        # Until we can recompile things, failing a guard should force use of the
+        # eval loop forever after. Even once we can recompile things, we should
+        # limit how often we're willing to recompile highly-dynamic functions.
+        # test_mutants has a good example of this.
+
+        # Compile like this so we get a new code object every time.
+        foo = compile_for_llvm("foo", "def foo(): return len([])",
+                               optimization_level=None)
+        self.configure_func(foo)
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+        self.assertEqual(foo.__code__.co_fatalbailcount, 0)
+        self.assertEqual(foo(), 0)
+
+        with test_support.swap_attr(__builtin__, "len", lambda x: 7):
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+            self.assertEqual(foo.__code__.co_fatalbailcount, 1)
+            # Since we can't recompile things yet, __use_llvm__ should be left
+            # at False and execution should use the eval loop.
+            self.configure_func(foo)
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+            self.assertEqual(foo(), 7)
+
+    def test_nondict_builtins_class(self):
+        # Regression test: this used to trigger a fatal assertion when trying
+        # to watch an instance of D; assertions from pure-Python code are a
+        # no-no.
+        class D(dict):
+            pass
+
+        foo = compile_for_llvm("foo", "def foo(): return len",
+                               optimization_level=None,
+                               globals_dict=D(globals()))
+        foo.__code__.__use_llvm__ = True
+        foo()
+
 
 def test_main():
     tests = [LoopExceptionInteractionTests, GeneralCompilationTests,
@@ -2374,9 +2545,9 @@ def test_main():
         print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()
     else:
-        tests.append(OptimizationTests)
+        tests.extend([OptimizationTests, LlvmRebindBuiltinsTests])
 
-    run_unittest(*tests)
+    test_support.run_unittest(*tests)
 
 
 if __name__ == "__main__":

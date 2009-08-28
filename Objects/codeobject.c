@@ -116,6 +116,9 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		co->co_use_llvm = (Py_JitControl == PY_JIT_ALWAYS);
 		co->co_optimization = -1;
 		co->co_callcount = 0;
+		co->co_fatalbailcount = 0;
+		co->co_assumed_globals = NULL;
+		co->co_assumed_builtins = NULL;
 #endif
 	}
 	return co;
@@ -141,6 +144,7 @@ static PyMemberDef code_memberlist[] = {
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
 #ifdef WITH_LLVM
 	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
+	{"co_fatalbailcount", T_INT,	OFF(co_fatalbailcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 #endif
 	{NULL}	/* Sentinel */
@@ -178,6 +182,51 @@ static PyGetSetDef code_getsetlist[] = {
 	{"co_llvm", (getter)code_get_co_llvm, (setter)NULL},
 	{NULL} /* Sentinel */
 };
+
+
+int
+_PyCode_WatchGlobals(PyCodeObject *code, PyObject *globals, PyObject *builtins)
+{
+	/* If any of these checks fail, we need this optimization off. */
+	code->co_flags &= ~CO_FDO_GLOBALS;
+	if (globals == NULL || builtins == NULL ||
+	    !PyDict_CheckExact(globals) || !PyDict_CheckExact(builtins)) {
+		return 0;
+	}
+	if (_PyDict_AddWatcher(globals, code)) {
+		return -1;
+	}
+	if (_PyDict_AddWatcher(builtins, code)) {
+		_PyDict_DropWatcher(globals, code);
+		return -1;
+	}
+	if (code->co_assumed_globals) {
+		_PyDict_DropWatcher(code->co_assumed_globals, code);
+		_PyDict_DropWatcher(code->co_assumed_builtins, code);
+	}
+	/* Only if all of the above went well can we turn this on. */
+	code->co_flags |= CO_FDO_GLOBALS;
+
+	/* Note that we do not hold a reference to these dicts. If one of these
+	   dicts is deleted, it will notify all dependent code objects.
+	   Likewise, if this code object is deleted, it will remove itself from
+	   the dictionaries' watcher arrays. */
+	code->co_assumed_globals = globals;
+	code->co_assumed_builtins = builtins;
+	return 0;
+}
+
+void
+_PyCode_InvalidateMachineCode(PyCodeObject *code)
+{
+	/* This will cause the LLVM-generated code to bail back to the
+	   interpreter. The LLVM code won't be re-entered until it is
+	   recompiled. */
+	code->co_use_llvm = 0;
+	code->co_fatalbailcount++;
+	/* This is a no-op if not configured with --with-instrumentation. */
+	_PyEval_RecordFatalBail(code);
+}
 
 int
 _PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int new_opt_level)
@@ -356,11 +405,17 @@ code_dealloc(PyCodeObject *co)
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
 #ifdef WITH_LLVM
+	// co_native_function is destroyed by co_llvm_function.
 	if (co->co_llvm_function) {
 		_LlvmFunction_Dealloc(co->co_llvm_function);
 		co->co_llvm_function = NULL;
 	}
-	// co_native_function is destroyed by co_llvm_function.
+	if (co->co_assumed_globals) {
+		_PyDict_DropWatcher(co->co_assumed_globals, co);
+		_PyDict_DropWatcher(co->co_assumed_builtins, co);
+		co->co_assumed_globals = NULL;
+		co->co_assumed_builtins = NULL;
+	}
 	PyFeedbackMap_Del(co->co_runtime_feedback);
 #endif
 	PyObject_DEL(co);

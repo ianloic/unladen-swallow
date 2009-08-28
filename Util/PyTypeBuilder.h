@@ -369,6 +369,9 @@ public:
     DEFINE_FIELD(PyCodeObject, co_use_llvm)
     DEFINE_FIELD(PyCodeObject, co_optimization)
     DEFINE_FIELD(PyCodeObject, co_callcount)
+    DEFINE_FIELD(PyCodeObject, co_fatalbailcount)
+    DEFINE_FIELD(PyCodeObject, co_assumed_globals)
+    DEFINE_FIELD(PyCodeObject, co_assumed_builtins)
 };
 
 template<> class TypeBuilder<PyTryBlock, false> {

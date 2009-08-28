@@ -31,6 +31,10 @@ public:
     llvm::IRBuilder<>& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
+    /// Returns true if this function actually makes use of the LOAD_GLOBAL
+    /// optimization; returns false otherwise.
+    bool UsesLoadGlobalOpt() const { return this->uses_load_global_opt_; }
+
     /// Sets the current instruction index.  This is only put into the
     /// frame object when tracing.
     void SetLasti(int current_instruction_index);
@@ -174,6 +178,11 @@ public:
     void BUILD_SLICE_THREE();
     void UNPACK_SEQUENCE(int size);
 
+    /* LOAD_GLOBAL comes in two flavors: the safe version (a port of the eval
+       loop that's guaranteed to work) and a fast version, which uses dict
+       versioning to cache pointers as immediates in the generated IR. */
+    void LOAD_GLOBAL_safe(int index);
+    void LOAD_GLOBAL_fast(int index);
     void LOAD_GLOBAL(int index);
     void STORE_GLOBAL(int index);
     void DELETE_GLOBAL(int index);
@@ -465,9 +474,16 @@ private:
     // The most recent index we've started emitting an instruction for.
     int f_lasti_;
 
+    // Flag to indicate whether this code object uses the LOAD_GLOBALS
+    // optimization.
+    bool uses_load_global_opt_;
+
     // The following pointers hold values created in the function's
     // entry block. They're constant after construction.
     llvm::Value *frame_;
+
+    // Address of code_object_->co_use_llvm, used for guards.
+    llvm::Value *use_llvm_addr_;
 
     llvm::Value *tstate_;
     llvm::Value *stack_bottom_;
