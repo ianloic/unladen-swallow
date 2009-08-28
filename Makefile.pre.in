@@ -198,8 +198,8 @@ PYTHON=		python$(EXE)
 BUILDPYTHON=	python$(BUILDEXE)
 
 # This goes at the end of a CC line intended to build an executable.
-EXECUTABLE_LINK_ARGS=	$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(LLVMLDFLAGS) \
-		$(SYSLIBS) $(LDLAST)
+EXECUTABLE_LINK_ARGS=	$(LINKFORSHARED) $(BLDLIBRARY) $(LIBS) $(MODLIBS) \
+		$(LLVMLDFLAGS) $(SYSLIBS) $(LDLAST)
 
 # The task to run while instrument when building the profile-opt target
 PROFILE_TASK=	$(srcdir)/Tools/pybench/pybench.py -n 2 --with-gc --with-syscheck
@@ -451,8 +451,8 @@ llvm_tools: llvm
 
 # Build the interpreter
 $(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) | llvm
-		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
-			Modules/python.o $(EXECUTABLE_LINK_ARGS)
+		$(LINKCC) $(LDFLAGS) -o $@ Modules/python.o \
+		$(EXECUTABLE_LINK_ARGS)
 
 platform: $(BUILDPYTHON)
 	$(RUNSHARED) ./$(BUILDPYTHON) -E -c 'import sys ; from distutils.util import get_platform ; print get_platform()+"-"+sys.version[0:3]' >platform
