@@ -558,7 +558,12 @@ class SizeofTest(unittest.TestCase):
         # dict
         dict_llvm_suffix = ''
         if WITH_LLVM:
-            dict_llvm_suffix = 'P2i'
+            # The last two members of the dict struct are really Py_ssize_t
+            # values, but struct.calcsize doesn't have a Py_ssize_t character
+            # code.  In order to make this work on 32-bit and 64-bit platforms,
+            # we assume that sizeof(void*) == sizeof(Py_ssize_t), which is
+            # generally true, and put '2P' at the end.
+            dict_llvm_suffix = 'P2P'
         check({}, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix))
         x = {1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8}
         check(x, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix) + 16*size('P2P'))
