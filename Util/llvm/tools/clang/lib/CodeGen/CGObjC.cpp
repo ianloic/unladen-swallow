@@ -126,7 +126,7 @@ void CodeGenFunction::StartObjCMethod(const ObjCMethodDecl *OMD,
 /// its pointer, name, and types registered in the class struture.  
 void CodeGenFunction::GenerateObjCMethod(const ObjCMethodDecl *OMD) {
   // Check if we should generate debug info for this method.
-  if (CGM.getDebugInfo() && !OMD->hasAttr<NodebugAttr>())
+  if (CGM.getDebugInfo() && !OMD->hasAttr<NoDebugAttr>())
     DebugInfo = CGM.getDebugInfo();
   StartObjCMethod(OMD, OMD->getClassInterface());
   EmitStmt(OMD->getBody());
@@ -199,8 +199,7 @@ void CodeGenFunction::GenerateObjCGetter(ObjCImplementationDecl *IMP,
     LValue LV = EmitLValueForIvar(TypeOfSelfObject(), LoadObjCSelf(), Ivar, 0);
     if (hasAggregateLLVMType(Ivar->getType())) {
       EmitAggregateCopy(ReturnValue, LV.getAddress(), Ivar->getType());
-    }
-    else {
+    } else {
       CodeGenTypes &Types = CGM.getTypes();
       RValue RV = EmitLoadOfLValue(LV, Ivar->getType());
       RV = RValue::get(Builder.CreateBitCast(RV.getScalarVal(),
@@ -305,8 +304,8 @@ llvm::Value *CodeGenFunction::LoadObjCSelf() {
 QualType CodeGenFunction::TypeOfSelfObject() {
   const ObjCMethodDecl *OMD = cast<ObjCMethodDecl>(CurFuncDecl);
   ImplicitParamDecl *selfDecl = OMD->getSelfDecl();
-  const PointerType *PTy = 
-    cast<PointerType>(getContext().getCanonicalType(selfDecl->getType()));
+  const ObjCObjectPointerType *PTy = cast<ObjCObjectPointerType>(
+    getContext().getCanonicalType(selfDecl->getType()));
   return PTy->getPointeeType();
 }
 
@@ -337,23 +336,22 @@ RValue CodeGenFunction::EmitObjCPropertyGet(const Expr *Exp) {
              GenerateMessageSend(*this, Exp->getType(), S, 
                                  EmitScalarExpr(E->getBase()), 
                                  false, CallArgList());
-  }
-  else {
-    const ObjCKVCRefExpr *KE = cast<ObjCKVCRefExpr>(Exp);
+  } else {
+    const ObjCImplicitSetterGetterRefExpr *KE = 
+      cast<ObjCImplicitSetterGetterRefExpr>(Exp);
     Selector S = KE->getGetterMethod()->getSelector();
     llvm::Value *Receiver;
-    if (KE->getClassProp()) {
-      const ObjCInterfaceDecl *OID = KE->getClassProp();
+    if (KE->getInterfaceDecl()) {
+      const ObjCInterfaceDecl *OID = KE->getInterfaceDecl();
       Receiver = CGM.getObjCRuntime().GetClass(Builder, OID);
-    }
-    else if (isa<ObjCSuperExpr>(KE->getBase()))
+    } else if (isa<ObjCSuperExpr>(KE->getBase()))
       return EmitObjCSuperPropertyGet(KE, S);
     else 
       Receiver = EmitScalarExpr(KE->getBase());
     return CGM.getObjCRuntime().
              GenerateMessageSend(*this, Exp->getType(), S, 
                                  Receiver, 
-                                 KE->getClassProp() != 0, CallArgList());
+                                 KE->getInterfaceDecl() != 0, CallArgList());
   }
 }
 
@@ -391,27 +389,24 @@ void CodeGenFunction::EmitObjCPropertySet(const Expr *Exp,
     CGM.getObjCRuntime().GenerateMessageSend(*this, getContext().VoidTy, S, 
                                              EmitScalarExpr(E->getBase()), 
                                              false, Args);
-  }
-  else if (const ObjCKVCRefExpr *E = dyn_cast<ObjCKVCRefExpr>(Exp)) {
+  } else if (const ObjCImplicitSetterGetterRefExpr *E = 
+               dyn_cast<ObjCImplicitSetterGetterRefExpr>(Exp)) {
     Selector S = E->getSetterMethod()->getSelector();
     CallArgList Args;
     llvm::Value *Receiver;
-    if (E->getClassProp()) {
-      const ObjCInterfaceDecl *OID = E->getClassProp();
+    if (E->getInterfaceDecl()) {
+      const ObjCInterfaceDecl *OID = E->getInterfaceDecl();
       Receiver = CGM.getObjCRuntime().GetClass(Builder, OID);
-    }
-    else if (isa<ObjCSuperExpr>(E->getBase())) {
+    } else if (isa<ObjCSuperExpr>(E->getBase())) {
       EmitObjCSuperPropertySet(E, S, Src);
       return;
-    }
-    else
+    } else
       Receiver = EmitScalarExpr(E->getBase());
     Args.push_back(std::make_pair(Src, E->getType()));
     CGM.getObjCRuntime().GenerateMessageSend(*this, getContext().VoidTy, S, 
                                              Receiver, 
-                                             E->getClassProp() != 0, Args);
-  }
-  else
+                                             E->getInterfaceDecl() != 0, Args);
+  } else
     assert (0 && "bad expression node in EmitObjCPropertySet");
 }
 

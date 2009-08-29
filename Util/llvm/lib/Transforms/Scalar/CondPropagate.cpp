@@ -14,19 +14,15 @@
 
 #define DEBUG_TYPE "condprop"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Constants.h"
-#include "llvm/Function.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/Type.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
 using namespace llvm;
 
 STATISTIC(NumBrThread, "Number of CFG edges threaded through branches");
@@ -124,7 +120,7 @@ void CondProp::SimplifyBlock(BasicBlock *BB) {
       // Succ is now dead, but we cannot delete it without potentially
       // invalidating iterators elsewhere.  Just insert an unreachable
       // instruction in it and delete this block later on.
-      new UnreachableInst(Succ);
+      new UnreachableInst(BB->getContext(), Succ);
       DeadBlocks.push_back(Succ);
       MadeChange = true;
     }

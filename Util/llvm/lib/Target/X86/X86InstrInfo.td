@@ -56,6 +56,10 @@ def SDT_X86CallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>,
 
 def SDT_X86Call   : SDTypeProfile<0, -1, [SDTCisVT<0, iPTR>]>;
 
+def SDT_X86VASTART_SAVE_XMM_REGS : SDTypeProfile<0, -1, [SDTCisVT<0, i8>,
+                                                         SDTCisVT<1, iPTR>,
+                                                         SDTCisVT<2, iPTR>]>;
+
 def SDTX86RepStr  : SDTypeProfile<0, 1, [SDTCisVT<0, OtherVT>]>;
 
 def SDTX86RdTsc   : SDTypeProfile<0, 0, []>;
@@ -114,6 +118,11 @@ def X86AtomSwap64 : SDNode<"X86ISD::ATOMSWAP64_DAG", SDTX86atomicBinary,
 def X86retflag : SDNode<"X86ISD::RET_FLAG", SDTX86Ret,
                         [SDNPHasChain, SDNPOptInFlag]>;
 
+def X86vastart_save_xmm_regs :
+                 SDNode<"X86ISD::VASTART_SAVE_XMM_REGS",
+                        SDT_X86VASTART_SAVE_XMM_REGS,
+                        [SDNPHasChain]>;
+
 def X86callseq_start :
                  SDNode<"ISD::CALLSEQ_START", SDT_X86CallSeqStart,
                         [SDNPHasChain, SDNPOutFlag]>;
@@ -122,9 +131,6 @@ def X86callseq_end :
                         [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;       
 
 def X86call    : SDNode<"X86ISD::CALL",     SDT_X86Call,
-                        [SDNPHasChain, SDNPOutFlag, SDNPOptInFlag]>;
-
-def X86tailcall: SDNode<"X86ISD::TAILCALL",     SDT_X86Call,
                         [SDNPHasChain, SDNPOutFlag, SDNPOptInFlag]>;
 
 def X86rep_stos: SDNode<"X86ISD::REP_STOS", SDTX86RepStr,
@@ -167,12 +173,20 @@ def i32imm_pcrel : Operand<i32> {
   let PrintMethod = "print_pcrel_imm";
 }
 
+// A version of ptr_rc which excludes SP, ESP, and RSP. This is used for
+// the index operand of an address, to conform to x86 encoding restrictions.
+def ptr_rc_nosp : PointerLikeRegClass<1>;
 
 // *mem - Operand definitions for the funky X86 addressing mode operands.
 //
+def X86MemAsmOperand : AsmOperandClass {
+  let Name = "Mem";
+  let SuperClass = ?;
+}
 class X86MemOperand<string printMethod> : Operand<iPTR> {
   let PrintMethod = printMethod;
-  let MIOperandInfo = (ops ptr_rc, i8imm, ptr_rc, i32imm, i8imm);
+  let MIOperandInfo = (ops ptr_rc, i8imm, ptr_rc_nosp, i32imm, i8imm);
+  let ParserMatchClass = X86MemAsmOperand;
 }
 
 def i8mem   : X86MemOperand<"printi8mem">;
@@ -191,12 +205,14 @@ def f256mem : X86MemOperand<"printf256mem">;
 // plain GR64, so that it doesn't potentially require a REX prefix.
 def i8mem_NOREX : Operand<i64> {
   let PrintMethod = "printi8mem";
-  let MIOperandInfo = (ops GR64_NOREX, i8imm, GR64_NOREX, i32imm, i8imm);
+  let MIOperandInfo = (ops GR64_NOREX, i8imm, GR64_NOREX_NOSP, i32imm, i8imm);
+  let ParserMatchClass = X86MemAsmOperand;
 }
 
 def lea32mem : Operand<i32> {
   let PrintMethod = "printlea32mem";
-  let MIOperandInfo = (ops GR32, i8imm, GR32, i32imm);
+  let MIOperandInfo = (ops GR32, i8imm, GR32_NOSP, i32imm);
+  let ParserMatchClass = X86MemAsmOperand;
 }
 
 def SSECC : Operand<i8> {
@@ -207,14 +223,27 @@ def piclabel: Operand<i32> {
   let PrintMethod = "printPICLabel";
 }
 
+def ImmSExt8AsmOperand : AsmOperandClass {
+  let Name = "ImmSExt8";
+  let SuperClass = ImmAsmOperand;
+}
+
 // A couple of more descriptive operand definitions.
 // 16-bits but only 8 bits are significant.
-def i16i8imm  : Operand<i16>;
+def i16i8imm  : Operand<i16> {
+  let ParserMatchClass = ImmSExt8AsmOperand;
+}
 // 32-bits but only 8 bits are significant.
-def i32i8imm  : Operand<i32>;
+def i32i8imm  : Operand<i32> {
+  let ParserMatchClass = ImmSExt8AsmOperand;
+}
 
 // Branch targets have OtherVT type and print as pc-relative values.
 def brtarget : Operand<OtherVT> {
+  let PrintMethod = "print_pcrel_imm";
+}
+
+def brtarget8 : Operand<OtherVT> {
   let PrintMethod = "print_pcrel_imm";
 }
 
@@ -225,7 +254,8 @@ def brtarget : Operand<OtherVT> {
 // Define X86 specific addressing mode.
 def addr      : ComplexPattern<iPTR, 5, "SelectAddr", [], []>;
 def lea32addr : ComplexPattern<i32, 4, "SelectLEAAddr",
-                               [add, sub, mul, shl, or, frameindex], []>;
+                               [add, sub, mul, X86mul_imm, shl, or, frameindex],
+                               []>;
 def tls32addr : ComplexPattern<i32, 4, "SelectTLSADDRAddr",
                                [tglobaltlsaddr], []>;
 
@@ -246,8 +276,14 @@ def FPStackf32   : Predicate<"!Subtarget->hasSSE1()">;
 def FPStackf64   : Predicate<"!Subtarget->hasSSE2()">;
 def In32BitMode  : Predicate<"!Subtarget->is64Bit()">;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">;
+def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
+def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
 def SmallCode    : Predicate<"TM.getCodeModel() == CodeModel::Small">;
-def NotSmallCode : Predicate<"TM.getCodeModel() != CodeModel::Small">;
+def KernelCode   : Predicate<"TM.getCodeModel() == CodeModel::Kernel">;
+def FarData      : Predicate<"TM.getCodeModel() != CodeModel::Small &&"
+                             "TM.getCodeModel() != CodeModel::Kernel">;
+def NearData     : Predicate<"TM.getCodeModel() == CodeModel::Small ||"
+                             "TM.getCodeModel() == CodeModel::Kernel">;
 def IsStatic     : Predicate<"TM.getRelocationModel() == Reloc::Static">;
 def OptForSpeed  : Predicate<"!OptForSize">;
 def FastBTMem    : Predicate<"!Subtarget->isBTMemSlow()">;
@@ -484,9 +520,28 @@ def ADJCALLSTACKUP32   : I<0, Pseudo, (outs), (ins i32imm:$amt1, i32imm:$amt2),
                           Requires<[In32BitMode]>;
 }
 
+// x86-64 va_start lowering magic.
+let usesCustomDAGSchedInserter = 1 in
+def VASTART_SAVE_XMM_REGS : I<0, Pseudo,
+                              (outs),
+                              (ins GR8:$al,
+                                   i64imm:$regsavefi, i64imm:$offset,
+                                   variable_ops),
+                              "#VASTART_SAVE_XMM_REGS $al, $regsavefi, $offset",
+                              [(X86vastart_save_xmm_regs GR8:$al,
+                                                         imm:$regsavefi,
+                                                         imm:$offset)]>;
+
 // Nop
-let neverHasSideEffects = 1 in
+let neverHasSideEffects = 1 in {
   def NOOP : I<0x90, RawFrm, (outs), (ins), "nop", []>;
+  def NOOPL : I<0x1f, MRM0m, (outs), (ins i32mem:$zero),
+                "nopl\t$zero", []>, TB;
+}
+
+// Trap
+def INT3 : I<0xcc, RawFrm, (outs), (ins), "int 3", []>;
+def INT : I<0xcd, RawFrm, (outs), (ins i8imm:$trap), "int\t$trap", []>;
 
 // PIC base
 let neverHasSideEffects = 1, isNotDuplicable = 1, Uses = [ESP] in
@@ -514,8 +569,10 @@ let isBranch = 1, isTerminator = 1 in
   class IBr<bits<8> opcode, dag ins, string asm, list<dag> pattern> :
         I<opcode, RawFrm, (outs), ins, asm, pattern>;
 
-let isBranch = 1, isBarrier = 1 in
+let isBranch = 1, isBarrier = 1 in {
   def JMP : IBr<0xE9, (ins brtarget:$dst), "jmp\t$dst", [(br bb:$dst)]>;
+  def JMP8 : IBr<0xEB, (ins brtarget8:$dst), "jmp\t$dst", []>;
+}
 
 // Indirect branches
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
@@ -527,6 +584,26 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
 
 // Conditional branches
 let Uses = [EFLAGS] in {
+// Short conditional jumps
+def JO8   : IBr<0x70, (ins brtarget8:$dst), "jo\t$dst", []>;
+def JNO8  : IBr<0x71, (ins brtarget8:$dst), "jno\t$dst", []>;
+def JB8   : IBr<0x72, (ins brtarget8:$dst), "jb\t$dst", []>;
+def JAE8  : IBr<0x73, (ins brtarget8:$dst), "jae\t$dst", []>;
+def JE8   : IBr<0x74, (ins brtarget8:$dst), "je\t$dst", []>;
+def JNE8  : IBr<0x75, (ins brtarget8:$dst), "jne\t$dst", []>;
+def JBE8  : IBr<0x76, (ins brtarget8:$dst), "jbe\t$dst", []>;
+def JA8   : IBr<0x77, (ins brtarget8:$dst), "ja\t$dst", []>;
+def JS8   : IBr<0x78, (ins brtarget8:$dst), "js\t$dst", []>;
+def JNS8  : IBr<0x79, (ins brtarget8:$dst), "jns\t$dst", []>;
+def JP8   : IBr<0x7A, (ins brtarget8:$dst), "jp\t$dst", []>;
+def JNP8  : IBr<0x7B, (ins brtarget8:$dst), "jnp\t$dst", []>;
+def JL8   : IBr<0x7C, (ins brtarget8:$dst), "jl\t$dst", []>;
+def JGE8  : IBr<0x7D, (ins brtarget8:$dst), "jge\t$dst", []>;
+def JLE8  : IBr<0x7E, (ins brtarget8:$dst), "jle\t$dst", []>;
+def JG8   : IBr<0x7F, (ins brtarget8:$dst), "jg\t$dst", []>;
+
+def JCXZ8 : IBr<0xE3, (ins brtarget8:$dst), "jcxz\t$dst", []>;
+
 def JE  : IBr<0x84, (ins brtarget:$dst), "je\t$dst",
               [(X86brcond bb:$dst, X86_COND_E, EFLAGS)]>, TB;
 def JNE : IBr<0x85, (ins brtarget:$dst), "jne\t$dst",
@@ -586,10 +663,6 @@ let isCall = 1 in
   }
 
 // Tail call stuff.
-
-def TAILCALL : I<0, Pseudo, (outs), (ins),
-                         "#TAILCALL",
-                         []>;
 
 let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in
 def TCRETURNdi : I<0, Pseudo, (outs), (ins i32imm:$dst, i32imm:$offset, variable_ops),
@@ -717,6 +790,17 @@ def RDTSC : I<0x31, RawFrm, (outs), (ins), "rdtsc", [(X86rdtsc)]>,
 let isBarrier = 1, hasCtrlDep = 1 in {
 def TRAP    : I<0x0B, RawFrm, (outs), (ins), "ud2", [(trap)]>, TB;
 }
+
+def SYSCALL  : I<0x05, RawFrm,
+                 (outs), (ins), "syscall", []>, TB;
+def SYSRET   : I<0x07, RawFrm,
+                 (outs), (ins), "sysret", []>, TB;
+def SYSENTER : I<0x34, RawFrm,
+                 (outs), (ins), "sysenter", []>, TB;
+def SYSEXIT  : I<0x35, RawFrm,
+                 (outs), (ins), "sysexit", []>, TB;
+
+
 
 //===----------------------------------------------------------------------===//
 //  Input/Output Instructions...
@@ -950,6 +1034,18 @@ let isTwoAddress = 1 in {
 
 // Conditional moves
 let Uses = [EFLAGS] in {
+
+// X86 doesn't have 8-bit conditional moves. Use a customDAGSchedInserter to
+// emit control flow. An alternative to this is to mark i8 SELECT as Promote,
+// however that requires promoting the operands, and can induce additional
+// i8 register pressure.
+let usesCustomDAGSchedInserter = 1, isTwoAddress = 0 in
+def CMOV_GR8 : I<0, Pseudo,
+                 (outs GR8:$dst), (ins GR8:$src1, GR8:$src2, i8imm:$cond),
+                 "#CMOV_GR8 PSEUDO!",
+                 [(set GR8:$dst, (X86cmov GR8:$src1, GR8:$src2,
+                                          imm:$cond, EFLAGS))]>;
+
 let isCommutable = 1 in {
 def CMOVB16rr : I<0x42, MRMSrcReg,       // if <u, GR16 = GR16
                   (outs GR16:$dst), (ins GR16:$src1, GR16:$src2),
@@ -2295,6 +2391,14 @@ let isTwoAddress = 0 in {
                   [(store (add (load addr:$dst), i32immSExt8:$src2),
                                addr:$dst),
                    (implicit EFLAGS)]>;
+
+  // addition to rAX
+  def ADD8i8 : Ii8<0x04, RawFrm, (outs), (ins i8imm:$src),
+                   "add\t{$src, %al|%al, $src}", []>;
+  def ADD16i16 : Ii16<0x05, RawFrm, (outs), (ins i16imm:$src),
+                      "add\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def ADD32i32 : Ii32<0x05, RawFrm, (outs), (ins i32imm:$src),
+                      "add\t{$src, %eax|%eax, $src}", []>;
 }
 
 let Uses = [EFLAGS] in {
@@ -3095,7 +3199,8 @@ let neverHasSideEffects = 1 in {
 
 // Alias instructions that map movr0 to xor.
 // FIXME: remove when we can teach regalloc that xor reg, reg is ok.
-let Defs = [EFLAGS], isReMaterializable = 1, isAsCheapAsAMove = 1 in {
+let Defs = [EFLAGS], isReMaterializable = 1, isAsCheapAsAMove = 1,
+    isCodeGenOnly = 1 in {
 def MOV8r0   : I<0x30, MRMInitReg, (outs GR8 :$dst), (ins),
                  "xor{b}\t$dst, $dst",
                  [(set GR8:$dst, 0)]>;
@@ -3127,12 +3232,12 @@ def TLS_addr32 : I<0, Pseudo, (outs), (ins lea32mem:$sym),
                   [(X86tlsaddr tls32addr:$sym)]>,
                   Requires<[In32BitMode]>;
 
-let AddedComplexity = 5 in
+let AddedComplexity = 5, isCodeGenOnly = 1 in
 def GS_MOV32rm : I<0x8B, MRMSrcMem, (outs GR32:$dst), (ins i32mem:$src),
                    "movl\t%gs:$src, $dst",
                    [(set GR32:$dst, (gsload addr:$src))]>, SegGS;
 
-let AddedComplexity = 5 in
+let AddedComplexity = 5, isCodeGenOnly = 1 in
 def FS_MOV32rm : I<0x8B, MRMSrcMem, (outs GR32:$dst), (ins i32mem:$src),
                    "movl\t%fs:$src, $dst",
                    [(set GR32:$dst, (fsload addr:$src))]>, SegFS;
@@ -3143,7 +3248,7 @@ def FS_MOV32rm : I<0x8B, MRMSrcMem, (outs GR32:$dst), (ins i32mem:$src),
 
 def DWARF_LOC   : I<0, Pseudo, (outs),
                     (ins i32imm:$line, i32imm:$col, i32imm:$file),
-                    ".loc\t${file:debug} ${line:debug} ${col:debug}",
+                    ".loc\t$file $line $col",
                     [(dwarf_loc (i32 imm:$line), (i32 imm:$col),
                       (i32 imm:$file))]>;
 
@@ -3151,7 +3256,7 @@ def DWARF_LOC   : I<0, Pseudo, (outs),
 // EH Pseudo Instructions
 //
 let isTerminator = 1, isReturn = 1, isBarrier = 1,
-    hasCtrlDep = 1 in {
+    hasCtrlDep = 1, isCodeGenOnly = 1 in {
 def EH_RETURN   : I<0xC3, RawFrm, (outs), (ins GR32:$addr),
                     "ret\t#eh_return, addr: $addr",
                     [(X86ehret GR32:$addr)]>;
@@ -3222,6 +3327,78 @@ def LXADD8  : I<0xC0, MRMSrcMem, (outs GR8:$dst), (ins i8mem:$ptr, GR8:$val),
                [(set GR8:$dst, (atomic_load_add_8 addr:$ptr, GR8:$val))]>,
                 TB, LOCK;
 }
+
+// Optimized codegen when the non-memory output is not used.
+// FIXME: Use normal add / sub instructions and add lock prefix dynamically.
+def LOCK_ADD8mr  : I<0x00, MRMDestMem, (outs), (ins i8mem:$dst, GR8:$src2),
+                    "lock\n\t"
+                    "add{b}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD16mr  : I<0x01, MRMDestMem, (outs), (ins i16mem:$dst, GR16:$src2),
+                    "lock\n\t"
+                    "add{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize, LOCK;
+def LOCK_ADD32mr  : I<0x01, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src2),
+                    "lock\n\t"
+                    "add{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD8mi   : Ii8<0x80, MRM0m, (outs), (ins i8mem :$dst, i8imm :$src2),
+                    "lock\n\t"
+                    "add{b}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD16mi  : Ii16<0x81, MRM0m, (outs), (ins i16mem:$dst, i16imm:$src2),
+                    "lock\n\t"
+                     "add{w}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD32mi  : Ii32<0x81, MRM0m, (outs), (ins i32mem:$dst, i32imm:$src2),
+                    "lock\n\t"
+                    "add{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD16mi8 : Ii8<0x83, MRM0m, (outs), (ins i16mem:$dst, i16i8imm :$src2),
+                    "lock\n\t"
+                    "add{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize, LOCK;
+def LOCK_ADD32mi8 : Ii8<0x83, MRM0m, (outs), (ins i32mem:$dst, i32i8imm :$src2),
+                    "lock\n\t"
+                    "add{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+
+def LOCK_INC8m  : I<0xFE, MRM0m, (outs), (ins i8mem :$dst),
+                    "lock\n\t"
+                    "inc{b}\t$dst", []>, LOCK;
+def LOCK_INC16m : I<0xFF, MRM0m, (outs), (ins i16mem:$dst),
+                    "lock\n\t"
+                    "inc{w}\t$dst", []>, OpSize, LOCK;
+def LOCK_INC32m : I<0xFF, MRM0m, (outs), (ins i32mem:$dst),
+                    "lock\n\t"
+                    "inc{l}\t$dst", []>, LOCK;
+
+def LOCK_SUB8mr   : I<0x28, MRMDestMem, (outs), (ins i8mem :$dst, GR8 :$src2),
+                    "lock\n\t"
+                    "sub{b}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB16mr  : I<0x29, MRMDestMem, (outs), (ins i16mem:$dst, GR16:$src2),
+                    "lock\n\t"
+                    "sub{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize, LOCK;
+def LOCK_SUB32mr  : I<0x29, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src2), 
+                    "lock\n\t"
+                    "sub{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB8mi   : Ii8<0x80, MRM5m, (outs), (ins i8mem :$dst, i8imm:$src2), 
+                    "lock\n\t"
+                    "sub{b}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB16mi  : Ii16<0x81, MRM5m, (outs), (ins i16mem:$dst, i16imm:$src2), 
+                    "lock\n\t"
+                    "sub{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize, LOCK;
+def LOCK_SUB32mi  : Ii32<0x81, MRM5m, (outs), (ins i32mem:$dst, i32imm:$src2), 
+                    "lock\n\t"
+                     "sub{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB16mi8 : Ii8<0x83, MRM5m, (outs), (ins i16mem:$dst, i16i8imm :$src2), 
+                    "lock\n\t"
+                     "sub{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize, LOCK;
+def LOCK_SUB32mi8 : Ii8<0x83, MRM5m, (outs), (ins i32mem:$dst, i32i8imm :$src2),
+                    "lock\n\t"
+                     "sub{l}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+
+def LOCK_DEC8m  : I<0xFE, MRM1m, (outs), (ins i8mem :$dst),
+                    "lock\n\t"
+                    "dec{b}\t$dst", []>, LOCK;
+def LOCK_DEC16m : I<0xFF, MRM1m, (outs), (ins i16mem:$dst),
+                    "lock\n\t"
+                    "dec{w}\t$dst", []>, OpSize, LOCK;
+def LOCK_DEC32m : I<0xFF, MRM1m, (outs), (ins i32mem:$dst),
+                    "lock\n\t"
+                    "dec{l}\t$dst", []>, LOCK;
 
 // Atomic exchange, and, or, xor
 let Constraints = "$val = $dst", Defs = [EFLAGS],
@@ -3345,14 +3522,6 @@ def : Pat<(store (i32 (X86Wrapper texternalsym:$src)), addr:$dst),
 
 // Calls
 // tailcall stuff
-def : Pat<(X86tailcall GR32:$dst),
-          (TAILCALL)>;
-
-def : Pat<(X86tailcall (i32 tglobaladdr:$dst)),
-          (TAILCALL)>;
-def : Pat<(X86tailcall (i32 texternalsym:$dst)),
-          (TAILCALL)>;
-
 def : Pat<(X86tcret GR32:$dst, imm:$off),
           (TCRETURNri GR32:$dst, imm:$off)>;
 
@@ -3362,6 +3531,7 @@ def : Pat<(X86tcret (i32 tglobaladdr:$dst), imm:$off),
 def : Pat<(X86tcret (i32 texternalsym:$dst), imm:$off),
           (TCRETURNdi texternalsym:$dst, imm:$off)>;
 
+// Normal calls, with various flavors of addresses.
 def : Pat<(X86call (i32 tglobaladdr:$dst)),
           (CALLpcrel32 tglobaladdr:$dst)>;
 def : Pat<(X86call (i32 texternalsym:$dst)),
@@ -3472,21 +3642,17 @@ def : Pat<(zextloadi32i1 addr:$src), (MOVZX32rm8 addr:$src)>;
 
 // extload bool -> extload byte
 def : Pat<(extloadi8i1 addr:$src),   (MOV8rm      addr:$src)>;
-def : Pat<(extloadi16i1 addr:$src),  (MOVZX16rm8  addr:$src)>,
-         Requires<[In32BitMode]>;
+def : Pat<(extloadi16i1 addr:$src),  (MOVZX16rm8  addr:$src)>;
 def : Pat<(extloadi32i1 addr:$src),  (MOVZX32rm8  addr:$src)>;
-def : Pat<(extloadi16i8 addr:$src),  (MOVZX16rm8  addr:$src)>,
-         Requires<[In32BitMode]>;
+def : Pat<(extloadi16i8 addr:$src),  (MOVZX16rm8  addr:$src)>;
 def : Pat<(extloadi32i8 addr:$src),  (MOVZX32rm8  addr:$src)>;
 def : Pat<(extloadi32i16 addr:$src), (MOVZX32rm16 addr:$src)>;
 
-// anyext
-def : Pat<(i16 (anyext GR8 :$src)), (MOVZX16rr8  GR8 :$src)>,
-         Requires<[In32BitMode]>;
-def : Pat<(i32 (anyext GR8 :$src)), (MOVZX32rr8  GR8 :$src)>,
-         Requires<[In32BitMode]>;
-def : Pat<(i32 (anyext GR16:$src)),
-          (INSERT_SUBREG (i32 (IMPLICIT_DEF)), GR16:$src, x86_subreg_16bit)>;
+// anyext. Define these to do an explicit zero-extend to
+// avoid partial-register updates.
+def : Pat<(i16 (anyext GR8 :$src)), (MOVZX16rr8  GR8 :$src)>;
+def : Pat<(i32 (anyext GR8 :$src)), (MOVZX32rr8  GR8 :$src)>;
+def : Pat<(i32 (anyext GR16:$src)), (MOVZX32rr16 GR16:$src)>;
 
 // (and (i32 load), 255) -> (zextload i8)
 def : Pat<(i32 (and (nvloadi32 addr:$src), (i32 255))),
@@ -3564,6 +3730,10 @@ def : Pat<(srl_su GR16:$src, (i8 8)),
             x86_subreg_16bit)>,
       Requires<[In32BitMode]>;
 def : Pat<(i32 (zext (srl_su GR16:$src, (i8 8)))),
+          (MOVZX32rr8 (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
+                                      x86_subreg_8bit_hi))>,
+      Requires<[In32BitMode]>;
+def : Pat<(i32 (anyext (srl_su GR16:$src, (i8 8)))),
           (MOVZX32rr8 (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
                                       x86_subreg_8bit_hi))>,
       Requires<[In32BitMode]>;

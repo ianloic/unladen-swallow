@@ -20,6 +20,7 @@
 #include "PPCHazardRecognizers.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionAnalysis.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
@@ -51,17 +52,12 @@ namespace {
         PPCLowering(*TM.getTargetLowering()),
         PPCSubTarget(*TM.getSubtargetImpl()) {}
     
-    virtual bool runOnFunction(Function &Fn) {
-      // Do not codegen any 'available_externally' functions at all, they have
-      // definitions outside the translation unit.
-      if (Fn.hasAvailableExternallyLinkage())
-        return false;
-
+    virtual bool runOnMachineFunction(MachineFunction &MF) {
       // Make sure we re-emit a set of the global base reg if necessary
       GlobalBaseReg = 0;
-      SelectionDAGISel::runOnFunction(Fn);
+      SelectionDAGISel::runOnMachineFunction(MF);
       
-      InsertVRSaveCode(Fn);
+      InsertVRSaveCode(MF);
       return true;
     }
    
@@ -147,30 +143,14 @@ namespace {
     }
       
     /// SelectInlineAsmMemoryOperand - Implement addressing mode selection for
-    /// inline asm expressions.
-    virtual bool SelectInlineAsmMemoryOperand(const SDValue &Op,
+    /// inline asm expressions.  It is always correct to compute the value into
+    /// a register.  The case of adding a (possibly relocatable) constant to a
+    /// register can be improved, but it is wrong to substitute Reg+Reg for
+    /// Reg in an asm, because the load or store opcode would have to change.
+   virtual bool SelectInlineAsmMemoryOperand(const SDValue &Op,
                                               char ConstraintCode,
                                               std::vector<SDValue> &OutOps) {
-      SDValue Op0, Op1;
-      switch (ConstraintCode) {
-      default: return true;
-      case 'm':   // memory
-        if (!SelectAddrIdx(Op, Op, Op0, Op1))
-          SelectAddrImm(Op, Op, Op0, Op1);
-        break;
-      case 'o':   // offsetable
-        if (!SelectAddrImm(Op, Op, Op0, Op1)) {
-          Op0 = Op;
-          Op1 = getSmallIPtrImm(0);
-        }
-        break;
-      case 'v':   // not offsetable
-        SelectAddrIdxOnly(Op, Op, Op0, Op1);
-        break;
-      }
-      
-      OutOps.push_back(Op0);
-      OutOps.push_back(Op1);
+      OutOps.push_back(Op);
       return false;
     }
     
@@ -181,7 +161,7 @@ namespace {
     /// SelectionDAGISel when it has created a SelectionDAG for us to codegen.
     virtual void InstructionSelect();
     
-    void InsertVRSaveCode(Function &Fn);
+    void InsertVRSaveCode(MachineFunction &MF);
 
     virtual const char *getPassName() const {
       return "PowerPC DAG->DAG Pattern Instruction Selection";
@@ -218,13 +198,12 @@ void PPCDAGToDAGISel::InstructionSelect() {
 /// InsertVRSaveCode - Once the entire function has been instruction selected,
 /// all virtual registers are created and all machine instructions are built,
 /// check to see if we need to save/restore VRSAVE.  If so, do it.
-void PPCDAGToDAGISel::InsertVRSaveCode(Function &F) {
+void PPCDAGToDAGISel::InsertVRSaveCode(MachineFunction &Fn) {
   // Check to see if this function uses vector registers, which means we have to
   // save and restore the VRSAVE register and update it with the regs we use.  
   //
   // In this case, there will be virtual registers of vector type type created
   // by the scheduler.  Detect them now.
-  MachineFunction &Fn = MachineFunction::get(&F);
   bool HasVectorVReg = false;
   for (unsigned i = TargetRegisterInfo::FirstVirtualRegister, 
        e = RegInfo->getLastVirtReg()+1; i != e; ++i)
@@ -287,7 +266,7 @@ SDNode *PPCDAGToDAGISel::getGlobalBaseReg() {
   if (!GlobalBaseReg) {
     const TargetInstrInfo &TII = *TM.getInstrInfo();
     // Insert the set of GlobalBaseReg into the first MBB of the function
-    MachineBasicBlock &FirstMBB = BB->getParent()->front();
+    MachineBasicBlock &FirstMBB = MF->front();
     MachineBasicBlock::iterator MBBI = FirstMBB.begin();
     DebugLoc dl = DebugLoc::getUnknownLoc();
 
@@ -602,8 +581,8 @@ static PPC::Predicate getPredicateForSetCC(ISD::CondCode CC) {
   case ISD::SETONE:
   case ISD::SETOLE:
   case ISD::SETOGE:
-    LLVM_UNREACHABLE("Should be lowered by legalize!");
-  default: LLVM_UNREACHABLE("Unknown condition!");
+    llvm_unreachable("Should be lowered by legalize!");
+  default: llvm_unreachable("Unknown condition!");
   case ISD::SETOEQ:
   case ISD::SETEQ:  return PPC::PRED_EQ;
   case ISD::SETUNE:
@@ -634,7 +613,7 @@ static unsigned getCRIdxForSetCC(ISD::CondCode CC, bool &Invert, int &Other) {
   Invert = false;
   Other = -1;
   switch (CC) {
-  default: LLVM_UNREACHABLE("Unknown condition!");
+  default: llvm_unreachable("Unknown condition!");
   case ISD::SETOLT:
   case ISD::SETLT:  return 0;                  // Bit #0 = SETOLT
   case ISD::SETOGT:
@@ -653,7 +632,7 @@ static unsigned getCRIdxForSetCC(ISD::CondCode CC, bool &Invert, int &Other) {
   case ISD::SETOGE: 
   case ISD::SETOLE: 
   case ISD::SETONE:
-    assert(0 && "Invalid branch code: should be expanded by legalize");
+    llvm_unreachable("Invalid branch code: should be expanded by legalize");
   // These are invalid for floating point.  Assume integer.
   case ISD::SETULT: return 0;
   case ISD::SETUGT: return 1;
@@ -925,7 +904,7 @@ SDNode *PPCDAGToDAGISel::Select(SDValue Op) {
   case ISD::LOAD: {
     // Handle preincrement loads.
     LoadSDNode *LD = cast<LoadSDNode>(Op);
-    MVT LoadedVT = LD->getMemoryVT();
+    EVT LoadedVT = LD->getMemoryVT();
     
     // Normal loads are handled by code generated from the .td file.
     if (LD->getAddressingMode() != ISD::PRE_INC)
@@ -940,8 +919,8 @@ SDNode *PPCDAGToDAGISel::Select(SDValue Op) {
       if (LD->getValueType(0) != MVT::i64) {
         // Handle PPC32 integer and normal FP loads.
         assert((!isSExt || LoadedVT == MVT::i16) && "Invalid sext update load");
-        switch (LoadedVT.getSimpleVT()) {
-          default: assert(0 && "Invalid PPC load type!");
+        switch (LoadedVT.getSimpleVT().SimpleTy) {
+          default: llvm_unreachable("Invalid PPC load type!");
           case MVT::f64: Opcode = PPC::LFDU; break;
           case MVT::f32: Opcode = PPC::LFSU; break;
           case MVT::i32: Opcode = PPC::LWZU; break;
@@ -952,8 +931,8 @@ SDNode *PPCDAGToDAGISel::Select(SDValue Op) {
       } else {
         assert(LD->getValueType(0) == MVT::i64 && "Unknown load result type!");
         assert((!isSExt || LoadedVT == MVT::i16) && "Invalid sext update load");
-        switch (LoadedVT.getSimpleVT()) {
-          default: assert(0 && "Invalid PPC load type!");
+        switch (LoadedVT.getSimpleVT().SimpleTy) {
+          default: llvm_unreachable("Invalid PPC load type!");
           case MVT::i64: Opcode = PPC::LDU; break;
           case MVT::i32: Opcode = PPC::LWZU8; break;
           case MVT::i16: Opcode = isSExt ? PPC::LHAU8 : PPC::LHZU8; break;
@@ -970,7 +949,7 @@ SDNode *PPCDAGToDAGISel::Select(SDValue Op) {
                                    PPCLowering.getPointerTy(),
                                    MVT::Other, Ops, 3);
     } else {
-      assert(0 && "R+R preindex loads not supported yet!");
+      llvm_unreachable("R+R preindex loads not supported yet!");
     }
   }
     
@@ -1114,47 +1093,6 @@ SDNode *PPCDAGToDAGISel::Select(SDValue Op) {
     Chain = SDValue(CurDAG->getTargetNode(Opc, dl, MVT::Other, Target,
                                             Chain), 0);
     return CurDAG->SelectNodeTo(N, PPC::BCTR, MVT::Other, Chain);
-  }
-  case ISD::DECLARE: {
-    SDValue Chain = N->getOperand(0);
-    SDValue N1 = N->getOperand(1);
-    SDValue N2 = N->getOperand(2);
-    FrameIndexSDNode *FINode = dyn_cast<FrameIndexSDNode>(N1);
-    
-    // FIXME: We need to handle this for VLAs.
-    if (!FINode) {
-      ReplaceUses(Op.getValue(0), Chain);
-      return NULL;
-    }
-    
-    if (N2.getOpcode() == ISD::ADD) {
-      if (N2.getOperand(0).getOpcode() == ISD::ADD &&
-          N2.getOperand(0).getOperand(0).getOpcode() == PPCISD::GlobalBaseReg &&
-          N2.getOperand(0).getOperand(1).getOpcode() == PPCISD::Hi &&
-          N2.getOperand(1).getOpcode() == PPCISD::Lo)
-        N2 = N2.getOperand(0).getOperand(1).getOperand(0);
-      else if (N2.getOperand(0).getOpcode() == ISD::ADD &&
-          N2.getOperand(0).getOperand(0).getOpcode() == PPCISD::GlobalBaseReg &&
-          N2.getOperand(0).getOperand(1).getOpcode() == PPCISD::Lo &&
-               N2.getOperand(1).getOpcode() == PPCISD::Hi)
-        N2 = N2.getOperand(0).getOperand(1).getOperand(0);
-      else if (N2.getOperand(0).getOpcode() == PPCISD::Hi &&
-               N2.getOperand(1).getOpcode() == PPCISD::Lo)
-        N2 = N2.getOperand(0).getOperand(0);
-    }
-    
-    // If we don't have a global address here, the debug info is mangled, just
-    // drop it.
-    if (!isa<GlobalAddressSDNode>(N2)) {
-      ReplaceUses(Op.getValue(0), Chain);
-      return NULL;
-    }
-    int FI = cast<FrameIndexSDNode>(N1)->getIndex();
-    GlobalValue *GV = cast<GlobalAddressSDNode>(N2)->getGlobal();
-    SDValue Tmp1 = CurDAG->getTargetFrameIndex(FI, TLI.getPointerTy());
-    SDValue Tmp2 = CurDAG->getTargetGlobalAddress(GV, TLI.getPointerTy());
-    return CurDAG->SelectNodeTo(N, TargetInstrInfo::DECLARE,
-                                MVT::Other, Tmp1, Tmp2, Chain);
   }
   }
   

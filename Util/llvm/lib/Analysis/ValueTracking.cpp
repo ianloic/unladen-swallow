@@ -18,23 +18,12 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/Operator.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/MathExtras.h"
 #include <cstring>
 using namespace llvm;
-
-/// getOpcode - If this is an Instruction or a ConstantExpr, return the
-/// opcode value. Otherwise return UserOp1.
-static unsigned getOpcode(const Value *V) {
-  if (const Instruction *I = dyn_cast<Instruction>(V))
-    return I->getOpcode();
-  if (const ConstantExpr *CE = dyn_cast<ConstantExpr>(V))
-    return CE->getOpcode();
-  // Use UserOp1 to mean there's no opcode.
-  return Instruction::UserOp1;
-}
-
 
 /// ComputeMaskedBits - Determine which of the bits specified in Mask are
 /// known to be either zero or one and return them in the KnownZero/KnownOne
@@ -48,7 +37,7 @@ static unsigned getOpcode(const Value *V) {
 /// this won't lose us code quality.
 void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
                              APInt &KnownZero, APInt &KnownOne,
-                             TargetData *TD, unsigned Depth) {
+                             const TargetData *TD, unsigned Depth) {
   const unsigned MaxDepth = 6;
   assert(V && "No Value?");
   assert(Depth <= MaxDepth && "Limit Search Depth");
@@ -92,8 +81,16 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
   // The address of an aligned GlobalValue has trailing zeros.
   if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) {
     unsigned Align = GV->getAlignment();
-    if (Align == 0 && TD && GV->getType()->getElementType()->isSized()) 
-      Align = TD->getPrefTypeAlignment(GV->getType()->getElementType());
+    if (Align == 0 && TD && GV->getType()->getElementType()->isSized()) {
+      const Type *ObjectType = GV->getType()->getElementType();
+      // If the object is defined in the current Module, we'll be giving
+      // it the preferred alignment. Otherwise, we have to assume that it
+      // may only have the minimum ABI alignment.
+      if (!GV->isDeclaration() && !GV->mayBeOverridden())
+        Align = TD->getPrefTypeAlignment(ObjectType);
+      else
+        Align = TD->getABITypeAlignment(ObjectType);
+    }
     if (Align > 0)
       KnownZero = Mask & APInt::getLowBitsSet(BitWidth,
                                               CountTrailingZeros_32(Align));
@@ -108,11 +105,11 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
   if (Depth == MaxDepth || Mask == 0)
     return;  // Limit search depth.
 
-  User *I = dyn_cast<User>(V);
+  Operator *I = dyn_cast<Operator>(V);
   if (!I) return;
 
   APInt KnownZero2(KnownZero), KnownOne2(KnownOne);
-  switch (getOpcode(I)) {
+  switch (I->getOpcode()) {
   default: break;
   case Instruction::And: {
     // If either the LHS or the RHS are Zero, the result is zero.
@@ -383,7 +380,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     // Determine which operand has more trailing zeros, and use that
     // many bits from the other operand.
     if (LHSKnownZeroOut > RHSKnownZeroOut) {
-      if (getOpcode(I) == Instruction::Add) {
+      if (I->getOpcode() == Instruction::Add) {
         APInt Mask = APInt::getLowBitsSet(BitWidth, LHSKnownZeroOut);
         KnownZero |= KnownZero2 & Mask;
         KnownOne  |= KnownOne2 & Mask;
@@ -463,10 +460,12 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
         Align = TD->getABITypeAlignment(AI->getType()->getElementType());
         Align =
           std::max(Align,
-                   (unsigned)TD->getABITypeAlignment(Type::DoubleTy));
+                   (unsigned)TD->getABITypeAlignment(
+                     Type::getDoubleTy(V->getContext())));
         Align =
           std::max(Align,
-                   (unsigned)TD->getABITypeAlignment(Type::Int64Ty));
+                   (unsigned)TD->getABITypeAlignment(
+                      Type::getInt64Ty(V->getContext())));
       }
     }
     
@@ -523,10 +522,10 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
       for (unsigned i = 0; i != 2; ++i) {
         Value *L = P->getIncomingValue(i);
         Value *R = P->getIncomingValue(!i);
-        User *LU = dyn_cast<User>(L);
+        Operator *LU = dyn_cast<Operator>(L);
         if (!LU)
           continue;
-        unsigned Opcode = getOpcode(LU);
+        unsigned Opcode = LU->getOpcode();
         // Check for operations that have the property that if
         // both their operands have low zero bits, the result
         // will have low zero bits.
@@ -610,7 +609,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
 /// this predicate to simplify operations downstream.  Mask is known to be zero
 /// for bits that V cannot have.
 bool llvm::MaskedValueIsZero(Value *V, const APInt &Mask,
-                             TargetData *TD, unsigned Depth) {
+                             const TargetData *TD, unsigned Depth) {
   APInt KnownZero(Mask.getBitWidth(), 0), KnownOne(Mask.getBitWidth(), 0);
   ComputeMaskedBits(V, Mask, KnownZero, KnownOne, TD, Depth);
   assert((KnownZero & KnownOne) == 0 && "Bits known to be one AND zero?"); 
@@ -627,7 +626,8 @@ bool llvm::MaskedValueIsZero(Value *V, const APInt &Mask,
 ///
 /// 'Op' must have a scalar integer type.
 ///
-unsigned llvm::ComputeNumSignBits(Value *V, TargetData *TD, unsigned Depth) {
+unsigned llvm::ComputeNumSignBits(Value *V, const TargetData *TD,
+                                  unsigned Depth) {
   assert((TD || V->getType()->isIntOrIntVector()) &&
          "ComputeNumSignBits requires a TargetData object to operate "
          "on non-integer values!");
@@ -643,8 +643,8 @@ unsigned llvm::ComputeNumSignBits(Value *V, TargetData *TD, unsigned Depth) {
   if (Depth == 6)
     return 1;  // Limit search depth.
   
-  User *U = dyn_cast<User>(V);
-  switch (getOpcode(V)) {
+  Operator *U = dyn_cast<Operator>(V);
+  switch (Operator::getOpcode(V)) {
   default: break;
   case Instruction::SExt:
     Tmp = TyBits-cast<IntegerType>(U->getOperand(0)->getType())->getBitWidth();
@@ -790,7 +790,7 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
   if (Depth == 6)
     return 1;  // Limit search depth.
 
-  const Instruction *I = dyn_cast<Instruction>(V);
+  const Operator *I = dyn_cast<Operator>(V);
   if (I == 0) return false;
   
   // (add x, 0.0) is guaranteed to return +0.0, not -0.0.
@@ -811,15 +811,11 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
   if (const CallInst *CI = dyn_cast<CallInst>(I))
     if (const Function *F = CI->getCalledFunction()) {
       if (F->isDeclaration()) {
-        switch (F->getNameLen()) {
-        case 3:  // abs(x) != -0.0
-          if (!strcmp(F->getNameStart(), "abs")) return true;
-          break;
-        case 4:  // abs[lf](x) != -0.0
-          if (!strcmp(F->getNameStart(), "absf")) return true;
-          if (!strcmp(F->getNameStart(), "absl")) return true;
-          break;
-        }
+        // abs(x) != -0.0
+        if (F->getName() == "abs") return true;
+        // abs[lf](x) != -0.0
+        if (F->getName() == "absf") return true;
+        if (F->getName() == "absl") return true;
       }
     }
   
@@ -832,11 +828,11 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
 // indices from Idxs that should be left out when inserting into the resulting
 // struct. To is the result struct built so far, new insertvalue instructions
 // build on that.
-Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
-                                 SmallVector<unsigned, 10> &Idxs,
-                                 unsigned IdxSkip,
-                                 LLVMContext *Context,
-                                 Instruction *InsertBefore) {
+static Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
+                                SmallVector<unsigned, 10> &Idxs,
+                                unsigned IdxSkip,
+                                LLVMContext &Context,
+                                Instruction *InsertBefore) {
   const llvm::StructType *STy = llvm::dyn_cast<llvm::StructType>(IndexedType);
   if (STy) {
     // Save the original To argument so we can modify it
@@ -892,14 +888,14 @@ Value *BuildSubAggregate(Value *From, Value* To, const Type *IndexedType,
 // insertvalue instruction somewhere).
 //
 // All inserted insertvalue instructions are inserted before InsertBefore
-Value *BuildSubAggregate(Value *From, const unsigned *idx_begin,
-                         const unsigned *idx_end, LLVMContext *Context,
-                         Instruction *InsertBefore) {
+static Value *BuildSubAggregate(Value *From, const unsigned *idx_begin,
+                                const unsigned *idx_end, LLVMContext &Context,
+                                Instruction *InsertBefore) {
   assert(InsertBefore && "Must have someplace to insert!");
   const Type *IndexedType = ExtractValueInst::getIndexedType(From->getType(),
                                                              idx_begin,
                                                              idx_end);
-  Value *To = Context->getUndef(IndexedType);
+  Value *To = UndefValue::get(IndexedType);
   SmallVector<unsigned, 10> Idxs(idx_begin, idx_end);
   unsigned IdxSkip = Idxs.size();
 
@@ -914,7 +910,7 @@ Value *BuildSubAggregate(Value *From, const unsigned *idx_begin,
 /// If InsertBefore is not null, this function will duplicate (modified)
 /// insertvalues when a part of a nested struct is extracted.
 Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
-                         const unsigned *idx_end, LLVMContext *Context,
+                         const unsigned *idx_end, LLVMContext &Context,
                          Instruction *InsertBefore) {
   // Nothing to index? Just return V then (this is useful at the end of our
   // recursion)
@@ -928,11 +924,11 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
   const CompositeType *PTy = cast<CompositeType>(V->getType());
 
   if (isa<UndefValue>(V))
-    return Context->getUndef(ExtractValueInst::getIndexedType(PTy,
+    return UndefValue::get(ExtractValueInst::getIndexedType(PTy,
                                                               idx_begin,
                                                               idx_end));
   else if (isa<ConstantAggregateZero>(V))
-    return Context->getNullValue(ExtractValueInst::getIndexedType(PTy, 
+    return Constant::getNullValue(ExtractValueInst::getIndexedType(PTy, 
                                                                   idx_begin,
                                                                   idx_end));
   else if (Constant *C = dyn_cast<Constant>(V)) {
@@ -1041,7 +1037,7 @@ bool llvm::GetConstantStringInfo(Value *V, std::string &Str, uint64_t Offset,
     // Make sure the index-ee is a pointer to array of i8.
     const PointerType *PT = cast<PointerType>(GEP->getOperand(0)->getType());
     const ArrayType *AT = dyn_cast<ArrayType>(PT->getElementType());
-    if (AT == 0 || AT->getElementType() != Type::Int8Ty)
+    if (AT == 0 || AT->getElementType() != Type::getInt8Ty(V->getContext()))
       return false;
     
     // Check to make sure that the first operand of the GEP is an integer and
@@ -1066,7 +1062,7 @@ bool llvm::GetConstantStringInfo(Value *V, std::string &Str, uint64_t Offset,
   // variable that is a constant and is initialized. The referenced constant
   // initializer is the array that we'll use for optimization.
   GlobalVariable* GV = dyn_cast<GlobalVariable>(V);
-  if (!GV || !GV->isConstant() || !GV->hasInitializer())
+  if (!GV || !GV->isConstant() || !GV->hasDefinitiveInitializer())
     return false;
   Constant *GlobalInit = GV->getInitializer();
   
@@ -1080,7 +1076,8 @@ bool llvm::GetConstantStringInfo(Value *V, std::string &Str, uint64_t Offset,
   
   // Must be a Constant Array
   ConstantArray *Array = dyn_cast<ConstantArray>(GlobalInit);
-  if (Array == 0 || Array->getType()->getElementType() != Type::Int8Ty)
+  if (Array == 0 ||
+      Array->getType()->getElementType() != Type::getInt8Ty(V->getContext()))
     return false;
   
   // Get the number of elements in the array

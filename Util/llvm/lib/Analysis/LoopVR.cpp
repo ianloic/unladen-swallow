@@ -16,6 +16,7 @@
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/Support/CFG.h"
@@ -41,7 +42,7 @@ ConstantRange LoopVR::getRange(const SCEV *S, const SCEV *T, ScalarEvolution &SE
 
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(S))
     return ConstantRange(C->getValue()->getValue());
-
+    
   ConstantRange FullSet(cast<IntegerType>(S->getType())->getBitWidth(), true);
 
   // {x,+,y,+,...z}. We detect overflow by checking the size of the set after
@@ -72,9 +73,9 @@ ConstantRange LoopVR::getRange(const SCEV *S, const SCEV *T, ScalarEvolution &SE
     ConstantRange X = getRange(Mul->getOperand(0), T, SE);
     if (X.isFullSet()) return FullSet;
 
-    const IntegerType *Ty = Context->getIntegerType(X.getBitWidth());
-    const IntegerType *ExTy = Context->getIntegerType(X.getBitWidth() *
-                                               Mul->getNumOperands());
+    const IntegerType *Ty = IntegerType::get(SE.getContext(), X.getBitWidth());
+    const IntegerType *ExTy = IntegerType::get(SE.getContext(),
+                                      X.getBitWidth() * Mul->getNumOperands());
     ConstantRange XExt = X.zeroExtend(ExTy->getBitWidth());
 
     for (unsigned i = 1, e = Mul->getNumOperands(); i != e; ++i) {
@@ -141,14 +142,13 @@ ConstantRange LoopVR::getRange(const SCEV *S, const SCEV *T, ScalarEvolution &SE
 
     if (R.getUnsignedMin() == 0) {
       // Just because it contains zero, doesn't mean it will also contain one.
-      // Use maximalIntersectWith to get the right behaviour.
       ConstantRange NotZero(APInt(L.getBitWidth(), 1),
                             APInt::getNullValue(L.getBitWidth()));
-      R = R.maximalIntersectWith(NotZero);
+      R = R.intersectWith(NotZero);
     }
  
-    // But, the maximal intersection might still include zero. If it does, then
-    // we know it also included one.
+    // But, the intersection might still include zero. If it does, then we know
+    // it also included one.
     if (R.contains(APInt::getNullValue(L.getBitWidth())))
       Upper = L.getUnsignedMax();
     else
@@ -220,10 +220,15 @@ ConstantRange LoopVR::getRange(const SCEV *S, const SCEV *T, ScalarEvolution &SE
   return FullSet;
 }
 
+void LoopVR::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequiredTransitive<LoopInfo>();
+  AU.addRequiredTransitive<ScalarEvolution>();
+  AU.setPreservesAll();
+}
+
 bool LoopVR::runOnFunction(Function &F) { Map.clear(); return false; }
 
-void LoopVR::print(std::ostream &os, const Module *) const {
-  raw_os_ostream OS(os);
+void LoopVR::print(raw_ostream &OS, const Module *) const {
   for (std::map<Value *, ConstantRange *>::const_iterator I = Map.begin(),
        E = Map.end(); I != E; ++I) {
     OS << *I->first << ": " << *I->second << '\n';
@@ -288,5 +293,5 @@ void LoopVR::narrow(Value *V, const ConstantRange &CR) {
   if (I == Map.end())
     Map[V] = new ConstantRange(CR);
   else
-    Map[V] = new ConstantRange(Map[V]->maximalIntersectWith(CR));
+    Map[V] = new ConstantRange(Map[V]->intersectWith(CR));
 }

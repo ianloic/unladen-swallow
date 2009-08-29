@@ -43,4 +43,34 @@ void nowarn(unsigned char* a, unsigned char* b)
 {
   unsigned char c = 1;
   *a |= c, *b += c;
+
+
+  // PR4633
+  int y, x;
+  ((void)0), y = x;
 }
+
+void t4(int a) {
+  int b = 0;
+
+  if (a)
+    b == 1; // expected-warning{{expression result unused}}
+  else
+    b == 2; // expected-warning{{expression result unused}}
+    
+  while (1)
+    b == 3; // expected-warning{{expression result unused}}
+
+  do
+    b == 4; // expected-warning{{expression result unused}}
+  while (1);
+  
+  for (;;)
+    b == 5; // expected-warning{{expression result unused}}
+    
+  for (b == 1;;) {} // expected-warning{{expression result unused}}
+  for (;b == 1;) {}
+  for (;;b == 1) {} // expected-warning{{expression result unused}}
+}
+
+

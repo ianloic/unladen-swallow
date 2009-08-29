@@ -16,17 +16,15 @@
 #include "llvm/Function.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
-#include "llvm/Instructions.h"
-#include "llvm/Intrinsics.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cstring>
 using namespace llvm;
 
 
 static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
   assert(F && "Illegal to upgrade a non-existent Function.");
-
-  LLVMContext* Context = F->getContext();
 
   // Get the Function's name.
   const std::string& Name = F->getName();
@@ -166,7 +164,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
          Name.compare(13,4,"psrl", 4) == 0) && Name[17] != 'i') {
       
       const llvm::Type *VT =
-                        Context->getVectorType(Context->getIntegerType(64), 1);
+                    VectorType::get(IntegerType::get(FTy->getContext(), 64), 1);
       
       // We don't have to do anything if the parameter already has
       // the correct type.
@@ -231,7 +229,7 @@ bool llvm::UpgradeIntrinsicFunction(Function *F, Function *&NewFn) {
 // order to seamlessly integrate with existing context.
 void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
   Function *F = CI->getCalledFunction();
-  LLVMContext* Context = F->getContext();
+  LLVMContext &C = CI->getContext();
   
   assert(F && "CallInst has no function associated with it.");
 
@@ -240,23 +238,23 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
     bool isMovSD = false, isShufPD = false;
     bool isUnpckhPD = false, isUnpcklPD = false;
     bool isPunpckhQPD = false, isPunpcklQPD = false;
-    if (strcmp(F->getNameStart(), "llvm.x86.sse2.loadh.pd") == 0)
+    if (F->getName() == "llvm.x86.sse2.loadh.pd")
       isLoadH = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.loadl.pd") == 0)
+    else if (F->getName() == "llvm.x86.sse2.loadl.pd")
       isLoadL = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.movl.dq") == 0)
+    else if (F->getName() == "llvm.x86.sse2.movl.dq")
       isMovL = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.movs.d") == 0)
+    else if (F->getName() == "llvm.x86.sse2.movs.d")
       isMovSD = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.shuf.pd") == 0)
+    else if (F->getName() == "llvm.x86.sse2.shuf.pd")
       isShufPD = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.unpckh.pd") == 0)
+    else if (F->getName() == "llvm.x86.sse2.unpckh.pd")
       isUnpckhPD = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.unpckl.pd") == 0)
+    else if (F->getName() == "llvm.x86.sse2.unpckl.pd")
       isUnpcklPD = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.punpckh.qdq") == 0)
+    else if (F->getName() ==  "llvm.x86.sse2.punpckh.qdq")
       isPunpckhQPD = true;
-    else if (strcmp(F->getNameStart(), "llvm.x86.sse2.punpckl.qdq") == 0)
+    else if (F->getName() ==  "llvm.x86.sse2.punpckl.qdq")
       isPunpcklQPD = true;
 
     if (isLoadH || isLoadL || isMovL || isMovSD || isShufPD ||
@@ -265,60 +263,60 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       Value *Op0 = CI->getOperand(1);
       ShuffleVectorInst *SI = NULL;
       if (isLoadH || isLoadL) {
-        Value *Op1 = Context->getUndef(Op0->getType());
+        Value *Op1 = UndefValue::get(Op0->getType());
         Value *Addr = new BitCastInst(CI->getOperand(2), 
-                                  Context->getPointerTypeUnqual(Type::DoubleTy),
+                                  PointerType::getUnqual(Type::getDoubleTy(C)),
                                       "upgraded.", CI);
         Value *Load = new LoadInst(Addr, "upgraded.", false, 8, CI);
-        Value *Idx = Context->getConstantInt(Type::Int32Ty, 0);
+        Value *Idx = ConstantInt::get(Type::getInt32Ty(C), 0);
         Op1 = InsertElementInst::Create(Op1, Load, Idx, "upgraded.", CI);
 
         if (isLoadH) {
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 0));
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 2));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 0));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 2));
         } else {
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 2));
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 1));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 2));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 1));
         }
-        Value *Mask = Context->getConstantVector(Idxs);
+        Value *Mask = ConstantVector::get(Idxs);
         SI = new ShuffleVectorInst(Op0, Op1, Mask, "upgraded.", CI);
       } else if (isMovL) {
-        Constant *Zero = Context->getConstantInt(Type::Int32Ty, 0);
+        Constant *Zero = ConstantInt::get(Type::getInt32Ty(C), 0);
         Idxs.push_back(Zero);
         Idxs.push_back(Zero);
         Idxs.push_back(Zero);
         Idxs.push_back(Zero);
-        Value *ZeroV = Context->getConstantVector(Idxs);
+        Value *ZeroV = ConstantVector::get(Idxs);
 
         Idxs.clear(); 
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 4));
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 5));
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 2));
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 3));
-        Value *Mask = Context->getConstantVector(Idxs);
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 4));
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 5));
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 2));
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 3));
+        Value *Mask = ConstantVector::get(Idxs);
         SI = new ShuffleVectorInst(ZeroV, Op0, Mask, "upgraded.", CI);
       } else if (isMovSD ||
                  isUnpckhPD || isUnpcklPD || isPunpckhQPD || isPunpcklQPD) {
         Value *Op1 = CI->getOperand(2);
         if (isMovSD) {
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 2));
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 1));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 2));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 1));
         } else if (isUnpckhPD || isPunpckhQPD) {
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 1));
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 3));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 1));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 3));
         } else {
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 0));
-          Idxs.push_back(Context->getConstantInt(Type::Int32Ty, 2));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 0));
+          Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), 2));
         }
-        Value *Mask = Context->getConstantVector(Idxs);
+        Value *Mask = ConstantVector::get(Idxs);
         SI = new ShuffleVectorInst(Op0, Op1, Mask, "upgraded.", CI);
       } else if (isShufPD) {
         Value *Op1 = CI->getOperand(2);
         unsigned MaskVal = cast<ConstantInt>(CI->getOperand(3))->getZExtValue();
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty, MaskVal & 1));
-        Idxs.push_back(Context->getConstantInt(Type::Int32Ty,
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C), MaskVal & 1));
+        Idxs.push_back(ConstantInt::get(Type::getInt32Ty(C),
                                                ((MaskVal >> 1) & 1)+2));
-        Value *Mask = Context->getConstantVector(Idxs);
+        Value *Mask = ConstantVector::get(Idxs);
         SI = new ShuffleVectorInst(Op0, Op1, Mask, "upgraded.", CI);
       }
 
@@ -333,13 +331,13 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       //  Clean up the old call now that it has been completely upgraded.
       CI->eraseFromParent();
     } else {
-      assert(0 && "Unknown function for CallInst upgrade.");
+      llvm_unreachable("Unknown function for CallInst upgrade.");
     }
     return;
   }
 
   switch (NewFn->getIntrinsicID()) {
-  default:  assert(0 && "Unknown function for CallInst upgrade.");
+  default:  llvm_unreachable("Unknown function for CallInst upgrade.");
   case Intrinsic::x86_mmx_psll_d:
   case Intrinsic::x86_mmx_psll_q:
   case Intrinsic::x86_mmx_psll_w:
@@ -432,6 +430,77 @@ void llvm::UpgradeCallsToIntrinsic(Function* F) {
       }
       // Remove old function, no longer used, from the module.
       F->eraseFromParent();
+    }
+  }
+}
+
+/// This function checks debug info intrinsics. If an intrinsic is invalid
+/// then this function simply removes the intrinsic. 
+void llvm::CheckDebugInfoIntrinsics(Module *M) {
+
+
+  if (Function *FuncStart = M->getFunction("llvm.dbg.func.start")) {
+    if (!FuncStart->use_empty()) {
+      DbgFuncStartInst *DFSI = cast<DbgFuncStartInst>(FuncStart->use_back());
+      if (!isa<MDNode>(DFSI->getOperand(1))) {
+        while (!FuncStart->use_empty()) {
+          CallInst *CI = cast<CallInst>(FuncStart->use_back());
+          CI->eraseFromParent();
+        }
+        FuncStart->eraseFromParent();
+      }
+    }
+  }
+
+  if (Function *StopPoint = M->getFunction("llvm.dbg.stoppoint")) {
+    if (!StopPoint->use_empty()) {
+      DbgStopPointInst *DSPI = cast<DbgStopPointInst>(StopPoint->use_back());
+      if (!isa<MDNode>(DSPI->getOperand(3))) {
+        while (!StopPoint->use_empty()) {
+          CallInst *CI = cast<CallInst>(StopPoint->use_back());
+          CI->eraseFromParent();
+        }
+        StopPoint->eraseFromParent();
+      }
+    }
+  }
+
+  if (Function *RegionStart = M->getFunction("llvm.dbg.region.start")) {
+    if (!RegionStart->use_empty()) {
+      DbgRegionStartInst *DRSI = cast<DbgRegionStartInst>(RegionStart->use_back());
+      if (!isa<MDNode>(DRSI->getOperand(1))) {
+        while (!RegionStart->use_empty()) {
+          CallInst *CI = cast<CallInst>(RegionStart->use_back());
+          CI->eraseFromParent();
+        }
+        RegionStart->eraseFromParent();
+      }
+    }
+  }
+
+  if (Function *RegionEnd = M->getFunction("llvm.dbg.region.end")) {
+    if (!RegionEnd->use_empty()) {
+      DbgRegionEndInst *DREI = cast<DbgRegionEndInst>(RegionEnd->use_back());
+      if (!isa<MDNode>(DREI->getOperand(1))) {
+        while (!RegionEnd->use_empty()) {
+          CallInst *CI = cast<CallInst>(RegionEnd->use_back());
+          CI->eraseFromParent();
+      }
+        RegionEnd->eraseFromParent();
+      }
+    }
+  }
+  
+  if (Function *Declare = M->getFunction("llvm.dbg.declare")) {
+    if (!Declare->use_empty()) {
+      DbgDeclareInst *DDI = cast<DbgDeclareInst>(Declare->use_back());
+      if (!isa<MDNode>(DDI->getOperand(2))) {
+        while (!Declare->use_empty()) {
+          CallInst *CI = cast<CallInst>(Declare->use_back());
+          CI->eraseFromParent();
+        }
+        Declare->eraseFromParent();
+      }
     }
   }
 }

@@ -28,6 +28,7 @@ namespace llvm {
   class Instruction;
   class Constant;
   class GlobalValue;
+  class MetadataBase;
   class MDString;
   class MDNode;
   struct ValID;
@@ -45,8 +46,8 @@ namespace llvm {
     std::map<unsigned, std::pair<PATypeHolder, LocTy> > ForwardRefTypeIDs;
     std::vector<PATypeHolder> NumberedTypes;
     /// MetadataCache - This map keeps track of parsed metadata constants.
-    std::map<unsigned, Constant *> MetadataCache;
-    std::map<unsigned, std::pair<Constant *, LocTy> > ForwardRefMDNodes;
+    std::map<unsigned, MetadataBase *> MetadataCache;
+    std::map<unsigned, std::pair<MetadataBase *, LocTy> > ForwardRefMDNodes;
 
     struct UpRefRecord {
       /// Loc - This is the location of the upref.
@@ -142,11 +143,15 @@ namespace llvm {
     bool ParseDefine();
 
     bool ParseGlobalType(bool &IsConstant);
+    bool ParseUnnamedGlobal();
     bool ParseNamedGlobal();
     bool ParseGlobal(const std::string &Name, LocTy Loc, unsigned Linkage,
                      bool HasLinkage, unsigned Visibility);
     bool ParseAlias(const std::string &Name, LocTy Loc, unsigned Visibility);
     bool ParseStandaloneMetadata();
+    bool ParseNamedMetadata();
+    bool ParseMDString(MetadataBase *&S);
+    bool ParseMDNode(MetadataBase *&N);
 
     // Type Parsing.
     bool ParseType(PATypeHolder &Result, bool AllowVoid = false);

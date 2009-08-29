@@ -29,12 +29,13 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
 #include "llvm/PassManager.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetMachOWriterInfo.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/OutputBuffer.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
@@ -60,7 +61,7 @@ MachOWriter::MachOWriter(raw_ostream &o, TargetMachine &tm)
   is64Bit = TM.getTargetData()->getPointerSizeInBits() == 64;
   isLittleEndian = TM.getTargetData()->isLittleEndian();
 
-  TAI = TM.getTargetAsmInfo();
+  MAI = TM.getMCAsmInfo();
 
   // Create the machine code emitter object for this target.
   MachOCE = new MachOCodeEmitter(*this, *getTextSection(true));
@@ -220,7 +221,7 @@ void MachOWriter::AddSymbolToSection(MachOSection *Sec, GlobalVariable *GV) {
   }
   // Globals without external linkage apparently do not go in the symbol table.
   if (!GV->hasLocalLinkage()) {
-    MachOSym Sym(GV, Mang->getValueName(GV), Sec->Index, TAI);
+    MachOSym Sym(GV, Mang->getMangledName(GV), Sec->Index, MAI);
     Sym.n_value = Sec->size();
     SymbolTable.push_back(Sym);
   }
@@ -254,8 +255,8 @@ void MachOWriter::EmitGlobal(GlobalVariable *GV) {
     // merged with other symbols.
     if (NoInit || GV->hasLinkOnceLinkage() || GV->hasWeakLinkage() ||
         GV->hasCommonLinkage()) {
-      MachOSym ExtOrCommonSym(GV, Mang->getValueName(GV),
-                              MachOSym::NO_SECT, TAI);
+      MachOSym ExtOrCommonSym(GV, Mang->getMangledName(GV),
+                              MachOSym::NO_SECT, MAI);
       // For undefined (N_UNDF) external (N_EXT) types, n_value is the size in
       // bytes of the symbol.
       ExtOrCommonSym.n_value = Size;
@@ -453,7 +454,7 @@ void MachOWriter::BufferSymbolAndStringTable() {
   for (std::vector<GlobalValue*>::iterator I = PendingGlobals.begin(),
          E = PendingGlobals.end(); I != E; ++I) {
     if (GVOffset[*I] == 0 && GVSection[*I] == 0) {
-      MachOSym UndfSym(*I, Mang->getValueName(*I), MachOSym::NO_SECT, TAI);
+      MachOSym UndfSym(*I, Mang->getMangledName(*I), MachOSym::NO_SECT, MAI);
       SymbolTable.push_back(UndfSym);
       GVOffset[*I] = -1;
     }
@@ -633,9 +634,8 @@ void MachOWriter::InitMem(const Constant *C, uintptr_t Offset,
       }
       case Instruction::Add:
       default:
-        cerr << "ConstantExpr not handled as global var init: " << *CE << "\n";
-        abort();
-        break;
+        errs() << "ConstantExpr not handled as global var init: " << *CE <<"\n";
+        llvm_unreachable(0);
       }
     } else if (PC->getType()->isSingleValueType()) {
       unsigned char *ptr = (unsigned char *)PA;
@@ -669,7 +669,7 @@ void MachOWriter::InitMem(const Constant *C, uintptr_t Offset,
           ptr[6] = val >> 48;
           ptr[7] = val >> 56;
         } else {
-          assert(0 && "Not implemented: bit widths > 64");
+          llvm_unreachable("Not implemented: bit widths > 64");
         }
         break;
       }
@@ -710,11 +710,13 @@ void MachOWriter::InitMem(const Constant *C, uintptr_t Offset,
                                                  ScatteredOffset));
           ScatteredOffset = 0;
         } else
-          assert(0 && "Unknown constant pointer type!");
+          llvm_unreachable("Unknown constant pointer type!");
         break;
       default:
-        cerr << "ERROR: Constant unimp for type: " << *PC->getType() << "\n";
-        abort();
+        std::string msg;
+        raw_string_ostream Msg(msg);
+        Msg << "ERROR: Constant unimp for type: " << *PC->getType();
+        llvm_report_error(Msg.str());
       }
     } else if (isa<ConstantAggregateZero>(PC)) {
       memset((void*)PA, 0, (size_t)TD->getTypeAllocSize(PC->getType()));
@@ -730,8 +732,8 @@ void MachOWriter::InitMem(const Constant *C, uintptr_t Offset,
         WorkList.push_back(CPair(CPS->getOperand(i),
                                  PA+SL->getElementOffset(i)));
     } else {
-      cerr << "Bad Type: " << *PC->getType() << "\n";
-      assert(0 && "Unknown constant type to initialize memory with!");
+      errs() << "Bad Type: " << *PC->getType() << "\n";
+      llvm_unreachable("Unknown constant type to initialize memory with!");
     }
   }
 }
@@ -741,13 +743,14 @@ void MachOWriter::InitMem(const Constant *C, uintptr_t Offset,
 //===----------------------------------------------------------------------===//
 
 MachOSym::MachOSym(const GlobalValue *gv, std::string name, uint8_t sect,
-                   const TargetAsmInfo *TAI) :
+                   const MCAsmInfo *MAI) :
   GV(gv), n_strx(0), n_type(sect == NO_SECT ? N_UNDF : N_SECT), n_sect(sect),
   n_desc(0), n_value(0) {
 
+  // FIXME: This is completely broken, it should use the mangler interface.
   switch (GV->getLinkage()) {
   default:
-    assert(0 && "Unexpected linkage type!");
+    llvm_unreachable("Unexpected linkage type!");
     break;
   case GlobalValue::WeakAnyLinkage:
   case GlobalValue::WeakODRLinkage:
@@ -756,17 +759,19 @@ MachOSym::MachOSym(const GlobalValue *gv, std::string name, uint8_t sect,
   case GlobalValue::CommonLinkage:
     assert(!isa<Function>(gv) && "Unexpected linkage type for Function!");
   case GlobalValue::ExternalLinkage:
-    GVName = TAI->getGlobalPrefix() + name;
+    GVName = MAI->getGlobalPrefix() + name;
     n_type |= GV->hasHiddenVisibility() ? N_PEXT : N_EXT;
     break;
   case GlobalValue::PrivateLinkage:
-    GVName = TAI->getPrivateGlobalPrefix() + name;
+    GVName = MAI->getPrivateGlobalPrefix() + name;
+    break;
+  case GlobalValue::LinkerPrivateLinkage:
+    GVName = MAI->getLinkerPrivateGlobalPrefix() + name;
     break;
   case GlobalValue::InternalLinkage:
-    GVName = TAI->getGlobalPrefix() + name;
+    GVName = MAI->getGlobalPrefix() + name;
     break;
   }
 }
 
 } // end namespace llvm
-

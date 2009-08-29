@@ -21,10 +21,13 @@
 #include "clang/AST/StmtIterator.h"
 #include "clang/AST/DeclGroup.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/iterator.h"
 #include "clang/AST/ASTContext.h"
 #include <string>
 using llvm::dyn_cast_or_null;
+
+namespace llvm {
+  class FoldingSetNodeID;
+}
 
 namespace clang {
   class ASTContext;
@@ -101,7 +104,11 @@ public:
 #include "clang/AST/StmtNodes.def"
 };
 private:
-  const StmtClass sClass;
+  /// \brief The statement class.
+  const unsigned sClass : 8;
+  
+  /// \brief The reference count for this statement.
+  unsigned RefCount : 24;
 
   // Make vanilla 'new' and 'delete' illegal for Stmts.
 protected:
@@ -147,19 +154,41 @@ protected:
   void DestroyChildren(ASTContext& Ctx);
   
   /// \brief Construct an empty statement.
-  explicit Stmt(StmtClass SC, EmptyShell) : sClass(SC) { 
+  explicit Stmt(StmtClass SC, EmptyShell) : sClass(SC), RefCount(1) { 
     if (Stmt::CollectingStats()) Stmt::addStmtClass(SC);
   }
 
+  /// \brief Virtual method that performs the actual destruction of
+  /// this statement.
+  ///
+  /// Subclasses should override this method (not Destroy()) to
+  /// provide class-specific destruction.
+  virtual void DoDestroy(ASTContext &Ctx);
+  
 public:
-  Stmt(StmtClass SC) : sClass(SC) { 
+  Stmt(StmtClass SC) : sClass(SC), RefCount(1) { 
     if (Stmt::CollectingStats()) Stmt::addStmtClass(SC);
   }
   virtual ~Stmt() {}
   
-  virtual void Destroy(ASTContext &Ctx);
+  /// \brief Destroy the current statement and its children.
+  void Destroy(ASTContext &Ctx) { 
+    assert(RefCount >= 1);
+    if (--RefCount == 0)
+      DoDestroy(Ctx); 
+  }
 
-  StmtClass getStmtClass() const { return sClass; }
+  /// \brief Increases the reference count for this statement.
+  ///
+  /// Invoke the Retain() operation when this statement or expression
+  /// is being shared by another owner.
+  Stmt *Retain() {
+    assert(RefCount >= 1);
+    ++RefCount;
+    return this;
+  }
+  
+  StmtClass getStmtClass() const { return (StmtClass)sClass; }
   const char *getStmtClassName() const;
   
   /// SourceLocation tokens are not useful in isolation - they are low level
@@ -227,6 +256,21 @@ public:
   const_child_iterator child_end() const {
     return const_child_iterator(const_cast<Stmt*>(this)->child_end());
   }
+
+  /// \brief Produce a unique representation of the given statement.
+  ///
+  /// \brief ID once the profiling operation is complete, will contain
+  /// the unique representation of the given statement.
+  ///
+  /// \brief Context the AST context in which the statement resides
+  ///
+  /// \brief Canonical whether the profile should be based on the canonical
+  /// representation of this statement (e.g., where non-type template
+  /// parameters are identified by index/level rather than their 
+  /// declaration pointers) or the exact representation of the statement as
+  /// written in the source.
+  void Profile(llvm::FoldingSetNodeID &ID, ASTContext &Context,
+               bool Canonical);
 };
 
 /// DeclStmt - Adaptor class for mixing declarations with statements and
@@ -237,6 +281,7 @@ public:
 class DeclStmt : public Stmt {
   DeclGroupRef DG;
   SourceLocation StartLoc, EndLoc;
+  
 public:
   DeclStmt(DeclGroupRef dg, SourceLocation startLoc, 
            SourceLocation endLoc) : Stmt(DeclStmtClass), DG(dg),
@@ -244,8 +289,6 @@ public:
   
   /// \brief Build an empty declaration statement.
   explicit DeclStmt(EmptyShell Empty) : Stmt(DeclStmtClass, Empty) { }
-
-  virtual void Destroy(ASTContext& Ctx);
 
   /// isSingleDecl - This method returns true if this DeclStmt refers
   /// to a single Decl.
@@ -296,8 +339,6 @@ public:
 
   /// \brief Build an empty null statement.
   explicit NullStmt(EmptyShell Empty) : Stmt(NullStmtClass, Empty) { }
-
-  NullStmt* Clone(ASTContext &C) const;
 
   SourceLocation getSemiLoc() const { return SemiLoc; }
   void setSemiLoc(SourceLocation L) { SemiLoc = L; }
@@ -617,6 +658,10 @@ class SwitchStmt : public Stmt {
   // This points to a linked list of case and default statements.
   SwitchCase *FirstCase;
   SourceLocation SwitchLoc;
+  
+protected:
+  virtual void DoDestroy(ASTContext &Ctx);
+  
 public:
   SwitchStmt(Expr *cond) : Stmt(SwitchStmtClass), FirstCase(0) {
       SubExprs[COND] = reinterpret_cast<Stmt*>(cond);
@@ -635,6 +680,11 @@ public:
   Stmt *getBody() { return SubExprs[BODY]; }
   void setBody(Stmt *S) { SubExprs[BODY] = S; }
   SwitchCase *getSwitchCaseList() { return FirstCase; }
+  
+  /// \brief Set the case list for this switch statement.
+  ///
+  /// The caller is responsible for incrementing the retain counts on
+  /// all of the SwitchCase statements in this list.
   void setSwitchCaseList(SwitchCase *SC) { FirstCase = SC; }
 
   SourceLocation getSwitchLoc() const { return SwitchLoc; }
@@ -646,6 +696,7 @@ public:
   }  
   void addSwitchCase(SwitchCase *SC) {
     assert(!SC->getNextSwitchCase() && "case/default already added to a switch");
+    SC->Retain();
     SC->setNextSwitchCase(FirstCase);
     FirstCase = SC;
   }
@@ -903,8 +954,6 @@ public:
     return SourceRange(ContinueLoc); 
   }
 
-  ContinueStmt* Clone(ASTContext &C) const;
-
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == ContinueStmtClass; 
   }
@@ -929,8 +978,6 @@ public:
   void setBreakLoc(SourceLocation L) { BreakLoc = L; }
 
   virtual SourceRange getSourceRange() const { return SourceRange(BreakLoc); }
-
-  BreakStmt* Clone(ASTContext &C) const;
 
   static bool classof(const Stmt *T) { 
     return T->getStmtClass() == BreakStmtClass; 

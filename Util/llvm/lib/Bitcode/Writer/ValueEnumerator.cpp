@@ -14,7 +14,7 @@
 #include "ValueEnumerator.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
-#include "llvm/MDNode.h"
+#include "llvm/Metadata.h"
 #include "llvm/Module.h"
 #include "llvm/TypeSymbolTable.h"
 #include "llvm/ValueSymbolTable.h"
@@ -114,6 +114,18 @@ ValueEnumerator::ValueEnumerator(const Module *M) {
     TypeMap[Types[i].first] = i+1;
 }
 
+unsigned ValueEnumerator::getValueID(const Value *V) const {
+  if (isa<MetadataBase>(V)) {
+    ValueMapType::const_iterator I = MDValueMap.find(V);
+    assert(I != MDValueMap.end() && "Value not in slotcalculator!");
+    return I->second-1;
+  }
+  
+  ValueMapType::const_iterator I = ValueMap.find(V);
+  assert(I != ValueMap.end() && "Value not in slotcalculator!");
+  return I->second-1;
+}
+  
 // Optimize constant ordering.
 namespace {
   struct CstSortPredicate {
@@ -165,9 +177,52 @@ void ValueEnumerator::EnumerateValueSymbolTable(const ValueSymbolTable &VST) {
     EnumerateValue(VI->getValue());
 }
 
+void ValueEnumerator::EnumerateMetadata(const MetadataBase *MD) {
+  // Check to see if it's already in!
+  unsigned &MDValueID = MDValueMap[MD];
+  if (MDValueID) {
+    // Increment use count.
+    MDValues[MDValueID-1].second++;
+    return;
+  }
+
+  // Enumerate the type of this value.
+  EnumerateType(MD->getType());
+
+  if (const MDNode *N = dyn_cast<MDNode>(MD)) {
+    MDValues.push_back(std::make_pair(MD, 1U));
+    MDValueMap[MD] = MDValues.size();
+    MDValueID = MDValues.size();
+    for (MDNode::const_elem_iterator I = N->elem_begin(), E = N->elem_end();
+         I != E; ++I) {
+      if (*I)
+        EnumerateValue(*I);
+      else
+        EnumerateType(Type::getVoidTy(MD->getContext()));
+    }
+    return;
+  } else if (const NamedMDNode *N = dyn_cast<NamedMDNode>(MD)) {
+    for(NamedMDNode::const_elem_iterator I = N->elem_begin(),
+          E = N->elem_end(); I != E; ++I) {
+      MetadataBase *M = *I;
+      EnumerateValue(M);
+    }
+    MDValues.push_back(std::make_pair(MD, 1U));
+    MDValueMap[MD] = Values.size();
+    return;
+  }
+
+  // Add the value.
+  MDValues.push_back(std::make_pair(MD, 1U));
+  MDValueID = MDValues.size();
+}
+
 void ValueEnumerator::EnumerateValue(const Value *V) {
-  assert(V->getType() != Type::VoidTy && "Can't insert void values!");
-  
+  assert(V->getType() != Type::getVoidTy(V->getContext()) &&
+         "Can't insert void values!");
+  if (const MetadataBase *MB = dyn_cast<MetadataBase>(V))
+    return EnumerateMetadata(MB);
+
   // Check to see if it's already in!
   unsigned &ValueID = ValueMap[V];
   if (ValueID) {
@@ -204,21 +259,9 @@ void ValueEnumerator::EnumerateValue(const Value *V) {
       Values.push_back(std::make_pair(V, 1U));
       ValueMap[V] = Values.size();
       return;
-    } else if (const MDNode *N = dyn_cast<MDNode>(C)) {
-      for (MDNode::const_elem_iterator I = N->elem_begin(), E = N->elem_end();
-           I != E; ++I) {
-        if (*I)
-          EnumerateValue(*I);
-        else
-          EnumerateType(Type::VoidTy);
-      }
-
-      Values.push_back(std::make_pair(V, 1U));
-      ValueMap[V] = Values.size();
-      return;
     }
   }
-  
+
   // Add the value.
   Values.push_back(std::make_pair(V, 1U));
   ValueID = Values.size();
@@ -259,10 +302,14 @@ void ValueEnumerator::EnumerateOperandType(const Value *V) {
       EnumerateOperandType(C->getOperand(i));
 
     if (const MDNode *N = dyn_cast<MDNode>(V)) {
-      for (unsigned i = 0, e = N->getNumElements(); i != e; ++i)
-        EnumerateOperandType(N->getElement(i));
+      for (unsigned i = 0, e = N->getNumElements(); i != e; ++i) {
+        Value *Elem = N->getElement(i);
+        if (Elem)
+          EnumerateOperandType(Elem);
+      }
     }
-  }
+  } else if (isa<MDString>(V) || isa<MDNode>(V))
+    EnumerateValue(V);
 }
 
 void ValueEnumerator::EnumerateAttributes(const AttrListPtr &PAL) {
@@ -312,7 +359,7 @@ void ValueEnumerator::incorporateFunction(const Function &F) {
   // Add all of the instructions.
   for (Function::const_iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
     for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I!=E; ++I) {
-      if (I->getType() != Type::VoidTy)
+      if (I->getType() != Type::getVoidTy(F.getContext()))
         EnumerateValue(I);
     }
   }

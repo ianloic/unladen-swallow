@@ -18,6 +18,7 @@
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/DeclGroup.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/TypeLoc.h"
 using namespace clang;
 
 
@@ -46,6 +47,7 @@ namespace {
     void VisitRecordDecl(RecordDecl *RD);
     void VisitValueDecl(ValueDecl *VD);
     void VisitEnumConstantDecl(EnumConstantDecl *ECD);
+    void VisitDeclaratorDecl(DeclaratorDecl *DD);
     void VisitFunctionDecl(FunctionDecl *FD);
     void VisitFieldDecl(FieldDecl *FD);
     void VisitVarDecl(VarDecl *VD);
@@ -112,10 +114,14 @@ void PCHDeclReader::VisitTypedefDecl(TypedefDecl *TD) {
 
 void PCHDeclReader::VisitTagDecl(TagDecl *TD) {
   VisitTypeDecl(TD);
+  TD->setPreviousDeclaration(
+                        cast_or_null<TagDecl>(Reader.GetDecl(Record[Idx++])));
   TD->setTagKind((TagDecl::TagKind)Record[Idx++]);
   TD->setDefinition(Record[Idx++]);
   TD->setTypedefForAnonDecl(
                     cast_or_null<TypedefDecl>(Reader.GetDecl(Record[Idx++])));
+  TD->setRBraceLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  TD->setTagKeywordLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
 }
 
 void PCHDeclReader::VisitEnumDecl(EnumDecl *ED) {
@@ -143,8 +149,76 @@ void PCHDeclReader::VisitEnumConstantDecl(EnumConstantDecl *ECD) {
   ECD->setInitVal(Reader.ReadAPSInt(Record, Idx));
 }
 
+namespace {
+
+class TypeLocReader : public TypeLocVisitor<TypeLocReader> {
+  PCHReader &Reader;
+  const PCHReader::RecordData &Record;
+  unsigned &Idx;
+
+public:
+  TypeLocReader(PCHReader &Reader, const PCHReader::RecordData &Record,
+                unsigned &Idx)
+    : Reader(Reader), Record(Record), Idx(Idx) { }
+
+#define ABSTRACT_TYPELOC(CLASS)
+#define TYPELOC(CLASS, PARENT, TYPE) \
+    void Visit##CLASS(CLASS TyLoc); 
+#include "clang/AST/TypeLocNodes.def"
+  
+  void VisitTypeLoc(TypeLoc TyLoc) {
+    assert(0 && "A type loc wrapper was not handled!");
+  }
+};
+
+}
+
+void TypeLocReader::VisitDefaultTypeSpecLoc(DefaultTypeSpecLoc TyLoc) {
+  TyLoc.setStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitTypedefLoc(TypedefLoc TyLoc) {
+  TyLoc.setNameLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitPointerLoc(PointerLoc TyLoc) {
+  TyLoc.setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitBlockPointerLoc(BlockPointerLoc TyLoc) {
+  TyLoc.setCaretLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitMemberPointerLoc(MemberPointerLoc TyLoc) {
+  TyLoc.setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitReferenceLoc(ReferenceLoc TyLoc) {
+  TyLoc.setAmpLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitFunctionLoc(FunctionLoc TyLoc) {
+  TyLoc.setLParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  TyLoc.setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  for (unsigned i = 0, e = TyLoc.getNumArgs(); i != e; ++i)
+    TyLoc.setArg(i, cast<ParmVarDecl>(Reader.GetDecl(Record[Idx++])));
+}
+void TypeLocReader::VisitArrayLoc(ArrayLoc TyLoc) {
+  TyLoc.setLBracketLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  TyLoc.setRBracketLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  if (Record[Idx++])
+    TyLoc.setSizeExpr(Reader.ReadDeclExpr());
+}
+
+void PCHDeclReader::VisitDeclaratorDecl(DeclaratorDecl *DD) {
+  VisitValueDecl(DD);
+  QualType InfoTy = Reader.GetType(Record[Idx++]);
+  if (InfoTy.isNull())
+    return;
+
+  DeclaratorInfo *DInfo = Reader.getContext()->CreateDeclaratorInfo(InfoTy);
+  TypeLocReader TLR(Reader, Record, Idx);
+  for (TypeLoc TL = DInfo->getTypeLoc(); !TL.isNull(); TL = TL.getNextTypeLoc())
+    TLR.Visit(TL);
+  DD->setDeclaratorInfo(DInfo);
+}
+
 void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
-  VisitValueDecl(FD);
+  VisitDeclaratorDecl(FD);
   if (Record[Idx++])
     FD->setLazyBody(Reader.getDeclsCursor().GetCurrentBitNo());
   FD->setPreviousDeclaration(
@@ -157,7 +231,6 @@ void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   FD->setHasInheritedPrototype(Record[Idx++]);
   FD->setHasWrittenPrototype(Record[Idx++]);
   FD->setDeleted(Record[Idx++]);
-  FD->setTypeSpecStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   FD->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
   // FIXME: C++ TemplateOrInstantiation
   unsigned NumParams = Record[Idx++];
@@ -220,7 +293,7 @@ void PCHDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
   ID->setImplicitInterfaceDecl(Record[Idx++]);
   ID->setClassLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   ID->setSuperClassLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  ID->setAtEndLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  ID->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
 }
 
 void PCHDeclReader::VisitObjCIvarDecl(ObjCIvarDecl *IVD) {
@@ -302,10 +375,9 @@ void PCHDeclReader::VisitObjCPropertyDecl(ObjCPropertyDecl *D) {
 }
 
 void PCHDeclReader::VisitObjCImplDecl(ObjCImplDecl *D) {
-  VisitNamedDecl(D);
+  VisitObjCContainerDecl(D);
   D->setClassInterface(
               cast_or_null<ObjCInterfaceDecl>(Reader.GetDecl(Record[Idx++])));
-  D->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
 }
 
 void PCHDeclReader::VisitObjCCategoryImplDecl(ObjCCategoryImplDecl *D) {
@@ -330,21 +402,20 @@ void PCHDeclReader::VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *D) {
 }
 
 void PCHDeclReader::VisitFieldDecl(FieldDecl *FD) {
-  VisitValueDecl(FD);
+  VisitDeclaratorDecl(FD);
   FD->setMutable(Record[Idx++]);
   if (Record[Idx++])
     FD->setBitWidth(Reader.ReadDeclExpr());
 }
 
 void PCHDeclReader::VisitVarDecl(VarDecl *VD) {
-  VisitValueDecl(VD);
+  VisitDeclaratorDecl(VD);
   VD->setStorageClass((VarDecl::StorageClass)Record[Idx++]);
   VD->setThreadSpecified(Record[Idx++]);
   VD->setCXXDirectInitializer(Record[Idx++]);
   VD->setDeclaredInCondition(Record[Idx++]);
   VD->setPreviousDeclaration(
                          cast_or_null<VarDecl>(Reader.GetDecl(Record[Idx++])));
-  VD->setTypeSpecStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   if (Record[Idx++])
     VD->setInit(*Reader.getContext(), Reader.ReadDeclExpr());
 }
@@ -356,7 +427,6 @@ void PCHDeclReader::VisitImplicitParamDecl(ImplicitParamDecl *PD) {
 void PCHDeclReader::VisitParmVarDecl(ParmVarDecl *PD) {
   VisitVarDecl(PD);
   PD->setObjCDeclQualifier((Decl::ObjCDeclQualifier)Record[Idx++]);
-  // FIXME: default argument (C++ only)
 }
 
 void PCHDeclReader::VisitOriginalParmVarDecl(OriginalParmVarDecl *PD) {
@@ -477,10 +547,11 @@ Attr *PCHReader::ReadAttributes() {
       New = ::new (*Context) IBOutletAttr();
       break;
 
+    SIMPLE_ATTR(Malloc);
+    SIMPLE_ATTR(NoDebug);
+    SIMPLE_ATTR(NoInline);
     SIMPLE_ATTR(NoReturn);
     SIMPLE_ATTR(NoThrow);
-    SIMPLE_ATTR(Nodebug);
-    SIMPLE_ATTR(Noinline);
     
     case Attr::NonNull: {
       unsigned Size = Record[Idx++];
@@ -504,7 +575,8 @@ Attr *PCHReader::ReadAttributes() {
     SIMPLE_ATTR(CFReturnsRetained);
     SIMPLE_ATTR(NSReturnsRetained);
     SIMPLE_ATTR(Overloadable);
-    UNSIGNED_ATTR(Packed);
+    SIMPLE_ATTR(Packed);
+    UNSIGNED_ATTR(PragmaPack);
     SIMPLE_ATTR(Pure);
     UNSIGNED_ATTR(Regparm);
     STRING_ATTR(Section);
@@ -606,11 +678,11 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
     D = TypedefDecl::Create(*Context, 0, SourceLocation(), 0, QualType());
     break;
   case pch::DECL_ENUM:
-    D = EnumDecl::Create(*Context, 0, SourceLocation(), 0, 0);
+    D = EnumDecl::Create(*Context, 0, SourceLocation(), 0, SourceLocation(), 0);
     break;
   case pch::DECL_RECORD:
     D = RecordDecl::Create(*Context, TagDecl::TK_struct, 0, SourceLocation(),
-                           0, 0);
+                           0, SourceLocation(), 0);
     break;
   case pch::DECL_ENUM_CONSTANT:
     D = EnumConstantDecl::Create(*Context, 0, SourceLocation(), 0, QualType(),
@@ -618,7 +690,7 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
     break;
   case pch::DECL_FUNCTION:
     D = FunctionDecl::Create(*Context, 0, SourceLocation(), DeclarationName(), 
-                             QualType());
+                             QualType(), 0);
     break;
   case pch::DECL_OBJC_METHOD:
     D = ObjCMethodDecl::Create(*Context, SourceLocation(), SourceLocation(), 
@@ -628,7 +700,7 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
     D = ObjCInterfaceDecl::Create(*Context, 0, SourceLocation(), 0);
     break;
   case pch::DECL_OBJC_IVAR:
-    D = ObjCIvarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(),
+    D = ObjCIvarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0,
                              ObjCIvarDecl::None);
     break;
   case pch::DECL_OBJC_PROTOCOL:
@@ -665,12 +737,12 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
                                      ObjCPropertyImplDecl::Dynamic, 0);
     break;
   case pch::DECL_FIELD:
-    D = FieldDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0, 
+    D = FieldDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0, 0, 
                           false);
     break;
   case pch::DECL_VAR:
-    D = VarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(),
-                        VarDecl::None, SourceLocation());
+    D = VarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0,
+                        VarDecl::None);
     break;
 
   case pch::DECL_IMPLICIT_PARAM:
@@ -678,12 +750,12 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
     break;
 
   case pch::DECL_PARM_VAR:
-    D = ParmVarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 
+    D = ParmVarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0, 
                             VarDecl::None, 0);
     break;
   case pch::DECL_ORIGINAL_PARM_VAR:
     D = OriginalParmVarDecl::Create(*Context, 0, SourceLocation(), 0,
-                                    QualType(), QualType(), VarDecl::None, 0);
+                                    QualType(),0, QualType(), VarDecl::None, 0);
     break;
   case pch::DECL_FILE_SCOPE_ASM:
     D = FileScopeAsmDecl::Create(*Context, 0, SourceLocation(), 0);

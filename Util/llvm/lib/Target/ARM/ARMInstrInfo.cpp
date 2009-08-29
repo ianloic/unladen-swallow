@@ -21,16 +21,15 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/CommandLine.h"
 using namespace llvm;
 
 ARMInstrInfo::ARMInstrInfo(const ARMSubtarget &STI)
-  : ARMBaseInstrInfo(STI), RI(*this, STI) {
+  : RI(*this, STI), Subtarget(STI) {
 }
 
-unsigned ARMInstrInfo::
-getUnindexedOpcode(unsigned Opc) const {
+unsigned ARMInstrInfo::getUnindexedOpcode(unsigned Opc) const {
   switch (Opc) {
   default: break;
   case ARM::LDR_PRE:
@@ -62,41 +61,7 @@ getUnindexedOpcode(unsigned Opc) const {
   return 0;
 }
 
-unsigned ARMInstrInfo::
-getOpcode(ARMII::Op Op) const {
-  switch (Op) {
-  case ARMII::ADDri: return ARM::ADDri;
-  case ARMII::ADDrs: return ARM::ADDrs;
-  case ARMII::ADDrr: return ARM::ADDrr;
-  case ARMII::B: return ARM::B;
-  case ARMII::Bcc: return ARM::Bcc;
-  case ARMII::BR_JTr: return ARM::BR_JTr;
-  case ARMII::BR_JTm: return ARM::BR_JTm;
-  case ARMII::BR_JTadd: return ARM::BR_JTadd;
-  case ARMII::BX_RET: return ARM::BX_RET;
-  case ARMII::FCPYS: return ARM::FCPYS;
-  case ARMII::FCPYD: return ARM::FCPYD;
-  case ARMII::FLDD: return ARM::FLDD;
-  case ARMII::FLDS: return ARM::FLDS;
-  case ARMII::FSTD: return ARM::FSTD;
-  case ARMII::FSTS: return ARM::FSTS;
-  case ARMII::LDR: return ARM::LDR;
-  case ARMII::MOVr: return ARM::MOVr;
-  case ARMII::STR: return ARM::STR;
-  case ARMII::SUBri: return ARM::SUBri;
-  case ARMII::SUBrs: return ARM::SUBrs;
-  case ARMII::SUBrr: return ARM::SUBrr;
-  case ARMII::VMOVD: return ARM::VMOVD;
-  case ARMII::VMOVQ: return ARM::VMOVQ;
-  default:
-    break;
-  }
-
-  return 0;
-}
-
-bool ARMInstrInfo::
-BlockHasNoFallThrough(const MachineBasicBlock &MBB) const {
+bool ARMInstrInfo::BlockHasNoFallThrough(const MachineBasicBlock &MBB) const {
   if (MBB.empty()) return false;
 
   switch (MBB.back().getOpcode()) {
@@ -117,12 +82,12 @@ BlockHasNoFallThrough(const MachineBasicBlock &MBB) const {
 void ARMInstrInfo::
 reMaterialize(MachineBasicBlock &MBB,
               MachineBasicBlock::iterator I,
-              unsigned DestReg,
+              unsigned DestReg, unsigned SubIdx,
               const MachineInstr *Orig) const {
   DebugLoc dl = Orig->getDebugLoc();
   if (Orig->getOpcode() == ARM::MOVi2pieces) {
     RI.emitLoadConstPool(MBB, I, dl,
-                         DestReg,
+                         DestReg, SubIdx,
                          Orig->getOperand(1).getImm(),
                          (ARMCC::CondCodes)Orig->getOperand(2).getImm(),
                          Orig->getOperand(3).getReg());
@@ -133,3 +98,4 @@ reMaterialize(MachineBasicBlock &MBB,
   MI->getOperand(0).setReg(DestReg);
   MBB.insert(I, MI);
 }
+

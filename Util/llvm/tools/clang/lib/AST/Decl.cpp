@@ -16,6 +16,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/PrettyPrinter.h"
@@ -34,6 +35,10 @@ void Attr::Destroy(ASTContext &C) {
   C.Deallocate((void*)this);
 }
 
+/// \brief Return the TypeLoc wrapper for the type source info.
+TypeLoc DeclaratorInfo::getTypeLoc() const {
+  return TypeLoc::Create(Ty, (void*)(this + 1));
+}
 
 //===----------------------------------------------------------------------===//
 // Decl Allocation/Deallocation Method Implementations
@@ -79,9 +84,9 @@ const char *VarDecl::getStorageClassSpecifierString(StorageClass SC) {
 
 ParmVarDecl *ParmVarDecl::Create(ASTContext &C, DeclContext *DC,
                                  SourceLocation L, IdentifierInfo *Id,
-                                 QualType T, StorageClass S,
-                                 Expr *DefArg) {
-  return new (C) ParmVarDecl(ParmVar, DC, L, Id, T, S, DefArg);
+                                 QualType T, DeclaratorInfo *DInfo,
+                                 StorageClass S, Expr *DefArg) {
+  return new (C) ParmVarDecl(ParmVar, DC, L, Id, T, DInfo, S, DefArg);
 }
 
 QualType ParmVarDecl::getOriginalType() const {
@@ -125,20 +130,19 @@ bool VarDecl::isExternC(ASTContext &Context) const {
 OriginalParmVarDecl *OriginalParmVarDecl::Create(
                                  ASTContext &C, DeclContext *DC,
                                  SourceLocation L, IdentifierInfo *Id,
-                                 QualType T, QualType OT, StorageClass S,
-                                 Expr *DefArg) {
-  return new (C) OriginalParmVarDecl(DC, L, Id, T, OT, S, DefArg);
+                                 QualType T, DeclaratorInfo *DInfo,
+                                 QualType OT, StorageClass S, Expr *DefArg) {
+  return new (C) OriginalParmVarDecl(DC, L, Id, T, DInfo, OT, S, DefArg);
 }
 
 FunctionDecl *FunctionDecl::Create(ASTContext &C, DeclContext *DC,
                                    SourceLocation L, 
-                                   DeclarationName N, QualType T, 
+                                   DeclarationName N, QualType T,
+                                   DeclaratorInfo *DInfo,
                                    StorageClass S, bool isInline, 
-                                   bool hasWrittenPrototype,
-                                   SourceLocation TypeSpecStartLoc) {
+                                   bool hasWrittenPrototype) {
   FunctionDecl *New 
-    = new (C) FunctionDecl(Function, DC, L, N, T, S, isInline, 
-                           TypeSpecStartLoc);
+    = new (C) FunctionDecl(Function, DC, L, N, T, DInfo, S, isInline);
   New->HasWrittenPrototype = hasWrittenPrototype;
   return New;
 }
@@ -148,16 +152,16 @@ BlockDecl *BlockDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L) {
 }
 
 FieldDecl *FieldDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L,
-                             IdentifierInfo *Id, QualType T, Expr *BW,
-                             bool Mutable) {
-  return new (C) FieldDecl(Decl::Field, DC, L, Id, T, BW, Mutable);
+                             IdentifierInfo *Id, QualType T,
+                             DeclaratorInfo *DInfo, Expr *BW, bool Mutable) {
+  return new (C) FieldDecl(Decl::Field, DC, L, Id, T, DInfo, BW, Mutable);
 }
 
 bool FieldDecl::isAnonymousStructOrUnion() const {
   if (!isImplicit() || getDeclName())
     return false;
   
-  if (const RecordType *Record = getType()->getAsRecordType())
+  if (const RecordType *Record = getType()->getAs<RecordType>())
     return Record->getDecl()->isAnonymousStructOrUnion();
 
   return false;
@@ -182,9 +186,9 @@ TypedefDecl *TypedefDecl::Create(ASTContext &C, DeclContext *DC,
 }
 
 EnumDecl *EnumDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L,
-                           IdentifierInfo *Id,
+                           IdentifierInfo *Id, SourceLocation TKL,
                            EnumDecl *PrevDecl) {
-  EnumDecl *Enum = new (C) EnumDecl(DC, L, Id);
+  EnumDecl *Enum = new (C) EnumDecl(DC, L, Id, PrevDecl, TKL);
   C.getTypeDeclType(Enum, PrevDecl);
   return Enum;
 }
@@ -310,13 +314,23 @@ NamedDecl *NamedDecl::getUnderlyingDecl() {
 }
 
 //===----------------------------------------------------------------------===//
+// DeclaratorDecl Implementation
+//===----------------------------------------------------------------------===//
+
+SourceLocation DeclaratorDecl::getTypeSpecStartLoc() const {
+  if (DeclInfo)
+    return DeclInfo->getTypeLoc().getTypeSpecRange().getBegin();
+  return SourceLocation();
+}
+
+//===----------------------------------------------------------------------===//
 // VarDecl Implementation
 //===----------------------------------------------------------------------===//
 
 VarDecl *VarDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L,
-                         IdentifierInfo *Id, QualType T, StorageClass S, 
-                         SourceLocation TypeSpecStartLoc) {
-  return new (C) VarDecl(Var, DC, L, Id, T, S, TypeSpecStartLoc);
+                         IdentifierInfo *Id, QualType T, DeclaratorInfo *DInfo,
+                         StorageClass S) {
+  return new (C) VarDecl(Var, DC, L, Id, T, DInfo, S);
 }
 
 void VarDecl::Destroy(ASTContext& C) {
@@ -341,6 +355,10 @@ SourceRange VarDecl::getSourceRange() const {
   return SourceRange(getLocation(), getLocation());
 }
 
+VarDecl *VarDecl::getInstantiatedFromStaticDataMember() {
+  return getASTContext().getInstantiatedFromStaticDataMember(this);
+}
+
 bool VarDecl::isTentativeDefinition(ASTContext &Context) const {
   if (!isFileVarDecl() || Context.getLangOptions().CPlusPlus)
     return false;
@@ -351,19 +369,19 @@ bool VarDecl::isTentativeDefinition(ASTContext &Context) const {
 }
 
 const Expr *VarDecl::getDefinition(const VarDecl *&Def) const {
-  Def = this;
-  while (Def && !Def->getInit())
-    Def = Def->getPreviousDeclaration();
+  redecl_iterator I = redecls_begin(), E = redecls_end();
+  while (I != E && !I->getInit())
+    ++I;
 
-  return Def? Def->getInit() : 0;
+  if (I != E) {
+    Def = *I;
+    return I->getInit();
+  }
+  return 0;
 }
 
-Decl *VarDecl::getPrimaryDecl() const {
-  const VarDecl *Prim = this;
-  while (Prim->getPreviousDeclaration())
-    Prim = Prim->getPreviousDeclaration();
-
-  return const_cast<VarDecl *>(Prim);
+VarDecl *VarDecl::getCanonicalDecl() {
+  return getFirstDeclaration();
 }
 
 //===----------------------------------------------------------------------===//
@@ -384,10 +402,10 @@ void FunctionDecl::Destroy(ASTContext& C) {
 
 
 Stmt *FunctionDecl::getBody(const FunctionDecl *&Definition) const {
-  for (const FunctionDecl *FD = this; FD != 0; FD = FD->PreviousDeclaration) {
-    if (FD->Body) {
-      Definition = FD;
-      return FD->Body.get(getASTContext().getExternalSource());
+  for (redecl_iterator I = redecls_begin(), E = redecls_end(); I != E; ++I) {
+    if (I->Body) {
+      Definition = *I;
+      return I->Body.get(getASTContext().getExternalSource());
     }
   }
 
@@ -395,9 +413,9 @@ Stmt *FunctionDecl::getBody(const FunctionDecl *&Definition) const {
 }
 
 Stmt *FunctionDecl::getBodyIfAvailable() const {
-  for (const FunctionDecl *FD = this; FD != 0; FD = FD->PreviousDeclaration) {
-    if (FD->Body && !FD->Body.isOffset()) {
-      return FD->Body.get(0);
+  for (redecl_iterator I = redecls_begin(), E = redecls_end(); I != E; ++I) {
+    if (I->Body && !I->Body.isOffset()) {
+      return I->Body.get(0);
     }
   }
 
@@ -410,8 +428,9 @@ void FunctionDecl::setBody(Stmt *B) {
     EndRangeLoc = B->getLocEnd();
 }
 
-bool FunctionDecl::isMain() const {
-  return getDeclContext()->getLookupContext()->isTranslationUnit() &&
+bool FunctionDecl::isMain(ASTContext &Context) const {
+  return !Context.getLangOptions().Freestanding &&
+    getDeclContext()->getLookupContext()->isTranslationUnit() &&
     getIdentifier() && getIdentifier()->isStr("main");
 }
 
@@ -545,11 +564,9 @@ bool FunctionDecl::hasActiveGNUInlineAttribute(ASTContext &Context) const {
   if (!isInline() || !hasAttr<GNUInlineAttr>())
     return false;
 
-  for (const FunctionDecl *FD = getPreviousDeclaration(); FD; 
-       FD = FD->getPreviousDeclaration()) {
-    if (FD->isInline() && !FD->hasAttr<GNUInlineAttr>())
+  for (redecl_iterator I = redecls_begin(), E = redecls_end(); I != E; ++I)
+    if (I->isInline() && !I->hasAttr<GNUInlineAttr>())
       return false;
-  }
 
   return true;
 }
@@ -558,8 +575,8 @@ bool FunctionDecl::isExternGNUInline(ASTContext &Context) const {
   if (!hasActiveGNUInlineAttribute(Context))
     return false;
 
-  for (const FunctionDecl *FD = this; FD; FD = FD->getPreviousDeclaration())
-    if (FD->getStorageClass() == Extern && FD->hasAttr<GNUInlineAttr>())
+  for (redecl_iterator I = redecls_begin(), E = redecls_end(); I != E; ++I)
+    if (I->getStorageClass() == Extern && I->hasAttr<GNUInlineAttr>())
       return true;
 
   return false;
@@ -567,8 +584,8 @@ bool FunctionDecl::isExternGNUInline(ASTContext &Context) const {
 
 void 
 FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
-  PreviousDeclaration = PrevDecl;
-  
+  redeclarable_base::setPreviousDeclaration(PrevDecl);
+
   if (FunctionTemplateDecl *FunTmpl = getDescribedFunctionTemplate()) {
     FunctionTemplateDecl *PrevFunTmpl 
       = PrevDecl? PrevDecl->getDescribedFunctionTemplate() : 0;
@@ -577,12 +594,8 @@ FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
   }
 }
 
-Decl *FunctionDecl::getPrimaryDecl() const {
-  const FunctionDecl *Prim = this;
-  while (Prim->getPreviousDeclaration())
-    Prim = Prim->getPreviousDeclaration();
-
-  return const_cast<FunctionDecl *>(Prim);
+FunctionDecl *FunctionDecl::getCanonicalDecl() {
+  return getFirstDeclaration();
 }
 
 /// getOverloadedOperator - Which C++ overloaded operator this
@@ -658,26 +671,41 @@ void FunctionDecl::setExplicitSpecialization(bool ES) {
 // TagDecl Implementation
 //===----------------------------------------------------------------------===//
 
+SourceRange TagDecl::getSourceRange() const {
+  SourceLocation E = RBraceLoc.isValid() ? RBraceLoc : getLocation();
+  return SourceRange(TagKeywordLoc, E);
+}
+
+TagDecl* TagDecl::getCanonicalDecl() {
+  return getFirstDeclaration();
+}
+
 void TagDecl::startDefinition() {
-  TagType *TagT = const_cast<TagType *>(TypeForDecl->getAsTagType());
-  TagT->decl.setPointer(this);
-  TagT->getAsTagType()->decl.setInt(1);
+  if (TagType *TagT = const_cast<TagType *>(TypeForDecl->getAs<TagType>())) {
+    TagT->decl.setPointer(this);
+    TagT->decl.setInt(1);
+  }
 }
 
 void TagDecl::completeDefinition() {
-  assert((!TypeForDecl || 
-          TypeForDecl->getAsTagType()->decl.getPointer() == this) &&
-         "Attempt to redefine a tag definition?");
   IsDefinition = true;
-  TagType *TagT = const_cast<TagType *>(TypeForDecl->getAsTagType());
-  TagT->decl.setPointer(this);
-  TagT->decl.setInt(0);
+  if (TagType *TagT = const_cast<TagType *>(TypeForDecl->getAs<TagType>())) {
+    assert(TagT->decl.getPointer() == this &&
+           "Attempt to redefine a tag definition?");
+    TagT->decl.setInt(0);
+  }
 }
 
 TagDecl* TagDecl::getDefinition(ASTContext& C) const {
-  QualType T = C.getTypeDeclType(const_cast<TagDecl*>(this));
-  TagDecl* D = cast<TagDecl>(T->getAsTagType()->getDecl());
-  return D->isDefinition() ? D : 0;
+  if (isDefinition())
+    return const_cast<TagDecl *>(this);
+  
+  for (redecl_iterator R = redecls_begin(), REnd = redecls_end(); 
+       R != REnd; ++R)
+    if (R->isDefinition())
+      return *R;
+  
+  return 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -685,8 +713,9 @@ TagDecl* TagDecl::getDefinition(ASTContext& C) const {
 //===----------------------------------------------------------------------===//
 
 RecordDecl::RecordDecl(Kind DK, TagKind TK, DeclContext *DC, SourceLocation L,
-                       IdentifierInfo *Id)
-  : TagDecl(DK, TK, DC, L, Id) {
+                       IdentifierInfo *Id, RecordDecl *PrevDecl,
+                       SourceLocation TKL)
+  : TagDecl(DK, TK, DC, L, Id, PrevDecl, TKL) {
   HasFlexibleArrayMember = false;
   AnonymousStructOrUnion = false;
   HasObjectMember = false;
@@ -695,9 +724,9 @@ RecordDecl::RecordDecl(Kind DK, TagKind TK, DeclContext *DC, SourceLocation L,
 
 RecordDecl *RecordDecl::Create(ASTContext &C, TagKind TK, DeclContext *DC,
                                SourceLocation L, IdentifierInfo *Id,
-                               RecordDecl* PrevDecl) {
+                               SourceLocation TKL, RecordDecl* PrevDecl) {
   
-  RecordDecl* R = new (C) RecordDecl(Record, TK, DC, L, Id);
+  RecordDecl* R = new (C) RecordDecl(Record, TK, DC, L, Id, PrevDecl, TKL);
   C.getTypeDeclType(R, PrevDecl);
   return R;
 }

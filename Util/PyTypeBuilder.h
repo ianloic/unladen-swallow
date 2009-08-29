@@ -31,7 +31,7 @@ class PyTypeBuilder : public llvm::TypeBuilder<T, false> {};
 // from a byte offset inside a type to a GEP index referring to the
 // field of the type.  This should be called like
 //   _PyTypeBuilder_GetFieldIndexFromOffset(
-//       PyTypeBuilder<PySomethingType>::get(),
+//       PyTypeBuilder<PySomethingType>::get(context),
 //       offsetof(PySomethingType, field));
 // It will only work if PySomethingType is a POD type.
 PyAPI_FUNC(unsigned int)
@@ -52,11 +52,11 @@ namespace llvm {
 // set or order of fields in a type.
 #define DEFINE_FIELD(TYPE, FIELD_NAME) \
     static Value *FIELD_NAME(IRBuilder<> &builder, Value *ptr) { \
-        assert(ptr->getType() == PyTypeBuilder<TYPE*>::get() && \
-               "*ptr must be of type " #TYPE); \
+        assert(ptr->getType() == PyTypeBuilder<TYPE*>::get(ptr->getContext()) \
+               && "*ptr must be of type " #TYPE); \
         static const unsigned int index = \
             _PyTypeBuilder_GetFieldIndexFromOffset( \
-                PyTypeBuilder<TYPE>::get(), \
+                PyTypeBuilder<TYPE>::get(ptr->getContext()), \
                 offsetof(TYPE, FIELD_NAME)); \
         return builder.CreateStructGEP(ptr, index, #FIELD_NAME); \
     }
@@ -75,7 +75,7 @@ namespace llvm {
 
 template<> class TypeBuilder<PyObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyObject struct.
@@ -88,7 +88,7 @@ public:
 
 template<> class TypeBuilder<PyStringObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyStringObject struct.
@@ -105,7 +105,7 @@ public:
 
 template<> class TypeBuilder<PyUnicodeObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyUnicodeObject struct.
@@ -122,7 +122,7 @@ public:
 
 template<> class TypeBuilder<PyIntObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyIntObject struct.
@@ -136,7 +136,7 @@ public:
 
 template<> class TypeBuilder<PyLongObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyLongObject struct.
@@ -150,7 +150,7 @@ public:
 
 template<> class TypeBuilder<PyFloatObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyFloatObject struct.
@@ -164,7 +164,7 @@ public:
 
 template<> class TypeBuilder<PyComplexObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyFloatObject struct.
@@ -178,7 +178,7 @@ public:
 
 template<> class TypeBuilder<PyTupleObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTupleObject struct.
@@ -193,8 +193,8 @@ public:
 
 template<> class TypeBuilder<PyListObject, false> {
 public:
-    static const StructType *get() {
-        static const StructType *const result = Create();
+    static const StructType *get(llvm::LLVMContext &context) {
+        static const StructType *const result = Create(context);
         return result;
     }
 
@@ -203,25 +203,26 @@ public:
     DEFINE_FIELD(PyListObject, allocated)
 
 private:
-    static const StructType *Create() {
+    static const StructType *Create(llvm::LLVMContext &context) {
         // Keep this in sync with listobject.h.
         return StructType::get(
+            context,
             // From PyObject_HEAD. In C these are directly nested
             // fields, but the layout should be the same when it's
             // represented as a nested struct.
-            PyTypeBuilder<PyObject>::get(),
+            PyTypeBuilder<PyObject>::get(context),
             // From PyObject_VAR_HEAD
-            PyTypeBuilder<ssize_t>::get(),
+            PyTypeBuilder<ssize_t>::get(context),
             // From PyListObject
-            PyTypeBuilder<PyObject**>::get(),  // ob_item
-            PyTypeBuilder<Py_ssize_t>::get(),  // allocated
+            PyTypeBuilder<PyObject**>::get(context),  // ob_item
+            PyTypeBuilder<Py_ssize_t>::get(context),  // allocated
             NULL);
     }
 };
 
 template<> class TypeBuilder<PyTypeObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTypeObject struct.
@@ -288,7 +289,7 @@ public:
 
 template<> class TypeBuilder<PyNumberMethods, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTypeObject struct.
@@ -301,7 +302,7 @@ public:
 
 template<> class TypeBuilder<PySequenceMethods, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTypeObject struct.
@@ -314,7 +315,7 @@ public:
 
 template<> class TypeBuilder<PyMappingMethods, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTypeObject struct.
@@ -327,7 +328,7 @@ public:
 
 template<> class TypeBuilder<PyBufferProcs, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTypeObject struct.
@@ -340,7 +341,7 @@ public:
 
 template<> class TypeBuilder<PyCodeObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyCodeObject struct.
@@ -376,7 +377,7 @@ public:
 
 template<> class TypeBuilder<PyTryBlock, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyTryBlock struct.
@@ -390,7 +391,7 @@ public:
 
 template<> class TypeBuilder<PyFrameObject, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyFrameObject struct.
@@ -424,7 +425,7 @@ public:
 
 template<> class TypeBuilder<PyExcInfo, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyExcInfo struct
@@ -443,7 +444,7 @@ public:
 
 template<> class TypeBuilder<PyThreadState, false> {
 public:
-    static const StructType *get() {
+    static const StructType *get(llvm::LLVMContext &context) {
         static const StructType *const result =
             cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
                                  // Clang's name for the PyThreadState struct.

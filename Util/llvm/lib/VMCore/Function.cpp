@@ -36,7 +36,7 @@ template class SymbolTableListTraits<BasicBlock, Function>;
 // Argument Implementation
 //===----------------------------------------------------------------------===//
 
-Argument::Argument(const Type *Ty, const std::string &Name, Function *Par)
+Argument::Argument(const Type *Ty, const Twine &Name, Function *Par)
   : Value(Ty, Value::ArgumentVal) {
   Parent = 0;
 
@@ -115,10 +115,8 @@ void Argument::removeAttr(Attributes attr) {
 // Helper Methods in Function
 //===----------------------------------------------------------------------===//
 
-LLVMContext *Function::getContext() const {
-  const Module* M = getParent();
-  if (M) return &M->getContext();
-  return 0;
+LLVMContext &Function::getContext() const {
+  return getType()->getContext();
 }
 
 const FunctionType *Function::getFunctionType() const {
@@ -146,7 +144,7 @@ void Function::eraseFromParent() {
 //===----------------------------------------------------------------------===//
 
 Function::Function(const FunctionType *Ty, LinkageTypes Linkage,
-                   const std::string &name, Module *ParentModule)
+                   const Twine &name, Module *ParentModule)
   : GlobalValue(PointerType::getUnqual(Ty), 
                 Value::FunctionVal, 0, 0, Linkage, name) {
   assert(FunctionType::isValidReturnType(getReturnType()) &&
@@ -184,7 +182,7 @@ void Function::BuildLazyArguments() const {
   // Create the arguments vector, all arguments start out unnamed.
   const FunctionType *FT = getFunctionType();
   for (unsigned i = 0, e = FT->getNumParams(); i != e; ++i) {
-    assert(FT->getParamType(i) != Type::VoidTy &&
+    assert(FT->getParamType(i) != Type::getVoidTy(FT->getContext()) &&
            "Cannot have void typed arguments!");
     ArgumentList.push_back(new Argument(FT->getParamType(i)));
   }
@@ -329,10 +327,10 @@ std::string Intrinsic::getName(ID id, const Type **Tys, unsigned numTys) {
   for (unsigned i = 0; i < numTys; ++i) {
     if (const PointerType* PTyp = dyn_cast<PointerType>(Tys[i])) {
       Result += ".p" + llvm::utostr(PTyp->getAddressSpace()) + 
-                MVT::getMVT(PTyp->getElementType()).getMVTString();
+                EVT::getEVT(PTyp->getElementType()).getEVTString();
     }
     else if (Tys[i])
-      Result += "." + MVT::getMVT(Tys[i]).getMVTString();
+      Result += "." + EVT::getEVT(Tys[i]).getEVTString();
   }
   return Result;
 }
@@ -348,7 +346,7 @@ const FunctionType *Intrinsic::getType(LLVMContext &Context,
 #include "llvm/Intrinsics.gen"
 #undef GET_INTRINSIC_GENERATOR
 
-  return Context.getFunctionType(ResultTy, ArgTys, IsVarArg); 
+  return FunctionType::get(ResultTy, ArgTys, IsVarArg); 
 }
 
 bool Intrinsic::isOverloaded(ID id) {

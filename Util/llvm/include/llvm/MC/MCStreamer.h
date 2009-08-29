@@ -17,11 +17,15 @@
 #include "llvm/Support/DataTypes.h"
 
 namespace llvm {
+  class AsmPrinter;
+  class MCAsmInfo;
+  class MCCodeEmitter;
   class MCContext;
-  class MCValue;
   class MCInst;
   class MCSection;
   class MCSymbol;
+  class MCValue;
+  class StringRef;
   class raw_ostream;
 
   /// MCStreamer - Streaming machine code generation interface.  This interface
@@ -53,6 +57,10 @@ namespace llvm {
       SymbolAttrLast = WeakReference
     };
 
+    enum AssemblerFlag {
+      SubsectionsViaSymbols  /// .subsections_via_symbols (Apple)
+    };
+
   private:
     MCContext &Context;
 
@@ -62,6 +70,9 @@ namespace llvm {
   protected:
     MCStreamer(MCContext &Ctx);
 
+    /// CurSection - This is the current section code is being emitted to, it is
+    /// kept up to date by SwitchSection.
+    const MCSection *CurSection;
   public:
     virtual ~MCStreamer();
 
@@ -71,11 +82,16 @@ namespace llvm {
     /// @{
 
     /// SwitchSection - Set the current section where code is being emitted to
-    /// @param Section.
+    /// @param Section.  This is required to update CurSection.
     ///
     /// This corresponds to assembler directives like .section, .text, etc.
-    virtual void SwitchSection(MCSection *Section) = 0;
+    virtual void SwitchSection(const MCSection *Section) = 0;
 
+    
+    /// getCurrentSection - Return the current seciton that the streamer is
+    /// emitting code to.
+    const MCSection *getCurrentSection() const { return CurSection; }
+    
     /// EmitLabel - Emit a label for @param Symbol into the current section.
     ///
     /// This corresponds to an assembler statement such as:
@@ -88,6 +104,9 @@ namespace llvm {
     // FIXME: What to do about the current section? Should we get rid of the
     // symbol section in the constructor and initialize it here?
     virtual void EmitLabel(MCSymbol *Symbol) = 0;
+
+    /// EmitAssemblerFlag - Note in the output the specified @param Flag
+    virtual void EmitAssemblerFlag(AssemblerFlag Flag) = 0;
 
     /// EmitAssignment - Emit an assignment of @param Value to @param Symbol.
     ///
@@ -115,8 +134,20 @@ namespace llvm {
     virtual void EmitSymbolAttribute(MCSymbol *Symbol,
                                      SymbolAttr Attribute) = 0;
 
-    /// EmitCommonSymbol - Emit a common symbol of @param Size with the @param
-    /// Pow2Alignment if non-zero.
+    /// EmitSymbolDesc - Set the @param DescValue for the @param Symbol.
+    ///
+    /// @param Symbol - The symbol to have its n_desc field set.
+    /// @param DescValue - The value to set into the n_desc field.
+    virtual void EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) = 0;
+
+    /// EmitLocalSymbol - Emit a local symbol of @param Value to @param Symbol.
+    ///
+    /// @param Symbol - The local symbol being created.
+    /// @param Value - The value for the symbol.
+    virtual void EmitLocalSymbol(MCSymbol *Symbol, const MCValue &Value) = 0;
+
+    /// EmitCommonSymbol - Emit a common or local common symbol of @param Size
+    /// with the @param Pow2Alignment if non-zero.
     ///
     /// @param Symbol - The common symbol to emit.
     /// @param Size - The size of the common symbol.
@@ -124,16 +155,26 @@ namespace llvm {
     virtual void EmitCommonSymbol(MCSymbol *Symbol, unsigned Size,
                                   unsigned Pow2Alignment) = 0;
 
+    /// EmitZerofill - Emit a the zerofill section and possiblity a symbol, if
+    /// @param Symbol is non-NULL, for @param Size and with the @param
+    /// Pow2Alignment if non-zero.
+    ///
+    /// @param Section - The zerofill section to create and or to put the symbol
+    /// @param Symbol - The zerofill symbol to emit, if non-NULL.
+    /// @param Size - The size of the zerofill symbol.
+    /// @param Pow2Alignment - The alignment of the zerofill symbol if non-zero.
+    virtual void EmitZerofill(const MCSection *Section, MCSymbol *Symbol = 0,
+                              unsigned Size = 0,unsigned Pow2Alignment = 0) = 0;
+
     /// @}
     /// @name Generating Data
     /// @{
 
-    /// EmitBytes - Emit @param Length bytes starting at @param Data into the
-    /// output.
+    /// EmitBytes - Emit the bytes in @param Data into the output.
     ///
     /// This is used to implement assembler directives such as .byte, .ascii,
     /// etc.
-    virtual void EmitBytes(const char *Data, unsigned Length) = 0;
+    virtual void EmitBytes(const StringRef &Data) = 0;
 
     /// EmitValue - Emit the expression @param Value into the output as a native
     /// integer of the given @param Size bytes.
@@ -190,10 +231,18 @@ namespace llvm {
     virtual void Finish() = 0;
   };
 
+  /// createNullStreamer - Create a dummy machine code streamer, which does
+  /// nothing. This is useful for timing the assembler front end.
+  MCStreamer *createNullStreamer(MCContext &Ctx);
+
   /// createAsmStreamer - Create a machine code streamer which will print out
   /// assembly for the native target, suitable for compiling with a native
   /// assembler.
-  MCStreamer *createAsmStreamer(MCContext &Ctx, raw_ostream &OS);
+  ///
+  /// \arg AP - If given, an AsmPrinter to use for printing instructions.
+  MCStreamer *createAsmStreamer(MCContext &Ctx, raw_ostream &OS,
+                                const MCAsmInfo &MAI, AsmPrinter *AP = 0,
+                                MCCodeEmitter *CE = 0);
 
   // FIXME: These two may end up getting rolled into a single
   // createObjectStreamer interface, which implements the assembler backend, and
@@ -201,7 +250,8 @@ namespace llvm {
 
   /// createMachOStream - Create a machine code streamer which will generative
   /// Mach-O format object files.
-  MCStreamer *createMachOStreamer(MCContext &Ctx, raw_ostream &OS);
+  MCStreamer *createMachOStreamer(MCContext &Ctx, raw_ostream &OS,
+                                  MCCodeEmitter *CE = 0);
 
   /// createELFStreamer - Create a machine code streamer which will generative
   /// ELF format object files.

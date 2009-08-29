@@ -215,7 +215,7 @@ bool PruneEH::SimplifyFunction(Function *F) {
 
           // Remove the uncond branch and add an unreachable.
           BB->getInstList().pop_back();
-          new UnreachableInst(BB);
+          new UnreachableInst(BB->getContext(), BB);
 
           DeleteBasicBlock(New);  // Delete the new BB.
           MadeChange = true;
@@ -243,7 +243,7 @@ void PruneEH::DeleteBasicBlock(BasicBlock *BB) {
     } else if (InvokeInst *II = dyn_cast<InvokeInst>(I))
       CGN->removeCallEdgeFor(II);
     if (!I->use_empty())
-      I->replaceAllUsesWith(Context->getUndef(I->getType()));
+      I->replaceAllUsesWith(UndefValue::get(I->getType()));
   }
 
   // Get the list of successors of this block.

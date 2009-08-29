@@ -15,6 +15,7 @@
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
+#include "llvm/Support/Compiler.h"
 using namespace clang;
 
 /// \brief Parse a template declaration, explicit instantiation, or
@@ -27,6 +28,29 @@ Parser::ParseDeclarationStartingWithTemplate(unsigned Context,
     return ParseExplicitInstantiation(ConsumeToken(), DeclEnd);
 
   return ParseTemplateDeclarationOrSpecialization(Context, DeclEnd, AS);
+}
+
+/// \brief RAII class that manages the template parameter depth.
+namespace {
+  class VISIBILITY_HIDDEN TemplateParameterDepthCounter {
+    unsigned &Depth;
+    unsigned AddedLevels;
+
+  public:
+    explicit TemplateParameterDepthCounter(unsigned &Depth) 
+      : Depth(Depth), AddedLevels(0) { }
+    
+    ~TemplateParameterDepthCounter() {
+      Depth -= AddedLevels;
+    }
+    
+    void operator++() { 
+      ++Depth;
+      ++AddedLevels;
+    }
+    
+    operator unsigned() const { return Depth; }
+  };
 }
 
 /// \brief Parse a template declaration or an explicit specialization.
@@ -75,8 +99,9 @@ Parser::ParseTemplateDeclarationOrSpecialization(unsigned Context,
   // defining A<T>::B receives just the inner template parameter list
   // (and retrieves the outer template parameter list from its
   // context).
-  bool isSpecialiation = true;
+  bool isSpecialization = true;
   TemplateParameterLists ParamLists;
+  TemplateParameterDepthCounter Depth(TemplateParameterDepth);
   do {
     // Consume the 'export', if any.
     SourceLocation ExportLoc;
@@ -96,23 +121,31 @@ Parser::ParseTemplateDeclarationOrSpecialization(unsigned Context,
     // Parse the '<' template-parameter-list '>'
     SourceLocation LAngleLoc, RAngleLoc;
     TemplateParameterList TemplateParams;
-    ParseTemplateParameters(ParamLists.size(), TemplateParams, LAngleLoc, 
-                            RAngleLoc);
-
-    if (!TemplateParams.empty())
-      isSpecialiation = false;
+    if (ParseTemplateParameters(Depth, TemplateParams, LAngleLoc, 
+                                RAngleLoc)) {
+      // Skip until the semi-colon or a }.
+      SkipUntil(tok::r_brace, true, true);
+      if (Tok.is(tok::semi))
+        ConsumeToken();
+      return DeclPtrTy();      
+    }
 
     ParamLists.push_back(
-      Actions.ActOnTemplateParameterList(ParamLists.size(), ExportLoc, 
+      Actions.ActOnTemplateParameterList(Depth, ExportLoc, 
                                          TemplateLoc, LAngleLoc, 
                                          TemplateParams.data(),
                                          TemplateParams.size(), RAngleLoc));
+
+    if (!TemplateParams.empty()) {
+      isSpecialization = false;
+      ++Depth;
+    }    
   } while (Tok.is(tok::kw_export) || Tok.is(tok::kw_template));
 
   // Parse the actual template declaration.
   return ParseSingleDeclarationAfterTemplate(Context, 
                                              ParsedTemplateInfo(&ParamLists,
-                                                             isSpecialiation),
+                                                             isSpecialization),
                                              DeclEnd, AS);
 }
 
@@ -145,6 +178,12 @@ Parser::ParseSingleDeclarationAfterTemplate(
   assert(TemplateInfo.Kind != ParsedTemplateInfo::NonTemplate &&
          "Template information required");
 
+  if (Context == Declarator::MemberContext) {
+    // We are parsing a member template.
+    ParseCXXClassMemberDeclaration(AS, TemplateInfo);
+    return DeclPtrTy::make((void*)0);
+  }
+  
   // Parse the declaration specifiers.
   DeclSpec DS;
   // FIXME: Pass TemplateLoc through for explicit template instantiations
@@ -181,7 +220,7 @@ Parser::ParseSingleDeclarationAfterTemplate(
     }
 
     // Eat the semi colon after the declaration.
-    ExpectAndConsume(tok::semi, diag::err_expected_semi_declation);
+    ExpectAndConsume(tok::semi, diag::err_expected_semi_declaration);
     return ThisDecl;
   }
 
@@ -219,6 +258,8 @@ Parser::ParseSingleDeclarationAfterTemplate(
 /// The template parameter we parse will be added to this list. LAngleLoc and
 /// RAngleLoc will receive the positions of the '<' and '>', respectively, 
 /// that enclose this template parameter list.
+///
+/// \returns true if an error occurred, false otherwise.
 bool Parser::ParseTemplateParameters(unsigned Depth,
                                      TemplateParameterList &TemplateParams,
                                      SourceLocation &LAngleLoc,
@@ -226,7 +267,7 @@ bool Parser::ParseTemplateParameters(unsigned Depth,
   // Get the template parameter list.
   if(!Tok.is(tok::less)) {
     Diag(Tok.getLocation(), diag::err_expected_less_after) << "template";
-    return false;
+    return true;
   }
   LAngleLoc = ConsumeToken();
   
@@ -236,11 +277,11 @@ bool Parser::ParseTemplateParameters(unsigned Depth,
   else if(ParseTemplateParameterList(Depth, TemplateParams)) {
     if(!Tok.is(tok::greater)) {
       Diag(Tok.getLocation(), diag::err_expected_greater);
-      return false;
+      return true;
     }
     RAngleLoc = ConsumeToken();
   }
-  return true;
+  return false;
 }
 
 /// ParseTemplateParameterList - Parse a template parameter list. If
@@ -392,8 +433,8 @@ Parser::ParseTemplateTemplateParameter(unsigned Depth, unsigned Position) {
   SourceLocation LAngleLoc, RAngleLoc;
   {
     ParseScope TemplateParmScope(this, Scope::TemplateParamScope);
-    if(!ParseTemplateParameters(Depth + 1, TemplateParams, LAngleLoc,
-                                RAngleLoc)) {
+    if(ParseTemplateParameters(Depth + 1, TemplateParams, LAngleLoc,
+                               RAngleLoc)) {
       return DeclPtrTy();
     }
   }

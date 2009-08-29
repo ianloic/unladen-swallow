@@ -16,6 +16,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/LexDiagnostic.h"
 #include "clang/Basic/TargetInfo.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringExtras.h"
 using namespace clang;
 
@@ -95,7 +96,9 @@ static unsigned ProcessCharEscape(const char *&ThisTokBuf,
     }
 
     // See if any bits will be truncated when evaluated as a character.
-    unsigned CharWidth = PP.getTargetInfo().getCharWidth(IsWide);
+    unsigned CharWidth = IsWide
+                       ? PP.getTargetInfo().getWCharWidth()
+                       : PP.getTargetInfo().getCharWidth();
                        
     if (CharWidth != 32 && (ResultChar >> CharWidth) != 0) {
       Overflow = true;
@@ -124,7 +127,9 @@ static unsigned ProcessCharEscape(const char *&ThisTokBuf,
              ThisTokBuf[0] >= '0' && ThisTokBuf[0] <= '7');
     
     // Check for overflow.  Reject '\777', but not L'\777'.
-    unsigned CharWidth = PP.getTargetInfo().getCharWidth(IsWide);
+    unsigned CharWidth = IsWide
+                       ? PP.getTargetInfo().getWCharWidth()
+                       : PP.getTargetInfo().getCharWidth();
                        
     if (CharWidth != 32 && (ResultChar >> CharWidth) != 0) {
       PP.Diag(Loc, diag::warn_octal_escape_too_large);
@@ -600,9 +605,11 @@ bool NumericLiteralParser::GetIntegerValue(llvm::APInt &Val) {
 llvm::APFloat NumericLiteralParser::
 GetFloatValue(const llvm::fltSemantics &Format, bool* isExact) {
   using llvm::APFloat;
+  using llvm::StringRef;
   
   llvm::SmallVector<char,256> floatChars;
-  for (unsigned i = 0, n = ThisTokEnd-ThisTokBegin; i != n; ++i)
+  unsigned n = std::min(SuffixBegin - ThisTokBegin, ThisTokEnd - ThisTokBegin);
+  for (unsigned i = 0; i != n; ++i)
     floatChars.push_back(ThisTokBegin[i]);
   
   floatChars.push_back('\0');
@@ -610,7 +617,8 @@ GetFloatValue(const llvm::fltSemantics &Format, bool* isExact) {
   APFloat V (Format, APFloat::fcZero, false);
   APFloat::opStatus status;
   
-  status = V.convertFromString(&floatChars[0],APFloat::rmNearestTiesToEven);
+  status = V.convertFromString(StringRef(&floatChars[0], n),
+                               APFloat::rmNearestTiesToEven);
   
   if (isExact)
     *isExact = status == APFloat::opOK;
@@ -684,7 +692,8 @@ CharLiteralParser::CharLiteralParser(const char *begin, const char *end,
     else
       PP.Diag(Loc, diag::ext_four_char_character_literal);
     IsMultiChar = true;
-  }
+  } else
+    IsMultiChar = false;
 
   // Transfer the value from APInt to uint64_t
   Value = LitVal.getZExtValue();

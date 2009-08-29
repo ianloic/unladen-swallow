@@ -18,12 +18,12 @@
 #ifndef LLVM_CODEGEN_MACHINEFUNCTION_H
 #define LLVM_CODEGEN_MACHINEFUNCTION_H
 
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/Support/DebugLoc.h"
-#include "llvm/CodeGen/MachineBasicBlock.h"
-#include "llvm/Support/Annotation.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Recycler.h"
+#include <map>
 
 namespace llvm {
 
@@ -38,7 +38,7 @@ class TargetRegisterClass;
 template <>
 struct ilist_traits<MachineBasicBlock>
     : public ilist_default_traits<MachineBasicBlock> {
-  mutable ilist_node<MachineBasicBlock> Sentinel;
+  mutable ilist_half_node<MachineBasicBlock> Sentinel;
 public:
   MachineBasicBlock *createSentinel() const {
     return static_cast<MachineBasicBlock*>(&Sentinel);
@@ -66,8 +66,8 @@ struct MachineFunctionInfo {
   virtual ~MachineFunctionInfo() {}
 };
 
-class MachineFunction : private Annotation {
-  const Function *Fn;
+class MachineFunction {
+  Function *Fn;
   const TargetMachine &Target;
 
   // RegInfo - Information about each register in use in the function.
@@ -115,12 +115,12 @@ class MachineFunction : private Annotation {
   unsigned Alignment;
 
 public:
-  MachineFunction(const Function *Fn, const TargetMachine &TM);
+  MachineFunction(Function *Fn, const TargetMachine &TM);
   ~MachineFunction();
 
   /// getFunction - Return the LLVM function that this machine code represents
   ///
-  const Function *getFunction() const { return Fn; }
+  Function *getFunction() const { return Fn; }
 
   /// getTarget - Return the target machine this machine code is compiled with
   ///
@@ -207,8 +207,7 @@ public:
   /// print - Print out the MachineFunction in a format suitable for debugging
   /// to the specified stream.
   ///
-  void print(std::ostream &OS) const;
-  void print(std::ostream *OS) const { if (OS) print(*OS); }
+  void print(raw_ostream &OS) const;
 
   /// viewCFG - This function is meant for use from the debugger.  You can just
   /// say 'call F->viewCFG()' and a ghostview window should pop up from the
@@ -228,21 +227,6 @@ public:
   /// dump - Print the current MachineFunction to cerr, useful for debugger use.
   ///
   void dump() const;
-
-  /// construct - Allocate and initialize a MachineFunction for a given Function
-  /// and Target
-  ///
-  static MachineFunction& construct(const Function *F, const TargetMachine &TM);
-
-  /// destruct - Destroy the MachineFunction corresponding to a given Function
-  ///
-  static void destruct(const Function *F);
-
-  /// get - Return a handle to a MachineFunction corresponding to the given
-  /// Function.  This should not be called before "construct()" for a given
-  /// Function.
-  ///
-  static MachineFunction& get(const Function *F);
 
   // Provide accessors for the MachineBasicBlock list...
   typedef BasicBlockListType::iterator iterator;
@@ -343,7 +327,7 @@ public:
   /// getOrCreateDebugLocID - Look up the DebugLocTuple index with the given
   /// source file, line, and column. If none currently exists, create a new
   /// DebugLocTuple, and insert it into the DebugIdMap.
-  unsigned getOrCreateDebugLocID(GlobalVariable *CompileUnit,
+  unsigned getOrCreateDebugLocID(MDNode *CompileUnit,
                                  unsigned Line, unsigned Col);
 
   /// getDebugLocTuple - Get the DebugLocTuple for a given DebugLoc object.

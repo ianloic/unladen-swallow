@@ -94,9 +94,11 @@ namespace {
     void VisitObjCProtocolExpr(ObjCProtocolExpr *E);
     void VisitObjCIvarRefExpr(ObjCIvarRefExpr *E);
     void VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E);
-    void VisitObjCKVCRefExpr(ObjCKVCRefExpr *E);
+    void VisitObjCImplicitSetterGetterRefExpr(
+                        ObjCImplicitSetterGetterRefExpr *E);
     void VisitObjCMessageExpr(ObjCMessageExpr *E);
     void VisitObjCSuperExpr(ObjCSuperExpr *E);
+    void VisitObjCIsaExpr(ObjCIsaExpr *E);
     
     // Objective-C Statements    
     void VisitObjCForCollectionStmt(ObjCForCollectionStmt *);
@@ -105,6 +107,9 @@ namespace {
     void VisitObjCAtTryStmt(ObjCAtTryStmt *);
     void VisitObjCAtSynchronizedStmt(ObjCAtSynchronizedStmt *);
     void VisitObjCAtThrowStmt(ObjCAtThrowStmt *);
+
+    // C++ Statements    
+    void VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E);
   };
 }
 
@@ -350,7 +355,7 @@ void PCHStmtWriter::VisitStringLiteral(StringLiteral *E) {
 void PCHStmtWriter::VisitCharacterLiteral(CharacterLiteral *E) {
   VisitExpr(E);
   Record.push_back(E->getValue());
-  Writer.AddSourceLocation(E->getLoc(), Record);
+  Writer.AddSourceLocation(E->getLocation(), Record);
   Record.push_back(E->isWide());
   Code = pch::EXPR_CHARACTER_LITERAL;
 }
@@ -413,9 +418,18 @@ void PCHStmtWriter::VisitMemberExpr(MemberExpr *E) {
   Code = pch::EXPR_MEMBER;
 }
 
+void PCHStmtWriter::VisitObjCIsaExpr(ObjCIsaExpr *E) {
+  VisitExpr(E);
+  Writer.WriteSubStmt(E->getBase());
+  Writer.AddSourceLocation(E->getIsaMemberLoc(), Record);
+  Record.push_back(E->isArrow());
+  Code = pch::EXPR_OBJC_ISA;
+}
+
 void PCHStmtWriter::VisitCastExpr(CastExpr *E) {
   VisitExpr(E);
   Writer.WriteSubStmt(E->getSubExpr());
+  Record.push_back(E->getCastKind()); // FIXME: stable encoding
 }
 
 void PCHStmtWriter::VisitBinaryOperator(BinaryOperator *E) {
@@ -439,6 +453,8 @@ void PCHStmtWriter::VisitConditionalOperator(ConditionalOperator *E) {
   Writer.WriteSubStmt(E->getCond());
   Writer.WriteSubStmt(E->getLHS());
   Writer.WriteSubStmt(E->getRHS());
+  Writer.AddSourceLocation(E->getQuestionLoc(), Record);
+  Writer.AddSourceLocation(E->getColonLoc(), Record);
   Code = pch::EXPR_CONDITIONAL_OPERATOR;
 }
 
@@ -659,13 +675,14 @@ void PCHStmtWriter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
   Code = pch::EXPR_OBJC_PROPERTY_REF_EXPR;
 }
 
-void PCHStmtWriter::VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
+void PCHStmtWriter::VisitObjCImplicitSetterGetterRefExpr(
+                                  ObjCImplicitSetterGetterRefExpr *E) {
   VisitExpr(E);
   Writer.AddDeclRef(E->getGetterMethod(), Record);
   Writer.AddDeclRef(E->getSetterMethod(), Record);
   
-  // NOTE: ClassProp and Base are mutually exclusive.
-  Writer.AddDeclRef(E->getClassProp(), Record);
+  // NOTE: InterfaceDecl and Base are mutually exclusive.
+  Writer.AddDeclRef(E->getInterfaceDecl(), Record);
   Writer.WriteSubStmt(E->getBase());
   Writer.AddSourceLocation(E->getLocation(), Record);
   Writer.AddSourceLocation(E->getClassLoc(), Record);
@@ -743,6 +760,16 @@ void PCHStmtWriter::VisitObjCAtThrowStmt(ObjCAtThrowStmt *S) {
   Writer.WriteSubStmt(S->getThrowExpr());
   Writer.AddSourceLocation(S->getThrowLoc(), Record);
   Code = pch::STMT_OBJC_AT_THROW;
+}
+
+//===----------------------------------------------------------------------===//
+// C++ Expressions and Statements.
+//===----------------------------------------------------------------------===//
+
+void PCHStmtWriter::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
+  VisitCallExpr(E);
+  Record.push_back(E->getOperator());
+  Code = pch::EXPR_CXX_OPERATOR_CALL;
 }
 
 //===----------------------------------------------------------------------===//

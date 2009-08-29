@@ -117,7 +117,7 @@ def SPitof  : SDNode<"SPISD::ITOF", SDTSPITOF>;
 def SPselecticc : SDNode<"SPISD::SELECT_ICC", SDTSPselectcc, [SDNPInFlag]>;
 def SPselectfcc : SDNode<"SPISD::SELECT_FCC", SDTSPselectcc, [SDNPInFlag]>;
 
-// These are target-independent nodes, but have target-specific formats.
+//  These are target-independent nodes, but have target-specific formats.
 def SDT_SPCallSeqStart : SDCallSeqStart<[ SDTCisVT<0, i32> ]>;
 def SDT_SPCallSeqEnd   : SDCallSeqEnd<[ SDTCisVT<0, i32>,
                                         SDTCisVT<1, i32> ]>;
@@ -753,8 +753,6 @@ def : Pat<(call tglobaladdr:$dst),
           (CALL tglobaladdr:$dst)>;
 def : Pat<(call texternalsym:$dst),
           (CALL texternalsym:$dst)>;
-
-def : Pat<(ret), (RETL)>;
 
 // Map integer extload's to zextloads.
 def : Pat<(i32 (extloadi1 ADDRrr:$src)), (LDUBrr ADDRrr:$src)>;

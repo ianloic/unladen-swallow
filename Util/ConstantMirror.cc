@@ -36,6 +36,12 @@ PyConstantMirror::PyConstantMirror(PyGlobalLlvmData *llvm_data)
 {
 }
 
+llvm::LLVMContext &
+PyConstantMirror::context() const
+{
+    return this->llvm_data_.context();
+}
+
 Constant *
 PyConstantMirror::GetConstantFor(PyObject *obj)
 {
@@ -77,15 +83,17 @@ PyConstantMirror::GetConstantFor(PyCodeObject *obj)
     this->GetGlobalVariableFor((PyObject*)obj->co_varnames);
     this->GetGlobalVariableFor((PyObject*)obj->co_names);
 
-    const llvm::StructType *code_type = PyTypeBuilder<PyCodeObject>::get();
+    const llvm::StructType *code_type =
+        PyTypeBuilder<PyCodeObject>::get(this->context());
     return this->ConstantFromMemory(code_type, obj);
 }
 
 // Given a StructType in the form of most Python PyVarObjects, with a flexible
 // array as its last member, returns a new StructType with that flexible array
 // resized to the right dynamic number of elements.
-static StructType *
-ResizeVarObjectType(const StructType *type, unsigned dynamic_size)
+StructType *
+PyConstantMirror::ResizeVarObjectType(const StructType *type,
+                                      unsigned dynamic_size) const
 {
     std::vector<const Type*> contents(
         type->element_begin(), type->element_end());
@@ -103,7 +111,7 @@ ResizeVarObjectType(const StructType *type, unsigned dynamic_size)
     flexible_array =
         ArrayType::get(cast<ArrayType>(flexible_array)->getElementType(),
                        dynamic_size);
-    return StructType::get(contents);
+    return StructType::get(this->context(), contents);
 }
 
 Constant *
@@ -115,7 +123,8 @@ PyConstantMirror::GetConstantFor(PyTupleObject *obj)
         this->GetGlobalVariableFor(obj->ob_item[i]);
     }
 
-    const StructType *tuple_type = PyTypeBuilder<PyTupleObject>::get();
+    const StructType *tuple_type =
+        PyTypeBuilder<PyTupleObject>::get(this->context());
     const StructType *resized_tuple_type =
         ResizeVarObjectType(tuple_type, tuple_size);
     return this->ConstantFromMemory(resized_tuple_type, obj);
@@ -125,7 +134,8 @@ Constant *
 PyConstantMirror::GetConstantFor(PyStringObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)obj->ob_type);
-    const StructType *string_type = PyTypeBuilder<PyStringObject>::get();
+    const StructType *string_type =
+        PyTypeBuilder<PyStringObject>::get(this->context());
     const Py_ssize_t string_size = PyString_GET_SIZE(obj);
     const StructType *resized_string_type =
         // +1 for the '\0' at the end.
@@ -138,7 +148,8 @@ PyConstantMirror::GetConstantFor(PyUnicodeObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)obj->ob_type);
     this->GetGlobalVariableFor(obj->defenc);
-    const StructType *unicode_type = PyTypeBuilder<PyUnicodeObject>::get();
+    const StructType *unicode_type =
+        PyTypeBuilder<PyUnicodeObject>::get(this->context());
     return this->ConstantFromMemory(unicode_type, obj);
 }
 
@@ -147,7 +158,8 @@ PyConstantMirror::GetConstantFor(PyIntObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)obj->ob_type);
 
-    const StructType *int_type = PyTypeBuilder<PyIntObject>::get();
+    const StructType *int_type =
+        PyTypeBuilder<PyIntObject>::get(this->context());
     return this->ConstantFromMemory(int_type, obj);
 }
 
@@ -155,7 +167,8 @@ Constant *
 PyConstantMirror::GetConstantFor(PyLongObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)Py_TYPE(obj));
-    const StructType *long_type = PyTypeBuilder<PyLongObject>::get();
+    const StructType *long_type =
+        PyTypeBuilder<PyLongObject>::get(this->context());
     const Py_ssize_t long_size = Py_SIZE(obj);
     // See longintrepr.h for the meaning of long's ob_size field.
     const StructType *resized_long_type =
@@ -168,7 +181,8 @@ PyConstantMirror::GetConstantFor(PyFloatObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)obj->ob_type);
 
-    const StructType *float_type = PyTypeBuilder<PyFloatObject>::get();
+    const StructType *float_type =
+        PyTypeBuilder<PyFloatObject>::get(this->context());
     return this->ConstantFromMemory(float_type, obj);
 }
 
@@ -177,14 +191,16 @@ PyConstantMirror::GetConstantFor(PyComplexObject *obj)
 {
     this->GetGlobalVariableFor((PyObject*)obj->ob_type);
 
-    const StructType *complex_type = PyTypeBuilder<PyComplexObject>::get();
+    const StructType *complex_type =
+        PyTypeBuilder<PyComplexObject>::get(this->context());
     return this->ConstantFromMemory(complex_type, obj);
 }
 
 Constant *
 PyConstantMirror::GetConstantFor(PyTypeObject *obj)
 {
-    const llvm::StructType *type_type = PyTypeBuilder<PyTypeObject>::get();
+    const llvm::StructType *type_type =
+        PyTypeBuilder<PyTypeObject>::get(this->context());
     // Register subobjects with the ExecutionEngine so it emits a
     // Constant that refers to them.
     this->GetGlobalVariableForOwned(obj->tp_as_number, (PyObject*)obj);
@@ -197,27 +213,29 @@ PyConstantMirror::GetConstantFor(PyTypeObject *obj)
 llvm::Constant *
 PyConstantMirror::GetConstantFor(PyNumberMethods *obj)
 {
-    return this->ConstantFromMemory(PyTypeBuilder<PyNumberMethods>::get(), obj);
+    return this->ConstantFromMemory(
+        PyTypeBuilder<PyNumberMethods>::get(this->context()), obj);
 }
 
 llvm::Constant *
 PyConstantMirror::GetConstantFor(PySequenceMethods *obj)
 {
     return this->ConstantFromMemory(
-        PyTypeBuilder<PySequenceMethods>::get(), obj);
+        PyTypeBuilder<PySequenceMethods>::get(this->context()), obj);
 }
 
 llvm::Constant *
 PyConstantMirror::GetConstantFor(PyMappingMethods *obj)
 {
     return this->ConstantFromMemory(
-        PyTypeBuilder<PyMappingMethods>::get(), obj);
+        PyTypeBuilder<PyMappingMethods>::get(this->context()), obj);
 }
 
 llvm::Constant *
 PyConstantMirror::GetConstantFor(PyBufferProcs *obj)
 {
-    return this->ConstantFromMemory(PyTypeBuilder<PyBufferProcs>::get(), obj);
+    return this->ConstantFromMemory(
+        PyTypeBuilder<PyBufferProcs>::get(this->context()), obj);
 }
 
 template<typename T>
@@ -296,7 +314,7 @@ PyConstantMirror::ConstantFromMemory(const Type *type, const void *memory) const
         // If we don't already have a mapping for the requested
         // address, emit it as an inttoptr.
         return llvm::ConstantExpr::getIntToPtr(
-            ConstantInt::get(Type::Int64Ty,
+            ConstantInt::get(Type::getInt64Ty(this->context()),
                              reinterpret_cast<intptr_t>(the_pointer)),
             type);
     }
@@ -348,7 +366,7 @@ Constant *
 PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
 {
     if (ptr == NULL) {
-        return Constant::getNullValue(PyTypeBuilder<T*>::get());
+        return Constant::getNullValue(PyTypeBuilder<T*>::get(this->context()));
     }
     GlobalValue *result =
         const_cast<GlobalValue*>(this->engine_.getGlobalValueAtAddress(ptr));

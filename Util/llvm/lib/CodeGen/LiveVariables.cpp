@@ -37,7 +37,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Config/alloca.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -48,20 +47,21 @@ static RegisterPass<LiveVariables> X("livevars", "Live Variable Analysis");
 void LiveVariables::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequiredID(UnreachableMachineBlockElimID);
   AU.setPreservesAll();
+  MachineFunctionPass::getAnalysisUsage(AU);
 }
 
 void LiveVariables::VarInfo::dump() const {
-  cerr << "  Alive in blocks: ";
+  errs() << "  Alive in blocks: ";
   for (SparseBitVector<>::iterator I = AliveBlocks.begin(),
            E = AliveBlocks.end(); I != E; ++I)
-    cerr << *I << ", ";
-  cerr << "\n  Killed by:";
+    errs() << *I << ", ";
+  errs() << "\n  Killed by:";
   if (Kills.empty())
-    cerr << " No instructions.\n";
+    errs() << " No instructions.\n";
   else {
     for (unsigned i = 0, e = Kills.size(); i != e; ++i)
-      cerr << "\n    #" << i << ": " << *Kills[i];
-    cerr << "\n";
+      errs() << "\n    #" << i << ": " << *Kills[i];
+    errs() << "\n";
   }
 }
 

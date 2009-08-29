@@ -36,8 +36,9 @@ namespace lltok {
     kw_declare, kw_define,
     kw_global,  kw_constant,
 
-    kw_private, kw_internal, kw_linkonce, kw_linkonce_odr, kw_weak, kw_weak_odr,
-    kw_appending, kw_dllimport, kw_dllexport, kw_common,kw_available_externally,
+    kw_private, kw_linker_private, kw_internal, kw_linkonce, kw_linkonce_odr,
+    kw_weak, kw_weak_odr, kw_appending, kw_dllimport, kw_dllexport, kw_common,
+    kw_available_externally,
     kw_default, kw_hidden, kw_protected,
     kw_extern_weak,
     kw_external, kw_thread_local,
@@ -50,6 +51,10 @@ namespace lltok {
     kw_deplibs,
     kw_datalayout,
     kw_volatile,
+    kw_nuw,
+    kw_nsw,
+    kw_exact,
+    kw_inbounds,
     kw_align,
     kw_addrspace,
     kw_section,
@@ -77,6 +82,7 @@ namespace lltok {
     kw_readnone,
     kw_readonly,
 
+    kw_inlinehint,
     kw_noinline,
     kw_alwaysinline,
     kw_optsize,
@@ -84,6 +90,7 @@ namespace lltok {
     kw_sspreq,
     kw_noredzone,
     kw_noimplicitfloat,
+    kw_naked,
 
     kw_type,
     kw_opaque,
@@ -119,6 +126,7 @@ namespace lltok {
     GlobalVar,         // @foo @"foo"
     LocalVar,          // %foo %"foo"
     StringConstant,    // "foo"
+    NamedMD,           // !foo
 
     // Metadata valued tokens.
     Metadata,          // !"foo" !{i8 42}

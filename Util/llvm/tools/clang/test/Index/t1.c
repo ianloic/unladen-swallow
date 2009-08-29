@@ -7,3 +7,25 @@ void foo_func(int param1) {
   }
   bar_func();
 }
+
+struct S1 {
+  int x;
+};
+
+struct S2 {
+  int x;
+};
+
+void field_test(void) {
+  struct S1 s1;
+  s1.x = 0;
+  ((struct S2 *)0)->x = 0;
+  
+  struct MyStruct ms;
+  ms.field_var = 10;
+}
+
+int (^CP)(int) = ^(int x) { return x * global_var; };
+
+// Suppress 'no run line' failure.
+// RUN: true

@@ -37,6 +37,9 @@
 using namespace clang::driver;
 using namespace clang;
 
+// Used to set values for "production" clang, for releases.
+// #define USE_PRODUCTION_CLANG
+
 Driver::Driver(const char *_Name, const char *_Dir,
                const char *_DefaultHostTriple,
                const char *_DefaultImageName,
@@ -46,13 +49,20 @@ Driver::Driver(const char *_Name, const char *_Dir,
     DefaultImageName(_DefaultImageName),
     Host(0),
     CCCIsCXX(false), CCCEcho(false), CCCPrintBindings(false),
-    CCCGenericGCCName("gcc"), CCCUseClang(true), CCCUseClangCXX(false), 
+    CCCGenericGCCName("gcc"), CCCUseClang(true),
+#ifdef USE_PRODUCTION_CLANG
+    CCCUseClangCXX(false), 
+#else
+    CCCUseClangCXX(true), 
+#endif
     CCCUseClangCPP(true), CCCUsePCH(true),
     SuppressMissingInputWarning(false)
 {
-  // Only use clang on i386 and x86_64 by default.
+#ifdef USE_PRODUCTION_CLANG
+  // Only use clang on i386 and x86_64 by default, in a "production" build.
   CCCClangArchs.insert("i386");
   CCCClangArchs.insert("x86_64");
+#endif
 }
 
 Driver::~Driver() {
@@ -144,6 +154,8 @@ Compilation *Driver::BuildCompilation(int argc, const char **argv) {
 
     } else if (!strcmp(Opt, "clang-cxx")) {
       CCCUseClangCXX = true;
+    } else if (!strcmp(Opt, "no-clang-cxx")) {
+      CCCUseClangCXX = false;
     } else if (!strcmp(Opt, "pch-is-pch")) {
       CCCUsePCH = true;
     } else if (!strcmp(Opt, "pch-is-pth")) {
@@ -385,7 +397,7 @@ void Driver::PrintHelp(bool ShowHidden) const {
   OS.flush();
 }
 
-void Driver::PrintVersion(const Compilation &C) const {
+void Driver::PrintVersion(const Compilation &C, llvm::raw_ostream &OS) const {
   static char buf[] = "$URL: http://llvm.org/svn/llvm-project/cfe/trunk/lib/Driver/Driver.cpp $";
   char *zap = strstr(buf, "/lib/Driver");
   if (zap)
@@ -402,17 +414,16 @@ void Driver::PrintVersion(const Compilation &C) const {
 #endif
   // FIXME: The following handlers should use a callback mechanism, we
   // don't know what the client would like to do.
-
-  llvm::errs() << "clang version " CLANG_VERSION_STRING " (" 
+  OS << "clang version " CLANG_VERSION_STRING " (" 
                << vers << " " << revision << ")" << '\n';
 
   const ToolChain &TC = C.getDefaultToolChain();
-  llvm::errs() << "Target: " << TC.getTripleString() << '\n';
+  OS << "Target: " << TC.getTripleString() << '\n';
 
   // Print the threading model.
   //
   // FIXME: Implement correctly.
-  llvm::errs() << "Thread model: " << "posix" << '\n';
+  OS << "Thread model: " << "posix" << '\n';
 }
 
 bool Driver::HandleImmediateArgs(const Compilation &C) {
@@ -432,13 +443,14 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   }
 
   if (C.getArgs().hasArg(options::OPT__version)) {
-    PrintVersion(C);
+    // Follow gcc behavior and use stdout for --version and stderr for -v
+    PrintVersion(C, llvm::outs());
     return false;
   }
 
   if (C.getArgs().hasArg(options::OPT_v) || 
       C.getArgs().hasArg(options::OPT__HASH_HASH_HASH)) {
-    PrintVersion(C);
+    PrintVersion(C, llvm::errs());
     SuppressMissingInputWarning = true;
   }
 
@@ -466,19 +478,19 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   // FIXME: The following handlers should use a callback mechanism, we
   // don't know what the client would like to do.
   if (Arg *A = C.getArgs().getLastArg(options::OPT_print_file_name_EQ)) {
-    llvm::outs() << GetFilePath(A->getValue(C.getArgs()), TC).toString() 
+    llvm::outs() << GetFilePath(A->getValue(C.getArgs()), TC).str() 
                  << "\n";
     return false;
   }
 
   if (Arg *A = C.getArgs().getLastArg(options::OPT_print_prog_name_EQ)) {
-    llvm::outs() << GetProgramPath(A->getValue(C.getArgs()), TC).toString() 
+    llvm::outs() << GetProgramPath(A->getValue(C.getArgs()), TC).str() 
                  << "\n";
     return false;
   }
 
   if (C.getArgs().hasArg(options::OPT_print_libgcc_file_name)) {
-    llvm::outs() << GetFilePath("libgcc.a", TC).toString() << "\n";
+    llvm::outs() << GetFilePath("libgcc.a", TC).str() << "\n";
     return false;
   }
 
@@ -1227,28 +1239,16 @@ std::string Driver::GetTemporaryPath(const char *Suffix) const {
   P.eraseFromDisk(false, 0);
 
   P.appendSuffix(Suffix);
-  return P.toString();
+  return P.str();
 }
 
 const HostInfo *Driver::GetHostInfo(const char *TripleStr) const {
   llvm::PrettyStackTraceString CrashInfo("Constructing host");
   llvm::Triple Triple(TripleStr);
 
-  // Normalize Arch a bit. 
-  //
-  // FIXME: We shouldn't need to do this once everything goes through the triple
-  // interface.
-  if (Triple.getArchName() == "i686") 
-    Triple.setArchName("i386");
-  else if (Triple.getArchName() == "amd64")
-    Triple.setArchName("x86_64");
-  else if (Triple.getArchName() == "ppc" || 
-           Triple.getArchName() == "Power Macintosh")
-    Triple.setArchName("powerpc");
-  else if (Triple.getArchName() == "ppc64")
-    Triple.setArchName("powerpc64");
-
   switch (Triple.getOS()) {
+  case llvm::Triple::AuroraUX:
+    return createAuroraUXHostInfo(*this, Triple);
   case llvm::Triple::Darwin:
     return createDarwinHostInfo(*this, Triple);
   case llvm::Triple::DragonFly:

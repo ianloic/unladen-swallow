@@ -19,6 +19,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -28,7 +29,7 @@ using namespace llvm;
 AbstractLatticeFunction::~AbstractLatticeFunction() {}
 
 /// PrintValue - Render the specified lattice value to the specified stream.
-void AbstractLatticeFunction::PrintValue(LatticeVal V, std::ostream &OS) {
+void AbstractLatticeFunction::PrintValue(LatticeVal V, raw_ostream &OS) {
   if (V == UndefVal)
     OS << "undefined";
   else if (V == OverdefinedVal)
@@ -88,7 +89,7 @@ void SparseSolver::UpdateState(Instruction &Inst, LatticeVal V) {
 /// MarkBlockExecutable - This method can be used by clients to mark all of
 /// the blocks that are known to be intrinsically live in the processed unit.
 void SparseSolver::MarkBlockExecutable(BasicBlock *BB) {
-  DOUT << "Marking Block Executable: " << BB->getNameStart() << "\n";
+  DEBUG(errs() << "Marking Block Executable: " << BB->getName() << "\n");
   BBExecutable.insert(BB);   // Basic block is executable!
   BBWorkList.push_back(BB);  // Add the block to the work list!
 }
@@ -99,8 +100,8 @@ void SparseSolver::markEdgeExecutable(BasicBlock *Source, BasicBlock *Dest) {
   if (!KnownFeasibleEdges.insert(Edge(Source, Dest)).second)
     return;  // This edge is already known to be executable!
   
-  DOUT << "Marking Edge Executable: " << Source->getNameStart()
-       << " -> " << Dest->getNameStart() << "\n";
+  DEBUG(errs() << "Marking Edge Executable: " << Source->getName()
+        << " -> " << Dest->getName() << "\n");
 
   if (BBExecutable.count(Dest)) {
     // The destination is already executable, but we just made an edge
@@ -154,7 +155,7 @@ void SparseSolver::getFeasibleSuccessors(TerminatorInst &TI,
     }
 
     // Constant condition variables mean the branch can only go a single way
-    Succs[C == Context->getConstantIntFalse()] = true;
+    Succs[C == ConstantInt::getFalse(*Context)] = true;
     return;
   }
   
@@ -284,7 +285,7 @@ void SparseSolver::Solve(Function &F) {
       Instruction *I = InstWorkList.back();
       InstWorkList.pop_back();
 
-      DOUT << "\nPopped off I-WL: " << *I;
+      DEBUG(errs() << "\nPopped off I-WL: " << *I);
 
       // "I" got into the work list because it made a transition.  See if any
       // users are both live and in need of updating.
@@ -301,7 +302,7 @@ void SparseSolver::Solve(Function &F) {
       BasicBlock *BB = BBWorkList.back();
       BBWorkList.pop_back();
 
-      DOUT << "\nPopped off BBWL: " << *BB;
+      DEBUG(errs() << "\nPopped off BBWL: " << *BB);
 
       // Notify all instructions in this basic block that they are newly
       // executable.
@@ -311,7 +312,7 @@ void SparseSolver::Solve(Function &F) {
   }
 }
 
-void SparseSolver::Print(Function &F, std::ostream &OS) const {
+void SparseSolver::Print(Function &F, raw_ostream &OS) const {
   OS << "\nFUNCTION: " << F.getNameStr() << "\n";
   for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
     if (!BBExecutable.count(BB))

@@ -1,7 +1,5 @@
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=basic -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=range -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
@@ -30,7 +28,7 @@ typedef struct _NSZone NSZone;
 @end
 typedef float CGFloat;
 typedef struct _NSPoint {} NSRect;
-static __inline__ __attribute__((always_inline)) NSRect NSMakeRect(CGFloat x, CGFloat y, CGFloat w, CGFloat h) {}
+static __inline__ __attribute__((always_inline)) NSRect NSMakeRect(CGFloat x, CGFloat y, CGFloat w, CGFloat h) { NSRect r; return r; }
 typedef struct {} NSFastEnumerationState;
 @protocol NSFastEnumeration 
 - (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state objects:(id *)stackbuf count:(NSUInteger)len;

@@ -15,6 +15,8 @@ namespace llvm {
 class Constant;
 class ExecutionEngine;
 class GlobalVariable;
+class LLVMContext;
+class StructType;
 class TargetData;
 class Type;
 }
@@ -72,6 +74,12 @@ private:
 
     llvm::Constant *ConstantFromMemory(const llvm::Type *type,
                                        const void *memory) const;
+
+    llvm::StructType *ResizeVarObjectType(const llvm::StructType *type,
+                                          unsigned dynamic_size) const;
+
+    // Attempted shorthand for getting the context.
+    llvm::LLVMContext &context() const;
 
     class RemovePyObjFromGlobalMappingsVH;
 

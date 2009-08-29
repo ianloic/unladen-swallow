@@ -16,30 +16,42 @@
 #ifndef LLVM_CODEGEN_ASMPRINTER_H
 #define LLVM_CODEGEN_ASMPRINTER_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/Support/DebugLoc.h"
 #include "llvm/Target/TargetMachine.h"
-#include <set>
+#include "llvm/ADT/DenseMap.h"
 
 namespace llvm {
   class GCStrategy;
   class Constant;
   class ConstantArray;
+  class ConstantFP;
   class ConstantInt;
   class ConstantStruct;
   class ConstantVector;
   class GCMetadataPrinter;
+  class GlobalValue;
   class GlobalVariable;
+  class MachineBasicBlock;
+  class MachineFunction;
+  class MachineInstr;
+  class MachineLoopInfo;
+  class MachineLoop;
+  class MachineConstantPool;
   class MachineConstantPoolEntry;
   class MachineConstantPoolValue;
+  class MachineJumpTableInfo;
   class MachineModuleInfo;
+  class MCInst;
+  class MCContext;
+  class MCSection;
+  class MCStreamer;
   class DwarfWriter;
   class Mangler;
-  class Section;
-  class TargetAsmInfo;
+  class MCAsmInfo;
+  class TargetLoweringObjectFile;
   class Type;
-  class raw_ostream;
+  class formatted_raw_ostream;
 
   /// AsmPrinter - This class is intended to be used as a driving class for all
   /// asm writers.
@@ -57,31 +69,50 @@ namespace llvm {
     typedef DenseMap<GCStrategy*,GCMetadataPrinter*> gcp_map_type;
     typedef gcp_map_type::iterator gcp_iterator;
     gcp_map_type GCMetadataPrinters;
-    
+
+    /// If VerboseAsm is set, a pointer to the loop info for this
+    /// function.
+    ///
+    MachineLoopInfo *LI;
+
   protected:
     /// MMI - If available, this is a pointer to the current MachineModuleInfo.
     MachineModuleInfo *MMI;
     
     /// DW - If available, this is a pointer to the current dwarf writer.
     DwarfWriter *DW;
-    
+
   public:
     /// Output stream on which we're printing assembly code.
     ///
-    raw_ostream &O;
+    formatted_raw_ostream &O;
 
     /// Target machine description.
     ///
     TargetMachine &TM;
     
+    /// getObjFileLowering - Return information about object file lowering.
+    TargetLoweringObjectFile &getObjFileLowering() const;
+    
     /// Target Asm Printer information.
     ///
-    const TargetAsmInfo *TAI;
+    const MCAsmInfo *MAI;
 
     /// Target Register Information.
     ///
     const TargetRegisterInfo *TRI;
 
+    /// OutContext - This is the context for the output file that we are
+    /// streaming.  This owns all of the global MC-related objects for the
+    /// generated translation unit.
+    MCContext &OutContext;
+    
+    /// OutStreamer - This is the MCStreamer object for the file we are
+    /// generating.  This contains the transient state for the current
+    /// translation unit that we are generating (such as the current section
+    /// etc).
+    MCStreamer &OutStreamer;
+    
     /// The current machine function.
     const MachineFunction *MF;
 
@@ -94,18 +125,18 @@ namespace llvm {
     ///
     std::string CurrentFnName;
     
-    /// CurrentSection - The current section we are emitting to.  This is
-    /// controlled and used by the SwitchSection method.
-    std::string CurrentSection;
-    const Section* CurrentSection_;
-
-    /// IsInTextSection - True if the current section we are emitting to is a
-    /// text section.
-    bool IsInTextSection;
+    /// getCurrentSection() - Return the current section we are emitting to.
+    const MCSection *getCurrentSection() const;
+    
 
     /// VerboseAsm - Emit comments in assembly output if this is true.
     ///
     bool VerboseAsm;
+
+    /// ExuberantAsm - Emit many more comments in assembly output if
+    /// this is true.
+    ///
+    bool ExuberantAsm;
 
     /// Private state for PrintSpecial()
     // Assign a unique ID to this machine instruction.
@@ -117,8 +148,8 @@ namespace llvm {
     mutable DebugLocTuple PrevDLT;
 
   protected:
-    explicit AsmPrinter(raw_ostream &o, TargetMachine &TM,
-                        const TargetAsmInfo *T, bool V);
+    explicit AsmPrinter(formatted_raw_ostream &o, TargetMachine &TM,
+                        const MCAsmInfo *T, bool V);
     
   public:
     virtual ~AsmPrinter();
@@ -126,38 +157,6 @@ namespace llvm {
     /// isVerbose - Return true if assembly output should contain comments.
     ///
     bool isVerbose() const { return VerboseAsm; }
-
-    /// SwitchToTextSection - Switch to the specified section of the executable
-    /// if we are not already in it!  If GV is non-null and if the global has an
-    /// explicitly requested section, we switch to the section indicated for the
-    /// global instead of NewSection.
-    ///
-    /// If the new section is an empty string, this method forgets what the
-    /// current section is, but does not emit a .section directive.
-    ///
-    /// This method is used when about to emit executable code.
-    ///
-    void SwitchToTextSection(const char *NewSection, 
-                             const GlobalValue *GV = NULL);
-
-    /// SwitchToDataSection - Switch to the specified section of the executable
-    /// if we are not already in it!  If GV is non-null and if the global has an
-    /// explicitly requested section, we switch to the section indicated for the
-    /// global instead of NewSection.
-    ///
-    /// If the new section is an empty string, this method forgets what the
-    /// current section is, but does not emit a .section directive.
-    ///
-    /// This method is used when about to emit data.  For most assemblers, this
-    /// is the same as the SwitchToTextSection method, but not all assemblers
-    /// are the same.
-    ///
-    void SwitchToDataSection(const char *NewSection, 
-                             const GlobalValue *GV = NULL);
-
-    /// SwitchToSection - Switch to the specified section of the executable if
-    /// we are not already in it!
-    void SwitchToSection(const Section* NS);
 
     /// getGlobalLinkName - Returns the asm/link name of of the specified
     /// global variable.  Should be overridden by each target asm printer to
@@ -169,11 +168,9 @@ namespace llvm {
     /// Should be overridden if an indirect reference should be used.
     virtual void EmitExternalGlobal(const GlobalVariable *GV);
 
-    /// getCurrentFunctionEHName - Called to return (and cache) the
-    /// CurrentFnEHName.
+    /// getCurrentFunctionEHName - Called to return the CurrentFnEHName.
     /// 
-    const std::string &getCurrentFunctionEHName(const MachineFunction *MF,
-                                                std::string &FuncEHName) const;
+    std::string getCurrentFunctionEHName(const MachineFunction *MF) const;
 
   protected:
     /// getAnalysisUsage - Record analysis usage.
@@ -212,6 +209,10 @@ namespace llvm {
                                        unsigned AsmVariant, 
                                        const char *ExtraCode);
     
+    /// PrintGlobalVariable - Emit the specified global variable and its
+    /// initializer to the output stream.
+    virtual void PrintGlobalVariable(const GlobalVariable *GV) = 0;
+
     /// SetupMachineFunction - This should be called when a new MachineFunction
     /// is being processed from runOnMachineFunction.
     void SetupMachineFunction(MachineFunction &MF);
@@ -241,7 +242,7 @@ namespace llvm {
     /// special global used by LLVM.  If so, emit it and return true, otherwise
     /// do nothing and return false.
     bool EmitSpecialLLVMGlobal(const GlobalVariable *GV);
-    
+
   public:
     //===------------------------------------------------------------------===//
     /// LEB 128 number encoding.
@@ -332,6 +333,19 @@ namespace llvm {
     /// debug tables.
     void printDeclare(const MachineInstr *MI) const;
 
+    /// EmitComments - Pretty-print comments for instructions
+    void EmitComments(const MachineInstr &MI) const;
+    /// EmitComments - Pretty-print comments for instructions
+    void EmitComments(const MCInst &MI) const;
+    /// EmitComments - Pretty-print comments for basic blocks
+    void EmitComments(const MachineBasicBlock &MBB) const;
+
+    /// printMCInst - Print an MCInst for this target.
+    ///
+    /// Note, this is only a temporary hack to allow the MCStreamer to print
+    /// instructions, do not use this function outside of llvm-mc.
+    virtual void printMCInst(const MCInst *MI);
+
   protected:
     /// EmitZeros - Emit a block of zeros.
     ///
@@ -383,22 +397,14 @@ namespace llvm {
     /// specified type.
     void printDataDirective(const Type *type, unsigned AddrSpace = 0);
 
-    /// printSuffixedName - This prints a name with preceding 
-    /// getPrivateGlobalPrefix and the specified suffix, handling quoted names
-    /// correctly.
-    void printSuffixedName(const char *Name, const char *Suffix,
-                           const char *Prefix = 0);
-    void printSuffixedName(const std::string &Name, const char* Suffix);
-
     /// printVisibility - This prints visibility information about symbol, if
     /// this is suported by the target.
     void printVisibility(const std::string& Name, unsigned Visibility) const;
 
     /// printOffset - This is just convenient handler for printing offsets.
     void printOffset(int64_t Offset) const;
-
+ 
   private:
-    const GlobalValue *findGlobalValue(const Constant* CV);
     void EmitLLVMUsedList(Constant *List);
     void EmitXXStructorList(Constant *List);
     void EmitGlobalConstantStruct(const ConstantStruct* CVS,

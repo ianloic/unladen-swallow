@@ -69,7 +69,8 @@ namespace X86 {
 /// instruction info tracks.
 ///
 namespace X86II {
-  enum {
+  /// Target Operand Flag enum.
+  enum TOF {
     //===------------------------------------------------------------------===//
     // X86 Specific MachineOperand flags.
     
@@ -154,7 +155,72 @@ namespace X86II {
     /// dllimport linkage on windows.
     MO_DLLIMPORT = 12,
     
+    /// MO_DARWIN_STUB - On a symbol operand "FOO", this indicates that the
+    /// reference is actually to the "FOO$stub" symbol.  This is used for calls
+    /// and jumps to external functions on Tiger and before.
+    MO_DARWIN_STUB = 13,
     
+    /// MO_DARWIN_NONLAZY - On a symbol operand "FOO", this indicates that the
+    /// reference is actually to the "FOO$non_lazy_ptr" symbol, which is a
+    /// non-PIC-base-relative reference to a non-hidden dyld lazy pointer stub.
+    MO_DARWIN_NONLAZY = 14,
+
+    /// MO_DARWIN_NONLAZY_PIC_BASE - On a symbol operand "FOO", this indicates
+    /// that the reference is actually to "FOO$non_lazy_ptr - PICBASE", which is
+    /// a PIC-base-relative reference to a non-hidden dyld lazy pointer stub.
+    MO_DARWIN_NONLAZY_PIC_BASE = 15,
+    
+    /// MO_DARWIN_HIDDEN_NONLAZY - On a symbol operand "FOO", this indicates
+    /// that the reference is actually to the "FOO$non_lazy_ptr" symbol, which
+    /// is a non-PIC-base-relative reference to a hidden dyld lazy pointer stub.
+    MO_DARWIN_HIDDEN_NONLAZY = 16,
+    
+    /// MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE - On a symbol operand "FOO", this
+    /// indicates that the reference is actually to "FOO$non_lazy_ptr -PICBASE",
+    /// which is a PIC-base-relative reference to a hidden dyld lazy pointer
+    /// stub.
+    MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE = 17
+  };
+}
+
+/// isGlobalStubReference - Return true if the specified TargetFlag operand is
+/// a reference to a stub for a global, not the global itself.
+inline static bool isGlobalStubReference(unsigned char TargetFlag) {
+  switch (TargetFlag) {
+  case X86II::MO_DLLIMPORT: // dllimport stub.
+  case X86II::MO_GOTPCREL:  // rip-relative GOT reference.
+  case X86II::MO_GOT:       // normal GOT reference.
+  case X86II::MO_DARWIN_NONLAZY_PIC_BASE:        // Normal $non_lazy_ptr ref.
+  case X86II::MO_DARWIN_NONLAZY:                 // Normal $non_lazy_ptr ref.
+  case X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE: // Hidden $non_lazy_ptr ref.
+  case X86II::MO_DARWIN_HIDDEN_NONLAZY:          // Hidden $non_lazy_ptr ref.
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// isGlobalRelativeToPICBase - Return true if the specified global value
+/// reference is relative to a 32-bit PIC base (X86ISD::GlobalBaseReg).  If this
+/// is true, the addressing mode has the PIC base register added in (e.g. EBX).
+inline static bool isGlobalRelativeToPICBase(unsigned char TargetFlag) {
+  switch (TargetFlag) {
+  case X86II::MO_GOTOFF:                         // isPICStyleGOT: local global.
+  case X86II::MO_GOT:                            // isPICStyleGOT: other global.
+  case X86II::MO_PIC_BASE_OFFSET:                // Darwin local global.
+  case X86II::MO_DARWIN_NONLAZY_PIC_BASE:        // Darwin/32 external global.
+  case X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE: // Darwin/32 hidden global.
+    return true;
+  default:
+    return false;
+  }
+}
+ 
+/// X86II - This namespace holds all of the target specific flags that
+/// instruction info tracks.
+///
+namespace X86II {
+  enum {
     //===------------------------------------------------------------------===//
     // Instruction encodings.  These are the standard/most common forms for X86
     // instructions.
@@ -255,6 +321,9 @@ namespace X86II {
 
     // T8, TA - Prefix after the 0x0F prefix.
     T8 = 13 << Op0Shift,  TA = 14 << Op0Shift,
+    
+    // TF - Prefix before and after 0x0F
+    TF = 15 << Op0Shift,
 
     //===------------------------------------------------------------------===//
     // REX_W - REX prefixes are instruction prefixes used in 64-bit mode.
@@ -361,10 +430,10 @@ class X86InstrInfo : public TargetInstrInfoImpl {
   /// RegOp2MemOpTable2Addr, RegOp2MemOpTable0, RegOp2MemOpTable1,
   /// RegOp2MemOpTable2 - Load / store folding opcode maps.
   ///
-  DenseMap<unsigned*, unsigned> RegOp2MemOpTable2Addr;
-  DenseMap<unsigned*, unsigned> RegOp2MemOpTable0;
-  DenseMap<unsigned*, unsigned> RegOp2MemOpTable1;
-  DenseMap<unsigned*, unsigned> RegOp2MemOpTable2;
+  DenseMap<unsigned*, std::pair<unsigned,unsigned> > RegOp2MemOpTable2Addr;
+  DenseMap<unsigned*, std::pair<unsigned,unsigned> > RegOp2MemOpTable0;
+  DenseMap<unsigned*, std::pair<unsigned,unsigned> > RegOp2MemOpTable1;
+  DenseMap<unsigned*, std::pair<unsigned,unsigned> > RegOp2MemOpTable2;
   
   /// MemOp2RegOpTable - Load / store unfolding opcode map.
   ///
@@ -390,7 +459,8 @@ public:
 
   bool isReallyTriviallyReMaterializable(const MachineInstr *MI) const;
   void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
-                     unsigned DestReg, const MachineInstr *Orig) const;
+                     unsigned DestReg, unsigned SubIdx,
+                     const MachineInstr *Orig) const;
 
   bool isInvariantLoad(const MachineInstr *MI) const;
 
@@ -536,9 +606,10 @@ public:
 
 private:
   MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
-                                      MachineInstr* MI,
-                                      unsigned OpNum,
-                                      const SmallVectorImpl<MachineOperand> &MOs) const;
+                                     MachineInstr* MI,
+                                     unsigned OpNum,
+                                     const SmallVectorImpl<MachineOperand> &MOs,
+                                     unsigned Alignment) const;
 };
 
 } // End llvm namespace

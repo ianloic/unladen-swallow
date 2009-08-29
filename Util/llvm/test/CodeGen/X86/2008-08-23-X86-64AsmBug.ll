@@ -2,6 +2,7 @@
 ; RUN: llvm-as < %s | llc -mtriple=x86_64-apple-darwin | grep movq
 ; PR2677
 
+
 	%struct.Bigint = type { %struct.Bigint*, i32, i32, i32, i32, [1 x i32] }
 
 define double @_Z7qstrtodPKcPS0_Pb(i8* %s00, i8** %se, i8* %ok) nounwind {

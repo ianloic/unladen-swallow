@@ -15,9 +15,9 @@
 #define DEBUG_TYPE "asm-printer"
 #include "llvm/MC/MCInst.h"
 #include "X86ATTAsmPrinter.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FormattedStream.h"
 using namespace llvm;
 
 // Include the auto-generated portion of the assembly writer.
@@ -28,7 +28,7 @@ using namespace llvm;
 
 void X86ATTAsmPrinter::printSSECC(const MCInst *MI, unsigned Op) {
   switch (MI->getOperand(Op).getImm()) {
-  default: assert(0 && "Invalid ssecc argument!");
+  default: llvm_unreachable("Invalid ssecc argument!");
   case 0: O << "eq"; break;
   case 1: O << "lt"; break;
   case 2: O << "le"; break;
@@ -42,8 +42,8 @@ void X86ATTAsmPrinter::printSSECC(const MCInst *MI, unsigned Op) {
 
 
 void X86ATTAsmPrinter::printPICLabel(const MCInst *MI, unsigned Op) {
-  assert(0 &&
-         "This is only used for MOVPC32r, should lower before asm printing!");
+  llvm_unreachable("This is only used for MOVPC32r,"
+                   "should lower before asm printing!");
 }
 
 
@@ -55,13 +55,15 @@ void X86ATTAsmPrinter::print_pcrel_imm(const MCInst *MI, unsigned OpNo) {
   
   if (Op.isImm())
     O << Op.getImm();
+  else if (Op.isMCValue())
+    Op.getMCValue().print(O);
   else if (Op.isMBBLabel())
     // FIXME: Keep in sync with printBasicBlockLabel.  printBasicBlockLabel
     // should eventually call into this code, not the other way around.
-    O << TAI->getPrivateGlobalPrefix() << "BB" << Op.getMBBLabelFunction()
+    O << MAI->getPrivateGlobalPrefix() << "BB" << Op.getMBBLabelFunction()
       << '_' << Op.getMBBLabelBlock();
   else
-    assert(0 && "Unknown pcrel immediate operand");
+    llvm_unreachable("Unknown pcrel immediate operand");
 }
 
 
@@ -75,9 +77,9 @@ void X86ATTAsmPrinter::printOperand(const MCInst *MI, unsigned OpNo,
     unsigned Reg = Op.getReg();
 #if 0
     if (Modifier && strncmp(Modifier, "subreg", strlen("subreg")) == 0) {
-      MVT VT = (strcmp(Modifier+6,"64") == 0) ?
-      MVT::i64 : ((strcmp(Modifier+6, "32") == 0) ? MVT::i32 :
-                  ((strcmp(Modifier+6,"16") == 0) ? MVT::i16 : MVT::i8));
+      EVT VT = (strcmp(Modifier+6,"64") == 0) ?
+      EVT::i64 : ((strcmp(Modifier+6, "32") == 0) ? EVT::i32 :
+                  ((strcmp(Modifier+6,"16") == 0) ? EVT::i16 : EVT::i8));
       Reg = getX86SubSuperRegister(Reg, VT);
     }
 #endif
@@ -87,6 +89,10 @@ void X86ATTAsmPrinter::printOperand(const MCInst *MI, unsigned OpNo,
     //if (!Modifier || (strcmp(Modifier, "debug") && strcmp(Modifier, "mem")))
     O << '$';
     O << Op.getImm();
+    return;
+  } else if (Op.isMCValue()) {
+    O << '$';
+    Op.getMCValue().print(O);
     return;
   }
   
@@ -103,8 +109,10 @@ void X86ATTAsmPrinter::printLeaMemReference(const MCInst *MI, unsigned Op) {
     int64_t DispVal = DispSpec.getImm();
     if (DispVal || (!IndexReg.getReg() && !BaseReg.getReg()))
       O << DispVal;
+  } else if (DispSpec.isMCValue()) {
+    DispSpec.getMCValue().print(O);
   } else {
-    LLVM_UNREACHABLE("non-immediate displacement for LEA?");
+    llvm_unreachable("non-immediate displacement for LEA?");
     //assert(DispSpec.isGlobal() || DispSpec.isCPI() ||
     //       DispSpec.isJTI() || DispSpec.isSymbol());
     //printOperand(MI, Op+3, "mem");

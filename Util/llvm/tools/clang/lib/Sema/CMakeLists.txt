@@ -7,10 +7,11 @@ add_clang_library(clangSema
   Sema.cpp
   SemaAccess.cpp
   SemaAttr.cpp
-  SemaChecking.cpp
+  SemaCXXCast.cpp
   SemaCXXScopeSpec.cpp
-  SemaDeclAttr.cpp
+  SemaChecking.cpp
   SemaDecl.cpp
+  SemaDeclAttr.cpp
   SemaDeclCXX.cpp
   SemaDeclObjC.cpp
   SemaExpr.cpp
@@ -19,15 +20,12 @@ add_clang_library(clangSema
   SemaInherit.cpp
   SemaInit.cpp
   SemaLookup.cpp
-  SemaNamedCast.cpp
   SemaOverload.cpp
   SemaStmt.cpp
   SemaTemplate.cpp
   SemaTemplateDeduction.cpp
   SemaTemplateInstantiate.cpp
   SemaTemplateInstantiateDecl.cpp
-  SemaTemplateInstantiateExpr.cpp
-  SemaTemplateInstantiateStmt.cpp
   SemaType.cpp
   )
 

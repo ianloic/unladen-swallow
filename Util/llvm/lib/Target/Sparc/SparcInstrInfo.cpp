@@ -17,6 +17,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "SparcGenInstrInfo.inc"
 using namespace llvm;
 
@@ -160,30 +161,7 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     BuildMI(MBB, I, DL, get(SP::STDFri)).addFrameIndex(FI).addImm(0)
       .addReg(SrcReg,  getKillRegState(isKill));
   else
-    assert(0 && "Can't store this register to stack slot");
-}
-
-void SparcInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
-                                    bool isKill,
-                                    SmallVectorImpl<MachineOperand> &Addr,
-                                    const TargetRegisterClass *RC,
-                                 SmallVectorImpl<MachineInstr*> &NewMIs) const {
-  unsigned Opc = 0;
-  DebugLoc DL = DebugLoc::getUnknownLoc();
-  if (RC == SP::IntRegsRegisterClass)
-    Opc = SP::STri;
-  else if (RC == SP::FPRegsRegisterClass)
-    Opc = SP::STFri;
-  else if (RC == SP::DFPRegsRegisterClass)
-    Opc = SP::STDFri;
-  else
-    assert(0 && "Can't load this register");
-  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc));
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
-    MIB.addOperand(Addr[i]);
-  MIB.addReg(SrcReg, getKillRegState(isKill));
-  NewMIs.push_back(MIB);
-  return;
+    llvm_unreachable("Can't store this register to stack slot");
 }
 
 void SparcInstrInfo::
@@ -200,28 +178,7 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   else if (RC == SP::DFPRegsRegisterClass)
     BuildMI(MBB, I, DL, get(SP::LDDFri), DestReg).addFrameIndex(FI).addImm(0);
   else
-    assert(0 && "Can't load this register from stack slot");
-}
-
-void SparcInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
-                                     SmallVectorImpl<MachineOperand> &Addr,
-                                     const TargetRegisterClass *RC,
-                                 SmallVectorImpl<MachineInstr*> &NewMIs) const {
-  unsigned Opc = 0;
-  if (RC == SP::IntRegsRegisterClass)
-    Opc = SP::LDri;
-  else if (RC == SP::FPRegsRegisterClass)
-    Opc = SP::LDFri;
-  else if (RC == SP::DFPRegsRegisterClass)
-    Opc = SP::LDDFri;
-  else
-    assert(0 && "Can't load this register");
-  DebugLoc DL = DebugLoc::getUnknownLoc();
-  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc), DestReg);
-  for (unsigned i = 0, e = Addr.size(); i != e; ++i)
-    MIB.addOperand(Addr[i]);
-  NewMIs.push_back(MIB);
-  return;
+    llvm_unreachable("Can't load this register from stack slot");
 }
 
 MachineInstr *SparcInstrInfo::foldMemoryOperandImpl(MachineFunction &MF,

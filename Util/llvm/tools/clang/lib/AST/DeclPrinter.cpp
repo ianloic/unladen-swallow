@@ -19,7 +19,6 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace clang;
@@ -34,6 +33,8 @@ namespace {
     llvm::raw_ostream& Indent();
     void ProcessDeclGroup(llvm::SmallVectorImpl<Decl*>& Decls);
 
+    void Print(AccessSpecifier AS);
+    
   public:
     DeclPrinter(llvm::raw_ostream &Out, ASTContext &Context, 
                 const PrintingPolicy &Policy,
@@ -71,6 +72,8 @@ namespace {
     void VisitObjCCompatibleAliasDecl(ObjCCompatibleAliasDecl *D);
     void VisitObjCPropertyDecl(ObjCPropertyDecl *D);
     void VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *D);
+    void VisitUnresolvedUsingDecl(UnresolvedUsingDecl *D);
+    void VisitUsingDecl(UsingDecl *D);
   };
 }
 
@@ -90,7 +93,7 @@ static QualType GetBaseType(QualType T) {
   while (!BaseType->isSpecifierType()) {
     if (isa<TypedefType>(BaseType))
       break;
-    else if (const PointerType* PTy = BaseType->getAsPointerType())
+    else if (const PointerType* PTy = BaseType->getAs<PointerType>())
       BaseType = PTy->getPointeeType();
     else if (const ArrayType* ATy = dyn_cast<ArrayType>(BaseType))
       BaseType = ATy->getElementType();
@@ -164,6 +167,15 @@ void DeclPrinter::ProcessDeclGroup(llvm::SmallVectorImpl<Decl*>& Decls) {
 
 }
 
+void DeclPrinter::Print(AccessSpecifier AS) {
+  switch(AS) {
+  case AS_none:      break;
+  case AS_public:    Out << "public"; break;
+  case AS_protected: Out << "protected"; break;
+  case AS_private:   Out << " private"; break;
+  }
+}
+
 //----------------------------------------------------------------------------
 // Common C declarations
 //----------------------------------------------------------------------------
@@ -172,6 +184,9 @@ void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
   if (Indent)
     Indentation += Policy.Indentation;
 
+  bool PrintAccess = isa<CXXRecordDecl>(DC);
+  AccessSpecifier CurAS = AS_none;
+  
   llvm::SmallVector<Decl*, 2> Decls;
   for (DeclContext::decl_iterator D = DC->decls_begin(), DEnd = DC->decls_end();
        D != DEnd; ++D) {
@@ -185,6 +200,15 @@ void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
         continue;
     }
 
+    if (PrintAccess) {
+      AccessSpecifier AS = D->getAccess();
+      if (AS != CurAS) {
+        Print(AS);
+        Out << ":\n";
+        CurAS = AS;
+      }
+    }
+    
     // The next bits of code handles stuff like "struct {int x;} a,b"; we're
     // forced to merge the declarations because there's no other way to
     // refer to the struct in question.  This limited merging is safe without
@@ -335,7 +359,81 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
     }
 
     Proto += ")";
-    AFT->getResultType().getAsStringInternal(Proto, Policy);
+    if (D->hasAttr<NoReturnAttr>())
+      Proto += " __attribute((noreturn))";
+    if (CXXConstructorDecl *CDecl = dyn_cast<CXXConstructorDecl>(D)) {
+      if (CDecl->getNumBaseOrMemberInitializers() > 0) {
+        Proto += " : ";
+        Out << Proto;
+        Proto.clear();
+        for (CXXConstructorDecl::init_const_iterator B = CDecl->init_begin(), 
+             E = CDecl->init_end();
+             B != E; ++B) {
+          CXXBaseOrMemberInitializer * BMInitializer = (*B);
+          if (B != CDecl->init_begin())
+            Out << ", ";
+          bool hasArguments = (BMInitializer->arg_begin() != 
+                               BMInitializer->arg_end());
+          if (BMInitializer->isMemberInitializer()) {
+            FieldDecl *FD = BMInitializer->getMember();
+            Out <<  FD->getNameAsString();
+          }
+          else // FIXME. skip dependent types for now.
+            if (const RecordType *RT = 
+                BMInitializer->getBaseClass()->getAs<RecordType>()) {
+              const CXXRecordDecl *BaseDecl = 
+                cast<CXXRecordDecl>(RT->getDecl());
+              Out << BaseDecl->getNameAsString();
+          }
+          if (hasArguments) {
+            Out << "(";
+            for (CXXBaseOrMemberInitializer::const_arg_iterator BE = 
+                 BMInitializer->const_arg_begin(), 
+                 EE =  BMInitializer->const_arg_end(); BE != EE; ++BE) {
+              if (BE != BMInitializer->const_arg_begin())
+                Out<< ", ";
+              const Expr *Exp = (*BE);
+              Exp->printPretty(Out, Context, 0, Policy, Indentation);
+            }
+            Out << ")";
+          } else
+            Out << "()";
+        }
+      }
+    }
+    else if (CXXDestructorDecl *DDecl = dyn_cast<CXXDestructorDecl>(D)) {
+      if (DDecl->getNumBaseOrMemberDestructions() > 0) {
+        // List order of base/member destruction for visualization purposes.
+        assert (D->isThisDeclarationADefinition() && "Destructor with dtor-list");
+        Proto += "/* : ";
+        for (CXXDestructorDecl::destr_const_iterator *B = DDecl->destr_begin(), 
+             *E = DDecl->destr_end();
+             B != E; ++B) {
+          uintptr_t BaseOrMember = (*B);
+          if (B != DDecl->destr_begin())
+            Proto += ", ";
+
+          if (DDecl->isMemberToDestroy(BaseOrMember)) {
+            FieldDecl *FD = DDecl->getMemberToDestroy(BaseOrMember);
+            Proto += "~";
+            Proto += FD->getNameAsString();
+          }
+          else // FIXME. skip dependent types for now.
+            if (const RecordType *RT = 
+                  DDecl->getAnyBaseClassToDestroy(BaseOrMember)
+                    ->getAs<RecordType>()) {
+              const CXXRecordDecl *BaseDecl = 
+                cast<CXXRecordDecl>(RT->getDecl());
+              Proto += "~";
+              Proto += BaseDecl->getNameAsString();
+            }
+          Proto += "()";
+        }
+        Proto += " */";
+      }
+    }
+    else
+      AFT->getResultType().getAsStringInternal(Proto, Policy);
   } else {
     D->getType().getAsStringInternal(Proto, Policy);
   }
@@ -467,14 +565,8 @@ void DeclPrinter::VisitCXXRecordDecl(CXXRecordDecl *D) {
         if (Base->isVirtual())
           Out << "virtual ";
 
-        switch(Base->getAccessSpecifierAsWritten()) {
-        case AS_none:      break;
-        case AS_public:    Out << "public "; break;
-        case AS_protected: Out << "protected "; break;
-        case AS_private:   Out << " private "; break;
-        }
-
-        Out << Base->getType().getAsString(Policy);
+        Print(Base->getAccessSpecifierAsWritten());
+        Out << " " << Base->getType().getAsString(Policy);
       }
     }
 
@@ -763,3 +855,17 @@ void DeclPrinter::VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *PID) {
   if (PID->getPropertyIvarDecl())
     Out << "=" << PID->getPropertyIvarDecl()->getNameAsString();
 }
+
+void DeclPrinter::VisitUsingDecl(UsingDecl *D) {
+  Out << "using ";
+  D->getTargetNestedNameDecl()->print(Out, Policy);
+  Out << D->getTargetDecl()->getNameAsString();
+}
+
+void DeclPrinter::VisitUnresolvedUsingDecl(UnresolvedUsingDecl *D) {
+  Out << "using ";
+  D->getTargetNestedNameSpecifier()->print(Out, Policy);
+  Out << D->getTargetName().getAsString();
+}
+
+

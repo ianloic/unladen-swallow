@@ -19,7 +19,9 @@ def Implicit : DiagGroup<"implicit", [
 
 
 // Empty DiagGroups: these are recognized by clang but ignored.
+def : DiagGroup<"address">;
 def : DiagGroup<"aggregate-return">;
+def : DiagGroup<"attributes">;
 def : DiagGroup<"bad-function-cast">;
 def : DiagGroup<"cast-align">;
 def : DiagGroup<"cast-qual">;
@@ -38,6 +40,7 @@ def FormatExtraArgs : DiagGroup<"format-extra-args">;
 def FormatZeroLength : DiagGroup<"format-zero-length">;
 
 def FourByteMultiChar : DiagGroup<"four-char-constants">;
+def : DiagGroup<"import">;
 def : DiagGroup<"init-self">;
 def : DiagGroup<"inline">;
 def : DiagGroup<"int-to-pointer-cast">;
@@ -49,15 +52,16 @@ def : DiagGroup<"missing-noreturn">;
 def MultiChar : DiagGroup<"multichar">;
 def : DiagGroup<"nested-externs">;
 def : DiagGroup<"newline-eof">;
-def : DiagGroup<"long-long">;
+def LongLong : DiagGroup<"long-long">;
 def MismatchedTags : DiagGroup<"mismatched-tags">;
 def : DiagGroup<"missing-field-initializers">;
 def NonNull : DiagGroup<"nonnull">;
 def : DiagGroup<"nonportable-cfstrings">;
 def : DiagGroup<"old-style-definition">;
+def : DiagGroup<"overflow">;
 def : DiagGroup<"packed">;
 def Parentheses : DiagGroup<"parentheses">;
-def : DiagGroup<"pointer-arith">;
+def PointerArith : DiagGroup<"pointer-arith">;
 def : DiagGroup<"pointer-to-int-cast">;
 def : DiagGroup<"redundant-decls">;
 def ReturnType : DiagGroup<"return-type">;
@@ -94,7 +98,9 @@ def UnusedParameter : DiagGroup<"unused-parameter">;
 def UnusedValue    : DiagGroup<"unused-value">;
 def UnusedVariable : DiagGroup<"unused-variable">;
 def ReadOnlySetterAttrs : DiagGroup<"readonly-setter-attrs">;
+def Reorder : DiagGroup<"reorder">;
 def UndeclaredSelector : DiagGroup<"undeclared-selector">;
+def SuperSubClassMismatch : DiagGroup<"super-class-method-mismatch">;
 def : DiagGroup<"variadic-macros">;
 def VectorConversions : DiagGroup<"vector-conversions">;      // clang specific
 def VolatileRegisterVar : DiagGroup<"volatile-register-var">;
@@ -126,6 +132,7 @@ def Most : DiagGroup<"most", [
     Implicit,
     MismatchedTags,
     MultiChar,
+    ReturnType,
     Switch,
     Trigraphs,
     Uninitialized,
@@ -134,8 +141,7 @@ def Most : DiagGroup<"most", [
     UnusedVariable,
     VectorConversions,
     VolatileRegisterVar,
-    ReadOnlySetterAttrs,
-    UndeclaredSelector
+    Reorder
  ]>;
 
 // -Wall is -Wmost -Wparentheses

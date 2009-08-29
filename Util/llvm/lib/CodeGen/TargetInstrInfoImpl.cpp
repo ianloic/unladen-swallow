@@ -18,16 +18,26 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 // commuteInstruction - The default implementation of this method just exchanges
-// operand 1 and 2.
+// the two operands returned by findCommutedOpIndices.
 MachineInstr *TargetInstrInfoImpl::commuteInstruction(MachineInstr *MI,
                                                       bool NewMI) const {
   const TargetInstrDesc &TID = MI->getDesc();
   bool HasDef = TID.getNumDefs();
-  unsigned Idx1 = HasDef ? 1 : 0;
-  unsigned Idx2 = HasDef ? 2 : 1;
+  if (HasDef && !MI->getOperand(0).isReg())
+    // No idea how to commute this instruction. Target should implement its own.
+    return 0;
+  unsigned Idx1, Idx2;
+  if (!findCommutedOpIndices(MI, Idx1, Idx2)) {
+    std::string msg;
+    raw_string_ostream Msg(msg);
+    Msg << "Don't know how to commute: " << *MI;
+    llvm_report_error(Msg.str());
+  }
 
   assert(MI->getOperand(Idx1).isReg() && MI->getOperand(Idx2).isReg() &&
          "This only knows how to commute register operands so far");
@@ -70,26 +80,24 @@ MachineInstr *TargetInstrInfoImpl::commuteInstruction(MachineInstr *MI,
   return MI;
 }
 
-/// CommuteChangesDestination - Return true if commuting the specified
-/// instruction will also changes the destination operand. Also return the
-/// current operand index of the would be new destination register by
-/// reference. This can happen when the commutable instruction is also a
-/// two-address instruction.
-bool TargetInstrInfoImpl::CommuteChangesDestination(MachineInstr *MI,
-                                                    unsigned &OpIdx) const{
+/// findCommutedOpIndices - If specified MI is commutable, return the two
+/// operand indices that would swap value. Return true if the instruction
+/// is not in a form which this routine understands.
+bool TargetInstrInfoImpl::findCommutedOpIndices(MachineInstr *MI,
+                                                unsigned &SrcOpIdx1,
+                                                unsigned &SrcOpIdx2) const {
   const TargetInstrDesc &TID = MI->getDesc();
-  if (!TID.getNumDefs())
+  if (!TID.isCommutable())
     return false;
-  assert(MI->getOperand(1).isReg() && MI->getOperand(2).isReg() &&
-         "This only knows how to commute register operands so far");
-  if (MI->getOperand(0).getReg() == MI->getOperand(1).getReg()) {
-    // Must be two address instruction!
-    assert(MI->getDesc().getOperandConstraint(0, TOI::TIED_TO) &&
-           "Expecting a two-address instruction!");
-    OpIdx = 2;
-    return true;
-  }
-  return false;
+  // This assumes v0 = op v1, v2 and commuting would swap v1 and v2. If this
+  // is not true, then the target must implement this.
+  SrcOpIdx1 = TID.getNumDefs();
+  SrcOpIdx2 = SrcOpIdx1 + 1;
+  if (!MI->getOperand(SrcOpIdx1).isReg() ||
+      !MI->getOperand(SrcOpIdx2).isReg())
+    // No idea.
+    return false;
+  return true;
 }
 
 
@@ -122,10 +130,34 @@ bool TargetInstrInfoImpl::PredicateInstruction(MachineInstr *MI,
 void TargetInstrInfoImpl::reMaterialize(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator I,
                                         unsigned DestReg,
+                                        unsigned SubIdx,
                                         const MachineInstr *Orig) const {
   MachineInstr *MI = MBB.getParent()->CloneMachineInstr(Orig);
-  MI->getOperand(0).setReg(DestReg);
+  MachineOperand &MO = MI->getOperand(0);
+  MO.setReg(DestReg);
+  MO.setSubReg(SubIdx);
   MBB.insert(I, MI);
+}
+
+bool TargetInstrInfoImpl::isDeadInstruction(const MachineInstr *MI) const {
+  const TargetInstrDesc &TID = MI->getDesc();
+  if (TID.mayLoad() || TID.mayStore() || TID.isCall() || TID.isTerminator() ||
+      TID.isCall() || TID.isBarrier() || TID.isReturn() ||
+      TID.hasUnmodeledSideEffects())
+    return false;
+  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = MI->getOperand(i);
+    if (!MO.isReg() || !MO.getReg())
+      continue;
+    if (MO.isDef() && !MO.isDead())
+      return false;
+    if (MO.isUse() && MO.isKill())
+      // FIXME: We can't remove kill markers or else the scavenger will assert.
+      // An alternative is to add a ADD pseudo instruction to replace kill
+      // markers.
+      return false;
+  }
+  return true;
 }
 
 unsigned

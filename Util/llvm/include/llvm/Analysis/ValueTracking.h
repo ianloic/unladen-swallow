@@ -30,14 +30,14 @@ namespace llvm {
   /// bit sets.  This code only analyzes bits in Mask, in order to short-circuit
   /// processing.
   void ComputeMaskedBits(Value *V, const APInt &Mask, APInt &KnownZero,
-                         APInt &KnownOne, TargetData *TD = 0,
+                         APInt &KnownOne, const TargetData *TD = 0,
                          unsigned Depth = 0);
   
   /// MaskedValueIsZero - Return true if 'V & Mask' is known to be zero.  We use
   /// this predicate to simplify operations downstream.  Mask is known to be
   /// zero for bits that V cannot have.
   bool MaskedValueIsZero(Value *V, const APInt &Mask, 
-                         TargetData *TD = 0, unsigned Depth = 0);
+                         const TargetData *TD = 0, unsigned Depth = 0);
 
   
   /// ComputeNumSignBits - Return the number of times the sign bit of the
@@ -48,7 +48,7 @@ namespace llvm {
   ///
   /// 'Op' must have a scalar integer type.
   ///
-  unsigned ComputeNumSignBits(Value *Op, TargetData *TD = 0,
+  unsigned ComputeNumSignBits(Value *Op, const TargetData *TD = 0,
                               unsigned Depth = 0);
 
   /// CannotBeNegativeZero - Return true if we can prove that the specified FP 
@@ -65,13 +65,13 @@ namespace llvm {
   Value *FindInsertedValue(Value *V,
                            const unsigned *idx_begin,
                            const unsigned *idx_end,
-                           LLVMContext *Context,
+                           LLVMContext &Context,
                            Instruction *InsertBefore = 0);
 
   /// This is a convenience wrapper for finding values indexed by a single index
   /// only.
   inline Value *FindInsertedValue(Value *V, const unsigned Idx,
-                                  LLVMContext *Context,
+                                  LLVMContext &Context,
                                   Instruction *InsertBefore = 0) {
     const unsigned Idxs[1] = { Idx };
     return FindInsertedValue(V, &Idxs[0], &Idxs[1], Context, InsertBefore);

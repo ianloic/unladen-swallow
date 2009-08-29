@@ -15,6 +15,7 @@
 #define SELECTIONDAGBUILD_H
 
 #include "llvm/Constants.h"
+#include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #ifndef NDEBUG
@@ -23,6 +24,7 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/CallSite.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 #include <vector>
 #include <set>
@@ -115,7 +117,7 @@ public:
   SmallSet<Instruction*, 8> CatchInfoFound;
 #endif
 
-  unsigned MakeReg(MVT VT);
+  unsigned MakeReg(EVT VT);
   
   /// isExportedInst - Return true if the specified value is an instruction
   /// exported from its block.
@@ -361,11 +363,21 @@ public:
   /// GFI - Garbage collection metadata for the function.
   GCFunctionInfo *GFI;
 
+  /// HasTailCall - This is set to true if a call in the current
+  /// block has been translated as a tail call. In this case,
+  /// no subsequent DAG nodes should be created.
+  ///
+  bool HasTailCall;
+
+  LLVMContext *Context;
+
   SelectionDAGLowering(SelectionDAG &dag, TargetLowering &tli,
                        FunctionLoweringInfo &funcinfo,
                        CodeGenOpt::Level ol)
     : CurDebugLoc(DebugLoc::getUnknownLoc()), 
-      TLI(tli), DAG(dag), FuncInfo(funcinfo), OptLevel(ol) {
+      TLI(tli), DAG(dag), FuncInfo(funcinfo), OptLevel(ol),
+      HasTailCall(false),
+      Context(dag.getContext()) {
   }
 
   void init(GCFunctionInfo *gfi, AliasAnalysis &aa);
@@ -535,12 +547,10 @@ private:
   void visitVACopy(CallInst &I);
 
   void visitUserOp1(Instruction &I) {
-    assert(0 && "UserOp1 should not exist at instruction selection time!");
-    abort();
+    llvm_unreachable("UserOp1 should not exist at instruction selection time!");
   }
   void visitUserOp2(Instruction &I) {
-    assert(0 && "UserOp2 should not exist at instruction selection time!");
-    abort();
+    llvm_unreachable("UserOp2 should not exist at instruction selection time!");
   }
   
   const char *implVisitBinaryAtomic(CallInst& I, ISD::NodeType Op);

@@ -19,18 +19,17 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Pass.h"
 #include "llvm/PassManager.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/FindUsedTypes.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetMachineRegistry.h"
 #include "llvm/Support/Mangler.h"
-#include <ios>
-using namespace llvm;
 
-namespace {
+namespace llvm {
+  extern Target TheMSILTarget;
 
   class MSILModule : public ModulePass {
     Module *ModulePtr;
@@ -56,7 +55,7 @@ namespace {
 
   };
 
-  class MSILWriter  : public FunctionPass {
+  class MSILWriter : public FunctionPass {
     struct StaticInitializer {
       const Constant* constant;
       uint64_t offset;
@@ -75,7 +74,7 @@ namespace {
     }
 
   public:
-    raw_ostream &Out;
+    formatted_raw_ostream &Out;
     Module* ModulePtr;
     const TargetData* TD;
     Mangler* Mang;
@@ -85,7 +84,11 @@ namespace {
       StaticInitList;
     const std::set<const Type *>* UsedTypes;
     static char ID;
-    MSILWriter(raw_ostream &o) : FunctionPass(&ID), Out(o) {
+    DenseMap<const Value*, unsigned> AnonValueNumbers;
+    unsigned NextAnonValueNumber;
+
+    MSILWriter(formatted_raw_ostream &o) : FunctionPass(&ID), Out(o),
+         NextAnonValueNumber(0) {
       UniqID = 0;
     }
 
@@ -183,7 +186,7 @@ namespace {
     void printIndirectSave(const Type* Ty);
 
     void printCastInstruction(unsigned int Op, const Value* V,
-                              const Type* Ty);
+                              const Type* Ty, const Type* SrcTy=0);
 
     void printGepInstruction(const Value* V, gep_type_iterator I,
                              gep_type_iterator E);
@@ -244,11 +247,12 @@ namespace {
 
     const char* getLibraryName(const GlobalVariable* GV); 
     
-    const char* getLibraryForSymbol(const char* Name, bool isFunction,
+    const char* getLibraryForSymbol(const StringRef &Name, bool isFunction,
                                     unsigned CallingConv);
 
     void printExternals();
   };
+
 }
 
 #endif

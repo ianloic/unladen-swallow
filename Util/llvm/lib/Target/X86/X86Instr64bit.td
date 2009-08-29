@@ -28,26 +28,29 @@ def i64i32imm_pcrel : Operand<i64> {
 
 
 // 64-bits but only 8 bits are significant.
-def i64i8imm   : Operand<i64>;
+def i64i8imm   : Operand<i64> {
+  let ParserMatchClass = ImmSExt8AsmOperand;
+}
 
 def lea64mem : Operand<i64> {
   let PrintMethod = "printlea64mem";
-  let MIOperandInfo = (ops GR64, i8imm, GR64, i32imm);
+  let MIOperandInfo = (ops GR64, i8imm, GR64_NOSP, i32imm);
+  let ParserMatchClass = X86MemAsmOperand;
 }
 
 def lea64_32mem : Operand<i32> {
   let PrintMethod = "printlea64_32mem";
   let AsmOperandLowerMethod = "lower_lea64_32mem";
-  let MIOperandInfo = (ops GR32, i8imm, GR32, i32imm);
+  let MIOperandInfo = (ops GR32, i8imm, GR32_NOSP, i32imm);
+  let ParserMatchClass = X86MemAsmOperand;
 }
 
 //===----------------------------------------------------------------------===//
 // Complex Pattern Definitions.
 //
 def lea64addr : ComplexPattern<i64, 4, "SelectLEAAddr",
-                        [add, mul, X86mul_imm, shl, or, frameindex, X86Wrapper,
-                         X86WrapperRIP],
-                        []>;
+                        [add, sub, mul, X86mul_imm, shl, or, frameindex,
+                         X86WrapperRIP], []>;
 
 def tls64addr : ComplexPattern<i64, 4, "SelectTLSADDRAddr",
                                [tglobaltlsaddr], []>;
@@ -129,13 +132,37 @@ let isCall = 1 in
     def CALL64pcrel32 : Ii32<0xE8, RawFrm,
                           (outs), (ins i64i32imm_pcrel:$dst, variable_ops),
                           "call\t$dst", []>,
-                        Requires<[In64BitMode]>;
+                        Requires<[In64BitMode, NotWin64]>;
     def CALL64r       : I<0xFF, MRM2r, (outs), (ins GR64:$dst, variable_ops),
-                          "call\t{*}$dst", [(X86call GR64:$dst)]>;
+                          "call\t{*}$dst", [(X86call GR64:$dst)]>,
+                        Requires<[NotWin64]>;
     def CALL64m       : I<0xFF, MRM2m, (outs), (ins i64mem:$dst, variable_ops),
-                          "call\t{*}$dst", [(X86call (loadi64 addr:$dst))]>;
+                          "call\t{*}$dst", [(X86call (loadi64 addr:$dst))]>,
+                        Requires<[NotWin64]>;
   }
 
+  // FIXME: We need to teach codegen about single list of call-clobbered registers.
+let isCall = 1 in
+  // All calls clobber the non-callee saved registers. RSP is marked as
+  // a use to prevent stack-pointer assignments that appear immediately
+  // before calls from potentially appearing dead. Uses for argument
+  // registers are added manually.
+  let Defs = [RAX, RCX, RDX, R8, R9, R10, R11,
+              FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0, ST1,
+              MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7,
+              XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, EFLAGS],
+      Uses = [RSP] in {
+    def WINCALL64pcrel32 : I<0xE8, RawFrm,
+                             (outs), (ins i64i32imm_pcrel:$dst, variable_ops),
+                             "call\t$dst", []>,
+                           Requires<[IsWin64]>;
+    def WINCALL64r       : I<0xFF, MRM2r, (outs), (ins GR64:$dst, variable_ops),
+                             "call\t{*}$dst",
+                             [(X86call GR64:$dst)]>, Requires<[IsWin64]>;
+    def WINCALL64m       : I<0xFF, MRM2m, (outs), (ins i64mem:$dst, variable_ops),
+                             "call\t{*}$dst",
+                             [(X86call (loadi64 addr:$dst))]>, Requires<[IsWin64]>;
+  }
 
 
 let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in
@@ -245,6 +272,10 @@ def REP_MOVSQ : RI<0xA5, RawFrm, (outs), (ins), "{rep;movsq|rep movsq}",
 let Defs = [RCX,RDI], Uses = [RAX,RCX,RDI] in
 def REP_STOSQ : RI<0xAB, RawFrm, (outs), (ins), "{rep;stosq|rep stosq}",
                    [(X86rep_stos i64)]>, REP;
+
+// Fast system-call instructions
+def SYSEXIT64 : RI<0x35, RawFrm,
+                   (outs), (ins), "sysexit", []>, TB;
 
 //===----------------------------------------------------------------------===//
 //  Move Instructions...
@@ -1306,14 +1337,12 @@ def Int_CVTTSS2SI64rm: RSSI<0x2C, MRMSrcMem, (outs GR64:$dst), (ins f32mem:$src)
 // Alias instructions that map movr0 to xor. Use xorl instead of xorq; it's
 // equivalent due to implicit zero-extending, and it sometimes has a smaller
 // encoding.
-// FIXME: remove when we can teach regalloc that xor reg, reg is ok.
-// FIXME: AddedComplexity gives MOV64r0 a higher priority than MOV64ri32. Remove
+// FIXME: AddedComplexity gives this a higher priority than MOV64ri32. Remove
 // when we have a better way to specify isel priority.
-let Defs = [EFLAGS], AddedComplexity = 1,
-    isReMaterializable = 1, isAsCheapAsAMove = 1 in
-def MOV64r0  : I<0x31, MRMInitReg,  (outs GR64:$dst), (ins),
-                "xor{l}\t${dst:subreg32}, ${dst:subreg32}",
-                [(set GR64:$dst, 0)]>;
+let AddedComplexity = 1 in
+def : Pat<(i64 0),
+          (SUBREG_TO_REG (i64 0), (MOV32r0), x86_subreg_32bit)>;
+
 
 // Materialize i64 constant where top 32-bits are zero.
 let AddedComplexity = 1, isReMaterializable = 1, isAsCheapAsAMove = 1 in
@@ -1343,12 +1372,12 @@ def TLS_addr64 : I<0, Pseudo, (outs), (ins lea64mem:$sym),
                   [(X86tlsaddr tls64addr:$sym)]>,
                   Requires<[In64BitMode]>;
 
-let AddedComplexity = 5 in
+let AddedComplexity = 5, isCodeGenOnly = 1 in
 def MOV64GSrm : RI<0x8B, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
                  "movq\t%gs:$src, $dst",
                  [(set GR64:$dst, (gsload addr:$src))]>, SegGS;
 
-let AddedComplexity = 5 in
+let AddedComplexity = 5, isCodeGenOnly = 1 in
 def MOV64FSrm : RI<0x8B, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
                  "movq\t%fs:$src, $dst",
                  [(set GR64:$dst, (fsload addr:$src))]>, SegFS;
@@ -1371,10 +1400,42 @@ def LXADD64 : RI<0xC1, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$ptr,GR64:$val),
                "xadd\t$val, $ptr",
                [(set GR64:$dst, (atomic_load_add_64 addr:$ptr, GR64:$val))]>,
                 TB, LOCK;
+
 def XCHG64rm : RI<0x87, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$ptr,GR64:$val),
                   "xchg\t$val, $ptr", 
                   [(set GR64:$dst, (atomic_swap_64 addr:$ptr, GR64:$val))]>;
 }
+
+// Optimized codegen when the non-memory output is not used.
+// FIXME: Use normal add / sub instructions and add lock prefix dynamically.
+def LOCK_ADD64mr : RI<0x03, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src2),
+                      "lock\n\t"
+                      "add{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD64mi8 : RIi8<0x83, MRM0m, (outs),
+                                      (ins i64mem:$dst, i64i8imm :$src2),
+                    "lock\n\t"
+                    "add{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_ADD64mi32 : RIi32<0x81, MRM0m, (outs),
+                                        (ins i64mem:$dst, i64i32imm :$src2),
+                      "lock\n\t"
+                      "add{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB64mr : RI<0x29, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src2), 
+                      "lock\n\t"
+                      "sub{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB64mi8 : RIi8<0x83, MRM5m, (outs),
+                                      (ins i64mem:$dst, i64i8imm :$src2), 
+                      "lock\n\t"
+                      "sub{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_SUB64mi32 : RIi32<0x81, MRM5m, (outs),
+                                        (ins i64mem:$dst, i64i32imm:$src2),
+                      "lock\n\t"
+                      "sub{q}\t{$src2, $dst|$dst, $src2}", []>, LOCK;
+def LOCK_INC64m : RI<0xFF, MRM0m, (outs), (ins i64mem:$dst),
+                     "lock\n\t"
+                     "inc{q}\t$dst", []>, LOCK;
+def LOCK_DEC64m : RI<0xFF, MRM1m, (outs), (ins i64mem:$dst),
+                      "lock\n\t"
+                      "dec{q}\t$dst", []>, LOCK;
 
 // Atomic exchange, and, or, xor
 let Constraints = "$val = $dst", Defs = [EFLAGS],
@@ -1409,74 +1470,72 @@ def ATOMUMAX64: I<0, Pseudo, (outs GR64:$dst),(ins i64mem:$ptr, GR64:$val),
 // Non-Instruction Patterns
 //===----------------------------------------------------------------------===//
 
-// ConstantPool GlobalAddress, ExternalSymbol, and JumpTable
+// ConstantPool GlobalAddress, ExternalSymbol, and JumpTable when not in small
+// code model mode, should use 'movabs'.  FIXME: This is really a hack, the
+//  'movabs' predicate should handle this sort of thing.
 def : Pat<(i64 (X86Wrapper tconstpool  :$dst)),
-          (MOV64ri tconstpool  :$dst)>, Requires<[NotSmallCode]>;
+          (MOV64ri tconstpool  :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
-          (MOV64ri tjumptable  :$dst)>, Requires<[NotSmallCode]>;
+          (MOV64ri tjumptable  :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
-          (MOV64ri tglobaladdr :$dst)>, Requires<[NotSmallCode]>;
+          (MOV64ri tglobaladdr :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
-          (MOV64ri texternalsym:$dst)>, Requires<[NotSmallCode]>;
+          (MOV64ri texternalsym:$dst)>, Requires<[FarData]>;
+
+// In static codegen with small code model, we can get the address of a label
+// into a register with 'movl'.  FIXME: This is a hack, the 'imm' predicate of
+// the MOV64ri64i32 should accept these.
+def : Pat<(i64 (X86Wrapper tconstpool  :$dst)),
+          (MOV64ri64i32 tconstpool  :$dst)>, Requires<[SmallCode]>;
+def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
+          (MOV64ri64i32 tjumptable  :$dst)>, Requires<[SmallCode]>;
+def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
+          (MOV64ri64i32 tglobaladdr :$dst)>, Requires<[SmallCode]>;
+def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
+          (MOV64ri64i32 texternalsym:$dst)>, Requires<[SmallCode]>;
+
+// In kernel code model, we can get the address of a label
+// into a register with 'movq'.  FIXME: This is a hack, the 'imm' predicate of
+// the MOV64ri32 should accept these.
+def : Pat<(i64 (X86Wrapper tconstpool  :$dst)),
+          (MOV64ri32 tconstpool  :$dst)>, Requires<[KernelCode]>;
+def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
+          (MOV64ri32 tjumptable  :$dst)>, Requires<[KernelCode]>;
+def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
+          (MOV64ri32 tglobaladdr :$dst)>, Requires<[KernelCode]>;
+def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
+          (MOV64ri32 texternalsym:$dst)>, Requires<[KernelCode]>;
 
 // If we have small model and -static mode, it is safe to store global addresses
 // directly as immediates.  FIXME: This is really a hack, the 'imm' predicate
-// should handle this sort of thing.
+// for MOV64mi32 should handle this sort of thing.
 def : Pat<(store (i64 (X86Wrapper tconstpool:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tconstpool:$src)>,
-          Requires<[SmallCode, IsStatic]>;
+          Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper tjumptable:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tjumptable:$src)>,
-          Requires<[SmallCode, IsStatic]>;
+          Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper tglobaladdr:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
-          Requires<[SmallCode, IsStatic]>;
+          Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper texternalsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, texternalsym:$src)>,
-          Requires<[SmallCode, IsStatic]>;
-
-// If we have small model and -static mode, it is safe to store global addresses
-// directly as immediates.  FIXME: This is really a hack, the 'imm' predicate
-// should handle this sort of thing.
-def : Pat<(store (i64 (X86WrapperRIP tconstpool:$src)), addr:$dst),
-          (MOV64mi32 addr:$dst, tconstpool:$src)>,
-          Requires<[SmallCode, IsStatic]>;
-def : Pat<(store (i64 (X86WrapperRIP tjumptable:$src)), addr:$dst),
-          (MOV64mi32 addr:$dst, tjumptable:$src)>,
-          Requires<[SmallCode, IsStatic]>;
-def : Pat<(store (i64 (X86WrapperRIP tglobaladdr:$src)), addr:$dst),
-          (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
-          Requires<[SmallCode, IsStatic]>;
-def : Pat<(store (i64 (X86WrapperRIP texternalsym:$src)), addr:$dst),
-          (MOV64mi32 addr:$dst, texternalsym:$src)>,
-          Requires<[SmallCode, IsStatic]>;
-
+          Requires<[NearData, IsStatic]>;
 
 // Calls
 // Direct PC relative function call for small code model. 32-bit displacement
 // sign extended to 64-bit.
 def : Pat<(X86call (i64 tglobaladdr:$dst)),
-          (CALL64pcrel32 tglobaladdr:$dst)>;
+          (CALL64pcrel32 tglobaladdr:$dst)>, Requires<[NotWin64]>;
 def : Pat<(X86call (i64 texternalsym:$dst)),
-          (CALL64pcrel32 texternalsym:$dst)>;
+          (CALL64pcrel32 texternalsym:$dst)>, Requires<[NotWin64]>;
 
-def : Pat<(X86tailcall (i64 tglobaladdr:$dst)),
-          (CALL64pcrel32 tglobaladdr:$dst)>;
-def : Pat<(X86tailcall (i64 texternalsym:$dst)),
-          (CALL64pcrel32 texternalsym:$dst)>;
-
-def : Pat<(X86tailcall GR64:$dst),
-          (CALL64r GR64:$dst)>;
-
+def : Pat<(X86call (i64 tglobaladdr:$dst)),
+          (WINCALL64pcrel32 tglobaladdr:$dst)>, Requires<[IsWin64]>;
+def : Pat<(X86call (i64 texternalsym:$dst)),
+          (WINCALL64pcrel32 texternalsym:$dst)>, Requires<[IsWin64]>;
 
 // tailcall stuff
-def : Pat<(X86tailcall GR32:$dst),
-          (TAILCALL)>;
-def : Pat<(X86tailcall (i64 tglobaladdr:$dst)),
-          (TAILCALL)>;
-def : Pat<(X86tailcall (i64 texternalsym:$dst)),
-          (TAILCALL)>;
-
 def : Pat<(X86tcret GR64:$dst, imm:$off),
           (TCRETURNri64 GR64:$dst, imm:$off)>;
 
@@ -1540,30 +1599,15 @@ def : Pat<(extloadi64i16 addr:$src), (MOVZX64rm16 addr:$src)>;
 // For other extloads, use subregs, since the high contents of the register are
 // defined after an extload.
 def : Pat<(extloadi64i32 addr:$src),
-          (INSERT_SUBREG (i64 (IMPLICIT_DEF)), (MOV32rm addr:$src),
+          (SUBREG_TO_REG (i64 0), (MOV32rm addr:$src),
                          x86_subreg_32bit)>;
-def : Pat<(extloadi16i1 addr:$src), 
-          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), (MOV8rm addr:$src), 
-                         x86_subreg_8bit)>,
-         Requires<[In64BitMode]>;
-def : Pat<(extloadi16i8 addr:$src), 
-          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), (MOV8rm addr:$src), 
-                         x86_subreg_8bit)>,
-         Requires<[In64BitMode]>;
 
-// anyext
-def : Pat<(i64 (anyext GR8:$src)),
-          (INSERT_SUBREG (i64 (IMPLICIT_DEF)), GR8:$src, x86_subreg_8bit)>;
-def : Pat<(i64 (anyext GR16:$src)),
-          (INSERT_SUBREG (i64 (IMPLICIT_DEF)), GR16:$src, x86_subreg_16bit)>;
-def : Pat<(i64 (anyext GR32:$src)), 
-          (INSERT_SUBREG (i64 (IMPLICIT_DEF)), GR32:$src, x86_subreg_32bit)>;
-def : Pat<(i16 (anyext GR8:$src)),
-          (INSERT_SUBREG (i16 (IMPLICIT_DEF)), GR8:$src, x86_subreg_8bit)>,
-         Requires<[In64BitMode]>;
-def : Pat<(i32 (anyext GR8:$src)),
-          (INSERT_SUBREG (i32 (IMPLICIT_DEF)), GR8:$src, x86_subreg_8bit)>,
-         Requires<[In64BitMode]>;
+// anyext. Define these to do an explicit zero-extend to
+// avoid partial-register updates.
+def : Pat<(i64 (anyext GR8 :$src)), (MOVZX64rr8  GR8  :$src)>;
+def : Pat<(i64 (anyext GR16:$src)), (MOVZX64rr16 GR16 :$src)>;
+def : Pat<(i64 (anyext GR32:$src)),
+          (SUBREG_TO_REG (i64 0), GR32:$src, x86_subreg_32bit)>;
 
 //===----------------------------------------------------------------------===//
 // Some peepholes
@@ -1661,7 +1705,19 @@ def : Pat<(i32 (zext (srl_su GR16:$src, (i8 8)))),
             (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
                             x86_subreg_8bit_hi))>,
       Requires<[In64BitMode]>;
+def : Pat<(i32 (anyext (srl_su GR16:$src, (i8 8)))),
+          (MOVZX32_NOREXrr8
+            (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
+                            x86_subreg_8bit_hi))>,
+      Requires<[In64BitMode]>;
 def : Pat<(i64 (zext (srl_su GR16:$src, (i8 8)))),
+          (SUBREG_TO_REG
+            (i64 0),
+            (MOVZX32_NOREXrr8
+              (EXTRACT_SUBREG (COPY_TO_REGCLASS GR16:$src, GR16_ABCD),
+                              x86_subreg_8bit_hi)),
+            x86_subreg_32bit)>;
+def : Pat<(i64 (anyext (srl_su GR16:$src, (i8 8)))),
           (SUBREG_TO_REG
             (i64 0),
             (MOVZX32_NOREXrr8

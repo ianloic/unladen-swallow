@@ -15,10 +15,12 @@
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
-#include "clang/AST/Expr.h"
+#include "clang/AST/ExprObjC.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/Basic/TargetInfo.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 using namespace clang;
 
 Sema::OwningStmtResult Sema::ActOnExprStmt(FullExprArg expr) {
@@ -49,6 +51,31 @@ Sema::OwningStmtResult Sema::ActOnDeclStmt(DeclGroupPtrTy dg,
   return Owned(new (Context) DeclStmt(DG, StartLoc, EndLoc));
 }
 
+void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
+  const Expr *E = dyn_cast_or_null<Expr>(S);
+  if (!E)
+    return;
+
+  // Ignore expressions that have void type.
+  if (E->getType()->isVoidType())
+    return;
+  
+  SourceLocation Loc;
+  SourceRange R1, R2;
+  if (!E->isUnusedResultAWarning(Loc, R1, R2))
+    return;
+  
+  // Okay, we have an unused result.  Depending on what the base expression is,
+  // we might want to make a more specific diagnostic.  Check for one of these
+  // cases now.
+  unsigned DiagID = diag::warn_unused_expr;
+  E = E->IgnoreParens();
+  if (isa<ObjCImplicitSetterGetterRefExpr>(E))
+    DiagID = diag::warn_unused_property_expr;
+  
+  Diag(Loc, DiagID) << R1 << R2;
+}
+
 Action::OwningStmtResult
 Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
                         MultiStmtArg elts, bool isStmtExpr) {
@@ -74,20 +101,11 @@ Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
   }
   // Warn about unused expressions in statements.
   for (unsigned i = 0; i != NumElts; ++i) {
-    Expr *E = dyn_cast<Expr>(Elts[i]);
-    if (!E) continue;
-    
-    // Warn about expressions with unused results if they are non-void and if
-    // this not the last stmt in a stmt expr.
-    if (E->getType()->isVoidType() || (isStmtExpr && i == NumElts-1))
+    // Ignore statements that are last in a statement expression.
+    if (isStmtExpr && i == NumElts - 1)
       continue;
     
-    SourceLocation Loc;
-    SourceRange R1, R2;
-    if (!E->isUnusedResultAWarning(Loc, R1, R2))
-      continue;
-
-    Diag(Loc, diag::warn_unused_expr) << R1 << R2;
+    DiagnoseUnusedExprResult(Elts[i]);
   }
 
   return Owned(new (Context) CompoundStmt(Context, Elts, NumElts, L, R));
@@ -205,6 +223,7 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal,
   }
 
   Stmt *thenStmt = ThenVal.takeAs<Stmt>();
+  DiagnoseUnusedExprResult(thenStmt);
 
   // Warn if the if block has a null body without an else value.
   // this helps prevent bugs due to typos, such as
@@ -215,9 +234,12 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal,
       Diag(stmt->getSemiLoc(), diag::warn_empty_if_body);
   }
 
+  Stmt *elseStmt = ElseVal.takeAs<Stmt>();
+  DiagnoseUnusedExprResult(elseStmt);
+  
   CondResult.release();
   return Owned(new (Context) IfStmt(IfLoc, condExpr, thenStmt,
-                                    ElseLoc, ElseVal.takeAs<Stmt>()));
+                                    ElseLoc, elseStmt));
 }
 
 Action::OwningStmtResult
@@ -561,9 +583,11 @@ Sema::ActOnWhileStmt(SourceLocation WhileLoc, FullExprArg Cond, StmtArg Body) {
                        << condType << condExpr->getSourceRange());
   }
 
+  Stmt *bodyStmt = Body.takeAs<Stmt>();
+  DiagnoseUnusedExprResult(bodyStmt);
+  
   CondArg.release();
-  return Owned(new (Context) WhileStmt(condExpr, Body.takeAs<Stmt>(), 
-                                       WhileLoc));
+  return Owned(new (Context) WhileStmt(condExpr, bodyStmt, WhileLoc));
 }
 
 Action::OwningStmtResult
@@ -587,8 +611,11 @@ Sema::ActOnDoStmt(SourceLocation DoLoc, StmtArg Body,
                        << condType << condExpr->getSourceRange());
   }
 
+  Stmt *bodyStmt = Body.takeAs<Stmt>();
+  DiagnoseUnusedExprResult(bodyStmt);
+
   Cond.release();
-  return Owned(new (Context) DoStmt(Body.takeAs<Stmt>(), condExpr, DoLoc,
+  return Owned(new (Context) DoStmt(bodyStmt, condExpr, DoLoc,
                                     WhileLoc, CondRParen));
 }
 
@@ -629,6 +656,11 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
                             diag::err_typecheck_statement_requires_scalar)
         << SecondType << Second->getSourceRange());
   }
+  
+  DiagnoseUnusedExprResult(First);
+  DiagnoseUnusedExprResult(Third);
+  DiagnoseUnusedExprResult(Body);
+
   first.release();
   second.release();
   third.release();
@@ -669,14 +701,15 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
 
       FirstType = static_cast<Expr*>(First)->getType();        
     }
-    if (!Context.isObjCObjectPointerType(FirstType))
+    if (!FirstType->isObjCObjectPointerType() && 
+        !FirstType->isBlockPointerType())
         Diag(ForLoc, diag::err_selector_element_type)
           << FirstType << First->getSourceRange();
   }
   if (Second) {
     DefaultFunctionArrayConversion(Second);
     QualType SecondType = Second->getType();
-    if (!Context.isObjCObjectPointerType(SecondType))
+    if (!SecondType->isObjCObjectPointerType())
       Diag(ForLoc, diag::err_collection_expr_type)
         << SecondType << Second->getSourceRange();
   }
@@ -834,8 +867,8 @@ static bool IsReturnCopyElidable(ASTContext &Ctx, QualType RetType,
 }
 
 Action::OwningStmtResult
-Sema::ActOnReturnStmt(SourceLocation ReturnLoc, FullExprArg rex) {
-  Expr *RetValExp = rex->takeAs<Expr>();
+Sema::ActOnReturnStmt(SourceLocation ReturnLoc, ExprArg rex) {
+  Expr *RetValExp = rex.takeAs<Expr>();
   if (CurBlock)
     return ActOnBlockReturnStmt(ReturnLoc, RetValExp);
 
@@ -864,6 +897,8 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, FullExprArg rex) {
           << CurDecl->getDeclName() << isa<ObjCMethodDecl>(CurDecl)
           << RetValExp->getSourceRange();
       }
+      
+      RetValExp = MaybeCreateCXXExprWithTemporaries(RetValExp, true);
     }
     return Owned(new (Context) ReturnStmt(ReturnLoc, RetValExp));
   }
@@ -912,6 +947,8 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, FullExprArg rex) {
     if (RetValExp) CheckReturnStackAddr(RetValExp, FnRetType, ReturnLoc);
   }
 
+  if (RetValExp)
+    RetValExp = MaybeCreateCXXExprWithTemporaries(RetValExp, true);
   return Owned(new (Context) ReturnStmt(ReturnLoc, RetValExp));
 }
 
@@ -1045,13 +1082,13 @@ Sema::OwningStmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc,
       return StmtError(Diag(Literal->getLocStart(),diag::err_asm_wide_character)
         << Literal->getSourceRange());
 
-    llvm::SmallString<16> Clobber(Literal->getStrData(),
-                                  Literal->getStrData() +
-                                  Literal->getByteLength());
+    std::string Clobber(Literal->getStrData(),
+                        Literal->getStrData() +
+                        Literal->getByteLength());
 
     if (!Context.Target.isValidGCCRegisterName(Clobber.c_str()))
       return StmtError(Diag(Literal->getLocStart(),
-                  diag::err_asm_unknown_register_name) << Clobber.c_str());
+                  diag::err_asm_unknown_register_name) << Clobber);
   }
 
   constraints.release();
@@ -1161,7 +1198,7 @@ Sema::ActOnObjCAtCatchStmt(SourceLocation AtLoc,
     if (PVD->isInvalidDecl())
       return StmtError();
     
-    if (!Context.isObjCObjectPointerType(PVD->getType()))
+    if (!PVD->getType()->isObjCObjectPointerType())
       return StmtError(Diag(PVD->getLocation(), 
                        diag::err_catch_param_not_objc_type));
     if (PVD->getType()->isObjCQualifiedIdType())
@@ -1203,8 +1240,8 @@ Sema::ActOnObjCAtThrowStmt(SourceLocation AtLoc, ExprArg expr,Scope *CurScope) {
   } else {
     QualType ThrowType = ThrowExpr->getType();
     // Make sure the expression type is an ObjC pointer or "void *".
-    if (!Context.isObjCObjectPointerType(ThrowType)) {
-      const PointerType *PT = ThrowType->getAsPointerType();
+    if (!ThrowType->isObjCObjectPointerType()) {
+      const PointerType *PT = ThrowType->getAs<PointerType>();
       if (!PT || !PT->getPointeeType()->isVoidType())
         return StmtError(Diag(AtLoc, diag::error_objc_throw_expects_object)
                         << ThrowExpr->getType() << ThrowExpr->getSourceRange());
@@ -1220,8 +1257,8 @@ Sema::ActOnObjCAtSynchronizedStmt(SourceLocation AtLoc, ExprArg SynchExpr,
 
   // Make sure the expression type is an ObjC pointer or "void *".
   Expr *SyncExpr = static_cast<Expr*>(SynchExpr.get());
-  if (!Context.isObjCObjectPointerType(SyncExpr->getType())) {
-    const PointerType *PT = SyncExpr->getType()->getAsPointerType();
+  if (!SyncExpr->getType()->isObjCObjectPointerType()) {
+    const PointerType *PT = SyncExpr->getType()->getAs<PointerType>();
     if (!PT || !PT->getPointeeType()->isVoidType())
       return StmtError(Diag(AtLoc, diag::error_objc_synchronized_expects_object)
                        << SyncExpr->getType() << SyncExpr->getSourceRange());
@@ -1243,6 +1280,38 @@ Sema::ActOnCXXCatchBlock(SourceLocation CatchLoc, DeclPtrTy ExDecl,
                                           HandlerBlock.takeAs<Stmt>()));
 }
 
+class TypeWithHandler {
+  QualType t;
+  CXXCatchStmt *stmt;
+public:
+  TypeWithHandler(const QualType &type, CXXCatchStmt *statement)
+  : t(type), stmt(statement) {}
+
+  bool operator<(const TypeWithHandler &y) const {
+    if (t.getTypePtr() < y.t.getTypePtr())
+      return true;
+    else if (t.getTypePtr() > y.t.getTypePtr())
+      return false;
+    else if (t.getCVRQualifiers() < y.t.getCVRQualifiers())
+      return true;
+    else if (t.getCVRQualifiers() < y.t.getCVRQualifiers())
+      return false;
+    else
+      return getTypeSpecStartLoc() < y.getTypeSpecStartLoc();
+  }
+  
+  bool operator==(const TypeWithHandler& other) const {
+    return t.getTypePtr() == other.t.getTypePtr()
+        && t.getCVRQualifiers() == other.t.getCVRQualifiers();
+  }
+  
+  QualType getQualType() const { return t; }
+  CXXCatchStmt *getCatchStmt() const { return stmt; }
+  SourceLocation getTypeSpecStartLoc() const {
+    return stmt->getExceptionDecl()->getTypeSpecStartLoc();
+  }
+};
+
 /// ActOnCXXTryBlock - Takes a try compound-statement and a number of
 /// handlers and creates a try statement from them.
 Action::OwningStmtResult
@@ -1253,13 +1322,44 @@ Sema::ActOnCXXTryBlock(SourceLocation TryLoc, StmtArg TryBlock,
          "The parser shouldn't call this if there are no handlers.");
   Stmt **Handlers = reinterpret_cast<Stmt**>(RawHandlers.get());
 
-  for(unsigned i = 0; i < NumHandlers - 1; ++i) {
+  llvm::SmallVector<TypeWithHandler, 8> TypesWithHandlers;
+  
+  for(unsigned i = 0; i < NumHandlers; ++i) {
     CXXCatchStmt *Handler = llvm::cast<CXXCatchStmt>(Handlers[i]);
-    if (!Handler->getExceptionDecl())
-      return StmtError(Diag(Handler->getLocStart(), diag::err_early_catch_all));
+    if (!Handler->getExceptionDecl()) {
+      if (i < NumHandlers - 1)
+        return StmtError(Diag(Handler->getLocStart(),
+                              diag::err_early_catch_all));
+      
+      continue;
+    }
+    
+    const QualType CaughtType = Handler->getCaughtType();
+    const QualType CanonicalCaughtType = Context.getCanonicalType(CaughtType);
+    TypesWithHandlers.push_back(TypeWithHandler(CanonicalCaughtType, Handler));
   }
-  // FIXME: We should detect handlers for the same type as an earlier one.
-  // This one is rather easy.
+
+  // Detect handlers for the same type as an earlier one.
+  if (NumHandlers > 1) {
+    llvm::array_pod_sort(TypesWithHandlers.begin(), TypesWithHandlers.end());
+    
+    TypeWithHandler prev = TypesWithHandlers[0];
+    for (unsigned i = 1; i < TypesWithHandlers.size(); ++i) {
+      TypeWithHandler curr = TypesWithHandlers[i];
+      
+      if (curr == prev) {
+        Diag(curr.getTypeSpecStartLoc(),
+             diag::warn_exception_caught_by_earlier_handler)
+          << curr.getCatchStmt()->getCaughtType().getAsString();
+        Diag(prev.getTypeSpecStartLoc(),
+             diag::note_previous_exception_handler)
+          << prev.getCatchStmt()->getCaughtType().getAsString();
+      }
+      
+      prev = curr;
+    }
+  }
+  
   // FIXME: We should detect handlers that cannot catch anything because an
   // earlier handler catches a superclass. Need to find a method that is not
   // quadratic for this.

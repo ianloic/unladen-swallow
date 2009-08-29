@@ -55,71 +55,83 @@ NonLoc ValueManager::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
 }
 
 
-SVal ValueManager::getRegionValueSymbolVal(const MemRegion* R, QualType T) {
-  SymbolRef sym = SymMgr.getRegionValueSymbol(R, T);
-                                
-  if (const TypedRegion* TR = dyn_cast<TypedRegion>(R)) {
-    if (T.isNull())
-      T = TR->getValueType(SymMgr.getContext());
-
-    // If T is of function pointer type, create a CodeTextRegion wrapping a
-    // symbol.
-    if (T->isFunctionPointerType()) {
-      return loc::MemRegionVal(MemMgr.getCodeTextRegion(sym, T));
-    }
-    
-    if (Loc::IsLocType(T))
-      return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
+SVal ValueManager::convertToArrayIndex(SVal V) {
+  if (V.isUnknownOrUndef())
+    return V;
   
-    // Only handle integers for now.
-    if (T->isIntegerType() && T->isScalarType())
-      return nonloc::SymbolVal(sym);
+  // Common case: we have an appropriately sized integer.
+  if (nonloc::ConcreteInt* CI = dyn_cast<nonloc::ConcreteInt>(&V)) {
+    const llvm::APSInt& I = CI->getValue();
+    if (I.getBitWidth() == ArrayIndexWidth && I.isSigned())
+      return V;
   }
-
-  return UnknownVal();
+  
+  return SVator->EvalCastNL(cast<NonLoc>(V), ArrayIndexTy);
 }
 
-SVal ValueManager::getConjuredSymbolVal(const Expr* E, unsigned Count) {
-  QualType T = E->getType();
-  SymbolRef sym = SymMgr.getConjuredSymbol(E, Count);
+SVal ValueManager::getRegionValueSymbolVal(const MemRegion* R, QualType T) {
 
-  // If T is of function pointer type, create a CodeTextRegion wrapping a
-  // symbol.
-  if (T->isFunctionPointerType()) {
-    return loc::MemRegionVal(MemMgr.getCodeTextRegion(sym, T));
+  if (T.isNull()) {
+    const TypedRegion* TR = cast<TypedRegion>(R);
+    T = TR->getValueType(SymMgr.getContext());
   }
+  
+  if (!SymbolManager::canSymbolicate(T))
+    return UnknownVal();
+
+  SymbolRef sym = SymMgr.getRegionValueSymbol(R, T);
+    
+  if (Loc::IsLocType(T))
+    return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
+  
+  return nonloc::SymbolVal(sym);
+}
+
+SVal ValueManager::getConjuredSymbolVal(const Expr *E, unsigned Count) {
+  QualType T = E->getType();
+  
+  if (!SymbolManager::canSymbolicate(T))
+    return UnknownVal();
+  
+  SymbolRef sym = SymMgr.getConjuredSymbol(E, Count);
 
   if (Loc::IsLocType(T))
     return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
 
-  if (T->isIntegerType() && T->isScalarType())
-    return nonloc::SymbolVal(sym);
-
-  return UnknownVal();
+  return nonloc::SymbolVal(sym);
 }
 
-SVal ValueManager::getConjuredSymbolVal(const Expr* E, QualType T,
+SVal ValueManager::getConjuredSymbolVal(const Expr *E, QualType T,
                                         unsigned Count) {
+  
+  if (!SymbolManager::canSymbolicate(T))
+    return UnknownVal();
 
   SymbolRef sym = SymMgr.getConjuredSymbol(E, T, Count);
 
-  // If T is of function pointer type, create a CodeTextRegion wrapping a
-  // symbol.
-  if (T->isFunctionPointerType()) {
-    return loc::MemRegionVal(MemMgr.getCodeTextRegion(sym, T));
-  }
-
   if (Loc::IsLocType(T))
     return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
 
-  if (T->isIntegerType() && T->isScalarType())
-    return nonloc::SymbolVal(sym);
+  return nonloc::SymbolVal(sym);
+}
 
-  return UnknownVal();
+
+SVal ValueManager::getDerivedRegionValueSymbolVal(SymbolRef parentSymbol,
+                                                  const TypedRegion *R) {
+  QualType T = R->getValueType(R->getContext());
+
+  if (!SymbolManager::canSymbolicate(T))
+    return UnknownVal();
+    
+  SymbolRef sym = SymMgr.getDerivedSymbol(parentSymbol, R);
+  
+  if (Loc::IsLocType(T))
+    return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
+  
+  return nonloc::SymbolVal(sym);
 }
 
 SVal ValueManager::getFunctionPointer(const FunctionDecl* FD) {
-  CodeTextRegion* R 
-    = MemMgr.getCodeTextRegion(FD, Context.getPointerType(FD->getType()));
+  CodeTextRegion *R  = MemMgr.getCodeTextRegion(FD);
   return loc::MemRegionVal(R);
 }

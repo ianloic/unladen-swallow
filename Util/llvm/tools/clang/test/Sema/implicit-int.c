@@ -1,6 +1,7 @@
 // RUN: clang-cc -fsyntax-only %s -verify -pedantic
 
 foo() { // expected-warning {{type specifier missing, defaults to 'int'}}
+  return 0;
 }
 
 y;  // expected-warning {{type specifier missing, defaults to 'int'}}
@@ -23,7 +24,7 @@ h19_insline(n)  // expected-warning {{parameter 'n' was not declared, defaulting
 }
 
 struct foo {
- __extension__ __attribute__((packed)) x : 4; // expected-warning {{type specifier missing, defaults to 'int'}}
+ __extension__ __attribute__((packed)) x : 4;
 };
 
 

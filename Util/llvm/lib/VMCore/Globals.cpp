@@ -21,7 +21,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LeakDetector.h"
-#include "llvm/Support/Streams.h"
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -79,7 +78,7 @@ void GlobalValue::removeDeadConstantUsers() const {
 /// Override destroyConstant to make sure it doesn't get called on
 /// GlobalValue's because they shouldn't be treated like other constants.
 void GlobalValue::destroyConstant() {
-  LLVM_UNREACHABLE("You can't GV->destroyConstant()!");
+  llvm_unreachable("You can't GV->destroyConstant()!");
 }
 
 /// copyAttributesFrom - copy all additional attributes (those not needed to
@@ -97,9 +96,9 @@ void GlobalValue::copyAttributesFrom(const GlobalValue *Src) {
 
 GlobalVariable::GlobalVariable(LLVMContext &Context, const Type *Ty,
                                bool constant, LinkageTypes Link,
-                               Constant *InitVal, const std::string &Name,
+                               Constant *InitVal, const Twine &Name,
                                bool ThreadLocal, unsigned AddressSpace)
-  : GlobalValue(Context.getPointerType(Ty, AddressSpace), 
+  : GlobalValue(PointerType::get(Ty, AddressSpace), 
                 Value::GlobalVariableVal,
                 OperandTraits<GlobalVariable>::op_begin(this),
                 InitVal != 0, Link, Name),
@@ -115,10 +114,10 @@ GlobalVariable::GlobalVariable(LLVMContext &Context, const Type *Ty,
 
 GlobalVariable::GlobalVariable(Module &M, const Type *Ty, bool constant,
                                LinkageTypes Link, Constant *InitVal,
-                               const std::string &Name,
+                               const Twine &Name,
                                GlobalVariable *Before, bool ThreadLocal,
                                unsigned AddressSpace)
-  : GlobalValue(M.getContext().getPointerType(Ty, AddressSpace), 
+  : GlobalValue(PointerType::get(Ty, AddressSpace), 
                 Value::GlobalVariableVal,
                 OperandTraits<GlobalVariable>::op_begin(this),
                 InitVal != 0, Link, Name),
@@ -188,7 +187,7 @@ void GlobalVariable::copyAttributesFrom(const GlobalValue *Src) {
 //===----------------------------------------------------------------------===//
 
 GlobalAlias::GlobalAlias(const Type *Ty, LinkageTypes Link,
-                         const std::string &Name, Constant* aliasee,
+                         const Twine &Name, Constant* aliasee,
                          Module *ParentModule)
   : GlobalValue(Ty, Value::GlobalAliasVal, &Op<0>(), 1, Link, Name) {
   LeakDetector::addGarbageObject(this);
@@ -246,7 +245,7 @@ const GlobalValue *GlobalAlias::getAliasedGlobal() const {
            CE->getOpcode() == Instruction::GetElementPtr))
         return dyn_cast<GlobalValue>(CE->getOperand(0));
       else
-        LLVM_UNREACHABLE("Unsupported aliasee");
+        llvm_unreachable("Unsupported aliasee");
     }
   }
   return 0;

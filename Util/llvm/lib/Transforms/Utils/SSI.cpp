@@ -23,6 +23,7 @@
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/SSI.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/Dominators.h"
 
 using namespace llvm;
@@ -32,10 +33,13 @@ static const std::string SSI_SIG = "SSI_sigma";
 
 static const unsigned UNSIGNED_INFINITE = ~0U;
 
+STATISTIC(NumSigmaInserted, "Number of sigma functions inserted");
+STATISTIC(NumPhiInserted, "Number of phi functions inserted");
+
 void SSI::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<DominanceFrontier>();
   AU.addRequired<DominatorTree>();
-  AU.setPreservesAll();
+  AU.setPreservesCFG();
 }
 
 bool SSI::runOnFunction(Function &F) {
@@ -91,7 +95,7 @@ void SSI::insertSigmaFunctions(SmallVectorImpl<Instruction *> &value) {
           // Next Basic Block
           BasicBlock *BB_next = TI->getSuccessor(j);
           if (BB_next != BB &&
-              BB_next->getUniquePredecessor() != NULL &&
+              BB_next->getSinglePredecessor() != NULL &&
               dominateAny(BB_next, value[i])) {
             PHINode *PN = PHINode::Create(
                 value[i]->getType(), SSI_SIG, BB_next->begin());
@@ -100,6 +104,7 @@ void SSI::insertSigmaFunctions(SmallVectorImpl<Instruction *> &value) {
             created.insert(PN);
             need = true;
             defsites[i].push_back(BB_next);
+            ++NumSigmaInserted;
           }
         }
       }
@@ -116,7 +121,7 @@ void SSI::insertPhiFunctions(SmallVectorImpl<Instruction *> &value) {
     // Test if there were any sigmas for this variable
     if (needConstruction[i]) {
 
-      SmallPtrSet<BasicBlock *, 1> BB_visited;
+      SmallPtrSet<BasicBlock *, 16> BB_visited;
 
       // Insert phi functions if there is any sigma function
       while (!defsites[i].empty()) {
@@ -125,6 +130,10 @@ void SSI::insertPhiFunctions(SmallVectorImpl<Instruction *> &value) {
 
         defsites[i].pop_back();
         DominanceFrontier::iterator DF_BB = DF->find(BB);
+
+        // The BB is unreachable. Skip it.
+        if (DF_BB == DF->end())
+          continue; 
 
         // Iterates through all the dominance frontier of BB
         for (std::set<BasicBlock *>::iterator DF_BB_begin =
@@ -143,6 +152,7 @@ void SSI::insertPhiFunctions(SmallVectorImpl<Instruction *> &value) {
             created.insert(PN);
 
             defsites[i].push_back(BB_dominated);
+            ++NumPhiInserted;
           }
         }
       }
@@ -216,10 +226,9 @@ void SSI::rename(BasicBlock *BB) {
     for (BasicBlock::iterator begin = BB_succ->begin(),
          notPhi = BB_succ->getFirstNonPHI(); begin != *notPhi; ++begin) {
       Instruction *I = begin;
-      PHINode *PN;
+      PHINode *PN = dyn_cast<PHINode>(I);
       int position;
-      if ((PN = dyn_cast<PHINode>(I)) && ((position
-          = getPositionPhi(PN)) != -1)) {
+      if (PN && ((position = getPositionPhi(PN)) != -1)) {
         PN->addIncoming(value_stack[position].back(), BB);
       }
     }
@@ -244,6 +253,8 @@ void SSI::rename(BasicBlock *BB) {
       }
     }
   }
+
+  delete defined;
 }
 
 /// Substitute any use in this instruction for the last definition of
@@ -276,12 +287,16 @@ void SSI::substituteUse(Instruction *I) {
 }
 
 /// Test if the BasicBlock BB dominates any use or definition of value.
+/// If it dominates a phi instruction that is on the same BasicBlock,
+/// that does not count.
 ///
 bool SSI::dominateAny(BasicBlock *BB, Instruction *value) {
   for (Value::use_iterator begin = value->use_begin(),
        end = value->use_end(); begin != end; ++begin) {
     Instruction *I = cast<Instruction>(*begin);
     BasicBlock *BB_father = I->getParent();
+    if (BB == BB_father && isa<PHINode>(I))
+      continue;
     if (DT_->dominates(BB, BB_father)) {
       return true;
     }
@@ -293,19 +308,42 @@ bool SSI::dominateAny(BasicBlock *BB, Instruction *value) {
 /// as an operand of another phi function used in the same BasicBlock,
 /// LLVM looks this as an error. So on the second phi, the first phi is called
 /// P and the BasicBlock it incomes is B. This P will be replaced by the value
-/// it has for BasicBlock B.
+/// it has for BasicBlock B. It also includes undef values for predecessors
+/// that were not included in the phi.
 ///
 void SSI::fixPhis() {
   for (SmallPtrSet<PHINode *, 1>::iterator begin = phisToFix.begin(),
        end = phisToFix.end(); begin != end; ++begin) {
     PHINode *PN = *begin;
     for (unsigned i = 0, e = PN->getNumIncomingValues(); i < e; ++i) {
-      PHINode *PN_father;
-      if ((PN_father = dyn_cast<PHINode>(PN->getIncomingValue(i))) &&
-          PN->getParent() == PN_father->getParent()) {
+      PHINode *PN_father = dyn_cast<PHINode>(PN->getIncomingValue(i));
+      if (PN_father && PN->getParent() == PN_father->getParent() &&
+          !DT_->dominates(PN->getParent(), PN->getIncomingBlock(i))) {
         BasicBlock *BB = PN->getIncomingBlock(i);
         int pos = PN_father->getBasicBlockIndex(BB);
         PN->setIncomingValue(i, PN_father->getIncomingValue(pos));
+      }
+    }
+  }
+
+  for (DenseMapIterator<PHINode *, unsigned> begin = phis.begin(),
+       end = phis.end(); begin != end; ++begin) {
+    PHINode *PN = begin->first;
+    BasicBlock *BB = PN->getParent();
+    pred_iterator PI = pred_begin(BB), PE = pred_end(BB);
+    SmallVector<BasicBlock*, 8> Preds(PI, PE);
+    for (unsigned size = Preds.size();
+         PI != PE && PN->getNumIncomingValues() != size; ++PI) {
+      bool found = false;
+      for (unsigned i = 0, pn_end = PN->getNumIncomingValues();
+           i < pn_end; ++i) {
+        if (PN->getIncomingBlock(i) == *PI) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        PN->addIncoming(UndefValue::get(PN->getType()), *PI);
       }
     }
   }
@@ -388,3 +426,40 @@ FunctionPass *llvm::createSSIPass() { return new SSI(); }
 char SSI::ID = 0;
 static RegisterPass<SSI> X("ssi", "Static Single Information Construction");
 
+/// SSIEverything - A pass that runs createSSI on every non-void variable,
+/// intended for debugging.
+namespace {
+  struct VISIBILITY_HIDDEN SSIEverything : public FunctionPass {
+    static char ID; // Pass identification, replacement for typeid
+    SSIEverything() : FunctionPass(&ID) {}
+
+    bool runOnFunction(Function &F);
+
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.addRequired<SSI>();
+    }
+  };
+}
+
+bool SSIEverything::runOnFunction(Function &F) {
+  SmallVector<Instruction *, 16> Insts;
+  SSI &ssi = getAnalysis<SSI>();
+
+  if (F.isDeclaration() || F.isIntrinsic()) return false;
+
+  for (Function::iterator B = F.begin(), BE = F.end(); B != BE; ++B)
+    for (BasicBlock::iterator I = B->begin(), E = B->end(); I != E; ++I)
+      if (I->getType() != Type::getVoidTy(F.getContext()))
+        Insts.push_back(I);
+
+  ssi.createSSI(Insts);
+  return true;
+}
+
+/// createSSIEverythingPass - The public interface to this file...
+///
+FunctionPass *llvm::createSSIEverythingPass() { return new SSIEverything(); }
+
+char SSIEverything::ID = 0;
+static RegisterPass<SSIEverything>
+Y("ssi-everything", "Static Single Information Construction");

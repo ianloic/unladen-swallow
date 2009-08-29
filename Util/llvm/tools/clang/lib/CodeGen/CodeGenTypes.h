@@ -14,6 +14,7 @@
 #ifndef CLANG_CODEGEN_CODEGENTYPES_H
 #define CLANG_CODEGEN_CODEGENTYPES_H
 
+#include "llvm/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include <vector>
@@ -27,6 +28,7 @@ namespace llvm {
   class PATypeHolder;
   class TargetData;
   class Type;
+  class LLVMContext;
 }
 
 namespace clang {
@@ -51,29 +53,27 @@ namespace CodeGen {
   /// lowering AST types to LLVM types.
   class CGRecordLayout {
     CGRecordLayout(); // DO NOT IMPLEMENT
+    
+    /// LLVMType - The LLVMType corresponding to this record layout.
+    const llvm::Type *LLVMType;
+    
+    /// ContainsMemberPointer - Whether one of the fields in this record layout
+    /// is a member pointer, or a struct that contains a member pointer.
+    bool ContainsMemberPointer;
+    
   public:
-    CGRecordLayout(llvm::Type *T, llvm::SmallSet<unsigned, 8> &PF) 
-      : STy(T), PaddingFields(PF) {
-      // FIXME : Collect info about fields that requires adjustments 
-      // (i.e. fields that do not directly map to llvm struct fields.)
-    }
+    CGRecordLayout(const llvm::Type *T, bool ContainsMemberPointer) 
+      : LLVMType(T), ContainsMemberPointer(ContainsMemberPointer) { }
 
     /// getLLVMType - Return llvm type associated with this record.
-    llvm::Type *getLLVMType() const {
-      return STy;
+    const llvm::Type *getLLVMType() const {
+      return LLVMType;
     }
 
-    bool isPaddingField(unsigned No) const {
-      return PaddingFields.count(No) != 0;
+    bool containsMemberPointer() const {
+      return ContainsMemberPointer;
     }
-
-    unsigned getNumPaddingFields() {
-      return PaddingFields.size();
-    }
-
-  private:
-    llvm::Type *STy;
-    llvm::SmallSet<unsigned, 8> PaddingFields;
+    
   };
   
 /// CodeGenTypes - This class organizes the cross-module state that is used
@@ -112,13 +112,15 @@ class CodeGenTypes {
   llvm::FoldingSet<CGFunctionInfo> FunctionInfos;
 
 public:
-  class BitFieldInfo {
-  public:
-    explicit BitFieldInfo(unsigned short B, unsigned short S)
-      : Begin(B), Size(S) {}
+  struct BitFieldInfo {
+    BitFieldInfo(unsigned FieldNo, 
+                 unsigned Start, 
+                 unsigned Size)
+      : FieldNo(FieldNo), Start(Start), Size(Size) {}
 
-    unsigned short Begin;
-    unsigned short Size;
+    unsigned FieldNo;
+    unsigned Start;
+    unsigned Size;
   };
 
 private:
@@ -143,6 +145,7 @@ public:
   TargetInfo &getTarget() const { return Target; }
   ASTContext &getContext() const { return Context; }
   const ABIInfo &getABIInfo() const;
+  llvm::LLVMContext &getLLVMContext() { return TheModule.getContext(); }
 
   /// ConvertType - Convert type T into a llvm::Type.  
   const llvm::Type *ConvertType(QualType T);
@@ -159,7 +162,7 @@ public:
   const llvm::FunctionType *GetFunctionType(const CGFunctionInfo &Info,
                                             bool IsVariadic);
   
-  const CGRecordLayout *getCGRecordLayout(const TagDecl*) const;
+  const CGRecordLayout &getCGRecordLayout(const TagDecl*) const;
   
   /// getLLVMFieldNo - Return llvm::StructType element number
   /// that corresponds to the field FD.
@@ -187,10 +190,11 @@ public:
   
 public:  // These are internal details of CGT that shouldn't be used externally.
   /// addFieldInfo - Assign field number to field FD.
-  void addFieldInfo(const FieldDecl *FD, unsigned No);
+  void addFieldInfo(const FieldDecl *FD, unsigned FieldNo);
 
   /// addBitFieldInfo - Assign a start bit and a size to field FD.
-  void addBitFieldInfo(const FieldDecl *FD, unsigned Begin, unsigned Size);
+  void addBitFieldInfo(const FieldDecl *FD, unsigned FieldNo,
+                       unsigned Start, unsigned Size);
 
   /// getBitFieldInfo - Return the BitFieldInfo  that corresponds to the field
   /// FD.

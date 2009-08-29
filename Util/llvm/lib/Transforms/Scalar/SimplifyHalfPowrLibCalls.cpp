@@ -39,7 +39,6 @@ namespace {
     bool runOnFunction(Function &F);
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<TargetData>();
     }
 
     Instruction *
@@ -123,7 +122,7 @@ SimplifyHalfPowrLibCalls::InlineHalfPowrs(const std::vector<Instruction *> &Half
 /// runOnFunction - Top level algorithm.
 ///
 bool SimplifyHalfPowrLibCalls::runOnFunction(Function &F) {
-  TD = &getAnalysis<TargetData>();
+  TD = getAnalysisIfAvailable<TargetData>();
   
   bool Changed = false;
   std::vector<Instruction *> HalfPowrs;
@@ -136,8 +135,7 @@ bool SimplifyHalfPowrLibCalls::runOnFunction(Function &F) {
         Function *Callee = CI->getCalledFunction();
         if (Callee && Callee->hasExternalLinkage()) {
           // Look for calls with well-known names.
-          const char *CalleeName = Callee->getNameStart();
-          if (strcmp(CalleeName, "__half_powrf4") == 0)
+          if (Callee->getName() == "__half_powrf4")
             IsHalfPowr = true;
         }
       }

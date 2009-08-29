@@ -145,6 +145,11 @@ namespace llvm {
       return Latency;
     }
 
+    /// setLatency - Set the latency for this edge.
+    void setLatency(unsigned Lat) {
+      Latency = Lat;
+    }
+
     //// getSUnit - Return the SUnit to which this edge points.
     SUnit *getSUnit() const {
       return Dep.getPointer();
@@ -429,8 +434,8 @@ namespace llvm {
 
   class ScheduleDAG {
   public:
-    MachineBasicBlock *BB;                // The block in which to insert instructions.
-    MachineBasicBlock::iterator InsertPos;// The position to insert instructions.
+    MachineBasicBlock *BB;          // The block in which to insert instructions
+    MachineBasicBlock::iterator InsertPos;// The position to insert instructions
     const TargetMachine &TM;              // Target processor
     const TargetInstrInfo *TII;           // Target instruction information
     const TargetRegisterInfo *TRI;        // Target processor register info
@@ -490,13 +495,19 @@ namespace llvm {
     ///
     virtual void ComputeLatency(SUnit *SU) = 0;
 
+    /// ComputeOperandLatency - Override dependence edge latency using
+    /// operand use/def information
+    ///
+    virtual void ComputeOperandLatency(SUnit *Def, SUnit *Use,
+                                       SDep& dep) const { };
+
     /// Schedule - Order nodes according to selected style, filling
     /// in the Sequence member.
     ///
     virtual void Schedule() = 0;
 
-    /// ForceUnitLatencies - Return true if all scheduling edges should be given a
-    /// latency value of one.  The default is to return false; schedulers may
+    /// ForceUnitLatencies - Return true if all scheduling edges should be given
+    /// a latency value of one.  The default is to return false; schedulers may
     /// override this as needed.
     virtual bool ForceUnitLatencies() const { return false; }
 
@@ -524,7 +535,8 @@ namespace llvm {
     void EmitLiveInCopies(MachineBasicBlock *MBB);
   };
 
-  class SUnitIterator : public forward_iterator<SUnit, ptrdiff_t> {
+  class SUnitIterator : public std::iterator<std::forward_iterator_tag,
+                                             SUnit, ptrdiff_t> {
     SUnit *Node;
     unsigned Operand;
 
@@ -536,7 +548,7 @@ namespace llvm {
     bool operator!=(const SUnitIterator& x) const { return !operator==(x); }
 
     const SUnitIterator &operator=(const SUnitIterator &I) {
-      assert(I.Node == Node && "Cannot assign iterators to two different nodes!");
+      assert(I.Node==Node && "Cannot assign iterators to two different nodes!");
       Operand = I.Operand;
       return *this;
     }

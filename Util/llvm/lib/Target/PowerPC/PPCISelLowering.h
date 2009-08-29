@@ -60,6 +60,8 @@ namespace llvm {
       /// though these are usually folded into other nodes.
       Hi, Lo,
       
+      TOC_ENTRY,
+
       /// OPRC, CHAIN = DYNALLOC(CHAIN, NEGSIZE, FRAME_INDEX)
       /// This instruction is lowered in PPCRegisterInfo::eliminateFrameIndex to
       /// compute an allocation on the stack.
@@ -84,6 +86,9 @@ namespace llvm {
       /// CALL - A direct function call.
       CALL_Darwin, CALL_SVR4,
       
+      /// NOP - Special NOP which follows 64-bit SVR4 calls.
+      NOP,
+
       /// CHAIN,FLAG = MTCTR(VAL, CHAIN[, INFLAG]) - Directly corresponds to a
       /// MTCTR instruction.
       MTCTR,
@@ -160,8 +165,6 @@ namespace llvm {
       /// indexed. This is used to implement atomic operations.
       STCX,
 
-      /// TAILCALL - Indicates a tail call should be taken.
-      TAILCALL,
       /// TC_RETURN - A tail call return.
       ///   operand #0 chain
       ///   operand #1 callee (register or absolute)
@@ -232,7 +235,7 @@ namespace llvm {
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
     /// getSetCCResultType - Return the ISD::SETCC ValueType
-    virtual MVT getSetCCResultType(MVT VT) const;
+    virtual MVT::SimpleValueType getSetCCResultType(EVT VT) const;
 
     /// getPreIndexedAddressParts - returns true by value, base pointer and
     /// offset pointer and addressing mode by reference if the node's address
@@ -297,7 +300,7 @@ namespace llvm {
     ConstraintType getConstraintType(const std::string &Constraint) const;
     std::pair<unsigned, const TargetRegisterClass*> 
       getRegForInlineAsmConstraint(const std::string &Constraint,
-                                   MVT VT) const;
+                                   EVT VT) const;
 
     /// getByValTypeAlignment - Return the desired alignment for ByVal aggregate
     /// function arguments in the caller parameter area.  This is the actual
@@ -327,16 +330,16 @@ namespace llvm {
     /// the offset of the target addressing mode.
     virtual bool isLegalAddressImmediate(GlobalValue *GV) const;
 
-    /// IsEligibleForTailCallOptimization - Check whether the call is eligible
-    /// for tail call optimization. Target which want to do tail call
-    /// optimization should implement this function.
-    virtual bool IsEligibleForTailCallOptimization(CallSDNode *TheCall,
-                                                   SDValue Ret,
-                                                   SelectionDAG &DAG) const;
+    virtual bool
+    IsEligibleForTailCallOptimization(SDValue Callee,
+                                      unsigned CalleeCC,
+                                      bool isVarArg,
+                                      const SmallVectorImpl<ISD::InputArg> &Ins,
+                                      SelectionDAG& DAG) const;
 
     virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
     
-    virtual MVT getOptimalMemOpType(uint64_t Size, unsigned Align,
+    virtual EVT getOptimalMemOpType(uint64_t Size, unsigned Align,
                                     bool isSrcConst, bool isSrcStr,
                                     SelectionDAG &DAG) const;
 
@@ -370,20 +373,6 @@ namespace llvm {
     SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG, int VarArgsFrameIndex,
                          int VarArgsStackOffset, unsigned VarArgsNumGPR,
                          unsigned VarArgsNumFPR, const PPCSubtarget &Subtarget);
-    SDValue LowerFORMAL_ARGUMENTS_SVR4(SDValue Op, SelectionDAG &DAG,
-                                       int &VarArgsFrameIndex, 
-                                       int &VarArgsStackOffset,
-                                       unsigned &VarArgsNumGPR,
-                                       unsigned &VarArgsNumFPR,
-                                       const PPCSubtarget &Subtarget);
-    SDValue LowerFORMAL_ARGUMENTS_Darwin(SDValue Op, SelectionDAG &DAG,
-                                         int &VarArgsFrameIndex, 
-                                         const PPCSubtarget &Subtarget);
-    SDValue LowerCALL_Darwin(SDValue Op, SelectionDAG &DAG,
-                             const PPCSubtarget &Subtarget, TargetMachine &TM);
-    SDValue LowerCALL_SVR4(SDValue Op, SelectionDAG &DAG,
-                           const PPCSubtarget &Subtarget, TargetMachine &TM);
-    SDValue LowerRET(SDValue Op, SelectionDAG &DAG, TargetMachine &TM);
     SDValue LowerSTACKRESTORE(SDValue Op, SelectionDAG &DAG,
                                 const PPCSubtarget &Subtarget);
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG,
@@ -400,6 +389,71 @@ namespace llvm {
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG);
     SDValue LowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG);
     SDValue LowerMUL(SDValue Op, SelectionDAG &DAG);
+
+    SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
+                            unsigned CallConv, bool isVarArg,
+                            const SmallVectorImpl<ISD::InputArg> &Ins,
+                            DebugLoc dl, SelectionDAG &DAG,
+                            SmallVectorImpl<SDValue> &InVals);
+    SDValue FinishCall(unsigned CallConv, DebugLoc dl, bool isTailCall,
+                       bool isVarArg,
+                       SelectionDAG &DAG,
+                       SmallVector<std::pair<unsigned, SDValue>, 8>
+                         &RegsToPass,
+                       SDValue InFlag, SDValue Chain,
+                       SDValue &Callee,
+                       int SPDiff, unsigned NumBytes,
+                       const SmallVectorImpl<ISD::InputArg> &Ins,
+                       SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerFormalArguments(SDValue Chain,
+                           unsigned CallConv, bool isVarArg,
+                           const SmallVectorImpl<ISD::InputArg> &Ins,
+                           DebugLoc dl, SelectionDAG &DAG,
+                           SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerCall(SDValue Chain, SDValue Callee,
+                unsigned CallConv, bool isVarArg, bool isTailCall,
+                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<ISD::InputArg> &Ins,
+                DebugLoc dl, SelectionDAG &DAG,
+                SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerReturn(SDValue Chain,
+                  unsigned CallConv, bool isVarArg,
+                  const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  DebugLoc dl, SelectionDAG &DAG);
+
+    SDValue
+      LowerFormalArguments_Darwin(SDValue Chain,
+                                  unsigned CallConv, bool isVarArg,
+                                  const SmallVectorImpl<ISD::InputArg> &Ins,
+                                  DebugLoc dl, SelectionDAG &DAG,
+                                  SmallVectorImpl<SDValue> &InVals);
+    SDValue
+      LowerFormalArguments_SVR4(SDValue Chain,
+                                unsigned CallConv, bool isVarArg,
+                                const SmallVectorImpl<ISD::InputArg> &Ins,
+                                DebugLoc dl, SelectionDAG &DAG,
+                                SmallVectorImpl<SDValue> &InVals);
+
+    SDValue
+      LowerCall_Darwin(SDValue Chain, SDValue Callee,
+                       unsigned CallConv, bool isVarArg, bool isTailCall,
+                       const SmallVectorImpl<ISD::OutputArg> &Outs,
+                       const SmallVectorImpl<ISD::InputArg> &Ins,
+                       DebugLoc dl, SelectionDAG &DAG,
+                       SmallVectorImpl<SDValue> &InVals);
+    SDValue
+      LowerCall_SVR4(SDValue Chain, SDValue Callee,
+                     unsigned CallConv, bool isVarArg, bool isTailCall,
+                     const SmallVectorImpl<ISD::OutputArg> &Outs,
+                     const SmallVectorImpl<ISD::InputArg> &Ins,
+                     DebugLoc dl, SelectionDAG &DAG,
+                     SmallVectorImpl<SDValue> &InVals);
   };
 }
 

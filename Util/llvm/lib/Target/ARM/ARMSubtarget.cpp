@@ -13,8 +13,7 @@
 
 #include "ARMSubtarget.h"
 #include "ARMGenSubtarget.inc"
-#include "llvm/Module.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/GlobalValue.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/CommandLine.h"
 using namespace llvm;
@@ -23,10 +22,11 @@ static cl::opt<bool>
 ReserveR9("arm-reserve-r9", cl::Hidden,
           cl::desc("Reserve R9, making it unavailable as GPR"));
 
-ARMSubtarget::ARMSubtarget(const Module &M, const std::string &FS,
+ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
                            bool isThumb)
   : ARMArchVersion(V4T)
   , ARMFPUType(None)
+  , UseNEONForSinglePrecisionFP(false)
   , IsThumb(isThumb)
   , ThumbMode(Thumb1)
   , IsR9Reserved(ReserveR9)
@@ -45,7 +45,6 @@ ARMSubtarget::ARMSubtarget(const Module &M, const std::string &FS,
 
   // Set the boolean corresponding to the current target triple, or the default
   // if one cannot be determined, to true.
-  const std::string& TT = M.getTargetTriple();
   unsigned Len = TT.length();
   unsigned Idx = 0;
 
@@ -75,14 +74,14 @@ ARMSubtarget::ARMSubtarget(const Module &M, const std::string &FS,
     }
   }
 
+  // Thumb2 implies at least V6T2.
+  if (ARMArchVersion < V6T2 && ThumbMode >= Thumb2)
+    ARMArchVersion = V6T2;
+
   if (Len >= 10) {
     if (TT.find("-darwin") != std::string::npos)
       // arm-darwin
       TargetType = isDarwin;
-  } else if (TT.empty()) {
-#if defined(__APPLE__)
-    TargetType = isDarwin;
-#endif
   }
 
   if (TT.find("eabi") != std::string::npos)
@@ -93,4 +92,14 @@ ARMSubtarget::ARMSubtarget(const Module &M, const std::string &FS,
 
   if (isTargetDarwin())
     IsR9Reserved = ReserveR9 | (ARMArchVersion < V6);
+}
+
+/// GVIsIndirectSymbol - true if the GV will be accessed via an indirect symbol.
+bool ARMSubtarget::GVIsIndirectSymbol(GlobalValue *GV, bool isStatic) const {
+  // If symbol visibility is hidden, the extra load is not needed if
+  // the symbol is definitely defined in the current translation unit.
+  bool isDecl = GV->isDeclaration() || GV->hasAvailableExternallyLinkage();
+  if (GV->hasHiddenVisibility() && (!isDecl && !GV->hasCommonLinkage()))
+    return false;
+  return !isStatic && (isDecl || GV->isWeakForLinker());
 }

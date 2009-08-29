@@ -135,7 +135,7 @@ std::string DeclarationName::getAsString() const {
 
   case CXXConstructorName: {
     QualType ClassType = getCXXNameType();
-    if (const RecordType *ClassRec = ClassType->getAsRecordType())
+    if (const RecordType *ClassRec = ClassType->getAs<RecordType>())
       return ClassRec->getDecl()->getNameAsString();
     return ClassType.getAsString();
   }
@@ -143,7 +143,7 @@ std::string DeclarationName::getAsString() const {
   case CXXDestructorName: {
     std::string Result = "~";
     QualType Type = getCXXNameType();
-    if (const RecordType *Rec = Type->getAsRecordType())
+    if (const RecordType *Rec = Type->getAs<RecordType>())
       Result += Rec->getDecl()->getNameAsString();
     else
       Result += Type.getAsString();
@@ -170,7 +170,7 @@ std::string DeclarationName::getAsString() const {
   case CXXConversionFunctionName: {
     std::string Result = "operator ";
     QualType Type = getCXXNameType();
-    if (const RecordType *Rec = Type->getAsRecordType())
+    if (const RecordType *Rec = Type->getAs<RecordType>())
       Result += Rec->getDecl()->getNameAsString();
     else
       Result += Type.getAsString();
@@ -298,12 +298,10 @@ DeclarationNameTable::~DeclarationNameTable() {
 
 DeclarationName 
 DeclarationNameTable::getCXXSpecialName(DeclarationName::NameKind Kind, 
-                                        QualType Ty) {
+                                        CanQualType Ty) {
   assert(Kind >= DeclarationName::CXXConstructorName &&
          Kind <= DeclarationName::CXXConversionFunctionName &&
          "Kind must be a C++ special name kind");
-  assert(Ty->isCanonical() && 
-         "Can only build C++ special names from canonical types");
   llvm::FoldingSet<CXXSpecialName> *SpecialNames 
     = static_cast<llvm::FoldingSet<CXXSpecialName>*>(CXXSpecialNamesImpl);
 

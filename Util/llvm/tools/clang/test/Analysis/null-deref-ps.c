@@ -1,7 +1,5 @@
 // RUN: clang-cc -analyze -std=gnu99 -checker-cfref -verify %s -analyzer-constraints=basic -analyzer-store=basic &&
-// RUN: clang-cc -analyze -std=gnu99 -checker-cfref -verify %s -analyzer-constraints=basic -analyzer-store=basic-new-cast &&
 // RUN: clang-cc -analyze -std=gnu99 -checker-cfref -verify %s -analyzer-constraints=range -analyzer-store=basic &&
-// RUN: clang-cc -analyze -std=gnu99 -checker-cfref -verify %s -analyzer-constraints=range -analyzer-store=basic-new-cast &&
 // RUN: clang-cc -analyze -std=gnu99 -checker-cfref -analyzer-store=region -analyzer-constraints=range -analyzer-purge-dead=false -verify %s &&
 // RUN: clang-cc -analyze -std=gnu99 -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
@@ -74,6 +72,7 @@ int f4_b() {
   else return; // expected-warning {{non-void function 'f4_b' should return a value}}
 
   *p += 10; // expected-warning{{Dereference of null pointer}}
+  return 0;
 }
 
 
@@ -102,6 +101,15 @@ int bar3(int*p, int q, int *r) __attribute__((nonnull(1,3)));
 int f6c(int *p, int *q) {
    return !p ? bar3(q, 2, p) // expected-warning {{Null pointer passed as an argument to a 'nonnull' parameter}}
              : bar3(p, 2, q); // no-warning
+}
+
+void f6d(int *p) {
+  bar(p, 0);
+  // At this point, 'p' cannot be null.
+  if (!p) {
+    int *q = 0;
+    *q = 0xDEADBEEF; // no-warning    
+  }  
 }
 
 int* qux();
@@ -162,7 +170,7 @@ int* f7c2(int *x) {
 }
 
 
-int f8(int *p, int *q) {
+void f8(int *p, int *q) {
   if (!p)
     if (p)
       *p = 1; // no-warning
@@ -262,6 +270,15 @@ void f12(HF12ITEM i, char *q) {
 void f13() {
   int *x = 0;
   if (((((int) x) << 2) + 1) >> 1) *x = 1; // no-warning
+}
+
+// PR 4759 - Attribute non-null checking by the analyzer was not correctly
+// handling pointer values that were undefined.
+void pr4759_aux(int *p) __attribute__((nonnull));
+
+void pr4759() {
+  int *p;
+  pr4759_aux(p); // expected-warning{{undefined}}
 }
 
 

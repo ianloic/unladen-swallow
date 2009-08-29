@@ -22,6 +22,7 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -85,18 +86,11 @@ static void AddPredecessorToBlock(BasicBlock *Succ, BasicBlock *NewPred,
 static bool CanPropagatePredecessorsForPHIs(BasicBlock *BB, BasicBlock *Succ) {
   assert(*succ_begin(BB) == Succ && "Succ is not successor of BB!");
 
-  DOUT << "Looking to fold " << BB->getNameStart() << " into " 
-       << Succ->getNameStart() << "\n";
+  DEBUG(errs() << "Looking to fold " << BB->getName() << " into " 
+        << Succ->getName() << "\n");
   // Shortcut, if there is only a single predecessor it must be BB and merging
   // is always safe
   if (Succ->getSinglePredecessor()) return true;
-
-  typedef SmallPtrSet<Instruction*, 16> InstrSet;
-  InstrSet BBPHIs;
-
-  // Make a list of all phi nodes in BB
-  BasicBlock::iterator BBI = BB->begin();
-  while (isa<PHINode>(*BBI)) BBPHIs.insert(BBI++);
 
   // Make a list of the predecessors of BB
   typedef SmallPtrSet<BasicBlock*, 16> BlockSet;
@@ -127,16 +121,13 @@ static bool CanPropagatePredecessorsForPHIs(BasicBlock *BB, BasicBlock *Succ) {
             PI != PE; PI++) {
         if (BBPN->getIncomingValueForBlock(*PI) 
               != PN->getIncomingValueForBlock(*PI)) {
-          DOUT << "Can't fold, phi node " << *PN->getNameStart() << " in " 
-               << Succ->getNameStart() << " is conflicting with " 
-               << BBPN->getNameStart() << " with regard to common predecessor "
-               << (*PI)->getNameStart() << "\n";
+          DEBUG(errs() << "Can't fold, phi node " << PN->getName() << " in " 
+                << Succ->getName() << " is conflicting with " 
+                << BBPN->getName() << " with regard to common predecessor "
+                << (*PI)->getName() << "\n");
           return false;
         }
       }
-      // Remove this phinode from the list of phis in BB, since it has been
-      // handled.
-      BBPHIs.erase(BBPN);
     } else {
       Value* Val = PN->getIncomingValueForBlock(BB);
       for (BlockSet::iterator PI = CommonPreds.begin(), PE = CommonPreds.end();
@@ -145,31 +136,13 @@ static bool CanPropagatePredecessorsForPHIs(BasicBlock *BB, BasicBlock *Succ) {
         // one for BB, in which case this phi node will not prevent the merging
         // of the block.
         if (Val != PN->getIncomingValueForBlock(*PI)) {
-          DOUT << "Can't fold, phi node " << *PN->getNameStart() << " in " 
-          << Succ->getNameStart() << " is conflicting with regard to common "
-          << "predecessor " << (*PI)->getNameStart() << "\n";
+          DEBUG(errs() << "Can't fold, phi node " << PN->getName() << " in " 
+                << Succ->getName() << " is conflicting with regard to common "
+                << "predecessor " << (*PI)->getName() << "\n");
           return false;
         }
       }
     }
-  }
-
-  // If there are any other phi nodes in BB that don't have a phi node in Succ
-  // to merge with, they must be moved to Succ completely. However, for any
-  // predecessors of Succ, branches will be added to the phi node that just
-  // point to itself. So, for any common predecessors, this must not cause
-  // conflicts.
-  for (InstrSet::iterator I = BBPHIs.begin(), E = BBPHIs.end();
-        I != E; I++) {
-    PHINode *PN = cast<PHINode>(*I);
-    for (BlockSet::iterator PI = CommonPreds.begin(), PE = CommonPreds.end();
-          PI != PE; PI++)
-      if (PN->getIncomingValueForBlock(*PI) != PN) {
-        DOUT << "Can't fold, phi node " << *PN->getNameStart() << " in " 
-             << BB->getNameStart() << " is conflicting with regard to common "
-             << "predecessor " << (*PI)->getNameStart() << "\n";
-        return false;
-      }
   }
 
   return true;
@@ -183,8 +156,36 @@ static bool TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
   // Check to see if merging these blocks would cause conflicts for any of the
   // phi nodes in BB or Succ. If not, we can safely merge.
   if (!CanPropagatePredecessorsForPHIs(BB, Succ)) return false;
-  
-  DOUT << "Killing Trivial BB: \n" << *BB;
+
+  // Check for cases where Succ has multiple predecessors and a PHI node in BB
+  // has uses which will not disappear when the PHI nodes are merged.  It is
+  // possible to handle such cases, but difficult: it requires checking whether
+  // BB dominates Succ, which is non-trivial to calculate in the case where
+  // Succ has multiple predecessors.  Also, it requires checking whether
+  // constructing the necessary self-referential PHI node doesn't intoduce any
+  // conflicts; this isn't too difficult, but the previous code for doing this
+  // was incorrect.
+  //
+  // Note that if this check finds a live use, BB dominates Succ, so BB is
+  // something like a loop pre-header (or rarely, a part of an irreducible CFG);
+  // folding the branch isn't profitable in that case anyway.
+  if (!Succ->getSinglePredecessor()) {
+    BasicBlock::iterator BBI = BB->begin();
+    while (isa<PHINode>(*BBI)) {
+      for (Value::use_iterator UI = BBI->use_begin(), E = BBI->use_end();
+           UI != E; ++UI) {
+        if (PHINode* PN = dyn_cast<PHINode>(*UI)) {
+          if (PN->getIncomingBlock(UI) != BB)
+            return false;
+        } else {
+          return false;
+        }
+      }
+      ++BBI;
+    }
+  }
+
+  DEBUG(errs() << "Killing Trivial BB: \n" << *BB);
   
   if (isa<PHINode>(Succ->begin())) {
     // If there is more than one pred of succ, and there are PHI nodes in
@@ -218,38 +219,16 @@ static bool TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     }
   }
   
-  if (isa<PHINode>(&BB->front())) {
-    SmallVector<BasicBlock*, 16>
-    OldSuccPreds(pred_begin(Succ), pred_end(Succ));
-    
-    // Move all PHI nodes in BB to Succ if they are alive, otherwise
-    // delete them.
-    while (PHINode *PN = dyn_cast<PHINode>(&BB->front())) {
-      if (PN->use_empty()) {
-        // Just remove the dead phi.  This happens if Succ's PHIs were the only
-        // users of the PHI nodes.
-        PN->eraseFromParent();
-        continue;
-      }
-    
-      // The instruction is alive, so this means that BB must dominate all
-      // predecessors of Succ (Since all uses of the PN are after its
-      // definition, so in Succ or a block dominated by Succ. If a predecessor
-      // of Succ would not be dominated by BB, PN would violate the def before
-      // use SSA demand). Therefore, we can simply move the phi node to the
-      // next block.
+  while (PHINode *PN = dyn_cast<PHINode>(&BB->front())) {
+    if (Succ->getSinglePredecessor()) {
+      // BB is the only predecessor of Succ, so Succ will end up with exactly
+      // the same predecessors BB had.
       Succ->getInstList().splice(Succ->begin(),
                                  BB->getInstList(), BB->begin());
-      
-      // We need to add new entries for the PHI node to account for
-      // predecessors of Succ that the PHI node does not take into
-      // account.  At this point, since we know that BB dominated succ and all
-      // of its predecessors, this means that we should any newly added
-      // incoming edges should use the PHI node itself as the value for these
-      // edges, because they are loop back edges.
-      for (unsigned i = 0, e = OldSuccPreds.size(); i != e; ++i)
-        if (OldSuccPreds[i] != BB)
-          PN->addIncoming(PN, OldSuccPreds[i]);
+    } else {
+      // We explicitly check for such uses in CanPropagatePredecessorsForPHIs.
+      assert(PN->use_empty() && "There shouldn't be any uses here!");
+      PN->eraseFromParent();
     }
   }
     
@@ -384,26 +363,15 @@ static bool DominatesMergePoint(Value *V, BasicBlock *BB,
       // Okay, it looks like the instruction IS in the "condition".  Check to
       // see if its a cheap instruction to unconditionally compute, and if it
       // only uses stuff defined outside of the condition.  If so, hoist it out.
+      if (!I->isSafeToSpeculativelyExecute())
+        return false;
+
       switch (I->getOpcode()) {
       default: return false;  // Cannot hoist this out safely.
       case Instruction::Load: {
-        // We can hoist loads that are non-volatile and obviously cannot trap.
-        if (cast<LoadInst>(I)->isVolatile())
-          return false;
-        // FIXME: A computation of a constant can trap!
-        if (!isa<AllocaInst>(I->getOperand(0)) &&
-            !isa<Constant>(I->getOperand(0)))
-          return false;
-        // External weak globals may have address 0, so we can't load them.
-        Value *V2 = I->getOperand(0)->getUnderlyingObject();
-        if (V2) {
-          GlobalVariable* GV = dyn_cast<GlobalVariable>(V2);
-          if (GV && GV->hasExternalWeakLinkage())
-            return false;
-        }
-        // Finally, we have to check to make sure there are no instructions
-        // before the load in its basic block, as we are going to hoist the loop
-        // out to its predecessor.
+        // We have to check to make sure there are no instructions before the
+        // load in its basic block, as we are going to hoist the loop out to
+        // its predecessor.
         BasicBlock::iterator IP = PBB->begin();
         while (isa<DbgInfoIntrinsic>(IP))
           IP++;
@@ -646,12 +614,13 @@ static bool SimplifyEqualityComparisonWithOnlyPredecessor(TerminatorInst *TI,
         assert(ThisCases.size() == 1 && "Branch can only have one case!");
         // Insert the new branch.
         Instruction *NI = BranchInst::Create(ThisDef, TI);
+        (void) NI;
 
         // Remove PHI node entries for the dead edge.
         ThisCases[0].second->removePredecessor(TI->getParent());
 
-        DOUT << "Threading pred instr: " << *Pred->getTerminator()
-             << "Through successor TI: " << *TI << "Leaving: " << *NI << "\n";
+        DEBUG(errs() << "Threading pred instr: " << *Pred->getTerminator()
+             << "Through successor TI: " << *TI << "Leaving: " << *NI << "\n");
 
         EraseTerminatorInstAndDCECond(TI);
         return true;
@@ -663,8 +632,8 @@ static bool SimplifyEqualityComparisonWithOnlyPredecessor(TerminatorInst *TI,
         for (unsigned i = 0, e = PredCases.size(); i != e; ++i)
           DeadCases.insert(PredCases[i].first);
 
-        DOUT << "Threading pred instr: " << *Pred->getTerminator()
-             << "Through successor TI: " << *TI;
+        DEBUG(errs() << "Threading pred instr: " << *Pred->getTerminator()
+                     << "Through successor TI: " << *TI);
 
         for (unsigned i = SI->getNumCases()-1; i != 0; --i)
           if (DeadCases.count(SI->getCaseValue(i))) {
@@ -672,7 +641,7 @@ static bool SimplifyEqualityComparisonWithOnlyPredecessor(TerminatorInst *TI,
             SI->removeCase(i);
           }
 
-        DOUT << "Leaving: " << *TI << "\n";
+        DEBUG(errs() << "Leaving: " << *TI << "\n");
         return true;
       }
     }
@@ -713,9 +682,10 @@ static bool SimplifyEqualityComparisonWithOnlyPredecessor(TerminatorInst *TI,
 
     // Insert the new branch.
     Instruction *NI = BranchInst::Create(TheRealDest, TI);
+    (void) NI;
 
-    DOUT << "Threading pred instr: " << *Pred->getTerminator()
-         << "Through successor TI: " << *TI << "Leaving: " << *NI << "\n";
+    DEBUG(errs() << "Threading pred instr: " << *Pred->getTerminator()
+              << "Through successor TI: " << *TI << "Leaving: " << *NI << "\n");
 
     EraseTerminatorInstAndDCECond(TI);
     return true;
@@ -848,7 +818,8 @@ static bool FoldValueComparisonIntoPredecessors(TerminatorInst *TI) {
           if (InfLoopBlock == 0) {
             // Insert it at the end of the function, because it's either code,
             // or it won't matter if it's hot. :)
-            InfLoopBlock = BasicBlock::Create("infloop", BB->getParent());
+            InfLoopBlock = BasicBlock::Create(BB->getContext(),
+                                              "infloop", BB->getParent());
             BranchInst::Create(InfLoopBlock, InfLoopBlock);
           }
           NewSI->setSuccessor(i, InfLoopBlock);
@@ -901,7 +872,7 @@ static bool HoistThenElseCodeToIf(BranchInst *BI) {
   while (isa<DbgInfoIntrinsic>(I2))
     I2 = BB2_Itr++;
   if (I1->getOpcode() != I2->getOpcode() || isa<PHINode>(I1) ||
-      !I1->isIdenticalTo(I2) ||
+      !I1->isIdenticalToWhenDefined(I2) ||
       (isa<InvokeInst>(I1) && !isSafeToHoistInvoke(BB1, BB2, I1, I2)))
     return false;
 
@@ -920,6 +891,7 @@ static bool HoistThenElseCodeToIf(BranchInst *BI) {
     BIParent->getInstList().splice(BI, BB1->getInstList(), I1);
     if (!I2->use_empty())
       I2->replaceAllUsesWith(I1);
+    I1->intersectOptionalDataWith(I2);
     BB2->getInstList().erase(I2);
 
     I1 = BB1_Itr++;
@@ -928,7 +900,8 @@ static bool HoistThenElseCodeToIf(BranchInst *BI) {
     I2 = BB2_Itr++;
     while (isa<DbgInfoIntrinsic>(I2))
       I2 = BB2_Itr++;
-  } while (I1->getOpcode() == I2->getOpcode() && I1->isIdenticalTo(I2));
+  } while (I1->getOpcode() == I2->getOpcode() &&
+           I1->isIdenticalToWhenDefined(I2));
 
   return true;
 
@@ -938,9 +911,9 @@ HoistTerminator:
     return true;
 
   // Okay, it is safe to hoist the terminator.
-  Instruction *NT = I1->clone();
+  Instruction *NT = I1->clone(BB1->getContext());
   BIParent->getInstList().insert(BI, NT);
-  if (NT->getType() != Type::VoidTy) {
+  if (NT->getType() != Type::getVoidTy(BB1->getContext())) {
     I1->replaceAllUsesWith(NT);
     I2->replaceAllUsesWith(NT);
     NT->takeName(I1);
@@ -1178,7 +1151,7 @@ static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
 /// ultimate destination.
 static bool FoldCondBranchOnPHI(BranchInst *BI) {
   BasicBlock *BB = BI->getParent();
-  LLVMContext *Context = BB->getContext();
+  LLVMContext &Context = BB->getContext();
   PHINode *PN = dyn_cast<PHINode>(BI->getCondition());
   // NOTE: we currently cannot transform this case if the PHI node is used
   // outside of the block.
@@ -1199,7 +1172,7 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
   for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
     ConstantInt *CB;
     if ((CB = dyn_cast<ConstantInt>(PN->getIncomingValue(i))) &&
-        CB->getType() == Type::Int1Ty) {
+        CB->getType() == Type::getInt1Ty(BB->getContext())) {
       // Okay, we now know that all edges from PredBB should be revectored to
       // branch to RealDest.
       BasicBlock *PredBB = PN->getIncomingBlock(i);
@@ -1211,7 +1184,8 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
       // difficult cases.  Instead of being smart about this, just insert a new
       // block that jumps to the destination block, effectively splitting
       // the edge we are about to create.
-      BasicBlock *EdgeBB = BasicBlock::Create(RealDest->getName()+".critedge",
+      BasicBlock *EdgeBB = BasicBlock::Create(BB->getContext(),
+                                              RealDest->getName()+".critedge",
                                               RealDest->getParent(), RealDest);
       BranchInst::Create(RealDest, EdgeBB);
       PHINode *PN;
@@ -1231,7 +1205,7 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
           TranslateMap[PN] = PN->getIncomingValueForBlock(PredBB);
         } else {
           // Clone the instruction.
-          Instruction *N = BBI->clone();
+          Instruction *N = BBI->clone(Context);
           if (BBI->hasName()) N->setName(BBI->getName()+".c");
           
           // Update operands due to translation.
@@ -1276,8 +1250,6 @@ static bool FoldCondBranchOnPHI(BranchInst *BI) {
 /// FoldTwoEntryPHINode - Given a BB that starts with the specified two-entry
 /// PHI node, see if we can eliminate it.
 static bool FoldTwoEntryPHINode(PHINode *PN) {
-  LLVMContext *Context = PN->getParent()->getContext();
-  
   // Ok, this is a two entry PHI node.  Check to see if this is a simple "if
   // statement", which has a very simple dominance structure.  Basically, we
   // are trying to find the condition that is being branched on, which
@@ -1300,8 +1272,8 @@ static bool FoldTwoEntryPHINode(PHINode *PN) {
     if (NumPhis > 2)
       return false;
   
-  DOUT << "FOUND IF CONDITION!  " << *IfCond << "  T: "
-       << IfTrue->getName() << "  F: " << IfFalse->getName() << "\n";
+  DEBUG(errs() << "FOUND IF CONDITION!  " << *IfCond << "  T: "
+        << IfTrue->getName() << "  F: " << IfFalse->getName() << "\n");
   
   // Loop over the PHI's seeing if we can promote them all to select
   // instructions.  While we are at it, keep track of the instructions
@@ -1315,7 +1287,7 @@ static bool FoldTwoEntryPHINode(PHINode *PN) {
       if (PN->getIncomingValue(0) != PN)
         PN->replaceAllUsesWith(PN->getIncomingValue(0));
       else
-        PN->replaceAllUsesWith(Context->getUndef(PN->getType()));
+        PN->replaceAllUsesWith(UndefValue::get(PN->getType()));
     } else if (!DominatesMergePoint(PN->getIncomingValue(0), BB,
                                     &AggressiveInsts) ||
                !DominatesMergePoint(PN->getIncomingValue(1), BB,
@@ -1431,7 +1403,7 @@ static bool SimplifyCondBranchToTwoReturns(BranchInst *BI) {
   if (FalseRet->getNumOperands() == 0) {
     TrueSucc->removePredecessor(BI->getParent());
     FalseSucc->removePredecessor(BI->getParent());
-    ReturnInst::Create(0, BI);
+    ReturnInst::Create(BI->getContext(), 0, BI);
     EraseTerminatorInstAndDCECond(BI);
     return true;
   }
@@ -1480,12 +1452,13 @@ static bool SimplifyCondBranchToTwoReturns(BranchInst *BI) {
   }
 
   Value *RI = !TrueValue ?
-              ReturnInst::Create(BI) :
-              ReturnInst::Create(TrueValue, BI);
+              ReturnInst::Create(BI->getContext(), BI) :
+              ReturnInst::Create(BI->getContext(), TrueValue, BI);
+  (void) RI;
       
-  DOUT << "\nCHANGING BRANCH TO TWO RETURNS INTO SELECT:"
-       << "\n  " << *BI << "NewRet = " << *RI
-       << "TRUEBLOCK: " << *TrueSucc << "FALSEBLOCK: "<< *FalseSucc;
+  DEBUG(errs() << "\nCHANGING BRANCH TO TWO RETURNS INTO SELECT:"
+               << "\n  " << *BI << "NewRet = " << *RI
+               << "TRUEBLOCK: " << *TrueSucc << "FALSEBLOCK: "<< *FalseSucc);
       
   EraseTerminatorInstAndDCECond(BI);
 
@@ -1565,7 +1538,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI) {
     else
       continue;
 
-    DOUT << "FOLDING BRANCH TO COMMON DEST:\n" << *PBI << *BB;
+    DEBUG(errs() << "FOLDING BRANCH TO COMMON DEST:\n" << *PBI << *BB);
     
     // If we need to invert the condition in the pred block to match, do so now.
     if (InvertPredCond) {
@@ -1581,7 +1554,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI) {
     
     // Clone Cond into the predecessor basic block, and or/and the
     // two conditions together.
-    Instruction *New = Cond->clone();
+    Instruction *New = Cond->clone(BB->getContext());
     PredBlock->getInstList().insert(PBI, New);
     New->takeName(Cond);
     Cond->setName(New->getName()+".old");
@@ -1609,8 +1582,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI) {
 static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
   assert(PBI->isConditional() && BI->isConditional());
   BasicBlock *BB = BI->getParent();
-  LLVMContext *Context = BB->getContext();
-  
+
   // If this block ends with a branch instruction, and if there is a
   // predecessor that ends on a branch of the same condition, make 
   // this conditional branch redundant.
@@ -1621,7 +1593,8 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
     if (BB->getSinglePredecessor()) {
       // Turn this into a branch on constant.
       bool CondIsTrue = PBI->getSuccessor(0) == BB;
-      BI->setCondition(Context->getConstantInt(Type::Int1Ty, CondIsTrue));
+      BI->setCondition(ConstantInt::get(Type::getInt1Ty(BB->getContext()), 
+                                        CondIsTrue));
       return true;  // Nuke the branch on constant.
     }
     
@@ -1629,7 +1602,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
     // in the constant and simplify the block result.  Subsequent passes of
     // simplifycfg will thread the block.
     if (BlockIsSimpleEnoughToThreadThrough(BB)) {
-      PHINode *NewPN = PHINode::Create(Type::Int1Ty,
+      PHINode *NewPN = PHINode::Create(Type::getInt1Ty(BB->getContext()),
                                        BI->getCondition()->getName() + ".pr",
                                        BB->begin());
       // Okay, we're going to insert the PHI node.  Since PBI is not the only
@@ -1641,7 +1614,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
             PBI->getCondition() == BI->getCondition() &&
             PBI->getSuccessor(0) != PBI->getSuccessor(1)) {
           bool CondIsTrue = PBI->getSuccessor(0) == BB;
-          NewPN->addIncoming(Context->getConstantInt(Type::Int1Ty, 
+          NewPN->addIncoming(ConstantInt::get(Type::getInt1Ty(BB->getContext()), 
                                               CondIsTrue), *PI);
         } else {
           NewPN->addIncoming(BI->getCondition(), *PI);
@@ -1699,8 +1672,8 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
   // Finally, if everything is ok, fold the branches to logical ops.
   BasicBlock *OtherDest  = BI->getSuccessor(BIOp ^ 1);
   
-  DOUT << "FOLDING BRs:" << *PBI->getParent()
-       << "AND: " << *BI->getParent();
+  DEBUG(errs() << "FOLDING BRs:" << *PBI->getParent()
+               << "AND: " << *BI->getParent());
   
   
   // If OtherDest *is* BB, then BB is a basic block with a single conditional
@@ -1713,12 +1686,13 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
   if (OtherDest == BB) {
     // Insert it at the end of the function, because it's either code,
     // or it won't matter if it's hot. :)
-    BasicBlock *InfLoopBlock = BasicBlock::Create("infloop", BB->getParent());
+    BasicBlock *InfLoopBlock = BasicBlock::Create(BB->getContext(),
+                                                  "infloop", BB->getParent());
     BranchInst::Create(InfLoopBlock, InfLoopBlock);
     OtherDest = InfLoopBlock;
   }  
   
-  DOUT << *PBI->getParent()->getParent();
+  DEBUG(errs() << *PBI->getParent()->getParent());
   
   // BI may have other predecessors.  Because of this, we leave
   // it alone, but modify PBI.
@@ -1768,9 +1742,8 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI) {
     }
   }
   
-  DOUT << "INTO: " << *PBI->getParent();
-  
-  DOUT << *PBI->getParent()->getParent();
+  DEBUG(errs() << "INTO: " << *PBI->getParent());
+  DEBUG(errs() << *PBI->getParent()->getParent());
   
   // This basic block is probably dead.  We know it has at least
   // one fewer predecessor.
@@ -1797,7 +1770,7 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
   // Remove basic blocks that have no predecessors... or that just have themself
   // as a predecessor.  These are unreachable.
   if (pred_begin(BB) == pred_end(BB) || BB->getSinglePredecessor() == BB) {
-    DOUT << "Removing BB: \n" << *BB;
+    DEBUG(errs() << "Removing BB: \n" << *BB);
     DeleteDeadBlock(BB);
     return true;
   }
@@ -1837,11 +1810,11 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
       if (!UncondBranchPreds.empty()) {
         while (!UncondBranchPreds.empty()) {
           BasicBlock *Pred = UncondBranchPreds.pop_back_val();
-          DOUT << "FOLDING: " << *BB
-               << "INTO UNCOND BRANCH PRED: " << *Pred;
+          DEBUG(errs() << "FOLDING: " << *BB
+                       << "INTO UNCOND BRANCH PRED: " << *Pred);
           Instruction *UncondBranch = Pred->getTerminator();
           // Clone the return and add it to the end of the predecessor.
-          Instruction *NewRet = RI->clone();
+          Instruction *NewRet = RI->clone(BB->getContext());
           Pred->getInstList().push_back(NewRet);
 
           BasicBlock::iterator BBI = RI;
@@ -1898,7 +1871,7 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
       if (BranchInst *BI = dyn_cast<BranchInst>(Pred->getTerminator())) {
         if (BI->isUnconditional()) {
           Pred->getInstList().pop_back();  // nuke uncond branch
-          new UnwindInst(Pred);            // Use unwind.
+          new UnwindInst(Pred->getContext(), Pred);            // Use unwind.
           Changed = true;
         }
       } else if (InvokeInst *II = dyn_cast<InvokeInst>(Pred->getTerminator()))
@@ -2047,7 +2020,7 @@ bool llvm::SimplifyCFG(BasicBlock *BB) {
         if (BranchInst *BI = dyn_cast<BranchInst>(TI)) {
           if (BI->isUnconditional()) {
             if (BI->getSuccessor(0) == BB) {
-              new UnreachableInst(TI);
+              new UnreachableInst(TI->getContext(), TI);
               TI->eraseFromParent();
               Changed = true;
             }

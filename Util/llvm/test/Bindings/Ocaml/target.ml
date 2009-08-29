@@ -8,6 +8,9 @@
 open Llvm
 open Llvm_target
 
+let context = global_context ()
+let i32_type = Llvm.i32_type context
+let i64_type = Llvm.i64_type context
 
 (* Tiny unit test framework - really just to help find which line is busted *)
 let suite name f =
@@ -18,14 +21,14 @@ let suite name f =
 (*===-- Fixture -----------------------------------------------------------===*)
 
 let filename = Sys.argv.(1)
-let m = create_module filename
+let m = create_module context filename
 
 
 (*===-- Target Data -------------------------------------------------------===*)
 
 let test_target_data () =
   let td = TargetData.create (target_triple m) in
-  let sty = struct_type [| i32_type; i64_type |] in
+  let sty = struct_type context [| i32_type; i64_type |] in
   
   ignore (TargetData.as_string td);
   ignore (TargetData.invalidate_struct_layout td sty);

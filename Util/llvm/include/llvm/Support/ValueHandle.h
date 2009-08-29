@@ -14,6 +14,7 @@
 #ifndef LLVM_SUPPORT_VALUEHANDLE_H
 #define LLVM_SUPPORT_VALUEHANDLE_H
 
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Value.h"
 
@@ -57,32 +58,32 @@ public:
     : PrevPair(0, Kind), Next(0), VP(0) {}
   ValueHandleBase(HandleBaseKind Kind, Value *V)
     : PrevPair(0, Kind), Next(0), VP(V) {
-    if (V)
+    if (isValid(VP))
       AddToUseList();
   }
   ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS)
     : PrevPair(0, Kind), Next(0), VP(RHS.VP) {
-    if (VP)
+    if (isValid(VP))
       AddToExistingUseList(RHS.getPrevPtr());
   }
   ~ValueHandleBase() {
-    if (VP)
+    if (isValid(VP))
       RemoveFromUseList();   
   }
   
   Value *operator=(Value *RHS) {
     if (VP == RHS) return RHS;
-    if (VP) RemoveFromUseList();
+    if (isValid(VP)) RemoveFromUseList();
     VP = RHS;
-    if (VP) AddToUseList();
+    if (isValid(VP)) AddToUseList();
     return RHS;
   }
 
   Value *operator=(const ValueHandleBase &RHS) {
     if (VP == RHS.VP) return RHS.VP;
-    if (VP) RemoveFromUseList();
+    if (isValid(VP)) RemoveFromUseList();
     VP = RHS.VP;
-    if (VP) AddToExistingUseList(RHS.getPrevPtr());
+    if (isValid(VP)) AddToExistingUseList(RHS.getPrevPtr());
     return VP;
   }
   
@@ -92,6 +93,12 @@ public:
 protected:
   Value *getValPtr() const { return VP; }
 private:
+  static bool isValid(Value *V) {
+    return V &&
+           V != DenseMapInfo<Value *>::getEmptyKey() &&
+           V != DenseMapInfo<Value *>::getTombstoneKey();
+  }
+
   // Callbacks made from Value.
   static void ValueIsDeleted(Value *V);
   static void ValueIsRAUWd(Value *Old, Value *New);
@@ -101,8 +108,8 @@ private:
   HandleBaseKind getKind() const { return PrevPair.getInt(); }
   void setPrevPtr(ValueHandleBase **Ptr) { PrevPair.setPointer(Ptr); }
   
-  /// AddToUseList - Add this ValueHandle to the use list for VP, where List is
-  /// known to point into the existing use list.
+  /// AddToExistingUseList - Add this ValueHandle to the use list for VP,
+  /// where List is known to point into the existing use list.
   void AddToExistingUseList(ValueHandleBase **List);
   
   /// AddToUseList - Add this ValueHandle to the use list for VP.
@@ -164,7 +171,7 @@ class AssertingVH
     return static_cast<ValueTy*>(ValueHandleBase::getValPtr());
   }
   void setValPtr(ValueTy *P) {
-    ValueHandleBase::operator=(P);
+    ValueHandleBase::operator=(GetAsValue(P));
   }
 #else
   ValueTy *ThePtr;
@@ -172,10 +179,15 @@ class AssertingVH
   void setValPtr(ValueTy *P) { ThePtr = P; }
 #endif
 
+  // Convert a ValueTy*, which may be const, to the type the base
+  // class expects.
+  static Value *GetAsValue(Value *V) { return V; }
+  static Value *GetAsValue(const Value *V) { return const_cast<Value*>(V); }
+
 public:
 #ifndef NDEBUG
   AssertingVH() : ValueHandleBase(Assert) {}
-  AssertingVH(ValueTy *P) : ValueHandleBase(Assert, P) {}
+  AssertingVH(ValueTy *P) : ValueHandleBase(Assert, GetAsValue(P)) {}
   AssertingVH(const AssertingVH &RHS) : ValueHandleBase(Assert, RHS) {}
 #else
   AssertingVH() : ThePtr(0) {}

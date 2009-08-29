@@ -41,6 +41,8 @@ namespace {
     bool mangle(const NamedDecl *D);
     void mangleGuardVariable(const VarDecl *D);
     
+    void mangleCXXVtable(QualType Type);
+    void mangleCXXRtti(QualType Type);
     void mangleCXXCtor(const CXXConstructorDecl *D, CXXCtorType Type);
     void mangleCXXDtor(const CXXDestructorDecl *D, CXXDtorType Type);
 
@@ -89,7 +91,7 @@ bool CXXNameMangler::mangleFunctionDecl(const FunctionDecl *FD) {
   // name mangling (always).
   if (!FD->hasAttr<OverloadableAttr>()) {
     // C functions are not mangled, and "main" is never mangled.
-    if (!Context.getLangOptions().CPlusPlus || FD->isMain())
+    if (!Context.getLangOptions().CPlusPlus || FD->isMain(Context))
       return false;
     
     // No mangling in an "implicit extern C" header. 
@@ -158,10 +160,22 @@ void CXXNameMangler::mangleCXXDtor(const CXXDestructorDecl *D,
   mangle(D);
 }
 
+void CXXNameMangler::mangleCXXVtable(QualType T) {
+  // <special-name> ::= TV <type>  # virtual table
+  Out << "_ZTV";
+  mangleType(T);
+}
+
+void CXXNameMangler::mangleCXXRtti(QualType T) {
+  // <special-name> ::= TI <type>  # typeinfo structure
+  Out << "_ZTI";
+  mangleType(T);
+}
+
 void CXXNameMangler::mangleGuardVariable(const VarDecl *D)
 {
   //  <special-name> ::= GV <object name>	# Guard variable for one-time 
-  //                                      # initialization
+  //                                            # initialization
 
   Out << "_ZGV";
   mangleName(D);
@@ -480,6 +494,11 @@ void CXXNameMangler::mangleType(QualType T) {
     Out << 'P';
     mangleType(PT->getPointeeType());
   }
+  else if (const ObjCObjectPointerType *PT = 
+           dyn_cast<ObjCObjectPointerType>(T.getTypePtr())) {
+    Out << 'P';
+    mangleType(PT->getPointeeType());
+  }
   //         ::= R <type>   # reference-to
   else if (const LValueReferenceType *RT =
            dyn_cast<LValueReferenceType>(T.getTypePtr())) {
@@ -535,8 +554,8 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   // UNSUPPORTED:    ::= De # IEEE 754r decimal floating point (128 bits)
   // UNSUPPORTED:    ::= Df # IEEE 754r decimal floating point (32 bits)
   // UNSUPPORTED:    ::= Dh # IEEE 754r half-precision floating point (16 bits)
-  // UNSUPPORTED:    ::= Di # char32_t
-  // UNSUPPORTED:    ::= Ds # char16_t
+  //                 ::= Di # char32_t
+  //                 ::= Ds # char16_t
   //                 ::= u <source-name>    # vendor extended type
   // From our point of view, std::nullptr_t is a builtin, but as far as mangling
   // is concerned, it's a type called std::nullptr_t.
@@ -552,6 +571,8 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   case BuiltinType::UInt128: Out << 'o'; break;
   case BuiltinType::SChar: Out << 'a'; break;
   case BuiltinType::WChar: Out << 'w'; break;
+  case BuiltinType::Char16: Out << "Ds"; break;
+  case BuiltinType::Char32: Out << "Di"; break;
   case BuiltinType::Short: Out << 's'; break;
   case BuiltinType::Int: Out << 'i'; break;
   case BuiltinType::Long: Out << 'l'; break;
@@ -570,6 +591,8 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   case BuiltinType::UndeducedAuto:
     assert(0 && "Should not see undeduced auto here");
     break;
+  case BuiltinType::ObjCId: Out << "11objc_object"; break;
+  case BuiltinType::ObjCClass: Out << "10objc_class"; break;
   }
 }
 
@@ -798,7 +821,20 @@ namespace clang {
     
     os.flush();
   }
-  
-  
-}
 
+  void mangleCXXVtable(QualType Type, ASTContext &Context,
+                       llvm::raw_ostream &os) {
+    CXXNameMangler Mangler(Context, os);
+    Mangler.mangleCXXVtable(Type);
+
+    os.flush();
+  }
+
+  void mangleCXXRtti(QualType Type, ASTContext &Context,
+                     llvm::raw_ostream &os) {
+    CXXNameMangler Mangler(Context, os);
+    Mangler.mangleCXXRtti(Type);
+
+    os.flush();
+  }
+}

@@ -22,6 +22,7 @@
 #define LLVM_CALL_GRAPH_SCC_PASS_H
 
 #include "llvm/Pass.h"
+#include "llvm/Analysis/CallGraph.h"
 
 namespace llvm {
 

@@ -315,7 +315,7 @@ public:
   void setArgumentPack(TemplateArgument *Args, unsigned NumArgs, bool CopyArgs);
   
   /// \brief Used to insert TemplateArguments into FoldingSets.
-  void Profile(llvm::FoldingSetNodeID &ID) const {
+  void Profile(llvm::FoldingSetNodeID &ID, ASTContext &Context) const {
     ID.AddInteger(Kind);
     switch (Kind) {
       case Null:
@@ -326,7 +326,7 @@ public:
         break;
         
       case Declaration:
-        ID.AddPointer(getAsDecl()); // FIXME: Must be canonical!
+        ID.AddPointer(getAsDecl()? getAsDecl()->getCanonicalDecl() : 0);
         break;
         
       case Integral:
@@ -335,14 +335,13 @@ public:
         break;
         
       case Expression:
-        // FIXME: We need a canonical representation of expressions.
-        ID.AddPointer(getAsExpr());
+        getAsExpr()->Profile(ID, Context, true);
         break;
         
       case Pack:
         ID.AddInteger(Args.NumArgs);
         for (unsigned I = 0; I != Args.NumArgs; ++I)
-          Args.Args[I].Profile(ID);
+          Args.Args[I].Profile(ID, Context);
     }
   }
 };
@@ -534,15 +533,16 @@ public:
   
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, TemplateArguments->getFlatArgumentList(), 
-            TemplateArguments->flat_size());    
+            TemplateArguments->flat_size(),
+            Function->getASTContext());    
   }
   
   static void 
   Profile(llvm::FoldingSetNodeID &ID, const TemplateArgument *TemplateArgs, 
-          unsigned NumTemplateArgs) {
+          unsigned NumTemplateArgs, ASTContext &Context) {
     ID.AddInteger(NumTemplateArgs);
     for (unsigned Arg = 0; Arg != NumTemplateArgs; ++Arg)
-      TemplateArgs[Arg].Profile(ID);
+      TemplateArgs[Arg].Profile(ID, Context);
   }  
 };
   
@@ -552,9 +552,15 @@ protected:
   /// \brief Data that is common to all of the declarations of a given
   /// function template.
   struct Common {
+    Common() : InstantiatedFromMember(0) { }
+    
     /// \brief The function template specializations for this function
     /// template, including explicit specializations and instantiations.
     llvm::FoldingSet<FunctionTemplateSpecializationInfo> Specializations;
+    
+    /// \brief The member function template from which this was most
+    /// directly instantiated (or null).
+    FunctionTemplateDecl *InstantiatedFromMember;    
   };
   
   /// \brief A pointer to the previous declaration (if this is a redeclaration)
@@ -602,6 +608,39 @@ public:
   void setPreviousDeclaration(FunctionTemplateDecl *Prev) {
     if (Prev)
       CommonOrPrev = Prev;
+  }
+  
+  virtual FunctionTemplateDecl *getCanonicalDecl();
+  
+  /// \brief Retrieve the member function template that this function template 
+  /// was instantiated from.
+  ///
+  /// This routine will return non-NULL for member function templates of
+  /// class templates.  For example, given:
+  ///
+  /// \code
+  /// template <typename T>
+  /// struct X {
+  ///   template <typename U> void f();
+  /// };
+  /// \endcode
+  ///
+  /// X<int>::A<float> is a CXXMethodDecl (whose parent is X<int>, a
+  /// ClassTemplateSpecializationDecl) for which getPrimaryTemplate() will 
+  /// return X<int>::f, a FunctionTemplateDecl (whose parent is again
+  /// X<int>) for which getInstantiatedFromMemberTemplate() will return
+  /// X<T>::f, a FunctionTemplateDecl (whose parent is X<T>, a 
+  /// ClassTemplateDecl).
+  ///
+  /// \returns NULL if this is not an instantiation of a member function 
+  /// template.
+  FunctionTemplateDecl *getInstantiatedFromMemberTemplate() {
+    return getCommonPtr()->InstantiatedFromMember;
+  }
+  
+  void setInstantiatedFromMemberTemplate(FunctionTemplateDecl *FTD) {
+    assert(!getCommonPtr()->InstantiatedFromMember);
+    getCommonPtr()->InstantiatedFromMember = FTD;
   }
   
   /// Create a template function node.
@@ -745,16 +784,15 @@ class NonTypeTemplateParmDecl
 
   NonTypeTemplateParmDecl(DeclContext *DC, SourceLocation L, unsigned D,
                           unsigned P, IdentifierInfo *Id, QualType T,
-                          SourceLocation TSSL = SourceLocation())
-    : VarDecl(NonTypeTemplateParm, DC, L, Id, T, VarDecl::None, TSSL),
+                          DeclaratorInfo *DInfo)
+    : VarDecl(NonTypeTemplateParm, DC, L, Id, T, DInfo, VarDecl::None),
       TemplateParmPosition(D, P), DefaultArgument(0) 
   { }
 
 public:
   static NonTypeTemplateParmDecl *
   Create(ASTContext &C, DeclContext *DC, SourceLocation L, unsigned D,
-         unsigned P, IdentifierInfo *Id, QualType T,
-         SourceLocation TypeSpecStartLoc = SourceLocation());
+         unsigned P, IdentifierInfo *Id, QualType T, DeclaratorInfo *DInfo);
 
   using TemplateParmPosition::getDepth;
   using TemplateParmPosition::getPosition;
@@ -867,8 +905,23 @@ enum TemplateSpecializationKind {
 /// \endcode
 class ClassTemplateSpecializationDecl 
   : public CXXRecordDecl, public llvm::FoldingSetNode {
+    
+  /// \brief Structure that stores information about a class template 
+  /// specialization that was instantiated from a class template partial
+  /// specialization.
+  struct SpecializedPartialSpecialization {
+    /// \brief The class template partial specialization from which this
+    /// class template specialization was instantiated.
+    ClassTemplatePartialSpecializationDecl *PartialSpecialization;
+    
+    /// \brief The template argument list deduced for the class template
+    /// partial specialization itself.
+    TemplateArgumentList *TemplateArgs;
+  };
+    
   /// \brief The template that this specialization specializes
-  ClassTemplateDecl *SpecializedTemplate;
+  llvm::PointerUnion<ClassTemplateDecl *, SpecializedPartialSpecialization *>
+    SpecializedTemplate;
 
   /// \brief The template arguments used to describe this specialization.
   TemplateArgumentList TemplateArgs;
@@ -881,7 +934,8 @@ protected:
   ClassTemplateSpecializationDecl(ASTContext &Context, Kind DK,
                                   DeclContext *DC, SourceLocation L,
                                   ClassTemplateDecl *SpecializedTemplate,
-                                  TemplateArgumentListBuilder &Builder);
+                                  TemplateArgumentListBuilder &Builder,
+                                  ClassTemplateSpecializationDecl *PrevDecl);
                                   
 public:
   static ClassTemplateSpecializationDecl *
@@ -890,11 +944,13 @@ public:
          TemplateArgumentListBuilder &Builder,
          ClassTemplateSpecializationDecl *PrevDecl);
 
-  /// \brief Retrieve the template that this specialization specializes.
-  ClassTemplateDecl *getSpecializedTemplate() const { 
-    return SpecializedTemplate; 
-  }
+  virtual void Destroy(ASTContext& C);
 
+  /// \brief Retrieve the template that this specialization specializes.
+  ClassTemplateDecl *getSpecializedTemplate() const;
+
+  /// \brief Retrieve the template arguments of the class template 
+  /// specialization.
   const TemplateArgumentList &getTemplateArgs() const { 
     return TemplateArgs;
   }
@@ -909,6 +965,56 @@ public:
     SpecializationKind = TSK;
   }
 
+  /// \brief If this class template specialization is an instantiation of
+  /// a template (rather than an explicit specialization), return the
+  /// class template or class template partial specialization from which it
+  /// was instantiated.
+  llvm::PointerUnion<ClassTemplateDecl *, 
+                     ClassTemplatePartialSpecializationDecl *>
+  getInstantiatedFrom() const {
+    if (getSpecializationKind() != TSK_ImplicitInstantiation &&
+        getSpecializationKind() != TSK_ExplicitInstantiation)
+      return (ClassTemplateDecl*)0;
+    
+    if (SpecializedPartialSpecialization *PartialSpec 
+          = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+      return PartialSpec->PartialSpecialization;
+    
+    return const_cast<ClassTemplateDecl*>(
+                             SpecializedTemplate.get<ClassTemplateDecl*>());
+  }
+    
+  /// \brief Retrieve the set of template arguments that should be used
+  /// to instantiate members of the class template or class template partial
+  /// specialization from which this class template specialization was
+  /// instantiated.
+  ///
+  /// \returns For a class template specialization instantiated from the primary
+  /// template, this function will return the same template arguments as
+  /// getTemplateArgs(). For a class template specialization instantiated from
+  /// a class template partial specialization, this function will return the
+  /// deduced template arguments for the class template partial specialization
+  /// itself.
+  const TemplateArgumentList &getTemplateInstantiationArgs() const {
+    if (SpecializedPartialSpecialization *PartialSpec 
+        = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+      return *PartialSpec->TemplateArgs;
+    
+    return getTemplateArgs();
+  }
+    
+  /// \brief Note that this class template specialization is actually an
+  /// instantiation of the given class template partial specialization whose
+  /// template arguments have been deduced.
+  void setInstantiationOf(ClassTemplatePartialSpecializationDecl *PartialSpec,
+                          TemplateArgumentList *TemplateArgs) {
+    SpecializedPartialSpecialization *PS 
+      = new (getASTContext()) SpecializedPartialSpecialization();
+    PS->PartialSpecialization = PartialSpec;
+    PS->TemplateArgs = TemplateArgs;
+    SpecializedTemplate = PS;
+  }
+    
   /// \brief Sets the type of this specialization as it was written by
   /// the user. This will be a class template specialization type.
   void setTypeAsWritten(QualType T) {
@@ -916,15 +1022,16 @@ public:
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
-    Profile(ID, TemplateArgs.getFlatArgumentList(), TemplateArgs.flat_size());
+    Profile(ID, TemplateArgs.getFlatArgumentList(), TemplateArgs.flat_size(),
+            getASTContext());
   }
 
   static void 
   Profile(llvm::FoldingSetNodeID &ID, const TemplateArgument *TemplateArgs, 
-          unsigned NumTemplateArgs) {
+          unsigned NumTemplateArgs, ASTContext &Context) {
     ID.AddInteger(NumTemplateArgs);
     for (unsigned Arg = 0; Arg != NumTemplateArgs; ++Arg)
-      TemplateArgs[Arg].Profile(ID);
+      TemplateArgs[Arg].Profile(ID, Context);
   }
 
   static bool classof(const Decl *D) { 
@@ -951,9 +1058,12 @@ class ClassTemplatePartialSpecializationDecl
                                          DeclContext *DC, SourceLocation L,
                                          TemplateParameterList *Params,
                                          ClassTemplateDecl *SpecializedTemplate,
-                                         TemplateArgumentListBuilder &Builder)
-    : ClassTemplateSpecializationDecl(Context, ClassTemplatePartialSpecialization,
-                                      DC, L, SpecializedTemplate, Builder),
+                                         TemplateArgumentListBuilder &Builder,
+                               ClassTemplatePartialSpecializationDecl *PrevDecl)
+    : ClassTemplateSpecializationDecl(Context, 
+                                      ClassTemplatePartialSpecialization,
+                                      DC, L, SpecializedTemplate, Builder,
+                                      PrevDecl),
       TemplateParams(Params) { }
 
 public:
@@ -986,6 +1096,8 @@ protected:
   /// \brief Data that is common to all of the declarations of a given
   /// class template.
   struct Common {
+    Common() : InstantiatedFromMember(0) {}
+
     /// \brief The class template specializations for this class
     /// template, including explicit specializations and instantiations.
     llvm::FoldingSet<ClassTemplateSpecializationDecl> Specializations;
@@ -997,6 +1109,10 @@ protected:
 
     /// \brief The injected-class-name type for this class template.
     QualType InjectedClassNameType;
+
+    /// \brief The templated member class from which this was most
+    /// directly instantiated (or null).
+    ClassTemplateDecl *InstantiatedFromMember;
   };
 
   /// \brief Previous declaration of this class template.
@@ -1027,6 +1143,8 @@ public:
   ClassTemplateDecl *getPreviousDeclaration() const {
     return PreviousDeclaration;
   }
+  
+  virtual ClassTemplateDecl *getCanonicalDecl();
 
   /// Create a class template node.
   static ClassTemplateDecl *Create(ASTContext &C, DeclContext *DC,
@@ -1048,6 +1166,16 @@ public:
     return CommonPtr->PartialSpecializations;
   }
 
+  /// \brief Find a class template partial specialization with the given
+  /// type T.
+  ///
+  /// \brief A dependent type that names a specialization of this class
+  /// template.
+  ///
+  /// \returns the class template partial specialization that exactly matches
+  /// the type \p T, or NULL if no such partial specialization exists.
+  ClassTemplatePartialSpecializationDecl *findPartialSpecialization(QualType T);
+  
   /// \brief Retrieve the type of the injected-class-name for this
   /// class template.
   ///
@@ -1063,6 +1191,35 @@ public:
   /// };
   /// \endcode
   QualType getInjectedClassNameType(ASTContext &Context);
+
+  /// \brief Retrieve the member class template that this class template was
+  /// derived from.
+  ///
+  /// This routine will return non-NULL for templated member classes of
+  /// class templates.  For example, given:
+  ///
+  /// \code
+  /// template <typename T>
+  /// struct X {
+  ///   template <typename U> struct A {};
+  /// };
+  /// \endcode
+  ///
+  /// X<int>::A<float> is a ClassTemplateSpecializationDecl (whose parent
+  /// is X<int>, also a CTSD) for which getSpecializedTemplate() will
+  /// return X<int>::A<U>, a TemplateClassDecl (whose parent is again
+  /// X<int>) for which getInstantiatedFromMemberTemplate() will return
+  /// X<T>::A<U>, a TemplateClassDecl (whose parent is X<T>, also a TCD).
+  ///
+  /// \returns null if this is not an instantiation of a member class template.
+  ClassTemplateDecl *getInstantiatedFromMemberTemplate() const {
+    return CommonPtr->InstantiatedFromMember;
+  }
+
+  void setInstantiatedFromMemberTemplate(ClassTemplateDecl *CTD) {
+    assert(!CommonPtr->InstantiatedFromMember);
+    CommonPtr->InstantiatedFromMember = CTD;
+  }
 
   // Implement isa/cast/dyncast support
   static bool classof(const Decl *D)

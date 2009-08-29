@@ -52,10 +52,16 @@ ifdef IGNORE_TESTS
 RUNTESTFLAGS += --ignore "$(strip $(IGNORE_TESTS))"
 endif
 
+# Both AuroraUX & Solaris do not have the -m flag for ulimit
+ifeq ($(HOST_OS),SunOS)
+ULIMIT=ulimit -t 600 ; ulimit -d 512000 ; ulimit -v 512000 ;
+else
+ULIMIT=ulimit -t 600 ; ulimit -d 512000 ; ulimit -m 512000 ; ulimit -v 512000 ;
+endif
+
 ifneq ($(RUNTEST),)
 check-local:: site.exp
-	( ulimit -t 600 ; ulimit -d 512000 ; \
-	  ulimit -m 512000 ; ulimit -v 512000 ; \
+	( $(ULIMIT) \
 	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(PATH)" \
 	  $(RUNTEST) $(RUNTESTFLAGS) )
 else
@@ -78,8 +84,7 @@ check-one: site.exp $(TCLSH)
 	  echo "proc verbose args { }" ; \
 	  echo "source $(LLVM_SRC_ROOT)/test/lib/llvm.exp" ; \
 	  echo "RunLLVMTests $(TESTPATH)" ) | \
-	( ulimit -t 600 ; ulimit -d 512000 ; \
-	  ulimit -m 512000 ; ulimit -v 512000 ; \
+	( $(ULIMIT) \
 	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(PATH)" \
 	  $(TCLSH) )
 endif
@@ -88,7 +93,7 @@ clean::
 	$(RM) -rf `find $(LLVM_OBJ_ROOT)/test -name Output -type d -print`
 
 # dsymutil is used on the Darwin to manipulate DWARF debugging information.
-ifeq ($(OS),Darwin)
+ifeq ($(TARGET_OS),Darwin)
 DSYMUTIL=dsymutil
 else
 DSYMUTIL=true
@@ -97,6 +102,11 @@ ifdef TargetCommonOpts
 BUGPOINT_TOPTS="-gcc-tool-args $(TargetCommonOpts)"
 else
 BUGPOINT_TOPTS=""
+endif
+
+ifneq ($(OCAMLC),)
+CC_FOR_OCAMLC := $(shell $(OCAMLC) -config | grep native_c_compiler | sed -e 's/native_c_compiler: //')
+CXX_FOR_OCAMLC := $(subst gcc,g++,$(CC_FOR_OCAMLC))
 endif
 
 FORCE:
@@ -127,7 +137,7 @@ site.exp: FORCE
 	@echo 'set llvmgccmajvers "$(LLVMGCC_MAJVERS)"' >> site.tmp
 	@echo 'set bugpoint_topts $(BUGPOINT_TOPTS)' >> site.tmp
 	@echo 'set shlibext "$(SHLIBEXT)"' >> site.tmp
-	@echo 'set ocamlc "$(OCAMLC) -cc $(CXX) -I $(LibDir)/ocaml"' >> site.tmp
+	@echo 'set ocamlc "$(OCAMLC) -cc \"$(CXX_FOR_OCAMLC)\" -I $(LibDir)/ocaml"' >> site.tmp
 	@echo 'set valgrind "$(VALGRIND)"' >> site.tmp
 	@echo 'set grep "$(GREP)"' >>site.tmp
 	@echo 'set gas "$(GAS)"' >>site.tmp

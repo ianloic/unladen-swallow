@@ -16,7 +16,6 @@
 
 #include "llvm/Support/DataTypes.h"
 #include <cassert>
-#include <iosfwd>
 
 namespace llvm {
   
@@ -119,12 +118,6 @@ private:
     TargetFlags = 0;
   }
 public:
-  MachineOperand(const MachineOperand &M) {
-    *this = M;
-  }
-  
-  ~MachineOperand() {}
-  
   /// getType - Returns the MachineOperandType for this operand.
   ///
   MachineOperandType getType() const { return (MachineOperandType)OpKind; }
@@ -139,7 +132,6 @@ public:
   MachineInstr *getParent() { return ParentMI; }
   const MachineInstr *getParent() const { return ParentMI; }
   
-  void print(std::ostream &os, const TargetMachine *TM = 0) const;
   void print(raw_ostream &os, const TargetMachine *TM = 0) const;
 
   //===--------------------------------------------------------------------===//
@@ -448,20 +440,6 @@ public:
     Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  const MachineOperand &operator=(const MachineOperand &MO) {
-    OpKind   = MO.OpKind;
-    IsDef    = MO.IsDef;
-    IsImp    = MO.IsImp;
-    IsKill   = MO.IsKill;
-    IsDead   = MO.IsDead;
-    IsUndef  = MO.IsUndef;
-    IsEarlyClobber = MO.IsEarlyClobber;
-    SubReg   = MO.SubReg;
-    ParentMI = MO.ParentMI;
-    Contents = MO.Contents;
-    TargetFlags = MO.TargetFlags;
-    return *this;
-  }
 
   friend class MachineInstr;
   friend class MachineRegisterInfo;
@@ -487,11 +465,6 @@ private:
   /// MachineRegisterInfo it is linked with.
   void RemoveRegOperandFromRegInfo();
 };
-
-inline std::ostream &operator<<(std::ostream &OS, const MachineOperand &MO) {
-  MO.print(OS, 0);
-  return OS;
-}
 
 inline raw_ostream &operator<<(raw_ostream &OS, const MachineOperand& MO) {
   MO.print(OS, 0);

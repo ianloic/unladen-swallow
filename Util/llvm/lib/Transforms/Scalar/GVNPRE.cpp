@@ -39,6 +39,7 @@
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <deque>
 #include <map>
@@ -240,7 +241,7 @@ Expression::ExpressionOpcode
     
     // THIS SHOULD NEVER HAPPEN
     default:
-      assert(0 && "Binary operator with unknown opcode?");
+      llvm_unreachable("Binary operator with unknown opcode?");
       return Expression::ADD;
   }
 }
@@ -271,7 +272,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
       
       // THIS SHOULD NEVER HAPPEN
       default:
-        assert(0 && "Comparison with unknown predicate?");
+        llvm_unreachable("Comparison with unknown predicate?");
         return Expression::ICMPEQ;
     }
   } else {
@@ -307,7 +308,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
       
       // THIS SHOULD NEVER HAPPEN
       default:
-        assert(0 && "Comparison with unknown predicate?");
+        llvm_unreachable("Comparison with unknown predicate?");
         return Expression::FCMPOEQ;
     }
   }
@@ -343,7 +344,7 @@ Expression::ExpressionOpcode
     
     // THIS SHOULD NEVER HAPPEN
     default:
-      assert(0 && "Cast operator with unknown opcode?");
+      llvm_unreachable("Cast operator with unknown opcode?");
       return Expression::BITCAST;
   }
 }
@@ -577,7 +578,7 @@ uint32_t ValueTable::lookup(Value* V) const {
   if (VI != valueNumbering.end())
     return VI->second;
   else
-    assert(0 && "Value not numbered?");
+    llvm_unreachable("Value not numbered?");
   
   return 0;
 }
@@ -767,7 +768,7 @@ Value* GVNPRE::find_leader(ValueNumberedSet& vals, uint32_t v) {
     if (v == VN.lookup(*I))
       return *I;
   
-  assert(0 && "No leader found, but present bit is set?");
+  llvm_unreachable("No leader found, but present bit is set?");
   return 0;
 }
 
@@ -866,7 +867,8 @@ Value* GVNPRE::phi_translate(Value* V, BasicBlock* pred, BasicBlock* succ) {
                                  newOp1, newOp2,
                                  C->getName()+".expr");
       else if (ExtractElementInst* E = dyn_cast<ExtractElementInst>(U))
-        newVal = new ExtractElementInst(newOp1, newOp2, E->getName()+".expr");
+        newVal = ExtractElementInst::Create(newOp1, newOp2, 
+                                            E->getName()+".expr");
       
       uint32_t v = VN.lookup_or_add(newVal);
       
@@ -1218,13 +1220,13 @@ void GVNPRE::topo_sort(ValueNumberedSet& set, SmallVector<Value*, 8>& vec) {
 
 /// dump - Dump a set of values to standard error
 void GVNPRE::dump(ValueNumberedSet& s) const {
-  DOUT << "{ ";
+  DEBUG(errs() << "{ ");
   for (ValueNumberedSet::iterator I = s.begin(), E = s.end();
        I != E; ++I) {
-    DOUT << "" << VN.lookup(*I) << ": ";
+    DEBUG(errs() << "" << VN.lookup(*I) << ": ");
     DEBUG((*I)->dump());
   }
-  DOUT << "}\n\n";
+  DEBUG(errs() << "}\n\n");
 }
 
 /// elimination - Phase 3 of the main algorithm.  Perform full redundancy 
@@ -1679,7 +1681,8 @@ void GVNPRE::insertion_pre(Value* e, BasicBlock* BB,
                                         BO->getName()+".gvnpre",
                                         (*PI)->getTerminator());
       else if (CmpInst* C = dyn_cast<CmpInst>(U))
-        newVal = CmpInst::Create(C->getOpcode(), C->getPredicate(), s1, s2,
+        newVal = CmpInst::Create(C->getOpcode(),
+                                 C->getPredicate(), s1, s2,
                                  C->getName()+".gvnpre", 
                                  (*PI)->getTerminator());
       else if (ShuffleVectorInst* S = dyn_cast<ShuffleVectorInst>(U))
@@ -1689,7 +1692,7 @@ void GVNPRE::insertion_pre(Value* e, BasicBlock* BB,
         newVal = InsertElementInst::Create(s1, s2, s3, S->getName()+".gvnpre",
                                            (*PI)->getTerminator());
       else if (ExtractElementInst* S = dyn_cast<ExtractElementInst>(U))
-        newVal = new ExtractElementInst(s1, s2, S->getName()+".gvnpre",
+        newVal = ExtractElementInst::Create(s1, s2, S->getName()+".gvnpre",
                                         (*PI)->getTerminator());
       else if (SelectInst* S = dyn_cast<SelectInst>(U))
         newVal = SelectInst::Create(s1, s2, s3, S->getName()+".gvnpre",

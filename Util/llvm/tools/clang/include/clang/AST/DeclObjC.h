@@ -125,7 +125,7 @@ private:
   ObjCList<ParmVarDecl> ParamInfo;
   
   /// List of attributes for this method declaration.
-  SourceLocation EndLoc; // the location of the ';' or '{'.
+  SourceLocation EndLoc; // the location of the ';' or '}'.
   
   // The following are only used for method definitions, null otherwise.
   // FIXME: space savings opportunity, consider a sub-class.
@@ -154,7 +154,12 @@ private:
     EndLoc(endLoc), Body(0), SelfDecl(0), CmdDecl(0) {}
 
   virtual ~ObjCMethodDecl() {}
-  
+
+  /// \brief A definition will return its interface declaration.
+  /// An interface declaration will return its definition.
+  /// Otherwise it will return itself.
+  virtual ObjCMethodDecl *getNextRedeclaration();
+
 public:
   
   /// Destroy - Call destructors and release memory.
@@ -168,7 +173,9 @@ public:
                                 bool isVariadic = false,
                                 bool isSynthesized = false,
                                 ImplementationControl impControl = None);
-  
+
+  virtual ObjCMethodDecl *getCanonicalDecl();
+
   ObjCDeclQualifier getObjCDeclQualifier() const {
     return ObjCDeclQualifier(objcDeclQualifier);
   }
@@ -178,7 +185,7 @@ public:
   SourceLocation getLocStart() const { return getLocation(); }
   SourceLocation getLocEnd() const { return EndLoc; }
   void setEndLoc(SourceLocation Loc) { EndLoc = Loc; }
-  SourceRange getSourceRange() const { 
+  virtual SourceRange getSourceRange() const { 
     return SourceRange(getLocation(), EndLoc); 
   }
     
@@ -248,6 +255,9 @@ public:
   CompoundStmt *getCompoundBody() { return (CompoundStmt*)Body; }
   void setBody(Stmt *B) { Body = B; }
 
+  /// \brief Returns whether this specific method is a definition.
+  bool isThisDeclarationADefinition() const { return Body; }
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return D->getKind() == ObjCMethod; }
   static bool classof(const ObjCMethodDecl *D) { return true; }
@@ -275,9 +285,8 @@ struct ObjCMethodList {
 };
 
 /// ObjCContainerDecl - Represents a container for method declarations.
-/// Current sub-classes are ObjCInterfaceDecl, ObjCCategoryDecl, and
-/// ObjCProtocolDecl. 
-/// FIXME: Use for ObjC implementation decls.
+/// Current sub-classes are ObjCInterfaceDecl, ObjCCategoryDecl,
+/// ObjCProtocolDecl, and ObjCImplDecl. 
 ///
 class ObjCContainerDecl : public NamedDecl, public DeclContext {
   SourceLocation AtEndLoc; // marks the end of the method container.
@@ -328,19 +337,24 @@ public:
   }
 
   // Get the local instance/class method declared in this interface.
-  ObjCMethodDecl *getInstanceMethod(Selector Sel) const;
-  ObjCMethodDecl *getClassMethod(Selector Sel) const;
-  ObjCIvarDecl *getIvarDecl(IdentifierInfo *Id) const;
-
-  ObjCMethodDecl *getMethod(Selector Sel, bool isInstance) const {
-    return isInstance ? getInstanceMethod(Sel) : getClassMethod(Sel);
+  ObjCMethodDecl *getMethod(Selector Sel, bool isInstance) const;
+  ObjCMethodDecl *getInstanceMethod(Selector Sel) const {
+    return getMethod(Sel, true/*isInstance*/);
   }
+  ObjCMethodDecl *getClassMethod(Selector Sel) const {
+    return getMethod(Sel, false/*isInstance*/);
+  }
+  ObjCIvarDecl *getIvarDecl(IdentifierInfo *Id) const;
     
   ObjCPropertyDecl *FindPropertyDeclaration(IdentifierInfo *PropertyId) const;
 
   // Marks the end of the container.
   SourceLocation getAtEndLoc() const { return AtEndLoc; }
   void setAtEndLoc(SourceLocation L) { AtEndLoc = L; }
+
+  virtual SourceRange getSourceRange() const {
+    return SourceRange(getLocation(), getAtEndLoc());
+  }
   
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
@@ -423,8 +437,19 @@ public:
   const ObjCList<ObjCProtocolDecl> &getReferencedProtocols() const { 
     return ReferencedProtocols; 
   }
-  
+
+  ObjCImplementationDecl *getImplementation() const;
+  void setImplementation(ObjCImplementationDecl *ImplD);
+
   ObjCCategoryDecl *FindCategoryDeclaration(IdentifierInfo *CategoryId) const;
+  
+  // Get the local instance/class method declared in a category.
+  ObjCMethodDecl *getCategoryInstanceMethod(Selector Sel) const;
+  ObjCMethodDecl *getCategoryClassMethod(Selector Sel) const;
+  ObjCMethodDecl *getCategoryMethod(Selector Sel, bool isInstance) const {
+    return isInstance ? getInstanceMethod(Sel) 
+                      : getClassMethod(Sel);
+  }
 
   typedef ObjCList<ObjCProtocolDecl>::iterator protocol_iterator;
   protocol_iterator protocol_begin() const {return ReferencedProtocols.begin();}
@@ -480,11 +505,16 @@ public:
 
   // Lookup a method. First, we search locally. If a method isn't
   // found, we search referenced protocols and class categories.
-  ObjCMethodDecl *lookupInstanceMethod(Selector Sel);
-  ObjCMethodDecl *lookupClassMethod(Selector Sel);
+  ObjCMethodDecl *lookupMethod(Selector Sel, bool isInstance) const;
+  ObjCMethodDecl *lookupInstanceMethod(Selector Sel) const {
+    return lookupMethod(Sel, true/*isInstance*/);
+  }
+  ObjCMethodDecl *lookupClassMethod(Selector Sel) const {
+    return lookupMethod(Sel, false/*isInstance*/);
+  }
   ObjCInterfaceDecl *lookupInheritedClass(const IdentifierInfo *ICName);
 
-  // Location information, modeled after the Stmt API. 
+  // Location information, modeled after the Stmt API.
   SourceLocation getLocStart() const { return getLocation(); } // '@'interface
   SourceLocation getLocEnd() const { return EndLoc; }
   void setLocEnd(SourceLocation LE) { EndLoc = LE; };
@@ -499,6 +529,13 @@ public:
   /// declaration without an @interface declaration.
   bool isImplicitInterfaceDecl() const { return InternalInterface; }
   void setImplicitInterfaceDecl(bool val) { InternalInterface = val; }
+  
+  /// ClassImplementsProtocol - Checks that 'lProto' protocol
+  /// has been implemented in IDecl class, its super class or categories (if
+  /// lookupCategory is true).
+  bool ClassImplementsProtocol(ObjCProtocolDecl *lProto,
+                               bool lookupCategory,
+                               bool RHSIsQualifiedID = false);
   
   // Low-level accessor
   Type *getTypeForDecl() const { return TypeForDecl; }
@@ -531,13 +568,14 @@ public:
   
 private:
   ObjCIvarDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
-               QualType T, AccessControl ac, Expr *BW)
-    : FieldDecl(ObjCIvar, DC, L, Id, T, BW, /*Mutable=*/false), 
+               QualType T, DeclaratorInfo *DInfo, AccessControl ac, Expr *BW)
+    : FieldDecl(ObjCIvar, DC, L, Id, T, DInfo, BW, /*Mutable=*/false), 
       DeclAccess(ac) {}
   
 public:
   static ObjCIvarDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
                               IdentifierInfo *Id, QualType T,
+                              DeclaratorInfo *DInfo,
                               AccessControl ac, Expr *BW = NULL);
     
   void setAccessControl(AccessControl ac) { DeclAccess = ac; }
@@ -563,7 +601,9 @@ class ObjCAtDefsFieldDecl : public FieldDecl {
 private:
   ObjCAtDefsFieldDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
                       QualType T, Expr *BW)
-    : FieldDecl(ObjCAtDefsField, DC, L, Id, T, BW, /*Mutable=*/false) {}
+    : FieldDecl(ObjCAtDefsField, DC, L, Id, T,
+                /*DInfo=*/0, // FIXME: Do ObjCAtDefs have declarators ?
+                BW, /*Mutable=*/false) {}
   
 public:
   static ObjCAtDefsFieldDecl *Create(ASTContext &C, DeclContext *DC,
@@ -643,8 +683,13 @@ public:
   
   // Lookup a method. First, we search locally. If a method isn't
   // found, we search referenced protocols and class categories.
-  ObjCMethodDecl *lookupInstanceMethod(Selector Sel);
-  ObjCMethodDecl *lookupClassMethod(Selector Sel);
+  ObjCMethodDecl *lookupMethod(Selector Sel, bool isInstance) const;
+  ObjCMethodDecl *lookupInstanceMethod(Selector Sel) const {
+    return lookupMethod(Sel, true/*isInstance*/);
+  }
+  ObjCMethodDecl *lookupClassMethod(Selector Sel) const {
+    return lookupMethod(Sel, false/*isInstance*/);
+  }
 
   bool isForwardDecl() const { return isForwardProtoDecl; }
   void setForwardDecl(bool val) { isForwardProtoDecl = val; }
@@ -771,7 +816,10 @@ public:
   ObjCInterfaceDecl *getClassInterface() { return ClassInterface; }
   const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
   void setClassInterface(ObjCInterfaceDecl *IDecl) { ClassInterface = IDecl; }
-  
+
+  ObjCCategoryImplDecl *getImplementation() const;
+  void setImplementation(ObjCCategoryImplDecl *ImplD);
+
   /// setProtocolList - Set the list of protocols that this interface
   /// implements.
   void setProtocolList(ObjCProtocolDecl *const*List, unsigned Num,
@@ -805,26 +853,23 @@ public:
   static bool classof(const ObjCCategoryDecl *D) { return true; }
 };
 
-class ObjCImplDecl : public NamedDecl, public DeclContext {
+class ObjCImplDecl : public ObjCContainerDecl {
   /// Class interface for this category implementation
   ObjCInterfaceDecl *ClassInterface;
-  
-  SourceLocation EndLoc;  
   
 protected:
   ObjCImplDecl(Kind DK, DeclContext *DC, SourceLocation L,
                ObjCInterfaceDecl *classInterface)
-    : NamedDecl(DK, DC, L, 
-                classInterface? classInterface->getDeclName() 
-                              : DeclarationName()), 
-      DeclContext(DK), ClassInterface(classInterface) {}
+    : ObjCContainerDecl(DK, DC, L, 
+                        classInterface? classInterface->getIdentifier() : 0), 
+      ClassInterface(classInterface) {}
   
 public:
   virtual ~ObjCImplDecl() {}
   
   const ObjCInterfaceDecl *getClassInterface() const { return ClassInterface; }
   ObjCInterfaceDecl *getClassInterface() { return ClassInterface; }
-  void setClassInterface(ObjCInterfaceDecl *IFace) { ClassInterface = IFace; }
+  void setClassInterface(ObjCInterfaceDecl *IFace);
 
   void addInstanceMethod(ObjCMethodDecl *method) { 
     // FIXME: Context should be set correctly before we get here.
@@ -835,14 +880,6 @@ public:
     // FIXME: Context should be set correctly before we get here.
     method->setLexicalDeclContext(this);
     addDecl(method); 
-  }
-  
-  // Get the local instance/class method declared in this interface.
-  ObjCMethodDecl *getInstanceMethod(Selector Sel) const;
-  ObjCMethodDecl *getClassMethod(Selector Sel) const;
-  ObjCMethodDecl *getMethod(Selector Sel, bool isInstance) const {
-    return isInstance ? getInstanceMethod(Sel) 
-                      : getClassMethod(Sel);
   }
   
   void addPropertyImplementation(ObjCPropertyImplDecl *property);
@@ -859,30 +896,10 @@ public:
     return propimpl_iterator(decls_end());
   }
 
-  typedef filtered_decl_iterator<ObjCMethodDecl, 
-                                 &ObjCMethodDecl::isInstanceMethod> 
-    instmeth_iterator;
-  instmeth_iterator instmeth_begin() const {
-    return instmeth_iterator(decls_begin());
+  static bool classof(const Decl *D) {
+    return D->getKind() >= ObjCImplFirst && D->getKind() <= ObjCImplLast;
   }
-  instmeth_iterator instmeth_end() const {
-    return instmeth_iterator(decls_end());
-  }
-
-  typedef filtered_decl_iterator<ObjCMethodDecl, 
-                                 &ObjCMethodDecl::isClassMethod> 
-    classmeth_iterator;
-  classmeth_iterator classmeth_begin() const {
-    return classmeth_iterator(decls_begin());
-  }
-  classmeth_iterator classmeth_end() const {
-    return classmeth_iterator(decls_end());
-  }
-
-  // Location information, modeled after the Stmt API. 
-  SourceLocation getLocStart() const { return getLocation(); }
-  SourceLocation getLocEnd() const { return EndLoc; }
-  void setLocEnd(SourceLocation LE) { EndLoc = LE; };
+  static bool classof(const ObjCImplDecl *D) { return true; }
 };
   
 /// ObjCCategoryImplDecl - An object of this class encapsulates a category 
@@ -916,6 +933,8 @@ public:
     return Id; 
   }
   void setIdentifier(IdentifierInfo *II) { Id = II; }
+  
+  ObjCCategoryDecl *getCategoryClass() const;
 
   /// getNameAsCString - Get the name of identifier for the class
   /// interface associated with this implementation as a C string
@@ -931,12 +950,6 @@ public:
   
   static bool classof(const Decl *D) { return D->getKind() == ObjCCategoryImpl;}
   static bool classof(const ObjCCategoryImplDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const ObjCCategoryImplDecl *D) {
-    return static_cast<DeclContext *>(const_cast<ObjCCategoryImplDecl*>(D));
-  }
-  static ObjCCategoryImplDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<ObjCCategoryImplDecl *>(const_cast<DeclContext*>(DC));
-  }
 };
 
 /// ObjCImplementationDecl - Represents a class definition - this is where
@@ -1010,12 +1023,6 @@ public:
     return D->getKind() == ObjCImplementation;
   }
   static bool classof(const ObjCImplementationDecl *D) { return true; }
-  static DeclContext *castToDeclContext(const ObjCImplementationDecl *D) {
-    return static_cast<DeclContext *>(const_cast<ObjCImplementationDecl*>(D));
-  }
-  static ObjCImplementationDecl *castFromDeclContext(const DeclContext *DC) {
-    return static_cast<ObjCImplementationDecl *>(const_cast<DeclContext*>(DC));
-  }
 };
 
 /// ObjCCompatibleAliasDecl - Represents alias of a class. This alias is 
@@ -1189,6 +1196,9 @@ public:
                                       Kind PK, 
                                       ObjCIvarDecl *ivarDecl);
 
+  virtual SourceRange getSourceRange() const { 
+    return SourceRange(AtLoc, getLocation()); 
+  }
   SourceLocation getLocStart() const { return AtLoc; }
   void setAtLoc(SourceLocation Loc) { AtLoc = Loc; }
 

@@ -84,32 +84,38 @@ SourceLocation Sema::getLocationOfStringLiteralByte(const StringLiteral *SL,
   }
 }
 
+/// CheckablePrintfAttr - does a function call have a "printf" attribute
+/// and arguments that merit checking?
+bool Sema::CheckablePrintfAttr(const FormatAttr *Format, CallExpr *TheCall) {
+  if (Format->getType() == "printf") return true;
+  if (Format->getType() == "printf0") {
+    // printf0 allows null "format" string; if so don't check format/args
+    unsigned format_idx = Format->getFormatIdx() - 1;
+    if (format_idx < TheCall->getNumArgs()) {
+      Expr *Format = TheCall->getArg(format_idx)->IgnoreParenCasts();
+      if (!Format->isNullPointerConstant(Context))
+        return true;
+    }
+  }
+  return false;
+}
 
-/// CheckFunctionCall - Check a direct function call for various correctness
-/// and safety properties not strictly enforced by the C type system.
 Action::OwningExprResult
-Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
+Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   OwningExprResult TheCallResult(Owned(TheCall));
-  // Get the IdentifierInfo* for the called function.
-  IdentifierInfo *FnInfo = FDecl->getIdentifier();
 
-  // None of the checks below are needed for functions that don't have
-  // simple names (e.g., C++ conversion functions).
-  if (!FnInfo)
-    return move(TheCallResult);
-
-  switch (FDecl->getBuiltinID(Context)) {
+  switch (BuiltinID) {
   case Builtin::BI__builtin___CFStringMakeConstantString:
     assert(TheCall->getNumArgs() == 1 &&
            "Wrong # arguments to builtin CFStringMakeConstantString");
     if (CheckObjCString(TheCall->getArg(0)))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_stdarg_start:
   case Builtin::BI__builtin_va_start:
     if (SemaBuiltinVAStart(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_isgreater:
   case Builtin::BI__builtin_isgreaterequal:
   case Builtin::BI__builtin_isless:
@@ -118,12 +124,12 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
   case Builtin::BI__builtin_isunordered:
     if (SemaBuiltinUnorderedCompare(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_return_address:
   case Builtin::BI__builtin_frame_address:
     if (SemaBuiltinStackAddress(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_shufflevector:
     return SemaBuiltinShuffleVector(TheCall);
     // TheCall will be freed by the smart pointer here, but that's fine, since
@@ -131,15 +137,15 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
   case Builtin::BI__builtin_prefetch:
     if (SemaBuiltinPrefetch(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_object_size:
     if (SemaBuiltinObjectSize(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__builtin_longjmp:
     if (SemaBuiltinLongjmp(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   case Builtin::BI__sync_fetch_and_add:
   case Builtin::BI__sync_fetch_and_sub:
   case Builtin::BI__sync_fetch_and_or:
@@ -158,16 +164,30 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
   case Builtin::BI__sync_lock_release:
     if (SemaBuiltinAtomicOverloaded(TheCall))
       return ExprError();
-    return move(TheCallResult);
+    break;
   }
+  
+  return move(TheCallResult);
+}
 
+/// CheckFunctionCall - Check a direct function call for various correctness
+/// and safety properties not strictly enforced by the C type system.
+bool Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
+  // Get the IdentifierInfo* for the called function.
+  IdentifierInfo *FnInfo = FDecl->getIdentifier();
+
+  // None of the checks below are needed for functions that don't have
+  // simple names (e.g., C++ conversion functions).
+  if (!FnInfo)
+    return false;
+  
   // FIXME: This mechanism should be abstracted to be less fragile and
   // more efficient. For example, just map function ids to custom
   // handlers.
 
   // Printf checking.
   if (const FormatAttr *Format = FDecl->getAttr<FormatAttr>()) {
-    if (Format->getType() == "printf") {
+    if (CheckablePrintfAttr(Format, TheCall)) {
       bool HasVAListArg = Format->getFirstArg() == 0;
       if (!HasVAListArg) {
         if (const FunctionProtoType *Proto 
@@ -178,41 +198,42 @@ Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall) {
                            HasVAListArg ? 0 : Format->getFirstArg() - 1);
     }
   }
-  for (const Attr *attr = FDecl->getAttrs(); 
-       attr; attr = attr->getNext()) {
-    if (const NonNullAttr *NonNull = dyn_cast<NonNullAttr>(attr))
-      CheckNonNullArguments(NonNull, TheCall);
-  }
+  
+  for (const NonNullAttr *NonNull = FDecl->getAttr<NonNullAttr>(); NonNull; 
+       NonNull = NonNull->getNext<NonNullAttr>())
+    CheckNonNullArguments(NonNull, TheCall);
 
-  return move(TheCallResult);
+  return false;
 }
 
-Action::OwningExprResult
-Sema::CheckBlockCall(NamedDecl *NDecl, CallExpr *TheCall) {
-
-  OwningExprResult TheCallResult(Owned(TheCall));
+bool Sema::CheckBlockCall(NamedDecl *NDecl, CallExpr *TheCall) {
   // Printf checking.
   const FormatAttr *Format = NDecl->getAttr<FormatAttr>();
   if (!Format)
-    return move(TheCallResult);
+    return false;
+  
   const VarDecl *V = dyn_cast<VarDecl>(NDecl);
   if (!V)
-    return move(TheCallResult);
+    return false;
+  
   QualType Ty = V->getType();
   if (!Ty->isBlockPointerType())
-    return move(TheCallResult);
-  if (Format->getType() == "printf") {
-      bool HasVAListArg = Format->getFirstArg() == 0;
-      if (!HasVAListArg) {
-        const FunctionType *FT = 
-          Ty->getAsBlockPointerType()->getPointeeType()->getAsFunctionType();
-        if (const FunctionProtoType *Proto = dyn_cast<FunctionProtoType>(FT))
-          HasVAListArg = !Proto->isVariadic();
-      }
-      CheckPrintfArguments(TheCall, HasVAListArg, Format->getFormatIdx() - 1,
-                           HasVAListArg ? 0 : Format->getFirstArg() - 1);
+    return false;
+  
+  if (!CheckablePrintfAttr(Format, TheCall))
+    return false;
+  
+  bool HasVAListArg = Format->getFirstArg() == 0;
+  if (!HasVAListArg) {
+    const FunctionType *FT = 
+      Ty->getAs<BlockPointerType>()->getPointeeType()->getAsFunctionType();
+    if (const FunctionProtoType *Proto = dyn_cast<FunctionProtoType>(FT))
+      HasVAListArg = !Proto->isVariadic();
   }
-  return move(TheCallResult);
+  CheckPrintfArguments(TheCall, HasVAListArg, Format->getFormatIdx() - 1,
+                       HasVAListArg ? 0 : Format->getFirstArg() - 1);
+
+  return false;
 }
 
 /// SemaBuiltinAtomicOverloaded - We have a call to a function like
@@ -241,7 +262,7 @@ bool Sema::SemaBuiltinAtomicOverloaded(CallExpr *TheCall) {
     return Diag(DRE->getLocStart(), diag::err_atomic_builtin_must_be_pointer)
              << FirstArg->getType() << FirstArg->getSourceRange();
   
-  QualType ValType = FirstArg->getType()->getAsPointerType()->getPointeeType();
+  QualType ValType = FirstArg->getType()->getAs<PointerType>()->getPointeeType();
   if (!ValType->isIntegerType() && !ValType->isPointerType() && 
       !ValType->isBlockPointerType())
     return Diag(DRE->getLocStart(),
@@ -344,11 +365,12 @@ bool Sema::SemaBuiltinAtomicOverloaded(CallExpr *TheCall) {
                                            TUScope, false, DRE->getLocStart()));
   const FunctionProtoType *BuiltinFT =
     NewBuiltinDecl->getType()->getAsFunctionProtoType();
-  ValType = BuiltinFT->getArgType(0)->getAsPointerType()->getPointeeType();
+  ValType = BuiltinFT->getArgType(0)->getAs<PointerType>()->getPointeeType();
   
   // If the first type needs to be converted (e.g. void** -> int*), do it now.
   if (BuiltinFT->getArgType(0) != FirstArg->getType()) {
-    ImpCastExprToType(FirstArg, BuiltinFT->getArgType(0), false);
+    ImpCastExprToType(FirstArg, BuiltinFT->getArgType(0), CastExpr::CK_Unknown,
+                      /*isLvalue=*/false);
     TheCall->setArg(0, FirstArg);
   }
   
@@ -367,7 +389,10 @@ bool Sema::SemaBuiltinAtomicOverloaded(CallExpr *TheCall) {
     
     // GCC does an implicit conversion to the pointer or integer ValType.  This
     // can fail in some cases (1i -> int**), check for this error case now.
-    if (CheckCastTypes(Arg->getSourceRange(), ValType, Arg))
+    CastExpr::CastKind Kind = CastExpr::CK_Unknown;
+    CXXMethodDecl *ConversionDecl = 0;
+    if (CheckCastTypes(Arg->getSourceRange(), ValType, Arg, Kind,
+                       ConversionDecl))
       return true;
     
     // Okay, we have something that *can* be converted to the right type.  Check
@@ -376,7 +401,7 @@ bool Sema::SemaBuiltinAtomicOverloaded(CallExpr *TheCall) {
     // pass in 42.  The 42 gets converted to char.  This is even more strange
     // for things like 45.123 -> char, etc.
     // FIXME: Do this check.  
-    ImpCastExprToType(Arg, ValType, false);
+    ImpCastExprToType(Arg, ValType, Kind, /*isLvalue=*/false);
     TheCall->setArg(i+1, Arg);
   }
   
@@ -609,8 +634,8 @@ Action::OwningExprResult Sema::SemaBuiltinShuffleVector(CallExpr *TheCall) {
     TheCall->setArg(i, 0);
   }
 
-  return Owned(new (Context) ShuffleVectorExpr(exprs.begin(), exprs.size(),
-                                               exprs[0]->getType(),
+  return Owned(new (Context) ShuffleVectorExpr(Context, exprs.begin(),
+                                            exprs.size(), exprs[0]->getType(),
                                             TheCall->getCallee()->getLocStart(),
                                             TheCall->getRParenLoc()));
 }
@@ -749,8 +774,7 @@ bool Sema::SemaCheckStringLiteral(const Expr *E, const CallExpr *TheCall,
 
       if (const ArrayType *AT = Context.getAsArrayType(T)) {
         isConstant = AT->getElementType().isConstant(Context);
-      }
-      else if (const PointerType *PT = T->getAsPointerType()) {
+      } else if (const PointerType *PT = T->getAs<PointerType>()) {
         isConstant = T.isConstant(Context) && 
                      PT->getPointeeType().isConstant(Context);
       }
@@ -1203,9 +1227,8 @@ Sema::CheckReturnStackAddr(Expr *RetValExp, QualType lhsType,
       if (C->hasBlockDeclRefExprs())
         Diag(C->getLocStart(), diag::err_ret_local_block)
           << C->getSourceRange();
-  }
-  // Perform checking for stack values returned by reference.
-  else if (lhsType->isReferenceType()) {
+  } else if (lhsType->isReferenceType()) {
+    // Perform checking for stack values returned by reference.
     // Check for a reference to the stack
     if (DeclRefExpr *DR = EvalVal(RetValExp))
       Diag(DR->getLocStart(), diag::warn_ret_stack_ref)
@@ -1236,7 +1259,7 @@ Sema::CheckReturnStackAddr(Expr *RetValExp, QualType lhsType,
 ///   * taking the address of an array element where the array is on the stack
 static DeclRefExpr* EvalAddr(Expr *E) {
   // We should only be called for evaluating pointer expressions.
-  assert((E->getType()->isPointerType() ||
+  assert((E->getType()->isAnyPointerType() ||
           E->getType()->isBlockPointerType() ||
           E->getType()->isObjCQualifiedIdType()) &&
          "EvalAddr only works on pointers");
@@ -1398,7 +1421,8 @@ static DeclRefExpr* EvalVal(Expr *E) {
   }
   
   // Accesses to members are potential references to data on the stack.
-  case Stmt::MemberExprClass: {
+  case Stmt::MemberExprClass: 
+  case Stmt::CXXQualifiedMemberExprClass: {
     MemberExpr *M = cast<MemberExpr>(E);
       
     // Check for indirect access.  We only want direct field accesses.
@@ -1442,8 +1466,7 @@ void Sema::CheckFloatComparison(SourceLocation loc, Expr* lex, Expr *rex) {
     if (FloatingLiteral* FLL = dyn_cast<FloatingLiteral>(LeftExprSansParen)) {
       if (FLL->isExact())
         EmitWarning = false;
-    }
-    else
+    } else
       if (FloatingLiteral* FLR = dyn_cast<FloatingLiteral>(RightExprSansParen)){
         if (FLR->isExact())
           EmitWarning = false;

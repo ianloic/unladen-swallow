@@ -35,7 +35,7 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
                                   DenseMap<const Value*, Value*> &ValueMap,
                                   const char *NameSuffix, Function *F,
                                   ClonedCodeInfo *CodeInfo) {
-  BasicBlock *NewBB = BasicBlock::Create("", F);
+  BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", F);
   if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
 
   bool hasCalls = false, hasDynamicAllocas = false, hasStaticAllocas = false;
@@ -43,7 +43,7 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
   // Loop over all instructions, and copy them over.
   for (BasicBlock::const_iterator II = BB->begin(), IE = BB->end();
        II != IE; ++II) {
-    Instruction *NewInst = II->clone();
+    Instruction *NewInst = II->clone(BB->getContext());
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -73,7 +73,7 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
 //
 void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                              DenseMap<const Value*, Value*> &ValueMap,
-                             std::vector<ReturnInst*> &Returns,
+                             SmallVectorImpl<ReturnInst*> &Returns,
                              const char *NameSuffix, ClonedCodeInfo *CodeInfo) {
   assert(NameSuffix && "NameSuffix cannot be null!");
 
@@ -151,8 +151,7 @@ Function *llvm::CloneFunction(const Function *F,
       ArgTypes.push_back(I->getType());
 
   // Create a new function type...
-  FunctionType *FTy =
-     F->getContext()->getFunctionType(F->getFunctionType()->getReturnType(),
+  FunctionType *FTy = FunctionType::get(F->getFunctionType()->getReturnType(),
                                     ArgTypes, F->getFunctionType()->isVarArg());
 
   // Create the new function...
@@ -167,7 +166,7 @@ Function *llvm::CloneFunction(const Function *F,
       ValueMap[I] = DestI++;        // Add mapping to ValueMap
     }
 
-  std::vector<ReturnInst*> Returns;  // Ignore returns cloned...
+  SmallVector<ReturnInst*, 8> Returns;  // Ignore returns cloned.
   CloneFunctionInto(NewF, F, ValueMap, Returns, "", CodeInfo);
   return NewF;
 }
@@ -181,7 +180,7 @@ namespace {
     Function *NewFunc;
     const Function *OldFunc;
     DenseMap<const Value*, Value*> &ValueMap;
-    std::vector<ReturnInst*> &Returns;
+    SmallVectorImpl<ReturnInst*> &Returns;
     const char *NameSuffix;
     ClonedCodeInfo *CodeInfo;
     const TargetData *TD;
@@ -189,7 +188,7 @@ namespace {
   public:
     PruningFunctionCloner(Function *newFunc, const Function *oldFunc,
                           DenseMap<const Value*, Value*> &valueMap,
-                          std::vector<ReturnInst*> &returns,
+                          SmallVectorImpl<ReturnInst*> &returns,
                           const char *nameSuffix, 
                           ClonedCodeInfo *codeInfo,
                           const TargetData *td)
@@ -220,7 +219,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
   
   // Nope, clone it now.
   BasicBlock *NewBB;
-  BBEntry = NewBB = BasicBlock::Create();
+  BBEntry = NewBB = BasicBlock::Create(BB->getContext());
   if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
 
   bool hasCalls = false, hasDynamicAllocas = false, hasStaticAllocas = false;
@@ -239,7 +238,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
     // Do not clone llvm.dbg.region.end. It will be adjusted by the inliner.
     if (const DbgFuncStartInst *DFSI = dyn_cast<DbgFuncStartInst>(II)) {
       if (DbgFnStart == NULL) {
-        DISubprogram SP(cast<GlobalVariable>(DFSI->getSubprogram()));
+        DISubprogram SP(DFSI->getSubprogram());
         if (SP.describes(BB->getParent()))
           DbgFnStart = DFSI->getSubprogram();
       }
@@ -249,7 +248,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
         continue;
     }
       
-    Instruction *NewInst = II->clone();
+    Instruction *NewInst = II->clone(BB->getContext());
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -297,7 +296,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
   }
   
   if (!TerminatorDone) {
-    Instruction *NewInst = OldTI->clone();
+    Instruction *NewInst = OldTI->clone(BB->getContext());
     if (OldTI->hasName())
       NewInst->setName(OldTI->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -325,7 +324,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
 /// mapping its operands through ValueMap if they are available.
 Constant *PruningFunctionCloner::
 ConstantFoldMappedInstruction(const Instruction *I) {
-  LLVMContext *Context = I->getParent()->getContext();
+  LLVMContext &Context = I->getContext();
   
   SmallVector<Constant*, 8> Ops;
   for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i)
@@ -362,12 +361,12 @@ ConstantFoldMappedInstruction(const Instruction *I) {
 /// used for things like CloneFunction or CloneModule.
 void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
                                      DenseMap<const Value*, Value*> &ValueMap,
-                                     std::vector<ReturnInst*> &Returns,
+                                     SmallVectorImpl<ReturnInst*> &Returns,
                                      const char *NameSuffix, 
                                      ClonedCodeInfo *CodeInfo,
                                      const TargetData *TD) {
   assert(NameSuffix && "NameSuffix cannot be null!");
-  LLVMContext *Context = OldFunc->getContext();
+  LLVMContext &Context = OldFunc->getContext();
   
 #ifndef NDEBUG
   for (Function::const_arg_iterator II = OldFunc->arg_begin(), 
@@ -392,7 +391,7 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
   // insert it into the new function in the right order.  If not, ignore it.
   //
   // Defer PHI resolution until rest of function is resolved.
-  std::vector<const PHINode*> PHIToResolve;
+  SmallVector<const PHINode*, 16> PHIToResolve;
   for (Function::const_iterator BI = OldFunc->begin(), BE = OldFunc->end();
        BI != BE; ++BI) {
     BasicBlock *NewBB = cast_or_null<BasicBlock>(ValueMap[BI]);
@@ -490,7 +489,7 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
       BasicBlock::iterator I = NewBB->begin();
       BasicBlock::const_iterator OldI = OldBB->begin();
       while ((PN = dyn_cast<PHINode>(I++))) {
-        Value *NV = OldFunc->getContext()->getUndef(PN->getType());
+        Value *NV = UndefValue::get(PN->getType());
         PN->replaceAllUsesWith(NV);
         assert(ValueMap[OldI] == PN && "ValueMap mismatch");
         ValueMap[OldI] = NV;

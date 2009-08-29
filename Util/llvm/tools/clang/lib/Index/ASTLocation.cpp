@@ -13,10 +13,39 @@
 
 #include "clang/Index/ASTLocation.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeclObjC.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprObjC.h"
 using namespace clang;
 using namespace idx;
+
+static Decl *getDeclFromExpr(Stmt *E) {
+  if (DeclRefExpr *RefExpr = dyn_cast<DeclRefExpr>(E))
+    return RefExpr->getDecl();
+  if (MemberExpr *ME = dyn_cast<MemberExpr>(E))
+    return ME->getMemberDecl();
+  if (ObjCIvarRefExpr *RE = dyn_cast<ObjCIvarRefExpr>(E))
+    return RE->getDecl();
+
+  if (CallExpr *CE = dyn_cast<CallExpr>(E))
+    return getDeclFromExpr(CE->getCallee());
+  if (CastExpr *CE = dyn_cast<CastExpr>(E))
+    return getDeclFromExpr(CE->getSubExpr());
+  
+  return 0;
+}
+
+Decl *ASTLocation::getReferencedDecl() {
+  if (isInvalid())
+    return 0;
+  if (isDecl())
+    return getDecl();
+  
+  assert(getStmt());
+  return getDeclFromExpr(getStmt());
+}
+
 
 static bool isContainedInStatement(Stmt *Node, Stmt *Parent) {
   assert(Node && Parent && "Passed null Node or Parent");
@@ -26,14 +55,15 @@ static bool isContainedInStatement(Stmt *Node, Stmt *Parent) {
   
   for (Stmt::child_iterator
          I = Parent->child_begin(), E = Parent->child_end(); I != E; ++I) {
-    if (isContainedInStatement(Node, *I))
-      return true;
+    if (*I)
+      if (isContainedInStatement(Node, *I))
+        return true;
   }
   
   return false;
 }
 
-static Decl *FindImmediateParent(Decl *D, Stmt *Node) {
+Decl *ASTLocation::FindImmediateParent(Decl *D, Stmt *Node) {
   assert(D && Node && "Passed null Decl or null Stmt");
 
   if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
@@ -42,7 +72,7 @@ static Decl *FindImmediateParent(Decl *D, Stmt *Node) {
       return 0;
     return isContainedInStatement(Node, Init) ? D : 0;
   }
-  
+
   if (FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
     if (!FD->isThisDeclarationADefinition())
       return 0;
@@ -53,11 +83,38 @@ static Decl *FindImmediateParent(Decl *D, Stmt *Node) {
       if (Child)
         return Child;
     }
-    
+
     assert(FD->getBody() && "If not definition we should have exited already");
     return isContainedInStatement(Node, FD->getBody()) ? D : 0;
   }
-  
+
+  if (ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(D)) {
+    if (!MD->getBody())
+      return 0;
+
+    for (DeclContext::decl_iterator
+           I = MD->decls_begin(), E = MD->decls_end(); I != E; ++I) {
+      Decl *Child = FindImmediateParent(*I, Node);
+      if (Child)
+        return Child;
+    }
+
+    assert(MD->getBody() && "If not definition we should have exited already");
+    return isContainedInStatement(Node, MD->getBody()) ? D : 0;
+  }
+
+  if (BlockDecl *BD = dyn_cast<BlockDecl>(D)) {
+    for (DeclContext::decl_iterator
+           I = BD->decls_begin(), E = BD->decls_end(); I != E; ++I) {
+      Decl *Child = FindImmediateParent(*I, Node);
+      if (Child)
+        return Child;
+    }
+
+    assert(BD->getBody() && "BlockDecl without body ?");
+    return isContainedInStatement(Node, BD->getBody()) ? D : 0;
+  }
+
   return 0;
 }
 
@@ -67,14 +124,19 @@ bool ASTLocation::isImmediateParent(Decl *D, Stmt *Node) {
 }
 
 SourceRange ASTLocation::getSourceRange() const {
+  if (isInvalid())
+    return SourceRange();
   return isDecl() ? getDecl()->getSourceRange() : getStmt()->getSourceRange();
 }
 
-void ASTLocation::print(llvm::raw_ostream &OS) {
-  assert(isValid() && "ASTLocation is not valid");
+void ASTLocation::print(llvm::raw_ostream &OS) const {
+  if (isInvalid()) {
+    OS << "<< Invalid ASTLocation >>\n";
+    return;
+  }
 
   OS << "[Decl: " << getDecl()->getDeclKindName() << " ";
-  if (NamedDecl *ND = dyn_cast<NamedDecl>(getDecl()))
+  if (const NamedDecl *ND = dyn_cast<NamedDecl>(getDecl()))
     OS << ND->getNameAsString();
   
   if (getStmt()) {

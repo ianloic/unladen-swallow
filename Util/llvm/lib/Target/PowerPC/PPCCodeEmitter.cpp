@@ -58,8 +58,7 @@ namespace {
 
   template <class CodeEmitter>
   class VISIBILITY_HIDDEN Emitter : public MachineFunctionPass,
-      public PPCCodeEmitter
-  {
+      public PPCCodeEmitter {
     TargetMachine &TM;
     CodeEmitter &MCE;
 
@@ -133,6 +132,7 @@ void Emitter<CodeEmitter>::emitBasicBlock(MachineBasicBlock &MBB) {
   
   for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end(); I != E; ++I){
     const MachineInstr &MI = *I;
+    MCE.processDebugLoc(MI.getDebugLoc());
     switch (MI.getOpcode()) {
     default:
       MCE.emitWordBE(getBinaryCodeForInstr(MI));
@@ -181,7 +181,7 @@ unsigned PPCCodeEmitter::getMachineOpValue(const MachineInstr &MI,
         assert(MovePCtoLROffset && "MovePCtoLR not seen yet?");
       }
       switch (MI.getOpcode()) {
-      default: MI.dump(); assert(0 && "Unknown instruction for relocation!");
+      default: MI.dump(); llvm_unreachable("Unknown instruction for relocation!");
       case PPC::LIS:
       case PPC::LIS8:
       case PPC::ADDIS:
@@ -266,13 +266,12 @@ unsigned PPCCodeEmitter::getMachineOpValue(const MachineInstr &MI,
                                                Reloc, MO.getMBB()));
   } else {
 #ifndef NDEBUG
-    cerr << "ERROR: Unknown type of MachineOperand: " << MO << "\n";
+    errs() << "ERROR: Unknown type of MachineOperand: " << MO << "\n";
 #endif
-    llvm_unreachable();
+    llvm_unreachable(0);
   }
 
   return rv;
 }
 
 #include "PPCGenCodeEmitter.inc"
-

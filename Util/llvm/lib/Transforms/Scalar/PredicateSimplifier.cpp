@@ -97,6 +97,7 @@
 #include "llvm/Support/ConstantRange.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/InstVisitor.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
@@ -276,21 +277,21 @@ namespace {
 
 #ifndef NDEBUG
     virtual void dump() const {
-      dump(*cerr.stream());
+      dump(errs());
     }
 
-    void dump(std::ostream &os) const {
+    void dump(raw_ostream &os) const {
       os << "Predicate simplifier DomTreeDFS: \n";
       dump(Entry, 0, os);
       os << "\n\n";
     }
 
-    void dump(Node *N, int depth, std::ostream &os) const {
+    void dump(Node *N, int depth, raw_ostream &os) const {
       ++depth;
       for (int i = 0; i < depth; ++i) { os << " "; }
       os << "[" << depth << "] ";
 
-      os << N->getBlock()->getName() << " (" << N->getDFSNumIn()
+      os << N->getBlock()->getNameStr() << " (" << N->getDFSNumIn()
          << ", " << N->getDFSNumOut() << ")\n";
 
       for (Node::iterator I = N->begin(), E = N->end(); I != E; ++I)
@@ -424,10 +425,10 @@ namespace {
 #ifndef NDEBUG
     virtual ~ValueNumbering() {}
     virtual void dump() {
-      dump(*cerr.stream());
+      print(errs());
     }
 
-    void dump(std::ostream &os) {
+    void print(raw_ostream &os) {
       for (unsigned i = 1; i <= Values.size(); ++i) {
         os << i << " = ";
         WriteAsOperand(os, Values[i-1]);
@@ -468,8 +469,8 @@ namespace {
     /// valueNumber - finds the value number for V under the Subtree. If
     /// there is no value number, returns zero.
     unsigned valueNumber(Value *V, DomTreeDFS::Node *Subtree) {
-      if (!(isa<Constant>(V) || isa<Argument>(V) || isa<Instruction>(V))
-          || V->getType() == Type::VoidTy) return 0;
+      if (!(isa<Constant>(V) || isa<Argument>(V) || isa<Instruction>(V)) || 
+          V->getType() == Type::getVoidTy(V->getContext())) return 0;
 
       VNMapType::iterator E = VNMap.end();
       VNPair pair(V, 0, Subtree);
@@ -495,7 +496,8 @@ namespace {
     unsigned newVN(Value *V) {
       assert((isa<Constant>(V) || isa<Argument>(V) || isa<Instruction>(V)) &&
              "Bad Value for value numbering.");
-      assert(V->getType() != Type::VoidTy && "Won't value number a void value");
+      assert(V->getType() != Type::getVoidTy(V->getContext()) &&
+             "Won't value number a void value");
 
       Values.push_back(V);
 
@@ -654,10 +656,10 @@ namespace {
 #ifndef NDEBUG
       virtual ~Node() {}
       virtual void dump() const {
-        dump(*cerr.stream());
+        dump(errs());
       }
     private:
-      void dump(std::ostream &os) const {
+      void dump(raw_ostream &os) const {
         static const std::string names[32] =
           { "000000", "000001", "000002", "000003", "000004", "000005",
             "000006", "000007", "000008", "000009", "     >", "    >=",
@@ -885,10 +887,10 @@ namespace {
 #ifndef NDEBUG
     virtual ~InequalityGraph() {}
     virtual void dump() {
-      dump(*cerr.stream());
+      dump(errs());
     }
 
-    void dump(std::ostream &os) {
+    void dump(raw_ostream &os) {
       for (unsigned i = 1; i <= Nodes.size(); ++i) {
         os << i << " = {";
         node(i)->dump(os);
@@ -905,6 +907,7 @@ namespace {
   class VISIBILITY_HIDDEN ValueRanges {
     ValueNumbering &VN;
     TargetData *TD;
+    LLVMContext *Context;
 
     class VISIBILITY_HIDDEN ScopedRange {
       typedef std::vector<std::pair<DomTreeDFS::Node *, ConstantRange> >
@@ -920,10 +923,10 @@ namespace {
 #ifndef NDEBUG
       virtual ~ScopedRange() {}
       virtual void dump() const {
-        dump(*cerr.stream());
+        dump(errs());
       }
 
-      void dump(std::ostream &os) const {
+      void dump(raw_ostream &os) const {
         os << "{";
         for (const_iterator I = begin(), E = end(); I != E; ++I) {
           os << &I->second << " (" << I->first->getDFSNumIn() << "), ";
@@ -967,7 +970,7 @@ namespace {
             std::lower_bound(begin(), E, std::make_pair(Subtree, empty), swo);
 
         if (I != end() && I->first == Subtree) {
-          ConstantRange CR2 = I->second.maximalIntersectWith(CR);
+          ConstantRange CR2 = I->second.intersectWith(CR);
           assert(!CR2.isEmptySet() && !CR2.isSingleElement() &&
                  "Invalid union of ranges.");
           I->second = CR2;
@@ -990,7 +993,7 @@ namespace {
       assert(!CR.isEmptySet() && "Can't deal with empty set.");
 
       if (LV == NE)
-        return makeConstantRange(ICmpInst::ICMP_NE, CR);
+        return ConstantRange::makeICmpRegion(ICmpInst::ICMP_NE, CR);
 
       unsigned LV_s = LV & (SGT_BIT|SLT_BIT);
       unsigned LV_u = LV & (UGT_BIT|ULT_BIT);
@@ -999,71 +1002,22 @@ namespace {
       ConstantRange Range(CR.getBitWidth());
 
       if (LV_s == SGT_BIT) {
-        Range = Range.maximalIntersectWith(makeConstantRange(
+        Range = Range.intersectWith(ConstantRange::makeICmpRegion(
                     hasEQ ? ICmpInst::ICMP_SGE : ICmpInst::ICMP_SGT, CR));
       } else if (LV_s == SLT_BIT) {
-        Range = Range.maximalIntersectWith(makeConstantRange(
+        Range = Range.intersectWith(ConstantRange::makeICmpRegion(
                     hasEQ ? ICmpInst::ICMP_SLE : ICmpInst::ICMP_SLT, CR));
       }
 
       if (LV_u == UGT_BIT) {
-        Range = Range.maximalIntersectWith(makeConstantRange(
+        Range = Range.intersectWith(ConstantRange::makeICmpRegion(
                     hasEQ ? ICmpInst::ICMP_UGE : ICmpInst::ICMP_UGT, CR));
       } else if (LV_u == ULT_BIT) {
-        Range = Range.maximalIntersectWith(makeConstantRange(
+        Range = Range.intersectWith(ConstantRange::makeICmpRegion(
                     hasEQ ? ICmpInst::ICMP_ULE : ICmpInst::ICMP_ULT, CR));
       }
 
       return Range;
-    }
-
-    /// makeConstantRange - Creates a ConstantRange representing the set of all
-    /// value that match the ICmpInst::Predicate with any of the values in CR.
-    ConstantRange makeConstantRange(ICmpInst::Predicate ICmpOpcode,
-                                    const ConstantRange &CR) {
-      uint32_t W = CR.getBitWidth();
-      switch (ICmpOpcode) {
-        default: assert(!"Invalid ICmp opcode to makeConstantRange()");
-        case ICmpInst::ICMP_EQ:
-          return ConstantRange(CR.getLower(), CR.getUpper());
-        case ICmpInst::ICMP_NE:
-          if (CR.isSingleElement())
-            return ConstantRange(CR.getUpper(), CR.getLower());
-          return ConstantRange(W);
-        case ICmpInst::ICMP_ULT:
-          return ConstantRange(APInt::getMinValue(W), CR.getUnsignedMax());
-        case ICmpInst::ICMP_SLT:
-          return ConstantRange(APInt::getSignedMinValue(W), CR.getSignedMax());
-        case ICmpInst::ICMP_ULE: {
-          APInt UMax(CR.getUnsignedMax());
-          if (UMax.isMaxValue())
-            return ConstantRange(W);
-          return ConstantRange(APInt::getMinValue(W), UMax + 1);
-        }
-        case ICmpInst::ICMP_SLE: {
-          APInt SMax(CR.getSignedMax());
-          if (SMax.isMaxSignedValue() || (SMax+1).isMaxSignedValue())
-            return ConstantRange(W);
-          return ConstantRange(APInt::getSignedMinValue(W), SMax + 1);
-        }
-        case ICmpInst::ICMP_UGT:
-          return ConstantRange(CR.getUnsignedMin() + 1, APInt::getNullValue(W));
-        case ICmpInst::ICMP_SGT:
-          return ConstantRange(CR.getSignedMin() + 1,
-                               APInt::getSignedMinValue(W));
-        case ICmpInst::ICMP_UGE: {
-          APInt UMin(CR.getUnsignedMin());
-          if (UMin.isMinValue())
-            return ConstantRange(W);
-          return ConstantRange(UMin, APInt::getNullValue(W));
-        }
-        case ICmpInst::ICMP_SGE: {
-          APInt SMin(CR.getSignedMin());
-          if (SMin.isMinSignedValue())
-            return ConstantRange(W);
-          return ConstantRange(SMin, APInt::getSignedMinValue(W));
-        }
-      }
     }
 
 #ifndef NDEBUG
@@ -1074,16 +1028,17 @@ namespace {
 
   public:
 
-    ValueRanges(ValueNumbering &VN, TargetData *TD) : VN(VN), TD(TD) {}
+    ValueRanges(ValueNumbering &VN, TargetData *TD, LLVMContext *C) :
+      VN(VN), TD(TD), Context(C) {}
 
 #ifndef NDEBUG
     virtual ~ValueRanges() {}
 
     virtual void dump() const {
-      dump(*cerr.stream());
+      dump(errs());
     }
 
-    void dump(std::ostream &os) const {
+    void dump(raw_ostream &os) const {
       for (unsigned i = 0, e = Ranges.size(); i != e; ++i) {
         os << (i+1) << " = ";
         Ranges[i].dump(os);
@@ -1130,7 +1085,7 @@ namespace {
       switch (LV) {
       default: assert(!"Impossible lattice value!");
       case NE:
-        return CR1.maximalIntersectWith(CR2).isEmptySet();
+        return CR1.intersectWith(CR2).isEmptySet();
       case ULT:
         return CR1.getUnsignedMax().ult(CR2.getUnsignedMin());
       case ULE:
@@ -1196,7 +1151,7 @@ namespace {
         unsigned i = VN.valueNumber(*I, Subtree);
         ConstantRange CR_Kill = i ? range(i, Subtree) : range(*I);
         if (CR_Kill.isFullSet()) continue;
-        Merged = Merged.maximalIntersectWith(CR_Kill);
+        Merged = Merged.intersectWith(CR_Kill);
       }
 
       if (Merged.isFullSet() || Merged == CR_New) return;
@@ -1206,7 +1161,7 @@ namespace {
 
     void applyRange(unsigned n, const ConstantRange &CR,
                     DomTreeDFS::Node *Subtree, VRPSolver *VRP) {
-      ConstantRange Merged = CR.maximalIntersectWith(range(n, Subtree));
+      ConstantRange Merged = CR.intersectWith(range(n, Subtree));
       if (Merged.isEmptySet()) {
         markBlock(VRP);
         return;
@@ -1216,7 +1171,8 @@ namespace {
         Value *V = VN.value(n); // XXX: redesign worklist.
         const Type *Ty = V->getType();
         if (Ty->isInteger()) {
-          addToWorklist(V, ConstantInt::get(*I), ICmpInst::ICMP_EQ, VRP);
+          addToWorklist(V, ConstantInt::get(*Context, *I),
+                        ICmpInst::ICMP_EQ, VRP);
           return;
         } else if (const PointerType *PTy = dyn_cast<PointerType>(Ty)) {
           assert(*I == 0 && "Pointer is null but not zero?");
@@ -1296,13 +1252,13 @@ namespace {
       ConstantRange CR2 = range(n2, Subtree);
 
       if (!CR1.isSingleElement()) {
-        ConstantRange NewCR1 = CR1.maximalIntersectWith(create(LV, CR2));
+        ConstantRange NewCR1 = CR1.intersectWith(create(LV, CR2));
         if (NewCR1 != CR1)
           applyRange(n1, NewCR1, Subtree, VRP);
       }
 
       if (!CR2.isSingleElement()) {
-        ConstantRange NewCR2 = CR2.maximalIntersectWith(
+        ConstantRange NewCR2 = CR2.intersectWith(
                                        create(reversePredicate(LV), CR1));
         if (NewCR2 != CR2)
           applyRange(n2, NewCR2, Subtree, VRP);
@@ -1344,7 +1300,7 @@ namespace {
            E = DeadBlocks.end(); I != E; ++I) {
         BasicBlock *BB = *I;
 
-        DOUT << "unreachable block: " << BB->getName() << "\n";
+        DEBUG(errs() << "unreachable block: " << BB->getName() << "\n");
 
         for (succ_iterator SI = succ_begin(BB), SE = succ_end(BB);
              SI != SE; ++SI) {
@@ -1355,7 +1311,7 @@ namespace {
         TerminatorInst *TI = BB->getTerminator();
         TI->replaceAllUsesWith(UndefValue::get(TI->getType()));
         TI->eraseFromParent();
-        new UnreachableInst(BB);
+        new UnreachableInst(BB->getContext(), BB);
         ++NumBlocks;
         modified = true;
       }
@@ -1390,6 +1346,7 @@ namespace {
     BasicBlock *TopBB;
     Instruction *TopInst;
     bool &modified;
+    LLVMContext *Context;
 
     typedef InequalityGraph::Node Node;
 
@@ -1428,11 +1385,13 @@ namespace {
     }
 
     bool makeEqual(Value *V1, Value *V2) {
-      DOUT << "makeEqual(" << *V1 << ", " << *V2 << ")\n";
-      DOUT << "context is ";
-      if (TopInst) DOUT << "I: " << *TopInst << "\n";
-      else DOUT << "BB: " << TopBB->getName()
-                << "(" << Top->getDFSNumIn() << ")\n";
+      DEBUG(errs() << "makeEqual(" << *V1 << ", " << *V2 << ")\n");
+      DEBUG(errs() << "context is ");
+      DEBUG(if (TopInst) 
+              errs() << "I: " << *TopInst << "\n";
+            else 
+              errs() << "BB: " << TopBB->getName()
+                     << "(" << Top->getDFSNumIn() << ")\n");
 
       assert(V1->getType() == V2->getType() &&
              "Can't make two values with different types equal.");
@@ -1532,8 +1491,8 @@ namespace {
             ToNotify.push_back(I);
           }
 
-          DOUT << "Simply removing " << *I2
-               << ", replacing with " << *V1 << "\n";
+          DEBUG(errs() << "Simply removing " << *I2
+                       << ", replacing with " << *V1 << "\n");
           I2->replaceAllUsesWith(V1);
           // leave it dead; it'll get erased later.
           ++NumInstruction;
@@ -1564,8 +1523,8 @@ namespace {
 
         // If that killed the instruction, stop here.
         if (I2 && isInstructionTriviallyDead(I2)) {
-          DOUT << "Killed all uses of " << *I2
-               << ", replacing with " << *V1 << "\n";
+          DEBUG(errs() << "Killed all uses of " << *I2
+                       << ", replacing with " << *V1 << "\n");
           continue;
         }
 
@@ -1709,7 +1668,8 @@ namespace {
         Top(DTDFS->getNodeForBlock(TopBB)),
         TopBB(TopBB),
         TopInst(NULL),
-        modified(modified)
+        modified(modified),
+        Context(&TopBB->getContext())
     {
       assert(Top && "VRPSolver created for unreachable basic block.");
     }
@@ -1725,7 +1685,8 @@ namespace {
         Top(DTDFS->getNodeForBlock(TopInst->getParent())),
         TopBB(TopInst->getParent()),
         TopInst(TopInst),
-        modified(modified)
+        modified(modified),
+        Context(&TopInst->getContext())
     {
       assert(Top && "VRPSolver created for unreachable basic block.");
       assert(Top->getBlock() == TopInst->getParent() && "Context mismatch.");
@@ -1735,7 +1696,7 @@ namespace {
       if (Constant *C1 = dyn_cast<Constant>(V1))
         if (Constant *C2 = dyn_cast<Constant>(V2))
           return ConstantExpr::getCompare(Pred, C1, C2) ==
-                 ConstantInt::getTrue();
+                 ConstantInt::getTrue(*Context);
 
       unsigned n1 = VN.valueNumber(V1, Top);
       unsigned n2 = VN.valueNumber(V2, Top);
@@ -1769,10 +1730,12 @@ namespace {
     /// add - adds a new property to the work queue
     void add(Value *V1, Value *V2, ICmpInst::Predicate Pred,
              Instruction *I = NULL) {
-      DOUT << "adding " << *V1 << " " << Pred << " " << *V2;
-      if (I) DOUT << " context: " << *I;
-      else DOUT << " default context (" << Top->getDFSNumIn() << ")";
-      DOUT << "\n";
+      DEBUG(errs() << "adding " << *V1 << " " << Pred << " " << *V2);
+      if (I)
+        DEBUG(errs() << " context: " << *I);
+      else 
+        DEBUG(errs() << " default context (" << Top->getDFSNumIn() << ")");
+      DEBUG(errs() << "\n");
 
       assert(V1->getType() == V2->getType() &&
              "Can't relate two values with different types.");
@@ -1801,7 +1764,7 @@ namespace {
         switch (BO->getOpcode()) {
           case Instruction::And: {
             // "and i32 %a, %b" EQ -1 then %a EQ -1 and %b EQ -1
-            ConstantInt *CI = ConstantInt::getAllOnesValue(Ty);
+            ConstantInt *CI = cast<ConstantInt>(Constant::getAllOnesValue(Ty));
             if (Canonical == CI) {
               add(CI, Op0, ICmpInst::ICMP_EQ, NewContext);
               add(CI, Op1, ICmpInst::ICMP_EQ, NewContext);
@@ -1826,7 +1789,8 @@ namespace {
 
             if (ConstantInt *CI = dyn_cast<ConstantInt>(Canonical)) {
               if (ConstantInt *Arg = dyn_cast<ConstantInt>(LHS)) {
-                add(RHS, ConstantInt::get(CI->getValue() ^ Arg->getValue()),
+                add(RHS,
+                  ConstantInt::get(*Context, CI->getValue() ^ Arg->getValue()),
                     ICmpInst::ICMP_EQ, NewContext);
               }
             }
@@ -1846,10 +1810,10 @@ namespace {
         // "icmp ult i32 %a, %y" EQ true then %a u< y
         // etc.
 
-        if (Canonical == ConstantInt::getTrue()) {
+        if (Canonical == ConstantInt::getTrue(*Context)) {
           add(IC->getOperand(0), IC->getOperand(1), IC->getPredicate(),
               NewContext);
-        } else if (Canonical == ConstantInt::getFalse()) {
+        } else if (Canonical == ConstantInt::getFalse(*Context)) {
           add(IC->getOperand(0), IC->getOperand(1),
               ICmpInst::getInversePredicate(IC->getPredicate()), NewContext);
         }
@@ -1865,11 +1829,11 @@ namespace {
         if (isRelatedBy(True, False, ICmpInst::ICMP_NE)) {
           if (Canonical == VN.canonicalize(True, Top) ||
               isRelatedBy(Canonical, False, ICmpInst::ICMP_NE))
-            add(SI->getCondition(), ConstantInt::getTrue(),
+            add(SI->getCondition(), ConstantInt::getTrue(*Context),
                 ICmpInst::ICMP_EQ, NewContext);
           else if (Canonical == VN.canonicalize(False, Top) ||
                    isRelatedBy(Canonical, True, ICmpInst::ICMP_NE))
-            add(SI->getCondition(), ConstantInt::getFalse(),
+            add(SI->getCondition(), ConstantInt::getFalse(*Context),
                 ICmpInst::ICMP_EQ, NewContext);
         }
       } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(I)) {
@@ -1939,7 +1903,7 @@ namespace {
 
         Constant *Zero = Constant::getNullValue(Ty);
         Constant *One = ConstantInt::get(Ty, 1);
-        ConstantInt *AllOnes = ConstantInt::getAllOnesValue(Ty);
+        ConstantInt *AllOnes = cast<ConstantInt>(Constant::getAllOnesValue(Ty));
 
         switch (Opcode) {
           default: break;
@@ -2093,9 +2057,10 @@ namespace {
 
         ICmpInst::Predicate Pred = IC->getPredicate();
         if (isRelatedBy(Op0, Op1, Pred))
-          add(IC, ConstantInt::getTrue(), ICmpInst::ICMP_EQ, NewContext);
+          add(IC, ConstantInt::getTrue(*Context), ICmpInst::ICMP_EQ, NewContext);
         else if (isRelatedBy(Op0, Op1, ICmpInst::getInversePredicate(Pred)))
-          add(IC, ConstantInt::getFalse(), ICmpInst::ICMP_EQ, NewContext);
+          add(IC, ConstantInt::getFalse(*Context),
+              ICmpInst::ICMP_EQ, NewContext);
 
       } else if (SelectInst *SI = dyn_cast<SelectInst>(I)) {
         if (I->getType()->isFPOrFPVector()) return;
@@ -2106,9 +2071,9 @@ namespace {
         // %b EQ %c then %a EQ %b
 
         Value *Canonical = VN.canonicalize(SI->getCondition(), Top);
-        if (Canonical == ConstantInt::getTrue()) {
+        if (Canonical == ConstantInt::getTrue(*Context)) {
           add(SI, SI->getTrueValue(), ICmpInst::ICMP_EQ, NewContext);
-        } else if (Canonical == ConstantInt::getFalse()) {
+        } else if (Canonical == ConstantInt::getFalse(*Context)) {
           add(SI, SI->getFalseValue(), ICmpInst::ICMP_EQ, NewContext);
         } else if (VN.canonicalize(SI->getTrueValue(), Top) ==
                    VN.canonicalize(SI->getFalseValue(), Top)) {
@@ -2169,9 +2134,9 @@ namespace {
 
     /// solve - process the work queue
     void solve() {
-      //DOUT << "WorkList entry, size: " << WorkList.size() << "\n";
+      //DEBUG(errs() << "WorkList entry, size: " << WorkList.size() << "\n");
       while (!WorkList.empty()) {
-        //DOUT << "WorkList size: " << WorkList.size() << "\n";
+        //DEBUG(errs() << "WorkList size: " << WorkList.size() << "\n");
 
         Operation &O = WorkList.front();
         TopInst = O.ContextInst;
@@ -2184,21 +2149,23 @@ namespace {
         assert(O.LHS == VN.canonicalize(O.LHS, Top) && "Canonicalize isn't.");
         assert(O.RHS == VN.canonicalize(O.RHS, Top) && "Canonicalize isn't.");
 
-        DOUT << "solving " << *O.LHS << " " << O.Op << " " << *O.RHS;
-        if (O.ContextInst) DOUT << " context inst: " << *O.ContextInst;
-        else DOUT << " context block: " << O.ContextBB->getName();
-        DOUT << "\n";
+        DEBUG(errs() << "solving " << *O.LHS << " " << O.Op << " " << *O.RHS;
+              if (O.ContextInst) 
+                errs() << " context inst: " << *O.ContextInst;
+              else
+                errs() << " context block: " << O.ContextBB->getName();
+              errs() << "\n";
 
-        DEBUG(VN.dump());
-        DEBUG(IG.dump());
-        DEBUG(VR.dump());
+              VN.dump();
+              IG.dump();
+              VR.dump(););
 
         // If they're both Constant, skip it. Check for contradiction and mark
         // the BB as unreachable if so.
         if (Constant *CI_L = dyn_cast<Constant>(O.LHS)) {
           if (Constant *CI_R = dyn_cast<Constant>(O.RHS)) {
             if (ConstantExpr::getCompare(O.Op, CI_L, CI_R) ==
-                ConstantInt::getFalse())
+                ConstantInt::getFalse(*Context))
               UB.mark(TopBB);
 
             WorkList.pop_front();
@@ -2309,6 +2276,7 @@ namespace {
 
     std::vector<DomTreeDFS::Node *> WorkList;
 
+    LLVMContext *Context;
   public:
     static char ID; // Pass identification, replacement for typeid
     PredicateSimplifier() : FunctionPass(&ID) {}
@@ -2318,8 +2286,6 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequiredID(BreakCriticalEdgesID);
       AU.addRequired<DominatorTree>();
-      AU.addRequired<TargetData>();
-      AU.addPreserved<TargetData>();
     }
 
   private:
@@ -2376,8 +2342,8 @@ namespace {
     // Visits each instruction in the basic block.
     void visitBasicBlock(DomTreeDFS::Node *Node) {
       BasicBlock *BB = Node->getBlock();
-      DOUT << "Entering Basic Block: " << BB->getName()
-           << " (" << Node->getDFSNumIn() << ")\n";
+      DEBUG(errs() << "Entering Basic Block: " << BB->getName()
+            << " (" << Node->getDFSNumIn() << ")\n");
       for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E;) {
         visitInstruction(I++, Node);
       }
@@ -2385,7 +2351,7 @@ namespace {
 
     // Tries to simplify each Instruction and add new properties.
     void visitInstruction(Instruction *I, DomTreeDFS::Node *DT) {
-      DOUT << "Considering instruction " << *I << "\n";
+      DEBUG(errs() << "Considering instruction " << *I << "\n");
       DEBUG(VN->dump());
       DEBUG(IG->dump());
       DEBUG(VR->dump());
@@ -2408,7 +2374,7 @@ namespace {
       if (V != I) {
         modified = true;
         ++NumInstruction;
-        DOUT << "Removing " << *I << ", replacing with " << *V << "\n";
+        DEBUG(errs() << "Removing " << *I << ", replacing with " << *V << "\n");
         if (unsigned n = VN->valueNumber(I, DTDFS->getRootNode()))
           if (VN->value(n) == I) IG->remove(n);
         VN->remove(I);
@@ -2425,33 +2391,40 @@ namespace {
         if (V != Oper) {
           modified = true;
           ++NumVarsReplaced;
-          DOUT << "Resolving " << *I;
+          DEBUG(errs() << "Resolving " << *I);
           I->setOperand(i, V);
-          DOUT << " into " << *I;
+          DEBUG(errs() << " into " << *I);
         }
       }
 #endif
 
       std::string name = I->getParent()->getName();
-      DOUT << "push (%" << name << ")\n";
+      DEBUG(errs() << "push (%" << name << ")\n");
       Forwards visit(this, DT);
       visit.visit(*I);
-      DOUT << "pop (%" << name << ")\n";
+      DEBUG(errs() << "pop (%" << name << ")\n");
     }
   };
 
   bool PredicateSimplifier::runOnFunction(Function &F) {
     DominatorTree *DT = &getAnalysis<DominatorTree>();
     DTDFS = new DomTreeDFS(DT);
-    TargetData *TD = &getAnalysis<TargetData>();
+    TargetData *TD = getAnalysisIfAvailable<TargetData>();
 
-    DOUT << "Entering Function: " << F.getName() << "\n";
+    // FIXME: PredicateSimplifier should still be able to do basic
+    // optimizations without TargetData. But for now, just exit if
+    // it's not available.
+    if (!TD) return false;
+
+    Context = &F.getContext();
+
+    DEBUG(errs() << "Entering Function: " << F.getName() << "\n");
 
     modified = false;
     DomTreeDFS::Node *Root = DTDFS->getRootNode();
     VN = new ValueNumbering(DTDFS);
     IG = new InequalityGraph(*VN, Root);
-    VR = new ValueRanges(*VN, TD);
+    VR = new ValueRanges(*VN, TD, Context);
     WorkList.push_back(Root);
 
     do {
@@ -2489,24 +2462,28 @@ namespace {
       return;
     }
 
+    LLVMContext *Context = &BI.getContext();
+
     for (DomTreeDFS::Node::iterator I = DTNode->begin(), E = DTNode->end();
          I != E; ++I) {
       BasicBlock *Dest = (*I)->getBlock();
-      DOUT << "Branch thinking about %" << Dest->getName()
-           << "(" << PS->DTDFS->getNodeForBlock(Dest)->getDFSNumIn() << ")\n";
+      DEBUG(errs() << "Branch thinking about %" << Dest->getName()
+            << "(" << PS->DTDFS->getNodeForBlock(Dest)->getDFSNumIn() << ")\n");
 
       if (Dest == TrueDest) {
-        DOUT << "(" << DTNode->getBlock()->getName() << ") true set:\n";
+        DEBUG(errs() << "(" << DTNode->getBlock()->getName() 
+              << ") true set:\n");
         VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, Dest);
-        VRP.add(ConstantInt::getTrue(), Condition, ICmpInst::ICMP_EQ);
+        VRP.add(ConstantInt::getTrue(*Context), Condition, ICmpInst::ICMP_EQ);
         VRP.solve();
         DEBUG(VN.dump());
         DEBUG(IG.dump());
         DEBUG(VR.dump());
       } else if (Dest == FalseDest) {
-        DOUT << "(" << DTNode->getBlock()->getName() << ") false set:\n";
+        DEBUG(errs() << "(" << DTNode->getBlock()->getName() 
+              << ") false set:\n");
         VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, Dest);
-        VRP.add(ConstantInt::getFalse(), Condition, ICmpInst::ICMP_EQ);
+        VRP.add(ConstantInt::getFalse(*Context), Condition, ICmpInst::ICMP_EQ);
         VRP.solve();
         DEBUG(VN.dump());
         DEBUG(IG.dump());
@@ -2526,8 +2503,8 @@ namespace {
     for (DomTreeDFS::Node::iterator I = DTNode->begin(), E = DTNode->end();
          I != E; ++I) {
       BasicBlock *BB = (*I)->getBlock();
-      DOUT << "Switch thinking about BB %" << BB->getName()
-           << "(" << PS->DTDFS->getNodeForBlock(BB)->getDFSNumIn() << ")\n";
+      DEBUG(errs() << "Switch thinking about BB %" << BB->getName()
+            << "(" << PS->DTDFS->getNodeForBlock(BB)->getDFSNumIn() << ")\n");
 
       VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, BB);
       if (BB == SI.getDefaultDest()) {
@@ -2545,7 +2522,8 @@ namespace {
 
   void PredicateSimplifier::Forwards::visitAllocaInst(AllocaInst &AI) {
     VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &AI);
-    VRP.add(Constant::getNullValue(AI.getType()), &AI, ICmpInst::ICMP_NE);
+    VRP.add(Constant::getNullValue(AI.getType()),
+            &AI, ICmpInst::ICMP_NE);
     VRP.solve();
   }
 
@@ -2555,7 +2533,8 @@ namespace {
     if (isa<Constant>(Ptr)) return;
 
     VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &LI);
-    VRP.add(Constant::getNullValue(Ptr->getType()), Ptr, ICmpInst::ICMP_NE);
+    VRP.add(Constant::getNullValue(Ptr->getType()),
+            Ptr, ICmpInst::ICMP_NE);
     VRP.solve();
   }
 
@@ -2564,27 +2543,30 @@ namespace {
     if (isa<Constant>(Ptr)) return;
 
     VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &SI);
-    VRP.add(Constant::getNullValue(Ptr->getType()), Ptr, ICmpInst::ICMP_NE);
+    VRP.add(Constant::getNullValue(Ptr->getType()),
+            Ptr, ICmpInst::ICMP_NE);
     VRP.solve();
   }
 
   void PredicateSimplifier::Forwards::visitSExtInst(SExtInst &SI) {
     VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &SI);
+    LLVMContext &Context = SI.getContext();
     uint32_t SrcBitWidth = cast<IntegerType>(SI.getSrcTy())->getBitWidth();
     uint32_t DstBitWidth = cast<IntegerType>(SI.getDestTy())->getBitWidth();
     APInt Min(APInt::getHighBitsSet(DstBitWidth, DstBitWidth-SrcBitWidth+1));
     APInt Max(APInt::getLowBitsSet(DstBitWidth, SrcBitWidth-1));
-    VRP.add(ConstantInt::get(Min), &SI, ICmpInst::ICMP_SLE);
-    VRP.add(ConstantInt::get(Max), &SI, ICmpInst::ICMP_SGE);
+    VRP.add(ConstantInt::get(Context, Min), &SI, ICmpInst::ICMP_SLE);
+    VRP.add(ConstantInt::get(Context, Max), &SI, ICmpInst::ICMP_SGE);
     VRP.solve();
   }
 
   void PredicateSimplifier::Forwards::visitZExtInst(ZExtInst &ZI) {
     VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &ZI);
+    LLVMContext &Context = ZI.getContext();
     uint32_t SrcBitWidth = cast<IntegerType>(ZI.getSrcTy())->getBitWidth();
     uint32_t DstBitWidth = cast<IntegerType>(ZI.getDestTy())->getBitWidth();
     APInt Max(APInt::getLowBitsSet(DstBitWidth, SrcBitWidth));
-    VRP.add(ConstantInt::get(Max), &ZI, ICmpInst::ICMP_UGE);
+    VRP.add(ConstantInt::get(Context, Max), &ZI, ICmpInst::ICMP_UGE);
     VRP.solve();
   }
 
@@ -2599,8 +2581,8 @@ namespace {
       case Instruction::SDiv: {
         Value *Divisor = BO.getOperand(1);
         VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &BO);
-        VRP.add(Constant::getNullValue(Divisor->getType()), Divisor,
-                ICmpInst::ICMP_NE);
+        VRP.add(Constant::getNullValue(Divisor->getType()), 
+                Divisor, ICmpInst::ICMP_NE);
         VRP.solve();
         break;
       }
@@ -2673,6 +2655,8 @@ namespace {
 
     Pred = IC.getPredicate();
 
+    LLVMContext &Context = IC.getContext();
+
     if (ConstantInt *Op1 = dyn_cast<ConstantInt>(IC.getOperand(1))) {
       ConstantInt *NextVal = 0;
       switch (Pred) {
@@ -2680,12 +2664,12 @@ namespace {
         case ICmpInst::ICMP_SLT:
         case ICmpInst::ICMP_ULT:
           if (Op1->getValue() != 0)
-            NextVal = ConstantInt::get(Op1->getValue()-1);
+            NextVal = ConstantInt::get(Context, Op1->getValue()-1);
          break;
         case ICmpInst::ICMP_SGT:
         case ICmpInst::ICMP_UGT:
           if (!Op1->getValue().isAllOnesValue())
-            NextVal = ConstantInt::get(Op1->getValue()+1);
+            NextVal = ConstantInt::get(Context, Op1->getValue()+1);
          break;
       }
 
@@ -2693,8 +2677,8 @@ namespace {
         VRPSolver VRP(VN, IG, UB, VR, PS->DTDFS, PS->modified, &IC);
         if (VRP.isRelatedBy(IC.getOperand(0), NextVal,
                             ICmpInst::getInversePredicate(Pred))) {
-          ICmpInst *NewIC = new ICmpInst(ICmpInst::ICMP_EQ, IC.getOperand(0),
-                                         NextVal, "", &IC);
+          ICmpInst *NewIC = new ICmpInst(&IC, ICmpInst::ICMP_EQ, 
+                                         IC.getOperand(0), NextVal, "");
           NewIC->takeName(&IC);
           IC.replaceAllUsesWith(NewIC);
 

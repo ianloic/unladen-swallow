@@ -23,7 +23,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Allocator.h"
-#include <iosfwd>
+#include "llvm/Support/AlignOf.h"
 #include <cassert>
 #include <climits>
 
@@ -31,7 +31,7 @@ namespace llvm {
   class MachineInstr;
   class MachineRegisterInfo;
   class TargetRegisterInfo;
-  struct LiveInterval;
+  class raw_ostream;
 
   /// VNInfo - Value Number Information.
   /// This class holds information about a machine level values, including
@@ -48,7 +48,6 @@ namespace llvm {
   /// index of the MBB in which the PHI originally existed. This can be used
   /// to insert code (spills or copies) which deals with the value, which will
   /// be live in to the block.
-
   class VNInfo {
   private:
     enum {
@@ -60,33 +59,78 @@ namespace llvm {
     };
 
     unsigned char flags;
+    union {
+      MachineInstr *copy;
+      unsigned reg;
+    } cr;
 
   public:
+    /// Holds information about individual kills.
+    struct KillInfo {
+      bool isPHIKill : 1;
+      unsigned killIdx : 31;
+
+      KillInfo(bool isPHIKill, unsigned killIdx)
+        : isPHIKill(isPHIKill), killIdx(killIdx) {
+
+        assert(killIdx != 0 && "Zero kill indices are no longer permitted.");
+      }
+
+    };
+
+    typedef SmallVector<KillInfo, 4> KillSet;
+
     /// The ID number of this value.
     unsigned id;
     
     /// The index of the defining instruction (if isDefAccurate() returns true).
     unsigned def;
-    MachineInstr *copy;
-    SmallVector<unsigned, 4> kills;
+
+    KillSet kills;
 
     VNInfo()
-      : flags(IS_UNUSED), id(~1U), def(0), copy(0) {}
+      : flags(IS_UNUSED), id(~1U), def(0) { cr.copy = 0; }
 
     /// VNInfo constructor.
     /// d is presumed to point to the actual defining instr. If it doesn't
     /// setIsDefAccurate(false) should be called after construction.
     VNInfo(unsigned i, unsigned d, MachineInstr *c)
-      : flags(IS_DEF_ACCURATE), id(i), def(d), copy(c) {}
+      : flags(IS_DEF_ACCURATE), id(i), def(d) { cr.copy = c; }
 
     /// VNInfo construtor, copies values from orig, except for the value number.
     VNInfo(unsigned i, const VNInfo &orig)
-      : flags(orig.flags), id(i), def(orig.def), copy(orig.copy),
-        kills(orig.kills) {}
+      : flags(orig.flags), cr(orig.cr), id(i), def(orig.def), kills(orig.kills)
+    { }
+
+    /// Copy from the parameter into this VNInfo.
+    void copyFrom(VNInfo &src) {
+      flags = src.flags;
+      cr = src.cr;
+      def = src.def;
+      kills = src.kills;
+    }
 
     /// Used for copying value number info.
     unsigned getFlags() const { return flags; }
     void setFlags(unsigned flags) { this->flags = flags; }
+
+    /// For a register interval, if this VN was definied by a copy instr
+    /// getCopy() returns a pointer to it, otherwise returns 0.
+    /// For a stack interval the behaviour of this method is undefined.
+    MachineInstr* getCopy() const { return cr.copy; }
+    /// For a register interval, set the copy member.
+    /// This method should not be called on stack intervals as it may lead to
+    /// undefined behavior.
+    void setCopy(MachineInstr *c) { cr.copy = c; }
+    
+    /// For a stack interval, returns the reg which this stack interval was
+    /// defined from.
+    /// For a register interval the behaviour of this method is undefined. 
+    unsigned getReg() const { return cr.reg; }
+    /// For a stack interval, set the defining register.
+    /// This method should not be called on register intervals as it may lead
+    /// to undefined behaviour.
+    void setReg(unsigned reg) { cr.reg = reg; }
 
     /// Returns true if one or more kills are PHI nodes.
     bool hasPHIKill() const { return flags & HAS_PHI_KILL; }
@@ -106,7 +150,7 @@ namespace llvm {
       else
         flags &= ~REDEF_BY_EC;
     }
-  
+   
     /// Returns true if this value is defined by a PHI instruction (or was,
     /// PHI instrucions may have been eliminated).
     bool isPHIDef() const { return flags & IS_PHI_DEF; }
@@ -137,6 +181,18 @@ namespace llvm {
 
   };
 
+  inline bool operator<(const VNInfo::KillInfo &k1, const VNInfo::KillInfo &k2){
+    return k1.killIdx < k2.killIdx;
+  }
+  
+  inline bool operator<(const VNInfo::KillInfo &k, unsigned idx) {
+    return k.killIdx < idx;
+  }
+
+  inline bool operator<(unsigned idx, const VNInfo::KillInfo &k) {
+    return idx < k.killIdx;
+  }
+
   /// LiveRange structure - This represents a simple register range in the
   /// program, with an inclusive start point and an exclusive end point.
   /// These ranges are rendered as [start,end).
@@ -163,14 +219,13 @@ namespace llvm {
     }
 
     void dump() const;
-    void print(std::ostream &os) const;
-    void print(std::ostream *os) const { if (os) print(*os); }
+    void print(raw_ostream &os) const;
 
   private:
     LiveRange(); // DO NOT IMPLEMENT
   };
 
-  std::ostream& operator<<(std::ostream& os, const LiveRange &LR);
+  raw_ostream& operator<<(raw_ostream& os, const LiveRange &LR);
 
 
   inline bool operator<(unsigned V, const LiveRange &LR) {
@@ -184,7 +239,9 @@ namespace llvm {
   /// LiveInterval - This class represents some number of live ranges for a
   /// register or value.  This class also contains a bit of register allocator
   /// state.
-  struct LiveInterval {
+  class LiveInterval {
+  public:
+
     typedef SmallVector<LiveRange,4> Ranges;
     typedef SmallVector<VNInfo*,4> VNInfoList;
 
@@ -193,8 +250,6 @@ namespace llvm {
     float weight;        // weight of this interval
     Ranges ranges;       // the ranges in which this register is live
     VNInfoList valnos;   // value#'s
-
-  public:
     
     struct InstrSlots {
       enum {
@@ -286,32 +341,17 @@ namespace llvm {
     inline const VNInfo *getValNumInfo(unsigned ValNo) const {
       return valnos[ValNo];
     }
-    
-    /// copyValNumInfo - Copy the value number info for one value number to
-    /// another.
-    void copyValNumInfo(VNInfo *DstValNo, const VNInfo *SrcValNo) {
-      DstValNo->def = SrcValNo->def;
-      DstValNo->copy = SrcValNo->copy;
-      DstValNo->setFlags(SrcValNo->getFlags());
-      DstValNo->kills = SrcValNo->kills;
-    }
 
     /// getNextValue - Create a new value number and return it.  MIIdx specifies
     /// the instruction that defines the value number.
     VNInfo *getNextValue(unsigned MIIdx, MachineInstr *CopyMI,
-                         bool isDefAccurate, BumpPtrAllocator &VNInfoAllocator) {
+                         bool isDefAccurate, BumpPtrAllocator &VNInfoAllocator){
 
       assert(MIIdx != ~0u && MIIdx != ~1u &&
              "PHI def / unused flags should now be passed explicitly.");
-#ifdef __GNUC__
-      unsigned Alignment = (unsigned)__alignof__(VNInfo);
-#else
-      // FIXME: ugly.
-      unsigned Alignment = 8;
-#endif
       VNInfo *VNI =
         static_cast<VNInfo*>(VNInfoAllocator.Allocate((unsigned)sizeof(VNInfo),
-                                                      Alignment));
+                                                      alignof<VNInfo>()));
       new (VNI) VNInfo((unsigned)valnos.size(), MIIdx, CopyMI);
       VNI->setIsDefAccurate(isDefAccurate);
       valnos.push_back(VNI);
@@ -320,17 +360,12 @@ namespace llvm {
 
     /// Create a copy of the given value. The new value will be identical except
     /// for the Value number.
-    VNInfo *createValueCopy(const VNInfo *orig, BumpPtrAllocator &VNInfoAllocator) {
+    VNInfo *createValueCopy(const VNInfo *orig,
+                            BumpPtrAllocator &VNInfoAllocator) {
 
-#ifdef __GNUC__
-      unsigned Alignment = (unsigned)__alignof__(VNInfo);
-#else
-      // FIXME: ugly.
-      unsigned Alignment = 8;
-#endif
       VNInfo *VNI =
         static_cast<VNInfo*>(VNInfoAllocator.Allocate((unsigned)sizeof(VNInfo),
-                                                      Alignment));
+                                                      alignof<VNInfo>()));
     
       new (VNI) VNInfo((unsigned)valnos.size(), *orig);
       valnos.push_back(VNI);
@@ -339,27 +374,28 @@ namespace llvm {
 
     /// addKill - Add a kill instruction index to the specified value
     /// number.
-    static void addKill(VNInfo *VNI, unsigned KillIdx) {
-      SmallVector<unsigned, 4> &kills = VNI->kills;
+    static void addKill(VNInfo *VNI, unsigned KillIdx, bool phiKill) {
+      VNInfo::KillSet &kills = VNI->kills;
+      VNInfo::KillInfo newKill(phiKill, KillIdx);
       if (kills.empty()) {
-        kills.push_back(KillIdx);
+        kills.push_back(newKill);
       } else {
-        SmallVector<unsigned, 4>::iterator
-          I = std::lower_bound(kills.begin(), kills.end(), KillIdx);
-        kills.insert(I, KillIdx);
+        VNInfo::KillSet::iterator
+          I = std::lower_bound(kills.begin(), kills.end(), newKill);
+        kills.insert(I, newKill);
       }
     }
 
     /// addKills - Add a number of kills into the VNInfo kill vector. If this
     /// interval is live at a kill point, then the kill is not added.
-    void addKills(VNInfo *VNI, const SmallVector<unsigned, 4> &kills) {
+    void addKills(VNInfo *VNI, const VNInfo::KillSet &kills) {
       for (unsigned i = 0, e = static_cast<unsigned>(kills.size());
            i != e; ++i) {
-        unsigned KillIdx = kills[i];
-        if (!liveBeforeAndAt(KillIdx)) {
-          SmallVector<unsigned, 4>::iterator
-            I = std::lower_bound(VNI->kills.begin(), VNI->kills.end(), KillIdx);
-          VNI->kills.insert(I, KillIdx);
+        const VNInfo::KillInfo &Kill = kills[i];
+        if (!liveBeforeAndAt(Kill.killIdx)) {
+          VNInfo::KillSet::iterator
+            I = std::lower_bound(VNI->kills.begin(), VNI->kills.end(), Kill);
+          VNI->kills.insert(I, Kill);
         }
       }
     }
@@ -367,10 +403,10 @@ namespace llvm {
     /// removeKill - Remove the specified kill from the list of kills of
     /// the specified val#.
     static bool removeKill(VNInfo *VNI, unsigned KillIdx) {
-      SmallVector<unsigned, 4> &kills = VNI->kills;
-      SmallVector<unsigned, 4>::iterator
+      VNInfo::KillSet &kills = VNI->kills;
+      VNInfo::KillSet::iterator
         I = std::lower_bound(kills.begin(), kills.end(), KillIdx);
-      if (I != kills.end() && *I == KillIdx) {
+      if (I != kills.end() && I->killIdx == KillIdx) {
         kills.erase(I);
         return true;
       }
@@ -380,10 +416,11 @@ namespace llvm {
     /// removeKills - Remove all the kills in specified range
     /// [Start, End] of the specified val#.
     static void removeKills(VNInfo *VNI, unsigned Start, unsigned End) {
-      SmallVector<unsigned, 4> &kills = VNI->kills;
-      SmallVector<unsigned, 4>::iterator
+      VNInfo::KillSet &kills = VNI->kills;
+
+      VNInfo::KillSet::iterator
         I = std::lower_bound(kills.begin(), kills.end(), Start);
-      SmallVector<unsigned, 4>::iterator
+      VNInfo::KillSet::iterator
         E = std::upper_bound(kills.begin(), kills.end(), End);
       kills.erase(I, E);
     }
@@ -391,15 +428,15 @@ namespace llvm {
     /// isKill - Return true if the specified index is a kill of the
     /// specified val#.
     static bool isKill(const VNInfo *VNI, unsigned KillIdx) {
-      const SmallVector<unsigned, 4> &kills = VNI->kills;
-      SmallVector<unsigned, 4>::const_iterator
+      const VNInfo::KillSet &kills = VNI->kills;
+      VNInfo::KillSet::const_iterator
         I = std::lower_bound(kills.begin(), kills.end(), KillIdx);
-      return I != kills.end() && *I == KillIdx;
+      return I != kills.end() && I->killIdx == KillIdx;
     }
 
     /// isOnlyLROfValNo - Return true if the specified live range is the only
     /// one defined by the its val#.
-    bool isOnlyLROfValNo( const LiveRange *LR) {
+    bool isOnlyLROfValNo(const LiveRange *LR) {
       for (const_iterator I = begin(), E = end(); I != E; ++I) {
         const LiveRange *Tmp = I;
         if (Tmp != LR && Tmp->valno == LR->valno)
@@ -481,6 +518,13 @@ namespace llvm {
       return I == end() ? 0 : &*I;
     }
 
+    /// getLiveRangeContaining - Return the live range that contains the
+    /// specified index, or null if there is none.
+    LiveRange *getLiveRangeContaining(unsigned Idx) {
+      iterator I = FindLiveRangeContaining(Idx);
+      return I == end() ? 0 : &*I;
+    }
+
     /// FindLiveRangeContaining - Return an iterator to the live range that
     /// contains the specified index, or end() if there is none.
     const_iterator FindLiveRangeContaining(unsigned Idx) const;
@@ -548,24 +592,27 @@ namespace llvm {
     ///
     unsigned getSize() const;
 
+    /// ComputeJoinedWeight - Set the weight of a live interval after
+    /// Other has been merged into it.
+    void ComputeJoinedWeight(const LiveInterval &Other);
+
     bool operator<(const LiveInterval& other) const {
       return beginNumber() < other.beginNumber();
     }
 
-    void print(std::ostream &OS, const TargetRegisterInfo *TRI = 0) const;
-    void print(std::ostream *OS, const TargetRegisterInfo *TRI = 0) const {
-      if (OS) print(*OS, TRI);
-    }
+    void print(raw_ostream &OS, const TargetRegisterInfo *TRI = 0) const;
     void dump() const;
 
   private:
+
     Ranges::iterator addRangeFrom(LiveRange LR, Ranges::iterator From);
     void extendIntervalEndTo(Ranges::iterator I, unsigned NewEnd);
     Ranges::iterator extendIntervalStartTo(Ranges::iterator I, unsigned NewStr);
     LiveInterval& operator=(const LiveInterval& rhs); // DO NOT IMPLEMENT
+
   };
 
-  inline std::ostream &operator<<(std::ostream &OS, const LiveInterval &LI) {
+  inline raw_ostream &operator<<(raw_ostream &OS, const LiveInterval &LI) {
     LI.print(OS);
     return OS;
   }

@@ -1,4 +1,4 @@
-//===--- DeclReferenceMap.cpp - Map Decls to their references ---*- C++ -*-===//
+//===--- DeclReferenceMap.cpp - Map Decls to their references -------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,96 +14,42 @@
 
 #include "clang/Index/DeclReferenceMap.h"
 #include "clang/Index/ASTLocation.h"
-#include "clang/AST/Decl.h"
-#include "clang/AST/Stmt.h"
-#include "clang/AST/DeclVisitor.h"
-#include "clang/AST/StmtVisitor.h"
+#include "ASTVisitor.h"
 #include "llvm/Support/Compiler.h"
 using namespace clang;
 using namespace idx;
 
 namespace {
 
-class VISIBILITY_HIDDEN StmtMapper : public StmtVisitor<StmtMapper> {
+class VISIBILITY_HIDDEN RefMapper : public ASTVisitor<RefMapper> {
   DeclReferenceMap::MapTy &Map;
-  Decl *Parent;
 
 public:
-  StmtMapper(DeclReferenceMap::MapTy &map, Decl *parent)
-    : Map(map), Parent(parent) { }
+  RefMapper(DeclReferenceMap::MapTy &map) : Map(map) { }
 
-  void VisitDeclStmt(DeclStmt *Node);
   void VisitDeclRefExpr(DeclRefExpr *Node);
-  void VisitStmt(Stmt *Node);
-};
-
-class VISIBILITY_HIDDEN DeclMapper : public DeclVisitor<DeclMapper> {
-  DeclReferenceMap::MapTy &Map;
-  
-public:
-  DeclMapper(DeclReferenceMap::MapTy &map)
-    : Map(map) { }
-
-  void VisitDeclContext(DeclContext *DC);
-  void VisitVarDecl(VarDecl *D);
-  void VisitFunctionDecl(FunctionDecl *D);
-  void VisitBlockDecl(BlockDecl *D);
-  void VisitDecl(Decl *D);
+  void VisitMemberExpr(MemberExpr *Node);
+  void VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node);
 };
 
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
-// StmtMapper Implementation
+// RefMapper Implementation
 //===----------------------------------------------------------------------===//
 
-void StmtMapper::VisitDeclStmt(DeclStmt *Node) {
-  DeclMapper Mapper(Map);
-  for (DeclStmt::decl_iterator
-         I = Node->decl_begin(), E = Node->decl_end(); I != E; ++I)
-    Mapper.Visit(*I);
+void RefMapper::VisitDeclRefExpr(DeclRefExpr *Node) {
+  NamedDecl *PrimD = cast<NamedDecl>(Node->getDecl()->getCanonicalDecl());
+  Map.insert(std::make_pair(PrimD, ASTLocation(CurrentDecl, Node)));
 }
 
-void StmtMapper::VisitDeclRefExpr(DeclRefExpr *Node) {
-  NamedDecl *PrimD = cast<NamedDecl>(Node->getDecl()->getPrimaryDecl());
-  Map.insert(std::make_pair(PrimD, ASTLocation(Parent, Node)));
+void RefMapper::VisitMemberExpr(MemberExpr *Node) {
+  NamedDecl *PrimD = cast<NamedDecl>(Node->getMemberDecl()->getCanonicalDecl());
+  Map.insert(std::make_pair(PrimD, ASTLocation(CurrentDecl, Node)));
 }
 
-void StmtMapper::VisitStmt(Stmt *Node) {
-  for (Stmt::child_iterator
-         I = Node->child_begin(), E = Node->child_end(); I != E; ++I)
-    Visit(*I);
-}
-
-//===----------------------------------------------------------------------===//
-// DeclMapper Implementation
-//===----------------------------------------------------------------------===//
-
-void DeclMapper::VisitDeclContext(DeclContext *DC) {
-  for (DeclContext::decl_iterator
-         I = DC->decls_begin(), E = DC->decls_end(); I != E; ++I)
-    Visit(*I);
-}
-
-void DeclMapper::VisitFunctionDecl(FunctionDecl *D) {
-  if (!D->isThisDeclarationADefinition())
-    return;
-  
-  StmtMapper(Map, D).Visit(D->getBody());
-}
-
-void DeclMapper::VisitBlockDecl(BlockDecl *D) {
-  StmtMapper(Map, D).Visit(D->getBody());
-}
-
-void DeclMapper::VisitVarDecl(VarDecl *D) {
-  if (Expr *Init = D->getInit())
-    StmtMapper(Map, D).Visit(Init);
-}
-
-void DeclMapper::VisitDecl(Decl *D) {
-  if (DeclContext *DC = dyn_cast<DeclContext>(D))
-    VisitDeclContext(DC);
+void RefMapper::VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node) {
+  Map.insert(std::make_pair(Node->getDecl(), ASTLocation(CurrentDecl, Node)));
 }
 
 //===----------------------------------------------------------------------===//
@@ -111,22 +57,22 @@ void DeclMapper::VisitDecl(Decl *D) {
 //===----------------------------------------------------------------------===//
 
 DeclReferenceMap::DeclReferenceMap(ASTContext &Ctx) {
-  DeclMapper(Map).Visit(Ctx.getTranslationUnitDecl());
+  RefMapper(Map).Visit(Ctx.getTranslationUnitDecl());
 }
 
 DeclReferenceMap::astlocation_iterator
 DeclReferenceMap::refs_begin(NamedDecl *D) const {
-  NamedDecl *Prim = cast<NamedDecl>(D->getPrimaryDecl());
+  NamedDecl *Prim = cast<NamedDecl>(D->getCanonicalDecl());
   return astlocation_iterator(Map.lower_bound(Prim));  
 }
 
 DeclReferenceMap::astlocation_iterator
 DeclReferenceMap::refs_end(NamedDecl *D) const {
-  NamedDecl *Prim = cast<NamedDecl>(D->getPrimaryDecl());
+  NamedDecl *Prim = cast<NamedDecl>(D->getCanonicalDecl());
   return astlocation_iterator(Map.upper_bound(Prim));  
 }
 
 bool DeclReferenceMap::refs_empty(NamedDecl *D) const {
-  NamedDecl *Prim = cast<NamedDecl>(D->getPrimaryDecl());
+  NamedDecl *Prim = cast<NamedDecl>(D->getCanonicalDecl());
   return refs_begin(Prim) == refs_end(Prim);  
 }

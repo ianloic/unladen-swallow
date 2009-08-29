@@ -31,12 +31,12 @@ dnl===
 dnl===-----------------------------------------------------------------------===
 dnl Initialize autoconf and define the package name, version number and
 dnl email address for reporting bugs.
-AC_INIT([[llvm]],[[2.6svn]],[llvmbugs@cs.uiuc.edu])
+AC_INIT([[llvm]],[[2.7svn]],[llvmbugs@cs.uiuc.edu])
 
 dnl Provide a copyright substitution and ensure the copyright notice is included
 dnl in the output of --version option of the generated configure script.
-AC_SUBST(LLVM_COPYRIGHT,["Copyright (c) 2003-2008 University of Illinois at Urbana-Champaign."])
-AC_COPYRIGHT([Copyright (c) 2003-2008 University of Illinois at Urbana-Champaign.])
+AC_SUBST(LLVM_COPYRIGHT,["Copyright (c) 2003-2009 University of Illinois at Urbana-Champaign."])
+AC_COPYRIGHT([Copyright (c) 2003-2009 University of Illinois at Urbana-Champaign.])
 
 dnl Indicate that we require autoconf 2.59 or later. Ths is needed because we
 dnl use some autoconf macros only available in 2.59.
@@ -175,11 +175,58 @@ AC_CACHE_CHECK([type of operating system we're going to host on],
     llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
     llvm_cv_os_type="MingW"
     llvm_cv_platform_type="Win32" ;;
+  *-unknown-eabi*)
+    llvm_cv_link_all_option="-Wl,--whole-archive"
+    llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
+    llvm_cv_os_type="Freestanding"
+    llvm_cv_platform_type="Unix" ;;
+  *-unknown-elf*)
+    llvm_cv_link_all_option="-Wl,--whole-archive"
+    llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
+    llvm_cv_os_type="Freestanding"
+    llvm_cv_platform_type="Unix" ;;
   *)
     llvm_cv_link_all_option=""
     llvm_cv_no_link_all_option=""
     llvm_cv_os_type="Unknown"
     llvm_cv_platform_type="Unknown" ;;
+esac])
+
+AC_CACHE_CHECK([type of operating system we're going to target],
+               [llvm_cv_target_os_type],
+[case $target in
+  *-*-aix*)
+    llvm_cv_target_os_type="AIX" ;;
+  *-*-irix*)
+    llvm_cv_target_os_type="IRIX" ;;
+  *-*-cygwin*)
+    llvm_cv_target_os_type="Cygwin" ;;
+  *-*-darwin*)
+    llvm_cv_target_os_type="Darwin" ;;
+  *-*-freebsd*)
+    llvm_cv_target_os_type="FreeBSD" ;;
+  *-*-openbsd*)
+    llvm_cv_target_os_type="OpenBSD" ;;
+  *-*-netbsd*)
+    llvm_cv_target_os_type="NetBSD" ;;
+  *-*-dragonfly*)
+    llvm_cv_target_os_type="DragonFly" ;;
+  *-*-hpux*)
+    llvm_cv_target_os_type="HP-UX" ;;
+  *-*-interix*)
+    llvm_cv_target_os_type="Interix" ;;
+  *-*-linux*)
+    llvm_cv_target_os_type="Linux" ;;
+  *-*-solaris*)
+    llvm_cv_target_os_type="SunOS" ;;
+  *-*-win32*)
+    llvm_cv_target_os_type="Win32" ;;
+  *-*-mingw*)
+    llvm_cv_target_os_type="MingW" ;;
+  *-unknown-eabi*)
+    llvm_cv_target_os_type="Freestanding" ;;
+  *)
+    llvm_cv_target_os_type="Unknown" ;;
 esac])
 
 dnl Make sure we aren't attempting to configure for an unknown system
@@ -190,6 +237,8 @@ fi
 dnl Set the "OS" Makefile variable based on the platform type so the
 dnl makefile can configure itself to specific build hosts
 AC_SUBST(OS,$llvm_cv_os_type)
+AC_SUBST(HOST_OS,$llvm_cv_os_type)
+AC_SUBST(TARGET_OS,$llvm_cv_target_os_type)
 
 dnl Set the LINKALL and NOLINKALL Makefile variables based on the platform
 AC_SUBST(LINKALL,$llvm_cv_link_all_option)
@@ -221,12 +270,13 @@ AC_CACHE_CHECK([target architecture],[llvm_cv_target_arch],
   sparc*-*)               llvm_cv_target_arch="Sparc" ;;
   powerpc*-*)             llvm_cv_target_arch="PowerPC" ;;
   alpha*-*)               llvm_cv_target_arch="Alpha" ;;
-  ia64-*)                 llvm_cv_target_arch="IA64" ;;
   arm*-*)                 llvm_cv_target_arch="ARM" ;;
   mips-*)                 llvm_cv_target_arch="Mips" ;;
   pic16-*)                llvm_cv_target_arch="PIC16" ;;
   xcore-*)                llvm_cv_target_arch="XCore" ;;
   msp430-*)               llvm_cv_target_arch="MSP430" ;;
+  s390x-*)                llvm_cv_target_arch="SystemZ" ;;
+  bfin-*)                 llvm_cv_target_arch="Blackfin" ;;
   *)                      llvm_cv_target_arch="Unknown" ;;
 esac])
 
@@ -341,18 +391,19 @@ then
   AC_SUBST(JIT,[[]])
 else
   case "$llvm_cv_target_arch" in
-    x86)     AC_SUBST(TARGET_HAS_JIT,1) ;;
-    Sparc)   AC_SUBST(TARGET_HAS_JIT,0) ;;
-    PowerPC) AC_SUBST(TARGET_HAS_JIT,1) ;;
-    x86_64)  AC_SUBST(TARGET_HAS_JIT,1) ;;
-    Alpha)   AC_SUBST(TARGET_HAS_JIT,1) ;;
-    IA64)    AC_SUBST(TARGET_HAS_JIT,0) ;;
-    ARM)     AC_SUBST(TARGET_HAS_JIT,0) ;;
-    Mips)    AC_SUBST(TARGET_HAS_JIT,0) ;;
-    PIC16)   AC_SUBST(TARGET_HAS_JIT,0) ;;
-    XCore)   AC_SUBST(TARGET_HAS_JIT,0) ;;
-    MSP430)  AC_SUBST(TARGET_HAS_JIT,0) ;;
-    *)       AC_SUBST(TARGET_HAS_JIT,0) ;;
+    x86)         AC_SUBST(TARGET_HAS_JIT,1) ;;
+    Sparc)       AC_SUBST(TARGET_HAS_JIT,0) ;;
+    PowerPC)     AC_SUBST(TARGET_HAS_JIT,1) ;;
+    x86_64)      AC_SUBST(TARGET_HAS_JIT,1) ;;
+    Alpha)       AC_SUBST(TARGET_HAS_JIT,1) ;;
+    ARM)         AC_SUBST(TARGET_HAS_JIT,0) ;;
+    Mips)        AC_SUBST(TARGET_HAS_JIT,0) ;;
+    PIC16)       AC_SUBST(TARGET_HAS_JIT,0) ;;
+    XCore)       AC_SUBST(TARGET_HAS_JIT,0) ;;
+    MSP430)      AC_SUBST(TARGET_HAS_JIT,0) ;;
+    SystemZ)     AC_SUBST(TARGET_HAS_JIT,0) ;;
+    Blackfin)    AC_SUBST(TARGET_HAS_JIT,0) ;;
+    *)           AC_SUBST(TARGET_HAS_JIT,0) ;;
   esac
 fi
 
@@ -401,41 +452,43 @@ AC_ARG_ENABLE([targets],AS_HELP_STRING([--enable-targets],
     [Build specific host targets: all,host-only,{target-name} (default=all)]),,
     enableval=all)
 case "$enableval" in
-  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha IA64 ARM Mips CellSPU PIC16 XCore MSP430 CBackend MSIL CppBackend" ;;
+  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha ARM Mips CellSPU PIC16 XCore MSP430 SystemZ Blackfin CBackend MSIL CppBackend" ;;
   host-only)
     case "$llvm_cv_target_arch" in
-      x86)     TARGETS_TO_BUILD="X86" ;;
-      x86_64)  TARGETS_TO_BUILD="X86" ;;
-      Sparc)   TARGETS_TO_BUILD="Sparc" ;;
-      PowerPC) TARGETS_TO_BUILD="PowerPC" ;;
-      Alpha)   TARGETS_TO_BUILD="Alpha" ;;
-      IA64)    TARGETS_TO_BUILD="IA64" ;;
-      ARM)     TARGETS_TO_BUILD="ARM" ;;
-      Mips)    TARGETS_TO_BUILD="Mips" ;;
+      x86)         TARGETS_TO_BUILD="X86" ;;
+      x86_64)      TARGETS_TO_BUILD="X86" ;;
+      Sparc)       TARGETS_TO_BUILD="Sparc" ;;
+      PowerPC)     TARGETS_TO_BUILD="PowerPC" ;;
+      Alpha)       TARGETS_TO_BUILD="Alpha" ;;
+      ARM)         TARGETS_TO_BUILD="ARM" ;;
+      Mips)        TARGETS_TO_BUILD="Mips" ;;
       CellSPU|SPU) TARGETS_TO_BUILD="CellSPU" ;;
-      PIC16)   TARGETS_TO_BUILD="PIC16" ;;
-      XCore)   TARGETS_TO_BUILD="XCore" ;;
-      MSP430)  TARGETS_TO_BUILD="MSP430" ;;
+      PIC16)       TARGETS_TO_BUILD="PIC16" ;;
+      XCore)       TARGETS_TO_BUILD="XCore" ;;
+      MSP430)      TARGETS_TO_BUILD="MSP430" ;;
+      SystemZ)     TARGETS_TO_BUILD="SystemZ" ;;
+      Blackfin)    TARGETS_TO_BUILD="Blackfin" ;;
       *)       AC_MSG_ERROR([Can not set target to build]) ;;
     esac
     ;;
   *)for a_target in `echo $enableval|sed -e 's/,/ /g' ` ; do
       case "$a_target" in
-        x86)     TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
-        x86_64)  TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
-        sparc)   TARGETS_TO_BUILD="Sparc $TARGETS_TO_BUILD" ;;
-        powerpc) TARGETS_TO_BUILD="PowerPC $TARGETS_TO_BUILD" ;;
-        alpha)   TARGETS_TO_BUILD="Alpha $TARGETS_TO_BUILD" ;;
-        ia64)    TARGETS_TO_BUILD="IA64 $TARGETS_TO_BUILD" ;;
-        arm)     TARGETS_TO_BUILD="ARM $TARGETS_TO_BUILD" ;;
-        mips)    TARGETS_TO_BUILD="Mips $TARGETS_TO_BUILD" ;;
-        spu)     TARGETS_TO_BUILD="CellSPU $TARGETS_TO_BUILD" ;;
-        pic16)   TARGETS_TO_BUILD="PIC16 $TARGETS_TO_BUILD" ;;
-        xcore)   TARGETS_TO_BUILD="XCore $TARGETS_TO_BUILD" ;;
-        msp430)  TARGETS_TO_BUILD="MSP430 $TARGETS_TO_BUILD" ;;
-        cbe)     TARGETS_TO_BUILD="CBackend $TARGETS_TO_BUILD" ;;
-        msil)    TARGETS_TO_BUILD="MSIL $TARGETS_TO_BUILD" ;;
-        cpp)     TARGETS_TO_BUILD="CppBackend $TARGETS_TO_BUILD" ;;
+        x86)      TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
+        x86_64)   TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
+        sparc)    TARGETS_TO_BUILD="Sparc $TARGETS_TO_BUILD" ;;
+        powerpc)  TARGETS_TO_BUILD="PowerPC $TARGETS_TO_BUILD" ;;
+        alpha)    TARGETS_TO_BUILD="Alpha $TARGETS_TO_BUILD" ;;
+        arm)      TARGETS_TO_BUILD="ARM $TARGETS_TO_BUILD" ;;
+        mips)     TARGETS_TO_BUILD="Mips $TARGETS_TO_BUILD" ;;
+        spu)      TARGETS_TO_BUILD="CellSPU $TARGETS_TO_BUILD" ;;
+        pic16)    TARGETS_TO_BUILD="PIC16 $TARGETS_TO_BUILD" ;;
+        xcore)    TARGETS_TO_BUILD="XCore $TARGETS_TO_BUILD" ;;
+        msp430)   TARGETS_TO_BUILD="MSP430 $TARGETS_TO_BUILD" ;;
+        systemz)  TARGETS_TO_BUILD="SystemZ $TARGETS_TO_BUILD" ;;
+        blackfin) TARGETS_TO_BUILD="Blackfin $TARGETS_TO_BUILD" ;;
+        cbe)      TARGETS_TO_BUILD="CBackend $TARGETS_TO_BUILD" ;;
+        msil)     TARGETS_TO_BUILD="MSIL $TARGETS_TO_BUILD" ;;
+        cpp)      TARGETS_TO_BUILD="CppBackend $TARGETS_TO_BUILD" ;;
         *) AC_MSG_ERROR([Unrecognized target $a_target]) ;;
       esac
   done
@@ -454,17 +507,22 @@ for a_target in $TARGETS_TO_BUILD; do
 done
 
 # Build the LLVM_TARGET and LLVM_ASM_PRINTER macro uses for
-# Targets.def and AsmPrinters.def.
+# Targets.def, AsmPrinters.def, and AsmParsers.def.
 LLVM_ENUM_TARGETS=""
 LLVM_ENUM_ASM_PRINTERS=""
+LLVM_ENUM_ASM_PARSERS=""
 for target_to_build in $TARGETS_TO_BUILD; do
   LLVM_ENUM_TARGETS="LLVM_TARGET($target_to_build) $LLVM_ENUM_TARGETS"
   if test -f ${srcdir}/lib/Target/${target_to_build}/AsmPrinter/Makefile ; then
     LLVM_ENUM_ASM_PRINTERS="LLVM_ASM_PRINTER($target_to_build) $LLVM_ENUM_ASM_PRINTERS";
   fi
+  if test -f ${srcdir}/lib/Target/${target_to_build}/AsmParser/Makefile ; then
+    LLVM_ENUM_ASM_PARSERS="LLVM_ASM_PARSER($target_to_build) $LLVM_ENUM_ASM_PARSERS";
+  fi
 done
 AC_SUBST(LLVM_ENUM_TARGETS)
 AC_SUBST(LLVM_ENUM_ASM_PRINTERS)
+AC_SUBST(LLVM_ENUM_ASM_PARSERS)
 
 dnl Prevent the CBackend from using printf("%a") for floating point so older
 dnl C compilers that cannot deal with the 0x0p+0 hex floating point format
@@ -673,6 +731,46 @@ if test "$DOT" != "echo dot" ; then
   AC_DEFINE_UNQUOTED([LLVM_PATH_DOT],"$DOT${EXEEXT}",
    [Define to path to dot program if found or 'echo dot' otherwise])
 fi
+AC_PATH_PROG(FDP, [fdp], [echo fdp])
+if test "$FDP" != "echo fdp" ; then
+  AC_DEFINE([HAVE_FDP],[1],[Define if the neat program is available])
+  dnl If we're targeting for mingw we should emit windows paths, not msys
+  if test "$llvm_cv_os_type" = "MingW" ; then
+    FDP=`echo $FDP | sed 's/^\/\([[A-Za-z]]\)\//\1:\//' `
+  fi
+  AC_DEFINE_UNQUOTED([LLVM_PATH_FDP],"$FDP${EXEEXT}",
+   [Define to path to fdp program if found or 'echo fdp' otherwise])
+fi
+AC_PATH_PROG(NEATO, [neato], [echo neato])
+if test "$NEATO" != "echo neato" ; then
+  AC_DEFINE([HAVE_NEATO],[1],[Define if the neat program is available])
+  dnl If we're targeting for mingw we should emit windows paths, not msys
+  if test "$llvm_cv_os_type" = "MingW" ; then
+    NEATO=`echo $NEATO | sed 's/^\/\([[A-Za-z]]\)\//\1:\//' `
+  fi
+  AC_DEFINE_UNQUOTED([LLVM_PATH_NEATO],"$NEATO${EXEEXT}",
+   [Define to path to neato program if found or 'echo neato' otherwise])
+fi
+AC_PATH_PROG(TWOPI, [twopi], [echo twopi])
+if test "$TWOPI" != "echo twopi" ; then
+  AC_DEFINE([HAVE_TWOPI],[1],[Define if the neat program is available])
+  dnl If we're targeting for mingw we should emit windows paths, not msys
+  if test "$llvm_cv_os_type" = "MingW" ; then
+    TWOPI=`echo $TWOPI | sed 's/^\/\([[A-Za-z]]\)\//\1:\//' `
+  fi
+  AC_DEFINE_UNQUOTED([LLVM_PATH_TWOPI],"$TWOPI${EXEEXT}",
+   [Define to path to twopi program if found or 'echo twopi' otherwise])
+fi
+AC_PATH_PROG(CIRCO, [circo], [echo circo])
+if test "$CIRCO" != "echo circo" ; then
+  AC_DEFINE([HAVE_CIRCO],[1],[Define if the neat program is available])
+  dnl If we're targeting for mingw we should emit windows paths, not msys
+  if test "$llvm_cv_os_type" = "MingW" ; then
+    CIRCO=`echo $CIRCO | sed 's/^\/\([[A-Za-z]]\)\//\1:\//' `
+  fi
+  AC_DEFINE_UNQUOTED([LLVM_PATH_CIRCO],"$CIRCO${EXEEXT}",
+   [Define to path to circo program if found or 'echo circo' otherwise])
+fi
 AC_PATH_PROGS(GV, [gv gsview32], [echo gv])
 if test "$GV" != "echo gv" ; then
   AC_DEFINE([HAVE_GV],[1],[Define if the gv program is available])
@@ -824,8 +922,6 @@ dnl=== SECTION 5: Check for libraries
 dnl===
 dnl===-----------------------------------------------------------------------===
 
-dnl libelf is for sparc only; we can ignore it if we don't have it
-AC_CHECK_LIB(elf, elf_begin)
 AC_CHECK_LIB(m,sin)
 if test "$llvm_cv_os_type" = "MingW" ; then
   AC_CHECK_LIB(imagehlp, main)
@@ -881,6 +977,43 @@ AC_ARG_WITH(udis86,
     AC_SUBST(USE_UDIS86, [0]))
 AC_DEFINE_UNQUOTED([USE_UDIS86],$USE_UDIS86,
                    [Define if use udis86 library])
+
+dnl Allow OProfile support for JIT output.
+AC_ARG_WITH(oprofile,
+  AS_HELP_STRING([--with-oprofile=<prefix>],
+    [Tell OProfile >= 0.9.4 how to symbolize JIT output]),
+    [
+      AC_SUBST(USE_OPROFILE, [1])
+      case "$withval" in
+        /usr|yes) llvm_cv_oppath=/usr/lib/oprofile ;;
+        *) llvm_cv_oppath="${withval}/lib/oprofile"
+           CPPFLAGS="-I${withval}/include";;
+      esac
+      LIBS="$LIBS -L${llvm_cv_oppath} -Wl,-rpath,${llvm_cv_oppath}"
+      AC_SEARCH_LIBS(op_open_agent, opagent, [], [
+        echo "Error! You need to have libopagent around."
+        exit -1
+      ])
+      AC_CHECK_HEADER([opagent.h], [], [
+        echo "Error! You need to have opagent.h around."
+        exit -1
+      ])
+    ],
+    [
+      llvm_cv_old_LIBS="$LIBS"
+      LIBS="$LIBS -L/usr/lib/oprofile -Wl,-rpath,/usr/lib/oprofile"
+      dnl If either the library or header aren't present, omit oprofile support.
+      AC_SEARCH_LIBS(op_open_agent, opagent,
+                     [AC_SUBST(USE_OPROFILE, [1])],
+                     [LIBS="$llvm_cv_old_LIBS"
+                      AC_SUBST(USE_OPROFILE, [0])])
+      AC_CHECK_HEADER([opagent.h], [], [
+        LIBS="$llvm_cv_old_LIBS"
+        AC_SUBST(USE_OPROFILE, [0])
+      ])
+    ])
+AC_DEFINE_UNQUOTED([USE_OPROFILE],$USE_OPROFILE,
+                   [Define if we have the oprofile JIT-support library])
 
 dnl===-----------------------------------------------------------------------===
 dnl===
@@ -948,6 +1081,7 @@ AC_CHECK_FUNCS([strerror strerror_r strerror_s ])
 AC_CHECK_FUNCS([strtoll strtoq sysconf malloc_zone_statistics ])
 AC_CHECK_FUNCS([setjmp longjmp sigsetjmp siglongjmp])
 AC_C_PRINTF_A
+dnl FIXME: This is no longer used, please remove (but test)!!!
 AC_FUNC_ALLOCA
 AC_FUNC_RAND48
 
@@ -1178,8 +1312,8 @@ dnl files can be updated automatically when their *.in sources change.
 AC_CONFIG_HEADERS([include/llvm/Config/config.h])
 AC_CONFIG_FILES([include/llvm/Config/Targets.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmPrinters.def])
+AC_CONFIG_FILES([include/llvm/Config/AsmParsers.def])
 AC_CONFIG_HEADERS([include/llvm/Support/DataTypes.h])
-AC_CONFIG_HEADERS([include/llvm/ADT/iterator.h])
 
 dnl Configure the makefile's configuration data
 AC_CONFIG_FILES([Makefile.config])

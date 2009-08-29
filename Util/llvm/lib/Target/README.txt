@@ -197,13 +197,6 @@ _bar:   addic r3,r3,-1
 
 //===---------------------------------------------------------------------===//
 
-Legalize should lower ctlz like this:
-  ctlz(x) = popcnt((x-1) & ~x)
-
-on targets that have popcnt but not ctlz.  itanium, what else?
-
-//===---------------------------------------------------------------------===//
-
 quantum_sigma_x in 462.libquantum contains the following loop:
 
       for(i=0; i<reg->size; i++)
@@ -332,11 +325,6 @@ we don't eliminate the computation of the top half of effective_addr2 because
 we don't have whole-function selection dags.  On x86, this means we use one
 extra register for the function when effective_addr2 is declared as U64 than
 when it is declared U32.
-
-//===---------------------------------------------------------------------===//
-
-Promote for i32 bswap can use i64 bswap + shr.  Useful on targets with 64-bit
-regs and bswap, like itanium.
 
 //===---------------------------------------------------------------------===//
 
@@ -1123,16 +1111,6 @@ optimized with "clang -emit-llvm-bc | opt -std-compile-opts".
 
 //===---------------------------------------------------------------------===//
 
-We would like to do the following transform in the instcombiner:
-
-  -X/C -> X/-C
-
-However, this isn't valid if (-X) overflows. We can implement this when we
-have the concept of a "C signed subtraction" operator that which is undefined
-on overflow.
-
-//===---------------------------------------------------------------------===//
-
 This was noticed in the entryblock for grokdeclarator in 403.gcc:
 
         %tmp = icmp eq i32 %decl_context, 4          
@@ -1675,5 +1653,27 @@ entry:
 
 Instcombine should be able to optimize away the loads (and thus the globals).
 
+
+//===---------------------------------------------------------------------===//
+
+I saw this constant expression in real code after llvm-g++ -O2:
+
+declare extern_weak i32 @0(i64)
+
+define void @foo() {
+  br i1 icmp eq (i32 zext (i1 icmp ne (i32 (i64)* @0, i32 (i64)* null) to i32),
+i32 0), label %cond_true, label %cond_false
+cond_true:
+  ret void
+cond_false:
+  ret void
+}
+
+That branch expression should be reduced to:
+
+  i1 icmp eq (i32 (i64)* @0, i32 (i64)* null)
+
+It's probably not a perf issue, I just happened to see it while examining
+something else and didn't want to forget about it.
 
 //===---------------------------------------------------------------------===//

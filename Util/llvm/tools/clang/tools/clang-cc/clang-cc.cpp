@@ -58,12 +58,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Config/config.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PluginLoader.h"
 #include "llvm/Support/PrettyStackTrace.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Host.h"
 #include "llvm/System/Path.h"
 #include "llvm/System/Process.h"
@@ -386,6 +387,10 @@ OverflowChecking("ftrapv",
                  llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
+AltiVec("faltivec", llvm::cl::desc("Enable AltiVec vector initializer syntax"),
+                    llvm::cl::init(false));
+
+static llvm::cl::opt<bool>
 ObjCSenderDispatch("fobjc-sender-dependent-dispatch",
 				 llvm::cl::desc("Enable sender-dependent dispatch for"
 					 "Objective-C messages"), llvm::cl::init(false));
@@ -501,6 +506,9 @@ static void InitializeLangOptions(LangOptions &Options, LangKind LK){
   if (ObjCEnableGCBitmapPrint)
     Options.ObjCGCBitmapPrint = 1;
   
+  if (AltiVec)
+    Options.AltiVec = 1;
+  
   Options.setVisibilityMode(SymbolVisibility);
   Options.OverflowChecking = OverflowChecking;
 }
@@ -592,6 +600,10 @@ Exceptions("fexceptions",
            llvm::cl::desc("Enable support for exception handling"));
 
 static llvm::cl::opt<bool>
+Rtti("frtti", llvm::cl::init(true),
+     llvm::cl::desc("Enable generation of rtti information"));
+
+static llvm::cl::opt<bool>
 GNURuntime("fgnu-runtime",
             llvm::cl::desc("Generate output compatible with the standard GNU "
                            "Objective-C runtime"));
@@ -639,6 +651,11 @@ static llvm::cl::opt<bool>
 AccessControl("faccess-control", 
               llvm::cl::desc("Enable C++ access control"));
 
+static llvm::cl::opt<bool>
+NoElideConstructors("fno-elide-constructors",
+                    llvm::cl::desc("Disable C++ copy constructor elision"));
+
+
 // It might be nice to add bounds to the CommandLine library directly.
 struct OptLevelParser : public llvm::cl::parser<unsigned> {
   bool parse(llvm::cl::Option &O, const char *ArgName,
@@ -646,7 +663,7 @@ struct OptLevelParser : public llvm::cl::parser<unsigned> {
     if (llvm::cl::parser<unsigned>::parse(O, ArgName, Arg, Val))
       return true;
     if (Val > 3)
-      return O.error(": '" + Arg + "' invalid optimization level!");
+      return O.error("'" + Arg + "' invalid optimization level!");
     return false;
   }
 };
@@ -733,7 +750,7 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
   
   if (Options.CPlusPlus) {
     Options.C99 = 0;
-    Options.HexFloats = Options.GNUMode;
+    Options.HexFloats = 0;
   }
   
   if (LangStd == lang_c89 || LangStd == lang_c94 || LangStd == lang_gnu89)
@@ -769,6 +786,7 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
   if (NoLaxVectorConversions.getPosition())
       Options.LaxVectorConversions = 0;
   Options.Exceptions = Exceptions;
+  Options.Rtti = Rtti;
   if (EnableBlocks.getPosition())
     Options.Blocks = EnableBlocks;
   if (CharIsSigned.getPosition())
@@ -784,6 +802,8 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
 
   if (AccessControl)
     Options.AccessControl = 1;
+  
+  Options.ElideConstructors = !NoElideConstructors;
   
   // OpenCL and C++ both have bool, true, false keywords.
   Options.Bool = Options.OpenCL | Options.CPlusPlus;
@@ -1681,7 +1701,7 @@ static void SetUpBuildDumpLog(unsigned argc, char **argv,
                               llvm::OwningPtr<DiagnosticClient> &DiagClient) {
   
   std::string ErrorInfo;
-  BuildLogFile = new llvm::raw_fd_ostream(DumpBuildInformation.c_str(), false,
+  BuildLogFile = new llvm::raw_fd_ostream(DumpBuildInformation.c_str(),
                                           ErrorInfo);
   
   if (!ErrorInfo.empty()) {
@@ -1709,40 +1729,36 @@ static void SetUpBuildDumpLog(unsigned argc, char **argv,
 // Main driver
 //===----------------------------------------------------------------------===//
 
-static llvm::raw_ostream* ComputeOutFile(const std::string& InFile,
-                                         const char* Extension,
+static llvm::raw_ostream *ComputeOutFile(const std::string &InFile,
+                                         const char *Extension,
                                          bool Binary,
                                          llvm::sys::Path& OutPath) {
-  llvm::raw_ostream* Ret;
-  bool UseStdout = false;
+  llvm::raw_ostream *Ret;
   std::string OutFile;
-  if (OutputFile == "-" || (OutputFile.empty() && InFile == "-")) {
-    UseStdout = true;
-  } else if (!OutputFile.empty()) {
+  if (!OutputFile.empty())
     OutFile = OutputFile;
+  else if (InFile == "-") {
+    OutFile = "-";
   } else if (Extension) {
     llvm::sys::Path Path(InFile);
     Path.eraseSuffix();
     Path.appendSuffix(Extension);
-    OutFile = Path.toString();
+    OutFile = Path.str();
   } else {
-    UseStdout = true;
+    OutFile = "-";
   }
 
-  if (UseStdout) {
-    Ret = new llvm::raw_stdout_ostream();
-    if (Binary)
-      llvm::sys::Program::ChangeStdoutToBinary();
-  } else {
-    std::string Error;
-    Ret = new llvm::raw_fd_ostream(OutFile.c_str(), Binary, Error);
-    if (!Error.empty()) {
-      // FIXME: Don't fail this way.
-      llvm::cerr << "ERROR: " << Error << "\n";
-      ::exit(1);
-    }
-    OutPath = OutFile;
+  std::string Error;
+  Ret = new llvm::raw_fd_ostream(OutFile.c_str(), Error,
+                                 (Binary ? llvm::raw_fd_ostream::F_Binary : 0));
+  if (!Error.empty()) {
+    // FIXME: Don't fail this way.
+    llvm::errs() << "ERROR: " << Error << "\n";
+    ::exit(1);
   }
+  
+  if (OutFile != "-")
+    OutPath = OutFile;
 
   return Ret;
 }
@@ -1894,7 +1910,7 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
     if (OutputFile.empty() || OutputFile == "-") {
       // FIXME: Don't fail this way.
       // FIXME: Verify that we can actually seek in the given file.
-      llvm::cerr << "ERROR: PTH requires an seekable file for output!\n";
+      llvm::errs() << "ERROR: PTH requires an seekable file for output!\n";
       ::exit(1);
     }
     OS.reset(ComputeOutFile(InFile, 0, true, OutPath));
@@ -2077,6 +2093,13 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
   
   if (FixItRewrite)
     FixItRewrite->WriteFixedFile(InFile, OutputFile);
+
+  // Disable the consumer prior to the context, the consumer may perform actions
+  // in its destructor which require the context.
+  if (DisableFree)
+    Consumer.take();
+  else
+    Consumer.reset();
   
   // If in -disable-free mode, don't deallocate ASTContext.
   if (DisableFree)
@@ -2103,11 +2126,6 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
   if (ClearSourceMgr)
     PP.getSourceManager().clearIDTables();
 
-  if (DisableFree)
-    Consumer.take();
-  else
-    Consumer.reset();
-
   // Always delete the output stream because we don't want to leak file
   // handles.  Also, we don't want to try to erase an open file.
   OS.reset();
@@ -2122,10 +2140,19 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
 static llvm::cl::list<std::string>
 InputFilenames(llvm::cl::Positional, llvm::cl::desc("<input files>"));
 
+static void LLVMErrorHandler(void *UserData, const std::string &Message) {
+  Diagnostic &Diags = *static_cast<Diagnostic*>(UserData);
+
+  Diags.Report(FullSourceLoc(), diag::err_fe_error_backend) << Message;
+
+  // We cannot recover from llvm errors.
+  exit(1);
+}
+
 int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal();
   llvm::PrettyStackTraceProgram X(argc, argv);
-  llvm::LLVMContext Context;
+  llvm::LLVMContext &Context = llvm::getGlobalContext();
   llvm::cl::ParseCommandLineOptions(argc, argv,
                               "LLVM 'Clang' Compiler: http://clang.llvm.org\n");
   
@@ -2200,6 +2227,11 @@ int main(int argc, char **argv) {
                             OptNoWarnings))
     return 1;
 
+  // Set an error handler, so that any LLVM backend diagnostics go through our
+  // error handler.
+  llvm::llvm_install_error_handler(LLVMErrorHandler,
+                                   static_cast<void*>(&Diags));
+
   // -I- is a deprecated GCC feature, scan for it and reject it.
   for (unsigned i = 0, e = I_dirs.size(); i != e; ++i) {
     if (I_dirs[i] == "-") {
@@ -2270,16 +2302,16 @@ int main(int argc, char **argv) {
       llvm::raw_ostream *DependencyOS;
       if (DependencyTargets.empty()) {
         // FIXME: Use a proper diagnostic
-        llvm::cerr << "-dependency-file requires at least one -MT option\n";
+        llvm::errs() << "-dependency-file requires at least one -MT option\n";
         HadErrors = true;
         continue;
       }
       std::string ErrStr;
       DependencyOS =
-          new llvm::raw_fd_ostream(DependencyFile.c_str(), false, ErrStr);
+          new llvm::raw_fd_ostream(DependencyFile.c_str(), ErrStr);
       if (!ErrStr.empty()) {
         // FIXME: Use a proper diagnostic
-        llvm::cerr << "unable to open dependency file: " + ErrStr;
+        llvm::errs() << "unable to open dependency file: " + ErrStr;
         HadErrors = true;
         continue;
       }

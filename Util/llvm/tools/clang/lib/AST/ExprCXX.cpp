@@ -17,14 +17,6 @@
 #include "clang/AST/ExprCXX.h"
 using namespace clang;
 
-void CXXConditionDeclExpr::Destroy(ASTContext& C) {
-  // FIXME: Cannot destroy the decl here, because it is linked into the
-  // DeclContext's chain.
-  //getVarDecl()->Destroy(C);
-  this->~CXXConditionDeclExpr();
-  C.Deallocate(this);
-}
-
 //===----------------------------------------------------------------------===//
 //  Child Iterators for iterating over subexpressions/substatements
 //===----------------------------------------------------------------------===//
@@ -131,12 +123,6 @@ Stmt::child_iterator UnresolvedFunctionNameExpr::child_begin() {
 Stmt::child_iterator UnresolvedFunctionNameExpr::child_end() {
   return child_iterator();
 }
-
-UnresolvedFunctionNameExpr* 
-UnresolvedFunctionNameExpr::Clone(ASTContext &C) const {
-  return new (C) UnresolvedFunctionNameExpr(Name, getType(), Loc);
-}
-
 // UnaryTypeTraitExpr
 Stmt::child_iterator UnaryTypeTraitExpr::child_begin() {
   return child_iterator();
@@ -196,11 +182,13 @@ TemplateIdRefExpr::Create(ASTContext &Context, QualType T,
                                      NumTemplateArgs, RAngleLoc);
 }
 
-void TemplateIdRefExpr::Destroy(ASTContext &Context) {
+void TemplateIdRefExpr::DoDestroy(ASTContext &Context) {
   const TemplateArgument *TemplateArgs = getTemplateArgs();
   for (unsigned I = 0; I != NumTemplateArgs; ++I)
     if (Expr *E = TemplateArgs[I].getAsExpr())
       E->Destroy(Context);
+  this->~TemplateIdRefExpr();
+  Context.Deallocate(this);
 }
 
 Stmt::child_iterator TemplateIdRefExpr::child_begin() {
@@ -213,34 +201,87 @@ Stmt::child_iterator TemplateIdRefExpr::child_end() {
   return Stmt::child_iterator();
 }
 
-bool UnaryTypeTraitExpr::EvaluateTrait() const {
+bool UnaryTypeTraitExpr::EvaluateTrait(ASTContext& C) const {
   switch(UTT) {
   default: assert(false && "Unknown type trait or not implemented");
   case UTT_IsPOD: return QueriedType->isPODType();
   case UTT_IsClass: // Fallthrough
   case UTT_IsUnion:
-    if (const RecordType *Record = QueriedType->getAsRecordType()) {
+    if (const RecordType *Record = QueriedType->getAs<RecordType>()) {
       bool Union = Record->getDecl()->isUnion();
       return UTT == UTT_IsUnion ? Union : !Union;
     }
     return false;
   case UTT_IsEnum: return QueriedType->isEnumeralType();
   case UTT_IsPolymorphic:
-    if (const RecordType *Record = QueriedType->getAsRecordType()) {
+    if (const RecordType *Record = QueriedType->getAs<RecordType>()) {
       // Type traits are only parsed in C++, so we've got CXXRecords.
       return cast<CXXRecordDecl>(Record->getDecl())->isPolymorphic();
     }
     return false;
   case UTT_IsAbstract:
-    if (const RecordType *RT = QueriedType->getAsRecordType())
+    if (const RecordType *RT = QueriedType->getAs<RecordType>())
       return cast<CXXRecordDecl>(RT->getDecl())->isAbstract();
     return false;
+  case UTT_IsEmpty:
+    if (const RecordType *Record = QueriedType->getAs<RecordType>()) {
+      return !Record->getDecl()->isUnion()
+          && cast<CXXRecordDecl>(Record->getDecl())->isEmpty();
+    }
+    return false;
   case UTT_HasTrivialConstructor:
-    if (const RecordType *RT = QueriedType->getAsRecordType())
+    // http://gcc.gnu.org/onlinedocs/gcc/Type-Traits.html:
+    //   If __is_pod (type) is true then the trait is true, else if type is
+    //   a cv class or union type (or array thereof) with a trivial default
+    //   constructor ([class.ctor]) then the trait is true, else it is false.
+    if (QueriedType->isPODType())
+      return true;
+    if (const RecordType *RT =
+          C.getBaseElementType(QueriedType)->getAs<RecordType>())
       return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialConstructor();
     return false;
+  case UTT_HasTrivialCopy:
+    // http://gcc.gnu.org/onlinedocs/gcc/Type-Traits.html:
+    //   If __is_pod (type) is true or type is a reference type then
+    //   the trait is true, else if type is a cv class or union type
+    //   with a trivial copy constructor ([class.copy]) then the trait
+    //   is true, else it is false.
+    if (QueriedType->isPODType() || QueriedType->isReferenceType())
+      return true;
+    if (const RecordType *RT = QueriedType->getAs<RecordType>())
+      return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialCopyConstructor();
+    return false;
+  case UTT_HasTrivialAssign:
+    // http://gcc.gnu.org/onlinedocs/gcc/Type-Traits.html:
+    //   If type is const qualified or is a reference type then the
+    //   trait is false. Otherwise if __is_pod (type) is true then the
+    //   trait is true, else if type is a cv class or union type with
+    //   a trivial copy assignment ([class.copy]) then the trait is
+    //   true, else it is false.
+    // Note: the const and reference restrictions are interesting,
+    // given that const and reference members don't prevent a class
+    // from having a trivial copy assignment operator (but do cause
+    // errors if the copy assignment operator is actually used, q.v.
+    // [class.copy]p12).
+
+    if (C.getBaseElementType(QueriedType).isConstQualified())
+      return false;
+    if (QueriedType->isPODType())
+      return true;
+    if (const RecordType *RT = QueriedType->getAs<RecordType>())
+      return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialCopyAssignment();
+    return false;
   case UTT_HasTrivialDestructor:
-    if (const RecordType *RT = QueriedType->getAsRecordType())
+    // http://gcc.gnu.org/onlinedocs/gcc/Type-Traits.html:
+    //   If __is_pod (type) is true or type is a reference type
+    //   then the trait is true, else if type is a cv class or union
+    //   type (or array thereof) with a trivial destructor
+    //   ([class.dtor]) then the trait is true, else it is
+    //   false.
+    if (QueriedType->isPODType() || QueriedType->isReferenceType())
+      return true;
+    if (const RecordType *RT =
+          C.getBaseElementType(QueriedType)->getAs<RecordType>())
       return cast<CXXRecordDecl>(RT->getDecl())->hasTrivialDestructor();
     return false;
   }
@@ -301,9 +342,9 @@ CXXTemporary *CXXTemporary::Create(ASTContext &C,
   return new (C) CXXTemporary(Destructor);
 }
 
-void CXXTemporary::Destroy(ASTContext &C) {
+void CXXTemporary::Destroy(ASTContext &Ctx) {
   this->~CXXTemporary();
-  C.Deallocate(this);
+  Ctx.Deallocate(this);
 }
 
 CXXBindTemporaryExpr *CXXBindTemporaryExpr::Create(ASTContext &C, 
@@ -315,7 +356,7 @@ CXXBindTemporaryExpr *CXXBindTemporaryExpr::Create(ASTContext &C,
   return new (C) CXXBindTemporaryExpr(Temp, SubExpr);
 }
 
-void CXXBindTemporaryExpr::Destroy(ASTContext &C) {
+void CXXBindTemporaryExpr::DoDestroy(ASTContext &C) {
   Temp->Destroy(C);
   this->~CXXBindTemporaryExpr();
   C.Deallocate(this);
@@ -348,14 +389,18 @@ CXXConstructExpr::CXXConstructExpr(ASTContext &C, StmtClass SC, QualType T,
        (T->isDependentType() ||
         CallExpr::hasAnyValueDependentArguments(args, numargs))),
   Constructor(D), Elidable(elidable), Args(0), NumArgs(numargs) {
+    // leave room for default arguments;
+    FunctionDecl *FDecl = cast<FunctionDecl>(D);
+    unsigned NumArgsInProto = FDecl->param_size();
+    NumArgs += (NumArgsInProto - numargs);
     if (NumArgs > 0) {
       Args = new (C) Stmt*[NumArgs];
-      for (unsigned i = 0; i < NumArgs; ++i)
+      for (unsigned i = 0; i < numargs; ++i)
         Args[i] = args[i];
     }
 }
 
-void CXXConstructExpr::Destroy(ASTContext &C) {
+void CXXConstructExpr::DoDestroy(ASTContext &C) {
   DestroyChildren(C);
   if (Args)
     C.Deallocate(Args);
@@ -387,7 +432,7 @@ CXXExprWithTemporaries *CXXExprWithTemporaries::Create(ASTContext &C,
                                         ShouldDestroyTemps);
 }
 
-void CXXExprWithTemporaries::Destroy(ASTContext &C) {
+void CXXExprWithTemporaries::DoDestroy(ASTContext &C) {
   DestroyChildren(C);
   this->~CXXExprWithTemporaries();
   C.Deallocate(this);
@@ -469,20 +514,4 @@ Stmt::child_iterator CXXUnresolvedMemberExpr::child_begin() {
 
 Stmt::child_iterator CXXUnresolvedMemberExpr::child_end() {
   return child_iterator(&Base + 1);
-}
-
-//===----------------------------------------------------------------------===//
-//  Cloners
-//===----------------------------------------------------------------------===//
-
-CXXBoolLiteralExpr* CXXBoolLiteralExpr::Clone(ASTContext &C) const {
-  return new (C) CXXBoolLiteralExpr(Value, getType(), Loc);
-}
-
-CXXNullPtrLiteralExpr* CXXNullPtrLiteralExpr::Clone(ASTContext &C) const {
-  return new (C) CXXNullPtrLiteralExpr(getType(), Loc);
-}
-
-CXXZeroInitValueExpr* CXXZeroInitValueExpr::Clone(ASTContext &C) const {
-  return new (C) CXXZeroInitValueExpr(getType(), TyBeginLoc, RParenLoc);
 }

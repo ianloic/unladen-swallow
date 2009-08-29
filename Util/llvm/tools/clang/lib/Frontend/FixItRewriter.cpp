@@ -16,10 +16,11 @@
 #include "clang/Frontend/FixItRewriter.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
-#include "llvm/ADT/OwningPtr.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
+#include "llvm/ADT/OwningPtr.h"
+#include <cstdio>
+
 using namespace clang;
 
 FixItRewriter::FixItRewriter(Diagnostic &Diags, SourceManager &SourceMgr,
@@ -44,10 +45,8 @@ bool FixItRewriter::WriteFixedFile(const std::string &InFileName,
   llvm::raw_ostream *OutFile;
   if (!OutFileName.empty()) {
     std::string Err;
-    OutFile = new llvm::raw_fd_ostream(OutFileName.c_str(), 
-                                       // set binary mode (critical for Windoze)
-                                       true, 
-                                       Err);
+    OutFile = new llvm::raw_fd_ostream(OutFileName.c_str(), Err,
+                                       llvm::raw_fd_ostream::F_Binary);
     OwnedStream.reset(OutFile);
   } else if (InFileName == "-") {
     OutFile = &llvm::outs();
@@ -57,10 +56,8 @@ bool FixItRewriter::WriteFixedFile(const std::string &InFileName,
     Path.eraseSuffix();
     Path.appendSuffix("fixit." + Suffix);
     std::string Err;
-    OutFile = new llvm::raw_fd_ostream(Path.toString().c_str(), 
-                                       // set binary mode (critical for Windoze)
-                                       true, 
-                                       Err);
+    OutFile = new llvm::raw_fd_ostream(Path.c_str(), Err,
+                                       llvm::raw_fd_ostream::F_Binary);
     OwnedStream.reset(OutFile);
   }  
 
@@ -157,7 +154,7 @@ void FixItRewriter::HandleDiagnostic(Diagnostic::Level DiagLevel,
     const CodeModificationHint &Hint = Info.getCodeModificationHint(Idx);
     if (!Hint.RemoveRange.isValid()) {
       // We're adding code.
-      if (Rewrite.InsertStrBefore(Hint.InsertionLoc, Hint.CodeToInsert))
+      if (Rewrite.InsertTextBefore(Hint.InsertionLoc, Hint.CodeToInsert))
         Failed = true;
       continue;
     }
@@ -173,8 +170,7 @@ void FixItRewriter::HandleDiagnostic(Diagnostic::Level DiagLevel,
     // We're replacing code.
     if (Rewrite.ReplaceText(Hint.RemoveRange.getBegin(),
                             Rewrite.getRangeSize(Hint.RemoveRange),
-                            Hint.CodeToInsert.c_str(),
-                            Hint.CodeToInsert.size()))
+                            Hint.CodeToInsert))
       Failed = true;
   }
 

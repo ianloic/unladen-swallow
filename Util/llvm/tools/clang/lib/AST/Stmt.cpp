@@ -19,6 +19,7 @@
 #include "clang/AST/Type.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
+#include <cstdio>
 using namespace clang;
 
 static struct StmtClassNameTable {
@@ -43,7 +44,7 @@ static StmtClassNameTable &getStmtInfoTableEntry(Stmt::StmtClass E) {
 }
 
 const char *Stmt::getStmtClassName() const {
-  return getStmtInfoTableEntry(sClass).Name;
+  return getStmtInfoTableEntry((StmtClass)sClass).Name;
 }
 
 void Stmt::DestroyChildren(ASTContext &C) {
@@ -51,16 +52,9 @@ void Stmt::DestroyChildren(ASTContext &C) {
     if (Stmt* Child = *I++) Child->Destroy(C);
 }
 
-void Stmt::Destroy(ASTContext &C) {
+void Stmt::DoDestroy(ASTContext &C) {
   DestroyChildren(C);
-  // FIXME: Eventually all Stmts should be allocated with the allocator
-  //  in ASTContext, just like with Decls.
   this->~Stmt();
-  C.Deallocate((void *)this);
-}
-
-void DeclStmt::Destroy(ASTContext &C) {
-  this->~DeclStmt();
   C.Deallocate((void *)this);
 }
 
@@ -99,16 +93,18 @@ bool Stmt::CollectingStats(bool enable) {
   return StatSwitch;
 }
 
-NullStmt* NullStmt::Clone(ASTContext &C) const {
-  return new (C) NullStmt(SemiLoc);
-}
-
-ContinueStmt* ContinueStmt::Clone(ASTContext &C) const {
-  return new (C) ContinueStmt(ContinueLoc);
-}
-
-BreakStmt* BreakStmt::Clone(ASTContext &C) const {
-  return new (C) BreakStmt(BreakLoc);
+void SwitchStmt::DoDestroy(ASTContext &Ctx) {
+  // Destroy the SwitchCase statements in this switch. In the normal
+  // case, this loop will merely decrement the reference counts from 
+  // the Retain() calls in addSwitchCase();
+  SwitchCase *SC = FirstCase;
+  while (SC) {
+    SwitchCase *Next = SC->getNextSwitchCase();
+    SC->Destroy(Ctx);
+    SC = Next;
+  }
+  
+  Stmt::DoDestroy(Ctx);
 }
 
 void CompoundStmt::setStmts(ASTContext &C, Stmt **Stmts, unsigned NumStmts) {
@@ -569,10 +565,10 @@ QualType CXXCatchStmt::getCaughtType() {
   return QualType();
 }
 
-void CXXCatchStmt::Destroy(ASTContext& C) {
+void CXXCatchStmt::DoDestroy(ASTContext& C) {
   if (ExceptionDecl)
     ExceptionDecl->Destroy(C);
-  Stmt::Destroy(C);
+  Stmt::DoDestroy(C);
 }
 
 // CXXTryStmt

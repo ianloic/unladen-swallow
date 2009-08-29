@@ -16,22 +16,25 @@
 #include "clang/Basic/TargetBuiltins.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/LangOptions.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/MC/MCSectionMachO.h"
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
 //  Common code shared among targets.
 //===----------------------------------------------------------------------===//
 
-static void Define(std::vector<char> &Buf, const char *Macro,
-                   const char *Val = "1") {
+static void Define(std::vector<char> &Buf, const llvm::StringRef &Macro,
+                   const llvm::StringRef &Val = "1") {
   const char *Def = "#define ";
   Buf.insert(Buf.end(), Def, Def+strlen(Def));
-  Buf.insert(Buf.end(), Macro, Macro+strlen(Macro));
+  Buf.insert(Buf.end(), Macro.begin(), Macro.end());
   Buf.push_back(' ');
-  Buf.insert(Buf.end(), Val, Val+strlen(Val));
+  Buf.insert(Buf.end(), Val.begin(), Val.end());
   Buf.push_back('\n');
 }
 
@@ -51,91 +54,34 @@ static void DefineStd(std::vector<char> &Buf, const char *MacroName,
   llvm::SmallString<20> TmpStr;
   TmpStr = "__";
   TmpStr += MacroName;
-  Define(Buf, TmpStr.c_str());
+  Define(Buf, TmpStr.str());
 
   // Define __unix__.
   TmpStr += "__";
-  Define(Buf, TmpStr.c_str());
+  Define(Buf, TmpStr.str());
 }
 
 //===----------------------------------------------------------------------===//
 // Defines specific to certain operating systems.
 //===----------------------------------------------------------------------===//
+
 namespace {
 template<typename TgtInfo>
 class OSTargetInfo : public TgtInfo {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                             std::vector<char> &Defines) const=0;
 public:
   OSTargetInfo(const std::string& triple) : TgtInfo(triple) {}
   virtual void getTargetDefines(const LangOptions &Opts,
                                 std::vector<char> &Defines) const {
     TgtInfo::getTargetDefines(Opts, Defines);
-    getOSDefines(Opts, TgtInfo::getTargetTriple(), Defines);
+    getOSDefines(Opts, TgtInfo::getTriple(), Defines);
   }
 
 };
-}
+} // end anonymous namespace
 
-namespace {
-/// getDarwinNumber - Parse the 'darwin number' out of the specific targe
-/// triple.  For example, if we have darwin8.5 return 8,5,0.  If any entry is
-/// not defined, return 0's.  Return true if we have -darwin in the string or
-/// false otherwise.
-static bool getDarwinNumber(const char *Triple, unsigned &Maj, unsigned &Min, unsigned &Revision) {
-  Maj = Min = Revision = 0;
-  const char *Darwin = strstr(Triple, "-darwin");
-  if (Darwin == 0) return false;
-
-  Darwin += strlen("-darwin");
-  if (Darwin[0] < '0' || Darwin[0] > '9')
-    return true;
-
-  Maj = Darwin[0]-'0';
-  ++Darwin;
-
-  // Handle "darwin11".
-  if (Maj == 1 && Darwin[0] >= '0' && Darwin[0] <= '9') {
-    Maj = Maj*10 + (Darwin[0] - '0');
-    ++Darwin;
-  }
-
-  // Handle minor version: 10.4.9 -> darwin8.9 -> "1049"
-  if (Darwin[0] != '.')
-    return true;
-
-  ++Darwin;
-  if (Darwin[0] < '0' || Darwin[0] > '9')
-    return true;
-
-  Min = Darwin[0]-'0';
-  ++Darwin;
-
-  // Handle 10.4.11 -> darwin8.11
-  if (Min == 1 && Darwin[0] >= '0' && Darwin[0] <= '9') {
-    Min = Min*10 + (Darwin[0] - '0');
-    ++Darwin;
-  }
-
-  // Handle revision darwin8.9.1
-  if (Darwin[0] != '.')
-    return true;
-
-  ++Darwin;
-  if (Darwin[0] < '0' || Darwin[0] > '9')
-    return true;
-
-  Revision = Darwin[0]-'0';
-  ++Darwin;
-
-  if (Revision == 1 && Darwin[0] >= '0' && Darwin[0] <= '9') {
-    Revision = Revision*10 + (Darwin[0] - '0');
-    ++Darwin;
-  }
-
-  return true;
-}
 
 static void getDarwinDefines(std::vector<char> &Defs, const LangOptions &Opts) {
   Define(Defs, "__APPLE_CC__", "5621");
@@ -158,68 +104,78 @@ static void getDarwinDefines(std::vector<char> &Defs, const LangOptions &Opts) {
     Define(Defs, "__DYNAMIC__");
 }
 
-static void getDarwinOSXDefines(std::vector<char> &Defs, const char *Triple) {
+static void getDarwinOSXDefines(std::vector<char> &Defs,
+                                const llvm::Triple &Triple) {
+  if (Triple.getOS() != llvm::Triple::Darwin)
+    return;
+  
   // Figure out which "darwin number" the target triple is.  "darwin9" -> 10.5.
   unsigned Maj, Min, Rev;
-  if (getDarwinNumber(Triple, Maj, Min, Rev)) {
-    char MacOSXStr[] = "1000";
-    if (Maj >= 4 && Maj <= 13) { // 10.0-10.9
-      // darwin7 -> 1030, darwin8 -> 1040, darwin9 -> 1050, etc.
-      MacOSXStr[2] = '0' + Maj-4;
-    }
-
-    // Handle minor version: 10.4.9 -> darwin8.9 -> "1049"
-    // Cap 10.4.11 -> darwin8.11 -> "1049"
-    MacOSXStr[3] = std::min(Min, 9U)+'0';
-    Define(Defs, "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", MacOSXStr);
+  Triple.getDarwinNumber(Maj, Min, Rev);
+  
+  char MacOSXStr[] = "1000";
+  if (Maj >= 4 && Maj <= 13) { // 10.0-10.9
+    // darwin7 -> 1030, darwin8 -> 1040, darwin9 -> 1050, etc.
+    MacOSXStr[2] = '0' + Maj-4;
   }
+
+  // Handle minor version: 10.4.9 -> darwin8.9 -> "1049"
+  // Cap 10.4.11 -> darwin8.11 -> "1049"
+  MacOSXStr[3] = std::min(Min, 9U)+'0';
+  Define(Defs, "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", MacOSXStr);
 }
 
 static void getDarwinIPhoneOSDefines(std::vector<char> &Defs,
-                                     const char *Triple) {
+                                     const llvm::Triple &Triple) {
+  if (Triple.getOS() != llvm::Triple::Darwin)
+    return;
+  
   // Figure out which "darwin number" the target triple is.  "darwin9" -> 10.5.
   unsigned Maj, Min, Rev;
-  if (getDarwinNumber(Triple, Maj, Min, Rev)) {
-    // When targetting iPhone OS, interpret the minor version and
-    // revision as the iPhone OS version
-    char iPhoneOSStr[] = "10000";
-    if (Min >= 2 && Min <= 9) { // iPhone OS 2.0-9.0
-      // darwin9.2.0 -> 20000, darwin9.3.0 -> 30000, etc.
-      iPhoneOSStr[0] = '0' + Min;
-    }
-
-    // Handle minor version: 2.2 -> darwin9.2.2 -> 20200
-    iPhoneOSStr[2] = std::min(Rev, 9U)+'0';
-    Define(Defs, "__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__",
-           iPhoneOSStr);
+  Triple.getDarwinNumber(Maj, Min, Rev);
+  
+  // When targetting iPhone OS, interpret the minor version and
+  // revision as the iPhone OS version
+  char iPhoneOSStr[] = "10000";
+  if (Min >= 2 && Min <= 9) { // iPhone OS 2.0-9.0
+    // darwin9.2.0 -> 20000, darwin9.3.0 -> 30000, etc.
+    iPhoneOSStr[0] = '0' + Min;
   }
+
+  // Handle minor version: 2.2 -> darwin9.2.2 -> 20200
+  iPhoneOSStr[2] = std::min(Rev, 9U)+'0';
+  Define(Defs, "__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__",
+         iPhoneOSStr);
 }
 
 /// GetDarwinLanguageOptions - Set the default language options for darwin.
 static void GetDarwinLanguageOptions(LangOptions &Opts,
-                                     const char *Triple) {
+                                     const llvm::Triple &Triple) {
   Opts.NeXTRuntime = true;
-
-  unsigned Maj, Min, Rev;
-  if (!getDarwinNumber(Triple, Maj, Min, Rev))
+  
+  if (Triple.getOS() != llvm::Triple::Darwin)
     return;
 
+  unsigned MajorVersion = Triple.getDarwinMajorNumber();
+
   // Blocks and stack protectors default to on for 10.6 (darwin10) and beyond.
-  if (Maj > 9) {
+  if (MajorVersion > 9) {
     Opts.Blocks = 1;
     Opts.setStackProtectorMode(LangOptions::SSPOn);
   }
 
   // Non-fragile ABI (in 64-bit mode) default to on for 10.5 (darwin9) and
   // beyond.
-  if (Maj >= 9 && Opts.ObjC1 && !strncmp(Triple, "x86_64", 6))
+  if (MajorVersion >= 9 && Opts.ObjC1 &&
+      Triple.getArch() == llvm::Triple::x86_64)
     Opts.ObjCNonFragileABI = 1;
 }
 
+namespace {
 template<typename Target>
 class DarwinTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     std::vector<char> &Defines) const {
     getDarwinDefines(Defines, Opts);
     getDarwinOSXDefines(Defines, Triple);
@@ -230,21 +186,13 @@ protected:
   /// options.
   virtual void getDefaultLangOptions(LangOptions &Opts) {
     TargetInfo::getDefaultLangOptions(Opts);
-    GetDarwinLanguageOptions(Opts, TargetInfo::getTargetTriple());
+    GetDarwinLanguageOptions(Opts, TargetInfo::getTriple());
   }
 public:
   DarwinTargetInfo(const std::string& triple) :
     OSTargetInfo<Target>(triple) {
       this->TLSSupported = false;
     }
-
-  virtual const char *getCFStringSymbolPrefix() const {
-    return "\01L_unnamed_cfstring_";
-  }
-
-  virtual const char *getStringSymbolPrefix(bool IsConstant) const {
-    return IsConstant ? "\01LC" : "\01lC";
-  }
 
   virtual const char *getUnicodeStringSymbolPrefix() const {
     return "__utf16_string_";
@@ -253,13 +201,22 @@ public:
   virtual const char *getUnicodeStringSection() const {
     return "__TEXT,__ustring";
   }
+  
+  virtual std::string isValidSectionSpecifier(const llvm::StringRef &SR) const {
+    // Let MCSectionMachO validate this.
+    llvm::StringRef Segment, Section;
+    unsigned TAA, StubSize;
+    return llvm::MCSectionMachO::ParseSectionSpecifier(SR, Segment, Section,
+                                                       TAA, StubSize);
+  }
 };
+
 
 // DragonFlyBSD Target
 template<typename Target>
 class DragonFlyBSDTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     std::vector<char> &Defs) const {
     // DragonFly defines; list based off of gcc output
     Define(Defs, "__DragonFly__");
@@ -278,11 +235,13 @@ public:
 template<typename Target>
 class FreeBSDTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     std::vector<char> &Defs) const {
     // FreeBSD defines; list based off of gcc output
 
-    const char *FreeBSD = strstr(Triple, "-freebsd");
+    // FIXME: Move version number handling to llvm::Triple.
+    const char *FreeBSD = strstr(Triple.getTriple().c_str(),
+                                 "-freebsd");
     FreeBSD += strlen("-freebsd");
     char release[] = "X";
     release[0] = FreeBSD[0];
@@ -306,7 +265,7 @@ public:
 template<typename Target>
 class LinuxTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                            std::vector<char> &Defs) const {
     // Linux defines; list based off of gcc output
     DefineStd(Defs, "unix", Opts);
@@ -321,11 +280,29 @@ public:
   }
 };
 
+// NetBSD Target
+template<typename Target>
+class NetBSDTargetInfo : public OSTargetInfo<Target> {
+protected:
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    std::vector<char> &Defs) const {
+    // NetBSD defines; list based off of gcc output
+    Define(Defs, "__NetBSD__", "1");
+    Define(Defs, "__unix__", "1");
+    Define(Defs, "__ELF__", "1");
+  }
+public:
+  NetBSDTargetInfo(const std::string &triple) 
+    : OSTargetInfo<Target>(triple) {
+      this->UserLabelPrefix = "";
+    }
+};
+
 // OpenBSD Target
 template<typename Target>
 class OpenBSDTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     std::vector<char> &Defs) const {
     // OpenBSD defines; list based off of gcc output
 
@@ -342,7 +319,7 @@ public:
 template<typename Target>
 class SolarisTargetInfo : public OSTargetInfo<Target> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                                 std::vector<char> &Defs) const {
     DefineStd(Defs, "sun", Opts);
     DefineStd(Defs, "unix", Opts);
@@ -362,7 +339,7 @@ public:
 
 /// GetWindowsLanguageOptions - Set the default language options for Windows.
 static void GetWindowsLanguageOptions(LangOptions &Opts,
-                                     const char *Triple) {
+                                     const llvm::Triple &Triple) {
   Opts.Microsoft = true;
 }
 
@@ -399,9 +376,6 @@ public:
            "  void* overflow_arg_area;"
            "  void* reg_save_area;"
            "} __builtin_va_list[1];";*/
-  }
-  virtual const char *getTargetPrefix() const {
-    return "ppc";
   }
   virtual void getGCCRegNames(const char * const *&Names,
                               unsigned &NumNames) const;
@@ -604,9 +578,6 @@ public:
                                  unsigned &NumRecords) const {
     Records = BuiltinInfo;
     NumRecords = clang::X86::LastTSBuiltin-Builtin::FirstTSBuiltin;
-  }
-  virtual const char *getTargetPrefix() const {
-    return "x86";
   }
   virtual void getGCCRegNames(const char * const *&Names,
                               unsigned &NumNames) const {
@@ -946,7 +917,7 @@ public:
 
   virtual void getDefaultLangOptions(LangOptions &Opts) {
     X86_32TargetInfo::getDefaultLangOptions(Opts);
-    GetWindowsLanguageOptions(Opts, getTargetTriple());
+    GetWindowsLanguageOptions(Opts, getTriple());
   }
 };
 } // end anonymous namespace
@@ -1008,6 +979,7 @@ class ARMTargetInfo : public TargetInfo {
     Armv4t,
     Armv5,
     Armv6,
+    Armv7a,
     XScale
   } ArmArch;
 public:
@@ -1015,7 +987,9 @@ public:
     // FIXME: Are the defaults correct for ARM?
     DescriptionString = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
                         "i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:64:64";
-    if (triple.find("arm-") == 0 || triple.find("armv6-") == 0)
+    if (triple.find("armv7-") == 0)
+      ArmArch = Armv7a;
+    else if (triple.find("arm-") == 0 || triple.find("armv6-") == 0)
       ArmArch = Armv6;
     else if (triple.find("armv5-") == 0)
       ArmArch = Armv5;
@@ -1040,7 +1014,10 @@ public:
     Define(Defs, "__LITTLE_ENDIAN__");
 
     // Subtarget options.
-    if (ArmArch == Armv6) {
+    if (ArmArch == Armv7a) {
+      Define(Defs, "__ARM_ARCH_7A__");
+      Define(Defs, "__THUMB_INTERWORK__");
+    } else if (ArmArch == Armv6) {
       Define(Defs, "__ARM_ARCH_6K__");
       Define(Defs, "__THUMB_INTERWORK__");
     } else if (ArmArch == Armv5) {
@@ -1067,9 +1044,6 @@ public:
   }
   virtual const char *getVAListDeclaration() const {
     return "typedef char* __builtin_va_list;";
-  }
-  virtual const char *getTargetPrefix() const {
-    return "arm";
   }
   virtual void getGCCRegNames(const char * const *&Names,
                               unsigned &NumNames) const {
@@ -1109,7 +1083,7 @@ namespace {
 class DarwinARMTargetInfo : 
   public DarwinTargetInfo<ARMTargetInfo> {
 protected:
-  virtual void getOSDefines(const LangOptions &Opts, const char *Triple,
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     std::vector<char> &Defines) const {
     getDarwinDefines(Defines, Opts);
     getDarwinIPhoneOSDefines(Defines, Triple);
@@ -1143,9 +1117,6 @@ public:
   }
   virtual const char *getVAListDeclaration() const {
     return "typedef void* __builtin_va_list;";
-  }
-  virtual const char *getTargetPrefix() const {
-    return "sparc";
   }
   virtual void getGCCRegNames(const char * const *&Names,
                               unsigned &NumNames) const;
@@ -1264,15 +1235,23 @@ namespace {
       Define(Defines, "__pic16");
       Define(Defines, "rom", "__attribute__((address_space(1)))");
       Define(Defines, "ram", "__attribute__((address_space(0)))");
-      Define(Defines, "_section(SectName)", "__attribute__((section(SectName)))");
-      Define(Defines, "_address(Addr)","__attribute__((section(\"Address=\"#Addr)))");
+      Define(Defines, "_section(SectName)", 
+             "__attribute__((section(SectName)))");
+      Define(Defines, "_address(Addr)",
+             "__attribute__((section(\"Address=\"#Addr)))");
       Define(Defines, "_CONFIG(conf)", "asm(\"CONFIG \"#conf)");
+      Define(Defines, "_interrupt",
+             "__attribute__((section(\"interrupt=0x4\"))) \
+             __attribute__((used))");
     }
     virtual void getTargetBuiltins(const Builtin::Info *&Records,
                                    unsigned &NumRecords) const {}
-    virtual const char *getVAListDeclaration() const { return "";}
-    virtual const char *getClobbers() const {return "";}
-    virtual const char *getTargetPrefix() const {return "pic16";}
+    virtual const char *getVAListDeclaration() const { 
+      return "";
+    }
+    virtual const char *getClobbers() const {
+      return "";
+    }
     virtual void getGCCRegNames(const char * const *&Names,
                                 unsigned &NumNames) const {}
     virtual bool validateAsmConstraint(const char *&Name,
@@ -1317,9 +1296,6 @@ namespace {
       Records = 0;
       NumRecords = 0;
     }
-    virtual const char *getTargetPrefix() const {
-      return "msp430";
-    }
     virtual void getGCCRegNames(const char * const *&Names,
                                 unsigned &NumNames) const;
     virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
@@ -1356,93 +1332,303 @@ namespace {
 }
 
 
+namespace {
+  class SystemZTargetInfo : public TargetInfo {
+    static const char * const GCCRegNames[];
+  public:
+    SystemZTargetInfo(const std::string& triple) : TargetInfo(triple) {
+      TLSSupported = false;
+      IntWidth = IntAlign = 32;
+      LongWidth = LongLongWidth = LongAlign = LongLongAlign = 64;
+      PointerWidth = PointerAlign = 64;
+      DescriptionString = "E-p:64:64:64-i8:8:16-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-f128:128:128-a0:16:16";
+   }
+    virtual void getTargetDefines(const LangOptions &Opts,
+                                 std::vector<char> &Defines) const {
+      Define(Defines, "__s390__");
+      Define(Defines, "__s390x__");
+    }
+    virtual void getTargetBuiltins(const Builtin::Info *&Records,
+                                   unsigned &NumRecords) const {
+      // FIXME: Implement.
+      Records = 0;
+      NumRecords = 0;
+    }
+
+    virtual void getDefaultLangOptions(LangOptions &Opts) {
+      TargetInfo::getDefaultLangOptions(Opts);
+      Opts.CharIsSigned = false;
+    }
+
+    virtual void getGCCRegNames(const char * const *&Names,
+                                unsigned &NumNames) const;
+    virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                  unsigned &NumAliases) const {
+      // No aliases.
+      Aliases = 0;
+      NumAliases = 0;
+    }
+    virtual bool validateAsmConstraint(const char *&Name,
+                                       TargetInfo::ConstraintInfo &info) const {
+      // FIXME: implement
+      return true;
+    }
+    virtual const char *getClobbers() const {
+      // FIXME: Is this really right?
+      return "";
+    }
+    virtual const char *getVAListDeclaration() const {
+      // FIXME: implement
+      return "typedef char* __builtin_va_list;";
+   }
+  };
+
+  const char * const SystemZTargetInfo::GCCRegNames[] = {
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+  };
+
+  void SystemZTargetInfo::getGCCRegNames(const char * const *&Names,
+                                         unsigned &NumNames) const {
+    Names = GCCRegNames;
+    NumNames = llvm::array_lengthof(GCCRegNames);
+  }
+}
+
+namespace {
+  class BlackfinTargetInfo : public TargetInfo {
+    static const char * const GCCRegNames[];
+  public:
+    BlackfinTargetInfo(const std::string& triple) : TargetInfo(triple) {
+      TLSSupported = false;
+      DoubleAlign = 32;
+      LongLongAlign = 32;
+      LongDoubleAlign = 32;
+      DescriptionString = "e-p:32:32-i64:32-f64:32";
+    }
+
+    virtual void getTargetDefines(const LangOptions &Opts,
+                                  std::vector<char> &Defines) const {
+      DefineStd(Defines, "bfin", Opts);
+      DefineStd(Defines, "BFIN", Opts);
+      Define(Defines, "__ADSPBLACKFIN__");
+      // FIXME: This one is really dependent on -mcpu
+      Define(Defines, "__ADSPLPBLACKFIN__");
+      // FIXME: Add cpu-dependent defines and __SILICON_REVISION__
+    }
+
+    virtual void getTargetBuiltins(const Builtin::Info *&Records,
+                                   unsigned &NumRecords) const {
+      // FIXME: Implement.
+      Records = 0;
+      NumRecords = 0;
+    }
+
+    virtual void getGCCRegNames(const char * const *&Names,
+                                unsigned &NumNames) const;
+
+    virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                  unsigned &NumAliases) const {
+      // No aliases.
+      Aliases = 0;
+      NumAliases = 0;
+    }
+
+    virtual bool validateAsmConstraint(const char *&Name,
+                                       TargetInfo::ConstraintInfo &Info) const {
+      if (strchr("adzDWeABbvfcCtukxywZY", Name[0])) {
+        Info.setAllowsRegister();
+        return true;
+      }
+      return false;
+    }
+
+    virtual const char *getClobbers() const {
+      return "";
+    }
+
+    virtual const char *getVAListDeclaration() const {
+      return "typedef char* __builtin_va_list;";
+    }
+  };
+
+  const char * const BlackfinTargetInfo::GCCRegNames[] = {
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+    "p0", "p1", "p2", "p3", "p4", "p5", "sp", "fp",
+    "i0", "i1", "i2", "i3", "b0", "b1", "b2", "b3",
+    "l0", "l1", "l2", "l3", "m0", "m1", "m2", "m3",
+    "a0", "a1", "cc",
+    "rets", "reti", "retx", "retn", "rete", "astat", "seqstat", "usp",
+    "argp", "lt0", "lt1", "lc0", "lc1", "lb0", "lb1"
+  };
+
+  void BlackfinTargetInfo::getGCCRegNames(const char * const *&Names,
+                                          unsigned &NumNames) const {
+    Names = GCCRegNames;
+    NumNames = llvm::array_lengthof(GCCRegNames);
+  }
+}
+
+namespace {
+
+  // LLVM and Clang cannot be used directly to output native binaries for 
+  // target, but is used to compile C code to llvm bitcode with correct 
+  // type and alignment information.
+  // 
+  // TCE uses the llvm bitcode as input and uses it for generating customized 
+  // target processor and program binary. TCE co-design environment is 
+  // publicly available in http://tce.cs.tut.fi
+
+  class TCETargetInfo : public TargetInfo{
+  public:
+    TCETargetInfo(const std::string& triple) : TargetInfo(triple) {
+      TLSSupported = false;
+      IntWidth = 32;
+      LongWidth = LongLongWidth = 32;
+      IntMaxTWidth = 32;
+      PointerWidth = 32;
+      IntAlign = 32;
+      LongAlign = LongLongAlign = 32;
+      PointerAlign = 32;
+      SizeType = UnsignedInt;
+      IntMaxType = SignedLong;
+      UIntMaxType = UnsignedLong;
+      IntPtrType = SignedInt;
+      PtrDiffType = SignedInt;
+      FloatWidth = 32;
+      FloatAlign = 32;
+      DoubleWidth = 32;
+      DoubleAlign = 32;
+      LongDoubleWidth = 32;
+      LongDoubleAlign = 32;
+      FloatFormat = &llvm::APFloat::IEEEsingle;
+      DoubleFormat = &llvm::APFloat::IEEEsingle;
+      LongDoubleFormat = &llvm::APFloat::IEEEsingle;
+      DescriptionString = "E-p:32:32:32-a0:32:32"
+                          "-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:32:64"
+                          "-f32:32:32-f64:32:64";
+    }
+
+    virtual void getTargetDefines(const LangOptions &Opts,
+                                  std::vector<char> &Defines) const {
+      DefineStd(Defines, "tce", Opts);
+      Define(Defines, "__TCE__");
+      Define(Defines, "__TCE_V1__");
+    }
+    virtual void getTargetBuiltins(const Builtin::Info *&Records,
+                                   unsigned &NumRecords) const {}
+    virtual const char *getClobbers() const {
+      return "";
+    }
+    virtual const char *getVAListDeclaration() const {
+      return "typedef void* __builtin_va_list;";
+    }
+    virtual void getGCCRegNames(const char * const *&Names,
+                                unsigned &NumNames) const {}
+    virtual bool validateAsmConstraint(const char *&Name,
+                                       TargetInfo::ConstraintInfo &info) const {
+      return true;
+    }
+    virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                  unsigned &NumAliases) const {}
+  };
+}
+
 //===----------------------------------------------------------------------===//
 // Driver code
 //===----------------------------------------------------------------------===//
 
-static inline bool IsX86(const std::string& TT) {
-  return (TT.size() >= 5 && TT[0] == 'i' && TT[2] == '8' && TT[3] == '6' &&
-          TT[4] == '-' && TT[1] - '3' < 6);
-}
-
 /// CreateTargetInfo - Return the target info object for the specified target
 /// triple.
 TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
-  // OS detection; this isn't really anywhere near complete.
-  // Additions and corrections are welcome.
-  bool isDarwin = T.find("-darwin") != std::string::npos;
-  bool isDragonFly = T.find("-dragonfly") != std::string::npos;
-  bool isOpenBSD = T.find("-openbsd") != std::string::npos;
-  bool isFreeBSD = T.find("-freebsd") != std::string::npos;
-  bool isSolaris = T.find("-solaris") != std::string::npos;
-  bool isLinux = T.find("-linux") != std::string::npos;
-  bool isWindows = T.find("-windows") != std::string::npos ||
-                   T.find("-win32") != std::string::npos ||
-                   T.find("-mingw") != std::string::npos;
+  llvm::Triple Triple(T);
+  llvm::Triple::OSType os = Triple.getOS();
 
-  if (T.find("ppc-") == 0 || T.find("powerpc-") == 0) {
-    if (isDarwin)
-      return new DarwinTargetInfo<PPCTargetInfo>(T);
-    return new PPC32TargetInfo(T);
-  }
+  switch (Triple.getArch()) {
+  default:
+    return NULL;
 
-  if (T.find("ppc64-") == 0 || T.find("powerpc64-") == 0) {
-    if (isDarwin)
-      return new DarwinTargetInfo<PPC64TargetInfo>(T);
-    return new PPC64TargetInfo(T);
-  }
-
-  if (T.find("armv") == 0 || T.find("arm-") == 0 || T.find("xscale") == 0) {
-    if (isDarwin)
+  case llvm::Triple::arm:
+    switch (os) {
+    case llvm::Triple::Darwin:
       return new DarwinARMTargetInfo(T);
-    if (isFreeBSD)
+    case llvm::Triple::FreeBSD:
       return new FreeBSDTargetInfo<ARMTargetInfo>(T);
-    return new ARMTargetInfo(T);
-  }
+    default:
+      return new ARMTargetInfo(T);
+    }
 
-  if (T.find("sparc-") == 0) {
-    if (isSolaris)
-      return new SolarisSparcV8TargetInfo(T);
-    return new SparcV8TargetInfo(T);
-  }
+  case llvm::Triple::bfin:
+    return new BlackfinTargetInfo(T);
 
-  if (T.find("x86_64-") == 0 || T.find("amd64-") == 0) {
-    if (isDarwin)
-      return new DarwinX86_64TargetInfo(T);
-    if (isLinux)
-      return new LinuxTargetInfo<X86_64TargetInfo>(T);
-    if (isOpenBSD)
-      return new OpenBSDX86_64TargetInfo(T);
-    if (isFreeBSD)
-      return new FreeBSDTargetInfo<X86_64TargetInfo>(T);
-    if (isSolaris)
-      return new SolarisTargetInfo<X86_64TargetInfo>(T);
-    return new X86_64TargetInfo(T);
-  }
-
-  if (T.find("pic16-") == 0)
-    return new PIC16TargetInfo(T);
-
-  if (T.find("msp430-") == 0)
+  case llvm::Triple::msp430:
     return new MSP430TargetInfo(T);
 
-  if (IsX86(T)) {
-    if (isDarwin)
-      return new DarwinI386TargetInfo(T);
-    if (isLinux)
-      return new LinuxTargetInfo<X86_32TargetInfo>(T);
-    if (isDragonFly)
-      return new DragonFlyBSDTargetInfo<X86_32TargetInfo>(T);
-    if (isOpenBSD)
-      return new OpenBSDI386TargetInfo(T);
-    if (isFreeBSD)
-      return new FreeBSDTargetInfo<X86_32TargetInfo>(T);
-    if (isSolaris)
-      return new SolarisTargetInfo<X86_32TargetInfo>(T);
-    if (isWindows)
-      return new WindowsX86_32TargetInfo(T);
-    return new X86_32TargetInfo(T);
-  }
+  case llvm::Triple::pic16:
+    return new PIC16TargetInfo(T);
 
-  return NULL;
+  case llvm::Triple::ppc:
+    if (os == llvm::Triple::Darwin)
+      return new DarwinTargetInfo<PPCTargetInfo>(T);
+    return new PPC32TargetInfo(T);
+
+  case llvm::Triple::ppc64:
+    if (os == llvm::Triple::Darwin)
+      return new DarwinTargetInfo<PPC64TargetInfo>(T);
+    return new PPC64TargetInfo(T);
+
+  case llvm::Triple::sparc:
+    if (os == llvm::Triple::Solaris)
+      return new SolarisSparcV8TargetInfo(T);
+    return new SparcV8TargetInfo(T);
+
+  case llvm::Triple::systemz:
+    return new SystemZTargetInfo(T);
+
+  case llvm::Triple::tce:
+    return new TCETargetInfo(T);
+
+  case llvm::Triple::x86:
+    switch (os) {
+    case llvm::Triple::Darwin:
+      return new DarwinI386TargetInfo(T);
+    case llvm::Triple::Linux:
+      return new LinuxTargetInfo<X86_32TargetInfo>(T);
+    case llvm::Triple::DragonFly:
+      return new DragonFlyBSDTargetInfo<X86_32TargetInfo>(T);
+    case llvm::Triple::NetBSD:
+      return new NetBSDTargetInfo<X86_32TargetInfo>(T);
+    case llvm::Triple::OpenBSD:
+      return new OpenBSDI386TargetInfo(T);
+    case llvm::Triple::FreeBSD:
+      return new FreeBSDTargetInfo<X86_32TargetInfo>(T);
+    case llvm::Triple::Solaris:
+      return new SolarisTargetInfo<X86_32TargetInfo>(T);
+    case llvm::Triple::Cygwin:
+    case llvm::Triple::MinGW32:
+    case llvm::Triple::MinGW64:
+    case llvm::Triple::Win32:
+      return new WindowsX86_32TargetInfo(T);
+    default:
+      return new X86_32TargetInfo(T);
+    }
+
+  case llvm::Triple::x86_64:
+    switch (os) {
+    case llvm::Triple::Darwin:
+      return new DarwinX86_64TargetInfo(T);
+    case llvm::Triple::Linux:
+      return new LinuxTargetInfo<X86_64TargetInfo>(T);
+    case llvm::Triple::NetBSD:
+      return new NetBSDTargetInfo<X86_64TargetInfo>(T);
+    case llvm::Triple::OpenBSD:
+      return new OpenBSDX86_64TargetInfo(T);
+    case llvm::Triple::FreeBSD:
+      return new FreeBSDTargetInfo<X86_64TargetInfo>(T);
+    case llvm::Triple::Solaris:
+      return new SolarisTargetInfo<X86_64TargetInfo>(T);
+    default:
+      return new X86_64TargetInfo(T);
+    }
+  }
 }

@@ -25,9 +25,13 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include <iostream>
+#include "llvm/System/Host.h"
 #include <memory>
 using namespace llvm;
+
+namespace llvm {
+  Triple TargetTriple;
+}
 
 // Anonymous namespace to define command line options for debugging.
 //
@@ -89,6 +93,20 @@ Module *llvm::ParseInputFile(const std::string &Filename,
     Result = 0;
   }
   
+  // If we don't have an override triple, use the first one to configure
+  // bugpoint, or use the host triple if none provided.
+  if (Result) {
+    if (TargetTriple.getTriple().empty()) {
+      Triple TheTriple(Result->getTargetTriple());
+
+      if (TheTriple.getTriple().empty())
+        TheTriple.setTriple(sys::getHostTriple());
+        
+      TargetTriple.setTriple(TheTriple.getTriple());
+    }
+
+    Result->setTargetTriple(TargetTriple.getTriple());  // override the triple
+  }
   return Result;
 }
 
@@ -107,28 +125,28 @@ bool BugDriver::addSources(const std::vector<std::string> &Filenames) {
     if (Program == 0) return true;
     
     if (!run_as_child)
-      std::cout << "Read input file      : '" << Filenames[0] << "'\n";
+      outs() << "Read input file      : '" << Filenames[0] << "'\n";
 
     for (unsigned i = 1, e = Filenames.size(); i != e; ++i) {
       std::auto_ptr<Module> M(ParseInputFile(Filenames[i], Context));
       if (M.get() == 0) return true;
 
       if (!run_as_child)
-        std::cout << "Linking in input file: '" << Filenames[i] << "'\n";
+        outs() << "Linking in input file: '" << Filenames[i] << "'\n";
       std::string ErrorMessage;
       if (Linker::LinkModules(Program, M.get(), &ErrorMessage)) {
-        std::cerr << ToolName << ": error linking in '" << Filenames[i] << "': "
-                  << ErrorMessage << '\n';
+        errs() << ToolName << ": error linking in '" << Filenames[i] << "': "
+               << ErrorMessage << '\n';
         return true;
       }
     }
   } catch (const std::string &Error) {
-    std::cerr << ToolName << ": error reading input '" << Error << "'\n";
+    errs() << ToolName << ": error reading input '" << Error << "'\n";
     return true;
   }
 
   if (!run_as_child)
-    std::cout << "*** All input ok\n";
+    outs() << "*** All input ok\n";
 
   // All input files read successfully!
   return false;
@@ -162,7 +180,7 @@ bool BugDriver::run() {
   // file, then we know the compiler didn't crash, so try to diagnose a 
   // miscompilation.
   if (!PassesToRun.empty()) {
-    std::cout << "Running selected passes on program to test for crash: ";
+    outs() << "Running selected passes on program to test for crash: ";
     if (runPasses(PassesToRun))
       return debugOptimizerCrash();
   }
@@ -171,12 +189,12 @@ bool BugDriver::run() {
   if (initializeExecutionEnvironment()) return true;
 
   // Test to see if we have a code generator crash.
-  std::cout << "Running the code generator to test for a crash: ";
+  outs() << "Running the code generator to test for a crash: ";
   try {
     compileProgram(Program);
-    std::cout << '\n';
+    outs() << '\n';
   } catch (ToolExecutionError &TEE) {
-    std::cout << TEE.what();
+    outs() << TEE.what();
     return debugCodeGeneratorCrash();
   }
 
@@ -187,7 +205,7 @@ bool BugDriver::run() {
   //
   bool CreatedOutput = false;
   if (ReferenceOutputFile.empty()) {
-    std::cout << "Generating reference output from raw program: ";
+    outs() << "Generating reference output from raw program: ";
     if(!createReferenceFile(Program)){
       return debugCodeGeneratorCrash();
     }
@@ -197,28 +215,28 @@ bool BugDriver::run() {
   // Make sure the reference output file gets deleted on exit from this
   // function, if appropriate.
   sys::Path ROF(ReferenceOutputFile);
-  FileRemover RemoverInstance(ROF, CreatedOutput);
+  FileRemover RemoverInstance(ROF, CreatedOutput && !SaveTemps);
 
   // Diff the output of the raw program against the reference output.  If it
   // matches, then we assume there is a miscompilation bug and try to 
   // diagnose it.
-  std::cout << "*** Checking the code generator...\n";
+  outs() << "*** Checking the code generator...\n";
   try {
     if (!diffProgram()) {
-      std::cout << "\n*** Debugging miscompilation!\n";
+      outs() << "\n*** Output matches: Debugging miscompilation!\n";
       return debugMiscompilation();
     }
   } catch (ToolExecutionError &TEE) {
-    std::cerr << TEE.what();
+    errs() << TEE.what();
     return debugCodeGeneratorCrash();
   }
 
-  std::cout << "\n*** Input program does not match reference diff!\n";
-  std::cout << "Debugging code generator problem!\n";
+  outs() << "\n*** Input program does not match reference diff!\n";
+  outs() << "Debugging code generator problem!\n";
   try {
     return debugCodeGenerator();
   } catch (ToolExecutionError &TEE) {
-    std::cerr << TEE.what();
+    errs() << TEE.what();
     return debugCodeGeneratorCrash();
   }
 }
@@ -227,18 +245,18 @@ void llvm::PrintFunctionList(const std::vector<Function*> &Funcs) {
   unsigned NumPrint = Funcs.size();
   if (NumPrint > 10) NumPrint = 10;
   for (unsigned i = 0; i != NumPrint; ++i)
-    std::cout << " " << Funcs[i]->getName();
+    outs() << " " << Funcs[i]->getName();
   if (NumPrint < Funcs.size())
-    std::cout << "... <" << Funcs.size() << " total>";
-  std::cout << std::flush;
+    outs() << "... <" << Funcs.size() << " total>";
+  outs().flush();
 }
 
 void llvm::PrintGlobalVariableList(const std::vector<GlobalVariable*> &GVs) {
   unsigned NumPrint = GVs.size();
   if (NumPrint > 10) NumPrint = 10;
   for (unsigned i = 0; i != NumPrint; ++i)
-    std::cout << " " << GVs[i]->getName();
+    outs() << " " << GVs[i]->getName();
   if (NumPrint < GVs.size())
-    std::cout << "... <" << GVs.size() << " total>";
-  std::cout << std::flush;
+    outs() << "... <" << GVs.size() << " total>";
+  outs().flush();
 }

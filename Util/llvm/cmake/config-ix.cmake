@@ -1,7 +1,6 @@
 
 # include checks
 include(CheckIncludeFile)
-check_include_file(alloca.h HAVE_ALLOCA_H)
 check_include_file(argz.h HAVE_ARGZ_H)
 check_include_file(assert.h HAVE_ASSERT_H)
 check_include_file(dirent.h HAVE_DIRENT_H)
@@ -51,7 +50,6 @@ check_library_exists(dl dlopen "" HAVE_LIBDL)
 # function checks
 include(CheckSymbolExists)
 include(CheckFunctionExists)
-check_symbol_exists(alloca alloca.h HAVE_ALLOCA)
 check_symbol_exists(getpagesize unistd.h HAVE_GETPAGESIZE)
 check_symbol_exists(getrusage sys/resource.h HAVE_GETRUSAGE)
 check_symbol_exists(setrlimit sys/resource.h HAVE_SETRLIMIT)
@@ -65,6 +63,9 @@ check_symbol_exists(floorf math.h HAVE_FLOORF)
 check_symbol_exists(mallinfo malloc.h HAVE_MALLINFO)
 check_symbol_exists(malloc_zone_statistics malloc/malloc.h
                     HAVE_MALLOC_ZONE_STATISTICS)
+check_symbol_exists(mkdtemp unistd.h HAVE_MKDTEMP)
+check_symbol_exists(mkstemp unistd.h HAVE_MKSTEMP)
+check_symbol_exists(mktemp unistd.h HAVE_MKTEMP)
 check_symbol_exists(pthread_mutex_lock pthread.h HAVE_PTHREAD_MUTEX_LOCK)
 check_symbol_exists(strtoll stdlib.h HAVE_STRTOLL)
 check_symbol_exists(strerror string.h HAVE_STRERROR)
@@ -76,8 +77,15 @@ if( LLVM_USING_GLIBC )
   add_llvm_definitions( -D_GNU_SOURCE )
 endif()
 
+# Define LLVM_MULTITHREADED if gcc atomic builtins exists.
+include(CheckAtomic)
+
 include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-fPIC" SUPPORTS_FPIC_FLAG)
+# On windows all code is position-independent and mingw warns if -fPIC
+# is in the command-line.
+if( NOT WIN32 )
+  check_cxx_compiler_flag("-fPIC" SUPPORTS_FPIC_FLAG)
+endif()
 
 include(GetTargetTriple)
 get_target_triple(LLVM_HOSTTRIPLE)
@@ -98,8 +106,6 @@ elseif (LLVM_NATIVE_ARCH MATCHES "powerpc")
   set(LLVM_NATIVE_ARCH PowerPC)
 elseif (LLVM_NATIVE_ARCH MATCHES "alpha")
   set(LLVM_NATIVE_ARCH Alpha)
-elseif (LLVM_NATIVE_ARCH MATCHES "ia64")
-  set(LLVM_NATIVE_ARCH IA64)
 elseif (LLVM_NATIVE_ARCH MATCHES "arm")
   set(LLVM_NATIVE_ARCH ARM)
 elseif (LLVM_NATIVE_ARCH MATCHES "mips")
@@ -172,11 +178,6 @@ endif()
 configure_file(
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Config/config.h.cmake
   ${LLVM_BINARY_DIR}/include/llvm/Config/config.h
-  )
-
-configure_file(
-  ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT/iterator.cmake
-  ${LLVM_BINARY_DIR}/include/llvm/ADT/iterator.h
   )
 
 configure_file(

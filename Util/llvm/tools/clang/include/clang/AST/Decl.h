@@ -16,6 +16,7 @@
 
 #include "clang/AST/APValue.h"
 #include "clang/AST/DeclBase.h"
+#include "clang/AST/Redeclarable.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/ExternalASTSource.h"
 
@@ -27,7 +28,28 @@ class CompoundStmt;
 class StringLiteral;
 class TemplateArgumentList;
 class FunctionTemplateSpecializationInfo;
-  
+class TypeLoc;
+
+/// \brief A container of type source information.
+///
+/// A client can read the relevant info using TypeLoc wrappers, e.g:
+/// @code
+/// TypeLoc TL = DeclaratorInfo->getTypeLoc();
+/// if (PointerLoc *PL = dyn_cast<PointerLoc>(&TL))
+///   PL->getStarLoc().print(OS, SrcMgr);
+/// @endcode
+///
+class DeclaratorInfo {
+  QualType Ty;
+  // Contains a memory block after the class, used for type source information,
+  // allocated by ASTContext.
+  friend class ASTContext;
+  DeclaratorInfo(QualType ty) : Ty(ty) { }
+public:
+  /// \brief Return the TypeLoc wrapper for the type source info.
+  TypeLoc getTypeLoc() const;
+};
+
 /// TranslationUnitDecl - The top declaration context.
 class TranslationUnitDecl : public Decl, public DeclContext {
   ASTContext &Ctx;
@@ -201,6 +223,29 @@ public:
   static bool classof(const ValueDecl *D) { return true; }
 };
 
+/// \brief Represents a ValueDecl that came out of a declarator.
+/// Contains type source information through DeclaratorInfo.
+class DeclaratorDecl : public ValueDecl {
+  DeclaratorInfo *DeclInfo;
+
+protected:
+  DeclaratorDecl(Kind DK, DeclContext *DC, SourceLocation L,
+                 DeclarationName N, QualType T, DeclaratorInfo *DInfo)
+    : ValueDecl(DK, DC, L, N, T), DeclInfo(DInfo) {}
+
+public:
+  DeclaratorInfo *getDeclaratorInfo() const { return DeclInfo; }
+  void setDeclaratorInfo(DeclaratorInfo *DInfo) { DeclInfo = DInfo; }
+
+  SourceLocation getTypeSpecStartLoc() const;
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Decl *D) {
+    return D->getKind() >= DeclaratorFirst && D->getKind() <= DeclaratorLast;
+  }
+  static bool classof(const DeclaratorDecl *D) { return true; }
+};
+
 /// \brief Structure used to store a statement, the constant value to
 /// which it was evaluated (if any), and whether or not the statement
 /// is an integral constant expression (if known).
@@ -224,7 +269,7 @@ struct EvaluatedStmt {
 
 /// VarDecl - An instance of this class is created to represent a variable
 /// declaration or definition.
-class VarDecl : public ValueDecl {
+class VarDecl : public DeclaratorDecl, public Redeclarable<VarDecl> {
 public:
   enum StorageClass {
     None, Auto, Register, Extern, Static, PrivateExtern
@@ -236,8 +281,22 @@ public:
   /// It is illegal to call this function with SC == None.
   static const char *getStorageClassSpecifierString(StorageClass SC);
 
+protected:
+  /// \brief Placeholder type used in Init to denote an unparsed C++ default
+  /// argument.
+  struct UnparsedDefaultArgument;
+
+  /// \brief Placeholder type used in Init to denote an uninstantiated C++ 
+  /// default argument.
+  struct UninstantiatedDefaultArgument;
+
+  /// \brief The initializer for this variable or, for a ParmVarDecl, the 
+  /// C++ default argument.
+  mutable llvm::PointerUnion4<Stmt *, EvaluatedStmt *, 
+                              UnparsedDefaultArgument *, 
+                              UninstantiatedDefaultArgument *> Init;
+  
 private:
-  mutable llvm::PointerUnion<Stmt *, EvaluatedStmt *> Init;
   // FIXME: This can be packed into the bitfields in Decl.
   unsigned SClass : 3;
   bool ThreadSpecified : 1;
@@ -247,26 +306,31 @@ private:
   /// condition, e.g., if (int x = foo()) { ... }.
   bool DeclaredInCondition : 1;
 
-  /// \brief The previous declaration of this variable.
-  VarDecl *PreviousDeclaration;
-
-  // Move to DeclGroup when it is implemented.
-  SourceLocation TypeSpecStartLoc;
   friend class StmtIteratorBase;
 protected:
   VarDecl(Kind DK, DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
-          QualType T, StorageClass SC, SourceLocation TSSL = SourceLocation())
-    : ValueDecl(DK, DC, L, Id, T), Init(),
+          QualType T, DeclaratorInfo *DInfo, StorageClass SC)
+    : DeclaratorDecl(DK, DC, L, Id, T, DInfo), Init(),
       ThreadSpecified(false), HasCXXDirectInit(false),
-      DeclaredInCondition(false), PreviousDeclaration(0), 
-      TypeSpecStartLoc(TSSL) { 
+      DeclaredInCondition(false) { 
     SClass = SC; 
   }
+
+  typedef Redeclarable<VarDecl> redeclarable_base;
+  virtual VarDecl *getNextRedeclaration() { return RedeclLink.getNext(); }
+
 public:
+  typedef redeclarable_base::redecl_iterator redecl_iterator;
+  redecl_iterator redecls_begin() const {
+    return redeclarable_base::redecls_begin();
+  } 
+  redecl_iterator redecls_end() const {
+    return redeclarable_base::redecls_end();
+  }
+
   static VarDecl *Create(ASTContext &C, DeclContext *DC,
                          SourceLocation L, IdentifierInfo *Id,
-                         QualType T, StorageClass S,
-                         SourceLocation TypeSpecStartLoc = SourceLocation());
+                         QualType T, DeclaratorInfo *DInfo, StorageClass S);
 
   virtual ~VarDecl();
   virtual void Destroy(ASTContext& C);
@@ -276,19 +340,15 @@ public:
   
   virtual SourceRange getSourceRange() const;
 
-  SourceLocation getTypeSpecStartLoc() const { return TypeSpecStartLoc; }
-  void setTypeSpecStartLoc(SourceLocation SL) {
-    TypeSpecStartLoc = SL;
-  }
-
   const Expr *getInit() const { 
     if (Init.isNull())
       return 0;
 
     const Stmt *S = Init.dyn_cast<Stmt *>();
-    if (!S)
-      S = Init.get<EvaluatedStmt *>()->Value;
-
+    if (!S) {
+      if (EvaluatedStmt *ES = Init.dyn_cast<EvaluatedStmt*>())
+        S = ES->Value;
+    }
     return (const Expr*) S; 
   }
   Expr *getInit() { 
@@ -296,17 +356,19 @@ public:
       return 0;
 
     Stmt *S = Init.dyn_cast<Stmt *>();
-    if (!S)
-      S = Init.get<EvaluatedStmt *>()->Value;
+    if (!S) {
+      if (EvaluatedStmt *ES = Init.dyn_cast<EvaluatedStmt*>())
+        S = ES->Value;
+    }
 
     return (Expr*) S; 
   }
 
   /// \brief Retrieve the address of the initializer expression.
   Stmt **getInitAddress() {
-    if (Init.is<Stmt *>())
-      return reinterpret_cast<Stmt **>(&Init); // FIXME: ugly hack
-    return &Init.get<EvaluatedStmt *>()->Value;
+    if (EvaluatedStmt *ES = Init.dyn_cast<EvaluatedStmt*>())
+      return &ES->Value;
+    return reinterpret_cast<Stmt **>(&Init); // FIXME: ugly hack
   }
 
   void setInit(ASTContext &C, Expr *I);
@@ -405,15 +467,7 @@ public:
     DeclaredInCondition = InCondition; 
   }
 
-  /// getPreviousDeclaration - Return the previous declaration of this
-  /// variable.
-  const VarDecl *getPreviousDeclaration() const { return PreviousDeclaration; }
-
-  void setPreviousDeclaration(VarDecl *PrevDecl) {
-    PreviousDeclaration = PrevDecl;
-  }
-
-  virtual Decl *getPrimaryDecl() const;
+  virtual VarDecl *getCanonicalDecl();
 
   /// hasLocalStorage - Returns true if a variable with function scope
   ///  is a non-static local variable.
@@ -464,6 +518,11 @@ public:
     return getDeclContext()->isRecord();
   }
 
+  /// \brief If this variable is an instantiated static data member of a
+  /// class template specialization, returns the templated static data member 
+  /// from which it was instantiated.
+  VarDecl *getInstantiatedFromStaticDataMember(); 
+  
   /// isFileVarDecl - Returns true for file scoped variable declaration.
   bool isFileVarDecl() const {
     if (getKind() != Decl::Var)
@@ -473,6 +532,9 @@ public:
       if (isa<TranslationUnitDecl>(Ctx) || isa<NamespaceDecl>(Ctx) )
         return true;
     }
+    if (isStaticDataMember() && isOutOfLine())
+      return true;
+    
     return false;
   }
 
@@ -494,12 +556,12 @@ public:
 class ImplicitParamDecl : public VarDecl {
 protected:
   ImplicitParamDecl(Kind DK, DeclContext *DC, SourceLocation L,
-            IdentifierInfo *Id, QualType Tw) 
-    : VarDecl(DK, DC, L, Id, Tw, VarDecl::None) {}
+                    IdentifierInfo *Id, QualType Tw) 
+    : VarDecl(DK, DC, L, Id, Tw, /*DInfo=*/0, VarDecl::None) {}
 public:
   static ImplicitParamDecl *Create(ASTContext &C, DeclContext *DC,
-                         SourceLocation L, IdentifierInfo *Id,
-                         QualType T);
+                                   SourceLocation L, IdentifierInfo *Id,
+                                   QualType T);
   // Implement isa/cast/dyncast/etc.
   static bool classof(const ImplicitParamDecl *D) { return true; }
   static bool classof(const Decl *D) { return D->getKind() == ImplicitParam; }
@@ -512,19 +574,27 @@ class ParmVarDecl : public VarDecl {
   /// in, inout, etc.
   unsigned objcDeclQualifier : 6;
   
-  /// Default argument, if any.  [C++ Only]
-  Expr *DefaultArg;
+  /// \brief Retrieves the fake "value" of an unparsed 
+  static Expr *getUnparsedDefaultArgValue() {
+    uintptr_t Value = (uintptr_t)-1;
+    // Mask off the low bits
+    Value &= ~(uintptr_t)0x07;
+    return reinterpret_cast<Expr*> (Value);
+  }
+  
 protected:
   ParmVarDecl(Kind DK, DeclContext *DC, SourceLocation L,
-              IdentifierInfo *Id, QualType T, StorageClass S,
-              Expr *DefArg)
-    : VarDecl(DK, DC, L, Id, T, S), 
-      objcDeclQualifier(OBJC_TQ_None), DefaultArg(DefArg) {}
+              IdentifierInfo *Id, QualType T, DeclaratorInfo *DInfo,
+              StorageClass S, Expr *DefArg)
+  : VarDecl(DK, DC, L, Id, T, DInfo, S), objcDeclQualifier(OBJC_TQ_None) {
+    setDefaultArg(DefArg);
+  }
 
 public:
   static ParmVarDecl *Create(ASTContext &C, DeclContext *DC,
                              SourceLocation L,IdentifierInfo *Id,
-                             QualType T, StorageClass S, Expr *DefArg);
+                             QualType T, DeclaratorInfo *DInfo,
+                             StorageClass S, Expr *DefArg);
   
   ObjCDeclQualifier getObjCDeclQualifier() const {
     return ObjCDeclQualifier(objcDeclQualifier);
@@ -535,18 +605,32 @@ public:
     
   const Expr *getDefaultArg() const { 
     assert(!hasUnparsedDefaultArg() && "Default argument is not yet parsed!");
-    return DefaultArg; 
+    assert(!hasUninstantiatedDefaultArg() && 
+           "Default argument is not yet instantiated!");
+    return getInit();
   }
   Expr *getDefaultArg() { 
     assert(!hasUnparsedDefaultArg() && "Default argument is not yet parsed!");
-    return DefaultArg; 
+    assert(!hasUninstantiatedDefaultArg() && 
+           "Default argument is not yet instantiated!");
+    return getInit();
   }
-  void setDefaultArg(Expr *defarg) { DefaultArg = defarg; }
+  void setDefaultArg(Expr *defarg) { 
+    Init = reinterpret_cast<Stmt *>(defarg);
+  }
 
+  void setUninstantiatedDefaultArg(Expr *arg) {
+    Init = reinterpret_cast<UninstantiatedDefaultArgument *>(arg);
+  }
+  Expr *getUninstantiatedDefaultArg() {
+    return (Expr *)Init.get<UninstantiatedDefaultArgument *>();
+  }
+  
   /// hasDefaultArg - Determines whether this parameter has a default argument,
   /// either parsed or not.
   bool hasDefaultArg() const {
-    return DefaultArg != 0;
+    return getInit() || hasUnparsedDefaultArg() || 
+      hasUninstantiatedDefaultArg();
   }
   
   /// hasUnparsedDefaultArg - Determines whether this parameter has a
@@ -560,15 +644,21 @@ public:
   ///   }; // x has a regular default argument now
   /// @endcode
   bool hasUnparsedDefaultArg() const {
-    return DefaultArg == reinterpret_cast<Expr *>(-1);
+    return Init.is<UnparsedDefaultArgument*>();
   }
 
+  bool hasUninstantiatedDefaultArg() const {
+    return Init.is<UninstantiatedDefaultArgument*>();
+  }
+  
   /// setUnparsedDefaultArg - Specify that this parameter has an
   /// unparsed default argument. The argument will be replaced with a
   /// real default argument via setDefaultArg when the class
   /// definition enclosing the function declaration that owns this
   /// default argument is completed.
-  void setUnparsedDefaultArg() { DefaultArg = reinterpret_cast<Expr *>(-1); }
+  void setUnparsedDefaultArg() { 
+    Init = (UnparsedDefaultArgument *)0;
+  }
 
   QualType getOriginalType() const;
   
@@ -596,15 +686,17 @@ protected:
   QualType OriginalType;
 private:
   OriginalParmVarDecl(DeclContext *DC, SourceLocation L,
-                              IdentifierInfo *Id, QualType T, 
+                              IdentifierInfo *Id, QualType T,
+                              DeclaratorInfo *DInfo, 
                               QualType OT, StorageClass S,
                               Expr *DefArg)
-  : ParmVarDecl(OriginalParmVar, DC, L, Id, T, S, DefArg), OriginalType(OT) {}
+  : ParmVarDecl(OriginalParmVar, DC, L, Id, T, DInfo, S, DefArg),
+    OriginalType(OT) {}
 public:
   static OriginalParmVarDecl *Create(ASTContext &C, DeclContext *DC,
                                      SourceLocation L,IdentifierInfo *Id,
-                                     QualType T, QualType OT,
-                                     StorageClass S, Expr *DefArg);
+                                     QualType T, DeclaratorInfo *DInfo,
+                                     QualType OT, StorageClass S, Expr *DefArg);
 
   void setOriginalType(QualType T) { OriginalType = T; }
 
@@ -624,7 +716,8 @@ public:
 /// contains all of the information known about the function. Other,
 /// previous declarations of the function are available via the
 /// getPreviousDeclaration() chain. 
-class FunctionDecl : public ValueDecl, public DeclContext {
+class FunctionDecl : public DeclaratorDecl, public DeclContext,
+                     public Redeclarable<FunctionDecl> {
 public:
   enum StorageClass {
     None, Extern, Static, PrivateExtern
@@ -637,17 +730,6 @@ private:
   ParmVarDecl **ParamInfo;
   
   LazyDeclStmtPtr Body;
-  
-  /// PreviousDeclaration - A link to the previous declaration of this
-  /// same function, NULL if this is the first declaration. For
-  /// example, in the following code, the PreviousDeclaration can be
-  /// traversed several times to see all three declarations of the
-  /// function "f", the last of which is also a definition.
-  ///
-  ///   int f(int x, int y = 1);
-  ///   int f(int x = 0, int y);
-  ///   int f(int x, int y) { return x + y; }
-  FunctionDecl *PreviousDeclaration;
 
   // FIXME: This can be packed into the bitfields in Decl.
   // NOTE: VC++ treats enums as signed, avoid using the StorageClass enum
@@ -659,9 +741,9 @@ private:
   bool HasInheritedPrototype : 1;
   bool HasWrittenPrototype : 1;
   bool IsDeleted : 1;
-
-  // Move to DeclGroup when it is implemented.
-  SourceLocation TypeSpecStartLoc;
+  bool IsTrivial : 1; // sunk from CXXMethodDecl
+  bool IsCopyAssignment : 1;  // sunk from CXXMethodDecl
+  bool HasImplicitReturnZero : 1;
   
   /// \brief End part of this FunctionDecl's source range.
   ///
@@ -690,26 +772,38 @@ private:
 
 protected:
   FunctionDecl(Kind DK, DeclContext *DC, SourceLocation L,
-               DeclarationName N, QualType T,
-               StorageClass S, bool isInline,
-               SourceLocation TSSL = SourceLocation())
-    : ValueDecl(DK, DC, L, N, T), 
+               DeclarationName N, QualType T, DeclaratorInfo *DInfo,
+               StorageClass S, bool isInline)
+    : DeclaratorDecl(DK, DC, L, N, T, DInfo), 
       DeclContext(DK),
-      ParamInfo(0), Body(), PreviousDeclaration(0),
+      ParamInfo(0), Body(),
       SClass(S), IsInline(isInline), C99InlineDefinition(false), 
       IsVirtualAsWritten(false), IsPure(false), HasInheritedPrototype(false), 
-      HasWrittenPrototype(true), IsDeleted(false), TypeSpecStartLoc(TSSL),
+      HasWrittenPrototype(true), IsDeleted(false), IsTrivial(false),
+      IsCopyAssignment(false),
+      HasImplicitReturnZero(false),
       EndRangeLoc(L), TemplateOrSpecialization() {}
 
   virtual ~FunctionDecl() {}
   virtual void Destroy(ASTContext& C);
 
+  typedef Redeclarable<FunctionDecl> redeclarable_base;
+  virtual FunctionDecl *getNextRedeclaration() { return RedeclLink.getNext(); }
+
 public:
+  typedef redeclarable_base::redecl_iterator redecl_iterator;
+  redecl_iterator redecls_begin() const {
+    return redeclarable_base::redecls_begin();
+  } 
+  redecl_iterator redecls_end() const {
+    return redeclarable_base::redecls_end();
+  }
+
   static FunctionDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
-                              DeclarationName N, QualType T, 
+                              DeclarationName N, QualType T,
+                              DeclaratorInfo *DInfo,
                               StorageClass S = None, bool isInline = false,
-                              bool hasWrittenPrototype = true,
-                              SourceLocation TSStartLoc = SourceLocation());
+                              bool hasWrittenPrototype = true);
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(getLocation(), EndRangeLoc);
@@ -717,9 +811,6 @@ public:
   void setLocEnd(SourceLocation E) {
     EndRangeLoc = E;
   }
-  
-  SourceLocation getTypeSpecStartLoc() const { return TypeSpecStartLoc; }
-  void setTypeSpecStartLoc(SourceLocation TS) { TypeSpecStartLoc = TS; }
 
   /// getBody - Retrieve the body (definition) of the function. The
   /// function body might be in any of the (re-)declarations of this
@@ -756,6 +847,22 @@ public:
   /// abstract.
   bool isPure() const { return IsPure; }
   void setPure(bool P = true) { IsPure = P; }
+
+  /// Whether this function is "trivial" in some specialized C++ senses.
+  /// Can only be true for default constructors, copy constructors,
+  /// copy assignment operators, and destructors.  Not meaningful until
+  /// the class has been fully built by Sema.
+  bool isTrivial() const { return IsTrivial; }
+  void setTrivial(bool IT) { IsTrivial = IT; }
+                       
+  bool isCopyAssignment() const { return IsCopyAssignment; }
+  void setCopyAssignment(bool CA) { IsCopyAssignment = CA; }
+
+  /// Whether falling off this function implicitly returns null/zero.
+  /// If a more specific implicit return value is required, front-ends
+  /// should synthesize the appropriate return statements.
+  bool hasImplicitReturnZero() const { return HasImplicitReturnZero; }
+  void setHasImplicitReturnZero(bool IRZ) { HasImplicitReturnZero = IRZ; }
 
   /// \brief Whether this function has a prototype, either because one
   /// was explicitly written or because it was "inherited" by merging
@@ -796,7 +903,7 @@ public:
 
   /// \brief Determines whether this is a function "main", which is
   /// the entry point into an executable program.
-  bool isMain() const;
+  bool isMain(ASTContext &Context) const;
 
   /// \brief Determines whether this function is a function with
   /// external, C linkage.
@@ -805,15 +912,9 @@ public:
   /// \brief Determines whether this is a global function.
   bool isGlobal() const;
 
-  /// getPreviousDeclaration - Return the previous declaration of this
-  /// function.
-  const FunctionDecl *getPreviousDeclaration() const {
-    return PreviousDeclaration;
-  }
-
   void setPreviousDeclaration(FunctionDecl * PrevDecl);
 
-  virtual Decl *getPrimaryDecl() const;
+  virtual FunctionDecl *getCanonicalDecl();
 
   unsigned getBuiltinID(ASTContext &Context) const;
 
@@ -990,20 +1091,21 @@ public:
 
 /// FieldDecl - An instance of this class is created by Sema::ActOnField to 
 /// represent a member of a struct/union/class.
-class FieldDecl : public ValueDecl {
+class FieldDecl : public DeclaratorDecl {
   // FIXME: This can be packed into the bitfields in Decl.
   bool Mutable : 1;
   Expr *BitWidth;
 protected:
   FieldDecl(Kind DK, DeclContext *DC, SourceLocation L, 
-            IdentifierInfo *Id, QualType T, Expr *BW, bool Mutable)
-    : ValueDecl(DK, DC, L, Id, T), Mutable(Mutable), BitWidth(BW)
+            IdentifierInfo *Id, QualType T, DeclaratorInfo *DInfo,
+            Expr *BW, bool Mutable)
+    : DeclaratorDecl(DK, DC, L, Id, T, DInfo), Mutable(Mutable), BitWidth(BW)
       { }
 
 public:
   static FieldDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L, 
-                           IdentifierInfo *Id, QualType T, Expr *BW, 
-                           bool Mutable);
+                           IdentifierInfo *Id, QualType T,
+                           DeclaratorInfo *DInfo, Expr *BW, bool Mutable);
 
   /// isMutable - Determines whether this field is mutable (C++ only).
   bool isMutable() const { return Mutable; }
@@ -1129,7 +1231,8 @@ public:
 class TypedefDecl;
   
 /// TagDecl - Represents the declaration of a struct/union/class/enum.
-class TagDecl : public TypeDecl, public DeclContext {
+class TagDecl 
+  : public TypeDecl, public DeclContext, public Redeclarable<TagDecl> {
 public:
   enum TagKind {
     TK_struct,
@@ -1150,17 +1253,44 @@ private:
   /// TypedefForAnonDecl - If a TagDecl is anonymous and part of a typedef,
   /// this points to the TypedefDecl. Used for mangling.
   TypedefDecl *TypedefForAnonDecl;
-  
+
+  SourceLocation TagKeywordLoc;
+  SourceLocation RBraceLoc;
+
 protected:
   TagDecl(Kind DK, TagKind TK, DeclContext *DC, SourceLocation L,
-          IdentifierInfo *Id)
-    : TypeDecl(DK, DC, L, Id), DeclContext(DK), TypedefForAnonDecl(0) {
+          IdentifierInfo *Id, TagDecl *PrevDecl,
+          SourceLocation TKL = SourceLocation())
+    : TypeDecl(DK, DC, L, Id), DeclContext(DK), TypedefForAnonDecl(0),
+      TagKeywordLoc(TKL) {
     assert((DK != Enum || TK == TK_enum) &&"EnumDecl not matched with TK_enum");
     TagDeclKind = TK;
     IsDefinition = false;
+    setPreviousDeclaration(PrevDecl);
   }
+    
+  typedef Redeclarable<TagDecl> redeclarable_base;
+  virtual TagDecl *getNextRedeclaration() { return RedeclLink.getNext(); }
+    
 public:
+  typedef redeclarable_base::redecl_iterator redecl_iterator;
+  redecl_iterator redecls_begin() const {
+    return redeclarable_base::redecls_begin();
+  } 
+  redecl_iterator redecls_end() const {
+    return redeclarable_base::redecls_end();
+  }
+    
+  SourceLocation getRBraceLoc() const { return RBraceLoc; }
+  void setRBraceLoc(SourceLocation L) { RBraceLoc = L; }
+
+  SourceLocation getTagKeywordLoc() const { return TagKeywordLoc; }
+  void setTagKeywordLoc(SourceLocation TKL) { TagKeywordLoc = TKL; }
+
+  virtual SourceRange getSourceRange() const;
   
+  virtual TagDecl* getCanonicalDecl();
+
   /// isDefinition - Return true if this decl has its body specified.
   bool isDefinition() const {
     return IsDefinition;
@@ -1244,14 +1374,14 @@ class EnumDecl : public TagDecl {
   EnumDecl *InstantiatedFrom;
 
   EnumDecl(DeclContext *DC, SourceLocation L,
-           IdentifierInfo *Id)
-    : TagDecl(Enum, TK_enum, DC, L, Id), InstantiatedFrom(0) {
+           IdentifierInfo *Id, EnumDecl *PrevDecl, SourceLocation TKL)
+    : TagDecl(Enum, TK_enum, DC, L, Id, PrevDecl, TKL), InstantiatedFrom(0) {
       IntegerType = QualType();
     }
 public:
   static EnumDecl *Create(ASTContext &C, DeclContext *DC,
                           SourceLocation L, IdentifierInfo *Id,
-                          EnumDecl *PrevDecl);
+                          SourceLocation TKL, EnumDecl *PrevDecl);
   
   virtual void Destroy(ASTContext& C);
 
@@ -1317,12 +1447,14 @@ class RecordDecl : public TagDecl {
 
 protected:
   RecordDecl(Kind DK, TagKind TK, DeclContext *DC,
-             SourceLocation L, IdentifierInfo *Id);
+             SourceLocation L, IdentifierInfo *Id, 
+             RecordDecl *PrevDecl, SourceLocation TKL);
   virtual ~RecordDecl();
 
 public:
   static RecordDecl *Create(ASTContext &C, TagKind TK, DeclContext *DC,
                             SourceLocation L, IdentifierInfo *Id,
+                            SourceLocation TKL = SourceLocation(),
                             RecordDecl* PrevDecl = 0);
 
   virtual void Destroy(ASTContext& C);

@@ -101,9 +101,11 @@ namespace {
     unsigned VisitObjCProtocolExpr(ObjCProtocolExpr *E);
     unsigned VisitObjCIvarRefExpr(ObjCIvarRefExpr *E);
     unsigned VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E);
-    unsigned VisitObjCKVCRefExpr(ObjCKVCRefExpr *E);
+    unsigned VisitObjCImplicitSetterGetterRefExpr(
+                            ObjCImplicitSetterGetterRefExpr *E);
     unsigned VisitObjCMessageExpr(ObjCMessageExpr *E);
     unsigned VisitObjCSuperExpr(ObjCSuperExpr *E);
+    unsigned VisitObjCIsaExpr(ObjCIsaExpr *E);
     
     unsigned VisitObjCForCollectionStmt(ObjCForCollectionStmt *);
     unsigned VisitObjCAtCatchStmt(ObjCAtCatchStmt *);
@@ -111,6 +113,8 @@ namespace {
     unsigned VisitObjCAtTryStmt(ObjCAtTryStmt *);
     unsigned VisitObjCAtSynchronizedStmt(ObjCAtSynchronizedStmt *);
     unsigned VisitObjCAtThrowStmt(ObjCAtThrowStmt *);
+
+    unsigned VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E);
   };
 }
 
@@ -191,6 +195,10 @@ unsigned PCHStmtReader::VisitSwitchStmt(SwitchStmt *S) {
       PrevSC->setNextSwitchCase(SC);
     else
       S->setSwitchCaseList(SC);
+    
+    // Retain this SwitchCase, since SwitchStmt::addSwitchCase() would
+    // normally retain it (but we aren't calling addSwitchCase).
+    SC->Retain();
     PrevSC = SC;
   }
   return 2;
@@ -446,9 +454,19 @@ unsigned PCHStmtReader::VisitMemberExpr(MemberExpr *E) {
   return 1;
 }
 
+unsigned PCHStmtReader::VisitObjCIsaExpr(ObjCIsaExpr *E) {
+  VisitExpr(E);
+  E->setBase(cast<Expr>(StmtStack.back()));
+  E->setIsaMemberLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  E->setArrow(Record[Idx++]);
+  return 1;
+}
+
 unsigned PCHStmtReader::VisitCastExpr(CastExpr *E) {
   VisitExpr(E);
   E->setSubExpr(cast<Expr>(StmtStack.back()));
+  E->setCastKind((CastExpr::CastKind)Record[Idx++]);
+
   return 1;
 }
 
@@ -473,6 +491,8 @@ unsigned PCHStmtReader::VisitConditionalOperator(ConditionalOperator *E) {
   E->setCond(cast<Expr>(StmtStack[StmtStack.size() - 3]));
   E->setLHS(cast_or_null<Expr>(StmtStack[StmtStack.size() - 2]));
   E->setRHS(cast_or_null<Expr>(StmtStack[StmtStack.size() - 1]));
+  E->setQuestionLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  E->setColonLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 3;
 }
 
@@ -649,7 +669,8 @@ unsigned PCHStmtReader::VisitGNUNullExpr(GNUNullExpr *E) {
 unsigned PCHStmtReader::VisitShuffleVectorExpr(ShuffleVectorExpr *E) {
   VisitExpr(E);
   unsigned NumExprs = Record[Idx++];
-  E->setExprs((Expr **)&StmtStack[StmtStack.size() - NumExprs], NumExprs);
+  E->setExprs(*Reader.getContext(), 
+              (Expr **)&StmtStack[StmtStack.size() - NumExprs], NumExprs);
   E->setBuiltinLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   E->setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return NumExprs;
@@ -723,13 +744,14 @@ unsigned PCHStmtReader::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
   return 1;
 }
 
-unsigned PCHStmtReader::VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
+unsigned PCHStmtReader::VisitObjCImplicitSetterGetterRefExpr(
+                                      ObjCImplicitSetterGetterRefExpr *E) {
   VisitExpr(E);
   E->setGetterMethod(
                  cast_or_null<ObjCMethodDecl>(Reader.GetDecl(Record[Idx++])));
   E->setSetterMethod(
                  cast_or_null<ObjCMethodDecl>(Reader.GetDecl(Record[Idx++])));
-  E->setClassProp(
+  E->setInterfaceDecl(
               cast_or_null<ObjCInterfaceDecl>(Reader.GetDecl(Record[Idx++])));
   E->setBase(cast_or_null<Expr>(StmtStack.back()));
   E->setLocation(SourceLocation::getFromRawEncoding(Record[Idx++]));
@@ -814,6 +836,15 @@ unsigned PCHStmtReader::VisitObjCAtThrowStmt(ObjCAtThrowStmt *S) {
   S->setThrowExpr(StmtStack.back());
   S->setThrowLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   return 1;
+}
+
+//===----------------------------------------------------------------------===//
+// C++ Expressions and Statements
+
+unsigned PCHStmtReader::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
+  unsigned num = VisitCallExpr(E);
+  E->setOperator((OverloadedOperatorKind)Record[Idx++]);
+  return num;
 }
 
 
@@ -983,7 +1014,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
       break;
 
     case pch::EXPR_CALL:
-      S = new (Context) CallExpr(*Context, Empty);
+      S = new (Context) CallExpr(*Context, Stmt::CallExprClass, Empty);
       break;
 
     case pch::EXPR_MEMBER:
@@ -1087,13 +1118,16 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
       S = new (Context) ObjCPropertyRefExpr(Empty);
       break;
     case pch::EXPR_OBJC_KVC_REF_EXPR:
-      S = new (Context) ObjCKVCRefExpr(Empty);
+      S = new (Context) ObjCImplicitSetterGetterRefExpr(Empty);
       break;
     case pch::EXPR_OBJC_MESSAGE_EXPR:
       S = new (Context) ObjCMessageExpr(Empty);
       break;
     case pch::EXPR_OBJC_SUPER_EXPR:
       S = new (Context) ObjCSuperExpr(Empty);
+      break;
+    case pch::EXPR_OBJC_ISA:
+      S = new (Context) ObjCIsaExpr(Empty);
       break;
     case pch::STMT_OBJC_FOR_COLLECTION:
       S = new (Context) ObjCForCollectionStmt(Empty);
@@ -1112,6 +1146,10 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
       break;
     case pch::STMT_OBJC_AT_THROW:
       S = new (Context) ObjCAtThrowStmt(Empty);
+      break;
+      
+    case pch::EXPR_CXX_OPERATOR_CALL:
+      S = new (Context) CXXOperatorCallExpr(*Context, Empty);
       break;
     }
 

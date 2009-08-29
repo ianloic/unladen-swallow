@@ -14,35 +14,28 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "X86.h"
 #include "X86ATTAsmPrinter.h"
 #include "X86IntelAsmPrinter.h"
-#include "X86Subtarget.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Target/TargetRegistry.h"
 using namespace llvm;
 
 /// createX86CodePrinterPass - Returns a pass that prints the X86 assembly code
 /// for a MachineFunction to the given output stream, using the given target
 /// machine description.
 ///
-FunctionPass *llvm::createX86CodePrinterPass(raw_ostream &o,
-                                             X86TargetMachine &tm,
-                                             bool verbose) {
-  const X86Subtarget *Subtarget = &tm.getSubtarget<X86Subtarget>();
-
-  if (Subtarget->isFlavorIntel())
-    return new X86IntelAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
-  return new X86ATTAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
+static AsmPrinter *createX86CodePrinterPass(formatted_raw_ostream &o,
+                                            TargetMachine &tm,
+                                            const MCAsmInfo *tai,
+                                            bool verbose) {
+  if (tm.getMCAsmInfo()->getAssemblerDialect() == 1)
+    return new X86IntelAsmPrinter(o, tm, tai, verbose);
+  return new X86ATTAsmPrinter(o, tm, tai, verbose);
 }
-
-namespace {
-  static struct Register {
-    Register() {
-      X86TargetMachine::registerAsmPrinter(createX86CodePrinterPass);
-    }
-  } Registrator;
-}
-
-extern "C" int X86AsmPrinterForceLink;
-int X86AsmPrinterForceLink = 0;
 
 // Force static initialization.
-extern "C" void LLVMInitializeX86AsmPrinter() { }
+extern "C" void LLVMInitializeX86AsmPrinter() { 
+  TargetRegistry::RegisterAsmPrinter(TheX86_32Target, createX86CodePrinterPass);
+  TargetRegistry::RegisterAsmPrinter(TheX86_64Target, createX86CodePrinterPass);
+}

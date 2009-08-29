@@ -32,13 +32,13 @@ public:
  void emitLoadConstPool(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator &MBBI,
                         DebugLoc dl,
-                        unsigned DestReg, int Val,
+                        unsigned DestReg, unsigned SubIdx, int Val,
                         ARMCC::CondCodes Pred = ARMCC::AL,
                         unsigned PredReg = 0) const;
 
   /// Code Generation virtual methods...
   const TargetRegisterClass *
-    getPhysicalRegisterRegClass(unsigned Reg, MVT VT = MVT::Other) const;
+    getPhysicalRegisterRegClass(unsigned Reg, EVT VT = MVT::Other) const;
 
   bool requiresRegisterScavenging(const MachineFunction &MF) const;
 
@@ -47,6 +47,12 @@ public:
   void eliminateCallFramePseudoInstr(MachineFunction &MF,
                                      MachineBasicBlock &MBB,
                                      MachineBasicBlock::iterator I) const;
+
+  // rewrite MI to access 'Offset' bytes from the FP. Return the offset that
+  // could not be handled directly in MI.
+  int rewriteFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
+                        unsigned FrameReg, int Offset,
+                        unsigned MOVOpc, unsigned ADDriOpc, unsigned SUBriOpc) const;
 
   void eliminateFrameIndex(MachineBasicBlock::iterator II,
                            int SPAdj, RegScavenger *RS = NULL) const;

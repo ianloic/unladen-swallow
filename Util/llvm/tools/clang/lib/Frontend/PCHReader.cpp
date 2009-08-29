@@ -107,6 +107,7 @@ PCHValidator::ReadLanguageOptions(const LangOptions &LangOpts) {
   PARSE_LANGOPT_BENIGN(getVisibilityMode());
   PARSE_LANGOPT_BENIGN(InstantiationDepth);
   PARSE_LANGOPT_IMPORTANT(OpenCL, diag::warn_pch_opencl);
+  PARSE_LANGOPT_IMPORTANT(ElideConstructors, diag::warn_elide_constructors);
 #undef PARSE_LANGOPT_IRRELEVANT
 #undef PARSE_LANGOPT_BENIGN
 
@@ -114,9 +115,9 @@ PCHValidator::ReadLanguageOptions(const LangOptions &LangOpts) {
 }
 
 bool PCHValidator::ReadTargetTriple(const std::string &Triple) {
-  if (Triple != PP.getTargetInfo().getTargetTriple()) {
+  if (Triple != PP.getTargetInfo().getTriple().getTriple()) {
     Reader.Diag(diag::warn_pch_target_triple)
-      << Triple << PP.getTargetInfo().getTargetTriple();
+      << Triple << PP.getTargetInfo().getTriple().getTriple();
     return true;
   }
   return false;
@@ -1364,14 +1365,6 @@ PCHReader::ReadPCHBlock() {
       ExtVectorDecls.swap(Record);
       break;
 
-    case pch::OBJC_CATEGORY_IMPLEMENTATIONS:
-      if (!ObjCCategoryImpls.empty()) {
-        Error("duplicate OBJC_CATEGORY_IMPLEMENTATIONS record in PCH file");
-        return Failure;
-      }
-      ObjCCategoryImpls.swap(Record);
-      break;
-
     case pch::ORIGINAL_FILE_NAME:
       OriginalFileName.assign(BlobStart, BlobLen);
       MaybeAddSystemRootToFilename(OriginalFileName);
@@ -1469,7 +1462,7 @@ PCHReader::PCHReadResult PCHReader::ReadPCH(const std::string &FileName) {
     return IgnorePCH;
   
   if (PP) {
-    // Initialization of builtins and library builtins occurs before the
+    // Initialization of keywords and pragmas occurs before the
     // PCH file is read, so there may be some identifiers that were
     // loaded into the IdentifierTable before we intercepted the
     // creation of identifiers. Iterate through the list of known
@@ -1531,6 +1524,7 @@ void PCHReader::InitializeContext(ASTContext &Ctx) {
     Context->setObjCProtoType(GetType(Proto));
   if (unsigned Class = SpecialTypes[pch::SPECIAL_TYPE_OBJC_CLASS])
     Context->setObjCClassType(GetType(Class));
+
   if (unsigned String = SpecialTypes[pch::SPECIAL_TYPE_CF_CONSTANT_STRING])
     Context->setCFConstantStringType(GetType(String));
   if (unsigned FastEnum 
@@ -1542,11 +1536,39 @@ void PCHReader::InitializeContext(ASTContext &Ctx) {
     if (const TypedefType *Typedef = FileType->getAsTypedefType())
       Context->setFILEDecl(Typedef->getDecl());
     else {
-      const TagType *Tag = FileType->getAsTagType();
+      const TagType *Tag = FileType->getAs<TagType>();
       assert(Tag && "Invalid FILE type in PCH file");
       Context->setFILEDecl(Tag->getDecl());
     }
   }
+  if (unsigned Jmp_buf = SpecialTypes[pch::SPECIAL_TYPE_jmp_buf]) {
+    QualType Jmp_bufType = GetType(Jmp_buf);
+    assert(!Jmp_bufType.isNull() && "jmp_bug type is NULL");
+    if (const TypedefType *Typedef = Jmp_bufType->getAsTypedefType())
+      Context->setjmp_bufDecl(Typedef->getDecl());
+    else {
+      const TagType *Tag = Jmp_bufType->getAs<TagType>();
+      assert(Tag && "Invalid jmp_bug type in PCH file");
+      Context->setjmp_bufDecl(Tag->getDecl());
+    }
+  }
+  if (unsigned Sigjmp_buf = SpecialTypes[pch::SPECIAL_TYPE_sigjmp_buf]) {
+    QualType Sigjmp_bufType = GetType(Sigjmp_buf);
+    assert(!Sigjmp_bufType.isNull() && "sigjmp_buf type is NULL");
+    if (const TypedefType *Typedef = Sigjmp_bufType->getAsTypedefType())
+      Context->setsigjmp_bufDecl(Typedef->getDecl());
+    else {
+      const TagType *Tag = Sigjmp_bufType->getAs<TagType>();
+      assert(Tag && "Invalid sigjmp_buf type in PCH file");
+      Context->setsigjmp_bufDecl(Tag->getDecl());
+    }
+  }
+  if (unsigned ObjCIdRedef 
+        = SpecialTypes[pch::SPECIAL_TYPE_OBJC_ID_REDEFINITION])
+    Context->ObjCIdRedefinitionType = GetType(ObjCIdRedef);
+  if (unsigned ObjCClassRedef 
+      = SpecialTypes[pch::SPECIAL_TYPE_OBJC_CLASS_REDEFINITION])
+    Context->ObjCClassRedefinitionType = GetType(ObjCClassRedef);
 }
 
 /// \brief Retrieve the name of the original source file name
@@ -1917,30 +1939,24 @@ QualType PCHReader::ReadTypeRecord(uint64_t Offset) {
     assert(Record.size() == 1 && "incorrect encoding of enum type");
     return Context->getTypeDeclType(cast<EnumDecl>(GetDecl(Record[0])));
 
-  case pch::TYPE_OBJC_INTERFACE:
-    assert(Record.size() == 1 && "incorrect encoding of objc interface type");
-    return Context->getObjCInterfaceType(
-                                  cast<ObjCInterfaceDecl>(GetDecl(Record[0])));
-
-  case pch::TYPE_OBJC_QUALIFIED_INTERFACE: {
+  case pch::TYPE_OBJC_INTERFACE: {
     unsigned Idx = 0;
     ObjCInterfaceDecl *ItfD = cast<ObjCInterfaceDecl>(GetDecl(Record[Idx++]));
     unsigned NumProtos = Record[Idx++];
     llvm::SmallVector<ObjCProtocolDecl*, 4> Protos;
     for (unsigned I = 0; I != NumProtos; ++I)
       Protos.push_back(cast<ObjCProtocolDecl>(GetDecl(Record[Idx++])));
-    return Context->getObjCQualifiedInterfaceType(ItfD, Protos.data(), NumProtos);
+    return Context->getObjCInterfaceType(ItfD, Protos.data(), NumProtos);
   }
 
   case pch::TYPE_OBJC_OBJECT_POINTER: {
     unsigned Idx = 0;
-    ObjCInterfaceDecl *ItfD = 
-      cast_or_null<ObjCInterfaceDecl>(GetDecl(Record[Idx++]));
+    QualType OIT = GetType(Record[Idx++]);
     unsigned NumProtos = Record[Idx++];
     llvm::SmallVector<ObjCProtocolDecl*, 4> Protos;
     for (unsigned I = 0; I != NumProtos; ++I)
       Protos.push_back(cast<ObjCProtocolDecl>(GetDecl(Record[Idx++])));
-    return Context->getObjCObjectPointerType(ItfD, Protos.data(), NumProtos);
+    return Context->getObjCObjectPointerType(OIT, Protos.data(), NumProtos);
   }
   }
   // Suppress a GCC warning
@@ -1984,6 +2000,10 @@ QualType PCHReader::GetType(pch::TypeID ID) {
     case pch::PREDEF_TYPE_OVERLOAD_ID:   T = Context->OverloadTy;         break;
     case pch::PREDEF_TYPE_DEPENDENT_ID:  T = Context->DependentTy;        break;
     case pch::PREDEF_TYPE_NULLPTR_ID:    T = Context->NullPtrTy;          break;
+    case pch::PREDEF_TYPE_CHAR16_ID:     T = Context->Char16Ty;           break;
+    case pch::PREDEF_TYPE_CHAR32_ID:     T = Context->Char32Ty;           break;
+    case pch::PREDEF_TYPE_OBJC_ID:       T = Context->ObjCBuiltinIdTy;    break;
+    case pch::PREDEF_TYPE_OBJC_CLASS:    T = Context->ObjCBuiltinClassTy; break;
     }
 
     assert(!T.isNull() && "Unknown predefined type");
@@ -1991,7 +2011,7 @@ QualType PCHReader::GetType(pch::TypeID ID) {
   }
 
   Index -= pch::NUM_PREDEF_TYPE_IDS;
-  assert(Index < TypesLoaded.size() && "Type index out-of-range");
+  //assert(Index < TypesLoaded.size() && "Type index out-of-range");
   if (!TypesLoaded[Index])
     TypesLoaded[Index] = ReadTypeRecord(TypeOffsets[Index]).getTypePtr();
     
@@ -2211,13 +2231,6 @@ void PCHReader::InitializeSema(Sema &S) {
   for (unsigned I = 0, N = ExtVectorDecls.size(); I != N; ++I)
     SemaObj->ExtVectorDecls.push_back(
                                cast<TypedefDecl>(GetDecl(ExtVectorDecls[I])));
-
-  // If there were any Objective-C category implementations,
-  // deserialize them and add them to Sema's vector of such
-  // definitions.
-  for (unsigned I = 0, N = ObjCCategoryImpls.size(); I != N; ++I)
-    SemaObj->ObjCCategoryImpls.push_back(
-                cast<ObjCCategoryImplDecl>(GetDecl(ObjCCategoryImpls[I])));
 }
 
 IdentifierInfo* PCHReader::get(const char *NameStart, const char *NameEnd) {
@@ -2374,15 +2387,15 @@ PCHReader::ReadDeclarationName(const RecordData &Record, unsigned &Idx) {
 
   case DeclarationName::CXXConstructorName:
     return Context->DeclarationNames.getCXXConstructorName(
-                                                      GetType(Record[Idx++]));
+                          Context->getCanonicalType(GetType(Record[Idx++])));
 
   case DeclarationName::CXXDestructorName:
     return Context->DeclarationNames.getCXXDestructorName(
-                                                      GetType(Record[Idx++]));
+                          Context->getCanonicalType(GetType(Record[Idx++])));
 
   case DeclarationName::CXXConversionFunctionName:
     return Context->DeclarationNames.getCXXConversionFunctionName(
-                                                      GetType(Record[Idx++]));
+                          Context->getCanonicalType(GetType(Record[Idx++])));
 
   case DeclarationName::CXXOperatorName:
     return Context->DeclarationNames.getCXXOperatorName(

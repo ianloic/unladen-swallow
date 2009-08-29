@@ -41,12 +41,13 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/CallSite.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/Compiler.h"
 #include <set>
 using namespace llvm;
 
@@ -61,7 +62,6 @@ namespace {
   struct VISIBILITY_HIDDEN ArgPromotion : public CallGraphSCCPass {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequired<AliasAnalysis>();
-      AU.addRequired<TargetData>();
       CallGraphSCCPass::getAnalysisUsage(AU);
     }
 
@@ -145,9 +145,9 @@ bool ArgPromotion::PromoteArguments(CallGraphNode *CGN) {
       const Type *AgTy = cast<PointerType>(PtrArg->getType())->getElementType();
       if (const StructType *STy = dyn_cast<StructType>(AgTy)) {
         if (maxElements > 0 && STy->getNumElements() > maxElements) {
-          DOUT << "argpromotion disable promoting argument '"
-               << PtrArg->getName() << "' because it would require adding more "
-               << "than " << maxElements << " arguments to the function.\n";
+          DEBUG(errs() << "argpromotion disable promoting argument '"
+                << PtrArg->getName() << "' because it would require adding more"
+                << " than " << maxElements << " arguments to the function.\n");
         } else {
           // If all the elements are single-value types, we can promote it.
           bool AllSimple = true;
@@ -410,9 +410,9 @@ bool ArgPromotion::isSafeToPromoteArgument(Argument *Arg, bool isByVal) const {
     // to do.
     if (ToPromote.find(Operands) == ToPromote.end()) {
       if (maxElements > 0 && ToPromote.size() == maxElements) {
-        DOUT << "argpromotion not promoting argument '"
-             << Arg->getName() << "' because it would require adding more "
-             << "than " << maxElements << " arguments to the function.\n";
+        DEBUG(errs() << "argpromotion not promoting argument '"
+              << Arg->getName() << "' because it would require adding more "
+              << "than " << maxElements << " arguments to the function.\n");
         // We limit aggregate promotion to only promoting up to a fixed number
         // of elements of the aggregate.
         return false;
@@ -433,7 +433,8 @@ bool ArgPromotion::isSafeToPromoteArgument(Argument *Arg, bool isByVal) const {
   SmallPtrSet<BasicBlock*, 16> TranspBlocks;
 
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
-  TargetData &TD = getAnalysis<TargetData>();
+  TargetData *TD = getAnalysisIfAvailable<TargetData>();
+  if (!TD) return false; // Without TargetData, assume the worst.
 
   for (unsigned i = 0, e = Loads.size(); i != e; ++i) {
     // Check to see if the load is invalidated from the start of the block to
@@ -443,7 +444,7 @@ bool ArgPromotion::isSafeToPromoteArgument(Argument *Arg, bool isByVal) const {
 
     const PointerType *LoadTy =
       cast<PointerType>(Load->getPointerOperand()->getType());
-    unsigned LoadSize = (unsigned)TD.getTypeStoreSize(LoadTy->getElementType());
+    unsigned LoadSize =(unsigned)TD->getTypeStoreSize(LoadTy->getElementType());
 
     if (AA.canInstructionRangeModify(BB->front(), *Load, Arg, LoadSize))
       return false;  // Pointer is invalidated!
@@ -582,11 +583,11 @@ Function *ArgPromotion::DoPromotion(Function *F,
   bool ExtraArgHack = false;
   if (Params.empty() && FTy->isVarArg()) {
     ExtraArgHack = true;
-    Params.push_back(Type::Int32Ty);
+    Params.push_back(Type::getInt32Ty(F->getContext()));
   }
 
   // Construct the new function type using the new arguments.
-  FunctionType *NFTy = Context->getFunctionType(RetTy, Params, FTy->isVarArg());
+  FunctionType *NFTy = FunctionType::get(RetTy, Params, FTy->isVarArg());
 
   // Create the new function body and insert it into the module...
   Function *NF = Function::Create(NFTy, F->getLinkage(), F->getName());
@@ -637,9 +638,10 @@ Function *ArgPromotion::DoPromotion(Function *F,
         // Emit a GEP and load for each element of the struct.
         const Type *AgTy = cast<PointerType>(I->getType())->getElementType();
         const StructType *STy = cast<StructType>(AgTy);
-        Value *Idxs[2] = { Context->getConstantInt(Type::Int32Ty, 0), 0 };
+        Value *Idxs[2] = {
+              ConstantInt::get(Type::getInt32Ty(F->getContext()), 0), 0 };
         for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
-          Idxs[1] = Context->getConstantInt(Type::Int32Ty, i);
+          Idxs[1] = ConstantInt::get(Type::getInt32Ty(F->getContext()), i);
           Value *Idx = GetElementPtrInst::Create(*AI, Idxs, Idxs+2,
                                                  (*AI)->getName()+"."+utostr(i),
                                                  Call);
@@ -663,8 +665,10 @@ Function *ArgPromotion::DoPromotion(Function *F,
                  IE = SI->end(); II != IE; ++II) {
               // Use i32 to index structs, and i64 for others (pointers/arrays).
               // This satisfies GEP constraints.
-              const Type *IdxTy = (isa<StructType>(ElTy) ? Type::Int32Ty : Type::Int64Ty);
-              Ops.push_back(Context->getConstantInt(IdxTy, *II));
+              const Type *IdxTy = (isa<StructType>(ElTy) ?
+                    Type::getInt32Ty(F->getContext()) : 
+                    Type::getInt64Ty(F->getContext()));
+              Ops.push_back(ConstantInt::get(IdxTy, *II));
               // Keep track of the type we're currently indexing
               ElTy = cast<CompositeType>(ElTy)->getTypeAtIndex(*II);
             }
@@ -680,7 +684,7 @@ Function *ArgPromotion::DoPromotion(Function *F,
       }
 
     if (ExtraArgHack)
-      Args.push_back(Context->getNullValue(Type::Int32Ty));
+      Args.push_back(Constant::getNullValue(Type::getInt32Ty(F->getContext())));
 
     // Push any varargs arguments on the list
     for (; AI != CS.arg_end(); ++AI, ++ArgIndex) {
@@ -757,14 +761,16 @@ Function *ArgPromotion::DoPromotion(Function *F,
       const Type *AgTy = cast<PointerType>(I->getType())->getElementType();
       Value *TheAlloca = new AllocaInst(AgTy, 0, "", InsertPt);
       const StructType *STy = cast<StructType>(AgTy);
-      Value *Idxs[2] = { Context->getConstantInt(Type::Int32Ty, 0), 0 };
+      Value *Idxs[2] = {
+            ConstantInt::get(Type::getInt32Ty(F->getContext()), 0), 0 };
 
       for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
-        Idxs[1] = Context->getConstantInt(Type::Int32Ty, i);
-        std::string Name = TheAlloca->getName()+"."+utostr(i);
-        Value *Idx = GetElementPtrInst::Create(TheAlloca, Idxs, Idxs+2,
-                                               Name, InsertPt);
-        I2->setName(I->getName()+"."+utostr(i));
+        Idxs[1] = ConstantInt::get(Type::getInt32Ty(F->getContext()), i);
+        Value *Idx = 
+          GetElementPtrInst::Create(TheAlloca, Idxs, Idxs+2,
+                                    TheAlloca->getName()+"."+Twine(i), 
+                                    InsertPt);
+        I2->setName(I->getName()+"."+Twine(i));
         new StoreInst(I2++, Idx, InsertPt);
       }
 
@@ -793,8 +799,8 @@ Function *ArgPromotion::DoPromotion(Function *F,
         LI->replaceAllUsesWith(I2);
         AA.replaceWithNewValue(LI, I2);
         LI->eraseFromParent();
-        DOUT << "*** Promoted load of argument '" << I->getName()
-             << "' in function '" << F->getName() << "'\n";
+        DEBUG(errs() << "*** Promoted load of argument '" << I->getName()
+              << "' in function '" << F->getName() << "'\n");
       } else {
         GetElementPtrInst *GEP = cast<GetElementPtrInst>(I->use_back());
         IndicesVector Operands;
@@ -820,8 +826,8 @@ Function *ArgPromotion::DoPromotion(Function *F,
         NewName += ".val";
         TheArg->setName(NewName);
 
-        DOUT << "*** Promoted agg argument '" << TheArg->getName()
-             << "' of function '" << NF->getName() << "'\n";
+        DEBUG(errs() << "*** Promoted agg argument '" << TheArg->getName()
+              << "' of function '" << NF->getName() << "'\n");
 
         // All of the uses must be load instructions.  Replace them all with
         // the argument specified by ArgNo.
@@ -843,7 +849,8 @@ Function *ArgPromotion::DoPromotion(Function *F,
 
   // Notify the alias analysis implementation that we inserted a new argument.
   if (ExtraArgHack)
-    AA.copyValue(Context->getNullValue(Type::Int32Ty), NF->arg_begin());
+    AA.copyValue(Constant::getNullValue(Type::getInt32Ty(F->getContext())), 
+                 NF->arg_begin());
 
 
   // Tell the alias analysis that the old function is about to disappear.

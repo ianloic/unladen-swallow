@@ -18,6 +18,7 @@
 #define LLVM_CODEGEN_MACHINECODEEMITTER_H
 
 #include "llvm/Support/DataTypes.h"
+#include "llvm/Support/DebugLoc.h"
 
 namespace llvm {
 
@@ -232,7 +233,12 @@ public:
       (*(uint64_t*)Addr) = (uint64_t)Value;
   }
   
-  
+  /// processDebugLoc - Records debug location information about a
+  /// MachineInstruction.  This is called before emitting any bytes associated
+  /// with the instruction.  Even if successive instructions have the same debug
+  /// location, this method will be called for each one.
+  virtual void processDebugLoc(DebugLoc DL) {}
+
   /// emitLabel - Emits a label
   virtual void emitLabel(uint64_t LabelID) = 0;
 
@@ -273,6 +279,13 @@ public:
   virtual uintptr_t getCurrentPCOffset() const {
     return CurBufferPtr-BufferBegin;
   }
+
+  /// earlyResolveAddresses - True if the code emitter can use symbol addresses 
+  /// during code emission time. The JIT is capable of doing this because it
+  /// creates jump tables or constant pools in memory on the fly while the
+  /// object code emitters rely on a linker to have real addresses and should
+  /// use relocations instead.
+  virtual bool earlyResolveAddresses() const = 0;
 
   /// addRelocation - Whenever a relocatable address is needed, it should be
   /// noted with this interface.

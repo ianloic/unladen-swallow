@@ -16,7 +16,7 @@
 #include "llvm/Support/CallSite.h"
 #include "llvm/CallingConv.h"
 #include "llvm/IntrinsicInst.h"
-
+#include "llvm/ADT/SmallPtrSet.h"
 using namespace llvm;
 
 // CountCodeReductionForConstant - Figure out an approximation for how many
@@ -42,6 +42,18 @@ unsigned InlineCostAnalyzer::FunctionInfo::
       // Figure out if this instruction will be removed due to simple constant
       // propagation.
       Instruction &Inst = cast<Instruction>(**UI);
+      
+      // We can't constant propagate instructions which have effects or
+      // read memory.
+      //
+      // FIXME: It would be nice to capture the fact that a load from a
+      // pointer-to-constant-global is actually a *really* good thing to zap.
+      // Unfortunately, we don't know the pointer that may get propagated here,
+      // so we can't make this decision.
+      if (Inst.mayReadFromMemory() || Inst.mayHaveSideEffects() ||
+          isa<AllocationInst>(Inst))
+        continue;
+
       bool AllOperandsConstant = true;
       for (unsigned i = 0, e = Inst.getNumOperands(); i != e; ++i)
         if (!isa<Constant>(Inst.getOperand(i)) && Inst.getOperand(i) != V) {
@@ -113,7 +125,7 @@ void InlineCostAnalyzer::FunctionInfo::analyzeFunction(Function *F) {
         // probably won't do this in callers.
         if (Function *F = CS.getCalledFunction())
           if (F->isDeclaration() && 
-              (F->isName("setjmp") || F->isName("_setjmp"))) {
+              (F->getName() == "setjmp" || F->getName() == "_setjmp")) {
             NeverInline = true;
             return;
           }
@@ -189,8 +201,7 @@ InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
   // If there is only one call of the function, and it has internal linkage,
   // make it almost guaranteed to be inlined.
   //
-  if ((Callee->hasLocalLinkage() || Callee->hasAvailableExternallyLinkage()) && 
-      Callee->hasOneUse())
+  if (Callee->hasLocalLinkage() && Callee->hasOneUse())
     InlineCost -= 15000;
   
   // If this function uses the coldcc calling convention, prefer not to inline

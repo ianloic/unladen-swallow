@@ -17,7 +17,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Support/ConstantRange.h"
-#include <iosfwd>
 #include <map>
 
 namespace llvm {
@@ -33,14 +32,10 @@ public:
   LoopVR() : FunctionPass(&ID) {}
 
   bool runOnFunction(Function &F);
-  virtual void print(std::ostream &os, const Module *) const;
+  virtual void print(raw_ostream &os, const Module *) const;
   void releaseMemory();
 
-  void getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.addRequiredTransitive<LoopInfo>();
-    AU.addRequiredTransitive<ScalarEvolution>();
-    AU.setPreservesAll();
-  }
+  void getAnalysisUsage(AnalysisUsage &AU) const;
 
   //===---------------------------------------------------------------------
   // Methods that are used to look up and update particular values.

@@ -52,10 +52,11 @@
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
@@ -75,24 +76,24 @@ namespace {
     bool Changed;
   public:
 
-   static char ID; // Pass identification, replacement for typeid
-   IndVarSimplify() : LoopPass(&ID) {}
+    static char ID; // Pass identification, replacement for typeid
+    IndVarSimplify() : LoopPass(&ID) {}
 
-   virtual bool runOnLoop(Loop *L, LPPassManager &LPM);
+    virtual bool runOnLoop(Loop *L, LPPassManager &LPM);
 
-   virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-     AU.addRequired<DominatorTree>();
-     AU.addRequired<ScalarEvolution>();
-     AU.addRequiredID(LoopSimplifyID);
-     AU.addRequired<LoopInfo>();
-     AU.addRequired<IVUsers>();
-     AU.addRequiredID(LCSSAID);
-     AU.addPreserved<ScalarEvolution>();
-     AU.addPreservedID(LoopSimplifyID);
-     AU.addPreserved<IVUsers>();
-     AU.addPreservedID(LCSSAID);
-     AU.setPreservesCFG();
-   }
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.addRequired<DominatorTree>();
+      AU.addRequired<LoopInfo>();
+      AU.addRequired<ScalarEvolution>();
+      AU.addRequiredID(LoopSimplifyID);
+      AU.addRequiredID(LCSSAID);
+      AU.addRequired<IVUsers>();
+      AU.addPreserved<ScalarEvolution>();
+      AU.addPreservedID(LoopSimplifyID);
+      AU.addPreservedID(LCSSAID);
+      AU.addPreserved<IVUsers>();
+      AU.setPreservesCFG();
+    }
 
   private:
 
@@ -182,13 +183,13 @@ ICmpInst *IndVarSimplify::LinearFunctionTestReplace(Loop *L,
   else
     Opcode = ICmpInst::ICMP_EQ;
 
-  DOUT << "INDVARS: Rewriting loop exit condition to:\n"
-       << "      LHS:" << *CmpIndVar // includes a newline
-       << "       op:\t"
-       << (Opcode == ICmpInst::ICMP_NE ? "!=" : "==") << "\n"
-       << "      RHS:\t" << *RHS << "\n";
+  DEBUG(errs() << "INDVARS: Rewriting loop exit condition to:\n"
+               << "      LHS:" << *CmpIndVar << '\n'
+               << "       op:\t"
+               << (Opcode == ICmpInst::ICMP_NE ? "!=" : "==") << "\n"
+               << "      RHS:\t" << *RHS << "\n");
 
-  ICmpInst *Cond = new ICmpInst(Opcode, CmpIndVar, ExitCnt, "exitcond", BI);
+  ICmpInst *Cond = new ICmpInst(BI, Opcode, CmpIndVar, ExitCnt, "exitcond");
 
   Instruction *OrigCond = cast<Instruction>(BI->getCondition());
   // It's tempting to use replaceAllUsesWith here to fully replace the old
@@ -273,28 +274,26 @@ void IndVarSimplify::RewriteLoopExitValues(Loop *L,
 
         Value *ExitVal = Rewriter.expandCodeFor(ExitValue, PN->getType(), Inst);
 
-        DOUT << "INDVARS: RLEV: AfterLoopVal = " << *ExitVal
-             << "  LoopVal = " << *Inst << "\n";
+        DEBUG(errs() << "INDVARS: RLEV: AfterLoopVal = " << *ExitVal << '\n'
+                     << "  LoopVal = " << *Inst << "\n");
 
         PN->setIncomingValue(i, ExitVal);
 
         // If this instruction is dead now, delete it.
         RecursivelyDeleteTriviallyDeadInstructions(Inst);
 
-        // If we're inserting code into the exit block rather than the
-        // preheader, we can (and have to) remove the PHI entirely.
-        // This is safe, because the NewVal won't be variant
-        // in the loop, so we don't need an LCSSA phi node anymore.
-        if (ExitBlocks.size() == 1) {
+        if (NumPreds == 1) {
+          // Completely replace a single-pred PHI. This is safe, because the
+          // NewVal won't be variant in the loop, so we don't need an LCSSA phi
+          // node anymore.
           PN->replaceAllUsesWith(ExitVal);
           RecursivelyDeleteTriviallyDeadInstructions(PN);
-          break;
         }
       }
-      if (ExitBlocks.size() != 1) {
+      if (NumPreds != 1) {
         // Clone the PHI and delete the original one. This lets IVUsers and
         // any other maps purge the original user from their records.
-        PHINode *NewPN = PN->clone();
+        PHINode *NewPN = PN->clone(PN->getContext());
         NewPN->takeName(PN);
         NewPN->insertBefore(PN);
         PN->replaceAllUsesWith(NewPN);
@@ -403,7 +402,7 @@ bool IndVarSimplify::runOnLoop(Loop *L, LPPassManager &LPM) {
 
     ++NumInserted;
     Changed = true;
-    DOUT << "INDVARS: New CanIV: " << *IndVar;
+    DEBUG(errs() << "INDVARS: New CanIV: " << *IndVar << '\n');
 
     // Now that the official induction variable is established, reinsert
     // the old canonical-looking variable after it so that the IR remains
@@ -508,8 +507,8 @@ void IndVarSimplify::RewriteIVExpressions(Loop *L, const Type *LargestType,
         NewVal->takeName(Op);
       User->replaceUsesOfWith(Op, NewVal);
       UI->setOperandValToReplace(NewVal);
-      DOUT << "INDVARS: Rewrote IV '" << *AR << "' " << *Op
-           << "   into = " << *NewVal << "\n";
+      DEBUG(errs() << "INDVARS: Rewrote IV '" << *AR << "' " << *Op << '\n'
+                   << "   into = " << *NewVal << "\n");
       ++NumRemoved;
       Changed = true;
 
@@ -546,8 +545,19 @@ void IndVarSimplify::SinkUnusedInvariants(Loop *L) {
     // New instructions were inserted at the end of the preheader.
     if (isa<PHINode>(I))
       break;
-    if (I->isTrapping())
+    // Don't move instructions which might have side effects, since the side
+    // effects need to complete before instructions inside the loop.  Also
+    // don't move instructions which might read memory, since the loop may
+    // modify memory. Note that it's okay if the instruction might have
+    // undefined behavior: LoopSimplify guarantees that the preheader
+    // dominates the exit block.
+    if (I->mayHaveSideEffects() || I->mayReadFromMemory())
       continue;
+    // Don't sink static AllocaInsts out of the entry block, which would
+    // turn them into dynamic allocas!
+    if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
+      if (AI->isStaticAlloca())
+        continue;
     // Determine if there is a use in or before the loop (direct or
     // otherwise).
     bool UsedInLoop = false;
@@ -630,7 +640,8 @@ void IndVarSimplify::HandleFloatingPointIV(Loop *L, PHINode *PH) {
   // Check incoming value.
   ConstantFP *InitValue = dyn_cast<ConstantFP>(PH->getIncomingValue(IncomingEdge));
   if (!InitValue) return;
-  uint64_t newInitValue = Type::Int32Ty->getPrimitiveSizeInBits();
+  uint64_t newInitValue =
+              Type::getInt32Ty(PH->getContext())->getPrimitiveSizeInBits();
   if (!convertToInt(InitValue->getValueAPF(), &newInitValue))
     return;
 
@@ -646,7 +657,8 @@ void IndVarSimplify::HandleFloatingPointIV(Loop *L, PHINode *PH) {
     IncrVIndex = 0;
   IncrValue = dyn_cast<ConstantFP>(Incr->getOperand(IncrVIndex));
   if (!IncrValue) return;
-  uint64_t newIncrValue = Type::Int32Ty->getPrimitiveSizeInBits();
+  uint64_t newIncrValue =
+              Type::getInt32Ty(PH->getContext())->getPrimitiveSizeInBits();
   if (!convertToInt(IncrValue->getValueAPF(), &newIncrValue))
     return;
 
@@ -677,7 +689,7 @@ void IndVarSimplify::HandleFloatingPointIV(Loop *L, PHINode *PH) {
     EVIndex = 0;
   EV = dyn_cast<ConstantFP>(EC->getOperand(EVIndex));
   if (!EV) return;
-  uint64_t intEV = Type::Int32Ty->getPrimitiveSizeInBits();
+  uint64_t intEV = Type::getInt32Ty(PH->getContext())->getPrimitiveSizeInBits();
   if (!convertToInt(EV->getValueAPF(), &intEV))
     return;
 
@@ -710,24 +722,26 @@ void IndVarSimplify::HandleFloatingPointIV(Loop *L, PHINode *PH) {
   if (NewPred == CmpInst::BAD_ICMP_PREDICATE) return;
 
   // Insert new integer induction variable.
-  PHINode *NewPHI = PHINode::Create(Type::Int32Ty,
+  PHINode *NewPHI = PHINode::Create(Type::getInt32Ty(PH->getContext()),
                                     PH->getName()+".int", PH);
-  NewPHI->addIncoming(Context->getConstantInt(Type::Int32Ty, newInitValue),
+  NewPHI->addIncoming(ConstantInt::get(Type::getInt32Ty(PH->getContext()),
+                                       newInitValue),
                       PH->getIncomingBlock(IncomingEdge));
 
   Value *NewAdd = BinaryOperator::CreateAdd(NewPHI,
-                                          Context->getConstantInt(Type::Int32Ty,
+                           ConstantInt::get(Type::getInt32Ty(PH->getContext()),
                                                              newIncrValue),
                                             Incr->getName()+".int", Incr);
   NewPHI->addIncoming(NewAdd, PH->getIncomingBlock(BackEdge));
 
   // The back edge is edge 1 of newPHI, whatever it may have been in the
   // original PHI.
-  ConstantInt *NewEV = Context->getConstantInt(Type::Int32Ty, intEV);
+  ConstantInt *NewEV = ConstantInt::get(Type::getInt32Ty(PH->getContext()),
+                                        intEV);
   Value *LHS = (EVIndex == 1 ? NewPHI->getIncomingValue(1) : NewEV);
   Value *RHS = (EVIndex == 1 ? NewEV : NewPHI->getIncomingValue(1));
-  ICmpInst *NewEC = new ICmpInst(NewPred, LHS, RHS, EC->getNameStart(),
-                                 EC->getParent()->getTerminator());
+  ICmpInst *NewEC = new ICmpInst(EC->getParent()->getTerminator(),
+                                 NewPred, LHS, RHS, EC->getName());
 
   // In the following deltions, PH may become dead and may be deleted.
   // Use a WeakVH to observe whether this happens.
@@ -739,7 +753,7 @@ void IndVarSimplify::HandleFloatingPointIV(Loop *L, PHINode *PH) {
   RecursivelyDeleteTriviallyDeadInstructions(EC);
 
   // Delete old, floating point, increment instruction.
-  Incr->replaceAllUsesWith(Context->getUndef(Incr->getType()));
+  Incr->replaceAllUsesWith(UndefValue::get(Incr->getType()));
   RecursivelyDeleteTriviallyDeadInstructions(Incr);
 
   // Replace floating induction variable, if it isn't already deleted.

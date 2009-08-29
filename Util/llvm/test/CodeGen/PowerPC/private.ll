@@ -11,15 +11,13 @@
 ; RUN: grep L_baz: %t
 ; RUN: grep lis.*\L_baz %t
 
-declare void @foo()
-
-define private void @foo() {
+define private void @foo() nounwind {
         ret void
 }
 
 @baz = private global i32 4;
 
-define i32 @bar() {
+define i32 @bar() nounwind {
         call void @foo()
 	%1 = load i32* @baz, align 4
         ret i32 %1

@@ -51,6 +51,7 @@ FunctionPass *llvm::createPrologEpilogCodeInserter() { return new PEI(); }
 /// frame indexes with appropriate references.
 ///
 bool PEI::runOnMachineFunction(MachineFunction &Fn) {
+  const Function* F = Fn.getFunction();
   const TargetRegisterInfo *TRI = Fn.getTarget().getRegisterInfo();
   RS = TRI->requiresRegisterScavenging(Fn) ? new RegScavenger() : NULL;
 
@@ -59,14 +60,16 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
   if (MachineModuleInfo *MMI = getAnalysisIfAvailable<MachineModuleInfo>())
     Fn.getFrameInfo()->setMachineModuleInfo(MMI);
 
+  // Calculate the MaxCallFrameSize and HasCalls variables for the function's
+  // frame information. Also eliminates call frame pseudo instructions.
+  calculateCallsInformation(Fn);
+
   // Allow the target machine to make some adjustments to the function
   // e.g. UsedPhysRegs before calculateCalleeSavedRegisters.
   TRI->processFunctionBeforeCalleeSavedScan(Fn, RS);
 
-  // Scan the function for modified callee saved registers and insert spill
-  // code for any callee saved registers that are modified.  Also calculate
-  // the MaxCallFrameSize and HasCalls variables for the function's frame
-  // information and eliminates call frame pseudo instructions.
+  // Scan the function for modified callee saved registers and insert spill code
+  // for any callee saved registers that are modified.
   calculateCalleeSavedRegisters(Fn);
 
   // Determine placement of CSR spill/restore code:
@@ -78,7 +81,8 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
   placeCSRSpillsAndRestores(Fn);
 
   // Add the code to save and restore the callee saved registers
-  insertCSRSpillsAndRestores(Fn);
+  if (!F->hasFnAttr(Attribute::Naked))
+    insertCSRSpillsAndRestores(Fn);
 
   // Allow the target machine to make final modifications to the function
   // before the frame layout is finalized.
@@ -92,7 +96,8 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
   // called functions.  Because of this, calculateCalleeSavedRegisters
   // must be called before this function in order to set the HasCalls
   // and MaxCallFrameSize variables.
-  insertPrologEpilogCode(Fn);
+  if (!F->hasFnAttr(Attribute::Naked))
+    insertPrologEpilogCode(Fn);
 
   // Replace all MO_FrameIndex operands with physical register references
   // and actual offsets.
@@ -117,34 +122,23 @@ void PEI::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 #endif
 
-/// calculateCalleeSavedRegisters - Scan the function for modified callee saved
-/// registers.  Also calculate the MaxCallFrameSize and HasCalls variables for
-/// the function's frame information and eliminates call frame pseudo
-/// instructions.
-///
-void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
+/// calculateCallsInformation - Calculate the MaxCallFrameSize and HasCalls
+/// variables for the function's frame information and eliminate call frame
+/// pseudo instructions.
+void PEI::calculateCallsInformation(MachineFunction &Fn) {
   const TargetRegisterInfo *RegInfo = Fn.getTarget().getRegisterInfo();
-  const TargetFrameInfo *TFI = Fn.getTarget().getFrameInfo();
 
-  // Get the callee saved register list...
-  const unsigned *CSRegs = RegInfo->getCalleeSavedRegs(&Fn);
+  unsigned MaxCallFrameSize = 0;
+  bool HasCalls = false;
 
   // Get the function call frame set-up and tear-down instruction opcode
   int FrameSetupOpcode   = RegInfo->getCallFrameSetupOpcode();
   int FrameDestroyOpcode = RegInfo->getCallFrameDestroyOpcode();
 
-  // These are used to keep track the callee-save area. Initialize them.
-  MinCSFrameIndex = INT_MAX;
-  MaxCSFrameIndex = 0;
-
-  // Early exit for targets which have no callee saved registers and no call
-  // frame setup/destroy pseudo instructions.
-  if ((CSRegs == 0 || CSRegs[0] == 0) &&
-      FrameSetupOpcode == -1 && FrameDestroyOpcode == -1)
+  // Early exit for targets which have no call frame setup/destroy pseudo
+  // instructions.
+  if (FrameSetupOpcode == -1 && FrameDestroyOpcode == -1)
     return;
-
-  unsigned MaxCallFrameSize = 0;
-  bool HasCalls = false;
 
   std::vector<MachineBasicBlock::iterator> FrameSDOps;
   for (MachineFunction::iterator BB = Fn.begin(), E = Fn.end(); BB != E; ++BB)
@@ -157,6 +151,10 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
         if (Size > MaxCallFrameSize) MaxCallFrameSize = Size;
         HasCalls = true;
         FrameSDOps.push_back(I);
+      } else if (I->getOpcode() == TargetInstrInfo::INLINEASM) {
+        // An InlineAsm might be a call; assume it is to get the stack frame
+        // aligned correctly for calls.
+        HasCalls = true;
       }
 
   MachineFrameInfo *FFI = Fn.getFrameInfo();
@@ -173,8 +171,28 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
     if (RegInfo->hasReservedCallFrame(Fn) || RegInfo->hasFP(Fn))
       RegInfo->eliminateCallFramePseudoInstr(Fn, *I->getParent(), I);
   }
+}
 
-  // Now figure out which *callee saved* registers are modified by the current
+
+/// calculateCalleeSavedRegisters - Scan the function for modified callee saved
+/// registers.
+void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
+  const TargetRegisterInfo *RegInfo = Fn.getTarget().getRegisterInfo();
+  const TargetFrameInfo *TFI = Fn.getTarget().getFrameInfo();
+  MachineFrameInfo *FFI = Fn.getFrameInfo();
+
+  // Get the callee saved register list...
+  const unsigned *CSRegs = RegInfo->getCalleeSavedRegs(&Fn);
+
+  // These are used to keep track the callee-save area. Initialize them.
+  MinCSFrameIndex = INT_MAX;
+  MaxCSFrameIndex = 0;
+
+  // Early exit for targets which have no callee saved registers.
+  if (CSRegs == 0 || CSRegs[0] == 0)
+    return;
+
+  // Figure out which *callee saved* registers are modified by the current
   // function, thus needing to be saved and restored in the prolog/epilog.
   const TargetRegisterClass * const *CSRegClasses =
     RegInfo->getCalleeSavedRegClasses(&Fn);
@@ -210,6 +228,12 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
     unsigned Reg = I->getReg();
     const TargetRegisterClass *RC = I->getRegClass();
 
+    int FrameIdx;
+    if (RegInfo->hasReservedSpillSlot(Fn, Reg, FrameIdx)) {
+      I->setFrameIdx(FrameIdx);
+      continue;
+    }
+
     // Check to see if this physreg must be spilled to a particular stack slot
     // on this target.
     const std::pair<unsigned,int> *FixedSlot = FixedSpillSlots;
@@ -217,7 +241,6 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
            FixedSlot->first != Reg)
       ++FixedSlot;
 
-    int FrameIdx;
     if (FixedSlot == FixedSpillSlots + NumFixedSpillSlots) {
       // Nope, just spill it anywhere convenient.
       unsigned Align = RC->getAlignment();
@@ -248,6 +271,8 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
   // Get callee saved register information.
   MachineFrameInfo *FFI = Fn.getFrameInfo();
   const std::vector<CalleeSavedInfo> &CSI = FFI->getCalleeSavedInfo();
+
+  FFI->setCalleeSavedInfoValid(true);
 
   // Early exit if no callee saved registers are modified!
   if (CSI.empty())
@@ -612,11 +637,6 @@ void PEI::replaceFrameIndices(MachineFunction &Fn) {
     if (RS) RS->enterBasicBlock(BB);
 
     for (MachineBasicBlock::iterator I = BB->begin(); I != BB->end(); ) {
-      if (I->getOpcode() == TargetInstrInfo::DECLARE) {
-        // Ignore it.
-        ++I;
-        continue;
-      }
 
       if (I->getOpcode() == FrameSetupOpcode ||
           I->getOpcode() == FrameDestroyOpcode) {

@@ -16,6 +16,15 @@
 #define LLVM_TARGET_TARGETOPTIONS_H
 
 namespace llvm {
+  // Possible float ABI settings. Used with FloatABIType in TargetOptions.h.
+  namespace FloatABI {
+    enum ABIType {
+      Default, // Target-specific (either soft of hard depending on triple, etc).
+      Soft, // Soft float.
+      Hard  // Hard float.
+    };
+  }
+  
   /// PrintMachineCode - This flag is enabled when the -print-machineinstrs
   /// option is specified on the command line, and should enable debugging
   /// output from the code generator.
@@ -85,10 +94,14 @@ namespace llvm {
   /// .bss section. This flag disables such behaviour (necessary, e.g. for
   /// crt*.o compiling).
   extern bool NoZerosInBSS;
-  
-  /// ExceptionHandling - This flag indicates that exception information should
-  /// be emitted.
-  extern bool ExceptionHandling;
+
+  /// DwarfExceptionHandling - This flag indicates that Dwarf exception
+  /// information should be emitted.
+  extern bool DwarfExceptionHandling;
+
+  /// SjLjExceptionHandling - This flag indicates that SJLJ exception
+  /// information should be emitted.
+  extern bool SjLjExceptionHandling;
 
   /// UnwindTablesMandatory - This flag indicates that unwind tables should
   /// be emitted for all functions.

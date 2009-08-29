@@ -45,7 +45,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/IntrinsicInst.h"
-#include "llvm/MDNode.h"
+#include "llvm/Metadata.h"
 #include "llvm/Module.h"
 #include "llvm/ModuleProvider.h"
 #include "llvm/Pass.h"
@@ -56,7 +56,6 @@
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/InstVisitor.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -65,7 +64,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <sstream>
 #include <cstdarg>
 using namespace llvm;
 
@@ -86,9 +84,9 @@ namespace {  // Anonymous namespace for class
 
       for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
         if (I->empty() || !I->back().isTerminator()) {
-          cerr << "Basic Block does not have terminator!\n";
-          WriteAsOperand(*cerr, I, true);
-          cerr << "\n";
+          errs() << "Basic Block does not have terminator!\n";
+          WriteAsOperand(errs(), I, true);
+          errs() << "\n";
           Broken = true;
         }
       }
@@ -116,7 +114,9 @@ namespace {
                           // What to do if verification fails.
     Module *Mod;          // Module we are verifying right now
     DominatorTree *DT; // Dominator Tree, caution can be null!
-    std::stringstream msgs;  // A stringstream to collect messages
+       
+    std::string Messages;
+    raw_string_ostream MessagesStr;
 
     /// InstInThisBlock - when verifying a basic block, keep track of all of the
     /// instructions we have seen so far.  This allows us to do efficient
@@ -127,20 +127,20 @@ namespace {
     Verifier()
       : FunctionPass(&ID), 
       Broken(false), RealPass(true), action(AbortProcessAction),
-      DT(0), msgs( std::ios::app | std::ios::out ) {}
+      DT(0), MessagesStr(Messages) {}
     explicit Verifier(VerifierFailureAction ctn)
       : FunctionPass(&ID), 
       Broken(false), RealPass(true), action(ctn), DT(0),
-      msgs( std::ios::app | std::ios::out ) {}
+      MessagesStr(Messages) {}
     explicit Verifier(bool AB)
       : FunctionPass(&ID), 
       Broken(false), RealPass(true),
       action( AB ? AbortProcessAction : PrintMessageAction), DT(0),
-      msgs( std::ios::app | std::ios::out ) {}
+      MessagesStr(Messages) {}
     explicit Verifier(DominatorTree &dt)
       : FunctionPass(&ID), 
       Broken(false), RealPass(false), action(PrintMessageAction),
-      DT(&dt), msgs( std::ios::app | std::ios::out ) {}
+      DT(&dt), MessagesStr(Messages) {}
 
 
     bool doInitialization(Module &M) {
@@ -206,20 +206,20 @@ namespace {
     ///
     bool abortIfBroken() {
       if (!Broken) return false;
-      msgs << "Broken module found, ";
+      MessagesStr << "Broken module found, ";
       switch (action) {
-      default: assert(0 && "Unknown action");
+      default: llvm_unreachable("Unknown action");
       case AbortProcessAction:
-        msgs << "compilation aborted!\n";
-        cerr << msgs.str();
+        MessagesStr << "compilation aborted!\n";
+        errs() << MessagesStr.str();
         // Client should choose different reaction if abort is not desired
         abort();
       case PrintMessageAction:
-        msgs << "verification continues.\n";
-        cerr << msgs.str();
+        MessagesStr << "verification continues.\n";
+        errs() << MessagesStr.str();
         return false;
       case ReturnStatusAction:
-        msgs << "compilation terminated.\n";
+        MessagesStr << "compilation terminated.\n";
         return true;
       }
     }
@@ -286,28 +286,27 @@ namespace {
     void WriteValue(const Value *V) {
       if (!V) return;
       if (isa<Instruction>(V)) {
-        msgs << *V;
+        MessagesStr << *V;
       } else {
-        WriteAsOperand(msgs, V, true, Mod);
-        msgs << "\n";
+        WriteAsOperand(MessagesStr, V, true, Mod);
+        MessagesStr << "\n";
       }
     }
 
     void WriteType(const Type *T) {
       if (!T) return;
-      raw_os_ostream RO(msgs);
-      RO << ' ';
-      WriteTypeSymbolic(RO, T, Mod);
+      MessagesStr << ' ';
+      WriteTypeSymbolic(MessagesStr, T, Mod);
     }
 
 
     // CheckFailed - A check failed, so print out the condition and the message
     // that failed.  This provides a nice place to put a breakpoint if you want
     // to see why something is not correct.
-    void CheckFailed(const std::string &Message,
+    void CheckFailed(const Twine &Message,
                      const Value *V1 = 0, const Value *V2 = 0,
                      const Value *V3 = 0, const Value *V4 = 0) {
-      msgs << Message << "\n";
+      MessagesStr << Message.str() << "\n";
       WriteValue(V1);
       WriteValue(V2);
       WriteValue(V3);
@@ -315,9 +314,9 @@ namespace {
       Broken = true;
     }
 
-    void CheckFailed( const std::string& Message, const Value* V1,
-                      const Type* T2, const Value* V3 = 0 ) {
-      msgs << Message << "\n";
+    void CheckFailed(const Twine &Message, const Value* V1,
+                     const Type* T2, const Value* V3 = 0) {
+      MessagesStr << Message.str() << "\n";
       WriteValue(V1);
       WriteType(T2);
       WriteValue(V3);
@@ -378,6 +377,15 @@ void Verifier::visitGlobalVariable(GlobalVariable &GV) {
             "Global variable initializer type does not match global "
             "variable type!", &GV);
 
+    // If the global has common linkage, it must have a zero initializer and
+    // cannot be constant.
+    if (GV.hasCommonLinkage()) {
+      Assert1(GV.getInitializer()->isNullValue(),
+              "'common' global must have a zero initializer!", &GV);
+      Assert1(!GV.isConstant(), "'common' global may not be marked constant!",
+              &GV);
+    }
+    
     // Verify that any metadata used in a global initializer points only to
     // other globals.
     if (MDNode *FirstNode = dyn_cast<MDNode>(GV.getInitializer())) {
@@ -544,15 +552,17 @@ void Verifier::visitFunction(Function &F) {
   const FunctionType *FT = F.getFunctionType();
   unsigned NumArgs = F.arg_size();
 
+  Assert1(!F.hasCommonLinkage(), "Functions may not have common linkage", &F);
   Assert2(FT->getNumParams() == NumArgs,
           "# formal arguments must match # of arguments for function type!",
           &F, FT);
   Assert1(F.getReturnType()->isFirstClassType() ||
-          F.getReturnType() == Type::VoidTy || 
+          F.getReturnType() == Type::getVoidTy(F.getContext()) || 
           isa<StructType>(F.getReturnType()),
           "Functions cannot return aggregate values!", &F);
 
-  Assert1(!F.hasStructRetAttr() || F.getReturnType() == Type::VoidTy,
+  Assert1(!F.hasStructRetAttr() ||
+          F.getReturnType() == Type::getVoidTy(F.getContext()),
           "Invalid struct return type!", &F);
 
   const AttrListPtr &Attrs = F.getAttributes();
@@ -580,7 +590,7 @@ void Verifier::visitFunction(Function &F) {
   bool isLLVMdotName = F.getName().size() >= 5 &&
                        F.getName().substr(0, 5) == "llvm.";
   if (!isLLVMdotName)
-    Assert1(F.getReturnType() != Type::MetadataTy,
+    Assert1(F.getReturnType() != Type::getMetadataTy(F.getContext()),
             "Function may not return metadata unless it's an intrinsic", &F);
 
   // Check that the argument values match the function type for this function...
@@ -593,7 +603,7 @@ void Verifier::visitFunction(Function &F) {
     Assert1(I->getType()->isFirstClassType(),
             "Function arguments must have first-class types!", I);
     if (!isLLVMdotName)
-      Assert2(I->getType() != Type::MetadataTy,
+      Assert2(I->getType() != Type::getMetadataTy(F.getContext()),
               "Function takes metadata but isn't an intrinsic", I, &F);
   }
 
@@ -678,7 +688,7 @@ void Verifier::visitTerminatorInst(TerminatorInst &I) {
 void Verifier::visitReturnInst(ReturnInst &RI) {
   Function *F = RI.getParent()->getParent();
   unsigned N = RI.getNumOperands();
-  if (F->getReturnType() == Type::VoidTy) 
+  if (F->getReturnType() == Type::getVoidTy(RI.getContext())) 
     Assert2(N == 0,
             "Found return instr that returns non-void in Function of void "
             "return type!", &RI, F->getReturnType());
@@ -956,7 +966,7 @@ void Verifier::visitBitCastInst(BitCastInst &I) {
   // However, you can't cast pointers to anything but pointers.
   Assert1(isa<PointerType>(DestTy) == isa<PointerType>(DestTy),
           "Bitcast requires both operands to be pointer or neither", &I);
-  Assert1(SrcBitSize == DestBitSize, "Bitcast requies types of same width", &I);
+  Assert1(SrcBitSize == DestBitSize, "Bitcast requires types of same width",&I);
 
   // Disallow aggregates.
   Assert1(!SrcTy->isAggregateType(),
@@ -1038,12 +1048,12 @@ void Verifier::VerifyCallSite(CallSite CS) {
   // Verify that there's no metadata unless it's a direct call to an intrinsic.
   if (!CS.getCalledFunction() || CS.getCalledFunction()->getName().size() < 5 ||
       CS.getCalledFunction()->getName().substr(0, 5) != "llvm.") {
-    Assert1(FTy->getReturnType() != Type::MetadataTy,
+    Assert1(FTy->getReturnType() != Type::getMetadataTy(I->getContext()),
             "Only intrinsics may return metadata", I);
     for (FunctionType::param_iterator PI = FTy->param_begin(),
            PE = FTy->param_end(); PI != PE; ++PI)
-      Assert1(PI->get() != Type::MetadataTy, "Function has metadata parameter "
-              "but isn't an intrinsic", I);
+      Assert1(PI->get() != Type::getMetadataTy(I->getContext()),
+              "Function has metadata parameter but isn't an intrinsic", I);
   }
 
   visitInstruction(*I);
@@ -1117,7 +1127,7 @@ void Verifier::visitBinaryOperator(BinaryOperator &B) {
             "Shift return type must be same as operands!", &B);
     break;
   default:
-    assert(0 && "Unknown BinaryOperator opcode!");
+    llvm_unreachable("Unknown BinaryOperator opcode!");
   }
 
   visitInstruction(B);
@@ -1208,7 +1218,8 @@ void Verifier::visitLoadInst(LoadInst &LI) {
     cast<PointerType>(LI.getOperand(0)->getType())->getElementType();
   Assert2(ElTy == LI.getType(),
           "Load result type does not match pointer operand type!", &LI, ElTy);
-  Assert1(ElTy != Type::MetadataTy, "Can't load metadata!", &LI);
+  Assert1(ElTy != Type::getMetadataTy(LI.getContext()),
+          "Can't load metadata!", &LI);
   visitInstruction(LI);
 }
 
@@ -1217,7 +1228,8 @@ void Verifier::visitStoreInst(StoreInst &SI) {
     cast<PointerType>(SI.getOperand(1)->getType())->getElementType();
   Assert2(ElTy == SI.getOperand(0)->getType(),
           "Stored value type does not match pointer operand type!", &SI, ElTy);
-  Assert1(ElTy != Type::MetadataTy, "Can't store metadata!", &SI);
+  Assert1(ElTy != Type::getMetadataTy(SI.getContext()),
+          "Can't store metadata!", &SI);
   visitInstruction(SI);
 }
 
@@ -1268,24 +1280,25 @@ void Verifier::visitInstruction(Instruction &I) {
   
 
   // Check that void typed values don't have names
-  Assert1(I.getType() != Type::VoidTy || !I.hasName(),
+  Assert1(I.getType() != Type::getVoidTy(I.getContext()) || !I.hasName(),
           "Instruction has a name, but provides a void value!", &I);
 
   // Check that the return value of the instruction is either void or a legal
   // value type.
-  Assert1(I.getType() == Type::VoidTy || I.getType()->isFirstClassType()
+  Assert1(I.getType() == Type::getVoidTy(I.getContext()) || 
+          I.getType()->isFirstClassType()
           || ((isa<CallInst>(I) || isa<InvokeInst>(I)) 
               && isa<StructType>(I.getType())),
           "Instruction returns a non-scalar type!", &I);
 
   // Check that the instruction doesn't produce metadata or metadata*. Calls
   // all already checked against the callee type.
-  Assert1(I.getType() != Type::MetadataTy ||
+  Assert1(I.getType() != Type::getMetadataTy(I.getContext()) ||
           isa<CallInst>(I) || isa<InvokeInst>(I),
           "Invalid use of metadata!", &I);
 
   if (const PointerType *PTy = dyn_cast<PointerType>(I.getType()))
-    Assert1(PTy->getElementType() != Type::MetadataTy,
+    Assert1(PTy->getElementType() != Type::getMetadataTy(I.getContext()),
             "Instructions may not produce pointer to metadata.", &I);
 
 
@@ -1312,7 +1325,7 @@ void Verifier::visitInstruction(Instruction &I) {
 
     if (const PointerType *PTy =
             dyn_cast<PointerType>(I.getOperand(i)->getType()))
-      Assert1(PTy->getElementType() != Type::MetadataTy,
+      Assert1(PTy->getElementType() != Type::getMetadataTy(I.getContext()),
               "Invalid use of metadata pointer.", &I);
     
     if (Function *F = dyn_cast<Function>(I.getOperand(i))) {
@@ -1543,9 +1556,9 @@ bool Verifier::PerformTypeCheck(Intrinsic::ID ID, Function *F, const Type *Ty,
         return false;
       }
     } else {
-      if (Ty != FTy->getParamType(Match - 1)) {
+      if (Ty != FTy->getParamType(Match - NumRets)) {
         CheckFailed(IntrinsicParam(ArgNo, NumRets) + " does not "
-                    "match parameter %" + utostr(Match - 1) + ".", F);
+                    "match parameter %" + utostr(Match - NumRets) + ".", F);
         return false;
       }
     }
@@ -1586,7 +1599,13 @@ bool Verifier::PerformTypeCheck(Intrinsic::ID ID, Function *F, const Type *Ty,
     if (EltTy != Ty)
       Suffix += "v" + utostr(NumElts);
 
-    Suffix += MVT::getMVT(EltTy).getMVTString();
+    Suffix += EVT::getEVT(EltTy).getEVTString();
+  } else if (VT == MVT::vAny) {
+    if (!VTy) {
+      CheckFailed(IntrinsicParam(ArgNo, NumRets) + " is not a vector type.", F);
+      return false;
+    }
+    Suffix += ".v" + utostr(NumElts) + EVT::getEVT(EltTy).getEVTString();
   } else if (VT == MVT::iPTR) {
     if (!isa<PointerType>(Ty)) {
       CheckFailed(IntrinsicParam(ArgNo, NumRets) + " is not a "
@@ -1599,17 +1618,17 @@ bool Verifier::PerformTypeCheck(Intrinsic::ID ID, Function *F, const Type *Ty,
     // allow either case to be legal.
     if (const PointerType* PTyp = dyn_cast<PointerType>(Ty)) {
       Suffix += ".p" + utostr(PTyp->getAddressSpace()) + 
-        MVT::getMVT(PTyp->getElementType()).getMVTString();
+        EVT::getEVT(PTyp->getElementType()).getEVTString();
     } else {
       CheckFailed(IntrinsicParam(ArgNo, NumRets) + " is not a "
                   "pointer and a pointer is required.", F);
       return false;
     }
-  } else if (MVT((MVT::SimpleValueType)VT).isVector()) {
-    MVT VVT = MVT((MVT::SimpleValueType)VT);
+  } else if (EVT((MVT::SimpleValueType)VT).isVector()) {
+    EVT VVT = EVT((MVT::SimpleValueType)VT);
 
     // If this is a vector argument, verify the number and type of elements.
-    if (VVT.getVectorElementType() != MVT::getMVT(EltTy)) {
+    if (VVT.getVectorElementType() != EVT::getEVT(EltTy)) {
       CheckFailed("Intrinsic prototype has incorrect vector element type!", F);
       return false;
     }
@@ -1619,7 +1638,8 @@ bool Verifier::PerformTypeCheck(Intrinsic::ID ID, Function *F, const Type *Ty,
                   "vector elements!", F);
       return false;
     }
-  } else if (MVT((MVT::SimpleValueType)VT).getTypeForMVT() != EltTy) {
+  } else if (EVT((MVT::SimpleValueType)VT).getTypeForEVT(Ty->getContext()) != 
+             EltTy) {
     CheckFailed(IntrinsicParam(ArgNo, NumRets) + " is wrong!", F);
     return false;
   } else if (EltTy != Ty) {
@@ -1743,8 +1763,6 @@ bool llvm::verifyModule(const Module &M, VerifierFailureAction action,
   PM.run(const_cast<Module&>(M));
   
   if (ErrorInfo && V->Broken)
-    *ErrorInfo = V->msgs.str();
+    *ErrorInfo = V->MessagesStr.str();
   return V->Broken;
 }
-
-// vim: sw=2

@@ -26,6 +26,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/GlobalValue.h"
 #include "llvm/Intrinsics.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -116,7 +117,7 @@ namespace {
       uint64_t complow = 1 << (63 - at);
       uint64_t comphigh = 1 << (64 - at);
       //cerr << x << ":" << complow << ":" << comphigh << "\n";
-      if (abs(complow - x) <= abs(comphigh - x))
+      if (abs64(complow - x) <= abs64(comphigh - x))
         return complow;
       else
         return comphigh;
@@ -210,7 +211,6 @@ private:
 /// GOT address into a register.
 ///
 SDNode *AlphaDAGToDAGISel::getGlobalBaseReg() {
-  MachineFunction *MF = BB->getParent();
   unsigned GlobalBaseReg = getInstrInfo()->getGlobalBaseReg(MF);
   return CurDAG->getRegister(GlobalBaseReg, TLI.getPointerTy()).getNode();
 }
@@ -218,7 +218,6 @@ SDNode *AlphaDAGToDAGISel::getGlobalBaseReg() {
 /// getGlobalRetAddr - Grab the return address.
 ///
 SDNode *AlphaDAGToDAGISel::getGlobalRetAddr() {
-  MachineFunction *MF = BB->getParent();
   unsigned GlobalRetAddr = getInstrInfo()->getGlobalRetAddr(MF);
   return CurDAG->getRegister(GlobalRetAddr, TLI.getPointerTy()).getNode();
 }
@@ -304,7 +303,8 @@ SDNode *AlphaDAGToDAGISel::Select(SDValue Op) {
       // val32 >= IMM_LOW  + IMM_LOW  * IMM_MULT) //always true
       break; //(zext (LDAH (LDA)))
     //Else use the constant pool
-    ConstantInt *C = ConstantInt::get(Type::Int64Ty, uval);
+    ConstantInt *C = ConstantInt::get(
+                                Type::getInt64Ty(*CurDAG->getContext()), uval);
     SDValue CPI = CurDAG->getTargetConstantPool(C, MVT::i64);
     SDNode *Tmp = CurDAG->getTargetNode(Alpha::LDAHr, dl, MVT::i64, CPI,
                                         SDValue(getGlobalBaseReg(), 0));
@@ -315,7 +315,7 @@ SDNode *AlphaDAGToDAGISel::Select(SDValue Op) {
   case ISD::ConstantFP: {
     ConstantFPSDNode *CN = cast<ConstantFPSDNode>(N);
     bool isDouble = N->getValueType(0) == MVT::f64;
-    MVT T = isDouble ? MVT::f64 : MVT::f32;
+    EVT T = isDouble ? MVT::f64 : MVT::f32;
     if (CN->getValueAPF().isPosZero()) {
       return CurDAG->SelectNodeTo(N, isDouble ? Alpha::CPYST : Alpha::CPYSS,
                                   T, CurDAG->getRegister(Alpha::F31, T),
@@ -338,7 +338,7 @@ SDNode *AlphaDAGToDAGISel::Select(SDValue Op) {
       bool rev = false;
       bool inv = false;
       switch(CC) {
-      default: DEBUG(N->dump(CurDAG)); assert(0 && "Unknown FP comparison!");
+      default: DEBUG(N->dump(CurDAG)); llvm_unreachable("Unknown FP comparison!");
       case ISD::SETEQ: case ISD::SETOEQ: case ISD::SETUEQ:
         Opc = Alpha::CMPTEQ; break;
       case ISD::SETLT: case ISD::SETOLT: case ISD::SETULT: 
@@ -384,25 +384,6 @@ SDNode *AlphaDAGToDAGISel::Select(SDValue Op) {
     }
     break;
 
-  case ISD::SELECT:
-    if (N->getValueType(0).isFloatingPoint() &&
-        (N->getOperand(0).getOpcode() != ISD::SETCC ||
-         !N->getOperand(0).getOperand(1).getValueType().isFloatingPoint())) {
-      //This should be the condition not covered by the Patterns
-      //FIXME: Don't have SelectCode die, but rather return something testable
-      // so that things like this can be caught in fall though code
-      //move int to fp
-      bool isDouble = N->getValueType(0) == MVT::f64;
-      SDValue cond = N->getOperand(0);
-      SDValue TV = N->getOperand(1);
-      SDValue FV = N->getOperand(2);
-      
-      SDNode* LD = CurDAG->getTargetNode(Alpha::ITOFT, dl, MVT::f64, cond);
-      return CurDAG->getTargetNode(isDouble?Alpha::FCMOVNET:Alpha::FCMOVNES,
-                                   dl, MVT::f64, FV, TV, SDValue(LD,0));
-    }
-    break;
-
   case ISD::AND: {
     ConstantSDNode* SC = NULL;
     ConstantSDNode* MC = NULL;
@@ -445,55 +426,9 @@ void AlphaDAGToDAGISel::SelectCALL(SDValue Op) {
   SDNode *N = Op.getNode();
   SDValue Chain = N->getOperand(0);
   SDValue Addr = N->getOperand(1);
-  SDValue InFlag(0,0);  // Null incoming flag value.
+  SDValue InFlag = N->getOperand(N->getNumOperands() - 1);
   DebugLoc dl = N->getDebugLoc();
 
-   std::vector<SDValue> CallOperands;
-   std::vector<MVT> TypeOperands;
-  
-   //grab the arguments
-   for(int i = 2, e = N->getNumOperands(); i < e; ++i) {
-     TypeOperands.push_back(N->getOperand(i).getValueType());
-     CallOperands.push_back(N->getOperand(i));
-   }
-   int count = N->getNumOperands() - 2;
-
-   static const unsigned args_int[] = {Alpha::R16, Alpha::R17, Alpha::R18,
-                                       Alpha::R19, Alpha::R20, Alpha::R21};
-   static const unsigned args_float[] = {Alpha::F16, Alpha::F17, Alpha::F18,
-                                         Alpha::F19, Alpha::F20, Alpha::F21};
-   
-   for (int i = 6; i < count; ++i) {
-     unsigned Opc = Alpha::WTF;
-     if (TypeOperands[i].isInteger()) {
-       Opc = Alpha::STQ;
-     } else if (TypeOperands[i] == MVT::f32) {
-       Opc = Alpha::STS;
-     } else if (TypeOperands[i] == MVT::f64) {
-       Opc = Alpha::STT;
-     } else
-       assert(0 && "Unknown operand"); 
-
-     SDValue Ops[] = { CallOperands[i],  getI64Imm((i - 6) * 8), 
-                       CurDAG->getCopyFromReg(Chain, dl, Alpha::R30, MVT::i64),
-                       Chain };
-     Chain = SDValue(CurDAG->getTargetNode(Opc, dl, MVT::Other, Ops, 4), 0);
-   }
-   for (int i = 0; i < std::min(6, count); ++i) {
-     if (TypeOperands[i].isInteger()) {
-       Chain = CurDAG->getCopyToReg(Chain, dl, args_int[i], 
-                                    CallOperands[i], InFlag);
-       InFlag = Chain.getValue(1);
-     } else if (TypeOperands[i] == MVT::f32 || TypeOperands[i] == MVT::f64) {
-       Chain = CurDAG->getCopyToReg(Chain, dl, args_float[i], 
-                                    CallOperands[i], InFlag);
-       InFlag = Chain.getValue(1);
-     } else
-       assert(0 && "Unknown operand"); 
-   }
-
-   // Finally, once everything is in registers to pass to the call, emit the
-   // call itself.
    if (Addr.getOpcode() == AlphaISD::GPRelLo) {
      SDValue GOT = SDValue(getGlobalBaseReg(), 0);
      Chain = CurDAG->getCopyToReg(Chain, dl, Alpha::R29, GOT, InFlag);
@@ -509,31 +444,8 @@ void AlphaDAGToDAGISel::SelectCALL(SDValue Op) {
    }
    InFlag = Chain.getValue(1);
 
-   std::vector<SDValue> CallResults;
-  
-   switch (N->getValueType(0).getSimpleVT()) {
-   default: assert(0 && "Unexpected ret value!");
-     case MVT::Other: break;
-   case MVT::i64:
-     Chain = CurDAG->getCopyFromReg(Chain, dl, 
-                                    Alpha::R0, MVT::i64, InFlag).getValue(1);
-     CallResults.push_back(Chain.getValue(0));
-     break;
-   case MVT::f32:
-     Chain = CurDAG->getCopyFromReg(Chain, dl, 
-                                    Alpha::F0, MVT::f32, InFlag).getValue(1);
-     CallResults.push_back(Chain.getValue(0));
-     break;
-   case MVT::f64:
-     Chain = CurDAG->getCopyFromReg(Chain, dl,
-                                    Alpha::F0, MVT::f64, InFlag).getValue(1);
-     CallResults.push_back(Chain.getValue(0));
-     break;
-   }
-
-   CallResults.push_back(Chain);
-   for (unsigned i = 0, e = CallResults.size(); i != e; ++i)
-     ReplaceUses(Op.getValue(i), CallResults[i]);
+  ReplaceUses(Op.getValue(0), Chain);
+  ReplaceUses(Op.getValue(1), InFlag);
 }
 
 

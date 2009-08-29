@@ -331,13 +331,13 @@ OPTIONS:
 <div class="doc_text">
 
 <p>In addition to input and output filenames, we would like the compiler example
-to support three boolean flags: "<tt>-f</tt>" to force overwriting of the output
-file, "<tt>--quiet</tt>" to enable quiet mode, and "<tt>-q</tt>" for backwards
-compatibility with some of our users.  We can support these by declaring options
-of boolean type like this:</p>
+to support three boolean flags: "<tt>-f</tt>" to force writing binary output to
+a terminal, "<tt>--quiet</tt>" to enable quiet mode, and "<tt>-q</tt>" for
+backwards compatibility with some of our users.  We can support these by
+declaring options of boolean type like this:</p>
 
 <div class="doc_code"><pre>
-<a href="#cl::opt">cl::opt</a>&lt;bool&gt; Force ("<i>f</i>", <a href="#cl::desc">cl::desc</a>("<i>Overwrite output files</i>"));
+<a href="#cl::opt">cl::opt</a>&lt;bool&gt; Force ("<i>f</i>", <a href="#cl::desc">cl::desc</a>("<i>Enable binary output on terminals</i>"));
 <a href="#cl::opt">cl::opt</a>&lt;bool&gt; Quiet ("<i>quiet</i>", <a href="#cl::desc">cl::desc</a>("<i>Don't print informational messages</i>"));
 <a href="#cl::opt">cl::opt</a>&lt;bool&gt; Quiet2("<i>q</i>", <a href="#cl::desc">cl::desc</a>("<i>Don't print informational messages</i>"), <a href="#cl::Hidden">cl::Hidden</a>);
 </pre></div>
@@ -378,7 +378,7 @@ library calls to parse the string value into the specified data type.</p>
 USAGE: compiler [options] &lt;input file&gt;
 
 OPTIONS:
-  <b>-f     - Overwrite output files</b>
+  <b>-f     - Enable binary output on terminals</b>
   -o     - Override output filename
   <b>-quiet - Don't print informational messages</b>
   -help  - display available options (--help-hidden for more)
@@ -390,7 +390,7 @@ OPTIONS:
 USAGE: compiler [options] &lt;input file&gt;
 
 OPTIONS:
-  -f     - Overwrite output files
+  -f     - Enable binary output on terminals
   -o     - Override output filename
   <b>-q     - Don't print informational messages</b>
   -quiet - Don't print informational messages
@@ -530,7 +530,7 @@ OPTIONS:
     -O1         - Enable trivial optimizations
     -O2         - Enable default optimizations
     -O3         - Enable expensive optimizations</b>
-  -f            - Overwrite output files
+  -f            - Enable binary output on terminals
   -help         - display available options (--help-hidden for more)
   -o &lt;filename&gt; - Specify output filename
   -quiet        - Don't print informational messages
@@ -614,7 +614,7 @@ OPTIONS:
     =none       - disable debug information
     =quick      - enable quick debug information
     =detailed   - enable detailed debug information</b>
-  -f            - Overwrite output files
+  -f            - Enable binary output on terminals
   -help         - display available options (--help-hidden for more)
   -o &lt;filename&gt; - Specify output filename
   -quiet        - Don't print informational messages
@@ -1441,9 +1441,9 @@ string "<tt>-pos1 -foo -bar baz -pos2 -bork</tt>" would cause the "<tt>-foo -bar
 
 <li><a name="cl::Sink">The <b><tt>cl::Sink</tt></b></a> modifier is
 used to handle unknown options. If there is at least one option with
-<b><tt>cl::Sink</tt></b></a> modifier specified, the parser passes
+<tt>cl::Sink</tt> modifier specified, the parser passes
 unrecognized option strings to it as values instead of signaling an
-error. As with <b><tt>cl::CommaSeparated</tt></b></a>, this modifier
+error. As with <tt>cl::CommaSeparated</tt>, this modifier
 only makes sense with a <a href="#cl::list">cl::list</a> option.</li>
 
 </ul>
@@ -1883,7 +1883,7 @@ our example, we implement <tt>parse</tt> as:</p>
 
     default:
       <i>// Print an error message if unrecognized character!</i>
-      <b>return</b> O.error(": '" + Arg + "' value invalid for file size argument!");
+      <b>return</b> O.error("'" + Arg + "' value invalid for file size argument!");
     }
   }
 }
@@ -1972,7 +1972,7 @@ tutorial.</p>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-06-16 20:09:39 -0700 (Tue, 16 Jun 2009) $
+  Last modified: $Date: 2009-08-25 11:54:01 -0400 (Tue, 25 Aug 2009) $
 </address>
 
 </body>

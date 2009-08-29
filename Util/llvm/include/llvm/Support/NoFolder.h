@@ -28,9 +28,12 @@
 
 namespace llvm {
 
+class LLVMContext;
+
 /// NoFolder - Create "constants" (actually, values) with no folding.
 class NoFolder {
 public:
+  explicit NoFolder(LLVMContext &) {}
 
   //===--------------------------------------------------------------------===//
   // Binary Operators
@@ -38,6 +41,9 @@ public:
 
   Value *CreateAdd(Constant *LHS, Constant *RHS) const {
     return BinaryOperator::CreateAdd(LHS, RHS);
+  }
+  Value *CreateNSWAdd(Constant *LHS, Constant *RHS) const {
+    return BinaryOperator::CreateNSWAdd(LHS, RHS);
   }
   Value *CreateFAdd(Constant *LHS, Constant *RHS) const {
     return BinaryOperator::CreateFAdd(LHS, RHS);
@@ -59,6 +65,9 @@ public:
   }
   Value *CreateSDiv(Constant *LHS, Constant *RHS) const {
     return BinaryOperator::CreateSDiv(LHS, RHS);
+  }
+  Value *CreateExactSDiv(Constant *LHS, Constant *RHS) const {
+    return BinaryOperator::CreateExactSDiv(LHS, RHS);
   }
   Value *CreateFDiv(Constant *LHS, Constant *RHS) const {
     return BinaryOperator::CreateFDiv(LHS, RHS);
@@ -118,6 +127,15 @@ public:
   Value *CreateGetElementPtr(Constant *C, Value* const *IdxList,
                              unsigned NumIdx) const {
     return GetElementPtrInst::Create(C, IdxList, IdxList+NumIdx);
+  }
+
+  Constant *CreateInBoundsGetElementPtr(Constant *C, Constant* const *IdxList,
+                                        unsigned NumIdx) const {
+    return ConstantExpr::getInBoundsGetElementPtr(C, IdxList, NumIdx);
+  }
+  Value *CreateInBoundsGetElementPtr(Constant *C, Value* const *IdxList,
+                                     unsigned NumIdx) const {
+    return GetElementPtrInst::CreateInBounds(C, IdxList, IdxList+NumIdx);
   }
 
   //===--------------------------------------------------------------------===//

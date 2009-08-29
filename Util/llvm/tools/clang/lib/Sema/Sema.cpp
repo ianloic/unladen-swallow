@@ -13,11 +13,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "Sema.h"
+#include "llvm/ADT/DenseMap.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Basic/TargetInfo.h"
 using namespace clang;
 
@@ -53,9 +55,9 @@ static void ConvertArgToStringFn(Diagnostic::ArgumentKind Kind, intptr_t Val,
       
         // Don't desugar magic Objective-C types.
         Ty.getUnqualifiedType() != Context.getObjCIdType() &&
+        Ty.getUnqualifiedType() != Context.getObjCClassType() &&
         Ty.getUnqualifiedType() != Context.getObjCSelType() &&
         Ty.getUnqualifiedType() != Context.getObjCProtoType() &&
-        Ty.getUnqualifiedType() != Context.getObjCClassType() &&
         
         // Not va_list.
         Ty.getUnqualifiedType() != Context.getBuiltinVaListType()) {
@@ -78,8 +80,7 @@ static void ConvertArgToStringFn(Diagnostic::ArgumentKind Kind, intptr_t Val,
     else
       assert(ModLen == 0 && ArgLen == 0 &&
              "Invalid modifier for DeclarationName argument");
-  } else {
-    assert(Kind == Diagnostic::ak_nameddecl);
+  } else if (Kind == Diagnostic::ak_nameddecl) {
     if (ModLen == 1 && Modifier[0] == 'q' && ArgLen == 0)
       S = reinterpret_cast<NamedDecl*>(Val)->getQualifiedNameAsString();
     else { 
@@ -87,6 +88,11 @@ static void ConvertArgToStringFn(Diagnostic::ArgumentKind Kind, intptr_t Val,
            "Invalid modifier for NamedDecl* argument");
       S = reinterpret_cast<NamedDecl*>(Val)->getNameAsString();
     }
+  } else {
+    llvm::raw_string_ostream OS(S);
+    assert(Kind == Diagnostic::ak_nestednamespec);
+    reinterpret_cast<NestedNameSpecifier*> (Val)->print(OS, 
+                                                        Context.PrintingPolicy);
   }
   
   Output.push_back('\'');
@@ -140,17 +146,6 @@ void Sema::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
     Context.setObjCSelType(Context.getTypeDeclType(SelTypedef));
   }
 
-  if (Context.getObjCClassType().isNull()) {
-    RecordDecl *ClassTag = CreateStructDecl(Context, "objc_class");
-    QualType ClassT = Context.getPointerType(Context.getTagDeclType(ClassTag));
-    TypedefDecl *ClassTypedef = 
-      TypedefDecl::Create(Context, CurContext, SourceLocation(),
-                          &Context.Idents.get("Class"), ClassT);
-    PushOnScopeChains(ClassTag, TUScope);
-    PushOnScopeChains(ClassTypedef, TUScope);
-    Context.setObjCClassType(Context.getTypeDeclType(ClassTypedef));
-  }
-
   // Synthesize "@class Protocol;
   if (Context.getObjCProtoType().isNull()) {
     ObjCInterfaceDecl *ProtocolDecl =
@@ -160,19 +155,27 @@ void Sema::ActOnTranslationUnitScope(SourceLocation Loc, Scope *S) {
     Context.setObjCProtoType(Context.getObjCInterfaceType(ProtocolDecl));
     PushOnScopeChains(ProtocolDecl, TUScope);
   }
-
-  // Synthesize "typedef struct objc_object { Class isa; } *id;"
+  // Create the built-in typedef for 'id'.
   if (Context.getObjCIdType().isNull()) {
-    RecordDecl *ObjectTag = CreateStructDecl(Context, "objc_object");
-
-    QualType ObjT = Context.getPointerType(Context.getTagDeclType(ObjectTag));
-    PushOnScopeChains(ObjectTag, TUScope);
-    TypedefDecl *IdTypedef = TypedefDecl::Create(Context, CurContext,
-                                                 SourceLocation(),
-                                                 &Context.Idents.get("id"),
-                                                 ObjT);
+    TypedefDecl *IdTypedef = 
+      TypedefDecl::Create( 
+        Context, CurContext, SourceLocation(), &Context.Idents.get("id"),
+        Context.getObjCObjectPointerType(Context.ObjCBuiltinIdTy)
+      );
     PushOnScopeChains(IdTypedef, TUScope);
     Context.setObjCIdType(Context.getTypeDeclType(IdTypedef));
+    Context.ObjCIdRedefinitionType = Context.getObjCIdType();
+  }
+  // Create the built-in typedef for 'Class'.
+  if (Context.getObjCClassType().isNull()) {
+    TypedefDecl *ClassTypedef = 
+      TypedefDecl::Create( 
+        Context, CurContext, SourceLocation(), &Context.Idents.get("Class"),
+        Context.getObjCObjectPointerType(Context.ObjCBuiltinClassTy)
+      );
+    PushOnScopeChains(ClassTypedef, TUScope);
+    Context.setObjCClassType(Context.getTypeDeclType(ClassTypedef));
+    Context.ObjCClassRedefinitionType = Context.getObjCClassType();
   }
 }
 
@@ -198,7 +201,8 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
 /// ImpCastExprToType - If Expr is not of type 'Type', insert an implicit cast. 
 /// If there is already an implicit cast, merge into the existing one.
 /// If isLvalue, the result of the cast is an lvalue.
-void Sema::ImpCastExprToType(Expr *&Expr, QualType Ty, bool isLvalue) {
+void Sema::ImpCastExprToType(Expr *&Expr, QualType Ty, 
+                             const CastExpr::CastInfo &Info, bool isLvalue) {
   QualType ExprTy = Context.getCanonicalType(Expr->getType());
   QualType TypeTy = Context.getCanonicalType(Ty);
   
@@ -221,7 +225,8 @@ void Sema::ImpCastExprToType(Expr *&Expr, QualType Ty, bool isLvalue) {
     ImpCast->setType(Ty);
     ImpCast->setLvalueCast(isLvalue);
   } else 
-    Expr = new (Context) ImplicitCastExpr(Ty, Expr, isLvalue);
+    Expr = new (Context) ImplicitCastExpr(Ty, Info, Expr, 
+                                          isLvalue);
 }
 
 void Sema::DeleteExpr(ExprTy *E) {
@@ -247,6 +252,15 @@ void Sema::ActOnEndOfTranslationUnit() {
   // template instantiations earlier.
   PerformPendingImplicitInstantiations();
   
+  // check for #pragma weak identifiers that were never declared
+  for (llvm::DenseMap<IdentifierInfo*,WeakInfo>::iterator
+        I = WeakUndeclaredIdentifiers.begin(),
+        E = WeakUndeclaredIdentifiers.end(); I != E; ++I) {
+      if (!I->second.getUsed())
+        Diag(I->second.getLocation(), diag::warn_weak_identifier_undeclared)
+          << I->first;
+  }
+
   if (!CompleteTranslationUnit)
     return;
 
@@ -302,27 +316,30 @@ void Sema::ActOnEndOfTranslationUnit() {
 // Helper functions.
 //===----------------------------------------------------------------------===//
 
+DeclContext *Sema::getFunctionLevelDeclContext() {
+  DeclContext *DC = PreDeclaratorDC ? PreDeclaratorDC : CurContext;
+  
+  while (isa<BlockDecl>(DC))
+    DC = DC->getParent();
+  
+  return DC;
+}
+
 /// getCurFunctionDecl - If inside of a function body, this returns a pointer
 /// to the function decl for the function being parsed.  If we're currently
 /// in a 'block', this returns the containing context.
 FunctionDecl *Sema::getCurFunctionDecl() {
-  DeclContext *DC = CurContext;
-  while (isa<BlockDecl>(DC))
-    DC = DC->getParent();
+  DeclContext *DC = getFunctionLevelDeclContext();
   return dyn_cast<FunctionDecl>(DC);
 }
 
 ObjCMethodDecl *Sema::getCurMethodDecl() {
-  DeclContext *DC = CurContext;
-  while (isa<BlockDecl>(DC))
-    DC = DC->getParent();
+  DeclContext *DC = getFunctionLevelDeclContext();
   return dyn_cast<ObjCMethodDecl>(DC);
 }
 
 NamedDecl *Sema::getCurFunctionOrMethodDecl() {
-  DeclContext *DC = CurContext;
-  while (isa<BlockDecl>(DC))
-    DC = DC->getParent();
+  DeclContext *DC = getFunctionLevelDeclContext();
   if (isa<ObjCMethodDecl>(DC) || isa<FunctionDecl>(DC))
     return cast<NamedDecl>(DC);
   return 0;
@@ -346,6 +363,15 @@ Sema::SemaDiagnosticBuilder::~SemaDiagnosticBuilder() {
   }
 }
 
+Sema::SemaDiagnosticBuilder
+Sema::Diag(SourceLocation Loc, const PartialDiagnostic& PD) {
+  SemaDiagnosticBuilder Builder(Diag(Loc, PD.getDiagID()));
+  PD.Emit(Builder);
+  
+  return Builder;
+}
+
 void Sema::ActOnComment(SourceRange Comment) {
   Context.Comments.push_back(Comment);
 }
+

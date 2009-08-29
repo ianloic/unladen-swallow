@@ -13,6 +13,7 @@ def err_fe_unknown_triple : Error<
   "unknown target triple '%0', please use -triple or -arch">;
 def err_fe_error_reading : Error<"error reading '%0'">;
 def err_fe_error_reading_stdin : Error<"error reading stdin">;
+def err_fe_error_backend : Error<"error in backend: %0">, DefaultFatal;
 
 def note_fixit_applied : Note<"FIX-IT applied suggested code changes">;
 def note_fixit_in_macro : Note<
@@ -68,6 +69,9 @@ def warn_pch_altivec : Error<
     "are currently %select{disabled|enabled}1">;
 def warn_pch_opencl : Error<
     "OpenCL language extensions were %select{disabled|enabled}0 in PCH file "
+    "but are currently %select{disabled|enabled}1">;
+    def warn_elide_constructors : Error<
+    "Elidable copy constructors were %select{disabled|enabled}0 in PCH file "
     "but are currently %select{disabled|enabled}1">;
 def warn_pch_exceptions : Error<
     "exceptions were %select{disabled|enabled}0 in PCH file but "

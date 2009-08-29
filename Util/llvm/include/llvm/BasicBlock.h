@@ -47,7 +47,7 @@ template<> struct ilist_traits<Instruction>
   Instruction *ensureHead(Instruction*) const { return createSentinel(); }
   static void noteHead(Instruction*, Instruction*) {}
 private:
-  mutable ilist_node<Instruction> Sentinel;
+  mutable ilist_half_node<Instruction> Sentinel;
 };
 
 /// This represents a single basic block in LLVM. A basic block is simply a
@@ -83,12 +83,11 @@ private:
   /// is automatically inserted at either the end of the function (if
   /// InsertBefore is null), or before the specified basic block.
   ///
-  explicit BasicBlock(const std::string &Name = "", Function *Parent = 0,
-                      BasicBlock *InsertBefore = 0);
+  explicit BasicBlock(LLVMContext &C, const Twine &Name = "",
+                      Function *Parent = 0, BasicBlock *InsertBefore = 0);
 public:
-  /// getContext - Get the context in which this basic block lives,
-  /// or null if it is not currently attached to a function.
-  LLVMContext *getContext() const;
+  /// getContext - Get the context in which this basic block lives.
+  LLVMContext &getContext() const;
   
   /// Instruction iterators...
   typedef InstListType::iterator                              iterator;
@@ -97,9 +96,9 @@ public:
   /// Create - Creates a new BasicBlock. If the Parent parameter is specified,
   /// the basic block is automatically inserted at either the end of the
   /// function (if InsertBefore is 0), or before the specified basic block.
-  static BasicBlock *Create(const std::string &Name = "", Function *Parent = 0,
-                            BasicBlock *InsertBefore = 0) {
-    return new BasicBlock(Name, Parent, InsertBefore);
+  static BasicBlock *Create(LLVMContext &Context, const Twine &Name = "", 
+                            Function *Parent = 0,BasicBlock *InsertBefore = 0) {
+    return new BasicBlock(Context, Name, Parent, InsertBefore);
   }
   ~BasicBlock();
 
@@ -232,7 +231,7 @@ public:
   /// cause a degenerate basic block to be formed, having a terminator inside of
   /// the basic block).
   ///
-  BasicBlock *splitBasicBlock(iterator I, const std::string &BBName = "");
+  BasicBlock *splitBasicBlock(iterator I, const Twine &BBName = "");
 };
 
 } // End llvm namespace

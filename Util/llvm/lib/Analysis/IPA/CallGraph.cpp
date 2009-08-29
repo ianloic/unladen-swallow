@@ -18,8 +18,7 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
-#include <ostream>
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 namespace {
@@ -68,30 +67,21 @@ public:
     AU.setPreservesAll();
   }
 
-  void print(std::ostream *o, const Module *M) const {
-    if (o) print(*o, M);
-  }
-
-  virtual void print(std::ostream &o, const Module *M) const {
-    o << "CallGraph Root is: ";
+  virtual void print(raw_ostream &OS, const Module *) const {
+    OS << "CallGraph Root is: ";
     if (Function *F = getRoot()->getFunction())
-      o << F->getName() << "\n";
-    else
-      o << "<<null function: 0x" << getRoot() << ">>\n";
+      OS << F->getName() << "\n";
+    else {
+      OS << "<<null function: 0x" << getRoot() << ">>\n";
+    }
     
-    CallGraph::print(o, M);
+    CallGraph::print(OS, 0);
   }
 
   virtual void releaseMemory() {
     destroy();
   }
   
-  /// dump - Print out this call graph.
-  ///
-  inline void dump() const {
-    print(cerr, Mod);
-  }
-
   CallGraphNode* getExternalCallingNode() const { return ExternalCallingNode; }
   CallGraphNode* getCallsExternalNode()   const { return CallsExternalNode; }
 
@@ -187,13 +177,9 @@ void CallGraph::destroy() {
   }
 }
 
-void CallGraph::print(std::ostream &OS, const Module *M) const {
+void CallGraph::print(raw_ostream &OS, Module*) const {
   for (CallGraph::const_iterator I = begin(), E = end(); I != E; ++I)
     I->second->print(OS);
-}
-
-void CallGraph::dump() const {
-  print(cerr, 0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -242,7 +228,7 @@ CallGraphNode *CallGraph::getOrInsertFunction(const Function *F) {
   return CGN = new CallGraphNode(const_cast<Function*>(F));
 }
 
-void CallGraphNode::print(std::ostream &OS) const {
+void CallGraphNode::print(raw_ostream &OS) const {
   if (Function *F = getFunction())
     OS << "Call graph node for function: '" << F->getName() <<"'\n";
   else
@@ -256,7 +242,7 @@ void CallGraphNode::print(std::ostream &OS) const {
   OS << "\n";
 }
 
-void CallGraphNode::dump() const { print(cerr); }
+void CallGraphNode::dump() const { print(errs()); }
 
 /// removeCallEdgeFor - This method removes the edge in the node for the
 /// specified call site.  Note that this method takes linear time, so it

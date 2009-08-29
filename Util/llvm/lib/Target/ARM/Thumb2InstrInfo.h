@@ -31,11 +31,24 @@ public:
   // if there is not such an opcode.
   unsigned getUnindexedOpcode(unsigned Opc) const;
 
-  // Return the opcode that implements 'Op', or 0 if no opcode
-  unsigned getOpcode(ARMII::Op Op) const;
-
   // Return true if the block does not fall through.
   bool BlockHasNoFallThrough(const MachineBasicBlock &MBB) const;
+
+  bool copyRegToReg(MachineBasicBlock &MBB,
+                    MachineBasicBlock::iterator I,
+                    unsigned DestReg, unsigned SrcReg,
+                    const TargetRegisterClass *DestRC,
+                    const TargetRegisterClass *SrcRC) const;
+
+  void storeRegToStackSlot(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator MBBI,
+                           unsigned SrcReg, bool isKill, int FrameIndex,
+                           const TargetRegisterClass *RC) const;
+
+  void loadRegFromStackSlot(MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MBBI,
+                            unsigned DestReg, int FrameIndex,
+                            const TargetRegisterClass *RC) const;
 
   /// getRegisterInfo - TargetInstrInfo is a superset of MRegister info.  As
   /// such, whenever a client has an instance of instruction info, it should

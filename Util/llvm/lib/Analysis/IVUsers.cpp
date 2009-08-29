@@ -54,7 +54,7 @@ static bool containsAddRecFromDifferentLoop(const SCEV *S, Loop *L) {
       if (newLoop == L)
         return false;
       // if newLoop is an outer loop of L, this is OK.
-      if (!LoopInfoBase<BasicBlock>::isNotAlreadyContainedIn(L, newLoop))
+      if (!LoopInfo::isNotAlreadyContainedIn(L, newLoop))
         return false;
     }
     return true;
@@ -129,8 +129,8 @@ static bool getSCEVStartAndStride(const SCEV *&SH, Loop *L, Loop *UseLoop,
     if (!AddRecStride->dominates(Preheader, DT))
       return false;
 
-    DOUT << "[" << L->getHeader()->getName()
-         << "] Variable stride: " << *AddRec << "\n";
+    DEBUG(errs() << "[" << L->getHeader()->getName()
+                 << "] Variable stride: " << *AddRec << "\n");
   }
 
   Stride = AddRecStride;
@@ -228,14 +228,14 @@ bool IVUsers::AddUsersIfInteresting(Instruction *I) {
     if (LI->getLoopFor(User->getParent()) != L) {
       if (isa<PHINode>(User) || Processed.count(User) ||
           !AddUsersIfInteresting(User)) {
-        DOUT << "FOUND USER in other loop: " << *User
-             << "   OF SCEV: " << *ISE << "\n";
+        DEBUG(errs() << "FOUND USER in other loop: " << *User << '\n'
+                     << "   OF SCEV: " << *ISE << '\n');
         AddUserToIVUsers = true;
       }
     } else if (Processed.count(User) ||
                !AddUsersIfInteresting(User)) {
-      DOUT << "FOUND USER: " << *User
-           << "   OF SCEV: " << *ISE << "\n";
+      DEBUG(errs() << "FOUND USER: " << *User << '\n'
+                   << "   OF SCEV: " << *ISE << '\n');
       AddUserToIVUsers = true;
     }
 
@@ -257,7 +257,7 @@ bool IVUsers::AddUsersIfInteresting(Instruction *I) {
         const SCEV *NewStart = SE->getMinusSCEV(Start, Stride);
         StrideUses->addUser(NewStart, User, I);
         StrideUses->Users.back().setIsUseOfPostIncrementedValue(true);
-        DOUT << "   USING POSTINC SCEV, START=" << *NewStart<< "\n";
+        DEBUG(errs() << "   USING POSTINC SCEV, START=" << *NewStart<< "\n");
       } else {
         StrideUses->addUser(Start, User, I);
       }
@@ -340,13 +340,9 @@ void IVUsers::print(raw_ostream &OS, const Module *M) const {
         OS << " (post-inc)";
       OS << " in ";
       UI->getUser()->print(OS);
+      OS << '\n';
     }
   }
-}
-
-void IVUsers::print(std::ostream &o, const Module *M) const {
-  raw_os_ostream OS(o);
-  print(OS, M);
 }
 
 void IVUsers::dump() const {

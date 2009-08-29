@@ -68,6 +68,8 @@ public:
     TST_void,
     TST_char,
     TST_wchar,        // C++ wchar_t
+    TST_char16,       // C++0x char16_t
+    TST_char32,       // C++0x char32_t
     TST_int,
     TST_float,
     TST_double,
@@ -153,13 +155,6 @@ private:
   SourceLocation FS_inlineLoc, FS_virtualLoc, FS_explicitLoc;
   SourceLocation FriendLoc;
   
-  bool BadSpecifier(TST T, const char *&PrevSpec);
-  bool BadSpecifier(TQ T, const char *&PrevSpec);
-  bool BadSpecifier(TSS T, const char *&PrevSpec);
-  bool BadSpecifier(TSC T, const char *&PrevSpec);
-  bool BadSpecifier(TSW T, const char *&PrevSpec);
-  bool BadSpecifier(SCS T, const char *&PrevSpec);
-  
   DeclSpec(const DeclSpec&);       // DO NOT IMPLEMENT
   void operator=(const DeclSpec&); // DO NOT IMPLEMENT
 public:  
@@ -217,6 +212,10 @@ public:
   /// getSpecifierName - Turn a type-specifier-type into a string like "_Bool"
   /// or "union".
   static const char *getSpecifierName(DeclSpec::TST T);
+  static const char *getSpecifierName(DeclSpec::TQ Q);
+  static const char *getSpecifierName(DeclSpec::TSS S);
+  static const char *getSpecifierName(DeclSpec::TSC C);
+  static const char *getSpecifierName(DeclSpec::TSW W);
   static const char *getSpecifierName(DeclSpec::SCS S);
   
   // type-qualifiers
@@ -268,26 +267,44 @@ public:
   void SetRangeStart(SourceLocation Loc) { Range.setBegin(Loc); }
   void SetRangeEnd(SourceLocation Loc) { Range.setEnd(Loc); }
   
-  /// These methods set the specified attribute of the DeclSpec, but return true
-  /// and ignore the request if invalid (e.g. "extern" then "auto" is
-  /// specified).  The name of the previous specifier is returned in prevspec.
-  bool SetStorageClassSpec(SCS S, SourceLocation Loc, const char *&PrevSpec);
-  bool SetStorageClassSpecThread(SourceLocation Loc, const char *&PrevSpec);
-  bool SetTypeSpecWidth(TSW W, SourceLocation Loc, const char *&PrevSpec);
-  bool SetTypeSpecComplex(TSC C, SourceLocation Loc, const char *&PrevSpec);
-  bool SetTypeSpecSign(TSS S, SourceLocation Loc, const char *&PrevSpec);
+  /// These methods set the specified attribute of the DeclSpec and
+  /// return false if there was no error.  If an error occurs (for
+  /// example, if we tried to set "auto" on a spec with "extern"
+  /// already set), they return true and set PrevSpec and DiagID
+  /// such that
+  ///   Diag(Loc, DiagID) << PrevSpec;
+  /// will yield a useful result.
+  ///
+  /// TODO: use a more general approach that still allows these
+  /// diagnostics to be ignored when desired.
+  bool SetStorageClassSpec(SCS S, SourceLocation Loc, const char *&PrevSpec,
+                           unsigned &DiagID);
+  bool SetStorageClassSpecThread(SourceLocation Loc, const char *&PrevSpec,
+                                 unsigned &DiagID);
+  bool SetTypeSpecWidth(TSW W, SourceLocation Loc, const char *&PrevSpec,
+                        unsigned &DiagID);
+  bool SetTypeSpecComplex(TSC C, SourceLocation Loc, const char *&PrevSpec,
+                          unsigned &DiagID);
+  bool SetTypeSpecSign(TSS S, SourceLocation Loc, const char *&PrevSpec,
+                       unsigned &DiagID);
   bool SetTypeSpecType(TST T, SourceLocation Loc, const char *&PrevSpec,
-                       void *Rep = 0, bool Owned = false);
+                       unsigned &DiagID, void *Rep = 0, bool Owned = false);
   bool SetTypeSpecError();
-
+  void UpdateTypeRep(void *Rep) { TypeRep = Rep; }
+                  
   bool SetTypeQual(TQ T, SourceLocation Loc, const char *&PrevSpec,
-                   const LangOptions &Lang);
+                   unsigned &DiagID, const LangOptions &Lang);
   
-  bool SetFunctionSpecInline(SourceLocation Loc, const char *&PrevSpec);
-  bool SetFunctionSpecVirtual(SourceLocation Loc, const char *&PrevSpec);
-  bool SetFunctionSpecExplicit(SourceLocation Loc, const char *&PrevSpec);
+  bool SetFunctionSpecInline(SourceLocation Loc, const char *&PrevSpec,
+                             unsigned &DiagID);
+  bool SetFunctionSpecVirtual(SourceLocation Loc, const char *&PrevSpec,
+                              unsigned &DiagID);
+  bool SetFunctionSpecExplicit(SourceLocation Loc, const char *&PrevSpec,
+                               unsigned &DiagID);
   
-  bool SetFriendSpec(SourceLocation Loc, const char *&PrevSpec);
+  bool SetFriendSpec(SourceLocation Loc, const char *&PrevSpec,
+                     unsigned &DiagID);
+
   bool isFriendSpecified() const { return Friend_specified; }
   SourceLocation getFriendSpecLoc() const { return FriendLoc; }
 
@@ -720,7 +737,8 @@ struct DeclaratorChunk {
                                      bool hasAnyExceptionSpec,
                                      ActionBase::TypeTy **Exceptions,
                                      SourceRange *ExceptionRanges,
-                                     unsigned NumExceptions, SourceLocation Loc,
+                                     unsigned NumExceptions,
+                                     SourceLocation LPLoc, SourceLocation RPLoc,
                                      Declarator &TheDeclarator);
   
   /// getBlockPointer - Return a DeclaratorChunk for a block.
@@ -835,6 +853,9 @@ private:
   DeclaratorChunk::ParamInfo InlineParams[16];
   bool InlineParamsUsed;
 
+  /// Extension - true if the declaration is preceded by __extension__.
+  bool Extension : 1;
+
   friend struct DeclaratorChunk;
 
 public:
@@ -843,7 +864,7 @@ public:
       Kind(DK_Abstract),
       InvalidType(DS.getTypeSpecType() == DeclSpec::TST_error),
       GroupingParens(false), AttrList(0), AsmLabel(0), Type(0),
-      InlineParamsUsed(false) {
+      InlineParamsUsed(false), Extension(false) {
   }
   
   ~Declarator() {
@@ -1060,8 +1081,20 @@ public:
   const AttributeList *getAttributes() const { return AttrList; }
   AttributeList *getAttributes() { return AttrList; }
 
+  /// hasAttributes - do we contain any attributes?
+  bool hasAttributes() const {
+    if (getAttributes() || getDeclSpec().getAttributes()) return true;
+    for (unsigned i = 0, e = getNumTypeObjects(); i != e; ++i)
+      if (getTypeObject(i).getAttrs())
+        return true;
+    return false;
+  }
+
   void setAsmLabel(ActionBase::ExprTy *E) { AsmLabel = E; }
   ActionBase::ExprTy *getAsmLabel() const { return AsmLabel; }
+
+  void setExtension(bool Val = true) { Extension = Val; }
+  bool getExtension() const { return Extension; }
 
   ActionBase::TypeTy *getDeclaratorIdType() const { return Type; }
 

@@ -54,9 +54,9 @@ ObjCContainerDecl::getIvarDecl(IdentifierInfo *Id) const {
   return 0;
 }
 
-// Get the local instance method declared in this interface.
+// Get the local instance/class method declared in this interface.
 ObjCMethodDecl *
-ObjCContainerDecl::getInstanceMethod(Selector Sel) const {
+ObjCContainerDecl::getMethod(Selector Sel, bool isInstance) const {
   // Since instance & class methods can have the same name, the loop below
   // ensures we get the correct method.
   //
@@ -68,27 +68,7 @@ ObjCContainerDecl::getInstanceMethod(Selector Sel) const {
   lookup_const_iterator Meth, MethEnd;
   for (llvm::tie(Meth, MethEnd) = lookup(Sel); Meth != MethEnd; ++Meth) {
     ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(*Meth);
-    if (MD && MD->isInstanceMethod())
-      return MD;
-  }
-  return 0;
-}
-
-// Get the local class method declared in this interface.
-ObjCMethodDecl *
-ObjCContainerDecl::getClassMethod(Selector Sel) const {
-  // Since instance & class methods can have the same name, the loop below
-  // ensures we get the correct method.
-  //
-  // @interface Whatever
-  // - (int) class_method;
-  // + (float) class_method;
-  // @end
-  //
-  lookup_const_iterator Meth, MethEnd;
-  for (llvm::tie(Meth, MethEnd) = lookup(Sel); Meth != MethEnd; ++Meth) {
-    ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(*Meth);
-    if (MD && MD->isClassMethod())
+    if (MD && MD->isInstanceMethod() == isInstance)
       return MD;
   }
   return 0;
@@ -165,14 +145,15 @@ ObjCInterfaceDecl *ObjCInterfaceDecl::lookupInheritedClass(
   return NULL;
 }
 
-/// lookupInstanceMethod - This method returns an instance method by looking in
+/// lookupMethod - This method returns an instance/class method by looking in
 /// the class, its categories, and its super classes (using a linear search).
-ObjCMethodDecl *ObjCInterfaceDecl::lookupInstanceMethod(Selector Sel) {
-  ObjCInterfaceDecl* ClassDecl = this;
+ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
+                                                bool isInstance) const {
+  const ObjCInterfaceDecl* ClassDecl = this;
   ObjCMethodDecl *MethodDecl = 0;
   
   while (ClassDecl != NULL) {
-    if ((MethodDecl = ClassDecl->getInstanceMethod(Sel)))
+    if ((MethodDecl = ClassDecl->getMethod(Sel, isInstance)))
       return MethodDecl;
       
     // Didn't find one yet - look through protocols.
@@ -180,13 +161,13 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupInstanceMethod(Selector Sel) {
       ClassDecl->getReferencedProtocols();
     for (ObjCList<ObjCProtocolDecl>::iterator I = Protocols.begin(),
          E = Protocols.end(); I != E; ++I)
-      if ((MethodDecl = (*I)->lookupInstanceMethod(Sel)))
+      if ((MethodDecl = (*I)->lookupMethod(Sel, isInstance)))
         return MethodDecl;
     
     // Didn't find one yet - now look through categories.
     ObjCCategoryDecl *CatDecl = ClassDecl->getCategoryList();
     while (CatDecl) {
-      if ((MethodDecl = CatDecl->getInstanceMethod(Sel)))
+      if ((MethodDecl = CatDecl->getMethod(Sel, isInstance)))
         return MethodDecl;
         
       // Didn't find one yet - look through protocols.
@@ -194,43 +175,7 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupInstanceMethod(Selector Sel) {
         CatDecl->getReferencedProtocols();
       for (ObjCList<ObjCProtocolDecl>::iterator I = Protocols.begin(),
            E = Protocols.end(); I != E; ++I)
-        if ((MethodDecl = (*I)->lookupInstanceMethod(Sel)))
-          return MethodDecl;
-      CatDecl = CatDecl->getNextClassCategory();
-    }
-    ClassDecl = ClassDecl->getSuperClass();
-  }
-  return NULL;
-}
-
-// lookupClassMethod - This method returns a class method by looking in the
-// class, its categories, and its super classes (using a linear search).
-ObjCMethodDecl *ObjCInterfaceDecl::lookupClassMethod(Selector Sel) {
-  ObjCInterfaceDecl* ClassDecl = this;
-  ObjCMethodDecl *MethodDecl = 0;
-
-  while (ClassDecl != NULL) {
-    if ((MethodDecl = ClassDecl->getClassMethod(Sel)))
-      return MethodDecl;
-
-    // Didn't find one yet - look through protocols.
-    for (ObjCInterfaceDecl::protocol_iterator I = ClassDecl->protocol_begin(),
-         E = ClassDecl->protocol_end(); I != E; ++I)
-      if ((MethodDecl = (*I)->lookupClassMethod(Sel)))
-        return MethodDecl;
-    
-    // Didn't find one yet - now look through categories.
-    ObjCCategoryDecl *CatDecl = ClassDecl->getCategoryList();
-    while (CatDecl) {
-      if ((MethodDecl = CatDecl->getClassMethod(Sel)))
-        return MethodDecl;
-        
-      // Didn't find one yet - look through protocols.
-      const ObjCList<ObjCProtocolDecl> &Protocols =
-        CatDecl->getReferencedProtocols();
-      for (ObjCList<ObjCProtocolDecl>::iterator I = Protocols.begin(),
-           E = Protocols.end(); I != E; ++I)
-        if ((MethodDecl = (*I)->lookupClassMethod(Sel)))
+        if ((MethodDecl = (*I)->lookupMethod(Sel, isInstance)))
           return MethodDecl;
       CatDecl = CatDecl->getNextClassCategory();
     }
@@ -272,6 +217,56 @@ void ObjCMethodDecl::Destroy(ASTContext &C) {
   Decl::Destroy(C);
 }
 
+/// \brief A definition will return its interface declaration.
+/// An interface declaration will return its definition.
+/// Otherwise it will return itself.
+ObjCMethodDecl *ObjCMethodDecl::getNextRedeclaration() {
+  ASTContext &Ctx = getASTContext();
+  ObjCMethodDecl *Redecl = 0;
+  Decl *CtxD = cast<Decl>(getDeclContext());
+
+  if (ObjCInterfaceDecl *IFD = dyn_cast<ObjCInterfaceDecl>(CtxD)) {
+    if (ObjCImplementationDecl *ImplD = Ctx.getObjCImplementation(IFD))
+      Redecl = ImplD->getMethod(getSelector(), isInstanceMethod());
+
+  } else if (ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(CtxD)) {
+    if (ObjCCategoryImplDecl *ImplD = Ctx.getObjCImplementation(CD))
+      Redecl = ImplD->getMethod(getSelector(), isInstanceMethod());
+
+  } else if (ObjCImplementationDecl *ImplD =
+               dyn_cast<ObjCImplementationDecl>(CtxD)) {
+    if (ObjCInterfaceDecl *IFD = ImplD->getClassInterface())
+      Redecl = IFD->getMethod(getSelector(), isInstanceMethod());
+
+  } else if (ObjCCategoryImplDecl *CImplD =
+               dyn_cast<ObjCCategoryImplDecl>(CtxD)) {
+    if (ObjCCategoryDecl *CatD = CImplD->getCategoryClass())
+      Redecl = CatD->getMethod(getSelector(), isInstanceMethod());
+  }
+
+  return Redecl ? Redecl : this;
+}
+
+ObjCMethodDecl *ObjCMethodDecl::getCanonicalDecl() {
+  Decl *CtxD = cast<Decl>(getDeclContext());
+
+  if (ObjCImplementationDecl *ImplD = dyn_cast<ObjCImplementationDecl>(CtxD)) {
+    if (ObjCInterfaceDecl *IFD = ImplD->getClassInterface())
+      if (ObjCMethodDecl *MD = IFD->getMethod(getSelector(),
+                                              isInstanceMethod()))
+        return MD;
+
+  } else if (ObjCCategoryImplDecl *CImplD =
+               dyn_cast<ObjCCategoryImplDecl>(CtxD)) {
+    if (ObjCCategoryDecl *CatD = CImplD->getCategoryClass())
+      if (ObjCMethodDecl *MD = CatD->getMethod(getSelector(),
+                                               isInstanceMethod()))
+        return MD;
+  }
+
+  return this;
+}
+
 void ObjCMethodDecl::createImplicitParams(ASTContext &Context, 
                                           const ObjCInterfaceDecl *OID) {
   QualType selfTy;
@@ -280,7 +275,7 @@ void ObjCMethodDecl::createImplicitParams(ASTContext &Context,
     // of the interface (which has been reported). Recover gracefully.
     if (OID) {
       selfTy = Context.getObjCInterfaceType(OID);
-      selfTy = Context.getPointerType(selfTy);
+      selfTy = Context.getObjCObjectPointerType(selfTy);
     } else {
       selfTy = Context.getObjCIdType();
     }
@@ -317,12 +312,10 @@ ObjCInterfaceDecl *ObjCMethodDecl::getClassInterface() {
     return ID;
   if (ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(getDeclContext()))
     return CD->getClassInterface();
-  if (ObjCImplementationDecl *IMD = 
-      dyn_cast<ObjCImplementationDecl>(getDeclContext()))
+  if (ObjCImplDecl *IMD = dyn_cast<ObjCImplDecl>(getDeclContext()))
     return IMD->getClassInterface();
-  if (ObjCCategoryImplDecl *CID = 
-      dyn_cast<ObjCCategoryImplDecl>(getDeclContext()))
-    return CID->getClassInterface();
+
+  assert(!isa<ObjCProtocolDecl>(getDeclContext()) && "It's a protocol method");
   assert(false && "unknown method context");
   return 0;
 }
@@ -363,6 +356,15 @@ void ObjCInterfaceDecl::Destroy(ASTContext &C) {
   Decl::Destroy(C);
 }
 
+ObjCImplementationDecl *ObjCInterfaceDecl::getImplementation() const {
+  return getASTContext().getObjCImplementation(
+                                          const_cast<ObjCInterfaceDecl*>(this));
+}
+
+void ObjCInterfaceDecl::setImplementation(ObjCImplementationDecl *ImplD) {
+  getASTContext().setObjCImplementation(this, ImplD);
+}
+
 
 /// FindCategoryDeclaration - Finds category declaration in the list of
 /// categories for this class and returns it. Name of the category is passed
@@ -377,14 +379,79 @@ ObjCInterfaceDecl::FindCategoryDeclaration(IdentifierInfo *CategoryId) const {
   return 0;
 }
 
+ObjCMethodDecl *
+ObjCInterfaceDecl::getCategoryInstanceMethod(Selector Sel) const {
+  for (ObjCCategoryDecl *Category = getCategoryList();
+       Category; Category = Category->getNextClassCategory())
+    if (ObjCCategoryImplDecl *Impl = Category->getImplementation())
+      if (ObjCMethodDecl *MD = Impl->getInstanceMethod(Sel))
+        return MD;
+  return 0;
+}
+
+ObjCMethodDecl *ObjCInterfaceDecl::getCategoryClassMethod(Selector Sel) const {
+  for (ObjCCategoryDecl *Category = getCategoryList();
+       Category; Category = Category->getNextClassCategory())
+    if (ObjCCategoryImplDecl *Impl = Category->getImplementation())
+      if (ObjCMethodDecl *MD = Impl->getClassMethod(Sel))
+        return MD;
+  return 0;
+}
+
+/// ClassImplementsProtocol - Checks that 'lProto' protocol
+/// has been implemented in IDecl class, its super class or categories (if
+/// lookupCategory is true).
+bool ObjCInterfaceDecl::ClassImplementsProtocol(ObjCProtocolDecl *lProto,
+                                    bool lookupCategory,
+                                    bool RHSIsQualifiedID) {
+  ObjCInterfaceDecl *IDecl = this;
+  // 1st, look up the class.
+  const ObjCList<ObjCProtocolDecl> &Protocols =
+  IDecl->getReferencedProtocols();
+  
+  for (ObjCList<ObjCProtocolDecl>::iterator PI = Protocols.begin(),
+       E = Protocols.end(); PI != E; ++PI) {
+    if (getASTContext().ProtocolCompatibleWithProtocol(lProto, *PI))
+      return true;
+    // This is dubious and is added to be compatible with gcc.  In gcc, it is
+    // also allowed assigning a protocol-qualified 'id' type to a LHS object
+    // when protocol in qualified LHS is in list of protocols in the rhs 'id'
+    // object. This IMO, should be a bug.
+    // FIXME: Treat this as an extension, and flag this as an error when GCC
+    // extensions are not enabled.
+    if (RHSIsQualifiedID && 
+        getASTContext().ProtocolCompatibleWithProtocol(*PI, lProto))
+      return true;
+  }
+  
+  // 2nd, look up the category.
+  if (lookupCategory)
+    for (ObjCCategoryDecl *CDecl = IDecl->getCategoryList(); CDecl;
+         CDecl = CDecl->getNextClassCategory()) {
+      for (ObjCCategoryDecl::protocol_iterator PI = CDecl->protocol_begin(),
+           E = CDecl->protocol_end(); PI != E; ++PI)
+        if (getASTContext().ProtocolCompatibleWithProtocol(lProto, *PI))
+          return true;
+    }
+  
+  // 3rd, look up the super class(s)
+  if (IDecl->getSuperClass())
+    return
+  IDecl->getSuperClass()->ClassImplementsProtocol(lProto, lookupCategory,
+                                                  RHSIsQualifiedID);
+  
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // ObjCIvarDecl
 //===----------------------------------------------------------------------===//
 
 ObjCIvarDecl *ObjCIvarDecl::Create(ASTContext &C, DeclContext *DC,
                                    SourceLocation L, IdentifierInfo *Id,
-                                   QualType T, AccessControl ac, Expr *BW) {
-  return new (C) ObjCIvarDecl(DC, L, Id, T, ac, BW);
+                                   QualType T, DeclaratorInfo *DInfo,
+                                   AccessControl ac, Expr *BW) {
+  return new (C) ObjCIvarDecl(DC, L, Id, T, DInfo, ac, BW);
 }
 
 
@@ -432,30 +499,17 @@ ObjCProtocolDecl *ObjCProtocolDecl::lookupProtocolNamed(IdentifierInfo *Name) {
   return NULL;
 }
 
-// lookupInstanceMethod - Lookup a instance method in the protocol and protocols
+// lookupMethod - Lookup a instance/class method in the protocol and protocols
 // it inherited.
-ObjCMethodDecl *ObjCProtocolDecl::lookupInstanceMethod(Selector Sel) {
+ObjCMethodDecl *ObjCProtocolDecl::lookupMethod(Selector Sel,
+                                               bool isInstance) const {
   ObjCMethodDecl *MethodDecl = NULL;
   
-  if ((MethodDecl = getInstanceMethod(Sel)))
+  if ((MethodDecl = getMethod(Sel, isInstance)))
     return MethodDecl;
   
   for (protocol_iterator I = protocol_begin(), E = protocol_end(); I != E; ++I)
-    if ((MethodDecl = (*I)->lookupInstanceMethod(Sel)))
-      return MethodDecl;
-  return NULL;
-}
-
-// lookupInstanceMethod - Lookup a class method in the protocol and protocols
-// it inherited.
-ObjCMethodDecl *ObjCProtocolDecl::lookupClassMethod(Selector Sel) {
-  ObjCMethodDecl *MethodDecl = NULL;
-  
-  if ((MethodDecl = getClassMethod(Sel)))
-    return MethodDecl;
-  
-  for (protocol_iterator I = protocol_begin(), E = protocol_end(); I != E; ++I)
-    if ((MethodDecl = (*I)->lookupClassMethod(Sel)))
+    if ((MethodDecl = (*I)->lookupMethod(Sel, isInstance)))
       return MethodDecl;
   return NULL;
 }
@@ -529,6 +583,16 @@ ObjCCategoryDecl *ObjCCategoryDecl::Create(ASTContext &C, DeclContext *DC,
   return new (C) ObjCCategoryDecl(DC, L, Id);
 }
 
+ObjCCategoryImplDecl *ObjCCategoryDecl::getImplementation() const {
+  return getASTContext().getObjCImplementation(
+                                           const_cast<ObjCCategoryDecl*>(this));
+}
+
+void ObjCCategoryDecl::setImplementation(ObjCCategoryImplDecl *ImplD) {
+  getASTContext().setObjCImplementation(this, ImplD);
+}
+
+
 //===----------------------------------------------------------------------===//
 // ObjCCategoryImplDecl
 //===----------------------------------------------------------------------===//
@@ -540,11 +604,32 @@ ObjCCategoryImplDecl::Create(ASTContext &C, DeclContext *DC,
   return new (C) ObjCCategoryImplDecl(DC, L, Id, ClassInterface);
 }
 
+ObjCCategoryDecl *ObjCCategoryImplDecl::getCategoryClass() const {
+  return getClassInterface()->FindCategoryDeclaration(getIdentifier());
+}
+
 
 void ObjCImplDecl::addPropertyImplementation(ObjCPropertyImplDecl *property) {
   // FIXME: The context should be correct before we get here.
   property->setLexicalDeclContext(this);
   addDecl(property);
+}
+
+void ObjCImplDecl::setClassInterface(ObjCInterfaceDecl *IFace) {
+  ASTContext &Ctx = getASTContext();
+
+  if (ObjCImplementationDecl *ImplD
+        = dyn_cast_or_null<ObjCImplementationDecl>(this)) {
+    if (IFace)
+      Ctx.setObjCImplementation(IFace, ImplD);
+
+  } else if (ObjCCategoryImplDecl *ImplD =
+             dyn_cast_or_null<ObjCCategoryImplDecl>(this)) {
+    if (ObjCCategoryDecl *CD = IFace->FindCategoryDeclaration(getIdentifier()))
+      Ctx.setObjCImplementation(CD, ImplD);
+  }
+
+  ClassInterface = IFace;
 }
 
 /// FindPropertyImplIvarDecl - This method lookup the ivar in the list of
@@ -572,50 +657,6 @@ FindPropertyImplDecl(IdentifierInfo *Id) const {
     ObjCPropertyImplDecl *PID = *i;
     if (PID->getPropertyDecl()->getIdentifier() == Id)
       return PID;
-  }
-  return 0;
-}
-
-// getInstanceMethod - This method returns an instance method by looking in
-// the class implementation. Unlike interfaces, we don't look outside the
-// implementation.
-ObjCMethodDecl *ObjCImplDecl::getInstanceMethod(Selector Sel) const {
-  // Since instance & class methods can have the same name, the loop below
-  // ensures we get the correct method.
-  //
-  // @interface Whatever
-  // - (int) class_method;
-  // + (float) class_method;
-  // @end
-  //
-  lookup_const_iterator Meth, MethEnd;
-  for (llvm::tie(Meth, MethEnd) = lookup(Sel);
-       Meth != MethEnd; ++Meth) {
-    ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(*Meth);
-    if (MD && MD->isInstanceMethod())
-      return MD;
-  }
-  return 0;
-}
-
-// getClassMethod - This method returns an instance method by looking in
-// the class implementation. Unlike interfaces, we don't look outside the
-// implementation.
-ObjCMethodDecl *ObjCImplDecl::getClassMethod(Selector Sel) const {
-  // Since instance & class methods can have the same name, the loop below
-  // ensures we get the correct method.
-  //
-  // @interface Whatever
-  // - (int) class_method;
-  // + (float) class_method;
-  // @end
-  //
-  lookup_const_iterator Meth, MethEnd;
-  for (llvm::tie(Meth, MethEnd) = lookup(Sel);
-       Meth != MethEnd; ++Meth) {
-    ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(*Meth);
-    if (MD && MD->isClassMethod())
-      return MD;
   }
   return 0;
 }

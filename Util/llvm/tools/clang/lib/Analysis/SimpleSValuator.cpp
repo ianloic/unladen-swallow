@@ -19,12 +19,14 @@ using namespace clang;
 
 namespace {
 class VISIBILITY_HIDDEN SimpleSValuator : public SValuator {
+protected:
+  virtual SVal EvalCastNL(NonLoc val, QualType castTy);    
+  virtual SVal EvalCastL(Loc val, QualType castTy);    
+
 public:
   SimpleSValuator(ValueManager &valMgr) : SValuator(valMgr) {}
   virtual ~SimpleSValuator() {}
   
-  virtual SVal EvalCast(NonLoc val, QualType castTy);    
-  virtual SVal EvalCast(Loc val, QualType castTy);    
   virtual SVal EvalMinus(NonLoc val);    
   virtual SVal EvalComplement(NonLoc val);    
   virtual SVal EvalBinOpNN(BinaryOperator::Opcode op, NonLoc lhs, NonLoc rhs,
@@ -44,11 +46,34 @@ SValuator *clang::CreateSimpleSValuator(ValueManager &valMgr) {
 // Transfer function for Casts.
 //===----------------------------------------------------------------------===//
 
-SVal SimpleSValuator::EvalCast(NonLoc val, QualType castTy) {  
+SVal SimpleSValuator::EvalCastNL(NonLoc val, QualType castTy) {
+  
+  bool isLocType = Loc::IsLocType(castTy);
+  
+  if (nonloc::LocAsInteger *LI = dyn_cast<nonloc::LocAsInteger>(&val)) {
+    if (isLocType)
+      return LI->getLoc();
+    
+    ASTContext &Ctx = ValMgr.getContext();    
+    
+    // FIXME: Support promotions/truncations.
+    if (Ctx.getTypeSize(castTy) == Ctx.getTypeSize(Ctx.VoidPtrTy))
+      return val;
+    
+    return UnknownVal();
+  }
+
+  if (const SymExpr *se = val.getAsSymbolicExpression()) {
+    ASTContext &Ctx = ValMgr.getContext();
+    QualType T = Ctx.getCanonicalType(se->getType(Ctx));
+    if (T == Ctx.getCanonicalType(castTy))
+      return val;
+    
+    return UnknownVal();
+  }
+  
   if (!isa<nonloc::ConcreteInt>(val))
     return UnknownVal();
-
-  bool isLocType = Loc::IsLocType(castTy);
   
   // Only handle casts from integers to integers.
   if (!isLocType && !castTy->isIntegerType())
@@ -64,7 +89,7 @@ SVal SimpleSValuator::EvalCast(NonLoc val, QualType castTy) {
     return ValMgr.makeIntVal(i);
 }
 
-SVal SimpleSValuator::EvalCast(Loc val, QualType castTy) {
+SVal SimpleSValuator::EvalCastL(Loc val, QualType castTy) {
   
   // Casts from pointers -> pointers, just return the lval.
   //
@@ -176,7 +201,26 @@ static SVal EvalEquality(ValueManager &ValMgr, Loc lhs, Loc rhs, bool isEqual,
 
 SVal SimpleSValuator::EvalBinOpNN(BinaryOperator::Opcode op,
                                   NonLoc lhs, NonLoc rhs,
-                                  QualType resultTy)  {  
+                                  QualType resultTy)  {
+
+  assert(!lhs.isUnknownOrUndef());
+  assert(!rhs.isUnknownOrUndef());
+
+  // Handle trivial case where left-side and right-side are the same.
+  if (lhs == rhs)
+    switch (op) {
+      default:
+        break;
+      case BinaryOperator::EQ:
+      case BinaryOperator::LE:
+      case BinaryOperator::GE:
+        return ValMgr.makeTruthVal(true, resultTy);
+      case BinaryOperator::LT:
+      case BinaryOperator::GT:
+      case BinaryOperator::NE:
+        return ValMgr.makeTruthVal(false, resultTy);
+    }
+  
   while (1) {
     switch (lhs.getSubKind()) {
     default:

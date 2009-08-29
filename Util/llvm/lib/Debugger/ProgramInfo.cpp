@@ -22,8 +22,8 @@
 #include "llvm/Module.h"
 #include "llvm/Debugger/SourceFile.h"
 #include "llvm/Debugger/SourceLanguage.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SlowOperationInformer.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/ADT/STLExtras.h"
 using namespace llvm;
 
@@ -136,7 +136,7 @@ SourceFile &SourceFileInfo::getSourceText() const {
       tmpPath.set(Directory);
     tmpPath.appendComponent(BaseName);
     if (tmpPath.canRead())
-      SourceText = new SourceFile(tmpPath.toString(), Descriptor);
+      SourceText = new SourceFile(tmpPath.str(), Descriptor);
     else
       SourceText = new SourceFile(BaseName, Descriptor);
   }
@@ -184,7 +184,7 @@ void SourceFunctionInfo::getSourceLocation(unsigned &RetLineNo,
             if (SD) {             // We found the first stop point!
               // This is just a sanity check.
               if (getSourceFile().getDescriptor() != SD)
-                cout << "WARNING: first line of function is not in the"
+                outs() << "WARNING: first line of function is not in the"
                      << " file that the function descriptor claims it is in.\n";
               break;
             }
@@ -271,7 +271,8 @@ ProgramInfo::getSourceFiles(bool RequiresCompleteMap) {
   // should be on the use list of the llvm.dbg.translation_units global.
   //
   GlobalVariable *Units =
-    M->getGlobalVariable("llvm.dbg.translation_units", StructType::get());
+    M->getGlobalVariable("llvm.dbg.translation_units", 
+                         StructType::get(M->getContext()));
   if (Units == 0)
     throw "Program contains no debugging information!";
 
@@ -353,7 +354,7 @@ ProgramInfo::getSourceFunctions(bool RequiresCompleteMap) {
   // should be on the use list of the llvm.dbg.translation_units global.
   //
   GlobalVariable *Units =
-    M->getGlobalVariable("llvm.dbg.globals", StructType::get());
+    M->getGlobalVariable("llvm.dbg.globals", StructType::get(M->getContext()));
   if (Units == 0)
     throw "Program contains no debugging information!";
 

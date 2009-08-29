@@ -17,13 +17,14 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Support/IRBuilder.h"
 #include "llvm/Support/TargetFolder.h"
+#include <set>
 
 namespace llvm {
   /// SCEVExpander - This class uses information about analyze scalars to
   /// rewrite expressions in canonical form.
   ///
   /// Clients should create an instance of this class when rewriting is needed,
-  /// and destroy it when finished to allow the release of the associated 
+  /// and destroy it when finished to allow the release of the associated
   /// memory.
   struct SCEVExpander : public SCEVVisitor<SCEVExpander, Value*> {
     ScalarEvolution &SE;
@@ -37,7 +38,7 @@ namespace llvm {
     friend struct SCEVVisitor<SCEVExpander, Value*>;
   public:
     explicit SCEVExpander(ScalarEvolution &se)
-      : SE(se), Builder(*se.getContext(),
+      : SE(se), Builder(se.getContext(),
                         TargetFolder(se.TD, se.getContext())) {}
 
     /// clear - Erase the contents of the InsertedExpressions map so that users
@@ -60,8 +61,8 @@ namespace llvm {
     }
 
   private:
-    LLVMContext *getContext() const { return SE.getContext(); }
-    
+    LLVMContext &getContext() const { return SE.getContext(); }
+
     /// InsertBinop - Insert the specified binary operator, doing a small amount
     /// of work to avoid inserting an obviously redundant operation.
     Value *InsertBinop(Instruction::BinaryOps Opcode, Value *LHS, Value *RHS);
@@ -114,6 +115,10 @@ namespace llvm {
 
     Value *visitUMaxExpr(const SCEVUMaxExpr *S);
 
+    Value *visitFieldOffsetExpr(const SCEVFieldOffsetExpr *S);
+
+    Value *visitAllocSizeExpr(const SCEVAllocSizeExpr *S);
+
     Value *visitUnknown(const SCEVUnknown *S) {
       return S->getValue();
     }
@@ -121,4 +126,3 @@ namespace llvm {
 }
 
 #endif
-

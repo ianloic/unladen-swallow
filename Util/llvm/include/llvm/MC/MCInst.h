@@ -22,6 +22,7 @@
 #include "llvm/Support/DebugLoc.h"
 
 namespace llvm {
+class raw_ostream;
 
 /// MCOperand - Instances of this class represent operands of the MCInst class.
 /// This is a simple discriminated union.
@@ -94,23 +95,34 @@ public:
     MCValueVal = Val;
   }
   
-  void MakeReg(unsigned Reg) {
-    Kind = kRegister;
-    RegVal = Reg;
+  static MCOperand CreateReg(unsigned Reg) {
+    MCOperand Op;
+    Op.Kind = kRegister;
+    Op.RegVal = Reg;
+    return Op;
   }
-  void MakeImm(int64_t Val) {
-    Kind = kImmediate;
-    ImmVal = Val;
+  static MCOperand CreateImm(int64_t Val) {
+    MCOperand Op;
+    Op.Kind = kImmediate;
+    Op.ImmVal = Val;
+    return Op;
   }
-  void MakeMBBLabel(unsigned Fn, unsigned MBB) {
-    Kind = kMBBLabel;
-    MBBLabel.FunctionNo = Fn;
-    MBBLabel.BlockNo = MBB;
+  static MCOperand CreateMBBLabel(unsigned Fn, unsigned MBB) {
+    MCOperand Op;
+    Op.Kind = kMBBLabel;
+    Op.MBBLabel.FunctionNo = Fn;
+    Op.MBBLabel.BlockNo = MBB;
+    return Op;
   }
-  void MakeMCValue(const MCValue &Val) {
-    Kind = kMCValue;
-    MCValueVal = Val;
+  static MCOperand CreateMCValue(const MCValue &Val) {
+    MCOperand Op;
+    Op.Kind = kMCValue;
+    Op.MCValueVal = Val;
+    return Op;
   }
+
+  void print(raw_ostream &OS) const;
+  void dump() const;
 };
 
   
@@ -134,6 +146,9 @@ public:
   void addOperand(const MCOperand &Op) {
     Operands.push_back(Op);
   }
+
+  void print(raw_ostream &OS) const;
+  void dump() const;
 };
 
 

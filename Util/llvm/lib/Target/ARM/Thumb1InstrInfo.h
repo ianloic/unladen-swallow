@@ -31,9 +31,6 @@ public:
   // if there is not such an opcode.
   unsigned getUnindexedOpcode(unsigned Opc) const;
 
-  // Return the opcode that implements 'Op', or 0 if no opcode
-  unsigned getOpcode(ARMII::Op Op) const;
-
   // Return true if the block does not fall through.
   bool BlockHasNoFallThrough(const MachineBasicBlock &MBB) const;
 
@@ -50,14 +47,6 @@ public:
                                    MachineBasicBlock::iterator MI,
                                    const std::vector<CalleeSavedInfo> &CSI) const;
 
-  bool isMoveInstr(const MachineInstr &MI,
-                           unsigned &SrcReg, unsigned &DstReg,
-                           unsigned &SrcSubIdx, unsigned &DstSubIdx) const;
-  unsigned isLoadFromStackSlot(const MachineInstr *MI,
-                                       int &FrameIndex) const;
-  unsigned isStoreToStackSlot(const MachineInstr *MI,
-                                      int &FrameIndex) const;
-
   bool copyRegToReg(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator I,
                             unsigned DestReg, unsigned SrcReg,
@@ -68,20 +57,10 @@ public:
                                    unsigned SrcReg, bool isKill, int FrameIndex,
                                    const TargetRegisterClass *RC) const;
 
-  void storeRegToAddr(MachineFunction &MF, unsigned SrcReg, bool isKill,
-                              SmallVectorImpl<MachineOperand> &Addr,
-                              const TargetRegisterClass *RC,
-                              SmallVectorImpl<MachineInstr*> &NewMIs) const;
-
   void loadRegFromStackSlot(MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MBBI,
                                     unsigned DestReg, int FrameIndex,
                                     const TargetRegisterClass *RC) const;
-
-  void loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
-                               SmallVectorImpl<MachineOperand> &Addr,
-                               const TargetRegisterClass *RC,
-                               SmallVectorImpl<MachineInstr*> &NewMIs) const;
 
   bool canFoldMemoryOperand(const MachineInstr *MI,
                                     const SmallVectorImpl<unsigned> &Ops) const;
@@ -90,7 +69,7 @@ public:
                                       MachineInstr* MI,
                                       const SmallVectorImpl<unsigned> &Ops,
                                       int FrameIndex) const;
- 
+
   MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
                                       MachineInstr* MI,
                                       const SmallVectorImpl<unsigned> &Ops,

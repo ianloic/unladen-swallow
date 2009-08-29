@@ -16,27 +16,23 @@
 
 using namespace clang;
 
-StoreManager::StoreManager(GRStateManager &stateMgr, bool useNewCastRegion)
-  : ValMgr(stateMgr.getValueManager()),
-    StateMgr(stateMgr),
-    UseNewCastRegion(useNewCastRegion),
+StoreManager::StoreManager(GRStateManager &stateMgr)
+  : ValMgr(stateMgr.getValueManager()), StateMgr(stateMgr),
     MRMgr(ValMgr.getRegionManager()) {}
 
 StoreManager::CastResult
 StoreManager::MakeElementRegion(const GRState *state, const MemRegion *region,
-                                QualType pointeeTy, QualType castToTy) {
-  
-  // Record the cast type of the region.
-  state = setCastType(state, region, castToTy);
-  
-  // Create a new ElementRegion at offset 0.
-  SVal idx = ValMgr.makeZeroArrayIndex();
+                                QualType pointeeTy, QualType castToTy,
+                                uint64_t index) {
+  // Create a new ElementRegion.
+  SVal idx = ValMgr.makeArrayIndex(index);
   return CastResult(state, MRMgr.getElementRegion(pointeeTy, idx, region,
                                                   ValMgr.getContext()));  
 }
 
+// FIXME: Merge with the implementation of the same method in MemRegion.cpp
 static bool IsCompleteType(ASTContext &Ctx, QualType Ty) {
-  if (const RecordType *RT = Ty->getAsRecordType()) {
+  if (const RecordType *RT = Ty->getAs<RecordType>()) {
     const RecordDecl *D = RT->getDecl();
     if (!D->getDefinition(Ctx))
       return false;
@@ -46,85 +42,152 @@ static bool IsCompleteType(ASTContext &Ctx, QualType Ty) {
 }
 
 StoreManager::CastResult
-StoreManager::NewCastRegion(const GRState *state, const MemRegion* R,
-                            QualType CastToTy) {
+StoreManager::CastRegion(const GRState *state, const MemRegion* R,
+                         QualType CastToTy) {
   
   ASTContext& Ctx = StateMgr.getContext();
   
-  // We need to know the real type of CastToTy.
-  QualType ToTy = Ctx.getCanonicalType(CastToTy);
-
   // Handle casts to Objective-C objects.
-  if (Ctx.isObjCObjectPointerType(CastToTy)) {
-    state = setCastType(state, R, CastToTy);
-    return CastResult(state, R);
+  if (CastToTy->isObjCObjectPointerType())
+    return CastResult(state, R->getBaseRegion());
+
+  if (CastToTy->isBlockPointerType()) {
+    // FIXME: We may need different solutions, depending on the symbol
+    // involved.  Blocks can be casted to/from 'id', as they can be treated
+    // as Objective-C objects.  This could possibly be handled by enhancing
+    // our reasoning of downcasts of symbolic objects.    
+    if (isa<CodeTextRegion>(R) || isa<SymbolicRegion>(R))
+      return CastResult(state, R);
+
+    // We don't know what to make of it.  Return a NULL region, which
+    // will be interpretted as UnknownVal.
+    return CastResult(state, NULL);
   }
 
   // Now assume we are casting from pointer to pointer. Other cases should
   // already be handled.
-  QualType PointeeTy = CastToTy->getAsPointerType()->getPointeeType();
+  QualType PointeeTy = CastToTy->getAs<PointerType>()->getPointeeType();
+  QualType CanonPointeeTy = Ctx.getCanonicalType(PointeeTy);
+
+  // Handle casts to void*.  We just pass the region through.
+  if (CanonPointeeTy.getUnqualifiedType() == Ctx.VoidTy)
+    return CastResult(state, R);
   
+  // Handle casts from compatible types.
+  if (R->isBoundable())
+    if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
+      QualType ObjTy = Ctx.getCanonicalType(TR->getValueType(Ctx));
+      if (CanonPointeeTy == ObjTy)
+        return CastResult(state, R);
+    }
+
   // Process region cast according to the kind of the region being cast.
   switch (R->getKind()) {
     case MemRegion::BEG_TYPED_REGIONS:
     case MemRegion::MemSpaceRegionKind:
     case MemRegion::BEG_DECL_REGIONS:
     case MemRegion::END_DECL_REGIONS:
-    case MemRegion::END_TYPED_REGIONS:
-    case MemRegion::TypedViewRegionKind: {
+    case MemRegion::END_TYPED_REGIONS: {
       assert(0 && "Invalid region cast");
       break;
-    }
-      
+    }      
     case MemRegion::CodeTextRegionKind: {
-      // CodeTextRegion should be cast to only function pointer type.
-      assert(CastToTy->isFunctionPointerType() || CastToTy->isBlockPointerType()
-             || (CastToTy->isPointerType() &&
-                 CastToTy->getAsPointerType()->getPointeeType()->isVoidType()));
+      // CodeTextRegion should be cast to only a function or block pointer type,
+      // although they can in practice be casted to anything, e.g, void*,
+      // char*, etc.
+      // Just pass the region through.
       break;
     }
       
     case MemRegion::StringRegionKind:
-      // Handle casts of string literals.
-      return MakeElementRegion(state, R, PointeeTy, CastToTy);
-
     case MemRegion::ObjCObjectRegionKind:
-    case MemRegion::SymbolicRegionKind:
       // FIXME: Need to handle arbitrary downcasts.
-    case MemRegion::AllocaRegionKind: {  
-      state = setCastType(state, R, CastToTy);
-      break;
-    }
-
+    case MemRegion::SymbolicRegionKind:
+    case MemRegion::AllocaRegionKind:
     case MemRegion::CompoundLiteralRegionKind:
-    case MemRegion::ElementRegionKind:
     case MemRegion::FieldRegionKind:
     case MemRegion::ObjCIvarRegionKind:
-    case MemRegion::VarRegionKind: {
-      // VarRegion, ElementRegion, and FieldRegion has an inherent type.
-      // Normally they should not be cast. We only layer an ElementRegion when
-      // the cast-to pointee type is of smaller size. In other cases, we return
-      // the original VarRegion.
+    case MemRegion::VarRegionKind:   
+      return MakeElementRegion(state, R, PointeeTy, CastToTy);
       
-      // If the pointee or object type is incomplete, do not compute their
-      // sizes, and return the original region.
-      QualType ObjTy = cast<TypedRegion>(R)->getValueType(Ctx);
+    case MemRegion::ElementRegionKind: {
+      // If we are casting from an ElementRegion to another type, the
+      // algorithm is as follows:
+      //
+      // (1) Compute the "raw offset" of the ElementRegion from the
+      //     base region.  This is done by calling 'getAsRawOffset()'.
+      //
+      // (2a) If we get a 'RegionRawOffset' after calling 
+      //      'getAsRawOffset()', determine if the absolute offset
+      //      can be exactly divided into chunks of the size of the 
+      //      casted-pointee type.  If so, create a new ElementRegion with 
+      //      the pointee-cast type as the new ElementType and the index
+      //      being the offset divded by the chunk size.  If not, create
+      //      a new ElementRegion at offset 0 off the raw offset region.
+      //
+      // (2b) If we don't a get a 'RegionRawOffset' after calling
+      //      'getAsRawOffset()', it means that we are at offset 0.
+      //      
+      // FIXME: Handle symbolic raw offsets.
       
-      if (!IsCompleteType(Ctx, PointeeTy) || !IsCompleteType(Ctx, ObjTy)) {
-        state = setCastType(state, R, ToTy);
-        break;
-      }
-
-      uint64_t PointeeTySize = Ctx.getTypeSize(PointeeTy);
-      uint64_t ObjTySize = Ctx.getTypeSize(ObjTy);
+      const ElementRegion *elementR = cast<ElementRegion>(R);
+      const RegionRawOffset &rawOff = elementR->getAsRawOffset();
+      const MemRegion *baseR = rawOff.getRegion();
       
-      if ((PointeeTySize > 0 && PointeeTySize < ObjTySize) ||
-          (ObjTy->isAggregateType() && PointeeTy->isScalarType()) ||
-          ObjTySize == 0 /* R has 'void*' type. */)
-        return MakeElementRegion(state, R, PointeeTy, ToTy);
+      // If we cannot compute a raw offset, throw up our hands and return
+      // a NULL MemRegion*.
+      if (!baseR)
+        return CastResult(state, NULL);
+      
+      int64_t off = rawOff.getByteOffset();
+      
+      if (off == 0) {
+        // Edge case: we are at 0 bytes off the beginning of baseR.  We
+        // check to see if type we are casting to is the same as the base
+        // region.  If so, just return the base region.        
+        if (const TypedRegion *TR = dyn_cast<TypedRegion>(baseR)) {
+          QualType ObjTy = Ctx.getCanonicalType(TR->getValueType(Ctx));
+          QualType CanonPointeeTy = Ctx.getCanonicalType(PointeeTy);
+          if (CanonPointeeTy == ObjTy)
+            return CastResult(state, baseR);
+        }
         
-      state = setCastType(state, R, ToTy);
-      break;
+        // Otherwise, create a new ElementRegion at offset 0.
+        return MakeElementRegion(state, baseR, PointeeTy, CastToTy, 0);
+      }
+      
+      // We have a non-zero offset from the base region.  We want to determine
+      // if the offset can be evenly divided by sizeof(PointeeTy).  If so,
+      // we create an ElementRegion whose index is that value.  Otherwise, we
+      // create two ElementRegions, one that reflects a raw offset and the other
+      // that reflects the cast.
+      
+      // Compute the index for the new ElementRegion.
+      int64_t newIndex = 0;
+      const MemRegion *newSuperR = 0;
+
+      // We can only compute sizeof(PointeeTy) if it is a complete type.
+      if (IsCompleteType(Ctx, PointeeTy)) {
+        // Compute the size in **bytes**.
+        int64_t pointeeTySize = (int64_t) (Ctx.getTypeSize(PointeeTy) / 8);
+
+        // Is the offset a multiple of the size?  If so, we can layer the
+        // ElementRegion (with elementType == PointeeTy) directly on top of
+        // the base region.
+        if (off % pointeeTySize == 0) {
+          newIndex = off / pointeeTySize;
+          newSuperR = baseR;
+        }
+      }
+      
+      if (!newSuperR) {
+        // Create an intermediate ElementRegion to represent the raw byte.
+        // This will be the super region of the final ElementRegion.
+        SVal idx = ValMgr.makeArrayIndex(off);
+        newSuperR = MRMgr.getElementRegion(Ctx.CharTy, idx, baseR, Ctx);
+      }
+            
+      return MakeElementRegion(state, newSuperR, PointeeTy, CastToTy, newIndex);
     }
   }
   
@@ -132,156 +195,17 @@ StoreManager::NewCastRegion(const GRState *state, const MemRegion* R,
 }
 
 
-StoreManager::CastResult
-StoreManager::OldCastRegion(const GRState* state, const MemRegion* R,
-                         QualType CastToTy) {
+/// CastRetrievedVal - Used by subclasses of StoreManager to implement
+///  implicit casts that arise from loads from regions that are reinterpreted
+///  as another region.
+SValuator::CastResult StoreManager::CastRetrievedVal(SVal V,
+                                                     const GRState *state,
+                                                     const TypedRegion *R,
+                                                     QualType castTy) {
+  if (castTy.isNull())
+    return SValuator::CastResult(state, V);
   
-  ASTContext& Ctx = StateMgr.getContext();
-
-  // We need to know the real type of CastToTy.
-  QualType ToTy = Ctx.getCanonicalType(CastToTy);
-
-  // Return the same region if the region types are compatible.
-  if (const TypedRegion* TR = dyn_cast<TypedRegion>(R)) {
-    QualType Ta = Ctx.getCanonicalType(TR->getLocationType(Ctx));
-
-    if (Ta == ToTy)
-      return CastResult(state, R);
-  }
-  
-  if (const PointerType* PTy = dyn_cast<PointerType>(ToTy.getTypePtr())) {
-    // Check if we are casting to 'void*'.
-    // FIXME: Handle arbitrary upcasts.
-    QualType Pointee = PTy->getPointeeType();
-    if (Pointee->isVoidType()) {
-      while (true) {
-        if (const TypedViewRegion *TR = dyn_cast<TypedViewRegion>(R)) {
-          // Casts to void* removes TypedViewRegion. This happens when:
-          //
-          // void foo(void*);
-          // ...
-          // void bar() {
-          //   int x;
-          //   foo(&x);
-          // }
-          //
-          R = TR->removeViews();
-          continue;
-        }
-        else if (const ElementRegion *ER = dyn_cast<ElementRegion>(R)) {
-          // Casts to void* also removes ElementRegions. This happens when:
-          //
-          // void foo(void*);
-          // ...
-          // void bar() {
-          //   int x;
-          //   foo((char*)&x);
-          // }                
-          //
-          R = ER->getSuperRegion();
-          continue;
-        }
-
-        break;
-      }
-      
-      return CastResult(state, R);
-    }
-    else if (Pointee->isIntegerType()) {
-      // FIXME: At some point, it stands to reason that this 'dyn_cast' should
-      //  become a 'cast' and that 'R' will always be a TypedRegion.
-      if (const TypedRegion *TR = dyn_cast<TypedRegion>(R)) {
-        // Check if we are casting to a region with an integer type.  We now
-        // the types aren't the same, so we construct an ElementRegion.
-        SVal Idx = ValMgr.makeZeroArrayIndex();
-        
-        // If the super region is an element region, strip it away.
-        // FIXME: Is this the right thing to do in all cases?
-        const MemRegion *Base = isa<ElementRegion>(TR) ? TR->getSuperRegion()
-                                                       : TR;
-        ElementRegion* ER = MRMgr.getElementRegion(Pointee, Idx, Base, 
-                                                   StateMgr.getContext());
-        return CastResult(state, ER);
-      }
-    }
-  }
-
-  // FIXME: Need to handle arbitrary downcasts.
-  // FIXME: Handle the case where a TypedViewRegion (layering a SymbolicRegion
-  //         or an AllocaRegion is cast to another view, thus causing the memory
-  //         to be re-used for a different purpose.
-  if (isa<SymbolicRegion>(R) || isa<AllocaRegion>(R)) {
-    const MemRegion* ViewR = MRMgr.getTypedViewRegion(CastToTy, R);  
-    return CastResult(AddRegionView(state, ViewR, R), ViewR);
-  }
-  
-  return CastResult(state, R);
+  ASTContext &Ctx = ValMgr.getContext();  
+  return ValMgr.getSValuator().EvalCast(V, state, castTy, R->getValueType(Ctx));
 }
 
-const GRState *StoreManager::InvalidateRegion(const GRState *state,
-                                              const MemRegion *R,
-                                              const Expr *E, unsigned Count) {
-  ASTContext& Ctx = StateMgr.getContext();
-
-  if (!R->isBoundable())
-    return state;
-
-  if (isa<AllocaRegion>(R) || isa<SymbolicRegion>(R)) {
-    // Invalidate the alloca region by setting its default value to 
-    // conjured symbol. The type of the symbol is irrelavant.
-    SVal V = ValMgr.getConjuredSymbolVal(E, Ctx.IntTy, Count);
-    state = setDefaultValue(state, R, V);
-    return state;
-  }
-
-  const TypedRegion *TR = cast<TypedRegion>(R);
-
-  QualType T = TR->getValueType(Ctx);
-
-  if (Loc::IsLocType(T) || (T->isIntegerType() && T->isScalarType())) {
-    SVal V = ValMgr.getConjuredSymbolVal(E, T, Count);
-    return Bind(state, ValMgr.makeLoc(TR), V);
-  }
-  else if (const RecordType *RT = T->getAsStructureType()) {
-    // FIXME: handle structs with default region value.
-    const RecordDecl *RD = RT->getDecl()->getDefinition(Ctx);
-
-    // No record definition.  There is nothing we can do.
-    if (!RD)
-      return state;
-
-    // Iterate through the fields and construct new symbols.
-    for (RecordDecl::field_iterator FI=RD->field_begin(),
-           FE=RD->field_end(); FI!=FE; ++FI) {
-      
-      // For now just handle scalar fields.
-      FieldDecl *FD = *FI;
-      QualType FT = FD->getType();
-      const FieldRegion* FR = MRMgr.getFieldRegion(FD, TR);
-      
-      if (Loc::IsLocType(FT) || 
-          (FT->isIntegerType() && FT->isScalarType())) {
-        SVal V = ValMgr.getConjuredSymbolVal(E, FT, Count);
-        state = state->bindLoc(ValMgr.makeLoc(FR), V);
-      }
-      else if (FT->isStructureType()) {
-        // set the default value of the struct field to conjured
-        // symbol. Note that the type of the symbol is irrelavant.
-        // We cannot use the type of the struct otherwise ValMgr won't
-        // give us the conjured symbol.
-        SVal V = ValMgr.getConjuredSymbolVal(E, Ctx.IntTy, Count);
-        state = setDefaultValue(state, FR, V);
-      }
-    }
-  } else if (const ArrayType *AT = Ctx.getAsArrayType(T)) {
-    // Set the default value of the array to conjured symbol.
-    SVal V = ValMgr.getConjuredSymbolVal(E, AT->getElementType(),
-                                         Count);
-    state = setDefaultValue(state, TR, V);
-  } else {
-    // Just blast away other values.
-    state = Bind(state, ValMgr.makeLoc(TR), UnknownVal());
-  }
-  
-  return state;
-}

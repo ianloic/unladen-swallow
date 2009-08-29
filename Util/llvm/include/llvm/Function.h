@@ -21,7 +21,6 @@
 #include "llvm/GlobalValue.h"
 #include "llvm/BasicBlock.h"
 #include "llvm/Argument.h"
-#include "llvm/Support/Annotation.h"
 #include "llvm/Attributes.h"
 
 namespace llvm {
@@ -46,7 +45,7 @@ template<> struct ilist_traits<BasicBlock>
 
   static ValueSymbolTable *getSymTab(Function *ItemParent);
 private:
-  mutable ilist_node<BasicBlock> Sentinel;
+  mutable ilist_half_node<BasicBlock> Sentinel;
 };
 
 template<> struct ilist_traits<Argument>
@@ -63,10 +62,10 @@ template<> struct ilist_traits<Argument>
 
   static ValueSymbolTable *getSymTab(Function *ItemParent);
 private:
-  mutable ilist_node<Argument> Sentinel;
+  mutable ilist_half_node<Argument> Sentinel;
 };
 
-class Function : public GlobalValue, public Annotable,
+class Function : public GlobalValue,
                  public ilist_node<Function> {
 public:
   typedef iplist<Argument> ArgumentListType;
@@ -114,11 +113,11 @@ private:
   /// the module.
   ///
   Function(const FunctionType *Ty, LinkageTypes Linkage,
-           const std::string &N = "", Module *M = 0);
+           const Twine &N = "", Module *M = 0);
 
 public:
   static Function *Create(const FunctionType *Ty, LinkageTypes Linkage,
-                          const std::string &N = "", Module *M = 0) {
+                          const Twine &N = "", Module *M = 0) {
     return new(0) Function(Ty, Linkage, N, M);
   }
 
@@ -129,7 +128,7 @@ public:
 
   /// getContext - Return a pointer to the LLVMContext associated with this 
   /// function, or NULL if this function is not bound to a context yet.
-  LLVMContext *getContext() const;
+  LLVMContext &getContext() const;
 
   /// isVarArg - Return true if this function takes a variable number of
   /// arguments.

@@ -15,6 +15,7 @@
 #ifndef TARGET_ARM_H
 #define TARGET_ARM_H
 
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 
@@ -25,7 +26,7 @@ class FunctionPass;
 class MachineCodeEmitter;
 class JITCodeEmitter;
 class ObjectCodeEmitter;
-class raw_ostream;
+class formatted_raw_ostream;
 
 // Enums corresponding to ARM condition codes
 namespace ARMCC {
@@ -51,7 +52,7 @@ namespace ARMCC {
 
   inline static CondCodes getOppositeCondition(CondCodes CC){
     switch (CC) {
-    default: assert(0 && "Unknown condition code");
+    default: llvm_unreachable("Unknown condition code");
     case EQ: return NE;
     case NE: return EQ;
     case HS: return LO;
@@ -72,7 +73,7 @@ namespace ARMCC {
 
 inline static const char *ARMCondCodeToString(ARMCC::CondCodes CC) {
   switch (CC) {
-  default: assert(0 && "Unknown condition code");
+  default: llvm_unreachable("Unknown condition code");
   case ARMCC::EQ:  return "eq";
   case ARMCC::NE:  return "ne";
   case ARMCC::HS:  return "hs";
@@ -92,21 +93,21 @@ inline static const char *ARMCondCodeToString(ARMCC::CondCodes CC) {
 }
 
 FunctionPass *createARMISelDag(ARMBaseTargetMachine &TM);
-FunctionPass *createARMCodePrinterPass(raw_ostream &O,
-                                       ARMBaseTargetMachine &TM,
-                                       bool Verbose);
-FunctionPass *createARMCodeEmitterPass(ARMBaseTargetMachine &TM,
-                                       MachineCodeEmitter &MCE);
 
 FunctionPass *createARMCodeEmitterPass(ARMBaseTargetMachine &TM,
                                        MachineCodeEmitter &MCE);
 FunctionPass *createARMJITCodeEmitterPass(ARMBaseTargetMachine &TM,
                                           JITCodeEmitter &JCE);
-FunctionPass *createARMObjectCodeEmitterPass(ARMBaseTargetMachine &TM, 
+FunctionPass *createARMObjectCodeEmitterPass(ARMBaseTargetMachine &TM,
                                              ObjectCodeEmitter &OCE);
 
 FunctionPass *createARMLoadStoreOptimizationPass(bool PreAlloc = false);
 FunctionPass *createARMConstantIslandPass();
+FunctionPass *createNEONPreAllocPass();
+FunctionPass *createThumb2ITBlockPass();
+FunctionPass *createThumb2SizeReductionPass();
+
+extern Target TheARMTarget, TheThumbTarget;
 
 } // end namespace llvm;
 

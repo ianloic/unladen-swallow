@@ -1,7 +1,5 @@
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify -triple x86_64-apple-darwin9 %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=basic -verify -triple x86_64-apple-darwin9 %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify -triple x86_64-apple-darwin9 %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=range -verify -triple x86_64-apple-darwin9 %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify -triple x86_64-apple-darwin9 %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify -triple x86_64-apple-darwin9 %s
 
@@ -45,6 +43,7 @@ typedef struct _NSZone NSZone;
 - (void)setCurrentPathComponentIndex:(unsigned int)aCurrentPathComponentIndex;
 - (NSURL *)folderFeedURL;
 @end  @implementation IHGoogleDocsAdapter    - (id)initWithUsername:(NSString *)inUsername password:(NSString *)inPassword owner:(NSObject <IHGoogleDocsAdapterDelegate> *)owner {
+  return 0;
 }
 
 //===----------------------------------------------------------------------===//

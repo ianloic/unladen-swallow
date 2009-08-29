@@ -25,6 +25,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 using namespace llvm;
 
@@ -68,22 +69,23 @@ EmitCopyFromReg(SDNode *Node, unsigned ResNo, bool IsClone, bool IsCloned,
           SDValue Op = User->getOperand(i);
           if (Op.getNode() != Node || Op.getResNo() != ResNo)
             continue;
-          MVT VT = Node->getValueType(Op.getResNo());
+          EVT VT = Node->getValueType(Op.getResNo());
           if (VT == MVT::Other || VT == MVT::Flag)
             continue;
           Match = false;
           if (User->isMachineOpcode()) {
             const TargetInstrDesc &II = TII->get(User->getMachineOpcode());
-            const TargetRegisterClass *RC =
-              getInstrOperandRegClass(TRI, II, i+II.getNumDefs());
+            const TargetRegisterClass *RC = 0;
+            if (i+II.getNumDefs() < II.getNumOperands())
+              RC = II.OpInfo[i+II.getNumDefs()].getRegClass(TRI);
             if (!UseRC)
               UseRC = RC;
             else if (RC) {
-              if (UseRC->hasSuperClass(RC))
-                UseRC = RC;
-              else
-                assert((UseRC == RC || RC->hasSuperClass(UseRC)) &&
-                       "Multiple uses expecting different register classes!");
+              const TargetRegisterClass *ComRC = getCommonSubClass(UseRC, RC);
+              // If multiple uses expect disjoint register classes, we emit
+              // copies in AddRegisterOperand.
+              if (ComRC)
+                UseRC = ComRC;
             }
           }
         }
@@ -93,7 +95,7 @@ EmitCopyFromReg(SDNode *Node, unsigned ResNo, bool IsClone, bool IsCloned,
         break;
     }
 
-  MVT VT = Node->getValueType(ResNo);
+  EVT VT = Node->getValueType(ResNo);
   const TargetRegisterClass *SrcRC = 0, *DstRC = 0;
   SrcRC = TRI->getPhysicalRegisterRegClass(SrcReg, VT);
   
@@ -159,9 +161,16 @@ void ScheduleDAGSDNodes::CreateVirtualRegisters(SDNode *Node, MachineInstr *MI,
     // is a vreg in the same register class, use the CopyToReg'd destination
     // register instead of creating a new vreg.
     unsigned VRBase = 0;
-    const TargetRegisterClass *RC = getInstrOperandRegClass(TRI, II, i);
+    const TargetRegisterClass *RC = II.OpInfo[i].getRegClass(TRI);
+    if (II.OpInfo[i].isOptionalDef()) {
+      // Optional def must be a physical register.
+      unsigned NumResults = CountResults(Node);
+      VRBase = cast<RegisterSDNode>(Node->getOperand(i-NumResults))->getReg();
+      assert(TargetRegisterInfo::isPhysicalRegister(VRBase));
+      MI->addOperand(MachineOperand::CreateReg(VRBase, true));
+    }
 
-    if (!IsClone && !IsCloned)
+    if (!VRBase && !IsClone && !IsCloned)
       for (SDNode::use_iterator UI = Node->use_begin(), E = Node->use_end();
            UI != E; ++UI) {
         SDNode *User = *UI;
@@ -243,10 +252,10 @@ ScheduleDAGSDNodes::AddRegisterOperand(MachineInstr *MI, SDValue Op,
   // If the instruction requires a register in a different class, create
   // a new virtual register and copy the value into it.
   if (II) {
-    const TargetRegisterClass *SrcRC =
-      MRI.getRegClass(VReg);
-    const TargetRegisterClass *DstRC =
-      getInstrOperandRegClass(TRI, *II, IIOpNum);
+    const TargetRegisterClass *SrcRC = MRI.getRegClass(VReg);
+    const TargetRegisterClass *DstRC = 0;
+    if (IIOpNum < II->getNumOperands())
+      DstRC = II->OpInfo[IIOpNum].getRegClass(TRI);
     assert((DstRC || (TID.isVariadic() && IIOpNum >= TID.getNumOperands())) &&
            "Don't have operand info for this instruction!");
     if (DstRC && SrcRC != DstRC && !SrcRC->hasSuperClass(DstRC)) {
@@ -325,7 +334,7 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
 /// type matches the specified type.
 static const TargetRegisterClass*
 getSuperRegisterRegClass(const TargetRegisterClass *TRC,
-                         unsigned SubIdx, MVT VT) {
+                         unsigned SubIdx, EVT VT) {
   // Pick the register class of the superegister for this type
   for (TargetRegisterInfo::regclass_iterator I = TRC->superregclasses_begin(),
          E = TRC->superregclasses_end(); I != E; ++I)
@@ -423,7 +432,7 @@ void ScheduleDAGSDNodes::EmitSubregNode(SDNode *Node,
     MI->addOperand(MachineOperand::CreateImm(SubIdx));
     BB->insert(InsertPos, MI);
   } else
-    assert(0 && "Node is not insert_subreg, extract_subreg, or subreg_to_reg");
+    llvm_unreachable("Node is not insert_subreg, extract_subreg, or subreg_to_reg");
      
   SDValue Op(Node, 0);
   bool isNew = VRBaseMap.insert(std::make_pair(Op, VRBase)).second;
@@ -507,12 +516,17 @@ void ScheduleDAGSDNodes::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
     
     // Emit all of the actual operands of this instruction, adding them to the
     // instruction as appropriate.
-    for (unsigned i = 0; i != NodeOperands; ++i)
-      AddOperand(MI, Node->getOperand(i), i+II.getNumDefs(), &II, VRBaseMap);
+    bool HasOptPRefs = II.getNumDefs() > NumResults;
+    assert((!HasOptPRefs || !HasPhysRegOuts) &&
+           "Unable to cope with optional defs and phys regs defs!");
+    unsigned NumSkip = HasOptPRefs ? II.getNumDefs() - NumResults : 0;
+    for (unsigned i = NumSkip; i != NodeOperands; ++i)
+      AddOperand(MI, Node->getOperand(i), i-NumSkip+II.getNumDefs(), &II,
+                 VRBaseMap);
 
     // Emit all of the memory operands of this instruction
     for (unsigned i = NodeOperands; i != MemOperandsEnd; ++i)
-      AddMemOperand(MI, cast<MemOperandSDNode>(Node->getOperand(i))->MO);
+      AddMemOperand(MI,cast<MemOperandSDNode>(Node->getOperand(i+NumSkip))->MO);
 
     if (II.usesCustomDAGSchedInsertionHook()) {
       // Insert this instruction into the basic block using a target
@@ -539,11 +553,12 @@ void ScheduleDAGSDNodes::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
 #ifndef NDEBUG
     Node->dump(DAG);
 #endif
-    assert(0 && "This target-independent node should have been selected!");
+    llvm_unreachable("This target-independent node should have been selected!");
     break;
   case ISD::EntryToken:
-    assert(0 && "EntryToken should have been excluded from the schedule!");
+    llvm_unreachable("EntryToken should have been excluded from the schedule!");
     break;
+  case ISD::MERGE_VALUES:
   case ISD::TokenFactor: // fall thru
     break;
   case ISD::CopyToReg: {
@@ -606,7 +621,7 @@ void ScheduleDAGSDNodes::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
       ++i;  // Skip the ID value.
         
       switch (Flags & 7) {
-      default: assert(0 && "Bad flags!");
+      default: llvm_unreachable("Bad flags!");
       case 2:   // Def of register.
         for (; NumVals; --NumVals, ++i) {
           unsigned Reg = cast<RegisterSDNode>(Node->getOperand(i))->getReg();

@@ -5,6 +5,7 @@ add_llvm_library(LLVMCodeGen
   DwarfEHPrepare.cpp
   ELFCodeEmitter.cpp
   ELFWriter.cpp
+  ExactHazardRecognizer.cpp
   GCMetadata.cpp
   GCMetadataPrinter.cpp
   GCStrategy.cpp
@@ -23,6 +24,8 @@ add_llvm_library(LLVMCodeGen
   MachineBasicBlock.cpp
   MachineDominators.cpp
   MachineFunction.cpp
+  MachineFunctionAnalysis.cpp
+  MachineFunctionPass.cpp
   MachineInstr.cpp
   MachineLICM.cpp
   MachineLoopInfo.cpp
@@ -33,14 +36,12 @@ add_llvm_library(LLVMCodeGen
   MachineVerifier.cpp
   ObjectCodeEmitter.cpp
   OcamlGC.cpp
-  PBQP.cpp
   PHIElimination.cpp
   Passes.cpp
   PostRASchedulerList.cpp
   PreAllocSplitting.cpp
   PrologEpilogInserter.cpp
   PseudoSourceValue.cpp
-  RegAllocBigBlock.cpp
   RegAllocLinearScan.cpp
   RegAllocLocal.cpp
   RegAllocPBQP.cpp
@@ -54,6 +55,7 @@ add_llvm_library(LLVMCodeGen
   ShadowStackGC.cpp
   ShrinkWrapping.cpp
   SimpleRegisterCoalescing.cpp
+  SjLjEHPrepare.cpp
   Spiller.cpp
   StackProtector.cpp
   StackSlotColoring.cpp

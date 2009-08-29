@@ -6,15 +6,15 @@ add_llvm_library(LLVMAnalysis
   AliasSetTracker.cpp
   Analysis.cpp
   BasicAliasAnalysis.cpp
-  CaptureTracking.cpp
   CFGPrinter.cpp
+  CaptureTracking.cpp
   ConstantFolding.cpp
   DbgInfoPrinter.cpp
   DebugInfo.cpp
+  IVUsers.cpp
   InstCount.cpp
   Interval.cpp
   IntervalPartition.cpp
-  IVUsers.cpp
   LibCallAliasAnalysis.cpp
   LibCallSemantics.cpp
   LiveValues.cpp
@@ -23,11 +23,14 @@ add_llvm_library(LLVMAnalysis
   LoopPass.cpp
   LoopVR.cpp
   MemoryDependenceAnalysis.cpp
+  PointerTracking.cpp
   PostDominators.cpp
+  ProfileEstimatorPass.cpp
   ProfileInfo.cpp
   ProfileInfoLoader.cpp
   ProfileInfoLoaderPass.cpp
   ScalarEvolution.cpp
+  ScalarEvolutionAliasAnalysis.cpp
   ScalarEvolutionExpander.cpp
   SparsePropagation.cpp
   Trace.cpp

@@ -137,10 +137,7 @@ namespace llvm {
     }
 
     /// print - Implement the dump method.
-    virtual void print(std::ostream &O, const Module* = 0) const;
-    void print(std::ostream *O, const Module* M = 0) const {
-      if (O) print(*O, M);
-    }
+    virtual void print(raw_ostream &O, const Module* = 0) const;
 
   private:
     /// joinIntervals - join compatible live intervals
@@ -206,13 +203,7 @@ namespace llvm {
     /// ReMaterializeTrivialDef - If the source of a copy is defined by a trivial
     /// computation, replace the copy by rematerialize the definition.
     bool ReMaterializeTrivialDef(LiveInterval &SrcInt, unsigned DstReg,
-                                 MachineInstr *CopyMI);
-
-    /// TurnCopyIntoImpDef - If source of the specified copy is an implicit def,
-    /// turn the copy into an implicit def.
-    bool TurnCopyIntoImpDef(MachineBasicBlock::iterator &I,
-                            MachineBasicBlock *MBB,
-                            unsigned DstReg, unsigned SrcReg);
+                                 unsigned DstSubIdx, MachineInstr *CopyMI);
 
     /// CanCoalesceWithImpDef - Returns true if the specified copy instruction
     /// from an implicit def to another register can be coalesced away.
@@ -276,10 +267,6 @@ namespace llvm {
     /// being updated is not zero, make sure to set it to the correct physical
     /// subregister.
     void UpdateRegDefsUses(unsigned SrcReg, unsigned DstReg, unsigned SubIdx);
-
-    /// RemoveDeadImpDef - Remove implicit_def instructions which are
-    /// "re-defining" registers due to insert_subreg coalescing. e.g.
-    void RemoveDeadImpDef(unsigned Reg, LiveInterval &LI);
 
     /// RemoveUnnecessaryKills - Remove kill markers that are no longer accurate
     /// due to live range lengthening as the result of coalescing.
