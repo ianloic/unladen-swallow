@@ -90,7 +90,7 @@ LLVM_LIB_DIR=	@LLVM_PATH@/lib
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
 LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
 ifneq (@BUILD_LLVM@, disabled)
-	LLVMLDFLAGS+=	-lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMMC -lLLVMAsmPrinter -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMCore -lLLVMSupport -lLLVMSystem
+	LLVMLDFLAGS+=   -lLLVMX86AsmParser -lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMX86Info -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMMC -lLLVMCore -lLLVMSupport -lLLVMSystem
 endif
 
 

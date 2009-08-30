@@ -250,7 +250,8 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
     // wasn't already present.
     llvm::GlobalVariable *& the_string = this->constant_strings_[value];
     if (the_string == NULL) {
-        llvm::Constant *str_const = llvm::ConstantArray::get(value, true);
+        llvm::Constant *str_const = llvm::ConstantArray::get(this->context(),
+                                                             value, true);
         the_string = new llvm::GlobalVariable(
             *this->module_,
             str_const->getType(),
@@ -265,9 +266,10 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
     // expecting string constants instead expect an i8* pointing to
     // the first element.  We use GEP instead of bitcasting to make
     // type safety more obvious.
+    const llvm::Type *int64_type = llvm::Type::getInt64Ty(this->context());
     llvm::Constant *indices[] = {
-        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0),
-        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0)
+        llvm::ConstantInt::get(int64_type, 0),
+        llvm::ConstantInt::get(int64_type, 0)
     };
     return llvm::ConstantExpr::getGetElementPtr(the_string, indices, 2);
 }

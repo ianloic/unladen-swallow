@@ -1005,7 +1005,6 @@ namespace {
       in(); nl(Out) << getCppName(GV);
     }
     Out << " = new GlobalVariable(/*Module=*/*mod, ";
-    nl(Out) << "*mod,";
     nl(Out) << "/*Type=*/";
     printCppName(GV->getType()->getElementType());
     Out << ",";

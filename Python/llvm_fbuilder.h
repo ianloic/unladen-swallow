@@ -8,6 +8,7 @@
 
 #include "Util/EventTimer.h"
 #include "llvm/ADT/SparseBitVector.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
@@ -46,6 +47,10 @@ public:
 
     /// Inserts a call to llvm.dbg.stoppoint.
     void SetDebugStopPoint(int line_number);
+
+    /// Convenience wrapper for creating named basic blocks using the current
+    /// context and function.
+    llvm::BasicBlock *CreateBasicBlock(const llvm::Twine &name);
 
     /// This function fills the block that handles a backedge.  Each
     /// backedge needs to check if it needs to handle signals or
@@ -463,6 +468,7 @@ private:
     // about the function.  It's not used to examine the bytecode
     // string.
     PyCodeObject *const code_object_;
+    llvm::LLVMContext &context_;
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;

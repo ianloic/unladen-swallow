@@ -50,7 +50,7 @@ public:
     // Use this accessor for the LLVMContext rather than
     // getGlobalContext() directly so that we can more easily add new
     // contexts later.
-    llvm::LLVMContext &context() { return llvm::getGlobalContext(); }
+    llvm::LLVMContext &context() const { return llvm::getGlobalContext(); }
 
     llvm::Module *module() { return this->module_; }
 
