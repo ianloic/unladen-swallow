@@ -44,6 +44,10 @@ using llvm::ICmpInst;
 
 using llvm::ExecutionEngine;
 
+// helper to produce better error messages
+#define _PyErr_SetString(T,S) \
+  PyErr_Format(T, S " (in %s at %s:%d)",__PRETTY_FUNCTION__ , __FILE__, __LINE__)
+
 // FIXME: assert sizeof(unicode) == 2
 #define CHAR_TYPE IntegerType::get(16)
 #define CHAR_POINTER_TYPE PointerType::get(CHAR_TYPE, 0)
@@ -569,7 +573,7 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
 {
   // make sure we got a sequence
   if (!PySequence_Check(seq)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+    _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
     return false;
   }
 
@@ -617,20 +621,20 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
     PyObject* element = PySequence_GetItem(seq, index);
     // make sure that that item is a sequence
     if (!PySequence_Check(element)) {
-      PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+      _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
       Py_XDECREF(element);
       return false;
     }
     // whose length is two
     if (PySequence_Size(element) != 2) {
-      PyErr_SetString(PyExc_ValueError, "Expected a 2-sequence");
+      _PyErr_SetString(PyExc_ValueError, "Expected a 2-sequence");
       Py_XDECREF(element);
       return false;
     }
     // the first item is a string
     PyObject* op = PySequence_GetItem(element, 0);
     if (!PyString_Check(op)) {
-      PyErr_SetString(PyExc_TypeError, "Expected a string");
+      _PyErr_SetString(PyExc_TypeError, "Expected a string");
       Py_XDECREF(op);
       Py_XDECREF(element);
       return false;
@@ -706,7 +710,7 @@ BasicBlock*
 CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
-    PyErr_SetString(PyExc_TypeError, "Expected an integer");
+    _PyErr_SetString(PyExc_TypeError, "Expected an integer");
     return NULL;
   }
 
@@ -758,7 +762,7 @@ BasicBlock*
 CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
   // the argument should be a sequence
   if (!PySequence_Check(arg)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+    _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
     return NULL;
   }
 
@@ -784,12 +788,12 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
     // each item in the sequences should be a 2-tuple
     PyObject* item = PySequence_GetItem(arg, i);
     if (!PyTuple_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "Expected a tuple");
+      _PyErr_SetString(PyExc_TypeError, "Expected a tuple");
       Py_XDECREF(item);
       return NULL;
     }
     if (PyTuple_Size(item) != 2) {
-      PyErr_SetString(PyExc_ValueError, "Expected a 2-tuple");
+      _PyErr_SetString(PyExc_ValueError, "Expected a 2-tuple");
       Py_XDECREF(item);
       return NULL;
     }
@@ -800,7 +804,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
 
     // the op is a string, 
     if (!PyString_Check(op)) {
-      PyErr_SetString(PyExc_TypeError, "Expected a string");
+      _PyErr_SetString(PyExc_TypeError, "Expected a string");
       Py_XDECREF(item);
       return false;
     }
@@ -813,7 +817,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
     } else if (!strcmp(op_str, "literal")) {
       // the argument should just be an integer
       if (!PyInt_Check(op_arg)) {
-        PyErr_SetString(PyExc_TypeError, "Expected an integer");
+        _PyErr_SetString(PyExc_TypeError, "Expected an integer");
         return NULL;
       }
 
@@ -824,7 +828,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       // parse the start and end of the range
       int from, to;
       if(!PyArg_ParseTuple(op_arg, "ii", &from, &to)) {
-        PyErr_SetString(PyExc_ValueError, "Expected a 2-tuple of integers");
+        _PyErr_SetString(PyExc_ValueError, "Expected a 2-tuple of integers");
         Py_XDECREF(item);
         return NULL;
       }
@@ -837,7 +841,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       more_tests = yet_more_tests;
     } else if (!strcmp(op_str, "category")) {
       if (!PyString_Check(op_arg)) {
-        PyErr_SetString(PyExc_TypeError, "Expected a string category name");
+        _PyErr_SetString(PyExc_TypeError, "Expected a string category name");
         Py_XDECREF(item);
         return false;
       }
@@ -869,20 +873,20 @@ BasicBlock*
 CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
   // @arg is a tuple of (None, [branch1, branch2, branch3...])
   if (!PyTuple_Check(arg)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a tuple");
+    _PyErr_SetString(PyExc_TypeError, "Expected a tuple");
     return NULL;
   }
 
   PyObject* branches = PyTuple_GetItem(arg, 1);
   // branches should be a sequence
   if (!PySequence_Check(branches)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+    _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
     return NULL;
   }
 
   Py_ssize_t num_branches = PySequence_Size(branches);
   if (num_branches == -1) {
-    PyErr_SetString(PyExc_TypeError, "Failed to get sequence length");
+    _PyErr_SetString(PyExc_TypeError, "Failed to get sequence length");
     return NULL;
   }
 
@@ -905,7 +909,7 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
     // get the branch sequence
     PyObject* branch = PySequence_GetItem(branches, i);
     if (branch == NULL) {
-      PyErr_SetString(PyExc_TypeError, "Failed to get branch");
+      _PyErr_SetString(PyExc_TypeError, "Failed to get branch");
       return NULL;
     }
 
@@ -950,7 +954,7 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
   
   if (!PyArg_ParseTuple(arg, "iiO", &min, &max, &sub_pattern) ||
       !PySequence_Check(sub_pattern)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a tuple: int, int, sequence");
+    _PyErr_SetString(PyExc_TypeError, "Expected a tuple: int, int, sequence");
     return NULL;
   }
 
@@ -1027,7 +1031,7 @@ BasicBlock*
 CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
-    PyErr_SetString(PyExc_TypeError, "Expected an integer");
+    _PyErr_SetString(PyExc_TypeError, "Expected an integer");
     return NULL;
   }
 
@@ -1036,7 +1040,7 @@ CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
 
   // make sure the group ID isn't larger than we expect
   if (id > regex.groups) {
-    PyErr_SetString(PyExc_ValueError, "Unexpected group id");
+    _PyErr_SetString(PyExc_ValueError, "Unexpected group id");
     return NULL;
   }
 
@@ -1054,7 +1058,7 @@ BasicBlock*
 CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
-    PyErr_SetString(PyExc_TypeError, "Expected an integer");
+    _PyErr_SetString(PyExc_TypeError, "Expected an integer");
     return NULL;
   }
 
@@ -1063,7 +1067,7 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
 
   // make sure the group ID isn't larger than we expect
   if (id > regex.groups) {
-    PyErr_SetString(PyExc_ValueError, "Unexpected group id");
+    _PyErr_SetString(PyExc_ValueError, "Unexpected group id");
     return NULL;
   }
 
@@ -1110,7 +1114,7 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   
   // make sure we got a sequence
   if (!PySequence_Check(seq)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a sequence");
+    _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
     return -1;
   }
 
