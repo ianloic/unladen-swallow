@@ -222,6 +222,10 @@ def finditer(pattern, string, flags=0):
   return compile(pattern, flags).finditer(string)
 
 # taken from SRE's re.py
+_alphanum = {}
+for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890':
+    _alphanum[c] = 1
+del c
 def escape(pattern):
     "Escape all non-alphanumeric characters in pattern."
     s = list(pattern)
