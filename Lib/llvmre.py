@@ -29,9 +29,14 @@ class RegexObject(object):
     for op, av in pattern:
       if op == 'subpattern':
         id, subpattern = av
-        new_pattern.append(('subpattern_begin', id))
-        new_pattern.extend(self.__flatten_subpatterns(subpattern))
-        new_pattern.append(('subpattern_end', id))
+        if id == None:
+          # we can ignore non-grouping subpatterns
+          new_pattern.extend(self.__flatten_subpatterns(subpattern))
+        else:
+          # use new subpattern_begin & subpattern_end ops
+          new_pattern.append(('subpattern_begin', id))
+          new_pattern.extend(self.__flatten_subpatterns(subpattern))
+          new_pattern.append(('subpattern_end', id))
       elif op == 'max_repeat' or op == 'min_repeat':
         min, max, pattern = av
         new_pattern.append((op, (min, max, self.__flatten_subpatterns(pattern))))
