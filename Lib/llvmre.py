@@ -197,7 +197,11 @@ class MatchObject(object):
     return expand_template(parse_template(template, self.__parsed), self)
 
 def compile(pattern, flags=0):
-  return RegexObject(pattern, flags)
+  if isinstance(pattern, RegexObject):
+    assert flags == pattern.flags # right?
+    return pattern
+  else:
+    return RegexObject(pattern, flags)
 
 def match(pattern, string, flags=0):
   return compile(pattern, flags).match(string)
