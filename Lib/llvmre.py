@@ -220,3 +220,17 @@ def findall(pattern, string, flags=0):
 
 def finditer(pattern, string, flags=0):
   return compile(pattern, flags).finditer(string)
+
+# taken from SRE's re.py
+def escape(pattern):
+    "Escape all non-alphanumeric characters in pattern."
+    s = list(pattern)
+    alphanum = _alphanum
+    for i in range(len(pattern)):
+        c = pattern[i]
+        if c not in alphanum:
+            if c == "\000":
+                s[i] = "\\000"
+            else:
+                s[i] = "\\" + c
+    return pattern[:0].join(s)
