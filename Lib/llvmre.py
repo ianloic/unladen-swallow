@@ -74,28 +74,26 @@ class RegexObject(object):
     raise NotImplementedError('RegexObject.split')
 
   def findall(self, string, pos=0, endpos=None):
+    return [m.group(0) for m in self.finditer(string, pos, endpos)]
+
+  def finditer(self, string, pos=0, endpos=None):
     if pos: _pos = pos
     else: _pos = 0
     if endpos: _endpos = endpos
     else: _endpos = len(string)
-    results = []
     while True:
       groups = self.__re.find(unicode(string), _pos, _endpos)
       if groups:
-        # add this match to the results
-        results.append(string[groups[0]:groups[1]])
         # next time search after this result
         if _pos == groups[1]:
           _pos = groups[1] + 1
         else:
           _pos = groups[1]
+        # yeild this result
+        yield MatchObject(self, string, pos, endpos, groups, self.__parsed)
       else:
         # no match, stop looking
-        break
-    return results
-
-  def finditer(self, string, pos=0, endpos=None):
-    return iter(self.findall(string, pos, endpos))
+        raise StopIteration
 
   def sub(self, repl, string, count=0):
     return self.subn(repl, string, count)[0]
