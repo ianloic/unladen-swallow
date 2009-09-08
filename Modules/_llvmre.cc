@@ -179,6 +179,7 @@ class CompiledRegEx {
     BasicBlock* subpattern_begin(BasicBlock* block, PyObject* arg);
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
     BasicBlock* branch(BasicBlock* block, PyObject* arg);
+    BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
 
     // helpers to generate commonly used code
     Value* loadOffset(BasicBlock* block);
@@ -675,6 +676,8 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
       last = subpattern_end(block, arg);
     } else if (!strcmp(op_str, "branch")) {
       last = branch(block, arg);
+    } else if (!strcmp(op_str, "groupref_exists")) {
+      last = groupref_exists(block, arg);
     } else {
       PyErr_Format(PyExc_ValueError, "Unsupported SRE code '%s'", op_str);
       Py_XDECREF(op);
@@ -1079,6 +1082,75 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   new StoreInst(off, end_ptr, block);
 
   return block;
+}
+
+BasicBlock*
+CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
+  // @arg should be a tuple of (group-number, yes-seq, no-seq)
+  int groupnum;
+  PyObject* yes_seq;
+  PyObject* no_seq;
+  if (!PyArg_ParseTuple(arg, "iOO", &groupnum, &yes_seq, &no_seq)) {
+    _PyErr_SetString(PyExc_ValueError, "Expected a 3-tuple");
+  }
+
+  if (!PySequence_Check(yes_seq)) {
+    _PyErr_SetString(PyExc_ValueError, "Expected a sequence");
+  }
+
+  if (no_seq != Py_None && !PySequence_Check(no_seq)) {
+    _PyErr_SetString(PyExc_ValueError, "Expected a sequence or None");
+  }
+
+  // create the blocks we need
+  BasicBlock* yes = BasicBlock::Create("yes", function);
+  BasicBlock* no = BasicBlock::Create("no", function);
+  BasicBlock* next_block = BasicBlock::Create("block", function);
+
+  // prepare the arguments for the sub-expressions
+  std::vector<Value*> args;
+  args.push_back(string);
+  args.push_back(loadOffset(block));
+  args.push_back(end_offset);
+  args.push_back(groups);
+
+  // compile the yes seq to a function
+  CompiledRegEx yes_compiled(regex);
+  yes_compiled.Compile(yes_seq, 0);
+  // call it from the yes block
+  Value* yes_result = CallInst::Create(yes_compiled.function, 
+      args.begin(), args.end(), "yes_result", yes);
+  // save the result
+  storeOffset(yes, yes_result);
+  // continue...
+  BranchInst::Create(next_block, yes);
+
+  // if there's a no function...
+  if (no_seq != Py_None) {
+    CompiledRegEx no_compiled(regex);
+    no_compiled.Compile(no_seq, 0);
+    // call it from the no block
+    Value* no_result = CallInst::Create(no_compiled.function, 
+        args.begin(), args.end(), "no_result", no);
+    // save the result
+    storeOffset(no, no_result);
+  }
+  // continue...
+  BranchInst::Create(next_block, no);
+
+  // generate code to check if the specified group has matched
+  // get the pointer to the end offset of the group
+  Value* end_ptr = GetElementPtrInst::Create(groups, 
+      ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2+1), "end_ptr", block);
+  // load the end value
+  Value* end_off = new LoadInst(end_ptr, "end", block);
+  // check if the end_off is not found
+  Value* end_not_found = new ICmpInst(ICmpInst::ICMP_EQ, end_off,
+      regex.not_found, "end_not_found", block);
+  // either yes or no
+  BranchInst::Create(no, yes, end_not_found, block);
+
+  return next_block;
 }
 
 static PyObject *
