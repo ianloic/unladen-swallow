@@ -181,7 +181,9 @@ class CompiledRegEx {
     BasicBlock* branch(BasicBlock* block, PyObject* arg);
     BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
     BasicBlock* at_end(BasicBlock* block);
+    BasicBlock* at_end_string(BasicBlock* block);
     BasicBlock* at_beginning(BasicBlock* block);
+    BasicBlock* at_beginning_string(BasicBlock* block);
     BasicBlock* at_boundary(BasicBlock* block, bool non_boundary);
 
     // helpers to generate commonly used code
@@ -694,6 +696,10 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
         last = at_end(block);
       } else if (!strcmp(arg_str, "at_beginning")) {
         last = at_beginning(block);
+      } else if (!strcmp(arg_str, "at_beginning_string")) {
+        last = at_beginning_string(block);
+      } else if (!strcmp(arg_str, "at_end_string")) {
+        last = at_end_string(block);
       } else if (!strcmp(arg_str, "at_boundary")) {
         last = at_boundary(block, false);
       } else if (!strcmp(arg_str, "at_non_boundary")) {
@@ -1058,6 +1064,38 @@ CompiledRegEx::at_beginning(BasicBlock* block)
     BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
         test_slash_n);
   }
+
+  return next_block;
+}
+
+BasicBlock*
+CompiledRegEx::at_beginning_string(BasicBlock* block)
+{
+  // match the start of the string
+
+  BasicBlock* next_block = BasicBlock::Create("block", function);
+
+  // are we at the start of the string?
+  Value* offset = loadOffset(block);
+  Value* start = new ICmpInst(ICmpInst::ICMP_EQ, offset, 
+      ConstantInt::get(OFFSET_TYPE, 0), "start", block);
+  BranchInst::Create(next_block, return_not_found, start, block);
+
+  return next_block;
+}
+
+BasicBlock*
+CompiledRegEx::at_end_string(BasicBlock* block)
+{
+  // match the end of the string
+
+  BasicBlock* next_block = BasicBlock::Create("block", function);
+
+  // are we at the end of the string?
+  Value* offset = loadOffset(block);
+  Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset,
+      "ended", block);
+  BranchInst::Create(next_block, return_not_found, ended, block);
 
   return next_block;
 }
