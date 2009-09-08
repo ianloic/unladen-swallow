@@ -151,11 +151,15 @@ class MatchObject(object):
     else:
       self.lastindex = None
     while len(groups) >= 2: self.__groups.append((groups.pop(0), groups.pop(0)))
-    # FIXME: implement lastindex, lastgroup
     self.pos = pos
     self.endpos = endpos
     self.re = regex.pattern
     self.string = string
+    self.lastgroup = None
+    for name, num in regex.groupindex.items():
+      if num == self.lastindex:
+        self.lastgroup = name
+        break
 
   def __groupnum(self, group):
     '''take a group name (or number) and return the group number'''
