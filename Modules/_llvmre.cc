@@ -182,6 +182,7 @@ class CompiledRegEx {
     BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
     BasicBlock* at_end(BasicBlock* block);
     BasicBlock* at_beginning(BasicBlock* block);
+    BasicBlock* at_boundary(BasicBlock* block, bool non_boundary);
 
     // helpers to generate commonly used code
     Value* loadOffset(BasicBlock* block);
@@ -189,8 +190,8 @@ class CompiledRegEx {
     BasicBlock* loadCharacter(BasicBlock* block);
     Function* greedy(Function* repeat, Function* after);
     Function* nongreedy(Function* repeat, Function* after);
-    void testRange(BasicBlock* block, int from, int to, BasicBlock* member, BasicBlock* nonmember);
-    bool testCategory(BasicBlock* block, const char* category, BasicBlock* member, BasicBlock* nonmember);
+    void testRange(BasicBlock* block, Value* c, int from, int to, BasicBlock* member, BasicBlock* nonmember);
+    bool testCategory(BasicBlock* block, Value* c, const char* category, BasicBlock* member, BasicBlock* nonmember);
 
     // call unladen-swallow's optimizer
     bool optimize(Function* f);
@@ -427,33 +428,35 @@ CompiledRegEx::nongreedy(Function* repeat, Function* after)
 
 void
 CompiledRegEx::testRange(BasicBlock* block,
+                         Value*      c,
                          int         from,
                          int         to,
                          BasicBlock* member, 
                          BasicBlock* nonmember) 
 {
-  /** in @block, test if the current character (this.character) is in the range
+  /** in @block, test if the current character (@c) is in the range
    * @from to @to inclusive. If so jump to @member, else jump to @nonmember */
 
   // create a couple of new basic blocks for the range test
   BasicBlock* greater_equal = BasicBlock::Create("greater_equal", function);
   // test the character >= from
-  Value* is_ge = new llvm::ICmpInst(llvm::ICmpInst::ICMP_UGE, character,
+  Value* is_ge = new llvm::ICmpInst(llvm::ICmpInst::ICMP_UGE, c,
       ConstantInt::get(CHAR_TYPE, from), "is_ge", block);
   BranchInst::Create(greater_equal, nonmember, is_ge, block);
   // test the character <= to
-  Value* is_le = new llvm::ICmpInst(llvm::ICmpInst::ICMP_ULE, character,
+  Value* is_le = new llvm::ICmpInst(llvm::ICmpInst::ICMP_ULE, c,
       ConstantInt::get(CHAR_TYPE, to), "is_le", greater_equal);
   BranchInst::Create(member, nonmember, is_le, greater_equal);
 }
 
 bool
 CompiledRegEx::testCategory(BasicBlock* block,
+                            Value* c,
                             const char* category, 
                             BasicBlock* member, 
                             BasicBlock* nonmember) 
 {
-  /** in @block, test if the current character (this.character) is a member 
+  /** in @block, test if the character (@c) is a member 
    *  of @category and branch to @member or @nonmember as appropriate */
   if (!strcmp(category, "category_digit")) {
     if (regex.flags & SRE_FLAG_UNICODE) {
@@ -464,32 +467,32 @@ CompiledRegEx::testCategory(BasicBlock* block,
 
       // call the function
       std::vector<Value*> args;
-      args.push_back(character);
+      args.push_back(c);
       Value* IsDigit_result = CallInst::Create(regex.Py_UNICODE_ISDIGIT,
           args.begin(), args.end(), "IsDigit_result", block);
       // go to the right successor block
       BranchInst::Create(member, nonmember, IsDigit_result, block);
     } else {
       // for non-unicode, test if it's in the range '0' - '9'
-      testRange(block, '0', '9', member, nonmember);
+      testRange(block, c, '0', '9', member, nonmember);
     }
   } else if (!strcmp(category, "category_not_digit")) {
     // the opposite of the digit category
-    testCategory(block, "category_digit", nonmember, member);
+    testCategory(block, c, "category_digit", nonmember, member);
   } else if (!strcmp(category, "category_word")) {
     if (regex.flags & SRE_FLAG_LOCALE) {
       // match [0-9_] and whatever system isalnum matches
       BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
       BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
-      testRange(block, '0', '9', member, tmp1);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, character,
+      testRange(block, c, '0', '9', member, tmp1);
+      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
         ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp1);
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // make sure isalnum is available to the JIT
       ENSURE_TEST_FUNCTION(isalnum);
       // call the function
       std::vector<Value*> args;
-      args.push_back(character);
+      args.push_back(c);
       Value* result = CallInst::Create(regex.isalnum,
           args.begin(), args.end(), "result", tmp2);
       // go to the right successor block
@@ -498,15 +501,15 @@ CompiledRegEx::testCategory(BasicBlock* block,
       // match [0-9_] and whatever Py_UNICODE_ISALNUM matches
       BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
       BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
-      testRange(block, '0', '9', member, tmp1);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, character,
+      testRange(block, c, '0', '9', member, tmp1);
+      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
         ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp1);
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // make sure Py_UNICODE_ISALNUM is available to the JIT
       ENSURE_TEST_FUNCTION(Py_UNICODE_ISALNUM);
       // call the function
       std::vector<Value*> args;
-      args.push_back(character);
+      args.push_back(c);
       Value* result = CallInst::Create(regex.Py_UNICODE_ISALNUM,
           args.begin(), args.end(), "result", tmp2);
       // go to the right successor block
@@ -516,20 +519,20 @@ CompiledRegEx::testCategory(BasicBlock* block,
       BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
       BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
       BasicBlock* tmp3 = BasicBlock::Create("category_word_3", function);
-      testRange(block, 'a', 'z', member, tmp1);
-      testRange(tmp1, 'A', 'Z', member, tmp2);
-      testRange(tmp2, '0', '9', member, tmp3);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, character,
+      testRange(block, c, 'a', 'z', member, tmp1);
+      testRange(tmp1, c, 'A', 'Z', member, tmp2);
+      testRange(tmp2, c, '0', '9', member, tmp3);
+      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
         ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp3);
       BranchInst::Create(member, nonmember, is_underscore, tmp3);
     }
   } else if (!strcmp(category, "category_not_word")) {
-    testCategory(block, "category_word", nonmember, member);
+    testCategory(block, c, "category_word", nonmember, member);
   } else if (!strcmp(category, "category_space")) {
     // match [ \t\n\r\f\v]
     BasicBlock* unmatched = BasicBlock::Create("", function);
     // create a switch instruction
-    SwitchInst* switch_ = SwitchInst::Create(character, unmatched, 6, block);
+    SwitchInst* switch_ = SwitchInst::Create(c, unmatched, 6, block);
     switch_->addCase(ConstantInt::get(CHAR_TYPE, ' '), member);
     switch_->addCase(ConstantInt::get(CHAR_TYPE, '\t'), member);
     switch_->addCase(ConstantInt::get(CHAR_TYPE, '\n'), member);
@@ -542,7 +545,7 @@ CompiledRegEx::testCategory(BasicBlock* block,
       ENSURE_TEST_FUNCTION(isspace);
       // call the function
       std::vector<Value*> args;
-      args.push_back(character);
+      args.push_back(c);
       Value* result = CallInst::Create(regex.isspace,
           args.begin(), args.end(), "result", unmatched);
       // go to the right successor block
@@ -553,7 +556,7 @@ CompiledRegEx::testCategory(BasicBlock* block,
       ENSURE_TEST_FUNCTION(Py_UNICODE_ISSPACE);
       // call the function
       std::vector<Value*> args;
-      args.push_back(character);
+      args.push_back(c);
       Value* result = CallInst::Create(regex.Py_UNICODE_ISSPACE,
           args.begin(), args.end(), "result", unmatched);
       // go to the right successor block
@@ -563,7 +566,7 @@ CompiledRegEx::testCategory(BasicBlock* block,
       BranchInst::Create(nonmember, unmatched);
     }
   } else if (!strcmp(category, "category_not_space")) {
-    testCategory(block, "category_space", nonmember, member);
+    testCategory(block, c, "category_space", nonmember, member);
   } else {
     PyErr_Format(PyExc_ValueError, "Unsupported SRE category '%s'", category);
     return false;
@@ -691,6 +694,10 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
         last = at_end(block);
       } else if (!strcmp(arg_str, "at_beginning")) {
         last = at_beginning(block);
+      } else if (!strcmp(arg_str, "at_boundary")) {
+        last = at_boundary(block, false);
+      } else if (!strcmp(arg_str, "at_non_boundary")) {
+        last = at_boundary(block, true);
       } else {
         PyErr_Format(PyExc_ValueError, "Unexpected SRE at code '%s'", arg_str);
         return NULL;
@@ -856,8 +863,8 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       Py_XDECREF(item);
 
       BasicBlock* yet_more_tests = BasicBlock::Create("more_tests", function);
-      testRange(more_tests, from, to, negate?return_not_found:matched,
-          yet_more_tests);
+      testRange(more_tests, character, from, to, 
+          negate ? return_not_found : matched, yet_more_tests);
       more_tests = yet_more_tests;
     } else if (!strcmp(op_str, "category")) {
       if (!PyString_Check(op_arg)) {
@@ -867,7 +874,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       }
       const char* category_name = PyString_AsString(op_arg);
       BasicBlock* yet_more_tests = BasicBlock::Create("more_tests", function);
-      if (!testCategory(more_tests, category_name, 
+      if (!testCategory(more_tests, character, category_name, 
             negate?return_not_found:matched, yet_more_tests)) {
         return false;
       }
@@ -1050,6 +1057,82 @@ CompiledRegEx::at_beginning(BasicBlock* block)
         test_slash_n);
     BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
         test_slash_n);
+  }
+
+  return next_block;
+}
+
+BasicBlock*
+CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
+  // at a boundary if next (@offset) and previous (@offset-1) have different
+  // word-ness, as determined by category_word. 
+  // also, the start and end of strings are non-word.
+ 
+  // set up blocks
+  BasicBlock* test_prev = BasicBlock::Create("test_prev", function);
+  BasicBlock* post_test_prev = BasicBlock::Create("post_test_prev", function);
+  BasicBlock* pre_test_next = BasicBlock::Create("pre_test_next", function);
+  BasicBlock* test_next = BasicBlock::Create("test_next", function);
+  BasicBlock* post_test_next = BasicBlock::Create("post_test_next", function);
+  BasicBlock* test_word = BasicBlock::Create("test_word", function);
+  BasicBlock* next_block = BasicBlock::Create("block", function);
+
+  // initial block
+  // variables to hold the word-ness of the previous and next characters
+  Value* prev_word_ptr = new llvm::AllocaInst(BOOL_TYPE, "prev_word_ptr", 
+      block);
+  Value* next_word_ptr = new llvm::AllocaInst(BOOL_TYPE, "next_word_ptr", 
+      block);
+
+  // load the offset
+  Value* offset = loadOffset(block);
+  // set the next/prev word-ness values based on the offset
+  Value* not_start = new ICmpInst(ICmpInst::ICMP_NE, offset,
+      ConstantInt::get(OFFSET_TYPE, 0), "not_start", block);
+  new StoreInst(not_start, prev_word_ptr, block);
+  Value* not_end = new ICmpInst(ICmpInst::ICMP_ULT, offset, 
+      end_offset, "not_end", block);
+  new StoreInst(not_end, next_word_ptr, block);
+
+  // if we're not at the start then test the word-ness of the previous char
+  BranchInst::Create(test_prev, pre_test_next, not_start, block);
+
+  // test the previous character's word-ness
+  Value* prev_off = BinaryOperator::CreateSub(offset, 
+      ConstantInt::get(OFFSET_TYPE, 1), "prev_off", test_prev);
+  Value* prev_c_ptr = GetElementPtrInst::Create(string, prev_off, "prev_c_ptr",
+      test_prev);
+  Value* prev_c = new LoadInst(prev_c_ptr, "prev_c", test_prev);
+  testCategory(test_prev, prev_c, "category_word", pre_test_next, 
+      post_test_prev);
+  
+  // the previous is not a word, store that
+  new StoreInst(ConstantInt::get(BOOL_TYPE, 0), prev_word_ptr, post_test_prev);
+  BranchInst::Create(pre_test_next, post_test_prev);
+
+  // if we're not at the end then test the word-ness of the next character
+  BranchInst::Create(test_next, test_word, not_end, pre_test_next);
+
+  // test the next character's word-ness
+  Value* next_c_ptr = GetElementPtrInst::Create(string, offset, "next_c_ptr",
+      test_next);
+  Value* next_c = new LoadInst(next_c_ptr, "next_c", test_next);
+  testCategory(test_next, next_c, "category_word", test_word, post_test_next);
+
+  // the next is not a word, store that
+  new StoreInst(ConstantInt::get(BOOL_TYPE, 0), next_word_ptr, post_test_next);
+  BranchInst::Create(test_word, post_test_next);
+
+  // compare the word-ness of the previous and next characters
+  Value* prev_word = new LoadInst(prev_word_ptr, "prev_word", test_word);
+  Value* next_word = new LoadInst(next_word_ptr, "next_word", test_word);
+  Value* boundary = new ICmpInst(ICmpInst::ICMP_NE, prev_word, next_word,
+      "boundary", test_word);
+
+  if (non_boundary) {
+    BranchInst::Create(return_not_found, next_block, boundary, test_word);
+  } else {
+    BranchInst::Create(next_block, return_not_found, boundary, test_word);
   }
 
   return next_block;
