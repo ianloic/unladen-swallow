@@ -1271,6 +1271,12 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
       ConstantInt::get(OFFSET_TYPE, (id-1)*2+1), "end_ptr", block);
   new StoreInst(off, end_ptr, block);
 
+  // store the group index at the end of the group array for
+  // MatchObject.lastindex
+  Value* lastindex_ptr = GetElementPtrInst::Create(groups,
+      ConstantInt::get(OFFSET_TYPE, regex.groups*2), "lastindex_ptr", block);
+  new StoreInst(ConstantInt::get(OFFSET_TYPE, id), lastindex_ptr, block);
+
   return block;
 }
 
@@ -1500,30 +1506,40 @@ RegEx_match(RegEx* self, PyObject* args) {
 
   ReOffset* groups = NULL;
   if (self->groups) {
-    groups = new ReOffset[self->groups*2];
+    groups = new ReOffset[self->groups*2 + 1];
   }
 
   ReOffset result = (func_ptr)(characters, pos, end, groups);
 
   if (result >= 0) {
     // matched, return a list of offsets
-    PyObject* groups_list = PyList_New(self->groups*2 + 2);
+    PyObject* groups_list = PyList_New(self->groups*2 + 3);
     // r[0] - the start of the whole match
     PyList_SetItem(groups_list, 0, PyInt_FromLong((long)pos));
     // r[0] - the end of the whole match
     PyList_SetItem(groups_list, 1, PyInt_FromLong((long)result));
     // for each group, the start and end offsets
     if (self->groups) {
-      for (int i=0; i<self->groups*2; i++) {
+      for (int i=0; i<self->groups*2 + 1; i++) {
         PyList_SetItem(groups_list, i+2, PyInt_FromLong((long)groups[i]));
       }
-      delete[] groups;
+    } else {
+      // if there were no groups still stick a lastindex in there
+      PyList_SetItem(groups_list, 2, PyInt_FromLong(-1L));
     }
 
     Py_INCREF(groups_list);
 
+    if (groups) {
+      delete[] groups;
+    }
+    
     return groups_list;
   } else {
+    if (groups) {
+      delete[] groups;
+    }
+
     // no match, return None
     Py_INCREF(Py_None);
     return Py_None;
@@ -1548,7 +1564,7 @@ RegEx_find(RegEx* self, PyObject* args) {
 
   ReOffset* groups = NULL;
   if (self->groups) {
-    groups = new ReOffset[self->groups*2];
+    groups = new ReOffset[self->groups*2 + 1];
   }
 
   ReOffset start;
@@ -1557,23 +1573,33 @@ RegEx_find(RegEx* self, PyObject* args) {
 
   if (result >= 0) {
     // matched, return a list of offsets
-    PyObject* groups_list = PyList_New(self->groups*2 + 2);
+    PyObject* groups_list = PyList_New(self->groups*2 + 3);
     // r[0] - the start of the whole match
     PyList_SetItem(groups_list, 0, PyInt_FromLong((long)start));
     // r[0] - the end of the whole match
     PyList_SetItem(groups_list, 1, PyInt_FromLong((long)result));
     // for each group, the start and end offsets
     if (self->groups) {
-      for (int i=0; i<self->groups*2; i++) {
+      for (int i=0; i<self->groups*2 + 1; i++) {
         PyList_SetItem(groups_list, i+2, PyInt_FromLong((long)groups[i]));
       }
-      delete[] groups;
+    } else {
+      // if there were no groups still stick a lastindex in there
+      PyList_SetItem(groups_list, 2, PyInt_FromLong(-1L));
     }
 
     Py_INCREF(groups_list);
 
+    if (groups) {
+      delete[] groups;
+    }
+    
     return groups_list;
   } else {
+    if (groups) {
+      delete[] groups;
+    }
+    
     // no match, return None
     Py_INCREF(Py_None);
     return Py_None;

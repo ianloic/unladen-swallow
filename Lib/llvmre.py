@@ -146,7 +146,11 @@ class MatchObject(object):
     self.__regex = regex
     self.__groups = []
     self.__parsed = parsed
-    while len(groups): self.__groups.append((groups.pop(0), groups.pop(0)))
+    if len(groups) > 3:
+      self.lastindex = groups.pop(-1)
+    else:
+      self.lastindex = None
+    while len(groups) >= 2: self.__groups.append((groups.pop(0), groups.pop(0)))
     # FIXME: implement lastindex, lastgroup
     self.pos = pos
     self.endpos = endpos
