@@ -179,6 +179,7 @@ class CompiledRegEx {
     BasicBlock* subpattern_begin(BasicBlock* block, PyObject* arg);
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
     BasicBlock* branch(BasicBlock* block, PyObject* arg);
+    BasicBlock* at(BasicBlock* block, PyObject* arg);
     BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
 
     // helpers to generate commonly used code
@@ -676,6 +677,8 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
       last = subpattern_end(block, arg);
     } else if (!strcmp(op_str, "branch")) {
       last = branch(block, arg);
+    } else if (!strcmp(op_str, "at")) {
+      last = at(block, arg);
     } else if (!strcmp(op_str, "groupref_exists")) {
       last = groupref_exists(block, arg);
     } else {
@@ -946,6 +949,104 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
   PyErr_Clear();
 
   return matched;
+}
+
+BasicBlock*
+CompiledRegEx::at(BasicBlock* block, PyObject* arg) {
+  // the arg is just a string
+  if (!PyString_Check(arg)) {
+    _PyErr_SetString(PyExc_TypeError, "Expected a string");
+    return NULL;
+  }
+
+  const char* op = PyString_AsString(arg);
+
+  if (!strcmp(op, "at_end")) {
+    // match end of string, or \n before the end of the string
+    // if in MULTILINE mode, also match just \n
+    
+    bool multiline = regex.flags & SRE_FLAG_MULTILINE;
+   
+    // make the blocks we need
+    BasicBlock* test_slash_n = BasicBlock::Create("test_slash_n", function);
+    BasicBlock* test_near_end;
+    if (!multiline) {
+     test_near_end = BasicBlock::Create("test_near_end", function);
+    }
+    BasicBlock* next_block = BasicBlock::Create("block", function);
+    Value* offset = loadOffset(block);
+
+    // are we at the end?
+    Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset, 
+        "ended", block);
+    BranchInst::Create(next_block, test_slash_n, ended, block);
+
+    // is there a \n in the current position?
+    Value* c_ptr = GetElementPtrInst::Create(string, offset, "c_ptr", 
+        test_slash_n);
+    Value* c = new LoadInst(c_ptr, "c", test_slash_n);
+    Value* c_slash_n = new ICmpInst(ICmpInst::ICMP_EQ, c, 
+        ConstantInt::get(CHAR_TYPE, '\n'), "c_slash_n", test_slash_n);
+    // for MULTILINE the \n means a match, for non MULTILINE we need to check
+    // that we're almost at the end
+    BranchInst::Create(multiline ? next_block : test_near_end, return_not_found,
+        c_slash_n, test_slash_n);
+
+    if (!multiline) {
+      // are we near the end?
+      Value* offset_plus_one = BinaryOperator::CreateAdd(offset,
+          ConstantInt::get(OFFSET_TYPE, 1), "offset_plus_one", test_near_end);
+      Value* near_end = new ICmpInst(ICmpInst::ICMP_UGE, offset_plus_one, 
+          end_offset, "near_end", test_near_end);
+      // either go to the next or return not_found
+      BranchInst::Create(next_block, return_not_found, near_end, test_near_end);
+    }
+
+    return next_block;
+
+  } else if (!strcmp(op, "at_beginning")) {
+    // match the start of the string, also in multiline mode match after a
+    // \n
+
+    bool multiline = regex.flags & SRE_FLAG_MULTILINE;
+
+    Value* offset = loadOffset(block);
+
+    BasicBlock* test_slash_n;
+    if (multiline) {
+     test_slash_n = BasicBlock::Create("test_slash_n", function);
+    }
+    BasicBlock* next_block = BasicBlock::Create("block", function);
+
+    // are we at the start of the string?
+    Value* start = new ICmpInst(ICmpInst::ICMP_EQ, offset, 
+        ConstantInt::get(OFFSET_TYPE, 0), "start", block);
+    // for multiline, we also check for \n before the offset
+    BranchInst::Create(next_block, multiline ? test_slash_n : return_not_found,
+        start, block);
+
+    if (multiline) {
+      // load the character back one
+      Value* previous_offset = BinaryOperator::CreateSub(offset,
+          ConstantInt::get(OFFSET_TYPE, 1), "previous_offset", test_slash_n);
+      Value* previous_c_ptr = GetElementPtrInst::Create(string, 
+          previous_offset, "previous_c_ptr", 
+        test_slash_n);
+      Value* previous_c = new LoadInst(previous_c_ptr, "previous_c", 
+          test_slash_n);
+      // is it \n?
+      Value* previous_c_slash_n = new ICmpInst(ICmpInst::ICMP_EQ, previous_c, 
+          ConstantInt::get(CHAR_TYPE, '\n'), "previous_c_slash_n", 
+          test_slash_n);
+      BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
+          test_slash_n);
+    }
+
+    return next_block;
+  } else {
+    PyErr_Format(PyExc_ValueError, "Unexpected SRE at code '%s'", op);
+    return NULL;
+  }
 }
 
 BasicBlock*
