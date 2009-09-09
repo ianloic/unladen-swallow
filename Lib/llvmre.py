@@ -20,7 +20,7 @@ class RegexObject(object):
     self.__re = RegEx(processed, flags, self.__parsed.pattern.groups-1)
     # expected properties
     self.flags = flags
-    self.groups = self.__parsed.pattern.groups
+    self.groups = self.__parsed.pattern.groups-1
     self.groupindex = self.__parsed.pattern.groupdict
     self.pattern = pattern
 
@@ -119,7 +119,15 @@ class RegexObject(object):
         raise StopIteration
 
   def findall(self, string, pos=0, endpos=None):
-    return [m.group(0) for m in self.finditer(string, pos, endpos)]
+    all = []
+    for m in self.finditer(string, pos, endpos):
+      if self.groups == 0:
+        all.append(m.group(0))
+      elif self.groups == 1:
+        all.append(m.group(1))
+      else:
+        all.append(m.groups())
+    return all
 
   def finditer(self, string, pos=0, endpos=None):
     return self.__finditer(string, pos, endpos)
