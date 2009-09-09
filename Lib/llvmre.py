@@ -71,9 +71,8 @@ class RegexObject(object):
       return None
 
   def split(self, string, maxsplit=0):
-    # FIXME maxsplit
     # find matches for the separator
-    matches = [m for m in self.finditer(string)]
+    matches = [m for m in self.__finditer(string, count=maxsplit)]
     # find the spans of those matches
     spans = [m.span() for m in matches]
     # find the spans between those matches
@@ -93,14 +92,12 @@ class RegexObject(object):
     else:
       return split
 
-  def findall(self, string, pos=0, endpos=None):
-    return [m.group(0) for m in self.finditer(string, pos, endpos)]
-
-  def finditer(self, string, pos=0, endpos=None):
+  def __finditer(self, string, pos=0, endpos=None, count=0):
     if pos: _pos = pos
     else: _pos = 0
     if endpos: _endpos = endpos
     else: _endpos = len(string)
+    num = 0
     while True:
       groups = self.__re.find(unicode(string), _pos, _endpos)
       if groups:
@@ -111,52 +108,43 @@ class RegexObject(object):
           _pos = groups[1]
         # yeild this result
         yield MatchObject(self, string, pos, endpos, groups, self.__parsed)
+
+        # increment the counter
+        num = num + 1
+        # check the counter
+        if count and num >= count:
+          raise StopIteration
       else:
         # no match, stop looking
         raise StopIteration
+
+  def findall(self, string, pos=0, endpos=None):
+    return [m.group(0) for m in self.finditer(string, pos, endpos)]
+
+  def finditer(self, string, pos=0, endpos=None):
+    return self.__finditer(string, pos, endpos)
 
   def sub(self, repl, string, count=0):
     return self.subn(repl, string, count)[0]
 
   def subn(self, repl, string, count=0):
-    pos = 0
-    endpos = len(string)
     result = ''
-    num = 0;
-    while True:
-      groups = self.__re.find(unicode(string), pos, endpos)
-      if groups:
-        # make a match object
-        mo = MatchObject(self, string, pos, endpos, groups, self.__parsed)
-        if callable(repl):
-          # repl is a function, call it with the match object
-          replacement = repl(mo)
-        else:
-          # repl is a string, use template expansion
-          replacement = mo.expand(repl)
+    pos = 0
 
-        # increment the counter
-        num = num + 1
-        # check the counter
-        if count and num > count:
-          num = num-1
-          break
+    # find the matches
+    matches = list(self.__finditer(string, count=count))
 
-        # add the chars leading up to the match and the replacement
-        result = result + string[pos:mo.start()] + replacement
-
-        # next time search after this result
-        if pos == mo.end():
-          pos = mo.end() + 1
-        else:
-          pos = mo.end()
-
+    # substitute matches for replacements
+    for m in matches:
+      result = result + string[pos:m.start()]
+      if callable(repl):
+        result = result + repl(m)
       else:
-        # no match, stop looking
-        break
-    # add everything after the last match
-    result = result + string[pos:]
-    return (result, num)
+        result = result + m.expand(repl)
+      pos = m.end()
+    result = result + string[pos:len(string)]
+
+    return (result, len(matches))
 
 
 class MatchObject(object):
