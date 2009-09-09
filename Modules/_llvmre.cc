@@ -630,7 +630,6 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
 
   // create a block that returns "not found"
   return_not_found = BasicBlock::Create("return_not_found", function);
-  ReturnInst::Create(regex.not_found, return_not_found);
 
   last = entry;
 
@@ -737,14 +736,20 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
 
     if (last == NULL) {
       // control flow ends, we're done here
-      return optimize(function);
+      break;
     }
 
     index++;
   }
 
-  // we've processed the whole pattern, if we are matching here, return success
-  BranchInst::Create(return_offset, last);
+  if (last != NULL) {
+    // we've processed the whole pattern, if we are matching here, 
+    // return success
+    BranchInst::Create(return_offset, last);
+  }
+
+  // add the return instruction to return_not_found
+  ReturnInst::Create(regex.not_found, return_not_found);
 
   return optimize(function);
 
@@ -1305,6 +1310,11 @@ CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
       ConstantInt::get(OFFSET_TYPE, (id-1)*2), "start_ptr", block);
   new StoreInst(off, start_ptr, block);
 
+  // if this expression fails, clear the start offset
+  start_ptr = GetElementPtrInst::Create(groups, 
+      ConstantInt::get(OFFSET_TYPE, (id-1)*2), "start_ptr", return_not_found);
+  new StoreInst(regex.not_found, start_ptr, return_not_found);
+
   return block;
 }
 
@@ -1328,8 +1338,9 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   // get the current offset
   Value* off = loadOffset(block);
   // store the end location
+  int end_offset = (id-1)*2+1;
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, (id-1)*2+1), "end_ptr", block);
+      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", block);
   new StoreInst(off, end_ptr, block);
 
   // store the group index at the end of the group array for
@@ -1337,6 +1348,11 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   Value* lastindex_ptr = GetElementPtrInst::Create(groups,
       ConstantInt::get(OFFSET_TYPE, regex.groups*2), "lastindex_ptr", block);
   new StoreInst(ConstantInt::get(OFFSET_TYPE, id), lastindex_ptr, block);
+
+  // if this expression fails, clear the end offset
+  end_ptr = GetElementPtrInst::Create(groups, 
+      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", return_not_found);
+  new StoreInst(regex.not_found, end_ptr, return_not_found);
 
   return block;
 }
