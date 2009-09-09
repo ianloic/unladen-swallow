@@ -213,7 +213,7 @@ class MatchObject(object):
   def expand(self, template):
     # reuse SRE's template code
     from sre_parse import parse_template, expand_template
-    return expand_template(parse_template(template, self.__parsed), self)
+    return expand_template(parse_template(template, self.__regex), self)
 
 def compile(pattern, flags=0):
   if isinstance(pattern, RegexObject):
