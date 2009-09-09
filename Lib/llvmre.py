@@ -71,7 +71,27 @@ class RegexObject(object):
       return None
 
   def split(self, string, maxsplit=0):
-    raise NotImplementedError('RegexObject.split')
+    # FIXME maxsplit
+    # find matches for the separator
+    matches = [m for m in self.finditer(string)]
+    # find the spans of those matches
+    spans = [m.span() for m in matches]
+    # find the spans between those matches
+    spans = reduce(lambda result,span: 
+        result[:-1] + [(result[-1], span[0]), span[1]], spans, [0])
+    spans[-1] = (spans[-1],len(string))
+
+    split = [string[a:b] for a,b in spans]
+    if self.groups:
+      # there are capturing groups, insert them into the result
+      result = []
+      for i in range(len(matches)):
+        result.append(split[i])
+        result.extend(matches[i].groups())
+      result.append(split[-1])
+      return result
+    else:
+      return split
 
   def findall(self, string, pos=0, endpos=None):
     return [m.group(0) for m in self.finditer(string, pos, endpos)]
@@ -231,6 +251,9 @@ def findall(pattern, string, flags=0):
 
 def finditer(pattern, string, flags=0):
   return compile(pattern, flags).finditer(string)
+
+def split(pattern, string, maxsplit=0):
+  return compile(pattern).split(string, maxsplit)
 
 # taken from SRE's re.py
 _alphanum = {}
