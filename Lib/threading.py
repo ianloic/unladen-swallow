@@ -751,19 +751,6 @@ class _MainThread(Thread):
     def _set_daemon(self):
         return False
 
-    def _exitfunc(self):
-        self._Thread__stop()
-        t = _pickSomeNonDaemonThread()
-        if t:
-            if __debug__:
-                self._note("%s: waiting for other threads", self)
-        while t:
-            t.join()
-            t = _pickSomeNonDaemonThread()
-        if __debug__:
-            self._note("%s: exiting", self)
-        self._Thread__delete()
-
 def _pickSomeNonDaemonThread():
     for t in enumerate():
         if not t.daemon and t.is_alive():
@@ -828,11 +815,42 @@ def enumerate():
 
 from thread import stack_size
 
-# Create the main thread object,
-# and make it available for the interpreter
-# (Py_Main) as threading._shutdown.
+# Create the main thread object and record it's id.  This puts it into the
+# active threads dictionary.  This assumes that the all threads are created via
+# the threading module.  If the program uses the thread module to spawn a
+# thread that imports threading, we'll choose the wrong main thread.
+_MainThread()
 
-_shutdown = _MainThread()._exitfunc
+main_thread_id = _get_ident()
+
+def _shutdown():
+    """Shutdown handler that waits for all non-daemon threads to exit.
+
+    This is called from the main thread during shut down.
+    """
+    # If this thread isn't in the _active dict, then it's because we forked
+    # from a spanwed thread.  In that case, because the main thread of the child
+    # process was originally a spawned thread, it will have already removed
+    # itself from the active dict by returning through __bootstrap_inner.
+    # Therefore we don't stop and delete it.
+    ident = _get_ident()
+    assert ident == main_thread_id, \
+            "Shutdown handler called from non-main thread!"
+    main_thread = _active.get(ident, None)
+    if main_thread:
+        main_thread._Thread__stop()
+    t = _pickSomeNonDaemonThread()
+    if t and main_thread:
+        if __debug__:
+            main_thread._note("%s: waiting for other threads", main_thread)
+    while t:
+        t.join()
+        t = _pickSomeNonDaemonThread()
+    if __debug__ and main_thread:
+        main_thread._note("%s: exiting", main_thread)
+    if main_thread:
+        main_thread._Thread__delete()
+
 
 # get thread-local implementation, either from the thread
 # module, or from the python fallback
@@ -867,6 +885,10 @@ def _after_fork():
                 # invalid state, so we reset them.
                 thread._Thread__block._reset_lock()
                 thread._Thread__started._Event__cond._reset_lock()
+                # We also update this global variable so we can keep track of
+                # the new main thread (whichever thread forked).
+                global main_thread_id
+                main_thread_id = ident
                 new_active[ident] = thread
             else:
                 # All the others are already stopped.

@@ -446,9 +446,24 @@ t_bootstrap(void *boot_raw)
 	Py_DECREF(boot->args);
 	Py_XDECREF(boot->keyw);
 	PyMem_DEL(boot_raw);
-	PyThreadState_Clear(tstate);
-	PyThreadState_DeleteCurrent();
-	PyThread_exit_thread();
+	/* You'd think that a thread running this code would necessarily be a
+	 * spawned thread, but such a spawned thread can fork and become the
+	 * main thread of a new process.  If we've become the main thread, shut
+	 * down the interpreter.  Otherwise just terminate the thread.  */
+	if (_PyEval_main_thread == tstate->thread_id) {
+		Py_WaitForThreadShutdown();
+		Py_Finalize();
+		/* Note that we must call _exit() directly instead of returning
+		 * in order to terminate any daemon threads that we didn't wait
+		 * for.  We also need to call _exit() instead of exit() so that
+		 * we don't double flush any open file descriptors.  */
+		_exit(0);
+	}
+	else {
+		PyThreadState_Clear(tstate);
+		PyThreadState_DeleteCurrent();
+		PyThread_exit_thread();
+	}
 }
 
 static PyObject *

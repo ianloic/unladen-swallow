@@ -305,7 +305,7 @@ PyEval_GetCallStats(PyObject *self)
 #include "pythread.h"
 
 static PyThread_type_lock interpreter_lock = 0; /* This is the GIL */
-static long main_thread = 0;
+long _PyEval_main_thread = 0;
 
 int
 PyEval_ThreadsInitialized(void)
@@ -320,7 +320,7 @@ PyEval_InitThreads(void)
 		return;
 	interpreter_lock = PyThread_allocate_lock();
 	PyThread_acquire_lock(interpreter_lock, 1);
-	main_thread = PyThread_get_thread_ident();
+	_PyEval_main_thread = PyThread_get_thread_ident();
 }
 
 void
@@ -377,7 +377,7 @@ PyEval_ReInitThreads(void)
 	  create a new lock and waste a little bit of memory */
 	interpreter_lock = PyThread_allocate_lock();
 	PyThread_acquire_lock(interpreter_lock, 1);
-	main_thread = PyThread_get_thread_ident();
+	_PyEval_main_thread = PyThread_get_thread_ident();
 
 	/* Update the threading module with the new state.
 	 */
@@ -505,7 +505,8 @@ Py_MakePendingCalls(void)
 {
 	static int busy = 0;
 #ifdef WITH_THREAD
-	if (main_thread && PyThread_get_thread_ident() != main_thread)
+	if (_PyEval_main_thread &&
+	    PyThread_get_thread_ident() != _PyEval_main_thread)
 		return 0;
 #endif
 	if (busy)
