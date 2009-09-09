@@ -251,7 +251,7 @@ CompiledRegEx::loadCharacter(BasicBlock* block) {
   // get the current offset
   Value* offset = loadOffset(block);
   // make sure it's not past the end of the string
-  Value* ended = new ICmpInst(ICmpInst::ICMP_UGT, offset, end_offset, 
+  Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset, 
       "ended", block);
   // if it's ended, return not_found, otherwise, continue
   // I'm scared this will fuck things up
@@ -1217,24 +1217,22 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
   CompiledRegEx* repeated = new CompiledRegEx(regex);
   repeated->Compile(sub_pattern, 0);
 
-  if (min > 0) {
-    for (int i=0; i<=min; i++) {
-      // build the arguments to the function
-      std::vector<Value*> args;
-      args.push_back(string);
-      args.push_back(loadOffset(block));
-      args.push_back(end_offset);
-      args.push_back(groups);
-      Value* repeat_result = CallInst::Create(repeated->function, 
-          args.begin(), args.end(), "repeat_result", block);
-      Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-          repeat_result, regex.not_found, "repeat_result_not_found", block);
-      BasicBlock* next = BasicBlock::Create("repeat", function);
-      BranchInst::Create(return_not_found, next, repeat_result_not_found,
-          block);
-      block = next;
-      storeOffset(block, repeat_result);
-    }
+  for (int i=0; i<min; i++) {
+    // build the arguments to the function
+    std::vector<Value*> args;
+    args.push_back(string);
+    args.push_back(loadOffset(block));
+    args.push_back(end_offset);
+    args.push_back(groups);
+    Value* repeat_result = CallInst::Create(repeated->function, 
+        args.begin(), args.end(), "repeat_result", block);
+    Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
+        repeat_result, regex.not_found, "repeat_result_not_found", block);
+    BasicBlock* next = BasicBlock::Create("repeat", function);
+    BranchInst::Create(return_not_found, next, repeat_result_not_found,
+        block);
+    block = next;
+    storeOffset(block, repeat_result);
   }
 
   if (max > min) {
