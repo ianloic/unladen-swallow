@@ -88,6 +88,17 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
   return Py_UNICODE_ISSPACE(c) == 1;
 }
 
+// locale-agnostic case tools for IGNORECASE
+inline bool hasCase(int c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+inline int lowerCase(int c) {
+  return (c >= 'A' && c <= 'Z') ? (c + 'a' - 'A') : c;
+}
+inline int upperCase(int c) {
+  return (c >= 'a' && c <= 'z') ? (c + 'A' - 'a') : c;
+}
+
 // make sure there's a function in the RegEx object for the associated
 // wrapper. for some reason the mapping isn't being picked up
 // automatically so we have to use engine->addGlobalMapping. I don't think
@@ -747,21 +758,35 @@ CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
     return NULL;
   }
 
-  // get the next character
+  // get the character literal
+  int c = PyInt_AsLong(arg);
+
+  // get the next character from the string
   block = loadCharacter(block);
-  // is it equal to the character in the pattern
-  Value* c_equal = new llvm::ICmpInst(llvm::ICmpInst::ICMP_EQ, character,
-      ConstantInt::get(CHAR_TYPE, PyInt_AsLong(arg)), 
-      "c_equal", block);
 
   // create a block to continue to on success
   BasicBlock* post = BasicBlock::Create("post_literal", function);
 
-  // depending on the kind of operation either continue or return not_found
-  if (not_literal) { /* not_literal */
-    BranchInst::Create(return_not_found, post, c_equal, block);
-  } else { /* literal */
-    BranchInst::Create(post, return_not_found, c_equal, block);
+  if (regex.flags & SRE_FLAG_IGNORECASE && hasCase(c)) {
+    // create a small switch to test upper & lower cases
+    SwitchInst* switch_ = SwitchInst::Create(character,
+        not_literal ? post : return_not_found, 2, block);
+    // lower and upper cases
+    switch_->addCase(ConstantInt::get(CHAR_TYPE, lowerCase(c)),
+        not_literal ? return_not_found : post);
+    switch_->addCase(ConstantInt::get(CHAR_TYPE, upperCase(c)),
+        not_literal ? return_not_found : post);
+  } else {
+    // is it equal to the character in the pattern
+    Value* c_equal = new llvm::ICmpInst(llvm::ICmpInst::ICMP_EQ, character,
+        ConstantInt::get(CHAR_TYPE, c), "c_equal", block);
+
+    // depending on the kind of operation either continue or return not_found
+    if (not_literal) { /* not_literal */
+      BranchInst::Create(return_not_found, post, c_equal, block);
+    } else { /* literal */
+      BranchInst::Create(post, return_not_found, c_equal, block);
+    }
   }
 
   // clear any Python exception state that we don't care about
