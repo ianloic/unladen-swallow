@@ -24,6 +24,13 @@ class RegexObject(object):
     self.groupindex = self.__parsed.pattern.groupdict
     self.pattern = pattern
 
+  def __unicode(self, s):
+    '''return @s as a unicode string'''
+    try:
+      return unicode(s)
+    except:
+      return unicode(s, 'latin1')
+
   def __flatten_subpatterns(self, pattern):
     new_pattern = []
     for op, av in pattern:
@@ -50,7 +57,7 @@ class RegexObject(object):
 
   def match(self, string, pos=0, endpos=None):
     if endpos == None: endpos = len(string)
-    groups = self.__re.match(unicode(string), pos, endpos)
+    groups = self.__re.match(self.__unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
     else:
@@ -58,7 +65,7 @@ class RegexObject(object):
 
   def search(self, string, pos=0, endpos=None):
     if endpos == None: endpos = len(string)
-    groups = self.__re.find(unicode(string), pos, endpos)
+    groups = self.__re.find(self.__unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
     else:
@@ -92,7 +99,7 @@ class RegexObject(object):
     _pos = pos
     num = 0
     while True:
-      groups = self.__re.find(unicode(string), _pos, endpos)
+      groups = self.__re.find(self.__unicode(string), _pos, endpos)
       if groups:
         # next time search after this result
         if _pos == groups[1]:
