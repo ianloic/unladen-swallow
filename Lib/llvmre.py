@@ -48,23 +48,17 @@ class RegexObject(object):
         new_pattern.append((op, av))
     return new_pattern
 
-  def match(self, string, pos=None, endpos=None):
-    if pos: _pos = pos
-    else: _pos = 0
-    if endpos: _endpos = endpos
-    else: _endpos = len(string)
-    groups = self.__re.match(unicode(string), _pos, _endpos)
+  def match(self, string, pos=0, endpos=None):
+    if endpos == None: endpos = len(string)
+    groups = self.__re.match(unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
     else:
       return None
 
   def search(self, string, pos=0, endpos=None):
-    if pos: _pos = pos
-    else: _pos = 0
-    if endpos: _endpos = endpos
-    else: _endpos = len(string)
-    groups = self.__re.find(unicode(string), _pos, _endpos)
+    if endpos == None: endpos = len(string)
+    groups = self.__re.find(unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
     else:
@@ -94,13 +88,11 @@ class RegexObject(object):
       return split
 
   def __finditer(self, string, pos=0, endpos=None, count=0, ignore_empty=False):
-    if pos: _pos = pos
-    else: _pos = 0
-    if endpos: _endpos = endpos
-    else: _endpos = len(string)
+    if endpos == None: endpos = len(string)
+    _pos = pos
     num = 0
     while True:
-      groups = self.__re.find(unicode(string), _pos, _endpos)
+      groups = self.__re.find(unicode(string), _pos, endpos)
       if groups:
         # next time search after this result
         if _pos == groups[1]:
