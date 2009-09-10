@@ -181,6 +181,7 @@ class CompiledRegEx {
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
     BasicBlock* branch(BasicBlock* block, PyObject* arg);
     BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
+    BasicBlock* assert_(BasicBlock* block, PyObject* arg, bool assert_not);
     BasicBlock* at_end(BasicBlock* block);
     BasicBlock* at_end_string(BasicBlock* block);
     BasicBlock* at_beginning(BasicBlock* block);
@@ -688,6 +689,10 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
       last = branch(block, arg);
     } else if (!strcmp(op_str, "groupref_exists")) {
       last = groupref_exists(block, arg);
+    } else if (!strcmp(op_str, "assert")) {
+      last = assert_(block, arg, false);
+    } else if (!strcmp(op_str, "assert_not")) {
+      last = assert_(block, arg, true);
     } else if (!strcmp(op_str, "at")) {
       // the arg is just a string
       if (!PyString_Check(arg)) {
@@ -1443,6 +1448,50 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
   BranchInst::Create(no, yes, end_not_found, block);
 
   return next_block;
+}
+
+BasicBlock*
+CompiledRegEx::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
+  // @arg is a tuple of (direction, pattern)
+  // direction is 1 or -1, pattern is a sequence
+  // FIXME: implement backwards assertions
+  int direction;
+  PyObject* pattern;
+  if (!PyArg_ParseTuple(arg, "iO", &direction, &pattern) ||
+      !PySequence_Check(pattern)) {
+    _PyErr_SetString(PyExc_TypeError, "Expected a tuple: direction, sequence");
+  }
+
+  if (direction != 1) {
+    _PyErr_SetString(PyExc_ValueError, "Expected direction == 1");
+  }
+
+  // compile the assertion expression
+  CompiledRegEx compiled(regex);
+  compiled.Compile(pattern, 0);
+
+  // call the assertion expression
+  std::vector<Value*> args;
+  args.push_back(string);
+  args.push_back(loadOffset(block));
+  args.push_back(end_offset);
+  args.push_back(groups);
+  Value* assert_result = CallInst::Create(compiled.function, 
+      args.begin(), args.end(), "assert_result", block);
+
+  // did it fail?
+  Value* assert_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
+      assert_result, regex.not_found, "assert_not_found", block);
+
+  // create a block for continuation
+  BasicBlock* next = BasicBlock::Create("block", function);
+  if (assert_not) {
+    BranchInst::Create(next, return_not_found, assert_not_found, block);
+  } else {
+    BranchInst::Create(return_not_found, next, assert_not_found, block);
+  }
+
+  return next;
 }
 
 static PyObject *

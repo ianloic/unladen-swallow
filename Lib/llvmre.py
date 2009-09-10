@@ -51,6 +51,9 @@ class RegexObject(object):
       elif op == 'branch':
         n, branches = av
         new_pattern.append((op, (n, map(self.__flatten_subpatterns, branches))))
+      elif op == 'assert' or op == 'assert_not':
+        direction, pat = av
+        new_pattern.append((op, (direction, self.__flatten_subpatterns(pat))))
       else:
         new_pattern.append((op, av))
     return new_pattern
