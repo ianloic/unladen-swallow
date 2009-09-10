@@ -105,7 +105,7 @@ class RegexObject(object):
       groups = self.__re.find(self.__unicode(string), _pos, endpos)
       if groups:
         # next time search after this result
-        if _pos == groups[1]:
+        if groups[0] == groups[1]:
           _pos = groups[1] + 1
           # if we should ignore empty matches, skip it
           if ignore_empty:
