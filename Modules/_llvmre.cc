@@ -38,6 +38,7 @@ using llvm::ReturnInst;
 using llvm::BranchInst;
 using llvm::SwitchInst;
 using llvm::GetElementPtrInst;
+using llvm::AllocaInst;
 using llvm::LoadInst;
 using llvm::StoreInst;
 using llvm::ICmpInst;
@@ -620,7 +621,7 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
 
   // create the entry BasicBlock
   entry = BasicBlock::Create("entry", function);
-  offset_ptr = new llvm::AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
+  offset_ptr = new AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
 
   // create a block that returns the offset
@@ -631,7 +632,10 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
   // create a block that returns "not found"
   return_not_found = BasicBlock::Create("return_not_found", function);
 
-  last = entry;
+  // create a first basic block to be used
+  BasicBlock* first = BasicBlock::Create("first", function);
+
+  last = first;
 
   Py_ssize_t seq_length = PySequence_Size(seq);
   while (index < seq_length) {
@@ -747,6 +751,9 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
     // return success
     BranchInst::Create(return_offset, last);
   }
+
+  // jump from the entry to the first block
+  BranchInst::Create(first, entry);
 
   // add the return instruction to return_not_found
   ReturnInst::Create(regex.not_found, return_not_found);
@@ -1147,9 +1154,9 @@ CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // initial block
   // variables to hold the word-ness of the previous and next characters
-  Value* prev_word_ptr = new llvm::AllocaInst(BOOL_TYPE, "prev_word_ptr", 
+  Value* prev_word_ptr = new AllocaInst(BOOL_TYPE, "prev_word_ptr", 
       block);
-  Value* next_word_ptr = new llvm::AllocaInst(BOOL_TYPE, "next_word_ptr", 
+  Value* next_word_ptr = new AllocaInst(BOOL_TYPE, "next_word_ptr", 
       block);
 
   // load the offset
@@ -1306,14 +1313,25 @@ CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // get the current offset
   Value* off = loadOffset(block);
   // store the start location
+  int start_offset = (id-1)*2;
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, (id-1)*2), "start_ptr", block);
+      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", block);
   new StoreInst(off, start_ptr, block);
 
-  // if this expression fails, clear the start offset
+  // save the previous end offset when the function begins
+  Value* old_start_offset_ptr = new AllocaInst(OFFSET_TYPE, 
+      "old_start_offset_ptr", entry);
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, (id-1)*2), "start_ptr", return_not_found);
-  new StoreInst(regex.not_found, start_ptr, return_not_found);
+      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", entry);
+  new StoreInst(new LoadInst(start_ptr, "old_start", entry), 
+      old_start_offset_ptr, entry);
+
+  // if this expression fails, restore the start offset
+  start_ptr = GetElementPtrInst::Create(groups, 
+      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", 
+      return_not_found);
+  new StoreInst(new LoadInst(old_start_offset_ptr, "old_start", 
+        return_not_found), start_ptr, return_not_found);
 
   return block;
 }
@@ -1349,10 +1367,19 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
       ConstantInt::get(OFFSET_TYPE, regex.groups*2), "lastindex_ptr", block);
   new StoreInst(ConstantInt::get(OFFSET_TYPE, id), lastindex_ptr, block);
 
-  // if this expression fails, clear the end offset
+  // save the previous end offset when the function begins
+  Value* old_end_offset_ptr = new AllocaInst(OFFSET_TYPE, "old_end_offset_ptr",
+      entry);
+  end_ptr = GetElementPtrInst::Create(groups, 
+      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", entry);
+  new StoreInst(new LoadInst(end_ptr, "old_end", entry), old_end_offset_ptr, 
+      entry);
+
+  // if this expression fails, restore the end offset
   end_ptr = GetElementPtrInst::Create(groups, 
       ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", return_not_found);
-  new StoreInst(regex.not_found, end_ptr, return_not_found);
+  new StoreInst(new LoadInst(old_end_offset_ptr, "old_end", return_not_found), 
+      end_ptr, return_not_found);
 
   return block;
 }
@@ -1515,7 +1542,7 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   BasicBlock* return_match_result = BasicBlock::Create("return_match_result", self->find);
 
   // create the entry BasicBlock
-  Value* offset_ptr = new llvm::AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
+  Value* offset_ptr = new AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
   BranchInst::Create(test_offset, entry);
 
@@ -1583,7 +1610,11 @@ RegEx_match(RegEx* self, PyObject* args) {
 
   ReOffset* groups = NULL;
   if (self->groups) {
-    groups = new ReOffset[self->groups*2 + 1];
+    int groups_size = self->groups*2 + 1;
+    groups = new ReOffset[groups_size];
+    for (int i=0; i<groups_size; i++) {
+      groups[i] = -1;
+    }
   }
 
   ReOffset result = (func_ptr)(characters, pos, end, groups);
@@ -1641,7 +1672,11 @@ RegEx_find(RegEx* self, PyObject* args) {
 
   ReOffset* groups = NULL;
   if (self->groups) {
-    groups = new ReOffset[self->groups*2 + 1];
+    int groups_size = self->groups*2 + 1;
+    groups = new ReOffset[groups_size];
+    for (int i=0; i<groups_size; i++) {
+      groups[i] = -1;
+    }
   }
 
   ReOffset start;
