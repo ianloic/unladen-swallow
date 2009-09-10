@@ -1386,6 +1386,7 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
 
 BasicBlock*
 CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
+  // FIXME: support IGNORECASE
   // @arg should be an integer
   if (!PyInt_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected an integer");
