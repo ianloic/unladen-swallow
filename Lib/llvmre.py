@@ -164,13 +164,14 @@ class RegexObject(object):
 class MatchObject(object):
   def __init__(self, regex, string, pos, endpos, groups, parsed):
     self.__regex = regex
-    self.__groups = []
+    self.regs = []
     self.__parsed = parsed
     if len(groups) > 3:
       self.lastindex = groups.pop(-1)
     else:
       self.lastindex = None
-    while len(groups) >= 2: self.__groups.append((groups.pop(0), groups.pop(0)))
+    while len(groups) >= 2: self.regs.append((groups.pop(0), groups.pop(0)))
+    self.regs = tuple(self.regs)
     self.pos = pos
     self.endpos = endpos
     self.re = regex.pattern
@@ -189,7 +190,7 @@ class MatchObject(object):
       return self.__regex.groupindex[group]
 
   def span(self, group=0):
-    return self.__groups[self.__groupnum(group)]
+    return self.regs[self.__groupnum(group)]
 
   def start(self, group=0):
     return self.span(group)[0]
@@ -210,7 +211,7 @@ class MatchObject(object):
 
   def groups(self, default=None):
     result = []
-    for span in self.__groups[1:]:
+    for span in self.regs[1:]:
       if span[0] == -1 or span[1] == -1:
         result.append(default)
       else:
