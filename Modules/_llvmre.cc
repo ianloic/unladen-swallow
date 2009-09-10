@@ -180,6 +180,7 @@ class CompiledRegEx {
     BasicBlock* subpattern_begin(BasicBlock* block, PyObject* arg);
     BasicBlock* subpattern_end(BasicBlock* block, PyObject* arg);
     BasicBlock* branch(BasicBlock* block, PyObject* arg);
+    BasicBlock* groupref(BasicBlock* block, PyObject* arg);
     BasicBlock* groupref_exists(BasicBlock* block, PyObject* arg);
     BasicBlock* assert_(BasicBlock* block, PyObject* arg, bool assert_not);
     BasicBlock* at_end(BasicBlock* block);
@@ -687,6 +688,8 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
       last = subpattern_end(block, arg);
     } else if (!strcmp(op_str, "branch")) {
       last = branch(block, arg);
+    } else if (!strcmp(op_str, "groupref")) {
+      last = groupref(block, arg);
     } else if (!strcmp(op_str, "groupref_exists")) {
       last = groupref_exists(block, arg);
     } else if (!strcmp(op_str, "assert")) {
@@ -1381,6 +1384,113 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   return block;
 }
 
+BasicBlock*
+CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
+  // @arg should be an integer
+  if (!PyInt_Check(arg)) {
+    _PyErr_SetString(PyExc_TypeError, "Expected an integer");
+    return NULL;
+  }
+
+  // the group id
+  int groupnum = PyInt_AsLong(arg);
+  // make sure it's valid
+  if (groupnum < 0 || groupnum > regex.groups) {
+    _PyErr_SetString(PyExc_ValueError, "Unexpected group id");
+    return NULL;
+  }
+
+  // get the current position
+  Value* offset = loadOffset(block);
+
+  // find the start and end positions
+  Value* start_ptr = GetElementPtrInst::Create(groups, 
+    ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2), "start_ptr", block);
+  Value* start_off = new LoadInst(start_ptr, "start_off", block);
+  Value* end_ptr = GetElementPtrInst::Create(groups, 
+    ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2+1), "end_ptr", block);
+  Value* end_off = new LoadInst(end_ptr, "end_off", block);
+
+  // check if the group exists
+  Value* start_exists = new ICmpInst(ICmpInst::ICMP_NE, start_off, 
+      regex.not_found, "start_exists", block);
+  Value* end_exists = new ICmpInst(ICmpInst::ICMP_NE, end_off, 
+      regex.not_found, "end_exists", block);
+  Value* group_exists = BinaryOperator::CreateAnd(start_exists, end_exists,
+      "group_exists", block);
+
+  // find the length of the group
+  Value* group_length = BinaryOperator::CreateSub(end_off, start_off, 
+      "group_length", block);
+  // where would the groupref end?
+  Value* groupref_end = BinaryOperator::CreateAdd(offset, group_length, 
+      "groupref_end", block);
+  // do we have enough characters?
+  Value* groupref_fits = new ICmpInst(ICmpInst::ICMP_ULE, groupref_end, 
+      end_offset, "groupref_fits", block);
+
+  // so, is it even possible that this groupref will work?
+  Value* groupref_possible = BinaryOperator::CreateAnd(group_exists,
+      groupref_fits, "groupref_possible", block);
+
+  // create a block for testing the groupref
+  BasicBlock* groupref_test = BasicBlock::Create("groupre_test", function);
+
+  // jump to that block if appropriate
+  BranchInst::Create(groupref_test, return_not_found, groupref_possible, 
+      block);
+
+  // allocate a local variable to hold the offset into the group that we are
+  // testing
+  Value* group_off_ptr = new AllocaInst(OFFSET_TYPE, "group_off_ptr", entry);
+
+  // store the start address in that
+  new StoreInst(start_off, group_off_ptr, groupref_test);
+
+  // create blocks for looping over the group
+  BasicBlock* groupref_loop = BasicBlock::Create("groupref_loop", function);
+  BasicBlock* groupref_loop_a = BasicBlock::Create("groupref_loop_a", function);
+  // create a block to continue into
+  BasicBlock* next = BasicBlock::Create("block", function);
+
+  // jump into the loop
+  BranchInst::Create(groupref_loop, groupref_test);
+
+  // load the offset (that we're getting group contents from)
+  Value* group_off = new LoadInst(group_off_ptr, "group_off", groupref_loop);
+  // have we finished looping?
+  Value* group_finished = new ICmpInst(ICmpInst::ICMP_EQ, group_off, end_off,
+      "group_finished", groupref_loop);
+  // if we finish looping then we have a match
+  BranchInst::Create(next, groupref_loop_a, group_finished, groupref_loop);
+
+  // load the next character in the string
+  Value* string_c_off = loadOffset(groupref_loop_a);
+  Value* string_c_ptr = GetElementPtrInst::Create(string, string_c_off, 
+      "string_c_ptr", groupref_loop_a);
+  Value* string_c = new LoadInst(string_c_ptr, "string_c", groupref_loop_a);
+  // load the next character in the group
+  Value* group_c_ptr = GetElementPtrInst::Create(string, group_off, 
+      "group_c_ptr", groupref_loop_a);
+  Value* group_c = new LoadInst(group_c_ptr, "group_c", groupref_loop_a);
+
+  // increment offsets
+  string_c_off = BinaryOperator::CreateAdd(string_c_off, 
+      ConstantInt::get(OFFSET_TYPE, 1), "increment", groupref_loop_a);
+  storeOffset(groupref_loop_a, string_c_off);
+  group_off = BinaryOperator::CreateAdd(group_off,
+      ConstantInt::get(OFFSET_TYPE, 1), "group_off_inc", groupref_loop_a);
+  new StoreInst(group_off, group_off_ptr, groupref_loop_a);
+
+  // compare the group and string values
+  Value* groupref_match = new ICmpInst(ICmpInst::ICMP_EQ, group_c,
+      string_c, "groupref_match", groupref_loop_a);
+  // if they match then continue looping, otherwise return not_found
+  BranchInst::Create(groupref_loop, return_not_found, groupref_match, 
+      groupref_loop_a);
+
+  return next;
+}
 BasicBlock*
 CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
   // @arg should be a tuple of (group-number, yes-seq, no-seq)
