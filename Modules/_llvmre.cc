@@ -222,8 +222,8 @@ bool CompiledRegEx::optimize(Function* f) {
   // optimize the function
 	struct PyGlobalLlvmData *global_llvm_data = PyGlobalLlvmData::Get();
 	if (global_llvm_data->Optimize(*f, 3) < 0) {
-		PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
-		return false;
+    PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
+    return false;
   }
   return true;
 }
@@ -1734,6 +1734,10 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   new StoreInst(new LoadInst(offset_ptr, "offset", return_match_result),
       start_ptr, return_match_result);
   ReturnInst::Create(match_result, return_match_result);
+
+  // optimize the find function
+	struct PyGlobalLlvmData *global_llvm_data = PyGlobalLlvmData::Get();
+	global_llvm_data->Optimize(*(self->find), 3);
 
   return 0;
 }
