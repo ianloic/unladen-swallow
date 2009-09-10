@@ -72,7 +72,8 @@ class RegexObject(object):
 
   def split(self, string, maxsplit=0):
     # find matches for the separator
-    matches = [m for m in self.__finditer(string, count=maxsplit)]
+    matches = [m for m in self.__finditer(string, count=maxsplit, 
+      ignore_empty=True)]
     # find the spans of those matches
     spans = [m.span() for m in matches]
     # find the spans between those matches
@@ -92,7 +93,7 @@ class RegexObject(object):
     else:
       return split
 
-  def __finditer(self, string, pos=0, endpos=None, count=0):
+  def __finditer(self, string, pos=0, endpos=None, count=0, ignore_empty=False):
     if pos: _pos = pos
     else: _pos = 0
     if endpos: _endpos = endpos
@@ -104,6 +105,9 @@ class RegexObject(object):
         # next time search after this result
         if _pos == groups[1]:
           _pos = groups[1] + 1
+          # if we should ignore empty matches, skip it
+          if ignore_empty:
+            continue
         else:
           _pos = groups[1]
         # yeild this result
