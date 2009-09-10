@@ -225,7 +225,8 @@ class MatchObject(object):
 
 def compile(pattern, flags=0):
   if isinstance(pattern, RegexObject):
-    assert flags == pattern.flags # right?
+    if flags != pattern.flags:
+      raise ValueError()
     return pattern
   else:
     return RegexObject(pattern, flags)
