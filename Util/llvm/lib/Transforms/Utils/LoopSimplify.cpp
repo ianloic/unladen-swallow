@@ -91,9 +91,9 @@ namespace {
   private:
     bool ProcessLoop(Loop *L);
     BasicBlock *RewriteLoopExitBlock(Loop *L, BasicBlock *Exit);
-    void InsertPreheaderForLoop(Loop *L);
+    BasicBlock *InsertPreheaderForLoop(Loop *L);
     Loop *SeparateNestedLoop(Loop *L);
-    void InsertUniqueBackedgeBlock(Loop *L);
+    void InsertUniqueBackedgeBlock(Loop *L, BasicBlock *Preheader);
     void PlaceSplitBlockCarefully(BasicBlock *NewBB,
                                   SmallVectorImpl<BasicBlock*> &SplitPreds,
                                   Loop *L);
@@ -161,12 +161,12 @@ bool LoopSimplify::runOnFunction(Function &F) {
       TI->getSuccessor(i)->removePredecessor(BB);
    
     // Add a new unreachable instruction before the old terminator.
-    new UnreachableInst(TI);
+    new UnreachableInst(TI->getContext(), TI);
     
     // Delete the dead terminator.
     if (AA) AA->deleteValue(TI);
     if (!TI->use_empty())
-      TI->replaceAllUsesWith(Context->getUndef(TI->getType()));
+      TI->replaceAllUsesWith(UndefValue::get(TI->getType()));
     TI->eraseFromParent();
     Changed |= true;
   }
@@ -193,8 +193,9 @@ ReprocessLoop:
          "Header isn't first block in loop?");
 
   // Does the loop already have a preheader?  If so, don't insert one.
-  if (L->getLoopPreheader() == 0) {
-    InsertPreheaderForLoop(L);
+  BasicBlock *Preheader = L->getLoopPreheader();
+  if (!Preheader) {
+    Preheader = InsertPreheaderForLoop(L);
     NumInserted++;
     Changed = true;
   }
@@ -243,7 +244,7 @@ ReprocessLoop:
     // If we either couldn't, or didn't want to, identify nesting of the loops,
     // insert a new block that all backedges target, then make it jump to the
     // loop header.
-    InsertUniqueBackedgeBlock(L);
+    InsertUniqueBackedgeBlock(L, Preheader);
     NumInserted++;
     Changed = true;
   }
@@ -287,19 +288,10 @@ ReprocessLoop:
         Instruction *Inst = I++;
         if (Inst == CI)
           continue;
-        if (Inst->isTrapping()) {
+        if (!L->makeLoopInvariant(Inst, Changed, Preheader->getTerminator())) {
           AllInvariant = false;
           break;
         }
-        for (unsigned j = 0, f = Inst->getNumOperands(); j != f; ++j)
-          if (!L->isLoopInvariant(Inst->getOperand(j))) {
-            AllInvariant = false;
-            break;
-          }
-        if (!AllInvariant)
-          break;
-        // Hoist.
-        Inst->moveBefore(L->getLoopPreheader()->getTerminator());
       }
       if (!AllInvariant) continue;
 
@@ -340,7 +332,7 @@ ReprocessLoop:
 /// preheader, this method is called to insert one.  This method has two phases:
 /// preheader insertion and analysis updating.
 ///
-void LoopSimplify::InsertPreheaderForLoop(Loop *L) {
+BasicBlock *LoopSimplify::InsertPreheaderForLoop(Loop *L) {
   BasicBlock *Header = L->getHeader();
 
   // Compute the set of predecessors of the loop that are not in the loop.
@@ -367,6 +359,8 @@ void LoopSimplify::InsertPreheaderForLoop(Loop *L) {
   // Make sure that NewBB is put someplace intelligent, which doesn't mess up
   // code layout too horribly.
   PlaceSplitBlockCarefully(NewBB, OutsideBlocks, L);
+
+  return NewBB;
 }
 
 /// RewriteLoopExitBlock - Ensure that the loop preheader dominates all exit
@@ -579,11 +573,10 @@ Loop *LoopSimplify::SeparateNestedLoop(Loop *L) {
 /// backedges to target a new basic block and have that block branch to the loop
 /// header.  This ensures that loops have exactly one backedge.
 ///
-void LoopSimplify::InsertUniqueBackedgeBlock(Loop *L) {
+void LoopSimplify::InsertUniqueBackedgeBlock(Loop *L, BasicBlock *Preheader) {
   assert(L->getNumBackEdges() > 1 && "Must have > 1 backedge!");
 
   // Get information about the loop
-  BasicBlock *Preheader = L->getLoopPreheader();
   BasicBlock *Header = L->getHeader();
   Function *F = Header->getParent();
 
@@ -593,7 +586,8 @@ void LoopSimplify::InsertUniqueBackedgeBlock(Loop *L) {
     if (*I != Preheader) BackedgeBlocks.push_back(*I);
 
   // Create and insert the new backedge block...
-  BasicBlock *BEBlock = BasicBlock::Create(Header->getName()+".backedge", F);
+  BasicBlock *BEBlock = BasicBlock::Create(Header->getContext(),
+                                           Header->getName()+".backedge", F);
   BranchInst *BETerminator = BranchInst::Create(Header, BEBlock);
 
   // Move the new backedge block to right after the last backedge block.

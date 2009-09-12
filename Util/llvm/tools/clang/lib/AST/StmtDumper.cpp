@@ -117,6 +117,7 @@ namespace  {
     
     // Exprs
     void VisitExpr(Expr *Node);
+    void VisitCastExpr(CastExpr *Node);
     void VisitDeclRefExpr(DeclRefExpr *Node);
     void VisitPredefinedExpr(PredefinedExpr *Node);
     void VisitCharacterLiteral(CharacterLiteral *Node);
@@ -137,6 +138,10 @@ namespace  {
     void VisitCXXBoolLiteralExpr(CXXBoolLiteralExpr *Node);
     void VisitCXXThisExpr(CXXThisExpr *Node);
     void VisitCXXFunctionalCastExpr(CXXFunctionalCastExpr *Node);
+    void VisitCXXConstructExpr(CXXConstructExpr *Node);
+    void VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *Node);
+    void VisitCXXExprWithTemporaries(CXXExprWithTemporaries *Node);
+    void DumpCXXTemporary(CXXTemporary *Temporary);
     
     // ObjC
     void VisitObjCEncodeExpr(ObjCEncodeExpr *Node);
@@ -144,7 +149,8 @@ namespace  {
     void VisitObjCSelectorExpr(ObjCSelectorExpr *Node);
     void VisitObjCProtocolExpr(ObjCProtocolExpr *Node);
     void VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *Node);
-    void VisitObjCKVCRefExpr(ObjCKVCRefExpr *Node);
+    void VisitObjCImplicitSetterGetterRefExpr(
+                                          ObjCImplicitSetterGetterRefExpr *Node);
     void VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node);
     void VisitObjCSuperExpr(ObjCSuperExpr *Node);
   };
@@ -293,22 +299,62 @@ void StmtDumper::VisitExpr(Expr *Node) {
   DumpExpr(Node);
 }
 
+void StmtDumper::VisitCastExpr(CastExpr *Node) {
+  DumpExpr(Node);
+  fprintf(F, " ");
+  switch (Node->getCastKind()) {
+  case CastExpr::CK_Unknown:
+    fprintf(F, "<Unknown>");
+    break;
+  case CastExpr::CK_BitCast:
+    fprintf(F, "<BitCast>");
+    break;
+  case CastExpr::CK_NoOp:
+    fprintf(F, "<NoOp>");
+    break;
+  case CastExpr::CK_DerivedToBase:
+    fprintf(F, "<DerivedToBase>");
+    break;
+  case CastExpr::CK_Dynamic:
+    fprintf(F, "<Dynamic>");
+    break;
+  case CastExpr::CK_ToUnion:
+    fprintf(F, "<ToUnion>");
+    break;
+  case CastExpr::CK_ArrayToPointerDecay:
+    fprintf(F, "<ArrayToPointerDecay>");
+    break;
+  case CastExpr::CK_NullToMemberPointer:
+    fprintf(F, "<NullToMemberPointer>");
+    break;
+  case CastExpr::CK_BaseToDerivedMemberPointer:
+    fprintf(F, "<BaseToDerivedMemberPointer>");
+    break;
+  case CastExpr::CK_UserDefinedConversion:
+    fprintf(F, "<UserDefinedConversion>");
+    break;
+  case CastExpr::CK_ConstructorConversion:
+    fprintf(F, "<ConstructorConversion>");
+    break;
+  }
+}
+
 void StmtDumper::VisitDeclRefExpr(DeclRefExpr *Node) {
   DumpExpr(Node);
 
   fprintf(F, " ");
   switch (Node->getDecl()->getKind()) {
-    case Decl::Function: fprintf(F,"FunctionDecl"); break;
-    case Decl::Var: fprintf(F,"Var"); break;
-    case Decl::ParmVar: fprintf(F,"ParmVar"); break;
-    case Decl::EnumConstant: fprintf(F,"EnumConstant"); break;
-    case Decl::Typedef: fprintf(F,"Typedef"); break;
-    case Decl::Record: fprintf(F,"Record"); break;
-    case Decl::Enum: fprintf(F,"Enum"); break;
-    case Decl::CXXRecord: fprintf(F,"CXXRecord"); break;
-    case Decl::ObjCInterface: fprintf(F,"ObjCInterface"); break;
-    case Decl::ObjCClass: fprintf(F,"ObjCClass"); break;
-    default: fprintf(F,"Decl"); break;
+  default: fprintf(F,"Decl"); break;
+  case Decl::Function: fprintf(F,"FunctionDecl"); break;
+  case Decl::Var: fprintf(F,"Var"); break;
+  case Decl::ParmVar: fprintf(F,"ParmVar"); break;
+  case Decl::EnumConstant: fprintf(F,"EnumConstant"); break;
+  case Decl::Typedef: fprintf(F,"Typedef"); break;
+  case Decl::Record: fprintf(F,"Record"); break;
+  case Decl::Enum: fprintf(F,"Enum"); break;
+  case Decl::CXXRecord: fprintf(F,"CXXRecord"); break;
+  case Decl::ObjCInterface: fprintf(F,"ObjCInterface"); break;
+  case Decl::ObjCClass: fprintf(F,"ObjCClass"); break;
   }
   
   fprintf(F, "='%s' %p", Node->getDecl()->getNameAsString().c_str(), 
@@ -451,6 +497,33 @@ void StmtDumper::VisitCXXFunctionalCastExpr(CXXFunctionalCastExpr *Node) {
           Node->getTypeAsWritten().getAsString().c_str());
 }
 
+void StmtDumper::VisitCXXConstructExpr(CXXConstructExpr *Node) {
+  DumpExpr(Node);
+  if (Node->isElidable())
+    fprintf(F, " elidable");
+}
+
+void StmtDumper::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *Node) {
+  DumpExpr(Node);
+  fprintf(F, " ");
+  DumpCXXTemporary(Node->getTemporary());
+}
+
+void StmtDumper::VisitCXXExprWithTemporaries(CXXExprWithTemporaries *Node) {
+  DumpExpr(Node);
+  ++IndentLevel;
+  for (unsigned i = 0, e = Node->getNumTemporaries(); i != e; ++i) {
+    fprintf(F, "\n");
+    Indent();
+    DumpCXXTemporary(Node->getTemporary(i));
+  }
+  --IndentLevel;
+}
+
+void StmtDumper::DumpCXXTemporary(CXXTemporary *Temporary) {
+  fprintf(F, "(CXXTemporary %p)", (void *)Temporary);
+}
+
 //===----------------------------------------------------------------------===//
 // Obj-C Expressions
 //===----------------------------------------------------------------------===//
@@ -490,7 +563,8 @@ void StmtDumper::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *Node) {
           Node->getProperty()->getNameAsString().c_str());
 }
 
-void StmtDumper::VisitObjCKVCRefExpr(ObjCKVCRefExpr *Node) {
+void StmtDumper::VisitObjCImplicitSetterGetterRefExpr(
+                                        ObjCImplicitSetterGetterRefExpr *Node) {
   DumpExpr(Node);
   
   ObjCMethodDecl *Getter = Node->getGetterMethod();

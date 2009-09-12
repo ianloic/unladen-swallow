@@ -16,6 +16,7 @@
 
 #include "CodeGenTypes.h"
 #include "clang/AST/Type.h"
+#include "llvm/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "clang/Basic/TargetInfo.h"
@@ -38,6 +39,7 @@ namespace llvm {
   class TargetData;
   class FunctionType;
   class Value;
+  class LLVMContext;
 }
 
 namespace clang {
@@ -63,6 +65,7 @@ class BlockModule : public BlockBase {
   const llvm::TargetData &TheTargetData;
   CodeGenTypes &Types;
   CodeGenModule &CGM;
+  llvm::LLVMContext &VMContext;
   
   ASTContext &getContext() const { return Context; }
   llvm::Module &getModule() const { return TheModule; }
@@ -104,12 +107,13 @@ public:
   BlockModule(ASTContext &C, llvm::Module &M, const llvm::TargetData &TD,
               CodeGenTypes &T, CodeGenModule &CodeGen)
     : Context(C), TheModule(M), TheTargetData(TD), Types(T),
-      CGM(CodeGen),
+      CGM(CodeGen), VMContext(M.getContext()),
       NSConcreteGlobalBlock(0), NSConcreteStackBlock(0), BlockDescriptorType(0),
       GenericBlockLiteralType(0), GenericExtendedBlockLiteralType(0),
       BlockObjectAssign(0), BlockObjectDispose(0) {
     Block.GlobalUniqueCount = 0;
-    PtrToInt8Ty = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
+    PtrToInt8Ty = llvm::PointerType::getUnqual(
+                llvm::Type::getInt8Ty(M.getContext()));
   }
 };
 
@@ -117,6 +121,9 @@ class BlockFunction : public BlockBase {
   CodeGenModule &CGM;
   CodeGenFunction &CGF;
   ASTContext &getContext() const;
+
+protected:
+  llvm::LLVMContext &VMContext;
 
 public:
   const llvm::Type *PtrToInt8Ty;
@@ -217,7 +224,7 @@ public:
       return true;
     if (getContext().isObjCNSObjectType(Ty))
       return true;
-    if (getContext().isObjCObjectPointerType(Ty))
+    if (Ty->isObjCObjectPointerType())
       return true;
     return false;
   }

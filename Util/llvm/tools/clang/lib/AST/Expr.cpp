@@ -28,36 +28,6 @@ using namespace clang;
 // Primary Expressions.
 //===----------------------------------------------------------------------===//
 
-PredefinedExpr* PredefinedExpr::Clone(ASTContext &C) const {
-  return new (C) PredefinedExpr(Loc, getType(), Type);
-}
-
-IntegerLiteral* IntegerLiteral::Clone(ASTContext &C) const {
-  return new (C) IntegerLiteral(Value, getType(), Loc);
-}
-
-CharacterLiteral* CharacterLiteral::Clone(ASTContext &C) const {
-  return new (C) CharacterLiteral(Value, IsWide, getType(), Loc);
-}
-
-FloatingLiteral* FloatingLiteral::Clone(ASTContext &C) const {
-  return new (C) FloatingLiteral(Value, IsExact, getType(), Loc);
-}
-
-ImaginaryLiteral* ImaginaryLiteral::Clone(ASTContext &C) const {
-  // FIXME: Use virtual Clone(), once it is available
-  Expr *ClonedVal = 0;
-  if (const IntegerLiteral *IntLit = dyn_cast<IntegerLiteral>(Val))
-    ClonedVal = IntLit->Clone(C);
-  else
-    ClonedVal = cast<FloatingLiteral>(Val)->Clone(C);
-  return new (C) ImaginaryLiteral(ClonedVal, getType());
-}
-
-GNUNullExpr* GNUNullExpr::Clone(ASTContext &C) const {
-  return new (C) GNUNullExpr(getType(), TokenLoc);
-}
-
 /// getValueAsApproximateDouble - This returns the value as an inaccurate
 /// double.  Note that this may cause loss of precision, but is useful for
 /// debugging dumps, etc.
@@ -106,15 +76,9 @@ StringLiteral *StringLiteral::CreateEmpty(ASTContext &C, unsigned NumStrs) {
   return SL;
 }
 
-StringLiteral* StringLiteral::Clone(ASTContext &C) const {
-  return Create(C, StrData, ByteLength, IsWide, getType(),
-                TokLocs, NumConcatenated);
-}
-
-void StringLiteral::Destroy(ASTContext &C) {
+void StringLiteral::DoDestroy(ASTContext &C) {
   C.Deallocate(const_cast<char*>(StrData));
-  this->~StringLiteral();
-  C.Deallocate(this);
+  Expr::DoDestroy(C);
 }
 
 void StringLiteral::setStrData(ASTContext &C, const char *Str, unsigned Len) {
@@ -213,16 +177,24 @@ CallExpr::CallExpr(ASTContext& C, Expr *fn, Expr **args, unsigned numargs,
   RParenLoc = rparenloc;
 }
 
-CallExpr::CallExpr(ASTContext &C, EmptyShell Empty) 
-  : Expr(CallExprClass, Empty), SubExprs(0), NumArgs(0) { 
+CallExpr::CallExpr(ASTContext &C, StmtClass SC, EmptyShell Empty) 
+  : Expr(SC, Empty), SubExprs(0), NumArgs(0) { 
   SubExprs = new (C) Stmt*[1];
 }
 
-void CallExpr::Destroy(ASTContext& C) {
+void CallExpr::DoDestroy(ASTContext& C) {
   DestroyChildren(C);
   if (SubExprs) C.Deallocate(SubExprs);
   this->~CallExpr();
   C.Deallocate(this);
+}
+
+FunctionDecl *CallExpr::getDirectCallee() {
+  Expr *CEE = getCallee()->IgnoreParenCasts();
+  if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(CEE))
+    return dyn_cast<FunctionDecl>(DRE->getDecl());
+
+  return 0;
 }
 
 /// setNumArgs - This changes the number of arguments present in this call.
@@ -241,7 +213,7 @@ void CallExpr::setNumArgs(ASTContext& C, unsigned NumArgs) {
   }
 
   // Otherwise, we are growing the # arguments.  New an bigger argument array.
-  Stmt **NewSubExprs = new Stmt*[NumArgs+1];
+  Stmt **NewSubExprs = new (C) Stmt*[NumArgs+1];
   // Copy over args.
   for (unsigned i = 0; i != getNumArgs()+ARGS_START; ++i)
     NewSubExprs[i] = SubExprs[i];
@@ -280,9 +252,9 @@ unsigned CallExpr::isBuiltinCall(ASTContext &Context) const {
 
 QualType CallExpr::getCallReturnType() const {
   QualType CalleeType = getCallee()->getType();
-  if (const PointerType *FnTypePtr = CalleeType->getAsPointerType())
+  if (const PointerType *FnTypePtr = CalleeType->getAs<PointerType>())
     CalleeType = FnTypePtr->getPointeeType();
-  else if (const BlockPointerType *BPT = CalleeType->getAsBlockPointerType())
+  else if (const BlockPointerType *BPT = CalleeType->getAs<BlockPointerType>())
     CalleeType = BPT->getPointeeType();
   
   const FunctionType *FnType = CalleeType->getAsFunctionType();
@@ -431,7 +403,7 @@ Expr *InitListExpr::updateInit(unsigned Init, Expr *expr) {
 /// getFunctionType - Return the underlying function type for this block.
 ///
 const FunctionType *BlockExpr::getFunctionType() const {
-  return getType()->getAsBlockPointerType()->
+  return getType()->getAs<BlockPointerType>()->
                     getPointeeType()->getAsFunctionType();
 }
 
@@ -525,6 +497,7 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
   }
 
   case MemberExprClass:
+  case CXXQualifiedMemberExprClass:
     // If the base pointer or element is to a volatile pointer/field, accessing
     // it is a side effect.
     if (getType().isVolatileQualified())
@@ -569,6 +542,22 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
   }
   case ObjCMessageExprClass:
     return false;
+      
+  case ObjCImplicitSetterGetterRefExprClass: {   // Dot syntax for message send.
+#if 0
+    const ObjCImplicitSetterGetterRefExpr *Ref = 
+      cast<ObjCImplicitSetterGetterRefExpr>(this);
+    // FIXME: We really want the location of the '.' here.
+    Loc = Ref->getLocation();
+    R1 = SourceRange(Ref->getLocation(), Ref->getLocation());
+    if (Ref->getBase())
+      R2 = Ref->getBase()->getSourceRange();
+#else
+    Loc = getExprLoc();
+    R1 = getSourceRange();
+#endif
+    return true;
+  }
   case StmtExprClass: {
     // Statement exprs don't logically have side effects themselves, but are
     // sometimes used in macros in ways that give them a type that is unused.
@@ -585,11 +574,10 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
     return true;
   }
   case CStyleCastExprClass:
-    // If this is a cast to void, check the operand.  Otherwise, the result of
-    // the cast is unused.
+    // If this is an explicit cast to void, allow it.  People do this when they
+    // think they know what they're doing :).
     if (getType()->isVoidType())
-      return cast<CastExpr>(this)->getSubExpr()
-               ->isUnusedResultAWarning(Loc, R1, R2);
+      return false;
     Loc = cast<CStyleCastExpr>(this)->getLParenLoc();
     R1 = cast<CStyleCastExpr>(this)->getSubExpr()->getSourceRange();
     return true;
@@ -617,6 +605,9 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
     // effects (e.g. a placement new with an uninitialized POD).
   case CXXDeleteExprClass:
     return false;
+  case CXXBindTemporaryExprClass:
+    return cast<CXXBindTemporaryExpr>(this)
+      ->getSubExpr()->isUnusedResultAWarning(Loc, R1, R2);
   case CXXExprWithTemporariesClass:
     return cast<CXXExprWithTemporaries>(this)
       ->getSubExpr()->isUnusedResultAWarning(Loc, R1, R2);
@@ -694,7 +685,8 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
       return LV_Valid;
     break;
   }
-  case MemberExprClass: { 
+  case MemberExprClass: 
+  case CXXQualifiedMemberExprClass: { 
     const MemberExpr *m = cast<MemberExpr>(this);
     if (Ctx.getLangOptions().CPlusPlus) { // C++ [expr.ref]p4:
       NamedDecl *Member = m->getMemberDecl();
@@ -804,7 +796,7 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
     return LV_Valid;
   case ObjCPropertyRefExprClass: // FIXME: check if read-only property.
     return LV_Valid;
-  case ObjCKVCRefExprClass: // FIXME: check if read-only property.
+  case ObjCImplicitSetterGetterRefExprClass: // FIXME: check if read-only property.
     return LV_Valid;
   case PredefinedExprClass:
     return LV_Valid;
@@ -829,6 +821,9 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
   case CXXTypeidExprClass:
     // C++ 5.2.8p1: The result of a typeid expression is an lvalue of ...
     return LV_Valid;
+  case CXXBindTemporaryExprClass:
+    return cast<CXXBindTemporaryExpr>(this)->getSubExpr()->
+      isLvalueInternal(Ctx);
   case ConditionalOperatorClass: {
     // Complicated handling is only for C++.
     if (!Ctx.getLangOptions().CPlusPlus)
@@ -916,15 +911,16 @@ Expr::isModifiableLvalue(ASTContext &Ctx, SourceLocation *Loc) const {
   if (CT->isIncompleteType())
     return MLV_IncompleteType;
     
-  if (const RecordType *r = CT->getAsRecordType()) {
+  if (const RecordType *r = CT->getAs<RecordType>()) {
     if (r->hasConstFields()) 
       return MLV_ConstQualified;
   }
   
   // Assigning to an 'implicit' property?
-  else if (isa<ObjCKVCRefExpr>(this)) {
-    const ObjCKVCRefExpr* KVCExpr = cast<ObjCKVCRefExpr>(this);
-    if (KVCExpr->getSetterMethod() == 0)
+  else if (isa<ObjCImplicitSetterGetterRefExpr>(this)) {
+    const ObjCImplicitSetterGetterRefExpr* Expr = 
+      cast<ObjCImplicitSetterGetterRefExpr>(this);
+    if (Expr->getSetterMethod() == 0)
       return MLV_NoSetterProperty;
   }
   return MLV_Valid;    
@@ -954,7 +950,8 @@ bool Expr::hasGlobalStorage() const {
       return true;
     return false;
   }
-  case MemberExprClass: {
+  case MemberExprClass:
+  case CXXQualifiedMemberExprClass: {
     const MemberExpr *M = cast<MemberExpr>(this);
     return !M->isArrow() && M->getBase()->hasGlobalStorage();
   }
@@ -992,13 +989,14 @@ bool Expr::isOBJCGCCandidate(ASTContext &Ctx) const {
       QualType T = VD->getType();
       // dereferencing to an object pointer is always a gc'able candidate
       if (T->isPointerType() && 
-          Ctx.isObjCObjectPointerType(T->getAsPointerType()->getPointeeType()))
+          T->getAs<PointerType>()->getPointeeType()->isObjCObjectPointerType())
         return true;
         
     }
     return false;
   }
-  case MemberExprClass: {
+  case MemberExprClass: 
+  case CXXQualifiedMemberExprClass: {
     const MemberExpr *M = cast<MemberExpr>(this);
     return M->getBase()->isOBJCGCCandidate(Ctx);
   }
@@ -1095,6 +1093,7 @@ bool Expr::isConstantInitializer(ASTContext &Ctx) const {
   switch (getStmtClass()) {
   default: break;
   case StringLiteralClass:
+  case ObjCStringLiteralClass:
   case ObjCEncodeExprClass:
     return true;
   case CompoundLiteralExprClass: {
@@ -1136,7 +1135,6 @@ bool Expr::isConstantInitializer(ASTContext &Ctx) const {
       return cast<CastExpr>(this)->getSubExpr()->isConstantInitializer(Ctx);
     break;
   }
-
   return isEvaluatable(Ctx);
 }
 
@@ -1420,7 +1418,7 @@ bool Expr::isNullPointerConstant(ASTContext &Ctx) const
   if (const ExplicitCastExpr *CE = dyn_cast<ExplicitCastExpr>(this)) {
     if (!Ctx.getLangOptions().CPlusPlus) {
       // Check that it is a cast to void*.
-      if (const PointerType *PT = CE->getType()->getAsPointerType()) {
+      if (const PointerType *PT = CE->getType()->getAs<PointerType>()) {
         QualType Pointee = PT->getPointeeType();
         if (Pointee.getCVRQualifiers() == 0 && 
             Pointee->isVoidType() &&                              // to void*
@@ -1558,22 +1556,6 @@ ObjCMessageExpr::ObjCMessageExpr(Expr *receiver, Selector selInfo,
   RBracloc = RBrac;
 }
 
-ObjCStringLiteral* ObjCStringLiteral::Clone(ASTContext &C) const {
-  // Clone the string literal.
-  StringLiteral *NewString = 
-    String ? cast<StringLiteral>(String)->Clone(C) : 0;
-  
-  return new (C) ObjCStringLiteral(NewString, getType(), AtLoc);
-}
-
-ObjCSelectorExpr *ObjCSelectorExpr::Clone(ASTContext &C) const {
-  return new (C) ObjCSelectorExpr(getType(), SelName, AtLoc, RParenLoc);
-}
-
-ObjCProtocolExpr *ObjCProtocolExpr::Clone(ASTContext &C) const {
-  return new (C) ObjCProtocolExpr(getType(), TheProtocol, AtLoc, RParenLoc);
-}
-
 // constructor for class messages. 
 // FIXME: clsName should be typed to ObjCInterfaceType
 ObjCMessageExpr::ObjCMessageExpr(IdentifierInfo *clsName, Selector selInfo,
@@ -1641,16 +1623,23 @@ bool ChooseExpr::isConditionTrue(ASTContext &C) const {
   return getCond()->EvaluateAsInt(C) != 0;
 }
 
-void ShuffleVectorExpr::setExprs(Expr ** Exprs, unsigned NumExprs) {
-  if (NumExprs)
-    delete [] SubExprs;
-  
-  SubExprs = new Stmt* [NumExprs];
+void ShuffleVectorExpr::setExprs(ASTContext &C, Expr ** Exprs,
+                                 unsigned NumExprs) {
+  if (SubExprs) C.Deallocate(SubExprs);
+
+  SubExprs = new (C) Stmt* [NumExprs];
   this->NumExprs = NumExprs;
   memcpy(SubExprs, Exprs, sizeof(Expr *) * NumExprs);
+}  
+
+void ShuffleVectorExpr::DoDestroy(ASTContext& C) {
+  DestroyChildren(C);
+  if (SubExprs) C.Deallocate(SubExprs);
+  this->~ShuffleVectorExpr();
+  C.Deallocate(this);
 }
 
-void SizeOfAlignOfExpr::Destroy(ASTContext& C) {
+void SizeOfAlignOfExpr::DoDestroy(ASTContext& C) {
   // Override default behavior of traversing children. If this has a type
   // operand and the type is a variable-length array, the child iteration
   // will iterate over the size expression. However, this expression belongs
@@ -1661,7 +1650,7 @@ void SizeOfAlignOfExpr::Destroy(ASTContext& C) {
     C.Deallocate(this);
   }
   else
-    Expr::Destroy(C);
+    Expr::DoDestroy(C);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1824,13 +1813,29 @@ void DesignatedInitExpr::ExpandDesignator(unsigned Idx,
   NumDesignators = NumDesignators - 1 + NumNewDesignators;
 }
 
-void DesignatedInitExpr::Destroy(ASTContext &C) {
+void DesignatedInitExpr::DoDestroy(ASTContext &C) {
   delete [] Designators;
-  Expr::Destroy(C);
+  Expr::DoDestroy(C);
 }
 
-ImplicitValueInitExpr *ImplicitValueInitExpr::Clone(ASTContext &C) const {
-  return new (C) ImplicitValueInitExpr(getType());
+ParenListExpr::ParenListExpr(ASTContext& C, SourceLocation lparenloc, 
+                             Expr **exprs, unsigned nexprs,
+                             SourceLocation rparenloc)
+: Expr(ParenListExprClass, QualType(),
+       hasAnyTypeDependentArguments(exprs, nexprs),
+       hasAnyValueDependentArguments(exprs, nexprs)), 
+  NumExprs(nexprs), LParenLoc(lparenloc), RParenLoc(rparenloc) {
+  
+  Exprs = new (C) Stmt*[nexprs];
+  for (unsigned i = 0; i != nexprs; ++i)
+    Exprs[i] = exprs[i];
+}
+
+void ParenListExpr::DoDestroy(ASTContext& C) {
+  DestroyChildren(C);
+  if (Exprs) C.Deallocate(Exprs);
+  this->~ParenListExpr();
+  C.Deallocate(this);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1862,13 +1867,21 @@ Stmt::child_iterator ObjCIvarRefExpr::child_end() { return &Base+1; }
 Stmt::child_iterator ObjCPropertyRefExpr::child_begin() { return &Base; }
 Stmt::child_iterator ObjCPropertyRefExpr::child_end() { return &Base+1; }
 
-// ObjCKVCRefExpr
-Stmt::child_iterator ObjCKVCRefExpr::child_begin() { return &Base; }
-Stmt::child_iterator ObjCKVCRefExpr::child_end() { return &Base+1; }
+// ObjCImplicitSetterGetterRefExpr
+Stmt::child_iterator ObjCImplicitSetterGetterRefExpr::child_begin() { 
+  return &Base; 
+}
+Stmt::child_iterator ObjCImplicitSetterGetterRefExpr::child_end() { 
+  return &Base+1; 
+}
 
 // ObjCSuperExpr
 Stmt::child_iterator ObjCSuperExpr::child_begin() { return child_iterator(); }
 Stmt::child_iterator ObjCSuperExpr::child_end() { return child_iterator(); }
+
+// ObjCIsaExpr
+Stmt::child_iterator ObjCIsaExpr::child_begin() { return &Base; }
+Stmt::child_iterator ObjCIsaExpr::child_end() { return &Base+1; }
 
 // PredefinedExpr
 Stmt::child_iterator PredefinedExpr::child_begin() { return child_iterator(); }
@@ -2031,6 +2044,14 @@ Stmt::child_iterator ImplicitValueInitExpr::child_begin() {
 
 Stmt::child_iterator ImplicitValueInitExpr::child_end() { 
   return child_iterator(); 
+}
+
+// ParenListExpr
+Stmt::child_iterator ParenListExpr::child_begin() {
+  return &Exprs[0];
+}
+Stmt::child_iterator ParenListExpr::child_end() {
+  return &Exprs[0]+NumExprs;
 }
 
 // ObjCStringLiteral

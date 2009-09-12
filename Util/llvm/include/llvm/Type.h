@@ -12,11 +12,11 @@
 #define LLVM_TYPE_H
 
 #include "llvm/AbstractTypeUser.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/System/Atomic.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/iterator.h"
 #include <string>
 #include <vector>
 
@@ -66,6 +66,7 @@ public:
   /// value, you can cast to a "DerivedType" subclass (see DerivedTypes.h)
   /// Note: If you add an element to this, you need to add an element to the
   /// Type::getPrimitiveType function, or else things will break!
+  /// Also update LLVMTypeKind and LLVMGetTypeKind () in the C binding.
   ///
   enum TypeID {
     // PrimitiveTypes .. make sure LastPrimitiveTyID stays up to date
@@ -105,6 +106,10 @@ private:
   ///
   mutable sys::cas_flag RefCount;
 
+  /// Context - This refers to the LLVMContext in which this type was uniqued.
+  LLVMContext &Context;
+  friend class LLVMContextImpl;
+
   const Type *getForwardedTypeInternal() const;
 
   // Some Type instances are allocated as arrays, some aren't. So we provide
@@ -112,8 +117,10 @@ private:
   void destroy() const; // const is a lie, this does "delete this"!
 
 protected:
-  explicit Type(TypeID id) : ID(id), Abstract(false), SubclassData(0),
-                             RefCount(0), ForwardType(0), NumContainedTys(0),
+  explicit Type(LLVMContext &C, TypeID id) :
+                             ID(id), Abstract(false), SubclassData(0),
+                             RefCount(0), Context(C),
+                             ForwardType(0), NumContainedTys(0),
                              ContainedTys(0) {}
   virtual ~Type() {
     assert(AbstractTypeUsers.empty() && "Abstract types remain");
@@ -160,7 +167,6 @@ protected:
 
 public:
   void print(raw_ostream &O) const;
-  void print(std::ostream &O) const;
 
   /// @brief Debugging support: print to stderr
   void dump() const;
@@ -168,6 +174,9 @@ public:
   /// @brief Debugging support: print to stderr (use type names from context
   /// module).
   void dump(const Module *Context) const;
+
+  /// getContext - Fetch the LLVMContext in which this type was uniqued.
+  LLVMContext &getContext() const { return Context; }
 
   //===--------------------------------------------------------------------===//
   // Property accessors for dealing with types... Some of these virtual methods
@@ -268,6 +277,11 @@ public:
   /// This will return zero if the type does not have a size or is not a
   /// primitive type.
   ///
+  /// Note that this may not reflect the size of memory allocated for an
+  /// instance of the type or the number of bytes that are written when an
+  /// instance of the type is stored to memory. The TargetData class provides
+  /// additional query functions to provide this information.
+  ///
   unsigned getPrimitiveSizeInBits() const;
 
   /// getScalarSizeInBits - If this is a vector type, return the
@@ -292,7 +306,7 @@ public:
   /// getVAArgsPromotedType - Return the type an argument of this type
   /// will be promoted to if passed through a variable argument
   /// function.
-  const Type *getVAArgsPromotedType() const; 
+  const Type *getVAArgsPromotedType(LLVMContext &C) const; 
 
   /// getScalarType - If this is a vector type, return the element type,
   /// otherwise return this.
@@ -324,14 +338,24 @@ public:
   //
 
   /// getPrimitiveType - Return a type based on an identifier.
-  static const Type *getPrimitiveType(TypeID IDNumber);
+  static const Type *getPrimitiveType(LLVMContext &C, TypeID IDNumber);
 
   //===--------------------------------------------------------------------===//
   // These are the builtin types that are always available...
   //
-  static const Type *VoidTy, *LabelTy, *FloatTy, *DoubleTy, *MetadataTy;
-  static const Type *X86_FP80Ty, *FP128Ty, *PPC_FP128Ty;
-  static const IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
+  static const Type *getVoidTy(LLVMContext &C);
+  static const Type *getLabelTy(LLVMContext &C);
+  static const Type *getFloatTy(LLVMContext &C);
+  static const Type *getDoubleTy(LLVMContext &C);
+  static const Type *getMetadataTy(LLVMContext &C);
+  static const Type *getX86_FP80Ty(LLVMContext &C);
+  static const Type *getFP128Ty(LLVMContext &C);
+  static const Type *getPPC_FP128Ty(LLVMContext &C);
+  static const IntegerType *getInt1Ty(LLVMContext &C);
+  static const IntegerType *getInt8Ty(LLVMContext &C);
+  static const IntegerType *getInt16Ty(LLVMContext &C);
+  static const IntegerType *getInt32Ty(LLVMContext &C);
+  static const IntegerType *getInt64Ty(LLVMContext &C);
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Type *) { return true; }
@@ -459,7 +483,6 @@ template <> inline bool isa_impl<PointerType, Type>(const Type &Ty) {
   return Ty.getTypeID() == Type::PointerTyID;
 }
 
-std::ostream &operator<<(std::ostream &OS, const Type &T);
 raw_ostream &operator<<(raw_ostream &OS, const Type &T);
 
 } // End llvm namespace

@@ -19,10 +19,9 @@
 #include "ARMSubtarget.h"
 #include "llvm/Function.h"
 #include "llvm/CodeGen/JITCodeEmitter.h"
-#include "llvm/Config/alloca.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Streams.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Memory.h"
 #include <cstdlib>
 using namespace llvm;
@@ -46,11 +45,11 @@ static TargetJITInfo::JITCompilerFn JITCompilerFunction;
 // CompilationCallback stub - We can't use a C function with inline assembly in
 // it, because we the prolog/epilog inserted by GCC won't work for us (we need
 // to preserve more context and manipulate the stack directly).  Instead,
-// write our own wrapper, which does things our way, so we have complete 
+// write our own wrapper, which does things our way, so we have complete
 // control over register saving and restoring.
 extern "C" {
 #if defined(__arm__)
-  void ARMCompilationCallback(void);
+  void ARMCompilationCallback();
   asm(
     ".text\n"
     ".align 2\n"
@@ -78,11 +77,11 @@ extern "C" {
     // order for the registers.
     //      +--------+
     //   0  | LR     | Original return address
-    //      +--------+    
+    //      +--------+
     //   1  | LR     | Stub address (start of stub)
     // 2-5  | R3..R0 | Saved registers (we need to preserve all regs)
     // 6-20 | D0..D7 | Saved VFP registers
-    //      +--------+    
+    //      +--------+
     //
 #ifndef __SOFTFP__
     // Restore VFP caller-saved registers.
@@ -104,14 +103,14 @@ extern "C" {
       );
 #else  // Not an ARM host
   void ARMCompilationCallback() {
-    LLVM_UNREACHABLE("Cannot call ARMCompilationCallback() on a non-ARM arch!\n");
+    llvm_unreachable("Cannot call ARMCompilationCallback() on a non-ARM arch!");
   }
 #endif
 }
 
-/// ARMCompilationCallbackC - This is the target-specific function invoked 
-/// by the function stub when we did not know the real target of a call.  
-/// This function must locate the start of the stub or call site and pass 
+/// ARMCompilationCallbackC - This is the target-specific function invoked
+/// by the function stub when we did not know the real target of a call.
+/// This function must locate the start of the stub or call site and pass
 /// it into the JIT compiler function.
 extern "C" void ARMCompilationCallbackC(intptr_t StubAddr) {
   // Get the address of the compiled code for this function.
@@ -123,12 +122,12 @@ extern "C" void ARMCompilationCallbackC(intptr_t StubAddr) {
   //   ldr pc, [pc,#-4]
   //   <addr>
   if (!sys::Memory::setRangeWritable((void*)StubAddr, 8)) {
-    LLVM_UNREACHABLE("ERROR: Unable to mark stub writable");
+    llvm_unreachable("ERROR: Unable to mark stub writable");
   }
   *(intptr_t *)StubAddr = 0xe51ff004;  // ldr pc, [pc, #-4]
   *(intptr_t *)(StubAddr+4) = NewVal;
   if (!sys::Memory::setRangeExecutable((void*)StubAddr, 8)) {
-    LLVM_UNREACHABLE("ERROR: Unable to mark stub executable");
+    llvm_unreachable("ERROR: Unable to mark stub executable");
   }
 }
 
@@ -159,12 +158,12 @@ void *ARMJITInfo::emitFunctionStub(const Function* F, void *Fn,
       if (!LazyPtr) {
         // In PIC mode, the function stub is loading a lazy-ptr.
         LazyPtr= (intptr_t)emitGlobalValueIndirectSym((GlobalValue*)F, Fn, JCE);
-        if (F)
-          DOUT << "JIT: Indirect symbol emitted at [" << LazyPtr << "] for GV '"
-               << F->getName() << "'\n";
-        else
-          DOUT << "JIT: Stub emitted at [" << LazyPtr
-               << "] for external function at '" << Fn << "'\n";
+        DEBUG(if (F)
+                errs() << "JIT: Indirect symbol emitted at [" << LazyPtr
+                       << "] for GV '" << F->getName() << "'\n";
+              else
+                errs() << "JIT: Stub emitted at [" << LazyPtr
+                       << "] for external function at '" << Fn << "'\n");
       }
       JCE.startGVStub(F, 16, 4);
       intptr_t Addr = (intptr_t)JCE.getCurrentPCValue();
@@ -183,7 +182,7 @@ void *ARMJITInfo::emitFunctionStub(const Function* F, void *Fn,
     }
   } else {
     // The compilation callback will overwrite the first two words of this
-    // stub with indirect branch instructions targeting the compiled code. 
+    // stub with indirect branch instructions targeting the compiled code.
     // This stub sets the return address to restart the stub, so that
     // the new branch will be invoked when we come back.
     //

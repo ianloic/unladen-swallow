@@ -14,11 +14,13 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineRelocation.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/OutputBuffer.h"
 #include <vector>
@@ -33,7 +35,7 @@ MachOCodeEmitter::MachOCodeEmitter(MachOWriter &mow, MachOSection &mos) :
       ObjectCodeEmitter(&mos), MOW(mow), TM(MOW.TM) {
   is64Bit = TM.getTargetData()->getPointerSizeInBits() == 64;
   isLittleEndian = TM.getTargetData()->isLittleEndian();
-  TAI = TM.getTargetAsmInfo();
+  MAI = TM.getMCAsmInfo();
 }
 
 /// startFunction - This callback is invoked when a new machine function is
@@ -59,7 +61,7 @@ void MachOCodeEmitter::startFunction(MachineFunction &MF) {
 
   // Create symbol for function entry
   const GlobalValue *FuncV = MF.getFunction();
-  MachOSym FnSym(FuncV, MOW.Mang->getValueName(FuncV), MOS->Index, TAI);
+  MachOSym FnSym(FuncV, MOW.Mang->getMangledName(FuncV), MOS->Index, MAI);
   FnSym.n_value = getCurrentPCOffset();
 
   // add it to the symtab.
@@ -104,7 +106,7 @@ bool MachOCodeEmitter::finishFunction(MachineFunction &MF) {
       // FIXME: This should be a set or something that uniques
       MOW.PendingGlobals.push_back(MR.getGlobalValue());
     } else {
-      assert(0 && "Unhandled relocation type");
+      llvm_unreachable("Unhandled relocation type");
     }
     MOS->addRelocation(MR);
   }

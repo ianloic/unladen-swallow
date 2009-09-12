@@ -40,7 +40,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CompileOptions &compileOpts,
   : BlockModule(C, M, TD, Types, *this), Context(C),
     Features(C.getLangOptions()), CompileOpts(compileOpts), TheModule(M),
     TheTargetData(TD), Diags(diags), Types(C, M, TD), Runtime(0),
-    MemCpyFn(0), MemMoveFn(0), MemSetFn(0), CFConstantStringClassRef(0) {
+    MemCpyFn(0), MemMoveFn(0), MemSetFn(0), CFConstantStringClassRef(0),
+    VMContext(M.getContext()) {
 
   if (!Features.ObjC1)
     Runtime = 0;
@@ -61,6 +62,9 @@ CodeGenModule::~CodeGenModule() {
 }
 
 void CodeGenModule::Release() {
+  // We need to call this first because it can add deferred declarations.
+  EmitCXXGlobalInitFunc();
+
   EmitDeferred();
   if (Runtime)
     if (llvm::Function *ObjCInitFunction = Runtime->ModuleInitFunction())
@@ -195,21 +199,22 @@ void CodeGenModule::AddGlobalDtor(llvm::Function * Dtor, int Priority) {
 void CodeGenModule::EmitCtorList(const CtorList &Fns, const char *GlobalName) {
   // Ctor function type is void()*.
   llvm::FunctionType* CtorFTy =
-    llvm::FunctionType::get(llvm::Type::VoidTy, 
+    llvm::FunctionType::get(llvm::Type::getVoidTy(VMContext), 
                             std::vector<const llvm::Type*>(),
                             false);
   llvm::Type *CtorPFTy = llvm::PointerType::getUnqual(CtorFTy);
 
   // Get the type of a ctor entry, { i32, void ()* }.
   llvm::StructType* CtorStructTy = 
-    llvm::StructType::get(llvm::Type::Int32Ty, 
+    llvm::StructType::get(VMContext, llvm::Type::getInt32Ty(VMContext), 
                           llvm::PointerType::getUnqual(CtorFTy), NULL);
 
   // Construct the constructor and destructor arrays.
   std::vector<llvm::Constant*> Ctors;
   for (CtorList::const_iterator I = Fns.begin(), E = Fns.end(); I != E; ++I) {
     std::vector<llvm::Constant*> S;
-    S.push_back(llvm::ConstantInt::get(llvm::Type::Int32Ty, I->second, false));
+    S.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 
+                I->second, false));
     S.push_back(llvm::ConstantExpr::getBitCast(I->first, CtorPFTy));
     Ctors.push_back(llvm::ConstantStruct::get(CtorStructTy, S));
   }
@@ -355,7 +360,7 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   if (D->hasAttr<AlwaysInlineAttr>())
     F->addFnAttr(llvm::Attribute::AlwaysInline);
   
-  if (D->hasAttr<NoinlineAttr>())
+  if (D->hasAttr<NoInlineAttr>())
     F->addFnAttr(llvm::Attribute::NoInline);
 }
 
@@ -413,23 +418,21 @@ void CodeGenModule::AddUsedGlobal(llvm::GlobalValue *GV) {
 
 void CodeGenModule::EmitLLVMUsed() {
   // Don't create llvm.used if there is no need.
-  // FIXME. Runtime indicates that there might be more 'used' symbols; but not
-  // necessariy. So, this test is not accurate for emptiness.
-  if (LLVMUsed.empty() && !Runtime)
+  if (LLVMUsed.empty())
     return;
 
-  llvm::Type *i8PTy = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
+  llvm::Type *i8PTy =
+      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
   
   // Convert LLVMUsed to what ConstantArray needs.
   std::vector<llvm::Constant*> UsedArray;
   UsedArray.resize(LLVMUsed.size());
   for (unsigned i = 0, e = LLVMUsed.size(); i != e; ++i) {
     UsedArray[i] = 
-     llvm::ConstantExpr::getBitCast(cast<llvm::Constant>(&*LLVMUsed[i]), i8PTy);
+     llvm::ConstantExpr::getBitCast(cast<llvm::Constant>(&*LLVMUsed[i]), 
+                                      i8PTy);
   }
   
-  if (Runtime)
-    Runtime->MergeMetadataGlobals(UsedArray);
   if (UsedArray.empty())
     return;
   llvm::ArrayType *ATy = llvm::ArrayType::get(i8PTy, UsedArray.size());
@@ -484,32 +487,34 @@ llvm::Constant *CodeGenModule::EmitAnnotateAttr(llvm::GlobalValue *GV,
 
   // get [N x i8] constants for the annotation string, and the filename string
   // which are the 2nd and 3rd elements of the global annotation structure.
-  const llvm::Type *SBP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
-  llvm::Constant *anno = llvm::ConstantArray::get(AA->getAnnotation(), true);
-  llvm::Constant *unit = llvm::ConstantArray::get(M->getModuleIdentifier(),
+  const llvm::Type *SBP =
+      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+  llvm::Constant *anno = llvm::ConstantArray::get(VMContext, 
+                                                  AA->getAnnotation(), true);
+  llvm::Constant *unit = llvm::ConstantArray::get(VMContext,
+                                                  M->getModuleIdentifier(),
                                                   true);
 
   // Get the two global values corresponding to the ConstantArrays we just
   // created to hold the bytes of the strings.
-  const char *StringPrefix = getContext().Target.getStringSymbolPrefix(true);
   llvm::GlobalValue *annoGV = 
-  new llvm::GlobalVariable(*M, anno->getType(), false,
-                           llvm::GlobalValue::InternalLinkage, anno,
-                           GV->getName() + StringPrefix);
+    new llvm::GlobalVariable(*M, anno->getType(), false,
+                             llvm::GlobalValue::PrivateLinkage, anno,
+                             GV->getName());
   // translation unit name string, emitted into the llvm.metadata section.
   llvm::GlobalValue *unitGV =
-  new llvm::GlobalVariable(*M, unit->getType(), false,
-                           llvm::GlobalValue::InternalLinkage, unit, 
-                           StringPrefix);
+    new llvm::GlobalVariable(*M, unit->getType(), false,
+                             llvm::GlobalValue::PrivateLinkage, unit, 
+                             ".str");
 
   // Create the ConstantStruct for the global annotation.
   llvm::Constant *Fields[4] = {
     llvm::ConstantExpr::getBitCast(GV, SBP),
     llvm::ConstantExpr::getBitCast(annoGV, SBP),
     llvm::ConstantExpr::getBitCast(unitGV, SBP),
-    llvm::ConstantInt::get(llvm::Type::Int32Ty, LineNo)
+    llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), LineNo)
   };
-  return llvm::ConstantStruct::get(Fields, 4, false);
+  return llvm::ConstantStruct::get(VMContext, Fields, 4, false);
 }
 
 bool CodeGenModule::MayDeferGeneration(const ValueDecl *Global) {
@@ -642,6 +647,21 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(const char *MangledName,
     // top-level declarations.
     if (FD->isThisDeclarationADefinition() && MayDeferGeneration(FD))
       DeferredDeclsToEmit.push_back(D);
+    // A called constructor which has no definition or declaration need be
+    // synthesized.
+    else if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+      const CXXRecordDecl *ClassDecl = 
+        cast<CXXRecordDecl>(CD->getDeclContext());
+      if (CD->isCopyConstructor(getContext()))
+        DeferredCopyConstructorToEmit(D);
+      else if (!ClassDecl->hasUserDeclaredConstructor())
+        DeferredDeclsToEmit.push_back(D);
+    }
+    else if (isa<CXXDestructorDecl>(FD)) 
+       DeferredDestructorToEmit(D);
+    else if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD))
+           if (MD->isCopyAssignment())
+             DeferredCopyAssignmentToEmit(D);
   }
   
   // This function doesn't have a complete type (for example, the return
@@ -649,7 +669,7 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(const char *MangledName,
   // sure not to try to set attributes.
   bool IsIncompleteFunction = false;
   if (!isa<llvm::FunctionType>(Ty)) {
-    Ty = llvm::FunctionType::get(llvm::Type::VoidTy,
+    Ty = llvm::FunctionType::get(llvm::Type::getVoidTy(VMContext),
                                  std::vector<const llvm::Type*>(), false);
     IsIncompleteFunction = true;
   }
@@ -663,6 +683,126 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(const char *MangledName,
   Entry = F;
   return F;
 }
+
+/// Defer definition of copy constructor(s) which need be implicitly defined.
+void CodeGenModule::DeferredCopyConstructorToEmit(GlobalDecl CopyCtorDecl) {
+  const CXXConstructorDecl *CD = 
+    cast<CXXConstructorDecl>(CopyCtorDecl.getDecl());
+  const CXXRecordDecl *ClassDecl = cast<CXXRecordDecl>(CD->getDeclContext());
+  if (ClassDecl->hasTrivialCopyConstructor() ||
+      ClassDecl->hasUserDeclaredCopyConstructor())
+    return;
+  
+  // First make sure all direct base classes and virtual bases and non-static
+  // data mebers which need to have their copy constructors implicitly defined
+  // are defined. 12.8.p7
+  for (CXXRecordDecl::base_class_const_iterator Base = ClassDecl->bases_begin();
+       Base != ClassDecl->bases_end(); ++Base) {
+    CXXRecordDecl *BaseClassDecl
+      = cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
+    if (CXXConstructorDecl *BaseCopyCtor = 
+        BaseClassDecl->getCopyConstructor(Context, 0))
+      GetAddrOfCXXConstructor(BaseCopyCtor, Ctor_Complete);
+  }
+  
+  for (CXXRecordDecl::field_iterator Field = ClassDecl->field_begin(),
+       FieldEnd = ClassDecl->field_end();
+       Field != FieldEnd; ++Field) {
+    QualType FieldType = Context.getCanonicalType((*Field)->getType());
+    if (const ArrayType *Array = Context.getAsArrayType(FieldType))
+      FieldType = Array->getElementType();
+    if (const RecordType *FieldClassType = FieldType->getAs<RecordType>()) {
+      if ((*Field)->isAnonymousStructOrUnion())
+        continue;
+      CXXRecordDecl *FieldClassDecl
+        = cast<CXXRecordDecl>(FieldClassType->getDecl());
+      if (CXXConstructorDecl *FieldCopyCtor = 
+          FieldClassDecl->getCopyConstructor(Context, 0))
+        GetAddrOfCXXConstructor(FieldCopyCtor, Ctor_Complete);
+    }
+  }
+  DeferredDeclsToEmit.push_back(CopyCtorDecl);
+}
+
+/// Defer definition of copy assignments which need be implicitly defined.
+void CodeGenModule::DeferredCopyAssignmentToEmit(GlobalDecl CopyAssignDecl) {
+  const CXXMethodDecl *CD = cast<CXXMethodDecl>(CopyAssignDecl.getDecl());
+  const CXXRecordDecl *ClassDecl = cast<CXXRecordDecl>(CD->getDeclContext());
+  
+  if (ClassDecl->hasTrivialCopyAssignment() ||
+      ClassDecl->hasUserDeclaredCopyAssignment())
+    return;
+  
+  // First make sure all direct base classes and virtual bases and non-static
+  // data mebers which need to have their copy assignments implicitly defined
+  // are defined. 12.8.p12
+  for (CXXRecordDecl::base_class_const_iterator Base = ClassDecl->bases_begin();
+       Base != ClassDecl->bases_end(); ++Base) {
+    CXXRecordDecl *BaseClassDecl
+      = cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
+    const CXXMethodDecl *MD = 0;
+    if (!BaseClassDecl->hasTrivialCopyAssignment() &&
+        !BaseClassDecl->hasUserDeclaredCopyAssignment() &&
+        BaseClassDecl->hasConstCopyAssignment(getContext(), MD))
+      GetAddrOfFunction(GlobalDecl(MD), 0);
+  }
+  
+  for (CXXRecordDecl::field_iterator Field = ClassDecl->field_begin(),
+       FieldEnd = ClassDecl->field_end();
+       Field != FieldEnd; ++Field) {
+    QualType FieldType = Context.getCanonicalType((*Field)->getType());
+    if (const ArrayType *Array = Context.getAsArrayType(FieldType))
+      FieldType = Array->getElementType();
+    if (const RecordType *FieldClassType = FieldType->getAs<RecordType>()) {
+      if ((*Field)->isAnonymousStructOrUnion())
+        continue;
+      CXXRecordDecl *FieldClassDecl
+        = cast<CXXRecordDecl>(FieldClassType->getDecl());
+      const CXXMethodDecl *MD = 0;
+      if (!FieldClassDecl->hasTrivialCopyAssignment() &&
+          !FieldClassDecl->hasUserDeclaredCopyAssignment() &&
+          FieldClassDecl->hasConstCopyAssignment(getContext(), MD))
+          GetAddrOfFunction(GlobalDecl(MD), 0);
+    }
+  }
+  DeferredDeclsToEmit.push_back(CopyAssignDecl);  
+}
+
+void CodeGenModule::DeferredDestructorToEmit(GlobalDecl DtorDecl) {
+  const CXXDestructorDecl *DD = cast<CXXDestructorDecl>(DtorDecl.getDecl());
+  const CXXRecordDecl *ClassDecl = cast<CXXRecordDecl>(DD->getDeclContext());
+  if (ClassDecl->hasTrivialDestructor() ||
+      ClassDecl->hasUserDeclaredDestructor())
+    return;
+
+  for (CXXRecordDecl::base_class_const_iterator Base = ClassDecl->bases_begin();
+       Base != ClassDecl->bases_end(); ++Base) {
+    CXXRecordDecl *BaseClassDecl
+      = cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
+    if (const CXXDestructorDecl *BaseDtor = 
+          BaseClassDecl->getDestructor(Context))
+      GetAddrOfCXXDestructor(BaseDtor, Dtor_Complete);
+  }
+ 
+  for (CXXRecordDecl::field_iterator Field = ClassDecl->field_begin(),
+       FieldEnd = ClassDecl->field_end();
+       Field != FieldEnd; ++Field) {
+    QualType FieldType = Context.getCanonicalType((*Field)->getType());
+    if (const ArrayType *Array = Context.getAsArrayType(FieldType))
+      FieldType = Array->getElementType();
+    if (const RecordType *FieldClassType = FieldType->getAs<RecordType>()) {
+      if ((*Field)->isAnonymousStructOrUnion())
+        continue;
+      CXXRecordDecl *FieldClassDecl
+        = cast<CXXRecordDecl>(FieldClassType->getDecl());
+      if (const CXXDestructorDecl *FieldDtor = 
+            FieldClassDecl->getDestructor(Context))
+        GetAddrOfCXXDestructor(FieldDtor, Dtor_Complete);
+    }
+  }
+  DeferredDeclsToEmit.push_back(DtorDecl);
+}
+
 
 /// GetAddrOfFunction - Return the address of the given function.  If Ty is
 /// non-null, then this function will use the specified type if it has to
@@ -804,13 +944,19 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
     // exists. A use may still exists, however, so we still may need
     // to do a RAUW.
     assert(!ASTTy->isIncompleteType() && "Unexpected incomplete type");
-    Init = llvm::Constant::getNullValue(getTypes().ConvertTypeForMem(ASTTy));
+    Init = EmitNullConstant(D->getType());
   } else {
     Init = EmitConstantExpr(D->getInit(), D->getType());
+    
     if (!Init) {
-      ErrorUnsupported(D, "static initializer");
       QualType T = D->getInit()->getType();
-      Init = llvm::UndefValue::get(getTypes().ConvertType(T));
+      if (getLangOptions().CPlusPlus) {
+        CXXGlobalInits.push_back(D);
+        Init = EmitNullConstant(T);
+      } else {
+        ErrorUnsupported(D, "static initializer");
+        Init = llvm::UndefValue::get(getTypes().ConvertType(T));
+      }
     }
   }
 
@@ -819,7 +965,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   
   // Strip off a bitcast if we got one back.
   if (llvm::ConstantExpr *CE = dyn_cast<llvm::ConstantExpr>(Entry)) {
-    assert(CE->getOpcode() == llvm::Instruction::BitCast);
+    assert(CE->getOpcode() == llvm::Instruction::BitCast ||
+           // all zero index gep.
+           CE->getOpcode() == llvm::Instruction::GetElementPtr);
     Entry = CE->getOperand(0);
   }
   
@@ -862,7 +1010,15 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   }
 
   GV->setInitializer(Init);
-  GV->setConstant(D->getType().isConstant(Context));
+
+  // If it is safe to mark the global 'constant', do so now.
+  GV->setConstant(false);
+  if (D->getType().isConstant(Context)) {
+    // FIXME: In C++, if the variable has a non-trivial ctor/dtor or any mutable
+    // members, it cannot be declared "LLVM const".
+    GV->setConstant(true);
+  }
+  
   GV->setAlignment(getContext().getDeclAlignInBytes(D));
 
   // Set the llvm linkage type as appropriate.
@@ -872,12 +1028,18 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
     GV->setLinkage(llvm::Function::DLLImportLinkage);
   else if (D->hasAttr<DLLExportAttr>())
     GV->setLinkage(llvm::Function::DLLExportLinkage);
-  else if (D->hasAttr<WeakAttr>())
-    GV->setLinkage(llvm::GlobalVariable::WeakAnyLinkage);
-  else if (!CompileOpts.NoCommon &&
-           (!D->hasExternalStorage() && !D->getInit()))
+  else if (D->hasAttr<WeakAttr>()) {
+    if (GV->isConstant())
+      GV->setLinkage(llvm::GlobalVariable::WeakODRLinkage);
+    else
+      GV->setLinkage(llvm::GlobalVariable::WeakAnyLinkage);
+  } else if (!CompileOpts.NoCommon &&
+           !D->hasExternalStorage() && !D->getInit() &&
+           !D->getAttr<SectionAttr>()) {
     GV->setLinkage(llvm::GlobalVariable::CommonLinkage);
-  else
+    // common vars aren't constant even if declared const.
+    GV->setConstant(false);
+  } else
     GV->setLinkage(llvm::GlobalVariable::ExternalLinkage);
 
   SetCommonAttributes(D, GV);
@@ -941,7 +1103,7 @@ static void ReplaceUsesOfNonProtoTypeWithRealFunction(llvm::GlobalValue *Old,
     llvm::CallInst *NewCall = llvm::CallInst::Create(NewFn, ArgList.begin(),
                                                      ArgList.end(), "", CI);
     ArgList.clear();
-    if (NewCall->getType() != llvm::Type::VoidTy)
+    if (NewCall->getType() != llvm::Type::getVoidTy(Old->getContext()))
       NewCall->takeName(CI);
     NewCall->setCallingConv(CI->getCallingConv());
     NewCall->setAttributes(CI->getAttributes());
@@ -1148,180 +1310,166 @@ llvm::Function *CodeGenModule::getIntrinsic(unsigned IID,const llvm::Type **Tys,
 
 llvm::Function *CodeGenModule::getMemCpyFn() {
   if (MemCpyFn) return MemCpyFn;
-  const llvm::Type *IntPtr = TheTargetData.getIntPtrType();
+  const llvm::Type *IntPtr = TheTargetData.getIntPtrType(VMContext);
   return MemCpyFn = getIntrinsic(llvm::Intrinsic::memcpy, &IntPtr, 1);
 }
 
 llvm::Function *CodeGenModule::getMemMoveFn() {
   if (MemMoveFn) return MemMoveFn;
-  const llvm::Type *IntPtr = TheTargetData.getIntPtrType();
+  const llvm::Type *IntPtr = TheTargetData.getIntPtrType(VMContext);
   return MemMoveFn = getIntrinsic(llvm::Intrinsic::memmove, &IntPtr, 1);
 }
 
 llvm::Function *CodeGenModule::getMemSetFn() {
   if (MemSetFn) return MemSetFn;
-  const llvm::Type *IntPtr = TheTargetData.getIntPtrType();
+  const llvm::Type *IntPtr = TheTargetData.getIntPtrType(VMContext);
   return MemSetFn = getIntrinsic(llvm::Intrinsic::memset, &IntPtr, 1);
 }
 
-static void appendFieldAndPadding(CodeGenModule &CGM,
-                                  std::vector<llvm::Constant*>& Fields,
-                                  FieldDecl *FieldD, FieldDecl *NextFieldD,
-                                  llvm::Constant* Field,
-                                  RecordDecl* RD, const llvm::StructType *STy) {
-  // Append the field.
-  Fields.push_back(Field);
-  
-  int StructFieldNo = CGM.getTypes().getLLVMFieldNo(FieldD);
-  
-  int NextStructFieldNo;
-  if (!NextFieldD) {
-    NextStructFieldNo = STy->getNumElements();
-  } else {
-    NextStructFieldNo = CGM.getTypes().getLLVMFieldNo(NextFieldD);
+static llvm::StringMapEntry<llvm::Constant*> &
+GetConstantCFStringEntry(llvm::StringMap<llvm::Constant*> &Map,
+                         const StringLiteral *Literal,
+                         bool TargetIsLSB,
+                         bool &IsUTF16,
+                         unsigned &StringLength) {
+  unsigned NumBytes = Literal->getByteLength();
+
+  // Check for simple case.
+  if (!Literal->containsNonAsciiOrNull()) {
+    StringLength = NumBytes;
+    return Map.GetOrCreateValue(llvm::StringRef(Literal->getStrData(), 
+                                                StringLength));
   }
+
+  // Otherwise, convert the UTF8 literals into a byte string.
+  llvm::SmallVector<UTF16, 128> ToBuf(NumBytes);
+  const UTF8 *FromPtr = (UTF8 *)Literal->getStrData();
+  UTF16 *ToPtr = &ToBuf[0];
+        
+  ConversionResult Result = ConvertUTF8toUTF16(&FromPtr, FromPtr + NumBytes, 
+                                               &ToPtr, ToPtr + NumBytes,
+                                               strictConversion);
   
-  // Append padding
-  for (int i = StructFieldNo + 1; i < NextStructFieldNo; i++) {
-    llvm::Constant *C = 
-      llvm::Constant::getNullValue(STy->getElementType(StructFieldNo + 1));
-    
-    Fields.push_back(C);
+  // Check for conversion failure.
+  if (Result != conversionOK) {
+    // FIXME: Have Sema::CheckObjCString() validate the UTF-8 string and remove
+    // this duplicate code.
+    assert(Result == sourceIllegal && "UTF-8 to UTF-16 conversion failed");
+    StringLength = NumBytes;
+    return Map.GetOrCreateValue(llvm::StringRef(Literal->getStrData(), 
+                                                StringLength));
   }
+
+  // ConvertUTF8toUTF16 returns the length in ToPtr.
+  StringLength = ToPtr - &ToBuf[0];
+
+  // Render the UTF-16 string into a byte array and convert to the target byte
+  // order.
+  //
+  // FIXME: This isn't something we should need to do here.
+  llvm::SmallString<128> AsBytes;
+  AsBytes.reserve(StringLength * 2);
+  for (unsigned i = 0; i != StringLength; ++i) {
+    unsigned short Val = ToBuf[i];
+    if (TargetIsLSB) {
+      AsBytes.push_back(Val & 0xFF);
+      AsBytes.push_back(Val >> 8);
+    } else {
+      AsBytes.push_back(Val >> 8);
+      AsBytes.push_back(Val & 0xFF);
+    }
+  }
+  // Append one extra null character, the second is automatically added by our
+  // caller.
+  AsBytes.push_back(0);
+
+  IsUTF16 = true;
+  return Map.GetOrCreateValue(llvm::StringRef(AsBytes.data(), AsBytes.size()));
 }
 
-llvm::Constant *CodeGenModule::
-GetAddrOfConstantCFString(const StringLiteral *Literal) {
-  std::string str;
+llvm::Constant *
+CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   unsigned StringLength = 0;
-  
   bool isUTF16 = false;
-  if (Literal->containsNonAsciiOrNull()) {
-    // Convert from UTF-8 to UTF-16.
-    llvm::SmallVector<UTF16, 128> ToBuf(Literal->getByteLength());
-    const UTF8 *FromPtr = (UTF8 *)Literal->getStrData();
-    UTF16 *ToPtr = &ToBuf[0];
-        
-    ConversionResult Result;
-    Result = ConvertUTF8toUTF16(&FromPtr, FromPtr+Literal->getByteLength(),
-                                &ToPtr, ToPtr+Literal->getByteLength(),
-                                strictConversion);
-    if (Result == conversionOK) {
-      // FIXME: Storing UTF-16 in a C string is a hack to test Unicode strings
-      // without doing more surgery to this routine. Since we aren't explicitly
-      // checking for endianness here, it's also a bug (when generating code for
-      // a target that doesn't match the host endianness). Modeling this as an
-      // i16 array is likely the cleanest solution.
-      StringLength = ToPtr-&ToBuf[0];
-      str.assign((char *)&ToBuf[0], StringLength*2);// Twice as many UTF8 chars.
-      isUTF16 = true;
-    } else if (Result == sourceIllegal) {
-      // FIXME: Have Sema::CheckObjCString() validate the UTF-8 string.
-      str.assign(Literal->getStrData(), Literal->getByteLength());
-      StringLength = str.length();
-    } else
-      assert(Result == conversionOK && "UTF-8 to UTF-16 conversion failed");
-    
-  } else {
-    str.assign(Literal->getStrData(), Literal->getByteLength());
-    StringLength = str.length();
-  }
-  llvm::StringMapEntry<llvm::Constant *> &Entry = 
-    CFConstantStringMap.GetOrCreateValue(&str[0], &str[str.length()]);
+  llvm::StringMapEntry<llvm::Constant*> &Entry =
+    GetConstantCFStringEntry(CFConstantStringMap, Literal, 
+                             getTargetData().isLittleEndian(),
+                             isUTF16, StringLength);
   
   if (llvm::Constant *C = Entry.getValue())
     return C;
   
-  llvm::Constant *Zero = llvm::Constant::getNullValue(llvm::Type::Int32Ty);
+  llvm::Constant *Zero =
+      llvm::Constant::getNullValue(llvm::Type::getInt32Ty(VMContext));
   llvm::Constant *Zeros[] = { Zero, Zero };
   
+  // If we don't already have it, get __CFConstantStringClassReference.
   if (!CFConstantStringClassRef) {
     const llvm::Type *Ty = getTypes().ConvertType(getContext().IntTy);
     Ty = llvm::ArrayType::get(Ty, 0);
-
-    // FIXME: This is fairly broken if __CFConstantStringClassReference is
-    // already defined, in that it will get renamed and the user will most
-    // likely see an opaque error message. This is a general issue with relying
-    // on particular names.
-    llvm::GlobalVariable *GV = 
-      new llvm::GlobalVariable(getModule(), Ty, false,
-                               llvm::GlobalVariable::ExternalLinkage, 0, 
-                               "__CFConstantStringClassReference");
-    
+    llvm::Constant *GV = CreateRuntimeVariable(Ty, 
+                                           "__CFConstantStringClassReference");
     // Decay array -> ptr
     CFConstantStringClassRef =
       llvm::ConstantExpr::getGetElementPtr(GV, Zeros, 2);
   }
   
   QualType CFTy = getContext().getCFConstantStringType();
-  RecordDecl *CFRD = CFTy->getAsRecordType()->getDecl();
 
   const llvm::StructType *STy = 
     cast<llvm::StructType>(getTypes().ConvertType(CFTy));
 
-  std::vector<llvm::Constant*> Fields;
-  RecordDecl::field_iterator Field = CFRD->field_begin();
+  std::vector<llvm::Constant*> Fields(4);
 
   // Class pointer.
-  FieldDecl *CurField = *Field++;
-  FieldDecl *NextField = *Field++;
-  appendFieldAndPadding(*this, Fields, CurField, NextField,
-                        CFConstantStringClassRef, CFRD, STy);
+  Fields[0] = CFConstantStringClassRef;
   
   // Flags.
-  CurField = NextField;
-  NextField = *Field++;
   const llvm::Type *Ty = getTypes().ConvertType(getContext().UnsignedIntTy);
-  appendFieldAndPadding(*this, Fields, CurField, NextField,
-                        isUTF16 ? llvm::ConstantInt::get(Ty, 0x07d0)
-                                : llvm::ConstantInt::get(Ty, 0x07C8), 
-                        CFRD, STy);
-    
+  Fields[1] = isUTF16 ? llvm::ConstantInt::get(Ty, 0x07d0) : 
+    llvm::ConstantInt::get(Ty, 0x07C8);
+
   // String pointer.
-  CurField = NextField;
-  NextField = *Field++;
-  llvm::Constant *C = llvm::ConstantArray::get(str);
+  llvm::Constant *C = llvm::ConstantArray::get(VMContext, Entry.getKey().str());
 
   const char *Sect, *Prefix;
   bool isConstant;
+  llvm::GlobalValue::LinkageTypes Linkage;
   if (isUTF16) {
     Prefix = getContext().Target.getUnicodeStringSymbolPrefix();
     Sect = getContext().Target.getUnicodeStringSection();
+    // FIXME: why do utf strings get "l" labels instead of "L" labels?
+    Linkage = llvm::GlobalValue::InternalLinkage;
     // FIXME: Why does GCC not set constant here?
     isConstant = false;
   } else {
-    Prefix = getContext().Target.getStringSymbolPrefix(true);
+    Prefix = ".str";
     Sect = getContext().Target.getCFStringDataSection();
+    Linkage = llvm::GlobalValue::PrivateLinkage;
     // FIXME: -fwritable-strings should probably affect this, but we
     // are following gcc here.
     isConstant = true;
   }
   llvm::GlobalVariable *GV = 
     new llvm::GlobalVariable(getModule(), C->getType(), isConstant, 
-                             llvm::GlobalValue::InternalLinkage,
-                             C, Prefix);
+                             Linkage, C, Prefix);
   if (Sect)
     GV->setSection(Sect);
   if (isUTF16) {
     unsigned Align = getContext().getTypeAlign(getContext().ShortTy)/8;
     GV->setAlignment(Align); 
   }
-  appendFieldAndPadding(*this, Fields, CurField, NextField,
-                        llvm::ConstantExpr::getGetElementPtr(GV, Zeros, 2),
-                        CFRD, STy);
-  
+  Fields[2] = llvm::ConstantExpr::getGetElementPtr(GV, Zeros, 2);
+
   // String length.
-  CurField = NextField;
-  NextField = 0;
   Ty = getTypes().ConvertType(getContext().LongTy);
-  appendFieldAndPadding(*this, Fields, CurField, NextField,
-                        llvm::ConstantInt::get(Ty, StringLength), CFRD, STy);
+  Fields[3] = llvm::ConstantInt::get(Ty, StringLength);
   
   // The struct.
   C = llvm::ConstantStruct::get(STy, Fields);
   GV = new llvm::GlobalVariable(getModule(), C->getType(), true, 
-                                llvm::GlobalVariable::InternalLinkage, C, 
-                                getContext().Target.getCFStringSymbolPrefix());
+                                llvm::GlobalVariable::PrivateLinkage, C, 
+                                "_unnamed_cfstring_");
   if (const char *Sect = getContext().Target.getCFStringSection())
     GV->setSection(Sect);
   Entry.setValue(GV);
@@ -1376,11 +1524,12 @@ static llvm::Constant *GenerateStringLiteral(const std::string &str,
                                              CodeGenModule &CGM,
                                              const char *GlobalName) {
   // Create Constant for this string literal. Don't add a '\0'.
-  llvm::Constant *C = llvm::ConstantArray::get(str, false);
+  llvm::Constant *C =
+      llvm::ConstantArray::get(CGM.getLLVMContext(), str, false);
   
   // Create a global variable for this string
   return new llvm::GlobalVariable(CGM.getModule(), C->getType(), constant, 
-                                  llvm::GlobalValue::InternalLinkage,
+                                  llvm::GlobalValue::PrivateLinkage,
                                   C, GlobalName);
 }
 
@@ -1398,14 +1547,14 @@ llvm::Constant *CodeGenModule::GetAddrOfConstantString(const std::string &str,
 
   // Get the default prefix if a name wasn't specified.
   if (!GlobalName)
-    GlobalName = getContext().Target.getStringSymbolPrefix(IsConstant);
+    GlobalName = ".str";
 
   // Don't share any string literals if strings aren't constant.
   if (!IsConstant)
     return GenerateStringLiteral(str, false, *this, GlobalName);
   
   llvm::StringMapEntry<llvm::Constant *> &Entry = 
-  ConstantStringMap.GetOrCreateValue(&str[0], &str[str.length()]);
+    ConstantStringMap.GetOrCreateValue(&str[0], &str[str.length()]);
 
   if (Entry.getValue())
     return Entry.getValue();
@@ -1461,7 +1610,8 @@ void CodeGenModule::EmitNamespace(const NamespaceDecl *ND) {
 
 // EmitLinkageSpec - Emit all declarations in a linkage spec.
 void CodeGenModule::EmitLinkageSpec(const LinkageSpecDecl *LSD) {
-  if (LSD->getLanguage() != LinkageSpecDecl::lang_c) {
+  if (LSD->getLanguage() != LinkageSpecDecl::lang_c &&
+      LSD->getLanguage() != LinkageSpecDecl::lang_cxx) {
     ErrorUnsupported(LSD, "linkage spec");
     return;
   }
@@ -1484,6 +1634,7 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
     return;
   
   switch (D->getKind()) {
+  case Decl::CXXConversion:
   case Decl::CXXMethod:
   case Decl::Function:
     // Skip function templates

@@ -1,4 +1,4 @@
-//===--- Program.h - Entity originator and misc -----------------*- C++ -*-===//
+//===--- Program.cpp - Entity originator and misc -------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,7 +13,7 @@
 
 #include "clang/Index/Program.h"
 #include "ProgramImpl.h"
-#include "clang/Index/EntityHandler.h"
+#include "clang/Index/Handlers.h"
 #include "clang/Index/TranslationUnit.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/ASTContext.h"
@@ -22,7 +22,6 @@ using namespace clang;
 using namespace idx;
 
 // Out-of-line to give the virtual tables a home.
-EntityHandler::~EntityHandler() { }
 TranslationUnit::~TranslationUnit() { }
 
 Program::Program() : Impl(new ProgramImpl()) { }
@@ -31,18 +30,21 @@ Program::~Program() {
   delete static_cast<ProgramImpl *>(Impl);
 }
 
-static void FindEntitiesInDC(DeclContext *DC, Program &Prog, EntityHandler *Handler) {
+static void FindEntitiesInDC(DeclContext *DC, Program &Prog,
+                             EntityHandler &Handler) {
   for (DeclContext::decl_iterator
          I = DC->decls_begin(), E = DC->decls_end(); I != E; ++I) {
-    Entity *Ent = Entity::get(*I, Prog);
-    if (Ent)
-      Handler->HandleEntity(Ent);
+    if (I->getLocation().isInvalid())
+      continue;
+    Entity Ent = Entity::get(*I, Prog);
+    if (Ent.isValid())
+      Handler.Handle(Ent);
     if (DeclContext *SubDC = dyn_cast<DeclContext>(*I))
       FindEntitiesInDC(SubDC, Prog, Handler);
   }
 }
 
 /// \brief Traverses the AST and passes all the entities to the Handler.
-void Program::FindEntities(ASTContext &Ctx, EntityHandler *Handler) {
+void Program::FindEntities(ASTContext &Ctx, EntityHandler &Handler) {
   FindEntitiesInDC(Ctx.getTranslationUnitDecl(), *this, Handler);
 }

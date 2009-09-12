@@ -14,6 +14,9 @@
 #ifndef LLVM_CLANG_AST_ATTR_H
 #define LLVM_CLANG_AST_ATTR_H
 
+#include "llvm/Support/Casting.h"
+using llvm::dyn_cast;
+
 #include <cassert>
 #include <cstring>
 #include <string>
@@ -59,17 +62,19 @@ public:
     FormatArg,
     GNUInline,
     IBOutletKind, // Clang-specific.  Use "Kind" suffix to not conflict with
+    Malloc,
+    NoDebug,
+    NoInline,
+    NonNull,
     NoReturn,
     NoThrow,
-    Nodebug,
-    Noinline,
-    NonNull,
     ObjCException,
     ObjCNSObject,
     CFReturnsRetained,   // Clang/Checker-specific.
     NSReturnsRetained,   // Clang/Checker-specific.
     Overloadable, // Clang-specific
     Packed,
+    PragmaPack,
     Pure,
     Regparm,
     ReqdWorkGroupSize,   // OpenCL-specific
@@ -119,6 +124,13 @@ public:
   const Attr *getNext() const { return Next; }
   void setNext(Attr *next) { Next = next; }
 
+  template<typename T> const T *getNext() const {
+    for (const Attr *attr = getNext(); attr; attr = attr->getNext())
+      if (const T *V = dyn_cast<T>(attr))
+        return V;
+    return 0;
+  }
+  
   bool isInherited() const { return Inherited; }
   void setInherited(bool value) { Inherited = value; }
 
@@ -146,24 +158,26 @@ public:                                                                 \
   static bool classof(const ATTR##Attr *A) { return true; }             \
 }
 
-class PackedAttr : public Attr {
+DEF_SIMPLE_ATTR(Packed);
+
+class PragmaPackAttr : public Attr {
   unsigned Alignment;
 
 public:
-  PackedAttr(unsigned alignment) : Attr(Packed), Alignment(alignment) {}
+  PragmaPackAttr(unsigned alignment) : Attr(PragmaPack), Alignment(alignment) {}
 
   /// getAlignment - The specified alignment in bits.
   unsigned getAlignment() const { return Alignment; }
 
   virtual Attr* clone(ASTContext &C) const { 
-    return ::new (C) PackedAttr(Alignment); 
+    return ::new (C) PragmaPackAttr(Alignment); 
   }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Attr *A) {
-    return A->getKind() == Packed;
+    return A->getKind() == PragmaPack;
   }
-  static bool classof(const PackedAttr *A) { return true; }
+  static bool classof(const PragmaPackAttr *A) { return true; }
 };
   
 class AlignedAttr : public Attr {
@@ -285,6 +299,7 @@ public:
   static bool classof(const IBOutletAttr *A) { return true; }
 };
 
+DEF_SIMPLE_ATTR(Malloc);
 DEF_SIMPLE_ATTR(NoReturn);
 DEF_SIMPLE_ATTR(AnalyzerNoReturn);  
 DEF_SIMPLE_ATTR(Deprecated);
@@ -481,9 +496,9 @@ public:
   static bool classof(const CleanupAttr *A) { return true; }
 };
 
-DEF_SIMPLE_ATTR(Nodebug);
+DEF_SIMPLE_ATTR(NoDebug);
 DEF_SIMPLE_ATTR(WarnUnusedResult);  
-DEF_SIMPLE_ATTR(Noinline);
+DEF_SIMPLE_ATTR(NoInline);
 
 class RegparmAttr : public Attr {
   unsigned NumParams;

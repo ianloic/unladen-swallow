@@ -17,7 +17,7 @@
 	%struct.metrics = type { i16, i16, i16, i16, i16 }
 	%struct.rec = type { %struct.head_type }
 
-define void @FontChange(i1 %foo) {
+define void @FontChange(i1 %foo) nounwind {
 entry:
 	br i1 %foo, label %bb298, label %bb49
 bb49:		; preds = %entry

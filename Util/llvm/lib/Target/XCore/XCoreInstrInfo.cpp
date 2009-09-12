@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "XCoreGenInstrInfo.inc"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace llvm {
 namespace XCore {
@@ -36,7 +37,7 @@ namespace XCore {
 
 using namespace llvm;
 
-XCoreInstrInfo::XCoreInstrInfo(void)
+XCoreInstrInfo::XCoreInstrInfo()
   : TargetInstrInfoImpl(XCoreInsts, array_lengthof(XCoreInsts)),
     RI(*this) {
 }
@@ -186,7 +187,7 @@ static XCore::CondCode GetCondFromBranchOpc(unsigned BrOpc)
 static inline unsigned GetCondBranchFromCond(XCore::CondCode CC) 
 {
   switch (CC) {
-  default: assert(0 && "Illegal condition code!");
+  default: llvm_unreachable("Illegal condition code!");
   case XCore::COND_TRUE   : return XCore::BRFT_lru6;
   case XCore::COND_FALSE  : return XCore::BRFF_lru6;
   }
@@ -197,7 +198,7 @@ static inline unsigned GetCondBranchFromCond(XCore::CondCode CC)
 static inline XCore::CondCode GetOppositeBranchCondition(XCore::CondCode CC)
 {
   switch (CC) {
-  default: assert(0 && "Illegal condition code!");
+  default: llvm_unreachable("Illegal condition code!");
   case XCore::COND_TRUE   : return XCore::COND_FALSE;
   case XCore::COND_FALSE  : return XCore::COND_TRUE;
   }
@@ -402,14 +403,6 @@ void XCoreInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     .addImm(0);
 }
 
-void XCoreInstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
-                            bool isKill, SmallVectorImpl<MachineOperand> &Addr,
-                            const TargetRegisterClass *RC,
-                            SmallVectorImpl<MachineInstr*> &NewMIs) const
-{
-  assert(0 && "unimplemented\n");
-}
-
 void XCoreInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator I,
                                           unsigned DestReg, int FrameIndex,
@@ -420,14 +413,6 @@ void XCoreInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   BuildMI(MBB, I, DL, get(XCore::LDWFI), DestReg)
     .addFrameIndex(FrameIndex)
     .addImm(0);
-}
-
-void XCoreInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
-                              SmallVectorImpl<MachineOperand> &Addr,
-                              const TargetRegisterClass *RC,
-                              SmallVectorImpl<MachineInstr*> &NewMIs) const
-{
-  assert(0 && "unimplemented\n");
 }
 
 bool XCoreInstrInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,

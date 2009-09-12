@@ -23,10 +23,11 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "llvm/Module.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
+#include <cstdio>
+
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -117,9 +118,9 @@ void ASTViewer::HandleTopLevelSingleDecl(Decl *D) {
     FD->print(llvm::errs());
     
     if (FD->getBodyIfAvailable()) {
-      llvm::cerr << '\n';
+      llvm::errs() << '\n';
       FD->getBodyIfAvailable()->viewAST();
-      llvm::cerr << '\n';
+      llvm::errs() << '\n';
     }
     return;
   }
@@ -128,9 +129,9 @@ void ASTViewer::HandleTopLevelSingleDecl(Decl *D) {
     MD->print(llvm::errs());
     
     if (MD->getBody()) {
-      llvm::cerr << '\n';
+      llvm::errs() << '\n';
       MD->getBody()->viewAST();
-      llvm::cerr << '\n';
+      llvm::errs() << '\n';
     }
   }
 }

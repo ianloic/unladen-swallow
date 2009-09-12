@@ -23,10 +23,9 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Streams.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
-#include <ostream>
 using namespace llvm;
 
 // An example for liveAt():
@@ -377,8 +376,9 @@ void LiveInterval::scaleNumbering(unsigned factor) {
       vni->def = InstrSlots::scale(vni->def, factor);
 
     for (unsigned i = 0; i < vni->kills.size(); ++i) {
-      if (vni->kills[i] != 0)
-        vni->kills[i] = InstrSlots::scale(vni->kills[i], factor);
+      if (!vni->kills[i].isPHIKill)
+        vni->kills[i].killIdx =
+          InstrSlots::scale(vni->kills[i].killIdx, factor);
     }
   }
 }
@@ -502,7 +502,7 @@ void LiveInterval::join(LiveInterval &Other, const int *LHSValNoAssignments,
     InsertPos = addRangeFrom(*I, InsertPos);
   }
 
-  weight += Other.weight;
+  ComputeJoinedWeight(Other);
 
   // Update regalloc hint if currently there isn't one.
   if (TargetRegisterInfo::isVirtualRegister(reg) &&
@@ -711,7 +711,7 @@ VNInfo* LiveInterval::MergeValueNumberInto(VNInfo *V1, VNInfo *V2) {
 
   // Make sure V2 is smaller than V1.
   if (V1->id < V2->id) {
-    copyValNumInfo(V1, V2);
+    V1->copyFrom(*V2);
     std::swap(V1, V2);
   }
 
@@ -792,16 +792,38 @@ unsigned LiveInterval::getSize() const {
   return Sum;
 }
 
-std::ostream& llvm::operator<<(std::ostream& os, const LiveRange &LR) {
+/// ComputeJoinedWeight - Set the weight of a live interval Joined
+/// after Other has been merged into it.
+void LiveInterval::ComputeJoinedWeight(const LiveInterval &Other) {
+  // If either of these intervals was spilled, the weight is the
+  // weight of the non-spilled interval.  This can only happen with
+  // iterative coalescers.
+
+  if (Other.weight != HUGE_VALF) {
+    weight += Other.weight;
+  }
+  else if (weight == HUGE_VALF &&
+      !TargetRegisterInfo::isPhysicalRegister(reg)) {
+    // Remove this assert if you have an iterative coalescer
+    assert(0 && "Joining to spilled interval");
+    weight = Other.weight;
+  }
+  else {
+    // Otherwise the weight stays the same
+    // Remove this assert if you have an iterative coalescer
+    assert(0 && "Joining from spilled interval");
+  }
+}
+
+raw_ostream& llvm::operator<<(raw_ostream& os, const LiveRange &LR) {
   return os << '[' << LR.start << ',' << LR.end << ':' << LR.valno->id << ")";
 }
 
 void LiveRange::dump() const {
-  cerr << *this << "\n";
+  errs() << *this << "\n";
 }
 
-void LiveInterval::print(std::ostream &OS,
-                         const TargetRegisterInfo *TRI) const {
+void LiveInterval::print(raw_ostream &OS, const TargetRegisterInfo *TRI) const {
   if (isStackSlot())
     OS << "SS#" << getStackSlotIndex();
   else if (TRI && TargetRegisterInfo::isPhysicalRegister(reg))
@@ -840,7 +862,9 @@ void LiveInterval::print(std::ostream &OS,
         if (ee || vni->hasPHIKill()) {
           OS << "-(";
           for (unsigned j = 0; j != ee; ++j) {
-            OS << vni->kills[j];
+            OS << vni->kills[j].killIdx;
+            if (vni->kills[j].isPHIKill)
+              OS << "*";
             if (j != ee-1)
               OS << " ";
           }
@@ -857,10 +881,10 @@ void LiveInterval::print(std::ostream &OS,
 }
 
 void LiveInterval::dump() const {
-  cerr << *this << "\n";
+  errs() << *this << "\n";
 }
 
 
-void LiveRange::print(std::ostream &os) const {
+void LiveRange::print(raw_ostream &os) const {
   os << *this;
 }

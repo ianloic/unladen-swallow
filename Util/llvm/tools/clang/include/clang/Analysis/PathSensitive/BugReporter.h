@@ -48,8 +48,8 @@ class ParentMap;
 class BugReporterVisitor {
 public:
   virtual ~BugReporterVisitor();
-  virtual PathDiagnosticPiece* VisitNode(const ExplodedNode<GRState>* N,
-                                         const ExplodedNode<GRState>* PrevN,
+  virtual PathDiagnosticPiece* VisitNode(const ExplodedNode* N,
+                                         const ExplodedNode* PrevN,
                                          BugReporterContext& BRC) = 0;
   
   virtual bool isOwnedByReporterContext() { return true; }
@@ -61,7 +61,7 @@ protected:
   BugType& BT;
   std::string ShortDescription;
   std::string Description;
-  const ExplodedNode<GRState> *EndNode;
+  const ExplodedNode *EndNode;
   SourceRange R;
   
 protected:
@@ -76,15 +76,15 @@ public:
   class NodeResolver {
   public:
     virtual ~NodeResolver() {}
-    virtual const ExplodedNode<GRState>*
-            getOriginalNode(const ExplodedNode<GRState>* N) = 0;
+    virtual const ExplodedNode*
+            getOriginalNode(const ExplodedNode* N) = 0;
   };
   
-  BugReport(BugType& bt, const char* desc, const ExplodedNode<GRState> *n)
+  BugReport(BugType& bt, const char* desc, const ExplodedNode *n)
     : BT(bt), Description(desc), EndNode(n) {}
   
   BugReport(BugType& bt, const char* shortDesc, const char* desc,
-            const ExplodedNode<GRState> *n)
+            const ExplodedNode *n)
   : BT(bt), ShortDescription(shortDesc), Description(desc), EndNode(n) {}
 
   virtual ~BugReport();
@@ -95,13 +95,13 @@ public:
   BugType& getBugType() { return BT; }
   
   // FIXME: Perhaps this should be moved into a subclass?
-  const ExplodedNode<GRState>* getEndNode() const { return EndNode; }
+  const ExplodedNode* getEndNode() const { return EndNode; }
   
   // FIXME: Do we need this?  Maybe getLocation() should return a ProgramPoint
   // object.
   // FIXME: If we do need it, we can probably just make it private to
   // BugReporter.
-  Stmt* getStmt(BugReporter& BR) const;
+  const Stmt* getStmt() const;
   
   const std::string& getDescription() const { return Description; }
 
@@ -116,7 +116,7 @@ public:
   
   // FIXME: Perhaps move this into a subclass.
   virtual PathDiagnosticPiece* getEndPath(BugReporterContext& BRC,
-                                          const ExplodedNode<GRState>* N);
+                                          const ExplodedNode* N);
   
   /// getLocation - Return the "definitive" location of the reported bug.
   ///  While a bug can span an entire path, usually there is a specific
@@ -125,15 +125,14 @@ public:
   virtual SourceLocation getLocation() const;
   
   /// getRanges - Returns the source ranges associated with this bug.
-  virtual void getRanges(BugReporter& BR,const SourceRange*& beg,
-                         const SourceRange*& end);
+  virtual void getRanges(const SourceRange*& beg, const SourceRange*& end);
 
-  virtual PathDiagnosticPiece* VisitNode(const ExplodedNode<GRState>* N,
-                                         const ExplodedNode<GRState>* PrevN,
+  virtual PathDiagnosticPiece* VisitNode(const ExplodedNode* N,
+                                         const ExplodedNode* PrevN,
                                          BugReporterContext& BR);
   
   virtual void registerInitialVisitors(BugReporterContext& BRC,
-                                       const ExplodedNode<GRState>* N) {}
+                                       const ExplodedNode* N) {}
 };
 
 //===----------------------------------------------------------------------===//
@@ -199,8 +198,7 @@ public:
   const std::string& getCategory() const { return Category; }
 
   virtual void FlushReports(BugReporter& BR);  
-  void AddReport(BugReport* BR);  
-  
+
   typedef llvm::FoldingSet<BugReportEquivClass>::iterator iterator;
   iterator begin() { return EQClasses.begin(); }
   iterator end() { return EQClasses.end(); }
@@ -218,11 +216,11 @@ public:
 class RangedBugReport : public BugReport {
   std::vector<SourceRange> Ranges;
 public:
-  RangedBugReport(BugType& D, const char* description, ExplodedNode<GRState> *n)
+  RangedBugReport(BugType& D, const char* description, ExplodedNode *n)
     : BugReport(D, description, n) {}
   
   RangedBugReport(BugType& D, const char *shortDescription,
-                  const char *description, ExplodedNode<GRState> *n)
+                  const char *description, ExplodedNode *n)
   : BugReport(D, shortDescription, description, n) {}
   
   ~RangedBugReport();
@@ -231,8 +229,7 @@ public:
   void addRange(SourceRange R) { Ranges.push_back(R); }
   
   // FIXME: Move this out of line.
-  void getRanges(BugReporter& BR,const SourceRange*& beg,
-                 const SourceRange*& end) {
+  void getRanges(const SourceRange*& beg, const SourceRange*& end) {
     
     if (Ranges.empty()) {
       beg = NULL;
@@ -245,6 +242,35 @@ public:
   }
 };
   
+class EnhancedBugReport : public RangedBugReport {
+public:
+  typedef void (*VisitorCreator)(BugReporterContext &BRcC, const void *data,
+                                 const ExplodedNode *N);
+  
+private:
+  typedef std::vector<std::pair<VisitorCreator, const void*> > Creators;
+  Creators creators;
+  
+public:
+  EnhancedBugReport(BugType& D, const char* description, ExplodedNode *n)
+   : RangedBugReport(D, description, n) {}
+  
+  EnhancedBugReport(BugType& D, const char *shortDescription,
+                  const char *description, ExplodedNode *n)
+    : RangedBugReport(D, shortDescription, description, n) {}
+  
+  ~EnhancedBugReport() {}
+  
+  void registerInitialVisitors(BugReporterContext& BRC, const ExplodedNode* N) {    
+    for (Creators::iterator I = creators.begin(), E = creators.end(); I!=E; ++I)
+      I->first(BRC, I->second, N);
+  }
+  
+  void addVisitorCreator(VisitorCreator creator, const void *data) {
+    creators.push_back(std::make_pair(creator, data));
+  }
+};
+  
 //===----------------------------------------------------------------------===//
 // BugReporter and friends.
 //===----------------------------------------------------------------------===//
@@ -254,7 +280,7 @@ public:
   virtual ~BugReporterData();
   virtual Diagnostic& getDiagnostic() = 0;  
   virtual PathDiagnosticClient* getPathDiagnosticClient() = 0;  
-  virtual ASTContext& getContext() = 0;
+  virtual ASTContext& getASTContext() = 0;
   virtual SourceManager& getSourceManager() = 0;
   virtual CFG* getCFG() = 0;
   virtual ParentMap& getParentMap() = 0;
@@ -298,7 +324,7 @@ public:
   iterator begin() { return BugTypes.begin(); }
   iterator end() { return BugTypes.end(); }
   
-  ASTContext& getContext() { return D.getContext(); }
+  ASTContext& getContext() { return D.getASTContext(); }
   
   SourceManager& getSourceManager() { return D.getSourceManager(); }
   
@@ -359,15 +385,15 @@ public:
   
   /// getEngine - Return the analysis engine used to analyze a given
   ///  function or method.
-  GRExprEngine& getEngine() { return Eng; }
+  GRExprEngine &getEngine() { return Eng; }
 
   /// getGraph - Get the exploded graph created by the analysis engine
   ///  for the analyzed method or function.
-  ExplodedGraph<GRState>& getGraph();
+  ExplodedGraph &getGraph();
   
   /// getStateManager - Return the state manager used by the analysis
   ///  engine.
-  GRStateManager& getStateManager();
+  GRStateManager &getStateManager();
   
   virtual void GeneratePathDiagnostic(PathDiagnostic& PD,
                                       BugReportEquivClass& R);
@@ -403,7 +429,7 @@ public:
   
   GRBugReporter& getBugReporter() { return BR; }  
   
-  ExplodedGraph<GRState>& getGraph() { return BR.getGraph(); }
+  ExplodedGraph &getGraph() { return BR.getGraph(); }
   
   void addNotableSymbol(SymbolRef Sym) {
     // FIXME: For now forward to GRBugReporter.
@@ -431,14 +457,8 @@ public:
     return BR.getSourceManager();
   }
   
-  const Decl& getCodeDecl() {
-    return getStateManager().getCodeDecl();
-  }
-  
-  const CFG& getCFG() {
-    return *BR.getCFG();
-  }
-  
+  const Decl &getCodeDecl();
+  const CFG &getCFG();
   virtual BugReport::NodeResolver& getNodeResolver() = 0;  
 };
 
@@ -460,6 +480,24 @@ public:
   str_iterator str_begin() const { return Strs.begin(); }
   str_iterator str_end() const { return Strs.end(); }
 };
+  
+//===----------------------------------------------------------------------===//
+//===----------------------------------------------------------------------===//
+  
+namespace bugreporter {
+  
+const Stmt *GetDerefExpr(const ExplodedNode *N);
+const Stmt *GetReceiverExpr(const ExplodedNode *N);
+const Stmt *GetDenomExpr(const ExplodedNode *N);
+const Stmt *GetCalleeExpr(const ExplodedNode *N);
+const Stmt *GetRetValExpr(const ExplodedNode *N);
+
+void registerTrackNullOrUndefValue(BugReporterContext& BRC, const void *stmt,
+                                   const ExplodedNode* N);
+
+} // end namespace clang::bugreporter
+  
+//===----------------------------------------------------------------------===//
 
 } // end clang namespace
 

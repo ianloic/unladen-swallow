@@ -1,8 +1,6 @@
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=basic -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=basic -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=basic -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -analyzer-constraints=range -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -analyzer-constraints=range -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -analyzer-constraints=range -verify %s
 
 
@@ -26,7 +24,7 @@ extern NSString * const NSXMLParserErrorDomain ;
 @end
 
 @implementation A
-- (void)myMethodWhichMayFail:(NSError **)error {   // expected-warning {{Method accepting NSError** should have a non-void return value to indicate whether or not an error occured.}}
+- (void)myMethodWhichMayFail:(NSError **)error {   // expected-warning {{Method accepting NSError** should have a non-void return value to indicate whether or not an error occurred}}
   *error = [NSError errorWithDomain:@"domain" code:1 userInfo:0]; // expected-warning {{Potential null dereference.}}
 }
 
@@ -39,7 +37,7 @@ extern NSString * const NSXMLParserErrorDomain ;
 struct __CFError {};
 typedef struct __CFError* CFErrorRef;
 
-void foo(CFErrorRef* error) { // expected-warning {{Function accepting CFErrorRef* should have a non-void return value to indicate whether or not an error occured.}}
+void foo(CFErrorRef* error) { // expected-warning {{Function accepting CFErrorRef* should have a non-void return value to indicate whether or not an error occurred}}
   *error = 0;  // expected-warning {{Potential null dereference.}}
 }
 

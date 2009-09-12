@@ -23,9 +23,9 @@
 #include "llvm/Target/TargetInstrDesc.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Analysis/DebugInfo.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LeakDetector.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/FoldingSet.h"
 using namespace llvm;
@@ -156,7 +156,7 @@ bool MachineOperand::isIdenticalTo(const MachineOperand &Other) const {
     return false;
   
   switch (getType()) {
-  default: assert(0 && "Unrecognized operand type");
+  default: llvm_unreachable("Unrecognized operand type");
   case MachineOperand::MO_Register:
     return getReg() == Other.getReg() && isDef() == Other.isDef() &&
            getSubReg() == Other.getSubReg();
@@ -182,11 +182,6 @@ bool MachineOperand::isIdenticalTo(const MachineOperand &Other) const {
 
 /// print - Print the specified machine operand.
 ///
-void MachineOperand::print(std::ostream &OS, const TargetMachine *TM) const {
-  raw_os_ostream RawOS(OS);
-  print(RawOS, TM);
-}
-
 void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
   switch (getType()) {
   case MachineOperand::MO_Register:
@@ -242,7 +237,7 @@ void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
     OS << getImm();
     break;
   case MachineOperand::MO_FPImmediate:
-    if (getFPImm()->getType() == Type::FloatTy)
+    if (getFPImm()->getType() == Type::getFloatTy(getFPImm()->getContext()))
       OS << getFPImm()->getValueAPF().convertToFloat();
     else
       OS << getFPImm()->getValueAPF().convertToDouble();
@@ -274,7 +269,7 @@ void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
     OS << '>';
     break;
   default:
-    assert(0 && "Unrecognized operand type");
+    llvm_unreachable("Unrecognized operand type");
   }
   
   if (unsigned TF = getTargetFlags())
@@ -731,7 +726,9 @@ isRegTiedToUseOperand(unsigned DefOpIdx, unsigned *UseOpIdx) const {
     unsigned DefPart = 0;
     for (unsigned i = 1, e = getNumOperands(); i < e; ) {
       const MachineOperand &FMO = getOperand(i);
-      assert(FMO.isImm());
+      // After the normal asm operands there may be additional imp-def regs.
+      if (!FMO.isImm())
+        return false;
       // Skip over this def.
       unsigned NumOps = InlineAsm::getNumOperandRegisters(FMO.getImm());
       unsigned PrevDef = i + 1;
@@ -782,16 +779,22 @@ isRegTiedToDefOperand(unsigned UseOpIdx, unsigned *DefOpIdx) const {
     const MachineOperand &MO = getOperand(UseOpIdx);
     if (!MO.isReg() || !MO.isUse() || MO.getReg() == 0)
       return false;
-    int FlagIdx = UseOpIdx - 1;
-    if (FlagIdx < 1)
-      return false;
-    while (!getOperand(FlagIdx).isImm()) {
-      if (--FlagIdx == 0)
+
+    // Find the flag operand corresponding to UseOpIdx
+    unsigned FlagIdx, NumOps=0;
+    for (FlagIdx = 1; FlagIdx < UseOpIdx; FlagIdx += NumOps+1) {
+      const MachineOperand &UFMO = getOperand(FlagIdx);
+      // After the normal asm operands there may be additional imp-def regs.
+      if (!UFMO.isImm())
         return false;
+      NumOps = InlineAsm::getNumOperandRegisters(UFMO.getImm());
+      assert(NumOps < getNumOperands() && "Invalid inline asm flag");
+      if (UseOpIdx < FlagIdx+NumOps+1)
+        break;
     }
-    const MachineOperand &UFMO = getOperand(FlagIdx);
-    if (FlagIdx + InlineAsm::getNumOperandRegisters(UFMO.getImm()) < UseOpIdx)
+    if (FlagIdx >= UseOpIdx)
       return false;
+    const MachineOperand &UFMO = getOperand(FlagIdx);
     unsigned DefNo;
     if (InlineAsm::isUseOperandTiedToDef(UFMO.getImm(), DefNo)) {
       if (!DefOpIdx)
@@ -880,7 +883,7 @@ bool MachineInstr::isSafeToMove(const TargetInstrInfo *TII,
   // load.
   if (TID->mayLoad() && !TII->isInvariantLoad(this))
     // Otherwise, this is a real load.  If there is a store between the load and
-    // end of block, or if the laod is volatile, we can't move it.
+    // end of block, or if the load is volatile, we can't move it.
     return !SawStore && !hasVolatileMemoryRef();
 
   return true;
@@ -939,12 +942,7 @@ bool MachineInstr::hasVolatileMemoryRef() const {
 }
 
 void MachineInstr::dump() const {
-  cerr << "  " << *this;
-}
-
-void MachineInstr::print(std::ostream &OS, const TargetMachine *TM) const {
-  raw_os_ostream RawOS(OS);
-  print(RawOS, TM);
+  errs() << "  " << *this;
 }
 
 void MachineInstr::print(raw_ostream &OS, const TargetMachine *TM) const {
@@ -1021,7 +1019,7 @@ bool MachineInstr::addRegisterKilled(unsigned IncomingReg,
   SmallVector<unsigned,4> DeadOps;
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
     MachineOperand &MO = getOperand(i);
-    if (!MO.isReg() || !MO.isUse())
+    if (!MO.isReg() || !MO.isUse() || MO.isUndef())
       continue;
     unsigned Reg = MO.getReg();
     if (!Reg)
@@ -1031,6 +1029,9 @@ bool MachineInstr::addRegisterKilled(unsigned IncomingReg,
       if (!Found) {
         if (MO.isKill())
           // The register is already marked kill.
+          return true;
+        if (isPhysReg && isRegTiedToDefOperand(i))
+          // Two-address uses of physregs must not be marked kill.
           return true;
         MO.setIsKill();
         Found = true;

@@ -8,6 +8,7 @@
 
 #include "Util/EventTimer.h"
 #include "llvm/ADT/SparseBitVector.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
@@ -31,6 +32,10 @@ public:
     llvm::IRBuilder<>& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
+    /// Returns true if this function actually makes use of the LOAD_GLOBAL
+    /// optimization; returns false otherwise.
+    bool UsesLoadGlobalOpt() const { return this->uses_load_global_opt_; }
+
     /// Sets the current instruction index.  This is only put into the
     /// frame object when tracing.
     void SetLasti(int current_instruction_index);
@@ -42,6 +47,10 @@ public:
 
     /// Inserts a call to llvm.dbg.stoppoint.
     void SetDebugStopPoint(int line_number);
+
+    /// Convenience wrapper for creating named basic blocks using the current
+    /// context and function.
+    llvm::BasicBlock *CreateBasicBlock(const llvm::Twine &name);
 
     /// This function fills the block that handles a backedge.  Each
     /// backedge needs to check if it needs to handle signals or
@@ -174,6 +183,11 @@ public:
     void BUILD_SLICE_THREE();
     void UNPACK_SEQUENCE(int size);
 
+    /* LOAD_GLOBAL comes in two flavors: the safe version (a port of the eval
+       loop that's guaranteed to work) and a fast version, which uses dict
+       versioning to cache pointers as immediates in the generated IR. */
+    void LOAD_GLOBAL_safe(int index);
+    void LOAD_GLOBAL_fast(int index);
     void LOAD_GLOBAL(int index);
     void STORE_GLOBAL(int index);
     void DELETE_GLOBAL(int index);
@@ -265,6 +279,13 @@ private:
     // function will be looked up in Python's C runtime.
     template<typename T>
     llvm::Function *GetGlobalFunction(const std::string &name);
+
+    // Returns a global variable that represents 'obj'.  These get
+    // cached in the ExecutionEngine's global mapping table, and they
+    // incref the object so its address doesn't get re-used while the
+    // GlobalVariable is still alive.  See Util/ConstantMirror.h for
+    // more details.
+    llvm::Constant *GetGlobalVariableFor(PyObject *obj);
 
     // Copies the elements from array[0] to array[N-1] to target, bytewise.
     void MemCpy(llvm::Value *target, llvm::Value *array, llvm::Value *N);
@@ -447,6 +468,7 @@ private:
     // about the function.  It's not used to examine the bytecode
     // string.
     PyCodeObject *const code_object_;
+    llvm::LLVMContext &context_;
     llvm::Module *const module_;
     llvm::Function *const function_;
     llvm::IRBuilder<> builder_;
@@ -458,9 +480,16 @@ private:
     // The most recent index we've started emitting an instruction for.
     int f_lasti_;
 
+    // Flag to indicate whether this code object uses the LOAD_GLOBALS
+    // optimization.
+    bool uses_load_global_opt_;
+
     // The following pointers hold values created in the function's
     // entry block. They're constant after construction.
     llvm::Value *frame_;
+
+    // Address of code_object_->co_use_llvm, used for guards.
+    llvm::Value *use_llvm_addr_;
 
     llvm::Value *tstate_;
     llvm::Value *stack_bottom_;

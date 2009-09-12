@@ -10,6 +10,7 @@
 
 #include "Python.h"
 #include "frameobject.h"
+#include "longintrepr.h"
 #include "opcode.h"
 
 #include "Util/EventTimer.h"
@@ -162,3 +163,22 @@ _PyLlvm_Frame_BlockPop(PyTryBlock *blocks, char *num_blocks)
     b = &blocks[*num_blocks];
     return b;
 }
+
+/* Define a global using PyTupleObject so we can look it up from
+   TypeBuilder<PyTupleObject>. */
+PyTupleObject *_dummy_TupleObject;
+/* Ditto for PyStringObject, */
+PyStringObject *_dummy_StringObject;
+/* PyUnicodeObject, */
+PyUnicodeObject *_dummy_UnicodeObject;
+/* PyIntObject, */
+PyIntObject *_dummy_IntObject;
+/* PyLongObject, */
+PyLongObject *_dummy_LongObject;
+/* PyFloatObject, */
+PyFloatObject *_dummy_FloatObject;
+/* and PyComplexObject. */
+PyComplexObject *_dummy_ComplexObject;
+
+/* Expose PyEllipsis to ConstantMirror. */
+PyObject* objectEllipsis() { return Py_Ellipsis; }

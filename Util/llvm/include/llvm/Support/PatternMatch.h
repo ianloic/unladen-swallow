@@ -311,7 +311,8 @@ struct BinaryOpClass_match {
   template<typename OpTy>
   bool match(OpTy *V) {
     if (Class *I = dyn_cast<Class>(V))
-      if (L.match(I->getOperand(0)) && R.match(I->getOperand(1))) {
+      if (L.match(I->getOperand(0)) &&
+          R.match(I->getOperand(1))) {
         if (Opcode)
           *Opcode = I->getOpcode();
         return true;
@@ -356,7 +357,8 @@ struct CmpClass_match {
   template<typename OpTy>
   bool match(OpTy *V) {
     if (Class *I = dyn_cast<Class>(V))
-      if (L.match(I->getOperand(0)) && R.match(I->getOperand(1))) {
+      if (L.match(I->getOperand(0)) &&
+          R.match(I->getOperand(1))) {
         Predicate = I->getPredicate();
         return true;
       }
@@ -403,7 +405,7 @@ struct SelectClass_match {
 };
 
 template<typename Cond, typename LHS, typename RHS>
-inline SelectClass_match<Cond, RHS, LHS>
+inline SelectClass_match<Cond, LHS, RHS>
 m_Select(const Cond &C, const LHS &L, const RHS &R) {
   return SelectClass_match<Cond, LHS, RHS>(C, L, R);
 }
@@ -503,7 +505,7 @@ struct neg_match {
   }
 private:
   bool matchIfNeg(Value *LHS, Value *RHS) {
-    return LHS == ConstantExpr::getZeroValueForNegationExpr(LHS->getType()) &&
+    return LHS == ConstantFP::getZeroValueForNegation(LHS->getType()) &&
            L.match(RHS);
   }
 };
@@ -532,7 +534,7 @@ struct fneg_match {
   }
 private:
   bool matchIfFNeg(Value *LHS, Value *RHS) {
-    return LHS == ConstantExpr::getZeroValueForNegationExpr(LHS->getType()) &&
+    return LHS == ConstantFP::getZeroValueForNegation(LHS->getType()) &&
            L.match(RHS);
   }
 };

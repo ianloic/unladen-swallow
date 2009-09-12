@@ -1,4 +1,5 @@
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=region --verify -fblocks %s
+// RUN: clang-cc -triple i386-apple-darwin9 -analyze -checker-cfref --analyzer-store=region --verify -fblocks %s &&
+// RUN: clang-cc -triple x86_64-apple-darwin9 -analyze -checker-cfref --analyzer-store=region --verify -fblocks %s
 
 typedef struct objc_selector *SEL;
 typedef signed char BOOL;
@@ -31,10 +32,12 @@ extern NSString * const NSConnectionReplyMode;
 
 // PR 2948 (testcase; crash on VisitLValue for union types)
 // http://llvm.org/bugs/show_bug.cgi?id=2948
-
 void checkaccess_union() {
   int ret = 0, status;
-  if (((((__extension__ (((union {  // expected-warning {{ Branch condition evaluates to an uninitialized value.}}
+  // Since RegionStore doesn't handle unions yet,
+  // this branch condition won't be triggered
+  // as involving an uninitialized value.  
+  if (((((__extension__ (((union {  // no-warning
     __typeof (status) __in; int __i;}
     )
     {
@@ -42,7 +45,6 @@ void checkaccess_union() {
       ).__i))) & 0xff00) >> 8) == 1)
         ret = 1;
 }
-
 
 // Check our handling of fields being invalidated by function calls.
 struct test2_struct { int x; int y; char* s; };
@@ -68,3 +70,100 @@ char test2() {
   return 'a';
 }
 
+// BasicStore handles this case incorrectly because it doesn't reason about
+// the value pointed to by 'x' and thus creates different symbolic values
+// at the declarations of 'a' and 'b' respectively.  RegionStore handles
+// it correctly. See the companion test in 'misc-ps-basic-store.m'.
+void test_trivial_symbolic_comparison_pointer_parameter(int *x) {
+  int a = *x;
+  int b = *x;
+  if (a != b) {
+    int *p = 0;
+    *p = 0xDEADBEEF;     // no-warning
+  }
+}
+
+// This is a modified test from 'misc-ps.m'.  Here we have the extra
+// NULL dereferences which are pruned out by RegionStore's symbolic reasoning
+// of fields.
+typedef struct _BStruct { void *grue; } BStruct;
+void testB_aux(void *ptr);
+
+void testB(BStruct *b) {
+  {
+    int *__gruep__ = ((int *)&((b)->grue));
+    int __gruev__ = *__gruep__;
+    int __gruev2__ = *__gruep__;
+    if (__gruev__ != __gruev2__) {
+      int *p = 0;
+      *p = 0xDEADBEEF; // no-warning
+    }
+
+    testB_aux(__gruep__);
+  }
+  {
+    int *__gruep__ = ((int *)&((b)->grue));
+    int __gruev__ = *__gruep__;
+    int __gruev2__ = *__gruep__;
+    if (__gruev__ != __gruev2__) {
+      int *p = 0;
+      *p = 0xDEADBEEF; // no-warning
+    }
+
+    if (~0 != __gruev__) {}
+  }
+}
+
+void testB_2(BStruct *b) {
+  {
+    int **__gruep__ = ((int **)&((b)->grue));
+    int *__gruev__ = *__gruep__;
+    testB_aux(__gruep__);
+  }
+  {
+    int **__gruep__ = ((int **)&((b)->grue));
+    int *__gruev__ = *__gruep__;
+    if ((int*)~0 != __gruev__) {}
+  }
+}
+
+// This test case is a reduced case of a caching bug discovered by an
+// assertion failure in RegionStoreManager::BindArray.  Essentially the
+// DeclStmt is evaluated twice, but on the second loop iteration the
+// engine caches out.  Previously a false transition would cause UnknownVal
+// to bind to the variable, firing an assertion failure.  This bug was fixed
+// in r76262.
+void test_declstmt_caching() {
+again:
+  {
+    const char a[] = "I like to crash";
+    goto again;
+  }
+}
+
+// Reduced test case from <rdar://problem/7114618>.
+// Basically a null check is performed on the field value, which is then
+// assigned to a variable and then checked again.
+struct s_7114618 { int *p; };
+void test_rdar_7114618(struct s_7114618 *s) {
+  if (s->p) {
+    int *p = s->p;
+    if (!p) {
+      // Infeasible
+      int *dead = 0;
+      *dead = 0xDEADBEEF; // no-warning
+    }
+  }
+}
+
+// Test pointers increment correctly.
+void f() {
+  int a[2];
+  a[1] = 3;
+  int *p = a;
+  p++;
+  if (*p != 3) {
+    int *q = 0;
+    *q = 3; // no-warning
+  }
+}

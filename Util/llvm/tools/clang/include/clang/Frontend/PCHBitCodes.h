@@ -212,17 +212,13 @@ namespace clang {
       /// \brief Record code for the set of ext_vector type names.
       EXT_VECTOR_DECLS = 18,
 
-      /// \brief Record code for the set of Objective-C category
-      /// implementations.
-      OBJC_CATEGORY_IMPLEMENTATIONS = 19,
-
       /// \brief Record code for the original file that was used to
       /// generate the precompiled header.
-      ORIGINAL_FILE_NAME = 20,
+      ORIGINAL_FILE_NAME = 19,
       
       /// \brief Record code for the sorted array of source ranges where
       /// comments were encountered in the source code.
-      COMMENT_RANGES = 21
+      COMMENT_RANGES = 20
     };
 
     /// \brief Record types used within a source manager block.
@@ -329,7 +325,15 @@ namespace clang {
       /// \brief The '__int128_t' type.
       PREDEF_TYPE_INT128_ID     = 22,
       /// \brief The type of 'nullptr'.
-      PREDEF_TYPE_NULLPTR_ID    = 23
+      PREDEF_TYPE_NULLPTR_ID    = 23,
+      /// \brief The C++ 'char16_t' type.
+      PREDEF_TYPE_CHAR16_ID     = 24,
+      /// \brief The C++ 'char32_t' type.
+      PREDEF_TYPE_CHAR32_ID     = 25,
+      /// \brief The ObjC 'id' type.
+      PREDEF_TYPE_OBJC_ID       = 26,
+      /// \brief The ObjC 'Class' type.
+      PREDEF_TYPE_OBJC_CLASS    = 27     
     };
 
     /// \brief The number of predefined type IDs that are reserved for
@@ -388,16 +392,14 @@ namespace clang {
       TYPE_ENUM                     = 20,
       /// \brief An ObjCInterfaceType record.
       TYPE_OBJC_INTERFACE           = 21,
-      /// \brief An ObjCQualifiedInterfaceType record.
-      TYPE_OBJC_QUALIFIED_INTERFACE = 22,
       /// \brief An ObjCObjectPointerType record.
-      TYPE_OBJC_OBJECT_POINTER      = 23,
+      TYPE_OBJC_OBJECT_POINTER      = 22,
       /// \brief a DecltypeType record.
-      TYPE_DECLTYPE                 = 24,
+      TYPE_DECLTYPE                 = 23,
       /// \brief A ConstantArrayWithExprType record.
-      TYPE_CONSTANT_ARRAY_WITH_EXPR = 25,
+      TYPE_CONSTANT_ARRAY_WITH_EXPR = 24,
       /// \brief A ConstantArrayWithoutExprType record.
-      TYPE_CONSTANT_ARRAY_WITHOUT_EXPR = 26
+      TYPE_CONSTANT_ARRAY_WITHOUT_EXPR = 25
     };
 
     /// \brief The type IDs for special types constructed by semantic
@@ -421,7 +423,15 @@ namespace clang {
       /// \brief Objective-C fast enumeration state type
       SPECIAL_TYPE_OBJC_FAST_ENUMERATION_STATE = 6,
       /// \brief C FILE typedef type
-      SPECIAL_TYPE_FILE                        = 7
+      SPECIAL_TYPE_FILE                        = 7,
+      /// \brief C jmp_buf typedef type
+      SPECIAL_TYPE_jmp_buf                     = 8,
+      /// \brief C sigjmp_buf typedef type
+      SPECIAL_TYPE_sigjmp_buf                  = 9,
+      /// \brief Objective-C "id" redefinition type
+      SPECIAL_TYPE_OBJC_ID_REDEFINITION        = 10,
+      /// \brief Objective-C "Class" redefinition type
+      SPECIAL_TYPE_OBJC_CLASS_REDEFINITION     = 11
     };
 
     /// \brief Record codes for each kind of declaration.
@@ -630,13 +640,15 @@ namespace clang {
       EXPR_OBJC_IVAR_REF_EXPR,
       /// \brief An ObjCPropertyRefExpr record.
       EXPR_OBJC_PROPERTY_REF_EXPR,
-      /// \brief An ObjCKVCRefExpr record.
+      /// \brief An ObjCImplicitSetterGetterRefExpr record.
       EXPR_OBJC_KVC_REF_EXPR,
       /// \brief An ObjCMessageExpr record.
       EXPR_OBJC_MESSAGE_EXPR,
       /// \brief An ObjCSuperExpr record.
       EXPR_OBJC_SUPER_EXPR,
-
+      /// \brief An ObjCIsa Expr record.
+      EXPR_OBJC_ISA,
+      
       /// \brief An ObjCForCollectionStmt record.      
       STMT_OBJC_FOR_COLLECTION,
       /// \brief An ObjCAtCatchStmt record.      
@@ -648,7 +660,12 @@ namespace clang {
       /// \brief An ObjCAtSynchronizedStmt record.      
       STMT_OBJC_AT_SYNCHRONIZED,
       /// \brief An ObjCAtThrowStmt record.      
-      STMT_OBJC_AT_THROW
+      STMT_OBJC_AT_THROW,
+
+      // C++
+
+      /// \brief An CXXOperatorCallExpr record.      
+      EXPR_CXX_OPERATOR_CALL
     };
 
     /// \brief The kinds of designators that can occur in a

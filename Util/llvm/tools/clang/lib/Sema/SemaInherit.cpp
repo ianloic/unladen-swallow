@@ -114,7 +114,7 @@ bool Sema::IsDerivedFrom(QualType Derived, QualType Base, BasePaths &Paths) {
     return false;
 
   Paths.setOrigin(Derived);
-  return LookupInBases(cast<CXXRecordDecl>(Derived->getAsRecordType()->getDecl()),
+  return LookupInBases(cast<CXXRecordDecl>(Derived->getAs<RecordType>()->getDecl()),
                        MemberLookupCriteria(Base), Paths);
 }
 
@@ -156,7 +156,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
       if (Paths.isDetectingVirtual() && Paths.DetectedVirtual == 0) {
         // If this is the first virtual we find, remember it. If it turns out
         // there is no base path here, we'll reset it later.
-        Paths.DetectedVirtual = BaseType->getAsRecordType();
+        Paths.DetectedVirtual = BaseType->getAs<RecordType>();
         SetVirtual = true;
       }
     } else
@@ -175,7 +175,7 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
     }
 
     CXXRecordDecl *BaseRecord 
-      = cast<CXXRecordDecl>(BaseSpec->getType()->getAsRecordType()->getDecl());
+      = cast<CXXRecordDecl>(BaseSpec->getType()->getAs<RecordType>()->getDecl());
 
     // Either look at the base class type or look into the base class
     // type to see if we've found a member that meets the search
@@ -227,13 +227,13 @@ bool Sema::LookupInBases(CXXRecordDecl *Class,
         // return immediately.
         return FoundPath;
       }
-    } 
-    // C++ [class.member.lookup]p2:
-    //   A member name f in one sub-object B hides a member name f in
-    //   a sub-object A if A is a base class sub-object of B. Any
-    //   declarations that are so hidden are eliminated from
-    //   consideration.
-    else if (VisitBase && LookupInBases(BaseRecord, Criteria, Paths)) {
+    } else if (VisitBase && LookupInBases(BaseRecord, Criteria, Paths)) {
+      // C++ [class.member.lookup]p2:
+      //   A member name f in one sub-object B hides a member name f in
+      //   a sub-object A if A is a base class sub-object of B. Any
+      //   declarations that are so hidden are eliminated from
+      //   consideration.
+
       // There is a path to a base class that meets the criteria. If we're not
       // collecting paths or finding ambiguities, we're done.
       FoundPath = true;

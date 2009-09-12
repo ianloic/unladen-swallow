@@ -19,7 +19,7 @@
 #include <string>
 
 namespace llvm {
-class Module;
+class GlobalValue;
 
 class ARMSubtarget : public TargetSubtarget {
 protected:
@@ -43,6 +43,11 @@ protected:
   /// ARMFPUType - Floating Point Unit type.
   ARMFPEnum ARMFPUType;
 
+  /// UseNEONForSinglePrecisionFP - if the NEONFP attribute has been
+  /// specified. Use the method useNEONForSinglePrecisionFP() to
+  /// determine if NEON should actually be used.
+  bool UseNEONForSinglePrecisionFP;
+
   /// IsThumb - True if we are in thumb mode, false if in ARM mode.
   bool IsThumb;
 
@@ -61,7 +66,7 @@ protected:
 
   /// Selected instruction itineraries (one entry per itinerary class.)
   InstrItineraryData InstrItins;
-  
+
  public:
   enum {
     isELF, isDarwin
@@ -73,9 +78,9 @@ protected:
   } TargetABI;
 
   /// This constructor initializes the data members to match that
-  /// of the specified module.
+  /// of the specified triple.
   ///
-  ARMSubtarget(const Module &M, const std::string &FS, bool isThumb);
+  ARMSubtarget(const std::string &TT, const std::string &FS, bool isThumb);
 
   /// getMaxInlineSizeThreshold - Returns the maximum memset / memcpy size
   /// that still makes it profitable to inline the call.
@@ -99,6 +104,8 @@ protected:
   bool hasVFP2() const { return ARMFPUType >= VFPv2; }
   bool hasVFP3() const { return ARMFPUType >= VFPv3; }
   bool hasNEON() const { return ARMFPUType >= NEON;  }
+  bool useNEONForSinglePrecisionFP() const {
+    return hasNEON() && UseNEONForSinglePrecisionFP; }
 
   bool isTargetDarwin() const { return TargetType == isDarwin; }
   bool isTargetELF() const { return TargetType == isELF; }
@@ -115,7 +122,7 @@ protected:
 
   const std::string & getCPUString() const { return CPUString; }
 
-  /// getInstrItins - Return the instruction itineraies based on subtarget 
+  /// getInstrItins - Return the instruction itineraies based on subtarget
   /// selection.
   const InstrItineraryData &getInstrItineraryData() const { return InstrItins; }
 
@@ -123,6 +130,10 @@ protected:
   /// stack frame on entry to the function and which must be maintained by every
   /// function for this subtarget.
   unsigned getStackAlignment() const { return stackAlignment; }
+
+  /// GVIsIndirectSymbol - true if the GV will be accessed via an indirect
+  /// symbol.
+  bool GVIsIndirectSymbol(GlobalValue *GV, bool isStatic) const;
 };
 } // End llvm namespace
 

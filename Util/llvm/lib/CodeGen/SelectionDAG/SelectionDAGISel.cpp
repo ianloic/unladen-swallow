@@ -29,6 +29,7 @@
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionAnalysis.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -47,8 +48,10 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -151,10 +154,12 @@ namespace llvm {
 // basic blocks, and the scheduler passes ownership of it to this method.
 MachineBasicBlock *TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
                                                  MachineBasicBlock *MBB) const {
-  cerr << "If a target marks an instruction with "
-       << "'usesCustomDAGSchedInserter', it must implement "
-       << "TargetLowering::EmitInstrWithCustomInserter!\n";
-  abort();
+#ifndef NDEBUG
+  errs() << "If a target marks an instruction with "
+          "'usesCustomDAGSchedInserter', it must implement "
+          "TargetLowering::EmitInstrWithCustomInserter!";
+#endif
+  llvm_unreachable(0);
   return 0;  
 }
 
@@ -263,7 +268,7 @@ static void EmitLiveInCopies(MachineBasicBlock *EntryMBB,
 //===----------------------------------------------------------------------===//
 
 SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL) :
-  FunctionPass(&ID), TM(tm), TLI(*tm.getTargetLowering()),
+  MachineFunctionPass(&ID), TM(tm), TLI(*tm.getTargetLowering()),
   FuncInfo(new FunctionLoweringInfo(TLI)),
   CurDAG(new SelectionDAG(TLI, *FuncInfo)),
   SDL(new SelectionDAGLowering(*CurDAG, TLI, *FuncInfo, OL)),
@@ -278,44 +283,42 @@ SelectionDAGISel::~SelectionDAGISel() {
   delete FuncInfo;
 }
 
-unsigned SelectionDAGISel::MakeReg(MVT VT) {
+unsigned SelectionDAGISel::MakeReg(EVT VT) {
   return RegInfo->createVirtualRegister(TLI.getRegClassFor(VT));
 }
 
 void SelectionDAGISel::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AliasAnalysis>();
+  AU.addPreserved<AliasAnalysis>();
   AU.addRequired<GCModuleInfo>();
+  AU.addPreserved<GCModuleInfo>();
   AU.addRequired<DwarfWriter>();
-  AU.setPreservesAll();
+  AU.addPreserved<DwarfWriter>();
+  MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-bool SelectionDAGISel::runOnFunction(Function &Fn) {
+bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
+  Function &Fn = *mf.getFunction();
+
   // Do some sanity-checking on the command-line options.
   assert((!EnableFastISelVerbose || EnableFastISel) &&
          "-fast-isel-verbose requires -fast-isel");
   assert((!EnableFastISelAbort || EnableFastISel) &&
          "-fast-isel-abort requires -fast-isel");
 
-  // Do not codegen any 'available_externally' functions at all, they have
-  // definitions outside the translation unit.
-  if (Fn.hasAvailableExternallyLinkage())
-    return false;
-
-
   // Get alias analysis for load/store combining.
   AA = &getAnalysis<AliasAnalysis>();
 
-  TargetMachine &TM = TLI.getTargetMachine();
-  MF = &MachineFunction::construct(&Fn, TM);
+  MF = &mf;
   const TargetInstrInfo &TII = *TM.getInstrInfo();
   const TargetRegisterInfo &TRI = *TM.getRegisterInfo();
 
-  if (MF->getFunction()->hasGC())
-    GFI = &getAnalysis<GCModuleInfo>().getFunctionInfo(*MF->getFunction());
+  if (Fn.hasGC())
+    GFI = &getAnalysis<GCModuleInfo>().getFunctionInfo(Fn);
   else
     GFI = 0;
   RegInfo = &MF->getRegInfo();
-  DOUT << "\n\n\n=== " << Fn.getName() << "\n";
+  DEBUG(errs() << "\n\n\n=== " << Fn.getName() << "\n");
 
   MachineModuleInfo *MMI = getAnalysisIfAvailable<MachineModuleInfo>();
   DwarfWriter *DW = getAnalysisIfAvailable<DwarfWriter>();
@@ -363,139 +366,35 @@ static void copyCatchInfo(BasicBlock *SrcBB, BasicBlock *DestBB,
     }
 }
 
-/// IsFixedFrameObjectWithPosOffset - Check if object is a fixed frame object and
-/// whether object offset >= 0.
-static bool
-IsFixedFrameObjectWithPosOffset(MachineFrameInfo *MFI, SDValue Op) {
-  if (!isa<FrameIndexSDNode>(Op)) return false;
-
-  FrameIndexSDNode * FrameIdxNode = dyn_cast<FrameIndexSDNode>(Op);
-  int FrameIdx =  FrameIdxNode->getIndex();
-  return MFI->isFixedObjectIndex(FrameIdx) &&
-    MFI->getObjectOffset(FrameIdx) >= 0;
-}
-
-/// IsPossiblyOverwrittenArgumentOfTailCall - Check if the operand could
-/// possibly be overwritten when lowering the outgoing arguments in a tail
-/// call. Currently the implementation of this call is very conservative and
-/// assumes all arguments sourcing from FORMAL_ARGUMENTS or a CopyFromReg with
-/// virtual registers would be overwritten by direct lowering.
-static bool IsPossiblyOverwrittenArgumentOfTailCall(SDValue Op,
-                                                    MachineFrameInfo *MFI) {
-  RegisterSDNode * OpReg = NULL;
-  if (Op.getOpcode() == ISD::FORMAL_ARGUMENTS ||
-      (Op.getOpcode()== ISD::CopyFromReg &&
-       (OpReg = dyn_cast<RegisterSDNode>(Op.getOperand(1))) &&
-       (OpReg->getReg() >= TargetRegisterInfo::FirstVirtualRegister)) ||
-      (Op.getOpcode() == ISD::LOAD &&
-       IsFixedFrameObjectWithPosOffset(MFI, Op.getOperand(1))) ||
-      (Op.getOpcode() == ISD::MERGE_VALUES &&
-       Op.getOperand(Op.getResNo()).getOpcode() == ISD::LOAD &&
-       IsFixedFrameObjectWithPosOffset(MFI, Op.getOperand(Op.getResNo()).
-                                       getOperand(1))))
-    return true;
-  return false;
-}
-
-/// CheckDAGForTailCallsAndFixThem - This Function looks for CALL nodes in the
-/// DAG and fixes their tailcall attribute operand.
-static void CheckDAGForTailCallsAndFixThem(SelectionDAG &DAG, 
-                                           const TargetLowering& TLI) {
-  SDNode * Ret = NULL;
-  SDValue Terminator = DAG.getRoot();
-
-  // Find RET node.
-  if (Terminator.getOpcode() == ISD::RET) {
-    Ret = Terminator.getNode();
-  }
- 
-  // Fix tail call attribute of CALL nodes.
-  for (SelectionDAG::allnodes_iterator BE = DAG.allnodes_begin(),
-         BI = DAG.allnodes_end(); BI != BE; ) {
-    --BI;
-    if (CallSDNode *TheCall = dyn_cast<CallSDNode>(BI)) {
-      SDValue OpRet(Ret, 0);
-      SDValue OpCall(BI, 0);
-      bool isMarkedTailCall = TheCall->isTailCall();
-      // If CALL node has tail call attribute set to true and the call is not
-      // eligible (no RET or the target rejects) the attribute is fixed to
-      // false. The TargetLowering::IsEligibleForTailCallOptimization function
-      // must correctly identify tail call optimizable calls.
-      if (!isMarkedTailCall) continue;
-      if (Ret==NULL ||
-          !TLI.IsEligibleForTailCallOptimization(TheCall, OpRet, DAG)) {
-        // Not eligible. Mark CALL node as non tail call. Note that we
-        // can modify the call node in place since calls are not CSE'd.
-        TheCall->setNotTailCall();
-      } else {
-        // Look for tail call clobbered arguments. Emit a series of
-        // copyto/copyfrom virtual register nodes to protect them.
-        SmallVector<SDValue, 32> Ops;
-        SDValue Chain = TheCall->getChain(), InFlag;
-        Ops.push_back(Chain);
-        Ops.push_back(TheCall->getCallee());
-        for (unsigned i = 0, e = TheCall->getNumArgs(); i != e; ++i) {
-          SDValue Arg = TheCall->getArg(i);
-          bool isByVal = TheCall->getArgFlags(i).isByVal();
-          MachineFunction &MF = DAG.getMachineFunction();
-          MachineFrameInfo *MFI = MF.getFrameInfo();
-          if (!isByVal &&
-              IsPossiblyOverwrittenArgumentOfTailCall(Arg, MFI)) {
-            MVT VT = Arg.getValueType();
-            unsigned VReg = MF.getRegInfo().
-              createVirtualRegister(TLI.getRegClassFor(VT));
-            Chain = DAG.getCopyToReg(Chain, Arg.getDebugLoc(),
-                                     VReg, Arg, InFlag);
-            InFlag = Chain.getValue(1);
-            Arg = DAG.getCopyFromReg(Chain, Arg.getDebugLoc(),
-                                     VReg, VT, InFlag);
-            Chain = Arg.getValue(1);
-            InFlag = Arg.getValue(2);
-          }
-          Ops.push_back(Arg);
-          Ops.push_back(TheCall->getArgFlagsVal(i));
-        }
-        // Link in chain of CopyTo/CopyFromReg.
-        Ops[0] = Chain;
-        DAG.UpdateNodeOperands(OpCall, Ops.begin(), Ops.size());
-      }
-    }
-  }
-}
-
 void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
                                         BasicBlock::iterator Begin,
                                         BasicBlock::iterator End) {
   SDL->setCurrentBasicBlock(BB);
 
-  // Lower all of the non-terminator instructions.
-  for (BasicBlock::iterator I = Begin; I != End; ++I)
+  // Lower all of the non-terminator instructions. If a call is emitted
+  // as a tail call, cease emitting nodes for this block.
+  for (BasicBlock::iterator I = Begin; I != End && !SDL->HasTailCall; ++I)
     if (!isa<TerminatorInst>(I))
       SDL->visit(*I);
 
-  // Ensure that all instructions which are used outside of their defining
-  // blocks are available as virtual registers.  Invoke is handled elsewhere.
-  for (BasicBlock::iterator I = Begin; I != End; ++I)
-    if (!isa<PHINode>(I) && !isa<InvokeInst>(I))
-      SDL->CopyToExportRegsIfNeeded(I);
+  if (!SDL->HasTailCall) {
+    // Ensure that all instructions which are used outside of their defining
+    // blocks are available as virtual registers.  Invoke is handled elsewhere.
+    for (BasicBlock::iterator I = Begin; I != End; ++I)
+      if (!isa<PHINode>(I) && !isa<InvokeInst>(I))
+        SDL->CopyToExportRegsIfNeeded(I);
 
-  // Handle PHI nodes in successor blocks.
-  if (End == LLVMBB->end()) {
-    HandlePHINodesInSuccessorBlocks(LLVMBB);
+    // Handle PHI nodes in successor blocks.
+    if (End == LLVMBB->end()) {
+      HandlePHINodesInSuccessorBlocks(LLVMBB);
 
-    // Lower the terminator after the copies are emitted.
-    SDL->visit(*LLVMBB->getTerminator());
+      // Lower the terminator after the copies are emitted.
+      SDL->visit(*LLVMBB->getTerminator());
+    }
   }
     
   // Make sure the root of the DAG is up-to-date.
   CurDAG->setRoot(SDL->getControlRoot());
-
-  // Check whether calls in this block are real tail calls. Fix up CALL nodes
-  // with correct tailcall attribute so that the target can rely on the tailcall
-  // attribute indicating whether the call is really eligible for tail call
-  // optimization.
-  if (PerformTailCallOpt)
-    CheckDAGForTailCallsAndFixThem(*CurDAG, TLI);
 
   // Final step, emit the lowered DAG as machine code.
   CodeGenAndEmitDAG();
@@ -535,7 +434,7 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
     
     // Ignore non-scalar or non-integer values.
     SDValue Src = N->getOperand(2);
-    MVT SrcVT = Src.getValueType();
+    EVT SrcVT = Src.getValueType();
     if (!SrcVT.isInteger() || SrcVT.isVector())
       continue;
     
@@ -546,10 +445,10 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
     // Only install this information if it tells us something.
     if (NumSignBits != 1 || KnownZero != 0 || KnownOne != 0) {
       DestReg -= TargetRegisterInfo::FirstVirtualRegister;
-      FunctionLoweringInfo &FLI = CurDAG->getFunctionLoweringInfo();
-      if (DestReg >= FLI.LiveOutRegInfo.size())
-        FLI.LiveOutRegInfo.resize(DestReg+1);
-      FunctionLoweringInfo::LiveOutInfo &LOI = FLI.LiveOutRegInfo[DestReg];
+      if (DestReg >= FuncInfo->LiveOutRegInfo.size())
+        FuncInfo->LiveOutRegInfo.resize(DestReg+1);
+      FunctionLoweringInfo::LiveOutInfo &LOI =
+        FuncInfo->LiveOutRegInfo[DestReg];
       LOI.NumSignBits = NumSignBits;
       LOI.KnownOne = KnownOne;
       LOI.KnownZero = KnownZero;
@@ -565,10 +464,10 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
   if (ViewDAGCombine1 || ViewLegalizeTypesDAGs || ViewLegalizeDAGs ||
       ViewDAGCombine2 || ViewDAGCombineLT || ViewISelDAGs || ViewSchedDAGs ||
       ViewSUnitDAGs)
-    BlockName = CurDAG->getMachineFunction().getFunction()->getName() + ':' +
-                BB->getBasicBlock()->getName();
+    BlockName = MF->getFunction()->getNameStr() + ":" +
+                BB->getBasicBlock()->getNameStr();
 
-  DOUT << "Initial selection DAG:\n";
+  DEBUG(errs() << "Initial selection DAG:\n");
   DEBUG(CurDAG->dump());
 
   if (ViewDAGCombine1) CurDAG->viewGraph("dag-combine1 input for " + BlockName);
@@ -581,7 +480,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     CurDAG->Combine(Unrestricted, *AA, OptLevel);
   }
   
-  DOUT << "Optimized lowered selection DAG:\n";
+  DEBUG(errs() << "Optimized lowered selection DAG:\n");
   DEBUG(CurDAG->dump());
   
   // Second step, hack on the DAG until it only uses operations and types that
@@ -598,7 +497,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
       Changed = CurDAG->LegalizeTypes();
     }
 
-    DOUT << "Type-legalized selection DAG:\n";
+    DEBUG(errs() << "Type-legalized selection DAG:\n");
     DEBUG(CurDAG->dump());
 
     if (Changed) {
@@ -613,7 +512,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
         CurDAG->Combine(NoIllegalTypes, *AA, OptLevel);
       }
 
-      DOUT << "Optimized type-legalized selection DAG:\n";
+      DEBUG(errs() << "Optimized type-legalized selection DAG:\n");
       DEBUG(CurDAG->dump());
     }
 
@@ -643,7 +542,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
         CurDAG->Combine(NoIllegalOperations, *AA, OptLevel);
       }
 
-      DOUT << "Optimized vector-legalized selection DAG:\n";
+      DEBUG(errs() << "Optimized vector-legalized selection DAG:\n");
       DEBUG(CurDAG->dump());
     }
   }
@@ -657,7 +556,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     CurDAG->Legalize(DisableLegalizeTypes, OptLevel);
   }
   
-  DOUT << "Legalized selection DAG:\n";
+  DEBUG(errs() << "Legalized selection DAG:\n");
   DEBUG(CurDAG->dump());
   
   if (ViewDAGCombine2) CurDAG->viewGraph("dag-combine2 input for " + BlockName);
@@ -670,7 +569,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     CurDAG->Combine(NoIllegalOperations, *AA, OptLevel);
   }
   
-  DOUT << "Optimized legalized selection DAG:\n";
+  DEBUG(errs() << "Optimized legalized selection DAG:\n");
   DEBUG(CurDAG->dump());
 
   if (ViewISelDAGs) CurDAG->viewGraph("isel input for " + BlockName);
@@ -687,7 +586,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     InstructionSelect();
   }
 
-  DOUT << "Selected selection DAG:\n";
+  DEBUG(errs() << "Selected selection DAG:\n");
   DEBUG(CurDAG->dump());
 
   if (ViewSchedDAGs) CurDAG->viewGraph("scheduler input for " + BlockName);
@@ -720,7 +619,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     delete Scheduler;
   }
 
-  DOUT << "Selected machine code:\n";
+  DEBUG(errs() << "Selected machine code:\n");
   DEBUG(BB->dump());
 }  
 
@@ -763,7 +662,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
              I != E; ++I, ++j)
           if (Fn.paramHasAttr(j, Attribute::ByVal)) {
             if (EnableFastISelVerbose || EnableFastISelAbort)
-              cerr << "FastISel skips entry block due to byval argument\n";
+              errs() << "FastISel skips entry block due to byval argument\n";
             SuppressFastISel = true;
             break;
           }
@@ -828,11 +727,11 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
         if (isa<TerminatorInst>(BI))
           if (!HandlePHINodesInSuccessorBlocksFast(LLVMBB, FastIS)) {
             if (EnableFastISelVerbose || EnableFastISelAbort) {
-              cerr << "FastISel miss: ";
+              errs() << "FastISel miss: ";
               BI->dump();
             }
-            if (EnableFastISelAbort)
-              assert(0 && "FastISel didn't handle a PHI in a successor");
+            assert(!EnableFastISelAbort && 
+                   "FastISel didn't handle a PHI in a successor");
             break;
           }
 
@@ -847,11 +746,11 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
         // Then handle certain instructions as single-LLVM-Instruction blocks.
         if (isa<CallInst>(BI)) {
           if (EnableFastISelVerbose || EnableFastISelAbort) {
-            cerr << "FastISel missed call: ";
+            errs() << "FastISel missed call: ";
             BI->dump();
           }
 
-          if (BI->getType() != Type::VoidTy) {
+          if (BI->getType() != Type::getVoidTy(*CurDAG->getContext())) {
             unsigned &R = FuncInfo->ValueMap[BI];
             if (!R)
               R = FuncInfo->CreateRegForValue(BI);
@@ -869,13 +768,13 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
         // For now, be a little lenient about non-branch terminators.
         if (!isa<TerminatorInst>(BI) || isa<BranchInst>(BI)) {
           if (EnableFastISelVerbose || EnableFastISelAbort) {
-            cerr << "FastISel miss: ";
+            errs() << "FastISel miss: ";
             BI->dump();
           }
           if (EnableFastISelAbort)
             // The "fast" selector couldn't handle something and bailed.
             // For the purpose of debugging, just abort.
-            assert(0 && "FastISel didn't select the entire block");
+            llvm_unreachable("FastISel didn't select the entire block");
         }
         break;
       }
@@ -900,14 +799,15 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
 void
 SelectionDAGISel::FinishBasicBlock() {
 
-  DOUT << "Target-post-processed machine code:\n";
+  DEBUG(errs() << "Target-post-processed machine code:\n");
   DEBUG(BB->dump());
 
-  DOUT << "Total amount of phi nodes to update: "
-       << SDL->PHINodesToUpdate.size() << "\n";
+  DEBUG(errs() << "Total amount of phi nodes to update: "
+               << SDL->PHINodesToUpdate.size() << "\n");
   DEBUG(for (unsigned i = 0, e = SDL->PHINodesToUpdate.size(); i != e; ++i)
-          DOUT << "Node " << i << " : (" << SDL->PHINodesToUpdate[i].first
-               << ", " << SDL->PHINodesToUpdate[i].second << ")\n";);
+          errs() << "Node " << i << " : ("
+                 << SDL->PHINodesToUpdate[i].first
+                 << ", " << SDL->PHINodesToUpdate[i].second << ")\n");
   
   // Next, now that we know what the last MBB the LLVM BB expanded is, update
   // PHI nodes in successors.
@@ -1215,12 +1115,12 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
       // Otherwise, this is a memory operand.  Ask the target to select it.
       std::vector<SDValue> SelOps;
       if (SelectInlineAsmMemoryOperand(InOps[i+1], 'm', SelOps)) {
-        cerr << "Could not match memory address.  Inline asm failure!\n";
-        exit(1);
+        llvm_report_error("Could not match memory address.  Inline asm"
+                          " failure!");
       }
       
       // Add this to the output node.
-      MVT IntPtrTy = CurDAG->getTargetLoweringInfo().getPointerTy();
+      EVT IntPtrTy = TLI.getPointerTy();
       Ops.push_back(CurDAG->getTargetConstant(4/*MEM*/ | (SelOps.size()<< 3),
                                               IntPtrTy));
       Ops.insert(Ops.end(), SelOps.begin(), SelOps.end());
@@ -1233,7 +1133,7 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
     Ops.push_back(InOps.back());
 }
 
-/// findFlagUse - Return use of MVT::Flag value produced by the specified
+/// findFlagUse - Return use of EVT::Flag value produced by the specified
 /// SDNode.
 ///
 static SDNode *findFlagUse(SDNode *N) {
@@ -1336,7 +1236,7 @@ bool SelectionDAGISel::IsLegalAndProfitableToFold(SDNode *N, SDNode *U,
   // Fold. But since Fold and FU are flagged together, this will create
   // a cycle in the scheduling graph.
 
-  MVT VT = Root->getValueType(Root->getNumValues()-1);
+  EVT VT = Root->getValueType(Root->getNumValues()-1);
   while (VT == MVT::Flag) {
     SDNode *FU = findFlagUse(Root);
     if (FU == NULL)

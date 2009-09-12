@@ -24,14 +24,14 @@
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/System/Host.h"
 #include "llvm/System/Path.h"
 #include "llvm/System/Process.h"
 #include "llvm/Target/SubtargetFeature.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetMachineRegistry.h"
-#include "llvm/Target/TargetAsmInfo.h"
-
-#include <fstream>
+#include "llvm/Target/TargetRegistry.h"
+#include "llvm/Target/TargetSelect.h"
 
 using namespace llvm;
 
@@ -127,6 +127,8 @@ LTOModule* LTOModule::makeLTOModule(const void* mem, size_t length,
 /// subtarget. It would be better if we could encode this information into the
 /// IR. See <rdar://5972456>.
 std::string getFeatureString(const char *TargetTriple) {
+  InitializeAllTargets();
+
   SubtargetFeatures Features;
 
   if (strncmp(TargetTriple, "powerpc-apple-", 14) == 0) {
@@ -142,20 +144,25 @@ std::string getFeatureString(const char *TargetTriple) {
 LTOModule* LTOModule::makeLTOModule(MemoryBuffer* buffer,
                                     std::string& errMsg)
 {
+    InitializeAllTargets();
+
     // parse bitcode buffer
     OwningPtr<Module> m(ParseBitcodeFile(buffer, getGlobalContext(), &errMsg));
     if ( !m )
         return NULL;
-    // find machine architecture for this module
-    const TargetMachineRegistry::entry* march = 
-            TargetMachineRegistry::getClosestStaticTargetForModule(*m, errMsg);
 
+    std::string Triple = m->getTargetTriple();
+    if (Triple.empty())
+      Triple = sys::getHostTriple();
+
+    // find machine architecture for this module
+    const Target* march = TargetRegistry::lookupTarget(Triple, errMsg);
     if ( march == NULL ) 
         return NULL;
 
     // construct LTModule, hand over ownership of module and target
-    std::string FeatureStr = getFeatureString(m->getTargetTriple().c_str());
-    TargetMachine* target = march->CtorFn(*m, FeatureStr);
+    std::string FeatureStr = getFeatureString(Triple.c_str());
+    TargetMachine* target = march->createTargetMachine(Triple, FeatureStr);
     return new LTOModule(m.take(), target);
 }
 
@@ -325,14 +332,14 @@ void LTOModule::addDefinedDataSymbol(GlobalValue* v, Mangler& mangler)
 
 
 void LTOModule::addDefinedSymbol(GlobalValue* def, Mangler &mangler, 
-                                bool isFunction)
+                                 bool isFunction)
 {    
     // ignore all llvm.* symbols
-    if ( strncmp(def->getNameStart(), "llvm.", 5) == 0 )
+    if (def->getName().startswith("llvm."))
         return;
 
     // string is owned by _defines
-    const char* symbolName = ::strdup(mangler.getValueName(def).c_str());
+    const char* symbolName = ::strdup(mangler.getMangledName(def).c_str());
 
     // set alignment part log2() can have rounding errors
     uint32_t align = def->getAlignment();
@@ -381,7 +388,7 @@ void LTOModule::addDefinedSymbol(GlobalValue* def, Mangler &mangler,
 
 void LTOModule::addAsmGlobalSymbol(const char *name) {
     // only add new define if not already defined
-    if ( _defines.count(name, &name[strlen(name)+1]) == 0 ) 
+    if ( _defines.count(name) == 0 ) 
         return;
         
     // string is owned by _defines
@@ -398,10 +405,14 @@ void LTOModule::addAsmGlobalSymbol(const char *name) {
 void LTOModule::addPotentialUndefinedSymbol(GlobalValue* decl, Mangler &mangler)
 {   
     // ignore all llvm.* symbols
-    if ( strncmp(decl->getNameStart(), "llvm.", 5) == 0 )
+    if (decl->getName().startswith("llvm."))
         return;
 
-    const char* name = mangler.getValueName(decl).c_str();
+    // ignore all aliases
+    if (isa<GlobalAlias>(decl))
+        return;
+
+    std::string name = mangler.getMangledName(decl);
 
     // we already have the symbol
     if (_undefines.find(name) != _undefines.end())
@@ -409,7 +420,7 @@ void LTOModule::addPotentialUndefinedSymbol(GlobalValue* decl, Mangler &mangler)
 
     NameAndAttributes info;
     // string is owned by _undefines
-    info.name = ::strdup(name);
+    info.name = ::strdup(name.c_str());
     if (decl->hasExternalWeakLinkage())
       info.attributes = LTO_SYMBOL_DEFINITION_WEAKUNDEF;
     else
@@ -419,7 +430,7 @@ void LTOModule::addPotentialUndefinedSymbol(GlobalValue* decl, Mangler &mangler)
 
 
 
-// Find exeternal symbols referenced by VALUE. This is a recursive function.
+// Find external symbols referenced by VALUE. This is a recursive function.
 void LTOModule::findExternalRefs(Value* value, Mangler &mangler) {
 
     if (GlobalValue* gv = dyn_cast<GlobalValue>(value)) {
@@ -447,7 +458,7 @@ void LTOModule::lazyParseSymbols()
         _symbolsParsed = true;
         
         // Use mangler to add GlobalPrefix to names to match linker names.
-        Mangler mangler(*_module, _target->getTargetAsmInfo()->getGlobalPrefix());
+        Mangler mangler(*_module, _target->getMCAsmInfo()->getGlobalPrefix());
         // add chars used in ObjC method names so method names aren't mangled
         mangler.markCharAcceptable('[');
         mangler.markCharAcceptable(']');
@@ -505,8 +516,7 @@ void LTOModule::lazyParseSymbols()
                                                 it != _undefines.end(); ++it) {
             // if this symbol also has a definition, then don't make an undefine
             // because it is a tentative definition
-            if ( _defines.count(it->getKeyData(), it->getKeyData()+
-                                                  it->getKeyLength()) == 0 ) {
+            if ( _defines.count(it->getKey()) == 0 ) {
               NameAndAttributes info = it->getValue();
               _symbols.push_back(info);
             }
@@ -539,4 +549,3 @@ const char* LTOModule::getSymbolName(uint32_t index)
     else
         return NULL;
 }
-

@@ -14,7 +14,7 @@
 #ifndef LLVM_CLANG_ANALYSES_DATAFLOW_SOLVER
 #define LLVM_CLANG_ANALYSES_DATAFLOW_SOLVER
 
-#include "clang/AST/CFG.h"
+#include "clang/Analysis/CFG.h"
 #include "clang/Analysis/ProgramPoint.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "functional" // STL
@@ -24,7 +24,7 @@ namespace clang {
 //===----------------------------------------------------------------------===//
 /// DataflowWorkListTy - Data structure representing the worklist used for
 ///  dataflow algorithms.
-//===----------------------------------------------------------------------===//  
+//===----------------------------------------------------------------------===//
 
 class DataflowWorkListTy {
   typedef llvm::SmallPtrSet<const CFGBlock*,20> BlockSet;
@@ -70,11 +70,11 @@ template <> struct ItrTraits<forward_analysis_tag> {
   static StmtItr StmtEnd(const CFGBlock* B) { return B->end(); }
   
   static BlockEdge PrevEdge(const CFGBlock* B, const CFGBlock* Prev) {
-    return BlockEdge(Prev, B);
+    return BlockEdge(Prev, B, 0);
   }
   
   static BlockEdge NextEdge(const CFGBlock* B, const CFGBlock* Next) {
-    return BlockEdge(B, Next);
+    return BlockEdge(B, Next, 0);
   }
 };
 
@@ -93,11 +93,11 @@ template <> struct ItrTraits<backward_analysis_tag> {
   static StmtItr StmtEnd(const CFGBlock* B) { return B->rend(); }    
   
   static BlockEdge PrevEdge(const CFGBlock* B, const CFGBlock* Prev) {
-    return BlockEdge(B, Prev);
+    return BlockEdge(B, Prev, 0);
   }
   
   static BlockEdge NextEdge(const CFGBlock* B, const CFGBlock* Next) {
-    return BlockEdge(Next, B);
+    return BlockEdge(Next, B, 0);
   }
 };
 } // end namespace dataflow
@@ -194,9 +194,9 @@ private:
     
     while (!WorkList.isEmpty()) {
       const CFGBlock* B = WorkList.dequeue();
-      ProcessMerge(cfg,B);
+      ProcessMerge(cfg, B);
       ProcessBlock(B, recordStmtValues, AnalysisDirTag());
-      UpdateEdges(cfg,B,TF.getVal());
+      UpdateEdges(cfg, B, TF.getVal());
     }
   }  
   
@@ -211,16 +211,22 @@ private:
     bool firstMerge = true;
     
     for (PrevBItr I=ItrTraits::PrevBegin(B),E=ItrTraits::PrevEnd(B); I!=E; ++I){
+      
+      CFGBlock *PrevBlk = *I;
+
+      if (!PrevBlk)
+        continue;
 
       typename EdgeDataMapTy::iterator EI =
-        M.find(ItrTraits::PrevEdge(B, *I));
+        M.find(ItrTraits::PrevEdge(B, PrevBlk));
 
       if (EI != M.end()) {
         if (firstMerge) {
           firstMerge = false;
           V.copyValues(EI->second);
         }
-        else Merge(V,EI->second);
+        else
+          Merge(V, EI->second);
       }
     }
     
@@ -263,7 +269,8 @@ private:
   //    forward/backward analysis respectively)
   void UpdateEdges(CFG& cfg, const CFGBlock* B, ValTy& V) {
     for (NextBItr I=ItrTraits::NextBegin(B), E=ItrTraits::NextEnd(B); I!=E; ++I)
-      UpdateEdgeValue(ItrTraits::NextEdge(B, *I),V,*I);
+      if (CFGBlock *NextBlk = *I)
+        UpdateEdgeValue(ItrTraits::NextEdge(B, NextBlk),V, NextBlk);
   }
     
   /// UpdateEdgeValue - Update the value associated with a given edge.

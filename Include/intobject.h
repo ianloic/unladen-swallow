@@ -20,7 +20,7 @@ _Py_TrueStruct and _Py_ZeroStruct in boolobject.h; don't use this.
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PyIntObject {
     PyObject_HEAD
     long ob_ival;
 } PyIntObject;

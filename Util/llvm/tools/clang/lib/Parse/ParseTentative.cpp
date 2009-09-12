@@ -409,7 +409,7 @@ Parser::TPResult Parser::TryParseDeclarator(bool mayBeAbstract,
 
   while (1) {
     if (Tok.is(tok::coloncolon) || Tok.is(tok::identifier))
-      TryAnnotateCXXScopeToken();
+      TryAnnotateCXXScopeToken(true);
 
     if (Tok.is(tok::star) || Tok.is(tok::amp) || Tok.is(tok::caret) ||
         (Tok.is(tok::annot_cxxscope) && NextToken().is(tok::star))) {
@@ -427,8 +427,12 @@ Parser::TPResult Parser::TryParseDeclarator(bool mayBeAbstract,
   // direct-declarator:
   // direct-abstract-declarator:
 
-  if (Tok.is(tok::identifier) && mayHaveIdentifier) {
+  if ((Tok.is(tok::identifier) ||
+       (Tok.is(tok::annot_cxxscope) && NextToken().is(tok::identifier))) &&
+      mayHaveIdentifier) {
     // declarator-id
+    if (Tok.is(tok::annot_cxxscope))
+      ConsumeToken();
     ConsumeToken();
   } else if (Tok.is(tok::l_paren)) {
     ConsumeParen();
@@ -681,6 +685,8 @@ Parser::TPResult Parser::isCXXDeclarationSpecifier() {
 
   case tok::kw_char:
   case tok::kw_wchar_t:
+  case tok::kw_char16_t:
+  case tok::kw_char32_t:
   case tok::kw_bool:
   case tok::kw_short:
   case tok::kw_int:

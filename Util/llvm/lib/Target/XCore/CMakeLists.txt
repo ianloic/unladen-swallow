@@ -11,13 +11,14 @@ tablegen(XCoreGenCallingConv.inc -gen-callingconv)
 tablegen(XCoreGenSubtarget.inc -gen-subtarget)
 
 add_llvm_target(XCore
-  XCoreAsmPrinter.cpp
+  MCSectionXCore.cpp
   XCoreFrameInfo.cpp
   XCoreInstrInfo.cpp
   XCoreISelDAGToDAG.cpp
   XCoreISelLowering.cpp
   XCoreRegisterInfo.cpp
   XCoreSubtarget.cpp
-  XCoreTargetAsmInfo.cpp
+  XCoreMCAsmInfo.cpp
   XCoreTargetMachine.cpp
+  XCoreTargetObjectFile.cpp
   )

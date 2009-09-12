@@ -29,8 +29,10 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Config/config.h"
 using namespace llvm;
 
@@ -61,11 +63,11 @@ public:
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) 
     =0;
   
-  Value *OptimizeCall(CallInst *CI, const TargetData &TD, IRBuilder<> &B) {
+  Value *OptimizeCall(CallInst *CI, const TargetData *TD, IRBuilder<> &B) {
     Caller = CI->getParent()->getParent();
-    this->TD = &TD;
+    this->TD = TD;
     if (CI->getCalledFunction())
-      Context = CI->getCalledFunction()->getContext();
+      Context = &CI->getCalledFunction()->getContext();
     return CallOptimizer(CI->getCalledFunction(), CI, B);
   }
 
@@ -124,7 +126,7 @@ public:
 /// CastToCStr - Return V if it is an i8*, otherwise cast it to i8*.
 Value *LibCallOptimization::CastToCStr(Value *V, IRBuilder<> &B) {
   return
-        B.CreateBitCast(V, Context->getPointerTypeUnqual(Type::Int8Ty), "cstr");
+        B.CreateBitCast(V, PointerType::getUnqual(Type::getInt8Ty(*Context)), "cstr");
 }
 
 /// EmitStrLen - Emit a call to the strlen function to the builder, for the
@@ -137,8 +139,8 @@ Value *LibCallOptimization::EmitStrLen(Value *Ptr, IRBuilder<> &B) {
                                    Attribute::NoUnwind);
 
   Constant *StrLen =M->getOrInsertFunction("strlen", AttrListPtr::get(AWI, 2),
-                                           TD->getIntPtrType(),
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
+                                           TD->getIntPtrType(*Context),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
                                            NULL);
   CallInst *CI = B.CreateCall(StrLen, CastToCStr(Ptr, B), "strlen");
   if (const Function *F = dyn_cast<Function>(StrLen->stripPointerCasts()))
@@ -157,7 +159,7 @@ Value *LibCallOptimization::EmitMemCpy(Value *Dst, Value *Src, Value *Len,
   Tys[0] = Len->getType();
   Value *MemCpy = Intrinsic::getDeclaration(M, IID, Tys, 1);
   return B.CreateCall4(MemCpy, CastToCStr(Dst, B), CastToCStr(Src, B), Len,
-                       Context->getConstantInt(Type::Int32Ty, Align));
+                       ConstantInt::get(Type::getInt32Ty(*Context), Align));
 }
 
 /// EmitMemChr - Emit a call to the memchr function.  This assumes that Ptr is
@@ -169,9 +171,9 @@ Value *LibCallOptimization::EmitMemChr(Value *Ptr, Value *Val,
   AWI = AttributeWithIndex::get(~0u, Attribute::ReadOnly | Attribute::NoUnwind);
 
   Value *MemChr = M->getOrInsertFunction("memchr", AttrListPtr::get(&AWI, 1),
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
-                                         Type::Int32Ty, TD->getIntPtrType(),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                                         Type::getInt32Ty(*Context), TD->getIntPtrType(*Context),
                                          NULL);
   CallInst *CI = B.CreateCall3(MemChr, CastToCStr(Ptr, B), Val, Len, "memchr");
 
@@ -192,10 +194,10 @@ Value *LibCallOptimization::EmitMemCmp(Value *Ptr1, Value *Ptr2,
                                    Attribute::NoUnwind);
 
   Value *MemCmp = M->getOrInsertFunction("memcmp", AttrListPtr::get(AWI, 3),
-                                         Type::Int32Ty,
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
-                                         TD->getIntPtrType(), NULL);
+                                         Type::getInt32Ty(*Context),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                                         TD->getIntPtrType(*Context), NULL);
   CallInst *CI = B.CreateCall3(MemCmp, CastToCStr(Ptr1, B), CastToCStr(Ptr2, B),
                                Len, "memcmp");
 
@@ -213,7 +215,7 @@ Value *LibCallOptimization::EmitMemSet(Value *Dst, Value *Val,
  const Type *Tys[1];
  Tys[0] = Len->getType();
  Value *MemSet = Intrinsic::getDeclaration(M, IID, Tys, 1);
- Value *Align = Context->getConstantInt(Type::Int32Ty, 1);
+ Value *Align = ConstantInt::get(Type::getInt32Ty(*Context), 1);
  return B.CreateCall4(MemSet, CastToCStr(Dst, B), Val, Len, Align);
 }
 
@@ -224,12 +226,12 @@ Value *LibCallOptimization::EmitMemSet(Value *Dst, Value *Val,
 Value *LibCallOptimization::EmitUnaryFloatFnCall(Value *Op, const char *Name,
                                                  IRBuilder<> &B) {
   char NameBuffer[20];
-  if (Op->getType() != Type::DoubleTy) {
+  if (Op->getType() != Type::getDoubleTy(*Context)) {
     // If we need to add a suffix, copy into NameBuffer.
     unsigned NameLen = strlen(Name);
     assert(NameLen < sizeof(NameBuffer)-2);
     memcpy(NameBuffer, Name, NameLen);
-    if (Op->getType() == Type::FloatTy)
+    if (Op->getType() == Type::getFloatTy(*Context))
       NameBuffer[NameLen] = 'f';  // floorf
     else
       NameBuffer[NameLen] = 'l';  // floorl
@@ -252,10 +254,10 @@ Value *LibCallOptimization::EmitUnaryFloatFnCall(Value *Op, const char *Name,
 /// is an integer.
 void LibCallOptimization::EmitPutChar(Value *Char, IRBuilder<> &B) {
   Module *M = Caller->getParent();
-  Value *PutChar = M->getOrInsertFunction("putchar", Type::Int32Ty,
-                                          Type::Int32Ty, NULL);
+  Value *PutChar = M->getOrInsertFunction("putchar", Type::getInt32Ty(*Context),
+                                          Type::getInt32Ty(*Context), NULL);
   CallInst *CI = B.CreateCall(PutChar,
-                              B.CreateIntCast(Char, Type::Int32Ty, "chari"),
+                              B.CreateIntCast(Char, Type::getInt32Ty(*Context), "chari"),
                               "putchar");
 
   if (const Function *F = dyn_cast<Function>(PutChar->stripPointerCasts()))
@@ -271,8 +273,8 @@ void LibCallOptimization::EmitPutS(Value *Str, IRBuilder<> &B) {
   AWI[1] = AttributeWithIndex::get(~0u, Attribute::NoUnwind);
 
   Value *PutS = M->getOrInsertFunction("puts", AttrListPtr::get(AWI, 2),
-                                       Type::Int32Ty,
-                                    Context->getPointerTypeUnqual(Type::Int8Ty),
+                                       Type::getInt32Ty(*Context),
+                                    PointerType::getUnqual(Type::getInt8Ty(*Context)),
                                        NULL);
   CallInst *CI = B.CreateCall(PutS, CastToCStr(Str, B), "puts");
   if (const Function *F = dyn_cast<Function>(PutS->stripPointerCasts()))
@@ -289,12 +291,12 @@ void LibCallOptimization::EmitFPutC(Value *Char, Value *File, IRBuilder<> &B) {
   AWI[1] = AttributeWithIndex::get(~0u, Attribute::NoUnwind);
   Constant *F;
   if (isa<PointerType>(File->getType()))
-    F = M->getOrInsertFunction("fputc", AttrListPtr::get(AWI, 2), Type::Int32Ty,
-                               Type::Int32Ty, File->getType(), NULL);
+    F = M->getOrInsertFunction("fputc", AttrListPtr::get(AWI, 2), Type::getInt32Ty(*Context),
+                               Type::getInt32Ty(*Context), File->getType(), NULL);
   else
-    F = M->getOrInsertFunction("fputc", Type::Int32Ty, Type::Int32Ty,
+    F = M->getOrInsertFunction("fputc", Type::getInt32Ty(*Context), Type::getInt32Ty(*Context),
                                File->getType(), NULL);
-  Char = B.CreateIntCast(Char, Type::Int32Ty, "chari");
+  Char = B.CreateIntCast(Char, Type::getInt32Ty(*Context), "chari");
   CallInst *CI = B.CreateCall2(F, Char, File, "fputc");
 
   if (const Function *Fn = dyn_cast<Function>(F->stripPointerCasts()))
@@ -311,12 +313,12 @@ void LibCallOptimization::EmitFPutS(Value *Str, Value *File, IRBuilder<> &B) {
   AWI[2] = AttributeWithIndex::get(~0u, Attribute::NoUnwind);
   Constant *F;
   if (isa<PointerType>(File->getType()))
-    F = M->getOrInsertFunction("fputs", AttrListPtr::get(AWI, 3), Type::Int32Ty,
-                               Context->getPointerTypeUnqual(Type::Int8Ty),
+    F = M->getOrInsertFunction("fputs", AttrListPtr::get(AWI, 3), Type::getInt32Ty(*Context),
+                               PointerType::getUnqual(Type::getInt8Ty(*Context)),
                                File->getType(), NULL);
   else
-    F = M->getOrInsertFunction("fputs", Type::Int32Ty,
-                               Context->getPointerTypeUnqual(Type::Int8Ty),
+    F = M->getOrInsertFunction("fputs", Type::getInt32Ty(*Context),
+                               PointerType::getUnqual(Type::getInt8Ty(*Context)),
                                File->getType(), NULL);
   CallInst *CI = B.CreateCall2(F, CastToCStr(Str, B), File, "fputs");
 
@@ -336,17 +338,17 @@ void LibCallOptimization::EmitFWrite(Value *Ptr, Value *Size, Value *File,
   Constant *F;
   if (isa<PointerType>(File->getType()))
     F = M->getOrInsertFunction("fwrite", AttrListPtr::get(AWI, 3),
-                               TD->getIntPtrType(),
-                               Context->getPointerTypeUnqual(Type::Int8Ty),
-                               TD->getIntPtrType(), TD->getIntPtrType(),
+                               TD->getIntPtrType(*Context),
+                               PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                               TD->getIntPtrType(*Context), TD->getIntPtrType(*Context),
                                File->getType(), NULL);
   else
-    F = M->getOrInsertFunction("fwrite", TD->getIntPtrType(),
-                               Context->getPointerTypeUnqual(Type::Int8Ty),
-                               TD->getIntPtrType(), TD->getIntPtrType(),
+    F = M->getOrInsertFunction("fwrite", TD->getIntPtrType(*Context),
+                               PointerType::getUnqual(Type::getInt8Ty(*Context)),
+                               TD->getIntPtrType(*Context), TD->getIntPtrType(*Context),
                                File->getType(), NULL);
   CallInst *CI = B.CreateCall4(F, CastToCStr(Ptr, B), Size,
-                        Context->getConstantInt(TD->getIntPtrType(), 1), File);
+                        ConstantInt::get(TD->getIntPtrType(*Context), 1), File);
 
   if (const Function *Fn = dyn_cast<Function>(F->stripPointerCasts()))
     CI->setCallingConv(Fn->getCallingConv());
@@ -436,7 +438,8 @@ static uint64_t GetStringLengthH(Value *V, SmallPtrSet<PHINode*, 32> &PHIs) {
   // variable that is a constant and is initialized. The referenced constant
   // initializer is the array that we'll use for optimization.
   GlobalVariable* GV = dyn_cast<GlobalVariable>(GEP->getOperand(0));
-  if (!GV || !GV->isConstant() || !GV->hasInitializer())
+  if (!GV || !GV->isConstant() || !GV->hasInitializer() ||
+      GV->mayBeOverridden())
     return 0;
   Constant *GlobalInit = GV->getInitializer();
   
@@ -447,7 +450,8 @@ static uint64_t GetStringLengthH(Value *V, SmallPtrSet<PHINode*, 32> &PHIs) {
   
   // Must be a Constant Array
   ConstantArray *Array = dyn_cast<ConstantArray>(GlobalInit);
-  if (!Array || Array->getType()->getElementType() != Type::Int8Ty)
+  if (!Array ||
+      Array->getType()->getElementType() != Type::getInt8Ty(V->getContext()))
     return false;
   
   // Get the number of elements in the array
@@ -512,23 +516,31 @@ struct VISIBILITY_HIDDEN ExitOpt : public LibCallOptimization {
 
     // Verify the caller is main, and that the result type of main matches the
     // argument type of exit.
-    if (!Caller->isName("main") || !Caller->hasExternalLinkage() ||
+    if (Caller->getName() != "main" || !Caller->hasExternalLinkage() ||
         Caller->getReturnType() != CI->getOperand(1)->getType())
       return 0;
 
     TerminatorInst *OldTI = CI->getParent()->getTerminator();
-    
-    // Create the return after the call.
-    ReturnInst *RI = B.CreateRet(CI->getOperand(1));
 
     // Drop all successor phi node entries.
     for (unsigned i = 0, e = OldTI->getNumSuccessors(); i != e; ++i)
       OldTI->getSuccessor(i)->removePredecessor(CI->getParent());
-    
-    // Erase all instructions from after our return instruction until the end of
-    // the block.
-    BasicBlock::iterator FirstDead = RI; ++FirstDead;
-    CI->getParent()->getInstList().erase(FirstDead, CI->getParent()->end());
+
+    // Remove all instructions after the exit.
+    BasicBlock::iterator Dead = CI, E = OldTI; ++Dead;
+    while (Dead != E) {
+      BasicBlock::iterator Next = next(Dead);
+      if (Dead->getType() != Type::getVoidTy(*Context))
+        Dead->replaceAllUsesWith(UndefValue::get(Dead->getType()));
+      Dead->eraseFromParent();
+      Dead = Next;
+    }
+
+    // Insert a return instruction.
+    OldTI->eraseFromParent();
+    B.SetInsertPoint(B.GetInsertBlock());
+    B.CreateRet(CI->getOperand(1));
+
     return CI;
   }
 };
@@ -545,7 +557,7 @@ struct VISIBILITY_HIDDEN StrCatOpt : public LibCallOptimization {
     // Verify the "strcat" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 2 ||
-        FT->getReturnType() != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getReturnType() != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         FT->getParamType(0) != FT->getReturnType() ||
         FT->getParamType(1) != FT->getReturnType())
       return 0;
@@ -562,7 +574,10 @@ struct VISIBILITY_HIDDEN StrCatOpt : public LibCallOptimization {
     // Handle the simple, do-nothing case: strcat(x, "") -> x
     if (Len == 0)
       return Dst;
-    
+
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     EmitStrLenMemCpy(Src, Dst, Len, B);
     return Dst;
   }
@@ -580,7 +595,7 @@ struct VISIBILITY_HIDDEN StrCatOpt : public LibCallOptimization {
     // We have enough information to now generate the memcpy call to do the
     // concatenation for us.  Make a memcpy to copy the nul byte with align = 1.
     EmitMemCpy(CpyDst, Src,
-               Context->getConstantInt(TD->getIntPtrType(), Len+1), 1, B);
+               ConstantInt::get(TD->getIntPtrType(*Context), Len+1), 1, B);
   }
 };
 
@@ -592,7 +607,7 @@ struct VISIBILITY_HIDDEN StrNCatOpt : public StrCatOpt {
     // Verify the "strncat" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 ||
-        FT->getReturnType() != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getReturnType() != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         FT->getParamType(0) != FT->getReturnType() ||
         FT->getParamType(1) != FT->getReturnType() ||
         !isa<IntegerType>(FT->getParamType(2)))
@@ -619,6 +634,9 @@ struct VISIBILITY_HIDDEN StrNCatOpt : public StrCatOpt {
     // strncat(x,  c, 0) -> x
     if (SrcLen == 0 || Len == 0) return Dst;
 
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     // We don't optimize this case
     if (Len < SrcLen) return 0;
 
@@ -637,7 +655,7 @@ struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
     // Verify the "strchr" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 2 ||
-        FT->getReturnType() != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getReturnType() != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         FT->getParamType(0) != FT->getReturnType())
       return 0;
     
@@ -647,12 +665,15 @@ struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
     // of the input string and turn this into memchr.
     ConstantInt *CharC = dyn_cast<ConstantInt>(CI->getOperand(2));
     if (CharC == 0) {
+      // These optimizations require TargetData.
+      if (!TD) return 0;
+
       uint64_t Len = GetStringLength(SrcStr);
-      if (Len == 0 || FT->getParamType(1) != Type::Int32Ty) // memchr needs i32.
+      if (Len == 0 || FT->getParamType(1) != Type::getInt32Ty(*Context)) // memchr needs i32.
         return 0;
       
       return EmitMemChr(SrcStr, CI->getOperand(2), // include nul.
-                        Context->getConstantInt(TD->getIntPtrType(), Len), B);
+                        ConstantInt::get(TD->getIntPtrType(*Context), Len), B);
     }
 
     // Otherwise, the character is a constant, see if the first argument is
@@ -669,7 +690,7 @@ struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
     uint64_t i = 0;
     while (1) {
       if (i == Str.size())    // Didn't find the char.  strchr returns null.
-        return Context->getNullValue(CI->getType());
+        return Constant::getNullValue(CI->getType());
       // Did we find our match?
       if (Str[i] == CharValue)
         break;
@@ -677,7 +698,7 @@ struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
     }
     
     // strchr(s+n,c)  -> gep(s+n+i,c)
-    Value *Idx = Context->getConstantInt(Type::Int64Ty, i);
+    Value *Idx = ConstantInt::get(Type::getInt64Ty(*Context), i);
     return B.CreateGEP(SrcStr, Idx, "strchr");
   }
 };
@@ -689,14 +710,14 @@ struct VISIBILITY_HIDDEN StrCmpOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strcmp" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
-    if (FT->getNumParams() != 2 || FT->getReturnType() != Type::Int32Ty ||
+    if (FT->getNumParams() != 2 || FT->getReturnType() != Type::getInt32Ty(*Context) ||
         FT->getParamType(0) != FT->getParamType(1) ||
-        FT->getParamType(0) != Context->getPointerTypeUnqual(Type::Int8Ty))
+        FT->getParamType(0) != PointerType::getUnqual(Type::getInt8Ty(*Context)))
       return 0;
     
     Value *Str1P = CI->getOperand(1), *Str2P = CI->getOperand(2);
     if (Str1P == Str2P)      // strcmp(x,x)  -> 0
-      return Context->getConstantInt(CI->getType(), 0);
+      return ConstantInt::get(CI->getType(), 0);
     
     std::string Str1, Str2;
     bool HasStr1 = GetConstantStringInfo(Str1P, Str1);
@@ -710,15 +731,18 @@ struct VISIBILITY_HIDDEN StrCmpOpt : public LibCallOptimization {
     
     // strcmp(x, y)  -> cnst  (if both x and y are constant strings)
     if (HasStr1 && HasStr2)
-      return Context->getConstantInt(CI->getType(), 
+      return ConstantInt::get(CI->getType(), 
                                      strcmp(Str1.c_str(),Str2.c_str()));
 
     // strcmp(P, "x") -> memcmp(P, "x", 2)
     uint64_t Len1 = GetStringLength(Str1P);
     uint64_t Len2 = GetStringLength(Str2P);
     if (Len1 && Len2) {
+      // These optimizations require TargetData.
+      if (!TD) return 0;
+
       return EmitMemCmp(Str1P, Str2P,
-                        Context->getConstantInt(TD->getIntPtrType(),
+                        ConstantInt::get(TD->getIntPtrType(*Context),
                         std::min(Len1, Len2)), B);
     }
 
@@ -733,15 +757,15 @@ struct VISIBILITY_HIDDEN StrNCmpOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strncmp" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
-    if (FT->getNumParams() != 3 || FT->getReturnType() != Type::Int32Ty ||
+    if (FT->getNumParams() != 3 || FT->getReturnType() != Type::getInt32Ty(*Context) ||
         FT->getParamType(0) != FT->getParamType(1) ||
-        FT->getParamType(0) != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getParamType(0) != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         !isa<IntegerType>(FT->getParamType(2)))
       return 0;
     
     Value *Str1P = CI->getOperand(1), *Str2P = CI->getOperand(2);
     if (Str1P == Str2P)      // strncmp(x,x,n)  -> 0
-      return Context->getConstantInt(CI->getType(), 0);
+      return ConstantInt::get(CI->getType(), 0);
     
     // Get the length argument if it is constant.
     uint64_t Length;
@@ -751,7 +775,7 @@ struct VISIBILITY_HIDDEN StrNCmpOpt : public LibCallOptimization {
       return 0;
     
     if (Length == 0) // strncmp(x,y,0)   -> 0
-      return Context->getConstantInt(CI->getType(), 0);
+      return ConstantInt::get(CI->getType(), 0);
     
     std::string Str1, Str2;
     bool HasStr1 = GetConstantStringInfo(Str1P, Str1);
@@ -765,7 +789,7 @@ struct VISIBILITY_HIDDEN StrNCmpOpt : public LibCallOptimization {
     
     // strncmp(x, y)  -> cnst  (if both x and y are constant strings)
     if (HasStr1 && HasStr2)
-      return Context->getConstantInt(CI->getType(),
+      return ConstantInt::get(CI->getType(),
                               strncmp(Str1.c_str(), Str2.c_str(), Length));
     return 0;
   }
@@ -781,13 +805,16 @@ struct VISIBILITY_HIDDEN StrCpyOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 2 || FT->getReturnType() != FT->getParamType(0) ||
         FT->getParamType(0) != FT->getParamType(1) ||
-        FT->getParamType(0) != Context->getPointerTypeUnqual(Type::Int8Ty))
+        FT->getParamType(0) != PointerType::getUnqual(Type::getInt8Ty(*Context)))
       return 0;
     
     Value *Dst = CI->getOperand(1), *Src = CI->getOperand(2);
     if (Dst == Src)      // strcpy(x,x)  -> x
       return Src;
     
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     // See if we can get the length of the input string.
     uint64_t Len = GetStringLength(Src);
     if (Len == 0) return 0;
@@ -795,7 +822,7 @@ struct VISIBILITY_HIDDEN StrCpyOpt : public LibCallOptimization {
     // We have enough information to now generate the memcpy call to do the
     // concatenation for us.  Make a memcpy to copy the nul byte with align = 1.
     EmitMemCpy(Dst, Src,
-               Context->getConstantInt(TD->getIntPtrType(), Len), 1, B);
+               ConstantInt::get(TD->getIntPtrType(*Context), Len), 1, B);
     return Dst;
   }
 };
@@ -808,7 +835,7 @@ struct VISIBILITY_HIDDEN StrNCpyOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || FT->getReturnType() != FT->getParamType(0) ||
         FT->getParamType(0) != FT->getParamType(1) ||
-        FT->getParamType(0) != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getParamType(0) != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         !isa<IntegerType>(FT->getParamType(2)))
       return 0;
 
@@ -823,7 +850,7 @@ struct VISIBILITY_HIDDEN StrNCpyOpt : public LibCallOptimization {
 
     if (SrcLen == 0) {
       // strncpy(x, "", y) -> memset(x, '\0', y, 1)
-      EmitMemSet(Dst, Context->getConstantInt(Type::Int8Ty, '\0'), LenOp, B);
+      EmitMemSet(Dst, ConstantInt::get(Type::getInt8Ty(*Context), '\0'), LenOp, B);
       return Dst;
     }
 
@@ -835,12 +862,15 @@ struct VISIBILITY_HIDDEN StrNCpyOpt : public LibCallOptimization {
 
     if (Len == 0) return Dst; // strncpy(x, y, 0) -> x
 
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     // Let strncpy handle the zero padding
     if (Len > SrcLen+1) return 0;
 
     // strncpy(x, s, c) -> memcpy(x, s, c, 1) [s and c are constant]
     EmitMemCpy(Dst, Src,
-               Context->getConstantInt(TD->getIntPtrType(), Len), 1, B);
+               ConstantInt::get(TD->getIntPtrType(*Context), Len), 1, B);
 
     return Dst;
   }
@@ -853,7 +883,7 @@ struct VISIBILITY_HIDDEN StrLenOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 1 ||
-        FT->getParamType(0) != Context->getPointerTypeUnqual(Type::Int8Ty) ||
+        FT->getParamType(0) != PointerType::getUnqual(Type::getInt8Ty(*Context)) ||
         !isa<IntegerType>(FT->getReturnType()))
       return 0;
     
@@ -861,7 +891,7 @@ struct VISIBILITY_HIDDEN StrLenOpt : public LibCallOptimization {
 
     // Constant folding: strlen("xyz") -> 3
     if (uint64_t Len = GetStringLength(Src))
-      return Context->getConstantInt(CI->getType(), Len-1);
+      return ConstantInt::get(CI->getType(), Len-1);
 
     // Handle strlen(p) != 0.
     if (!IsOnlyUsedInZeroEqualityComparison(CI)) return 0;
@@ -902,13 +932,13 @@ struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || !isa<PointerType>(FT->getParamType(0)) ||
         !isa<PointerType>(FT->getParamType(1)) ||
-        FT->getReturnType() != Type::Int32Ty)
+        FT->getReturnType() != Type::getInt32Ty(*Context))
       return 0;
 
     Value *LHS = CI->getOperand(1), *RHS = CI->getOperand(2);
 
     if (LHS == RHS)  // memcmp(s,s,x) -> 0
-      return Context->getNullValue(CI->getType());
+      return Constant::getNullValue(CI->getType());
 
     // Make sure we have a constant length.
     ConstantInt *LenC = dyn_cast<ConstantInt>(CI->getOperand(3));
@@ -916,7 +946,7 @@ struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
     uint64_t Len = LenC->getZExtValue();
 
     if (Len == 0) // memcmp(s1,s2,0) -> 0
-      return Context->getNullValue(CI->getType());
+      return Constant::getNullValue(CI->getType());
 
     if (Len == 1) { // memcmp(S1,S2,1) -> *LHS - *RHS
       Value *LHSV = B.CreateLoad(CastToCStr(LHS, B), "lhsv");
@@ -927,8 +957,8 @@ struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
     // memcmp(S1,S2,2) != 0 -> (*(short*)LHS ^ *(short*)RHS)  != 0
     // memcmp(S1,S2,4) != 0 -> (*(int*)LHS ^ *(int*)RHS)  != 0
     if ((Len == 2 || Len == 4) && IsOnlyUsedInZeroEqualityComparison(CI)) {
-      const Type *PTy = Context->getPointerTypeUnqual(Len == 2 ?
-                                               Type::Int16Ty : Type::Int32Ty);
+      const Type *PTy = PointerType::getUnqual(Len == 2 ?
+                       Type::getInt16Ty(*Context) : Type::getInt32Ty(*Context));
       LHS = B.CreateBitCast(LHS, PTy, "tmp");
       RHS = B.CreateBitCast(RHS, PTy, "tmp");
       LoadInst *LHSV = B.CreateLoad(LHS, "lhsv");
@@ -946,11 +976,14 @@ struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
 
 struct VISIBILITY_HIDDEN MemCpyOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || FT->getReturnType() != FT->getParamType(0) ||
         !isa<PointerType>(FT->getParamType(0)) ||
         !isa<PointerType>(FT->getParamType(1)) ||
-        FT->getParamType(2) != TD->getIntPtrType())
+        FT->getParamType(2) != TD->getIntPtrType(*Context))
       return 0;
 
     // memcpy(x, y, n) -> llvm.memcpy(x, y, n, 1)
@@ -964,23 +997,26 @@ struct VISIBILITY_HIDDEN MemCpyOpt : public LibCallOptimization {
 
 struct VISIBILITY_HIDDEN MemMoveOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || FT->getReturnType() != FT->getParamType(0) ||
         !isa<PointerType>(FT->getParamType(0)) ||
         !isa<PointerType>(FT->getParamType(1)) ||
-        FT->getParamType(2) != TD->getIntPtrType())
+        FT->getParamType(2) != TD->getIntPtrType(*Context))
       return 0;
 
     // memmove(x, y, n) -> llvm.memmove(x, y, n, 1)
     Module *M = Caller->getParent();
     Intrinsic::ID IID = Intrinsic::memmove;
     const Type *Tys[1];
-    Tys[0] = TD->getIntPtrType();
+    Tys[0] = TD->getIntPtrType(*Context);
     Value *MemMove = Intrinsic::getDeclaration(M, IID, Tys, 1);
     Value *Dst = CastToCStr(CI->getOperand(1), B);
     Value *Src = CastToCStr(CI->getOperand(2), B);
     Value *Size = CI->getOperand(3);
-    Value *Align = Context->getConstantInt(Type::Int32Ty, 1);
+    Value *Align = ConstantInt::get(Type::getInt32Ty(*Context), 1);
     B.CreateCall4(MemMove, Dst, Src, Size, Align);
     return CI->getOperand(1);
   }
@@ -991,15 +1027,18 @@ struct VISIBILITY_HIDDEN MemMoveOpt : public LibCallOptimization {
 
 struct VISIBILITY_HIDDEN MemSetOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || FT->getReturnType() != FT->getParamType(0) ||
         !isa<PointerType>(FT->getParamType(0)) ||
-        FT->getParamType(1) != TD->getIntPtrType() ||
-        FT->getParamType(2) != TD->getIntPtrType())
+        !isa<IntegerType>(FT->getParamType(1)) ||
+        FT->getParamType(2) != TD->getIntPtrType(*Context))
       return 0;
 
     // memset(p, v, n) -> llvm.memset(p, v, n, 1)
-    Value *Val = B.CreateTrunc(CI->getOperand(2), Type::Int8Ty);
+    Value *Val = B.CreateIntCast(CI->getOperand(2), Type::getInt8Ty(*Context), false);
     EmitMemSet(CI->getOperand(1), Val,  CI->getOperand(3), B);
     return CI->getOperand(1);
   }
@@ -1034,7 +1073,7 @@ struct VISIBILITY_HIDDEN PowOpt : public LibCallOptimization {
     if (Op2C == 0) return 0;
     
     if (Op2C->getValueAPF().isZero())  // pow(x, 0.0) -> 1.0
-      return Context->getConstantFP(CI->getType(), 1.0);
+      return ConstantFP::get(CI->getType(), 1.0);
     
     if (Op2C->isExactlyValue(0.5)) {
       // FIXME: This is not safe for -0.0 and -inf.  This can only be done when
@@ -1054,7 +1093,7 @@ struct VISIBILITY_HIDDEN PowOpt : public LibCallOptimization {
     if (Op2C->isExactlyValue(2.0))  // pow(x, 2.0) -> x*x
       return B.CreateFMul(Op1, Op1, "pow2");
     if (Op2C->isExactlyValue(-1.0)) // pow(x, -1.0) -> 1.0/x
-      return B.CreateFDiv(Context->getConstantFP(CI->getType(), 1.0),
+      return B.CreateFDiv(ConstantFP::get(CI->getType(), 1.0),
                           Op1, "powrecip");
     return 0;
   }
@@ -1078,28 +1117,28 @@ struct VISIBILITY_HIDDEN Exp2Opt : public LibCallOptimization {
     Value *LdExpArg = 0;
     if (SIToFPInst *OpC = dyn_cast<SIToFPInst>(Op)) {
       if (OpC->getOperand(0)->getType()->getPrimitiveSizeInBits() <= 32)
-        LdExpArg = B.CreateSExt(OpC->getOperand(0), Type::Int32Ty, "tmp");
+        LdExpArg = B.CreateSExt(OpC->getOperand(0), Type::getInt32Ty(*Context), "tmp");
     } else if (UIToFPInst *OpC = dyn_cast<UIToFPInst>(Op)) {
       if (OpC->getOperand(0)->getType()->getPrimitiveSizeInBits() < 32)
-        LdExpArg = B.CreateZExt(OpC->getOperand(0), Type::Int32Ty, "tmp");
+        LdExpArg = B.CreateZExt(OpC->getOperand(0), Type::getInt32Ty(*Context), "tmp");
     }
 
     if (LdExpArg) {
       const char *Name;
-      if (Op->getType() == Type::FloatTy)
+      if (Op->getType() == Type::getFloatTy(*Context))
         Name = "ldexpf";
-      else if (Op->getType() == Type::DoubleTy)
+      else if (Op->getType() == Type::getDoubleTy(*Context))
         Name = "ldexp";
       else
         Name = "ldexpl";
 
-      Constant *One = Context->getConstantFP(APFloat(1.0f));
-      if (Op->getType() != Type::FloatTy)
-        One = Context->getConstantExprFPExtend(One, Op->getType());
+      Constant *One = ConstantFP::get(*Context, APFloat(1.0f));
+      if (Op->getType() != Type::getFloatTy(*Context))
+        One = ConstantExpr::getFPExtend(One, Op->getType());
 
       Module *M = Caller->getParent();
       Value *Callee = M->getOrInsertFunction(Name, Op->getType(),
-                                             Op->getType(), Type::Int32Ty,NULL);
+                                             Op->getType(), Type::getInt32Ty(*Context),NULL);
       CallInst *CI = B.CreateCall2(Callee, One, LdExpArg);
       if (const Function *F = dyn_cast<Function>(Callee->stripPointerCasts()))
         CI->setCallingConv(F->getCallingConv());
@@ -1116,19 +1155,19 @@ struct VISIBILITY_HIDDEN Exp2Opt : public LibCallOptimization {
 struct VISIBILITY_HIDDEN UnaryDoubleFPOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
-    if (FT->getNumParams() != 1 || FT->getReturnType() != Type::DoubleTy ||
-        FT->getParamType(0) != Type::DoubleTy)
+    if (FT->getNumParams() != 1 || FT->getReturnType() != Type::getDoubleTy(*Context) ||
+        FT->getParamType(0) != Type::getDoubleTy(*Context))
       return 0;
 
     // If this is something like 'floor((double)floatval)', convert to floorf.
     FPExtInst *Cast = dyn_cast<FPExtInst>(CI->getOperand(1));
-    if (Cast == 0 || Cast->getOperand(0)->getType() != Type::FloatTy)
+    if (Cast == 0 || Cast->getOperand(0)->getType() != Type::getFloatTy(*Context))
       return 0;
 
     // floor((double)floatval) -> (double)floorf(floatval)
     Value *V = Cast->getOperand(0);
-    V = EmitUnaryFloatFnCall(V, Callee->getNameStart(), B);
-    return B.CreateFPExt(V, Type::DoubleTy);
+    V = EmitUnaryFloatFnCall(V, Callee->getName().data(), B);
+    return B.CreateFPExt(V, Type::getDoubleTy(*Context));
   }
 };
 
@@ -1144,7 +1183,7 @@ struct VISIBILITY_HIDDEN FFSOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     // Just make sure this has 2 arguments of the same FP type, which match the
     // result type.
-    if (FT->getNumParams() != 1 || FT->getReturnType() != Type::Int32Ty ||
+    if (FT->getNumParams() != 1 || FT->getReturnType() != Type::getInt32Ty(*Context) ||
         !isa<IntegerType>(FT->getParamType(0)))
       return 0;
     
@@ -1153,8 +1192,8 @@ struct VISIBILITY_HIDDEN FFSOpt : public LibCallOptimization {
     // Constant fold.
     if (ConstantInt *CI = dyn_cast<ConstantInt>(Op)) {
       if (CI->getValue() == 0)  // ffs(0) -> 0.
-        return Context->getNullValue(CI->getType());
-      return Context->getConstantInt(Type::Int32Ty, // ffs(c) -> cttz(c)+1
+        return Constant::getNullValue(CI->getType());
+      return ConstantInt::get(Type::getInt32Ty(*Context), // ffs(c) -> cttz(c)+1
                               CI->getValue().countTrailingZeros()+1);
     }
     
@@ -1163,11 +1202,11 @@ struct VISIBILITY_HIDDEN FFSOpt : public LibCallOptimization {
     Value *F = Intrinsic::getDeclaration(Callee->getParent(),
                                          Intrinsic::cttz, &ArgType, 1);
     Value *V = B.CreateCall(F, Op, "cttz");
-    V = B.CreateAdd(V, Context->getConstantInt(V->getType(), 1), "tmp");
-    V = B.CreateIntCast(V, Type::Int32Ty, false, "tmp");
+    V = B.CreateAdd(V, ConstantInt::get(V->getType(), 1), "tmp");
+    V = B.CreateIntCast(V, Type::getInt32Ty(*Context), false, "tmp");
     
-    Value *Cond = B.CreateICmpNE(Op, Context->getNullValue(ArgType), "tmp");
-    return B.CreateSelect(Cond, V, Context->getConstantInt(Type::Int32Ty, 0));
+    Value *Cond = B.CreateICmpNE(Op, Constant::getNullValue(ArgType), "tmp");
+    return B.CreateSelect(Cond, V, ConstantInt::get(Type::getInt32Ty(*Context), 0));
   }
 };
 
@@ -1179,14 +1218,14 @@ struct VISIBILITY_HIDDEN IsDigitOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     // We require integer(i32)
     if (FT->getNumParams() != 1 || !isa<IntegerType>(FT->getReturnType()) ||
-        FT->getParamType(0) != Type::Int32Ty)
+        FT->getParamType(0) != Type::getInt32Ty(*Context))
       return 0;
     
     // isdigit(c) -> (c-'0') <u 10
     Value *Op = CI->getOperand(1);
-    Op = B.CreateSub(Op, Context->getConstantInt(Type::Int32Ty, '0'), 
+    Op = B.CreateSub(Op, ConstantInt::get(Type::getInt32Ty(*Context), '0'), 
                      "isdigittmp");
-    Op = B.CreateICmpULT(Op, Context->getConstantInt(Type::Int32Ty, 10), 
+    Op = B.CreateICmpULT(Op, ConstantInt::get(Type::getInt32Ty(*Context), 10), 
                          "isdigit");
     return B.CreateZExt(Op, CI->getType());
   }
@@ -1200,12 +1239,12 @@ struct VISIBILITY_HIDDEN IsAsciiOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     // We require integer(i32)
     if (FT->getNumParams() != 1 || !isa<IntegerType>(FT->getReturnType()) ||
-        FT->getParamType(0) != Type::Int32Ty)
+        FT->getParamType(0) != Type::getInt32Ty(*Context))
       return 0;
     
     // isascii(c) -> c <u 128
     Value *Op = CI->getOperand(1);
-    Op = B.CreateICmpULT(Op, Context->getConstantInt(Type::Int32Ty, 128),
+    Op = B.CreateICmpULT(Op, ConstantInt::get(Type::getInt32Ty(*Context), 128),
                          "isascii");
     return B.CreateZExt(Op, CI->getType());
   }
@@ -1225,7 +1264,7 @@ struct VISIBILITY_HIDDEN AbsOpt : public LibCallOptimization {
     // abs(x) -> x >s -1 ? x : -x
     Value *Op = CI->getOperand(1);
     Value *Pos = B.CreateICmpSGT(Op, 
-                             Context->getConstantIntAllOnesValue(Op->getType()),
+                             Constant::getAllOnesValue(Op->getType()),
                                  "ispos");
     Value *Neg = B.CreateNeg(Op, "neg");
     return B.CreateSelect(Pos, Op, Neg);
@@ -1241,12 +1280,12 @@ struct VISIBILITY_HIDDEN ToAsciiOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     // We require i32(i32)
     if (FT->getNumParams() != 1 || FT->getReturnType() != FT->getParamType(0) ||
-        FT->getParamType(0) != Type::Int32Ty)
+        FT->getParamType(0) != Type::getInt32Ty(*Context))
       return 0;
     
     // isascii(c) -> c & 0x7f
     return B.CreateAnd(CI->getOperand(1),
-                       Context->getConstantInt(CI->getType(),0x7F));
+                       ConstantInt::get(CI->getType(),0x7F));
   }
 };
 
@@ -1263,7 +1302,7 @@ struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() < 1 || !isa<PointerType>(FT->getParamType(0)) ||
         !(isa<IntegerType>(FT->getReturnType()) ||
-          FT->getReturnType() == Type::VoidTy))
+          FT->getReturnType() == Type::getVoidTy(*Context)))
       return 0;
     
     // Check for a fixed format string.
@@ -1274,13 +1313,13 @@ struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
     // Empty format string -> noop.
     if (FormatStr.empty())  // Tolerate printf's declared void.
       return CI->use_empty() ? (Value*)CI : 
-                               Context->getConstantInt(CI->getType(), 0);
+                               ConstantInt::get(CI->getType(), 0);
     
     // printf("x") -> putchar('x'), even for '%'.
     if (FormatStr.size() == 1) {
-      EmitPutChar(Context->getConstantInt(Type::Int32Ty, FormatStr[0]), B);
+      EmitPutChar(ConstantInt::get(Type::getInt32Ty(*Context), FormatStr[0]), B);
       return CI->use_empty() ? (Value*)CI : 
-                               Context->getConstantInt(CI->getType(), 1);
+                               ConstantInt::get(CI->getType(), 1);
     }
     
     // printf("foo\n") --> puts("foo")
@@ -1289,12 +1328,12 @@ struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
       // Create a string literal with no \n on it.  We expect the constant merge
       // pass to be run after this pass, to merge duplicate strings.
       FormatStr.erase(FormatStr.end()-1);
-      Constant *C = Context->getConstantArray(FormatStr, true);
+      Constant *C = ConstantArray::get(*Context, FormatStr, true);
       C = new GlobalVariable(*Callee->getParent(), C->getType(), true,
                              GlobalVariable::InternalLinkage, C, "str");
       EmitPutS(C, B);
       return CI->use_empty() ? (Value*)CI : 
-                    Context->getConstantInt(CI->getType(), FormatStr.size()+1);
+                    ConstantInt::get(CI->getType(), FormatStr.size()+1);
     }
     
     // Optimize specific format strings.
@@ -1303,7 +1342,7 @@ struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
         isa<IntegerType>(CI->getOperand(2)->getType())) {
       EmitPutChar(CI->getOperand(2), B);
       return CI->use_empty() ? (Value*)CI : 
-                               Context->getConstantInt(CI->getType(), 1);
+                               ConstantInt::get(CI->getType(), 1);
     }
     
     // printf("%s\n", str) --> puts(str)
@@ -1341,11 +1380,14 @@ struct VISIBILITY_HIDDEN SPrintFOpt : public LibCallOptimization {
       for (unsigned i = 0, e = FormatStr.size(); i != e; ++i)
         if (FormatStr[i] == '%')
           return 0; // we found a format specifier, bail out.
-      
+
+      // These optimizations require TargetData.
+      if (!TD) return 0;
+
       // sprintf(str, fmt) -> llvm.memcpy(str, fmt, strlen(fmt)+1, 1)
       EmitMemCpy(CI->getOperand(1), CI->getOperand(2), // Copy the nul byte.
-          Context->getConstantInt(TD->getIntPtrType(), FormatStr.size()+1),1,B);
-      return Context->getConstantInt(CI->getType(), FormatStr.size());
+          ConstantInt::get(TD->getIntPtrType(*Context), FormatStr.size()+1),1,B);
+      return ConstantInt::get(CI->getType(), FormatStr.size());
     }
     
     // The remaining optimizations require the format string to be "%s" or "%c"
@@ -1357,22 +1399,25 @@ struct VISIBILITY_HIDDEN SPrintFOpt : public LibCallOptimization {
     if (FormatStr[1] == 'c') {
       // sprintf(dst, "%c", chr) --> *(i8*)dst = chr; *((i8*)dst+1) = 0
       if (!isa<IntegerType>(CI->getOperand(3)->getType())) return 0;
-      Value *V = B.CreateTrunc(CI->getOperand(3), Type::Int8Ty, "char");
+      Value *V = B.CreateTrunc(CI->getOperand(3), Type::getInt8Ty(*Context), "char");
       Value *Ptr = CastToCStr(CI->getOperand(1), B);
       B.CreateStore(V, Ptr);
-      Ptr = B.CreateGEP(Ptr, Context->getConstantInt(Type::Int32Ty, 1), "nul");
-      B.CreateStore(Context->getNullValue(Type::Int8Ty), Ptr);
+      Ptr = B.CreateGEP(Ptr, ConstantInt::get(Type::getInt32Ty(*Context), 1), "nul");
+      B.CreateStore(Constant::getNullValue(Type::getInt8Ty(*Context)), Ptr);
       
-      return Context->getConstantInt(CI->getType(), 1);
+      return ConstantInt::get(CI->getType(), 1);
     }
     
     if (FormatStr[1] == 's') {
+      // These optimizations require TargetData.
+      if (!TD) return 0;
+
       // sprintf(dest, "%s", str) -> llvm.memcpy(dest, str, strlen(str)+1, 1)
       if (!isa<PointerType>(CI->getOperand(3)->getType())) return 0;
 
       Value *Len = EmitStrLen(CI->getOperand(3), B);
       Value *IncLen = B.CreateAdd(Len,
-                                  Context->getConstantInt(Len->getType(), 1),
+                                  ConstantInt::get(Len->getType(), 1),
                                   "leninc");
       EmitMemCpy(CI->getOperand(1), CI->getOperand(3), IncLen, 1, B);
       
@@ -1405,13 +1450,13 @@ struct VISIBILITY_HIDDEN FWriteOpt : public LibCallOptimization {
     
     // If this is writing zero records, remove the call (it's a noop).
     if (Bytes == 0)
-      return Context->getConstantInt(CI->getType(), 0);
+      return ConstantInt::get(CI->getType(), 0);
     
     // If this is writing one byte, turn it into fputc.
     if (Bytes == 1) {  // fwrite(S,1,1,F) -> fputc(S[0],F)
       Value *Char = B.CreateLoad(CastToCStr(CI->getOperand(1), B), "char");
       EmitFPutC(Char, CI->getOperand(4), B);
-      return Context->getConstantInt(CI->getType(), 1);
+      return ConstantInt::get(CI->getType(), 1);
     }
 
     return 0;
@@ -1423,6 +1468,9 @@ struct VISIBILITY_HIDDEN FWriteOpt : public LibCallOptimization {
 
 struct VISIBILITY_HIDDEN FPutsOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
+    // These optimizations require TargetData.
+    if (!TD) return 0;
+
     // Require two pointers.  Also, we can't optimize if return value is used.
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 2 || !isa<PointerType>(FT->getParamType(0)) ||
@@ -1434,7 +1482,7 @@ struct VISIBILITY_HIDDEN FPutsOpt : public LibCallOptimization {
     uint64_t Len = GetStringLength(CI->getOperand(1));
     if (!Len) return 0;
     EmitFWrite(CI->getOperand(1),
-               Context->getConstantInt(TD->getIntPtrType(), Len-1),
+               ConstantInt::get(TD->getIntPtrType(*Context), Len-1),
                CI->getOperand(2), B);
     return CI;  // Known to have no uses (see above).
   }
@@ -1462,11 +1510,14 @@ struct VISIBILITY_HIDDEN FPrintFOpt : public LibCallOptimization {
       for (unsigned i = 0, e = FormatStr.size(); i != e; ++i)
         if (FormatStr[i] == '%')  // Could handle %% -> % if we cared.
           return 0; // We found a format specifier.
-      
-      EmitFWrite(CI->getOperand(2), Context->getConstantInt(TD->getIntPtrType(),
+
+      // These optimizations require TargetData.
+      if (!TD) return 0;
+
+      EmitFWrite(CI->getOperand(2), ConstantInt::get(TD->getIntPtrType(*Context),
                                                      FormatStr.size()),
                  CI->getOperand(1), B);
-      return Context->getConstantInt(CI->getType(), FormatStr.size());
+      return ConstantInt::get(CI->getType(), FormatStr.size());
     }
     
     // The remaining optimizations require the format string to be "%s" or "%c"
@@ -1479,7 +1530,7 @@ struct VISIBILITY_HIDDEN FPrintFOpt : public LibCallOptimization {
       // fprintf(F, "%c", chr) --> *(i8*)dst = chr
       if (!isa<IntegerType>(CI->getOperand(3)->getType())) return 0;
       EmitFPutC(CI->getOperand(3), CI->getOperand(1), B);
-      return Context->getConstantInt(CI->getType(), 1);
+      return ConstantInt::get(CI->getType(), 1);
     }
     
     if (FormatStr[1] == 's') {
@@ -1536,7 +1587,6 @@ namespace {
     bool doInitialization(Module &M);
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<TargetData>();
     }
   };
   char SimplifyLibCalls::ID = 0;
@@ -1637,9 +1687,9 @@ bool SimplifyLibCalls::runOnFunction(Function &F) {
   if (Optimizations.empty())
     InitOptimizations();
   
-  const TargetData &TD = getAnalysis<TargetData>();
+  const TargetData *TD = getAnalysisIfAvailable<TargetData>();
   
-  IRBuilder<> Builder(*Context);
+  IRBuilder<> Builder(F.getContext());
 
   bool Changed = false;
   for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
@@ -1655,20 +1705,18 @@ bool SimplifyLibCalls::runOnFunction(Function &F) {
         continue;
       
       // Ignore unknown calls.
-      const char *CalleeName = Callee->getNameStart();
-      StringMap<LibCallOptimization*>::iterator OMI =
-        Optimizations.find(CalleeName, CalleeName+Callee->getNameLen());
-      if (OMI == Optimizations.end()) continue;
+      LibCallOptimization *LCO = Optimizations.lookup(Callee->getName());
+      if (!LCO) continue;
       
       // Set the builder to the instruction after the call.
       Builder.SetInsertPoint(BB, I);
       
       // Try to optimize this call.
-      Value *Result = OMI->second->OptimizeCall(CI, TD, Builder);
+      Value *Result = LCO->OptimizeCall(CI, TD, Builder);
       if (Result == 0) continue;
 
-      DEBUG(DOUT << "SimplifyLibCalls simplified: " << *CI;
-            DOUT << "  into: " << *Result << "\n");
+      DEBUG(errs() << "SimplifyLibCalls simplified: " << *CI;
+            errs() << "  into: " << *Result << "\n");
       
       // Something changed!
       Changed = true;
@@ -1736,40 +1784,39 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
     if (!F.isDeclaration())
       continue;
 
-    unsigned NameLen = F.getNameLen();
-    if (!NameLen)
+    if (!F.hasName())
       continue;
 
     const FunctionType *FTy = F.getFunctionType();
 
-    const char *NameStr = F.getNameStart();
-    switch (NameStr[0]) {
+    StringRef Name = F.getName();
+    switch (Name[0]) {
       case 's':
-        if (NameLen == 6 && !strcmp(NameStr, "strlen")) {
+        if (Name == "strlen") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setOnlyReadsMemory(F);
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "strcpy")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "stpcpy")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "strcat")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "strtol")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "strtod")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "strtof")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strtoul")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strtoll")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strtold")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strncat")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strncpy")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "strtoull"))) {
+        } else if (Name == "strcpy" ||
+                   Name == "stpcpy" ||
+                   Name == "strcat" ||
+                   Name == "strtol" ||
+                   Name == "strtod" ||
+                   Name == "strtof" ||
+                   Name == "strtoul" ||
+                   Name == "strtoll" ||
+                   Name == "strtold" ||
+                   Name == "strncat" ||
+                   Name == "strncpy" ||
+                   Name == "strtoull") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 7 && !strcmp(NameStr, "strxfrm")) {
+        } else if (Name == "strxfrm") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1777,13 +1824,13 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "strcmp")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "strspn")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strncmp")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strcspn")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strcoll")) ||
-                   (NameLen == 10 && !strcmp(NameStr, "strcasecmp")) ||
-                   (NameLen == 11 && !strcmp(NameStr, "strncasecmp"))) {
+        } else if (Name == "strcmp" ||
+                   Name == "strspn" ||
+                   Name == "strncmp" ||
+                   Name ==" strcspn" ||
+                   Name == "strcoll" ||
+                   Name == "strcasecmp" ||
+                   Name == "strncasecmp") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1792,31 +1839,31 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "strstr")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strpbrk"))) {
+        } else if (Name == "strstr" ||
+                   Name == "strpbrk") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setOnlyReadsMemory(F);
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "strtok")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "strtok_r"))) {
+        } else if (Name == "strtok" ||
+                   Name == "strtok_r") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "scanf")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "setbuf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "setvbuf"))) {
+        } else if (Name == "scanf" ||
+                   Name == "setbuf" ||
+                   Name == "setvbuf") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "strdup")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "strndup"))) {
+        } else if (Name == "strdup" ||
+                   Name == "strndup") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)))
@@ -1824,10 +1871,10 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 4 && !strcmp(NameStr, "stat")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "sscanf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "sprintf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "statvfs"))) {
+        } else if (Name == "stat" ||
+                   Name == "sscanf" ||
+                   Name == "sprintf" ||
+                   Name == "statvfs") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1835,7 +1882,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 8 && !strcmp(NameStr, "snprintf")) {
+        } else if (Name == "snprintf") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(2)))
@@ -1843,7 +1890,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 3);
-        } else if (NameLen == 9 && !strcmp(NameStr, "setitimer")) {
+        } else if (Name == "setitimer") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(1)) ||
               !isa<PointerType>(FTy->getParamType(2)))
@@ -1851,7 +1898,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
           setDoesNotCapture(F, 3);
-        } else if (NameLen == 6 && !strcmp(NameStr, "system")) {
+        } else if (Name == "system") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -1860,7 +1907,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'm':
-        if (NameLen == 6 && !strcmp(NameStr, "memcmp")) {
+        if (Name == "memcmp") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1869,29 +1916,29 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "memchr")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "memrchr"))) {
+        } else if (Name == "memchr" ||
+                   Name == "memrchr") {
           if (FTy->getNumParams() != 3)
             continue;
           setOnlyReadsMemory(F);
           setDoesNotThrow(F);
-        } else if ((NameLen == 4 && !strcmp(NameStr, "modf")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "modff")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "modfl")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "memcpy")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "memccpy")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "memmove"))) {
+        } else if (Name == "modf" ||
+                   Name == "modff" ||
+                   Name == "modfl" ||
+                   Name == "memcpy" ||
+                   Name == "memccpy" ||
+                   Name == "memmove") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 8 && !strcmp(NameStr, "memalign")) {
+        } else if (Name == "memalign") {
           if (!isa<PointerType>(FTy->getReturnType()))
             continue;
           setDoesNotAlias(F, 0);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "mkdir")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "mktime"))) {
+        } else if (Name == "mkdir" ||
+                   Name == "mktime") {
           if (FTy->getNumParams() == 0 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -1900,7 +1947,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'r':
-        if (NameLen == 7 && !strcmp(NameStr, "realloc")) {
+        if (Name == "realloc") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getReturnType()))
@@ -1908,23 +1955,23 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 4 && !strcmp(NameStr, "read")) {
+        } else if (Name == "read") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           // May throw; "read" is a valid pthread cancellation point.
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "rmdir")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "rewind")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "remove")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "realpath"))) {
+        } else if (Name == "rmdir" ||
+                   Name == "rewind" ||
+                   Name == "remove" ||
+                   Name == "realpath") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 6 && !strcmp(NameStr, "rename")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "readlink"))) {
+        } else if (Name == "rename" ||
+                   Name == "readlink") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1935,7 +1982,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'w':
-        if (NameLen == 5 && !strcmp(NameStr, "write")) {
+        if (Name == "write") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
@@ -1944,7 +1991,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'b':
-        if (NameLen == 5 && !strcmp(NameStr, "bcopy")) {
+        if (Name == "bcopy") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1952,7 +1999,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 4 && !strcmp(NameStr, "bcmp")) {
+        } else if (Name == "bcmp") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -1961,7 +2008,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setOnlyReadsMemory(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 5 && !strcmp(NameStr, "bzero")) {
+        } else if (Name == "bzero") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -1970,17 +2017,17 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'c':
-        if (NameLen == 6 && !strcmp(NameStr, "calloc")) {
+        if (Name == "calloc") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getReturnType()))
             continue;
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "chmod")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "chown")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "ctermid")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "clearerr")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "closedir"))) {
+        } else if (Name == "chmod" ||
+                   Name == "chown" ||
+                   Name == "ctermid" ||
+                   Name == "clearerr" ||
+                   Name == "closedir") {
           if (FTy->getNumParams() == 0 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -1989,17 +2036,17 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'a':
-        if ((NameLen == 4 && !strcmp(NameStr, "atoi")) ||
-            (NameLen == 4 && !strcmp(NameStr, "atol")) ||
-            (NameLen == 4 && !strcmp(NameStr, "atof")) ||
-            (NameLen == 5 && !strcmp(NameStr, "atoll"))) {
+        if (Name == "atoi" ||
+            Name == "atol" ||
+            Name == "atof" ||
+            Name == "atoll") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setOnlyReadsMemory(F);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 6 && !strcmp(NameStr, "access")) {
+        } else if (Name == "access") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -2008,7 +2055,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'f':
-        if (NameLen == 5 && !strcmp(NameStr, "fopen")) {
+        if (Name == "fopen") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)) ||
@@ -2018,7 +2065,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 6 && !strcmp(NameStr, "fdopen")) {
+        } else if (Name == "fdopen") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2026,52 +2073,52 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 4 && !strcmp(NameStr, "feof")) ||
-                   (NameLen == 4 && !strcmp(NameStr, "free")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "fseek")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "ftell")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "fgetc")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fseeko")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "ftello")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fileno")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fflush")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fclose")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "fsetpos")) ||
-                   (NameLen == 9 && !strcmp(NameStr, "flockfile")) ||
-                   (NameLen == 11 && !strcmp(NameStr, "funlockfile")) ||
-                   (NameLen == 12 && !strcmp(NameStr, "ftrylockfile"))) {
+        } else if (Name == "feof" ||
+                   Name == "free" ||
+                   Name == "fseek" ||
+                   Name == "ftell" ||
+                   Name == "fgetc" ||
+                   Name == "fseeko" ||
+                   Name == "ftello" ||
+                   Name == "fileno" ||
+                   Name == "fflush" ||
+                   Name == "fclose" ||
+                   Name == "fsetpos" ||
+                   Name == "flockfile" ||
+                   Name == "funlockfile" ||
+                   Name == "ftrylockfile") {
           if (FTy->getNumParams() == 0 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 6 && !strcmp(NameStr, "ferror")) {
+        } else if (Name == "ferror") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setOnlyReadsMemory(F);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "fputc")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "fstat")) ||
-                   (NameLen == 5 && !strcmp(NameStr, "frexp")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "frexpf")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "frexpl")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "fstatvfs"))) {
+        } else if (Name == "fputc" ||
+                   Name == "fstat" ||
+                   Name == "frexp" ||
+                   Name == "frexpf" ||
+                   Name == "frexpl" ||
+                   Name == "fstatvfs") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 5 && !strcmp(NameStr, "fgets")) {
+        } else if (Name == "fgets") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(2)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 3);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "fread")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fwrite"))) {
+        } else if (Name == "fread" ||
+                   Name == "fwrite") {
           if (FTy->getNumParams() != 4 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(3)))
@@ -2079,10 +2126,10 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 4);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "fputs")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "fscanf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "fprintf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "fgetpos"))) {
+        } else if (Name == "fputs" ||
+                   Name == "fscanf" ||
+                   Name == "fprintf" ||
+                   Name == "fgetpos") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2093,31 +2140,31 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'g':
-        if ((NameLen == 4 && !strcmp(NameStr, "getc")) ||
-            (NameLen == 10 && !strcmp(NameStr, "getlogin_r")) ||
-            (NameLen == 13 && !strcmp(NameStr, "getc_unlocked"))) {
+        if (Name == "getc" ||
+            Name == "getlogin_r" ||
+            Name == "getc_unlocked") {
           if (FTy->getNumParams() == 0 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 6 && !strcmp(NameStr, "getenv")) {
+        } else if (Name == "getenv") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setOnlyReadsMemory(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 4 && !strcmp(NameStr, "gets")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "getchar"))) {
+        } else if (Name == "gets" ||
+                   Name == "getchar") {
           setDoesNotThrow(F);
-        } else if (NameLen == 9 && !strcmp(NameStr, "getitimer")) {
+        } else if (Name == "getitimer") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 8 && !strcmp(NameStr, "getpwnam")) {
+        } else if (Name == "getpwnam") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -2126,22 +2173,22 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'u':
-        if (NameLen == 6 && !strcmp(NameStr, "ungetc")) {
+        if (Name == "ungetc") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "uname")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "unlink")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "unsetenv"))) {
+        } else if (Name == "uname" ||
+                   Name == "unlink" ||
+                   Name == "unsetenv") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "utime")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "utimes"))) {
+        } else if (Name == "utime" ||
+                   Name == "utimes") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2152,30 +2199,30 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'p':
-        if (NameLen == 4 && !strcmp(NameStr, "putc")) {
+        if (Name == "putc") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 4 && !strcmp(NameStr, "puts")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "printf")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "perror"))) {
+        } else if (Name == "puts" ||
+                   Name == "printf" ||
+                   Name == "perror") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 5 && !strcmp(NameStr, "pread")) ||
-                   (NameLen == 6 && !strcmp(NameStr, "pwrite"))) {
+        } else if (Name == "pread" ||
+                   Name == "pwrite") {
           if (FTy->getNumParams() != 4 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           // May throw; these are valid pthread cancellation points.
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 7 && !strcmp(NameStr, "putchar")) {
+        } else if (Name == "putchar") {
           setDoesNotThrow(F);
-        } else if (NameLen == 5 && !strcmp(NameStr, "popen")) {
+        } else if (Name == "popen") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)) ||
@@ -2185,7 +2232,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 6 && !strcmp(NameStr, "pclose")) {
+        } else if (Name == "pclose") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -2194,14 +2241,14 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'v':
-        if (NameLen == 6 && !strcmp(NameStr, "vscanf")) {
+        if (Name == "vscanf") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 7 && !strcmp(NameStr, "vsscanf")) ||
-                   (NameLen == 7 && !strcmp(NameStr, "vfscanf"))) {
+        } else if (Name == "vsscanf" ||
+                   Name == "vfscanf") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(1)) ||
               !isa<PointerType>(FTy->getParamType(2)))
@@ -2209,19 +2256,19 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 6 && !strcmp(NameStr, "valloc")) {
+        } else if (Name == "valloc") {
           if (!isa<PointerType>(FTy->getReturnType()))
             continue;
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
-        } else if (NameLen == 7 && !strcmp(NameStr, "vprintf")) {
+        } else if (Name == "vprintf") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 8 && !strcmp(NameStr, "vfprintf")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "vsprintf"))) {
+        } else if (Name == "vfprintf" ||
+                   Name == "vsprintf") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2229,7 +2276,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 9 && !strcmp(NameStr, "vsnprintf")) {
+        } else if (Name == "vsnprintf") {
           if (FTy->getNumParams() != 4 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(2)))
@@ -2240,13 +2287,13 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'o':
-        if (NameLen == 4 && !strcmp(NameStr, "open")) {
+        if (Name == "open") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           // May throw; "open" is a valid pthread cancellation point.
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 7 && !strcmp(NameStr, "opendir")) {
+        } else if (Name == "opendir") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)))
@@ -2257,12 +2304,12 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 't':
-        if (NameLen == 7 && !strcmp(NameStr, "tmpfile")) {
+        if (Name == "tmpfile") {
           if (!isa<PointerType>(FTy->getReturnType()))
             continue;
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
-        } else if (NameLen == 5 && !strcmp(NameStr, "times")) {
+        } else if (Name == "times") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -2271,21 +2318,21 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'h':
-        if ((NameLen == 5 && !strcmp(NameStr, "htonl")) ||
-            (NameLen == 5 && !strcmp(NameStr, "htons"))) {
+        if (Name == "htonl" ||
+            Name == "htons") {
           setDoesNotThrow(F);
           setDoesNotAccessMemory(F);
         }
         break;
       case 'n':
-        if ((NameLen == 5 && !strcmp(NameStr, "ntohl")) ||
-            (NameLen == 5 && !strcmp(NameStr, "ntohs"))) {
+        if (Name == "ntohl" ||
+            Name == "ntohs") {
           setDoesNotThrow(F);
           setDoesNotAccessMemory(F);
         }
         break;
       case 'l':
-        if (NameLen == 5 && !strcmp(NameStr, "lstat")) {
+        if (Name == "lstat") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2293,7 +2340,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 6 && !strcmp(NameStr, "lchown")) {
+        } else if (Name == "lchown") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
@@ -2302,7 +2349,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 'q':
-        if (NameLen == 5 && !strcmp(NameStr, "qsort")) {
+        if (Name == "qsort") {
           if (FTy->getNumParams() != 4 ||
               !isa<PointerType>(FTy->getParamType(3)))
             continue;
@@ -2311,8 +2358,8 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case '_':
-        if ((NameLen == 8 && !strcmp(NameStr, "__strdup")) ||
-            (NameLen == 9 && !strcmp(NameStr, "__strndup"))) {
+        if (Name == "__strdup" ||
+            Name == "__strndup") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)))
@@ -2320,19 +2367,19 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 10 && !strcmp(NameStr, "__strtok_r")) {
+        } else if (Name == "__strtok_r") {
           if (FTy->getNumParams() != 3 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 8 && !strcmp(NameStr, "_IO_getc")) {
+        } else if (Name == "_IO_getc") {
           if (FTy->getNumParams() != 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 8 && !strcmp(NameStr, "_IO_putc")) {
+        } else if (Name == "_IO_putc") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
@@ -2341,16 +2388,16 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
         }
         break;
       case 1:
-        if (NameLen == 15 && !strcmp(NameStr, "\1__isoc99_scanf")) {
+        if (Name == "\1__isoc99_scanf") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if ((NameLen == 7 && !strcmp(NameStr, "\1stat64")) ||
-                   (NameLen == 8 && !strcmp(NameStr, "\1lstat64")) ||
-                   (NameLen == 10 && !strcmp(NameStr, "\1statvfs64")) ||
-                   (NameLen == 16 && !strcmp(NameStr, "\1__isoc99_sscanf"))) {
+        } else if (Name == "\1stat64" ||
+                   Name == "\1lstat64" ||
+                   Name == "\1statvfs64" ||
+                   Name == "\1__isoc99_sscanf") {
           if (FTy->getNumParams() < 1 ||
               !isa<PointerType>(FTy->getParamType(0)) ||
               !isa<PointerType>(FTy->getParamType(1)))
@@ -2358,7 +2405,7 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 8 && !strcmp(NameStr, "\1fopen64")) {
+        } else if (Name == "\1fopen64") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getReturnType()) ||
               !isa<PointerType>(FTy->getParamType(0)) ||
@@ -2368,26 +2415,26 @@ bool SimplifyLibCalls::doInitialization(Module &M) {
           setDoesNotAlias(F, 0);
           setDoesNotCapture(F, 1);
           setDoesNotCapture(F, 2);
-        } else if ((NameLen == 9 && !strcmp(NameStr, "\1fseeko64")) ||
-                   (NameLen == 9 && !strcmp(NameStr, "\1ftello64"))) {
+        } else if (Name == "\1fseeko64" ||
+                   Name == "\1ftello64") {
           if (FTy->getNumParams() == 0 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 1);
-        } else if (NameLen == 10 && !strcmp(NameStr, "\1tmpfile64")) {
+        } else if (Name == "\1tmpfile64") {
           if (!isa<PointerType>(FTy->getReturnType()))
             continue;
           setDoesNotThrow(F);
           setDoesNotAlias(F, 0);
-        } else if ((NameLen == 8 && !strcmp(NameStr, "\1fstat64")) ||
-                   (NameLen == 11 && !strcmp(NameStr, "\1fstatvfs64"))) {
+        } else if (Name == "\1fstat64" ||
+                   Name == "\1fstatvfs64") {
           if (FTy->getNumParams() != 2 ||
               !isa<PointerType>(FTy->getParamType(1)))
             continue;
           setDoesNotThrow(F);
           setDoesNotCapture(F, 2);
-        } else if (NameLen == 7 && !strcmp(NameStr, "\1open64")) {
+        } else if (Name == "\1open64") {
           if (FTy->getNumParams() < 2 ||
               !isa<PointerType>(FTy->getParamType(0)))
             continue;

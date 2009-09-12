@@ -12,11 +12,13 @@ import tsc_stats
 class TscStatsTest(unittest.TestCase):
 
     def testMedianOdd(self):
-        xs = [2, 1, 5, 4, 3]
+        # Note: median requires that its input be sorted.
+        xs = [1, 2, 3, 4, 5]
         self.assertEqual(tsc_stats.median(xs), 3)
 
     def testMedianEven(self):
-        xs = [5, 6, 4, 3, 1, 2]
+        # Note: median requires that its input be sorted.
+        xs = [1, 2, 3, 4, 5, 6]
         self.assertAlmostEqual(tsc_stats.median(xs), 3.5, 0.01)
 
     def testMean(self):

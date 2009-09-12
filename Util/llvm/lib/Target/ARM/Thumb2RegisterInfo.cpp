@@ -20,6 +20,8 @@
 #include "Thumb2RegisterInfo.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/Function.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -44,20 +46,22 @@ Thumb2RegisterInfo::Thumb2RegisterInfo(const ARMBaseInstrInfo &tii,
 void Thumb2RegisterInfo::emitLoadConstPool(MachineBasicBlock &MBB,
                                            MachineBasicBlock::iterator &MBBI,
                                            DebugLoc dl,
-                                           unsigned DestReg, int Val,
+                                           unsigned DestReg, unsigned SubIdx,
+                                           int Val,
                                            ARMCC::CondCodes Pred,
                                            unsigned PredReg) const {
   MachineFunction &MF = *MBB.getParent();
   MachineConstantPool *ConstantPool = MF.getConstantPool();
-  Constant *C = ConstantInt::get(Type::Int32Ty, Val);
+  Constant *C = ConstantInt::get(
+           Type::getInt32Ty(MBB.getParent()->getFunction()->getContext()), Val);
   unsigned Idx = ConstantPool->getConstantPoolIndex(C, 4);
 
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::t2LDRpci), DestReg)
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::t2LDRpci))
+    .addReg(DestReg, getDefRegState(true), SubIdx)
     .addConstantPoolIndex(Idx).addImm((int64_t)ARMCC::AL).addReg(0);
 }
 
 bool Thumb2RegisterInfo::
 requiresRegisterScavenging(const MachineFunction &MF) const {
-  // FIXME
-  return false;
+  return true;
 }

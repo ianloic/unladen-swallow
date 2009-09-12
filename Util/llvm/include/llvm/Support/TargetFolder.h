@@ -30,7 +30,7 @@ class LLVMContext;
 /// TargetFolder - Create constants with target dependent folding.
 class TargetFolder {
   const TargetData *TD;
-  LLVMContext *Context;
+  LLVMContext &Context;
 
   /// Fold - Fold the constant using target specific information.
   Constant *Fold(Constant *C) const {
@@ -41,7 +41,7 @@ class TargetFolder {
   }
 
 public:
-  explicit TargetFolder(const TargetData *TheTD, LLVMContext *C) :
+  explicit TargetFolder(const TargetData *TheTD, LLVMContext &C) :
     TD(TheTD), Context(C) {}
 
   //===--------------------------------------------------------------------===//
@@ -50,6 +50,9 @@ public:
 
   Constant *CreateAdd(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getAdd(LHS, RHS));
+  }
+  Constant *CreateNSWAdd(Constant *LHS, Constant *RHS) const {
+    return Fold(ConstantExpr::getNSWAdd(LHS, RHS));
   }
   Constant *CreateFAdd(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getFAdd(LHS, RHS));
@@ -71,6 +74,9 @@ public:
   }
   Constant *CreateSDiv(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getSDiv(LHS, RHS));
+  }
+  Constant *CreateExactSDiv(Constant *LHS, Constant *RHS) const {
+    return Fold(ConstantExpr::getExactSDiv(LHS, RHS));
   }
   Constant *CreateFDiv(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getFDiv(LHS, RHS));
@@ -133,6 +139,15 @@ public:
   Constant *CreateGetElementPtr(Constant *C, Value* const *IdxList,
                                 unsigned NumIdx) const {
     return Fold(ConstantExpr::getGetElementPtr(C, IdxList, NumIdx));
+  }
+
+  Constant *CreateInBoundsGetElementPtr(Constant *C, Constant* const *IdxList,
+                                        unsigned NumIdx) const {
+    return Fold(ConstantExpr::getInBoundsGetElementPtr(C, IdxList, NumIdx));
+  }
+  Constant *CreateInBoundsGetElementPtr(Constant *C, Value* const *IdxList,
+                                        unsigned NumIdx) const {
+    return Fold(ConstantExpr::getInBoundsGetElementPtr(C, IdxList, NumIdx));
   }
 
   //===--------------------------------------------------------------------===//

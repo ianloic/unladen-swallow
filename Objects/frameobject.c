@@ -713,7 +713,17 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	f->f_iblock = 0;
 	f->f_throwflag = 0;
 #ifdef WITH_LLVM
-	f->f_use_llvm = code->co_use_llvm;
+	if (code->co_flags & CO_FDO_GLOBALS &&
+			(code->co_assumed_globals != f->f_globals ||
+			code->co_assumed_builtins != f->f_builtins)) {
+		// If there's no way a code object's assumptions about
+		// its globals and/or builtins could be valid, don't
+		// even try the machine code.
+		f->f_use_llvm = 0;
+	}
+	else {
+		f->f_use_llvm = code->co_use_llvm;
+	}
 	f->f_bailed_from_llvm = _PYFRAME_NO_BAIL;
 #endif
 

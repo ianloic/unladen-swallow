@@ -1,5 +1,4 @@
 // RUN: clang-cc -analyze -checker-cfref %s --analyzer-store=basic -verify &&
-// RUN: clang-cc -analyze -checker-cfref %s --analyzer-store=basic-new-cast -verify &&
 // RUN: clang-cc -analyze -checker-cfref %s --analyzer-store=region -verify
 
 typedef int bar_return_t;
@@ -29,4 +28,5 @@ __Beeble_check__Request__SetPortalSize_t(__attribute__((__unused__)) __Request__
     }
     while (0);
   }
+  return 0;
 }

@@ -37,6 +37,7 @@ class ObjCCategoryDecl;
 class ObjCProtocolDecl;
 class ObjCImplementationDecl;
 class ObjCCategoryImplDecl;
+class ObjCImplDecl;
 class LinkageSpecDecl;
 class BlockDecl;
 class DeclarationName;
@@ -78,7 +79,9 @@ public:
   /// namespaces, labels, tags, members and ordinary
   /// identifiers. These are meant as bitmasks, so that searches in
   /// C++ can look into the "tag" namespace during ordinary lookup. We
-  /// use additional namespaces for Objective-C entities.
+  /// use additional namespaces for Objective-C entities.  We also
+  /// put C++ friend declarations (of previously-undeclared entities) in
+  /// shadow namespaces.
   enum IdentifierNamespace {
     IDNS_Label = 0x1,
     IDNS_Tag = 0x2,
@@ -86,7 +89,9 @@ public:
     IDNS_Ordinary = 0x8,
     IDNS_ObjCProtocol = 0x10,
     IDNS_ObjCImplementation = 0x20,
-    IDNS_ObjCCategoryImpl = 0x40
+    IDNS_ObjCCategoryImpl = 0x40,
+    IDNS_OrdinaryFriend = 0x80,
+    IDNS_TagFriend = 0x100
   };
   
   /// ObjCDeclQualifier - Qualifier used on types in method declarations
@@ -162,7 +167,7 @@ private:
 
 protected:
   /// IdentifierNamespace - This specifies what IDNS_* namespace this lives in.
-  unsigned IdentifierNamespace : 8;
+  unsigned IdentifierNamespace : 16;
   
 private:
 #ifndef NDEBUG
@@ -311,12 +316,71 @@ public:
   // be defined inside or outside a function etc).
   bool isDefinedOutsideFunctionOrMethod() const;
 
-  /// \brief When there are multiple re-declarations (e.g. for functions),
-  /// this will return the primary one which all of them point to.
-  virtual Decl *getPrimaryDecl() const { return const_cast<Decl*>(this); }
+  /// \brief Retrieves the "canonical" declaration of the given declaration.
+  virtual Decl *getCanonicalDecl() { return this; }
+  const Decl *getCanonicalDecl() const {
+    return const_cast<Decl*>(this)->getCanonicalDecl();
+  }
 
-  /// \brief Whether this particular Decl is a primary one.
-  bool isPrimaryDecl() const { return getPrimaryDecl() == this; }
+  /// \brief Whether this particular Decl is a canonical one.
+  bool isCanonicalDecl() const { return getCanonicalDecl() == this; }
+  
+protected:
+  /// \brief Returns the next redeclaration or itself if this is the only decl.
+  ///
+  /// Decl subclasses that can be redeclared should override this method so that
+  /// Decl::redecl_iterator can iterate over them.
+  virtual Decl *getNextRedeclaration() { return this; }
+
+public:
+  /// \brief Iterates through all the redeclarations of the same decl.
+  class redecl_iterator {
+    /// Current - The current declaration.
+    Decl *Current;
+    Decl *Starter;
+
+  public:
+    typedef Decl*                     value_type;
+    typedef Decl*                     reference;
+    typedef Decl*                     pointer;
+    typedef std::forward_iterator_tag iterator_category;
+    typedef std::ptrdiff_t            difference_type;
+
+    redecl_iterator() : Current(0) { }
+    explicit redecl_iterator(Decl *C) : Current(C), Starter(C) { }
+
+    reference operator*() const { return Current; }
+    pointer operator->() const { return Current; }
+
+    redecl_iterator& operator++() {
+      assert(Current && "Advancing while iterator has reached end");
+      // Get either previous decl or latest decl.
+      Decl *Next = Current->getNextRedeclaration();
+      assert(Next && "Should return next redeclaration or itself, never null!");
+      Current = (Next != Starter ? Next : 0);
+      return *this;
+    }
+
+    redecl_iterator operator++(int) {
+      redecl_iterator tmp(*this);
+      ++(*this);
+      return tmp;
+    }
+
+    friend bool operator==(redecl_iterator x, redecl_iterator y) { 
+      return x.Current == y.Current;
+    }
+    friend bool operator!=(redecl_iterator x, redecl_iterator y) { 
+      return x.Current != y.Current;
+    }
+  };
+
+  /// \brief Returns iterator for all the redeclarations of the same decl.
+  /// It will iterate at least once (when this decl is the only one).
+  redecl_iterator redecls_begin() const {
+    return redecl_iterator(const_cast<Decl*>(this));
+  }
+  redecl_iterator redecls_end() const { return redecl_iterator(); }
 
   /// getBody - If this Decl represents a declaration for a body of code,
   ///  such as a function or method definition, this method returns the
@@ -345,6 +409,42 @@ public:
 
   /// \brief Whether this declaration is a function or function template.
   bool isFunctionOrFunctionTemplate() const;
+
+  /// \brief Changes the namespace of this declaration to reflect that it's
+  /// the object of a friend declaration.
+  ///
+  /// These declarations appear in the lexical context of the friending
+  /// class, but in the semantic context of the actual entity.  This property
+  /// applies only to a specific decl object;  other redeclarations of the
+  /// same entity may not (and probably don't) share this property.
+  void setObjectOfFriendDecl(bool PreviouslyDeclared) {
+    unsigned OldNS = IdentifierNamespace;
+    assert((OldNS == IDNS_Tag || OldNS == IDNS_Ordinary)
+           && "unsupported namespace for undeclared friend");
+    if (!PreviouslyDeclared) IdentifierNamespace = 0;
+
+    if (OldNS == IDNS_Tag)
+      IdentifierNamespace |= IDNS_TagFriend;
+    else
+      IdentifierNamespace |= IDNS_OrdinaryFriend;
+  }
+
+  enum FriendObjectKind {
+    FOK_None, // not a friend object
+    FOK_Declared, // a friend of a previously-declared entity
+    FOK_Undeclared // a friend of a previously-undeclared entity
+  };
+
+  /// \brief Determines whether this declaration is the object of a
+  /// friend declaration and, if so, what kind.
+  ///
+  /// There is currently no direct way to find the associated FriendDecl.
+  FriendObjectKind getFriendObjectKind() const {
+    unsigned mask
+      = (IdentifierNamespace & (IDNS_TagFriend | IDNS_OrdinaryFriend));
+    if (!mask) return FOK_None;
+    return (mask & (IDNS_Tag | IDNS_Ordinary) ? FOK_Declared : FOK_Undeclared);
+  }
   
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *) { return true; }
@@ -393,8 +493,6 @@ public:
 ///   TagDecl
 ///   ObjCMethodDecl
 ///   ObjCContainerDecl
-///   ObjCCategoryImplDecl
-///   ObjCImplementationDecl
 ///   LinkageSpecDecl
 ///   BlockDecl
 ///
@@ -519,12 +617,9 @@ public:
   /// inline namespaces.
   bool isTransparentContext() const;
 
-  bool Encloses(DeclContext *DC) const {
-    for (; DC; DC = DC->getParent())
-      if (DC == this)
-        return true;
-    return false;
-  }
+  /// \brief Determine whether this declaration context encloses the
+  /// declaration context DC.
+  bool Encloses(DeclContext *DC);
 
   /// getPrimaryContext - There may be many different
   /// declarations of the same entity (including forward declarations
@@ -767,6 +862,14 @@ public:
   /// If D is also a NamedDecl, it will be made visible within its
   /// semantic context via makeDeclVisibleInContext.
   void addDecl(Decl *D);
+
+  /// @brief Add the declaration D to this context without modifying
+  /// any lookup tables.
+  ///
+  /// This is useful for some operations in dependent contexts where
+  /// the semantic context might not be dependent;  this basically
+  /// only happens with friends.
+  void addHiddenDecl(Decl *D);
 
   /// lookup_iterator - An iterator that provides access to the results
   /// of looking up a name within this context.

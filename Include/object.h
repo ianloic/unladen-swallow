@@ -215,7 +215,7 @@ typedef int (*objobjproc)(PyObject *, PyObject *);
 typedef int (*visitproc)(PyObject *, void *);
 typedef int (*traverseproc)(PyObject *, visitproc, void *);
 
-typedef struct {
+typedef struct PyNumberMethods {
 	/* For numbers without flag bit Py_TPFLAGS_CHECKTYPES set, all
 	   arguments are guaranteed to be of the object's type (modulo
 	   coercion hacks -- i.e. if the type's coercion function
@@ -271,7 +271,7 @@ typedef struct {
 	unaryfunc nb_index;
 } PyNumberMethods;
 
-typedef struct {
+typedef struct PySequenceMethods {
 	lenfunc sq_length;
 	binaryfunc sq_concat;
 	ssizeargfunc sq_repeat;
@@ -285,13 +285,13 @@ typedef struct {
 	ssizeargfunc sq_inplace_repeat;
 } PySequenceMethods;
 
-typedef struct {
+typedef struct PyMappingMethods {
 	lenfunc mp_length;
 	binaryfunc mp_subscript;
 	objobjargproc mp_ass_subscript;
 } PyMappingMethods;
 
-typedef struct {
+typedef struct PyBufferProcs {
 	readbufferproc bf_getreadbuffer;
 	writebufferproc bf_getwritebuffer;
 	segcountproc bf_getsegcount;

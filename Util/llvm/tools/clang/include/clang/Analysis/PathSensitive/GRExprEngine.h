@@ -16,11 +16,12 @@
 #ifndef LLVM_CLANG_ANALYSIS_GREXPRENGINE
 #define LLVM_CLANG_ANALYSIS_GREXPRENGINE
 
+#include "clang/Analysis/PathSensitive/AnalysisManager.h"
+#include "clang/Analysis/PathSensitive/GRSubEngine.h"
 #include "clang/Analysis/PathSensitive/GRCoreEngine.h"
 #include "clang/Analysis/PathSensitive/GRState.h"
 #include "clang/Analysis/PathSensitive/GRSimpleAPICheck.h"
 #include "clang/Analysis/PathSensitive/GRTransferFuncs.h"
-#include "clang/Analysis/PathSensitive/SValuator.h"
 #include "clang/Analysis/PathSensitive/BugReporter.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/ExprObjC.h"
@@ -30,34 +31,19 @@ namespace clang {
   class PathDiagnosticClient;
   class Diagnostic;
   class ObjCForCollectionStmt;
+  class Checker;
 
-class GRExprEngine {  
-public:
-  typedef GRState                  StateTy;
-  typedef ExplodedGraph<StateTy>      GraphTy;
-  typedef GraphTy::NodeTy             NodeTy;
-  
-  // Builders.
-  typedef GRStmtNodeBuilder<StateTy>          StmtNodeBuilder;
-  typedef GRBranchNodeBuilder<StateTy>        BranchNodeBuilder;
-  typedef GRIndirectGotoNodeBuilder<StateTy>  IndirectGotoNodeBuilder;
-  typedef GRSwitchNodeBuilder<StateTy>        SwitchNodeBuilder;
-  typedef GREndPathNodeBuilder<StateTy>       EndPathNodeBuilder;
-  typedef ExplodedNodeSet<StateTy>            NodeSet;
-    
-protected:
-  GRCoreEngine<GRExprEngine> CoreEngine;
+class GRExprEngine : public GRSubEngine {  
+  AnalysisManager &AMgr;
+
+  GRCoreEngine CoreEngine;
   
   /// G - the simulation graph.
-  GraphTy& G;
+  ExplodedGraph& G;
   
-  /// Liveness - live-variables information the ValueDecl* and block-level
-  ///  Expr* in the CFG.  Used to prune out dead state.
-  LiveVariables& Liveness;
-
   /// Builder - The current GRStmtNodeBuilder which is used when building the
   ///  nodes for a given statement.
-  StmtNodeBuilder* Builder;
+  GRStmtNodeBuilder* Builder;
   
   /// StateMgr - Object that manages the data for all created states.
   GRStateManager StateMgr;
@@ -69,10 +55,10 @@ protected:
   ValueManager &ValMgr;
   
   /// SVator - SValuator object that creates SVals from expressions.
-  llvm::OwningPtr<SValuator> SVator;
+  SValuator &SVator;
   
   /// EntryNode - The immediate predecessor node.
-  NodeTy* EntryNode;
+  ExplodedNode* EntryNode;
 
   /// CleanedState - The state for EntryNode "cleaned" of all dead
   ///  variables and symbols (as determined by a liveness analysis).
@@ -89,27 +75,16 @@ protected:
   Selector RaiseSel;
   
   llvm::OwningPtr<GRSimpleAPICheck> BatchAuditor;
+  std::vector<Checker*> Checkers;
 
-  /// PurgeDead - Remove dead bindings before processing a statement.
-  bool PurgeDead;
-  
   /// BR - The BugReporter associated with this engine.  It is important that
   //   this object be placed at the very end of member variables so that its
   //   destructor is called before the rest of the GRExprEngine is destroyed.
   GRBugReporter BR;
   
-  /// EargerlyAssume - A flag indicating how the engine should handle
-  //   expressions such as: 'x = (y != 0)'.  When this flag is true then
-  //   the subexpression 'y != 0' will be eagerly assumed to be true or false,
-  //   thus evaluating it to the integers 0 or 1 respectively.  The upside
-  //   is that this can increase analysis precision until we have a better way
-  //   to lazily evaluate such logic.  The downside is that it eagerly
-  //   bifurcates paths.
-  const bool EagerlyAssume;
-
 public:
-  typedef llvm::SmallPtrSet<NodeTy*,2> ErrorNodes;  
-  typedef llvm::DenseMap<NodeTy*, Expr*> UndefArgsTy;
+  typedef llvm::SmallPtrSet<ExplodedNode*,2> ErrorNodes;  
+  typedef llvm::DenseMap<ExplodedNode*, Expr*> UndefArgsTy;
   
   /// NilReceiverStructRetExplicit - Nodes in the ExplodedGraph that resulted
   ///  from [x ...] with 'x' definitely being nil and the result was a 'struct'
@@ -211,23 +186,20 @@ public:
   ErrorNodes ExplicitOOBMemAccesses;
   
 public:
-  GRExprEngine(CFG& cfg, Decl& CD, ASTContext& Ctx, LiveVariables& L,
-               BugReporterData& BRD,
-               bool purgeDead, bool eagerlyAssume = true,
-               StoreManagerCreator SMC = CreateBasicStoreManager,
-               ConstraintManagerCreator CMC = CreateBasicConstraintManager);
+  GRExprEngine(AnalysisManager &mgr);
 
   ~GRExprEngine();
   
-  void ExecuteWorkList(unsigned Steps = 150000) {
-    CoreEngine.ExecuteWorkList(Steps);
+  void ExecuteWorkList(const LocationContext *L, unsigned Steps = 150000) {
+    CoreEngine.ExecuteWorkList(L, Steps);
   }
   
   /// getContext - Return the ASTContext associated with this analysis.
   ASTContext& getContext() const { return G.getContext(); }
+
+  AnalysisManager &getAnalysisManager() const { return AMgr; }
   
-  /// getCFG - Returns the CFG associated with this analysis.
-  CFG& getCFG() { return G.getCFG(); }
+  SValuator &getSValuator() { return SVator; }
   
   GRTransferFuncs& getTF() { return *StateMgr.TF; }
   
@@ -244,74 +216,73 @@ public:
   ///  simulation.
   void ViewGraph(bool trim = false);
   
-  void ViewGraph(NodeTy** Beg, NodeTy** End);
-  
-  /// getLiveness - Returned computed live-variables information for the
-  ///  analyzed function.  
-  const LiveVariables& getLiveness() const { return Liveness; }  
-  LiveVariables& getLiveness() { return Liveness; }
+  void ViewGraph(ExplodedNode** Beg, ExplodedNode** End);
   
   /// getInitialState - Return the initial state used for the root vertex
   ///  in the ExplodedGraph.
-  const GRState* getInitialState();
+  const GRState* getInitialState(const LocationContext *InitLoc);
   
-  GraphTy& getGraph() { return G; }
-  const GraphTy& getGraph() const { return G; }
+  ExplodedGraph& getGraph() { return G; }
+  const ExplodedGraph& getGraph() const { return G; }
 
   void RegisterInternalChecks();
   
-  bool isRetStackAddr(const NodeTy* N) const {
-    return N->isSink() && RetsStackAddr.count(const_cast<NodeTy*>(N)) != 0;
+  void registerCheck(Checker *check) {
+    Checkers.push_back(check);
   }
   
-  bool isUndefControlFlow(const NodeTy* N) const {
-    return N->isSink() && UndefBranches.count(const_cast<NodeTy*>(N)) != 0;
+  bool isRetStackAddr(const ExplodedNode* N) const {
+    return N->isSink() && RetsStackAddr.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isUndefStore(const NodeTy* N) const {
-    return N->isSink() && UndefStores.count(const_cast<NodeTy*>(N)) != 0;
+  bool isUndefControlFlow(const ExplodedNode* N) const {
+    return N->isSink() && UndefBranches.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isImplicitNullDeref(const NodeTy* N) const {
-    return N->isSink() && ImplicitNullDeref.count(const_cast<NodeTy*>(N)) != 0;
+  bool isUndefStore(const ExplodedNode* N) const {
+    return N->isSink() && UndefStores.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isExplicitNullDeref(const NodeTy* N) const {
-    return N->isSink() && ExplicitNullDeref.count(const_cast<NodeTy*>(N)) != 0;
+  bool isImplicitNullDeref(const ExplodedNode* N) const {
+    return N->isSink() && ImplicitNullDeref.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isUndefDeref(const NodeTy* N) const {
-    return N->isSink() && UndefDeref.count(const_cast<NodeTy*>(N)) != 0;
+  bool isExplicitNullDeref(const ExplodedNode* N) const {
+    return N->isSink() && ExplicitNullDeref.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isImplicitBadDivide(const NodeTy* N) const {
-    return N->isSink() && ImplicitBadDivides.count(const_cast<NodeTy*>(N)) != 0;
+  bool isUndefDeref(const ExplodedNode* N) const {
+    return N->isSink() && UndefDeref.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isExplicitBadDivide(const NodeTy* N) const {
-    return N->isSink() && ExplicitBadDivides.count(const_cast<NodeTy*>(N)) != 0;
+  bool isImplicitBadDivide(const ExplodedNode* N) const {
+    return N->isSink() && ImplicitBadDivides.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isNoReturnCall(const NodeTy* N) const {
-    return N->isSink() && NoReturnCalls.count(const_cast<NodeTy*>(N)) != 0;
+  bool isExplicitBadDivide(const ExplodedNode* N) const {
+    return N->isSink() && ExplicitBadDivides.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isUndefResult(const NodeTy* N) const {
-    return N->isSink() && UndefResults.count(const_cast<NodeTy*>(N)) != 0;
+  bool isNoReturnCall(const ExplodedNode* N) const {
+    return N->isSink() && NoReturnCalls.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isBadCall(const NodeTy* N) const {
-    return N->isSink() && BadCalls.count(const_cast<NodeTy*>(N)) != 0;
+  bool isUndefResult(const ExplodedNode* N) const {
+    return N->isSink() && UndefResults.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
-  bool isUndefArg(const NodeTy* N) const {
+  bool isBadCall(const ExplodedNode* N) const {
+    return N->isSink() && BadCalls.count(const_cast<ExplodedNode*>(N)) != 0;
+  }
+  
+  bool isUndefArg(const ExplodedNode* N) const {
     return N->isSink() &&
-      (UndefArgs.find(const_cast<NodeTy*>(N)) != UndefArgs.end() ||
-       MsgExprUndefArgs.find(const_cast<NodeTy*>(N)) != MsgExprUndefArgs.end());
+      (UndefArgs.find(const_cast<ExplodedNode*>(N)) != UndefArgs.end() ||
+       MsgExprUndefArgs.find(const_cast<ExplodedNode*>(N)) != MsgExprUndefArgs.end());
   }
   
-  bool isUndefReceiver(const NodeTy* N) const {
-    return N->isSink() && UndefReceivers.count(const_cast<NodeTy*>(N)) != 0;
+  bool isUndefReceiver(const ExplodedNode* N) const {
+    return N->isSink() && UndefReceivers.count(const_cast<ExplodedNode*>(N)) != 0;
   }
   
   typedef ErrorNodes::iterator ret_stackaddr_iterator;
@@ -429,7 +400,7 @@ public:
   
   /// ProcessStmt - Called by GRCoreEngine. Used to generate new successor
   ///  nodes by processing the 'effects' of a block-level statement.  
-  void ProcessStmt(Stmt* S, StmtNodeBuilder& builder);    
+  void ProcessStmt(Stmt* S, GRStmtNodeBuilder& builder);    
   
   /// ProcessBlockEntrance - Called by GRCoreEngine when start processing
   ///  a CFGBlock.  This method returns true if the analysis should continue
@@ -439,19 +410,19 @@ public:
   
   /// ProcessBranch - Called by GRCoreEngine.  Used to generate successor
   ///  nodes by processing the 'effects' of a branch condition.
-  void ProcessBranch(Stmt* Condition, Stmt* Term, BranchNodeBuilder& builder);
+  void ProcessBranch(Stmt* Condition, Stmt* Term, GRBranchNodeBuilder& builder);
   
   /// ProcessIndirectGoto - Called by GRCoreEngine.  Used to generate successor
   ///  nodes by processing the 'effects' of a computed goto jump.
-  void ProcessIndirectGoto(IndirectGotoNodeBuilder& builder);
+  void ProcessIndirectGoto(GRIndirectGotoNodeBuilder& builder);
   
   /// ProcessSwitch - Called by GRCoreEngine.  Used to generate successor
   ///  nodes by processing the 'effects' of a switch statement.
-  void ProcessSwitch(SwitchNodeBuilder& builder);
+  void ProcessSwitch(GRSwitchNodeBuilder& builder);
   
   /// ProcessEndPath - Called by GRCoreEngine.  Used to generate end-of-path
   ///  nodes when the control reaches the end of a function.
-  void ProcessEndPath(EndPathNodeBuilder& builder) {
+  void ProcessEndPath(GREndPathNodeBuilder& builder) {
     getTF().EvalEndPath(*this, builder);
     StateMgr.EndPath(builder.getState());
   }
@@ -481,190 +452,180 @@ public:
   const SymbolManager& getSymbolManager() const { return SymMgr; }
   
 protected:
-  const GRState* GetState(NodeTy* N) {
+  const GRState* GetState(ExplodedNode* N) {
     return N == EntryNode ? CleanedState : N->getState();
   }
   
 public:
-  NodeTy* MakeNode(NodeSet& Dst, Stmt* S, NodeTy* Pred, const GRState* St,
+  ExplodedNode* MakeNode(ExplodedNodeSet& Dst, Stmt* S, ExplodedNode* Pred, const GRState* St,
                    ProgramPoint::Kind K = ProgramPoint::PostStmtKind,
                    const void *tag = 0);
 protected:
-    
+  /// CheckerVisit - Dispatcher for performing checker-specific logic
+  ///  at specific statements.
+  void CheckerVisit(Stmt *S, ExplodedNodeSet &Dst, ExplodedNodeSet &Src, bool isPrevisit);
+  
   /// Visit - Transfer function logic for all statements.  Dispatches to
   ///  other functions that handle specific kinds of statements.
-  void Visit(Stmt* S, NodeTy* Pred, NodeSet& Dst);
+  void Visit(Stmt* S, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   /// VisitLValue - Evaluate the lvalue of the expression. For example, if Ex is
   /// a DeclRefExpr, it evaluates to the MemRegionVal which represents its
   /// storage location. Note that not all kinds of expressions has lvalue.
-  void VisitLValue(Expr* Ex, NodeTy* Pred, NodeSet& Dst);
+  void VisitLValue(Expr* Ex, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   /// VisitArraySubscriptExpr - Transfer function for array accesses.
-  void VisitArraySubscriptExpr(ArraySubscriptExpr* Ex, NodeTy* Pred,
-                               NodeSet& Dst, bool asLValue);
+  void VisitArraySubscriptExpr(ArraySubscriptExpr* Ex, ExplodedNode* Pred,
+                               ExplodedNodeSet& Dst, bool asLValue);
   
   /// VisitAsmStmt - Transfer function logic for inline asm.
-  void VisitAsmStmt(AsmStmt* A, NodeTy* Pred, NodeSet& Dst);
+  void VisitAsmStmt(AsmStmt* A, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   void VisitAsmStmtHelperOutputs(AsmStmt* A,
                                  AsmStmt::outputs_iterator I,
                                  AsmStmt::outputs_iterator E,
-                                 NodeTy* Pred, NodeSet& Dst);
+                                 ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   void VisitAsmStmtHelperInputs(AsmStmt* A,
                                 AsmStmt::inputs_iterator I,
                                 AsmStmt::inputs_iterator E,
-                                NodeTy* Pred, NodeSet& Dst);
+                                ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   /// VisitBinaryOperator - Transfer function logic for binary operators.
-  void VisitBinaryOperator(BinaryOperator* B, NodeTy* Pred, NodeSet& Dst);
+  void VisitBinaryOperator(BinaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
   
   /// VisitCall - Transfer function for function calls.
-  void VisitCall(CallExpr* CE, NodeTy* Pred,
+  void VisitCall(CallExpr* CE, ExplodedNode* Pred,
                  CallExpr::arg_iterator AI, CallExpr::arg_iterator AE,
-                 NodeSet& Dst);
-  void VisitCallRec(CallExpr* CE, NodeTy* Pred,
+                 ExplodedNodeSet& Dst);
+  void VisitCallRec(CallExpr* CE, ExplodedNode* Pred,
                     CallExpr::arg_iterator AI, CallExpr::arg_iterator AE,
-                    NodeSet& Dst, const FunctionProtoType *, 
+                    ExplodedNodeSet& Dst, const FunctionProtoType *, 
                     unsigned ParamIdx = 0);
   
   /// VisitCast - Transfer function logic for all casts (implicit and explicit).
-  void VisitCast(Expr* CastE, Expr* Ex, NodeTy* Pred, NodeSet& Dst);
+  void VisitCast(Expr* CastE, Expr* Ex, ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
-  /// VisitCastPointerToInteger - Transfer function (called by VisitCast) that
-  ///  handles pointer to integer casts and array to integer casts.
-  void VisitCastPointerToInteger(SVal V, const GRState* state, QualType PtrTy,
-                                 Expr* CastE, NodeTy* Pred, NodeSet& Dst);
-  
   /// VisitCompoundLiteralExpr - Transfer function logic for compound literals.
-  void VisitCompoundLiteralExpr(CompoundLiteralExpr* CL, NodeTy* Pred,
-                                NodeSet& Dst, bool asLValue);
+  void VisitCompoundLiteralExpr(CompoundLiteralExpr* CL, ExplodedNode* Pred,
+                                ExplodedNodeSet& Dst, bool asLValue);
   
   /// VisitDeclRefExpr - Transfer function logic for DeclRefExprs.
-  void VisitDeclRefExpr(DeclRefExpr* DR, NodeTy* Pred, NodeSet& Dst,
+  void VisitDeclRefExpr(DeclRefExpr* DR, ExplodedNode* Pred, ExplodedNodeSet& Dst,
                         bool asLValue); 
   
   /// VisitDeclStmt - Transfer function logic for DeclStmts.
-  void VisitDeclStmt(DeclStmt* DS, NodeTy* Pred, NodeSet& Dst); 
+  void VisitDeclStmt(DeclStmt* DS, ExplodedNode* Pred, ExplodedNodeSet& Dst); 
   
   /// VisitGuardedExpr - Transfer function logic for ?, __builtin_choose
-  void VisitGuardedExpr(Expr* Ex, Expr* L, Expr* R, NodeTy* Pred, NodeSet& Dst);
+  void VisitGuardedExpr(Expr* Ex, Expr* L, Expr* R, ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
-  void VisitInitListExpr(InitListExpr* E, NodeTy* Pred, NodeSet& Dst);
+  void VisitInitListExpr(InitListExpr* E, ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
   /// VisitLogicalExpr - Transfer function logic for '&&', '||'
-  void VisitLogicalExpr(BinaryOperator* B, NodeTy* Pred, NodeSet& Dst);
+  void VisitLogicalExpr(BinaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   /// VisitMemberExpr - Transfer function for member expressions.
-  void VisitMemberExpr(MemberExpr* M, NodeTy* Pred, NodeSet& Dst,bool asLValue);
+  void VisitMemberExpr(MemberExpr* M, ExplodedNode* Pred, ExplodedNodeSet& Dst,bool asLValue);
   
   /// VisitObjCIvarRefExpr - Transfer function logic for ObjCIvarRefExprs.
-  void VisitObjCIvarRefExpr(ObjCIvarRefExpr* DR, NodeTy* Pred, NodeSet& Dst,
+  void VisitObjCIvarRefExpr(ObjCIvarRefExpr* DR, ExplodedNode* Pred, ExplodedNodeSet& Dst,
                             bool asLValue); 
 
   /// VisitObjCForCollectionStmt - Transfer function logic for
   ///  ObjCForCollectionStmt.
-  void VisitObjCForCollectionStmt(ObjCForCollectionStmt* S, NodeTy* Pred,
-                                  NodeSet& Dst);
+  void VisitObjCForCollectionStmt(ObjCForCollectionStmt* S, ExplodedNode* Pred,
+                                  ExplodedNodeSet& Dst);
   
-  void VisitObjCForCollectionStmtAux(ObjCForCollectionStmt* S, NodeTy* Pred,
-                                     NodeSet& Dst, SVal ElementV);
+  void VisitObjCForCollectionStmtAux(ObjCForCollectionStmt* S, ExplodedNode* Pred,
+                                     ExplodedNodeSet& Dst, SVal ElementV);
   
   /// VisitObjCMessageExpr - Transfer function for ObjC message expressions.
-  void VisitObjCMessageExpr(ObjCMessageExpr* ME, NodeTy* Pred, NodeSet& Dst);
+  void VisitObjCMessageExpr(ObjCMessageExpr* ME, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   void VisitObjCMessageExprArgHelper(ObjCMessageExpr* ME,
                                      ObjCMessageExpr::arg_iterator I,
                                      ObjCMessageExpr::arg_iterator E,
-                                     NodeTy* Pred, NodeSet& Dst);
+                                     ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
-  void VisitObjCMessageExprDispatchHelper(ObjCMessageExpr* ME, NodeTy* Pred,
-                                          NodeSet& Dst);
+  void VisitObjCMessageExprDispatchHelper(ObjCMessageExpr* ME, ExplodedNode* Pred,
+                                          ExplodedNodeSet& Dst);
   
   /// VisitReturnStmt - Transfer function logic for return statements.
-  void VisitReturnStmt(ReturnStmt* R, NodeTy* Pred, NodeSet& Dst);
+  void VisitReturnStmt(ReturnStmt* R, ExplodedNode* Pred, ExplodedNodeSet& Dst);
   
   /// VisitSizeOfAlignOfExpr - Transfer function for sizeof.
-  void VisitSizeOfAlignOfExpr(SizeOfAlignOfExpr* Ex, NodeTy* Pred,
-                              NodeSet& Dst);
+  void VisitSizeOfAlignOfExpr(SizeOfAlignOfExpr* Ex, ExplodedNode* Pred,
+                              ExplodedNodeSet& Dst);
     
   /// VisitUnaryOperator - Transfer function logic for unary operators.
-  void VisitUnaryOperator(UnaryOperator* B, NodeTy* Pred, NodeSet& Dst,
+  void VisitUnaryOperator(UnaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst,
                           bool asLValue);
  
-  const GRState* CheckDivideZero(Expr* Ex, const GRState* St, NodeTy* Pred,
+  const GRState* CheckDivideZero(Expr* Ex, const GRState* St, ExplodedNode* Pred,
                                  SVal Denom);  
   
   /// EvalEagerlyAssume - Given the nodes in 'Src', eagerly assume symbolic
   ///  expressions of the form 'x != 0' and generate new nodes (stored in Dst)
   ///  with those assumptions.
-  void EvalEagerlyAssume(NodeSet& Dst, NodeSet& Src, Expr *Ex);
-  
-  SVal EvalCast(SVal X, QualType CastT) {
-    if (X.isUnknownOrUndef())
-      return X;
+  void EvalEagerlyAssume(ExplodedNodeSet& Dst, ExplodedNodeSet& Src, Expr *Ex);
     
-    if (isa<Loc>(X))
-      return SVator->EvalCast(cast<Loc>(X), CastT);
-    else
-      return SVator->EvalCast(cast<NonLoc>(X), CastT);
-  }
-  
   SVal EvalMinus(SVal X) {
-    return X.isValid() ? SVator->EvalMinus(cast<NonLoc>(X)) : X;
+    return X.isValid() ? SVator.EvalMinus(cast<NonLoc>(X)) : X;
   }
   
   SVal EvalComplement(SVal X) {
-    return X.isValid() ? SVator->EvalComplement(cast<NonLoc>(X)) : X;
+    return X.isValid() ? SVator.EvalComplement(cast<NonLoc>(X)) : X;
   }
   
 public:
   
   SVal EvalBinOp(BinaryOperator::Opcode op, NonLoc L, NonLoc R, QualType T) {
-    return SVator->EvalBinOpNN(op, L, R, T);
+    return SVator.EvalBinOpNN(op, L, R, T);
   }
 
   SVal EvalBinOp(BinaryOperator::Opcode op, NonLoc L, SVal R, QualType T) {
-    return R.isValid() ? SVator->EvalBinOpNN(op, L, cast<NonLoc>(R), T) : R;
+    return R.isValid() ? SVator.EvalBinOpNN(op, L, cast<NonLoc>(R), T) : R;
   }
   
-  SVal EvalBinOp(const GRState *state, BinaryOperator::Opcode op,
-                 SVal lhs, SVal rhs, QualType T);
+  SVal EvalBinOp(const GRState *ST, BinaryOperator::Opcode Op,
+                 SVal LHS, SVal RHS, QualType T) {
+    return SVator.EvalBinOp(ST, Op, LHS, RHS, T);
+  }
 
 protected:
   
-  void EvalCall(NodeSet& Dst, CallExpr* CE, SVal L, NodeTy* Pred);
+  void EvalCall(ExplodedNodeSet& Dst, CallExpr* CE, SVal L, ExplodedNode* Pred);
   
-  void EvalObjCMessageExpr(NodeSet& Dst, ObjCMessageExpr* ME, NodeTy* Pred) {
+  void EvalObjCMessageExpr(ExplodedNodeSet& Dst, ObjCMessageExpr* ME, ExplodedNode* Pred) {
     assert (Builder && "GRStmtNodeBuilder must be defined.");
     getTF().EvalObjCMessageExpr(Dst, *this, *Builder, ME, Pred);
   }
 
-  void EvalReturn(NodeSet& Dst, ReturnStmt* s, NodeTy* Pred);
+  void EvalReturn(ExplodedNodeSet& Dst, ReturnStmt* s, ExplodedNode* Pred);
   
   const GRState* MarkBranch(const GRState* St, Stmt* Terminator, 
                             bool branchTaken);
   
   /// EvalBind - Handle the semantics of binding a value to a specific location.
   ///  This method is used by EvalStore, VisitDeclStmt, and others.
-  void EvalBind(NodeSet& Dst, Expr* Ex, NodeTy* Pred,
+  void EvalBind(ExplodedNodeSet& Dst, Expr* Ex, ExplodedNode* Pred,
                 const GRState* St, SVal location, SVal Val);
   
 public:
-  void EvalLoad(NodeSet& Dst, Expr* Ex, NodeTy* Pred,
+  void EvalLoad(ExplodedNodeSet& Dst, Expr* Ex, ExplodedNode* Pred,
                 const GRState* St, SVal location, const void *tag = 0);
   
-  NodeTy* EvalLocation(Stmt* Ex, NodeTy* Pred,
+  ExplodedNode* EvalLocation(Stmt* Ex, ExplodedNode* Pred,
                        const GRState* St, SVal location,
                        const void *tag = 0);
 
   
-  void EvalStore(NodeSet& Dst, Expr* E, NodeTy* Pred, const GRState* St,
+  void EvalStore(ExplodedNodeSet& Dst, Expr* E, ExplodedNode* Pred, const GRState* St,
                  SVal TargetLV, SVal Val, const void *tag = 0);
   
-  void EvalStore(NodeSet& Dst, Expr* E, Expr* StoreE, NodeTy* Pred,
+  void EvalStore(ExplodedNodeSet& Dst, Expr* E, Expr* StoreE, ExplodedNode* Pred,
                  const GRState* St, SVal TargetLV, SVal Val,
                  const void *tag = 0);
   

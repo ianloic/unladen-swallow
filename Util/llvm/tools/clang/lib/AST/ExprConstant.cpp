@@ -222,7 +222,7 @@ APValue LValueExprEvaluator::VisitMemberExpr(MemberExpr *E) {
   if (E->isArrow()) {
     if (!EvaluatePointer(E->getBase(), result, Info))
       return APValue();
-    Ty = E->getBase()->getType()->getAsPointerType()->getPointeeType();
+    Ty = E->getBase()->getType()->getAs<PointerType>()->getPointeeType();
   } else {
     result = Visit(E->getBase());
     if (result.isUninit())
@@ -230,7 +230,7 @@ APValue LValueExprEvaluator::VisitMemberExpr(MemberExpr *E) {
     Ty = E->getBase()->getType();
   }
 
-  RecordDecl *RD = Ty->getAsRecordType()->getDecl();
+  RecordDecl *RD = Ty->getAs<RecordType>()->getDecl();
   const ASTRecordLayout &RL = Info.Ctx.getASTRecordLayout(RD);
 
   FieldDecl *FD = dyn_cast<FieldDecl>(E->getMemberDecl());
@@ -351,7 +351,7 @@ APValue PointerExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   if (!EvaluateInteger(IExp, AdditionalOffset, Info))
     return APValue();
 
-  QualType PointeeType = PExp->getType()->getAsPointerType()->getPointeeType();
+  QualType PointeeType = PExp->getType()->getAs<PointerType>()->getPointeeType();
   uint64_t SizeOfPointee;
   
   // Explicitly handle GNU void* and function pointer arithmetic extensions.
@@ -382,7 +382,8 @@ APValue PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
   const Expr* SubExpr = E->getSubExpr();
 
    // Check for pointer->pointer cast
-  if (SubExpr->getType()->isPointerType()) {
+  if (SubExpr->getType()->isPointerType() ||
+      SubExpr->getType()->isObjCObjectPointerType()) {
     APValue Result;
     if (EvaluatePointer(SubExpr, Result, Info))
       return Result;
@@ -734,7 +735,7 @@ public:
   }
 
   bool VisitUnaryTypeTraitExpr(const UnaryTypeTraitExpr *E) {
-    return Success(E->EvaluateTrait(), E);
+    return Success(E->EvaluateTrait(Info.Ctx), E);
   }
 
   bool VisitChooseExpr(const ChooseExpr *E) {
@@ -1028,7 +1029,7 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
 
       if (E->getOpcode() == BinaryOperator::Sub) {
         const QualType Type = E->getLHS()->getType();
-        const QualType ElementType = Type->getAsPointerType()->getPointeeType();
+        const QualType ElementType = Type->getAs<PointerType>()->getPointeeType();
 
         uint64_t D = LHSValue.getLValueOffset() - RHSValue.getLValueOffset();
         if (!ElementType->isVoidType() && !ElementType->isFunctionType())

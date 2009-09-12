@@ -82,6 +82,9 @@
 
 #include "pydebug.h"
 
+#include "pystate.h"
+#include "code.h"
+#include "frameobject.h"
 #include "unicodeobject.h"
 #include "intobject.h"
 #include "boolobject.h"
@@ -118,8 +121,6 @@
 
 #include "codecs.h"
 #include "pyerrors.h"
-
-#include "pystate.h"
 
 #include "pyarena.h"
 #include "modsupport.h"

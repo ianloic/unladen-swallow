@@ -119,6 +119,7 @@ list</a>.</p>
 
 <ul>
 <li>Something wonderful!</li>
+<li>AuroraUX / FreeBSD & OpenBSD Toolchain support.</li>
 <li>Many many bugs are fixed and many features have been added.</li>
 </ul>
 </div>
@@ -280,6 +281,7 @@ in this section.
 
 <ul>
 <li>Something wonderful!</li>
+<li>LLVM 2.6 includes a brand new experimental LLVM bindings to the Ada2005 programming language.</li>
 </ul>
 
 </div>
@@ -395,6 +397,29 @@ it run faster:</p>
 
 </div>
 
+<!--=========================================================================-->
+<div class="doc_subsection">
+<a name="ARM">ARM Target Improvements</a>
+</div>
+
+<div class="doc_text">
+<p>New features of the ARM target include:
+</p>
+
+<ul>
+
+<li>Preliminary support for processors, such as the Cortex-A8 and Cortex-A9,
+that implement version v7-A of the ARM architecture.  The ARM backend now
+supports both the Thumb2 and Advanced SIMD (Neon) instruction sets. The
+AAPCS-VFP "hard float" calling conventions are also supported with the
+<tt>-float-abi=hard</tt> flag. These features are still somewhat experimental
+and subject to change. The Neon intrinsics, in particular, may change in future
+releases of LLVM.
+</li>
+</ul>
+
+</div>
+
 
 <!--=========================================================================-->
 <div class="doc_subsection">
@@ -449,6 +474,64 @@ API changes are:</p>
     <tt>CreateNeg</tt> should only be used for integer arithmetic now;
     <tt>CreateFAdd</tt>, <tt>CreateFSub</tt>, <tt>CreateFMul</tt>, and
     <tt>CreateFNeg</tt> should now be used for floating-point arithmetic.</li>
+<li>The DynamicLibrary class can no longer be constructed, its functionality has
+    moved to static member functions.</li>
+<li><tt>raw_fd_ostream</tt>'s constructor for opening a given filename now
+    takes an extra <tt>Force</tt> argument. If <tt>Force</tt> is set to
+    <tt>false</tt>, an error will be reported if a file with the given name
+    already exists. If <tt>Force</tt> is set to <tt>true</tt>, the file will
+    be silently truncated (which is the behavior before this flag was
+    added).</li>
+<li><tt>SCEVHandle</tt> no longer exists, because reference counting is no
+longer done for <tt>SCEV*</tt> objects, instead <tt>const SCEV*</tt> should be
+used.</li>
+
+<li>Many APIs, notably <tt>llvm::Value</tt>, now use the <tt>StringRef</tt>
+and <tt>Twine</tt> classes instead of passing <tt>const char*</tt>
+or <tt>std::string</tt>, as described in
+the <a href="ProgrammersManual.html#string_apis">Programmer's Manual</a>. Most
+clients should be unaffected by this transition, unless they are used to <tt>Value::getName()</tt> returning a string. Here are some tips on updating to 2.6:
+  <ul>
+    <li><tt>getNameStr()</tt> is still available, and matches the old
+      behavior. Replacing <tt>getName()</tt> calls with this is an safe option,
+      although more efficient alternatives are now possible.</li>
+
+    <li>If you were just relying on <tt>getName()</tt> being able to be sent to
+      a <tt>std::ostream</tt>, consider migrating
+      to <tt>llvm::raw_ostream</tt>.</li>
+      
+    <li>If you were using <tt>getName().c_str()</tt> to get a <tt>const
+        char*</tt> pointer to the name, you can use <tt>getName().data()</tt>.
+        Note that this string (as before), may not be the entire name if the
+        name containts embedded null characters.</li>
+
+    <li>If you were using operator plus on the result of <tt>getName()</tt> and
+      treating the result as an <tt>std::string</tt>, you can either
+      uses <tt>Twine::str</tt> to get the result as an <tt>std::string</tt>, or
+      could move to a <tt>Twine</tt> based design.</li>
+
+    <li><tt>isName()</tt> should be replaced with comparison
+      against <tt>getName()</tt> (this is now efficient).
+  </ul>
+</li>
+
+<li>The registration interfaces for backend Targets has changed (what was
+previously TargetMachineRegistry). For backend authors, see the <a href="WritingAnLLVMBackend.html#TargetRegistration">Writing An LLVM Backend</a> guide. For clients, the notable API changes are:
+  <ul>
+    <li><tt>TargetMachineRegistry</tt> has been renamed
+      to <tt>TargetRegistry</tt>.</li>
+
+    <li>Clients should move to using the <tt>TargetRegistry::lookupTarget()</tt>
+      function to find targets.</li>
+  </ul>
+</li>
+
+<li>llvm-dis now fails if output file exists, instead of dumping to stdout.
+FIXME: describe any other tool changes due to the raw_fd_ostream change.  FIXME:
+This is not an API change, maybe there should be a tool changes section?</li>
+<li>temporarely due to Context API change passes should call doInitialization()
+method of the pass they inherit from, otherwise Context is NULL.
+FIXME: remove this entry when this is no longer needed.<li>
 </ul>
 
 </div>
@@ -467,7 +550,7 @@ API changes are:</p>
 
 <ul>
 <li>Intel and AMD machines (IA32, X86-64, AMD64, EMT-64) running Red Hat
-Linux, Fedora Core and FreeBSD (and probably other unix-like systems).</li>
+Linux, Fedora Core, FreeBSD and AuroraUX (and probably other unix-like systems).</li>
 <li>PowerPC and X86-based Mac OS X systems, running 10.3 and above in 32-bit
 and 64-bit modes.</li>
 <li>Intel and AMD machines running on Win32 using MinGW libraries (native).</li>
@@ -475,7 +558,6 @@ and 64-bit modes.</li>
     support is available for native builds with Visual C++).</li>
 <li>Sun UltraSPARC workstations running Solaris 10.</li>
 <li>Alpha-based machines running Debian GNU/Linux.</li>
-<li>Itanium-based (IA64) machines running Linux and HP-UX.</li>
 </ul>
 
 <p>The core LLVM infrastructure uses GNU autoconf to adapt itself
@@ -498,6 +580,15 @@ listed by component.  If you run into a problem, please check the <a
 href="http://llvm.org/bugs/">LLVM bug database</a> and submit a bug if
 there isn't already one.</p>
 
+<ul>
+<li>LLVM will not correctly compile on Solaris and/or OpenSolaris
+using the stock GCC 3.x.x series 'out the box',
+See: <a href="#brokengcc">Broken versions of GCC and other tools</a>.
+However, A <a href="http://pkg.auroraux.org/GCC">Modern GCC Build</a>
+for x86/x64 has been made available from the third party AuroraUX Project
+that has been meticulously tested for bootstrapping LLVM & Clang.</li>
+</ul>
+
 </div>
 
 <!-- ======================================================================= -->
@@ -515,7 +606,7 @@ components, please contact us on the <a
 href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev">LLVMdev list</a>.</p>
 
 <ul>
-<li>The MSIL, IA64, Alpha, SPU, MIPS, and PIC16 backends are experimental.</li>
+<li>The MSIL, Alpha, SPU, MIPS, and PIC16 backends are experimental.</li>
 <li>The <tt>llc</tt> "<tt>-filetype=asm</tt>" (the default) is the only
     supported value for this option.</li>
 </ul>
@@ -572,6 +663,9 @@ compilation, and lacks support for debug information.</li>
 <div class="doc_text">
 
 <ul>
+<li>Support for the Advanced SIMD (Neon) instruction set is still incomplete
+and not well tested.  Some features may not work at all, and the code quality
+may be poor in some cases.</li>
 <li>Thumb mode works only on ARMv6 or higher processors. On sub-ARMv6
 processors, thumb programs can crash or produce wrong
 results (<a href="http://llvm.org/PR1388">PR1388</a>).</li>
@@ -625,21 +719,6 @@ programs compiled with LLVM.  Please use more recent versions of QEMU.</li>
 appropriate nops inserted to ensure restartability.</li>
 
 </ul>
-</div>
-
-<!-- ======================================================================= -->
-<div class="doc_subsection">
-  <a name="ia64-be">Known problems with the IA64 back-end</a>
-</div>
-
-<div class="doc_text">
-
-<ul>
-<li>The Itanium backend is highly experimental and has a number of known
-    issues.  We are looking for a maintainer for the Itanium backend.  If you
-    are interested, please contact the LLVMdev mailing list.</li>
-</ul>
-
 </div>
 
 <!-- ======================================================================= -->
@@ -785,7 +864,7 @@ lists</a>.</p>
   src="http://www.w3.org/Icons/valid-html401-blue" alt="Valid HTML 4.01"></a>
 
   <a href="http://llvm.org/">LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-07-07 13:05:15 -0700 (Tue, 07 Jul 2009) $
+  Last modified: $Date: 2009-08-21 22:17:22 -0400 (Fri, 21 Aug 2009) $
 </address>
 
 </body>

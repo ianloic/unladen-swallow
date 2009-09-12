@@ -15,8 +15,8 @@
 #ifndef LLVM_TARGET_PIC16_H
 #define LLVM_TARGET_PIC16_H
 
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
-#include <iosfwd>
 #include <cassert>
 #include <sstream>
 #include <cstring>
@@ -26,7 +26,7 @@ namespace llvm {
   class PIC16TargetMachine;
   class FunctionPass;
   class MachineCodeEmitter;
-  class raw_ostream;
+  class formatted_raw_ostream;
 
 namespace PIC16CC {
   enum CondCodes {
@@ -254,6 +254,15 @@ namespace PIC16CC {
       return false;
     }
 
+    inline static bool isMemIntrinsic (const std::string &Name) {
+      if (Name.compare("@memcpy") == 0 || Name.compare("@memset") == 0 ||
+          Name.compare("@memmove") == 0) {
+        return true;
+      }
+      
+      return false;
+    }
+
     inline static bool isLocalToFunc (std::string &Func, std::string &Var) {
       if (! isLocalName(Var)) return false;
 
@@ -307,7 +316,7 @@ namespace PIC16CC {
 
   inline static const char *PIC16CondCodeToString(PIC16CC::CondCodes CC) {
     switch (CC) {
-    default: assert(0 && "Unknown condition code");
+    default: llvm_unreachable("Unknown condition code");
     case PIC16CC::NE:  return "ne";
     case PIC16CC::EQ:   return "eq";
     case PIC16CC::LT:   return "lt";
@@ -323,7 +332,7 @@ namespace PIC16CC {
 
   inline static bool isSignedComparison(PIC16CC::CondCodes CC) {
     switch (CC) {
-    default: assert(0 && "Unknown condition code");
+    default: llvm_unreachable("Unknown condition code");
     case PIC16CC::NE:  
     case PIC16CC::EQ: 
     case PIC16CC::LT:
@@ -342,11 +351,12 @@ namespace PIC16CC {
 
 
   FunctionPass *createPIC16ISelDag(PIC16TargetMachine &TM);
-  FunctionPass *createPIC16CodePrinterPass(raw_ostream &OS, 
-                                           PIC16TargetMachine &TM,
-                                           bool Verbose);
-  // Banksel optimzer pass.
+  // Banksel optimizer pass.
   FunctionPass *createPIC16MemSelOptimizerPass();
+
+  extern Target ThePIC16Target;
+  extern Target TheCooperTarget;
+  
 } // end namespace llvm;
 
 // Defines symbolic names for PIC16 registers.  This defines a mapping from

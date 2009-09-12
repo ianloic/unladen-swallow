@@ -23,11 +23,8 @@
 #include <iostream>
 using namespace llvm;
 
-namespace {
-  cl::opt<bool>
-  GenDebug("gen-debug", cl::desc("Generate debug code"),
-              cl::init(false));
-}
+static cl::opt<bool>
+GenDebug("gen-debug", cl::desc("Generate debug code"), cl::init(false));
 
 //===----------------------------------------------------------------------===//
 // DAGISelEmitter Helper methods
@@ -60,8 +57,8 @@ static const ComplexPattern *NodeGetComplexPattern(TreePatternNode *N,
 /// patterns before small ones.  This is used to determine the size of a
 /// pattern.
 static unsigned getPatternSize(TreePatternNode *P, CodeGenDAGPatterns &CGP) {
-  assert((EMVT::isExtIntegerInVTs(P->getExtTypes()) ||
-          EMVT::isExtFloatingPointInVTs(P->getExtTypes()) ||
+  assert((EEVT::isExtIntegerInVTs(P->getExtTypes()) ||
+          EEVT::isExtFloatingPointInVTs(P->getExtTypes()) ||
           P->getExtTypeNum(0) == MVT::isVoid ||
           P->getExtTypeNum(0) == MVT::Flag ||
           P->getExtTypeNum(0) == MVT::iPTR ||
@@ -698,7 +695,7 @@ public:
       if (DefInit *DI = dynamic_cast<DefInit*>(Child->getLeafValue())) {
         Record *LeafRec = DI->getDef();
         if (LeafRec->isSubClassOf("RegisterClass") || 
-            LeafRec->getName() == "ptr_rc") {
+            LeafRec->isSubClassOf("PointerLikeRegClass")) {
           // Handle register references.  Nothing to do here.
         } else if (LeafRec->isSubClassOf("Register")) {
           // Handle register references.
@@ -932,7 +929,8 @@ public:
         unsigned ResNo = TmpNo++;
         assert(N->getExtTypes().size() == 1 && "Multiple types not handled!");
         emitCode("SDValue Tmp" + utostr(ResNo) + 
-                 " = CurDAG->getTargetConstant(0x" + itohexstr(II->getValue()) +
+                 " = CurDAG->getTargetConstant(0x" + 
+                 utohexstr((uint64_t) II->getValue()) +
                  "ULL, " + getEnumName(N->getTypeNum(0)) + ");");
         NodeOps.push_back("Tmp" + utostr(ResNo));
         return NodeOps;
@@ -1778,7 +1776,7 @@ void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
           CallerCode += ", " + TargetOpcodes[j];
         }
         for (unsigned j = 0, e = TargetVTs.size(); j != e; ++j) {
-          CalleeCode += ", MVT VT" + utostr(j);
+          CalleeCode += ", EVT VT" + utostr(j);
           CallerCode += ", " + TargetVTs[j];
         }
         for (std::set<std::string>::iterator
@@ -1930,7 +1928,7 @@ void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
      << "  std::vector<SDValue> Ops(N.getNode()->op_begin(), N.getNode()->op_end());\n"
      << "  SelectInlineAsmMemoryOperands(Ops);\n\n"
     
-     << "  std::vector<MVT> VTs;\n"
+     << "  std::vector<EVT> VTs;\n"
      << "  VTs.push_back(MVT::Other);\n"
      << "  VTs.push_back(MVT::Flag);\n"
      << "  SDValue New = CurDAG->getNode(ISD::INLINEASM, N.getDebugLoc(), "
@@ -1959,26 +1957,9 @@ void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
      << "                              MVT::Other, Tmp, Chain);\n"
      << "}\n\n";
 
-  OS << "SDNode *Select_DECLARE(const SDValue &N) {\n"
-     << "  SDValue Chain = N.getOperand(0);\n"
-     << "  SDValue N1 = N.getOperand(1);\n"
-     << "  SDValue N2 = N.getOperand(2);\n"
-     << "  if (!isa<FrameIndexSDNode>(N1) || !isa<GlobalAddressSDNode>(N2)) {\n"
-     << "    CannotYetSelect(N);\n"
-     << "  }\n"
-     << "  int FI = cast<FrameIndexSDNode>(N1)->getIndex();\n"
-     << "  GlobalValue *GV = cast<GlobalAddressSDNode>(N2)->getGlobal();\n"
-     << "  SDValue Tmp1 = "
-     << "CurDAG->getTargetFrameIndex(FI, TLI.getPointerTy());\n"
-     << "  SDValue Tmp2 = "
-     << "CurDAG->getTargetGlobalAddress(GV, TLI.getPointerTy());\n"
-     << "  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::DECLARE,\n"
-     << "                              MVT::Other, Tmp1, Tmp2, Chain);\n"
-     << "}\n\n";
-
   OS << "// The main instruction selector code.\n"
      << "SDNode *SelectCode(SDValue N) {\n"
-     << "  MVT::SimpleValueType NVT = N.getNode()->getValueType(0).getSimpleVT();\n"
+     << "  MVT::SimpleValueType NVT = N.getNode()->getValueType(0).getSimpleVT().SimpleTy;\n"
      << "  switch (N.getOpcode()) {\n"
      << "  default:\n"
      << "    assert(!N.isMachineOpcode() && \"Node already selected!\");\n"
@@ -2009,7 +1990,6 @@ void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
      << "  case ISD::INLINEASM: return Select_INLINEASM(N);\n"
      << "  case ISD::DBG_LABEL: return Select_DBG_LABEL(N);\n"
      << "  case ISD::EH_LABEL: return Select_EH_LABEL(N);\n"
-     << "  case ISD::DECLARE: return Select_DECLARE(N);\n"
      << "  case ISD::UNDEF: return Select_UNDEF(N);\n";
 
   // Loop over all of the case statements, emiting a call to each method we
@@ -2091,7 +2071,7 @@ void DAGISelEmitter::EmitInstructionSelector(raw_ostream &OS) {
      << "}\n\n";
 
   OS << "void CannotYetSelectIntrinsic(SDValue N) DISABLE_INLINE {\n"
-     << "  cerr << \"Cannot yet select: \";\n"
+     << "  errs() << \"Cannot yet select: \";\n"
      << "  unsigned iid = cast<ConstantSDNode>(N.getOperand("
      << "N.getOperand(0).getValueType() == MVT::Other))->getZExtValue();\n"
      << " llvm_report_error(\"Cannot yet select: intrinsic %\" +\n"
@@ -2114,12 +2094,12 @@ void DAGISelEmitter::run(raw_ostream &OS) {
   EmitNodeTransforms(OS);
   EmitPredicateFunctions(OS);
   
-  DOUT << "\n\nALL PATTERNS TO MATCH:\n\n";
+  DEBUG(errs() << "\n\nALL PATTERNS TO MATCH:\n\n");
   for (CodeGenDAGPatterns::ptm_iterator I = CGP.ptm_begin(), E = CGP.ptm_end();
        I != E; ++I) {
-    DOUT << "PATTERN: ";   DEBUG(I->getSrcPattern()->dump());
-    DOUT << "\nRESULT:  "; DEBUG(I->getDstPattern()->dump());
-    DOUT << "\n";
+    DEBUG(errs() << "PATTERN: ";   I->getSrcPattern()->dump());
+    DEBUG(errs() << "\nRESULT:  "; I->getDstPattern()->dump());
+    DEBUG(errs() << "\n");
   }
   
   // At this point, we have full information about the 'Patterns' we need to

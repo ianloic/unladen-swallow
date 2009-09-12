@@ -1,0 +1,114 @@
+How Unladen Swallow Uses LLVM
+=============================
+
+This document tries to provide a high-level overview of how LLVM is used inside
+Unladen Swallow, including details of all the optimizations implemented for
+LLVM-generated Python machine code. This document should be as
+developer-centric as possible: it should be able to answer questions like,
+"how does Unladen Swallow determine function hotness" and also "where is that
+implemented?".
+
+TODO(collinwinter): move the CodeLifecycle wiki page into this file.
+
+Invariants
+----------
+
+- If f->f_use_llvm is true, co->co_use_llvm is true; if co->co_use_llvm is true,
+  f->f_use_llvm may be true. Individual execution frames may disable LLVM for
+  a number of reasons: if tracing is enabled, or if some assumptions in the
+  machine code are known not to hold in this particular frame of execution.
+
+
+Feedback-directed optimization
+------------------------------
+
+- TODO: Explain data gathering (r778)
+- TODO: Bailing back to the interpreter
+
+Whenever we encode assumptions about the world into the generated machine code,
+we need a way to detect that those assumptions are no longer valid and recover
+gracefully. These assumptions are protected by cheap-to-execute tests called
+*guards*. These guards come in two flavors: fatal guards and non-fatal guards.
+
+Fatal guards:
+Let's say that we've implemented an optimization that embeds pointers to builtin
+functions in the generated machine code as immediates. If someone rebinds the
+`len` builtin, any pointer we've embedded to the `builtin_len` C function is no
+longer valid (we should be calling the new `len` instead); since the pointers
+are immediates in the machine code, the whole machine code function is invalid,
+and needs to be recompiled. Because we cannot reuse the machine code once the
+guard `actual_len == expected_len` fails, we say that the guard failure is
+fatal.
+
+Non-fatal guards:
+By constrast, there are some guards that do not invalidate the machine code
+when they fail. One such example is that machine code functions do not support
+tracing: if they detect that tracing has been turned on, they immediately
+bail to the interpreter. Once tracing is disabled, though, it's perfectly safe
+to start using the machine code again.
+
+
+Optimization: LOAD_GLOBAL compile-time caching
+----------------------------------------------
+
+In the eval loop, the LOAD_GLOBAL opcode requires two PyDict_GetItem() calls to
+look up builtin functions (only one PyDict_GetItem() call for objects in the
+module's global namespace). Since builtin functions rarely change, we would
+like to avoid the work of repeatedly looking up the builtins.
+
+To accomplish this, we shift the PyDict_GetItem() calls from code execution-time
+to code compilation-time. When compiling a LOAD_GLOBAL opcode to LLVM IR, we
+try the global lookup, then the builtins lookup, and if successful, we cache
+the pointer as an immediate in the generated IR. Note that this kind of caching
+means that if the globals/builtins change, the machine code is no longer valid.
+
+Python edge cases:
+- The following code is perfectly legal:
+
+    assert "foo" not in globals()
+    def bar():
+        foo()
+        return len([])
+    bar()
+
+  This should use an unoptimized LOAD_GLOBAL implementation for looking up
+  `foo()` and an optimized implementation for `len()`.
+- There are `PyEval_GetGlobals()` and `PyEval_GetBuiltins()` functions; these
+  are seductive, but wrong. Get the globals/builtins off the PyFrameObject
+  passed in to `PyEval_EvalFrame()`.
+- A given code object can be run against different globals/builtins dicts.
+  Accordingly, we must keep track of which globals/builtins a code object is
+  assuming and guard on those values.
+
+Implementation:
+- When a function has been selected for compilation to LLVM IR, it will ask
+  the given globals/builtins dicts (as pulled off the frame object) to notify
+  the code object when the dicts change.
+- All dicts will grow an array of code objects that are anticipating updates.
+  This array will be manipulated via `_PyDict_AddWatcher()` and
+  `_PyDict_DropWatcher()` functions. It is a fatal error to add the same watcher
+  twice, or to call `_PyDict_DropWatcher()` with a code object not in the
+  watcher array.
+- When code objects are deleted, they will call `_PyDict_DropWatcher()` on the
+  globals/builtins dicts they are assuming. When dicts are deleted, they will
+  notify all code objects watching them.
+- The optimized machine code will guard the cached pointer by testing
+  co_use_llvm; if this is 0, tailcall to the interpreter to continue execution.
+  Otherwise (if it is 1), continue execution of the machine code, using the
+  cached pointer in place of the two `PyDict_GetItem()` calls.
+- When a dict is modified or deleted, it will loop over the array of watchers
+  and do the following:
+  1. Set co_use_llvm to 0; this signifies that the machine code is invalid. Any
+     active machine code frames will see the change to co_use_llvm and tail call
+     to `PyEval_EvalFrame()` to continue execution.
+  2. Increment co_fatalbailcount since the machine code is invalidated.
+  3. Drop the code object from the watcher arrays of its assumed
+     builtins/globals.
+  The array of watchers will then be zeroed out.
+
+Instrumentation:
+- The --with-instrumentation build will tell you which functions have their
+  machine code disabled due to changing globals/builtins. It can also tell you
+  how many machine code functions were disabled per globals/builtins change.
+- sys.setbailerror(True) will cause an exception to be raised if a function
+  fails a guard (fatal or non-fatal) and bails back to the interpreter.

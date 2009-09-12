@@ -20,6 +20,7 @@
 #include "llvm/Analysis/IntervalPartition.h"
 #include "llvm/Analysis/LoopVR.h"
 #include "llvm/Analysis/Passes.h"
+#include "llvm/Analysis/PointerTracking.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Assembly/PrintModulePass.h"
@@ -50,6 +51,7 @@ namespace {
       (void) llvm::createStructRetPromotionPass();
       (void) llvm::createBasicAliasAnalysisPass();
       (void) llvm::createLibCallAliasAnalysisPass(0);
+      (void) llvm::createScalarEvolutionAliasAnalysisPass();
       (void) llvm::createBlockPlacementPass();
       (void) llvm::createBlockProfilerPass();
       (void) llvm::createBreakCriticalEdgesPass();
@@ -91,6 +93,7 @@ namespace {
       (void) llvm::createLowerSwitchPass();
       (void) llvm::createNoAAPass();
       (void) llvm::createNoProfileInfoPass();
+      (void) llvm::createProfileEstimatorPass();
       (void) llvm::createProfileLoaderPass();
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
@@ -130,11 +133,13 @@ namespace {
       (void) llvm::createDbgInfoPrinterPass();
       (void) llvm::createPartialInliningPass();
       (void) llvm::createSSIPass();
+      (void) llvm::createSSIEverythingPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::FindUsedTypes();
       (void)new llvm::ScalarEvolution();
       (void)new llvm::LoopVR();
+      (void)new llvm::PointerTracking();
       ((llvm::Function*)0)->viewCFGOnly();
       llvm::AliasSetTracker X(*(llvm::AliasAnalysis*)0);
       X.add((llvm::Value*)0, 0);  // for -print-alias-sets

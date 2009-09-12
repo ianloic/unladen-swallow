@@ -91,9 +91,10 @@
 #include "llvm/Support/PrettyStackTrace.h"
 
 namespace llvm {
-  class Pass;
-  class Value;
   class Module;
+  class Pass;
+  class StringRef;
+  class Value;
 
 /// FunctionPassManager and PassManager, two top level managers, serve 
 /// as the public interface of pass manager infrastructure.
@@ -121,7 +122,7 @@ class PassManagerPrettyStackEntry : public PrettyStackTraceEntry {
   Value *V;
   Module *M;
 public:
-  PassManagerPrettyStackEntry(Pass *p)
+  explicit PassManagerPrettyStackEntry(Pass *p)
     : P(p), V(0), M(0) {}  // When P is releaseMemory'd.
   PassManagerPrettyStackEntry(Pass *p, Value &v)
     : P(p), V(&v), M(0) {} // When P is run on V
@@ -285,7 +286,8 @@ public:
   void removeNotPreservedAnalysis(Pass *P);
   
   /// Remove dead passes
-  void removeDeadPasses(Pass *P, const char *Msg, enum PassDebuggingString);
+  void removeDeadPasses(Pass *P, const StringRef &Msg, 
+                        enum PassDebuggingString);
 
   /// Add pass P into the PassVector. Update 
   /// AvailableAnalysis appropriately if ProcessAnalysis is true.
@@ -340,7 +342,7 @@ public:
   void dumpLastUses(Pass *P, unsigned Offset) const;
   void dumpPassArguments() const;
   void dumpPassInfo(Pass *P, enum PassDebuggingString S1,
-                    enum PassDebuggingString S2, const char *Msg);
+                    enum PassDebuggingString S2, const StringRef &Msg);
   void dumpRequiredSet(const Pass *P) const;
   void dumpPreservedSet(const Pass *P) const;
 
@@ -379,7 +381,7 @@ protected:
   std::map<AnalysisID, Pass *> *InheritedAnalysis[PMT_Last];
 
 private:
-  void dumpAnalysisUsage(const char *Msg, const Pass *P,
+  void dumpAnalysisUsage(const StringRef &Msg, const Pass *P,
                            const AnalysisUsage::VectorType &Set) const;
 
   // Set of available Analysis. This information is used while scheduling 
@@ -449,9 +451,9 @@ public:
   }
 };
 
-}
-
 extern void StartPassTimer(llvm::Pass *);
 extern void StopPassTimer(llvm::Pass *);
+
+}
 
 #endif

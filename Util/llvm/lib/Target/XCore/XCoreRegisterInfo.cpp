@@ -145,10 +145,10 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
       if (!isU6 && !isImmU16(Amount)) {
         // FIX could emit multiple instructions in this case.
 #ifndef NDEBUG
-        cerr << "eliminateCallFramePseudoInstr size too big: "
-             << Amount << "\n";
+        errs() << "eliminateCallFramePseudoInstr size too big: "
+               << Amount << "\n";
 #endif
-        llvm_unreachable();
+        llvm_unreachable(0);
       }
 
       MachineInstr *New;
@@ -191,12 +191,13 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   int StackSize = MF.getFrameInfo()->getStackSize();
 
   #ifndef NDEBUG
-  DOUT << "\nFunction         : " << MF.getFunction()->getName() << "\n";
-  DOUT << "<--------->\n";
-  MI.print(DOUT);
-  DOUT << "FrameIndex         : " << FrameIndex << "\n";
-  DOUT << "FrameOffset        : " << Offset << "\n";
-  DOUT << "StackSize          : " << StackSize << "\n";
+  DEBUG(errs() << "\nFunction         : " 
+        << MF.getFunction()->getName() << "\n");
+  DEBUG(errs() << "<--------->\n");
+  DEBUG(MI.print(errs()));
+  DEBUG(errs() << "FrameIndex         : " << FrameIndex << "\n");
+  DEBUG(errs() << "FrameOffset        : " << Offset << "\n");
+  DEBUG(errs() << "StackSize          : " << StackSize << "\n");
   #endif
 
   Offset += StackSize;
@@ -207,10 +208,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   
   assert(Offset%4 == 0 && "Misaligned stack offset");
 
-  #ifndef NDEBUG
-  DOUT << "Offset             : " << Offset << "\n";
-  DOUT << "<--------->\n";
-  #endif
+  DEBUG(errs() << "Offset             : " << Offset << "\n" << "<--------->\n");
   
   Offset/=4;
   
@@ -257,7 +255,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
               .addReg(ScratchReg, RegState::Kill);
         break;
       default:
-        assert(0 && "Unexpected Opcode\n");
+        llvm_unreachable("Unexpected Opcode");
       }
     } else {
       switch (MI.getOpcode()) {
@@ -278,7 +276,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
               .addImm(Offset);
         break;
       default:
-        assert(0 && "Unexpected Opcode\n");
+        llvm_unreachable("Unexpected Opcode");
       }
     }
   } else {
@@ -309,7 +307,7 @@ void XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
             .addImm(Offset);
       break;
     default:
-      assert(0 && "Unexpected Opcode\n");
+      llvm_unreachable("Unexpected Opcode");
     }
   }
   // Erase old instruction.

@@ -156,7 +156,7 @@ set_line_numbers(PyCodeObject *code, std::vector<InstrInfo>& instr_info)
 // *function accordingly into instr_info.  Returns -1 on error, or 0
 // on success.
 static int
-find_basic_blocks(PyObject *bytecode, llvm::Function *function,
+find_basic_blocks(PyObject *bytecode, py::LlvmFunctionBuilder &fbuilder,
                   std::vector<InstrInfo>& instr_info)
 {
     assert(PyString_Check(bytecode) && "Expected bytecode string");
@@ -216,7 +216,7 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
         }
         if (instr_info[iter.NextIndex()].block_ == NULL) {
             instr_info[iter.NextIndex()].block_ =
-                BasicBlock::Create(fallthrough_name, function);
+                fbuilder.CreateBasicBlock(fallthrough_name);
         }
         if (target_index >= instr_info.size()) {
             PyErr_Format(PyExc_SystemError,
@@ -227,12 +227,12 @@ find_basic_blocks(PyObject *bytecode, llvm::Function *function,
         }
         if (instr_info[target_index].block_ == NULL) {
             instr_info[target_index].block_ =
-                BasicBlock::Create(target_name, function);
+                fbuilder.CreateBasicBlock(target_name);
         }
         if (target_index < iter.NextIndex() &&  // This is a backedge.
             instr_info[target_index].backedge_block_ == NULL) {
             instr_info[target_index].backedge_block_ =
-                BasicBlock::Create(backedge_name, function);
+                fbuilder.CreateBasicBlock(backedge_name);
         }
     }
     if (iter.Error()) {
@@ -254,15 +254,16 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
                         "non-string codestring in code object");
         return NULL;
     }
+
     py::LlvmFunctionBuilder fbuilder(PyGlobalLlvmData::Get(), code);
     std::vector<InstrInfo> instr_info(PyString_GET_SIZE(code->co_code));
     if (-1 == set_line_numbers(code, instr_info)) {
         return NULL;
     }
-    if (-1 == find_basic_blocks(code->co_code, fbuilder.function(),
-                                instr_info)) {
+    if (-1 == find_basic_blocks(code->co_code, fbuilder, instr_info)) {
         return NULL;
     }
+
     BytecodeIterator iter(code->co_code);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
         fbuilder.SetLasti(iter.CurIndex());
@@ -461,6 +462,16 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
     if (llvm::verifyFunction(*fbuilder.function(), llvm::PrintMessageAction)) {
         PyErr_SetString(PyExc_SystemError, "invalid LLVM IR produced");
         return NULL;
+    }
+
+    /* If the code object doesn't need the LOAD_GLOBAL optimization, it should
+       not care whether the globals/builtins change. */
+    if (!fbuilder.UsesLoadGlobalOpt() && code->co_assumed_globals) {
+        code->co_flags &= ~CO_FDO_GLOBALS;
+        _PyDict_DropWatcher(code->co_assumed_globals, code);
+        _PyDict_DropWatcher(code->co_assumed_builtins, code);
+        code->co_assumed_globals = NULL;
+        code->co_assumed_builtins = NULL;
     }
 
     // Make sure the function survives global optimizations.

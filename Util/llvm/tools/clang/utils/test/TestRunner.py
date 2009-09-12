@@ -1,215 +1,282 @@
-#!/usr/bin/python
-#
-#  TestRunner.py - This script is used to run arbitrary unit tests.  Unit
-#  tests must contain the command used to run them in the input file, starting
-#  immediately after a "RUN:" string.
-#
-#  This runner recognizes and replaces the following strings in the command:
-#
-#     %s - Replaced with the input name of the program, or the program to
-#          execute, as appropriate.
-#     %S - Replaced with the directory where the input resides.
-#     %llvmgcc - llvm-gcc command
-#     %llvmgxx - llvm-g++ command
-#     %prcontext - prcontext.tcl script
-#     %t - temporary file name (derived from testcase name)
-#
-
-import errno
 import os
+import platform
 import re
 import signal
 import subprocess
 import sys
 
-# Increase determinism for things that use the terminal width.
-#
-# FIXME: Find a better place for this hack.
-os.environ['COLUMNS'] = '0'
+import ShUtil
+import Util
+
+kSystemName = platform.system()
 
 class TestStatus:
     Pass = 0 
     XFail = 1
     Fail = 2
     XPass = 3
-    NoRunLine = 4 
-    Invalid = 5
+    Invalid = 4
 
-    kNames = ['Pass','XFail','Fail','XPass','NoRunLine','Invalid']
+    kNames = ['Pass','XFail','Fail','XPass','Invalid']
     @staticmethod
     def getName(code): 
         return TestStatus.kNames[code]
 
-def mkdir_p(path):
-    if not path:
-        pass
-    elif os.path.exists(path):
-        pass
-    else:
-        parent = os.path.dirname(path) 
-        if parent != path:
-            mkdir_p(parent)
-        try:
-            os.mkdir(path)
-        except OSError,e:
-            if e.errno != errno.EEXIST:
-                raise
+def executeShCmd(cmd, cfg, cwd, results):
+    if isinstance(cmd, ShUtil.Seq):
+        if cmd.op == ';':
+            res = executeShCmd(cmd.lhs, cfg, cwd, results)
+            return executeShCmd(cmd.rhs, cfg, cwd, results)
 
-def remove(path):
+        if cmd.op == '&':
+            raise NotImplementedError,"unsupported test command: '&'"
+
+        if cmd.op == '||':
+            res = executeShCmd(cmd.lhs, cfg, cwd, results)
+            if res != 0:
+                res = executeShCmd(cmd.rhs, cfg, cwd, results)
+            return res
+        if cmd.op == '&&':
+            res = executeShCmd(cmd.lhs, cfg, cwd, results)
+            if res is None:
+                return res
+
+            if res == 0:
+                res = executeShCmd(cmd.rhs, cfg, cwd, results)
+            return res
+            
+        raise ValueError,'Unknown shell command: %r' % cmd.op
+
+    assert isinstance(cmd, ShUtil.Pipeline)
+    procs = []
+    input = subprocess.PIPE
+    for j in cmd.commands:
+        # FIXME: This is broken, it doesn't account for the accumulative nature
+        # of redirects.
+        stdin = input
+        stdout = stderr = subprocess.PIPE
+        for r in j.redirects:
+            if r[0] == ('>',2):
+                stderr = open(r[1], 'w')
+            elif r[0] == ('>&',2) and r[1] == '1':
+                stderr = subprocess.STDOUT
+            elif r[0] == ('>',):
+                stdout = open(r[1], 'w')
+            elif r[0] == ('<',):
+                stdin = open(r[1], 'r')
+            else:
+                raise NotImplementedError,"Unsupported redirect: %r" % r
+
+        procs.append(subprocess.Popen(j.args, cwd=cwd,
+                                      stdin = stdin,
+                                      stdout = stdout,
+                                      stderr = stderr,
+                                      env = cfg.environment))
+
+        # Immediately close stdin for any process taking stdin from us.
+        if stdin == subprocess.PIPE:
+            procs[-1].stdin.close()
+            procs[-1].stdin = None
+
+        if stdout == subprocess.PIPE:
+            input = procs[-1].stdout
+        else:
+            input = subprocess.PIPE
+    
+    # FIXME: There is a potential for deadlock here, when we have a pipe and
+    # some process other than the last one ends up blocked on stderr.
+    procData = [None] * len(procs)
+    procData[-1] = procs[-1].communicate()
+    for i in range(len(procs) - 1):
+        if procs[i].stdout is not None:
+            out = procs[i].stdout.read()
+        else:
+            out = ''
+        if procs[i].stderr is not None:
+            err = procs[i].stderr.read()
+        else:
+            err = ''
+        procData[i] = (out,err)
+
+    # FIXME: Fix tests to work with pipefail, and make exitCode max across
+    # procs.
+    for i,(out,err) in enumerate(procData):
+        exitCode = res = procs[i].wait()
+        results.append((cmd.commands[i], out, err, res))
+
+    if cmd.negate:
+        exitCode = not exitCode
+
+    return exitCode
+        
+def executeScriptInternal(cfg, commands, cwd):
+    cmd = ShUtil.ShParser(' &&\n'.join(commands), 
+                          kSystemName == 'Windows').parse()
+
+    results = []
     try:
-        os.remove(path)
-    except OSError:
-        pass
+        exitCode = executeShCmd(cmd, cfg, cwd, results)
+    except:
+        import traceback
 
-def cat(path, output):
-    f = open(path)
-    output.writelines(f)
+        out = ''
+        err = 'Exception during script execution:\n%s\n' % traceback.format_exc()
+        return out, err, 127
+
+    out = err = ''
+    for i,(cmd, cmd_out,cmd_err,res) in enumerate(results):
+        out += 'Command %d: %s\n' % (i, ' '.join('"%s"' % s for s in cmd.args))
+        out += 'Command %d Result: %r\n' % (i, res)
+        out += 'Command %d Output:\n%s\n\n' % (i, cmd_out)
+        out += 'Command %d Stderr:\n%s\n\n' % (i, cmd_err)
+
+    return out, err, exitCode
+
+def executeScript(cfg, script, commands, cwd):
+    # Write script file
+    f = open(script,'w')
+    if kSystemName == 'Windows':
+        f.write('\nif %ERRORLEVEL% NEQ 0 EXIT\n'.join(commands))
+    else:
+        f.write(' &&\n'.join(commands))
+    f.write('\n')
     f.close()
 
-def runOneTest(FILENAME, SUBST, OUTPUT, TESTNAME, CLANG, CLANGCC,
-               useValgrind=False,
-               useDGCompat=False,
-               useScript=None, 
-               output=sys.stdout):
-    if useValgrind:
-        VG_OUTPUT = '%s.vg'%(OUTPUT,)
-        if os.path.exists:
-            remove(VG_OUTPUT)
-        CLANG = 'valgrind --leak-check=full --quiet --log-file=%s %s'%(VG_OUTPUT, CLANG)
+    if kSystemName == 'Windows':
+        command = ['cmd','/c', script]
+    else:
+        command = ['/bin/sh', script]
+        if cfg.useValgrind:
+            # FIXME: Running valgrind on sh is overkill. We probably could just
+            # run on clang with no real loss.
+            command = ['valgrind', '-q',
+                       '--tool=memcheck', '--leak-check=no', '--trace-children=yes',
+                       '--error-exitcode=123'] + command
+
+    p = subprocess.Popen(command, cwd=cwd,
+                         stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE,
+                         env=cfg.environment)
+    out,err = p.communicate()
+    exitCode = p.wait()
+
+    return out, err, exitCode
+
+import StringIO
+def runOneTest(cfg, testPath, tmpBase):
+    # Make paths absolute.
+    tmpBase = os.path.abspath(tmpBase)
+    testPath = os.path.abspath(testPath)
 
     # Create the output directory if it does not already exist.
-    mkdir_p(os.path.dirname(OUTPUT))
 
-    # FIXME
-    #ulimit -t 40
+    Util.mkdir_p(os.path.dirname(tmpBase))
+    script = tmpBase + '.script'
+    if kSystemName == 'Windows':
+        script += '.bat'
 
-    # FIXME: Load script once
-    # FIXME: Support "short" script syntax
+    substitutions = [('%s', testPath),
+                     ('%S', os.path.dirname(testPath)),
+                     ('%t', tmpBase + '.tmp'),
+                     (' clang ', ' ' + cfg.clang + ' '),
+                     (' clang-cc ', ' ' + cfg.clangcc + ' ')]
 
-    if useScript:
-        scriptFile = useScript
-    else:
-        # See if we have a per-dir test script.
-        dirScriptFile = os.path.join(os.path.dirname(FILENAME), 'test.script')
-        if os.path.exists(dirScriptFile):
-            scriptFile = dirScriptFile
-        else:
-            scriptFile = FILENAME
-            
-    # Verify the script contains a run line.
-    for ln in open(scriptFile):
-        if 'RUN:' in ln:
-            break
-    else:
-        print >>output, "******************** TEST '%s' HAS NO RUN LINE! ********************"%(TESTNAME,)
-        output.flush()
-        return TestStatus.NoRunLine
-
-    OUTPUT = os.path.abspath(OUTPUT)
-    FILENAME = os.path.abspath(FILENAME)
-    SCRIPT = OUTPUT + '.script'
-    TEMPOUTPUT = OUTPUT + '.tmp'
-
-    substitutions = [('%s',SUBST),
-                     ('%S',os.path.dirname(SUBST)),
-                     ('%llvmgcc','llvm-gcc -emit-llvm -w'),
-                     ('%llvmgxx','llvm-g++ -emit-llvm -w'),
-                     ('%prcontext','prcontext.tcl'),
-                     ('%t',TEMPOUTPUT),
-                     (' clang ', ' ' + CLANG + ' '),
-                     (' clang-cc ', ' ' + CLANGCC + ' ')]
+    # Collect the test lines from the script.
     scriptLines = []
     xfailLines = []
-    for ln in open(scriptFile):
+    for ln in open(testPath):
         if 'RUN:' in ln:
-            # Isolate run parameters
+            # Isolate the command to run.
             index = ln.index('RUN:')
             ln = ln[index+4:]
-
-            # Apply substitutions
-            for a,b in substitutions:
-                ln = ln.replace(a,b)
-
-            if useDGCompat:
-                ln = re.sub(r'\{(.*)\}', r'"\1"', ln)
+            
+            # Strip trailing newline.
             scriptLines.append(ln)
         elif 'XFAIL' in ln:
             xfailLines.append(ln)
+        
+        # FIXME: Support something like END, in case we need to process large
+        # files.
+
+    # Verify the script contains a run line.
+    if not scriptLines:
+        return (TestStatus.Fail, "Test has no run line!")
     
-    if xfailLines:
-        print >>output, "XFAILED '%s':"%(TESTNAME,)
-        output.writelines(xfailLines)
+    # Apply substitutions to the script.
+    def processLine(ln):
+        # Apply substitutions
+        for a,b in substitutions:
+            ln = ln.replace(a,b)
 
-    # Write script file
-    f = open(SCRIPT,'w')
-    f.write(''.join(scriptLines))
-    f.close()
+        # Strip the trailing newline and any extra whitespace.
+        return ln.strip()
+    scriptLines = map(processLine, scriptLines)    
 
-    outputFile = open(OUTPUT,'w')
-    p = None
-    try:
-        p = subprocess.Popen(["/bin/sh",SCRIPT],
-                             cwd=os.path.dirname(FILENAME),
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE)
-        out,err = p.communicate()
-        outputFile.write(out)
-        outputFile.write(err)
-        SCRIPT_STATUS = p.wait()
+    # Validate interior lines for '&&', a lovely historical artifact.
+    for i in range(len(scriptLines) - 1):
+        ln = scriptLines[i]
 
-        # Detect Ctrl-C in subprocess.
-        if SCRIPT_STATUS == -signal.SIGINT:
-            raise KeyboardInterrupt
-    except KeyboardInterrupt:
-        raise
-    outputFile.close()
-
-    if xfailLines:
-        SCRIPT_STATUS = not SCRIPT_STATUS
-
-    if useValgrind:
-        VG_STATUS = len(list(open(VG_OUTPUT)))
-    else:
-        VG_STATUS = 0
+        if not ln.endswith('&&'):
+            return (TestStatus.Fail, 
+                    ("MISSING \'&&\': %s\n"  +
+                     "FOLLOWED BY   : %s\n") % (ln, scriptLines[i + 1]))
     
-    if SCRIPT_STATUS or VG_STATUS:
-        print >>output, "******************** TEST '%s' FAILED! ********************"%(TESTNAME,)
-        print >>output, "Command: "
-        output.writelines(scriptLines)
-        if not SCRIPT_STATUS:
-            print >>output, "Output:"
+        # Strip off '&&'
+        scriptLines[i] = ln[:-2]
+
+    if not cfg.useExternalShell:
+        res = executeScriptInternal(cfg, scriptLines, os.path.dirname(testPath))
+
+        if res is not None:
+            out, err, exitCode = res
+        elif True:
+            return (TestStatus.Fail, 
+                    "Unable to execute internally:\n%s\n" 
+                    % '\n'.join(scriptLines))
         else:
-            print >>output, "Incorrect Output:"
-        cat(OUTPUT, output)
-        if VG_STATUS:
-            print >>output, "Valgrind Output:"
-            cat(VG_OUTPUT, output)
-        print >>output, "******************** TEST '%s' FAILED! ********************"%(TESTNAME,)
-        output.flush()
-        if xfailLines:
-            return TestStatus.XPass
-        else:
-            return TestStatus.Fail
+            out, err, exitCode = executeScript(cfg, script, scriptLines, 
+                                               os.path.dirname(testPath))
+    else:
+        out, err, exitCode = executeScript(cfg, script, scriptLines, 
+                                           os.path.dirname(testPath))
+
+    # Detect Ctrl-C in subprocess.
+    if exitCode == -signal.SIGINT:
+        raise KeyboardInterrupt
 
     if xfailLines:
-        return TestStatus.XFail
+        ok = exitCode != 0
+        status = (TestStatus.XPass, TestStatus.XFail)[ok]
     else:
-        return TestStatus.Pass
+        ok = exitCode == 0
+        status = (TestStatus.Fail, TestStatus.Pass)[ok]
+
+    if ok:
+        return (status,'')
+
+    output = StringIO.StringIO()
+    print >>output, "Script:"
+    print >>output, "--"
+    print >>output, '\n'.join(scriptLines)
+    print >>output, "--"
+    print >>output, "Exit Code: %r" % exitCode
+    print >>output, "Command Output (stdout):"
+    print >>output, "--"
+    output.write(out)
+    print >>output, "--"
+    print >>output, "Command Output (stderr):"
+    print >>output, "--"
+    output.write(err)
+    print >>output, "--"
+    return (status, output.getvalue())
 
 def capture(args):
-    p = subprocess.Popen(args, stdout=subprocess.PIPE)
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out,_ = p.communicate()
     return out
 
-def which(command):
-    # Would be nice if Python had a lib function for this.
-    res = capture(['which',command])
-    res = res.strip()
-    if res and os.path.exists(res):
-        return res
-    return None
-
-def inferClang():
+def inferClang(cfg):
     # Determine which clang to use.
     clang = os.getenv('CLANG')
     
@@ -219,7 +286,7 @@ def inferClang():
         return clang
 
     # Otherwise look in the path.
-    clang = which('clang')
+    clang = Util.which('clang', cfg.environment['PATH'])
 
     if not clang:
         print >>sys.stderr, "error: couldn't find 'clang' program, try setting CLANG in your environment"
@@ -227,7 +294,7 @@ def inferClang():
         
     return clang
 
-def inferClangCC(clang):
+def inferClangCC(cfg, clang):
     clangcc = os.getenv('CLANGCC')
 
     # If the user set clang in the environment, definitely use that and don't
@@ -237,7 +304,11 @@ def inferClangCC(clang):
 
     # Otherwise try adding -cc since we expect to be looking in a build
     # directory.
-    clangcc = which(clang + '-cc')
+    if clang.endswith('.exe'):
+        clangccName = clang[:-4] + '-cc.exe'
+    else:
+        clangccName = clang + '-cc'
+    clangcc = Util.which(clangccName, cfg.environment['PATH'])
     if not clangcc:
         # Otherwise ask clang.
         res = capture([clang, '-print-prog-name=clang-cc'])
@@ -251,46 +322,12 @@ def inferClangCC(clang):
         
     return clangcc
     
-def main():
-    global options
-    from optparse import OptionParser
-    parser = OptionParser("usage: %prog [options] {tests}")
-    parser.add_option("", "--clang", dest="clang",
-                      help="Program to use as \"clang\"",
-                      action="store", default=None)
-    parser.add_option("", "--clang-cc", dest="clangcc",
-                      help="Program to use as \"clang-cc\"",
-                      action="store", default=None)
-    parser.add_option("", "--vg", dest="useValgrind",
-                      help="Run tests under valgrind",
-                      action="store_true", default=False)
-    parser.add_option("", "--dg", dest="useDGCompat",
-                      help="Use llvm dejagnu compatibility mode",
-                      action="store_true", default=False)
-    (opts, args) = parser.parse_args()
+def getTestOutputBase(dir, testpath):
+    """getTestOutputBase(dir, testpath) - Get the full path for temporary files
+    corresponding to the given test path."""
 
-    if not args:
-        parser.error('No tests specified')
-
-    if opts.clang is None:
-        opts.clang = inferClang()
-    if opts.clangcc is None:
-        opts.clangcc = inferClangCC(opts.clang)
-
-    for path in args:
-        command = path
-        # Use hand concatentation here because we want to override
-        # absolute paths.
-        output = 'Output/' + path + '.out'
-        testname = path
-        
-        res = runOneTest(path, command, output, testname, 
-                         opts.clang, opts.clangcc,
-                         useValgrind=opts.useValgrind,
-                         useDGCompat=opts.useDGCompat,
-                         useScript=os.getenv("TEST_SCRIPT"))
-
-    sys.exit(res == TestStatus.Fail or res == TestStatus.XPass)
-
-if __name__=='__main__':
-    main()
+    # Form the output base out of the test parent directory name and the test
+    # name. FIXME: Find a better way to organize test results.
+    return os.path.join(dir, 
+                        os.path.basename(os.path.dirname(testpath)),
+                        os.path.basename(testpath))

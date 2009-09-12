@@ -1,4 +1,4 @@
-//===- ARMBaseRegisterInfo.h - ARM Register Information Impl --------*- C++ -*-===//
+//===- ARMBaseRegisterInfo.h - ARM Register Information Impl ----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -53,19 +53,18 @@ protected:
   unsigned FramePtr;
 
   // Can be only subclassed.
-  explicit ARMBaseRegisterInfo(const ARMBaseInstrInfo &tii, const ARMSubtarget &STI);
+  explicit ARMBaseRegisterInfo(const ARMBaseInstrInfo &tii,
+                               const ARMSubtarget &STI);
 
   // Return the opcode that implements 'Op', or 0 if no opcode
   unsigned getOpcode(int Op) const;
 
 public:
   /// getRegisterNumbering - Given the enum value for some register, e.g.
-  /// ARM::LR, return the number that it corresponds to (e.g. 14).
-  static unsigned getRegisterNumbering(unsigned RegEnum);
-
-  /// Same as previous getRegisterNumbering except it returns true in isSPVFP
-  /// if the register is a single precision VFP register.
-  static unsigned getRegisterNumbering(unsigned RegEnum, bool &isSPVFP);
+  /// ARM::LR, return the number that it corresponds to (e.g. 14). It
+  /// also returns true in isSPVFP if the register is a single precision
+  /// VFP register.
+  static unsigned getRegisterNumbering(unsigned RegEnum, bool *isSPVFP = 0);
 
   /// Code Generation virtual methods...
   const unsigned *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
@@ -75,7 +74,7 @@ public:
 
   BitVector getReservedRegs(const MachineFunction &MF) const;
 
-  const TargetRegisterClass *getPointerRegClass() const;
+  const TargetRegisterClass *getPointerRegClass(unsigned Kind = 0) const;
 
   std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
   getAllocationOrder(const TargetRegisterClass *RC,
@@ -89,6 +88,8 @@ public:
                           MachineFunction &MF) const;
 
   bool hasFP(const MachineFunction &MF) const;
+
+  bool cannotEliminateFrame(const MachineFunction &MF) const;
 
   void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
                                             RegScavenger *RS = NULL) const;
@@ -111,7 +112,8 @@ public:
   virtual void emitLoadConstPool(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator &MBBI,
                                  DebugLoc dl,
-                                 unsigned DestReg, int Val,
+                                 unsigned DestReg, unsigned SubIdx,
+                                 int Val,
                                  ARMCC::CondCodes Pred = ARMCC::AL,
                                  unsigned PredReg = 0) const;
 
@@ -133,6 +135,8 @@ public:
   virtual void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;
 
 private:
+  unsigned estimateRSStackSizeLimit(MachineFunction &MF) const;
+
   unsigned getRegisterPairEven(unsigned Reg, const MachineFunction &MF) const;
 
   unsigned getRegisterPairOdd(unsigned Reg, const MachineFunction &MF) const;

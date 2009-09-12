@@ -53,7 +53,7 @@ public:
   typedef const unsigned* iterator;
   typedef const unsigned* const_iterator;
 
-  typedef const MVT* vt_iterator;
+  typedef const EVT* vt_iterator;
   typedef const TargetRegisterClass* const * sc_iterator;
 private:
   unsigned ID;
@@ -70,7 +70,7 @@ private:
 public:
   TargetRegisterClass(unsigned id,
                       const char *name,
-                      const MVT *vts,
+                      const EVT *vts,
                       const TargetRegisterClass * const *subcs,
                       const TargetRegisterClass * const *supcs,
                       const TargetRegisterClass * const *subregcs,
@@ -117,8 +117,8 @@ public:
 
   /// hasType - return true if this TargetRegisterClass has the ValueType vt.
   ///
-  bool hasType(MVT vt) const {
-    for(int i = 0; VTs[i] != MVT::Other; ++i)
+  bool hasType(EVT vt) const {
+    for(int i = 0; VTs[i].getSimpleVT().SimpleTy != MVT::Other; ++i)
       if (VTs[i] == vt)
         return true;
     return false;
@@ -132,7 +132,7 @@ public:
 
   vt_iterator vt_end() const {
     vt_iterator I = VTs;
-    while (*I != MVT::Other) ++I;
+    while (I->getSimpleVT().SimpleTy != MVT::Other) ++I;
     return I;
   }
 
@@ -318,10 +318,10 @@ public:
   }
 
   /// getPhysicalRegisterRegClass - Returns the Register Class of a physical
-  /// register of the given type. If type is MVT::Other, then just return any
+  /// register of the given type. If type is EVT::Other, then just return any
   /// register class the register belongs to.
   virtual const TargetRegisterClass *
-    getPhysicalRegisterRegClass(unsigned Reg, MVT VT = MVT::Other) const;
+    getPhysicalRegisterRegClass(unsigned Reg, EVT VT = MVT::Other) const;
 
   /// getAllocatableSet - Returns a bitset indexed by register number
   /// indicating if a register is allocatable or not. If a register class is
@@ -484,6 +484,15 @@ public:
     return 0;
   }
 
+  /// getMatchingSuperRegClass - Return a subclass of the specified register
+  /// class A so that each register in it has a sub-register of the
+  /// specified sub-register index which is in the specified register class B.
+  virtual const TargetRegisterClass *
+  getMatchingSuperRegClass(const TargetRegisterClass *A,
+                           const TargetRegisterClass *B, unsigned Idx) const {
+    return 0;
+  }
+
   //===--------------------------------------------------------------------===//
   // Register Class Information
   //
@@ -505,8 +514,9 @@ public:
   }
 
   /// getPointerRegClass - Returns a TargetRegisterClass used for pointer
-  /// values.
-  virtual const TargetRegisterClass *getPointerRegClass() const {
+  /// values.  If a target supports multiple different pointer register classes,
+  /// kind specifies which one is indicated.
+  virtual const TargetRegisterClass *getPointerRegClass(unsigned Kind=0) const {
     assert(0 && "Target didn't implement getPointerRegClass!");
     return 0; // Must return a value in order to compile with VS 2005
   }
@@ -567,18 +577,29 @@ public:
   /// has variable sized allocas or if frame pointer elimination is disabled.
   virtual bool hasFP(const MachineFunction &MF) const = 0;
 
-  // hasReservedCallFrame - Under normal circumstances, when a frame pointer is
-  // not required, we reserve argument space for call sites in the function
-  // immediately on entry to the current function. This eliminates the need for
-  // add/sub sp brackets around call sites. Returns true if the call frame is
-  // included as part of the stack frame.
+  /// hasReservedCallFrame - Under normal circumstances, when a frame pointer is
+  /// not required, we reserve argument space for call sites in the function
+  /// immediately on entry to the current function. This eliminates the need for
+  /// add/sub sp brackets around call sites. Returns true if the call frame is
+  /// included as part of the stack frame.
   virtual bool hasReservedCallFrame(MachineFunction &MF) const {
     return !hasFP(MF);
   }
 
-  // needsStackRealignment - true if storage within the function requires the
-  // stack pointer to be aligned more than the normal calling convention calls
-  // for.
+  /// hasReservedSpillSlot - Return true if target has reserved a spill slot in
+  /// the stack frame of the given function for the specified register. e.g. On
+  /// x86, if the frame register is required, the first fixed stack object is
+  /// reserved as its spill slot. This tells PEI not to create a new stack frame
+  /// object for the given register. It should be called only after
+  /// processFunctionBeforeCalleeSavedScan().
+  virtual bool hasReservedSpillSlot(MachineFunction &MF, unsigned Reg,
+                                    int &FrameIdx) const {
+    return false;
+  }
+
+  /// needsStackRealignment - true if storage within the function requires the
+  /// stack pointer to be aligned more than the normal calling convention calls
+  /// for.
   virtual bool needsStackRealignment(const MachineFunction &MF) const {
     return false;
   }

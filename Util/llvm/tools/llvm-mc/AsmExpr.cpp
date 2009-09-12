@@ -26,16 +26,16 @@ bool AsmExpr::EvaluateAsAbsolute(MCContext &Ctx, int64_t &Res) const {
   return true;
 }
 
-static bool EvaluateSymbolicAdd(const MCValue &LHS, MCSymbol *RHS_A, 
-                                MCSymbol *RHS_B, int64_t RHS_Cst,
+static bool EvaluateSymbolicAdd(const MCValue &LHS, const MCSymbol *RHS_A, 
+                                const MCSymbol *RHS_B, int64_t RHS_Cst,
                                 MCValue &Res) {
   // We can't add or subtract two symbols.
   if ((LHS.getSymA() && RHS_A) ||
       (LHS.getSymB() && RHS_B))
     return false;
 
-  MCSymbol *A = LHS.getSymA() ? LHS.getSymA() : RHS_A;
-  MCSymbol *B = LHS.getSymB() ? LHS.getSymB() : RHS_B;
+  const MCSymbol *A = LHS.getSymA() ? LHS.getSymA() : RHS_A;
+  const MCSymbol *B = LHS.getSymB() ? LHS.getSymB() : RHS_B;
   if (B) {
     // If we have a negated symbol, then we must have also have a non-negated
     // symbol in order to encode the expression. We can do this check later to
@@ -81,7 +81,7 @@ bool AsmExpr::EvaluateAsRelocatable(MCContext &Ctx, MCValue &Res) const {
       break;
     case AsmUnaryExpr::Minus:
       /// -(a - b + const) ==> (b - a - const)
-      if (Value.getSymA() && !Value.getSymA())
+      if (Value.getSymA() && !Value.getSymB())
         return false;
       Res = MCValue::get(Value.getSymB(), Value.getSymA(), 
                          -Value.getConstant()); 

@@ -1,4 +1,4 @@
-# RUN: llvm-mc %s | FileCheck %s
+# RUN: llvm-mc -triple i386-unknown-unknown %s | FileCheck %s
 
 # CHECK: TEST0:
 # CHECK: .byte 0
@@ -19,3 +19,8 @@ TEST2:
 # CHECK: .quad 9
 TEST3:  
         .quad 9
+
+# CHECK: TEST4:
+# CHECK: .short 3
+TEST4:  
+        .word 3

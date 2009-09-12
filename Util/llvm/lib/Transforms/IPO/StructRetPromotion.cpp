@@ -35,6 +35,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 STATISTIC(NumRejectedSRETUses , "Number of sret rejected due to unexpected uses");
@@ -90,9 +91,11 @@ bool SRETPromotion::PromoteReturn(CallGraphNode *CGN) {
   if (F->arg_size() == 0 || !F->hasStructRetAttr() || F->doesNotReturn())
     return false;
 
-  DOUT << "SretPromotion: Looking at sret function " << F->getNameStart() << "\n";
+  DEBUG(errs() << "SretPromotion: Looking at sret function " 
+        << F->getName() << "\n");
 
-  assert (F->getReturnType() == Type::VoidTy && "Invalid function return type");
+  assert (F->getReturnType() == Type::getVoidTy(F->getContext()) &&
+          "Invalid function return type");
   Function::arg_iterator AI = F->arg_begin();
   const llvm::PointerType *FArgType = dyn_cast<PointerType>(AI->getType());
   assert (FArgType && "Invalid sret parameter type");
@@ -102,16 +105,16 @@ bool SRETPromotion::PromoteReturn(CallGraphNode *CGN) {
 
   // Check if it is ok to perform this promotion.
   if (isSafeToUpdateAllCallers(F) == false) {
-    DOUT << "SretPromotion: Not all callers can be updated\n";
+    DEBUG(errs() << "SretPromotion: Not all callers can be updated\n");
     NumRejectedSRETUses++;
     return false;
   }
 
-  DOUT << "SretPromotion: sret argument will be promoted\n";
+  DEBUG(errs() << "SretPromotion: sret argument will be promoted\n");
   NumSRET++;
   // [1] Replace use of sret parameter 
-  AllocaInst *TheAlloca = new AllocaInst (STy, NULL, "mrv", 
-                                          F->getEntryBlock().begin());
+  AllocaInst *TheAlloca = new AllocaInst(STy, NULL, "mrv", 
+                                         F->getEntryBlock().begin());
   Value *NFirstArg = F->arg_begin();
   NFirstArg->replaceAllUsesWith(TheAlloca);
 
@@ -122,7 +125,7 @@ bool SRETPromotion::PromoteReturn(CallGraphNode *CGN) {
       ++BI;
       if (isa<ReturnInst>(I)) {
         Value *NV = new LoadInst(TheAlloca, "mrv.ld", I);
-        ReturnInst *NR = ReturnInst::Create(NV, I);
+        ReturnInst *NR = ReturnInst::Create(F->getContext(), NV, I);
         I->replaceAllUsesWith(NR);
         I->eraseFromParent();
       }
@@ -230,7 +233,7 @@ Function *SRETPromotion::cloneFunctionBody(Function *F,
     AttributesVec.push_back(AttributeWithIndex::get(~0, attrs));
 
 
-  FunctionType *NFTy = Context->getFunctionType(STy, Params, FTy->isVarArg());
+  FunctionType *NFTy = FunctionType::get(STy, Params, FTy->isVarArg());
   Function *NF = Function::Create(NFTy, F->getLinkage());
   NF->takeName(F);
   NF->copyAttributesFrom(F);
@@ -345,7 +348,7 @@ bool SRETPromotion::nestedStructType(const StructType *STy) {
   unsigned Num = STy->getNumElements();
   for (unsigned i = 0; i < Num; i++) {
     const Type *Ty = STy->getElementType(i);
-    if (!Ty->isSingleValueType() && Ty != Type::VoidTy)
+    if (!Ty->isSingleValueType() && Ty != Type::getVoidTy(STy->getContext()))
       return true;
   }
   return false;

@@ -33,16 +33,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Index/Program.h"
-#include "clang/Index/IndexProvider.h"
+#include "clang/Index/Indexer.h"
 #include "clang/Index/Entity.h"
 #include "clang/Index/TranslationUnit.h"
 #include "clang/Index/ASTLocation.h"
 #include "clang/Index/DeclReferenceMap.h"
+#include "clang/Index/SelectorMap.h"
+#include "clang/Index/Handlers.h"
+#include "clang/Index/Analyzer.h"
 #include "clang/Index/Utils.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CommandLineSourceLoc.h"
-#include "clang/AST/Decl.h"
-#include "clang/AST/Expr.h"
+#include "clang/AST/DeclObjC.h"
+#include "clang/AST/ExprObjC.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/CommandLine.h"
@@ -56,12 +59,18 @@ using namespace idx;
 class TUnit : public TranslationUnit {
 public:
   TUnit(ASTUnit *ast, const std::string &filename)
-    : AST(ast), Filename(filename) { }
+    : AST(ast), Filename(filename),
+      DeclRefMap(ast->getASTContext()),
+      SelMap(ast->getASTContext()) { }
   
   virtual ASTContext &getASTContext() { return AST->getASTContext(); }
+  virtual DeclReferenceMap &getDeclReferenceMap() { return DeclRefMap; }
+  virtual SelectorMap &getSelectorMap() { return SelMap; }
   
   llvm::OwningPtr<ASTUnit> AST;
   std::string Filename;
+  DeclReferenceMap DeclRefMap;
+  SelectorMap SelMap;
 };
 
 static llvm::cl::list<ParsedSourceLocation>
@@ -95,85 +104,101 @@ DisableFree("disable-free",
            llvm::cl::desc("Disable freeing of memory on exit"),
            llvm::cl::init(false));
 
-static void ProcessDecl(Decl *D) {
-  assert(D);
+static bool HadErrors = false;
+
+static void ProcessObjCMessage(ObjCMessageExpr *Msg, Indexer &Idxer) {
   llvm::raw_ostream &OS = llvm::outs();
-  
+  typedef Storing<TULocationHandler> ResultsTy;
+  ResultsTy Results;
+
+  Analyzer Analyz(Idxer.getProgram(), Idxer);
+
   switch (ProgAction) {
   default: assert(0);
-  case PrintRefs: {
-    NamedDecl *ND = dyn_cast<NamedDecl>(D);
-    if (!ND)
-      return;
-
-    DeclReferenceMap RefMap(ND->getASTContext());
-    for (DeclReferenceMap::astlocation_iterator
-           I = RefMap.refs_begin(ND), E = RefMap.refs_end(ND); I != E; ++I)
+  case PrintRefs:
+    llvm::errs() << "Error: Cannot -print-refs on a ObjC message expression\n";
+    HadErrors = true;
+    return;
+    
+  case PrintDecls: {
+    Analyz.FindObjCMethods(Msg, Results);
+    for (ResultsTy::iterator
+           I = Results.begin(), E = Results.end(); I != E; ++I)
       I->print(OS);
     break;
   }
-  
-  case PrintDefs: {
-    const Decl *DefD = 0;
-    if (FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
-      const FunctionDecl *DFD = 0;
-      FD->getBody(DFD);
-      DefD = DFD;
-    } else if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
-      const VarDecl *DVD = 0;
-      VD->getDefinition(DVD);
-      DefD = DVD;
-    } 
 
-    if (DefD)
-      ASTLocation(DefD).print(OS);
-    break;    
-  }
-  
-  case PrintDecls :
-    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
-      while (FD) {
-        ASTLocation(FD).print(OS);
-        FD = FD->getPreviousDeclaration();
-      }
-    } else if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
-      while (VD) {
-        ASTLocation(VD).print(OS);
-        VD = VD->getPreviousDeclaration();
-      }
-    } else
-      ASTLocation(D).print(OS);
+  case PrintDefs: {
+    Analyz.FindObjCMethods(Msg, Results);
+    for (ResultsTy::iterator
+           I = Results.begin(), E = Results.end(); I != E; ++I) {
+      const ObjCMethodDecl *D = cast<ObjCMethodDecl>(I->getDecl());
+      if (D->isThisDeclarationADefinition())
+        I->print(OS);
+    }
     break;
-    
+  }
+
   }
 }
 
-static void ProcessASTLocation(ASTLocation ASTLoc, IndexProvider &IdxProvider) {
+static void ProcessASTLocation(ASTLocation ASTLoc, Indexer &Idxer) {
   assert(ASTLoc.isValid());
+  
+  if (ObjCMessageExpr *Msg =
+        dyn_cast_or_null<ObjCMessageExpr>(ASTLoc.getStmt()))
+    return ProcessObjCMessage(Msg, Idxer);
 
-  Decl *D = 0;
-  if (ASTLoc.isStmt()) {
-    if (DeclRefExpr *RefExpr = dyn_cast<DeclRefExpr>(ASTLoc.getStmt()))
-      D = RefExpr->getDecl();
-  } else {
-    D = ASTLoc.getDecl();
+  Decl *D = ASTLoc.getReferencedDecl();
+  if (D == 0) {
+    llvm::errs() << "Error: Couldn't get referenced Decl for the ASTLocation\n";
+    HadErrors = true;
+    return;
   }
-  assert(D);
 
-  Entity *Ent = Entity::get(D, IdxProvider.getProgram());
-  // If there is no Entity associated with this Decl, it means that it's not
-  // visible to other translation units.
-  if (!Ent)
-    return ProcessDecl(D);
+  llvm::raw_ostream &OS = llvm::outs();
+  typedef Storing<TULocationHandler> ResultsTy;
+  ResultsTy Results;
 
-  // Find the "same" Decl in other translation units and print information.
-  for (IndexProvider::translation_unit_iterator
-         I = IdxProvider.translation_units_begin(Ent),
-         E = IdxProvider.translation_units_end(Ent); I != E; ++I) {
-    TUnit *TU = static_cast<TUnit*>(*I);
-    Decl *OtherD = Ent->getDecl(TU->getASTContext());
-    assert(OtherD && "Couldn't resolve Entity");
-    ProcessDecl(OtherD);
+  Analyzer Analyz(Idxer.getProgram(), Idxer);
+
+  switch (ProgAction) {
+  default: assert(0);
+  case PrintRefs: {
+    Analyz.FindReferences(D, Results);
+    for (ResultsTy::iterator
+           I = Results.begin(), E = Results.end(); I != E; ++I)
+      I->print(OS);
+    break;
+  }
+
+  case PrintDecls: {
+    Analyz.FindDeclarations(D, Results);
+    for (ResultsTy::iterator
+           I = Results.begin(), E = Results.end(); I != E; ++I)
+      I->print(OS);
+    break;
+  }
+
+  case PrintDefs: {
+    Analyz.FindDeclarations(D, Results);
+    for (ResultsTy::iterator
+           I = Results.begin(), E = Results.end(); I != E; ++I) {
+      const Decl *D = I->getDecl();
+      bool isDef = false;
+      if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+        isDef = FD->isThisDeclarationADefinition();
+      else if (const VarDecl *VD = dyn_cast<VarDecl>(D))
+        isDef = VD->getInit() != 0;
+      else if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(D))
+        isDef = MD->isThisDeclarationADefinition();
+
+      if (isDef)
+        I->print(OS);
+    }
+    break;
+  }
+
   }
 }
 
@@ -189,7 +214,7 @@ int main(int argc, char **argv) {
   FileManager FileMgr;
 
   Program Prog;
-  IndexProvider IdxProvider(Prog);
+  Indexer Idxer(Prog, FileMgr);
   llvm::SmallVector<TUnit*, 4> TUnits;
   
   // If no input was specified, read from stdin.
@@ -211,7 +236,7 @@ int main(int argc, char **argv) {
     TUnit *TU = new TUnit(AST.take(), InFile);
     TUnits.push_back(TU);
     
-    IdxProvider.IndexAST(TU);
+    Idxer.IndexAST(TU);
   }
 
   ASTLocation ASTLoc;
@@ -221,6 +246,10 @@ int main(int argc, char **argv) {
   if (!PointAtLocation.empty()) {
     const std::string &Filename = PointAtLocation[0].FileName;
     const FileEntry *File = FileMgr.getFile(Filename);
+    if (File == 0) {
+      llvm::errs() << "File '" << Filename << "' does not exist\n";
+      return 1;
+    }
 
     // Safety check. Using an out-of-date AST file will only lead to crashes
     // or incorrect results.
@@ -233,10 +262,6 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    if (File == 0) {
-      llvm::errs() << "File '" << Filename << "' does not exist\n";
-      return 1;
-    }
     unsigned Line = PointAtLocation[0].Line;
     unsigned Col = PointAtLocation[0].Column;
 
@@ -264,9 +289,12 @@ int main(int argc, char **argv) {
             FirstAST->getASTContext().getCommentForDecl(ASTLoc.getDecl()))
         OS << "Comment associated with this declaration:\n" << Comment << "\n";
     } else {
-      ProcessASTLocation(ASTLoc, IdxProvider);
+      ProcessASTLocation(ASTLoc, Idxer);
     }
   }
+  
+  if (HadErrors)
+    return 1;
 
   if (!DisableFree) {
     for (int i=0, e=TUnits.size(); i != e; ++i)

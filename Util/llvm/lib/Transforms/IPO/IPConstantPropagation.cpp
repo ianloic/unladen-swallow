@@ -134,7 +134,7 @@ bool IPCP::PropagateConstantsIntoArguments(Function &F) {
       continue;
   
     Value *V = ArgumentConstants[i].first;
-    if (V == 0) V = Context->getUndef(AI->getType());
+    if (V == 0) V = UndefValue::get(AI->getType());
     AI->replaceAllUsesWith(V);
     ++NumArgumentsProped;
     MadeChange = true;
@@ -152,22 +152,24 @@ bool IPCP::PropagateConstantsIntoArguments(Function &F) {
 // callers will be updated to use the value they pass in directly instead of
 // using the return value.
 bool IPCP::PropagateConstantReturn(Function &F) {
-  if (F.getReturnType() == Type::VoidTy)
+  if (F.getReturnType() == Type::getVoidTy(F.getContext()))
     return false; // No return value.
 
   // If this function could be overridden later in the link stage, we can't
   // propagate information about its results into callers.
   if (F.mayBeOverridden())
     return false;
+    
+  LLVMContext &Context = F.getContext();
   
   // Check to see if this function returns a constant.
   SmallVector<Value *,4> RetVals;
   const StructType *STy = dyn_cast<StructType>(F.getReturnType());
   if (STy)
     for (unsigned i = 0, e = STy->getNumElements(); i < e; ++i) 
-      RetVals.push_back(Context->getUndef(STy->getElementType(i)));
+      RetVals.push_back(UndefValue::get(STy->getElementType(i)));
   else
-    RetVals.push_back(Context->getUndef(F.getReturnType()));
+    RetVals.push_back(UndefValue::get(F.getReturnType()));
 
   unsigned NumNonConstant = 0;
   for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB)

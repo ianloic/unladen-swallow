@@ -57,9 +57,6 @@ namespace llvm {
                                                 const SelectionDAG &DAG,
                                                 unsigned Depth = 0) const;
 
-    virtual void LowerArguments(Function &F, SelectionDAG &DAG,
-                                SmallVectorImpl<SDValue> &ArgValues,
-                                DebugLoc dl);
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
                                                    MachineBasicBlock *MBB) const;
 
@@ -67,15 +64,38 @@ namespace llvm {
 
     ConstraintType getConstraintType(const std::string &Constraint) const;
     std::pair<unsigned, const TargetRegisterClass*>
-    getRegForInlineAsmConstraint(const std::string &Constraint, MVT VT) const;
+    getRegForInlineAsmConstraint(const std::string &Constraint, EVT VT) const;
     std::vector<unsigned>
     getRegClassForInlineAsmConstraint(const std::string &Constraint,
-                                      MVT VT) const;
+                                      EVT VT) const;
 
     virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
 
     /// getFunctionAlignment - Return the Log2 alignment of this function.
     virtual unsigned getFunctionAlignment(const Function *F) const;
+
+    virtual SDValue
+      LowerFormalArguments(SDValue Chain,
+                           unsigned CallConv,
+                           bool isVarArg,
+                           const SmallVectorImpl<ISD::InputArg> &Ins,
+                           DebugLoc dl, SelectionDAG &DAG,
+                           SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerCall(SDValue Chain, SDValue Callee,
+                unsigned CallConv, bool isVarArg,
+                bool isTailCall,
+                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<ISD::InputArg> &Ins,
+                DebugLoc dl, SelectionDAG &DAG,
+                SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerReturn(SDValue Chain,
+                  unsigned CallConv, bool isVarArg,
+                  const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  DebugLoc dl, SelectionDAG &DAG);
   };
 } // end namespace llvm
 

@@ -23,39 +23,43 @@
 
 void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
                                    GlobalValue *Array) {
-  LLVMContext *Context = MainFn->getContext();
+  LLVMContext &Context = MainFn->getContext();
   const Type *ArgVTy = 
-    Context->getPointerTypeUnqual(Context->getPointerTypeUnqual(Type::Int8Ty));
-  const PointerType *UIntPtr = Context->getPointerTypeUnqual(Type::Int32Ty);
+    PointerType::getUnqual(PointerType::getUnqual(Type::getInt8Ty(Context)));
+  const PointerType *UIntPtr =
+        PointerType::getUnqual(Type::getInt32Ty(Context));
   Module &M = *MainFn->getParent();
-  Constant *InitFn = M.getOrInsertFunction(FnName, Type::Int32Ty, Type::Int32Ty,
-                                           ArgVTy, UIntPtr, Type::Int32Ty,
+  Constant *InitFn = M.getOrInsertFunction(FnName, Type::getInt32Ty(Context),
+                                           Type::getInt32Ty(Context),
+                                           ArgVTy, UIntPtr,
+                                           Type::getInt32Ty(Context),
                                            (Type *)0);
 
   // This could force argc and argv into programs that wouldn't otherwise have
   // them, but instead we just pass null values in.
   std::vector<Value*> Args(4);
-  Args[0] = Context->getNullValue(Type::Int32Ty);
-  Args[1] = Context->getNullValue(ArgVTy);
+  Args[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+  Args[1] = Constant::getNullValue(ArgVTy);
 
   // Skip over any allocas in the entry block.
   BasicBlock *Entry = MainFn->begin();
   BasicBlock::iterator InsertPos = Entry->begin();
   while (isa<AllocaInst>(InsertPos)) ++InsertPos;
 
-  std::vector<Constant*> GEPIndices(2, Context->getNullValue(Type::Int32Ty));
+  std::vector<Constant*> GEPIndices(2,
+                             Constant::getNullValue(Type::getInt32Ty(Context)));
   unsigned NumElements = 0;
   if (Array) {
-    Args[2] = Context->getConstantExprGetElementPtr(Array, &GEPIndices[0],
+    Args[2] = ConstantExpr::getGetElementPtr(Array, &GEPIndices[0],
                                              GEPIndices.size());
     NumElements =
       cast<ArrayType>(Array->getType()->getElementType())->getNumElements();
   } else {
     // If this profiling instrumentation doesn't have a constant array, just
     // pass null.
-    Args[2] = Context->getConstantPointerNull(UIntPtr);
+    Args[2] = ConstantPointerNull::get(UIntPtr);
   }
-  Args[3] = Context->getConstantInt(Type::Int32Ty, NumElements);
+  Args[3] = ConstantInt::get(Type::getInt32Ty(Context), NumElements);
 
   Instruction *InitCall = CallInst::Create(InitFn, Args.begin(), Args.end(),
                                            "newargc", InsertPos);
@@ -80,16 +84,18 @@ void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
     AI = MainFn->arg_begin();
     // If the program looked at argc, have it look at the return value of the
     // init call instead.
-    if (AI->getType() != Type::Int32Ty) {
+    if (AI->getType() != Type::getInt32Ty(Context)) {
       Instruction::CastOps opcode;
       if (!AI->use_empty()) {
         opcode = CastInst::getCastOpcode(InitCall, true, AI->getType(), true);
         AI->replaceAllUsesWith(
           CastInst::Create(opcode, InitCall, AI->getType(), "", InsertPos));
       }
-      opcode = CastInst::getCastOpcode(AI, true, Type::Int32Ty, true);
+      opcode = CastInst::getCastOpcode(AI, true,
+                                       Type::getInt32Ty(Context), true);
       InitCall->setOperand(1, 
-          CastInst::Create(opcode, AI, Type::Int32Ty, "argc.cast", InitCall));
+          CastInst::Create(opcode, AI, Type::getInt32Ty(Context),
+                           "argc.cast", InitCall));
     } else {
       AI->replaceAllUsesWith(InitCall);
       InitCall->setOperand(1, AI);
@@ -101,25 +107,25 @@ void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
 
 void llvm::IncrementCounterInBlock(BasicBlock *BB, unsigned CounterNum,
                                    GlobalValue *CounterArray) {
-  LLVMContext *Context = BB->getContext();
-
   // Insert the increment after any alloca or PHI instructions...
   BasicBlock::iterator InsertPos = BB->getFirstNonPHI();
   while (isa<AllocaInst>(InsertPos))
     ++InsertPos;
 
+  LLVMContext &Context = BB->getContext();
+
   // Create the getelementptr constant expression
   std::vector<Constant*> Indices(2);
-  Indices[0] = Context->getNullValue(Type::Int32Ty);
-  Indices[1] = Context->getConstantInt(Type::Int32Ty, CounterNum);
+  Indices[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+  Indices[1] = ConstantInt::get(Type::getInt32Ty(Context), CounterNum);
   Constant *ElementPtr = 
-    Context->getConstantExprGetElementPtr(CounterArray, &Indices[0],
+    ConstantExpr::getGetElementPtr(CounterArray, &Indices[0],
                                           Indices.size());
 
   // Load, increment and store the value back.
   Value *OldVal = new LoadInst(ElementPtr, "OldFuncCounter", InsertPos);
   Value *NewVal = BinaryOperator::Create(Instruction::Add, OldVal,
-                                      Context->getConstantInt(Type::Int32Ty, 1),
+                                 ConstantInt::get(Type::getInt32Ty(Context), 1),
                                          "NewFuncCounter", InsertPos);
   new StoreInst(NewVal, ElementPtr, InsertPos);
 }

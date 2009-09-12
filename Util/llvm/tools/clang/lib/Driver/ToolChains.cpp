@@ -449,6 +449,48 @@ Tool &FreeBSD::SelectTool(const Compilation &C, const JobAction &JA) const {
   return *T;
 }
 
+/// AuroraUX - AuroraUX tool chain which can call as(1) and ld(1) directly.
+
+AuroraUX::AuroraUX(const HostInfo &Host, const llvm::Triple& Triple)
+  : Generic_GCC(Host, Triple) {
+
+  // Path mangling to find libexec
+  std::string Path(getHost().getDriver().Dir);
+
+  Path += "/../libexec";
+  getProgramPaths().push_back(Path);
+  getProgramPaths().push_back(getHost().getDriver().Dir);  
+
+  getFilePaths().push_back(getHost().getDriver().Dir + "/../lib");
+  getFilePaths().push_back("/usr/lib");
+  getFilePaths().push_back("/usr/sfw/lib");
+  getFilePaths().push_back("/opt/gcc4/lib");
+
+}
+
+Tool &AuroraUX::SelectTool(const Compilation &C, const JobAction &JA) const {
+  Action::ActionClass Key;
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+    Key = Action::AnalyzeJobClass;
+  else
+    Key = JA.getKind();
+
+  Tool *&T = Tools[Key];
+  if (!T) {
+    switch (Key) {
+    case Action::AssembleJobClass:
+      T = new tools::auroraux::Assemble(*this); break;
+    case Action::LinkJobClass:
+      T = new tools::auroraux::Link(*this); break;
+    default:
+      T = &Generic_GCC::SelectTool(C, JA);
+    }
+  }
+
+  return *T;
+}
+
+
 /// Linux toolchain (very bare-bones at the moment).
 
 Linux::Linux(const HostInfo &Host, const llvm::Triple& Triple)
@@ -456,6 +498,15 @@ Linux::Linux(const HostInfo &Host, const llvm::Triple& Triple)
   getFilePaths().push_back(getHost().getDriver().Dir + "/../lib/clang/1.0/");
   getFilePaths().push_back("/lib/");
   getFilePaths().push_back("/usr/lib/");
+
+  // Depending on the Linux distribution, any combination of lib{,32,64} is
+  // possible. E.g. Debian uses lib and lib32 for mixed i386/x86-64 systems,
+  // openSUSE uses lib and lib64 for the same purpose.
+  getFilePaths().push_back("/lib32/");
+  getFilePaths().push_back("/usr/lib32/");
+  getFilePaths().push_back("/lib64/");
+  getFilePaths().push_back("/usr/lib64/");
+
   // FIXME: Figure out some way to get gcc's libdir
   // (e.g. /usr/lib/gcc/i486-linux-gnu/4.3/ for Ubuntu 32-bit); we need
   // crtbegin.o/crtend.o/etc., and want static versions of various

@@ -19,6 +19,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
+#include <sstream>
 #include <iostream>
 using namespace llvm;
 
@@ -32,10 +33,20 @@ static bool isIdentChar(char C) {
 // This should be an anon namespace, this works around a GCC warning.
 namespace llvm {  
   struct AsmWriterOperand {
-    enum { isLiteralTextOperand, isMachineInstrOperand } OperandType;
+    enum OpType {
+      // Output this text surrounded by quotes to the asm.
+      isLiteralTextOperand, 
+      // This is the name of a routine to call to print the operand.
+      isMachineInstrOperand,
+      // Output this text verbatim to the asm writer.  It is code that
+      // will output some text to the asm.
+      isLiteralStatementOperand
+    } OperandType;
 
     /// Str - For isLiteralTextOperand, this IS the literal text.  For
-    /// isMachineInstrOperand, this is the PrinterMethodName for the operand.
+    /// isMachineInstrOperand, this is the PrinterMethodName for the operand..
+    /// For isLiteralStatementOperand, this is the code to insert verbatim 
+    /// into the asm writer.
     std::string Str;
 
     /// MiOpNo - For isMachineInstrOperand, this is the operand number of the
@@ -47,14 +58,16 @@ namespace llvm {
     std::string MiModifier;
 
     // To make VS STL happy
-    AsmWriterOperand():OperandType(isLiteralTextOperand) {}
+    AsmWriterOperand(OpType op = isLiteralTextOperand):OperandType(op) {}
 
-    explicit AsmWriterOperand(const std::string &LitStr)
-      : OperandType(isLiteralTextOperand), Str(LitStr) {}
+    AsmWriterOperand(const std::string &LitStr,
+                     OpType op = isLiteralTextOperand)
+      : OperandType(op), Str(LitStr) {}
 
     AsmWriterOperand(const std::string &Printer, unsigned OpNo, 
-                     const std::string &Modifier) 
-      : OperandType(isMachineInstrOperand), Str(Printer), MIOpNo(OpNo),
+                     const std::string &Modifier,
+                     OpType op = isMachineInstrOperand) 
+      : OperandType(op), Str(Printer), MIOpNo(OpNo),
       MiModifier(Modifier) {}
 
     bool operator!=(const AsmWriterOperand &Other) const {
@@ -78,7 +91,7 @@ namespace llvm {
     std::vector<AsmWriterOperand> Operands;
     const CodeGenInstruction *CGI;
 
-    AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant);
+    AsmWriterInst(const CodeGenInstruction &CGI, Record *AsmWriter);
 
     /// MatchesAllButOneOp - If this instruction is exactly identical to the
     /// specified instruction except for one differing operand, return the
@@ -100,8 +113,14 @@ namespace llvm {
 
 
 std::string AsmWriterOperand::getCode() const {
-  if (OperandType == isLiteralTextOperand)
+  if (OperandType == isLiteralTextOperand) {
+    if (Str.size() == 1)
+      return "O << '" + Str + "'; ";
     return "O << \"" + Str + "\"; ";
+  }
+
+  if (OperandType == isLiteralStatementOperand)
+    return Str;
 
   std::string Result = Str + "(MI";
   if (MIOpNo != ~0U)
@@ -115,10 +134,19 @@ std::string AsmWriterOperand::getCode() const {
 /// ParseAsmString - Parse the specified Instruction's AsmString into this
 /// AsmWriterInst.
 ///
-AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
+AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, Record *AsmWriter) {
   this->CGI = &CGI;
+  
+  unsigned Variant       = AsmWriter->getValueAsInt("Variant");
+  int FirstOperandColumn = AsmWriter->getValueAsInt("FirstOperandColumn");
+  int OperandSpacing     = AsmWriter->getValueAsInt("OperandSpacing");
+  
   unsigned CurVariant = ~0U;  // ~0 if we are outside a {.|.|.} region, other #.
 
+  // This is the number of tabs we've seen if we're doing columnar layout.
+  unsigned CurColumn = 0;
+  
+  
   // NOTE: Any extensions to this code need to be mirrored in the 
   // AsmPrinter::printInlineAsm code that executes as compile time (assuming
   // that inline asm strings should also get the new feature)!
@@ -130,14 +158,35 @@ AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
     if (DollarPos == std::string::npos) DollarPos = AsmString.size();
 
     // Emit a constant string fragment.
+
     if (DollarPos != LastEmitted) {
       if (CurVariant == Variant || CurVariant == ~0U) {
         for (; LastEmitted != DollarPos; ++LastEmitted)
           switch (AsmString[LastEmitted]) {
-          case '\n': AddLiteralString("\\n"); break;
-          case '\t': AddLiteralString("\\t"); break;
-          case '"': AddLiteralString("\\\""); break;
-          case '\\': AddLiteralString("\\\\"); break;
+          case '\n':
+            AddLiteralString("\\n");
+            break;
+          case '\t':
+            // If the asm writer is not using a columnar layout, \t is not
+            // magic.
+            if (FirstOperandColumn == -1 || OperandSpacing == -1) {
+              AddLiteralString("\\t");
+            } else {
+              // We recognize a tab as an operand delimeter.
+              unsigned DestColumn = FirstOperandColumn + 
+                                    CurColumn++ * OperandSpacing;
+              Operands.push_back(
+                AsmWriterOperand("O.PadToColumn(" +
+                                 utostr(DestColumn) + ");\n",
+                                 AsmWriterOperand::isLiteralStatementOperand));
+            }
+            break;
+          case '"':
+            AddLiteralString("\\\"");
+            break;
+          case '\\':
+            AddLiteralString("\\\\");
+            break;
           default:
             AddLiteralString(std::string(1, AsmString[LastEmitted]));
             break;
@@ -151,7 +200,20 @@ AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
         if (AsmString[DollarPos+1] == 'n') {
           AddLiteralString("\\n");
         } else if (AsmString[DollarPos+1] == 't') {
-          AddLiteralString("\\t");
+          // If the asm writer is not using a columnar layout, \t is not
+          // magic.
+          if (FirstOperandColumn == -1 || OperandSpacing == -1) {
+            AddLiteralString("\\t");
+            break;
+          }
+            
+          // We recognize a tab as an operand delimeter.
+          unsigned DestColumn = FirstOperandColumn + 
+                                CurColumn++ * OperandSpacing;
+          Operands.push_back(
+            AsmWriterOperand("O.PadToColumn(" + utostr(DestColumn) + ");\n",
+                             AsmWriterOperand::isLiteralStatementOperand));
+          break;
         } else if (std::string("${|}\\").find(AsmString[DollarPos+1]) 
                    != std::string::npos) {
           AddLiteralString(std::string(1, AsmString[DollarPos+1]));
@@ -182,13 +244,14 @@ AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
       CurVariant = ~0U;
     } else if (DollarPos+1 != AsmString.size() &&
                AsmString[DollarPos+1] == '$') {
-      if (CurVariant == Variant || CurVariant == ~0U) 
+      if (CurVariant == Variant || CurVariant == ~0U) {
         AddLiteralString("$");  // "$$" -> $
+      }
       LastEmitted = DollarPos+2;
     } else {
       // Get the name of the variable.
       std::string::size_type VarEnd = DollarPos+1;
-
+ 
       // handle ${foo}bar as $foo by detecting whether the character following
       // the dollar sign is a curly brace.  If so, advance VarEnd and DollarPos
       // so the variable name does not contain the leading curly brace.
@@ -260,6 +323,9 @@ AsmWriterInst::AsmWriterInst(const CodeGenInstruction &CGI, unsigned Variant) {
     }
   }
 
+  Operands.push_back(
+    AsmWriterOperand("EmitComments(*MI);\n",
+                     AsmWriterOperand::isLiteralStatementOperand));
   AddLiteralString("\\n");
 }
 
@@ -357,7 +423,6 @@ static void EmitInstructions(std::vector<AsmWriterInst> &Insts,
     }
     O << "\n";
   }
-
   O << "    break;\n";
 }
 
@@ -386,7 +451,7 @@ FindUniqueOperandCommands(std::vector<std::string> &UniqueOperandCommands,
 
     // If this is the last operand, emit a return.
     if (Inst->Operands.size() == 1)
-      Command += "    return true;\n";
+      Command += "    return;\n";
     
     // Check to see if we already have 'Command' in UniqueOperandCommands.
     // If not, add it.
@@ -431,7 +496,10 @@ FindUniqueOperandCommands(std::vector<std::string> &UniqueOperandCommands,
       // Otherwise, scan to see if all of the other instructions in this command
       // set share the operand.
       bool AllSame = true;
-      
+      // Keep track of the maximum, number of operands or any
+      // instruction we see in the group.
+      size_t MaxSize = FirstInst->Operands.size();
+
       for (NIT = std::find(NIT+1, InstIdxs.end(), CommandIdx);
            NIT != InstIdxs.end();
            NIT = std::find(NIT+1, InstIdxs.end(), CommandIdx)) {
@@ -439,6 +507,11 @@ FindUniqueOperandCommands(std::vector<std::string> &UniqueOperandCommands,
         // matches, we're ok, otherwise bail out.
         const AsmWriterInst *OtherInst = 
           getAsmWriterInstByID(NIT-InstIdxs.begin());
+
+        if (OtherInst &&
+            OtherInst->Operands.size() > FirstInst->Operands.size())
+          MaxSize = std::max(MaxSize, OtherInst->Operands.size());
+
         if (!OtherInst || OtherInst->Operands.size() == Op ||
             OtherInst->Operands[Op] != FirstInst->Operands[Op]) {
           AllSame = false;
@@ -452,8 +525,12 @@ FindUniqueOperandCommands(std::vector<std::string> &UniqueOperandCommands,
       std::string Command = "    " + FirstInst->Operands[Op].getCode() + "\n";
       
       // If this is the last operand, emit a return after the code.
-      if (FirstInst->Operands.size() == Op+1)
-        Command += "    return true;\n";
+      if (FirstInst->Operands.size() == Op+1 &&
+          // Don't early-out too soon.  Other instructions in this
+          // group may have more operands.
+          FirstInst->Operands.size() == MaxSize) {
+        Command += "    return;\n";
+      }
       
       UniqueOperandCommands[CommandIdx] += Command;
       InstOpsUsed[CommandIdx]++;
@@ -482,14 +559,13 @@ void AsmWriterEmitter::run(raw_ostream &O) {
   CodeGenTarget Target;
   Record *AsmWriter = Target.getAsmWriter();
   std::string ClassName = AsmWriter->getValueAsString("AsmWriterClassName");
-  unsigned Variant = AsmWriter->getValueAsInt("Variant");
 
   O <<
   "/// printInstruction - This method is automatically generated by tablegen\n"
   "/// from the instruction set description.  This method returns true if the\n"
   "/// machine instruction was sufficiently described to print it, otherwise\n"
   "/// it returns false.\n"
-    "bool " << Target.getName() << ClassName
+    "void " << Target.getName() << ClassName
             << "::printInstruction(const MachineInstr *MI) {\n";
 
   std::vector<AsmWriterInst> Instructions;
@@ -497,7 +573,7 @@ void AsmWriterEmitter::run(raw_ostream &O) {
   for (CodeGenTarget::inst_iterator I = Target.inst_begin(),
          E = Target.inst_end(); I != E; ++I)
     if (!I->second.AsmString.empty())
-      Instructions.push_back(AsmWriterInst(I->second, Variant));
+      Instructions.push_back(AsmWriterInst(I->second, AsmWriter));
 
   // Get the instruction numbering.
   Target.getInstructionsByEnumValue(NumberedInstructions);
@@ -564,10 +640,10 @@ void AsmWriterEmitter::run(raw_ostream &O) {
     // For the first operand check, add a default value for instructions with
     // just opcode strings to use.
     if (isFirst) {
-      UniqueOperandCommands.push_back("    return true;\n");
+      UniqueOperandCommands.push_back("    return;\n");
       isFirst = false;
     }
-    
+
     std::vector<unsigned> InstIdxs;
     std::vector<unsigned> NumInstOpsHandled;
     FindUniqueOperandCommands(UniqueOperandCommands, InstIdxs,
@@ -582,8 +658,8 @@ void AsmWriterEmitter::run(raw_ostream &O) {
     
     // If we don't have enough bits for this operand, don't include it.
     if (NumBits > BitsLeft) {
-      DOUT << "Not enough bits to densely encode " << NumBits
-           << " more bits\n";
+      DEBUG(errs() << "Not enough bits to densely encode " << NumBits
+                   << " more bits\n");
       break;
     }
     
@@ -657,16 +733,13 @@ void AsmWriterEmitter::run(raw_ostream &O) {
   O << "  if (MI->getOpcode() == TargetInstrInfo::INLINEASM) {\n"
     << "    O << \"\\t\";\n"
     << "    printInlineAsm(MI);\n"
-    << "    return true;\n"
+    << "    return;\n"
     << "  } else if (MI->isLabel()) {\n"
     << "    printLabel(MI);\n"
-    << "    return true;\n"
-    << "  } else if (MI->getOpcode() == TargetInstrInfo::DECLARE) {\n"
-    << "    printDeclare(MI);\n"
-    << "    return true;\n"
+    << "    return;\n"
     << "  } else if (MI->getOpcode() == TargetInstrInfo::IMPLICIT_DEF) {\n"
     << "    printImplicitDef(MI);\n"
-    << "    return true;\n"
+    << "    return;\n"
     << "  }\n\n";
 
   O << "\n#endif\n";
@@ -675,7 +748,7 @@ void AsmWriterEmitter::run(raw_ostream &O) {
 
   O << "  // Emit the opcode for the instruction.\n"
     << "  unsigned Bits = OpInfo[MI->getOpcode()];\n"
-    << "  if (Bits == 0) return false;\n"
+    << "  assert(Bits != 0 && \"Cannot print this instruction.\");\n"
     << "  O << AsmStrs+(Bits & " << (1 << AsmStrBits)-1 << ");\n\n";
 
   // Output the table driven operand information.
@@ -739,8 +812,9 @@ void AsmWriterEmitter::run(raw_ostream &O) {
       EmitInstructions(Instructions, O);
 
     O << "  }\n";
-    O << "  return true;\n";
+    O << "  return;\n";
   }
-  
+
+  O << "  return;\n";
   O << "}\n";
 }

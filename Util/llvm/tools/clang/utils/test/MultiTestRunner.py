@@ -1,49 +1,55 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 """
 MultiTestRunner - Harness for running multiple tests in the simple clang style.
 
 TODO
 --
- - Fix Ctrl-c issues
- - Use a timeout
- - Detect signalled failures (abort)
+ - Use configuration file for clang specific stuff
+ - Use a timeout / ulimit
+ - Detect signaled failures (abort)
  - Better support for finding tests
+
+ - Support "disabling" tests? The advantage of making this distinct from XFAIL
+   is it makes it more obvious that it is a temporary measure (and MTR can put
+   in a separate category).
 """
 
-# TOD
 import os, sys, re, random, time
 import threading
-import ProgressBar
-import TestRunner
-from TestRunner import TestStatus
 from Queue import Queue
 
-kTestFileExtensions = set(['.mi','.i','.c','.cpp','.m','.mm','.ll'])
+import ProgressBar
+import TestRunner
+import Util
 
-def getTests(inputs):
+from TestingConfig import TestingConfig
+from TestRunner import TestStatus
+
+kConfigName = 'lit.cfg'
+
+def getTests(cfg, inputs):
     for path in inputs:
         if not os.path.exists(path):
-            print >>sys.stderr,"WARNING: Invalid test \"%s\""%(path,)
+            Util.warning('Invalid test %r' % path)
             continue
         
-        if os.path.isdir(path):
-            for dirpath,dirnames,filenames in os.walk(path):
-                dotTests = os.path.join(dirpath,'.tests')
-                if os.path.exists(dotTests):
-                    for ln in open(dotTests):
-                        if ln.strip():
-                            yield os.path.join(dirpath,ln.strip())
-                else:
-                    # FIXME: This doesn't belong here
-                    if 'Output' in dirnames:
-                        dirnames.remove('Output')
-                    for f in filenames:
-                        base,ext = os.path.splitext(f)
-                        if ext in kTestFileExtensions:
-                            yield os.path.join(dirpath,f)
-        else:
+        if not os.path.isdir(path):
             yield path
+            continue
+
+        foundOne = False
+        for dirpath,dirnames,filenames in os.walk(path):
+            # FIXME: This doesn't belong here
+            if 'Output' in dirnames:
+                dirnames.remove('Output')
+            for f in filenames:
+                base,ext = os.path.splitext(f)
+                if ext in cfg.suffixes:
+                    yield os.path.join(dirpath,f)
+                    foundOne = True
+        if not foundOne:
+            Util.warning('No tests in input directory %r' % path)
 
 class TestingProgressDisplay:
     def __init__(self, opts, numTests, progressBar=None):
@@ -90,30 +96,31 @@ class TestingProgressDisplay:
             else:
                 sys.stdout.write('\n')
 
-        extra = ''
-        if tr.code==TestStatus.Invalid:
-            extra = ' - (Invalid test)'
-        elif tr.code==TestStatus.NoRunLine:
-            extra = ' - (No RUN line)'
-        elif tr.failed():
-            extra = ' - %s'%(TestStatus.getName(tr.code).upper(),)
-        print '%*d/%*d - %s%s'%(self.digits, index+1, self.digits, 
-                              self.numTests, tr.path, extra)
+        status = TestStatus.getName(tr.code).upper()
+        print '%s: %s (%*d of %*d)' % (status, tr.path, 
+                                       self.digits, index+1, 
+                                       self.digits, self.numTests)
 
         if tr.failed() and self.opts.showOutput:
-            TestRunner.cat(tr.testResults, sys.stdout)
+            print "%s TEST '%s' FAILED %s" % ('*'*20, tr.path, '*'*20)
+            print tr.output
+            print "*" * 20
+
+        sys.stdout.flush()
 
 class TestResult:
-    def __init__(self, path, code, testResults):
+    def __init__(self, path, code, output, elapsed):
         self.path = path
         self.code = code
-        self.testResults = testResults
+        self.output = output
+        self.elapsed = elapsed
 
     def failed(self):
         return self.code in (TestStatus.Fail,TestStatus.XPass)
         
 class TestProvider:
-    def __init__(self, opts, tests, display):
+    def __init__(self, config, opts, tests, display):
+        self.config = config
         self.opts = opts
         self.tests = tests
         self.index = 0
@@ -152,138 +159,179 @@ class Tester(threading.Thread):
                 break
             self.runTest(item)
 
-    def runTest(self, (path,index)):
-        command = path
-        # Use hand concatentation here because we want to override
-        # absolute paths.
-        output = 'Output/' + path + '.out'
-        testname = path
-        testresults = 'Output/' + path + '.testresults'
-        TestRunner.mkdir_p(os.path.dirname(testresults))
+    def runTest(self, (path, index)):
+        base = TestRunner.getTestOutputBase('Output', path)
         numTests = len(self.provider.tests)
         digits = len(str(numTests))
         code = None
+        elapsed = None
         try:
             opts = self.provider.opts
-            if opts.debugDoNotTest:
-                code = None
-            else:
-                code = TestRunner.runOneTest(path, command, output, testname, 
-                                             opts.clang, opts.clangcc,
-                                             useValgrind=opts.useValgrind,
-                                             useDGCompat=opts.useDGCompat,
-                                             useScript=opts.testScript,
-                                             output=open(testresults,'w'))
+            startTime = time.time()
+            code, output = TestRunner.runOneTest(self.provider.config, 
+                                                 path, base)
+            elapsed = time.time() - startTime
         except KeyboardInterrupt:
             # This is a sad hack. Unfortunately subprocess goes
             # bonkers with ctrl-c and we start forking merrily.
-            print 'Ctrl-C detected, goodbye.'
+            print '\nCtrl-C detected, goodbye.'
             os.kill(0,9)
 
-        self.provider.setResult(index, TestResult(path, code, testresults))
+        self.provider.setResult(index, TestResult(path, code, output, elapsed))
 
-def detectCPUs():
-    """
-    Detects the number of CPUs on a system. Cribbed from pp.
-    """
-    # Linux, Unix and MacOS:
-    if hasattr(os, "sysconf"):
-        if os.sysconf_names.has_key("SC_NPROCESSORS_ONLN"):
-            # Linux & Unix:
-            ncpus = os.sysconf("SC_NPROCESSORS_ONLN")
-            if isinstance(ncpus, int) and ncpus > 0:
-                return ncpus
-        else: # OSX:
-            return int(os.popen2("sysctl -n hw.ncpu")[1].read())
-    # Windows:
-    if os.environ.has_key("NUMBER_OF_PROCESSORS"):
-        ncpus = int(os.environ["NUMBER_OF_PROCESSORS"]);
-        if ncpus > 0:
-            return ncpus
-    return 1 # Default
+def findConfigPath(root):
+    prev = None
+    while root != prev:
+        cfg = os.path.join(root, kConfigName)
+        if os.path.exists(cfg):
+            return cfg
+
+        prev,root = root,os.path.dirname(root)
+
+    raise ValueError,"Unable to find config file %r" % kConfigName
+
+def runTests(opts, provider):
+    # If only using one testing thread, don't use threads at all; this lets us
+    # profile, among other things.
+    if opts.numThreads == 1:
+        t = Tester(provider)
+        t.run()
+        return
+
+    # Otherwise spin up the testing threads and wait for them to finish.
+    testers = [Tester(provider) for i in range(opts.numThreads)]
+    for t in testers:
+        t.start()
+    try:
+        for t in testers:
+            t.join()
+    except KeyboardInterrupt:
+        sys.exit(1)
 
 def main():
     global options
-    from optparse import OptionParser
-    parser = OptionParser("usage: %prog [options] {inputs}")
-    parser.add_option("-j", "--threads", dest="numThreads",
-                      help="Number of testing threads",
-                      type=int, action="store", 
-                      default=detectCPUs())
-    parser.add_option("", "--clang", dest="clang",
-                      help="Program to use as \"clang\"",
+    from optparse import OptionParser, OptionGroup
+    parser = OptionParser("usage: %prog [options] {file-or-path}")
+
+    parser.add_option("", "--root", dest="root",
+                      help="Path to root test directory",
                       action="store", default=None)
-    parser.add_option("", "--clang-cc", dest="clangcc",
-                      help="Program to use as \"clang-cc\"",
+    parser.add_option("", "--config", dest="config",
+                      help="Testing configuration file [default='%s']" % kConfigName,
                       action="store", default=None)
-    parser.add_option("", "--vg", dest="useValgrind",
-                      help="Run tests under valgrind",
-                      action="store_true", default=False)
-    parser.add_option("", "--dg", dest="useDGCompat",
-                      help="Use llvm dejagnu compatibility mode",
-                      action="store_true", default=False)
-    parser.add_option("", "--script", dest="testScript",
-                      help="Default script to use",
-                      action="store", default=None)
-    parser.add_option("-v", "--verbose", dest="showOutput",
-                      help="Show all test output",
-                      action="store_true", default=False)
-    parser.add_option("-q", "--quiet", dest="quiet",
-                      help="Suppress no error output",
-                      action="store_true", default=False)
-    parser.add_option("-s", "--succinct", dest="succinct",
-                      help="Reduce amount of output",
-                      action="store_true", default=False)
-    parser.add_option("", "--max-tests", dest="maxTests",
-                      help="Maximum number of tests to run",
-                      action="store", type=int, default=None)
-    parser.add_option("", "--max-time", dest="maxTime",
-                      help="Maximum time to spend testing (in seconds)",
-                      action="store", type=float, default=None)
-    parser.add_option("", "--shuffle", dest="shuffle",
-                      help="Run tests in random order",
-                      action="store_true", default=False)
-    parser.add_option("", "--seed", dest="seed",
-                      help="Seed for random number generator (default: random)",
-                      action="store", default=None)
-    parser.add_option("", "--no-progress-bar", dest="useProgressBar",
-                      help="Do not use curses based progress bar",
-                      action="store_false", default=True)
-    parser.add_option("", "--debug-do-not-test", dest="debugDoNotTest",
-                      help="DEBUG: Skip running actual test script",
-                      action="store_true", default=False)
-    parser.add_option("", "--path", dest="path",
-                      help="Additional paths to add to testing environment",
-                      action="store", type=str, default=None)
+    
+    group = OptionGroup(parser, "Output Format")
+    # FIXME: I find these names very confusing, although I like the
+    # functionality.
+    group.add_option("-q", "--quiet", dest="quiet",
+                     help="Suppress no error output",
+                     action="store_true", default=False)
+    group.add_option("-s", "--succinct", dest="succinct",
+                     help="Reduce amount of output",
+                     action="store_true", default=False)
+    group.add_option("-v", "--verbose", dest="showOutput",
+                     help="Show all test output",
+                     action="store_true", default=False)
+    group.add_option("", "--no-progress-bar", dest="useProgressBar",
+                     help="Do not use curses based progress bar",
+                     action="store_false", default=True)
+    parser.add_option_group(group)
+
+    group = OptionGroup(parser, "Test Execution")
+    group.add_option("-j", "--threads", dest="numThreads",
+                     help="Number of testing threads",
+                     type=int, action="store", 
+                     default=None)
+    group.add_option("", "--clang", dest="clang",
+                     help="Program to use as \"clang\"",
+                     action="store", default=None)
+    group.add_option("", "--clang-cc", dest="clangcc",
+                     help="Program to use as \"clang-cc\"",
+                     action="store", default=None)
+    group.add_option("", "--path", dest="path",
+                     help="Additional paths to add to testing environment",
+                     action="append", type=str, default=[])
+    group.add_option("", "--no-sh", dest="useExternalShell",
+                     help="Run tests using an external shell",
+                     action="store_false", default=True)
+    group.add_option("", "--vg", dest="useValgrind",
+                     help="Run tests under valgrind",
+                     action="store_true", default=False)
+    group.add_option("", "--time-tests", dest="timeTests",
+                     help="Track elapsed wall time for each test",
+                     action="store_true", default=False)
+    parser.add_option_group(group)
+
+    group = OptionGroup(parser, "Test Selection")
+    group.add_option("", "--max-tests", dest="maxTests",
+                     help="Maximum number of tests to run",
+                     action="store", type=int, default=None)
+    group.add_option("", "--max-time", dest="maxTime",
+                     help="Maximum time to spend testing (in seconds)",
+                     action="store", type=float, default=None)
+    group.add_option("", "--shuffle", dest="shuffle",
+                     help="Run tests in random order",
+                     action="store_true", default=False)
+    parser.add_option_group(group)
                       
     (opts, args) = parser.parse_args()
-
+    
     if not args:
         parser.error('No inputs specified')
 
+    if opts.numThreads is None:
+        opts.numThreads = Util.detectCPUs()
+
+    inputs = args
+
+    # Resolve root if not given, either infer it from the config file if given,
+    # otherwise from the inputs.
+    if not opts.root:
+        if opts.config:
+            opts.root = os.path.dirname(opts.config)
+        else:
+            opts.root = os.path.commonprefix([os.path.abspath(p)
+                                              for p in inputs])
+
+    # Find the config file, if not specified.
+    if not opts.config:
+        try:
+            opts.config = findConfigPath(opts.root)
+        except ValueError,e:
+            parser.error(e.args[0])
+
+    cfg = TestingConfig.frompath(opts.config)
+
+    # Update the configuration based on the command line arguments.
+    for name in ('PATH','SYSTEMROOT'):
+        if name in cfg.environment:
+            parser.error("'%s' should not be set in configuration!" % name)
+
+    cfg.root = opts.root
+    cfg.environment['PATH'] = os.pathsep.join(opts.path + 
+                                                 [os.environ.get('PATH','')])
+    cfg.environment['SYSTEMROOT'] = os.environ.get('SYSTEMROOT','')
+
     if opts.clang is None:
-        opts.clang = TestRunner.inferClang()
+        opts.clang = TestRunner.inferClang(cfg)
     if opts.clangcc is None:
-        opts.clangcc = TestRunner.inferClangCC(opts.clang)
+        opts.clangcc = TestRunner.inferClangCC(cfg, opts.clang)
+
+    cfg.clang = opts.clang
+    cfg.clangcc = opts.clangcc
+    cfg.useValgrind = opts.useValgrind
+    cfg.useExternalShell = opts.useExternalShell
 
     # FIXME: It could be worth loading these in parallel with testing.
-    allTests = list(getTests(args))
+    allTests = list(getTests(cfg, args))
     allTests.sort()
     
     tests = allTests
-    if opts.seed is not None:
-        try:
-            seed = int(opts.seed)
-        except:
-            parser.error('--seed argument should be an integer')
-        random.seed(seed)
     if opts.shuffle:
         random.shuffle(tests)
     if opts.maxTests is not None:
         tests = tests[:opts.maxTests]
-    if opts.path is not None:
-        os.environ["PATH"] = opts.path + ":" + os.environ["PATH"];
-    
+        
     extra = ''
     if len(tests) != len(allTests):
         extra = ' of %d'%(len(allTests),)
@@ -302,33 +350,26 @@ def main():
         if not progressBar:
             print header
 
-    display = TestingProgressDisplay(opts, len(tests), progressBar)
-    provider = TestProvider(opts, tests, display)
+    # Don't create more threads than tests.
+    opts.numThreads = min(len(tests), opts.numThreads)
 
-    testers = [Tester(provider) for i in range(opts.numThreads)]
     startTime = time.time()
-    for t in testers:
-        t.start()
-    try:
-        for t in testers:
-            t.join()
-    except KeyboardInterrupt:
-        sys.exit(1)
-
+    display = TestingProgressDisplay(opts, len(tests), progressBar)
+    provider = TestProvider(cfg, opts, tests, display)
+    runTests(opts, provider)
     display.finish()
 
     if not opts.quiet:
         print 'Testing Time: %.2fs'%(time.time() - startTime)
 
-    # List test results organized organized by kind.
+    # List test results organized by kind.
     byCode = {}
     for t in provider.results:
         if t:
             if t.code not in byCode:
                 byCode[t.code] = []
             byCode[t.code].append(t)
-    for title,code in (('Expected Failures', TestStatus.XFail),
-                       ('Unexpected Passing Tests', TestStatus.XPass),
+    for title,code in (('Unexpected Passing Tests', TestStatus.XPass),
                        ('Failing Tests', TestStatus.Fail)):
         elts = byCode.get(code)
         if not elts:
@@ -343,5 +384,12 @@ def main():
         print '\nFailures: %d' % (numFailures,)
         sys.exit(1)
         
+    if opts.timeTests:
+        print '\nTest Times:'
+        provider.results.sort(key=lambda t: t and t.elapsed)
+        for tr in provider.results:
+            if tr:
+                print '%.2fs: %s' % (tr.elapsed, tr.path)
+
 if __name__=='__main__':
     main()

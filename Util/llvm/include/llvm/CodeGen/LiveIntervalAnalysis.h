@@ -20,6 +20,7 @@
 #ifndef LLVM_CODEGEN_LIVEINTERVAL_ANALYSIS_H
 #define LLVM_CODEGEN_LIVEINTERVAL_ANALYSIS_H
 
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/ADT/BitVector.h"
@@ -79,7 +80,7 @@ namespace llvm {
     /// FunctionSize - The number of instructions present in the function
     uint64_t FunctionSize;
 
-    typedef DenseMap<MachineInstr*, unsigned> Mi2IndexMap;
+    typedef DenseMap<const MachineInstr*, unsigned> Mi2IndexMap;
     Mi2IndexMap mi2iMap_;
 
     typedef std::vector<MachineInstr*> Index2MiMap;
@@ -87,6 +88,8 @@ namespace llvm {
 
     typedef DenseMap<unsigned, LiveInterval*> Reg2IntervalMap;
     Reg2IntervalMap r2iMap_;
+
+    DenseMap<MachineBasicBlock*, unsigned> terminatorGaps;
 
     BitVector allocatableRegs_;
 
@@ -196,7 +199,7 @@ namespace llvm {
     }
 
     /// getInstructionIndex - returns the base index of instr
-    unsigned getInstructionIndex(MachineInstr* instr) const {
+    unsigned getInstructionIndex(const MachineInstr* instr) const {
       Mi2IndexMap::const_iterator it = mi2iMap_.find(instr);
       assert(it != mi2iMap_.end() && "Invalid instruction!");
       return it->second;
@@ -344,10 +347,7 @@ namespace llvm {
     virtual bool runOnMachineFunction(MachineFunction&);
 
     /// print - Implement the dump method.
-    virtual void print(std::ostream &O, const Module* = 0) const;
-    void print(std::ostream *O, const Module* M = 0) const {
-      if (O) print(*O, M);
-    }
+    virtual void print(raw_ostream &O, const Module* = 0) const;
 
     /// addIntervalsForSpills - Create new intervals for spilled defs / uses of
     /// the given interval. FIXME: It also returns the weight of the spill slot
@@ -535,7 +535,6 @@ namespace llvm {
 
     void printRegName(unsigned reg) const;
   };
-
 } // End llvm namespace
 
 #endif

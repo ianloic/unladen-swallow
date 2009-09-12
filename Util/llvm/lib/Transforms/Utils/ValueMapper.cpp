@@ -14,24 +14,26 @@
 
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/BasicBlock.h"
+#include "llvm/DerivedTypes.h"  // For getNullValue(Type::Int32Ty)
 #include "llvm/Constants.h"
 #include "llvm/GlobalValue.h"
 #include "llvm/Instruction.h"
 #include "llvm/LLVMContext.h"
-#include "llvm/MDNode.h"
+#include "llvm/Metadata.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/ErrorHandling.h"
 using namespace llvm;
 
-Value *llvm::MapValue(const Value *V, ValueMapTy &VM, LLVMContext *Context) {
+Value *llvm::MapValue(const Value *V, ValueMapTy &VM, LLVMContext &Context) {
   Value *&VMSlot = VM[V];
   if (VMSlot) return VMSlot;      // Does it exist in the map yet?
   
   // NOTE: VMSlot can be invalidated by any reference to VM, which can grow the
   // DenseMap.  This includes any recursive calls to MapValue.
 
-  // Global values do not need to be seeded into the ValueMap if they are using
-  // the identity mapping.
-  if (isa<GlobalValue>(V) || isa<InlineAsm>(V))
+  // Global values and metadata do not need to be seeded into the ValueMap if 
+  // they are using the identity mapping.
+  if (isa<GlobalValue>(V) || isa<InlineAsm>(V) || isa<MetadataBase>(V))
     return VMSlot = const_cast<Value*>(V);
 
   if (Constant *C = const_cast<Constant*>(dyn_cast<Constant>(V))) {
@@ -54,7 +56,7 @@ Value *llvm::MapValue(const Value *V, ValueMapTy &VM, LLVMContext *Context) {
           Values.push_back(cast<Constant>(MV));
           for (++i; i != e; ++i)
             Values.push_back(cast<Constant>(MapValue(*i, VM, Context)));
-          return VM[V] = Context->getConstantArray(CA->getType(), Values);
+          return VM[V] = ConstantArray::get(CA->getType(), Values);
         }
       }
       return VM[V] = C;
@@ -74,7 +76,7 @@ Value *llvm::MapValue(const Value *V, ValueMapTy &VM, LLVMContext *Context) {
           Values.push_back(cast<Constant>(MV));
           for (++i; i != e; ++i)
             Values.push_back(cast<Constant>(MapValue(*i, VM, Context)));
-          return VM[V] = Context->getConstantStruct(CS->getType(), Values);
+          return VM[V] = ConstantStruct::get(CS->getType(), Values);
         }
       }
       return VM[V] = C;
@@ -99,37 +101,15 @@ Value *llvm::MapValue(const Value *V, ValueMapTy &VM, LLVMContext *Context) {
           Values.push_back(cast<Constant>(MV));
           for (++i; i != e; ++i)
             Values.push_back(cast<Constant>(MapValue(*i, VM, Context)));
-          return VM[V] = Context->getConstantVector(Values);
+          return VM[V] = ConstantVector::get(Values);
         }
       }
       return VM[V] = C;
       
-    } else if (MDNode *N = dyn_cast<MDNode>(C)) {
-      for (MDNode::const_elem_iterator b = N->elem_begin(), i = b,
-             e = N->elem_end(); i != e; ++i) {
-        if (!*i) continue;
-
-        Value *MV = MapValue(*i, VM, Context);
-        if (MV != *i) {
-          // This MDNode must contain a reference to a global, make a new MDNode
-          // and return it.
-	  SmallVector<Value*, 8> Values;
-          Values.reserve(N->getNumElements());
-          for (MDNode::const_elem_iterator j = b; j != i; ++j)
-            Values.push_back(*j);
-          Values.push_back(MV);
-          for (++i; i != e; ++i)
-            Values.push_back(MapValue(*i, VM, Context));
-          return VM[V] = Context->getMDNode(Values.data(), Values.size());
-        }
-      }
-      return VM[V] = C;
-
     } else {
-      assert(0 && "Unknown type of constant!");
+      llvm_unreachable("Unknown type of constant!");
     }
   }
-
   return 0;
 }
 

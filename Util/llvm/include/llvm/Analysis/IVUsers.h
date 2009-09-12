@@ -25,7 +25,7 @@ namespace llvm {
 class DominatorTree;
 class Instruction;
 class Value;
-class IVUsersOfOneStride;
+struct IVUsersOfOneStride;
 
 /// IVStrideUse - Keep track of one use of a strided induction variable, where
 /// the stride is stored externally.  The Offset member keeps track of the
@@ -206,10 +206,6 @@ public:
   const SCEV *getReplacementExpr(const IVStrideUse &U) const;
 
   void print(raw_ostream &OS, const Module* = 0) const;
-  virtual void print(std::ostream &OS, const Module* = 0) const;
-  void print(std::ostream *OS, const Module* M = 0) const {
-    if (OS) print(*OS, M);
-  }
 
   /// dump - This method is used for debugging.
   void dump() const;

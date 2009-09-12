@@ -16,7 +16,6 @@
 #include "X86Relocations.h"
 #include "X86Subtarget.h"
 #include "llvm/Function.h"
-#include "llvm/Config/alloca.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cstdlib>
@@ -24,7 +23,7 @@
 using namespace llvm;
 
 // Determine the platform we're running on
-#if defined (__x86_64__) || defined (_M_AMD64)
+#if defined (__x86_64__) || defined (_M_AMD64) || defined (_M_X64)
 # define X86_64_JIT
 #elif defined(__i386__) || defined(i386) || defined(_M_IX86)
 # define X86_32_JIT
@@ -322,7 +321,7 @@ extern "C" {
 
 #else // Not an i386 host
   void X86CompilationCallback() {
-    LLVM_UNREACHABLE("Cannot call X86CompilationCallback() on a non-x86 arch!\n");
+    llvm_unreachable("Cannot call X86CompilationCallback() on a non-x86 arch!");
   }
 #endif
 }
@@ -348,10 +347,10 @@ X86CompilationCallback2(intptr_t *StackPtr, intptr_t RetAddr) {
 #endif
 
 #if 0
-  DOUT << "In callback! Addr=" << (void*)RetAddr
-       << " ESP=" << (void*)StackPtr
-       << ": Resolving call to function: "
-       << TheVM->getFunctionReferencedName((void*)RetAddr) << "\n";
+  DEBUG(errs() << "In callback! Addr=" << (void*)RetAddr
+               << " ESP=" << (void*)StackPtr
+               << ": Resolving call to function: "
+               << TheVM->getFunctionReferencedName((void*)RetAddr) << "\n");
 #endif
 
   // Sanity check to make sure this really is a call instruction.
@@ -495,9 +494,11 @@ void X86JITInfo::emitFunctionStubAtAddr(const Function* F, void *Fn, void *Stub,
   // complains about casting a function pointer to a normal pointer.
   JCE.startGVStub(F, Stub, 5);
   JCE.emitByte(0xE9);
-#if defined (X86_64_JIT)
-  assert(((((intptr_t)Fn-JCE.getCurrentPCValue()-5) << 32) >> 32) == 
-          ((intptr_t)Fn-JCE.getCurrentPCValue()-5) 
+#if defined (X86_64_JIT) && !defined (NDEBUG)
+  // Yes, we need both of these casts, or some broken versions of GCC (4.2.4)
+  // get the signed-ness of the expression wrong.  Go figure.
+  intptr_t Displacement = (intptr_t)Fn - (intptr_t)JCE.getCurrentPCValue() - 5;
+  assert(((Displacement << 32) >> 32) == Displacement
          && "PIC displacement does not fit in displacement field!");
 #endif
   JCE.emitWordLE((intptr_t)Fn-JCE.getCurrentPCValue()-4);
@@ -538,6 +539,7 @@ void X86JITInfo::relocate(void *Function, MachineRelocation *MR,
       break;
     }
     case X86::reloc_absolute_word:
+    case X86::reloc_absolute_word_sext:
       // Absolute relocation, just add the relocated value to the value already
       // in memory.
       *((unsigned*)RelocPos) += (unsigned)ResultPtr;
@@ -554,7 +556,7 @@ char* X86JITInfo::allocateThreadLocalMemory(size_t size) {
   TLSOffset -= size;
   return TLSOffset;
 #else
-  assert(0 && "Cannot allocate thread local storage on this arch!\n");
+  llvm_unreachable("Cannot allocate thread local storage on this arch!");
   return 0;
 #endif
 }

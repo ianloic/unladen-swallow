@@ -1,4 +1,4 @@
-//===--- Program.h - Entity originator and misc -----------------*- C++ -*-===//
+//===--- Program.h - Cross-translation unit information ---------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-//  Storage for Entities and utility functions
+// This file declares the idx::Program interface.
 //
 //===----------------------------------------------------------------------===//
 
@@ -20,20 +20,22 @@ namespace clang {
 namespace idx {
   class EntityHandler;
 
-/// \brief Repository for Entities.
+/// \brief Top level object that owns and maintains information
+/// that is common across translation units.
 class Program {
   void *Impl;
 
   Program(const Program&); // do not implement
   Program &operator=(const Program &); // do not implement
   friend class Entity;
+  friend class GlobalSelector;
   
 public:
   Program();
   ~Program();
 
   /// \brief Traverses the AST and passes all the entities to the Handler.
-  void FindEntities(ASTContext &Ctx, EntityHandler *Handler);
+  void FindEntities(ASTContext &Ctx, EntityHandler &Handler);
 };
 
 } // namespace idx

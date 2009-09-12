@@ -18,13 +18,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProfilingUtils.h"
-#include "llvm/Constants.h"
-#include "llvm/DerivedTypes.h"
-#include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include <set>
@@ -48,14 +45,17 @@ ModulePass *llvm::createEdgeProfilerPass() { return new EdgeProfiler(); }
 bool EdgeProfiler::runOnModule(Module &M) {
   Function *Main = M.getFunction("main");
   if (Main == 0) {
-    cerr << "WARNING: cannot insert edge profiling into a module"
-         << " with no main function!\n";
+    errs() << "WARNING: cannot insert edge profiling into a module"
+           << " with no main function!\n";
     return false;  // No main, no instrumentation!
   }
 
   std::set<BasicBlock*> BlocksToInstrument;
   unsigned NumEdges = 0;
-  for (Module::iterator F = M.begin(), E = M.end(); F != E; ++F)
+  for (Module::iterator F = M.begin(), E = M.end(); F != E; ++F) {
+    if (F->isDeclaration()) continue;
+    // Reserve space for (0,entry) edge.
+    ++NumEdges;
     for (Function::iterator BB = F->begin(), E = F->end(); BB != E; ++BB) {
       // Keep track of which blocks need to be instrumented.  We don't want to
       // instrument blocks that are added as the result of breaking critical
@@ -63,15 +63,19 @@ bool EdgeProfiler::runOnModule(Module &M) {
       BlocksToInstrument.insert(BB);
       NumEdges += BB->getTerminator()->getNumSuccessors();
     }
+  }
 
-  const Type *ATy = Context->getArrayType(Type::Int32Ty, NumEdges);
+  const Type *ATy = ArrayType::get(Type::getInt32Ty(M.getContext()), NumEdges);
   GlobalVariable *Counters =
     new GlobalVariable(M, ATy, false, GlobalValue::InternalLinkage,
-                       Context->getNullValue(ATy), "EdgeProfCounters");
+                       Constant::getNullValue(ATy), "EdgeProfCounters");
 
   // Instrument all of the edges...
   unsigned i = 0;
-  for (Module::iterator F = M.begin(), E = M.end(); F != E; ++F)
+  for (Module::iterator F = M.begin(), E = M.end(); F != E; ++F) {
+    if (F->isDeclaration()) continue;
+    // Create counter for (0,entry) edge.
+    IncrementCounterInBlock(&F->getEntryBlock(), i++, Counters);
     for (Function::iterator BB = F->begin(), E = F->end(); BB != E; ++BB)
       if (BlocksToInstrument.count(BB)) {  // Don't instrument inserted blocks
         // Okay, we have to add a counter of each outgoing edge.  If the
@@ -94,6 +98,7 @@ bool EdgeProfiler::runOnModule(Module &M) {
           }
         }
       }
+  }
 
   // Add the initialization call to main.
   InsertProfilingInitCall(Main, "llvm_start_edge_profiling", Counters);

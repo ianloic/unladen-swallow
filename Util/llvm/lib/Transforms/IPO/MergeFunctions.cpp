@@ -53,6 +53,8 @@
 #include "llvm/Support/CallSite.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <vector>
 using namespace llvm;
@@ -62,7 +64,7 @@ STATISTIC(NumFunctionsMerged, "Number of functions merged");
 namespace {
   struct VISIBILITY_HIDDEN MergeFunctions : public ModulePass {
     static char ID; // Pass identification, replacement for typeid
-    MergeFunctions() : ModulePass((intptr_t)&ID) {}
+    MergeFunctions() : ModulePass(&ID) {}
 
     bool runOnModule(Module &M);
   };
@@ -128,7 +130,7 @@ static bool isEquivalentType(const Type *Ty1, const Type *Ty2) {
     return false;
 
   default:
-    assert(0 && "Unknown type!");
+    llvm_unreachable("Unknown type!");
     return false;
 
   case Type::PointerTyID: {
@@ -186,7 +188,8 @@ static bool
 isEquivalentOperation(const Instruction *I1, const Instruction *I2) {
   if (I1->getOpcode() != I2->getOpcode() ||
       I1->getNumOperands() != I2->getNumOperands() ||
-      !isEquivalentType(I1->getType(), I2->getType()))
+      !isEquivalentType(I1->getType(), I2->getType()) ||
+      !I1->hasSameSubclassOptionalData(I2))
     return false;
 
   // We have two instructions of identical opcode and #operands.  Check to see
@@ -450,6 +453,7 @@ static LinkageCategory categorize(const Function *F) {
   switch (F->getLinkage()) {
   case GlobalValue::InternalLinkage:
   case GlobalValue::PrivateLinkage:
+  case GlobalValue::LinkerPrivateLinkage:
     return Internal;
 
   case GlobalValue::WeakAnyLinkage:
@@ -469,14 +473,14 @@ static LinkageCategory categorize(const Function *F) {
     return ExternalStrong;
   }
 
-  assert(0 && "Unknown LinkageType.");
+  llvm_unreachable("Unknown LinkageType.");
   return ExternalWeak;
 }
 
 static void ThunkGToF(Function *F, Function *G) {
   Function *NewG = Function::Create(G->getFunctionType(), G->getLinkage(), "",
                                     G->getParent());
-  BasicBlock *BB = BasicBlock::Create("", NewG);
+  BasicBlock *BB = BasicBlock::Create(F->getContext(), "", NewG);
 
   std::vector<Value *> Args;
   unsigned i = 0;
@@ -495,13 +499,13 @@ static void ThunkGToF(Function *F, Function *G) {
   CallInst *CI = CallInst::Create(F, Args.begin(), Args.end(), "", BB);
   CI->setTailCall();
   CI->setCallingConv(F->getCallingConv());
-  if (NewG->getReturnType() == Type::VoidTy) {
-    ReturnInst::Create(BB);
+  if (NewG->getReturnType() == Type::getVoidTy(F->getContext())) {
+    ReturnInst::Create(F->getContext(), BB);
   } else if (CI->getType() != NewG->getReturnType()) {
     Value *BCI = new BitCastInst(CI, NewG->getReturnType(), "", BB);
-    ReturnInst::Create(BCI, BB);
+    ReturnInst::Create(F->getContext(), BCI, BB);
   } else {
-    ReturnInst::Create(CI, BB);
+    ReturnInst::Create(F->getContext(), CI, BB);
   }
 
   NewG->copyAttributesFrom(G);
@@ -518,7 +522,7 @@ static void AliasGToF(Function *F, Function *G) {
 
   GlobalAlias *GA = new GlobalAlias(
     G->getType(), G->getLinkage(), "",
-    F->getContext()->getConstantExprBitCast(F, G->getType()), G->getParent());
+    ConstantExpr::getBitCast(F, G->getType()), G->getParent());
   F->setAlignment(std::max(F->getAlignment(), G->getAlignment()));
   GA->takeName(G);
   GA->setVisibility(G->getVisibility());
@@ -575,7 +579,7 @@ static bool fold(std::vector<Function *> &FnVec, unsigned i, unsigned j) {
     case Internal:
       switch (catG) {
         case ExternalStrong:
-          assert(0);
+          llvm_unreachable(0);
           // fall-through
         case ExternalWeak:
 	  if (F->hasAddressTaken())
@@ -630,19 +634,19 @@ bool MergeFunctions::runOnModule(Module &M) {
   bool LocalChanged;
   do {
     LocalChanged = false;
-    DOUT << "size: " << FnMap.size() << "\n";
+    DEBUG(errs() << "size: " << FnMap.size() << "\n");
     for (std::map<unsigned long, std::vector<Function *> >::iterator
          I = FnMap.begin(), E = FnMap.end(); I != E; ++I) {
       std::vector<Function *> &FnVec = I->second;
-      DOUT << "hash (" << I->first << "): " << FnVec.size() << "\n";
+      DEBUG(errs() << "hash (" << I->first << "): " << FnVec.size() << "\n");
 
       for (int i = 0, e = FnVec.size(); i != e; ++i) {
         for (int j = i + 1; j != e; ++j) {
           bool isEqual = equals(FnVec[i], FnVec[j]);
 
-          DOUT << "  " << FnVec[i]->getName()
-               << (isEqual ? " == " : " != ")
-               << FnVec[j]->getName() << "\n";
+          DEBUG(errs() << "  " << FnVec[i]->getName()
+                << (isEqual ? " == " : " != ")
+                << FnVec[j]->getName() << "\n");
 
           if (isEqual) {
             if (fold(FnVec, i, j)) {

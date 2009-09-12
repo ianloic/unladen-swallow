@@ -204,9 +204,10 @@ bool Emitter<CodeEmitter>::runOnMachineFunction(MachineFunction &MF) {
   JTI->Initialize(MF, IsPIC);
 
   do {
-    DOUT << "JITTing function '" << MF.getFunction()->getName() << "'\n";
+    DEBUG(errs() << "JITTing function '"
+          << MF.getFunction()->getName() << "'\n");
     MCE.startFunction(MF);
-    for (MachineFunction::iterator MBB = MF.begin(), E = MF.end(); 
+    for (MachineFunction::iterator MBB = MF.begin(), E = MF.end();
          MBB != E; ++MBB) {
       MCE.StartMachineBasicBlock(MBB);
       for (MachineBasicBlock::const_iterator I = MBB->begin(), E = MBB->end();
@@ -223,7 +224,7 @@ bool Emitter<CodeEmitter>::runOnMachineFunction(MachineFunction &MF) {
 template<class CodeEmitter>
 unsigned Emitter<CodeEmitter>::getShiftOp(unsigned Imm) const {
   switch (ARM_AM::getAM2ShiftOpc(Imm)) {
-  default: LLVM_UNREACHABLE("Unknown shift opc!");
+  default: llvm_unreachable("Unknown shift opc!");
   case ARM_AM::asr: return 2;
   case ARM_AM::lsl: return 0;
   case ARM_AM::lsr: return 1;
@@ -258,9 +259,9 @@ unsigned Emitter<CodeEmitter>::getMachineOpValue(const MachineInstr &MI,
     emitMachineBasicBlock(MO.getMBB(), ARM::reloc_arm_branch);
   else {
 #ifndef NDEBUG
-    cerr << MO;
+    errs() << MO;
 #endif
-    llvm_unreachable();
+    llvm_unreachable(0);
   }
   return 0;
 }
@@ -299,7 +300,7 @@ void Emitter<CodeEmitter>::emitConstPoolAddress(unsigned CPI,
 /// be emitted to the current location in the function, and allow it to be PC
 /// relative.
 template<class CodeEmitter>
-void Emitter<CodeEmitter>::emitJumpTableAddress(unsigned JTIndex, 
+void Emitter<CodeEmitter>::emitJumpTableAddress(unsigned JTIndex,
                                                 unsigned Reloc) {
   MCE.addRelocation(MachineRelocation::getJumpTable(MCE.getCurrentPCOffset(),
                                                     Reloc, JTIndex, 0, true));
@@ -315,32 +316,28 @@ void Emitter<CodeEmitter>::emitMachineBasicBlock(MachineBasicBlock *BB,
 
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitWordLE(unsigned Binary) {
-#ifndef NDEBUG
-  DOUT << "  0x" << std::hex << std::setw(8) << std::setfill('0')
-       << Binary << std::dec << "\n";
-#endif
+  DEBUG(errs() << "  0x";
+        errs().write_hex(Binary) << "\n");
   MCE.emitWordLE(Binary);
 }
 
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitDWordLE(uint64_t Binary) {
-#ifndef NDEBUG
-  DOUT << "  0x" << std::hex << std::setw(8) << std::setfill('0')
-       << (unsigned)Binary << std::dec << "\n";
-  DOUT << "  0x" << std::hex << std::setw(8) << std::setfill('0')
-       << (unsigned)(Binary >> 32) << std::dec << "\n";
-#endif
+  DEBUG(errs() << "  0x";
+        errs().write_hex(Binary) << "\n");
   MCE.emitDWordLE(Binary);
 }
 
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI) {
-  DOUT << "JIT: " << (void*)MCE.getCurrentPCValue() << ":\t" << MI;
+  DEBUG(errs() << "JIT: " << (void*)MCE.getCurrentPCValue() << ":\t" << MI);
+
+  MCE.processDebugLoc(MI.getDebugLoc());
 
   NumEmitted++;  // Keep track of the # of mi's emitted
   switch (MI.getDesc().TSFlags & ARMII::FormMask) {
   default: {
-    LLVM_UNREACHABLE("Unhandled instruction encoding format!");
+    llvm_unreachable("Unhandled instruction encoding format!");
     break;
   }
   case ARMII::Pseudo:
@@ -405,7 +402,7 @@ void Emitter<CodeEmitter>::emitConstPoolInstruction(const MachineInstr &MI) {
   unsigned CPI = MI.getOperand(0).getImm();       // CP instruction index.
   unsigned CPIndex = MI.getOperand(1).getIndex(); // Actual cp entry index.
   const MachineConstantPoolEntry &MCPE = (*MCPEs)[CPIndex];
-  
+
   // Remember the CONSTPOOL_ENTRY address for later relocation.
   JTI->addConstantPoolEntryAddr(CPI, MCE.getCurrentPCValue());
 
@@ -415,36 +412,29 @@ void Emitter<CodeEmitter>::emitConstPoolInstruction(const MachineInstr &MI) {
     ARMConstantPoolValue *ACPV =
       static_cast<ARMConstantPoolValue*>(MCPE.Val.MachineCPVal);
 
-    DOUT << "  ** ARM constant pool #" << CPI << " @ "
-         << (void*)MCE.getCurrentPCValue() << " " << *ACPV << '\n';
+    DEBUG(errs() << "  ** ARM constant pool #" << CPI << " @ "
+          << (void*)MCE.getCurrentPCValue() << " " << *ACPV << '\n');
 
     GlobalValue *GV = ACPV->getGV();
     if (GV) {
-      assert(!ACPV->isStub() && "Don't know how to deal this yet!");
-      if (ACPV->isNonLazyPointer())
-        MCE.addRelocation(MachineRelocation::getIndirectSymbol(
-                  MCE.getCurrentPCOffset(), ARM::reloc_arm_machine_cp_entry, GV,
-                  (intptr_t)ACPV, false));
-      else 
-        emitGlobalAddress(GV, ARM::reloc_arm_machine_cp_entry,
-                          ACPV->isStub() || isa<Function>(GV), (intptr_t)ACPV);
+      emitGlobalAddress(GV, ARM::reloc_arm_machine_cp_entry,
+                        isa<Function>(GV), (intptr_t)ACPV);
      } else  {
-      assert(!ACPV->isNonLazyPointer() && "Don't know how to deal this yet!");
       emitExternalSymbolAddress(ACPV->getSymbol(), ARM::reloc_arm_absolute);
     }
     emitWordLE(0);
   } else {
     Constant *CV = MCPE.Val.ConstVal;
 
-#ifndef NDEBUG
-    DOUT << "  ** Constant pool #" << CPI << " @ "
-         << (void*)MCE.getCurrentPCValue() << " ";
-    if (const Function *F = dyn_cast<Function>(CV))
-      DOUT << F->getName();
-    else
-      DOUT << *CV;
-    DOUT << '\n';
-#endif
+    DEBUG({
+        errs() << "  ** Constant pool #" << CPI << " @ "
+               << (void*)MCE.getCurrentPCValue() << " ";
+        if (const Function *F = dyn_cast<Function>(CV))
+          errs() << F->getName();
+        else
+          errs() << *CV;
+        errs() << '\n';
+      });
 
     if (GlobalValue *GV = dyn_cast<GlobalValue>(CV)) {
       emitGlobalAddress(GV, ARM::reloc_arm_absolute, isa<Function>(GV));
@@ -453,15 +443,15 @@ void Emitter<CodeEmitter>::emitConstPoolInstruction(const MachineInstr &MI) {
       uint32_t Val = *(uint32_t*)CI->getValue().getRawData();
       emitWordLE(Val);
     } else if (const ConstantFP *CFP = dyn_cast<ConstantFP>(CV)) {
-      if (CFP->getType() == Type::FloatTy)
+      if (CFP->getType() == Type::getFloatTy(CFP->getContext()))
         emitWordLE(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
-      else if (CFP->getType() == Type::DoubleTy)
+      else if (CFP->getType() == Type::getDoubleTy(CFP->getContext()))
         emitDWordLE(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
       else {
-        LLVM_UNREACHABLE("Unable to handle this constantpool entry!");
+        llvm_unreachable("Unable to handle this constantpool entry!");
       }
     } else {
-      LLVM_UNREACHABLE("Unable to handle this constantpool entry!");
+      llvm_unreachable("Unable to handle this constantpool entry!");
     }
   }
 }
@@ -512,7 +502,7 @@ void Emitter<CodeEmitter>::emitMOVi2piecesInstruction(const MachineInstr &MI) {
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitLEApcrelJTInstruction(const MachineInstr &MI) {
   // It's basically add r, pc, (LJTI - $+8)
-  
+
   const TargetInstrDesc &TID = MI.getDesc();
 
   // Emit the 'add' instruction.
@@ -579,8 +569,8 @@ void Emitter<CodeEmitter>::emitPseudoMoveInstruction(const MachineInstr &MI) {
 
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::addPCLabel(unsigned LabelID) {
-  DOUT << "  ** LPC" << LabelID << " @ "
-       << (void*)MCE.getCurrentPCValue() << '\n';
+  DEBUG(errs() << "  ** LPC" << LabelID << " @ "
+        << (void*)MCE.getCurrentPCValue() << '\n');
   JTI->addPCLabelAddr(LabelID, MCE.getCurrentPCValue());
 }
 
@@ -589,12 +579,12 @@ void Emitter<CodeEmitter>::emitPseudoInstruction(const MachineInstr &MI) {
   unsigned Opcode = MI.getDesc().Opcode;
   switch (Opcode) {
   default:
-    LLVM_UNREACHABLE("ARMCodeEmitter::emitPseudoInstruction");//FIXME:
+    llvm_unreachable("ARMCodeEmitter::emitPseudoInstruction");//FIXME:
   case TargetInstrInfo::INLINEASM: {
     // We allow inline assembler nodes with empty bodies - they can
     // implicitly define registers, which is ok for JIT.
     if (MI.getOperand(0).getSymbolName()[0]) {
-      llvm_report_error("JIT does not support inline asm!\n");
+      llvm_report_error("JIT does not support inline asm!");
     }
     break;
   }
@@ -603,7 +593,6 @@ void Emitter<CodeEmitter>::emitPseudoInstruction(const MachineInstr &MI) {
     MCE.emitLabel(MI.getOperand(0).getImm());
     break;
   case TargetInstrInfo::IMPLICIT_DEF:
-  case TargetInstrInfo::DECLARE:
   case ARM::DWARF_LOC:
     // Do nothing.
     break;
@@ -676,7 +665,7 @@ unsigned Emitter<CodeEmitter>::getMachineSoRegOpValue(
     // ROR - 0111
     // RRX - 0110 and bit[11:8] clear.
     switch (SOpc) {
-    default: LLVM_UNREACHABLE("Unknown shift opc!");
+    default: llvm_unreachable("Unknown shift opc!");
     case ARM_AM::lsl: SBits = 0x1; break;
     case ARM_AM::lsr: SBits = 0x3; break;
     case ARM_AM::asr: SBits = 0x5; break;
@@ -690,7 +679,7 @@ unsigned Emitter<CodeEmitter>::getMachineSoRegOpValue(
     // ASR - 100
     // ROR - 110
     switch (SOpc) {
-    default: LLVM_UNREACHABLE("Unknown shift opc!");
+    default: llvm_unreachable("Unknown shift opc!");
     case ARM_AM::lsl: SBits = 0x0; break;
     case ARM_AM::lsr: SBits = 0x2; break;
     case ARM_AM::asr: SBits = 0x4; break;
@@ -746,7 +735,7 @@ void Emitter<CodeEmitter>::emitDataProcessingInstruction(
   const TargetInstrDesc &TID = MI.getDesc();
 
   if (TID.Opcode == ARM::BFC) {
-    llvm_report_error("ERROR: ARMv6t2 JIT is not yet supported.");
+    llvm_report_error("ARMv6t2 JIT is not yet supported.");
   }
 
   // Part of binary is determined by TableGn.
@@ -959,7 +948,7 @@ static unsigned getAddrModeUPBits(unsigned Mode) {
   // DA - Decrement after  - bit U = 0 and bit P = 0
   // DB - Decrement before - bit U = 0 and bit P = 1
   switch (Mode) {
-  default: LLVM_UNREACHABLE("Unknown addressing sub-mode!");
+  default: llvm_unreachable("Unknown addressing sub-mode!");
   case ARM_AM::da:                      break;
   case ARM_AM::db: Binary |= 0x1 << ARMII::P_BitShift; break;
   case ARM_AM::ia: Binary |= 0x1 << ARMII::U_BitShift; break;
@@ -1114,7 +1103,7 @@ void Emitter<CodeEmitter>::emitMiscArithInstruction(const MachineInstr &MI) {
   unsigned ShiftAmt = MI.getOperand(OpIdx).getImm();
   assert(ShiftAmt < 32 && "shift_imm range is 0 to 31!");
   Binary |= ShiftAmt << ARMII::ShiftShift;
-  
+
   emitWordLE(Binary);
 }
 
@@ -1123,7 +1112,7 @@ void Emitter<CodeEmitter>::emitBranchInstruction(const MachineInstr &MI) {
   const TargetInstrDesc &TID = MI.getDesc();
 
   if (TID.Opcode == ARM::TPsoft) {
-    LLVM_UNREACHABLE("ARM::TPsoft FIXME"); // FIXME
+    llvm_unreachable("ARM::TPsoft FIXME"); // FIXME
   }
 
   // Part of binary is determined by TableGn.
@@ -1143,7 +1132,8 @@ void Emitter<CodeEmitter>::emitInlineJumpTable(unsigned JTIndex) {
   // Remember the base address of the inline jump table.
   uintptr_t JTBase = MCE.getCurrentPCValue();
   JTI->addJumpTableBaseAddr(JTIndex, JTBase);
-  DOUT << "  ** Jump Table #" << JTIndex << " @ " << (void*)JTBase << '\n';
+  DEBUG(errs() << "  ** Jump Table #" << JTIndex << " @ " << (void*)JTBase
+               << '\n');
 
   // Now emit the jump table entries.
   const std::vector<MachineBasicBlock*> &MBBs = (*MJTEs)[JTIndex].MBBs;
@@ -1163,18 +1153,17 @@ void Emitter<CodeEmitter>::emitMiscBranchInstruction(const MachineInstr &MI) {
   const TargetInstrDesc &TID = MI.getDesc();
 
   // Handle jump tables.
-  if (TID.Opcode == ARM::BR_JTr || TID.Opcode == ARM::BR_JTadd ||
-      TID.Opcode == ARM::t2BR_JTr || TID.Opcode == ARM::t2BR_JTadd) {
+  if (TID.Opcode == ARM::BR_JTr || TID.Opcode == ARM::BR_JTadd) {
     // First emit a ldr pc, [] instruction.
     emitDataProcessingInstruction(MI, ARM::PC);
 
     // Then emit the inline jump table.
     unsigned JTIndex =
-      (TID.Opcode == ARM::BR_JTr || TID.Opcode == ARM::t2BR_JTr)
+      (TID.Opcode == ARM::BR_JTr)
       ? MI.getOperand(1).getIndex() : MI.getOperand(2).getIndex();
     emitInlineJumpTable(JTIndex);
     return;
-  } else if (TID.Opcode == ARM::BR_JTm || TID.Opcode == ARM::t2BR_JTm) {
+  } else if (TID.Opcode == ARM::BR_JTm) {
     // First emit a ldr pc, [] instruction.
     emitLoadStoreInstruction(MI, ARM::PC);
 
@@ -1192,7 +1181,7 @@ void Emitter<CodeEmitter>::emitMiscBranchInstruction(const MachineInstr &MI) {
   if (TID.Opcode == ARM::BX_RET)
     // The return register is LR.
     Binary |= ARMRegisterInfo::getRegisterNumbering(ARM::LR);
-  else 
+  else
     // otherwise, set the return register
     Binary |= getMachineOpValue(MI, 0);
 
@@ -1203,7 +1192,7 @@ static unsigned encodeVFPRd(const MachineInstr &MI, unsigned OpIdx) {
   unsigned RegD = MI.getOperand(OpIdx).getReg();
   unsigned Binary = 0;
   bool isSPVFP = false;
-  RegD = ARMRegisterInfo::getRegisterNumbering(RegD, isSPVFP);
+  RegD = ARMRegisterInfo::getRegisterNumbering(RegD, &isSPVFP);
   if (!isSPVFP)
     Binary |=   RegD               << ARMII::RegRdShift;
   else {
@@ -1217,7 +1206,7 @@ static unsigned encodeVFPRn(const MachineInstr &MI, unsigned OpIdx) {
   unsigned RegN = MI.getOperand(OpIdx).getReg();
   unsigned Binary = 0;
   bool isSPVFP = false;
-  RegN = ARMRegisterInfo::getRegisterNumbering(RegN, isSPVFP);
+  RegN = ARMRegisterInfo::getRegisterNumbering(RegN, &isSPVFP);
   if (!isSPVFP)
     Binary |=   RegN               << ARMII::RegRnShift;
   else {
@@ -1231,7 +1220,7 @@ static unsigned encodeVFPRm(const MachineInstr &MI, unsigned OpIdx) {
   unsigned RegM = MI.getOperand(OpIdx).getReg();
   unsigned Binary = 0;
   bool isSPVFP = false;
-  RegM = ARMRegisterInfo::getRegisterNumbering(RegM, isSPVFP);
+  RegM = ARMRegisterInfo::getRegisterNumbering(RegM, &isSPVFP);
   if (!isSPVFP)
     Binary |=   RegM;
   else {
@@ -1277,7 +1266,7 @@ void Emitter<CodeEmitter>::emitVFPArithInstruction(const MachineInstr &MI) {
 
   // Encode Dm / Sm.
   Binary |= encodeVFPRm(MI, OpIdx);
-  
+
   emitWordLE(Binary);
 }
 
@@ -1422,4 +1411,3 @@ void Emitter<CodeEmitter>::emitMiscInstruction(const MachineInstr &MI) {
 }
 
 #include "ARMGenCodeEmitter.inc"
-

@@ -159,7 +159,7 @@ we'll do numeric literals:</p>
 <div class="doc_code">
 <pre>
 Value *NumberExprAST::Codegen() {
-  return ConstantFP::get(APFloat(Val));
+  return ConstantFP::get(getGlobalContext(), APFloat(Val));
 }
 </pre>
 </div>
@@ -170,7 +170,7 @@ internally (<tt>APFloat</tt> has the capability of holding floating point
 constants of <em>A</em>rbitrary <em>P</em>recision).  This code basically just
 creates and returns a <tt>ConstantFP</tt>.  Note that in the LLVM IR
 that constants are all uniqued together and shared.  For this reason, the API
-uses "the foo::get(..)" idiom instead of "new foo(..)" or "foo::Create(..)".</p>
+uses "the Context.get..." idiom instead of "new foo(..)" or "foo::Create(..)".</p>
 
 <div class="doc_code">
 <pre>
@@ -206,7 +206,7 @@ Value *BinaryExprAST::Codegen() {
   case '&lt;':
     L = Builder.CreateFCmpULT(L, R, "cmptmp");
     // Convert bool 0/1 to double 0.0 or 1.0
-    return Builder.CreateUIToFP(L, Type::DoubleTy, "booltmp");
+    return Builder.CreateUIToFP(L, Type::getDoubleTy(getGlobalContext()), "booltmp");
   default: return ErrorV("invalid binary operator");
   }
 }
@@ -307,8 +307,8 @@ bodies and external function declarations.  The code starts with:</p>
 <pre>
 Function *PrototypeAST::Codegen() {
   // Make the function type:  double(double,double) etc.
-  std::vector&lt;const Type*&gt; Doubles(Args.size(), Type::DoubleTy);
-  FunctionType *FT = FunctionType::get(Type::DoubleTy, Doubles, false);
+  std::vector&lt;const Type*&gt; Doubles(Args.size(), Type::getDoubleTy(getGlobalContext()));
+  FunctionType *FT = FunctionType::get(Type::getDoubleTy(getGlobalContext()), Doubles, false);
   
   Function *F = Function::Create(FT, Function::ExternalLinkage, Name, TheModule);
 </pre>
@@ -320,10 +320,10 @@ really talks about the external interface for a function (not the value computed
 by an expression), it makes sense for it to return the LLVM Function it
 corresponds to when codegen'd.</p>
 
-<p>The call to <tt>FunctionType::get</tt> creates
+<p>The call to <tt>Context.get</tt> creates
 the <tt>FunctionType</tt> that should be used for a given Prototype.  Since all
 function arguments in Kaleidoscope are of type double, the first line creates
-a vector of "N" LLVM double types.  It then uses the <tt>FunctionType::get</tt>
+a vector of "N" LLVM double types.  It then uses the <tt>Context.get</tt>
 method to create a function type that takes "N" doubles as arguments, returns
 one double as a result, and that is not vararg (the false parameter indicates
 this).  Note that Types in LLVM are uniqued just like Constants are, so you
@@ -439,7 +439,7 @@ is an LLVM Function object that is ready to go for us.</p>
 <div class="doc_code">
 <pre>
   // Create a new basic block to start insertion into.
-  BasicBlock *BB = BasicBlock::Create("entry", TheFunction);
+  BasicBlock *BB = BasicBlock::Create(getGlobalContext(), "entry", TheFunction);
   Builder.SetInsertPoint(BB);
   
   if (Value *RetVal = Body-&gt;Codegen()) {
@@ -1028,13 +1028,13 @@ static PrototypeAST *ParseExtern() {
 //===----------------------------------------------------------------------===//
 
 static Module *TheModule;
-static IRBuilder&lt;&gt; Builder;
+static IRBuilder&lt;&gt; Builder(getGlobalContext());
 static std::map&lt;std::string, Value*&gt; NamedValues;
 
 Value *ErrorV(const char *Str) { Error(Str); return 0; }
 
 Value *NumberExprAST::Codegen() {
-  return ConstantFP::get(APFloat(Val));
+  return ConstantFP::get(getGlobalContext(), APFloat(Val));
 }
 
 Value *VariableExprAST::Codegen() {
@@ -1055,7 +1055,7 @@ Value *BinaryExprAST::Codegen() {
   case '&lt;':
     L = Builder.CreateFCmpULT(L, R, "cmptmp");
     // Convert bool 0/1 to double 0.0 or 1.0
-    return Builder.CreateUIToFP(L, Type::DoubleTy, "booltmp");
+    return Builder.CreateUIToFP(L, Type::getDoubleTy(getGlobalContext()), "booltmp");
   default: return ErrorV("invalid binary operator");
   }
 }
@@ -1081,8 +1081,8 @@ Value *CallExprAST::Codegen() {
 
 Function *PrototypeAST::Codegen() {
   // Make the function type:  double(double,double) etc.
-  std::vector&lt;const Type*&gt; Doubles(Args.size(), Type::DoubleTy);
-  FunctionType *FT = FunctionType::get(Type::DoubleTy, Doubles, false);
+  std::vector&lt;const Type*&gt; Doubles(Args.size(), Type::getDoubleTy(getGlobalContext()));
+  FunctionType *FT = FunctionType::get(Type::getDoubleTy(getGlobalContext()), Doubles, false);
   
   Function *F = Function::Create(FT, Function::ExternalLinkage, Name, TheModule);
   
@@ -1127,7 +1127,7 @@ Function *FunctionAST::Codegen() {
     return 0;
   
   // Create a new basic block to start insertion into.
-  BasicBlock *BB = BasicBlock::Create("entry", TheFunction);
+  BasicBlock *BB = BasicBlock::Create(getGlobalContext(), "entry", TheFunction);
   Builder.SetInsertPoint(BB);
   
   if (Value *RetVal = Body-&gt;Codegen()) {
@@ -1249,7 +1249,7 @@ int main() {
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2007-10-17 11:05:13 -0700 (Wed, 17 Oct 2007) $
+  Last modified: $Date: 2009-07-21 11:05:13 -0700 (Tue, 21 Jul 2009) $
 </address>
 </body>
 </html>

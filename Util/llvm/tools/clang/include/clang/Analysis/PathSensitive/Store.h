@@ -37,20 +37,12 @@ class StoreManager {
 protected:
   ValueManager &ValMgr;
   GRStateManager &StateMgr;
-  const bool UseNewCastRegion;
 
   /// MRMgr - Manages region objects associated with this StoreManager.
   MemRegionManager &MRMgr;
 
-  StoreManager(GRStateManager &stateMgr, bool useNewCastRegion = false);
+  StoreManager(GRStateManager &stateMgr);
 
-protected:
-  virtual const GRState *AddRegionView(const GRState *state,
-                                        const MemRegion *view,
-                                        const MemRegion *base) {
-    return state;
-  }
-  
 public:  
   virtual ~StoreManager() {}
   
@@ -61,8 +53,8 @@ public:
   ///   expected type of the returned value.  This is used if the value is
   ///   lazily computed.
   /// \return The value bound to the location \c loc.
-  virtual SVal Retrieve(const GRState *state, Loc loc,
-                        QualType T = QualType()) = 0;
+  virtual SValuator::CastResult Retrieve(const GRState *state, Loc loc,
+                                         QualType T = QualType()) = 0;
 
   /// Return a state with the specified value bound to the given location.
   /// \param[in] state The analysis state.
@@ -85,7 +77,7 @@ public:
   
   /// getInitialStore - Returns the initial "empty" store representing the
   ///  value bindings upon entry to an analyzed function.
-  virtual Store getInitialStore() = 0;
+  virtual Store getInitialStore(const LocationContext *InitLoc) = 0;
   
   /// getRegionManager - Returns the internal RegionManager object that is
   ///  used to query and manipulate MemRegion objects.
@@ -96,7 +88,8 @@ public:
   //   caller's responsibility to 'delete' the returned map.
   virtual SubRegionMap *getSubRegionMap(const GRState *state) = 0;
 
-  virtual SVal getLValueVar(const GRState *state, const VarDecl *vd) = 0;
+  virtual SVal getLValueVar(const GRState *ST, const VarDecl *VD,
+                            const LocationContext *LC) = 0;
 
   virtual SVal getLValueString(const GRState *state,
                                const StringLiteral* sl) = 0;
@@ -135,15 +128,7 @@ public:
   ///  a MemRegion* to a specific location type.  'R' is the region being
   ///  casted and 'CastToTy' the result type of the cast.
   CastResult CastRegion(const GRState *state, const MemRegion *region,
-                                QualType CastToTy) {
-    return UseNewCastRegion ? NewCastRegion(state, region, CastToTy)
-                            : OldCastRegion(state, region, CastToTy);
-  }
-  
-  virtual const GRState *setCastType(const GRState *state, const MemRegion* R,
-                                     QualType T) {
-    return state;
-  }
+                        QualType CastToTy);  
 
   /// EvalBinOp - Perform pointer arithmetic.
   virtual SVal EvalBinOp(const GRState *state, BinaryOperator::Opcode Op,
@@ -151,23 +136,21 @@ public:
     return UnknownVal();
   }
   
-  /// getSelfRegion - Returns the region for the 'self' (Objective-C) or
-  ///  'this' object (C++).  When used when analyzing a normal function this
-  ///  method returns NULL.
-  virtual const MemRegion* getSelfRegion(Store store) = 0;
-
-  virtual Store RemoveDeadBindings(const GRState *state,
-                                   Stmt* Loc, SymbolReaper& SymReaper,
+  virtual void RemoveDeadBindings(GRState &state, Stmt* Loc,
+                                  SymbolReaper& SymReaper,
                       llvm::SmallVectorImpl<const MemRegion*>& RegionRoots) = 0;
 
-  virtual const GRState *BindDecl(const GRState *state, const VarDecl *vd, 
-                                   SVal initVal) = 0;
+  virtual const GRState *BindDecl(const GRState *ST, const VarDecl *VD,
+                                  const LocationContext *LC, SVal initVal) = 0;
 
-  virtual const GRState *BindDeclWithNoInit(const GRState *state,
-                                             const VarDecl *vd) = 0;
+  virtual const GRState *BindDeclWithNoInit(const GRState *ST,
+                                            const VarDecl *VD,
+                                            const LocationContext *LC) = 0;
 
-  const GRState *InvalidateRegion(const GRState *state, const MemRegion *R,
-                                  const Expr *E, unsigned Count);
+  virtual const GRState *InvalidateRegion(const GRState *state,
+                                          const MemRegion *R,
+                                          const Expr *E, unsigned Count) = 0;
+
   // FIXME: Make out-of-line.
   virtual const GRState *setExtent(const GRState *state,
                                     const MemRegion *region, SVal extent) {
@@ -194,15 +177,16 @@ public:
   /// iterBindings - Iterate over the bindings in the Store.
   virtual void iterBindings(Store store, BindingsHandler& f) = 0;
 
-private:
+protected:
   CastResult MakeElementRegion(const GRState *state, const MemRegion *region,
-                               QualType pointeeTy, QualType castToTy);
+                               QualType pointeeTy, QualType castToTy,
+                               uint64_t index = 0);
   
-  CastResult NewCastRegion(const GRState *state, const MemRegion *region,
-                           QualType CastToTy);
-  
-  CastResult OldCastRegion(const GRState *state, const MemRegion *region,
-                           QualType CastToTy);  
+  /// CastRetrievedVal - Used by subclasses of StoreManager to implement
+  ///  implicit casts that arise from loads from regions that are reinterpreted
+  ///  as another region.
+  SValuator::CastResult CastRetrievedVal(SVal val, const GRState *state,
+                                         const TypedRegion *R, QualType castTy);    
 };
 
 // FIXME: Do we still need this?
@@ -223,7 +207,6 @@ public:
 
 // FIXME: Do we need to pass GRStateManager anymore?
 StoreManager *CreateBasicStoreManager(GRStateManager& StMgr);
-StoreManager *CreateBasicStoreNewCastManager(GRStateManager& StMgr);
 StoreManager *CreateRegionStoreManager(GRStateManager& StMgr);
 StoreManager *CreateFieldsOnlyRegionStoreManager(GRStateManager& StMgr);
 

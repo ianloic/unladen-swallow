@@ -14,12 +14,12 @@
 #ifndef ARMBASEINSTRUCTIONINFO_H
 #define ARMBASEINSTRUCTIONINFO_H
 
-#include "llvm/Target/TargetInstrInfo.h"
-#include "ARMRegisterInfo.h"
 #include "ARM.h"
+#include "ARMRegisterInfo.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Target/TargetInstrInfo.h"
 
 namespace llvm {
-  class ARMSubtarget;
 
 /// ARMII - This namespace holds all of the target specific flags that
 /// instruction info tracks.
@@ -154,50 +154,16 @@ namespace ARMII {
     I_BitShift     = 25,
     CondShift      = 28
   };
-
-  /// ARMII::Op - Holds all of the instruction types required by
-  /// target specific instruction and register code.  ARMBaseInstrInfo
-  /// and subclasses should return a specific opcode that implements
-  /// the instruction type.
-  ///
-  enum Op {
-    ADDri,
-    ADDrs,
-    ADDrr,
-    B,
-    Bcc,
-    BR_JTr,
-    BR_JTm,
-    BR_JTadd,
-    BX_RET,
-    FCPYS,
-    FCPYD,
-    FLDD,
-    FLDS,
-    FSTD,
-    FSTS,
-    LDR,
-    MOVr,
-    STR,
-    SUBri,
-    SUBrs,
-    SUBrr,
-    VMOVD,
-    VMOVQ
-  };
 }
 
 class ARMBaseInstrInfo : public TargetInstrInfoImpl {
 protected:
   // Can be only subclassed.
-  explicit ARMBaseInstrInfo(const ARMSubtarget &STI);
+  explicit ARMBaseInstrInfo();
 public:
   // Return the non-pre/post incrementing version of 'Opc'. Return 0
   // if there is not such an opcode.
   virtual unsigned getUnindexedOpcode(unsigned Opc) const =0;
-
-  // Return the opcode that implements 'Op', or 0 if no opcode
-  virtual unsigned getOpcode(ARMII::Op Op) const =0;
 
   // Return true if the block does not fall through.
   virtual bool BlockHasNoFallThrough(const MachineBasicBlock &MBB) const =0;
@@ -222,7 +188,10 @@ public:
   bool ReverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const;
 
   // Predication support.
-  virtual bool isPredicated(const MachineInstr *MI) const;
+  bool isPredicated(const MachineInstr *MI) const {
+    int PIdx = MI->findFirstPredOperandIdx();
+    return PIdx != -1 && MI->getOperand(PIdx).getImm() != ARMCC::AL;
+  }
 
   ARMCC::CondCodes getPredicate(const MachineInstr *MI) const {
     int PIdx = MI->findFirstPredOperandIdx();
@@ -261,29 +230,20 @@ public:
                             unsigned DestReg, unsigned SrcReg,
                             const TargetRegisterClass *DestRC,
                             const TargetRegisterClass *SrcRC) const;
+
   virtual void storeRegToStackSlot(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator MBBI,
                                    unsigned SrcReg, bool isKill, int FrameIndex,
                                    const TargetRegisterClass *RC) const;
-
-  virtual void storeRegToAddr(MachineFunction &MF, unsigned SrcReg, bool isKill,
-                              SmallVectorImpl<MachineOperand> &Addr,
-                              const TargetRegisterClass *RC,
-                              SmallVectorImpl<MachineInstr*> &NewMIs) const;
 
   virtual void loadRegFromStackSlot(MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MBBI,
                                     unsigned DestReg, int FrameIndex,
                                     const TargetRegisterClass *RC) const;
 
-  virtual void loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
-                               SmallVectorImpl<MachineOperand> &Addr,
-                               const TargetRegisterClass *RC,
-                               SmallVectorImpl<MachineInstr*> &NewMIs) const;
-
   virtual bool canFoldMemoryOperand(const MachineInstr *MI,
                                     const SmallVectorImpl<unsigned> &Ops) const;
-  
+
   virtual MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
                                               MachineInstr* MI,
                                               const SmallVectorImpl<unsigned> &Ops,
@@ -293,7 +253,81 @@ public:
                                               MachineInstr* MI,
                                               const SmallVectorImpl<unsigned> &Ops,
                                               MachineInstr* LoadMI) const;
+
 };
+
+static inline
+const MachineInstrBuilder &AddDefaultPred(const MachineInstrBuilder &MIB) {
+  return MIB.addImm((int64_t)ARMCC::AL).addReg(0);
 }
+
+static inline
+const MachineInstrBuilder &AddDefaultCC(const MachineInstrBuilder &MIB) {
+  return MIB.addReg(0);
+}
+
+static inline
+const MachineInstrBuilder &AddDefaultT1CC(const MachineInstrBuilder &MIB,
+                                          bool isDead = false) {
+  return MIB.addReg(ARM::CPSR, getDefRegState(true) | getDeadRegState(isDead));
+}
+
+static inline
+const MachineInstrBuilder &AddNoT1CC(const MachineInstrBuilder &MIB) {
+  return MIB.addReg(0);
+}
+
+static inline
+bool isUncondBranchOpcode(int Opc) {
+  return Opc == ARM::B || Opc == ARM::tB || Opc == ARM::t2B;
+}
+
+static inline
+bool isCondBranchOpcode(int Opc) {
+  return Opc == ARM::Bcc || Opc == ARM::tBcc || Opc == ARM::t2Bcc;
+}
+
+static inline
+bool isJumpTableBranchOpcode(int Opc) {
+  return Opc == ARM::BR_JTr || Opc == ARM::BR_JTm || Opc == ARM::BR_JTadd ||
+    Opc == ARM::tBR_JTr || Opc == ARM::t2BR_JT;
+}
+
+/// getInstrPredicate - If instruction is predicated, returns its predicate
+/// condition, otherwise returns AL. It also returns the condition code
+/// register by reference.
+ARMCC::CondCodes getInstrPredicate(MachineInstr *MI, unsigned &PredReg);
+
+int getMatchingCondBranchOpcode(int Opc);
+
+/// emitARMRegPlusImmediate / emitT2RegPlusImmediate - Emits a series of
+/// instructions to materializea destreg = basereg + immediate in ARM / Thumb2
+/// code.
+void emitARMRegPlusImmediate(MachineBasicBlock &MBB,
+                             MachineBasicBlock::iterator &MBBI, DebugLoc dl,
+                             unsigned DestReg, unsigned BaseReg, int NumBytes,
+                             ARMCC::CondCodes Pred, unsigned PredReg,
+                             const ARMBaseInstrInfo &TII);
+
+void emitT2RegPlusImmediate(MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator &MBBI, DebugLoc dl,
+                            unsigned DestReg, unsigned BaseReg, int NumBytes,
+                            ARMCC::CondCodes Pred, unsigned PredReg,
+                            const ARMBaseInstrInfo &TII);
+
+
+/// rewriteARMFrameIndex / rewriteT2FrameIndex -
+/// Rewrite MI to access 'Offset' bytes from the FP. Return false if the
+/// offset could not be handled directly in MI, and return the left-over
+/// portion by reference.
+bool rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
+                          unsigned FrameReg, int &Offset,
+                          const ARMBaseInstrInfo &TII);
+
+bool rewriteT2FrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
+                         unsigned FrameReg, int &Offset,
+                         const ARMBaseInstrInfo &TII);
+
+} // End llvm namespace
 
 #endif

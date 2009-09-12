@@ -120,7 +120,8 @@ public:
   ComplexPairTy VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
     return EmitLoadOfLValue(E);
   }
-  ComplexPairTy VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
+  ComplexPairTy VisitObjCImplicitSetterGetterRefExpr(
+                               ObjCImplicitSetterGetterRefExpr *E) {
     return EmitLoadOfLValue(E);
   }
   ComplexPairTy VisitObjCMessageExpr(ObjCMessageExpr *E) {
@@ -181,13 +182,15 @@ public:
   ComplexPairTy VisitCXXZeroInitValueExpr(CXXZeroInitValueExpr *E) {
     assert(E->getType()->isAnyComplexType() && "Expected complex type!");
     QualType Elem = E->getType()->getAsComplexType()->getElementType();
-    llvm::Constant *Null = llvm::Constant::getNullValue(CGF.ConvertType(Elem));
+    llvm::Constant *Null = 
+                       llvm::Constant::getNullValue(CGF.ConvertType(Elem));
     return ComplexPairTy(Null, Null);
   }
   ComplexPairTy VisitImplicitValueInitExpr(ImplicitValueInitExpr *E) {
     assert(E->getType()->isAnyComplexType() && "Expected complex type!");
     QualType Elem = E->getType()->getAsComplexType()->getElementType();
-    llvm::Constant *Null = llvm::Constant::getNullValue(CGF.ConvertType(Elem));
+    llvm::Constant *Null = 
+                       llvm::Constant::getNullValue(CGF.ConvertType(Elem));
     return ComplexPairTy(Null, Null);
   }
   
@@ -259,27 +262,34 @@ public:
 /// load the real and imaginary pieces, returning them as Real/Imag.
 ComplexPairTy ComplexExprEmitter::EmitLoadOfComplex(llvm::Value *SrcPtr,
                                                     bool isVolatile) {
-  llvm::SmallString<64> Name(SrcPtr->getNameStart(),
-                             SrcPtr->getNameStart()+SrcPtr->getNameLen());
+  llvm::SmallString<64> Name(SrcPtr->getName().begin(),
+                             SrcPtr->getName().end());
   
   llvm::Value *Real=0, *Imag=0;
 
   if (!IgnoreReal) {
+    // FIXME: Clean this up once builder takes Twine/StringRef.
     Name += ".realp";
-    llvm::Value *RealPtr = Builder.CreateStructGEP(SrcPtr, 0, Name.c_str());
+    llvm::Value *RealPtr = Builder.CreateStructGEP(SrcPtr, 0,
+                                                   Name.str().str().c_str());
 
     Name.pop_back();  // .realp -> .real
-    Real = Builder.CreateLoad(RealPtr, isVolatile, Name.c_str());
+    // FIXME: Clean this up once builder takes Twine/StringRef.
+    Real = Builder.CreateLoad(RealPtr, isVolatile,
+                              Name.str().str().c_str());
     Name.resize(Name.size()-4); // .real -> .imagp
   }
   
   if (!IgnoreImag) {
     Name += "imagp";
   
-    llvm::Value *ImagPtr = Builder.CreateStructGEP(SrcPtr, 1, Name.c_str());
+    // FIXME: Clean this up once builder takes Twine/StringRef.
+    llvm::Value *ImagPtr = Builder.CreateStructGEP(SrcPtr, 1,
+                                                   Name.str().str().c_str());
 
     Name.pop_back();  // .imagp -> .imag
-    Imag = Builder.CreateLoad(ImagPtr, isVolatile, Name.c_str());
+    // FIXME: Clean this up once builder takes Twine/StringRef.
+    Imag = Builder.CreateLoad(ImagPtr, isVolatile, Name.str().str().c_str());
   }
   return ComplexPairTy(Real, Imag);
 }
@@ -312,7 +322,8 @@ ComplexPairTy ComplexExprEmitter::VisitExpr(Expr *E) {
 ComplexPairTy ComplexExprEmitter::
 VisitImaginaryLiteral(const ImaginaryLiteral *IL) {
   llvm::Value *Imag = CGF.EmitScalarExpr(IL->getSubExpr());
-  return ComplexPairTy(llvm::Constant::getNullValue(Imag->getType()), Imag);
+  return
+        ComplexPairTy(llvm::Constant::getNullValue(Imag->getType()), Imag);
 }
 
 
@@ -375,13 +386,12 @@ ComplexPairTy ComplexExprEmitter::VisitPrePostIncDec(const UnaryOperator *E,
     
     // Add the inc/dec to the real part.
     NextVal = Builder.CreateAdd(InVal.first, NextVal, isInc ? "inc" : "dec");
-    
   } else {
     QualType ElemTy = E->getType()->getAsComplexType()->getElementType();
     llvm::APFloat FVal(CGF.getContext().getFloatTypeSemantics(ElemTy), 1);
     if (!isInc)
       FVal.changeSign();
-    NextVal = llvm::ConstantFP::get(FVal);
+    NextVal = llvm::ConstantFP::get(CGF.getLLVMContext(), FVal);
     
     // Add the inc/dec to the real part.
     NextVal = Builder.CreateFAdd(InVal.first, NextVal, isInc ? "inc" : "dec");

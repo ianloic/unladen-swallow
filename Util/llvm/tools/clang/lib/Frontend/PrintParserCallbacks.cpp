@@ -109,7 +109,7 @@ namespace {
     /// This allows ActOnDeclarator to register "xx" prior to parsing the
     /// initializer. The declaration above should still result in a warning, 
     /// since the reference to "xx" is uninitialized.
-    virtual void AddInitializerToDecl(DeclPtrTy Dcl, FullExprArg Init) {
+    virtual void AddInitializerToDecl(DeclPtrTy Dcl, ExprArg Init) {
       Out << __FUNCTION__ << "\n";
     }
 
@@ -193,10 +193,11 @@ namespace {
       return TypeResult();
     }
   
-    virtual DeclPtrTy ActOnTag(Scope *S, unsigned TagType, TagKind TK,
+    virtual DeclPtrTy ActOnTag(Scope *S, unsigned TagType, TagUseKind TUK,
                                SourceLocation KWLoc, const CXXScopeSpec &SS,
                                IdentifierInfo *Name, SourceLocation NameLoc,
                                AttributeList *Attr, AccessSpecifier AS,
+                               MultiTemplateParamsArg TemplateParamLists,
                                bool &Owned) {
       // TagType is an instance of DeclSpec::TST, indicating what kind of tag this
       // is (struct/union/enum/class).
@@ -244,7 +245,8 @@ namespace {
 
     virtual void ActOnEnumBody(SourceLocation EnumLoc, SourceLocation LBraceLoc,
                                SourceLocation RBraceLoc, DeclPtrTy EnumDecl,
-                               DeclPtrTy *Elements, unsigned NumElements) {
+                               DeclPtrTy *Elements, unsigned NumElements,
+                               Scope *S, AttributeList *AttrList) {
       Out << __FUNCTION__ << "\n";
     }
 
@@ -372,7 +374,7 @@ namespace {
       return StmtEmpty();
     }
     virtual OwningStmtResult ActOnReturnStmt(SourceLocation ReturnLoc,
-                                             FullExprArg RetValExp) {
+                                             ExprArg RetValExp) {
       Out << __FUNCTION__ << "\n";
       return StmtEmpty();
     }
@@ -531,7 +533,8 @@ namespace {
                                                       tok::TokenKind OpKind,
                                                       SourceLocation MemberLoc,
                                                       IdentifierInfo &Member,
-                                                      DeclPtrTy ImplDecl) {
+                                                      DeclPtrTy ImplDecl,
+                                                      const CXXScopeSpec *SS=0) {
       Out << __FUNCTION__ << "\n";
       return ExprEmpty();
     }
@@ -571,8 +574,9 @@ namespace {
       Out << __FUNCTION__ << "\n";
       return ExprEmpty();
     }
-    virtual OwningExprResult ActOnCastExpr(SourceLocation LParenLoc, TypeTy *Ty,
-                                           SourceLocation RParenLoc,ExprArg Op){
+    virtual OwningExprResult ActOnCastExpr(Scope *S, SourceLocation LParenLoc, 
+                                           TypeTy *Ty, SourceLocation RParenLoc,
+                                           ExprArg Op) {
       Out << __FUNCTION__ << "\n";
       return ExprEmpty();
     }

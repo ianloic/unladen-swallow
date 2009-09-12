@@ -78,14 +78,14 @@ def D14 : ARMReg<14, "d14", [S28, S29]>;
 def D15 : ARMReg<15, "d15", [S30, S31]>;
 
 // VFP3 defines 16 additional double registers
-def D16 : ARMFReg<16, "d16">; def D17 : ARMFReg<17, "d16">;
-def D18 : ARMFReg<18, "d16">; def D19 : ARMFReg<19, "d16">;
-def D20 : ARMFReg<20, "d16">; def D21 : ARMFReg<21, "d16">;
-def D22 : ARMFReg<22, "d16">; def D23 : ARMFReg<23, "d16">;
-def D24 : ARMFReg<24, "d16">; def D25 : ARMFReg<25, "d16">;
-def D26 : ARMFReg<26, "d16">; def D27 : ARMFReg<27, "d16">;
-def D28 : ARMFReg<28, "d16">; def D29 : ARMFReg<29, "d16">;
-def D30 : ARMFReg<30, "d16">; def D31 : ARMFReg<31, "d16">;
+def D16 : ARMFReg<16, "d16">; def D17 : ARMFReg<17, "d17">;
+def D18 : ARMFReg<18, "d18">; def D19 : ARMFReg<19, "d19">;
+def D20 : ARMFReg<20, "d20">; def D21 : ARMFReg<21, "d21">;
+def D22 : ARMFReg<22, "d22">; def D23 : ARMFReg<23, "d23">;
+def D24 : ARMFReg<24, "d24">; def D25 : ARMFReg<25, "d25">;
+def D26 : ARMFReg<26, "d26">; def D27 : ARMFReg<27, "d27">;
+def D28 : ARMFReg<28, "d28">; def D29 : ARMFReg<29, "d29">;
+def D30 : ARMFReg<30, "d30">; def D31 : ARMFReg<31, "d31">;
 
 // Advanced SIMD (NEON) defines 16 quad-word aliases
 def Q0  : ARMReg< 0,  "q0", [D0,   D1]>;
@@ -106,7 +106,9 @@ def Q14 : ARMReg<14, "q14", [D28, D29]>;
 def Q15 : ARMReg<15, "q15", [D30, D31]>;
 
 // Current Program Status Register.
-def CPSR : ARMReg<0, "cpsr">;
+def CPSR  : ARMReg<0, "cpsr">;
+
+def FPSCR : ARMReg<1, "fpscr">;
 
 // Register classes.
 //
@@ -158,6 +160,13 @@ def GPR : RegisterClass<"ARM", [i32], 32, [R0, R1, R2, R3, R4, R5, R6,
       ARM::R4, ARM::R5, ARM::R6,
       ARM::R8, ARM::R10,ARM::R11,
       ARM::R7 };
+    // FP is R7, R9 is available as callee-saved register.
+    // This is used by non-Darwin platform in Thumb mode.
+    static const unsigned ARM_GPR_AO_5[] = {
+      ARM::R0, ARM::R1, ARM::R2, ARM::R3,
+      ARM::R12,ARM::LR,
+      ARM::R4, ARM::R5, ARM::R6,
+      ARM::R8, ARM::R9, ARM::R10,ARM::R11,ARM::R7 };
 
     GPRClass::iterator
     GPRClass::allocation_order_begin(const MachineFunction &MF) const {
@@ -171,6 +180,8 @@ def GPR : RegisterClass<"ARM", [i32], 32, [R0, R1, R2, R3, R4, R5, R6,
       } else {
         if (Subtarget.isR9Reserved())
           return ARM_GPR_AO_2;
+        else if (Subtarget.isThumb())
+          return ARM_GPR_AO_5;
         else
           return ARM_GPR_AO_1;
       }
@@ -191,6 +202,8 @@ def GPR : RegisterClass<"ARM", [i32], 32, [R0, R1, R2, R3, R4, R5, R6,
       } else {
         if (Subtarget.isR9Reserved())
           I = ARM_GPR_AO_2 + (sizeof(ARM_GPR_AO_2)/sizeof(unsigned));
+        else if (Subtarget.isThumb())
+          I = ARM_GPR_AO_5 + (sizeof(ARM_GPR_AO_5)/sizeof(unsigned));
         else
           I = ARM_GPR_AO_1 + (sizeof(ARM_GPR_AO_1)/sizeof(unsigned));
       }
@@ -246,7 +259,9 @@ def SPR : RegisterClass<"ARM", [f32], 32, [S0, S1, S2, S3, S4, S5, S6, S7, S8,
 // is double-word alignment though.
 def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
                         [D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
-                         D8,  D9,  D10, D11, D12, D13, D14, D15]> {
+                         D8,  D9,  D10, D11, D12, D13, D14, D15,
+                         D16, D17, D18, D19, D20, D21, D22, D23,
+                         D24, D25, D26, D27, D28, D29, D30, D31]> {
   let SubRegClassList = [SPR, SPR];
   let MethodProtos = [{
     iterator allocation_order_begin(const MachineFunction &MF) const;
@@ -265,7 +280,7 @@ def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
       ARM::D4,  ARM::D5,  ARM::D6,  ARM::D7, 
       ARM::D8,  ARM::D9,  ARM::D10, ARM::D11, 
       ARM::D12, ARM::D13, ARM::D14, ARM::D15,
-      ARM::D16, ARM::D17, ARM::D18, ARM::D15,
+      ARM::D16, ARM::D17, ARM::D18, ARM::D19,
       ARM::D20, ARM::D21, ARM::D22, ARM::D23,
       ARM::D24, ARM::D25, ARM::D26, ARM::D27,
       ARM::D28, ARM::D29, ARM::D30, ARM::D31 };
@@ -288,6 +303,14 @@ def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
         return ARM_DPR_VFP2 + (sizeof(ARM_DPR_VFP2)/sizeof(unsigned));
     }
   }];
+}
+
+// Subset of DPR that are accessible with VFP2 (and so that also have
+// 32-bit SPR subregs).
+def DPR_VFP2 : RegisterClass<"ARM", [f64, v2f32], 64,
+                             [D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
+                              D8,  D9,  D10, D11, D12, D13, D14, D15]> {
+  let SubRegClassList = [SPR, SPR];
 }
 
 // Generic 128-bit vector register class.

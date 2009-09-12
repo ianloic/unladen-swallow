@@ -16,31 +16,37 @@
 
 // FIXME: Daniel isn't smart enough to use a prototype for this.
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/DataTypes.h"
 #include <cassert>
 #include <vector>
 #include <string>
 
-namespace llvm { struct fltSemantics; }
+namespace llvm {
+struct fltSemantics;
+class StringRef;
+}
 
 namespace clang {
 
 class Diagnostic;
+class SourceLocation;
 class SourceManager;
 class LangOptions;
-  
 namespace Builtin { struct Info; }
   
 /// TargetInfo - This class exposes information about the current target.
 ///
 class TargetInfo {
-  std::string Triple;
+  llvm::Triple Triple;
 protected:
   // Target values set by the ctor of the actual target implementation.  Default
   // values are specified by the TargetInfo constructor.
   bool TLSSupported;
   unsigned char PointerWidth, PointerAlign;
   unsigned char WCharWidth, WCharAlign;
+  unsigned char Char16Width, Char16Align;
+  unsigned char Char32Width, Char32Align;
   unsigned char IntWidth, IntAlign;
   unsigned char FloatWidth, FloatAlign;
   unsigned char DoubleWidth, DoubleAlign;
@@ -77,7 +83,7 @@ public:
   };
 protected:
   IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType,
-          Int64Type;
+          Char16Type, Char32Type, Int64Type;
 public:
   IntType getSizeType() const { return SizeType; }
   IntType getIntMaxType() const { return IntMaxType; }
@@ -87,6 +93,8 @@ public:
   }
   IntType getIntPtrType() const { return IntPtrType; }
   IntType getWCharType() const { return WCharType; }
+  IntType getChar16Type() const { return Char16Type; }
+  IntType getChar32Type() const { return Char32Type; }
   IntType getInt64Type() const { return Int64Type; }
 
   /// getPointerWidth - Return the width of pointers on this target, for the
@@ -102,13 +110,9 @@ public:
   /// target, in bits.
   unsigned getBoolWidth(bool isWide = false) const { return 8; }  // FIXME
   unsigned getBoolAlign(bool isWide = false) const { return 8; }  // FIXME
-  
-  unsigned getCharWidth(bool isWide = false) const {
-    return isWide ? getWCharWidth() : 8; // FIXME
-  }
-  unsigned getCharAlign(bool isWide = false) const {
-    return isWide ? getWCharAlign() : 8; // FIXME
-  }
+ 
+  unsigned getCharWidth() const { return 8; } // FIXME
+  unsigned getCharAlign() const { return 8; } // FIXME
   
   /// getShortWidth/Align - Return the size of 'signed short' and
   /// 'unsigned short' for this target, in bits.  
@@ -130,10 +134,20 @@ public:
   unsigned getLongLongWidth() const { return LongLongWidth; }
   unsigned getLongLongAlign() const { return LongLongAlign; }
   
-  /// getWcharWidth/Align - Return the size of 'wchar_t' for this target, in
+  /// getWCharWidth/Align - Return the size of 'wchar_t' for this target, in
   /// bits.
   unsigned getWCharWidth() const { return WCharWidth; }
   unsigned getWCharAlign() const { return WCharAlign; }
+
+  /// getChar16Width/Align - Return the size of 'char16_t' for this target, in
+  /// bits.
+  unsigned getChar16Width() const { return Char16Width; }
+  unsigned getChar16Align() const { return Char16Align; }
+
+  /// getChar32Width/Align - Return the size of 'char32_t' for this target, in
+  /// bits.
+  unsigned getChar32Width() const { return Char32Width; }
+  unsigned getChar32Align() const { return Char32Align; }
 
   /// getFloatWidth/Align/Format - Return the size/align/format of 'float'.
   unsigned getFloatWidth() const { return FloatWidth; }
@@ -270,13 +284,9 @@ public:
   virtual const char *getClobbers() const = 0;
   
 
-  /// getTargetPrefix - Return the target prefix used for identifying
-  /// llvm intrinsics.
-  virtual const char *getTargetPrefix() const = 0;
-    
-  /// getTargetTriple - Return the target triple of the primary target.
-  const char *getTargetTriple() const {
-    return Triple.c_str();
+  /// getTriple - Return the target triple of the primary target.
+  const llvm::Triple &getTriple() const {
+    return Triple;
   }
   
   const char *getTargetDescription() const {
@@ -289,18 +299,6 @@ public:
   };
 
   virtual bool useGlobalsForAutomaticVariables() const { return false; }
-
-  /// getStringSymbolPrefix - Get the default symbol prefix to
-  /// use for string literals.
-  virtual const char *getStringSymbolPrefix(bool IsConstant) const { 
-    return ".str";
-  }
-
-  /// getCFStringSymbolPrefix - Get the default symbol prefix
-  /// to use for CFString literals.
-  virtual const char *getCFStringSymbolPrefix() const { 
-    return "";
-  }
 
   /// getUnicodeStringSymbolPrefix - Get the default symbol prefix to
   /// use for string literals.
@@ -325,6 +323,21 @@ public:
   /// no special section is used.
   virtual const char *getCFStringDataSection() const { 
     return "__TEXT,__cstring,cstring_literals";
+  }
+  
+  
+  /// isValidSectionSpecifier - This is an optional hook that targets can
+  /// implement to perform semantic checking on attribute((section("foo")))
+  /// specifiers.  In this case, "foo" is passed in to be checked.  If the
+  /// section specifier is invalid, the backend should return a non-empty string
+  /// that indicates the problem.
+  ///
+  /// This hook is a simple quality of implementation feature to catch errors
+  /// and give good diagnostics in cases when the assembler or code generator
+  /// would otherwise reject the section specifier.
+  ///
+  virtual std::string isValidSectionSpecifier(const llvm::StringRef &SR) const {
+    return "";
   }
 
   /// getDefaultLangOptions - Allow the target to specify default settings for

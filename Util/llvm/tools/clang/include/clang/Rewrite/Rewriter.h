@@ -22,6 +22,7 @@
 #include <cstring>
 #include <string>
 #include "clang/Rewrite/DeltaTree.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace clang {
   class SourceManager;
@@ -59,33 +60,30 @@ public:
   /// the buffer is specified relative to the original SourceBuffer.  The
   /// text is inserted after the specified location.
   ///
-  void InsertText(unsigned OrigOffset, const char *StrData, unsigned StrLen,
+  void InsertText(unsigned OrigOffset, const llvm::StringRef &Str,
                   bool InsertAfter = true);
   
 
-  /// InsertTextBefore - Insert some text before the specified point,
-  /// where the offset in the buffer is specified relative to the original
-  /// SourceBuffer.
-  ///
-  void InsertTextBefore(unsigned OrigOffset, const char *StrData,
-                        unsigned StrLen) {
-    InsertText(OrigOffset, StrData, StrLen, false);
+  /// InsertTextBefore - Insert some text before the specified point, where the
+  /// offset in the buffer is specified relative to the original
+  /// SourceBuffer. The text is inserted before the specified location.  This is
+  /// method is the same as InsertText with "InsertAfter == false".
+  void InsertTextBefore(unsigned OrigOffset, const llvm::StringRef &Str) {
+    InsertText(OrigOffset, Str, false);
   }
   
-  /// InsertText - Insert some text at the specified point, where the offset in
-  /// the buffer is specified relative to the original SourceBuffer.  The
-  /// text is inserted after the specified location.  This is method is the
-  /// same as InsertText with "InsertAfter == false".
-  void InsertTextAfter(unsigned OrigOffset, const char *StrData,
-                       unsigned StrLen) {
-    InsertText(OrigOffset, StrData, StrLen);
+  /// InsertTextAfter - Insert some text at the specified point, where the
+  /// offset in the buffer is specified relative to the original SourceBuffer.
+  /// The text is inserted after the specified location.
+  void InsertTextAfter(unsigned OrigOffset, const llvm::StringRef &Str) {
+    InsertText(OrigOffset, Str);
   }
   
   /// ReplaceText - This method replaces a range of characters in the input
   /// buffer with a new string.  This is effectively a combined "remove/insert"
   /// operation.
   void ReplaceText(unsigned OrigOffset, unsigned OrigLength,
-                   const char *NewStr, unsigned NewLength);
+                   const llvm::StringRef &NewStr);
   
 private:  // Methods only usable by Rewriter.
   
@@ -159,7 +157,7 @@ public:
   /// InsertText - Insert the specified string at the specified location in the
   /// original buffer.  This method returns true (and does nothing) if the input
   /// location was not rewritable, false otherwise.
-  bool InsertText(SourceLocation Loc, const char *StrData, unsigned StrLen,
+  bool InsertText(SourceLocation Loc, const llvm::StringRef &Str,
                   bool InsertAfter = true);
   
   /// InsertTextAfter - Insert the specified string at the specified location in
@@ -167,9 +165,8 @@ public:
   ///  the input location was not rewritable, false otherwise.  Text is
   ///  inserted after any other text that has been previously inserted
   ///  at the some point (the default behavior for InsertText).
-  bool InsertTextAfter(SourceLocation Loc, const char *StrData,
-                       unsigned StrLen) {
-    return InsertText(Loc, StrData, StrLen);
+  bool InsertTextAfter(SourceLocation Loc, const llvm::StringRef &Str) {
+    return InsertText(Loc, Str);
   }    
   
   /// InsertText - Insert the specified string at the specified location in the
@@ -177,29 +174,9 @@ public:
   /// location was not rewritable, false otherwise.  Text is
   /// inserted before any other text that has been previously inserted
   /// at the some point.
-  bool InsertTextBefore(SourceLocation Loc, const char *StrData,
-                       unsigned StrLen) {
-    return InsertText(Loc, StrData, StrLen, false);
+  bool InsertTextBefore(SourceLocation Loc, const llvm::StringRef &Str) {
+    return InsertText(Loc, Str, false);
   }
-
-
-  bool InsertCStrBefore(SourceLocation Loc, const char* Str) {
-    return InsertTextBefore(Loc, Str, strlen(Str));
-  }
-  
-  
-  bool InsertCStrAfter(SourceLocation Loc, const char* Str) {
-    return InsertTextAfter(Loc, Str, strlen(Str));
-  }
-  
-  bool InsertStrBefore(SourceLocation Loc, const std::string& S) {
-    return S.empty() ? false : InsertTextBefore(Loc, &S[0], S.size());
-  }
-
-  bool InsertStrAfter(SourceLocation Loc, const std::string& S) {
-    return S.empty() ? false : InsertTextAfter(Loc, &S[0], S.size());
-  }
-  
   
   /// RemoveText - Remove the specified text region.
   bool RemoveText(SourceLocation Start, unsigned Length);
@@ -208,7 +185,7 @@ public:
   /// buffer with a new string.  This is effectively a combined "remove/insert"
   /// operation.
   bool ReplaceText(SourceLocation Start, unsigned OrigLength,
-                   const char *NewStr, unsigned NewLength);
+                   const llvm::StringRef &NewStr);
   
   /// ReplaceStmt - This replaces a Stmt/Expr with another, using the pretty
   /// printer to generate the replacement code.  This returns true if the input

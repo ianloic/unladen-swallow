@@ -17,10 +17,10 @@
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
 #include "llvm/Config/config.h"
 #include <cstdio>
-#include <vector>
 using namespace clang;
 
 void InitHeaderSearch::AddPath(const std::string &Path, IncludeDirGroup Group,
@@ -75,8 +75,8 @@ void InitHeaderSearch::AddPath(const std::string &Path, IncludeDirGroup Group,
   }
   
   if (Verbose)
-    fprintf(stderr, "ignoring nonexistent directory \"%s\"\n",
-            MappedPath.c_str());
+    llvm::errs() << "ignoring nonexistent directory \""
+                 << MappedPath.str() << "\"\n";
 }
 
 
@@ -162,6 +162,22 @@ void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang) {
         false);
     AddPath("/usr/include/c++/4.3.2/backward", System, true, false, false);
 
+    // openSUSE 11.1
+    AddPath("/usr/include/c++/4.3", System, true, false, false);
+    AddPath("/usr/include/c++/4.3/i586-suse-linux", System, true, false,
+        false);
+    AddPath("/usr/include/c++/4.3/x86_64-suse-linux", System, true, false,
+        false);
+    AddPath("/usr/include/c++/4.3/backward", System, true, false, false);
+
+    // openSUSE 11.2
+    AddPath("/usr/include/c++/4.4", System, true, false, false);
+    AddPath("/usr/include/c++/4.4/i586-suse-linux", System, true, false,
+        false);
+    AddPath("/usr/include/c++/4.4/x86_64-suse-linux", System, true, false,
+        false);
+    AddPath("/usr/include/c++/4.4/backward", System, true, false, false);
+
     // Arch Linux 2008-06-24
     AddPath("/usr/include/c++/4.3.1", System, true, false, false);
     AddPath("/usr/include/c++/4.3.1/i686-pc-linux-gnu", System, true, false,
@@ -170,13 +186,24 @@ void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang) {
     AddPath("/usr/include/c++/4.3.1/x86_64-unknown-linux-gnu", System, true,
         false, false);
 
-    // Gentoo x86 stable
+    // Gentoo x86 2009.0 stable
+    AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.3.2/include/g++-v4", System,
+            true, false, false);
+    AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.3.2/include/g++-v4/"
+            "i686-pc-linux-gnu", System, true, false, false);
+    AddPath(" /usr/lib/gcc/i686-pc-linux-gnu/4.3.2/include/g++-v4/backward",
+            System, true, false, false);
+
+    // Gentoo x86 2008.0 stable
     AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.1.2/include/g++-v4", System,
             true, false, false);
     AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.1.2/include/g++-v4/"
             "i686-pc-linux-gnu", System, true, false, false);
     AddPath("/usr/lib/gcc/i686-pc-linux-gnu/4.1.2/include/g++-v4/backward",
             System, true, false, false);
+
+    // Ubuntu 8.10
+    AddPath("/usr/include/c++/4.3/i486-linux-gnu", System, true, false, false);
 
     // Gentoo amd64 stable
     AddPath("/usr/lib/gcc/x86_64-pc-linux-gnu/4.1.2/include/g++-v4", System,
@@ -191,6 +218,10 @@ void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang) {
 
     // FreeBSD
     AddPath("/usr/include/c++/4.2", System, true, false, false);
+
+    // AuroraUX
+    AddPath("/opt/gcc4/include/c++/4.2.4", System, true, false, false);
+    AddPath("/opt/gcc4/include/c++/4.2.4/i386-pc-solaris2.11", System, true, false, false);
   }
 
   AddPath("/usr/local/include", System, false, false, false);

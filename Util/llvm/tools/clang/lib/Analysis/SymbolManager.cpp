@@ -18,7 +18,9 @@
 
 using namespace clang;
 
-static void print(llvm::raw_ostream& os, const SymExpr *SE);
+void SymExpr::dump() const {
+  dumpToStream(llvm::errs());
+}
 
 static void print(llvm::raw_ostream& os, BinaryOperator::Opcode Op) {  
   switch (Op) {
@@ -44,45 +46,35 @@ static void print(llvm::raw_ostream& os, BinaryOperator::Opcode Op) {
   }        
 }
 
-static void print(llvm::raw_ostream& os, const SymIntExpr *SE) {
+void SymIntExpr::dumpToStream(llvm::raw_ostream& os) const {
   os << '(';
-  print(os, SE->getLHS());
+  getLHS()->dumpToStream(os);
   os << ") ";
-  print(os, SE->getOpcode());
-  os << ' ' << SE->getRHS().getZExtValue();
-  if (SE->getRHS().isUnsigned()) os << 'U';
+  print(os, getOpcode());
+  os << ' ' << getRHS().getZExtValue();
+  if (getRHS().isUnsigned()) os << 'U';
 }
   
-static void print(llvm::raw_ostream& os, const SymSymExpr *SE) {
+void SymSymExpr::dumpToStream(llvm::raw_ostream& os) const {
   os << '(';
-  print(os, SE->getLHS());
+  getLHS()->dumpToStream(os);
   os << ") ";
   os << '(';
-  print(os, SE->getRHS());
+  getRHS()->dumpToStream(os);
   os << ')';  
 }
 
-static void print(llvm::raw_ostream& os, const SymExpr *SE) {
-  switch (SE->getKind()) {
-    case SymExpr::BEGIN_SYMBOLS:
-    case SymExpr::RegionValueKind:
-    case SymExpr::ConjuredKind:
-    case SymExpr::END_SYMBOLS:
-      os << '$' << cast<SymbolData>(SE)->getSymbolID();
-      return;
-    case SymExpr::SymIntKind:
-      print(os, cast<SymIntExpr>(SE));
-      return;
-    case SymExpr::SymSymKind:
-      print(os, cast<SymSymExpr>(SE));
-      return;
-  }
+void SymbolConjured::dumpToStream(llvm::raw_ostream& os) const {
+  os << "conj_$" << getSymbolID() << '{' << T.getAsString() << '}';
 }
 
+void SymbolDerived::dumpToStream(llvm::raw_ostream& os) const {
+  os << "derived_$" << getSymbolID() << '{'
+     << getParentSymbol() << ',' << getRegion() << '}';
+}
 
-llvm::raw_ostream& llvm::operator<<(llvm::raw_ostream& os, const SymExpr *SE) {
-  print(os, SE);
-  return os;
+void SymbolRegionValue::dumpToStream(llvm::raw_ostream& os) const {
+  os << "reg_$" << getSymbolID() << "<" << R << ">";
 }
 
 const SymbolRegionValue* 
@@ -117,6 +109,24 @@ SymbolManager::getConjuredSymbol(const Stmt* E, QualType T, unsigned Count,
   }
   
   return cast<SymbolConjured>(SD);
+}
+
+const SymbolDerived*
+SymbolManager::getDerivedSymbol(SymbolRef parentSymbol,
+                                const TypedRegion *R) {
+  
+  llvm::FoldingSetNodeID profile;
+  SymbolDerived::Profile(profile, parentSymbol, R);
+  void* InsertPos;  
+  SymExpr *SD = DataSet.FindNodeOrInsertPos(profile, InsertPos);  
+  if (!SD) {  
+    SD = (SymExpr*) BPAlloc.Allocate<SymbolDerived>();
+    new (SD) SymbolDerived(SymbolCounter, parentSymbol, R);
+    DataSet.InsertNode(SD, InsertPos);  
+    ++SymbolCounter;
+  }
+  
+  return cast<SymbolDerived>(SD);
 }
 
 const SymIntExpr *SymbolManager::getSymIntExpr(const SymExpr *lhs,
@@ -159,6 +169,11 @@ QualType SymbolConjured::getType(ASTContext&) const {
   return T;
 }
 
+
+QualType SymbolDerived::getType(ASTContext& Ctx) const {
+  return R->getValueType(Ctx);
+}
+
 QualType SymbolRegionValue::getType(ASTContext& C) const {
   if (!T.isNull())
     return T;
@@ -172,7 +187,7 @@ QualType SymbolRegionValue::getType(ASTContext& C) const {
 SymbolManager::~SymbolManager() {}
 
 bool SymbolManager::canSymbolicate(QualType T) {
-  return Loc::IsLocType(T) || T->isIntegerType();  
+  return Loc::IsLocType(T) || (T->isIntegerType() && T->isScalarType());
 }
 
 void SymbolReaper::markLive(SymbolRef sym) {
@@ -191,6 +206,14 @@ bool SymbolReaper::maybeDead(SymbolRef sym) {
 bool SymbolReaper::isLive(SymbolRef sym) {
   if (TheLiving.contains(sym))
     return true;
+  
+  if (const SymbolDerived *derived = dyn_cast<SymbolDerived>(sym)) {
+    if (isLive(derived->getParentSymbol())) {
+      markLive(sym);
+      return true;
+    }
+    return false;
+  }
   
   // Interogate the symbol.  It may derive from an input value to
   // the analyzed function/method.

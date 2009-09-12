@@ -53,8 +53,8 @@ void html::HighlightRange(RewriteBuffer &RB, unsigned B, unsigned E,
                           const char *BufferStart,
                           const char *StartTag, const char *EndTag) {
   // Insert the tag at the absolute start/end of the range.
-  RB.InsertTextAfter(B, StartTag, strlen(StartTag));
-  RB.InsertTextBefore(E, EndTag, strlen(EndTag));
+  RB.InsertTextAfter(B, StartTag);
+  RB.InsertTextBefore(E, EndTag);
   
   // Scan the range to see if there is a \r or \n.  If so, and if the line is
   // not blank, insert tags on that line as well.
@@ -68,7 +68,7 @@ void html::HighlightRange(RewriteBuffer &RB, unsigned B, unsigned E,
       // Okay, we found a newline in the range.  If we have an open tag, we need
       // to insert a close tag at the first non-whitespace before the newline.
       if (HadOpenTag)
-        RB.InsertTextBefore(LastNonWhiteSpace+1, EndTag, strlen(EndTag));
+        RB.InsertTextBefore(LastNonWhiteSpace+1, EndTag);
         
       // Instead of inserting an open tag immediately after the newline, we
       // wait until we see a non-whitespace character.  This prevents us from
@@ -87,7 +87,7 @@ void html::HighlightRange(RewriteBuffer &RB, unsigned B, unsigned E,
     default:
       // If there is no tag open, do it now.
       if (!HadOpenTag) {
-        RB.InsertTextAfter(i, StartTag, strlen(StartTag));
+        RB.InsertTextAfter(i, StartTag);
         HadOpenTag = true;
       }
         
@@ -120,11 +120,11 @@ void html::EscapeText(Rewriter &R, FileID FID,
       
     case ' ':
       if (EscapeSpaces)
-        RB.ReplaceText(FilePos, 1, "&nbsp;", 6);
+        RB.ReplaceText(FilePos, 1, "&nbsp;");
       ++ColNo;
       break;
     case '\f':
-      RB.ReplaceText(FilePos, 1, "<hr>", 4);
+      RB.ReplaceText(FilePos, 1, "<hr>");
       ColNo = 0;
       break;
         
@@ -133,25 +133,26 @@ void html::EscapeText(Rewriter &R, FileID FID,
         break;
       unsigned NumSpaces = 8-(ColNo&7);
       if (EscapeSpaces)
-        RB.ReplaceText(FilePos, 1, "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
-                       "&nbsp;&nbsp;&nbsp;", 6*NumSpaces);
+        RB.ReplaceText(FilePos, 1,
+                       llvm::StringRef("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+                                       "&nbsp;&nbsp;&nbsp;", 6*NumSpaces));
       else
-        RB.ReplaceText(FilePos, 1, "        ", NumSpaces);
+        RB.ReplaceText(FilePos, 1, llvm::StringRef("        ", NumSpaces));
       ColNo += NumSpaces;
       break;
     }
     case '<':
-      RB.ReplaceText(FilePos, 1, "&lt;", 4);
+      RB.ReplaceText(FilePos, 1, "&lt;");
       ++ColNo;
       break;
       
     case '>':
-      RB.ReplaceText(FilePos, 1, "&gt;", 4);
+      RB.ReplaceText(FilePos, 1, "&gt;");
       ++ColNo;
       break;
       
     case '&':
-      RB.ReplaceText(FilePos, 1, "&amp;", 5);
+      RB.ReplaceText(FilePos, 1, "&amp;");
       ++ColNo;
       break;
     }
@@ -177,23 +178,23 @@ std::string html::EscapeText(const std::string& s, bool EscapeSpaces,
       else os << ' ';
       break;
       
-      case '\t':
-        if (ReplaceTabs) {
-          if (EscapeSpaces)
-            for (unsigned i = 0; i < 4; ++i)
-              os << "&nbsp;";
-          else
-            for (unsigned i = 0; i < 4; ++i)
-              os << " ";
-        }
-        else 
-          os << c;
+    case '\t':
+      if (ReplaceTabs) {
+        if (EscapeSpaces)
+          for (unsigned i = 0; i < 4; ++i)
+            os << "&nbsp;";
+        else
+          for (unsigned i = 0; i < 4; ++i)
+            os << " ";
+      }
+      else 
+        os << c;
       
-        break;
+      break;
       
-      case '<': os << "&lt;"; break;
-      case '>': os << "&gt;"; break;
-      case '&': os << "&amp;"; break;
+    case '<': os << "&lt;"; break;
+    case '>': os << "&gt;"; break;
+    case '&': os << "&amp;"; break;
     }
   }
   
@@ -202,19 +203,19 @@ std::string html::EscapeText(const std::string& s, bool EscapeSpaces,
 
 static void AddLineNumber(RewriteBuffer &RB, unsigned LineNo,
                           unsigned B, unsigned E) {
-  llvm::SmallString<100> Str;
-  Str += "<tr><td class=\"num\" id=\"LN";
-  Str.append_uint(LineNo);
-  Str += "\">";
-  Str.append_uint(LineNo);
-  Str += "</td><td class=\"line\">";
+  llvm::SmallString<256> Str;
+  llvm::raw_svector_ostream OS(Str);
+
+  OS << "<tr><td class=\"num\" id=\"LN"
+     << LineNo << "\">"
+     << LineNo << "</td><td class=\"line\">";
   
   if (B == E) { // Handle empty lines.
-    Str += " </td></tr>";
-    RB.InsertTextBefore(B, &Str[0], Str.size());
+    OS << " </td></tr>";
+    RB.InsertTextBefore(B, OS.str());
   } else {
-    RB.InsertTextBefore(B, &Str[0], Str.size());
-    RB.InsertTextBefore(E, "</td></tr>", strlen("</td></tr>"));
+    RB.InsertTextBefore(B, OS.str());
+    RB.InsertTextBefore(E, "</td></tr>");
   }
 }
 
@@ -258,10 +259,8 @@ void html::AddLineNumbers(Rewriter& R, FileID FID) {
   }
   
   // Add one big table tag that surrounds all of the code.
-  RB.InsertTextBefore(0, "<table class=\"code\">\n",
-                      strlen("<table class=\"code\">\n"));
-  
-  RB.InsertTextAfter(FileEnd - FileBeg, "</table>", strlen("</table>"));
+  RB.InsertTextBefore(0, "<table class=\"code\">\n");
+  RB.InsertTextAfter(FileEnd - FileBeg, "</table>");
 }
 
 void html::AddHeaderFooterInternalBuiltinCSS(Rewriter& R, FileID FID, 
@@ -340,10 +339,10 @@ void html::AddHeaderFooterInternalBuiltinCSS(Rewriter& R, FileID FID,
       "</style>\n</head>\n<body>";
 
   // Generate header
-  R.InsertStrBefore(StartLoc, os.str());
+  R.InsertTextBefore(StartLoc, os.str());
   // Generate footer
   
-  R.InsertCStrAfter(EndLoc, "</body></html>\n");
+  R.InsertTextAfter(EndLoc, "</body></html>\n");
 }
 
 /// SyntaxHighlight - Relex the specified FileID and annotate the HTML with
@@ -519,7 +518,7 @@ void html::HighlightMacros(Rewriter &R, FileID FID, Preprocessor& PP) {
     assert(SM.getFileID(LLoc.second) == FID &&
            "Start and end of expansion must be in the same ultimate file!");
 
-    std::string Expansion = PP.getSpelling(Tok);
+    std::string Expansion = EscapeText(PP.getSpelling(Tok));
     unsigned LineLen = Expansion.size();
     
     Token PrevTok = Tok;

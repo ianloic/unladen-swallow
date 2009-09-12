@@ -22,6 +22,7 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/CanonicalType.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/OwningPtr.h"
@@ -70,18 +71,20 @@ class ASTContext {
   llvm::FoldingSet<ConstantArrayType> ConstantArrayTypes;
   llvm::FoldingSet<IncompleteArrayType> IncompleteArrayTypes;
   std::vector<VariableArrayType*> VariableArrayTypes;
-  std::vector<DependentSizedArrayType*> DependentSizedArrayTypes;
-  std::vector<DependentSizedExtVectorType*> DependentSizedExtVectorTypes;
+  llvm::FoldingSet<DependentSizedArrayType> DependentSizedArrayTypes;
+  llvm::FoldingSet<DependentSizedExtVectorType> DependentSizedExtVectorTypes;
   llvm::FoldingSet<VectorType> VectorTypes;
   llvm::FoldingSet<FunctionNoProtoType> FunctionNoProtoTypes;
   llvm::FoldingSet<FunctionProtoType> FunctionProtoTypes;
+  llvm::FoldingSet<DependentTypeOfExprType> DependentTypeOfExprTypes;
+  llvm::FoldingSet<DependentDecltypeType> DependentDecltypeTypes;
   llvm::FoldingSet<TemplateTypeParmType> TemplateTypeParmTypes;
   llvm::FoldingSet<TemplateSpecializationType> TemplateSpecializationTypes;
   llvm::FoldingSet<QualifiedNameType> QualifiedNameTypes;
   llvm::FoldingSet<TypenameType> TypenameTypes;
-  llvm::FoldingSet<ObjCQualifiedInterfaceType> ObjCQualifiedInterfaceTypes;
+  llvm::FoldingSet<ObjCInterfaceType> ObjCInterfaceTypes;
   llvm::FoldingSet<ObjCObjectPointerType> ObjCObjectPointerTypes;
-
+  
   llvm::FoldingSet<QualifiedTemplateName> QualifiedTemplateNames;
   llvm::FoldingSet<DependentTemplateName> DependentTemplateNames;
 
@@ -97,6 +100,9 @@ class ASTContext {
   llvm::DenseMap<const RecordDecl*, const ASTRecordLayout*> ASTRecordLayouts;
   llvm::DenseMap<const ObjCContainerDecl*, const ASTRecordLayout*> ObjCLayouts;
 
+  /// \brief Mapping from ObjCContainers to their ObjCImplementations.
+  llvm::DenseMap<ObjCContainerDecl*, ObjCImplDecl*> ObjCImpls;
+
   llvm::DenseMap<unsigned, FixedWidthIntType*> SignedFixedWidthIntTypes;
   llvm::DenseMap<unsigned, FixedWidthIntType*> UnsignedFixedWidthIntTypes;
   
@@ -106,8 +112,7 @@ class ASTContext {
   QualType BuiltinVaListType;
 
   /// ObjCIdType - a pseudo built-in typedef type (set by Sema).
-  QualType ObjCIdType;
-  const RecordType *IdStructType;
+  QualType ObjCIdTypedefType;
   
   /// ObjCSelType - another pseudo built-in typedef type (set by Sema).
   QualType ObjCSelType;
@@ -118,8 +123,7 @@ class ASTContext {
   const RecordType *ProtoStructType;
 
   /// ObjCClassType - another pseudo built-in typedef type (set by Sema).
-  QualType ObjCClassType;
-  const RecordType *ClassStructType;
+  QualType ObjCClassTypedefType;
   
   QualType ObjCConstantStringType;
   RecordDecl *CFConstantStringTypeDecl;
@@ -129,11 +133,43 @@ class ASTContext {
   /// \brief The type for the C FILE type.
   TypeDecl *FILEDecl;
   
+  /// \brief The type for the C jmp_buf type.
+  TypeDecl *jmp_bufDecl;
+  
+  /// \brief The type for the C sigjmp_buf type.
+  TypeDecl *sigjmp_bufDecl;
+  
   /// \brief Keeps track of all declaration attributes. 
   ///
   /// Since so few decls have attrs, we keep them in a hash map instead of
   /// wasting space in the Decl class.
   llvm::DenseMap<const Decl*, Attr*> DeclAttrs;
+
+  /// \brief Keeps track of the static data member templates from which
+  /// static data members of class template specializations were instantiated.
+  ///
+  /// This data structure stores the mapping from instantiations of static
+  /// data members to the static data member representations within the
+  /// class template from which they were instantiated. 
+  ///
+  /// Given the following example:
+  ///
+  /// \code
+  /// template<typename T>
+  /// struct X {
+  ///   static T value;
+  /// };
+  ///
+  /// template<typename T>
+  ///   T X<T>::value = T(17);
+  ///
+  /// int *x = &X<int>::value;
+  /// \endcode
+  ///
+  /// This mapping will contain an entry that maps from the VarDecl for 
+  /// X<int>::value to the corresponding VarDecl for X<T>::value (within the
+  /// class template X). 
+  llvm::DenseMap<VarDecl *, VarDecl *> InstantiatedFromStaticDataMember;
   
   TranslationUnitDecl *TUDecl;
 
@@ -166,6 +202,11 @@ public:
   llvm::OwningPtr<ExternalASTSource> ExternalSource;
   clang::PrintingPolicy PrintingPolicy;
 
+  // Typedefs which may be provided defining the structure of Objective-C
+  // pseudo-builtins
+  QualType ObjCIdRedefinitionType;
+  QualType ObjCClassRedefinitionType;
+
   /// \brief Source ranges for all of the comments in the source file,
   /// sorted in order of appearance in the translation unit.
   std::vector<SourceRange> Comments;
@@ -191,6 +232,15 @@ public:
   
   /// \brief Erase the attributes corresponding to the given declaration.
   void eraseDeclAttrs(const Decl *D) { DeclAttrs.erase(D); }
+
+  /// \brief If this variable is an instantiated static data member of a
+  /// class template specialization, returns the templated static data member 
+  /// from which it was instantiated.
+  VarDecl *getInstantiatedFromStaticDataMember(VarDecl *Var);
+  
+  /// \brief Note that the static data member \p Inst is an instantiation of
+  /// the static data member template \p Tmpl of a class template.
+  void setInstantiatedFromStaticDataMember(VarDecl *Inst, VarDecl *Tmpl);  
   
   TranslationUnitDecl *getTranslationUnitDecl() const { return TUDecl; }
 
@@ -200,7 +250,9 @@ public:
   QualType VoidTy;
   QualType BoolTy;
   QualType CharTy;
-  QualType WCharTy; // [C++ 3.9.1p5], integer type in C99.
+  QualType WCharTy;  // [C++ 3.9.1p5], integer type in C99.
+  QualType Char16Ty; // [C++0x 3.9.1p5], integer type in C99.
+  QualType Char32Ty; // [C++0x 3.9.1p5], integer type in C99.
   QualType SignedCharTy, ShortTy, IntTy, LongTy, LongLongTy, Int128Ty;
   QualType UnsignedCharTy, UnsignedShortTy, UnsignedIntTy, UnsignedLongTy;
   QualType UnsignedLongLongTy, UnsignedInt128Ty;
@@ -210,6 +262,7 @@ public:
   QualType OverloadTy;
   QualType DependentTy;
   QualType UndeducedAutoTy;
+  QualType ObjCBuiltinIdTy, ObjCBuiltinClassTy;
 
   ASTContext(const LangOptions& LOpts, SourceManager &SM, TargetInfo &t,
              IdentifierTable &idents, SelectorTable &sels,
@@ -247,6 +300,10 @@ public:
   /// objc gc qualified type. The retulting type has a union of the qualifiers
   /// from T and the gc attribute.
   QualType getObjCGCQualType(QualType T, QualType::GCAttrTypes gcAttr);
+  
+  /// getNoReturnType - Add the noreturn attribute to the given type which must
+  /// be a FunctionType or a pointer to an allowable type or a BlockPointer.
+  QualType getNoReturnType(QualType T);
   
   /// getComplexType - Return the uniqued reference to the type for a complex
   /// number with the specified element type.
@@ -336,7 +393,7 @@ public:
 
   /// getFunctionNoProtoType - Return a K&R style C function type like 'int()'.
   ///
-  QualType getFunctionNoProtoType(QualType ResultTy);
+  QualType getFunctionNoProtoType(QualType ResultTy, bool NoReturn = false);
 
   /// getFunctionType - Return a normal function type with a typed argument
   /// list.  isVariadic indicates whether the argument list includes '...'.
@@ -344,7 +401,8 @@ public:
                            unsigned NumArgs, bool isVariadic,
                            unsigned TypeQuals, bool hasExceptionSpec = false,
                            bool hasAnyExceptionSpec = false,
-                           unsigned NumExs = 0, const QualType *ExArray = 0);
+                           unsigned NumExs = 0, const QualType *ExArray = 0,
+                           bool NoReturn = false);
 
   /// getTypeDeclType - Return the unique reference to the type for
   /// the specified type declaration.
@@ -353,7 +411,6 @@ public:
   /// getTypedefType - Return the unique reference to the type for the
   /// specified typename decl.
   QualType getTypedefType(TypedefDecl *Decl);
-  QualType getObjCInterfaceType(const ObjCInterfaceDecl *Decl);
 
   QualType getTemplateTypeParmType(unsigned Depth, unsigned Index, 
                                    bool ParameterPack,
@@ -373,18 +430,15 @@ public:
                            const TemplateSpecializationType *TemplateId,
                            QualType Canon = QualType());
 
+  QualType getObjCInterfaceType(const ObjCInterfaceDecl *Decl,
+                                ObjCProtocolDecl **Protocols = 0, 
+                                unsigned NumProtocols = 0);
+
   /// getObjCObjectPointerType - Return a ObjCObjectPointerType type for the
   /// given interface decl and the conforming protocol list.
-  QualType getObjCObjectPointerType(ObjCInterfaceDecl *Decl,
+  QualType getObjCObjectPointerType(QualType OIT,
                                     ObjCProtocolDecl **ProtocolList = 0,
                                     unsigned NumProtocols = 0);
-  
-  /// getObjCQualifiedInterfaceType - Return a 
-  /// ObjCQualifiedInterfaceType type for the given interface decl and
-  /// the conforming protocol list.
-  QualType getObjCQualifiedInterfaceType(ObjCInterfaceDecl *Decl,
-                                         ObjCProtocolDecl **ProtocolList,
-                                         unsigned NumProtocols);
   
   /// getTypeOfType - GCC extension.
   QualType getTypeOfExprType(Expr *e);
@@ -395,7 +449,7 @@ public:
   
   /// getTagDeclType - Return the unique reference to the type for the
   /// specified TagDecl (struct/union/class/enum) decl.
-  QualType getTagDeclType(TagDecl *Decl);
+  QualType getTagDeclType(const TagDecl *Decl);
   
   /// getSizeType - Return the unique type for "size_t" (C99 7.17), defined
   /// in <stddef.h>. The sizeof operator requires this (C99 6.5.3.4p4).
@@ -459,6 +513,30 @@ public:
       return getTypeDeclType(FILEDecl);
     return QualType();
   }
+
+  /// \brief Set the type for the C jmp_buf type.
+  void setjmp_bufDecl(TypeDecl *jmp_bufDecl) {
+    this->jmp_bufDecl = jmp_bufDecl;
+  }
+  
+  /// \brief Retrieve the C jmp_buf type.
+  QualType getjmp_bufType() { 
+    if (jmp_bufDecl) 
+      return getTypeDeclType(jmp_bufDecl);
+    return QualType();
+  }
+
+  /// \brief Set the type for the C sigjmp_buf type.
+  void setsigjmp_bufDecl(TypeDecl *sigjmp_bufDecl) {
+    this->sigjmp_bufDecl = sigjmp_bufDecl;
+  }
+  
+  /// \brief Retrieve the C sigjmp_buf type.
+  QualType getsigjmp_bufType() { 
+    if (sigjmp_bufDecl) 
+      return getTypeDeclType(sigjmp_bufDecl);
+    return QualType();
+  }
                        
   /// getObjCEncodingForType - Emit the ObjC type encoding for the
   /// given type into \arg S. If \arg NameFields is specified then
@@ -484,13 +562,16 @@ public:
                                       const Decl *Container,
                                       std::string &S);
   
+  bool ProtocolCompatibleWithProtocol(ObjCProtocolDecl *lProto,
+                                      ObjCProtocolDecl *rProto);
+  
   /// getObjCEncodingTypeSize returns size of type for objective-c encoding
   /// purpose.
   int getObjCEncodingTypeSize(QualType t);
 
   /// This setter/getter represents the ObjC 'id' type. It is setup lazily, by
   /// Sema.  id is always a (typedef for a) pointer type, a pointer to a struct.
-  QualType getObjCIdType() const { return ObjCIdType; }
+  QualType getObjCIdType() const { return ObjCIdTypedefType; }
   void setObjCIdType(QualType T);
   
   void setObjCSelType(QualType T);
@@ -502,7 +583,7 @@ public:
   /// This setter/getter repreents the ObjC 'Class' type. It is setup lazily, by
   /// Sema.  'Class' is always a (typedef for a) pointer type, a pointer to a
   /// struct.
-  QualType getObjCClassType() const { return ObjCClassType; }
+  QualType getObjCClassType() const { return ObjCClassTypedefType; }
   void setObjCClassType(QualType T);
   
   void setBuiltinVaListType(QualType T);
@@ -513,13 +594,17 @@ public:
   TemplateName getQualifiedTemplateName(NestedNameSpecifier *NNS, 
                                         bool TemplateKeyword,
                                         TemplateDecl *Template);
-
+  TemplateName getQualifiedTemplateName(NestedNameSpecifier *NNS, 
+                                        bool TemplateKeyword,
+                                        OverloadedFunctionDecl *Template);
+  
   TemplateName getDependentTemplateName(NestedNameSpecifier *NNS, 
                                         const IdentifierInfo *Name);
 
   enum GetBuiltinTypeError {
-    GE_None,        //< No error
-    GE_Missing_FILE //< Missing the FILE type from <stdio.h>
+    GE_None,              //< No error
+    GE_Missing_stdio,     //< Missing a type from <stdio.h>
+    GE_Missing_setjmp     //< Missing a type from <setjmp.h>
   };
   
   /// GetBuiltinType - Return the type for the specified builtin.
@@ -533,12 +618,6 @@ private:
   //===--------------------------------------------------------------------===//
  
 public:
-  /// isObjCObjectPointerType - Returns true if type is an Objective-C pointer
-  /// to an object type.  This includes "id" and "Class" (two 'special' pointers
-  /// to struct), Interface* (pointer to ObjCInterfaceType) and id<P> (qualified
-  /// ID type).
-  bool isObjCObjectPointerType(QualType Ty) const;
-
   /// getObjCGCAttr - Returns one of GCNone, Weak or Strong objc's
   /// garbage collection attribute.
   ///
@@ -630,7 +709,7 @@ public:
   /// include typedefs, 'typeof' operators, etc. The returned type is guaranteed
   /// to be free of any of these, allowing two canonical types to be compared
   /// for exact equality with a simple pointer comparison.
-  QualType getCanonicalType(QualType T);
+  CanQualType getCanonicalType(QualType T);
   const Type *getCanonicalType(const Type *T) {
     return T->getCanonicalTypeInternal().getTypePtr();
   }
@@ -646,19 +725,6 @@ public:
     T1 = getCanonicalType(T1);
     T2 = getCanonicalType(T2);
     return T1.getUnqualifiedType() == T2.getUnqualifiedType();
-  }
-
-  /// \brief Retrieves the "canonical" declaration of the given declaration.
-  Decl *getCanonicalDecl(Decl *D);
-
-  /// \brief Retrieves the "canonical" declaration of the given tag
-  /// declaration.
-  ///
-  /// The canonical declaration for the given tag declaration is
-  /// either the definition of the tag (if it is a complete type) or
-  /// the first declaration of that tag.
-  TagDecl *getCanonicalDecl(TagDecl *Tag) {
-    return cast<TagDecl>(getCanonicalDecl((Decl *)Tag));
   }
 
   /// \brief Retrieves the "canonical" declaration of 
@@ -709,6 +775,13 @@ public:
   /// types, values, and templates.
   TemplateName getCanonicalTemplateName(TemplateName Name);
 
+  /// \brief Retrieve the "canonical" template argument.
+  ///
+  /// The canonical template argument is the simplest template argument 
+  /// (which may be a type, value, expression, or declaration) that 
+  /// expresses the value of the argument.
+  TemplateArgument getCanonicalTemplateArgument(const TemplateArgument &Arg);
+  
   /// Type Query functions.  If the type is an instance of the specified class,
   /// return the Type pointer for the underlying maximally pretty type.  This
   /// is a member of ASTContext because this may need to do some amount of
@@ -727,6 +800,13 @@ public:
   /// getBaseElementType - Returns the innermost element type of a variable
   /// length array type. For example, will return "int" for int[m][n]
   QualType getBaseElementType(const VariableArrayType *VAT);
+
+  /// getBaseElementType - Returns the innermost element type of a type
+  /// (which needn't actually be an array type).
+  QualType getBaseElementType(QualType QT);
+  
+  /// getConstantArrayElementCount - Returns number of constant array elements.
+  uint64_t getConstantArrayElementCount(const ConstantArrayType *CA) const;
   
   /// getArrayDecayedType - Return the properly qualified result of decaying the
   /// specified array type to a pointer.  This operation is non-trivial when
@@ -736,6 +816,18 @@ public:
   /// See C99 6.7.5.3p7 and C99 6.3.2.1p3.
   QualType getArrayDecayedType(QualType T);
   
+  /// getPromotedIntegerType - Returns the type that Promotable will
+  /// promote to: C99 6.3.1.1p2, assuming that Promotable is a promotable
+  /// integer type.
+  QualType getPromotedIntegerType(QualType PromotableType);
+
+  /// \brief Whether this is a promotable bitfield reference according
+  /// to C99 6.3.1.1p2, bullet 2 (and GCC extensions).
+  ///
+  /// \returns the type this bit-field will promote to, or NULL if no
+  /// promotion occurs.
+  QualType isPromotableBitField(Expr *E);
+
   /// getIntegerTypeOrder - Returns the highest ranked integer type: 
   /// C99 6.3.1.8p1.  If LHS > RHS, return 1.  If LHS == RHS, return 0. If
   /// LHS < RHS, return -1. 
@@ -768,34 +860,34 @@ public:
   bool typesAreCompatible(QualType, QualType); // C99 6.2.7p1
   
   bool isObjCIdType(QualType T) const {
-    return T == ObjCIdType;
-  }
-  bool isObjCIdStructType(QualType T) const {
-    if (!IdStructType) // ObjC isn't enabled
-      return false;
-    return T->getAsStructureType() == IdStructType;
+    return T == ObjCIdTypedefType;
   }
   bool isObjCClassType(QualType T) const {
-    return T == ObjCClassType;
-  }
-  bool isObjCClassStructType(QualType T) const {
-    if (!ClassStructType) // ObjC isn't enabled
-      return false;
-    return T->getAsStructureType() == ClassStructType;
+    return T == ObjCClassTypedefType;
   }
   bool isObjCSelType(QualType T) const {
     assert(SelStructType && "isObjCSelType used before 'SEL' type is built");
     return T->getAsStructureType() == SelStructType;
   }
+  bool QualifiedIdConformsQualifiedId(QualType LHS, QualType RHS);
+  bool ObjCQualifiedIdTypesAreCompatible(QualType LHS, QualType RHS,
+                                         bool ForCompare);
 
   // Check the safety of assignment from LHS to RHS
-  bool canAssignObjCInterfaces(const ObjCInterfaceType *LHS, 
+  bool canAssignObjCInterfaces(const ObjCObjectPointerType *LHSOPT,
+                               const ObjCObjectPointerType *RHSOPT);
+  bool canAssignObjCInterfaces(const ObjCInterfaceType *LHS,
                                const ObjCInterfaceType *RHS);
   bool areComparableObjCPointerTypes(QualType LHS, QualType RHS);
 
   // Functions for calculating composite types
   QualType mergeTypes(QualType, QualType);
   QualType mergeFunctionTypes(QualType, QualType);
+
+  /// UsualArithmeticConversionsType - handles the various conversions
+  /// that are common to binary operators (C99 6.3.1.8, C++ [expr]p9)
+  /// and returns the result type of that conversion.
+  QualType UsualArithmeticConversionsType(QualType lhs, QualType rhs);
 
   //===--------------------------------------------------------------------===//
   //                    Integer Predicates
@@ -833,6 +925,28 @@ public:
     Res = Value;
     return Res;
   }
+
+  /// \brief Get the implementation of ObjCInterfaceDecl,or NULL if none exists.
+  ObjCImplementationDecl *getObjCImplementation(ObjCInterfaceDecl *D);
+  /// \brief Get the implementation of ObjCCategoryDecl, or NULL if none exists.
+  ObjCCategoryImplDecl   *getObjCImplementation(ObjCCategoryDecl *D);
+
+  /// \brief Set the implementation of ObjCInterfaceDecl.
+  void setObjCImplementation(ObjCInterfaceDecl *IFaceD,
+                             ObjCImplementationDecl *ImplD);
+  /// \brief Set the implementation of ObjCCategoryDecl.
+  void setObjCImplementation(ObjCCategoryDecl *CatD,
+                             ObjCCategoryImplDecl *ImplD);
+
+  /// \brief Allocate an uninitialized DeclaratorInfo.
+  ///
+  /// The caller should initialize the memory held by DeclaratorInfo using
+  /// the TypeLoc wrappers.
+  ///
+  /// \param T the type that will be the basis for type source info. This type
+  /// should refer to how the declarator was written in source code, not to
+  /// what type semantic analysis resolved the declarator to.
+  DeclaratorInfo *CreateDeclaratorInfo(QualType T);
 
 private:
   ASTContext(const ASTContext&); // DO NOT IMPLEMENT

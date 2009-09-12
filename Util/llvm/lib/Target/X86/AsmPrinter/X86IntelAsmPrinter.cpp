@@ -16,7 +16,7 @@
 #define DEBUG_TYPE "asm-printer"
 #include "X86IntelAsmPrinter.h"
 #include "X86InstrInfo.h"
-#include "X86TargetAsmInfo.h"
+#include "X86MCAsmInfo.h"
 #include "X86.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
@@ -26,9 +26,12 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/DwarfWriter.h"
-#include "llvm/Support/Mangler.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Mangler.h"
 using namespace llvm;
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
@@ -114,7 +117,7 @@ void X86IntelAsmPrinter::decorateName(std::string &Name,
 
     break;
   default:
-    assert(0 && "Unsupported DecorationStyle");
+    llvm_unreachable("Unsupported DecorationStyle");
   }
 }
 
@@ -141,10 +144,12 @@ bool X86IntelAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   decorateName(CurrentFnName, F);
 
-  SwitchToTextSection("_text", F);
+  OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(F, Mang, TM));
+
   switch (F->getLinkage()) {
-  default: assert(0 && "Unsupported linkage type!");
+  default: llvm_unreachable("Unsupported linkage type!");
   case Function::PrivateLinkage:
+  case Function::LinkerPrivateLinkage:
   case Function::InternalLinkage:
     EmitAlignment(FnAlign);
     break;
@@ -179,8 +184,6 @@ bool X86IntelAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   O << CurrentFnName << "\tendp\n";
 
-  O.flush();
-
   // We didn't modify anything.
   return false;
 }
@@ -207,7 +210,7 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
     if (TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
       unsigned Reg = MO.getReg();
       if (Modifier && strncmp(Modifier, "subreg", strlen("subreg")) == 0) {
-        MVT VT = (strcmp(Modifier,"subreg64") == 0) ?
+        EVT VT = (strcmp(Modifier,"subreg64") == 0) ?
           MVT::i64 : ((strcmp(Modifier, "subreg32") == 0) ? MVT::i32 :
                       ((strcmp(Modifier,"subreg16") == 0) ? MVT::i16 :MVT::i8));
         Reg = getX86SubSuperRegister(Reg, VT);
@@ -223,14 +226,14 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
   case MachineOperand::MO_JumpTableIndex: {
     bool isMemOp  = Modifier && !strcmp(Modifier, "mem");
     if (!isMemOp) O << "OFFSET ";
-    O << TAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
+    O << MAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
       << "_" << MO.getIndex();
     return;
   }
   case MachineOperand::MO_ConstantPoolIndex: {
     bool isMemOp  = Modifier && !strcmp(Modifier, "mem");
     if (!isMemOp) O << "OFFSET ";
-    O << "[" << TAI->getPrivateGlobalPrefix() << "CPI"
+    O << "[" << MAI->getPrivateGlobalPrefix() << "CPI"
       << getFunctionNumber() << "_" << MO.getIndex();
     printOffset(MO.getOffset());
     O << "]";
@@ -239,8 +242,7 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
   case MachineOperand::MO_GlobalAddress: {
     bool isMemOp  = Modifier && !strcmp(Modifier, "mem");
     GlobalValue *GV = MO.getGlobal();
-    std::string Name = Mang->getValueName(GV);
-
+    std::string Name = Mang->getMangledName(GV);
     decorateName(Name, GV);
 
     if (!isMemOp) O << "OFFSET ";
@@ -256,7 +258,7 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
     return;
   }
   case MachineOperand::MO_ExternalSymbol: {
-    O << TAI->getGlobalPrefix() << MO.getSymbolName();
+    O << MAI->getGlobalPrefix() << MO.getSymbolName();
     return;
   }
   default:
@@ -267,17 +269,17 @@ void X86IntelAsmPrinter::printOp(const MachineOperand &MO,
 void X86IntelAsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo){
   const MachineOperand &MO = MI->getOperand(OpNo);
   switch (MO.getType()) {
-  default: assert(0 && "Unknown pcrel immediate operand");
+  default: llvm_unreachable("Unknown pcrel immediate operand");
   case MachineOperand::MO_Immediate:
     O << MO.getImm();
     return;
   case MachineOperand::MO_MachineBasicBlock:
-    printBasicBlockLabel(MO.getMBB());
+    printBasicBlockLabel(MO.getMBB(), false, false, false);
     return;
     
   case MachineOperand::MO_GlobalAddress: {
     GlobalValue *GV = MO.getGlobal();
-    std::string Name = Mang->getValueName(GV);
+    std::string Name = Mang->getMangledName(GV);
     decorateName(Name, GV);
     
     // Handle dllimport linkage.
@@ -291,7 +293,7 @@ void X86IntelAsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo){
   }
 
   case MachineOperand::MO_ExternalSymbol:
-    O << TAI->getGlobalPrefix() << MO.getSymbolName();
+    O << MAI->getGlobalPrefix() << MO.getSymbolName();
     return;
   }
 }
@@ -355,10 +357,10 @@ void X86IntelAsmPrinter::printMemReference(const MachineInstr *MI, unsigned Op,
 
 void X86IntelAsmPrinter::printPICJumpTableSetLabel(unsigned uid,
                                            const MachineBasicBlock *MBB) const {
-  if (!TAI->getSetDirective())
+  if (!MAI->getSetDirective())
     return;
 
-  O << TAI->getSetDirective() << ' ' << TAI->getPrivateGlobalPrefix()
+  O << MAI->getSetDirective() << ' ' << MAI->getPrivateGlobalPrefix()
     << getFunctionNumber() << '_' << uid << "_set_" << MBB->getNumber() << ',';
   printBasicBlockLabel(MBB, false, false, false);
   O << '-' << "\"L" << getFunctionNumber() << "$pb\"'\n";
@@ -445,7 +447,7 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
   // Emit declarations for external functions.
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
     if (I->isDeclaration()) {
-      std::string Name = Mang->getValueName(I);
+      std::string Name = Mang->getMangledName(I);
       decorateName(Name, I);
 
       O << "\tEXTERN " ;
@@ -460,7 +462,7 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
   for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
        I != E; ++I) {
     if (I->isDeclaration()) {
-      std::string Name = Mang->getValueName(I);
+      std::string Name = Mang->getMangledName(I);
 
       O << "\tEXTERN " ;
       if (I->hasDLLImportLinkage()) {
@@ -473,73 +475,70 @@ bool X86IntelAsmPrinter::doInitialization(Module &M) {
   return Result;
 }
 
-bool X86IntelAsmPrinter::doFinalization(Module &M) {
+void X86IntelAsmPrinter::PrintGlobalVariable(const GlobalVariable *GV) {
+  // Check to see if this is a special global used by LLVM, if so, emit it.
+  if (GV->isDeclaration() ||
+      EmitSpecialLLVMGlobal(GV))
+    return;
+  
   const TargetData *TD = TM.getTargetData();
 
-  // Print out module-level global variables here.
-  for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-       I != E; ++I) {
-    if (I->isDeclaration()) continue;   // External global require no code
-
-    // Check to see if this is a special global used by LLVM, if so, emit it.
-    if (EmitSpecialLLVMGlobal(I))
-      continue;
-
-    std::string name = Mang->getValueName(I);
-    Constant *C = I->getInitializer();
-    unsigned Align = TD->getPreferredAlignmentLog(I);
-    bool bCustomSegment = false;
-
-    switch (I->getLinkage()) {
-    case GlobalValue::CommonLinkage:
-    case GlobalValue::LinkOnceAnyLinkage:
-    case GlobalValue::LinkOnceODRLinkage:
-    case GlobalValue::WeakAnyLinkage:
-    case GlobalValue::WeakODRLinkage:
-      SwitchToDataSection("");
-      O << name << "?\tSEGEMNT PARA common 'COMMON'\n";
-      bCustomSegment = true;
-      // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
-      // are also available.
-      break;
-    case GlobalValue::AppendingLinkage:
-      SwitchToDataSection("");
-      O << name << "?\tSEGMENT PARA public 'DATA'\n";
-      bCustomSegment = true;
-      // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
-      // are also available.
-      break;
-    case GlobalValue::DLLExportLinkage:
-      DLLExportedGVs.insert(name);
-      // FALL THROUGH
-    case GlobalValue::ExternalLinkage:
-      O << "\tpublic " << name << "\n";
-      // FALL THROUGH
-    case GlobalValue::InternalLinkage:
-      SwitchToSection(TAI->getDataSection());
-      break;
-    default:
-      assert(0 && "Unknown linkage type!");
-    }
-
-    if (!bCustomSegment)
-      EmitAlignment(Align, I);
-
-    O << name << ":";
-    if (VerboseAsm)
-      O << "\t\t\t\t" << TAI->getCommentString()
-        << " " << I->getName();
-    O << '\n';
-
-    EmitGlobalConstant(C);
-
-    if (bCustomSegment)
-      O << name << "?\tends\n";
+  std::string name = Mang->getMangledName(GV);
+  Constant *C = GV->getInitializer();
+  unsigned Align = TD->getPreferredAlignmentLog(GV);
+  bool bCustomSegment = false;
+  
+  switch (GV->getLinkage()) {
+  case GlobalValue::CommonLinkage:
+  case GlobalValue::LinkOnceAnyLinkage:
+  case GlobalValue::LinkOnceODRLinkage:
+  case GlobalValue::WeakAnyLinkage:
+  case GlobalValue::WeakODRLinkage:
+    // FIXME: make a MCSection.
+    O << name << "?\tSEGEMNT PARA common 'COMMON'\n";
+    bCustomSegment = true;
+    // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
+    // are also available.
+    break;
+  case GlobalValue::AppendingLinkage:
+    // FIXME: make a MCSection.
+    O << name << "?\tSEGMENT PARA public 'DATA'\n";
+    bCustomSegment = true;
+    // FIXME: the default alignment is 16 bytes, but 1, 2, 4, and 256
+    // are also available.
+    break;
+  case GlobalValue::DLLExportLinkage:
+    DLLExportedGVs.insert(name);
+    // FALL THROUGH
+  case GlobalValue::ExternalLinkage:
+    O << "\tpublic " << name << "\n";
+    // FALL THROUGH
+  case GlobalValue::InternalLinkage:
+    OutStreamer.SwitchSection(getObjFileLowering().getDataSection());
+    break;
+  default:
+    llvm_unreachable("Unknown linkage type!");
   }
+  
+  if (!bCustomSegment)
+    EmitAlignment(Align, GV);
+  
+  O << name << ":";
+  if (VerboseAsm)
+    O.PadToColumn(MAI->getCommentColumn());
+    O << MAI->getCommentString()
+    << " " << GV->getName();
+  O << '\n';
+  
+  EmitGlobalConstant(C);
+  
+  if (bCustomSegment)
+    O << name << "?\tends\n";
+}
 
-    // Output linker support code for dllexported globals
+bool X86IntelAsmPrinter::doFinalization(Module &M) {
+  // Output linker support code for dllexported globals
   if (!DLLExportedGVs.empty() || !DLLExportedFns.empty()) {
-    SwitchToDataSection("");
     O << "; WARNING: The following code is valid only with MASM v8.x"
       << "and (possible) higher\n"
       << "; This version of MASM is usually shipped with Microsoft "
@@ -549,24 +548,22 @@ bool X86IntelAsmPrinter::doFinalization(Module &M) {
       << "; dllexported symbols in the earlier versions of MASM in fully "
       << "automatic way\n\n";
     O << "_drectve\t segment info alias('.drectve')\n";
-  }
 
-  for (StringSet<>::iterator i = DLLExportedGVs.begin(),
-         e = DLLExportedGVs.end();
-         i != e; ++i)
-    O << "\t db ' /EXPORT:" << i->getKeyData() << ",data'\n";
+    for (StringSet<>::iterator i = DLLExportedGVs.begin(),
+           e = DLLExportedGVs.end();
+           i != e; ++i)
+      O << "\t db ' /EXPORT:" << i->getKeyData() << ",data'\n";
 
-  for (StringSet<>::iterator i = DLLExportedFns.begin(),
-         e = DLLExportedFns.end();
-         i != e; ++i)
-    O << "\t db ' /EXPORT:" << i->getKeyData() << "'\n";
+    for (StringSet<>::iterator i = DLLExportedFns.begin(),
+           e = DLLExportedFns.end();
+           i != e; ++i)
+      O << "\t db ' /EXPORT:" << i->getKeyData() << "'\n";
 
-  if (!DLLExportedGVs.empty() || !DLLExportedFns.empty())
     O << "_drectve\t ends\n";
+  }
 
   // Bypass X86SharedAsmPrinter::doFinalization().
   bool Result = AsmPrinter::doFinalization(M);
-  SwitchToDataSection("");
   O << "\tend\n";
   return Result;
 }

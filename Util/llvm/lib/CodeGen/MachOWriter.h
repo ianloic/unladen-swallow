@@ -22,15 +22,16 @@ namespace llvm {
   class Constant;
   class GlobalVariable;
   class Mangler;
+  class MachineBasicBlock;
   class MachineRelocation;
   class MachOCodeEmitter;
-  class MachODySymTab;
-  class MachOHeader;
-  class MachOSection;
-  class MachOSym;
+  struct MachODySymTab;
+  struct MachOHeader;
+  struct MachOSection;
+  struct MachOSym;
   class TargetData;
   class TargetMachine;
-  class TargetAsmInfo;
+  class MCAsmInfo;
   class ObjectCodeEmitter;
   class OutputBuffer;
   class raw_ostream;
@@ -77,7 +78,7 @@ namespace llvm {
     bool is64Bit, isLittleEndian;
 
     // Target Asm Info
-    const TargetAsmInfo *TAI;
+    const MCAsmInfo *MAI;
 
     /// Header - An instance of MachOHeader that we will update while we build
     /// the file, and then emit during finalization.

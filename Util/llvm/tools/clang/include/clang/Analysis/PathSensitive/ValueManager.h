@@ -16,14 +16,19 @@
 #ifndef LLVM_CLANG_ANALYSIS_AGGREGATE_VALUE_MANAGER_H
 #define LLVM_CLANG_ANALYSIS_AGGREGATE_VALUE_MANAGER_H
 
+#include "llvm/ADT/OwningPtr.h"
 #include "clang/Analysis/PathSensitive/MemRegion.h"
 #include "clang/Analysis/PathSensitive/SVals.h"
 #include "clang/Analysis/PathSensitive/BasicValueFactory.h"
 #include "clang/Analysis/PathSensitive/SymbolManager.h"
+#include "clang/Analysis/PathSensitive/SValuator.h"
 
 namespace llvm { class BumpPtrAllocator; }
 
 namespace clang {  
+
+class GRStateManager;
+  
 class ValueManager {
 
   ASTContext &Context;  
@@ -32,25 +37,43 @@ class ValueManager {
   /// SymMgr - Object that manages the symbol information.
   SymbolManager SymMgr;
 
+  /// SVator - SValuator object that creates SVals from expressions.
+  llvm::OwningPtr<SValuator> SVator;
 
   MemRegionManager MemMgr;
   
+  GRStateManager &StateMgr;
+  
+  const QualType ArrayIndexTy;
+  const unsigned ArrayIndexWidth;
+  
 public:
-  ValueManager(llvm::BumpPtrAllocator &alloc, ASTContext &context)
-               : Context(context), BasicVals(Context, alloc),
-                 SymMgr(Context, BasicVals, alloc),
-                 MemMgr(Context, alloc) {}
+  ValueManager(llvm::BumpPtrAllocator &alloc, ASTContext &context,
+               GRStateManager &stateMgr)
+               : Context(context), BasicVals(context, alloc),
+                 SymMgr(context, BasicVals, alloc),
+                 MemMgr(context, alloc), StateMgr(stateMgr),
+                 ArrayIndexTy(context.IntTy),
+                 ArrayIndexWidth(context.getTypeSize(ArrayIndexTy))  
+  {
+    // FIXME: Generalize later.
+    SVator.reset(clang::CreateSimpleSValuator(*this));
+  }
 
   // Accessors to submanagers.
   
   ASTContext &getContext() { return Context; }
   const ASTContext &getContext() const { return Context; }
   
+  GRStateManager &getStateManager() { return StateMgr; }
+  
   BasicValueFactory &getBasicValueFactory() { return BasicVals; }
   const BasicValueFactory &getBasicValueFactory() const { return BasicVals; }
   
   SymbolManager &getSymbolManager() { return SymMgr; }
   const SymbolManager &getSymbolManager() const { return SymMgr; }
+                 
+  SValuator &getSValuator() { return *SVator.get(); }
 
   MemRegionManager &getRegionManager() { return MemMgr; }
   const MemRegionManager &getRegionManager() const { return MemMgr; }
@@ -82,15 +105,28 @@ public:
   SVal getConjuredSymbolVal(const Expr *E, unsigned Count);  
   SVal getConjuredSymbolVal(const Expr* E, QualType T, unsigned Count);
 
+  SVal getDerivedRegionValueSymbolVal(SymbolRef parentSymbol,
+                                      const TypedRegion *R);
+  
   SVal getFunctionPointer(const FunctionDecl* FD);
 
   NonLoc makeCompoundVal(QualType T, llvm::ImmutableList<SVal> Vals) {
     return nonloc::CompoundVal(BasicVals.getCompoundValData(T, Vals));
   }
+  
+  NonLoc makeLazyCompoundVal(const GRState *state, const TypedRegion *R) {
+    return nonloc::LazyCompoundVal(BasicVals.getLazyCompoundValData(state, R));
+  }
 
   NonLoc makeZeroArrayIndex() {
-    return nonloc::ConcreteInt(BasicVals.getZeroWithPtrWidth(false));
+    return nonloc::ConcreteInt(BasicVals.getValue(0, ArrayIndexTy));
   }
+  
+  NonLoc makeArrayIndex(uint64_t idx) {
+    return nonloc::ConcreteInt(BasicVals.getValue(idx, ArrayIndexTy));
+  }
+  
+  SVal convertToArrayIndex(SVal V);
 
   nonloc::ConcreteInt makeIntVal(const IntegerLiteral* I) {
     return nonloc::ConcreteInt(BasicVals.getValue(I->getValue(),
@@ -118,6 +154,10 @@ public:
 
   NonLoc makeIntVal(uint64_t X, bool isUnsigned) {
     return nonloc::ConcreteInt(BasicVals.getIntValue(X, isUnsigned));
+  }
+
+  NonLoc makeIntValWithPtrWidth(uint64_t X, bool isUnsigned) {
+    return nonloc::ConcreteInt(BasicVals.getIntWithPtrWidth(X, isUnsigned));
   }
 
   NonLoc makeIntVal(uint64_t X, unsigned BitWidth, bool isUnsigned) {

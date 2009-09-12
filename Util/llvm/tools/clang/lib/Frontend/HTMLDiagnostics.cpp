@@ -23,7 +23,6 @@
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
 #include <fstream>
@@ -39,9 +38,11 @@ class VISIBILITY_HIDDEN HTMLDiagnostics : public PathDiagnosticClient {
   llvm::sys::Path Directory, FilePrefix;
   bool createdDir, noDir;
   Preprocessor* PP;
-  std::vector<const PathDiagnostic*> BatchedDiags;  
+  std::vector<const PathDiagnostic*> BatchedDiags;
+  llvm::SmallVectorImpl<std::string> *FilesMade;  
 public:
-  HTMLDiagnostics(const std::string& prefix, Preprocessor* pp);
+  HTMLDiagnostics(const std::string& prefix, Preprocessor* pp,
+                  llvm::SmallVectorImpl<std::string> *filesMade = 0);
 
   virtual ~HTMLDiagnostics();
   
@@ -65,9 +66,10 @@ public:
   
 } // end anonymous namespace
 
-HTMLDiagnostics::HTMLDiagnostics(const std::string& prefix, Preprocessor* pp)
+HTMLDiagnostics::HTMLDiagnostics(const std::string& prefix, Preprocessor* pp,
+                                 llvm::SmallVectorImpl<std::string>* filesMade)
   : Directory(prefix), FilePrefix(prefix), createdDir(false), noDir(false),
-    PP(pp) {
+    PP(pp), FilesMade(filesMade) {
   
   // All html files begin with "report" 
   FilePrefix.appendComponent("report");
@@ -75,8 +77,43 @@ HTMLDiagnostics::HTMLDiagnostics(const std::string& prefix, Preprocessor* pp)
 
 PathDiagnosticClient*
 clang::CreateHTMLDiagnosticClient(const std::string& prefix, Preprocessor* PP,
-                                  PreprocessorFactory*) {
-  return new HTMLDiagnostics(prefix, PP);
+                                  PreprocessorFactory*,
+                                  llvm::SmallVectorImpl<std::string>* FilesMade)
+{
+  return new HTMLDiagnostics(prefix, PP, FilesMade);
+}
+
+//===----------------------------------------------------------------------===//
+// Factory for HTMLDiagnosticClients
+//===----------------------------------------------------------------------===//
+
+namespace {
+class VISIBILITY_HIDDEN HTMLDiagnosticsFactory
+  : public PathDiagnosticClientFactory {
+
+  std::string Prefix;
+  Preprocessor *PP;
+public:
+  HTMLDiagnosticsFactory(const std::string& prefix, Preprocessor* pp)
+    : Prefix(prefix), PP(pp) {}
+
+  virtual ~HTMLDiagnosticsFactory() {}
+    
+  const char *getName() const { return "HTMLDiagnostics"; }
+    
+  PathDiagnosticClient*
+  createPathDiagnosticClient(llvm::SmallVectorImpl<std::string> *FilesMade) {
+
+  return new HTMLDiagnostics(Prefix, PP, FilesMade);
+  }
+};
+} // end anonymous namespace
+
+PathDiagnosticClientFactory*
+clang::CreateHTMLDiagnosticClientFactory(const std::string& prefix,
+                                         Preprocessor* PP,
+                                         PreprocessorFactory*) {
+  return new HTMLDiagnosticsFactory(prefix, PP);
 }
 
 //===----------------------------------------------------------------------===//
@@ -113,9 +150,9 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D) {
     Directory.createDirectoryOnDisk(true, &ErrorMsg);
   
     if (!Directory.isDirectory()) {
-      llvm::cerr << "warning: could not create directory '"
-                 << Directory.toString() << "'\n"
-                 << "reason: " << ErrorMsg << '\n'; 
+      llvm::errs() << "warning: could not create directory '"
+                   << Directory.str() << "'\n"
+                   << "reason: " << ErrorMsg << '\n'; 
       
       noDir = true;
       
@@ -199,7 +236,7 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D) {
   
   if (!llvm::sys::Path(Entry->getName()).isAbsolute()) {
     llvm::sys::Path P = llvm::sys::Path::GetCurrentDirectory();
-    DirName = P.toString() + "/";
+    DirName = P.str() + "/";
   }
     
   // Add the name of the file as an <h1> tag.  
@@ -232,60 +269,41 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D) {
     os << "</table>\n<!-- REPORTSUMMARYEXTRA -->\n"
           "<h3>Annotated Source Code</h3>\n";    
     
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
+    R.InsertTextBefore(SMgr.getLocForStartOfFile(FID), os.str());
   }
   
   // Embed meta-data tags.
-  
-  const std::string& BugDesc = D.getDescription();
-  
-  if (!BugDesc.empty()) {
-    std::string s;
-    llvm::raw_string_ostream os(s);
-    os << "\n<!-- BUGDESC " << BugDesc << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
-  }
-  
-  const std::string& BugType = D.getBugType();
-  if (!BugType.empty()) {
-    std::string s;
-    llvm::raw_string_ostream os(s);
-    os << "\n<!-- BUGTYPE " << BugType << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
-  }
-  
-  const std::string& BugCategory = D.getCategory();
-  
-  if (!BugCategory.empty()) {
-    std::string s;
-    llvm::raw_string_ostream os(s);
-    os << "\n<!-- BUGCATEGORY " << BugCategory << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
-  }
-  
   {
     std::string s;
     llvm::raw_string_ostream os(s);
+  
+    const std::string& BugDesc = D.getDescription();  
+    if (!BugDesc.empty())
+      os << "\n<!-- BUGDESC " << BugDesc << " -->\n";
+    
+    const std::string& BugType = D.getBugType();
+    if (!BugType.empty())
+      os << "\n<!-- BUGTYPE " << BugType << " -->\n";
+  
+    const std::string& BugCategory = D.getCategory();  
+    if (!BugCategory.empty())
+      os << "\n<!-- BUGCATEGORY " << BugCategory << " -->\n";
+
     os << "\n<!-- BUGFILE " << DirName << Entry->getName() << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
-  }
-  
-  {
-    std::string s;
-    llvm::raw_string_ostream os(s);
+
     os << "\n<!-- BUGLINE "
        << D.back()->getLocation().asLocation().getInstantiationLineNumber()
        << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
+
+    os << "\n<!-- BUGPATHLENGTH " << D.size() << " -->\n";
+    
+    // Mark the end of the tags.
+    os << "\n<!-- BUGMETAEND -->\n";
+    
+    // Insert the text.
+    R.InsertTextBefore(SMgr.getLocForStartOfFile(FID), os.str());
   }
   
-  {
-    std::string s;
-    llvm::raw_string_ostream os(s);
-    os << "\n<!-- BUGPATHLENGTH " << D.size() << " -->\n";
-    R.InsertStrBefore(SMgr.getLocForStartOfFile(FID), os.str());
-  }
-
   // Add CSS, header, and footer.
   
   html::AddHeaderFooterInternalBuiltinCSS(R, FID, Entry->getName());
@@ -294,7 +312,7 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D) {
   const RewriteBuffer *Buf = R.getRewriteBufferFor(FID);
   
   if (!Buf) {
-    llvm::cerr << "warning: no diagnostics generated for main file.\n";
+    llvm::errs() << "warning: no diagnostics generated for main file.\n";
     return;
   }
 
@@ -311,18 +329,20 @@ void HTMLDiagnostics::ReportDiag(const PathDiagnostic& D) {
     H.appendSuffix("html");
     F.renamePathOnDisk(H, NULL);
     
-    os.open(H.toString().c_str());
+    os.open(H.c_str());
     
     if (!os) {
-      llvm::cerr << "warning: could not create file '" << F.toString() << "'\n";
+      llvm::errs() << "warning: could not create file '" << F.str() << "'\n";
       return;
     }
+
+    if (FilesMade)
+      FilesMade->push_back(H.getLast());
   }
   
   // Emit the HTML to disk.
-
   for (RewriteBuffer::iterator I = Buf->begin(), E = Buf->end(); I!=E; ++I)
-      os << *I;
+      os << *I;  
 }
 
 void HTMLDiagnostics::HandlePiece(Rewriter& R, FileID BugFileID,
@@ -490,7 +510,7 @@ void HTMLDiagnostics::HandlePiece(Rewriter& R, FileID BugFileID,
   SourceLocation Loc = 
     SM.getLocForStartOfFile(LPosInfo.first).getFileLocWithOffset(DisplayPos);
 
-  R.InsertStrBefore(Loc, os.str());
+  R.InsertTextBefore(Loc, os.str());
 
   // Now highlight the ranges.  
   for (const SourceRange *I = P.ranges_begin(), *E = P.ranges_end();
@@ -513,7 +533,7 @@ void HTMLDiagnostics::HandlePiece(Rewriter& R, FileID BugFileID,
       std::string EscapedCode = html::EscapeText(Hint->CodeToInsert, true);
       EscapedCode = "<span class=\"CodeInsertionHint\">" + EscapedCode
         + "</span>";
-      R.InsertStrBefore(Hint->InsertionLoc, EscapedCode);
+      R.InsertTextBefore(Hint->InsertionLoc, EscapedCode);
     }
   }
 #endif

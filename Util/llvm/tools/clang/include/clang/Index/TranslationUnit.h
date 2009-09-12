@@ -3,11 +3,11 @@
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
-// License. See LICENSaE.TXT for details.
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
-//  Abstract interface for a translation unit
+//  Abstract interface for a translation unit.
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,12 +18,16 @@ namespace clang {
   class ASTContext;
 
 namespace idx {
+  class DeclReferenceMap;
+  class SelectorMap;
 
 /// \brief Abstract interface for a translation unit.
 class TranslationUnit {
 public:
   virtual ~TranslationUnit();
   virtual ASTContext &getASTContext() = 0;
+  virtual DeclReferenceMap &getDeclReferenceMap() = 0;
+  virtual SelectorMap &getSelectorMap() = 0;
 };
 
 } // namespace idx

@@ -782,7 +782,7 @@ public:
   // Clone - Clone this operator, replacing arguments with the new list
   virtual OpInit *clone(std::vector<Init *> &Operands) = 0;
 
-  virtual int getNumOperands(void) const = 0;
+  virtual int getNumOperands() const = 0;
   virtual Init *getOperand(int i) = 0;
 
   // Fold - If possible, fold this to a simpler init.  Return this if not
@@ -820,7 +820,7 @@ public:
     return new UnOpInit(getOpcode(), *Operands.begin(), getType());
   }
 
-  int getNumOperands(void) const { return 1; }
+  int getNumOperands() const { return 1; }
   Init *getOperand(int i) {
     assert(i == 0 && "Invalid operand id for unary operator");
     return getOperand();
@@ -864,7 +864,7 @@ public:
     return new BinOpInit(getOpcode(), Operands[0], Operands[1], getType());
   }
 
-  int getNumOperands(void) const { return 2; }
+  int getNumOperands() const { return 2; }
   Init *getOperand(int i) {
     assert((i == 0 || i == 1) && "Invalid operand id for binary operator");
     if (i == 0) {
@@ -909,7 +909,7 @@ public:
                           getType());
   }
 
-  int getNumOperands(void) const { return 3; }
+  int getNumOperands() const { return 3; }
   Init *getOperand(int i) {
     assert((i == 0 || i == 1 || i == 2) &&
            "Invalid operand id for ternary operator");
@@ -1220,6 +1220,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, const RecordVal &RV) {
 }
 
 class Record {
+  static unsigned LastID;
+
+  // Unique record ID.
+  unsigned ID;
   std::string Name;
   SMLoc Loc;
   std::vector<std::string> TemplateArgs;
@@ -1227,9 +1231,12 @@ class Record {
   std::vector<Record*> SuperClasses;
 public:
 
-  explicit Record(const std::string &N, SMLoc loc) : Name(N), Loc(loc) {}
+  explicit Record(const std::string &N, SMLoc loc) : 
+    ID(LastID++), Name(N), Loc(loc) {}
   ~Record() {}
   
+  unsigned getID() const { return ID; }
+
   const std::string &getName() const { return Name; }
   void setName(const std::string &Name);  // Also updates RecordKeeper.
   

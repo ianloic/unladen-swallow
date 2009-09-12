@@ -62,12 +62,11 @@ namespace llvm {
   class AlphaTargetLowering : public TargetLowering {
     int VarArgsOffset;  // What is the offset to the first vaarg
     int VarArgsBase;    // What is the base FrameIndex
-    bool useITOF;
   public:
     explicit AlphaTargetLowering(TargetMachine &TM);
     
     /// getSetCCResultType - Get the SETCC result ValueType
-    virtual MVT getSetCCResultType(MVT VT) const;
+    virtual MVT::SimpleValueType getSetCCResultType(EVT VT) const;
 
     /// LowerOperation - Provide custom lowering hooks for some operations.
     ///
@@ -82,21 +81,17 @@ namespace llvm {
     // Friendly names for dumps
     const char *getTargetNodeName(unsigned Opcode) const;
 
-    /// LowerCallTo - This hook lowers an abstract call to a function into an
-    /// actual call.
-    virtual std::pair<SDValue, SDValue>
-    LowerCallTo(SDValue Chain, const Type *RetTy, bool RetSExt, bool RetZExt,
-                bool isVarArg, bool isInreg, unsigned NumFixedArgs, unsigned CC,
-                bool isTailCall, SDValue Callee, ArgListTy &Args,
-                SelectionDAG &DAG, DebugLoc dl);
+    SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
+                            unsigned CallConv, bool isVarArg,
+                            const SmallVectorImpl<ISD::InputArg> &Ins,
+                            DebugLoc dl, SelectionDAG &DAG,
+                            SmallVectorImpl<SDValue> &InVals);
 
     ConstraintType getConstraintType(const std::string &Constraint) const;
 
     std::vector<unsigned> 
       getRegClassForInlineAsmConstraint(const std::string &Constraint,
-                                        MVT VT) const;
-
-    bool hasITOF() { return useITOF; }
+                                        EVT VT) const;
 
     MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
                                                    MachineBasicBlock *BB) const;
@@ -111,6 +106,26 @@ namespace llvm {
     void LowerVAARG(SDNode *N, SDValue &Chain, SDValue &DataPtr,
                     SelectionDAG &DAG);
 
+    virtual SDValue
+      LowerFormalArguments(SDValue Chain,
+                           unsigned CallConv, bool isVarArg,
+                           const SmallVectorImpl<ISD::InputArg> &Ins,
+                           DebugLoc dl, SelectionDAG &DAG,
+                           SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerCall(SDValue Chain, SDValue Callee,
+                unsigned CallConv, bool isVarArg, bool isTailCall,
+                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<ISD::InputArg> &Ins,
+                DebugLoc dl, SelectionDAG &DAG,
+                SmallVectorImpl<SDValue> &InVals);
+
+    virtual SDValue
+      LowerReturn(SDValue Chain,
+                  unsigned CallConv, bool isVarArg,
+                  const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  DebugLoc dl, SelectionDAG &DAG);
   };
 }
 

@@ -13,6 +13,10 @@ range of runtime data useful for optimizing Python itself. Data currently
 collected:
 - Stats on the size of generated LLVM IR.
 - Stats on the size of emitted machine code.
+- Which functions had their machine code disabled due to fatal guard failures,
+  but continued to be called.
+- How many machine code functions were invalidated by each change to
+  globals/builtins dicts.
 
 This data will be printed to stderr at interpreter-shutdown.
 

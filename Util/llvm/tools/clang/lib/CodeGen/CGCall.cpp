@@ -118,7 +118,7 @@ const CGFunctionInfo &CodeGenTypes::getFunctionInfo(QualType ResTy,
   FunctionInfos.InsertNode(FI, InsertPos);
 
   // Compute ABI information.
-  getABIInfo().computeInfo(*FI, getContext());
+  getABIInfo().computeInfo(*FI, getContext(), TheModule.getContext());
 
   return *FI;
 }
@@ -321,14 +321,14 @@ CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI, bool IsVariadic) {
 
   case ABIArgInfo::Indirect: {
     assert(!RetAI.getIndirectAlign() && "Align unused on indirect return.");
-    ResultType = llvm::Type::VoidTy;
+    ResultType = llvm::Type::getVoidTy(getLLVMContext());
     const llvm::Type *STy = ConvertType(RetTy);
     ArgTys.push_back(llvm::PointerType::get(STy, RetTy.getAddressSpace()));
     break;
   }
 
   case ABIArgInfo::Ignore:
-    ResultType = llvm::Type::VoidTy;
+    ResultType = llvm::Type::getVoidTy(getLLVMContext());
     break;
 
   case ABIArgInfo::Coerce:
@@ -385,6 +385,8 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
       FuncAttrs |= llvm::Attribute::ReadNone;
     else if (TargetDecl->hasAttr<PureAttr>())
       FuncAttrs |= llvm::Attribute::ReadOnly;
+    if (TargetDecl->hasAttr<MallocAttr>())
+      RetAttrs |= llvm::Attribute::NoAlias;
   }
 
   if (CompileOpts.DisableRedZone)
@@ -505,6 +507,19 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
 void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
                                          llvm::Function *Fn,
                                          const FunctionArgList &Args) {
+  // If this is an implicit-return-zero function, go ahead and
+  // initialize the return value.  TODO: it might be nice to have
+  // a more general mechanism for this that didn't require synthesized
+  // return statements.
+  if (const FunctionDecl* FD = dyn_cast_or_null<FunctionDecl>(CurFuncDecl)) {
+    if (FD->hasImplicitReturnZero()) {
+      QualType RetTy = FD->getResultType().getUnqualifiedType();
+      const llvm::Type* LLVMTy = CGM.getTypes().ConvertType(RetTy);
+      llvm::Constant* Zero = llvm::Constant::getNullValue(LLVMTy);
+      Builder.CreateStore(Zero, ReturnValue);
+    }
+  }
+
   // FIXME: We no longer need the types from FunctionArgList; lift up and
   // simplify.
 
@@ -581,7 +596,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       // Name the arguments used in expansion and increment AI.
       unsigned Index = 0;
       for (; AI != End; ++AI, ++Index)
-        AI->setName(Name + "." + llvm::utostr(Index));
+        AI->setName(Name + "." + llvm::Twine(Index));
       continue;
     }
 
@@ -824,7 +839,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   }    
 
   llvm::Instruction *CI = CS.getInstruction();
-  if (Builder.isNamePreserving() && CI->getType() != llvm::Type::VoidTy)
+  if (Builder.isNamePreserving() &&
+      CI->getType() != llvm::Type::getVoidTy(VMContext))
     CI->setName("call");
 
   switch (RetAI.getKind()) {

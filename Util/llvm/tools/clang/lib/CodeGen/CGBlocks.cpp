@@ -17,6 +17,8 @@
 #include "llvm/Module.h"
 #include "llvm/Target/TargetData.h"
 #include <algorithm>
+#include <cstdio>
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -48,7 +50,7 @@ BuildDescriptorBlockDecl(bool BlockHasCopyDispose, uint64_t Size,
     Elts.push_back(BuildDestroyHelper(Ty, NoteForHelper));
   }
 
-  C = llvm::ConstantStruct::get(Elts);
+  C = llvm::ConstantStruct::get(VMContext, Elts);
 
   C = new llvm::GlobalVariable(CGM.getModule(), C->getType(), true,
                                llvm::GlobalValue::InternalLinkage,
@@ -161,7 +163,7 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
       Elts[0] = CGM.getNSConcreteGlobalBlock();
       Elts[1] = llvm::ConstantInt::get(IntTy, flags|BLOCK_IS_GLOBAL);
 
-      C = llvm::ConstantStruct::get(Elts);
+      C = llvm::ConstantStruct::get(VMContext, Elts);
 
       char Name[32];
       sprintf(Name, "__block_holder_tmp_%d", CGM.getGlobalUniqueCount());
@@ -189,7 +191,7 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
         Types[i+5] = ConvertType(Ty);
     }
 
-    llvm::StructType *Ty = llvm::StructType::get(Types, true);
+    llvm::StructType *Ty = llvm::StructType::get(VMContext, Types, true);
 
     llvm::AllocaInst *A = CreateTempAlloca(Ty);
     A->setAlignment(subBlockAlign);
@@ -265,7 +267,7 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
             llvm::Value *BlockLiteral = LoadBlockStruct();
 
             Loc = Builder.CreateGEP(BlockLiteral,
-                                    llvm::ConstantInt::get(llvm::Type::Int64Ty,
+                                    llvm::ConstantInt::get(llvm::Type::getInt64Ty(VMContext),
                                                            offset),
                                     "block.literal");
             Ty = llvm::PointerType::get(Ty, 0);
@@ -310,7 +312,8 @@ const llvm::Type *BlockModule::getBlockDescriptorType() {
   //   unsigned long reserved;
   //   unsigned long block_size;
   // };
-  BlockDescriptorType = llvm::StructType::get(UnsignedLongTy,
+  BlockDescriptorType = llvm::StructType::get(UnsignedLongTy->getContext(),
+                                              UnsignedLongTy,
                                               UnsignedLongTy,
                                               NULL);
 
@@ -337,7 +340,8 @@ const llvm::Type *BlockModule::getGenericBlockLiteralType() {
   //   void (*__invoke)(void *);
   //   struct __block_descriptor *__descriptor;
   // };
-  GenericBlockLiteralType = llvm::StructType::get(PtrToInt8Ty,
+  GenericBlockLiteralType = llvm::StructType::get(IntTy->getContext(),
+                                                  PtrToInt8Ty,
                                                   IntTy,
                                                   IntTy,
                                                   PtrToInt8Ty,
@@ -369,7 +373,8 @@ const llvm::Type *BlockModule::getGenericExtendedBlockLiteralType() {
   //   void *__copy_func_helper_decl;
   //   void *__destroy_func_decl;
   // };
-  GenericExtendedBlockLiteralType = llvm::StructType::get(PtrToInt8Ty,
+  GenericExtendedBlockLiteralType = llvm::StructType::get(IntTy->getContext(),
+                                                          PtrToInt8Ty,
                                                           IntTy,
                                                           IntTy,
                                                           PtrToInt8Ty,
@@ -386,7 +391,7 @@ const llvm::Type *BlockModule::getGenericExtendedBlockLiteralType() {
 
 RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr* E) {
   const BlockPointerType *BPT =
-    E->getCallee()->getType()->getAsBlockPointerType();
+    E->getCallee()->getType()->getAs<BlockPointerType>();
 
   llvm::Value *Callee = EmitScalarExpr(E->getCallee());
 
@@ -403,7 +408,8 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr* E) {
 
   BlockLiteral =
     Builder.CreateBitCast(BlockLiteral,
-                          llvm::PointerType::getUnqual(llvm::Type::Int8Ty),
+                          llvm::PointerType::getUnqual(
+                              llvm::Type::getInt8Ty(VMContext)),
                           "tmp");
 
   // Add the block literal.
@@ -453,7 +459,7 @@ llvm::Value *CodeGenFunction::GetAddrOfBlockDecl(const BlockDeclRefExpr *E) {
 
   llvm::Value *BlockLiteral = LoadBlockStruct();
   llvm::Value *V = Builder.CreateGEP(BlockLiteral,
-                                     llvm::ConstantInt::get(llvm::Type::Int64Ty,
+                                  llvm::ConstantInt::get(llvm::Type::getInt64Ty(VMContext),
                                                             offset),
                                      "block.literal");
   if (E->isByRef()) {
@@ -507,10 +513,11 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
   // block literal struct.
   uint64_t BlockLiteralSize =
     TheTargetData.getTypeStoreSizeInBits(getGenericBlockLiteralType()) / 8;
-  DescriptorFields[1] = llvm::ConstantInt::get(UnsignedLongTy,BlockLiteralSize);
+  DescriptorFields[1] =
+                      llvm::ConstantInt::get(UnsignedLongTy,BlockLiteralSize);
 
   llvm::Constant *DescriptorStruct =
-    llvm::ConstantStruct::get(&DescriptorFields[0], 2);
+    llvm::ConstantStruct::get(VMContext, &DescriptorFields[0], 2);
 
   llvm::GlobalVariable *Descriptor =
     new llvm::GlobalVariable(getModule(), DescriptorStruct->getType(), true,
@@ -551,7 +558,7 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
   LiteralFields[4] = Descriptor;
 
   llvm::Constant *BlockLiteralStruct =
-    llvm::ConstantStruct::get(&LiteralFields[0], 5);
+    llvm::ConstantStruct::get(VMContext, &LiteralFields[0], 5);
 
   llvm::GlobalVariable *BlockLiteral =
     new llvm::GlobalVariable(getModule(), BlockLiteralStruct->getType(), true,
@@ -608,8 +615,7 @@ CodeGenFunction::GenerateBlockFunction(const BlockExpr *BExpr,
       dyn_cast<FunctionProtoType>(BlockFunctionType)) {
     ResultType = FTy->getResultType();
     IsVariadic = FTy->isVariadic();
-  }
-  else {
+  } else {
     // K&R style block.
     ResultType = BlockFunctionType->getResultType();
     IsVariadic = false;
@@ -685,13 +691,12 @@ uint64_t BlockFunction::getBlockOffset(const BlockDeclRefExpr *BDRE) {
 
   uint64_t Pad = BlockOffset - OldOffset;
   if (Pad) {
-    llvm::ArrayType::get(llvm::Type::Int8Ty, Pad);
+    llvm::ArrayType::get(llvm::Type::getInt8Ty(VMContext), Pad);
     QualType PadTy = getContext().getConstantArrayType(getContext().CharTy,
                                                        llvm::APInt(32, Pad),
                                                        ArrayType::Normal, 0);
     ValueDecl *PadDecl = VarDecl::Create(getContext(), 0, SourceLocation(),
-                                         0, QualType(PadTy), VarDecl::None,
-                                         SourceLocation());
+                                         0, QualType(PadTy), 0, VarDecl::None);
     Expr *E;
     E = new (getContext()) DeclRefExpr(PadDecl, PadDecl->getType(),
                                        SourceLocation(), false, false);
@@ -738,7 +743,7 @@ GenerateCopyHelperFunction(bool BlockHasCopyDispose, const llvm::StructType *T,
 
   FunctionDecl *FD = FunctionDecl::Create(getContext(),
                                           getContext().getTranslationUnitDecl(),
-                                          SourceLocation(), II, R,
+                                          SourceLocation(), II, R, 0,
                                           FunctionDecl::Static, false,
                                           true);
   CGF.StartFunction(FD, R, Fn, Args, SourceLocation());
@@ -774,7 +779,8 @@ GenerateCopyHelperFunction(bool BlockHasCopyDispose, const llvm::StructType *T,
         llvm::Value *Dstv = Builder.CreateStructGEP(DstObj, index);
         Dstv = Builder.CreateBitCast(Dstv, PtrToInt8Ty);
 
-        llvm::Value *N = llvm::ConstantInt::get(llvm::Type::Int32Ty, flag);
+        llvm::Value *N = llvm::ConstantInt::get(
+              llvm::Type::getInt32Ty(T->getContext()), flag);
         llvm::Value *F = getBlockObjectAssign();
         Builder.CreateCall3(F, Dstv, Srcv, N);
       }
@@ -819,7 +825,7 @@ GenerateDestroyHelperFunction(bool BlockHasCopyDispose,
 
   FunctionDecl *FD = FunctionDecl::Create(getContext(),
                                           getContext().getTranslationUnitDecl(),
-                                          SourceLocation(), II, R,
+                                          SourceLocation(), II, R, 0,
                                           FunctionDecl::Static, false,
                                           true);
   CGF.StartFunction(FD, R, Fn, Args, SourceLocation());
@@ -903,7 +909,7 @@ GeneratebyrefCopyHelperFunction(const llvm::Type *T, int flag) {
 
   FunctionDecl *FD = FunctionDecl::Create(getContext(),
                                           getContext().getTranslationUnitDecl(),
-                                          SourceLocation(), II, R,
+                                          SourceLocation(), II, R, 0,
                                           FunctionDecl::Static, false,
                                           true);
   CGF.StartFunction(FD, R, Fn, Args, SourceLocation());
@@ -925,7 +931,8 @@ GeneratebyrefCopyHelperFunction(const llvm::Type *T, int flag) {
   
   flag |= BLOCK_BYREF_CALLER;
 
-  llvm::Value *N = llvm::ConstantInt::get(llvm::Type::Int32Ty, flag);
+  llvm::Value *N = llvm::ConstantInt::get(
+          llvm::Type::getInt32Ty(T->getContext()), flag);
   llvm::Value *F = getBlockObjectAssign();
   Builder.CreateCall3(F, DstObj, SrcObj, N);
 
@@ -966,7 +973,7 @@ BlockFunction::GeneratebyrefDestroyHelperFunction(const llvm::Type *T,
 
   FunctionDecl *FD = FunctionDecl::Create(getContext(),
                                           getContext().getTranslationUnitDecl(),
-                                          SourceLocation(), II, R,
+                                          SourceLocation(), II, R, 0,
                                           FunctionDecl::Static, false,
                                           true);
   CGF.StartFunction(FD, R, Fn, Args, SourceLocation());
@@ -1022,9 +1029,9 @@ llvm::Value *BlockFunction::getBlockObjectDispose() {
   if (CGM.BlockObjectDispose == 0) {
     const llvm::FunctionType *FTy;
     std::vector<const llvm::Type*> ArgTys;
-    const llvm::Type *ResultType = llvm::Type::VoidTy;
+    const llvm::Type *ResultType = llvm::Type::getVoidTy(VMContext);
     ArgTys.push_back(PtrToInt8Ty);
-    ArgTys.push_back(llvm::Type::Int32Ty);
+    ArgTys.push_back(llvm::Type::getInt32Ty(VMContext));
     FTy = llvm::FunctionType::get(ResultType, ArgTys, false);
     CGM.BlockObjectDispose
       = CGM.CreateRuntimeFunction(FTy, "_Block_object_dispose");
@@ -1036,10 +1043,10 @@ llvm::Value *BlockFunction::getBlockObjectAssign() {
   if (CGM.BlockObjectAssign == 0) {
     const llvm::FunctionType *FTy;
     std::vector<const llvm::Type*> ArgTys;
-    const llvm::Type *ResultType = llvm::Type::VoidTy;
+    const llvm::Type *ResultType = llvm::Type::getVoidTy(VMContext);
     ArgTys.push_back(PtrToInt8Ty);
     ArgTys.push_back(PtrToInt8Ty);
-    ArgTys.push_back(llvm::Type::Int32Ty);
+    ArgTys.push_back(llvm::Type::getInt32Ty(VMContext));
     FTy = llvm::FunctionType::get(ResultType, ArgTys, false);
     CGM.BlockObjectAssign
       = CGM.CreateRuntimeFunction(FTy, "_Block_object_assign");
@@ -1051,7 +1058,7 @@ void BlockFunction::BuildBlockRelease(llvm::Value *V, int flag) {
   llvm::Value *F = getBlockObjectDispose();
   llvm::Value *N;
   V = Builder.CreateBitCast(V, PtrToInt8Ty);
-  N = llvm::ConstantInt::get(llvm::Type::Int32Ty, flag);
+  N = llvm::ConstantInt::get(llvm::Type::getInt32Ty(V->getContext()), flag);
   Builder.CreateCall2(F, V, N);
 }
 
@@ -1059,8 +1066,9 @@ ASTContext &BlockFunction::getContext() const { return CGM.getContext(); }
 
 BlockFunction::BlockFunction(CodeGenModule &cgm, CodeGenFunction &cgf,
                              CGBuilderTy &B)
-  : CGM(cgm), CGF(cgf), Builder(B) {
-  PtrToInt8Ty = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
+  : CGM(cgm), CGF(cgf), VMContext(cgm.getLLVMContext()), Builder(B) {
+  PtrToInt8Ty = llvm::PointerType::getUnqual(
+            llvm::Type::getInt8Ty(VMContext));
 
   BlockHasCopyDispose = false;
 }

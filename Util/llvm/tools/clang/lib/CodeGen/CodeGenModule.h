@@ -21,6 +21,7 @@
 #include "CGCall.h"
 #include "CGCXX.h"
 #include "CodeGenTypes.h"
+#include "llvm/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -34,6 +35,7 @@ namespace llvm {
   class GlobalValue;
   class TargetData;
   class FunctionType;
+  class LLVMContext;
 }
 
 namespace clang {
@@ -171,9 +173,15 @@ class CodeGenModule : public BlockModule {
   llvm::StringMap<llvm::Constant*> CFConstantStringMap;
   llvm::StringMap<llvm::Constant*> ConstantStringMap;
 
+  /// CXXGlobalInits - Variables with global initializers that need to run
+  /// before main.
+  std::vector<const VarDecl*> CXXGlobalInits;
+  
   /// CFConstantStringClassRef - Cached reference to the class for constant
   /// strings. This value has type int * but is actually an Obj-C class pointer.
   llvm::Constant *CFConstantStringClassRef;
+  
+  llvm::LLVMContext &VMContext;
 public:
   CodeGenModule(ASTContext &C, const CompileOptions &CompileOpts,
                 llvm::Module &M, const llvm::TargetData &TD, Diagnostic &Diags);
@@ -202,6 +210,7 @@ public:
   CodeGenTypes &getTypes() { return Types; }
   Diagnostic &getDiags() const { return Diags; }
   const llvm::TargetData &getTargetData() const { return TheTargetData; }
+  llvm::LLVMContext &getLLVMContext() { return VMContext; }
 
   /// getDeclVisibilityMode - Compute the visibility of the decl \arg D.
   LangOptions::VisibilityMode getDeclVisibilityMode(const Decl *D) const;
@@ -222,6 +231,9 @@ public:
   /// create it.
   llvm::Constant *GetAddrOfFunction(GlobalDecl GD,
                                     const llvm::Type *Ty = 0);
+
+  /// GenerateRtti - Generate the rtti information for the given type.
+  llvm::Constant *GenerateRtti(const CXXRecordDecl *RD);
 
   /// GetStringForStringLiteral - Return the appropriate bytes for a string
   /// literal, properly padded to match the literal type. If only the address of
@@ -368,7 +380,7 @@ public:
                                     CXXDtorType Type);
 
   void EmitTentativeDefinition(const VarDecl *D);
-  
+
   enum GVALinkage {
     GVA_Internal,
     GVA_C99Inline,
@@ -388,6 +400,9 @@ private:
   llvm::Constant *GetOrCreateLLVMGlobal(const char *MangledName,
                                         const llvm::PointerType *PTy,
                                         const VarDecl *D);
+  void DeferredCopyConstructorToEmit(GlobalDecl D);
+  void DeferredCopyAssignmentToEmit(GlobalDecl D);
+  void DeferredDestructorToEmit(GlobalDecl D);
   
   /// SetCommonAttributes - Set attributes which are common to any
   /// form of a global definition (alias, Objective-C method,
@@ -437,6 +452,9 @@ private:
   /// EmitCXXDestructor - Emit a single destructor with the given type from
   /// a C++ destructor Decl.
   void EmitCXXDestructor(const CXXDestructorDecl *D, CXXDtorType Type);
+  
+  /// EmitCXXGlobalInitFunc - Emit a function that initializes C++ globals.
+  void EmitCXXGlobalInitFunc();
   
   // FIXME: Hardcoding priority here is gross.
   void AddGlobalCtor(llvm::Function *Ctor, int Priority=65535);

@@ -24,6 +24,7 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ValueHandle.h"
 #include <algorithm>
 using namespace llvm;
@@ -50,7 +51,7 @@ void llvm::DeleteDeadBlock(BasicBlock *BB) {
     // contained within it must dominate their uses, that all uses will
     // eventually be removed (they are themselves dead).
     if (!I.use_empty())
-      I.replaceAllUsesWith(BB->getContext()->getUndef(I.getType()));
+      I.replaceAllUsesWith(UndefValue::get(I.getType()));
     BB->getInstList().pop_back();
   }
   
@@ -70,7 +71,7 @@ void llvm::FoldSingleEntryPHINodes(BasicBlock *BB) {
     if (PN->getIncomingValue(0) != PN)
       PN->replaceAllUsesWith(PN->getIncomingValue(0));
     else
-      PN->replaceAllUsesWith(BB->getContext()->getUndef(PN->getType()));
+      PN->replaceAllUsesWith(UndefValue::get(PN->getType()));
     PN->eraseFromParent();
   }
 }
@@ -250,12 +251,11 @@ void llvm::RemoveSuccessor(TerminatorInst *TI, unsigned SuccNum) {
       Value *RetVal = 0;
 
       // Create a value to return... if the function doesn't return null...
-      if (BB->getParent()->getReturnType() != Type::VoidTy)
-        RetVal = TI->getParent()->getContext()->getNullValue(
-                   BB->getParent()->getReturnType());
+      if (BB->getParent()->getReturnType() != Type::getVoidTy(TI->getContext()))
+        RetVal = Constant::getNullValue(BB->getParent()->getReturnType());
 
       // Create the return...
-      NewTI = ReturnInst::Create(RetVal);
+      NewTI = ReturnInst::Create(TI->getContext(), RetVal);
     }
     break;
 
@@ -263,8 +263,7 @@ void llvm::RemoveSuccessor(TerminatorInst *TI, unsigned SuccNum) {
   case Instruction::Switch:    // Should remove entry
   default:
   case Instruction::Ret:       // Cannot happen, has no successors!
-    assert(0 && "Unhandled terminator instruction type in RemoveSuccessor!");
-    abort();
+    llvm_unreachable("Unhandled terminator instruction type in RemoveSuccessor!");
   }
 
   if (NewTI)   // If it's a different instruction, replace.
@@ -361,8 +360,8 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
                                          unsigned NumPreds, const char *Suffix,
                                          Pass *P) {
   // Create new basic block, insert right before the original block.
-  BasicBlock *NewBB =
-    BasicBlock::Create(BB->getName()+Suffix, BB->getParent(), BB);
+  BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), BB->getName()+Suffix,
+                                         BB->getParent(), BB);
   
   // The new block unconditionally branches to the old block.
   BranchInst *BI = BranchInst::Create(BB, NewBB);
@@ -387,8 +386,7 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
   if (NumPreds == 0) {
     // Insert dummy values as the incoming value.
     for (BasicBlock::iterator I = BB->begin(); isa<PHINode>(I); ++I)
-      cast<PHINode>(I)->addIncoming(BB->getContext()->getUndef(I->getType()), 
-                                    NewBB);
+      cast<PHINode>(I)->addIncoming(UndefValue::get(I->getType()), NewBB);
     return NewBB;
   }
   
@@ -506,11 +504,15 @@ static bool AreEquivalentAddressValues(const Value *A, const Value *B) {
   // Test if the values are trivially equivalent.
   if (A == B) return true;
   
-  // Test if the values come form identical arithmetic instructions.
+  // Test if the values come from identical arithmetic instructions.
+  // Use isIdenticalToWhenDefined instead of isIdenticalTo because
+  // this function is only used when one address use dominates the
+  // other, which means that they'll always either have the same
+  // value or one of them will have an undefined value.
   if (isa<BinaryOperator>(A) || isa<CastInst>(A) ||
       isa<PHINode>(A) || isa<GetElementPtrInst>(A))
     if (const Instruction *BI = dyn_cast<Instruction>(B))
-      if (cast<Instruction>(A)->isIdenticalTo(BI))
+      if (cast<Instruction>(A)->isIdenticalToWhenDefined(BI))
         return true;
   
   // Otherwise they may not be equivalent.
@@ -540,7 +542,7 @@ Value *llvm::FindAvailableLoadedValue(Value *Ptr, BasicBlock *ScanBB,
   unsigned AccessSize = 0;
   if (AA) {
     const Type *AccessTy = cast<PointerType>(Ptr->getType())->getElementType();
-    AccessSize = AA->getTargetData().getTypeStoreSizeInBits(AccessTy);
+    AccessSize = AA->getTypeStoreSize(AccessTy);
   }
   
   while (ScanFrom != ScanBB->begin()) {
@@ -618,7 +620,7 @@ void llvm::CopyPrecedingStopPoint(Instruction *I,
   if (I != I->getParent()->begin()) {
     BasicBlock::iterator BBI = I;  --BBI;
     if (DbgStopPointInst *DSPI = dyn_cast<DbgStopPointInst>(BBI)) {
-      CallInst *newDSPI = DSPI->clone();
+      CallInst *newDSPI = DSPI->clone(I->getContext());
       newDSPI->insertBefore(InsertPos);
     }
   }

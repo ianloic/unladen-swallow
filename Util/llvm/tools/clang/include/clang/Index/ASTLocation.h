@@ -26,6 +26,7 @@ namespace clang {
   class SourceRange;
 
 namespace idx {
+  class TranslationUnit;
 
 /// \brief Represents a Decl or a Stmt and its immediate Decl parent. It's
 /// immutable.
@@ -58,10 +59,21 @@ public:
   bool isDecl() const { return isValid() && Stm == 0; }
   bool isStmt() const { return isValid() && Stm != 0; }
 
+  /// \brief Returns the declaration that this ASTLocation references.
+  ///
+  /// If this points to a Decl, that Decl is returned.
+  /// If this points to an Expr that references a Decl, that Decl is returned,
+  /// otherwise it returns NULL.
+  Decl *getReferencedDecl();
+  const Decl *getReferencedDecl() const {
+    return const_cast<ASTLocation*>(this)->getReferencedDecl();
+  }
+
   SourceRange getSourceRange() const;
 
   /// \brief Checks that D is the immediate Decl parent of Node.
   static bool isImmediateParent(Decl *D, Stmt *Node);
+  static Decl *FindImmediateParent(Decl *D, Stmt *Node);
 
   friend bool operator==(const ASTLocation &L, const ASTLocation &R) { 
     return L.D == R.D && L.Stm == R.Stm;
@@ -70,7 +82,21 @@ public:
     return !(L == R);
   }
   
-  void print(llvm::raw_ostream &OS);
+  void print(llvm::raw_ostream &OS) const;
+};
+
+/// \brief Like ASTLocation but also contains the TranslationUnit that the
+/// ASTLocation originated from.
+class TULocation : public ASTLocation {
+  TranslationUnit *TU;
+  
+public:
+  TULocation(TranslationUnit *tu, ASTLocation astLoc)
+    : ASTLocation(astLoc), TU(tu) {
+    assert(tu && "Passed null translation unit");
+  }
+  
+  TranslationUnit *getTU() const { return TU; }
 };
 
 } // namespace idx

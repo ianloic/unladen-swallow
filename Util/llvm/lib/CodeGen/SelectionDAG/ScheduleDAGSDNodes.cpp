@@ -18,6 +18,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtarget.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
@@ -152,6 +153,11 @@ void ScheduleDAGSDNodes::BuildSchedUnits() {
 }
 
 void ScheduleDAGSDNodes::AddSchedEdges() {
+  const TargetSubtarget &ST = TM.getSubtarget<TargetSubtarget>();
+
+  // Check to see if the scheduler cares about latencies.
+  bool UnitLatencies = ForceUnitLatencies();
+
   // Pass 2: add the preds, succs, etc.
   for (unsigned su = 0, e = SUnits.size(); su != e; ++su) {
     SUnit *SU = &SUnits[su];
@@ -189,7 +195,7 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
         assert(OpSU && "Node has no SUnit!");
         if (OpSU == SU) continue;           // In the same group.
 
-        MVT OpVT = N->getOperand(i).getValueType();
+        EVT OpVT = N->getOperand(i).getValueType();
         assert(OpVT != MVT::Flag && "Flagged nodes should be in same sunit!");
         bool isChain = OpVT == MVT::Other;
 
@@ -206,8 +212,15 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
         // dependency. This may change in the future though.
         if (Cost >= 0)
           PhysReg = 0;
-        SU->addPred(SDep(OpSU, isChain ? SDep::Order : SDep::Data,
-                         OpSU->Latency, PhysReg));
+
+        const SDep& dep = SDep(OpSU, isChain ? SDep::Order : SDep::Data,
+                               OpSU->Latency, PhysReg);
+        if (!isChain && !UnitLatencies) {
+          ComputeOperandLatency(OpSU, SU, (SDep &)dep);
+          ST.adjustSchedDependency(OpSU, SU, (SDep &)dep);
+        }
+
+        SU->addPred(dep);
       }
     }
   }
@@ -234,8 +247,8 @@ void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
   for (SDNode *N = SU->getNode(); N; N = N->getFlaggedNode())
     if (N->isMachineOpcode()) {
       SawMachineOpcode = true;
-      SU->Latency +=
-        InstrItins.getLatency(TII->get(N->getMachineOpcode()).getSchedClass());
+      SU->Latency += InstrItins.
+        getStageLatency(TII->get(N->getMachineOpcode()).getSchedClass());
     }
 }
 
@@ -276,19 +289,19 @@ unsigned ScheduleDAGSDNodes::ComputeMemOperandsEnd(SDNode *Node) {
 
 void ScheduleDAGSDNodes::dumpNode(const SUnit *SU) const {
   if (!SU->getNode()) {
-    cerr << "PHYS REG COPY\n";
+    errs() << "PHYS REG COPY\n";
     return;
   }
 
   SU->getNode()->dump(DAG);
-  cerr << "\n";
+  errs() << "\n";
   SmallVector<SDNode *, 4> FlaggedNodes;
   for (SDNode *N = SU->getNode()->getFlaggedNode(); N; N = N->getFlaggedNode())
     FlaggedNodes.push_back(N);
   while (!FlaggedNodes.empty()) {
-    cerr << "    ";
+    errs() << "    ";
     FlaggedNodes.back()->dump(DAG);
-    cerr << "\n";
+    errs() << "\n";
     FlaggedNodes.pop_back();
   }
 }

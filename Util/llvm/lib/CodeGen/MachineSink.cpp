@@ -7,7 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This pass 
+// This pass moves instructions into successor blocks, when possible, so that
+// they aren't executed on paths where their results aren't needed.
+//
+// This pass is not intended to be a replacement or a complete alternative
+// for an LLVM-IR-level sinking pass. It is only designed to sink simple
+// constructs that are not exposed before lowering and instruction selection.
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,6 +26,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 STATISTIC(NumSunk, "Number of machine instructions sunk");
@@ -31,7 +37,7 @@ namespace {
     const TargetInstrInfo *TII;
     MachineFunction       *CurMF; // Current MachineFunction
     MachineRegisterInfo  *RegInfo; // Machine register information
-    MachineDominatorTree *DT;   // Machine dominator tree for the current Loop
+    MachineDominatorTree *DT;   // Machine dominator tree
 
   public:
     static char ID; // Pass identification
@@ -40,6 +46,7 @@ namespace {
     virtual bool runOnMachineFunction(MachineFunction &MF);
     
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.setPreservesCFG();
       MachineFunctionPass::getAnalysisUsage(AU);
       AU.addRequired<MachineDominatorTree>();
       AU.addPreserved<MachineDominatorTree>();
@@ -85,7 +92,7 @@ bool MachineSinking::AllUsesDominatedByBlock(unsigned Reg,
 
 
 bool MachineSinking::runOnMachineFunction(MachineFunction &MF) {
-  DOUT << "******** Machine Sinking ********\n";
+  DEBUG(errs() << "******** Machine Sinking ********\n");
   
   CurMF = &MF;
   TM = &CurMF->getTarget();
@@ -151,7 +158,7 @@ bool MachineSinking::SinkInstruction(MachineInstr *MI, bool &SawStore) {
   // also sink them down before their first use in the block.  This xform has to
   // be careful not to *increase* register pressure though, e.g. sinking
   // "x = y + z" down if it kills y and z would increase the live ranges of y
-  // and z only the shrink the live range of x.
+  // and z and only shrink the live range of x.
   
   // Loop over all the operands of the specified instruction.  If there is
   // anything we can't handle, bail out.
@@ -232,15 +239,15 @@ bool MachineSinking::SinkInstruction(MachineInstr *MI, bool &SawStore) {
   if (MI->getParent() == SuccToSinkTo)
     return false;
   
-  DEBUG(cerr << "Sink instr " << *MI);
-  DEBUG(cerr << "to block " << *SuccToSinkTo);
+  DEBUG(errs() << "Sink instr " << *MI);
+  DEBUG(errs() << "to block " << *SuccToSinkTo);
   
   // If the block has multiple predecessors, this would introduce computation on
   // a path that it doesn't already exist.  We could split the critical edge,
   // but for now we just punt.
   // FIXME: Split critical edges if not backedges.
   if (SuccToSinkTo->pred_size() > 1) {
-    DEBUG(cerr << " *** PUNTING: Critical edge found\n");
+    DEBUG(errs() << " *** PUNTING: Critical edge found\n");
     return false;
   }
   

@@ -17,8 +17,9 @@ add_llvm_target(MipsCodeGen
   MipsISelLowering.cpp
   MipsRegisterInfo.cpp
   MipsSubtarget.cpp
-  MipsTargetAsmInfo.cpp
+  MipsMCAsmInfo.cpp
   MipsTargetMachine.cpp
+  MipsTargetObjectFile.cpp
   )
 
 target_link_libraries (LLVMMipsCodeGen LLVMSelectionDAG)

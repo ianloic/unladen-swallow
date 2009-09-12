@@ -29,12 +29,12 @@ public:
 
   /// emitLoadConstPool - Emits a load from constpool to materialize the
   /// specified immediate.
- void emitLoadConstPool(MachineBasicBlock &MBB,
-                        MachineBasicBlock::iterator &MBBI,
-                        DebugLoc dl,
-                        unsigned DestReg, int Val,
-                        ARMCC::CondCodes Pred = ARMCC::AL,
-                        unsigned PredReg = 0) const;
+  void emitLoadConstPool(MachineBasicBlock &MBB,
+                         MachineBasicBlock::iterator &MBBI,
+                         DebugLoc dl,
+                         unsigned DestReg, unsigned SubIdx, int Val,
+                         ARMCC::CondCodes Pred = ARMCC::AL,
+                         unsigned PredReg = 0) const;
 
   bool requiresRegisterScavenging(const MachineFunction &MF) const;
 };

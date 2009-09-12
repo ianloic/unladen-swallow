@@ -19,7 +19,6 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
-#include "llvm/Support/CFG.h"
 #include "llvm/Target/TargetData.h"
 using namespace clang;
 using namespace CodeGen;
@@ -69,9 +68,9 @@ const llvm::Type *CodeGenFunction::ConvertType(QualType T) {
 bool CodeGenFunction::hasAggregateLLVMType(QualType T) {
   // FIXME: Use positive checks instead of negative ones to be more robust in
   // the face of extension.
-  return !T->hasPointerRepresentation() &&!T->isRealType() &&
+  return !T->hasPointerRepresentation() && !T->isRealType() &&
     !T->isVoidType() && !T->isVectorType() && !T->isFunctionType() && 
-    !T->isBlockPointerType();
+    !T->isBlockPointerType() && !T->isMemberPointerType();
 }
 
 void CodeGenFunction::EmitReturnBlock() {
@@ -82,11 +81,12 @@ void CodeGenFunction::EmitReturnBlock() {
   if (CurBB) {
     assert(!CurBB->getTerminator() && "Unexpected terminated block.");
 
-    // We have a valid insert point, reuse it if there are no explicit
-    // jumps to the return block.
-    if (ReturnBlock->use_empty())
+    // We have a valid insert point, reuse it if it is empty or there are no
+    // explicit jumps to the return block.
+    if (CurBB->empty() || ReturnBlock->use_empty()) {
+      ReturnBlock->replaceAllUsesWith(CurBB);
       delete ReturnBlock;
-    else
+    } else
       EmitBlock(ReturnBlock);
     return;
   }
@@ -156,8 +156,8 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
   // Create a marker to make it easy to insert allocas into the entryblock
   // later.  Don't create this with the builder, because we don't want it
   // folded.
-  llvm::Value *Undef = llvm::UndefValue::get(llvm::Type::Int32Ty);
-  AllocaInsertPt = new llvm::BitCastInst(Undef, llvm::Type::Int32Ty, "",
+  llvm::Value *Undef = llvm::UndefValue::get(llvm::Type::getInt32Ty(VMContext));
+  AllocaInsertPt = new llvm::BitCastInst(Undef, llvm::Type::getInt32Ty(VMContext), "",
                                          EntryBB);
   if (Builder.isNamePreserving())
     AllocaInsertPt->setName("allocapt");
@@ -173,11 +173,13 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
   // FIXME: The cast here is a huge hack.
   if (CGDebugInfo *DI = getDebugInfo()) {
     DI->setLocation(StartLoc);
-    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
       DI->EmitFunctionStart(CGM.getMangledName(FD), RetTy, CurFn, Builder);
     } else {
       // Just use LLVM function name.
-      DI->EmitFunctionStart(Fn->getName().c_str(), 
+      
+      // FIXME: Remove unnecessary conversion to std::string when API settles.
+      DI->EmitFunctionStart(std::string(Fn->getName()).c_str(), 
                             RetTy, CurFn, Builder);
     }
   }
@@ -200,7 +202,7 @@ void CodeGenFunction::StartFunction(const Decl *D, QualType RetTy,
 void CodeGenFunction::GenerateCode(const FunctionDecl *FD,
                                    llvm::Function *Fn) {
   // Check if we should generate debug info for this function.
-  if (CGM.getDebugInfo() && !FD->hasAttr<NodebugAttr>())
+  if (CGM.getDebugInfo() && !FD->hasAttr<NoDebugAttr>())
     DebugInfo = CGM.getDebugInfo();
   
   FunctionArgList Args;
@@ -229,10 +231,35 @@ void CodeGenFunction::GenerateCode(const FunctionDecl *FD,
   // FIXME: Support CXXTryStmt here, too.
   if (const CompoundStmt *S = FD->getCompoundBody()) {
     StartFunction(FD, FD->getResultType(), Fn, Args, S->getLBracLoc());
+    if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD))
+      EmitCtorPrologue(CD);
     EmitStmt(S);
+    if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(FD))
+      EmitDtorEpilogue(DD);
     FinishFunction(S->getRBracLoc());
   }
-
+  else 
+    if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+      const CXXRecordDecl *ClassDecl = 
+        cast<CXXRecordDecl>(CD->getDeclContext());
+      (void) ClassDecl;
+      if (CD->isCopyConstructor(getContext())) {
+        assert(!ClassDecl->hasUserDeclaredCopyConstructor() &&
+               "bogus constructor is being synthesize");
+        SynthesizeCXXCopyConstructor(CD, FD, Fn, Args);
+      }
+      else {
+        assert(!ClassDecl->hasUserDeclaredConstructor() &&
+               "bogus constructor is being synthesize");
+        SynthesizeDefaultConstructor(CD, FD, Fn, Args);
+      }
+    }
+  else if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(FD))
+         SynthesizeDefaultDestructor(DD, FD, Fn, Args);
+  else if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD))
+         if (MD->isCopyAssignment())
+           SynthesizeCXXCopyAssignment(MD, FD, Fn, Args);
+    
   // Destroy the 'this' declaration.
   if (CXXThisDecl)
     CXXThisDecl->Destroy(getContext());
@@ -377,15 +404,6 @@ void CodeGenFunction::EmitBranchOnBoolExpr(const Expr *Cond,
   Builder.CreateCondBr(CondV, TrueBlock, FalseBlock);
 }
 
-/// getCGRecordLayout - Return record layout info.
-const CGRecordLayout *CodeGenFunction::getCGRecordLayout(CodeGenTypes &CGT,
-                                                         QualType Ty) {
-  const RecordType *RTy = Ty->getAsRecordType();
-  assert (RTy && "Unexpected type. RecordType expected here.");
-
-  return CGT.getCGRecordLayout(RTy->getDecl());
-}
-
 /// ErrorUnsupported - Print out an error that codegen doesn't support the
 /// specified stmt yet.
 void CodeGenFunction::ErrorUnsupported(const Stmt *S, const char *Type,
@@ -399,7 +417,7 @@ unsigned CodeGenFunction::GetIDForAddrOfLabel(const LabelStmt *L) {
 }
 
 void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty) {
-  const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
+  const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
   if (DestPtr->getType() != BP)
     DestPtr = Builder.CreateBitCast(DestPtr, BP, "tmp");
 
@@ -411,13 +429,14 @@ void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty) {
     return;
   
   // FIXME: Handle variable sized types.
-  const llvm::Type *IntPtr = llvm::IntegerType::get(LLVMPointerWidth);
+  const llvm::Type *IntPtr = llvm::IntegerType::get(VMContext, 
+                                                    LLVMPointerWidth);
 
   Builder.CreateCall4(CGM.getMemSetFn(), DestPtr,
-                      llvm::ConstantInt::getNullValue(llvm::Type::Int8Ty),
+                 llvm::Constant::getNullValue(llvm::Type::getInt8Ty(VMContext)),
                       // TypeInfo.first describes size in bits.
                       llvm::ConstantInt::get(IntPtr, TypeInfo.first/8),
-                      llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 
                                              TypeInfo.second/8));
 }
 
@@ -443,43 +462,40 @@ void CodeGenFunction::EmitIndirectSwitches() {
     I->setSuccessor(0, Default);
     for (std::map<const LabelStmt*,unsigned>::iterator LI = LabelIDs.begin(), 
            LE = LabelIDs.end(); LI != LE; ++LI) {
-      I->addCase(llvm::ConstantInt::get(llvm::Type::Int32Ty,
+      I->addCase(llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext),
                                         LI->second), 
                  getBasicBlockForLabel(LI->first));
     }
   }         
 }
 
-llvm::Value *CodeGenFunction::GetVLASize(const VariableArrayType *VAT)
-{
-  llvm::Value *&SizeEntry = VLASizeMap[VAT];
+llvm::Value *CodeGenFunction::GetVLASize(const VariableArrayType *VAT) {
+  llvm::Value *&SizeEntry = VLASizeMap[VAT->getSizeExpr()];
   
   assert(SizeEntry && "Did not emit size for type");
   return SizeEntry;
 }
 
-llvm::Value *CodeGenFunction::EmitVLASize(QualType Ty)
-{
+llvm::Value *CodeGenFunction::EmitVLASize(QualType Ty) {
   assert(Ty->isVariablyModifiedType() &&
          "Must pass variably modified type to EmitVLASizes!");
   
+  EnsureInsertPoint();
+  
   if (const VariableArrayType *VAT = getContext().getAsVariableArrayType(Ty)) {
-    llvm::Value *&SizeEntry = VLASizeMap[VAT];
+    llvm::Value *&SizeEntry = VLASizeMap[VAT->getSizeExpr()];
     
     if (!SizeEntry) {
-      // Get the element size;
-      llvm::Value *ElemSize;
-    
-      QualType ElemTy = VAT->getElementType();
-
       const llvm::Type *SizeTy = ConvertType(getContext().getSizeType());
                                              
+      // Get the element size;
+      QualType ElemTy = VAT->getElementType();
+      llvm::Value *ElemSize;
       if (ElemTy->isVariableArrayType())
         ElemSize = EmitVLASize(ElemTy);
-      else {
+      else
         ElemSize = llvm::ConstantInt::get(SizeTy,
                                           getContext().getTypeSize(ElemTy) / 8);
-      }
     
       llvm::Value *NumElements = EmitScalarExpr(VAT->getSizeExpr());
       NumElements = Builder.CreateIntCast(NumElements, SizeTy, false, "tmp");
@@ -488,14 +504,16 @@ llvm::Value *CodeGenFunction::EmitVLASize(QualType Ty)
     }
     
     return SizeEntry;
-  } else if (const ArrayType *AT = dyn_cast<ArrayType>(Ty)) {
-    EmitVLASize(AT->getElementType());
-  } else if (const PointerType *PT = Ty->getAsPointerType())
-    EmitVLASize(PT->getPointeeType());
-  else {
-    assert(0 && "unknown VM type!");
   }
   
+  if (const ArrayType *AT = dyn_cast<ArrayType>(Ty)) {
+    EmitVLASize(AT->getElementType());
+    return 0;
+  } 
+  
+  const PointerType *PT = Ty->getAs<PointerType>();
+  assert(PT && "unknown VM type!");
+  EmitVLASize(PT->getPointeeType());
   return 0;
 }
 
@@ -565,7 +583,7 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock()
     
     Builder.SetInsertPoint(SwitchBlock);
 
-    llvm::Value *DestCodePtr = CreateTempAlloca(llvm::Type::Int32Ty, 
+    llvm::Value *DestCodePtr = CreateTempAlloca(llvm::Type::getInt32Ty(VMContext), 
                                                 "cleanup.dst");
     llvm::Value *DestCode = Builder.CreateLoad(DestCodePtr, "tmp");
     
@@ -579,7 +597,7 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock()
       
       // If we had a current basic block, we also need to emit an instruction
       // to initialize the cleanup destination.
-      Builder.CreateStore(llvm::Constant::getNullValue(llvm::Type::Int32Ty),
+      Builder.CreateStore(llvm::Constant::getNullValue(llvm::Type::getInt32Ty(VMContext)),
                           DestCodePtr);
     } else
       Builder.ClearInsertionPoint();
@@ -596,13 +614,13 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock()
         
         // Check if we already have a destination for this block.
         if (Dest == SI->getDefaultDest())
-          ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 0);
+          ID = llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 0);
         else {
           ID = SI->findCaseDest(Dest);
           if (!ID) {
             // No code found, get a new unique one by using the number of
             // switch successors.
-            ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+            ID = llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 
                                         SI->getNumSuccessors());
             SI->addCase(ID, Dest);
           }
@@ -619,7 +637,7 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock()
         llvm::BasicBlock *CleanupPad = createBasicBlock("cleanup.pad", CurFn);
 
         // Create a unique case ID.
-        llvm::ConstantInt *ID = llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+        llvm::ConstantInt *ID = llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 
                                                        SI->getNumSuccessors());
 
         // Store the jump destination before the branch instruction.

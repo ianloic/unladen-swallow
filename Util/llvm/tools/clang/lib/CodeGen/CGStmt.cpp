@@ -43,13 +43,24 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   if (EmitSimpleStmt(S))
     return;
 
-  // If we happen to be at an unreachable point just create a dummy
-  // basic block to hold the code. We could change parts of irgen to
-  // simply not generate this code, but this situation is rare and
-  // probably not worth the effort.
-  // FIXME: Verify previous performance/effort claim.
-  EnsureInsertPoint();
-  
+  // Check if we are generating unreachable code.
+  if (!HaveInsertPoint()) {
+    // If so, and the statement doesn't contain a label, then we do not need to
+    // generate actual code. This is safe because (1) the current point is
+    // unreachable, so we don't need to execute the code, and (2) we've already
+    // handled the statements which update internal data structures (like the
+    // local variable map) which could be used by subsequent statements.
+    if (!ContainsLabel(S)) {
+      // Verify that any decl statements were handled as simple, they may be in
+      // scope of subsequent reachable statements.
+      assert(!isa<DeclStmt>(*S) && "Unexpected DeclStmt!");
+      return;
+    }
+
+    // Otherwise, make a new block to hold the code.
+    EnsureInsertPoint();
+  }
+
   // Generate a stoppoint if we are emitting debug info.
   EmitStopPoint(S);
 
@@ -57,10 +68,19 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   default:
     // Must be an expression in a stmt context.  Emit the value (to get
     // side-effects) and ignore the result.
-    if (const Expr *E = dyn_cast<Expr>(S)) {
-      EmitAnyExpr(E, 0, false, true);
-    } else {
+    if (!isa<Expr>(S))
       ErrorUnsupported(S, "statement");
+
+    EmitAnyExpr(cast<Expr>(S), 0, false, true);
+    
+    // Expression emitters don't handle unreachable blocks yet, so look for one
+    // explicitly here. This handles the common case of a call to a noreturn
+    // function.
+    if (llvm::BasicBlock *CurBB = Builder.GetInsertBlock()) {
+      if (CurBB->empty() && CurBB->use_empty()) {
+        CurBB->eraseFromParent();
+        Builder.ClearInsertionPoint();
+      }
     }
     break;
   case Stmt::IndirectGotoStmtClass:  
@@ -72,7 +92,6 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::ForStmtClass:      EmitForStmt(cast<ForStmt>(*S));           break;
     
   case Stmt::ReturnStmtClass:   EmitReturnStmt(cast<ReturnStmt>(*S));     break;
-  case Stmt::DeclStmtClass:     EmitDeclStmt(cast<DeclStmt>(*S));         break;
 
   case Stmt::SwitchStmtClass:   EmitSwitchStmt(cast<SwitchStmt>(*S));     break;
   case Stmt::AsmStmtClass:      EmitAsmStmt(cast<AsmStmt>(*S));           break;
@@ -103,6 +122,7 @@ bool CodeGenFunction::EmitSimpleStmt(const Stmt *S) {
   default: return false;
   case Stmt::NullStmtClass: break;
   case Stmt::CompoundStmtClass: EmitCompoundStmt(cast<CompoundStmt>(*S)); break;
+  case Stmt::DeclStmtClass:     EmitDeclStmt(cast<DeclStmt>(*S));         break;
   case Stmt::LabelStmtClass:    EmitLabelStmt(cast<LabelStmt>(*S));       break;
   case Stmt::GotoStmtClass:     EmitGotoStmt(cast<GotoStmt>(*S));         break;
   case Stmt::BreakStmtClass:    EmitBreakStmt(cast<BreakStmt>(*S));       break;
@@ -262,7 +282,7 @@ void CodeGenFunction::EmitIndirectGotoStmt(const IndirectGotoStmt &S) {
   // EmitIndirectSwitches(). We need a default dest, so we use the
   // current BB, but this is overwritten.
   llvm::Value *V = Builder.CreatePtrToInt(EmitScalarExpr(S.getTarget()),
-                                          llvm::Type::Int32Ty, 
+                                          llvm::Type::getInt32Ty(VMContext), 
                                           "addr");
   llvm::SwitchInst *I = Builder.CreateSwitch(V, Builder.GetInsertBlock());
   IndirectSwitches.push_back(I);
@@ -514,6 +534,13 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
 }
 
 void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
+  // As long as debug info is modeled with instructions, we have to ensure we
+  // have a place to insert here and write the stop point here.
+  if (getDebugInfo()) {
+    EnsureInsertPoint();
+    EmitStopPoint(&S);
+  }
+
   for (DeclStmt::const_decl_iterator I = S.decl_begin(), E = S.decl_end();
        I != E; ++I)
     EmitDecl(**I);
@@ -570,7 +597,7 @@ void CodeGenFunction::EmitCaseStmtRange(const CaseStmt &S) {
   if (Range.ult(llvm::APInt(Range.getBitWidth(), 64))) {
     // Range is small enough to add multiple switch instruction cases.
     for (unsigned i = 0, e = Range.getZExtValue() + 1; i != e; ++i) {
-      SwitchInsn->addCase(llvm::ConstantInt::get(LHS), CaseDest);
+      SwitchInsn->addCase(llvm::ConstantInt::get(VMContext, LHS), CaseDest);
       LHS++;
     }
     return;
@@ -591,10 +618,11 @@ void CodeGenFunction::EmitCaseStmtRange(const CaseStmt &S) {
 
   // Emit range check.
   llvm::Value *Diff = 
-    Builder.CreateSub(SwitchInsn->getCondition(), llvm::ConstantInt::get(LHS), 
-                      "tmp");
+    Builder.CreateSub(SwitchInsn->getCondition(), 
+                      llvm::ConstantInt::get(VMContext, LHS),  "tmp");
   llvm::Value *Cond = 
-    Builder.CreateICmpULE(Diff, llvm::ConstantInt::get(Range), "tmp");
+    Builder.CreateICmpULE(Diff,
+                          llvm::ConstantInt::get(VMContext, Range), "tmp");
   Builder.CreateCondBr(Cond, CaseDest, FalseDest);
 
   // Restore the appropriate insertion point.
@@ -613,7 +641,7 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
   EmitBlock(createBasicBlock("sw.bb"));
   llvm::BasicBlock *CaseDest = Builder.GetInsertBlock();
   llvm::APSInt CaseVal = S.getLHS()->EvaluateAsInt(getContext());
-  SwitchInsn->addCase(llvm::ConstantInt::get(CaseVal), CaseDest);
+  SwitchInsn->addCase(llvm::ConstantInt::get(VMContext, CaseVal), CaseDest);
   
   // Recursively emitting the statement is acceptable, but is not wonderful for
   // code where we have many case statements nested together, i.e.:
@@ -631,7 +659,7 @@ void CodeGenFunction::EmitCaseStmt(const CaseStmt &S) {
   while (NextCase && NextCase->getRHS() == 0) {
     CurCase = NextCase;
     CaseVal = CurCase->getLHS()->EvaluateAsInt(getContext());
-    SwitchInsn->addCase(llvm::ConstantInt::get(CaseVal), CaseDest);
+    SwitchInsn->addCase(llvm::ConstantInt::get(VMContext, CaseVal), CaseDest);
 
     NextCase = dyn_cast<CaseStmt>(CurCase->getSubStmt());
   }
@@ -752,7 +780,7 @@ llvm::Value* CodeGenFunction::EmitAsmInput(const AsmStmt &S,
 
       uint64_t Size = CGM.getTargetData().getTypeSizeInBits(Ty);
       if (Size <= 64 && llvm::isPowerOf2_64(Size)) {
-        Ty = llvm::IntegerType::get(Size);
+        Ty = llvm::IntegerType::get(VMContext, Size);
         Ty = llvm::PointerType::getUnqual(Ty);
         
         Arg = Builder.CreateLoad(Builder.CreateBitCast(Dest.getAddress(), Ty));
@@ -868,10 +896,9 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
         uint64_t InputSize = getContext().getTypeSize(InputTy);
         if (getContext().getTypeSize(OutputTy) < InputSize) {
           // Form the asm to return the value as a larger integer type.
-          ResultRegTypes.back() = llvm::IntegerType::get((unsigned)InputSize);
+          ResultRegTypes.back() = llvm::IntegerType::get(VMContext, (unsigned)InputSize);
         }
       }
-      
     } else {
       ArgTypes.push_back(Dest.getAddress()->getType());
       Args.push_back(Dest.getAddress());
@@ -927,9 +954,9 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
         // Use ptrtoint as appropriate so that we can do our extension.
         if (isa<llvm::PointerType>(Arg->getType()))
           Arg = Builder.CreatePtrToInt(Arg,
-                                      llvm::IntegerType::get(LLVMPointerWidth));
+                                      llvm::IntegerType::get(VMContext, LLVMPointerWidth));
         unsigned OutputSize = (unsigned)getContext().getTypeSize(OutputTy);
-        Arg = Builder.CreateZExt(Arg, llvm::IntegerType::get(OutputSize));
+        Arg = Builder.CreateZExt(Arg, llvm::IntegerType::get(VMContext, OutputSize));
       }
     }
     
@@ -971,11 +998,11 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
 
   const llvm::Type *ResultType;
   if (ResultRegTypes.empty())
-    ResultType = llvm::Type::VoidTy;
+    ResultType = llvm::Type::getVoidTy(VMContext);
   else if (ResultRegTypes.size() == 1)
     ResultType = ResultRegTypes[0];
   else
-    ResultType = llvm::StructType::get(ResultRegTypes);
+    ResultType = llvm::StructType::get(VMContext, ResultRegTypes);
   
   const llvm::FunctionType *FTy = 
     llvm::FunctionType::get(ResultType, ArgTypes, false);
@@ -1008,7 +1035,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
       // Truncate the integer result to the right size, note that
       // ResultTruncRegTypes can be a pointer.
       uint64_t ResSize = CGM.getTargetData().getTypeSizeInBits(TruncTy);
-      Tmp = Builder.CreateTrunc(Tmp, llvm::IntegerType::get((unsigned)ResSize));
+      Tmp = Builder.CreateTrunc(Tmp, llvm::IntegerType::get(VMContext, (unsigned)ResSize));
       
       if (Tmp->getType() != TruncTy) {
         assert(isa<llvm::PointerType>(TruncTy));

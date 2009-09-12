@@ -146,8 +146,9 @@ _PyDict_Dummy(void)
 #endif
 
 /* forward declarations */
-static PyDictEntry *
-lookdict_string(PyDictObject *mp, PyObject *key, long hash);
+static PyDictEntry *lookdict_string(PyDictObject *mp, PyObject *key, long hash);
+static void notify_watchers(PyDictObject *self);
+static void del_watchers_array(PyDictObject *self);
 
 #ifdef SHOW_CONVERSION_COUNTS
 static long created = 0L;
@@ -262,6 +263,11 @@ PyDict_New(void)
 #endif
 	}
 	mp->ma_lookup = lookdict_string;
+#ifdef WITH_LLVM
+	mp->ma_watchers = NULL;
+	mp->ma_watchers_used = 0;
+	mp->ma_watchers_allocated = 0;
+#endif
 #ifdef SHOW_CONVERSION_COUNTS
 	++created;
 #endif
@@ -700,6 +706,7 @@ PyDict_SetItem(register PyObject *op, PyObject *key, PyObject *value)
 	Py_INCREF(key);
 	if (insertdict(mp, key, hash, value) != 0)
 		return -1;
+	notify_watchers(mp);
 	/* If we added a key, we can safely resize.  Otherwise just return!
 	 * If fill >= 2/3 size, adjust size.  Normally, this doubles or
 	 * quaduples the size, but it's also possible for the dict to shrink
@@ -754,6 +761,7 @@ PyDict_DelItem(PyObject *op, PyObject *key)
 	mp->ma_used--;
 	Py_DECREF(old_value);
 	Py_DECREF(old_key);
+	notify_watchers(mp);
 	return 0;
 }
 
@@ -776,6 +784,10 @@ PyDict_Clear(PyObject *op)
 	n = mp->ma_mask + 1;
 	i = 0;
 #endif
+
+	/* Clear the list of watching code objects. */
+	notify_watchers(mp);
+	del_watchers_array(mp);
 
 	table = mp->ma_table;
 	assert(table != NULL);
@@ -902,6 +914,11 @@ dict_dealloc(register PyDictObject *mp)
 {
 	register PyDictEntry *ep;
 	Py_ssize_t fill = mp->ma_fill;
+
+	/* De-optimize any optimized code objects. */
+	notify_watchers(mp);
+	del_watchers_array(mp);
+
  	PyObject_GC_UnTrack(mp);
 	Py_TRASHCAN_SAFE_BEGIN(mp)
 	for (ep = mp->ma_table; fill > 0; ep++) {
@@ -1483,6 +1500,7 @@ PyDict_Merge(PyObject *a, PyObject *b, int override)
 					return -1;
 			}
 		}
+		notify_watchers(mp);
 	}
 	else {
 		/* Do it the generic, slower way */
@@ -1930,6 +1948,7 @@ dict_pop(PyDictObject *mp, PyObject *args)
 	ep->me_value = NULL;
 	mp->ma_used--;
 	Py_DECREF(old_key);
+	notify_watchers(mp);
 	return old_value;
 }
 
@@ -1988,6 +2007,7 @@ dict_popitem(PyDictObject *mp)
 	mp->ma_used--;
 	assert(mp->ma_table[0].me_value == NULL);
 	mp->ma_table[0].me_hash = i + 1;  /* next place to start */
+	notify_watchers(mp);
 	return res;
 }
 
@@ -2012,6 +2032,134 @@ dict_tp_clear(PyObject *op)
 	return 0;
 }
 
+#ifdef WITH_LLVM
+int
+_PyDict_AddWatcher(PyObject *self, PyCodeObject *code)
+{
+#ifndef NDEBUG
+	Py_ssize_t i;
+#endif
+	PyDictObject *mp = (PyDictObject *)self;
+	assert(PyDict_CheckExact(self));
+
+	if (mp->ma_watchers_used >= mp->ma_watchers_allocated) {
+		PyCodeObject **new = mp->ma_watchers;
+		Py_ssize_t new_alloc_size = mp->ma_watchers_allocated * 2;
+		if (new_alloc_size == 0)
+			new_alloc_size = 64;
+		// Reminder: if new == NULL, this is equivalent to malloc().
+		PyMem_Resize(new, PyCodeObject *, new_alloc_size);
+		if (new == NULL) {
+			PyErr_NoMemory();
+			return -1;
+		}
+		mp->ma_watchers = new;
+		mp->ma_watchers_allocated = new_alloc_size;
+	}
+#ifndef NDEBUG
+	for (i = 0; i < mp->ma_watchers_used; ++i) {
+		if (mp->ma_watchers[i] == code)
+			assert(0 && "Adding a watcher twice!");
+	}
+#endif
+
+	/* Don't take a reference to the code object. The code object is
+	   responsible for calling _PyDict_DropWatcher() when it is deleted.
+	 */
+	mp->ma_watchers[mp->ma_watchers_used++] = code;
+	return 0;
+}
+
+void
+_PyDict_DropWatcher(PyObject *self, PyCodeObject *code)
+{
+	Py_ssize_t i;
+	PyDictObject *mp = (PyDictObject *)self;
+	assert(PyDict_CheckExact(self));
+
+	for (i = 0; i < mp->ma_watchers_used; ++i) {
+		if (mp->ma_watchers[i] == code) {
+			/* Compact the rest of the array. */
+			for (; i < mp->ma_watchers_used - 1; ++i)
+				mp->ma_watchers[i] = mp->ma_watchers[i + 1];
+			mp->ma_watchers_used--;
+			return;
+		}
+	}
+	assert(0 && "Tried to drop non-watcher");
+}
+#endif  /* WITH_LLVM */
+
+#ifdef WITH_LLVM
+// We split the real work of notify_watchers() out into a separate function so
+// that gcc will inline the self->ma_watchers_used test.
+static void
+notify_watchers_helper(PyDictObject *self)
+{
+	Py_ssize_t i;
+	/* No-op if not configured with --with-instrumentation. */
+	_PyEval_RecordWatcherCount(self->ma_watchers_used);
+
+	/* Assume that we're only updating PyCodeObjects. This may need to be
+	   made more general in the future.
+	   Note that notifying the watching code objects clears them from this
+	   list. There's no point in notifying a code object multiple times
+	   in quick succession. */
+	for (i = 0; i < self->ma_watchers_used; ++i) {
+		PyObject *pyself;
+		PyCodeObject *code = self->ma_watchers[i];
+		if (code == NULL)
+			continue;
+
+		pyself = (PyObject *)self;
+		_PyCode_InvalidateMachineCode(code);
+		/* Clean up the watcher list for the other dict
+		   this code object is watching. This prevents the
+		   other dict from potentially corrupting memory during
+		   notify_watchers(). */
+		if (code->co_assumed_globals == pyself) {
+			_PyDict_DropWatcher(code->co_assumed_builtins,
+			                    code);
+		}
+		else if (code->co_assumed_builtins == pyself) {
+			_PyDict_DropWatcher(code->co_assumed_globals,
+			                    code);
+		}
+		else {
+			assert(0 && "Code isn't watching this dict!");
+		}
+		code->co_assumed_globals = NULL;
+		code->co_assumed_builtins = NULL;
+		self->ma_watchers[i] = NULL;
+	}
+	self->ma_watchers_used = 0;
+}
+#endif  /* WITH_LLVM */
+
+static void
+notify_watchers(PyDictObject *self)
+{
+#ifdef WITH_LLVM
+	if (self->ma_watchers_used == 0)
+		return;
+
+	notify_watchers_helper(self);
+#endif  /* WITH_LLVM */
+}
+
+static void
+del_watchers_array(PyDictObject *self)
+{
+#ifdef WITH_LLVM
+	assert(self->ma_watchers_used == 0 &&
+	       "need to call notify_watchers() before del_watchers_array()");
+	if (self->ma_watchers_allocated) {
+		PyMem_DEL(self->ma_watchers);
+		self->ma_watchers = NULL;
+		self->ma_watchers_allocated = 0;
+	}
+#endif  /* WITH_LLVM */
+}
 
 extern PyTypeObject PyDictIterKey_Type; /* Forward */
 extern PyTypeObject PyDictIterValue_Type; /* Forward */

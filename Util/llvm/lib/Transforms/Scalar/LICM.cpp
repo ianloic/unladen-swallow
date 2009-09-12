@@ -48,6 +48,7 @@
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
 #include <algorithm>
@@ -389,7 +390,7 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
     // Don't hoist loads which have may-aliased stores in loop.
     unsigned Size = 0;
     if (LI->getType()->isSized())
-      Size = AA->getTargetData().getTypeStoreSize(LI->getType());
+      Size = AA->getTypeStoreSize(LI->getType());
     return !pointerInvalidatedByLoop(LI->getOperand(0), Size);
   } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
     // Handle obvious cases efficiently.
@@ -465,7 +466,7 @@ bool LICM::isLoopInvariantInst(Instruction &I) {
 /// position, and may either delete it or move it to outside of the loop.
 ///
 void LICM::sink(Instruction &I) {
-  DOUT << "LICM sinking instruction: " << I;
+  DEBUG(errs() << "LICM sinking instruction: " << I);
 
   SmallVector<BasicBlock*, 8> ExitBlocks;
   CurLoop->getExitBlocks(ExitBlocks);
@@ -475,6 +476,8 @@ void LICM::sink(Instruction &I) {
   ++NumSunk;
   Changed = true;
 
+  LLVMContext &Context = I.getContext();
+
   // The case where there is only a single exit node of this loop is common
   // enough that we handle it as a special (more efficient) case.  It is more
   // efficient to handle because there are no PHI nodes that need to be placed.
@@ -483,7 +486,7 @@ void LICM::sink(Instruction &I) {
       // Instruction is not used, just delete it.
       CurAST->deleteValue(&I);
       if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
-        I.replaceAllUsesWith(Context->getUndef(I.getType()));
+        I.replaceAllUsesWith(UndefValue::get(I.getType()));
       I.eraseFromParent();
     } else {
       // Move the instruction to the start of the exit block, after any PHI
@@ -497,7 +500,7 @@ void LICM::sink(Instruction &I) {
     // The instruction is actually dead if there ARE NO exit blocks.
     CurAST->deleteValue(&I);
     if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
-      I.replaceAllUsesWith(Context->getUndef(I.getType()));
+      I.replaceAllUsesWith(UndefValue::get(I.getType()));
     I.eraseFromParent();
   } else {
     // Otherwise, if we have multiple exits, use the PromoteMem2Reg function to
@@ -507,7 +510,7 @@ void LICM::sink(Instruction &I) {
     // Firstly, we create a stack object to hold the value...
     AllocaInst *AI = 0;
 
-    if (I.getType() != Type::VoidTy) {
+    if (I.getType() != Type::getVoidTy(I.getContext())) {
       AI = new AllocaInst(I.getType(), 0, I.getName(),
                           I.getParent()->getParent()->getEntryBlock().begin());
       CurAST->add(AI);
@@ -570,7 +573,7 @@ void LICM::sink(Instruction &I) {
             ExitBlock->getInstList().insert(InsertPt, &I);
             New = &I;
           } else {
-            New = I.clone();
+            New = I.clone(Context);
             CurAST->copyValue(&I, New);
             if (!I.getName().empty())
               New->setName(I.getName()+".le");
@@ -602,7 +605,7 @@ void LICM::sink(Instruction &I) {
 /// that is safe to hoist, this instruction is called to do the dirty work.
 ///
 void LICM::hoist(Instruction &I) {
-  DOUT << "LICM hoisting to " << Preheader->getName() << ": " << I;
+  DEBUG(errs() << "LICM hoisting to " << Preheader->getName() << ": " << I);
 
   // Remove the instruction from its current basic block... but don't delete the
   // instruction.
@@ -623,7 +626,8 @@ void LICM::hoist(Instruction &I) {
 ///
 bool LICM::isSafeToExecuteUnconditionally(Instruction &Inst) {
   // If it is not a trapping instruction, it is always safe to hoist.
-  if (!Inst.isTrapping()) return true;
+  if (Inst.isSafeToSpeculativelyExecute())
+    return true;
 
   // Otherwise we have to check to make sure that the instruction dominates all
   // of the exit blocks.  If it doesn't, then there is a path out of the loop
@@ -634,12 +638,6 @@ bool LICM::isSafeToExecuteUnconditionally(Instruction &Inst) {
   // is a common case, and can save some work, check it now.
   if (Inst.getParent() == CurLoop->getHeader())
     return true;
-
-  // It's always safe to load from a global or alloca.
-  if (isa<LoadInst>(Inst))
-    if (isa<AllocationInst>(Inst.getOperand(0)) ||
-        isa<GlobalVariable>(Inst.getOperand(0)))
-      return true;
 
   // Get the exit blocks for the current loop.
   SmallVector<BasicBlock*, 8> ExitBlocks;
@@ -773,7 +771,7 @@ void LICM::PromoteValuesInLoop() {
   PromotedAllocas.reserve(PromotedValues.size());
   for (unsigned i = 0, e = PromotedValues.size(); i != e; ++i)
     PromotedAllocas.push_back(PromotedValues[i].first);
-  PromoteMemToReg(PromotedAllocas, *DT, *DF, Context, CurAST);
+  PromoteMemToReg(PromotedAllocas, *DT, *DF, Preheader->getContext(), CurAST);
 }
 
 /// FindPromotableValuesInLoop - Check the current loop for stores to definite
@@ -862,7 +860,7 @@ void LICM::FindPromotableValuesInLoop(
     for (AliasSet::iterator I = AS.begin(), E = AS.end(); I != E; ++I)
       ValueToAllocaMap.insert(std::make_pair(I->getValue(), AI));
 
-    DOUT << "LICM: Promoting value: " << *V << "\n";
+    DEBUG(errs() << "LICM: Promoting value: " << *V << "\n");
   }
 }
 

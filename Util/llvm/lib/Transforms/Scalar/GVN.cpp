@@ -37,6 +37,8 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cstdio>
@@ -201,7 +203,7 @@ template <> struct DenseMapInfo<Expression> {
 Expression::ExpressionOpcode ValueTable::getOpcode(BinaryOperator* BO) {
   switch(BO->getOpcode()) {
   default: // THIS SHOULD NEVER HAPPEN
-    assert(0 && "Binary operator with unknown opcode?");
+    llvm_unreachable("Binary operator with unknown opcode?");
   case Instruction::Add:  return Expression::ADD;
   case Instruction::FAdd: return Expression::FADD;
   case Instruction::Sub:  return Expression::SUB;
@@ -227,7 +229,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
   if (isa<ICmpInst>(C)) {
     switch (C->getPredicate()) {
     default:  // THIS SHOULD NEVER HAPPEN
-      assert(0 && "Comparison with unknown predicate?");
+      llvm_unreachable("Comparison with unknown predicate?");
     case ICmpInst::ICMP_EQ:  return Expression::ICMPEQ;
     case ICmpInst::ICMP_NE:  return Expression::ICMPNE;
     case ICmpInst::ICMP_UGT: return Expression::ICMPUGT;
@@ -242,7 +244,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
   } else {
     switch (C->getPredicate()) {
     default: // THIS SHOULD NEVER HAPPEN
-      assert(0 && "Comparison with unknown predicate?");
+      llvm_unreachable("Comparison with unknown predicate?");
     case FCmpInst::FCMP_OEQ: return Expression::FCMPOEQ;
     case FCmpInst::FCMP_OGT: return Expression::FCMPOGT;
     case FCmpInst::FCMP_OGE: return Expression::FCMPOGE;
@@ -264,7 +266,7 @@ Expression::ExpressionOpcode ValueTable::getOpcode(CmpInst* C) {
 Expression::ExpressionOpcode ValueTable::getOpcode(CastInst* C) {
   switch(C->getOpcode()) {
   default: // THIS SHOULD NEVER HAPPEN
-    assert(0 && "Cast operator with unknown opcode?");
+    llvm_unreachable("Cast operator with unknown opcode?");
   case Instruction::Trunc:    return Expression::TRUNC;
   case Instruction::ZExt:     return Expression::ZEXT;
   case Instruction::SExt:     return Expression::SEXT;
@@ -728,10 +730,8 @@ namespace {
     void dump(DenseMap<uint32_t, Value*>& d);
     bool iterateOnFunction(Function &F);
     Value* CollapsePhi(PHINode* p);
-    bool isSafeReplacement(PHINode* p, Instruction* inst);
     bool performPRE(Function& F);
     Value* lookupNumber(BasicBlock* BB, uint32_t num);
-    bool mergeBlockIntoPredecessor(BasicBlock* BB);
     Value* AttemptRedundancyElimination(Instruction* orig, unsigned valno);
     void cleanupGlobalSets();
     void verifyRemoved(const Instruction *I) const;
@@ -756,6 +756,19 @@ void GVN::dump(DenseMap<uint32_t, Value*>& d) {
   printf("}\n");
 }
 
+static bool isSafeReplacement(PHINode* p, Instruction* inst) {
+  if (!isa<PHINode>(inst))
+    return true;
+  
+  for (Instruction::use_iterator UI = p->use_begin(), E = p->use_end();
+       UI != E; ++UI)
+    if (PHINode* use_phi = dyn_cast<PHINode>(UI))
+      if (use_phi->getParent() == inst->getParent())
+        return false;
+  
+  return true;
+}
+
 Value* GVN::CollapsePhi(PHINode* p) {
   Value* constVal = p->hasConstantValue();
   if (!constVal) return 0;
@@ -768,19 +781,6 @@ Value* GVN::CollapsePhi(PHINode* p) {
     if (isSafeReplacement(p, inst))
       return inst;
   return 0;
-}
-
-bool GVN::isSafeReplacement(PHINode* p, Instruction* inst) {
-  if (!isa<PHINode>(inst))
-    return true;
-  
-  for (Instruction::use_iterator UI = p->use_begin(), E = p->use_end();
-       UI != E; ++UI)
-    if (PHINode* use_phi = dyn_cast<PHINode>(UI))
-      if (use_phi->getParent() == inst->getParent())
-        return false;
-  
-  return true;
 }
 
 /// GetValueForBlock - Get the value to use within the specified basic block.
@@ -796,7 +796,7 @@ Value *GVN::GetValueForBlock(BasicBlock *BB, Instruction* orig,
   // If the block is unreachable, just return undef, since this path
   // can't actually occur at runtime.
   if (!DT->isReachableFromEntry(BB))
-    return Phis[BB] = Context->getUndef(orig->getType());
+    return Phis[BB] = UndefValue::get(orig->getType());
   
   if (BasicBlock *Pred = BB->getSinglePredecessor()) {
     Value *ret = GetValueForBlock(Pred, orig, Phis);
@@ -850,7 +850,7 @@ Value *GVN::GetValueForBlock(BasicBlock *BB, Instruction* orig,
     if (I->second == PN)
       I->second = v;
 
-  DEBUG(cerr << "GVN removed: " << *PN);
+  DEBUG(errs() << "GVN removed: " << *PN << '\n');
   MD->removeInstruction(PN);
   PN->eraseFromParent();
   DEBUG(verifyRemoved(PN));
@@ -944,7 +944,8 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   SmallVector<MemoryDependenceAnalysis::NonLocalDepEntry, 64> Deps; 
   MD->getNonLocalPointerDependency(LI->getOperand(0), true, LI->getParent(),
                                    Deps);
-  //DEBUG(cerr << "INVESTIGATING NONLOCAL LOAD: " << Deps.size() << *LI);
+  //DEBUG(errs() << "INVESTIGATING NONLOCAL LOAD: "
+  //             << Deps.size() << *LI << '\n');
   
   // If we had to process more than one hundred blocks to find the
   // dependencies, this load isn't worth worrying about.  Optimizing
@@ -956,9 +957,9 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   // clobber in the current block.  Reject this early.
   if (Deps.size() == 1 && Deps[0].second.isClobber()) {
     DEBUG(
-      DOUT << "GVN: non-local load ";
-      WriteAsOperand(*DOUT.stream(), LI);
-      DOUT << " is clobbered by " << *Deps[0].second.getInst();
+      errs() << "GVN: non-local load ";
+      WriteAsOperand(errs(), LI);
+      errs() << " is clobbered by " << *Deps[0].second.getInst() << '\n';
     );
     return false;
   }
@@ -983,8 +984,8 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     
     // Loading the allocation -> undef.
     if (isa<AllocationInst>(DepInst)) {
-      ValuesPerBlock.push_back(std::make_pair(DepBB, 
-                                            Context->getUndef(LI->getType())));
+      ValuesPerBlock.push_back(std::make_pair(DepBB,  
+                               UndefValue::get(LI->getType())));
       continue;
     }
   
@@ -1027,7 +1028,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     for (SmallPtrSet<Instruction*, 4>::iterator I = p.begin(), E = p.end();
          I != E; ++I) {
       if ((*I)->getParent() == LI->getParent()) {
-        DEBUG(cerr << "GVN REMOVING NONLOCAL LOAD #1: " << *LI);
+        DEBUG(errs() << "GVN REMOVING NONLOCAL LOAD #1: " << *LI << '\n');
         LI->replaceAllUsesWith(*I);
         if (isa<PointerType>((*I)->getType()))
           MD->invalidateCachedPointerInfo(*I);
@@ -1039,7 +1040,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
       ValuesPerBlock.push_back(std::make_pair((*I)->getParent(), *I));
     }
     
-    DEBUG(cerr << "GVN REMOVING NONLOCAL LOAD: " << *LI);
+    DEBUG(errs() << "GVN REMOVING NONLOCAL LOAD: " << *LI << '\n');
     
     DenseMap<BasicBlock*, Value*> BlockReplValues;
     BlockReplValues.insert(ValuesPerBlock.begin(), ValuesPerBlock.end());
@@ -1154,15 +1155,15 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   // non-PHI instruction in this block, we don't know how to recompute it above.
   if (Instruction *LPInst = dyn_cast<Instruction>(LoadPtr))
     if (!DT->dominates(LPInst->getParent(), UnavailablePred)) {
-      DEBUG(cerr << "COULDN'T PRE LOAD BECAUSE PTR IS UNAVAILABLE IN PRED: "
-                 << *LPInst << *LI << "\n");
+      DEBUG(errs() << "COULDN'T PRE LOAD BECAUSE PTR IS UNAVAILABLE IN PRED: "
+                   << *LPInst << '\n' << *LI << "\n");
       return false;
     }
   
   // We don't currently handle critical edges :(
   if (UnavailablePred->getTerminator()->getNumSuccessors() != 1) {
-    DEBUG(cerr << "COULD NOT PRE LOAD BECAUSE OF CRITICAL EDGE '"
-                << UnavailablePred->getName() << "': " << *LI);
+    DEBUG(errs() << "COULD NOT PRE LOAD BECAUSE OF CRITICAL EDGE '"
+                 << UnavailablePred->getName() << "': " << *LI << '\n');
     return false;
   }
 
@@ -1182,7 +1183,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   // Okay, we can eliminate this load by inserting a reload in the predecessor
   // and using PHI construction to get the value in the other predecessors, do
   // it.
-  DEBUG(cerr << "GVN REMOVING PRE LOAD: " << *LI);
+  DEBUG(errs() << "GVN REMOVING PRE LOAD: " << *LI << '\n');
   
   Value *NewLoad = new LoadInst(LoadPtr, LI->getName()+".pre", false,
                                 LI->getAlignment(),
@@ -1224,10 +1225,10 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
   if (dep.isClobber()) {
     DEBUG(
       // fast print dep, using operator<< on instruction would be too slow
-      DOUT << "GVN: load ";
-      WriteAsOperand(*DOUT.stream(), L);
+      errs() << "GVN: load ";
+      WriteAsOperand(errs(), L);
       Instruction *I = dep.getInst();
-      DOUT << " is clobbered by " << *I;
+      errs() << " is clobbered by " << *I << '\n';
     );
     return false;
   }
@@ -1271,7 +1272,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
   // undef value.  This can happen when loading for a fresh allocation with no
   // intervening stores, for example.
   if (isa<AllocationInst>(DepInst)) {
-    L->replaceAllUsesWith(Context->getUndef(L->getType()));
+    L->replaceAllUsesWith(UndefValue::get(L->getType()));
     toErase.push_back(L);
     NumGVNLoad++;
     return true;
@@ -1383,9 +1384,11 @@ bool GVN::processInstruction(Instruction *I,
     BasicBlock* falseSucc = BI->getSuccessor(1);
     
     if (trueSucc->getSinglePredecessor())
-      localAvail[trueSucc]->table[condVN] = Context->getConstantIntTrue();
+      localAvail[trueSucc]->table[condVN] = 
+        ConstantInt::getTrue(trueSucc->getContext());
     if (falseSucc->getSinglePredecessor())
-      localAvail[falseSucc]->table[condVN] = Context->getConstantIntFalse();
+      localAvail[falseSucc]->table[condVN] =
+        ConstantInt::getFalse(trueSucc->getContext());
 
     return false;
     
@@ -1475,7 +1478,7 @@ bool GVN::runOnFunction(Function& F) {
   unsigned Iteration = 0;
   
   while (shouldContinue) {
-    DEBUG(cerr << "GVN iteration: " << Iteration << "\n");
+    DEBUG(errs() << "GVN iteration: " << Iteration << "\n");
     shouldContinue = iterateOnFunction(F);
     changed |= shouldContinue;
     ++Iteration;
@@ -1523,7 +1526,7 @@ bool GVN::processBlock(BasicBlock* BB) {
 
     for (SmallVector<Instruction*, 4>::iterator I = toErase.begin(),
          E = toErase.end(); I != E; ++I) {
-      DEBUG(cerr << "GVN removed: " << **I);
+      DEBUG(errs() << "GVN removed: " << **I << '\n');
       MD->removeInstruction(*I);
       (*I)->eraseFromParent();
       DEBUG(verifyRemoved(*I));
@@ -1557,7 +1560,8 @@ bool GVN::performPRE(Function& F) {
       Instruction *CurInst = BI++;
 
       if (isa<AllocationInst>(CurInst) || isa<TerminatorInst>(CurInst) ||
-          isa<PHINode>(CurInst) || (CurInst->getType() == Type::VoidTy) ||
+          isa<PHINode>(CurInst) ||
+          (CurInst->getType() == Type::getVoidTy(F.getContext())) ||
           CurInst->mayReadFromMemory() || CurInst->mayHaveSideEffects() ||
           isa<DbgInfoIntrinsic>(CurInst))
         continue;
@@ -1627,7 +1631,7 @@ bool GVN::performPRE(Function& F) {
       // will be available in the predecessor by the time we need them.  Any
       // that weren't original present will have been instantiated earlier
       // in this loop.
-      Instruction* PREInstr = CurInst->clone();
+      Instruction* PREInstr = CurInst->clone(CurInst->getContext());
       bool success = true;
       for (unsigned i = 0, e = CurInst->getNumOperands(); i != e; ++i) {
         Value *Op = PREInstr->getOperand(i);
@@ -1676,7 +1680,7 @@ bool GVN::performPRE(Function& F) {
         MD->invalidateCachedPointerInfo(Phi);
       VN.erase(CurInst);
       
-      DEBUG(cerr << "GVN PRE removed: " << *CurInst);
+      DEBUG(errs() << "GVN PRE removed: " << *CurInst << '\n');
       MD->removeInstruction(CurInst);
       CurInst->eraseFromParent();
       DEBUG(verifyRemoved(CurInst));

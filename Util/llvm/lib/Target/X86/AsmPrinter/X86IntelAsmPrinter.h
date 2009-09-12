@@ -20,13 +20,13 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FormattedStream.h"
 
 namespace llvm {
 
 struct VISIBILITY_HIDDEN X86IntelAsmPrinter : public AsmPrinter {
-  explicit X86IntelAsmPrinter(raw_ostream &O, X86TargetMachine &TM,
-                              const TargetAsmInfo *T, bool V)
+  explicit X86IntelAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
+                              const MCAsmInfo *T, bool V)
     : AsmPrinter(O, TM, T, V) {}
 
   virtual const char *getPassName() const {
@@ -37,7 +37,7 @@ struct VISIBILITY_HIDDEN X86IntelAsmPrinter : public AsmPrinter {
   /// from the instruction set description.  This method returns true if the
   /// machine instruction was sufficiently described to print it, otherwise it
   /// returns false.
-  bool printInstruction(const MachineInstr *MI);
+  void printInstruction(const MachineInstr *MI);
 
   // This method is used by the tablegen'erated instruction printer.
   void printOperand(const MachineInstr *MI, unsigned OpNo,
@@ -135,6 +135,8 @@ struct VISIBILITY_HIDDEN X86IntelAsmPrinter : public AsmPrinter {
   bool doInitialization(Module &M);
   bool doFinalization(Module &M);
 
+  void PrintGlobalVariable(const GlobalVariable *GV);
+  
   // We have to propagate some information about MachineFunction to
   // AsmPrinter. It's ok, when we're printing the function, since we have
   // access to MachineFunction and can get the appropriate MachineFunctionInfo.

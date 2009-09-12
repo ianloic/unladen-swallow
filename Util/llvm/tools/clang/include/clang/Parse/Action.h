@@ -22,6 +22,7 @@
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Ownership.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/ADT/PointerUnion.h"
 
 namespace clang {
   // Semantic.
@@ -169,11 +170,27 @@ public:
   
   /// getTypeName - Return non-null if the specified identifier is a type name
   /// in the current scope.
-  /// An optional CXXScopeSpec can be passed to indicate the C++ scope (class or
-  /// namespace) that the identifier must be a member of.
-  /// i.e. for "foo::bar", 'II' will be "bar" and 'SS' will be "foo::".
+  ///
+  /// \param II the identifier for which we are performing name lookup
+  ///
+  /// \param NameLoc the location of the identifier
+  ///
+  /// \param S the scope in which this name lookup occurs
+  ///
+  /// \param SS if non-NULL, the C++ scope specifier that precedes the 
+  /// identifier
+  ///
+  /// \param isClassName whether this is a C++ class-name production, in 
+  /// which we can end up referring to a member of an unknown specialization 
+  /// that we know (from the grammar) is supposed to be a type. For example,
+  /// this occurs when deriving from "std::vector<T>::allocator_type", where T 
+  /// is a template parameter.
+  ///
+  /// \returns the type referred to by this identifier, or NULL if the type
+  /// does not name an identifier.
   virtual TypeTy *getTypeName(IdentifierInfo &II, SourceLocation NameLoc,
-                              Scope *S, const CXXScopeSpec *SS = 0) = 0;
+                              Scope *S, const CXXScopeSpec *SS = 0,
+                              bool isClassName = false) = 0;
 
   /// isTagName() - This method is called *for error recovery purposes only*
   /// to determine if the specified name is a valid tag name ("struct foo").  If
@@ -189,14 +206,28 @@ public:
   virtual bool isCurrentClassName(const IdentifierInfo &II, Scope *S,
                                   const CXXScopeSpec *SS = 0) = 0;
 
-  /// \brief Determines whether the identifier II is a template name
-  /// in the current scope. If so, the kind of template name is
-  /// returned, and \p TemplateDecl receives the declaration. An
-  /// optional CXXScope can be passed to indicate the C++ scope in
-  /// which the identifier will be found.
+  /// \brief Determine whether the given identifier refers to the name of a
+  /// template.
+  ///
+  /// \param II the identifier that we are querying to determine whether it
+  /// is a template.
+  ///
+  /// \param S the scope in which name lookup occurs
+  ///
+  /// \param SS the C++ scope specifier that precedes the template name, if
+  /// any.
+  ///
+  /// \param EnteringContext whether we are potentially entering the context
+  /// referred to by the scope specifier \p SS
+  ///
+  /// \param Template if the name does refer to a template, the declaration
+  /// of the template that the name refers to.
+  ///
+  /// \returns the kind of template that this name refers to.
   virtual TemplateNameKind isTemplateName(const IdentifierInfo &II, Scope *S,
-                                          TemplateTy &Template,
-                                          const CXXScopeSpec *SS = 0) = 0;
+                                          const CXXScopeSpec *SS,
+                                          bool EnteringContext,
+                                          TemplateTy &Template) = 0;
 
   /// ActOnCXXGlobalScopeSpecifier - Return the object that represents the
   /// global scope ('::').
@@ -215,7 +246,8 @@ public:
                                                   const CXXScopeSpec &SS,
                                                   SourceLocation IdLoc,
                                                   SourceLocation CCLoc,
-                                                  IdentifierInfo &II) {
+                                                  IdentifierInfo &II,
+                                                  bool EnteringContext) {
     return 0;
   }
 
@@ -233,6 +265,27 @@ public:
                                                   SourceRange TypeRange,
                                                   SourceLocation CCLoc) {
     return 0; 
+  }
+
+  /// ActOnCXXEnterMemberScope - Called when a C++ class member accessor ('.'
+  /// or '->') is parsed. After this method is called, according to
+  /// [C++ 3.4.5p4], qualified-ids should be looked up in the contexts of both
+  /// the entire postfix-expression and the scope of the class of the object
+  /// expression.
+  /// 'SS' should be an empty CXXScopeSpec to be filled with the class's scope.
+  virtual OwningExprResult ActOnCXXEnterMemberScope(Scope *S,
+                                                    CXXScopeSpec &SS,
+                                                    ExprArg Base,
+                                                    tok::TokenKind OpKind) {
+    return ExprEmpty();
+  }
+
+  /// ActOnCXXExitMemberScope - Called when a postfix-expression that previously
+  /// invoked ActOnCXXEnterMemberScope() is finished. 'SS' is the same
+  /// CXXScopeSpec that was passed to ActOnCXXEnterMemberScope. Used to
+  /// indicate that names should revert to being looked up in the defining
+  /// scope.
+  virtual void ActOnCXXExitMemberScope(Scope *S, const CXXScopeSpec &SS) {
   }
 
   /// ActOnCXXEnterDeclaratorScope - Called when a C++ scope specifier (global
@@ -288,7 +341,7 @@ public:
   /// This allows ActOnDeclarator to register "xx" prior to parsing the
   /// initializer. The declaration above should still result in a warning, 
   /// since the reference to "xx" is uninitialized.
-  virtual void AddInitializerToDecl(DeclPtrTy Dcl, FullExprArg Init) {
+  virtual void AddInitializerToDecl(DeclPtrTy Dcl, ExprArg Init) {
     return;
   }
 
@@ -302,7 +355,10 @@ public:
 
   /// ActOnUninitializedDecl - This action is called immediately after
   /// ActOnDeclarator (when an initializer is *not* present).
-  virtual void ActOnUninitializedDecl(DeclPtrTy Dcl) {
+  /// If TypeContainsUndeducedAuto is true, then the type of the declarator
+  /// has an undeduced 'auto' type somewhere.
+  virtual void ActOnUninitializedDecl(DeclPtrTy Dcl, 
+                                      bool TypeContainsUndeducedAuto) {
     return;
   }
 
@@ -407,18 +463,60 @@ public:
     return TypeResult();
   }
   
-  enum TagKind {
-    TK_Reference,   // Reference to a tag:  'struct foo *X;'
-    TK_Declaration, // Fwd decl of a tag:   'struct foo;'
-    TK_Definition   // Definition of a tag: 'struct foo { int X; } Y;'
+  enum TagUseKind {
+    TUK_Reference,   // Reference to a tag:  'struct foo *X;'
+    TUK_Declaration, // Fwd decl of a tag:   'struct foo;'
+    TUK_Definition,  // Definition of a tag: 'struct foo { int X; } Y;'
+    TUK_Friend       // Friend declaration:  'friend struct foo;'
   };
-  virtual DeclPtrTy ActOnTag(Scope *S, unsigned TagSpec, TagKind TK,
+
+  /// \brief The parser has encountered a tag (e.g., "class X") that should be
+  /// turned into a declaration by the action module.
+  ///
+  /// \param S the scope in which this tag occurs.
+  ///
+  /// \param TagSpec an instance of DeclSpec::TST, indicating what kind of tag 
+  /// this is (struct/union/enum/class).
+  ///
+  /// \param TUK how the tag we have encountered is being used, which
+  /// can be a reference to a (possibly pre-existing) tag, a
+  /// declaration of that tag, or the beginning of a definition of
+  /// that tag.
+  ///
+  /// \param KWLoc the location of the "struct", "class", "union", or "enum" 
+  /// keyword.
+  ///
+  /// \param SS C++ scope specifier that precedes the name of the tag, e.g.,
+  /// the "std::" in "class std::type_info".
+  ///
+  /// \param Name the name of the tag, e.g., "X" in "struct X". This parameter
+  /// may be NULL, to indicate an anonymous class/struct/union/enum type.
+  ///
+  /// \param NameLoc the location of the name of the tag.
+  ///
+  /// \param Attr the set of attributes that appertain to the tag.
+  ///
+  /// \param AS when this tag occurs within a C++ class, provides the 
+  /// current access specifier (AS_public, AS_private, AS_protected). 
+  /// Otherwise, it will be AS_none.
+  ///
+  /// \param TemplateParameterLists the set of C++ template parameter lists 
+  /// that apply to this tag, if the tag is a declaration or definition (see 
+  /// the \p TK parameter). The action module is responsible for determining,
+  /// based on the template parameter lists and the scope specifier, whether
+  /// the declared tag is a class template or not.
+  ///
+  /// \param OwnedDecl the callee should set this flag true when the returned
+  /// declaration is "owned" by this reference. Ownership is handled entirely
+  /// by the action module.
+  ///
+  /// \returns the declaration to which this tag refers.
+  virtual DeclPtrTy ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
                              SourceLocation KWLoc, const CXXScopeSpec &SS,
                              IdentifierInfo *Name, SourceLocation NameLoc,
                              AttributeList *Attr, AccessSpecifier AS,
+                             MultiTemplateParamsArg TemplateParameterLists,
                              bool &OwnedDecl) {
-    // TagType is an instance of DeclSpec::TST, indicating what kind of tag this
-    // is (struct/union/enum/class).
     return DeclPtrTy();
   }
   
@@ -452,7 +550,8 @@ public:
 
   /// ActOnTagFinishDefinition - Invoked once we have finished parsing
   /// the definition of a tag (enumeration, class, struct, or union).
-  virtual void ActOnTagFinishDefinition(Scope *S, DeclPtrTy TagDecl) { }
+  virtual void ActOnTagFinishDefinition(Scope *S, DeclPtrTy TagDecl,
+                                        SourceLocation RBraceLoc) { }
 
   virtual DeclPtrTy ActOnEnumConstant(Scope *S, DeclPtrTy EnumDecl,
                                       DeclPtrTy LastEnumConstant,
@@ -462,7 +561,8 @@ public:
   }
   virtual void ActOnEnumBody(SourceLocation EnumLoc, SourceLocation LBraceLoc,
                              SourceLocation RBraceLoc, DeclPtrTy EnumDecl,
-                             DeclPtrTy *Elements, unsigned NumElements) {}
+                             DeclPtrTy *Elements, unsigned NumElements,
+                             Scope *S, AttributeList *AttrList) {}
 
   //===--------------------------------------------------------------------===//
   // Statement Parsing Callbacks.
@@ -572,7 +672,7 @@ public:
     return StmtEmpty();
   }
   virtual OwningStmtResult ActOnReturnStmt(SourceLocation ReturnLoc,
-                                           FullExprArg RetValExp) {
+                                           ExprArg RetValExp) {
     return StmtEmpty();
   }
   virtual OwningStmtResult ActOnAsmStmt(SourceLocation AsmLoc,
@@ -756,6 +856,12 @@ public:
     return move(Val);  // Default impl returns operand.
   }
 
+  virtual OwningExprResult ActOnParenListExpr(SourceLocation L, 
+                                              SourceLocation R, 
+                                              MultiExprArg Val) {
+    return ExprEmpty();
+  }
+  
   // Postfix Expressions.
   virtual OwningExprResult ActOnPostfixUnaryOp(Scope *S, SourceLocation OpLoc,
                                                tok::TokenKind Kind,
@@ -773,7 +879,8 @@ public:
                                                     tok::TokenKind OpKind,
                                                     SourceLocation MemberLoc,
                                                     IdentifierInfo &Member,
-                                                    DeclPtrTy ObjCImpDecl) {
+                                                    DeclPtrTy ObjCImpDecl,
+                                                const CXXScopeSpec *SS = 0) {
     return ExprEmpty();
   }
 
@@ -831,11 +938,12 @@ public:
     return ExprEmpty();
   }
 
-  virtual OwningExprResult ActOnCastExpr(SourceLocation LParenLoc, TypeTy *Ty,
-                                         SourceLocation RParenLoc, ExprArg Op) {
+  virtual OwningExprResult ActOnCastExpr(Scope *S, SourceLocation LParenLoc,
+                                         TypeTy *Ty, SourceLocation RParenLoc, 
+                                         ExprArg Op) {
     return ExprEmpty();
   }
-
+    
   virtual OwningExprResult ActOnBinOp(Scope *S, SourceLocation TokLoc,
                                       tok::TokenKind Kind,
                                       ExprArg LHS, ExprArg RHS) {
@@ -1064,12 +1172,12 @@ public:
   }
 
   /// ActOnFriendDecl - This action is called when a friend declaration is
-  /// encountered. Returns false on success.
-  virtual bool ActOnFriendDecl(Scope *S, SourceLocation FriendLoc,
-                               DeclPtrTy Dcl) {
-    return false;
+  /// encountered.
+  virtual DeclPtrTy ActOnFriendDecl(Scope *S,
+                        llvm::PointerUnion<const DeclSpec*,Declarator*> D,
+                                    bool IsDefinition) {
+    return DeclPtrTy();
   }
-  
 
   //===------------------------- C++ Expressions --------------------------===//
 
@@ -1171,7 +1279,19 @@ public:
     return ExprEmpty();
   }
 
-
+  /// ActOnDestructorReferenceExpr - Parsed a destructor reference, for example:
+  ///
+  /// t->~T();
+  virtual OwningExprResult
+  ActOnDestructorReferenceExpr(Scope *S, ExprArg Base,
+                               SourceLocation OpLoc,
+                               tok::TokenKind OpKind,
+                               SourceLocation ClassNameLoc,
+                               IdentifierInfo *ClassName,
+                               const CXXScopeSpec *SS = 0) {
+    return ExprEmpty();
+  }
+  
   /// ActOnFinishFullExpr - Called whenever a full expression has been parsed.
   /// (C++ [intro.execution]p12).
   virtual OwningExprResult ActOnFinishFullExpr(ExprArg Expr) {
@@ -1199,6 +1319,7 @@ public:
   /// specifier on the function.
   virtual DeclPtrTy ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS,
                                              Declarator &D,
+                                 MultiTemplateParamsArg TemplateParameterLists,
                                              ExprTy *BitfieldWidth,
                                              ExprTy *Init,
                                              bool Deleted = false) {
@@ -1228,6 +1349,8 @@ public:
                                     SourceLocation ColonLoc,
                                     MemInitTy **MemInits, unsigned NumMemInits){
   }
+ 
+ virtual void ActOnDefaultCtorInitializers(DeclPtrTy CDtorDecl) {}
 
   /// ActOnFinishCXXMemberSpecification - Invoked after all member declarators
   /// are parsed but *before* parsing of inline method definitions.
@@ -1351,18 +1474,6 @@ public:
     return 0;
   }
 
-  /// \brief Process the declaration or definition of a class template
-  /// with the given template parameter lists.
-  virtual DeclResult
-  ActOnClassTemplate(Scope *S, unsigned TagSpec, TagKind TK,
-                     SourceLocation KWLoc, const CXXScopeSpec &SS,
-                     IdentifierInfo *Name, SourceLocation NameLoc,
-                     AttributeList *Attr,
-                     MultiTemplateParamsArg TemplateParameterLists,
-                     AccessSpecifier AS) {
-    return DeclResult();
-  }
-
   /// \brief Form a type from a template and a list of template
   /// arguments.
   ///
@@ -1444,7 +1555,7 @@ public:
   /// \param TagSpec whether this declares a class, struct, or union
   /// (template)
   ///
-  /// \param TK whether this is a declaration or a definition
+  /// \param TUK whether this is a declaration or a definition
   /// 
   /// \param KWLoc the location of the 'class', 'struct', or 'union'
   /// keyword.
@@ -1464,7 +1575,7 @@ public:
   /// parameter lists (such as a missing \c template<> prior to a
   /// specialization); the parser does not check this condition.
   virtual DeclResult
-  ActOnClassTemplateSpecialization(Scope *S, unsigned TagSpec, TagKind TK,
+  ActOnClassTemplateSpecialization(Scope *S, unsigned TagSpec, TagUseKind TUK,
                                    SourceLocation KWLoc, 
                                    const CXXScopeSpec &SS,
                                    TemplateTy Template,
@@ -1869,7 +1980,8 @@ public:
   }
   
   /// ActOnPragmaUnused - Called on well formed #pragma unused(...).
-  virtual void ActOnPragmaUnused(ExprTy **Exprs, unsigned NumExprs,
+  virtual void ActOnPragmaUnused(const Token *Identifiers,
+                                 unsigned NumIdentifiers, Scope *CurScope,
                                  SourceLocation PragmaLoc, 
                                  SourceLocation LParenLoc,
                                  SourceLocation RParenLoc) {
@@ -1913,17 +2025,55 @@ public:
 
   /// getTypeName - This looks at the IdentifierInfo::FETokenInfo field to
   /// determine whether the name is a typedef or not in this scope.
+  ///
+  /// \param II the identifier for which we are performing name lookup
+  ///
+  /// \param NameLoc the location of the identifier
+  ///
+  /// \param S the scope in which this name lookup occurs
+  ///
+  /// \param SS if non-NULL, the C++ scope specifier that precedes the 
+  /// identifier
+  ///
+  /// \param isClassName whether this is a C++ class-name production, in 
+  /// which we can end up referring to a member of an unknown specialization 
+  /// that we know (from the grammar) is supposed to be a type. For example,
+  /// this occurs when deriving from "std::vector<T>::allocator_type", where T 
+  /// is a template parameter.
+  ///
+  /// \returns the type referred to by this identifier, or NULL if the type
+  /// does not name an identifier.
   virtual TypeTy *getTypeName(IdentifierInfo &II, SourceLocation NameLoc,
-                              Scope *S, const CXXScopeSpec *SS);
+                              Scope *S, const CXXScopeSpec *SS,
+                              bool isClassName = false);
 
   /// isCurrentClassName - Always returns false, because MinimalAction
   /// does not support C++ classes with constructors.
   virtual bool isCurrentClassName(const IdentifierInfo& II, Scope *S,
                                   const CXXScopeSpec *SS);
 
+  /// \brief Determine whether the given identifier refers to the name of a
+  /// template.
+  ///
+  /// \param II the identifier that we are querying to determine whether it
+  /// is a template.
+  ///
+  /// \param S the scope in which name lookup occurs
+  ///
+  /// \param SS the C++ scope specifier that precedes the template name, if
+  /// any.
+  ///
+  /// \param EnteringContext whether we are potentially entering the context
+  /// referred to by the scope specifier \p SS
+  ///
+  /// \param Template if the name does refer to a template, the declaration
+  /// of the template that the name refers to.
+  ///
+  /// \returns the kind of template that this name refers to.
   virtual TemplateNameKind isTemplateName(const IdentifierInfo &II, Scope *S,
-                                          TemplateTy &Template,
-                                          const CXXScopeSpec *SS = 0);
+                                          const CXXScopeSpec *SS,
+                                          bool EnteringContext,
+                                          TemplateTy &Template);
 
   /// ActOnDeclarator - If this is a typedef declarator, we modify the
   /// IdentifierInfo::FETokenInfo field to keep track of this fact, until S is

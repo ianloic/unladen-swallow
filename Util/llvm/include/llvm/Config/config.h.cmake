@@ -6,14 +6,6 @@
 /* Define if dlopen(0) will open the symbols of the program */
 #undef CAN_DLOPEN_SELF
 
-/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
-   systems. This function is required for `alloca.c' support on those systems.
-   */
-#undef CRAY_STACKSEG_END
-
-/* Define to 1 if using `alloca.c'. */
-#undef C_ALLOCA
-
 /* Define if CBE is enabled for printf %a output */
 #undef ENABLE_CBE_PRINTF_A
 
@@ -22,13 +14,6 @@
 
 /* Define if threads enabled */
 #cmakedefine ENABLE_THREADS ${ENABLE_THREADS}
-
-/* Define to 1 if you have `alloca', as a function or macro. */
-#cmakedefine HAVE_ALLOCA ${HAVE_ALLOCA}
-
-/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
-   */
-#cmakedefine HAVE_ALLOCA_H ${HAVE_ALLOCA_H}
 
 /* Define to 1 if you have the `argz_append' function. */
 #undef HAVE_ARGZ_APPEND
@@ -181,9 +166,6 @@
 /* Define if you have the libdl library or equivalent. */
 #undef HAVE_LIBDL
 
-/* Define to 1 if you have the `elf' library (-lelf). */
-#undef HAVE_LIBELF
-
 /* Define to 1 if you have the `imagehlp' library (-limagehlp). */
 #cmakedefine HAVE_LIBIMAGEHLP ${HAVE_LIBIMAGEHLP}
 
@@ -240,13 +222,13 @@
 #cmakedefine HAVE_MEMORY_H ${HAVE_MEMORY_H}
 
 /* Define to 1 if you have the `mkdtemp' function. */
-#undef HAVE_MKDTEMP
+#cmakedefine HAVE_MKDTEMP ${HAVE_MKDTEMP}
 
 /* Define to 1 if you have the `mkstemp' function. */
-#undef HAVE_MKSTEMP
+#cmakedefine HAVE_MKSTEMP ${HAVE_MKSTEMP}
 
 /* Define to 1 if you have the `mktemp' function. */
-#undef HAVE_MKTEMP
+#cmakedefine HAVE_MKTEMP ${HAVE_MKTEMP}
 
 /* Define to 1 if you have a working `mmap' system call. */
 #undef HAVE_MMAP
@@ -469,6 +451,9 @@
 
 /* Installation directory for man pages */
 #undef LLVM_MANDIR
+
+/* Build multithreading support into LLVM */
+#cmakedefine LLVM_MULTITHREADED ${LLVM_MULTITHREADED}
 
 /* Define if this is Unixish platform */
 #cmakedefine LLVM_ON_UNIX ${LLVM_ON_UNIX}

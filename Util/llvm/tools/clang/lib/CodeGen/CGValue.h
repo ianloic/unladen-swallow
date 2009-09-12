@@ -24,7 +24,7 @@ namespace llvm {
 
 namespace clang {
   class ObjCPropertyRefExpr;
-  class ObjCKVCRefExpr;
+  class ObjCImplicitSetterGetterRefExpr;
 
 namespace CodeGen {
 
@@ -143,7 +143,7 @@ class LValue {
     // Obj-C property reference expression
     const ObjCPropertyRefExpr *PropertyRefExpr;
     // ObjC 'implicit' property reference expression
-    const ObjCKVCRefExpr *KVCRefExpr;
+    const ObjCImplicitSetterGetterRefExpr *KVCRefExpr;
   };
 
   bool Volatile:1;
@@ -163,7 +163,8 @@ class LValue {
   // objective-c's gc attributes
   unsigned ObjCType : 2;  
 
-  
+  // address space
+  unsigned AddressSpace;
 
 private:
   static void SetQualifiers(unsigned Qualifiers, LValue& R) {
@@ -195,7 +196,9 @@ public:
   bool isGlobalObjCRef() const { return GlobalObjCRef; }
   bool isObjCWeak() const { return ObjCType == Weak; }
   bool isObjCStrong() const { return ObjCType == Strong; }
-  
+
+  unsigned getAddressSpace() const { return AddressSpace; }
+
   static void SetObjCIvar(LValue& R, bool iValue) {
     R.Ivar = iValue;
   }
@@ -248,17 +251,19 @@ public:
   }
 
   // 'implicit' property ref lvalue
-  const ObjCKVCRefExpr *getKVCRefExpr() const {
+  const ObjCImplicitSetterGetterRefExpr *getKVCRefExpr() const {
     assert(isKVCRef());
     return KVCRefExpr;
   }
 
   static LValue MakeAddr(llvm::Value *V, unsigned Qualifiers,
-                         QualType::GCAttrTypes GCAttrs = QualType::GCNone) {
+                         QualType::GCAttrTypes GCAttrs = QualType::GCNone,
+                         unsigned AddressSpace = 0) {
     LValue R;
     R.LVType = Simple;
     R.V = V;
     SetQualifiers(Qualifiers,R);
+    R.AddressSpace = AddressSpace;
     SetObjCType(GCAttrs, R);
     return R;
   }
@@ -308,7 +313,8 @@ public:
     return R;
   }
   
-  static LValue MakeKVCRef(const ObjCKVCRefExpr *E, unsigned Qualifiers) {
+  static LValue MakeKVCRef(const ObjCImplicitSetterGetterRefExpr *E, 
+                           unsigned Qualifiers) {
     LValue R;
     R.LVType = KVCRef;
     R.KVCRefExpr = E;

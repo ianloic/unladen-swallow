@@ -78,7 +78,7 @@ static void AddQuotedIncludePath(std::vector<char> &Buf,
     
   // Escape double quotes etc.
   Buf.push_back('"');
-  std::string EscapedFile = Lexer::Stringify(Path.toString());
+  std::string EscapedFile = Lexer::Stringify(Path.str());
   Buf.insert(Buf.end(), EscapedFile.begin(), EscapedFile.end());
   Buf.push_back('"');
 }
@@ -247,10 +247,13 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     DefineBuiltinMacro(Buf, "__STDC__=1");
   if (LangOpts.AsmPreprocessor)
     DefineBuiltinMacro(Buf, "__ASSEMBLER__=1");
-  if (LangOpts.C99 && !LangOpts.CPlusPlus)
-    DefineBuiltinMacro(Buf, "__STDC_VERSION__=199901L");
-  else if (0) // STDC94 ?
-    DefineBuiltinMacro(Buf, "__STDC_VERSION__=199409L");
+
+  if (!LangOpts.CPlusPlus) {
+    if (LangOpts.C99)
+      DefineBuiltinMacro(Buf, "__STDC_VERSION__=199901L");
+    else if (!LangOpts.GNUMode && LangOpts.Digraphs)
+      DefineBuiltinMacro(Buf, "__STDC_VERSION__=199409L");
+  }
 
   // Standard conforming mode?
   if (!LangOpts.GNUMode)
@@ -302,8 +305,16 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     DefineBuiltinMacro(Buf, "__EXCEPTIONS=1");
     DefineBuiltinMacro(Buf, "__GNUG__=4");
     DefineBuiltinMacro(Buf, "__GXX_WEAK__=1");
-    DefineBuiltinMacro(Buf, "__cplusplus=1");
+    if (LangOpts.GNUMode)
+      DefineBuiltinMacro(Buf, "__cplusplus=1");
+    else 
+      // C++ [cpp.predefined]p1:
+      //   The name_ _cplusplusis defined to the value199711Lwhen compiling a 
+      //   C++ translation unit.
+      DefineBuiltinMacro(Buf, "__cplusplus=199711L");
     DefineBuiltinMacro(Buf, "__private_extern__=extern");
+    // Ugly hack to work with GNU libstdc++.
+    DefineBuiltinMacro(Buf, "_GNU_SOURCE=1");
   }
   
   // Filter out some microsoft extensions when trying to parse in ms-compat

@@ -527,7 +527,7 @@ class SizeofTest(unittest.TestCase):
         check(complex(0,1), size(h + '2d'))
         # code
         if WITH_LLVM:
-            check(get_cell().func_code, size(h + '4i8Pi5Pc2i'))
+            check(get_cell().func_code, size(h + '4i8Pi5Pc3i2P'))
         else:
             check(get_cell().func_code, size(h + '4i8Pi2P'))
         # BaseException
@@ -556,9 +556,18 @@ class SizeofTest(unittest.TestCase):
         # method-wrapper (descriptor object)
         check({}.__iter__, size(h + '2P'))
         # dict
-        check({}, size(h + '3P2P' + 8*'P2P'))
+        dict_llvm_suffix = ''
+        if WITH_LLVM:
+            # The last two members of the dict struct are really Py_ssize_t
+            # values, but struct.calcsize doesn't have a Py_ssize_t character
+            # code.  In order to make this work on 32-bit and 64-bit platforms,
+            # we assume that sizeof(void*) == sizeof(Py_ssize_t), which is
+            # generally true, and put '2P' at the end.
+            dict_llvm_suffix = 'P2P'
+        check({}, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix))
         x = {1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8}
-        check(x, size(h + '3P2P' + 8*'P2P') + 16*size('P2P'))
+        check(x, size(h + '3P2P' + 8*'P2P' + dict_llvm_suffix) + 16*size('P2P'))
+        del dict_llvm_suffix
         # dictionary-keyiterator
         check({}.iterkeys(), size(h + 'P2PPP'))
         # dictionary-valueiterator

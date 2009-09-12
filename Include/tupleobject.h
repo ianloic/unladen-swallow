@@ -23,7 +23,7 @@ returned item's reference count.
 Keep this in sync with Util/PyTypeBuilder.h.
 */
 
-typedef struct {
+typedef struct PyTupleObject {
     PyObject_VAR_HEAD
     PyObject *ob_item[1];
 

@@ -36,12 +36,13 @@ class VISIBILITY_HIDDEN AggExprEmitter : public StmtVisitor<AggExprEmitter> {
   llvm::Value *DestPtr;
   bool VolatileDest;
   bool IgnoreResult;
-
+  bool IsInitializer;
 public:
   AggExprEmitter(CodeGenFunction &cgf, llvm::Value *destPtr, bool v,
-                 bool ignore)
+                 bool ignore, bool isinit)
     : CGF(cgf), Builder(CGF.Builder),
-      DestPtr(destPtr), VolatileDest(v), IgnoreResult(ignore) {
+      DestPtr(destPtr), VolatileDest(v), IgnoreResult(ignore),
+      IsInitializer(isinit) {
   }
 
   //===--------------------------------------------------------------------===//
@@ -86,8 +87,7 @@ public:
   }
   
   // Operators.
-  void VisitCStyleCastExpr(CStyleCastExpr *E);
-  void VisitImplicitCastExpr(ImplicitCastExpr *E);
+  void VisitCastExpr(CastExpr *E);
   void VisitCallExpr(const CallExpr *E);
   void VisitStmtExpr(const StmtExpr *E);
   void VisitBinaryOperator(const BinaryOperator *BO);
@@ -99,7 +99,7 @@ public:
     EmitAggLoadOfLValue(E);
   }
   void VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E);
-  void VisitObjCKVCRefExpr(ObjCKVCRefExpr *E);
+  void VisitObjCImplicitSetterGetterRefExpr(ObjCImplicitSetterGetterRefExpr *E);
   
   void VisitConditionalOperator(const ConditionalOperator *CO);
   void VisitChooseExpr(const ChooseExpr *CE);
@@ -166,21 +166,27 @@ void AggExprEmitter::EmitFinalDestCopy(const Expr *E, LValue Src, bool Ignore) {
 //                            Visitor Methods
 //===----------------------------------------------------------------------===//
 
-void AggExprEmitter::VisitCStyleCastExpr(CStyleCastExpr *E) {
-  // GCC union extension
-  if (E->getSubExpr()->getType()->isScalarType()) {
+void AggExprEmitter::VisitCastExpr(CastExpr *E) {
+  if (E->getCastKind() == CastExpr::CK_ToUnion) {
+    // GCC union extension
     QualType PtrTy =
         CGF.getContext().getPointerType(E->getSubExpr()->getType());
     llvm::Value *CastPtr = Builder.CreateBitCast(DestPtr,
                                                  CGF.ConvertType(PtrTy));
-    EmitInitializationToLValue(E->getSubExpr(), LValue::MakeAddr(CastPtr, 0));
+    EmitInitializationToLValue(E->getSubExpr(),
+                               LValue::MakeAddr(CastPtr, 0));
     return;
   }
-
-  Visit(E->getSubExpr());
-}
-
-void AggExprEmitter::VisitImplicitCastExpr(ImplicitCastExpr *E) {
+  if (E->getCastKind() == CastExpr::CK_UserDefinedConversion) {
+    CXXFunctionalCastExpr *CXXFExpr = cast<CXXFunctionalCastExpr>(E);
+    CGF.EmitCXXFunctionalCastExpr(CXXFExpr);
+    return;
+  }
+  
+  // FIXME: Remove the CK_Unknown check here.
+  assert((E->getCastKind() == CastExpr::CK_NoOp || 
+          E->getCastKind() == CastExpr::CK_Unknown) && 
+         "Only no-op casts allowed!");
   assert(CGF.getContext().hasSameUnqualifiedType(E->getSubExpr()->getType(),
                                                  E->getType()) &&
          "Implicit cast types must be compatible");
@@ -207,14 +213,16 @@ void AggExprEmitter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
   EmitFinalDestCopy(E, RV);
 }
 
-void AggExprEmitter::VisitObjCKVCRefExpr(ObjCKVCRefExpr *E) {
+void AggExprEmitter::VisitObjCImplicitSetterGetterRefExpr(
+                                   ObjCImplicitSetterGetterRefExpr *E) {
   RValue RV = CGF.EmitObjCPropertyGet(E);
   EmitFinalDestCopy(E, RV);
 }
 
 void AggExprEmitter::VisitBinComma(const BinaryOperator *E) {
   CGF.EmitAnyExpr(E->getLHS(), 0, false, true);
-  CGF.EmitAggExpr(E->getRHS(), DestPtr, VolatileDest);
+  CGF.EmitAggExpr(E->getRHS(), DestPtr, VolatileDest,
+                  /*IgnoreResult=*/false, IsInitializer);
 }
 
 void AggExprEmitter::VisitStmtExpr(const StmtExpr *E) {
@@ -242,8 +250,7 @@ void AggExprEmitter::VisitBinAssign(const BinaryOperator *E) {
     CGF.EmitAggExpr(E->getRHS(), AggLoc, VolatileDest);
     CGF.EmitObjCPropertySet(LHS.getPropertyRefExpr(), 
                             RValue::getAggregate(AggLoc, VolatileDest));
-  } 
-  else if (LHS.isKVCRef()) {
+  } else if (LHS.isKVCRef()) {
     llvm::Value *AggLoc = DestPtr;
     if (!AggLoc)
       AggLoc = CGF.CreateTempAlloca(CGF.ConvertType(E->getRHS()->getType()));
@@ -253,7 +260,7 @@ void AggExprEmitter::VisitBinAssign(const BinaryOperator *E) {
   } else {
     if (CGF.getContext().getLangOptions().NeXTRuntime) {
       QualType LHSTy = E->getLHS()->getType();
-      if (const RecordType *FDTTy = LHSTy.getTypePtr()->getAsRecordType())
+      if (const RecordType *FDTTy = LHSTy.getTypePtr()->getAs<RecordType>())
         if (FDTTy->getDecl()->hasObjectMember()) {
           LValue RHS = CGF.EmitLValue(E->getRHS());
           CGF.CGM.getObjCRuntime().EmitGCMemmoveCollectable(CGF, LHS.getAddress(), 
@@ -324,7 +331,9 @@ void AggExprEmitter::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *E) {
   } else 
     Visit(E->getSubExpr());
   
-  CGF.PushCXXTemporary(E->getTemporary(), Val);
+  // Don't make this a live temporary if we're emitting an initializer expr.
+  if (!IsInitializer)
+    CGF.PushCXXTemporary(E->getTemporary(), Val);
 }
 
 void
@@ -340,7 +349,7 @@ AggExprEmitter::VisitCXXConstructExpr(const CXXConstructExpr *E) {
 }
 
 void AggExprEmitter::VisitCXXExprWithTemporaries(CXXExprWithTemporaries *E) {
-  CGF.EmitCXXExprWithTemporaries(E, DestPtr, VolatileDest);
+  CGF.EmitCXXExprWithTemporaries(E, DestPtr, VolatileDest, IsInitializer);
 }
 
 void AggExprEmitter::EmitInitializationToLValue(Expr* E, LValue LV) {
@@ -441,7 +450,7 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
   // the disadvantage is that the generated code is more difficult for
   // the optimizer, especially with bitfields.
   unsigned NumInitElements = E->getNumInits();
-  RecordDecl *SD = E->getType()->getAsRecordType()->getDecl();
+  RecordDecl *SD = E->getType()->getAs<RecordType>()->getDecl();
   unsigned CurInitVal = 0;
 
   if (E->getType()->isUnionType()) {
@@ -511,13 +520,14 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
 /// the value of the aggregate expression is not needed.  If VolatileDest is
 /// true, DestPtr cannot be 0.
 void CodeGenFunction::EmitAggExpr(const Expr *E, llvm::Value *DestPtr,
-                                  bool VolatileDest, bool IgnoreResult) {
+                                  bool VolatileDest, bool IgnoreResult,
+                                  bool IsInitializer) {
   assert(E && hasAggregateLLVMType(E->getType()) &&
          "Invalid aggregate expression to emit");
   assert ((DestPtr != 0 || VolatileDest == false)
           && "volatile aggregate can't be 0");
   
-  AggExprEmitter(*this, DestPtr, VolatileDest, IgnoreResult)
+  AggExprEmitter(*this, DestPtr, VolatileDest, IgnoreResult, IsInitializer)
     .Visit(const_cast<Expr*>(E));
 }
 
@@ -542,7 +552,8 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
   // equal, but other compilers do this optimization, and almost every memcpy
   // implementation handles this case safely.  If there is a libc that does not
   // safely handle this, we can add a target hook.
-  const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::Int8Ty);
+  const llvm::Type *BP =
+                llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
   if (DestPtr->getType() != BP)
     DestPtr = Builder.CreateBitCast(DestPtr, BP, "tmp");
   if (SrcPtr->getType() != BP)
@@ -552,7 +563,8 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
   std::pair<uint64_t, unsigned> TypeInfo = getContext().getTypeInfo(Ty);
   
   // FIXME: Handle variable sized types.
-  const llvm::Type *IntPtr = llvm::IntegerType::get(LLVMPointerWidth);
+  const llvm::Type *IntPtr =
+          llvm::IntegerType::get(VMContext, LLVMPointerWidth);
   
   // FIXME: If we have a volatile struct, the optimizer can remove what might
   // appear to be `extra' memory ops:
@@ -570,6 +582,6 @@ void CodeGenFunction::EmitAggregateCopy(llvm::Value *DestPtr,
                       DestPtr, SrcPtr,
                       // TypeInfo.first describes size in bits.
                       llvm::ConstantInt::get(IntPtr, TypeInfo.first/8),
-                      llvm::ConstantInt::get(llvm::Type::Int32Ty, 
+                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 
                                              TypeInfo.second/8));
 }

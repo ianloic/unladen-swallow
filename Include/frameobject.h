@@ -82,6 +82,9 @@ enum _PyFrameBailReason {
     _PYFRAME_TRACE_ON_ENTRY,
     _PYFRAME_LINE_TRACE,
     _PYFRAME_BACKEDGE_TRACE,
+    /* Fatal guard failures invalidate the machine code. */
+    _PYFRAME_FATAL_GUARD_FAIL,
+    _PYFRAME_GUARD_FAIL,
 };
 
 /* Standard object interface */

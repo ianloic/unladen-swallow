@@ -200,6 +200,19 @@ llvm::DIType CGDebugInfo::CreateCVRType(QualType Ty, llvm::DICompileUnit Unit) {
                                         0, 0, 0, 0, 0, FromTy);
 }
 
+llvm::DIType CGDebugInfo::CreateType(const ObjCObjectPointerType *Ty,
+                                     llvm::DICompileUnit Unit) {
+  llvm::DIType EltTy = getOrCreateType(Ty->getPointeeType(), Unit);
+ 
+  // Bit size, align and offset of the type.
+  uint64_t Size = M->getContext().getTypeSize(Ty);
+  uint64_t Align = M->getContext().getTypeAlign(Ty);
+                                                                               
+  return DebugFactory.CreateDerivedType(llvm::dwarf::DW_TAG_pointer_type, Unit,
+                                        "", llvm::DICompileUnit(),
+                                        0, Size, Align, 0, 0, EltTy);
+}
+
 llvm::DIType CGDebugInfo::CreateType(const PointerType *Ty,
                                      llvm::DICompileUnit Unit) {
   llvm::DIType EltTy = getOrCreateType(Ty->getPointeeType(), Unit);
@@ -419,7 +432,7 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty,
   // its members.  Finally, we create a descriptor for the complete type (which
   // may refer to the forward decl if the struct is recursive) and replace all
   // uses of the forward declaration with the final definition.
-  llvm::DIType FwdDecl =
+  llvm::DICompositeType FwdDecl =
     DebugFactory.CreateCompositeType(Tag, Unit, Name, DefUnit, Line, 0, 0, 0, 0,
                                      llvm::DIType(), llvm::DIArray());
   
@@ -493,15 +506,16 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty,
   uint64_t Size = M->getContext().getTypeSize(Ty);
   uint64_t Align = M->getContext().getTypeAlign(Ty);
   
-  llvm::DIType RealDecl =
+  llvm::DICompositeType RealDecl =
     DebugFactory.CreateCompositeType(Tag, Unit, Name, DefUnit, Line, Size,
                                      Align, 0, 0, llvm::DIType(), Elements);
 
   // Now that we have a real decl for the struct, replace anything using the
   // old decl with the new one.  This will recursively update the debug info.
-  FwdDecl.getGV()->replaceAllUsesWith(RealDecl.getGV());
-  FwdDecl.getGV()->eraseFromParent();
-  
+  FwdDecl.replaceAllUsesWith(RealDecl);
+
+  // Update TypeCache.
+  TypeCache[QualType(Ty, 0).getAsOpaquePtr()] = RealDecl;  
   return RealDecl;
 }
 
@@ -529,7 +543,7 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
   // its members.  Finally, we create a descriptor for the complete type (which
   // may refer to the forward decl if the struct is recursive) and replace all
   // uses of the forward declaration with the final definition.
-  llvm::DIType FwdDecl =
+  llvm::DICompositeType FwdDecl =
     DebugFactory.CreateCompositeType(Tag, Unit, Name, DefUnit, Line, 0, 0, 0, 0,
                                      llvm::DIType(), llvm::DIArray(),
                                      RuntimeLang);
@@ -617,16 +631,17 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
   uint64_t Size = M->getContext().getTypeSize(Ty);
   uint64_t Align = M->getContext().getTypeAlign(Ty);
   
-  llvm::DIType RealDecl =
+  llvm::DICompositeType RealDecl =
     DebugFactory.CreateCompositeType(Tag, Unit, Name, DefUnit, Line, Size,
                                      Align, 0, 0, llvm::DIType(), Elements,
                                      RuntimeLang);
 
   // Now that we have a real decl for the struct, replace anything using the
   // old decl with the new one.  This will recursively update the debug info.
-  FwdDecl.getGV()->replaceAllUsesWith(RealDecl.getGV());
-  FwdDecl.getGV()->eraseFromParent();
-  
+  FwdDecl.replaceAllUsesWith(RealDecl);
+
+  // Update TypeCache.
+  TypeCache[QualType(Ty, 0).getAsOpaquePtr()] = RealDecl;  
   return RealDecl;
 }
 
@@ -707,8 +722,9 @@ llvm::DIType CGDebugInfo::CreateType(const ArrayType *Ty,
   QualType EltTy(Ty, 0);
   while ((Ty = dyn_cast<ArrayType>(EltTy))) {
     uint64_t Upper = 0;
-    if (const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(Ty))
-      Upper = CAT->getSize().getZExtValue() - 1;
+    if (const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(Ty)) 
+      if (CAT->getSize().getZExtValue())
+	Upper = CAT->getSize().getZExtValue() - 1;
     // FIXME: Verify this is right for VLAs.
     Subscripts.push_back(DebugFactory.GetOrCreateSubrange(0, Upper));
     EltTy = Ty->getElementType();
@@ -732,7 +748,7 @@ llvm::DIType CGDebugInfo::getOrCreateType(QualType Ty,
   if (Ty.isNull())
     return llvm::DIType();
   
-  // Check to see if the compile unit already has created this type.
+  // Check TypeCache first.
   llvm::DIType &Slot = TypeCache[Ty.getAsOpaquePtr()];
   if (!Slot.isNull()) return Slot;
 
@@ -748,7 +764,7 @@ llvm::DIType CGDebugInfo::getOrCreateType(QualType Ty,
 #define DEPENDENT_TYPE(Class, Base) case Type::Class:
 #include "clang/AST/TypeNodes.def"
     assert(false && "Dependent types cannot show up in debug information");
-    
+
   case Type::LValueReference:
   case Type::RValueReference:
   case Type::Vector:
@@ -760,10 +776,8 @@ llvm::DIType CGDebugInfo::getOrCreateType(QualType Ty,
   case Type::QualifiedName:
     // Unsupported types
     return llvm::DIType();
-  case Type::ObjCObjectPointer:   // Encode id<p> in debug info just like id.
-    return Slot = getOrCreateType(M->getContext().getObjCIdType(), Unit);
-      
-  case Type::ObjCQualifiedInterface:  // Drop protocols from interface.
+  case Type::ObjCObjectPointer:
+    return Slot = CreateType(cast<ObjCObjectPointerType>(Ty), Unit);
   case Type::ObjCInterface: 
     return Slot = CreateType(cast<ObjCInterfaceType>(Ty), Unit);
   case Type::Builtin: return Slot = CreateType(cast<BuiltinType>(Ty), Unit);
@@ -792,8 +806,8 @@ llvm::DIType CGDebugInfo::getOrCreateType(QualType Ty,
     return Slot = getOrCreateType(cast<TypeOfType>(Ty)->getUnderlyingType(),
                                   Unit);
   case Type::Decltype:
-    return Slot = getOrCreateType(cast<DecltypeType>(Ty)->getUnderlyingExpr()
-                                  ->getType(), Unit);
+    return Slot = getOrCreateType(cast<DecltypeType>(Ty)->getUnderlyingType(),
+                                  Unit);
   }
   
   return Slot;

@@ -1,17 +1,23 @@
 set(LLVM_NO_RTTI 1)
 
 add_clang_library(clangAnalysis
+  AnalysisContext.cpp
+  AnalysisManager.cpp
   BasicConstraintManager.cpp
   BasicObjCFoundationChecks.cpp
   BasicStore.cpp
   BasicValueFactory.cpp
   BugReporter.cpp
+  BugReporterVisitors.cpp
+  CFG.cpp
   CFRefCount.cpp
+  CallGraph.cpp
   CheckDeadStores.cpp
   CheckNSError.cpp
   CheckObjCDealloc.cpp
   CheckObjCInstMethSignature.cpp
   CheckObjCUnusedIVars.cpp
+  CheckSecuritySyntaxOnly.cpp
   Environment.cpp
   ExplodedGraph.cpp
   GRBlockCounter.cpp
@@ -24,10 +30,11 @@ add_clang_library(clangAnalysis
   PathDiagnostic.cpp
   RangeConstraintManager.cpp
   RegionStore.cpp
+  SVals.cpp
+  SValuator.cpp
   SimpleConstraintManager.cpp
   SimpleSValuator.cpp
   Store.cpp
-  SVals.cpp
   SymbolManager.cpp
   UninitializedValues.cpp
   ValueManager.cpp

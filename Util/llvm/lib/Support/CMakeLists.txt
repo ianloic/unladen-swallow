@@ -3,7 +3,6 @@ add_llvm_library(LLVMSupport
   APInt.cpp
   APSInt.cpp
   Allocator.cpp
-  Annotation.cpp
   CommandLine.cpp
   ConstantRange.cpp
   Debug.cpp
@@ -11,6 +10,7 @@ add_llvm_library(LLVMSupport
   ErrorHandling.cpp
   FileUtilities.cpp
   FoldingSet.cpp
+  FormattedStream.cpp
   GraphWriter.cpp
   IsInf.cpp
   IsNAN.cpp
@@ -22,13 +22,15 @@ add_llvm_library(LLVMSupport
   SmallPtrSet.cpp
   SourceMgr.cpp
   Statistic.cpp
-  Streams.cpp
   StringExtras.cpp
   StringMap.cpp
   StringPool.cpp
   SystemUtils.cpp
+  TargetRegistry.cpp
   Timer.cpp
   Triple.cpp
+  Twine.cpp
+  raw_os_ostream.cpp
   raw_ostream.cpp
   )
 

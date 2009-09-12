@@ -219,8 +219,8 @@ SPURegisterInfo::getNumArgRegs()
 
 /// getPointerRegClass - Return the register class to use to hold pointers.
 /// This is used for addressing modes.
-const TargetRegisterClass * SPURegisterInfo::getPointerRegClass() const
-{
+const TargetRegisterClass *
+SPURegisterInfo::getPointerRegClass(unsigned Kind) const {
   return &SPU::R32CRegClass;
 }
 
@@ -365,7 +365,7 @@ SPURegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
   SPOp.ChangeToRegister(SPU::R1, false);
   if (Offset > SPUFrameInfo::maxFrameOffset()
       || Offset < SPUFrameInfo::minFrameOffset()) {
-    cerr << "Large stack adjustment ("
+    errs() << "Large stack adjustment ("
          << Offset
          << ") in SPURegisterInfo::eliminateFrameIndex.";
   } else {

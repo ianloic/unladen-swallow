@@ -90,7 +90,7 @@ Module *llvm::CloneModule(const Module *M,
     if (I->hasInitializer())
       GV->setInitializer(cast<Constant>(MapValue(I->getInitializer(),
                                                  ValueMap,
-                                                 &M->getContext())));
+                                                 M->getContext())));
     GV->setLinkage(I->getLinkage());
     GV->setThreadLocal(I->isThreadLocal());
     GV->setConstant(I->isConstant());
@@ -108,7 +108,7 @@ Module *llvm::CloneModule(const Module *M,
         ValueMap[J] = DestI++;
       }
 
-      std::vector<ReturnInst*> Returns;  // Ignore returns cloned...
+      SmallVector<ReturnInst*, 8> Returns;  // Ignore returns cloned.
       CloneFunctionInto(F, I, ValueMap, Returns);
     }
 
@@ -121,7 +121,7 @@ Module *llvm::CloneModule(const Module *M,
     GlobalAlias *GA = cast<GlobalAlias>(ValueMap[I]);
     GA->setLinkage(I->getLinkage());
     if (const Constant* C = I->getAliasee())
-      GA->setAliasee(cast<Constant>(MapValue(C, ValueMap, &M->getContext())));
+      GA->setAliasee(cast<Constant>(MapValue(C, ValueMap, M->getContext())));
   }
   
   return New;

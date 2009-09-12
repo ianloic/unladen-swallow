@@ -98,6 +98,13 @@ void FunctionTemplateDecl::Destroy(ASTContext &C) {
   Decl::Destroy(C);
 }
 
+FunctionTemplateDecl *FunctionTemplateDecl::getCanonicalDecl() {
+  FunctionTemplateDecl *FunTmpl = this;
+  while (FunTmpl->getPreviousDeclaration())
+    FunTmpl = FunTmpl->getPreviousDeclaration();
+  return FunTmpl;
+}
+
 FunctionTemplateDecl::Common *FunctionTemplateDecl::getCommonPtr() {
   // Find the first declaration of this function template.
   FunctionTemplateDecl *First = this;
@@ -114,6 +121,13 @@ FunctionTemplateDecl::Common *FunctionTemplateDecl::getCommonPtr() {
 //===----------------------------------------------------------------------===//
 // ClassTemplateDecl Implementation
 //===----------------------------------------------------------------------===//
+
+ClassTemplateDecl *ClassTemplateDecl::getCanonicalDecl() {
+  ClassTemplateDecl *Template = this;
+  while (Template->getPreviousDeclaration())
+    Template = Template->getPreviousDeclaration();
+  return Template;
+}
 
 ClassTemplateDecl *ClassTemplateDecl::Create(ASTContext &C,
                                              DeclContext *DC,
@@ -147,6 +161,21 @@ void ClassTemplateDecl::Destroy(ASTContext& C) {
   C.Deallocate((void*)this);
 }
 
+ClassTemplatePartialSpecializationDecl *
+ClassTemplateDecl::findPartialSpecialization(QualType T) {
+  ASTContext &Context = getASTContext();
+  typedef llvm::FoldingSet<ClassTemplatePartialSpecializationDecl>::iterator
+    partial_spec_iterator;
+  for (partial_spec_iterator P = getPartialSpecializations().begin(),
+                          PEnd = getPartialSpecializations().end();
+       P != PEnd; ++P) {
+    if (Context.hasSameType(Context.getTypeDeclType(&*P), T))
+      return &*P;
+  }
+  
+  return 0;
+}
+
 QualType ClassTemplateDecl::getInjectedClassNameType(ASTContext &Context) {
   if (!CommonPtr->InjectedClassNameType.isNull())
     return CommonPtr->InjectedClassNameType;
@@ -157,52 +186,32 @@ QualType ClassTemplateDecl::getInjectedClassNameType(ASTContext &Context) {
   // better to fix that redundancy.
 
   TemplateParameterList *Params = getTemplateParameters();
-
   llvm::SmallVector<TemplateArgument, 16> TemplateArgs;
-  llvm::SmallVector<TemplateArgument, 16> CanonTemplateArgs;
   TemplateArgs.reserve(Params->size());
-  CanonTemplateArgs.reserve(Params->size());
-
-  for (TemplateParameterList::iterator 
-         Param = Params->begin(), ParamEnd = Params->end(); 
+  for (TemplateParameterList::iterator Param = Params->begin(), 
+                                    ParamEnd = Params->end(); 
        Param != ParamEnd; ++Param) {
     if (isa<TemplateTypeParmDecl>(*Param)) {
       QualType ParamType = Context.getTypeDeclType(cast<TypeDecl>(*Param));
       TemplateArgs.push_back(TemplateArgument((*Param)->getLocation(), 
                                               ParamType));
-      CanonTemplateArgs.push_back(
-                         TemplateArgument((*Param)->getLocation(),
-                                          Context.getCanonicalType(ParamType)));
     } else if (NonTypeTemplateParmDecl *NTTP = 
                  dyn_cast<NonTypeTemplateParmDecl>(*Param)) {
-      // FIXME: Build canonical expression, too!
       Expr *E = new (Context) DeclRefExpr(NTTP, NTTP->getType(),
                                           NTTP->getLocation(),
                                           NTTP->getType()->isDependentType(),
                                           /*Value-dependent=*/true);
       TemplateArgs.push_back(TemplateArgument(E));
-      CanonTemplateArgs.push_back(TemplateArgument(E));
     } else { 
       TemplateTemplateParmDecl *TTP = cast<TemplateTemplateParmDecl>(*Param);
       TemplateArgs.push_back(TemplateArgument(TTP->getLocation(), TTP));
-      CanonTemplateArgs.push_back(TemplateArgument(TTP->getLocation(), 
-                                              Context.getCanonicalDecl(TTP)));
     }
   }
 
-  // FIXME: I should really move the "build-the-canonical-type" logic
-  // into ASTContext::getTemplateSpecializationType.
-  TemplateName Name = TemplateName(this);
-  QualType CanonType = Context.getTemplateSpecializationType(
-                                       Context.getCanonicalTemplateName(Name),
-                                             &CanonTemplateArgs[0],
-                                             CanonTemplateArgs.size());
-
   CommonPtr->InjectedClassNameType
-    = Context.getTemplateSpecializationType(Name,
+    = Context.getTemplateSpecializationType(TemplateName(this),
                                             &TemplateArgs[0],
-                                            TemplateArgs.size(),
-                                            CanonType);
+                                            TemplateArgs.size());
   return CommonPtr->InjectedClassNameType;
 }
 
@@ -227,9 +236,8 @@ NonTypeTemplateParmDecl *
 NonTypeTemplateParmDecl::Create(ASTContext &C, DeclContext *DC,
                                 SourceLocation L, unsigned D, unsigned P,
                                 IdentifierInfo *Id, QualType T,
-                                SourceLocation TypeSpecStartLoc) {
-  return new (C) NonTypeTemplateParmDecl(DC, L, D, P, Id, T,
-                                         TypeSpecStartLoc);
+                                DeclaratorInfo *DInfo) {
+  return new (C) NonTypeTemplateParmDecl(DC, L, D, P, Id, T, DInfo);
 }
 
 SourceLocation NonTypeTemplateParmDecl::getDefaultArgumentLoc() const {
@@ -276,6 +284,7 @@ void TemplateArgument::setArgumentPack(TemplateArgument *args, unsigned NumArgs,
     return;
   }
   
+  // FIXME: Allocate in ASTContext
   Args.Args = new TemplateArgument[NumArgs];
   for (unsigned I = 0; I != Args.NumArgs; ++I)
     Args.Args[I] = args[I];
@@ -374,13 +383,15 @@ ClassTemplateSpecializationDecl::
 ClassTemplateSpecializationDecl(ASTContext &Context, Kind DK,
                                 DeclContext *DC, SourceLocation L,
                                 ClassTemplateDecl *SpecializedTemplate,
-                                TemplateArgumentListBuilder &Builder)
+                                TemplateArgumentListBuilder &Builder,
+                                ClassTemplateSpecializationDecl *PrevDecl)
   : CXXRecordDecl(DK, 
                   SpecializedTemplate->getTemplatedDecl()->getTagKind(), 
                   DC, L,
                   // FIXME: Should we use DeclarationName for the name of
                   // class template specializations?
-                  SpecializedTemplate->getIdentifier()),
+                  SpecializedTemplate->getIdentifier(),
+                  PrevDecl),
     SpecializedTemplate(SpecializedTemplate),
     TemplateArgs(Context, Builder, /*TakeArgs=*/true),
     SpecializationKind(TSK_Undeclared) {
@@ -397,9 +408,26 @@ ClassTemplateSpecializationDecl::Create(ASTContext &Context,
                                                    ClassTemplateSpecialization,
                                                    DC, L, 
                                                    SpecializedTemplate,
-                                                   Builder);
+                                                   Builder,
+                                                   PrevDecl);
   Context.getTypeDeclType(Result, PrevDecl);
   return Result;
+}
+
+void ClassTemplateSpecializationDecl::Destroy(ASTContext &C) {
+  if (SpecializedPartialSpecialization *PartialSpec 
+        = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+    C.Deallocate(PartialSpec);
+  
+  CXXRecordDecl::Destroy(C);
+}
+
+ClassTemplateDecl *
+ClassTemplateSpecializationDecl::getSpecializedTemplate() const { 
+  if (SpecializedPartialSpecialization *PartialSpec 
+      = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+    return PartialSpec->PartialSpecialization->getSpecializedTemplate();
+  return SpecializedTemplate.get<ClassTemplateDecl*>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -416,7 +444,7 @@ Create(ASTContext &Context, DeclContext *DC, SourceLocation L,
     = new (Context)ClassTemplatePartialSpecializationDecl(Context, 
                                                           DC, L, Params,
                                                           SpecializedTemplate,
-                                                          Builder);
+                                                          Builder, PrevDecl);
   Result->setSpecializationKind(TSK_ExplicitSpecialization);
   Context.getTypeDeclType(Result, PrevDecl);
   return Result;

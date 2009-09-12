@@ -19,26 +19,28 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
-#include "llvm/MDNode.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/Support/Mangler.h"
-#include "llvm/Support/MathExtras.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Compiler.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetAsmInfo.h"
-#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetRegistry.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/Mangler.h"
+#include "llvm/Support/MathExtras.h"
 #include <set>
 using namespace llvm;
 
@@ -50,8 +52,8 @@ namespace {
   class VISIBILITY_HIDDEN SPUAsmPrinter : public AsmPrinter {
     std::set<std::string> FnStubs, GVStubs;
   public:
-    explicit SPUAsmPrinter(raw_ostream &O, TargetMachine &TM,
-                           const TargetAsmInfo *T, bool V) :
+    explicit SPUAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
+                           const MCAsmInfo *T, bool V) :
       AsmPrinter(O, TM, T, V) {}
 
     virtual const char *getPassName() const {
@@ -66,7 +68,7 @@ namespace {
     /// from the instruction set description.  This method returns true if the
     /// machine instruction was sufficiently described to print it, otherwise it
     /// returns false.
-    bool printInstruction(const MachineInstr *MI);
+    void printInstruction(const MachineInstr *MI);
 
     void printMachineInstruction(const MachineInstr *MI);
     void printOp(const MachineOperand &MO);
@@ -265,7 +267,7 @@ namespace {
                && "Invalid negated immediate rotate 7-bit argument");
         O << -value;
       } else {
-        assert(0 &&"Invalid/non-immediate rotate amount in printRotateNeg7Imm");
+        llvm_unreachable("Invalid/non-immediate rotate amount in printRotateNeg7Imm");
       }
     }
 
@@ -276,21 +278,19 @@ namespace {
                && "Invalid negated immediate rotate 7-bit argument");
         O << -value;
       } else {
-        assert(0 &&"Invalid/non-immediate rotate amount in printRotateNeg7Imm");
+        llvm_unreachable("Invalid/non-immediate rotate amount in printRotateNeg7Imm");
       }
     }
 
     virtual bool runOnMachineFunction(MachineFunction &F) = 0;
-    //! Assembly printer cleanup after function has been emitted
-    virtual bool doFinalization(Module &M) = 0;
   };
 
   /// LinuxAsmPrinter - SPU assembly printer, customized for Linux
   class VISIBILITY_HIDDEN LinuxAsmPrinter : public SPUAsmPrinter {
     DwarfWriter *DW;
   public:
-    explicit LinuxAsmPrinter(raw_ostream &O, SPUTargetMachine &TM,
-                             const TargetAsmInfo *T, bool V)
+    explicit LinuxAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
+                             const MCAsmInfo *T, bool V)
       : SPUAsmPrinter(O, TM, T, V), DW(0) {}
 
     virtual const char *getPassName() const {
@@ -299,8 +299,6 @@ namespace {
 
     bool runOnMachineFunction(MachineFunction &F);
     bool doInitialization(Module &M);
-    //! Dump globals, perform cleanup after function emission
-    bool doFinalization(Module &M);
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesAll();
@@ -310,7 +308,7 @@ namespace {
     }
 
     //! Emit a global variable according to its section and type
-    void printModuleLevelGV(const GlobalVariable* GVar);
+    void PrintGlobalVariable(const GlobalVariable* GVar);
   };
 } // end of anonymous namespace
 
@@ -327,27 +325,27 @@ void SPUAsmPrinter::printOp(const MachineOperand &MO) {
     printBasicBlockLabel(MO.getMBB());
     return;
   case MachineOperand::MO_JumpTableIndex:
-    O << TAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
+    O << MAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
       << '_' << MO.getIndex();
     return;
   case MachineOperand::MO_ConstantPoolIndex:
-    O << TAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber()
+    O << MAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber()
       << '_' << MO.getIndex();
     return;
   case MachineOperand::MO_ExternalSymbol:
     // Computing the address of an external symbol, not calling it.
     if (TM.getRelocationModel() != Reloc::Static) {
-      std::string Name(TAI->getGlobalPrefix()); Name += MO.getSymbolName();
+      std::string Name(MAI->getGlobalPrefix()); Name += MO.getSymbolName();
       GVStubs.insert(Name);
       O << "L" << Name << "$non_lazy_ptr";
       return;
     }
-    O << TAI->getGlobalPrefix() << MO.getSymbolName();
+    O << MAI->getGlobalPrefix() << MO.getSymbolName();
     return;
   case MachineOperand::MO_GlobalAddress: {
     // Computing the address of a global symbol, not calling it.
     GlobalValue *GV = MO.getGlobal();
-    std::string Name = Mang->getValueName(GV);
+    std::string Name = Mang->getMangledName(GV);
 
     // External or weakly linked global variables need non-lazily-resolved
     // stubs
@@ -430,12 +428,13 @@ LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
   // Print out labels for the function.
   const Function *F = MF.getFunction();
 
-  SwitchToSection(TAI->SectionForGlobal(F));
+  OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(F, Mang, TM));
   EmitAlignment(MF.getAlignment(), F);
 
   switch (F->getLinkage()) {
-  default: assert(0 && "Unknown linkage type!");
+  default: llvm_unreachable("Unknown linkage type!");
   case Function::PrivateLinkage:
+  case Function::LinkerPrivateLinkage:
   case Function::InternalLinkage:  // Symbols default to internal.
     break;
   case Function::ExternalLinkage:
@@ -486,17 +485,7 @@ LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF)
 bool LinuxAsmPrinter::doInitialization(Module &M) {
   bool Result = AsmPrinter::doInitialization(M);
   DW = getAnalysisIfAvailable<DwarfWriter>();
-  SwitchToTextSection("\t.text");
   return Result;
-}
-
-/// PrintUnmangledNameSafely - Print out the printable characters in the name.
-/// Don't print things like \\n or \\0.
-static void PrintUnmangledNameSafely(const Value *V, raw_ostream &OS) {
-  for (const char *Name = V->getNameStart(), *E = Name+V->getNameLen();
-       Name != E; ++Name)
-    if (isprint(*Name))
-      OS << *Name;
 }
 
 /*!
@@ -505,7 +494,7 @@ static void PrintUnmangledNameSafely(const Value *V, raw_ostream &OS) {
   \note This code was shamelessly copied from the PowerPC's assembly printer,
   which sort of screams for some kind of refactorization of common code.
  */
-void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
+void LinuxAsmPrinter::PrintGlobalVariable(const GlobalVariable *GVar) {
   const TargetData *TD = TM.getTargetData();
 
   if (!GVar->hasInitializer())
@@ -515,18 +504,17 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (EmitSpecialLLVMGlobal(GVar))
     return;
 
-  std::string name = Mang->getValueName(GVar);
+  std::string name = Mang->getMangledName(GVar);
 
   printVisibility(name, GVar->getVisibility());
 
   Constant *C = GVar->getInitializer();
-  if (isa<MDNode>(C) || isa<MDString>(C))
-    return;
   const Type *Type = C->getType();
   unsigned Size = TD->getTypeAllocSize(Type);
   unsigned Align = TD->getPreferredAlignmentLog(GVar);
 
-  SwitchToSection(TAI->SectionForGlobal(GVar));
+  OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(GVar, Mang,
+                                                                  TM));
 
   if (C->isNullValue() && /* FIXME: Verify correct */
       !GVar->hasSection() &&
@@ -540,12 +528,12 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
         O << name << ":\n";
         O << "\t.zero " << Size << '\n';
       } else if (GVar->hasLocalLinkage()) {
-        O << TAI->getLCOMMDirective() << name << ',' << Size;
+        O << MAI->getLCOMMDirective() << name << ',' << Size;
       } else {
         O << ".comm " << name << ',' << Size;
       }
-      O << "\t\t" << TAI->getCommentString() << " '";
-      PrintUnmangledNameSafely(GVar, O);
+      O << "\t\t" << MAI->getCommentString() << " '";
+      WriteAsOperand(O, GVar, /*PrintType=*/false, GVar->getParent());
       O << "'\n";
       return;
   }
@@ -570,6 +558,7 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
       << "\t.type " << name << ", @object\n";
     // FALL THROUGH
    case GlobalValue::PrivateLinkage:
+   case GlobalValue::LinkerPrivateLinkage:
    case GlobalValue::InternalLinkage:
     break;
    default:
@@ -577,40 +566,15 @@ void LinuxAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   }
 
   EmitAlignment(Align, GVar);
-  O << name << ":\t\t\t\t" << TAI->getCommentString() << " '";
-  PrintUnmangledNameSafely(GVar, O);
+  O << name << ":\t\t\t\t" << MAI->getCommentString() << " '";
+  WriteAsOperand(O, GVar, /*PrintType=*/false, GVar->getParent());
   O << "'\n";
 
   EmitGlobalConstant(C);
   O << '\n';
 }
 
-bool LinuxAsmPrinter::doFinalization(Module &M) {
-  // Print out module-level global variables here.
-  for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-       I != E; ++I)
-    printModuleLevelGV(I);
-
-  return AsmPrinter::doFinalization(M);
-}
-
-/// createSPUCodePrinterPass - Returns a pass that prints the Cell SPU
-/// assembly code for a MachineFunction to the given output stream, in a format
-/// that the Linux SPU assembler can deal with.
-///
-FunctionPass *llvm::createSPUAsmPrinterPass(raw_ostream &o,
-                                            SPUTargetMachine &tm,
-                                            bool verbose) {
-  return new LinuxAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
-}
-
 // Force static initialization.
-extern "C" void LLVMInitializeCellSPUAsmPrinter() { }
-
-namespace {
-  static struct Register {
-    Register() {
-      SPUTargetMachine::registerAsmPrinter(createSPUAsmPrinterPass);
-    }
-  } Registrator;
+extern "C" void LLVMInitializeCellSPUAsmPrinter() { 
+  RegisterAsmPrinter<LinuxAsmPrinter> X(TheCellSPUTarget);
 }

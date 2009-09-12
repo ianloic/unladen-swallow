@@ -95,6 +95,12 @@ def neg_xform : SDNodeXForm<imm, [{
   return getI32Imm(-value);
 }]>;
 
+def bpwsub_xform : SDNodeXForm<imm, [{
+  // Transformation function: 32-imm
+  uint32_t value = N->getZExtValue();
+  return getI32Imm(32-value);
+}]>;
+
 def div4neg_xform : SDNodeXForm<imm, [{
   // Transformation function: -imm/4
   uint32_t value = N->getZExtValue();
@@ -160,6 +166,14 @@ def immBitp : PatLeaf<(imm), [{
           || value == 16
           || value == 24
           || value == 32;
+}]>;
+
+def immBpwSubBitp : PatLeaf<(imm), [{
+  uint32_t value = (uint32_t)N->getZExtValue();
+  return (value >= 24 && value <= 31)
+          || value == 16
+          || value == 8
+          || value == 0;
 }]>;
 
 def lda16f : PatFrag<(ops node:$addr, node:$offset),
@@ -821,7 +835,7 @@ def : Pat<(zextloadi8 (add GRRegs:$addr, GRRegs:$offset)),
           (LD8U_3r GRRegs:$addr, GRRegs:$offset)>;
 def : Pat<(zextloadi8 GRRegs:$addr), (LD8U_3r GRRegs:$addr, (LDC_ru6 0))>;
 
-def : Pat<(zextloadi16 (lda16f GRRegs:$addr, GRRegs:$offset)),
+def : Pat<(sextloadi16 (lda16f GRRegs:$addr, GRRegs:$offset)),
           (LD16S_3r GRRegs:$addr, GRRegs:$offset)>;
 def : Pat<(sextloadi16 GRRegs:$addr), (LD16S_3r GRRegs:$addr, (LDC_ru6 0))>;
 
@@ -989,3 +1003,5 @@ def : Pat<(mul GRRegs:$src, -3),
 def : Pat<(sra GRRegs:$src, 31),
           (ASHR_l2rus GRRegs:$src, 32)>;
 
+def : Pat<(sra (shl GRRegs:$src, immBpwSubBitp:$imm), immBpwSubBitp:$imm),
+          (SEXT_rus GRRegs:$src, (bpwsub_xform immBpwSubBitp:$imm))>;

@@ -238,7 +238,7 @@ bool LoopRotate::rotateLoop(Loop *Lp, LPPassManager &LPM) {
     // This is not a PHI instruction. Insert its clone into original pre-header.
     // If this instruction is using a value from same basic block then
     // update it to use value from cloned instruction.
-    Instruction *C = In->clone();
+    Instruction *C = In->clone(In->getContext());
     C->setName(In->getName());
     OrigPreHeader->getInstList().push_back(C);
 
@@ -435,7 +435,8 @@ void LoopRotate::preserveCanonicalLoopForm(LPPassManager &LPM) {
   // Right now original pre-header has two successors, new header and
   // exit block. Insert new block between original pre-header and
   // new header such that loop's new pre-header has only one successor.
-  BasicBlock *NewPreHeader = BasicBlock::Create("bb.nph",
+  BasicBlock *NewPreHeader = BasicBlock::Create(OrigHeader->getContext(),
+                                                "bb.nph",
                                                 OrigHeader->getParent(), 
                                                 NewHeader);
   LoopInfo &LI = LPM.getAnalysis<LoopInfo>();
@@ -511,26 +512,30 @@ void LoopRotate::preserveCanonicalLoopForm(LPPassManager &LPM) {
       DF->addBasicBlock(L->getHeader(), LatchSet);
     }
 
-    // If a loop block dominates new loop latch then its frontier is
-    // new header and Exit.
+    // If a loop block dominates new loop latch then add to its frontiers
+    // new header and Exit and remove new latch (which is equal to original
+    // header).
     BasicBlock *NewLatch = L->getLoopLatch();
-    DominatorTree *DT = getAnalysisIfAvailable<DominatorTree>();
-    for (Loop::block_iterator BI = L->block_begin(), BE = L->block_end();
-         BI != BE; ++BI) {
-      BasicBlock *B = *BI;
-      if (DT->dominates(B, NewLatch)) {
-        DominanceFrontier::iterator BDFI = DF->find(B);
-        if (BDFI != DF->end()) {
-          DominanceFrontier::DomSetType &BSet = BDFI->second;
-          BSet = BDFI->second;
-          BSet.clear();
-          BSet.insert(L->getHeader());
-          BSet.insert(Exit);
-        } else {
-          DominanceFrontier::DomSetType BSet;
-          BSet.insert(L->getHeader());
-          BSet.insert(Exit);
-          DF->addBasicBlock(B, BSet);
+
+    assert(NewLatch == OrigHeader && "NewLatch is inequal to OrigHeader");
+
+    if (DominatorTree *DT = getAnalysisIfAvailable<DominatorTree>()) {
+      for (Loop::block_iterator BI = L->block_begin(), BE = L->block_end();
+           BI != BE; ++BI) {
+        BasicBlock *B = *BI;
+        if (DT->dominates(B, NewLatch)) {
+          DominanceFrontier::iterator BDFI = DF->find(B);
+          if (BDFI != DF->end()) {
+            DominanceFrontier::DomSetType &BSet = BDFI->second;
+            BSet.erase(NewLatch);
+            BSet.insert(L->getHeader());
+            BSet.insert(Exit);
+          } else {
+            DominanceFrontier::DomSetType BSet;
+            BSet.insert(L->getHeader());
+            BSet.insert(Exit);
+            DF->addBasicBlock(B, BSet);
+          }
         }
       }
     }

@@ -24,8 +24,8 @@
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/StandardPasses.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/System/Path.h"
@@ -33,7 +33,7 @@
 #include "llvm/Target/SubtargetFeature.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetMachineRegistry.h"
+#include "llvm/Target/TargetRegistry.h"
 using namespace clang;
 using namespace llvm;
 
@@ -42,6 +42,7 @@ namespace {
     BackendAction Action;
     CompileOptions CompileOpts;
     llvm::raw_ostream *AsmOutStream;
+    llvm::formatted_raw_ostream FormattedOutStream;
     ASTContext *Context;
 
     Timer LLVMIRGeneration;
@@ -79,13 +80,17 @@ namespace {
                     LLVMContext& C) :
       Action(action), 
       CompileOpts(compopts),
-      AsmOutStream(OS), 
+      AsmOutStream(OS),
       LLVMIRGeneration("LLVM IR Generation Time"),
       CodeGenerationTime("Code Generation Time"),
       Gen(CreateLLVMCodeGen(Diags, infile, compopts, C)),
       TheModule(0), TheTargetData(0), ModuleProvider(0),
       CodeGenPasses(0), PerModulePasses(0), PerFunctionPasses(0) {
       
+      if (AsmOutStream)
+        FormattedOutStream.setStream(*AsmOutStream,
+                                     formatted_raw_ostream::PRESERVE_STREAM);
+        
       // Enable -time-passes if -ftime-report is enabled.
       llvm::TimePassesIsEnabled = CompileOpts.TimePasses;
     }
@@ -145,7 +150,7 @@ namespace {
       
       // Force a flush here in case we never get released.
       if (AsmOutStream)
-        AsmOutStream->flush();
+        FormattedOutStream.flush();
     }
     
     virtual void HandleTagDeclDefinition(TagDecl *D) {
@@ -200,9 +205,9 @@ bool BackendConsumer::AddEmitPasses(std::string &Error) {
     bool Fast = CompileOpts.OptimizationLevel == 0;
 
     // Create the TargetMachine for generating code.
-    const TargetMachineRegistry::entry *TME = 
-      TargetMachineRegistry::getClosestStaticTargetForModule(*TheModule, Error);
-    if (!TME) {
+    std::string Triple = TheModule->getTargetTriple();
+    const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Triple, Error);
+    if (!TheTarget) {
       Error = std::string("Unable to get target machine: ") + Error;
       return false;
     }
@@ -217,7 +222,7 @@ bool BackendConsumer::AddEmitPasses(std::string &Error) {
         Features.AddFeature(*it);
       FeaturesStr = Features.getString();
     }
-    TargetMachine *TM = TME->CtorFn(*TheModule, FeaturesStr);
+    TargetMachine *TM = TheTarget->createTargetMachine(Triple, FeaturesStr);
     
     // Set register scheduler & allocation policy.
     RegisterScheduler::setDefault(createDefaultScheduler);
@@ -240,7 +245,7 @@ bool BackendConsumer::AddEmitPasses(std::string &Error) {
 
     // Normal mode, emit a .s file by running the code generator.
     // Note, this also adds codegenerator level optimization passes.
-    switch (TM->addPassesToEmitFile(*PM, *AsmOutStream,
+    switch (TM->addPassesToEmitFile(*PM, FormattedOutStream,
                                     TargetMachine::AssemblyFile, OptLevel)) {
     default:
     case FileModel::Error:
@@ -323,7 +328,7 @@ void BackendConsumer::EmitAssembly() {
   std::string Error;
   if (!AddEmitPasses(Error)) {
     // FIXME: Don't fail this way.
-    llvm::cerr << "ERROR: " << Error << "\n";
+    llvm::errs() << "ERROR: " << Error << "\n";
     ::exit(1);
   }
 

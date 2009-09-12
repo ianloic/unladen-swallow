@@ -9,7 +9,7 @@ struct PyFeedbackMap;
 
 struct PyFeedbackMap *PyFeedbackMap_New(void);
 void PyFeedbackMap_Del(struct PyFeedbackMap *);
-void PyFeedbackMap_Clear(struct PyFeedbackMap *);
+PyAPI_FUNC(void) PyFeedbackMap_Clear(struct PyFeedbackMap *);
 
 #ifdef __cplusplus
 }  /* extern "C" */

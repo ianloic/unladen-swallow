@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
@@ -38,8 +39,13 @@ static const char *const PSVNames[] = {
   "ConstantPool"
 };
 
+// FIXME: THIS IS A HACK!!!!
+// Eventually these should be uniqued on LLVMContext rather than in a managed
+// static.  For now, we can safely use the global context for the time being to
+// squeak by.
 PseudoSourceValue::PseudoSourceValue() :
-  Value(PointerType::getUnqual(Type::Int8Ty), PseudoSourceValueVal) {}
+  Value(PointerType::getUnqual(Type::getInt8Ty(getGlobalContext())),
+        PseudoSourceValueVal) {}
 
 void PseudoSourceValue::dump() const {
   print(errs()); errs() << '\n';
@@ -83,7 +89,7 @@ bool PseudoSourceValue::isConstant(const MachineFrameInfo *) const {
       this == getConstantPool() ||
       this == getJumpTable())
     return true;
-  assert(0 && "Unknown PseudoSourceValue!");
+  llvm_unreachable("Unknown PseudoSourceValue!");
   return false;
 }
 

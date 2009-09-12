@@ -114,6 +114,10 @@ delete them on exit. This option can also take an argument: the
 <tt class="docutils literal"><span class="pre">--save-temps=obj</span></tt> switch will write files into the directory specified with
 the <tt class="docutils literal"><span class="pre">-o</span></tt> option. The <tt class="docutils literal"><span class="pre">--save-temps=cwd</span></tt> and <tt class="docutils literal"><span class="pre">--save-temps</span></tt> switches are
 both synonyms for the default behaviour.</li>
+<li><tt class="docutils literal"><span class="pre">--temp-dir</span> <span class="pre">DIRECTORY</span></tt> - Store temporary files in the given directory. This
+directory is deleted on exit unless <tt class="docutils literal"><span class="pre">--save-temps</span></tt> is specified. If
+<tt class="docutils literal"><span class="pre">--save-temps=obj</span></tt> is also specified, <tt class="docutils literal"><span class="pre">--temp-dir</span></tt> is given the
+precedence.</li>
 <li><tt class="docutils literal"><span class="pre">--check-graph</span></tt> - Check the compilation for common errors like mismatched
 output/input language names, multiple default edges and cycles. Because of
 plugins, these checks can't be performed at compile-time. Exit with code zero
@@ -672,7 +676,7 @@ the <tt class="docutils literal"><span class="pre">Base</span></tt> plugin behav
 <a href="mailto:foldr@codedgers.com">Mikhail Glushenkov</a><br />
 <a href="http://llvm.org">LLVM Compiler Infrastructure</a><br />
 
-Last modified: $Date: 2009-07-07 09:44:20 -0700 (Tue, 07 Jul 2009) $
+Last modified: $Date: 2009-07-11 15:28:00 -0400 (Sat, 11 Jul 2009) $
 </address></div>
 </div>
 </div>

@@ -24,17 +24,17 @@ void CodeGenFunction::PushCXXTemporary(const CXXTemporary *Temporary,
   // Check if temporaries need to be conditional. If so, we'll create a 
   // condition boolean, initialize it to 0 and 
   if (!ConditionalTempDestructionStack.empty()) {
-    CondPtr = CreateTempAlloca(llvm::Type::Int1Ty, "cond");
+    CondPtr = CreateTempAlloca(llvm::Type::getInt1Ty(VMContext), "cond");
   
     // Initialize it to false. This initialization takes place right after
     // the alloca insert point.
     llvm::StoreInst *SI = 
-      new llvm::StoreInst(llvm::ConstantInt::getFalse(), CondPtr);
+      new llvm::StoreInst(llvm::ConstantInt::getFalse(VMContext), CondPtr);
     llvm::BasicBlock *Block = AllocaInsertPt->getParent();
     Block->getInstList().insertAfter((llvm::Instruction *)AllocaInsertPt, SI);
 
     // Now set it to true.
-    Builder.CreateStore(llvm::ConstantInt::getTrue(), CondPtr);
+    Builder.CreateStore(llvm::ConstantInt::getTrue(VMContext), CondPtr);
   }
   
   LiveTemporaries.push_back(CXXLiveTemporaryInfo(Temporary, Ptr, DtorBlock, 
@@ -74,7 +74,7 @@ void CodeGenFunction::PopCXXTemporary() {
 
   if (CondEnd) {
     // Reset the condition. to false.
-    Builder.CreateStore(llvm::ConstantInt::getFalse(), Info.CondPtr);
+    Builder.CreateStore(llvm::ConstantInt::getFalse(VMContext), Info.CondPtr);
     EmitBlock(CondEnd);
   }
   
@@ -84,11 +84,13 @@ void CodeGenFunction::PopCXXTemporary() {
 RValue
 CodeGenFunction::EmitCXXExprWithTemporaries(const CXXExprWithTemporaries *E,
                                             llvm::Value *AggLoc,
-                                            bool isAggLocVolatile) {
+                                            bool IsAggLocVolatile,
+                                            bool IsInitializer) {
   // If we shouldn't destroy the temporaries, just emit the
   // child expression.
   if (!E->shouldDestroyTemporaries())
-    return EmitAnyExpr(E->getSubExpr(), AggLoc, isAggLocVolatile);
+    return EmitAnyExpr(E->getSubExpr(), AggLoc, IsAggLocVolatile, 
+                       /*IgnoreResult=*/false, IsInitializer);
 
   // Keep track of the current cleanup stack depth.
   size_t CleanupStackDepth = CleanupEntries.size();
@@ -96,7 +98,8 @@ CodeGenFunction::EmitCXXExprWithTemporaries(const CXXExprWithTemporaries *E,
 
   unsigned OldNumLiveTemporaries = LiveTemporaries.size();
   
-  RValue RV = EmitAnyExpr(E->getSubExpr(), AggLoc, isAggLocVolatile);
+  RValue RV = EmitAnyExpr(E->getSubExpr(), AggLoc, IsAggLocVolatile, 
+                          /*IgnoreResult=*/false, IsInitializer);
   
   // Pop temporaries.
   while (LiveTemporaries.size() > OldNumLiveTemporaries)

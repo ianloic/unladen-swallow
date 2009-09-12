@@ -23,10 +23,8 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Pass.h"
-#include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetLowering.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/AddrModeMatcher.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -39,6 +37,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/PatternMatch.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
@@ -232,7 +231,7 @@ void CodeGenPrepare::EliminateMostlyEmptyBlock(BasicBlock *BB) {
   BranchInst *BI = cast<BranchInst>(BB->getTerminator());
   BasicBlock *DestBB = BI->getSuccessor(0);
 
-  DOUT << "MERGING MOSTLY EMPTY BLOCKS - BEFORE:\n" << *BB << *DestBB;
+  DEBUG(errs() << "MERGING MOSTLY EMPTY BLOCKS - BEFORE:\n" << *BB << *DestBB);
 
   // If the destination block has a single pred, then this is a trivial edge,
   // just collapse it.
@@ -246,7 +245,7 @@ void CodeGenPrepare::EliminateMostlyEmptyBlock(BasicBlock *BB) {
       if (isEntry && BB != &BB->getParent()->getEntryBlock())
         BB->moveBefore(&BB->getParent()->getEntryBlock());
       
-      DOUT << "AFTER:\n" << *DestBB << "\n\n\n";
+      DEBUG(errs() << "AFTER:\n" << *DestBB << "\n\n\n");
       return;
     }
   }
@@ -285,7 +284,7 @@ void CodeGenPrepare::EliminateMostlyEmptyBlock(BasicBlock *BB) {
   BB->replaceAllUsesWith(DestBB);
   BB->eraseFromParent();
 
-  DOUT << "AFTER:\n" << *DestBB << "\n\n\n";
+  DEBUG(errs() << "AFTER:\n" << *DestBB << "\n\n\n");
 }
 
 
@@ -410,8 +409,8 @@ static void SplitEdgeNicely(TerminatorInst *TI, unsigned SuccNum,
 ///
 static bool OptimizeNoopCopyExpression(CastInst *CI, const TargetLowering &TLI){
   // If this is a noop copy,
-  MVT SrcVT = TLI.getValueType(CI->getOperand(0)->getType());
-  MVT DstVT = TLI.getValueType(CI->getType());
+  EVT SrcVT = TLI.getValueType(CI->getOperand(0)->getType());
+  EVT DstVT = TLI.getValueType(CI->getType());
 
   // This is an fp<->int conversion?
   if (SrcVT.isInteger() != DstVT.isInteger())
@@ -424,10 +423,10 @@ static bool OptimizeNoopCopyExpression(CastInst *CI, const TargetLowering &TLI){
   // If these values will be promoted, find out what they will be promoted
   // to.  This helps us consider truncates on PPC as noop copies when they
   // are.
-  if (TLI.getTypeAction(SrcVT) == TargetLowering::Promote)
-    SrcVT = TLI.getTypeToTransformTo(SrcVT);
-  if (TLI.getTypeAction(DstVT) == TargetLowering::Promote)
-    DstVT = TLI.getTypeToTransformTo(DstVT);
+  if (TLI.getTypeAction(CI->getContext(), SrcVT) == TargetLowering::Promote)
+    SrcVT = TLI.getTypeToTransformTo(CI->getContext(), SrcVT);
+  if (TLI.getTypeAction(CI->getContext(), DstVT) == TargetLowering::Promote)
+    DstVT = TLI.getTypeToTransformTo(CI->getContext(), DstVT);
 
   // If, after promotion, these are the same types, this is a noop copy.
   if (SrcVT != DstVT)
@@ -520,7 +519,8 @@ static bool OptimizeCmpExpression(CmpInst *CI) {
       BasicBlock::iterator InsertPt = UserBB->getFirstNonPHI();
 
       InsertedCmp =
-        CmpInst::Create(CI->getOpcode(), CI->getPredicate(), CI->getOperand(0),
+        CmpInst::Create(CI->getOpcode(),
+                        CI->getPredicate(),  CI->getOperand(0),
                         CI->getOperand(1), "", InsertPt);
       MadeChange = true;
     }
@@ -577,7 +577,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
 
   // If all the instructions matched are already in this BB, don't do anything.
   if (!AnyNonLocal) {
-    DEBUG(cerr << "CGP: Found      local addrmode: " << AddrMode << "\n");
+    DEBUG(errs() << "CGP: Found      local addrmode: " << AddrMode << "\n");
     return false;
   }
 
@@ -592,14 +592,15 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   // computation.
   Value *&SunkAddr = SunkAddrs[Addr];
   if (SunkAddr) {
-    DEBUG(cerr << "CGP: Reusing nonlocal addrmode: " << AddrMode << " for "
-               << *MemoryInst);
+    DEBUG(errs() << "CGP: Reusing nonlocal addrmode: " << AddrMode << " for "
+                 << *MemoryInst);
     if (SunkAddr->getType() != Addr->getType())
       SunkAddr = new BitCastInst(SunkAddr, Addr->getType(), "tmp", InsertPt);
   } else {
-    DEBUG(cerr << "CGP: SINKING nonlocal addrmode: " << AddrMode << " for "
-               << *MemoryInst);
-    const Type *IntPtrTy = TLI->getTargetData()->getIntPtrType();
+    DEBUG(errs() << "CGP: SINKING nonlocal addrmode: " << AddrMode << " for "
+                 << *MemoryInst);
+    const Type *IntPtrTy =
+          TLI->getTargetData()->getIntPtrType(AccessTy->getContext());
 
     Value *Result = 0;
     // Start with the scale value.
@@ -616,7 +617,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
         V = new SExtInst(V, IntPtrTy, "sunkaddr", InsertPt);
       }
       if (AddrMode.Scale != 1)
-        V = BinaryOperator::CreateMul(V, Context->getConstantInt(IntPtrTy,
+        V = BinaryOperator::CreateMul(V, ConstantInt::get(IntPtrTy,
                                                                 AddrMode.Scale),
                                       "sunkaddr", InsertPt);
       Result = V;
@@ -648,7 +649,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
 
     // Add in the Base Offset if present.
     if (AddrMode.BaseOffs) {
-      Value *V = Context->getConstantInt(IntPtrTy, AddrMode.BaseOffs);
+      Value *V = ConstantInt::get(IntPtrTy, AddrMode.BaseOffs);
       if (Result)
         Result = BinaryOperator::CreateAdd(Result, V, "sunkaddr", InsertPt);
       else
@@ -656,7 +657,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     }
 
     if (Result == 0)
-      SunkAddr = Context->getNullValue(Addr->getType());
+      SunkAddr = Constant::getNullValue(Addr->getType());
     else
       SunkAddr = new IntToPtrInst(Result, Addr->getType(), "sunkaddr",InsertPt);
   }
@@ -858,18 +859,16 @@ bool CodeGenPrepare::OptimizeBlock(BasicBlock &BB) {
     } else if (CallInst *CI = dyn_cast<CallInst>(I)) {
       // If we found an inline asm expession, and if the target knows how to
       // lower it to normal LLVM code, do so now.
-      if (TLI && isa<InlineAsm>(CI->getCalledValue()))
-        if (const TargetAsmInfo *TAI =
-            TLI->getTargetMachine().getTargetAsmInfo()) {
-          if (TAI->ExpandInlineAsm(CI)) {
-            BBI = BB.begin();
-            // Avoid processing instructions out of order, which could cause
-            // reuse before a value is defined.
-            SunkAddrs.clear();
-          } else
-            // Sink address computing for memory operands into the block.
-            MadeChange |= OptimizeInlineAsmInst(I, &(*CI), SunkAddrs);
-        }
+      if (TLI && isa<InlineAsm>(CI->getCalledValue())) {
+        if (TLI->ExpandInlineAsm(CI)) {
+          BBI = BB.begin();
+          // Avoid processing instructions out of order, which could cause
+          // reuse before a value is defined.
+          SunkAddrs.clear();
+        } else
+          // Sink address computing for memory operands into the block.
+          MadeChange |= OptimizeInlineAsmInst(I, &(*CI), SunkAddrs);
+      }
     }
   }
 

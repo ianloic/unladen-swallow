@@ -70,7 +70,6 @@ ModulePass *llvm::createRaiseAllocationsPass() {
 // function into the appropriate instruction.
 //
 void RaiseAllocations::doInitialization(Module &M) {
-
   // Get Malloc and free prototypes if they exist!
   MallocFunc = M.getFunction("malloc");
   if (MallocFunc) {
@@ -78,22 +77,26 @@ void RaiseAllocations::doInitialization(Module &M) {
 
     // Get the expected prototype for malloc
     const FunctionType *Malloc1Type = 
-      Context->getFunctionType(Context->getPointerTypeUnqual(Type::Int8Ty),
-                      std::vector<const Type*>(1, Type::Int64Ty), false);
+      FunctionType::get(PointerType::getUnqual(Type::getInt8Ty(M.getContext())),
+                      std::vector<const Type*>(1,
+                                      Type::getInt64Ty(M.getContext())), false);
 
     // Chck to see if we got the expected malloc
     if (TyWeHave != Malloc1Type) {
       // Check to see if the prototype is wrong, giving us i8*(i32) * malloc
       // This handles the common declaration of: 'void *malloc(unsigned);'
       const FunctionType *Malloc2Type = 
-        Context->getFunctionType(Context->getPointerTypeUnqual(Type::Int8Ty),
-                          std::vector<const Type*>(1, Type::Int32Ty), false);
+        FunctionType::get(PointerType::getUnqual(
+                          Type::getInt8Ty(M.getContext())),
+                          std::vector<const Type*>(1, 
+                                      Type::getInt32Ty(M.getContext())), false);
       if (TyWeHave != Malloc2Type) {
         // Check to see if the prototype is missing, giving us 
         // i8*(...) * malloc
         // This handles the common declaration of: 'void *malloc();'
         const FunctionType *Malloc3Type = 
-          Context->getFunctionType(Context->getPointerTypeUnqual(Type::Int8Ty), 
+          FunctionType::get(PointerType::getUnqual(
+                                    Type::getInt8Ty(M.getContext())), 
                                     true);
         if (TyWeHave != Malloc3Type)
           // Give up
@@ -107,22 +110,24 @@ void RaiseAllocations::doInitialization(Module &M) {
     const FunctionType* TyWeHave = FreeFunc->getFunctionType();
     
     // Get the expected prototype for void free(i8*)
-    const FunctionType *Free1Type = Context->getFunctionType(Type::VoidTy,
-      std::vector<const Type*>(1, Context->getPointerTypeUnqual(Type::Int8Ty)), 
-                               false);
+    const FunctionType *Free1Type =
+      FunctionType::get(Type::getVoidTy(M.getContext()),
+        std::vector<const Type*>(1, PointerType::getUnqual(
+                                 Type::getInt8Ty(M.getContext()))), 
+                                 false);
 
     if (TyWeHave != Free1Type) {
       // Check to see if the prototype was forgotten, giving us 
       // void (...) * free
       // This handles the common forward declaration of: 'void free();'
-      const FunctionType* Free2Type = Context->getFunctionType(Type::VoidTy, 
-                                                               true);
+      const FunctionType* Free2Type =
+                    FunctionType::get(Type::getVoidTy(M.getContext()), true);
 
       if (TyWeHave != Free2Type) {
         // One last try, check to see if we can find free as 
         // int (...)* free.  This handles the case where NOTHING was declared.
-        const FunctionType* Free3Type = Context->getFunctionType(Type::Int32Ty,
-                                                                 true);
+        const FunctionType* Free3Type =
+                    FunctionType::get(Type::getInt32Ty(M.getContext()), true);
         
         if (TyWeHave != Free3Type) {
           // Give up.
@@ -142,7 +147,7 @@ void RaiseAllocations::doInitialization(Module &M) {
 bool RaiseAllocations::runOnModule(Module &M) {
   // Find the malloc/free prototypes...
   doInitialization(M);
-
+  
   bool Changed = false;
 
   // First, process all of the malloc calls...
@@ -164,12 +169,15 @@ bool RaiseAllocations::runOnModule(Module &M) {
 
           // If no prototype was provided for malloc, we may need to cast the
           // source size.
-          if (Source->getType() != Type::Int32Ty)
+          if (Source->getType() != Type::getInt32Ty(M.getContext()))
             Source = 
-              CastInst::CreateIntegerCast(Source, Type::Int32Ty, false/*ZExt*/,
+              CastInst::CreateIntegerCast(Source, 
+                                          Type::getInt32Ty(M.getContext()), 
+                                          false/*ZExt*/,
                                           "MallocAmtCast", I);
 
-          MallocInst *MI = new MallocInst(Type::Int8Ty, Source, "", I);
+          MallocInst *MI = new MallocInst(Type::getInt8Ty(M.getContext()),
+                                          Source, "", I);
           MI->takeName(I);
           I->replaceAllUsesWith(MI);
 
@@ -221,7 +229,7 @@ bool RaiseAllocations::runOnModule(Module &M) {
           Value *Source = *CS.arg_begin();
           if (!isa<PointerType>(Source->getType()))
             Source = new IntToPtrInst(Source,           
-                                   Context->getPointerTypeUnqual(Type::Int8Ty), 
+                        PointerType::getUnqual(Type::getInt8Ty(M.getContext())), 
                                       "FreePtrCast", I);
           new FreeInst(Source, I);
 
@@ -231,8 +239,8 @@ bool RaiseAllocations::runOnModule(Module &M) {
             BranchInst::Create(II->getNormalDest(), I);
 
           // Delete the old call site
-          if (I->getType() != Type::VoidTy)
-            I->replaceAllUsesWith(Context->getUndef(I->getType()));
+          if (I->getType() != Type::getVoidTy(M.getContext()))
+            I->replaceAllUsesWith(UndefValue::get(I->getType()));
           I->eraseFromParent();
           Changed = true;
           ++NumRaised;

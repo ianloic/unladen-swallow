@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct Py_complex {
     double real;
     double imag;
 } Py_complex;
@@ -37,7 +37,7 @@ PyComplexObject represents a complex number with double-precision
 real and imaginary parts.
 */
 
-typedef struct {
+typedef struct PyComplexObject {
     PyObject_HEAD
     Py_complex cval;
 } PyComplexObject;     

@@ -86,6 +86,20 @@ struct _dictobject {
 	PyDictEntry *ma_table;
 	PyDictEntry *(*ma_lookup)(PyDictObject *mp, PyObject *key, long hash);
 	PyDictEntry ma_smalltable[PyDict_MINSIZE];
+
+#ifdef WITH_LLVM
+	/* When the dict changes, tell any dependent code objects that whatever
+	 * assumptions they may have had about the state of the dict may be
+	 * invalid. This is used by the LLVM-generated machine code to speed up
+	 * access to globals and builtins. If ma_watchers_used is 0, no code
+	 * objects depend on this dictionary; this keeps updates to non-globals/
+	 * non-builtins dicts fast. Use _PyDict_AddWatcher() and 
+	 * _PyDict_DropWatcher() to modify this.
+	 */
+	PyCodeObject **ma_watchers;
+	Py_ssize_t ma_watchers_used;
+	Py_ssize_t ma_watchers_allocated;
+#endif
 };
 
 PyAPI_DATA(PyTypeObject) PyDict_Type;
@@ -136,6 +150,19 @@ PyAPI_FUNC(int) PyDict_MergeFromSeq2(PyObject *d,
 PyAPI_FUNC(PyObject *) PyDict_GetItemString(PyObject *dp, const char *key);
 PyAPI_FUNC(int) PyDict_SetItemString(PyObject *dp, const char *key, PyObject *item);
 PyAPI_FUNC(int) PyDict_DelItemString(PyObject *dp, const char *key);
+
+#ifdef WITH_LLVM
+/* Register the given code object as depending on the state of this dict.
+   Registering the same code object twice is a fatal error. Returns -1 on error,
+   0 on success. */
+PyAPI_FUNC(int) _PyDict_AddWatcher(PyObject *dp, PyCodeObject *code);
+
+/* Unregister the given code object; it is no longer watching this dict for
+   changes. Unregistering a code object that isn't watching this dict (calling
+   _PyDict_DropWatcher() twice on the same dict/code pair, for example) is a
+   fatal error. */
+PyAPI_FUNC(void) _PyDict_DropWatcher(PyObject *dp, PyCodeObject *code);
+#endif
 
 #ifdef __cplusplus
 }

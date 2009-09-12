@@ -16,8 +16,9 @@
 
 #include "llvm/AbstractTypeUser.h"
 #include "llvm/Use.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
-#include <iosfwd>
 #include <string>
 
 namespace llvm {
@@ -40,6 +41,7 @@ typedef StringMapEntry<Value*> ValueName;
 class raw_ostream;
 class AssemblyAnnotationWriter;
 class ValueHandleBase;
+class LLVMContext;
 
 //===----------------------------------------------------------------------===//
 //                                 Value Class
@@ -62,6 +64,12 @@ class Value {
   const unsigned char SubclassID;   // Subclass identifier (for isa/dyn_cast)
   unsigned char HasValueHandle : 1; // Has a ValueHandle pointing to this?
 protected:
+  /// SubclassOptionalData - This member is similar to SubclassData, however it
+  /// is for holding information which may be used to aid optimization, but
+  /// which may be cleared to zero without affecting conservative
+  /// interpretation.
+  unsigned char SubclassOptionalData : 7;
+
   /// SubclassData - This member is defined by this class, but is not used for
   /// anything.  Subclasses can use it to hold whatever state they find useful.
   /// This field is initialized to zero by the ctor.
@@ -88,42 +96,40 @@ public:
 
   /// print - Implement operator<< on Value.
   ///
-  void print(std::ostream &O, AssemblyAnnotationWriter *AAW = 0) const;
   void print(raw_ostream &O, AssemblyAnnotationWriter *AAW = 0) const;
 
   /// All values are typed, get the type of this value.
   ///
   inline const Type *getType() const { return VTy; }
 
+  /// All values hold a context through their type.
+  LLVMContext &getContext() const;
+
   // All values can potentially be named...
   inline bool hasName() const { return Name != 0; }
   ValueName *getValueName() const { return Name; }
-
-  /// getNameStart - Return a pointer to a null terminated string for this name.
-  /// Note that names can have null characters within the string as well as at
-  /// their end.  This always returns a non-null pointer.
-  const char *getNameStart() const;
-  /// getNameEnd - Return a pointer to the end of the name.
-  const char *getNameEnd() const { return getNameStart() + getNameLen(); }
   
-  /// isName - Return true if this value has the name specified by the provided
-  /// nul terminated string.
-  bool isName(const char *N) const;
-  
-  /// getNameLen - Return the length of the string, correctly handling nul
-  /// characters embedded into them.
-  unsigned getNameLen() const;
+  /// getName() - Return a constant reference to the value's name. This is cheap
+  /// and guaranteed to return the same reference as long as the value is not
+  /// modified.
+  ///
+  /// This is currently guaranteed to return a StringRef for which data() points
+  /// to a valid null terminated string. The use of StringRef.data() is 
+  /// deprecated here, however, and clients should not rely on it. If such 
+  /// behavior is needed, clients should use expensive getNameStr(), or switch 
+  /// to an interface that does not depend on null termination.
+  StringRef getName() const;
 
-  /// getName()/getNameStr() - Return the name of the specified value, 
-  /// *constructing a string* to hold it.  Because these are guaranteed to
-  /// construct a string, they are very expensive and should be avoided.
-  std::string getName() const { return getNameStr(); }
+  /// getNameStr() - Return the name of the specified value, *constructing a
+  /// string* to hold it.  This is guaranteed to construct a string and is very
+  /// expensive, clients should use getName() unless necessary.
   std::string getNameStr() const;
 
-
-  void setName(const std::string &name);
-  void setName(const char *Name, unsigned NameLen);
-  void setName(const char *Name);  // Takes a null-terminated string.
+  /// setName() - Change the name of the value, choosing a new unique name if
+  /// the provided name is taken.
+  ///
+  /// \arg Name - The new name; or "" if the value's name should be removed.
+  void setName(const Twine &Name);
 
   
   /// takeName - transfer the name from V to this value, setting V's name to
@@ -139,6 +145,12 @@ public:
   // uncheckedReplaceAllUsesWith - Just like replaceAllUsesWith but dangerous.
   // Only use when in type resolution situations!
   void uncheckedReplaceAllUsesWith(Value *V);
+
+  /// clearOptionalData - Clear any optional optimization data from this Value.
+  /// Transformation passes must call this method whenever changing the IR
+  /// in a way that would affect the values produced by this Value, unless
+  /// it takes special care to ensure correctness in some other way.
+  void clearOptionalData() { SubclassOptionalData = 0; }
 
   //----------------------------------------------------------------------
   // Methods for handling the chain of uses of this Value.
@@ -203,15 +215,16 @@ public:
     ConstantStructVal,        // This is an instance of ConstantStruct
     ConstantVectorVal,        // This is an instance of ConstantVector
     ConstantPointerNullVal,   // This is an instance of ConstantPointerNull
-    MDStringVal,              // This is an instance of MDString
     MDNodeVal,                // This is an instance of MDNode
+    MDStringVal,              // This is an instance of MDString
+    NamedMDNodeVal,           // This is an instance of NamedMDNode
     InlineAsmVal,             // This is an instance of InlineAsm
     PseudoSourceValueVal,     // This is an instance of PseudoSourceValue
     InstructionVal,           // This is an instance of Instruction
     
     // Markers:
     ConstantFirstVal = FunctionVal,
-    ConstantLastVal  = MDNodeVal
+    ConstantLastVal  = ConstantPointerNullVal
   };
 
   /// getValueID - Return an ID for the concrete type of this object.  This is
@@ -225,6 +238,18 @@ public:
   ///   the ValueTy enum.
   unsigned getValueID() const {
     return SubclassID;
+  }
+
+  /// hasSameSubclassOptionalData - Test whether the optional flags contained
+  /// in this value are equal to the optional flags in the given value.
+  bool hasSameSubclassOptionalData(const Value *V) const {
+    return SubclassOptionalData == V->SubclassOptionalData;
+  }
+
+  /// intersectOptionalDataWith - Clear any optional flags in this value
+  /// that are not also set in the given value.
+  void intersectOptionalDataWith(const Value *V) {
+    SubclassOptionalData &= V->SubclassOptionalData;
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -265,10 +290,6 @@ public:
   }
 };
 
-inline std::ostream &operator<<(std::ostream &OS, const Value &V) {
-  V.print(OS);
-  return OS;
-}
 inline raw_ostream &operator<<(raw_ostream &OS, const Value &V) {
   V.print(OS);
   return OS;

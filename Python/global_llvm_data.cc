@@ -69,7 +69,9 @@ PyGlobalLlvmData::PyGlobalLlvmData()
         // JIT slowly, to produce better machine code.  TODO: We'll
         // almost certainly want to make this configurable per
         // function.
-        llvm::CodeGenOpt::Default);
+        llvm::CodeGenOpt::Default,
+        // Allocate GlobalVariables separately from code.
+        false);
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
@@ -79,6 +81,8 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     // codegen, and (once the GIL is gone) JITting lazily is
     // thread-unsafe anyway.
     engine_->DisableLazyCompilation();
+
+    this->constant_mirror_.reset(new PyConstantMirror(this));
 
     this->InstallInitialModule();
 
@@ -95,6 +99,12 @@ PyGlobalLlvmData::InstallInitialModule()
         if (it->getName().find("_PyLlvm_Fast") == 0) {
             it->setCallingConv(llvm::CallingConv::Fast);
         }
+    }
+
+    // Fill the ExecutionEngine with the addresses of known global variables.
+    for (Module::global_iterator it = this->module_->global_begin();
+         it != this->module_->global_end(); ++it) {
+        this->engine_->getOrEmitGlobalVariable(it);
     }
 }
 
@@ -203,10 +213,11 @@ PyGlobalLlvmData::InitializeOptimizations()
 
 PyGlobalLlvmData::~PyGlobalLlvmData()
 {
+    this->constant_mirror_->python_shutting_down_ = true;
     for (size_t i = 0; i < this->optimizations_.size(); ++i) {
         delete this->optimizations_[i];
     }
-    delete engine_;
+    delete this->engine_;
 }
 
 int
@@ -239,7 +250,8 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
     // wasn't already present.
     llvm::GlobalVariable *& the_string = this->constant_strings_[value];
     if (the_string == NULL) {
-        llvm::Constant *str_const = llvm::ConstantArray::get(value, true);
+        llvm::Constant *str_const = llvm::ConstantArray::get(this->context(),
+                                                             value, true);
         the_string = new llvm::GlobalVariable(
             *this->module_,
             str_const->getType(),
@@ -254,9 +266,10 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
     // expecting string constants instead expect an i8* pointing to
     // the first element.  We use GEP instead of bitcasting to make
     // type safety more obvious.
+    const llvm::Type *int64_type = llvm::Type::getInt64Ty(this->context());
     llvm::Constant *indices[] = {
-        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0),
-        llvm::ConstantInt::get(llvm::Type::Int64Ty, 0)
+        llvm::ConstantInt::get(int64_type, 0),
+        llvm::ConstantInt::get(int64_type, 0)
     };
     return llvm::ConstantExpr::getGetElementPtr(the_string, indices, 2);
 }

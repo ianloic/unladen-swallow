@@ -17,17 +17,19 @@
 #include "AlphaInstrInfo.h"
 #include "AlphaTargetMachine.h"
 #include "llvm/Module.h"
-#include "llvm/MDNode.h"
 #include "llvm/Type.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DwarfWriter.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetRegistry.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FormattedStream.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
@@ -38,21 +40,20 @@ namespace {
     /// Unique incrementer for label values for referencing Global values.
     ///
 
-    explicit AlphaAsmPrinter(raw_ostream &o, TargetMachine &tm,
-                             const TargetAsmInfo *T, bool V)
+    explicit AlphaAsmPrinter(formatted_raw_ostream &o, TargetMachine &tm,
+                             const MCAsmInfo *T, bool V)
       : AsmPrinter(o, tm, T, V) {}
 
     virtual const char *getPassName() const {
       return "Alpha Assembly Printer";
     }
-    bool printInstruction(const MachineInstr *MI);
+    void printInstruction(const MachineInstr *MI);
     void printOp(const MachineOperand &MO, bool IsCallOp = false);
     void printOperand(const MachineInstr *MI, int opNum);
-    void printBaseOffsetPair (const MachineInstr *MI, int i, bool brackets=true);
-    void printModuleLevelGV(const GlobalVariable* GVar);
+    void printBaseOffsetPair(const MachineInstr *MI, int i, bool brackets=true);
+    void PrintGlobalVariable(const GlobalVariable *GVar);
     bool runOnMachineFunction(MachineFunction &F);
     bool doInitialization(Module &M);
-    bool doFinalization(Module &M);
 
     bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                          unsigned AsmVariant, const char *ExtraCode);
@@ -62,17 +63,6 @@ namespace {
                                const char *ExtraCode);
   };
 } // end of anonymous namespace
-
-/// createAlphaCodePrinterPass - Returns a pass that prints the Alpha
-/// assembly code for a MachineFunction to the given output stream,
-/// using the given target machine description.  This should work
-/// regardless of whether the function is in SSA form.
-///
-FunctionPass *llvm::createAlphaCodePrinterPass(raw_ostream &o,
-                                               TargetMachine &tm,
-                                               bool verbose) {
-  return new AlphaAsmPrinter(o, tm, tm.getTargetAsmInfo(), verbose);
-}
 
 #include "AlphaGenAsmWriter.inc"
 
@@ -101,7 +91,7 @@ void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
     return;
 
   case MachineOperand::MO_Immediate:
-    LLVM_UNREACHABLE("printOp() does not handle immediate values");
+    llvm_unreachable("printOp() does not handle immediate values");
     return;
 
   case MachineOperand::MO_MachineBasicBlock:
@@ -109,7 +99,7 @@ void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
     return;
 
   case MachineOperand::MO_ConstantPoolIndex:
-    O << TAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber() << "_"
+    O << MAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber() << "_"
       << MO.getIndex();
     return;
 
@@ -117,14 +107,12 @@ void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
     O << MO.getSymbolName();
     return;
 
-  case MachineOperand::MO_GlobalAddress: {
-    GlobalValue *GV = MO.getGlobal();
-    O << Mang->getValueName(GV);
+  case MachineOperand::MO_GlobalAddress:
+    O << Mang->getMangledName(MO.getGlobal());
     return;
-  }
 
   case MachineOperand::MO_JumpTableIndex:
-    O << TAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
+    O << MAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
       << '_' << MO.getIndex();
     return;
 
@@ -151,13 +139,14 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   // Print out labels for the function.
   const Function *F = MF.getFunction();
-  SwitchToSection(TAI->SectionForGlobal(F));
+  OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(F, Mang, TM));
 
   EmitAlignment(MF.getAlignment(), F);
   switch (F->getLinkage()) {
-  default: assert(0 && "Unknown linkage type!");
+  default: llvm_unreachable("Unknown linkage type!");
   case Function::InternalLinkage:  // Symbols default to internal.
   case Function::PrivateLinkage:
+  case Function::LinkerPrivateLinkage:
     break;
    case Function::ExternalLinkage:
      O << "\t.globl " << CurrentFnName << "\n";
@@ -166,7 +155,7 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   case Function::WeakODRLinkage:
   case Function::LinkOnceAnyLinkage:
   case Function::LinkOnceODRLinkage:
-    O << TAI->getWeakRefDirective() << CurrentFnName << "\n";
+    O << MAI->getWeakRefDirective() << CurrentFnName << "\n";
     break;
   }
 
@@ -187,9 +176,7 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
          II != E; ++II) {
       // Print the assembly for the instruction.
       ++EmittedInsts;
-      if (!printInstruction(II)) {
-        LLVM_UNREACHABLE("Unhandled instruction in asm writer!");
-      }
+      printInstruction(II);
     }
   }
 
@@ -209,7 +196,7 @@ bool AlphaAsmPrinter::doInitialization(Module &M)
   return AsmPrinter::doInitialization(M);
 }
 
-void AlphaAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
+void AlphaAsmPrinter::PrintGlobalVariable(const GlobalVariable *GVar) {
   const TargetData *TD = TM.getTargetData();
 
   if (!GVar->hasInitializer()) return;  // External global require no code
@@ -218,15 +205,14 @@ void AlphaAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
   if (EmitSpecialLLVMGlobal(GVar))
     return;
 
-  std::string name = Mang->getValueName(GVar);
+  std::string name = Mang->getMangledName(GVar);
   Constant *C = GVar->getInitializer();
-  if (isa<MDNode>(C) || isa<MDString>(C))
-    return;
   unsigned Size = TD->getTypeAllocSize(C->getType());
   unsigned Align = TD->getPreferredAlignmentLog(GVar);
 
   // 0: Switch to section
-  SwitchToSection(TAI->SectionForGlobal(GVar));
+  OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(GVar, Mang,
+                                                                  TM));
 
   // 1: Check visibility
   printVisibility(name, GVar->getVisibility());
@@ -238,21 +224,22 @@ void AlphaAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
    case GlobalValue::WeakAnyLinkage:
    case GlobalValue::WeakODRLinkage:
    case GlobalValue::CommonLinkage:
-    O << TAI->getWeakRefDirective() << name << '\n';
+    O << MAI->getWeakRefDirective() << name << '\n';
     break;
    case GlobalValue::AppendingLinkage:
    case GlobalValue::ExternalLinkage:
-      O << TAI->getGlobalDirective() << name << "\n";
+      O << MAI->getGlobalDirective() << name << "\n";
       break;
     case GlobalValue::InternalLinkage:
     case GlobalValue::PrivateLinkage:
+    case GlobalValue::LinkerPrivateLinkage:
       break;
     default:
-      LLVM_UNREACHABLE("Unknown linkage type!");
+      llvm_unreachable("Unknown linkage type!");
     }
 
   // 3: Type, Size, Align
-  if (TAI->hasDotTypeDotSizeDirective()) {
+  if (MAI->hasDotTypeDotSizeDirective()) {
     O << "\t.type\t" << name << ", @object\n";
     O << "\t.size\t" << name << ", " << Size << "\n";
   }
@@ -263,14 +250,6 @@ void AlphaAsmPrinter::printModuleLevelGV(const GlobalVariable* GVar) {
 
   EmitGlobalConstant(C);
   O << '\n';
-}
-
-bool AlphaAsmPrinter::doFinalization(Module &M) {
-  for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-       I != E; ++I)
-    printModuleLevelGV(I);
-
-  return AsmPrinter::doFinalization(M);
 }
 
 /// PrintAsmOperand - Print out an operand for an inline asm expression.
@@ -295,12 +274,6 @@ bool AlphaAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 }
 
 // Force static initialization.
-extern "C" void LLVMInitializeAlphaAsmPrinter() { }
-
-namespace {
-  static struct Register {
-    Register() {
-      AlphaTargetMachine::registerAsmPrinter(createAlphaCodePrinterPass);
-    }
-  } Registrator;
+extern "C" void LLVMInitializeAlphaAsmPrinter() { 
+  RegisterAsmPrinter<AlphaAsmPrinter> X(TheAlphaTarget);
 }

@@ -30,6 +30,7 @@ namespace llvm {
 
 namespace clang {  
   class MemRegion;
+  class TypedRegion;
   class ASTContext;
   class BasicValueFactory;
 }
@@ -38,7 +39,9 @@ namespace clang {
   
 class SymExpr : public llvm::FoldingSetNode {
 public:
-  enum Kind { BEGIN_SYMBOLS, RegionValueKind, ConjuredKind, END_SYMBOLS,
+  enum Kind { BEGIN_SYMBOLS,
+              RegionValueKind, ConjuredKind, DerivedKind,
+              END_SYMBOLS,
               SymIntKind, SymSymKind };
 private:
   Kind K;
@@ -50,6 +53,10 @@ public:
   virtual ~SymExpr() {}
   
   Kind getKind() const { return K; }  
+    
+  void dump() const;
+  
+  virtual void dumpToStream(llvm::raw_ostream &os) const = 0;
   
   virtual QualType getType(ASTContext&) const = 0;  
   virtual void Profile(llvm::FoldingSetNodeID& profile) = 0;
@@ -71,7 +78,7 @@ public:
   virtual ~SymbolData() {}
   
   SymbolID getSymbolID() const { return Sym; }
-    
+
   // Implement isa<T> support.
   static inline bool classof(const SymExpr* SE) { 
     Kind k = SE->getKind();
@@ -104,6 +111,8 @@ public:
     Profile(profile, R, T);
   }
   
+  void dumpToStream(llvm::raw_ostream &os) const;
+  
   QualType getType(ASTContext&) const;
 
   // Implement isa<T> support.
@@ -130,6 +139,8 @@ public:
   
   QualType getType(ASTContext&) const;
   
+  void dumpToStream(llvm::raw_ostream &os) const;
+  
   static void Profile(llvm::FoldingSetNodeID& profile, const Stmt* S,
                       QualType T, unsigned Count, const void* SymbolTag) {    
     profile.AddInteger((unsigned) ConjuredKind);
@@ -146,6 +157,38 @@ public:
   // Implement isa<T> support.
   static inline bool classof(const SymExpr* SE) {
     return SE->getKind() == ConjuredKind;
+  }  
+};
+  
+class SymbolDerived : public SymbolData {
+  SymbolRef parentSymbol;
+  const TypedRegion *R;
+  
+public:
+  SymbolDerived(SymbolID sym, SymbolRef parent, const TypedRegion *r)
+    : SymbolData(DerivedKind, sym), parentSymbol(parent), R(r) {}
+
+  SymbolRef getParentSymbol() const { return parentSymbol; }
+  const TypedRegion *getRegion() const { return R; }
+  
+  QualType getType(ASTContext&) const;
+  
+  void dumpToStream(llvm::raw_ostream &os) const;
+  
+  static void Profile(llvm::FoldingSetNodeID& profile, SymbolRef parent,
+                      const TypedRegion *r) {
+    profile.AddInteger((unsigned) DerivedKind);
+    profile.AddPointer(r);
+    profile.AddPointer(parent);
+  }
+ 
+  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+    Profile(profile, parentSymbol, R);
+  }
+  
+  // Implement isa<T> support.
+  static inline bool classof(const SymExpr* SE) {
+    return SE->getKind() == DerivedKind;
   }  
 };
 
@@ -166,6 +209,8 @@ public:
   QualType getType(ASTContext& C) const { return T; }  
   
   BinaryOperator::Opcode getOpcode() const { return Op; }
+    
+  void dumpToStream(llvm::raw_ostream &os) const;  
   
   const SymExpr *getLHS() const { return LHS; }
   const llvm::APSInt &getRHS() const { return RHS; }
@@ -208,7 +253,9 @@ public:
   // FIXME: We probably need to make this out-of-line to avoid redundant
   // generation of virtual functions.
   QualType getType(ASTContext& C) const { return T; }
-
+  
+  void dumpToStream(llvm::raw_ostream &os) const;
+  
   static void Profile(llvm::FoldingSetNodeID& ID, const SymExpr *lhs,
                     BinaryOperator::Opcode op, const SymExpr *rhs, QualType t) {
     ID.AddInteger((unsigned) SymSymKind);
@@ -256,6 +303,9 @@ public:
                                           const void* SymbolTag = 0) {    
     return getConjuredSymbol(E, E->getType(), VisitCount, SymbolTag);
   }
+  
+  const SymbolDerived *getDerivedSymbol(SymbolRef parentSymbol,
+                                        const TypedRegion *R);
 
   const SymIntExpr *getSymIntExpr(const SymExpr *lhs, BinaryOperator::Opcode op,
                                   const llvm::APSInt& rhs, QualType t);
@@ -325,7 +375,10 @@ public:
 } // end clang namespace
 
 namespace llvm {
-  llvm::raw_ostream& operator<<(llvm::raw_ostream& Out,
-                                const clang::SymExpr *SE);
+static inline llvm::raw_ostream& operator<<(llvm::raw_ostream& os,
+                                            const clang::SymExpr *SE) {
+  SE->dumpToStream(os);
+  return os;
 }
+} // end llvm namespace
 #endif

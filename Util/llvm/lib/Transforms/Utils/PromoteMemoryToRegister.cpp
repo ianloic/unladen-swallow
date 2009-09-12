@@ -30,7 +30,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
@@ -183,7 +182,7 @@ namespace {
     ///
     AliasSetTracker *AST;
     
-    LLVMContext *Context;
+    LLVMContext &Context;
 
     /// AllocaLookup - Reverse mapping of Allocas.
     ///
@@ -216,7 +215,7 @@ namespace {
   public:
     PromoteMem2Reg(const std::vector<AllocaInst*> &A, DominatorTree &dt,
                    DominanceFrontier &df, AliasSetTracker *ast,
-                   LLVMContext *C)
+                   LLVMContext &C)
       : Allocas(A), DT(dt), DF(df), AST(ast), Context(C) {}
 
     void run();
@@ -449,7 +448,7 @@ void PromoteMem2Reg::run() {
   //
   RenamePassData::ValVector Values(Allocas.size());
   for (unsigned i = 0, e = Allocas.size(); i != e; ++i)
-    Values[i] = Context->getUndef(Allocas[i]->getAllocatedType());
+    Values[i] = UndefValue::get(Allocas[i]->getAllocatedType());
 
   // Walks all basic blocks in the function performing the SSA rename algorithm
   // and inserting the phi nodes we marked as necessary
@@ -476,7 +475,7 @@ void PromoteMem2Reg::run() {
     // Just delete the users now.
     //
     if (!A->use_empty())
-      A->replaceAllUsesWith(Context->getUndef(A->getType()));
+      A->replaceAllUsesWith(UndefValue::get(A->getType()));
     if (AST) AST->deleteValue(A);
     A->eraseFromParent();
   }
@@ -562,7 +561,7 @@ void PromoteMem2Reg::run() {
     BasicBlock::iterator BBI = BB->begin();
     while ((SomePHI = dyn_cast<PHINode>(BBI++)) &&
            SomePHI->getNumIncomingValues() == NumBadPreds) {
-      Value *UndefVal = Context->getUndef(SomePHI->getType());
+      Value *UndefVal = UndefValue::get(SomePHI->getType());
       for (unsigned pred = 0, e = Preds.size(); pred != e; ++pred)
         SomePHI->addIncoming(UndefVal, Preds[pred]);
     }
@@ -761,6 +760,7 @@ void PromoteMem2Reg::RewriteSingleStoreAlloca(AllocaInst *AI,
   }
 }
 
+namespace {
 
 /// StoreIndexSearchPredicate - This is a helper predicate used to search by the
 /// first element of a pair.
@@ -770,6 +770,8 @@ struct StoreIndexSearchPredicate {
     return LHS.first < RHS.first;
   }
 };
+
+}
 
 /// PromoteSingleBlockAlloca - Many allocas are only used within a single basic
 /// block.  If this is the case, avoid traversing the CFG and inserting a lot of
@@ -808,7 +810,7 @@ void PromoteMem2Reg::PromoteSingleBlockAlloca(AllocaInst *AI, AllocaInfo &Info,
   if (StoresByIndex.empty()) {
     for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end(); UI != E;) 
       if (LoadInst *LI = dyn_cast<LoadInst>(*UI++)) {
-        LI->replaceAllUsesWith(Context->getUndef(LI->getType()));
+        LI->replaceAllUsesWith(UndefValue::get(LI->getType()));
         if (AST && isa<PointerType>(LI->getType()))
           AST->deleteValue(LI);
         LBI.deleteValue(LI);
@@ -868,8 +870,8 @@ bool PromoteMem2Reg::QueuePhiNode(BasicBlock *BB, unsigned AllocaNo,
   // Create a PhiNode using the dereferenced type... and add the phi-node to the
   // BasicBlock.
   PN = PHINode::Create(Allocas[AllocaNo]->getAllocatedType(),
-                       Allocas[AllocaNo]->getName() + "." +
-                       utostr(Version++), BB->begin());
+                       Allocas[AllocaNo]->getName() + "." + Twine(Version++), 
+                       BB->begin());
   ++NumPHIInsert;
   PhiToAllocaMap[PN] = AllocaNo;
   PN->reserveOperandSpace(getNumPreds(BB));
@@ -999,7 +1001,7 @@ NextIteration:
 ///
 void llvm::PromoteMemToReg(const std::vector<AllocaInst*> &Allocas,
                            DominatorTree &DT, DominanceFrontier &DF,
-                           LLVMContext *Context, AliasSetTracker *AST) {
+                           LLVMContext &Context, AliasSetTracker *AST) {
   // If there is nothing to do, bail out...
   if (Allocas.empty()) return;
 

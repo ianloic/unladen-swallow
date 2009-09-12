@@ -17,7 +17,6 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Streams.h"
 #include "llvm/Support/Format.h"
 using namespace clang;
 
@@ -518,12 +517,15 @@ void StmtPrinter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *Node) {
   OS << Node->getProperty()->getNameAsCString();
 }
 
-void StmtPrinter::VisitObjCKVCRefExpr(ObjCKVCRefExpr *Node) {
+void StmtPrinter::VisitObjCImplicitSetterGetterRefExpr(
+                                        ObjCImplicitSetterGetterRefExpr *Node) {
   if (Node->getBase()) {
     PrintExpr(Node->getBase());
     OS << ".";
   }
-  // FIXME: Setter/Getter names
+  if (Node->getGetterMethod())
+    OS << Node->getGetterMethod()->getNameAsString();
+    
 }
 
 void StmtPrinter::VisitPredefinedExpr(PredefinedExpr *Node) {
@@ -739,6 +741,11 @@ void StmtPrinter::VisitMemberExpr(MemberExpr *Node) {
   // representing anonymous unions/structs
   OS << Node->getMemberDecl()->getNameAsString();
 }
+void StmtPrinter::VisitObjCIsaExpr(ObjCIsaExpr *Node) {
+  PrintExpr(Node->getBase());
+  OS << (Node->isArrow() ? "->isa" : ".isa");
+}
+
 void StmtPrinter::VisitExtVectorElementExpr(ExtVectorElementExpr *Node) {
   PrintExpr(Node->getBase());
   OS << ".";
@@ -843,6 +850,15 @@ void StmtPrinter::VisitInitListExpr(InitListExpr* Node) {
       OS << "0";
   }
   OS << " }";
+}
+
+void StmtPrinter::VisitParenListExpr(ParenListExpr* Node) {
+  OS << "( ";
+  for (unsigned i = 0, e = Node->getNumExprs(); i != e; ++i) {
+    if (i) OS << ", ";
+    PrintExpr(Node->getExpr(i));
+  }
+  OS << " )";
 }
 
 void StmtPrinter::VisitDesignatedInitExpr(DesignatedInitExpr *Node) {
@@ -1110,6 +1126,16 @@ StmtPrinter::VisitCXXUnresolvedConstructExpr(
   OS << ")";
 }
 
+void StmtPrinter::VisitCXXQualifiedMemberExpr(CXXQualifiedMemberExpr *Node) {
+  // FIXME: Suppress printing implicit bases (like "this")
+  PrintExpr(Node->getBase());
+  OS << (Node->isArrow() ? "->" : ".");
+  // FIXME: Suppress printing references to unnamed objects
+  // representing anonymous unions/structs
+  Node->getQualifier()->print(OS, Policy);
+  OS << Node->getMemberDecl()->getNameAsString();
+}
+
 void StmtPrinter::VisitCXXUnresolvedMemberExpr(CXXUnresolvedMemberExpr *Node) {
   PrintExpr(Node->getBase());
   OS << (Node->isArrow() ? "->" : ".");
@@ -1241,7 +1267,7 @@ void Stmt::printPretty(llvm::raw_ostream &OS, ASTContext& Context,
   }
 
   if (Policy.Dump) {
-    dump();
+    dump(Context.getSourceManager());
     return;
   }
   

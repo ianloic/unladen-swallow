@@ -1,5 +1,4 @@
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic -verify %s &&
-// RUN: clang-cc -analyze -checker-cfref -analyzer-store=basic-new-cast -verify %s &&
 // RUN: clang-cc -analyze -checker-cfref -analyzer-store=region -verify %s
 //
 // This test case simply should not crash.  It evaluates the logic of not
@@ -80,6 +79,7 @@ typedef NSUInteger JabaSourceLanguage;
 Dos_CharacterRangeType = 0,     Dos_LineRangeType = 1 }
   DosTextRangeType;
 @implementation JabaSCSharedDiagramViewController  + (NSImage *)findImageNamed:(NSString *)name {
+  return 0;
 }
 - (void)revealSourceInEditor:(JabasectItem *)sectItem duperGesture:(BOOL)duperGesture {
   id <EcoNamedElement> selectedElement = [sectItem representedObject];

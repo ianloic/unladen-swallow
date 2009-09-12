@@ -2,8 +2,10 @@
 
 import test.test_support
 from test.test_support import verbose
+import os
 import random
 import re
+import subprocess
 import sys
 import threading
 import thread
@@ -215,7 +217,6 @@ class ThreadTests(unittest.TestCase):
                 print("test_finalize_with_runnning_thread can't import ctypes")
             return  # can't do anything
 
-        import subprocess
         rc = subprocess.call([sys.executable, "-c", """if 1:
             import ctypes, sys, time, thread
 
@@ -246,7 +247,6 @@ class ThreadTests(unittest.TestCase):
     def test_finalize_with_trace(self):
         # Issue1733757
         # Avoid a deadlock when sys.settrace steps into threading._shutdown
-        import subprocess
         rc = subprocess.call([sys.executable, "-c", """if 1:
             import sys, threading
 
@@ -335,13 +335,11 @@ class ThreadJoinOnShutdown(unittest.TestCase):
                 print 'end of thread'
         \n""" + script
 
-        import subprocess
         p = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE)
         rc = p.wait()
         data = p.stdout.read().replace('\r', '')
+        self.assertEqual(rc, 0, "Unexpected error")
         self.assertEqual(data, "end of main\nend of thread\n")
-        self.failIf(rc == 2, "interpreter was blocked")
-        self.failUnless(rc == 0, "Unexpected error")
 
     def test_1_join_on_shutdown(self):
         # The usual case: on exit, wait for a non-daemon thread
@@ -358,7 +356,6 @@ class ThreadJoinOnShutdown(unittest.TestCase):
 
     def test_2_join_in_forked_process(self):
         # Like the test above, but from a forked interpreter
-        import os
         if not hasattr(os, 'fork'):
             return
         script = """if 1:
@@ -377,7 +374,6 @@ class ThreadJoinOnShutdown(unittest.TestCase):
     def test_3_join_in_forked_from_thread(self):
         # Like the test above, but fork() was called from a worker thread
         # In the forked process, the main Thread object must be marked as stopped.
-        import os
         if not hasattr(os, 'fork'):
             return
         # Skip platforms with known problems forking from a worker thread.
@@ -408,11 +404,18 @@ class ThreadJoinOnShutdown(unittest.TestCase):
 
 class ThreadAndForkTests(unittest.TestCase):
 
+    def assertScriptHasOutput(self, script, expected_output):
+        p = subprocess.Popen([sys.executable, "-c", script],
+                             stdout=subprocess.PIPE)
+        rc = p.wait()
+        data = p.stdout.read().decode().replace('\r', '')
+        self.assertEqual(rc, 0, "Unexpected error")
+        self.assertEqual(data, expected_output)
+
     def test_join_fork_stop_deadlock(self):
         # There used to be a possible deadlock when forking from a child
         # thread.  See http://bugs.python.org/issue6643.
 
-        import os
         if not hasattr(os, 'fork'):
             return
         # Skip platforms with known problems forking from a worker thread.
@@ -437,9 +440,8 @@ class ThreadAndForkTests(unittest.TestCase):
         #   lock in the Thread.__block Condition object and hang, because the
         #   lock was held across the fork.
 
-        script = """if 1:
-            import os, sys, time, threading
-
+        script = """if True:
+            import os, time, threading
             finish_join = False
             start_fork = False
 
@@ -485,14 +487,100 @@ class ThreadAndForkTests(unittest.TestCase):
             w.join()
             print('end of main')
             """
-        import subprocess
-        p = subprocess.Popen([sys.executable, "-c", script],
-                             stdout=subprocess.PIPE)
-        rc = p.wait()
-        data = p.stdout.read().decode().replace('\r', '')
-        self.assertEqual(data, "end of main\n")
-        self.assertFalse(rc == 2, "interpreter was blocked")
-        self.assertTrue(rc == 0, "Unexpected error")
+        self.assertScriptHasOutput(script, "end of main\n")
+
+    def test_thread_fork_thread_hang(self):
+        # Check that a thread that forks and then spawns a daemon thread can
+        # exit properly.  Previously, it would just exit one thread instead of
+        # shutting down the entire process, so the daemon thread would prevent
+        # the process from exiting, causing the parent process to hang in
+        # waitpid().
+
+        if not hasattr(os, 'fork'):
+            return
+        # Skip platforms with known problems forking from a worker thread.
+        # See http://bugs.python.org/issue3863.
+        if sys.platform in ('freebsd4', 'freebsd5', 'freebsd6', 'os2emx'):
+            raise unittest.SkipTest('due to known OS bugs on ' + sys.platform)
+        script = """if True:
+            import os, threading
+            def worker():
+                childpid = os.fork()
+                if childpid != 0:
+                    # Parent waits for child.
+                    os.waitpid(childpid, 0)
+                else:
+                    # Child spawns a daemon thread and then returns
+                    # immediately.
+                    def daemon():
+                        while True:
+                            pass
+                    d = threading.Thread(target=daemon)
+                    d.daemon = True
+                    d.start()
+                    # Try to exit the process by returning from the last
+                    # non-daemon thread.  We used to hang because the daemon
+                    # thread was still running:
+                    # http://bugs.python.org/issue6642
+                    print('end of thread')
+
+            w = threading.Thread(target=worker)
+            w.start()
+            w.join()
+            print('end of main')
+            """
+        self.assertScriptHasOutput(script, "end of thread\nend of main\n")
+
+    def test_thread_fork_atexit(self):
+        # Check that a spawned thread that forks properly executes atexit
+        # handlers.  Previously, Py_Finalize was not being called because the
+        # main thread in the child process does not return through Py_Main().
+        # Now there is a check in thread_PyThread_exit_thread() to run these
+        # finalizers if the exiting thread happens to be the main thread.
+
+        if not hasattr(os, 'fork'):
+            return
+        # Skip platforms with known problems forking from a worker thread.
+        # See http://bugs.python.org/issue3863.
+        if sys.platform in ('freebsd4', 'freebsd5', 'freebsd6', 'os2emx'):
+            raise unittest.SkipTest('due to known OS bugs on ' + sys.platform)
+        script = """if True:
+            import os, threading, atexit
+
+            def worker():
+                # Setup a pipe between the processes, and register an atexit
+                # handler to write the pid to the pipe.  Note, these are file
+                # descriptors, not file-like objects.
+                (reader, writer) = os.pipe()
+                def write_atexit():
+                    if writer is None:
+                        return
+                    os.write(writer, str(os.getpid()))
+                    os.close(writer)
+                atexit.register(write_atexit)
+
+                childpid = os.fork()
+                if childpid != 0:  # Parent
+                    os.close(writer)
+                    # Throw away the writer so that the atexit handler does
+                    # nothing in the parent.
+                    writer = None
+                    os.waitpid(childpid, 0)
+                    output = os.read(reader, 100)
+                    if output == str(childpid):
+                        print "successfully read child pid"
+                    else:
+                        print "got bad output:", output
+                else:  # Child
+                    os.close(reader)
+                    # The child should just return without exiting.  We want to
+                    # verify that the atexit handler gets called.
+
+            w = threading.Thread(target=worker)
+            w.start()
+            w.join()
+            """
+        self.assertScriptHasOutput(script, "successfully read child pid\n")
 
 
 class ThreadingExceptionTests(unittest.TestCase):

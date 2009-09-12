@@ -31,26 +31,21 @@
 
 using namespace clang;
 
-static ObjCInterfaceType* GetReceiverType(ObjCMessageExpr* ME) {
-  Expr* Receiver = ME->getReceiver();
+static const ObjCInterfaceType* GetReceiverType(const ObjCMessageExpr* ME) {
+  const Expr* Receiver = ME->getReceiver();
   
   if (!Receiver)
     return NULL;
   
-  QualType X = Receiver->getType();
-  
-  if (X->isPointerType()) {
-    Type* TP = X.getTypePtr();
-    const PointerType* T = TP->getAsPointerType();    
-    return dyn_cast<ObjCInterfaceType>(T->getPointeeType().getTypePtr());
-  }
+  if (const ObjCObjectPointerType *PT =
+      Receiver->getType()->getAsObjCObjectPointerType())
+    return PT->getInterfaceType();
 
-  // FIXME: Support ObjCQualifiedIdType?
   return NULL;
 }
 
-static const char* GetReceiverNameType(ObjCMessageExpr* ME) {
-  ObjCInterfaceType* ReceiverType = GetReceiverType(ME);
+static const char* GetReceiverNameType(const ObjCMessageExpr* ME) {
+  const ObjCInterfaceType *ReceiverType = GetReceiverType(ME);
   return ReceiverType ? ReceiverType->getDecl()->getIdentifier()->getName()
                       : NULL;
 }
@@ -67,22 +62,22 @@ class VISIBILITY_HIDDEN BasicObjCFoundationChecks : public GRSimpleAPICheck {
   BugReporter& BR;
   ASTContext &Ctx;
       
-  bool isNSString(ObjCInterfaceType* T, const char* suffix);
-  bool AuditNSString(NodeTy* N, ObjCMessageExpr* ME);
+  bool isNSString(const ObjCInterfaceType *T, const char* suffix);
+  bool AuditNSString(ExplodedNode* N, const ObjCMessageExpr* ME);
       
-  void Warn(NodeTy* N, Expr* E, const std::string& s);  
-  void WarnNilArg(NodeTy* N, Expr* E);
+  void Warn(ExplodedNode* N, const Expr* E, const std::string& s);  
+  void WarnNilArg(ExplodedNode* N, const Expr* E);
   
-  bool CheckNilArg(NodeTy* N, unsigned Arg);
+  bool CheckNilArg(ExplodedNode* N, unsigned Arg);
 
 public:
   BasicObjCFoundationChecks(ASTContext& ctx, BugReporter& br) 
     : BT(0), BR(br), Ctx(ctx) {}
         
-  bool Audit(ExplodedNode<GRState>* N, GRStateManager&);
+  bool Audit(ExplodedNode* N, GRStateManager&);
   
 private:  
-  void WarnNilArg(NodeTy* N, ObjCMessageExpr* ME, unsigned Arg) {    
+  void WarnNilArg(ExplodedNode* N, const ObjCMessageExpr* ME, unsigned Arg) {    
     std::string sbuf;
     llvm::raw_string_ostream os(sbuf);
     os << "Argument to '" << GetReceiverNameType(ME) << "' method '"
@@ -108,13 +103,13 @@ clang::CreateBasicObjCFoundationChecks(ASTContext& Ctx, BugReporter& BR) {
 
 
 
-bool BasicObjCFoundationChecks::Audit(ExplodedNode<GRState>* N,
+bool BasicObjCFoundationChecks::Audit(ExplodedNode* N,
                                       GRStateManager&) {
   
-  ObjCMessageExpr* ME =
+  const ObjCMessageExpr* ME =
     cast<ObjCMessageExpr>(cast<PostStmt>(N->getLocation()).getStmt());
 
-  ObjCInterfaceType* ReceiverType = GetReceiverType(ME);
+  const ObjCInterfaceType *ReceiverType = GetReceiverType(ME);
   
   if (!ReceiverType)
     return false;
@@ -129,8 +124,7 @@ bool BasicObjCFoundationChecks::Audit(ExplodedNode<GRState>* N,
       
   name += 2;
   
-  // FIXME: Make all of this faster.
-  
+  // FIXME: Make all of this faster.  
   if (isNSString(ReceiverType, name))
     return AuditNSString(N, ME);
 
@@ -145,11 +139,11 @@ static inline bool isNil(SVal X) {
 // Error reporting.
 //===----------------------------------------------------------------------===//
 
-bool BasicObjCFoundationChecks::CheckNilArg(NodeTy* N, unsigned Arg) {
-  ObjCMessageExpr* ME =
+bool BasicObjCFoundationChecks::CheckNilArg(ExplodedNode* N, unsigned Arg) {
+  const ObjCMessageExpr* ME =
     cast<ObjCMessageExpr>(cast<PostStmt>(N->getLocation()).getStmt());
   
-  Expr * E = ME->getArg(Arg);
+  const Expr * E = ME->getArg(Arg);
   
   if (isNil(N->getState()->getSVal(E))) {
     WarnNilArg(N, ME, Arg);
@@ -163,14 +157,13 @@ bool BasicObjCFoundationChecks::CheckNilArg(NodeTy* N, unsigned Arg) {
 // NSString checking.
 //===----------------------------------------------------------------------===//
 
-bool BasicObjCFoundationChecks::isNSString(ObjCInterfaceType* T,
-                                           const char* suffix) {
-  
+bool BasicObjCFoundationChecks::isNSString(const ObjCInterfaceType *T,
+                                           const char* suffix) {  
   return !strcmp("String", suffix) || !strcmp("MutableString", suffix);
 }
 
-bool BasicObjCFoundationChecks::AuditNSString(NodeTy* N, 
-                                              ObjCMessageExpr* ME) {
+bool BasicObjCFoundationChecks::AuditNSString(ExplodedNode* N, 
+                                              const ObjCMessageExpr* ME) {
   
   Selector S = ME->getSelector();
   
@@ -261,10 +254,10 @@ public:
   
   ~AuditCFNumberCreate() {}
   
-  bool Audit(ExplodedNode<GRState>* N, GRStateManager&);
+  bool Audit(ExplodedNode* N, GRStateManager&);
   
 private:
-  void AddError(const TypedRegion* R, Expr* Ex, ExplodedNode<GRState> *N,
+  void AddError(const TypedRegion* R, const Expr* Ex, ExplodedNode *N,
                 uint64_t SourceSize, uint64_t TargetSize, uint64_t NumberKind);  
 };
 } // end anonymous namespace
@@ -362,9 +355,10 @@ static const char* GetCFNumberTypeStr(uint64_t i) {
 }
 #endif
 
-bool AuditCFNumberCreate::Audit(ExplodedNode<GRState>* N,GRStateManager&){  
-  CallExpr* CE = cast<CallExpr>(cast<PostStmt>(N->getLocation()).getStmt());
-  Expr* Callee = CE->getCallee();  
+bool AuditCFNumberCreate::Audit(ExplodedNode* N,GRStateManager&){  
+  const CallExpr* CE =
+    cast<CallExpr>(cast<PostStmt>(N->getLocation()).getStmt());
+  const Expr* Callee = CE->getCallee();  
   SVal CallV = N->getState()->getSVal(Callee);  
   const FunctionDecl* FD = CallV.getAsFunctionDecl();
 
@@ -400,14 +394,11 @@ bool AuditCFNumberCreate::Audit(ExplodedNode<GRState>* N,GRStateManager&){
   if (!LV)
     return false;
   
-  const TypedRegion* R = dyn_cast<TypedRegion>(LV->getRegion());
-  if (!R) return false;
-  
-  while (const TypedViewRegion* ATR = dyn_cast<TypedViewRegion>(R)) {
-    R = dyn_cast<TypedRegion>(ATR->getSuperRegion());
-    if (!R) return false;
-  }
-  
+  const TypedRegion* R = dyn_cast<TypedRegion>(LV->getBaseRegion());
+
+  if (!R)
+    return false;
+
   QualType T = Ctx.getCanonicalType(R->getValueType(Ctx));
   
   // FIXME: If the pointee isn't an integer type, should we flag a warning?
@@ -430,8 +421,8 @@ bool AuditCFNumberCreate::Audit(ExplodedNode<GRState>* N,GRStateManager&){
   return SourceSize < TargetSize;
 }
 
-void AuditCFNumberCreate::AddError(const TypedRegion* R, Expr* Ex,
-                                   ExplodedNode<GRState> *N,
+void AuditCFNumberCreate::AddError(const TypedRegion* R, const Expr* Ex,
+                                   ExplodedNode *N,
                                    uint64_t SourceSize, uint64_t TargetSize,
                                    uint64_t NumberKind) {
   
@@ -465,17 +456,93 @@ clang::CreateAuditCFNumberCreate(ASTContext& Ctx, BugReporter& BR) {
 }
 
 //===----------------------------------------------------------------------===//
-// Check registration.
+// CFRetain/CFRelease auditing for null arguments.
+//===----------------------------------------------------------------------===//
 
-void clang::RegisterAppleChecks(GRExprEngine& Eng) {
+namespace {
+class VISIBILITY_HIDDEN AuditCFRetainRelease : public GRSimpleAPICheck {
+  APIMisuse *BT;
+  
+  // FIXME: Either this should be refactored into GRSimpleAPICheck, or
+  //   it should always be passed with a call to Audit.  The latter
+  //   approach makes this class more stateless.
+  ASTContext& Ctx;
+  IdentifierInfo *Retain, *Release;
+  BugReporter& BR;
+  
+public:
+  AuditCFRetainRelease(ASTContext& ctx, BugReporter& br) 
+  : BT(0), Ctx(ctx),
+    Retain(&Ctx.Idents.get("CFRetain")), Release(&Ctx.Idents.get("CFRelease")),
+    BR(br){}
+  
+  ~AuditCFRetainRelease() {}
+  
+  bool Audit(ExplodedNode* N, GRStateManager&);
+};
+} // end anonymous namespace
+
+
+bool AuditCFRetainRelease::Audit(ExplodedNode* N, GRStateManager&) {
+  const CallExpr* CE = cast<CallExpr>(cast<PostStmt>(N->getLocation()).getStmt());
+  
+  // If the CallExpr doesn't have exactly 1 argument just give up checking.
+  if (CE->getNumArgs() != 1)
+    return false;
+  
+  // Check if we called CFRetain/CFRelease.
+  const GRState* state = N->getState();
+  SVal X = state->getSVal(CE->getCallee());
+  const FunctionDecl* FD = X.getAsFunctionDecl();
+  
+  if (!FD)
+    return false;
+  
+  const IdentifierInfo *FuncII = FD->getIdentifier();  
+  if (!(FuncII == Retain || FuncII == Release))
+    return false;
+  
+  // Finally, check if the argument is NULL.
+  // FIXME: We should be able to bifurcate the state here, as a successful
+  // check will result in the value not being NULL afterwards.
+  // FIXME: Need a way to register vistors for the BugReporter.  Would like
+  // to benefit from the same diagnostics that regular null dereference
+  // reporting has.
+  if (state->getStateManager().isEqual(state, CE->getArg(0), 0)) {
+    if (!BT)
+      BT = new APIMisuse("null passed to CFRetain/CFRelease");
+    
+    const char *description = (FuncII == Retain)
+                            ? "Null pointer argument in call to CFRetain"
+                            : "Null pointer argument in call to CFRelease";
+
+    RangedBugReport *report = new RangedBugReport(*BT, description, N);
+    report->addRange(CE->getArg(0)->getSourceRange());
+    BR.EmitReport(report);
+    return true;
+  }
+
+  return false;
+}
+    
+    
+GRSimpleAPICheck*
+clang::CreateAuditCFRetainRelease(ASTContext& Ctx, BugReporter& BR) {  
+  return new AuditCFRetainRelease(Ctx, BR);
+}
+
+//===----------------------------------------------------------------------===//
+// Check registration.
+//===----------------------------------------------------------------------===//
+
+void clang::RegisterAppleChecks(GRExprEngine& Eng, const Decl &D) {
   ASTContext& Ctx = Eng.getContext();
   BugReporter &BR = Eng.getBugReporter();
 
   Eng.AddCheck(CreateBasicObjCFoundationChecks(Ctx, BR),
                Stmt::ObjCMessageExprClass);
-
-  Eng.AddCheck(CreateAuditCFNumberCreate(Ctx, BR),
-               Stmt::CallExprClass);
+  Eng.AddCheck(CreateAuditCFNumberCreate(Ctx, BR), Stmt::CallExprClass);  
+  Eng.AddCheck(CreateAuditCFRetainRelease(Ctx, BR), Stmt::CallExprClass);
   
-  RegisterNSErrorChecks(BR, Eng);
+  RegisterNSErrorChecks(BR, Eng, D);
 }

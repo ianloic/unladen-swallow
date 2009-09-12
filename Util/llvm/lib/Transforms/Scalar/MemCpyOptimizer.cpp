@@ -24,6 +24,7 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetData.h"
 #include <list>
 using namespace llvm;
@@ -36,17 +37,17 @@ STATISTIC(NumMemSetInfer, "Number of memsets inferred");
 /// true for all i8 values obviously, but is also true for i32 0, i32 -1,
 /// i16 0xF0F0, double 0.0 etc.  If the value can't be handled with a repeated
 /// byte store (e.g. i16 0x1234), return null.
-static Value *isBytewiseValue(Value *V, LLVMContext* Context) {
+static Value *isBytewiseValue(Value *V, LLVMContext& Context) {
   // All byte-wide stores are splatable, even of arbitrary variables.
-  if (V->getType() == Type::Int8Ty) return V;
+  if (V->getType() == Type::getInt8Ty(Context)) return V;
   
   // Constant float and double values can be handled as integer values if the
   // corresponding integer value is "byteable".  An important case is 0.0. 
   if (ConstantFP *CFP = dyn_cast<ConstantFP>(V)) {
-    if (CFP->getType() == Type::FloatTy)
-      V = Context->getConstantExprBitCast(CFP, Type::Int32Ty);
-    if (CFP->getType() == Type::DoubleTy)
-      V = Context->getConstantExprBitCast(CFP, Type::Int64Ty);
+    if (CFP->getType() == Type::getFloatTy(Context))
+      V = ConstantExpr::getBitCast(CFP, Type::getInt32Ty(Context));
+    if (CFP->getType() == Type::getDoubleTy(Context))
+      V = ConstantExpr::getBitCast(CFP, Type::getInt64Ty(Context));
     // Don't handle long double formats, which have strange constraints.
   }
   
@@ -69,7 +70,7 @@ static Value *isBytewiseValue(Value *V, LLVMContext* Context) {
         if (Val != Val2)
           return 0;
       }
-      return Context->getConstantInt(Val);
+      return ConstantInt::get(Context, Val);
     }
   }
   
@@ -309,10 +310,8 @@ namespace {
       AU.addRequired<DominatorTree>();
       AU.addRequired<MemoryDependenceAnalysis>();
       AU.addRequired<AliasAnalysis>();
-      AU.addRequired<TargetData>();
       AU.addPreserved<AliasAnalysis>();
       AU.addPreserved<MemoryDependenceAnalysis>();
-      AU.addPreserved<TargetData>();
     }
   
     // Helper fuctions
@@ -346,18 +345,20 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator& BBI) {
   // Ensure that the value being stored is something that can be memset'able a
   // byte at a time like "0" or "-1" or any width, as well as things like
   // 0xA0A0A0A0 and 0.0.
-  Value *ByteVal = isBytewiseValue(SI->getOperand(0), Context);
+  Value *ByteVal = isBytewiseValue(SI->getOperand(0), SI->getContext());
   if (!ByteVal)
     return false;
 
-  TargetData &TD = getAnalysis<TargetData>();
+  TargetData *TD = getAnalysisIfAvailable<TargetData>();
+  if (!TD) return false;
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
+  Module *M = SI->getParent()->getParent()->getParent();
 
   // Okay, so we now have a single store that can be splatable.  Scan to find
   // all subsequent stores of the same value to offset from the same pointer.
   // Join these together into ranges, so we can decide whether contiguous blocks
   // are stored.
-  MemsetRanges Ranges(TD);
+  MemsetRanges Ranges(*TD);
   
   Value *StartPtr = SI->getPointerOperand();
   
@@ -385,12 +386,13 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator& BBI) {
     if (NextStore->isVolatile()) break;
     
     // Check to see if this stored value is of the same byte-splattable value.
-    if (ByteVal != isBytewiseValue(NextStore->getOperand(0), Context))
+    if (ByteVal != isBytewiseValue(NextStore->getOperand(0), 
+                                   NextStore->getContext()))
       break;
 
     // Check to see if this store is to a constant offset from the start ptr.
     int64_t Offset;
-    if (!IsPointerOffset(StartPtr, NextStore->getPointerOperand(), Offset, TD))
+    if (!IsPointerOffset(StartPtr, NextStore->getPointerOperand(), Offset, *TD))
       break;
 
     Ranges.addStore(Offset, NextStore);
@@ -419,7 +421,7 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator& BBI) {
     if (Range.TheStores.size() == 1) continue;
     
     // If it is profitable to lower this range to memset, do so now.
-    if (!Range.isProfitableToUseMemset(TD))
+    if (!Range.isProfitableToUseMemset(*TD))
       continue;
     
     // Otherwise, we do want to transform this!  Create a new memset.  We put
@@ -429,9 +431,8 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator& BBI) {
     BasicBlock::iterator InsertPt = BI;
   
     if (MemSetF == 0) {
-      const Type *Tys[] = {Type::Int64Ty};
-      MemSetF = Intrinsic::getDeclaration(SI->getParent()->getParent()
-                                          ->getParent(), Intrinsic::memset,
+      const Type *Tys[] = {Type::getInt64Ty(SI->getContext())};
+      MemSetF = Intrinsic::getDeclaration(M, Intrinsic::memset,
                                           Tys, 1);
    }
     
@@ -439,21 +440,25 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator& BBI) {
     StartPtr = Range.StartPtr;
   
     // Cast the start ptr to be i8* as memset requires.
-    const Type *i8Ptr = Context->getPointerTypeUnqual(Type::Int8Ty);
+    const Type *i8Ptr =
+          PointerType::getUnqual(Type::getInt8Ty(SI->getContext()));
     if (StartPtr->getType() != i8Ptr)
-      StartPtr = new BitCastInst(StartPtr, i8Ptr, StartPtr->getNameStart(),
+      StartPtr = new BitCastInst(StartPtr, i8Ptr, StartPtr->getName(),
                                  InsertPt);
   
     Value *Ops[] = {
       StartPtr, ByteVal,   // Start, value
-      Context->getConstantInt(Type::Int64Ty, Range.End-Range.Start),  // size
-      Context->getConstantInt(Type::Int32Ty, Range.Alignment)   // align
+      // size
+      ConstantInt::get(Type::getInt64Ty(SI->getContext()),
+                       Range.End-Range.Start),
+      // align
+      ConstantInt::get(Type::getInt32Ty(SI->getContext()), Range.Alignment)
     };
     Value *C = CallInst::Create(MemSetF, Ops, Ops+4, "", InsertPt);
-    DEBUG(cerr << "Replace stores:\n";
+    DEBUG(errs() << "Replace stores:\n";
           for (unsigned i = 0, e = Range.TheStores.size(); i != e; ++i)
-            cerr << *Range.TheStores[i];
-          cerr << "With: " << *C); C=C;
+            errs() << *Range.TheStores[i];
+          errs() << "With: " << *C); C=C;
   
     // Don't invalidate the iterator
     BBI = BI;
@@ -506,13 +511,14 @@ bool MemCpyOpt::performCallSlotOptzn(MemCpyInst *cpy, CallInst *C) {
     return false;
 
   // Check that all of src is copied to dest.
-  TargetData& TD = getAnalysis<TargetData>();
+  TargetData* TD = getAnalysisIfAvailable<TargetData>();
+  if (!TD) return false;
 
   ConstantInt* srcArraySize = dyn_cast<ConstantInt>(srcAlloca->getArraySize());
   if (!srcArraySize)
     return false;
 
-  uint64_t srcSize = TD.getTypeAllocSize(srcAlloca->getAllocatedType()) *
+  uint64_t srcSize = TD->getTypeAllocSize(srcAlloca->getAllocatedType()) *
     srcArraySize->getZExtValue();
 
   if (cpyLength->getZExtValue() < srcSize)
@@ -527,7 +533,7 @@ bool MemCpyOpt::performCallSlotOptzn(MemCpyInst *cpy, CallInst *C) {
     if (!destArraySize)
       return false;
 
-    uint64_t destSize = TD.getTypeAllocSize(A->getAllocatedType()) *
+    uint64_t destSize = TD->getTypeAllocSize(A->getAllocatedType()) *
       destArraySize->getZExtValue();
 
     if (destSize < srcSize)
@@ -539,7 +545,7 @@ bool MemCpyOpt::performCallSlotOptzn(MemCpyInst *cpy, CallInst *C) {
       return false;
 
     const Type* StructTy = cast<PointerType>(A->getType())->getElementType();
-    uint64_t destSize = TD.getTypeAllocSize(StructTy);
+    uint64_t destSize = TD->getTypeAllocSize(StructTy);
 
     if (destSize < srcSize)
       return false;

@@ -19,6 +19,7 @@
 #include "llvm/Intrinsics.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -161,7 +162,7 @@ InstructionSelect() {
 SDNode *XCoreDAGToDAGISel::Select(SDValue Op) {
   SDNode *N = Op.getNode();
   DebugLoc dl = N->getDebugLoc();
-  MVT NVT = N->getValueType(0);
+  EVT NVT = N->getValueType(0);
   if (NVT == MVT::i32) {
     switch (N->getOpcode()) {
       default: break;
@@ -173,7 +174,8 @@ SDNode *XCoreDAGToDAGISel::Select(SDValue Op) {
         else if (! Predicate_immU16(N)) {
           unsigned Val = cast<ConstantSDNode>(N)->getZExtValue();
           SDValue CPIdx =
-            CurDAG->getTargetConstantPool(ConstantInt::get(Type::Int32Ty, Val),
+            CurDAG->getTargetConstantPool(ConstantInt::get(
+                                  Type::getInt32Ty(*CurDAG->getContext()), Val),
                                           TLI.getPointerTy());
           return CurDAG->getTargetNode(XCore::LDWCP_lru6, dl, MVT::i32, 
                                        MVT::Other, CPIdx, 
