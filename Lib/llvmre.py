@@ -144,12 +144,17 @@ class RegexObject(object):
   def subn(self, repl, string, count=0):
     result = ''
     pos = 0
+    matched = False
 
     # find the matches
     matches = list(self.__finditer(string, count=count))
 
     # substitute matches for replacements
     for m in matches:
+      if matched and pos == m.start() and pos == m.end():
+        # ignore empty matches immediately following another match
+        continue
+      matched = True
       result = result + string[pos:m.start()]
       if callable(repl):
         result = result + repl(m)
