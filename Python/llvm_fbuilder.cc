@@ -16,6 +16,7 @@
 #include "llvm/Constant.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/Function.h"
 #include "llvm/GlobalAlias.h"
 #include "llvm/Instructions.h"
@@ -35,10 +36,15 @@ using llvm::ConstantExpr;
 using llvm::ConstantInt;
 using llvm::Function;
 using llvm::FunctionType;
+using llvm::GlobalVariable;
 using llvm::Module;
 using llvm::Type;
 using llvm::Value;
 using llvm::array_endof;
+
+// Use like "this->GET_GLOBAL_VARIABLE(Type, variable)".
+#define GET_GLOBAL_VARIABLE(TYPE, VARIABLE) \
+    GetGlobalVariable<TYPE>(&VARIABLE, #VARIABLE)
 
 namespace py {
 
@@ -880,7 +886,7 @@ LlvmFunctionBuilder::MaybeCallLineTrace(BasicBlock *fallthrough_block,
     BasicBlock *call_trace = this->CreateBasicBlock("call_trace");
 
     Value *tracing_possible = this->builder_.CreateLoad(
-        this->GetGlobalVariable<int>("_Py_TracingPossible"));
+        this->GET_GLOBAL_VARIABLE(int, _Py_TracingPossible));
     this->builder_.CreateCondBr(this->IsNonZero(tracing_possible),
                                 call_trace, fallthrough_block);
 
@@ -1283,7 +1289,7 @@ LlvmFunctionBuilder::WITH_CLEANUP()
     BasicBlock *main_block =
         this->CreateBasicBlock("WITH_CLEANUP_main_block");
 
-    Value *none = this->GetGlobalVariable<PyObject>("_Py_NoneStruct");
+    Value *none = this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct);
     this->builder_.CreateStore(this->Pop(), exc_type);
 
     Value *is_none = this->builder_.CreateICmpEQ(
@@ -1800,7 +1806,7 @@ LlvmFunctionBuilder::FOR_ITER(llvm::BasicBlock *target,
 
     this->builder_.SetInsertPoint(exception);
     Value *exc_stopiteration = this->builder_.CreateLoad(
-        this->GetGlobalVariable<PyObject*>("PyExc_StopIteration"));
+        this->GET_GLOBAL_VARIABLE(PyObject*, PyExc_StopIteration));
     Value *was_stopiteration = this->CreateCall(
         this->GetGlobalFunction<int(PyObject *)>("PyErr_ExceptionMatches"),
         exc_stopiteration);
@@ -1948,15 +1954,14 @@ LlvmFunctionBuilder::END_FINALLY()
     // but for sanity we also double-check that the None is present.
     Value *is_none = this->builder_.CreateICmpEQ(
         finally_discriminator,
-        this->GetGlobalVariable<PyObject>("_Py_NoneStruct"));
+        this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct));
     this->DecRef(finally_discriminator);
     this->builder_.CreateCondBr(is_none, finally_fallthrough, not_none);
 
     this->builder_.SetInsertPoint(not_none);
     // If we didn't get a None, raise a SystemError.
     Value *system_error = this->builder_.CreateLoad(
-        this->GetGlobalVariable<PyObject *>(
-            "PyExc_SystemError"));
+        this->GET_GLOBAL_VARIABLE(PyObject *, PyExc_SystemError));
     Value *err_msg =
         this->llvm_data_->GetGlobalStringPtr("'finally' pops bad exception");
     this->CreateCall(
@@ -2246,7 +2251,7 @@ LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
     Value *lhs = this->Pop();
     Function *op = this->GetGlobalFunction<PyObject*(PyObject*, PyObject*,
         PyObject *)>(apifunc);
-    Value *pynone = this->GetGlobalVariable<PyObject>("_Py_NoneStruct");
+    Value *pynone = this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct);
     Value *result = this->CreateCall(op, lhs, rhs, pynone,
                                                "powop_result");
     this->DecRef(lhs);
@@ -2299,8 +2304,8 @@ LlvmFunctionBuilder::UNARY_NOT()
     Value *value = this->Pop();
     Value *retval = this->builder_.CreateSelect(
         this->IsPythonTrue(value),
-        this->GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
-        this->GetGlobalVariable<PyObject>("_Py_TrueStruct"),
+        this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct),
+        this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct),
         "UNARY_NOT_result");
     this->IncRef(retval);
     this->Push(retval);
@@ -2474,8 +2479,8 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
     }
     Value *value = this->builder_.CreateSelect(
         result,
-        this->GetGlobalVariable<PyObject>("_Py_TrueStruct"),
-        this->GetGlobalVariable<PyObject>("_Py_ZeroStruct"),
+        this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct),
+        this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct),
         "COMPARE_OP_result");
     this->IncRef(value);
     this->Push(value);
@@ -2505,7 +2510,7 @@ LlvmFunctionBuilder::STORE_MAP()
     Value *dict_type = this->builder_.CreateLoad(
         ObjectTy::ob_type(this->builder_, dict));
     Value *is_exact_dict = this->builder_.CreateICmpEQ(
-        dict_type, GetGlobalVariable<PyTypeObject>("PyDict_Type"));
+        dict_type, this->GET_GLOBAL_VARIABLE(PyTypeObject, PyDict_Type));
     this->Assert(is_exact_dict,
                  "dict argument to STORE_MAP is not exactly a PyDict");
     Function *setitem = this->GetGlobalFunction<
@@ -2976,10 +2981,26 @@ LlvmFunctionBuilder::GetGlobalFunction(const std::string &name)
 }
 
 template<typename VariableType> Constant *
-LlvmFunctionBuilder::GetGlobalVariable(const std::string &name)
+LlvmFunctionBuilder::GetGlobalVariable(void *var_address,
+                                       const std::string &name)
 {
-    return this->module_->getOrInsertGlobal(
-        name, PyTypeBuilder<VariableType>::get(this->context_));
+    const Type *expected_type =
+        PyTypeBuilder<VariableType>::get(this->context_);
+    if (GlobalVariable *global = this->module_->getNamedGlobal(name)) {
+        assert (expected_type == global->getType()->getElementType());
+        return global;
+    }
+    if (llvm::GlobalValue *global =
+        const_cast<llvm::GlobalValue*>(this->llvm_data_->getExecutionEngine()->
+                                       getGlobalValueAtAddress(var_address))) {
+        assert (expected_type == global->getType()->getElementType());
+        if (!global->hasName())
+            global->setName(name);
+        return global;
+    }
+    return new GlobalVariable(
+        *this->module_, expected_type, /*isConstant=*/false,
+        llvm::GlobalValue::ExternalLinkage, NULL, name);
 }
 
 Constant *
@@ -3185,8 +3206,8 @@ LlvmFunctionBuilder::IsPythonTrue(Value *value)
 
     Value *result_addr = this->CreateAllocaInEntryBlock(
         Type::getInt1Ty(this->context_), NULL, "IsPythonTrue_result");
-    Value *py_false = this->GetGlobalVariable<PyObject>("_Py_ZeroStruct");
-    Value *py_true = this->GetGlobalVariable<PyObject>("_Py_TrueStruct");
+    Value *py_false = this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct);
+    Value *py_true = this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct);
 
     Value *is_PyTrue = this->builder_.CreateICmpEQ(
         py_true, value, "IsPythonTrue_is_PyTrue");

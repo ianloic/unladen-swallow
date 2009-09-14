@@ -271,10 +271,13 @@ private:
     /// Prints failure_message (with puts) and aborts.
     void Abort(const std::string &failure_message);
 
-    // Returns the global variable with type T and name 'name'. The
-    // variable will be looked up in Python's C runtime.
+    // Returns the global variable with type T, address 'var_address',
+    // and name 'name'.  If the ExecutionEngine already knows of a
+    // variable with the given address, we name and return it.
+    // Otherwise the variable will be looked up in Python's C runtime.
     template<typename T>
-    llvm::Constant *GetGlobalVariable(const std::string &name);
+    llvm::Constant *GetGlobalVariable(
+        void *var_address, const std::string &name);
     // Returns the global function with type T and name 'name'. The
     // function will be looked up in Python's C runtime.
     template<typename T>

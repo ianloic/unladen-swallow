@@ -51,14 +51,18 @@ namespace llvm {
 // has the extra benefit that it's more resilient to changes in the
 // set or order of fields in a type.
 #define DEFINE_FIELD(TYPE, FIELD_NAME) \
+    static unsigned FIELD_NAME##_index(LLVMContext &context) { \
+        static const unsigned int index = \
+            _PyTypeBuilder_GetFieldIndexFromOffset( \
+                PyTypeBuilder<TYPE>::get(context), \
+                offsetof(TYPE, FIELD_NAME)); \
+        return index; \
+    } \
     static Value *FIELD_NAME(IRBuilder<> &builder, Value *ptr) { \
         assert(ptr->getType() == PyTypeBuilder<TYPE*>::get(ptr->getContext()) \
                && "*ptr must be of type " #TYPE); \
-        static const unsigned int index = \
-            _PyTypeBuilder_GetFieldIndexFromOffset( \
-                PyTypeBuilder<TYPE>::get(ptr->getContext()), \
-                offsetof(TYPE, FIELD_NAME)); \
-        return builder.CreateStructGEP(ptr, index, #FIELD_NAME); \
+        return builder.CreateStructGEP( \
+            ptr, FIELD_NAME##_index(ptr->getContext()), #FIELD_NAME); \
     }
 
 #ifdef Py_TRACE_REFS
@@ -76,11 +80,10 @@ namespace llvm {
 template<> class TypeBuilder<PyObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyObject struct.
-                                 "struct._object"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyObject struct.
+                "struct._object"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyObject)
@@ -89,11 +92,10 @@ public:
 template<> class TypeBuilder<PyStringObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyStringObject struct.
-                                 "struct.PyStringObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyStringObject struct.
+                "struct.PyStringObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyStringObject)
@@ -106,11 +108,10 @@ public:
 template<> class TypeBuilder<PyUnicodeObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyUnicodeObject struct.
-                                 "struct.PyUnicodeObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyUnicodeObject struct.
+                "struct.PyUnicodeObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyUnicodeObject)
@@ -123,11 +124,10 @@ public:
 template<> class TypeBuilder<PyIntObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyIntObject struct.
-                                 "struct.PyIntObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyIntObject struct.
+                "struct.PyIntObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyIntObject)
@@ -137,11 +137,10 @@ public:
 template<> class TypeBuilder<PyLongObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyLongObject struct.
-                                 "struct._longobject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyLongObject struct.
+                "struct._longobject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyLongObject)
@@ -151,11 +150,10 @@ public:
 template<> class TypeBuilder<PyFloatObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyFloatObject struct.
-                                 "struct.PyFloatObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyFloatObject struct.
+                "struct.PyFloatObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyFloatObject)
@@ -165,11 +163,10 @@ public:
 template<> class TypeBuilder<PyComplexObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyFloatObject struct.
-                                 "struct.PyComplexObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyFloatObject struct.
+                "struct.PyComplexObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyComplexObject)
@@ -179,11 +176,10 @@ public:
 template<> class TypeBuilder<PyTupleObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTupleObject struct.
-                                 "struct.PyTupleObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTupleObject struct.
+                "struct.PyTupleObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyTupleObject)
@@ -194,40 +190,25 @@ public:
 template<> class TypeBuilder<PyListObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result = Create(context);
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyListObject struct.
+                "struct.PyListObject"));
     }
 
+    DEFINE_OBJECT_HEAD_FIELDS(PyListObject)
     DEFINE_FIELD(PyListObject, ob_size)
     DEFINE_FIELD(PyListObject, ob_item)
     DEFINE_FIELD(PyListObject, allocated)
-
-private:
-    static const StructType *Create(llvm::LLVMContext &context) {
-        // Keep this in sync with listobject.h.
-        return StructType::get(
-            context,
-            // From PyObject_HEAD. In C these are directly nested
-            // fields, but the layout should be the same when it's
-            // represented as a nested struct.
-            PyTypeBuilder<PyObject>::get(context),
-            // From PyObject_VAR_HEAD
-            PyTypeBuilder<ssize_t>::get(context),
-            // From PyListObject
-            PyTypeBuilder<PyObject**>::get(context),  // ob_item
-            PyTypeBuilder<Py_ssize_t>::get(context),  // allocated
-            NULL);
-    }
 };
 
 template<> class TypeBuilder<PyTypeObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTypeObject struct.
-                                 "struct._typeobject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTypeObject struct.
+                "struct._typeobject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyTypeObject)
@@ -290,37 +271,81 @@ public:
 template<> class TypeBuilder<PyNumberMethods, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTypeObject struct.
-                                 "struct.PyNumberMethods"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTypeObject struct.
+                "struct.PyNumberMethods"));
     }
 
-    // No fields yet because we haven't needed them.
+    DEFINE_FIELD(PyNumberMethods, nb_add)
+    DEFINE_FIELD(PyNumberMethods, nb_subtract)
+    DEFINE_FIELD(PyNumberMethods, nb_multiply)
+    DEFINE_FIELD(PyNumberMethods, nb_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_remainder)
+    DEFINE_FIELD(PyNumberMethods, nb_divmod)
+    DEFINE_FIELD(PyNumberMethods, nb_power)
+    DEFINE_FIELD(PyNumberMethods, nb_negative)
+    DEFINE_FIELD(PyNumberMethods, nb_positive)
+    DEFINE_FIELD(PyNumberMethods, nb_absolute)
+    DEFINE_FIELD(PyNumberMethods, nb_nonzero)
+    DEFINE_FIELD(PyNumberMethods, nb_invert)
+    DEFINE_FIELD(PyNumberMethods, nb_lshift)
+    DEFINE_FIELD(PyNumberMethods, nb_rshift)
+    DEFINE_FIELD(PyNumberMethods, nb_and)
+    DEFINE_FIELD(PyNumberMethods, nb_xor)
+    DEFINE_FIELD(PyNumberMethods, nb_or)
+    DEFINE_FIELD(PyNumberMethods, nb_coerce)
+    DEFINE_FIELD(PyNumberMethods, nb_int)
+    DEFINE_FIELD(PyNumberMethods, nb_long)
+    DEFINE_FIELD(PyNumberMethods, nb_float)
+    DEFINE_FIELD(PyNumberMethods, nb_oct)
+    DEFINE_FIELD(PyNumberMethods, nb_hex)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_add)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_subtract)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_multiply)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_remainder)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_power)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_lshift)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_rshift)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_and)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_xor)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_or)
+    DEFINE_FIELD(PyNumberMethods, nb_floor_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_true_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_floor_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_inplace_true_divide)
+    DEFINE_FIELD(PyNumberMethods, nb_index)
 };
 
 template<> class TypeBuilder<PySequenceMethods, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTypeObject struct.
-                                 "struct.PySequenceMethods"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTypeObject struct.
+                "struct.PySequenceMethods"));
     }
 
-    // No fields yet because we haven't needed them.
+    DEFINE_FIELD(PySequenceMethods, sq_length)
+    DEFINE_FIELD(PySequenceMethods, sq_concat)
+    DEFINE_FIELD(PySequenceMethods, sq_repeat)
+    DEFINE_FIELD(PySequenceMethods, sq_item)
+    DEFINE_FIELD(PySequenceMethods, sq_slice)
+    DEFINE_FIELD(PySequenceMethods, sq_ass_item)
+    DEFINE_FIELD(PySequenceMethods, sq_ass_slice)
+    DEFINE_FIELD(PySequenceMethods, sq_contains)
+    DEFINE_FIELD(PySequenceMethods, sq_inplace_concat)
+    DEFINE_FIELD(PySequenceMethods, sq_inplace_repeat)
 };
 
 template<> class TypeBuilder<PyMappingMethods, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTypeObject struct.
-                                 "struct.PyMappingMethods"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTypeObject struct.
+                "struct.PyMappingMethods"));
     }
 
     // No fields yet because we haven't needed them.
@@ -329,11 +354,10 @@ public:
 template<> class TypeBuilder<PyBufferProcs, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTypeObject struct.
-                                 "struct.PyBufferProcs"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTypeObject struct.
+                "struct.PyBufferProcs"));
     }
 
     // No fields yet because we haven't needed them.
@@ -342,11 +366,10 @@ public:
 template<> class TypeBuilder<PyCodeObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyCodeObject struct.
-                                 "struct.PyCodeObject"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyCodeObject struct.
+                "struct.PyCodeObject"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyCodeObject)
@@ -378,11 +401,10 @@ public:
 template<> class TypeBuilder<PyTryBlock, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyTryBlock struct.
-                                 "struct.PyTryBlock"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyTryBlock struct.
+                "struct.PyTryBlock"));
     }
     DEFINE_FIELD(PyTryBlock, b_type)
     DEFINE_FIELD(PyTryBlock, b_handler)
@@ -392,11 +414,10 @@ public:
 template<> class TypeBuilder<PyFrameObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyFrameObject struct.
-                                 "struct._frame"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyFrameObject struct.
+                "struct._frame"));
     }
 
     DEFINE_OBJECT_HEAD_FIELDS(PyFrameObject)
@@ -426,12 +447,11 @@ public:
 template<> class TypeBuilder<PyExcInfo, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyExcInfo struct
-                                 // defined in llvm_inline_functions.c.
-                                 "struct.PyExcInfo"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyExcInfo struct
+                // defined in llvm_inline_functions.c.
+                "struct.PyExcInfo"));
     }
 
     // We use an enum here because PyExcInfo isn't defined in a header.
@@ -445,11 +465,10 @@ public:
 template<> class TypeBuilder<PyThreadState, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
-        static const StructType *const result =
-            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
-                                 // Clang's name for the PyThreadState struct.
-                                 "struct._ts"));
-        return result;
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyThreadState struct.
+                "struct._ts"));
     }
 
     DEFINE_FIELD(PyThreadState, next)

@@ -167,7 +167,9 @@ _PyLlvm_Frame_BlockPop(PyTryBlock *blocks, char *num_blocks)
 /* Define a global using PyTupleObject so we can look it up from
    TypeBuilder<PyTupleObject>. */
 PyTupleObject *_dummy_TupleObject;
-/* Ditto for PyStringObject, */
+/* Ditto for PyListObject, */
+PyListObject *_dummy_ListObject;
+/* PyStringObject, */
 PyStringObject *_dummy_StringObject;
 /* PyUnicodeObject, */
 PyUnicodeObject *_dummy_UnicodeObject;
