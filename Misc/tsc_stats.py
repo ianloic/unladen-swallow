@@ -187,7 +187,7 @@ class TimeAnalyzer(object):
             time = int(time)
             for stat in self.statistics:
                 if stat.try_match(thread, event, time):
-                    if not stat.started:
+                    if not stat.started and stat.aggregate_deltas:
                         delta = stat.aggregate_deltas[-1]
                         if (stat is self.eval_compile_stats and
                             self.call_stats.started):
