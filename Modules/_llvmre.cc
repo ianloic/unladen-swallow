@@ -17,6 +17,8 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Attributes.h"
+#include "llvm/LLVMContext.h"
+
 
 // for SRE_FLAG_*
 #include "sre_constants.h"
@@ -45,22 +47,19 @@ using llvm::ICmpInst;
 
 using llvm::ExecutionEngine;
 
+using llvm::LLVMContext;
+using llvm::getGlobalContext;
+
 // helper to produce better error messages
 #define _PyErr_SetString(T,S) \
   PyErr_Format(T, S " (in %s at %s:%d)",__PRETTY_FUNCTION__ , __FILE__, __LINE__)
 
-// FIXME: assert sizeof(unicode) == 2
-#define CHAR_TYPE IntegerType::get(16)
-#define CHAR_POINTER_TYPE PointerType::get(CHAR_TYPE, 0)
-#define BOOL_TYPE IntegerType::get(1)
-#define OFFSET_TYPE IntegerType::get(32)
-#define OFFSET_POINTER_TYPE PointerType::get(OFFSET_TYPE, 0)
 
 typedef int32_t ReOffset;
 typedef ReOffset (*MatchFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*);
 typedef ReOffset (*FindFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*, ReOffset*);
 
-class CompiledRegEx;
+class CompiledExpression;
 
 // Wrapper functions for character class tests. To make things simpler these
 // all accept a Py_UNICODE character and return bool
@@ -96,9 +95,9 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
 #define ENSURE_TEST_FUNCTION(name) \
   if (regex.name == NULL) { \
     std::vector<const Type*> func_args; \
-    func_args.push_back(CHAR_TYPE); \
+    func_args.push_back(regex.charType); \
     const FunctionType* func_type = \
-      FunctionType::get(BOOL_TYPE, func_args, false); \
+      FunctionType::get(regex.boolType, func_args, false); \
     regex.name = Function::Create(func_type, \
         Function::ExternalLinkage, "wrap_" #name, regex.module); \
     PyGlobalLlvmData *global_llvm_data = \
@@ -110,11 +109,14 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
 
 typedef struct {
   PyObject_HEAD
-  /* Type-specific fields go here. */
+
+  // Unladed Swallow global LLVM data
+  PyGlobalLlvmData* global_data;
+  // LLVM module
   Module* module;
 
-  /* the compiled regular expression */
-  CompiledRegEx* compiled;
+  /* the root compiled regular expression */
+  CompiledExpression* compiled;
 
   /* a function to find the first instance of that compiled regular 
    * expression */
@@ -126,6 +128,13 @@ typedef struct {
   // useful value to reuse
   Value* not_found;
 
+  // types
+  const IntegerType* charType;
+  const IntegerType* boolType;
+  const IntegerType* offsetType;
+  const PointerType* charPointerType;
+  const PointerType* offsetPointerType;
+
   // external functions that get lazily created
   Function* Py_UNICODE_ISDIGIT;
   Function* isalnum;
@@ -135,10 +144,10 @@ typedef struct {
 } RegEx;
 
 
-class CompiledRegEx {
+class CompiledExpression {
   public:
-    CompiledRegEx(RegEx& regex, bool first=false);
-    ~CompiledRegEx();
+    CompiledExpression(RegEx& regex, bool first=false);
+    ~CompiledExpression();
 
     // compile the result of sre_parse.parse
     bool Compile(PyObject* seq, Py_ssize_t index);
@@ -198,18 +207,26 @@ class CompiledRegEx {
     void testRange(BasicBlock* block, Value* c, int from, int to, BasicBlock* member, BasicBlock* nonmember);
     bool testCategory(BasicBlock* block, Value* c, const char* category, BasicBlock* member, BasicBlock* nonmember);
 
+    BasicBlock* createBlock(const char* name="block", Function* func=NULL) {
+      return BasicBlock::Create(context(), name, func?func:function);
+    }
+
     // call unladen-swallow's optimizer
     bool optimize(Function* f);
+
+    LLVMContext& context() {
+      return regex.global_data->context();
+    }
 };
 
-CompiledRegEx::CompiledRegEx(RegEx& regex, bool first) 
+CompiledExpression::CompiledExpression(RegEx& regex, bool first) 
   : regex(regex), first(first) {
 }
 
-CompiledRegEx::~CompiledRegEx() {
+CompiledExpression::~CompiledExpression() {
 }
 
-bool CompiledRegEx::optimize(Function* f) {
+bool CompiledExpression::optimize(Function* f) {
   if (regex.flags & 128) {
     // don't optimize if DEBUG is set
     return true;
@@ -229,25 +246,25 @@ bool CompiledRegEx::optimize(Function* f) {
 }
 
 Value* 
-CompiledRegEx::loadOffset(BasicBlock* block) {
+CompiledExpression::loadOffset(BasicBlock* block) {
   return new LoadInst(offset_ptr, "offset", block);
 }
 
 void
-CompiledRegEx::storeOffset(BasicBlock* block, Value* value) {
+CompiledExpression::storeOffset(BasicBlock* block, Value* value) {
   new StoreInst(value, offset_ptr, block);
 }
 
 BasicBlock* 
-CompiledRegEx::loadCharacter(BasicBlock* block) {
+CompiledExpression::loadCharacter(BasicBlock* block) {
   // get the current offset
   Value* offset = loadOffset(block);
   // make sure it's not past the end of the string
-  Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset, 
-      "ended", block);
+  Value* ended = new ICmpInst(*block, ICmpInst::ICMP_UGE, offset, end_offset, 
+      "ended");
   // if it's ended, return not_found, otherwise, continue
   // I'm scared this will fuck things up
-  BasicBlock* new_block = BasicBlock::Create("block", function);
+  BasicBlock* new_block = createBlock();
   BranchInst::Create(return_not_found, new_block, ended, block);
 
   block = new_block;
@@ -257,23 +274,23 @@ CompiledRegEx::loadCharacter(BasicBlock* block) {
   character = new LoadInst(c_ptr, "c", block);
   // increment the offset
   offset = BinaryOperator::CreateAdd(offset,
-      ConstantInt::get(OFFSET_TYPE, 1), "increment", block);
+      ConstantInt::get(regex.offsetType, 1), "increment", block);
   storeOffset(block, offset);
   return block;
 }
 
 Function*
-CompiledRegEx::greedy(Function* repeat, Function* after) 
+CompiledExpression::greedy(Function* repeat, Function* after) 
 {
   // create the function
   std::vector<const Type*> args_type;
-  args_type.push_back(CHAR_POINTER_TYPE); // string
-  args_type.push_back(OFFSET_TYPE); // offset
-  args_type.push_back(OFFSET_TYPE); // end_offset
-  args_type.push_back(OFFSET_POINTER_TYPE); // groups
-  args_type.push_back(OFFSET_TYPE); // counter
+  args_type.push_back(regex.charPointerType); // string
+  args_type.push_back(regex.offsetType); // offset
+  args_type.push_back(regex.offsetType); // end_offset
+  args_type.push_back(regex.offsetPointerType); // groups
+  args_type.push_back(regex.offsetType); // counter
 
-  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+  FunctionType *func_type = FunctionType::get(regex.offsetType, args_type, false);
 
   // FIXME: choose better function flags
   Function* function = Function::Create(func_type, Function::ExternalLinkage,
@@ -292,16 +309,15 @@ CompiledRegEx::greedy(Function* repeat, Function* after)
   countdown->setName("countdown");
 
   // create BasicBlocks
-  BasicBlock* call_repeat = BasicBlock::Create("call_repeat", function);
-  BasicBlock* count = BasicBlock::Create("count", function);
-  BasicBlock* recurse = BasicBlock::Create("recurse", function);
-  BasicBlock* call_after = BasicBlock::Create("call_after", function);
-  BasicBlock* return_offset = BasicBlock::Create("return_offset", function);
+  BasicBlock* call_repeat = createBlock("call_repeat", function);
+  BasicBlock* count = createBlock("count", function);
+  BasicBlock* recurse = createBlock("recurse", function);
+  BasicBlock* call_after = createBlock("call_after", function);
+  BasicBlock* return_offset = createBlock("return_offset", function);
 
   // set up BasicBlock to return not_found
-  BasicBlock* return_not_found = 
-    BasicBlock::Create("return_not_found", function);
-  ReturnInst::Create(regex.not_found, return_not_found);
+  BasicBlock* return_not_found = createBlock("return_not_found", function);
+  ReturnInst::Create(context(), regex.not_found, return_not_found);
 
   // call repeat
   std::vector<Value*> call_args;
@@ -311,16 +327,16 @@ CompiledRegEx::greedy(Function* repeat, Function* after)
   call_args.push_back(groups);
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
-  Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-      repeat_result, regex.not_found, "repeat_result_not_found", call_repeat);
+  Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
+      repeat_result, regex.not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(OFFSET_TYPE, 1), "remaining", count);
-  Value* stop_recursion = new ICmpInst(ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(OFFSET_TYPE, 0), "stop_recursion", count);
+      ConstantInt::get(regex.offsetType, 1), "remaining", count);
+  Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
+      ConstantInt::get(regex.offsetType, 0), "stop_recursion");
   BranchInst::Create(call_after, recurse, stop_recursion, count);
 
   // recurse
@@ -328,8 +344,8 @@ CompiledRegEx::greedy(Function* repeat, Function* after)
   call_args.push_back(remaining);
   Value* recurse_result = CallInst::Create(function, call_args.begin(),
       call_args.end(), "recurse_result", recurse);
-  Value* recurse_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-      recurse_result, regex.not_found, "recurse_result_not_found", recurse);
+  Value* recurse_result_not_found = new ICmpInst(*recurse, ICmpInst::ICMP_EQ,
+      recurse_result, regex.not_found, "recurse_result_not_found");
   BranchInst::Create(call_after, return_offset, recurse_result_not_found, 
       recurse);
 
@@ -337,10 +353,10 @@ CompiledRegEx::greedy(Function* repeat, Function* after)
   call_args.resize(4);
   Value* after_result = CallInst::Create(after, call_args.begin(), 
       call_args.end(), "after_result", call_after);
-  ReturnInst::Create(after_result, call_after);
+  ReturnInst::Create(context(), after_result, call_after);
 
   // return_offset
-  ReturnInst::Create(recurse_result, return_offset);
+  ReturnInst::Create(context(), recurse_result, return_offset);
 
   optimize(function);
 
@@ -348,17 +364,17 @@ CompiledRegEx::greedy(Function* repeat, Function* after)
 }
 
 Function*
-CompiledRegEx::nongreedy(Function* repeat, Function* after) 
+CompiledExpression::nongreedy(Function* repeat, Function* after) 
 {
   // create the function
   std::vector<const Type*> args_type;
-  args_type.push_back(CHAR_POINTER_TYPE); // string
-  args_type.push_back(OFFSET_TYPE); // offset
-  args_type.push_back(OFFSET_TYPE); // end_offset
-  args_type.push_back(OFFSET_POINTER_TYPE); // groups
-  args_type.push_back(OFFSET_TYPE); // counter
+  args_type.push_back(regex.charPointerType); // string
+  args_type.push_back(regex.offsetType); // offset
+  args_type.push_back(regex.offsetType); // end_offset
+  args_type.push_back(regex.offsetPointerType); // groups
+  args_type.push_back(regex.offsetType); // counter
 
-  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+  FunctionType *func_type = FunctionType::get(regex.offsetType, args_type, false);
 
   // FIXME: choose better function flags
   Function* function = Function::Create(func_type, Function::ExternalLinkage,
@@ -377,16 +393,15 @@ CompiledRegEx::nongreedy(Function* repeat, Function* after)
   countdown->setName("countdown");
 
   // create BasicBlocks
-  BasicBlock* call_after = BasicBlock::Create("call_after", function);
-  BasicBlock* call_repeat = BasicBlock::Create("call_repeat", function);
-  BasicBlock* count = BasicBlock::Create("count", function);
-  BasicBlock* recurse = BasicBlock::Create("recurse", function);
-  BasicBlock* return_after_result = BasicBlock::Create("return_after_result", function);
+  BasicBlock* call_after = createBlock("call_after", function);
+  BasicBlock* call_repeat = createBlock("call_repeat", function);
+  BasicBlock* count = createBlock("count", function);
+  BasicBlock* recurse = createBlock("recurse", function);
+  BasicBlock* return_after_result = createBlock("return_after_result", function);
 
   // set up BasicBlock to return not_found
-  BasicBlock* return_not_found = 
-    BasicBlock::Create("return_not_found", function);
-  ReturnInst::Create(regex.not_found, return_not_found);
+  BasicBlock* return_not_found = createBlock("return_not_found", function);
+  ReturnInst::Create(context(), regex.not_found, return_not_found);
 
   // call after
   std::vector<Value*> call_args;
@@ -396,24 +411,24 @@ CompiledRegEx::nongreedy(Function* repeat, Function* after)
   call_args.push_back(groups);
   Value* after_result = CallInst::Create(after, call_args.begin(),
       call_args.end(), "after_result", call_after);
-  Value* after_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-      after_result, regex.not_found, "after_result_not_found", call_after);
+  Value* after_result_not_found = new ICmpInst(*call_after, ICmpInst::ICMP_EQ,
+      after_result, regex.not_found, "after_result_not_found");
   BranchInst::Create(call_repeat, return_after_result, after_result_not_found,
       call_after);
 
   // call repeat
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
-  Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-      repeat_result, regex.not_found, "repeat_result_not_found", call_repeat);
+  Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
+      repeat_result, regex.not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(OFFSET_TYPE, 1), "remaining", count);
-  Value* stop_recursion = new ICmpInst(ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(OFFSET_TYPE, 0), "stop_recursion", count);
+      ConstantInt::get(regex.offsetType, 1), "remaining", count);
+  Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
+      ConstantInt::get(regex.offsetType, 0), "stop_recursion");
   BranchInst::Create(return_not_found, recurse, stop_recursion, count);
 
   // recurse
@@ -421,10 +436,10 @@ CompiledRegEx::nongreedy(Function* repeat, Function* after)
   call_args.push_back(remaining);
   Value* recurse_result = CallInst::Create(function, call_args.begin(),
       call_args.end(), "recurse_result", recurse);
-  ReturnInst::Create(recurse_result, recurse);
+  ReturnInst::Create(context(), recurse_result, recurse);
 
   // return_after_result
-  ReturnInst::Create(after_result, return_after_result);
+  ReturnInst::Create(context(), after_result, return_after_result);
 
   optimize(function);
 
@@ -432,7 +447,7 @@ CompiledRegEx::nongreedy(Function* repeat, Function* after)
 }
 
 void
-CompiledRegEx::testRange(BasicBlock* block,
+CompiledExpression::testRange(BasicBlock* block,
                          Value*      c,
                          int         from,
                          int         to,
@@ -443,19 +458,19 @@ CompiledRegEx::testRange(BasicBlock* block,
    * @from to @to inclusive. If so jump to @member, else jump to @nonmember */
 
   // create a couple of new basic blocks for the range test
-  BasicBlock* greater_equal = BasicBlock::Create("greater_equal", function);
+  BasicBlock* greater_equal = createBlock("greater_equal");
   // test the character >= from
-  Value* is_ge = new llvm::ICmpInst(llvm::ICmpInst::ICMP_UGE, c,
-      ConstantInt::get(CHAR_TYPE, from), "is_ge", block);
+  Value* is_ge = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_UGE, c,
+      ConstantInt::get(regex.charType, from), "is_ge");
   BranchInst::Create(greater_equal, nonmember, is_ge, block);
   // test the character <= to
-  Value* is_le = new llvm::ICmpInst(llvm::ICmpInst::ICMP_ULE, c,
-      ConstantInt::get(CHAR_TYPE, to), "is_le", greater_equal);
+  Value* is_le = new llvm::ICmpInst(*greater_equal, llvm::ICmpInst::ICMP_ULE, 
+      c, ConstantInt::get(regex.charType, to), "is_le");
   BranchInst::Create(member, nonmember, is_le, greater_equal);
 }
 
 bool
-CompiledRegEx::testCategory(BasicBlock* block,
+CompiledExpression::testCategory(BasicBlock* block,
                             Value* c,
                             const char* category, 
                             BasicBlock* member, 
@@ -487,11 +502,11 @@ CompiledRegEx::testCategory(BasicBlock* block,
   } else if (!strcmp(category, "category_word")) {
     if (regex.flags & SRE_FLAG_LOCALE) {
       // match [0-9_] and whatever system isalnum matches
-      BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
-      BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
+      BasicBlock* tmp1 = createBlock("category_word_1");
+      BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp1);
+      Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
+        ConstantInt::get(regex.charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // make sure isalnum is available to the JIT
       ENSURE_TEST_FUNCTION(isalnum);
@@ -504,11 +519,11 @@ CompiledRegEx::testCategory(BasicBlock* block,
       BranchInst::Create(member, nonmember, result, tmp2);
     } else if (regex.flags & SRE_FLAG_UNICODE) {
       // match [0-9_] and whatever Py_UNICODE_ISALNUM matches
-      BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
-      BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
+      BasicBlock* tmp1 = createBlock("category_word_1");
+      BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp1);
+      Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
+        ConstantInt::get(regex.charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // make sure Py_UNICODE_ISALNUM is available to the JIT
       ENSURE_TEST_FUNCTION(Py_UNICODE_ISALNUM);
@@ -521,29 +536,29 @@ CompiledRegEx::testCategory(BasicBlock* block,
       BranchInst::Create(member, nonmember, result, tmp2);
     } else {
       // match [a-zA-Z0-9_]
-      BasicBlock* tmp1 = BasicBlock::Create("category_word_1", function);
-      BasicBlock* tmp2 = BasicBlock::Create("category_word_2", function);
-      BasicBlock* tmp3 = BasicBlock::Create("category_word_3", function);
+      BasicBlock* tmp1 = createBlock("category_word_1");
+      BasicBlock* tmp2 = createBlock("category_word_2");
+      BasicBlock* tmp3 = createBlock("category_word_3");
       testRange(block, c, 'a', 'z', member, tmp1);
       testRange(tmp1, c, 'A', 'Z', member, tmp2);
       testRange(tmp2, c, '0', '9', member, tmp3);
-      Value* is_underscore = new ICmpInst(ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(CHAR_TYPE, '_'), "is_underscore", tmp3);
+      Value* is_underscore = new ICmpInst(*tmp3, ICmpInst::ICMP_EQ, c,
+        ConstantInt::get(regex.charType, '_'), "is_underscore");
       BranchInst::Create(member, nonmember, is_underscore, tmp3);
     }
   } else if (!strcmp(category, "category_not_word")) {
     testCategory(block, c, "category_word", nonmember, member);
   } else if (!strcmp(category, "category_space")) {
     // match [ \t\n\r\f\v]
-    BasicBlock* unmatched = BasicBlock::Create("", function);
+    BasicBlock* unmatched = createBlock();
     // create a switch instruction
     SwitchInst* switch_ = SwitchInst::Create(c, unmatched, 6, block);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, ' '), member);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, '\t'), member);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, '\n'), member);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, '\r'), member);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, '\f'), member);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, '\v'), member);
+    switch_->addCase(ConstantInt::get(regex.charType, ' '), member);
+    switch_->addCase(ConstantInt::get(regex.charType, '\t'), member);
+    switch_->addCase(ConstantInt::get(regex.charType, '\n'), member);
+    switch_->addCase(ConstantInt::get(regex.charType, '\r'), member);
+    switch_->addCase(ConstantInt::get(regex.charType, '\f'), member);
+    switch_->addCase(ConstantInt::get(regex.charType, '\v'), member);
     if (regex.flags & SRE_FLAG_LOCALE) {
       // also match isspace
       // make sure isspace is available to the JIT
@@ -580,7 +595,7 @@ CompiledRegEx::testCategory(BasicBlock* block,
 }
 
 bool 
-CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
+CompiledExpression::Compile(PyObject* seq, Py_ssize_t index)
 {
   // make sure we got a sequence
   if (!PySequence_Check(seq)) {
@@ -589,11 +604,11 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
   }
 
   std::vector<const Type*> args_type;
-  args_type.push_back(CHAR_POINTER_TYPE); // string
-  args_type.push_back(OFFSET_TYPE); // offset
-  args_type.push_back(OFFSET_TYPE); // end_offset
-  args_type.push_back(OFFSET_POINTER_TYPE); // groups
-  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+  args_type.push_back(regex.charPointerType); // string
+  args_type.push_back(regex.offsetType); // offset
+  args_type.push_back(regex.offsetType); // end_offset
+  args_type.push_back(regex.offsetPointerType); // groups
+  FunctionType *func_type = FunctionType::get(regex.offsetType, args_type, false);
 
   // FIXME: choose better function flags
   function = Function::Create(func_type, Function::ExternalLinkage, 
@@ -611,20 +626,20 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
   groups->setName("groups");
 
   // create the entry BasicBlock
-  entry = BasicBlock::Create("entry", function);
-  offset_ptr = new AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
+  entry = createBlock("entry");
+  offset_ptr = new AllocaInst(regex.offsetType, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
 
   // create a block that returns the offset
-  return_offset = BasicBlock::Create("return_offset", function);
+  return_offset = createBlock("return_offset");
   Value* _offset = new LoadInst(offset_ptr, "offset", return_offset);
-  ReturnInst::Create(_offset, return_offset);
+  ReturnInst::Create(context(), _offset, return_offset);
 
   // create a block that returns "not found"
-  return_not_found = BasicBlock::Create("return_not_found", function);
+  return_not_found = createBlock("return_not_found");
 
   // create a first basic block to be used
-  BasicBlock* first = BasicBlock::Create("first", function);
+  BasicBlock* first = createBlock("first");
 
   last = first;
 
@@ -662,7 +677,7 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
     Py_XDECREF(element);
 
     // create a basic block for the start of this operation
-    BasicBlock* block = BasicBlock::Create(op_str, function);
+    BasicBlock* block = createBlock(op_str);
     // if there was a previous block, jump from that one to this operation's
     // start block
     if (last) {
@@ -753,14 +768,14 @@ CompiledRegEx::Compile(PyObject* seq, Py_ssize_t index)
   BranchInst::Create(first, entry);
 
   // add the return instruction to return_not_found
-  ReturnInst::Create(regex.not_found, return_not_found);
+  ReturnInst::Create(context(), regex.not_found, return_not_found);
 
   return optimize(function);
 
 }
 
 BasicBlock*
-CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
+CompiledExpression::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected an integer");
@@ -774,7 +789,7 @@ CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
   block = loadCharacter(block);
 
   // create a block to continue to on success
-  BasicBlock* post = BasicBlock::Create("post_literal", function);
+  BasicBlock* post = createBlock("post_literal");
 
   Py_UNICODE upper, lower;
 
@@ -784,14 +799,14 @@ CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
     SwitchInst* switch_ = SwitchInst::Create(character,
         not_literal ? post : return_not_found, 2, block);
     // lower and upper cases
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, lower),
+    switch_->addCase(ConstantInt::get(regex.charType, lower),
         not_literal ? return_not_found : post);
-    switch_->addCase(ConstantInt::get(CHAR_TYPE, upper),
+    switch_->addCase(ConstantInt::get(regex.charType, upper),
         not_literal ? return_not_found : post);
   } else {
     // is it equal to the character in the pattern
-    Value* c_equal = new llvm::ICmpInst(llvm::ICmpInst::ICMP_EQ, character,
-        ConstantInt::get(CHAR_TYPE, c), "c_equal", block);
+    Value* c_equal = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
+        character, ConstantInt::get(regex.charType, c), "c_equal");
 
     // depending on the kind of operation either continue or return not_found
     if (not_literal) { /* not_literal */
@@ -807,7 +822,7 @@ CompiledRegEx::literal(BasicBlock* block, PyObject* arg, bool not_literal) {
 }
 
 BasicBlock*
-CompiledRegEx::any(BasicBlock* block) {
+CompiledExpression::any(BasicBlock* block) {
   // get the next character
   block = loadCharacter(block);
 
@@ -816,11 +831,11 @@ CompiledRegEx::any(BasicBlock* block) {
   } else {
     // 'any' matches anything except for '\n'
     // is newline?
-    Value* c_newline = new llvm::ICmpInst(llvm::ICmpInst::ICMP_EQ, character,
-        ConstantInt::get(CHAR_TYPE, '\n'), "c_newline", block);
+    Value* c_newline = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
+        character, ConstantInt::get(regex.charType, '\n'), "c_newline");
 
     // create a block to continue to on success
-    BasicBlock* post = BasicBlock::Create("post_any", function);
+    BasicBlock* post = createBlock("post_any");
     BranchInst::Create(return_not_found, post, c_newline, block);
     block = post;
   }
@@ -829,7 +844,7 @@ CompiledRegEx::any(BasicBlock* block) {
 }
 
 BasicBlock*
-CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
+CompiledExpression::in(BasicBlock* block, PyObject* arg) {
   // the argument should be a sequence
   if (!PySequence_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected a sequence");
@@ -840,10 +855,10 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
   block = loadCharacter(block);
 
   // create a block where more tests can take place (ie: ranges, categories)
-  BasicBlock* more_tests = BasicBlock::Create("more_tests", function);
+  BasicBlock* more_tests = createBlock("more_tests");
 
   // create a block for matches
-  BasicBlock* matched = BasicBlock::Create("matched", function);
+  BasicBlock* matched = createBlock("matched");
 
   // create a switch instruction to use for all the literals
   SwitchInst* switch_ = SwitchInst::Create(character, more_tests, 
@@ -892,7 +907,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       }
 
       // add a switch case
-      switch_->addCase(ConstantInt::get(CHAR_TYPE, PyInt_AsLong(op_arg)),
+      switch_->addCase(ConstantInt::get(regex.charType, PyInt_AsLong(op_arg)),
           negate?return_not_found:matched);
     } else if (!strcmp(op_str, "range")) {
       // parse the start and end of the range
@@ -905,7 +920,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
       // lose the reference to the tuple
       Py_XDECREF(item);
 
-      BasicBlock* yet_more_tests = BasicBlock::Create("more_tests", function);
+      BasicBlock* yet_more_tests = createBlock("more_tests");
       testRange(more_tests, character, from, to, 
           negate ? return_not_found : matched, yet_more_tests);
       more_tests = yet_more_tests;
@@ -916,7 +931,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
         return false;
       }
       const char* category_name = PyString_AsString(op_arg);
-      BasicBlock* yet_more_tests = BasicBlock::Create("more_tests", function);
+      BasicBlock* yet_more_tests = createBlock("more_tests");
       if (!testCategory(more_tests, character, category_name, 
             negate?return_not_found:matched, yet_more_tests)) {
         return false;
@@ -940,7 +955,7 @@ CompiledRegEx::in(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
+CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
   // @arg is a tuple of (None, [branch1, branch2, branch3...])
   if (!PyTuple_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected a tuple");
@@ -961,7 +976,7 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
   }
 
   // the basic block that we'll jump to when we've matched a branch
-  BasicBlock* matched = BasicBlock::Create("matched", function);
+  BasicBlock* matched = createBlock("matched");
 
   // prepare the arguments for the branches
   std::vector<Value*> args;
@@ -972,9 +987,9 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
 
   for (Py_ssize_t i=0; i<num_branches; i++) {
     // the block we'll go to if there's a match
-    BasicBlock* match =  BasicBlock::Create("match", function);
+    BasicBlock* match =  createBlock("match");
     // the next basic block we'll branch from
-    BasicBlock* next = BasicBlock::Create("branch", function);
+    BasicBlock* next = createBlock("branch");
 
     // get the branch sequence
     PyObject* branch = PySequence_GetItem(branches, i);
@@ -984,7 +999,7 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
     }
 
     // compile it to a function
-    CompiledRegEx compiled_branch(regex);
+    CompiledExpression compiled_branch(regex);
     compiled_branch.Compile(branch, 0);
     // done with the branch object
     Py_XDECREF(branch);
@@ -993,8 +1008,8 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
     Value* branch_result = CallInst::Create(compiled_branch.function, 
         args.begin(), args.end(), "branch_result", block);
     // check it
-    Value* branch_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ, 
-        branch_result, regex.not_found, "branch_result_not_found", block);
+    Value* branch_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, 
+        branch_result, regex.not_found, "branch_result_not_found");
     // no match means run the next check, otherwise go to match:
     BranchInst::Create(next, match, branch_result_not_found, block);
 
@@ -1016,7 +1031,7 @@ CompiledRegEx::branch(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::at_end(BasicBlock* block)
+CompiledExpression::at_end(BasicBlock* block)
 {
   // match end of string, or \n before the end of the string
   // if in MULTILINE mode, also match just \n
@@ -1024,25 +1039,25 @@ CompiledRegEx::at_end(BasicBlock* block)
   bool multiline = regex.flags & SRE_FLAG_MULTILINE;
  
   // make the blocks we need
-  BasicBlock* test_slash_n = BasicBlock::Create("test_slash_n", function);
+  BasicBlock* test_slash_n = createBlock("test_slash_n");
   BasicBlock* test_near_end;
   if (!multiline) {
-   test_near_end = BasicBlock::Create("test_near_end", function);
+   test_near_end = createBlock("test_near_end");
   }
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* next_block = createBlock("block");
   Value* offset = loadOffset(block);
 
   // are we at the end?
-  Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset, 
-      "ended", block);
+  Value* ended = new ICmpInst(*block, ICmpInst::ICMP_UGE, offset, end_offset, 
+      "ended");
   BranchInst::Create(next_block, test_slash_n, ended, block);
 
   // is there a \n in the current position?
   Value* c_ptr = GetElementPtrInst::Create(string, offset, "c_ptr", 
       test_slash_n);
   Value* c = new LoadInst(c_ptr, "c", test_slash_n);
-  Value* c_slash_n = new ICmpInst(ICmpInst::ICMP_EQ, c, 
-      ConstantInt::get(CHAR_TYPE, '\n'), "c_slash_n", test_slash_n);
+  Value* c_slash_n = new ICmpInst(*test_slash_n, ICmpInst::ICMP_EQ, c, 
+      ConstantInt::get(regex.charType, '\n'), "c_slash_n");
   // for MULTILINE the \n means a match, for non MULTILINE we need to check
   // that we're almost at the end
   BranchInst::Create(multiline ? next_block : test_near_end, return_not_found,
@@ -1051,9 +1066,9 @@ CompiledRegEx::at_end(BasicBlock* block)
   if (!multiline) {
     // are we near the end?
     Value* offset_plus_one = BinaryOperator::CreateAdd(offset,
-        ConstantInt::get(OFFSET_TYPE, 1), "offset_plus_one", test_near_end);
-    Value* near_end = new ICmpInst(ICmpInst::ICMP_UGE, offset_plus_one, 
-        end_offset, "near_end", test_near_end);
+        ConstantInt::get(regex.offsetType, 1), "offset_plus_one", test_near_end);
+    Value* near_end = new ICmpInst(*test_near_end, ICmpInst::ICMP_UGE, 
+        offset_plus_one, end_offset, "near_end");
     // either go to the next or return not_found
     BranchInst::Create(next_block, return_not_found, near_end, test_near_end);
   }
@@ -1063,7 +1078,7 @@ CompiledRegEx::at_end(BasicBlock* block)
 
 
 BasicBlock*
-CompiledRegEx::at_beginning(BasicBlock* block)
+CompiledExpression::at_beginning(BasicBlock* block)
 {
   // match the start of the string, also in multiline mode match after a
   // \n
@@ -1074,13 +1089,13 @@ CompiledRegEx::at_beginning(BasicBlock* block)
 
   BasicBlock* test_slash_n;
   if (multiline) {
-   test_slash_n = BasicBlock::Create("test_slash_n", function);
+   test_slash_n = createBlock("test_slash_n");
   }
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* next_block = createBlock("block");
 
   // are we at the start of the string?
-  Value* start = new ICmpInst(ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(OFFSET_TYPE, 0), "start", block);
+  Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
+      ConstantInt::get(regex.offsetType, 0), "start");
   // for multiline, we also check for \n before the offset
   BranchInst::Create(next_block, multiline ? test_slash_n : return_not_found,
       start, block);
@@ -1088,16 +1103,16 @@ CompiledRegEx::at_beginning(BasicBlock* block)
   if (multiline) {
     // load the character back one
     Value* previous_offset = BinaryOperator::CreateSub(offset,
-        ConstantInt::get(OFFSET_TYPE, 1), "previous_offset", test_slash_n);
+        ConstantInt::get(regex.offsetType, 1), "previous_offset", test_slash_n);
     Value* previous_c_ptr = GetElementPtrInst::Create(string, 
         previous_offset, "previous_c_ptr", 
       test_slash_n);
     Value* previous_c = new LoadInst(previous_c_ptr, "previous_c", 
         test_slash_n);
     // is it \n?
-    Value* previous_c_slash_n = new ICmpInst(ICmpInst::ICMP_EQ, previous_c, 
-        ConstantInt::get(CHAR_TYPE, '\n'), "previous_c_slash_n", 
-        test_slash_n);
+    Value* previous_c_slash_n = new ICmpInst(*test_slash_n, 
+        ICmpInst::ICMP_EQ, previous_c, ConstantInt::get(regex.charType, '\n'),
+        "previous_c_slash_n");
     BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
         test_slash_n);
   }
@@ -1106,67 +1121,67 @@ CompiledRegEx::at_beginning(BasicBlock* block)
 }
 
 BasicBlock*
-CompiledRegEx::at_beginning_string(BasicBlock* block)
+CompiledExpression::at_beginning_string(BasicBlock* block)
 {
   // match the start of the string
 
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* next_block = createBlock("block");
 
   // are we at the start of the string?
   Value* offset = loadOffset(block);
-  Value* start = new ICmpInst(ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(OFFSET_TYPE, 0), "start", block);
+  Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
+      ConstantInt::get(regex.offsetType, 0), "start");
   BranchInst::Create(next_block, return_not_found, start, block);
 
   return next_block;
 }
 
 BasicBlock*
-CompiledRegEx::at_end_string(BasicBlock* block)
+CompiledExpression::at_end_string(BasicBlock* block)
 {
   // match the end of the string
 
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* next_block = createBlock("block");
 
   // are we at the end of the string?
   Value* offset = loadOffset(block);
-  Value* ended = new ICmpInst(ICmpInst::ICMP_UGE, offset, end_offset,
-      "ended", block);
+  Value* ended = new ICmpInst(*block, ICmpInst::ICMP_UGE, offset, end_offset,
+      "ended");
   BranchInst::Create(next_block, return_not_found, ended, block);
 
   return next_block;
 }
 
 BasicBlock*
-CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
+CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
   // at a boundary if next (@offset) and previous (@offset-1) have different
   // word-ness, as determined by category_word. 
   // also, the start and end of strings are non-word.
  
   // set up blocks
-  BasicBlock* test_prev = BasicBlock::Create("test_prev", function);
-  BasicBlock* post_test_prev = BasicBlock::Create("post_test_prev", function);
-  BasicBlock* pre_test_next = BasicBlock::Create("pre_test_next", function);
-  BasicBlock* test_next = BasicBlock::Create("test_next", function);
-  BasicBlock* post_test_next = BasicBlock::Create("post_test_next", function);
-  BasicBlock* test_word = BasicBlock::Create("test_word", function);
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* test_prev = createBlock("test_prev");
+  BasicBlock* post_test_prev = createBlock("post_test_prev");
+  BasicBlock* pre_test_next = createBlock("pre_test_next");
+  BasicBlock* test_next = createBlock("test_next");
+  BasicBlock* post_test_next = createBlock("post_test_next");
+  BasicBlock* test_word = createBlock("test_word");
+  BasicBlock* next_block = createBlock("block");
 
   // initial block
   // variables to hold the word-ness of the previous and next characters
-  Value* prev_word_ptr = new AllocaInst(BOOL_TYPE, "prev_word_ptr", 
+  Value* prev_word_ptr = new AllocaInst(regex.boolType, "prev_word_ptr", 
       block);
-  Value* next_word_ptr = new AllocaInst(BOOL_TYPE, "next_word_ptr", 
+  Value* next_word_ptr = new AllocaInst(regex.boolType, "next_word_ptr", 
       block);
 
   // load the offset
   Value* offset = loadOffset(block);
   // set the next/prev word-ness values based on the offset
-  Value* not_start = new ICmpInst(ICmpInst::ICMP_NE, offset,
-      ConstantInt::get(OFFSET_TYPE, 0), "not_start", block);
+  Value* not_start = new ICmpInst(*block, ICmpInst::ICMP_NE, offset,
+      ConstantInt::get(regex.offsetType, 0), "not_start");
   new StoreInst(not_start, prev_word_ptr, block);
-  Value* not_end = new ICmpInst(ICmpInst::ICMP_ULT, offset, 
-      end_offset, "not_end", block);
+  Value* not_end = new ICmpInst(*block, ICmpInst::ICMP_ULT, offset, 
+      end_offset, "not_end");
   new StoreInst(not_end, next_word_ptr, block);
 
   // if we're not at the start then test the word-ness of the previous char
@@ -1174,7 +1189,7 @@ CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // test the previous character's word-ness
   Value* prev_off = BinaryOperator::CreateSub(offset, 
-      ConstantInt::get(OFFSET_TYPE, 1), "prev_off", test_prev);
+      ConstantInt::get(regex.offsetType, 1), "prev_off", test_prev);
   Value* prev_c_ptr = GetElementPtrInst::Create(string, prev_off, "prev_c_ptr",
       test_prev);
   Value* prev_c = new LoadInst(prev_c_ptr, "prev_c", test_prev);
@@ -1182,7 +1197,7 @@ CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
       post_test_prev);
   
   // the previous is not a word, store that
-  new StoreInst(ConstantInt::get(BOOL_TYPE, 0), prev_word_ptr, post_test_prev);
+  new StoreInst(ConstantInt::get(regex.boolType, 0), prev_word_ptr, post_test_prev);
   BranchInst::Create(pre_test_next, post_test_prev);
 
   // if we're not at the end then test the word-ness of the next character
@@ -1195,14 +1210,14 @@ CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
   testCategory(test_next, next_c, "category_word", test_word, post_test_next);
 
   // the next is not a word, store that
-  new StoreInst(ConstantInt::get(BOOL_TYPE, 0), next_word_ptr, post_test_next);
+  new StoreInst(ConstantInt::get(regex.boolType, 0), next_word_ptr, post_test_next);
   BranchInst::Create(test_word, post_test_next);
 
   // compare the word-ness of the previous and next characters
   Value* prev_word = new LoadInst(prev_word_ptr, "prev_word", test_word);
   Value* next_word = new LoadInst(next_word_ptr, "next_word", test_word);
-  Value* boundary = new ICmpInst(ICmpInst::ICMP_NE, prev_word, next_word,
-      "boundary", test_word);
+  Value* boundary = new ICmpInst(*test_word, ICmpInst::ICMP_NE, 
+      prev_word, next_word, "boundary");
 
   if (non_boundary) {
     BranchInst::Create(return_not_found, next_block, boundary, test_word);
@@ -1214,7 +1229,7 @@ CompiledRegEx::at_boundary(BasicBlock* block, bool non_boundary) {
 }
 
 BasicBlock*
-CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq, 
+CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq, 
     Py_ssize_t index, bool is_greedy) {
   // parse the arguments
   int min, max;
@@ -1226,7 +1241,7 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     return NULL;
   }
 
-  CompiledRegEx* repeated = new CompiledRegEx(regex);
+  CompiledExpression* repeated = new CompiledExpression(regex);
   repeated->Compile(sub_pattern, 0);
 
   for (int i=0; i<min; i++) {
@@ -1238,9 +1253,9 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     args.push_back(groups);
     Value* repeat_result = CallInst::Create(repeated->function, 
         args.begin(), args.end(), "repeat_result", block);
-    Value* repeat_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-        repeat_result, regex.not_found, "repeat_result_not_found", block);
-    BasicBlock* next = BasicBlock::Create("repeat", function);
+    Value* repeat_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
+        repeat_result, regex.not_found, "repeat_result_not_found");
+    BasicBlock* next = createBlock("repeat");
     BranchInst::Create(return_not_found, next, repeat_result_not_found,
         block);
     block = next;
@@ -1252,7 +1267,7 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     // time to harness the power of RECURSION!
 
     // compile everything after this instruction...
-    CompiledRegEx* after = new CompiledRegEx(regex);
+    CompiledExpression* after = new CompiledExpression(regex);
     after->Compile(seq, index+1);
 
     // make a function for recursion
@@ -1269,19 +1284,19 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     args.push_back(loadOffset(block));
     args.push_back(end_offset);
     args.push_back(groups);
-    args.push_back(ConstantInt::get(OFFSET_TYPE, max-min));
+    args.push_back(ConstantInt::get(regex.offsetType, max-min));
     Value* recurse_result = CallInst::Create(recurse, args.begin(), args.end(),
         "recurse_result", block);
-    Value* recurse_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-        recurse_result, regex.not_found, "recurse_result_not_found", block);
+    Value* recurse_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
+        recurse_result, regex.not_found, "recurse_result_not_found");
 
     BasicBlock* return_recurse_result = 
-      BasicBlock::Create("return_recurse_result", function);
-    ReturnInst::Create(recurse_result, return_recurse_result);
+      createBlock("return_recurse_result");
+    ReturnInst::Create(context(), recurse_result, return_recurse_result);
 
-    BasicBlock* call_after = BasicBlock::Create("call_after", function);
+    BasicBlock* call_after = createBlock("call_after");
     args.resize(4); // use the same args as recurse without the countdown
-    ReturnInst::Create(CallInst::Create(after->function, args.begin(),
+    ReturnInst::Create(context(), CallInst::Create(after->function, args.begin(),
           args.end(), "after_result", call_after), call_after);
 
     BranchInst::Create(call_after, return_recurse_result,
@@ -1294,7 +1309,7 @@ CompiledRegEx::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
 }
 
 BasicBlock*
-CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
+CompiledExpression::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected an integer");
@@ -1315,20 +1330,20 @@ CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // store the start location
   int start_offset = (id-1)*2;
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", block);
+      ConstantInt::get(regex.offsetType, start_offset), "start_ptr", block);
   new StoreInst(off, start_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_start_offset_ptr = new AllocaInst(OFFSET_TYPE, 
+  Value* old_start_offset_ptr = new AllocaInst(regex.offsetType, 
       "old_start_offset_ptr", entry);
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", entry);
+      ConstantInt::get(regex.offsetType, start_offset), "start_ptr", entry);
   new StoreInst(new LoadInst(start_ptr, "old_start", entry), 
       old_start_offset_ptr, entry);
 
   // if this expression fails, restore the start offset
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, start_offset), "start_ptr", 
+      ConstantInt::get(regex.offsetType, start_offset), "start_ptr", 
       return_not_found);
   new StoreInst(new LoadInst(old_start_offset_ptr, "old_start", 
         return_not_found), start_ptr, return_not_found);
@@ -1337,7 +1352,7 @@ CompiledRegEx::subpattern_begin(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
+CompiledExpression::subpattern_end(BasicBlock* block, PyObject* arg) {
   // the argument should just be an integer
   if (!PyInt_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected an integer");
@@ -1358,26 +1373,26 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
   // store the end location
   int end_offset = (id-1)*2+1;
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", block);
+      ConstantInt::get(regex.offsetType, end_offset), "end_ptr", block);
   new StoreInst(off, end_ptr, block);
 
   // store the group index at the end of the group array for
   // MatchObject.lastindex
   Value* lastindex_ptr = GetElementPtrInst::Create(groups,
-      ConstantInt::get(OFFSET_TYPE, regex.groups*2), "lastindex_ptr", block);
-  new StoreInst(ConstantInt::get(OFFSET_TYPE, id), lastindex_ptr, block);
+      ConstantInt::get(regex.offsetType, regex.groups*2), "lastindex_ptr", block);
+  new StoreInst(ConstantInt::get(regex.offsetType, id), lastindex_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_end_offset_ptr = new AllocaInst(OFFSET_TYPE, "old_end_offset_ptr",
+  Value* old_end_offset_ptr = new AllocaInst(regex.offsetType, "old_end_offset_ptr",
       entry);
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", entry);
+      ConstantInt::get(regex.offsetType, end_offset), "end_ptr", entry);
   new StoreInst(new LoadInst(end_ptr, "old_end", entry), old_end_offset_ptr, 
       entry);
 
   // if this expression fails, restore the end offset
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, end_offset), "end_ptr", return_not_found);
+      ConstantInt::get(regex.offsetType, end_offset), "end_ptr", return_not_found);
   new StoreInst(new LoadInst(old_end_offset_ptr, "old_end", return_not_found), 
       end_ptr, return_not_found);
 
@@ -1385,7 +1400,7 @@ CompiledRegEx::subpattern_end(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
+CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
   // FIXME: support IGNORECASE
   // @arg should be an integer
   if (!PyInt_Check(arg)) {
@@ -1406,17 +1421,17 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
 
   // find the start and end positions
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2), "start_ptr", block);
+    ConstantInt::get(regex.offsetType, (groupnum-1)*2), "start_ptr", block);
   Value* start_off = new LoadInst(start_ptr, "start_off", block);
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2+1), "end_ptr", block);
+    ConstantInt::get(regex.offsetType, (groupnum-1)*2+1), "end_ptr", block);
   Value* end_off = new LoadInst(end_ptr, "end_off", block);
 
   // check if the group exists
-  Value* start_exists = new ICmpInst(ICmpInst::ICMP_NE, start_off, 
-      regex.not_found, "start_exists", block);
-  Value* end_exists = new ICmpInst(ICmpInst::ICMP_NE, end_off, 
-      regex.not_found, "end_exists", block);
+  Value* start_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, start_off, 
+      regex.not_found, "start_exists");
+  Value* end_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, end_off, 
+      regex.not_found, "end_exists");
   Value* group_exists = BinaryOperator::CreateAnd(start_exists, end_exists,
       "group_exists", block);
 
@@ -1427,15 +1442,15 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
   Value* groupref_end = BinaryOperator::CreateAdd(offset, group_length, 
       "groupref_end", block);
   // do we have enough characters?
-  Value* groupref_fits = new ICmpInst(ICmpInst::ICMP_ULE, groupref_end, 
-      end_offset, "groupref_fits", block);
+  Value* groupref_fits = new ICmpInst(*block, ICmpInst::ICMP_ULE, groupref_end,
+      end_offset, "groupref_fits");
 
   // so, is it even possible that this groupref will work?
   Value* groupref_possible = BinaryOperator::CreateAnd(group_exists,
       groupref_fits, "groupref_possible", block);
 
   // create a block for testing the groupref
-  BasicBlock* groupref_test = BasicBlock::Create("groupre_test", function);
+  BasicBlock* groupref_test = createBlock("groupre_test");
 
   // jump to that block if appropriate
   BranchInst::Create(groupref_test, return_not_found, groupref_possible, 
@@ -1443,16 +1458,16 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
 
   // allocate a local variable to hold the offset into the group that we are
   // testing
-  Value* group_off_ptr = new AllocaInst(OFFSET_TYPE, "group_off_ptr", entry);
+  Value* group_off_ptr = new AllocaInst(regex.offsetType, "group_off_ptr", entry);
 
   // store the start address in that
   new StoreInst(start_off, group_off_ptr, groupref_test);
 
   // create blocks for looping over the group
-  BasicBlock* groupref_loop = BasicBlock::Create("groupref_loop", function);
-  BasicBlock* groupref_loop_a = BasicBlock::Create("groupref_loop_a", function);
+  BasicBlock* groupref_loop = createBlock("groupref_loop");
+  BasicBlock* groupref_loop_a = createBlock("groupref_loop_a");
   // create a block to continue into
-  BasicBlock* next = BasicBlock::Create("block", function);
+  BasicBlock* next = createBlock("block");
 
   // jump into the loop
   BranchInst::Create(groupref_loop, groupref_test);
@@ -1460,8 +1475,8 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
   // load the offset (that we're getting group contents from)
   Value* group_off = new LoadInst(group_off_ptr, "group_off", groupref_loop);
   // have we finished looping?
-  Value* group_finished = new ICmpInst(ICmpInst::ICMP_EQ, group_off, end_off,
-      "group_finished", groupref_loop);
+  Value* group_finished = new ICmpInst(*groupref_loop, ICmpInst::ICMP_EQ, 
+      group_off, end_off, "group_finished");
   // if we finish looping then we have a match
   BranchInst::Create(next, groupref_loop_a, group_finished, groupref_loop);
 
@@ -1477,15 +1492,15 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
 
   // increment offsets
   string_c_off = BinaryOperator::CreateAdd(string_c_off, 
-      ConstantInt::get(OFFSET_TYPE, 1), "increment", groupref_loop_a);
+      ConstantInt::get(regex.offsetType, 1), "increment", groupref_loop_a);
   storeOffset(groupref_loop_a, string_c_off);
   group_off = BinaryOperator::CreateAdd(group_off,
-      ConstantInt::get(OFFSET_TYPE, 1), "group_off_inc", groupref_loop_a);
+      ConstantInt::get(regex.offsetType, 1), "group_off_inc", groupref_loop_a);
   new StoreInst(group_off, group_off_ptr, groupref_loop_a);
 
   // compare the group and string values
-  Value* groupref_match = new ICmpInst(ICmpInst::ICMP_EQ, group_c,
-      string_c, "groupref_match", groupref_loop_a);
+  Value* groupref_match = new ICmpInst(*groupref_loop_a, ICmpInst::ICMP_EQ, 
+      group_c, string_c, "groupref_match");
   // if they match then continue looping, otherwise return not_found
   BranchInst::Create(groupref_loop, return_not_found, groupref_match, 
       groupref_loop_a);
@@ -1493,7 +1508,7 @@ CompiledRegEx::groupref(BasicBlock* block, PyObject* arg) {
   return next;
 }
 BasicBlock*
-CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
+CompiledExpression::groupref_exists(BasicBlock* block, PyObject* arg) {
   // @arg should be a tuple of (group-number, yes-seq, no-seq)
   int groupnum;
   PyObject* yes_seq;
@@ -1511,9 +1526,9 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
   }
 
   // create the blocks we need
-  BasicBlock* yes = BasicBlock::Create("yes", function);
-  BasicBlock* no = BasicBlock::Create("no", function);
-  BasicBlock* next_block = BasicBlock::Create("block", function);
+  BasicBlock* yes = createBlock("yes");
+  BasicBlock* no = createBlock("no");
+  BasicBlock* next_block = createBlock("block");
 
   // prepare the arguments for the sub-expressions
   std::vector<Value*> args;
@@ -1523,7 +1538,7 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
   args.push_back(groups);
 
   // compile the yes seq to a function
-  CompiledRegEx yes_compiled(regex);
+  CompiledExpression yes_compiled(regex);
   yes_compiled.Compile(yes_seq, 0);
   // call it from the yes block
   Value* yes_result = CallInst::Create(yes_compiled.function, 
@@ -1535,7 +1550,7 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
 
   // if there's a no function...
   if (no_seq != Py_None) {
-    CompiledRegEx no_compiled(regex);
+    CompiledExpression no_compiled(regex);
     no_compiled.Compile(no_seq, 0);
     // call it from the no block
     Value* no_result = CallInst::Create(no_compiled.function, 
@@ -1549,12 +1564,12 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
   // generate code to check if the specified group has matched
   // get the pointer to the end offset of the group
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(OFFSET_TYPE, (groupnum-1)*2+1), "end_ptr", block);
+      ConstantInt::get(regex.offsetType, (groupnum-1)*2+1), "end_ptr", block);
   // load the end value
   Value* end_off = new LoadInst(end_ptr, "end", block);
   // check if the end_off is not found
-  Value* end_not_found = new ICmpInst(ICmpInst::ICMP_EQ, end_off,
-      regex.not_found, "end_not_found", block);
+  Value* end_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, end_off,
+      regex.not_found, "end_not_found");
   // either yes or no
   BranchInst::Create(no, yes, end_not_found, block);
 
@@ -1562,7 +1577,7 @@ CompiledRegEx::groupref_exists(BasicBlock* block, PyObject* arg) {
 }
 
 BasicBlock*
-CompiledRegEx::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
+CompiledExpression::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
   // @arg is a tuple of (direction, pattern)
   // direction is 1 or -1, pattern is a sequence
   // FIXME: implement backwards assertions
@@ -1578,7 +1593,7 @@ CompiledRegEx::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
   }
 
   // compile the assertion expression
-  CompiledRegEx compiled(regex);
+  CompiledExpression compiled(regex);
   compiled.Compile(pattern, 0);
 
   // call the assertion expression
@@ -1591,11 +1606,11 @@ CompiledRegEx::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
       args.begin(), args.end(), "assert_result", block);
 
   // did it fail?
-  Value* assert_not_found = new ICmpInst(ICmpInst::ICMP_EQ,
-      assert_result, regex.not_found, "assert_not_found", block);
+  Value* assert_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
+      assert_result, regex.not_found, "assert_not_found");
 
   // create a block for continuation
-  BasicBlock* next = BasicBlock::Create("block", function);
+  BasicBlock* next = createBlock("block");
   if (assert_not) {
     BranchInst::Create(next, return_not_found, assert_not_found, block);
   } else {
@@ -1612,11 +1627,22 @@ RegEx_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 
   self = (RegEx *)type->tp_alloc(type, 0);
   if (self != NULL) {
-    // create a module for this pattern
-    self->module = new Module("LlvmRe", llvm::getGlobalContext());
+    // use the Unladen Swallow LLVM context
+    self->global_data = PyGlobalLlvmData::Get();
 
+    // create a module for this pattern
+    self->module = new Module("LlvmRe", self->global_data->context());
+
+    // the types we use
+    // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
+    self->charType = IntegerType::get(self->global_data->context(), 16);
+    self->boolType = IntegerType::get(self->global_data->context(), 1);
+    self->offsetType = IntegerType::get(self->global_data->context(), 32);
+    self->charPointerType = PointerType::get(self->charType, 0);
+    self->offsetPointerType = PointerType::get(self->offsetType, 0);
     // set up some handy constants
-    self->not_found = ConstantInt::getSigned(OFFSET_TYPE, -1);
+    self->not_found = ConstantInt::getSigned(self->offsetType, -1);
+
   }
 
   return (PyObject *)self;
@@ -1629,9 +1655,9 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   PyObject *seq=NULL;
   int flags, groups;
 
-  static char *kwlist[] = {"seq", "flags", "groups", NULL};
+  static const char *kwlist[] = {"seq", "flags", "groups", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oii", kwlist, 
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oii", (char**)kwlist, 
         &seq, &flags, &groups)) {
     return -1; 
   }
@@ -1646,7 +1672,7 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   self->groups = groups;
   
   // compile that sequence into LLVM bytecode
-  self->compiled = new CompiledRegEx(*self, true);
+  self->compiled = new CompiledExpression(*self, true);
 
   Py_INCREF(seq);
   if (!self->compiled->Compile(seq, 0)) {
@@ -1661,12 +1687,12 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
  
   // function argument types
   std::vector<const Type*> args_type;
-  args_type.push_back(CHAR_POINTER_TYPE); // string
-  args_type.push_back(OFFSET_TYPE); // offset
-  args_type.push_back(OFFSET_TYPE); // end_offset
-  args_type.push_back(OFFSET_POINTER_TYPE); // groups
-  args_type.push_back(OFFSET_POINTER_TYPE); // start_ptr
-  FunctionType *func_type = FunctionType::get(OFFSET_TYPE, args_type, false);
+  args_type.push_back(self->charPointerType); // string
+  args_type.push_back(self->offsetType); // offset
+  args_type.push_back(self->offsetType); // end_offset
+  args_type.push_back(self->offsetPointerType); // groups
+  args_type.push_back(self->offsetPointerType); // start_ptr
+  FunctionType *func_type = FunctionType::get(self->offsetType, args_type, false);
 
   // FIXME: choose better function flags
   // create the find function
@@ -1686,15 +1712,15 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   start_ptr->setName("start_ptr");
 
   // create basic blocks
-  BasicBlock* entry = BasicBlock::Create("entry", self->find);
-  BasicBlock* test_offset = BasicBlock::Create("test_offset", self->find);
-  BasicBlock* match = BasicBlock::Create("match", self->find);
-  BasicBlock* increment = BasicBlock::Create("increment", self->find);
-  BasicBlock* return_not_found = BasicBlock::Create("return_not_found", self->find);
-  BasicBlock* return_match_result = BasicBlock::Create("return_match_result", self->find);
+  BasicBlock* entry = BasicBlock::Create(self->global_data->context(), "entry", self->find);
+  BasicBlock* test_offset = BasicBlock::Create(self->global_data->context(), "test_offset", self->find);
+  BasicBlock* match = BasicBlock::Create(self->global_data->context(), "match", self->find);
+  BasicBlock* increment = BasicBlock::Create(self->global_data->context(), "increment", self->find);
+  BasicBlock* return_not_found = BasicBlock::Create(self->global_data->context(), "return_not_found", self->find);
+  BasicBlock* return_match_result = BasicBlock::Create(self->global_data->context(), "return_match_result", self->find);
 
   // create the entry BasicBlock
-  Value* offset_ptr = new AllocaInst(OFFSET_TYPE, "offset_ptr", entry);
+  Value* offset_ptr = new AllocaInst(self->offsetType, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
   BranchInst::Create(test_offset, entry);
 
@@ -1702,8 +1728,8 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   // get the current offset
   offset = new LoadInst(offset_ptr, "offset", test_offset);
   // make sure it's not past the end of the string
-  Value* ended = new ICmpInst(ICmpInst::ICMP_UGT, offset, end_offset, "ended",
-      test_offset);
+  Value* ended = new ICmpInst(*test_offset, ICmpInst::ICMP_UGT, offset, 
+      end_offset, "ended");
   BranchInst::Create(return_not_found, match, ended, test_offset);
 
   // create the match BasicBlock
@@ -1715,25 +1741,25 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   call_args.push_back(groups_arg);
   Value* match_result = CallInst::Create(self->compiled->function,
       call_args.begin(), call_args.end(), "match_result", match);
-  Value* match_result_not_found = new ICmpInst(ICmpInst::ICMP_EQ, 
-      match_result, self->not_found, "match_result_not_found", match);
+  Value* match_result_not_found = new ICmpInst(*match, ICmpInst::ICMP_EQ, 
+      match_result, self->not_found, "match_result_not_found");
   BranchInst::Create(increment, return_match_result, match_result_not_found, 
       match);
 
   // create the increment BasicBlock
   offset = BinaryOperator::CreateAdd(offset, 
-      ConstantInt::get(OFFSET_TYPE, 1), "increment", increment);
+      ConstantInt::get(self->offsetType, 1), "increment", increment);
   new StoreInst(offset, offset_ptr, increment);
   BranchInst::Create(test_offset, increment);
 
   // create the return_not_found BasicBlock
-  ReturnInst::Create(self->not_found, return_not_found);
+  ReturnInst::Create(self->global_data->context(), self->not_found, return_not_found);
 
   // create the return_match_result BasicBlock
   // put the offset in our outparam
   new StoreInst(new LoadInst(offset_ptr, "offset", return_match_result),
       start_ptr, return_match_result);
-  ReturnInst::Create(match_result, return_match_result);
+  ReturnInst::Create(self->global_data->context(), match_result, return_match_result);
 
   // optimize the find function
 	struct PyGlobalLlvmData *global_llvm_data = PyGlobalLlvmData::Get();
