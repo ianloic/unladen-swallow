@@ -128,6 +128,9 @@ DEBUG = sre_compile.SRE_FLAG_DEBUG # dump pattern after compilation
 # sre exception
 error = sre_compile.error
 
+from llvmre import *
+'''
+
 # --------------------------------------------------------------------
 # public interface
 
@@ -323,3 +326,5 @@ class Scanner:
                 append(action)
             i = j
         return result, string[i:]
+
+'''
