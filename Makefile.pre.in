@@ -75,22 +75,27 @@ PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
 PY_CXXFLAGS=	$(CXXFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE -Wno-write-strings
 
 # LLVM flags extracted from llvm-config jit bitreader x86
-# These will be unused if BUILD_LLVM=disabled.
+# These will be unused if BUILD_LLVM==disabled.
 LLVMBASEFLAGS=	-D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtual
 ifeq (@BUILD_LLVM@, 0)
 	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
+	LLVM_LIB_DIR=   @LLVM_PATH@/lib
 else
 	# If LLVM is disabled, we still need some of the utility headers from LLVM
 	# for things like managed statics and mutexes. Pull those in, but don't
 	# actually use LLVM for code generation.
 	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ -I$(srcdir)/@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
+	# This line will be nonsensical if BUILD_LLVM==0, but that's what the
+	# test above is for. It's also nonsense if BUILD_LLVM==disabled, but
+	# then it won't be used, either.
+	LLVM_LIB_DIR=	$(PWD)/@LLVM_PATH@/lib
 endif
 LLVM_INC_DIR=	@LLVM_INC_DIR@
-LLVM_LIB_DIR=	@LLVM_PATH@/lib
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
-LLVMLDFLAGS=	-L$(LLVM_LIB_DIR)
-ifneq (@BUILD_LLVM@, disabled)
-	LLVMLDFLAGS+=   -lLLVMX86AsmParser -lLLVMX86AsmPrinter -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMX86Info -lLLVMBitReader -lLLVMJIT -lLLVMExecutionEngine -lLLVMCodeGen -lLLVMScalarOpts -lLLVMTransformUtils -lLLVMipa -lLLVMAnalysis -lLLVMTarget -lLLVMMC -lLLVMCore -lLLVMSupport -lLLVMSystem
+ifeq (@BUILD_LLVM@, disabled)
+	LLVMLIBS = UNUSED
+else
+	LLVMLIBS = LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
 endif
 
 
@@ -198,8 +203,9 @@ PYTHON=		python$(EXE)
 BUILDPYTHON=	python$(BUILDEXE)
 
 # This goes at the end of a CC line intended to build an executable.
+# LLVM will be included via libpythonX.Y.a.
 EXECUTABLE_LINK_ARGS=	$(LINKFORSHARED) $(BLDLIBRARY) $(LIBS) $(MODLIBS) \
-		$(LLVMLDFLAGS) $(SYSLIBS) $(LDLAST)
+		$(SYSLIBS) $(LDLAST)
 
 # The task to run while instrument when building the profile-opt target
 PROFILE_TASK=	$(srcdir)/Tools/pybench/pybench.py -n 2 --with-gc --with-syscheck
@@ -466,10 +472,21 @@ sharedmods: $(BUILDPYTHON)
 	esac
 
 # Build static library
-# avoid long command lines, same as LIBRARY_OBJS
+# avoid long command lines, same as LIBRARY_OBJS.
+# We "link in" LLVM by extracting all .o files from LLVM's .a's, then
+# merging them into libpythonX.Y.a.
 $(LIBRARY): $(LIBRARY_OBJS)
-	-rm -f $@
+	-rm -rf $@ $@-objs
 	$(AR) cr $@ Modules/getbuildinfo.o
+	if test @BUILD_LLVM@ != disabled; then \
+		mkdir $@-objs; \
+		(cd $@-objs; \
+		for lib in $(LLVMLIBS) ; do \
+			$(AR) x $(LLVM_LIB_DIR)/lib$$lib.a; \
+		done); \
+		$(AR) cr $@ $@-objs/*.o; \
+		rm -fr $@-objs; \
+	fi
 	$(AR) cr $@ $(PARSER_OBJS)
 	$(AR) cr $@ $(OBJECT_OBJS)
 	$(AR) cr $@ $(PYTHON_OBJS)
