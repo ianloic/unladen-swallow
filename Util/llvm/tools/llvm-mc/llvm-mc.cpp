@@ -12,12 +12,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/MCAsmLexer.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/ADT/OwningPtr.h"
-#include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -28,6 +29,7 @@
 #include "llvm/System/Signals.h"
 #include "llvm/Target/TargetAsmParser.h"
 #include "llvm/Target/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"  // FIXME.
 #include "llvm/Target/TargetSelect.h"
 #include "AsmParser.h"
 using namespace llvm;
@@ -82,6 +84,18 @@ Action(cl::desc("Action to perform:"),
                              "Assemble a .s file (default)"),
                   clEnumValEnd));
 
+static const Target *GetTarget(const char *ProgName) {
+  // Get the target specific parser.
+  std::string Error;
+  const Target *TheTarget = TargetRegistry::lookupTarget(TripleName, Error);
+  if (TheTarget)
+    return TheTarget;
+
+  errs() << ProgName << ": error: unable to get target for '" << TripleName
+         << "', see --version and --triple.\n";
+  return 0;
+}
+
 static int AsLexInput(const char *ProgName) {
   std::string ErrorMessage;
   MemoryBuffer *Buffer = MemoryBuffer::getFileOrSTDIN(InputFilename,
@@ -104,7 +118,14 @@ static int AsLexInput(const char *ProgName) {
   // it later.
   SrcMgr.setIncludeDirs(IncludeDirs);
 
-  AsmLexer Lexer(SrcMgr);
+  const Target *TheTarget = GetTarget(ProgName);
+  if (!TheTarget)
+    return 1;
+
+  const MCAsmInfo *MAI = TheTarget->createAsmInfo(TripleName);
+  assert(MAI && "Unable to create target asm info!");
+
+  AsmLexer Lexer(SrcMgr, *MAI);
   
   bool Error = false;
   
@@ -119,9 +140,6 @@ static int AsLexInput(const char *ProgName) {
       break;
     case AsmToken::Identifier:
       outs() << "identifier: " << Lexer.getTok().getString() << '\n';
-      break;
-    case AsmToken::Register:
-      outs() << "register: " << Lexer.getTok().getString() << '\n';
       break;
     case AsmToken::String:
       outs() << "string: " << Lexer.getTok().getString() << '\n';
@@ -163,18 +181,6 @@ static int AsLexInput(const char *ProgName) {
   }
   
   return Error;
-}
-
-static const Target *GetTarget(const char *ProgName) {
-  // Get the target specific parser.
-  std::string Error;
-  const Target *TheTarget = TargetRegistry::lookupTarget(TripleName, Error);
-  if (TheTarget)
-    return TheTarget;
-
-  errs() << ProgName << ": error: unable to get target for '" << TripleName
-         << "', see --version and --triple.\n";
-  return 0;
 }
 
 static formatted_raw_ostream *GetOutputStream() {
@@ -238,25 +244,27 @@ static int AssembleInput(const char *ProgName) {
     return 1;
   }
 
-  OwningPtr<AsmPrinter> AP;
+  OwningPtr<MCInstPrinter> IP;
   OwningPtr<MCCodeEmitter> CE;
   OwningPtr<MCStreamer> Str;
 
-  if (FileType == OFT_AssemblyFile) {
-    const MCAsmInfo *TAI = TheTarget->createAsmInfo(TripleName);
-    assert(TAI && "Unable to create target asm info!");
+  const MCAsmInfo *MAI = TheTarget->createAsmInfo(TripleName);
+  assert(MAI && "Unable to create target asm info!");
 
-    AP.reset(TheTarget->createAsmPrinter(*Out, *TM, TAI, true));
+  if (FileType == OFT_AssemblyFile) {
+    // FIXME: Syntax Variant should be selectable somehow?
+    unsigned SyntaxVariant = 0;
+    IP.reset(TheTarget->createMCInstPrinter(SyntaxVariant, *MAI, *Out));
     if (ShowEncoding)
       CE.reset(TheTarget->createCodeEmitter(*TM));
-    Str.reset(createAsmStreamer(Ctx, *Out, *TAI, AP.get(), CE.get()));
+    Str.reset(createAsmStreamer(Ctx, *Out, *MAI, IP.get(), CE.get()));
   } else {
     assert(FileType == OFT_ObjectFile && "Invalid file type!");
     CE.reset(TheTarget->createCodeEmitter(*TM));
     Str.reset(createMachOStreamer(Ctx, *Out, CE.get()));
   }
 
-  AsmParser Parser(SrcMgr, Ctx, *Str.get());
+  AsmParser Parser(SrcMgr, Ctx, *Str.get(), *MAI);
   OwningPtr<TargetAsmParser> TAP(TheTarget->createAsmParser(Parser));
   if (!TAP) {
     errs() << ProgName 

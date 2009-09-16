@@ -29,24 +29,18 @@ namespace sys {
   /// @since 1.4
   /// @brief An abstraction for finding and executing programs.
   class Program {
-    /// Opaque handle for target specific data.
-	void *Data;
 
     unsigned Pid_;
-
-    // Noncopyable.
-    Program(const Program& other);
-    Program& operator=(const Program& other);
 
     /// @name Methods
     /// @{
   public:
 
-    Program();
-	~Program();
-	
+    Program() : Pid_(0) {}
+    ~Program() {}
+
     /// Return process ID of this program.
-    unsigned GetPid() { return Pid_; }
+    unsigned GetPid() const { return Pid_; }
 
     /// This function executes the program using the \p arguments provided.  The
     /// invoked program will inherit the stdin, stdout, and stderr file
@@ -99,7 +93,17 @@ namespace sys {
       ///< it doesn't.
       std::string* ErrMsg = 0 ///< If non-zero, provides a pointer to a string
       ///< instance in which error messages will be returned. If the string
-      ///< is non-empty upon return an error occurred while invoking the
+      ///< is non-empty upon return an error occurred while waiting.
+      );
+
+    /// This function terminates the program.
+    /// @returns true if an error occured.
+    /// @see Execute
+    /// @brief Terminates the program.
+    bool Kill
+    ( std::string* ErrMsg = 0 ///< If non-zero, provides a pointer to a string
+      ///< instance in which error messages will be returned. If the string
+      ///< is non-empty upon return an error occurred while killing the
       ///< program.
       );
 

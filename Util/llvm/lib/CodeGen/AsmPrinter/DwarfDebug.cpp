@@ -23,6 +23,7 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Mangler.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/System/Path.h"
@@ -487,6 +488,27 @@ void DwarfDebug::AddSourceLine(DIE *Die, const DIGlobal *G) {
   AddUInt(Die, dwarf::DW_AT_decl_file, 0, FileID);
   AddUInt(Die, dwarf::DW_AT_decl_line, 0, Line);
 }
+
+/// AddSourceLine - Add location information to specified debug information
+/// entry.
+void DwarfDebug::AddSourceLine(DIE *Die, const DISubprogram *SP) {
+  // If there is no compile unit specified, don't add a line #.
+  if (SP->getCompileUnit().isNull())
+    return;
+  // If the line number is 0, don't add it.
+  if (SP->getLineNumber() == 0)
+    return;
+
+
+  unsigned Line = SP->getLineNumber();
+  unsigned FileID = FindCompileUnit(SP->getCompileUnit()).getID();
+  assert(FileID && "Invalid file id");
+  AddUInt(Die, dwarf::DW_AT_decl_file, 0, FileID);
+  AddUInt(Die, dwarf::DW_AT_decl_line, 0, Line);
+}
+
+/// AddSourceLine - Add location information to specified debug information
+/// entry.
 void DwarfDebug::AddSourceLine(DIE *Die, const DIType *Ty) {
   // If there is no compile unit specified, don't add a line #.
   DICompileUnit CU = Ty->getCompileUnit();
@@ -498,6 +520,238 @@ void DwarfDebug::AddSourceLine(DIE *Die, const DIType *Ty) {
   assert(FileID && "Invalid file id");
   AddUInt(Die, dwarf::DW_AT_decl_file, 0, FileID);
   AddUInt(Die, dwarf::DW_AT_decl_line, 0, Line);
+}
+
+/* Byref variables, in Blocks, are declared by the programmer as
+   "SomeType VarName;", but the compiler creates a
+   __Block_byref_x_VarName struct, and gives the variable VarName
+   either the struct, or a pointer to the struct, as its type.  This
+   is necessary for various behind-the-scenes things the compiler
+   needs to do with by-reference variables in blocks.
+
+   However, as far as the original *programmer* is concerned, the
+   variable should still have type 'SomeType', as originally declared.
+
+   The following function dives into the __Block_byref_x_VarName
+   struct to find the original type of the variable.  This will be
+   passed back to the code generating the type for the Debug
+   Information Entry for the variable 'VarName'.  'VarName' will then
+   have the original type 'SomeType' in its debug information.
+
+   The original type 'SomeType' will be the type of the field named
+   'VarName' inside the __Block_byref_x_VarName struct.
+
+   NOTE: In order for this to not completely fail on the debugger
+   side, the Debug Information Entry for the variable VarName needs to
+   have a DW_AT_location that tells the debugger how to unwind through
+   the pointers and __Block_byref_x_VarName struct to find the actual
+   value of the variable.  The function AddBlockByrefType does this.  */
+
+/// Find the type the programmer originally declared the variable to be
+/// and return that type.
+///
+DIType DwarfDebug::GetBlockByrefType(DIType Ty, std::string Name) {
+
+  DIType subType = Ty;
+  unsigned tag = Ty.getTag();
+
+  if (tag == dwarf::DW_TAG_pointer_type) {
+    DIDerivedType DTy = DIDerivedType (Ty.getNode());
+    subType = DTy.getTypeDerivedFrom();
+  }
+
+  DICompositeType blockStruct = DICompositeType(subType.getNode());
+
+  DIArray Elements = blockStruct.getTypeArray();
+
+  if (Elements.isNull())
+    return Ty;
+
+  for (unsigned i = 0, N = Elements.getNumElements(); i < N; ++i) {
+    DIDescriptor Element = Elements.getElement(i);
+    DIDerivedType DT = DIDerivedType(Element.getNode());
+    std::string Name2;
+    DT.getName(Name2);
+    if (Name == Name2)
+      return (DT.getTypeDerivedFrom());
+  }
+
+  return Ty;
+}
+
+/* Byref variables, in Blocks, are declared by the programmer as "SomeType
+   VarName;", but the compiler creates a __Block_byref_x_VarName struct, and
+   gives the variable VarName either the struct, or a pointer to the struct, as
+   its type.  This is necessary for various behind-the-scenes things the
+   compiler needs to do with by-reference variables in Blocks.
+
+   However, as far as the original *programmer* is concerned, the variable
+   should still have type 'SomeType', as originally declared.
+
+   The function GetBlockByrefType dives into the __Block_byref_x_VarName
+   struct to find the original type of the variable, which is then assigned to
+   the variable's Debug Information Entry as its real type.  So far, so good.
+   However now the debugger will expect the variable VarName to have the type
+   SomeType.  So we need the location attribute for the variable to be an
+   expression that explains to the debugger how to navigate through the 
+   pointers and struct to find the actual variable of type SomeType.
+
+   The following function does just that.  We start by getting
+   the "normal" location for the variable. This will be the location
+   of either the struct __Block_byref_x_VarName or the pointer to the
+   struct __Block_byref_x_VarName.
+
+   The struct will look something like:
+
+   struct __Block_byref_x_VarName {
+     ... <various fields>
+     struct __Block_byref_x_VarName *forwarding;
+     ... <various other fields>
+     SomeType VarName;
+     ... <maybe more fields>
+   };
+
+   If we are given the struct directly (as our starting point) we
+   need to tell the debugger to:
+
+   1).  Add the offset of the forwarding field.
+
+   2).  Follow that pointer to get the the real __Block_byref_x_VarName
+   struct to use (the real one may have been copied onto the heap).
+
+   3).  Add the offset for the field VarName, to find the actual variable.
+
+   If we started with a pointer to the struct, then we need to
+   dereference that pointer first, before the other steps.
+   Translating this into DWARF ops, we will need to append the following
+   to the current location description for the variable:
+
+   DW_OP_deref                    -- optional, if we start with a pointer
+   DW_OP_plus_uconst <forward_fld_offset>
+   DW_OP_deref
+   DW_OP_plus_uconst <varName_fld_offset>
+
+   That is what this function does.  */
+
+/// AddBlockByrefAddress - Start with the address based on the location
+/// provided, and generate the DWARF information necessary to find the
+/// actual Block variable (navigating the Block struct) based on the
+/// starting location.  Add the DWARF information to the die.  For
+/// more information, read large comment just above here.
+///
+void DwarfDebug::AddBlockByrefAddress(DbgVariable *&DV, DIE *Die, 
+                                       unsigned Attribute,
+                                       const MachineLocation &Location) {
+  const DIVariable &VD = DV->getVariable();
+  DIType Ty = VD.getType();
+  DIType TmpTy = Ty;
+  unsigned Tag = Ty.getTag();
+  bool isPointer = false;
+
+  std::string varName;
+  VD.getName(varName);
+
+  if (Tag == dwarf::DW_TAG_pointer_type) {
+    DIDerivedType DTy = DIDerivedType (Ty.getNode());
+    TmpTy = DTy.getTypeDerivedFrom();
+    isPointer = true;
+  }
+
+  DICompositeType blockStruct = DICompositeType(TmpTy.getNode());
+
+  std::string typeName;
+  blockStruct.getName(typeName);
+
+   assert(typeName.find ("__Block_byref_") == 0
+          && "Attempting to get Block location of non-Block variable!");
+
+   // Find the __forwarding field and the variable field in the __Block_byref
+   // struct.
+   
+   DIArray Fields = blockStruct.getTypeArray();
+   DIDescriptor varField = DIDescriptor();
+   DIDescriptor forwardingField = DIDescriptor();
+
+
+   for (unsigned i = 0, N = Fields.getNumElements(); i < N; ++i) {
+     DIDescriptor Element = Fields.getElement(i);
+     DIDerivedType DT = DIDerivedType(Element.getNode());
+     std::string fieldName;
+     DT.getName(fieldName);
+     if (fieldName == "__forwarding")
+       forwardingField = Element;
+     else if (fieldName == varName)
+       varField = Element;
+   }
+     
+   assert (!varField.isNull() && "Can't find byref variable in Block struct");
+   assert (!forwardingField.isNull() 
+           && "Can't find forwarding field in Block struct");
+
+   // Get the offsets for the forwarding field and the variable field.
+
+   unsigned int forwardingFieldOffset = 
+     DIDerivedType(forwardingField.getNode()).getOffsetInBits() >> 3;
+   unsigned int varFieldOffset = 
+     DIDerivedType(varField.getNode()).getOffsetInBits() >> 3;
+
+   // Decode the original location, and use that as the start of the 
+   // byref variable's location.
+
+   unsigned Reg = RI->getDwarfRegNum(Location.getReg(), false);
+   DIEBlock *Block = new DIEBlock();
+
+   if (Location.isReg()) {
+     if (Reg < 32)
+       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + Reg);
+     else {
+       Reg = Reg - dwarf::DW_OP_reg0;
+       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
+       AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
+     }
+   } else {
+     if (Reg < 32)
+       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
+     else {
+       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
+       AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
+     }
+
+     AddUInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
+   }
+
+   // If we started with a pointer to the__Block_byref... struct, then
+   // the first thing we need to do is dereference the pointer (DW_OP_deref).
+
+   if (isPointer)
+     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
+
+   // Next add the offset for the '__forwarding' field:
+   // DW_OP_plus_uconst ForwardingFieldOffset.  Note there's no point in
+   // adding the offset if it's 0.
+
+   if (forwardingFieldOffset > 0) {
+     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
+     AddUInt(Block, 0, dwarf::DW_FORM_udata, forwardingFieldOffset);
+   }
+
+   // Now dereference the __forwarding field to get to the real __Block_byref
+   // struct:  DW_OP_deref.
+
+   AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
+
+   // Now that we've got the real __Block_byref... struct, add the offset
+   // for the variable's field to get to the location of the actual variable:
+   // DW_OP_plus_uconst varFieldOffset.  Again, don't add if it's 0.
+
+   if (varFieldOffset > 0) {
+     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
+     AddUInt(Block, 0, dwarf::DW_FORM_udata, varFieldOffset);
+   }
+
+   // Now attach the location information to the DIE.
+
+   AddBlock(Die, Attribute, 0, Block);
 }
 
 /// AddAddress - Add an address attribute to a die based on the location
@@ -547,12 +801,12 @@ void DwarfDebug::AddType(CompileUnit *DW_Unit, DIE *Entity, DIType Ty) {
 
   // Construct type.
   DIE Buffer(dwarf::DW_TAG_base_type);
-  if (Ty.isBasicType(Ty.getTag()))
+  if (Ty.isBasicType())
     ConstructTypeDIE(DW_Unit, Buffer, DIBasicType(Ty.getNode()));
-  else if (Ty.isCompositeType(Ty.getTag()))
+  else if (Ty.isCompositeType())
     ConstructTypeDIE(DW_Unit, Buffer, DICompositeType(Ty.getNode()));
   else {
-    assert(Ty.isDerivedType(Ty.getTag()) && "Unknown kind of DIType");
+    assert(Ty.isDerivedType() && "Unknown kind of DIType");
     ConstructTypeDIE(DW_Unit, Buffer, DIDerivedType(Ty.getNode()));
 
   }
@@ -961,7 +1215,10 @@ DIE *DwarfDebug::CreateDbgScopeVariable(DbgVariable *DV, CompileUnit *Unit) {
   AddSourceLine(VariableDie, &VD);
 
   // Add variable type.
-  AddType(Unit, VariableDie, VD.getType());
+  if (VD.isBlockByrefVariable())
+    AddType(Unit, VariableDie, GetBlockByrefType(VD.getType(), Name));
+  else
+    AddType(Unit, VariableDie, VD.getType());
 
   // Add variable address.
   if (!DV->isInlinedFnVar()) {
@@ -970,7 +1227,11 @@ DIE *DwarfDebug::CreateDbgScopeVariable(DbgVariable *DV, CompileUnit *Unit) {
     MachineLocation Location;
     Location.set(RI->getFrameRegister(*MF),
                  RI->getFrameIndexOffset(*MF, DV->getFrameIndex()));
-    AddAddress(VariableDie, dwarf::DW_AT_location, Location);
+
+    if (VD.isBlockByrefVariable())
+      AddBlockByrefAddress (DV, VariableDie, dwarf::DW_AT_location, Location);
+    else
+      AddAddress(VariableDie, dwarf::DW_AT_location, Location);
   }
 
   return VariableDie;
@@ -983,7 +1244,7 @@ DbgScope *DwarfDebug::getOrCreateScope(MDNode *N) {
   if (Slot) return Slot;
 
   DbgScope *Parent = NULL;
-  DIBlock Block(N);
+  DILexicalBlock Block(N);
 
   // Don't create a new scope if we already created one for an inlined function.
   DenseMap<const MDNode *, DbgScope *>::iterator
@@ -1226,6 +1487,10 @@ void DwarfDebug::ConstructCompileUnit(MDNode *N) {
 
 void DwarfDebug::ConstructGlobalVariableDIE(MDNode *N) {
   DIGlobalVariable DI_GV(N);
+  
+  // If debug information is malformed then ignore it.
+  if (DI_GV.Verify() == false)
+    return;
 
   // Check for pre-existence.
   DIE *&Slot = ModuleCU->getDieMapSlotFor(DI_GV.getNode());
@@ -1237,9 +1502,8 @@ void DwarfDebug::ConstructGlobalVariableDIE(MDNode *N) {
   // Add address.
   DIEBlock *Block = new DIEBlock();
   AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_addr);
-  std::string GLN;
   AddObjectLabel(Block, 0, dwarf::DW_FORM_udata,
-                 Asm->getGlobalLinkName(DI_GV.getGlobal(), GLN));
+                 Asm->Mang->getMangledName(DI_GV.getGlobal()));
   AddBlock(VariableDie, dwarf::DW_AT_location, 0, Block);
 
   // Add to map.
@@ -1449,6 +1713,7 @@ void DwarfDebug::BeginFunction(MachineFunction *MF) {
     unsigned LabelID = RecordSourceLine(DLT.Line, DLT.Col,
                                         DICompileUnit(DLT.CompileUnit));
     Asm->printLabel(LabelID);
+    O << '\n';
   }
 
   if (TimePassesIsEnabled)
@@ -2132,6 +2397,8 @@ void DwarfDebug::EmitDebugLines() {
       const SrcLineInfo &LineInfo = LineInfos[i];
       unsigned LabelID = MMI->MappedLabel(LineInfo.getLabelID());
       if (!LabelID) continue;
+
+      if (LineInfo.getLine() == 0) continue;
 
       if (!Asm->isVerbose())
         Asm->EOL();

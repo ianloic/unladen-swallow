@@ -102,17 +102,20 @@ static void getDarwinDefines(std::vector<char> &Defs, const LangOptions &Opts) {
     Define(Defs, "__STATIC__");
   else
     Define(Defs, "__DYNAMIC__");
+
+  if (Opts.POSIXThreads)
+    Define(Defs, "_REENTRANT", "1");
 }
 
 static void getDarwinOSXDefines(std::vector<char> &Defs,
                                 const llvm::Triple &Triple) {
   if (Triple.getOS() != llvm::Triple::Darwin)
     return;
-  
+
   // Figure out which "darwin number" the target triple is.  "darwin9" -> 10.5.
   unsigned Maj, Min, Rev;
   Triple.getDarwinNumber(Maj, Min, Rev);
-  
+
   char MacOSXStr[] = "1000";
   if (Maj >= 4 && Maj <= 13) { // 10.0-10.9
     // darwin7 -> 1030, darwin8 -> 1040, darwin9 -> 1050, etc.
@@ -129,11 +132,11 @@ static void getDarwinIPhoneOSDefines(std::vector<char> &Defs,
                                      const llvm::Triple &Triple) {
   if (Triple.getOS() != llvm::Triple::Darwin)
     return;
-  
+
   // Figure out which "darwin number" the target triple is.  "darwin9" -> 10.5.
   unsigned Maj, Min, Rev;
   Triple.getDarwinNumber(Maj, Min, Rev);
-  
+
   // When targetting iPhone OS, interpret the minor version and
   // revision as the iPhone OS version
   char iPhoneOSStr[] = "10000";
@@ -152,7 +155,7 @@ static void getDarwinIPhoneOSDefines(std::vector<char> &Defs,
 static void GetDarwinLanguageOptions(LangOptions &Opts,
                                      const llvm::Triple &Triple) {
   Opts.NeXTRuntime = true;
-  
+
   if (Triple.getOS() != llvm::Triple::Darwin)
     return;
 
@@ -180,7 +183,7 @@ protected:
     getDarwinDefines(Defines, Opts);
     getDarwinOSXDefines(Defines, Triple);
   }
-  
+
   /// getDefaultLangOptions - Allow the target to specify default settings for
   /// various language options.  These may be overridden by command line
   /// options.
@@ -201,7 +204,7 @@ public:
   virtual const char *getUnicodeStringSection() const {
     return "__TEXT,__ustring";
   }
-  
+
   virtual std::string isValidSectionSpecifier(const llvm::StringRef &SR) const {
     // Let MCSectionMachO validate this.
     llvm::StringRef Segment, Section;
@@ -227,7 +230,7 @@ protected:
     DefineStd(Defs, "unix", Opts);
   }
 public:
-  DragonFlyBSDTargetInfo(const std::string &triple) 
+  DragonFlyBSDTargetInfo(const std::string &triple)
     : OSTargetInfo<Target>(triple) {}
 };
 
@@ -255,7 +258,7 @@ protected:
     Define(Defs, "__ELF__", "1");
   }
 public:
-  FreeBSDTargetInfo(const std::string &triple) 
+  FreeBSDTargetInfo(const std::string &triple)
     : OSTargetInfo<Target>(triple) {
       this->UserLabelPrefix = "";
     }
@@ -272,9 +275,11 @@ protected:
     DefineStd(Defs, "linux", Opts);
     Define(Defs, "__gnu_linux__");
     Define(Defs, "__ELF__", "1");
+    if (Opts.POSIXThreads)
+      Define(Defs, "_REENTRANT", "1");
   }
 public:
-  LinuxTargetInfo(const std::string& triple) 
+  LinuxTargetInfo(const std::string& triple)
     : OSTargetInfo<Target>(triple) {
     this->UserLabelPrefix = "";
   }
@@ -290,9 +295,11 @@ protected:
     Define(Defs, "__NetBSD__", "1");
     Define(Defs, "__unix__", "1");
     Define(Defs, "__ELF__", "1");
+    if (Opts.POSIXThreads)
+      Define(Defs, "_POSIX_THREADS", "1");
   }
 public:
-  NetBSDTargetInfo(const std::string &triple) 
+  NetBSDTargetInfo(const std::string &triple)
     : OSTargetInfo<Target>(triple) {
       this->UserLabelPrefix = "";
     }
@@ -309,9 +316,11 @@ protected:
     Define(Defs, "__OpenBSD__", "1");
     DefineStd(Defs, "unix", Opts);
     Define(Defs, "__ELF__", "1");
+    if (Opts.POSIXThreads)
+      Define(Defs, "_POSIX_THREADS", "1");
   }
 public:
-  OpenBSDTargetInfo(const std::string &triple) 
+  OpenBSDTargetInfo(const std::string &triple)
     : OSTargetInfo<Target>(triple) {}
 };
 
@@ -328,14 +337,14 @@ protected:
     Define(Defs, "__SVR4");
   }
 public:
-  SolarisTargetInfo(const std::string& triple) 
+  SolarisTargetInfo(const std::string& triple)
     : OSTargetInfo<Target>(triple) {
     this->UserLabelPrefix = "";
     this->WCharType = this->SignedLong;
     // FIXME: WIntType should be SignedLong
   }
 };
-} // end anonymous namespace. 
+} // end anonymous namespace.
 
 /// GetWindowsLanguageOptions - Set the default language options for Windows.
 static void GetWindowsLanguageOptions(LangOptions &Opts,
@@ -440,21 +449,21 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
 
 
 const char * const PPCTargetInfo::GCCRegNames[] = {
-  "0", "1", "2", "3", "4", "5", "6", "7",
-  "8", "9", "10", "11", "12", "13", "14", "15",
-  "16", "17", "18", "19", "20", "21", "22", "23",
-  "24", "25", "26", "27", "28", "29", "30", "31",
-  "0", "1", "2", "3", "4", "5", "6", "7",
-  "8", "9", "10", "11", "12", "13", "14", "15",
-  "16", "17", "18", "19", "20", "21", "22", "23",
-  "24", "25", "26", "27", "28", "29", "30", "31",
+  "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+  "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+  "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
+  "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+  "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7",
+  "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
+  "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
+  "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31",
   "mq", "lr", "ctr", "ap",
-  "0", "1", "2", "3", "4", "5", "6", "7",
+  "cr0", "cr1", "cr2", "cr3", "cr4", "cr5", "cr6", "cr7",
   "xer",
-  "0", "1", "2", "3", "4", "5", "6", "7",
-  "8", "9", "10", "11", "12", "13", "14", "15",
-  "16", "17", "18", "19", "20", "21", "22", "23",
-  "24", "25", "26", "27", "28", "29", "30", "31",
+  "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
+  "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
+  "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
+  "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
   "vrsave", "vscr",
   "spe_acc", "spefscr",
   "sfp"
@@ -469,38 +478,71 @@ void PPCTargetInfo::getGCCRegNames(const char * const *&Names,
 const TargetInfo::GCCRegAlias PPCTargetInfo::GCCRegAliases[] = {
   // While some of these aliases do map to different registers
   // they still share the same register name.
-  { { "cc", "cr0", "fr0", "r0", "v0"}, "0" },
-  { { "cr1", "fr1", "r1", "sp", "v1"}, "1" },
-  { { "cr2", "fr2", "r2", "toc", "v2"}, "2" },
-  { { "cr3", "fr3", "r3", "v3"}, "3" },
-  { { "cr4", "fr4", "r4", "v4"}, "4" },
-  { { "cr5", "fr5", "r5", "v5"}, "5" },
-  { { "cr6", "fr6", "r6", "v6"}, "6" },
-  { { "cr7", "fr7", "r7", "v7"}, "7" },
-  { { "fr8", "r8", "v8"}, "8" },
-  { { "fr9", "r9", "v9"}, "9" },
-  { { "fr10", "r10", "v10"}, "10" },
-  { { "fr11", "r11", "v11"}, "11" },
-  { { "fr12", "r12", "v12"}, "12" },
-  { { "fr13", "r13", "v13"}, "13" },
-  { { "fr14", "r14", "v14"}, "14" },
-  { { "fr15", "r15", "v15"}, "15" },
-  { { "fr16", "r16", "v16"}, "16" },
-  { { "fr17", "r17", "v17"}, "17" },
-  { { "fr18", "r18", "v18"}, "18" },
-  { { "fr19", "r19", "v19"}, "19" },
-  { { "fr20", "r20", "v20"}, "20" },
-  { { "fr21", "r21", "v21"}, "21" },
-  { { "fr22", "r22", "v22"}, "22" },
-  { { "fr23", "r23", "v23"}, "23" },
-  { { "fr24", "r24", "v24"}, "24" },
-  { { "fr25", "r25", "v25"}, "25" },
-  { { "fr26", "r26", "v26"}, "26" },
-  { { "fr27", "r27", "v27"}, "27" },
-  { { "fr28", "r28", "v28"}, "28" },
-  { { "fr29", "r29", "v29"}, "29" },
-  { { "fr30", "r30", "v30"}, "30" },
-  { { "fr31", "r31", "v31"}, "31" },
+  { { "0" }, "r0" }, 
+  { { "1"}, "r1" }, 
+  { { "2" }, "r2" }, 
+  { { "3" }, "r3" }, 
+  { { "4" }, "r4" }, 
+  { { "5" }, "r5" }, 
+  { { "6" }, "r6" }, 
+  { { "7" }, "r7" }, 
+  { { "8" }, "r8" }, 
+  { { "9" }, "r9" }, 
+  { { "10" }, "r10" }, 
+  { { "11" }, "r11" }, 
+  { { "12" }, "r12" }, 
+  { { "13" }, "r13" }, 
+  { { "14" }, "r14" }, 
+  { { "15" }, "r15" }, 
+  { { "16" }, "r16" }, 
+  { { "17" }, "r17" }, 
+  { { "18" }, "r18" }, 
+  { { "19" }, "r19" }, 
+  { { "20" }, "r20" }, 
+  { { "21" }, "r21" }, 
+  { { "22" }, "r22" }, 
+  { { "23" }, "r23" }, 
+  { { "24" }, "r24" }, 
+  { { "25" }, "r25" }, 
+  { { "26" }, "r26" }, 
+  { { "27" }, "r27" }, 
+  { { "28" }, "r28" }, 
+  { { "29" }, "r29" }, 
+  { { "30" }, "r30" }, 
+  { { "31" }, "r31" }, 
+  { { "fr0" }, "f0" }, 
+  { { "fr1" }, "f1" }, 
+  { { "fr2" }, "f2" }, 
+  { { "fr3" }, "f3" }, 
+  { { "fr4" }, "f4" }, 
+  { { "fr5" }, "f5" }, 
+  { { "fr6" }, "f6" }, 
+  { { "fr7" }, "f7" }, 
+  { { "fr8" }, "f8" }, 
+  { { "fr9" }, "f9" }, 
+  { { "fr10" }, "f00" }, 
+  { { "fr11" }, "f11" }, 
+  { { "fr12" }, "f12" }, 
+  { { "fr13" }, "f13" }, 
+  { { "fr14" }, "f14" }, 
+  { { "fr15" }, "f15" }, 
+  { { "fr16" }, "f16" }, 
+  { { "fr17" }, "f17" }, 
+  { { "fr18" }, "f18" }, 
+  { { "fr19" }, "f19" }, 
+  { { "fr20" }, "f20" }, 
+  { { "fr21" }, "f21" }, 
+  { { "fr22" }, "f22" }, 
+  { { "fr23" }, "f23" }, 
+  { { "fr24" }, "f24" }, 
+  { { "fr25" }, "f25" }, 
+  { { "fr26" }, "f26" }, 
+  { { "fr27" }, "f27" }, 
+  { { "fr28" }, "f28" }, 
+  { { "fr29" }, "f29" }, 
+  { { "fr30" }, "f30" }, 
+  { { "fr31" }, "f31" }, 
+  { { "cc" }, "cr0" }, 
 };
 
 void PPCTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
@@ -600,12 +642,12 @@ public:
   virtual bool setFeatureEnabled(llvm::StringMap<bool> &Features,
                                  const std::string &Name,
                                  bool Enabled) const;
-  virtual void getDefaultFeatures(const std::string &CPU, 
+  virtual void getDefaultFeatures(const std::string &CPU,
                                   llvm::StringMap<bool> &Features) const;
   virtual void HandleTargetFeatures(const llvm::StringMap<bool> &Features);
 };
 
-void X86TargetInfo::getDefaultFeatures(const std::string &CPU, 
+void X86TargetInfo::getDefaultFeatures(const std::string &CPU,
                                        llvm::StringMap<bool> &Features) const {
   // FIXME: This should not be here.
   Features["3dnow"] = false;
@@ -649,7 +691,7 @@ void X86TargetInfo::getDefaultFeatures(const std::string &CPU,
     setFeatureEnabled(Features, "sse4", true);
   else if (CPU == "k6" || CPU == "winchip-c6")
     setFeatureEnabled(Features, "mmx", true);
-  else if (CPU == "k6-2" || CPU == "k6-3" || CPU == "athlon" || 
+  else if (CPU == "k6-2" || CPU == "k6-3" || CPU == "athlon" ||
            CPU == "athlon-tbird" || CPU == "winchip2" || CPU == "c3") {
     setFeatureEnabled(Features, "mmx", true);
     setFeatureEnabled(Features, "3dnow", true);
@@ -658,14 +700,14 @@ void X86TargetInfo::getDefaultFeatures(const std::string &CPU,
     setFeatureEnabled(Features, "3dnowa", true);
   } else if (CPU == "k8" || CPU == "opteron" || CPU == "athlon64" ||
            CPU == "athlon-fx") {
-    setFeatureEnabled(Features, "sse2", true); 
+    setFeatureEnabled(Features, "sse2", true);
     setFeatureEnabled(Features, "3dnowa", true);
   } else if (CPU == "c3-2")
     setFeatureEnabled(Features, "sse", true);
 }
 
 bool X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
-                                      const std::string &Name, 
+                                      const std::string &Name,
                                       bool Enabled) const {
   // FIXME: This *really* should not be here.
   if (!Features.count(Name) && Name != "sse4")
@@ -679,13 +721,13 @@ bool X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
     else if (Name == "sse2")
       Features["mmx"] = Features["sse"] = Features["sse2"] = true;
     else if (Name == "sse3")
-      Features["mmx"] = Features["sse"] = Features["sse2"] = 
+      Features["mmx"] = Features["sse"] = Features["sse2"] =
         Features["sse3"] = true;
     else if (Name == "ssse3")
-      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] = 
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = true;
     else if (Name == "sse4")
-      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] = 
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = Features["sse41"] = Features["sse42"] = true;
     else if (Name == "3dnow")
       Features["3dnowa"] = true;
@@ -693,16 +735,16 @@ bool X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
       Features["3dnow"] = Features["3dnowa"] = true;
   } else {
     if (Name == "mmx")
-      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] = 
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = Features["sse41"] = Features["sse42"] = false;
     else if (Name == "sse")
-      Features["sse"] = Features["sse2"] = Features["sse3"] = 
+      Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = Features["sse41"] = Features["sse42"] = false;
     else if (Name == "sse2")
-      Features["sse2"] = Features["sse3"] = Features["ssse3"] = 
+      Features["sse2"] = Features["sse3"] = Features["ssse3"] =
         Features["sse41"] = Features["sse42"] = false;
     else if (Name == "sse3")
-      Features["sse3"] = Features["ssse3"] = Features["sse41"] = 
+      Features["sse3"] = Features["ssse3"] = Features["sse41"] =
         Features["sse42"] = false;
     else if (Name == "ssse3")
       Features["ssse3"] = Features["sse41"] = Features["sse42"] = false;
@@ -954,7 +996,7 @@ public:
 namespace {
 class DarwinX86_64TargetInfo : public DarwinTargetInfo<X86_64TargetInfo> {
 public:
-  DarwinX86_64TargetInfo(const std::string& triple) 
+  DarwinX86_64TargetInfo(const std::string& triple)
       : DarwinTargetInfo<X86_64TargetInfo>(triple) {
     Int64Type = SignedLongLong;
   }
@@ -964,7 +1006,7 @@ public:
 namespace {
 class OpenBSDX86_64TargetInfo : public OpenBSDTargetInfo<X86_64TargetInfo> {
 public:
-  OpenBSDX86_64TargetInfo(const std::string& triple) 
+  OpenBSDX86_64TargetInfo(const std::string& triple)
       : OpenBSDTargetInfo<X86_64TargetInfo>(triple) {
     IntMaxType = SignedLongLong;
     UIntMaxType = UnsignedLongLong;
@@ -982,11 +1024,19 @@ class ARMTargetInfo : public TargetInfo {
     Armv7a,
     XScale
   } ArmArch;
+
+  std::string ABI;
+
 public:
-  ARMTargetInfo(const std::string& triple) : TargetInfo(triple) {
+  ARMTargetInfo(const std::string& triple)
+    : TargetInfo(triple), ABI("aapcs-linux")
+  {
     // FIXME: Are the defaults correct for ARM?
-    DescriptionString = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
-                        "i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:64:64";
+    DescriptionString = ("e-p:32:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
+                         "i64:32:32-f32:32:32-f64:32:32-"
+                         "v64:64:64-v128:128:128-a0:0:32");
+    SizeType = UnsignedInt;
+    PtrDiffType = SignedInt;
     if (triple.find("armv7-") == 0)
       ArmArch = Armv7a;
     else if (triple.find("arm-") == 0 || triple.find("armv6-") == 0)
@@ -1003,6 +1053,28 @@ public:
       // re-evaluated when codegen is brought up.
       ArmArch = Armv6;
     }
+  }
+  virtual const char *getABI() const { return ABI.c_str(); }
+  virtual bool setABI(const std::string &Name) {
+    ABI = Name;
+
+    // The defaults (above) are for AAPCS, check if we need to change them.
+    //
+    // FIXME: We need support for -meabi... we could just mangle it into the
+    // name.
+    if (Name == "apcs-gnu") {
+      DoubleAlign = LongLongAlign = 32;
+      SizeType = UnsignedLong;
+
+      // FIXME: Override "preferred align" for double and long long.
+    } else if (Name == "aapcs") {
+      // FIXME: Enumerated types are variable width in straight AAPCS.
+    } else if (Name == "aapcs-linux") {
+      ;
+    } else
+      return false;
+
+    return true;
   }
   virtual void getTargetDefines(const LangOptions &Opts,
                                 std::vector<char> &Defs) const {
@@ -1080,7 +1152,7 @@ public:
 
 
 namespace {
-class DarwinARMTargetInfo : 
+class DarwinARMTargetInfo :
   public DarwinTargetInfo<ARMTargetInfo> {
 protected:
   virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
@@ -1090,7 +1162,7 @@ protected:
   }
 
 public:
-  DarwinARMTargetInfo(const std::string& triple) 
+  DarwinARMTargetInfo(const std::string& triple)
     : DarwinTargetInfo<ARMTargetInfo>(triple) {}
 };
 } // end anonymous namespace.
@@ -1235,7 +1307,7 @@ namespace {
       Define(Defines, "__pic16");
       Define(Defines, "rom", "__attribute__((address_space(1)))");
       Define(Defines, "ram", "__attribute__((address_space(0)))");
-      Define(Defines, "_section(SectName)", 
+      Define(Defines, "_section(SectName)",
              "__attribute__((section(SectName)))");
       Define(Defines, "_address(Addr)",
              "__attribute__((section(\"Address=\"#Addr)))");
@@ -1246,7 +1318,7 @@ namespace {
     }
     virtual void getTargetBuiltins(const Builtin::Info *&Records,
                                    unsigned &NumRecords) const {}
-    virtual const char *getVAListDeclaration() const { 
+    virtual const char *getVAListDeclaration() const {
       return "";
     }
     virtual const char *getClobbers() const {
@@ -1471,12 +1543,12 @@ namespace {
 
 namespace {
 
-  // LLVM and Clang cannot be used directly to output native binaries for 
-  // target, but is used to compile C code to llvm bitcode with correct 
+  // LLVM and Clang cannot be used directly to output native binaries for
+  // target, but is used to compile C code to llvm bitcode with correct
   // type and alignment information.
-  // 
-  // TCE uses the llvm bitcode as input and uses it for generating customized 
-  // target processor and program binary. TCE co-design environment is 
+  //
+  // TCE uses the llvm bitcode as input and uses it for generating customized
+  // target processor and program binary. TCE co-design environment is
   // publicly available in http://tce.cs.tut.fi
 
   class TCETargetInfo : public TargetInfo{
@@ -1549,6 +1621,7 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
     return NULL;
 
   case llvm::Triple::arm:
+  case llvm::Triple::thumb:
     switch (os) {
     case llvm::Triple::Darwin:
       return new DarwinARMTargetInfo(T);

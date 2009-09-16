@@ -72,18 +72,40 @@ MDNode::MDNode(LLVMContext &C, Value*const* Vals, unsigned NumVals)
     // Only record metadata uses.
     if (MetadataBase *MB = dyn_cast_or_null<MetadataBase>(Vals[i]))
       OperandList[NumOperands++] = MB;
-    Node.push_back(WeakVH(Vals[i]));
+    else if(Vals[i] && 
+            Vals[i]->getType()->getTypeID() == Type::MetadataTyID)
+      OperandList[NumOperands++] = Vals[i];
+    Node.push_back(ElementVH(Vals[i], this));
   }
+}
+
+void MDNode::Profile(FoldingSetNodeID &ID) const {
+  for (const_elem_iterator I = elem_begin(), E = elem_end(); I != E; ++I)
+    ID.AddPointer(*I);
 }
 
 MDNode *MDNode::get(LLVMContext &Context, Value*const* Vals, unsigned NumVals) {
   LLVMContextImpl *pImpl = Context.pImpl;
-  std::vector<Value*> V;
-  V.reserve(NumVals);
-  for (unsigned i = 0; i < NumVals; ++i)
-    V.push_back(Vals[i]);
+  FoldingSetNodeID ID;
+  for (unsigned i = 0; i != NumVals; ++i)
+    ID.AddPointer(Vals[i]);
+
+  pImpl->ConstantsLock.reader_acquire();
+  void *InsertPoint;
+  MDNode *N = pImpl->MDNodeSet.FindNodeOrInsertPos(ID, InsertPoint);
+  pImpl->ConstantsLock.reader_release();
   
-  return pImpl->MDNodes.getOrCreate(Type::getMetadataTy(Context), V);
+  if (!N) {
+    sys::SmartScopedWriter<true> Writer(pImpl->ConstantsLock);
+    N = pImpl->MDNodeSet.FindNodeOrInsertPos(ID, InsertPoint);
+    if (!N) {
+      // InsertPoint will have been set by the FindNodeOrInsertPos call.
+      N = new MDNode(Context, Vals, NumVals);
+      pImpl->MDNodeSet.InsertNode(N, InsertPoint);
+    }
+  }
+
+  return N;
 }
 
 /// dropAllReferences - Remove all uses and clear node vector.
@@ -92,17 +114,97 @@ void MDNode::dropAllReferences() {
   Node.clear();
 }
 
-static std::vector<Value*> getValType(MDNode *N) {
-  std::vector<Value*> Elements;
-  Elements.reserve(N->getNumElements());
-  for (unsigned i = 0, e = N->getNumElements(); i != e; ++i)
-    Elements.push_back(N->getElement(i));
-  return Elements;
+MDNode::~MDNode() {
+  {
+    LLVMContextImpl *pImpl = getType()->getContext().pImpl;
+    sys::SmartScopedWriter<true> Writer(pImpl->ConstantsLock);
+    pImpl->MDNodeSet.RemoveNode(this);
+  }
+  dropAllReferences();
 }
 
-MDNode::~MDNode() {
-  getType()->getContext().pImpl->MDNodes.remove(this);
-  dropAllReferences();
+// Replace value from this node's element list.
+void MDNode::replaceElement(Value *From, Value *To) {
+  if (From == To || !getType())
+    return;
+  LLVMContext &Context = getType()->getContext();
+  LLVMContextImpl *pImpl = Context.pImpl;
+
+  // Find value. This is a linear search, do something if it consumes 
+  // lot of time. It is possible that to have multiple instances of
+  // From in this MDNode's element list.
+  SmallVector<unsigned, 4> Indexes;
+  unsigned Index = 0;
+  for (SmallVector<ElementVH, 4>::iterator I = Node.begin(),
+         E = Node.end(); I != E; ++I, ++Index) {
+    Value *V = *I;
+    if (V && V == From) 
+      Indexes.push_back(Index);
+  }
+
+  if (Indexes.empty())
+    return;
+
+  // Remove "this" from the context map. 
+  {
+    sys::SmartScopedWriter<true> Writer(pImpl->ConstantsLock);
+    pImpl->MDNodeSet.RemoveNode(this);
+  }
+
+  // MDNode only lists metadata elements in operand list, because MDNode
+  // used by MDNode is considered a valid use. However on the side, MDNode
+  // using a non-metadata value is not considered a "use" of non-metadata
+  // value.
+  SmallVector<unsigned, 4> OpIndexes;
+  unsigned OpIndex = 0;
+  for (User::op_iterator OI = op_begin(), OE = op_end();
+       OI != OE; ++OI, OpIndex++) {
+    if (*OI == From)
+      OpIndexes.push_back(OpIndex);
+  }
+  if (MetadataBase *MDTo = dyn_cast_or_null<MetadataBase>(To)) {
+    for (SmallVector<unsigned, 4>::iterator OI = OpIndexes.begin(),
+           OE = OpIndexes.end(); OI != OE; ++OI)
+      setOperand(*OI, MDTo);
+  } else {
+    for (SmallVector<unsigned, 4>::iterator OI = OpIndexes.begin(),
+           OE = OpIndexes.end(); OI != OE; ++OI)
+      setOperand(*OI, 0);
+  }
+
+  // Replace From element(s) in place.
+  for (SmallVector<unsigned, 4>::iterator I = Indexes.begin(), E = Indexes.end(); 
+       I != E; ++I) {
+    unsigned Index = *I;
+    Node[Index] = ElementVH(To, this);
+  }
+
+  // Insert updated "this" into the context's folding node set.
+  // If a node with same element list already exist then before inserting 
+  // updated "this" into the folding node set, replace all uses of existing 
+  // node with updated "this" node.
+  FoldingSetNodeID ID;
+  Profile(ID);
+  pImpl->ConstantsLock.reader_acquire();
+  void *InsertPoint;
+  MDNode *N = pImpl->MDNodeSet.FindNodeOrInsertPos(ID, InsertPoint);
+  pImpl->ConstantsLock.reader_release();
+
+  if (N) {
+    N->replaceAllUsesWith(this);
+    delete N;
+    N = 0;
+  }
+
+  {
+    sys::SmartScopedWriter<true> Writer(pImpl->ConstantsLock);
+    N = pImpl->MDNodeSet.FindNodeOrInsertPos(ID, InsertPoint);
+    if (!N) {
+      // InsertPoint will have been set by the FindNodeOrInsertPos call.
+      N = this;
+      pImpl->MDNodeSet.InsertNode(N, InsertPoint);
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

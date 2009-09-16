@@ -245,7 +245,7 @@ bool ARMBaseRegisterInfo::isReservedReg(const MachineFunction &MF,
 
 const TargetRegisterClass *
 ARMBaseRegisterInfo::getPointerRegClass(unsigned Kind) const {
-  return &ARM::GPRRegClass;
+  return ARM::GPRRegisterClass;
 }
 
 /// getAllocationOrder - Returns the register allocation order for a specified
@@ -536,7 +536,7 @@ ARMBaseRegisterInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
       }
     }
 
-    if (CSRegClasses[i] == &ARM::GPRRegClass) {
+    if (CSRegClasses[i] == ARM::GPRRegisterClass) {
       if (Spilled) {
         NumGPRSpills++;
 
@@ -680,7 +680,7 @@ ARMBaseRegisterInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
           }
         } else {
           // Reserve a slot closest to SP or frame pointer.
-          const TargetRegisterClass *RC = &ARM::GPRRegClass;
+          const TargetRegisterClass *RC = ARM::GPRRegisterClass;
           RS->setScavengingFrameIndex(MFI->CreateStackObject(RC->getSize(),
                                                            RC->getAlignment()));
         }
@@ -1068,10 +1068,10 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // If the offset we have is too large to fit into the instruction, we need
   // to form it with a series of ADDri's.  Do this by taking 8-bit chunks
   // out of 'Offset'.
-  unsigned ScratchReg = findScratchRegister(RS, &ARM::GPRRegClass, AFI);
+  unsigned ScratchReg = findScratchRegister(RS, ARM::GPRRegisterClass, AFI);
   if (ScratchReg == 0)
     // No register is "free". Scavenge a register.
-    ScratchReg = RS->scavengeRegister(&ARM::GPRRegClass, II, SPAdj);
+    ScratchReg = RS->scavengeRegister(ARM::GPRRegisterClass, II, SPAdj);
   int PIdx = MI.findFirstPredOperandIdx();
   ARMCC::CondCodes Pred = (PIdx == -1)
     ? ARMCC::AL : (ARMCC::CondCodes)MI.getOperand(PIdx).getImm();

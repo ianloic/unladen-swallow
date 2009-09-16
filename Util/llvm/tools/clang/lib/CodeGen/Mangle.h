@@ -29,11 +29,17 @@ namespace clang {
   class ASTContext;
   class CXXConstructorDecl;
   class CXXDestructorDecl;
+  class FunctionDecl;
   class NamedDecl;
   class VarDecl;
-  
-  bool mangleName(const NamedDecl *D, ASTContext &Context, 
+
+  bool mangleName(const NamedDecl *D, ASTContext &Context,
                   llvm::raw_ostream &os);
+  void mangleThunk(const FunctionDecl *FD, int64_t n, int64_t vn,
+                   ASTContext &Context, llvm::raw_ostream &os);
+  void mangleCovariantThunk(const FunctionDecl *FD, int64_t nv_t, int64_t v_t,
+                            int64_t nv_r, int64_t v_r, ASTContext &Context,
+                            llvm::raw_ostream &os);
   void mangleGuardVariable(const VarDecl *D, ASTContext &Context,
                            llvm::raw_ostream &os);
   void mangleCXXVtable(QualType T, ASTContext &Context, llvm::raw_ostream &os);
@@ -44,4 +50,4 @@ namespace clang {
                      ASTContext &Context, llvm::raw_ostream &os);
 }
 
-#endif 
+#endif

@@ -89,7 +89,7 @@ void checkNumberOfArguments (const DagInit* d, unsigned min_arguments) {
 
 // isDagEmpty - is this DAG marked with an empty marker?
 bool isDagEmpty (const DagInit* d) {
-  return d->getOperator()->getAsString() == "empty";
+  return d->getOperator()->getAsString() == "empty_dag_marker";
 }
 
 // EscapeVariableName - Escape commas and other symbols not allowed
@@ -1074,6 +1074,16 @@ void EmitLogicalOperationTest(const DagInit& d, const char* LogicOp,
   }
 }
 
+void EmitLogicalNot(const DagInit& d, const char* IndentLevel,
+                    const OptionDescriptions& OptDescs, raw_ostream& O)
+{
+  checkNumberOfArguments(&d, 1);
+  const DagInit& InnerTest = InitPtrToDag(d.getArg(0));
+  O << "! (";
+  EmitCaseTest(InnerTest, IndentLevel, OptDescs, O);
+  O << ")";
+}
+
 /// EmitCaseTest - Helper function used by EmitCaseConstructHandler.
 void EmitCaseTest(const DagInit& d, const char* IndentLevel,
                   const OptionDescriptions& OptDescs,
@@ -1084,6 +1094,8 @@ void EmitCaseTest(const DagInit& d, const char* IndentLevel,
     EmitLogicalOperationTest(d, "&&", IndentLevel, OptDescs, O);
   else if (TestName == "or")
     EmitLogicalOperationTest(d, "||", IndentLevel, OptDescs, O);
+  else if (TestName == "not")
+    EmitLogicalNot(d, IndentLevel, OptDescs, O);
   else if (EmitCaseTest1Arg(TestName, d, OptDescs, O))
     return;
   else if (EmitCaseTest2Args(TestName, d, IndentLevel, OptDescs, O))

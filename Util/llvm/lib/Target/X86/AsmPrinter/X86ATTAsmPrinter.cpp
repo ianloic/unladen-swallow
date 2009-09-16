@@ -15,65 +15,47 @@
 
 #define DEBUG_TYPE "asm-printer"
 #include "X86ATTAsmPrinter.h"
+#include "X86ATTInstPrinter.h"
+#include "X86MCInstLower.h"
 #include "X86.h"
 #include "X86COFF.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86TargetMachine.h"
-#include "X86MCAsmInfo.h"
 #include "llvm/CallingConv.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Module.h"
 #include "llvm/Type.h"
-#include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/CodeGen/DwarfWriter.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
-
-static cl::opt<bool> NewAsmPrinter("experimental-asm-printer",
-                                   cl::Hidden);
 
 //===----------------------------------------------------------------------===//
 // Primitive Helper Functions.
 //===----------------------------------------------------------------------===//
 
-void X86ATTAsmPrinter::PrintPICBaseSymbol() const {
-  // FIXME: the actual label generated doesn't matter here!  Just mangle in
-  // something unique (the function number) with Private prefix.
-  if (Subtarget->isTargetDarwin())
-    O << "\"L" << getFunctionNumber() << "$pb\"";
-  else {
-    assert(Subtarget->isTargetELF() && "Don't know how to print PIC label!");
-    O << ".Lllvm$" << getFunctionNumber() << ".$piclabel";
-  }
+void X86ATTAsmPrinter::printMCInst(const MCInst *MI) {
+  X86ATTInstPrinter(O, *MAI).printInstruction(MI);
 }
 
-MCSymbol *X86ATTAsmPrinter::GetPICBaseSymbol() {
-  // FIXME: the actual label generated doesn't matter here!  Just mangle in
-  // something unique (the function number) with Private prefix.
-  std::string Name;
-  
-  if (Subtarget->isTargetDarwin()) {
-    Name = "L" + utostr(getFunctionNumber())+"$pb";
-  } else {
-    assert(Subtarget->isTargetELF() && "Don't know how to print PIC label!");
-    Name = ".Lllvm$" + utostr(getFunctionNumber())+".$piclabel";
-  }     
-  return OutContext.GetOrCreateSymbol(Name);
+void X86ATTAsmPrinter::PrintPICBaseSymbol() const {
+  // FIXME: Gross const cast hack.
+  X86ATTAsmPrinter *AP = const_cast<X86ATTAsmPrinter*>(this);
+  X86MCInstLower(OutContext, 0, *AP).GetPICBaseSymbol()->print(O, MAI);
 }
 
 static X86MachineFunctionInfo calculateFunctionInfo(const Function *F,
@@ -112,23 +94,23 @@ static X86MachineFunctionInfo calculateFunctionInfo(const Function *F,
 
 /// DecorateCygMingName - Query FunctionInfoMap and use this information for
 /// various name decorations for Cygwin and MingW.
-void X86ATTAsmPrinter::DecorateCygMingName(std::string &Name,
+void X86ATTAsmPrinter::DecorateCygMingName(SmallVectorImpl<char> &Name,
                                            const GlobalValue *GV) {
   assert(Subtarget->isTargetCygMing() && "This is only for cygwin and mingw");
   
   const Function *F = dyn_cast<Function>(GV);
   if (!F) return;
-
+  
   // Save function name for later type emission.
   if (F->isDeclaration())
-    CygMingStubs.insert(Name);
+    CygMingStubs.insert(StringRef(Name.data(), Name.size()));
   
   // We don't want to decorate non-stdcall or non-fastcall functions right now
-  unsigned CC = F->getCallingConv();
+  CallingConv::ID CC = F->getCallingConv();
   if (CC != CallingConv::X86_StdCall && CC != CallingConv::X86_FastCall)
     return;
-
-
+  
+  
   const X86MachineFunctionInfo *Info;
   
   FMFInfoMap::const_iterator info_item = FunctionInfoMap.find(F);
@@ -139,32 +121,30 @@ void X86ATTAsmPrinter::DecorateCygMingName(std::string &Name,
   } else {
     Info = &info_item->second;
   }
-
+  
+  if (Info->getDecorationStyle() == None) return;
   const FunctionType *FT = F->getFunctionType();
-  switch (Info->getDecorationStyle()) {
-  case None:
-    break;
-  case StdCall:
-    // "Pure" variadic functions do not receive @0 suffix.
-    if (!FT->isVarArg() || (FT->getNumParams() == 0) ||
-        (FT->getNumParams() == 1 && F->hasStructRetAttr()))
-      Name += '@' + utostr_32(Info->getBytesToPopOnReturn());
-    break;
-  case FastCall:
-    // "Pure" variadic functions do not receive @0 suffix.
-    if (!FT->isVarArg() || (FT->getNumParams() == 0) ||
-        (FT->getNumParams() == 1 && F->hasStructRetAttr()))
-      Name += '@' + utostr_32(Info->getBytesToPopOnReturn());
 
-    if (Name[0] == '_') {
+  // "Pure" variadic functions do not receive @0 suffix.
+  if (!FT->isVarArg() || FT->getNumParams() == 0 ||
+      (FT->getNumParams() == 1 && F->hasStructRetAttr()))
+    raw_svector_ostream(Name) << '@' << Info->getBytesToPopOnReturn();
+  
+  if (Info->getDecorationStyle() == FastCall) {
+    if (Name[0] == '_')
       Name[0] = '@';
-    } else {
-      Name = '@' + Name;
-    }
-    break;
-  default:
-    llvm_unreachable("Unsupported DecorationStyle");
-  }
+    else
+      Name.insert(Name.begin(), '@');
+  }    
+}
+
+/// DecorateCygMingName - Query FunctionInfoMap and use this information for
+/// various name decorations for Cygwin and MingW.
+void X86ATTAsmPrinter::DecorateCygMingName(std::string &Name,
+                                           const GlobalValue *GV) {
+  SmallString<128> NameStr(Name.begin(), Name.end());
+  DecorateCygMingName(NameStr, GV);
+  Name.assign(NameStr.begin(), NameStr.end());
 }
 
 void X86ATTAsmPrinter::emitFunctionHeader(const MachineFunction &MF) {
@@ -235,7 +215,7 @@ void X86ATTAsmPrinter::emitFunctionHeader(const MachineFunction &MF) {
 bool X86ATTAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   const Function *F = MF.getFunction();
   this->MF = &MF;
-  unsigned CC = F->getCallingConv();
+  CallingConv::ID CC = F->getCallingConv();
 
   SetupMachineFunction(MF);
   O << "\n\n";
@@ -267,7 +247,7 @@ bool X86ATTAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
       // This is an entry block or a block that's only reachable via a
       // fallthrough edge. In non-VerboseAsm mode, don't print the label.
     } else {
-      printBasicBlockLabel(I, true, true, VerboseAsm);
+      EmitBasicBlockStart(I);
       O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
@@ -324,7 +304,6 @@ void X86ATTAsmPrinter::printSymbolOperand(const MachineOperand &MO) {
       Suffix = "$stub";
     else if (MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY ||
              MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY_PIC_BASE ||
-             MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY ||
              MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
       Suffix = "$non_lazy_ptr";
     
@@ -337,13 +316,44 @@ void X86ATTAsmPrinter::printSymbolOperand(const MachineOperand &MO) {
       Name = "__imp_" + Name;
     
     if (MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY ||
-        MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY_PIC_BASE)
-      GVStubs[Name] = Mang->getMangledName(GV);
-    else if (MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY ||
-             MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
-      HiddenGVStubs[Name] = Mang->getMangledName(GV);
-    else if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB)
-      FnStubs[Name] = Mang->getMangledName(GV);
+        MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY_PIC_BASE) {
+      SmallString<128> NameStr;
+      Mang->getNameWithPrefix(NameStr, GV, true);
+      NameStr += "$non_lazy_ptr";
+      MCSymbol *Sym = OutContext.GetOrCreateSymbol(NameStr.str());
+      
+      const MCSymbol *&StubSym = 
+        MMI->getObjFileInfo<MachineModuleInfoMachO>().getGVStubEntry(Sym);
+      if (StubSym == 0) {
+        NameStr.clear();
+        Mang->getNameWithPrefix(NameStr, GV, false);
+        StubSym = OutContext.GetOrCreateSymbol(NameStr.str());
+      }
+    } else if (MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE){
+      SmallString<128> NameStr;
+      Mang->getNameWithPrefix(NameStr, GV, true);
+      NameStr += "$non_lazy_ptr";
+      MCSymbol *Sym = OutContext.GetOrCreateSymbol(NameStr.str());
+      const MCSymbol *&StubSym =
+        MMI->getObjFileInfo<MachineModuleInfoMachO>().getHiddenGVStubEntry(Sym);
+      if (StubSym == 0) {
+        NameStr.clear();
+        Mang->getNameWithPrefix(NameStr, GV, false);
+        StubSym = OutContext.GetOrCreateSymbol(NameStr.str());
+      }
+    } else if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB) {
+      SmallString<128> NameStr;
+      Mang->getNameWithPrefix(NameStr, GV, true);
+      NameStr += "$stub";
+      MCSymbol *Sym = OutContext.GetOrCreateSymbol(NameStr.str());
+      const MCSymbol *&StubSym =
+        MMI->getObjFileInfo<MachineModuleInfoMachO>().getFnStubEntry(Sym);
+      if (StubSym == 0) {
+        NameStr.clear();
+        Mang->getNameWithPrefix(NameStr, GV, false);
+        StubSym = OutContext.GetOrCreateSymbol(NameStr.str());
+      }
+    }
     
     // If the name begins with a dollar-sign, enclose it in parens.  We do this
     // to avoid having it look like an integer immediate to the assembler.
@@ -358,8 +368,14 @@ void X86ATTAsmPrinter::printSymbolOperand(const MachineOperand &MO) {
   case MachineOperand::MO_ExternalSymbol: {
     std::string Name = Mang->makeNameProper(MO.getSymbolName());
     if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB) {
-      FnStubs[Name+"$stub"] = Name;
       Name += "$stub";
+      MCSymbol *Sym = OutContext.GetOrCreateSymbol(Name);
+      const MCSymbol *&StubSym =
+        MMI->getObjFileInfo<MachineModuleInfoMachO>().getFnStubEntry(Sym);
+      if (StubSym == 0) {
+        Name.erase(Name.end()-5, Name.end());
+        StubSym = OutContext.GetOrCreateSymbol(Name);
+      }
     }
     
     // If the name begins with a dollar-sign, enclose it in parens.  We do this
@@ -378,7 +394,6 @@ void X86ATTAsmPrinter::printSymbolOperand(const MachineOperand &MO) {
   case X86II::MO_NO_FLAG:    // No flag.
     break;
   case X86II::MO_DARWIN_NONLAZY:
-  case X86II::MO_DARWIN_HIDDEN_NONLAZY:
   case X86II::MO_DLLIMPORT:
   case X86II::MO_DARWIN_STUB:
     // These affect the name of the symbol, not any suffix.
@@ -417,7 +432,7 @@ void X86ATTAsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo) {
     O << MO.getImm();
     return;
   case MachineOperand::MO_MachineBasicBlock:
-    printBasicBlockLabel(MO.getMBB(), false, false, false);
+    GetMBBSymbol(MO.getMBB()->getNumber())->print(O, MAI);
     return;
   case MachineOperand::MO_GlobalAddress:
   case MachineOperand::MO_ExternalSymbol:
@@ -427,15 +442,12 @@ void X86ATTAsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo) {
 }
 
 
-
 void X86ATTAsmPrinter::printOperand(const MachineInstr *MI, unsigned OpNo,
                                     const char *Modifier) {
   const MachineOperand &MO = MI->getOperand(OpNo);
   switch (MO.getType()) {
   default: llvm_unreachable("unknown operand type!");
   case MachineOperand::MO_Register: {
-    assert(TargetRegisterInfo::isPhysicalRegister(MO.getReg()) &&
-           "Virtual registers should not make it this far!");
     O << '%';
     unsigned Reg = MO.getReg();
     if (Modifier && strncmp(Modifier, "subreg", strlen("subreg")) == 0) {
@@ -444,7 +456,7 @@ void X86ATTAsmPrinter::printOperand(const MachineInstr *MI, unsigned OpNo,
                     ((strcmp(Modifier+6,"16") == 0) ? MVT::i16 : MVT::i8));
       Reg = getX86SubSuperRegister(Reg, VT);
     }
-    O << TRI->getAsmName(Reg);
+    O << X86ATTInstPrinter::getRegisterName(Reg);
     return;
   }
 
@@ -544,7 +556,9 @@ void X86ATTAsmPrinter::printPICJumpTableSetLabel(unsigned uid,
 
   O << MAI->getSetDirective() << ' ' << MAI->getPrivateGlobalPrefix()
     << getFunctionNumber() << '_' << uid << "_set_" << MBB->getNumber() << ',';
-  printBasicBlockLabel(MBB, false, false, false);
+  
+  GetMBBSymbol(MBB->getNumber())->print(O, MAI);
+  
   if (Subtarget->isPICStyleRIPRel())
     O << '-' << MAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
       << '_' << uid << '\n';
@@ -563,7 +577,6 @@ void X86ATTAsmPrinter::printPICLabel(const MachineInstr *MI, unsigned Op) {
   O << ':';
 }
 
-
 void X86ATTAsmPrinter::printPICJumpTableEntry(const MachineJumpTableInfo *MJTI,
                                               const MachineBasicBlock *MBB,
                                               unsigned uid) const {
@@ -576,10 +589,10 @@ void X86ATTAsmPrinter::printPICJumpTableEntry(const MachineJumpTableInfo *MJTI,
     O << MAI->getPrivateGlobalPrefix() << getFunctionNumber()
       << '_' << uid << "_set_" << MBB->getNumber();
   } else if (Subtarget->isPICStyleGOT()) {
-    printBasicBlockLabel(MBB, false, false, false);
+    GetMBBSymbol(MBB->getNumber())->print(O, MAI);
     O << "@GOTOFF";
   } else
-    printBasicBlockLabel(MBB, false, false, false);
+    GetMBBSymbol(MBB->getNumber())->print(O, MAI);
 }
 
 bool X86ATTAsmPrinter::printAsmMRegister(const MachineOperand &MO, char Mode) {
@@ -603,7 +616,7 @@ bool X86ATTAsmPrinter::printAsmMRegister(const MachineOperand &MO, char Mode) {
     break;
   }
 
-  O << '%'<< TRI->getAsmName(Reg);
+  O << '%' << X86ATTInstPrinter::getRegisterName(Reg);
   return false;
 }
 
@@ -708,107 +721,6 @@ bool X86ATTAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
   return false;
 }
 
-static void lower_lea64_32mem(MCInst *MI, unsigned OpNo) {
-  // Convert registers in the addr mode according to subreg64.
-  for (unsigned i = 0; i != 4; ++i) {
-    if (!MI->getOperand(i).isReg()) continue;
-    
-    unsigned Reg = MI->getOperand(i).getReg();
-    if (Reg == 0) continue;
-    
-    MI->getOperand(i).setReg(getX86SubSuperRegister(Reg, MVT::i64));
-  }
-}
-
-/// LowerGlobalAddressOperand - Lower an MO_GlobalAddress operand to an
-/// MCOperand.
-MCOperand X86ATTAsmPrinter::LowerGlobalAddressOperand(const MachineOperand &MO){
-  const GlobalValue *GV = MO.getGlobal();
-  
-  const char *Suffix = "";
-  if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB)
-    Suffix = "$stub";
-  else if (MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY ||
-           MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY_PIC_BASE ||
-           MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY ||
-           MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
-    Suffix = "$non_lazy_ptr";
-  
-  std::string Name = Mang->getMangledName(GV, Suffix, Suffix[0] != '\0');
-  if (Subtarget->isTargetCygMing())
-    DecorateCygMingName(Name, GV);
-  
-  // Handle dllimport linkage.
-  if (MO.getTargetFlags() == X86II::MO_DLLIMPORT)
-    Name = "__imp_" + Name;
-  
-  if (MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY ||
-      MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY_PIC_BASE)
-    GVStubs[Name] = Mang->getMangledName(GV);
-  else if (MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY ||
-           MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
-    HiddenGVStubs[Name] = Mang->getMangledName(GV);
-  else if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB)
-    FnStubs[Name] = Mang->getMangledName(GV);
-  
-  
-  // Handle target operand flags.
-  // FIXME: This should be common between external symbols, constant pool etc.
-  MCSymbol *NegatedSymbol = 0;
-  
-  switch (MO.getTargetFlags()) {
-  default:
-    llvm_unreachable("Unknown target flag on GV operand");
-  case X86II::MO_NO_FLAG:    // No flag.
-    break;
-  case X86II::MO_DARWIN_NONLAZY:
-  case X86II::MO_DARWIN_HIDDEN_NONLAZY:
-  case X86II::MO_DLLIMPORT:
-  case X86II::MO_DARWIN_STUB:
-    // These affect the name of the symbol, not any suffix.
-    break;
-  case X86II::MO_GOT_ABSOLUTE_ADDRESS:
-    assert(0 && "Reloc mode unimp!");
-    //O << " + [.-";
-    //PrintPICBaseSymbol();
-    //O << ']';
-    break;      
-  case X86II::MO_PIC_BASE_OFFSET:
-  case X86II::MO_DARWIN_NONLAZY_PIC_BASE:
-  case X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE:
-    // Subtract the pic base.
-    NegatedSymbol = GetPICBaseSymbol();
-    break;
-      
-  // FIXME: These probably should be a modifier on the symbol or something??
-  case X86II::MO_TLSGD:     Name += "@TLSGD";     break;
-  case X86II::MO_GOTTPOFF:  Name += "@GOTTPOFF";  break;
-  case X86II::MO_INDNTPOFF: Name += "@INDNTPOFF"; break;
-  case X86II::MO_TPOFF:     Name += "@TPOFF";     break;
-  case X86II::MO_NTPOFF:    Name += "@NTPOFF";    break;
-  case X86II::MO_GOTPCREL:  Name += "@GOTPCREL";  break;
-  case X86II::MO_GOT:       Name += "@GOT";       break;
-  case X86II::MO_GOTOFF:    Name += "@GOTOFF";    break;
-  case X86II::MO_PLT:       Name += "@PLT";       break;
-  }
-  
-  // Create a symbol for the name.
-  MCSymbol *Sym = OutContext.GetOrCreateSymbol(Name);
-  return MCOperand::CreateMCValue(MCValue::get(Sym, NegatedSymbol,
-                                               MO.getOffset()));
-}
-
-MCOperand X86ATTAsmPrinter::
-LowerExternalSymbolOperand(const MachineOperand &MO){
-  std::string Name = Mang->makeNameProper(MO.getSymbolName());
-  if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB) {
-    FnStubs[Name+"$stub"] = Name;
-    Name += "$stub";
-  }
-
-  MCSymbol *Sym = OutContext.GetOrCreateSymbol(Name);
-  return MCOperand::CreateMCValue(MCValue::get(Sym, 0, MO.getOffset()));
-}
 
 
 /// printMachineInstruction -- Print out a single X86 LLVM instruction MI in
@@ -817,109 +729,19 @@ LowerExternalSymbolOperand(const MachineOperand &MO){
 void X86ATTAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
 
-  if (!NewAsmPrinter) {
-    // Call the autogenerated instruction printer routines.
-    printInstruction(MI);
-    return;
-  }
+  processDebugLoc(MI->getDebugLoc());
   
-  MCInst TmpInst;
-
-  switch (MI->getOpcode()) {
-  case TargetInstrInfo::DBG_LABEL:
-  case TargetInstrInfo::EH_LABEL:
-  case TargetInstrInfo::GC_LABEL:
-    printLabel(MI);
-    return;
-  case TargetInstrInfo::INLINEASM:
-    O << '\t';
-    printInlineAsm(MI);
-    return;
-  case TargetInstrInfo::IMPLICIT_DEF:
-    printImplicitDef(MI);
-    return;
-  case X86::MOVPC32r: {
-    // This is a pseudo op for a two instruction sequence with a label, which
-    // looks like:
-    //     call "L1$pb"
-    // "L1$pb":
-    //     popl %esi
-    
-    // Emit the call.
-    MCSymbol *PICBase = GetPICBaseSymbol();
-    TmpInst.setOpcode(X86::CALLpcrel32);
-    TmpInst.addOperand(MCOperand::CreateMCValue(MCValue::get(PICBase)));
-    printInstruction(&TmpInst);
-
-    // Emit the label.
-    OutStreamer.EmitLabel(PICBase);
-    
-    // popl $reg
-    TmpInst.setOpcode(X86::POP32r);
-    TmpInst.getOperand(0) = MCOperand::CreateReg(MI->getOperand(0).getReg());
-    printInstruction(&TmpInst);
-    O << "OLD: ";
-    // Call the autogenerated instruction printer routines.
-    printInstruction(MI);
-    return;
-  }
-  }
+  printInstructionThroughMCStreamer(MI);
   
-  O << "NEW: ";
-  
-  TmpInst.setOpcode(MI->getOpcode());
-  
-  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI->getOperand(i);
-    
-    MCOperand MCOp;
-    switch (MO.getType()) {
-    default:
-      O.flush();
-      errs() << "Cannot lower operand #" << i << " of :" << *MI;
-      llvm_unreachable("Unimp");
-    case MachineOperand::MO_Register:
-      MCOp = MCOperand::CreateReg(MO.getReg());
-      break;
-    case MachineOperand::MO_Immediate:
-      MCOp = MCOperand::CreateImm(MO.getImm());
-      break;
-    case MachineOperand::MO_MachineBasicBlock:
-      MCOp = MCOperand::CreateMBBLabel(getFunctionNumber(), 
-                                       MO.getMBB()->getNumber());
-      break;
-    case MachineOperand::MO_GlobalAddress:
-      MCOp = LowerGlobalAddressOperand(MO);
-      break;
-    case MachineOperand::MO_ExternalSymbol:
-      MCOp = LowerExternalSymbolOperand(MO);
-      break;
-    }
-    
-    TmpInst.addOperand(MCOp);
-  }
-  
-  switch (TmpInst.getOpcode()) {
-  case X86::LEA64_32r:
-    // Handle the 'subreg rewriting' for the lea64_32mem operand.
-    lower_lea64_32mem(&TmpInst, 1);
-    break;
-  }
-  
-  // FIXME: Convert TmpInst.
-  printInstruction(&TmpInst);
-  O << "OLD: ";
-  
-  // Call the autogenerated instruction printer routines.
-  printInstruction(MI);
+  if (VerboseAsm && !MI->getDebugLoc().isUnknown())
+    EmitComments(*MI);
+  O << '\n';
 }
 
 void X86ATTAsmPrinter::PrintGlobalVariable(const GlobalVariable* GVar) {
-  const TargetData *TD = TM.getTargetData();
-
   if (!GVar->hasInitializer())
     return;   // External global require no code
-
+  
   // Check to see if this is a special global used by LLVM, if so, emit it.
   if (EmitSpecialLLVMGlobal(GVar)) {
     if (Subtarget->isTargetDarwin() &&
@@ -931,6 +753,8 @@ void X86ATTAsmPrinter::PrintGlobalVariable(const GlobalVariable* GVar) {
     }
     return;
   }
+  
+  const TargetData *TD = TM.getTargetData();
 
   std::string name = Mang->getMangledName(GVar);
   Constant *C = GVar->getInitializer();
@@ -1056,32 +880,39 @@ void X86ATTAsmPrinter::PrintGlobalVariable(const GlobalVariable* GVar) {
 }
 
 bool X86ATTAsmPrinter::doFinalization(Module &M) {
-  // Print out module-level global variables here.
-  for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
-       I != E; ++I) {
-    if (I->hasDLLExportLinkage())
-      DLLExportedGVs.insert(Mang->getMangledName(I));
-  }
-
   if (Subtarget->isTargetDarwin()) {
     // All darwin targets use mach-o.
     TargetLoweringObjectFileMachO &TLOFMacho = 
       static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
     
+    MachineModuleInfoMachO &MMIMacho =
+      MMI->getObjFileInfo<MachineModuleInfoMachO>();
+    
     // Add the (possibly multiple) personalities to the set of global value
     // stubs.  Only referenced functions get into the Personalities list.
-    if (MAI->doesSupportExceptionHandling() && MMI && !Subtarget->is64Bit()) {
+    if (!Subtarget->is64Bit()) {
       const std::vector<Function*> &Personalities = MMI->getPersonalities();
       for (unsigned i = 0, e = Personalities.size(); i != e; ++i) {
-        if (Personalities[i])
-          GVStubs[Mang->getMangledName(Personalities[i], "$non_lazy_ptr",
-                                       true /*private label*/)] = 
-            Mang->getMangledName(Personalities[i]);
+        if (Personalities[i] == 0)
+          continue;
+        
+        SmallString<128> Name;
+        Mang->getNameWithPrefix(Name, Personalities[i], true /*private label*/);
+        Name += "$non_lazy_ptr";
+        MCSymbol *NLPName = OutContext.GetOrCreateSymbol(Name.str());
+
+        const MCSymbol *&StubName = MMIMacho.getGVStubEntry(NLPName);
+        Name.clear();
+        Mang->getNameWithPrefix(Name, Personalities[i], false);
+        StubName = OutContext.GetOrCreateSymbol(Name.str());
       }
     }
 
-    // Output stubs for dynamically-linked functions
-    if (!FnStubs.empty()) {
+    // Output stubs for dynamically-linked functions.
+    MachineModuleInfoMachO::SymbolListTy Stubs;
+
+    Stubs = MMIMacho.GetFnStubList();
+    if (!Stubs.empty()) {
       const MCSection *TheSection = 
         TLOFMacho.getMachOSection("__IMPORT", "__jump_table",
                                   MCSectionMachO::S_SYMBOL_STUBS |
@@ -1089,33 +920,49 @@ bool X86ATTAsmPrinter::doFinalization(Module &M) {
                                   MCSectionMachO::S_ATTR_PURE_INSTRUCTIONS,
                                   5, SectionKind::getMetadata());
       OutStreamer.SwitchSection(TheSection);
-      for (StringMap<std::string>::iterator I = FnStubs.begin(),
-           E = FnStubs.end(); I != E; ++I)
-        O << I->getKeyData() << ":\n" << "\t.indirect_symbol " << I->second
-          << "\n\thlt ; hlt ; hlt ; hlt ; hlt\n";
+
+      for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        Stubs[i].first->print(O, MAI);
+        O << ":\n" << "\t.indirect_symbol ";
+        // Get the MCSymbol without the $stub suffix.
+        Stubs[i].second->print(O, MAI);
+        O << "\n\thlt ; hlt ; hlt ; hlt ; hlt\n";
+      }
       O << '\n';
+      
+      Stubs.clear();
     }
 
     // Output stubs for external and common global variables.
-    if (!GVStubs.empty()) {
+    Stubs = MMIMacho.GetGVStubList();
+    if (!Stubs.empty()) {
       const MCSection *TheSection = 
         TLOFMacho.getMachOSection("__IMPORT", "__pointers",
                                   MCSectionMachO::S_NON_LAZY_SYMBOL_POINTERS,
                                   SectionKind::getMetadata());
       OutStreamer.SwitchSection(TheSection);
-      for (StringMap<std::string>::iterator I = GVStubs.begin(),
-           E = GVStubs.end(); I != E; ++I)
-        O << I->getKeyData() << ":\n\t.indirect_symbol "
-          << I->second << "\n\t.long\t0\n";
+
+      for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        Stubs[i].first->print(O, MAI);
+        O << ":\n\t.indirect_symbol ";
+        Stubs[i].second->print(O, MAI);
+        O << "\n\t.long\t0\n";
+      }
+      Stubs.clear();
     }
 
-    if (!HiddenGVStubs.empty()) {
+    Stubs = MMIMacho.GetHiddenGVStubList();
+    if (!Stubs.empty()) {
       OutStreamer.SwitchSection(getObjFileLowering().getDataSection());
       EmitAlignment(2);
-      for (StringMap<std::string>::iterator I = HiddenGVStubs.begin(),
-           E = HiddenGVStubs.end(); I != E; ++I)
-        O << I->getKeyData() << ":\n" << MAI->getData32bitsDirective()
-          << I->second << '\n';
+
+      for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        Stubs[i].first->print(O, MAI);
+        O << ":\n" << MAI->getData32bitsDirective();
+        Stubs[i].second->print(O, MAI);
+        O << '\n';
+      }
+      Stubs.clear();
     }
 
     // Funny Darwin hack: This flag tells the linker that no global symbols
@@ -1124,40 +971,47 @@ bool X86ATTAsmPrinter::doFinalization(Module &M) {
     // linker can safely perform dead code stripping.  Since LLVM never
     // generates code that does this, it is always safe to set.
     O << "\t.subsections_via_symbols\n";
-  } else if (Subtarget->isTargetCygMing()) {
-    // Emit type information for external functions
-    for (StringSet<>::iterator i = CygMingStubs.begin(), e = CygMingStubs.end();
-         i != e; ++i) {
-      O << "\t.def\t " << i->getKeyData()
+  }  
+  
+  if (Subtarget->isTargetCOFF()) {
+    for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
+         I != E; ++I)
+      if (I->hasDLLExportLinkage())
+        DLLExportedGVs.insert(Mang->getMangledName(I));
+    
+    if (Subtarget->isTargetCygMing()) {
+      // Emit type information for external functions
+      for (StringSet<>::iterator i = CygMingStubs.begin(), e = CygMingStubs.end();
+           i != e; ++i) {
+        O << "\t.def\t " << i->getKeyData()
         << ";\t.scl\t" << COFF::C_EXT
         << ";\t.type\t" << (COFF::DT_FCN << COFF::N_BTSHFT)
         << ";\t.endef\n";
+      }
+    }
+  
+    // Output linker support code for dllexported globals on windows.
+    if (!DLLExportedGVs.empty() || !DLLExportedFns.empty()) {
+      // dllexport symbols only exist on coff targets.
+      TargetLoweringObjectFileCOFF &TLOFCOFF = 
+        static_cast<TargetLoweringObjectFileCOFF&>(getObjFileLowering());
+      
+      OutStreamer.SwitchSection(TLOFCOFF.getCOFFSection(".section .drectve",
+                                                        true,
+                                                   SectionKind::getMetadata()));
+    
+      for (StringSet<>::iterator i = DLLExportedGVs.begin(),
+           e = DLLExportedGVs.end(); i != e; ++i)
+        O << "\t.ascii \" -export:" << i->getKeyData() << ",data\"\n";
+    
+      for (StringSet<>::iterator i = DLLExportedFns.begin(),
+           e = DLLExportedFns.end();
+           i != e; ++i)
+        O << "\t.ascii \" -export:" << i->getKeyData() << "\"\n";
     }
   }
-  
-  
-  // Output linker support code for dllexported globals on windows.
-  if (!DLLExportedGVs.empty() || !DLLExportedFns.empty()) {
-    // dllexport symbols only exist on coff targets.
-    TargetLoweringObjectFileCOFF &TLOFMacho = 
-      static_cast<TargetLoweringObjectFileCOFF&>(getObjFileLowering());
-    
-    OutStreamer.SwitchSection(TLOFMacho.getCOFFSection(".section .drectve",true,
-                                                 SectionKind::getMetadata()));
-  
-    for (StringSet<>::iterator i = DLLExportedGVs.begin(),
-         e = DLLExportedGVs.end(); i != e; ++i)
-      O << "\t.ascii \" -export:" << i->getKeyData() << ",data\"\n";
-  
-    for (StringSet<>::iterator i = DLLExportedFns.begin(),
-         e = DLLExportedFns.end();
-         i != e; ++i)
-      O << "\t.ascii \" -export:" << i->getKeyData() << "\"\n";
-  }
-  
+
   // Do common shutdown.
   return AsmPrinter::doFinalization(M);
 }
 
-// Include the auto-generated portion of the assembly writer.
-#include "X86GenAsmWriter.inc"

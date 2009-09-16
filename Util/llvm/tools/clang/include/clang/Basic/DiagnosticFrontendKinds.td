@@ -11,6 +11,7 @@ let Component = "Frontend" in {
 
 def err_fe_unknown_triple : Error<
   "unknown target triple '%0', please use -triple or -arch">;
+def err_fe_unknown_target_abi : Error<"unknown target ABI '%0'">;
 def err_fe_error_reading : Error<"error reading '%0'">;
 def err_fe_error_reading_stdin : Error<"error reading stdin">;
 def err_fe_error_backend : Error<"error in backend: %0">, DefaultFatal;
@@ -87,8 +88,11 @@ def warn_pch_builtins : Error<
     "PCH file was compiled with builtins %select{enabled|disabled}0 but "
     "builtins are currently %select{enabled|disabled}1">;
 def warn_pch_thread_safe_statics : Error<
-    "PCH file was compiled %select{without|with}0 thread-safe statics but"
+    "PCH file was compiled %select{without|with}0 thread-safe statics but "
     "thread-safe statics are currently %select{disabled|enabled}1">;
+def warn_pch_posix_threads : Error<
+    "PCH file was compiled %select{without|with}0 POSIX thread support but "
+    "POSIX threads are currently %select{disabled|enabled}1">;
 def warn_pch_blocks : Error<
     "blocks were %select{disabled|enabled}0 in PCH file but "
     "are currently %select{disabled|enabled}1">;

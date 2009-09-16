@@ -42,8 +42,8 @@ namespace {
 
   //! EVT mapping to useful data for Cell SPU
   struct valtype_map_s {
-    const EVT   valtype;
-    const int   prefslot_byte;
+    EVT   valtype;
+    int   prefslot_byte;
   };
 
   const valtype_map_s valtype_map[] = {
@@ -1015,7 +1015,7 @@ LowerConstantFP(SDValue Op, SelectionDAG &DAG) {
 
 SDValue
 SPUTargetLowering::LowerFormalArguments(SDValue Chain,
-                                        unsigned CallConv, bool isVarArg,
+                                        CallingConv::ID CallConv, bool isVarArg,
                                         const SmallVectorImpl<ISD::InputArg>
                                           &Ins,
                                         DebugLoc dl, SelectionDAG &DAG,
@@ -1144,7 +1144,7 @@ static SDNode *isLSAAddress(SDValue Op, SelectionDAG &DAG) {
 
 SDValue
 SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                             unsigned CallConv, bool isVarArg,
+                             CallingConv::ID CallConv, bool isVarArg,
                              bool isTailCall,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -1371,7 +1371,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
 SDValue
 SPUTargetLowering::LowerReturn(SDValue Chain,
-                               unsigned CallConv, bool isVarArg,
+                               CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                DebugLoc dl, SelectionDAG &DAG) {
 

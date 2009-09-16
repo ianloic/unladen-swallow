@@ -33,7 +33,8 @@ public:
   Generic_GCC(const HostInfo &Host, const llvm::Triple& Triple);
   ~Generic_GCC();
 
-  virtual DerivedArgList *TranslateArgs(InputArgList &Args) const;
+  virtual DerivedArgList *TranslateArgs(InputArgList &Args,
+                                        const char *BoundArch) const;
 
   virtual Tool &SelectTool(const Compilation &C, const JobAction &JA) const;
 
@@ -43,8 +44,8 @@ public:
   virtual const char *GetForcedPicModel() const;
 };
 
-  /// Darwin_X86 - Darwin tool chain for i386 an x86_64.
-class VISIBILITY_HIDDEN Darwin_X86 : public ToolChain {
+/// Darwin - Darwin tool chain.
+class VISIBILITY_HIDDEN Darwin : public ToolChain {
   mutable llvm::DenseMap<unsigned, Tool*> Tools;
 
   /// Darwin version of tool chain.
@@ -53,6 +54,9 @@ class VISIBILITY_HIDDEN Darwin_X86 : public ToolChain {
   /// GCC version to use.
   unsigned GCCVersion[3];
 
+  /// Whether this is this an iPhone toolchain.
+  bool IsIPhone;
+
   /// The directory suffix for this tool chain.
   std::string ToolChainDir;
 
@@ -60,13 +64,17 @@ class VISIBILITY_HIDDEN Darwin_X86 : public ToolChain {
   /// initialized.
   mutable std::string MacosxVersionMin;
 
+  /// The default iphoneos-version-min of this tool chain.
+  std::string IPhoneOSVersionMin;
+
   const char *getMacosxVersionMin() const;
 
 public:
-  Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple, 
-             const unsigned (&DarwinVersion)[3],
-             const unsigned (&GCCVersion)[3]);
-  ~Darwin_X86();
+  Darwin(const HostInfo &Host, const llvm::Triple& Triple,
+         const unsigned (&DarwinVersion)[3],
+         const unsigned (&GCCVersion)[3],
+         bool IsIPhone);
+  ~Darwin();
 
   void getDarwinVersion(unsigned (&Res)[3]) const {
     Res[0] = DarwinVersion[0];
@@ -84,11 +92,18 @@ public:
     return MacosxVersionMin.c_str();
   }
 
-  const std::string &getToolChainDir() const { 
+  const char *getIPhoneOSVersionStr() const {
+    return IPhoneOSVersionMin.c_str();
+  }
+
+  const std::string &getToolChainDir() const {
     return ToolChainDir;
   }
 
-  virtual DerivedArgList *TranslateArgs(InputArgList &Args) const;
+  bool isIPhone() const { return IsIPhone; }
+
+  virtual DerivedArgList *TranslateArgs(InputArgList &Args,
+                                        const char *BoundArch) const;
 
   virtual Tool &SelectTool(const Compilation &C, const JobAction &JA) const;
 
@@ -101,7 +116,7 @@ public:
   /// Darwin_GCC - Generic Darwin tool chain using gcc.
 class VISIBILITY_HIDDEN Darwin_GCC : public Generic_GCC {
 public:
-  Darwin_GCC(const HostInfo &Host, const llvm::Triple& Triple) 
+  Darwin_GCC(const HostInfo &Host, const llvm::Triple& Triple)
     : Generic_GCC(Host, Triple) {}
 
   virtual const char *GetDefaultRelocationModel() const { return "pic"; }

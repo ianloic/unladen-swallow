@@ -270,7 +270,7 @@ std::string MSILWriter::getLabelName(const Value* V) {
 }
 
 
-std::string MSILWriter::getConvModopt(unsigned CallingConvID) {
+std::string MSILWriter::getConvModopt(CallingConv::ID CallingConvID) {
   switch (CallingConvID) {
   case CallingConv::C:
   case CallingConv::Cold:
@@ -1623,13 +1623,13 @@ const char* MSILWriter::getLibraryName(const Function* F) {
 
 
 const char* MSILWriter::getLibraryName(const GlobalVariable* GV) {
-  return getLibraryForSymbol(Mang->getMangledName(GV), false, 0);
+  return getLibraryForSymbol(Mang->getMangledName(GV), false, CallingConv::C);
 }
 
 
 const char* MSILWriter::getLibraryForSymbol(const StringRef &Name, 
                                             bool isFunction,
-                                            unsigned CallingConv) {
+                                            CallingConv::ID CallingConv) {
   // TODO: Read *.def file with function and libraries definitions.
   return "MSVCRT.DLL";  
 }
@@ -1678,7 +1678,6 @@ void MSILWriter::printExternals() {
        E = ModulePtr->global_end(); I!=E; ++I) {
     if (!I->isDeclaration() || !I->hasDLLImportLinkage()) continue;
     // Use "LoadLibrary"/"GetProcAddress" to recive variable address.
-    std::string Label = "not_null$_"+utostr(getUniqID());
     std::string Tmp = getTypeName(I->getType())+getValueName(&*I);
     printSimpleInstruction("ldsflda",Tmp.c_str());
     Out << "\tldstr\t\"" << getLibraryName(&*I) << "\"\n";

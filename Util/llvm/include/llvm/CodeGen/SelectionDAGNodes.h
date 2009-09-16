@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/RecyclingAllocator.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/DebugLoc.h"
@@ -1518,18 +1519,22 @@ private:
 
   //! SVOffset - Memory location offset. Note that base is defined in MemSDNode
   int SVOffset;
-
 public:
   MemSDNode(unsigned Opc, DebugLoc dl, SDVTList VTs, EVT MemoryVT,
-            const Value *srcValue, int SVOff,
-            unsigned alignment, bool isvolatile);
+            const Value *srcValue, int SVOff, unsigned alignment,
+            bool isvolatile);
 
   MemSDNode(unsigned Opc, DebugLoc dl, SDVTList VTs, const SDValue *Ops,
             unsigned NumOps, EVT MemoryVT, const Value *srcValue, int SVOff,
             unsigned alignment, bool isvolatile);
 
   /// Returns alignment and volatility of the memory access
-  unsigned getAlignment() const { return (1u << (SubclassData >> 6)) >> 1; }
+  unsigned getOriginalAlignment() const { 
+    return (1u << (SubclassData >> 6)) >> 1; 
+  }
+  unsigned getAlignment() const {
+    return MinAlign(getOriginalAlignment(), SVOffset);
+  }
   bool isVolatile() const { return (SubclassData >> 5) & 1; }
 
   /// getRawSubclassData - Return the SubclassData value, which contains an

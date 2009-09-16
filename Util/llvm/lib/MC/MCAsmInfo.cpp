@@ -30,14 +30,6 @@ MCAsmInfo::MCAsmInfo() {
   GlobalPrefix = "";
   PrivateGlobalPrefix = ".";
   LinkerPrivateGlobalPrefix = "";
-  JumpTableSpecialLabelPrefix = 0;
-  GlobalVarAddrPrefix = "";
-  GlobalVarAddrSuffix = "";
-  FunctionAddrPrefix = "";
-  FunctionAddrSuffix = "";
-  PersonalityPrefix = "";
-  PersonalitySuffix = "";
-  NeedsIndirectEncoding = false;
   InlineAsmStart = "APP";
   InlineAsmEnd = "NO_APP";
   AssemblerDialect = 0;

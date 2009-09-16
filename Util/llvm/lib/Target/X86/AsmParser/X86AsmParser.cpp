@@ -12,8 +12,9 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAsmLexer.h"
 #include "llvm/MC/MCAsmParser.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/MC/MCValue.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetAsmParser.h"
@@ -39,7 +40,9 @@ private:
   bool ParseOperand(X86Operand &Op);
 
   bool ParseMemOperand(X86Operand &Op);
-  
+
+  bool ParseDirectiveWord(unsigned Size, SMLoc L);
+
   /// @name Auto-generated Match Functions
   /// {  
 
@@ -57,6 +60,8 @@ public:
     : TargetAsmParser(T), Parser(_Parser) {}
 
   virtual bool ParseInstruction(const StringRef &Name, MCInst &Inst);
+
+  virtual bool ParseDirective(AsmToken DirectiveID);
 };
   
 } // end anonymous namespace
@@ -85,12 +90,12 @@ struct X86Operand {
     } Reg;
 
     struct {
-      MCValue Val;
+      const MCExpr *Val;
     } Imm;
 
     struct {
       unsigned SegReg;
-      MCValue Disp;
+      const MCExpr *Disp;
       unsigned BaseReg;
       unsigned IndexReg;
       unsigned Scale;
@@ -107,12 +112,12 @@ struct X86Operand {
     return Reg.RegNo;
   }
 
-  const MCValue &getImm() const {
+  const MCExpr *getImm() const {
     assert(Kind == Immediate && "Invalid access!");
     return Imm.Val;
   }
 
-  const MCValue &getMemDisp() const {
+  const MCExpr *getMemDisp() const {
     assert(Kind == Memory && "Invalid access!");
     return Mem.Disp;
   }
@@ -143,11 +148,12 @@ struct X86Operand {
     if (!isImm())
       return false;
 
-    if (!getImm().isAbsolute())
-      return true;
+    if (const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm())) {
+      int64_t Value = CE->getValue();
+      return Value == (int64_t) (int8_t) Value;
+    }
 
-    int64_t Value = getImm().getConstant();
-    return Value == (int64_t) (int8_t) Value;
+    return true;
   }
   
   bool isMem() const { return Kind == Memory; }
@@ -161,13 +167,13 @@ struct X86Operand {
 
   void addImmOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
-    Inst.addOperand(MCOperand::CreateMCValue(getImm()));
+    Inst.addOperand(MCOperand::CreateExpr(getImm()));
   }
 
   void addImmSExt8Operands(MCInst &Inst, unsigned N) const {
     // FIXME: Support user customization of the render method.
     assert(N == 1 && "Invalid number of operands!");
-    Inst.addOperand(MCOperand::CreateMCValue(getImm()));
+    Inst.addOperand(MCOperand::CreateExpr(getImm()));
   }
 
   void addMemOperands(MCInst &Inst, unsigned N) const {
@@ -176,7 +182,7 @@ struct X86Operand {
     Inst.addOperand(MCOperand::CreateReg(getMemBaseReg()));
     Inst.addOperand(MCOperand::CreateImm(getMemScale()));
     Inst.addOperand(MCOperand::CreateReg(getMemIndexReg()));
-    Inst.addOperand(MCOperand::CreateMCValue(getMemDisp()));
+    Inst.addOperand(MCOperand::CreateExpr(getMemDisp()));
 
     // FIXME: What a hack.
     if (N == 5)
@@ -198,15 +204,16 @@ struct X86Operand {
     return Res;
   }
 
-  static X86Operand CreateImm(MCValue Val) {
+  static X86Operand CreateImm(const MCExpr *Val) {
     X86Operand Res;
     Res.Kind = Immediate;
     Res.Imm.Val = Val;
     return Res;
   }
 
-  static X86Operand CreateMem(unsigned SegReg, MCValue Disp, unsigned BaseReg,
-                              unsigned IndexReg, unsigned Scale) {
+  static X86Operand CreateMem(unsigned SegReg, const MCExpr *Disp,
+                              unsigned BaseReg, unsigned IndexReg,
+                              unsigned Scale) {
     // We should never just have a displacement, that would be an immediate.
     assert((SegReg || BaseReg || IndexReg) && "Invalid memory operand!");
 
@@ -228,20 +235,24 @@ struct X86Operand {
 
 
 bool X86ATTAsmParser::ParseRegister(X86Operand &Op) {
+  const AsmToken &TokPercent = getLexer().getTok();
+  (void)TokPercent; // Avoid warning when assertions are disabled.
+  assert(TokPercent.is(AsmToken::Percent) && "Invalid token kind!");
+  getLexer().Lex(); // Eat percent token.
+
   const AsmToken &Tok = getLexer().getTok();
-  assert(Tok.is(AsmToken::Register) && "Invalid token kind!");
+  assert(TokPercent.is(AsmToken::Identifier) && "Invalid token kind!");
 
   // FIXME: Validate register for the current architecture; we have to do
   // validation later, so maybe there is no need for this here.
   unsigned RegNo;
-  assert(Tok.getString().startswith("%") && "Invalid register name!");
 
-  RegNo = MatchRegisterName(Tok.getString().substr(1));
+  RegNo = MatchRegisterName(Tok.getString());
   if (RegNo == 0)
     return Error(Tok.getLoc(), "invalid register name");
 
   Op = X86Operand::CreateReg(RegNo);
-  getLexer().Lex(); // Eat register token.
+  getLexer().Lex(); // Eat identifier token.
 
   return false;
 }
@@ -250,15 +261,15 @@ bool X86ATTAsmParser::ParseOperand(X86Operand &Op) {
   switch (getLexer().getKind()) {
   default:
     return ParseMemOperand(Op);
-  case AsmToken::Register:
+  case AsmToken::Percent:
     // FIXME: if a segment register, this could either be just the seg reg, or
     // the start of a memory operand.
     return ParseRegister(Op);
   case AsmToken::Dollar: {
     // $42 -> immediate.
     getLexer().Lex();
-    MCValue Val;
-    if (getParser().ParseRelocatableExpression(Val))
+    const MCExpr *Val;
+    if (getParser().ParseExpression(Val))
       return true;
     Op = X86Operand::CreateImm(Val);
     return false;
@@ -275,9 +286,9 @@ bool X86ATTAsmParser::ParseMemOperand(X86Operand &Op) {
   // of a memory operand with a missing displacement "(%ebx)" or "(,%eax)".  The
   // only way to do this without lookahead is to eat the ( and see what is after
   // it.
-  MCValue Disp = MCValue::get(0, 0, 0);
+  const MCExpr *Disp = MCConstantExpr::Create(0, getParser().getContext());
   if (getLexer().isNot(AsmToken::LParen)) {
-    if (getParser().ParseRelocatableExpression(Disp)) return true;
+    if (getParser().ParseExpression(Disp)) return true;
     
     // After parsing the base expression we could either have a parenthesized
     // memory address or not.  If not, return now.  If so, eat the (.
@@ -297,12 +308,12 @@ bool X86ATTAsmParser::ParseMemOperand(X86Operand &Op) {
     // so we have to eat the ( to see beyond it.
     getLexer().Lex(); // Eat the '('.
     
-    if (getLexer().is(AsmToken::Register) || getLexer().is(AsmToken::Comma)) {
+    if (getLexer().is(AsmToken::Percent) || getLexer().is(AsmToken::Comma)) {
       // Nothing to do here, fall into the code below with the '(' part of the
       // memory operand consumed.
     } else {
       // It must be an parenthesized expression, parse it now.
-      if (getParser().ParseParenRelocatableExpression(Disp))
+      if (getParser().ParseParenExpression(Disp))
         return true;
       
       // After parsing the base expression we could either have a parenthesized
@@ -325,7 +336,7 @@ bool X86ATTAsmParser::ParseMemOperand(X86Operand &Op) {
   // the rest of the memory operand.
   unsigned BaseReg = 0, IndexReg = 0, Scale = 1;
   
-  if (getLexer().is(AsmToken::Register)) {
+  if (getLexer().is(AsmToken::Percent)) {
     if (ParseRegister(Op))
       return true;
     BaseReg = Op.getReg();
@@ -340,7 +351,7 @@ bool X86ATTAsmParser::ParseMemOperand(X86Operand &Op) {
     //
     // Not that even though it would be completely consistent to support syntax
     // like "1(%eax,,1)", the assembler doesn't.
-    if (getLexer().is(AsmToken::Register)) {
+    if (getLexer().is(AsmToken::Percent)) {
       if (ParseRegister(Op))
         return true;
       IndexReg = Op.getReg();
@@ -424,6 +435,38 @@ bool X86ATTAsmParser::ParseInstruction(const StringRef &Name, MCInst &Inst) {
 
   Error(Loc, "unrecognized instruction");
   return true;
+}
+
+bool X86ATTAsmParser::ParseDirective(AsmToken DirectiveID) {
+  StringRef IDVal = DirectiveID.getIdentifier();
+  if (IDVal == ".word")
+    return ParseDirectiveWord(2, DirectiveID.getLoc());
+  return true;
+}
+
+/// ParseDirectiveWord
+///  ::= .word [ expression (, expression)* ]
+bool X86ATTAsmParser::ParseDirectiveWord(unsigned Size, SMLoc L) {
+  if (getLexer().isNot(AsmToken::EndOfStatement)) {
+    for (;;) {
+      const MCExpr *Value;
+      if (getParser().ParseExpression(Value))
+        return true;
+
+      getParser().getStreamer().EmitValue(Value, Size);
+
+      if (getLexer().is(AsmToken::EndOfStatement))
+        break;
+      
+      // FIXME: Improve diagnostic.
+      if (getLexer().isNot(AsmToken::Comma))
+        return Error(L, "unexpected token in directive");
+      getLexer().Lex();
+    }
+  }
+
+  getLexer().Lex();
+  return false;
 }
 
 // Force static initialization.

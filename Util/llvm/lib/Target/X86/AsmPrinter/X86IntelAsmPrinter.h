@@ -38,22 +38,19 @@ struct VISIBILITY_HIDDEN X86IntelAsmPrinter : public AsmPrinter {
   /// machine instruction was sufficiently described to print it, otherwise it
   /// returns false.
   void printInstruction(const MachineInstr *MI);
+  static const char *getRegisterName(unsigned RegNo);
+
 
   // This method is used by the tablegen'erated instruction printer.
   void printOperand(const MachineInstr *MI, unsigned OpNo,
-                    const char *Modifier = 0) {
-    const MachineOperand &MO = MI->getOperand(OpNo);
-    if (MO.isReg()) {
-      assert(TargetRegisterInfo::isPhysicalRegister(MO.getReg()) &&
-             "Not physreg??");
-      O << TM.getRegisterInfo()->get(MO.getReg()).Name;  // Capitalized names
-    } else {
-      printOp(MO, Modifier);
-    }
-  }
+                    const char *Modifier = 0);
   
   void print_pcrel_imm(const MachineInstr *MI, unsigned OpNo);
 
+  void printopaquemem(const MachineInstr *MI, unsigned OpNo) {
+    O << "OPAQUE PTR ";
+    printMemReference(MI, OpNo);
+  }
 
   void printi8mem(const MachineInstr *MI, unsigned OpNo) {
     O << "BYTE PTR ";

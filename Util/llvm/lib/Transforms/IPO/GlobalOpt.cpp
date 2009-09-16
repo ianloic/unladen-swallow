@@ -2024,20 +2024,37 @@ static Constant *getVal(DenseMap<Value*, Constant*> &ComputedValues,
 /// we punt.  We basically just support direct accesses to globals and GEP's of
 /// globals.  This should be kept up to date with CommitValueTo.
 static bool isSimpleEnoughPointerToCommit(Constant *C, LLVMContext &Context) {
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(C)) {
-    if (!GV->hasExternalLinkage() && !GV->hasLocalLinkage())
-      return false;  // do not allow weak/linkonce/dllimport/dllexport linkage.
-    return !GV->isDeclaration();  // reject external globals.
-  }
+  // Conservatively, avoid aggregate types. This is because we don't
+  // want to worry about them partially overlapping other stores.
+  if (!cast<PointerType>(C->getType())->getElementType()->isSingleValueType())
+    return false;
+
+  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(C))
+    // Do not allow weak/linkonce/dllimport/dllexport linkage or
+    // external globals.
+    return GV->hasDefinitiveInitializer();
+
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C))
     // Handle a constantexpr gep.
     if (CE->getOpcode() == Instruction::GetElementPtr &&
-        isa<GlobalVariable>(CE->getOperand(0))) {
+        isa<GlobalVariable>(CE->getOperand(0)) &&
+        cast<GEPOperator>(CE)->isInBounds()) {
       GlobalVariable *GV = cast<GlobalVariable>(CE->getOperand(0));
-      if (!GV->hasExternalLinkage() && !GV->hasLocalLinkage())
-        return false;  // do not allow weak/linkonce/dllimport/dllexport linkage.
-      return GV->hasInitializer() &&
-             ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE,
+      // Do not allow weak/linkonce/dllimport/dllexport linkage or
+      // external globals.
+      if (!GV->hasDefinitiveInitializer())
+        return false;
+
+      // The first index must be zero.
+      ConstantInt *CI = dyn_cast<ConstantInt>(*next(CE->op_begin()));
+      if (!CI || !CI->isZero()) return false;
+
+      // The remaining indices must be compile-time known integers within the
+      // notional bounds of the corresponding static array types.
+      if (!CE->isGEPWithNoNotionalOverIndexing())
+        return false;
+
+      return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE,
                                                     Context);
     }
   return false;
@@ -2226,8 +2243,9 @@ static bool EvaluateFunction(Function *F, Constant *&RetVal,
       for (User::op_iterator i = GEP->op_begin() + 1, e = GEP->op_end();
            i != e; ++i)
         GEPOps.push_back(getVal(Values, *i));
-      InstResult =
-            ConstantExpr::getGetElementPtr(P, &GEPOps[0], GEPOps.size());
+      InstResult = cast<GEPOperator>(GEP)->isInBounds() ?
+          ConstantExpr::getInBoundsGetElementPtr(P, &GEPOps[0], GEPOps.size()) :
+          ConstantExpr::getGetElementPtr(P, &GEPOps[0], GEPOps.size());
     } else if (LoadInst *LI = dyn_cast<LoadInst>(CurInst)) {
       if (LI->isVolatile()) return false;  // no volatile accesses.
       InstResult = ComputeLoadResult(getVal(Values, LI->getOperand(0)),

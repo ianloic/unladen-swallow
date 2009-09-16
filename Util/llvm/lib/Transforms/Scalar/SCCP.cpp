@@ -33,7 +33,6 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/CallSite.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InstVisitor.h"
@@ -60,7 +59,7 @@ namespace {
 /// LatticeVal class - This class represents the different lattice values that
 /// an LLVM value may occupy.  It is a simple class with value semantics.
 ///
-class VISIBILITY_HIDDEN LatticeVal {
+class LatticeVal {
   enum {
     /// undefined - This LLVM Value has no known value yet.
     undefined,
@@ -1131,8 +1130,7 @@ void SCCPSolver::visitLoadInst(LoadInst &I) {
   if (PtrVal.isConstant() && !I.isVolatile()) {
     Value *Ptr = PtrVal.getConstant();
     // TODO: Consider a target hook for valid address spaces for this xform.
-    if (isa<ConstantPointerNull>(Ptr) && 
-        cast<PointerType>(Ptr->getType())->getAddressSpace() == 0) {
+    if (isa<ConstantPointerNull>(Ptr) && I.getPointerAddressSpace() == 0) {
       // load null -> null
       markConstant(IV, &I, Constant::getNullValue(I.getType()));
       return;
@@ -1507,7 +1505,7 @@ namespace {
   /// SCCP Class - This class uses the SCCPSolver to implement a per-function
   /// Sparse Conditional Constant Propagator.
   ///
-  struct VISIBILITY_HIDDEN SCCP : public FunctionPass {
+  struct SCCP : public FunctionPass {
     static char ID; // Pass identification, replacement for typeid
     SCCP() : FunctionPass(&ID) {}
 
@@ -1622,7 +1620,7 @@ namespace {
   /// IPSCCP Class - This class implements interprocedural Sparse Conditional
   /// Constant Propagation.
   ///
-  struct VISIBILITY_HIDDEN IPSCCP : public ModulePass {
+  struct IPSCCP : public ModulePass {
     static char ID;
     IPSCCP() : ModulePass(&ID) {}
     bool runOnModule(Module &M);

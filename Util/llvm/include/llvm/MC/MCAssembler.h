@@ -21,6 +21,7 @@
 namespace llvm {
 class raw_ostream;
 class MCAssembler;
+class MCContext;
 class MCSection;
 class MCSectionData;
 
@@ -436,7 +437,7 @@ public:
 // FIXME: Same concerns as with SectionData.
 class MCSymbolData : public ilist_node<MCSymbolData> {
 public:
-  MCSymbol &Symbol;
+  const MCSymbol *Symbol;
 
   /// Fragment - The fragment this symbol's value is relative to, if any.
   MCFragment *Fragment;
@@ -473,13 +474,13 @@ public:
 public:
   // Only for use as sentinel.
   MCSymbolData();
-  MCSymbolData(MCSymbol &_Symbol, MCFragment *_Fragment, uint64_t _Offset,
+  MCSymbolData(const MCSymbol &_Symbol, MCFragment *_Fragment, uint64_t _Offset,
                MCAssembler *A = 0);
 
   /// @name Accessors
   /// @{
 
-  MCSymbol &getSymbol() const { return Symbol; }
+  const MCSymbol &getSymbol() const { return *Symbol; }
 
   MCFragment *getFragment() const { return Fragment; }
   void setFragment(MCFragment *Value) { Fragment = Value; }
@@ -559,6 +560,8 @@ private:
   MCAssembler(const MCAssembler&);    // DO NOT IMPLEMENT
   void operator=(const MCAssembler&); // DO NOT IMPLEMENT
 
+  MCContext &Context;
+
   raw_ostream &OS;
   
   iplist<MCSectionData> Sections;
@@ -584,8 +587,10 @@ public:
   // concrete and require clients to pass in a target like object. The other
   // option is to make this abstract, and have targets provide concrete
   // implementations as we do with AsmParser.
-  MCAssembler(raw_ostream &OS);
+  MCAssembler(MCContext &_Context, raw_ostream &OS);
   ~MCAssembler();
+
+  MCContext &getContext() const { return Context; }
 
   /// Finish - Do final processing and write the object to the output stream.
   void Finish();

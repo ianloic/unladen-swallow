@@ -46,20 +46,21 @@ public:
                  GRExprEngine &eng,
                  ExplodedNode *pred,
                  const void *tag, bool preVisit)
-    : Dst(dst), B(builder), Eng(eng), Pred(pred), 
+    : Dst(dst), B(builder), Eng(eng), Pred(pred),
       OldSink(B.BuildSinks), OldTag(B.Tag),
       OldPointKind(B.PointKind), OldHasGen(B.HasGeneratedNode) {
-        assert(Dst.empty());
+        //assert(Dst.empty()); // This is a fake assertion.
+              // See GRExprEngine::CheckerVisit(), CurrSet is repeatedly used.
         B.Tag = tag;
         if (preVisit)
-          B.PointKind = ProgramPoint::PreStmtKind;        
+          B.PointKind = ProgramPoint::PreStmtKind;
       }
-  
+
   ~CheckerContext() {
-    if (!B.BuildSinks && Dst.empty() && !B.HasGeneratedNode)
+    if (!B.BuildSinks && !B.HasGeneratedNode)
       Dst.Add(Pred);
   }
-  
+
   ConstraintManager &getConstraintManager() {
       return Eng.getConstraintManager();
   }
@@ -67,30 +68,34 @@ public:
   GRStmtNodeBuilder &getNodeBuilder() { return B; }
   ExplodedNode *&getPredecessor() { return Pred; }
   const GRState *getState() { return B.GetState(Pred); }
-  
+
   ASTContext &getASTContext() {
     return Eng.getContext();
   }
-  
-  ExplodedNode *generateNode(const Stmt* S, const GRState *state,
-                             bool markAsSink = false) {    
+
+  ExplodedNode *GenerateNode(const Stmt *S, bool markAsSink = false) {
+    return GenerateNode(S, getState(), markAsSink);
+  }
+
+  ExplodedNode *GenerateNode(const Stmt* S, const GRState *state,
+                             bool markAsSink = false) {
     ExplodedNode *node = B.generateNode(S, state, Pred);
-    
+
     if (markAsSink && node)
       node->markAsSink();
-    
+
     return node;
   }
-  
+
   void addTransition(ExplodedNode *node) {
     Dst.Add(node);
   }
-  
+
   void EmitReport(BugReport *R) {
     Eng.getBugReporter().EmitReport(R);
   }
 };
-  
+
 class Checker {
 private:
   friend class GRExprEngine;
@@ -100,11 +105,11 @@ private:
                 GRExprEngine &Eng,
                 const Stmt *stmt,
                 ExplodedNode *Pred, bool isPrevisit) {
-    CheckerContext C(Dst, Builder, Eng, Pred, getTag(), isPrevisit);    
+    CheckerContext C(Dst, Builder, Eng, Pred, getTag(), isPrevisit);
     assert(isPrevisit && "Only previsit supported for now.");
     _PreVisit(C, stmt);
   }
-  
+
 public:
   virtual ~Checker() {}
   virtual void _PreVisit(CheckerContext &C, const Stmt *stmt) = 0;
@@ -114,4 +119,4 @@ public:
 } // end clang namespace
 
 #endif
-  
+

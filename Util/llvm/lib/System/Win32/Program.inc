@@ -25,16 +25,6 @@
 namespace llvm {
 using namespace sys;
 
-Program::Program() : Pid_(0), Data(0) {}
-
-Program::~Program() {
-	if (Data) {
-		HANDLE hProcess = (HANDLE) Data;
-		CloseHandle(hProcess);
-		Data = 0;
-	}
-}
-
 // This function just uses the PATH environment variable to find the program.
 Path
 Program::FindProgramByName(const std::string& progName) {
@@ -121,7 +111,7 @@ static HANDLE RedirectIO(const Path *path, int fd, std::string* ErrMsg) {
 
 /// ArgNeedsQuotes - Check whether argument needs to be quoted when calling
 /// CreateProcess.
-static bool ArgNeedsQuotes(const char *Str) {  
+static bool ArgNeedsQuotes(const char *Str) {
   return Str[0] == '\0' || strchr(Str, ' ') != 0;
 }
 
@@ -132,12 +122,7 @@ Program::Execute(const Path& path,
                  const Path** redirects,
                  unsigned memoryLimit,
                  std::string* ErrMsg) {
-  if (Data) {
-    HANDLE hProcess = (HANDLE) Data;
-    CloseHandle(Data);
-    Data = 0;
-  }
-  
+
   if (!path.canExecute()) {
     if (ErrMsg)
       *ErrMsg = "program not executable";
@@ -265,9 +250,9 @@ Program::Execute(const Path& path,
     return false;
   }
   Pid_ = pi.dwProcessId;
-  Data = pi.hProcess;
-  
+
   // Make sure these get closed no matter what.
+  AutoHandle hProcess(pi.hProcess);
   AutoHandle hThread(pi.hThread);
 
   // Assign the process to a job if a memory limit is defined.
@@ -301,13 +286,18 @@ Program::Execute(const Path& path,
 int
 Program::Wait(unsigned secondsToWait,
               std::string* ErrMsg) {
-  if (Data == 0) {
+  if (Pid_ == 0) {
     MakeErrMsg(ErrMsg, "Process not started!");
     return -1;
   }
 
-  HANDLE hProcess = (HANDLE) Data;
-  
+  HANDLE hOpen = OpenProcess(SYNCHRONIZE, FALSE, Pid_);
+  if (hOpen == NULL) {
+    MakeErrMsg(ErrMsg, "OpenProcess failed!");
+    return -1;
+  }
+  AutoHandle hProcess(hOpen);
+
   // Wait for the process to terminate.
   DWORD millisecondsToWait = INFINITE;
   if (secondsToWait > 0)
@@ -333,6 +323,28 @@ Program::Wait(unsigned secondsToWait,
   }
 
   return status;
+}
+
+bool
+Program::Kill(std::string* ErrMsg) {
+  if (Pid_ == 0) {
+    MakeErrMsg(ErrMsg, "Process not started!");
+    return true;
+  }
+
+  HANDLE hOpen = OpenProcess(PROCESS_TERMINATE, FALSE, Pid_);
+  if (hOpen == NULL) {
+    MakeErrMsg(ErrMsg, "OpenProcess failed!");
+    return true;
+  }
+  AutoHandle hProcess(hOpen);
+
+  if (TerminateProcess(hProcess, 1) == 0) {
+    MakeErrMsg(ErrMsg, "The process couldn't be killed!");
+    return true;
+  }
+
+  return false;
 }
 
 bool Program::ChangeStdinToBinary(){

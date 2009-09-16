@@ -364,7 +364,9 @@ static void MoveBelowTokenFactor(SelectionDAG *CurDAG, SDValue Load,
                              Store.getOperand(2), Store.getOperand(3));
 }
 
-/// isRMWLoad - Return true if N is a load that's part of RMW sub-DAG.
+/// isRMWLoad - Return true if N is a load that's part of RMW sub-DAG.  The 
+/// chain produced by the load must only be used by the store's chain operand,
+/// otherwise this may produce a cycle in the DAG.
 /// 
 static bool isRMWLoad(SDValue N, SDValue Chain, SDValue Address,
                       SDValue &Load) {
@@ -382,8 +384,9 @@ static bool isRMWLoad(SDValue N, SDValue Chain, SDValue Address,
     return false;
 
   if (N.hasOneUse() &&
+      LD->hasNUsesOfValue(1, 1) &&
       N.getOperand(1) == Address &&
-      N.getNode()->isOperandOf(Chain.getNode())) {
+      LD->isOperandOf(Chain.getNode())) {
     Load = N;
     return true;
   }
@@ -447,7 +450,8 @@ static bool isCalleeLoad(SDValue Callee, SDValue &Chain) {
   if (Chain.getOperand(0).getNode() == Callee.getNode())
     return true;
   if (Chain.getOperand(0).getOpcode() == ISD::TokenFactor &&
-      Callee.getValue(1).isOperandOf(Chain.getOperand(0).getNode()))
+      Callee.getValue(1).isOperandOf(Chain.getOperand(0).getNode()) &&
+      Callee.getValue(1).hasOneUse())
     return true;
   return false;
 }

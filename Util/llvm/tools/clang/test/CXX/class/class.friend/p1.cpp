@@ -61,9 +61,11 @@ class A {
 
   typedef void ftypedef();
   friend ftypedef typedeffed_function; // okay (because it's not declared as a member)
-};
 
-class UndeclaredSoFar { };
+  class facet;
+  friend class facet;  // should not assert
+  class facet {};
+};
 
 A::UndeclaredSoFar y; // expected-error {{ unknown type name 'UndeclaredSoFar' }}
 

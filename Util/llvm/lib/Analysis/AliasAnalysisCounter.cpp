@@ -23,7 +23,7 @@
 using namespace llvm;
 
 static cl::opt<bool>
-PrintAll("count-aa-print-all-queries", cl::ReallyHidden);
+PrintAll("count-aa-print-all-queries", cl::ReallyHidden, cl::init(true));
 static cl::opt<bool>
 PrintAllFailures("count-aa-print-all-failed-queries", cl::ReallyHidden);
 
@@ -90,19 +90,6 @@ namespace {
     bool pointsToConstantMemory(const Value *P) {
       return getAnalysis<AliasAnalysis>().pointsToConstantMemory(P);
     }
-    bool doesNotAccessMemory(CallSite CS) {
-      return getAnalysis<AliasAnalysis>().doesNotAccessMemory(CS);
-    }
-    bool doesNotAccessMemory(Function *F) {
-      return getAnalysis<AliasAnalysis>().doesNotAccessMemory(F);
-    }
-    bool onlyReadsMemory(CallSite CS) {
-      return getAnalysis<AliasAnalysis>().onlyReadsMemory(CS);
-    }
-    bool onlyReadsMemory(Function *F) {
-      return getAnalysis<AliasAnalysis>().onlyReadsMemory(F);
-    }
-
 
     // Forwarding functions: just delegate to a real AA implementation, counting
     // the number of responses...

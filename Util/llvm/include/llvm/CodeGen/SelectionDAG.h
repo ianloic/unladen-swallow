@@ -552,10 +552,9 @@ public:
   SDValue getIndexedLoad(SDValue OrigLoad, DebugLoc dl, SDValue Base,
                            SDValue Offset, ISD::MemIndexedMode AM);
   SDValue getLoad(ISD::MemIndexedMode AM, DebugLoc dl, ISD::LoadExtType ExtType,
-                    EVT VT, SDValue Chain,
-                    SDValue Ptr, SDValue Offset,
-                    const Value *SV, int SVOffset, EVT EVT,
-                    bool isVolatile=false, unsigned Alignment=0);
+                  EVT VT, SDValue Chain, SDValue Ptr, SDValue Offset,
+                  const Value *SV, int SVOffset, EVT EVT,
+                  bool isVolatile=false, unsigned Alignment=0);
 
   /// getStore - Helper function to build ISD::STORE nodes.
   ///
@@ -839,6 +838,9 @@ public:
   /// implement the ComputeNumSignBitsForTarget method in the TargetLowering
   /// class to allow target nodes to be understood.
   unsigned ComputeNumSignBits(SDValue Op, unsigned Depth = 0) const;
+
+  /// isKnownNeverNan - Test whether the given SDValue is known to never be NaN.
+  bool isKnownNeverNaN(SDValue Op) const;
 
   /// isVerifiedDebugInfoDesc - Returns true if the specified SDValue has
   /// been verified as a debug information descriptor.

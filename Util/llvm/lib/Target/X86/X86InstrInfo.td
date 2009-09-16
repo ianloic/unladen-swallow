@@ -189,6 +189,10 @@ class X86MemOperand<string printMethod> : Operand<iPTR> {
   let ParserMatchClass = X86MemAsmOperand;
 }
 
+def opaque32mem : X86MemOperand<"printopaquemem">;
+def opaque48mem : X86MemOperand<"printopaquemem">;
+def opaque80mem : X86MemOperand<"printopaquemem">;
+
 def i8mem   : X86MemOperand<"printi8mem">;
 def i16mem  : X86MemOperand<"printi16mem">;
 def i32mem  : X86MemOperand<"printi32mem">;
@@ -561,7 +565,11 @@ let isTerminator = 1, isReturn = 1, isBarrier = 1,
                     [(X86retflag 0)]>;
   def RETI   : Ii16<0xC2, RawFrm, (outs), (ins i16imm:$amt, variable_ops),
                     "ret\t$amt",
-                    [(X86retflag imm:$amt)]>;
+                    [(X86retflag timm:$amt)]>;
+  def LRET   : I   <0xCB, RawFrm, (outs), (ins),
+                    "lret", []>;
+  def LRETI  : Ii16<0xCA, RawFrm, (outs), (ins i16imm:$amt),
+                    "lret\t$amt", []>;
 }
 
 // All branches are RawFrm, Void, Branch, and Terminators
@@ -580,6 +588,18 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
                      [(brind GR32:$dst)]>;
   def JMP32m     : I<0xFF, MRM4m, (outs), (ins i32mem:$dst), "jmp{l}\t{*}$dst",
                      [(brind (loadi32 addr:$dst))]>;
+                     
+  def FARJMP16i  : Iseg16<0xEA, RawFrm, (outs), 
+                          (ins i16imm:$seg, i16imm:$off),
+                          "ljmp{w}\t$seg, $off", []>, OpSize;
+  def FARJMP32i  : Iseg32<0xEA, RawFrm, (outs),
+                          (ins i16imm:$seg, i32imm:$off),
+                          "ljmp{l}\t$seg, $off", []>;                     
+
+  def FARJMP16m  : I<0xFF, MRM5m, (outs), (ins opaque32mem:$dst), 
+                     "ljmp{w}\t{*}$dst", []>, OpSize;
+  def FARJMP32m  : I<0xFF, MRM5m, (outs), (ins opaque48mem:$dst),
+                     "ljmp{l}\t{*}$dst", []>;
 }
 
 // Conditional branches
@@ -660,7 +680,24 @@ let isCall = 1 in
                         "call\t{*}$dst", [(X86call GR32:$dst)]>;
     def CALL32m     : I<0xFF, MRM2m, (outs), (ins i32mem:$dst, variable_ops),
                         "call\t{*}$dst", [(X86call (loadi32 addr:$dst))]>;
+  
+    def FARCALL16i  : Iseg16<0x9A, RawFrm, (outs), 
+                             (ins i16imm:$seg, i16imm:$off),
+                             "lcall{w}\t$seg, $off", []>, OpSize;
+    def FARCALL32i  : Iseg32<0x9A, RawFrm, (outs),
+                             (ins i16imm:$seg, i32imm:$off),
+                             "lcall{l}\t$seg, $off", []>;
+                             
+    def FARCALL16m  : I<0xFF, MRM3m, (outs), (ins opaque32mem:$dst),
+                        "lcall{w}\t{*}$dst", []>, OpSize;
+    def FARCALL32m  : I<0xFF, MRM3m, (outs), (ins opaque48mem:$dst),
+                        "lcall{l}\t{*}$dst", []>;
   }
+
+// Constructing a stack frame.
+
+def ENTER : I<0xC8, RawFrm, (outs), (ins i16imm:$len, i8imm:$lvl),
+              "enter\t$len, $lvl", []>;
 
 // Tail call stuff.
 
@@ -693,11 +730,29 @@ def LEAVE    : I<0xC9, RawFrm,
                  (outs), (ins), "leave", []>;
 
 let Defs = [ESP], Uses = [ESP], neverHasSideEffects=1 in {
-let mayLoad = 1 in
-def POP32r   : I<0x58, AddRegFrm, (outs GR32:$reg), (ins), "pop{l}\t$reg", []>;
+let mayLoad = 1 in {
+def POP16r  : I<0x58, AddRegFrm, (outs GR16:$reg), (ins), "pop{w}\t$reg", []>,
+  OpSize;
+def POP32r  : I<0x58, AddRegFrm, (outs GR32:$reg), (ins), "pop{l}\t$reg", []>;
+def POP16rmr: I<0x8F, MRM0r, (outs GR16:$reg), (ins), "pop{w}\t$reg", []>,
+  OpSize;
+def POP16rmm: I<0x8F, MRM0m, (outs i16mem:$dst), (ins), "pop{w}\t$dst", []>,
+  OpSize;
+def POP32rmr: I<0x8F, MRM0r, (outs GR32:$reg), (ins), "pop{l}\t$reg", []>;
+def POP32rmm: I<0x8F, MRM0m, (outs i32mem:$dst), (ins), "pop{l}\t$dst", []>;
+}
 
-let mayStore = 1 in
+let mayStore = 1 in {
+def PUSH16r  : I<0x50, AddRegFrm, (outs), (ins GR16:$reg), "push{w}\t$reg",[]>,
+  OpSize;
 def PUSH32r  : I<0x50, AddRegFrm, (outs), (ins GR32:$reg), "push{l}\t$reg",[]>;
+def PUSH16rmr: I<0xFF, MRM6r, (outs), (ins GR16:$reg), "push{w}\t$reg",[]>,
+  OpSize;
+def PUSH16rmm: I<0xFF, MRM6m, (outs), (ins i16mem:$src), "push{w}\t$src",[]>,
+  OpSize;
+def PUSH32rmr: I<0xFF, MRM6r, (outs), (ins GR32:$reg), "push{l}\t$reg",[]>;
+def PUSH32rmm: I<0xFF, MRM6m, (outs), (ins i32mem:$src), "push{l}\t$src",[]>;
+}
 }
 
 let Defs = [ESP], Uses = [ESP], neverHasSideEffects = 1, mayStore = 1 in {
@@ -783,6 +838,14 @@ let Defs = [ECX,EDI], Uses = [EAX,ECX,EDI] in
 def REP_STOSD : I<0xAB, RawFrm, (outs), (ins), "{rep;stosl|rep stosd}",
                   [(X86rep_stos i32)]>, REP;
 
+def SCAS8 : I<0xAE, RawFrm, (outs), (ins), "scas{b}", []>;
+def SCAS16 : I<0xAF, RawFrm, (outs), (ins), "scas{w}", []>, OpSize;
+def SCAS32 : I<0xAF, RawFrm, (outs), (ins), "scas{l}", []>;
+
+def CMPS8 : I<0xA6, RawFrm, (outs), (ins), "cmps{b}", []>;
+def CMPS16 : I<0xA7, RawFrm, (outs), (ins), "cmps{w}", []>, OpSize;
+def CMPS32 : I<0xA7, RawFrm, (outs), (ins), "cmps{l}", []>;
+
 let Defs = [RAX, RDX] in
 def RDTSC : I<0x31, RawFrm, (outs), (ins), "rdtsc", [(X86rdtsc)]>,
             TB;
@@ -800,6 +863,7 @@ def SYSENTER : I<0x34, RawFrm,
 def SYSEXIT  : I<0x35, RawFrm,
                  (outs), (ins), "sysexit", []>, TB;
 
+def WAIT : I<0x9B, RawFrm, (outs), (ins), "wait", []>;
 
 
 //===----------------------------------------------------------------------===//
@@ -876,6 +940,30 @@ def MOV16mi : Ii16<0xC7, MRM0m, (outs), (ins i16mem:$dst, i16imm:$src),
 def MOV32mi : Ii32<0xC7, MRM0m, (outs), (ins i32mem:$dst, i32imm:$src),
                    "mov{l}\t{$src, $dst|$dst, $src}",
                    [(store (i32 imm:$src), addr:$dst)]>;
+
+def MOV8o8a : Ii8 <0xA0, RawFrm, (outs), (ins i8imm:$src),
+                   "mov{b}\t{$src, %al|%al, $src}", []>;
+def MOV16o16a : Ii16 <0xA1, RawFrm, (outs), (ins i16imm:$src),
+                      "mov{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+def MOV32o32a : Ii32 <0xA1, RawFrm, (outs), (ins i32imm:$src),
+                      "mov{l}\t{$src, %eax|%eax, $src}", []>;
+
+def MOV8ao8 : Ii8 <0xA2, RawFrm, (outs i8imm:$dst), (ins),
+                   "mov{b}\t{%al, $dst|$dst, %al}", []>;
+def MOV16ao16 : Ii16 <0xA3, RawFrm, (outs i16imm:$dst), (ins),
+                      "mov{w}\t{%ax, $dst|$dst, %ax}", []>, OpSize;
+def MOV32ao32 : Ii32 <0xA3, RawFrm, (outs i32imm:$dst), (ins),
+                      "mov{l}\t{%eax, $dst|$dst, %eax}", []>;
+
+// Moves to and from segment registers
+def MOV16rs : I<0x8C, MRMDestReg, (outs GR16:$dst), (ins SEGMENT_REG:$src),
+                "mov{w}\t{$src, $dst|$dst, $src}", []>;
+def MOV16ms : I<0x8C, MRMDestMem, (outs i16mem:$dst), (ins SEGMENT_REG:$src),
+                "mov{w}\t{$src, $dst|$dst, $src}", []>;
+def MOV16sr : I<0x8E, MRMSrcReg, (outs SEGMENT_REG:$dst), (ins GR16:$src),
+                "mov{w}\t{$src, $dst|$dst, $src}", []>;
+def MOV16sm : I<0x8E, MRMSrcMem, (outs SEGMENT_REG:$dst), (ins i16mem:$src),
+                "mov{w}\t{$src, $dst|$dst, $src}", []>;
 
 let canFoldAsLoad = 1, isReMaterializable = 1, mayHaveSideEffects = 1 in {
 def MOV8rm  : I<0x8A, MRMSrcMem, (outs GR8 :$dst), (ins i8mem :$src),
@@ -1038,8 +1126,10 @@ let Uses = [EFLAGS] in {
 // X86 doesn't have 8-bit conditional moves. Use a customDAGSchedInserter to
 // emit control flow. An alternative to this is to mark i8 SELECT as Promote,
 // however that requires promoting the operands, and can induce additional
-// i8 register pressure.
-let usesCustomDAGSchedInserter = 1, isTwoAddress = 0 in
+// i8 register pressure. Note that CMOV_GR8 is conservatively considered to
+// clobber EFLAGS, because if one of the operands is zero, the expansion
+// could involve an xor.
+let usesCustomDAGSchedInserter = 1, isTwoAddress = 0, Defs = [EFLAGS] in
 def CMOV_GR8 : I<0, Pseudo,
                  (outs GR8:$dst), (ins GR8:$src1, GR8:$src2, i8imm:$cond),
                  "#CMOV_GR8 PSEUDO!",
@@ -1645,6 +1735,14 @@ let isTwoAddress = 0 in {
                      "and{l}\t{$src, $dst|$dst, $src}",
                 [(store (and (load addr:$dst), i32immSExt8:$src), addr:$dst),
                  (implicit EFLAGS)]>;
+
+  def AND8i8 : Ii8<0x24, RawFrm, (outs), (ins i8imm:$src),
+                   "and{b}\t{$src, %al|%al, $src}", []>;
+  def AND16i16 : Ii16<0x25, RawFrm, (outs), (ins i16imm:$src),
+                      "and{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def AND32i32 : Ii32<0x25, RawFrm, (outs), (ins i32imm:$src),
+                      "and{l}\t{$src, %eax|%eax, $src}", []>;
+
 }
 
 
@@ -1731,6 +1829,13 @@ let isTwoAddress = 0 in {
                  "or{l}\t{$src, $dst|$dst, $src}",
                  [(store (or (load addr:$dst), i32immSExt8:$src), addr:$dst),
                   (implicit EFLAGS)]>;
+                  
+  def OR8i8 : Ii8 <0x0C, RawFrm, (outs), (ins i8imm:$src),
+                   "or{b}\t{$src, %al|%al, $src}", []>;
+  def OR16i16 : Ii16 <0x0D, RawFrm, (outs), (ins i16imm:$src),
+                      "or{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def OR32i32 : Ii32 <0x0D, RawFrm, (outs), (ins i32imm:$src),
+                      "or{l}\t{$src, %eax|%eax, $src}", []>;
 } // isTwoAddress = 0
 
 
@@ -1840,6 +1945,13 @@ let isTwoAddress = 0 in {
                      "xor{l}\t{$src, $dst|$dst, $src}",
                  [(store (xor (load addr:$dst), i32immSExt8:$src), addr:$dst),
                   (implicit EFLAGS)]>;
+                  
+  def XOR8i8 : Ii8 <0x34, RawFrm, (outs), (ins i8imm:$src),
+                   "xor{b}\t{$src, %al|%al, $src}", []>;
+  def XOR16i16 : Ii16 <0x35, RawFrm, (outs), (ins i16imm:$src),
+                        "xor{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def XOR32i32 : Ii32 <0x35, RawFrm, (outs), (ins i32imm:$src),
+                        "xor{l}\t{$src, %eax|%eax, $src}", []>;
 } // isTwoAddress = 0
 } // Defs = [EFLAGS]
 
@@ -1867,8 +1979,17 @@ def SHL16ri  : Ii8<0xC1, MRM4r, (outs GR16:$dst), (ins GR16:$src1, i8imm:$src2),
 def SHL32ri  : Ii8<0xC1, MRM4r, (outs GR32:$dst), (ins GR32:$src1, i8imm:$src2),
                    "shl{l}\t{$src2, $dst|$dst, $src2}",
                    [(set GR32:$dst, (shl GR32:$src1, (i8 imm:$src2)))]>;
-// NOTE: We don't use shifts of a register by one, because 'add reg,reg' is
-// cheaper.
+
+// NOTE: We don't include patterns for shifts of a register by one, because
+// 'add reg,reg' is cheaper.
+
+def SHL8r1   : I<0xD0, MRM4r, (outs GR8:$dst), (ins GR8:$src1),
+                 "shl{b}\t$dst", []>;
+def SHL16r1  : I<0xD1, MRM4r, (outs GR16:$dst), (ins GR16:$src1),
+                 "shl{w}\t$dst", []>, OpSize;
+def SHL32r1  : I<0xD1, MRM4r, (outs GR32:$dst), (ins GR32:$src1),
+                 "shl{l}\t$dst", []>;
+
 } // isConvertibleToThreeAddress = 1
 
 let isTwoAddress = 0 in {
@@ -2324,6 +2445,15 @@ def ADD32rm  : I<0x03, MRMSrcMem, (outs GR32:$dst),
                  "add{l}\t{$src2, $dst|$dst, $src2}",
                  [(set GR32:$dst, (add GR32:$src1, (load addr:$src2))),
                   (implicit EFLAGS)]>;
+                  
+// Register-Register Addition - Equivalent to the normal rr forms (ADD8rr, 
+//   ADD16rr, and ADD32rr), but differently encoded.
+def ADD8mrmrr: I<0x02, MRMSrcReg, (outs GR8:$dst), (ins GR8:$src1, GR8:$src2),
+                 "add{b}\t{$src2, $dst|$dst, $src2}", []>;
+def ADD16mrmrr: I<0x03, MRMSrcReg,(outs GR16:$dst),(ins GR16:$src1, GR16:$src2),
+                  "add{w}\t{$src2, $dst|$dst, $src2}", []>, OpSize;
+def ADD32mrmrr: I<0x03, MRMSrcReg,(outs GR16:$dst),(ins GR16:$src1, GR16:$src2),
+                  "add{l}\t{$src2, $dst|$dst, $src2}", []>;
 
 // Register-Integer Addition
 def ADD8ri    : Ii8<0x80, MRM0r, (outs GR8:$dst), (ins GR8:$src1, i8imm:$src2),
@@ -2394,11 +2524,11 @@ let isTwoAddress = 0 in {
 
   // addition to rAX
   def ADD8i8 : Ii8<0x04, RawFrm, (outs), (ins i8imm:$src),
-                   "add\t{$src, %al|%al, $src}", []>;
+                   "add{b}\t{$src, %al|%al, $src}", []>;
   def ADD16i16 : Ii16<0x05, RawFrm, (outs), (ins i16imm:$src),
-                      "add\t{$src, %ax|%ax, $src}", []>, OpSize;
+                      "add{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
   def ADD32i32 : Ii32<0x05, RawFrm, (outs), (ins i32imm:$src),
-                      "add\t{$src, %eax|%eax, $src}", []>;
+                      "add{l}\t{$src, %eax|%eax, $src}", []>;
 }
 
 let Uses = [EFLAGS] in {
@@ -2477,6 +2607,13 @@ let isTwoAddress = 0 in {
   def ADC32mi8 : Ii8<0x83, MRM2m, (outs), (ins i32mem:$dst, i32i8imm :$src2),
                      "adc{l}\t{$src2, $dst|$dst, $src2}",
                [(store (adde (load addr:$dst), i32immSExt8:$src2), addr:$dst)]>;
+
+  def ADC8i8 : Ii8<0x14, RawFrm, (outs), (ins i8imm:$src),
+                   "adc{b}\t{$src, %al|%al, $src}", []>;
+  def ADC16i16 : Ii16<0x15, RawFrm, (outs), (ins i16imm:$src),
+                      "adc{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def ADC32i32 : Ii32<0x15, RawFrm, (outs), (ins i32imm:$src),
+                      "adc{l}\t{$src, %eax|%eax, $src}", []>;
 }
 } // Uses = [EFLAGS]
 
@@ -2576,6 +2713,13 @@ let isTwoAddress = 0 in {
                      [(store (sub (load addr:$dst), i32immSExt8:$src2),
                              addr:$dst),
                       (implicit EFLAGS)]>;
+                      
+  def SUB8i8 : Ii8<0x2C, RawFrm, (outs), (ins i8imm:$src),
+                   "sub{b}\t{$src, %al|%al, $src}", []>;
+  def SUB16i16 : Ii16<0x2D, RawFrm, (outs), (ins i16imm:$src),
+                      "sub{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def SUB32i32 : Ii32<0x2D, RawFrm, (outs), (ins i32imm:$src),
+                      "sub{l}\t{$src, %eax|%eax, $src}", []>;
 }
 
 let Uses = [EFLAGS] in {
@@ -2620,6 +2764,13 @@ let isTwoAddress = 0 in {
   def SBB32mi8 : Ii8<0x83, MRM3m, (outs), (ins i32mem:$dst, i32i8imm :$src2), 
                      "sbb{l}\t{$src2, $dst|$dst, $src2}",
                [(store (sube (load addr:$dst), i32immSExt8:$src2), addr:$dst)]>;
+               
+  def SBB8i8 : Ii8<0x1C, RawFrm, (outs), (ins i8imm:$src),
+                   "sbb{b}\t{$src, %al|%al, $src}", []>;
+  def SBB16i16 : Ii16<0x1D, RawFrm, (outs), (ins i16imm:$src),
+                      "sbb{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+  def SBB32i32 : Ii32<0x1D, RawFrm, (outs), (ins i32imm:$src),
+                      "sbb{l}\t{$src, %eax|%eax, $src}", []>;
 }
 def SBB8rm   : I<0x1A, MRMSrcMem, (outs GR8:$dst), (ins GR8:$src1, i8mem:$src2),
                     "sbb{b}\t{$src2, $dst|$dst, $src2}",
@@ -2750,6 +2901,13 @@ def TEST32rr : I<0x85, MRMDestReg, (outs),  (ins GR32:$src1, GR32:$src2),
                      [(X86cmp (and_su GR32:$src1, GR32:$src2), 0),
                       (implicit EFLAGS)]>;
 }
+
+def TEST8i8  : Ii8<0xA8, RawFrm, (outs), (ins i8imm:$src),
+                   "test{b}\t{$src, %al|%al, $src}", []>;
+def TEST16i16 : Ii16<0xA9, RawFrm, (outs), (ins i16imm:$src),
+                     "test{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+def TEST32i32 : Ii32<0xA9, RawFrm, (outs), (ins i32imm:$src),
+                     "test{l}\t{$src, %eax|%eax, $src}", []>;
 
 def TEST8rm  : I<0x84, MRMSrcMem, (outs),  (ins GR8 :$src1, i8mem :$src2),
                      "test{b}\t{$src2, $src1|$src1, $src2}",
@@ -2982,6 +3140,13 @@ def SETNOm   : I<0x91, MRM0m,
 
 // Integer comparisons
 let Defs = [EFLAGS] in {
+def CMP8i8 : Ii8<0x3C, RawFrm, (outs), (ins i8imm:$src),
+                 "cmp{b}\t{$src, %al|%al, $src}", []>;
+def CMP16i16 : Ii16<0x3D, RawFrm, (outs), (ins i16imm:$src),
+                    "cmp{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+def CMP32i32 : Ii32<0x3D, RawFrm, (outs), (ins i32imm:$src),
+                    "cmp{l}\t{$src, %eax|%eax, $src}", []>;
+
 def CMP8rr  : I<0x38, MRMDestReg,
                 (outs), (ins GR8 :$src1, GR8 :$src2),
                 "cmp{b}\t{$src2, $src1|$src1, $src2}",
@@ -4130,6 +4295,18 @@ def : Pat<(parallel (X86dec_flag GR32:$src), (implicit EFLAGS)),
 def : Pat<(parallel (store (i32 (X86dec_flag (loadi32 addr:$dst))), addr:$dst),
                     (implicit EFLAGS)),
           (DEC32m addr:$dst)>, Requires<[In32BitMode]>;
+
+// -disable-16bit support.
+def : Pat<(truncstorei16 (i32 imm:$src), addr:$dst),
+          (MOV16mi addr:$dst, imm:$src)>;
+def : Pat<(truncstorei16 GR32:$src, addr:$dst),
+          (MOV16mr addr:$dst, (EXTRACT_SUBREG GR32:$src, x86_subreg_16bit))>;
+def : Pat<(i32 (sextloadi16 addr:$dst)),
+          (MOVSX32rm16 addr:$dst)>;
+def : Pat<(i32 (zextloadi16 addr:$dst)),
+          (MOVZX32rm16 addr:$dst)>;
+def : Pat<(i32 (extloadi16 addr:$dst)),
+          (MOVZX32rm16 addr:$dst)>;
 
 //===----------------------------------------------------------------------===//
 // Floating Point Stack Support

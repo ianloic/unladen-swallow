@@ -16,8 +16,10 @@ add_llvm_library(LLVMSupport
   IsNAN.cpp
   ManagedStatic.cpp
   MemoryBuffer.cpp
+  MemoryObject.cpp
   PluginLoader.cpp
   PrettyStackTrace.cpp
+  Regex.cpp
   SlowOperationInformer.cpp
   SmallPtrSet.cpp
   SourceMgr.cpp
@@ -32,6 +34,11 @@ add_llvm_library(LLVMSupport
   Twine.cpp
   raw_os_ostream.cpp
   raw_ostream.cpp
+  regcomp.c
+  regerror.c
+  regexec.c
+  regfree.c
+  regstrlcpy.c
   )
 
 target_link_libraries (LLVMSupport LLVMSystem)

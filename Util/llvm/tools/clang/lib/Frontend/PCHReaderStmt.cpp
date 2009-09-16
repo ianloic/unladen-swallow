@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Frontend/PCHReader.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtVisitor.h"
 using namespace clang;
 
@@ -106,7 +107,7 @@ namespace {
     unsigned VisitObjCMessageExpr(ObjCMessageExpr *E);
     unsigned VisitObjCSuperExpr(ObjCSuperExpr *E);
     unsigned VisitObjCIsaExpr(ObjCIsaExpr *E);
-    
+
     unsigned VisitObjCForCollectionStmt(ObjCForCollectionStmt *);
     unsigned VisitObjCAtCatchStmt(ObjCAtCatchStmt *);
     unsigned VisitObjCAtFinallyStmt(ObjCAtFinallyStmt *);
@@ -115,6 +116,7 @@ namespace {
     unsigned VisitObjCAtThrowStmt(ObjCAtThrowStmt *);
 
     unsigned VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E);
+    unsigned VisitCXXConstructExpr(CXXConstructExpr *E);
   };
 }
 
@@ -132,7 +134,7 @@ unsigned PCHStmtReader::VisitNullStmt(NullStmt *S) {
 unsigned PCHStmtReader::VisitCompoundStmt(CompoundStmt *S) {
   VisitStmt(S);
   unsigned NumStmts = Record[Idx++];
-  S->setStmts(*Reader.getContext(), 
+  S->setStmts(*Reader.getContext(),
               StmtStack.data() + StmtStack.size() - NumStmts, NumStmts);
   S->setLBracLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   S->setRBracLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
@@ -195,7 +197,7 @@ unsigned PCHStmtReader::VisitSwitchStmt(SwitchStmt *S) {
       PrevSC->setNextSwitchCase(SC);
     else
       S->setSwitchCaseList(SC);
-    
+
     // Retain this SwitchCase, since SwitchStmt::addSwitchCase() would
     // normally retain it (but we aren't calling addSwitchCase).
     SC->Retain();
@@ -298,8 +300,8 @@ unsigned PCHStmtReader::VisitAsmStmt(AsmStmt *S) {
   S->setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   S->setVolatile(Record[Idx++]);
   S->setSimple(Record[Idx++]);
-  
-  unsigned StackIdx 
+
+  unsigned StackIdx
     = StmtStack.size() - (NumOutputs*2 + NumInputs*2 + NumClobbers + 1);
   S->setAsmString(cast_or_null<StringLiteral>(StmtStack[StackIdx++]));
 
@@ -372,12 +374,12 @@ unsigned PCHStmtReader::VisitImaginaryLiteral(ImaginaryLiteral *E) {
 unsigned PCHStmtReader::VisitStringLiteral(StringLiteral *E) {
   VisitExpr(E);
   unsigned Len = Record[Idx++];
-  assert(Record[Idx] == E->getNumConcatenated() && 
+  assert(Record[Idx] == E->getNumConcatenated() &&
          "Wrong number of concatenated tokens!");
   ++Idx;
   E->setWide(Record[Idx++]);
 
-  // Read string data  
+  // Read string data
   llvm::SmallVector<char, 16> Str(&Record[Idx], &Record[Idx] + Len);
   E->setStrData(*Reader.getContext(), Str.data(), Len);
   Idx += Len;
@@ -536,7 +538,7 @@ unsigned PCHStmtReader::VisitInitListExpr(InitListExpr *E) {
   unsigned NumInits = Record[Idx++];
   E->reserveInits(NumInits);
   for (unsigned I = 0; I != NumInits; ++I)
-    E->updateInit(I, 
+    E->updateInit(I,
                   cast<Expr>(StmtStack[StmtStack.size() - NumInits - 1 + I]));
   E->setSyntacticForm(cast_or_null<InitListExpr>(StmtStack.back()));
   E->setLBraceLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
@@ -563,11 +565,11 @@ unsigned PCHStmtReader::VisitDesignatedInitExpr(DesignatedInitExpr *E) {
     switch ((pch::DesignatorTypes)Record[Idx++]) {
     case pch::DESIG_FIELD_DECL: {
       FieldDecl *Field = cast<FieldDecl>(Reader.GetDecl(Record[Idx++]));
-      SourceLocation DotLoc 
+      SourceLocation DotLoc
         = SourceLocation::getFromRawEncoding(Record[Idx++]);
-      SourceLocation FieldLoc 
+      SourceLocation FieldLoc
         = SourceLocation::getFromRawEncoding(Record[Idx++]);
-      Designators.push_back(Designator(Field->getIdentifier(), DotLoc, 
+      Designators.push_back(Designator(Field->getIdentifier(), DotLoc,
                                        FieldLoc));
       Designators.back().setField(Field);
       break;
@@ -575,14 +577,14 @@ unsigned PCHStmtReader::VisitDesignatedInitExpr(DesignatedInitExpr *E) {
 
     case pch::DESIG_FIELD_NAME: {
       const IdentifierInfo *Name = Reader.GetIdentifierInfo(Record, Idx);
-      SourceLocation DotLoc 
+      SourceLocation DotLoc
         = SourceLocation::getFromRawEncoding(Record[Idx++]);
-      SourceLocation FieldLoc 
+      SourceLocation FieldLoc
         = SourceLocation::getFromRawEncoding(Record[Idx++]);
       Designators.push_back(Designator(Name, DotLoc, FieldLoc));
       break;
     }
-      
+
     case pch::DESIG_ARRAY: {
       unsigned Index = Record[Idx++];
       SourceLocation LBracketLoc
@@ -669,7 +671,7 @@ unsigned PCHStmtReader::VisitGNUNullExpr(GNUNullExpr *E) {
 unsigned PCHStmtReader::VisitShuffleVectorExpr(ShuffleVectorExpr *E) {
   VisitExpr(E);
   unsigned NumExprs = Record[Idx++];
-  E->setExprs(*Reader.getContext(), 
+  E->setExprs(*Reader.getContext(),
               (Expr **)&StmtStack[StmtStack.size() - NumExprs], NumExprs);
   E->setBuiltinLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   E->setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
@@ -766,7 +768,7 @@ unsigned PCHStmtReader::VisitObjCMessageExpr(ObjCMessageExpr *E) {
   E->setRightLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
   E->setSelector(Reader.GetSelector(Record, Idx));
   E->setMethodDecl(cast_or_null<ObjCMethodDecl>(Reader.GetDecl(Record[Idx++])));
-  
+
   E->setReceiver(
          cast_or_null<Expr>(StmtStack[StmtStack.size() - E->getNumArgs() - 1]));
   if (!E->getReceiver()) {
@@ -847,6 +849,14 @@ unsigned PCHStmtReader::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
   return num;
 }
 
+unsigned PCHStmtReader::VisitCXXConstructExpr(CXXConstructExpr *E) {
+  VisitExpr(E);
+  E->setConstructor(cast<CXXConstructorDecl>(Reader.GetDecl(Record[Idx++])));
+  E->setElidable(Record[Idx++]);  
+  for (unsigned I = 0, N = E->getNumArgs(); I != N; ++I)
+    E->setArg(I, cast<Expr>(StmtStack[StmtStack.size() - N + I]));
+  return E->getNumArgs();
+}
 
 // Within the bitstream, expressions are stored in Reverse Polish
 // Notation, with each of the subexpressions preceding the
@@ -896,8 +906,8 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
       Finished = true;
       break;
 
-    case pch::STMT_NULL_PTR: 
-      S = 0; 
+    case pch::STMT_NULL_PTR:
+      S = 0;
       break;
 
     case pch::STMT_NULL:
@@ -935,7 +945,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::STMT_DO:
       S = new (Context) DoStmt(Empty);
       break;
-      
+
     case pch::STMT_FOR:
       S = new (Context) ForStmt(Empty);
       break;
@@ -943,7 +953,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::STMT_GOTO:
       S = new (Context) GotoStmt(Empty);
       break;
-      
+
     case pch::STMT_INDIRECT_GOTO:
       S = new (Context) IndirectGotoStmt(Empty);
       break;
@@ -971,25 +981,25 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::EXPR_PREDEFINED:
       S = new (Context) PredefinedExpr(Empty);
       break;
-      
-    case pch::EXPR_DECL_REF: 
-      S = new (Context) DeclRefExpr(Empty); 
+
+    case pch::EXPR_DECL_REF:
+      S = new (Context) DeclRefExpr(Empty);
       break;
-      
-    case pch::EXPR_INTEGER_LITERAL: 
+
+    case pch::EXPR_INTEGER_LITERAL:
       S = new (Context) IntegerLiteral(Empty);
       break;
-      
+
     case pch::EXPR_FLOATING_LITERAL:
       S = new (Context) FloatingLiteral(Empty);
       break;
-      
+
     case pch::EXPR_IMAGINARY_LITERAL:
       S = new (Context) ImaginaryLiteral(Empty);
       break;
 
     case pch::EXPR_STRING_LITERAL:
-      S = StringLiteral::CreateEmpty(*Context, 
+      S = StringLiteral::CreateEmpty(*Context,
                                      Record[PCHStmtReader::NumExprFields + 1]);
       break;
 
@@ -1056,7 +1066,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::EXPR_DESIGNATED_INIT:
       S = DesignatedInitExpr::CreateEmpty(*Context,
                                      Record[PCHStmtReader::NumExprFields] - 1);
-     
+
       break;
 
     case pch::EXPR_IMPLICIT_VALUE_INIT:
@@ -1090,7 +1100,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::EXPR_SHUFFLE_VECTOR:
       S = new (Context) ShuffleVectorExpr(Empty);
       break;
-      
+
     case pch::EXPR_BLOCK:
       S = new (Context) BlockExpr(Empty);
       break;
@@ -1098,7 +1108,7 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::EXPR_BLOCK_DECL_REF:
       S = new (Context) BlockDeclRefExpr(Empty);
       break;
-        
+
     case pch::EXPR_OBJC_STRING_LITERAL:
       S = new (Context) ObjCStringLiteral(Empty);
       break;
@@ -1147,9 +1157,14 @@ Stmt *PCHReader::ReadStmt(llvm::BitstreamCursor &Cursor) {
     case pch::STMT_OBJC_AT_THROW:
       S = new (Context) ObjCAtThrowStmt(Empty);
       break;
-      
+
     case pch::EXPR_CXX_OPERATOR_CALL:
       S = new (Context) CXXOperatorCallExpr(*Context, Empty);
+      break;
+        
+    case pch::EXPR_CXX_CONSTRUCT:
+      S = new (Context) CXXConstructExpr(Empty, *Context,
+                                      Record[PCHStmtReader::NumExprFields + 2]);
       break;
     }
 

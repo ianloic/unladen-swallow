@@ -998,7 +998,7 @@ bool LLParser::ParseOptionalVisibility(unsigned &Res) {
 ///   ::= 'arm_aapcs_vfpcc'
 ///   ::= 'cc' UINT
 ///
-bool LLParser::ParseOptionalCallingConv(unsigned &CC) {
+bool LLParser::ParseOptionalCallingConv(CallingConv::ID &CC) {
   switch (Lex.getKind()) {
   default:                       CC = CallingConv::C; return false;
   case lltok::kw_ccc:            CC = CallingConv::C; break;
@@ -1009,8 +1009,18 @@ bool LLParser::ParseOptionalCallingConv(unsigned &CC) {
   case lltok::kw_arm_apcscc:     CC = CallingConv::ARM_APCS; break;
   case lltok::kw_arm_aapcscc:    CC = CallingConv::ARM_AAPCS; break;
   case lltok::kw_arm_aapcs_vfpcc:CC = CallingConv::ARM_AAPCS_VFP; break;
-  case lltok::kw_cc:             Lex.Lex(); return ParseUInt32(CC);
+  case lltok::kw_cc: {
+      unsigned ArbitraryCC;
+      Lex.Lex();
+      if (ParseUInt32(ArbitraryCC)) {
+        return true;
+      } else
+        CC = static_cast<CallingConv::ID>(ArbitraryCC);
+        return false;
+    }
+    break;
   }
+  
   Lex.Lex();
   return false;
 }
@@ -1676,6 +1686,7 @@ bool LLParser::PerFunctionState::SetInstName(int NameID,
         return P.Error(NameLoc, "instruction forward referenced with type '" + 
                        FI->second.first->getType()->getDescription() + "'");
       FI->second.first->replaceAllUsesWith(Inst);
+      delete FI->second.first;
       ForwardRefValIDs.erase(FI);
     }
 
@@ -1691,6 +1702,7 @@ bool LLParser::PerFunctionState::SetInstName(int NameID,
       return P.Error(NameLoc, "instruction forward referenced with type '" + 
                      FI->second.first->getType()->getDescription() + "'");
     FI->second.first->replaceAllUsesWith(Inst);
+    delete FI->second.first;
     ForwardRefVals.erase(FI);
   }
   
@@ -2083,13 +2095,11 @@ bool LLParser::ParseValID(ValID &ID) {
     if (!Val0->getType()->isIntOrIntVector() &&
         !Val0->getType()->isFPOrFPVector())
       return Error(ID.Loc,"constexpr requires integer, fp, or vector operands");
-    Constant *C = ConstantExpr::get(Opc, Val0, Val1);
-    if (NUW)
-      cast<OverflowingBinaryOperator>(C)->setHasNoUnsignedWrap(true);
-    if (NSW)
-      cast<OverflowingBinaryOperator>(C)->setHasNoSignedWrap(true);
-    if (Exact)
-      cast<SDivOperator>(C)->setIsExact(true);
+    unsigned Flags = 0;
+    if (NUW)   Flags |= OverflowingBinaryOperator::NoUnsignedWrap;
+    if (NSW)   Flags |= OverflowingBinaryOperator::NoSignedWrap;
+    if (Exact) Flags |= SDivOperator::IsExact;
+    Constant *C = ConstantExpr::get(Opc, Val0, Val1, Flags);
     ID.ConstantVal = C;
     ID.Kind = ValID::t_Constant;
     return false;
@@ -2145,10 +2155,12 @@ bool LLParser::ParseValID(ValID &ID) {
                                              (Value**)(Elts.data() + 1),
                                              Elts.size() - 1))
         return Error(ID.Loc, "invalid indices for getelementptr");
-      ID.ConstantVal = ConstantExpr::getGetElementPtr(Elts[0],
-                                              Elts.data() + 1, Elts.size() - 1);
-      if (InBounds)
-        cast<GEPOperator>(ID.ConstantVal)->setIsInBounds(true);
+      ID.ConstantVal = InBounds ?
+        ConstantExpr::getInBoundsGetElementPtr(Elts[0],
+                                               Elts.data() + 1,
+                                               Elts.size() - 1) :
+        ConstantExpr::getGetElementPtr(Elts[0],
+                                       Elts.data() + 1, Elts.size() - 1);
     } else if (Opc == Instruction::Select) {
       if (Elts.size() != 3)
         return Error(ID.Loc, "expected three operands to select");
@@ -2357,7 +2369,8 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
   LocTy LinkageLoc = Lex.getLoc();
   unsigned Linkage;
   
-  unsigned Visibility, CC, RetAttrs;
+  unsigned Visibility, RetAttrs;
+  CallingConv::ID CC;
   PATypeHolder RetType(Type::getVoidTy(Context));
   LocTy RetTypeLoc = Lex.getLoc();
   if (ParseOptionalLinkage(Linkage) ||
@@ -2501,7 +2514,7 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
       }
     }
     
-  } else if (FunctionName.empty()) {
+  } else {
     // If this is a definition of a forward referenced function, make sure the
     // types agree.
     std::map<unsigned, std::pair<GlobalValue*, LocTy> >::iterator I
@@ -2668,9 +2681,9 @@ bool LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
           return Error(ModifierLoc, "nsw only applies to integer operations");
       }
       if (NUW)
-        cast<OverflowingBinaryOperator>(Inst)->setHasNoUnsignedWrap(true);
+        cast<BinaryOperator>(Inst)->setHasNoUnsignedWrap(true);
       if (NSW)
-        cast<OverflowingBinaryOperator>(Inst)->setHasNoSignedWrap(true);
+        cast<BinaryOperator>(Inst)->setHasNoSignedWrap(true);
     }
     return Result;
   }
@@ -2685,7 +2698,7 @@ bool LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
     bool Result = ParseArithmetic(Inst, PFS, KeywordVal, 1);
     if (!Result)
       if (Exact)
-        cast<SDivOperator>(Inst)->setIsExact(true);
+        cast<BinaryOperator>(Inst)->setIsExact(true);
     return Result;
   }
 
@@ -2917,7 +2930,8 @@ bool LLParser::ParseSwitch(Instruction *&Inst, PerFunctionState &PFS) {
 ///       OptionalAttrs 'to' TypeAndValue 'unwind' TypeAndValue
 bool LLParser::ParseInvoke(Instruction *&Inst, PerFunctionState &PFS) {
   LocTy CallLoc = Lex.getLoc();
-  unsigned CC, RetAttrs, FnAttrs;
+  unsigned RetAttrs, FnAttrs;
+  CallingConv::ID CC;
   PATypeHolder RetType(Type::getVoidTy(Context));
   LocTy RetTypeLoc;
   ValID CalleeID;
@@ -3265,7 +3279,8 @@ bool LLParser::ParsePHI(Instruction *&Inst, PerFunctionState &PFS) {
 ///       ParameterList OptionalAttrs
 bool LLParser::ParseCall(Instruction *&Inst, PerFunctionState &PFS,
                          bool isTail) {
-  unsigned CC, RetAttrs, FnAttrs;
+  unsigned RetAttrs, FnAttrs;
+  CallingConv::ID CC;
   PATypeHolder RetType(Type::getVoidTy(Context));
   LocTy RetTypeLoc;
   ValID CalleeID;
@@ -3486,7 +3501,7 @@ bool LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
     return Error(Loc, "invalid getelementptr indices");
   Inst = GetElementPtrInst::Create(Ptr, Indices.begin(), Indices.end());
   if (InBounds)
-    cast<GEPOperator>(Inst)->setIsInBounds(true);
+    cast<GetElementPtrInst>(Inst)->setIsInBounds(true);
   return false;
 }
 

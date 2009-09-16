@@ -17,6 +17,7 @@
 #include "clang/Driver/Option.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
 
@@ -25,11 +26,12 @@
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
 
-/// Darwin_X86 - Darwin tool chain for i386 and x86_64.
+/// Darwin - Darwin tool chain for i386 and x86_64.
 
-Darwin_X86::Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple,
-                       const unsigned (&_DarwinVersion)[3],
-                       const unsigned (&_GCCVersion)[3])
+Darwin::Darwin(const HostInfo &Host, const llvm::Triple& Triple,
+               const unsigned (&_DarwinVersion)[3],
+               const unsigned (&_GCCVersion)[3],
+               bool _IsIPhone)
   : ToolChain(Host, Triple) {
   DarwinVersion[0] = _DarwinVersion[0];
   DarwinVersion[1] = _DarwinVersion[1];
@@ -37,9 +39,13 @@ Darwin_X86::Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple,
   GCCVersion[0] = _GCCVersion[0];
   GCCVersion[1] = _GCCVersion[1];
   GCCVersion[2] = _GCCVersion[2];
+  IsIPhone = _IsIPhone;
 
   llvm::raw_string_ostream(MacosxVersionMin)
     << "10." << DarwinVersion[0] - 4 << '.' << DarwinVersion[1];
+
+  // FIXME: Lift default up.
+  IPhoneOSVersionMin = "3.0";
 
   ToolChainDir = "i686-apple-darwin";
   ToolChainDir += llvm::utostr(DarwinVersion[0]);
@@ -63,7 +69,7 @@ Darwin_X86::Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple,
     Path += "/x86_64";
     getFilePaths().push_back(Path);
   }
-  
+
   Path = getHost().getDriver().Dir;
   Path += "/../lib/gcc/";
   Path += getToolChainDir();
@@ -89,17 +95,16 @@ Darwin_X86::Darwin_X86(const HostInfo &Host, const llvm::Triple& Triple,
   getProgramPaths().push_back(getHost().getDriver().Dir);
 }
 
-Darwin_X86::~Darwin_X86() {
+Darwin::~Darwin() {
   // Free tool implementations.
   for (llvm::DenseMap<unsigned, Tool*>::iterator
          it = Tools.begin(), ie = Tools.end(); it != ie; ++it)
     delete it->second;
 }
 
-Tool &Darwin_X86::SelectTool(const Compilation &C, 
-                              const JobAction &JA) const {
+Tool &Darwin::SelectTool(const Compilation &C, const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();
@@ -120,7 +125,7 @@ Tool &Darwin_X86::SelectTool(const Compilation &C,
     case Action::AssembleJobClass:
       T = new tools::darwin::Assemble(*this); break;
     case Action::LinkJobClass:
-      T = new tools::darwin::Link(*this, MacosxVersionMin.c_str()); break;
+      T = new tools::darwin::Link(*this); break;
     case Action::LipoJobClass:
       T = new tools::darwin::Lipo(*this); break;
     }
@@ -129,7 +134,8 @@ Tool &Darwin_X86::SelectTool(const Compilation &C,
   return *T;
 }
 
-DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const { 
+DerivedArgList *Darwin::TranslateArgs(InputArgList &Args,
+                                      const char *BoundArch) const {
   DerivedArgList *DAL = new DerivedArgList(Args, false);
   const OptTable &Opts = getHost().getDriver().getOpts();
 
@@ -138,30 +144,36 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
   // more opaque. For now, we follow gcc closely solely for the
   // purpose of easily achieving feature parity & testability. Once we
   // have something that works, we should reevaluate each translation
-  // and try to push it down into tool specific logic.  
+  // and try to push it down into tool specific logic.
 
-  Arg *OSXVersion = 
+  Arg *OSXVersion =
     Args.getLastArg(options::OPT_mmacosx_version_min_EQ, false);
   Arg *iPhoneVersion =
-    Args.getLastArg(options::OPT_miphoneos_version_min_EQ, false);  
+    Args.getLastArg(options::OPT_miphoneos_version_min_EQ, false);
   if (OSXVersion && iPhoneVersion) {
     getHost().getDriver().Diag(clang::diag::err_drv_argument_not_allowed_with)
           << OSXVersion->getAsString(Args)
-          << iPhoneVersion->getAsString(Args); 
+          << iPhoneVersion->getAsString(Args);
   } else if (!OSXVersion && !iPhoneVersion) {
     // Chose the default version based on the arch.
     //
-    // FIXME: This will need to be fixed when we merge in arm support.
+    // FIXME: Are there iPhone overrides for this?
 
-    // Look for MACOSX_DEPLOYMENT_TARGET, otherwise use the version
-    // from the host.
-    const char *Version = ::getenv("MACOSX_DEPLOYMENT_TARGET");
-    if (!Version)
-      Version = MacosxVersionMin.c_str();
-    const Option *O = Opts.getOption(options::OPT_mmacosx_version_min_EQ);
-    DAL->append(DAL->MakeJoinedArg(0, O, Version));
+    if (!isIPhone()) {
+      // Look for MACOSX_DEPLOYMENT_TARGET, otherwise use the version
+      // from the host.
+      const char *Version = ::getenv("MACOSX_DEPLOYMENT_TARGET");
+      if (!Version)
+        Version = MacosxVersionMin.c_str();
+      const Option *O = Opts.getOption(options::OPT_mmacosx_version_min_EQ);
+      DAL->append(DAL->MakeJoinedArg(0, O, Version));
+    } else {
+      const char *Version = IPhoneOSVersionMin.c_str();
+      const Option *O = Opts.getOption(options::OPT_miphoneos_version_min_EQ);
+      DAL->append(DAL->MakeJoinedArg(0, O, Version));
+    }
   }
-  
+
   for (ArgList::iterator it = Args.begin(), ie = Args.end(); it != ie; ++it) {
     Arg *A = *it;
 
@@ -174,7 +186,7 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
       // interface for this.
       unsigned Prev, Index = Prev = A->getIndex() + 1;
       Arg *XarchArg = Opts.ParseOneArg(Args, Index);
-      
+
       // If the argument parsing failed or more than one argument was
       // consumed, the -Xarch_ argument's parameter tried to consume
       // extra arguments. Emit an error and ignore.
@@ -183,7 +195,7 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
       // driver behavior; that isn't going to work in our model. We
       // use isDriverOption() as an approximation, although things
       // like -O4 are going to slip through.
-      if (!XarchArg || Index > Prev + 1 || 
+      if (!XarchArg || Index > Prev + 1 ||
           XarchArg->getOption().isDriverOption()) {
        getHost().getDriver().Diag(clang::diag::err_drv_invalid_Xarch_argument)
           << A->getAsString(Args);
@@ -192,7 +204,7 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
 
       XarchArg->setBaseArg(A);
       A = XarchArg;
-    } 
+    }
 
     // Sob. These is strictly gcc compatible for the time being. Apple
     // gcc translates options twice, which means that self-expanding
@@ -209,7 +221,7 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
       DAL->append(DAL->MakeFlagArg(A, Opts.getOption(options::OPT_static)));
       DAL->append(DAL->MakeFlagArg(A, Opts.getOption(options::OPT_static)));
       break;
-      
+
     case options::OPT_dependency_file:
       DAL->append(DAL->MakeSeparateArg(A, Opts.getOption(options::OPT_MF),
                                        A->getValue(Args)));
@@ -270,35 +282,98 @@ DerivedArgList *Darwin_X86::TranslateArgs(InputArgList &Args) const {
     }
   }
 
-  // FIXME: Actually, gcc always adds this, but it is filtered for
-  // duplicates somewhere. This also changes the order of things, so
-  // look it up.
-  if (getArchName() == "x86_64")
-    if (!Args.hasArg(options::OPT_m64, false))
+  if (getTriple().getArch() == llvm::Triple::x86 ||
+      getTriple().getArch() == llvm::Triple::x86_64)
+    if (!Args.hasArg(options::OPT_mtune_EQ, false))
+      DAL->append(DAL->MakeJoinedArg(0, Opts.getOption(options::OPT_mtune_EQ),
+                                     "core2"));
+
+  // Add the arch options based on the particular spelling of -arch, to match
+  // how the driver driver works.
+  if (BoundArch) {
+    llvm::StringRef Name = BoundArch;
+    const Option *MCpu = Opts.getOption(options::OPT_mcpu_EQ);
+    const Option *MArch = Opts.getOption(options::OPT_march_EQ);
+
+    // This code must be kept in sync with LLVM's getArchTypeForDarwinArch,
+    // which defines the list of which architectures we accept.
+    if (Name == "ppc")
+      ;
+    else if (Name == "ppc601")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "601"));
+    else if (Name == "ppc603")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "603"));
+    else if (Name == "ppc604")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "604"));
+    else if (Name == "ppc604e")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "604e"));
+    else if (Name == "ppc750")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "750"));
+    else if (Name == "ppc7400")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "7400"));
+    else if (Name == "ppc7450")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "7450"));
+    else if (Name == "ppc970")
+      DAL->append(DAL->MakeJoinedArg(0, MCpu, "970"));
+
+    else if (Name == "ppc64")
       DAL->append(DAL->MakeFlagArg(0, Opts.getOption(options::OPT_m64)));
 
-  if (!Args.hasArg(options::OPT_mtune_EQ, false))
-    DAL->append(DAL->MakeJoinedArg(0, Opts.getOption(options::OPT_mtune_EQ),
-                                    "core2"));
+    else if (Name == "i386")
+      ;
+    else if (Name == "i486")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "i486"));
+    else if (Name == "i586")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "i586"));
+    else if (Name == "i686")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "i686"));
+    else if (Name == "pentium")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "pentium"));
+    else if (Name == "pentium2")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "pentium2"));
+    else if (Name == "pentpro")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "pentiumpro"));
+    else if (Name == "pentIIm3")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "pentium2"));
+
+    else if (Name == "x86_64")
+      DAL->append(DAL->MakeFlagArg(0, Opts.getOption(options::OPT_m64)));
+
+    else if (Name == "arm")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "armv4t"));
+    else if (Name == "armv4t")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "armv4t"));
+    else if (Name == "armv5")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "armv5tej"));
+    else if (Name == "xscale")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "xscale"));
+    else if (Name == "armv6")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "armv6k"));
+    else if (Name == "armv7")
+      DAL->append(DAL->MakeJoinedArg(0, MArch, "armv7a"));
+
+    else
+      llvm::llvm_unreachable("invalid Darwin arch");
+  }
 
   return DAL;
-} 
-
-bool Darwin_X86::IsMathErrnoDefault() const { 
-  return false; 
 }
 
-bool Darwin_X86::IsUnwindTablesDefault() const {
+bool Darwin::IsMathErrnoDefault() const {
+  return false;
+}
+
+bool Darwin::IsUnwindTablesDefault() const {
   // FIXME: Gross; we should probably have some separate target
   // definition, possibly even reusing the one in clang.
   return getArchName() == "x86_64";
 }
 
-const char *Darwin_X86::GetDefaultRelocationModel() const {
+const char *Darwin::GetDefaultRelocationModel() const {
   return "pic";
 }
 
-const char *Darwin_X86::GetForcedPicModel() const {
+const char *Darwin::GetForcedPicModel() const {
   if (getArchName() == "x86_64")
     return "pic";
   return 0;
@@ -309,13 +384,12 @@ const char *Darwin_X86::GetForcedPicModel() const {
 /// command line options.
 
 Generic_GCC::Generic_GCC(const HostInfo &Host, const llvm::Triple& Triple)
-  : ToolChain(Host, Triple) 
-{
+  : ToolChain(Host, Triple) {
   std::string Path(getHost().getDriver().Dir);
   Path += "/../libexec";
   getProgramPaths().push_back(Path);
 
-  getProgramPaths().push_back(getHost().getDriver().Dir);  
+  getProgramPaths().push_back(getHost().getDriver().Dir);
 }
 
 Generic_GCC::~Generic_GCC() {
@@ -325,10 +399,10 @@ Generic_GCC::~Generic_GCC() {
     delete it->second;
 }
 
-Tool &Generic_GCC::SelectTool(const Compilation &C, 
+Tool &Generic_GCC::SelectTool(const Compilation &C,
                               const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();
@@ -351,7 +425,7 @@ Tool &Generic_GCC::SelectTool(const Compilation &C,
       T = new tools::gcc::Assemble(*this); break;
     case Action::LinkJobClass:
       T = new tools::gcc::Link(*this); break;
-      
+
       // This is a bit ungeneric, but the only platform using a driver
       // driver is Darwin.
     case Action::LipoJobClass:
@@ -362,8 +436,8 @@ Tool &Generic_GCC::SelectTool(const Compilation &C,
   return *T;
 }
 
-bool Generic_GCC::IsMathErrnoDefault() const { 
-  return true; 
+bool Generic_GCC::IsMathErrnoDefault() const {
+  return true;
 }
 
 bool Generic_GCC::IsUnwindTablesDefault() const {
@@ -380,7 +454,8 @@ const char *Generic_GCC::GetForcedPicModel() const {
   return 0;
 }
 
-DerivedArgList *Generic_GCC::TranslateArgs(InputArgList &Args) const {
+DerivedArgList *Generic_GCC::TranslateArgs(InputArgList &Args,
+                                           const char *BoundArch) const {
   return new DerivedArgList(Args, true);
 }
 
@@ -394,7 +469,7 @@ OpenBSD::OpenBSD(const HostInfo &Host, const llvm::Triple& Triple)
 
 Tool &OpenBSD::SelectTool(const Compilation &C, const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();
@@ -429,7 +504,7 @@ FreeBSD::FreeBSD(const HostInfo &Host, const llvm::Triple& Triple, bool Lib32)
 
 Tool &FreeBSD::SelectTool(const Compilation &C, const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();
@@ -459,7 +534,7 @@ AuroraUX::AuroraUX(const HostInfo &Host, const llvm::Triple& Triple)
 
   Path += "/../libexec";
   getProgramPaths().push_back(Path);
-  getProgramPaths().push_back(getHost().getDriver().Dir);  
+  getProgramPaths().push_back(getHost().getDriver().Dir);
 
   getFilePaths().push_back(getHost().getDriver().Dir + "/../lib");
   getFilePaths().push_back("/usr/lib");
@@ -470,7 +545,7 @@ AuroraUX::AuroraUX(const HostInfo &Host, const llvm::Triple& Triple)
 
 Tool &AuroraUX::SelectTool(const Compilation &C, const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();
@@ -526,7 +601,7 @@ DragonFly::DragonFly(const HostInfo &Host, const llvm::Triple& Triple)
 
   Path += "/../libexec";
   getProgramPaths().push_back(Path);
-  getProgramPaths().push_back(getHost().getDriver().Dir);  
+  getProgramPaths().push_back(getHost().getDriver().Dir);
 
   getFilePaths().push_back(getHost().getDriver().Dir + "/../lib");
   getFilePaths().push_back("/usr/lib");
@@ -535,7 +610,7 @@ DragonFly::DragonFly(const HostInfo &Host, const llvm::Triple& Triple)
 
 Tool &DragonFly::SelectTool(const Compilation &C, const JobAction &JA) const {
   Action::ActionClass Key;
-  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getArchName()))
+  if (getHost().getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
     Key = Action::AnalyzeJobClass;
   else
     Key = JA.getKind();

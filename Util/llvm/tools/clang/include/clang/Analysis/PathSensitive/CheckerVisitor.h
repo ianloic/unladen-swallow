@@ -14,14 +14,14 @@
 #ifndef LLVM_CLANG_ANALYSIS_CHECKERVISITOR
 #define LLVM_CLANG_ANALYSIS_CHECKERVISITOR
 #include "clang/Analysis/PathSensitive/Checker.h"
-  
+
 namespace clang {
 
 //===----------------------------------------------------------------------===//
 // Checker visitor interface.  Used by subclasses of Checker to specify their
 // own checker visitor logic.
 //===----------------------------------------------------------------------===//
-  
+
 /// CheckerVisitor - This class implements a simple visitor for Stmt subclasses.
 /// Since Expr derives from Stmt, this also includes support for visiting Exprs.
 template<typename ImplClass>
@@ -36,6 +36,10 @@ public:
       default:
         assert(false && "Unsupport statement.");
         return;
+      case Stmt::CompoundAssignOperatorClass:
+        static_cast<ImplClass*>(this)->PreVisitBinaryOperator(C,
+                                         static_cast<const BinaryOperator*>(S));
+        break;
 #define PREVISIT(NAME) \
 case Stmt::NAME ## Class:\
 static_cast<ImplClass*>(this)->PreVisit ## NAME(C,static_cast<const NAME*>(S));\
@@ -43,13 +47,13 @@ break;
 #include "clang/Analysis/PathSensitive/CheckerVisitor.def"
     }
   }
-  
+
 #define PREVISIT(NAME) \
 void PreVisit ## NAME(CheckerContext &C, const NAME* S) {}
 #include "clang/Analysis/PathSensitive/CheckerVisitor.def"
 };
-  
+
 } // end clang namespace
 
 #endif
-  
+

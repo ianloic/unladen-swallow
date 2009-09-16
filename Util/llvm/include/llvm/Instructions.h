@@ -20,6 +20,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Attributes.h"
 #include "llvm/BasicBlock.h"
+#include "llvm/CallingConv.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/ADT/SmallVector.h"
 #include <iterator>
@@ -30,6 +31,7 @@ class ConstantInt;
 class ConstantRange;
 class APInt;
 class LLVMContext;
+class DominatorTree;
 
 //===----------------------------------------------------------------------===//
 //                             AllocationInst Class
@@ -277,6 +279,11 @@ public:
   const Value *getPointerOperand() const { return getOperand(0); }
   static unsigned getPointerOperandIndex() { return 0U; }
 
+  unsigned getPointerAddressSpace() const {
+    return cast<PointerType>(getPointerOperand()->getType())->getAddressSpace();
+  }
+  
+  
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const LoadInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -341,6 +348,10 @@ public:
   const Value *getPointerOperand() const { return getOperand(1); }
   static unsigned getPointerOperandIndex() { return 1U; }
 
+  unsigned getPointerAddressSpace() const {
+    return cast<PointerType>(getPointerOperand()->getType())->getAddressSpace();
+  }
+  
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const StoreInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -352,7 +363,7 @@ public:
 };
 
 template <>
-struct OperandTraits<StoreInst> : FixedNumOperandTraits<2> {
+struct OperandTraits<StoreInst> : public FixedNumOperandTraits<2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(StoreInst, Value)
@@ -485,7 +496,7 @@ public:
                                            Instruction *InsertBefore = 0) {
     GetElementPtrInst *GEP = Create(Ptr, IdxBegin, IdxEnd,
                                     NameStr, InsertBefore);
-    cast<GEPOperator>(GEP)->setIsInBounds(true);
+    GEP->setIsInBounds(true);
     return GEP;
   }
   template<typename InputIterator>
@@ -496,21 +507,21 @@ public:
                                            BasicBlock *InsertAtEnd) {
     GetElementPtrInst *GEP = Create(Ptr, IdxBegin, IdxEnd,
                                     NameStr, InsertAtEnd);
-    cast<GEPOperator>(GEP)->setIsInBounds(true);
+    GEP->setIsInBounds(true);
     return GEP;
   }
   static GetElementPtrInst *CreateInBounds(Value *Ptr, Value *Idx,
                                            const Twine &NameStr = "",
                                            Instruction *InsertBefore = 0) {
     GetElementPtrInst *GEP = Create(Ptr, Idx, NameStr, InsertBefore);
-    cast<GEPOperator>(GEP)->setIsInBounds(true);
+    GEP->setIsInBounds(true);
     return GEP;
   }
   static GetElementPtrInst *CreateInBounds(Value *Ptr, Value *Idx,
                                            const Twine &NameStr,
                                            BasicBlock *InsertAtEnd) {
     GetElementPtrInst *GEP = Create(Ptr, Idx, NameStr, InsertAtEnd);
-    cast<GEPOperator>(GEP)->setIsInBounds(true);
+    GEP->setIsInBounds(true);
     return GEP;
   }
 
@@ -561,6 +572,10 @@ public:
   static unsigned getPointerOperandIndex() {
     return 0U;                      // get index for modifying correct operand
   }
+  
+  unsigned getPointerAddressSpace() const {
+    return cast<PointerType>(getType())->getAddressSpace();
+  }
 
   /// getPointerOperandType - Method to return the pointer operand as a
   /// PointerType.
@@ -587,6 +602,10 @@ public:
   /// a constant offset between them.
   bool hasAllConstantIndices() const;
 
+  /// setIsInBounds - Set or clear the inbounds flag on this GEP instruction.
+  /// See LangRef.html for the meaning of inbounds on a getelementptr.
+  void setIsInBounds(bool);
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const GetElementPtrInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -598,7 +617,7 @@ public:
 };
 
 template <>
-struct OperandTraits<GetElementPtrInst> : VariadicOperandTraits<1> {
+struct OperandTraits<GetElementPtrInst> : public VariadicOperandTraits<1> {
 };
 
 template<typename InputIterator>
@@ -1014,6 +1033,18 @@ public:
                           BasicBlock *InsertAtEnd) {
     return new(1) CallInst(F, NameStr, InsertAtEnd);
   }
+  /// CreateMalloc - Generate the IR for a call to malloc:
+  /// 1. Compute the malloc call's argument as the specified type's size,
+  ///    possibly multiplied by the array size if the array size is not
+  ///    constant 1.
+  /// 2. Call malloc with that argument.
+  /// 3. Bitcast the result of the malloc call to the specified type.
+  static Value *CreateMalloc(Instruction *I,
+                             const Type *AllocTy, const Type *IntPtrTy,
+                             Value *ArraySize = 0, const Twine &NameStr = "");
+  static Value *CreateMalloc(BasicBlock *InsertAtEnd,
+                             const Type *AllocTy, const Type *IntPtrTy,
+                             Value *ArraySize = 0, const Twine &NameStr = "");
 
   ~CallInst();
 
@@ -1029,9 +1060,11 @@ public:
 
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.
-  unsigned getCallingConv() const { return SubclassData >> 1; }
-  void setCallingConv(unsigned CC) {
-    SubclassData = (SubclassData & 1) | (CC << 1);
+  CallingConv::ID getCallingConv() const {
+    return static_cast<CallingConv::ID>(SubclassData >> 1);
+  }
+  void setCallingConv(CallingConv::ID CC) {
+    SubclassData = (SubclassData & 1) | (static_cast<unsigned>(CC) << 1);
   }
 
   /// getAttributes - Return the parameter attributes for this call.
@@ -1127,7 +1160,7 @@ public:
 };
 
 template <>
-struct OperandTraits<CallInst> : VariadicOperandTraits<1> {
+struct OperandTraits<CallInst> : public VariadicOperandTraits<1> {
 };
 
 template<typename InputIterator>
@@ -1196,10 +1229,13 @@ public:
     return new(3) SelectInst(C, S1, S2, NameStr, InsertAtEnd);
   }
 
-  Value *getCondition() const { return Op<0>(); }
-  Value *getTrueValue() const { return Op<1>(); }
-  Value *getFalseValue() const { return Op<2>(); }
-
+  const Value *getCondition() const { return Op<0>(); }
+  const Value *getTrueValue() const { return Op<1>(); }
+  const Value *getFalseValue() const { return Op<2>(); }
+  Value *getCondition() { return Op<0>(); }
+  Value *getTrueValue() { return Op<1>(); }
+  Value *getFalseValue() { return Op<2>(); }
+  
   /// areInvalidOperands - Return a string if the specified operands are invalid
   /// for a select operation, otherwise return null.
   static const char *areInvalidOperands(Value *Cond, Value *True, Value *False);
@@ -1224,7 +1260,7 @@ public:
 };
 
 template <>
-struct OperandTraits<SelectInst> : FixedNumOperandTraits<3> {
+struct OperandTraits<SelectInst> : public FixedNumOperandTraits<3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SelectInst, Value)
@@ -1291,6 +1327,16 @@ public:
 
   virtual ExtractElementInst *clone(LLVMContext &Context) const;
 
+  Value *getVectorOperand() { return Op<0>(); }
+  Value *getIndexOperand() { return Op<1>(); }
+  const Value *getVectorOperand() const { return Op<0>(); }
+  const Value *getIndexOperand() const { return Op<1>(); }
+  
+  const VectorType *getVectorOperandType() const {
+    return reinterpret_cast<const VectorType*>(getVectorOperand()->getType());
+  }
+  
+  
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
@@ -1305,7 +1351,7 @@ public:
 };
 
 template <>
-struct OperandTraits<ExtractElementInst> : FixedNumOperandTraits<2> {
+struct OperandTraits<ExtractElementInst> : public FixedNumOperandTraits<2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ExtractElementInst, Value)
@@ -1362,7 +1408,7 @@ public:
 };
 
 template <>
-struct OperandTraits<InsertElementInst> : FixedNumOperandTraits<3> {
+struct OperandTraits<InsertElementInst> : public FixedNumOperandTraits<3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(InsertElementInst, Value)
@@ -1418,7 +1464,7 @@ public:
 };
 
 template <>
-struct OperandTraits<ShuffleVectorInst> : FixedNumOperandTraits<3> {
+struct OperandTraits<ShuffleVectorInst> : public FixedNumOperandTraits<3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ShuffleVectorInst, Value)
@@ -1753,7 +1799,7 @@ public:
 };
 
 template <>
-struct OperandTraits<InsertValueInst> : FixedNumOperandTraits<2> {
+struct OperandTraits<InsertValueInst> : public FixedNumOperandTraits<2> {
 };
 
 template<typename InputIterator>
@@ -1934,7 +1980,12 @@ public:
   /// hasConstantValue - If the specified PHI node always merges together the
   /// same value, return the value, otherwise return null.
   ///
-  Value *hasConstantValue(bool AllowNonDominatingInstruction = false) const;
+  /// If the PHI has undef operands, but all the rest of the operands are
+  /// some unique value, return that value if it can be proved that the
+  /// value dominates the PHI. If DT is null, use a conservative check,
+  /// otherwise use DT to test for dominance.
+  ///
+  Value *hasConstantValue(DominatorTree *DT = 0) const;
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const PHINode *) { return true; }
@@ -1949,7 +2000,7 @@ public:
 };
 
 template <>
-struct OperandTraits<PHINode> : HungoffOperandTraits<2> {
+struct OperandTraits<PHINode> : public HungoffOperandTraits<2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(PHINode, Value)
@@ -2025,7 +2076,7 @@ public:
 };
 
 template <>
-struct OperandTraits<ReturnInst> : OptionalOperandTraits<> {
+struct OperandTraits<ReturnInst> : public OptionalOperandTraits<> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReturnInst, Value)
@@ -2133,7 +2184,7 @@ private:
 };
 
 template <>
-struct OperandTraits<BranchInst> : VariadicOperandTraits<1> {};
+struct OperandTraits<BranchInst> : public VariadicOperandTraits<1> {};
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(BranchInst, Value)
 
@@ -2282,7 +2333,7 @@ private:
 };
 
 template <>
-struct OperandTraits<SwitchInst> : HungoffOperandTraits<2> {
+struct OperandTraits<SwitchInst> : public HungoffOperandTraits<2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SwitchInst, Value)
@@ -2369,9 +2420,11 @@ public:
 
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.
-  unsigned getCallingConv() const { return SubclassData; }
-  void setCallingConv(unsigned CC) {
-    SubclassData = CC;
+  CallingConv::ID getCallingConv() const {
+    return static_cast<CallingConv::ID>(SubclassData);
+  }
+  void setCallingConv(CallingConv::ID CC) {
+    SubclassData = static_cast<unsigned>(CC);
   }
 
   /// getAttributes - Return the parameter attributes for this invoke.
@@ -2498,7 +2551,7 @@ private:
 };
 
 template <>
-struct OperandTraits<InvokeInst> : VariadicOperandTraits<3> {
+struct OperandTraits<InvokeInst> : public VariadicOperandTraits<3> {
 };
 
 template<typename InputIterator>

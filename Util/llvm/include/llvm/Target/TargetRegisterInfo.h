@@ -41,7 +41,6 @@ class RegScavenger;
 /// of AX.
 ///
 struct TargetRegisterDesc {
-  const char     *AsmName;      // Assembly language name for the register
   const char     *Name;         // Printable name for the reg (for debugging)
   const unsigned *AliasSet;     // Register Alias Set, described above
   const unsigned *SubRegs;      // Sub-register set, described above
@@ -368,12 +367,6 @@ public:
     return get(RegNo).SuperRegs;
   }
 
-  /// getAsmName - Return the symbolic target-specific name for the
-  /// specified physical register.
-  const char *getAsmName(unsigned RegNo) const {
-    return get(RegNo).AsmName;
-  }
-
   /// getName - Return the human-readable symbolic target-specific name for the
   /// specified physical register.
   const char *getName(unsigned RegNo) const {
@@ -386,9 +379,16 @@ public:
     return NumRegs;
   }
 
-  /// areAliases - Returns true if the two registers alias each other, false
-  /// otherwise
-  bool areAliases(unsigned regA, unsigned regB) const {
+  /// regsOverlap - Returns true if the two registers are equal or alias each
+  /// other. The registers may be virtual register.
+  bool regsOverlap(unsigned regA, unsigned regB) const {
+    if (regA == regB)
+      return true;
+
+    if (isVirtualRegister(regA) || isVirtualRegister(regB))
+      return false;
+
+    // regA and regB are distinct physical registers. Do they alias?
     size_t index = (regA + regB * 37) & (AliasesHashSize-1);
     unsigned ProbeAmt = 0;
     while (AliasesHash[index*2] != 0 &&
@@ -401,17 +401,6 @@ public:
     }
 
     return false;
-  }
-
-  /// regsOverlap - Returns true if the two registers are equal or alias each
-  /// other. The registers may be virtual register.
-  bool regsOverlap(unsigned regA, unsigned regB) const {
-    if (regA == regB)
-      return true;
-
-    if (isVirtualRegister(regA) || isVirtualRegister(regB))
-      return false;
-    return areAliases(regA, regB);
   }
 
   /// isSubRegister - Returns true if regB is a sub-register of regA.
@@ -691,7 +680,7 @@ public:
 
 
 // This is useful when building IndexedMaps keyed on virtual registers
-struct VirtReg2IndexFunctor : std::unary_function<unsigned, unsigned> {
+struct VirtReg2IndexFunctor : public std::unary_function<unsigned, unsigned> {
   unsigned operator()(unsigned Reg) const {
     return Reg - TargetRegisterInfo::FirstVirtualRegister;
   }

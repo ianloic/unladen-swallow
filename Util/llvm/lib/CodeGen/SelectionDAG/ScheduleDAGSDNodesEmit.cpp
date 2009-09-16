@@ -282,7 +282,7 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
   if (Op.isMachineOpcode()) {
     AddRegisterOperand(MI, Op, IIOpNum, II, VRBaseMap);
   } else if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-    MI->addOperand(MachineOperand::CreateImm(C->getZExtValue()));
+    MI->addOperand(MachineOperand::CreateImm(C->getSExtValue()));
   } else if (ConstantFPSDNode *F = dyn_cast<ConstantFPSDNode>(Op)) {
     const ConstantFP *CFP = F->getConstantFPValue();
     MI->addOperand(MachineOperand::CreateFPImm(CFP));
@@ -319,7 +319,7 @@ void ScheduleDAGSDNodes::AddOperand(MachineInstr *MI, SDValue Op,
     MI->addOperand(MachineOperand::CreateCPI(Idx, Offset,
                                              CP->getTargetFlags()));
   } else if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Op)) {
-    MI->addOperand(MachineOperand::CreateES(ES->getSymbol(), 0,
+    MI->addOperand(MachineOperand::CreateES(ES->getSymbol(),
                                             ES->getTargetFlags()));
   } else {
     assert(Op.getValueType() != MVT::Other &&

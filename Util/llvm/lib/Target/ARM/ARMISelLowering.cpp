@@ -40,6 +40,7 @@
 #include "llvm/ADT/VectorExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include <sstream>
 using namespace llvm;
 
 static bool CC_ARM_APCS_Custom_f64(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
@@ -98,6 +99,14 @@ void ARMTargetLowering::addTypeForNEON(EVT VT, EVT PromotedLdStVT,
     AddPromotedToType (ISD::XOR, VT.getSimpleVT(),
                        PromotedBitwiseVT.getSimpleVT());
   }
+
+  // Neon does not support vector divide/remainder operations.
+  setOperationAction(ISD::SDIV, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::UDIV, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::FDIV, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::SREM, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::UREM, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::FREM, VT.getSimpleVT(), Expand);
 }
 
 void ARMTargetLowering::addDRTypeForNEON(EVT VT) {
@@ -235,6 +244,39 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     addQRTypeForNEON(MVT::v8i16);
     addQRTypeForNEON(MVT::v4i32);
     addQRTypeForNEON(MVT::v2i64);
+
+    // v2f64 is legal so that QR subregs can be extracted as f64 elements, but
+    // neither Neon nor VFP support any arithmetic operations on it.
+    setOperationAction(ISD::FADD, MVT::v2f64, Expand);
+    setOperationAction(ISD::FSUB, MVT::v2f64, Expand);
+    setOperationAction(ISD::FMUL, MVT::v2f64, Expand);
+    setOperationAction(ISD::FDIV, MVT::v2f64, Expand);
+    setOperationAction(ISD::FREM, MVT::v2f64, Expand);
+    setOperationAction(ISD::FCOPYSIGN, MVT::v2f64, Expand);
+    setOperationAction(ISD::VSETCC, MVT::v2f64, Expand);
+    setOperationAction(ISD::FNEG, MVT::v2f64, Expand);
+    setOperationAction(ISD::FABS, MVT::v2f64, Expand);
+    setOperationAction(ISD::FSQRT, MVT::v2f64, Expand);
+    setOperationAction(ISD::FSIN, MVT::v2f64, Expand);
+    setOperationAction(ISD::FCOS, MVT::v2f64, Expand);
+    setOperationAction(ISD::FPOWI, MVT::v2f64, Expand);
+    setOperationAction(ISD::FPOW, MVT::v2f64, Expand);
+    setOperationAction(ISD::FLOG, MVT::v2f64, Expand);
+    setOperationAction(ISD::FLOG2, MVT::v2f64, Expand);
+    setOperationAction(ISD::FLOG10, MVT::v2f64, Expand);
+    setOperationAction(ISD::FEXP, MVT::v2f64, Expand);
+    setOperationAction(ISD::FEXP2, MVT::v2f64, Expand);
+    setOperationAction(ISD::FCEIL, MVT::v2f64, Expand);
+    setOperationAction(ISD::FTRUNC, MVT::v2f64, Expand);
+    setOperationAction(ISD::FRINT, MVT::v2f64, Expand);
+    setOperationAction(ISD::FNEARBYINT, MVT::v2f64, Expand);
+    setOperationAction(ISD::FFLOOR, MVT::v2f64, Expand);
+
+    // Neon does not support some operations on v1i64 and v2i64 types.
+    setOperationAction(ISD::MUL, MVT::v1i64, Expand);
+    setOperationAction(ISD::MUL, MVT::v2i64, Expand);
+    setOperationAction(ISD::VSETCC, MVT::v1i64, Expand);
+    setOperationAction(ISD::VSETCC, MVT::v2i64, Expand);
 
     setTargetDAGCombine(ISD::INTRINSIC_WO_CHAIN);
     setTargetDAGCombine(ISD::SHL);
@@ -518,12 +560,9 @@ static ARMCC::CondCodes IntCCToARMCC(ISD::CondCode CC) {
   }
 }
 
-/// FPCCToARMCC - Convert a DAG fp condition code to an ARM CC. It
-/// returns true if the operands should be inverted to form the proper
-/// comparison.
-static bool FPCCToARMCC(ISD::CondCode CC, ARMCC::CondCodes &CondCode,
+/// FPCCToARMCC - Convert a DAG fp condition code to an ARM CC.
+static void FPCCToARMCC(ISD::CondCode CC, ARMCC::CondCodes &CondCode,
                         ARMCC::CondCodes &CondCode2) {
-  bool Invert = false;
   CondCode2 = ARMCC::AL;
   switch (CC) {
   default: llvm_unreachable("Unknown FP condition!");
@@ -534,7 +573,7 @@ static bool FPCCToARMCC(ISD::CondCode CC, ARMCC::CondCodes &CondCode,
   case ISD::SETGE:
   case ISD::SETOGE: CondCode = ARMCC::GE; break;
   case ISD::SETOLT: CondCode = ARMCC::MI; break;
-  case ISD::SETOLE: CondCode = ARMCC::GT; Invert = true; break;
+  case ISD::SETOLE: CondCode = ARMCC::LS; break;
   case ISD::SETONE: CondCode = ARMCC::MI; CondCode2 = ARMCC::GT; break;
   case ISD::SETO:   CondCode = ARMCC::VC; break;
   case ISD::SETUO:  CondCode = ARMCC::VS; break;
@@ -548,7 +587,6 @@ static bool FPCCToARMCC(ISD::CondCode CC, ARMCC::CondCodes &CondCode,
   case ISD::SETNE:
   case ISD::SETUNE: CondCode = ARMCC::NE; break;
   }
-  return Invert;
 }
 
 //===----------------------------------------------------------------------===//
@@ -684,7 +722,7 @@ static bool RetCC_ARM_AAPCS_Custom_f64(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
 
 /// CCAssignFnForNode - Selects the correct CCAssignFn for a the
 /// given CallingConvention value.
-CCAssignFn *ARMTargetLowering::CCAssignFnForNode(unsigned CC,
+CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
                                                  bool Return,
                                                  bool isVarArg) const {
   switch (CC) {
@@ -714,7 +752,7 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(unsigned CC,
 /// appropriate copies out of appropriate physical registers.
 SDValue
 ARMTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
-                                   unsigned CallConv, bool isVarArg,
+                                   CallingConv::ID CallConv, bool isVarArg,
                                    const SmallVectorImpl<ISD::InputArg> &Ins,
                                    DebugLoc dl, SelectionDAG &DAG,
                                    SmallVectorImpl<SDValue> &InVals) {
@@ -845,7 +883,7 @@ void ARMTargetLowering::PassF64ArgInRegs(DebugLoc dl, SelectionDAG &DAG,
 /// nodes.
 SDValue
 ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                             unsigned CallConv, bool isVarArg,
+                             CallingConv::ID CallConv, bool isVarArg,
                              bool isTailCall,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -969,7 +1007,8 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // tBX takes a register source operand.
     if (isARMFunc && Subtarget->isThumb1Only() && !Subtarget->hasV5TOps()) {
       ARMConstantPoolValue *CPV = new ARMConstantPoolValue(GV,
-                                                           ARMPCLabelIndex, 4);
+                                                           ARMPCLabelIndex,
+                                                           ARMCP::CPValue, 4);
       SDValue CPAddr = DAG.getTargetConstantPool(CPV, getPointerTy(), 4);
       CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
       Callee = DAG.getLoad(getPointerTy(), dl,
@@ -1048,7 +1087,7 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
 SDValue
 ARMTargetLowering::LowerReturn(SDValue Chain,
-                               unsigned CallConv, bool isVarArg,
+                               CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                DebugLoc dl, SelectionDAG &DAG) {
 
@@ -1166,7 +1205,7 @@ ARMTargetLowering::LowerToTLSGeneralDynamicModel(GlobalAddressSDNode *GA,
   unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
   ARMConstantPoolValue *CPV =
     new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
-                             PCAdj, "tlsgd", true);
+                             ARMCP::CPValue, PCAdj, "tlsgd", true);
   SDValue Argument = DAG.getTargetConstantPool(CPV, PtrVT, 4);
   Argument = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Argument);
   Argument = DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Argument, NULL, 0);
@@ -1208,7 +1247,7 @@ ARMTargetLowering::LowerToTLSExecModels(GlobalAddressSDNode *GA,
     unsigned char PCAdj = Subtarget->isThumb() ? 4 : 8;
     ARMConstantPoolValue *CPV =
       new ARMConstantPoolValue(GA->getGlobal(), ARMPCLabelIndex,
-                               PCAdj, "gottpoff", true);
+                               ARMCP::CPValue, PCAdj, "gottpoff", true);
     Offset = DAG.getTargetConstantPool(CPV, PtrVT, 4);
     Offset = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Offset);
     Offset = DAG.getLoad(PtrVT, dl, Chain, Offset, NULL, 0);
@@ -1284,7 +1323,7 @@ SDValue ARMTargetLowering::LowerGlobalAddressDarwin(SDValue Op,
   else {
     unsigned PCAdj = (RelocM != Reloc::PIC_) ? 0 : (Subtarget->isThumb()?4:8);
     ARMConstantPoolValue *CPV =
-      new ARMConstantPoolValue(GV, ARMPCLabelIndex, PCAdj);
+      new ARMConstantPoolValue(GV, ARMPCLabelIndex, ARMCP::CPValue, PCAdj);
     CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
   }
   CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
@@ -1297,7 +1336,7 @@ SDValue ARMTargetLowering::LowerGlobalAddressDarwin(SDValue Op,
     Result = DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Result, PICLabel);
   }
 
-  if (Subtarget->GVIsIndirectSymbol(GV, RelocM == Reloc::Static))
+  if (Subtarget->GVIsIndirectSymbol(GV, RelocM))
     Result = DAG.getLoad(PtrVT, dl, Chain, Result, NULL, 0);
 
   return Result;
@@ -1348,6 +1387,46 @@ static SDValue LowerNeonVSTIntrinsic(SDValue Op, SelectionDAG &DAG,
   return SDValue();
 }
 
+static SDValue LowerNeonVLDLaneIntrinsic(SDValue Op, SelectionDAG &DAG,
+                                         unsigned NumVecs) {
+  SDNode *Node = Op.getNode();
+  EVT VT = Node->getValueType(0);
+
+  if (!VT.is64BitVector())
+    return SDValue(); // unimplemented
+
+  // Change the lane number operand to be a TargetConstant; otherwise it
+  // will be legalized into a register.
+  ConstantSDNode *Lane = dyn_cast<ConstantSDNode>(Node->getOperand(NumVecs+3));
+  if (!Lane) {
+    assert(false && "vld lane number must be a constant");
+    return SDValue();
+  }
+  SmallVector<SDValue, 8> Ops(Node->op_begin(), Node->op_end());
+  Ops[NumVecs+3] = DAG.getTargetConstant(Lane->getZExtValue(), MVT::i32);
+  return DAG.UpdateNodeOperands(Op, &Ops[0], Ops.size());
+}
+
+static SDValue LowerNeonVSTLaneIntrinsic(SDValue Op, SelectionDAG &DAG,
+                                         unsigned NumVecs) {
+  SDNode *Node = Op.getNode();
+  EVT VT = Node->getOperand(3).getValueType();
+
+  if (!VT.is64BitVector())
+    return SDValue(); // unimplemented
+
+  // Change the lane number operand to be a TargetConstant; otherwise it
+  // will be legalized into a register.
+  ConstantSDNode *Lane = dyn_cast<ConstantSDNode>(Node->getOperand(NumVecs+3));
+  if (!Lane) {
+    assert(false && "vst lane number must be a constant");
+    return SDValue();
+  }
+  SmallVector<SDValue, 8> Ops(Node->op_begin(), Node->op_end());
+  Ops[NumVecs+3] = DAG.getTargetConstant(Lane->getZExtValue(), MVT::i32);
+  return DAG.UpdateNodeOperands(Op, &Ops[0], Ops.size());
+}
+
 SDValue
 ARMTargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) {
   unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
@@ -1356,10 +1435,22 @@ ARMTargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) {
     return LowerNeonVLDIntrinsic(Op, DAG, 3);
   case Intrinsic::arm_neon_vld4:
     return LowerNeonVLDIntrinsic(Op, DAG, 4);
+  case Intrinsic::arm_neon_vld2lane:
+    return LowerNeonVLDLaneIntrinsic(Op, DAG, 2);
+  case Intrinsic::arm_neon_vld3lane:
+    return LowerNeonVLDLaneIntrinsic(Op, DAG, 3);
+  case Intrinsic::arm_neon_vld4lane:
+    return LowerNeonVLDLaneIntrinsic(Op, DAG, 4);
   case Intrinsic::arm_neon_vst3:
     return LowerNeonVSTIntrinsic(Op, DAG, 3);
   case Intrinsic::arm_neon_vst4:
     return LowerNeonVSTIntrinsic(Op, DAG, 4);
+  case Intrinsic::arm_neon_vst2lane:
+    return LowerNeonVSTLaneIntrinsic(Op, DAG, 2);
+  case Intrinsic::arm_neon_vst3lane:
+    return LowerNeonVSTLaneIntrinsic(Op, DAG, 3);
+  case Intrinsic::arm_neon_vst4lane:
+    return LowerNeonVSTLaneIntrinsic(Op, DAG, 4);
   default: return SDValue();    // Don't custom lower most intrinsics.
   }
 }
@@ -1375,10 +1466,6 @@ ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) {
     return DAG.getNode(ARMISD::THREAD_POINTER, dl, PtrVT);
   }
   case Intrinsic::eh_sjlj_lsda: {
-    // blah. horrible, horrible hack with the forced magic name.
-    // really need to clean this up. It belongs in the target-independent
-    // layer somehow that doesn't require the coupling with the asm
-    // printer.
     MachineFunction &MF = DAG.getMachineFunction();
     EVT PtrVT = getPointerTy();
     DebugLoc dl = Op.getDebugLoc();
@@ -1386,13 +1473,9 @@ ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) {
     SDValue CPAddr;
     unsigned PCAdj = (RelocM != Reloc::PIC_)
       ? 0 : (Subtarget->isThumb() ? 4 : 8);
-    // Save off the LSDA name for the AsmPrinter to use when it's time
-    // to emit the table
-    std::string LSDAName = "L_lsda_";
-    LSDAName += MF.getFunction()->getName();
     ARMConstantPoolValue *CPV =
-      new ARMConstantPoolValue(*DAG.getContext(), LSDAName.c_str(), 
-                               ARMPCLabelIndex, PCAdj);
+      new ARMConstantPoolValue(MF.getFunction(), ARMPCLabelIndex,
+                               ARMCP::CPLSDA, PCAdj);
     CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
     CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
     SDValue Result =
@@ -1504,7 +1587,7 @@ ARMTargetLowering::GetF64FormalArgument(CCValAssign &VA, CCValAssign &NextVA,
 
 SDValue
 ARMTargetLowering::LowerFormalArguments(SDValue Chain,
-                                        unsigned CallConv, bool isVarArg,
+                                        CallingConv::ID CallConv, bool isVarArg,
                                         const SmallVectorImpl<ISD::InputArg>
                                           &Ins,
                                         DebugLoc dl, SelectionDAG &DAG,
@@ -1768,8 +1851,7 @@ static SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG,
   }
 
   ARMCC::CondCodes CondCode, CondCode2;
-  if (FPCCToARMCC(CC, CondCode, CondCode2))
-    std::swap(TrueVal, FalseVal);
+  FPCCToARMCC(CC, CondCode, CondCode2);
 
   SDValue ARMCC = DAG.getConstant(CondCode, MVT::i32);
   SDValue CCR = DAG.getRegister(ARM::CPSR, MVT::i32);
@@ -1805,9 +1887,7 @@ static SDValue LowerBR_CC(SDValue Op, SelectionDAG &DAG,
 
   assert(LHS.getValueType() == MVT::f32 || LHS.getValueType() == MVT::f64);
   ARMCC::CondCodes CondCode, CondCode2;
-  if (FPCCToARMCC(CC, CondCode, CondCode2))
-    // Swap the LHS/RHS of the comparison if needed.
-    std::swap(LHS, RHS);
+  FPCCToARMCC(CC, CondCode, CondCode2);
 
   SDValue Cmp = getVFPCmp(LHS, RHS, DAG, dl);
   SDValue ARMCC = DAG.getConstant(CondCode, MVT::i32);
@@ -2040,14 +2120,19 @@ static SDValue getZeroVector(EVT VT, SelectionDAG &DAG, DebugLoc dl) {
   // will be implemented with the NEON VNEG instruction.  However, VNEG does
   // not support i64 elements, so sometimes the zero vectors will need to be
   // explicitly constructed.  For those cases, and potentially other uses in
-  // the future, always build zero vectors as <4 x i32> or <2 x i32> bitcasted
+  // the future, always build zero vectors as <16 x i8> or <8 x i8> bitcasted
   // to their dest type.  This ensures they get CSE'd.
   SDValue Vec;
-  SDValue Cst = DAG.getTargetConstant(0, MVT::i32);
-  if (VT.getSizeInBits() == 64)
-    Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v2i32, Cst, Cst);
-  else
-    Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32, Cst, Cst, Cst, Cst);
+  SDValue Cst = DAG.getTargetConstant(0, MVT::i8);
+  SmallVector<SDValue, 8> Ops;
+  MVT TVT;
+
+  if (VT.getSizeInBits() == 64) {
+    Ops.assign(8, Cst); TVT = MVT::v8i8;
+  } else {
+    Ops.assign(16, Cst); TVT = MVT::v16i8;
+  }
+  Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, TVT, &Ops[0], Ops.size());
 
   return DAG.getNode(ISD::BIT_CONVERT, dl, VT, Vec);
 }
@@ -2057,14 +2142,19 @@ static SDValue getZeroVector(EVT VT, SelectionDAG &DAG, DebugLoc dl) {
 static SDValue getOnesVector(EVT VT, SelectionDAG &DAG, DebugLoc dl) {
   assert(VT.isVector() && "Expected a vector type");
 
-  // Always build ones vectors as <4 x i32> or <2 x i32> bitcasted to their dest
-  // type.  This ensures they get CSE'd.
+  // Always build ones vectors as <16 x i32> or <8 x i32> bitcasted to their
+  // dest type. This ensures they get CSE'd.
   SDValue Vec;
-  SDValue Cst = DAG.getTargetConstant(~0U, MVT::i32);
-  if (VT.getSizeInBits() == 64)
-    Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v2i32, Cst, Cst);
-  else
-    Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32, Cst, Cst, Cst, Cst);
+  SDValue Cst = DAG.getTargetConstant(0xFF, MVT::i8);
+  SmallVector<SDValue, 8> Ops;
+  MVT TVT;
+
+  if (VT.getSizeInBits() == 64) {
+    Ops.assign(8, Cst); TVT = MVT::v8i8;
+  } else {
+    Ops.assign(16, Cst); TVT = MVT::v16i8;
+  }
+  Vec = DAG.getNode(ISD::BUILD_VECTOR, dl, TVT, &Ops[0], Ops.size());
 
   return DAG.getNode(ISD::BIT_CONVERT, dl, VT, Vec);
 }
@@ -2691,13 +2781,20 @@ static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
 static SDValue LowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) {
   EVT VT = Op.getValueType();
   DebugLoc dl = Op.getDebugLoc();
-  assert((VT == MVT::i8 || VT == MVT::i16) &&
-         "unexpected type for custom-lowering vector extract");
   SDValue Vec = Op.getOperand(0);
   SDValue Lane = Op.getOperand(1);
+
+  // FIXME: This is invalid for 8 and 16-bit elements - the information about
+  // sign / zero extension is lost!
   Op = DAG.getNode(ARMISD::VGETLANEu, dl, MVT::i32, Vec, Lane);
   Op = DAG.getNode(ISD::AssertZext, dl, MVT::i32, Op, DAG.getValueType(VT));
-  return DAG.getNode(ISD::TRUNCATE, dl, VT, Op);
+
+  if (VT.bitsLT(MVT::i32))
+    Op = DAG.getNode(ISD::TRUNCATE, dl, VT, Op);
+  else if (VT.bitsGT(MVT::i32))
+    Op = DAG.getNode(ISD::ANY_EXTEND, dl, VT, Op);
+
+  return Op;
 }
 
 static SDValue LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) {

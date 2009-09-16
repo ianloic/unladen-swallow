@@ -34,10 +34,6 @@
 namespace llvm {
 using namespace sys;
 
-Program::Program() : Pid_(0) {}
-
-Program::~Program() {}
-
 // This function just uses the PATH environment variable to find the program.
 Path
 Program::FindProgramByName(const std::string& progName) {
@@ -114,11 +110,6 @@ static bool RedirectIO(const Path *Path, int FD, std::string* ErrMsg) {
   }
   close(InFD);      // Close the original FD
   return false;
-}
-
-static bool Timeout = false;
-static void TimeOutHandler(int Sig) {
-  Timeout = true;
 }
 
 static void SetMemoryLimits (unsigned size)
@@ -233,18 +224,16 @@ Program::Wait(unsigned secondsToWait,
 
   // Install a timeout handler.
   if (secondsToWait) {
-    Timeout = false;
-    Act.sa_sigaction = 0;
-    Act.sa_handler = TimeOutHandler;
+    memset(&Act, 0, sizeof(Act));
+    Act.sa_handler = SIG_IGN;
     sigemptyset(&Act.sa_mask);
-    Act.sa_flags = 0;
     sigaction(SIGALRM, &Act, &Old);
     alarm(secondsToWait);
   }
 
   // Parent process: Wait for the child process to terminate.
   int status;
-  int child = this->Pid_;
+  pid_t child = Pid_;
   while (wait(&status) != child)
     if (secondsToWait && errno == EINTR) {
       // Kill the child.
@@ -288,6 +277,21 @@ Program::Wait(unsigned secondsToWait,
   return -99;
 #endif
 
+}
+
+bool
+Program::Kill(std::string* ErrMsg) {
+  if (Pid_ == 0) {
+    MakeErrMsg(ErrMsg, "Process not started!");
+    return true;
+  }
+
+  if (kill(Pid_, SIGKILL) != 0) {
+    MakeErrMsg(ErrMsg, "The process couldn't be killed!");
+    return true;
+  }
+
+  return false;
 }
 
 bool Program::ChangeStdinToBinary(){

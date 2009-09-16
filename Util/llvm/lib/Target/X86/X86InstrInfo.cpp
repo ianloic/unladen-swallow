@@ -2162,7 +2162,7 @@ MachineInstr*
 X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
                                     MachineInstr *MI, unsigned i,
                                     const SmallVectorImpl<MachineOperand> &MOs,
-                                    unsigned Align) const {
+                                    unsigned Size, unsigned Align) const {
   const DenseMap<unsigned*, std::pair<unsigned,unsigned> > *OpcodeTablePtr=NULL;
   bool isTwoAddrFold = false;
   unsigned NumOps = MI->getDesc().getNumOperands();
@@ -2202,13 +2202,44 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     DenseMap<unsigned*, std::pair<unsigned,unsigned> >::iterator I =
       OpcodeTablePtr->find((unsigned*)MI->getOpcode());
     if (I != OpcodeTablePtr->end()) {
+      unsigned Opcode = I->second.first;
       unsigned MinAlign = I->second.second;
       if (Align < MinAlign)
         return NULL;
+      bool NarrowToMOV32rm = false;
+      if (Size) {
+        unsigned RCSize =  MI->getDesc().OpInfo[i].getRegClass(&RI)->getSize();
+        if (Size < RCSize) {
+          // Check if it's safe to fold the load. If the size of the object is
+          // narrower than the load width, then it's not.
+          if (Opcode != X86::MOV64rm || RCSize != 8 || Size != 4)
+            return NULL;
+          // If this is a 64-bit load, but the spill slot is 32, then we can do
+          // a 32-bit load which is implicitly zero-extended. This likely is due
+          // to liveintervalanalysis remat'ing a load from stack slot.
+          if (MI->getOperand(0).getSubReg() || MI->getOperand(1).getSubReg())
+            return NULL;
+          Opcode = X86::MOV32rm;
+          NarrowToMOV32rm = true;
+        }
+      }
+
       if (isTwoAddrFold)
-        NewMI = FuseTwoAddrInst(MF, I->second.first, MOs, MI, *this);
+        NewMI = FuseTwoAddrInst(MF, Opcode, MOs, MI, *this);
       else
-        NewMI = FuseInst(MF, I->second.first, i, MOs, MI, *this);
+        NewMI = FuseInst(MF, Opcode, i, MOs, MI, *this);
+
+      if (NarrowToMOV32rm) {
+        // If this is the special case where we use a MOV32rm to load a 32-bit
+        // value and zero-extend the top bits. Change the destination register
+        // to a 32-bit one.
+        unsigned DstReg = NewMI->getOperand(0).getReg();
+        if (TargetRegisterInfo::isPhysicalRegister(DstReg))
+          NewMI->getOperand(0).setReg(RI.getSubReg(DstReg,
+                                                   4/*x86_subreg_32bit*/));
+        else
+          NewMI->getOperand(0).setSubReg(4/*x86_subreg_32bit*/);
+      }
       return NewMI;
     }
   }
@@ -2228,16 +2259,22 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
   if (NoFusing) return NULL;
 
   const MachineFrameInfo *MFI = MF.getFrameInfo();
+  unsigned Size = MFI->getObjectSize(FrameIndex);
   unsigned Alignment = MFI->getObjectAlignment(FrameIndex);
   if (Ops.size() == 2 && Ops[0] == 0 && Ops[1] == 1) {
     unsigned NewOpc = 0;
+    unsigned RCSize = 0;
     switch (MI->getOpcode()) {
     default: return NULL;
-    case X86::TEST8rr:  NewOpc = X86::CMP8ri; break;
-    case X86::TEST16rr: NewOpc = X86::CMP16ri; break;
-    case X86::TEST32rr: NewOpc = X86::CMP32ri; break;
-    case X86::TEST64rr: NewOpc = X86::CMP64ri32; break;
+    case X86::TEST8rr:  NewOpc = X86::CMP8ri; RCSize = 1; break;
+    case X86::TEST16rr: NewOpc = X86::CMP16ri; RCSize = 2; break;
+    case X86::TEST32rr: NewOpc = X86::CMP32ri; RCSize = 4; break;
+    case X86::TEST64rr: NewOpc = X86::CMP64ri32; RCSize = 8; break;
     }
+    // Check if it's safe to fold the load. If the size of the object is
+    // narrower than the load width, then it's not.
+    if (Size < RCSize)
+      return NULL;
     // Change to CMPXXri r, 0 first.
     MI->setDesc(get(NewOpc));
     MI->getOperand(1).ChangeToImmediate(0);
@@ -2246,7 +2283,7 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
 
   SmallVector<MachineOperand,4> MOs;
   MOs.push_back(MachineOperand::CreateFI(FrameIndex));
-  return foldMemoryOperandImpl(MF, MI, Ops[0], MOs, Alignment);
+  return foldMemoryOperandImpl(MF, MI, Ops[0], MOs, Size, Alignment);
 }
 
 MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
@@ -2318,7 +2355,7 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     for (unsigned i = NumOps - X86AddrNumOperands; i != NumOps; ++i)
       MOs.push_back(LoadMI->getOperand(i));
   }
-  return foldMemoryOperandImpl(MF, MI, Ops[0], MOs, Alignment);
+  return foldMemoryOperandImpl(MF, MI, Ops[0], MOs, 0, Alignment);
 }
 
 
@@ -3237,7 +3274,7 @@ unsigned X86InstrInfo::getGlobalBaseReg(MachineFunction *MF) const {
     GlobalBaseReg = RegInfo.createVirtualRegister(X86::GR32RegisterClass);
     // Generate addl $__GLOBAL_OFFSET_TABLE_ + [.-piclabel], %some_register
     BuildMI(FirstMBB, MBBI, DL, TII->get(X86::ADD32ri), GlobalBaseReg)
-      .addReg(PC).addExternalSymbol("_GLOBAL_OFFSET_TABLE_", 0,
+      .addReg(PC).addExternalSymbol("_GLOBAL_OFFSET_TABLE_",
                                     X86II::MO_GOT_ABSOLUTE_ADDRESS);
   } else {
     GlobalBaseReg = PC;

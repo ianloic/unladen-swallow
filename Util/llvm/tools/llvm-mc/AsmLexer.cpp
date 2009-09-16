@@ -15,12 +15,14 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Config/config.h"  // for strtoull.
+#include "llvm/MC/MCAsmInfo.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 using namespace llvm;
 
-AsmLexer::AsmLexer(SourceMgr &SM) : SrcMgr(SM)  {
+AsmLexer::AsmLexer(SourceMgr &SM, const MCAsmInfo &_MAI) : SrcMgr(SM),
+                                                           MAI(_MAI)  {
   CurBuffer = 0;
   CurBuf = SrcMgr.getMemoryBuffer(CurBuffer);
   CurPtr = CurBuf->getBufferStart();
@@ -99,17 +101,6 @@ AsmToken AsmLexer::LexIdentifier() {
          *CurPtr == '.' || *CurPtr == '@')
     ++CurPtr;
   return AsmToken(AsmToken::Identifier, StringRef(TokStart, CurPtr - TokStart));
-}
-
-/// LexPercent: Register: %[a-zA-Z0-9]+
-AsmToken AsmLexer::LexPercent() {
-  if (!isalnum(*CurPtr))
-    return AsmToken(AsmToken::Percent, StringRef(CurPtr, 1));  // Single %.
-  
-  while (isalnum(*CurPtr))
-    ++CurPtr;
-  
-  return AsmToken(AsmToken::Register, StringRef(TokStart, CurPtr - TokStart));
 }
 
 /// LexSlash: Slash: /
@@ -241,12 +232,16 @@ AsmToken AsmLexer::LexQuote() {
 StringRef AsmLexer::LexUntilEndOfStatement() {
   TokStart = CurPtr;
 
-  while (*CurPtr != '#' &&  // Start of line comment.
-         *CurPtr != ';' &&  // End of statement marker.
+  while (*CurPtr != ';' &&  // End of statement marker.
          *CurPtr != '\n' &&
          *CurPtr != '\r' &&
-         (*CurPtr != 0 || CurPtr != CurBuf->getBufferEnd()))
+         (*CurPtr != 0 || CurPtr != CurBuf->getBufferEnd())) {
+    // check for start of line comment.
+    for (const char *p = MAI.getCommentString(); *p != 0; ++p)
+      if (*CurPtr == *p)
+        break;
     ++CurPtr;
+  }
   return StringRef(TokStart, CurPtr-TokStart);
 }
 
@@ -255,6 +250,10 @@ AsmToken AsmLexer::LexToken() {
   // This always consumes at least one character.
   int CurChar = getNextChar();
   
+  for (const char *p = MAI.getCommentString(); *p != 0; ++p)
+    if (CurChar == *p)
+      return LexLineComment();
+
   switch (CurChar) {
   default:
     // Handle identifier: [a-zA-Z_.][a-zA-Z0-9_$.@]*
@@ -278,6 +277,10 @@ AsmToken AsmLexer::LexToken() {
   case '~': return AsmToken(AsmToken::Tilde, StringRef(TokStart, 1));
   case '(': return AsmToken(AsmToken::LParen, StringRef(TokStart, 1));
   case ')': return AsmToken(AsmToken::RParen, StringRef(TokStart, 1));
+  case '[': return AsmToken(AsmToken::LBrac, StringRef(TokStart, 1));
+  case ']': return AsmToken(AsmToken::RBrac, StringRef(TokStart, 1));
+  case '{': return AsmToken(AsmToken::LCurly, StringRef(TokStart, 1));
+  case '}': return AsmToken(AsmToken::RCurly, StringRef(TokStart, 1));
   case '*': return AsmToken(AsmToken::Star, StringRef(TokStart, 1));
   case ',': return AsmToken(AsmToken::Comma, StringRef(TokStart, 1));
   case '$': return AsmToken(AsmToken::Dollar, StringRef(TokStart, 1));
@@ -298,9 +301,9 @@ AsmToken AsmLexer::LexToken() {
     if (*CurPtr == '=')
       return ++CurPtr, AsmToken(AsmToken::ExclaimEqual, StringRef(TokStart, 2));
     return AsmToken(AsmToken::Exclaim, StringRef(TokStart, 1));
-  case '%': return LexPercent();
+  case '%': return AsmToken(AsmToken::Percent, StringRef(TokStart, 1));
   case '/': return LexSlash();
-  case '#': return LexLineComment();
+  case '#': return AsmToken(AsmToken::Hash, StringRef(TokStart, 1));
   case '"': return LexQuote();
   case '0': case '1': case '2': case '3': case '4':
   case '5': case '6': case '7': case '8': case '9':

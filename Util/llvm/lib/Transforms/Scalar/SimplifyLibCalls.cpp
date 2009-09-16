@@ -9,11 +9,9 @@
 //
 // This file implements a simple pass that applies a variety of small
 // optimizations for calls to specific well-known function calls (e.g. runtime
-// library functions). For example, a call to the function "exit(3)" that
-// occurs within the main() function can be transformed into a simple "return 3"
-// instruction. Any optimization that takes this form (replace call to library
-// function with simpler code that provides the same result) belongs in this
-// file.
+// library functions).   Any optimization that takes the very simple form
+// "replace call to library function with simpler code that provides the same
+// result" belongs in this file.
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,7 +28,6 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Config/config.h"
@@ -46,7 +43,7 @@ STATISTIC(NumAnnotated, "Number of attributes added to library functions");
 /// This class is the abstract base class for the set of optimizations that
 /// corresponds to one library call.
 namespace {
-class VISIBILITY_HIDDEN LibCallOptimization {
+class LibCallOptimization {
 protected:
   Function *Caller;
   const TargetData *TD;
@@ -500,59 +497,13 @@ static bool IsOnlyUsedInZeroEqualityComparison(Value *V) {
 }
 
 //===----------------------------------------------------------------------===//
-// Miscellaneous LibCall Optimizations
-//===----------------------------------------------------------------------===//
-
-namespace {
-//===---------------------------------------===//
-// 'exit' Optimizations
-
-/// ExitOpt - int main() { exit(4); } --> int main() { return 4; }
-struct VISIBILITY_HIDDEN ExitOpt : public LibCallOptimization {
-  virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
-    // Verify we have a reasonable prototype for exit.
-    if (Callee->arg_size() == 0 || !CI->use_empty())
-      return 0;
-
-    // Verify the caller is main, and that the result type of main matches the
-    // argument type of exit.
-    if (Caller->getName() != "main" || !Caller->hasExternalLinkage() ||
-        Caller->getReturnType() != CI->getOperand(1)->getType())
-      return 0;
-
-    TerminatorInst *OldTI = CI->getParent()->getTerminator();
-
-    // Drop all successor phi node entries.
-    for (unsigned i = 0, e = OldTI->getNumSuccessors(); i != e; ++i)
-      OldTI->getSuccessor(i)->removePredecessor(CI->getParent());
-
-    // Remove all instructions after the exit.
-    BasicBlock::iterator Dead = CI, E = OldTI; ++Dead;
-    while (Dead != E) {
-      BasicBlock::iterator Next = next(Dead);
-      if (Dead->getType() != Type::getVoidTy(*Context))
-        Dead->replaceAllUsesWith(UndefValue::get(Dead->getType()));
-      Dead->eraseFromParent();
-      Dead = Next;
-    }
-
-    // Insert a return instruction.
-    OldTI->eraseFromParent();
-    B.SetInsertPoint(B.GetInsertBlock());
-    B.CreateRet(CI->getOperand(1));
-
-    return CI;
-  }
-};
-
-//===----------------------------------------------------------------------===//
 // String and Memory LibCall Optimizations
 //===----------------------------------------------------------------------===//
 
 //===---------------------------------------===//
 // 'strcat' Optimizations
-
-struct VISIBILITY_HIDDEN StrCatOpt : public LibCallOptimization {
+namespace {
+struct StrCatOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strcat" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -602,7 +553,7 @@ struct VISIBILITY_HIDDEN StrCatOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strncat' Optimizations
 
-struct VISIBILITY_HIDDEN StrNCatOpt : public StrCatOpt {
+struct StrNCatOpt : public StrCatOpt {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strncat" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -650,7 +601,7 @@ struct VISIBILITY_HIDDEN StrNCatOpt : public StrCatOpt {
 //===---------------------------------------===//
 // 'strchr' Optimizations
 
-struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
+struct StrChrOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strchr" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -706,7 +657,7 @@ struct VISIBILITY_HIDDEN StrChrOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strcmp' Optimizations
 
-struct VISIBILITY_HIDDEN StrCmpOpt : public LibCallOptimization {
+struct StrCmpOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strcmp" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -753,7 +704,7 @@ struct VISIBILITY_HIDDEN StrCmpOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strncmp' Optimizations
 
-struct VISIBILITY_HIDDEN StrNCmpOpt : public LibCallOptimization {
+struct StrNCmpOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strncmp" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -799,7 +750,7 @@ struct VISIBILITY_HIDDEN StrNCmpOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strcpy' Optimizations
 
-struct VISIBILITY_HIDDEN StrCpyOpt : public LibCallOptimization {
+struct StrCpyOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Verify the "strcpy" function prototype.
     const FunctionType *FT = Callee->getFunctionType();
@@ -830,7 +781,7 @@ struct VISIBILITY_HIDDEN StrCpyOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strncpy' Optimizations
 
-struct VISIBILITY_HIDDEN StrNCpyOpt : public LibCallOptimization {
+struct StrNCpyOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || FT->getReturnType() != FT->getParamType(0) ||
@@ -879,7 +830,7 @@ struct VISIBILITY_HIDDEN StrNCpyOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strlen' Optimizations
 
-struct VISIBILITY_HIDDEN StrLenOpt : public LibCallOptimization {
+struct StrLenOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 1 ||
@@ -905,7 +856,7 @@ struct VISIBILITY_HIDDEN StrLenOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'strto*' Optimizations
 
-struct VISIBILITY_HIDDEN StrToOpt : public LibCallOptimization {
+struct StrToOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if ((FT->getNumParams() != 2 && FT->getNumParams() != 3) ||
@@ -927,7 +878,7 @@ struct VISIBILITY_HIDDEN StrToOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'memcmp' Optimizations
 
-struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
+struct MemCmpOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 3 || !isa<PointerType>(FT->getParamType(0)) ||
@@ -974,7 +925,7 @@ struct VISIBILITY_HIDDEN MemCmpOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'memcpy' Optimizations
 
-struct VISIBILITY_HIDDEN MemCpyOpt : public LibCallOptimization {
+struct MemCpyOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // These optimizations require TargetData.
     if (!TD) return 0;
@@ -995,7 +946,7 @@ struct VISIBILITY_HIDDEN MemCpyOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'memmove' Optimizations
 
-struct VISIBILITY_HIDDEN MemMoveOpt : public LibCallOptimization {
+struct MemMoveOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // These optimizations require TargetData.
     if (!TD) return 0;
@@ -1025,7 +976,7 @@ struct VISIBILITY_HIDDEN MemMoveOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'memset' Optimizations
 
-struct VISIBILITY_HIDDEN MemSetOpt : public LibCallOptimization {
+struct MemSetOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // These optimizations require TargetData.
     if (!TD) return 0;
@@ -1051,7 +1002,7 @@ struct VISIBILITY_HIDDEN MemSetOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'pow*' Optimizations
 
-struct VISIBILITY_HIDDEN PowOpt : public LibCallOptimization {
+struct PowOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // Just make sure this has 2 arguments of the same FP type, which match the
@@ -1102,7 +1053,7 @@ struct VISIBILITY_HIDDEN PowOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'exp2' Optimizations
 
-struct VISIBILITY_HIDDEN Exp2Opt : public LibCallOptimization {
+struct Exp2Opt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // Just make sure this has 1 argument of FP type, which matches the
@@ -1152,7 +1103,7 @@ struct VISIBILITY_HIDDEN Exp2Opt : public LibCallOptimization {
 //===---------------------------------------===//
 // Double -> Float Shrinking Optimizations for Unary Functions like 'floor'
 
-struct VISIBILITY_HIDDEN UnaryDoubleFPOpt : public LibCallOptimization {
+struct UnaryDoubleFPOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     if (FT->getNumParams() != 1 || FT->getReturnType() != Type::getDoubleTy(*Context) ||
@@ -1178,7 +1129,7 @@ struct VISIBILITY_HIDDEN UnaryDoubleFPOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'ffs*' Optimizations
 
-struct VISIBILITY_HIDDEN FFSOpt : public LibCallOptimization {
+struct FFSOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // Just make sure this has 2 arguments of the same FP type, which match the
@@ -1213,7 +1164,7 @@ struct VISIBILITY_HIDDEN FFSOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'isdigit' Optimizations
 
-struct VISIBILITY_HIDDEN IsDigitOpt : public LibCallOptimization {
+struct IsDigitOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // We require integer(i32)
@@ -1234,7 +1185,7 @@ struct VISIBILITY_HIDDEN IsDigitOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'isascii' Optimizations
 
-struct VISIBILITY_HIDDEN IsAsciiOpt : public LibCallOptimization {
+struct IsAsciiOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // We require integer(i32)
@@ -1253,7 +1204,7 @@ struct VISIBILITY_HIDDEN IsAsciiOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'abs', 'labs', 'llabs' Optimizations
 
-struct VISIBILITY_HIDDEN AbsOpt : public LibCallOptimization {
+struct AbsOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // We require integer(integer) where the types agree.
@@ -1275,7 +1226,7 @@ struct VISIBILITY_HIDDEN AbsOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'toascii' Optimizations
 
-struct VISIBILITY_HIDDEN ToAsciiOpt : public LibCallOptimization {
+struct ToAsciiOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     const FunctionType *FT = Callee->getFunctionType();
     // We require i32(i32)
@@ -1296,7 +1247,7 @@ struct VISIBILITY_HIDDEN ToAsciiOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'printf' Optimizations
 
-struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
+struct PrintFOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Require one fixed pointer argument and an integer/void result.
     const FunctionType *FT = Callee->getFunctionType();
@@ -1359,7 +1310,7 @@ struct VISIBILITY_HIDDEN PrintFOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'sprintf' Optimizations
 
-struct VISIBILITY_HIDDEN SPrintFOpt : public LibCallOptimization {
+struct SPrintFOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Require two fixed pointer arguments and an integer result.
     const FunctionType *FT = Callee->getFunctionType();
@@ -1431,7 +1382,7 @@ struct VISIBILITY_HIDDEN SPrintFOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'fwrite' Optimizations
 
-struct VISIBILITY_HIDDEN FWriteOpt : public LibCallOptimization {
+struct FWriteOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Require a pointer, an integer, an integer, a pointer, returning integer.
     const FunctionType *FT = Callee->getFunctionType();
@@ -1466,7 +1417,7 @@ struct VISIBILITY_HIDDEN FWriteOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'fputs' Optimizations
 
-struct VISIBILITY_HIDDEN FPutsOpt : public LibCallOptimization {
+struct FPutsOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // These optimizations require TargetData.
     if (!TD) return 0;
@@ -1491,7 +1442,7 @@ struct VISIBILITY_HIDDEN FPutsOpt : public LibCallOptimization {
 //===---------------------------------------===//
 // 'fprintf' Optimizations
 
-struct VISIBILITY_HIDDEN FPrintFOpt : public LibCallOptimization {
+struct FPrintFOpt : public LibCallOptimization {
   virtual Value *CallOptimizer(Function *Callee, CallInst *CI, IRBuilder<> &B) {
     // Require two fixed paramters as pointers and integer result.
     const FunctionType *FT = Callee->getFunctionType();
@@ -1553,10 +1504,8 @@ struct VISIBILITY_HIDDEN FPrintFOpt : public LibCallOptimization {
 namespace {
   /// This pass optimizes well known library functions from libc and libm.
   ///
-  class VISIBILITY_HIDDEN SimplifyLibCalls : public FunctionPass {
+  class SimplifyLibCalls : public FunctionPass {
     StringMap<LibCallOptimization*> Optimizations;
-    // Miscellaneous LibCall Optimizations
-    ExitOpt Exit; 
     // String and Memory LibCall Optimizations
     StrCatOpt StrCat; StrNCatOpt StrNCat; StrChrOpt StrChr; StrCmpOpt StrCmp;
     StrNCmpOpt StrNCmp; StrCpyOpt StrCpy; StrNCpyOpt StrNCpy; StrLenOpt StrLen;
@@ -1603,9 +1552,6 @@ FunctionPass *llvm::createSimplifyLibCallsPass() {
 /// Optimizations - Populate the Optimizations map with all the optimizations
 /// we know.
 void SimplifyLibCalls::InitOptimizations() {
-  // Miscellaneous LibCall Optimizations
-  Optimizations["exit"] = &Exit;
-  
   // String and Memory LibCall Optimizations
   Optimizations["strcat"] = &StrCat;
   Optimizations["strncat"] = &StrNCat;

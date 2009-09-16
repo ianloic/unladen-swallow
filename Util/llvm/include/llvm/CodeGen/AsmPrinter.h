@@ -46,6 +46,7 @@ namespace llvm {
   class MCContext;
   class MCSection;
   class MCStreamer;
+  class MCSymbol;
   class DwarfWriter;
   class Mangler;
   class MCAsmInfo;
@@ -75,10 +76,11 @@ namespace llvm {
     ///
     MachineLoopInfo *LI;
 
-  protected:
+  public:
     /// MMI - If available, this is a pointer to the current MachineModuleInfo.
     MachineModuleInfo *MMI;
     
+  protected:
     /// DW - If available, this is a pointer to the current dwarf writer.
     DwarfWriter *DW;
 
@@ -133,11 +135,6 @@ namespace llvm {
     ///
     bool VerboseAsm;
 
-    /// ExuberantAsm - Emit many more comments in assembly output if
-    /// this is true.
-    ///
-    bool ExuberantAsm;
-
     /// Private state for PrintSpecial()
     // Assign a unique ID to this machine instruction.
     mutable const MachineInstr *LastMI;
@@ -158,20 +155,10 @@ namespace llvm {
     ///
     bool isVerbose() const { return VerboseAsm; }
 
-    /// getGlobalLinkName - Returns the asm/link name of of the specified
-    /// global variable.  Should be overridden by each target asm printer to
-    /// generate the appropriate value.
-    virtual const std::string &getGlobalLinkName(const GlobalVariable *GV,
-                                                 std::string &LinkName) const;
-
-    /// EmitExternalGlobal - Emit the external reference to a global variable.
-    /// Should be overridden if an indirect reference should be used.
-    virtual void EmitExternalGlobal(const GlobalVariable *GV);
-
-    /// getCurrentFunctionEHName - Called to return the CurrentFnEHName.
-    /// 
-    std::string getCurrentFunctionEHName(const MachineFunction *MF) const;
-
+    /// getFunctionNumber - Return a unique ID for the current function.
+    ///
+    unsigned getFunctionNumber() const { return FunctionNumber; }
+    
   protected:
     /// getAnalysisUsage - Record analysis usage.
     /// 
@@ -216,10 +203,6 @@ namespace llvm {
     /// SetupMachineFunction - This should be called when a new MachineFunction
     /// is being processed from runOnMachineFunction.
     void SetupMachineFunction(MachineFunction &MF);
-    
-    /// getFunctionNumber - Return a unique ID for the current function.
-    ///
-    unsigned getFunctionNumber() const { return FunctionNumber; }
     
     /// IncrementFunctionNumber - Increase Function Number.  AsmPrinters should
     /// not normally call this, as the counter is automatically bumped by
@@ -268,7 +251,8 @@ namespace llvm {
     void EOL() const;
     void EOL(const std::string &Comment) const;
     void EOL(const char* Comment) const;
-    
+    void EOL(const char *Comment, unsigned Encoding) const;
+
     /// EmitULEB128Bytes - Emit an assembler byte data directive to compose an
     /// unsigned leb128 value.
     void EmitULEB128Bytes(unsigned Value) const;
@@ -335,17 +319,17 @@ namespace llvm {
 
     /// EmitComments - Pretty-print comments for instructions
     void EmitComments(const MachineInstr &MI) const;
-    /// EmitComments - Pretty-print comments for instructions
-    void EmitComments(const MCInst &MI) const;
     /// EmitComments - Pretty-print comments for basic blocks
     void EmitComments(const MachineBasicBlock &MBB) const;
 
-    /// printMCInst - Print an MCInst for this target.
-    ///
-    /// Note, this is only a temporary hack to allow the MCStreamer to print
-    /// instructions, do not use this function outside of llvm-mc.
-    virtual void printMCInst(const MCInst *MI);
-
+    /// GetMBBSymbol - Return the MCSymbol corresponding to the specified basic
+    /// block label.
+    MCSymbol *GetMBBSymbol(unsigned MBBID) const;
+    
+    /// EmitBasicBlockStart - This method prints the label for the specified
+    /// MachineBasicBlock, an alignment (if present) and a comment describing
+    /// it if appropriate.
+    void EmitBasicBlockStart(const MachineBasicBlock *MBB) const;
   protected:
     /// EmitZeros - Emit a block of zeros.
     ///
@@ -376,13 +360,7 @@ namespace llvm {
     /// that is an implicit def.
     virtual void printImplicitDef(const MachineInstr *MI) const;
     
-    /// printBasicBlockLabel - This method prints the label for the specified
-    /// MachineBasicBlock
-    virtual void printBasicBlockLabel(const MachineBasicBlock *MBB,
-                                      bool printAlign = false,
-                                      bool printColon = false,
-                                      bool printComment = true) const;
-                                      
+    
     /// printPICJumpTableSetLabel - This method prints a set label for the
     /// specified MachineBasicBlock for a jumptable entry.
     virtual void printPICJumpTableSetLabel(unsigned uid,

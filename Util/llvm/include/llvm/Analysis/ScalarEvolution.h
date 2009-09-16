@@ -219,10 +219,11 @@ namespace llvm {
     /// exit value.
     std::map<PHINode*, Constant*> ConstantEvolutionLoopExitValue;
 
-    /// ValuesAtScopes - This map contains entries for all the instructions
-    /// that we attempt to compute getSCEVAtScope information for without
-    /// using SCEV techniques, which can be expensive.
-    std::map<Instruction *, std::map<const Loop *, Constant *> > ValuesAtScopes;
+    /// ValuesAtScopes - This map contains entries for all the expressions
+    /// that we attempt to compute getSCEVAtScope information for, which can
+    /// be expensive in extreme cases.
+    std::map<const SCEV *,
+             std::map<const Loop *, const SCEV *> > ValuesAtScopes;
 
     /// createSCEV - We know that there is no SCEV for the specified value.
     /// Analyze the expression.
@@ -235,6 +236,11 @@ namespace llvm {
     /// createNodeForGEP - Provide the special handling we need to analyze GEP
     /// SCEVs.
     const SCEV *createNodeForGEP(Operator *GEP);
+
+    /// computeSCEVAtScope - Implementation code for getSCEVAtScope; called
+    /// at most once for each SCEV+Loop pair.
+    ///
+    const SCEV *computeSCEVAtScope(const SCEV *S, const Loop *L);
 
     /// ForgetSymbolicValue - This looks up computed SCEV values for all
     /// instructions that depend on the given instruction and removes them from
@@ -376,7 +382,7 @@ namespace llvm {
     /// this is the pointer-sized integer type.
     const Type *getEffectiveSCEVType(const Type *Ty) const;
 
-    /// getSCEV - Return a SCEV expression handle for the full generality of the
+    /// getSCEV - Return a SCEV expression for the full generality of the
     /// specified expression.
     const SCEV *getSCEV(Value *V);
 
@@ -490,7 +496,7 @@ namespace llvm {
     const SCEV *getUMinFromMismatchedTypes(const SCEV *LHS,
                                            const SCEV *RHS);
 
-    /// getSCEVAtScope - Return a SCEV expression handle for the specified value
+    /// getSCEVAtScope - Return a SCEV expression for the specified value
     /// at the specified scope in the program.  The L value specifies a loop
     /// nest to evaluate the expression at, where null is the top-level or a
     /// specified loop is immediately inside of the loop.

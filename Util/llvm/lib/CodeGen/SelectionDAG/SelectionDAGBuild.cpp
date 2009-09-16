@@ -861,6 +861,10 @@ SDValue SelectionDAGLowering::getValue(const Value *V) {
       for (User::const_op_iterator OI = C->op_begin(), OE = C->op_end();
            OI != OE; ++OI) {
         SDNode *Val = getValue(*OI).getNode();
+        // If the operand is an empty aggregate, there are no values.
+        if (!Val) continue;
+        // Add each leaf value from the operand to the Constants list
+        // to form a flattened list of all the values.
         for (unsigned i = 0, e = Val->getNumValues(); i != e; ++i)
           Constants.push_back(SDValue(Val, i));
       }
@@ -989,7 +993,8 @@ void SelectionDAGLowering::visitRet(ReturnInst &I) {
   }
 
   bool isVarArg = DAG.getMachineFunction().getFunction()->isVarArg();
-  unsigned CallConv = DAG.getMachineFunction().getFunction()->getCallingConv();
+  CallingConv::ID CallConv =
+    DAG.getMachineFunction().getFunction()->getCallingConv();
   Chain = TLI.LowerReturn(Chain, CallConv, isVarArg,
                           Outs, getCurDebugLoc(), DAG);
 
@@ -1713,11 +1718,8 @@ bool SelectionDAGLowering::handleJTSwitchCase(CaseRec& CR,
   MachineFunction *CurMF = FuncInfo.MF;
 
   // Figure out which block is immediately after the current one.
-  MachineBasicBlock *NextBlock = 0;
   MachineFunction::iterator BBI = CR.CaseBB;
-
-  if (++BBI != FuncInfo.MF->end())
-    NextBlock = BBI;
+  ++BBI;
 
   const BasicBlock *LLVMBB = CR.CaseBB->getBasicBlock();
 
@@ -1786,11 +1788,8 @@ bool SelectionDAGLowering::handleBTSplitSwitchCase(CaseRec& CR,
   MachineFunction *CurMF = FuncInfo.MF;
 
   // Figure out which block is immediately after the current one.
-  MachineBasicBlock *NextBlock = 0;
   MachineFunction::iterator BBI = CR.CaseBB;
-
-  if (++BBI != FuncInfo.MF->end())
-    NextBlock = BBI;
+  ++BBI;
 
   Case& FrontCase = *CR.Range.first;
   Case& BackCase  = *(CR.Range.second-1);
@@ -2813,11 +2812,10 @@ void SelectionDAGLowering::visitLoad(LoadInst &I) {
   EVT PtrVT = Ptr.getValueType();
   for (unsigned i = 0; i != NumValues; ++i) {
     SDValue L = DAG.getLoad(ValueVTs[i], getCurDebugLoc(), Root,
-                              DAG.getNode(ISD::ADD, getCurDebugLoc(),
-                                          PtrVT, Ptr,
-                                          DAG.getConstant(Offsets[i], PtrVT)),
-                              SV, Offsets[i],
-                              isVolatile, Alignment);
+                            DAG.getNode(ISD::ADD, getCurDebugLoc(),
+                                        PtrVT, Ptr,
+                                        DAG.getConstant(Offsets[i], PtrVT)),
+                            SV, Offsets[i], isVolatile, Alignment);
     Values[i] = L;
     Chains[i] = L.getValue(1);
   }
@@ -2866,8 +2864,7 @@ void SelectionDAGLowering::visitStore(StoreInst &I) {
                              DAG.getNode(ISD::ADD, getCurDebugLoc(),
                                          PtrVT, Ptr,
                                          DAG.getConstant(Offsets[i], PtrVT)),
-                             PtrV, Offsets[i],
-                             isVolatile, Alignment);
+                             PtrV, Offsets[i], isVolatile, Alignment);
 
   DAG.setRoot(DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
                           MVT::Other, &Chains[0], NumValues));
@@ -3980,7 +3977,11 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
     // Don't handle byval struct arguments or VLAs, for example.
     if (!AI)
       return 0;
-    int FI = FuncInfo.StaticAllocaMap[AI];
+    DenseMap<const AllocaInst*, int>::iterator SI =
+      FuncInfo.StaticAllocaMap.find(AI);
+    if (SI == FuncInfo.StaticAllocaMap.end()) 
+      return 0; // VLAs.
+    int FI = SI->second;
     DW->RecordVariable(cast<MDNode>(Variable), FI);
     return 0;
   }
@@ -5613,7 +5614,7 @@ std::pair<SDValue, SDValue>
 TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
                             bool RetSExt, bool RetZExt, bool isVarArg,
                             bool isInreg, unsigned NumFixedArgs,
-                            unsigned CallConv, bool isTailCall,
+                            CallingConv::ID CallConv, bool isTailCall,
                             bool isReturnValueUsed,
                             SDValue Callee,
                             ArgListTy &Args, SelectionDAG &DAG, DebugLoc dl) {
