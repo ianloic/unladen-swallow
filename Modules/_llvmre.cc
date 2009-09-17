@@ -50,6 +50,8 @@ using llvm::ExecutionEngine;
 using llvm::LLVMContext;
 using llvm::getGlobalContext;
 
+using llvm::IRBuilder;
+
 // helper to produce better error messages
 #define _PyErr_SetString(T,S) \
   PyErr_Format(T, S " (in %s at %s:%d)",__PRETTY_FUNCTION__ , __FILE__, __LINE__)
@@ -107,16 +109,26 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
   } \
 
 
+class RegEx;
+
 typedef struct {
   PyObject_HEAD
+  RegEx* regex;
+} PyRegEx;
 
+
+
+class RegEx {
+public:
+  RegEx();
+  ~RegEx();
   // Unladed Swallow global LLVM data
   PyGlobalLlvmData* global_data;
   // LLVM module
   Module* module;
 
   /* the root compiled regular expression */
-  CompiledExpression* compiled;
+  CompiledExpression compiled;
 
   /* a function to find the first instance of that compiled regular 
    * expression */
@@ -141,7 +153,30 @@ typedef struct {
   Function* Py_UNICODE_ISALNUM;
   Function* isspace;
   Function* Py_UNICODE_ISSPACE;
-} RegEx;
+};
+
+
+RegEx::RegEx(PyObject* seq, int flags, int groups) {
+  // use the Unladen Swallow LLVM context
+  global_data = PyGlobalLlvmData::Get();
+
+  // create a module for this pattern
+  module = new Module("LlvmRe", global_data->context());
+
+  // the types we use
+  // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
+  charType = IntegerType::get(self->global_data->context(), 16);
+  boolType = IntegerType::get(self->global_data->context(), 1);
+  offsetType = IntegerType::get(self->global_data->context(), 32);
+  charPointerType = PointerType::get(self->charType, 0);
+  offsetPointerType = PointerType::get(self->offsetType, 0);
+  // set up some handy constants
+  not_found = ConstantInt::getSigned(self->offsetType, -1);
+}
+
+RegEx::~RegEx() {
+  delete module;
+}
 
 
 class CompiledExpression {
@@ -199,7 +234,11 @@ class CompiledExpression {
     BasicBlock* at_boundary(BasicBlock* block, bool non_boundary);
 
     // helpers to generate commonly used code
-    Value* loadOffset(BasicBlock* block);
+    Value* loadOffset(IRBuilder<> &bb);
+    Value* loadOffset(BasicBlock* block) {
+      IRBuilder<> bb(block);
+      return loadOffset(bb);
+    }
     void storeOffset(BasicBlock* block, Value* value);
     BasicBlock* loadCharacter(BasicBlock* block);
     Function* greedy(Function* repeat, Function* after);
@@ -246,8 +285,8 @@ bool CompiledExpression::optimize(Function* f) {
 }
 
 Value* 
-CompiledExpression::loadOffset(BasicBlock* block) {
-  return new LoadInst(offset_ptr, "offset", block);
+CompiledExpression::loadOffset(IRBuilder<> &bb) {
+  return bb.CreateLoad(offset_ptr, "offset");
 }
 
 void
@@ -956,6 +995,8 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
 
 BasicBlock*
 CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
+  IRBuilder<> bb(block);
+  
   // @arg is a tuple of (None, [branch1, branch2, branch3...])
   if (!PyTuple_Check(arg)) {
     _PyErr_SetString(PyExc_TypeError, "Expected a tuple");
@@ -975,21 +1016,20 @@ CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
     return NULL;
   }
 
+
   // the basic block that we'll jump to when we've matched a branch
   BasicBlock* matched = createBlock("matched");
 
-  // prepare the arguments for the branches
-  std::vector<Value*> args;
-  args.push_back(string);
-  args.push_back(loadOffset(block));
-  args.push_back(end_offset);
-  args.push_back(groups);
+  // the offset that the branches are tested from
+  Value* offset = loadOffset(bb);
 
   for (Py_ssize_t i=0; i<num_branches; i++) {
     // the block we'll go to if there's a match
     BasicBlock* match =  createBlock("match");
+    IRBuilder<> match_bb(match);
     // the next basic block we'll branch from
     BasicBlock* next = createBlock("branch");
+    IRBuilder<> next_bb(next);
 
     // get the branch sequence
     PyObject* branch = PySequence_GetItem(branches, i);
@@ -1005,24 +1045,25 @@ CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
     Py_XDECREF(branch);
 
     // call it
-    Value* branch_result = CallInst::Create(compiled_branch.function, 
-        args.begin(), args.end(), "branch_result", block);
+    Value* branch_result = bb.CreateCall4(compiled_branch.function,
+        string, offset, end_offset, groups, "branch_result");
     // check it
-    Value* branch_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, 
-        branch_result, regex.not_found, "branch_result_not_found");
+    Value* branch_result_not_found = bb.CreateICmpEQ(branch_result, 
+        regex.not_found, "branch_result_not_found");
     // no match means run the next check, otherwise go to match:
-    BranchInst::Create(next, match, branch_result_not_found, block);
+    bb.CreateCondBr(branch_result_not_found, next, match);
 
     // store the new offset, go to the final block
     storeOffset(match, branch_result);
-    BranchInst::Create(matched, match);
+
+    match_bb.CreateBr(matched);
 
     // next becomes current
-    block = next;
+    bb.SetInsertPoint(next); 
   }
 
   // once we've tried all of the branches we've failed
-  BranchInst::Create(return_not_found, block);
+  bb.CreateBr(return_not_found);
 
   // clear any Python exception state that we don't care about
   PyErr_Clear();
@@ -1241,8 +1282,8 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     return NULL;
   }
 
-  CompiledExpression* repeated = new CompiledExpression(regex);
-  repeated->Compile(sub_pattern, 0);
+  CompiledExpression repeated(regex);
+  repeated.Compile(sub_pattern, 0);
 
   for (int i=0; i<min; i++) {
     // build the arguments to the function
@@ -1251,7 +1292,7 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     args.push_back(loadOffset(block));
     args.push_back(end_offset);
     args.push_back(groups);
-    Value* repeat_result = CallInst::Create(repeated->function, 
+    Value* repeat_result = CallInst::Create(repeated.function, 
         args.begin(), args.end(), "repeat_result", block);
     Value* repeat_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
         repeat_result, regex.not_found, "repeat_result_not_found");
@@ -1267,15 +1308,15 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     // time to harness the power of RECURSION!
 
     // compile everything after this instruction...
-    CompiledExpression* after = new CompiledExpression(regex);
-    after->Compile(seq, index+1);
+    CompiledExpression after(regex);
+    after.Compile(seq, index+1);
 
     // make a function for recursion
     Function* recurse;
     if (is_greedy) {
-      recurse = greedy(repeated->function, after->function);
+      recurse = greedy(repeated.function, after.function);
     } else {
-      recurse = nongreedy(repeated->function, after->function);
+      recurse = nongreedy(repeated.function, after.function);
     }
 
     // call it
@@ -1296,7 +1337,7 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
 
     BasicBlock* call_after = createBlock("call_after");
     args.resize(4); // use the same args as recurse without the countdown
-    ReturnInst::Create(context(), CallInst::Create(after->function, args.begin(),
+    ReturnInst::Create(context(), CallInst::Create(after.function, args.begin(),
           args.end(), "after_result", call_after), call_after);
 
     BranchInst::Create(call_after, return_recurse_result,
@@ -1621,36 +1662,31 @@ CompiledExpression::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
 }
 
 static PyObject *
-RegEx_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+PyRegEx_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
   RegEx *self;
 
   self = (RegEx *)type->tp_alloc(type, 0);
   if (self != NULL) {
-    // use the Unladen Swallow LLVM context
-    self->global_data = PyGlobalLlvmData::Get();
-
-    // create a module for this pattern
-    self->module = new Module("LlvmRe", self->global_data->context());
-
-    // the types we use
-    // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
-    self->charType = IntegerType::get(self->global_data->context(), 16);
-    self->boolType = IntegerType::get(self->global_data->context(), 1);
-    self->offsetType = IntegerType::get(self->global_data->context(), 32);
-    self->charPointerType = PointerType::get(self->charType, 0);
-    self->offsetPointerType = PointerType::get(self->offsetType, 0);
-    // set up some handy constants
-    self->not_found = ConstantInt::getSigned(self->offsetType, -1);
-
+    self->regex = new RegEx();
   }
 
   return (PyObject *)self;
 }
 
 
+static void
+PyRegEx_dealloc(RegEx *self)
+{
+  if (self->regex) {
+    delete self->regex;
+    self->regex = NULL;
+  }
+}
+
+
 static int
-RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
+PyRegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
 {
   PyObject *seq=NULL;
   int flags, groups;
@@ -1668,12 +1704,10 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
     return -1;
   }
 
-  self->flags = flags;
-  self->groups = groups;
-  
   // compile that sequence into LLVM bytecode
-  self->compiled = new CompiledExpression(*self, true);
+  self->regex = new RegEx(seq, flags, groups);
 
+#if 0
   Py_INCREF(seq);
   if (!self->compiled->Compile(seq, 0)) {
     delete self->compiled;
@@ -1682,6 +1716,7 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
     return -1;
   }
   Py_DECREF(seq);
+#endif
 
   // compile a new function to find rather than match
  
@@ -1769,14 +1804,14 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
 }
 
 static PyObject*
-RegEx_dump(RegEx* self) {
+PyRegEx_dump(PyRegEx* self) {
   self->module->dump();
   Py_INCREF(Py_None);
   return Py_None;
 }
 
 static PyObject*
-RegEx_match(RegEx* self, PyObject* args) {
+PyRegEx_match(PyRegEx* self, PyObject* args) {
   Py_UNICODE* characters;
   int length, pos, end;
   if (!PyArg_ParseTuple(args, "u#ii", &characters, &length, &pos, &end)) {
@@ -1838,7 +1873,7 @@ RegEx_match(RegEx* self, PyObject* args) {
 
 
 static PyObject*
-RegEx_find(RegEx* self, PyObject* args) {
+RegEx_find(PyRegEx* se lf, PyObject* args) {
   Py_UNICODE* characters;
   int length, pos, end;
   if (!PyArg_ParseTuple(args, "u#ii", &characters, &length, &pos, &end)) {
@@ -1901,7 +1936,7 @@ RegEx_find(RegEx* self, PyObject* args) {
 }
 
 
-static PyMethodDef RegEx_methods[] = {
+static PyMethodDef PyRegEx_methods[] = {
   {"dump", (PyCFunction)RegEx_dump, METH_NOARGS,
    "Dump the LLVM code for the RegEx", },
   {"match", (PyCFunction)RegEx_match, METH_VARARGS,
@@ -1911,13 +1946,13 @@ static PyMethodDef RegEx_methods[] = {
   {NULL}  /* Sentinel */
 };
   
-static PyTypeObject RegExType = {
+static PyTypeObject PyRegExType = {
   PyObject_HEAD_INIT(NULL)
   0,                         /*ob_size*/
   "llvmre.RegEx",            /*tp_name*/
-  sizeof(RegEx),             /*tp_basicsize*/
+  sizeof(PyRegEx),             /*tp_basicsize*/
   0,                         /*tp_itemsize*/
-  0,                         /*tp_dealloc*/
+  (destructor)PyRegEx_dealloc, /*tp_dealloc*/
   0,                         /*tp_print*/
   0,                         /*tp_getattr*/
   0,                         /*tp_setattr*/
@@ -1940,17 +1975,17 @@ static PyTypeObject RegExType = {
   0,                         /* tp_weaklistoffset */
   0,                         /* tp_iter */
   0,                         /* tp_iternext */
-  RegEx_methods,             /* tp_methods */
-  0/*RegEx_members*/,             /* tp_members */
+  PyRegEx_methods,           /* tp_methods */
+  0/*PyRegEx_members*/,      /* tp_members */
   0,                         /* tp_getset */
   0,                         /* tp_base */
   0,                         /* tp_dict */
   0,                         /* tp_descr_get */
   0,                         /* tp_descr_set */
   0,                         /* tp_dictoffset */
-  (initproc)RegEx_init,      /* tp_init */
+  (initproc)PyRegEx_init,    /* tp_init */
   0,                         /* tp_alloc */
-  RegEx_new,                 /* tp_new */
+  PyRegEx_new,               /* tp_new */
 };
 
 static PyMethodDef llvmre_methods[] = {
@@ -1965,12 +2000,12 @@ init_llvmre(void)
 {
   PyObject* m;
 
-  if (PyType_Ready(&RegExType) < 0)
+  if (PyType_Ready(&PyRegExType) < 0)
     return;
 
   m = Py_InitModule3("_llvmre", llvmre_methods,
              "JIT Python regular expressions using LLVM");
 
-  Py_INCREF(&RegExType);
-  PyModule_AddObject(m, "RegEx", (PyObject *)&RegExType);
+  Py_INCREF(&PyRegExType);
+  PyModule_AddObject(m, "RegEx", (PyObject *)&PyRegExType);
 }
