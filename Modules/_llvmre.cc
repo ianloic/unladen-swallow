@@ -1154,6 +1154,7 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
       // the argument should just be an integer
       if (!PyInt_Check(op_arg)) {
         _PyErr_SetString(PyExc_TypeError, "Expected an integer");
+        Py_XDECREF(item);
         return NULL;
       }
 
@@ -1168,9 +1169,6 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
         Py_XDECREF(item);
         return NULL;
       }
-      // lose the reference to the tuple
-      Py_XDECREF(item);
-
       BasicBlock* yet_more_tests = createBlock("more_tests");
       testRange(more_tests, character, from, to, 
           negate ? return_not_found : matched, yet_more_tests);
@@ -1185,6 +1183,7 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
       BasicBlock* yet_more_tests = createBlock("more_tests");
       if (!testCategory(more_tests, character, category_name, 
             negate?return_not_found:matched, yet_more_tests)) {
+        Py_XDECREF(item);
         return false;
       }
       more_tests = yet_more_tests;
