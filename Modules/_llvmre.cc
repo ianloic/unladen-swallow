@@ -263,6 +263,7 @@ RegularExpression::RegularExpression()
 
 RegularExpression::~RegularExpression() 
 {
+  delete module;
 }
 
 bool 
@@ -1915,6 +1916,14 @@ RegEx_init(RegEx *self, PyObject *args, PyObject *kwds)
   return 0;
 }
 
+static void
+RegEx_dealloc(RegEx* self)
+{
+  if (self && self->re) {
+    delete self->re;
+  }
+}
+
 static PyObject*
 RegEx_dump(RegEx* self) {
   if (self->re) {
@@ -1932,7 +1941,11 @@ RegEx_match(RegEx* self, PyObject* args) {
     return NULL;
   }
 
-  return self->re->Match(characters, length, pos, end);
+  if (self->re) {
+    return self->re->Match(characters, length, pos, end);
+  } else {
+    return NULL;
+  }
 }
 
 
@@ -1944,7 +1957,11 @@ RegEx_find(RegEx* self, PyObject* args) {
     return NULL;
   }
 
-  return self->re->Find(characters, length, pos, end);
+  if (self->re) {
+    return self->re->Find(characters, length, pos, end);
+  } else {
+    return NULL;
+  }
 }
 
 static PyMethodDef RegEx_methods[] = {
@@ -1963,7 +1980,7 @@ static PyTypeObject RegExType = {
   "llvmre.RegEx",            /*tp_name*/
   sizeof(RegEx),             /*tp_basicsize*/
   0,                         /*tp_itemsize*/
-  0,                         /*tp_dealloc*/
+  (destructor)RegEx_dealloc, /*tp_dealloc*/
   0,                         /*tp_print*/
   0,                         /*tp_getattr*/
   0,                         /*tp_setattr*/
