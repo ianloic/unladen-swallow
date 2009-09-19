@@ -46,6 +46,7 @@ using llvm::StoreInst;
 using llvm::ICmpInst;
 
 using llvm::ExecutionEngine;
+using llvm::EngineBuilder;
 
 using llvm::LLVMContext;
 using llvm::getGlobalContext;
@@ -91,9 +92,7 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
 }
 
 // make sure there's a function in the RegEx object for the associated
-// wrapper. for some reason the mapping isn't being picked up
-// automatically so we have to use engine->addGlobalMapping. I don't think
-// that we should, in theory...
+// wrapper. 
 #define ENSURE_TEST_FUNCTION(name) \
   if (re.name == NULL) { \
     std::vector<const Type*> func_args; \
@@ -202,8 +201,12 @@ class RegularExpression : CompiledExpression {
 
     // Unladed Swallow global LLVM data
     PyGlobalLlvmData* global_data;
+    // LLVM Context
+    LLVMContext context;
     // LLVM module
     Module* module;
+    // the execution engine
+    ExecutionEngine* ee;
 
     int flags;
     int groups;
@@ -248,13 +251,16 @@ RegularExpression::RegularExpression()
   global_data = PyGlobalLlvmData::Get();
  
   // create a module for this pattern
-  module = new Module("LlvmRe", global_data->context());
+  module = new Module("LlvmRe", context);
+
+  // get an execution engine
+  ee = EngineBuilder(module).create();
 
   // the types we use
   // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
-  charType = IntegerType::get(global_data->context(), 16);
-  boolType = IntegerType::get(global_data->context(), 1);
-  offsetType = IntegerType::get(global_data->context(), 32);
+  charType = IntegerType::get(context, 16);
+  boolType = IntegerType::get(context, 1);
+  offsetType = IntegerType::get(context, 32);
   charPointerType = PointerType::get(charType, 0);
   offsetPointerType = PointerType::get(offsetType, 0);
   // set up some handy constants
@@ -263,6 +269,11 @@ RegularExpression::RegularExpression()
 
 RegularExpression::~RegularExpression() 
 {
+  // free the execution engine state for all of the functions
+  for(Module::iterator i=module->begin(), e=module->end(); i!=e; ++i) {
+    ee->freeMachineCodeForFunction(i);
+  }
+  // delete the module
   delete module;
 }
 
@@ -307,17 +318,17 @@ RegularExpression::CompileFind()
   start_ptr->setName("start_ptr");
 
   // create basic blocks
-  BasicBlock* entry = BasicBlock::Create(global_data->context(), 
+  BasicBlock* entry = BasicBlock::Create(context, 
       "entry", find_function);
-  BasicBlock* test_offset = BasicBlock::Create(global_data->context(), 
+  BasicBlock* test_offset = BasicBlock::Create(context, 
       "test_offset", find_function);
-  BasicBlock* match = BasicBlock::Create(global_data->context(), 
+  BasicBlock* match = BasicBlock::Create(context, 
       "match", find_function);
-  BasicBlock* increment = BasicBlock::Create(global_data->context(), 
+  BasicBlock* increment = BasicBlock::Create(context, 
       "increment", find_function);
-  BasicBlock* return_not_found = BasicBlock::Create(global_data->context(), 
+  BasicBlock* return_not_found = BasicBlock::Create(context, 
       "return_not_found", find_function);
-  BasicBlock* return_match_result = BasicBlock::Create(global_data->context(), 
+  BasicBlock* return_match_result = BasicBlock::Create(context, 
       "return_match_result", find_function);
 
   // create the entry BasicBlock
@@ -354,13 +365,13 @@ RegularExpression::CompileFind()
   BranchInst::Create(test_offset, increment);
 
   // create the return_not_found BasicBlock
-  ReturnInst::Create(global_data->context(), not_found, return_not_found);
+  ReturnInst::Create(context, not_found, return_not_found);
 
   // create the return_match_result BasicBlock
   // put the offset in our outparam
   new StoreInst(new LoadInst(offset_ptr, "offset", return_match_result),
       start_ptr, return_match_result);
-  ReturnInst::Create(global_data->context(), match_result, return_match_result);
+  ReturnInst::Create(context, match_result, return_match_result);
 
   // optimize the find function
 	global_data->Optimize(*(find_function), 3);
@@ -435,10 +446,8 @@ RegularExpression::Match(Py_UNICODE* characters,
                          int pos, 
                          int end)
 {
-  ExecutionEngine *engine = global_data->getExecutionEngine();
-
   MatchFunction func_ptr = (MatchFunction)
-    engine->getPointerToFunction(function);
+    ee->getPointerToFunction(function);
 
   ReOffset* groups_array = AllocateGroupsArray();
 
@@ -453,10 +462,8 @@ RegularExpression::Find(Py_UNICODE* characters,
                         int pos, 
                         int end)
 {
-  ExecutionEngine *engine = global_data->getExecutionEngine();
-
   FindFunction func_ptr = 
-    (FindFunction)engine->getPointerToFunction(find_function);
+    (FindFunction)ee->getPointerToFunction(find_function);
 
   ReOffset start;
   ReOffset* groups_array = AllocateGroupsArray();
@@ -475,7 +482,7 @@ CompiledExpression::~CompiledExpression() {
 LLVMContext& 
 CompiledExpression::context() 
 {
-  return re.global_data->context();
+  return re.context;
 }
 
 bool CompiledExpression::optimize(Function* f) {
