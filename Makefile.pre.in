@@ -80,6 +80,7 @@ LLVMBASEFLAGS=	-D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Woverloaded-virtu
 ifeq (@BUILD_LLVM@, 0)
 	LLVMCXXFLAGS=	-I@LLVM_INC_DIR@ $(LLVMBASEFLAGS)
 	LLVM_LIB_DIR=   @LLVM_PATH@/lib
+	OUR_PWD=
 else
 	# If LLVM is disabled, we still need some of the utility headers from LLVM
 	# for things like managed statics and mutexes. Pull those in, but don't
@@ -88,7 +89,10 @@ else
 	# This line will be nonsensical if BUILD_LLVM==0, but that's what the
 	# test above is for. It's also nonsense if BUILD_LLVM==disabled, but
 	# then it won't be used, either.
-	LLVM_LIB_DIR=	$(PWD)/@LLVM_PATH@/lib
+	LLVM_LIB_DIR=	@LLVM_PATH@/lib
+	# We can't trust the PWD environment variable (Buildbot doesn't set it
+	# correctly, for example).
+	OUR_PWD=`pwd`/
 endif
 LLVM_INC_DIR=	@LLVM_INC_DIR@
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
@@ -479,10 +483,11 @@ $(LIBRARY): $(LIBRARY_OBJS)
 	-rm -rf $@ $@-objs
 	$(AR) cr $@ Modules/getbuildinfo.o
 	if test @BUILD_LLVM@ != disabled; then \
+		export OUR_PWD=$(OUR_PWD); \
 		mkdir $@-objs; \
 		(cd $@-objs; \
 		for lib in $(LLVMLIBS) ; do \
-			$(AR) x $(LLVM_LIB_DIR)/lib$$lib.a; \
+			$(AR) x $${OUR_PWD}$(LLVM_LIB_DIR)/lib$$lib.a; \
 		done); \
 		$(AR) cr $@ $@-objs/*.o; \
 		rm -fr $@-objs; \
