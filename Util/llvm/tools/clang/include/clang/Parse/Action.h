@@ -1215,7 +1215,7 @@ public:
   /// ActOnFriendTypeDecl - Parsed a friend type declaration.
   virtual DeclPtrTy ActOnFriendTypeDecl(Scope *S,
                                         const DeclSpec &DS,
-                                        bool IsTemplate) {
+                                        MultiTemplateParamsArg TParams) {
     return DeclPtrTy();
   }
 
@@ -2185,6 +2185,128 @@ public:
                                     SourceLocation AliasNameLoc) {
     return;
   }
+  
+  /// \name Code completion actions
+  ///
+  /// These actions are used to signal that a code-completion token has been
+  /// found at a point in the grammar where the Action implementation is
+  /// likely to be able to provide a list of possible completions, e.g.,
+  /// after the "." or "->" of a member access expression.
+  /// 
+  /// \todo Code completion for designated field initializers
+  /// \todo Code completion for call arguments after a function template-id
+  /// \todo Code completion within a call expression, object construction, etc.
+  /// \todo Code completion within a template argument list.
+  /// \todo Code completion for attributes.
+  //@{
+  
+  /// \brief Code completion for an ordinary name that occurs within the given
+  /// scope.
+  ///
+  /// \param S the scope in which the name occurs.
+  virtual void CodeCompleteOrdinaryName(Scope *S) { }
+  
+  /// \brief Code completion for a member access expression.
+  ///
+  /// This code completion action is invoked when the code-completion token
+  /// is found after the "." or "->" of a member access expression.
+  ///
+  /// \param S the scope in which the member access expression occurs.
+  ///
+  /// \param Base the base expression (e.g., the x in "x.foo") of the member
+  /// access.
+  ///
+  /// \param OpLoc the location of the "." or "->" operator.
+  ///
+  /// \param IsArrow true when the operator is "->", false when it is ".".
+  virtual void CodeCompleteMemberReferenceExpr(Scope *S, ExprTy *Base,
+                                               SourceLocation OpLoc,
+                                               bool IsArrow) { }
+  
+  /// \brief Code completion for a reference to a tag.
+  ///
+  /// This code completion action is invoked when the code-completion
+  /// token is found after a tag keyword (struct, union, enum, or class).
+  ///
+  /// \param S the scope in which the tag reference occurs.
+  ///
+  /// \param TagSpec an instance of DeclSpec::TST, indicating what kind of tag
+  /// this is (struct/union/enum/class).
+  virtual void CodeCompleteTag(Scope *S, unsigned TagSpec) { }
+  
+  /// \brief Code completion for a case statement.
+  ///
+  /// \brief S the scope in which the case statement occurs.
+  virtual void CodeCompleteCase(Scope *S) { }
+  
+  /// \brief Code completion for a call.
+  ///
+  /// \brief S the scope in which the call occurs.
+  ///
+  /// \param Fn the expression describing the function being called.
+  ///
+  /// \param Args the arguments to the function call (so far).
+  ///
+  /// \param NumArgs the number of arguments in \p Args.
+  virtual void CodeCompleteCall(Scope *S, ExprTy *Fn,
+                                ExprTy **Args, unsigned NumArgs) { }
+                                
+  /// \brief Code completion for a C++ nested-name-specifier that precedes a
+  /// qualified-id of some form.
+  ///
+  /// This code completion action is invoked when the code-completion token
+  /// is found after the "::" of a nested-name-specifier.
+  ///
+  /// \param S the scope in which the nested-name-specifier occurs.
+  /// 
+  /// \param SS the scope specifier ending with "::".
+  ///
+  /// \parame EnteringContext whether we're entering the context of this
+  /// scope specifier.
+  virtual void CodeCompleteQualifiedId(Scope *S, const CXXScopeSpec &SS,
+                                       bool EnteringContext) { }
+  
+  /// \brief Code completion for a C++ "using" declaration or directive.
+  ///
+  /// This code completion action is invoked when the code-completion token is
+  /// found after the "using" keyword.
+  ///
+  /// \param S the scope in which the "using" occurs.
+  virtual void CodeCompleteUsing(Scope *S) { }
+  
+  /// \brief Code completion for a C++ using directive.
+  ///
+  /// This code completion action is invoked when the code-completion token is
+  /// found after "using namespace".
+  ///
+  /// \param S the scope in which the "using namespace" occurs.
+  virtual void CodeCompleteUsingDirective(Scope *S) { }
+  
+  /// \brief Code completion for a C++ namespace declaration or namespace
+  /// alias declaration.
+  ///
+  /// This code completion action is invoked when the code-completion token is
+  /// found after "namespace".
+  ///
+  /// \param S the scope in which the "namespace" token occurs.
+  virtual void CodeCompleteNamespaceDecl(Scope *S) { }
+
+  /// \brief Code completion for a C++ namespace alias declaration.
+  ///
+  /// This code completion action is invoked when the code-completion token is
+  /// found after "namespace identifier = ".
+  ///
+  /// \param S the scope in which the namespace alias declaration occurs.
+  virtual void CodeCompleteNamespaceAliasDecl(Scope *S) { }
+  
+  /// \brief Code completion for an operator name.
+  ///
+  /// This code completion action is invoked when the code-completion token is
+  /// found after the keyword "operator".
+  ///
+  /// \param S the scope in which the operator keyword occurs.
+  virtual void CodeCompleteOperatorName(Scope *S) { }
+  //@}
 };
 
 /// MinimalAction - Minimal actions are used by light-weight clients of the

@@ -29,23 +29,31 @@ using namespace clang::driver::toolchains;
 /// Darwin - Darwin tool chain for i386 and x86_64.
 
 Darwin::Darwin(const HostInfo &Host, const llvm::Triple& Triple,
-               const unsigned (&_DarwinVersion)[3],
-               const unsigned (&_GCCVersion)[3],
-               bool _IsIPhone)
-  : ToolChain(Host, Triple) {
+               const unsigned (&_DarwinVersion)[3], bool _IsIPhoneOS)
+  : ToolChain(Host, Triple),
+    IsIPhoneOS(_IsIPhoneOS)
+{
   DarwinVersion[0] = _DarwinVersion[0];
   DarwinVersion[1] = _DarwinVersion[1];
   DarwinVersion[2] = _DarwinVersion[2];
-  GCCVersion[0] = _GCCVersion[0];
-  GCCVersion[1] = _GCCVersion[1];
-  GCCVersion[2] = _GCCVersion[2];
-  IsIPhone = _IsIPhone;
 
   llvm::raw_string_ostream(MacosxVersionMin)
     << "10." << DarwinVersion[0] - 4 << '.' << DarwinVersion[1];
 
   // FIXME: Lift default up.
   IPhoneOSVersionMin = "3.0";
+}
+
+DarwinGCC::DarwinGCC(const HostInfo &Host, const llvm::Triple& Triple,
+                     const unsigned (&DarwinVersion)[3],
+                     const unsigned (&_GCCVersion)[3], bool IsIPhoneOS)
+  : Darwin(Host, Triple, DarwinVersion, IsIPhoneOS)
+{
+  GCCVersion[0] = _GCCVersion[0];
+  GCCVersion[1] = _GCCVersion[1];
+  GCCVersion[2] = _GCCVersion[2];
+
+  // Set up the tool chain paths to match gcc.
 
   ToolChainDir = "i686-apple-darwin";
   ToolChainDir += llvm::utostr(DarwinVersion[0]);
@@ -60,32 +68,32 @@ Darwin::Darwin(const HostInfo &Host, const llvm::Triple& Triple,
   if (getArchName() == "x86_64") {
     Path = getHost().getDriver().Dir;
     Path += "/../lib/gcc/";
-    Path += getToolChainDir();
+    Path += ToolChainDir;
     Path += "/x86_64";
     getFilePaths().push_back(Path);
 
     Path = "/usr/lib/gcc/";
-    Path += getToolChainDir();
+    Path += ToolChainDir;
     Path += "/x86_64";
     getFilePaths().push_back(Path);
   }
 
   Path = getHost().getDriver().Dir;
   Path += "/../lib/gcc/";
-  Path += getToolChainDir();
+  Path += ToolChainDir;
   getFilePaths().push_back(Path);
 
   Path = "/usr/lib/gcc/";
-  Path += getToolChainDir();
+  Path += ToolChainDir;
   getFilePaths().push_back(Path);
 
   Path = getHost().getDriver().Dir;
   Path += "/../libexec/gcc/";
-  Path += getToolChainDir();
+  Path += ToolChainDir;
   getProgramPaths().push_back(Path);
 
   Path = "/usr/libexec/gcc/";
-  Path += getToolChainDir();
+  Path += ToolChainDir;
   getProgramPaths().push_back(Path);
 
   Path = getHost().getDriver().Dir;
@@ -134,6 +142,127 @@ Tool &Darwin::SelectTool(const Compilation &C, const JobAction &JA) const {
   return *T;
 }
 
+void DarwinGCC::AddLinkSearchPathArgs(const ArgList &Args,
+                                      ArgStringList &CmdArgs) const {
+  // FIXME: Derive these correctly.
+  if (getArchName() == "x86_64") {
+    CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir +
+                                         "/x86_64"));
+    // Intentionally duplicated for (temporary) gcc bug compatibility.
+    CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir +
+                                         "/x86_64"));
+  }
+  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/" + ToolChainDir));
+  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir));
+  // Intentionally duplicated for (temporary) gcc bug compatibility.
+  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir));
+  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir +
+                                       "/../../../" + ToolChainDir));
+  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + ToolChainDir +
+                                       "/../../.."));
+}
+
+void DarwinGCC::AddLinkRuntimeLibArgs(const ArgList &Args,
+                                      ArgStringList &CmdArgs) const {
+  unsigned MacosxVersionMin[3];
+  getMacosxVersionMin(Args, MacosxVersionMin);
+
+  // Derived from libgcc and lib specs but refactored.
+  if (Args.hasArg(options::OPT_static)) {
+    CmdArgs.push_back("-lgcc_static");
+  } else {
+    if (Args.hasArg(options::OPT_static_libgcc)) {
+      CmdArgs.push_back("-lgcc_eh");
+    } else if (Args.hasArg(options::OPT_miphoneos_version_min_EQ)) {
+      // Derived from darwin_iphoneos_libgcc spec.
+      if (isIPhoneOS()) {
+        CmdArgs.push_back("-lgcc_s.1");
+      } else {
+        CmdArgs.push_back("-lgcc_s.10.5");
+      }
+    } else if (Args.hasArg(options::OPT_shared_libgcc) ||
+               // FIXME: -fexceptions -fno-exceptions means no exceptions
+               Args.hasArg(options::OPT_fexceptions) ||
+               Args.hasArg(options::OPT_fgnu_runtime)) {
+      // FIXME: This is probably broken on 10.3?
+      if (isMacosxVersionLT(MacosxVersionMin, 10, 5))
+        CmdArgs.push_back("-lgcc_s.10.4");
+      else if (isMacosxVersionLT(MacosxVersionMin, 10, 6))
+        CmdArgs.push_back("-lgcc_s.10.5");
+    } else {
+      if (isMacosxVersionLT(MacosxVersionMin, 10, 3, 9))
+        ; // Do nothing.
+      else if (isMacosxVersionLT(MacosxVersionMin, 10, 5))
+        CmdArgs.push_back("-lgcc_s.10.4");
+      else if (isMacosxVersionLT(MacosxVersionMin, 10, 6))
+        CmdArgs.push_back("-lgcc_s.10.5");
+    }
+
+    if (isIPhoneOS() || isMacosxVersionLT(MacosxVersionMin, 10, 6)) {
+      CmdArgs.push_back("-lgcc");
+      CmdArgs.push_back("-lSystem");
+    } else {
+      CmdArgs.push_back("-lSystem");
+      CmdArgs.push_back("-lgcc");
+    }
+  }
+}
+
+DarwinClang::DarwinClang(const HostInfo &Host, const llvm::Triple& Triple,
+                         const unsigned (&DarwinVersion)[3],
+                         bool IsIPhoneOS)
+  : Darwin(Host, Triple, DarwinVersion, IsIPhoneOS)
+{
+  // We expect 'as', 'ld', etc. to be adjacent to our install dir.
+  getProgramPaths().push_back(getHost().getDriver().Dir);
+}
+
+void DarwinClang::AddLinkSearchPathArgs(const ArgList &Args,
+                                       ArgStringList &CmdArgs) const {
+  // The Clang toolchain uses explicit paths for internal libraries.
+}
+
+void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
+                                        ArgStringList &CmdArgs) const {
+  // Check for static linking.
+  if (Args.hasArg(options::OPT_static)) {
+    // FIXME: We need to have compiler-rt available (perhaps as
+    // libclang_static.a) to link against.
+    return;
+  }
+
+  // Reject -static-libgcc for now, we can deal with this when and if someone
+  // cares. This is useful in situations where someone wants to statically link
+  // something like libstdc++, and needs its runtime support routines.
+  if (const Arg *A = Args.getLastArg(options::OPT_static_libgcc)) {
+    getHost().getDriver().Diag(clang::diag::err_drv_unsupported_opt)
+      << A->getAsString(Args);
+    return;
+  }
+
+  // Otherwise link libSystem, which should have the support routines.
+  //
+  // FIXME: This is only true for 10.6 and beyond. Legacy support isn't
+  // critical, but it should work... we should just link in the static
+  // compiler-rt library.
+  CmdArgs.push_back("-lSystem");
+}
+
+void Darwin::getMacosxVersionMin(const ArgList &Args,
+                                 unsigned (&Res)[3]) const {
+  if (Arg *A = Args.getLastArg(options::OPT_mmacosx_version_min_EQ)) {
+    bool HadExtra;
+    if (!Driver::GetReleaseVersion(A->getValue(Args), Res[0], Res[1], Res[2],
+                                   HadExtra) ||
+        HadExtra) {
+      const Driver &D = getHost().getDriver();
+      D.Diag(clang::diag::err_drv_invalid_version_number)
+        << A->getAsString(Args);
+    }
+  } else
+    return getMacosxVersion(Res);
+}
+
 DerivedArgList *Darwin::TranslateArgs(InputArgList &Args,
                                       const char *BoundArch) const {
   DerivedArgList *DAL = new DerivedArgList(Args, false);
@@ -159,7 +288,7 @@ DerivedArgList *Darwin::TranslateArgs(InputArgList &Args,
     //
     // FIXME: Are there iPhone overrides for this?
 
-    if (!isIPhone()) {
+    if (!isIPhoneOS()) {
       // Look for MACOSX_DEPLOYMENT_TARGET, otherwise use the version
       // from the host.
       const char *Version = ::getenv("MACOSX_DEPLOYMENT_TARGET");

@@ -200,6 +200,11 @@ static prec::Level getBinOpPrecedence(tok::TokenKind Kind,
 ///         expression ',' assignment-expression
 ///
 Parser::OwningExprResult Parser::ParseExpression() {
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteOrdinaryName(CurScope);
+    ConsumeToken();
+  }
+
   OwningExprResult LHS(ParseAssignmentExpression());
   if (LHS.isInvalid()) return move(LHS);
 
@@ -894,8 +899,14 @@ Parser::ParsePostfixExpressionSuffix(OwningExprResult LHS) {
 
       Loc = ConsumeParen();
 
+      if (Tok.is(tok::code_completion)) {
+        Actions.CodeCompleteCall(CurScope, LHS.get(), 0, 0);
+        ConsumeToken();
+      }
+      
       if (Tok.isNot(tok::r_paren)) {
-        if (ParseExpressionList(ArgExprs, CommaLocs)) {
+        if (ParseExpressionList(ArgExprs, CommaLocs, &Action::CodeCompleteCall,
+                                LHS.get())) {
           SkipUntil(tok::r_paren);
           return ExprError();
         }
@@ -935,6 +946,14 @@ Parser::ParsePostfixExpressionSuffix(OwningExprResult LHS) {
         ParseOptionalCXXScopeSpecifier(SS, ObjectType, false);
       }
 
+      if (Tok.is(tok::code_completion)) {
+        // Code completion for a member access expression.
+        Actions.CodeCompleteMemberReferenceExpr(CurScope, LHS.get(),
+                                                OpLoc, OpKind == tok::arrow);
+        
+        ConsumeToken();
+      }
+      
       if (Tok.is(tok::identifier)) {
         if (!LHS.isInvalid())
           LHS = Actions.ActOnMemberReferenceExpr(CurScope, move(LHS), OpLoc,
@@ -1495,8 +1514,19 @@ Parser::OwningExprResult Parser::ParseStringLiteralExpression() {
 /// [C++]   assignment-expression
 /// [C++]   expression-list , assignment-expression
 ///
-bool Parser::ParseExpressionList(ExprListTy &Exprs, CommaLocsTy &CommaLocs) {
+bool Parser::ParseExpressionList(ExprListTy &Exprs, CommaLocsTy &CommaLocs,
+                                 void (Action::*Completer)(Scope *S, 
+                                                           void *Data,
+                                                           ExprTy **Args,
+                                                           unsigned NumArgs),
+                                 void *Data) {
   while (1) {
+    if (Tok.is(tok::code_completion)) {
+      if (Completer)
+        (Actions.*Completer)(CurScope, Data, Exprs.data(), Exprs.size());
+      ConsumeToken();
+    }
+    
     OwningExprResult Expr(ParseAssignmentExpression());
     if (Expr.isInvalid())
       return true;

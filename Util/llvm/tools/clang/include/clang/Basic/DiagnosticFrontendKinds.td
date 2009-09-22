@@ -15,6 +15,8 @@ def err_fe_unknown_target_abi : Error<"unknown target ABI '%0'">;
 def err_fe_error_reading : Error<"error reading '%0'">;
 def err_fe_error_reading_stdin : Error<"error reading stdin">;
 def err_fe_error_backend : Error<"error in backend: %0">, DefaultFatal;
+def err_fe_invalid_ast_file : Error<"invalid AST file: '%0'">, DefaultFatal;
+def err_fe_invalid_ast_action : Error<"invalid action for AST input">, DefaultFatal;
 
 def note_fixit_applied : Note<"FIX-IT applied suggested code changes">;
 def note_fixit_in_macro : Note<
@@ -71,7 +73,7 @@ def warn_pch_altivec : Error<
 def warn_pch_opencl : Error<
     "OpenCL language extensions were %select{disabled|enabled}0 in PCH file "
     "but are currently %select{disabled|enabled}1">;
-    def warn_elide_constructors : Error<
+def warn_pch_elide_constructors : Error<
     "Elidable copy constructors were %select{disabled|enabled}0 in PCH file "
     "but are currently %select{disabled|enabled}1">;
 def warn_pch_exceptions : Error<
@@ -93,6 +95,9 @@ def warn_pch_thread_safe_statics : Error<
 def warn_pch_posix_threads : Error<
     "PCH file was compiled %select{without|with}0 POSIX thread support but "
     "POSIX threads are currently %select{disabled|enabled}1">;
+def warn_pch_stack_protector : Error<
+    "stack protector was %select{off|on|required}0 in PCH file but "
+    "is currently %select{off|on|required}1">;
 def warn_pch_blocks : Error<
     "blocks were %select{disabled|enabled}0 in PCH file but "
     "are currently %select{disabled|enabled}1">;

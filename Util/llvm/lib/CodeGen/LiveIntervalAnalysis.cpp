@@ -109,18 +109,15 @@ void LiveIntervals::releaseMemory() {
 }
 
 static bool CanTurnIntoImplicitDef(MachineInstr *MI, unsigned Reg,
-                                   const TargetInstrInfo *tii_) {
+                                   unsigned OpIdx, const TargetInstrInfo *tii_){
   unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
   if (tii_->isMoveInstr(*MI, SrcReg, DstReg, SrcSubReg, DstSubReg) &&
       Reg == SrcReg)
     return true;
 
-  if ((MI->getOpcode() == TargetInstrInfo::INSERT_SUBREG ||
-       MI->getOpcode() == TargetInstrInfo::SUBREG_TO_REG) &&
-      MI->getOperand(2).getReg() == Reg)
+  if (OpIdx == 2 && MI->getOpcode() == TargetInstrInfo::SUBREG_TO_REG)
     return true;
-  if (MI->getOpcode() == TargetInstrInfo::EXTRACT_SUBREG &&
-      MI->getOperand(1).getReg() == Reg)
+  if (OpIdx == 1 && MI->getOpcode() == TargetInstrInfo::EXTRACT_SUBREG)
     return true;
   return false;
 }
@@ -148,6 +145,20 @@ void LiveIntervals::processImplicitDefs() {
         continue;
       }
 
+      if (MI->getOpcode() == TargetInstrInfo::INSERT_SUBREG) {
+        MachineOperand &MO = MI->getOperand(2);
+        if (ImpDefRegs.count(MO.getReg())) {
+          // %reg1032<def> = INSERT_SUBREG %reg1032, undef, 2
+          // This is an identity copy, eliminate it now.
+          if (MO.isKill()) {
+            LiveVariables::VarInfo& vi = lv_->getVarInfo(MO.getReg());
+            vi.removeKill(MI);
+          }
+          MI->eraseFromParent();
+          continue;
+        }
+      }
+
       bool ChangedToImpDef = false;
       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
         MachineOperand& MO = MI->getOperand(i);
@@ -159,13 +170,16 @@ void LiveIntervals::processImplicitDefs() {
         if (!ImpDefRegs.count(Reg))
           continue;
         // Use is a copy, just turn it into an implicit_def.
-        if (CanTurnIntoImplicitDef(MI, Reg, tii_)) {
+        if (CanTurnIntoImplicitDef(MI, Reg, i, tii_)) {
           bool isKill = MO.isKill();
           MI->setDesc(tii_->get(TargetInstrInfo::IMPLICIT_DEF));
           for (int j = MI->getNumOperands() - 1, ee = 0; j > ee; --j)
             MI->RemoveOperand(j);
-          if (isKill)
+          if (isKill) {
             ImpDefRegs.erase(Reg);
+            LiveVariables::VarInfo& vi = lv_->getVarInfo(Reg);
+            vi.removeKill(MI);
+          }
           ChangedToImpDef = true;
           break;
         }
@@ -665,7 +679,8 @@ void LiveIntervals::handleVirtualRegisterDef(MachineBasicBlock *mbb,
   if (interval.empty()) {
     // Get the Idx of the defining instructions.
     MachineInstrIndex defIndex = getDefIndex(MIIdx);
-    // Earlyclobbers move back one.
+    // Earlyclobbers move back one, so that they overlap the live range
+    // of inputs.
     if (MO.isEarlyClobber())
       defIndex = getUseIndex(MIIdx);
     VNInfo *ValNo;
@@ -690,6 +705,11 @@ void LiveIntervals::handleVirtualRegisterDef(MachineBasicBlock *mbb,
       MachineInstrIndex killIdx;
       if (vi.Kills[0] != mi)
         killIdx = getNextSlot(getUseIndex(getInstructionIndex(vi.Kills[0])));
+      else if (MO.isEarlyClobber())
+        // Earlyclobbers that die in this instruction move up one extra, to
+        // compensate for having the starting point moved back one.  This
+        // gets them to overlap the live range of other outputs.
+        killIdx = getNextSlot(getNextSlot(defIndex));
       else
         killIdx = getNextSlot(defIndex);
 
@@ -732,8 +752,7 @@ void LiveIntervals::handleVirtualRegisterDef(MachineBasicBlock *mbb,
       MachineInstr *Kill = vi.Kills[i];
       MachineInstrIndex killIdx =
         getNextSlot(getUseIndex(getInstructionIndex(Kill)));
-      LiveRange LR(getMBBStartIdx(Kill->getParent()),
-                   killIdx, ValNo);
+      LiveRange LR(getMBBStartIdx(Kill->getParent()), killIdx, ValNo);
       interval.addRange(LR);
       ValNo->addKill(killIdx);
       DEBUG(errs() << " +" << LR);
@@ -791,7 +810,9 @@ void LiveIntervals::handleVirtualRegisterDef(MachineBasicBlock *mbb,
       // range covering the def slot.
       if (MO.isDead())
         interval.addRange(
-          LiveRange(RedefIndex, getNextSlot(RedefIndex), OldValNo));
+          LiveRange(RedefIndex, MO.isEarlyClobber() ?
+                                getNextSlot(getNextSlot(RedefIndex)) :
+                                getNextSlot(RedefIndex), OldValNo));
 
       DEBUG({
           errs() << " RESULT: ";
@@ -892,9 +913,14 @@ void LiveIntervals::handlePhysicalRegisterDef(MachineBasicBlock *MBB,
   // If it is not used after definition, it is considered dead at
   // the instruction defining it. Hence its interval is:
   // [defSlot(def), defSlot(def)+1)
+  // For earlyclobbers, the defSlot was pushed back one; the extra
+  // advance below compensates.
   if (MO.isDead()) {
     DEBUG(errs() << " dead");
-    end = getNextSlot(start);
+    if (MO.isEarlyClobber())
+      end = getNextSlot(getNextSlot(start));
+    else
+      end = getNextSlot(start);
     goto exit;
   }
 

@@ -237,7 +237,7 @@ namespace llvm {
 
       // ADD, SUB, SMUL, UMUL, etc. - Arithmetic operations with FLAGS results.
       ADD, SUB, SMUL, UMUL,
-      INC, DEC,
+      INC, DEC, OR, XOR, AND,
 
       // MUL_IMM - X86 specific multiply by immediate.
       MUL_IMM,
@@ -413,7 +413,8 @@ namespace llvm {
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                  MachineBasicBlock *MBB) const;
+                                                         MachineBasicBlock *MBB,
+                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
 
  
     /// getTargetNodeName - This method returns the name of a target specific
@@ -695,15 +696,15 @@ namespace llvm {
     
     /// Utility function to emit string processing sse4.2 instructions
     /// that return in xmm0.
-    // This takes the instruction to expand, the associated machine basic
-    // block, the number of args, and whether or not the second arg is
-    // in memory or not.
+    /// This takes the instruction to expand, the associated machine basic
+    /// block, the number of args, and whether or not the second arg is
+    /// in memory or not.
     MachineBasicBlock *EmitPCMP(MachineInstr *BInstr, MachineBasicBlock *BB,
 				unsigned argNum, bool inMem) const;
 
     /// Utility function to emit atomic bitwise operations (and, or, xor).
-    // It takes the bitwise instruction to expand, the associated machine basic
-    // block, and the associated X86 opcodes for reg/reg and reg/imm.
+    /// It takes the bitwise instruction to expand, the associated machine basic
+    /// block, and the associated X86 opcodes for reg/reg and reg/imm.
     MachineBasicBlock *EmitAtomicBitwiseWithCustomInserter(
                                                     MachineInstr *BInstr,
                                                     MachineBasicBlock *BB,
@@ -739,7 +740,8 @@ namespace llvm {
                                                    MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredSelect(MachineInstr *I,
-                                         MachineBasicBlock *BB) const;
+                                         MachineBasicBlock *BB,
+                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
     
     /// Emit nodes that will be selected as "test Op0,Op0", or something
     /// equivalent, for use with the given x86 condition code.

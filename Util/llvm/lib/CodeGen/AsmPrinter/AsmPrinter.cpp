@@ -106,6 +106,9 @@ bool AsmPrinter::doInitialization(Module &M) {
   
   if (MAI->doesAllowQuotesInName())
     Mang->setUseQuotes(true);
+
+  if (MAI->doesAllowNameToStartWithDigit())
+    Mang->setSymbolsCanStartWithDigit(true);
   
   GCModuleInfo *MI = getAnalysisIfAvailable<GCModuleInfo>();
   assert(MI && "AsmPrinter didn't require GCModuleInfo?");
@@ -205,6 +208,11 @@ bool AsmPrinter::doFinalization(Module &M) {
     if (MAI->getNonexecutableStackDirective())
       O << MAI->getNonexecutableStackDirective() << '\n';
 
+  
+  // Allow the target to emit any magic that it wants at the end of the file,
+  // after everything else has gone out.
+  EmitEndOfAsmFile(M);
+  
   delete Mang; Mang = 0;
   DW = 0; MMI = 0;
   

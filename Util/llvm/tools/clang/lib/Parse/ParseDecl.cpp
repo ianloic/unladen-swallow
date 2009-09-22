@@ -710,6 +710,11 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
                                         const ParsedTemplateInfo &TemplateInfo,
                                         AccessSpecifier AS,
                                         DeclSpecContext DSContext) {
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteOrdinaryName(CurScope);
+    ConsumeToken();
+  }
+  
   DS.SetRangeStart(Tok.getLocation());
   while (1) {
     bool isInvalid = false;
@@ -1589,7 +1594,12 @@ void Parser::ParseStructUnionBody(SourceLocation RecordLoc,
 void Parser::ParseEnumSpecifier(SourceLocation StartLoc, DeclSpec &DS,
                                 AccessSpecifier AS) {
   // Parse the tag portion of this.
-
+  if (Tok.is(tok::code_completion)) {
+    // Code completion for an enum name.
+    Actions.CodeCompleteTag(CurScope, DeclSpec::TST_enum);
+    ConsumeToken();
+  }
+  
   AttributeList *Attr = 0;
   // If attributes exist after tag, parse them.
   if (Tok.is(tok::kw___attribute))

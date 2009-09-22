@@ -139,7 +139,8 @@ public:
                            bool isCategoryImpl,
                            llvm::Value *Receiver,
                            bool IsClassMessage,
-                           const CallArgList &CallArgs);
+                           const CallArgList &CallArgs,
+                           const ObjCMethodDecl *Method);
   virtual llvm::Value *GetClass(CGBuilderTy &Builder,
                                 const ObjCInterfaceDecl *OID);
   virtual llvm::Value *GetSelector(CGBuilderTy &Builder, Selector Sel);
@@ -364,7 +365,8 @@ CGObjCGNU::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
                                     bool isCategoryImpl,
                                     llvm::Value *Receiver,
                                     bool IsClassMessage,
-                                    const CallArgList &CallArgs) {
+                                    const CallArgList &CallArgs,
+                                    const ObjCMethodDecl *Method) {
   llvm::Value *cmd = GetSelector(CGF.Builder, Sel);
 
   CallArgList ActualArgs;
@@ -378,7 +380,8 @@ CGObjCGNU::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
 
   CodeGenTypes &Types = CGM.getTypes();
   const CGFunctionInfo &FnInfo = Types.getFunctionInfo(ResultType, ActualArgs);
-  const llvm::FunctionType *impType = Types.GetFunctionType(FnInfo, false);
+  const llvm::FunctionType *impType =
+    Types.GetFunctionType(FnInfo, Method ? Method->isVariadic() : false);
 
   llvm::Value *ReceiverClass = 0;
   if (isCategoryImpl) {
@@ -476,7 +479,8 @@ CGObjCGNU::GenerateMessageSend(CodeGen::CodeGenFunction &CGF,
 
   CodeGenTypes &Types = CGM.getTypes();
   const CGFunctionInfo &FnInfo = Types.getFunctionInfo(ResultType, ActualArgs);
-  const llvm::FunctionType *impType = Types.GetFunctionType(FnInfo, false);
+  const llvm::FunctionType *impType =
+    Types.GetFunctionType(FnInfo, Method ? Method->isVariadic() : false);
 
   llvm::Value *imp;
   // For sender-aware dispatch, we pass the sender as the third argument to a
@@ -913,7 +917,7 @@ void CGObjCGNU::GenerateProtocol(const ObjCProtocolDecl *PD) {
     {llvm::ConstantInt::get(IntTy, Properties.size()), NULLPtr, PropertyArray};
 
   llvm::Constant *PropertyListInit =
-      llvm::ConstantStruct::get(VMContext, PropertyListInitFields, 3);
+      llvm::ConstantStruct::get(VMContext, PropertyListInitFields, 3, false);
   llvm::Constant *PropertyList = new llvm::GlobalVariable(TheModule,
       PropertyListInit->getType(), false, llvm::GlobalValue::InternalLinkage,
       PropertyListInit, ".objc_property_list");
@@ -926,7 +930,7 @@ void CGObjCGNU::GenerateProtocol(const ObjCProtocolDecl *PD) {
       OptionalPropertyArray };
 
   llvm::Constant *OptionalPropertyListInit =
-      llvm::ConstantStruct::get(VMContext, OptionalPropertyListInitFields, 3);
+      llvm::ConstantStruct::get(VMContext, OptionalPropertyListInitFields, 3, false);
   llvm::Constant *OptionalPropertyList = new llvm::GlobalVariable(TheModule,
           OptionalPropertyListInit->getType(), false,
           llvm::GlobalValue::InternalLinkage, OptionalPropertyListInit,
@@ -1124,7 +1128,7 @@ llvm::Constant *CGObjCGNU::GeneratePropertyList(const ObjCImplementationDecl *OI
     {llvm::ConstantInt::get(IntTy, Properties.size()), NULLPtr, PropertyArray};
 
   llvm::Constant *PropertyListInit =
-      llvm::ConstantStruct::get(VMContext, PropertyListInitFields, 3);
+      llvm::ConstantStruct::get(VMContext, PropertyListInitFields, 3, false);
   return new llvm::GlobalVariable(TheModule, PropertyListInit->getType(), false,
           llvm::GlobalValue::InternalLinkage, PropertyListInit,
           ".objc_property_list");
@@ -1530,7 +1534,7 @@ llvm::Function *CGObjCGNU::GenerateMethod(const ObjCMethodDecl *OMD,
   std::string FunctionName = SymbolNameForMethod(ClassName, CategoryName,
       MethodName, isClassMethod);
 
-  llvm::Function *Method 
+  llvm::Function *Method
     = llvm::Function::Create(MethodTy,
                              llvm::GlobalValue::InternalLinkage,
                              FunctionName,
@@ -1684,10 +1688,10 @@ void CGObjCGNU::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
 
         // All other types should be Objective-C interface pointer types.
         const ObjCObjectPointerType *OPT =
-          CatchDecl->getType()->getAsObjCObjectPointerType();
+          CatchDecl->getType()->getAs<ObjCObjectPointerType>();
         assert(OPT && "Invalid @catch type.");
         const ObjCInterfaceType *IT =
-          OPT->getPointeeType()->getAsObjCInterfaceType();
+          OPT->getPointeeType()->getAs<ObjCInterfaceType>();
         assert(IT && "Invalid @catch type.");
         llvm::Value *EHType =
           MakeConstantString(IT->getDecl()->getNameAsString());
@@ -1923,7 +1927,7 @@ LValue CGObjCGNU::EmitObjCValueForIvar(CodeGen::CodeGenFunction &CGF,
                                        llvm::Value *BaseValue,
                                        const ObjCIvarDecl *Ivar,
                                        unsigned CVRQualifiers) {
-  const ObjCInterfaceDecl *ID = ObjectTy->getAsObjCInterfaceType()->getDecl();
+  const ObjCInterfaceDecl *ID = ObjectTy->getAs<ObjCInterfaceType>()->getDecl();
   return EmitValueForIvarAtOffset(CGF, ID, BaseValue, Ivar, CVRQualifiers,
                                   EmitIvarOffset(CGF, ID, Ivar));
 }

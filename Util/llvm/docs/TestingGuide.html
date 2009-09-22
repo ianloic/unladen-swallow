@@ -595,6 +595,36 @@ directive in a file.</p>
 </div>
 
 <!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"><a 
+name="FileCheck-CHECK-NOT">The "CHECK-NOT:" directive</a></div>
+
+<div class="doc_text">
+
+<p>The CHECK-NOT: directive is used to verify that a string doesn't occur
+between two matches (or the first match and the beginning of the file).  For
+example, to verify that a load is removed by a transformation, a test like this
+can be used:</p>
+
+<div class="doc_code">
+<pre>
+define i8 @coerce_offset0(i32 %V, i32* %P) {
+  store i32 %V, i32* %P
+   
+  %P2 = bitcast i32* %P to i8*
+  %P3 = getelementptr i8* %P2, i32 2
+
+  %A = load i8* %P3
+  ret i8 %A
+; <b>CHECK:</b> @coerce_offset0
+; <b>CHECK-NOT:</b> load
+; <b>CHECK:</b> ret i8
+}
+</pre>
+</div>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
 <div class="doc_subsection"><a name="dgvars">Variables and
 substitutions</a></div>
 <!-- _______________________________________________________________________ -->
@@ -1114,7 +1144,7 @@ know. Thanks!</p>
 
   John T. Criswell, Reid Spencer, and Tanya Lattner<br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-09-09 21:56:59 -0700 (Wed, 09 Sep 2009) $
+  Last modified: $Date: 2009-09-20 15:45:18 -0700 (Sun, 20 Sep 2009) $
 </address>
 </body>
 </html>

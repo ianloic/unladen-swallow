@@ -51,7 +51,7 @@ std::string PredefinedExpr::ComputeName(ASTContext &Context, IdentType IT,
 
     std::string Proto = FD->getQualifiedNameAsString(Policy);
 
-    const FunctionType *AFT = FD->getType()->getAsFunctionType();
+    const FunctionType *AFT = FD->getType()->getAs<FunctionType>();
     const FunctionProtoType *FT = 0;
     if (FD->hasWrittenPrototype())
       FT = dyn_cast<FunctionProtoType>(AFT);
@@ -159,14 +159,14 @@ void StringLiteral::DoDestroy(ASTContext &C) {
   Expr::DoDestroy(C);
 }
 
-void StringLiteral::setStrData(ASTContext &C, const char *Str, unsigned Len) {
+void StringLiteral::setString(ASTContext &C, llvm::StringRef Str) {
   if (StrData)
     C.Deallocate(const_cast<char*>(StrData));
 
-  char *AStrData = new (C, 1) char[Len];
-  memcpy(AStrData, Str, Len);
+  char *AStrData = new (C, 1) char[Str.size()];
+  memcpy(AStrData, Str.data(), Str.size());
   StrData = AStrData;
-  ByteLength = Len;
+  ByteLength = Str.size();
 }
 
 /// getOpcodeStr - Turn an Opcode enum value into the punctuation char it
@@ -335,7 +335,7 @@ QualType CallExpr::getCallReturnType() const {
   else if (const BlockPointerType *BPT = CalleeType->getAs<BlockPointerType>())
     CalleeType = BPT->getPointeeType();
 
-  const FunctionType *FnType = CalleeType->getAsFunctionType();
+  const FunctionType *FnType = CalleeType->getAs<FunctionType>();
   return FnType->getResultType();
 }
 
@@ -575,7 +575,7 @@ Expr *InitListExpr::updateInit(unsigned Init, Expr *expr) {
 ///
 const FunctionType *BlockExpr::getFunctionType() const {
   return getType()->getAs<BlockPointerType>()->
-                    getPointeeType()->getAsFunctionType();
+                    getPointeeType()->getAs<FunctionType>();
 }
 
 SourceLocation BlockExpr::getCaretLocation() const {
@@ -1069,14 +1069,14 @@ Expr::isModifiableLvalue(ASTContext &Ctx, SourceLocation *Loc) const {
     if (!BDR->isByRef() && isa<VarDecl>(BDR->getDecl()))
       return MLV_NotBlockQualified;
   }
-  
+
   // Assigning to an 'implicit' property?
-  if (const ObjCImplicitSetterGetterRefExpr* Expr = 
+  if (const ObjCImplicitSetterGetterRefExpr* Expr =
         dyn_cast<ObjCImplicitSetterGetterRefExpr>(this)) {
     if (Expr->getSetterMethod() == 0)
       return MLV_NoSetterProperty;
   }
-  
+
   QualType CT = Ctx.getCanonicalType(getType());
 
   if (CT.isConstQualified())
@@ -1117,8 +1117,10 @@ bool Expr::isOBJCGCCandidate(ASTContext &Ctx) const {
       if (VD->hasGlobalStorage())
         return true;
       QualType T = VD->getType();
-      // dereferencing to a pointer is always a gc'able candidate
-      return T->isPointerType();
+      // dereferencing to a  pointer is always a gc'able candidate,
+      // unless it is __weak.
+      return T->isPointerType() &&
+             (Ctx.getObjCGCAttrKind(T) != QualType::Weak);
     }
     return false;
   }
@@ -1369,11 +1371,11 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
   case Expr::NoStmtClass:
   case Expr::ExprClass:
     return ICEDiag(2, E->getLocStart());
-      
+
   case Expr::GNUNullExprClass:
     // GCC considers the GNU __null value to be an integral constant expression.
     return NoDiag();
-      
+
   case Expr::ParenExprClass:
     return CheckICE(cast<ParenExpr>(E)->getSubExpr(), Ctx);
   case Expr::IntegerLiteralClass:
@@ -1429,7 +1431,7 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
     case UnaryOperator::AddrOf:
     case UnaryOperator::Deref:
       return ICEDiag(2, E->getLocStart());
-        
+
     case UnaryOperator::Extension:
     case UnaryOperator::LNot:
     case UnaryOperator::Plus:
@@ -1471,7 +1473,7 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
     case BinaryOperator::XorAssign:
     case BinaryOperator::OrAssign:
       return ICEDiag(2, E->getLocStart());
-        
+
     case BinaryOperator::Mul:
     case BinaryOperator::Div:
     case BinaryOperator::Rem:
@@ -1599,7 +1601,7 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
     return CheckICE(cast<ChooseExpr>(E)->getChosenSubExpr(Ctx), Ctx);
   }
   }
-  
+
   // Silence a GCC warning
   return ICEDiag(2, E->getLocStart());
 }
@@ -1624,6 +1626,9 @@ bool Expr::isIntegerConstantExpr(llvm::APSInt &Result, ASTContext &Ctx,
 /// integer constant expression with the value zero, or if this is one that is
 /// cast to void*.
 bool Expr::isNullPointerConstant(ASTContext &Ctx) const {
+  // Ignore value dependent expressions.
+  assert(!isValueDependent() && "Unexpect value dependent expression!");
+
   // Strip off a cast to void*, if it exists. Except in C++.
   if (const ExplicitCastExpr *CE = dyn_cast<ExplicitCastExpr>(this)) {
     if (!Ctx.getLangOptions().CPlusPlus) {
@@ -1688,7 +1693,7 @@ bool ExtVectorElementExpr::isArrow() const {
 }
 
 unsigned ExtVectorElementExpr::getNumElements() const {
-  if (const VectorType *VT = getType()->getAsVectorType())
+  if (const VectorType *VT = getType()->getAs<VectorType>())
     return VT->getNumElements();
   return 1;
 }

@@ -143,7 +143,7 @@ unsigned CodeGenFunction::getAccessedFieldNo(unsigned Idx,
 RValue CodeGenFunction::GetUndefRValue(QualType Ty) {
   if (Ty->isVoidType()) {
     return RValue::get(0);
-  } else if (const ComplexType *CTy = Ty->getAsComplexType()) {
+  } else if (const ComplexType *CTy = Ty->getAs<ComplexType>()) {
     const llvm::Type *EltTy = ConvertType(CTy->getElementType());
     llvm::Value *U = llvm::UndefValue::get(EltTy);
     return RValue::getComplex(std::make_pair(U, U));
@@ -420,7 +420,7 @@ RValue CodeGenFunction::EmitLoadOfExtVectorElementLValue(LValue LV,
 
   // If the result of the expression is a non-vector type, we must be extracting
   // a single element.  Just codegen as an extractelement.
-  const VectorType *ExprVT = ExprType->getAsVectorType();
+  const VectorType *ExprVT = ExprType->getAs<VectorType>();
   if (!ExprVT) {
     unsigned InIdx = getAccessedFieldNo(0, Elts);
     llvm::Value *Elt = llvm::ConstantInt::get(
@@ -492,17 +492,9 @@ void CodeGenFunction::EmitStoreThroughLValue(RValue Src, LValue Dst,
     // load of a __strong object.
     llvm::Value *LvalueDst = Dst.getAddress();
     llvm::Value *src = Src.getScalarVal();
-#if 0
-    // FIXME: We cannot positively determine if we have an 'ivar' assignment,
-    // object assignment or an unknown assignment. For now, generate call to
-    // objc_assign_strongCast assignment which is a safe, but consevative
-    // assumption.
     if (Dst.isObjCIvar())
       CGM.getObjCRuntime().EmitObjCIvarAssign(*this, src, LvalueDst);
-    else
-      CGM.getObjCRuntime().EmitObjCGlobalAssign(*this, src, LvalueDst);
-#endif
-    if (Dst.isGlobalObjCRef())
+    else if (Dst.isGlobalObjCRef())
       CGM.getObjCRuntime().EmitObjCGlobalAssign(*this, src, LvalueDst);
     else
       CGM.getObjCRuntime().EmitObjCStrongCastAssign(*this, src, LvalueDst);
@@ -627,7 +619,7 @@ void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
 
   llvm::Value *SrcVal = Src.getScalarVal();
 
-  if (const VectorType *VTy = Ty->getAsVectorType()) {
+  if (const VectorType *VTy = Ty->getAs<VectorType>()) {
     unsigned NumSrcElts = VTy->getNumElements();
     unsigned NumDstElts =
        cast<llvm::VectorType>(Vec->getType())->getNumElements();
@@ -694,6 +686,54 @@ void CodeGenFunction::EmitStoreThroughExtVectorComponentLValue(RValue Src,
   Builder.CreateStore(Vec, Dst.getExtVectorAddr(), Dst.isVolatileQualified());
 }
 
+// setObjCGCLValueClass - sets class of he lvalue for the purpose of
+// generating write-barries API. It is currently a global, ivar,
+// or neither.
+static
+void setObjCGCLValueClass(const ASTContext &Ctx, const Expr *E, LValue &LV) {
+  if (Ctx.getLangOptions().getGCMode() == LangOptions::NonGC)
+    return;
+  
+  if (isa<ObjCIvarRefExpr>(E)) {
+    LV.SetObjCIvar(LV, true);
+    LV.SetObjCArray(LV, E->getType()->isArrayType());
+    return;
+  }
+  if (const DeclRefExpr *Exp = dyn_cast<DeclRefExpr>(E)) {
+    if (const VarDecl *VD = dyn_cast<VarDecl>(Exp->getDecl())) {
+      if ((VD->isBlockVarDecl() && !VD->hasLocalStorage()) ||
+          VD->isFileVarDecl())
+        LV.SetGlobalObjCRef(LV, true);
+    }
+    LV.SetObjCArray(LV, E->getType()->isArrayType());
+  }
+  else if (const UnaryOperator *Exp = dyn_cast<UnaryOperator>(E))
+    setObjCGCLValueClass(Ctx, Exp->getSubExpr(), LV);
+  else if (const ParenExpr *Exp = dyn_cast<ParenExpr>(E))
+    setObjCGCLValueClass(Ctx, Exp->getSubExpr(), LV);
+  else if (const ImplicitCastExpr *Exp = dyn_cast<ImplicitCastExpr>(E))
+    setObjCGCLValueClass(Ctx, Exp->getSubExpr(), LV);
+  else if (const CStyleCastExpr *Exp = dyn_cast<CStyleCastExpr>(E))
+    setObjCGCLValueClass(Ctx, Exp->getSubExpr(), LV);
+  else if (const ArraySubscriptExpr *Exp = dyn_cast<ArraySubscriptExpr>(E)) {
+    setObjCGCLValueClass(Ctx, Exp->getBase(), LV);
+    if (LV.isObjCIvar() && !LV.isObjCArray()) 
+      // Using array syntax to assigning to what an ivar points to is not 
+      // same as assigning to the ivar itself. {id *Names;} Names[i] = 0;
+      LV.SetObjCIvar(LV, false); 
+    else if (LV.isGlobalObjCRef() && !LV.isObjCArray())
+      // Using array syntax to assigning to what global points to is not 
+      // same as assigning to the global itself. {id *G;} G[i] = 0;
+      LV.SetGlobalObjCRef(LV, false);
+  }
+  else if (const MemberExpr *Exp = dyn_cast<MemberExpr>(E)) {
+    setObjCGCLValueClass(Ctx, Exp->getBase(), LV);
+    // We don't know if member is an 'ivar', but this flag is looked at
+    // only in the context of LV.isObjCIvar().
+    LV.SetObjCArray(LV, E->getType()->isArrayType());
+  }
+}
+
 LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
   const VarDecl *VD = dyn_cast<VarDecl>(E->getDecl());
 
@@ -729,6 +769,7 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
                             E->getType().getAddressSpace());
     }
     LValue::SetObjCNonGC(LV, NonGCable);
+    setObjCGCLValueClass(getContext(), E, LV);
     return LV;
   } else if (VD && VD->isFileVarDecl()) {
     llvm::Value *V = CGM.GetAddrOfGlobalVar(VD);
@@ -737,14 +778,13 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     LValue LV = LValue::MakeAddr(V, E->getType().getCVRQualifiers(),
                                  getContext().getObjCGCAttrKind(E->getType()),
                                  E->getType().getAddressSpace());
-    if (LV.isObjCStrong())
-      LV.SetGlobalObjCRef(LV, true);
+    setObjCGCLValueClass(getContext(), E, LV);
     return LV;
   } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(E->getDecl())) {
     llvm::Value* V = CGM.GetAddrOfFunction(FD);
     if (!FD->hasPrototype()) {
       if (const FunctionProtoType *Proto =
-              FD->getType()->getAsFunctionProtoType()) {
+              FD->getType()->getAs<FunctionProtoType>()) {
         // Ugly case: for a K&R-style definition, the type of the definition
         // isn't the same as the type of a use.  Correct for this with a
         // bitcast.
@@ -938,8 +978,10 @@ LValue CodeGenFunction::EmitArraySubscriptExpr(const ArraySubscriptExpr *E) {
                                getContext().getObjCGCAttrKind(T),
                                E->getBase()->getType().getAddressSpace());
   if (getContext().getLangOptions().ObjC1 &&
-      getContext().getLangOptions().getGCMode() != LangOptions::NonGC)
+      getContext().getLangOptions().getGCMode() != LangOptions::NonGC) {
     LValue::SetObjCNonGC(LV, !E->isOBJCGCCandidate(getContext()));
+    setObjCGCLValueClass(getContext(), E, LV);
+  }
   return LV;
 }
 
@@ -1000,7 +1042,6 @@ EmitExtVectorElementExpr(const ExtVectorElementExpr *E) {
 
 LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
   bool isUnion = false;
-  bool isIvar = false;
   bool isNonGC = false;
   Expr *BaseExpr = E->getBase();
   llvm::Value *BaseValue = NULL;
@@ -1024,8 +1065,6 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
     CVRQualifiers = BaseExpr->getType().getCVRQualifiers();
   } else {
     LValue BaseLV = EmitLValue(BaseExpr);
-    if (BaseLV.isObjCIvar())
-      isIvar = true;
     if (BaseLV.isNonGC())
       isNonGC = true;
     // FIXME: this isn't right for bitfields.
@@ -1041,8 +1080,8 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
   assert(Field && "No code generation for non-field member references");
   LValue MemExpLV = EmitLValueForField(BaseValue, Field, isUnion,
                                        CVRQualifiers);
-  LValue::SetObjCIvar(MemExpLV, isIvar);
   LValue::SetObjCNonGC(MemExpLV, isNonGC);
+  setObjCGCLValueClass(getContext(), E, MemExpLV);
   return MemExpLV;
 }
 
@@ -1094,19 +1133,11 @@ LValue CodeGenFunction::EmitLValueForField(llvm::Value* BaseValue,
   }
   if (Field->getType()->isReferenceType())
     V = Builder.CreateLoad(V, "tmp");
-
-  QualType::GCAttrTypes attr = QualType::GCNone;
-  if (CGM.getLangOptions().ObjC1 &&
-      CGM.getLangOptions().getGCMode() != LangOptions::NonGC) {
-    QualType Ty = Field->getType();
-    attr = Ty.getObjCGCAttr();
-    if (attr != QualType::GCNone) {
-      // __weak attribute on a field is ignored.
-      if (attr == QualType::Weak)
-        attr = QualType::GCNone;
-    } else if (Ty->isObjCObjectPointerType())
-      attr = QualType::Strong;
-  }
+  QualType::GCAttrTypes attr = getContext().getObjCGCAttrKind(Field->getType());
+  // __weak attribute on a field is ignored.
+  if (attr == QualType::Weak)
+    attr = QualType::GCNone;
+  
   LValue LV =
     LValue::MakeAddr(V,
                      Field->getType().getCVRQualifiers()|CVRQualifiers,
@@ -1391,7 +1422,10 @@ LValue CodeGenFunction::EmitObjCIvarRefLValue(const ObjCIvarRefExpr *E) {
     CVRQualifiers = ObjectTy.getCVRQualifiers();
   }
 
-  return EmitLValueForIvar(ObjectTy, BaseValue, E->getDecl(), CVRQualifiers);
+  LValue LV = 
+    EmitLValueForIvar(ObjectTy, BaseValue, E->getDecl(), CVRQualifiers);
+  setObjCGCLValueClass(getContext(), E, LV);
+  return LV;
 }
 
 LValue
@@ -1436,10 +1470,10 @@ RValue CodeGenFunction::EmitCall(llvm::Value *Callee, QualType CalleeType,
          "Call must have function pointer type!");
 
   QualType FnType = CalleeType->getAs<PointerType>()->getPointeeType();
-  QualType ResultType = FnType->getAsFunctionType()->getResultType();
+  QualType ResultType = FnType->getAs<FunctionType>()->getResultType();
 
   CallArgList Args;
-  EmitCallArgs(Args, FnType->getAsFunctionProtoType(), ArgBeg, ArgEnd);
+  EmitCallArgs(Args, FnType->getAs<FunctionProtoType>(), ArgBeg, ArgEnd);
 
   // FIXME: We should not need to do this, it should be part of the function
   // type.

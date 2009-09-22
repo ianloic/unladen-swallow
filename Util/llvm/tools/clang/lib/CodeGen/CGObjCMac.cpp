@@ -129,7 +129,6 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
 
   LValue LV = LValue::MakeAddr(V, IvarTy.getCVRQualifiers()|CVRQualifiers,
                                CGF.CGM.getContext().getObjCGCAttrKind(IvarTy));
-  LValue::SetObjCIvar(LV, true);
   return LV;
 }
 
@@ -935,6 +934,7 @@ protected:
                                         QualType Arg0Ty,
                                         bool IsSuper,
                                         const CallArgList &CallArgs,
+                                        const ObjCMethodDecl *OMD,
                                         const ObjCCommonTypesHelper &ObjCTypes);
 
 public:
@@ -1092,7 +1092,8 @@ public:
                            bool isCategoryImpl,
                            llvm::Value *Receiver,
                            bool IsClassMessage,
-                           const CallArgList &CallArgs);
+                           const CallArgList &CallArgs,
+                           const ObjCMethodDecl *Method);
 
   virtual llvm::Value *GetClass(CGBuilderTy &Builder,
                                 const ObjCInterfaceDecl *ID);
@@ -1314,7 +1315,8 @@ public:
                            bool isCategoryImpl,
                            llvm::Value *Receiver,
                            bool IsClassMessage,
-                           const CallArgList &CallArgs);
+                           const CallArgList &CallArgs,
+                           const ObjCMethodDecl *Method);
 
   virtual llvm::Value *GetClass(CGBuilderTy &Builder,
                                 const ObjCInterfaceDecl *ID);
@@ -1448,7 +1450,8 @@ CGObjCMac::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
                                     bool isCategoryImpl,
                                     llvm::Value *Receiver,
                                     bool IsClassMessage,
-                                    const CodeGen::CallArgList &CallArgs) {
+                                    const CodeGen::CallArgList &CallArgs,
+                                    const ObjCMethodDecl *Method) {
   // Create and init a super structure; this is a (receiver, class)
   // pair we will pass to objc_msgSendSuper.
   llvm::Value *ObjCSuper =
@@ -1490,7 +1493,7 @@ CGObjCMac::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
   return EmitLegacyMessageSend(CGF, ResultType,
                                EmitSelector(CGF.Builder, Sel),
                                ObjCSuper, ObjCTypes.SuperPtrCTy,
-                               true, CallArgs, ObjCTypes);
+                               true, CallArgs, Method, ObjCTypes);
 }
 
 /// Generate code for a message send expression.
@@ -1504,18 +1507,19 @@ CodeGen::RValue CGObjCMac::GenerateMessageSend(CodeGen::CodeGenFunction &CGF,
   return EmitLegacyMessageSend(CGF, ResultType,
                                EmitSelector(CGF.Builder, Sel),
                                Receiver, CGF.getContext().getObjCIdType(),
-                               false, CallArgs, ObjCTypes);
+                               false, CallArgs, Method, ObjCTypes);
 }
 
-CodeGen::RValue CGObjCCommonMac::EmitLegacyMessageSend(
-  CodeGen::CodeGenFunction &CGF,
-  QualType ResultType,
-  llvm::Value *Sel,
-  llvm::Value *Arg0,
-  QualType Arg0Ty,
-  bool IsSuper,
-  const CallArgList &CallArgs,
-  const ObjCCommonTypesHelper &ObjCTypes) {
+CodeGen::RValue
+CGObjCCommonMac::EmitLegacyMessageSend(CodeGen::CodeGenFunction &CGF,
+                                       QualType ResultType,
+                                       llvm::Value *Sel,
+                                       llvm::Value *Arg0,
+                                       QualType Arg0Ty,
+                                       bool IsSuper,
+                                       const CallArgList &CallArgs,
+                                       const ObjCMethodDecl *Method,
+                                       const ObjCCommonTypesHelper &ObjCTypes) {
   CallArgList ActualArgs;
   if (!IsSuper)
     Arg0 = CGF.Builder.CreateBitCast(Arg0, ObjCTypes.ObjectPtrTy, "tmp");
@@ -1526,9 +1530,8 @@ CodeGen::RValue CGObjCCommonMac::EmitLegacyMessageSend(
 
   CodeGenTypes &Types = CGM.getTypes();
   const CGFunctionInfo &FnInfo = Types.getFunctionInfo(ResultType, ActualArgs);
-  // In 64bit ABI, type must be assumed VARARG. In 32bit abi,
-  // it seems not to matter.
-  const llvm::FunctionType *FTy = Types.GetFunctionType(FnInfo, (ObjCABI == 2));
+  const llvm::FunctionType *FTy =
+    Types.GetFunctionType(FnInfo, Method ? Method->isVariadic() : false);
 
   llvm::Constant *Fn = NULL;
   if (CGM.ReturnTypeUsesSret(FnInfo)) {
@@ -1536,7 +1539,7 @@ CodeGen::RValue CGObjCCommonMac::EmitLegacyMessageSend(
       : ObjCTypes.getSendStretFn(IsSuper);
   } else if (ResultType->isFloatingType()) {
     if (ObjCABI == 2) {
-      if (const BuiltinType *BT = ResultType->getAsBuiltinType()) {
+      if (const BuiltinType *BT = ResultType->getAs<BuiltinType>()) {
         BuiltinType::Kind k = BT->getKind();
         Fn = (k == BuiltinType::LongDouble) ? ObjCTypes.getSendFpretFn2(IsSuper)
           : ObjCTypes.getSendFn2(IsSuper);
@@ -1773,7 +1776,7 @@ CGObjCMac::EmitProtocolList(const std::string &Name,
                                                   ProtocolRefs.size()),
                              ProtocolRefs);
 
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
   llvm::GlobalVariable *GV =
     CreateMetadataVar(Name, Init, "__OBJC,__cat_cls_meth,regular,no_dead_strip",
                       4, false);
@@ -1818,7 +1821,7 @@ llvm::Constant *CGObjCCommonMac::EmitPropertyList(const std::string &Name,
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.PropertyTy,
                                              Properties.size());
   Values[2] = llvm::ConstantArray::get(AT, Properties);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV =
     CreateMetadataVar(Name, Init,
@@ -1858,7 +1861,7 @@ llvm::Constant *CGObjCMac::EmitMethodDescList(const std::string &Name,
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.MethodDescriptionTy,
                                              Methods.size());
   Values[1] = llvm::ConstantArray::get(AT, Methods);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV = CreateMetadataVar(Name, Init, Section, 4, true);
   return llvm::ConstantExpr::getBitCast(GV,
@@ -2231,7 +2234,7 @@ llvm::Constant *CGObjCMac::EmitIvarList(const ObjCImplementationDecl *ID,
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.IvarTy,
                                              Ivars.size());
   Values[1] = llvm::ConstantArray::get(AT, Ivars);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV;
   if (ForClass)
@@ -2291,7 +2294,7 @@ llvm::Constant *CGObjCMac::EmitMethodList(const std::string &Name,
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.MethodTy,
                                              Methods.size());
   Values[2] = llvm::ConstantArray::get(AT, Methods);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV = CreateMetadataVar(Name, Init, Section, 4, true);
   return llvm::ConstantExpr::getBitCast(GV,
@@ -2543,7 +2546,7 @@ void CGObjCMac::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
       if (!CatchParam) {
         AllMatched = true;
       } else {
-        OPT = CatchParam->getType()->getAsObjCObjectPointerType();
+        OPT = CatchParam->getType()->getAs<ObjCObjectPointerType>();
 
         // catch(id e) always matches.
         // FIXME: For the time being we also match id<X>; this should
@@ -2566,7 +2569,7 @@ void CGObjCMac::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
 
       assert(OPT && "Unexpected non-object pointer type in @catch");
       QualType T = OPT->getPointeeType();
-      const ObjCInterfaceType *ObjCType = T->getAsObjCInterfaceType();
+      const ObjCInterfaceType *ObjCType = T->getAs<ObjCInterfaceType>();
       assert(ObjCType && "Catch parameter must have Objective-C type!");
 
       // Check if the @catch block matches the exception object.
@@ -2800,7 +2803,7 @@ LValue CGObjCMac::EmitObjCValueForIvar(CodeGen::CodeGenFunction &CGF,
                                        llvm::Value *BaseValue,
                                        const ObjCIvarDecl *Ivar,
                                        unsigned CVRQualifiers) {
-  const ObjCInterfaceDecl *ID = ObjectTy->getAsObjCInterfaceType()->getDecl();
+  const ObjCInterfaceDecl *ID = ObjectTy->getAs<ObjCInterfaceType>()->getDecl();
   return EmitValueForIvarAtOffset(CGF, ID, BaseValue, Ivar, CVRQualifiers,
                                   EmitIvarOffset(CGF, ID, Ivar));
 }
@@ -2926,7 +2929,7 @@ llvm::Constant *CGObjCMac::EmitModuleSymbols() {
                                                   NumClasses + NumCategories),
                              Symbols);
 
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV =
     CreateMetadataVar("\01L_OBJC_SYMBOLS", Init,
@@ -4601,7 +4604,7 @@ llvm::Constant *CGObjCNonFragileABIMac::EmitMethodList(
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.MethodTy,
                                              Methods.size());
   Values[2] = llvm::ConstantArray::get(AT, Methods);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
 
   llvm::GlobalVariable *GV =
     new llvm::GlobalVariable(CGM.getModule(), Init->getType(), false,
@@ -4727,7 +4730,7 @@ llvm::Constant *CGObjCNonFragileABIMac::EmitIvarList(
   llvm::ArrayType *AT = llvm::ArrayType::get(ObjCTypes.IvarnfABITy,
                                              Ivars.size());
   Values[2] = llvm::ConstantArray::get(AT, Ivars);
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
   const char *Prefix = "\01l_OBJC_$_INSTANCE_VARIABLES_";
   llvm::GlobalVariable *GV =
     new llvm::GlobalVariable(CGM.getModule(), Init->getType(), false,
@@ -4921,7 +4924,7 @@ CGObjCNonFragileABIMac::EmitProtocolList(const std::string &Name,
                            ProtocolRefs.size()),
       ProtocolRefs);
 
-  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+  llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
   GV = new llvm::GlobalVariable(CGM.getModule(), Init->getType(), false,
                                 llvm::GlobalValue::InternalLinkage,
                                 Init,
@@ -4965,7 +4968,7 @@ LValue CGObjCNonFragileABIMac::EmitObjCValueForIvar(
   llvm::Value *BaseValue,
   const ObjCIvarDecl *Ivar,
   unsigned CVRQualifiers) {
-  const ObjCInterfaceDecl *ID = ObjectTy->getAsObjCInterfaceType()->getDecl();
+  const ObjCInterfaceDecl *ID = ObjectTy->getAs<ObjCInterfaceType>()->getDecl();
   return EmitValueForIvarAtOffset(CGF, ID, BaseValue, Ivar, CVRQualifiers,
                                   EmitIvarOffset(CGF, ID, Ivar));
 }
@@ -5055,7 +5058,7 @@ CodeGen::RValue CGObjCNonFragileABIMac::EmitMessageSend(
     std::vector<llvm::Constant*> Values(2);
     Values[0] = Fn;
     Values[1] = GetMethodVarName(Sel);
-    llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values);
+    llvm::Constant *Init = llvm::ConstantStruct::get(VMContext, Values, false);
     GV =  new llvm::GlobalVariable(CGM.getModule(), Init->getType(), false,
                                    llvm::GlobalValue::WeakAnyLinkage,
                                    Init,
@@ -5081,18 +5084,18 @@ CodeGen::RValue CGObjCNonFragileABIMac::EmitMessageSend(
 }
 
 /// Generate code for a message send expression in the nonfragile abi.
-CodeGen::RValue CGObjCNonFragileABIMac::GenerateMessageSend(
-  CodeGen::CodeGenFunction &CGF,
-  QualType ResultType,
-  Selector Sel,
-  llvm::Value *Receiver,
-  bool IsClassMessage,
-  const CallArgList &CallArgs,
-  const ObjCMethodDecl *Method) {
+CodeGen::RValue
+CGObjCNonFragileABIMac::GenerateMessageSend(CodeGen::CodeGenFunction &CGF,
+                                            QualType ResultType,
+                                            Selector Sel,
+                                            llvm::Value *Receiver,
+                                            bool IsClassMessage,
+                                            const CallArgList &CallArgs,
+                                            const ObjCMethodDecl *Method) {
   return LegacyDispatchedSelector(Sel)
     ? EmitLegacyMessageSend(CGF, ResultType, EmitSelector(CGF.Builder, Sel),
                             Receiver, CGF.getContext().getObjCIdType(),
-                            false, CallArgs, ObjCTypes)
+                            false, CallArgs, Method, ObjCTypes)
     : EmitMessageSend(CGF, ResultType, Sel,
                       Receiver, CGF.getContext().getObjCIdType(),
                       false, CallArgs);
@@ -5200,7 +5203,8 @@ CGObjCNonFragileABIMac::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
                                                  bool isCategoryImpl,
                                                  llvm::Value *Receiver,
                                                  bool IsClassMessage,
-                                                 const CodeGen::CallArgList &CallArgs) {
+                                                 const CodeGen::CallArgList &CallArgs,
+                                                 const ObjCMethodDecl *Method) {
   // ...
   // Create and init a super structure; this is a (receiver, class)
   // pair we will pass to objc_msgSendSuper.
@@ -5237,8 +5241,7 @@ CGObjCNonFragileABIMac::GenerateMessageSendSuper(CodeGen::CodeGenFunction &CGF,
   return (LegacyDispatchedSelector(Sel))
     ? EmitLegacyMessageSend(CGF, ResultType,EmitSelector(CGF.Builder, Sel),
                             ObjCSuper, ObjCTypes.SuperPtrCTy,
-                            true, CallArgs,
-                            ObjCTypes)
+                            true, CallArgs, Method, ObjCTypes)
     : EmitMessageSend(CGF, ResultType, Sel,
                       ObjCSuper, ObjCTypes.SuperPtrCTy,
                       true, CallArgs);
@@ -5459,7 +5462,7 @@ CGObjCNonFragileABIMac::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
         } else {
           // All other types should be Objective-C interface pointer types.
           const ObjCObjectPointerType *PT =
-            CatchDecl->getType()->getAsObjCObjectPointerType();
+            CatchDecl->getType()->getAs<ObjCObjectPointerType>();
           assert(PT && "Invalid @catch type.");
           const ObjCInterfaceType *IT = PT->getInterfaceType();
           assert(IT && "Invalid @catch type.");

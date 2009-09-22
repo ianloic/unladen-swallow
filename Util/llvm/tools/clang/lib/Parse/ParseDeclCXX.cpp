@@ -47,6 +47,11 @@ Parser::DeclPtrTy Parser::ParseNamespace(unsigned Context,
   assert(Tok.is(tok::kw_namespace) && "Not a namespace!");
   SourceLocation NamespaceLoc = ConsumeToken();  // eat the 'namespace'.
 
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteNamespaceDecl(CurScope);
+    ConsumeToken();
+  }
+  
   SourceLocation IdentLoc;
   IdentifierInfo *Ident = 0;
 
@@ -115,6 +120,11 @@ Parser::DeclPtrTy Parser::ParseNamespaceAlias(SourceLocation NamespaceLoc,
 
   ConsumeToken(); // eat the '='.
 
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteNamespaceAliasDecl(CurScope);
+    ConsumeToken();
+  }
+  
   CXXScopeSpec SS;
   // Parse (optional) nested-name-specifier.
   ParseOptionalCXXScopeSpecifier(SS, /*ObjectType=*/0, false);
@@ -188,6 +198,11 @@ Parser::DeclPtrTy Parser::ParseUsingDirectiveOrDeclaration(unsigned Context,
   // Eat 'using'.
   SourceLocation UsingLoc = ConsumeToken();
 
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteUsing(CurScope);
+    ConsumeToken();
+  }
+  
   if (Tok.is(tok::kw_namespace))
     // Next token after 'using' is 'namespace' so it must be using-directive
     return ParseUsingDirective(Context, UsingLoc, DeclEnd);
@@ -214,6 +229,11 @@ Parser::DeclPtrTy Parser::ParseUsingDirective(unsigned Context,
   // Eat 'namespace'.
   SourceLocation NamespcLoc = ConsumeToken();
 
+  if (Tok.is(tok::code_completion)) {
+    Actions.CodeCompleteUsingDirective(CurScope);
+    ConsumeToken();
+  }
+  
   CXXScopeSpec SS;
   // Parse (optional) nested-name-specifier.
   ParseOptionalCXXScopeSpecifier(SS, /*ObjectType=*/0, false);
@@ -527,6 +547,12 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
     TagType = DeclSpec::TST_union;
   }
 
+  if (Tok.is(tok::code_completion)) {
+    // Code completion for a struct, class, or union name.
+    Actions.CodeCompleteTag(CurScope, TagType);
+    ConsumeToken();
+  }
+  
   AttributeList *Attr = 0;
   // If attributes exist after tag, parse them.
   if (Tok.is(tok::kw___attribute))
@@ -1011,12 +1037,15 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
   DeclSpec DS;
   ParseDeclarationSpecifiers(DS, TemplateInfo, AS, DSC_class);
 
+  Action::MultiTemplateParamsArg TemplateParams(Actions,
+      TemplateInfo.TemplateParams? TemplateInfo.TemplateParams->data() : 0,
+      TemplateInfo.TemplateParams? TemplateInfo.TemplateParams->size() : 0);
+
   if (Tok.is(tok::semi)) {
     ConsumeToken();
 
     if (DS.isFriendSpecified()) {
-      bool IsTemplate = TemplateInfo.Kind != ParsedTemplateInfo::NonTemplate;
-      Actions.ActOnFriendTypeDecl(CurScope, DS, IsTemplate);
+      Actions.ActOnFriendTypeDecl(CurScope, DS, move(TemplateParams));
     } else
       Actions.ParsedFreeStandingDeclSpec(CurScope, DS);
 
@@ -1118,10 +1147,6 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
     // NOTE: If Sema is the Action module and declarator is an instance field,
     // this call will *not* return the created decl; It will return null.
     // See Sema::ActOnCXXMemberDeclarator for details.
-
-    Action::MultiTemplateParamsArg TemplateParams(Actions,
-        TemplateInfo.TemplateParams? TemplateInfo.TemplateParams->data() : 0,
-        TemplateInfo.TemplateParams? TemplateInfo.TemplateParams->size() : 0);
 
     DeclPtrTy ThisDecl;
     if (DS.isFriendSpecified()) {

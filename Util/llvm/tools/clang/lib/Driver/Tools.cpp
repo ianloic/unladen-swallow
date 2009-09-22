@@ -512,10 +512,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     } else if (JA.getType() == types::TY_LLVMBC) {
       CmdArgs.push_back("-emit-llvm-bc");
     } else if (JA.getType() == types::TY_PP_Asm) {
-      if (Inputs[0].getType() == types::TY_AST)
-        CmdArgs.push_back("-compile-ast");
-      else
-        CmdArgs.push_back("-S");
+      CmdArgs.push_back("-S");
     } else if (JA.getType() == types::TY_AST) {
       CmdArgs.push_back("-emit-pch");
     }
@@ -707,13 +704,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (types::getPreprocessedType(InputType) != types::TY_INVALID)
     AddPreprocessingOptions(D, Args, CmdArgs, Output, Inputs);
 
-  // Manually translate -O to -O1 and -O4 to -O3; let clang reject
+  // Manually translate -O to -O2 and -O4 to -O3; let clang reject
   // others.
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (A->getOption().getId() == options::OPT_O4)
       CmdArgs.push_back("-O3");
     else if (A->getValue(Args)[0] == '\0')
-      CmdArgs.push_back("-O1");
+      CmdArgs.push_back("-O2");
     else
       A->render(Args, CmdArgs);
   }
@@ -1591,7 +1588,7 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // Derived from asm spec.
   AddDarwinArch(Args, CmdArgs);
 
-  if (!getDarwinToolChain().isIPhone() ||
+  if (!getDarwinToolChain().isIPhoneOS() ||
       Args.hasArg(options::OPT_force__cpusubtype__ALL))
     CmdArgs.push_back("-force_cpusubtype_ALL");
 
@@ -1645,20 +1642,6 @@ static bool isSourceSuffix(const char *Str) {
             memcmp(Str, "cpp", 3) == 0 ||
             memcmp(Str, "cxx", 3) == 0);
   }
-}
-
-static bool isMacosxVersionLT(unsigned (&A)[3], unsigned (&B)[3]) {
-  for (unsigned i=0; i < 3; ++i) {
-    if (A[i] > B[i]) return false;
-    if (A[i] < B[i]) return true;
-  }
-  return false;
-}
-
-static bool isMacosxVersionLT(unsigned (&A)[3],
-                              unsigned V0, unsigned V1=0, unsigned V2=0) {
-  unsigned B[3] = { V0, V1, V2 };
-  return isMacosxVersionLT(A, B);
 }
 
 // FIXME: Can we tablegen this?
@@ -1809,7 +1792,7 @@ void darwin::Link::AddLinkArgs(const ArgList &Args,
   Args.AddLastArg(CmdArgs, options::OPT_all__load);
   Args.AddAllArgs(CmdArgs, options::OPT_allowable__client);
   Args.AddLastArg(CmdArgs, options::OPT_bind__at__load);
-  if (getDarwinToolChain().isIPhone())
+  if (getDarwinToolChain().isIPhoneOS())
     Args.AddLastArg(CmdArgs, options::OPT_arch__errors__fatal);
   Args.AddLastArg(CmdArgs, options::OPT_dead__strip);
   Args.AddLastArg(CmdArgs, options::OPT_no__dead__strip__inits__and__terms);
@@ -1824,7 +1807,7 @@ void darwin::Link::AddLinkArgs(const ArgList &Args,
   if (!Args.hasArg(options::OPT_mmacosx_version_min_EQ) &&
       !Args.hasArg(options::OPT_miphoneos_version_min_EQ)) {
     // Add default version min.
-    if (!getDarwinToolChain().isIPhone()) {
+    if (!getDarwinToolChain().isIPhoneOS()) {
       CmdArgs.push_back("-macosx_version_min");
       CmdArgs.push_back(getDarwinToolChain().getMacosxVersionStr());
     } else {
@@ -1866,7 +1849,7 @@ void darwin::Link::AddLinkArgs(const ArgList &Args,
   Args.AddAllArgs(CmdArgs, options::OPT_sub__umbrella);
 
   Args.AddAllArgsTranslated(CmdArgs, options::OPT_isysroot, "-syslibroot");
-  if (getDarwinToolChain().isIPhone()) {
+  if (getDarwinToolChain().isIPhoneOS()) {
     if (!Args.hasArg(options::OPT_isysroot)) {
       CmdArgs.push_back("-syslibroot");
       CmdArgs.push_back("/Developer/SDKs/Extra");
@@ -1931,20 +1914,9 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
 
-  unsigned MacosxVersion[3];
-  if (Arg *A = Args.getLastArg(options::OPT_mmacosx_version_min_EQ)) {
-    bool HadExtra;
-    if (!Driver::GetReleaseVersion(A->getValue(Args), MacosxVersion[0],
-                                   MacosxVersion[1], MacosxVersion[2],
-                                   HadExtra) ||
-        HadExtra) {
-      const Driver &D = getToolChain().getHost().getDriver();
-      D.Diag(clang::diag::err_drv_invalid_version_number)
-        << A->getAsString(Args);
-    }
-  } else {
-    getDarwinToolChain().getMacosxVersion(MacosxVersion);
-  }
+
+  unsigned MacosxVersionMin[3];
+  getDarwinToolChain().getMacosxVersionMin(Args, MacosxVersionMin);
 
   if (!Args.hasArg(options::OPT_A) &&
       !Args.hasArg(options::OPT_nostdlib) &&
@@ -1952,15 +1924,15 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
     // Derived from startfile spec.
     if (Args.hasArg(options::OPT_dynamiclib)) {
       // Derived from darwin_dylib1 spec.
-      if (isMacosxVersionLT(MacosxVersion, 10, 5))
+      if (getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin, 10, 5))
         CmdArgs.push_back("-ldylib1.o");
-      else if (isMacosxVersionLT(MacosxVersion, 10, 6))
+      else if (getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin, 10, 6))
         CmdArgs.push_back("-ldylib1.10.5.o");
     } else {
       if (Args.hasArg(options::OPT_bundle)) {
         if (!Args.hasArg(options::OPT_static)) {
           // Derived from darwin_bundle1 spec.
-          if (isMacosxVersionLT(MacosxVersion, 10, 6))
+          if (getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin, 10, 6))
             CmdArgs.push_back("-lbundle1.o");
         }
       } else {
@@ -1981,11 +1953,13 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
             CmdArgs.push_back("-lcrt0.o");
           } else {
             // Derived from darwin_crt1 spec.
-            if (getDarwinToolChain().isIPhone()) {
+            if (getDarwinToolChain().isIPhoneOS()) {
               CmdArgs.push_back("-lcrt1.o");
-            } else if (isMacosxVersionLT(MacosxVersion, 10, 5))
+            } else if (getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin,
+                                                              10, 5))
               CmdArgs.push_back("-lcrt1.o");
-            else if (isMacosxVersionLT(MacosxVersion, 10, 6))
+            else if (getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin,
+                                                            10, 6))
               CmdArgs.push_back("-lcrt1.10.5.o");
             else
               CmdArgs.push_back("-lcrt1.10.6.o");
@@ -1998,7 +1972,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
     if (Args.hasArg(options::OPT_shared_libgcc) &&
         !Args.hasArg(options::OPT_miphoneos_version_min_EQ) &&
-        isMacosxVersionLT(MacosxVersion, 10, 5)) {
+        getDarwinToolChain().isMacosxVersionLT(MacosxVersionMin, 10, 5)) {
       const char *Str =
         Args.MakeArgString(getToolChain().GetFilePath(C, "crt3.o"));
       CmdArgs.push_back(Str);
@@ -2011,23 +1985,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
     // This is more complicated in gcc...
     CmdArgs.push_back("-lgomp");
 
-  // FIXME: Derive these correctly.
-  llvm::StringRef TCDir = getDarwinToolChain().getToolChainDir();
-  if (getToolChain().getArchName() == "x86_64") {
-    CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir +
-                                         "/x86_64"));
-    // Intentionally duplicated for (temporary) gcc bug compatibility.
-    CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir +
-                                         "/x86_64"));
-  }
-  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/" + TCDir));
-  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir));
-  // Intentionally duplicated for (temporary) gcc bug compatibility.
-  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir));
-  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir +
-                                       "/../../../" + TCDir));
-  CmdArgs.push_back(Args.MakeArgString("-L/usr/lib/gcc/" + TCDir +
-                                       "/../../.."));
+  getDarwinToolChain().AddLinkSearchPathArgs(Args, CmdArgs);
 
   for (InputInfoList::const_iterator
          it = Inputs.begin(), ie = Inputs.end(); it != ie; ++it) {
@@ -2062,46 +2020,8 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
     // link_ssp spec is empty.
 
-    // Derived from libgcc and lib specs but refactored.
-    if (Args.hasArg(options::OPT_static)) {
-      CmdArgs.push_back("-lgcc_static");
-    } else {
-      if (Args.hasArg(options::OPT_static_libgcc)) {
-        CmdArgs.push_back("-lgcc_eh");
-      } else if (Args.hasArg(options::OPT_miphoneos_version_min_EQ)) {
-        // Derived from darwin_iphoneos_libgcc spec.
-        if (getDarwinToolChain().isIPhone()) {
-          CmdArgs.push_back("-lgcc_s.1");
-        } else {
-          CmdArgs.push_back("-lgcc_s.10.5");
-        }
-      } else if (Args.hasArg(options::OPT_shared_libgcc) ||
-                 // FIXME: -fexceptions -fno-exceptions means no exceptions
-                 Args.hasArg(options::OPT_fexceptions) ||
-                 Args.hasArg(options::OPT_fgnu_runtime)) {
-        // FIXME: This is probably broken on 10.3?
-        if (isMacosxVersionLT(MacosxVersion, 10, 5))
-          CmdArgs.push_back("-lgcc_s.10.4");
-        else if (isMacosxVersionLT(MacosxVersion, 10, 6))
-          CmdArgs.push_back("-lgcc_s.10.5");
-      } else {
-        if (isMacosxVersionLT(MacosxVersion, 10, 3, 9))
-          ; // Do nothing.
-        else if (isMacosxVersionLT(MacosxVersion, 10, 5))
-          CmdArgs.push_back("-lgcc_s.10.4");
-        else if (isMacosxVersionLT(MacosxVersion, 10, 6))
-          CmdArgs.push_back("-lgcc_s.10.5");
-      }
-
-      if (getDarwinToolChain().isIPhone() ||
-          isMacosxVersionLT(MacosxVersion, 10, 6)) {
-        CmdArgs.push_back("-lgcc");
-        CmdArgs.push_back("-lSystem");
-      } else {
-        CmdArgs.push_back("-lSystem");
-        CmdArgs.push_back("-lgcc");
-      }
-    }
+    // Let the tool chain choose which runtime library to link.
+    getDarwinToolChain().AddLinkRuntimeLibArgs(Args, CmdArgs);
   }
 
   if (!Args.hasArg(options::OPT_A) &&

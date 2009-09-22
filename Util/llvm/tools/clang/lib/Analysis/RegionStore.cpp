@@ -756,7 +756,7 @@ SVal RegionStoreManager::EvalBinOp(const GRState *state,
       if (const PointerType *PT = T->getAs<PointerType>())
         EleTy = PT->getPointeeType();
       else
-        EleTy = T->getAsObjCObjectPointerType()->getPointeeType();
+        EleTy = T->getAs<ObjCObjectPointerType>()->getPointeeType();
 
       SVal ZeroIdx = ValMgr.makeZeroArrayIndex();
       ER = MRMgr.getElementRegion(EleTy, ZeroIdx, SR, getContext());
@@ -1302,6 +1302,10 @@ const GRState *RegionStoreManager::Bind(const GRState *state, Loc L, SVal V) {
             ValMgr.getSValuator().EvalCast(V, state, superTy, erTy);
           return Bind(cr.getState(), loc::MemRegionVal(superR), cr.getSVal());
         }
+        // For now, just invalidate the fields of the struct/union/class.
+        // FIXME: Precisely handle the fields of the record.
+        if (superTy->isRecordType())
+          return InvalidateRegion(state, superR, NULL, 0);
       }
     }
   }

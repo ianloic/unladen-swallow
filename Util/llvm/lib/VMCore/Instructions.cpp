@@ -234,12 +234,11 @@ void PHINode::resizeOperands(unsigned NumOps) {
 /// otherwise use DT to test for dominance.
 ///
 Value *PHINode::hasConstantValue(DominatorTree *DT) const {
-  // If the PHI node only has one incoming value, eliminate the PHI node...
+  // If the PHI node only has one incoming value, eliminate the PHI node.
   if (getNumIncomingValues() == 1) {
     if (getIncomingValue(0) != this)   // not  X = phi X
       return getIncomingValue(0);
-    else
-      return UndefValue::get(getType());  // Self cycle is dead.
+    return UndefValue::get(getType());  // Self cycle is dead.
   }
       
   // Otherwise if all of the incoming values are the same for the PHI, replace
@@ -253,8 +252,7 @@ Value *PHINode::hasConstantValue(DominatorTree *DT) const {
     } else if (getIncomingValue(i) != this) { // Not the PHI node itself...
       if (InVal && getIncomingValue(i) != InVal)
         return 0;  // Not the same, bail out.
-      else
-        InVal = getIncomingValue(i);
+      InVal = getIncomingValue(i);
     }
   
   // The only case that could cause InVal to be null is if we have a PHI node
@@ -267,19 +265,20 @@ Value *PHINode::hasConstantValue(DominatorTree *DT) const {
   // instruction, we cannot always return X as the result of the PHI node.  Only
   // do this if X is not an instruction (thus it must dominate the PHI block),
   // or if the client is prepared to deal with this possibility.
-  if (HasUndefInput)
-    if (Instruction *IV = dyn_cast<Instruction>(InVal)) {
-      if (DT) {
-        // We have a DominatorTree. Do a precise test.
-        if (!DT->dominates(IV, this))
-          return 0;
-      } else {
-        // If it's in the entry block, it dominates everything.
-        if (IV->getParent() != &IV->getParent()->getParent()->getEntryBlock() ||
-            isa<InvokeInst>(IV))
-          return 0;   // Cannot guarantee that InVal dominates this PHINode.
-      }
-    }
+  if (!HasUndefInput || !isa<Instruction>(InVal))
+    return InVal;
+  
+  Instruction *IV = cast<Instruction>(InVal);
+  if (DT) {
+    // We have a DominatorTree. Do a precise test.
+    if (!DT->dominates(IV, this))
+      return 0;
+  } else {
+    // If it is in the entry block, it obviously dominates everything.
+    if (IV->getParent() != &IV->getParent()->getParent()->getEntryBlock() ||
+        isa<InvokeInst>(IV))
+      return 0;   // Cannot guarantee that InVal dominates this PHINode.
+  }
 
   // All of the incoming values are the same, return the value now.
   return InVal;
@@ -460,19 +459,20 @@ static Value *checkArraySize(Value *Amt, const Type *IntPtrTy) {
 }
 
 static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
-                           const Type *AllocTy, const Type *IntPtrTy,
+                           const Type *IntPtrTy, const Type *AllocTy,
                            Value *ArraySize, const Twine &NameStr) {
   assert(((!InsertBefore && InsertAtEnd) || (InsertBefore && !InsertAtEnd)) &&
-         "createMalloc needs only InsertBefore or InsertAtEnd");
-  const PointerType *AllocPtrType = dyn_cast<PointerType>(AllocTy);
-  assert(AllocPtrType && "CreateMalloc passed a non-pointer allocation type");
-  
+         "createMalloc needs either InsertBefore or InsertAtEnd");
+
+  // malloc(type) becomes: 
+  //       bitcast (i8* malloc(typeSize)) to type*
+  // malloc(type, arraySize) becomes:
+  //       bitcast (i8 *malloc(typeSize*arraySize)) to type*
+  Value *AllocSize = ConstantExpr::getSizeOf(AllocTy);
+  AllocSize = ConstantExpr::getTruncOrBitCast(cast<Constant>(AllocSize),
+                                              IntPtrTy);
   ArraySize = checkArraySize(ArraySize, IntPtrTy);
 
-  // malloc(type) becomes i8 *malloc(size)
-  Value *AllocSize = ConstantExpr::getSizeOf(AllocPtrType->getElementType());
-  AllocSize = ConstantExpr::getTruncOrBitCast(cast<Constant>(AllocSize), 
-                                              IntPtrTy);
   if (!IsConstantOne(ArraySize)) {
     if (IsConstantOne(AllocSize)) {
       AllocSize = ArraySize;         // Operand * 1 = Operand
@@ -482,47 +482,41 @@ static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
       // Malloc arg is constant product of type size and array size
       AllocSize = ConstantExpr::getMul(Scale, cast<Constant>(AllocSize));
     } else {
-      Value *Scale = ArraySize;
-      if (Scale->getType() != IntPtrTy) {
-        if (InsertBefore)
-          Scale = CastInst::CreateIntegerCast(Scale, IntPtrTy, false /*ZExt*/,
-                                              "", InsertBefore);
-        else
-          Scale = CastInst::CreateIntegerCast(Scale, IntPtrTy, false /*ZExt*/,
-                                              "", InsertAtEnd);
-      }
       // Multiply type size by the array size...
       if (InsertBefore)
-        AllocSize = BinaryOperator::CreateMul(Scale, AllocSize,
-                                              "", InsertBefore);
+        AllocSize = BinaryOperator::CreateMul(ArraySize, AllocSize,
+                                              "mallocsize", InsertBefore);
       else
-        AllocSize = BinaryOperator::CreateMul(Scale, AllocSize,
-                                              "", InsertAtEnd);
+        AllocSize = BinaryOperator::CreateMul(ArraySize, AllocSize,
+                                              "mallocsize", InsertAtEnd);
     }
   }
 
+  assert(AllocSize->getType() == IntPtrTy && "malloc arg is wrong size");
   // Create the call to Malloc.
   BasicBlock* BB = InsertBefore ? InsertBefore->getParent() : InsertAtEnd;
   Module* M = BB->getParent()->getParent();
   const Type *BPTy = PointerType::getUnqual(Type::getInt8Ty(BB->getContext()));
   // prototype malloc as "void *malloc(size_t)"
-  Constant *MallocFunc = M->getOrInsertFunction("malloc", BPTy, 
-                                                IntPtrTy, NULL);
+  Constant *MallocF = M->getOrInsertFunction("malloc", BPTy, IntPtrTy, NULL);
+  if (!cast<Function>(MallocF)->doesNotAlias(0))
+    cast<Function>(MallocF)->setDoesNotAlias(0);
+  const PointerType *AllocPtrType = PointerType::getUnqual(AllocTy);
   CallInst *MCall = NULL;
-  if (InsertBefore) 
-    MCall = CallInst::Create(MallocFunc, AllocSize, NameStr, InsertBefore);
-  else
-    MCall = CallInst::Create(MallocFunc, AllocSize, NameStr, InsertAtEnd);
+  Value    *MCast = NULL;
+  if (InsertBefore) {
+    MCall = CallInst::Create(MallocF, AllocSize, "malloccall", InsertBefore);
+    // Create a cast instruction to convert to the right type...
+    MCast = new BitCastInst(MCall, AllocPtrType, NameStr, InsertBefore);
+  } else {
+    MCall = CallInst::Create(MallocF, AllocSize, "malloccall", InsertAtEnd);
+    // Create a cast instruction to convert to the right type...
+    MCast = new BitCastInst(MCall, AllocPtrType, NameStr);
+  }
   MCall->setTailCall();
-
-  // Create a cast instruction to convert to the right type...
   assert(MCall->getType() != Type::getVoidTy(BB->getContext()) &&
          "Malloc has void return type");
-  Value *MCast;
-  if (InsertBefore)
-    MCast = new BitCastInst(MCall, AllocPtrType, NameStr, InsertBefore);
-  else
-    MCast = new BitCastInst(MCall, AllocPtrType, NameStr);
+
   return MCast;
 }
 
@@ -532,11 +526,10 @@ static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
 ///    constant 1.
 /// 2. Call malloc with that argument.
 /// 3. Bitcast the result of the malloc call to the specified type.
-Value *CallInst::CreateMalloc(Instruction *InsertBefore,
-                              const Type *AllocTy, const Type *IntPtrTy,
-                              Value *ArraySize, const Twine &NameStr) {
-  return createMalloc(InsertBefore, NULL, AllocTy,
-                      IntPtrTy, ArraySize, NameStr);
+Value *CallInst::CreateMalloc(Instruction *InsertBefore, const Type *IntPtrTy,
+                              const Type *AllocTy, Value *ArraySize,
+                              const Twine &Name) {
+  return createMalloc(InsertBefore, NULL, IntPtrTy, AllocTy, ArraySize, Name);
 }
 
 /// CreateMalloc - Generate the IR for a call to malloc:
@@ -547,11 +540,10 @@ Value *CallInst::CreateMalloc(Instruction *InsertBefore,
 /// 3. Bitcast the result of the malloc call to the specified type.
 /// Note: This function does not add the bitcast to the basic block, that is the
 /// responsibility of the caller.
-Value *CallInst::CreateMalloc(BasicBlock *InsertAtEnd,
-                              const Type *AllocTy, const Type *IntPtrTy,
-                              Value *ArraySize, const Twine &NameStr) {
-  return createMalloc(NULL, InsertAtEnd, AllocTy, 
-                      IntPtrTy, ArraySize, NameStr);
+Value *CallInst::CreateMalloc(BasicBlock *InsertAtEnd, const Type *IntPtrTy,
+                              const Type *AllocTy, Value *ArraySize, 
+                              const Twine &Name) {
+  return createMalloc(NULL, InsertAtEnd, IntPtrTy, AllocTy, ArraySize, Name);
 }
 
 //===----------------------------------------------------------------------===//

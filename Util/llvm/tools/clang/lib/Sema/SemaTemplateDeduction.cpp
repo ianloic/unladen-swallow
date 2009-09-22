@@ -410,7 +410,7 @@ DeduceTemplateArguments(ASTContext &Context,
   //     T
   //     cv-list T
   if (const TemplateTypeParmType *TemplateTypeParm
-        = Param->getAsTemplateTypeParmType()) {
+        = Param->getAs<TemplateTypeParmType>()) {
     unsigned Index = TemplateTypeParm->getIndex();
     bool RecanonicalizeArg = false;
 
@@ -1040,7 +1040,7 @@ Sema::DeduceTemplateArguments(ClassTemplatePartialSpecializationDecl *Partial,
 /// \brief Determine whether the given type T is a simple-template-id type.
 static bool isSimpleTemplateIdType(QualType T) {
   if (const TemplateSpecializationType *Spec
-        = T->getAsTemplateSpecializationType())
+        = T->getAs<TemplateSpecializationType>())
     return Spec->getTemplateName().getAsTemplateDecl() != 0;
 
   return false;
@@ -1157,7 +1157,7 @@ Sema::SubstituteExplicitTemplateArguments(
   if (FunctionType) {
     // FIXME: exception-specifications?
     const FunctionProtoType *Proto
-      = Function->getType()->getAsFunctionProtoType();
+      = Function->getType()->getAs<FunctionProtoType>();
     assert(Proto && "Function template does not have a prototype?");
 
     QualType ResultType
@@ -1310,7 +1310,7 @@ Sema::DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
     return TDK_TooFewArguments;
   else if (NumArgs > Function->getNumParams()) {
     const FunctionProtoType *Proto
-      = Function->getType()->getAsFunctionProtoType();
+      = Function->getType()->getAs<FunctionProtoType>();
     if (!Proto->isVariadic())
       return TDK_TooManyArguments;
 
@@ -1384,7 +1384,7 @@ Sema::DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
       //   the argument is an lvalue, the type A& is used in place of A for
       //   type deduction.
       if (isa<RValueReferenceType>(ParamRefType) &&
-          ParamRefType->getAsTemplateTypeParmType() &&
+          ParamRefType->getAs<TemplateTypeParmType>() &&
           Args[I]->isLvalue(Context) == Expr::LV_Valid)
         ArgType = Context.getLValueReferenceType(ArgType);
     }
@@ -2198,4 +2198,19 @@ Sema::MarkUsedTemplateParameters(const TemplateArgumentList &TemplateArgs,
                                  llvm::SmallVectorImpl<bool> &Used) {
   for (unsigned I = 0, N = TemplateArgs.size(); I != N; ++I)
     ::MarkUsedTemplateParameters(*this, TemplateArgs[I], OnlyDeduced, Used);
+}
+
+/// \brief Marks all of the template parameters that will be deduced by a
+/// call to the given function template.
+void Sema::MarkDeducedTemplateParameters(FunctionTemplateDecl *FunctionTemplate,
+                                         llvm::SmallVectorImpl<bool> &Deduced) {
+  TemplateParameterList *TemplateParams 
+    = FunctionTemplate->getTemplateParameters();
+  Deduced.clear();
+  Deduced.resize(TemplateParams->size());
+  
+  FunctionDecl *Function = FunctionTemplate->getTemplatedDecl();
+  for (unsigned I = 0, N = Function->getNumParams(); I != N; ++I)
+    ::MarkUsedTemplateParameters(*this, Function->getParamDecl(I)->getType(),
+                                 true, Deduced);
 }

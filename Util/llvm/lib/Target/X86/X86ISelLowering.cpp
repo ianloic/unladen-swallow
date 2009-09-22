@@ -65,7 +65,7 @@ static TargetLoweringObjectFile *createTLOF(X86TargetMachine &TM) {
   case X86Subtarget::isDarwin:
     if (TM.getSubtarget<X86Subtarget>().is64Bit())
       return new X8664_MachoTargetObjectFile();
-    return new TargetLoweringObjectFileMachO();
+    return new X8632_MachoTargetObjectFile();
   case X86Subtarget::isELF:
     return new TargetLoweringObjectFileELF();
   case X86Subtarget::isMingw:
@@ -5363,21 +5363,48 @@ SDValue X86TargetLowering::EmitTest(SDValue Op, unsigned X86CC,
       Opcode = X86ISD::ADD;
       NumOperands = 2;
       break;
+    case ISD::AND: {
+      // If the primary and result isn't used, don't bother using X86ISD::AND,
+      // because a TEST instruction will be better.
+      bool NonFlagUse = false;
+      for (SDNode::use_iterator UI = Op.getNode()->use_begin(),
+           UE = Op.getNode()->use_end(); UI != UE; ++UI)
+        if (UI->getOpcode() != ISD::BRCOND &&
+            UI->getOpcode() != ISD::SELECT &&
+            UI->getOpcode() != ISD::SETCC) {
+          NonFlagUse = true;
+          break;
+        }
+      if (!NonFlagUse)
+        break;
+    }
+    // FALL THROUGH
     case ISD::SUB:
-      // Due to the ISEL shortcoming noted above, be conservative if this sub is
+    case ISD::OR:
+    case ISD::XOR:
+      // Due to the ISEL shortcoming noted above, be conservative if this op is
       // likely to be selected as part of a load-modify-store instruction.
       for (SDNode::use_iterator UI = Op.getNode()->use_begin(),
            UE = Op.getNode()->use_end(); UI != UE; ++UI)
         if (UI->getOpcode() == ISD::STORE)
           goto default_case;
-      // Otherwise use a regular EFLAGS-setting sub.
-      Opcode = X86ISD::SUB;
+      // Otherwise use a regular EFLAGS-setting instruction.
+      switch (Op.getNode()->getOpcode()) {
+      case ISD::SUB: Opcode = X86ISD::SUB; break;
+      case ISD::OR:  Opcode = X86ISD::OR;  break;
+      case ISD::XOR: Opcode = X86ISD::XOR; break;
+      case ISD::AND: Opcode = X86ISD::AND; break;
+      default: llvm_unreachable("unexpected operator!");
+      }
       NumOperands = 2;
       break;
     case X86ISD::ADD:
     case X86ISD::SUB:
     case X86ISD::INC:
     case X86ISD::DEC:
+    case X86ISD::OR:
+    case X86ISD::XOR:
+    case X86ISD::AND:
       return SDValue(Op.getNode(), 1);
     default:
     default_case:
@@ -5605,7 +5632,10 @@ static bool isX86LogicalCmp(SDValue Op) {
        Opc == X86ISD::SMUL ||
        Opc == X86ISD::UMUL ||
        Opc == X86ISD::INC ||
-       Opc == X86ISD::DEC))
+       Opc == X86ISD::DEC ||
+       Opc == X86ISD::OR ||
+       Opc == X86ISD::XOR ||
+       Opc == X86ISD::AND))
     return true;
 
   return false;
@@ -7133,6 +7163,9 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::UMUL:               return "X86ISD::UMUL";
   case X86ISD::INC:                return "X86ISD::INC";
   case X86ISD::DEC:                return "X86ISD::DEC";
+  case X86ISD::OR:                 return "X86ISD::OR";
+  case X86ISD::XOR:                return "X86ISD::XOR";
+  case X86ISD::AND:                return "X86ISD::AND";
   case X86ISD::MUL_IMM:            return "X86ISD::MUL_IMM";
   case X86ISD::PTEST:              return "X86ISD::PTEST";
   case X86ISD::VASTART_SAVE_XMM_REGS: return "X86ISD::VASTART_SAVE_XMM_REGS";
@@ -7635,23 +7668,17 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
 // all of this code can be replaced with that in the .td file.
 MachineBasicBlock *
 X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
-			    unsigned numArgs, bool memArg) const {
+                            unsigned numArgs, bool memArg) const {
 
   MachineFunction *F = BB->getParent();
   DebugLoc dl = MI->getDebugLoc();
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
 
   unsigned Opc;
-
-  if (memArg) {
-    Opc = numArgs == 3 ?
-      X86::PCMPISTRM128rm :
-      X86::PCMPESTRM128rm;
-  } else {
-    Opc = numArgs == 3 ?
-      X86::PCMPISTRM128rr :
-      X86::PCMPESTRM128rr;
-  }
+  if (memArg)
+    Opc = numArgs == 3 ? X86::PCMPISTRM128rm : X86::PCMPESTRM128rm;
+  else
+    Opc = numArgs == 3 ? X86::PCMPISTRM128rr : X86::PCMPESTRM128rr;
 
   MachineInstrBuilder MIB = BuildMI(BB, dl, TII->get(Opc));
 
@@ -7740,10 +7767,11 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
 
 MachineBasicBlock *
 X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
-                                     MachineBasicBlock *BB) const {
+                                     MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc DL = MI->getDebugLoc();
-  
+
   // To "insert" a SELECT_CC instruction, we actually have to insert the
   // diamond control-flow pattern.  The incoming instruction knows the
   // destination vreg to set, the condition code register to branch on, the
@@ -7751,7 +7779,7 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
   MachineFunction::iterator It = BB;
   ++It;
-  
+
   //  thisMBB:
   //  ...
   //   TrueVal = ...
@@ -7767,22 +7795,30 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
-  // Update machine-CFG edges by transferring all successors of the current
+  // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
-  sinkMBB->transferSuccessors(BB);
-  
+  // Also inform sdisel of the edge changes.
+  for (MachineBasicBlock::succ_iterator I = BB->succ_begin(),
+         E = BB->succ_end(); I != E; ++I) {
+    EM->insert(std::make_pair(*I, sinkMBB));
+    sinkMBB->addSuccessor(*I);
+  }
+  // Next, remove all successors of the current block, and add the true
+  // and fallthrough blocks as its successors.
+  while (!BB->succ_empty())
+    BB->removeSuccessor(BB->succ_begin());
   // Add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);
-  
+
   //  copy0MBB:
   //   %FalseValue = ...
   //   # fallthrough to sinkMBB
   BB = copy0MBB;
-  
+
   // Update machine-CFG edges
   BB->addSuccessor(sinkMBB);
-  
+
   //  sinkMBB:
   //   %Result = phi [ %FalseValue, copy0MBB ], [ %TrueValue, thisMBB ]
   //  ...
@@ -7798,7 +7834,8 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
 
 MachineBasicBlock *
 X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                               MachineBasicBlock *BB) const {
+                                               MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   switch (MI->getOpcode()) {
   default: assert(false && "Unexpected instr type to insert");
   case X86::CMOV_GR8:
@@ -7808,7 +7845,7 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::CMOV_V4F32:
   case X86::CMOV_V2F64:
   case X86::CMOV_V2I64:
-    return EmitLoweredSelect(MI, BB);
+    return EmitLoweredSelect(MI, BB, EM);
 
   case X86::FP32_TO_INT16_IN_MEM:
   case X86::FP32_TO_INT32_IN_MEM:
@@ -8094,6 +8131,9 @@ void X86TargetLowering::computeMaskedBitsForTargetNode(const SDValue Op,
   case X86ISD::UMUL:
   case X86ISD::INC:
   case X86ISD::DEC:
+  case X86ISD::OR:
+  case X86ISD::XOR:
+  case X86ISD::AND:
     // These nodes' second result is a boolean.
     if (Op.getResNo() == 0)
       break;
@@ -8216,76 +8256,158 @@ static SDValue PerformSELECTCombine(SDNode *N, SelectionDAG &DAG,
   SDValue LHS = N->getOperand(1);
   SDValue RHS = N->getOperand(2);
 
-  // If we have SSE[12] support, try to form min/max nodes.
+  // If we have SSE[12] support, try to form min/max nodes. SSE min/max
+  // instructions have the peculiarity that if either operand is a NaN,
+  // they chose what we call the RHS operand (and as such are not symmetric).
+  // It happens that this matches the semantics of the common C idiom
+  // x<y?x:y and related forms, so we can recognize these cases.
   if (Subtarget->hasSSE2() &&
       (LHS.getValueType() == MVT::f32 || LHS.getValueType() == MVT::f64) &&
       Cond.getOpcode() == ISD::SETCC) {
     ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
 
     unsigned Opcode = 0;
+    // Check for x CC y ? x : y.
     if (LHS == Cond.getOperand(0) && RHS == Cond.getOperand(1)) {
       switch (CC) {
       default: break;
-      case ISD::SETOLE: // (X <= Y) ? X : Y -> min
+      case ISD::SETULT:
+        // This can be a min if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(RHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(LHS))
+            break;
+        }
+        Opcode = X86ISD::FMIN;
+        break;
+      case ISD::SETOLE:
+        // This can be a min if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(LHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(RHS))
+            break;
+        }
+        Opcode = X86ISD::FMIN;
+        break;
       case ISD::SETULE:
-      case ISD::SETLE:
-        if (!UnsafeFPMath) break;
-        // FALL THROUGH.
-      case ISD::SETOLT:  // (X olt/lt Y) ? X : Y -> min
+        // This can be a min, but if either operand is a NaN we need it to
+        // preserve the original LHS.
+        std::swap(LHS, RHS);
+      case ISD::SETOLT:
       case ISD::SETLT:
+      case ISD::SETLE:
         Opcode = X86ISD::FMIN;
         break;
 
-      case ISD::SETOGT: // (X > Y) ? X : Y -> max
+      case ISD::SETOGE:
+        // This can be a max if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(LHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(RHS))
+            break;
+        }
+        Opcode = X86ISD::FMAX;
+        break;
       case ISD::SETUGT:
+        // This can be a max if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(RHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(LHS))
+            break;
+        }
+        Opcode = X86ISD::FMAX;
+        break;
+      case ISD::SETUGE:
+        // This can be a max, but if either operand is a NaN we need it to
+        // preserve the original LHS.
+        std::swap(LHS, RHS);
+      case ISD::SETOGT:
       case ISD::SETGT:
-        if (!UnsafeFPMath) break;
-        // FALL THROUGH.
-      case ISD::SETUGE:  // (X uge/ge Y) ? X : Y -> max
       case ISD::SETGE:
         Opcode = X86ISD::FMAX;
         break;
       }
+    // Check for x CC y ? y : x -- a min/max with reversed arms.
     } else if (LHS == Cond.getOperand(1) && RHS == Cond.getOperand(0)) {
       switch (CC) {
       default: break;
-      case ISD::SETOGT:
-        // This can use a min only if the LHS isn't NaN.
-        if (DAG.isKnownNeverNaN(LHS))
-          Opcode = X86ISD::FMIN;
-        else if (DAG.isKnownNeverNaN(RHS)) {
-          Opcode = X86ISD::FMIN;
-          // Put the potential NaN in the RHS so that SSE will preserve it.
-          std::swap(LHS, RHS);
+      case ISD::SETOGE:
+        // This can be a min if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(RHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(LHS))
+            break;
         }
+        Opcode = X86ISD::FMIN;
         break;
-
-      case ISD::SETUGT: // (X > Y) ? Y : X -> min
+      case ISD::SETUGT:
+        // This can be a min if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(LHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(RHS))
+            break;
+        }
+        Opcode = X86ISD::FMIN;
+        break;
+      case ISD::SETUGE:
+        // This can be a min, but if either operand is a NaN we need it to
+        // preserve the original LHS.
+        std::swap(LHS, RHS);
+      case ISD::SETOGT:
       case ISD::SETGT:
-        if (!UnsafeFPMath) break;
-        // FALL THROUGH.
-      case ISD::SETUGE:  // (X uge/ge Y) ? Y : X -> min
       case ISD::SETGE:
         Opcode = X86ISD::FMIN;
         break;
 
-      case ISD::SETULE:
-        // This can use a max only if the LHS isn't NaN.
-        if (DAG.isKnownNeverNaN(LHS))
-          Opcode = X86ISD::FMAX;
-        else if (DAG.isKnownNeverNaN(RHS)) {
-          Opcode = X86ISD::FMAX;
-          // Put the potential NaN in the RHS so that SSE will preserve it.
-          std::swap(LHS, RHS);
+      case ISD::SETULT:
+        // This can be a max if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(LHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(RHS))
+            break;
         }
+        Opcode = X86ISD::FMAX;
         break;
-
-      case ISD::SETOLE:   // (X <= Y) ? Y : X -> max
-      case ISD::SETLE:
-        if (!UnsafeFPMath) break;
-        // FALL THROUGH.
-      case ISD::SETOLT:   // (X olt/lt Y) ? Y : X -> max
+      case ISD::SETOLE:
+        // This can be a max if we can prove that at least one of the operands
+        // is not a nan.
+        if (!FiniteOnlyFPMath()) {
+          if (DAG.isKnownNeverNaN(RHS)) {
+            // Put the potential NaN in the RHS so that SSE will preserve it.
+            std::swap(LHS, RHS);
+          } else if (!DAG.isKnownNeverNaN(LHS))
+            break;
+        }
+        Opcode = X86ISD::FMAX;
+        break;
+      case ISD::SETULE:
+        // This can be a max, but if either operand is a NaN we need it to
+        // preserve the original LHS.
+        std::swap(LHS, RHS);
+      case ISD::SETOLT:
       case ISD::SETLT:
+      case ISD::SETLE:
         Opcode = X86ISD::FMAX;
         break;
       }
@@ -9334,12 +9456,12 @@ X86TargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
         (Constraint[4] >= '0' && Constraint[4] <= '7') &&
         Constraint[5] == ')' &&
         Constraint[6] == '}') {
-      
+
       Res.first = X86::ST0+Constraint[4]-'0';
       Res.second = X86::RFP80RegisterClass;
       return Res;
     }
-    
+
     // GCC allows "st(0)" to be called just plain "st".
     if (StringsEqualNoCase("{st}", Constraint)) {
       Res.first = X86::ST0;
@@ -9353,7 +9475,7 @@ X86TargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
       Res.second = X86::CCRRegisterClass;
       return Res;
     }
-    
+
     // 'A' means EAX + EDX.
     if (Constraint == "A") {
       Res.first = X86::EAX;

@@ -77,6 +77,12 @@ void ARMTargetLowering::addTypeForNEON(EVT VT, EVT PromotedLdStVT,
     setOperationAction(ISD::VSETCC, VT.getSimpleVT(), Custom);
   if (ElemTy == MVT::i8 || ElemTy == MVT::i16)
     setOperationAction(ISD::EXTRACT_VECTOR_ELT, VT.getSimpleVT(), Custom);
+  if (ElemTy != MVT::i32) {
+    setOperationAction(ISD::SINT_TO_FP, VT.getSimpleVT(), Expand);
+    setOperationAction(ISD::UINT_TO_FP, VT.getSimpleVT(), Expand);
+    setOperationAction(ISD::FP_TO_SINT, VT.getSimpleVT(), Expand);
+    setOperationAction(ISD::FP_TO_UINT, VT.getSimpleVT(), Expand);
+  }
   setOperationAction(ISD::BUILD_VECTOR, VT.getSimpleVT(), Custom);
   setOperationAction(ISD::VECTOR_SHUFFLE, VT.getSimpleVT(), Custom);
   setOperationAction(ISD::CONCAT_VECTORS, VT.getSimpleVT(), Custom);
@@ -2882,7 +2888,8 @@ void ARMTargetLowering::ReplaceNodeResults(SDNode *N,
 
 MachineBasicBlock *
 ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                               MachineBasicBlock *BB) const {
+                                               MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
   switch (MI->getOpcode()) {
@@ -2913,12 +2920,15 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     F->insert(It, sinkMBB);
     // Update machine-CFG edges by first adding all successors of the current
     // block to the new block which will contain the Phi node for the select.
-    for(MachineBasicBlock::succ_iterator i = BB->succ_begin(),
-        e = BB->succ_end(); i != e; ++i)
-      sinkMBB->addSuccessor(*i);
+    // Also inform sdisel of the edge changes.
+    for (MachineBasicBlock::succ_iterator I = BB->succ_begin(), 
+           E = BB->succ_end(); I != E; ++I) {
+      EM->insert(std::make_pair(*I, sinkMBB));
+      sinkMBB->addSuccessor(*I);
+    }
     // Next, remove all successors of the current block, and add the true
     // and fallthrough blocks as its successors.
-    while(!BB->succ_empty())
+    while (!BB->succ_empty())
       BB->removeSuccessor(BB->succ_begin());
     BB->addSuccessor(copy0MBB);
     BB->addSuccessor(sinkMBB);

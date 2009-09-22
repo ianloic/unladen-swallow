@@ -24,6 +24,7 @@
 
 #include "clang/Frontend/AnalysisConsumer.h"
 #include "clang/Frontend/ASTConsumers.h"
+#include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompileOptions.h"
 #include "clang/Frontend/FixItRewriter.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
@@ -37,6 +38,7 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Analysis/PathDiagnostic.h"
 #include "clang/CodeGen/ModuleBuilder.h"
+#include "clang/Sema/CodeCompleteConsumer.h"
 #include "clang/Sema/ParseAST.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "clang/AST/ASTConsumer.h"
@@ -212,6 +214,17 @@ OutputFile("o",
  llvm::cl::desc("Specify output file"));
 
 
+static llvm::cl::opt<int>
+DumpCodeCompletion("code-completion-dump",
+                   llvm::cl::value_desc("N"),
+                   llvm::cl::desc("Dump code-completion information at $$N$$"));
+
+/// \brief Buld a new code-completion consumer that prints the results of
+/// code completion to standard output.
+static CodeCompleteConsumer *BuildPrintingCodeCompleter(Sema &S, void *) {
+  return new PrintingCodeCompleteConsumer(S, llvm::outs());
+}
+
 //===----------------------------------------------------------------------===//
 // PTH.
 //===----------------------------------------------------------------------===//
@@ -318,7 +331,8 @@ enum LangKind {
   langkind_objc_cpp,
   langkind_objcxx,
   langkind_objcxx_cpp,
-  langkind_ocl
+  langkind_ocl,
+  langkind_ast
 };
 
 static llvm::cl::opt<LangKind>
@@ -347,14 +361,9 @@ BaseLang("x", llvm::cl::desc("Base language to compile"),
                                "C++ header"),
                     clEnumValN(langkind_objcxx, "objective-c++-header",
                                "Objective-C++ header"),
+                    clEnumValN(langkind_ast, "ast",
+                               "Clang AST"),
                     clEnumValEnd));
-
-static llvm::cl::opt<bool>
-LangObjC("ObjC", llvm::cl::desc("Set base language to Objective-C"),
-         llvm::cl::Hidden);
-static llvm::cl::opt<bool>
-LangObjCXX("ObjC++", llvm::cl::desc("Set base language to Objective-C++"),
-           llvm::cl::Hidden);
 
 static llvm::cl::opt<bool>
 ObjCExclusiveGC("fobjc-gc-only",
@@ -400,35 +409,16 @@ static llvm::cl::opt<bool>
 PThread("pthread", llvm::cl::desc("Support POSIX threads in generated code"),
          llvm::cl::init(false));
 
-/// InitializeBaseLanguage - Handle the -x foo options.
-static void InitializeBaseLanguage() {
-  if (LangObjC)
-    BaseLang = langkind_objc;
-  else if (LangObjCXX)
-    BaseLang = langkind_objcxx;
-}
-
-static LangKind GetLanguage(const std::string &Filename) {
+static LangKind GetLanguage(llvm::StringRef Filename) {
   if (BaseLang != langkind_unspecified)
     return BaseLang;
 
-  std::string::size_type DotPos = Filename.rfind('.');
-
-  if (DotPos == std::string::npos) {
-    BaseLang = langkind_c;  // Default to C if no extension.
+  llvm::StringRef Ext = Filename.rsplit('.').second;
+  if (Ext == "ast")
+    return langkind_ast;
+  else if (Ext == "c")
     return langkind_c;
-  }
-
-  std::string Ext = std::string(Filename.begin()+DotPos+1, Filename.end());
-  // C header: .h
-  // C++ header: .hh or .H;
-  // assembler no preprocessing: .s
-  // assembler: .S
-  if (Ext == "c")
-    return langkind_c;
-  else if (Ext == "S" ||
-           // If the compiler is run on a .s file, preprocess it as .S
-           Ext == "s")
+  else if (Ext == "S" || Ext == "s")
     return langkind_asm_cpp;
   else if (Ext == "i")
     return langkind_c_cpp;
@@ -670,8 +660,8 @@ TargetABI("target-abi",
 
 // It might be nice to add bounds to the CommandLine library directly.
 struct OptLevelParser : public llvm::cl::parser<unsigned> {
-  bool parse(llvm::cl::Option &O, const char *ArgName,
-             const std::string &Arg, unsigned &Val) {
+  bool parse(llvm::cl::Option &O, llvm::StringRef ArgName,
+             llvm::StringRef Arg, unsigned &Val) {
     if (llvm::cl::parser<unsigned>::parse(O, ArgName, Arg, Val))
       return true;
     if (Val > 3)
@@ -708,6 +698,7 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
   if (LangStd == lang_unspecified) {
     // Based on the base language, pick one.
     switch (LK) {
+    case langkind_ast: assert(0 && "Invalid call for AST inputs");
     case lang_unspecified: assert(0 && "Unknown base language");
     case langkind_ocl:
       LangStd = lang_c99;
@@ -1755,55 +1746,36 @@ static llvm::raw_ostream *ComputeOutFile(const std::string &InFile,
   return Ret;
 }
 
-/// ProcessInputFile - Process a single input file with the specified state.
-///
-static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
-                             const std::string &InFile, ProgActions PA,
-                             const llvm::StringMap<bool> &Features,
-                             llvm::LLVMContext& Context) {
-  llvm::OwningPtr<llvm::raw_ostream> OS;
-  llvm::OwningPtr<ASTConsumer> Consumer;
-  bool ClearSourceMgr = false;
-  FixItRewriter *FixItRewrite = 0;
-  bool CompleteTranslationUnit = true;
-  llvm::sys::Path OutPath;
-
+static ASTConsumer *CreateConsumerAction(Preprocessor &PP,
+                                         const std::string &InFile,
+                                         ProgActions PA,
+                                         llvm::OwningPtr<llvm::raw_ostream> &OS,
+                                         llvm::sys::Path &OutPath,
+                                         const llvm::StringMap<bool> &Features,
+                                         llvm::LLVMContext& Context) {
   switch (PA) {
   default:
-    fprintf(stderr, "Unexpected program action!\n");
-    HadErrors = true;
-    return;
+    return 0;
 
   case ASTPrint:
     OS.reset(ComputeOutFile(InFile, 0, false, OutPath));
-    Consumer.reset(CreateASTPrinter(OS.get()));
-    break;
+    return CreateASTPrinter(OS.get());
 
   case ASTPrintXML:
     OS.reset(ComputeOutFile(InFile, "xml", false, OutPath));
-    Consumer.reset(CreateASTPrinterXML(OS.get()));
-    break;
+    return CreateASTPrinterXML(OS.get());
 
   case ASTDump:
-    Consumer.reset(CreateASTDumper());
-    break;
+    return CreateASTDumper();
 
   case ASTView:
-    Consumer.reset(CreateASTViewer());
-    break;
+    return CreateASTViewer();
 
   case PrintDeclContext:
-    Consumer.reset(CreateDeclContextPrinter());
-    break;
-
-  case EmitHTML:
-    OS.reset(ComputeOutFile(InFile, 0, true, OutPath));
-    Consumer.reset(CreateHTMLPrinter(OS.get(), PP.getDiagnostics(), &PP, &PPF));
-    break;
+    return CreateDeclContextPrinter();
 
   case InheritanceView:
-    Consumer.reset(CreateInheritanceViewer(InheritanceViewCls));
-    break;
+    return CreateInheritanceViewer(InheritanceViewCls);
 
   case EmitAssembly:
   case EmitLLVM:
@@ -1825,11 +1797,57 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
 
     CompileOptions Opts;
     InitializeCompileOptions(Opts, PP.getLangOptions(), Features);
-    Consumer.reset(CreateBackendConsumer(Act, PP.getDiagnostics(),
-                                         PP.getLangOptions(), Opts, InFile,
-                                         OS.get(), Context));
-    break;
+    return CreateBackendConsumer(Act, PP.getDiagnostics(), PP.getLangOptions(),
+                                 Opts, InFile, OS.get(), Context);
   }
+
+  case RewriteObjC:
+    OS.reset(ComputeOutFile(InFile, "cpp", true, OutPath));
+    return CreateObjCRewriter(InFile, OS.get(), PP.getDiagnostics(),
+                              PP.getLangOptions(), SilenceRewriteMacroWarning);
+
+  case RewriteBlocks:
+    return CreateBlockRewriter(InFile, PP.getDiagnostics(),
+                               PP.getLangOptions());
+  }
+}
+
+/// ProcessInputFile - Process a single input file with the specified state.
+///
+static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
+                             const std::string &InFile, ProgActions PA,
+                             const llvm::StringMap<bool> &Features,
+                             llvm::LLVMContext& Context) {
+  llvm::OwningPtr<llvm::raw_ostream> OS;
+  llvm::OwningPtr<ASTConsumer> Consumer;
+  bool ClearSourceMgr = false;
+  FixItRewriter *FixItRewrite = 0;
+  bool CompleteTranslationUnit = true;
+  llvm::sys::Path OutPath;
+
+  switch (PA) {
+  default:
+    Consumer.reset(CreateConsumerAction(PP, InFile, PA, OS, OutPath,
+                                        Features, Context));
+
+    if (!Consumer.get()) {
+      fprintf(stderr, "Unexpected program action!\n");
+      HadErrors = true;
+      return;
+    }
+
+    break;;
+
+  case EmitHTML:
+    OS.reset(ComputeOutFile(InFile, 0, true, OutPath));
+    Consumer.reset(CreateHTMLPrinter(OS.get(), PP.getDiagnostics(), &PP, &PPF));
+    break;
+
+  case RunAnalysis:
+    Consumer.reset(CreateAnalysisConsumer(PP.getDiagnostics(), &PP, &PPF,
+                                          PP.getLangOptions(), OutputFile,
+                                          ReadAnalyzerOptions()));
+    break;
 
   case GeneratePCH:
     if (RelocatablePCH.getValue() && !isysroot.getNumOccurrences()) {
@@ -1844,25 +1862,6 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
       Consumer.reset(CreatePCHGenerator(PP, OS.get()));
     CompleteTranslationUnit = false;
     break;
-
-  case RewriteObjC:
-    OS.reset(ComputeOutFile(InFile, "cpp", true, OutPath));
-    Consumer.reset(CreateObjCRewriter(InFile, OS.get(), PP.getDiagnostics(),
-                                      PP.getLangOptions(),
-                                      SilenceRewriteMacroWarning));
-    break;
-
-  case RewriteBlocks:
-    Consumer.reset(CreateBlockRewriter(InFile, PP.getDiagnostics(),
-                                       PP.getLangOptions()));
-    break;
-
-  case RunAnalysis: {
-    Consumer.reset(CreateAnalysisConsumer(PP.getDiagnostics(), &PP, &PPF,
-                                          PP.getLangOptions(), OutputFile,
-                                          ReadAnalyzerOptions()));
-    break;
-  }
 
   case DumpRawTokens: {
     llvm::TimeRegion Timer(ClangFrontendTimer);
@@ -2052,12 +2051,29 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
     if (InitializeSourceManager(PP, InFile))
       return;
   }
-
-
+  
   // If we have an ASTConsumer, run the parser with it.
-  if (Consumer)
+  if (Consumer) {
+    CodeCompleteConsumer *(*CreateCodeCompleter)(Sema &, void *) = 0;
+    void *CreateCodeCompleterData = 0;
+    
+    if (DumpCodeCompletion) {
+      // To dump code-completion information, we chop off the file at the
+      // location of the string $$N$$, where N is the value provided to
+      // -code-completion-dump, and then tell the lexer to return a 
+      // code-completion token before it hits the end of the file.
+      // FIXME: Find $$N$$ in the main file buffer
+      
+      PP.SetMainFileEofCodeCompletion();
+      
+      // Set up the creation routine for code-completion.
+      CreateCodeCompleter = BuildPrintingCodeCompleter;
+    }
+
     ParseAST(PP, Consumer.get(), *ContextOwner.get(), Stats,
-             CompleteTranslationUnit);
+             CompleteTranslationUnit,
+             CreateCodeCompleter, CreateCodeCompleterData);
+  }
 
   if (PA == RunPreprocessorOnly) {    // Just lex as fast as we can, no output.
     llvm::TimeRegion Timer(ClangFrontendTimer);
@@ -2117,6 +2133,66 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
   // files.
   if (ClearSourceMgr)
     PP.getSourceManager().clearIDTables();
+
+  // Always delete the output stream because we don't want to leak file
+  // handles.  Also, we don't want to try to erase an open file.
+  OS.reset();
+
+  if ((HadErrors || (PP.getDiagnostics().getNumErrors() != 0)) &&
+      !OutPath.isEmpty()) {
+    // If we had errors, try to erase the output file.
+    OutPath.eraseFromDisk();
+  }
+}
+
+/// ProcessInputFile - Process a single AST input file with the specified state.
+///
+static void ProcessASTInputFile(const std::string &InFile, ProgActions PA,
+                                const llvm::StringMap<bool> &Features,
+                                Diagnostic &Diags, FileManager &FileMgr,
+                                llvm::LLVMContext& Context) {
+  std::string Error;
+  llvm::OwningPtr<ASTUnit> AST(ASTUnit::LoadFromPCHFile(InFile, Diags, FileMgr,
+                                                        &Error));
+  if (!AST) {
+    Diags.Report(FullSourceLoc(), diag::err_fe_invalid_ast_file) << Error;
+    return;
+  }
+
+  Preprocessor &PP = AST->getPreprocessor();
+
+  llvm::OwningPtr<llvm::raw_ostream> OS;
+  llvm::sys::Path OutPath;
+  llvm::OwningPtr<ASTConsumer> Consumer(CreateConsumerAction(PP, InFile, PA, OS,
+                                                             OutPath, Features,
+                                                             Context));
+
+  if (!Consumer.get()) {
+    Diags.Report(FullSourceLoc(), diag::err_fe_invalid_ast_action);
+    return;
+  }
+
+  // Set the main file ID to an empty file.
+  //
+  // FIXME: We probably shouldn't need this, but for now this is the simplest
+  // way to reuse the logic in ParseAST.
+  const char *EmptyStr = "";
+  llvm::MemoryBuffer *SB =
+    llvm::MemoryBuffer::getMemBuffer(EmptyStr, EmptyStr, "<dummy input>");
+  AST->getSourceManager().createMainFileIDForMemBuffer(SB);
+
+  // Stream the input AST to the consumer.
+  ParseAST(PP, Consumer.get(), AST->getASTContext(), Stats);
+
+  // Release the consumer and the AST, in that order since the consumer may
+  // perform actions in its destructor which require the context.
+  if (DisableFree) {
+    Consumer.take();
+    AST.take();
+  } else {
+    Consumer.reset();
+    AST.reset();
+  }
 
   // Always delete the output stream because we don't want to leak file
   // handles.  Also, we don't want to try to erase an open file.
@@ -2271,6 +2347,14 @@ int main(int argc, char **argv) {
   for (unsigned i = 0, e = InputFilenames.size(); i != e; ++i) {
     const std::string &InFile = InputFilenames[i];
 
+    LangKind LK = GetLanguage(InFile);
+    // AST inputs are handled specially.
+    if (LK == langkind_ast) {
+      ProcessASTInputFile(InFile, ProgAction, Features,
+                          Diags, FileMgr, Context);
+      continue;
+    }
+
     /// Create a SourceManager object.  This tracks and owns all the file
     /// buffers allocated to a translation unit.
     if (!SourceMgr)
@@ -2282,8 +2366,6 @@ int main(int argc, char **argv) {
     LangOptions LangInfo;
     DiagClient->setLangOptions(&LangInfo);
 
-    InitializeBaseLanguage();
-    LangKind LK = GetLanguage(InFile);
     InitializeLangOptions(LangInfo, LK);
     InitializeLanguageStandard(LangInfo, LK, Target.get(), Features);
 

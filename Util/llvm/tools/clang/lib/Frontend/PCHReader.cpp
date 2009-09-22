@@ -106,9 +106,11 @@ PCHValidator::ReadLanguageOptions(const LangOptions &LangOpts) {
     return true;
   }
   PARSE_LANGOPT_BENIGN(getVisibilityMode());
+  PARSE_LANGOPT_IMPORTANT(getStackProtectorMode(),
+                          diag::warn_pch_stack_protector);
   PARSE_LANGOPT_BENIGN(InstantiationDepth);
   PARSE_LANGOPT_IMPORTANT(OpenCL, diag::warn_pch_opencl);
-  PARSE_LANGOPT_IMPORTANT(ElideConstructors, diag::warn_elide_constructors);
+  PARSE_LANGOPT_IMPORTANT(ElideConstructors, diag::warn_pch_elide_constructors);
 #undef PARSE_LANGOPT_IRRELEVANT
 #undef PARSE_LANGOPT_BENIGN
 
@@ -1386,8 +1388,13 @@ PCHReader::PCHReadResult PCHReader::ReadPCH(const std::string &FileName) {
   this->FileName = FileName;
 
   // Open the PCH file.
+  //
+  // FIXME: This shouldn't be here, we should just take a raw_ostream.
   std::string ErrStr;
-  Buffer.reset(llvm::MemoryBuffer::getFile(FileName.c_str(), &ErrStr));
+  if (FileName == "-")
+    Buffer.reset(llvm::MemoryBuffer::getSTDIN());
+  else
+    Buffer.reset(llvm::MemoryBuffer::getFile(FileName.c_str(), &ErrStr));
   if (!Buffer) {
     Error(ErrStr.c_str());
     return IgnorePCH;
@@ -1534,7 +1541,7 @@ void PCHReader::InitializeContext(ASTContext &Ctx) {
   if (unsigned File = SpecialTypes[pch::SPECIAL_TYPE_FILE]) {
     QualType FileType = GetType(File);
     assert(!FileType.isNull() && "FILE type is NULL");
-    if (const TypedefType *Typedef = FileType->getAsTypedefType())
+    if (const TypedefType *Typedef = FileType->getAs<TypedefType>())
       Context->setFILEDecl(Typedef->getDecl());
     else {
       const TagType *Tag = FileType->getAs<TagType>();
@@ -1545,7 +1552,7 @@ void PCHReader::InitializeContext(ASTContext &Ctx) {
   if (unsigned Jmp_buf = SpecialTypes[pch::SPECIAL_TYPE_jmp_buf]) {
     QualType Jmp_bufType = GetType(Jmp_buf);
     assert(!Jmp_bufType.isNull() && "jmp_bug type is NULL");
-    if (const TypedefType *Typedef = Jmp_bufType->getAsTypedefType())
+    if (const TypedefType *Typedef = Jmp_bufType->getAs<TypedefType>())
       Context->setjmp_bufDecl(Typedef->getDecl());
     else {
       const TagType *Tag = Jmp_bufType->getAs<TagType>();
@@ -1556,7 +1563,7 @@ void PCHReader::InitializeContext(ASTContext &Ctx) {
   if (unsigned Sigjmp_buf = SpecialTypes[pch::SPECIAL_TYPE_sigjmp_buf]) {
     QualType Sigjmp_bufType = GetType(Sigjmp_buf);
     assert(!Sigjmp_bufType.isNull() && "sigjmp_buf type is NULL");
-    if (const TypedefType *Typedef = Sigjmp_bufType->getAsTypedefType())
+    if (const TypedefType *Typedef = Sigjmp_bufType->getAs<TypedefType>())
       Context->setsigjmp_bufDecl(Typedef->getDecl());
     else {
       const TagType *Tag = Sigjmp_bufType->getAs<TagType>();
@@ -1719,6 +1726,9 @@ bool PCHReader::ParseLanguageOptions(
     LangOpts.setGCMode((LangOptions::GCMode)Record[Idx]);
     ++Idx;
     LangOpts.setVisibilityMode((LangOptions::VisibilityMode)Record[Idx]);
+    ++Idx;
+    LangOpts.setStackProtectorMode((LangOptions::StackProtectorMode)
+                                   Record[Idx]);
     ++Idx;
     PARSE_LANGOPT(InstantiationDepth);
     PARSE_LANGOPT(OpenCL);
@@ -2129,9 +2139,9 @@ void PCHReader::StartTranslationUnit(ASTConsumer *Consumer) {
     return;
 
   for (unsigned I = 0, N = ExternalDefinitions.size(); I != N; ++I) {
-    Decl *D = GetDecl(ExternalDefinitions[I]);
-    DeclGroupRef DG(D);
-    Consumer->HandleTopLevelDecl(DG);
+    // Force deserialization of this decl, which will cause it to be passed to
+    // the consumer (or queued).
+    GetDecl(ExternalDefinitions[I]);
   }
 
   for (unsigned I = 0, N = InterestingDecls.size(); I != N; ++I) {

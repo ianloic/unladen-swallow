@@ -30,13 +30,16 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 using namespace llvm;
 
-JITDwarfEmitter::JITDwarfEmitter(JIT& theJit) : Jit(theJit) {}
+JITDwarfEmitter::JITDwarfEmitter(JIT& theJit) : MMI(0), Jit(theJit) {}
 
 
 unsigned char* JITDwarfEmitter::EmitDwarfTable(MachineFunction& F, 
                                                JITCodeEmitter& jce,
                                                unsigned char* StartFunction,
-                                               unsigned char* EndFunction) {
+                                               unsigned char* EndFunction,
+                                               unsigned char* &EHFramePtr) {
+  assert(MMI && "MachineModuleInfo not registered!");
+
   const TargetMachine& TM = F.getTarget();
   TD = TM.getTargetData();
   stackGrowthDirection = TM.getFrameInfo()->getStackGrowthDirection();
@@ -47,7 +50,6 @@ unsigned char* JITDwarfEmitter::EmitDwarfTable(MachineFunction& F,
                                                      EndFunction);
       
   unsigned char* Result = 0;
-  unsigned char* EHFramePtr = 0;
 
   const std::vector<Function *> Personalities = MMI->getPersonalities();
   EHFramePtr = EmitCommonEHFrame(Personalities[MMI->getPersonalityIndex()]);
@@ -206,6 +208,8 @@ struct CallSiteEntry {
 unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
                                          unsigned char* StartFunction,
                                          unsigned char* EndFunction) const {
+  assert(MMI && "MachineModuleInfo not registered!");
+
   // Map all labels and get rid of any dead landing pads.
   MMI->TidyLandingPads();
 

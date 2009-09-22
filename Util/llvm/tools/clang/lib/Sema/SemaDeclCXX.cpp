@@ -280,9 +280,13 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old) {
       Diag(OldParam->getLocation(), diag::note_previous_definition)
         << OldParam->getDefaultArgRange();
       Invalid = true;
-    } else if (OldParam->getDefaultArg()) {
+    } else if (OldParam->hasDefaultArg()) {
       // Merge the old default argument into the new parameter
-      NewParam->setDefaultArg(OldParam->getDefaultArg());
+      if (OldParam->hasUninstantiatedDefaultArg())
+        NewParam->setUninstantiatedDefaultArg(
+                                      OldParam->getUninstantiatedDefaultArg());
+      else
+        NewParam->setDefaultArg(OldParam->getDefaultArg());
     } else if (NewParam->hasDefaultArg()) {
       if (New->getDescribedFunctionTemplate()) {
         // Paragraph 4, quoted above, only applies to non-template functions.
@@ -321,8 +325,8 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old) {
   }
 
   if (CheckEquivalentExceptionSpec(
-          Old->getType()->getAsFunctionProtoType(), Old->getLocation(),
-          New->getType()->getAsFunctionProtoType(), New->getLocation())) {
+          Old->getType()->getAs<FunctionProtoType>(), Old->getLocation(),
+          New->getType()->getAs<FunctionProtoType>(), New->getLocation())) {
     Invalid = true;
   }
 
@@ -1628,7 +1632,7 @@ namespace {
       }
 
       // Check the return type.
-      QualType RTy = FD->getType()->getAsFunctionType()->getResultType();
+      QualType RTy = FD->getType()->getAs<FunctionType>()->getResultType();
       bool Invalid =
         SemaRef.RequireNonAbstractType(FD->getLocation(), RTy,
                                        diag::err_abstract_type_in_decl,
@@ -2058,7 +2062,7 @@ QualType Sema::CheckConstructorDeclarator(Declarator &D, QualType R,
   // return type, since constructors don't have return types. We
   // *always* have to do this, because GetTypeForDeclarator will
   // put in a result type of "int" when none was specified.
-  const FunctionProtoType *Proto = R->getAsFunctionProtoType();
+  const FunctionProtoType *Proto = R->getAs<FunctionProtoType>();
   return Context.getFunctionType(Context.VoidTy, Proto->arg_type_begin(),
                                  Proto->getNumArgs(),
                                  Proto->isVariadic(), 0);
@@ -2225,7 +2229,7 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
   }
 
   // Make sure we don't have any parameters.
-  if (R->getAsFunctionProtoType()->getNumArgs() > 0) {
+  if (R->getAs<FunctionProtoType>()->getNumArgs() > 0) {
     Diag(D.getIdentifierLoc(), diag::err_conv_function_with_params);
 
     // Delete the parameters.
@@ -2234,7 +2238,7 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
   }
 
   // Make sure the conversion function isn't variadic.
-  if (R->getAsFunctionProtoType()->isVariadic() && !D.isInvalidType()) {
+  if (R->getAs<FunctionProtoType>()->isVariadic() && !D.isInvalidType()) {
     Diag(D.getIdentifierLoc(), diag::err_conv_function_variadic);
     D.setInvalidType();
   }
@@ -2257,7 +2261,7 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
   // of the errors above fired) and with the conversion type as the
   // return type.
   R = Context.getFunctionType(ConvType, 0, 0, false,
-                              R->getAsFunctionProtoType()->getTypeQuals());
+                              R->getAs<FunctionProtoType>()->getTypeQuals());
 
   // C++0x explicit conversion operators.
   if (D.getDeclSpec().isExplicitSpecified() && !getLangOptions().CPlusPlus0x)
@@ -3795,7 +3799,7 @@ bool Sema::CheckOverloadedOperatorDeclaration(FunctionDecl *FnDecl) {
 
   // Overloaded operators other than operator() cannot be variadic.
   if (Op != OO_Call &&
-      FnDecl->getType()->getAsFunctionProtoType()->isVariadic()) {
+      FnDecl->getType()->getAs<FunctionProtoType>()->isVariadic()) {
     return Diag(FnDecl->getLocation(), diag::err_operator_overload_variadic)
       << FnDecl->getDeclName();
   }
@@ -3820,7 +3824,7 @@ bool Sema::CheckOverloadedOperatorDeclaration(FunctionDecl *FnDecl) {
   if ((Op == OO_PlusPlus || Op == OO_MinusMinus) && NumParams == 2) {
     ParmVarDecl *LastParam = FnDecl->getParamDecl(FnDecl->getNumParams() - 1);
     bool ParamIsInt = false;
-    if (const BuiltinType *BT = LastParam->getType()->getAsBuiltinType())
+    if (const BuiltinType *BT = LastParam->getType()->getAs<BuiltinType>())
       ParamIsInt = BT->getKind() == BuiltinType::Int;
 
     if (!ParamIsInt)
@@ -4023,40 +4027,57 @@ Sema::DeclPtrTy Sema::ActOnStaticAssertDeclaration(SourceLocation AssertLoc,
   return DeclPtrTy::make(Decl);
 }
 
+/// Handle a friend type declaration.  This works in tandem with
+/// ActOnTag.
+///
+/// Notes on friend class templates:
+///
+/// We generally treat friend class declarations as if they were
+/// declaring a class.  So, for example, the elaborated type specifier
+/// in a friend declaration is required to obey the restrictions of a
+/// class-head (i.e. no typedefs in the scope chain), template
+/// parameters are required to match up with simple template-ids, &c.
+/// However, unlike when declaring a template specialization, it's
+/// okay to refer to a template specialization without an empty
+/// template parameter declaration, e.g.
+///   friend class A<T>::B<unsigned>;
+/// We permit this as a special case; if there are any template
+/// parameters present at all, require proper matching, i.e.
+///   template <> template <class T> friend class A<int>::B;
 Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
                                           const DeclSpec &DS,
-                                          bool IsTemplate) {
+                                          MultiTemplateParamsArg TempParams) {
   SourceLocation Loc = DS.getSourceRange().getBegin();
 
   assert(DS.isFriendSpecified());
   assert(DS.getStorageClassSpec() == DeclSpec::SCS_unspecified);
 
-  // Handle friend templates specially.
-  if (IsTemplate) {
-    Decl *D;
-    switch (DS.getTypeSpecType()) {
-    default:
-      // FIXME: implement this
-      assert(false && "unelaborated type templates are currently unimplemented!");
-    case DeclSpec::TST_class:
-    case DeclSpec::TST_union:
-    case DeclSpec::TST_struct:
-      D = (Decl*) DS.getTypeRep();
-    }
-
-    ClassTemplateDecl *Temp = cast<ClassTemplateDecl>(D);
-    FriendDecl *FD = FriendDecl::Create(Context, CurContext, Loc, Temp,
-                                        DS.getFriendSpecLoc());
-    FD->setAccess(AS_public);
-    CurContext->addDecl(FD);
-
-    return DeclPtrTy::make(FD);
-  }
-
-  // Try to convert the decl specifier to a type.
+  // Try to convert the decl specifier to a type.  This works for
+  // friend templates because ActOnTag never produces a ClassTemplateDecl
+  // for a TUK_Friend.
   bool invalid = false;
   QualType T = ConvertDeclSpecToType(DS, Loc, invalid);
   if (invalid) return DeclPtrTy();
+
+  // This is definitely an error in C++98.  It's probably meant to
+  // be forbidden in C++0x, too, but the specification is just
+  // poorly written.
+  //
+  // The problem is with declarations like the following:
+  //   template <T> friend A<T>::foo;
+  // where deciding whether a class C is a friend or not now hinges
+  // on whether there exists an instantiation of A that causes
+  // 'foo' to equal C.  There are restrictions on class-heads
+  // (which we declare (by fiat) elaborated friend declarations to
+  // be) that makes this tractable.
+  //
+  // FIXME: handle "template <> friend class A<T>;", which
+  // is possibly well-formed?  Who even knows?
+  if (TempParams.size() && !isa<ElaboratedType>(T)) {
+    Diag(Loc, diag::err_tagless_friend_type_template)
+      << DS.getSourceRange();
+    return DeclPtrTy();
+  }
 
   // C++ [class.friend]p2:
   //   An elaborated-type-specifier shall be used in a friend declaration
@@ -4085,7 +4106,6 @@ Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
   }
 
   bool IsDefinition = false;
-  FriendDecl::FriendUnion FU = T.getTypePtr();
 
   // We want to do a few things differently if the type was declared with
   // a tag:  specifically, we want to use the associated RecordDecl as
@@ -4097,10 +4117,8 @@ Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
   case DeclSpec::TST_struct:
   case DeclSpec::TST_union:
     CXXRecordDecl *RD = cast_or_null<CXXRecordDecl>((Decl*) DS.getTypeRep());
-    if (RD) {
+    if (RD)
       IsDefinition |= RD->isDefinition();
-      FU = RD;
-    }
     break;
   }
 
@@ -4122,12 +4140,20 @@ Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
       if (RT->getDecl()->getDeclContext() == CurContext)
         Diag(DS.getFriendSpecLoc(), diag::ext_friend_inner_class);
 
-  FriendDecl *FD = FriendDecl::Create(Context, CurContext, Loc, FU,
-                                      DS.getFriendSpecLoc());
-  FD->setAccess(AS_public);
-  CurContext->addDecl(FD);
+  Decl *D;
+  if (TempParams.size())
+    D = FriendTemplateDecl::Create(Context, CurContext, Loc,
+                                   TempParams.size(),
+                                 (TemplateParameterList**) TempParams.release(),
+                                   T.getTypePtr(),
+                                   DS.getFriendSpecLoc());
+  else
+    D = FriendDecl::Create(Context, CurContext, Loc, T.getTypePtr(),
+                           DS.getFriendSpecLoc());
+  D->setAccess(AS_public);
+  CurContext->addDecl(D);
 
-  return DeclPtrTy::make(FD);
+  return DeclPtrTy::make(D);
 }
 
 Sema::DeclPtrTy
@@ -4356,8 +4382,8 @@ void Sema::DiagnoseReturnInConstructorExceptionHandler(CXXTryStmt *TryBlock) {
 
 bool Sema::CheckOverridingFunctionReturnType(const CXXMethodDecl *New,
                                              const CXXMethodDecl *Old) {
-  QualType NewTy = New->getType()->getAsFunctionType()->getResultType();
-  QualType OldTy = Old->getType()->getAsFunctionType()->getResultType();
+  QualType NewTy = New->getType()->getAs<FunctionType>()->getResultType();
+  QualType OldTy = Old->getType()->getAs<FunctionType>()->getResultType();
 
   QualType CNewTy = Context.getCanonicalType(NewTy);
   QualType COldTy = Context.getCanonicalType(OldTy);
@@ -4439,9 +4465,9 @@ bool Sema::CheckOverridingFunctionExceptionSpec(const CXXMethodDecl *New,
                                                 const CXXMethodDecl *Old) {
   return CheckExceptionSpecSubset(diag::err_override_exception_spec,
                                   diag::note_overridden_virtual_function,
-                                  Old->getType()->getAsFunctionProtoType(),
+                                  Old->getType()->getAs<FunctionProtoType>(),
                                   Old->getLocation(),
-                                  New->getType()->getAsFunctionProtoType(),
+                                  New->getType()->getAs<FunctionProtoType>(),
                                   New->getLocation());
 }
 

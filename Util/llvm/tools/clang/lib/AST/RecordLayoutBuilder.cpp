@@ -23,18 +23,17 @@ using namespace clang;
 
 ASTRecordLayoutBuilder::ASTRecordLayoutBuilder(ASTContext &Ctx)
   : Ctx(Ctx), Size(0), Alignment(8), Packed(false), MaxFieldAlignment(0),
-  NextOffset(0), IsUnion(false), NonVirtualSize(0), NonVirtualAlignment(8) {}
+  NextOffset(0), IsUnion(false), NonVirtualSize(0), NonVirtualAlignment(8),
+  PrimaryBase(0), PrimaryBaseWasVirtual(false) {}
 
 /// LayoutVtable - Lay out the vtable and set PrimaryBase.
-void ASTRecordLayoutBuilder::LayoutVtable(const CXXRecordDecl *RD,
-                    llvm::SmallSet<const CXXRecordDecl*, 32> &IndirectPrimary) {
+void ASTRecordLayoutBuilder::LayoutVtable(const CXXRecordDecl *RD) {
   if (!RD->isDynamicClass()) {
     // There is no primary base in this case.
-    setPrimaryBase(0, false);
     return;
   }
 
-  SelectPrimaryBase(RD, IndirectPrimary);
+  SelectPrimaryBase(RD);
   if (PrimaryBase == 0) {
     int AS = 0;
     UpdateAlignment(Ctx.Target.getPointerAlign(AS));
@@ -62,7 +61,7 @@ ASTRecordLayoutBuilder::LayoutNonVirtualBases(const CXXRecordDecl *RD) {
 //
 /// IsNearlyEmpty - Indicates when a class has a vtable pointer, but
 /// no other data.
-bool ASTRecordLayoutBuilder::IsNearlyEmpty(const CXXRecordDecl *RD) {
+bool ASTRecordLayoutBuilder::IsNearlyEmpty(const CXXRecordDecl *RD) const {
   // FIXME: Audit the corners
   if (!RD->isDynamicClass())
     return false;
@@ -72,35 +71,36 @@ bool ASTRecordLayoutBuilder::IsNearlyEmpty(const CXXRecordDecl *RD) {
   return false;
 }
 
-void ASTRecordLayoutBuilder::SelectPrimaryForBase(const CXXRecordDecl *RD,
-                    llvm::SmallSet<const CXXRecordDecl*, 32> &IndirectPrimary) {
+void ASTRecordLayoutBuilder::IdentifyPrimaryBases(const CXXRecordDecl *RD) {
   const ASTRecordLayout &Layout = Ctx.getASTRecordLayout(RD);
-  const CXXRecordDecl *PrimaryBase = Layout.getPrimaryBase();
-  const bool PrimaryBaseWasVirtual = Layout.getPrimaryBaseWasVirtual();
-
-  if (PrimaryBaseWasVirtual)
-    IndirectPrimary.insert(PrimaryBase);
-
+  
+  // If the record has a primary base class that is virtual, add it to the set
+  // of primary bases.
+  if (Layout.getPrimaryBaseWasVirtual())
+    IndirectPrimaryBases.insert(Layout.getPrimaryBase());
+  
+  // Now traverse all bases and find primary bases for them.
   for (CXXRecordDecl::base_class_const_iterator i = RD->bases_begin(),
        e = RD->bases_end(); i != e; ++i) {
     const CXXRecordDecl *Base =
       cast<CXXRecordDecl>(i->getType()->getAs<RecordType>()->getDecl());
+    
     // Only bases with virtual bases participate in computing the
     // indirect primary virtual base classes.
     if (Base->getNumVBases())
-      SelectPrimaryForBase(Base, IndirectPrimary);
+      IdentifyPrimaryBases(Base);
   }
 }
 
-void ASTRecordLayoutBuilder::SelectPrimaryVBase(const CXXRecordDecl *RD,
-                                             const CXXRecordDecl *&FirstPrimary,
-                    llvm::SmallSet<const CXXRecordDecl*, 32> &IndirectPrimary) {
+void
+ASTRecordLayoutBuilder::SelectPrimaryVBase(const CXXRecordDecl *RD,
+                                           const CXXRecordDecl *&FirstPrimary) {
   for (CXXRecordDecl::base_class_const_iterator i = RD->bases_begin(),
          e = RD->bases_end(); i != e; ++i) {
     const CXXRecordDecl *Base =
       cast<CXXRecordDecl>(i->getType()->getAs<RecordType>()->getDecl());
     if (!i->isVirtual()) {
-      SelectPrimaryVBase(Base, FirstPrimary, IndirectPrimary);
+      SelectPrimaryVBase(Base, FirstPrimary);
       if (PrimaryBase)
         return;
       continue;
@@ -108,7 +108,7 @@ void ASTRecordLayoutBuilder::SelectPrimaryVBase(const CXXRecordDecl *RD,
     if (IsNearlyEmpty(Base)) {
       if (FirstPrimary==0)
         FirstPrimary = Base;
-      if (!IndirectPrimary.count(Base)) {
+      if (!IndirectPrimaryBases.count(Base)) {
         setPrimaryBase(Base, true);
         return;
       }
@@ -118,33 +118,31 @@ void ASTRecordLayoutBuilder::SelectPrimaryVBase(const CXXRecordDecl *RD,
 
 /// SelectPrimaryBase - Selects the primary base for the given class and
 /// record that with setPrimaryBase.  We also calculate the IndirectPrimaries.
-void ASTRecordLayoutBuilder::SelectPrimaryBase(const CXXRecordDecl *RD,
-                    llvm::SmallSet<const CXXRecordDecl*, 32> &IndirectPrimary) {
-  // We compute all the primary virtual bases for all of our direct and
+void ASTRecordLayoutBuilder::SelectPrimaryBase(const CXXRecordDecl *RD) {
+  // Compute all the primary virtual bases for all of our direct and
   // indirect bases, and record all their primary virtual base classes.
-  const CXXRecordDecl *FirstPrimary = 0;
   for (CXXRecordDecl::base_class_const_iterator i = RD->bases_begin(),
        e = RD->bases_end(); i != e; ++i) {
     const CXXRecordDecl *Base =
       cast<CXXRecordDecl>(i->getType()->getAs<RecordType>()->getDecl());
-    SelectPrimaryForBase(Base, IndirectPrimary);
+    IdentifyPrimaryBases(Base);
   }
 
-  // The primary base is the first non-virtual indirect or direct base class,
-  // if one exists.
+  // If the record has a dynamic base class, attempt to choose a primary base 
+  // class. It is the first (in direct base class order) non-virtual dynamic 
+  // base class, if one exists.
   for (CXXRecordDecl::base_class_const_iterator i = RD->bases_begin(),
        e = RD->bases_end(); i != e; ++i) {
     if (!i->isVirtual()) {
       const CXXRecordDecl *Base =
         cast<CXXRecordDecl>(i->getType()->getAs<RecordType>()->getDecl());
       if (Base->isDynamicClass()) {
+        // We found it.
         setPrimaryBase(Base, false);
         return;
       }
     }
   }
-
-  setPrimaryBase(0, false);
 
   // Otherwise, it is the first nearly empty virtual base that is not an
   // indirect primary virtual base class, if one exists.
@@ -153,14 +151,15 @@ void ASTRecordLayoutBuilder::SelectPrimaryBase(const CXXRecordDecl *RD,
   // is expensive.
   if (RD->getNumVBases() == 0)
     return;
-
+  
   // Then we can search for the first nearly empty virtual base itself.
-  SelectPrimaryVBase(RD, FirstPrimary, IndirectPrimary);
+  const CXXRecordDecl *FirstPrimary = 0;
+  SelectPrimaryVBase(RD, FirstPrimary);
 
   // Otherwise if is the first nearly empty virtual base, if one exists,
   // otherwise there is no primary base class.
-  setPrimaryBase(FirstPrimary, true);
-  return;
+  if (!PrimaryBase)
+    setPrimaryBase(FirstPrimary, true);
 }
 
 void ASTRecordLayoutBuilder::LayoutVirtualBase(const CXXRecordDecl *RD) {
@@ -198,8 +197,7 @@ void ASTRecordLayoutBuilder::LayoutVirtualBases(const CXXRecordDecl *RD,
         // Mark it so we don't lay it out twice.
         mark.insert(Base);
         assert (IndirectPrimary.count(Base) && "IndirectPrimary was wrong");
-        VBases.push_back(Base);
-        VBaseOffsets.push_back(Offset);
+        VBases.push_back(std::make_pair(Base, Offset));
       } else if (IndirectPrimary.count(Base)) {
         // Someone else will eventually lay this out.
         ;
@@ -210,7 +208,7 @@ void ASTRecordLayoutBuilder::LayoutVirtualBases(const CXXRecordDecl *RD,
         // Mark it so we don't lay it out twice.
         mark.insert(Base);
         LayoutVirtualBase(Base);
-        BaseOffset = *(VBaseOffsets.end()-1);
+        BaseOffset = VBases.back().second;
       }
     }
     if (Base->getNumVBases()) {
@@ -224,9 +222,11 @@ void ASTRecordLayoutBuilder::LayoutVirtualBases(const CXXRecordDecl *RD,
 void ASTRecordLayoutBuilder::LayoutBaseNonVirtually(const CXXRecordDecl *RD,
   bool IsVirtualBase) {
   const ASTRecordLayout &BaseInfo = Ctx.getASTRecordLayout(RD);
+  if (!Bases.empty()) {
     assert(BaseInfo.getDataSize() > 0 &&
            "FIXME: Handle empty classes.");
-
+  }
+  
   unsigned BaseAlign = BaseInfo.getNonVirtualAlign();
   uint64_t BaseSize = BaseInfo.getNonVirtualSize();
 
@@ -234,13 +234,10 @@ void ASTRecordLayoutBuilder::LayoutBaseNonVirtually(const CXXRecordDecl *RD,
   Size = (Size + (BaseAlign-1)) & ~(BaseAlign-1);
 
   // Add base class offsets.
-  if (IsVirtualBase) {
-    VBases.push_back(RD);
-    VBaseOffsets.push_back(Size);
-  } else {
-    Bases.push_back(RD);
-    BaseOffsets.push_back(Size);
-  }
+  if (IsVirtualBase) 
+    VBases.push_back(std::make_pair(RD, Size));
+  else
+    Bases.push_back(std::make_pair(RD, Size));
 
 #if 0
   // And now add offsets for all our primary virtual bases as well, so
@@ -280,16 +277,14 @@ void ASTRecordLayoutBuilder::Layout(const RecordDecl *D) {
   if (const AlignedAttr *AA = D->getAttr<AlignedAttr>())
     UpdateAlignment(AA->getAlignment());
 
-  llvm::SmallSet<const CXXRecordDecl*, 32> IndirectPrimary;
-
   // If this is a C++ class, lay out the vtable and the non-virtual bases.
   const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(D);
   if (RD) {
-    LayoutVtable(RD, IndirectPrimary);
+    LayoutVtable(RD);
     // PrimaryBase goes first.
     if (PrimaryBase) {
       if (PrimaryBaseWasVirtual)
-        IndirectPrimary.insert(PrimaryBase);
+        IndirectPrimaryBases.insert(PrimaryBase);
       LayoutBaseNonVirtually(PrimaryBase, PrimaryBaseWasVirtual);
     }
     LayoutNonVirtualBases(RD);
@@ -302,7 +297,7 @@ void ASTRecordLayoutBuilder::Layout(const RecordDecl *D) {
 
   if (RD) {
     llvm::SmallSet<const CXXRecordDecl*, 32> mark;
-    LayoutVirtualBases(RD, PrimaryBase, 0, mark, IndirectPrimary);
+    LayoutVirtualBases(RD, PrimaryBase, 0, mark, IndirectPrimaryBases);
   }
 
   // Finally, round the size of the total struct up to the alignment of the
@@ -467,11 +462,6 @@ ASTRecordLayoutBuilder::ComputeLayout(ASTContext &Ctx,
   // FIXME: IsPODForThePurposeOfLayout should be stored in the record layout.
   bool IsPODForThePurposeOfLayout = cast<CXXRecordDecl>(D)->isPOD();
 
-  assert(Builder.Bases.size() == Builder.BaseOffsets.size() &&
-         "Base offsets vector must be same size as bases vector!");
-  assert(Builder.VBases.size() == Builder.VBaseOffsets.size() &&
-         "Base offsets vector must be same size as bases vector!");
-
   // FIXME: This should be done in FinalizeLayout.
   uint64_t DataSize =
     IsPODForThePurposeOfLayout ? Builder.Size : Builder.NextOffset;
@@ -486,10 +476,8 @@ ASTRecordLayoutBuilder::ComputeLayout(ASTContext &Ctx,
                              Builder.PrimaryBase,
                              Builder.PrimaryBaseWasVirtual,
                              Builder.Bases.data(),
-                             Builder.BaseOffsets.data(),
                              Builder.Bases.size(),
                              Builder.VBases.data(),
-                             Builder.VBaseOffsets.data(),
                              Builder.VBases.size());
 }
 

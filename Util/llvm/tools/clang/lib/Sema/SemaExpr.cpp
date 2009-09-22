@@ -132,8 +132,8 @@ void Sema::DiagnoseSentinelCalls(NamedDecl *D, SourceLocation Loc,
     QualType Ty = V->getType();
     if (Ty->isBlockPointerType() || Ty->isFunctionPointerType()) {
       const FunctionType *FT = Ty->isFunctionPointerType()
-      ? Ty->getAs<PointerType>()->getPointeeType()->getAsFunctionType()
-      : Ty->getAs<BlockPointerType>()->getPointeeType()->getAsFunctionType();
+      ? Ty->getAs<PointerType>()->getPointeeType()->getAs<FunctionType>()
+      : Ty->getAs<BlockPointerType>()->getPointeeType()->getAs<FunctionType>();
       if (const FunctionProtoType *Proto = dyn_cast<FunctionProtoType>(FT)) {
         unsigned NumArgsInProto = Proto->getNumArgs();
         unsigned k;
@@ -261,7 +261,7 @@ void Sema::DefaultArgumentPromotion(Expr *&Expr) {
   assert(!Ty.isNull() && "DefaultArgumentPromotion - missing type");
 
   // If this is a 'float' (CVR qualified or typedef) promote to double.
-  if (const BuiltinType *BT = Ty->getAsBuiltinType())
+  if (const BuiltinType *BT = Ty->getAs<BuiltinType>())
     if (BT->getKind() == BuiltinType::Float)
       return ImpCastExprToType(Expr, Context.DoubleTy);
 
@@ -842,7 +842,7 @@ Sema::ActOnDeclarationNameExpr(Scope *S, SourceLocation Loc,
 
       QualType T = Func->getType();
       QualType NoProtoType = T;
-      if (const FunctionProtoType *Proto = T->getAsFunctionProtoType())
+      if (const FunctionProtoType *Proto = T->getAs<FunctionProtoType>())
         NoProtoType = Context.getFunctionNoProtoType(Proto->getResultType());
       return BuildDeclRefExpr(Func, NoProtoType, Loc, false, false, SS);
     }
@@ -1002,7 +1002,7 @@ Sema::BuildDeclarationNameExpr(SourceLocation Loc, NamedDecl *D,
           MarkDeclarationReferenced(Loc, D);
           if (PerformObjectMemberConversion(This, D))
             return ExprError();
-          
+
           bool ShouldCheckUse = true;
           if (CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D)) {
             // Don't diagnose the use of a virtual member function unless it's
@@ -1010,7 +1010,7 @@ Sema::BuildDeclarationNameExpr(SourceLocation Loc, NamedDecl *D,
             if (MD->isVirtual() && (!SS || !SS->isSet()))
               ShouldCheckUse = false;
           }
-          
+
           if (ShouldCheckUse && DiagnoseUseOfDecl(D, Loc))
             return ExprError();
           return Owned(BuildMemberExpr(Context, This, true, SS, D,
@@ -1483,7 +1483,7 @@ QualType Sema::CheckRealImagOperand(Expr *&V, SourceLocation Loc, bool isReal) {
     return Context.DependentTy;
 
   // These operators return the element type of a complex type.
-  if (const ComplexType *CT = V->getType()->getAsComplexType())
+  if (const ComplexType *CT = V->getType()->getAs<ComplexType>())
     return CT->getElementType();
 
   // Otherwise they pass through real integer and floating point types here.
@@ -1562,7 +1562,7 @@ Sema::ActOnPostfixUnaryOp(Scope *S, SourceLocation OpLoc,
 
         // Determine the result type
         QualType ResultTy
-          = FnDecl->getType()->getAsFunctionType()->getResultType();
+          = FnDecl->getType()->getAs<FunctionType>()->getResultType();
         ResultTy = ResultTy.getNonReferenceType();
 
         // Build the actual expression node.
@@ -1678,7 +1678,7 @@ Sema::ActOnArraySubscriptExpr(Scope *S, ExprArg Base, SourceLocation LLoc,
 
         // Determine the result type
         QualType ResultTy
-          = FnDecl->getType()->getAsFunctionType()->getResultType();
+          = FnDecl->getType()->getAs<FunctionType>()->getResultType();
         ResultTy = ResultTy.getNonReferenceType();
 
         // Build the actual expression node.
@@ -1759,17 +1759,17 @@ Sema::ActOnArraySubscriptExpr(Scope *S, ExprArg Base, SourceLocation LLoc,
     IndexExpr = LHSExp;
     ResultType = PTy->getPointeeType();
   } else if (const ObjCObjectPointerType *PTy =
-               LHSTy->getAsObjCObjectPointerType()) {
+               LHSTy->getAs<ObjCObjectPointerType>()) {
     BaseExpr = LHSExp;
     IndexExpr = RHSExp;
     ResultType = PTy->getPointeeType();
   } else if (const ObjCObjectPointerType *PTy =
-               RHSTy->getAsObjCObjectPointerType()) {
+               RHSTy->getAs<ObjCObjectPointerType>()) {
      // Handle the uncommon case of "123[Ptr]".
     BaseExpr = RHSExp;
     IndexExpr = LHSExp;
     ResultType = PTy->getPointeeType();
-  } else if (const VectorType *VTy = LHSTy->getAsVectorType()) {
+  } else if (const VectorType *VTy = LHSTy->getAs<VectorType>()) {
     BaseExpr = LHSExp;    // vectors: V[123]
     IndexExpr = RHSExp;
 
@@ -1809,7 +1809,7 @@ Sema::ActOnArraySubscriptExpr(Scope *S, ExprArg Base, SourceLocation LLoc,
     return ExprError(Diag(LLoc, diag::err_typecheck_subscript_not_integer)
                      << IndexExpr->getSourceRange());
 
-  if ((IndexExpr->getType()->isSpecificBuiltinType(BuiltinType::Char_S) || 
+  if ((IndexExpr->getType()->isSpecificBuiltinType(BuiltinType::Char_S) ||
        IndexExpr->getType()->isSpecificBuiltinType(BuiltinType::Char_U))
          && !IndexExpr->isTypeDependent())
     Diag(LLoc, diag::warn_subscript_is_char) << IndexExpr->getSourceRange();
@@ -1847,7 +1847,7 @@ QualType Sema::
 CheckExtVectorComponent(QualType baseType, SourceLocation OpLoc,
                         const IdentifierInfo *CompName,
                         SourceLocation CompLoc) {
-  const ExtVectorType *vecType = baseType->getAsExtVectorType();
+  const ExtVectorType *vecType = baseType->getAs<ExtVectorType>();
 
   // The vector accessor can't exceed the number of elements.
   const char *compStr = CompName->getName();
@@ -2029,13 +2029,65 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
       BaseType = Context.ObjCIdRedefinitionType;
       ImpCastExprToType(BaseExpr, BaseType);
     }
-  } else if (BaseType->isObjCClassType() &&
-             BaseType != Context.ObjCClassRedefinitionType) {
-    BaseType = Context.ObjCClassRedefinitionType;
-    ImpCastExprToType(BaseExpr, BaseType);
   }
   assert(!BaseType.isNull() && "no type for member expression");
 
+  // Handle properties on ObjC 'Class' types.
+  if (OpKind == tok::period && BaseType->isObjCClassType()) {
+    // Also must look for a getter name which uses property syntax.
+    IdentifierInfo *Member = MemberName.getAsIdentifierInfo();
+    Selector Sel = PP.getSelectorTable().getNullarySelector(Member);
+    if (ObjCMethodDecl *MD = getCurMethodDecl()) {
+      ObjCInterfaceDecl *IFace = MD->getClassInterface();
+      ObjCMethodDecl *Getter;
+      // FIXME: need to also look locally in the implementation.
+      if ((Getter = IFace->lookupClassMethod(Sel))) {
+        // Check the use of this method.
+        if (DiagnoseUseOfDecl(Getter, MemberLoc))
+          return ExprError();
+      }
+      // If we found a getter then this may be a valid dot-reference, we
+      // will look for the matching setter, in case it is needed.
+      Selector SetterSel =
+      SelectorTable::constructSetterName(PP.getIdentifierTable(),
+                                         PP.getSelectorTable(), Member);
+      ObjCMethodDecl *Setter = IFace->lookupClassMethod(SetterSel);
+      if (!Setter) {
+        // If this reference is in an @implementation, also check for 'private'
+        // methods.
+        Setter = FindMethodInNestedImplementations(IFace, SetterSel);
+      }
+      // Look through local category implementations associated with the class.
+      if (!Setter)
+        Setter = IFace->getCategoryClassMethod(SetterSel);
+      
+      if (Setter && DiagnoseUseOfDecl(Setter, MemberLoc))
+        return ExprError();
+      
+      if (Getter || Setter) {
+        QualType PType;
+        
+        if (Getter)
+          PType = Getter->getResultType();
+        else
+          // Get the expression type from Setter's incoming parameter.
+          PType = (*(Setter->param_end() -1))->getType();
+        // FIXME: we must check that the setter has property type.
+        return Owned(new (Context) ObjCImplicitSetterGetterRefExpr(Getter, 
+                                                  PType,
+                                                  Setter, MemberLoc, BaseExpr));
+      }
+      return ExprError(Diag(MemberLoc, diag::err_property_not_found)
+                       << MemberName << BaseType);
+    }
+  }
+  
+  if (BaseType->isObjCClassType() &&
+      BaseType != Context.ObjCClassRedefinitionType) {
+    BaseType = Context.ObjCClassRedefinitionType;
+    ImpCastExprToType(BaseExpr, BaseType);
+  }
+  
   // Get the type being accessed in BaseType.  If this is an arrow, the BaseExpr
   // must have pointer type, and the accessed type is the pointee.
   if (OpKind == tok::arrow) {
@@ -2067,8 +2119,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
       return ExprError(Diag(MemberLoc,
                             diag::err_typecheck_member_reference_arrow)
         << BaseType << BaseExpr->getSourceRange());
-  } else {
-    if (BaseType->isDependentType()) {
+  } else if (BaseType->isDependentType()) {
       // Require that the base type isn't a pointer type
       // (so we'll report an error for)
       // T* t;
@@ -2103,7 +2154,6 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
                                                      RAngleLoc));
       }
     }
-  }
 
   // Handle field access to simple records.  This also handles access to fields
   // of the ObjC 'id' struct.
@@ -2168,7 +2218,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
       if (MD->isVirtual() && (!SS || !SS->isSet()))
         ShouldCheckUse = false;
     }
-    
+
     // Check the use of this field
     if (ShouldCheckUse && DiagnoseUseOfDecl(MemberDecl, MemberLoc))
       return ExprError();
@@ -2303,61 +2353,13 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
                                                        MemberLoc));
   }
 
-  // Handle properties on ObjC 'Class' types.
-  if (OpKind == tok::period && BaseType->isObjCClassType()) {
-    // Also must look for a getter name which uses property syntax.
-    IdentifierInfo *Member = MemberName.getAsIdentifierInfo();
-    Selector Sel = PP.getSelectorTable().getNullarySelector(Member);
-    if (ObjCMethodDecl *MD = getCurMethodDecl()) {
-      ObjCInterfaceDecl *IFace = MD->getClassInterface();
-      ObjCMethodDecl *Getter;
-      // FIXME: need to also look locally in the implementation.
-      if ((Getter = IFace->lookupClassMethod(Sel))) {
-        // Check the use of this method.
-        if (DiagnoseUseOfDecl(Getter, MemberLoc))
-          return ExprError();
-      }
-      // If we found a getter then this may be a valid dot-reference, we
-      // will look for the matching setter, in case it is needed.
-      Selector SetterSel =
-        SelectorTable::constructSetterName(PP.getIdentifierTable(),
-                                           PP.getSelectorTable(), Member);
-      ObjCMethodDecl *Setter = IFace->lookupClassMethod(SetterSel);
-      if (!Setter) {
-        // If this reference is in an @implementation, also check for 'private'
-        // methods.
-        Setter = FindMethodInNestedImplementations(IFace, SetterSel);
-      }
-      // Look through local category implementations associated with the class.
-      if (!Setter)
-        Setter = IFace->getCategoryClassMethod(SetterSel);
-
-      if (Setter && DiagnoseUseOfDecl(Setter, MemberLoc))
-        return ExprError();
-
-      if (Getter || Setter) {
-        QualType PType;
-
-        if (Getter)
-          PType = Getter->getResultType();
-        else
-          // Get the expression type from Setter's incoming parameter.
-          PType = (*(Setter->param_end() -1))->getType();
-        // FIXME: we must check that the setter has property type.
-        return Owned(new (Context) ObjCImplicitSetterGetterRefExpr(Getter, PType,
-                                        Setter, MemberLoc, BaseExpr));
-      }
-      return ExprError(Diag(MemberLoc, diag::err_property_not_found)
-        << MemberName << BaseType);
-    }
-  }
   // Handle access to Objective-C instance variables, such as "Obj->ivar" and
   // (*Obj).ivar.
   if ((OpKind == tok::arrow && BaseType->isObjCObjectPointerType()) ||
       (OpKind == tok::period && BaseType->isObjCInterfaceType())) {
-    const ObjCObjectPointerType *OPT = BaseType->getAsObjCObjectPointerType();
+    const ObjCObjectPointerType *OPT = BaseType->getAs<ObjCObjectPointerType>();
     const ObjCInterfaceType *IFaceT =
-      OPT ? OPT->getInterfaceType() : BaseType->getAsObjCInterfaceType();
+      OPT ? OPT->getInterfaceType() : BaseType->getAs<ObjCInterfaceType>();
     if (IFaceT) {
       IdentifierInfo *Member = MemberName.getAsIdentifierInfo();
 
@@ -2419,7 +2421,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
   // Handle properties on 'id' and qualified "id".
   if (OpKind == tok::period && (BaseType->isObjCIdType() ||
                                 BaseType->isObjCQualifiedIdType())) {
-    const ObjCObjectPointerType *QIdTy = BaseType->getAsObjCObjectPointerType();
+    const ObjCObjectPointerType *QIdTy = BaseType->getAs<ObjCObjectPointerType>();
     IdentifierInfo *Member = MemberName.getAsIdentifierInfo();
 
     // Check protocols on qualified interfaces.
@@ -2734,6 +2736,96 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   return Invalid;
 }
 
+/// \brief "Deconstruct" the function argument of a call expression to find 
+/// the underlying declaration (if any), the name of the called function, 
+/// whether argument-dependent lookup is available, whether it has explicit
+/// template arguments, etc.
+void Sema::DeconstructCallFunction(Expr *FnExpr,
+                                   NamedDecl *&Function,
+                                   DeclarationName &Name,
+                                   NestedNameSpecifier *&Qualifier,
+                                   SourceRange &QualifierRange,
+                                   bool &ArgumentDependentLookup,
+                                   bool &HasExplicitTemplateArguments,
+                                 const TemplateArgument *&ExplicitTemplateArgs,
+                                   unsigned &NumExplicitTemplateArgs) {
+  // Set defaults for all of the output parameters.
+  Function = 0;
+  Name = DeclarationName();
+  Qualifier = 0;
+  QualifierRange = SourceRange();
+  ArgumentDependentLookup = getLangOptions().CPlusPlus;
+  HasExplicitTemplateArguments = false;
+  
+  // If we're directly calling a function, get the appropriate declaration.
+  // Also, in C++, keep track of whether we should perform argument-dependent
+  // lookup and whether there were any explicitly-specified template arguments.
+  while (true) {
+    if (ImplicitCastExpr *IcExpr = dyn_cast<ImplicitCastExpr>(FnExpr))
+      FnExpr = IcExpr->getSubExpr();
+    else if (ParenExpr *PExpr = dyn_cast<ParenExpr>(FnExpr)) {
+      // Parentheses around a function disable ADL
+      // (C++0x [basic.lookup.argdep]p1).
+      ArgumentDependentLookup = false;
+      FnExpr = PExpr->getSubExpr();
+    } else if (isa<UnaryOperator>(FnExpr) &&
+               cast<UnaryOperator>(FnExpr)->getOpcode()
+               == UnaryOperator::AddrOf) {
+      FnExpr = cast<UnaryOperator>(FnExpr)->getSubExpr();
+    } else if (QualifiedDeclRefExpr *QDRExpr 
+                 = dyn_cast<QualifiedDeclRefExpr>(FnExpr)) {
+      // Qualified names disable ADL (C++0x [basic.lookup.argdep]p1).
+      ArgumentDependentLookup = false;
+      Qualifier = QDRExpr->getQualifier();
+      QualifierRange = QDRExpr->getQualifierRange();
+      Function = dyn_cast<NamedDecl>(QDRExpr->getDecl());
+      break;
+    } else if (DeclRefExpr *DRExpr = dyn_cast<DeclRefExpr>(FnExpr)) {
+      Function = dyn_cast<NamedDecl>(DRExpr->getDecl());
+      break;
+    } else if (UnresolvedFunctionNameExpr *DepName
+               = dyn_cast<UnresolvedFunctionNameExpr>(FnExpr)) {
+      Name = DepName->getName();
+      break;
+    } else if (TemplateIdRefExpr *TemplateIdRef
+               = dyn_cast<TemplateIdRefExpr>(FnExpr)) {
+      Function = TemplateIdRef->getTemplateName().getAsTemplateDecl();
+      if (!Function)
+        Function = TemplateIdRef->getTemplateName().getAsOverloadedFunctionDecl();
+      HasExplicitTemplateArguments = true;
+      ExplicitTemplateArgs = TemplateIdRef->getTemplateArgs();
+      NumExplicitTemplateArgs = TemplateIdRef->getNumTemplateArgs();
+      
+      // C++ [temp.arg.explicit]p6:
+      //   [Note: For simple function names, argument dependent lookup (3.4.2)
+      //   applies even when the function name is not visible within the
+      //   scope of the call. This is because the call still has the syntactic
+      //   form of a function call (3.4.1). But when a function template with
+      //   explicit template arguments is used, the call does not have the
+      //   correct syntactic form unless there is a function template with
+      //   that name visible at the point of the call. If no such name is
+      //   visible, the call is not syntactically well-formed and
+      //   argument-dependent lookup does not apply. If some such name is
+      //   visible, argument dependent lookup applies and additional function
+      //   templates may be found in other namespaces.
+      //
+      // The summary of this paragraph is that, if we get to this point and the
+      // template-id was not a qualified name, then argument-dependent lookup
+      // is still possible.
+      if ((Qualifier = TemplateIdRef->getQualifier())) {
+        ArgumentDependentLookup = false;
+        QualifierRange = TemplateIdRef->getQualifierRange();
+      }
+      break;
+    } else {
+      // Any kind of name that does not refer to a declaration (or
+      // set of declarations) disables ADL (C++0x [basic.lookup.argdep]p3).
+      ArgumentDependentLookup = false;
+      break;
+    }
+  }
+}
+
 /// ActOnCallExpr - Handle a call to Fn with the specified array of arguments.
 /// This provides the location of the left/right parens and a list of comma
 /// locations.
@@ -2808,67 +2900,15 @@ Sema::ActOnCallExpr(Scope *S, ExprArg fn, SourceLocation LParenLoc,
   // If we're directly calling a function, get the appropriate declaration.
   // Also, in C++, keep track of whether we should perform argument-dependent
   // lookup and whether there were any explicitly-specified template arguments.
-  Expr *FnExpr = Fn;
   bool ADL = true;
   bool HasExplicitTemplateArgs = 0;
   const TemplateArgument *ExplicitTemplateArgs = 0;
   unsigned NumExplicitTemplateArgs = 0;
-  while (true) {
-    if (ImplicitCastExpr *IcExpr = dyn_cast<ImplicitCastExpr>(FnExpr))
-      FnExpr = IcExpr->getSubExpr();
-    else if (ParenExpr *PExpr = dyn_cast<ParenExpr>(FnExpr)) {
-      // Parentheses around a function disable ADL
-      // (C++0x [basic.lookup.argdep]p1).
-      ADL = false;
-      FnExpr = PExpr->getSubExpr();
-    } else if (isa<UnaryOperator>(FnExpr) &&
-               cast<UnaryOperator>(FnExpr)->getOpcode()
-                 == UnaryOperator::AddrOf) {
-      FnExpr = cast<UnaryOperator>(FnExpr)->getSubExpr();
-    } else if (DeclRefExpr *DRExpr = dyn_cast<DeclRefExpr>(FnExpr)) {
-      // Qualified names disable ADL (C++0x [basic.lookup.argdep]p1).
-      ADL &= !isa<QualifiedDeclRefExpr>(DRExpr);
-      NDecl = dyn_cast<NamedDecl>(DRExpr->getDecl());
-      break;
-    } else if (UnresolvedFunctionNameExpr *DepName
-                 = dyn_cast<UnresolvedFunctionNameExpr>(FnExpr)) {
-      UnqualifiedName = DepName->getName();
-      break;
-    } else if (TemplateIdRefExpr *TemplateIdRef
-                 = dyn_cast<TemplateIdRefExpr>(FnExpr)) {
-      NDecl = TemplateIdRef->getTemplateName().getAsTemplateDecl();
-      if (!NDecl)
-        NDecl = TemplateIdRef->getTemplateName().getAsOverloadedFunctionDecl();
-      HasExplicitTemplateArgs = true;
-      ExplicitTemplateArgs = TemplateIdRef->getTemplateArgs();
-      NumExplicitTemplateArgs = TemplateIdRef->getNumTemplateArgs();
-
-      // C++ [temp.arg.explicit]p6:
-      //   [Note: For simple function names, argument dependent lookup (3.4.2)
-      //   applies even when the function name is not visible within the
-      //   scope of the call. This is because the call still has the syntactic
-      //   form of a function call (3.4.1). But when a function template with
-      //   explicit template arguments is used, the call does not have the
-      //   correct syntactic form unless there is a function template with
-      //   that name visible at the point of the call. If no such name is
-      //   visible, the call is not syntactically well-formed and
-      //   argument-dependent lookup does not apply. If some such name is
-      //   visible, argument dependent lookup applies and additional function
-      //   templates may be found in other namespaces.
-      //
-      // The summary of this paragraph is that, if we get to this point and the
-      // template-id was not a qualified name, then argument-dependent lookup
-      // is still possible.
-      if (TemplateIdRef->getQualifier())
-        ADL = false;
-      break;
-    } else {
-      // Any kind of name that does not refer to a declaration (or
-      // set of declarations) disables ADL (C++0x [basic.lookup.argdep]p3).
-      ADL = false;
-      break;
-    }
-  }
+  NestedNameSpecifier *Qualifier = 0;
+  SourceRange QualifierRange;
+  DeconstructCallFunction(Fn, NDecl, UnqualifiedName, Qualifier, QualifierRange,
+                          ADL,HasExplicitTemplateArgs, ExplicitTemplateArgs,
+                          NumExplicitTemplateArgs);
 
   OverloadedFunctionDecl *Ovl = 0;
   FunctionTemplateDecl *FunctionTemplate = 0;
@@ -2903,16 +2943,15 @@ Sema::ActOnCallExpr(Scope *S, ExprArg fn, SourceLocation LParenLoc,
 
       // Update Fn to refer to the actual function selected.
       Expr *NewFn = 0;
-      if (QualifiedDeclRefExpr *QDRExpr
-            = dyn_cast<QualifiedDeclRefExpr>(FnExpr))
+      if (Qualifier)
         NewFn = new (Context) QualifiedDeclRefExpr(FDecl, FDecl->getType(),
-                                                   QDRExpr->getLocation(),
+                                                   Fn->getLocStart(),
                                                    false, false,
-                                                 QDRExpr->getQualifierRange(),
-                                                   QDRExpr->getQualifier());
+                                                   QualifierRange,
+                                                   Qualifier);
       else
         NewFn = new (Context) DeclRefExpr(FDecl, FDecl->getType(),
-                                          Fn->getSourceRange().getBegin());
+                                          Fn->getLocStart());
       Fn->Destroy(Context);
       Fn = NewFn;
     }
@@ -2936,10 +2975,10 @@ Sema::ActOnCallExpr(Scope *S, ExprArg fn, SourceLocation LParenLoc,
     if (PT == 0)
       return ExprError(Diag(LParenLoc, diag::err_typecheck_call_not_function)
         << Fn->getType() << Fn->getSourceRange());
-    FuncT = PT->getPointeeType()->getAsFunctionType();
+    FuncT = PT->getPointeeType()->getAs<FunctionType>();
   } else { // This is a block call.
     FuncT = Fn->getType()->getAs<BlockPointerType>()->getPointeeType()->
-                getAsFunctionType();
+                getAs<FunctionType>();
   }
   if (FuncT == 0)
     return ExprError(Diag(LParenLoc, diag::err_typecheck_call_not_function)
@@ -2969,7 +3008,7 @@ Sema::ActOnCallExpr(Scope *S, ExprArg fn, SourceLocation LParenLoc,
       const FunctionDecl *Def = 0;
       if (FDecl->getBody(Def) && NumArgs != Def->param_size()) {
         const FunctionProtoType *Proto =
-            Def->getType()->getAsFunctionProtoType();
+            Def->getType()->getAs<FunctionProtoType>();
         if (!Proto || !(Proto->isVariadic() && NumArgs >= Def->param_size())) {
           Diag(RParenLoc, diag::warn_call_wrong_number_of_arguments)
             << (NumArgs > Def->param_size()) << FDecl << Fn->getSourceRange();
@@ -3204,12 +3243,12 @@ Sema::ActOnCastExpr(Scope *S, SourceLocation LParenLoc, TypeTy *Ty,
     return ExprError();
 
   if (Method) {
-    OwningExprResult CastArg = BuildCXXCastArgument(LParenLoc, castType, Kind, 
+    OwningExprResult CastArg = BuildCXXCastArgument(LParenLoc, castType, Kind,
                                                     Method, move(Op));
-    
+
     if (CastArg.isInvalid())
       return ExprError();
-    
+
     castExpr = CastArg.takeAs<Expr>();
   } else {
     Op.release();
@@ -3422,8 +3461,8 @@ QualType Sema::CheckConditionalOperands(Expr *&Cond, Expr *&LHS, Expr *&RHS,
       // Two identical object pointer types are always compatible.
       return LHSTy;
     }
-    const ObjCObjectPointerType *LHSOPT = LHSTy->getAsObjCObjectPointerType();
-    const ObjCObjectPointerType *RHSOPT = RHSTy->getAsObjCObjectPointerType();
+    const ObjCObjectPointerType *LHSOPT = LHSTy->getAs<ObjCObjectPointerType>();
+    const ObjCObjectPointerType *RHSOPT = RHSTy->getAs<ObjCObjectPointerType>();
     QualType compositeType = LHSTy;
 
     // If both operands are interfaces and either operand can be
@@ -3470,7 +3509,7 @@ QualType Sema::CheckConditionalOperands(Expr *&Cond, Expr *&LHS, Expr *&RHS,
   // Check Objective-C object pointer types and 'void *'
   if (LHSTy->isVoidPointerType() && RHSTy->isObjCObjectPointerType()) {
     QualType lhptee = LHSTy->getAs<PointerType>()->getPointeeType();
-    QualType rhptee = RHSTy->getAsObjCObjectPointerType()->getPointeeType();
+    QualType rhptee = RHSTy->getAs<ObjCObjectPointerType>()->getPointeeType();
     QualType destPointee = lhptee.getQualifiedType(rhptee.getCVRQualifiers());
     QualType destType = Context.getPointerType(destPointee);
     ImpCastExprToType(LHS, destType); // add qualifiers if necessary
@@ -3478,7 +3517,7 @@ QualType Sema::CheckConditionalOperands(Expr *&Cond, Expr *&LHS, Expr *&RHS,
     return destType;
   }
   if (LHSTy->isObjCObjectPointerType() && RHSTy->isVoidPointerType()) {
-    QualType lhptee = LHSTy->getAsObjCObjectPointerType()->getPointeeType();
+    QualType lhptee = LHSTy->getAs<ObjCObjectPointerType>()->getPointeeType();
     QualType rhptee = RHSTy->getAs<PointerType>()->getPointeeType();
     QualType destPointee = rhptee.getQualifiedType(lhptee.getCVRQualifiers());
     QualType destType = Context.getPointerType(destPointee);
@@ -4021,8 +4060,8 @@ inline QualType Sema::CheckVectorOperands(SourceLocation Loc, Expr *&lex,
   // type.  It would be nice if we only had one vector type someday.
   if (getLangOptions().LaxVectorConversions) {
     // FIXME: Should we warn here?
-    if (const VectorType *LV = lhsType->getAsVectorType()) {
-      if (const VectorType *RV = rhsType->getAsVectorType())
+    if (const VectorType *LV = lhsType->getAs<VectorType>()) {
+      if (const VectorType *RV = rhsType->getAs<VectorType>())
         if (LV->getElementType() == RV->getElementType() &&
             LV->getNumElements() == RV->getNumElements()) {
           return lhsType->isExtVectorType() ? lhsType : rhsType;
@@ -4040,7 +4079,7 @@ inline QualType Sema::CheckVectorOperands(SourceLocation Loc, Expr *&lex,
   }
 
   // Handle the case of an ext vector and scalar.
-  if (const ExtVectorType *LV = lhsType->getAsExtVectorType()) {
+  if (const ExtVectorType *LV = lhsType->getAs<ExtVectorType>()) {
     QualType EltTy = LV->getElementType();
     if (EltTy->isIntegralType() && rhsType->isIntegralType()) {
       if (Context.getIntegerTypeOrder(EltTy, rhsType) >= 0) {
@@ -4339,7 +4378,8 @@ QualType Sema::CheckShiftOperands(Expr *&lex, Expr *&rex, SourceLocation Loc,
   // Sanity-check shift operands
   llvm::APSInt Right;
   // Check right/shifter operand
-  if (rex->isIntegerConstantExpr(Right, Context)) {
+  if (!rex->isValueDependent() &&
+      rex->isIntegerConstantExpr(Right, Context)) {
     if (Right.isNegative())
       Diag(Loc, diag::warn_shift_negative) << rex->getSourceRange();
     else {
@@ -4694,7 +4734,7 @@ QualType Sema::CheckVectorCompareOperands(Expr *&lex, Expr *&rex,
   if (lType->isIntegerType())
     return lType;
 
-  const VectorType *VTy = lType->getAsVectorType();
+  const VectorType *VTy = lType->getAs<VectorType>();
   unsigned TypeSize = Context.getTypeSize(VTy->getElementType());
   if (TypeSize == Context.getTypeSize(Context.IntTy))
     return Context.getExtVectorType(Context.IntTy, VTy->getNumElements());
@@ -5131,7 +5171,7 @@ QualType Sema::CheckIndirectionOperand(Expr *Op, SourceLocation OpLoc) {
   if (const PointerType *PT = Ty->getAs<PointerType>())
     return PT->getPointeeType();
 
-  if (const ObjCObjectPointerType *OPT = Ty->getAsObjCObjectPointerType())
+  if (const ObjCObjectPointerType *OPT = Ty->getAs<ObjCObjectPointerType>())
     return OPT->getPointeeType();
 
   Diag(OpLoc, diag::err_typecheck_indirection_requires_pointer)
@@ -5734,7 +5774,7 @@ void Sema::ActOnBlockArguments(Declarator &ParamInfo, Scope *CurScope) {
            diag::warn_attribute_sentinel_not_variadic) << 1;
       // FIXME: remove the attribute.
     }
-    QualType RetTy = T.getTypePtr()->getAsFunctionType()->getResultType();
+    QualType RetTy = T.getTypePtr()->getAs<FunctionType>()->getResultType();
 
     // Do not allow returning a objc interface by-value.
     if (RetTy->isObjCInterfaceType()) {
@@ -5786,7 +5826,7 @@ void Sema::ActOnBlockArguments(Declarator &ParamInfo, Scope *CurScope) {
 
   // Analyze the return type.
   QualType T = GetTypeForDeclarator(ParamInfo, CurScope);
-  QualType RetTy = T->getAsFunctionType()->getResultType();
+  QualType RetTy = T->getAs<FunctionType>()->getResultType();
 
   // Do not allow returning a objc interface by-value.
   if (RetTy->isObjCInterfaceType()) {
@@ -6143,4 +6183,3 @@ void Sema::MarkDeclarationReferenced(SourceLocation Loc, Decl *D) {
     return;
   }
 }
-

@@ -1,5 +1,11 @@
 // RUN: clang-cc -fsyntax-only -verify %s
 
+template<typename T>
+class C { C(int a0 = 0); };
+
+template<>
+C<char>::C(int a0);
+
 struct S { };
 
 template<typename T> void f1(T a, T b = 10) { } // expected-error{{cannot initialize 'b' with an rvalue of type 'int'}}
@@ -67,4 +73,14 @@ void test_x0_not_default_constructible(X0<NotDefaultConstructible> xn) {
   xn.f(NotDefaultConstructible(17));
   xn.f(42);
   xn.f(); // expected-note{{in instantiation of default function argument}}
+}
+
+template<typename T>
+struct X1 {
+  typedef T value_type;
+  X1(const value_type& value = value_type());
+};
+
+void test_X1() {
+  X1<int> x1;
 }

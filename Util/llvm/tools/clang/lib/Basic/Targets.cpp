@@ -478,71 +478,71 @@ void PPCTargetInfo::getGCCRegNames(const char * const *&Names,
 const TargetInfo::GCCRegAlias PPCTargetInfo::GCCRegAliases[] = {
   // While some of these aliases do map to different registers
   // they still share the same register name.
-  { { "0" }, "r0" }, 
-  { { "1"}, "r1" }, 
-  { { "2" }, "r2" }, 
-  { { "3" }, "r3" }, 
-  { { "4" }, "r4" }, 
-  { { "5" }, "r5" }, 
-  { { "6" }, "r6" }, 
-  { { "7" }, "r7" }, 
-  { { "8" }, "r8" }, 
-  { { "9" }, "r9" }, 
-  { { "10" }, "r10" }, 
-  { { "11" }, "r11" }, 
-  { { "12" }, "r12" }, 
-  { { "13" }, "r13" }, 
-  { { "14" }, "r14" }, 
-  { { "15" }, "r15" }, 
-  { { "16" }, "r16" }, 
-  { { "17" }, "r17" }, 
-  { { "18" }, "r18" }, 
-  { { "19" }, "r19" }, 
-  { { "20" }, "r20" }, 
-  { { "21" }, "r21" }, 
-  { { "22" }, "r22" }, 
-  { { "23" }, "r23" }, 
-  { { "24" }, "r24" }, 
-  { { "25" }, "r25" }, 
-  { { "26" }, "r26" }, 
-  { { "27" }, "r27" }, 
-  { { "28" }, "r28" }, 
-  { { "29" }, "r29" }, 
-  { { "30" }, "r30" }, 
-  { { "31" }, "r31" }, 
-  { { "fr0" }, "f0" }, 
-  { { "fr1" }, "f1" }, 
-  { { "fr2" }, "f2" }, 
-  { { "fr3" }, "f3" }, 
-  { { "fr4" }, "f4" }, 
-  { { "fr5" }, "f5" }, 
-  { { "fr6" }, "f6" }, 
-  { { "fr7" }, "f7" }, 
-  { { "fr8" }, "f8" }, 
-  { { "fr9" }, "f9" }, 
-  { { "fr10" }, "f00" }, 
-  { { "fr11" }, "f11" }, 
-  { { "fr12" }, "f12" }, 
-  { { "fr13" }, "f13" }, 
-  { { "fr14" }, "f14" }, 
-  { { "fr15" }, "f15" }, 
-  { { "fr16" }, "f16" }, 
-  { { "fr17" }, "f17" }, 
-  { { "fr18" }, "f18" }, 
-  { { "fr19" }, "f19" }, 
-  { { "fr20" }, "f20" }, 
-  { { "fr21" }, "f21" }, 
-  { { "fr22" }, "f22" }, 
-  { { "fr23" }, "f23" }, 
-  { { "fr24" }, "f24" }, 
-  { { "fr25" }, "f25" }, 
-  { { "fr26" }, "f26" }, 
-  { { "fr27" }, "f27" }, 
-  { { "fr28" }, "f28" }, 
-  { { "fr29" }, "f29" }, 
-  { { "fr30" }, "f30" }, 
-  { { "fr31" }, "f31" }, 
-  { { "cc" }, "cr0" }, 
+  { { "0" }, "r0" },
+  { { "1"}, "r1" },
+  { { "2" }, "r2" },
+  { { "3" }, "r3" },
+  { { "4" }, "r4" },
+  { { "5" }, "r5" },
+  { { "6" }, "r6" },
+  { { "7" }, "r7" },
+  { { "8" }, "r8" },
+  { { "9" }, "r9" },
+  { { "10" }, "r10" },
+  { { "11" }, "r11" },
+  { { "12" }, "r12" },
+  { { "13" }, "r13" },
+  { { "14" }, "r14" },
+  { { "15" }, "r15" },
+  { { "16" }, "r16" },
+  { { "17" }, "r17" },
+  { { "18" }, "r18" },
+  { { "19" }, "r19" },
+  { { "20" }, "r20" },
+  { { "21" }, "r21" },
+  { { "22" }, "r22" },
+  { { "23" }, "r23" },
+  { { "24" }, "r24" },
+  { { "25" }, "r25" },
+  { { "26" }, "r26" },
+  { { "27" }, "r27" },
+  { { "28" }, "r28" },
+  { { "29" }, "r29" },
+  { { "30" }, "r30" },
+  { { "31" }, "r31" },
+  { { "fr0" }, "f0" },
+  { { "fr1" }, "f1" },
+  { { "fr2" }, "f2" },
+  { { "fr3" }, "f3" },
+  { { "fr4" }, "f4" },
+  { { "fr5" }, "f5" },
+  { { "fr6" }, "f6" },
+  { { "fr7" }, "f7" },
+  { { "fr8" }, "f8" },
+  { { "fr9" }, "f9" },
+  { { "fr10" }, "f10" },
+  { { "fr11" }, "f11" },
+  { { "fr12" }, "f12" },
+  { { "fr13" }, "f13" },
+  { { "fr14" }, "f14" },
+  { { "fr15" }, "f15" },
+  { { "fr16" }, "f16" },
+  { { "fr17" }, "f17" },
+  { { "fr18" }, "f18" },
+  { { "fr19" }, "f19" },
+  { { "fr20" }, "f20" },
+  { { "fr21" }, "f21" },
+  { { "fr22" }, "f22" },
+  { { "fr23" }, "f23" },
+  { { "fr24" }, "f24" },
+  { { "fr25" }, "f25" },
+  { { "fr26" }, "f26" },
+  { { "fr27" }, "f27" },
+  { { "fr28" }, "f28" },
+  { { "fr29" }, "f29" },
+  { { "fr30" }, "f30" },
+  { { "fr31" }, "f31" },
+  { { "cc" }, "cr0" },
 };
 
 void PPCTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
@@ -1025,34 +1025,46 @@ class ARMTargetInfo : public TargetInfo {
     XScale
   } ArmArch;
 
+   static const TargetInfo::GCCRegAlias GCCRegAliases[];
+   static const char * const GCCRegNames[];
+
   std::string ABI;
+  bool IsThumb;
 
 public:
-  ARMTargetInfo(const std::string& triple)
-    : TargetInfo(triple), ABI("aapcs-linux")
+  ARMTargetInfo(const std::string &TripleStr)
+    : TargetInfo(TripleStr), ABI("aapcs-linux"), IsThumb(false)
   {
-    // FIXME: Are the defaults correct for ARM?
+    llvm::Triple Triple(TripleStr);
+
     DescriptionString = ("e-p:32:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
                          "i64:32:32-f32:32:32-f64:32:32-"
                          "v64:64:64-v128:128:128-a0:0:32");
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
-    if (triple.find("armv7-") == 0)
+
+    // FIXME: This shouldn't be done this way, we should use features to
+    // indicate the arch. See lib/Driver/Tools.cpp.
+    llvm::StringRef Version(""), Arch = Triple.getArchName();
+    if (Arch.startswith("arm"))
+      Version = Arch.substr(3);
+    else if (Arch.startswith("thumb"))
+      Version = Arch.substr(5);
+    if (Version == "v7")
       ArmArch = Armv7a;
-    else if (triple.find("arm-") == 0 || triple.find("armv6-") == 0)
+    else if (Version.empty() || Version == "v6" || Version == "v6t2")
       ArmArch = Armv6;
-    else if (triple.find("armv5-") == 0)
+    else if (Version == "v5")
       ArmArch = Armv5;
-    else if (triple.find("armv4t-") == 0)
+    else if (Version == "v4t")
       ArmArch = Armv4t;
-    else if (triple.find("xscale-") == 0)
+    else if (Arch == "xscale" || Arch == "thumbv5e")
       ArmArch = XScale;
-    else if (triple.find("armv") == 0) {
-      // FIXME: fuzzy match for other random weird arm triples.  This is useful
-      // for the static analyzer and other clients, but probably should be
-      // re-evaluated when codegen is brought up.
+    else
       ArmArch = Armv6;
-    }
+
+    if (Arch.startswith("thumb"))
+      IsThumb = true;
   }
   virtual const char *getABI() const { return ABI.c_str(); }
   virtual bool setABI(const std::string &Name) {
@@ -1086,6 +1098,9 @@ public:
     Define(Defs, "__LITTLE_ENDIAN__");
 
     // Subtarget options.
+    //
+    // FIXME: Neither THUMB_INTERWORK nor SOFTFP is not being set correctly
+    // here.
     if (ArmArch == Armv7a) {
       Define(Defs, "__ARM_ARCH_7A__");
       Define(Defs, "__THUMB_INTERWORK__");
@@ -1104,9 +1119,22 @@ public:
       Define(Defs, "__XSCALE__");
       Define(Defs, "__SOFTFP__");
     }
+
     Define(Defs, "__ARMEL__");
+
+    if (IsThumb) {
+      Define(Defs, "__THUMBEL__");
+      Define(Defs, "__thumb__");
+      if (ArmArch == Armv7a)
+        Define(Defs, "__thumb2__");
+    }
+
+    // Note, this is always on in gcc, even though it doesn't make sense.
     Define(Defs, "__APCS_32__");
+    // FIXME: This should be conditional on VFP instruction support.
     Define(Defs, "__VFP_FP__");
+
+    Define(Defs, "__USING_SJLJ_EXCEPTIONS__");
   }
   virtual void getTargetBuiltins(const Builtin::Info *&Records,
                                  unsigned &NumRecords) const {
@@ -1118,17 +1146,9 @@ public:
     return "typedef char* __builtin_va_list;";
   }
   virtual void getGCCRegNames(const char * const *&Names,
-                              unsigned &NumNames) const {
-    // FIXME: Implement.
-    Names = 0;
-    NumNames = 0;
-  }
+                              unsigned &NumNames) const;
   virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
-                                unsigned &NumAliases) const {
-    // FIXME: Implement.
-    Aliases = 0;
-    NumAliases = 0;
-  }
+                                unsigned &NumAliases) const;
   virtual bool validateAsmConstraint(const char *&Name,
                                      TargetInfo::ConstraintInfo &Info) const {
     // FIXME: Check if this is complete
@@ -1148,6 +1168,43 @@ public:
     return "";
   }
 };
+
+const char * const ARMTargetInfo::GCCRegNames[] = {
+  "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+  "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+};
+
+void ARMTargetInfo::getGCCRegNames(const char * const *&Names,
+                                       unsigned &NumNames) const {
+  Names = GCCRegNames;
+  NumNames = llvm::array_lengthof(GCCRegNames);
+}
+
+const TargetInfo::GCCRegAlias ARMTargetInfo::GCCRegAliases[] = {
+
+  { { "a1" }, "r0" },
+  { { "a2" }, "r1" },
+  { { "a3" }, "r2" },
+  { { "a4" }, "r3" },
+  { { "v1" }, "r4" },
+  { { "v2" }, "r5" },
+  { { "v3" }, "r6" },
+  { { "v4" }, "r7" },
+  { { "v5" }, "r8" },
+  { { "v6", "rfp" }, "r9" },
+  { { "sl" }, "r10" },
+  { { "fp" }, "r11" },
+  { { "ip" }, "r12" },
+  { { "sp" }, "r13" },
+  { { "lr" }, "r14" },
+  { { "pc" }, "r15" },
+};
+
+void ARMTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                       unsigned &NumAliases) const {
+  Aliases = GCCRegAliases;
+  NumAliases = llvm::array_lengthof(GCCRegAliases);
+}
 } // end anonymous namespace.
 
 

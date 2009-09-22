@@ -5,6 +5,16 @@ import ShUtil
 import Test
 import Util
 
+import platform
+import tempfile
+
+class InternalShellError(Exception):
+    def __init__(self, command, message):
+        self.command = command
+        self.message = message
+
+# Don't use close_fds on Windows.
+kUseCloseFDs = platform.system() != 'Windows'
 def executeCommand(command, cwd=None, env=None):
     p = subprocess.Popen(command, cwd=cwd,
                          stdin=subprocess.PIPE,
@@ -48,7 +58,11 @@ def executeShCmd(cmd, cfg, cwd, results):
     assert isinstance(cmd, ShUtil.Pipeline)
     procs = []
     input = subprocess.PIPE
-    for j in cmd.commands:
+    stderrTempFiles = []
+    # To avoid deadlock, we use a single stderr stream for piped
+    # output. This is null until we have seen some output using
+    # stderr.
+    for i,j in enumerate(cmd.commands):
         redirects = [(0,), (1,), (2,)]
         for r in j.redirects:
             if r[0] == ('>',2):
@@ -94,12 +108,27 @@ def executeShCmd(cmd, cfg, cwd, results):
             stderrIsStdout = True
         else:
             stderrIsStdout = False
-        procs.append(subprocess.Popen(j.args, cwd=cwd,
+
+            # Don't allow stderr on a PIPE except for the last
+            # process, this could deadlock.
+            #
+            # FIXME: This is slow, but so is deadlock.
+            if stderr == subprocess.PIPE and j != cmd.commands[-1]:
+                stderr = tempfile.TemporaryFile(mode='w+b')
+                stderrTempFiles.append((i, stderr))
+
+        # Resolve the executable path ourselves.
+        args = list(j.args)
+        args[0] = Util.which(args[0], cfg.environment['PATH'])
+        if not args[0]:
+            raise InternalShellError(j, '%r: command not found' % j.args[0])
+
+        procs.append(subprocess.Popen(args, cwd=cwd,
                                       stdin = stdin,
                                       stdout = stdout,
                                       stderr = stderr,
                                       env = cfg.environment,
-                                      close_fds = True))
+                                      close_fds = kUseCloseFDs))
 
         # Immediately close stdin for any process taking stdin from us.
         if stdin == subprocess.PIPE:
@@ -114,10 +143,10 @@ def executeShCmd(cmd, cfg, cwd, results):
         else:
             input = subprocess.PIPE
 
-    # FIXME: There is a potential for deadlock here, when we have a pipe and
-    # some process other than the last one ends up blocked on stderr.
+    # FIXME: There is probably still deadlock potential here. Yawn.
     procData = [None] * len(procs)
     procData[-1] = procs[-1].communicate()
+
     for i in range(len(procs) - 1):
         if procs[i].stdout is not None:
             out = procs[i].stdout.read()
@@ -128,6 +157,11 @@ def executeShCmd(cmd, cfg, cwd, results):
         else:
             err = ''
         procData[i] = (out,err)
+        
+    # Read stderr out of the temp files.
+    for i,f in stderrTempFiles:
+        f.seek(0, 0)
+        procData[i] = (procData[i][0], f.read())
 
     exitCode = None
     for i,(out,err) in enumerate(procData):
@@ -159,7 +193,12 @@ def executeScriptInternal(test, litConfig, tmpBase, commands, cwd):
         return (Test.FAIL, "shell parser error on: %r" % ln)
 
     results = []
-    exitCode = executeShCmd(cmd, test.config, cwd, results)
+    try:
+        exitCode = executeShCmd(cmd, test.config, cwd, results)
+    except InternalShellError,e:
+        out = ''
+        err = e.message
+        exitCode = 255
 
     out = err = ''
     for i,(cmd, cmd_out,cmd_err,res) in enumerate(results):
@@ -225,7 +264,11 @@ def executeTclScriptInternal(test, litConfig, tmpBase, commands, cwd):
         return out,err,exitCode
     else:
         results = []
-        exitCode = executeShCmd(cmd, test.config, cwd, results)
+        try:
+            exitCode = executeShCmd(cmd, test.config, cwd, results)
+        except InternalShellError,e:
+            results.append((e.command, '', e.message + '\n', 255))
+            exitCode = 255
 
     out = err = ''
 

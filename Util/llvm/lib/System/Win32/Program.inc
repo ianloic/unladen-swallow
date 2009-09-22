@@ -22,8 +22,31 @@
 //===          and must not be UNIX code
 //===----------------------------------------------------------------------===//
 
+namespace {
+  struct Win32ProcessInfo {
+    HANDLE hProcess;
+    DWORD  dwProcessId;
+  };
+}
+
 namespace llvm {
 using namespace sys;
+
+Program::Program() : Data_(0) {}
+
+Program::~Program() {
+  if (Data_) {
+    Win32ProcessInfo* wpi = reinterpret_cast<Win32ProcessInfo*>(Data_);
+    CloseHandle(wpi->hProcess);
+    delete wpi;
+    Data_ = 0;
+  }
+}
+
+unsigned Program::GetPid() const {
+  Win32ProcessInfo* wpi = reinterpret_cast<Win32ProcessInfo*>(Data_);
+  return wpi->dwProcessId;
+}
 
 // This function just uses the PATH environment variable to find the program.
 Path
@@ -122,6 +145,12 @@ Program::Execute(const Path& path,
                  const Path** redirects,
                  unsigned memoryLimit,
                  std::string* ErrMsg) {
+  if (Data_) {
+    Win32ProcessInfo* wpi = reinterpret_cast<Win32ProcessInfo*>(Data_);
+    CloseHandle(wpi->hProcess);
+    delete wpi;
+    Data_ = 0;
+  }
 
   if (!path.canExecute()) {
     if (ErrMsg)
@@ -249,10 +278,12 @@ Program::Execute(const Path& path,
                path.str() + "'");
     return false;
   }
-  Pid_ = pi.dwProcessId;
+  Win32ProcessInfo* wpi = new Win32ProcessInfo;
+  wpi->hProcess = pi.hProcess;
+  wpi->dwProcessId = pi.dwProcessId;
+  Data_ = wpi;
 
   // Make sure these get closed no matter what.
-  AutoHandle hProcess(pi.hProcess);
   AutoHandle hThread(pi.hThread);
 
   // Assign the process to a job if a memory limit is defined.
@@ -286,17 +317,13 @@ Program::Execute(const Path& path,
 int
 Program::Wait(unsigned secondsToWait,
               std::string* ErrMsg) {
-  if (Pid_ == 0) {
+  if (Data_ == 0) {
     MakeErrMsg(ErrMsg, "Process not started!");
     return -1;
   }
 
-  HANDLE hOpen = OpenProcess(SYNCHRONIZE, FALSE, Pid_);
-  if (hOpen == NULL) {
-    MakeErrMsg(ErrMsg, "OpenProcess failed!");
-    return -1;
-  }
-  AutoHandle hProcess(hOpen);
+  Win32ProcessInfo* wpi = reinterpret_cast<Win32ProcessInfo*>(Data_);
+  HANDLE hProcess = wpi->hProcess;
 
   // Wait for the process to terminate.
   DWORD millisecondsToWait = INFINITE;
@@ -327,18 +354,13 @@ Program::Wait(unsigned secondsToWait,
 
 bool
 Program::Kill(std::string* ErrMsg) {
-  if (Pid_ == 0) {
+  if (Data_ == 0) {
     MakeErrMsg(ErrMsg, "Process not started!");
     return true;
   }
 
-  HANDLE hOpen = OpenProcess(PROCESS_TERMINATE, FALSE, Pid_);
-  if (hOpen == NULL) {
-    MakeErrMsg(ErrMsg, "OpenProcess failed!");
-    return true;
-  }
-  AutoHandle hProcess(hOpen);
-
+  Win32ProcessInfo* wpi = reinterpret_cast<Win32ProcessInfo*>(Data_);
+  HANDLE hProcess = wpi->hProcess;
   if (TerminateProcess(hProcess, 1) == 0) {
     MakeErrMsg(ErrMsg, "The process couldn't be killed!");
     return true;

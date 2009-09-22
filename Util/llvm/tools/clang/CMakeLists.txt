@@ -1,6 +1,25 @@
 # Clang version information
-# FIXME: get from a file called ./VER
-set(CLANG_VERSION 1.1)
+
+# Make sure that CMake reconfigures when the version changes.
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/VER
+  ${CMAKE_CURRENT_BINARY_DIR}/VER)
+
+set(CLANG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(CLANG_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+# Compute the Clang version from the contents of VER
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VER CLANG_VERSION_DATA)
+string(REGEX MATCH "[0-9]+\\.[0-9]+(\\.[0-9]+)?" CLANG_VERSION 
+  ${CLANG_VERSION_DATA})
+message(STATUS "Clang version: ${CLANG_VERSION}")
+
+# Add appropriate flags for GCC
+if (CMAKE_COMPILER_IS_GNUCXX)
+  # FIXME: Turn off exceptions, RTTI:
+  # -fno-exceptions -fno-rtti
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common -Woverloaded-virtual -pedantic -Wno-long-long -Wall -W -Wno-unused-parameter -Wwrite-strings")
+endif ()
 
 macro(add_clang_library name)
   set(srcs ${ARGN})

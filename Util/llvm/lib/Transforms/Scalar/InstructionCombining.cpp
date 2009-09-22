@@ -42,6 +42,7 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/Operator.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/MallocHelper.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -89,6 +90,7 @@ namespace {
     /// Add - Add the specified instruction to the worklist if it isn't already
     /// in it.
     void Add(Instruction *I) {
+      DEBUG(errs() << "IC: ADD: " << *I << '\n');
       if (WorklistMap.insert(std::make_pair(I, Worklist.size())).second)
         Worklist.push_back(I);
     }
@@ -326,7 +328,7 @@ namespace {
     // instruction.  Instead, visit methods should return the value returned by
     // this function.
     Instruction *EraseInstFromFunction(Instruction &I) {
-      DEBUG(errs() << "IC: erase " << I << '\n');
+      DEBUG(errs() << "IC: ERASE " << I << '\n');
 
       assert(I.use_empty() && "Cannot erase instruction that is used!");
       // Make sure that we reprocess all operands now that we reduced their
@@ -5891,9 +5893,9 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   
   // icmp <global/alloca*/null>, <global/alloca*/null> - Global/Stack value
   // addresses never equal each other!  We already know that Op0 != Op1.
-  if ((isa<GlobalValue>(Op0) || isa<AllocaInst>(Op0) ||
+  if ((isa<GlobalValue>(Op0) || isa<AllocaInst>(Op0) || isMalloc(Op0) ||
        isa<ConstantPointerNull>(Op0)) &&
-      (isa<GlobalValue>(Op1) || isa<AllocaInst>(Op1) ||
+      (isa<GlobalValue>(Op1) || isa<AllocaInst>(Op1) || isMalloc(Op1) ||
        isa<ConstantPointerNull>(Op1)))
     return ReplaceInstUsesWith(I, ConstantInt::get(Type::getInt1Ty(*Context), 
                                                    !I.isTrueWhenEqual()));
@@ -6231,8 +6233,33 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
         // can assume it is successful and remove the malloc.
         if (LHSI->hasOneUse() && isa<ConstantPointerNull>(RHSC)) {
           Worklist.Add(LHSI);
-          return ReplaceInstUsesWith(I, ConstantInt::get(Type::getInt1Ty(*Context),
-                                                         !I.isTrueWhenEqual()));
+          return ReplaceInstUsesWith(I,
+                                     ConstantInt::get(Type::getInt1Ty(*Context),
+                                                      !I.isTrueWhenEqual()));
+        }
+        break;
+      case Instruction::Call:
+        // If we have (malloc != null), and if the malloc has a single use, we
+        // can assume it is successful and remove the malloc.
+        if (isMalloc(LHSI) && LHSI->hasOneUse() &&
+            isa<ConstantPointerNull>(RHSC)) {
+          Worklist.Add(LHSI);
+          return ReplaceInstUsesWith(I,
+                                     ConstantInt::get(Type::getInt1Ty(*Context),
+                                                      !I.isTrueWhenEqual()));
+        }
+        break;
+      case Instruction::BitCast:
+        // If we have (malloc != null), and if the malloc has a single use, we
+        // can assume it is successful and remove the malloc.
+        CallInst* CI = extractMallocCallFromBitCast(LHSI);
+        if (CI && CI->hasOneUse() && LHSI->hasOneUse()
+            && isa<ConstantPointerNull>(RHSC)) {
+          Worklist.Add(LHSI);
+          Worklist.Add(CI);
+          return ReplaceInstUsesWith(I,
+                                     ConstantInt::get(Type::getInt1Ty(*Context),
+                                                      !I.isTrueWhenEqual()));
         }
         break;
       }
@@ -8784,8 +8811,10 @@ Instruction *InstCombiner::visitBitCast(BitCastInst &CI) {
     if (SrcPTy->getAddressSpace() != DstPTy->getAddressSpace())
       return 0;
     
-    // If we are casting a malloc or alloca to a pointer to a type of the same
+    // If we are casting a alloca to a pointer to a type of the same
     // size, rewrite the allocation instruction to allocate the "right" type.
+    // There is no need to modify malloc calls because it is their bitcast that
+    // needs to be cleaned up.
     if (AllocationInst *AI = dyn_cast<AllocationInst>(Src))
       if (Instruction *V = PromoteCastOfAllocation(CI, *AI))
         return V;
@@ -9459,6 +9488,7 @@ static unsigned EnforceKnownAlignment(Value *V,
         Align = PrefAlign;
       }
     }
+    // No alignment changes are possible for malloc calls
   }
 
   return Align;
@@ -9796,7 +9826,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     TerminatorInst *TI = II->getParent()->getTerminator();
     bool CannotRemove = false;
     for (++BI; &*BI != TI; ++BI) {
-      if (isa<AllocaInst>(BI)) {
+      if (isa<AllocaInst>(BI) || isMalloc(BI)) {
         CannotRemove = true;
         break;
       }
@@ -10313,8 +10343,8 @@ Instruction *InstCombiner::transformCallThroughTrampoline(CallSite CS) {
   return CS.getInstruction();
 }
 
-/// FoldPHIArgBinOpIntoPHI - If we have something like phi [add (a,b), add(c,d)]
-/// and if a/b/c/d and the add's all have a single use, turn this into two phi's
+/// FoldPHIArgBinOpIntoPHI - If we have something like phi [add (a,b), add(a,c)]
+/// and if a/b/c and the add's all have a single use, turn this into a phi
 /// and a single binop.
 Instruction *InstCombiner::FoldPHIArgBinOpIntoPHI(PHINode &PN) {
   Instruction *FirstInst = cast<Instruction>(PN.getIncomingValue(0));
@@ -10326,8 +10356,7 @@ Instruction *InstCombiner::FoldPHIArgBinOpIntoPHI(PHINode &PN) {
   const Type *LHSType = LHSVal->getType();
   const Type *RHSType = RHSVal->getType();
   
-  // Scan to see if all operands are the same opcode, all have one use, and all
-  // kill their operands (i.e. the operands have one use).
+  // Scan to see if all operands are the same opcode, and all have one use.
   for (unsigned i = 1; i != PN.getNumIncomingValues(); ++i) {
     Instruction *I = dyn_cast<Instruction>(PN.getIncomingValue(i));
     if (!I || I->getOpcode() != Opc || !I->hasOneUse() ||
@@ -10347,6 +10376,13 @@ Instruction *InstCombiner::FoldPHIArgBinOpIntoPHI(PHINode &PN) {
     if (I->getOperand(0) != LHSVal) LHSVal = 0;
     if (I->getOperand(1) != RHSVal) RHSVal = 0;
   }
+
+  // If both LHS and RHS would need a PHI, don't do this transformation,
+  // because it would increase the number of PHIs entering the block,
+  // which leads to higher register pressure. This is especially
+  // bad when the PHIs are in the header of a loop.
+  if (!LHSVal && !RHSVal)
+    return 0;
   
   // Otherwise, this is safe to transform!
   
@@ -10403,11 +10439,11 @@ Instruction *InstCombiner::FoldPHIArgGEPIntoPHI(PHINode &PN) {
   bool AllBasePointersAreAllocas = true;
 
   // We don't want to replace this phi if the replacement would require
-  // more than one phi.
+  // more than one phi, which leads to higher register pressure. This is
+  // especially bad when the PHIs are in the header of a loop.
   bool NeededPhi = false;
   
-  // Scan to see if all operands are the same opcode, all have one use, and all
-  // kill their operands (i.e. the operands have one use).
+  // Scan to see if all operands are the same opcode, and all have one use.
   for (unsigned i = 1; i != PN.getNumIncomingValues(); ++i) {
     GetElementPtrInst *GEP= dyn_cast<GetElementPtrInst>(PN.getIncomingValue(i));
     if (!GEP || !GEP->hasOneUse() || GEP->getType() != FirstInst->getType() ||
@@ -11054,7 +11090,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       if (Offset == 0) {
         // If the bitcast is of an allocation, and the allocation will be
         // converted to match the type of the cast, don't touch this.
-        if (isa<AllocationInst>(BCI->getOperand(0))) {
+        if (isa<AllocationInst>(BCI->getOperand(0)) ||
+            isMalloc(BCI->getOperand(0))) {
           // See if the bitcast simplifies, if so, don't nuke this GEP yet.
           if (Instruction *I = visitBitCast(*BCI)) {
             if (I != BCI) {
@@ -11185,6 +11222,21 @@ Instruction *InstCombiner::visitFreeInst(FreeInst &FI) {
       EraseInstFromFunction(FI);
       return EraseInstFromFunction(*MI);
     }
+  if (isMalloc(Op)) {
+    if (CallInst* CI = extractMallocCallFromBitCast(Op)) {
+      if (Op->hasOneUse() && CI->hasOneUse()) {
+        EraseInstFromFunction(FI);
+        EraseInstFromFunction(*CI);
+        return EraseInstFromFunction(*cast<Instruction>(Op));
+      }
+    } else {
+      // Op is a call to malloc
+      if (Op->hasOneUse()) {
+        EraseInstFromFunction(FI);
+        return EraseInstFromFunction(*cast<Instruction>(Op));
+      }
+    }
+  }
 
   return 0;
 }

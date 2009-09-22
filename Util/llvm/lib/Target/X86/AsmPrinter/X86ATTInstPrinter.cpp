@@ -19,6 +19,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
+#include "X86GenInstrNames.inc"
 using namespace llvm;
 
 // Include the auto-generated portion of the assembly writer.
@@ -41,11 +42,6 @@ void X86ATTInstPrinter::printSSECC(const MCInst *MI, unsigned Op) {
   case 6: O << "nle"; break;
   case 7: O << "ord"; break;
   }
-}
-
-void X86ATTInstPrinter::printPICLabel(const MCInst *MI, unsigned Op) {
-  llvm_unreachable("This is only used for MOVPC32r,"
-                   "should lower before instruction printing!");
 }
 
 /// print_pcrel_imm - This is used to print an immediate value that ends up

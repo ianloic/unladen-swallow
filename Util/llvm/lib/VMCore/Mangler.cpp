@@ -47,8 +47,9 @@ std::string Mangler::makeNameProper(const std::string &X,
       ++I;  // Skip over the marker.
     }
     
-    // Mangle the first letter specially, don't allow numbers.
-    if (*I >= '0' && *I <= '9')
+    // Mangle the first letter specially, don't allow numbers unless the target
+    // explicitly allows them.
+    if (!SymbolsCanStartWithDigit && *I >= '0' && *I <= '9')
       Result += MangleLetter(*I++);
 
     for (std::string::const_iterator E = X.end(); I != E; ++I) {
@@ -207,7 +208,7 @@ Mangler::Mangler(Module &M, const char *prefix, const char *privatePrefix,
                  const char *linkerPrivatePrefix)
   : Prefix(prefix), PrivatePrefix(privatePrefix),
     LinkerPrivatePrefix(linkerPrivatePrefix), UseQuotes(false),
-    NextAnonGlobalID(1) {
+    SymbolsCanStartWithDigit(false), NextAnonGlobalID(1) {
   std::fill(AcceptableChars, array_endof(AcceptableChars), 0);
 
   // Letters and numbers are acceptable.

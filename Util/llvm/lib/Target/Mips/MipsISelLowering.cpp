@@ -259,7 +259,8 @@ static Mips::CondCode FPCondCCodeToFCC(ISD::CondCode CC) {
 
 MachineBasicBlock *
 MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                MachineBasicBlock *BB) const {
+                                                MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   bool isFPCmp = false;
   DebugLoc dl = MI->getDebugLoc();
@@ -307,9 +308,12 @@ MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     F->insert(It, sinkMBB);
     // Update machine-CFG edges by first adding all successors of the current
     // block to the new block which will contain the Phi node for the select.
+    // Also inform sdisel of the edge changes.
     for(MachineBasicBlock::succ_iterator i = BB->succ_begin(),
-        e = BB->succ_end(); i != e; ++i)
+          e = BB->succ_end(); i != e; ++i) {
+      EM->insert(std::make_pair(*i, sinkMBB));
       sinkMBB->addSuccessor(*i);
+    }
     // Next, remove all successors of the current block, and add the true
     // and fallthrough blocks as its successors.
     while(!BB->succ_empty())

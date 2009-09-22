@@ -230,6 +230,9 @@ void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   FD->setHasInheritedPrototype(Record[Idx++]);
   FD->setHasWrittenPrototype(Record[Idx++]);
   FD->setDeleted(Record[Idx++]);
+  FD->setTrivial(Record[Idx++]);
+  FD->setCopyAssignment(Record[Idx++]);
+  FD->setHasImplicitReturnZero(Record[Idx++]);
   FD->setLocEnd(SourceLocation::getFromRawEncoding(Record[Idx++]));
   // FIXME: C++ TemplateOrInstantiation
   unsigned NumParams = Record[Idx++];
@@ -640,6 +643,8 @@ inline void PCHReader::LoadedDecl(unsigned Index, Decl *D) {
 /// code generation, e.g., inline function definitions, Objective-C
 /// declarations with metadata, etc.
 static bool isConsumerInterestedIn(Decl *D) {
+  if (isa<FileScopeAsmDecl>(D))
+    return true;
   if (VarDecl *Var = dyn_cast<VarDecl>(D))
     return Var->isFileVarDecl() && Var->getInit();
   if (FunctionDecl *Func = dyn_cast<FunctionDecl>(D))
@@ -794,4 +799,3 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
 
   return D;
 }
-

@@ -50,7 +50,7 @@ BuildDescriptorBlockDecl(bool BlockHasCopyDispose, uint64_t Size,
     Elts.push_back(BuildDestroyHelper(Ty, NoteForHelper));
   }
 
-  C = llvm::ConstantStruct::get(VMContext, Elts);
+  C = llvm::ConstantStruct::get(VMContext, Elts, false);
 
   C = new llvm::GlobalVariable(CGM.getModule(), C->getType(), true,
                                llvm::GlobalValue::InternalLinkage,
@@ -163,7 +163,7 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
       Elts[0] = CGM.getNSConcreteGlobalBlock();
       Elts[1] = llvm::ConstantInt::get(IntTy, flags|BLOCK_IS_GLOBAL);
 
-      C = llvm::ConstantStruct::get(VMContext, Elts);
+      C = llvm::ConstantStruct::get(VMContext, Elts, false);
 
       char Name[32];
       sprintf(Name, "__block_holder_tmp_%d", CGM.getGlobalUniqueCount());
@@ -218,9 +218,12 @@ llvm::Value *CodeGenFunction::BuildBlockLiteralTmp(const BlockExpr *BE) {
 
         llvm::Value* Addr = Builder.CreateStructGEP(V, i+5, "tmp");
         NoteForHelper[helpersize].index = i+5;
-        NoteForHelper[helpersize].RequiresCopying = BlockRequiresCopying(VD->getType());
+        NoteForHelper[helpersize].RequiresCopying
+          = BlockRequiresCopying(VD->getType());
         NoteForHelper[helpersize].flag
-          = VD->getType()->isBlockPointerType() ? BLOCK_FIELD_IS_BLOCK : BLOCK_FIELD_IS_OBJECT;
+          = (VD->getType()->isBlockPointerType()
+             ? BLOCK_FIELD_IS_BLOCK
+             : BLOCK_FIELD_IS_OBJECT);
 
         if (LocalDeclMap[VD]) {
           if (BDRE->isByRef()) {
@@ -386,6 +389,10 @@ const llvm::Type *BlockModule::getGenericExtendedBlockLiteralType() {
   return GenericExtendedBlockLiteralType;
 }
 
+bool BlockFunction::BlockRequiresCopying(QualType Ty) {
+  return CGM.BlockRequiresCopying(Ty);
+}
+
 RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr* E) {
   const BlockPointerType *BPT =
     E->getCallee()->getType()->getAs<BlockPointerType>();
@@ -417,13 +424,13 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr* E) {
   QualType FnType = BPT->getPointeeType();
 
   // And the rest of the arguments.
-  EmitCallArgs(Args, FnType->getAsFunctionProtoType(),
+  EmitCallArgs(Args, FnType->getAs<FunctionProtoType>(),
                E->arg_begin(), E->arg_end());
 
   // Load the function.
   llvm::Value *Func = Builder.CreateLoad(FuncPtr, false, "tmp");
 
-  QualType ResultType = FnType->getAsFunctionType()->getResultType();
+  QualType ResultType = FnType->getAs<FunctionType>()->getResultType();
 
   const CGFunctionInfo &FnInfo =
     CGM.getTypes().getFunctionInfo(ResultType, Args);
@@ -516,7 +523,7 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
                       llvm::ConstantInt::get(UnsignedLongTy,BlockLiteralSize);
 
   llvm::Constant *DescriptorStruct =
-    llvm::ConstantStruct::get(VMContext, &DescriptorFields[0], 2);
+    llvm::ConstantStruct::get(VMContext, &DescriptorFields[0], 2, false);
 
   llvm::GlobalVariable *Descriptor =
     new llvm::GlobalVariable(getModule(), DescriptorStruct->getType(), true,
@@ -557,7 +564,7 @@ BlockModule::GetAddrOfGlobalBlock(const BlockExpr *BE, const char * n) {
   LiteralFields[4] = Descriptor;
 
   llvm::Constant *BlockLiteralStruct =
-    llvm::ConstantStruct::get(VMContext, &LiteralFields[0], 5);
+    llvm::ConstantStruct::get(VMContext, &LiteralFields[0], 5, false);
 
   llvm::GlobalVariable *BlockLiteral =
     new llvm::GlobalVariable(getModule(), BlockLiteralStruct->getType(), true,

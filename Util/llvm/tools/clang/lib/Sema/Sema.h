@@ -42,6 +42,7 @@ namespace llvm {
 namespace clang {
   class ASTContext;
   class ASTConsumer;
+  class CodeCompleteConsumer;
   class Preprocessor;
   class Decl;
   class DeclContext;
@@ -177,6 +178,9 @@ public:
 
   /// \brief Source of additional semantic information.
   ExternalSemaSource *ExternalSource;
+
+  /// \brief Code-completion consumer.
+  CodeCompleteConsumer *CodeCompleter;
 
   /// CurContext - This is the current declaration context of parsing.
   DeclContext *CurContext;
@@ -787,6 +791,8 @@ public:
                                OverloadCandidateSet& Conversions,
                                bool AllowConversionFunctions,
                                bool AllowExplicit, bool ForceRValue);
+  bool DiagnoseAmbiguousUserDefinedConversion(Expr *From, QualType ToType);
+                                              
 
   ImplicitConversionSequence::CompareKind
   CompareImplicitConversionSequences(const ImplicitConversionSequence& ICS1,
@@ -831,7 +837,8 @@ public:
                             Expr **Args, unsigned NumArgs,
                             OverloadCandidateSet& CandidateSet,
                             bool SuppressUserConversions = false,
-                            bool ForceRValue = false);
+                            bool ForceRValue = false,
+                            bool PartialOverloading = false);
   void AddFunctionCandidates(const FunctionSet &Functions,
                              Expr **Args, unsigned NumArgs,
                              OverloadCandidateSet& CandidateSet,
@@ -887,7 +894,11 @@ public:
                                     OverloadCandidateSet& CandidateSet);
   void AddArgumentDependentLookupCandidates(DeclarationName Name,
                                             Expr **Args, unsigned NumArgs,
-                                            OverloadCandidateSet& CandidateSet);
+                                            bool HasExplicitTemplateArgs,
+                                  const TemplateArgument *ExplicitTemplateArgs,
+                                            unsigned NumExplicitTemplateArgs,                                            
+                                            OverloadCandidateSet& CandidateSet,
+                                            bool PartialOverloading = false);
   bool isBetterOverloadCandidate(const OverloadCandidate& Cand1,
                                  const OverloadCandidate& Cand2);
   OverloadingResult BestViableFunction(OverloadCandidateSet& CandidateSet,
@@ -900,6 +911,16 @@ public:
                                                    bool Complain);
   void FixOverloadedFunctionReference(Expr *E, FunctionDecl *Fn);
 
+  void AddOverloadedCallCandidates(NamedDecl *Callee,
+                                   DeclarationName &UnqualifiedName,
+                                   bool &ArgumentDependentLookup,
+                                   bool HasExplicitTemplateArgs,
+                                   const TemplateArgument *ExplicitTemplateArgs,
+                                   unsigned NumExplicitTemplateArgs,
+                                   Expr **Args, unsigned NumArgs,
+                                   OverloadCandidateSet &CandidateSet,
+                                   bool PartialOverloading = false);
+    
   FunctionDecl *ResolveOverloadedCallFn(Expr *Fn, NamedDecl *Callee,
                                         DeclarationName UnqualifiedName,
                                         bool HasExplicitTemplateArgs,
@@ -1666,6 +1687,16 @@ public:
                                  unsigned NumInitializers
                                  );
 
+  void DeconstructCallFunction(Expr *FnExpr,
+                               NamedDecl *&Function,
+                               DeclarationName &Name,
+                               NestedNameSpecifier *&Qualifier,
+                               SourceRange &QualifierRange,
+                               bool &ArgumentDependentLookup,
+                               bool &HasExplicitTemplateArguments,
+                               const TemplateArgument *&ExplicitTemplateArgs,
+                               unsigned &NumExplicitTemplateArgs);
+    
   /// ActOnCallExpr - Handle a call to Fn with the specified array of arguments.
   /// This provides the location of the left/right parens and a list of comma
   /// locations.
@@ -2079,6 +2110,7 @@ public:
   virtual CXXScopeTy *ActOnCXXGlobalScopeSpecifier(Scope *S,
                                                    SourceLocation CCLoc);
 
+  bool isAcceptableNestedNameSpecifier(NamedDecl *SD);
   NamedDecl *FindFirstQualifierInScope(Scope *S, NestedNameSpecifier *NNS);
 
 
@@ -2248,7 +2280,8 @@ public:
                                                  ExprArg AssertExpr,
                                                  ExprArg AssertMessageExpr);
 
-  DeclPtrTy ActOnFriendTypeDecl(Scope *S, const DeclSpec &DS, bool IsTemplate);
+  DeclPtrTy ActOnFriendTypeDecl(Scope *S, const DeclSpec &DS,
+                                MultiTemplateParamsArg TemplateParams);
   DeclPtrTy ActOnFriendFunctionDecl(Scope *S, Declarator &D, bool IsDefinition,
                                     MultiTemplateParamsArg TemplateParams);
 
@@ -2744,8 +2777,10 @@ public:
   
   void MarkUsedTemplateParameters(const TemplateArgumentList &TemplateArgs,
                                   bool OnlyDeduced,
-                                  llvm::SmallVectorImpl<bool> &Deduced);
-
+                                  llvm::SmallVectorImpl<bool> &Used);
+  void MarkDeducedTemplateParameters(FunctionTemplateDecl *FunctionTemplate,
+                                     llvm::SmallVectorImpl<bool> &Deduced);
+  
   //===--------------------------------------------------------------------===//
   // C++ Template Instantiation
   //
@@ -3103,8 +3138,10 @@ public:
                                   const CXXConstructorDecl *Tmpl,
                             const MultiLevelTemplateArgumentList &TemplateArgs);
 
-  NamedDecl *FindInstantiatedDecl(NamedDecl *D);
-  DeclContext *FindInstantiatedContext(DeclContext *DC);
+  NamedDecl *FindInstantiatedDecl(NamedDecl *D,
+                          const MultiLevelTemplateArgumentList &TemplateArgs);
+  DeclContext *FindInstantiatedContext(DeclContext *DC,
+                          const MultiLevelTemplateArgumentList &TemplateArgs);
 
   // Objective-C declarations.
   virtual DeclPtrTy ActOnStartClassInterface(SourceLocation AtInterfaceLoc,
@@ -3602,6 +3639,40 @@ public:
   void DiagnoseMissingMember(SourceLocation MemberLoc, DeclarationName Member,
                              NestedNameSpecifier *NNS, SourceRange Range);
 
+  /// adjustFunctionParamType - Converts the type of a function parameter to a
+  // type that can be passed as an argument type to
+  /// ASTContext::getFunctionType.
+  ///
+  /// C++ [dcl.fct]p3: "...Any cv-qualifier modifying a parameter type is
+  /// deleted. Such cv-qualifiers affect only the definition of the parameter 
+  /// within the body of the function; they do not affect the function type. 
+  QualType adjustFunctionParamType(QualType T) const {
+    if (!Context.getLangOptions().CPlusPlus)
+      return T;
+
+    return T.getUnqualifiedType();
+  }
+
+  /// \name Code completion
+  //@{
+  void setCodeCompleteConsumer(CodeCompleteConsumer *CCC);
+  virtual void CodeCompleteOrdinaryName(Scope *S);
+  virtual void CodeCompleteMemberReferenceExpr(Scope *S, ExprTy *Base,
+                                               SourceLocation OpLoc,
+                                               bool IsArrow);
+  virtual void CodeCompleteTag(Scope *S, unsigned TagSpec);
+  virtual void CodeCompleteCase(Scope *S);
+  virtual void CodeCompleteCall(Scope *S, ExprTy *Fn,
+                                ExprTy **Args, unsigned NumArgs);
+  virtual void CodeCompleteQualifiedId(Scope *S, const CXXScopeSpec &SS,
+                                       bool EnteringContext);
+  virtual void CodeCompleteUsing(Scope *S);
+  virtual void CodeCompleteUsingDirective(Scope *S);
+  virtual void CodeCompleteNamespaceDecl(Scope *S);
+  virtual void CodeCompleteNamespaceAliasDecl(Scope *S);
+  virtual void CodeCompleteOperatorName(Scope *S);
+  //@}
+  
   //===--------------------------------------------------------------------===//
   // Extra semantic analysis beyond the C type system
 private:

@@ -150,7 +150,7 @@ class VISIBILITY_HIDDEN DbgScope {
   SmallVector<DbgScope *, 4> Scopes;  // Scopes defined in scope.
   SmallVector<DbgVariable *, 8> Variables;// Variables declared in scope.
   SmallVector<DbgConcreteScope *, 8> ConcreteInsts;// Concrete insts of funcs.
-  
+
   // Private state for dump()
   mutable unsigned IndentLevel;
 public:
@@ -232,7 +232,7 @@ DbgScope::~DbgScope() {
 DwarfDebug::DwarfDebug(raw_ostream &OS, AsmPrinter *A, const MCAsmInfo *T)
   : Dwarf(OS, A, T, "dbg"), ModuleCU(0),
     AbbreviationsSet(InitAbbreviationsSetSize), Abbreviations(),
-    ValuesSet(InitValuesSetSize), Values(), StringPool(), 
+    ValuesSet(InitValuesSetSize), Values(), StringPool(),
     SectionSourceLines(), didInitial(false), shouldEmit(false),
     FunctionDbgScope(0), DebugTimer(0) {
   if (TimePassesIsEnabled)
@@ -593,7 +593,7 @@ DIType DwarfDebug::GetBlockByrefType(DIType Ty, std::string Name) {
    the variable's Debug Information Entry as its real type.  So far, so good.
    However now the debugger will expect the variable VarName to have the type
    SomeType.  So we need the location attribute for the variable to be an
-   expression that explains to the debugger how to navigate through the 
+   expression that explains to the debugger how to navigate through the
    pointers and struct to find the actual variable of type SomeType.
 
    The following function does just that.  We start by getting
@@ -639,9 +639,9 @@ DIType DwarfDebug::GetBlockByrefType(DIType Ty, std::string Name) {
 /// starting location.  Add the DWARF information to the die.  For
 /// more information, read large comment just above here.
 ///
-void DwarfDebug::AddBlockByrefAddress(DbgVariable *&DV, DIE *Die, 
-                                       unsigned Attribute,
-                                       const MachineLocation &Location) {
+void DwarfDebug::AddBlockByrefAddress(DbgVariable *&DV, DIE *Die,
+                                      unsigned Attribute,
+                                      const MachineLocation &Location) {
   const DIVariable &VD = DV->getVariable();
   DIType Ty = VD.getType();
   DIType TmpTy = Ty;
@@ -662,96 +662,96 @@ void DwarfDebug::AddBlockByrefAddress(DbgVariable *&DV, DIE *Die,
   std::string typeName;
   blockStruct.getName(typeName);
 
-   assert(typeName.find ("__Block_byref_") == 0
-          && "Attempting to get Block location of non-Block variable!");
+  assert(typeName.find ("__Block_byref_") == 0
+         && "Attempting to get Block location of non-Block variable!");
 
-   // Find the __forwarding field and the variable field in the __Block_byref
-   // struct.
-   
-   DIArray Fields = blockStruct.getTypeArray();
-   DIDescriptor varField = DIDescriptor();
-   DIDescriptor forwardingField = DIDescriptor();
+  // Find the __forwarding field and the variable field in the __Block_byref
+  // struct.
+
+  DIArray Fields = blockStruct.getTypeArray();
+  DIDescriptor varField = DIDescriptor();
+  DIDescriptor forwardingField = DIDescriptor();
 
 
-   for (unsigned i = 0, N = Fields.getNumElements(); i < N; ++i) {
-     DIDescriptor Element = Fields.getElement(i);
-     DIDerivedType DT = DIDerivedType(Element.getNode());
-     std::string fieldName;
-     DT.getName(fieldName);
-     if (fieldName == "__forwarding")
-       forwardingField = Element;
-     else if (fieldName == varName)
-       varField = Element;
-   }
-     
-   assert (!varField.isNull() && "Can't find byref variable in Block struct");
-   assert (!forwardingField.isNull() 
-           && "Can't find forwarding field in Block struct");
+  for (unsigned i = 0, N = Fields.getNumElements(); i < N; ++i) {
+    DIDescriptor Element = Fields.getElement(i);
+    DIDerivedType DT = DIDerivedType(Element.getNode());
+    std::string fieldName;
+    DT.getName(fieldName);
+    if (fieldName == "__forwarding")
+      forwardingField = Element;
+    else if (fieldName == varName)
+      varField = Element;
+  }
 
-   // Get the offsets for the forwarding field and the variable field.
+  assert (!varField.isNull() && "Can't find byref variable in Block struct");
+  assert (!forwardingField.isNull()
+          && "Can't find forwarding field in Block struct");
 
-   unsigned int forwardingFieldOffset = 
-     DIDerivedType(forwardingField.getNode()).getOffsetInBits() >> 3;
-   unsigned int varFieldOffset = 
-     DIDerivedType(varField.getNode()).getOffsetInBits() >> 3;
+  // Get the offsets for the forwarding field and the variable field.
 
-   // Decode the original location, and use that as the start of the 
-   // byref variable's location.
+  unsigned int forwardingFieldOffset =
+    DIDerivedType(forwardingField.getNode()).getOffsetInBits() >> 3;
+  unsigned int varFieldOffset =
+    DIDerivedType(varField.getNode()).getOffsetInBits() >> 3;
 
-   unsigned Reg = RI->getDwarfRegNum(Location.getReg(), false);
-   DIEBlock *Block = new DIEBlock();
+  // Decode the original location, and use that as the start of the
+  // byref variable's location.
 
-   if (Location.isReg()) {
-     if (Reg < 32)
-       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + Reg);
-     else {
-       Reg = Reg - dwarf::DW_OP_reg0;
-       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
-       AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-     }
-   } else {
-     if (Reg < 32)
-       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
-     else {
-       AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
-       AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-     }
+  unsigned Reg = RI->getDwarfRegNum(Location.getReg(), false);
+  DIEBlock *Block = new DIEBlock();
 
-     AddUInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
-   }
+  if (Location.isReg()) {
+    if (Reg < 32)
+      AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + Reg);
+    else {
+      Reg = Reg - dwarf::DW_OP_reg0;
+      AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
+      AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
+    }
+  } else {
+    if (Reg < 32)
+      AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
+    else {
+      AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
+      AddUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
+    }
 
-   // If we started with a pointer to the__Block_byref... struct, then
-   // the first thing we need to do is dereference the pointer (DW_OP_deref).
+    AddUInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
+  }
 
-   if (isPointer)
-     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
+  // If we started with a pointer to the__Block_byref... struct, then
+  // the first thing we need to do is dereference the pointer (DW_OP_deref).
 
-   // Next add the offset for the '__forwarding' field:
-   // DW_OP_plus_uconst ForwardingFieldOffset.  Note there's no point in
-   // adding the offset if it's 0.
+  if (isPointer)
+    AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
 
-   if (forwardingFieldOffset > 0) {
-     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
-     AddUInt(Block, 0, dwarf::DW_FORM_udata, forwardingFieldOffset);
-   }
+  // Next add the offset for the '__forwarding' field:
+  // DW_OP_plus_uconst ForwardingFieldOffset.  Note there's no point in
+  // adding the offset if it's 0.
 
-   // Now dereference the __forwarding field to get to the real __Block_byref
-   // struct:  DW_OP_deref.
+  if (forwardingFieldOffset > 0) {
+    AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
+    AddUInt(Block, 0, dwarf::DW_FORM_udata, forwardingFieldOffset);
+  }
 
-   AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
+  // Now dereference the __forwarding field to get to the real __Block_byref
+  // struct:  DW_OP_deref.
 
-   // Now that we've got the real __Block_byref... struct, add the offset
-   // for the variable's field to get to the location of the actual variable:
-   // DW_OP_plus_uconst varFieldOffset.  Again, don't add if it's 0.
+  AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_deref);
 
-   if (varFieldOffset > 0) {
-     AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
-     AddUInt(Block, 0, dwarf::DW_FORM_udata, varFieldOffset);
-   }
+  // Now that we've got the real __Block_byref... struct, add the offset
+  // for the variable's field to get to the location of the actual variable:
+  // DW_OP_plus_uconst varFieldOffset.  Again, don't add if it's 0.
 
-   // Now attach the location information to the DIE.
+  if (varFieldOffset > 0) {
+    AddUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
+    AddUInt(Block, 0, dwarf::DW_FORM_udata, varFieldOffset);
+  }
 
-   AddBlock(Die, Attribute, 0, Block);
+  // Now attach the location information to the DIE.
+
+  AddBlock(Die, Attribute, 0, Block);
 }
 
 /// AddAddress - Add an address attribute to a die based on the location
@@ -995,7 +995,7 @@ void DwarfDebug::ConstructSubrangeDIE(DIE &Buffer, DISubrange SR, DIE *IndexTy){
   if (L)
     AddSInt(DW_Subrange, dwarf::DW_AT_lower_bound, 0, L);
   if (H)
-  AddSInt(DW_Subrange, dwarf::DW_AT_upper_bound, 0, H);
+    AddSInt(DW_Subrange, dwarf::DW_AT_upper_bound, 0, H);
 
   Buffer.AddChild(DW_Subrange);
 }
@@ -1056,7 +1056,7 @@ DIE *DwarfDebug::CreateGlobalVariableDIE(CompileUnit *DW_Unit,
     AddString(GVDie, dwarf::DW_AT_MIPS_linkage_name, dwarf::DW_FORM_string,
               LinkageName);
   }
-    AddType(DW_Unit, GVDie, GV.getType());
+  AddType(DW_Unit, GVDie, GV.getType());
   if (!GV.isLocalToUnit())
     AddUInt(GVDie, dwarf::DW_AT_external, dwarf::DW_FORM_flag, 1);
   AddSourceLine(GVDie, &GV);
@@ -1393,13 +1393,13 @@ void DwarfDebug::ConstructDefaultDbgScope(MachineFunction *MF) {
   StringMap<DIE*>::iterator GI = Globals.find(MF->getFunction()->getName());
   if (GI != Globals.end()) {
     DIE *SPDie = GI->second;
-    
+
     // Add the function bounds.
     AddLabel(SPDie, dwarf::DW_AT_low_pc, dwarf::DW_FORM_addr,
              DWLabel("func_begin", SubprogramCount));
     AddLabel(SPDie, dwarf::DW_AT_high_pc, dwarf::DW_FORM_addr,
              DWLabel("func_end", SubprogramCount));
-    
+
     MachineLocation Location(RI->getFrameRegister(*MF));
     AddAddress(SPDie, dwarf::DW_AT_frame_base, Location);
   }
@@ -1487,7 +1487,7 @@ void DwarfDebug::ConstructCompileUnit(MDNode *N) {
 
 void DwarfDebug::ConstructGlobalVariableDIE(MDNode *N) {
   DIGlobalVariable DI_GV(N);
-  
+
   // If debug information is malformed then ignore it.
   if (DI_GV.Verify() == false)
     return;
@@ -1545,9 +1545,9 @@ void DwarfDebug::ConstructSubprogram(MDNode *N) {
   return;
 }
 
-  /// BeginModule - Emit all Dwarf sections that should come prior to the
-  /// content. Create global DIEs and emit initial debug info sections.
-  /// This is inovked by the target AsmPrinter.
+/// BeginModule - Emit all Dwarf sections that should come prior to the
+/// content. Create global DIEs and emit initial debug info sections.
+/// This is inovked by the target AsmPrinter.
 void DwarfDebug::BeginModule(Module *M, MachineModuleInfo *mmi) {
   this->M = M;
 
@@ -1582,7 +1582,7 @@ void DwarfDebug::BeginModule(Module *M, MachineModuleInfo *mmi) {
       DebugTimer->stopTimer();
     return;
   }
-  
+
   // Create DIEs for each of the externally visible global variables.
   for (DebugInfoFinder::iterator I = DbgFinder.global_variable_begin(),
          E = DbgFinder.global_variable_end(); I != E; ++I)
@@ -1904,7 +1904,7 @@ void DwarfDebug::RecordVariable(MDNode *N, unsigned FrameIndex) {
         Scope = I->second;
       }
     }
-    if (!InlinedVar) 
+    if (!InlinedVar)
       Scope = getOrCreateScope(Context);
   }
 
@@ -2109,7 +2109,7 @@ void DwarfDebug::EmitInitial() {
   didInitial = true;
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
-  
+
   // Dwarf sections base addresses.
   if (MAI->doesDwarfRequireFrameSection()) {
     Asm->OutStreamer.SwitchSection(TLOF.getDwarfFrameSection());
@@ -2669,7 +2669,7 @@ void DwarfDebug::EmitDebugRanges() {
 /// EmitDebugMacInfo - Emit visible names into a debug macinfo section.
 ///
 void DwarfDebug::EmitDebugMacInfo() {
-  if (const MCSection *LineInfo = 
+  if (const MCSection *LineInfo =
       Asm->getObjFileLowering().getDwarfMacroInfoSection()) {
     // Start the dwarf macinfo section.
     Asm->OutStreamer.SwitchSection(LineInfo);
