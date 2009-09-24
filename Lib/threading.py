@@ -225,7 +225,7 @@ class _Condition(_Verbose):
         else:
             return True
 
-    def _reset_lock(self, lock=None):
+    def _reset_after_fork(self, lock=None):
         """Throw away the old lock and replace it with this one."""
         if lock is None:
             lock = Lock()
@@ -234,6 +234,11 @@ class _Condition(_Verbose):
         # bound methods will still refer to the old lock.
         self.acquire = lock.acquire
         self.release = lock.release
+        # Any thread that may have been waiting on this condition no longer
+        # exists after the fork.  Even though we know the waiter locks must be
+        # in the acquired state, attempting to release these locks is dangerous
+        # on some platforms, such as OS X.
+        self.__waiters = []
 
     def wait(self, timeout=None):
         if not self._is_owned():
@@ -883,8 +888,8 @@ def _after_fork():
                 thread._Thread__ident = ident
                 # Any locks hanging off of the active thread may be in an
                 # invalid state, so we reset them.
-                thread._Thread__block._reset_lock()
-                thread._Thread__started._Event__cond._reset_lock()
+                thread._Thread__block._reset_after_fork()
+                thread._Thread__started._Event__cond._reset_after_fork()
                 # We also update this global variable so we can keep track of
                 # the new main thread (whichever thread forked).
                 global main_thread_id
