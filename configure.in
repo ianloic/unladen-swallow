@@ -3759,8 +3759,8 @@ then
         ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
         LLVM_PATH="$LLVM_BASE/Debug"
     else
-        ac_configure_args="$ac_configure_args --enable-optimized --disable-assertions"
-        LLVM_PATH="$LLVM_BASE/Release-Asserts"
+        ac_configure_args="$ac_configure_args --enable-optimized --disable-assertions --enable-debug-symbols"
+        LLVM_PATH="$LLVM_BASE/Release+Debug-Asserts"
     fi
     LLVM_INC_DIR="$LLVM_BASE/include"
     echo "Will build LLVM in $LLVM_BASE"
