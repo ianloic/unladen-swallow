@@ -87,12 +87,18 @@ Clear the runtime feedback collected for the given function.");
 static PyObject *
 llvm_clear_feedback(PyObject *self, PyObject *obj)
 {
-    PyFunctionObject *func;
+    PyCodeObject *code;
     if (PyFunction_Check(obj)) {
-        func = (PyFunctionObject *)obj;
+        PyFunctionObject *func = (PyFunctionObject *)obj;
+        code = (PyCodeObject *)func->func_code;
     }
     else if (PyMethod_Check(obj)) {
-        func = (PyFunctionObject *)((PyMethodObject *)obj)->im_func;
+        PyFunctionObject *func =
+            (PyFunctionObject *)((PyMethodObject *)obj)->im_func;
+        code = (PyCodeObject *)func->func_code;
+    }
+    else if (PyCode_Check(obj)) {
+        code = (PyCodeObject *)obj;
     }
     else {
         PyErr_Format(PyExc_TypeError,
@@ -101,11 +107,62 @@ llvm_clear_feedback(PyObject *self, PyObject *obj)
         return NULL;
     }
 
-    PyCodeObject *code = (PyCodeObject *)func->func_code;
     if (code->co_runtime_feedback)
         PyFeedbackMap_Clear(code->co_runtime_feedback);
+    Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(llvm_set_jit_control_doc,
+"set_jit_control(string)\n\
+\n\
+Set the JIT control mode. Valid values are 'never', 'whenhot' and 'always'.");
+
+static PyObject *
+llvm_set_jit_control(PyObject *self, PyObject *obj)
+{
+    if (!PyString_Check(obj)) {
+        PyErr_Format(PyExc_TypeError,
+                     "expected str, not %.100s object",
+                     Py_TYPE(obj)->tp_name);
+        return NULL;
+    }
+
+    const char *control = PyString_AsString(obj);
+    if (strcmp(control, "never") == 0)
+        Py_JitControl = PY_JIT_NEVER;
+    else if (strcmp(control, "whenhot") == 0)
+        Py_JitControl = PY_JIT_WHENHOT;
+    else if (strcmp(control, "always") == 0)
+        Py_JitControl = PY_JIT_ALWAYS;
+    else {
+        PyErr_Format(PyExc_ValueError,
+                     "invalid JIT control value: %s",
+                     control);
+        return NULL;
+    }
 
     Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(llvm_get_jit_control_doc,
+"get_jit_control() -> string\n\
+\n\
+Get the JIT control mode. Valid values are 'never', 'whenhot' and 'always'.");
+
+static PyObject *
+llvm_get_jit_control(PyObject *self)
+{
+    if (Py_JitControl == PY_JIT_NEVER)
+        return PyString_FromString("never");
+    else if (Py_JitControl == PY_JIT_WHENHOT)
+        return PyString_FromString("whenhot");
+    else if (Py_JitControl == PY_JIT_ALWAYS)
+        return PyString_FromString("always");
+
+    PyErr_Format(PyExc_SystemError,
+                 "unexpected jit control value: %d",
+                 Py_JitControl);
+    return NULL;
 }
 
 static struct PyMethodDef llvm_methods[] = {
@@ -113,6 +170,10 @@ static struct PyMethodDef llvm_methods[] = {
     {"compile", llvm_compile, METH_VARARGS, llvm_compile_doc},
     {"clear_feedback", (PyCFunction)llvm_clear_feedback, METH_O,
      llvm_clear_feedback_doc},
+    {"get_jit_control", (PyCFunction)llvm_get_jit_control, METH_NOARGS,
+     llvm_get_jit_control_doc},
+    {"set_jit_control", (PyCFunction)llvm_set_jit_control, METH_O,
+     llvm_set_jit_control_doc},
     { NULL, NULL }
 };
 

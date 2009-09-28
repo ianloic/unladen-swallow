@@ -138,7 +138,12 @@ import re
 import sys
 import time
 import traceback
+import types
 import warnings
+try:
+    import _llvm
+except ImportError:
+    _llvm = None
 
 # I see no other way to suppress these warnings;
 # putting them in test_grammar.py has no effect:
@@ -694,8 +699,10 @@ def dash_R(the_module, test, indirect_test, huntrleaks):
     repcount = nwarmup + ntracked
     print >> sys.stderr, "beginning", repcount, "repetitions"
     print >> sys.stderr, ("1234567890"*(repcount//10 + 1))[:repcount]
-    dash_R_cleanup(fs, ps, pic, abcs)
+    if _llvm:
+        _llvm.set_jit_control("never")
     for i in range(repcount):
+        dash_R_cleanup(fs, ps, pic, abcs)
         rc_before = sys.gettotalrefcount()
         run_the_test()
         sys.stderr.write('.')
@@ -755,6 +762,12 @@ def dash_R_cleanup(fs, ps, pic, abcs):
     filecmp._cache.clear()
     struct._clearcache()
     doctest.master = None
+
+    if _llvm:
+        code_types = (types.CodeType, types.FunctionType, types.MethodType)
+        for obj in gc.get_objects():
+            if isinstance(obj, code_types):
+                _llvm.clear_feedback(obj)
 
     # Collect cyclic trash.
     gc.collect()

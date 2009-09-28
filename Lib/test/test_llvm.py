@@ -152,7 +152,7 @@ def foo():
                          in str(test_func.__code__.co_llvm))
 
     # -j always will cause this test to always fail.
-    if sys.flags.jit_control != "always":
+    if _llvm.get_jit_control() != "always":
         def test_fetch_unset_co_llvm(self):
             def test_func():
                 pass
@@ -1337,7 +1337,7 @@ def generator(obj):
 
     # Getting this to work under -j always is a pain in the ass, and not worth
     # the effort IMHO.
-    if sys.flags.jit_control != "always":
+    if _llvm.get_jit_control() != "always":
         def test_toggle_generator(self):
             # Toggling between native code and the interpreter between yields
             # used to cause crashes because f_lasti doesn't get translated
@@ -1565,11 +1565,13 @@ def loop():
         def cause_bail():
             sys.settrace(lambda *args: None)
 
-        def foo():
-            try:
-                return cause_bail()
-            finally:
-                len([])  # This can be anything.
+        foo = compile_for_llvm("foo", """
+def foo():
+    try:
+        return cause_bail()
+    finally:
+        len([])  # This can be anything.
+""", optimization_level=None, globals_dict={"cause_bail": cause_bail})
         foo.__code__.__use_llvm__ = True
 
         orig_func = sys.gettrace()
@@ -2541,7 +2543,7 @@ def test_main():
     if sys.flags.optimize >= 1:
         print >>sys.stderr, "test_llvm -- skipping some tests due to -O flag."
         sys.stderr.flush()
-    if sys.flags.jit_control != "whenhot":
+    if _llvm.get_jit_control() != "whenhot":
         print >>sys.stderr, "test_llvm -- skipping some tests due to -j flag."
         sys.stderr.flush()
     else:
