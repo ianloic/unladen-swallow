@@ -375,6 +375,8 @@ static void ParseCStringVector(std::vector<char *> &OutputVector,
     memcpy(NewStr, WorkStr.data(), Pos);
     NewStr[Pos] = 0;
     OutputVector.push_back(NewStr);
+    
+    WorkStr = WorkStr.substr(Pos);
   }
 }
 
