@@ -838,6 +838,7 @@ _expectations = {
         test_gdbm
         test_grp
         test_ioctl
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_mhlib
@@ -881,6 +882,7 @@ _expectations = {
         test_epoll
         test_grp
         test_ioctl
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -905,6 +907,7 @@ _expectations = {
         test_bsddb185
         test_dl
         test_epoll
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_minidom
@@ -919,6 +922,7 @@ _expectations = {
         test_bsddb185
         test_dl
         test_epoll
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_minidom
@@ -936,6 +940,7 @@ _expectations = {
         test_fork1
         test_epoll
         test_gettext
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -966,6 +971,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_grp
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -991,6 +997,7 @@ _expectations = {
         test_curses
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -1005,6 +1012,7 @@ _expectations = {
         test_curses
         test_dbm
         test_epoll
+        test_jit_gdb
         test_kqueue
         test_gdbm
         test_gzip
@@ -1021,6 +1029,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_gzip
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -1038,6 +1047,7 @@ _expectations = {
         test_dl
         test_gdbm
         test_epoll
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -1055,6 +1065,7 @@ _expectations = {
         test_dbm
         test_epoll
         test_ioctl
+        test_jit_gdb
         test_kqueue
         test_largefile
         test_locale
@@ -1070,6 +1081,7 @@ _expectations = {
         test_curses
         test_dl
         test_epoll
+        test_jit_gdb
         test_kqueue
         test_largefile
         test_mhlib
@@ -1086,6 +1098,7 @@ _expectations = {
         test_bsddb3
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_ossaudiodev
         test_pep277
@@ -1107,6 +1120,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_gzip
+        test_jit_gdb
         test_kqueue
         test_ossaudiodev
         test_tcl
@@ -1121,6 +1135,7 @@ _expectations = {
         test_dl
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_normalization
         test_ossaudiodev
@@ -1138,6 +1153,7 @@ _expectations = {
         test_dl
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_ossaudiodev
         test_pep277

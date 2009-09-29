@@ -182,6 +182,11 @@ Py_InitializeEx(int install_sigs)
 			Py_JitControl = PY_JIT_ALWAYS;
 	}
 
+#ifdef WITH_LLVM
+        if (!_PyLlvm_Init())
+		Py_FatalError("Py_Initialize: can't init LLVM support");
+#endif
+
 	interp = PyInterpreterState_New();
 	if (interp == NULL)
 		Py_FatalError("Py_Initialize: can't make first interpreter");
@@ -201,11 +206,6 @@ Py_InitializeEx(int install_sigs)
 
 	if (!PyByteArray_Init())
 		Py_FatalError("Py_Initialize: can't init bytearray");
-
-#ifdef WITH_LLVM
-        if (!_PyLlvm_Init())
-		Py_FatalError("Py_Initialize: can't init LLVM support");
-#endif
 
 	_PyFloat_Init();
 
