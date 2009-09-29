@@ -2473,6 +2473,103 @@ def foo(trigger):
         self.assertEquals(foo.__code__.co_fatalbailcount, 0)
         del match
 
+    def test_setprofile_in_leaf_function(self):
+        # Make sure that the fast version of CALL_FUNCTION supports profiling.
+        data = []
+        def record_profile(*args):
+            data.append(args)
+
+        def profiling_leaf():
+            sys.setprofile(record_profile)
+
+        def outer(leaf):
+            [leaf(), len([])]
+
+        # This will specialize the len() call in outer, but not the leaf() call,
+        # since lambdas are created anew each time through the loop.
+        for _ in xrange(11000):
+            outer(lambda: None)
+        self.assertTrue(outer.__code__.__use_llvm__)
+        sys.setbailerror(False)
+        outer(profiling_leaf)
+        sys.setprofile(None)
+
+        len_event = data[1]
+        # Slice off the frame object.
+        self.assertEqual(len_event[1:], ("c_call", len))
+
+    def test_fastcalls_bail_on_unknown_function(self):
+        # If the function is different than the one that we've assumed, we
+        # need to bail to the interpreter.
+        def foo(f):
+            return f([])
+
+        for _ in xrange(11000):
+            foo(len)
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertRaises(RuntimeError, foo, lambda x: 7)
+
+        # Make sure bailing does the right thing.
+        self.assertTrue(foo.__code__.__use_llvm__)
+        sys.setbailerror(False)
+        self.assertEqual(foo(lambda x: 7), 7)
+
+    def test_guard_failure_blocks_native_code(self):
+        # Until we can recompile things, failing a guard should force use of the
+        # eval loop forever after. Even once we can recompile things, we should
+        # limit how often we're willing to recompile highly-dynamic functions.
+        # test_mutants has a good example of this.
+
+        # Compile like this so we get a new code object every time.
+        foo = compile_for_llvm("foo", "def foo(): return len([])",
+                               optimization_level=None)
+        for _ in xrange(11000):
+            foo()
+        self.assertEqual(foo.__code__.__use_llvm__, True)
+        self.assertEqual(foo.__code__.co_fatalbailcount, 0)
+        self.assertEqual(foo(), 0)
+
+        with test_support.swap_attr(__builtin__, "len", lambda x: 7):
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+            self.assertEqual(foo.__code__.co_fatalbailcount, 1)
+            # Since we can't recompile things yet, __use_llvm__ should be left
+            # at False and execution should use the eval loop.
+            for _ in xrange(11000):
+                foo()
+            self.assertEqual(foo.__code__.__use_llvm__, False)
+            self.assertEqual(foo(), 7)
+
+    def test_fast_calls_method(self):
+        # This used to crash at one point while developing CALL_FUNCTION's
+        # FDO-ified machine code. We include it here as a simple regression
+        # test.
+        d = dict.fromkeys(range(12000))
+        foo = compile_for_llvm('foo', 'def foo(x): return x()',
+                               optimization_level=None)
+        for _ in xrange(11000):
+            foo(d.popitem)
+        self.assertTrue(foo.__code__.__use_llvm__)
+
+        k, v = foo(d.popitem)
+        self.assertTrue(k < 12000, k)
+        self.assertEqual(v, None)
+
+    def test_fast_calls_same_method_different_invocant(self):
+        # For all strings, x.join will resolve to the same C function, so
+        # it should use the fast version of CALL_FUNCTION that calls the
+        # function pointer directly.
+        foo = compile_for_llvm('foo', 'def foo(x): return x.join(["c", "d"])',
+                               optimization_level=None)
+        for _ in xrange(11000):
+            foo("a")
+            foo("c")
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertEqual(foo("a"), "cad")
+
+        # A new, unknown-to-the-feedback-system instance should reuse the
+        # same function, just with a different invocant.
+        self.assertEqual(foo("b"), "cbd")
+
 
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 
@@ -2499,29 +2596,6 @@ class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 
         with test_support.swap_attr(__builtin__, "len", lambda x: 7):
             self.assertEqual(foo.__code__.__use_llvm__, False)
-
-    def test_guard_failure_blocks_native_code(self):
-        # Until we can recompile things, failing a guard should force use of the
-        # eval loop forever after. Even once we can recompile things, we should
-        # limit how often we're willing to recompile highly-dynamic functions.
-        # test_mutants has a good example of this.
-
-        # Compile like this so we get a new code object every time.
-        foo = compile_for_llvm("foo", "def foo(): return len([])",
-                               optimization_level=None)
-        self.configure_func(foo)
-        self.assertEqual(foo.__code__.__use_llvm__, True)
-        self.assertEqual(foo.__code__.co_fatalbailcount, 0)
-        self.assertEqual(foo(), 0)
-
-        with test_support.swap_attr(__builtin__, "len", lambda x: 7):
-            self.assertEqual(foo.__code__.__use_llvm__, False)
-            self.assertEqual(foo.__code__.co_fatalbailcount, 1)
-            # Since we can't recompile things yet, __use_llvm__ should be left
-            # at False and execution should use the eval loop.
-            self.configure_func(foo)
-            self.assertEqual(foo.__code__.__use_llvm__, False)
-            self.assertEqual(foo(), 7)
 
     def test_nondict_builtins_class(self):
         # Regression test: this used to trigger a fatal assertion when trying

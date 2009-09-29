@@ -4,6 +4,7 @@
 
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/Function.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Module.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -19,6 +20,7 @@ using llvm::ConstantFP;
 using llvm::ConstantInt;
 using llvm::ConstantStruct;
 using llvm::ExecutionEngine;
+using llvm::Function;
 using llvm::GlobalValue;
 using llvm::GlobalVariable;
 using llvm::IntegerType;
@@ -395,4 +397,25 @@ PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
         new RemovePyObjFromGlobalMappingsVH(this, result, owner);
     }
     return result;
+}
+
+Constant *
+PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
+                                        const llvm::StringRef &name)
+{
+    // Reuse an existing LLVM global if we can.
+    void *func_ptr = (void *)cfunc_ptr;
+    if (GlobalValue *found =
+            const_cast<GlobalValue*>
+                (this->engine_.getGlobalValueAtAddress(func_ptr)))
+        return found;
+
+    // Create a new LLVM global if we haven't seen this function pointer before.
+    Function *global_func = Function::Create(
+        PyTypeBuilder<PyObject*(PyObject*, PyObject*)>::get(this->context()),
+        GlobalVariable::ExternalLinkage,
+        name,
+        this->llvm_data_.module());
+    this->engine_.addGlobalMapping(global_func, func_ptr);
+    return global_func;
 }

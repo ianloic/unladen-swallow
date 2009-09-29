@@ -8,6 +8,8 @@
 
 #include "Python.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringRef.h"
+#include <string>
 
 class PyGlobalLlvmData;
 
@@ -63,6 +65,11 @@ public:
     // ExecutionEngine's address->GlobalValue mapping to avoid
     // creating two GlobalVariables for the same object.
     llvm::Constant *GetGlobalVariableFor(PyObject *obj);
+
+    // Create an LLVM global variable that is backed by the given function
+    // pointer.
+    llvm::Constant *GetGlobalForCFunction(PyCFunction cfunc_ptr,
+                                          const llvm::StringRef &name);
 
 private:
     friend struct PyGlobalLlvmData;

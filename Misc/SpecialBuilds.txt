@@ -17,6 +17,7 @@ collected:
   but continued to be called.
 - How many machine code functions were invalidated by each change to
   globals/builtins dicts.
+- Stats on how well LLVM was able to optimize CALL_FUNCTION opcodes.
 
 This data will be printed to stderr at interpreter-shutdown.
 

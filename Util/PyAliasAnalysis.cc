@@ -72,13 +72,15 @@ public:
     PyAliasAnalysis(PyGlobalLlvmData &global_data)
         : FunctionPass(&ID), context_(&global_data.context()),
           global_data_(global_data),
-          tracing_possible_(NULL) {}
+          tracing_possible_(NULL),
+          profiling_possible_(NULL) {}
 
     // Exists for the pass registration infrastructure.
     PyAliasAnalysis()
         : FunctionPass(&ID), context_(NULL),
           global_data_(*PyGlobalLlvmData::Get()),
-          tracing_possible_(NULL) {}
+          tracing_possible_(NULL),
+          profiling_possible_(NULL) {}
 
     virtual void getAnalysisUsage(llvm::AnalysisUsage &usage) const {
         AliasAnalysis::getAnalysisUsage(usage);
@@ -132,6 +134,7 @@ private:
     ScalarEvolution *scev_;
 
     const GlobalVariable *tracing_possible_;
+    const GlobalVariable *profiling_possible_;
 
     // These are GlobalVariables for builtin types that we know are constant.
     SmallPtrSet<const GlobalVariable*, 8> constant_types_;
@@ -163,7 +166,10 @@ PyAliasAnalysis::doInitialization(Module& module)
 {
     this->context_ = &module.getContext();
 
-    this->tracing_possible_ = module.getGlobalVariable("_Py_TracingPossible");
+    this->tracing_possible_ =
+        module.getGlobalVariable("_Py_TracingPossible");
+    this->profiling_possible_ =
+        module.getGlobalVariable("_Py_ProfilingPossible");
 
     this->constant_types_.clear();
     this->types_with_constant_values_.clear();
@@ -237,9 +243,11 @@ PyAliasAnalysis::alias(const Value *V1, unsigned V1Size,
 {
     if (V1 == V2)
         return MustAlias;
-    // No code copies the address of _Py_TracingPossible, so it can't
-    // alias any other pointer.
+    // No code copies the address of _Py_{Profiling,Tracing}Possible, so they
+    // can't alias any other pointer.
     if (V1 == this->tracing_possible_ || V2 == this->tracing_possible_)
+        return NoAlias;
+    if (V1 == this->profiling_possible_ || V2 == this->profiling_possible_)
         return NoAlias;
     return AliasAnalysis::alias(V1, V1Size, V2, V2Size);
 }

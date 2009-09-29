@@ -45,6 +45,12 @@ _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
     return PyExceptionClass_Check(obj) || PyString_Check(obj);
 }
 
+int __attribute__((always_inline))
+_PyLlvm_WrapCFunctionCheck(PyObject *obj)
+{
+    return PyCFunction_Check(obj);
+}
+
 
 /* TODO(collinwinter): move this special-casing into a common function that
    we can share with eval.cc. */
@@ -173,6 +179,8 @@ PyListObject *_dummy_ListObject;
 PyStringObject *_dummy_StringObject;
 /* PyUnicodeObject, */
 PyUnicodeObject *_dummy_UnicodeObject;
+/* PyCFunctionObject, */
+PyCFunctionObject *_dummy_CFunctionObject;
 /* PyIntObject, */
 PyIntObject *_dummy_IntObject;
 /* PyLongObject, */

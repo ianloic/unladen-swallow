@@ -494,6 +494,39 @@ public:
     DEFINE_FIELD(PyThreadState, thread_id)
 };
 
+template<> class TypeBuilder<PyCFunctionObject, false> {
+public:
+    static const StructType *get(llvm::LLVMContext &context) {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyCFunctionObject
+                                 // struct.
+                                 "struct.PyCFunctionObject"));
+        return result;
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyCFunctionObject)
+    DEFINE_FIELD(PyCFunctionObject, m_ml)
+    DEFINE_FIELD(PyCFunctionObject, m_self)
+    DEFINE_FIELD(PyCFunctionObject, m_module)
+};
+
+template<> class TypeBuilder<PyMethodDef, false> {
+public:
+    static const StructType *get(llvm::LLVMContext &context) {
+        static const StructType *const result =
+            cast<StructType>(PyGlobalLlvmData::Get()->module()->getTypeByName(
+                                 // Clang's name for the PyMethodDef struct.
+                                 "struct.PyMethodDef"));
+        return result;
+    }
+
+    DEFINE_FIELD(PyMethodDef, ml_name)
+    DEFINE_FIELD(PyMethodDef, ml_meth)
+    DEFINE_FIELD(PyMethodDef, ml_flags)
+    DEFINE_FIELD(PyMethodDef, ml_doc)
+};
+
 #undef DEFINE_OBJECT_HEAD_FIELDS
 #undef DEFINE_FIELD
 
@@ -509,6 +542,8 @@ typedef PyTypeBuilder<PyTypeObject> TypeTy;
 typedef PyTypeBuilder<PyCodeObject> CodeTy;
 typedef PyTypeBuilder<PyFrameObject> FrameTy;
 typedef PyTypeBuilder<PyThreadState> ThreadStateTy;
+typedef PyTypeBuilder<PyCFunctionObject> CFunctionTy;
+typedef PyTypeBuilder<PyMethodDef> MethodDefTy;
 }  // namespace py
 
 #endif  // UTIL_PYTYPEBUILDER_H

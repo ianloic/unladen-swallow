@@ -7,6 +7,7 @@
 #endif
 
 #include "Util/EventTimer.h"
+#include "Util/RuntimeFeedback.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -243,6 +244,14 @@ private:
     /// the base of the stack.
     llvm::Value *GetStackLevel();
 
+    /// Get the runtime feedback for the current opcode (as set by SetLasti()).
+    /// Opcodes with multiple feedback units should use the arg_index version
+    /// to access individual units.
+    const PyRuntimeFeedback *GetFeedback() const {
+        return GetFeedback(0);
+    }
+    const PyRuntimeFeedback *GetFeedback(unsigned arg_index) const;
+
     // Replaces a local variable with the PyObject* stored in
     // new_value.  Decrements the original value's refcount after
     // replacing it.
@@ -458,6 +467,12 @@ private:
     // stack pointer.
     void CallVarKwFunction(int num_args, int call_flag);
 
+    // CALL_FUNCTION comes in two flavors: CALL_FUNCTION_safe is guaranteed to
+    // work, while CALL_FUNCTION_fast takes advantage of data gathered while
+    // running through the eval loop to omit as much flexibility as possible.
+    void CALL_FUNCTION_safe(int num_args);
+    void CALL_FUNCTION_fast(int num_args, const PyRuntimeFeedback *);
+
     /// Emits code to conditionally bail out to the interpreter loop
     /// if a line tracing function is installed.  If the line tracing
     /// function is not installed, execution will continue at
@@ -465,6 +480,11 @@ private:
     /// _PYFRAME_BACKEDGE_TRACE.
     void MaybeCallLineTrace(llvm::BasicBlock *fallthrough_block,
                             char direction);
+
+    /// Emits code to conditionally bail out to the interpreter loop if a
+    /// profiling function is installed. If a profiling function is not
+    /// installed, execution will continue at fallthrough_block.
+    void BailIfProfiling(llvm::BasicBlock *fallthrough_block);
 
     PyGlobalLlvmData *const llvm_data_;
     // The code object is used for looking up peripheral information

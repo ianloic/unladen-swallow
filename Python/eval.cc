@@ -189,8 +189,6 @@ typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 /* Forward declarations */
 #ifdef WITH_LLVM
 static int mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f);
-static void record_type(PyCodeObject *, int, int, int, PyObject *);
-static void inc_feedback_counter(PyCodeObject *, int, int, int);
 #endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
@@ -200,7 +198,13 @@ static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
 
+/* Record data for use in generating optimized machine code. */
+static void record_type(PyCodeObject *, int, int, int, PyObject *);
+static void record_func(PyCodeObject *, int, int, int, PyObject *);
+static void inc_feedback_counter(PyCodeObject *, int, int, int);
+
 int _Py_TracingPossible = 0;
+int _Py_ProfilingPossible = 0;
 
 /* Keep this in sync with llvm_fbuilder.cc */
 #define CALL_FLAG_VAR 1
@@ -796,6 +800,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 #ifdef WITH_LLVM
 #define RECORD_TYPE(arg_index, obj) \
 	record_type(co, opcode, f->f_lasti, arg_index, obj)
+#define RECORD_FUNC(obj) \
+	record_func(co, opcode, f->f_lasti, 0, obj)
 #define RECORD_TRUE() \
 	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_TRUE)
 #define RECORD_FALSE() \
@@ -943,28 +949,43 @@ PyEval_EvalFrame(PyFrameObject *f)
 			goto exit_eval_frame;
 		}
 	}
-#endif  /* WITH_LLVM */
 
-	if ((bail_reason == _PYFRAME_NO_BAIL ||
-	     bail_reason == _PYFRAME_TRACE_ON_ENTRY) &&
-	    tstate->use_tracing) {
-		if (_PyEval_TraceEnterFunction(tstate, f)) {
-			/* Trace or profile function raised an error. */
-			goto exit_eval_frame;
-		}
-	}
-	if (bail_reason == _PYFRAME_BACKEDGE_TRACE) {
-		/* If we bailed because of a backedge, set instr_prev
-		   to ensure a line trace call. */
-		instr_prev = INT_MAX;
-	}
-#ifdef WITH_LLVM
 	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
 		PyErr_SetString(PyExc_RuntimeError,
-		                "bailed to the interpreter");
+			        "bailed to the interpreter");
 		goto exit_eval_frame;
 	}
 #endif  /* WITH_LLVM */
+
+	switch (bail_reason) {
+		case _PYFRAME_NO_BAIL:
+		case _PYFRAME_TRACE_ON_ENTRY:
+			if (tstate->use_tracing) {
+				if (_PyEval_TraceEnterFunction(tstate, f))
+					/* Trace or profile function raised
+					   an error. */
+					goto exit_eval_frame;
+			}
+			break;
+
+		case _PYFRAME_BACKEDGE_TRACE:
+			/* If we bailed because of a backedge, set instr_prev
+			   to ensure a line trace call. */
+			instr_prev = INT_MAX;
+			break;
+
+		case _PYFRAME_CALL_PROFILE:
+		case _PYFRAME_LINE_TRACE:
+		case _PYFRAME_FATAL_GUARD_FAIL:
+		case _PYFRAME_GUARD_FAIL:
+			/* These are handled by the opcode dispatch loop. */
+			break;
+
+		default:
+			PyErr_Format(PyExc_SystemError, "unknown bail reason");
+			goto exit_eval_frame;
+	}
+
 
 	names = co->co_names;
 	consts = co->co_consts;
@@ -2596,9 +2617,18 @@ PyEval_EvalFrame(PyFrameObject *f)
 			int num_args, num_kwargs, num_stack_slots;
 			PY_LOG_TSC_EVENT(CALL_START_EVAL);
 			PCALL(PCALL_ALL);
-			// TODO(jyasskin): Add feedback gathering.
 			num_args = oparg & 0xff;
 			num_kwargs = (oparg>>8) & 0xff;
+#ifdef WITH_LLVM
+			// We'll focus on these simple calls with only positional args for
+			// now (since they're easy to implement).
+			if (num_kwargs == 0) {
+				// Duplicate this bit of logic from
+				// _PyEval_CallFunction().
+				PyObject **func = stack_pointer - num_args - 1;
+				RECORD_FUNC(*func);
+			}
+#endif
 			x = _PyEval_CallFunction(stack_pointer,
 						 num_args, num_kwargs);
 			// +1 for the actual function object.
@@ -3770,6 +3800,8 @@ PyEval_SetProfile(Py_tracefunc func, PyObject *arg)
 {
 	PyThreadState *tstate = PyThreadState_GET();
 	PyObject *temp = tstate->c_profileobj;
+	_Py_ProfilingPossible +=
+		(func != NULL) - (tstate->c_profilefunc != NULL);
 	Py_XINCREF(arg);
 	tstate->c_profilefunc = NULL;
 	tstate->c_profileobj = NULL;
@@ -4046,7 +4078,7 @@ mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 #endif  /* WITH_LLVM */
 
 #define C_TRACE(x, call) \
-if (tstate->use_tracing && tstate->c_profilefunc) { \
+if (_Py_ProfilingPossible && tstate->use_tracing && tstate->c_profilefunc) { \
 	if (_PyEval_CallTrace(tstate->c_profilefunc, \
 		tstate->c_profileobj, \
 		tstate->frame, PyTrace_C_CALL, \
@@ -4077,7 +4109,7 @@ if (tstate->use_tracing && tstate->c_profilefunc) { \
 } else { \
 	PY_LOG_TSC_EVENT(CALL_ENTER_C); \
 	x = call; \
-	}
+}
 
 /* Consumes a reference to each of the arguments and the called function,
    but the caller must adjust the stack pointer down by (na + 2*nk + 1).
@@ -4470,11 +4502,11 @@ ext_call_fail:
 	return result;
 }
 
-#ifdef WITH_LLVM
 // Records the type of obj into the feedback array.
 void record_type(PyCodeObject *co, int expected_opcode,
 		 int opcode_index, int arg_index, PyObject *obj)
 {
+#ifdef WITH_LLVM
 #ifndef NDEBUG
 	unsigned char actual_opcode =
 		PyString_AS_STRING(co->co_code)[opcode_index];
@@ -4486,11 +4518,13 @@ void record_type(PyCodeObject *co, int expected_opcode,
 		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
 			opcode_index, arg_index);
 	feedback.AddTypeSeen(obj);
+#endif  /* WITH_LLVM */
 }
 
 void inc_feedback_counter(PyCodeObject *co, int expected_opcode,
 			  int opcode_index, int counter_id)
 {
+#ifdef WITH_LLVM
 #ifndef NDEBUG
 	unsigned char actual_opcode =
 		PyString_AS_STRING(co->co_code)[opcode_index];
@@ -4502,8 +4536,27 @@ void inc_feedback_counter(PyCodeObject *co, int expected_opcode,
 		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
 			opcode_index, 0);
 	feedback.IncCounter(counter_id);
-}
 #endif  /* WITH_LLVM */
+}
+
+// Records func into the feedback array.
+void record_func(PyCodeObject *co, int expected_opcode,
+                 int opcode_index, int arg_index, PyObject *func)
+{
+#ifdef WITH_LLVM
+#ifndef NDEBUG
+	unsigned char actual_opcode =
+		PyString_AS_STRING(co->co_code)[opcode_index];
+	assert((actual_opcode == expected_opcode ||
+		actual_opcode == EXTENDED_ARG) &&
+	       "Mismatch between feedback and opcode array.");
+#endif  /* NDEBUG */
+	PyRuntimeFeedback &feedback =
+		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
+			opcode_index, arg_index);
+	feedback.AddFuncSeen(func);
+#endif  /* WITH_LLVM */
+}
 
 
 /* Extract a slice index from a PyInt or PyLong or an object with the
