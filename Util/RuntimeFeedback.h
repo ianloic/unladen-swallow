@@ -91,7 +91,7 @@ private:
     void SetFlagBit(unsigned index, bool value);
     bool GetFlagBit(unsigned index) const;
 
-    void PyLimitedFeedback::Swap(PyLimitedFeedback *other);
+    void Swap(PyLimitedFeedback *other);
 
     enum { NUM_POINTERS  = 3 };
     enum Bits {
