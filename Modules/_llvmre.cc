@@ -116,10 +116,10 @@ typedef struct {
 class CompiledExpression {
   public:
     CompiledExpression(RegularExpression& re, bool first=false);
-    ~CompiledExpression();
+    virtual ~CompiledExpression();
 
     // compile the result of sre_parse.parse
-    bool Compile(PyObject* seq, Py_ssize_t index);
+    bool Compile(PyObject* seq, Py_ssize_t index, bool subpattern=true);
 
     // this holds useful re-wide state
     RegularExpression& re;
@@ -180,11 +180,7 @@ class CompiledExpression {
       return BasicBlock::Create(context(), name, func?func:function);
     }
 
-    // call unladen-swallow's optimizer
-    bool optimize(Function* f);
-
     inline LLVMContext& context();
-
 };
 
 
@@ -192,9 +188,12 @@ class CompiledExpression {
 class RegularExpression : CompiledExpression {
   public:
     RegularExpression();
-    ~RegularExpression();
+    virtual ~RegularExpression();
 
     bool Compile(PyObject* seq, int flags, int groups);
+
+    // call unladen-swallow's optimizer on a function
+    bool Optimize(Function* f);
 
     PyObject* Match(Py_UNICODE* characters, int length, int pos, int end);
     PyObject* Find(Py_UNICODE* characters, int length, int pos, int end);
@@ -202,11 +201,11 @@ class RegularExpression : CompiledExpression {
     // Unladed Swallow global LLVM data
     PyGlobalLlvmData* global_data;
     // LLVM Context
-    LLVMContext context;
+    static LLVMContext* context;
     // LLVM module
     Module* module;
     // the execution engine
-    ExecutionEngine* ee;
+    static ExecutionEngine* ee;
 
     int flags;
     int groups;
@@ -228,6 +227,11 @@ class RegularExpression : CompiledExpression {
     Function* isspace;
     Function* Py_UNICODE_ISSPACE;
 
+    // create an LLVM function associated with this re
+    inline Function* createFunction(const char* name, 
+                                    bool internal, 
+                                    const Type* extra_arg_type = NULL);
+
     // the find function
     Function* find_function;
   private:
@@ -236,7 +240,18 @@ class RegularExpression : CompiledExpression {
     PyObject* ProcessResult(ReOffset start,
                             ReOffset result,
                             ReOffset* groups_array);
+    // the function pointers
+    MatchFunction match_fp;
+    FindFunction find_fp;
+
+    // all of the functions created by this regex
+    typedef std::vector<Function*> Functions;
+    Functions functions;
+
 };
+
+LLVMContext* RegularExpression::context = NULL;
+ExecutionEngine* RegularExpression::ee = NULL;
 
 RegularExpression::RegularExpression() 
   : CompiledExpression(*this, true), find_function(NULL)
@@ -249,18 +264,27 @@ RegularExpression::RegularExpression()
   
   // use the Unladen Swallow LLVM context
   global_data = PyGlobalLlvmData::Get();
+
+  if (context == NULL) {
+    //context = new LLVMContext();
+    context = &global_data->context();
+  }
  
   // create a module for this pattern
-  module = new Module("LlvmRe", context);
+  //module = new Module("LlvmRe", *context);
+  module = global_data->module();
 
   // get an execution engine
-  ee = EngineBuilder(module).create();
+  if (ee == NULL) {
+    //ee = EngineBuilder(module).create();
+    ee = global_data->getExecutionEngine();
+  }
 
   // the types we use
   // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
-  charType = IntegerType::get(context, 16);
-  boolType = IntegerType::get(context, 1);
-  offsetType = IntegerType::get(context, 32);
+  charType = IntegerType::get(*context, 16);
+  boolType = IntegerType::get(*context, 1);
+  offsetType = IntegerType::get(*context, 32);
   charPointerType = PointerType::get(charType, 0);
   offsetPointerType = PointerType::get(offsetType, 0);
   // set up some handy constants
@@ -269,12 +293,71 @@ RegularExpression::RegularExpression()
 
 RegularExpression::~RegularExpression() 
 {
-  // free the execution engine state for all of the functions
-  for(Module::iterator i=module->begin(), e=module->end(); i!=e; ++i) {
-    ee->freeMachineCodeForFunction(i);
+  // first free all of the JIT state associated with this expression
+  for (Functions::reverse_iterator i = functions.rbegin(); 
+      i < functions.rend(); ++i) {
+    ee->freeMachineCodeForFunction(*i);
   }
-  // delete the module
-  delete module;
+  match_fp = NULL;
+  find_fp = NULL;
+
+  // free the functions associated with this regex
+  bool made_changes;
+  int passes = 0;
+  int remaining = 0;
+  do {
+    made_changes = false;
+    remaining = 0;
+    for (Functions::reverse_iterator i = functions.rbegin(); 
+        i < functions.rend(); ++i) {
+      Function* f = *i;
+      if (f == NULL) continue; // skip already freed functions
+      if (f->use_empty()) {
+        /*
+        void* x = ee->getPointerToGlobalIfAvailable(f);
+        printf("[pre] GlobalValue is %p\n", x);
+        ee->freeMachineCodeForFunction(f);
+        x = ee->getPointerToGlobalIfAvailable(f);
+        printf("[post] GlobalValue is %p\n", x);
+        */
+        printf("deleting Function named %s\n", f->getNameStr().c_str());
+        f->eraseFromParent();
+        *i = NULL;
+        made_changes = true;
+      } else {
+        remaining++;
+      }
+    }
+    passes++;
+  } while (made_changes);
+  if (remaining || passes) {
+    printf("remaining: %d, passes: %d\n", remaining, passes);
+  }
+}
+
+Function* 
+RegularExpression::createFunction(const char* name, 
+                                  bool internal, 
+                                  const Type* extra_arg_type)
+{
+  // function argument types
+  std::vector<const Type*> args_type;
+  args_type.push_back(re.charPointerType); // string
+  args_type.push_back(re.offsetType); // offset
+  args_type.push_back(re.offsetType); // end_offset
+  args_type.push_back(re.offsetPointerType); // groups
+  if (extra_arg_type != NULL) {
+    args_type.push_back(extra_arg_type); // start_ptr / counter
+  }
+  FunctionType *func_type = FunctionType::get(re.offsetType, args_type, false);
+
+  Function* func = Function::Create(func_type, 
+      internal ? Function::InternalLinkage : Function::ExternalLinkage,
+      name, re.module);
+
+  functions.push_back(func);
+
+  return func;
 }
 
 bool 
@@ -285,25 +368,20 @@ RegularExpression::Compile(PyObject* seq,
   this->flags = flags;
   this->groups = groups;
 
-  return CompiledExpression::Compile(seq, 0) && CompileFind();
+  if (CompiledExpression::Compile(seq, 0, false) && CompileFind()) {
+    match_fp = (MatchFunction) ee->getPointerToFunction(function);
+    find_fp = (FindFunction) ee->getPointerToFunction(find_function);
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool
 RegularExpression::CompileFind() 
 {
-  // function argument types
-  std::vector<const Type*> args_type;
-  args_type.push_back(charPointerType); // string
-  args_type.push_back(offsetType); // offset
-  args_type.push_back(offsetType); // end_offset
-  args_type.push_back(offsetPointerType); // groups
-  args_type.push_back(offsetPointerType); // start_ptr
-  FunctionType *func_type = FunctionType::get(offsetType, args_type, false);
-
-  // FIXME: choose better function flags
-  // create the find function
-  find_function = Function::Create(func_type, Function::ExternalLinkage, 
-      "find", module);
+    // create the find function
+  find_function = createFunction("find", false, offsetPointerType);
   // get and name the arguments
   Function::arg_iterator func_args = find_function->arg_begin();
   Value* string = func_args++;
@@ -318,17 +396,17 @@ RegularExpression::CompileFind()
   start_ptr->setName("start_ptr");
 
   // create basic blocks
-  BasicBlock* entry = BasicBlock::Create(context, 
+  BasicBlock* entry = BasicBlock::Create(*context, 
       "entry", find_function);
-  BasicBlock* test_offset = BasicBlock::Create(context, 
+  BasicBlock* test_offset = BasicBlock::Create(*context, 
       "test_offset", find_function);
-  BasicBlock* match = BasicBlock::Create(context, 
+  BasicBlock* match = BasicBlock::Create(*context, 
       "match", find_function);
-  BasicBlock* increment = BasicBlock::Create(context, 
+  BasicBlock* increment = BasicBlock::Create(*context, 
       "increment", find_function);
-  BasicBlock* return_not_found = BasicBlock::Create(context, 
+  BasicBlock* return_not_found = BasicBlock::Create(*context, 
       "return_not_found", find_function);
-  BasicBlock* return_match_result = BasicBlock::Create(context, 
+  BasicBlock* return_match_result = BasicBlock::Create(*context, 
       "return_match_result", find_function);
 
   // create the entry BasicBlock
@@ -365,17 +443,30 @@ RegularExpression::CompileFind()
   BranchInst::Create(test_offset, increment);
 
   // create the return_not_found BasicBlock
-  ReturnInst::Create(context, not_found, return_not_found);
+  ReturnInst::Create(*context, not_found, return_not_found);
 
   // create the return_match_result BasicBlock
   // put the offset in our outparam
   new StoreInst(new LoadInst(offset_ptr, "offset", return_match_result),
       start_ptr, return_match_result);
-  ReturnInst::Create(context, match_result, return_match_result);
+  ReturnInst::Create(*context, match_result, return_match_result);
 
-  // optimize the find function
-	global_data->Optimize(*(find_function), 3);
+  return Optimize(find_function);
+}
 
+bool
+RegularExpression::Optimize(Function* f)
+{
+  return true;
+
+  if (flags & 128) {
+    // don't optimize if the DEBUG flag is set
+    return true;
+  }
+	if (global_data->Optimize(*f, 3) < 0) {
+    PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
+    return false;
+  }
   return true;
 }
 
@@ -446,12 +537,13 @@ RegularExpression::Match(Py_UNICODE* characters,
                          int pos, 
                          int end)
 {
-  MatchFunction func_ptr = (MatchFunction)
-    ee->getPointerToFunction(function);
+  //printf("RegularExpression::Match - function called w/ characters=%p, length=%d, pos=%d, end=%d\n", characters, length, pos, end);
 
   ReOffset* groups_array = AllocateGroupsArray();
 
-  ReOffset result = (func_ptr)(characters, pos, end, groups_array);
+  ReOffset result = (match_fp)(characters, pos, end, groups_array);
+
+  //printf("RegularExpression::Match - function returned %d\n", result);
 
   return ProcessResult(pos, result, groups_array);
 }
@@ -462,12 +554,9 @@ RegularExpression::Find(Py_UNICODE* characters,
                         int pos, 
                         int end)
 {
-  FindFunction func_ptr = 
-    (FindFunction)ee->getPointerToFunction(find_function);
-
   ReOffset start;
   ReOffset* groups_array = AllocateGroupsArray();
-  ReOffset result = (func_ptr)(characters, pos, end, groups_array, &start);
+  ReOffset result = (find_fp)(characters, pos, end, groups_array, &start);
   return ProcessResult(start, result, groups_array);
 }
 
@@ -479,29 +568,11 @@ CompiledExpression::CompiledExpression(RegularExpression& re, bool first)
 CompiledExpression::~CompiledExpression() {
 }
 
+
 LLVMContext& 
 CompiledExpression::context() 
 {
-  return re.context;
-}
-
-bool CompiledExpression::optimize(Function* f) {
-  if (re.flags & 128) {
-    // don't optimize if DEBUG is set
-    return true;
-  }
-  // use fastcc if this isn't the first function we're calling
-  if (f != function || !first) {
-    // unfortunately this screws everything up
-    //f->setCallingConv(llvm::CallingConv::Fast);
-  }
-  // optimize the function
-	struct PyGlobalLlvmData *global_llvm_data = PyGlobalLlvmData::Get();
-	if (global_llvm_data->Optimize(*f, 3) < 0) {
-    PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
-    return false;
-  }
-  return true;
+  return *re.context;
 }
 
 Value* 
@@ -542,18 +613,7 @@ Function*
 CompiledExpression::greedy(Function* repeat, Function* after) 
 {
   // create the function
-  std::vector<const Type*> args_type;
-  args_type.push_back(re.charPointerType); // string
-  args_type.push_back(re.offsetType); // offset
-  args_type.push_back(re.offsetType); // end_offset
-  args_type.push_back(re.offsetPointerType); // groups
-  args_type.push_back(re.offsetType); // counter
-
-  FunctionType *func_type = FunctionType::get(re.offsetType, args_type, false);
-
-  // FIXME: choose better function flags
-  Function* function = Function::Create(func_type, Function::ExternalLinkage,
-      "recurse", re.module);
+  Function* function = re.createFunction("recurse", true, re.offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -617,7 +677,7 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   // return_offset
   ReturnInst::Create(context(), recurse_result, return_offset);
 
-  optimize(function);
+  re.Optimize(function);
 
   return function; 
 }
@@ -626,18 +686,7 @@ Function*
 CompiledExpression::nongreedy(Function* repeat, Function* after) 
 {
   // create the function
-  std::vector<const Type*> args_type;
-  args_type.push_back(re.charPointerType); // string
-  args_type.push_back(re.offsetType); // offset
-  args_type.push_back(re.offsetType); // end_offset
-  args_type.push_back(re.offsetPointerType); // groups
-  args_type.push_back(re.offsetType); // counter
-
-  FunctionType *func_type = FunctionType::get(re.offsetType, args_type, false);
-
-  // FIXME: choose better function flags
-  Function* function = Function::Create(func_type, Function::ExternalLinkage,
-      "recurse", re.module);
+  Function* function = re.createFunction("recurse", true, re.offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -700,7 +749,7 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   // return_after_result
   ReturnInst::Create(context(), after_result, return_after_result);
 
-  optimize(function);
+  re.Optimize(function);
 
   return function; 
 }
@@ -853,7 +902,9 @@ CompiledExpression::testCategory(BasicBlock* block,
 }
 
 bool 
-CompiledExpression::Compile(PyObject* seq, Py_ssize_t index)
+CompiledExpression::Compile(PyObject*  seq, 
+                            Py_ssize_t index,
+                            bool       subpattern)
 {
   // make sure we got a sequence
   if (!PySequence_Check(seq)) {
@@ -861,16 +912,7 @@ CompiledExpression::Compile(PyObject* seq, Py_ssize_t index)
     return false;
   }
 
-  std::vector<const Type*> args_type;
-  args_type.push_back(re.charPointerType); // string
-  args_type.push_back(re.offsetType); // offset
-  args_type.push_back(re.offsetType); // end_offset
-  args_type.push_back(re.offsetPointerType); // groups
-  FunctionType *func_type = FunctionType::get(re.offsetType, args_type, false);
-
-  // FIXME: choose better function flags
-  function = Function::Create(func_type, Function::ExternalLinkage, 
-      "pattern", re.module);
+  function = re.createFunction("pattern", subpattern);
 
   // get and name the arguments
   Function::arg_iterator args = function->arg_begin();
@@ -1028,7 +1070,7 @@ CompiledExpression::Compile(PyObject* seq, Py_ssize_t index)
   // add the return instruction to return_not_found
   ReturnInst::Create(context(), re.not_found, return_not_found);
 
-  return optimize(function);
+  return re.Optimize(function);
 
 }
 
