@@ -2570,6 +2570,95 @@ def foo(trigger):
         # same function, just with a different invocant.
         self.assertEqual(foo("b"), "cbd")
 
+    @at_each_optimization_level
+    def test_access_frame_locals_via_vars(self, level):
+        # We need to be able to call vars() inside an LLVM-compiled function
+        # and have it still work. This complicates some LLVM-side optimizations.
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    y = 7
+    return vars()
+""", optimization_level=level)
+
+        got_vars = foo(8)
+        self.assertEqual(got_vars, {"x": 8, "y": 7})
+
+    @at_each_optimization_level
+    def test_access_frame_locals_via_dir(self, level):
+        # We need to be able to call dir() inside an LLVM-compiled function
+        # and have it still work. This complicates some LLVM-side optimizations.
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    y = 7
+    return dir()
+""", optimization_level=level)
+
+        got_dir = foo(8)
+        self.assertEqual(set(got_dir), set(["x", "y"]))
+
+    @at_each_optimization_level
+    def test_access_frame_locals_via_locals(self, level):
+        # We need to be able to call locals() inside an LLVM-compiled function
+        # and have it still work. This complicates some LLVM-side optimizations.
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    z = 9
+    y = 7
+    del z
+    return locals()
+""", optimization_level=level)
+
+        got_locals = foo(8)
+        self.assertEqual(got_locals, {"x": 8, "y": 7})
+
+    @at_each_optimization_level
+    def test_access_frame_locals_via_traceback(self, level):
+        # Some production code, like Django's fancy debugging pages, rely on
+        # being able to pull locals out of frame objects. This complicates some
+        # LLVM-side optimizations.
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    y = 7
+    raise ZeroDivisionError
+""", optimization_level=level)
+
+        try:
+            foo(8)
+        except ZeroDivisionError:
+            tb = sys.exc_info()[2]
+        else:
+            self.fail("Failed to raise ZeroDivisionError")
+
+        # Sanity check to make sure we're getting the right frame.
+        self.assertEqual(tb.tb_next.tb_frame.f_code.co_name, "foo")
+        self.assertEqual(tb.tb_next.tb_frame.f_locals, {"y": 7, "x": 8})
+
+    @at_each_optimization_level
+    def test_access_frame_locals_in_finally_via_traceback(self, level):
+        # Some production code, like Django's fancy debugging pages, rely on
+        # being able to pull locals out of frame objects. This complicates some
+        # LLVM-side optimizations. This particular case is a strange corner
+        # case Jeffrey Yasskin thought up.
+        foo = compile_for_llvm("foo", """
+def foo(x):
+    y = 7
+    try:
+        raise ZeroDivisionError
+    finally:
+        z = 9
+""", optimization_level=level)
+
+        try:
+            foo(8)
+        except ZeroDivisionError:
+            tb = sys.exc_info()[2]
+        else:
+            self.fail("Failed to raise ZeroDivisionError")
+
+        # Sanity check to make sure we're getting the right frame.
+        self.assertEqual(tb.tb_next.tb_frame.f_code.co_name, "foo")
+        self.assertEqual(tb.tb_next.tb_frame.f_locals, {"y": 7, "x": 8, "z": 9})
+
 
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 

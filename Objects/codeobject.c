@@ -160,10 +160,14 @@ code_get_optimization(PyCodeObject *code)
 static int
 code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 {
+	int retcode;
 	long new_opt_level = PyInt_AsLong(new_opt_level_obj);
 	if (new_opt_level == -1 && PyErr_Occurred())
 		return -1;
-	return _PyCode_ToOptimizedLlvmIr(code, new_opt_level);
+	retcode = _PyCode_ToOptimizedLlvmIr(code, new_opt_level);
+	if (retcode == 1)
+		retcode = 0;
+	return retcode;
 }
 
 static PyObject *
@@ -240,6 +244,12 @@ _PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int new_opt_level)
 			     new_opt_level);
 		return -1;
 	}
+	// The exec statement wants to mess with the frame object in
+	// ways that can inhibit optimizations (or make them harder to
+	// implement), so we refuse to optimize code objects that use
+	// exec.
+	if (code->co_flags & CO_USES_EXEC)
+		return 1;
 	if (code->co_llvm_function == NULL) {
 		code->co_llvm_function = _PyCode_ToLlvmIr(code);
 		if (code->co_llvm_function == NULL)

@@ -200,6 +200,14 @@ find_basic_blocks(PyObject *bytecode, py::LlvmFunctionBuilder &fbuilder,
         OPCODE_JREL(SETUP_FINALLY)
 #undef OPCODE_JREL
 
+        // Disable an optimization to LOAD_FAST if DELETE_FAST is ever used.
+        // This isn't a jump, and isn't necessary for basic block creation, but
+        // doing this check here saves us having to iterate over the opcodes
+        // again.
+        case DELETE_FAST:
+            fbuilder.uses_delete_fast = true;
+            continue;
+
         default:
             // This isn't a jump, so we don't need any new blocks for it.
             continue;

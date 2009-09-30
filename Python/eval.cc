@@ -4057,8 +4057,12 @@ mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 				r = _PyCode_ToOptimizedLlvmIr(
 					co, target_optimization);
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
-				if (r < 0)
+				if (r < 0)  // Error
 					return -1;
+				if (r == 1) {  // Codegen refused
+					co->co_use_llvm = f->f_use_llvm = 0;
+					return 0;
+				}
 			}
 		}
 		if (co->co_native_function == NULL) {

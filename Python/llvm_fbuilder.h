@@ -7,10 +7,12 @@
 #endif
 
 #include "Util/EventTimer.h"
+#include "Util/PyTypeBuilder.h"
 #include "Util/RuntimeFeedback.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
+#include "llvm/Constants.h"
 #include "llvm/Support/IRBuilder.h"
 #include <string>
 
@@ -211,6 +213,8 @@ public:
     void RAISE_VARARGS_TWO();
     void RAISE_VARARGS_THREE();
 
+    bool uses_delete_fast;
+
 private:
     /// These two functions increment or decrement the reference count
     /// of a PyObject*. The behavior is undefined if the Value's type
@@ -239,6 +243,17 @@ private:
     /// the frame and the allocas.
     void CopyToFrameObject();
     void CopyFromFrameObject();
+
+    /// We copy the function's locals into an LLVM alloca so that LLVM can
+    /// better reason about them.
+    void CopyLocalsFromFrameObject();
+
+    template<typename T>
+    llvm::Constant *GetSigned(int64_t val) {
+        return llvm::ConstantInt::getSigned(
+                PyTypeBuilder<T>::get(this->context_),
+                val);
+    }
 
     /// Returns the difference between the current stack pointer and
     /// the base of the stack.
@@ -270,6 +285,9 @@ private:
     /// Inserts a call that will print opcode_name and abort the
     /// program when it's reached.
     void DieForUndefinedOpcode(const char *opcode_name);
+
+    /// How many parameters does the currently-compiling function have?
+    int GetParamCount() const;
 
     /// Implements something like the C assert statement.  If
     /// should_be_true (an i1) is false, prints failure_message (with
@@ -473,6 +491,11 @@ private:
     void CALL_FUNCTION_safe(int num_args);
     void CALL_FUNCTION_fast(int num_args, const PyRuntimeFeedback *);
 
+    // A safe version that always works, and a fast version that omits NULL
+    // checks where we know the local cannot be NULL.
+    void LOAD_FAST_safe(int index);
+    void LOAD_FAST_fast(int index);
+
     /// Emits code to conditionally bail out to the interpreter loop
     /// if a line tracing function is installed.  If the line tracing
     /// function is not installed, execution will continue at
@@ -535,6 +558,12 @@ private:
     // and forth when the frame escapes.
     llvm::Value *blockstack_addr_;
     llvm::Value *num_blocks_addr_;
+
+    // Expose the frame's locals to LLVM. We copy them in on function-entry,
+    // copy them out on write. We use a separate alloca for each local
+    // because LLVM's scalar replacement of aggregates pass doesn't handle
+    // array allocas.
+    std::vector<llvm::Value*> locals_;
 
     llvm::BasicBlock *unreachable_block_;
 

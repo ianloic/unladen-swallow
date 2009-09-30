@@ -119,6 +119,7 @@ struct compiler_unit {
 	int u_lineno;	   /* the lineno for the current stmt */
 	bool u_lineno_set; /* boolean to indicate whether instr
 			      has been generated with current lineno */
+	bool u_uses_exec;  /* Whether this code object uses exec */
 };
 
 /* This struct captures the global state of a compilation.  
@@ -480,6 +481,7 @@ compiler_enter_scope(struct compiler *c, identifier name, void *key,
 	u->u_firstlineno = lineno;
 	u->u_lineno = 0;
 	u->u_lineno_set = false;
+	u->u_uses_exec = false;
 	u->u_consts = PyDict_New();
 	if (!u->u_consts) {
 		compiler_unit_free(u);
@@ -1519,6 +1521,7 @@ compiler_exec(struct compiler *c, stmt_ty s)
 	}
 	ADDOP_I(c, CALL_FUNCTION, 3);
 	ADDOP(c, POP_TOP);
+	c->u->u_uses_exec = true;
 	return 1;
 }
 
@@ -3864,6 +3867,8 @@ compute_code_flags(struct compiler *c)
 		flags |= CO_GENERATOR;
 	if (ste->ste_blockstack)
 		flags |= CO_BLOCKSTACK;
+	if (c->u->u_uses_exec)
+		flags |= CO_USES_EXEC;
 
 	/* (Only) inherit compilerflags in PyCF_MASK */
 	flags |= (c->c_flags->cf_flags & PyCF_MASK);
