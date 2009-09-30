@@ -284,7 +284,7 @@ MachineMemOperand::MachineMemOperand(const Value *v, unsigned int f,
                                      int64_t o, uint64_t s, unsigned int a)
   : Offset(o), Size(s), V(v),
     Flags((f & 7) | ((Log2_32(a) + 1) << 3)) {
-  assert(isPowerOf2_32(a) && "Alignment is not a power of 2!");
+  assert(getBaseAlignment() == a && "Alignment is not a power of 2!");
   assert((isLoad() || isStore()) && "Not a load/store!");
 }
 
@@ -652,7 +652,7 @@ bool MachineInstr::isDebugLabel() const {
 }
 
 /// findRegisterUseOperandIdx() - Returns the MachineOperand that is a use of
-/// the specific register or -1 if it is not found. It further tightening
+/// the specific register or -1 if it is not found. It further tightens
 /// the search criteria to a use that kills the register if isKill is true.
 int MachineInstr::findRegisterUseOperandIdx(unsigned Reg, bool isKill,
                                           const TargetRegisterInfo *TRI) const {

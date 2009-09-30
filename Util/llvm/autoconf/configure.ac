@@ -381,6 +381,16 @@ else
   AC_SUBST(DEBUG_RUNTIME,[[DEBUG_RUNTIME=1]])
 fi
 
+dnl --enable-debug-symbols : should even optimized compiler libraries
+dnl have debug symbols?
+AC_ARG_ENABLE(debug-symbols,
+   AS_HELP_STRING(--enable-debug-symbols,[Build compiler with debug symbols (default is NO if optimization is on and YES if it's off)]),,enableval=no)
+if test ${enableval} = "no" ; then
+  AC_SUBST(DEBUG_SYMBOLS,[[]])
+else
+  AC_SUBST(DEBUG_SYMBOLS,[[DEBUG_SYMBOLS=1]])
+fi
+
 dnl --enable-jit: check whether they want to enable the jit
 AC_ARG_ENABLE(jit,
   AS_HELP_STRING(--enable-jit,
@@ -396,7 +406,7 @@ else
     PowerPC)     AC_SUBST(TARGET_HAS_JIT,1) ;;
     x86_64)      AC_SUBST(TARGET_HAS_JIT,1) ;;
     Alpha)       AC_SUBST(TARGET_HAS_JIT,1) ;;
-    ARM)         AC_SUBST(TARGET_HAS_JIT,0) ;;
+    ARM)         AC_SUBST(TARGET_HAS_JIT,1) ;;
     Mips)        AC_SUBST(TARGET_HAS_JIT,0) ;;
     PIC16)       AC_SUBST(TARGET_HAS_JIT,0) ;;
     XCore)       AC_SUBST(TARGET_HAS_JIT,0) ;;
@@ -1077,7 +1087,7 @@ AC_CHECK_FUNCS([powf fmodf strtof round ])
 AC_CHECK_FUNCS([getpagesize getrusage getrlimit setrlimit gettimeofday ])
 AC_CHECK_FUNCS([isatty mkdtemp mkstemp ])
 AC_CHECK_FUNCS([mktemp realpath sbrk setrlimit strdup ])
-AC_CHECK_FUNCS([strerror strerror_r strerror_s ])
+AC_CHECK_FUNCS([strerror strerror_r strerror_s setenv ])
 AC_CHECK_FUNCS([strtoll strtoq sysconf malloc_zone_statistics ])
 AC_CHECK_FUNCS([setjmp longjmp sigsetjmp siglongjmp])
 AC_C_PRINTF_A

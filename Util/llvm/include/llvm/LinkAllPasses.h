@@ -64,6 +64,7 @@ namespace {
       (void) llvm::createDeadStoreEliminationPass();
       (void) llvm::createDeadTypeEliminationPass();
       (void) llvm::createEdgeProfilerPass();
+      (void) llvm::createOptimalEdgeProfilerPass();
       (void) llvm::createFunctionInliningPass();
       (void) llvm::createAlwaysInlinerPass();
       (void) llvm::createFunctionProfilerPass();
@@ -94,6 +95,7 @@ namespace {
       (void) llvm::createNoAAPass();
       (void) llvm::createNoProfileInfoPass();
       (void) llvm::createProfileEstimatorPass();
+      (void) llvm::createProfileVerifierPass();
       (void) llvm::createProfileLoaderPass();
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
@@ -118,6 +120,7 @@ namespace {
       (void) llvm::createIndMemRemPass();
       (void) llvm::createInstCountPass();
       (void) llvm::createPredicateSimplifierPass();
+      (void) llvm::createCodeGenLICMPass();
       (void) llvm::createCodeGenPreparePass();
       (void) llvm::createGVNPass();
       (void) llvm::createMemCpyOptPass();

@@ -582,6 +582,68 @@ class ThreadAndForkTests(unittest.TestCase):
             """
         self.assertScriptHasOutput(script, "successfully read child pid\n")
 
+    def test_thread_fork_join_waiter(self):
+        # Check that a spawned thread that forks doesn't segfault on certain
+        # platforms, namely OS X.  This used to happen if there was a waiter
+        # lock in the thread's condition variable's waiters list.  Even though
+        # we know the lock will be held across the fork, it is not safe to
+        # release locks held across forks on all platforms, so releasing the
+        # waiter lock caused a segfault on OS X.  Furthermore, since locks on
+        # OS X are (as of this writing) implemented with a mutex + condition
+        # variable instead of a semaphore, while we know that the Python-level
+        # lock will be acquired, we can't know if the internal mutex will be
+        # acquired at the time of the fork.
+
+        if not hasattr(os, 'fork'):
+            return
+        # Skip platforms with known problems forking from a worker thread.
+        # See http://bugs.python.org/issue3863.
+        if sys.platform in ('freebsd4', 'freebsd5', 'freebsd6', 'os2emx'):
+            raise unittest.SkipTest('due to known OS bugs on ' + sys.platform)
+        script = """if True:
+            import os, time, threading
+
+            start_fork = False
+
+            def worker():
+                # Wait until the main thread has attempted to join this thread
+                # before continuing.
+                while not start_fork:
+                    time.sleep(0.01)
+                childpid = os.fork()
+                if childpid != 0:
+                    # Parent process just waits for child.
+                    (cpid, rc) = os.waitpid(childpid, 0)
+                    assert cpid == childpid
+                    assert rc == 0
+                    print('end of worker thread')
+                else:
+                    # Child process should just return.
+                    pass
+
+            w = threading.Thread(target=worker)
+
+            # Stub out the private condition variable's _release_save method.
+            # This releases the condition's lock and flips the global that
+            # causes the worker to fork.  At this point, the problematic waiter
+            # lock has been acquired once by the waiter and has been put onto
+            # the waiters list.
+            condition = w._Thread__block
+            orig_release_save = condition._release_save
+            def my_release_save():
+                global start_fork
+                orig_release_save()
+                # Waiter lock held here, condition lock released.
+                start_fork = True
+            condition._release_save = my_release_save
+
+            w.start()
+            w.join()
+            print('end of main thread')
+            """
+        output = "end of worker thread\nend of main thread\n"
+        self.assertScriptHasOutput(script, output)
+
 
 class ThreadingExceptionTests(unittest.TestCase):
     # A RuntimeError should be raised if Thread.start() is called

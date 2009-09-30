@@ -119,7 +119,8 @@ namespace llvm {
     SDValue getPIC16Cmp(SDValue LHS, SDValue RHS, unsigned OrigCC, SDValue &CC,
                         SelectionDAG &DAG, DebugLoc dl);
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                  MachineBasicBlock *MBB) const;
+                                                         MachineBasicBlock *MBB,
+                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
 
 
     virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG);
@@ -132,7 +133,7 @@ namespace llvm {
 
     virtual SDValue
     LowerFormalArguments(SDValue Chain,
-                         unsigned CallConv,
+                         CallingConv::ID CallConv,
                          bool isVarArg,
                          const SmallVectorImpl<ISD::InputArg> &Ins,
                          DebugLoc dl, SelectionDAG &DAG,
@@ -140,7 +141,7 @@ namespace llvm {
 
     virtual SDValue
       LowerCall(SDValue Chain, SDValue Callee,
-                unsigned CallConv, bool isVarArg, bool isTailCall,
+                CallingConv::ID CallConv, bool isVarArg, bool isTailCall,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
                 const SmallVectorImpl<ISD::InputArg> &Ins,
                 DebugLoc dl, SelectionDAG &DAG,
@@ -148,7 +149,7 @@ namespace llvm {
 
     virtual SDValue
       LowerReturn(SDValue Chain,
-                  unsigned CallConv, bool isVarArg,
+                  CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                   DebugLoc dl, SelectionDAG &DAG);
 

@@ -112,3 +112,58 @@ Instrumentation:
   how many machine code functions were disabled per globals/builtins change.
 - sys.setbailerror(True) will cause an exception to be raised if a function
   fails a guard (fatal or non-fatal) and bails back to the interpreter.
+
+
+Optimization: direct calls to C functions
+-----------------------------------------
+
+In the interpreter loop, CALL_FUNCTION opcodes that call zero- or
+single-argument C functions incur some overhead from checking that the number
+of arguments matches the number of expected parameters. It is unnecessary to
+incur this overhead repeatedly at runtime, since callsites with only positional
+arguments cannot change the nature or number of their arguments once written,
+and a C function cannot change its number of parameters.
+
+We can take advantage of this to move argument/parameter count checking from
+execution-time to compile-time. This allows us to emit direct calls to C
+functions, rather than going through the more generic Python call machinery.
+
+Implementation:
+- The runtime feedback-gathering code in Util/RuntimeFeedback.* will grow
+  support for recording the underlying C function pointers from
+  PyCFunctionObjects. The CALL_FUNCTION implementation in the interpreter loop
+  will use this to gather information about individual callsites.
+- When compiling CALL_FUNCTION opcodes, Python/fbuilder.cc will consult the
+  gathered runtime feedback. If the feedback meets its requirements (low arity,
+  all C functions, number of callsite arguments matches the number of function
+  parameters, etc), then fbuilder.cc will create an LLVM global value
+  representing the function pointer(s) and then emit a guarded direct call to
+  that function.
+- The optimized function call is guarded on the type of the callable object and
+  the callable object's underlying C function pointer. If either of these tests
+  fail, the function bails back to the interpreter. It is intended that these
+  guards will eventually be constant-propagated away.
+
+Example code:
+
+    def foo(l):
+        l.append(5)
+
+The actual call of the CALL_FUNCTION opcode goes from
+
+%CALL_FUNCTION_result = call %struct._object* @_PyEval_CallFunction(
+    %struct._object** %58, i32 1, i32 0) ;
+
+to
+
+%68 = call %struct._object* @append(%struct._object* %CALL_FUNCTION_actual_self,
+    %struct._object* bitcast (%struct.PyIntObject* @14 to %struct._object*)) ;
+
+This intentionally omits the necessary guards.
+
+Instrumentation:
+- The --with-tsc build already included instrumentation for measuring call
+  overhead. This optimization supports those TSC-based hooks.
+- The --with-instrumentation build includes support for measuring callsite
+  arity across an application, as well as tracking the reasons why various
+  callsites were forced to use the safe version of CALL_FUNCTION.

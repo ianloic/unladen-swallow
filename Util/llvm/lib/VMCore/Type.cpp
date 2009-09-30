@@ -42,6 +42,9 @@ using namespace llvm;
 
 AbstractTypeUser::~AbstractTypeUser() {}
 
+void AbstractTypeUser::setType(Value *V, const Type *NewTy) {
+  V->VTy = NewTy;
+}
 
 //===----------------------------------------------------------------------===//
 //                         Type Class Implementation
@@ -364,11 +367,10 @@ const IntegerType *Type::getInt64Ty(LLVMContext &C) {
 bool FunctionType::isValidReturnType(const Type *RetTy) {
   if (RetTy->isFirstClassType()) {
     if (const PointerType *PTy = dyn_cast<PointerType>(RetTy))
-      return PTy->getElementType() != Type::getMetadataTy(RetTy->getContext());
+      return PTy->getElementType()->getTypeID() != MetadataTyID;
     return true;
   }
-  if (RetTy == Type::getVoidTy(RetTy->getContext()) ||
-      RetTy == Type::getMetadataTy(RetTy->getContext()) ||
+  if (RetTy->getTypeID() == VoidTyID || RetTy->getTypeID() == MetadataTyID ||
       isa<OpaqueType>(RetTy))
     return true;
   
@@ -389,8 +391,7 @@ bool FunctionType::isValidReturnType(const Type *RetTy) {
 bool FunctionType::isValidArgumentType(const Type *ArgTy) {
   if ((!ArgTy->isFirstClassType() && !isa<OpaqueType>(ArgTy)) ||
       (isa<PointerType>(ArgTy) &&
-       cast<PointerType>(ArgTy)->getElementType() == 
-            Type::getMetadataTy(ArgTy->getContext())))
+       cast<PointerType>(ArgTy)->getElementType()->getTypeID() == MetadataTyID))
     return false;
 
   return true;
@@ -492,7 +493,7 @@ void DerivedType::dropAllTypeUses() {
         tmp = AlwaysOpaqueTy;
         if (!tmp) {
           tmp = OpaqueType::get(getContext());
-          PATypeHolder* tmp2 = new PATypeHolder(AlwaysOpaqueTy);
+          PATypeHolder* tmp2 = new PATypeHolder(tmp);
           sys::MemoryFence();
           AlwaysOpaqueTy = tmp;
           Holder = tmp2;
@@ -500,7 +501,7 @@ void DerivedType::dropAllTypeUses() {
       
         llvm_release_global_lock();
       }
-    } else {
+    } else if (!AlwaysOpaqueTy) {
       AlwaysOpaqueTy = OpaqueType::get(getContext());
       Holder = new PATypeHolder(AlwaysOpaqueTy);
     } 
@@ -509,7 +510,8 @@ void DerivedType::dropAllTypeUses() {
 
     // Change the rest of the types to be Int32Ty's.  It doesn't matter what we
     // pick so long as it doesn't point back to this type.  We choose something
-    // concrete to avoid overhead for adding to AbstracTypeUser lists and stuff.
+    // concrete to avoid overhead for adding to AbstractTypeUser lists and
+    // stuff.
     for (unsigned i = 1, e = NumContainedTys; i != e; ++i)
       ContainedTys[i] = Type::getInt32Ty(getContext());
   }
@@ -828,13 +830,12 @@ ArrayType *ArrayType::get(const Type *ElementType, uint64_t NumElements) {
 }
 
 bool ArrayType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy == Type::getVoidTy(ElemTy->getContext()) ||
-      ElemTy == Type::getLabelTy(ElemTy->getContext()) ||
-      ElemTy == Type::getMetadataTy(ElemTy->getContext()))
+  if (ElemTy->getTypeID() == VoidTyID || ElemTy->getTypeID() == LabelTyID ||
+      ElemTy->getTypeID() == MetadataTyID || isa<FunctionType>(ElemTy))
     return false;
 
   if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType() == Type::getMetadataTy(ElemTy->getContext()))
+    if (PTy->getElementType()->getTypeID() == MetadataTyID)
       return false;
 
   return true;
@@ -908,13 +909,12 @@ StructType *StructType::get(LLVMContext &Context, const Type *type, ...) {
 }
 
 bool StructType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy == Type::getVoidTy(ElemTy->getContext()) ||
-      ElemTy == Type::getLabelTy(ElemTy->getContext()) ||
-      ElemTy == Type::getMetadataTy(ElemTy->getContext()))
+  if (ElemTy->getTypeID() == VoidTyID || ElemTy->getTypeID() == LabelTyID ||
+      ElemTy->getTypeID() == MetadataTyID || isa<FunctionType>(ElemTy))
     return false;
 
   if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType() == Type::getMetadataTy(ElemTy->getContext()))
+    if (PTy->getElementType()->getTypeID() == MetadataTyID)
       return false;
 
   return true;
@@ -927,7 +927,7 @@ bool StructType::isValidElementType(const Type *ElemTy) {
 
 PointerType *PointerType::get(const Type *ValueType, unsigned AddressSpace) {
   assert(ValueType && "Can't get a pointer to <null> type!");
-  assert(ValueType != Type::getVoidTy(ValueType->getContext()) &&
+  assert(ValueType->getTypeID() != VoidTyID &&
          "Pointer to void is not valid, use i8* instead!");
   assert(isValidElementType(ValueType) && "Invalid type for pointer element!");
   PointerValType PVT(ValueType, AddressSpace);
@@ -954,12 +954,12 @@ PointerType *Type::getPointerTo(unsigned addrs) const {
 }
 
 bool PointerType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy == Type::getVoidTy(ElemTy->getContext()) ||
-      ElemTy == Type::getLabelTy(ElemTy->getContext()))
+  if (ElemTy->getTypeID() == VoidTyID ||
+      ElemTy->getTypeID() == LabelTyID)
     return false;
 
   if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType() == Type::getMetadataTy(ElemTy->getContext()))
+    if (PTy->getElementType()->getTypeID() == MetadataTyID)
       return false;
 
   return true;
@@ -1046,7 +1046,7 @@ void DerivedType::unlockedRefineAbstractTypeTo(const Type *NewType) {
   // refined, that we will not continue using a dead reference...
   //
   PATypeHolder NewTy(NewType);
-  // Any PATypeHolders referring to this type will now automatically forward o
+  // Any PATypeHolders referring to this type will now automatically forward to
   // the type we are resolved to.
   ForwardType = NewType;
   if (NewType->isAbstract())

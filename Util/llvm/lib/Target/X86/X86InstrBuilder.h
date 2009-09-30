@@ -47,7 +47,7 @@ struct X86AddressMode {
 
   unsigned Scale;
   unsigned IndexReg;
-  unsigned Disp;
+  int Disp;
   GlobalValue *GV;
   unsigned GVOpFlags;
 
@@ -144,7 +144,7 @@ addFrameReference(const MachineInstrBuilder &MIB, int FI, int Offset = 0) {
     Flags |= MachineMemOperand::MOStore;
   MachineMemOperand MMO(PseudoSourceValue::getFixedStack(FI),
                         Flags,
-                        MFI.getObjectOffset(FI) + Offset,
+                        Offset,
                         MFI.getObjectSize(FI),
                         MFI.getObjectAlignment(FI));
   return addOffset(MIB.addFrameIndex(FI), Offset)

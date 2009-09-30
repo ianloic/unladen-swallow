@@ -217,7 +217,7 @@ getRegForInlineAsmConstraint(const std::string &Constraint,
 
 SDValue
 SystemZTargetLowering::LowerFormalArguments(SDValue Chain,
-                                            unsigned CallConv,
+                                            CallingConv::ID CallConv,
                                             bool isVarArg,
                                             const SmallVectorImpl<ISD::InputArg>
                                               &Ins,
@@ -236,7 +236,7 @@ SystemZTargetLowering::LowerFormalArguments(SDValue Chain,
 
 SDValue
 SystemZTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                                 unsigned CallConv, bool isVarArg,
+                                 CallingConv::ID CallConv, bool isVarArg,
                                  bool isTailCall,
                                  const SmallVectorImpl<ISD::OutputArg> &Outs,
                                  const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -259,7 +259,7 @@ SystemZTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 // FIXME: varargs
 SDValue
 SystemZTargetLowering::LowerCCCArguments(SDValue Chain,
-                                         unsigned CallConv,
+                                         CallingConv::ID CallConv,
                                          bool isVarArg,
                                          const SmallVectorImpl<ISD::InputArg>
                                            &Ins,
@@ -349,7 +349,7 @@ SystemZTargetLowering::LowerCCCArguments(SDValue Chain,
 /// TODO: sret.
 SDValue
 SystemZTargetLowering::LowerCCCCallTo(SDValue Chain, SDValue Callee,
-                                      unsigned CallConv, bool isVarArg,
+                                      CallingConv::ID CallConv, bool isVarArg,
                                       bool isTailCall,
                                       const SmallVectorImpl<ISD::OutputArg>
                                         &Outs,
@@ -484,7 +484,7 @@ SystemZTargetLowering::LowerCCCCallTo(SDValue Chain, SDValue Callee,
 ///
 SDValue
 SystemZTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
-                                       unsigned CallConv, bool isVarArg,
+                                       CallingConv::ID CallConv, bool isVarArg,
                                        const SmallVectorImpl<ISD::InputArg>
                                          &Ins,
                                        DebugLoc dl, SelectionDAG &DAG,
@@ -528,7 +528,7 @@ SystemZTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
 
 SDValue
 SystemZTargetLowering::LowerReturn(SDValue Chain,
-                                   unsigned CallConv, bool isVarArg,
+                                   CallingConv::ID CallConv, bool isVarArg,
                                    const SmallVectorImpl<ISD::OutputArg> &Outs,
                                    DebugLoc dl, SelectionDAG &DAG) {
 
@@ -778,7 +778,8 @@ const char *SystemZTargetLowering::getTargetNodeName(unsigned Opcode) const {
 
 MachineBasicBlock*
 SystemZTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                   MachineBasicBlock *BB) const {
+                                                   MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const SystemZInstrInfo &TII = *TM.getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
   assert((MI->getOpcode() == SystemZ::Select32  ||
@@ -809,6 +810,10 @@ SystemZTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   BuildMI(BB, dl, TII.getBrCond(CC)).addMBB(copy1MBB);
   F->insert(I, copy0MBB);
   F->insert(I, copy1MBB);
+  // Inform sdisel of the edge changes.
+  for (MachineBasicBlock::succ_iterator SI = BB->succ_begin(), 
+         SE = BB->succ_end(); SI != SE; ++SI)
+    EM->insert(std::make_pair(*SI, copy1MBB));
   // Update machine-CFG edges by transferring all successors of the current
   // block to the new block which will contain the Phi node for the select.
   copy1MBB->transferSuccessors(BB);

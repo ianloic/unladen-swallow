@@ -20,61 +20,84 @@
 #include "llvm/GlobalAlias.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Function.h"
+#include "llvm/Metadata.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ConstantFolder.h"
 
 namespace llvm {
 
+/// IRBuilderDefaultInserter - This provides the default implementation of the
+/// IRBuilder 'InsertHelper' method that is called whenever an instruction is
+/// created by IRBuilder and needs to be inserted.  By default, this inserts the
+/// instruction at the insertion point.
+template <bool preserveNames = true>
+class IRBuilderDefaultInserter {
+protected:
+  void InsertHelper(Instruction *I, const Twine &Name,
+                    BasicBlock *BB, BasicBlock::iterator InsertPt) const {
+    if (BB) BB->getInstList().insert(InsertPt, I);
+    if (preserveNames)
+      I->setName(Name);
+  }
+};
+  
+  
 /// IRBuilder - This provides a uniform API for creating instructions and
 /// inserting them into a basic block: either at the end of a BasicBlock, or
 /// at a specific iterator location in a block.
 ///
 /// Note that the builder does not expose the full generality of LLVM
-/// instructions.  For example, it cannot be used to create instructions with
-/// arbitrary names (specifically, names with nul characters in them) - It only
-/// supports nul-terminated C strings.  For fully generic names, use
-/// I->setName().  For access to extra instruction properties, use the mutators
+/// instructions.  For access to extra instruction properties, use the mutators
 /// (e.g. setVolatile) on the instructions after they have been created.
 /// The first template argument handles whether or not to preserve names in the
 /// final instruction output. This defaults to on.  The second template argument
 /// specifies a class to use for creating constants.  This defaults to creating
-/// minimally folded constants.
-template <bool preserveNames=true, typename T = ConstantFolder> class IRBuilder{
+/// minimally folded constants.  The fourth template argument allows clients to
+/// specify custom insertion hooks that are called on every newly created
+/// insertion.
+template<bool preserveNames = true, typename T = ConstantFolder,
+         typename Inserter = IRBuilderDefaultInserter<preserveNames> >
+class IRBuilder : public Inserter {
   BasicBlock *BB;
   BasicBlock::iterator InsertPt;
+  MDKindID MDKind;
+  MDNode *CurLocation;
   LLVMContext &Context;
   T Folder;
 public:
-  IRBuilder(LLVMContext &C, const T& F) :
-    Context(C), Folder(F) { ClearInsertionPoint(); }
+  IRBuilder(LLVMContext &C, const T &F, const Inserter &I = Inserter())
+    : Inserter(I), MDKind(0), CurLocation(0), Context(C), Folder(F) {
+    ClearInsertionPoint(); 
+  }
   
-  explicit IRBuilder(LLVMContext &C) : Context(C), Folder(C) {
+  explicit IRBuilder(LLVMContext &C) 
+    : MDKind(0), CurLocation(0), Context(C), Folder(C) {
     ClearInsertionPoint();
   }
   
-  explicit IRBuilder(BasicBlock *TheBB, const T& F)
-      : Context(TheBB->getContext()), Folder(F) {
+  explicit IRBuilder(BasicBlock *TheBB, const T &F)
+    : MDKind(0), CurLocation(0), Context(TheBB->getContext()), Folder(F) {
     SetInsertPoint(TheBB);
   }
   
   explicit IRBuilder(BasicBlock *TheBB)
-      : Context(TheBB->getContext()), Folder(Context) {
+    : MDKind(0), CurLocation(0), Context(TheBB->getContext()), Folder(Context) {
     SetInsertPoint(TheBB);
   }
   
   IRBuilder(BasicBlock *TheBB, BasicBlock::iterator IP, const T& F)
-      : Context(TheBB->getContext()), Folder(F) {
+    : MDKind(0), CurLocation(0), Context(TheBB->getContext()), Folder(F) {
     SetInsertPoint(TheBB, IP);
   }
   
   IRBuilder(BasicBlock *TheBB, BasicBlock::iterator IP)
-      : Context(TheBB->getContext()), Folder(Context) {
+    : MDKind(0), CurLocation(0), Context(TheBB->getContext()), Folder(Context) {
     SetInsertPoint(TheBB, IP);
   }
 
   /// getFolder - Get the constant folder being used.
-  const T& getFolder() { return Folder; }
+  const T &getFolder() { return Folder; }
 
   /// isNamePreserving - Return true if this builder is configured to actually
   /// add the requested names to IR created through it.
@@ -108,20 +131,25 @@ public:
     InsertPt = IP;
   }
 
+  /// SetCurrentLocation - This specifies the location information used
+  /// by debugging information.
+  void SetCurrentLocation(MDNode *L) {
+    if (MDKind == 0) {
+      Context.getMetadata().RegisterMDKind("dbg");
+      MDKind = Context.getMetadata().getMDKind("dbg");
+    }
+    CurLocation = L;
+  }
+
+  MDNode *getCurrentLocation() const { return CurLocation; }
+  
   /// Insert - Insert and return the specified instruction.
   template<typename InstTy>
   InstTy *Insert(InstTy *I, const Twine &Name = "") const {
-    InsertHelper(I, Name);
+    this->InsertHelper(I, Name, BB, InsertPt);
+    if (CurLocation)
+      Context.getMetadata().setMD(MDKind, CurLocation, I);
     return I;
-  }
-
-  /// InsertHelper - Insert the specified instruction at the specified insertion
-  /// point.  This is split out of Insert so that it isn't duplicated for every
-  /// template instantiation.
-  void InsertHelper(Instruction *I, const Twine &Name) const {
-    if (BB) BB->getInstList().insert(InsertPt, I);
-    if (preserveNames)
-      I->setName(Name);
   }
 
   //===--------------------------------------------------------------------===//
@@ -406,8 +434,7 @@ public:
   LoadInst *CreateLoad(Value *Ptr, const Twine &Name = "") {
     return Insert(new LoadInst(Ptr), Name);
   }
-  LoadInst *CreateLoad(Value *Ptr, bool isVolatile,
-                       const Twine &Name = "") {
+  LoadInst *CreateLoad(Value *Ptr, bool isVolatile, const Twine &Name = "") {
     return Insert(new LoadInst(Ptr, 0, isVolatile), Name);
   }
   StoreInst *CreateStore(Value *Val, Value *Ptr, bool isVolatile = false) {
@@ -861,8 +888,7 @@ public:
                            const Twine &Name = "") {
     if (Constant *AggC = dyn_cast<Constant>(Agg))
       if (Constant *ValC = dyn_cast<Constant>(Val))
-        return Folder.CreateInsertValue(AggC, ValC,
-                                            IdxBegin, IdxEnd - IdxBegin);
+        return Folder.CreateInsertValue(AggC, ValC, IdxBegin, IdxEnd-IdxBegin);
     return Insert(InsertValueInst::Create(Agg, Val, IdxBegin, IdxEnd), Name);
   }
 

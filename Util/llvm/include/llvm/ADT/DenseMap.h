@@ -17,10 +17,11 @@
 #include "llvm/Support/PointerLikeTypeTraits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include <iterator>
+#include <new>
+#include <utility>
 #include <cassert>
 #include <cstring>
-#include <utility>
-#include <new>
 
 namespace llvm {
 
@@ -93,6 +94,8 @@ public:
   void resize(size_t Size) { grow(Size); }
 
   void clear() {
+    if (NumEntries == 0 && NumTombstones == 0) return;
+    
     // If the capacity of the array is huge, and the # elements used is small,
     // shrink the array.
     if (NumEntries * 4 < NumBuckets && NumBuckets > 64) {
@@ -421,7 +424,9 @@ private:
 };
 
 template<typename KeyT, typename ValueT, typename KeyInfoT, typename ValueInfoT>
-class DenseMapIterator {
+class DenseMapIterator : 
+      public std::iterator<std::forward_iterator_tag, std::pair<KeyT, ValueT>,
+                          ptrdiff_t> {
   typedef std::pair<KeyT, ValueT> BucketT;
 protected:
   const BucketT *Ptr, *End;

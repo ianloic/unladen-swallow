@@ -1,4 +1,5 @@
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=basic --verify -fblocks %s &&
+// NOTE: Use '-fobjc-gc' to test the analysis being run twice, and multiple reports are not issued.
+// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -fobjc-gc -analyzer-constraints=basic --verify -fblocks %s &&
 // RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=range --verify -fblocks %s &&
 // RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=basic --verify -fblocks %s &&
 // RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=range --verify -fblocks %s
@@ -552,5 +553,93 @@ void pr4781(unsigned long *raw1) {
     *cook = (*raw0 & 0x00fc0000L) << 6;
     *cook |= (*raw0 & 0x00000fc0L) << 10;
   }
+}
+
+// <rdar://problem/7185647> - 'self' should be treated as being non-null
+// upon entry to an objective-c method.
+@interface RDar7185647
+- (id)foo;
+@end
+@implementation RDar7185647
+- (id) foo {
+  if (self)
+    return self;
+  *((int *) 0x0) = 0xDEADBEEF; // no-warning
+  return self;
+}
+@end
+
+// Test reasoning of __builtin_offsetof;
+struct test_offsetof_A {
+  int x;
+  int y;
+};
+struct test_offsetof_B {
+  int w;
+  int z;
+};
+void test_offsetof_1() {
+  if (__builtin_offsetof(struct test_offsetof_A, x) ==
+      __builtin_offsetof(struct test_offsetof_B, w))
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // no-warning
+}
+void test_offsetof_2() {
+  if (__builtin_offsetof(struct test_offsetof_A, y) ==
+      __builtin_offsetof(struct test_offsetof_B, z))
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // no-warning
+}
+void test_offsetof_3() {
+  if (__builtin_offsetof(struct test_offsetof_A, y) -
+      __builtin_offsetof(struct test_offsetof_A, x)
+      ==
+      __builtin_offsetof(struct test_offsetof_B, z) -
+      __builtin_offsetof(struct test_offsetof_B, w))
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // no-warning
+}
+void test_offsetof_4() {
+  if (__builtin_offsetof(struct test_offsetof_A, y) ==
+      __builtin_offsetof(struct test_offsetof_B, w))
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // expected-warning{{Dereference of null pointer}}
+}
+
+// <rdar://problem/6829164> "nil receiver" false positive: make tracking 
+// of the MemRegion for 'self' path-sensitive
+@interface RDar6829164 : NSObject {
+  double x; int y;
+}
+- (id) init;
+@end
+
+id rdar_6829164_1();
+double rdar_6829164_2();
+
+@implementation RDar6829164
+- (id) init {
+  if((self = [super init]) != 0) {
+    id z = rdar_6829164_1();
+    y = (z != 0);
+    if (y)
+      x = rdar_6829164_2();
+  }
+  return self;
+}
+@end
+
+// <rdar://problem/7242015> - Invalidate values passed-by-reference
+// to functions when the pointer to the value is passed as an integer.
+void test_7242015_aux(unsigned long);
+int rdar_7242015() {
+  int x;
+  test_7242015_aux((unsigned long) &x); // no-warning
+  return x; // Previously we return and uninitialized value when
+            // using RegionStore.
 }
 

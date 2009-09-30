@@ -17,6 +17,7 @@ protected:
         this->a_tuple_ = PyTuple_New(0);
         this->a_dict_ = PyDict_New();
         this->a_string_ = PyString_FromString("Hello");
+        this->second_string_ = PyString_FromString("World");
     }
     ~PyRuntimeFeedbackTest()
     {
@@ -26,6 +27,7 @@ protected:
         Py_DECREF(this->a_tuple_);
         Py_DECREF(this->a_dict_);
         Py_DECREF(this->a_string_);
+        Py_DECREF(this->second_string_);
         Py_Finalize();
     }
 
@@ -35,6 +37,7 @@ protected:
     PyObject *a_tuple_;
     PyObject *a_dict_;
     PyObject *a_string_;
+    PyObject *second_string_;
 };
 
 class PyLimitedFeedbackTest : public PyRuntimeFeedbackTest {
@@ -141,6 +144,111 @@ TEST_F(PyLimitedFeedbackTest, DtorLowersRefcount)
     delete feedback;
     EXPECT_EQ(int_start_refcnt, Py_REFCNT(&PyInt_Type));
     EXPECT_EQ(list_start_refcnt, Py_REFCNT(&PyList_Type));
+}
+
+TEST_F(PyLimitedFeedbackTest, SingleFunc)
+{
+    PyLimitedFeedback *feedback = new PyLimitedFeedback();
+
+    PyObject *meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    long start_refcount = Py_REFCNT(meth1);
+    feedback->AddFuncSeen(meth1);
+    // This should not increase the reference count; we don't want to keep the
+    // bound invocant alive longer than necessary.
+    EXPECT_EQ(start_refcount, Py_REFCNT(meth1));
+
+    SmallVector<FunctionRecord*, 3> seen;
+    feedback->GetSeenFuncsInto(seen);
+    ASSERT_EQ(1U, seen.size());
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth1), (void *)seen[0]->func);
+    EXPECT_FALSE(feedback->FuncsOverflowed());
+
+    delete feedback;
+    Py_DECREF(meth1);
+}
+
+TEST_F(PyLimitedFeedbackTest, ThreeFuncs)
+{
+    PyLimitedFeedback *feedback = new PyLimitedFeedback();
+
+    PyObject *meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *meth2 = PyObject_GetAttrString(this->a_string_, "split");
+    PyObject *meth3 = PyObject_GetAttrString(this->a_string_, "lower");
+
+    feedback->AddFuncSeen(meth1);
+    feedback->AddFuncSeen(meth2);
+    feedback->AddFuncSeen(meth3);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    feedback->GetSeenFuncsInto(seen);
+    ASSERT_EQ(3U, seen.size());
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth1), (void *)seen[0]->func);
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth2), (void *)seen[1]->func);
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth3), (void *)seen[2]->func);
+    EXPECT_FALSE(feedback->FuncsOverflowed());
+
+    delete feedback;
+    Py_DECREF(meth1);
+    Py_DECREF(meth2);
+    Py_DECREF(meth3);
+}
+
+TEST_F(PyLimitedFeedbackTest, DuplicateFuncs)
+{
+    PyObject *meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *meth2 = PyObject_GetAttrString(this->a_string_, "split");
+
+    this->feedback_.AddFuncSeen(meth1);
+    this->feedback_.AddFuncSeen(meth2);
+    this->feedback_.AddFuncSeen(meth1);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth1), (void *)seen[0]->func);
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth2), (void *)seen[1]->func);
+    EXPECT_FALSE(this->feedback_.FuncsOverflowed());
+}
+
+TEST_F(PyLimitedFeedbackTest, SameMethodSameObject)
+{
+    PyObject *join_meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *join_meth2 = PyObject_GetAttrString(this->a_string_, "join");
+    assert(join_meth1 && join_meth2);
+    // The whole point is the the method objects are different, but really
+    // represent the same method.
+    assert(join_meth1 != join_meth2);
+
+    this->feedback_.AddFuncSeen(join_meth1);
+    this->feedback_.AddFuncSeen(join_meth2);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(1U, seen.size());
+
+    Py_DECREF(join_meth1);
+    Py_DECREF(join_meth2);
+}
+
+TEST_F(PyLimitedFeedbackTest, SameMethodSameTypeDifferentObjects)
+{
+    PyObject *join_meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *join_meth2 = PyObject_GetAttrString(this->second_string_, "join");
+    assert(join_meth1 && join_meth2);
+    // The whole point is the the method objects are different, but really
+    // represent the same method, just with a different invocant.
+    assert(join_meth1 != join_meth2);
+
+    // join_meth2 should be recognized as a duplicate of join_meth1.
+    this->feedback_.AddFuncSeen(join_meth1);
+    this->feedback_.AddFuncSeen(join_meth2);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(1U, seen.size());
+
+    Py_DECREF(join_meth1);
+    Py_DECREF(join_meth2);
 }
 
 TEST_F(PyLimitedFeedbackTest, Counter)
@@ -324,4 +432,62 @@ TEST_F(PyFullFeedbackTest, Assignment)
     second = this->feedback_;
     EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(&PyInt_Type));
     EXPECT_EQ(str_start_refcnt, Py_REFCNT(&PyString_Type));
+}
+
+TEST_F(PyFullFeedbackTest, DuplicateFuncs)
+{
+    PyObject *meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *meth2 = PyObject_GetAttrString(this->a_string_, "split");
+
+    this->feedback_.AddFuncSeen(meth1);
+    this->feedback_.AddFuncSeen(meth2);
+    this->feedback_.AddFuncSeen(meth1);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth1), (void *)seen[0]->func);
+    EXPECT_EQ((void *)PyCFunction_GET_FUNCTION(meth2), (void *)seen[1]->func);
+    EXPECT_FALSE(this->feedback_.FuncsOverflowed());
+}
+
+TEST_F(PyFullFeedbackTest, SameMethodSameObject)
+{
+    PyObject *join_meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *join_meth2 = PyObject_GetAttrString(this->a_string_, "join");
+    assert(join_meth1 && join_meth2);
+    // The whole point is the the method objects are different, but really
+    // represent the same method.
+    assert(join_meth1 != join_meth2);
+
+    this->feedback_.AddFuncSeen(join_meth1);
+    this->feedback_.AddFuncSeen(join_meth2);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(1U, seen.size());
+
+    Py_DECREF(join_meth1);
+    Py_DECREF(join_meth2);
+}
+
+TEST_F(PyFullFeedbackTest, SameMethodSameTypeDifferentObjects)
+{
+    PyObject *join_meth1 = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *join_meth2 = PyObject_GetAttrString(this->second_string_, "join");
+    assert(join_meth1 && join_meth2);
+    // The whole point is the the method objects are different, but really
+    // represent the same method, just with a different invocant.
+    assert(join_meth1 != join_meth2);
+
+    // join_meth2 should be recognized as a duplicate of join_meth1.
+    this->feedback_.AddFuncSeen(join_meth1);
+    this->feedback_.AddFuncSeen(join_meth2);
+
+    SmallVector<FunctionRecord*, 3> seen;
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(1U, seen.size());
+
+    Py_DECREF(join_meth1);
+    Py_DECREF(join_meth2);
 }

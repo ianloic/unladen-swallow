@@ -595,6 +595,36 @@ directive in a file.</p>
 </div>
 
 <!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"><a 
+name="FileCheck-CHECK-NOT">The "CHECK-NOT:" directive</a></div>
+
+<div class="doc_text">
+
+<p>The CHECK-NOT: directive is used to verify that a string doesn't occur
+between two matches (or the first match and the beginning of the file).  For
+example, to verify that a load is removed by a transformation, a test like this
+can be used:</p>
+
+<div class="doc_code">
+<pre>
+define i8 @coerce_offset0(i32 %V, i32* %P) {
+  store i32 %V, i32* %P
+   
+  %P2 = bitcast i32* %P to i8*
+  %P3 = getelementptr i8* %P2, i32 2
+
+  %A = load i8* %P3
+  ret i8 %A
+; <b>CHECK:</b> @coerce_offset0
+; <b>CHECK-NOT:</b> load
+; <b>CHECK:</b> ret i8
+}
+</pre>
+</div>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
 <div class="doc_subsection"><a name="dgvars">Variables and
 substitutions</a></div>
 <!-- _______________________________________________________________________ -->
@@ -649,14 +679,6 @@ substitutions</a></div>
     <dt><b>target_triplet</b> (%target_triplet)</dt>
     <dd>The target triplet that corresponds to the current host machine (the one
     running the test cases). This should probably be called "host".<dd>
-
-    <dt><b>prcontext</b> (%prcontext)</dt>
-    <dd>Path to the prcontext tcl script that prints some context around a 
-    line that matches a pattern. This isn't strictly necessary as the test suite
-    is run with its PATH altered to include the test/Scripts directory where
-    the prcontext script is located. Note that this script is similar to 
-    <tt>grep -C</tt> but you should use the <tt>prcontext</tt> script because
-    not all platforms support <tt>grep -C</tt>.</dd>
 
     <dt><b>llvmgcc</b> (%llvmgcc)</dt>
     <dd>The full path to the <tt>llvm-gcc</tt> executable as specified in the
@@ -1122,7 +1144,7 @@ know. Thanks!</p>
 
   John T. Criswell, Reid Spencer, and Tanya Lattner<br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-08-15 14:33:10 -0400 (Sat, 15 Aug 2009) $
+  Last modified: $Date: 2009-09-20 15:45:18 -0700 (Sun, 20 Sep 2009) $
 </address>
 </body>
 </html>

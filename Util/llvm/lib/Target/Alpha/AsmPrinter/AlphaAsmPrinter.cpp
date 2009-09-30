@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegistry.h"
@@ -48,6 +49,8 @@ namespace {
       return "Alpha Assembly Printer";
     }
     void printInstruction(const MachineInstr *MI);
+    static const char *getRegisterName(unsigned RegNo);
+
     void printOp(const MachineOperand &MO, bool IsCallOp = false);
     void printOperand(const MachineInstr *MI, int opNum);
     void printBaseOffsetPair(const MachineInstr *MI, int i, bool brackets=true);
@@ -72,7 +75,7 @@ void AlphaAsmPrinter::printOperand(const MachineInstr *MI, int opNum)
   if (MO.getType() == MachineOperand::MO_Register) {
     assert(TargetRegisterInfo::isPhysicalRegister(MO.getReg()) &&
            "Not physreg??");
-    O << TM.getRegisterInfo()->get(MO.getReg()).AsmName;
+    O << getRegisterName(MO.getReg());
   } else if (MO.isImm()) {
     O << MO.getImm();
     assert(MO.getImm() < (1 << 30));
@@ -83,11 +86,9 @@ void AlphaAsmPrinter::printOperand(const MachineInstr *MI, int opNum)
 
 
 void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
-  const TargetRegisterInfo &RI = *TM.getRegisterInfo();
-
   switch (MO.getType()) {
   case MachineOperand::MO_Register:
-    O << RI.get(MO.getReg()).AsmName;
+    O << getRegisterName(MO.getReg());
     return;
 
   case MachineOperand::MO_Immediate:
@@ -95,7 +96,7 @@ void AlphaAsmPrinter::printOp(const MachineOperand &MO, bool IsCallOp) {
     return;
 
   case MachineOperand::MO_MachineBasicBlock:
-    printBasicBlockLabel(MO.getMBB());
+    GetMBBSymbol(MO.getMBB()->getNumber())->print(O, MAI);
     return;
 
   case MachineOperand::MO_ConstantPoolIndex:
@@ -169,14 +170,20 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   for (MachineFunction::const_iterator I = MF.begin(), E = MF.end();
        I != E; ++I) {
     if (I != MF.begin()) {
-      printBasicBlockLabel(I, true, true);
+      EmitBasicBlockStart(I);
       O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
       // Print the assembly for the instruction.
       ++EmittedInsts;
+      processDebugLoc(II->getDebugLoc());
+      
       printInstruction(II);
+      
+      if (VerboseAsm && !II->getDebugLoc().isUnknown())
+        EmitComments(*II);
+      O << '\n';
     }
   }
 

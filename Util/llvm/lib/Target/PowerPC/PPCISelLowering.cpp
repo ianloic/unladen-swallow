@@ -1484,7 +1484,7 @@ static unsigned CalculateStackSlotSize(EVT ArgVT, ISD::ArgFlagsTy Flags,
 
 SDValue
 PPCTargetLowering::LowerFormalArguments(SDValue Chain,
-                                        unsigned CallConv, bool isVarArg,
+                                        CallingConv::ID CallConv, bool isVarArg,
                                         const SmallVectorImpl<ISD::InputArg>
                                           &Ins,
                                         DebugLoc dl, SelectionDAG &DAG,
@@ -1501,7 +1501,7 @@ PPCTargetLowering::LowerFormalArguments(SDValue Chain,
 SDValue
 PPCTargetLowering::LowerFormalArguments_SVR4(
                                       SDValue Chain,
-                                      unsigned CallConv, bool isVarArg,
+                                      CallingConv::ID CallConv, bool isVarArg,
                                       const SmallVectorImpl<ISD::InputArg>
                                         &Ins,
                                       DebugLoc dl, SelectionDAG &DAG,
@@ -1728,7 +1728,7 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
 SDValue
 PPCTargetLowering::LowerFormalArguments_Darwin(
                                       SDValue Chain,
-                                      unsigned CallConv, bool isVarArg,
+                                      CallingConv::ID CallConv, bool isVarArg,
                                       const SmallVectorImpl<ISD::InputArg>
                                         &Ins,
                                       DebugLoc dl, SelectionDAG &DAG,
@@ -2164,7 +2164,7 @@ static int CalculateTailCallSPDiff(SelectionDAG& DAG, bool IsTailCall,
 /// optimization should implement this function.
 bool
 PPCTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
-                                                     unsigned CalleeCC,
+                                                     CallingConv::ID CalleeCC,
                                                      bool isVarArg,
                                       const SmallVectorImpl<ISD::InputArg> &Ins,
                                                      SelectionDAG& DAG) const {
@@ -2173,7 +2173,7 @@ PPCTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     return false;
 
   MachineFunction &MF = DAG.getMachineFunction();
-  unsigned CallerCC = MF.getFunction()->getCallingConv();
+  CallingConv::ID CallerCC = MF.getFunction()->getCallingConv();
   if (CalleeCC == CallingConv::Fast && CallerCC == CalleeCC) {
     // Functions containing by val parameters are not supported.
     for (unsigned i = 0; i != Ins.size(); i++) {
@@ -2453,7 +2453,7 @@ unsigned PrepareCall(SelectionDAG &DAG, SDValue &Callee, SDValue &InFlag,
 
 SDValue
 PPCTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
-                                   unsigned CallConv, bool isVarArg,
+                                   CallingConv::ID CallConv, bool isVarArg,
                                    const SmallVectorImpl<ISD::InputArg> &Ins,
                                    DebugLoc dl, SelectionDAG &DAG,
                                    SmallVectorImpl<SDValue> &InVals) {
@@ -2478,8 +2478,8 @@ PPCTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
 }
 
 SDValue
-PPCTargetLowering::FinishCall(unsigned CallConv, DebugLoc dl, bool isTailCall,
-                              bool isVarArg,
+PPCTargetLowering::FinishCall(CallingConv::ID CallConv, DebugLoc dl,
+                              bool isTailCall, bool isVarArg,
                               SelectionDAG &DAG,
                               SmallVector<std::pair<unsigned, SDValue>, 8>
                                 &RegsToPass,
@@ -2554,7 +2554,7 @@ PPCTargetLowering::FinishCall(unsigned CallConv, DebugLoc dl, bool isTailCall,
 
 SDValue
 PPCTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                             unsigned CallConv, bool isVarArg,
+                             CallingConv::ID CallConv, bool isVarArg,
                              bool isTailCall,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -2573,7 +2573,7 @@ PPCTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
 SDValue
 PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
-                                  unsigned CallConv, bool isVarArg,
+                                  CallingConv::ID CallConv, bool isVarArg,
                                   bool isTailCall,
                                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                                   const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -2782,7 +2782,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
 
 SDValue
 PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
-                                    unsigned CallConv, bool isVarArg,
+                                    CallingConv::ID CallConv, bool isVarArg,
                                     bool isTailCall,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -2876,7 +2876,6 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
 
   SmallVector<SDValue, 8> MemOpChains;
   for (unsigned i = 0; i != NumOps; ++i) {
-    bool inMem = false;
     SDValue Arg = Outs[i].Val;
     ISD::ArgFlagsTy Flags = Outs[i].Flags;
 
@@ -2963,7 +2962,6 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         LowerMemOpCallTo(DAG, MF, Chain, Arg, PtrOff, SPDiff, ArgOffset,
                          isPPC64, isTailCall, false, MemOpChains,
                          TailCallArguments, dl);
-        inMem = true;
       }
       ArgOffset += PtrByteSize;
       break;
@@ -3003,7 +3001,6 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         LowerMemOpCallTo(DAG, MF, Chain, Arg, PtrOff, SPDiff, ArgOffset,
                          isPPC64, isTailCall, false, MemOpChains,
                          TailCallArguments, dl);
-        inMem = true;
       }
       if (isPPC64)
         ArgOffset += 8;
@@ -3116,7 +3113,7 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
 
 SDValue
 PPCTargetLowering::LowerReturn(SDValue Chain,
-                               unsigned CallConv, bool isVarArg,
+                               CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                DebugLoc dl, SelectionDAG &DAG) {
 
@@ -4491,7 +4488,8 @@ PPCTargetLowering::EmitPartwordAtomicBinary(MachineInstr *MI,
 
 MachineBasicBlock *
 PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                               MachineBasicBlock *BB) const {
+                                               MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
 
   // To "insert" these instructions we actually have to insert their
@@ -4527,9 +4525,18 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
       .addImm(SelectPred).addReg(MI->getOperand(1).getReg()).addMBB(sinkMBB);
     F->insert(It, copy0MBB);
     F->insert(It, sinkMBB);
-    // Update machine-CFG edges by transferring all successors of the current
+    // Update machine-CFG edges by first adding all successors of the current
     // block to the new block which will contain the Phi node for the select.
-    sinkMBB->transferSuccessors(BB);
+    // Also inform sdisel of the edge changes.
+    for (MachineBasicBlock::succ_iterator I = BB->succ_begin(), 
+           E = BB->succ_end(); I != E; ++I) {
+      EM->insert(std::make_pair(*I, sinkMBB));
+      sinkMBB->addSuccessor(*I);
+    }
+    // Next, remove all successors of the current block, and add the true
+    // and fallthrough blocks as its successors.
+    while (!BB->succ_empty())
+      BB->removeSuccessor(BB->succ_begin());
     // Next, add the true and fallthrough blocks as its successors.
     BB->addSuccessor(copy0MBB);
     BB->addSuccessor(sinkMBB);

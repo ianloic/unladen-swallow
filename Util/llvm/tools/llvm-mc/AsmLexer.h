@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCAsmLexer.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/DataTypes.h"
 #include <string>
 #include <cassert>
@@ -24,10 +25,12 @@ namespace llvm {
 class MemoryBuffer;
 class SourceMgr;
 class SMLoc;
+class MCAsmInfo;
 
 /// AsmLexer - Lexer class for assembly files.
 class AsmLexer : public MCAsmLexer {
   SourceMgr &SrcMgr;
+  const MCAsmInfo MAI;
   
   const char *CurPtr;
   const MemoryBuffer *CurBuf;
@@ -46,13 +49,14 @@ protected:
   virtual AsmToken LexToken();
 
 public:
-  AsmLexer(SourceMgr &SrcMgr);
+  AsmLexer(SourceMgr &SrcMgr, const MCAsmInfo &MAI);
   ~AsmLexer();
   
   SMLoc getLoc() const;
   
   StringRef LexUntilEndOfStatement();
-  
+
+  bool isAtStartOfComment(char Char);
 
   /// EnterIncludeFile - Enter the specified file. This returns true on failure.
   bool EnterIncludeFile(const std::string &Filename);
@@ -64,7 +68,6 @@ private:
   AsmToken ReturnError(const char *Loc, const std::string &Msg);
 
   AsmToken LexIdentifier();
-  AsmToken LexPercent();
   AsmToken LexSlash();
   AsmToken LexLineComment();
   AsmToken LexDigit();

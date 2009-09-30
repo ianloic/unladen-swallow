@@ -35,8 +35,8 @@ namespace {
     pch::DeclCode Code;
     unsigned AbbrevToUse;
 
-    PCHDeclWriter(PCHWriter &Writer, ASTContext &Context, 
-                  PCHWriter::RecordData &Record) 
+    PCHDeclWriter(PCHWriter &Writer, ASTContext &Context,
+                  PCHWriter::RecordData &Record)
       : Writer(Writer), Context(Context), Record(Record) {
     }
 
@@ -59,7 +59,7 @@ namespace {
     void VisitOriginalParmVarDecl(OriginalParmVarDecl *D);
     void VisitFileScopeAsmDecl(FileScopeAsmDecl *D);
     void VisitBlockDecl(BlockDecl *D);
-    void VisitDeclContext(DeclContext *DC, uint64_t LexicalOffset, 
+    void VisitDeclContext(DeclContext *DC, uint64_t LexicalOffset,
                           uint64_t VisibleOffset);
     void VisitObjCMethodDecl(ObjCMethodDecl *D);
     void VisitObjCContainerDecl(ObjCContainerDecl *D);
@@ -161,9 +161,9 @@ public:
 
 #define ABSTRACT_TYPELOC(CLASS)
 #define TYPELOC(CLASS, PARENT, TYPE) \
-    void Visit##CLASS(CLASS TyLoc); 
+    void Visit##CLASS(CLASS TyLoc);
 #include "clang/AST/TypeLocNodes.def"
-  
+
   void VisitTypeLoc(TypeLoc TyLoc) {
     assert(0 && "A type loc wrapper was not handled!");
   }
@@ -210,7 +210,7 @@ void PCHDeclWriter::VisitDeclaratorDecl(DeclaratorDecl *D) {
     Writer.AddTypeRef(QualType(), Record);
     return;
   }
-  
+
   Writer.AddTypeRef(DInfo->getTypeLoc().getSourceType(), Record);
   TypeLocWriter TLW(Writer, Record);
   for (TypeLoc TL = DInfo->getTypeLoc(); !TL.isNull(); TL = TL.getNextTypeLoc())
@@ -225,12 +225,14 @@ void PCHDeclWriter::VisitFunctionDecl(FunctionDecl *D) {
   Writer.AddDeclRef(D->getPreviousDeclaration(), Record);
   Record.push_back(D->getStorageClass()); // FIXME: stable encoding
   Record.push_back(D->isInline());
-  Record.push_back(D->isC99InlineDefinition());
   Record.push_back(D->isVirtualAsWritten());
   Record.push_back(D->isPure());
   Record.push_back(D->hasInheritedPrototype());
   Record.push_back(D->hasWrittenPrototype());
   Record.push_back(D->isDeleted());
+  Record.push_back(D->isTrivial());
+  Record.push_back(D->isCopyAssignment());
+  Record.push_back(D->hasImplicitReturnZero());
   Writer.AddSourceLocation(D->getLocEnd(), Record);
   // FIXME: C++ TemplateOrInstantiation
   Record.push_back(D->param_size());
@@ -243,7 +245,7 @@ void PCHDeclWriter::VisitFunctionDecl(FunctionDecl *D) {
 void PCHDeclWriter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
   VisitNamedDecl(D);
   // FIXME: convert to LazyStmtPtr?
-  // Unlike C/C++, method bodies will never be in header files. 
+  // Unlike C/C++, method bodies will never be in header files.
   Record.push_back(D->getBody() != 0);
   if (D->getBody() != 0) {
     Writer.AddStmt(D->getBody());
@@ -254,13 +256,13 @@ void PCHDeclWriter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
   Record.push_back(D->isVariadic());
   Record.push_back(D->isSynthesized());
   // FIXME: stable encoding for @required/@optional
-  Record.push_back(D->getImplementationControl()); 
+  Record.push_back(D->getImplementationControl());
   // FIXME: stable encoding for in/out/inout/bycopy/byref/oneway
-  Record.push_back(D->getObjCDeclQualifier()); 
+  Record.push_back(D->getObjCDeclQualifier());
   Writer.AddTypeRef(D->getResultType(), Record);
   Writer.AddSourceLocation(D->getLocEnd(), Record);
   Record.push_back(D->param_size());
-  for (ObjCMethodDecl::param_iterator P = D->param_begin(), 
+  for (ObjCMethodDecl::param_iterator P = D->param_begin(),
                                    PEnd = D->param_end(); P != PEnd; ++P)
     Writer.AddDeclRef(*P, Record);
   Code = pch::DECL_OBJC_METHOD;
@@ -277,12 +279,12 @@ void PCHDeclWriter::VisitObjCInterfaceDecl(ObjCInterfaceDecl *D) {
   Writer.AddTypeRef(QualType(D->getTypeForDecl(), 0), Record);
   Writer.AddDeclRef(D->getSuperClass(), Record);
   Record.push_back(D->protocol_size());
-  for (ObjCInterfaceDecl::protocol_iterator P = D->protocol_begin(), 
+  for (ObjCInterfaceDecl::protocol_iterator P = D->protocol_begin(),
          PEnd = D->protocol_end();
        P != PEnd; ++P)
     Writer.AddDeclRef(*P, Record);
   Record.push_back(D->ivar_size());
-  for (ObjCInterfaceDecl::ivar_iterator I = D->ivar_begin(), 
+  for (ObjCInterfaceDecl::ivar_iterator I = D->ivar_begin(),
                                      IEnd = D->ivar_end(); I != IEnd; ++I)
     Writer.AddDeclRef(*I, Record);
   Writer.AddDeclRef(D->getCategoryList(), Record);
@@ -297,7 +299,7 @@ void PCHDeclWriter::VisitObjCInterfaceDecl(ObjCInterfaceDecl *D) {
 void PCHDeclWriter::VisitObjCIvarDecl(ObjCIvarDecl *D) {
   VisitFieldDecl(D);
   // FIXME: stable encoding for @public/@private/@protected/@package
-  Record.push_back(D->getAccessControl()); 
+  Record.push_back(D->getAccessControl());
   Code = pch::DECL_OBJC_IVAR;
 }
 
@@ -306,7 +308,7 @@ void PCHDeclWriter::VisitObjCProtocolDecl(ObjCProtocolDecl *D) {
   Record.push_back(D->isForwardDecl());
   Writer.AddSourceLocation(D->getLocEnd(), Record);
   Record.push_back(D->protocol_size());
-  for (ObjCProtocolDecl::protocol_iterator 
+  for (ObjCProtocolDecl::protocol_iterator
        I = D->protocol_begin(), IEnd = D->protocol_end(); I != IEnd; ++I)
     Writer.AddDeclRef(*I, Record);
   Code = pch::DECL_OBJC_PROTOCOL;
@@ -328,7 +330,7 @@ void PCHDeclWriter::VisitObjCClassDecl(ObjCClassDecl *D) {
 void PCHDeclWriter::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *D) {
   VisitDecl(D);
   Record.push_back(D->protocol_size());
-  for (ObjCProtocolDecl::protocol_iterator 
+  for (ObjCProtocolDecl::protocol_iterator
        I = D->protocol_begin(), IEnd = D->protocol_end(); I != IEnd; ++I)
     Writer.AddDeclRef(*I, Record);
   Code = pch::DECL_OBJC_FORWARD_PROTOCOL;
@@ -338,7 +340,7 @@ void PCHDeclWriter::VisitObjCCategoryDecl(ObjCCategoryDecl *D) {
   VisitObjCContainerDecl(D);
   Writer.AddDeclRef(D->getClassInterface(), Record);
   Record.push_back(D->protocol_size());
-  for (ObjCProtocolDecl::protocol_iterator 
+  for (ObjCProtocolDecl::protocol_iterator
        I = D->protocol_begin(), IEnd = D->protocol_end(); I != IEnd; ++I)
     Writer.AddDeclRef(*I, Record);
   Writer.AddDeclRef(D->getNextClassCategory(), Record);
@@ -424,8 +426,8 @@ void PCHDeclWriter::VisitParmVarDecl(ParmVarDecl *D) {
   VisitVarDecl(D);
   Record.push_back(D->getObjCDeclQualifier()); // FIXME: stable encoding
   Code = pch::DECL_PARM_VAR;
-  
-  
+
+
   // If the assumptions about the DECL_PARM_VAR abbrev are true, use it.  Here
   // we dynamically check for the properties that we optimize for, but don't
   // know are true of all PARM_VAR_DECLs.
@@ -483,7 +485,7 @@ void PCHDeclWriter::VisitBlockDecl(BlockDecl *D) {
 /// that there are no declarations visible from this context. Note
 /// that this value will not be emitted for non-primary declaration
 /// contexts.
-void PCHDeclWriter::VisitDeclContext(DeclContext *DC, uint64_t LexicalOffset, 
+void PCHDeclWriter::VisitDeclContext(DeclContext *DC, uint64_t LexicalOffset,
                                      uint64_t VisibleOffset) {
   Record.push_back(LexicalOffset);
   Record.push_back(VisibleOffset);
@@ -509,7 +511,7 @@ void PCHWriter::WriteDeclsBlockAbbrevs() {
   Abv->Add(BitCodeAbbrevOp(0));                       // isImplicit
   Abv->Add(BitCodeAbbrevOp(0));                       // isUsed
   Abv->Add(BitCodeAbbrevOp(AS_none));                 // C++ AccessSpecifier
-  
+
   // NamedDecl
   Abv->Add(BitCodeAbbrevOp(0));                       // NameKind = Identifier
   Abv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // Name
@@ -526,8 +528,71 @@ void PCHWriter::WriteDeclsBlockAbbrevs() {
   Abv->Add(BitCodeAbbrevOp(0));                       // HasInit
   // ParmVarDecl
   Abv->Add(BitCodeAbbrevOp(0));                       // ObjCDeclQualifier
-  
+
   ParmVarDeclAbbrev = Stream.EmitAbbrev(Abv);
+}
+
+/// isRequiredDecl - Check if this is a "required" Decl, which must be seen by
+/// consumers of the AST.
+///
+/// Such decls will always be deserialized from the PCH file, so we would like
+/// this to be as restrictive as possible. Currently the predicate is driven by
+/// code generation requirements, if other clients have a different notion of
+/// what is "required" then we may have to consider an alternate scheme where
+/// clients can iterate over the top-level decls and get information on them,
+/// without necessary deserializing them. We could explicitly require such
+/// clients to use a separate API call to "realize" the decl. This should be
+/// relatively painless since they would presumably only do it for top-level
+/// decls.
+//
+// FIXME: This predicate is essentially IRgen's predicate to determine whether a
+// declaration can be deferred. Merge them somehow.
+static bool isRequiredDecl(const Decl *D, ASTContext &Context) {
+  // File scoped assembly must be seen.
+  if (isa<FileScopeAsmDecl>(D))
+    return true;
+
+  // Otherwise if this isn't a function or a file scoped variable it doesn't
+  // need to be seen.
+  if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
+    if (!VD->isFileVarDecl())
+      return false;
+  } else if (!isa<FunctionDecl>(D))
+    return false;
+
+  // Aliases and used decls must be seen.
+  if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>())
+    return true;
+
+  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
+    // Forward declarations don't need to be seen.
+    if (!FD->isThisDeclarationADefinition())
+      return false;
+
+    // Constructors and destructors must be seen.
+    if (FD->hasAttr<ConstructorAttr>() || FD->hasAttr<DestructorAttr>())
+      return true;
+
+    // Otherwise, this is required unless it is static.
+    //
+    // FIXME: Inlines.
+    return FD->getStorageClass() != FunctionDecl::Static;
+  } else {
+    const VarDecl *VD = cast<VarDecl>(D);
+
+    // In C++, this doesn't need to be seen if it is marked "extern".
+    if (Context.getLangOptions().CPlusPlus && !VD->getInit() &&
+        (VD->getStorageClass() == VarDecl::Extern ||
+         VD->isExternC()))
+      return false;
+
+    // In C, this doesn't need to be seen unless it is a definition.
+    if (!Context.getLangOptions().CPlusPlus && !VD->getInit())
+      return false;
+
+    // Otherwise, this is required unless it is static.
+    return VD->getStorageClass() != VarDecl::Static;
+  }
 }
 
 /// \brief Write a block containing all of the declarations.
@@ -537,7 +602,7 @@ void PCHWriter::WriteDeclsBlock(ASTContext &Context) {
 
   // Output the abbreviations that we will use in this block.
   WriteDeclsBlockAbbrevs();
-  
+
   // Emit all of the declarations.
   RecordData Record;
   PCHDeclWriter W(*this, Context, Record);
@@ -588,17 +653,19 @@ void PCHWriter::WriteDeclsBlock(ASTContext &Context) {
       exit(-1);
     }
     Stream.EmitRecord(W.Code, Record, W.AbbrevToUse);
-    
+
     // If the declaration had any attributes, write them now.
     if (D->hasAttrs())
       WriteAttributeRecord(D->getAttrs());
 
     // Flush any expressions that were written as part of this declaration.
     FlushStmts();
-    
-    // Note external declarations so that we can add them to a record
-    // in the PCH file later.
-    if (isa<FileScopeAsmDecl>(D))
+
+    // Note "external" declarations so that we can add them to a record in the
+    // PCH file later.
+    //
+    // FIXME: This should be renamed, the predicate is much more complicated.
+    if (isRequiredDecl(D, Context))
       ExternalDefinitions.push_back(ID);
   }
 

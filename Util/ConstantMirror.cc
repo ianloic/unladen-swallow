@@ -2,7 +2,9 @@
 
 #include "Util/PyTypeBuilder.h"
 
+#include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/Function.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Module.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -13,10 +15,12 @@
 using llvm::ArrayType;
 using llvm::CallbackVH;
 using llvm::Constant;
+using llvm::ConstantExpr;
 using llvm::ConstantFP;
 using llvm::ConstantInt;
 using llvm::ConstantStruct;
 using llvm::ExecutionEngine;
+using llvm::Function;
 using llvm::GlobalValue;
 using llvm::GlobalVariable;
 using llvm::IntegerType;
@@ -45,7 +49,15 @@ PyConstantMirror::context() const
 Constant *
 PyConstantMirror::GetConstantFor(PyObject *obj)
 {
-    PyTypeObject *type = Py_TYPE(obj);
+    PyTypeObject *const type = Py_TYPE(obj);
+
+    // Always try to emit a global for the object's type.  We have to
+    // be careful to avoid an infinite loop for 'type' itself, since
+    // it is its own type.
+    if ((PyObject*)type != obj) {
+        this->GetGlobalVariableFor((PyObject*)type);
+    }
+
     if (type == &PyType_Type)
         return this->GetConstantFor((PyTypeObject *)obj);
     if (type == &PyCode_Type)
@@ -64,14 +76,17 @@ PyConstantMirror::GetConstantFor(PyObject *obj)
         return this->GetConstantFor((PyFloatObject *)obj);
     if (type == &PyComplex_Type)
         return this->GetConstantFor((PyComplexObject *)obj);
-    // We could just emit an inttoptr here, but the crash is nice
-    // because it flags things we haven't implemented.  We could
-    // compromise by only crashing in debug builds.
-    std::string error_msg;
-    raw_string_ostream(error_msg)
-        << "Unexpected object type " << type->tp_name
-        << ". Add a case to PyConstantMirror::GetConstantFor(PyObject*).";
-    Py_FatalError(error_msg.c_str());
+    // TODO(jyasskin): Figure out how to find the object's true size
+    // here.  This will involve _PyObject_SIZE() or
+    // _PyObject_VAR_SIZE(), but to know which to use we'll need to
+    // determine whether obj is a varobject or a fixed-size one.
+    // Emitting too few bytes causes undefined LLVM behavior according
+    // to http://llvm.org/docs/LangRef.html#pointeraliasing ("An
+    // address of a global variable is associated with the address
+    // range of the variable's storage."), but I haven't seen any
+    // practical problems.
+    return this->ConstantFromMemory(
+        PyTypeBuilder<PyObject>::get(this->context()), obj);
 }
 
 Constant *
@@ -79,7 +94,6 @@ PyConstantMirror::GetConstantFor(PyCodeObject *obj)
 {
     // Register subobjects with the ExecutionEngine so it emits a
     // Constant that refers to them.
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
     this->GetGlobalVariableFor((PyObject*)obj->co_varnames);
     this->GetGlobalVariableFor((PyObject*)obj->co_names);
 
@@ -117,7 +131,6 @@ PyConstantMirror::ResizeVarObjectType(const StructType *type,
 Constant *
 PyConstantMirror::GetConstantFor(PyTupleObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
     const Py_ssize_t tuple_size = PyTuple_GET_SIZE(obj);
     for (Py_ssize_t i = 0; i < tuple_size; ++i) {
         this->GetGlobalVariableFor(obj->ob_item[i]);
@@ -133,7 +146,11 @@ PyConstantMirror::GetConstantFor(PyTupleObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyStringObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
+    // Hash the string to make sure the hash value is cached so that
+    // the optimizers can treat it as constant.  Ignore any errors.
+    if (PyObject_Hash((PyObject*)obj) == -1)
+        PyErr_Clear();
+
     const StructType *string_type =
         PyTypeBuilder<PyStringObject>::get(this->context());
     const Py_ssize_t string_size = PyString_GET_SIZE(obj);
@@ -146,7 +163,11 @@ PyConstantMirror::GetConstantFor(PyStringObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyUnicodeObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
+    // Hash the unicode to make sure the hash value is cached so that
+    // the optimizers can treat it as constant.  Ignore any errors.
+    if (PyObject_Hash((PyObject*)obj) == -1)
+        PyErr_Clear();
+
     this->GetGlobalVariableFor(obj->defenc);
     const StructType *unicode_type =
         PyTypeBuilder<PyUnicodeObject>::get(this->context());
@@ -156,8 +177,6 @@ PyConstantMirror::GetConstantFor(PyUnicodeObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyIntObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
-
     const StructType *int_type =
         PyTypeBuilder<PyIntObject>::get(this->context());
     return this->ConstantFromMemory(int_type, obj);
@@ -166,7 +185,6 @@ PyConstantMirror::GetConstantFor(PyIntObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyLongObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)Py_TYPE(obj));
     const StructType *long_type =
         PyTypeBuilder<PyLongObject>::get(this->context());
     const Py_ssize_t long_size = Py_SIZE(obj);
@@ -179,8 +197,6 @@ PyConstantMirror::GetConstantFor(PyLongObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyFloatObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
-
     const StructType *float_type =
         PyTypeBuilder<PyFloatObject>::get(this->context());
     return this->ConstantFromMemory(float_type, obj);
@@ -189,8 +205,6 @@ PyConstantMirror::GetConstantFor(PyFloatObject *obj)
 Constant *
 PyConstantMirror::GetConstantFor(PyComplexObject *obj)
 {
-    this->GetGlobalVariableFor((PyObject*)obj->ob_type);
-
     const StructType *complex_type =
         PyTypeBuilder<PyComplexObject>::get(this->context());
     return this->ConstantFromMemory(complex_type, obj);
@@ -383,4 +397,25 @@ PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
         new RemovePyObjFromGlobalMappingsVH(this, result, owner);
     }
     return result;
+}
+
+Constant *
+PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
+                                        const llvm::StringRef &name)
+{
+    // Reuse an existing LLVM global if we can.
+    void *func_ptr = (void *)cfunc_ptr;
+    if (GlobalValue *found =
+            const_cast<GlobalValue*>
+                (this->engine_.getGlobalValueAtAddress(func_ptr)))
+        return found;
+
+    // Create a new LLVM global if we haven't seen this function pointer before.
+    Function *global_func = Function::Create(
+        PyTypeBuilder<PyObject*(PyObject*, PyObject*)>::get(this->context()),
+        GlobalVariable::ExternalLinkage,
+        name,
+        this->llvm_data_.module());
+    this->engine_.addGlobalMapping(global_func, func_ptr);
+    return global_func;
 }

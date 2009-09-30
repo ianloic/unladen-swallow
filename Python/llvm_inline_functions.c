@@ -45,6 +45,12 @@ _PyLlvm_WrapIsExceptionOrString(PyObject *obj)
     return PyExceptionClass_Check(obj) || PyString_Check(obj);
 }
 
+int __attribute__((always_inline))
+_PyLlvm_WrapCFunctionCheck(PyObject *obj)
+{
+    return PyCFunction_Check(obj);
+}
+
 
 /* TODO(collinwinter): move this special-casing into a common function that
    we can share with eval.cc. */
@@ -167,10 +173,14 @@ _PyLlvm_Frame_BlockPop(PyTryBlock *blocks, char *num_blocks)
 /* Define a global using PyTupleObject so we can look it up from
    TypeBuilder<PyTupleObject>. */
 PyTupleObject *_dummy_TupleObject;
-/* Ditto for PyStringObject, */
+/* Ditto for PyListObject, */
+PyListObject *_dummy_ListObject;
+/* PyStringObject, */
 PyStringObject *_dummy_StringObject;
 /* PyUnicodeObject, */
 PyUnicodeObject *_dummy_UnicodeObject;
+/* PyCFunctionObject, */
+PyCFunctionObject *_dummy_CFunctionObject;
 /* PyIntObject, */
 PyIntObject *_dummy_IntObject;
 /* PyLongObject, */

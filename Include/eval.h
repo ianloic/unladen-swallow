@@ -240,6 +240,11 @@ PyAPI_FUNC(int) _PyEval_HandlePyTickerExpired(PyThreadState *tstate);
  * fast_next_opcode. */
 PyAPI_DATA(int) _Py_TracingPossible;
 
+/* Records whether profiling is on for any thread.  Counts the number of
+ * threads for which tstate->c_profilefunc is non-NULL, so if the value
+ * is 0, we know we don't have to check this thread's c_profilefunc. */
+PyAPI_DATA(int) _Py_ProfilingPossible;
+
 PyAPI_FUNC(int) _PyEval_CallTrace(Py_tracefunc, PyObject *, struct _frame *,
                                   int, PyObject *);
 PyAPI_FUNC(void) _PyEval_CallExcTrace(PyThreadState *, struct _frame *);

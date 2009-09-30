@@ -29,7 +29,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Path.h"
 #include "llvm/ADT/DenseMap.h"
-#include <sstream>
 using namespace llvm;
 
 // Error - Simple wrapper function to conditionally assign to E and return true.
@@ -395,14 +394,8 @@ static Value *RemapOperand(const Value *In,
       assert(!isa<GlobalValue>(CPV) && "Unmapped global?");
       llvm_unreachable("Unknown type of derived type constant value!");
     }
-  } else if (const MDNode *N = dyn_cast<MDNode>(In)) {
-    std::vector<Value*> Elems;
-    for (unsigned i = 0, e = N->getNumElements(); i !=e; ++i)
-      Elems.push_back(RemapOperand(N->getElement(i), ValueMap, Context));
-    if (!Elems.empty())
-      Result = MDNode::get(Context, &Elems[0], Elems.size());
-  } else if (const MDString *MDS = dyn_cast<MDString>(In)) {
-    Result = MDString::get(Context, MDS->getString());
+  } else if (isa<MetadataBase>(In)) {
+    Result = const_cast<Value*>(In);
   } else if (isa<InlineAsm>(In)) {
     Result = const_cast<Value*>(In);
   }

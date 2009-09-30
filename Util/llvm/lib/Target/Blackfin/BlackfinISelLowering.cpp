@@ -161,7 +161,7 @@ SDValue BlackfinTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) {
 
 SDValue
 BlackfinTargetLowering::LowerFormalArguments(SDValue Chain,
-                                             unsigned CallConv, bool isVarArg,
+                                             CallingConv::ID CallConv, bool isVarArg,
                                             const SmallVectorImpl<ISD::InputArg>
                                                &Ins,
                                              DebugLoc dl, SelectionDAG &DAG,
@@ -173,7 +173,7 @@ BlackfinTargetLowering::LowerFormalArguments(SDValue Chain,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
                  ArgLocs, *DAG.getContext());
-  CCInfo.AllocateStack(12, 4);	// ABI requires 12 bytes stack space
+  CCInfo.AllocateStack(12, 4);  // ABI requires 12 bytes stack space
   CCInfo.AnalyzeFormalArguments(Ins, CC_Blackfin);
 
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
@@ -218,7 +218,7 @@ BlackfinTargetLowering::LowerFormalArguments(SDValue Chain,
 
 SDValue
 BlackfinTargetLowering::LowerReturn(SDValue Chain,
-                                    unsigned CallConv, bool isVarArg,
+                                    CallingConv::ID CallConv, bool isVarArg,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
                                     DebugLoc dl, SelectionDAG &DAG) {
 
@@ -275,7 +275,7 @@ BlackfinTargetLowering::LowerReturn(SDValue Chain,
 
 SDValue
 BlackfinTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                                  unsigned CallConv, bool isVarArg,
+                                  CallingConv::ID CallConv, bool isVarArg,
                                   bool isTailCall,
                                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                                   const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -286,7 +286,7 @@ BlackfinTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, isVarArg, DAG.getTarget(), ArgLocs,
                  *DAG.getContext());
-  CCInfo.AllocateStack(12, 4);	// ABI requires 12 bytes stack space
+  CCInfo.AllocateStack(12, 4);  // ABI requires 12 bytes stack space
   CCInfo.AnalyzeCallOperands(Outs, CC_Blackfin);
 
   // Get the size of the outgoing arguments stack space requirement.

@@ -473,7 +473,7 @@ void StackSlotColoring::RewriteInstruction(MachineInstr *MI, int OldFI,
     else {
       MachineMemOperand MMO(PseudoSourceValue::getFixedStack(NewFI),
                             MMOs[i].getFlags(), MMOs[i].getOffset(),
-                            MMOs[i].getSize(),  MMOs[i].getAlignment());
+                            MMOs[i].getSize(),  MMOs[i].getBaseAlignment());
       MI->addMemOperand(MF, MMO);
     }
   }
@@ -558,7 +558,6 @@ bool StackSlotColoring::PropagateForward(MachineBasicBlock::iterator MII,
 
   SmallVector<MachineOperand*, 4> Uses;
   while (++MII != MBB->end()) {
-    bool FoundUse = false;
     bool FoundKill = false;
     const TargetInstrDesc &TID = MII->getDesc();
     for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
@@ -581,7 +580,6 @@ bool StackSlotColoring::PropagateForward(MachineBasicBlock::iterator MII,
         const TargetRegisterClass *RC = TID.OpInfo[i].getRegClass(TRI);
         if (RC && !RC->contains(NewReg))
           return false;
-        FoundUse = true;
         if (MO.isKill())
           FoundKill = true;
 

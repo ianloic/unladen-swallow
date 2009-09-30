@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/DwarfWriter.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -42,7 +43,13 @@ PIC16AsmPrinter::PIC16AsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
 }
 
 bool PIC16AsmPrinter::printMachineInstruction(const MachineInstr *MI) {
+  processDebugLoc(MI->getDebugLoc());
+  
   printInstruction(MI);
+  
+  if (VerboseAsm && !MI->getDebugLoc().isUnknown())
+    EmitComments(*MI);
+  O << '\n';
   return true;
 }
 
@@ -91,7 +98,7 @@ bool PIC16AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
     // Print a label for the basic block.
     if (I != MF.begin()) {
-      printBasicBlockLabel(I, true);
+      EmitBasicBlockStart(I);
       O << '\n';
     }
     
@@ -124,10 +131,7 @@ void PIC16AsmPrinter::printOperand(const MachineInstr *MI, int opNum) {
 
   switch (MO.getType()) {
     case MachineOperand::MO_Register:
-      if (TargetRegisterInfo::isPhysicalRegister(MO.getReg()))
-        O << TM.getRegisterInfo()->get(MO.getReg()).AsmName;
-      else
-        llvm_unreachable("not implemented");
+      O << getRegisterName(MO.getReg());
       return;
 
     case MachineOperand::MO_Immediate:
@@ -165,7 +169,7 @@ void PIC16AsmPrinter::printOperand(const MachineInstr *MI, int opNum) {
       break;
     }
     case MachineOperand::MO_MachineBasicBlock:
-      printBasicBlockLabel(MO.getMBB());
+      GetMBBSymbol(MO.getMBB()->getNumber())->print(O, MAI);
       return;
 
     default:

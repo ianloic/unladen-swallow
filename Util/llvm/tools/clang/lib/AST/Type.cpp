@@ -64,7 +64,7 @@ void DependentSizedArrayType::Destroy(ASTContext& C) {
   C.Deallocate(this);
 }
 
-void DependentSizedArrayType::Profile(llvm::FoldingSetNodeID &ID, 
+void DependentSizedArrayType::Profile(llvm::FoldingSetNodeID &ID,
                                       ASTContext &Context,
                                       QualType ET,
                                       ArraySizeModifier SizeMod,
@@ -76,8 +76,8 @@ void DependentSizedArrayType::Profile(llvm::FoldingSetNodeID &ID,
   E->Profile(ID, Context, true);
 }
 
-void 
-DependentSizedExtVectorType::Profile(llvm::FoldingSetNodeID &ID, 
+void
+DependentSizedExtVectorType::Profile(llvm::FoldingSetNodeID &ID,
                                      ASTContext &Context,
                                      QualType ElementType, Expr *SizeExpr) {
   ID.AddPointer(ElementType.getAsOpaquePtr());
@@ -99,7 +99,7 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
   // If this is directly an array type, return it.
   if (const ArrayType *ATy = dyn_cast<ArrayType>(this))
     return ATy->getElementType().getTypePtr();
-    
+
   // If the canonical form of this type isn't the right kind, reject it.
   if (!isa<ArrayType>(CanonicalType)) {
     // Look through type qualifiers
@@ -107,7 +107,7 @@ const Type *Type::getArrayElementTypeNoTypeQual() const {
       return AT->getElementType().getTypePtr();
     return 0;
   }
-  
+
   // If this is a typedef for an array type, strip the typedef off without
   // losing all typedef information.
   return cast<ArrayType>(getDesugaredType())->getElementType().getTypePtr();
@@ -143,6 +143,8 @@ QualType QualType::getDesugaredType(bool ForDisplay) const {
 QualType Type::getDesugaredType(bool ForDisplay) const {
   if (const TypedefType *TDT = dyn_cast<TypedefType>(this))
     return TDT->LookThroughTypedefs().getDesugaredType();
+  if (const ElaboratedType *ET = dyn_cast<ElaboratedType>(this))
+    return ET->getUnderlyingType().getDesugaredType();
   if (const TypeOfExprType *TOE = dyn_cast<TypeOfExprType>(this))
     return TOE->getUnderlyingExpr()->getType().getDesugaredType();
   if (const TypeOfType *TOT = dyn_cast<TypeOfType>(this))
@@ -151,13 +153,13 @@ QualType Type::getDesugaredType(bool ForDisplay) const {
     if (!DTT->getUnderlyingType()->isDependentType())
       return DTT->getUnderlyingType().getDesugaredType();
   }
-  if (const TemplateSpecializationType *Spec 
+  if (const TemplateSpecializationType *Spec
         = dyn_cast<TemplateSpecializationType>(this)) {
     if (ForDisplay)
       return QualType(this, 0);
 
     QualType Canon = Spec->getCanonicalTypeInternal();
-    if (Canon->getAsTemplateSpecializationType())
+    if (Canon->getAs<TemplateSpecializationType>())
       return QualType(this, 0);
     return Canon->getDesugaredType();
   }
@@ -260,7 +262,7 @@ const ComplexType *Type::getAsComplexIntegerType() const {
       return CTy;
     return 0;
   }
-  
+
   // If the canonical form of this type isn't what we want, reject it.
   if (!isa<ComplexType>(CanonicalType)) {
     // Look through type qualifiers (e.g. ExtQualType's).
@@ -268,60 +270,16 @@ const ComplexType *Type::getAsComplexIntegerType() const {
       return CanonicalType.getUnqualifiedType()->getAsComplexIntegerType();
     return 0;
   }
-  
+
   // If this is a typedef for a complex type, strip the typedef off without
   // losing all typedef information.
   return cast<ComplexType>(getDesugaredType());
 }
 
-const BuiltinType *Type::getAsBuiltinType() const {
-  // If this is directly a builtin type, return it.
-  if (const BuiltinType *BTy = dyn_cast<BuiltinType>(this))
-    return BTy;
-
-  // If the canonical form of this type isn't a builtin type, reject it.
-  if (!isa<BuiltinType>(CanonicalType)) {
-    // Look through type qualifiers (e.g. ExtQualType's).
-    if (isa<BuiltinType>(CanonicalType.getUnqualifiedType()))
-      return CanonicalType.getUnqualifiedType()->getAsBuiltinType();
-    return 0;
-  }
-
-  // If this is a typedef for a builtin type, strip the typedef off without
-  // losing all typedef information.
-  return cast<BuiltinType>(getDesugaredType());
-}
-
-const FunctionType *Type::getAsFunctionType() const {
-  // If this is directly a function type, return it.
-  if (const FunctionType *FTy = dyn_cast<FunctionType>(this))
-    return FTy;
-
-  // If the canonical form of this type isn't the right kind, reject it.
-  if (!isa<FunctionType>(CanonicalType)) {
-    // Look through type qualifiers
-    if (isa<FunctionType>(CanonicalType.getUnqualifiedType()))
-      return CanonicalType.getUnqualifiedType()->getAsFunctionType();
-    return 0;
-  }
-  
-  // If this is a typedef for a function type, strip the typedef off without
-  // losing all typedef information.
-  return cast<FunctionType>(getDesugaredType());
-}
-
-const FunctionNoProtoType *Type::getAsFunctionNoProtoType() const {
-  return dyn_cast_or_null<FunctionNoProtoType>(getAsFunctionType());
-}
-
-const FunctionProtoType *Type::getAsFunctionProtoType() const {
-  return dyn_cast_or_null<FunctionProtoType>(getAsFunctionType());
-}
-
 QualType Type::getPointeeType() const {
   if (const PointerType *PT = getAs<PointerType>())
     return PT->getPointeeType();
-  if (const ObjCObjectPointerType *OPT = getAsObjCObjectPointerType())
+  if (const ObjCObjectPointerType *OPT = getAs<ObjCObjectPointerType>())
     return OPT->getPointeeType();
   if (const BlockPointerType *BPT = getAs<BlockPointerType>())
     return BPT->getPointeeType();
@@ -355,7 +313,7 @@ bool Type::isVariablyModifiedType() const {
   // This one isn't completely obvious, but it follows from the
   // definition in C99 6.7.5p3. Because of this rule, it's
   // illegal to declare a function returning a variably modified type.
-  if (const FunctionType *FT = getAsFunctionType())
+  if (const FunctionType *FT = getAs<FunctionType>())
     return FT->getResultType()->isVariablyModifiedType();
 
   return false;
@@ -372,7 +330,7 @@ const RecordType *Type::getAsStructureType() const {
   if (const RecordType *RT = dyn_cast<RecordType>(CanonicalType)) {
     if (!RT->getDecl()->isStruct())
       return 0;
-    
+
     // If this is a typedef for a structure type, strip the typedef off without
     // losing all typedef information.
     return cast<RecordType>(getDesugaredType());
@@ -383,13 +341,13 @@ const RecordType *Type::getAsStructureType() const {
   return 0;
 }
 
-const RecordType *Type::getAsUnionType() const { 
+const RecordType *Type::getAsUnionType() const {
   // If this is directly a union type, return it.
   if (const RecordType *RT = dyn_cast<RecordType>(this)) {
     if (RT->getDecl()->isUnion())
       return RT;
   }
-    
+
   // If the canonical form of this type isn't the right kind, reject it.
   if (const RecordType *RT = dyn_cast<RecordType>(CanonicalType)) {
     if (!RT->getDecl()->isUnion())
@@ -399,86 +357,18 @@ const RecordType *Type::getAsUnionType() const {
     // losing all typedef information.
     return cast<RecordType>(getDesugaredType());
   }
-  
+
   // Look through type qualifiers
   if (isa<RecordType>(CanonicalType.getUnqualifiedType()))
     return CanonicalType.getUnqualifiedType()->getAsUnionType();
   return 0;
 }
 
-const EnumType *Type::getAsEnumType() const {
-  // Check the canonicalized unqualified type directly; the more complex
-  // version is unnecessary because there isn't any typedef information
-  // to preserve.
-  return dyn_cast<EnumType>(CanonicalType.getUnqualifiedType());
-}
-
-const ComplexType *Type::getAsComplexType() const {
-  // Are we directly a complex type?
-  if (const ComplexType *CTy = dyn_cast<ComplexType>(this))
-    return CTy;
-  
-  // If the canonical form of this type isn't the right kind, reject it.
-  if (!isa<ComplexType>(CanonicalType)) {
-    // Look through type qualifiers
-    if (isa<ComplexType>(CanonicalType.getUnqualifiedType()))
-      return CanonicalType.getUnqualifiedType()->getAsComplexType();
-    return 0;
-  }
-
-  // If this is a typedef for a complex type, strip the typedef off without
-  // losing all typedef information.
-  return cast<ComplexType>(getDesugaredType());
-}
-
-const VectorType *Type::getAsVectorType() const {
-  // Are we directly a vector type?
-  if (const VectorType *VTy = dyn_cast<VectorType>(this))
-    return VTy;
-  
-  // If the canonical form of this type isn't the right kind, reject it.
-  if (!isa<VectorType>(CanonicalType)) {
-    // Look through type qualifiers
-    if (isa<VectorType>(CanonicalType.getUnqualifiedType()))
-      return CanonicalType.getUnqualifiedType()->getAsVectorType();
-    return 0;
-  }
-
-  // If this is a typedef for a vector type, strip the typedef off without
-  // losing all typedef information.
-  return cast<VectorType>(getDesugaredType());
-}
-
-const ExtVectorType *Type::getAsExtVectorType() const {
-  // Are we directly an OpenCU vector type?
-  if (const ExtVectorType *VTy = dyn_cast<ExtVectorType>(this))
-    return VTy;
-  
-  // If the canonical form of this type isn't the right kind, reject it.
-  if (!isa<ExtVectorType>(CanonicalType)) {  
-    // Look through type qualifiers
-    if (isa<ExtVectorType>(CanonicalType.getUnqualifiedType()))
-      return CanonicalType.getUnqualifiedType()->getAsExtVectorType();
-    return 0;
-  }
-
-  // If this is a typedef for an extended vector type, strip the typedef off
-  // without losing all typedef information.
-  return cast<ExtVectorType>(getDesugaredType());
-}
-
-const ObjCInterfaceType *Type::getAsObjCInterfaceType() const {
-  // There is no sugar for ObjCInterfaceType's, just return the canonical
-  // type pointer if it is the right class.  There is no typedef information to
-  // return and these cannot be Address-space qualified.
-  return dyn_cast<ObjCInterfaceType>(CanonicalType.getUnqualifiedType());
-}
-
 const ObjCInterfaceType *Type::getAsObjCQualifiedInterfaceType() const {
   // There is no sugar for ObjCInterfaceType's, just return the canonical
   // type pointer if it is the right class.  There is no typedef information to
   // return and these cannot be Address-space qualified.
-  if (const ObjCInterfaceType *OIT = getAsObjCInterfaceType())
+  if (const ObjCInterfaceType *OIT = getAs<ObjCInterfaceType>())
     if (OIT->getNumProtocols())
       return OIT;
   return 0;
@@ -488,16 +378,10 @@ bool Type::isObjCQualifiedInterfaceType() const {
   return getAsObjCQualifiedInterfaceType() != 0;
 }
 
-const ObjCObjectPointerType *Type::getAsObjCObjectPointerType() const {
-  // There is no sugar for ObjCObjectPointerType's, just return the
-  // canonical type pointer if it is the right class.
-  return dyn_cast<ObjCObjectPointerType>(CanonicalType.getUnqualifiedType());
-}
-
 const ObjCObjectPointerType *Type::getAsObjCQualifiedIdType() const {
   // There is no sugar for ObjCQualifiedIdType's, just return the canonical
   // type pointer if it is the right class.
-  if (const ObjCObjectPointerType *OPT = getAsObjCObjectPointerType()) {
+  if (const ObjCObjectPointerType *OPT = getAs<ObjCObjectPointerType>()) {
     if (OPT->isObjCQualifiedIdType())
       return OPT;
   }
@@ -505,18 +389,11 @@ const ObjCObjectPointerType *Type::getAsObjCQualifiedIdType() const {
 }
 
 const ObjCObjectPointerType *Type::getAsObjCInterfacePointerType() const {
-  if (const ObjCObjectPointerType *OPT = getAsObjCObjectPointerType()) {
+  if (const ObjCObjectPointerType *OPT = getAs<ObjCObjectPointerType>()) {
     if (OPT->getInterfaceType())
       return OPT;
   }
   return 0;
-}
-
-const TemplateTypeParmType *Type::getAsTemplateTypeParmType() const {
-  // There is no sugar for template type parameters, so just return
-  // the canonical type pointer if it is the right class.
-  // FIXME: can these be address-space qualified?
-  return dyn_cast<TemplateTypeParmType>(CanonicalType);
 }
 
 const CXXRecordDecl *Type::getCXXRecordDeclForPointerType() const {
@@ -524,13 +401,6 @@ const CXXRecordDecl *Type::getCXXRecordDeclForPointerType() const {
     if (const RecordType *RT = PT->getPointeeType()->getAs<RecordType>())
       return dyn_cast<CXXRecordDecl>(RT->getDecl());
   return 0;
-}
-
-const TemplateSpecializationType *
-Type::getAsTemplateSpecializationType() const {
-  // There is no sugar for class template specialization types, so
-  // just return the canonical type pointer if it is the right class.
-  return dyn_cast<TemplateSpecializationType>(CanonicalType);
 }
 
 bool Type::isIntegerType() const {
@@ -610,14 +480,14 @@ bool Type::isSignedIntegerType() const {
     return BT->getKind() >= BuiltinType::Char_S &&
            BT->getKind() <= BuiltinType::LongLong;
   }
-  
+
   if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
     return ET->getDecl()->getIntegerType()->isSignedIntegerType();
-  
+
   if (const FixedWidthIntType *FWIT =
           dyn_cast<FixedWidthIntType>(CanonicalType))
     return FWIT->isSigned();
-  
+
   if (const VectorType *VT = dyn_cast<VectorType>(CanonicalType))
     return VT->getElementType()->isSignedIntegerType();
   if (const ExtQualType *EXTQT = dyn_cast<ExtQualType>(CanonicalType))
@@ -761,8 +631,8 @@ bool Type::isConstantSizeType() const {
 /// isIncompleteType - Return true if this is an incomplete type (C99 6.2.5p1)
 /// - a type that can describe objects, but which lacks information needed to
 /// determine its size.
-bool Type::isIncompleteType() const { 
-  switch (CanonicalType->getTypeClass()) { 
+bool Type::isIncompleteType() const {
+  switch (CanonicalType->getTypeClass()) {
   default: return false;
   case ExtQual:
     return cast<ExtQualType>(CanonicalType)->getBaseType()->isIncompleteType();
@@ -814,7 +684,7 @@ bool Type::isPODType() const {
     return true;
 
   case Record:
-    if (CXXRecordDecl *ClassDecl 
+    if (CXXRecordDecl *ClassDecl
           = dyn_cast<CXXRecordDecl>(cast<RecordType>(CanonicalType)->getDecl()))
       return ClassDecl->isPOD();
 
@@ -824,7 +694,7 @@ bool Type::isPODType() const {
 }
 
 bool Type::isPromotableIntegerType() const {
-  if (const BuiltinType *BT = getAsBuiltinType())
+  if (const BuiltinType *BT = getAs<BuiltinType>())
     switch (BT->getKind()) {
     case BuiltinType::Bool:
     case BuiltinType::Char_S:
@@ -834,14 +704,14 @@ bool Type::isPromotableIntegerType() const {
     case BuiltinType::Short:
     case BuiltinType::UShort:
       return true;
-    default: 
+    default:
       return false;
     }
   return false;
 }
 
 bool Type::isNullPtrType() const {
-  if (const BuiltinType *BT = getAsBuiltinType())
+  if (const BuiltinType *BT = getAs<BuiltinType>())
     return BT->getKind() == BuiltinType::NullPtr;
   return false;
 }
@@ -916,7 +786,7 @@ void FunctionProtoType::Profile(llvm::FoldingSetNodeID &ID, QualType Result,
   ID.AddInteger(hasExceptionSpec);
   if (hasExceptionSpec) {
     ID.AddInteger(anyExceptionSpec);
-    for(unsigned i = 0; i != NumExceptions; ++i)
+    for (unsigned i = 0; i != NumExceptions; ++i)
       ID.AddPointer(Exs[i].getAsOpaquePtr());
   }
   ID.AddInteger(NoReturn);
@@ -955,14 +825,14 @@ QualType TypedefType::LookThroughTypedefs() const {
   QualType FirstType = getDecl()->getUnderlyingType();
   if (!isa<TypedefType>(FirstType))
     return FirstType;
-  
+
   // Otherwise, do the fully general loop.
   unsigned TypeQuals = 0;
   const TypedefType *TDT = this;
   while (1) {
     QualType CurType = TDT->getDecl()->getUnderlyingType();
-    
-    
+
+
     /// FIXME:
     /// FIXME: This is incorrect for ExtQuals!
     /// FIXME:
@@ -978,25 +848,25 @@ TypeOfExprType::TypeOfExprType(Expr *E, QualType can)
   : Type(TypeOfExpr, can, E->isTypeDependent()), TOExpr(E) {
 }
 
-void DependentTypeOfExprType::Profile(llvm::FoldingSetNodeID &ID, 
+void DependentTypeOfExprType::Profile(llvm::FoldingSetNodeID &ID,
                                       ASTContext &Context, Expr *E) {
   E->Profile(ID, Context, true);
 }
 
 DecltypeType::DecltypeType(Expr *E, QualType underlyingType, QualType can)
-  : Type(Decltype, can, E->isTypeDependent()), E(E), 
+  : Type(Decltype, can, E->isTypeDependent()), E(E),
   UnderlyingType(underlyingType) {
 }
 
 DependentDecltypeType::DependentDecltypeType(ASTContext &Context, Expr *E)
   : DecltypeType(E, Context.DependentTy), Context(Context) { }
 
-void DependentDecltypeType::Profile(llvm::FoldingSetNodeID &ID, 
+void DependentDecltypeType::Profile(llvm::FoldingSetNodeID &ID,
                                     ASTContext &Context, Expr *E) {
   E->Profile(ID, Context, true);
 }
 
-TagType::TagType(TypeClass TC, TagDecl *D, QualType can) 
+TagType::TagType(TypeClass TC, TagDecl *D, QualType can)
   : Type(TC, can, D->isDependentType()), decl(D, 0) {}
 
 bool RecordType::classof(const TagType *TT) {
@@ -1007,7 +877,7 @@ bool EnumType::classof(const TagType *TT) {
   return isa<EnumDecl>(TT->getDecl());
 }
 
-bool 
+bool
 TemplateSpecializationType::
 anyDependentTemplateArguments(const TemplateArgument *Args, unsigned NumArgs) {
   for (unsigned Idx = 0; Idx < NumArgs; ++Idx) {
@@ -1015,12 +885,12 @@ anyDependentTemplateArguments(const TemplateArgument *Args, unsigned NumArgs) {
     case TemplateArgument::Null:
       assert(false && "Should not have a NULL template argument");
       break;
-        
+
     case TemplateArgument::Type:
       if (Args[Idx].getAsType()->isDependentType())
         return true;
       break;
-      
+
     case TemplateArgument::Declaration:
     case TemplateArgument::Integral:
       // Never dependent
@@ -1031,7 +901,7 @@ anyDependentTemplateArguments(const TemplateArgument *Args, unsigned NumArgs) {
           Args[Idx].getAsExpr()->isValueDependent())
         return true;
       break;
-        
+
     case TemplateArgument::Pack:
       assert(0 && "FIXME: Implement!");
       break;
@@ -1042,20 +912,19 @@ anyDependentTemplateArguments(const TemplateArgument *Args, unsigned NumArgs) {
 }
 
 TemplateSpecializationType::
-TemplateSpecializationType(ASTContext &Context, TemplateName T, 
+TemplateSpecializationType(ASTContext &Context, TemplateName T,
                            const TemplateArgument *Args,
                            unsigned NumArgs, QualType Canon)
-  : Type(TemplateSpecialization, 
+  : Type(TemplateSpecialization,
          Canon.isNull()? QualType(this, 0) : Canon,
          T.isDependent() || anyDependentTemplateArguments(Args, NumArgs)),
     Context(Context),
-    Template(T), NumArgs(NumArgs)
-{
-  assert((!Canon.isNull() || 
+    Template(T), NumArgs(NumArgs) {
+  assert((!Canon.isNull() ||
           T.isDependent() || anyDependentTemplateArguments(Args, NumArgs)) &&
          "No canonical type for non-dependent class template specialization");
 
-  TemplateArgument *TemplateArgs 
+  TemplateArgument *TemplateArgs
     = reinterpret_cast<TemplateArgument *>(this + 1);
   for (unsigned Arg = 0; Arg < NumArgs; ++Arg)
     new (&TemplateArgs[Arg]) TemplateArgument(Args[Arg]);
@@ -1081,10 +950,10 @@ TemplateSpecializationType::getArg(unsigned Idx) const {
   return getArgs()[Idx];
 }
 
-void 
-TemplateSpecializationType::Profile(llvm::FoldingSetNodeID &ID, 
-                                    TemplateName T, 
-                                    const TemplateArgument *Args, 
+void
+TemplateSpecializationType::Profile(llvm::FoldingSetNodeID &ID,
+                                    TemplateName T,
+                                    const TemplateArgument *Args,
                                     unsigned NumArgs,
                                     ASTContext &Context) {
   T.Profile(ID);
@@ -1095,7 +964,7 @@ TemplateSpecializationType::Profile(llvm::FoldingSetNodeID &ID,
 const Type *QualifierSet::strip(const Type* T) {
   QualType DT = T->getDesugaredType();
   addCVR(DT.getCVRQualifiers());
-  
+
   if (const ExtQualType* EQT = dyn_cast<ExtQualType>(DT)) {
     if (EQT->getAddressSpace())
       addAddressSpace(EQT->getAddressSpace());
@@ -1160,8 +1029,8 @@ std::string QualType::getAsString() const {
   return S;
 }
 
-void 
-QualType::getAsStringInternal(std::string &S, 
+void
+QualType::getAsStringInternal(std::string &S,
                               const PrintingPolicy &Policy) const {
   if (isNull()) {
     S += "NULL TYPE";
@@ -1184,7 +1053,7 @@ QualType::getAsStringInternal(std::string &S,
   getTypePtr()->getAsStringInternal(S, Policy);
 }
 
-void BuiltinType::getAsStringInternal(std::string &S, 
+void BuiltinType::getAsStringInternal(std::string &S,
                                       const PrintingPolicy &Policy) const {
   if (S.empty()) {
     S = getName(Policy.LangOpts);
@@ -1236,12 +1105,12 @@ void ExtQualType::getAsStringInternal(std::string &S, const PrintingPolicy &Poli
 
 void PointerType::getAsStringInternal(std::string &S, const PrintingPolicy &Policy) const {
   S = '*' + S;
-  
+
   // Handle things like 'int (*A)[4];' correctly.
   // FIXME: this should include vectors, but vectors use attributes I guess.
   if (isa<ArrayType>(getPointeeType()))
     S = '(' + S + ')';
-  
+
   getPointeeType().getAsStringInternal(S, Policy);
 }
 
@@ -1290,7 +1159,7 @@ void ConstantArrayType::getAsStringInternal(std::string &S, const PrintingPolicy
   S += '[';
   S += llvm::utostr(getSize().getZExtValue());
   S += ']';
-  
+
   getElementType().getAsStringInternal(S, Policy);
 }
 
@@ -1325,17 +1194,17 @@ void IncompleteArrayType::getAsStringInternal(std::string &S, const PrintingPoli
 
 void VariableArrayType::getAsStringInternal(std::string &S, const PrintingPolicy &Policy) const {
   S += '[';
-  
+
   if (getIndexTypeQualifier()) {
     AppendTypeQualList(S, getIndexTypeQualifier());
     S += ' ';
   }
-  
+
   if (getSizeModifier() == Static)
     S += "static";
   else if (getSizeModifier() == Star)
     S += '*';
-  
+
   if (getSizeExpr()) {
     std::string SStr;
     llvm::raw_string_ostream s(SStr);
@@ -1343,23 +1212,23 @@ void VariableArrayType::getAsStringInternal(std::string &S, const PrintingPolicy
     S += s.str();
   }
   S += ']';
-  
+
   getElementType().getAsStringInternal(S, Policy);
 }
 
 void DependentSizedArrayType::getAsStringInternal(std::string &S, const PrintingPolicy &Policy) const {
   S += '[';
-  
+
   if (getIndexTypeQualifier()) {
     AppendTypeQualList(S, getIndexTypeQualifier());
     S += ' ';
   }
-  
+
   if (getSizeModifier() == Static)
     S += "static";
   else if (getSizeModifier() == Star)
     S += '*';
-  
+
   if (getSizeExpr()) {
     std::string SStr;
     llvm::raw_string_ostream s(SStr);
@@ -1367,7 +1236,7 @@ void DependentSizedArrayType::getAsStringInternal(std::string &S, const Printing
     S += s.str();
   }
   S += ']';
-  
+
   getElementType().getAsStringInternal(S, Policy);
 }
 
@@ -1417,7 +1286,7 @@ void TypeOfType::getAsStringInternal(std::string &InnerString, const PrintingPol
   InnerString = "typeof(" + Tmp + ")" + InnerString;
 }
 
-void DecltypeType::getAsStringInternal(std::string &InnerString, 
+void DecltypeType::getAsStringInternal(std::string &InnerString,
                                        const PrintingPolicy &Policy) const {
   if (!InnerString.empty())    // Prefix the basic type, e.g. 'decltype(t) X'.
     InnerString = ' ' + InnerString;
@@ -1431,7 +1300,7 @@ void FunctionNoProtoType::getAsStringInternal(std::string &S, const PrintingPoli
   // If needed for precedence reasons, wrap the inner part in grouping parens.
   if (!S.empty())
     S = "(" + S + ")";
-  
+
   S += "()";
   if (getNoReturnAttr())
     S += " __attribute__((noreturn))";
@@ -1442,7 +1311,7 @@ void FunctionProtoType::getAsStringInternal(std::string &S, const PrintingPolicy
   // If needed for precedence reasons, wrap the inner part in grouping parens.
   if (!S.empty())
     S = "(" + S + ")";
-  
+
   S += "(";
   std::string Tmp;
   PrintingPolicy ParamPolicy(Policy);
@@ -1453,7 +1322,7 @@ void FunctionProtoType::getAsStringInternal(std::string &S, const PrintingPolicy
     S += Tmp;
     Tmp.clear();
   }
-  
+
   if (isVariadic()) {
     if (getNumArgs())
       S += ", ";
@@ -1462,7 +1331,7 @@ void FunctionProtoType::getAsStringInternal(std::string &S, const PrintingPolicy
     // Do not emit int() if we have a proto, emit 'int(void)'.
     S += "void";
   }
-  
+
   S += ")";
   if (getNoReturnAttr())
     S += " __attribute__((noreturn))";
@@ -1481,13 +1350,13 @@ void TemplateTypeParmType::getAsStringInternal(std::string &InnerString, const P
     InnerString = ' ' + InnerString;
 
   if (!Name)
-    InnerString = "type-parameter-" + llvm::utostr_32(Depth) + '-' + 
+    InnerString = "type-parameter-" + llvm::utostr_32(Depth) + '-' +
       llvm::utostr_32(Index) + InnerString;
   else
     InnerString = Name->getName() + InnerString;
 }
 
-std::string 
+std::string
 TemplateSpecializationType::PrintTemplateArgumentList(
                                                   const TemplateArgument *Args,
                                                   unsigned NumArgs,
@@ -1497,7 +1366,7 @@ TemplateSpecializationType::PrintTemplateArgumentList(
   for (unsigned Arg = 0; Arg < NumArgs; ++Arg) {
     if (Arg)
       SpecString += ", ";
-    
+
     // Print the argument into a string.
     std::string ArgString;
     switch (Args[Arg].getKind()) {
@@ -1547,7 +1416,7 @@ TemplateSpecializationType::PrintTemplateArgumentList(
   return SpecString;
 }
 
-void 
+void
 TemplateSpecializationType::
 getAsStringInternal(std::string &InnerString, const PrintingPolicy &Policy) const {
   std::string SpecString;
@@ -1571,10 +1440,11 @@ void QualifiedNameType::getAsStringInternal(std::string &InnerString, const Prin
     llvm::raw_string_ostream OS(MyString);
     NNS->print(OS, Policy);
   }
-  
+
   std::string TypeStr;
   PrintingPolicy InnerPolicy(Policy);
   InnerPolicy.SuppressTagKind = true;
+  InnerPolicy.SuppressScope = true;
   NamedType.getAsStringInternal(TypeStr, InnerPolicy);
 
   MyString += TypeStr;
@@ -1597,12 +1467,12 @@ void TypenameType::getAsStringInternal(std::string &InnerString, const PrintingP
     else if (const TemplateSpecializationType *Spec = getTemplateId()) {
       Spec->getTemplateName().print(OS, Policy, true);
       OS << TemplateSpecializationType::PrintTemplateArgumentList(
-                                                               Spec->getArgs(), 
+                                                               Spec->getArgs(),
                                                             Spec->getNumArgs(),
                                                                Policy);
     }
   }
-  
+
   if (InnerString.empty())
     InnerString.swap(MyString);
   else
@@ -1611,7 +1481,7 @@ void TypenameType::getAsStringInternal(std::string &InnerString, const PrintingP
 
 void ObjCInterfaceType::Profile(llvm::FoldingSetNodeID &ID,
                                          const ObjCInterfaceDecl *Decl,
-                                         ObjCProtocolDecl **protocols, 
+                                         ObjCProtocolDecl **protocols,
                                          unsigned NumProtocols) {
   ID.AddPointer(Decl);
   for (unsigned i = 0; i != NumProtocols; i++)
@@ -1629,7 +1499,7 @@ void ObjCInterfaceType::getAsStringInternal(std::string &InnerString,
                                            const PrintingPolicy &Policy) const {
   if (!InnerString.empty())    // Prefix the basic type, e.g. 'typedefname X'.
     InnerString = ' ' + InnerString;
-    
+
   std::string ObjCQIString = getDecl()->getNameAsString();
   if (getNumProtocols()) {
     ObjCQIString += '<';
@@ -1646,10 +1516,10 @@ void ObjCInterfaceType::getAsStringInternal(std::string &InnerString,
   InnerString = ObjCQIString + InnerString;
 }
 
-void ObjCObjectPointerType::getAsStringInternal(std::string &InnerString, 
+void ObjCObjectPointerType::getAsStringInternal(std::string &InnerString,
                                                 const PrintingPolicy &Policy) const {
   std::string ObjCQIString;
-  
+
   if (isObjCIdType() || isObjCQualifiedIdType())
     ObjCQIString = "id";
   else if (isObjCClassType() || isObjCQualifiedClassType())
@@ -1674,13 +1544,23 @@ void ObjCObjectPointerType::getAsStringInternal(std::string &InnerString,
   InnerString = ObjCQIString + InnerString;
 }
 
+void ElaboratedType::getAsStringInternal(std::string &InnerString,
+                                         const PrintingPolicy &Policy) const {
+  std::string TypeStr;
+  PrintingPolicy InnerPolicy(Policy);
+  InnerPolicy.SuppressTagKind = true;
+  UnderlyingType.getAsStringInternal(InnerString, InnerPolicy);
+
+  InnerString = std::string(getNameForTagKind(getTagKind())) + ' ' + InnerString;
+}
+
 void TagType::getAsStringInternal(std::string &InnerString, const PrintingPolicy &Policy) const {
   if (Policy.SuppressTag)
     return;
 
   if (!InnerString.empty())    // Prefix the basic type, e.g. 'typedefname X'.
     InnerString = ' ' + InnerString;
-  
+
   const char *Kind = Policy.SuppressTagKind? 0 : getDecl()->getKindName();
   const char *ID;
   if (const IdentifierInfo *II = getDecl()->getIdentifier())
@@ -1694,10 +1574,10 @@ void TagType::getAsStringInternal(std::string &InnerString, const PrintingPolicy
 
   // If this is a class template specialization, print the template
   // arguments.
-  if (ClassTemplateSpecializationDecl *Spec 
+  if (ClassTemplateSpecializationDecl *Spec
         = dyn_cast<ClassTemplateSpecializationDecl>(getDecl())) {
     const TemplateArgumentList &TemplateArgs = Spec->getTemplateArgs();
-    std::string TemplateArgsStr 
+    std::string TemplateArgsStr
       = TemplateSpecializationType::PrintTemplateArgumentList(
                                             TemplateArgs.getFlatArgumentList(),
                                             TemplateArgs.flat_size(),
@@ -1705,17 +1585,17 @@ void TagType::getAsStringInternal(std::string &InnerString, const PrintingPolicy
     InnerString = TemplateArgsStr + InnerString;
   }
 
-  if (Kind) {
+  if (!Policy.SuppressScope) {
     // Compute the full nested-name-specifier for this type. In C,
     // this will always be empty.
     std::string ContextStr;
-    for (DeclContext *DC = getDecl()->getDeclContext(); 
+    for (DeclContext *DC = getDecl()->getDeclContext();
          !DC->isTranslationUnit(); DC = DC->getParent()) {
       std::string MyPart;
       if (NamespaceDecl *NS = dyn_cast<NamespaceDecl>(DC)) {
         if (NS->getIdentifier())
           MyPart = NS->getNameAsString();
-      } else if (ClassTemplateSpecializationDecl *Spec 
+      } else if (ClassTemplateSpecializationDecl *Spec
                    = dyn_cast<ClassTemplateSpecializationDecl>(DC)) {
         const TemplateArgumentList &TemplateArgs = Spec->getTemplateArgs();
         std::string TemplateArgsStr
@@ -1735,7 +1615,10 @@ void TagType::getAsStringInternal(std::string &InnerString, const PrintingPolicy
         ContextStr = MyPart + "::" + ContextStr;
     }
 
-    InnerString = std::string(Kind) + " " + ContextStr + ID + InnerString;
+    if (Kind)
+      InnerString = std::string(Kind) + ' ' + ContextStr + ID + InnerString;
+    else
+      InnerString = ContextStr + ID + InnerString;
   } else
     InnerString = ID + InnerString;
 }

@@ -46,9 +46,6 @@ def really_hidden;
 def required;
 def zero_or_one;
 
-// Empty DAG marker.
-def empty;
-
 // The 'case' construct.
 def case;
 
@@ -59,12 +56,14 @@ def false;
 // Boolean operators.
 def and;
 def or;
+def not;
 
 // Primitive tests.
 def switch_on;
 def parameter_equals;
 def element_in_list;
 def input_languages_contain;
+def empty;
 def not_empty;
 def default;
 
@@ -80,6 +79,9 @@ def error;
 // Increase/decrease the edge weight.
 def inc_weight;
 def dec_weight;
+
+// Empty DAG marker.
+def empty_dag_marker;
 
 // Used to specify plugin priority.
 class PluginPriority<int p> {
@@ -110,10 +112,10 @@ class EdgeBase<string t1, string t2, dag d> {
       dag weight = d;
 }
 
-class Edge<string t1, string t2> : EdgeBase<t1, t2, (empty)>;
+class Edge<string t1, string t2> : EdgeBase<t1, t2, (empty_dag_marker)>;
 
 // Edge and SimpleEdge are synonyms.
-class SimpleEdge<string t1, string t2> : EdgeBase<t1, t2, (empty)>;
+class SimpleEdge<string t1, string t2> : EdgeBase<t1, t2, (empty_dag_marker)>;
 
 // Optionally enabled edge.
 class OptionalEdge<string t1, string t2, dag props> : EdgeBase<t1, t2, props>;

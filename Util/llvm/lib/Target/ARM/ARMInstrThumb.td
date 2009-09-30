@@ -139,7 +139,7 @@ def tADDrPCi : T1I<(outs tGPR:$dst), (ins i32imm:$rhs), IIC_iALUi,
 
 // ADD rd, sp, #imm8
 def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, i32imm:$rhs), IIC_iALUi,
-                  "add $dst, $sp, $rhs * 4 @ addrspi", []>;
+                  "add $dst, $sp, $rhs * 4", []>;
 
 // ADD sp, sp, #imm7
 def tADDspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, i32imm:$rhs), IIC_iALUi,
@@ -189,7 +189,7 @@ let isCall = 1,
   Defs = [R0,  R1,  R2,  R3,  R12, LR,
           D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
           D16, D17, D18, D19, D20, D21, D22, D23,
-          D24, D25, D26, D27, D28, D29, D30, D31, CPSR] in {
+          D24, D25, D26, D27, D28, D29, D30, D31, CPSR, FPSCR] in {
   // Also used for Thumb2
   def tBL  : TIx2<(outs), (ins i32imm:$func, variable_ops), IIC_Br, 
                    "bl ${func:call}",
@@ -220,7 +220,7 @@ let isCall = 1,
   Defs = [R0,  R1,  R2,  R3,  R9,  R12, LR,
           D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
           D16, D17, D18, D19, D20, D21, D22, D23,
-          D24, D25, D26, D27, D28, D29, D30, D31, CPSR] in {
+          D24, D25, D26, D27, D28, D29, D30, D31, CPSR, FPSCR] in {
   // Also used for Thumb2
   def tBLr9 : TIx2<(outs), (ins i32imm:$func, variable_ops), IIC_Br, 
                    "bl ${func:call}",
@@ -250,7 +250,7 @@ let isBranch = 1, isTerminator = 1 in {
   let isBarrier = 1 in {
     let isPredicable = 1 in
     def tB   : T1I<(outs), (ins brtarget:$target), IIC_Br,
-                   "b.n $target", [(br bb:$target)]>;
+                   "b $target", [(br bb:$target)]>;
 
   // Far jump
   let Defs = [LR] in
@@ -268,7 +268,7 @@ let isBranch = 1, isTerminator = 1 in {
 // a two-value operand where a dag node expects two operands. :(
 let isBranch = 1, isTerminator = 1 in
   def tBcc : T1I<(outs), (ins brtarget:$target, pred:$cc), IIC_Br,
-                 "b$cc.n $target",
+                 "b$cc $target",
                  [/*(ARMbrcond bb:$target, imm:$cc)*/]>;
 
 //===----------------------------------------------------------------------===//
@@ -310,10 +310,9 @@ def tRestore : T1pIs<(outs tGPR:$dst), (ins t_addrmode_sp:$addr), IIC_iLoadi,
                     "ldr", " $dst, $addr", []>;
 
 // Load tconstpool
-// FIXME: Added .n suffix to workaround a Darwin assembler bug.
 let canFoldAsLoad = 1 in
 def tLDRpci : T1pIs<(outs tGPR:$dst), (ins i32imm:$addr), IIC_iLoadi,
-                  "ldr", ".n $dst, $addr",
+                  "ldr", " $dst, $addr",
                   [(set tGPR:$dst, (load (ARMWrapper tconstpool:$addr)))]>;
 
 // Special LDR for loads from non-pc-relative constpools.
@@ -396,7 +395,7 @@ def tADDrr : T1sI<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iALUr,
 
 let neverHasSideEffects = 1 in
 def tADDhirr : T1pIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
-                     "add", " $dst, $rhs @ addhirr", []>;
+                     "add", " $dst, $rhs", []>;
 
 // And register
 let isCommutable = 1 in
@@ -500,11 +499,11 @@ def tMOVSr      : T1I<(outs tGPR:$dst), (ins tGPR:$src), IIC_iMOVr,
 
 // FIXME: Make these predicable.
 def tMOVgpr2tgpr : T1I<(outs tGPR:$dst), (ins GPR:$src), IIC_iMOVr,
-                       "mov $dst, $src\t@ hir2lor", []>;
+                       "mov $dst, $src", []>;
 def tMOVtgpr2gpr : T1I<(outs GPR:$dst), (ins tGPR:$src), IIC_iMOVr,
-                       "mov $dst, $src\t@ lor2hir", []>;
+                       "mov $dst, $src", []>;
 def tMOVgpr2gpr  : T1I<(outs GPR:$dst), (ins GPR:$src), IIC_iMOVr,
-                       "mov $dst, $src\t@ hir2hir", []>;
+                       "mov $dst, $src", []>;
 } // neverHasSideEffects
 
 // multiply register

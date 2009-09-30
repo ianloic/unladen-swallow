@@ -135,10 +135,10 @@ PyGlobalLlvmData::InitializeOptimizations()
     O2->add(llvm::createInstructionCombiningPass());
     O2->add(llvm::createCFGSimplificationPass());
     O2->add(llvm::createScalarReplAggregatesPass());
-    O2->add(CreatePyAliasAnalysis());
+    O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createLICMPass());
     O2->add(llvm::createCondPropagationPass());
-    O2->add(CreatePyAliasAnalysis());
+    O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createGVNPass());
     O2->add(llvm::createSCCPPass());
     O2->add(llvm::createAggressiveDCEPass());
@@ -184,6 +184,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
     optO3->add(createReassociatePass());           // Reassociate expressions
     optO3->add(createLoopRotatePass());            // Rotate Loop
+    optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createLICMPass());                  // Hoist loop invariants
     optO3->add(createLoopUnswitchPass());
     optO3->add(createLoopIndexSplitPass());        // Split loop index
@@ -192,7 +193,9 @@ PyGlobalLlvmData::InitializeOptimizations()
     optO3->add(createLoopDeletionPass());          // Delete dead loops
     optO3->add(createLoopUnrollPass());          // Unroll small loops
     optO3->add(createInstructionCombiningPass()); // Clean up after the unroller
+    optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createGVNPass());                   // Remove redundancies
+    optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createMemCpyOptPass());            // Remove memcpy / form memset
     optO3->add(createSCCPPass());                  // Constant prop with SCCP
 
@@ -200,6 +203,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     // opened up by them.
     optO3->add(createInstructionCombiningPass());
     optO3->add(createCondPropagationPass());       // Propagate conditionals
+    optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createDeadStoreEliminationPass());  // Delete dead stores
     optO3->add(createAggressiveDCEPass());   // Delete dead instructions
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs

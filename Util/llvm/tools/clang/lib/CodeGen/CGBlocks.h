@@ -66,7 +66,7 @@ class BlockModule : public BlockBase {
   CodeGenTypes &Types;
   CodeGenModule &CGM;
   llvm::LLVMContext &VMContext;
-  
+
   ASTContext &getContext() const { return Context; }
   llvm::Module &getModule() const { return TheModule; }
   CodeGenTypes &getTypes() { return Types; }
@@ -89,7 +89,7 @@ public:
   /// NSConcreteStackBlock - Cached reference to the class poinnter for stack
   /// blocks.
   llvm::Constant *NSConcreteStackBlock;
-  
+
   const llvm::Type *BlockDescriptorType;
   const llvm::Type *GenericBlockLiteralType;
   const llvm::Type *GenericExtendedBlockLiteralType;
@@ -114,6 +114,16 @@ public:
     Block.GlobalUniqueCount = 0;
     PtrToInt8Ty = llvm::PointerType::getUnqual(
                 llvm::Type::getInt8Ty(M.getContext()));
+  }
+
+  bool BlockRequiresCopying(QualType Ty) {
+    if (Ty->isBlockPointerType())
+      return true;
+    if (getContext().isObjCNSObjectType(Ty))
+      return true;
+    if (Ty->isObjCObjectPointerType())
+      return true;
+    return false;
   }
 };
 
@@ -157,11 +167,11 @@ public:
     /// ByCopyDeclRefs - Variables from parent scopes that have been imported
     /// into this block.
     llvm::SmallVector<const BlockDeclRefExpr *, 8> ByCopyDeclRefs;
-    
-    // ByRefDeclRefs - __block variables from parent scopes that have been 
+
+    // ByRefDeclRefs - __block variables from parent scopes that have been
     // imported into this block.
     llvm::SmallVector<const BlockDeclRefExpr *, 8> ByRefDeclRefs;
-    
+
     BlockInfo(const llvm::Type *blt, const char *n)
       : BlockLiteralTy(blt), Name(n) {
       // Skip asm prefix, if any.
@@ -219,15 +229,7 @@ public:
   llvm::Value *getBlockObjectDispose();
   void BuildBlockRelease(llvm::Value *DeclPtr, int flag = BLOCK_FIELD_IS_BYREF);
 
-  bool BlockRequiresCopying(QualType Ty) {
-    if (Ty->isBlockPointerType())
-      return true;
-    if (getContext().isObjCNSObjectType(Ty))
-      return true;
-    if (Ty->isObjCObjectPointerType())
-      return true;
-    return false;
-  }
+  bool BlockRequiresCopying(QualType Ty);
 };
 
 }  // end namespace CodeGen

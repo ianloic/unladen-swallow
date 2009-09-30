@@ -19,16 +19,20 @@
 #include "llvm/User.h"
 #include "llvm/Type.h"
 #include "llvm/OperandTraits.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ValueHandle.h"
 
 namespace llvm {
 class Constant;
+class Instruction;
 class LLVMContext;
-template<class ConstantClass, class TypeClass, class ValType>
-struct ConstantCreator;
 
 //===----------------------------------------------------------------------===//
 // MetadataBase  - A base class for MDNode, MDString and NamedMDNode.
@@ -103,14 +107,32 @@ public:
 /// MDNode - a tuple of other values.
 /// These contain a list of the values that represent the metadata. 
 /// MDNode is always unnamed.
-class MDNode : public MetadataBase {
+class MDNode : public MetadataBase, public FoldingSetNode {
   MDNode(const MDNode &);                // DO NOT IMPLEMENT
   void *operator new(size_t, unsigned);  // DO NOT IMPLEMENT
   // getNumOperands - Make this only available for private uses.
   unsigned getNumOperands() { return User::getNumOperands();  }
 
-  SmallVector<WeakVH, 4> Node;
-  friend struct ConstantCreator<MDNode, Type, std::vector<Value*> >;
+  friend class ElementVH;
+  // Use CallbackVH to hold MDNOde elements.
+  struct ElementVH : public CallbackVH {
+    MDNode *Parent;
+    ElementVH(Value *V, MDNode *P) : CallbackVH(V), Parent(P) {}
+    ~ElementVH() {}
+
+    virtual void deleted() {
+      Parent->replaceElement(this->operator Value*(), 0);
+    }
+
+    virtual void allUsesReplacedWith(Value *NV) {
+      Parent->replaceElement(this->operator Value*(), NV);
+    }
+  };
+  // Replace each instance of F from the element list of this node with T.
+  void replaceElement(Value *F, Value *T);
+
+  SmallVector<ElementVH, 4> Node;
+
 protected:
   explicit MDNode(LLVMContext &C, Value*const* Vals, unsigned NumVals);
 public:
@@ -140,8 +162,8 @@ public:
   }
 
   // Element access
-  typedef SmallVectorImpl<WeakVH>::const_iterator const_elem_iterator;
-  typedef SmallVectorImpl<WeakVH>::iterator elem_iterator;
+  typedef SmallVectorImpl<ElementVH>::const_iterator const_elem_iterator;
+  typedef SmallVectorImpl<ElementVH>::iterator elem_iterator;
   /// elem_empty - Return true if MDNode is empty.
   bool elem_empty() const                { return Node.empty(); }
   const_elem_iterator elem_begin() const { return Node.begin(); }
@@ -155,6 +177,10 @@ public:
   virtual bool isNullValue() const {
     return false;
   }
+
+  /// Profile - calculate a unique identifier for this MDNode to collapse
+  /// duplicates
+  void Profile(FoldingSetNodeID &ID) const;
 
   virtual void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U) {
     llvm_unreachable("This should never be called because MDNodes have no ops");
@@ -276,6 +302,57 @@ public:
   static bool classof(const Value *V) {
     return V->getValueID() == NamedMDNodeVal;
   }
+};
+
+//===----------------------------------------------------------------------===//
+/// Metadata -
+/// Metadata manages metadata used in a context.
+
+/// MDKindID - This id identifies metadata kind the metadata store. Valid
+/// ID values are 1 or higher. This ID is set by RegisterMDKind.
+typedef unsigned MDKindID;
+
+class Metadata {
+public:
+  typedef std::pair<MDKindID, WeakVH> MDPairTy;
+  typedef SmallVector<MDPairTy, 2> MDMapTy;
+  typedef DenseMap<const Instruction *, MDMapTy> MDStoreTy;
+  friend class BitcodeReader;
+private:
+
+  /// MetadataStore - Collection of metadata used in this context.
+  MDStoreTy MetadataStore;
+
+  /// MDHandlerNames - Map to hold metadata handler names.
+  StringMap<unsigned> MDHandlerNames;
+
+public:
+  /// RegisterMDKind - Register a new metadata kind and return its ID.
+  /// A metadata kind can be registered only once. 
+  MDKindID RegisterMDKind(const char *Name);
+
+  /// getMDKind - Return metadata kind. If the requested metadata kind
+  /// is not registered then return 0.
+  MDKindID getMDKind(const char *Name);
+
+  /// getMD - Get the metadata of given kind attached with an Instruction.
+  /// If the metadata is not found then return 0.
+  MDNode *getMD(MDKindID Kind, const Instruction *Inst);
+
+  /// getMDs - Get the metadata attached with an Instruction.
+  const MDMapTy *getMDs(const Instruction *Inst);
+
+  /// setMD - Attach the metadata of given kind with an Instruction.
+  void setMD(MDKindID Kind, MDNode *Node, Instruction *Inst);
+  
+  /// getHandlerNames - Get handler names. This is used by bitcode
+  /// writer.
+  const StringMap<unsigned> *getHandlerNames();
+
+  /// ValueIsDeleted - This handler is used to update metadata store
+  /// when a value is deleted.
+  void ValueIsDeleted(Value *V) {}
+  void ValueIsDeleted(const Instruction *Inst);
 };
 
 } // end llvm namespace

@@ -138,7 +138,12 @@ import re
 import sys
 import time
 import traceback
+import types
 import warnings
+try:
+    import _llvm
+except ImportError:
+    _llvm = None
 
 # I see no other way to suppress these warnings;
 # putting them in test_grammar.py has no effect:
@@ -694,14 +699,17 @@ def dash_R(the_module, test, indirect_test, huntrleaks):
     repcount = nwarmup + ntracked
     print >> sys.stderr, "beginning", repcount, "repetitions"
     print >> sys.stderr, ("1234567890"*(repcount//10 + 1))[:repcount]
-    dash_R_cleanup(fs, ps, pic, abcs)
+    if _llvm:
+        _llvm.set_jit_control("never")
     for i in range(repcount):
-        rc = sys.gettotalrefcount()
+        dash_R_cleanup(fs, ps, pic, abcs)
+        rc_before = sys.gettotalrefcount()
         run_the_test()
         sys.stderr.write('.')
         dash_R_cleanup(fs, ps, pic, abcs)
+        rc_after = sys.gettotalrefcount()
         if i >= nwarmup:
-            deltas.append(sys.gettotalrefcount() - rc - 2)
+            deltas.append(rc_after - rc_before)
     print >> sys.stderr
     if any(deltas):
         msg = '%s leaked %s references, sum=%s' % (test, deltas, sum(deltas))
@@ -754,6 +762,12 @@ def dash_R_cleanup(fs, ps, pic, abcs):
     filecmp._cache.clear()
     struct._clearcache()
     doctest.master = None
+
+    if _llvm:
+        code_types = (types.CodeType, types.FunctionType, types.MethodType)
+        for obj in gc.get_objects():
+            if isinstance(obj, code_types):
+                _llvm.clear_feedback(obj)
 
     # Collect cyclic trash.
     gc.collect()
@@ -824,6 +838,7 @@ _expectations = {
         test_gdbm
         test_grp
         test_ioctl
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_mhlib
@@ -867,6 +882,7 @@ _expectations = {
         test_epoll
         test_grp
         test_ioctl
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -891,6 +907,7 @@ _expectations = {
         test_bsddb185
         test_dl
         test_epoll
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_minidom
@@ -905,6 +922,7 @@ _expectations = {
         test_bsddb185
         test_dl
         test_epoll
+        test_jit_gdb
         test_largefile
         test_kqueue
         test_minidom
@@ -922,6 +940,7 @@ _expectations = {
         test_fork1
         test_epoll
         test_gettext
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -952,6 +971,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_grp
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -977,6 +997,7 @@ _expectations = {
         test_curses
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -991,6 +1012,7 @@ _expectations = {
         test_curses
         test_dbm
         test_epoll
+        test_jit_gdb
         test_kqueue
         test_gdbm
         test_gzip
@@ -1007,6 +1029,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_gzip
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -1024,6 +1047,7 @@ _expectations = {
         test_dl
         test_gdbm
         test_epoll
+        test_jit_gdb
         test_largefile
         test_locale
         test_kqueue
@@ -1041,6 +1065,7 @@ _expectations = {
         test_dbm
         test_epoll
         test_ioctl
+        test_jit_gdb
         test_kqueue
         test_largefile
         test_locale
@@ -1056,6 +1081,7 @@ _expectations = {
         test_curses
         test_dl
         test_epoll
+        test_jit_gdb
         test_kqueue
         test_largefile
         test_mhlib
@@ -1072,6 +1098,7 @@ _expectations = {
         test_bsddb3
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_ossaudiodev
         test_pep277
@@ -1093,6 +1120,7 @@ _expectations = {
         test_epoll
         test_gdbm
         test_gzip
+        test_jit_gdb
         test_kqueue
         test_ossaudiodev
         test_tcl
@@ -1107,6 +1135,7 @@ _expectations = {
         test_dl
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_normalization
         test_ossaudiodev
@@ -1124,6 +1153,7 @@ _expectations = {
         test_dl
         test_epoll
         test_gdbm
+        test_jit_gdb
         test_locale
         test_ossaudiodev
         test_pep277

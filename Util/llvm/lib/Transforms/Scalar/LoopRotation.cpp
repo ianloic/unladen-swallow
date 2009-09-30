@@ -32,7 +32,7 @@ using namespace llvm;
 STATISTIC(NumRotated, "Number of loops rotated");
 namespace {
 
-  class VISIBILITY_HIDDEN RenameData {
+  class RenameData {
   public:
     RenameData(Instruction *O, Value *P, Instruction *H) 
       : Original(O), PreHeader(P), Header(H) { }
@@ -42,8 +42,7 @@ namespace {
     Instruction *Header; // New header replacement
   };
   
-  class VISIBILITY_HIDDEN LoopRotate : public LoopPass {
-
+  class LoopRotate : public LoopPass {
   public:
     static char ID; // Pass ID, replacement for typeid
     LoopRotate() : LoopPass(&ID) {}
@@ -543,22 +542,7 @@ void LoopRotate::preserveCanonicalLoopForm(LPPassManager &LPM) {
 
   // Preserve canonical loop form, which means Exit block should
   // have only one predecessor.
-  BasicBlock *NExit = SplitEdge(L->getLoopLatch(), Exit, this);
-
-  // Preserve LCSSA.
-  for (BasicBlock::iterator I = Exit->begin();
-       (PN = dyn_cast<PHINode>(I)); ++I) {
-    unsigned N = PN->getNumIncomingValues();
-    for (unsigned index = 0; index != N; ++index)
-      if (PN->getIncomingBlock(index) == NExit) {
-        PHINode *NewPN = PHINode::Create(PN->getType(), PN->getName(),
-                                         NExit->begin());
-        NewPN->addIncoming(PN->getIncomingValue(index), L->getLoopLatch());
-        PN->setIncomingValue(index, NewPN);
-        PN->setIncomingBlock(index, NExit);
-        break;
-      }
-  }
+  SplitEdge(L->getLoopLatch(), Exit, this);
 
   assert(NewHeader && L->getHeader() == NewHeader &&
          "Invalid loop header after loop rotation");

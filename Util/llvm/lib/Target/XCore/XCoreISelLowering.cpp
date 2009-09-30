@@ -611,7 +611,7 @@ SDValue XCoreTargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) {
 /// XCore call implementation
 SDValue
 XCoreTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                               unsigned CallConv, bool isVarArg,
+                               CallingConv::ID CallConv, bool isVarArg,
                                bool isTailCall,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -636,7 +636,7 @@ XCoreTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 /// TODO: isTailCall, sret.
 SDValue
 XCoreTargetLowering::LowerCCCCallTo(SDValue Chain, SDValue Callee,
-                                    unsigned CallConv, bool isVarArg,
+                                    CallingConv::ID CallConv, bool isVarArg,
                                     bool isTailCall,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -761,7 +761,7 @@ XCoreTargetLowering::LowerCCCCallTo(SDValue Chain, SDValue Callee,
 /// appropriate copies out of appropriate physical registers.
 SDValue
 XCoreTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
-                                     unsigned CallConv, bool isVarArg,
+                                     CallingConv::ID CallConv, bool isVarArg,
                                      const SmallVectorImpl<ISD::InputArg> &Ins,
                                      DebugLoc dl, SelectionDAG &DAG,
                                      SmallVectorImpl<SDValue> &InVals) {
@@ -791,7 +791,7 @@ XCoreTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
 /// XCore formal arguments implementation
 SDValue
 XCoreTargetLowering::LowerFormalArguments(SDValue Chain,
-                                          unsigned CallConv,
+                                          CallingConv::ID CallConv,
                                           bool isVarArg,
                                       const SmallVectorImpl<ISD::InputArg> &Ins,
                                           DebugLoc dl,
@@ -814,7 +814,7 @@ XCoreTargetLowering::LowerFormalArguments(SDValue Chain,
 /// TODO: sret
 SDValue
 XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
-                                       unsigned CallConv,
+                                       CallingConv::ID CallConv,
                                        bool isVarArg,
                                        const SmallVectorImpl<ISD::InputArg>
                                          &Ins,
@@ -928,7 +928,7 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
 
 SDValue
 XCoreTargetLowering::LowerReturn(SDValue Chain,
-                                 unsigned CallConv, bool isVarArg,
+                                 CallingConv::ID CallConv, bool isVarArg,
                                  const SmallVectorImpl<ISD::OutputArg> &Outs,
                                  DebugLoc dl, SelectionDAG &DAG) {
 
@@ -981,7 +981,8 @@ XCoreTargetLowering::LowerReturn(SDValue Chain,
 
 MachineBasicBlock *
 XCoreTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                 MachineBasicBlock *BB) const {
+                                                 MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo &TII = *getTargetMachine().getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
   assert((MI->getOpcode() == XCore::SELECT_CC) &&
@@ -1009,9 +1010,18 @@ XCoreTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     .addReg(MI->getOperand(1).getReg()).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
-  // Update machine-CFG edges by transferring all successors of the current
+  // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
-  sinkMBB->transferSuccessors(BB);
+  // Also inform sdisel of the edge changes.
+  for (MachineBasicBlock::succ_iterator I = BB->succ_begin(), 
+         E = BB->succ_end(); I != E; ++I) {
+    EM->insert(std::make_pair(*I, sinkMBB));
+    sinkMBB->addSuccessor(*I);
+  }
+  // Next, remove all successors of the current block, and add the true
+  // and fallthrough blocks as its successors.
+  while (!BB->succ_empty())
+    BB->removeSuccessor(BB->succ_begin());
   // Next, add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);

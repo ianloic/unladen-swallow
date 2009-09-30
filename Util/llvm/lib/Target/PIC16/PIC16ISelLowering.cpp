@@ -1255,7 +1255,7 @@ LowerDirectCallReturn(SDValue RetLabel, SDValue Chain, SDValue InFlag,
 
 SDValue
 PIC16TargetLowering::LowerReturn(SDValue Chain,
-                                 unsigned CallConv, bool isVarArg,
+                                 CallingConv::ID CallConv, bool isVarArg,
                                  const SmallVectorImpl<ISD::OutputArg> &Outs,
                                  DebugLoc dl, SelectionDAG &DAG) {
 
@@ -1347,7 +1347,7 @@ GetDataAddress(DebugLoc dl, SDValue Callee, SDValue &Chain,
 
 SDValue
 PIC16TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
-                               unsigned CallConv, bool isVarArg,
+                               CallingConv::ID CallConv, bool isVarArg,
                                bool isTailCall,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
                                const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -1603,7 +1603,7 @@ void PIC16TargetLowering::InitReservedFrameCount(const Function *F) {
 
 SDValue
 PIC16TargetLowering::LowerFormalArguments(SDValue Chain,
-                                          unsigned CallConv,
+                                          CallingConv::ID CallConv,
                                           bool isVarArg,
                                       const SmallVectorImpl<ISD::InputArg> &Ins,
                                           DebugLoc dl,
@@ -1813,7 +1813,8 @@ SDValue PIC16TargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) {
 
 MachineBasicBlock *
 PIC16TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                 MachineBasicBlock *BB) const {
+                                                 MachineBasicBlock *BB,
+                   DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
   const TargetInstrInfo &TII = *getTargetMachine().getInstrInfo();
   unsigned CC = (PIC16CC::CondCodes)MI->getOperand(3).getImm();
   DebugLoc dl = MI->getDebugLoc();
@@ -1839,9 +1840,18 @@ PIC16TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
 
-  // Update machine-CFG edges by transferring all successors of the current
+  // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
-  sinkMBB->transferSuccessors(BB);
+  // Also inform sdisel of the edge changes.
+  for (MachineBasicBlock::succ_iterator I = BB->succ_begin(), 
+         E = BB->succ_end(); I != E; ++I) {
+    EM->insert(std::make_pair(*I, sinkMBB));
+    sinkMBB->addSuccessor(*I);
+  }
+  // Next, remove all successors of the current block, and add the true
+  // and fallthrough blocks as its successors.
+  while (!BB->succ_empty())
+    BB->removeSuccessor(BB->succ_begin());
   // Next, add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);

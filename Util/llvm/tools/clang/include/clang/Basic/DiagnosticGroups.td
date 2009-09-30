@@ -26,7 +26,6 @@ def : DiagGroup<"bad-function-cast">;
 def : DiagGroup<"cast-align">;
 def : DiagGroup<"cast-qual">;
 def : DiagGroup<"char-align">;
-def : DiagGroup<"char-subscripts">;
 def Comment : DiagGroup<"comment">;
 def : DiagGroup<"conversion">;
 def : DiagGroup<"declaration-after-statement">;
@@ -59,6 +58,7 @@ def NonNull : DiagGroup<"nonnull">;
 def : DiagGroup<"nonportable-cfstrings">;
 def : DiagGroup<"old-style-definition">;
 def : DiagGroup<"overflow">;
+def : DiagGroup<"overloaded-virtual">;
 def : DiagGroup<"packed">;
 def Parentheses : DiagGroup<"parentheses">;
 def PointerArith : DiagGroup<"pointer-arith">;
@@ -105,6 +105,7 @@ def : DiagGroup<"variadic-macros">;
 def VectorConversions : DiagGroup<"vector-conversions">;      // clang specific
 def VolatileRegisterVar : DiagGroup<"volatile-register-var">;
 def : DiagGroup<"write-strings">;
+def CharSubscript : DiagGroup<"char-subscripts">;
 
 // Aggregation warning settings.
 
@@ -141,7 +142,8 @@ def Most : DiagGroup<"most", [
     UnusedVariable,
     VectorConversions,
     VolatileRegisterVar,
-    Reorder
+    Reorder,
+    CharSubscript
  ]>;
 
 // -Wall is -Wmost -Wparentheses

@@ -20,7 +20,7 @@ extern "C" {
 #endif
 
 // PyListObject; keep in sync with Util/PyTypeBuilder.h.
-typedef struct {
+typedef struct PyListObject {
     PyObject_VAR_HEAD
     /* Vector of pointers to list elements.  list[0] is ob_item[0], etc. */
     PyObject **ob_item;

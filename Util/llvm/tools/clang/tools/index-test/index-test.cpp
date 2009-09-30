@@ -62,11 +62,11 @@ public:
     : AST(ast), Filename(filename),
       DeclRefMap(ast->getASTContext()),
       SelMap(ast->getASTContext()) { }
-  
+
   virtual ASTContext &getASTContext() { return AST->getASTContext(); }
   virtual DeclReferenceMap &getDeclReferenceMap() { return DeclRefMap; }
   virtual SelectorMap &getSelectorMap() { return SelMap; }
-  
+
   llvm::OwningPtr<ASTUnit> AST;
   std::string Filename;
   DeclReferenceMap DeclRefMap;
@@ -85,7 +85,7 @@ enum ProgActions {
   PrintDecls      // Print declarations of the point-at node
 };
 
-static llvm::cl::opt<ProgActions> 
+static llvm::cl::opt<ProgActions>
 ProgAction(
         llvm::cl::desc("Choose action to perform on the pointed-at AST node:"),
         llvm::cl::ZeroOrMore,
@@ -119,7 +119,7 @@ static void ProcessObjCMessage(ObjCMessageExpr *Msg, Indexer &Idxer) {
     llvm::errs() << "Error: Cannot -print-refs on a ObjC message expression\n";
     HadErrors = true;
     return;
-    
+
   case PrintDecls: {
     Analyz.FindObjCMethods(Msg, Results);
     for (ResultsTy::iterator
@@ -144,7 +144,7 @@ static void ProcessObjCMessage(ObjCMessageExpr *Msg, Indexer &Idxer) {
 
 static void ProcessASTLocation(ASTLocation ASTLoc, Indexer &Idxer) {
   assert(ASTLoc.isValid());
-  
+
   if (ObjCMessageExpr *Msg =
         dyn_cast_or_null<ObjCMessageExpr>(ASTLoc.getStmt()))
     return ProcessObjCMessage(Msg, Idxer);
@@ -210,24 +210,23 @@ int main(int argc, char **argv) {
   llvm::PrettyStackTraceProgram X(argc, argv);
   llvm::cl::ParseCommandLineOptions(argc, argv,
                      "LLVM 'Clang' Indexing Test Bed: http://clang.llvm.org\n");
-  
-  FileManager FileMgr;
 
   Program Prog;
-  Indexer Idxer(Prog, FileMgr);
+  Indexer Idxer(Prog);
   llvm::SmallVector<TUnit*, 4> TUnits;
-  
+
   // If no input was specified, read from stdin.
   if (InputFilenames.empty())
     InputFilenames.push_back("-");
 
   for (unsigned i = 0, e = InputFilenames.size(); i != e; ++i) {
     const std::string &InFile = InputFilenames[i];
-    
+
     std::string ErrMsg;
     llvm::OwningPtr<ASTUnit> AST;
 
-    AST.reset(ASTUnit::LoadFromPCHFile(InFile, FileMgr, &ErrMsg));
+    AST.reset(ASTUnit::LoadFromPCHFile(InFile, Idxer.getDiagnostics(),
+                                       Idxer.getFileManager(), &ErrMsg));
     if (!AST) {
       llvm::errs() << "[" << InFile << "] Error: " << ErrMsg << '\n';
       return 1;
@@ -235,7 +234,7 @@ int main(int argc, char **argv) {
 
     TUnit *TU = new TUnit(AST.take(), InFile);
     TUnits.push_back(TU);
-    
+
     Idxer.IndexAST(TU);
   }
 
@@ -245,7 +244,7 @@ int main(int argc, char **argv) {
 
   if (!PointAtLocation.empty()) {
     const std::string &Filename = PointAtLocation[0].FileName;
-    const FileEntry *File = FileMgr.getFile(Filename);
+    const FileEntry *File = Idxer.getFileManager().getFile(Filename);
     if (File == 0) {
       llvm::errs() << "File '" << Filename << "' does not exist\n";
       return 1;
@@ -254,7 +253,7 @@ int main(int argc, char **argv) {
     // Safety check. Using an out-of-date AST file will only lead to crashes
     // or incorrect results.
     // FIXME: Check all the source files that make up the AST file.
-    const FileEntry *ASTFile = FileMgr.getFile(FirstFile);
+    const FileEntry *ASTFile = Idxer.getFileManager().getFile(FirstFile);
     if (File->getModificationTime() > ASTFile->getModificationTime()) {
       llvm::errs() << "[" << FirstFile << "] Error: " <<
         "Pointing at a source file which was modified after creating "
@@ -272,7 +271,7 @@ int main(int argc, char **argv) {
         "Couldn't resolve source location (invalid location)\n";
       return 1;
     }
-    
+
     ASTLoc = ResolveLocationInAST(FirstAST->getASTContext(), Loc);
     if (ASTLoc.isInvalid()) {
       llvm::errs() << "[" << FirstFile << "] Error: " <<
@@ -280,7 +279,7 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
-  
+
   if (ASTLoc.isValid()) {
     if (ProgAction == PrintPoint) {
       llvm::raw_ostream &OS = llvm::outs();
@@ -292,7 +291,7 @@ int main(int argc, char **argv) {
       ProcessASTLocation(ASTLoc, Idxer);
     }
   }
-  
+
   if (HadErrors)
     return 1;
 
@@ -304,6 +303,6 @@ int main(int argc, char **argv) {
   // Managed static deconstruction. Useful for making things like
   // -time-passes usable.
   llvm::llvm_shutdown();
-  
+
   return 0;
 }

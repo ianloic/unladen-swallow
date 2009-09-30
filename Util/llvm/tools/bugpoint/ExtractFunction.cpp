@@ -37,6 +37,7 @@ using namespace llvm;
 
 namespace llvm {
   bool DisableSimplifyCFG = false;
+  extern cl::opt<std::string> OutputPrefix;
 } // End llvm namespace
 
 namespace {
@@ -188,8 +189,8 @@ static Constant *GetTorInit(std::vector<std::pair<Function*, int> > &TorList) {
     Elts.push_back(ConstantInt::get(
           Type::getInt32Ty(TorList[i].first->getContext()), TorList[i].second));
     Elts.push_back(TorList[i].first);
-    ArrayElts.push_back(ConstantStruct::get(
-                                        TorList[i].first->getContext(), Elts));
+    ArrayElts.push_back(ConstantStruct::get(TorList[i].first->getContext(),
+                                            Elts, false));
   }
   return ConstantArray::get(ArrayType::get(ArrayElts[0]->getType(), 
                                            ArrayElts.size()),
@@ -324,7 +325,7 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
                                                  Module *M) {
   char *ExtraArg = NULL;
 
-  sys::Path uniqueFilename("bugpoint-extractblocks");
+  sys::Path uniqueFilename(OutputPrefix + "-extractblocks");
   std::string ErrMsg;
   if (uniqueFilename.createTemporaryFileOnDisk(true, &ErrMsg)) {
     outs() << "*** Basic Block extraction failed!\n";

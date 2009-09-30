@@ -26,6 +26,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/PassNameParser.h"
 #include "llvm/System/Signals.h"
+#include "llvm/Support/IRReader.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PluginLoader.h"
@@ -63,6 +64,10 @@ PrintEachXForm("p", cl::desc("Print module after each transformation"));
 static cl::opt<bool>
 NoOutput("disable-output",
          cl::desc("Do not write result bitcode file"), cl::Hidden);
+
+static cl::opt<bool>
+OutputAssembly("S",
+         cl::desc("Write output as LLVM assembly"), cl::Hidden);
 
 static cl::opt<bool>
 NoVerify("disable-verify", cl::desc("Do not verify result module"), cl::Hidden);
@@ -132,7 +137,7 @@ struct CallGraphSCCPassPrinter : public CallGraphSCCPass {
   CallGraphSCCPassPrinter(const PassInfo *PI) :
     CallGraphSCCPass(&ID), PassToPrint(PI) {}
 
-  virtual bool runOnSCC(const std::vector<CallGraphNode *>&SCC) {
+  virtual bool runOnSCC(std::vector<CallGraphNode *>&SCC) {
     if (!Quiet) {
       outs() << "Printing analysis '" << PassToPrint->getPassName() << "':\n";
 
@@ -342,22 +347,14 @@ int main(int argc, char **argv) {
     // FIXME: The choice of target should be controllable on the command line.
     std::auto_ptr<TargetMachine> target;
 
-    std::string ErrorMessage;
+    SMDiagnostic Err;
 
     // Load the input module...
     std::auto_ptr<Module> M;
-    if (MemoryBuffer *Buffer
-          = MemoryBuffer::getFileOrSTDIN(InputFilename, &ErrorMessage)) {
-      M.reset(ParseBitcodeFile(Buffer, Context, &ErrorMessage));
-      delete Buffer;
-    }
+    M.reset(ParseIRFile(InputFilename, Err, Context));
 
     if (M.get() == 0) {
-      errs() << argv[0] << ": ";
-      if (ErrorMessage.size())
-        errs() << ErrorMessage << "\n";
-      else
-        errs() << "bitcode didn't read correctly.\n";
+      Err.Print(argv[0], errs());
       return 1;
     }
 
@@ -365,6 +362,10 @@ int main(int argc, char **argv) {
     // FIXME: outs() is not binary!
     raw_ostream *Out = &outs();  // Default to printing to stdout...
     if (OutputFilename != "-") {
+      // Make sure that the Output file gets unlinked from the disk if we get a
+      // SIGINT
+      sys::RemoveFileOnSignal(sys::Path(OutputFilename));
+
       std::string ErrorInfo;
       Out = new raw_fd_ostream(OutputFilename.c_str(), ErrorInfo,
                                raw_fd_ostream::F_Binary);
@@ -373,17 +374,14 @@ int main(int argc, char **argv) {
         delete Out;
         return 1;
       }
-
-      // Make sure that the Output file gets unlinked from the disk if we get a
-      // SIGINT
-      sys::RemoveFileOnSignal(sys::Path(OutputFilename));
     }
 
     // If the output is set to be emitted to standard out, and standard out is a
     // console, print out a warning message and refuse to do it.  We don't
     // impress anyone by spewing tons of binary goo to a terminal.
-    if (!Force && !NoOutput && CheckBitcodeOutputToConsole(*Out, !Quiet))
-      NoOutput = true;
+    if (!Force && !NoOutput && !OutputAssembly)
+      if (CheckBitcodeOutputToConsole(*Out, !Quiet))
+        NoOutput = true;
 
     // Create a PassManager to hold and optimize the collection of passes we are
     // about to build...
@@ -502,9 +500,13 @@ int main(int argc, char **argv) {
     if (!NoVerify && !VerifyEach)
       Passes.add(createVerifierPass());
 
-    // Write bitcode out to disk or outs() as the last step...
-    if (!NoOutput && !AnalyzeOnly)
-      Passes.add(createBitcodeWriterPass(*Out));
+    // Write bitcode or assembly  out to disk or outs() as the last step...
+    if (!NoOutput && !AnalyzeOnly) {
+      if (OutputAssembly)
+        Passes.add(createPrintModulePass(Out));
+      else
+        Passes.add(createBitcodeWriterPass(*Out));
+    }
 
     // Now that we have all of the passes ready, run them.
     Passes.run(*M.get());

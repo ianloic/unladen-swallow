@@ -53,6 +53,8 @@ public:
     llvm::LLVMContext &context() const { return llvm::getGlobalContext(); }
 
     llvm::Module *module() { return this->module_; }
+    llvm::ExistingModuleProvider *module_provider() {
+        return this->module_provider_; }
 
     PyConstantMirror &constant_mirror() { return *this->constant_mirror_; }
 

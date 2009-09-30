@@ -35,7 +35,8 @@ namespace llvm {
       ITOF,        // Int to FP within a FP register.
 
       CALL,        // A call instruction.
-      RET_FLAG     // Return with a flag operand.
+      RET_FLAG,    // Return with a flag operand.
+      GLOBAL_BASE_REG // Global base reg for PIC
     };
   }
 
@@ -58,7 +59,8 @@ namespace llvm {
                                                 unsigned Depth = 0) const;
 
     virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                   MachineBasicBlock *MBB) const;
+                                                         MachineBasicBlock *MBB,
+                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
 
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
@@ -76,7 +78,7 @@ namespace llvm {
 
     virtual SDValue
       LowerFormalArguments(SDValue Chain,
-                           unsigned CallConv,
+                           CallingConv::ID CallConv,
                            bool isVarArg,
                            const SmallVectorImpl<ISD::InputArg> &Ins,
                            DebugLoc dl, SelectionDAG &DAG,
@@ -84,7 +86,7 @@ namespace llvm {
 
     virtual SDValue
       LowerCall(SDValue Chain, SDValue Callee,
-                unsigned CallConv, bool isVarArg,
+                CallingConv::ID CallConv, bool isVarArg,
                 bool isTailCall,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
                 const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -93,9 +95,12 @@ namespace llvm {
 
     virtual SDValue
       LowerReturn(SDValue Chain,
-                  unsigned CallConv, bool isVarArg,
+                  CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                   DebugLoc dl, SelectionDAG &DAG);
+
+    SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG);
   };
 } // end namespace llvm
 

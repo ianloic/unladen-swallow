@@ -123,7 +123,7 @@ namespace {
   private:
     void printLinkageType(GlobalValue::LinkageTypes LT);
     void printVisibilityType(GlobalValue::VisibilityTypes VisTypes);
-    void printCallingConv(unsigned cc);
+    void printCallingConv(CallingConv::ID cc);
     void printEscapedString(const std::string& str);
     void printCFP(const ConstantFP* CFP);
 
@@ -268,7 +268,7 @@ namespace {
     Out << ")";
   }
 
-  void CppWriter::printCallingConv(unsigned cc){
+  void CppWriter::printCallingConv(CallingConv::ID cc){
     // Print the calling convention.
     switch (cc) {
     case CallingConv::C:     Out << "CallingConv::C"; break;
@@ -755,7 +755,7 @@ namespace {
       Out << "ConstantInt* " << constName
           << " = ConstantInt::get(getGlobalContext(), APInt("
           << cast<IntegerType>(CI->getType())->getBitWidth()
-          << ",  StringRef(\"" <<  constValue << "\"), 10));";
+          << ", StringRef(\"" <<  constValue << "\"), 10));";
     } else if (isa<ConstantAggregateZero>(CV)) {
       Out << "ConstantAggregateZero* " << constName
           << " = ConstantAggregateZero::get(" << typeName << ");";
@@ -842,7 +842,7 @@ namespace {
             << getCppName(CE->getOperand(0)) << ", "
             << "&" << constName << "_indices[0], "
             << constName << "_indices.size()"
-            << " );";
+            << ");";
       } else if (CE->isCast()) {
         printConstant(CE->getOperand(0));
         Out << "Constant* " << constName << " = ConstantExpr::getCast(";

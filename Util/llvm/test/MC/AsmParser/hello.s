@@ -1,4 +1,5 @@
 // RUN: llvm-mc -triple i386-unknown-unknown %s -o -
+// RUN: llvm-mc -triple i386-unknown-unknown %s -o - -output-asm-variant=1
         
 	.text
 	.align	4,0x90
@@ -19,7 +20,7 @@ _main:
 	movl	-4(%ebp), %eax
 	addl	$8, %esp
 	popl	%ebp
-	ret
+	//ret
 	.subsections_via_symbols
 	.cstring
 L_.str:

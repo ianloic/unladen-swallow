@@ -20,13 +20,15 @@
 #include "llvm/MC/MCAsmParser.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCAsmInfo.h"
 
 namespace llvm {
-class AsmExpr;
 class AsmCond;
 class MCContext;
+class MCExpr;
 class MCInst;
 class MCStreamer;
+class MCAsmInfo;
 class MCValue;
 class TargetAsmParser;
 class Twine;
@@ -46,8 +48,9 @@ private:
   mutable void *SectionUniquingMap;
 
 public:
-  AsmParser(SourceMgr &_SM, MCContext &_Ctx, MCStreamer &_Out)
-    : Lexer(_SM), Ctx(_Ctx), Out(_Out), TargetParser(0),
+  AsmParser(SourceMgr &_SM, MCContext &_Ctx, MCStreamer &_Out,
+            const MCAsmInfo &_MAI)
+    : Lexer(_SM, _MAI), Ctx(_Ctx), Out(_Out), TargetParser(0),
       SectionUniquingMap(0) {}
   ~AsmParser();
 
@@ -62,15 +65,19 @@ public:
 
   virtual MCAsmLexer &getLexer() { return Lexer; }
 
+  virtual MCContext &getContext() { return Ctx; }
+
+  virtual MCStreamer &getStreamer() { return Out; }
+
   virtual void Warning(SMLoc L, const Twine &Meg);
 
   virtual bool Error(SMLoc L, const Twine &Msg);
 
-  virtual bool ParseExpression(AsmExpr *&Res);
+  virtual bool ParseExpression(const MCExpr *&Res);
+
+  virtual bool ParseParenExpression(const MCExpr *&Res);
 
   virtual bool ParseAbsoluteExpression(int64_t &Res);
-
-  virtual bool ParseRelocatableExpression(MCValue &Res);
 
   /// }
 
@@ -92,21 +99,11 @@ private:
                                           SMLoc DirectiveLoc);
   void EatToEndOfStatement();
   
-  bool ParseAssignment(const StringRef &Name, bool IsDotSet);
+  bool ParseAssignment(const StringRef &Name);
 
-  /// ParseParenRelocatableExpression - Parse an expression which must be
-  /// relocatable, assuming that an initial '(' has already been consumed.
-  ///
-  /// @param Res - The relocatable expression value. The result is undefined on
-  /// error.  
-  /// @result - False on success.
-  ///
-  /// @see ParseRelocatableExpression, ParseParenExpr.
-  bool ParseParenRelocatableExpression(MCValue &Res);
-
-  bool ParsePrimaryExpr(AsmExpr *&Res);
-  bool ParseBinOpRHS(unsigned Precedence, AsmExpr *&Res);
-  bool ParseParenExpr(AsmExpr *&Res);
+  bool ParsePrimaryExpr(const MCExpr *&Res);
+  bool ParseBinOpRHS(unsigned Precedence, const MCExpr *&Res);
+  bool ParseParenExpr(const MCExpr *&Res);
 
   /// ParseIdentifier - Parse an identifier or string (as a quoted identifier)
   /// and set \arg Res to the identifier contents.

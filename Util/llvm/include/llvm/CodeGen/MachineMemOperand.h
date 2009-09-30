@@ -16,6 +16,8 @@
 #ifndef LLVM_CODEGEN_MACHINEMEMOPERAND_H
 #define LLVM_CODEGEN_MACHINEMEMOPERAND_H
 
+#include "llvm/Support/MathExtras.h"
+
 namespace llvm {
 
 class Value;
@@ -47,14 +49,17 @@ public:
   };
 
   /// MachineMemOperand - Construct an MachineMemOperand object with the
-  /// specified address Value, flags, offset, size, and alignment.
+  /// specified address Value, flags, offset, size, and base alignment.
   MachineMemOperand(const Value *v, unsigned int f, int64_t o, uint64_t s,
-                    unsigned int a);
+                    unsigned int base_alignment);
 
-  /// getValue - Return the base address of the memory access.
-  /// Special values are PseudoSourceValue::FPRel, PseudoSourceValue::SPRel,
-  /// and the other PseudoSourceValue members which indicate references to
-  /// frame/stack pointer relative references and other special references.
+  /// getValue - Return the base address of the memory access. This may either
+  /// be a normal LLVM IR Value, or one of the special values used in CodeGen.
+  /// Special values are those obtained via
+  /// PseudoSourceValue::getFixedStack(int), PseudoSourceValue::getStack, and
+  /// other PseudoSourceValue member functions which return objects which stand
+  /// for frame/stack pointer relative references and other special references
+  /// which are not representable in the high-level IR.
   const Value *getValue() const { return V; }
 
   /// getFlags - Return the raw flags of the source value, \see MemOperandFlags.
@@ -69,8 +74,14 @@ public:
   uint64_t getSize() const { return Size; }
 
   /// getAlignment - Return the minimum known alignment in bytes of the
-  /// memory reference.
-  unsigned int getAlignment() const { return (1u << (Flags >> 3)) >> 1; }
+  /// actual memory reference.
+  uint64_t getAlignment() const {
+    return MinAlign(getBaseAlignment(), getOffset());
+  }
+
+  /// getBaseAlignment - Return the minimum known alignment in bytes of the
+  /// base address, without the offset.
+  uint64_t getBaseAlignment() const { return (1u << (Flags >> 3)) >> 1; }
 
   bool isLoad() const { return Flags & MOLoad; }
   bool isStore() const { return Flags & MOStore; }
