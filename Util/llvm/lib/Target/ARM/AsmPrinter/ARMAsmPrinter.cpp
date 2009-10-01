@@ -50,7 +50,6 @@ STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
   class VISIBILITY_HIDDEN ARMAsmPrinter : public AsmPrinter {
-    DwarfWriter *DW;
 
     /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can
     /// make the right decision when printing asm code for different targets.
@@ -84,7 +83,7 @@ namespace {
   public:
     explicit ARMAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
                            const MCAsmInfo *T, bool V)
-      : AsmPrinter(O, TM, T, V), DW(0), AFI(NULL), MCP(NULL),
+      : AsmPrinter(O, TM, T, V), AFI(NULL), MCP(NULL),
         InCPMode(false) {
       Subtarget = &TM.getSubtarget<ARMSubtarget>();
     }
@@ -329,7 +328,14 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     break;
   }
   case MachineOperand::MO_Immediate: {
-    O << '#' << MO.getImm();
+    int64_t Imm = MO.getImm();
+    if (Modifier) {
+      if (strcmp(Modifier, "lo16") == 0)
+        Imm = Imm & 0xffffLL;
+      else if (strcmp(Modifier, "hi16") == 0)
+        Imm = (Imm & 0xffff0000LL) >> 16;
+    }
+    O << '#' << Imm;
     break;
   }
   case MachineOperand::MO_MachineBasicBlock:
@@ -1039,8 +1045,26 @@ void ARMAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
 
 bool ARMAsmPrinter::doInitialization(Module &M) {
 
+  if (Subtarget->isTargetDarwin()) {
+    Reloc::Model RelocM = TM.getRelocationModel();
+    if (RelocM == Reloc::PIC_ || RelocM == Reloc::DynamicNoPIC) {
+      // Declare all the text sections up front (before the DWARF sections
+      // emitted by AsmPrinter::doInitialization) so the assembler will keep
+      // them together at the beginning of the object file.  This helps
+      // avoid out-of-range branches that are due a fundamental limitation of
+      // the way symbol offsets are encoded with the current Darwin ARM
+      // relocations.
+      O << "\t.section __TEXT,__text,regular\n"
+        << "\t.section __TEXT,__textcoal_nt,coalesced\n"
+        << "\t.section __TEXT,__const_coal,coalesced\n";
+      if (RelocM == Reloc::DynamicNoPIC)
+        O << "\t.section __TEXT,__symbol_stub4,symbol_stubs,none,12\n";
+      else
+        O << "\t.section __TEXT,__picsymbolstub4,symbol_stubs,none,16\n";
+    }
+  }
+
   bool Result = AsmPrinter::doInitialization(M);
-  DW = getAnalysisIfAvailable<DwarfWriter>();
 
   // Use unified assembler syntax mode for Thumb.
   if (Subtarget->isThumb())

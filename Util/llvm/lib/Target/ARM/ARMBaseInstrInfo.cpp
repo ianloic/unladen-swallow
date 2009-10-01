@@ -423,6 +423,7 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
     default:
       llvm_unreachable("Unknown or unset size field for instr!");
     case TargetInstrInfo::IMPLICIT_DEF:
+    case TargetInstrInfo::KILL:
     case TargetInstrInfo::DBG_LABEL:
     case TargetInstrInfo::EH_LABEL:
       return 0;
@@ -864,7 +865,8 @@ ARMBaseInstrInfo::canFoldMemoryOperand(const MachineInstr *MI,
 /// getInstrPredicate - If instruction is predicated, returns its predicate
 /// condition, otherwise returns AL. It also returns the condition code
 /// register by reference.
-ARMCC::CondCodes llvm::getInstrPredicate(MachineInstr *MI, unsigned &PredReg) {
+ARMCC::CondCodes
+llvm::getInstrPredicate(const MachineInstr *MI, unsigned &PredReg) {
   int PIdx = MI->findFirstPredOperandIdx();
   if (PIdx == -1) {
     PredReg = 0;

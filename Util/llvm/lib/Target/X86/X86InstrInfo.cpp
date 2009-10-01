@@ -2296,7 +2296,7 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
   // Determine the alignment of the load.
   unsigned Alignment = 0;
   if (LoadMI->hasOneMemOperand())
-    Alignment = LoadMI->memoperands_begin()->getAlignment();
+    Alignment = (*LoadMI->memoperands_begin())->getAlignment();
   else
     switch (LoadMI->getOpcode()) {
     case X86::V_SET0:
@@ -2586,8 +2586,8 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
     EVT VT = *RC->vt_begin();
     bool isAligned = (RI.getStackAlignment() >= 16) ||
       RI.needsStackRealignment(MF);
-    Load = DAG.getTargetNode(getLoadRegOpcode(0, RC, isAligned, TM), dl,
-                             VT, MVT::Other, &AddrOps[0], AddrOps.size());
+    Load = DAG.getMachineNode(getLoadRegOpcode(0, RC, isAligned, TM), dl,
+                              VT, MVT::Other, &AddrOps[0], AddrOps.size());
     NewNodes.push_back(Load);
   }
 
@@ -2606,8 +2606,8 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
   if (Load)
     BeforeOps.push_back(SDValue(Load, 0));
   std::copy(AfterOps.begin(), AfterOps.end(), std::back_inserter(BeforeOps));
-  SDNode *NewNode= DAG.getTargetNode(Opc, dl, VTs, &BeforeOps[0],
-                                     BeforeOps.size());
+  SDNode *NewNode= DAG.getMachineNode(Opc, dl, VTs, &BeforeOps[0],
+                                      BeforeOps.size());
   NewNodes.push_back(NewNode);
 
   // Emit the store instruction.
@@ -2617,10 +2617,10 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
     AddrOps.push_back(Chain);
     bool isAligned = (RI.getStackAlignment() >= 16) ||
       RI.needsStackRealignment(MF);
-    SDNode *Store = DAG.getTargetNode(getStoreRegOpcode(0, DstRC,
-                                                        isAligned, TM),
-                                      dl, MVT::Other,
-                                      &AddrOps[0], AddrOps.size());
+    SDNode *Store = DAG.getMachineNode(getStoreRegOpcode(0, DstRC,
+                                                         isAligned, TM),
+                                       dl, MVT::Other,
+                                       &AddrOps[0], AddrOps.size());
     NewNodes.push_back(Store);
   }
 
@@ -3061,6 +3061,7 @@ static unsigned GetInstSizeWithDesc(const MachineInstr &MI,
     case TargetInstrInfo::EH_LABEL:
       break;
     case TargetInstrInfo::IMPLICIT_DEF:
+    case TargetInstrInfo::KILL:
     case X86::DWARF_LOC:
     case X86::FP_REG_KILL:
       break;

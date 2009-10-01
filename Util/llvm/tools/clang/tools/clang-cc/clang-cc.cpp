@@ -138,6 +138,7 @@ enum ProgActions {
   ASTDump,                      // Parse ASTs and dump them.
   ASTView,                      // Parse ASTs and view them in Graphviz.
   PrintDeclContext,             // Print DeclContext and their Decls.
+  DumpRecordLayouts,            // Dump record layout information.
   ParsePrintCallbacks,          // Parse and print each callback.
   ParseSyntaxOnly,              // Parse and perform semantic analysis.
   ParseNoop,                    // Parse with noop callbacks.
@@ -183,6 +184,8 @@ ProgAction(llvm::cl::desc("Choose output type:"), llvm::cl::ZeroOrMore,
                         "Build ASTs and view them with GraphViz"),
              clEnumValN(PrintDeclContext, "print-decl-contexts",
                         "Print DeclContexts and their Decls"),
+             clEnumValN(DumpRecordLayouts, "dump-record-layouts",
+                        "Dump record layout information"),
              clEnumValN(GeneratePTH, "emit-pth",
                         "Generate pre-tokenized header file"),
              clEnumValN(GeneratePCH, "emit-pch",
@@ -214,10 +217,10 @@ OutputFile("o",
  llvm::cl::desc("Specify output file"));
 
 
-static llvm::cl::opt<int>
-DumpCodeCompletion("code-completion-dump",
-                   llvm::cl::value_desc("N"),
-                   llvm::cl::desc("Dump code-completion information at $$N$$"));
+static llvm::cl::opt<ParsedSourceLocation>
+CodeCompletionAt("code-completion-at",
+                 llvm::cl::value_desc("file:line:column"),
+              llvm::cl::desc("Dump code-completion information at a location"));
 
 /// \brief Buld a new code-completion consumer that prints the results of
 /// code completion to standard output.
@@ -515,8 +518,7 @@ static void InitializeLangOptions(LangOptions &Options, LangKind LK){
 enum LangStds {
   lang_unspecified,
   lang_c89, lang_c94, lang_c99,
-  lang_gnu_START,
-  lang_gnu89 = lang_gnu_START, lang_gnu99,
+  lang_gnu89, lang_gnu99,
   lang_cxx98, lang_gnucxx98,
   lang_cxx0x, lang_gnucxx0x
 };
@@ -749,7 +751,22 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
   }
 
   // GNUMode - Set if we're in gnu99, gnu89, gnucxx98, etc.
-  Options.GNUMode = LangStd >= lang_gnu_START;
+  switch (LangStd) {
+  default: assert(0 && "Unknown language standard!");
+  case lang_gnucxx0x:
+  case lang_gnucxx98:
+  case lang_gnu99:
+  case lang_gnu89:
+    Options.GNUMode = 1;
+    break;
+  case lang_cxx0x:
+  case lang_cxx98:
+  case lang_c99:
+  case lang_c94:
+  case lang_c89:
+    Options.GNUMode = 0;
+    break;
+  }
 
   if (Options.CPlusPlus) {
     Options.C99 = 0;
@@ -1774,6 +1791,9 @@ static ASTConsumer *CreateConsumerAction(Preprocessor &PP,
   case PrintDeclContext:
     return CreateDeclContextPrinter();
 
+  case DumpRecordLayouts:
+    return CreateRecordLayoutDumper();
+
   case InheritanceView:
     return CreateInheritanceViewer(InheritanceViewCls);
 
@@ -2057,17 +2077,22 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
     CodeCompleteConsumer *(*CreateCodeCompleter)(Sema &, void *) = 0;
     void *CreateCodeCompleterData = 0;
     
-    if (DumpCodeCompletion) {
-      // To dump code-completion information, we chop off the file at the
-      // location of the string $$N$$, where N is the value provided to
-      // -code-completion-dump, and then tell the lexer to return a 
-      // code-completion token before it hits the end of the file.
-      // FIXME: Find $$N$$ in the main file buffer
-      
-      PP.SetMainFileEofCodeCompletion();
-      
-      // Set up the creation routine for code-completion.
-      CreateCodeCompleter = BuildPrintingCodeCompleter;
+    if (!CodeCompletionAt.FileName.empty()) {
+      // Tell the source manager to chop off the given file at a specific
+      // line and column.
+      if (const FileEntry *Entry 
+            = PP.getFileManager().getFile(CodeCompletionAt.FileName)) {
+        // Truncate the named file at the given line/column.
+        PP.getSourceManager().truncateFileAt(Entry, CodeCompletionAt.Line,
+                                             CodeCompletionAt.Column);
+        
+        // Set up the creation routine for code-completion.
+        CreateCodeCompleter = BuildPrintingCodeCompleter;
+      } else {
+        PP.getDiagnostics().Report(FullSourceLoc(), 
+                                   diag::err_fe_invalid_code_complete_file)
+          << CodeCompletionAt.FileName;
+      }
     }
 
     ParseAST(PP, Consumer.get(), *ContextOwner.get(), Stats,

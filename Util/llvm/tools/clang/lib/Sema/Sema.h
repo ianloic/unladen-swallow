@@ -403,6 +403,7 @@ public:
       // deduction, and that error is one of the SFINAE errors,
       // suppress the diagnostic.
       ++NumSFINAEErrors;
+      Diags.setLastDiagnosticIgnored();
       return SemaDiagnosticBuilder(*this);
     }
 
@@ -448,7 +449,7 @@ public:
   //
   QualType adjustParameterType(QualType T);
   QualType ConvertDeclSpecToType(const DeclSpec &DS, SourceLocation DeclLoc,
-                                 bool &IsInvalid);
+                                 bool &IsInvalid, QualType &SourceTy);
   void ProcessTypeAttributeList(QualType &Result, const AttributeList *AL);
   QualType BuildPointerType(QualType T, unsigned Quals,
                             SourceLocation Loc, DeclarationName Entity);
@@ -527,7 +528,7 @@ public:
   void DiagnoseFunctionSpecifiers(Declarator& D);
   NamedDecl* ActOnTypedefDeclarator(Scope* S, Declarator& D, DeclContext* DC,
                                     QualType R, DeclaratorInfo *DInfo,
-                                    Decl* PrevDecl, bool &Redeclaration);
+                                    NamedDecl* PrevDecl, bool &Redeclaration);
   NamedDecl* ActOnVariableDeclarator(Scope* S, Declarator& D, DeclContext* DC,
                                      QualType R, DeclaratorInfo *DInfo,
                                      NamedDecl* PrevDecl,
@@ -724,9 +725,7 @@ public:
   /// isDeclInScope - If 'Ctx' is a function/method, isDeclInScope returns true
   /// if 'D' is in Scope 'S', otherwise 'S' is ignored and isDeclInScope returns
   /// true if 'D' belongs to the given declaration context.
-  bool isDeclInScope(Decl *D, DeclContext *Ctx, Scope *S = 0) {
-    return IdResolver.isDeclInScope(D, Ctx, Context, S);
-  }
+  bool isDeclInScope(NamedDecl *&D, DeclContext *Ctx, Scope *S = 0);
 
   /// Finds the scope corresponding to the given decl context, if it
   /// happens to be an enclosing scope.  Otherwise return NULL.
@@ -782,6 +781,7 @@ public:
   bool CheckPointerConversion(Expr *From, QualType ToType, 
                               CastExpr::CastKind &Kind);
   bool IsMemberPointerConversion(Expr *From, QualType FromType, QualType ToType,
+                                 bool InOverloadResolution,
                                  QualType &ConvertedType);
   bool CheckMemberPointerConversion(Expr *From, QualType ToType,
                                     CastExpr::CastKind &Kind);
@@ -2151,7 +2151,7 @@ public:
   /// looked up in the declarator-id's scope, until the declarator is parsed and
   /// ActOnCXXExitDeclaratorScope is called.
   /// The 'SS' should be a non-empty valid CXXScopeSpec.
-  virtual void ActOnCXXEnterDeclaratorScope(Scope *S, const CXXScopeSpec &SS);
+  virtual bool ActOnCXXEnterDeclaratorScope(Scope *S, const CXXScopeSpec &SS);
 
   /// ActOnCXXExitDeclaratorScope - Called when a declarator that previously
   /// invoked ActOnCXXEnterDeclaratorScope(), is finished. 'SS' is the same
@@ -2179,6 +2179,8 @@ public:
   Expr *BuildObjCEncodeExpression(SourceLocation AtLoc,
                                   QualType EncodedType,
                                   SourceLocation RParenLoc);
+  CXXMemberCallExpr *BuildCXXMemberCallExpr(Expr *Exp, CXXMethodDecl *Method);
+
   virtual ExprResult ParseObjCEncodeExpression(SourceLocation AtLoc,
                                                SourceLocation EncodeLoc,
                                                SourceLocation LParenLoc,
@@ -2443,6 +2445,10 @@ public:
                                 TemplateParameterList *TemplateParams,
                                 AccessSpecifier AS);
 
+  void translateTemplateArguments(ASTTemplateArgsPtr &TemplateArgsIn,
+                                  SourceLocation *TemplateArgLocs,
+                        llvm::SmallVector<TemplateArgument, 16> &TemplateArgs);
+    
   QualType CheckTemplateIdType(TemplateName Template,
                                SourceLocation TemplateLoc,
                                SourceLocation LAngleLoc,
@@ -2515,6 +2521,14 @@ public:
                                                     MultiTemplateParamsArg TemplateParameterLists,
                                                     Declarator &D);
 
+  bool CheckFunctionTemplateSpecialization(FunctionDecl *FD,
+                                           bool HasExplicitTemplateArgs,
+                                           SourceLocation LAngleLoc,
+                                  const TemplateArgument *ExplicitTemplateArgs,
+                                           unsigned NumExplicitTemplateArgs,
+                                           SourceLocation RAngleLoc,
+                                           NamedDecl *&PrevDecl);
+    
   virtual DeclResult
   ActOnExplicitInstantiation(Scope *S,
                              SourceLocation ExternLoc,
@@ -2541,6 +2555,11 @@ public:
                              SourceLocation NameLoc,
                              AttributeList *Attr);
 
+  virtual DeclResult ActOnExplicitInstantiation(Scope *S,
+                                                SourceLocation ExternLoc,
+                                                SourceLocation TemplateLoc,
+                                                Declarator &D);
+    
   bool CheckTemplateArgumentList(TemplateDecl *Template,
                                  SourceLocation TemplateLoc,
                                  SourceLocation LAngleLoc,
@@ -2770,6 +2789,15 @@ public:
   FunctionTemplateDecl *getMoreSpecializedTemplate(FunctionTemplateDecl *FT1,
                                                    FunctionTemplateDecl *FT2,
                                            TemplatePartialOrderingContext TPOC);
+  FunctionDecl *getMostSpecialized(FunctionDecl **Specializations,
+                                   unsigned NumSpecializations,
+                                   TemplatePartialOrderingContext TPOC,
+                                   SourceLocation Loc,
+                                   const PartialDiagnostic &NoneDiag,
+                                   const PartialDiagnostic &AmbigDiag,
+                                   const PartialDiagnostic &CandidateDiag,
+                                   unsigned *Index = 0);
+                                   
   ClassTemplatePartialSpecializationDecl *
   getMoreSpecializedPartialSpecialization(
                                   ClassTemplatePartialSpecializationDecl *PS1,
@@ -3469,6 +3497,11 @@ public:
                                  bool AllowExplicit = false,
                                  bool Elidable = false);
   bool PerformImplicitConversion(Expr *&From, QualType ToType,
+                                 const char *Flavor,
+                                 bool AllowExplicit,
+                                 bool Elidable,
+                                 ImplicitConversionSequence& ICS);
+  bool PerformImplicitConversion(Expr *&From, QualType ToType,
                                  const ImplicitConversionSequence& ICS,
                                  const char *Flavor);
   bool PerformImplicitConversion(Expr *&From, QualType ToType,
@@ -3566,6 +3599,7 @@ public:
                                                       bool& DerivedToBase);
 
   bool CheckReferenceInit(Expr *&simpleInit_or_initList, QualType declType,
+                          SourceLocation DeclLoc,
                           bool SuppressUserConversions,
                           bool AllowExplicit,
                           bool ForceRValue,
@@ -3649,8 +3683,10 @@ public:
   QualType adjustFunctionParamType(QualType T) const {
     if (!Context.getLangOptions().CPlusPlus)
       return T;
-
-    return T.getUnqualifiedType();
+    return 
+      T->isDependentType() ? T.getUnqualifiedType()
+                            : T.getDesugaredType().getUnqualifiedType();
+    
   }
 
   /// \name Code completion
@@ -3700,6 +3736,7 @@ private:
   bool SemaBuiltinObjectSize(CallExpr *TheCall);
   bool SemaBuiltinLongjmp(CallExpr *TheCall);
   bool SemaBuiltinAtomicOverloaded(CallExpr *TheCall);
+  bool SemaBuiltinEHReturnDataRegNo(CallExpr *TheCall);
   bool SemaCheckStringLiteral(const Expr *E, const CallExpr *TheCall,
                               bool HasVAListArg, unsigned format_idx,
                               unsigned firstDataArg);

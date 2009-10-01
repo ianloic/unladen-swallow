@@ -42,7 +42,7 @@ class raw_ostream;
 class AssemblyAnnotationWriter;
 class ValueHandleBase;
 class LLVMContext;
-class Metadata;
+class MetadataContext;
 
 //===----------------------------------------------------------------------===//
 //                                 Value Class
@@ -83,12 +83,17 @@ private:
   friend class ValueSymbolTable; // Allow ValueSymbolTable to directly mod Name.
   friend class SymbolTable;      // Allow SymbolTable to directly poke Name.
   friend class ValueHandleBase;
-  friend class Metadata;
+  friend class MetadataContext;
   friend class AbstractTypeUser;
   ValueName *Name;
 
   void operator=(const Value &);     // Do not implement
   Value(const Value &);              // Do not implement
+
+protected:
+  /// printCustom - Value subclasses can override this to implement custom
+  /// printing behavior.
+  virtual void printCustom(raw_ostream &O) const;
 
 public:
   Value(const Type *Ty, unsigned scid);
@@ -96,7 +101,7 @@ public:
 
   /// dump - Support for debugging, callable in GDB: V->dump()
   //
-  virtual void dump() const;
+  void dump() const;
 
   /// print - Implement operator<< on Value.
   ///
@@ -293,6 +298,9 @@ public:
                                 const BasicBlock *PredBB) const{
     return const_cast<Value*>(this)->DoPHITranslation(CurBB, PredBB);
   }
+
+  /// hasMetadata - Return true if metadata is attached with this value.
+  bool hasMetadata() const { return HasMetadata; }
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, const Value &V) {

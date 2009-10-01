@@ -1006,7 +1006,7 @@ void GRExprEngine::VisitDeclRefExpr(DeclRefExpr *Ex, ExplodedNode *Pred,
     return;
 
   } else if (const FunctionDecl* FD = dyn_cast<FunctionDecl>(D)) {
-    assert(asLValue);
+    // This code is valid regardless of the value of 'isLValue'.
     SVal V = ValMgr.getFunctionPointer(FD);
     MakeNode(Dst, Ex, Pred, state->BindExpr(Ex, V),
              ProgramPoint::PostLValueKind);
@@ -2203,7 +2203,7 @@ void GRExprEngine::VisitDeclStmt(DeclStmt *DS, ExplodedNode *Pred,
       // UnknownVal.
       if (InitVal.isUnknown() ||
           !getConstraintManager().canReasonAbout(InitVal)) {
-        InitVal = ValMgr.getConjuredSymbolVal(InitEx, Count);
+        InitVal = ValMgr.getConjuredSymbolVal(NULL, InitEx, Count);
       }
 
       state = state->bindDecl(VD, LC, InitVal);
@@ -2263,6 +2263,7 @@ void GRExprEngine::VisitInitListExpr(InitListExpr* E, ExplodedNode* Pred,
     WorkList.reserve(NumInitElements);
     WorkList.push_back(InitListWLItem(Pred, StartVals, E->rbegin()));
     InitListExpr::reverse_iterator ItrEnd = E->rend();
+    assert(!(E->rbegin() == E->rend()));
 
     // Process the worklist until it is empty.
     while (!WorkList.empty()) {
@@ -2607,7 +2608,8 @@ void GRExprEngine::VisitUnaryOperator(UnaryOperator* U, ExplodedNode* Pred,
       // Conjure a new symbol if necessary to recover precision.
       if (Result.isUnknown() || !getConstraintManager().canReasonAbout(Result)){
         DefinedOrUnknownSVal SymVal =
-          ValMgr.getConjuredSymbolVal(Ex, Builder->getCurrentBlockCount());
+          ValMgr.getConjuredSymbolVal(NULL, Ex,
+                                      Builder->getCurrentBlockCount());
         Result = SymVal;
 
         // If the value is a location, ++/-- should always preserve
@@ -2811,7 +2813,7 @@ void GRExprEngine::VisitBinaryOperator(BinaryOperator* B,
               && (Loc::IsLocType(T) ||
                   (T->isScalarType() && T->isIntegerType()))) {
             unsigned Count = Builder->getCurrentBlockCount();
-            RightV = ValMgr.getConjuredSymbolVal(B->getRHS(), Count);
+            RightV = ValMgr.getConjuredSymbolVal(NULL, B->getRHS(), Count);
           }
 
           // Simulate the effects of a "store":  bind the value of the RHS
@@ -2935,7 +2937,7 @@ void GRExprEngine::VisitBinaryOperator(BinaryOperator* B,
           // The symbolic value is actually for the type of the left-hand side
           // expression, not the computation type, as this is the value the
           // LValue on the LHS will bind to.
-          LHSVal = ValMgr.getConjuredSymbolVal(B->getRHS(), LTy, Count);
+          LHSVal = ValMgr.getConjuredSymbolVal(NULL, B->getRHS(), LTy, Count);
 
           // However, we need to convert the symbol to the computation type.
           llvm::tie(state, Result) = SVator.EvalCast(LHSVal, state, CTy, LTy);

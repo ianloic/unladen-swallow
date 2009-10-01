@@ -319,11 +319,14 @@ PyConstantMirror::ConstantFromMemory(const Type *type, const void *memory) const
         void *the_pointer = read_as<void*>(memory);
         // Try to find a GlobalValue that's mapped to this address.
         // This will let LLVM's optimizers pull values out of here.
-        if (const GlobalValue *known_constant =
-            this->engine_.getGlobalValueAtAddress(the_pointer)) {
+        if (GlobalValue *known_constant =
             // You can't put a const Constant into another Constant,
             // so make it non-const.
-            return const_cast<GlobalValue*>(known_constant);
+            const_cast<GlobalValue*>(
+                this->engine_.getGlobalValueAtAddress(the_pointer))) {
+            if (known_constant->getType() == type)
+                return known_constant;
+            return llvm::ConstantExpr::getBitCast(known_constant, type);
         }
         // If we don't already have a mapping for the requested
         // address, emit it as an inttoptr.

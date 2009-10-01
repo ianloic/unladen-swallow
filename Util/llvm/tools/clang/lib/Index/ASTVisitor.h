@@ -16,6 +16,7 @@
 
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/TypeLocVisitor.h"
 
 namespace clang {
 
@@ -24,7 +25,8 @@ namespace idx {
 /// \brief Traverses the full AST, both Decls and Stmts.
 template<typename ImplClass>
 class ASTVisitor : public DeclVisitor<ImplClass>,
-                   public StmtVisitor<ImplClass> {
+                   public StmtVisitor<ImplClass>,
+                   public TypeLocVisitor<ImplClass> {
 public:
   ASTVisitor() : CurrentDecl(0) { }
 
@@ -33,6 +35,7 @@ public:
   typedef ASTVisitor<ImplClass>  Base;
   typedef DeclVisitor<ImplClass> BaseDeclVisitor;
   typedef StmtVisitor<ImplClass> BaseStmtVisitor;
+  typedef TypeLocVisitor<ImplClass> BaseTypeLocVisitor;
 
   using BaseStmtVisitor::Visit;
 
@@ -46,26 +49,32 @@ public:
     BaseDeclVisitor::Visit(D);
     CurrentDecl = PrevDecl;
   }
+  
+  void VisitDeclaratorDecl(DeclaratorDecl *D) {
+    BaseDeclVisitor::VisitDeclaratorDecl(D);
+    if (DeclaratorInfo *DInfo = D->getDeclaratorInfo())
+      Visit(DInfo->getTypeLoc());
+  }
 
   void VisitFunctionDecl(FunctionDecl *D) {
-    BaseDeclVisitor::VisitValueDecl(D);
+    BaseDeclVisitor::VisitFunctionDecl(D);
     if (D->isThisDeclarationADefinition())
       Visit(D->getBody());
   }
 
   void VisitObjCMethodDecl(ObjCMethodDecl *D) {
-    BaseDeclVisitor::VisitNamedDecl(D);
+    BaseDeclVisitor::VisitObjCMethodDecl(D);
     if (D->getBody())
       Visit(D->getBody());
   }
 
   void VisitBlockDecl(BlockDecl *D) {
-    BaseDeclVisitor::VisitDecl(D);
+    BaseDeclVisitor::VisitBlockDecl(D);
     Visit(D->getBody());
   }
 
   void VisitVarDecl(VarDecl *D) {
-    BaseDeclVisitor::VisitValueDecl(D);
+    BaseDeclVisitor::VisitVarDecl(D);
     if (Expr *Init = D->getInit())
       Visit(Init);
   }
@@ -104,6 +113,28 @@ public:
       if (*I)
         Visit(*I);
   }
+
+  //===--------------------------------------------------------------------===//
+  // TypeLocVisitor
+  //===--------------------------------------------------------------------===//
+  
+  void Visit(TypeLoc TL) {
+    for (; TL; TL = TL.getNextTypeLoc())
+      BaseTypeLocVisitor::Visit(TL);
+  }
+  
+  void VisitArrayLoc(ArrayLoc TL) {
+    BaseTypeLocVisitor::VisitArrayLoc(TL);
+    if (TL.getSizeExpr())
+      Visit(TL.getSizeExpr());
+  }
+  
+  void VisitFunctionLoc(FunctionLoc TL) {
+    BaseTypeLocVisitor::VisitFunctionLoc(TL);
+    for (unsigned i = 0; i != TL.getNumArgs(); ++i)
+      Visit(TL.getArg(i));
+  }
+
 };
 
 } // namespace idx

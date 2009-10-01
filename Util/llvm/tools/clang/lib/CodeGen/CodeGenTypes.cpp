@@ -267,7 +267,7 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
 
   case Type::VariableArray: {
     const VariableArrayType &A = cast<VariableArrayType>(Ty);
-    assert(A.getIndexTypeQualifier() == 0 &&
+    assert(A.getIndexTypeCVRQualifiers() == 0 &&
            "FIXME: We only handle trivial array types so far!");
     // VLAs resolve to the innermost element type; this matches
     // the return of alloca, and there isn't any obviously better choice.
@@ -275,7 +275,7 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
   }
   case Type::IncompleteArray: {
     const IncompleteArrayType &A = cast<IncompleteArrayType>(Ty);
-    assert(A.getIndexTypeQualifier() == 0 &&
+    assert(A.getIndexTypeCVRQualifiers() == 0 &&
            "FIXME: We only handle trivial array types so far!");
     // int X[] -> [0 x int]
     return llvm::ArrayType::get(ConvertTypeForMemRecursive(A.getElementType()), 0);
@@ -312,10 +312,6 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     return GetFunctionType(getFunctionInfo(FNPT), true);
   }
 
-  case Type::ExtQual:
-    return
-      ConvertTypeRecursive(QualType(cast<ExtQualType>(Ty).getBaseType(), 0));
-
   case Type::ObjCInterface: {
     // Objective-C interfaces are always opaque (outside of the
     // runtime, which can do whatever it likes); we never refine
@@ -346,9 +342,16 @@ const llvm::Type *CodeGenTypes::ConvertNewType(QualType T) {
     // Name the codegen type after the typedef name
     // if there is no tag type name available
     if (TD->getIdentifier())
-      TypeName += TD->getNameAsString();
+      // FIXME: We should not have to check for a null decl context here.
+      // Right now we do it because the implicit Obj-C decls don't have one.
+      TypeName += TD->getDeclContext() ? TD->getQualifiedNameAsString() :
+        TD->getNameAsString();
     else if (const TypedefType *TdT = dyn_cast<TypedefType>(T))
-      TypeName += TdT->getDecl()->getNameAsString();
+      // FIXME: We should not have to check for a null decl context here.
+      // Right now we do it because the implicit Obj-C decls don't have one.
+      TypeName += TdT->getDecl()->getDeclContext() ? 
+        TdT->getDecl()->getQualifiedNameAsString() :
+        TdT->getDecl()->getNameAsString();
     else
       TypeName += "anon";
 

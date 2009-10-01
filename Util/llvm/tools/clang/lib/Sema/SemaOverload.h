@@ -195,7 +195,11 @@ namespace clang {
       /// details of the user-defined conversion sequence.
       UserDefinedConversionSequence UserDefined;
     };
-
+    
+    /// When ConversionKind == BadConversion due to multiple conversion
+    /// functions, this will list those functions.
+    llvm::SmallVector<FunctionDecl*, 4> ConversionFunctionSet;
+    
     // The result of a comparison between implicit conversion
     // sequences. Use Sema::CompareImplicitConversionSequences to
     // actually perform the comparison.
@@ -257,7 +261,16 @@ namespace clang {
 
   /// OverloadCandidateSet - A set of overload candidates, used in C++
   /// overload resolution (C++ 13.3).
-  typedef llvm::SmallVector<OverloadCandidate, 16> OverloadCandidateSet;
+  class OverloadCandidateSet : public llvm::SmallVector<OverloadCandidate, 16> {
+    llvm::SmallPtrSet<Decl *, 16> Functions;
+    
+  public:
+    /// \brief Determine when this overload candidate will be new to the
+    /// overload set.
+    bool isNewCandidate(Decl *F) { 
+      return Functions.insert(F->getCanonicalDecl()); 
+    }
+  };
 } // end namespace clang
 
 #endif // LLVM_CLANG_SEMA_OVERLOAD_H

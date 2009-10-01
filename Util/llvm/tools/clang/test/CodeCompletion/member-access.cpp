@@ -1,6 +1,3 @@
-// RUN: clang-cc -fsyntax-only -code-completion-dump=1 %s -o - | FileCheck -check-prefix=CC1 %s &&
-// RUN: true
-
 struct Base1 {
   int member1;
   float member2;
@@ -29,14 +26,18 @@ public:
 };
 
 void test(const Proxy &p) {
-  // CHECK-CC1: member4 : 0
-  // CHECK-CC1: memfun3 : 0
-  // CHECK-CC1: memfun1 : 1
-  // CHECK-CC1: memfun1 : 1
-  // CHECK-CC1: memfun2 : 1
-  // CHECK-CC1: member1 : 2
-  // CHECK-CC1: member1 : 2
-  // CHECK-CC1: member2 : 2
-  // CHECK-CC1: member3 : 2
-  // CHECK-CC1: memfun1 : 2 (Hidden) : Base2::memfun1(<#int#>)
   p->
+  // RUN: clang-cc -fsyntax-only -code-completion-at=%s:29:6 %s -o - | FileCheck -check-prefix=CHECK-CC1 %s &&
+  // CHECK-CC1: member1 : 0 : [#Base1::#]member1
+  // CHECK-CC1: member1 : 0 : [#Base2::#]member1
+  // CHECK-CC1: member2 : 0 : [#Base1::#]member2
+  // CHECK-CC1: member3 : 0
+  // CHECK-CC1: member4 : 0
+  // CHECK-CC1: memfun1 : 0 : [#Base3::#]memfun1(<#float#>)
+  // CHECK-CC1: memfun1 : 0 : [#Base3::#]memfun1(<#double#>)
+  // CHECK-CC1: memfun2 : 0 : [#Base3::#]memfun2(<#int#>)
+  // CHECK-CC1: memfun3 : 0 : memfun3(<#int#>)
+  // CHECK-CC1: Base1 : 0 : Base1::
+  // CHECK-CC1: memfun1 : 0 (Hidden) : Base2::memfun1(<#int#>)
+  // RUN: true
+  

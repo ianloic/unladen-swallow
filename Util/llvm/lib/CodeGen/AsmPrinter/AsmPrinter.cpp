@@ -115,7 +115,7 @@ bool AsmPrinter::doInitialization(Module &M) {
 
   if (MAI->hasSingleParameterDotFile()) {
     /* Very minimal debug info. It is ignored if we emit actual
-       debug info. If we don't, this at helps the user find where
+       debug info. If we don't, this at least helps the user find where
        a function came from. */
     O << "\t.file\t\"" << M.getModuleIdentifier() << "\"\n";
   }
@@ -130,15 +130,12 @@ bool AsmPrinter::doInitialization(Module &M) {
       << '\n' << MAI->getCommentString()
       << " End of file scope inline assembly\n";
 
-  if (MAI->doesSupportDebugInformation() ||
-      MAI->doesSupportExceptionHandling()) {
-    MMI = getAnalysisIfAvailable<MachineModuleInfo>();
-    if (MMI)
-      MMI->AnalyzeModule(M);
-    DW = getAnalysisIfAvailable<DwarfWriter>();
-    if (DW)
-      DW->BeginModule(&M, MMI, O, this, MAI);
-  }
+  MMI = getAnalysisIfAvailable<MachineModuleInfo>();
+  if (MMI)
+    MMI->AnalyzeModule(M);
+  DW = getAnalysisIfAvailable<DwarfWriter>();
+  if (DW)
+    DW->BeginModule(&M, MMI, O, this, MAI);
 
   return false;
 }
@@ -1753,9 +1750,8 @@ void AsmPrinter::EmitComments(const MachineInstr &MI) const {
   O.PadToColumn(MAI->getCommentColumn());
   O << MAI->getCommentString() << " SrcLine ";
   if (DLT.CompileUnit) {
-    std::string Str;
     DICompileUnit CU(DLT.CompileUnit);
-    O << CU.getFilename(Str) << " ";
+    O << CU.getFilename() << " ";
   }
   O << DLT.Line;
   if (DLT.Col != 0) 

@@ -836,10 +836,10 @@ bool BitcodeReader::ParseMetadata() {
         return Error("Invalid METADATA_KIND record");
       SmallString<8> Name;
       Name.resize(RecordLength-1);
-      MDKindID Kind = Record[0];
+      unsigned Kind = Record[0];
       for (unsigned i = 1; i != RecordLength; ++i)
         Name[i-1] = Record[i];
-      Metadata &TheMetadata = Context.getMetadata();
+      MetadataContext &TheMetadata = Context.getMetadata();
       assert(TheMetadata.MDHandlerNames.find(Name.str())
              == TheMetadata.MDHandlerNames.end() &&
              "Already registered MDKind!");
@@ -1556,7 +1556,7 @@ bool BitcodeReader::ParseMetadataAttachment() {
   if (Stream.EnterSubBlock(bitc::METADATA_ATTACHMENT_ID))
     return Error("Malformed block record");
 
-  Metadata &TheMetadata = Context.getMetadata();
+  MetadataContext &TheMetadata = Context.getMetadata();
   SmallVector<uint64_t, 64> Record;
   while(1) {
     unsigned Code = Stream.ReadCode();
@@ -1580,9 +1580,9 @@ bool BitcodeReader::ParseMetadataAttachment() {
         return Error ("Invalid METADATA_ATTACHMENT reader!");
       Instruction *Inst = InstructionList[Record[0]];
       for (unsigned i = 1; i != RecordLength; i = i+2) {
-        MDKindID Kind = Record[i];
+        unsigned Kind = Record[i];
         Value *Node = MDValueList.getValueFwdRef(Record[i+1]);
-        TheMetadata.setMD(Kind, cast<MDNode>(Node), Inst);
+        TheMetadata.addMD(Kind, cast<MDNode>(Node), Inst);
       }
       break;
     }

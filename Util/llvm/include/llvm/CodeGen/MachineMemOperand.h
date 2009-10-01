@@ -16,12 +16,11 @@
 #ifndef LLVM_CODEGEN_MACHINEMEMOPERAND_H
 #define LLVM_CODEGEN_MACHINEMEMOPERAND_H
 
-#include "llvm/Support/MathExtras.h"
-
 namespace llvm {
 
 class Value;
 class FoldingSetNodeID;
+class raw_ostream;
 
 //===----------------------------------------------------------------------===//
 /// MachineMemOperand - A description of a memory reference used in the backend.
@@ -75,9 +74,7 @@ public:
 
   /// getAlignment - Return the minimum known alignment in bytes of the
   /// actual memory reference.
-  uint64_t getAlignment() const {
-    return MinAlign(getBaseAlignment(), getOffset());
-  }
+  uint64_t getAlignment() const;
 
   /// getBaseAlignment - Return the minimum known alignment in bytes of the
   /// base address, without the offset.
@@ -87,10 +84,22 @@ public:
   bool isStore() const { return Flags & MOStore; }
   bool isVolatile() const { return Flags & MOVolatile; }
 
+  /// refineAlignment - Update this MachineMemOperand to reflect the alignment
+  /// of MMO, if it has a greater alignment. This must only be used when the
+  /// new alignment applies to all users of this MachineMemOperand.
+  void refineAlignment(const MachineMemOperand *MMO);
+
+  /// setValue - Change the SourceValue for this MachineMemOperand. This
+  /// should only be used when an object is being relocated and all references
+  /// to it are being updated.
+  void setValue(const Value *NewSV) { V = NewSV; }
+
   /// Profile - Gather unique data for the object.
   ///
   void Profile(FoldingSetNodeID &ID) const;
 };
+
+raw_ostream &operator<<(raw_ostream &OS, const MachineMemOperand &MRO);
 
 } // End llvm namespace
 

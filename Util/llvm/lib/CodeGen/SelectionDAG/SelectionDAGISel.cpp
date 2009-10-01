@@ -372,8 +372,8 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
                                         BasicBlock::iterator Begin,
                                         BasicBlock::iterator End) {
   SDL->setCurrentBasicBlock(BB);
-  Metadata &TheMetadata = LLVMBB->getParent()->getContext().getMetadata();
-  MDKindID MDDbgKind = TheMetadata.getMDKind("dbg");
+  MetadataContext &TheMetadata = LLVMBB->getParent()->getContext().getMetadata();
+  unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
 
   // Lower all of the non-terminator instructions. If a call is emitted
   // as a tail call, cease emitting nodes for this block.
@@ -381,8 +381,7 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
     if (MDDbgKind) {
       // Update DebugLoc if debug information is attached with this
       // instruction.
-      if (MDNode *Dbg =
-          dyn_cast_or_null<MDNode>(TheMetadata.getMD(MDDbgKind, I))) {
+      if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, I)) {
         DILocation DILoc(Dbg);
         DebugLoc Loc = ExtractDebugLocation(DILoc, MF->getDebugLocInfo());
         SDL->setCurDebugLoc(Loc);
@@ -655,8 +654,8 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
 #endif
                                 );
 
-  Metadata &TheMetadata = Fn.getContext().getMetadata();
-  MDKindID MDDbgKind = TheMetadata.getMDKind("dbg");
+  MetadataContext &TheMetadata = Fn.getContext().getMetadata();
+  unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
 
   // Iterate over all basic blocks in the function.
   for (Function::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
@@ -743,8 +742,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
         if (MDDbgKind) {
           // Update DebugLoc if debug information is attached with this
           // instruction.
-          if (MDNode *Dbg =
-              dyn_cast_or_null<MDNode>(TheMetadata.getMD(MDDbgKind, BI))) {
+          if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, BI)) {
             DILocation DILoc(Dbg);
             DebugLoc Loc = ExtractDebugLocation(DILoc,
                                                 MF.getDebugLocInfo());

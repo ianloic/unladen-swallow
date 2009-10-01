@@ -825,7 +825,7 @@ Expr::isLvalueResult Expr::isLvalue(ASTContext &Ctx) const {
     return LV_NotObjectType;
 
   // Allow qualified void which is an incomplete type other than void (yuck).
-  if (TR->isVoidType() && !Ctx.getCanonicalType(TR).getCVRQualifiers())
+  if (TR->isVoidType() && !Ctx.getCanonicalType(TR).hasQualifiers())
     return LV_IncompleteVoidType;
 
   return LV_Valid;
@@ -1120,7 +1120,7 @@ bool Expr::isOBJCGCCandidate(ASTContext &Ctx) const {
       // dereferencing to a  pointer is always a gc'able candidate,
       // unless it is __weak.
       return T->isPointerType() &&
-             (Ctx.getObjCGCAttrKind(T) != QualType::Weak);
+             (Ctx.getObjCGCAttrKind(T) != Qualifiers::Weak);
     }
     return false;
   }
@@ -1397,7 +1397,7 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
     if (isa<EnumConstantDecl>(cast<DeclRefExpr>(E)->getDecl()))
       return NoDiag();
     if (Ctx.getLangOptions().CPlusPlus &&
-        E->getType().getCVRQualifiers() == QualType::Const) {
+        E->getType().getCVRQualifiers() == Qualifiers::Const) {
       // C++ 7.1.5.1p2
       //   A variable of non-volatile const-qualified integral or enumeration
       //   type initialized by an ICE can be used in ICEs.
@@ -1625,9 +1625,21 @@ bool Expr::isIntegerConstantExpr(llvm::APSInt &Result, ASTContext &Ctx,
 /// isNullPointerConstant - C99 6.3.2.3p3 -  Return true if this is either an
 /// integer constant expression with the value zero, or if this is one that is
 /// cast to void*.
-bool Expr::isNullPointerConstant(ASTContext &Ctx) const {
-  // Ignore value dependent expressions.
-  assert(!isValueDependent() && "Unexpect value dependent expression!");
+bool Expr::isNullPointerConstant(ASTContext &Ctx,
+                                 NullPointerConstantValueDependence NPC) const {
+  if (isValueDependent()) {
+    switch (NPC) {
+    case NPC_NeverValueDependent:
+      assert(false && "Unexpected value dependent expression!");
+      // If the unthinkable happens, fall through to the safest alternative.
+        
+    case NPC_ValueDependentIsNull:
+      return isTypeDependent() || getType()->isIntegralType();
+        
+    case NPC_ValueDependentIsNotNull:
+      return false;
+    }
+  }
 
   // Strip off a cast to void*, if it exists. Except in C++.
   if (const ExplicitCastExpr *CE = dyn_cast<ExplicitCastExpr>(this)) {
@@ -1635,23 +1647,23 @@ bool Expr::isNullPointerConstant(ASTContext &Ctx) const {
       // Check that it is a cast to void*.
       if (const PointerType *PT = CE->getType()->getAs<PointerType>()) {
         QualType Pointee = PT->getPointeeType();
-        if (Pointee.getCVRQualifiers() == 0 &&
+        if (!Pointee.hasQualifiers() &&
             Pointee->isVoidType() &&                              // to void*
             CE->getSubExpr()->getType()->isIntegerType())         // from int.
-          return CE->getSubExpr()->isNullPointerConstant(Ctx);
+          return CE->getSubExpr()->isNullPointerConstant(Ctx, NPC);
       }
     }
   } else if (const ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(this)) {
     // Ignore the ImplicitCastExpr type entirely.
-    return ICE->getSubExpr()->isNullPointerConstant(Ctx);
+    return ICE->getSubExpr()->isNullPointerConstant(Ctx, NPC);
   } else if (const ParenExpr *PE = dyn_cast<ParenExpr>(this)) {
     // Accept ((void*)0) as a null pointer constant, as many other
     // implementations do.
-    return PE->getSubExpr()->isNullPointerConstant(Ctx);
+    return PE->getSubExpr()->isNullPointerConstant(Ctx, NPC);
   } else if (const CXXDefaultArgExpr *DefaultArg
                = dyn_cast<CXXDefaultArgExpr>(this)) {
     // See through default argument expressions
-    return DefaultArg->getExpr()->isNullPointerConstant(Ctx);
+    return DefaultArg->getExpr()->isNullPointerConstant(Ctx, NPC);
   } else if (isa<GNUNullExpr>(this)) {
     // The GNU __null extension is always a null pointer constant.
     return true;

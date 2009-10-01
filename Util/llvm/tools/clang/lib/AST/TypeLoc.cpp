@@ -11,12 +11,36 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/AST/TypeLoc.h"
+#include "clang/AST/TypeLocVisitor.h"
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
 // TypeLoc Implementation
 //===----------------------------------------------------------------------===//
+
+namespace {
+
+/// \brief Return the source range for the visited TypeSpecLoc.
+class TypeLocRanger : public TypeLocVisitor<TypeLocRanger, SourceRange> {
+public:
+#define ABSTRACT_TYPELOC(CLASS)
+#define TYPELOC(CLASS, PARENT, TYPE) \
+    SourceRange Visit##CLASS(CLASS TyLoc) { return TyLoc.getSourceRange(); }
+#include "clang/AST/TypeLocNodes.def"
+
+  SourceRange VisitTypeLoc(TypeLoc TyLoc) {
+    assert(0 && "A typeloc wrapper was not handled!");
+    return SourceRange();
+  }
+};
+
+}
+
+SourceRange TypeLoc::getSourceRange() const {
+  if (isNull())
+    return SourceRange();
+  return TypeLocRanger().Visit(*this);
+}
 
 /// \brief Returns the size of type source info data block for the given type.
 unsigned TypeLoc::getFullDataSizeForType(QualType Ty) {
@@ -59,6 +83,7 @@ public:
 
 /// \brief Returns the size of the type source info data block.
 unsigned TypeLoc::getFullDataSize() const {
+  if (isNull()) return 0;
   return TypeSizer().Visit(*this);
 }
 
@@ -74,6 +99,7 @@ public:
 #include "clang/AST/TypeLocNodes.def"
 
   TypeLoc VisitTypeSpecLoc(TypeLoc TyLoc) { return TypeLoc(); }
+  TypeLoc VisitObjCProtocolListLoc(ObjCProtocolListLoc TL);
 
   TypeLoc VisitTypeLoc(TypeLoc TyLoc) {
     assert(0 && "A declarator loc wrapper was not handled!");
@@ -81,6 +107,10 @@ public:
   }
 };
 
+}
+
+TypeLoc NextLoc::VisitObjCProtocolListLoc(ObjCProtocolListLoc TL) {
+  return TL.getBaseTypeLoc();
 }
 
 TypeLoc NextLoc::VisitPointerLoc(PointerLoc TL) {
@@ -111,30 +141,6 @@ TypeLoc TypeLoc::getNextTypeLoc() const {
 //===----------------------------------------------------------------------===//
 // TypeSpecLoc Implementation
 //===----------------------------------------------------------------------===//
-
-namespace {
-
-/// \brief Return the source range for the visited TypeSpecLoc.
-class TypeSpecRanger : public TypeLocVisitor<TypeSpecRanger, SourceRange> {
-public:
-#define TYPELOC(CLASS, PARENT, TYPE)
-#define TYPESPEC_TYPELOC(CLASS, TYPE) \
-    SourceRange Visit##CLASS(CLASS TyLoc) { return TyLoc.getSourceRange(); }
-#include "clang/AST/TypeLocNodes.def"
-
-  SourceRange VisitTypeLoc(TypeLoc TyLoc) {
-    assert(0 && "A typespec loc wrapper was not handled!");
-    return SourceRange();
-  }
-};
-
-}
-
-SourceRange TypeSpecLoc::getSourceRange() const {
-  if (isNull())
-    return SourceRange();
-  return TypeSpecRanger().Visit(*this);
-}
 
 namespace {
 class TypeSpecChecker : public TypeLocVisitor<TypeSpecChecker, bool> {
@@ -221,6 +227,42 @@ public:
 
 bool TypedefLoc::classof(const TypeLoc *TL) {
   return TypedefLocChecker().Visit(*TL);
+}
+
+//===----------------------------------------------------------------------===//
+// ObjCInterfaceLoc Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class ObjCInterfaceLocChecker :
+  public TypeLocVisitor<ObjCInterfaceLocChecker, bool> {
+public:
+  bool VisitObjCInterfaceLoc(ObjCInterfaceLoc TyLoc) { return true; }
+};
+
+}
+
+bool ObjCInterfaceLoc::classof(const TypeLoc *TL) {
+  return ObjCInterfaceLocChecker().Visit(*TL);
+}
+
+//===----------------------------------------------------------------------===//
+// ObjCProtocolListLoc Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class ObjCProtocolListLocChecker :
+  public TypeLocVisitor<ObjCProtocolListLocChecker, bool> {
+public:
+  bool VisitObjCProtocolListLoc(ObjCProtocolListLoc TyLoc) { return true; }
+};
+
+}
+
+bool ObjCProtocolListLoc::classof(const TypeLoc *TL) {
+  return ObjCProtocolListLocChecker().Visit(*TL);
 }
 
 //===----------------------------------------------------------------------===//

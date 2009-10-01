@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
@@ -141,6 +142,10 @@ void LiveIntervals::processImplicitDefs() {
       if (MI->getOpcode() == TargetInstrInfo::IMPLICIT_DEF) {
         unsigned Reg = MI->getOperand(0).getReg();
         ImpDefRegs.insert(Reg);
+        if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          for (const unsigned *SS = tri_->getSubRegisters(Reg); *SS; ++SS)
+            ImpDefRegs.insert(*SS);
+        }
         ImpDefMIs.push_back(MI);
         continue;
       }
@@ -1082,12 +1087,8 @@ LiveIntervals::isProfitableToCoalesce(LiveInterval &DstInt, LiveInterval &SrcInt
                                    SmallVector<MachineInstr*,16> &OtherCopies) {
   bool HaveConflict = false;
   unsigned NumIdent = 0;
-  for (MachineRegisterInfo::reg_iterator ri = mri_->reg_begin(SrcInt.reg),
-         re = mri_->reg_end(); ri != re; ++ri) {
-    MachineOperand &O = ri.getOperand();
-    if (!O.isDef())
-      continue;
-
+  for (MachineRegisterInfo::def_iterator ri = mri_->def_begin(SrcInt.reg),
+         re = mri_->def_end(); ri != re; ++ri) {
     MachineInstr *MI = &*ri;
     unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
     if (!tii_->isMoveInstr(*MI, SrcReg, DstReg, SrcSubReg, DstSubReg))
@@ -1439,12 +1440,12 @@ bool LiveIntervals::isReMaterializable(const LiveInterval &li,
 
     // If the instruction accesses memory and the memory could be non-constant,
     // assume the instruction is not rematerializable.
-    for (std::list<MachineMemOperand>::const_iterator
-           I = MI->memoperands_begin(), E = MI->memoperands_end(); I != E; ++I){
-      const MachineMemOperand &MMO = *I;
-      if (MMO.isVolatile() || MMO.isStore())
+    for (MachineInstr::mmo_iterator I = MI->memoperands_begin(),
+         E = MI->memoperands_end(); I != E; ++I){
+      const MachineMemOperand *MMO = *I;
+      if (MMO->isVolatile() || MMO->isStore())
         return false;
-      const Value *V = MMO.getValue();
+      const Value *V = MMO->getValue();
       if (!V)
         return false;
       if (const PseudoSourceValue *PSV = dyn_cast<PseudoSourceValue>(V)) {

@@ -40,6 +40,7 @@ namespace llvm {
 namespace clang {
   class ASTContext;
   class CXXDestructorDecl;
+  class CXXTryStmt;
   class Decl;
   class EnumConstantDecl;
   class FunctionDecl;
@@ -496,6 +497,12 @@ public:
   //                                  Helpers
   //===--------------------------------------------------------------------===//
 
+  Qualifiers MakeQualifiers(QualType T) {
+    Qualifiers Quals = T.getQualifiers();
+    Quals.setObjCGCAttr(getContext().getObjCGCAttrKind(T));
+    return Quals;
+  }
+
   /// CreateTempAlloca - This creates a alloca and inserts it into the entry
   /// block.
   llvm::AllocaInst *CreateTempAlloca(const llvm::Type *Ty,
@@ -582,6 +589,11 @@ public:
                                         const CXXRecordDecl *BaseClassDecl,
                                         bool NullCheckValue);
 
+  /// GetCXXBaseClassOffset - Returns the offset from a derived class to its
+  /// base class. Returns null if the offset is 0.
+  llvm::Constant *GetCXXBaseClassOffset(const CXXRecordDecl *ClassDecl,
+                                        const CXXRecordDecl *BaseClassDecl);
+  
   void EmitClassAggrMemberwiseCopy(llvm::Value *DestValue,
                                    llvm::Value *SrcValue,
                                    const ArrayType *Array,
@@ -610,8 +622,11 @@ public:
                               CallExpr::const_arg_iterator ArgEnd);
 
   void EmitCXXAggrConstructorCall(const CXXConstructorDecl *D,
-                                  const ArrayType *Array,
-                                  llvm::Value *This);
+                                  const ConstantArrayType *ArrayTy,
+                                  llvm::Value *ArrayPtr);
+  void EmitCXXAggrConstructorCall(const CXXConstructorDecl *D,
+                                  llvm::Value *NumElements,
+                                  llvm::Value *ArrayPtr);
 
   void EmitCXXAggrDestructorCall(const CXXDestructorDecl *D,
                                  const ArrayType *Array,
@@ -702,6 +717,8 @@ public:
   void EmitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
   void EmitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
 
+  void EmitCXXTryStmt(const CXXTryStmt &S);
+  
   //===--------------------------------------------------------------------===//
   //                         LValue Expression Emission
   //===--------------------------------------------------------------------===//

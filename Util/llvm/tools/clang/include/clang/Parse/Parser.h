@@ -674,7 +674,9 @@ private:
   void ParseObjCClassInstanceVariables(DeclPtrTy interfaceDecl,
                                        SourceLocation atLoc);
   bool ParseObjCProtocolReferences(llvm::SmallVectorImpl<Action::DeclPtrTy> &P,
+                                   llvm::SmallVectorImpl<SourceLocation> &PLocs,
                                    bool WarnOnDeclarations,
+                                   SourceLocation &LAngleLoc,
                                    SourceLocation &EndProtoLoc);
   void ParseObjCInterfaceDeclList(DeclPtrTy interfaceDecl,
                                   tok::ObjCKeywordKind contextKey);
@@ -1123,7 +1125,9 @@ private:
     void EnterDeclaratorScope() {
       assert(!EnteredScope && "Already entered the scope!");
       assert(SS.isSet() && "C++ scope was not set!");
-      P.Actions.ActOnCXXEnterDeclaratorScope(P.CurScope, SS);
+      if (P.Actions.ActOnCXXEnterDeclaratorScope(P.CurScope, SS))
+        SS.setScopeRep(0);
+      
       if (!SS.isInvalid())
         EnteredScope = true;
     }

@@ -53,7 +53,7 @@ protected:
   virtual void setSuccessorV(unsigned idx, BasicBlock *B) = 0;
 public:
 
-  virtual TerminatorInst *clone(LLVMContext &Context) const = 0;
+  virtual TerminatorInst *clone() const = 0;
 
   /// getNumSuccessors - Return the number of successors that this terminator
   /// has.
@@ -216,6 +216,27 @@ public:
     return BO;
   }
 
+  /// CreateNSWSub - Create an Sub operator with the NSW flag set.
+  ///
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name = "") {
+    BinaryOperator *BO = CreateSub(V1, V2, Name);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name, BasicBlock *BB) {
+    BinaryOperator *BO = CreateSub(V1, V2, Name, BB);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name, Instruction *I) {
+    BinaryOperator *BO = CreateSub(V1, V2, Name, I);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+
   /// CreateExactSDiv - Create an SDiv operator with the exact flag set.
   ///
   static BinaryOperator *CreateExactSDiv(Value *V1, Value *V2,
@@ -278,7 +299,7 @@ public:
     return static_cast<BinaryOps>(Instruction::getOpcode());
   }
 
-  virtual BinaryOperator *clone(LLVMContext &Context) const;
+  virtual BinaryOperator *clone() const;
 
   /// swapOperands - Exchange the two operands to this instruction.
   /// This instruction is safe to use on any binary instruction and
@@ -290,17 +311,26 @@ public:
   /// setHasNoUnsignedWrap - Set or clear the nsw flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setHasNoUnsignedWrap(bool);
+  void setHasNoUnsignedWrap(bool b = true);
 
   /// setHasNoSignedWrap - Set or clear the nsw flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setHasNoSignedWrap(bool);
+  void setHasNoSignedWrap(bool b = true);
 
   /// setIsExact - Set or clear the exact flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setIsExact(bool);
+  void setIsExact(bool b = true);
+
+  /// hasNoUnsignedWrap - Determine whether the no unsigned wrap flag is set.
+  bool hasNoUnsignedWrap() const;
+
+  /// hasNoSignedWrap - Determine whether the no signed wrap flag is set.
+  bool hasNoSignedWrap() const;
+
+  /// isExact - Determine whether the exact flag is set.
+  bool isExact() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const BinaryOperator *) { return true; }

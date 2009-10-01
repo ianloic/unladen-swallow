@@ -300,7 +300,9 @@ public:
   /// looked up in the declarator-id's scope, until the declarator is parsed and
   /// ActOnCXXExitDeclaratorScope is called.
   /// The 'SS' should be a non-empty valid CXXScopeSpec.
-  virtual void ActOnCXXEnterDeclaratorScope(Scope *S, const CXXScopeSpec &SS) {
+  /// \returns true if an error occurred, false otherwise.
+  virtual bool ActOnCXXEnterDeclaratorScope(Scope *S, const CXXScopeSpec &SS) {
+    return false;
   }
 
   /// ActOnCXXExitDeclaratorScope - Called when a declarator that previously
@@ -1896,6 +1898,38 @@ public:
     return DeclResult();
   }
 
+  /// \brief Process the explicit instantiation of a function template or a
+  /// member of a class template.
+  ///
+  /// This routine is invoked when an explicit instantiation of a
+  /// function template or member function of a class template specialization 
+  /// is encountered. In the following example,
+  /// ActOnExplicitInstantiation will be invoked to force the
+  /// instantiation of X<int>:
+  ///
+  /// \code
+  /// template<typename T> void f(T);
+  /// template void f(int); // explicit instantiation
+  /// \endcode
+  ///
+  /// \param S the current scope
+  ///
+  /// \param ExternLoc the location of the 'extern' keyword that specifies that
+  /// this is an extern template (if any).
+  ///
+  /// \param TemplateLoc the location of the 'template' keyword that
+  /// specifies that this is an explicit instantiation.
+  ///
+  /// \param D the declarator describing the declaration to be implicitly
+  /// instantiated.
+  virtual DeclResult ActOnExplicitInstantiation(Scope *S,
+                                                SourceLocation ExternLoc,
+                                                SourceLocation TemplateLoc,
+                                                Declarator &D) {
+    return DeclResult();
+  }
+                             
+                              
   /// \brief Called when the parser has parsed a C++ typename
   /// specifier that ends in an identifier, e.g., "typename T::type".
   ///

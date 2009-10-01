@@ -32,6 +32,7 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include <algorithm>
+#include <cstring>
 #include <functional>
 #include <queue>
 using namespace clang;
@@ -288,14 +289,22 @@ void Sema::PushOnScopeChains(NamedDecl *D, Scope *S, bool AddToContext) {
          ((DeclContext *)S->getEntity())->isTransparentContext())
     S = S->getParent();
 
-  S->AddDecl(DeclPtrTy::make(D));
-
   // Add scoped declarations into their context, so that they can be
   // found later. Declarations without a context won't be inserted
   // into any context.
   if (AddToContext)
     CurContext->addDecl(D);
 
+  // Out-of-line function and variable definitions should not be pushed into
+  // scope.
+  if ((isa<FunctionTemplateDecl>(D) &&
+       cast<FunctionTemplateDecl>(D)->getTemplatedDecl()->isOutOfLine()) ||
+      (isa<FunctionDecl>(D) && cast<FunctionDecl>(D)->isOutOfLine()) ||
+      (isa<VarDecl>(D) && cast<VarDecl>(D)->isOutOfLine()))
+    return;
+
+  S->AddDecl(DeclPtrTy::make(D));
+  
   // C++ [basic.scope]p4:
   //   -- exactly one declaration shall declare a class name or
   //   enumeration name that is not a typedef name and the other
@@ -311,9 +320,10 @@ void Sema::PushOnScopeChains(NamedDecl *D, Scope *S, bool AddToContext) {
       IdentifierResolver::iterator
         I = IdResolver.begin(TD->getDeclName()),
         IEnd = IdResolver.end();
-      if (I != IEnd && isDeclInScope(*I, CurContext, S)) {
+      NamedDecl *ID = *I;
+      if (I != IEnd && isDeclInScope(ID, CurContext, S)) {
         NamedDecl *PrevDecl = *I;
-        for (; I != IEnd && isDeclInScope(*I, CurContext, S);
+        for (; I != IEnd && isDeclInScope(ID, CurContext, S);
              PrevDecl = *I, ++I) {
           if (TD->declarationReplaces(*I)) {
             // This is a redeclaration. Remove it from the chain and
@@ -372,6 +382,41 @@ void Sema::PushOnScopeChains(NamedDecl *D, Scope *S, bool AddToContext) {
   }
 
   IdResolver.AddDecl(D);
+}
+
+bool Sema::isDeclInScope(NamedDecl *&D, DeclContext *Ctx, Scope *S) {
+  if (OverloadedFunctionDecl *Ovl = dyn_cast<OverloadedFunctionDecl>(D)) {
+    // Look inside the overload set to determine if any of the declarations
+    // are in scope. (Possibly) build a new overload set containing only
+    // those declarations that are in scope.
+    OverloadedFunctionDecl *NewOvl = 0;
+    bool FoundInScope = false;
+    for (OverloadedFunctionDecl::function_iterator F = Ovl->function_begin(),
+         FEnd = Ovl->function_end();
+         F != FEnd; ++F) {
+      NamedDecl *FD = F->get();
+      if (!isDeclInScope(FD, Ctx, S)) {
+        if (!NewOvl && F != Ovl->function_begin()) {
+          NewOvl = OverloadedFunctionDecl::Create(Context, 
+                                                  F->get()->getDeclContext(),
+                                                  F->get()->getDeclName());
+          D = NewOvl;
+          for (OverloadedFunctionDecl::function_iterator 
+               First = Ovl->function_begin();
+               First != F; ++First)
+            NewOvl->addOverload(*First);
+        }
+      } else {
+        FoundInScope = true;
+        if (NewOvl)
+          NewOvl->addOverload(*F);
+      }
+    }
+    
+    return FoundInScope;
+  }
+  
+  return IdResolver.isDeclInScope(D, Ctx, Context, S);
 }
 
 void Sema::ActOnPopScope(SourceLocation Loc, Scope *S) {
@@ -1288,6 +1333,59 @@ Sema::DeclPtrTy Sema::ParsedFreeStandingDeclSpec(Scope *S, DeclSpec &DS) {
     Tag = dyn_cast<TagDecl>(static_cast<Decl *>(DS.getTypeRep()));
   }
 
+  if (DS.isFriendSpecified()) {
+    // We have a "friend" declaration that does not have a declarator.
+    // Look at the type to see if the friend declaration was handled
+    // elsewhere (e.g., for friend classes and friend class templates).
+    // If not, produce a suitable diagnostic or go try to befriend the
+    // type itself.
+    QualType T;
+    if (DS.getTypeSpecType() == DeclSpec::TST_typename ||
+        DS.getTypeSpecType() == DeclSpec::TST_typeofType)
+      T = QualType::getFromOpaquePtr(DS.getTypeRep());
+    else if (DS.getTypeSpecType() == DeclSpec::TST_typeofExpr ||
+             DS.getTypeSpecType() == DeclSpec::TST_decltype)
+      T = ((Expr *)DS.getTypeRep())->getType();
+    else if (DS.getTypeSpecType() == DeclSpec::TST_class ||
+             DS.getTypeSpecType() == DeclSpec::TST_struct ||
+             DS.getTypeSpecType() == DeclSpec::TST_union)
+      return DeclPtrTy::make(Tag);
+    
+    if (T.isNull()) {
+      // Fall through to diagnose this error, below.
+    } else if (const RecordType *RecordT = T->getAs<RecordType>()) {
+      // C++ [class.friend]p2:
+      //   An elaborated-type-specifier shall be used in a friend declaration
+      //   for a class.
+
+      // We have something like "friend C;", where C is the name of a
+      // class type but is missing an elaborated type specifier. Complain,
+      // but tell the user exactly how to fix the problem.
+      RecordDecl *RecordD = RecordT->getDecl();
+      Diag(DS.getTypeSpecTypeLoc(), diag::err_unelaborated_friend_type)
+        << (unsigned)RecordD->getTagKind()
+        << QualType(RecordT, 0)
+        << SourceRange(DS.getFriendSpecLoc())
+        << CodeModificationHint::CreateInsertion(DS.getTypeSpecTypeLoc(),
+                                  RecordD->getKindName() + std::string(" "));
+      
+      // FIXME: We could go into ActOnTag to actually make the friend
+      // declaration happen at this point.
+      return DeclPtrTy();
+    } 
+    
+    if (!T.isNull() && T->isDependentType()) {
+      // Since T is a dependent type, handle it as a friend type
+      // declaration.
+      return ActOnFriendTypeDecl(S, DS, MultiTemplateParamsArg(*this, 0, 0));
+    } 
+        
+    // Complain about any non-dependent friend type here.
+    Diag(DS.getFriendSpecLoc(), diag::err_unexpected_friend)
+      << DS.getSourceRange();
+    return DeclPtrTy();
+  }
+         
   if (RecordDecl *Record = dyn_cast_or_null<RecordDecl>(Tag)) {
     if (!Record->getDeclName() && Record->isDefinition() &&
         DS.getStorageClassSpec() != DeclSpec::SCS_typedef) {
@@ -1305,7 +1403,7 @@ Sema::DeclPtrTy Sema::ParsedFreeStandingDeclSpec(Scope *S, DeclSpec &DS) {
     if (Record->getDeclName() && getLangOptions().Microsoft)
       return DeclPtrTy::make(Tag);
   }
-
+  
   if (!DS.isMissingDeclaratorOk() &&
       DS.getTypeSpecType() != DeclSpec::TST_error) {
     // Warn about typedefs of enums without names, since this is an
@@ -1587,6 +1685,17 @@ DeclarationName Sema::GetNameForDeclarator(Declarator &D) {
     assert(D.getIdentifier() == 0 && "operator names have no identifier");
     return Context.DeclarationNames.getCXXOperatorName(
                                                 D.getOverloadedOperator());
+      
+  case Declarator::DK_TemplateId: {
+    TemplateName Name
+      = TemplateName::getFromVoidPointer(D.getTemplateId()->Template);    
+    if (TemplateDecl *Template = Name.getAsTemplateDecl())
+      return Template->getDeclName();
+    if (OverloadedFunctionDecl *Ovl = Name.getAsOverloadedFunctionDecl())
+      return Ovl->getDeclName();
+    
+    return DeclarationName();
+  }
   }
 
   assert(false && "Unknown name kind");
@@ -1794,9 +1903,11 @@ Sema::HandleDeclarator(Scope *S, Declarator &D,
   if (New == 0)
     return DeclPtrTy();
 
-  // If this has an identifier and is not an invalid redeclaration,
-  // add it to the scope stack.
-  if (Name && !(Redeclaration && New->isInvalidDecl()))
+  // If this has an identifier and is not an invalid redeclaration or 
+  // function template specialization, add it to the scope stack.
+  if (Name && !(Redeclaration && New->isInvalidDecl()) &&
+      !(isa<FunctionDecl>(New) && 
+        cast<FunctionDecl>(New)->isFunctionTemplateSpecialization()))
     PushOnScopeChains(New, S);
 
   return DeclPtrTy::make(New);
@@ -1814,14 +1925,16 @@ static QualType TryToFixInvalidVariablyModifiedType(QualType T,
   // constant expression folding, like struct {char x[(int)(char*)2];}
   SizeIsNegative = false;
 
-  if (const PointerType* PTy = dyn_cast<PointerType>(T)) {
+  QualifierCollector Qs;
+  const Type *Ty = Qs.strip(T);
+
+  if (const PointerType* PTy = dyn_cast<PointerType>(Ty)) {
     QualType Pointee = PTy->getPointeeType();
     QualType FixedType =
         TryToFixInvalidVariablyModifiedType(Pointee, Context, SizeIsNegative);
     if (FixedType.isNull()) return FixedType;
     FixedType = Context.getPointerType(FixedType);
-    FixedType.setCVRQualifiers(T.getCVRQualifiers());
-    return FixedType;
+    return Qs.apply(FixedType);
   }
 
   const VariableArrayType* VLATy = dyn_cast<VariableArrayType>(T);
@@ -1903,7 +2016,7 @@ void Sema::DiagnoseFunctionSpecifiers(Declarator& D) {
 NamedDecl*
 Sema::ActOnTypedefDeclarator(Scope* S, Declarator& D, DeclContext* DC,
                              QualType R,  DeclaratorInfo *DInfo,
-                             Decl* PrevDecl, bool &Redeclaration) {
+                             NamedDecl* PrevDecl, bool &Redeclaration) {
   // Typedef declarators cannot be qualified (C++ [dcl.meaning]p1).
   if (D.getCXXScopeSpec().isSet()) {
     Diag(D.getIdentifierLoc(), diag::err_qualified_typedef_declarator)
@@ -2514,6 +2627,7 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
   // Match up the template parameter lists with the scope specifier, then
   // determine whether we have a template or a template specialization.
   FunctionTemplateDecl *FunctionTemplate = 0;
+  bool isFunctionTemplateSpecialization = false;
   if (TemplateParameterList *TemplateParams
         = MatchTemplateParametersToScopeSpecifier(
                                   D.getDeclSpec().getSourceRange().getBegin(),
@@ -2534,13 +2648,14 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
       FunctionTemplate->setLexicalDeclContext(CurContext);
       NewFD->setDescribedFunctionTemplate(FunctionTemplate);
     } else {
-      // FIXME: Handle function template specializations
+      // This is a function template specialization.
+      isFunctionTemplateSpecialization = true;
     }
 
     // FIXME: Free this memory properly.
     TemplateParamLists.release();
   }
-
+  
   // C++ [dcl.fct.spec]p5:
   //   The virtual specifier shall only be used in declarations of
   //   nonstatic class member functions that appear within a
@@ -2676,6 +2791,52 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
         isOutOfScopePreviousDeclaration(PrevDecl, DC, Context)))
     PrevDecl = 0;
 
+  // If the declarator is a template-id, translate the parser's template 
+  // argument list into our AST format.
+  bool HasExplicitTemplateArgs = false;
+  llvm::SmallVector<TemplateArgument, 16> TemplateArgs;
+  SourceLocation LAngleLoc, RAngleLoc;
+  if (D.getKind() == Declarator::DK_TemplateId) {
+    TemplateIdAnnotation *TemplateId = D.getTemplateId();
+    ASTTemplateArgsPtr TemplateArgsPtr(*this,
+                                       TemplateId->getTemplateArgs(),
+                                       TemplateId->getTemplateArgIsType(),
+                                       TemplateId->NumArgs);
+    translateTemplateArguments(TemplateArgsPtr,
+                               TemplateId->getTemplateArgLocations(),
+                               TemplateArgs);
+    TemplateArgsPtr.release();
+    
+    HasExplicitTemplateArgs = true;
+    LAngleLoc = TemplateId->LAngleLoc;
+    RAngleLoc = TemplateId->RAngleLoc;
+    
+    if (FunctionTemplate) {
+      // FIXME: Diagnostic function template with explicit template
+      // arguments.
+      HasExplicitTemplateArgs = false;
+    } else if (!isFunctionTemplateSpecialization && 
+               !D.getDeclSpec().isFriendSpecified()) {
+      // We have encountered something that the user meant to be a 
+      // specialization (because it has explicitly-specified template
+      // arguments) but that was not introduced with a "template<>" (or had
+      // too few of them).
+      Diag(D.getIdentifierLoc(), diag::err_template_spec_needs_header)
+        << SourceRange(TemplateId->LAngleLoc, TemplateId->RAngleLoc)
+        << CodeModificationHint::CreateInsertion(
+                                   D.getDeclSpec().getSourceRange().getBegin(),
+                                                 "template<> ");
+      isFunctionTemplateSpecialization = true;
+    }
+  }
+  
+  if (isFunctionTemplateSpecialization &&
+      CheckFunctionTemplateSpecialization(NewFD, HasExplicitTemplateArgs,
+                                          LAngleLoc, TemplateArgs.data(),
+                                          TemplateArgs.size(), RAngleLoc,
+                                          PrevDecl))
+    NewFD->setInvalidDecl();
+  
   // Perform semantic checking on the function declaration.
   bool OverloadableAttrRequired = false; // FIXME: HACK!
   CheckFunctionDeclaration(NewFD, PrevDecl, Redeclaration,
@@ -2968,7 +3129,7 @@ void Sema::CheckMain(FunctionDecl* FD) {
       //   char const * const *
       //   char * const *
 
-      QualifierSet qs;
+      QualifierCollector qs;
       const PointerType* PT;
       if ((PT = qs.strip(AT)->getAs<PointerType>()) &&
           (PT = qs.strip(PT->getPointeeType())->getAs<PointerType>()) &&
@@ -3471,7 +3632,18 @@ Sema::ActOnParamDeclarator(Scope *S, Declarator &D) {
       << D.getCXXScopeSpec().getRange();
     New->setInvalidDecl();
   }
-
+  
+  // ISO/IEC TR 18037 S6.7.3: "The type of an object with automatic storage 
+  // duration shall not be qualified by an address-space qualifier."
+  // Since all parameters have automatic store duration, they can not have
+  // an address space.
+  if (T.getAddressSpace() != 0) {
+    Diag(D.getIdentifierLoc(),  
+         diag::err_arg_with_address_space);
+    New->setInvalidDecl();
+  }   
+  
+  
   // Add the parameter declaration into this scope.
   S->AddDecl(DeclPtrTy::make(New));
   if (II)
@@ -3765,14 +3937,14 @@ NamedDecl *Sema::ImplicitlyDefineFunction(SourceLocation Loc,
   }
 
   // Extension in C99.  Legal in C90, but warn about it.
-  if (getLangOptions().C99)
+  static const unsigned int BuiltinLen = strlen("__builtin_");
+  if (II.getLength() > BuiltinLen &&
+      std::equal(II.getName(), II.getName() + BuiltinLen, "__builtin_"))
+    Diag(Loc, diag::warn_builtin_unknown) << &II;
+  else if (getLangOptions().C99)
     Diag(Loc, diag::ext_implicit_function_decl) << &II;
   else
     Diag(Loc, diag::warn_implicit_function_decl) << &II;
-
-  // FIXME: handle stuff like:
-  // void foo() { extern float X(); }
-  // void bar() { X(); }  <-- implicit decl for X in another scope.
 
   // Set a Declarator for the implicit definition: int foo();
   const char *Dummy;
@@ -3959,11 +4131,7 @@ Sema::DeclPtrTy Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
           = MatchTemplateParametersToScopeSpecifier(KWLoc, SS,
                         (TemplateParameterList**)TemplateParameterLists.get(),
                                               TemplateParameterLists.size())) {
-      if (TUK == TUK_Friend) {
-        // When declaring a friend template, we do want to match the
-        // template parameters to the scope specifier, but don't go so far
-        // as to try to declare a new template.
-      } else if (TemplateParams->size() > 0) {
+      if (TemplateParams->size() > 0) {
         // This is a declaration or definition of a class template (which may
         // be a member of another template).
         OwnedDecl = false;
@@ -4299,7 +4467,8 @@ CreateNewDecl:
     if (Lookup.getKind() == LookupResult::Found)
       PrevTypedef = dyn_cast<TypedefDecl>(Lookup.getAsDecl());
 
-    if (PrevTypedef && isDeclInScope(PrevTypedef, SearchDC, S) &&
+    NamedDecl *PrevTypedefNamed = PrevTypedef;
+    if (PrevTypedef && isDeclInScope(PrevTypedefNamed, SearchDC, S) &&
         Context.getCanonicalType(Context.getTypeDeclType(PrevTypedef)) !=
           Context.getCanonicalType(Context.getTypeDeclType(New))) {
       Diag(Loc, diag::err_tag_definition_of_typedef)

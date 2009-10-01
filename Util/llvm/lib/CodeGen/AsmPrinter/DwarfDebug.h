@@ -284,10 +284,20 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   void AddAddress(DIE *Die, unsigned Attribute,
                   const MachineLocation &Location);
 
+  /// AddComplexAddress - Start with the address based on the location provided,
+  /// and generate the DWARF information necessary to find the actual variable
+  /// (navigating the extra location information encoded in the type) based on
+  /// the starting location.  Add the DWARF information to the die.
+  ///
+  void AddComplexAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
+                         const MachineLocation &Location);
+
+  // FIXME: Should be reformulated in terms of AddComplexAddress.
   /// AddBlockByrefAddress - Start with the address based on the location
   /// provided, and generate the DWARF information necessary to find the
   /// actual Block variable (navigating the Block struct) based on the
-  /// starting location.  Add the DWARF information to the die.
+  /// starting location.  Add the DWARF information to the die.  Obsolete,
+  /// please use AddComplexAddress instead.
   ///
   void AddBlockByrefAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
                             const MachineLocation &Location);
@@ -450,8 +460,8 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   /// source file names. If none currently exists, create a new id and insert it
   /// in the SourceIds map. This can update DirectoryNames and SourceFileNames maps
   /// as well.
-  unsigned GetOrCreateSourceID(const std::string &DirName,
-                               const std::string &FileName);
+  unsigned GetOrCreateSourceID(const char *DirName,
+                               const char *FileName);
 
   void ConstructCompileUnit(MDNode *N);
 
@@ -459,8 +469,9 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
 
   void ConstructSubprogram(MDNode *N);
 
+  // FIXME: This should go away in favor of complex addresses.
   /// Find the type the programmer originally declared the variable to be
-  /// and return that type.
+  /// and return that type.  Obsolete, use GetComplexAddrType instead.
   ///
   DIType GetBlockByrefType(DIType Ty, std::string Name);
 

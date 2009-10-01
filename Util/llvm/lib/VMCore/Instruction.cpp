@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LLVMContextImpl.h"
 #include "llvm/Type.h"
 #include "llvm/Instructions.h"
 #include "llvm/Function.h"
@@ -50,6 +51,10 @@ Instruction::Instruction(const Type *ty, unsigned it, Use *Ops, unsigned NumOps,
 // Out of line virtual method, so the vtable, etc has a home.
 Instruction::~Instruction() {
   assert(Parent == 0 && "Instruction still linked in the program!");
+  if (hasMetadata()) {
+    LLVMContext &Context = getContext();
+    Context.pImpl->TheMetadata.ValueIsDeleted(this);
+  }
 }
 
 

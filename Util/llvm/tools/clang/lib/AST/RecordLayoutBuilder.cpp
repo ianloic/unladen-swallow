@@ -23,7 +23,7 @@ using namespace clang;
 
 ASTRecordLayoutBuilder::ASTRecordLayoutBuilder(ASTContext &Ctx)
   : Ctx(Ctx), Size(0), Alignment(8), Packed(false), MaxFieldAlignment(0),
-  NextOffset(0), IsUnion(false), NonVirtualSize(0), NonVirtualAlignment(8),
+  DataSize(0), IsUnion(false), NonVirtualSize(0), NonVirtualAlignment(8),
   PrimaryBase(0), PrimaryBaseWasVirtual(false) {}
 
 /// LayoutVtable - Lay out the vtable and set PrimaryBase.
@@ -38,7 +38,7 @@ void ASTRecordLayoutBuilder::LayoutVtable(const CXXRecordDecl *RD) {
     int AS = 0;
     UpdateAlignment(Ctx.Target.getPointerAlign(AS));
     Size += Ctx.Target.getPointerWidth(AS);
-    NextOffset = Size;
+    DataSize = Size;
   }
 }
 
@@ -219,25 +219,199 @@ void ASTRecordLayoutBuilder::LayoutVirtualBases(const CXXRecordDecl *RD,
   }
 }
 
-void ASTRecordLayoutBuilder::LayoutBaseNonVirtually(const CXXRecordDecl *RD,
-  bool IsVirtualBase) {
+bool ASTRecordLayoutBuilder::canPlaceRecordAtOffset(const CXXRecordDecl *RD, 
+                                                    uint64_t Offset) const {
+  // Look for an empty class with the same type at the same offset.
+  for (EmptyClassOffsetsTy::const_iterator I = 
+        EmptyClassOffsets.lower_bound(Offset), 
+       E = EmptyClassOffsets.upper_bound(Offset); I != E; ++I) {
+    
+    if (I->second == RD)
+      return false;
+  }
+  
+  const ASTRecordLayout &Info = Ctx.getASTRecordLayout(RD);
+
+  // Check bases.
+  for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
+       E = RD->bases_end(); I != E; ++I) {
+    if (I->isVirtual())
+      continue;
+    
+    const CXXRecordDecl *Base =
+      cast<CXXRecordDecl>(I->getType()->getAs<RecordType>()->getDecl());
+
+    uint64_t BaseClassOffset = Info.getBaseClassOffset(Base);
+    
+    if (!canPlaceRecordAtOffset(Base, Offset + BaseClassOffset))
+      return false;
+  }
+  
+  // Check fields.
+  unsigned FieldNo = 0;
+  for (CXXRecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end(); 
+       I != E; ++I, ++FieldNo) {
+    const FieldDecl *FD = *I;
+    
+    uint64_t FieldOffset = Info.getFieldOffset(FieldNo);
+    
+    if (!canPlaceFieldAtOffset(FD, Offset + FieldOffset))
+      return false;
+  }
+
+  // FIXME: virtual bases.
+  return true;
+}
+
+bool ASTRecordLayoutBuilder::canPlaceFieldAtOffset(const FieldDecl *FD, 
+                                                   uint64_t Offset) const {
+  QualType T = FD->getType();
+  if (const RecordType *RT = T->getAs<RecordType>()) {
+    if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(RT->getDecl()))
+      return canPlaceRecordAtOffset(RD, Offset);
+  }
+  
+  if (const ConstantArrayType *AT = Ctx.getAsConstantArrayType(T)) {
+    QualType ElemTy = Ctx.getBaseElementType(AT);
+    const RecordType *RT = ElemTy->getAs<RecordType>();
+    if (!RT)
+      return true;
+    const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(RT->getDecl());
+    if (!RD)
+      return true;
+    
+    const ASTRecordLayout &Info = Ctx.getASTRecordLayout(RD);
+
+    uint64_t NumElements = Ctx.getConstantArrayElementCount(AT);
+    unsigned ElementOffset = Offset;
+    for (uint64_t I = 0; I != NumElements; ++I) {
+      if (!canPlaceRecordAtOffset(RD, ElementOffset))
+        return false;
+      
+      ElementOffset += Info.getSize();
+    }
+  }
+  
+  return true;
+}
+
+void ASTRecordLayoutBuilder::UpdateEmptyClassOffsets(const CXXRecordDecl *RD,
+                                                     uint64_t Offset) {
+  if (RD->isEmpty())
+    EmptyClassOffsets.insert(std::make_pair(Offset, RD));
+  
+  const ASTRecordLayout &Info = Ctx.getASTRecordLayout(RD);
+
+  // Update bases.
+  for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
+       E = RD->bases_end(); I != E; ++I) {
+    if (I->isVirtual())
+      continue;
+    
+    const CXXRecordDecl *Base =
+      cast<CXXRecordDecl>(I->getType()->getAs<RecordType>()->getDecl());
+    
+    uint64_t BaseClassOffset = Info.getBaseClassOffset(Base);
+    UpdateEmptyClassOffsets(Base, Offset + BaseClassOffset);
+  }
+  
+  // Update fields.
+  unsigned FieldNo = 0;
+  for (CXXRecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end(); 
+       I != E; ++I, ++FieldNo) {
+    const FieldDecl *FD = *I;
+    
+    uint64_t FieldOffset = Info.getFieldOffset(FieldNo);
+    UpdateEmptyClassOffsets(FD, Offset + FieldOffset);
+  }
+  
+  // FIXME: Update virtual bases.
+}
+
+void
+ASTRecordLayoutBuilder::UpdateEmptyClassOffsets(const FieldDecl *FD, 
+                                                uint64_t Offset) {
+  QualType T = FD->getType();
+
+  if (const RecordType *RT = T->getAs<RecordType>()) {
+    if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(RT->getDecl())) {
+      UpdateEmptyClassOffsets(RD, Offset);
+      return;
+    }
+  }
+  
+  if (const ConstantArrayType *AT = Ctx.getAsConstantArrayType(T)) {
+    QualType ElemTy = Ctx.getBaseElementType(AT);
+    const RecordType *RT = ElemTy->getAs<RecordType>();
+    if (!RT)
+      return;
+    const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(RT->getDecl());
+    if (!RD)
+      return;
+    
+    const ASTRecordLayout &Info = Ctx.getASTRecordLayout(RD);
+
+    uint64_t NumElements = Ctx.getConstantArrayElementCount(AT);
+    unsigned ElementOffset = Offset;
+
+    for (uint64_t I = 0; I != NumElements; ++I) {
+      UpdateEmptyClassOffsets(RD, ElementOffset);
+      ElementOffset += Info.getSize();
+    }
+  }
+}
+
+uint64_t ASTRecordLayoutBuilder::LayoutBase(const CXXRecordDecl *RD) {
   const ASTRecordLayout &BaseInfo = Ctx.getASTRecordLayout(RD);
-  if (!Bases.empty()) {
-    assert(BaseInfo.getDataSize() > 0 &&
-           "FIXME: Handle empty classes.");
+
+  // If we have an empty base class, try to place it at offset 0.
+  if (RD->isEmpty() && canPlaceRecordAtOffset(RD, 0)) {
+    // We were able to place the class at offset 0.
+    UpdateEmptyClassOffsets(RD, 0);
+
+    Size = std::max(Size, BaseInfo.getSize());
+
+    return 0;
   }
   
   unsigned BaseAlign = BaseInfo.getNonVirtualAlign();
-  uint64_t BaseSize = BaseInfo.getNonVirtualSize();
-
+  
   // Round up the current record size to the base's alignment boundary.
-  Size = (Size + (BaseAlign-1)) & ~(BaseAlign-1);
+  uint64_t Offset = llvm::RoundUpToAlignment(DataSize, BaseAlign);
+  
+  // Try to place the base.
+  while (true) {
+    if (canPlaceRecordAtOffset(RD, Offset))
+      break;
+    
+    Offset += BaseAlign;
+  }
+
+  if (!RD->isEmpty()) {
+    // Update the data size.
+    DataSize = Offset + BaseInfo.getNonVirtualSize();
+
+    Size = std::max(Size, DataSize);
+  } else
+    Size = std::max(Size, Offset + BaseInfo.getSize());
+
+  // Remember max struct/class alignment.
+  UpdateAlignment(BaseAlign);
+
+  UpdateEmptyClassOffsets(RD, Offset);
+  return Offset;
+}
+
+void ASTRecordLayoutBuilder::LayoutBaseNonVirtually(const CXXRecordDecl *RD,
+  bool IsVirtualBase) {
+  // Layout the base.
+  unsigned Offset = LayoutBase(RD);
 
   // Add base class offsets.
   if (IsVirtualBase) 
-    VBases.push_back(std::make_pair(RD, Size));
+    VBases.push_back(std::make_pair(RD, Offset));
   else
-    Bases.push_back(std::make_pair(RD, Size));
+    Bases.push_back(std::make_pair(RD, Offset));
 
 #if 0
   // And now add offsets for all our primary virtual bases as well, so
@@ -254,15 +428,6 @@ void ASTRecordLayoutBuilder::LayoutBaseNonVirtually(const CXXRecordDecl *RD,
       L = &Ctx.getASTRecordLayout(PB);
   }
 #endif
-
-  // Reserve space for this base.
-  Size += BaseSize;
-
-  // Remember the next available offset.
-  NextOffset = Size;
-
-  // Remember max struct/class alignment.
-  UpdateAlignment(BaseAlign);
 }
 
 void ASTRecordLayoutBuilder::Layout(const RecordDecl *D) {
@@ -315,7 +480,7 @@ void ASTRecordLayoutBuilder::Layout(const ObjCInterfaceDecl *D,
     // We start laying out ivars not at the end of the superclass
     // structure, but at the next byte following the last field.
     Size = llvm::RoundUpToAlignment(SL.getDataSize(), 8);
-    NextOffset = Size;
+    DataSize = Size;
   }
 
   Packed = D->hasAttr<PackedAttr>();
@@ -348,7 +513,7 @@ void ASTRecordLayoutBuilder::LayoutFields(const RecordDecl *D) {
 
 void ASTRecordLayoutBuilder::LayoutField(const FieldDecl *D) {
   bool FieldPacked = Packed;
-  uint64_t FieldOffset = IsUnion ? 0 : Size;
+  uint64_t FieldOffset = IsUnion ? 0 : DataSize;
   uint64_t FieldSize;
   unsigned FieldAlign;
 
@@ -408,7 +573,20 @@ void ASTRecordLayoutBuilder::LayoutField(const FieldDecl *D) {
       FieldAlign = std::min(FieldAlign, MaxFieldAlignment);
 
     // Round up the current record size to the field's alignment boundary.
-    FieldOffset = (FieldOffset + (FieldAlign-1)) & ~(FieldAlign-1);
+    FieldOffset = llvm::RoundUpToAlignment(FieldOffset, FieldAlign);
+    
+    if (!IsUnion) {
+      while (true) {
+        // Check if we can place the field at this offset.
+        if (canPlaceFieldAtOffset(D, FieldOffset))
+          break;
+        
+        // We couldn't place the field at the offset. Try again at a new offset.
+        FieldOffset += FieldAlign;
+      }
+      
+      UpdateEmptyClassOffsets(D, FieldOffset);
+    }
   }
 
   // Place this field at the current location.
@@ -420,8 +598,8 @@ void ASTRecordLayoutBuilder::LayoutField(const FieldDecl *D) {
   else
     Size = FieldOffset + FieldSize;
 
-  // Remember the next available offset.
-  NextOffset = Size;
+  // Update the data size.
+  DataSize = Size;
 
   // Remember max struct/class alignment.
   UpdateAlignment(FieldAlign);
@@ -464,7 +642,7 @@ ASTRecordLayoutBuilder::ComputeLayout(ASTContext &Ctx,
 
   // FIXME: This should be done in FinalizeLayout.
   uint64_t DataSize =
-    IsPODForThePurposeOfLayout ? Builder.Size : Builder.NextOffset;
+    IsPODForThePurposeOfLayout ? Builder.Size : Builder.DataSize;
   uint64_t NonVirtualSize =
     IsPODForThePurposeOfLayout ? DataSize : Builder.NonVirtualSize;
 
@@ -490,7 +668,7 @@ ASTRecordLayoutBuilder::ComputeLayout(ASTContext &Ctx,
   Builder.Layout(D, Impl);
 
   return new ASTRecordLayout(Builder.Size, Builder.Alignment,
-                             Builder.NextOffset,
+                             Builder.DataSize,
                              Builder.FieldOffsets.data(),
                              Builder.FieldOffsets.size());
 }

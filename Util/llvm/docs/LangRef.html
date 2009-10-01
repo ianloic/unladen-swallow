@@ -56,6 +56,7 @@
       <li><a href="#t_classifications">Type Classifications</a></li>
       <li><a href="#t_primitive">Primitive Types</a>    
         <ol>
+          <li><a href="#t_integer">Integer Type</a></li>
           <li><a href="#t_floating">Floating Point Types</a></li>
           <li><a href="#t_void">Void Type</a></li>
           <li><a href="#t_label">Label Type</a></li>
@@ -64,7 +65,6 @@
       </li>
       <li><a href="#t_derived">Derived Types</a>
         <ol>
-          <li><a href="#t_integer">Integer Type</a></li>
           <li><a href="#t_array">Array Type</a></li>
           <li><a href="#t_function">Function Type</a></li>
           <li><a href="#t_pointer">Pointer Type</a></li>
@@ -1380,7 +1380,7 @@ Classifications</a> </div>
 
 <p>The <a href="#t_firstclass">first class</a> types are perhaps the most
    important.  Values of these types are the only ones which can be produced by
-   instructions, passed as arguments, or used as operands to instructions.</p>
+   instructions.</p>
 
 </div>
 
@@ -1391,6 +1391,47 @@ Classifications</a> </div>
 
 <p>The primitive types are the fundamental building blocks of the LLVM
    system.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"> <a name="t_integer">Integer Type</a> </div>
+
+<div class="doc_text">
+
+<h5>Overview:</h5>
+<p>The integer type is a very simple type that simply specifies an arbitrary
+   bit width for the integer type desired. Any bit width from 1 bit to
+   2<sup>23</sup>-1 (about 8 million) can be specified.</p>
+
+<h5>Syntax:</h5>
+<pre>
+  iN
+</pre>
+
+<p>The number of bits the integer will occupy is specified by the <tt>N</tt>
+   value.</p>
+
+<h5>Examples:</h5>
+<table class="layout">
+  <tr class="layout">
+    <td class="left"><tt>i1</tt></td>
+    <td class="left">a single-bit integer.</td>
+  </tr>
+  <tr class="layout">
+    <td class="left"><tt>i32</tt></td>
+    <td class="left">a 32-bit integer.</td>
+  </tr>
+  <tr class="layout">
+    <td class="left"><tt>i1942652</tt></td>
+    <td class="left">a really big integer of over 1 million bits.</td>
+  </tr>
+</table>
+
+<p>Note that the code generator does not yet support large integer types to be
+   used as function return types. The specific limit on how large a return type
+   the code generator can currently handle is target-dependent; currently it's
+   often 64 bits for 32-bit targets and 128 bits for 64-bit targets.</p>
 
 </div>
 
@@ -1448,9 +1489,9 @@ Classifications</a> </div>
 <div class="doc_text">
 
 <h5>Overview:</h5>
-<p>The metadata type represents embedded metadata. The only derived type that
-   may contain metadata is <tt>metadata*</tt> or a function type that returns or
-   takes metadata typed parameters, but not pointer to metadata types.</p>
+<p>The metadata type represents embedded metadata. No derived types may be
+   created from metadata except for <a href="#t_function">function</a>
+   arguments.
 
 <h5>Syntax:</h5>
 <pre>
@@ -1467,49 +1508,10 @@ Classifications</a> </div>
 
 <p>The real power in LLVM comes from the derived types in the system.  This is
    what allows a programmer to represent arrays, functions, pointers, and other
-   useful types.  Note that these derived types may be recursive: For example,
-   it is possible to have a two dimensional array.</p>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsubsection"> <a name="t_integer">Integer Type</a> </div>
-
-<div class="doc_text">
-
-<h5>Overview:</h5>
-<p>The integer type is a very simple derived type that simply specifies an
-   arbitrary bit width for the integer type desired. Any bit width from 1 bit to
-   2^23-1 (about 8 million) can be specified.</p>
-
-<h5>Syntax:</h5>
-<pre>
-  iN
-</pre>
-
-<p>The number of bits the integer will occupy is specified by the <tt>N</tt>
-   value.</p>
-
-<h5>Examples:</h5>
-<table class="layout">
-  <tr class="layout">
-    <td class="left"><tt>i1</tt></td>
-    <td class="left">a single-bit integer.</td>
-  </tr>
-  <tr class="layout">
-    <td class="left"><tt>i32</tt></td>
-    <td class="left">a 32-bit integer.</td>
-  </tr>
-  <tr class="layout">
-    <td class="left"><tt>i1942652</tt></td>
-    <td class="left">a really big integer of over 1 million bits.</td>
-  </tr>
-</table>
-
-<p>Note that the code generator does not yet support large integer types to be
-   used as function return types. The specific limit on how large a return type
-   the code generator can currently handle is target-dependent; currently it's
-   often 64 bits for 32-bit targets and 128 bits for 64-bit targets.</p>
+   useful types.  Each of these types contain one or more element types which
+   may be a primitive type, or another derived type.  For example, it is
+   possible to have a two dimensional array, using an array as the element type
+   of another array.</p>
 
 </div>
 
@@ -1590,7 +1592,7 @@ Classifications</a> </div>
 
 <h5>Syntax:</h5>
 <pre>
-  &lt;returntype list&gt; (&lt;parameter list&gt;)
+  &lt;returntype&gt; (&lt;parameter list&gt;)
 </pre>
 
 <p>...where '<tt>&lt;parameter list&gt;</tt>' is a comma-separated list of type
@@ -1598,8 +1600,8 @@ Classifications</a> </div>
    which indicates that the function takes a variable number of arguments.
    Variable argument functions can access their arguments with
    the <a href="#int_varargs">variable argument handling intrinsic</a>
-   functions.  '<tt>&lt;returntype list&gt;</tt>' is a comma-separated list of
-   <a href="#t_firstclass">first class</a> type specifiers.</p>
+   functions.  '<tt>&lt;returntype&gt;</tt>' is a any type except
+   <a href="#t_label">label</a>.</p>
 
 <h5>Examples:</h5>
 <table class="layout">
@@ -1624,8 +1626,8 @@ Classifications</a> </div>
     </td>
   </tr><tr class="layout">
     <td class="left"><tt>{i32, i32} (i32)</tt></td>
-    <td class="left">A function taking an <tt>i32</tt>, returning two 
-        <tt>i32</tt> values as an aggregate of type <tt>{ i32, i32 }</tt>
+    <td class="left">A function taking an <tt>i32</tt>, returning a
+        <a href="#t_struct">structure</a> containing two <tt>i32</tt> values
     </td>
   </tr>
 </table>
@@ -1888,7 +1890,7 @@ Classifications</a> </div>
 <dl>
   <dt><b>Boolean constants</b></dt>
   <dd>The two strings '<tt>true</tt>' and '<tt>false</tt>' are both valid
-      constants of the <tt><a href="#t_primitive">i1</a></tt> type.</dd>
+      constants of the <tt><a href="#t_integer">i1</a></tt> type.</dd>
 
   <dt><b>Integer constants</b></dt>
   <dd>Standard integers (such as '4') are constants of
@@ -4691,7 +4693,7 @@ entry:
 <h5>Semantics:</h5>
 <p>The '<tt>icmp</tt>' compares <tt>op1</tt> and <tt>op2</tt> according to the
    condition code given as <tt>cond</tt>. The comparison performed always yields
-   either an <a href="#t_primitive"><tt>i1</tt></a> or vector of <tt>i1</tt>
+   either an <a href="#t_integer"><tt>i1</tt></a> or vector of <tt>i1</tt>
    result, as follows:</p>
 
 <ol>
@@ -4768,7 +4770,7 @@ entry:
    values based on comparison of its operands.</p>
 
 <p>If the operands are floating point scalars, then the result type is a boolean
-(<a href="#t_primitive"><tt>i1</tt></a>).</p>
+(<a href="#t_integer"><tt>i1</tt></a>).</p>
 
 <p>If the operands are floating point vectors, then the result type is a vector
    of boolean with the same number of elements as the operands being
@@ -4810,7 +4812,7 @@ entry:
 <p>The '<tt>fcmp</tt>' instruction compares <tt>op1</tt> and <tt>op2</tt>
    according to the condition code given as <tt>cond</tt>.  If the operands are
    vectors, then the vectors are compared element by element.  Each comparison
-   performed always yields an <a href="#t_primitive">i1</a> result, as
+   performed always yields an <a href="#t_integer">i1</a> result, as
    follows:</p>
 
 <ol>
@@ -5044,6 +5046,12 @@ Loop:       ; Infinite loop that counts from 0 on up...
   %Z = call void @foo() noreturn                    <i>; indicates that %foo never returns normally</i>
   %ZZ = call zeroext i32 @bar()                     <i>; Return value is %zero extended</i>
 </pre>
+
+<p>llvm treats calls to some functions with names and arguments that match the
+standard C99 library as being the C99 library functions, and may perform
+optimizations or generate code for them under that assumption.  This is
+something we'd like to change in the future to provide better support for
+freestanding environments and non-C-based langauges.</p>
 
 </div>
 
@@ -7117,7 +7125,7 @@ LLVM</a>.</p>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-09-10 18:49:31 -0700 (Thu, 10 Sep 2009) $
+  Last modified: $Date: 2009-09-27 16:27:42 -0700 (Sun, 27 Sep 2009) $
 </address>
 
 </body>

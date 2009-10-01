@@ -93,7 +93,7 @@ bool Sema::CheckablePrintfAttr(const FormatAttr *Format, CallExpr *TheCall) {
     unsigned format_idx = Format->getFormatIdx() - 1;
     if (format_idx < TheCall->getNumArgs()) {
       Expr *Format = TheCall->getArg(format_idx)->IgnoreParenCasts();
-      if (!Format->isNullPointerConstant(Context))
+      if (!Format->isNullPointerConstant(Context, Expr::NPC_ValueDependentIsNull))
         return true;
     }
   }
@@ -136,6 +136,10 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   case Builtin::BI__builtin_return_address:
   case Builtin::BI__builtin_frame_address:
     if (SemaBuiltinStackAddress(TheCall))
+      return ExprError();
+    break;
+  case Builtin::BI__builtin_eh_return_data_regno:
+    if (SemaBuiltinEHReturnDataRegNo(TheCall))
       return ExprError();
     break;
   case Builtin::BI__builtin_shufflevector:
@@ -698,7 +702,7 @@ bool Sema::SemaBuiltinPrefetch(CallExpr *TheCall) {
     llvm::APSInt Result;
     if (!BT || BT->getKind() != BuiltinType::Int)
       return Diag(TheCall->getLocStart(), diag::err_prefetch_invalid_argument)
-              << SourceRange(Arg->getLocStart(), Arg->getLocEnd());
+              << Arg->getSourceRange();
 
     if (Arg->isValueDependent())
       continue;
@@ -713,16 +717,28 @@ bool Sema::SemaBuiltinPrefetch(CallExpr *TheCall) {
     if (i == 1) {
       if (Result.getSExtValue() < 0 || Result.getSExtValue() > 1)
         return Diag(TheCall->getLocStart(), diag::err_argument_invalid_range)
-             << "0" << "1" << SourceRange(Arg->getLocStart(), Arg->getLocEnd());
+             << "0" << "1" << Arg->getSourceRange();
     } else {
       if (Result.getSExtValue() < 0 || Result.getSExtValue() > 3)
         return Diag(TheCall->getLocStart(), diag::err_argument_invalid_range)
-            << "0" << "3" << SourceRange(Arg->getLocStart(), Arg->getLocEnd());
+            << "0" << "3" << Arg->getSourceRange();
     }
   }
 
   return false;
 }
+
+/// SemaBuiltinEHReturnDataRegNo - Handle __builtin_eh_return_data_regno, the
+/// operand must be an integer constant.
+bool Sema::SemaBuiltinEHReturnDataRegNo(CallExpr *TheCall) {
+  llvm::APSInt Result;
+  if (!TheCall->getArg(0)->isIntegerConstantExpr(Result, Context))
+    return Diag(TheCall->getLocStart(), diag::err_expr_not_ice)
+      << TheCall->getArg(0)->getSourceRange();
+  
+  return false;
+}
+
 
 /// SemaBuiltinObjectSize - Handle __builtin_object_size(void *ptr,
 /// int type). This simply type checks that type is one of the defined
@@ -895,7 +911,8 @@ Sema::CheckNonNullArguments(const NonNullAttr *NonNull,
   for (NonNullAttr::iterator i = NonNull->begin(), e = NonNull->end();
        i != e; ++i) {
     const Expr *ArgExpr = TheCall->getArg(*i);
-    if (ArgExpr->isNullPointerConstant(Context))
+    if (ArgExpr->isNullPointerConstant(Context, 
+                                       Expr::NPC_ValueDependentIsNotNull))
       Diag(TheCall->getCallee()->getLocStart(), diag::warn_null_arg)
         << ArgExpr->getSourceRange();
   }

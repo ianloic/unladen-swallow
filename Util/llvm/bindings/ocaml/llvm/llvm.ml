@@ -42,13 +42,18 @@ module Linkage = struct
   | External
   | Available_externally
   | Link_once
+  | Link_once_odr
   | Weak
+  | Weak_odr
   | Appending
   | Internal
+  | Private
   | Dllimport
   | Dllexport
   | External_weak
   | Ghost
+  | Common
+  | Linker_private
 end
 
 module Visibility = struct
@@ -79,6 +84,16 @@ module Attribute = struct
   | Nest
   | Readnone
   | Readonly
+  | Noinline
+  | Alwaysinline
+  | Optsize
+  | Ssp
+  | Sspreq
+  | Nocapture
+  | Noredzone
+  | Noimplicitfloat
+  | Naked
+  | Inlinehint
 end
 
 module Icmp = struct

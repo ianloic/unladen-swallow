@@ -268,6 +268,16 @@ bool SimpleRegisterCoalescing::HasOtherReachingDefs(LiveInterval &IntA,
   return false;
 }
 
+static void
+TransferImplicitOps(MachineInstr *MI, MachineInstr *NewMI) {
+  for (unsigned i = MI->getDesc().getNumOperands(), e = MI->getNumOperands();
+       i != e; ++i) {
+    MachineOperand &MO = MI->getOperand(i);
+    if (MO.isReg() && MO.isImplicit())
+      NewMI->addOperand(MO);
+  }
+}
+
 /// RemoveCopyByCommutingDef - We found a non-trivially-coalescable copy with IntA
 /// being the source and IntB being the dest, thus this defines a value number
 /// in IntB.  If the source value number (in IntA) is defined by a commutable
@@ -416,7 +426,7 @@ bool SimpleRegisterCoalescing::RemoveCopyByCommutingDef(LiveInterval &IntA,
     ++UI;
     if (JoinedCopies.count(UseMI))
       continue;
-    MachineInstrIndex UseIdx = li_->getInstructionIndex(UseMI);
+    MachineInstrIndex UseIdx= li_->getUseIndex(li_->getInstructionIndex(UseMI));
     LiveInterval::iterator ULR = IntA.FindLiveRangeContaining(UseIdx);
     if (ULR == IntA.end() || ULR->valno != AValNo)
       continue;
@@ -427,7 +437,7 @@ bool SimpleRegisterCoalescing::RemoveCopyByCommutingDef(LiveInterval &IntA,
       if (Extended)
         UseMO.setIsKill(false);
       else
-        BKills.push_back(li_->getNextSlot(li_->getUseIndex(UseIdx)));
+        BKills.push_back(li_->getNextSlot(UseIdx));
     }
     unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
     if (!tii_->isMoveInstr(*UseMI, SrcReg, DstReg, SrcSubIdx, DstSubIdx))
@@ -724,6 +734,7 @@ bool SimpleRegisterCoalescing::ReMaterializeTrivialDef(LiveInterval &SrcInt,
     }
   }
 
+  TransferImplicitOps(CopyMI, NewMI);
   li_->ReplaceMachineInstrInMaps(CopyMI, NewMI);
   CopyMI->eraseFromParent();
   ReMatCopies.insert(CopyMI);
@@ -826,21 +837,21 @@ void SimpleRegisterCoalescing::RemoveUnnecessaryKills(unsigned Reg,
     MachineInstrIndex UseIdx =
       li_->getUseIndex(li_->getInstructionIndex(UseMI));
     const LiveRange *LR = LI.getLiveRangeContaining(UseIdx);
-    if (!LR || !LR->valno->isKill(li_->getNextSlot(UseIdx))) {
-      if (LR->valno->def != li_->getNextSlot(UseIdx)) {
-        // Interesting problem. After coalescing reg1027's def and kill are both
-        // at the same point:  %reg1027,0.000000e+00 = [56,814:0)  0@70-(814)
-        //
-        // bb5:
-        // 60   %reg1027<def> = t2MOVr %reg1027, 14, %reg0, %reg0
-        // 68   %reg1027<def> = t2LDRi12 %reg1027<kill>, 8, 14, %reg0
-        // 76   t2CMPzri %reg1038<kill,undef>, 0, 14, %reg0, %CPSR<imp-def>
-        // 84   %reg1027<def> = t2MOVr %reg1027, 14, %reg0, %reg0
-        // 96   t2Bcc mbb<bb5,0x2030910>, 1, %CPSR<kill>
-        //
-        // Do not remove the kill marker on t2LDRi12.
-        UseMO.setIsKill(false);
-      }
+    if (!LR ||
+        (!LR->valno->isKill(li_->getNextSlot(UseIdx)) &&
+         LR->valno->def != li_->getNextSlot(UseIdx))) {
+      // Interesting problem. After coalescing reg1027's def and kill are both
+      // at the same point:  %reg1027,0.000000e+00 = [56,814:0)  0@70-(814)
+      //
+      // bb5:
+      // 60   %reg1027<def> = t2MOVr %reg1027, 14, %reg0, %reg0
+      // 68   %reg1027<def> = t2LDRi12 %reg1027<kill>, 8, 14, %reg0
+      // 76   t2CMPzri %reg1038<kill,undef>, 0, 14, %reg0, %CPSR<imp-def>
+      // 84   %reg1027<def> = t2MOVr %reg1027, 14, %reg0, %reg0
+      // 96   t2Bcc mbb<bb5,0x2030910>, 1, %CPSR<kill>
+      //
+      // Do not remove the kill marker on t2LDRi12.
+      UseMO.setIsKill(false);
     }
   }
 }
@@ -2681,21 +2692,34 @@ bool SimpleRegisterCoalescing::runOnMachineFunction(MachineFunction &fn) {
       unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
       if (JoinedCopies.count(MI)) {
         // Delete all coalesced copies.
+        bool DoDelete = true;
         if (!tii_->isMoveInstr(*MI, SrcReg, DstReg, SrcSubIdx, DstSubIdx)) {
           assert((MI->getOpcode() == TargetInstrInfo::EXTRACT_SUBREG ||
                   MI->getOpcode() == TargetInstrInfo::INSERT_SUBREG ||
                   MI->getOpcode() == TargetInstrInfo::SUBREG_TO_REG) &&
                  "Unrecognized copy instruction");
           DstReg = MI->getOperand(0).getReg();
+          if (TargetRegisterInfo::isPhysicalRegister(DstReg))
+            // Do not delete extract_subreg, insert_subreg of physical
+            // registers unless the definition is dead. e.g.
+            // %DO<def> = INSERT_SUBREG %D0<undef>, %S0<kill>, 1
+            // or else the scavenger may complain. LowerSubregs will
+            // change this to an IMPLICIT_DEF later.
+            DoDelete = false;
         }
         if (MI->registerDefIsDead(DstReg)) {
           LiveInterval &li = li_->getInterval(DstReg);
           if (!ShortenDeadCopySrcLiveRange(li, MI))
             ShortenDeadCopyLiveRange(li, MI);
+          DoDelete = true;
         }
-        li_->RemoveMachineInstrFromMaps(MI);
-        mii = mbbi->erase(mii);
-        ++numPeep;
+        if (!DoDelete)
+          mii = next(mii);
+        else {
+          li_->RemoveMachineInstrFromMaps(MI);
+          mii = mbbi->erase(mii);
+          ++numPeep;
+        }
         continue;
       }
 

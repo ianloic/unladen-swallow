@@ -15,7 +15,6 @@
 #define LLVM_CLANG_AST_TYPELOC_H
 
 #include "clang/AST/Type.h"
-#include "clang/AST/TypeVisitor.h"
 
 namespace clang {
   class ParmVarDecl;
@@ -31,11 +30,9 @@ protected:
   QualType Ty;
   void *Data;
 
-  TypeLoc(QualType ty, void *data) : Ty(ty), Data(data) { }
-  static TypeLoc Create(QualType ty, void *data) { return TypeLoc(ty,data); }
-  friend class DeclaratorInfo;
 public:
   TypeLoc() : Data(0) { }
+  TypeLoc(QualType ty, void *opaqueData) : Ty(ty), Data(opaqueData) { }
 
   bool isNull() const { return Ty.isNull(); }
   operator bool() const { return !isNull(); }
@@ -46,6 +43,11 @@ public:
   /// \brief Get the type for which this source info wrapper provides
   /// information.
   QualType getSourceType() const { return Ty; }
+
+  /// \brief Get the pointer where source information is stored.
+  void *getOpaqueData() const { return Data; }
+
+  SourceRange getSourceRange() const;
 
   /// \brief Find the TypeSpecLoc that is part of this TypeLoc.
   TypeSpecLoc getTypeSpecLoc() const;
@@ -75,8 +77,6 @@ public:
 /// \brief Base wrapper of type source info data for type-spec types.
 class TypeSpecLoc : public TypeLoc  {
 public:
-  SourceRange getSourceRange() const;
-
   static bool classof(const TypeLoc *TL);
   static bool classof(const TypeSpecLoc *TL) { return true; }
 };
@@ -138,6 +138,10 @@ public:
     return SourceRange(getNameLoc(), getNameLoc());
   }
 
+  TypedefDecl *getTypedefDecl() const {
+    return cast<TypedefType>(Ty)->getDecl();
+  }
+
   /// \brief Returns the size of the type source info data block that is
   /// specific to this type.
   unsigned getLocalDataSize() const { return sizeof(Info); }
@@ -147,6 +151,105 @@ public:
 
   static bool classof(const TypeLoc *TL);
   static bool classof(const TypedefLoc *TL) { return true; }
+};
+
+/// \brief Wrapper for source info for ObjC interfaces.
+class ObjCInterfaceLoc : public TypeSpecLoc {
+  struct Info {
+    SourceLocation NameLoc;
+  };
+
+public:
+  SourceLocation getNameLoc() const {
+    return static_cast<Info*>(Data)->NameLoc;
+  }
+  void setNameLoc(SourceLocation Loc) {
+    static_cast<Info*>(Data)->NameLoc = Loc;
+  }
+  SourceRange getSourceRange() const {
+    return SourceRange(getNameLoc(), getNameLoc());
+  }
+
+  ObjCInterfaceDecl *getIFaceDecl() const {
+    return cast<ObjCInterfaceType>(Ty)->getDecl();
+  }
+
+  /// \brief Returns the size of the type source info data block that is
+  /// specific to this type.
+  unsigned getLocalDataSize() const { return sizeof(Info); }
+
+  /// \brief Returns the size of the type source info data block.
+  unsigned getFullDataSize() const { return getLocalDataSize(); }
+
+  static bool classof(const TypeLoc *TL);
+  static bool classof(const TypedefLoc *TL) { return true; }
+};
+
+/// \brief Wrapper for source info for ObjC protocol lists.
+class ObjCProtocolListLoc : public TypeSpecLoc {
+  struct Info {
+    SourceLocation LAngleLoc, RAngleLoc;
+  };
+  // SourceLocations are stored after Info, one for each Protocol.
+  SourceLocation *getProtocolLocArray() const {
+    return reinterpret_cast<SourceLocation*>(static_cast<Info*>(Data) + 1);
+  }
+
+public:
+  SourceLocation getLAngleLoc() const {
+    return static_cast<Info*>(Data)->LAngleLoc;
+  }
+  void setLAngleLoc(SourceLocation Loc) {
+    static_cast<Info*>(Data)->LAngleLoc = Loc;
+  }
+
+  SourceLocation getRAngleLoc() const {
+    return static_cast<Info*>(Data)->RAngleLoc;
+  }
+  void setRAngleLoc(SourceLocation Loc) {
+    static_cast<Info*>(Data)->RAngleLoc = Loc;
+  }
+
+  unsigned getNumProtocols() const {
+    return cast<ObjCProtocolListType>(Ty)->getNumProtocols();
+  }
+
+  SourceLocation getProtocolLoc(unsigned i) const {
+    assert(i < getNumProtocols() && "Index is out of bounds!");
+    return getProtocolLocArray()[i];
+  }
+  void setProtocolLoc(unsigned i, SourceLocation Loc) {
+    assert(i < getNumProtocols() && "Index is out of bounds!");
+    getProtocolLocArray()[i] = Loc;
+  }
+
+  ObjCProtocolDecl *getProtocol(unsigned i) const {
+    assert(i < getNumProtocols() && "Index is out of bounds!");
+    return *(cast<ObjCProtocolListType>(Ty)->qual_begin() + i);
+  }
+  
+  TypeLoc getBaseTypeLoc() const {
+    void *Next = static_cast<char*>(Data) + getLocalDataSize();
+    return TypeLoc(cast<ObjCProtocolListType>(Ty)->getBaseType(), Next);
+  }
+
+  SourceRange getSourceRange() const {
+    return SourceRange(getLAngleLoc(), getRAngleLoc());
+  }
+
+  /// \brief Returns the size of the type source info data block that is
+  /// specific to this type.
+  unsigned getLocalDataSize() const {
+    return sizeof(Info) + getNumProtocols() * sizeof(SourceLocation);
+  }
+
+  /// \brief Returns the size of the type source info data block.
+  unsigned getFullDataSize() const {
+    return getLocalDataSize() + getBaseTypeLoc().getFullDataSize();
+  }
+
+  static bool classof(const TypeLoc *TL);
+  static bool classof(const ObjCProtocolListLoc *TL) { return true; }
 };
 
 /// \brief Wrapper for source info for pointers.
@@ -165,7 +268,7 @@ public:
 
   TypeLoc getPointeeLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<PointerType>(Ty)->getPointeeType(), Next);
+    return TypeLoc(cast<PointerType>(Ty)->getPointeeType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this PointerLoc.
@@ -206,7 +309,7 @@ public:
 
   TypeLoc getPointeeLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<BlockPointerType>(Ty)->getPointeeType(), Next);
+    return TypeLoc(cast<BlockPointerType>(Ty)->getPointeeType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this BlockPointerLoc.
@@ -247,7 +350,7 @@ public:
 
   TypeLoc getPointeeLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<MemberPointerType>(Ty)->getPointeeType(), Next);
+    return TypeLoc(cast<MemberPointerType>(Ty)->getPointeeType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this MemberPointerLoc.
@@ -288,7 +391,7 @@ public:
 
   TypeLoc getPointeeLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<ReferenceType>(Ty)->getPointeeType(), Next);
+    return TypeLoc(cast<ReferenceType>(Ty)->getPointeeType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this ReferenceLoc.
@@ -350,7 +453,7 @@ public:
 
   TypeLoc getResultLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<FunctionType>(Ty)->getResultType(), Next);
+    return TypeLoc(cast<FunctionType>(Ty)->getResultType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this FunctionLoc.
@@ -406,7 +509,7 @@ public:
 
   TypeLoc getElementLoc() const {
     void *Next = static_cast<char*>(Data) + getLocalDataSize();
-    return Create(cast<ArrayType>(Ty)->getElementType(), Next);
+    return TypeLoc(cast<ArrayType>(Ty)->getElementType(), Next);
   }
 
   /// \brief Find the TypeSpecLoc that is part of this ArrayLoc.
@@ -429,41 +532,6 @@ public:
   static bool classof(const TypeLoc *TL);
   static bool classof(const ArrayLoc *TL) { return true; }
 };
-
-#define DISPATCH(CLASS) \
-  return static_cast<ImplClass*>(this)->Visit ## CLASS(cast<CLASS>(TyLoc))
-
-template<typename ImplClass, typename RetTy=void>
-class TypeLocVisitor {
-  class TypeDispatch : public TypeVisitor<TypeDispatch, RetTy> {
-    ImplClass *Impl;
-    TypeLoc TyLoc;
-
-  public:
-    TypeDispatch(ImplClass *impl, TypeLoc &tyLoc) : Impl(impl), TyLoc(tyLoc) { }
-#define ABSTRACT_TYPELOC(CLASS)
-#define TYPELOC(CLASS, PARENT, TYPE)                              \
-    RetTy Visit##TYPE(TYPE *) {                                   \
-      return Impl->Visit##CLASS(reinterpret_cast<CLASS&>(TyLoc)); \
-    }
-#include "clang/AST/TypeLocNodes.def"
-  };
-
-public:
-  RetTy Visit(TypeLoc TyLoc) {
-    TypeDispatch TD(static_cast<ImplClass*>(this), TyLoc);
-    return TD.Visit(TyLoc.getSourceType().getTypePtr());
-  }
-
-#define TYPELOC(CLASS, PARENT, TYPE) RetTy Visit##CLASS(CLASS TyLoc) {       \
-  DISPATCH(PARENT);                                                          \
-}
-#include "clang/AST/TypeLocNodes.def"
-
-  RetTy VisitTypeLoc(TypeLoc TyLoc) { return RetTy(); }
-};
-
-#undef DISPATCH
 
 }
 

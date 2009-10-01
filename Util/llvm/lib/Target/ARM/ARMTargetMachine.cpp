@@ -22,10 +22,9 @@
 #include "llvm/Target/TargetRegistry.h"
 using namespace llvm;
 
-static cl::opt<bool> DisableLdStOpti("disable-arm-loadstore-opti", cl::Hidden,
-                              cl::desc("Disable load store optimization pass"));
-static cl::opt<bool> DisableIfConversion("disable-arm-if-conversion",cl::Hidden,
-                              cl::desc("Disable if-conversion pass"));
+static cl::opt<bool>
+LdStBeforeSched("ldstopti-before-sched2", cl::Hidden,
+            cl::desc("Move ld / st multiple pass before postalloc scheduling"));
 
 static const MCAsmInfo *createMCAsmInfo(const Target &T,
                                         const StringRef &TT) {
@@ -91,7 +90,7 @@ ThumbTargetMachine::ThumbTargetMachine(const Target &T, const std::string &TT,
 // Pass Pipeline Configuration
 bool ARMBaseTargetMachine::addInstSelector(PassManagerBase &PM,
                                            CodeGenOpt::Level OptLevel) {
-  PM.add(createARMISelDag(*this));
+  PM.add(createARMISelDag(*this, OptLevel));
   return false;
 }
 
@@ -100,22 +99,30 @@ bool ARMBaseTargetMachine::addPreRegAlloc(PassManagerBase &PM,
   if (Subtarget.hasNEON())
     PM.add(createNEONPreAllocPass());
 
-  // FIXME: temporarily disabling load / store optimization pass for Thumb mode.
-  if (OptLevel != CodeGenOpt::None && !DisableLdStOpti && !Subtarget.isThumb())
+  // FIXME: temporarily disabling load / store optimization pass for Thumb1.
+  if (OptLevel != CodeGenOpt::None && !Subtarget.isThumb1Only())
     PM.add(createARMLoadStoreOptimizationPass(true));
+  return true;
+}
+
+bool ARMBaseTargetMachine::addPreSched2(PassManagerBase &PM,
+                                        CodeGenOpt::Level OptLevel) {
+  // FIXME: temporarily disabling load / store optimization pass for Thumb1.
+  if (OptLevel != CodeGenOpt::None && !Subtarget.isThumb1Only())
+    if (LdStBeforeSched)
+      PM.add(createARMLoadStoreOptimizationPass());
+
   return true;
 }
 
 bool ARMBaseTargetMachine::addPreEmitPass(PassManagerBase &PM,
                                           CodeGenOpt::Level OptLevel) {
-  // FIXME: temporarily disabling load / store optimization pass for Thumb1 mode.
-  if (OptLevel != CodeGenOpt::None && !DisableLdStOpti &&
-      !Subtarget.isThumb1Only())
-    PM.add(createARMLoadStoreOptimizationPass());
-
-  if (OptLevel != CodeGenOpt::None &&
-      !DisableIfConversion && !Subtarget.isThumb1Only())
+  // FIXME: temporarily disabling load / store optimization pass for Thumb1.
+  if (OptLevel != CodeGenOpt::None && !Subtarget.isThumb1Only()) {
+    if (!LdStBeforeSched)
+      PM.add(createARMLoadStoreOptimizationPass());
     PM.add(createIfConverterPass());
+  }
 
   if (Subtarget.isThumb2()) {
     PM.add(createThumb2ITBlockPass());

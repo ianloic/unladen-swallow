@@ -28,6 +28,21 @@ using namespace idx;
 
 namespace {
 
+static enum CXCursorKind TranslateDeclRefExpr(DeclRefExpr *DRE) 
+{
+  NamedDecl *D = DRE->getDecl();
+  if (isa<VarDecl>(D))
+    return CXCursor_VarRef;
+  else if (isa<FunctionDecl>(D))
+    return CXCursor_FunctionRef;
+  else if (isa<EnumConstantDecl>(D))
+    return CXCursor_EnumConstantRef;
+  else 
+    return CXCursor_NotImplemented;
+}
+
+#if 0
+// Will be useful one day.
 class CRefVisitor : public StmtVisitor<CRefVisitor> {
   CXDecl CDecl;
   CXDeclIterator Callback;
@@ -48,13 +63,7 @@ public:
       Visit(*C);
   }
   void VisitDeclRefExpr(DeclRefExpr *Node) {
-    NamedDecl *D = Node->getDecl();
-    if (isa<VarDecl>(D))
-      Call(CXCursor_VarRef, Node);
-    else if (isa<FunctionDecl>(D))
-      Call(CXCursor_FunctionRef, Node);
-    else if (isa<EnumConstantDecl>(D))
-      Call(CXCursor_EnumConstantRef, Node);
+    Call(TranslateDeclRefExpr(Node), Node);
   }
   void VisitMemberExpr(MemberExpr *Node) {
     Call(CXCursor_MemberRef, Node);
@@ -66,6 +75,7 @@ public:
     Call(CXCursor_ObjCIvarRef, Node);
   }
 };
+#endif
 
 // Translation Unit Visitor.
 class TUVisitor : public DeclVisitor<TUVisitor> {
@@ -208,9 +218,12 @@ public:
   void VisitFunctionDecl(FunctionDecl *ND) {
     if (ND->isThisDeclarationADefinition()) {
       VisitDeclContext(dyn_cast<DeclContext>(ND));
-      
+#if 0
+      // Not currently needed.
+      CompoundStmt *Body = dyn_cast<CompoundStmt>(ND->getBody());
       CRefVisitor RVisit(CDecl, Callback, CData);
-      RVisit.Visit(ND->getBody());
+      RVisit.Visit(Body);
+#endif
     }
   }
   void VisitObjCMethodDecl(ObjCMethodDecl *ND) {
@@ -339,6 +352,30 @@ const char *clang_getDeclSpelling(CXDecl AnonDecl)
     return ND->getIdentifier()->getName();
   else 
     return "";
+}
+
+unsigned clang_getDeclLine(CXDecl AnonDecl)
+{
+  assert(AnonDecl && "Passed null CXDecl");
+  NamedDecl *ND = static_cast<NamedDecl *>(AnonDecl);
+  SourceManager &SourceMgr = ND->getASTContext().getSourceManager();
+  return SourceMgr.getSpellingLineNumber(ND->getLocation());
+}
+
+unsigned clang_getDeclColumn(CXDecl AnonDecl)
+{
+  assert(AnonDecl && "Passed null CXDecl");
+  NamedDecl *ND = static_cast<NamedDecl *>(AnonDecl);
+  SourceManager &SourceMgr = ND->getASTContext().getSourceManager();
+  return SourceMgr.getSpellingColumnNumber(ND->getLocation());
+}
+
+const char *clang_getDeclSource(CXDecl AnonDecl) 
+{
+  assert(AnonDecl && "Passed null CXDecl");
+  NamedDecl *ND = static_cast<NamedDecl *>(AnonDecl);
+  SourceManager &SourceMgr = ND->getASTContext().getSourceManager();
+  return SourceMgr.getBufferName(ND->getLocation());
 }
 
 const char *clang_getCursorSpelling(CXCursor C)
@@ -475,8 +512,21 @@ CXCursor clang_getCursor(CXTranslationUnit CTUnit, const char *source_name,
                                                                 
   ASTLocation ALoc = ResolveLocationInAST(CXXUnit->getASTContext(), SLoc);
   
-  Decl *Dcl = ALoc.getDecl();
-  if (Dcl) {  
+  Decl *Dcl = ALoc.getParentDecl();
+  if (ALoc.isNamedRef())
+    Dcl = ALoc.AsNamedRef().ND;
+  Stmt *Stm = ALoc.dyn_AsStmt();
+  if (Dcl) {
+    if (Stm) {
+      if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(Stm)) {
+        CXCursor C = { TranslateDeclRefExpr(DRE), Dcl, Stm };
+        return C;
+      } else if (ObjCMessageExpr *MExp = dyn_cast<ObjCMessageExpr>(Stm)) {
+        CXCursor C = { CXCursor_ObjCSelectorRef, Dcl, MExp };
+        return C;
+      }
+      // Fall through...treat as a decl, not a ref.
+    }
     CXCursor C = { TranslateKind(Dcl), Dcl, 0 };
     return C;
   }
@@ -518,9 +568,36 @@ CXCursorKind clang_getCursorKind(CXCursor C)
   return C.kind;
 }
 
+static Decl *getDeclFromExpr(Stmt *E) {
+  if (DeclRefExpr *RefExpr = dyn_cast<DeclRefExpr>(E))
+    return RefExpr->getDecl();
+  if (MemberExpr *ME = dyn_cast<MemberExpr>(E))
+    return ME->getMemberDecl();
+  if (ObjCIvarRefExpr *RE = dyn_cast<ObjCIvarRefExpr>(E))
+    return RE->getDecl();
+
+  if (CallExpr *CE = dyn_cast<CallExpr>(E))
+    return getDeclFromExpr(CE->getCallee());
+  if (CastExpr *CE = dyn_cast<CastExpr>(E))
+    return getDeclFromExpr(CE->getSubExpr());
+  if (ObjCMessageExpr *OME = dyn_cast<ObjCMessageExpr>(E))
+    return OME->getMethodDecl();
+
+  return 0;
+}
+
 CXDecl clang_getCursorDecl(CXCursor C) 
 {
-  return C.decl;
+  if (clang_isDeclaration(C.kind))
+    return C.decl;
+    
+  if (clang_isReference(C.kind)) {
+    if (C.stmt)
+      return getDeclFromExpr(static_cast<Stmt *>(C.stmt));
+    else
+      return C.decl;
+  }
+  return 0;
 }
 
 static SourceLocation getLocationFromCursor(CXCursor C, 
@@ -612,5 +689,28 @@ const char *clang_getCursorSource(CXCursor C)
   SourceLocation SLoc = getLocationFromCursor(C, SourceMgr, ND);
   return SourceMgr.getBufferName(SLoc);
 }
+
+void clang_getDefinitionSpellingAndExtent(CXCursor C, 
+                                          const char **startBuf,
+                                          const char **endBuf,
+                                          unsigned *startLine,
+                                          unsigned *startColumn,
+                                          unsigned *endLine,
+                                          unsigned *endColumn) 
+{
+  assert(C.decl && "CXCursor has null decl");
+  NamedDecl *ND = static_cast<NamedDecl *>(C.decl);
+  FunctionDecl *FD = dyn_cast<FunctionDecl>(ND);
+  CompoundStmt *Body = dyn_cast<CompoundStmt>(FD->getBody());
+  
+  SourceManager &SM = FD->getASTContext().getSourceManager();
+  *startBuf = SM.getCharacterData(Body->getLBracLoc());
+  *endBuf = SM.getCharacterData(Body->getRBracLoc());
+  *startLine = SM.getSpellingLineNumber(Body->getLBracLoc());
+  *startColumn = SM.getSpellingColumnNumber(Body->getLBracLoc());
+  *endLine = SM.getSpellingLineNumber(Body->getRBracLoc());
+  *endColumn = SM.getSpellingColumnNumber(Body->getRBracLoc());
+}
+
 
 } // end extern "C"

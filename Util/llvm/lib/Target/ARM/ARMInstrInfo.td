@@ -100,6 +100,7 @@ def HasV5T    : Predicate<"Subtarget->hasV5TOps()">;
 def HasV5TE   : Predicate<"Subtarget->hasV5TEOps()">;
 def HasV6     : Predicate<"Subtarget->hasV6Ops()">;
 def HasV6T2   : Predicate<"Subtarget->hasV6T2Ops()">;
+def NoV6T2    : Predicate<"!Subtarget->hasV6T2Ops()">;
 def HasV7     : Predicate<"Subtarget->hasV7Ops()">;
 def HasVFP2   : Predicate<"Subtarget->hasVFP2()">;
 def HasVFP3   : Predicate<"Subtarget->hasVFP3()">;
@@ -189,6 +190,27 @@ def bf_inv_mask_imm : Operand<i32>,
 }] > {
   let PrintMethod = "printBitfieldInvMaskImmOperand";
 }
+
+/// Split a 32-bit immediate into two 16 bit parts.
+def lo16 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant((uint32_t)N->getZExtValue() & 0xffff,
+                                   MVT::i32);
+}]>;
+
+def hi16 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant((uint32_t)N->getZExtValue() >> 16, MVT::i32);
+}]>;
+
+def lo16AllZero : PatLeaf<(i32 imm), [{
+  // Returns true if all low 16-bits are 0.
+  return (((uint32_t)N->getZExtValue()) & 0xFFFFUL) == 0;
+  }], hi16>;
+
+/// imm0_65535 predicate - True if the 32-bit immediate is in the range 
+/// [0.65535].
+def imm0_65535 : PatLeaf<(i32 imm), [{
+  return (uint32_t)N->getZExtValue() < 65536;
+}]>;
 
 class BinOpFrag<dag res> : PatFrag<(ops node:$LHS, node:$RHS), res>;
 class UnOpFrag <dag res> : PatFrag<(ops node:$Src), res>;
@@ -596,7 +618,7 @@ def LEApcrelJT : AXI1<0x0, (outs GPR:$dst),
 //  Control Flow Instructions.
 //
 
-let isReturn = 1, isTerminator = 1 in
+let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def BX_RET : AI<(outs), (ins), BrMiscFrm, IIC_Br, 
                   "bx", " lr", [(ARMretflag)]> {
   let Inst{7-4}   = 0b0001;
@@ -608,7 +630,7 @@ let isReturn = 1, isTerminator = 1 in
 // FIXME: $dst1 should be a def. But the extra ops must be in the end of the
 // operand list.
 // FIXME: Should pc be an implicit operand like PICADD, etc?
-let isReturn = 1, isTerminator = 1, mayLoad = 1 in
+let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1 in
   def LDM_RET : AXI4ld<(outs),
                     (ins addrmode4:$addr, pred:$p, reglist:$dst1, variable_ops),
                     LdStMulFrm, IIC_Br, "ldm${p}${addr:submode} $addr, $dst1",
@@ -897,15 +919,35 @@ def STM : AXI4st<(outs),
 
 let neverHasSideEffects = 1 in
 def MOVr : AsI1<0b1101, (outs GPR:$dst), (ins GPR:$src), DPFrm, IIC_iMOVr,
-                 "mov", " $dst, $src", []>, UnaryDP;
+                "mov", " $dst, $src", []>, UnaryDP;
 def MOVs : AsI1<0b1101, (outs GPR:$dst), (ins so_reg:$src), 
-                 DPSoRegFrm, IIC_iMOVsr,
-                 "mov", " $dst, $src", [(set GPR:$dst, so_reg:$src)]>, UnaryDP;
+                DPSoRegFrm, IIC_iMOVsr,
+                "mov", " $dst, $src", [(set GPR:$dst, so_reg:$src)]>, UnaryDP;
 
 let isReMaterializable = 1, isAsCheapAsAMove = 1 in
 def MOVi : AsI1<0b1101, (outs GPR:$dst), (ins so_imm:$src), DPFrm, IIC_iMOVi,
-                 "mov", " $dst, $src", [(set GPR:$dst, so_imm:$src)]>, UnaryDP {
-    let Inst{25} = 1;
+                "mov", " $dst, $src", [(set GPR:$dst, so_imm:$src)]>, UnaryDP {
+  let Inst{25} = 1;
+}
+
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in
+def MOVi16 : AI1<0b1000, (outs GPR:$dst), (ins i32imm:$src), 
+                 DPFrm, IIC_iMOVi,
+                 "movw", " $dst, $src",
+                 [(set GPR:$dst, imm0_65535:$src)]>,
+                 Requires<[IsARM, HasV6T2]> {
+  let Inst{25} = 1;
+}
+
+let Constraints = "$src = $dst" in
+def MOVTi16 : AI1<0b1010, (outs GPR:$dst), (ins GPR:$src, i32imm:$imm),
+                  DPFrm, IIC_iMOVi,
+                  "movt", " $dst, $imm", 
+                  [(set GPR:$dst,
+                        (or (and GPR:$src, 0xffff), 
+                            lo16AllZero:$imm))]>, UnaryDP,
+                  Requires<[IsARM, HasV6T2]> {
+  let Inst{25} = 1;
 }
 
 let Uses = [CPSR] in
@@ -1469,7 +1511,8 @@ let isReMaterializable = 1 in
 def MOVi2pieces : AI1x2<(outs GPR:$dst), (ins so_imm2part:$src), 
                          Pseudo, IIC_iMOVi,
                          "mov", " $dst, $src",
-                         [(set GPR:$dst, so_imm2part:$src)]>;
+                         [(set GPR:$dst, so_imm2part:$src)]>,
+                  Requires<[IsARM, NoV6T2]>;
 
 def : ARMPat<(or GPR:$LHS, so_imm2part:$RHS),
              (ORRri (ORRri GPR:$LHS, (so_imm2part_1 imm:$RHS)),
@@ -1477,6 +1520,15 @@ def : ARMPat<(or GPR:$LHS, so_imm2part:$RHS),
 def : ARMPat<(xor GPR:$LHS, so_imm2part:$RHS),
              (EORri (EORri GPR:$LHS, (so_imm2part_1 imm:$RHS)),
                     (so_imm2part_2 imm:$RHS))>;
+
+// 32-bit immediate using movw + movt.
+// This is a single pseudo instruction to make it re-materializable. Remove
+// when we can do generalized remat.
+let isReMaterializable = 1 in
+def MOVi32imm : AI1x2<(outs GPR:$dst), (ins i32imm:$src), Pseudo, IIC_iMOVi,
+                     "movw", " $dst, ${src:lo16}\n\tmovt${p} $dst, ${src:hi16}",
+                     [(set GPR:$dst, (i32 imm:$src))]>,
+               Requires<[IsARM, HasV6T2]>;
 
 // TODO: add,sub,and, 3-instr forms?
 

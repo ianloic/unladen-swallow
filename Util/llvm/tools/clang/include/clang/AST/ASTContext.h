@@ -63,7 +63,7 @@ namespace clang {
 /// decls) that can be referred to throughout the semantic analysis of a file.
 class ASTContext {
   std::vector<Type*> Types;
-  llvm::FoldingSet<ExtQualType> ExtQualTypes;
+  llvm::FoldingSet<ExtQuals> ExtQualNodes;
   llvm::FoldingSet<ComplexType> ComplexTypes;
   llvm::FoldingSet<PointerType> PointerTypes;
   llvm::FoldingSet<BlockPointerType> BlockPointerTypes;
@@ -86,6 +86,7 @@ class ASTContext {
   llvm::FoldingSet<TypenameType> TypenameTypes;
   llvm::FoldingSet<ObjCInterfaceType> ObjCInterfaceTypes;
   llvm::FoldingSet<ObjCObjectPointerType> ObjCObjectPointerTypes;
+  llvm::FoldingSet<ObjCProtocolListType> ObjCProtocolListTypes;
   llvm::FoldingSet<ElaboratedType> ElaboratedTypes;
 
   llvm::FoldingSet<QualifiedTemplateName> QualifiedTemplateNames;
@@ -332,6 +333,11 @@ public:
   //                           Type Constructors
   //===--------------------------------------------------------------------===//
 
+private:
+  /// getExtQualType - Return a type with extended qualifiers.
+  QualType getExtQualType(const Type *Base, Qualifiers Quals);
+
+public:
   /// getAddSpaceQualType - Return the uniqued reference to the type for an
   /// address space qualified type with the specified type and address space.
   /// The resulting type has a union of the qualifiers from T and the address
@@ -342,7 +348,27 @@ public:
   /// getObjCGCQualType - Returns the uniqued reference to the type for an
   /// objc gc qualified type. The retulting type has a union of the qualifiers
   /// from T and the gc attribute.
-  QualType getObjCGCQualType(QualType T, QualType::GCAttrTypes gcAttr);
+  QualType getObjCGCQualType(QualType T, Qualifiers::GC gcAttr);
+
+  /// getRestrictType - Returns the uniqued reference to the type for a
+  /// 'restrict' qualified type.  The resulting type has a union of the
+  /// qualifiers from T and 'restrict'.
+  QualType getRestrictType(QualType T) {
+    return T.withFastQualifiers(Qualifiers::Restrict);
+  }
+
+  /// getVolatileType - Returns the uniqued reference to the type for a
+  /// 'volatile' qualified type.  The resulting type has a union of the
+  /// qualifiers from T and 'volatile'.
+  QualType getVolatileType(QualType T);
+
+  /// getConstType - Returns the uniqued reference to the type for a
+  /// 'const' qualified type.  The resulting type has a union of the
+  /// qualifiers from T and 'const'.
+  ///
+  /// It can be reasonably expected that this will always be
+  /// equivalent to calling T.withConst().
+  QualType getConstType(QualType T) { return T.withConst(); }
 
   /// getNoReturnType - Add the noreturn attribute to the given type which must
   /// be a FunctionType or a pointer to an allowable type or a BlockPointer.
@@ -484,6 +510,10 @@ public:
   QualType getObjCObjectPointerType(QualType OIT,
                                     ObjCProtocolDecl **ProtocolList = 0,
                                     unsigned NumProtocols = 0);
+
+  QualType getObjCProtocolListType(QualType T,
+                                   ObjCProtocolDecl **Protocols,
+                                   unsigned NumProtocols);
 
   /// getTypeOfType - GCC extension.
   QualType getTypeOfExprType(Expr *e);
@@ -636,6 +666,28 @@ public:
 
   QualType getFixedWidthIntType(unsigned Width, bool Signed);
 
+  /// getCVRQualifiedType - Returns a type with additional const,
+  /// volatile, or restrict qualifiers.
+  QualType getCVRQualifiedType(QualType T, unsigned CVR) {
+    return getQualifiedType(T, Qualifiers::fromCVRMask(CVR));
+  }
+
+  /// getQualifiedType - Returns a type with additional qualifiers.
+  QualType getQualifiedType(QualType T, Qualifiers Qs) {
+    if (!Qs.hasNonFastQualifiers())
+      return T.withFastQualifiers(Qs.getFastQualifiers());
+    QualifierCollector Qc(Qs);
+    const Type *Ptr = Qc.strip(T);
+    return getExtQualType(Ptr, Qc);
+  }
+
+  /// getQualifiedType - Returns a type with additional qualifiers.
+  QualType getQualifiedType(const Type *T, Qualifiers Qs) {
+    if (!Qs.hasNonFastQualifiers())
+      return QualType(T, Qs.getFastQualifiers());
+    return getExtQualType(T, Qs);
+  }
+
   TemplateName getQualifiedTemplateName(NestedNameSpecifier *NNS,
                                         bool TemplateKeyword,
                                         TemplateDecl *Template);
@@ -666,7 +718,7 @@ public:
   /// getObjCGCAttr - Returns one of GCNone, Weak or Strong objc's
   /// garbage collection attribute.
   ///
-  QualType::GCAttrTypes getObjCGCAttrKind(const QualType &Ty) const;
+  Qualifiers::GC getObjCGCAttrKind(const QualType &Ty) const;
 
   /// isObjCNSObjectType - Return true if this is an NSObject object with
   /// its NSObject attribute set.
@@ -842,9 +894,9 @@ public:
     return dyn_cast_or_null<IncompleteArrayType>(getAsArrayType(T));
   }
 
-  /// getBaseElementType - Returns the innermost element type of a variable
-  /// length array type. For example, will return "int" for int[m][n]
-  QualType getBaseElementType(const VariableArrayType *VAT);
+  /// getBaseElementType - Returns the innermost element type of an array type.
+  /// For example, will return "int" for int[m][n]
+  QualType getBaseElementType(const ArrayType *VAT);
 
   /// getBaseElementType - Returns the innermost element type of a type
   /// (which needn't actually be an array type).

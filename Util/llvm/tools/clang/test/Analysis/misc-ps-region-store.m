@@ -181,4 +181,109 @@ int rdar_test_7185607() {
   return s.x; // no-warning
 }
 
+// <rdar://problem/7242006> [RegionStore] compound literal assignment with
+//  floats not honored
+// This test case is mirrored in misc-ps.m, but this case is a negative.
+typedef float CGFloat;
+typedef struct _NSSize {
+    CGFloat width;
+    CGFloat height;
+} NSSize;
+
+CGFloat rdar7242006_negative(CGFloat x) {
+  NSSize y;
+  return y.width; // expected-warning{{garbage}}
+}
+
+// <rdar://problem/7249340> - Allow binding of values to symbolic regions.
+// This test case shows how RegionStore tracks the value bound to 'x'
+// after the assignment.
+typedef int* ptr_rdar_7249340;
+void rdar_7249340(ptr_rdar_7249340 x) {
+  *x = 1;
+  if (*x)
+    return;
+  int *p = 0;   // This is unreachable.
+  *p = 0xDEADBEEF; // no-warning
+}
+
+// <rdar://problem/7249327> - This test case tests both value tracking of
+// array values and that we handle symbolic values that are casted
+// between different integer types.  Note the assignment 'n = *a++'; here
+// 'n' is and 'int' and '*a' is 'unsigned'.  Previously we got a false positive
+// at 'x += *b++' (undefined value) because we got a false path.
+int rdar_7249327_aux(void);
+
+void rdar_7249327(unsigned int A[2*32]) {
+  int B[2*32];
+  int *b;
+  unsigned int *a;
+  int x = 0;
+  
+  int n;
+  
+  a = A;
+  b = B;
+  
+  n = *a++;
+  if (n)
+    *b++ = rdar_7249327_aux();
+
+  a = A;
+  b = B;
+  
+  n = *a++;
+  if (n)
+    x += *b++; // no-warning
+}
+
+// <rdar://problem/6914474> - Check that 'x' is invalidated because its
+// address is passed in as a value to a struct.
+struct doodad_6914474 { int *v; };
+extern void prod_6914474(struct doodad_6914474 *d);
+int rdar_6914474(void) {
+  int x;
+  struct doodad_6914474 d;
+  d.v = &x;
+  prod_6914474(&d);
+  return x; // no-warning
+}
+
+// Test invalidation of a single field.
+struct s_test_field_invalidate {
+  int x;
+};
+extern void test_invalidate_field(int *x);
+int test_invalidate_field_test() {
+  struct s_test_field_invalidate y;
+  test_invalidate_field(&y.x);
+  return y.x; // no-warning
+}
+int test_invalidate_field_test_positive() {
+  struct s_test_field_invalidate y;
+  return y.x; // expected-warning{{garbage}}
+}
+
+// This test case illustrates how a typeless array of bytes casted to a
+// struct should be treated as initialized.  RemoveDeadBindings previously
+// had a bug that caused 'x' to lose its default symbolic value after the
+// assignment to 'p', thus causing 'p->z' to evaluate to "undefined".
+struct ArrayWrapper { unsigned char y[16]; };
+struct WrappedStruct { unsigned z; };
+
+int test_handle_array_wrapper() {
+  struct ArrayWrapper x;
+  test_handle_array_wrapper(&x);
+  struct WrappedStruct *p = (struct WrappedStruct*) x.y;
+  return p->z;  // no-warning
+}
+
+// <rdar://problem/7261075> [RegionStore] crash when 
+//   handling load: '*((unsigned int *)"????")'
+int rdar_7261075(void) {
+  unsigned int var = 0;
+  if (var == *((unsigned int *)"????"))
+    return 1;
+  return 0;
+}
 

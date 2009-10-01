@@ -300,28 +300,30 @@ DeduceTemplateArguments(ASTContext &Context,
 }
 
 /// \brief Returns a completely-unqualified array type, capturing the
-/// qualifiers in CVRQuals.
+/// qualifiers in Quals.
 ///
 /// \param Context the AST context in which the array type was built.
 ///
 /// \param T a canonical type that may be an array type.
 ///
-/// \param CVRQuals will receive the set of const/volatile/restrict qualifiers
-/// that were applied to the element type of the array.
+/// \param Quals will receive the full set of qualifiers that were
+/// applied to the element type of the array.
 ///
 /// \returns if \p T is an array type, the completely unqualified array type
 /// that corresponds to T. Otherwise, returns T.
 static QualType getUnqualifiedArrayType(ASTContext &Context, QualType T,
-                                        unsigned &CVRQuals) {
+                                        Qualifiers &Quals) {
   assert(T->isCanonical() && "Only operates on canonical types");
   if (!isa<ArrayType>(T)) {
-    CVRQuals = T.getCVRQualifiers();
+    Quals = T.getQualifiers();
     return T.getUnqualifiedType();
   }
 
+  assert(!T.hasQualifiers() && "canonical array type has qualifiers!");
+
   if (const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(T)) {
     QualType Elt = getUnqualifiedArrayType(Context, CAT->getElementType(),
-                                           CVRQuals);
+                                           Quals);
     if (Elt == CAT->getElementType())
       return T;
 
@@ -331,7 +333,7 @@ static QualType getUnqualifiedArrayType(ASTContext &Context, QualType T,
 
   if (const IncompleteArrayType *IAT = dyn_cast<IncompleteArrayType>(T)) {
     QualType Elt = getUnqualifiedArrayType(Context, IAT->getElementType(),
-                                           CVRQuals);
+                                           Quals);
     if (Elt == IAT->getElementType())
       return T;
 
@@ -340,7 +342,7 @@ static QualType getUnqualifiedArrayType(ASTContext &Context, QualType T,
 
   const DependentSizedArrayType *DSAT = cast<DependentSizedArrayType>(T);
   QualType Elt = getUnqualifiedArrayType(Context, DSAT->getElementType(),
-                                         CVRQuals);
+                                         Quals);
   if (Elt == DSAT->getElementType())
     return T;
 
@@ -387,9 +389,9 @@ DeduceTemplateArguments(ASTContext &Context,
   //     referred to by the reference) can be more cv-qualified than the
   //     transformed A.
   if (TDF & TDF_ParamWithReferenceType) {
-    unsigned ExtraQualsOnParam
-      = Param.getCVRQualifiers() & ~Arg.getCVRQualifiers();
-    Param.setCVRQualifiers(Param.getCVRQualifiers() & ~ExtraQualsOnParam);
+    Qualifiers Quals = Param.getQualifiers();
+    Quals.setCVRQualifiers(Quals.getCVRQualifiers() & Arg.getCVRQualifiers());
+    Param = Context.getQualifiedType(Param.getUnqualifiedType(), Quals);
   }
 
   // If the parameter type is not dependent, there is nothing to deduce.
@@ -418,10 +420,10 @@ DeduceTemplateArguments(ASTContext &Context,
     // top level, so they can be matched with the qualifiers on the parameter.
     // FIXME: address spaces, ObjC GC qualifiers
     if (isa<ArrayType>(Arg)) {
-      unsigned CVRQuals = 0;
-      Arg = getUnqualifiedArrayType(Context, Arg, CVRQuals);
-      if (CVRQuals) {
-        Arg = Arg.getWithAdditionalQualifiers(CVRQuals);
+      Qualifiers Quals;
+      Arg = getUnqualifiedArrayType(Context, Arg, Quals);
+      if (Quals) {
+        Arg = Context.getQualifiedType(Arg, Quals);
         RecanonicalizeArg = true;
       }
     }
@@ -437,8 +439,8 @@ DeduceTemplateArguments(ASTContext &Context,
 
     assert(TemplateTypeParm->getDepth() == 0 && "Can't deduce with depth > 0");
 
-    unsigned Quals = Arg.getCVRQualifiers() & ~Param.getCVRQualifiers();
-    QualType DeducedType = Arg.getQualifiedType(Quals);
+    QualType DeducedType = Arg;
+    DeducedType.removeCVRQualifiers(Param.getCVRQualifiers());
     if (RecanonicalizeArg)
       DeducedType = Context.getCanonicalType(DeducedType);
 
@@ -1434,7 +1436,7 @@ Sema::DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
 }
 
 /// \brief Deduce template arguments when taking the address of a function
-/// template (C++ [temp.deduct.funcaddr]).
+/// template (C++ [temp.deduct.funcaddr]) or matching a 
 ///
 /// \param FunctionTemplate the function template for which we are performing
 /// template argument deduction.
@@ -1883,6 +1885,124 @@ Sema::getMoreSpecializedTemplate(FunctionTemplateDecl *FT1,
     return 0;
 }
 
+/// \brief Determine if the two templates are equivalent.
+static bool isSameTemplate(TemplateDecl *T1, TemplateDecl *T2) {
+  if (T1 == T2)
+    return true;
+  
+  if (!T1 || !T2)
+    return false;
+  
+  return T1->getCanonicalDecl() == T2->getCanonicalDecl();
+}
+
+/// \brief Retrieve the most specialized of the given function template
+/// specializations.
+///
+/// \param Specializations the set of function template specializations that
+/// we will be comparing.
+///
+/// \param NumSpecializations the number of function template specializations in
+/// \p Specializations
+///
+/// \param TPOC the partial ordering context to use to compare the function
+/// template specializations.
+///
+/// \param Loc the location where the ambiguity or no-specializations 
+/// diagnostic should occur.
+///
+/// \param NoneDiag partial diagnostic used to diagnose cases where there are
+/// no matching candidates.
+///
+/// \param AmbigDiag partial diagnostic used to diagnose an ambiguity, if one
+/// occurs.
+///
+/// \param CandidateDiag partial diagnostic used for each function template
+/// specialization that is a candidate in the ambiguous ordering. One parameter
+/// in this diagnostic should be unbound, which will correspond to the string
+/// describing the template arguments for the function template specialization.
+///
+/// \param Index if non-NULL and the result of this function is non-nULL, 
+/// receives the index corresponding to the resulting function template
+/// specialization.
+///
+/// \returns the most specialized function template specialization, if 
+/// found. Otherwise, returns NULL.
+///
+/// \todo FIXME: Consider passing in the "also-ran" candidates that failed 
+/// template argument deduction.
+FunctionDecl *Sema::getMostSpecialized(FunctionDecl **Specializations,
+                                       unsigned NumSpecializations,
+                                       TemplatePartialOrderingContext TPOC,
+                                       SourceLocation Loc,
+                                       const PartialDiagnostic &NoneDiag,
+                                       const PartialDiagnostic &AmbigDiag,
+                                       const PartialDiagnostic &CandidateDiag,
+                                       unsigned *Index) {
+  if (NumSpecializations == 0) {
+    Diag(Loc, NoneDiag);
+    return 0;
+  }
+  
+  if (NumSpecializations == 1) {
+    if (Index)
+      *Index = 0;
+    
+    return Specializations[0];
+  }
+    
+  
+  // Find the function template that is better than all of the templates it
+  // has been compared to.
+  unsigned Best = 0;
+  FunctionTemplateDecl *BestTemplate 
+    = Specializations[Best]->getPrimaryTemplate();
+  assert(BestTemplate && "Not a function template specialization?");
+  for (unsigned I = 1; I != NumSpecializations; ++I) {
+    FunctionTemplateDecl *Challenger = Specializations[I]->getPrimaryTemplate();
+    assert(Challenger && "Not a function template specialization?");
+    if (isSameTemplate(getMoreSpecializedTemplate(BestTemplate, Challenger, 
+                                                  TPOC),
+                       Challenger)) {
+      Best = I;
+      BestTemplate = Challenger;
+    }
+  }
+  
+  // Make sure that the "best" function template is more specialized than all
+  // of the others.
+  bool Ambiguous = false;
+  for (unsigned I = 0; I != NumSpecializations; ++I) {
+    FunctionTemplateDecl *Challenger = Specializations[I]->getPrimaryTemplate();
+    if (I != Best &&
+        !isSameTemplate(getMoreSpecializedTemplate(BestTemplate, Challenger, 
+                                                  TPOC),
+                        BestTemplate)) {
+      Ambiguous = true;
+      break;
+    }
+  }
+  
+  if (!Ambiguous) {
+    // We found an answer. Return it.
+    if (Index)
+      *Index = Best;
+    return Specializations[Best];
+  }
+  
+  // Diagnose the ambiguity.
+  Diag(Loc, AmbigDiag);
+  
+  // FIXME: Can we order the candidates in some sane way?
+  for (unsigned I = 0; I != NumSpecializations; ++I)
+    Diag(Specializations[I]->getLocation(), CandidateDiag)
+      << getTemplateArgumentBindingsText(
+            Specializations[I]->getPrimaryTemplate()->getTemplateParameters(),
+                         *Specializations[I]->getTemplateSpecializationArgs());
+  
+  return 0;
+}
+
 /// \brief Returns the more specialized class template partial specialization
 /// according to the rules of partial ordering of class template partial
 /// specializations (C++ [temp.class.order]).
@@ -2022,13 +2142,6 @@ MarkUsedTemplateParameters(Sema &SemaRef, QualType T,
 
   T = SemaRef.Context.getCanonicalType(T);
   switch (T->getTypeClass()) {
-  case Type::ExtQual:
-    MarkUsedTemplateParameters(SemaRef,
-                               QualType(cast<ExtQualType>(T)->getBaseType(), 0),
-                               OnlyDeduced,
-                               Used);
-    break;
-
   case Type::Pointer:
     MarkUsedTemplateParameters(SemaRef,
                                cast<PointerType>(T)->getPointeeType(),

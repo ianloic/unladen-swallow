@@ -18,7 +18,7 @@
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/DeclGroup.h"
 #include "clang/AST/Expr.h"
-#include "clang/AST/TypeLoc.h"
+#include "clang/AST/TypeLocVisitor.h"
 using namespace clang;
 
 
@@ -178,6 +178,15 @@ void TypeLocReader::VisitDefaultTypeSpecLoc(DefaultTypeSpecLoc TyLoc) {
 }
 void TypeLocReader::VisitTypedefLoc(TypedefLoc TyLoc) {
   TyLoc.setNameLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitObjCInterfaceLoc(ObjCInterfaceLoc TyLoc) {
+  TyLoc.setNameLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+}
+void TypeLocReader::VisitObjCProtocolListLoc(ObjCProtocolListLoc TyLoc) {
+  TyLoc.setLAngleLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  TyLoc.setRAngleLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  for (unsigned i = 0, e = TyLoc.getNumProtocols(); i != e; ++i)
+    TyLoc.setProtocolLoc(i, SourceLocation::getFromRawEncoding(Record[Idx++]));
 }
 void TypeLocReader::VisitPointerLoc(PointerLoc TyLoc) {
   TyLoc.setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));

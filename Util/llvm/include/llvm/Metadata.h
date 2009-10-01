@@ -23,7 +23,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -305,16 +304,14 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
-/// Metadata -
-/// Metadata manages metadata used in a context.
-
-/// MDKindID - This id identifies metadata kind the metadata store. Valid
-/// ID values are 1 or higher. This ID is set by RegisterMDKind.
-typedef unsigned MDKindID;
-
-class Metadata {
+/// MetadataContext -
+/// MetadataContext handles uniquing and assignment of IDs for custom metadata
+/// types. Custom metadata handler names do not contain spaces. And the name
+/// must start with an alphabet. The regular expression used to check name
+/// is [a-zA-Z$._][a-zA-Z$._0-9]*
+class MetadataContext {
 public:
-  typedef std::pair<MDKindID, WeakVH> MDPairTy;
+  typedef std::pair<unsigned, WeakVH> MDPairTy;
   typedef SmallVector<MDPairTy, 2> MDMapTy;
   typedef DenseMap<const Instruction *, MDMapTy> MDStoreTy;
   friend class BitcodeReader;
@@ -329,30 +326,45 @@ private:
 public:
   /// RegisterMDKind - Register a new metadata kind and return its ID.
   /// A metadata kind can be registered only once. 
-  MDKindID RegisterMDKind(const char *Name);
+  unsigned RegisterMDKind(const char *Name);
 
   /// getMDKind - Return metadata kind. If the requested metadata kind
   /// is not registered then return 0.
-  MDKindID getMDKind(const char *Name);
+  unsigned getMDKind(const char *Name);
+
+  /// validName - Return true if Name is a valid custom metadata handler name.
+  bool validName(const char *Name);
 
   /// getMD - Get the metadata of given kind attached with an Instruction.
   /// If the metadata is not found then return 0.
-  MDNode *getMD(MDKindID Kind, const Instruction *Inst);
+  MDNode *getMD(unsigned Kind, const Instruction *Inst);
 
   /// getMDs - Get the metadata attached with an Instruction.
   const MDMapTy *getMDs(const Instruction *Inst);
 
-  /// setMD - Attach the metadata of given kind with an Instruction.
-  void setMD(MDKindID Kind, MDNode *Node, Instruction *Inst);
+  /// addMD - Attach the metadata of given kind with an Instruction.
+  void addMD(unsigned Kind, MDNode *Node, Instruction *Inst);
   
+  /// removeMD - Remove metadata of given kind attached with an instuction.
+  void removeMD(unsigned Kind, Instruction *Inst);
+  
+  /// removeMDs - Remove all metadata attached with an instruction.
+  void removeMDs(const Instruction *Inst);
+
   /// getHandlerNames - Get handler names. This is used by bitcode
   /// writer.
   const StringMap<unsigned> *getHandlerNames();
 
   /// ValueIsDeleted - This handler is used to update metadata store
   /// when a value is deleted.
-  void ValueIsDeleted(Value *V) {}
-  void ValueIsDeleted(const Instruction *Inst);
+  void ValueIsDeleted(const Value *V) {}
+  void ValueIsDeleted(const Instruction *Inst) {
+    removeMDs(Inst);
+  }
+
+  /// ValueIsCloned - This handler is used to update metadata store
+  /// when In1 is cloned to create In2.
+  void ValueIsCloned(const Instruction *In1, Instruction *In2);
 };
 
 } // end llvm namespace

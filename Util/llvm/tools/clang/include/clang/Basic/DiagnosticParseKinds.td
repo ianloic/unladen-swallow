@@ -136,6 +136,8 @@ def err_rvalue_reference : Error<
 def err_argument_required_after_attribute : Error<
   "argument required after attribute">;
 def err_missing_param : Error<"expected parameter declarator">;
+def err_missing_comma_before_ellipsis : Error<
+  "C requires a comma prior to the ellipsis in a variadic function type">;
 def err_unexpected_typedef_ident : Error<
   "unexpected type name %0: expected identifier">;
 def err_expected_class_name : Error<"expected class name">;
@@ -277,6 +279,10 @@ def err_expected_type_name_after_typename : Error<
 
 def err_variadic_templates : Error<
   "variadic templates are only allowed in C++0x">;
+  
+// C++ declarations
+def err_friend_decl_defines_class : Error<
+  "cannot define a type in a friend declaration">;
 
 // Language specific pragmas
 // - Generic warnings

@@ -147,3 +147,54 @@ Debug dbg;
 // CHECK: @_ZNK5DebuglsEj
 int main(void) {  dbg << 32 ;}
 }
+
+template<typename T> struct S6 {
+  typedef int B;
+};
+
+template<typename T> void ft5(typename S6<T>::B) { }
+// CHECK: @_Z3ft5IiEvN2S6IT_E1BE
+template void ft5<int>(int);
+
+template<typename T> class A {};
+
+namespace NS {
+template<typename T> bool operator==(const A<T>&, const A<T>&) { return true; }
+}
+
+// CHECK: @_ZN2NSeqIcEEbRK1AIT_ES5_
+template bool NS::operator==(const ::A<char>&, const ::A<char>&);
+
+namespace std {
+template<typename T> bool operator==(const A<T>&, const A<T>&) { return true; }
+}
+
+// CHECK: @_ZSteqIcEbRK1AIT_ES4_
+template bool std::operator==(const ::A<char>&, const ::A<char>&);
+
+struct S {
+  typedef int U;
+};
+
+template <typename T> typename T::U ft6(const T&) { return 0; }
+
+// CHECK: @_Z3ft6I1SENT_1UERKS1_
+template int ft6<S>(const S&);
+
+template<typename> struct __is_scalar {
+  enum { __value = 1 };
+};
+
+template<bool, typename> struct __enable_if { };
+
+template<typename T> struct __enable_if<true, T> {
+  typedef T __type;
+};
+
+// PR5063
+template<typename T> typename __enable_if<__is_scalar<T>::__value, void>::__type ft7() { }
+
+// CHECK: @_Z3ft7IiEN11__enable_ifIXsr11__is_scalarIT_E7__valueEvE6__typeEv
+template void ft7<int>();
+// CHECK: @_Z3ft7IPvEN11__enable_ifIXsr11__is_scalarIT_E7__valueEvE6__typeEv
+template void ft7<void*>();

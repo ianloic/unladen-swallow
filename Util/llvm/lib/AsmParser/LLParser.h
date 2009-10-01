@@ -48,7 +48,7 @@ namespace llvm {
     /// MetadataCache - This map keeps track of parsed metadata constants.
     std::map<unsigned, MetadataBase *> MetadataCache;
     std::map<unsigned, std::pair<MetadataBase *, LocTy> > ForwardRefMDNodes;
-    SmallVector<std::pair<MDKindID, MDNode *>, 2> MDsOnInst;
+    SmallVector<std::pair<unsigned, MDNode *>, 2> MDsOnInst;
     struct UpRefRecord {
       /// Loc - This is the location of the upref.
       LocTy Loc;
@@ -128,7 +128,7 @@ namespace llvm {
     bool ParseOptionalVisibility(unsigned &Visibility);
     bool ParseOptionalCallingConv(CallingConv::ID &CC);
     bool ParseOptionalAlignment(unsigned &Alignment);
-    bool ParseOptionalDbgInfo();
+    bool ParseOptionalCustomMetadata();
     bool ParseOptionalInfo(unsigned &Alignment);
     bool ParseIndexList(SmallVectorImpl<unsigned> &Indices);
 

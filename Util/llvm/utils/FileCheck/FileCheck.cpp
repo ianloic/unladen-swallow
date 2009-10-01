@@ -19,9 +19,12 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Signals.h"
+#include "llvm/ADT/StringMap.h"
+#include <algorithm>
 using namespace llvm;
 
 static cl::opt<std::string>
@@ -39,10 +42,282 @@ static cl::opt<bool>
 NoCanonicalizeWhiteSpace("strict-whitespace",
               cl::desc("Do not treat all horizontal whitespace as equivalent"));
 
+//===----------------------------------------------------------------------===//
+// Pattern Handling Code.
+//===----------------------------------------------------------------------===//
+
+class Pattern {
+  SMLoc PatternLoc;
+  
+  /// FixedStr - If non-empty, this pattern is a fixed string match with the
+  /// specified fixed string.
+  StringRef FixedStr;
+  
+  /// RegEx - If non-empty, this is a regex pattern.
+  std::string RegExStr;
+  
+  /// VariableUses - Entries in this vector map to uses of a variable in the
+  /// pattern, e.g. "foo[[bar]]baz".  In this case, the RegExStr will contain
+  /// "foobaz" and we'll get an entry in this vector that tells us to insert the
+  /// value of bar at offset 3.
+  std::vector<std::pair<StringRef, unsigned> > VariableUses;
+  
+  /// VariableDefs - Entries in this vector map to definitions of a variable in
+  /// the pattern, e.g. "foo[[bar:.*]]baz".  In this case, the RegExStr will
+  /// contain "foo(.*)baz" and VariableDefs will contain the pair "bar",1.  The
+  /// index indicates what parenthesized value captures the variable value.
+  std::vector<std::pair<StringRef, unsigned> > VariableDefs;
+  
+public:
+  
+  Pattern() { }
+  
+  bool ParsePattern(StringRef PatternStr, SourceMgr &SM);
+  
+  /// Match - Match the pattern string against the input buffer Buffer.  This
+  /// returns the position that is matched or npos if there is no match.  If
+  /// there is a match, the size of the matched string is returned in MatchLen.
+  ///
+  /// The VariableTable StringMap provides the current values of filecheck
+  /// variables and is updated if this match defines new values.
+  size_t Match(StringRef Buffer, size_t &MatchLen,
+               StringMap<StringRef> &VariableTable) const;
+  
+private:
+  static void AddFixedStringToRegEx(StringRef FixedStr, std::string &TheStr);
+  bool AddRegExToRegEx(StringRef RegExStr, unsigned &CurParen, SourceMgr &SM);
+};
+
+
+bool Pattern::ParsePattern(StringRef PatternStr, SourceMgr &SM) {
+  PatternLoc = SMLoc::getFromPointer(PatternStr.data());
+  
+  // Ignore trailing whitespace.
+  while (!PatternStr.empty() &&
+         (PatternStr.back() == ' ' || PatternStr.back() == '\t'))
+    PatternStr = PatternStr.substr(0, PatternStr.size()-1);
+  
+  // Check that there is something on the line.
+  if (PatternStr.empty()) {
+    SM.PrintMessage(PatternLoc, "found empty check string with prefix '" +
+                    CheckPrefix+":'", "error");
+    return true;
+  }
+  
+  // Check to see if this is a fixed string, or if it has regex pieces.
+  if (PatternStr.size() < 2 ||
+      (PatternStr.find("{{") == StringRef::npos &&
+       PatternStr.find("[[") == StringRef::npos)) {
+    FixedStr = PatternStr;
+    return false;
+  }
+  
+  // Paren value #0 is for the fully matched string.  Any new parenthesized
+  // values add from their.
+  unsigned CurParen = 1;
+  
+  // Otherwise, there is at least one regex piece.  Build up the regex pattern
+  // by escaping scary characters in fixed strings, building up one big regex.
+  while (!PatternStr.empty()) {
+    // RegEx matches.
+    if (PatternStr.size() >= 2 &&
+        PatternStr[0] == '{' && PatternStr[1] == '{') {
+     
+      // Otherwise, this is the start of a regex match.  Scan for the }}.
+      size_t End = PatternStr.find("}}");
+      if (End == StringRef::npos) {
+        SM.PrintMessage(SMLoc::getFromPointer(PatternStr.data()),
+                        "found start of regex string with no end '}}'", "error");
+        return true;
+      }
+      
+      if (AddRegExToRegEx(PatternStr.substr(2, End-2), CurParen, SM))
+        return true;
+      PatternStr = PatternStr.substr(End+2);
+      continue;
+    }
+    
+    // Named RegEx matches.  These are of two forms: [[foo:.*]] which matches .*
+    // (or some other regex) and assigns it to the FileCheck variable 'foo'. The
+    // second form is [[foo]] which is a reference to foo.  The variable name
+    // itself must be of the form "[a-zA-Z][0-9a-zA-Z]*", otherwise we reject
+    // it.  This is to catch some common errors.
+    if (PatternStr.size() >= 2 &&
+        PatternStr[0] == '[' && PatternStr[1] == '[') {
+      // Verify that it is terminated properly.
+      size_t End = PatternStr.find("]]");
+      if (End == StringRef::npos) {
+        SM.PrintMessage(SMLoc::getFromPointer(PatternStr.data()),
+                        "invalid named regex reference, no ]] found", "error");
+        return true;
+      }
+      
+      StringRef MatchStr = PatternStr.substr(2, End-2);
+      PatternStr = PatternStr.substr(End+2);
+      
+      // Get the regex name (e.g. "foo").
+      size_t NameEnd = MatchStr.find(':');
+      StringRef Name = MatchStr.substr(0, NameEnd);
+      
+      if (Name.empty()) {
+        SM.PrintMessage(SMLoc::getFromPointer(Name.data()),
+                        "invalid name in named regex: empty name", "error");
+        return true;
+      }
+
+      // Verify that the name is well formed.
+      for (unsigned i = 0, e = Name.size(); i != e; ++i)
+        if ((Name[i] < 'a' || Name[i] > 'z') &&
+            (Name[i] < 'A' || Name[i] > 'Z') &&
+            (Name[i] < '0' || Name[i] > '9')) {
+          SM.PrintMessage(SMLoc::getFromPointer(Name.data()+i),
+                          "invalid name in named regex", "error");
+          return true;
+        }
+      
+      // Name can't start with a digit.
+      if (isdigit(Name[0])) {
+        SM.PrintMessage(SMLoc::getFromPointer(Name.data()),
+                        "invalid name in named regex", "error");
+        return true;
+      }
+      
+      // Handle [[foo]].
+      if (NameEnd == StringRef::npos) {
+        VariableUses.push_back(std::make_pair(Name, RegExStr.size()));
+        continue;
+      }
+      
+      // Handle [[foo:.*]].
+      VariableDefs.push_back(std::make_pair(Name, CurParen));
+      RegExStr += '(';
+      ++CurParen;
+      
+      if (AddRegExToRegEx(MatchStr.substr(NameEnd+1), CurParen, SM))
+        return true;
+
+      RegExStr += ')';
+    }
+    
+    // Handle fixed string matches.
+    // Find the end, which is the start of the next regex.
+    size_t FixedMatchEnd = PatternStr.find("{{");
+    FixedMatchEnd = std::min(FixedMatchEnd, PatternStr.find("[["));
+    AddFixedStringToRegEx(PatternStr.substr(0, FixedMatchEnd), RegExStr);
+    PatternStr = PatternStr.substr(FixedMatchEnd);
+    continue;
+  }
+
+  return false;
+}
+
+void Pattern::AddFixedStringToRegEx(StringRef FixedStr, std::string &TheStr) {
+  // Add the characters from FixedStr to the regex, escaping as needed.  This
+  // avoids "leaning toothpicks" in common patterns.
+  for (unsigned i = 0, e = FixedStr.size(); i != e; ++i) {
+    switch (FixedStr[i]) {
+    // These are the special characters matched in "p_ere_exp".
+    case '(':
+    case ')':
+    case '^':
+    case '$':
+    case '|':
+    case '*':
+    case '+':
+    case '?':
+    case '.':
+    case '[':
+    case '\\':
+    case '{':
+      TheStr += '\\';
+      // FALL THROUGH.
+    default:
+      TheStr += FixedStr[i];
+      break;
+    }
+  }
+}
+
+bool Pattern::AddRegExToRegEx(StringRef RegexStr, unsigned &CurParen,
+                              SourceMgr &SM) {
+  Regex R(RegexStr);
+  std::string Error;
+  if (!R.isValid(Error)) {
+    SM.PrintMessage(SMLoc::getFromPointer(RegexStr.data()),
+                    "invalid regex: " + Error, "error");
+    return true;
+  }
+  
+  RegExStr += RegexStr.str();
+  CurParen += R.getNumMatches();
+  return false;
+}
+
+/// Match - Match the pattern string against the input buffer Buffer.  This
+/// returns the position that is matched or npos if there is no match.  If
+/// there is a match, the size of the matched string is returned in MatchLen.
+size_t Pattern::Match(StringRef Buffer, size_t &MatchLen,
+                      StringMap<StringRef> &VariableTable) const {
+  // If this is a fixed string pattern, just match it now.
+  if (!FixedStr.empty()) {
+    MatchLen = FixedStr.size();
+    return Buffer.find(FixedStr);
+  }
+
+  // Regex match.
+  
+  // If there are variable uses, we need to create a temporary string with the
+  // actual value.
+  StringRef RegExToMatch = RegExStr;
+  std::string TmpStr;
+  if (!VariableUses.empty()) {
+    TmpStr = RegExStr;
+    
+    unsigned InsertOffset = 0;
+    for (unsigned i = 0, e = VariableUses.size(); i != e; ++i) {
+      // Look up the value and escape it so that we can plop it into the regex.
+      std::string Value;
+      AddFixedStringToRegEx(VariableTable[VariableUses[i].first], Value);
+      
+      // Plop it into the regex at the adjusted offset.
+      TmpStr.insert(TmpStr.begin()+VariableUses[i].second+InsertOffset,
+                    Value.begin(), Value.end());
+      InsertOffset += Value.size();
+    }
+    
+    // Match the newly constructed regex.
+    RegExToMatch = TmpStr;
+  }
+  
+  
+  SmallVector<StringRef, 4> MatchInfo;
+  if (!Regex(RegExToMatch, Regex::Newline).match(Buffer, &MatchInfo))
+    return StringRef::npos;
+  
+  // Successful regex match.
+  assert(!MatchInfo.empty() && "Didn't get any match");
+  StringRef FullMatch = MatchInfo[0];
+  
+  // If this defines any variables, remember their values.
+  for (unsigned i = 0, e = VariableDefs.size(); i != e; ++i) {
+    assert(VariableDefs[i].second < MatchInfo.size() &&
+           "Internal paren error");
+    VariableTable[VariableDefs[i].first] = MatchInfo[VariableDefs[i].second];
+  }
+  
+  MatchLen = FullMatch.size();
+  return FullMatch.data()-Buffer.data();
+}
+
+
+//===----------------------------------------------------------------------===//
+// Check Strings.
+//===----------------------------------------------------------------------===//
+
 /// CheckString - This is a check that we found in the input file.
 struct CheckString {
-  /// Str - The string to match.
-  std::string Str;
+  /// Pat - The pattern to match.
+  Pattern Pat;
   
   /// Loc - The location in the match file that the check string was specified.
   SMLoc Loc;
@@ -54,11 +329,42 @@ struct CheckString {
   /// NotStrings - These are all of the strings that are disallowed from
   /// occurring between this match string and the previous one (or start of
   /// file).
-  std::vector<std::pair<SMLoc, std::string> > NotStrings;
+  std::vector<std::pair<SMLoc, Pattern> > NotStrings;
   
-  CheckString(const std::string &S, SMLoc L, bool isCheckNext)
-    : Str(S), Loc(L), IsCheckNext(isCheckNext) {}
+  CheckString(const Pattern &P, SMLoc L, bool isCheckNext)
+    : Pat(P), Loc(L), IsCheckNext(isCheckNext) {}
 };
+
+/// CanonicalizeInputFile - Remove duplicate horizontal space from the specified
+/// memory buffer, free it, and return a new one.
+static MemoryBuffer *CanonicalizeInputFile(MemoryBuffer *MB) {
+  SmallVector<char, 16> NewFile;
+  NewFile.reserve(MB->getBufferSize());
+  
+  for (const char *Ptr = MB->getBufferStart(), *End = MB->getBufferEnd();
+       Ptr != End; ++Ptr) {
+    // If C is not a horizontal whitespace, skip it.
+    if (*Ptr != ' ' && *Ptr != '\t') {
+      NewFile.push_back(*Ptr);
+      continue;
+    }
+    
+    // Otherwise, add one space and advance over neighboring space.
+    NewFile.push_back(' ');
+    while (Ptr+1 != End &&
+           (Ptr[1] == ' ' || Ptr[1] == '\t'))
+      ++Ptr;
+  }
+  
+  // Free the old buffer and return a new one.
+  MemoryBuffer *MB2 =
+    MemoryBuffer::getMemBufferCopy(NewFile.data(), 
+                                   NewFile.data() + NewFile.size(),
+                                   MB->getBufferIdentifier());
+  
+  delete MB;
+  return MB2;
+}
 
 
 /// ReadCheckFile - Read the check file, which specifies the sequence of
@@ -74,12 +380,18 @@ static bool ReadCheckFile(SourceMgr &SM,
            << ErrorStr << '\n';
     return true;
   }
+  
+  // If we want to canonicalize whitespace, strip excess whitespace from the
+  // buffer containing the CHECK lines.
+  if (!NoCanonicalizeWhiteSpace)
+    F = CanonicalizeInputFile(F);
+  
   SM.AddNewSourceBuffer(F, SMLoc());
 
   // Find all instances of CheckPrefix followed by : in the file.
   StringRef Buffer = F->getBuffer();
 
-  std::vector<std::pair<SMLoc, std::string> > NotMatches;
+  std::vector<std::pair<SMLoc, Pattern> > NotMatches;
   
   while (1) {
     // See if Prefix occurs in the memory buffer.
@@ -117,29 +429,14 @@ static bool ReadCheckFile(SourceMgr &SM,
     
     // Scan ahead to the end of line.
     size_t EOL = Buffer.find_first_of("\n\r");
-    if (EOL == StringRef::npos) EOL = Buffer.size();
-    
-    // Ignore trailing whitespace.
-    while (EOL && (Buffer[EOL-1] == ' ' || Buffer[EOL-1] == '\t'))
-      --EOL;
-    
-    // Check that there is something on the line.
-    if (EOL == 0) {
-      SM.PrintMessage(SMLoc::getFromPointer(Buffer.data()),
-                      "found empty check string with prefix '"+CheckPrefix+":'",
-                      "error");
+
+    // Parse the pattern.
+    Pattern P;
+    if (P.ParsePattern(Buffer.substr(0, EOL), SM))
       return true;
-    }
     
-    StringRef PatternStr = Buffer.substr(0, EOL);
-    
-    // Handle CHECK-NOT.
-    if (IsCheckNot) {
-      NotMatches.push_back(std::make_pair(SMLoc::getFromPointer(Buffer.data()),
-                                          PatternStr.str()));
-      Buffer = Buffer.substr(EOL);
-      continue;
-    }
+    Buffer = Buffer.substr(EOL);
+
     
     // Verify that CHECK-NEXT lines have at least one CHECK line before them.
     if (IsCheckNext && CheckStrings.empty()) {
@@ -149,13 +446,19 @@ static bool ReadCheckFile(SourceMgr &SM,
       return true;
     }
     
+    // Handle CHECK-NOT.
+    if (IsCheckNot) {
+      NotMatches.push_back(std::make_pair(SMLoc::getFromPointer(Buffer.data()),
+                                          P));
+      continue;
+    }
+    
+    
     // Okay, add the string we captured to the output vector and move on.
-    CheckStrings.push_back(CheckString(PatternStr.str(),
+    CheckStrings.push_back(CheckString(P,
                                        SMLoc::getFromPointer(Buffer.data()),
                                        IsCheckNext));
     std::swap(NotMatches, CheckStrings.back().NotStrings);
-    
-    Buffer = Buffer.substr(EOL);
   }
   
   if (CheckStrings.empty()) {
@@ -172,60 +475,6 @@ static bool ReadCheckFile(SourceMgr &SM,
   
   return false;
 }
-
-// CanonicalizeCheckStrings - Replace all sequences of horizontal whitespace in
-// the check strings with a single space.
-static void CanonicalizeCheckStrings(std::vector<CheckString> &CheckStrings) {
-  for (unsigned i = 0, e = CheckStrings.size(); i != e; ++i) {
-    std::string &Str = CheckStrings[i].Str;
-    
-    for (unsigned C = 0; C != Str.size(); ++C) {
-      // If C is not a horizontal whitespace, skip it.
-      if (Str[C] != ' ' && Str[C] != '\t')
-        continue;
-      
-      // Replace the character with space, then remove any other space
-      // characters after it.
-      Str[C] = ' ';
-      
-      while (C+1 != Str.size() &&
-             (Str[C+1] == ' ' || Str[C+1] == '\t'))
-        Str.erase(Str.begin()+C+1);
-    }
-  }
-}
-
-/// CanonicalizeInputFile - Remove duplicate horizontal space from the specified
-/// memory buffer, free it, and return a new one.
-static MemoryBuffer *CanonicalizeInputFile(MemoryBuffer *MB) {
-  SmallVector<char, 16> NewFile;
-  NewFile.reserve(MB->getBufferSize());
-  
-  for (const char *Ptr = MB->getBufferStart(), *End = MB->getBufferEnd();
-       Ptr != End; ++Ptr) {
-    // If C is not a horizontal whitespace, skip it.
-    if (*Ptr != ' ' && *Ptr != '\t') {
-      NewFile.push_back(*Ptr);
-      continue;
-    }
-    
-    // Otherwise, add one space and advance over neighboring space.
-    NewFile.push_back(' ');
-    while (Ptr+1 != End &&
-           (Ptr[1] == ' ' || Ptr[1] == '\t'))
-      ++Ptr;
-  }
-  
-  // Free the old buffer and return a new one.
-  MemoryBuffer *MB2 =
-    MemoryBuffer::getMemBufferCopy(NewFile.data(), 
-                                   NewFile.data() + NewFile.size(),
-                                   MB->getBufferIdentifier());
-
-  delete MB;
-  return MB2;
-}
-
 
 static void PrintCheckFailed(const SourceMgr &SM, const CheckString &CheckStr,
                              StringRef Buffer) {
@@ -273,10 +522,6 @@ int main(int argc, char **argv) {
   if (ReadCheckFile(SM, CheckStrings))
     return 2;
 
-  // Remove duplicate spaces in the check strings if requested.
-  if (!NoCanonicalizeWhiteSpace)
-    CanonicalizeCheckStrings(CheckStrings);
-
   // Open the file to check and add it to SourceMgr.
   std::string ErrorStr;
   MemoryBuffer *F =
@@ -293,6 +538,9 @@ int main(int argc, char **argv) {
   
   SM.AddNewSourceBuffer(F, SMLoc());
   
+  /// VariableTable - This holds all the current filecheck variables.
+  StringMap<StringRef> VariableTable;
+  
   // Check that we have all of the expected strings, in order, in the input
   // file.
   StringRef Buffer = F->getBuffer();
@@ -305,7 +553,8 @@ int main(int argc, char **argv) {
     StringRef SearchFrom = Buffer;
     
     // Find StrNo in the file.
-    Buffer = Buffer.substr(Buffer.find(CheckStr.Str));
+    size_t MatchLen = 0;
+    Buffer = Buffer.substr(CheckStr.Pat.Match(Buffer, MatchLen, VariableTable));
     
     // If we didn't find a match, reject the input.
     if (Buffer.empty()) {
@@ -349,13 +598,17 @@ int main(int argc, char **argv) {
     
     // If this match had "not strings", verify that they don't exist in the
     // skipped region.
-    for (unsigned i = 0, e = CheckStr.NotStrings.size(); i != e; ++i) {
-      size_t Pos = SkippedRegion.find(CheckStr.NotStrings[i].second);
+    for (unsigned ChunkNo = 0, e = CheckStr.NotStrings.size();
+         ChunkNo != e; ++ChunkNo) {
+      size_t MatchLen = 0;
+      size_t Pos = CheckStr.NotStrings[ChunkNo].second.Match(SkippedRegion,
+                                                             MatchLen,
+                                                             VariableTable);
       if (Pos == StringRef::npos) continue;
      
       SM.PrintMessage(SMLoc::getFromPointer(LastMatch+Pos),
                       CheckPrefix+"-NOT: string occurred!", "error");
-      SM.PrintMessage(CheckStr.NotStrings[i].first,
+      SM.PrintMessage(CheckStr.NotStrings[ChunkNo].first,
                       CheckPrefix+"-NOT: pattern specified here", "note");
       return 1;
     }
@@ -363,7 +616,7 @@ int main(int argc, char **argv) {
 
     // Otherwise, everything is good.  Step over the matched text and remember
     // the position after the match as the end of the last match.
-    Buffer = Buffer.substr(CheckStr.Str.size());
+    Buffer = Buffer.substr(MatchLen);
     LastMatch = Buffer.data();
   }
   

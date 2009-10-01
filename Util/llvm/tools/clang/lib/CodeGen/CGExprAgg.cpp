@@ -174,27 +174,79 @@ void AggExprEmitter::EmitFinalDestCopy(const Expr *E, LValue Src, bool Ignore) {
 //===----------------------------------------------------------------------===//
 
 void AggExprEmitter::VisitCastExpr(CastExpr *E) {
-  if (E->getCastKind() == CastExpr::CK_ToUnion) {
+  switch (E->getCastKind()) {
+  default: assert(0 && "Unhandled cast kind!");
+
+  case CastExpr::CK_ToUnion: {
     // GCC union extension
     QualType PtrTy =
-        CGF.getContext().getPointerType(E->getSubExpr()->getType());
+    CGF.getContext().getPointerType(E->getSubExpr()->getType());
     llvm::Value *CastPtr = Builder.CreateBitCast(DestPtr,
                                                  CGF.ConvertType(PtrTy));
     EmitInitializationToLValue(E->getSubExpr(),
-                               LValue::MakeAddr(CastPtr, 0));
-    return;
+                               LValue::MakeAddr(CastPtr, Qualifiers()));
+    break;
   }
 
   // FIXME: Remove the CK_Unknown check here.
-  assert((E->getCastKind() == CastExpr::CK_NoOp ||
-          E->getCastKind() == CastExpr::CK_Unknown ||
-          E->getCastKind() == CastExpr::CK_UserDefinedConversion ||
-          E->getCastKind() == CastExpr::CK_ConstructorConversion) &&
-         "Only no-op casts allowed!");
-  assert(CGF.getContext().hasSameUnqualifiedType(E->getSubExpr()->getType(),
-                                                 E->getType()) &&
-         "Implicit cast types must be compatible");
-  Visit(E->getSubExpr());
+  case CastExpr::CK_Unknown:
+  case CastExpr::CK_NoOp:
+  case CastExpr::CK_UserDefinedConversion:
+  case CastExpr::CK_ConstructorConversion:
+    assert(CGF.getContext().hasSameUnqualifiedType(E->getSubExpr()->getType(),
+                                                   E->getType()) &&
+           "Implicit cast types must be compatible");
+    Visit(E->getSubExpr());
+    break;
+
+  case CastExpr::CK_NullToMemberPointer: {
+    const llvm::Type *PtrDiffTy = 
+      CGF.ConvertType(CGF.getContext().getPointerDiffType());
+
+    llvm::Value *NullValue = llvm::Constant::getNullValue(PtrDiffTy);
+    llvm::Value *Ptr = Builder.CreateStructGEP(DestPtr, 0, "ptr");
+    Builder.CreateStore(NullValue, Ptr, VolatileDest);
+    
+    llvm::Value *Adj = Builder.CreateStructGEP(DestPtr, 1, "adj");
+    Builder.CreateStore(NullValue, Adj, VolatileDest);
+
+    break;
+  }
+      
+  case CastExpr::CK_BaseToDerivedMemberPointer: {
+    QualType SrcType = E->getSubExpr()->getType();
+    
+    llvm::Value *Src = CGF.CreateTempAlloca(CGF.ConvertTypeForMem(SrcType), 
+                                            "tmp");
+    CGF.EmitAggExpr(E->getSubExpr(), Src, SrcType.isVolatileQualified());
+    
+    llvm::Value *SrcPtr = Builder.CreateStructGEP(Src, 0, "src.ptr");
+    SrcPtr = Builder.CreateLoad(SrcPtr);
+    
+    llvm::Value *SrcAdj = Builder.CreateStructGEP(Src, 1, "src.adj");
+    SrcAdj = Builder.CreateLoad(SrcAdj);
+    
+    llvm::Value *DstPtr = Builder.CreateStructGEP(DestPtr, 0, "dst.ptr");
+    Builder.CreateStore(SrcPtr, DstPtr, VolatileDest);
+    
+    llvm::Value *DstAdj = Builder.CreateStructGEP(DestPtr, 1, "dst.adj");
+    
+    // Now See if we need to update the adjustment.
+    const CXXRecordDecl *SrcDecl = 
+      cast<CXXRecordDecl>(SrcType->getAs<MemberPointerType>()->
+                          getClass()->getAs<RecordType>()->getDecl());
+    const CXXRecordDecl *DstDecl = 
+      cast<CXXRecordDecl>(E->getType()->getAs<MemberPointerType>()->
+                          getClass()->getAs<RecordType>()->getDecl());
+    
+    llvm::Constant *Adj = CGF.GetCXXBaseClassOffset(DstDecl, SrcDecl);
+    if (Adj)
+      SrcAdj = Builder.CreateAdd(SrcAdj, Adj, "adj");
+    
+    Builder.CreateStore(SrcAdj, DstAdj, VolatileDest);
+    break;
+  }
+  }
 }
 
 void AggExprEmitter::VisitCallExpr(const CallExpr *E) {
@@ -316,7 +368,7 @@ void AggExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
     return;
   }
 
-  EmitFinalDestCopy(VE, LValue::MakeAddr(ArgPtr, 0));
+  EmitFinalDestCopy(VE, LValue::MakeAddr(ArgPtr, Qualifiers()));
 }
 
 void AggExprEmitter::VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *E) {
@@ -429,15 +481,16 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
     QualType ElementType = CGF.getContext().getCanonicalType(E->getType());
     ElementType = CGF.getContext().getAsArrayType(ElementType)->getElementType();
 
-    unsigned CVRqualifier = ElementType.getCVRQualifiers();
+    // FIXME: were we intentionally ignoring address spaces and GC attributes?
+    Qualifiers Quals = CGF.MakeQualifiers(ElementType);
 
     for (uint64_t i = 0; i != NumArrayElements; ++i) {
       llvm::Value *NextVal = Builder.CreateStructGEP(DestPtr, i, ".array");
       if (i < NumInitElements)
         EmitInitializationToLValue(E->getInit(i),
-                                   LValue::MakeAddr(NextVal, CVRqualifier));
+                                   LValue::MakeAddr(NextVal, Quals));
       else
-        EmitNullInitializationToLValue(LValue::MakeAddr(NextVal, CVRqualifier),
+        EmitNullInitializationToLValue(LValue::MakeAddr(NextVal, Quals),
                                        ElementType);
     }
     return;

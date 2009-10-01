@@ -146,7 +146,7 @@ CXXRecordDecl::setBases(ASTContext &C,
 }
 
 bool CXXRecordDecl::hasConstCopyConstructor(ASTContext &Context) const {
-  return getCopyConstructor(Context, QualType::Const) != 0;
+  return getCopyConstructor(Context, Qualifiers::Const) != 0;
 }
 
 CXXConstructorDecl *CXXRecordDecl::getCopyConstructor(ASTContext &Context,
@@ -167,8 +167,8 @@ CXXConstructorDecl *CXXRecordDecl::getCopyConstructor(ASTContext &Context,
 
     if (cast<CXXConstructorDecl>(*Con)->isCopyConstructor(Context,
                                                           FoundTQs)) {
-      if (((TypeQuals & QualType::Const) == (FoundTQs & QualType::Const)) ||
-          (!(TypeQuals & QualType::Const) && (FoundTQs & QualType::Const)))
+      if (((TypeQuals & Qualifiers::Const) == (FoundTQs & Qualifiers::Const)) ||
+          (!(TypeQuals & Qualifiers::Const) && (FoundTQs & Qualifiers::Const)))
         return cast<CXXConstructorDecl>(*Con);
 
     }
@@ -451,6 +451,40 @@ CXXMethodDecl::Create(ASTContext &C, CXXRecordDecl *RD,
                                isStatic, isInline);
 }
 
+bool CXXMethodDecl::isUsualDeallocationFunction() const {
+  if (getOverloadedOperator() != OO_Delete &&
+      getOverloadedOperator() != OO_Array_Delete)
+    return false;
+  
+  // C++ [basic.stc.dynamic.deallocation]p2:
+  //   If a class T has a member deallocation function named operator delete 
+  //   with exactly one parameter, then that function is a usual (non-placement)
+  //   deallocation function. [...]
+  if (getNumParams() == 1)
+    return true;
+  
+  // C++ [basic.stc.dynamic.deallocation]p2:
+  //   [...] If class T does not declare such an operator delete but does 
+  //   declare a member deallocation function named operator delete with 
+  //   exactly two parameters, the second of which has type std::size_t (18.1),
+  //   then this function is a usual deallocation function.
+  ASTContext &Context = getASTContext();
+  if (getNumParams() != 2 ||
+      !Context.hasSameType(getParamDecl(1)->getType(), Context.getSizeType()))
+    return false;
+                 
+  // This function is a usual deallocation function if there are no 
+  // single-parameter deallocation functions of the same kind.
+  for (DeclContext::lookup_const_result R = getDeclContext()->lookup(getDeclName());
+       R.first != R.second; ++R.first) {
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*R.first))
+      if (FD->getNumParams() == 1)
+        return false;
+  }
+  
+  return true;
+}
+
 typedef llvm::DenseMap<const CXXMethodDecl*,
                        std::vector<const CXXMethodDecl *> *>
                        OverriddenMethodsMapTy;
@@ -508,7 +542,8 @@ QualType CXXMethodDecl::getThisType(ASTContext &C) const {
     ClassTy = TD->getInjectedClassNameType(C);
   else
     ClassTy = C.getTagDeclType(getParent());
-  ClassTy = ClassTy.getWithAdditionalQualifiers(getTypeQualifiers());
+  ClassTy = C.getQualifiedType(ClassTy,
+                               Qualifiers::fromCVRMask(getTypeQualifiers()));
   return C.getPointerType(ClassTy);
 }
 
@@ -599,6 +634,8 @@ CXXConstructorDecl::isCopyConstructor(ASTContext &Context,
     = Context.getCanonicalType(Context.getTagDeclType(getParent()));
   if (PointeeType.getUnqualifiedType() != ClassTy)
     return false;
+
+  // FIXME: other qualifiers?
 
   // We have a copy constructor.
   TypeQuals = PointeeType.getCVRQualifiers();

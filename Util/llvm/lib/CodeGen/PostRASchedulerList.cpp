@@ -34,6 +34,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtarget.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -178,6 +179,11 @@ namespace {
                                       unsigned LastNewReg,
                                       const TargetRegisterClass *);
     void StartBlockForKills(MachineBasicBlock *BB);
+    
+    // ToggleKillFlag - Toggle a register operand kill flag. Other
+    // adjustments may be made to the instruction if necessary. Return
+    // true if the operand has been deleted, false if not.
+    bool ToggleKillFlag(MachineInstr *MI, MachineOperand &MO);
   };
 }
 
@@ -204,6 +210,11 @@ static bool isSchedulingBoundary(const MachineInstr *MI,
 }
 
 bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
+  // Check that post-RA scheduling is enabled for this function
+  const TargetSubtarget &ST = Fn.getTarget().getSubtarget<TargetSubtarget>();
+  if (!ST.enablePostRAScheduler())
+    return true;
+
   DEBUG(errs() << "PostRAScheduler\n");
 
   const MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
@@ -650,11 +661,11 @@ bool SchedulePostRATDList::BreakAntiDependencies() {
        I != E; --Count) {
     MachineInstr *MI = --I;
 
-    // After regalloc, IMPLICIT_DEF instructions aren't safe to treat as
-    // dependence-breaking. In the case of an INSERT_SUBREG, the IMPLICIT_DEF
+    // After regalloc, KILL instructions aren't safe to treat as
+    // dependence-breaking. In the case of an INSERT_SUBREG, the KILL
     // is left behind appearing to clobber the super-register, while the
     // subregister needs to remain live. So we just ignore them.
-    if (MI->getOpcode() == TargetInstrInfo::IMPLICIT_DEF)
+    if (MI->getOpcode() == TargetInstrInfo::KILL)
       continue;
 
     // Check if this instruction has a dependence on the critical path that
@@ -822,6 +833,40 @@ void SchedulePostRATDList::StartBlockForKills(MachineBasicBlock *BB) {
   }
 }
 
+bool SchedulePostRATDList::ToggleKillFlag(MachineInstr *MI,
+                                          MachineOperand &MO) {
+  // Setting kill flag...
+  if (!MO.isKill()) {
+    MO.setIsKill(true);
+    return false;
+  }
+  
+  // If MO itself is live, clear the kill flag...
+  if (KillIndices[MO.getReg()] != ~0u) {
+    MO.setIsKill(false);
+    return false;
+  }
+
+  // If any subreg of MO is live, then create an imp-def for that
+  // subreg and keep MO marked as killed.
+  bool AllDead = true;
+  const unsigned SuperReg = MO.getReg();
+  for (const unsigned *Subreg = TRI->getSubRegisters(SuperReg);
+       *Subreg; ++Subreg) {
+    if (KillIndices[*Subreg] != ~0u) {
+      MI->addOperand(MachineOperand::CreateReg(*Subreg,
+                                               true  /*IsDef*/,
+                                               true  /*IsImp*/,
+                                               false /*IsKill*/,
+                                               false /*IsDead*/));
+      AllDead = false;
+    }
+  }
+
+  MO.setIsKill(AllDead);
+  return false;
+}
+
 /// FixupKills - Fix the register kill flags, they may have been made
 /// incorrect by instruction reordering.
 ///
@@ -860,9 +905,9 @@ void SchedulePostRATDList::FixupKills(MachineBasicBlock *MBB) {
       }
     }
 
-    // Examine all used registers and set kill flag. When a register
-    // is used multiple times we only set the kill flag on the first
-    // use.
+    // Examine all used registers and set/clear kill flag. When a
+    // register is used multiple times we only set the kill flag on
+    // the first use.
     killedRegs.clear();
     for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
       MachineOperand &MO = MI->getOperand(i);
@@ -889,8 +934,12 @@ void SchedulePostRATDList::FixupKills(MachineBasicBlock *MBB) {
       }
       
       if (MO.isKill() != kill) {
-        MO.setIsKill(kill);
-        DEBUG(errs() << "Fixed " << MO << " in ");
+        bool removed = ToggleKillFlag(MI, MO);
+        if (removed) {
+          DEBUG(errs() << "Fixed <removed> in ");
+        } else {
+          DEBUG(errs() << "Fixed " << MO << " in ");
+        }
         DEBUG(MI->dump());
       }
       
@@ -923,17 +972,17 @@ void SchedulePostRATDList::FixupKills(MachineBasicBlock *MBB) {
 /// the PendingQueue if the count reaches zero. Also update its cycle bound.
 void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge) {
   SUnit *SuccSU = SuccEdge->getSUnit();
-  --SuccSU->NumPredsLeft;
-  
+
 #ifndef NDEBUG
-  if (SuccSU->NumPredsLeft < 0) {
+  if (SuccSU->NumPredsLeft == 0) {
     errs() << "*** Scheduling failed! ***\n";
     SuccSU->dump(this);
     errs() << " has been released too many times!\n";
     llvm_unreachable(0);
   }
 #endif
-  
+  --SuccSU->NumPredsLeft;
+
   // Compute how many cycles it will be before this actually becomes
   // available.  This is the max of the start time of all predecessors plus
   // their latencies.

@@ -436,6 +436,12 @@ ConstantFP* ConstantFP::get(LLVMContext &Context, const APFloat& V) {
   return Slot;
 }
 
+ConstantFP *ConstantFP::getInfinity(const Type *Ty, bool Negative) {
+  const fltSemantics &Semantics = *TypeToFloatSemantics(Ty);
+  return ConstantFP::get(Ty->getContext(),
+                         APFloat::getInf(Semantics, Negative));
+}
+
 ConstantFP::ConstantFP(const Type *Ty, const APFloat& V)
   : Constant(Ty, ConstantFPVal, 0, 0), Val(V) {
   assert(&V.getSemantics() == TypeToFloatSemantics(Ty) &&
@@ -476,6 +482,10 @@ ConstantArray::ConstantArray(const ArrayType *T,
 
 Constant *ConstantArray::get(const ArrayType *Ty, 
                              const std::vector<Constant*> &V) {
+  for (unsigned i = 0, e = V.size(); i != e; ++i) {
+    assert(V[i]->getType() == Ty->getElementType() &&
+           "Wrong type in array element initializer");
+  }
   LLVMContextImpl *pImpl = Ty->getContext().pImpl;
   // If this is an all-zero array, return a ConstantAggregateZero object
   if (!V.empty()) {
@@ -634,6 +644,11 @@ Constant* ConstantVector::get(Constant* const* Vals, unsigned NumVals) {
 
 Constant* ConstantExpr::getNSWAdd(Constant* C1, Constant* C2) {
   return getTy(C1->getType(), Instruction::Add, C1, C2,
+               OverflowingBinaryOperator::NoSignedWrap);
+}
+
+Constant* ConstantExpr::getNSWSub(Constant* C1, Constant* C2) {
+  return getTy(C1->getType(), Instruction::Sub, C1, C2,
                OverflowingBinaryOperator::NoSignedWrap);
 }
 
@@ -2129,4 +2144,3 @@ void ConstantExpr::replaceUsesOfWithOnConstant(Value *From, Value *ToV,
   // Delete the old constant!
   destroyConstant();
 }
-

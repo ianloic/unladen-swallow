@@ -32,6 +32,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/FormattedStream.h"
@@ -678,7 +679,7 @@ void SlotTracker::processFunction() {
 
   ST_DEBUG("Inserting Instructions:\n");
 
-  Metadata &TheMetadata = TheFunction->getContext().getMetadata();
+  MetadataContext &TheMetadata = TheFunction->getContext().getMetadata();
 
   // Add all of the basic blocks and instructions with no names.
   for (Function::const_iterator BB = TheFunction->begin(),
@@ -695,9 +696,9 @@ void SlotTracker::processFunction() {
           CreateMetadataSlot(N);
 
       // Process metadata attached with this instruction.
-      const Metadata::MDMapTy *MDs = TheMetadata.getMDs(I);
+      const MetadataContext::MDMapTy *MDs = TheMetadata.getMDs(I);
       if (MDs)
-        for (Metadata::MDMapTy::const_iterator MI = MDs->begin(),
+        for (MetadataContext::MDMapTy::const_iterator MI = MDs->begin(),
                ME = MDs->end(); MI != ME; ++MI)
           if (MDNode *MDN = dyn_cast_or_null<MDNode>(MI->second))
             CreateMetadataSlot(MDN);
@@ -869,6 +870,30 @@ static const char *getPredicateText(unsigned predicate) {
   return pred;
 }
 
+static void WriteMDNodeComment(const MDNode *Node,
+			       formatted_raw_ostream &Out) {
+  if (Node->getNumElements() < 1)
+    return;
+  ConstantInt *CI = dyn_cast_or_null<ConstantInt>(Node->getElement(0));
+  if (!CI) return;
+  unsigned Val = CI->getZExtValue();
+  unsigned Tag = Val & ~LLVMDebugVersionMask;
+  if (Val >= LLVMDebugVersion) {
+    if (Tag == dwarf::DW_TAG_auto_variable)
+      Out << "; [ DW_TAG_auto_variable ]";
+    else if (Tag == dwarf::DW_TAG_arg_variable)
+      Out << "; [ DW_TAG_arg_variable ]";
+    else if (Tag == dwarf::DW_TAG_return_variable)
+      Out << "; [ DW_TAG_return_variable ]";
+    else if (Tag == dwarf::DW_TAG_vector_type)
+      Out << "; [ DW_TAG_vector_type ]";
+    else if (Tag == dwarf::DW_TAG_user_base)
+      Out << "; [ DW_TAG_user_base ]";
+    else
+      Out << "; [" << dwarf::TagString(Tag) << " ]";
+  }
+}
+
 static void WriteMDNodes(formatted_raw_ostream &Out, TypePrinting &TypePrinter,
                          SlotTracker &Machine) {
   SmallVector<const MDNode *, 16> Nodes;
@@ -898,7 +923,10 @@ static void WriteMDNodes(formatted_raw_ostream &Out, TypePrinting &TypePrinter,
       if (++NI != NE)
         Out << ", ";
     }
-    Out << "}\n";
+
+    Out << "}";
+    WriteMDNodeComment(Node, Out);
+    Out << "\n";
   }
 }
 
@@ -1198,6 +1226,11 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Value *V,
     return;
   }
 
+  if (V->getValueID() == Value::PseudoSourceValueVal) {
+    V->print(Out);
+    return;
+  }
+
   char Prefix = '%';
   int Slot;
   if (Machine) {
@@ -1261,17 +1294,22 @@ class AssemblyWriter {
   TypePrinting TypePrinter;
   AssemblyAnnotationWriter *AnnotationWriter;
   std::vector<const Type*> NumberedTypes;
-
-  // Each MDNode is assigned unique MetadataIDNo.
-  std::map<const MDNode *, unsigned> MDNodes;
-  unsigned MetadataIDNo;
+  DenseMap<unsigned, const char *> MDNames;
 
 public:
   inline AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
                         const Module *M,
                         AssemblyAnnotationWriter *AAW)
-    : Out(o), Machine(Mac), TheModule(M), AnnotationWriter(AAW), MetadataIDNo(0) {
+    : Out(o), Machine(Mac), TheModule(M), AnnotationWriter(AAW) {
     AddModuleTypesToPrinter(TypePrinter, NumberedTypes, M);
+    // FIXME: Provide MDPrinter
+    MetadataContext &TheMetadata = M->getContext().getMetadata();
+    const StringMap<unsigned> *Names = TheMetadata.getHandlerNames();
+    for (StringMapConstIterator<unsigned> I = Names->begin(),
+           E = Names->end(); I != E; ++I) {
+      const StringMapEntry<unsigned> &Entry = *I;
+      MDNames[I->second] = Entry.getKeyData();
+    }
   }
 
   void write(const Module *M) { printModule(M); }
@@ -1990,11 +2028,16 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Out << ", align " << cast<StoreInst>(I).getAlignment();
   }
 
-  // Print DebugInfo
-  Metadata &TheMetadata = I.getContext().getMetadata();
-  unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
-  if (const MDNode *Dbg = TheMetadata.getMD(MDDbgKind, &I))
-    Out << ", dbg !" << Machine.getMetadataSlot(Dbg);
+  // Print Metadata info
+  MetadataContext &TheMetadata = I.getContext().getMetadata();
+  const MetadataContext::MDMapTy *MDMap = TheMetadata.getMDs(&I);
+  if (MDMap)
+    for (MetadataContext::MDMapTy::const_iterator MI = MDMap->begin(),
+           ME = MDMap->end(); MI != ME; ++MI)
+      if (const MDNode *MD = dyn_cast_or_null<MDNode>(MI->second))
+        Out << ", !" << MDNames[MI->first]
+            << " !" << Machine.getMetadataSlot(MD);
+
   printInfoComment(I);
 }
 
@@ -2076,8 +2119,15 @@ void Value::print(raw_ostream &ROS, AssemblyAnnotationWriter *AAW) const {
   } else if (isa<InlineAsm>(this)) {
     WriteAsOperand(OS, this, true, 0);
   } else {
-    llvm_unreachable("Unknown value to print out!");
+    // Otherwise we don't know what it is. Call the virtual function to
+    // allow a subclass to print itself.
+    printCustom(OS);
   }
+}
+
+// Value::printCustom - subclasses should override this to implement printing.
+void Value::printCustom(raw_ostream &OS) const {
+  llvm_unreachable("Unknown value to print out!");
 }
 
 // Value::dump - allow easy printing of Values from the debugger.

@@ -112,6 +112,9 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
   V = CGF.Builder.CreateGEP(V, Offset, "add.ptr");
   V = CGF.Builder.CreateBitCast(V, llvm::PointerType::getUnqual(LTy));
 
+  Qualifiers Quals = CGF.MakeQualifiers(IvarTy);
+  Quals.addCVRQualifiers(CVRQualifiers);
+
   if (Ivar->isBitField()) {
     // We need to compute the bit offset for the bit-field, the offset
     // is to the byte. Note, there is a subtle invariant here: we can
@@ -124,11 +127,11 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
       Ivar->getBitWidth()->EvaluateAsInt(CGF.getContext()).getZExtValue();
     return LValue::MakeBitfield(V, BitOffset, BitFieldSize,
                                 IvarTy->isSignedIntegerType(),
-                                IvarTy.getCVRQualifiers()|CVRQualifiers);
+                                Quals.getCVRQualifiers());
   }
 
-  LValue LV = LValue::MakeAddr(V, IvarTy.getCVRQualifiers()|CVRQualifiers,
-                               CGF.CGM.getContext().getObjCGCAttrKind(IvarTy));
+  
+  LValue LV = LValue::MakeAddr(V, Quals);
   return LV;
 }
 
@@ -366,9 +369,10 @@ public:
 
   /// GcAssignIvarFn -- LLVM objc_assign_ivar function.
   llvm::Constant *getGcAssignIvarFn() {
-    // id objc_assign_ivar(id, id *)
+    // id objc_assign_ivar(id, id *, ptrdiff_t)
     std::vector<const llvm::Type*> Args(1, ObjectPtrTy);
     Args.push_back(ObjectPtrTy->getPointerTo());
+    Args.push_back(LongTy);
     llvm::FunctionType *FTy =
       llvm::FunctionType::get(ObjectPtrTy, Args, false);
     return CGM.CreateRuntimeFunction(FTy, "objc_assign_ivar");
@@ -1127,7 +1131,8 @@ public:
   virtual void EmitObjCGlobalAssign(CodeGen::CodeGenFunction &CGF,
                                     llvm::Value *src, llvm::Value *dest);
   virtual void EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
-                                  llvm::Value *src, llvm::Value *dest);
+                                  llvm::Value *src, llvm::Value *dest,
+                                  llvm::Value *ivarOffset);
   virtual void EmitObjCStrongCastAssign(CodeGen::CodeGenFunction &CGF,
                                         llvm::Value *src, llvm::Value *dest);
   virtual void EmitGCMemmoveCollectable(CodeGen::CodeGenFunction &CGF,
@@ -1357,7 +1362,8 @@ public:
   virtual void EmitObjCGlobalAssign(CodeGen::CodeGenFunction &CGF,
                                     llvm::Value *src, llvm::Value *dest);
   virtual void EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
-                                  llvm::Value *src, llvm::Value *dest);
+                                  llvm::Value *src, llvm::Value *dest,
+                                  llvm::Value *ivarOffset);
   virtual void EmitObjCStrongCastAssign(CodeGen::CodeGenFunction &CGF,
                                         llvm::Value *src, llvm::Value *dest);
   virtual void EmitGCMemmoveCollectable(CodeGen::CodeGenFunction &CGF,
@@ -2742,10 +2748,12 @@ void CGObjCMac::EmitObjCGlobalAssign(CodeGen::CodeGenFunction &CGF,
 }
 
 /// EmitObjCIvarAssign - Code gen for assigning to a __strong object.
-/// objc_assign_ivar (id src, id *dst)
+/// objc_assign_ivar (id src, id *dst, ptrdiff_t ivaroffset)
 ///
 void CGObjCMac::EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
-                                   llvm::Value *src, llvm::Value *dst) {
+                                   llvm::Value *src, llvm::Value *dst,
+                                   llvm::Value *ivarOffset) {
+  assert(ivarOffset && "EmitObjCIvarAssign - ivarOffset is NULL");
   const llvm::Type * SrcTy = src->getType();
   if (!isa<llvm::PointerType>(SrcTy)) {
     unsigned Size = CGM.getTargetData().getTypeAllocSize(SrcTy);
@@ -2756,8 +2764,8 @@ void CGObjCMac::EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
   }
   src = CGF.Builder.CreateBitCast(src, ObjCTypes.ObjectPtrTy);
   dst = CGF.Builder.CreateBitCast(dst, ObjCTypes.PtrObjectPtrTy);
-  CGF.Builder.CreateCall2(ObjCTypes.getGcAssignIvarFn(),
-                          src, dst, "assignivar");
+  CGF.Builder.CreateCall3(ObjCTypes.getGcAssignIvarFn(),
+                          src, dst, ivarOffset);
   return;
 }
 
@@ -2992,21 +3000,20 @@ llvm::Constant *CGObjCCommonMac::GetIvarLayoutName(IdentifierInfo *Ident,
   return llvm::Constant::getNullValue(ObjCTypes.Int8PtrTy);
 }
 
-static QualType::GCAttrTypes GetGCAttrTypeForType(ASTContext &Ctx,
-                                                  QualType FQT) {
+static Qualifiers::GC GetGCAttrTypeForType(ASTContext &Ctx, QualType FQT) {
   if (FQT.isObjCGCStrong())
-    return QualType::Strong;
+    return Qualifiers::Strong;
 
   if (FQT.isObjCGCWeak())
-    return QualType::Weak;
+    return Qualifiers::Weak;
 
   if (FQT->isObjCObjectPointerType() || FQT->isBlockPointerType())
-    return QualType::Strong;
+    return Qualifiers::Strong;
 
   if (const PointerType *PT = FQT->getAs<PointerType>())
     return GetGCAttrTypeForType(Ctx, PT->getPointeeType());
 
-  return QualType::GCNone;
+  return Qualifiers::GCNone;
 }
 
 void CGObjCCommonMac::BuildAggrIvarRecordLayout(const RecordType *RT,
@@ -3123,11 +3130,11 @@ void CGObjCCommonMac::BuildAggrIvarLayout(const ObjCImplementationDecl *OI,
     }
     // At this point, we are done with Record/Union and array there of.
     // For other arrays we are down to its element type.
-    QualType::GCAttrTypes GCAttr = GetGCAttrTypeForType(CGM.getContext(), FQT);
+    Qualifiers::GC GCAttr = GetGCAttrTypeForType(CGM.getContext(), FQT);
 
     unsigned FieldSize = CGM.getContext().getTypeSize(Field->getType());
-    if ((ForStrongLayout && GCAttr == QualType::Strong)
-        || (!ForStrongLayout && GCAttr == QualType::Weak)) {
+    if ((ForStrongLayout && GCAttr == Qualifiers::Strong)
+        || (!ForStrongLayout && GCAttr == Qualifiers::Weak)) {
       if (IsUnion) {
         uint64_t UnionIvarSize = FieldSize / WordSizeInBits;
         if (UnionIvarSize > MaxUnionIvarSize) {
@@ -3140,8 +3147,8 @@ void CGObjCCommonMac::BuildAggrIvarLayout(const ObjCImplementationDecl *OI,
                                     FieldSize / WordSizeInBits));
       }
     } else if ((ForStrongLayout &&
-                (GCAttr == QualType::GCNone || GCAttr == QualType::Weak))
-               || (!ForStrongLayout && GCAttr != QualType::Weak)) {
+                (GCAttr == Qualifiers::GCNone || GCAttr == Qualifiers::Weak))
+               || (!ForStrongLayout && GCAttr != Qualifiers::Weak)) {
       if (IsUnion) {
         // FIXME: Why the asymmetry? We divide by word size in bits on other
         // side.
@@ -5266,11 +5273,12 @@ llvm::Value *CGObjCNonFragileABIMac::EmitSelector(CGBuilderTy &Builder,
   return Builder.CreateLoad(Entry, false, "tmp");
 }
 /// EmitObjCIvarAssign - Code gen for assigning to a __strong object.
-/// objc_assign_ivar (id src, id *dst)
+/// objc_assign_ivar (id src, id *dst, ptrdiff_t)
 ///
 void CGObjCNonFragileABIMac::EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
                                                 llvm::Value *src,
-                                                llvm::Value *dst) {
+                                                llvm::Value *dst,
+                                                llvm::Value *ivarOffset) {
   const llvm::Type * SrcTy = src->getType();
   if (!isa<llvm::PointerType>(SrcTy)) {
     unsigned Size = CGM.getTargetData().getTypeAllocSize(SrcTy);
@@ -5281,8 +5289,8 @@ void CGObjCNonFragileABIMac::EmitObjCIvarAssign(CodeGen::CodeGenFunction &CGF,
   }
   src = CGF.Builder.CreateBitCast(src, ObjCTypes.ObjectPtrTy);
   dst = CGF.Builder.CreateBitCast(dst, ObjCTypes.PtrObjectPtrTy);
-  CGF.Builder.CreateCall2(ObjCTypes.getGcAssignIvarFn(),
-                          src, dst, "assignivar");
+  CGF.Builder.CreateCall3(ObjCTypes.getGcAssignIvarFn(),
+                          src, dst, ivarOffset);
   return;
 }
 

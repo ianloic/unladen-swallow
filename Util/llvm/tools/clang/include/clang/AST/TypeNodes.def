@@ -51,7 +51,6 @@
 #  define DEPENDENT_TYPE(Class, Base) TYPE(Class, Base)
 #endif
 
-TYPE(ExtQual, Type)
 TYPE(Builtin, Type)
 TYPE(FixedWidthInt, Type)
 TYPE(Complex, Type)
@@ -88,6 +87,7 @@ NON_CANONICAL_TYPE(QualifiedName, Type)
 DEPENDENT_TYPE(Typename, Type)
 TYPE(ObjCInterface, Type)
 TYPE(ObjCObjectPointer, Type)
+NON_CANONICAL_TYPE(ObjCProtocolList, Type)
 
 // These types are always leaves in the type hierarchy.
 #ifdef LEAF_TYPE

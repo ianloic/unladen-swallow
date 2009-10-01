@@ -52,3 +52,22 @@ void test10(void) {
  
   // No warning about falling off the end of a noreturn function.
 }
+
+void test11(int X) {
+  switch (X) {  
+  case __builtin_eh_return_data_regno(0):  // constant foldable.
+    break;
+  }
+
+  __builtin_eh_return_data_regno(X);  // expected-error {{not an integer constant expression}}
+}
+
+// PR5062
+void test12(void) __attribute__((__noreturn__));
+void test12(void) {
+  __builtin_trap();  // no warning because trap is noreturn.
+}
+
+void test_unknown_builtin(int a, int b) {
+  __builtin_foo(a, b); // expected-error{{use of unknown builtin}}
+}

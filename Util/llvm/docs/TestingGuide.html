@@ -625,6 +625,79 @@ define i8 @coerce_offset0(i32 %V, i32* %P) {
 </div>
 
 <!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"><a 
+name="FileCheck-Matching">FileCheck Pattern Matching Syntax</a></div>
+
+<div class="doc_text">
+
+<p>The CHECK: and CHECK-NOT: directives both take a pattern to match.  For most
+uses of FileCheck, fixed string matching is perfectly sufficient.  For some
+things, a more flexible form of matching is desired.  To support this, FileCheck
+allows you to specify regular expressions in matching strings, surrounded by
+double braces: <b>{{yourregex}}</b>.  Because we want to use fixed string
+matching for a majority of what we do, FileCheck has been designed to support
+mixing and matching fixed string matching with regular expressions.  This allows
+you to write things like this:</p>
+
+<div class="doc_code">
+<pre>
+; CHECK: movhpd	<b>{{[0-9]+}}</b>(%esp), <b>{{%xmm[0-7]}}</b>
+</pre>
+</div>
+
+<p>In this case, any offset from the ESP register will be allowed, and any xmm
+register will be allowed.</p>
+
+<p>Because regular expressions are enclosed with double braces, they are
+visually distinct, and you don't need to use escape characters within the double
+braces like you would in C.  In the rare case that you want to match double
+braces explicitly from the input, you can use something ugly like
+<b>{{[{][{]}}</b> as your pattern.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection"><a 
+name="FileCheck-Variables">FileCheck Variables</a></div>
+
+<div class="doc_text">
+
+<p>It is often useful to match a pattern and then verify that it occurs again
+later in the file.  For codegen tests, this can be useful to allow any register,
+but verify that that register is used consistently later.  To do this, FileCheck
+allows named variables to be defined and substituted into patterns.  Here is a
+simple example:</p>
+
+<div class="doc_code">
+<pre>
+; CHECK: test5:
+; CHECK:    notw	<b>[[REGISTER:%[a-z]+]]</b>
+; CHECK:    andw	{{.*}}<b>[[REGISTER]]</b>
+</pre>
+</div>
+
+<p>The first check line matches a regex (<tt>%[a-z]+</tt>) and captures it into
+the variables "REGISTER".  The second line verifies that whatever is in REGISTER
+occurs later in the file after an "andw".  FileCheck variable references are
+always contained in <tt>[[ ]]</tt> pairs, are named, and their names can be
+formed with the regex "<tt>[a-zA-Z][a-zA-Z0-9]*</tt>".  If a colon follows the
+name, then it is a definition of the variable, if not, it is a use.</p>
+
+<p>FileCheck variables can be defined multiple times, and uses always get the
+latest value.  Note that variables are all read at the start of a "CHECK" line
+and are all defined at the end.  This means that if you have something like
+"<tt>CHECK: [[XYZ:.*]]x[[XYZ]]</tt>" that the check line will read the previous
+value of the XYZ variable and define a new one after the match is performed.  If
+you need to do something like this you can probably take advantage of the fact
+that FileCheck is not actually line-oriented when it matches, this allows you to
+define two separate CHECK lines that match on the same line.
+</p>
+
+
+
+</div>
+
+<!-- _______________________________________________________________________ -->
 <div class="doc_subsection"><a name="dgvars">Variables and
 substitutions</a></div>
 <!-- _______________________________________________________________________ -->
@@ -1144,7 +1217,7 @@ know. Thanks!</p>
 
   John T. Criswell, Reid Spencer, and Tanya Lattner<br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-09-20 15:45:18 -0700 (Sun, 20 Sep 2009) $
+  Last modified: $Date: 2009-09-27 01:01:44 -0700 (Sun, 27 Sep 2009) $
 </address>
 </body>
 </html>

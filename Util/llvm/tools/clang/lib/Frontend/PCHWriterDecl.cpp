@@ -14,7 +14,7 @@
 #include "clang/Frontend/PCHWriter.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/Expr.h"
-#include "clang/AST/TypeLoc.h"
+#include "clang/AST/TypeLocVisitor.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include <cstdio>
 
@@ -176,6 +176,15 @@ void TypeLocWriter::VisitDefaultTypeSpecLoc(DefaultTypeSpecLoc TyLoc) {
 }
 void TypeLocWriter::VisitTypedefLoc(TypedefLoc TyLoc) {
   Writer.AddSourceLocation(TyLoc.getNameLoc(), Record);
+}
+void TypeLocWriter::VisitObjCInterfaceLoc(ObjCInterfaceLoc TyLoc) {
+  Writer.AddSourceLocation(TyLoc.getNameLoc(), Record);
+}
+void TypeLocWriter::VisitObjCProtocolListLoc(ObjCProtocolListLoc TyLoc) {
+  Writer.AddSourceLocation(TyLoc.getLAngleLoc(), Record);
+  Writer.AddSourceLocation(TyLoc.getRAngleLoc(), Record);
+  for (unsigned i = 0, e = TyLoc.getNumProtocols(); i != e; ++i)
+    Writer.AddSourceLocation(TyLoc.getProtocolLoc(i), Record);
 }
 void TypeLocWriter::VisitPointerLoc(PointerLoc TyLoc) {
   Writer.AddSourceLocation(TyLoc.getStarLoc(), Record);

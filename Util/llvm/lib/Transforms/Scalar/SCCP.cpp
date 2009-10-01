@@ -30,7 +30,6 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/MallocHelper.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/CallSite.h"
@@ -402,10 +401,7 @@ private:
   void visitLoadInst      (LoadInst &I);
   void visitGetElementPtrInst(GetElementPtrInst &I);
   void visitCallInst      (CallInst &I) { 
-    if (isMalloc(&I))
-      markOverdefined(&I);
-    else
-      visitCallSite(CallSite::get(&I));
+    visitCallSite(CallSite::get(&I));
   }
   void visitInvokeInst    (InvokeInst &II) {
     visitCallSite(CallSite::get(&II));
@@ -1267,6 +1263,10 @@ CallOverdefined:
   for (Function::arg_iterator AI = F->arg_begin(), E = F->arg_end();
        AI != E; ++AI, ++CAI) {
     LatticeVal &IV = ValueState[AI];
+    if (AI->hasByValAttr() && !F->onlyReadsMemory()) {
+      IV.markOverdefined();
+      continue;
+    }
     if (!IV.isOverdefined())
       mergeInValue(IV, AI, getValueState(*CAI));
   }

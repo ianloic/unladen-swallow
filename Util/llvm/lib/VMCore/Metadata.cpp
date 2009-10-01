@@ -259,17 +259,40 @@ NamedMDNode::~NamedMDNode() {
 
 /// RegisterMDKind - Register a new metadata kind and return its ID.
 /// A metadata kind can be registered only once. 
-MDKindID Metadata::RegisterMDKind(const char *Name) {
-  MDKindID Count = MDHandlerNames.size();
-  StringMap<unsigned>::iterator I = MDHandlerNames.find(Name);
-  assert(I == MDHandlerNames.end() && "Already registered MDKind!");
+unsigned MetadataContext::RegisterMDKind(const char *Name) {
+  assert (validName(Name) && "Invalid custome metadata name!");
+  unsigned Count = MDHandlerNames.size();
+  assert(MDHandlerNames.find(Name) == MDHandlerNames.end() 
+         && "Already registered MDKind!");
   MDHandlerNames[Name] = Count + 1;
   return Count + 1;
 }
 
+/// validName - Return true if Name is a valid custom metadata handler name.
+bool MetadataContext::validName(const char *Name) {
+  if (!Name)
+    return false;
+
+  if (!isalpha(*Name))
+    return false;
+
+  unsigned Length = strlen(Name);  
+  unsigned Count = 1;
+  ++Name;
+  while (Name &&
+         (isalnum(*Name) || *Name == '_' || *Name == '-' || *Name == '.')) {
+    ++Name;
+    ++Count;
+  }
+  if (Length != Count)
+    return false;
+  return true;
+}
+
 /// getMDKind - Return metadata kind. If the requested metadata kind
 /// is not registered then return 0.
-MDKindID Metadata::getMDKind(const char *Name) {
+unsigned MetadataContext::getMDKind(const char *Name) {
+  assert (validName(Name) && "Invalid custome metadata name!");
   StringMap<unsigned>::iterator I = MDHandlerNames.find(Name);
   if (I == MDHandlerNames.end())
     return 0;
@@ -277,39 +300,82 @@ MDKindID Metadata::getMDKind(const char *Name) {
   return I->getValue();
 }
 
-/// setMD - Attach the metadata of given kind with an Instruction.
-void Metadata::setMD(MDKindID MDKind, MDNode *Node, Instruction *Inst) {
-  MDStoreTy::iterator I = MetadataStore.find(Inst);
+/// addMD - Attach the metadata of given kind with an Instruction.
+void MetadataContext::addMD(unsigned MDKind, MDNode *Node, Instruction *Inst) {
+  assert (Node && "Unable to add custome metadata");
   Inst->HasMetadata = true;
+  MDStoreTy::iterator I = MetadataStore.find(Inst);
   if (I == MetadataStore.end()) {
     MDMapTy Info;
     Info.push_back(std::make_pair(MDKind, Node));
     MetadataStore.insert(std::make_pair(Inst, Info));
     return;
   }
-  
+
   MDMapTy &Info = I->second;
+  // If there is an entry for this MDKind then replace it.
+  for (unsigned i = 0, e = Info.size(); i != e; ++i) {
+    MDPairTy &P = Info[i];
+    if (P.first == MDKind) {
+      Info[i] = std::make_pair(MDKind, Node);
+      return;
+    }
+  }
+
+  // Otherwise add a new entry.
   Info.push_back(std::make_pair(MDKind, Node));
   return;
 }
 
-/// getMD - Get the metadata of given kind attached with an Instruction.
-/// If the metadata is not found then return 0.
-MDNode *Metadata::getMD(MDKindID MDKind, const Instruction *Inst) {
-  MDNode *Node = NULL;
+/// removeMD - Remove metadata of given kind attached with an instuction.
+void MetadataContext::removeMD(unsigned Kind, Instruction *Inst) {
   MDStoreTy::iterator I = MetadataStore.find(Inst);
   if (I == MetadataStore.end())
-    return Node;
+    return;
+
+  MDMapTy &Info = I->second;
+  for (MDMapTy::iterator MI = Info.begin(), ME = Info.end(); MI != ME; ++MI) {
+    MDPairTy &P = *MI;
+    if (P.first == Kind) {
+      Info.erase(MI);
+      return;
+    }
+  }
+
+  return;
+}
+  
+/// removeMDs - Remove all metadata attached with an instruction.
+void MetadataContext::removeMDs(const Instruction *Inst) {
+  // Find Metadata handles for this instruction.
+  MDStoreTy::iterator I = MetadataStore.find(Inst);
+  assert (I != MetadataStore.end() && "Invalid custom metadata info!");
+  MDMapTy &Info = I->second;
+  
+  // FIXME : Give all metadata handlers a chance to adjust.
+  
+  // Remove the entries for this instruction.
+  Info.clear();
+  MetadataStore.erase(I);
+}
+
+
+/// getMD - Get the metadata of given kind attached with an Instruction.
+/// If the metadata is not found then return 0.
+MDNode *MetadataContext::getMD(unsigned MDKind, const Instruction *Inst) {
+  MDStoreTy::iterator I = MetadataStore.find(Inst);
+  if (I == MetadataStore.end())
+    return NULL;
   
   MDMapTy &Info = I->second;
   for (MDMapTy::iterator I = Info.begin(), E = Info.end(); I != E; ++I)
     if (I->first == MDKind)
-      Node = dyn_cast_or_null<MDNode>(I->second);
-  return Node;
+      return dyn_cast_or_null<MDNode>(I->second);
+  return NULL;
 }
 
 /// getMDs - Get the metadata attached with an Instruction.
-const Metadata::MDMapTy *Metadata::getMDs(const Instruction *Inst) {
+const MetadataContext::MDMapTy *MetadataContext::getMDs(const Instruction *Inst) {
   MDStoreTy::iterator I = MetadataStore.find(Inst);
   if (I == MetadataStore.end())
     return NULL;
@@ -319,22 +385,22 @@ const Metadata::MDMapTy *Metadata::getMDs(const Instruction *Inst) {
 
 /// getHandlerNames - Get handler names. This is used by bitcode
 /// writer.
-const StringMap<unsigned> *Metadata::getHandlerNames() {
+const StringMap<unsigned> *MetadataContext::getHandlerNames() {
   return &MDHandlerNames;
 }
 
-/// ValueIsDeleted - This handler is used to update metadata store
-/// when a value is deleted.
-void Metadata::ValueIsDeleted(const Instruction *Inst) {
-  // Find Metadata handles for this instruction.
-  MDStoreTy::iterator I = MetadataStore.find(Inst);
-  if (I == MetadataStore.end())
-    return;
-  MDMapTy &Info = I->second;
-  
+/// ValueIsCloned - This handler is used to update metadata store
+/// when In1 is cloned to create In2.
+void MetadataContext::ValueIsCloned(const Instruction *In1, Instruction *In2) {
+  // Find Metadata handles for In1.
+  MDStoreTy::iterator I = MetadataStore.find(In1);
+  assert (I != MetadataStore.end() && "Invalid custom metadata info!");
+
   // FIXME : Give all metadata handlers a chance to adjust.
-  
-  // Remove the entries for this instruction.
-  Info.clear();
-  MetadataStore.erase(Inst);
+
+  MDMapTy &In1Info = I->second;
+  MDMapTy In2Info;
+  for (MDMapTy::iterator I = In1Info.begin(), E = In1Info.end(); I != E; ++I)
+    if (MDNode *MD = dyn_cast_or_null<MDNode>(I->second))
+      addMD(I->first, MD, In2);
 }
