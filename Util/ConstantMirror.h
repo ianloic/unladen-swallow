@@ -11,7 +11,7 @@
 #include "llvm/ADT/StringRef.h"
 #include <string>
 
-class PyGlobalLlvmData;
+struct PyGlobalLlvmData;
 
 namespace llvm {
 class Constant;

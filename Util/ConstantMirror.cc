@@ -305,9 +305,9 @@ PyConstantMirror::ConstantFromMemory(const Type *type, const void *memory) const
         const uint64_t element_size =
             this->target_data_.getTypeAllocSize(element_type);
         std::vector<Constant*> contents;
-        contents.reserve(array_type->getNumElements());
+        contents.reserve((size_t)array_type->getNumElements());
         const char *const cmemory = static_cast<const char*>(memory);
-        for (unsigned i = 0, end = array_type->getNumElements();
+        for (uint64_t i = 0, end = array_type->getNumElements();
              i < end; ++i) {
             uint64_t offset = i * element_size;
             contents.push_back(
@@ -344,6 +344,8 @@ PyConstantMirror::ConstantFromMemory(const Type *type, const void *memory) const
     raw_string_ostream(type_dump)
         << "Can't emit type " << type << " to memory.";
     Py_FatalError(type_dump.c_str());
+    /* NOTREACHED */
+    return NULL;
 }
 
 // This can only be allocated by new, and it deletes itself when the

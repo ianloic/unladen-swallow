@@ -9,6 +9,6 @@
 #include "llvm/Pass.h"
 
 // Implements Python-specific aliasing rules.
-llvm::Pass *CreatePyAliasAnalysis(class PyGlobalLlvmData &global_data);
+llvm::Pass *CreatePyAliasAnalysis(struct PyGlobalLlvmData &global_data);
 
 #endif  // UTIL_ALIASANALYSIS_H
