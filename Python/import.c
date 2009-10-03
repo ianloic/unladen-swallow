@@ -80,9 +80,10 @@ extern time_t PyOS_GetLastModificationTime(char *, FILE *);
 			             introduce POP_JUMP_IF_FALSE and
                                      POP_JUMP_IF_TRUE)
        Unladen Swallow 2009Q2: 62211 (undo vmgen-based opcodes)
+       Unladen Swallow 2009Q3: 62221 (add CO_USES_EXEC flag)
 .
 */
-#define MAGIC (62211 | ((long)'\r'<<16) | ((long)'\n'<<24))
+#define MAGIC (62221 | ((long)'\r'<<16) | ((long)'\n'<<24))
 
 /* Magic word as global; note that _PyImport_Init() can change the
    value of this global to accommodate for alterations of how the
