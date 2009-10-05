@@ -1791,7 +1791,12 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
         MethodDefTy::ml_meth(this->builder_, actual_method_def),
         "CALL_FUNCTION_actual_func_ptr");
     Value *is_same = this->builder_.CreateICmpEQ(
-        llvm_func,
+        // TODO(jyasskin): change this to "llvm_func" when
+        // http://llvm.org/PR5126 is fixed.
+        this->builder_.CreateIntToPtr(
+            ConstantInt::get(Type::getInt64Ty(this->context_),
+                             reinterpret_cast<intptr_t>(cfunc_ptr)),
+            actual_func_ptr->getType()),
         actual_func_ptr);
     this->builder_.CreateCondBr(is_same,
         all_assumptions_valid, invalid_assumptions);
