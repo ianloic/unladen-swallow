@@ -54,14 +54,7 @@ _PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
    TODO(collinwinter): tune this. */
 #define Py_HOT_OR_NOT(call_count) ((call_count) % 10000 == 0)
 
-/* #define Py_PROFILE_HOTNESS
-   Define this if you want stats on how many pure-Python functions were judged
-   hot. This will keep track of how many times each hot function (as determined
-   by Py_HOT_OR_NOT) was called; cold functions will not be counted. The sorted
-   breakdown will be shown at interpreter-shutdown.
-   TODO(collinwinter): add hotness stats over time.
-   */
-#ifdef Py_PROFILE_HOTNESS
+#ifdef Py_WITH_INSTRUMENTATION
 class HotnessTracker {
 	// llvm::DenseSet or llvm::SmallPtrSet may be better, but as of this
 	// writing, they don't seem to work with std::vector.
@@ -85,7 +78,7 @@ compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
 
 HotnessTracker::~HotnessTracker()
 {
-	printf("%d code objects deemed hot\n", this->hot_code_.size());
+	printf("\n%zd code objects deemed hot\n", this->hot_code_.size());
 
 	printf("Code call counts:\n");
 	std::vector<PyCodeObject*> to_sort(this->hot_code_.begin(),
@@ -102,9 +95,8 @@ HotnessTracker::~HotnessTracker()
 }
 
 static llvm::ManagedStatic<HotnessTracker> hot_code;
-#endif
 
-#ifdef Py_WITH_INSTRUMENTATION
+
 // Keep track of which functions failed fatal guards, but kept being called.
 // This can help gauge the efficacy of optimizations that involve fatal guards.
 class FatalBailTracker {
@@ -4032,7 +4024,7 @@ mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 	}
 
 	if (Py_HOT_OR_NOT(co->co_callcount)) {
-#ifdef Py_PROFILE_HOTNESS
+#ifdef Py_WITH_INSTRUMENTATION
 		hot_code->AddHotCode(co);
 #endif
 		if (Py_JitControl == PY_JIT_WHENHOT)

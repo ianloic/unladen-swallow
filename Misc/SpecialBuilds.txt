@@ -18,17 +18,12 @@ collected:
 - How many machine code functions were invalidated by each change to
   globals/builtins dicts.
 - Stats on how well LLVM was able to optimize CALL_FUNCTION opcodes.
+- Stats on which functions were deemed hot, and how hot they were; cold
+  functions will not be shown.
 
 This data will be printed to stderr at interpreter-shutdown.
 
 This build currently requires --with-llvm.
----------------------------------------------------------------------------
-Py_PROFILE_HOTNESS                     introduced in Unladen Swallow 2009Q2
-
-Define this if you want stats on how many pure-Python functions were judged
-hot. This will keep track of how many times each hot function (as determined
-by Py_HOT_OR_NOT) was called; cold functions will not be shown. The sorted
-breakdown will be shown at interpreter-shutdown.
 ---------------------------------------------------------------------------
 Py_REF_DEBUG                                              introduced in 1.4
                                                  named REF_DEBUG before 1.4
