@@ -28,6 +28,11 @@
 
 #include <vector>
 
+#ifndef DW_LANG_Python
+// Python has an official ID number in the draft Dwarf4 spec.
+#define DW_LANG_Python 0x0014
+#endif
+
 struct PyExcInfo;
 
 namespace Intrinsic = llvm::Intrinsic;
@@ -139,8 +144,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
       debug_info_(llvm_data->DebugInfo()),
       debug_compile_unit_(this->debug_info_ == NULL ? llvm::DICompileUnit() :
                           this->debug_info_->CreateCompileUnit(
-                              // 'py' in hex is 0x7079.
-                              llvm::dwarf::DW_LANG_lo_user + 0x7079,
+                              DW_LANG_Python,
                               pystring_to_std_string(code_object->co_filename),
                               "",  // Directory
                               "Unladen Swallow 2.6.1",
