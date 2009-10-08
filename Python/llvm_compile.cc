@@ -6,99 +6,14 @@
 #include "global_llvm_data.h"
 #include "opcode.h"
 
+#include "Util/PyBytecodeIterator.h"
+
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/BasicBlock.h"
 
 
 using llvm::BasicBlock;
-
-class BytecodeIterator {
-public:
-    // Initializes the iterator to point to the first opcode in the
-    // bytecode string.
-    BytecodeIterator(PyObject *bytecode_string);
-    // Allow the default copy operations.
-
-    int Opcode() const { return this->opcode_; }
-    int Oparg() const { return this->oparg_; }
-    size_t CurIndex() const { return this->cur_index_; }
-    size_t NextIndex() const { return this->next_index_; }
-    bool Done() const { return this->cur_index_ == this->bytecode_size_; }
-    bool Error() const { return this->error_; }
-
-    // Advances the iterator by one opcode, including the effect of
-    // any EXTENDED_ARG opcode in the way.  If there is an
-    // EXTENDED_ARG, this->CurIndex() will point to it rather than the
-    // actual opcode, since that's where jumps land.  If the bytecode
-    // is malformed, this will set a Python error and cause
-    // this->Error() to return true.
-    void Advance();
-
-private:
-    int opcode_;
-    int oparg_;
-    size_t cur_index_;
-    size_t next_index_;
-    bool error_;
-    const unsigned char *const bytecode_str_;
-    const size_t bytecode_size_;
-};
-
-BytecodeIterator::BytecodeIterator(PyObject *bytecode_string)
-    : error_(false),
-      bytecode_str_((unsigned char *)PyString_AS_STRING(bytecode_string)),
-      bytecode_size_(PyString_GET_SIZE(bytecode_string))
-{
-    assert(PyString_Check(bytecode_string) &&
-           "Argument to BytecodeIterator() must be a Python string.");
-    this->next_index_ = 0;
-    // Take advantage of the implementation of Advance() to fill in
-    // the other fields.
-    this->Advance();
-}
-
-void
-BytecodeIterator::Advance()
-{
-    this->cur_index_ = this->next_index_;
-    if (this->Done()) {
-        return;
-    }
-    this->opcode_ = this->bytecode_str_[this->cur_index_];
-    this->next_index_++;
-    if (HAS_ARG(this->opcode_)) {
-        if (this->next_index_ + 1 >= this->bytecode_size_) {
-            PyErr_SetString(PyExc_SystemError,
-                            "Argument fell off the end of the bytecode");
-            this->error_ = true;
-            return;
-        }
-        this->oparg_ = (this->bytecode_str_[this->next_index_] |
-                        this->bytecode_str_[this->next_index_ + 1] << 8);
-        this->next_index_ += 2;
-        if (this->opcode_ == EXTENDED_ARG) {
-            if (this->next_index_ + 2 >= this->bytecode_size_) {
-                PyErr_SetString(
-                    PyExc_SystemError,
-                    "EXTENDED_ARG fell off the end of the bytecode");
-                this->error_ = true;
-                return;
-            }
-            this->opcode_ = this->bytecode_str_[this->next_index_];
-            if (!HAS_ARG(this->opcode_)) {
-                PyErr_SetString(PyExc_SystemError,
-                                "Opcode after EXTENDED_ARG must take argument");
-                this->error_ = true;
-                return;
-            }
-            this->oparg_ <<= 16;
-            this->oparg_ |= (this->bytecode_str_[this->next_index_ + 1] |
-                             this->bytecode_str_[this->next_index_ + 2] << 8);
-            this->next_index_ += 3;
-        }
-    }
-}
 
 struct InstrInfo {
     InstrInfo() : line_number_(0), block_(NULL), backedge_block_(NULL) {}
@@ -162,7 +77,7 @@ find_basic_blocks(PyObject *bytecode, py::LlvmFunctionBuilder &fbuilder,
     assert(PyString_Check(bytecode) && "Expected bytecode string");
     assert(instr_info.size() == (size_t)PyString_GET_SIZE(bytecode) &&
            "instr_info indices must match bytecode indices.");
-    BytecodeIterator iter(bytecode);
+    PyBytecodeIterator iter(bytecode);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
         size_t target_index;
         const char *target_name;
@@ -272,7 +187,7 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
         return NULL;
     }
 
-    BytecodeIterator iter(code->co_code);
+    PyBytecodeIterator iter(code->co_code);
     for (; !iter.Done() && !iter.Error(); iter.Advance()) {
         fbuilder.SetLasti(iter.CurIndex());
         if (instr_info[iter.CurIndex()].block_ != NULL) {
