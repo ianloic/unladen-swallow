@@ -244,6 +244,12 @@ _PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int new_opt_level)
 			     new_opt_level);
 		return -1;
 	}
+	/* Large functions take a very long time to translate to LLVM
+	   IR, optimize, and JIT, so we just keep them in the
+	   interpreter. */
+	if (PyString_GET_SIZE(code->co_code) > 5000) {
+		return 1;
+	}
 	// The exec statement wants to mess with the frame object in
 	// ways that can inhibit optimizations (or make them harder to
 	// implement), so we refuse to optimize code objects that use
