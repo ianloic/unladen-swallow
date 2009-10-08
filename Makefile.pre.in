@@ -481,7 +481,7 @@ sharedmods: $(BUILDPYTHON)
 # merging them into libpythonX.Y.a.
 $(LIBRARY): $(LIBRARY_OBJS)
 	-rm -rf $@ $@-objs
-	$(AR) cr $@ Modules/getbuildinfo.o
+	$(AR) cqS $@ Modules/getbuildinfo.o
 	if test @BUILD_LLVM@ != disabled; then \
 		export OUR_PWD=$(OUR_PWD); \
 		mkdir $@-objs; \
@@ -489,14 +489,14 @@ $(LIBRARY): $(LIBRARY_OBJS)
 		for lib in $(LLVMLIBS) ; do \
 			$(AR) x $${OUR_PWD}$(LLVM_LIB_DIR)/lib$$lib.a; \
 		done); \
-		$(AR) cr $@ $@-objs/*.o; \
+		$(AR) cqS $@ $@-objs/*.o; \
 		rm -fr $@-objs; \
 	fi
-	$(AR) cr $@ $(PARSER_OBJS)
-	$(AR) cr $@ $(OBJECT_OBJS)
-	$(AR) cr $@ $(PYTHON_OBJS)
-	$(AR) cr $@ $(MODULE_OBJS) $(SIGNAL_OBJS)
-	$(AR) cr $@ $(MODOBJS)
+	$(AR) cqS $@ $(PARSER_OBJS)
+	$(AR) cqS $@ $(OBJECT_OBJS)
+	$(AR) cqS $@ $(PYTHON_OBJS)
+	$(AR) cqS $@ $(MODULE_OBJS) $(SIGNAL_OBJS)
+	$(AR) cqS $@ $(MODOBJS)
 	$(RANLIB) $@
 
 libpython$(VERSION).so: $(LIBRARY_OBJS)
