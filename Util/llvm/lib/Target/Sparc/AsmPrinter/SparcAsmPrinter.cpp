@@ -119,18 +119,17 @@ bool SparcAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
       // Print the assembly for the instruction.
-      processDebugLoc(II->getDebugLoc());
+      processDebugLoc(II, true);
       printInstruction(II);
       
       if (VerboseAsm && !II->getDebugLoc().isUnknown())
         EmitComments(*II);
       O << '\n';
-      
+      processDebugLoc(II, false);
       ++EmittedInsts;
     }
   }

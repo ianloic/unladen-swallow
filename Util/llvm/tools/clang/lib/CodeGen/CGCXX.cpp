@@ -135,7 +135,7 @@ CodeGenFunction::EmitStaticCXXBlockVarDeclInit(const VarDecl &D,
 
   llvm::SmallString<256> GuardVName;
   llvm::raw_svector_ostream GuardVOut(GuardVName);
-  mangleGuardVariable(&D, getContext(), GuardVOut);
+  mangleGuardVariable(CGM.getMangleContext(), &D, GuardVOut);
 
   // Create the guard variable.
   llvm::GlobalValue *GuardV =
@@ -199,6 +199,9 @@ RValue CodeGenFunction::EmitCXXMemberCall(const CXXMethodDecl *MD,
 }
 
 RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE) {
+  if (isa<BinaryOperator>(CE->getCallee())) 
+    return EmitCXXMemberPointerCallExpr(CE);
+      
   const MemberExpr *ME = cast<MemberExpr>(CE->getCallee());
   const CXXMethodDecl *MD = cast<CXXMethodDecl>(ME->getMemberDecl());
 
@@ -239,6 +242,112 @@ RValue CodeGenFunction::EmitCXXMemberCallExpr(const CXXMemberCallExpr *CE) {
 
   return EmitCXXMemberCall(MD, Callee, This,
                            CE->arg_begin(), CE->arg_end());
+}
+
+RValue
+CodeGenFunction::EmitCXXMemberPointerCallExpr(const CXXMemberCallExpr *E) {
+  const BinaryOperator *BO = cast<BinaryOperator>(E->getCallee());
+  const DeclRefExpr *BaseExpr = cast<DeclRefExpr>(BO->getLHS());
+  const DeclRefExpr *MemFn = cast<DeclRefExpr>(BO->getRHS());
+  
+  const MemberPointerType *MPT = MemFn->getType()->getAs<MemberPointerType>();
+  const FunctionProtoType *FPT = 
+    MPT->getPointeeType()->getAs<FunctionProtoType>();
+  const CXXRecordDecl *RD = 
+    cast<CXXRecordDecl>(cast<RecordType>(MPT->getClass())->getDecl());
+
+  const llvm::FunctionType *FTy = 
+    CGM.getTypes().GetFunctionType(CGM.getTypes().getFunctionInfo(RD, FPT),
+                                   FPT->isVariadic());
+
+  const llvm::Type *Int8PtrTy = 
+    llvm::Type::getInt8Ty(VMContext)->getPointerTo();
+
+  // Get the member function pointer.
+  llvm::Value *MemFnPtr = 
+    CreateTempAlloca(ConvertType(MemFn->getType()), "mem.fn");
+  EmitAggExpr(MemFn, MemFnPtr, /*VolatileDest=*/false);
+
+  // Emit the 'this' pointer.
+  llvm::Value *This;
+  
+  if (BO->getOpcode() == BinaryOperator::PtrMemI)
+    This = EmitScalarExpr(BaseExpr);
+  else 
+    This = EmitLValue(BaseExpr).getAddress();
+  
+  // Adjust it.
+  llvm::Value *Adj = Builder.CreateStructGEP(MemFnPtr, 1);
+  Adj = Builder.CreateLoad(Adj, "mem.fn.adj");
+  
+  llvm::Value *Ptr = Builder.CreateBitCast(This, Int8PtrTy, "ptr");
+  Ptr = Builder.CreateGEP(Ptr, Adj, "adj");
+  
+  This = Builder.CreateBitCast(Ptr, This->getType(), "this");
+  
+  llvm::Value *FnPtr = Builder.CreateStructGEP(MemFnPtr, 0, "mem.fn.ptr");
+  
+  const llvm::Type *PtrDiffTy = ConvertType(getContext().getPointerDiffType());
+
+  llvm::Value *FnAsInt = Builder.CreateLoad(FnPtr, "fn");
+  
+  // If the LSB in the function pointer is 1, the function pointer points to
+  // a virtual function.
+  llvm::Value *IsVirtual 
+    = Builder.CreateAnd(FnAsInt, llvm::ConstantInt::get(PtrDiffTy, 1),
+                        "and");
+  
+  IsVirtual = Builder.CreateTrunc(IsVirtual,
+                                  llvm::Type::getInt1Ty(VMContext));
+  
+  llvm::BasicBlock *FnVirtual = createBasicBlock("fn.virtual");
+  llvm::BasicBlock *FnNonVirtual = createBasicBlock("fn.nonvirtual");
+  llvm::BasicBlock *FnEnd = createBasicBlock("fn.end");
+  
+  Builder.CreateCondBr(IsVirtual, FnVirtual, FnNonVirtual);
+  EmitBlock(FnVirtual);
+  
+  const llvm::Type *VTableTy = 
+    FTy->getPointerTo()->getPointerTo()->getPointerTo();
+
+  llvm::Value *VTable = Builder.CreateBitCast(This, VTableTy);
+  VTable = Builder.CreateLoad(VTable);
+  
+  VTable = Builder.CreateGEP(VTable, FnAsInt, "fn");
+  
+  // Since the function pointer is 1 plus the virtual table offset, we
+  // subtract 1 by using a GEP.
+  VTable = Builder.CreateConstGEP1_64(VTable, -1);
+  
+  llvm::Value *VirtualFn = Builder.CreateLoad(VTable, "virtualfn");
+  
+  EmitBranch(FnEnd);
+  EmitBlock(FnNonVirtual);
+  
+  // If the function is not virtual, just load the pointer.
+  llvm::Value *NonVirtualFn = Builder.CreateLoad(FnPtr, "fn");
+  NonVirtualFn = Builder.CreateIntToPtr(NonVirtualFn, FTy->getPointerTo());
+  
+  EmitBlock(FnEnd);
+
+  llvm::PHINode *Callee = Builder.CreatePHI(FTy->getPointerTo());
+  Callee->reserveOperandSpace(2);
+  Callee->addIncoming(VirtualFn, FnVirtual);
+  Callee->addIncoming(NonVirtualFn, FnNonVirtual);
+
+  CallArgList Args;
+
+  QualType ThisType = 
+    getContext().getPointerType(getContext().getTagDeclType(RD));
+
+  // Push the this ptr.
+  Args.push_back(std::make_pair(RValue::get(This), ThisType));
+  
+  // And the rest of the call args
+  EmitCallArgs(Args, FPT, E->arg_begin(), E->arg_end());
+  QualType ResultType = BO->getType()->getAs<FunctionType>()->getResultType();
+  return EmitCall(CGM.getTypes().getFunctionInfo(ResultType, Args),
+                  Callee, Args, 0);
 }
 
 RValue
@@ -498,7 +607,7 @@ const char *CodeGenModule::getMangledCXXCtorName(const CXXConstructorDecl *D,
                                                  CXXCtorType Type) {
   llvm::SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
-  mangleCXXCtor(D, Type, Context, Out);
+  mangleCXXCtor(getMangleContext(), D, Type, Out);
 
   Name += '\0';
   return UniqueMangledName(Name.begin(), Name.end());
@@ -534,7 +643,7 @@ const char *CodeGenModule::getMangledCXXDtorName(const CXXDestructorDecl *D,
                                                  CXXDtorType Type) {
   llvm::SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
-  mangleCXXDtor(D, Type, Context, Out);
+  mangleCXXDtor(getMangleContext(), D, Type, Out);
 
   Name += '\0';
   return UniqueMangledName(Name.begin(), Name.end());
@@ -552,7 +661,7 @@ llvm::Constant *CodeGenModule::GenerateRtti(const CXXRecordDecl *RD) {
   llvm::raw_svector_ostream Out(OutName);
   QualType ClassTy;
   ClassTy = getContext().getTagDeclType(RD);
-  mangleCXXRtti(ClassTy, getContext(), Out);
+  mangleCXXRtti(getMangleContext(), ClassTy, Out);
   llvm::GlobalVariable::LinkageTypes linktype;
   linktype = llvm::GlobalValue::WeakAnyLinkage;
   std::vector<llvm::Constant *> info;
@@ -673,8 +782,8 @@ public:
       return i->second;
     // FIXME: temporal botch, is this data here, by the time we need it?
 
-    // FIXME: Locate the containing virtual base first.
-    return 42;
+    assert(false && "FIXME: Locate the containing virtual base first");
+    return 0;
   }
 
   bool OverrideMethod(const CXXMethodDecl *MD, llvm::Constant *m,
@@ -779,12 +888,26 @@ public:
       const CXXRecordDecl *RD = i->first;
       int64_t Offset = i->second;
       for (method_iter mi = RD->method_begin(), me = RD->method_end(); mi != me;
-           ++mi)
-        if (mi->isVirtual()) {
-          const CXXMethodDecl *MD = *mi;
-          llvm::Constant *m = wrap(CGM.GetAddrOfFunction(MD));
-          OverrideMethod(MD, m, MorallyVirtual, Offset);
+           ++mi) {
+        if (!mi->isVirtual())
+          continue;
+
+        const CXXMethodDecl *MD = *mi;
+        llvm::Constant *m = 0;
+        if (const CXXDestructorDecl *Dtor = dyn_cast<CXXDestructorDecl>(MD))
+          m = wrap(CGM.GetAddrOfCXXDestructor(Dtor, Dtor_Complete));
+        else {
+          const FunctionProtoType *FPT = 
+            MD->getType()->getAs<FunctionProtoType>();
+          const llvm::Type *Ty =
+            CGM.getTypes().GetFunctionType(CGM.getTypes().getFunctionInfo(MD),
+                                           FPT->isVariadic());
+          
+          m = wrap(CGM.GetAddrOfFunction(MD, Ty));
         }
+
+        OverrideMethod(MD, m, MorallyVirtual, Offset);
+      }
     }
   }
 
@@ -792,9 +915,15 @@ public:
     llvm::Constant *m = 0;
     if (const CXXDestructorDecl *Dtor = dyn_cast<CXXDestructorDecl>(MD))
       m = wrap(CGM.GetAddrOfCXXDestructor(Dtor, Dtor_Complete));
-    else
-      m = wrap(CGM.GetAddrOfFunction(MD));
-
+    else {
+      const FunctionProtoType *FPT = MD->getType()->getAs<FunctionProtoType>();
+      const llvm::Type *Ty =
+        CGM.getTypes().GetFunctionType(CGM.getTypes().getFunctionInfo(MD),
+                                       FPT->isVariadic());
+      
+      m = wrap(CGM.GetAddrOfFunction(MD, Ty));
+    }
+    
     // If we can find a previously allocated slot for this, reuse it.
     if (OverrideMethod(MD, m, MorallyVirtual, Offset))
       return;
@@ -1058,7 +1187,7 @@ llvm::Value *CodeGenFunction::GenerateVtable(const CXXRecordDecl *RD) {
   llvm::raw_svector_ostream Out(OutName);
   QualType ClassTy;
   ClassTy = getContext().getTagDeclType(RD);
-  mangleCXXVtable(ClassTy, getContext(), Out);
+  mangleCXXVtable(CGM.getMangleContext(), ClassTy, Out);
   llvm::GlobalVariable::LinkageTypes linktype;
   linktype = llvm::GlobalValue::WeakAnyLinkage;
   std::vector<llvm::Constant *> methods;
@@ -1156,7 +1285,7 @@ llvm::Constant *CodeGenModule::BuildThunk(const CXXMethodDecl *MD, bool Extern,
                                           int64_t nv, int64_t v) {
   llvm::SmallString<256> OutName;
   llvm::raw_svector_ostream Out(OutName);
-  mangleThunk(MD, nv, v, getContext(), Out);
+  mangleThunk(getMangleContext(), MD, nv, v, Out);
   llvm::GlobalVariable::LinkageTypes linktype;
   linktype = llvm::GlobalValue::WeakAnyLinkage;
   if (!Extern)
@@ -1181,7 +1310,7 @@ llvm::Constant *CodeGenModule::BuildCovariantThunk(const CXXMethodDecl *MD,
                                                    int64_t v_r) {
   llvm::SmallString<256> OutName;
   llvm::raw_svector_ostream Out(OutName);
-  mangleCovariantThunk(MD, nv_t, v_t, nv_r, v_r, getContext(), Out);
+  mangleCovariantThunk(getMangleContext(), MD, nv_t, v_t, nv_r, v_r, Out);
   llvm::GlobalVariable::LinkageTypes linktype;
   linktype = llvm::GlobalValue::WeakAnyLinkage;
   if (!Extern)
@@ -1202,25 +1331,59 @@ llvm::Constant *CodeGenModule::BuildCovariantThunk(const CXXMethodDecl *MD,
 }
 
 llvm::Value *
+CodeGenFunction::GetVirtualCXXBaseClassOffset(llvm::Value *This,
+                                              const CXXRecordDecl *ClassDecl,
+                                           const CXXRecordDecl *BaseClassDecl) {
+  // FIXME: move to Context
+  if (vtableinfo == 0)
+    vtableinfo = new VtableInfo(CGM);
+  
+  const llvm::Type *Int8PtrTy = 
+    llvm::Type::getInt8Ty(VMContext)->getPointerTo();
+
+  llvm::Value *VTablePtr = Builder.CreateBitCast(This, 
+                                                 Int8PtrTy->getPointerTo());
+  VTablePtr = Builder.CreateLoad(VTablePtr, "vtable");
+
+  llvm::Value *VBaseOffsetPtr = 
+    Builder.CreateConstGEP1_64(VTablePtr, 
+                               vtableinfo->VBlookup(ClassDecl, BaseClassDecl),
+                               "vbase.offset.ptr");
+  const llvm::Type *PtrDiffTy = 
+    ConvertType(getContext().getPointerDiffType());
+  
+  VBaseOffsetPtr = Builder.CreateBitCast(VBaseOffsetPtr, 
+                                         PtrDiffTy->getPointerTo());
+                                         
+  llvm::Value *VBaseOffset = Builder.CreateLoad(VBaseOffsetPtr, "vbase.offset");
+  
+  return VBaseOffset;
+}
+
+llvm::Value *
 CodeGenFunction::BuildVirtualCall(const CXXMethodDecl *MD, llvm::Value *&This,
                                   const llvm::Type *Ty) {
   // FIXME: If we know the dynamic type, we don't have to do a virtual dispatch.
 
-  // FIXME: move to Context
-  if (vtableinfo == 0)
-    vtableinfo = new VtableInfo(CGM);
-
-  VtableInfo::Index_t Idx = vtableinfo->lookup(MD);
-
+  uint64_t Index = CGM.GetVtableIndex(MD);
+  
   Ty = llvm::PointerType::get(Ty, 0);
   Ty = llvm::PointerType::get(Ty, 0);
   Ty = llvm::PointerType::get(Ty, 0);
   llvm::Value *vtbl = Builder.CreateBitCast(This, Ty);
   vtbl = Builder.CreateLoad(vtbl);
   llvm::Value *vfn = Builder.CreateConstInBoundsGEP1_64(vtbl,
-                                                        Idx, "vfn");
+                                                        Index, "vfn");
   vfn = Builder.CreateLoad(vfn);
   return vfn;
+}
+
+uint64_t CodeGenModule::GetVtableIndex(const CXXMethodDecl *MD) {
+  // FIXME: move to CodeGenModule.
+  if (vtableinfo == 0)
+    vtableinfo = new VtableInfo(*this);
+  
+  return vtableinfo->lookup(MD);
 }
 
 /// EmitClassAggrMemberwiseCopy - This routine generates code to copy a class
@@ -1241,7 +1404,7 @@ void CodeGenFunction::EmitClassAggrMemberwiseCopy(llvm::Value *Dest,
                                            "loop.index");
   llvm::Value* zeroConstant =
     llvm::Constant::getNullValue(llvm::Type::getInt64Ty(VMContext));
-    Builder.CreateStore(zeroConstant, IndexPtr, false);
+  Builder.CreateStore(zeroConstant, IndexPtr, false);
   // Start the loop with a block that tests the condition.
   llvm::BasicBlock *CondBlock = createBasicBlock("for.cond");
   llvm::BasicBlock *AfterFor = createBasicBlock("for.end");

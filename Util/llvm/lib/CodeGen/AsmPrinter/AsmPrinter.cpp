@@ -60,7 +60,7 @@ AsmPrinter::AsmPrinter(formatted_raw_ostream &o, TargetMachine &tm,
     OutStreamer(*createAsmStreamer(OutContext, O, *T, 0)),
 
     LastMI(0), LastFn(0), Counter(~0U),
-    PrevDLT(0, ~0U, ~0U) {
+    PrevDLT(0, 0, ~0U, ~0U) {
   DW = 0; MMI = 0;
   switch (AsmVerbose) {
   case cl::BOU_UNSET: VerboseAsm = VDef;  break;
@@ -110,8 +110,8 @@ bool AsmPrinter::doInitialization(Module &M) {
   if (MAI->doesAllowNameToStartWithDigit())
     Mang->setSymbolsCanStartWithDigit(true);
   
-  GCModuleInfo *MI = getAnalysisIfAvailable<GCModuleInfo>();
-  assert(MI && "AsmPrinter didn't require GCModuleInfo?");
+  // Allow the target to emit any magic that it wants at the start of the file.
+  EmitStartOfAsmFile(M);
 
   if (MAI->hasSingleParameterDotFile()) {
     /* Very minimal debug info. It is ignored if we emit actual
@@ -120,6 +120,8 @@ bool AsmPrinter::doInitialization(Module &M) {
     O << "\t.file\t\"" << M.getModuleIdentifier() << "\"\n";
   }
 
+  GCModuleInfo *MI = getAnalysisIfAvailable<GCModuleInfo>();
+  assert(MI && "AsmPrinter didn't require GCModuleInfo?");
   for (GCModuleInfo::iterator I = MI->begin(), E = MI->end(); I != E; ++I)
     if (GCMetadataPrinter *MP = GetOrCreateGCPrinter(*I))
       MP->beginAssembly(O, *this, *MAI);
@@ -1004,7 +1006,7 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
   // precision...
   LLVMContext &Context = CFP->getContext();
   const TargetData *TD = TM.getTargetData();
-  if (CFP->getType() == Type::getDoubleTy(Context)) {
+  if (CFP->getType()->isDoubleTy()) {
     double Val = CFP->getValueAPF().convertToDouble();  // for comment only
     uint64_t i = CFP->getValueAPF().bitcastToAPInt().getZExtValue();
     if (MAI->getData64bitsDirective(AddrSpace)) {
@@ -1046,7 +1048,9 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
       O << '\n';
     }
     return;
-  } else if (CFP->getType() == Type::getFloatTy(Context)) {
+  }
+  
+  if (CFP->getType()->isFloatTy()) {
     float Val = CFP->getValueAPF().convertToFloat();  // for comment only
     O << MAI->getData32bitsDirective(AddrSpace)
       << CFP->getValueAPF().bitcastToAPInt().getZExtValue();
@@ -1056,7 +1060,9 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
     }
     O << '\n';
     return;
-  } else if (CFP->getType() == Type::getX86_FP80Ty(Context)) {
+  }
+  
+  if (CFP->getType()->isX86_FP80Ty()) {
     // all long double variants are printed as hex
     // api needed to prevent premature destruction
     APInt api = CFP->getValueAPF().bitcastToAPInt();
@@ -1141,7 +1147,9 @@ void AsmPrinter::EmitGlobalConstantFP(const ConstantFP *CFP,
     EmitZeros(TD->getTypeAllocSize(Type::getX86_FP80Ty(Context)) -
               TD->getTypeStoreSize(Type::getX86_FP80Ty(Context)), AddrSpace);
     return;
-  } else if (CFP->getType() == Type::getPPC_FP128Ty(Context)) {
+  }
+  
+  if (CFP->getType()->isPPC_FP128Ty()) {
     // all long double variants are printed as hex
     // api needed to prevent premature destruction
     APInt api = CFP->getValueAPF().bitcastToAPInt();
@@ -1345,20 +1353,28 @@ void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) const {
 
 /// processDebugLoc - Processes the debug information of each machine
 /// instruction's DebugLoc.
-void AsmPrinter::processDebugLoc(DebugLoc DL) {
+void AsmPrinter::processDebugLoc(const MachineInstr *MI, 
+                                 bool BeforePrintingInsn) {
   if (!MAI || !DW)
     return;
-  
+  DebugLoc DL = MI->getDebugLoc();
   if (MAI->doesSupportDebugInformation() && DW->ShouldEmitDwarfDebug()) {
     if (!DL.isUnknown()) {
       DebugLocTuple CurDLT = MF->getDebugLocTuple(DL);
-
-      if (CurDLT.CompileUnit != 0 && PrevDLT != CurDLT) {
-        printLabel(DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,
-                                        DICompileUnit(CurDLT.CompileUnit)));
-        O << '\n';
-      }
-
+      if (BeforePrintingInsn) {
+        if (CurDLT.CompileUnit != 0 && PrevDLT != CurDLT) {
+	  unsigned L = DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,
+	  				    CurDLT.CompileUnit);
+          printLabel(L);
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+          DW->SetDbgScopeBeginLabels(MI, L);
+#endif
+        } else {
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+          DW->SetDbgScopeEndLabels(MI, 0);
+#endif
+        }
+      } 
       PrevDLT = CurDLT;
     }
   }
@@ -1613,8 +1629,15 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
   if (unsigned Align = MBB->getAlignment())
     EmitAlignment(Log2_32(Align));
 
-  GetMBBSymbol(MBB->getNumber())->print(O, MAI);
-  O << ':';
+  if (MBB->pred_empty() || MBB->isOnlyReachableByFallthrough()) {
+    if (VerboseAsm)
+      O << MAI->getCommentString() << " BB#" << MBB->getNumber() << ':';
+  } else {
+    GetMBBSymbol(MBB->getNumber())->print(O, MAI);
+    O << ':';
+    if (!VerboseAsm)
+      O << '\n';
+  }
   
   if (VerboseAsm) {
     if (const BasicBlock *BB = MBB->getBasicBlock())
@@ -1625,6 +1648,7 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
       }
 
     EmitComments(*MBB);
+    O << '\n';
   }
 }
 

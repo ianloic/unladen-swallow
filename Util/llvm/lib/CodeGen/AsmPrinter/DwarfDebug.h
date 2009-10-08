@@ -141,6 +141,19 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   /// DbgScopeMap - Tracks the scopes in the current function.
   DenseMap<MDNode *, DbgScope *> DbgScopeMap;
 
+  /// ScopedGVs - Tracks global variables that are not at file scope.
+  /// For example void f() { static int b = 42; }
+  SmallVector<WeakVH, 4> ScopedGVs;
+
+  typedef DenseMap<const MachineInstr *, SmallVector<DbgScope *, 2> > 
+    InsnToDbgScopeMapTy;
+
+  /// DbgScopeBeginMap - Maps instruction with a list DbgScopes it starts.
+  InsnToDbgScopeMapTy DbgScopeBeginMap;
+
+  /// DbgScopeEndMap - Maps instruction with a list DbgScopes it ends.
+  InsnToDbgScopeMapTy DbgScopeEndMap;
+
   /// DbgAbstractScopeMap - Tracks abstract instance scopes in the current
   /// function.
   DenseMap<MDNode *, DbgScope *> DbgAbstractScopeMap;
@@ -348,9 +361,10 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   ///
   DIE *CreateDbgScopeVariable(DbgVariable *DV, CompileUnit *Unit);
 
-  /// getOrCreateScope - Returns the scope associated with the given descriptor.
+  /// getDbgScope - Returns the scope associated with the given descriptor.
   ///
   DbgScope *getOrCreateScope(MDNode *N);
+  DbgScope *getDbgScope(MDNode *N, const MachineInstr *MI);
 
   /// ConstructDbgScope - Construct the components of a scope.
   ///
@@ -505,12 +519,7 @@ public:
   /// RecordSourceLine - Records location information and associates it with a 
   /// label. Returns a unique label ID used to generate a label and provide
   /// correspondence to the source line list.
-  unsigned RecordSourceLine(Value *V, unsigned Line, unsigned Col);
-  
-  /// RecordSourceLine - Records location information and associates it with a 
-  /// label. Returns a unique label ID used to generate a label and provide
-  /// correspondence to the source line list.
-  unsigned RecordSourceLine(unsigned Line, unsigned Col, DICompileUnit CU);
+  unsigned RecordSourceLine(unsigned Line, unsigned Col, MDNode *Scope);
 
   /// getRecordSourceLineCount - Return the number of source lines in the debug
   /// info.
@@ -542,6 +551,20 @@ public:
   /// RecordInlinedFnEnd - Indicate the end of inlined subroutine.
   unsigned RecordInlinedFnEnd(DISubprogram &SP);
 
+  /// ExtractScopeInformation - Scan machine instructions in this function
+  /// and collect DbgScopes. Return true, if atleast one scope was found.
+  bool ExtractScopeInformation(MachineFunction *MF);
+
+  /// CollectVariableInfo - Populate DbgScope entries with variables' info.
+  void CollectVariableInfo();
+
+  /// SetDbgScopeBeginLabels - Update DbgScope begin labels for the scopes that
+  /// start with this machine instruction.
+  void SetDbgScopeBeginLabels(const MachineInstr *MI, unsigned Label);
+
+  /// SetDbgScopeEndLabels - Update DbgScope end labels for the scopes that
+  /// end with this machine instruction.
+  void SetDbgScopeEndLabels(const MachineInstr *MI, unsigned Label);
 };
 
 } // End of namespace llvm

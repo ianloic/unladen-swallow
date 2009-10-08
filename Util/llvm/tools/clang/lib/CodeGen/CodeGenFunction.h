@@ -588,12 +588,12 @@ public:
                                         const CXXRecordDecl *ClassDecl,
                                         const CXXRecordDecl *BaseClassDecl,
                                         bool NullCheckValue);
-
-  /// GetCXXBaseClassOffset - Returns the offset from a derived class to its
-  /// base class. Returns null if the offset is 0.
-  llvm::Constant *GetCXXBaseClassOffset(const CXXRecordDecl *ClassDecl,
-                                        const CXXRecordDecl *BaseClassDecl);
   
+  llvm::Value *
+  GetVirtualCXXBaseClassOffset(llvm::Value *This,
+                               const CXXRecordDecl *ClassDecl,
+                               const CXXRecordDecl *BaseClassDecl);
+    
   void EmitClassAggrMemberwiseCopy(llvm::Value *DestValue,
                                    llvm::Value *SrcValue,
                                    const ArrayType *Array,
@@ -869,10 +869,12 @@ public:
                            CallExpr::const_arg_iterator ArgBeg,
                            CallExpr::const_arg_iterator ArgEnd);
   RValue EmitCXXMemberCallExpr(const CXXMemberCallExpr *E);
+  RValue EmitCXXMemberPointerCallExpr(const CXXMemberCallExpr *E);
 
   RValue EmitCXXOperatorMemberCallExpr(const CXXOperatorCallExpr *E,
                                        const CXXMethodDecl *MD);
 
+  
   RValue EmitBuiltinExpr(const FunctionDecl *FD,
                          unsigned BuiltinID, const CallExpr *E);
 

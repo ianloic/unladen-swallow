@@ -384,7 +384,7 @@ multiclass AsI1_bin_irs<bits<4> opcod, string opc, PatFrag opnode,
 }
 
 /// AI1_bin_s_irs - Similar to AsI1_bin_irs except it sets the 's' bit so the
-/// instruction modifies the CSPR register.
+/// instruction modifies the CPSR register.
 let Defs = [CPSR] in {
 multiclass AI1_bin_s_irs<bits<4> opcod, string opc, PatFrag opnode,
                          bit Commutable = 0> {
@@ -627,13 +627,12 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in
 }
 
 // FIXME: remove when we have a way to marking a MI with these properties.
-// FIXME: $dst1 should be a def. But the extra ops must be in the end of the
-// operand list.
 // FIXME: Should pc be an implicit operand like PICADD, etc?
-let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1 in
+let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1,
+    hasExtraDefRegAllocReq = 1 in
   def LDM_RET : AXI4ld<(outs),
-                    (ins addrmode4:$addr, pred:$p, reglist:$dst1, variable_ops),
-                    LdStMulFrm, IIC_Br, "ldm${p}${addr:submode} $addr, $dst1",
+                    (ins addrmode4:$addr, pred:$p, reglist:$wb, variable_ops),
+                    LdStMulFrm, IIC_Br, "ldm${p}${addr:submode} $addr, $wb",
                     []>;
 
 // On non-Darwin platforms R9 is callee-saved.
@@ -785,7 +784,7 @@ def LDRSB : AI3ldsb<(outs GPR:$dst), (ins addrmode3:$addr), LdMiscFrm,
                    IIC_iLoadr, "ldr", "sb $dst, $addr",
                    [(set GPR:$dst, (sextloadi8 addrmode3:$addr))]>;
 
-let mayLoad = 1 in {
+let mayLoad = 1, hasExtraDefRegAllocReq = 1 in {
 // Load doubleword
 def LDRD : AI3ldd<(outs GPR:$dst1, GPR:$dst2), (ins addrmode3:$addr), LdMiscFrm,
                  IIC_iLoadr, "ldr", "d $dst1, $addr",
@@ -848,7 +847,7 @@ def STRB : AI2stb<(outs), (ins GPR:$src, addrmode2:$addr), StFrm, IIC_iStorer,
                [(truncstorei8 GPR:$src, addrmode2:$addr)]>;
 
 // Store doubleword
-let mayStore = 1 in
+let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
 def STRD : AI3std<(outs), (ins GPR:$src1, GPR:$src2, addrmode3:$addr),
                StMiscFrm, IIC_iStorer,
                "str", "d $src1, $addr", []>, Requires<[IsARM, HasV5TE]>;
@@ -900,17 +899,16 @@ def STRB_POST: AI2stbpo<(outs GPR:$base_wb),
 //  Load / store multiple Instructions.
 //
 
-// FIXME: $dst1 should be a def.
-let mayLoad = 1 in
+let mayLoad = 1, hasExtraDefRegAllocReq = 1 in
 def LDM : AXI4ld<(outs),
-               (ins addrmode4:$addr, pred:$p, reglist:$dst1, variable_ops),
-               LdStMulFrm, IIC_iLoadm, "ldm${p}${addr:submode} $addr, $dst1",
+               (ins addrmode4:$addr, pred:$p, reglist:$wb, variable_ops),
+               LdStMulFrm, IIC_iLoadm, "ldm${p}${addr:submode} $addr, $wb",
                []>;
 
-let mayStore = 1 in
+let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
 def STM : AXI4st<(outs),
-               (ins addrmode4:$addr, pred:$p, reglist:$src1, variable_ops),
-               LdStMulFrm, IIC_iStorem, "stm${p}${addr:submode} $addr, $src1",
+               (ins addrmode4:$addr, pred:$p, reglist:$wb, variable_ops),
+               LdStMulFrm, IIC_iStorem, "stm${p}${addr:submode} $addr, $wb",
                []>;
 
 //===----------------------------------------------------------------------===//

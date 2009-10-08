@@ -405,11 +405,11 @@ bool SPUAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 ///
 void SPUAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
   printInstruction(MI);
-
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
+  processDebugLoc(MI, false);
   O << '\n';
 }
 
@@ -460,7 +460,6 @@ bool LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {

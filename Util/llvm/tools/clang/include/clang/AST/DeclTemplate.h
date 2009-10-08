@@ -548,6 +548,39 @@ public:
   }
 };
 
+/// \brief Provides information a specialization of a member of a class 
+/// template, which may be a member function, static data member, or
+/// member class.
+class MemberSpecializationInfo {
+  // The member declaration from which this member was instantiated, and the
+  // manner in which the instantiation occurred (in the lower two bits).
+  llvm::PointerIntPair<NamedDecl *, 2> MemberAndTSK;
+  
+public:
+  explicit 
+  MemberSpecializationInfo(NamedDecl *IF, TemplateSpecializationKind TSK)
+    : MemberAndTSK(IF, TSK - 1) {
+    assert(TSK != TSK_Undeclared && 
+           "Cannot encode undeclared template specializations for members");
+  }
+  
+  /// \brief Retrieve the member declaration from which this member was
+  /// instantiated.
+  NamedDecl *getInstantiatedFrom() const { return MemberAndTSK.getPointer(); }
+  
+  /// \brief Determine what kind of template specialization this is.
+  TemplateSpecializationKind getTemplateSpecializationKind() const {
+    return (TemplateSpecializationKind)(MemberAndTSK.getInt() + 1);
+  }
+  
+  /// \brief Set the template specialization kind.
+  void setTemplateSpecializationKind(TemplateSpecializationKind TSK) {
+    assert(TSK != TSK_Undeclared && 
+           "Cannot encode undeclared template specializations for members");
+    MemberAndTSK.setInt(TSK - 1);
+  }
+};
+  
 /// Declaration of a template function.
 class FunctionTemplateDecl : public TemplateDecl {
 protected:

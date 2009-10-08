@@ -90,8 +90,7 @@ namespace clang {
   class ObjCPropertyDecl;
   class ObjCContainerDecl;
   class FunctionProtoType;
-  class BasePaths;
-  struct MemberLookupCriteria;
+  class CXXBasePaths;
   class CXXTemporary;
 
 /// BlockSemaInfo - When a block is being parsed, this contains information
@@ -766,7 +765,8 @@ public:
                         bool SuppressUserConversions,
                         bool AllowExplicit,
                         bool ForceRValue,
-                        bool InOverloadResolution);
+                        bool InOverloadResolution,
+                        bool UserCast = false);
   bool IsStandardConversion(Expr *From, QualType ToType,
                             bool InOverloadResolution,
                             StandardConversionSequence& SCS);
@@ -790,7 +790,8 @@ public:
                                UserDefinedConversionSequence& User,
                                OverloadCandidateSet& Conversions,
                                bool AllowConversionFunctions,
-                               bool AllowExplicit, bool ForceRValue);
+                               bool AllowExplicit, bool ForceRValue,
+                               bool UserCast = false);
   bool DiagnoseAmbiguousUserDefinedConversion(Expr *From, QualType ToType);
                                               
 
@@ -1064,7 +1065,7 @@ public:
       /// pointers used to reconstruct DeclContext::lookup_iterators.
       OverloadedDeclFromDeclContext,
 
-      /// First is a pointer to a BasePaths structure, which is owned
+      /// First is a pointer to a CXXBasePaths structure, which is owned
       /// by the LookupResult. Last is non-zero to indicate that the
       /// ambiguity is caused by two names found in base class
       /// subobjects of different types.
@@ -1083,7 +1084,7 @@ public:
     /// IdentifierResolver::iterator (if StoredKind ==
     /// OverloadedDeclFromIdResolver), a DeclContext::lookup_iterator
     /// (if StoredKind == OverloadedDeclFromDeclContext), or a
-    /// BasePaths pointer (if StoredKind == AmbiguousLookupStoresBasePaths).
+    /// CXXBasePaths pointer (if StoredKind == AmbiguousLookupStoresBasePaths).
     mutable uintptr_t First;
 
     /// The last lookup result, whose contents depend on the kind of
@@ -1166,7 +1167,8 @@ public:
                                            DeclContext::lookup_iterator F,
                                            DeclContext::lookup_iterator L);
 
-    static LookupResult CreateLookupResult(ASTContext &Context, BasePaths *Paths,
+    static LookupResult CreateLookupResult(ASTContext &Context, 
+                                           CXXBasePaths *Paths,
                                            bool DifferentSubobjectTypes) {
       LookupResult Result;
       Result.StoredKind = AmbiguousLookupStoresBasePaths;
@@ -1207,7 +1209,7 @@ public:
 
     NamedDecl* getAsDecl() const;
 
-    BasePaths *getBasePaths() const;
+    CXXBasePaths *getBasePaths() const;
 
     /// \brief Iterate over the results of name lookup.
     ///
@@ -1268,10 +1270,6 @@ private:
   std::pair<bool, LookupResult> CppLookupName(Scope *S, DeclarationName Name,
                                               LookupNameKind NameKind,
                                               bool RedeclarationOnly);
-  ObjCMethodDecl *FindMethodInNestedImplementations(
-                                                const ObjCInterfaceDecl *IFace,
-                                                const Selector &Sel);
-
 public:
   /// Determines whether D is a suitable lookup result according to the
   /// lookup criteria.
@@ -2318,9 +2316,8 @@ public:
                                    unsigned NumBases);
 
   bool IsDerivedFrom(QualType Derived, QualType Base);
-  bool IsDerivedFrom(QualType Derived, QualType Base, BasePaths &Paths);
-  bool LookupInBases(CXXRecordDecl *Class, const MemberLookupCriteria& Criteria,
-                     BasePaths &Paths);
+  bool IsDerivedFrom(QualType Derived, QualType Base, CXXBasePaths &Paths);
+  
   bool CheckDerivedToBaseConversion(QualType Derived, QualType Base,
                                     SourceLocation Loc, SourceRange Range);
   bool CheckDerivedToBaseConversion(QualType Derived, QualType Base,
@@ -2329,7 +2326,7 @@ public:
                                     SourceLocation Loc, SourceRange Range,
                                     DeclarationName Name);
 
-  std::string getAmbiguousPathsDisplayString(BasePaths &Paths);
+  std::string getAmbiguousPathsDisplayString(CXXBasePaths &Paths);
 
   /// CheckOverridingFunctionReturnType - Checks whether the return types are
   /// covariant, according to C++ [class.virtual]p5.
@@ -2350,12 +2347,12 @@ public:
                                 AccessSpecifier LexicalAS);
 
   const CXXBaseSpecifier *FindInaccessibleBase(QualType Derived, QualType Base,
-                                               BasePaths &Paths,
+                                               CXXBasePaths &Paths,
                                                bool NoPrivileges = false);
 
   bool CheckBaseClassAccess(QualType Derived, QualType Base,
                             unsigned InaccessibleBaseID,
-                            BasePaths& Paths, SourceLocation AccessLoc,
+                            CXXBasePaths& Paths, SourceLocation AccessLoc,
                             DeclarationName Name);
 
 
@@ -2436,7 +2433,8 @@ public:
   MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
                                           const CXXScopeSpec &SS,
                                           TemplateParameterList **ParamLists,
-                                          unsigned NumParamLists);
+                                          unsigned NumParamLists,
+                                          bool &IsExplicitSpecialization);
 
   DeclResult CheckClassTemplate(Scope *S, unsigned TagSpec, TagUseKind TUK,
                                 SourceLocation KWLoc, const CXXScopeSpec &SS,
@@ -2488,13 +2486,6 @@ public:
                                                 const CXXScopeSpec &SS,
                                                 TypeTy *ObjectType);
 
-  bool CheckClassTemplateSpecializationScope(ClassTemplateDecl *ClassTemplate,
-                                    ClassTemplateSpecializationDecl *PrevDecl,
-                                             SourceLocation TemplateNameLoc,
-                                             SourceRange ScopeSpecifierRange,
-                                             bool PartialSpecialization,
-                                             bool ExplicitInstantiation);
-
   bool CheckClassTemplatePartialSpecializationArgs(
                                         TemplateParameterList *TemplateParams,
                               const TemplateArgumentListBuilder &TemplateArgs,
@@ -2528,6 +2519,8 @@ public:
                                            unsigned NumExplicitTemplateArgs,
                                            SourceLocation RAngleLoc,
                                            NamedDecl *&PrevDecl);
+  bool CheckMemberFunctionSpecialization(CXXMethodDecl *FD, 
+                                         NamedDecl *&PrevDecl);
     
   virtual DeclResult
   ActOnExplicitInstantiation(Scope *S,

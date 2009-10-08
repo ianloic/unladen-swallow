@@ -57,6 +57,8 @@ namespace {
     ParmVarDecl *VisitParmVarDecl(ParmVarDecl *D);
     Decl *VisitOriginalParmVarDecl(OriginalParmVarDecl *D);
     Decl *VisitClassTemplateDecl(ClassTemplateDecl *D);
+    Decl *VisitClassTemplatePartialSpecializationDecl(
+                                    ClassTemplatePartialSpecializationDecl *D);
     Decl *VisitFunctionTemplateDecl(FunctionTemplateDecl *D);
     Decl *VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D);
     Decl *VisitUnresolvedUsingDecl(UnresolvedUsingDecl *D);
@@ -401,6 +403,13 @@ Decl *TemplateDeclInstantiator::VisitClassTemplateDecl(ClassTemplateDecl *D) {
 }
 
 Decl *
+TemplateDeclInstantiator::VisitClassTemplatePartialSpecializationDecl(
+                                   ClassTemplatePartialSpecializationDecl *D) {
+  assert(false &&"Partial specializations of member templates are unsupported");
+  return 0;
+}
+
+Decl *
 TemplateDeclInstantiator::VisitFunctionTemplateDecl(FunctionTemplateDecl *D) {
   // FIXME: Dig out the out-of-line definition of this function template?
 
@@ -513,7 +522,7 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D) {
     if (!Owner->isDependentContext())
       DC->makeDeclVisibleInContext(Function, /* Recoverable = */ false);
 
-    Function->setInstantiationOfMemberFunction(D);
+    Function->setInstantiationOfMemberFunction(D, TSK_ImplicitInstantiation);
   }
 
   if (InitFunctionInstantiation(Function, D))
@@ -628,7 +637,7 @@ TemplateDeclInstantiator::VisitCXXMethodDecl(CXXMethodDecl *D,
       FunctionTemplate->setLexicalDeclContext(D->getLexicalDeclContext());
     Method->setDescribedFunctionTemplate(FunctionTemplate);
   } else if (!FunctionTemplate)
-    Method->setInstantiationOfMemberFunction(D);
+    Method->setInstantiationOfMemberFunction(D, TSK_ImplicitInstantiation);
 
   // If we are instantiating a member function defined
   // out-of-line, the instantiation will have the same lexical

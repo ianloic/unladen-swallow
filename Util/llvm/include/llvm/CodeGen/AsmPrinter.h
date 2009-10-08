@@ -141,7 +141,7 @@ namespace llvm {
     mutable const Function *LastFn;
     mutable unsigned Counter;
     
-    // Private state for processDebugLock()
+    // Private state for processDebugLoc()
     mutable DebugLocTuple PrevDLT;
 
   protected:
@@ -169,6 +169,10 @@ namespace llvm {
     /// call this implementation.
     bool doInitialization(Module &M);
 
+    /// EmitStartOfAsmFile - This virtual method can be overridden by targets
+    /// that want to emit something at the start of their file.
+    virtual void EmitStartOfAsmFile(Module &M) {}
+    
     /// EmitEndOfAsmFile - This virtual method can be overridden by targets that
     /// want to emit something at the end of their file.
     virtual void EmitEndOfAsmFile(Module &M) {}
@@ -353,8 +357,8 @@ namespace llvm {
     virtual void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV);
 
     /// processDebugLoc - Processes the debug information of each machine
-    /// instruction's DebugLoc.
-    void processDebugLoc(DebugLoc DL);
+    /// instruction's DebugLoc. 
+    void processDebugLoc(const MachineInstr *MI, bool BeforePrintingInsn);
     
     /// printInlineAsm - This method formats and prints the specified machine
     /// instruction that is an inline asm.

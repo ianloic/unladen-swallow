@@ -1599,11 +1599,19 @@ Sema::ActOnPostfixUnaryOp(Scope *S, SourceLocation OpLoc,
       }
     }
 
-    case OR_No_Viable_Function:
-      // No viable function; fall through to handling this as a
-      // built-in operator, which will produce an error message for us.
-      break;
-
+    case OR_No_Viable_Function: {
+      // No viable function; try checking this as a built-in operator, which
+      // will fail and provide a diagnostic. Then, print the overload
+      // candidates.
+      OwningExprResult Result = CreateBuiltinUnaryOp(OpLoc, Opc, move(Input));
+      assert(Result.isInvalid() && 
+             "C++ postfix-unary operator overloading is missing candidates!");
+      if (Result.isInvalid())
+        PrintOverloadCandidates(CandidateSet, /*OnlyViable=*/false);
+      
+      return move(Result);
+    }
+        
     case OR_Ambiguous:
       Diag(OpLoc,  diag::err_ovl_ambiguous_oper)
           << UnaryOperator::getOpcodeStr(Opc)
@@ -1993,21 +2001,6 @@ static Decl *FindGetterNameDecl(const ObjCObjectPointerType *QIdTy,
   return GDecl;
 }
 
-/// FindMethodInNestedImplementations - Look up a method in current and
-/// all base class implementations.
-///
-ObjCMethodDecl *Sema::FindMethodInNestedImplementations(
-                                              const ObjCInterfaceDecl *IFace,
-                                              const Selector &Sel) {
-  ObjCMethodDecl *Method = 0;
-  if (ObjCImplementationDecl *ImpDecl = IFace->getImplementation())
-    Method = ImpDecl->getInstanceMethod(Sel);
-
-  if (!Method && IFace->getSuperClass())
-    return FindMethodInNestedImplementations(IFace->getSuperClass(), Sel);
-  return Method;
-}
-
 Action::OwningExprResult
 Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
                                tok::TokenKind OpKind, SourceLocation MemberLoc,
@@ -2067,7 +2060,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
       if (!Setter) {
         // If this reference is in an @implementation, also check for 'private'
         // methods.
-        Setter = FindMethodInNestedImplementations(IFace, SetterSel);
+        Setter = IFace->lookupPrivateInstanceMethod(SetterSel);
       }
       // Look through local category implementations associated with the class.
       if (!Setter)
@@ -2518,7 +2511,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
 
     // If this reference is in an @implementation, check for 'private' methods.
     if (!Getter)
-      Getter = FindMethodInNestedImplementations(IFace, Sel);
+      Getter = IFace->lookupPrivateInstanceMethod(Sel);
 
     // Look through local category implementations associated with the class.
     if (!Getter)
@@ -2537,7 +2530,7 @@ Sema::BuildMemberReferenceExpr(Scope *S, ExprArg Base, SourceLocation OpLoc,
     if (!Setter) {
       // If this reference is in an @implementation, also check for 'private'
       // methods.
-      Setter = FindMethodInNestedImplementations(IFace, SetterSel);
+      Setter = IFace->lookupPrivateInstanceMethod(SetterSel);
     }
     // Look through local category implementations associated with the class.
     if (!Setter)
@@ -2908,6 +2901,28 @@ Sema::ActOnCallExpr(Scope *S, ExprArg fn, SourceLocation LParenLoc,
                 cast<FunctionTemplateDecl>(MemDecl)->getTemplatedDecl())))
         return Owned(BuildCallToMemberFunction(S, Fn, LParenLoc, Args, NumArgs,
                                                CommaLocs, RParenLoc));
+    }
+    
+    // Determine whether this is a call to a pointer-to-member function.
+    if (BinaryOperator *BO = dyn_cast<BinaryOperator>(Fn->IgnoreParens())) {
+      if (BO->getOpcode() == BinaryOperator::PtrMemD ||
+          BO->getOpcode() == BinaryOperator::PtrMemI) {
+        const FunctionProtoType *FPT = cast<FunctionProtoType>(BO->getType());
+        QualType ReturnTy = FPT->getResultType();
+      
+        CXXMemberCallExpr *CE = 
+          new (Context) CXXMemberCallExpr(Context, BO, Args, NumArgs,
+                                          ReturnTy.getNonReferenceType(),
+                                          RParenLoc);
+        
+        ExprOwningPtr<CXXMemberCallExpr> TheCall(this, CE);
+        
+        if (ConvertArgumentsForCall(&*TheCall, BO, 0, FPT, Args, NumArgs, 
+                                    RParenLoc))
+          return ExprError();
+
+        return Owned(MaybeBindToTemporary(TheCall.release()).release());
+      }
     }
   }
 
@@ -6183,15 +6198,9 @@ void Sema::MarkDeclarationReferenced(SourceLocation Loc, Decl *D) {
   if (FunctionDecl *Function = dyn_cast<FunctionDecl>(D)) {
     // Implicit instantiation of function templates and member functions of
     // class templates.
-    if (!Function->getBody()) {
-      // FIXME: distinguish between implicit instantiations of function
-      // templates and explicit specializations (the latter don't get
-      // instantiated, naturally).
-      if (Function->getInstantiatedFromMemberFunction() ||
-          Function->getPrimaryTemplate())
-        PendingImplicitInstantiations.push_back(std::make_pair(Function, Loc));
-    }
-
+    if (!Function->getBody() && 
+        Function->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
+      PendingImplicitInstantiations.push_back(std::make_pair(Function, Loc));
 
     // FIXME: keep track of references to static functions
     Function->setUsed(true);

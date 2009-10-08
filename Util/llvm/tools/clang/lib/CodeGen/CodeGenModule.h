@@ -22,6 +22,7 @@
 #include "CGCall.h"
 #include "CGCXX.h"
 #include "CodeGenTypes.h"
+#include "Mangle.h"
 #include "llvm/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
@@ -123,9 +124,11 @@ class CodeGenModule : public BlockModule {
   const llvm::TargetData &TheTargetData;
   Diagnostic &Diags;
   CodeGenTypes Types;
+  MangleContext MangleCtx;
+
   CGObjCRuntime* Runtime;
   CGDebugInfo* DebugInfo;
-
+  
   llvm::Function *MemCpyFn;
   llvm::Function *MemMoveFn;
   llvm::Function *MemSetFn;
@@ -217,6 +220,7 @@ public:
   const LangOptions &getLangOptions() const { return Features; }
   llvm::Module &getModule() const { return TheModule; }
   CodeGenTypes &getTypes() { return Types; }
+  MangleContext &getMangleContext() { return MangleCtx; }
   Diagnostic &getDiags() const { return Diags; }
   const llvm::TargetData &getTargetData() const { return TheTargetData; }
   llvm::LLVMContext &getLLVMContext() { return VMContext; }
@@ -251,6 +255,14 @@ public:
   llvm::Constant *BuildCovariantThunk(const CXXMethodDecl *MD, bool Extern,
                                       int64_t nv_t, int64_t v_t,
                                       int64_t nv_r, int64_t v_r);
+
+  /// GetVtableIndex - Return the vtable index for a virtual member function.
+  uint64_t GetVtableIndex(const CXXMethodDecl *MD);
+
+  /// GetCXXBaseClassOffset - Returns the offset from a derived class to its
+  /// base class. Returns null if the offset is 0.
+  llvm::Constant *GetCXXBaseClassOffset(const CXXRecordDecl *ClassDecl,
+                                        const CXXRecordDecl *BaseClassDecl);
 
   /// GetStringForStringLiteral - Return the appropriate bytes for a string
   /// literal, properly padded to match the literal type. If only the address of

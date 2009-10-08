@@ -274,7 +274,6 @@ bool XCoreAsmPrinter::runOnMachineFunction(MachineFunction &MF)
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
 
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
@@ -352,7 +351,7 @@ bool XCoreAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
 void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
 
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
 
   // Check for mov mnemonic
   unsigned src, dst, srcSR, dstSR;
@@ -365,6 +364,8 @@ void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
+
+  processDebugLoc(MI, false);
 }
 
 // Force static initialization.

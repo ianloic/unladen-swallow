@@ -663,23 +663,25 @@ CodeGenFunction::GenerateBlockFunction(const BlockExpr *BExpr,
   StartFunction(BD, ResultType, Fn, Args,
                 BExpr->getBody()->getLocEnd());
 
+  CurFuncDecl = OuterFuncDecl;
+  CurCodeDecl = BD;
+
   // Save a spot to insert the debug information for all the BlockDeclRefDecls.
   llvm::BasicBlock *entry = Builder.GetInsertBlock();
   llvm::BasicBlock::iterator entry_ptr = Builder.GetInsertPoint();
+  --entry_ptr;
 
-  CurFuncDecl = OuterFuncDecl;
-  CurCodeDecl = BD;
   EmitStmt(BExpr->getBody());
 
+  // Remember where we were...
+  llvm::BasicBlock *resume = Builder.GetInsertBlock();
+
+  // Go back to the entry.
+  ++entry_ptr;
+  Builder.SetInsertPoint(entry, entry_ptr);
+
   if (CGDebugInfo *DI = getDebugInfo()) {
-    llvm::BasicBlock *end = Builder.GetInsertBlock();
-    llvm::BasicBlock::iterator end_ptr = Builder.GetInsertPoint();
-
     // Emit debug information for all the BlockDeclRefDecls.
-    // First, go back to the entry...
-    Builder.SetInsertPoint(entry, entry_ptr);
-
-    // And then insert the debug information..
     for (unsigned i=0; i < BlockDeclRefDecls.size(); ++i) {
       const Expr *E = BlockDeclRefDecls[i];
       const BlockDeclRefExpr *BDRE = dyn_cast<BlockDeclRefExpr>(E);
@@ -691,10 +693,12 @@ CodeGenFunction::GenerateBlockFunction(const BlockExpr *BExpr,
                                               Builder, this);
       }
     }
-
-    // Then go back to the end, and we're done.
-    Builder.SetInsertPoint(end, end_ptr);
   }
+  // And resume where we left off.
+  if (resume == 0)
+    Builder.ClearInsertionPoint();
+  else
+    Builder.SetInsertPoint(resume);
 
   FinishFunction(cast<CompoundStmt>(BExpr->getBody())->getRBracLoc());
 

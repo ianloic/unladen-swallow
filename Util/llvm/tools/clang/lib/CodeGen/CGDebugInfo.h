@@ -131,6 +131,9 @@ private:
   void EmitDeclare(const BlockDeclRefExpr *BDRE, unsigned Tag, llvm::Value *AI,
                    CGBuilderTy &Builder, CodeGenFunction *CGF);
 
+  /// getContext - Get context info for the decl.
+  llvm::DIDescriptor getContext(const VarDecl *Decl,llvm::DIDescriptor &CU);
+
   /// getOrCreateCompileUnit - Get the compile unit from the cache or create a
   /// new one if necessary.
   llvm::DICompileUnit getOrCreateCompileUnit(SourceLocation Loc);
@@ -144,5 +147,6 @@ private:
 };
 } // namespace CodeGen
 } // namespace clang
+
 
 #endif

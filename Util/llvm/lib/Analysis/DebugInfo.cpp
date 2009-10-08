@@ -189,6 +189,11 @@ bool DIDescriptor::isVariable() const {
   }
 }
 
+/// isType - Return true if the specified tag is legal for DIType.
+bool DIDescriptor::isType() const {
+  return isBasicType() || isCompositeType() || isDerivedType();
+}
+
 /// isSubprogram - Return true if the specified tag is legal for
 /// DISubprogram.
 bool DIDescriptor::isSubprogram() const {
@@ -205,6 +210,11 @@ bool DIDescriptor::isGlobalVariable() const {
   unsigned Tag = getTag();
 
   return Tag == dwarf::DW_TAG_variable;
+}
+
+/// isGlobal - Return true if the specified tag is legal for DIGlobal.
+bool DIDescriptor::isGlobal() const {
+  return isGlobalVariable();
 }
 
 /// isScope - Return true if the specified tag is one of the scope
@@ -238,6 +248,22 @@ bool DIDescriptor::isLexicalBlock() const {
   unsigned Tag = getTag();
 
   return Tag == dwarf::DW_TAG_lexical_block;
+}
+
+/// isSubrange - Return true if the specified tag is DW_TAG_subrange_type.
+bool DIDescriptor::isSubrange() const {
+  assert (!isNull() && "Invalid descriptor!");
+  unsigned Tag = getTag();
+
+  return Tag == dwarf::DW_TAG_subrange_type;
+}
+
+/// isEnumerator - Return true if the specified tag is DW_TAG_enumerator.
+bool DIDescriptor::isEnumerator() const {
+  assert (!isNull() && "Invalid descriptor!");
+  unsigned Tag = getTag();
+
+  return Tag == dwarf::DW_TAG_enumerator;
 }
 
 //===----------------------------------------------------------------------===//
@@ -390,6 +416,30 @@ bool DISubprogram::describes(const Function *F) {
   if (strcmp(F->getName().data(), Name) == 0)
     return true;
   return false;
+}
+
+const char *DIScope::getFilename() const {
+  if (isLexicalBlock()) 
+    return DILexicalBlock(DbgNode).getFilename();
+  else if (isSubprogram())
+    return DISubprogram(DbgNode).getFilename();
+  else if (isCompileUnit())
+    return DICompileUnit(DbgNode).getFilename();
+  else 
+    assert (0 && "Invalid DIScope!");
+  return NULL;
+}
+
+const char *DIScope::getDirectory() const {
+  if (isLexicalBlock()) 
+    return DILexicalBlock(DbgNode).getDirectory();
+  else if (isSubprogram())
+    return DISubprogram(DbgNode).getDirectory();
+  else if (isCompileUnit())
+    return DICompileUnit(DbgNode).getDirectory();
+  else 
+    assert (0 && "Invalid DIScope!");
+  return NULL;
 }
 
 //===----------------------------------------------------------------------===//
@@ -883,15 +933,29 @@ void DIFactory::InsertRegionEnd(DIDescriptor D, BasicBlock *BB) {
 }
 
 /// InsertDeclare - Insert a new llvm.dbg.declare intrinsic call.
-void DIFactory::InsertDeclare(Value *Storage, DIVariable D, BasicBlock *BB) {
+void DIFactory::InsertDeclare(Value *Storage, DIVariable D,
+                              Instruction *InsertBefore) {
   // Cast the storage to a {}* for the call to llvm.dbg.declare.
-  Storage = new BitCastInst(Storage, EmptyStructPtr, "", BB);
+  Storage = new BitCastInst(Storage, EmptyStructPtr, "", InsertBefore);
 
   if (!DeclareFn)
     DeclareFn = Intrinsic::getDeclaration(&M, Intrinsic::dbg_declare);
 
   Value *Args[] = { Storage, D.getNode() };
-  CallInst::Create(DeclareFn, Args, Args+2, "", BB);
+  CallInst::Create(DeclareFn, Args, Args+2, "", InsertBefore);
+}
+
+/// InsertDeclare - Insert a new llvm.dbg.declare intrinsic call.
+void DIFactory::InsertDeclare(Value *Storage, DIVariable D,
+                              BasicBlock *InsertAtEnd) {
+  // Cast the storage to a {}* for the call to llvm.dbg.declare.
+  Storage = new BitCastInst(Storage, EmptyStructPtr, "", InsertAtEnd);
+
+  if (!DeclareFn)
+    DeclareFn = Intrinsic::getDeclaration(&M, Intrinsic::dbg_declare);
+
+  Value *Args[] = { Storage, D.getNode() };
+  CallInst::Create(DeclareFn, Args, Args+2, "", InsertAtEnd);
 }
 
 
@@ -902,7 +966,12 @@ void DIFactory::InsertDeclare(Value *Storage, DIVariable D, BasicBlock *BB) {
 /// processModule - Process entire module and collect debug info.
 void DebugInfoFinder::processModule(Module &M) {
 
-
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+  MetadataContext &TheMetadata = M.getContext().getMetadata();
+  unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
+  if (!MDDbgKind)
+    return;
+#endif
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
     for (Function::iterator FI = (*I).begin(), FE = (*I).end(); FI != FE; ++FI)
       for (BasicBlock::iterator BI = (*FI).begin(), BE = (*FI).end(); BI != BE;
@@ -917,6 +986,18 @@ void DebugInfoFinder::processModule(Module &M) {
           processRegionEnd(DRE);
         else if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(BI))
           processDeclare(DDI);
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+        else if (MDNode *L = TheMetadata.getMD(MDDbgKind, BI)) {
+          DILocation Loc(L);
+          DIScope S(Loc.getScope().getNode());
+          if (S.isCompileUnit())
+            addCompileUnit(DICompileUnit(S.getNode()));
+          else if (S.isSubprogram())
+            processSubprogram(DISubprogram(S.getNode()));
+          else if (S.isLexicalBlock())
+            processLexicalBlock(DILexicalBlock(S.getNode()));
+        }
+#endif
       }
 
   NamedMDNode *NMD = M.getNamedMetadata("llvm.dbg.gv");
@@ -956,6 +1037,17 @@ void DebugInfoFinder::processType(DIType DT) {
     if (!DDT.isNull())
       processType(DDT.getTypeDerivedFrom());
   }
+}
+
+/// processLexicalBlock
+void DebugInfoFinder::processLexicalBlock(DILexicalBlock LB) {
+  if (LB.isNull())
+    return;
+  DIScope Context = LB.getContext();
+  if (Context.isLexicalBlock())
+    return processLexicalBlock(DILexicalBlock(Context.getNode()));
+  else
+    return processSubprogram(DISubprogram(Context.getNode()));
 }
 
 /// processSubprogram - Process DISubprogram.
@@ -1221,7 +1313,7 @@ bool getLocationInfo(const Value *V, std::string &DisplayName,
     Value *Context = SPI.getContext();
 
     // If this location is already tracked then use it.
-    DebugLocTuple Tuple(cast<MDNode>(Context), SPI.getLine(),
+    DebugLocTuple Tuple(cast<MDNode>(Context), NULL, SPI.getLine(),
                         SPI.getColumn());
     DenseMap<DebugLocTuple, unsigned>::iterator II
       = DebugLocInfo.DebugIdMap.find(Tuple);
@@ -1242,9 +1334,11 @@ bool getLocationInfo(const Value *V, std::string &DisplayName,
                                 DebugLocTracker &DebugLocInfo) {
     DebugLoc DL;
     MDNode *Context = Loc.getScope().getNode();
-
+    MDNode *InlinedLoc = NULL;
+    if (!Loc.getOrigLocation().isNull())
+      InlinedLoc = Loc.getOrigLocation().getNode();
     // If this location is already tracked then use it.
-    DebugLocTuple Tuple(Context, Loc.getLineNumber(),
+    DebugLocTuple Tuple(Context, InlinedLoc, Loc.getLineNumber(),
                         Loc.getColumnNumber());
     DenseMap<DebugLocTuple, unsigned>::iterator II
       = DebugLocInfo.DebugIdMap.find(Tuple);
@@ -1271,7 +1365,7 @@ bool getLocationInfo(const Value *V, std::string &DisplayName,
     DICompileUnit CU(Subprogram.getCompileUnit());
 
     // If this location is already tracked then use it.
-    DebugLocTuple Tuple(CU.getNode(), Line, /* Column */ 0);
+    DebugLocTuple Tuple(CU.getNode(), NULL, Line, /* Column */ 0);
     DenseMap<DebugLocTuple, unsigned>::iterator II
       = DebugLocInfo.DebugIdMap.find(Tuple);
     if (II != DebugLocInfo.DebugIdMap.end())

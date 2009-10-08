@@ -8,7 +8,6 @@ add_llvm_library(LLVMScalarOpts
   DCE.cpp
   DeadStoreElimination.cpp
   GVN.cpp
-  GVNPRE.cpp
   IndVarSimplify.cpp
   InstructionCombining.cpp
   JumpThreading.cpp
@@ -20,7 +19,6 @@ add_llvm_library(LLVMScalarOpts
   LoopUnroll.cpp
   LoopUnswitch.cpp
   MemCpyOptimizer.cpp
-  PredicateSimplifier.cpp
   Reassociate.cpp
   Reg2Mem.cpp
   SCCP.cpp

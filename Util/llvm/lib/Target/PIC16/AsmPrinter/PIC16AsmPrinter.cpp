@@ -43,13 +43,12 @@ PIC16AsmPrinter::PIC16AsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
 }
 
 bool PIC16AsmPrinter::printMachineInstruction(const MachineInstr *MI) {
-  processDebugLoc(MI->getDebugLoc());
-  
+  processDebugLoc(MI, true);
   printInstruction(MI);
-  
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
+  processDebugLoc(MI, false);
   return true;
 }
 
@@ -99,7 +98,6 @@ bool PIC16AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     
     // Print a basic block.
@@ -217,7 +215,7 @@ void PIC16AsmPrinter::printLibcallDecls() {
   O << MAI->getCommentString() << "External decls for libcalls - END." <<"\n";
 }
 
-/// doInitialization - Perfrom Module level initializations here.
+/// doInitialization - Perform Module level initializations here.
 /// One task that we do here is to sectionize all global variables.
 /// The MemSelOptimizer pass depends on the sectionizing.
 ///

@@ -472,6 +472,36 @@ void Clang::AddX86TargetArgs(const ArgList &Args,
   }
 }
 
+static bool needsExceptions(const ArgList &Args,  types::ID InputType,
+                            const llvm::Triple &Triple) {
+  if (Arg *A = Args.getLastArg(options::OPT_fexceptions,
+                               options::OPT_fno_exceptions)) {
+    if (A->getOption().matches(options::OPT_fexceptions))
+      return true;
+    else
+      return false;
+  }
+  switch (InputType) {
+  case types::TY_CXX: case types::TY_CXXHeader:
+  case types::TY_PP_CXX: case types::TY_PP_CXXHeader:
+  case types::TY_ObjCXX: case types::TY_ObjCXXHeader:
+  case types::TY_PP_ObjCXX: case types::TY_PP_ObjCXXHeader:
+    return true;
+
+  case types::TY_ObjC: case types::TY_ObjCHeader:
+  case types::TY_PP_ObjC: case types::TY_PP_ObjCHeader:
+    if (Args.hasArg(options::OPT_fobjc_nonfragile_abi))
+      return true;
+    if (Triple.getOS() != llvm::Triple::Darwin)
+      return false;
+    return (Triple.getDarwinMajorNumber() >= 9 &&
+            Triple.getArch() == llvm::Triple::x86_64);
+
+  default:
+    return false;
+  }
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          Job &Dest,
                          const InputInfo &Output,
@@ -696,6 +726,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-g");
 
   Args.AddLastArg(CmdArgs, options::OPT_nostdinc);
+  Args.AddLastArg(CmdArgs, options::OPT_nostdclanginc);
 
   Args.AddLastArg(CmdArgs, options::OPT_isysroot);
 
@@ -808,15 +839,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-fblocks=0");
   }
 
-  // -fexceptions default varies depending on platform and language; only
-  // pass if specified.
- if (Arg *A = Args.getLastArg(options::OPT_fexceptions,
-                               options::OPT_fno_exceptions)) {
-    if (A->getOption().matches(options::OPT_fexceptions))
-      CmdArgs.push_back("-fexceptions");
-    else
-      CmdArgs.push_back("-fexceptions=0");
-  }
+  if (needsExceptions(Args, InputType, getToolChain().getTriple()))
+    CmdArgs.push_back("-fexceptions");
+  else
+    CmdArgs.push_back("-fexceptions=0");
 
   // -frtti is default, only pass non-default.
   if (!Args.hasFlag(options::OPT_frtti, options::OPT_fno_rtti))

@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/LatencyPriorityQueue.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -47,11 +48,17 @@ using namespace llvm;
 STATISTIC(NumNoops, "Number of noops inserted");
 STATISTIC(NumStalls, "Number of pipeline stalls");
 
+// Post-RA scheduling is enabled with
+// TargetSubtarget.enablePostRAScheduler(). This flag can be used to
+// override the target.
+static cl::opt<bool>
+EnablePostRAScheduler("post-RA-scheduler",
+                       cl::desc("Enable scheduling after register allocation"),
+                       cl::init(false), cl::Hidden);
 static cl::opt<bool>
 EnableAntiDepBreaking("break-anti-dependencies",
                       cl::desc("Break post-RA scheduling anti-dependencies"),
                       cl::init(true), cl::Hidden);
-
 static cl::opt<bool>
 EnablePostRAHazardAvoidance("avoid-hazards",
                       cl::desc("Enable exact hazard avoidance"),
@@ -123,13 +130,17 @@ namespace {
     /// RegRegs - Map registers to all their references within a live range.
     std::multimap<unsigned, MachineOperand *> RegRefs;
 
-    /// The index of the most recent kill (proceding bottom-up), or ~0u if
-    /// the register is not live.
+    /// KillIndices - The index of the most recent kill (proceding bottom-up),
+    /// or ~0u if the register is not live.
     unsigned KillIndices[TargetRegisterInfo::FirstVirtualRegister];
 
-    /// The index of the most recent complete def (proceding bottom up), or ~0u
-    /// if the register is live.
+    /// DefIndices - The index of the most recent complete def (proceding bottom
+    /// up), or ~0u if the register is live.
     unsigned DefIndices[TargetRegisterInfo::FirstVirtualRegister];
+
+    /// KeepRegs - A set of registers which are live and cannot be changed to
+    /// break anti-dependencies.
+    SmallSet<unsigned, 4> KeepRegs;
 
   public:
     SchedulePostRATDList(MachineFunction &MF,
@@ -210,10 +221,16 @@ static bool isSchedulingBoundary(const MachineInstr *MI,
 }
 
 bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
-  // Check that post-RA scheduling is enabled for this function
-  const TargetSubtarget &ST = Fn.getTarget().getSubtarget<TargetSubtarget>();
-  if (!ST.enablePostRAScheduler())
-    return true;
+  // Check for explicit enable/disable of post-ra scheduling.
+  if (EnablePostRAScheduler.getPosition() > 0) {
+    if (!EnablePostRAScheduler)
+      return true;
+  } else {
+    // Check that post-RA scheduling is enabled for this function
+    const TargetSubtarget &ST = Fn.getTarget().getSubtarget<TargetSubtarget>();
+    if (!ST.enablePostRAScheduler())
+      return true;
+  }
 
   DEBUG(errs() << "PostRAScheduler\n");
 
@@ -293,8 +310,13 @@ void SchedulePostRATDList::StartBlock(MachineBasicBlock *BB) {
   std::fill(KillIndices, array_endof(KillIndices), ~0u);
   std::fill(DefIndices, array_endof(DefIndices), BB->size());
 
+  // Clear "do not change" set.
+  KeepRegs.clear();
+
+  bool IsReturnBlock = (!BB->empty() && BB->back().getDesc().isReturn());
+
   // Determine the live-out physregs for this block.
-  if (!BB->empty() && BB->back().getDesc().isReturn())
+  if (IsReturnBlock) {
     // In a return block, examine the function live-out regs.
     for (MachineRegisterInfo::liveout_iterator I = MRI.liveout_begin(),
          E = MRI.liveout_end(); I != E; ++I) {
@@ -310,7 +332,7 @@ void SchedulePostRATDList::StartBlock(MachineBasicBlock *BB) {
         DefIndices[AliasReg] = ~0u;
       }
     }
-  else
+  } else {
     // In a non-return block, examine the live-in regs of all successors.
     for (MachineBasicBlock::succ_iterator SI = BB->succ_begin(),
          SE = BB->succ_end(); SI != SE; ++SI)
@@ -328,18 +350,16 @@ void SchedulePostRATDList::StartBlock(MachineBasicBlock *BB) {
           DefIndices[AliasReg] = ~0u;
         }
       }
+  }
 
-  // Consider callee-saved registers as live-out, since we're running after
-  // prologue/epilogue insertion so there's no way to add additional
-  // saved registers.
-  //
-  // TODO: there is a new method
-  // MachineFrameInfo::getPristineRegs(MBB). It gives you a list of
-  // CSRs that have not been saved when entering the MBB. The
-  // remaining CSRs have been saved and can be treated like call
-  // clobbered registers.
+  // Mark live-out callee-saved registers. In a return block this is
+  // all callee-saved registers. In non-return this is any
+  // callee-saved register that is not saved in the prolog.
+  const MachineFrameInfo *MFI = MF.getFrameInfo();
+  BitVector Pristine = MFI->getPristineRegs(BB);
   for (const unsigned *I = TRI->getCalleeSavedRegs(); *I; ++I) {
     unsigned Reg = *I;
+    if (!IsReturnBlock && !Pristine.test(Reg)) continue;
     Classes[Reg] = reinterpret_cast<TargetRegisterClass *>(-1);
     KillIndices[Reg] = BB->size();
     DefIndices[Reg] = ~0u;
@@ -476,6 +496,16 @@ void SchedulePostRATDList::PrescanInstruction(MachineInstr *MI) {
     // If we're still willing to consider this register, note the reference.
     if (Classes[Reg] != reinterpret_cast<TargetRegisterClass *>(-1))
       RegRefs.insert(std::make_pair(Reg, &MO));
+
+    // It's not safe to change register allocation for source operands of
+    // that have special allocation requirements.
+    if (MO.isUse() && MI->getDesc().hasExtraSrcRegAllocReq()) {
+      if (KeepRegs.insert(Reg)) {
+        for (const unsigned *Subreg = TRI->getSubRegisters(Reg);
+             *Subreg; ++Subreg)
+          KeepRegs.insert(*Subreg);
+      }
+    }
   }
 }
 
@@ -495,9 +525,10 @@ void SchedulePostRATDList::ScanInstruction(MachineInstr *MI,
 
     DefIndices[Reg] = Count;
     KillIndices[Reg] = ~0u;
-          assert(((KillIndices[Reg] == ~0u) !=
-                  (DefIndices[Reg] == ~0u)) &&
-               "Kill and Def maps aren't consistent for Reg!");
+    assert(((KillIndices[Reg] == ~0u) !=
+            (DefIndices[Reg] == ~0u)) &&
+           "Kill and Def maps aren't consistent for Reg!");
+    KeepRegs.erase(Reg);
     Classes[Reg] = 0;
     RegRefs.erase(Reg);
     // Repeat, for all subregs.
@@ -506,6 +537,7 @@ void SchedulePostRATDList::ScanInstruction(MachineInstr *MI,
       unsigned SubregReg = *Subreg;
       DefIndices[SubregReg] = Count;
       KillIndices[SubregReg] = ~0u;
+      KeepRegs.erase(SubregReg);
       Classes[SubregReg] = 0;
       RegRefs.erase(SubregReg);
     }
@@ -661,13 +693,6 @@ bool SchedulePostRATDList::BreakAntiDependencies() {
        I != E; --Count) {
     MachineInstr *MI = --I;
 
-    // After regalloc, KILL instructions aren't safe to treat as
-    // dependence-breaking. In the case of an INSERT_SUBREG, the KILL
-    // is left behind appearing to clobber the super-register, while the
-    // subregister needs to remain live. So we just ignore them.
-    if (MI->getOpcode() == TargetInstrInfo::KILL)
-      continue;
-
     // Check if this instruction has a dependence on the critical path that
     // is an anti-dependence that we may be able to break. If it is, set
     // AntiDepReg to the non-zero register associated with the anti-dependence.
@@ -690,8 +715,12 @@ bool SchedulePostRATDList::BreakAntiDependencies() {
         if (Edge->getKind() == SDep::Anti) {
           AntiDepReg = Edge->getReg();
           assert(AntiDepReg != 0 && "Anti-dependence on reg0?");
-          // Don't break anti-dependencies on non-allocatable registers.
           if (!AllocatableSet.test(AntiDepReg))
+            // Don't break anti-dependencies on non-allocatable registers.
+            AntiDepReg = 0;
+          else if (KeepRegs.count(AntiDepReg))
+            // Don't break anti-dependencies if an use down below requires
+            // this exact register.
             AntiDepReg = 0;
           else {
             // If the SUnit has other dependencies on the SUnit that it
@@ -723,16 +752,22 @@ bool SchedulePostRATDList::BreakAntiDependencies() {
 
     PrescanInstruction(MI);
 
-    // If this instruction has a use of AntiDepReg, breaking it
-    // is invalid.
-    for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-      MachineOperand &MO = MI->getOperand(i);
-      if (!MO.isReg()) continue;
-      unsigned Reg = MO.getReg();
-      if (Reg == 0) continue;
-      if (MO.isUse() && AntiDepReg == Reg) {
-        AntiDepReg = 0;
-        break;
+    if (MI->getDesc().hasExtraDefRegAllocReq())
+      // If this instruction's defs have special allocation requirement, don't
+      // break this anti-dependency.
+      AntiDepReg = 0;
+    else if (AntiDepReg) {
+      // If this instruction has a use of AntiDepReg, breaking it
+      // is invalid.
+      for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
+        MachineOperand &MO = MI->getOperand(i);
+        if (!MO.isReg()) continue;
+        unsigned Reg = MO.getReg();
+        if (Reg == 0) continue;
+        if (MO.isUse() && AntiDepReg == Reg) {
+          AntiDepReg = 0;
+          break;
+        }
       }
     }
 
@@ -849,6 +884,7 @@ bool SchedulePostRATDList::ToggleKillFlag(MachineInstr *MI,
 
   // If any subreg of MO is live, then create an imp-def for that
   // subreg and keep MO marked as killed.
+  MO.setIsKill(false);
   bool AllDead = true;
   const unsigned SuperReg = MO.getReg();
   for (const unsigned *Subreg = TRI->getSubRegisters(SuperReg);
@@ -863,7 +899,8 @@ bool SchedulePostRATDList::ToggleKillFlag(MachineInstr *MI,
     }
   }
 
-  MO.setIsKill(AllDead);
+  if(AllDead)
+    MO.setIsKill(true);
   return false;
 }
 

@@ -37,10 +37,13 @@ class VISIBILITY_HIDDEN ConstStructBuilder {
 
   unsigned NextFieldOffsetInBytes;
 
+  unsigned LLVMStructAlignment;
+  
   std::vector<llvm::Constant *> Elements;
 
   ConstStructBuilder(CodeGenModule &CGM, CodeGenFunction *CGF)
-    : CGM(CGM), CGF(CGF), Packed(false), NextFieldOffsetInBytes(0) { }
+    : CGM(CGM), CGF(CGF), Packed(false), NextFieldOffsetInBytes(0),
+    LLVMStructAlignment(1) { }
 
   bool AppendField(const FieldDecl *Field, uint64_t FieldOffset,
                    const Expr *InitExpr) {
@@ -61,44 +64,11 @@ class VISIBILITY_HIDDEN ConstStructBuilder {
       llvm::RoundUpToAlignment(NextFieldOffsetInBytes, FieldAlignment);
 
     if (AlignedNextFieldOffsetInBytes > FieldOffsetInBytes) {
-      std::vector<llvm::Constant *> PackedElements;
-
       assert(!Packed && "Alignment is wrong even with a packed struct!");
 
       // Convert the struct to a packed struct.
-      uint64_t ElementOffsetInBytes = 0;
-
-      for (unsigned i = 0, e = Elements.size(); i != e; ++i) {
-        llvm::Constant *C = Elements[i];
-
-        unsigned ElementAlign =
-          CGM.getTargetData().getABITypeAlignment(C->getType());
-        uint64_t AlignedElementOffsetInBytes =
-          llvm::RoundUpToAlignment(ElementOffsetInBytes, ElementAlign);
-
-        if (AlignedElementOffsetInBytes > ElementOffsetInBytes) {
-          // We need some padding.
-          uint64_t NumBytes =
-            AlignedElementOffsetInBytes - ElementOffsetInBytes;
-
-          const llvm::Type *Ty = llvm::Type::getInt8Ty(CGF->getLLVMContext());
-          if (NumBytes > 1)
-            Ty = llvm::ArrayType::get(Ty, NumBytes);
-
-          llvm::Constant *Padding = llvm::Constant::getNullValue(Ty);
-          PackedElements.push_back(Padding);
-          ElementOffsetInBytes += getSizeInBytes(Padding);
-        }
-
-        PackedElements.push_back(C);
-        ElementOffsetInBytes += getSizeInBytes(C);
-      }
-
-      assert(ElementOffsetInBytes == NextFieldOffsetInBytes &&
-             "Packing the struct changed its size!");
-
-      Elements = PackedElements;
-      Packed = true;
+      ConvertStructToPacked();
+      
       AlignedNextFieldOffsetInBytes = NextFieldOffsetInBytes;
     }
 
@@ -115,6 +85,11 @@ class VISIBILITY_HIDDEN ConstStructBuilder {
     // Add the field.
     Elements.push_back(C);
     NextFieldOffsetInBytes = AlignedNextFieldOffsetInBytes + getSizeInBytes(C);
+    
+    if (Packed)
+      assert(LLVMStructAlignment == 1 && "Packed struct not byte-aligned!");
+    else
+      LLVMStructAlignment = std::max(LLVMStructAlignment, FieldAlignment);
 
     return true;
   }
@@ -270,6 +245,44 @@ class VISIBILITY_HIDDEN ConstStructBuilder {
     AppendPadding(NumPadBytes);
   }
 
+  void ConvertStructToPacked() {
+    std::vector<llvm::Constant *> PackedElements;
+    uint64_t ElementOffsetInBytes = 0;
+
+    for (unsigned i = 0, e = Elements.size(); i != e; ++i) {
+      llvm::Constant *C = Elements[i];
+
+      unsigned ElementAlign =
+        CGM.getTargetData().getABITypeAlignment(C->getType());
+      uint64_t AlignedElementOffsetInBytes =
+        llvm::RoundUpToAlignment(ElementOffsetInBytes, ElementAlign);
+
+      if (AlignedElementOffsetInBytes > ElementOffsetInBytes) {
+        // We need some padding.
+        uint64_t NumBytes =
+          AlignedElementOffsetInBytes - ElementOffsetInBytes;
+
+        const llvm::Type *Ty = llvm::Type::getInt8Ty(CGF->getLLVMContext());
+        if (NumBytes > 1)
+          Ty = llvm::ArrayType::get(Ty, NumBytes);
+
+        llvm::Constant *Padding = llvm::Constant::getNullValue(Ty);
+        PackedElements.push_back(Padding);
+        ElementOffsetInBytes += getSizeInBytes(Padding);
+      }
+
+      PackedElements.push_back(C);
+      ElementOffsetInBytes += getSizeInBytes(C);
+    }
+
+    assert(ElementOffsetInBytes == NextFieldOffsetInBytes &&
+           "Packing the struct changed its size!");
+
+    Elements = PackedElements;
+    LLVMStructAlignment = 1;
+    Packed = true;
+  }
+                              
   bool Build(InitListExpr *ILE) {
     RecordDecl *RD = ILE->getType()->getAs<RecordType>()->getDecl();
     const ASTRecordLayout &Layout = CGM.getContext().getASTRecordLayout(RD);
@@ -306,9 +319,22 @@ class VISIBILITY_HIDDEN ConstStructBuilder {
       // we must have a flexible array member at the end.
       assert(RD->hasFlexibleArrayMember() &&
              "Must have flexible array member if struct is bigger than type!");
-
+      
       // No tail padding is necessary.
       return true;
+    }
+
+    uint64_t LLVMSizeInBytes = llvm::RoundUpToAlignment(NextFieldOffsetInBytes, 
+                                                        LLVMStructAlignment);
+
+    // Check if we need to convert the struct to a packed struct.
+    if (NextFieldOffsetInBytes <= LayoutSizeInBytes && 
+        LLVMSizeInBytes > LayoutSizeInBytes) {
+      assert(!Packed && "Size mismatch!");
+      
+      ConvertStructToPacked();
+      assert(NextFieldOffsetInBytes == LayoutSizeInBytes &&
+             "Converting to packed did not help!");
     }
 
     // Append tail padding if necessary.
@@ -376,7 +402,50 @@ public:
   llvm::Constant *VisitCompoundLiteralExpr(CompoundLiteralExpr *E) {
     return Visit(E->getInitializer());
   }
+  
+  llvm::Constant *EmitMemberFunctionPointer(CXXMethodDecl *MD) {
+    assert(MD->isInstance() && "Member function must not be static!");
+    
+    const llvm::Type *PtrDiffTy = 
+      CGM.getTypes().ConvertType(CGM.getContext().getPointerDiffType());
+    
+    llvm::Constant *Values[2];
+    
+    // Get the function pointer (or index if this is a virtual function).
+    if (MD->isVirtual()) {
+      uint64_t Index = CGM.GetVtableIndex(MD->getCanonicalDecl());
+      
+      Values[0] = llvm::ConstantInt::get(PtrDiffTy, Index + 1);
+    } else {
+      llvm::Constant *FuncPtr = CGM.GetAddrOfFunction(MD);
 
+      Values[0] = llvm::ConstantExpr::getPtrToInt(FuncPtr, PtrDiffTy);
+    } 
+    
+    // The adjustment will always be 0.
+    Values[1] = llvm::ConstantInt::get(PtrDiffTy, 0);
+    
+    return llvm::ConstantStruct::get(CGM.getLLVMContext(),
+                                     Values, 2, /*Packed=*/false);
+  }
+
+  llvm::Constant *VisitUnaryAddrOf(UnaryOperator *E) {
+    if (const MemberPointerType *MPT = 
+        E->getType()->getAs<MemberPointerType>()) {
+      QualType T = MPT->getPointeeType();
+      if (T->isFunctionProtoType()) {
+        QualifiedDeclRefExpr *DRE = cast<QualifiedDeclRefExpr>(E->getSubExpr());
+        
+        return EmitMemberFunctionPointer(cast<CXXMethodDecl>(DRE->getDecl()));
+      }
+      
+      // FIXME: Should we handle other member pointer types here too,
+      // or should they be handled by Expr::Evaluate?
+    }
+    
+    return 0;
+  }
+    
   llvm::Constant *VisitCastExpr(CastExpr* E) {
     switch (E->getCastKind()) {
     case CastExpr::CK_ToUnion: {
@@ -416,6 +485,43 @@ public:
     }
     case CastExpr::CK_NullToMemberPointer:
       return CGM.EmitNullConstant(E->getType());
+      
+    case CastExpr::CK_BaseToDerivedMemberPointer: {
+      Expr *SubExpr = E->getSubExpr();
+
+      const MemberPointerType *SrcTy = 
+        SubExpr->getType()->getAs<MemberPointerType>();
+      const MemberPointerType *DestTy = 
+        E->getType()->getAs<MemberPointerType>();
+      
+      const CXXRecordDecl *BaseClass =
+        cast<CXXRecordDecl>(cast<RecordType>(SrcTy->getClass())->getDecl());
+      const CXXRecordDecl *DerivedClass =
+        cast<CXXRecordDecl>(cast<RecordType>(DestTy->getClass())->getDecl());
+
+      if (SrcTy->getPointeeType()->isFunctionProtoType()) {
+        llvm::Constant *C = 
+          CGM.EmitConstantExpr(SubExpr, SubExpr->getType(), CGF);
+        if (!C)
+          return 0;
+        
+        llvm::ConstantStruct *CS = cast<llvm::ConstantStruct>(C);
+        
+        // Check if we need to update the adjustment.
+        if (llvm::Constant *Offset = CGM.GetCXXBaseClassOffset(DerivedClass,
+                                                               BaseClass)) {
+          llvm::Constant *Values[2];
+        
+          Values[0] = CS->getOperand(0);
+          Values[1] = llvm::ConstantExpr::getAdd(CS->getOperand(1), Offset);
+          return llvm::ConstantStruct::get(CGM.getLLVMContext(), Values, 2, 
+                                           /*Packed=*/false);
+        }
+        
+        return CS;
+      }          
+    }
+        
     default: {
       // FIXME: This should be handled by the CK_NoOp cast kind.
       // Explicit and implicit no-op casts

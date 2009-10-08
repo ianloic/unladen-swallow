@@ -469,6 +469,11 @@ public:
     ReferencedProtocols.set(List, Num, C);
   }
 
+  /// mergeClassExtensionProtocolList - Merge class extension's protocol list
+  /// into the protocol list for this class.
+  void mergeClassExtensionProtocolList(ObjCProtocolDecl *const* List, unsigned Num,
+                       ASTContext &C);
+
   void setIVarList(ObjCIvarDecl * const *List, unsigned Num, ASTContext &C) {
     IVars.set(List, Num, C);
   }
@@ -513,6 +518,9 @@ public:
     return lookupMethod(Sel, false/*isInstance*/);
   }
   ObjCInterfaceDecl *lookupInheritedClass(const IdentifierInfo *ICName);
+  
+  // Lookup a method in the classes implementation hierarchy.
+  ObjCMethodDecl *lookupPrivateInstanceMethod(const Selector &Sel);
 
   // Location information, modeled after the Stmt API.
   SourceLocation getLocStart() const { return getLocation(); } // '@'interface
@@ -690,7 +698,7 @@ public:
   ObjCMethodDecl *lookupClassMethod(Selector Sel) const {
     return lookupMethod(Sel, false/*isInstance*/);
   }
-
+  
   bool isForwardDecl() const { return isForwardProtoDecl; }
   void setForwardDecl(bool val) { isForwardProtoDecl = val; }
 

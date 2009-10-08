@@ -71,7 +71,6 @@ namespace {
       (void) llvm::createGlobalDCEPass();
       (void) llvm::createGlobalOptimizerPass();
       (void) llvm::createGlobalsModRefPass();
-      (void) llvm::createGVNPREPass();
       (void) llvm::createIPConstantPropagationPass();
       (void) llvm::createIPSCCPPass();
       (void) llvm::createIndVarSimplifyPass();
@@ -119,7 +118,6 @@ namespace {
       (void) llvm::createRSProfilingPass();
       (void) llvm::createIndMemRemPass();
       (void) llvm::createInstCountPass();
-      (void) llvm::createPredicateSimplifierPass();
       (void) llvm::createCodeGenLICMPass();
       (void) llvm::createCodeGenPreparePass();
       (void) llvm::createGVNPass();

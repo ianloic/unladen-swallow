@@ -606,8 +606,7 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
 /// getelementptr constantexpr, return the constant value being addressed by the
 /// constant expression, or null if something is funny and we can't decide.
 Constant *llvm::ConstantFoldLoadThroughGEPConstantExpr(Constant *C, 
-                                                       ConstantExpr *CE,
-                                                       LLVMContext &Context) {
+                                                       ConstantExpr *CE) {
   if (CE->getOperand(1) != Constant::getNullValue(CE->getOperand(1)->getType()))
     return 0;  // Do not allow stepping over the value!
   
@@ -677,8 +676,14 @@ llvm::canConstantFoldCallTo(const Function *F) {
   case Intrinsic::ctpop:
   case Intrinsic::ctlz:
   case Intrinsic::cttz:
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
     return true;
-  default: break;
+  default:
+    return false;
+  case 0: break;
   }
 
   if (!F->hasName()) return false;
@@ -719,9 +724,9 @@ static Constant *ConstantFoldFP(double (*NativeFP)(double), double V,
     return 0;
   }
   
-  if (Ty == Type::getFloatTy(Context))
+  if (Ty->isFloatTy())
     return ConstantFP::get(Context, APFloat((float)V));
-  if (Ty == Type::getDoubleTy(Context))
+  if (Ty->isDoubleTy())
     return ConstantFP::get(Context, APFloat(V));
   llvm_unreachable("Can only constant fold float/double");
   return 0; // dummy return to suppress warning
@@ -738,9 +743,9 @@ static Constant *ConstantFoldBinaryFP(double (*NativeFP)(double, double),
     return 0;
   }
   
-  if (Ty == Type::getFloatTy(Context))
+  if (Ty->isFloatTy())
     return ConstantFP::get(Context, APFloat((float)V));
-  if (Ty == Type::getDoubleTy(Context))
+  if (Ty->isDoubleTy())
     return ConstantFP::get(Context, APFloat(V));
   llvm_unreachable("Can only constant fold float/double");
   return 0; // dummy return to suppress warning
@@ -748,26 +753,23 @@ static Constant *ConstantFoldBinaryFP(double (*NativeFP)(double, double),
 
 /// ConstantFoldCall - Attempt to constant fold a call to the specified function
 /// with the specified arguments, returning null if unsuccessful.
-
 Constant *
 llvm::ConstantFoldCall(Function *F, 
-                       Constant* const* Operands, unsigned NumOperands) {
+                       Constant *const *Operands, unsigned NumOperands) {
   if (!F->hasName()) return 0;
   LLVMContext &Context = F->getContext();
   StringRef Name = F->getName();
-  
+
   const Type *Ty = F->getReturnType();
   if (NumOperands == 1) {
     if (ConstantFP *Op = dyn_cast<ConstantFP>(Operands[0])) {
-      if (Ty!=Type::getFloatTy(F->getContext()) &&
-          Ty!=Type::getDoubleTy(Context))
+      if (!Ty->isFloatTy() && !Ty->isDoubleTy())
         return 0;
       /// Currently APFloat versions of these functions do not exist, so we use
       /// the host native double versions.  Float versions are not called
       /// directly but for all these it is true (float)(f((double)arg)) ==
       /// f(arg).  Long double not supported yet.
-      double V = Ty==Type::getFloatTy(F->getContext()) ?
-                                     (double)Op->getValueAPF().convertToFloat():
+      double V = Ty->isFloatTy() ? (double)Op->getValueAPF().convertToFloat() :
                                      Op->getValueAPF().convertToDouble();
       switch (Name[0]) {
       case 'a':
@@ -832,7 +834,11 @@ llvm::ConstantFoldCall(Function *F,
       default:
         break;
       }
-    } else if (ConstantInt *Op = dyn_cast<ConstantInt>(Operands[0])) {
+      return 0;
+    }
+    
+    
+    if (ConstantInt *Op = dyn_cast<ConstantInt>(Operands[0])) {
       if (Name.startswith("llvm.bswap"))
         return ConstantInt::get(Context, Op->getValue().byteSwap());
       else if (Name.startswith("llvm.ctpop"))
@@ -841,37 +847,91 @@ llvm::ConstantFoldCall(Function *F,
         return ConstantInt::get(Ty, Op->getValue().countTrailingZeros());
       else if (Name.startswith("llvm.ctlz"))
         return ConstantInt::get(Ty, Op->getValue().countLeadingZeros());
+      return 0;
     }
-  } else if (NumOperands == 2) {
+    
+    return 0;
+  }
+  
+  if (NumOperands == 2) {
     if (ConstantFP *Op1 = dyn_cast<ConstantFP>(Operands[0])) {
-      if (Ty!=Type::getFloatTy(F->getContext()) && 
-          Ty!=Type::getDoubleTy(Context))
+      if (!Ty->isFloatTy() && !Ty->isDoubleTy())
         return 0;
-      double Op1V = Ty==Type::getFloatTy(F->getContext()) ? 
-                      (double)Op1->getValueAPF().convertToFloat():
+      double Op1V = Ty->isFloatTy() ? 
+                      (double)Op1->getValueAPF().convertToFloat() :
                       Op1->getValueAPF().convertToDouble();
       if (ConstantFP *Op2 = dyn_cast<ConstantFP>(Operands[1])) {
-        double Op2V = Ty==Type::getFloatTy(F->getContext()) ? 
+        if (Op2->getType() != Op1->getType())
+          return 0;
+        
+        double Op2V = Ty->isFloatTy() ? 
                       (double)Op2->getValueAPF().convertToFloat():
                       Op2->getValueAPF().convertToDouble();
 
-        if (Name == "pow") {
+        if (Name == "pow")
           return ConstantFoldBinaryFP(pow, Op1V, Op2V, Ty, Context);
-        } else if (Name == "fmod") {
+        if (Name == "fmod")
           return ConstantFoldBinaryFP(fmod, Op1V, Op2V, Ty, Context);
-        } else if (Name == "atan2") {
+        if (Name == "atan2")
           return ConstantFoldBinaryFP(atan2, Op1V, Op2V, Ty, Context);
-        }
       } else if (ConstantInt *Op2C = dyn_cast<ConstantInt>(Operands[1])) {
-        if (Name == "llvm.powi.f32") {
+        if (Name == "llvm.powi.f32")
           return ConstantFP::get(Context, APFloat((float)std::pow((float)Op1V,
                                                  (int)Op2C->getZExtValue())));
-        } else if (Name == "llvm.powi.f64") {
+        if (Name == "llvm.powi.f64")
           return ConstantFP::get(Context, APFloat((double)std::pow((double)Op1V,
                                                  (int)Op2C->getZExtValue())));
+      }
+      return 0;
+    }
+    
+    
+    if (ConstantInt *Op1 = dyn_cast<ConstantInt>(Operands[0])) {
+      if (ConstantInt *Op2 = dyn_cast<ConstantInt>(Operands[1])) {
+        switch (F->getIntrinsicID()) {
+        default: break;
+        case Intrinsic::uadd_with_overflow: {
+          Constant *Res = ConstantExpr::getAdd(Op1, Op2);           // result.
+          Constant *Ops[] = {
+            Res, ConstantExpr::getICmp(CmpInst::ICMP_ULT, Res, Op1) // overflow.
+          };
+          return ConstantStruct::get(F->getContext(), Ops, 2, false);
+        }
+        case Intrinsic::usub_with_overflow: {
+          Constant *Res = ConstantExpr::getSub(Op1, Op2);           // result.
+          Constant *Ops[] = {
+            Res, ConstantExpr::getICmp(CmpInst::ICMP_UGT, Res, Op1) // overflow.
+          };
+          return ConstantStruct::get(F->getContext(), Ops, 2, false);
+        }
+        case Intrinsic::sadd_with_overflow: {
+          Constant *Res = ConstantExpr::getAdd(Op1, Op2);           // result.
+          Constant *Overflow = ConstantExpr::getSelect(
+              ConstantExpr::getICmp(CmpInst::ICMP_SGT,
+                ConstantInt::get(Op1->getType(), 0), Op1),
+              ConstantExpr::getICmp(CmpInst::ICMP_SGT, Res, Op2), 
+              ConstantExpr::getICmp(CmpInst::ICMP_SLT, Res, Op2)); // overflow.
+
+          Constant *Ops[] = { Res, Overflow };
+          return ConstantStruct::get(F->getContext(), Ops, 2, false);
+        }
+        case Intrinsic::ssub_with_overflow: {
+          Constant *Res = ConstantExpr::getSub(Op1, Op2);           // result.
+          Constant *Overflow = ConstantExpr::getSelect(
+              ConstantExpr::getICmp(CmpInst::ICMP_SGT,
+                ConstantInt::get(Op2->getType(), 0), Op2),
+              ConstantExpr::getICmp(CmpInst::ICMP_SLT, Res, Op1), 
+              ConstantExpr::getICmp(CmpInst::ICMP_SGT, Res, Op1)); // overflow.
+
+          Constant *Ops[] = { Res, Overflow };
+          return ConstantStruct::get(F->getContext(), Ops, 2, false);
+        }
         }
       }
+      
+      return 0;
     }
+    return 0;
   }
   return 0;
 }

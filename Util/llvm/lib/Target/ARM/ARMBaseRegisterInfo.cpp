@@ -660,8 +660,7 @@ ARMBaseRegisterInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
       // off the frame pointer, the effective stack size is 4 bytes larger
       // since the FP points to the stack slot of the previous FP.
       if (estimateStackSize(MF, MFI) + (hasFP(MF) ? 4 : 0)
-          >= estimateRSStackSizeLimit(MF)
-          || AFI->isThumb1OnlyFunction()) {
+          >= estimateRSStackSizeLimit(MF)) {
         // If any non-reserved CS register isn't spilled, just spill one or two
         // extra. That should take care of it!
         unsigned NumExtras = TargetAlign / 4;
@@ -690,7 +689,8 @@ ARMBaseRegisterInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
             MF.getRegInfo().setPhysRegUsed(Extras[i]);
             AFI->setCSRegisterIsSpilled(Extras[i]);
           }
-        } else {
+        } else if (!AFI->isThumb1OnlyFunction()) {
+          // note: Thumb1 functions spill to R12, not the stack.
           // Reserve a slot closest to SP or frame pointer.
           const TargetRegisterClass *RC = ARM::GPRRegisterClass;
           RS->setScavengingFrameIndex(MFI->CreateStackObject(RC->getSize(),
@@ -1023,9 +1023,10 @@ unsigned findScratchRegister(RegScavenger *RS, const TargetRegisterClass *RC,
   return Reg;
 }
 
-void
+unsigned
 ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                         int SPAdj, RegScavenger *RS) const {
+                                         int SPAdj, int *Value,
+                                         RegScavenger *RS) const {
   unsigned i = 0;
   MachineInstr &MI = *II;
   MachineBasicBlock &MBB = *MI.getParent();
@@ -1067,7 +1068,7 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     Done = rewriteT2FrameIndex(MI, i, FrameReg, Offset, TII);
   }
   if (Done)
-    return;
+    return 0;
 
   // If we get here, the immediate doesn't fit into the instruction.  We folded
   // as much as possible above, handle the rest, providing a register that is
@@ -1102,6 +1103,7 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     }
     MI.getOperand(i).ChangeToRegister(ScratchReg, false, false, true);
   }
+  return 0;
 }
 
 /// Move iterator pass the next bunch of callee save load / store ops for

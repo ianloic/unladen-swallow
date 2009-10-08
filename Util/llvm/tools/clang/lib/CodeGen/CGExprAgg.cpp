@@ -94,6 +94,7 @@ public:
   void VisitBinaryOperator(const BinaryOperator *BO);
   void VisitBinAssign(const BinaryOperator *E);
   void VisitBinComma(const BinaryOperator *E);
+  void VisitUnaryAddrOf(const UnaryOperator *E);
 
   void VisitObjCMessageExpr(ObjCMessageExpr *E);
   void VisitObjCIvarRefExpr(ObjCIvarRefExpr *E) {
@@ -239,7 +240,7 @@ void AggExprEmitter::VisitCastExpr(CastExpr *E) {
       cast<CXXRecordDecl>(E->getType()->getAs<MemberPointerType>()->
                           getClass()->getAs<RecordType>()->getDecl());
     
-    llvm::Constant *Adj = CGF.GetCXXBaseClassOffset(DstDecl, SrcDecl);
+    llvm::Constant *Adj = CGF.CGM.GetCXXBaseClassOffset(DstDecl, SrcDecl);
     if (Adj)
       SrcAdj = Builder.CreateAdd(SrcAdj, Adj, "adj");
     
@@ -279,6 +280,38 @@ void AggExprEmitter::VisitBinComma(const BinaryOperator *E) {
   CGF.EmitAnyExpr(E->getLHS(), 0, false, true);
   CGF.EmitAggExpr(E->getRHS(), DestPtr, VolatileDest,
                   /*IgnoreResult=*/false, IsInitializer);
+}
+
+void AggExprEmitter::VisitUnaryAddrOf(const UnaryOperator *E) {
+  // We have a member function pointer.
+  const MemberPointerType *MPT = E->getType()->getAs<MemberPointerType>();
+  assert(MPT->getPointeeType()->isFunctionProtoType() &&
+         "Unexpected member pointer type!");
+  
+  const QualifiedDeclRefExpr *DRE = cast<QualifiedDeclRefExpr>(E->getSubExpr());
+  const CXXMethodDecl *MD = cast<CXXMethodDecl>(DRE->getDecl());
+
+  const llvm::Type *PtrDiffTy = 
+    CGF.ConvertType(CGF.getContext().getPointerDiffType());
+
+  llvm::Value *DstPtr = Builder.CreateStructGEP(DestPtr, 0, "dst.ptr");
+  llvm::Value *FuncPtr;
+  
+  if (MD->isVirtual()) {
+    uint64_t Index = CGF.CGM.GetVtableIndex(MD->getCanonicalDecl());
+    
+    FuncPtr = llvm::ConstantInt::get(PtrDiffTy, Index + 1);
+  } else {
+    FuncPtr = llvm::ConstantExpr::getPtrToInt(CGF.CGM.GetAddrOfFunction(MD), 
+                                              PtrDiffTy);
+  }
+  Builder.CreateStore(FuncPtr, DstPtr, VolatileDest);
+
+  llvm::Value *AdjPtr = Builder.CreateStructGEP(DestPtr, 1, "dst.adj");
+  
+  // The adjustment will always be 0.
+  Builder.CreateStore(llvm::ConstantInt::get(PtrDiffTy, 0), AdjPtr,
+                      VolatileDest);
 }
 
 void AggExprEmitter::VisitStmtExpr(const StmtExpr *E) {

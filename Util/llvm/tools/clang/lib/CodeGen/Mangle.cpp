@@ -22,6 +22,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/Basic/SourceManager.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -29,7 +30,7 @@ using namespace clang;
 
 namespace {
   class VISIBILITY_HIDDEN CXXNameMangler {
-    ASTContext &Context;
+    MangleContext &Context;
     llvm::raw_ostream &Out;
 
     const CXXMethodDecl *Structor;
@@ -39,7 +40,7 @@ namespace {
     llvm::DenseMap<uintptr_t, unsigned> Substitutions;
     
   public:
-    CXXNameMangler(ASTContext &C, llvm::raw_ostream &os)
+    CXXNameMangler(MangleContext &C, llvm::raw_ostream &os)
       : Context(C), Out(os), Structor(0), StructorType(0) { }
 
     bool mangle(const NamedDecl *D);
@@ -127,12 +128,13 @@ bool CXXNameMangler::mangleFunctionDecl(const FunctionDecl *FD) {
   // (always).
   if (!FD->hasAttr<OverloadableAttr>()) {
     // C functions are not mangled, and "main" is never mangled.
-    if (!Context.getLangOptions().CPlusPlus || FD->isMain())
+    if (!Context.getASTContext().getLangOptions().CPlusPlus || FD->isMain())
       return false;
 
     // No mangling in an "implicit extern C" header.
     if (FD->getLocation().isValid() &&
-        Context.getSourceManager().isInExternCSystemHeader(FD->getLocation()))
+        Context.getASTContext().getSourceManager().
+        isInExternCSystemHeader(FD->getLocation()))
       return false;
 
     // No name mangling in a C linkage specification.
@@ -165,7 +167,7 @@ bool CXXNameMangler::mangle(const NamedDecl *D) {
     return mangleFunctionDecl(FD);
 
   if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
-    if (!Context.getLangOptions().CPlusPlus ||
+    if (!Context.getASTContext().getLangOptions().CPlusPlus ||
         isInCLinkageSpecification(D) ||
         D->getDeclContext()->isTranslationUnit())
       return false;
@@ -254,7 +256,8 @@ static bool isStdNamespace(const DeclContext *DC) {
     return false;
 
   const NamespaceDecl *NS = cast<NamespaceDecl>(DC);
-  return NS->getOriginalNamespace()->getIdentifier()->isStr("std");
+  const IdentifierInfo *II = NS->getOriginalNamespace()->getIdentifier();
+  return II && II->isStr("std");
 }
 
 static const TemplateDecl *
@@ -402,9 +405,47 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND) {
   //                     ::= <source-name>
   DeclarationName Name = ND->getDeclName();
   switch (Name.getNameKind()) {
-  case DeclarationName::Identifier:
-    mangleSourceName(Name.getAsIdentifierInfo());
+  case DeclarationName::Identifier: {
+    if (const NamespaceDecl *NS = dyn_cast<NamespaceDecl>(ND)) {
+      if (NS->isAnonymousNamespace()) {
+        // This is how gcc mangles these names.  It's apparently
+        // always '1', no matter how many different anonymous
+        // namespaces appear in a context.
+        Out << "12_GLOBAL__N_1";
+        break;
+      }
+    }    
+
+    if (const IdentifierInfo *II = Name.getAsIdentifierInfo()) {
+      mangleSourceName(II);
+      break;
+    }
+      
+    // We must have an anonymous struct.
+    const TagDecl *TD = cast<TagDecl>(ND);
+    if (const TypedefDecl *D = TD->getTypedefForAnonDecl()) {
+      assert(TD->getDeclContext() == D->getDeclContext() &&
+             "Typedef should not be in another decl context!");
+      assert(D->getDeclName().getAsIdentifierInfo() &&
+             "Typedef was not named!");
+      mangleSourceName(D->getDeclName().getAsIdentifierInfo());
+      break;
+    }
+    
+    // Get a unique id for the anonymous struct.
+    uint64_t AnonStructId = Context.getAnonymousStructId(TD);
+
+    // Mangle it as a source name in the form
+    // [n] $_<id> 
+    // where n is the length of the string.
+    llvm::SmallString<8> Str;
+    Str += "$_";
+    Str += llvm::utostr(AnonStructId);
+
+    Out << Str.size();
+    Out << Str.str();
     break;
+  }
 
   case DeclarationName::ObjCZeroArgSelector:
   case DeclarationName::ObjCOneArgSelector:
@@ -437,7 +478,7 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND) {
   case DeclarationName::CXXConversionFunctionName:
     // <operator-name> ::= cv <type>    # (cast)
     Out << "cv";
-    mangleType(Context.getCanonicalType(Name.getCXXNameType()));
+    mangleType(Context.getASTContext().getCanonicalType(Name.getCXXNameType()));
     break;
 
   case DeclarationName::CXXOperatorName:
@@ -662,7 +703,7 @@ void CXXNameMangler::mangleQualifiers(Qualifiers Quals) {
 
 void CXXNameMangler::mangleType(QualType T) {
   // Only operate on the canonical type!
-  T = Context.getCanonicalType(T);
+  T = Context.getASTContext().getCanonicalType(T);
 
   bool IsSubstitutable = !isa<BuiltinType>(T);
   if (IsSubstitutable && mangleSubstitution(T))
@@ -1204,8 +1245,7 @@ static bool isCharSpecialization(QualType T, const char *Name) {
 bool CXXNameMangler::mangleStandardSubstitution(const NamedDecl *ND) {
   // <substitution> ::= St # ::std::
   if (const NamespaceDecl *NS = dyn_cast<NamespaceDecl>(ND)) {
-    if (NS->getParent()->isTranslationUnit() &&
-        NS->getOriginalNamespace()->getIdentifier()->isStr("std")) {
+    if (isStdNamespace(NS)) {
       Out << "St";
       return true;
     }
@@ -1283,7 +1323,7 @@ namespace clang {
   /// and this routine will return false. In this case, the caller should just
   /// emit the identifier of the declaration (\c D->getIdentifier()) as its
   /// name.
-  bool mangleName(const NamedDecl *D, ASTContext &Context,
+  bool mangleName(MangleContext &Context, const NamedDecl *D,
                   llvm::raw_ostream &os) {
     assert(!isa<CXXConstructorDecl>(D) &&
            "Use mangleCXXCtor for constructor decls!");
@@ -1291,11 +1331,11 @@ namespace clang {
            "Use mangleCXXDtor for destructor decls!");
 
     PrettyStackTraceDecl CrashInfo(const_cast<NamedDecl *>(D), SourceLocation(),
-                                   Context.getSourceManager(),
+                                   Context.getASTContext().getSourceManager(),
                                    "Mangling declaration");
     
     CXXNameMangler Mangler(Context, os);
-    if (!Mangler.mangle(D))
+    if (!Mangler.mangle(cast<NamedDecl>(D->getCanonicalDecl())))
       return false;
 
     os.flush();
@@ -1304,8 +1344,8 @@ namespace clang {
 
   /// \brief Mangles the a thunk with the offset n for the declaration D and
   /// emits that name to the given output stream.
-  void mangleThunk(const FunctionDecl *FD, int64_t nv, int64_t v,
-                   ASTContext &Context, llvm::raw_ostream &os) {
+  void mangleThunk(MangleContext &Context, const FunctionDecl *FD, 
+                   int64_t nv, int64_t v, llvm::raw_ostream &os) {
     // FIXME: Hum, we might have to thunk these, fix.
     assert(!isa<CXXDestructorDecl>(FD) &&
            "Use mangleCXXDtor for destructor decls!");
@@ -1317,8 +1357,9 @@ namespace clang {
 
   /// \brief Mangles the a covariant thunk for the declaration D and emits that
   /// name to the given output stream.
-  void mangleCovariantThunk(const FunctionDecl *FD, int64_t nv_t, int64_t v_t,
-                            int64_t nv_r, int64_t v_r, ASTContext &Context,
+  void mangleCovariantThunk(MangleContext &Context, const FunctionDecl *FD, 
+                            int64_t nv_t, int64_t v_t,
+                            int64_t nv_r, int64_t v_r,
                             llvm::raw_ostream &os) {
     // FIXME: Hum, we might have to thunk these, fix.
     assert(!isa<CXXDestructorDecl>(FD) &&
@@ -1331,7 +1372,7 @@ namespace clang {
 
   /// mangleGuardVariable - Returns the mangled name for a guard variable
   /// for the passed in VarDecl.
-  void mangleGuardVariable(const VarDecl *D, ASTContext &Context,
+  void mangleGuardVariable(MangleContext &Context, const VarDecl *D,
                            llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
     Mangler.mangleGuardVariable(D);
@@ -1339,23 +1380,23 @@ namespace clang {
     os.flush();
   }
 
-  void mangleCXXCtor(const CXXConstructorDecl *D, CXXCtorType Type,
-                     ASTContext &Context, llvm::raw_ostream &os) {
+  void mangleCXXCtor(MangleContext &Context, const CXXConstructorDecl *D, 
+                     CXXCtorType Type, llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
     Mangler.mangleCXXCtor(D, Type);
 
     os.flush();
   }
 
-  void mangleCXXDtor(const CXXDestructorDecl *D, CXXDtorType Type,
-                     ASTContext &Context, llvm::raw_ostream &os) {
+  void mangleCXXDtor(MangleContext &Context, const CXXDestructorDecl *D, 
+                     CXXDtorType Type, llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
     Mangler.mangleCXXDtor(D, Type);
 
     os.flush();
   }
 
-  void mangleCXXVtable(QualType Type, ASTContext &Context,
+  void mangleCXXVtable(MangleContext &Context, QualType Type,
                        llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
     Mangler.mangleCXXVtable(Type);
@@ -1363,7 +1404,7 @@ namespace clang {
     os.flush();
   }
 
-  void mangleCXXRtti(QualType Type, ASTContext &Context,
+  void mangleCXXRtti(MangleContext &Context, QualType Type,
                      llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
     Mangler.mangleCXXRtti(Type);

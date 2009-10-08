@@ -21,12 +21,16 @@ using namespace llvm;
 static cl::opt<bool>
 ReserveR9("arm-reserve-r9", cl::Hidden,
           cl::desc("Reserve R9, making it unavailable as GPR"));
+static cl::opt<bool>
+UseNEONFP("arm-use-neon-fp",
+          cl::desc("Use NEON for single-precision FP"),
+          cl::init(false), cl::Hidden);
 
 ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
                            bool isThumb)
   : ARMArchVersion(V4T)
   , ARMFPUType(None)
-  , UseNEONForSinglePrecisionFP(false)
+  , UseNEONForSinglePrecisionFP(UseNEONFP)
   , IsThumb(isThumb)
   , ThumbMode(Thumb1)
   , PostRAScheduler(false)
@@ -93,6 +97,13 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
 
   if (isTargetDarwin())
     IsR9Reserved = ReserveR9 | (ARMArchVersion < V6);
+
+  // Set CPU specific features.
+  if (CPUString == "cortex-a8") {
+    PostRAScheduler = true;
+    if (UseNEONFP.getPosition() == 0)
+      UseNEONForSinglePrecisionFP = true;
+  }
 }
 
 /// GVIsIndirectSymbol - true if the GV will be accessed via an indirect symbol.

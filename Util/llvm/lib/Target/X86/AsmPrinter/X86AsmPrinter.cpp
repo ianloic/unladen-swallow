@@ -165,13 +165,7 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   for (MachineFunction::const_iterator I = MF.begin(), E = MF.end();
        I != E; ++I) {
     // Print a label for the basic block.
-    if (!VerboseAsm && (I->pred_empty() || I->isOnlyReachableByFallthrough())) {
-      // This is an entry block or a block that's only reachable via a
-      // fallthrough edge. In non-VerboseAsm mode, don't print the label.
-    } else {
-      EmitBasicBlockStart(I);
-      O << '\n';
-    }
+    EmitBasicBlockStart(I);
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
          II != IE; ++II) {
       // Print the assembly for the instruction.
@@ -653,13 +647,15 @@ bool X86AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 void X86AsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
 
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
   
   printInstructionThroughMCStreamer(MI);
   
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
+
+  processDebugLoc(MI, false);
 }
 
 void X86AsmPrinter::PrintGlobalVariable(const GlobalVariable* GVar) {

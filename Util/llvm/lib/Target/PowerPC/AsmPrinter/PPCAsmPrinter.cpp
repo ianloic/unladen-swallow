@@ -381,8 +381,8 @@ namespace {
     }
 
     bool runOnMachineFunction(MachineFunction &F);
-    bool doInitialization(Module &M);
     bool doFinalization(Module &M);
+    void EmitStartOfAsmFile(Module &M);
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesAll();
@@ -545,7 +545,7 @@ void PPCAsmPrinter::printPredicateOperand(const MachineInstr *MI, unsigned OpNo,
 void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
   
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
 
   // Check for slwi/srwi mnemonics.
   if (MI->getOpcode() == PPC::RLWINM) {
@@ -595,6 +595,8 @@ void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
+
+  processDebugLoc(MI, false);
 }
 
 /// runOnMachineFunction - This uses the printMachineInstruction()
@@ -658,7 +660,6 @@ bool PPCLinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
@@ -842,7 +843,6 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
          II != IE; ++II) {
@@ -862,7 +862,7 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 }
 
 
-bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
+void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
   static const char *const CPUDirectives[] = {
     "",
     "ppc",
@@ -885,9 +885,6 @@ bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
   assert(Directive <= PPC::DIR_64 && "Directive out of range.");
   O << "\t.machine " << CPUDirectives[Directive] << '\n';
 
-  bool Result = AsmPrinter::doInitialization(M);
-  assert(MMI);
-
   // Prime text sections so they are adjacent.  This reduces the likelihood a
   // large data or debug section causes a branch to exceed 16M limit.
   TargetLoweringObjectFileMachO &TLOFMacho = 
@@ -907,8 +904,6 @@ bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
                                       16, SectionKind::getText()));
   }
   OutStreamer.SwitchSection(getObjFileLowering().getTextSection());
-
-  return Result;
 }
 
 void PPCDarwinAsmPrinter::PrintGlobalVariable(const GlobalVariable *GVar) {

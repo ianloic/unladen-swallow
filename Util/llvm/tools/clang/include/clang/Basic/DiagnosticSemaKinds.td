@@ -311,6 +311,8 @@ def err_static_assert_failed : Error<"static_assert failed \"%0\"">;
 
 def err_unexpected_friend : Error<
   "friends can only be classes or functions">;
+def err_enum_friend : Error<
+  "enum types cannot be friends">;
 def err_friend_is_member : Error<
   "friends cannot be members of the declaring class">;
 def ext_friend_inner_class : Extension<
@@ -916,6 +918,41 @@ def err_template_arg_not_pointer_to_member_form : Error<
 def err_template_arg_extra_parens : Error<
   "non-type template argument cannot be surrounded by parentheses">;
 
+// C++ template specialization
+def err_template_spec_unknown_kind : Error<
+  "can only provide an explicit %select{<error>|<error>|specialization|"
+  "instantiation|instantiation}0 for a class template, function template, or "
+  "a member function, static data member, or member class of a class template">;
+def note_specialized_entity : Note<
+  "explicitly %select{<error>|<error>|specialized|instantiated|instantiated}0 "
+  "declaration is here">;
+def err_template_spec_decl_function_scope : Error<
+  "explicit %select{<error>|<error>|specialization|instantiation|"
+  "instantiation}0 of %1 in function scope">;
+def err_template_spec_decl_class_scope : Error<
+  "explicit %select{<error>|<error>|specialization|instantiation|"
+  "instantiation}0 of %1 in class scope">;
+def err_template_spec_decl_out_of_scope_global : Error<
+  "%select{class template|class template partial|function template|member "
+  "function|static data member|member class}0 specialization of %1 must "
+  "originally be declared in the global scope">;
+def err_template_spec_decl_out_of_scope : Error<
+  "%select{class template|class template partial|function template|member "
+  "function|static data member|member class}0 specialization of %1 must "
+  "originally be declared in namespace %2">;
+def err_template_spec_redecl_out_of_scope : Error<
+  "%select{class template|class template partial|function template|member "
+  "function|static data member|member class}0 specialization of %1 not in a "
+  "namespace enclosing %2">;
+def err_template_spec_redecl_global_scope : Error<
+  "%select{class template|class template partial|function template|member "
+  "function|static data member|member class}0 specialization of %1 must occur "
+  "at global scope">;
+def err_function_spec_not_instantiated : Error<
+  "specialization of member function %q0 does not specialize an instantiated "
+  "member function">;
+def note_specialized_decl : Note<"attempt to specialize declaration here">;
+
 // C++ class template specializations and out-of-line definitions
 def err_template_spec_needs_header : Error<
   "template specialization requires 'template<>'">;
@@ -931,20 +968,6 @@ def err_template_spec_extra_headers : Error<
 def err_template_qualified_declarator_no_match : Error<
   "nested name specifier %0 for declaration does not refer into a class, "
   "class template or class template partial specialization">;
-def err_template_spec_decl_out_of_scope_global : Error<
-  "class template %select{|partial }0specialization of %1 must occur in the "
-  "global scope">;
-def err_template_spec_decl_out_of_scope : Error<
-  "class template %select{|partial }0specialization of %1 not in namespace %2">;
-def err_template_spec_decl_function_scope : Error<
-  "%select{class template specialization|class template partial specialization|"
-  "explicit instantiation}0 of %1 in function scope">;
-def err_template_spec_redecl_out_of_scope : Error<
-  "%select{class template specialization|class template partial specialization|"
-  "explicit instantiation}0 of %1 not in a namespace enclosing %2">;
-def err_template_spec_redecl_global_scope : Error<
-  "%select{class template specialization|class template partial specialization|"
-  "explicit instantiation}0 of %1 must occur at global scope">;
 
 // C++ Class Template Partial Specialization
 def err_default_arg_in_partial_spec : Error<
@@ -978,7 +1001,7 @@ def err_function_template_spec_ambiguous : Error<
     "arguments to identify a particular function template">;
 def note_function_template_spec_matched : Note<
     "function template matches specialization %0">;
-    
+
 // C++ Template Instantiation
 def err_template_recursion_depth_exceeded : Error<
   "recursive template instantiation exceeded maximum depth of %0">,

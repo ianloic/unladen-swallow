@@ -90,9 +90,10 @@ namespace {
     /// Add - Add the specified instruction to the worklist if it isn't already
     /// in it.
     void Add(Instruction *I) {
-      DEBUG(errs() << "IC: ADD: " << *I << '\n');
-      if (WorklistMap.insert(std::make_pair(I, Worklist.size())).second)
+      if (WorklistMap.insert(std::make_pair(I, Worklist.size())).second) {
+        DEBUG(errs() << "IC: ADD: " << *I << '\n');
         Worklist.push_back(I);
+      }
     }
     
     void AddValue(Value *V) {
@@ -774,7 +775,7 @@ bool InstCombiner::SimplifyDemandedBits(Use &U, APInt DemandedMask,
   Value *NewVal = SimplifyDemandedUseBits(U.get(), DemandedMask,
                                           KnownZero, KnownOne, Depth);
   if (NewVal == 0) return false;
-  U.set(NewVal);
+  U = NewVal;
   return true;
 }
 
@@ -5934,9 +5935,9 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   
   // icmp <global/alloca*/null>, <global/alloca*/null> - Global/Stack value
   // addresses never equal each other!  We already know that Op0 != Op1.
-  if ((isa<GlobalValue>(Op0) || isa<AllocaInst>(Op0) || isMalloc(Op0) ||
+  if ((isa<GlobalValue>(Op0) || isa<AllocaInst>(Op0) || 
        isa<ConstantPointerNull>(Op0)) &&
-      (isa<GlobalValue>(Op1) || isa<AllocaInst>(Op1) || isMalloc(Op1) ||
+      (isa<GlobalValue>(Op1) || isa<AllocaInst>(Op1) || 
        isa<ConstantPointerNull>(Op1)))
     return ReplaceInstUsesWith(I, ConstantInt::get(Type::getInt1Ty(*Context), 
                                                    !I.isTrueWhenEqual()));
@@ -9947,7 +9948,7 @@ Instruction *InstCombiner::visitCallSite(CallSite CS) {
       // If the call and callee calling conventions don't match, this call must
       // be unreachable, as the call is undefined.
       new StoreInst(ConstantInt::getTrue(*Context),
-                UndefValue::get(PointerType::getUnqual(Type::getInt1Ty(*Context))), 
+                UndefValue::get(Type::getInt1PtrTy(*Context)), 
                                   OldCall);
       if (!OldCall->use_empty())
         OldCall->replaceAllUsesWith(UndefValue::get(OldCall->getType()));
@@ -9961,7 +9962,7 @@ Instruction *InstCombiner::visitCallSite(CallSite CS) {
     // undef so that we know that this code is not reachable, despite the fact
     // that we can't modify the CFG here.
     new StoreInst(ConstantInt::getTrue(*Context),
-               UndefValue::get(PointerType::getUnqual(Type::getInt1Ty(*Context))),
+               UndefValue::get(Type::getInt1PtrTy(*Context)),
                   CS.getInstruction());
 
     if (!CS.getInstruction()->use_empty())
@@ -11235,7 +11236,7 @@ Instruction *InstCombiner::visitFreeInst(FreeInst &FI) {
   if (isa<UndefValue>(Op)) {
     // Insert a new store to null because we cannot modify the CFG here.
     new StoreInst(ConstantInt::getTrue(*Context),
-           UndefValue::get(PointerType::getUnqual(Type::getInt1Ty(*Context))), &FI);
+           UndefValue::get(Type::getInt1PtrTy(*Context)), &FI);
     return EraseInstFromFunction(FI);
   }
   
@@ -11439,8 +11440,7 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
         if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0)))
           if (GV->isConstant() && GV->hasDefinitiveInitializer())
             if (Constant *V = 
-               ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE, 
-                                                      *Context))
+               ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE))
               return ReplaceInstUsesWith(LI, V);
         if (CE->getOperand(0)->isNullValue()) {
           // Insert a new store to null instruction before the load to indicate
@@ -12819,7 +12819,7 @@ bool InstCombiner::DoOneIteration(Function &F, unsigned Iteration) {
           if (Constant *NewC = ConstantFoldConstantExpression(CE,   
                                   F.getContext(), TD))
             if (NewC != CE) {
-              i->set(NewC);
+              *i = NewC;
               MadeIRChange = true;
             }
     }
@@ -12854,7 +12854,8 @@ bool InstCombiner::DoOneIteration(Function &F, unsigned Iteration) {
     std::string OrigI;
 #endif
     DEBUG(raw_string_ostream SS(OrigI); I->print(SS); OrigI = SS.str(););
-    
+    DEBUG(errs() << "IC: Visiting: " << OrigI << '\n');
+
     if (Instruction *Result = visit(*I)) {
       ++NumCombined;
       // Should we replace the old instruction with a new one?

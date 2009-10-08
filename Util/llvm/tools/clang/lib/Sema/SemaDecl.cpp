@@ -12,11 +12,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "Sema.h"
-#include "SemaInherit.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Analysis/CFG.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
@@ -1183,6 +1183,10 @@ void Sema::CheckFallThroughForFunctionDef(Decl *D, Stmt *Body) {
   bool ReturnsVoid = false;
   bool HasNoReturn = false;
   if (FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
+    // If the result type of the function is a dependent type, we don't know
+    // whether it will be void or not, so don't 
+    if (FD->getResultType()->isDependentType())
+      return;
     if (FD->getResultType()->isVoidType())
       ReturnsVoid = true;
     if (FD->hasAttr<NoReturnAttr>())
@@ -1202,7 +1206,7 @@ void Sema::CheckFallThroughForFunctionDef(Decl *D, Stmt *Body) {
       && (Diags.getDiagnosticLevel(diag::warn_suggest_noreturn_block)
           == Diagnostic::Ignored || !ReturnsVoid))
     return;
-  // FIXME: Funtion try block
+  // FIXME: Function try block
   if (CompoundStmt *Compound = dyn_cast<CompoundStmt>(Body)) {
     switch (CheckFallThrough(Body)) {
     case MaybeFallThrough:
@@ -1319,71 +1323,29 @@ Sema::DeclPtrTy Sema::ParsedFreeStandingDeclSpec(Scope *S, DeclSpec &DS) {
   // FIXME: Warn on useless const/volatile
   // FIXME: Warn on useless static/extern/typedef/private_extern/mutable
   // FIXME: Warn on useless attributes
+  Decl *TagD = 0;
   TagDecl *Tag = 0;
   if (DS.getTypeSpecType() == DeclSpec::TST_class ||
       DS.getTypeSpecType() == DeclSpec::TST_struct ||
       DS.getTypeSpecType() == DeclSpec::TST_union ||
       DS.getTypeSpecType() == DeclSpec::TST_enum) {
-    if (!DS.getTypeRep()) // We probably had an error
+    TagD = static_cast<Decl *>(DS.getTypeRep());
+
+    if (!TagD) // We probably had an error
       return DeclPtrTy();
 
     // Note that the above type specs guarantee that the
     // type rep is a Decl, whereas in many of the others
     // it's a Type.
-    Tag = dyn_cast<TagDecl>(static_cast<Decl *>(DS.getTypeRep()));
+    Tag = dyn_cast<TagDecl>(TagD);
   }
 
   if (DS.isFriendSpecified()) {
-    // We have a "friend" declaration that does not have a declarator.
-    // Look at the type to see if the friend declaration was handled
-    // elsewhere (e.g., for friend classes and friend class templates).
-    // If not, produce a suitable diagnostic or go try to befriend the
-    // type itself.
-    QualType T;
-    if (DS.getTypeSpecType() == DeclSpec::TST_typename ||
-        DS.getTypeSpecType() == DeclSpec::TST_typeofType)
-      T = QualType::getFromOpaquePtr(DS.getTypeRep());
-    else if (DS.getTypeSpecType() == DeclSpec::TST_typeofExpr ||
-             DS.getTypeSpecType() == DeclSpec::TST_decltype)
-      T = ((Expr *)DS.getTypeRep())->getType();
-    else if (DS.getTypeSpecType() == DeclSpec::TST_class ||
-             DS.getTypeSpecType() == DeclSpec::TST_struct ||
-             DS.getTypeSpecType() == DeclSpec::TST_union)
-      return DeclPtrTy::make(Tag);
-    
-    if (T.isNull()) {
-      // Fall through to diagnose this error, below.
-    } else if (const RecordType *RecordT = T->getAs<RecordType>()) {
-      // C++ [class.friend]p2:
-      //   An elaborated-type-specifier shall be used in a friend declaration
-      //   for a class.
-
-      // We have something like "friend C;", where C is the name of a
-      // class type but is missing an elaborated type specifier. Complain,
-      // but tell the user exactly how to fix the problem.
-      RecordDecl *RecordD = RecordT->getDecl();
-      Diag(DS.getTypeSpecTypeLoc(), diag::err_unelaborated_friend_type)
-        << (unsigned)RecordD->getTagKind()
-        << QualType(RecordT, 0)
-        << SourceRange(DS.getFriendSpecLoc())
-        << CodeModificationHint::CreateInsertion(DS.getTypeSpecTypeLoc(),
-                                  RecordD->getKindName() + std::string(" "));
-      
-      // FIXME: We could go into ActOnTag to actually make the friend
-      // declaration happen at this point.
+    // If we're dealing with a class template decl, assume that the
+    // template routines are handling it.
+    if (TagD && isa<ClassTemplateDecl>(TagD))
       return DeclPtrTy();
-    } 
-    
-    if (!T.isNull() && T->isDependentType()) {
-      // Since T is a dependent type, handle it as a friend type
-      // declaration.
-      return ActOnFriendTypeDecl(S, DS, MultiTemplateParamsArg(*this, 0, 0));
-    } 
-        
-    // Complain about any non-dependent friend type here.
-    Diag(DS.getFriendSpecLoc(), diag::err_unexpected_friend)
-      << DS.getSourceRange();
-    return DeclPtrTy();
+    return ActOnFriendTypeDecl(S, DS, MultiTemplateParamsArg(*this, 0, 0));
   }
          
   if (RecordDecl *Record = dyn_cast_or_null<RecordDecl>(Tag)) {
@@ -2231,12 +2193,15 @@ Sema::ActOnVariableDeclarator(Scope* S, Declarator& D, DeclContext* DC,
 
   // Match up the template parameter lists with the scope specifier, then
   // determine whether we have a template or a template specialization.
+  // FIXME: Actually record when this is an explicit specialization!
+  bool isExplicitSpecialization = false;
   if (TemplateParameterList *TemplateParams
-      = MatchTemplateParametersToScopeSpecifier(
+        = MatchTemplateParametersToScopeSpecifier(
                                   D.getDeclSpec().getSourceRange().getBegin(),
-                                                D.getCXXScopeSpec(),
+                                                  D.getCXXScopeSpec(),
                         (TemplateParameterList**)TemplateParamLists.get(),
-                                                 TemplateParamLists.size())) {
+                                                   TemplateParamLists.size(),
+                                                  isExplicitSpecialization)) {
     if (TemplateParams->size() > 0) {
       // There is no such thing as a variable template.
       Diag(D.getIdentifierLoc(), diag::err_template_variable)
@@ -2252,6 +2217,8 @@ Sema::ActOnVariableDeclarator(Scope* S, Declarator& D, DeclContext* DC,
         << II
         << SourceRange(TemplateParams->getTemplateLoc(),
                        TemplateParams->getRAngleLoc());
+      
+      isExplicitSpecialization = true;
     }
   }
 
@@ -2451,6 +2418,35 @@ static bool isUsingDecl(Decl *D) {
   return isa<UsingDecl>(D) || isa<UnresolvedUsingDecl>(D);
 }
 
+/// \brief Data used with FindOverriddenMethod
+struct FindOverriddenMethodData {
+  Sema *S;
+  CXXMethodDecl *Method;
+};
+
+/// \brief Member lookup function that determines whether a given C++
+/// method overrides a method in a base class, to be used with
+/// CXXRecordDecl::lookupInBases().
+static bool FindOverriddenMethod(CXXBaseSpecifier *Specifier,
+                                 CXXBasePath &Path,
+                                 void *UserData) {
+  RecordDecl *BaseRecord = Specifier->getType()->getAs<RecordType>()->getDecl();
+  
+  FindOverriddenMethodData *Data 
+    = reinterpret_cast<FindOverriddenMethodData*>(UserData);
+  for (Path.Decls = BaseRecord->lookup(Data->Method->getDeclName());
+       Path.Decls.first != Path.Decls.second;
+       ++Path.Decls.first) {
+    if (CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(*Path.Decls.first)) {
+      OverloadedFunctionDecl::function_iterator MatchedDecl;
+      if (MD->isVirtual() && !Data->S->IsOverload(Data->Method, MD, MatchedDecl))
+        return true;
+    }
+  }
+  
+  return false;
+}
+
 NamedDecl*
 Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
                               QualType R, DeclaratorInfo *DInfo,
@@ -2627,13 +2623,15 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
   // Match up the template parameter lists with the scope specifier, then
   // determine whether we have a template or a template specialization.
   FunctionTemplateDecl *FunctionTemplate = 0;
+  bool isExplicitSpecialization = false;
   bool isFunctionTemplateSpecialization = false;
   if (TemplateParameterList *TemplateParams
         = MatchTemplateParametersToScopeSpecifier(
                                   D.getDeclSpec().getSourceRange().getBegin(),
                                   D.getCXXScopeSpec(),
                            (TemplateParameterList**)TemplateParamLists.get(),
-                                                  TemplateParamLists.size())) {
+                                                  TemplateParamLists.size(),
+                                                  isExplicitSpecialization)) {
     if (TemplateParams->size() > 0) {
       // This is a function template
 
@@ -2686,11 +2684,13 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
 
   if (CXXMethodDecl *NewMD = dyn_cast<CXXMethodDecl>(NewFD)) {
     // Look for virtual methods in base classes that this method might override.
-
-    BasePaths Paths;
-    if (LookupInBases(cast<CXXRecordDecl>(DC),
-                      MemberLookupCriteria(NewMD), Paths)) {
-      for (BasePaths::decl_iterator I = Paths.found_decls_begin(),
+    CXXBasePaths Paths;
+    FindOverriddenMethodData Data;
+    Data.Method = NewMD;
+    Data.S = this;
+    if (cast<CXXRecordDecl>(DC)->lookupInBases(&FindOverriddenMethod, &Data,
+                                                Paths)) {
+      for (CXXBasePaths::decl_iterator I = Paths.found_decls_begin(),
            E = Paths.found_decls_end(); I != E; ++I) {
         if (CXXMethodDecl *OldMD = dyn_cast<CXXMethodDecl>(*I)) {
           if (!CheckOverridingFunctionReturnType(NewMD, OldMD) &&
@@ -2812,7 +2812,7 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
     RAngleLoc = TemplateId->RAngleLoc;
     
     if (FunctionTemplate) {
-      // FIXME: Diagnostic function template with explicit template
+      // FIXME: Diagnose function template with explicit template
       // arguments.
       HasExplicitTemplateArgs = false;
     } else if (!isFunctionTemplateSpecialization && 
@@ -2830,13 +2830,17 @@ Sema::ActOnFunctionDeclarator(Scope* S, Declarator& D, DeclContext* DC,
     }
   }
   
-  if (isFunctionTemplateSpecialization &&
-      CheckFunctionTemplateSpecialization(NewFD, HasExplicitTemplateArgs,
-                                          LAngleLoc, TemplateArgs.data(),
-                                          TemplateArgs.size(), RAngleLoc,
-                                          PrevDecl))
+  if (isFunctionTemplateSpecialization) {
+      if (CheckFunctionTemplateSpecialization(NewFD, HasExplicitTemplateArgs,
+                                              LAngleLoc, TemplateArgs.data(),
+                                              TemplateArgs.size(), RAngleLoc,
+                                              PrevDecl))
+        NewFD->setInvalidDecl();
+  } else if (isExplicitSpecialization && isa<CXXMethodDecl>(NewFD) &&
+             CheckMemberFunctionSpecialization(cast<CXXMethodDecl>(NewFD),
+                                               PrevDecl))
     NewFD->setInvalidDecl();
-  
+           
   // Perform semantic checking on the function declaration.
   bool OverloadableAttrRequired = false; // FIXME: HACK!
   CheckFunctionDeclaration(NewFD, PrevDecl, Redeclaration,
@@ -4126,11 +4130,14 @@ Sema::DeclPtrTy Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
   OwnedDecl = false;
   TagDecl::TagKind Kind = TagDecl::getTagKindForTypeSpec(TagSpec);
 
+  // FIXME: Check explicit specializations more carefully.
+  bool isExplicitSpecialization = false;
   if (TUK != TUK_Reference) {
     if (TemplateParameterList *TemplateParams
           = MatchTemplateParametersToScopeSpecifier(KWLoc, SS,
                         (TemplateParameterList**)TemplateParameterLists.get(),
-                                              TemplateParameterLists.size())) {
+                                              TemplateParameterLists.size(),
+                                                    isExplicitSpecialization)) {
       if (TemplateParams->size() > 0) {
         // This is a declaration or definition of a class template (which may
         // be a member of another template).
@@ -4284,13 +4291,8 @@ Sema::DeclPtrTy Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
           // for the consumer of this Decl to know it doesn't own it.
           // For our current ASTs this shouldn't be a problem, but will
           // need to be changed with DeclGroups.
-          if (TUK == TUK_Reference)
+          if (TUK == TUK_Reference || TUK == TUK_Friend)
             return DeclPtrTy::make(PrevDecl);
-
-          // If this is a friend, make sure we create the new
-          // declaration in the appropriate semantic context.
-          if (TUK == TUK_Friend)
-            SearchDC = PrevDecl->getDeclContext();
 
           // Diagnose attempts to redefine a tag.
           if (TUK == TUK_Definition) {

@@ -12,10 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "Sema.h"
-#include "SemaInherit.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/TypeOrdering.h"
@@ -404,11 +404,14 @@ Sema::IsOverload(FunctionDecl *New, Decl* OldD,
 /// permitted.
 /// If @p ForceRValue, then overloading is performed as if From was an rvalue,
 /// no matter its actual lvalueness.
+/// If @p UserCast, the implicit conversion is being done for a user-specified
+/// cast.
 ImplicitConversionSequence
 Sema::TryImplicitConversion(Expr* From, QualType ToType,
                             bool SuppressUserConversions,
                             bool AllowExplicit, bool ForceRValue,
-                            bool InOverloadResolution) {
+                            bool InOverloadResolution,
+                            bool UserCast) {
   ImplicitConversionSequence ICS;
   OverloadCandidateSet Conversions;
   OverloadingResult UserDefResult = OR_Success;
@@ -419,7 +422,7 @@ Sema::TryImplicitConversion(Expr* From, QualType ToType,
                                    ICS.UserDefined,
                                    Conversions,
                                    !SuppressUserConversions, AllowExplicit,
-                                   ForceRValue)) == OR_Success) {
+				   ForceRValue, UserCast)) == OR_Success) {
     ICS.ConversionKind = ImplicitConversionSequence::UserDefinedConversion;
     // C++ [over.ics.user]p4:
     //   A conversion of an expression of class type to the same class
@@ -1256,8 +1259,8 @@ bool Sema::CheckMemberPointerConversion(Expr *From, QualType ToType,
   assert(FromClass->isRecordType() && "Pointer into non-class.");
   assert(ToClass->isRecordType() && "Pointer into non-class.");
 
-  BasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/false,
-                  /*DetectVirtual=*/true);
+  CXXBasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/false,
+                     /*DetectVirtual=*/true);
   bool DerivationOkay = IsDerivedFrom(ToClass, FromClass, Paths);
   assert(DerivationOkay &&
          "Should not have been called if derivation isn't OK.");
@@ -1372,12 +1375,15 @@ static void GetFunctionAndTemplate(AnyFunctionDecl Orig, T *&Function,
 ///
 /// \param ForceRValue  true if the expression should be treated as an rvalue
 /// for overload resolution.
+/// \param UserCast true if looking for user defined conversion for a static
+/// cast.
 Sema::OverloadingResult Sema::IsUserDefinedConversion(
                                    Expr *From, QualType ToType,
                                    UserDefinedConversionSequence& User,
                                    OverloadCandidateSet& CandidateSet,
                                    bool AllowConversionFunctions,
-                                   bool AllowExplicit, bool ForceRValue) {
+                                   bool AllowExplicit, bool ForceRValue,
+                                   bool UserCast) {
   if (const RecordType *ToRecordType = ToType->getAs<RecordType>()) {
     if (CXXRecordDecl *ToRecordDecl
           = dyn_cast<CXXRecordDecl>(ToRecordType->getDecl())) {
@@ -1411,11 +1417,14 @@ Sema::OverloadingResult Sema::IsUserDefinedConversion(
           if (ConstructorTmpl)
             AddTemplateOverloadCandidate(ConstructorTmpl, false, 0, 0, &From,
                                          1, CandidateSet,
-                                         /*SuppressUserConversions=*/true,
+                                         /*SuppressUserConversions=*/!UserCast,
                                          ForceRValue);
           else
+            // Allow one user-defined conversion when user specifies a
+            // From->ToType conversion via an static cast (c-style, etc).
             AddOverloadCandidate(Constructor, &From, 1, CandidateSet,
-                                 /*SuppressUserConversions=*/true, ForceRValue);
+                                 /*SuppressUserConversions=*/!UserCast, 
+                                 ForceRValue);
         }
       }
     }
@@ -3020,9 +3029,8 @@ BuiltinCandidateTypeSet::AddTypesConvertedFrom(QualType Ty,
       }
 
       CXXRecordDecl *ClassDecl = cast<CXXRecordDecl>(TyRec->getDecl());
-      // FIXME: Visit conversion functions in the base classes, too.
       OverloadedFunctionDecl *Conversions
-        = ClassDecl->getConversionFunctions();
+        = ClassDecl->getVisibleConversionFunctions();
       for (OverloadedFunctionDecl::function_iterator Func
              = Conversions->function_begin();
            Func != Conversions->function_end(); ++Func) {
@@ -3669,7 +3677,45 @@ Sema::AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
     break;
 
   case OO_ArrowStar:
-    // FIXME: No support for pointer-to-members yet.
+    // C++ [over.built]p11:
+    //    For every quintuple (C1, C2, T, CV1, CV2), where C2 is a class type, 
+    //    C1 is the same type as C2 or is a derived class of C2, T is an object 
+    //    type or a function type, and CV1 and CV2 are cv-qualifier-seqs, 
+    //    there exist candidate operator functions of the form 
+    //    CV12 T& operator->*(CV1 C1*, CV2 T C2::*); 
+    //    where CV12 is the union of CV1 and CV2.
+    {
+      for (BuiltinCandidateTypeSet::iterator Ptr = 
+             CandidateTypes.pointer_begin();
+           Ptr != CandidateTypes.pointer_end(); ++Ptr) {
+        QualType C1Ty = (*Ptr);
+        QualType C1;
+        if (const PointerType *PointerTy = C1Ty->getAs<PointerType>()) {
+          C1 = PointerTy->getPointeeType();
+          C1 = C1.getUnqualifiedType();
+          if (!isa<RecordType>(C1))
+            continue;
+        }
+        for (BuiltinCandidateTypeSet::iterator
+             MemPtr = CandidateTypes.member_pointer_begin(),
+             MemPtrEnd = CandidateTypes.member_pointer_end();
+             MemPtr != MemPtrEnd; ++MemPtr) {
+          const MemberPointerType *mptr = cast<MemberPointerType>(*MemPtr);
+          QualType C2 = QualType(mptr->getClass(), 0);
+          C2 = C2.getUnqualifiedType();
+          if (C1 != C2 && !IsDerivedFrom(C1, C2))
+            break;
+          QualType ParamTypes[2] = { *Ptr, *MemPtr };
+          // build CV12 T&
+          QualType T = mptr->getPointeeType();
+          unsigned CV1 = (*Ptr).getCVRQualifiers();
+          unsigned CV2 = T.getCVRQualifiers();
+          T = Context.getCVRQualifiedType(T, (CV1 | CV2));
+          QualType ResultTy = Context.getLValueReferenceType(T);
+          AddBuiltinCandidate(ResultTy, ParamTypes, Args, 2, CandidateSet);
+        }
+      }
+    }
     break;
 
   case OO_Conditional:
@@ -3998,10 +4044,11 @@ Sema::PrintOverloadCandidates(OverloadCandidateSet& CandidateSet,
 
         Diag(Cand->Surrogate->getLocation(), diag::err_ovl_surrogate_cand)
           << FnType;
-      } else {
+      } else if (OnlyViable) {
         // FIXME: We need to get the identifier in here
         // FIXME: Do we want the error message to point at the operator?
         // (built-ins won't have a location)
+        // FIXME: can we get some kind of stable location for this?
         QualType FnType
           = Context.getFunctionType(Cand->BuiltinTypes.ResultTy,
                                     Cand->BuiltinTypes.ParamTypes,
@@ -4070,6 +4117,9 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
   if (DeclRefExpr *DR = dyn_cast<DeclRefExpr>(OvlExpr)) {
     Ovl = dyn_cast<OverloadedFunctionDecl>(DR->getDecl());
     FunctionTemplate = dyn_cast<FunctionTemplateDecl>(DR->getDecl());
+  } else if (MemberExpr *ME = dyn_cast<MemberExpr>(OvlExpr)) {
+    Ovl = dyn_cast<OverloadedFunctionDecl>(ME->getMemberDecl());
+    FunctionTemplate = dyn_cast<FunctionTemplateDecl>(ME->getMemberDecl());
   }
 
   // If there's no overloaded function declaration or function template,
@@ -4631,19 +4681,34 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
       }
     }
 
-    case OR_No_Viable_Function:
+    case OR_No_Viable_Function: {
+      // C++ [over.match.oper]p9:
+      //   If the operator is the operator , [...] and there are no
+      //   viable functions, then the operator is assumed to be the
+      //   built-in operator and interpreted according to clause 5.
+      if (Opc == BinaryOperator::Comma)
+        break;
+
       // For class as left operand for assignment or compound assigment operator
       // do not fall through to handling in built-in, but report that no overloaded
       // assignment operator found
-      if (Args[0]->getType()->isRecordType() && Opc >= BinaryOperator::Assign && Opc <= BinaryOperator::OrAssign) {
+      OwningExprResult Result = ExprError();
+      if (Args[0]->getType()->isRecordType() && 
+          Opc >= BinaryOperator::Assign && Opc <= BinaryOperator::OrAssign) {
         Diag(OpLoc,  diag::err_ovl_no_viable_oper)
              << BinaryOperator::getOpcodeStr(Opc)
              << Args[0]->getSourceRange() << Args[1]->getSourceRange();
-        return ExprError();
+      } else {
+        // No viable function; try to create a built-in operation, which will
+        // produce an error. Then, show the non-viable candidates.
+        Result = CreateBuiltinBinOp(OpLoc, Opc, Args[0], Args[1]);
       }
-      // No viable function; fall through to handling this as a
-      // built-in operator, which will produce an error message for us.
-      break;
+      assert(Result.isInvalid() && 
+             "C++ binary operator overloading is missing candidates!");
+      if (Result.isInvalid())
+        PrintOverloadCandidates(CandidateSet, /*OnlyViable=*/false);
+      return move(Result);
+    }
 
     case OR_Ambiguous:
       Diag(OpLoc,  diag::err_ovl_ambiguous_oper)
@@ -4661,9 +4726,7 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
       return ExprError();
     }
 
-  // Either we found no viable overloaded operator or we matched a
-  // built-in operator. In either case, try to build a built-in
-  // operation.
+  // We matched a built-in operator; build it.
   return CreateBuiltinBinOp(OpLoc, Opc, Args[0], Args[1]);
 }
 

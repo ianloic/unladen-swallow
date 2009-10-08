@@ -181,9 +181,10 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
 }
 
 // FIXME: remove when we have a way to marking a MI with these properties.
-let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1 in
-def tPOP_RET : T1I<(outs), (ins pred:$p, reglist:$dst1, variable_ops), IIC_Br,
-                   "pop${p} $dst1", []>;
+let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1,
+    hasExtraDefRegAllocReq = 1 in
+def tPOP_RET : T1I<(outs), (ins pred:$p, reglist:$wb, variable_ops), IIC_Br,
+                   "pop${p} $wb", []>;
 
 let isCall = 1,
   Defs = [R0,  R1,  R2,  R3,  R12, LR,
@@ -348,25 +349,25 @@ def tSpill : T1pIs<(outs), (ins tGPR:$src, t_addrmode_sp:$addr), IIC_iStorei,
 //
 
 // These requires base address to be written back or one of the loaded regs.
-let mayLoad = 1 in
+let mayLoad = 1, hasExtraDefRegAllocReq = 1 in
 def tLDM : T1I<(outs),
-               (ins addrmode4:$addr, pred:$p, reglist:$dst1, variable_ops),
+               (ins addrmode4:$addr, pred:$p, reglist:$wb, variable_ops),
                IIC_iLoadm,
-               "ldm${addr:submode}${p} $addr, $dst1", []>;
+               "ldm${addr:submode}${p} $addr, $wb", []>;
 
-let mayStore = 1 in
+let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
 def tSTM : T1I<(outs),
-               (ins addrmode4:$addr, pred:$p, reglist:$src1, variable_ops),
+               (ins addrmode4:$addr, pred:$p, reglist:$wb, variable_ops),
                IIC_iStorem,
-               "stm${addr:submode}${p} $addr, $src1", []>;
+               "stm${addr:submode}${p} $addr, $wb", []>;
 
-let mayLoad = 1, Uses = [SP], Defs = [SP] in
-def tPOP : T1I<(outs), (ins pred:$p, reglist:$dst1, variable_ops), IIC_Br,
-               "pop${p} $dst1", []>;
+let mayLoad = 1, Uses = [SP], Defs = [SP], hasExtraDefRegAllocReq = 1 in
+def tPOP : T1I<(outs), (ins pred:$p, reglist:$wb, variable_ops), IIC_Br,
+               "pop${p} $wb", []>;
 
-let mayStore = 1, Uses = [SP], Defs = [SP] in
-def tPUSH : T1I<(outs), (ins pred:$p, reglist:$src1, variable_ops), IIC_Br,
-                "push${p} $src1", []>;
+let mayStore = 1, Uses = [SP], Defs = [SP], hasExtraSrcRegAllocReq = 1 in
+def tPUSH : T1I<(outs), (ins pred:$p, reglist:$wb, variable_ops), IIC_Br,
+                "push${p} $wb", []>;
 
 //===----------------------------------------------------------------------===//
 //  Arithmetic Instructions.

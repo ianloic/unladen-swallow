@@ -49,6 +49,22 @@ void CGDebugInfo::setLocation(SourceLocation Loc) {
     CurLoc = M->getContext().getSourceManager().getInstantiationLoc(Loc);
 }
 
+/// getContext - Get context info for the decl.
+llvm::DIDescriptor CGDebugInfo::getContext(const VarDecl *Decl,
+                                           llvm::DIDescriptor &CompileUnit) {
+  if (Decl->isFileVarDecl())
+    return CompileUnit;
+  if (Decl->getDeclContext()->isFunctionOrMethod()) {
+    // Find the last subprogram in region stack.
+    for (unsigned RI = RegionStack.size(), RE = 0; RI != RE; --RI) {
+      llvm::DIDescriptor R = RegionStack[RI - 1];
+      if (R.isSubprogram())
+        return R;
+    }
+  }
+  return CompileUnit;
+}
+
 /// getOrCreateCompileUnit - Get the compile unit from the cache or create a new
 /// one if necessary. This returns null for invalid source locations.
 llvm::DICompileUnit CGDebugInfo::getOrCreateCompileUnit(SourceLocation Loc) {
@@ -280,8 +296,10 @@ llvm::DIType CGDebugInfo::CreateType(const BlockPointerType *Ty,
   Elements = DebugFactory.GetOrCreateArray(EltTys.data(), EltTys.size());
   EltTys.clear();
 
+  unsigned Flags = llvm::DIType::FlagAppleBlock;
+
   EltTy = DebugFactory.CreateCompositeType(Tag, Unit, "__block_descriptor",
-                                           DefUnit, 0, FieldOffset, 0, 0, 0,
+                                           DefUnit, 0, FieldOffset, 0, 0, Flags,
                                            llvm::DIType(), Elements);
 
   // Bit size, align and offset of the type.
@@ -351,7 +369,7 @@ llvm::DIType CGDebugInfo::CreateType(const BlockPointerType *Ty,
   Elements = DebugFactory.GetOrCreateArray(EltTys.data(), EltTys.size());
 
   EltTy = DebugFactory.CreateCompositeType(Tag, Unit, "__block_literal_generic",
-                                           DefUnit, 0, FieldOffset, 0, 0, 0,
+                                           DefUnit, 0, FieldOffset, 0, 0, Flags,
                                            llvm::DIType(), Elements);
 
   BlockLiteralGenericSet = true;
@@ -861,7 +879,9 @@ void CGDebugInfo::EmitFunctionStart(const char *Name, QualType ReturnType,
                                   getOrCreateType(ReturnType, Unit),
                                   Fn->hasInternalLinkage(), true/*definition*/);
 
+#ifndef ATTACH_DEBUG_INFO_TO_AN_INSN
   DebugFactory.InsertSubprogramStart(SP, Builder.GetInsertBlock());
+#endif
 
   // Push function on region stack.
   RegionStack.push_back(SP);
@@ -885,8 +905,19 @@ void CGDebugInfo::EmitStopPoint(llvm::Function *Fn, CGBuilderTy &Builder) {
   // Get the appropriate compile unit.
   llvm::DICompileUnit Unit = getOrCreateCompileUnit(CurLoc);
   PresumedLoc PLoc = SM.getPresumedLoc(CurLoc);
+
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+  llvm::DIDescriptor DR = RegionStack.back();
+  llvm::DIScope DS = llvm::DIScope(DR.getNode());
+  llvm::DILocation DO(NULL);
+  llvm::DILocation DL = 
+    DebugFactory.CreateLocation(PLoc.getLine(), PLoc.getColumn(),
+                                DS, DO);
+  Builder.SetCurrentDebugLocation(DL.getNode());
+#else
   DebugFactory.InsertStopPoint(Unit, PLoc.getLine(), PLoc.getColumn(),
                                Builder.GetInsertBlock());
+#endif
 }
 
 /// EmitRegionStart- Constructs the debug code for entering a declarative
@@ -897,7 +928,9 @@ void CGDebugInfo::EmitRegionStart(llvm::Function *Fn, CGBuilderTy &Builder) {
     D = RegionStack.back();
   D = DebugFactory.CreateLexicalBlock(D);
   RegionStack.push_back(D);
+#ifndef ATTACH_DEBUG_INFO_TO_AN_INSN
   DebugFactory.InsertRegionStart(D, Builder.GetInsertBlock());
+#endif
 }
 
 /// EmitRegionEnd - Constructs the debug code for exiting a declarative
@@ -908,7 +941,9 @@ void CGDebugInfo::EmitRegionEnd(llvm::Function *Fn, CGBuilderTy &Builder) {
   // Provide an region stop point.
   EmitStopPoint(Fn, Builder);
 
+#ifndef ATTACH_DEBUG_INFO_TO_AN_INSN
   DebugFactory.InsertRegionEnd(RegionStack.back(), Builder.GetInsertBlock());
+#endif
   RegionStack.pop_back();
 }
 
@@ -1088,7 +1123,7 @@ void CGDebugInfo::EmitDeclare(const BlockDeclRefExpr *BDRE, unsigned Tag,
   // The llvm optimizer and code generator are not yet ready to support
   // optimized code debugging.
   const CompileOptions &CO = M->getCompileOpts();
-  if (CO.OptimizationLevel)
+  if (CO.OptimizationLevel || Builder.GetInsertBlock() == 0)
     return;
 
   uint64_t XOffset = 0;
@@ -1269,7 +1304,7 @@ void CGDebugInfo::EmitDeclare(const BlockDeclRefExpr *BDRE, unsigned Tag,
                                        Decl->getNameAsString(), Unit, Line, Ty,
                                        addr);
   // Insert an llvm.dbg.declare into the current block.
-  DebugFactory.InsertDeclare(Storage, D, Builder.GetInsertBlock());
+  DebugFactory.InsertDeclare(Storage, D, Builder.GetInsertPoint());
 }
 
 void CGDebugInfo::EmitDeclareOfAutoVariable(const VarDecl *Decl,
@@ -1325,7 +1360,8 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
                                            ArrayType::Normal, 0);
   }
 
-  DebugFactory.CreateGlobalVariable(Unit, Name, Name, "", Unit, LineNo,
+  DebugFactory.CreateGlobalVariable(getContext(Decl, Unit), 
+                                    Name, Name, "", Unit, LineNo,
                                     getOrCreateType(T, Unit),
                                     Var->hasInternalLinkage(),
                                     true/*definition*/, Var);

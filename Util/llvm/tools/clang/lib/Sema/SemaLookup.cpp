@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 #include "Sema.h"
-#include "SemaInherit.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
@@ -460,9 +460,9 @@ NamedDecl *Sema::LookupResult::getAsDecl() const {
 
 /// @brief Retrieves the BasePaths structure describing an ambiguous
 /// name lookup, or null.
-BasePaths *Sema::LookupResult::getBasePaths() const {
+CXXBasePaths *Sema::LookupResult::getBasePaths() const {
   if (StoredKind == AmbiguousLookupStoresBasePaths)
-      return reinterpret_cast<BasePaths *>(First);
+      return reinterpret_cast<CXXBasePaths *>(First);
   return 0;
 }
 
@@ -594,7 +594,7 @@ Sema::LookupResult::iterator Sema::LookupResult::end() {
 }
 
 void Sema::LookupResult::Destroy() {
-  if (BasePaths *Paths = getBasePaths())
+  if (CXXBasePaths *Paths = getBasePaths())
     delete Paths;
   else if (getKind() == AmbiguousReference)
     delete[] reinterpret_cast<NamedDecl **>(First);
@@ -660,7 +660,6 @@ Sema::CppLookupName(Scope *S, DeclarationName Name,
   }
 
   Scope *Initial = S;
-  DeclContext *OutOfLineCtx = 0;
   IdentifierResolver::iterator
     I = IdResolver.begin(Name),
     IEnd = IdResolver.end();
@@ -742,26 +741,7 @@ Sema::CppLookupName(Scope *S, DeclarationName Name,
   // context as well as walking through the scopes.
 
   LookupResultsTy LookupResults;
-  assert((!OutOfLineCtx || OutOfLineCtx->isFileContext()) &&
-         "We should have been looking only at file context here already.");
   bool LookedInCtx = false;
-  LookupResult Result;
-  while (OutOfLineCtx &&
-         OutOfLineCtx != S->getEntity() &&
-         OutOfLineCtx->isNamespace()) {
-    LookedInCtx = true;
-
-    // Look into context considering using-directives.
-    CppNamespaceLookup(Context, OutOfLineCtx, Name, NameKind, IDNS,
-                       LookupResults, &UDirs);
-
-    if ((Result = MergeLookupResults(Context, LookupResults)) ||
-        (RedeclarationOnly && !OutOfLineCtx->isTransparentContext()))
-      return std::make_pair(true, Result);
-
-    OutOfLineCtx = OutOfLineCtx->getParent();
-  }
-
   for (; S; S = S->getParent()) {
     DeclContext *Ctx = static_cast<DeclContext *>(S->getEntity());
     if (Ctx->isTransparentContext())
@@ -797,6 +777,7 @@ Sema::CppLookupName(Scope *S, DeclarationName Name,
     CppNamespaceLookup(Context, Ctx, Name, NameKind, IDNS,
                        LookupResults, &UDirs);
 
+    LookupResult Result;
     if ((Result = MergeLookupResults(Context, LookupResults)) ||
         (RedeclarationOnly && !Ctx->isTransparentContext()))
       return std::make_pair(true, Result);
@@ -1037,12 +1018,37 @@ Sema::LookupQualifiedName(DeclContext *LookupCtx, DeclarationName Name,
     return LookupResult::CreateLookupResult(Context, 0);
 
   // Perform lookup into our base classes.
-  BasePaths Paths;
-  Paths.setOrigin(Context.getTypeDeclType(cast<RecordDecl>(LookupCtx)));
+  CXXRecordDecl *LookupRec = cast<CXXRecordDecl>(LookupCtx);
+  CXXBasePaths Paths;
+  Paths.setOrigin(LookupRec);
 
   // Look for this member in our base classes
-  if (!LookupInBases(cast<CXXRecordDecl>(LookupCtx),
-                     MemberLookupCriteria(Name, NameKind, IDNS), Paths))
+  CXXRecordDecl::BaseMatchesCallback *BaseCallback = 0;
+  switch (NameKind) {
+    case LookupOrdinaryName:
+    case LookupMemberName:
+    case LookupRedeclarationWithLinkage:
+      BaseCallback = &CXXRecordDecl::FindOrdinaryMember;
+      break;
+      
+    case LookupTagName:
+      BaseCallback = &CXXRecordDecl::FindTagMember;
+      break;
+      
+    case LookupOperatorName:
+    case LookupNamespaceName:
+    case LookupObjCProtocolName:
+    case LookupObjCImplementationName:
+    case LookupObjCCategoryImplName:
+      // These lookups will never find a member in a C++ class (or base class).
+      return LookupResult::CreateLookupResult(Context, 0);
+      
+    case LookupNestedNameSpecifierName:
+      BaseCallback = &CXXRecordDecl::FindNestedNameSpecifierMember;
+      break;
+  }
+  
+  if (!LookupRec->lookupInBases(BaseCallback, Name.getAsOpaquePtr(), Paths))
     return LookupResult::CreateLookupResult(Context, 0);
 
   // C++ [class.member.lookup]p2:
@@ -1054,9 +1060,9 @@ Sema::LookupQualifiedName(DeclContext *LookupCtx, DeclarationName Name,
   // FIXME: support using declarations!
   QualType SubobjectType;
   int SubobjectNumber = 0;
-  for (BasePaths::paths_iterator Path = Paths.begin(), PathEnd = Paths.end();
+  for (CXXBasePaths::paths_iterator Path = Paths.begin(), PathEnd = Paths.end();
        Path != PathEnd; ++Path) {
-    const BasePathElement &PathElement = Path->back();
+    const CXXBasePathElement &PathElement = Path->back();
 
     // Determine whether we're looking at a distinct sub-object or not.
     if (SubobjectType.isNull()) {
@@ -1067,7 +1073,7 @@ Sema::LookupQualifiedName(DeclContext *LookupCtx, DeclarationName Name,
                  != Context.getCanonicalType(PathElement.Base->getType())) {
       // We found members of the given name in two subobjects of
       // different types. This lookup is ambiguous.
-      BasePaths *PathsOnHeap = new BasePaths;
+      CXXBasePaths *PathsOnHeap = new CXXBasePaths;
       PathsOnHeap->swap(Paths);
       return LookupResult::CreateLookupResult(Context, PathsOnHeap, true);
     } else if (SubobjectNumber != PathElement.SubobjectNumber) {
@@ -1105,7 +1111,7 @@ Sema::LookupQualifiedName(DeclContext *LookupCtx, DeclarationName Name,
 
       // We have found a nonstatic member name in multiple, distinct
       // subobjects. Name lookup is ambiguous.
-      BasePaths *PathsOnHeap = new BasePaths;
+      CXXBasePaths *PathsOnHeap = new CXXBasePaths;
       PathsOnHeap->swap(Paths);
       return LookupResult::CreateLookupResult(Context, PathsOnHeap, false);
     }
@@ -1202,7 +1208,7 @@ bool Sema::DiagnoseAmbiguousLookup(LookupResult &Result, DeclarationName Name,
                                    SourceRange LookupRange) {
   assert(Result.isAmbiguous() && "Lookup result must be ambiguous");
 
-  if (BasePaths *Paths = Result.getBasePaths()) {
+  if (CXXBasePaths *Paths = Result.getBasePaths()) {
     if (Result.getKind() == LookupResult::AmbiguousBaseSubobjects) {
       QualType SubobjectType = Paths->front().back().Base->getType();
       Diag(NameLoc, diag::err_ambiguous_member_multiple_subobjects)
@@ -1227,7 +1233,7 @@ bool Sema::DiagnoseAmbiguousLookup(LookupResult &Result, DeclarationName Name,
       << Name << LookupRange;
 
     std::set<Decl *> DeclsPrinted;
-    for (BasePaths::paths_iterator Path = Paths->begin(), PathEnd = Paths->end();
+    for (CXXBasePaths::paths_iterator Path = Paths->begin(), PathEnd = Paths->end();
          Path != PathEnd; ++Path) {
       Decl *D = *Path->Decls.first;
       if (DeclsPrinted.insert(D).second)

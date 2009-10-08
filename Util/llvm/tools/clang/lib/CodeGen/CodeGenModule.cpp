@@ -39,7 +39,7 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CompileOptions &compileOpts,
                              Diagnostic &diags)
   : BlockModule(C, M, TD, Types, *this), Context(C),
     Features(C.getLangOptions()), CompileOpts(compileOpts), TheModule(M),
-    TheTargetData(TD), Diags(diags), Types(C, M, TD), Runtime(0),
+    TheTargetData(TD), Diags(diags), Types(C, M, TD), MangleCtx(C), Runtime(0),
     MemCpyFn(0), MemMoveFn(0), MemSetFn(0), CFConstantStringClassRef(0),
     VMContext(M.getContext()) {
 
@@ -166,7 +166,7 @@ const char *CodeGenModule::getMangledName(const NamedDecl *ND) {
 
   llvm::SmallString<256> Name;
   llvm::raw_svector_ostream Out(Name);
-  if (!mangleName(ND, Context, Out)) {
+  if (!mangleName(getMangleContext(), ND, Out)) {
     assert(ND->getIdentifier() && "Attempt to mangle unnamed decl.");
     return ND->getNameAsCString();
   }
@@ -247,6 +247,11 @@ void CodeGenModule::EmitAnnotations() {
 static CodeGenModule::GVALinkage
 GetLinkageForFunction(ASTContext &Context, const FunctionDecl *FD,
                       const LangOptions &Features) {
+  // Everything located semantically within an anonymous namespace is
+  // always internal.
+  if (FD->isInAnonymousNamespace())
+    return CodeGenModule::GVA_Internal;
+
   // The kind of external linkage this function will have, if it is not
   // inline or static.
   CodeGenModule::GVALinkage External = CodeGenModule::GVA_StrongExternal;
@@ -340,6 +345,12 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
 
   if (D->hasAttr<NoInlineAttr>())
     F->addFnAttr(llvm::Attribute::NoInline);
+
+  if (const AlignedAttr *AA = D->getAttr<AlignedAttr>())
+    F->setAlignment(AA->getAlignment()/8);
+  // C++ ABI requires 2-byte alignment for member functions.
+  if (F->getAlignment() < 2 && isa<CXXMethodDecl>(D))
+    F->setAlignment(2);
 }
 
 void CodeGenModule::SetCommonAttributes(const Decl *D,
@@ -1000,7 +1011,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   GV->setAlignment(getContext().getDeclAlignInBytes(D));
 
   // Set the llvm linkage type as appropriate.
-  if (D->getStorageClass() == VarDecl::Static)
+  if (D->isInAnonymousNamespace())
+    GV->setLinkage(llvm::Function::InternalLinkage);
+  else if (D->getStorageClass() == VarDecl::Static)
     GV->setLinkage(llvm::Function::InternalLinkage);
   else if (D->hasAttr<DLLImportAttr>())
     GV->setLinkage(llvm::Function::DLLImportLinkage);
@@ -1081,7 +1094,7 @@ static void ReplaceUsesOfNonProtoTypeWithRealFunction(llvm::GlobalValue *Old,
     llvm::CallInst *NewCall = llvm::CallInst::Create(NewFn, ArgList.begin(),
                                                      ArgList.end(), "", CI);
     ArgList.clear();
-    if (NewCall->getType() != llvm::Type::getVoidTy(Old->getContext()))
+    if (!NewCall->getType()->isVoidTy())
       NewCall->takeName(CI);
     NewCall->setAttributes(CI->getAttributes());
     NewCall->setCallingConv(CI->getCallingConv());
