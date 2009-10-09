@@ -115,7 +115,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		   and then to machine code when it is first invoked. */
 		co->co_use_llvm = (Py_JitControl == PY_JIT_ALWAYS);
 		co->co_optimization = -1;
-		co->co_callcount = 0;
+		co->co_hotness = 0;
 		co->co_fatalbailcount = 0;
 		co->co_assumed_globals = NULL;
 		co->co_assumed_builtins = NULL;
@@ -143,7 +143,7 @@ static PyMemberDef code_memberlist[] = {
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
 #ifdef WITH_LLVM
-	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
+	{"co_hotness", T_INT,		OFF(co_hotness),	READONLY},
 	{"co_fatalbailcount", T_INT,	OFF(co_fatalbailcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 #endif

@@ -22,6 +22,7 @@ DEFAULT_OPT_LEVEL = _foo.__code__.co_optimization
 del _foo
 
 
+JIT_SPIN_COUNT = _llvm.get_hotness_threshold() / 10 + 1000
 JIT_OPT_LEVEL = sys.flags.optimize if sys.flags.optimize > 2 else 2
 
 
@@ -2371,15 +2372,26 @@ class OptimizationTests(LlvmTestCase):
     def test_hotness(self):
         foo = compile_for_llvm("foo", "def foo(): pass",
                                optimization_level=None)
-        iterations = 11000  # Threshold is 10000.
-        # Because code objects are stored in the co_consts array, the
-        # callcount will increase by `iterations` every time this test is run,
-        # which breaks regrtest.py.
-        base_count = foo.__code__.co_callcount
+        iterations = JIT_SPIN_COUNT
         l = [foo() for _ in xrange(iterations)]
-        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
+        self.assertEqual(foo.__code__.co_hotness, iterations * 10)
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
+
+    def test_loop_hotness(self):
+        # Test that long-running loops count toward the hotness metric. A
+        # function doing 1e6 inner loop iterations per call should be worthy
+        # of optimization.
+        foo = compile_for_llvm("foo", """
+def foo():
+    for x in xrange(1000):
+        for y in xrange(1000):
+            pass
+""", optimization_level=None)
+        self.assertFalse(foo.__code__.__use_llvm__)
+        foo()
+        foo()  # Hot-or-not calculations are done on function-entry.
+        self.assertTrue(foo.__code__.__use_llvm__)
 
     def test_generator_hotness(self):
         foo = compile_for_llvm("foo", """
@@ -2387,16 +2399,12 @@ def foo():
     yield 5
     yield 6
 """, optimization_level=None)
-        iterations = 11000  # Threshold is 10000.
-        # Because code objects are stored in the co_consts array, the
-        # callcount will increase by `iterations` every time this test is run,
-        # which breaks regrtest.py.
-        base_count = foo.__code__.co_callcount
+        iterations = JIT_SPIN_COUNT
         l = [foo() for _ in xrange(iterations)]
-        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
+        self.assertEqual(foo.__code__.co_hotness, iterations * 10)
 
         l = map(list, l)
-        self.assertEqual(foo.__code__.co_callcount, base_count + iterations)
+        self.assertEqual(foo.__code__.co_hotness, iterations * 10)
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
 
@@ -2405,7 +2413,7 @@ def foo():
         # implementation. We do this by asserting that if their assumptions
         # about globals/builtins no longer hold, they bail.
         with test_support.swap_attr(__builtin__, "len", len):
-            iterations = 11000
+            iterations = JIT_SPIN_COUNT
             foo = compile_for_llvm("foo", """
 def foo(x, callback):
     callback()
@@ -2458,7 +2466,7 @@ def foo(trigger):
     else:
         return 5
 """, optimization_level=None)
-        for _ in xrange(11000):  # Spin foo() until it becomes hot.
+        for _ in xrange(JIT_SPIN_COUNT):  # Spin foo() until it becomes hot.
             foo(False)
         self.assertEquals(foo.__code__.__use_llvm__, True)
         self.assertEquals(foo(False), 5)
@@ -2487,7 +2495,7 @@ def foo(trigger):
 
         # This will specialize the len() call in outer, but not the leaf() call,
         # since lambdas are created anew each time through the loop.
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             outer(lambda: None)
         self.assertTrue(outer.__code__.__use_llvm__)
         sys.setbailerror(False)
@@ -2504,7 +2512,7 @@ def foo(trigger):
         def foo(f):
             return f([])
 
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             foo(len)
         self.assertTrue(foo.__code__.__use_llvm__)
         self.assertRaises(RuntimeError, foo, lambda x: 7)
@@ -2523,7 +2531,7 @@ def foo(trigger):
         # Compile like this so we get a new code object every time.
         foo = compile_for_llvm("foo", "def foo(): return len([])",
                                optimization_level=None)
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             foo()
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_fatalbailcount, 0)
@@ -2534,7 +2542,7 @@ def foo(trigger):
             self.assertEqual(foo.__code__.co_fatalbailcount, 1)
             # Since we can't recompile things yet, __use_llvm__ should be left
             # at False and execution should use the eval loop.
-            for _ in xrange(11000):
+            for _ in xrange(JIT_SPIN_COUNT):
                 foo()
             self.assertEqual(foo.__code__.__use_llvm__, False)
             self.assertEqual(foo(), 7)
@@ -2546,7 +2554,7 @@ def foo(trigger):
         d = dict.fromkeys(range(12000))
         foo = compile_for_llvm('foo', 'def foo(x): return x()',
                                optimization_level=None)
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             foo(d.popitem)
         self.assertTrue(foo.__code__.__use_llvm__)
 
@@ -2560,7 +2568,7 @@ def foo(trigger):
         # function pointer directly.
         foo = compile_for_llvm('foo', 'def foo(x): return x.join(["c", "d"])',
                                optimization_level=None)
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             foo("a")
             foo("c")
         self.assertTrue(foo.__code__.__use_llvm__)
@@ -2665,7 +2673,7 @@ class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
     def configure_func(self, func, *args):
         # Spin the function until it triggers as hot. Setting co_optimization
         # doesn't trigger the full range of optimizations.
-        for _ in xrange(11000):
+        for _ in xrange(JIT_SPIN_COUNT):
             func(*args)
 
     def test_changing_globals_invalidates_function(self):

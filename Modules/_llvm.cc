@@ -165,6 +165,17 @@ llvm_get_jit_control(PyObject *self)
     return NULL;
 }
 
+PyDoc_STRVAR(llvm_get_hotness_threshold_doc,
+"get_hotness_threshold() -> long\n\
+\n\
+Return the threshold for co_hotness before the code is 'hot'.");
+
+static PyObject *
+llvm_get_hotness_threshold(PyObject *self)
+{
+    return PyLong_FromLong(PY_HOTNESS_THRESHOLD);
+}
+
 static struct PyMethodDef llvm_methods[] = {
     {"set_debug", (PyCFunction)llvm_setdebug, METH_O, setdebug_doc},
     {"compile", llvm_compile, METH_VARARGS, llvm_compile_doc},
@@ -174,6 +185,8 @@ static struct PyMethodDef llvm_methods[] = {
      llvm_get_jit_control_doc},
     {"set_jit_control", (PyCFunction)llvm_set_jit_control, METH_O,
      llvm_set_jit_control_doc},
+    {"get_hotness_threshold", (PyCFunction)llvm_get_hotness_threshold,
+     METH_NOARGS, llvm_get_hotness_threshold_doc},
     { NULL, NULL }
 };
 

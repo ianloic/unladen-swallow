@@ -47,13 +47,6 @@ _PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
 }
 
 
-/* Simple function for determinining when we should (re)optimize a function
-   with the given call count. The threshold value of 10000 is arbitrary. This
-   function is very simple, and should only be taken as a baseline for future
-   improvements.
-   TODO(collinwinter): tune this. */
-#define Py_HOT_OR_NOT(call_count) ((call_count) % 10000 == 0)
-
 #ifdef Py_WITH_INSTRUMENTATION
 class HotnessTracker {
 	// llvm::DenseSet or llvm::SmallPtrSet may be better, but as of this
@@ -73,24 +66,24 @@ public:
 static bool
 compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
 {
-	return first->co_callcount > second->co_callcount;
+	return first->co_hotness > second->co_hotness;
 }
 
 HotnessTracker::~HotnessTracker()
 {
 	printf("\n%zd code objects deemed hot\n", this->hot_code_.size());
 
-	printf("Code call counts:\n");
+	printf("Code hotness metric:\n");
 	std::vector<PyCodeObject*> to_sort(this->hot_code_.begin(),
 					   this->hot_code_.end());
 	std::sort(to_sort.begin(), to_sort.end(), compare_hotness);
 	for (std::vector<PyCodeObject*>::iterator co = to_sort.begin();
 	     co != to_sort.end(); ++co) {
-		printf("%s:%d (%s)\t%d\n",
+		printf("%s:%d (%s)\t%ld\n",
 			PyString_AsString((*co)->co_filename),
 			(*co)->co_firstlineno,
 			PyString_AsString((*co)->co_name),
-			(*co)->co_callcount);
+			(*co)->co_hotness);
 	}
 }
 
@@ -103,34 +96,34 @@ class FatalBailTracker {
 public:
 	~FatalBailTracker() {
 		printf("\nCode objects that failed fatal guards:\n");
-		printf("\tfile:line (funcname) bail callcount -> final callcount\n");
+		printf("\tfile:line (funcname) bail hotness -> final hotness\n");
 
 		for (TrackerData::const_iterator it = this->code_.begin();
 				it != this->code_.end(); ++it) {
 			PyCodeObject *code = it->first;
-			if (code->co_callcount == it->second)
+			if (code->co_hotness == it->second)
 				continue;
-			printf("\t%s:%d (%s)\t%d -> %d\n",
+			printf("\t%s:%d (%s)\t%ld -> %ld\n",
 				PyString_AsString(code->co_filename),
 				code->co_firstlineno,
 				PyString_AsString(code->co_name),
 				it->second,
-				code->co_callcount);
+				code->co_hotness);
 		}
 	}
 
 	void RecordFatalBail(PyCodeObject *code) {
 		Py_INCREF(code);
-		this->code_.push_back(std::make_pair(code, code->co_callcount));
+		this->code_.push_back(std::make_pair(code, code->co_hotness));
 	}
 
 private:
-	// Keep a list of (code object, callcount) where callcount is the
-	// value of co_callcount when RecordFatalBail() was called. This is
+	// Keep a list of (code object, hotness) where hotness is the
+	// value of co_hotness when RecordFatalBail() was called. This is
 	// used to hide code objects whose machine code functions are
 	// invalidated during shutdown because their module dict has gone away;
 	// these code objects are uninteresting for our analysis.
-	typedef std::pair<PyCodeObject *, int> DataPoint;
+	typedef std::pair<PyCodeObject *, long> DataPoint;
 	typedef std::vector<DataPoint> TrackerData;
 
 	TrackerData code_;
@@ -2468,6 +2461,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 			RECORD_TYPE(0, v);
 			x = (*v->ob_type->tp_iternext)(v);
 			if (x != NULL) {
+#ifdef WITH_LLVM
+				/* Putting the ++hotness here simulates doing
+				   this on the loop backedge. */
+				++co->co_hotness;
+#endif  /* WITH_LLVM */
 				PUSH(x);
 				PREDICT(STORE_FAST);
 				PREDICT(UNPACK_SEQUENCE);
@@ -4001,7 +3999,7 @@ err_args(PyObject *func, int flags, int nargs)
 }
 
 #ifdef WITH_LLVM
-// Increments co's call counter and, if it has passed the hotness
+// Increments co's hotness level and, if it has passed the hotness
 // threshold, compiles the bytecode to native code.  If the code
 // object was marked as needing to be run through LLVM, also compiles
 // the bytecode to native code, even if the code object isn't hot yet.
@@ -4017,13 +4015,13 @@ err_args(PyObject *func, int flags, int nargs)
 static int
 mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 {
-	++co->co_callcount;
+	co->co_hotness += 10;
 	if (co->co_fatalbailcount >= PY_MAX_FATALBAILCOUNT) {
 		co->co_use_llvm = f->f_use_llvm = 0;
 		return 0;
 	}
 
-	if (Py_HOT_OR_NOT(co->co_callcount)) {
+	if (co->co_hotness > PY_HOTNESS_THRESHOLD) {
 #ifdef Py_WITH_INSTRUMENTATION
 		hot_code->AddHotCode(co);
 #endif

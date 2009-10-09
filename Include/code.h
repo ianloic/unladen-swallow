@@ -45,15 +45,15 @@ typedef struct PyCodeObject {
        PyGlobalLlvmData::Optimize().  Starts at -1 for unoptimized
        code. */
     int co_optimization;
-    /* Number of times this code has been executed. This is used to decide
-       which code objects are worth sending through LLVM. */
-    int co_callcount;
     /* There are two kinds of guard failures: fatal failures (machine code is
        invalid, requires recompilation) and non-fatal failures (unexpected
        branch taken, machine code is still valid). If fatal guards are failing
        repeatedly in the same code object, we shouldn't waste time repeatedly
        recompiling this code. */
     int co_fatalbailcount;
+    /* Measure of how hot this code object is. This is used to decide
+       which code objects are worth sending through LLVM. */
+    long co_hotness;
     /* Because the globals dict is set on the frame, we record *which* globals
        dict we're assuming. */
     PyObject *co_assumed_globals;
@@ -67,6 +67,9 @@ typedef struct PyCodeObject {
    eval loop forever after. See the comment on the co_fatalbailcount field
    for more details. */
 #define PY_MAX_FATALBAILCOUNT 1
+
+/* The threshold for co_hotness before the code object is considered "hot". */
+#define PY_HOTNESS_THRESHOLD 100000
 
 /* Masks for co_flags above */
 #define CO_OPTIMIZED    (1 << 0)

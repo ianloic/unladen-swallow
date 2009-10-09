@@ -48,6 +48,29 @@ bail to the interpreter. Once tracing is disabled, though, it's perfectly safe
 to start using the machine code again.
 
 
+Hotness model: finding critical functions
+-----------------------------------------
+
+We use an online model to estimate which functions are most critical to an
+application's performance. This model is as follows:
+
+- Each code object has a hotness level (the co_hotness field).
+    - For each function entry, add 10 to the hotness level.
+    - For each loop backedge, add 1 to the hotness level.
+- If the hotness level exceeds a given threshold (see eval.cc),
+  compile the code object to machine code via LLVM. This check is done on
+  function-entry.
+
+There several classes of functions we're trying to catch with this model:
+
+- Straight-line utility functions (lots of invocations, low running time).
+- Loop-heavy main functions (few invocations, high running time).
+
+Previous models:
+- Simple call count-based model (10000 calls == hot). This was implemented as
+  an obviously-deficient baseline to be improved upon.
+
+
 Optimization: LOAD_GLOBAL compile-time caching
 ----------------------------------------------
 
