@@ -1985,6 +1985,14 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Util\PyBytecodeIterator.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\PyBytecodeIterator.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Util\PyTypeBuilder.cc"
 				>
 			</File>
