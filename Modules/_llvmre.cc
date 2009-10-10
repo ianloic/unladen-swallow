@@ -103,6 +103,7 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
         Function::ExternalLinkage, "wrap_" #name, re.module); \
   } \
 
+#ifndef TESTER
 /* a Python object representing a regular expression */
 typedef struct {
   PyObject_HEAD
@@ -111,6 +112,7 @@ typedef struct {
   RegularExpression* re;
 
 } RegEx;
+#endif /* TESTER */
 
 /* a compiled regular expression atom */
 class CompiledExpression {
@@ -313,14 +315,6 @@ RegularExpression::~RegularExpression()
       Function* f = *i;
       if (f == NULL) continue; // skip already freed functions
       if (f->use_empty()) {
-        /*
-        void* x = ee->getPointerToGlobalIfAvailable(f);
-        printf("[pre] GlobalValue is %p\n", x);
-        ee->freeMachineCodeForFunction(f);
-        x = ee->getPointerToGlobalIfAvailable(f);
-        printf("[post] GlobalValue is %p\n", x);
-        */
-        printf("deleting Function named %s\n", f->getNameStr().c_str());
         f->eraseFromParent();
         *i = NULL;
         made_changes = true;
@@ -330,9 +324,6 @@ RegularExpression::~RegularExpression()
     }
     passes++;
   } while (made_changes);
-  if (remaining || passes) {
-    printf("remaining: %d, passes: %d\n", remaining, passes);
-  }
 }
 
 Function* 
@@ -1919,6 +1910,8 @@ CompiledExpression::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
   return next;
 }
 
+#ifndef TESTER
+
 static PyObject *
 RegEx_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
@@ -2086,3 +2079,5 @@ init_llvmre(void)
   Py_INCREF(&RegExType);
   PyModule_AddObject(m, "RegEx", (PyObject *)&RegExType);
 }
+
+#endif /* TESTER */
