@@ -25,6 +25,7 @@
 #include "_llvmfunctionobject.h"
 #include "llvm/Function.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/raw_ostream.h"
 #include "Util/RuntimeFeedback.h"
 #include "Util/Stats.h"
 #endif
@@ -157,6 +158,74 @@ _PyEval_RecordWatcherCount(size_t watcher_count)
 	watcher_count_stats->RecordDataPoint(watcher_count);
 }
 
+
+class BailCountStats {
+public:
+	BailCountStats() : total_(0), trace_on_entry_(0), line_trace_(0),
+	                   backedge_trace_(0), call_profile_(0),
+	                   fatal_guard_fail_(0), guard_fail_(0) {};
+
+	~BailCountStats() {
+		printf("\nBailed to the interpreter %ld times\n", this->total_);
+		printf("TRACE_ON_ENTRY: %ld\n", this->trace_on_entry_);
+		printf("LINE_TRACE: %ld\n", this->line_trace_);
+		printf("BACKEDGE_TRACE: %ld\n", this->backedge_trace_);
+		printf("CALL_PROFILE: %ld\n", this->call_profile_);
+		printf("FATAL_GUARD_FAIL: %ld\n", this->fatal_guard_fail_);
+		printf("GUARD_FAIL: %ld\n", this->guard_fail_);
+
+		printf("\n%zd bail sites:\n", this->bail_sites_.size());
+		for (BailData::iterator i = this->bail_sites_.begin(),
+		     end = this->bail_sites_.end(); i != end; ++i) {
+			llvm::outs() << "    " << *i << "\n";
+		}
+	}
+
+	void RecordBail(PyFrameObject *frame, _PyFrameBailReason bail_reason) {
+		++this->total_;
+
+    		std::string record;
+		llvm::raw_string_ostream wrapper(record);
+		wrapper << PyString_AsString(frame->f_code->co_filename) << ":";
+		wrapper << frame->f_code->co_firstlineno << ":";
+		wrapper << PyString_AsString(frame->f_code->co_name) << ":";
+		wrapper << frame->f_lasti;
+    		wrapper.flush();
+
+		this->bail_sites_.insert(record);
+
+#define BAIL_CASE(name, field) \
+	case name: \
+		++this->field; \
+		break;
+
+		switch (bail_reason) {
+			BAIL_CASE(_PYFRAME_TRACE_ON_ENTRY, trace_on_entry_)
+			BAIL_CASE(_PYFRAME_LINE_TRACE, line_trace_)
+			BAIL_CASE(_PYFRAME_BACKEDGE_TRACE, backedge_trace_)
+			BAIL_CASE(_PYFRAME_CALL_PROFILE, call_profile_)
+			BAIL_CASE(_PYFRAME_FATAL_GUARD_FAIL, fatal_guard_fail_)
+			BAIL_CASE(_PYFRAME_GUARD_FAIL, guard_fail_)
+			default:
+				abort();   // Unknown bail reason.
+		}
+#undef BAIL_CASE
+	}
+
+private:
+	typedef std::set<std::string> BailData;
+	BailData bail_sites_;
+
+	long total_;
+	long trace_on_entry_;
+	long line_trace_;
+	long backedge_trace_;
+	long call_profile_;
+	long fatal_guard_fail_;
+	long guard_fail_;
+};
+
+static llvm::ManagedStatic<BailCountStats> bail_count_stats;
 #endif  // Py_WITH_INSTRUMENTATION
 
 
@@ -935,10 +1004,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 		}
 	}
 
-	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
-		PyErr_SetString(PyExc_RuntimeError,
-			        "bailed to the interpreter");
-		goto exit_eval_frame;
+	if (bail_reason != _PYFRAME_NO_BAIL) {
+#ifdef Py_WITH_INSTRUMENTATION
+		bail_count_stats->RecordBail(f, bail_reason);
+#endif
+		if (_Py_BailError) {
+			PyErr_SetString(PyExc_RuntimeError,
+	        	                "bailed to the interpreter");
+			goto exit_eval_frame;
+		}
 	}
 #endif  /* WITH_LLVM */
 

@@ -20,6 +20,8 @@ collected:
 - Stats on how well LLVM was able to optimize CALL_FUNCTION opcodes.
 - Stats on which functions were deemed hot, and how hot they were; cold
   functions will not be shown.
+- How many times LLVM code bailed to the interpreter, why it bailed, and the
+  opcodes it bailed from.
 
 This data will be printed to stderr at interpreter-shutdown.
 
