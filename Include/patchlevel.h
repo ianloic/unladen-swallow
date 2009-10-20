@@ -28,7 +28,7 @@
 
 /* Version as a string */
 #define PY_VERSION      	"2.6.1"
-#define UNLADEN_VERSION 	"2009Q3"
+#define UNLADEN_VERSION 	"2009Q4"
 /*--end constants--*/
 
 /* Subversion Revision number of this file (not of the repository) */
