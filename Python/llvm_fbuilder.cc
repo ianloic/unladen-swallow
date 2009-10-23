@@ -48,6 +48,7 @@ using llvm::Module;
 using llvm::Type;
 using llvm::Value;
 using llvm::array_endof;
+using llvm::errs;
 
 // Use like "this->GET_GLOBAL_VARIABLE(Type, variable)".
 #define GET_GLOBAL_VARIABLE(TYPE, VARIABLE) \
@@ -57,17 +58,13 @@ using llvm::array_endof;
 class CallFunctionStats {
 public:
     ~CallFunctionStats() {
-        llvm::errs() << "\nCALL_FUNCTION optimization:\n";
-        llvm::errs() << "Total opcodes: " << this->total << "\n";
-        llvm::errs() << "Optimized opcodes: " << this->optimized << "\n";
-        llvm::errs() << "No opt: callsite kwargs: "
-                     << this->no_opt_kwargs << "\n";
-        llvm::errs() << "No opt: function params: "
-                     << this->no_opt_params << "\n";
-        llvm::errs() << "No opt: no data: "
-                     << this->no_opt_no_data << "\n";
-        llvm::errs() << "No opt: polymorphic: "
-                     << this->no_opt_polymorphic << "\n";
+        errs() << "\nCALL_FUNCTION optimization:\n";
+        errs() << "Total opcodes: " << this->total << "\n";
+        errs() << "Optimized opcodes: " << this->optimized << "\n";
+        errs() << "No opt: callsite kwargs: " << this->no_opt_kwargs << "\n";
+        errs() << "No opt: function params: " << this->no_opt_params << "\n";
+        errs() << "No opt: no data: " << this->no_opt_no_data << "\n";
+        errs() << "No opt: polymorphic: " << this->no_opt_polymorphic << "\n";
     }
 
     // How many CALL_FUNCTION opcodes were compiled.
@@ -88,9 +85,34 @@ public:
 
 static llvm::ManagedStatic<CallFunctionStats> call_function_stats;
 
+class CondBranchStats {
+public:
+    ~CondBranchStats() {
+        errs() << "\nConditional branch optimization:\n";
+        errs() << "Total cond branches: " << this->total << "\n";
+        errs() << "Optimized branches: " << this->optimized << "\n";
+        errs() << "Insufficient data: " << this->not_enough_data << "\n";
+        errs() << "Unpredictable branches: " << this->unpredictable << "\n";
+    }
+
+    // Total number of conditional branch opcodes compiled.
+    unsigned total;
+    // Number of predictable conditional branches we were able to optimize.
+    unsigned optimized;
+    // Number of single-direction branches we don't feel comfortable predicting.
+    unsigned not_enough_data;
+    // Number of unpredictable conditional branches (both directions
+    // taken frequently; unable to be optimized).
+    unsigned unpredictable;
+};
+
+static llvm::ManagedStatic<CondBranchStats> cond_branch_stats;
+
 #define CF_INC_STATS(field) call_function_stats->field++
+#define COND_BRANCH_INC_STATS(field) cond_branch_stats->field++
 #else
 #define CF_INC_STATS(field)
+#define COND_BRANCH_INC_STATS(field)
 #endif  /* Py_WITH_INSTRUMENTATION */
 
 namespace py {
@@ -1008,15 +1030,7 @@ LlvmFunctionBuilder::MaybeCallLineTrace(BasicBlock *fallthrough_block,
                                 call_trace, fallthrough_block);
 
     this->builder_.SetInsertPoint(call_trace);
-    this->builder_.CreateStore(
-        // -1 so that next_instr gets set right in EvalFrame.
-        ConstantInt::getSigned(PyTypeBuilder<int>::get(this->context_),
-                               this->f_lasti_ - 1),
-        this->f_lasti_addr_);
-    this->builder_.CreateStore(
-        ConstantInt::get(PyTypeBuilder<char>::get(this->context_), direction),
-        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->CreateBailPoint(direction);
 }
 
 void
@@ -1030,18 +1044,7 @@ LlvmFunctionBuilder::BailIfProfiling(llvm::BasicBlock *fallthrough_block)
                                 profiling, fallthrough_block);
 
     this->builder_.SetInsertPoint(profiling);
-    this->builder_.CreateStore(
-        // -1 so that next_instr gets set right in EvalFrame.
-        ConstantInt::getSigned(
-            PyTypeBuilder<int>::get(this->context_),
-            this->f_lasti_ - 1),
-        this->f_lasti_addr_);
-    this->builder_.CreateStore(
-        ConstantInt::get(
-            PyTypeBuilder<char>::get(this->context_),
-            _PYFRAME_CALL_PROFILE),
-        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->CreateBailPoint(_PYFRAME_CALL_PROFILE);
 }
 
 void
@@ -1194,16 +1197,7 @@ LlvmFunctionBuilder::LOAD_GLOBAL_fast(int name_index)
     /* Our assumptions about the state of the globals/builtins no longer hold;
        bail back to the interpreter. */
     this->builder_.SetInsertPoint(invalid_assumptions);
-    this->builder_.CreateStore(
-        // -1 so that next_instr gets set right in EvalFrame.
-        ConstantInt::getSigned(PyTypeBuilder<int>::get(this->context_),
-                               this->f_lasti_ - 1),
-        this->f_lasti_addr_);
-    this->builder_.CreateStore(
-        ConstantInt::get(PyTypeBuilder<char>::get(this->context_),
-                         _PYFRAME_FATAL_GUARD_FAIL),
-        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->CreateBailPoint(_PYFRAME_FATAL_GUARD_FAIL);
 
     /* Our assumptions are still valid; encode the result of the lookups as an
        immediate in the IR. */
@@ -1677,7 +1671,7 @@ LlvmFunctionBuilder::LogTscEvent(_PyTscEventId event_id) {
 const PyRuntimeFeedback *
 LlvmFunctionBuilder::GetFeedback(unsigned arg_index) const
 {
-    PyFeedbackMap *map = this->code_object_->co_runtime_feedback;
+    const PyFeedbackMap *map = this->code_object_->co_runtime_feedback;
     if (map == NULL)
         return NULL;
     return map->GetFeedbackEntry(this->f_lasti_, arg_index);
@@ -1747,18 +1741,7 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
     // Handle bailing back to the interpreter if the assumptions below don't
     // hold.
     this->builder_.SetInsertPoint(invalid_assumptions);
-    this->builder_.CreateStore(
-        // -1 so that next_instr gets set right in EvalFrame.
-        ConstantInt::getSigned(
-            PyTypeBuilder<int>::get(this->context_),
-            this->f_lasti_ - 1),
-        this->f_lasti_addr_);
-    this->builder_.CreateStore(
-        ConstantInt::get(
-            PyTypeBuilder<char>::get(this->context_),
-            _PYFRAME_GUARD_FAIL),
-        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->CreateBailPoint(_PYFRAME_GUARD_FAIL);
 
     this->builder_.SetInsertPoint(not_profiling);
 #ifdef WITH_TSC
@@ -2031,28 +2014,136 @@ LlvmFunctionBuilder::JUMP_ABSOLUTE(llvm::BasicBlock *target,
     this->builder_.CreateBr(target);
 }
 
-void
-LlvmFunctionBuilder::POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
-                                       llvm::BasicBlock *fallthrough)
+enum BranchInput {
+    BranchInputFalse = -1,
+    BranchInputUnpredictable = 0,
+    BranchInputTrue = 1,
+};
+
+// If the branch was predictable, return the branch direction: return
+// BranchInputTrue if the branch was always True, return BranchInputFalse
+// if the branch was always False. If the branch was unpredictable or if we have
+// no data, return 0.
+static BranchInput
+predict_branch_input(const PyRuntimeFeedback *feedback)
 {
+    if (feedback == NULL) {
+        COND_BRANCH_INC_STATS(not_enough_data);
+        return BranchInputUnpredictable;
+    }
+
+    uintptr_t was_true = feedback->GetCounter(PY_FDO_JUMP_TRUE);
+    uintptr_t was_false = feedback->GetCounter(PY_FDO_JUMP_FALSE);
+
+    // We want to be relatively sure of our prediction. 200 was chosen by
+    // running the benchmarks and increasing this threshold until we stopped
+    // making massively-bad predictions. Example: increasing the threshold from
+    // 100 to 200 reduced bad predictions in 2to3 from 3900+ to 2. We currently
+    // optimize only perfectly-predictable branches as a baseline; later work
+    // should explore the tradeoffs between bail penalties and improved codegen
+    // gained from omiting rarely-taken branches.
+    if (was_true + was_false <= 200) {
+        COND_BRANCH_INC_STATS(not_enough_data);
+        return BranchInputUnpredictable;
+    }
+
+    BranchInput result = (BranchInput)(bool(was_true) - bool(was_false));
+    if (result == BranchInputUnpredictable) {
+        COND_BRANCH_INC_STATS(unpredictable);
+    }
+    return result;
+}
+
+void
+LlvmFunctionBuilder::GetPyCondBranchBailBlock(unsigned true_idx,
+                                              BasicBlock **true_block,
+                                              unsigned false_idx,
+                                              BasicBlock **false_block,
+                                              unsigned *bail_idx,
+                                              BasicBlock **bail_block)
+{
+    COND_BRANCH_INC_STATS(total);
+    BranchInput branch_dir = predict_branch_input(this->GetFeedback());
+
+    if (branch_dir == BranchInputFalse) {
+        *bail_idx = false_idx;
+        *false_block = *bail_block = this->CreateBasicBlock("FALSE_bail");
+    }
+    else if (branch_dir == BranchInputTrue) {
+        *bail_idx = true_idx;
+        *true_block = *bail_block = this->CreateBasicBlock("TRUE_bail");
+    }
+    else {
+        *bail_idx = 0;
+        *bail_block = NULL;
+    }
+}
+
+void
+LlvmFunctionBuilder::FillPyCondBranchBailBlock(BasicBlock *bail_to,
+                                               unsigned bail_idx)
+{
+    COND_BRANCH_INC_STATS(optimized);
+    BasicBlock *current = this->builder_.GetInsertBlock();
+
+    this->builder_.SetInsertPoint(bail_to);
+    this->CreateBailPoint(bail_idx, _PYFRAME_GUARD_FAIL);
+
+    this->builder_.SetInsertPoint(current);
+}
+
+void
+LlvmFunctionBuilder::POP_JUMP_IF_FALSE(unsigned target_idx,
+                                       unsigned fallthrough_idx,
+                                       BasicBlock *target,
+                                       BasicBlock *fallthrough)
+{
+    unsigned bail_idx = 0;
+    BasicBlock *bail_to = NULL;
+    this->GetPyCondBranchBailBlock(/*on true: */ target_idx, &target,
+                                   /*on false: */ fallthrough_idx, &fallthrough,
+                                   &bail_idx, &bail_to);
+
     Value *test_value = this->Pop();
     Value *is_true = this->IsPythonTrue(test_value);
     this->builder_.CreateCondBr(is_true, fallthrough, target);
+
+    if (bail_to)
+        this->FillPyCondBranchBailBlock(bail_to, bail_idx);
 }
 
 void
-LlvmFunctionBuilder::POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
-                                      llvm::BasicBlock *fallthrough)
+LlvmFunctionBuilder::POP_JUMP_IF_TRUE(unsigned target_idx,
+                                      unsigned fallthrough_idx,
+                                      BasicBlock *target,
+                                      BasicBlock *fallthrough)
 {
+    unsigned bail_idx = 0;
+    BasicBlock *bail_to = NULL;
+    this->GetPyCondBranchBailBlock(/*on true: */ fallthrough_idx, &fallthrough,
+                                   /*on false: */ target_idx, &target,
+                                   &bail_idx, &bail_to);
+
     Value *test_value = this->Pop();
     Value *is_true = this->IsPythonTrue(test_value);
     this->builder_.CreateCondBr(is_true, target, fallthrough);
+
+    if (bail_to)
+        this->FillPyCondBranchBailBlock(bail_to, bail_idx);
 }
 
 void
-LlvmFunctionBuilder::JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
-                                          llvm::BasicBlock *fallthrough)
+LlvmFunctionBuilder::JUMP_IF_FALSE_OR_POP(unsigned target_idx,
+                                          unsigned fallthrough_idx,
+                                          BasicBlock *target,
+                                          BasicBlock *fallthrough)
 {
+    unsigned bail_idx = 0;
+    BasicBlock *bail_to = NULL;
+    this->GetPyCondBranchBailBlock(/*on true: */ target_idx, &target,
+                                   /*on false: */ fallthrough_idx, &fallthrough,
+                                   &bail_idx, &bail_to);
+
     BasicBlock *true_path =
         this->CreateBasicBlock("JUMP_IF_FALSE_OR_POP_pop");
     Value *test_value = this->Pop();
@@ -2067,12 +2158,22 @@ LlvmFunctionBuilder::JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
     this->DecRef(test_value);
     this->builder_.CreateBr(fallthrough);
 
+    if (bail_to)
+        this->FillPyCondBranchBailBlock(bail_to, bail_idx);
 }
 
 void
-LlvmFunctionBuilder::JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
-                                         llvm::BasicBlock *fallthrough)
+LlvmFunctionBuilder::JUMP_IF_TRUE_OR_POP(unsigned target_idx,
+                                         unsigned fallthrough_idx,
+                                         BasicBlock *target,
+                                         BasicBlock *fallthrough)
 {
+    unsigned bail_idx = 0;
+    BasicBlock *bail_to = NULL;
+    this->GetPyCondBranchBailBlock(/*on true: */ fallthrough_idx, &fallthrough,
+                                   /*on false: */ target_idx, &target,
+                                   &bail_idx, &bail_to);
+
     BasicBlock *false_path =
         this->CreateBasicBlock("JUMP_IF_TRUE_OR_POP_pop");
     Value *test_value = this->Pop();
@@ -2086,6 +2187,22 @@ LlvmFunctionBuilder::JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
     test_value = this->Pop();
     this->DecRef(test_value);
     this->builder_.CreateBr(fallthrough);
+
+    if (bail_to)
+        this->FillPyCondBranchBailBlock(bail_to, bail_idx);
+}
+
+void
+LlvmFunctionBuilder::CreateBailPoint(unsigned bail_idx, char reason)
+{
+    this->builder_.CreateStore(
+        // -1 so that next_instr gets set right in EvalFrame.
+        this->GetSigned<int>(bail_idx - 1),
+        this->f_lasti_addr_);
+    this->builder_.CreateStore(
+        ConstantInt::get(PyTypeBuilder<char>::get(this->context_), reason),
+        FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
+    this->builder_.CreateBr(this->bail_to_interpreter_block_);
 }
 
 void

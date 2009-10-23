@@ -22,6 +22,7 @@ collected:
   functions will not be shown.
 - How many times LLVM code bailed to the interpreter, why it bailed, and the
   opcodes it bailed from.
+- Stats on how well LLVM was able to optimize conditional branches.
 
 This data will be printed to stderr at interpreter-shutdown.
 

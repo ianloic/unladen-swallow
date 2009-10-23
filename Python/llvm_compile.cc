@@ -320,6 +320,7 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
 #define REL iter.NextIndex() + iter.Oparg()
 #define NO_OPINDEX target
 #define NEED_OPINDEX target, target_opindex
+#define COND_BRANCH iter.Oparg(), iter.NextIndex(), target
 #define OPCODE_J(opname, OPINDEX_EXPR, TARGET_PARAM) \
     case opname: \
         target_opindex = OPINDEX_EXPR; \
@@ -334,12 +335,12 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
         fbuilder.opname(TARGET_PARAM, fallthrough); \
         break;
 
-        OPCODE_J(JUMP_IF_FALSE_OR_POP, ABS, NO_OPINDEX)
-        OPCODE_J(JUMP_IF_TRUE_OR_POP, ABS, NO_OPINDEX)
-        OPCODE_J(JUMP_ABSOLUTE, ABS, NO_OPINDEX)
-        OPCODE_J(POP_JUMP_IF_FALSE, ABS, NO_OPINDEX)
-        OPCODE_J(POP_JUMP_IF_TRUE, ABS, NO_OPINDEX)
+        OPCODE_J(JUMP_IF_FALSE_OR_POP, ABS, COND_BRANCH)
+        OPCODE_J(JUMP_IF_TRUE_OR_POP, ABS, COND_BRANCH)
+        OPCODE_J(POP_JUMP_IF_FALSE, ABS, COND_BRANCH)
+        OPCODE_J(POP_JUMP_IF_TRUE, ABS, COND_BRANCH)
         OPCODE_J(CONTINUE_LOOP, ABS, NEED_OPINDEX)
+        OPCODE_J(JUMP_ABSOLUTE, ABS, NO_OPINDEX)
         OPCODE_J(JUMP_FORWARD, REL, NO_OPINDEX)
         OPCODE_J(FOR_ITER, REL, NO_OPINDEX)
         OPCODE_J(SETUP_LOOP, REL, NEED_OPINDEX)

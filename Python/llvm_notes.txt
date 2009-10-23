@@ -190,3 +190,26 @@ Instrumentation:
 - The --with-instrumentation build includes support for measuring callsite
   arity across an application, as well as tracking the reasons why various
   callsites were forced to use the safe version of CALL_FUNCTION.
+
+
+Optimization: omit untaken branches
+-----------------------------------
+
+Unladen Swallow's runtime feedback system records whether a branch was taken or
+not. When compiling to LLVM IR, if we see a branch that is either 100% taken or
+not taken, we will replace the other direction with a bail-to-interpreter block.
+
+To limit the effect of mispredictions, we only optimize branches where we have
+200 or more data points. This gives us greater confidence that a given branch
+has stabilized.
+
+In order to keep this optimization minimally invasive, we actually compile
+code in the not-taken direction to LLVM IR, but the conditional branch doesn't
+jump to it. We rely on LLVM's dead-code elimination passes to remove any
+truly untaken branches (the code may have additional in-edges).
+
+Instrumentation:
+- The --with-instrumentation build collects statistics on how many conditional
+  branches were compiled to IR, how many we were able to optimize, how many
+  failed to optimize due to inconsistency, and how many failed to optimize due
+  to insufficient data.

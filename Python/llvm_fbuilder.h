@@ -97,13 +97,21 @@ public:
     }
     void JUMP_ABSOLUTE(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
 
-    void POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
+    void POP_JUMP_IF_FALSE(unsigned target_idx,
+                           unsigned fallthrough_idx,
+                           llvm::BasicBlock *target,
                            llvm::BasicBlock *fallthrough);
-    void POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
+    void POP_JUMP_IF_TRUE(unsigned target_idx,
+                          unsigned fallthrough_idx,
+                          llvm::BasicBlock *target,
                           llvm::BasicBlock *fallthrough);
-    void JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
+    void JUMP_IF_FALSE_OR_POP(unsigned target_idx,
+                              unsigned fallthrough_idx,
+                              llvm::BasicBlock *target,
                               llvm::BasicBlock *fallthrough);
-    void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
+    void JUMP_IF_TRUE_OR_POP(unsigned target_idx,
+                             unsigned fallthrough_idx,
+                             llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
     void CONTINUE_LOOP(llvm::BasicBlock *target,
                        int target_opindex,
@@ -325,6 +333,31 @@ private:
     // new block if it's NULL) and leaves the insertion point there.
     void CheckPyTicker(llvm::BasicBlock *next_block = NULL);
 
+    // Helper function for the POP_JUMP_IF_{TRUE,FALSE} and
+    // JUMP_IF_{TRUE,FALSE}_OR_POP, used for omitting untake branches.
+    // If sufficient data is availble, we made decide to omit one side of a
+    // conditional branch, replacing that code with a jump to the interpreter.
+    // If sufficient data is available:
+    //      - set true_block or false_block to a bail-to-interpreter block.
+    //      - set bail_idx and bail_block to handle bailing.
+    // If sufficient data is available or we decide not to optimize:
+    //      - leave true_block and false_block alone.
+    //      - bail_idx will be 0, bail_block will be NULL.
+    //
+    // Out parameters: true_block, false_block, bail_idx, bail_block.
+    void GetPyCondBranchBailBlock(unsigned true_idx,
+                                  llvm::BasicBlock **true_block,
+                                  unsigned false_idx,
+                                  llvm::BasicBlock **false_block,
+                                  unsigned *bail_idx,
+                                  llvm::BasicBlock **bail_block);
+
+    // Helper function for the POP_JUMP_IF_{TRUE,FALSE} and
+    // JUMP_IF_{TRUE,FALSE}_OR_POP. Fill in the bail block for these opcodes
+    // that was obtained from GetPyCondBranchBailBlock().
+    void FillPyCondBranchBailBlock(llvm::BasicBlock *bail_to,
+                                   unsigned bail_idx);
+
     // These are just like the CreateCall* calls on IRBuilder, except they also
     // apply callee's calling convention and attributes to the call site.
     llvm::CallInst *CreateCall(llvm::Value *callee,
@@ -388,6 +421,12 @@ private:
     // Propagates an exception by jumping to the unwind block with an
     // appropriate unwind reason set.
     void PropagateException();
+
+    // Set up a block preceding the bail-to-interpreter block.
+    void CreateBailPoint(unsigned bail_idx, char reason);
+    void CreateBailPoint(char reason) {
+        CreateBailPoint(f_lasti_, reason);
+    }
 
     // Only for use in the constructor: Fills in the block that
     // handles bailing out of JITted code back to the interpreter
