@@ -83,6 +83,7 @@ _LlvmFunction_Jit(_LlvmFunction *function_obj)
         PyThreadState_GET()->interp->global_llvm_data;
     llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
 
+    PyEvalFrameFunction native_func;
 #ifdef Py_WITH_INSTRUMENTATION
     llvm::MachineCodeInfo code_info;
     engine->runJITOnFunction(function, &code_info);
@@ -93,10 +94,16 @@ _LlvmFunction_Jit(_LlvmFunction *function_obj)
     // TODO(jyasskin): code_info.address() doesn't work for some reason.
     void *func = engine->getPointerToGlobalIfAvailable(function);
     assert(func && "function not installed in the globals");
-    return (PyEvalFrameFunction)func;
+    native_func = (PyEvalFrameFunction)func;
 #else
-    return (PyEvalFrameFunction)engine->getPointerToFunction(function);
+    native_func = (PyEvalFrameFunction)engine->getPointerToFunction(function);
 #endif
+    // Delete the function body to reduce memory usage. This means we'll
+    // need to re-compile the bytecode to IR and reoptimize it again, if we
+    // need it again. function->empty() can be used to test whether a function
+    // has been cleared out like this.
+    function->deleteBody();
+    return native_func;
 }
 
 
@@ -143,17 +150,49 @@ llvmfunction_dealloc(PyLlvmFunctionObject *functionobj)
 static PyObject *
 llvmfunction_str(PyLlvmFunctionObject *functionobj)
 {
+    std::string result;
+    llvm::raw_string_ostream wrapper(result);
+
     llvm::Function *const function = _PyLlvmFunction_GetFunction(functionobj);
     if (function == NULL) {
         PyErr_BadInternalCall();
         return NULL;
     }
+    else if (!function->empty()) {
+        function->print(wrapper);
+    }
+    else {
+        // This is an llvm::Function that we've cleared out. Compile the code
+        // object back to IR, then throw that IR away. We assume that people
+        // aren't printing out code objects in tight loops.
+        PyCodeObject *code = functionobj->code_object;
+        _LlvmFunction *cur_function = code->co_llvm_function;
+        int cur_opt_level = code->co_optimization;
+        // Null these out to trick _PyCode_ToOptimizedLlvmIr() into recompiling
+        // this function, then restore the original values when we're done.
+        // TODO(collinwinter): this approach is suboptimal.
+        code->co_llvm_function = NULL;
+        code->co_optimization = 0;
 
-    std::string result;
-    llvm::raw_string_ostream wrapper(result);
-    function->print(wrapper);
+        int ret = _PyCode_ToOptimizedLlvmIr(code, cur_opt_level);
+        _LlvmFunction *new_function = code->co_llvm_function;
+        code->co_llvm_function = cur_function;
+        code->co_optimization = cur_opt_level;
+        // The only way we could have rejected compilation is if the code
+        // object changed. I don't know how this could happen, but Python has
+        // surprised me before.
+        if (ret == 1) {  // Compilation rejected.
+            PyErr_BadInternalCall();
+            return NULL;
+        }
+        else if (ret == -1)  // Error during compilation.
+            return NULL;
+
+        llvm::Function *func = (llvm::Function *)new_function->lf_function;
+        func->print(wrapper);
+        _LlvmFunction_Dealloc(new_function);
+    }
     wrapper.flush();
-
     return PyString_FromStringAndSize(result.data(), result.size());
 }
 

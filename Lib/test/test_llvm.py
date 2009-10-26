@@ -71,6 +71,10 @@ class ExtraAssertsTestCase(unittest.TestCase):
             self.fail("%r not raised" % expected_exception)
         self.assertEquals(real_exception.args, expected_args)
 
+    def assertContains(self, obj, container):
+        if obj not in container:
+            self.fail("%r not found in %r" % (obj, container))
+
 
 class LlvmTestCase(unittest.TestCase):
 
@@ -632,7 +636,7 @@ def setglobal(x):
         testvalue = "test global value"
         self.assertTrue('_test_global' not in our_globals)
         setglobal(testvalue)
-        self.assertTrue('_test_global' in our_globals)
+        self.assertContains('_test_global', our_globals)
         self.assertEquals(our_globals['_test_global'], testvalue)
 
     @at_each_optimization_level
@@ -644,7 +648,7 @@ def delglobal():
     del _test_global
 ''', level, our_globals)
         our_globals['_test_global'] = 'test global value'
-        self.assertTrue('_test_global' in our_globals)
+        self.assertContains('_test_global', our_globals)
         delglobal()
         self.assertTrue('_test_global' not in our_globals)
 
@@ -2367,7 +2371,14 @@ def unpack(x):
 
 
 # These tests are skipped when -j never or -j always is passed to Python.
-class OptimizationTests(LlvmTestCase):
+class OptimizationTests(LlvmTestCase, ExtraAssertsTestCase):
+
+    def test_manual_optimization(self):
+        foo = compile_for_llvm("foo", "def foo(): return 5",
+                               optimization_level=None)
+        foo.__code__.co_optimization = 2
+        self.assertContains("getelementptr", str(foo.__code__.co_llvm))
+        self.assertEqual(foo(), 5)
 
     def test_hotness(self):
         foo = compile_for_llvm("foo", "def foo(): pass",
@@ -2377,6 +2388,7 @@ class OptimizationTests(LlvmTestCase):
         self.assertEqual(foo.__code__.co_hotness, iterations * 10)
         self.assertEqual(foo.__code__.__use_llvm__, True)
         self.assertEqual(foo.__code__.co_optimization, JIT_OPT_LEVEL)
+        self.assertContains("getelementptr", str(foo.__code__.co_llvm))
 
     def test_loop_hotness(self):
         # Test that long-running loops count toward the hotness metric. A
@@ -2717,7 +2729,7 @@ def foo(x):
         self.assertEqual(foo(False), 8)  # Does not raise RuntimeError
 
         # Make sure we compiled both branches to LLVM IR.
-        self.assertTrue("@len" in str(foo.__code__.co_llvm))
+        self.assertContains("@len", str(foo.__code__.co_llvm))
 
     def test_POP_JUMP_IF_TRUE_training_consistent(self):
         # If we have runtime feedback, we'd like to be able to omit untaken
@@ -2767,7 +2779,7 @@ def foo(x):
         self.assertEqual(foo(True), 8)  # Does not raise RuntimeError
 
         # Make sure we compiled both branches to LLVM IR.
-        self.assertTrue("@len" in str(foo.__code__.co_llvm))
+        self.assertContains("@len", str(foo.__code__.co_llvm))
 
     def test_JUMP_IF_FALSE_OR_POP_training_consistent(self):
         # If we have runtime feedback, we'd like to be able to omit untaken
@@ -2811,7 +2823,7 @@ def foo(x):
         self.assertEqual(foo(True), 2)  # Does not raise RuntimeError
 
         # Make sure we compiled both branches to LLVM IR.
-        self.assertTrue("@len" in str(foo.__code__.co_llvm))
+        self.assertContains("@len", str(foo.__code__.co_llvm))
 
     def test_JUMP_IF_TRUE_OR_POP_training_consistent(self):
         # If we have runtime feedback, we'd like to be able to omit untaken
@@ -2855,7 +2867,7 @@ def foo(x):
         self.assertEqual(foo(False), 2)  # Does not raise RuntimeError
 
         # Make sure we compiled both branches to LLVM IR.
-        self.assertTrue("@len" in str(foo.__code__.co_llvm))
+        self.assertContains("@len", str(foo.__code__.co_llvm))
 
 
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
