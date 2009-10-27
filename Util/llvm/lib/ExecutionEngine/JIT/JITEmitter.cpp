@@ -648,8 +648,10 @@ void *JITEmitter::getPointerToGlobal(GlobalValue *V, void *Reference,
     // Return the function stub if it's already created.
     ResultPtr = Resolver.getFunctionStubIfAvailable(F);
     if (ResultPtr) {
+#ifndef NDEBUG
       intptr_t Offset = (intptr_t)Reference - (intptr_t)ResultPtr;
-      assert((Offset & 0xFFFFFFFF) == Offset && "Offset too big for 32 bits");
+      assert(Offset == (int32_t)Offset && "Offset too big for 32 bits");
+#endif  // NDEBUG
       AddStubToCurrentFunction(ResultPtr);
     }
   } else {
@@ -681,8 +683,10 @@ void *JITEmitter::getPointerToGlobal(GlobalValue *V, void *Reference,
   if (StubAddr)
     AddStubToCurrentFunction(StubAddr);
 
+#ifndef NDEBUG
   intptr_t Offset = (intptr_t)Reference - (intptr_t)StubAddr;
-  assert((Offset & 0xFFFFFFFF) == Offset && "Offset too big for 32 bits");
+  assert(Offset == (int32_t)Offset && "Offset too big for 32 bits");
+#endif  // NDEBUG
   return StubAddr;
 }
 
