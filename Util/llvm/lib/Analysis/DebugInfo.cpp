@@ -116,7 +116,7 @@ GlobalVariable *DIDescriptor::getGlobalVariableField(unsigned Elt) const {
     return 0;
 
   if (Elt < DbgNode->getNumElements())
-      return dyn_cast<GlobalVariable>(DbgNode->getElement(Elt));
+      return dyn_cast_or_null<GlobalVariable>(DbgNode->getElement(Elt));
   return 0;
 }
 
@@ -695,6 +695,32 @@ DIBasicType DIFactory::CreateBasicType(DIDescriptor Context,
   return DIBasicType(MDNode::get(VMContext, &Elts[0], 10));
 }
 
+
+/// CreateBasicType - Create a basic type like int, float, etc.
+DIBasicType DIFactory::CreateBasicTypeEx(DIDescriptor Context,
+                                         StringRef Name,
+                                         DICompileUnit CompileUnit,
+                                         unsigned LineNumber,
+                                         Constant *SizeInBits,
+                                         Constant *AlignInBits,
+                                         Constant *OffsetInBits, unsigned Flags,
+                                         unsigned Encoding) {
+  Value *Elts[] = {
+    GetTagConstant(dwarf::DW_TAG_base_type),
+    Context.getNode(),
+    MDString::get(VMContext, Name),
+    CompileUnit.getNode(),
+    ConstantInt::get(Type::getInt32Ty(VMContext), LineNumber),
+    SizeInBits,
+    AlignInBits,
+    OffsetInBits,
+    ConstantInt::get(Type::getInt32Ty(VMContext), Flags),
+    ConstantInt::get(Type::getInt32Ty(VMContext), Encoding)
+  };
+  return DIBasicType(MDNode::get(VMContext, &Elts[0], 10));
+}
+
+
 /// CreateDerivedType - Create a derived type like const qualified type,
 /// pointer, typedef, etc.
 DIDerivedType DIFactory::CreateDerivedType(unsigned Tag,
@@ -722,6 +748,35 @@ DIDerivedType DIFactory::CreateDerivedType(unsigned Tag,
   return DIDerivedType(MDNode::get(VMContext, &Elts[0], 10));
 }
 
+
+/// CreateDerivedType - Create a derived type like const qualified type,
+/// pointer, typedef, etc.
+DIDerivedType DIFactory::CreateDerivedTypeEx(unsigned Tag,
+                                             DIDescriptor Context,
+                                             StringRef Name,
+                                             DICompileUnit CompileUnit,
+                                             unsigned LineNumber,
+                                             Constant *SizeInBits,
+                                             Constant *AlignInBits,
+                                             Constant *OffsetInBits,
+                                             unsigned Flags,
+                                             DIType DerivedFrom) {
+  Value *Elts[] = {
+    GetTagConstant(Tag),
+    Context.getNode(),
+    MDString::get(VMContext, Name),
+    CompileUnit.getNode(),
+    ConstantInt::get(Type::getInt32Ty(VMContext), LineNumber),
+    SizeInBits,
+    AlignInBits,
+    OffsetInBits,
+    ConstantInt::get(Type::getInt32Ty(VMContext), Flags),
+    DerivedFrom.getNode(),
+  };
+  return DIDerivedType(MDNode::get(VMContext, &Elts[0], 10));
+}
+
+
 /// CreateCompositeType - Create a composite type like array, struct, etc.
 DICompositeType DIFactory::CreateCompositeType(unsigned Tag,
                                                DIDescriptor Context,
@@ -745,6 +800,38 @@ DICompositeType DIFactory::CreateCompositeType(unsigned Tag,
     ConstantInt::get(Type::getInt64Ty(VMContext), SizeInBits),
     ConstantInt::get(Type::getInt64Ty(VMContext), AlignInBits),
     ConstantInt::get(Type::getInt64Ty(VMContext), OffsetInBits),
+    ConstantInt::get(Type::getInt32Ty(VMContext), Flags),
+    DerivedFrom.getNode(),
+    Elements.getNode(),
+    ConstantInt::get(Type::getInt32Ty(VMContext), RuntimeLang)
+  };
+  return DICompositeType(MDNode::get(VMContext, &Elts[0], 12));
+}
+
+
+/// CreateCompositeType - Create a composite type like array, struct, etc.
+DICompositeType DIFactory::CreateCompositeTypeEx(unsigned Tag,
+                                                 DIDescriptor Context,
+                                                 StringRef Name,
+                                                 DICompileUnit CompileUnit,
+                                                 unsigned LineNumber,
+                                                 Constant *SizeInBits,
+                                                 Constant *AlignInBits,
+                                                 Constant *OffsetInBits,
+                                                 unsigned Flags,
+                                                 DIType DerivedFrom,
+                                                 DIArray Elements,
+                                                 unsigned RuntimeLang) {
+
+  Value *Elts[] = {
+    GetTagConstant(Tag),
+    Context.getNode(),
+    MDString::get(VMContext, Name),
+    CompileUnit.getNode(),
+    ConstantInt::get(Type::getInt32Ty(VMContext), LineNumber),
+    SizeInBits,
+    AlignInBits,
+    OffsetInBits,
     ConstantInt::get(Type::getInt32Ty(VMContext), Flags),
     DerivedFrom.getNode(),
     Elements.getNode(),
@@ -969,8 +1056,6 @@ void DebugInfoFinder::processModule(Module &M) {
 #ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
   MetadataContext &TheMetadata = M.getContext().getMetadata();
   unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
-  if (!MDDbgKind)
-    return;
 #endif
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
     for (Function::iterator FI = (*I).begin(), FE = (*I).end(); FI != FE; ++FI)
@@ -987,15 +1072,17 @@ void DebugInfoFinder::processModule(Module &M) {
         else if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(BI))
           processDeclare(DDI);
 #ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
-        else if (MDNode *L = TheMetadata.getMD(MDDbgKind, BI)) {
-          DILocation Loc(L);
-          DIScope S(Loc.getScope().getNode());
-          if (S.isCompileUnit())
-            addCompileUnit(DICompileUnit(S.getNode()));
-          else if (S.isSubprogram())
-            processSubprogram(DISubprogram(S.getNode()));
-          else if (S.isLexicalBlock())
-            processLexicalBlock(DILexicalBlock(S.getNode()));
+        else if (MDDbgKind) {
+          if (MDNode *L = TheMetadata.getMD(MDDbgKind, BI)) {
+            DILocation Loc(L);
+            DIScope S(Loc.getScope().getNode());
+            if (S.isCompileUnit())
+              addCompileUnit(DICompileUnit(S.getNode()));
+            else if (S.isSubprogram())
+              processSubprogram(DISubprogram(S.getNode()));
+            else if (S.isLexicalBlock())
+              processLexicalBlock(DILexicalBlock(S.getNode()));
+          }
         }
 #endif
       }

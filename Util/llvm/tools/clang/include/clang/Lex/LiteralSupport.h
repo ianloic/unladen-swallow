@@ -17,7 +17,7 @@
 
 #include <string>
 #include "llvm/ADT/SmallString.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 
 namespace llvm {
   class APInt;
@@ -57,6 +57,7 @@ public:
   bool isLongLong;
   bool isFloat;       // 1.0f
   bool isImaginary;   // 1.0i
+  bool isMicrosoftInteger;  // Microsoft suffix extension i8, i16, i32, or i64.
 
   bool isIntegerLiteral() const {
     return !saw_period && !saw_exponent;

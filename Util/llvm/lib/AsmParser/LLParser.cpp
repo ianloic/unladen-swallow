@@ -69,6 +69,23 @@ bool LLParser::Run() {
 /// ValidateEndOfModule - Do final validity and sanity checks at the end of the
 /// module.
 bool LLParser::ValidateEndOfModule() {
+  // Update auto-upgraded malloc calls to "malloc".
+  // FIXME: Remove in LLVM 3.0.
+  if (MallocF) {
+    MallocF->setName("malloc");
+    // If setName() does not set the name to "malloc", then there is already a 
+    // declaration of "malloc".  In that case, iterate over all calls to MallocF
+    // and get them to call the declared "malloc" instead.
+    if (MallocF->getName() != "malloc") {
+      Constant* RealMallocF = M->getFunction("malloc");
+      if (RealMallocF->getType() != MallocF->getType())
+        RealMallocF = ConstantExpr::getBitCast(RealMallocF, MallocF->getType());
+      MallocF->replaceAllUsesWith(RealMallocF);
+      MallocF->eraseFromParent();
+      MallocF = NULL;
+    }
+  }
+
   if (!ForwardRefTypes.empty())
     return Error(ForwardRefTypes.begin()->second.second,
                  "use of undefined type named '" +
@@ -586,8 +603,7 @@ bool LLParser::ParseAlias(const std::string &Name, LocTy NameLoc,
 
   // See if this value already exists in the symbol table.  If so, it is either
   // a redefinition or a definition of a forward reference.
-  if (GlobalValue *Val =
-        cast_or_null<GlobalValue>(M->getValueSymbolTable().lookup(Name))) {
+  if (GlobalValue *Val = M->getNamedValue(Name)) {
     // See if this was a redefinition.  If so, there is no entry in
     // ForwardRefVals.
     std::map<std::string, std::pair<GlobalValue*, LocTy> >::iterator
@@ -654,9 +670,11 @@ bool LLParser::ParseGlobal(const std::string &Name, LocTy NameLoc,
 
   // See if the global was forward referenced, if so, use the global.
   if (!Name.empty()) {
-    if ((GV = M->getGlobalVariable(Name, true)) &&
-        !ForwardRefVals.erase(Name))
-      return Error(NameLoc, "redefinition of global '@" + Name + "'");
+    if (GlobalValue *GVal = M->getNamedValue(Name)) {
+      if (!ForwardRefVals.erase(Name) || !isa<GlobalValue>(GVal))
+        return Error(NameLoc, "redefinition of global '@" + Name + "'");
+      GV = cast<GlobalVariable>(GVal);
+    }
   } else {
     std::map<unsigned, std::pair<GlobalValue*, LocTy> >::iterator
       I = ForwardRefValIDs.find(NumberedVals.size());
@@ -1029,13 +1047,11 @@ bool LLParser::ParseOptionalCallingConv(CallingConv::ID &CC) {
 ///   ::= /* empty */
 ///   ::= !dbg !42
 bool LLParser::ParseOptionalCustomMetadata() {
-
-  std::string Name;
-  if (Lex.getKind() == lltok::NamedOrCustomMD) {
-    Name = Lex.getStrVal();
-    Lex.Lex();
-  } else
+  if (Lex.getKind() != lltok::NamedOrCustomMD)
     return false;
+
+  std::string Name = Lex.getStrVal();
+  Lex.Lex();
 
   if (Lex.getKind() != lltok::Metadata)
     return TokError("Expected '!' here");
@@ -1047,7 +1063,7 @@ bool LLParser::ParseOptionalCustomMetadata() {
   MetadataContext &TheMetadata = M->getContext().getMetadata();
   unsigned MDK = TheMetadata.getMDKind(Name.c_str());
   if (!MDK)
-    MDK = TheMetadata.RegisterMDKind(Name.c_str());
+    MDK = TheMetadata.registerMDKind(Name.c_str());
   MDsOnInst.push_back(std::make_pair(MDK, cast<MDNode>(Node)));
 
   return false;
@@ -1959,16 +1975,17 @@ bool LLParser::ParseValID(ValID &ID) {
     return false;
 
   case lltok::kw_asm: {
-    // ValID ::= 'asm' SideEffect? STRINGCONSTANT ',' STRINGCONSTANT
-    bool HasSideEffect;
+    // ValID ::= 'asm' SideEffect? AlignStack? STRINGCONSTANT ',' STRINGCONSTANT
+    bool HasSideEffect, AlignStack;
     Lex.Lex();
     if (ParseOptionalToken(lltok::kw_sideeffect, HasSideEffect) ||
+        ParseOptionalToken(lltok::kw_alignstack, AlignStack) ||
         ParseStringConstant(ID.StrVal) ||
         ParseToken(lltok::comma, "expected comma in inline asm expression") ||
         ParseToken(lltok::StringConstant, "expected constraint string"))
       return true;
     ID.StrVal2 = Lex.getStrVal();
-    ID.UIntVal = HasSideEffect;
+    ID.UIntVal = HasSideEffect | ((unsigned)AlignStack<<1);
     ID.Kind = ValID::t_InlineAsm;
     return false;
   }
@@ -2368,7 +2385,7 @@ bool LLParser::ConvertValIDToValue(const Type *Ty, ValID &ID, Value *&V,
       PTy ? dyn_cast<FunctionType>(PTy->getElementType()) : 0;
     if (!FTy || !InlineAsm::Verify(FTy, ID.StrVal2))
       return Error(ID.Loc, "invalid type for inline asm constraint string");
-    V = InlineAsm::get(FTy, ID.StrVal, ID.StrVal2, ID.UIntVal);
+    V = InlineAsm::get(FTy, ID.StrVal, ID.StrVal2, ID.UIntVal&1, ID.UIntVal>>1);
     return false;
   } else if (ID.Kind == ValID::t_Metadata) {
     V = ID.MetadataVal;
@@ -2547,6 +2564,8 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
              AI != AE; ++AI)
           AI->setName("");
       }
+    } else if (M->getNamedValue(FunctionName)) {
+      return Error(NameLoc, "redefinition of function '@" + FunctionName + "'");
     }
 
   } else {
@@ -2782,9 +2801,9 @@ bool LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   case lltok::kw_call:           return ParseCall(Inst, PFS, false);
   case lltok::kw_tail:           return ParseCall(Inst, PFS, true);
   // Memory.
-  case lltok::kw_alloca:
-  case lltok::kw_malloc:         return ParseAlloc(Inst, PFS, KeywordVal);
-  case lltok::kw_free:           return ParseFree(Inst, PFS);
+  case lltok::kw_alloca:         return ParseAlloc(Inst, PFS);
+  case lltok::kw_malloc:         return ParseAlloc(Inst, PFS, BB, false);
+  case lltok::kw_free:           return ParseFree(Inst, PFS, BB);
   case lltok::kw_load:           return ParseLoad(Inst, PFS, false);
   case lltok::kw_store:          return ParseStore(Inst, PFS, false);
   case lltok::kw_volatile:
@@ -2857,8 +2876,6 @@ bool LLParser::ParseRet(Instruction *&Inst, BasicBlock *BB,
   if (ParseType(Ty, true /*void allowed*/)) return true;
 
   if (Ty->isVoidTy()) {
-    if (EatIfPresent(lltok::comma))
-      if (ParseOptionalCustomMetadata()) return true;
     Inst = ReturnInst::Create(Context);
     return false;
   }
@@ -2894,8 +2911,6 @@ bool LLParser::ParseRet(Instruction *&Inst, BasicBlock *BB,
       }
     }
   }
-  if (EatIfPresent(lltok::comma))
-    if (ParseOptionalCustomMetadata()) return true;
 
   Inst = ReturnInst::Create(Context, RV);
   return false;
@@ -3293,7 +3308,7 @@ bool LLParser::ParseShuffleVector(Instruction *&Inst, PerFunctionState &PFS) {
 }
 
 /// ParsePHI
-///   ::= 'phi' Type '[' Value ',' Value ']' (',' '[' Value ',' Valueß ']')*
+///   ::= 'phi' Type '[' Value ',' Value ']' (',' '[' Value ',' Value ']')*
 bool LLParser::ParsePHI(Instruction *&Inst, PerFunctionState &PFS) {
   PATypeHolder Ty(Type::getVoidTy(Context));
   Value *Op0, *Op1;
@@ -3314,6 +3329,9 @@ bool LLParser::ParsePHI(Instruction *&Inst, PerFunctionState &PFS) {
     if (!EatIfPresent(lltok::comma))
       break;
 
+    if (Lex.getKind() == lltok::NamedOrCustomMD)
+      break;
+
     if (ParseToken(lltok::lsquare, "expected '[' in phi value list") ||
         ParseValue(Ty, Op0, PFS) ||
         ParseToken(lltok::comma, "expected ',' after insertelement value") ||
@@ -3321,6 +3339,9 @@ bool LLParser::ParsePHI(Instruction *&Inst, PerFunctionState &PFS) {
         ParseToken(lltok::rsquare, "expected ']' in phi value list"))
       return true;
   }
+
+  if (Lex.getKind() == lltok::NamedOrCustomMD)
+    if (ParseOptionalCustomMetadata()) return true;
 
   if (!Ty->isFirstClassType())
     return Error(TypeLoc, "phi node must have first class type");
@@ -3438,7 +3459,7 @@ bool LLParser::ParseCall(Instruction *&Inst, PerFunctionState &PFS,
 ///   ::= 'malloc' Type (',' TypeAndValue)? (',' OptionalInfo)?
 ///   ::= 'alloca' Type (',' TypeAndValue)? (',' OptionalInfo)?
 bool LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS,
-                          unsigned Opc) {
+                          BasicBlock* BB, bool isAlloca) {
   PATypeHolder Ty(Type::getVoidTy(Context));
   Value *Size = 0;
   LocTy SizeLoc;
@@ -3459,21 +3480,32 @@ bool LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS,
   if (Size && Size->getType() != Type::getInt32Ty(Context))
     return Error(SizeLoc, "element count must be i32");
 
-  if (Opc == Instruction::Malloc)
-    Inst = new MallocInst(Ty, Size, Alignment);
-  else
+  if (isAlloca) {
     Inst = new AllocaInst(Ty, Size, Alignment);
+    return false;
+  }
+
+  // Autoupgrade old malloc instruction to malloc call.
+  // FIXME: Remove in LLVM 3.0.
+  const Type *IntPtrTy = Type::getInt32Ty(Context);
+  if (!MallocF)
+    // Prototype malloc as "void *(int32)".
+    // This function is renamed as "malloc" in ValidateEndOfModule().
+    MallocF = cast<Function>(
+       M->getOrInsertFunction("", Type::getInt8PtrTy(Context), IntPtrTy, NULL));
+  Inst = CallInst::CreateMalloc(BB, IntPtrTy, Ty, Size, MallocF);
   return false;
 }
 
 /// ParseFree
 ///   ::= 'free' TypeAndValue
-bool LLParser::ParseFree(Instruction *&Inst, PerFunctionState &PFS) {
+bool LLParser::ParseFree(Instruction *&Inst, PerFunctionState &PFS,
+                         BasicBlock* BB) {
   Value *Val; LocTy Loc;
   if (ParseTypeAndValue(Val, Loc, PFS)) return true;
   if (!isa<PointerType>(Val->getType()))
     return Error(Loc, "operand to free must be a pointer");
-  Inst = new FreeInst(Val);
+  Inst = CallInst::CreateFree(Val, BB);
   return false;
 }
 
@@ -3554,11 +3586,15 @@ bool LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
 
   SmallVector<Value*, 16> Indices;
   while (EatIfPresent(lltok::comma)) {
+    if (Lex.getKind() == lltok::NamedOrCustomMD)
+      break;
     if (ParseTypeAndValue(Val, EltLoc, PFS)) return true;
     if (!isa<IntegerType>(Val->getType()))
       return Error(EltLoc, "getelementptr index must be an integer");
     Indices.push_back(Val);
   }
+  if (Lex.getKind() == lltok::NamedOrCustomMD)
+    if (ParseOptionalCustomMetadata()) return true;
 
   if (!GetElementPtrInst::getIndexedType(Ptr->getType(),
                                          Indices.begin(), Indices.end()))

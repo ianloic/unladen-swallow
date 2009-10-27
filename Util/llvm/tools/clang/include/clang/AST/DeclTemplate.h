@@ -518,6 +518,10 @@ public:
   /// specialization from the function template.
   const TemplateArgumentList *TemplateArguments;
 
+  /// \brief The point at which this function template specialization was
+  /// first instantiated. 
+  SourceLocation PointOfInstantiation;
+  
   /// \brief Retrieve the template from which this function was specialized.
   FunctionTemplateDecl *getTemplate() const { return Template.getPointer(); }
 
@@ -533,6 +537,21 @@ public:
     Template.setInt(TSK - 1);
   }
 
+  /// \brief Retrieve the first point of instantiation of this function
+  /// template specialization.
+  ///
+  /// The point of instantiation may be an invalid source location if this
+  /// function has yet to be instantiated.
+  SourceLocation getPointOfInstantiation() const { 
+    return PointOfInstantiation; 
+  }
+  
+  /// \brief Set the (first) point of instantiation of this function template
+  /// specialization.
+  void setPointOfInstantiation(SourceLocation POI) {
+    PointOfInstantiation = POI;
+  }
+  
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, TemplateArguments->getFlatArgumentList(),
             TemplateArguments->flat_size(),
@@ -556,10 +575,13 @@ class MemberSpecializationInfo {
   // manner in which the instantiation occurred (in the lower two bits).
   llvm::PointerIntPair<NamedDecl *, 2> MemberAndTSK;
   
+  // The point at which this member was first instantiated.
+  SourceLocation PointOfInstantiation;
+  
 public:
   explicit 
   MemberSpecializationInfo(NamedDecl *IF, TemplateSpecializationKind TSK)
-    : MemberAndTSK(IF, TSK - 1) {
+    : MemberAndTSK(IF, TSK - 1), PointOfInstantiation() {
     assert(TSK != TSK_Undeclared && 
            "Cannot encode undeclared template specializations for members");
   }
@@ -579,6 +601,18 @@ public:
            "Cannot encode undeclared template specializations for members");
     MemberAndTSK.setInt(TSK - 1);
   }
+  
+  /// \brief Retrieve the first point of instantiation of this member. 
+  /// If the point of instantiation is an invalid location, then this member
+  /// has not yet been instantiated.
+  SourceLocation getPointOfInstantiation() const { 
+    return PointOfInstantiation; 
+  }
+  
+  /// \brief Set the first point of instantiation.
+  void setPointOfInstantiation(SourceLocation POI) {
+    PointOfInstantiation = POI;
+  }
 };
   
 /// Declaration of a template function.
@@ -587,7 +621,7 @@ protected:
   /// \brief Data that is common to all of the declarations of a given
   /// function template.
   struct Common {
-    Common() : InstantiatedFromMember(0) { }
+    Common() : InstantiatedFromMember(0, false) { }
 
     /// \brief The function template specializations for this function
     /// template, including explicit specializations and instantiations.
@@ -595,7 +629,10 @@ protected:
 
     /// \brief The member function template from which this was most
     /// directly instantiated (or null).
-    FunctionTemplateDecl *InstantiatedFromMember;
+    ///
+    /// The boolean value indicates whether this member function template
+    /// was explicitly specialized.
+    llvm::PointerIntPair<FunctionTemplateDecl*, 1, bool> InstantiatedFromMember;
   };
 
   /// \brief A pointer to the previous declaration (if this is a redeclaration)
@@ -670,14 +707,40 @@ public:
   /// \returns NULL if this is not an instantiation of a member function
   /// template.
   FunctionTemplateDecl *getInstantiatedFromMemberTemplate() {
-    return getCommonPtr()->InstantiatedFromMember;
+    return getCommonPtr()->InstantiatedFromMember.getPointer();
   }
 
   void setInstantiatedFromMemberTemplate(FunctionTemplateDecl *FTD) {
-    assert(!getCommonPtr()->InstantiatedFromMember);
-    getCommonPtr()->InstantiatedFromMember = FTD;
+    assert(!getCommonPtr()->InstantiatedFromMember.getPointer());
+    getCommonPtr()->InstantiatedFromMember.setPointer(FTD);
   }
 
+  /// \brief Determines whether this template was a specialization of a 
+  /// member template.
+  ///
+  /// In the following example, the function template \c X<int>::f is a 
+  /// member specialization.
+  ///
+  /// \code
+  /// template<typename T>
+  /// struct X {
+  ///   template<typename U> void f(T, U);
+  /// };
+  ///
+  /// template<> template<typename T>
+  /// void X<int>::f(int, T);
+  /// \endcode
+  bool isMemberSpecialization() {
+    return getCommonPtr()->InstantiatedFromMember.getInt();
+  }
+  
+  /// \brief Note that this member template is a specialization.
+  void setMemberSpecialization() {
+    assert(getCommonPtr()->InstantiatedFromMember.getPointer() &&
+           "Only member templates can be member template specializations");
+    getCommonPtr()->InstantiatedFromMember.setInt(true);
+  }
+  
   /// Create a template function node.
   static FunctionTemplateDecl *Create(ASTContext &C, DeclContext *DC,
                                       SourceLocation L,
@@ -1129,7 +1192,7 @@ protected:
   /// \brief Data that is common to all of the declarations of a given
   /// class template.
   struct Common {
-    Common() : InstantiatedFromMember(0) {}
+    Common() : InstantiatedFromMember(0, 0) {}
 
     /// \brief The class template specializations for this class
     /// template, including explicit specializations and instantiations.
@@ -1145,9 +1208,15 @@ protected:
 
     /// \brief The templated member class from which this was most
     /// directly instantiated (or null).
-    ClassTemplateDecl *InstantiatedFromMember;
+    ///
+    /// The boolean value indicates whether this member class template
+    /// was explicitly specialized.
+    llvm::PointerIntPair<ClassTemplateDecl *, 1, bool> InstantiatedFromMember;
   };
 
+  // FIXME: Combine PreviousDeclaration with CommonPtr, as in 
+  // FunctionTemplateDecl.
+  
   /// \brief Previous declaration of this class template.
   ClassTemplateDecl *PreviousDeclaration;
 
@@ -1246,14 +1315,40 @@ public:
   ///
   /// \returns null if this is not an instantiation of a member class template.
   ClassTemplateDecl *getInstantiatedFromMemberTemplate() const {
-    return CommonPtr->InstantiatedFromMember;
+    return CommonPtr->InstantiatedFromMember.getPointer();
   }
 
   void setInstantiatedFromMemberTemplate(ClassTemplateDecl *CTD) {
-    assert(!CommonPtr->InstantiatedFromMember);
-    CommonPtr->InstantiatedFromMember = CTD;
+    assert(!CommonPtr->InstantiatedFromMember.getPointer());
+    CommonPtr->InstantiatedFromMember.setPointer(CTD);
   }
 
+  /// \brief Determines whether this template was a specialization of a 
+  /// member template.
+  ///
+  /// In the following example, the member template \c X<int>::Inner is a 
+  /// member specialization.
+  ///
+  /// \code
+  /// template<typename T>
+  /// struct X {
+  ///   template<typename U> struct Inner;
+  /// };
+  ///
+  /// template<> template<typename T>
+  /// struct X<int>::Inner { /* ... */ };
+  /// \endcode
+  bool isMemberSpecialization() {
+    return CommonPtr->InstantiatedFromMember.getInt();
+  }
+  
+  /// \brief Note that this member template is a specialization.
+  void setMemberSpecialization() {
+    assert(CommonPtr->InstantiatedFromMember.getPointer() &&
+           "Only member templates can be member template specializations");
+    CommonPtr->InstantiatedFromMember.setInt(true);
+  }
+  
   // Implement isa/cast/dyncast support
   static bool classof(const Decl *D)
   { return D->getKind() == ClassTemplate; }

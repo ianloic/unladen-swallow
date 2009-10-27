@@ -30,6 +30,91 @@ using namespace clang;
 // Primary Expressions.
 //===----------------------------------------------------------------------===//
 
+DeclRefExpr::DeclRefExpr(NestedNameSpecifier *Qualifier, 
+                         SourceRange QualifierRange,
+                         NamedDecl *D, SourceLocation NameLoc,
+                         bool HasExplicitTemplateArgumentList,
+                         SourceLocation LAngleLoc,
+                         const TemplateArgument *ExplicitTemplateArgs,
+                         unsigned NumExplicitTemplateArgs,
+                         SourceLocation RAngleLoc,
+                         QualType T, bool TD, bool VD)
+  : Expr(DeclRefExprClass, T, TD, VD),
+    DecoratedD(D,
+               (Qualifier? HasQualifierFlag : 0) |
+               (HasExplicitTemplateArgumentList? 
+                                    HasExplicitTemplateArgumentListFlag : 0)),
+    Loc(NameLoc) {
+  if (Qualifier) {
+    NameQualifier *NQ = getNameQualifier();
+    NQ->NNS = Qualifier;
+    NQ->Range = QualifierRange;
+  }
+      
+  if (HasExplicitTemplateArgumentList) {
+    ExplicitTemplateArgumentList *ETemplateArgs
+      = getExplicitTemplateArgumentList();
+    ETemplateArgs->LAngleLoc = LAngleLoc;
+    ETemplateArgs->RAngleLoc = RAngleLoc;
+    ETemplateArgs->NumTemplateArgs = NumExplicitTemplateArgs;
+    
+    TemplateArgument *TemplateArgs = ETemplateArgs->getTemplateArgs();
+    for (unsigned I = 0; I < NumExplicitTemplateArgs; ++I)
+      new (TemplateArgs + I) TemplateArgument(ExplicitTemplateArgs[I]);
+  }
+}
+
+DeclRefExpr *DeclRefExpr::Create(ASTContext &Context,
+                                 NestedNameSpecifier *Qualifier,
+                                 SourceRange QualifierRange,
+                                 NamedDecl *D,
+                                 SourceLocation NameLoc,
+                                 QualType T, bool TD, bool VD) {
+  return Create(Context, Qualifier, QualifierRange, D, NameLoc,
+                false, SourceLocation(), 0, 0, SourceLocation(),
+                T, TD, VD);
+}
+
+DeclRefExpr *DeclRefExpr::Create(ASTContext &Context,
+                                 NestedNameSpecifier *Qualifier,
+                                 SourceRange QualifierRange,
+                                 NamedDecl *D,
+                                 SourceLocation NameLoc,
+                                 bool HasExplicitTemplateArgumentList,
+                                 SourceLocation LAngleLoc,
+                                 const TemplateArgument *ExplicitTemplateArgs,
+                                 unsigned NumExplicitTemplateArgs,
+                                 SourceLocation RAngleLoc,
+                                 QualType T, bool TD, bool VD) {
+  std::size_t Size = sizeof(DeclRefExpr);
+  if (Qualifier != 0)
+    Size += sizeof(NameQualifier);
+  
+  if (HasExplicitTemplateArgumentList)
+    Size += sizeof(ExplicitTemplateArgumentList) +
+            sizeof(TemplateArgument) * NumExplicitTemplateArgs;
+  
+  void *Mem = Context.Allocate(Size, llvm::alignof<DeclRefExpr>());
+  return new (Mem) DeclRefExpr(Qualifier, QualifierRange, D, NameLoc,
+                               HasExplicitTemplateArgumentList,
+                               LAngleLoc, 
+                               ExplicitTemplateArgs, 
+                               NumExplicitTemplateArgs,
+                               RAngleLoc,
+                               T, TD, VD);
+}
+
+SourceRange DeclRefExpr::getSourceRange() const {
+  // FIXME: Does not handle multi-token names well, e.g., operator[].
+  SourceRange R(Loc);
+  
+  if (hasQualifier())
+    R.setBegin(getQualifierRange().getBegin());
+  if (hasExplicitTemplateArgumentList())
+    R.setEnd(getRAngleLoc());
+  return R;
+}
+
 // FIXME: Maybe this should use DeclPrinter with a special "print predefined
 // expr" policy instead.
 std::string PredefinedExpr::ComputeName(ASTContext &Context, IdentType IT,
@@ -426,6 +511,18 @@ const char *CastExpr::getCastKindName() const {
     return "IntegralToPointer";
   case CastExpr::CK_PointerToIntegral:
     return "PointerToIntegral";
+  case CastExpr::CK_ToVoid:
+    return "ToVoid";
+  case CastExpr::CK_VectorSplat:
+    return "VectorSplat";
+  case CastExpr::CK_IntegralCast:
+    return "IntegralCast";
+  case CastExpr::CK_IntegralToFloating:
+    return "IntegralToFloating";
+  case CastExpr::CK_FloatingToIntegral:
+    return "FloatingToIntegral";
+  case CastExpr::CK_FloatingCast:
+    return "FloatingCast";
   }
 
   assert(0 && "Unhandled cast kind!");
@@ -692,21 +789,22 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
   case CXXMemberCallExprClass: {
     // If this is a direct call, get the callee.
     const CallExpr *CE = cast<CallExpr>(this);
-    const Expr *CalleeExpr = CE->getCallee()->IgnoreParenCasts();
-    if (const DeclRefExpr *CalleeDRE = dyn_cast<DeclRefExpr>(CalleeExpr)) {
+    if (const FunctionDecl *FD = CE->getDirectCallee()) {
       // If the callee has attribute pure, const, or warn_unused_result, warn
       // about it. void foo() { strlen("bar"); } should warn.
-      if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(CalleeDRE->getDecl()))
-        if (FD->getAttr<WarnUnusedResultAttr>() ||
-            FD->getAttr<PureAttr>() || FD->getAttr<ConstAttr>()) {
-          Loc = CE->getCallee()->getLocStart();
-          R1 = CE->getCallee()->getSourceRange();
+      //
+      // Note: If new cases are added here, DiagnoseUnusedExprResult should be
+      // updated to match for QoI.
+      if (FD->getAttr<WarnUnusedResultAttr>() ||
+          FD->getAttr<PureAttr>() || FD->getAttr<ConstAttr>()) {
+        Loc = CE->getCallee()->getLocStart();
+        R1 = CE->getCallee()->getSourceRange();
 
-          if (unsigned NumArgs = CE->getNumArgs())
-            R2 = SourceRange(CE->getArg(0)->getLocStart(),
-                             CE->getArg(NumArgs-1)->getLocEnd());
-          return true;
-        }
+        if (unsigned NumArgs = CE->getNumArgs())
+          R2 = SourceRange(CE->getArg(0)->getLocStart(),
+                           CE->getArg(NumArgs-1)->getLocEnd());
+        return true;
+      }
     }
     return false;
   }
@@ -842,8 +940,7 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
     if (cast<ArraySubscriptExpr>(this)->getBase()->getType()->isVectorType())
       return cast<ArraySubscriptExpr>(this)->getBase()->isLvalue(Ctx);
     return LV_Valid;
-  case DeclRefExprClass:
-  case QualifiedDeclRefExprClass: { // C99 6.5.1p2
+  case DeclRefExprClass: { // C99 6.5.1p2
     const NamedDecl *RefdDecl = cast<DeclRefExpr>(this)->getDecl();
     if (DeclCanBeLvalue(RefdDecl, Ctx))
       return LV_Valid;
@@ -922,11 +1019,21 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
       return BinOp->getRHS()->isLvalue(Ctx);
 
     // C++ [expr.mptr.oper]p6
-    if ((BinOp->getOpcode() == BinaryOperator::PtrMemD ||
-         BinOp->getOpcode() == BinaryOperator::PtrMemI) &&
+    // The result of a .* expression is an lvalue only if its first operand is 
+    // an lvalue and its second operand is a pointer to data member. 
+    if (BinOp->getOpcode() == BinaryOperator::PtrMemD &&
         !BinOp->getType()->isFunctionType())
       return BinOp->getLHS()->isLvalue(Ctx);
 
+    // The result of an ->* expression is an lvalue only if its second operand 
+    // is a pointer to data member.
+    if (BinOp->getOpcode() == BinaryOperator::PtrMemI &&
+        !BinOp->getType()->isFunctionType()) {
+      QualType Ty = BinOp->getRHS()->getType();
+      if (Ty->isMemberPointerType() && !Ty->isMemberFunctionPointerType())
+        return LV_Valid;
+    }
+    
     if (!BinOp->isAssignmentOp())
       return LV_InvalidExpression;
 
@@ -1019,6 +1126,18 @@ Expr::isLvalueResult Expr::isLvalueInternal(ASTContext &Ctx) const {
     return LV_Valid;
   }
 
+  case TemplateIdRefExprClass: {
+    const TemplateIdRefExpr *TID = cast<TemplateIdRefExpr>(this);
+    TemplateName Template = TID->getTemplateName();
+    NamedDecl *ND = Template.getAsTemplateDecl();
+    if (!ND)
+      ND = Template.getAsOverloadedFunctionDecl();
+    if (ND && DeclCanBeLvalue(ND, Ctx))
+      return LV_Valid;
+    
+    break;
+  } 
+    
   default:
     break;
   }
@@ -1110,8 +1229,7 @@ bool Expr::isOBJCGCCandidate(ASTContext &Ctx) const {
     return cast<ImplicitCastExpr>(this)->getSubExpr()->isOBJCGCCandidate(Ctx);
   case CStyleCastExprClass:
     return cast<CStyleCastExpr>(this)->getSubExpr()->isOBJCGCCandidate(Ctx);
-  case DeclRefExprClass:
-  case QualifiedDeclRefExprClass: {
+  case DeclRefExprClass: {
     const Decl *D = cast<DeclRefExpr>(this)->getDecl();
     if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
       if (VD->hasGlobalStorage())
@@ -1245,13 +1363,22 @@ bool Expr::isConstantInitializer(ASTContext &Ctx) const {
   }
   case ImplicitValueInitExprClass:
     return true;
-  case ParenExprClass: {
+  case ParenExprClass:
     return cast<ParenExpr>(this)->getSubExpr()->isConstantInitializer(Ctx);
-  }
   case UnaryOperatorClass: {
     const UnaryOperator* Exp = cast<UnaryOperator>(this);
     if (Exp->getOpcode() == UnaryOperator::Extension)
       return Exp->getSubExpr()->isConstantInitializer(Ctx);
+    break;
+  }
+  case BinaryOperatorClass: {
+    // Special case &&foo - &&bar.  It would be nice to generalize this somehow
+    // but this handles the common case.
+    const BinaryOperator *Exp = cast<BinaryOperator>(this);
+    if (Exp->getOpcode() == BinaryOperator::Sub &&
+        isa<AddrLabelExpr>(Exp->getLHS()->IgnoreParenNoopCasts(Ctx)) &&
+        isa<AddrLabelExpr>(Exp->getRHS()->IgnoreParenNoopCasts(Ctx)))
+      return true;
     break;
   }
   case ImplicitCastExprClass:
@@ -1261,6 +1388,13 @@ bool Expr::isConstantInitializer(ASTContext &Ctx) const {
     // cast-to-union extension.
     if (getType()->isRecordType())
       return cast<CastExpr>(this)->getSubExpr()->isConstantInitializer(Ctx);
+      
+    // Integer->integer casts can be handled here, which is important for
+    // things like (int)(&&x-&&y).  Scary but true.
+    if (getType()->isIntegerType() &&
+        cast<CastExpr>(this)->getSubExpr()->getType()->isIntegerType())
+      return cast<CastExpr>(this)->getSubExpr()->isConstantInitializer(Ctx);
+      
     break;
   }
   return isEvaluatable(Ctx);
@@ -1393,7 +1527,6 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
     return ICEDiag(2, E->getLocStart());
   }
   case Expr::DeclRefExprClass:
-  case Expr::QualifiedDeclRefExprClass:
     if (isa<EnumConstantDecl>(cast<DeclRefExpr>(E)->getDecl()))
       return NoDiag();
     if (Ctx.getLangOptions().CPlusPlus &&
@@ -1713,40 +1846,36 @@ unsigned ExtVectorElementExpr::getNumElements() const {
 
 /// containsDuplicateElements - Return true if any element access is repeated.
 bool ExtVectorElementExpr::containsDuplicateElements() const {
-  const char *compStr = Accessor->getName();
-  unsigned length = Accessor->getLength();
+  // FIXME: Refactor this code to an accessor on the AST node which returns the
+  // "type" of component access, and share with code below and in Sema.
+  llvm::StringRef Comp = Accessor->getName();
 
   // Halving swizzles do not contain duplicate elements.
-  if (!strcmp(compStr, "hi") || !strcmp(compStr, "lo") ||
-      !strcmp(compStr, "even") || !strcmp(compStr, "odd"))
+  if (Comp == "hi" || Comp == "lo" || Comp == "even" || Comp == "odd")
     return false;
 
   // Advance past s-char prefix on hex swizzles.
-  if (*compStr == 's' || *compStr == 'S') {
-    compStr++;
-    length--;
-  }
+  if (Comp[0] == 's' || Comp[0] == 'S')
+    Comp = Comp.substr(1);
 
-  for (unsigned i = 0; i != length-1; i++) {
-    const char *s = compStr+i;
-    for (const char c = *s++; *s; s++)
-      if (c == *s)
+  for (unsigned i = 0, e = Comp.size(); i != e; ++i)
+    if (Comp.substr(i + 1).find(Comp[i]) != llvm::StringRef::npos)
         return true;
-  }
+
   return false;
 }
 
 /// getEncodedElementAccess - We encode the fields as a llvm ConstantArray.
 void ExtVectorElementExpr::getEncodedElementAccess(
                                   llvm::SmallVectorImpl<unsigned> &Elts) const {
-  const char *compStr = Accessor->getName();
-  if (*compStr == 's' || *compStr == 'S')
-    compStr++;
+  llvm::StringRef Comp = Accessor->getName();
+  if (Comp[0] == 's' || Comp[0] == 'S')
+    Comp = Comp.substr(1);
 
-  bool isHi =   !strcmp(compStr, "hi");
-  bool isLo =   !strcmp(compStr, "lo");
-  bool isEven = !strcmp(compStr, "even");
-  bool isOdd  = !strcmp(compStr, "odd");
+  bool isHi =   Comp == "hi";
+  bool isLo =   Comp == "lo";
+  bool isEven = Comp == "even";
+  bool isOdd  = Comp == "odd";
 
   for (unsigned i = 0, e = getNumElements(); i != e; ++i) {
     uint64_t Index;
@@ -1760,7 +1889,7 @@ void ExtVectorElementExpr::getEncodedElementAccess(
     else if (isOdd)
       Index = 2 * i + 1;
     else
-      Index = ExtVectorType::getAccessorIdx(compStr[i]);
+      Index = ExtVectorType::getAccessorIdx(Comp[i]);
 
     Elts.push_back(Index);
   }

@@ -451,7 +451,8 @@ public:
   unsigned isLoadFromStackSlot(const MachineInstr *MI, int &FrameIndex) const;
   unsigned isStoreToStackSlot(const MachineInstr *MI, int &FrameIndex) const;
 
-  bool isReallyTriviallyReMaterializable(const MachineInstr *MI) const;
+  bool isReallyTriviallyReMaterializable(const MachineInstr *MI,
+                                         AliasAnalysis *AA) const;
   void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
                      unsigned DestReg, unsigned SubIdx,
                      const MachineInstr *Orig) const;
@@ -498,6 +499,8 @@ public:
   virtual void storeRegToAddr(MachineFunction &MF, unsigned SrcReg, bool isKill,
                               SmallVectorImpl<MachineOperand> &Addr,
                               const TargetRegisterClass *RC,
+                              MachineInstr::mmo_iterator MMOBegin,
+                              MachineInstr::mmo_iterator MMOEnd,
                               SmallVectorImpl<MachineInstr*> &NewMIs) const;
 
   virtual void loadRegFromStackSlot(MachineBasicBlock &MBB,
@@ -508,6 +511,8 @@ public:
   virtual void loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
                                SmallVectorImpl<MachineOperand> &Addr,
                                const TargetRegisterClass *RC,
+                               MachineInstr::mmo_iterator MMOBegin,
+                               MachineInstr::mmo_iterator MMOEnd,
                                SmallVectorImpl<MachineInstr*> &NewMIs) const;
   
   virtual bool spillCalleeSavedRegisters(MachineBasicBlock &MBB,

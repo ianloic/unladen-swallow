@@ -50,7 +50,7 @@ STATISTIC(NumRenumbers, "Number of intervals renumbered into new registers");
 STATISTIC(NumDeadSpills, "Number of dead spills removed");
 
 namespace {
-  class VISIBILITY_HIDDEN PreAllocSplitting : public MachineFunctionPass {
+  class PreAllocSplitting : public MachineFunctionPass {
     MachineFunction       *CurrMF;
     const TargetMachine   *TM;
     const TargetInstrInfo *TII;
@@ -778,6 +778,24 @@ void PreAllocSplitting::ReconstructLiveInterval(LiveInterval* LI) {
     LI->addRange(LiveRange(DefIdx, LIs->getNextSlot(DefIdx), DeadVN));
     DeadVN->addKill(DefIdx);
   }
+
+  // Update kill markers.
+  for (LiveInterval::vni_iterator VI = LI->vni_begin(), VE = LI->vni_end();
+       VI != VE; ++VI) {
+    VNInfo* VNI = *VI;
+    for (unsigned i = 0, e = VNI->kills.size(); i != e; ++i) {
+      LiveIndex KillIdx = VNI->kills[i];
+      if (KillIdx.isPHIIndex())
+        continue;
+      MachineInstr *KillMI = LIs->getInstructionFromIndex(KillIdx);
+      if (KillMI) {
+        MachineOperand *KillMO = KillMI->findRegisterUseOperand(CurrLI->reg);
+        if (KillMO)
+          // It could be a dead def.
+          KillMO->setIsKill();
+      }
+    }
+  }
 }
 
 /// RenumberValno - Split the given valno out into a new vreg, allowing it to
@@ -934,7 +952,7 @@ MachineInstr* PreAllocSplitting::FoldSpill(unsigned vreg,
   if (I != IntervalSSMap.end()) {
     SS = I->second;
   } else {
-    SS = MFI->CreateStackObject(RC->getSize(), RC->getAlignment());    
+    SS = MFI->CreateStackObject(RC->getSize(), RC->getAlignment());
   }
   
   MachineInstr* FMI = TII->foldMemoryOperand(*MBB->getParent(),
@@ -1102,7 +1120,7 @@ bool PreAllocSplitting::SplitRegLiveInterval(LiveInterval *LI) {
       return false; // Def is dead. Do nothing.
     
     if ((SpillMI = FoldSpill(LI->reg, RC, DefMI, Barrier,
-                            BarrierMBB, SS, RefsInMBB))) {
+                             BarrierMBB, SS, RefsInMBB))) {
       SpillIndex = LIs->getInstructionIndex(SpillMI);
     } else {
       // Check if it's possible to insert a spill after the def MI.
@@ -1118,11 +1136,9 @@ bool PreAllocSplitting::SplitRegLiveInterval(LiveInterval *LI) {
         if (SpillPt == DefMBB->end())
           return false; // No gap to insert spill.
       }
-      // Add spill. The store instruction kills the register if def is before
-      // the barrier in the barrier block.
+      // Add spill. 
       SS = CreateSpillStackSlot(CurrLI->reg, RC);
-      TII->storeRegToStackSlot(*DefMBB, SpillPt, CurrLI->reg,
-                               DefMBB == BarrierMBB, SS, RC);
+      TII->storeRegToStackSlot(*DefMBB, SpillPt, CurrLI->reg, false, SS, RC);
       SpillMI = prior(SpillPt);
       LIs->InsertMachineInstrInMaps(SpillMI, SpillIndex);
     }
@@ -1150,7 +1166,7 @@ bool PreAllocSplitting::SplitRegLiveInterval(LiveInterval *LI) {
                           LIs->getDefIndex(RestoreIndex));
 
   ReconstructLiveInterval(CurrLI);
-  
+
   if (!FoldedRestore) {
     LiveIndex RestoreIdx = LIs->getInstructionIndex(prior(RestorePt));
     RestoreIdx = LIs->getDefIndex(RestoreIdx);
@@ -1193,8 +1209,6 @@ PreAllocSplitting::SplitRegLiveIntervals(const TargetRegisterClass **RCs,
   while (!Intervals.empty()) {
     if (PreSplitLimit != -1 && (int)NumSplits == PreSplitLimit)
       break;
-    else if (NumSplits == 4)
-      Change |= Change;
     LiveInterval *LI = Intervals.back();
     Intervals.pop_back();
     bool result = SplitRegLiveInterval(LI);

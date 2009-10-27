@@ -447,8 +447,6 @@ public:
   // Type Analysis / Processing: SemaType.cpp.
   //
   QualType adjustParameterType(QualType T);
-  QualType ConvertDeclSpecToType(const DeclSpec &DS, SourceLocation DeclLoc,
-                                 bool &IsInvalid, QualType &SourceTy);
   void ProcessTypeAttributeList(QualType &Result, const AttributeList *AL);
   QualType BuildPointerType(QualType T, unsigned Quals,
                             SourceLocation Loc, DeclarationName Entity);
@@ -470,9 +468,8 @@ public:
                                  SourceLocation Loc, DeclarationName Entity);
   QualType GetTypeForDeclarator(Declarator &D, Scope *S,
                                 DeclaratorInfo **DInfo = 0,
-                                unsigned Skip = 0, TagDecl **OwnedDecl = 0);
-  DeclaratorInfo *GetDeclaratorInfoForDeclarator(Declarator &D, QualType T,
-                                                 unsigned Skip);
+                                TagDecl **OwnedDecl = 0);
+  DeclaratorInfo *GetDeclaratorInfoForDeclarator(Declarator &D, QualType T);
   /// \brief Create a LocInfoType to hold the given QualType and DeclaratorInfo.
   QualType CreateLocInfoType(QualType T, DeclaratorInfo *DInfo);
   DeclarationName GetNameForDeclarator(Declarator &D);
@@ -482,9 +479,17 @@ public:
   bool CheckEquivalentExceptionSpec(
       const FunctionProtoType *Old, SourceLocation OldLoc,
       const FunctionProtoType *New, SourceLocation NewLoc);
-  bool CheckExceptionSpecSubset(unsigned DiagID, unsigned NoteID,
+  bool CheckEquivalentExceptionSpec(
+      const PartialDiagnostic &DiagID, const PartialDiagnostic & NoteID,
+      const FunctionProtoType *Old, SourceLocation OldLoc,
+      const FunctionProtoType *New, SourceLocation NewLoc);
+  bool CheckExceptionSpecSubset(
+      const PartialDiagnostic &DiagID, const PartialDiagnostic & NoteID,
       const FunctionProtoType *Superset, SourceLocation SuperLoc,
       const FunctionProtoType *Subset, SourceLocation SubLoc);
+  bool CheckParamExceptionSpec(const PartialDiagnostic & NoteID,
+      const FunctionProtoType *Target, SourceLocation TargetLoc,
+      const FunctionProtoType *Source, SourceLocation SourceLoc);
 
   QualType ObjCGetTypeForMethodDefinition(DeclPtrTy D);
 
@@ -493,7 +498,10 @@ public:
   virtual TypeResult ActOnTypeName(Scope *S, Declarator &D);
 
   bool RequireCompleteType(SourceLocation Loc, QualType T,
-                           const PartialDiagnostic &PD);
+                           const PartialDiagnostic &PD,
+                           std::pair<SourceLocation,
+                                     PartialDiagnostic> Note =
+                            std::make_pair(SourceLocation(), PDiag()));
 
   QualType getQualifiedNameType(const CXXScopeSpec &SS, QualType T);
 
@@ -514,7 +522,12 @@ public:
                               Scope *S, const CXXScopeSpec *SS,
                               bool isClassName = false);
   virtual DeclSpec::TST isTagName(IdentifierInfo &II, Scope *S);
-
+  virtual bool DiagnoseUnknownTypeName(const IdentifierInfo &II, 
+                                       SourceLocation IILoc,
+                                       Scope *S,
+                                       const CXXScopeSpec *SS,
+                                       TypeTy *&SuggestedType);
+  
   virtual DeclPtrTy ActOnDeclarator(Scope *S, Declarator &D) {
     return HandleDeclarator(S, D, MultiTemplateParamsArg(*this), false);
   }
@@ -542,6 +555,7 @@ public:
                                      bool IsFunctionDefinition,
                                      bool &Redeclaration);
   void CheckFunctionDeclaration(FunctionDecl *NewFD, NamedDecl *&PrevDecl,
+                                bool IsExplicitSpecialization,
                                 bool &Redeclaration,
                                 bool &OverloadableAttrRequired);
   void CheckMain(FunctionDecl *FD);
@@ -750,7 +764,8 @@ public:
 
 
   /// Subroutines of ActOnDeclarator().
-  TypedefDecl *ParseTypedefDecl(Scope *S, Declarator &D, QualType T);
+  TypedefDecl *ParseTypedefDecl(Scope *S, Declarator &D, QualType T,
+                                DeclaratorInfo *DInfo);
   void MergeTypeDefDecl(TypedefDecl *New, Decl *Old);
   bool MergeFunctionDecl(FunctionDecl *New, Decl *Old);
   bool MergeCompatibleFunctionDecls(FunctionDecl *New, FunctionDecl *Old);
@@ -891,6 +906,7 @@ public:
                            bool IsAssignmentOperator = false,
                            unsigned NumContextualBoolArguments = 0);
   void AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
+                                    SourceLocation OpLoc,
                                     Expr **Args, unsigned NumArgs,
                                     OverloadCandidateSet& CandidateSet);
   void AddArgumentDependentLookupCandidates(DeclarationName Name,
@@ -906,11 +922,13 @@ public:
                                        SourceLocation Loc,
                                        OverloadCandidateSet::iterator& Best);
   void PrintOverloadCandidates(OverloadCandidateSet& CandidateSet,
-                               bool OnlyViable);
+                         bool OnlyViable,
+                         const char *Opc=0,
+                         SourceLocation Loc=SourceLocation());
 
   FunctionDecl *ResolveAddressOfOverloadedFunction(Expr *From, QualType ToType,
                                                    bool Complain);
-  void FixOverloadedFunctionReference(Expr *E, FunctionDecl *Fn);
+  Expr *FixOverloadedFunctionReference(Expr *E, FunctionDecl *Fn);
 
   void AddOverloadedCallCandidates(NamedDecl *Callee,
                                    DeclarationName &UnqualifiedName,
@@ -957,6 +975,12 @@ public:
   OwningExprResult BuildOverloadedArrowExpr(Scope *S, ExprArg Base,
                                             SourceLocation OpLoc);
 
+  /// CheckCallReturnType - Checks that a call expression's return type is
+  /// complete. Returns true on failure. The location passed in is the location
+  /// that best represents the call.
+  bool CheckCallReturnType(QualType ReturnType, SourceLocation Loc,
+                           CallExpr *CE, FunctionDecl *FD);
+                           
   /// Helpers for dealing with blocks and functions.
   void CheckFallThroughForFunctionDef(Decl *D, Stmt *Body);
   void CheckFallThroughForBlock(QualType BlockTy, Stmt *Body);
@@ -1043,63 +1067,13 @@ public:
   /// results occurred for a given lookup.
   ///
   /// Any non-ambiguous lookup can be converted into a single
-  /// (possibly NULL) @c NamedDecl* via a conversion function or the
-  /// getAsDecl() method. This conversion permits the common-case
-  /// usage in C and Objective-C where name lookup will always return
-  /// a single declaration.
-  struct LookupResult {
-    /// The kind of entity that is actually stored within the
-    /// LookupResult object.
-    enum {
-      /// First is a single declaration (a NamedDecl*), which may be NULL.
-      SingleDecl,
-
-      /// First is a single declaration (an OverloadedFunctionDecl*).
-      OverloadedDeclSingleDecl,
-
-      /// [First, Last) is an iterator range represented as opaque
-      /// pointers used to reconstruct IdentifierResolver::iterators.
-      OverloadedDeclFromIdResolver,
-
-      /// [First, Last) is an iterator range represented as opaque
-      /// pointers used to reconstruct DeclContext::lookup_iterators.
-      OverloadedDeclFromDeclContext,
-
-      /// First is a pointer to a CXXBasePaths structure, which is owned
-      /// by the LookupResult. Last is non-zero to indicate that the
-      /// ambiguity is caused by two names found in base class
-      /// subobjects of different types.
-      AmbiguousLookupStoresBasePaths,
-
-      /// [First, Last) is an iterator range represented as opaque
-      /// pointers used to reconstruct new'ed Decl*[] array containing
-      /// found ambiguous decls. LookupResult is owner of this array.
-      AmbiguousLookupStoresDecls
-    } StoredKind;
-
-    /// The first lookup result, whose contents depend on the kind of
-    /// lookup result. This may be a NamedDecl* (if StoredKind ==
-    /// SingleDecl), OverloadedFunctionDecl* (if StoredKind ==
-    /// OverloadedDeclSingleDecl), the opaque pointer from an
-    /// IdentifierResolver::iterator (if StoredKind ==
-    /// OverloadedDeclFromIdResolver), a DeclContext::lookup_iterator
-    /// (if StoredKind == OverloadedDeclFromDeclContext), or a
-    /// CXXBasePaths pointer (if StoredKind == AmbiguousLookupStoresBasePaths).
-    mutable uintptr_t First;
-
-    /// The last lookup result, whose contents depend on the kind of
-    /// lookup result. This may be unused (if StoredKind ==
-    /// SingleDecl), it may have the same type as First (for
-    /// overloaded function declarations), or is may be used as a
-    /// Boolean value (if StoredKind == AmbiguousLookupStoresBasePaths).
-    mutable uintptr_t Last;
-
-    /// Context - The context in which we will build any
-    /// OverloadedFunctionDecl nodes needed by the conversion to
-    /// Decl*.
-    ASTContext *Context;
-
-    /// @brief The kind of entity found by name lookup.
+  /// (possibly NULL) @c NamedDecl* via the getAsSingleDecl() method.
+  /// This permits the common-case usage in C and Objective-C where
+  /// name lookup will always return a single declaration.  Use of
+  /// this is largely deprecated; callers should handle the possibility
+  /// of multiple declarations.
+  class LookupResult {
+  public:
     enum LookupKind {
       /// @brief No entity found met the criteria.
       NotFound = 0,
@@ -1113,6 +1087,13 @@ public:
       /// functions into an OverloadedFunctionDecl.
       FoundOverloaded,
 
+      /// @brief Name lookup results in an ambiguity; use
+      /// getAmbiguityKind to figure out what kind of ambiguity
+      /// we have.
+      Ambiguous
+    };
+
+    enum AmbiguityKind {
       /// Name lookup results in an ambiguity because multiple
       /// entities that meet the lookup criteria were found in
       /// subobjects of different types. For example:
@@ -1154,122 +1135,178 @@ public:
       ///    }
       /// }
       /// @endcode
-      AmbiguousReference
+      AmbiguousReference,
+
+      /// Name lookup results in an ambiguity because an entity with a
+      /// tag name was hidden by an entity with an ordinary name from
+      /// a different context.
+      /// @code
+      /// namespace A { struct Foo {}; }
+      /// namespace B { void Foo(); }
+      /// namespace C {
+      ///   using namespace A;
+      ///   using namespace B;
+      /// }
+      /// void test() {
+      ///   C::Foo(); // error: tag 'A::Foo' is hidden by an object in a
+      ///             // different namespace
+      /// }
+      /// @endcode
+      AmbiguousTagHiding
     };
 
-    static LookupResult CreateLookupResult(ASTContext &Context, NamedDecl *D);
+    typedef llvm::SmallVector<NamedDecl*, 4> DeclsTy;
+    typedef DeclsTy::const_iterator iterator;
 
-    static LookupResult CreateLookupResult(ASTContext &Context,
-                                           IdentifierResolver::iterator F,
-                                           IdentifierResolver::iterator L);
-
-    static LookupResult CreateLookupResult(ASTContext &Context,
-                                           DeclContext::lookup_iterator F,
-                                           DeclContext::lookup_iterator L);
-
-    static LookupResult CreateLookupResult(ASTContext &Context, 
-                                           CXXBasePaths *Paths,
-                                           bool DifferentSubobjectTypes) {
-      LookupResult Result;
-      Result.StoredKind = AmbiguousLookupStoresBasePaths;
-      Result.First = reinterpret_cast<uintptr_t>(Paths);
-      Result.Last = DifferentSubobjectTypes? 1 : 0;
-      Result.Context = &Context;
-      return Result;
+    LookupResult()
+      : Kind(NotFound),
+        Paths(0)
+    {}
+    ~LookupResult() {
+      if (Paths) deletePaths(Paths);
     }
 
-    template <typename Iterator>
-    static LookupResult CreateLookupResult(ASTContext &Context,
-                                           Iterator B, std::size_t Len) {
-      NamedDecl ** Array = new NamedDecl*[Len];
-      for (std::size_t Idx = 0; Idx < Len; ++Idx, ++B)
-        Array[Idx] = *B;
-      LookupResult Result;
-      Result.StoredKind = AmbiguousLookupStoresDecls;
-      Result.First = reinterpret_cast<uintptr_t>(Array);
-      Result.Last = reinterpret_cast<uintptr_t>(Array + Len);
-      Result.Context = &Context;
-      return Result;
-    }
-
-    LookupKind getKind() const;
-
-    /// @brief Determine whether name look found something.
-    operator bool() const { return getKind() != NotFound; }
-
-    /// @brief Determines whether the lookup resulted in an ambiguity.
     bool isAmbiguous() const {
-      return StoredKind == AmbiguousLookupStoresBasePaths ||
-             StoredKind == AmbiguousLookupStoresDecls;
+      return getKind() == Ambiguous;
     }
 
-    /// @brief Allows conversion of a lookup result into a
-    /// declaration, with the same behavior as getAsDecl.
-    operator NamedDecl*() const { return getAsDecl(); }
+    LookupKind getKind() const {
+      sanity();
+      return Kind;
+    }
 
-    NamedDecl* getAsDecl() const;
+    AmbiguityKind getAmbiguityKind() const {
+      assert(isAmbiguous());
+      return Ambiguity;
+    }
 
-    CXXBasePaths *getBasePaths() const;
+    iterator begin() const { return Decls.begin(); }
+    iterator end() const { return Decls.end(); }
 
-    /// \brief Iterate over the results of name lookup.
+    /// \brief Return true if no decls were found
+    bool empty() const { return Decls.empty(); }
+
+    /// \brief Return the base paths structure that's associated with
+    /// these results, or null if none is.
+    CXXBasePaths *getBasePaths() const {
+      return Paths;
+    }
+
+    /// \brief Add a declaration to these results.
+    void addDecl(NamedDecl *D) {
+      Decls.push_back(D->getUnderlyingDecl());
+      Kind = Found;
+    }
+
+    /// \brief Add all the declarations from another set of lookup
+    /// results.
+    void addAllDecls(const LookupResult &Other) {
+      Decls.append(Other.begin(), Other.end());
+      Kind = Found;
+    }
+
+    /// \brief Hides a set of declarations.
+    template <class NamedDeclSet> void hideDecls(const NamedDeclSet &Set) {
+      unsigned I = 0, N = Decls.size();
+      while (I < N) {
+        if (Set.count(Decls[I]))
+          Decls[I] = Decls[--N];
+        else
+          I++;
+      }
+      Decls.set_size(N);
+    }
+
+    /// \brief Resolves the kind of the lookup, possibly hiding decls.
     ///
-    /// The @c iterator class provides iteration over the results of a
-    /// non-ambiguous name lookup.
-    class iterator {
-      /// The LookupResult structure we're iterating through.
-      LookupResult *Result;
+    /// This should be called in any environment where lookup might
+    /// generate multiple lookup results.
+    void resolveKind();
 
-      /// The current position of this iterator within the sequence of
-      /// results. This value will have the same representation as the
-      /// @c First field in the LookupResult structure.
-      mutable uintptr_t Current;
+    /// \brief Fetch this as an unambiguous single declaration
+    /// (possibly an overloaded one).
+    ///
+    /// This is deprecated; users should be written to handle
+    /// ambiguous and overloaded lookups.
+    NamedDecl *getAsSingleDecl(ASTContext &Context) const;
 
-    public:
-      typedef NamedDecl *                value_type;
-      typedef NamedDecl *                reference;
-      typedef NamedDecl *                pointer;
-      typedef std::ptrdiff_t             difference_type;
-      typedef std::forward_iterator_tag  iterator_category;
+    /// \brief Fetch the unique decl found by this lookup.  Asserts
+    /// that one was found.
+    ///
+    /// This is intended for users who have examined the result kind
+    /// and are certain that there is only one result.
+    NamedDecl *getFoundDecl() const {
+      assert(getKind() == Found && "getFoundDecl called on non-unique result");
+      return *Decls.begin();
+    }
 
-      iterator() : Result(0), Current(0) { }
+    /// \brief Asks if the result is a single tag decl.
+    bool isSingleTagDecl() const {
+      return getKind() == Found && isa<TagDecl>(getFoundDecl());
+    }
 
-      iterator(LookupResult *Res, uintptr_t Cur) : Result(Res), Current(Cur) { }
+    /// \brief Make these results show that the name was found in
+    /// base classes of different types.
+    ///
+    /// The given paths object is copied and invalidated.
+    void setAmbiguousBaseSubobjectTypes(CXXBasePaths &P);
 
-      reference operator*() const;
+    /// \brief Make these results show that the name was found in
+    /// distinct base classes of the same type.
+    ///
+    /// The given paths object is copied and invalidated.
+    void setAmbiguousBaseSubobjects(CXXBasePaths &P);
 
-      pointer operator->() const { return **this; }
+    /// \brief Make these results show that the name was found in
+    /// different contexts and a tag decl was hidden by an ordinary
+    /// decl in a different context.
+    void setAmbiguousQualifiedTagHiding() {
+      setAmbiguous(AmbiguousTagHiding);
+    }
 
-      iterator &operator++();
+    /// \brief Clears out any current state.
+    void clear() {
+      Kind = NotFound;
+      Decls.clear();
+      if (Paths) deletePaths(Paths);
+      Paths = NULL;
+    }
 
-      iterator operator++(int) {
-        iterator tmp(*this);
-        ++(*this);
-        return tmp;
-      }
+    void print(llvm::raw_ostream &);
 
-      friend inline bool operator==(iterator const& x, iterator const& y) {
-        return x.Current == y.Current;
-      }
+  private:
+    void setAmbiguous(AmbiguityKind AK) {
+      Kind = Ambiguous;
+      Ambiguity = AK;
+    }
 
-      friend inline bool operator!=(iterator const& x, iterator const& y) {
-        return x.Current != y.Current;
-      }
-    };
-    friend class iterator;
+    void addDeclsFromBasePaths(const CXXBasePaths &P);
 
-    iterator begin();
-    iterator end();
+    // Sanity checks.
+    void sanity() const {
+      assert(Kind != NotFound || Decls.size() == 0);
+      assert(Kind != Found || Decls.size() == 1);
+      assert(Kind == NotFound || Kind == Found ||
+             (Kind == Ambiguous && Ambiguity == AmbiguousBaseSubobjects)
+             || Decls.size() > 1);
+      assert((Paths != NULL) == (Kind == Ambiguous &&
+                                 (Ambiguity == AmbiguousBaseSubobjectTypes ||
+                                  Ambiguity == AmbiguousBaseSubobjects)));
+    }
 
-    /// \brief Free the memory associated with this lookup.
-    void Destroy();
+    static void deletePaths(CXXBasePaths *);
+
+    LookupKind Kind;
+    AmbiguityKind Ambiguity; // ill-defined unless ambiguous
+    DeclsTy Decls;
+    CXXBasePaths *Paths;
   };
 
 private:
   typedef llvm::SmallVector<LookupResult, 3> LookupResultsVecTy;
 
-  std::pair<bool, LookupResult> CppLookupName(Scope *S, DeclarationName Name,
-                                              LookupNameKind NameKind,
-                                              bool RedeclarationOnly);
+  bool CppLookupName(LookupResult &R, Scope *S, DeclarationName Name,
+                     LookupNameKind NameKind, bool RedeclarationOnly);
 public:
   /// Determines whether D is a suitable lookup result according to the
   /// lookup criteria.
@@ -1301,24 +1338,35 @@ public:
     return false;
   }
 
-  LookupResult LookupName(Scope *S, DeclarationName Name,
-                          LookupNameKind NameKind,
-                          bool RedeclarationOnly = false,
-                          bool AllowBuiltinCreation = false,
-                          SourceLocation Loc = SourceLocation());
-  LookupResult LookupQualifiedName(DeclContext *LookupCtx, DeclarationName Name,
-                                   LookupNameKind NameKind,
-                                   bool RedeclarationOnly = false);
-  Decl *LookupQualifiedNameWithType(DeclContext *LookupCtx,
-                                    DeclarationName Name,
-                                    QualType T);
-  LookupResult LookupParsedName(Scope *S, const CXXScopeSpec *SS,
-                                DeclarationName Name,
-                                LookupNameKind NameKind,
-                                bool RedeclarationOnly = false,
-                                bool AllowBuiltinCreation = false,
-                                SourceLocation Loc = SourceLocation(),
-                                bool EnteringContext = false);
+  /// \brief Look up a name, looking for a single declaration.  Return
+  /// null if no unambiguous results were found.
+  ///
+  /// It is preferable to use the elaborated form and explicitly handle
+  /// ambiguity and overloaded.
+  NamedDecl *LookupSingleName(Scope *S, DeclarationName Name,
+                              LookupNameKind NameKind,
+                              bool RedeclarationOnly = false) {
+    LookupResult R;
+    LookupName(R, S, Name, NameKind, RedeclarationOnly);
+    return R.getAsSingleDecl(Context);
+  }
+  bool LookupName(LookupResult &R, Scope *S,
+                  DeclarationName Name,
+                  LookupNameKind NameKind,
+                  bool RedeclarationOnly = false,
+                  bool AllowBuiltinCreation = false,
+                  SourceLocation Loc = SourceLocation());
+  bool LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
+                           DeclarationName Name,
+                           LookupNameKind NameKind,
+                           bool RedeclarationOnly = false);
+  bool LookupParsedName(LookupResult &R, Scope *S, const CXXScopeSpec *SS,
+                        DeclarationName Name,
+                        LookupNameKind NameKind,
+                        bool RedeclarationOnly = false,
+                        bool AllowBuiltinCreation = false,
+                        SourceLocation Loc = SourceLocation(),
+                        bool EnteringContext = false);
 
   ObjCProtocolDecl *LookupProtocol(IdentifierInfo *II);
   ObjCCategoryImplDecl *LookupObjCCategoryImpl(IdentifierInfo *II);
@@ -1327,7 +1375,7 @@ public:
                                     QualType T1, QualType T2,
                                     FunctionSet &Functions);
 
-  void ArgumentDependentLookup(DeclarationName Name,
+  void ArgumentDependentLookup(DeclarationName Name, bool Operator,
                                Expr **Args, unsigned NumArgs,
                                FunctionSet &Functions);
 
@@ -1535,7 +1583,8 @@ public:
   //===--------------------------------------------------------------------===//
   // Expression Parsing Callbacks: SemaExpr.cpp.
 
-  bool DiagnoseUseOfDecl(NamedDecl *D, SourceLocation Loc);
+  bool DiagnoseUseOfDecl(NamedDecl *D, SourceLocation Loc,
+                         bool IgnoreDeprecated = false);
   bool DiagnosePropertyAccessorMismatch(ObjCPropertyDecl *PD,
                                         ObjCMethodDecl *Getter,
                                         SourceLocation Loc);
@@ -2059,6 +2108,15 @@ public:
                                bool HasTrailingLParen);
 
   virtual OwningExprResult
+  ActOnDestructorReferenceExpr(Scope *S, ExprArg Base,
+                               SourceLocation OpLoc,
+                               tok::TokenKind OpKind,
+                               SourceRange TypeRange,
+                               TypeTy *Type,
+                               const CXXScopeSpec &SS,
+                               bool HasTrailingLParen);
+    
+  virtual OwningExprResult
   ActOnOverloadedOperatorReferenceExpr(Scope *S, ExprArg Base,
                                        SourceLocation OpLoc,
                                        tok::TokenKind OpKind,
@@ -2294,6 +2352,10 @@ public:
                                  FunctionDecl::StorageClass& SC);
   DeclPtrTy ActOnConversionDeclarator(CXXConversionDecl *Conversion);
 
+  bool isImplicitMemberReference(const CXXScopeSpec *SS, NamedDecl *D,
+                                 SourceLocation NameLoc, QualType &ThisType,
+                                 QualType &MemberType);
+  
   //===--------------------------------------------------------------------===//
   // C++ Derived Classes
   //
@@ -2466,14 +2528,17 @@ public:
                                             DeclSpec::TST TagSpec,
                                             SourceLocation TagLoc);
 
-  OwningExprResult BuildTemplateIdExpr(TemplateName Template,
+  OwningExprResult BuildTemplateIdExpr(NestedNameSpecifier *Qualifier,
+                                       SourceRange QualifierRange,
+                                       TemplateName Template,
                                        SourceLocation TemplateNameLoc,
                                        SourceLocation LAngleLoc,
                                        const TemplateArgument *TemplateArgs,
                                        unsigned NumTemplateArgs,
                                        SourceLocation RAngleLoc);
 
-  virtual OwningExprResult ActOnTemplateIdExpr(TemplateTy Template,
+  virtual OwningExprResult ActOnTemplateIdExpr(const CXXScopeSpec &SS,
+                                               TemplateTy Template,
                                                SourceLocation TemplateNameLoc,
                                                SourceLocation LAngleLoc,
                                                ASTTemplateArgsPtr TemplateArgs,
@@ -2519,8 +2584,7 @@ public:
                                            unsigned NumExplicitTemplateArgs,
                                            SourceLocation RAngleLoc,
                                            NamedDecl *&PrevDecl);
-  bool CheckMemberFunctionSpecialization(CXXMethodDecl *FD, 
-                                         NamedDecl *&PrevDecl);
+  bool CheckMemberSpecialization(NamedDecl *Member, NamedDecl *&PrevDecl);
     
   virtual DeclResult
   ActOnExplicitInstantiation(Scope *S,
@@ -3095,6 +3159,10 @@ public:
 
   void PerformPendingImplicitInstantiations();
 
+  DeclaratorInfo *SubstType(DeclaratorInfo *T,
+                            const MultiLevelTemplateArgumentList &TemplateArgs,
+                            SourceLocation Loc, DeclarationName Entity);
+
   QualType SubstType(QualType T,
                      const MultiLevelTemplateArgumentList &TemplateArgs,
                      SourceLocation Loc, DeclarationName Entity);
@@ -3149,11 +3217,13 @@ public:
 
   void InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
                                      FunctionDecl *Function,
-                                     bool Recursive = false);
+                                     bool Recursive = false,
+                                     bool DefinitionRequired = false);
   void InstantiateStaticDataMemberDefinition(
                                      SourceLocation PointOfInstantiation,
                                      VarDecl *Var,
-                                     bool Recursive = false);
+                                     bool Recursive = false,
+                                     bool DefinitionRequired = false);
 
   void InstantiateMemInitializers(CXXConstructorDecl *New,
                                   const CXXConstructorDecl *Tmpl,
@@ -3356,8 +3426,7 @@ public:
   /// ImpCastExprToType - If Expr is not of type 'Type', insert an implicit
   /// cast.  If there is already an implicit cast, merge into the existing one.
   /// If isLvalue, the result of the cast is an lvalue.
-  void ImpCastExprToType(Expr *&Expr, QualType Type, 
-                         CastExpr::CastKind Kind = CastExpr::CK_Unknown,
+  void ImpCastExprToType(Expr *&Expr, QualType Type, CastExpr::CastKind Kind,
                          bool isLvalue = false);
 
   // UsualUnaryConversions - promotes integers (C99 6.3.1.1p2) and converts
@@ -3485,6 +3554,8 @@ public:
 
   bool IsStringLiteralToNonConstPointerConversion(Expr *From, QualType ToType);
 
+  bool CheckExceptionSpecCompatibility(Expr *From, QualType ToType);
+
   bool PerformImplicitConversion(Expr *&From, QualType ToType,
                                  const char *Flavor,
                                  bool AllowExplicit = false,
@@ -3499,6 +3570,10 @@ public:
                                  const char *Flavor);
   bool PerformImplicitConversion(Expr *&From, QualType ToType,
                                  const StandardConversionSequence& SCS,
+                                 const char *Flavor);
+  
+  bool BuildCXXDerivedToBaseExpr(Expr *&From, CastExpr::CastKind CastKind,
+                                 const ImplicitConversionSequence& ICS,
                                  const char *Flavor);
 
   /// the following "Check" methods will return a valid/converted QualType
@@ -3609,14 +3684,16 @@ public:
   // Since vectors are an extension, there are no C standard reference for this.
   // We allow casting between vectors and integer datatypes of the same size.
   // returns true if the cast is invalid
-  bool CheckVectorCast(SourceRange R, QualType VectorTy, QualType Ty);
+  bool CheckVectorCast(SourceRange R, QualType VectorTy, QualType Ty,
+                       CastExpr::CastKind &Kind);
 
   // CheckExtVectorCast - check type constraints for extended vectors.
   // Since vectors are an extension, there are no C standard reference for this.
   // We allow casting between vectors and integer datatypes of the same size,
   // or vectors and the element type of that vector.
   // returns true if the cast is invalid
-  bool CheckExtVectorCast(SourceRange R, QualType VectorTy, QualType Ty);
+  bool CheckExtVectorCast(SourceRange R, QualType VectorTy, Expr *&CastExpr,
+                          CastExpr::CastKind &Kind);
 
   /// CXXCheckCStyleCast - Check constraints of a C-style or function-style
   /// cast under C++ semantics.
@@ -3632,6 +3709,20 @@ public:
                                  ObjCMethodDecl *Method, bool isClassMessage,
                                  SourceLocation lbrac, SourceLocation rbrac,
                                  QualType &ReturnType);
+
+  /// CheckBooleanCondition - Diagnose problems involving the use of
+  /// the given expression as a boolean condition (e.g. in an if
+  /// statement).  Also performs the standard function and array
+  /// decays, possibly changing the input variable.
+  ///
+  /// \param Loc - A location associated with the condition, e.g. the
+  /// 'if' keyword.
+  /// \return true iff there were any errors
+  bool CheckBooleanCondition(Expr *&CondExpr, SourceLocation Loc);
+
+  /// DiagnoseAssignmentAsCondition - Given that an expression is
+  /// being used as a boolean condition, warn if it's an assignment.
+  void DiagnoseAssignmentAsCondition(Expr *E);
 
   /// CheckCXXBooleanCondition - Returns true if conversion to bool is invalid.
   bool CheckCXXBooleanCondition(Expr *&CondExpr);
@@ -3663,25 +3754,6 @@ public:
                       QualType FieldTy, const Expr *BitWidth,
                       bool *ZeroWidth = 0);
 
-  void DiagnoseMissingMember(SourceLocation MemberLoc, DeclarationName Member,
-                             NestedNameSpecifier *NNS, SourceRange Range);
-
-  /// adjustFunctionParamType - Converts the type of a function parameter to a
-  // type that can be passed as an argument type to
-  /// ASTContext::getFunctionType.
-  ///
-  /// C++ [dcl.fct]p3: "...Any cv-qualifier modifying a parameter type is
-  /// deleted. Such cv-qualifiers affect only the definition of the parameter 
-  /// within the body of the function; they do not affect the function type. 
-  QualType adjustFunctionParamType(QualType T) const {
-    if (!Context.getLangOptions().CPlusPlus)
-      return T;
-    return 
-      T->isDependentType() ? T.getUnqualifiedType()
-                            : T.getDesugaredType().getUnqualifiedType();
-    
-  }
-
   /// \name Code completion
   //@{
   void setCodeCompleteConsumer(CodeCompleteConsumer *CCC);
@@ -3700,6 +3772,8 @@ public:
   virtual void CodeCompleteNamespaceDecl(Scope *S);
   virtual void CodeCompleteNamespaceAliasDecl(Scope *S);
   virtual void CodeCompleteOperatorName(Scope *S);
+  
+  virtual void CodeCompleteObjCProperty(Scope *S, ObjCDeclSpec &ODS);
   //@}
   
   //===--------------------------------------------------------------------===//

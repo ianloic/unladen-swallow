@@ -198,7 +198,11 @@ void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
     Results.push_back(R);
     return;
   }
-  
+
+  // Skip unnamed entities.
+  if (!R.Declaration->getDeclName())
+    return;
+      
   // Look through using declarations.
   if (UsingDecl *Using = dyn_cast<UsingDecl>(R.Declaration))
     MaybeAddResult(Result(Using->getTargetDecl(), R.Rank, R.Qualifier),
@@ -229,8 +233,16 @@ void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
     if (Id->isStr("__va_list_tag") || Id->isStr("__builtin_va_list"))
       return;
     
-    // FIXME: Should we filter out other names in the implementation's
-    // namespace, e.g., those containing a __ or that start with _[A-Z]?
+    // Filter out names reserved for the implementation (C99 7.1.3, 
+    // C++ [lib.global.names]). Users don't need to see those.
+    //
+    // FIXME: Add predicate for this.
+    if (Id->getLength() >= 2) {
+      const char *Name = Id->getNameStart();
+      if (Name[0] == '_' &&
+          (Name[1] == '_' || (Name[1] >= 'A' && Name[1] <= 'Z')))
+        return;
+    }
   }
   
   // C++ constructors are never found by name lookup.
@@ -986,7 +998,7 @@ namespace {
                                           Y.Declaration->getDeclName());
           
         case Result::RK_Keyword:
-          return strcmp(X.Keyword, Y.Keyword) == -1;
+          return strcmp(X.Keyword, Y.Keyword) < 0;
       }
       
       // Silence GCC warning.
@@ -1159,8 +1171,7 @@ void Sema::CodeCompleteCase(Scope *S) {
         // At the XXX, our completions are TagDecl::TK_union,
         // TagDecl::TK_struct, and TagDecl::TK_class, rather than TK_union,
         // TK_struct, and TK_class.
-        if (QualifiedDeclRefExpr *QDRE = dyn_cast<QualifiedDeclRefExpr>(DRE))
-          Qualifier = QDRE->getQualifier();
+        Qualifier = DRE->getQualifier();
       }
   }
   
@@ -1393,3 +1404,30 @@ void Sema::CodeCompleteOperatorName(Scope *S) {
   HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
 }
 
+void Sema::CodeCompleteObjCProperty(Scope *S, ObjCDeclSpec &ODS) { 
+  if (!CodeCompleter)
+    return;
+  unsigned Attributes = ODS.getPropertyAttributes();
+  
+  typedef CodeCompleteConsumer::Result Result;
+  ResultBuilder Results(*this);
+  Results.EnterNewScope();
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_readonly))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("readonly", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_assign))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("assign", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_readwrite))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("readwrite", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_retain))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("retain", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_copy))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("copy", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_nonatomic))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("nonatomic", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_setter))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("setter", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_getter))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("getter", 0));
+  Results.ExitScope();
+  HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
+}

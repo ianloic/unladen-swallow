@@ -32,15 +32,9 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
-
-// FIXME: This cmd line option conditionalizes the new register scavenging
-// implemenation in PEI. Remove the option when scavenging works well enough
-// to be the default.
-extern cl::opt<bool> FrameIndexVirtualScavenging;
 
 Thumb1RegisterInfo::Thumb1RegisterInfo(const ARMBaseInstrInfo &tii,
                                        const ARMSubtarget &sti)
@@ -84,8 +78,15 @@ Thumb1RegisterInfo::getPhysicalRegisterRegClass(unsigned Reg, EVT VT) const {
 
 bool
 Thumb1RegisterInfo::requiresRegisterScavenging(const MachineFunction &MF) const {
-  return FrameIndexVirtualScavenging;
+  return true;
 }
+
+bool
+Thumb1RegisterInfo::requiresFrameIndexScavenging(const MachineFunction &MF)
+  const {
+  return true;
+}
+
 
 bool Thumb1RegisterInfo::hasReservedCallFrame(MachineFunction &MF) const {
   const MachineFrameInfo *FFI = MF.getFrameInfo();
@@ -128,13 +129,7 @@ void emitThumbRegPlusImmInReg(MachineBasicBlock &MBB,
     unsigned LdReg = DestReg;
     if (DestReg == ARM::SP) {
       assert(BaseReg == ARM::SP && "Unexpected!");
-      if (FrameIndexVirtualScavenging) {
-        LdReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
-      } else {
-        LdReg = ARM::R3;
-        BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVtgpr2gpr), ARM::R12)
-          .addReg(ARM::R3, RegState::Kill);
-      }
+      LdReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
     }
 
     if (NumBytes <= 255 && NumBytes >= 0)
@@ -159,10 +154,6 @@ void emitThumbRegPlusImmInReg(MachineBasicBlock &MBB,
     else
       MIB.addReg(LdReg).addReg(BaseReg, RegState::Kill);
     AddDefaultPred(MIB);
-
-    if (!FrameIndexVirtualScavenging && DestReg == ARM::SP)
-      BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVgpr2tgpr), ARM::R3)
-        .addReg(ARM::R12, RegState::Kill);
 }
 
 /// calcNumMI - Returns the number of instructions required to materialize
@@ -402,29 +393,46 @@ rewriteFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
   return 0;
 }
 
-/// saveScavengerRegister - Save the register so it can be used by the
+/// saveScavengerRegister - Spill the register so it can be used by the
 /// register scavenger. Return true.
-bool Thumb1RegisterInfo::saveScavengerRegister(MachineBasicBlock &MBB,
-                                               MachineBasicBlock::iterator I,
-                                               const TargetRegisterClass *RC,
-                                               unsigned Reg) const {
+bool
+Thumb1RegisterInfo::saveScavengerRegister(MachineBasicBlock &MBB,
+                                          MachineBasicBlock::iterator I,
+                                          MachineBasicBlock::iterator &UseMI,
+                                          const TargetRegisterClass *RC,
+                                          unsigned Reg) const {
   // Thumb1 can't use the emergency spill slot on the stack because
   // ldr/str immediate offsets must be positive, and if we're referencing
   // off the frame pointer (if, for example, there are alloca() calls in
   // the function, the offset will be negative. Use R12 instead since that's
   // a call clobbered register that we know won't be used in Thumb1 mode.
+  DebugLoc DL = DebugLoc::getUnknownLoc();
+  BuildMI(MBB, I, DL, TII.get(ARM::tMOVtgpr2gpr)).
+    addReg(ARM::R12, RegState::Define).addReg(Reg, RegState::Kill);
 
-  TII.copyRegToReg(MBB, I, ARM::R12, Reg, ARM::GPRRegisterClass, RC);
+  // The UseMI is where we would like to restore the register. If there's
+  // interference with R12 before then, however, we'll need to restore it
+  // before that instead and adjust the UseMI.
+  bool done = false;
+  for (MachineBasicBlock::iterator II = I; !done && II != UseMI ; ++II) {
+    // If this instruction affects R12, adjust our restore point.
+    for (unsigned i = 0, e = II->getNumOperands(); i != e; ++i) {
+      const MachineOperand &MO = II->getOperand(i);
+      if (!MO.isReg() || MO.isUndef() || !MO.getReg() ||
+          TargetRegisterInfo::isVirtualRegister(MO.getReg()))
+        continue;
+      if (MO.getReg() == ARM::R12) {
+        UseMI = II;
+        done = true;
+        break;
+      }
+    }
+  }
+  // Restore the register from R12
+  BuildMI(MBB, UseMI, DL, TII.get(ARM::tMOVgpr2tgpr)).
+    addReg(Reg, RegState::Define).addReg(ARM::R12, RegState::Kill);
+
   return true;
-}
-
-/// restoreScavengerRegister - restore a registers saved by
-// saveScavengerRegister().
-void Thumb1RegisterInfo::restoreScavengerRegister(MachineBasicBlock &MBB,
-                                               MachineBasicBlock::iterator I,
-                                               const TargetRegisterClass *RC,
-                                               unsigned Reg) const {
-  TII.copyRegToReg(MBB, I, Reg, ARM::R12, RC, ARM::GPRRegisterClass);
 }
 
 unsigned
@@ -635,7 +643,6 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     else  // tLDR has an extra register operand.
       MI.addOperand(MachineOperand::CreateReg(0, false));
   } else if (Desc.mayStore()) {
-    if (FrameIndexVirtualScavenging) {
       VReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
       assert (Value && "Frame index virtual allocated, but Value arg is NULL!");
       *Value = Offset;
@@ -658,52 +665,6 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
         MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
       else // tSTR has an extra register operand.
         MI.addOperand(MachineOperand::CreateReg(0, false));
-    } else {
-      // FIXME! This is horrific!!! We need register scavenging.
-      // Our temporary workaround has marked r3 unavailable. Of course, r3 is
-      // also a ABI register so it's possible that is is the register that is
-      // being storing here. If that's the case, we do the following:
-      // r12 = r2
-      // Use r2 to materialize sp + offset
-      // str r3, r2
-      // r2 = r12
-      unsigned ValReg = MI.getOperand(0).getReg();
-      unsigned TmpReg = ARM::R3;
-      bool UseRR = false;
-      if (ValReg == ARM::R3) {
-        BuildMI(MBB, II, dl, TII.get(ARM::tMOVtgpr2gpr), ARM::R12)
-          .addReg(ARM::R2, RegState::Kill);
-        TmpReg = ARM::R2;
-      }
-      if (TmpReg == ARM::R3 && AFI->isR3LiveIn())
-        BuildMI(MBB, II, dl, TII.get(ARM::tMOVtgpr2gpr), ARM::R12)
-          .addReg(ARM::R3, RegState::Kill);
-      if (Opcode == ARM::tSpill) {
-        if (FrameReg == ARM::SP)
-          emitThumbRegPlusImmInReg(MBB, II, TmpReg, FrameReg,
-                                   Offset, false, TII, *this, dl);
-        else {
-          emitLoadConstPool(MBB, II, dl, TmpReg, 0, Offset);
-          UseRR = true;
-        }
-      } else
-        emitThumbRegPlusImmediate(MBB, II, TmpReg, FrameReg, Offset, TII,
-                                  *this, dl);
-      MI.setDesc(TII.get(ARM::tSTR));
-      MI.getOperand(i).ChangeToRegister(TmpReg, false, false, true);
-      if (UseRR)  // Use [reg, reg] addrmode.
-        MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
-      else // tSTR has an extra register operand.
-        MI.addOperand(MachineOperand::CreateReg(0, false));
-
-      MachineBasicBlock::iterator NII = next(II);
-      if (ValReg == ARM::R3)
-        BuildMI(MBB, NII, dl, TII.get(ARM::tMOVgpr2tgpr), ARM::R2)
-          .addReg(ARM::R12, RegState::Kill);
-      if (TmpReg == ARM::R3 && AFI->isR3LiveIn())
-        BuildMI(MBB, NII, dl, TII.get(ARM::tMOVgpr2tgpr), ARM::R3)
-          .addReg(ARM::R12, RegState::Kill);
-    }
   } else
     assert(false && "Unexpected opcode!");
 
@@ -725,15 +686,6 @@ void Thumb1RegisterInfo::emitPrologue(MachineFunction &MF) const {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
   DebugLoc dl = (MBBI != MBB.end() ?
                  MBBI->getDebugLoc() : DebugLoc::getUnknownLoc());
-
-  // Check if R3 is live in. It might have to be used as a scratch register.
-  for (MachineRegisterInfo::livein_iterator I =MF.getRegInfo().livein_begin(),
-         E = MF.getRegInfo().livein_end(); I != E; ++I) {
-    if (I->first == ARM::R3) {
-      AFI->setR3IsLiveIn(true);
-      break;
-    }
-  }
 
   // Thumb add/sub sp, imm8 instructions implicitly multiply the offset by 4.
   NumBytes = (NumBytes + 3) & ~3;
@@ -892,7 +844,6 @@ void Thumb1RegisterInfo::emitEpilogue(MachineFunction &MF,
 
   if (VARegSaveSize) {
     // Epilogue for vararg functions: pop LR to R3 and branch off it.
-    // FIXME: Verify this is still ok when R3 is no longer being reserved.
     AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tPOP)))
       .addReg(0) // No write back.
       .addReg(ARM::R3, RegState::Define);

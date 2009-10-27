@@ -117,6 +117,8 @@ def err_expected_semi_after_static_assert : Error<
   "expected ';' after static_assert">;
 def err_expected_semi_for : Error<"expected ';' in 'for' statement specifier">;
 def err_expected_colon_after : Error<"expected ':' after %0">;
+def err_pointer_to_member_type : Error<
+  "invalid use of pointer to member type after %0">;
 def err_label_end_of_compound_statement : Error<
   "label at end of compound statement: expected statement">;
 def err_expected_string_literal : Error<"expected string literal">;
@@ -124,6 +126,7 @@ def err_expected_asm_operand : Error<
   "expected string literal or '[' for asm operand">;
 def err_expected_selector_for_method : Error<
   "expected selector for Objective-C method">;
+def err_expected_property_name : Error<"expected property name">;
 
 def err_unexpected_at : Error<"unexpected '@' in program">;
 
@@ -201,6 +204,9 @@ def warn_expected_implementation : Warning<
   "@end must appear in an @implementation context">;
 def error_property_ivar_decl : Error<
   "property synthesize requires specification of an ivar">;
+def warn_semicolon_before_method_nody : Warning<
+  "semicolon before method body is ignored">,
+  InGroup<DiagGroup<"semicolon-before-method-body">>;
 
 def err_expected_field_designator : Error<
   "expected a field designator, such as '.field = 4'">;

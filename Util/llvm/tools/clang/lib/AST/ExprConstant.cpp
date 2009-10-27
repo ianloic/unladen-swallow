@@ -873,6 +873,35 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
   switch (E->isBuiltinCall(Info.Ctx)) {
   default:
     return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
+
+  case Builtin::BI__builtin_object_size: {
+    const Expr *Arg = E->getArg(0)->IgnoreParens();
+    Expr::EvalResult Base;
+    if (Arg->EvaluateAsAny(Base, Info.Ctx)
+        && Base.Val.getKind() == APValue::LValue
+        && !Base.HasSideEffects)
+      if (const Expr *LVBase = Base.Val.getLValueBase())
+        if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(LVBase)) {
+          if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+            uint64_t Size = Info.Ctx.getTypeSize(VD->getType()) / 8;
+            uint64_t Offset = Base.Val.getLValueOffset();
+            if (Offset <= Size)
+              Size -= Base.Val.getLValueOffset();
+            else
+              Size = 0;
+            return Success(Size, E);
+          }
+        }
+
+    if (Base.HasSideEffects) {
+      if (E->getArg(1)->EvaluateAsInt(Info.Ctx).getZExtValue() < 2)
+        return Success(-1, E);
+      return Success(0, E);
+    }
+    
+    return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
+  }
+
   case Builtin::BI__builtin_classify_type:
     return Success(EvaluateBuiltinClassifyType(E), E);
 
@@ -1776,6 +1805,33 @@ APValue ComplexExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
 /// in Result.
 bool Expr::Evaluate(EvalResult &Result, ASTContext &Ctx) const {
   EvalInfo Info(Ctx, Result);
+
+  if (getType()->isVectorType()) {
+    if (!EvaluateVector(this, Result.Val, Info))
+      return false;
+  } else if (getType()->isIntegerType()) {
+    if (!IntExprEvaluator(Info, Result.Val).Visit(const_cast<Expr*>(this)))
+      return false;
+  } else if (getType()->hasPointerRepresentation()) {
+    if (!EvaluatePointer(this, Result.Val, Info))
+      return false;
+  } else if (getType()->isRealFloatingType()) {
+    llvm::APFloat f(0.0);
+    if (!EvaluateFloat(this, f, Info))
+      return false;
+
+    Result.Val = APValue(f);
+  } else if (getType()->isAnyComplexType()) {
+    if (!EvaluateComplex(this, Result.Val, Info))
+      return false;
+  } else
+    return false;
+
+  return true;
+}
+
+bool Expr::EvaluateAsAny(EvalResult &Result, ASTContext &Ctx) const {
+  EvalInfo Info(Ctx, Result, true);
 
   if (getType()->isVectorType()) {
     if (!EvaluateVector(this, Result.Val, Info))

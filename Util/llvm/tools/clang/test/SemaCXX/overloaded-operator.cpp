@@ -70,6 +70,34 @@ void enum_test(Enum1 enum1, Enum2 enum2, E1 e1, E2 e2) {
   float &f4 = (enum1 == enum2);  // expected-error{{non-const lvalue reference to type 'float' cannot be initialized with a temporary of type 'bool'}}
 }
 
+// PR5244 - Argument-dependent lookup would include the two operators below,
+// which would break later assumptions and lead to a crash.
+class pr5244_foo
+{
+  pr5244_foo(int);
+  pr5244_foo(char);
+};
+
+bool operator==(const pr5244_foo& s1, const pr5244_foo& s2);
+bool operator==(char c, const pr5244_foo& s);
+
+enum pr5244_bar
+{
+    pr5244_BAR
+};
+
+class pr5244_baz
+{
+    pr5244_bar quux;
+};
+
+void pr5244_barbaz()
+{
+  pr5244_baz quuux;
+  (void)(pr5244_BAR == quuux.quux);
+}
+
+
 
 struct PostInc {
   PostInc operator++(int);
@@ -155,7 +183,7 @@ typedef INTREF Func1(FLOAT, double);
 typedef float& Func2(int, double);
 
 struct ConvertToFunc {
-  operator Func1*(); // expected-note{{conversion candidate of type 'INTREF (*)(float, double)'}}
+  operator Func1*(); // expected-note{{conversion candidate of type 'INTREF (*)(FLOAT, double)'}}
   operator Func2&(); // expected-note{{conversion candidate of type 'float &(&)(int, double)'}}
   void operator()();
 };

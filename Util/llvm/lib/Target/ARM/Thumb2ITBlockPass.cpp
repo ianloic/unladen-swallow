@@ -14,14 +14,13 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
 STATISTIC(NumITs,     "Number of IT blocks inserted");
 
 namespace {
-  struct VISIBILITY_HIDDEN Thumb2ITBlockPass : public MachineFunctionPass {
+  struct Thumb2ITBlockPass : public MachineFunctionPass {
     static char ID;
     Thumb2ITBlockPass() : MachineFunctionPass(&ID) {}
 
@@ -107,8 +106,12 @@ bool Thumb2ITBlockPass::InsertITBlocks(MachineBasicBlock &MBB) {
     // Finalize IT mask.
     ARMCC::CondCodes OCC = ARMCC::getOppositeCondition(CC);
     unsigned Mask = 0, Pos = 3;
-    while (MBBI != E && Pos) {
+    // Branches, including tricky ones like LDM_RET, need to end an IT
+    // block so check the instruction we just put in the block.
+    while (MBBI != E && Pos &&
+           (!MI->getDesc().isBranch() && !MI->getDesc().isReturn())) {
       MachineInstr *NMI = &*MBBI;
+      MI = NMI;
       DebugLoc ndl = NMI->getDebugLoc();
       unsigned NPredReg = 0;
       ARMCC::CondCodes NCC = getPredicate(NMI, NPredReg);

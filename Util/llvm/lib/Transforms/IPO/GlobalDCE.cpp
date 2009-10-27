@@ -21,7 +21,6 @@
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Compiler.h"
 #include <set>
 using namespace llvm;
 
@@ -30,7 +29,7 @@ STATISTIC(NumFunctions, "Number of functions removed");
 STATISTIC(NumVariables, "Number of global variables removed");
 
 namespace {
-  struct VISIBILITY_HIDDEN GlobalDCE : public ModulePass {
+  struct GlobalDCE : public ModulePass {
     static char ID; // Pass identification, replacement for typeid
     GlobalDCE() : ModulePass(&ID) {}
 
@@ -149,8 +148,6 @@ bool GlobalDCE::runOnModule(Module &M) {
   // Make sure that all memory is released
   AliveGlobals.clear();
 
-  // Remove dead metadata.
-  Changed |= M.getContext().RemoveDeadMetadata();
   return Changed;
 }
 

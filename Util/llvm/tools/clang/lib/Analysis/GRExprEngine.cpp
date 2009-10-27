@@ -207,7 +207,7 @@ const GRState* GRExprEngine::getInitialState(const LocationContext *InitLoc) {
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
     // Precondition: the first argument of 'main' is an integer guaranteed
     //  to be > 0.
-    if (strcmp(FD->getIdentifier()->getName(), "main") == 0 &&
+    if (FD->getIdentifier()->getName() == "main" &&
         FD->getNumParams() > 0) {
       const ParmVarDecl *PD = FD->getParamDecl(0);
       QualType T = PD->getType();
@@ -409,7 +409,6 @@ void GRExprEngine::Visit(Stmt* S, ExplodedNode* Pred, ExplodedNodeSet& Dst) {
     }
 
     case Stmt::DeclRefExprClass:
-    case Stmt::QualifiedDeclRefExprClass:
       VisitDeclRefExpr(cast<DeclRefExpr>(S), Pred, Dst, false);
       break;
 
@@ -522,7 +521,6 @@ void GRExprEngine::VisitLValue(Expr* Ex, ExplodedNode* Pred,
       return;
 
     case Stmt::DeclRefExprClass:
-    case Stmt::QualifiedDeclRefExprClass:
       VisitDeclRefExpr(cast<DeclRefExpr>(Ex), Pred, Dst, true);
       return;
 
@@ -1042,8 +1040,8 @@ void GRExprEngine::VisitArraySubscriptExpr(ArraySubscriptExpr* A,
 
     for (ExplodedNodeSet::iterator I2=Tmp2.begin(),E2=Tmp2.end();I2!=E2; ++I2) {
       const GRState* state = GetState(*I2);
-      SVal V = state->getLValue(A->getType(), state->getSVal(Base),
-                                state->getSVal(Idx));
+      SVal V = state->getLValue(A->getType(), state->getSVal(Idx),
+                                state->getSVal(Base));
 
       if (asLValue)
         MakeNode(Dst, A, *I2, state->BindExpr(A, V),
@@ -1075,7 +1073,7 @@ void GRExprEngine::VisitMemberExpr(MemberExpr* M, ExplodedNode* Pred,
     // FIXME: Should we insert some assumption logic in here to determine
     // if "Base" is a valid piece of memory?  Before we put this assumption
     // later when using FieldOffset lvals (which we no longer have).
-    SVal L = state->getLValue(state->getSVal(Base), Field);
+    SVal L = state->getLValue(Field, state->getSVal(Base));
 
     if (asLValue)
       MakeNode(Dst, M, *I, state->BindExpr(M, L),
@@ -1167,19 +1165,6 @@ void GRExprEngine::EvalLoad(ExplodedNodeSet& Dst, Expr* Ex, ExplodedNode* Pred,
   }
   else {
     SVal V = state->getSVal(cast<Loc>(location), Ex->getType());
-
-    // Casts can create weird scenarios where a location must be implicitly
-    // converted to something else.  For example:
-    //
-    //  void *x;
-    //  int *y = (int*) &x; // void** -> int* cast.
-    //  invalidate(y);  // 'x' now binds to a symbolic region
-    //  int z = *y;
-    //
-    //if (isa<Loc>(V) && !Loc::IsLocType(Ex->getType())) {
-    //  V = EvalCast(V, Ex->getType());
-    //}
-
     MakeNode(Dst, Ex, Pred, state->BindExpr(Ex, V), K, tag);
   }
 }
@@ -1458,10 +1443,9 @@ static void MarkNoReturnFunction(const FunctionDecl *FD, CallExpr *CE,
     // HACK: Some functions are not marked noreturn, and don't return.
     //  Here are a few hardwired ones.  If this takes too long, we can
     //  potentially cache these results.
-    const char* s = FD->getIdentifier()->getName();
-    unsigned n = strlen(s);
+    const char* s = FD->getIdentifier()->getNameStart();
 
-    switch (n) {
+    switch (FD->getIdentifier()->getLength()) {
     default:
       break;
 
@@ -1470,17 +1454,10 @@ static void MarkNoReturnFunction(const FunctionDecl *FD, CallExpr *CE,
       break;
 
     case 5:
-      if (!memcmp(s, "panic", 5)) Builder->BuildSinks = true;
-      else if (!memcmp(s, "error", 5)) {
-        if (CE->getNumArgs() > 0) {
-          SVal X = state->getSVal(*CE->arg_begin());
-          // FIXME: use Assume to inspect the possible symbolic value of
-          // X. Also check the specific signature of error().
-          nonloc::ConcreteInt* CI = dyn_cast<nonloc::ConcreteInt>(&X);
-          if (CI && CI->getValue() != 0)
-            Builder->BuildSinks = true;
-        }
-      }
+      if (!memcmp(s, "panic", 5)) 
+        Builder->BuildSinks = true;
+      else if (!memcmp(s, "error", 5))
+        Builder->BuildSinks = true;
       break;
 
     case 6:
@@ -2801,66 +2778,55 @@ void GRExprEngine::VisitBinaryOperator(BinaryOperator* B,
       SVal RightV = state->getSVal(RHS);
 
       BinaryOperator::Opcode Op = B->getOpcode();
-      switch (Op) {
-        case BinaryOperator::Assign: {
 
-          // EXPERIMENTAL: "Conjured" symbols.
-          // FIXME: Handle structs.
-          QualType T = RHS->getType();
-
-          if ((RightV.isUnknown() ||
-               !getConstraintManager().canReasonAbout(RightV))
-              && (Loc::IsLocType(T) ||
-                  (T->isScalarType() && T->isIntegerType()))) {
-            unsigned Count = Builder->getCurrentBlockCount();
-            RightV = ValMgr.getConjuredSymbolVal(NULL, B->getRHS(), Count);
+      if (Op == BinaryOperator::Assign) {
+        // EXPERIMENTAL: "Conjured" symbols.
+        // FIXME: Handle structs.
+        QualType T = RHS->getType();
+        
+        if ((RightV.isUnknown()||!getConstraintManager().canReasonAbout(RightV))
+            && (Loc::IsLocType(T) || (T->isScalarType()&&T->isIntegerType()))) {
+          unsigned Count = Builder->getCurrentBlockCount();
+          RightV = ValMgr.getConjuredSymbolVal(NULL, B->getRHS(), Count);
+        }
+        
+        // Simulate the effects of a "store":  bind the value of the RHS
+        // to the L-Value represented by the LHS.
+        EvalStore(Dst, B, LHS, *I2, state->BindExpr(B, RightV), LeftV, RightV);
+        continue;
+      }
+      
+      if (!B->isAssignmentOp()) {
+        // Process non-assignments except commas or short-circuited
+        // logical expressions (LAnd and LOr).
+        SVal Result = EvalBinOp(state, Op, LeftV, RightV, B->getType());
+        
+        if (Result.isUnknown()) {
+          if (OldSt != state) {
+            // Generate a new node if we have already created a new state.
+            MakeNode(Dst, B, *I2, state);
           }
-
-          // Simulate the effects of a "store":  bind the value of the RHS
-          // to the L-Value represented by the LHS.
-          EvalStore(Dst, B, LHS, *I2, state->BindExpr(B, RightV),
-                    LeftV, RightV);
+          else
+            Dst.Add(*I2);
+          
           continue;
         }
-
-          // FALL-THROUGH.
-
-        default: {
-
-          if (B->isAssignmentOp())
-            break;
-
-          // Process non-assignments except commas or short-circuited
-          // logical expressions (LAnd and LOr).
-          SVal Result = EvalBinOp(state, Op, LeftV, RightV, B->getType());
-
-          if (Result.isUnknown()) {
-            if (OldSt != state) {
-              // Generate a new node if we have already created a new state.
-              MakeNode(Dst, B, *I2, state);
-            }
-            else
-              Dst.Add(*I2);
-
-            continue;
+        
+        state = state->BindExpr(B, Result);
+        
+        if (Result.isUndef()) {
+          // The operands were *not* undefined, but the result is undefined.
+          // This is a special node that should be flagged as an error.
+          if (ExplodedNode *UndefNode = Builder->generateNode(B, state, *I2)){
+            UndefNode->markAsSink();
+            UndefResults.insert(UndefNode);
           }
-
-          state = state->BindExpr(B, Result);
-
-          if (Result.isUndef()) {
-            // The operands were *not* undefined, but the result is undefined.
-            // This is a special node that should be flagged as an error.
-            if (ExplodedNode *UndefNode = Builder->generateNode(B, state, *I2)){
-              UndefNode->markAsSink();
-              UndefResults.insert(UndefNode);
-            }
-            continue;
-          }
-
-          // Otherwise, create a new node.
-          MakeNode(Dst, B, *I2, state);
           continue;
         }
+        
+        // Otherwise, create a new node.
+        MakeNode(Dst, B, *I2, state);
+        continue;
       }
 
       assert (B->isCompoundAssignmentOp());
@@ -2888,7 +2854,6 @@ void GRExprEngine::VisitBinaryOperator(BinaryOperator* B,
 
       for (ExplodedNodeSet::iterator I3=Tmp3.begin(), E3=Tmp3.end(); I3!=E3;
            ++I3) {
-
         state = GetState(*I3);
         SVal V = state->getSVal(LHS);
 

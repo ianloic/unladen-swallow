@@ -13,7 +13,6 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -66,7 +65,7 @@ namespace {
 /// This class is intended for use with the new spilling framework only. It
 /// rewrites vreg def/uses to use the assigned preg, but does not insert any
 /// spill code.
-struct VISIBILITY_HIDDEN TrivialRewriter : public VirtRegRewriter {
+struct TrivialRewriter : public VirtRegRewriter {
 
   bool runOnMachineFunction(MachineFunction &MF, VirtRegMap &VRM,
                             LiveIntervals* LIs) {
@@ -125,7 +124,7 @@ namespace {
 /// on a per-stack-slot / remat id basis as the low bit in the value of the
 /// SpillSlotsAvailable entries.  The predicate 'canClobberPhysReg()' checks
 /// this bit and addAvailable sets it if.
-class VISIBILITY_HIDDEN AvailableSpills {
+class AvailableSpills {
   const TargetRegisterInfo *TRI;
   const TargetInstrInfo *TII;
 
@@ -340,7 +339,7 @@ struct ReusedOp {
 
 /// ReuseInfo - This maintains a collection of ReuseOp's for each operand that
 /// is reused instead of reloaded.
-class VISIBILITY_HIDDEN ReuseInfo {
+class ReuseInfo {
   MachineInstr &MI;
   std::vector<ReusedOp> Reuses;
   BitVector PhysRegsClobbered;
@@ -614,7 +613,7 @@ static void ReMaterialize(MachineBasicBlock &MBB,
     assert(MO.isUse());
     unsigned SubIdx = MO.getSubReg();
     unsigned Phys = VRM.getPhys(VirtReg);
-    assert(Phys);
+    assert(Phys && "Virtual register is not assigned a register?");
     unsigned RReg = SubIdx ? TRI->getSubReg(Phys, SubIdx) : Phys;
     MO.setReg(RReg);
     MO.setSubReg(0);
@@ -857,7 +856,7 @@ unsigned ReuseInfo::GetRegForReload(const TargetRegisterClass *RC,
         Spills.ClobberPhysReg(NewPhysReg);
         Spills.ClobberPhysReg(NewOp.PhysRegReused);
 
-        unsigned RReg = SubIdx ? TRI->getSubReg(NewPhysReg, SubIdx) : NewPhysReg;
+        unsigned RReg = SubIdx ? TRI->getSubReg(NewPhysReg, SubIdx) :NewPhysReg;
         MI->getOperand(NewOp.Operand).setReg(RReg);
         MI->getOperand(NewOp.Operand).setSubReg(0);
 
@@ -995,7 +994,7 @@ namespace {
 
 namespace {
 
-class VISIBILITY_HIDDEN LocalRewriter : public VirtRegRewriter {
+class LocalRewriter : public VirtRegRewriter {
   MachineRegisterInfo *RegInfo;
   const TargetRegisterInfo *TRI;
   const TargetInstrInfo *TII;
@@ -1478,6 +1477,29 @@ private:
     ++NumStores;
   }
 
+  /// isSafeToDelete - Return true if this instruction doesn't produce any side
+  /// effect and all of its defs are dead.
+  static bool isSafeToDelete(MachineInstr &MI) {
+    const TargetInstrDesc &TID = MI.getDesc();
+    if (TID.mayLoad() || TID.mayStore() || TID.isCall() || TID.isTerminator() ||
+        TID.isCall() || TID.isBarrier() || TID.isReturn() ||
+        TID.hasUnmodeledSideEffects())
+      return false;
+    for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+      MachineOperand &MO = MI.getOperand(i);
+      if (!MO.isReg() || !MO.getReg())
+        continue;
+      if (MO.isDef() && !MO.isDead())
+        return false;
+      if (MO.isUse() && MO.isKill())
+        // FIXME: We can't remove kill markers or else the scavenger will assert.
+        // An alternative is to add a ADD pseudo instruction to replace kill
+        // markers.
+        return false;
+    }
+    return true;
+  }
+
   /// TransferDeadness - A identity copy definition is dead and it's being
   /// removed. Find the last def or use and mark it as dead / kill.
   void TransferDeadness(MachineBasicBlock *MBB, unsigned CurDist,
@@ -1519,7 +1541,7 @@ private:
       if (LastUD->isDef()) {
         // If the instruction has no side effect, delete it and propagate
         // backward further. Otherwise, mark is dead and we are done.
-        if (!TII->isDeadInstruction(LastUDMI)) {
+        if (!isSafeToDelete(*LastUDMI)) {
           LastUD->setIsDead();
           break;
         }
@@ -2340,7 +2362,7 @@ private:
       }
     ProcessNextInst:
       // Delete dead instructions without side effects.
-      if (!Erased && !BackTracked && TII->isDeadInstruction(&MI)) {
+      if (!Erased && !BackTracked && isSafeToDelete(MI)) {
         InvalidateKills(MI, TRI, RegKills, KillOps);
         VRM.RemoveMachineInstrFromMaps(&MI);
         MBB.erase(&MI);

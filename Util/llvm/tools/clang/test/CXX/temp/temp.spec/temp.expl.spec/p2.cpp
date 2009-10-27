@@ -49,19 +49,20 @@ namespace N0 {
   
 template<typename T>
 struct X0 { // expected-note 2{{here}}
-  static T member;
+  static T member; // expected-note{{here}}
   
   void f1(T t) { // expected-note{{explicitly specialized declaration is here}}
     t = 17;
   }
   
-  struct Inner : public T { };
+  struct Inner : public T { }; // expected-note 3{{here}}
   
   template<typename U>
-  struct InnerTemplate : public T { };
+  struct InnerTemplate : public T { }; // expected-note 2{{explicitly specialized}} \
+   // expected-error{{base specifier}}
   
   template<typename U>
-  void ft1(T t, U u);
+  void ft1(T t, U u); // expected-note{{explicitly specialized}}
 };
 
 }
@@ -106,35 +107,133 @@ void test_x0_cvvoid(N0::X0<const volatile void*> x0, const volatile void *cvp) {
   x0.f1(cvp); // okay: we've explicitly specialized
 }
 
-#if 0
-// FIXME: update the remainder of this test to check for scopes properly.
 //     -- static data member of a class template
-template<> 
-NonDefaultConstructible X0<NonDefaultConstructible>::member = 17;
+namespace N0 {
+  // This actually tests p15; the following is a declaration, not a definition.
+  template<> 
+  NonDefaultConstructible X0<NonDefaultConstructible>::member;
+  
+  template<> long X0<long>::member = 17;
+
+  template<> float X0<float>::member;
+  
+  template<> double X0<double>::member;
+}
 
 NonDefaultConstructible &get_static_member() {
-  return X0<NonDefaultConstructible>::member;
+  return N0::X0<NonDefaultConstructible>::member;
+}
+
+template<> int N0::X0<int>::member;  // expected-error{{originally}}
+
+template<> float N0::X0<float>::member = 3.14f;
+
+namespace N1 {
+  template<> double N0::X0<double>::member = 3.14; // expected-error{{not in a namespace enclosing}}
 }
 
 //    -- member class of a class template
-template<>
-struct X0<void*>::Inner { };
+namespace N0 {
+  
+  template<>
+  struct X0<void*>::Inner { };
 
-X0<void*>::Inner inner0;
+  template<>
+  struct X0<int>::Inner { };
+
+  template<>
+  struct X0<unsigned>::Inner;
+
+  template<>
+  struct X0<float>::Inner;
+
+  template<>
+  struct X0<double>::Inner; // expected-note{{forward declaration}}
+}
+
+template<>
+struct N0::X0<long>::Inner { }; // expected-error{{originally}}
+
+template<>
+struct N0::X0<float>::Inner { };
+
+namespace N1 {
+  template<>
+  struct N0::X0<unsigned>::Inner { }; // expected-error{{member class specialization}}
+
+  template<>
+  struct N0::X0<unsigned long>::Inner { }; // expected-error{{member class specialization}}
+};
+
+N0::X0<void*>::Inner inner0;
+N0::X0<int>::Inner inner1;
+N0::X0<long>::Inner inner2;
+N0::X0<float>::Inner inner3;
+N0::X0<double>::Inner inner4; // expected-error{{incomplete}}
 
 //    -- member class template of a class template
-template<>
-template<>
-struct X0<void*>::InnerTemplate<int> { };
+namespace N0 {
+  template<>
+  template<>
+  struct X0<void*>::InnerTemplate<int> { };
+  
+  template<> template<>
+  struct X0<int>::InnerTemplate<int>; // expected-note{{forward declaration}}
 
-X0<void*>::InnerTemplate<int> inner_template0;
+  template<> template<>
+  struct X0<int>::InnerTemplate<long>;
+
+  template<> template<>
+  struct X0<int>::InnerTemplate<double>;
+}
+
+template<> template<>
+struct N0::X0<int>::InnerTemplate<long> { }; // okay
+
+template<> template<>
+struct N0::X0<int>::InnerTemplate<float> { }; // expected-error{{class template specialization}}
+
+namespace N1 {
+  template<> template<>
+  struct N0::X0<int>::InnerTemplate<double> { }; // expected-error{{enclosing}}
+}
+
+N0::X0<void*>::InnerTemplate<int> inner_template0;
+N0::X0<int>::InnerTemplate<int> inner_template1; // expected-error{{incomplete}}
+N0::X0<int>::InnerTemplate<long> inner_template2;
+N0::X0<int>::InnerTemplate<unsigned long> inner_template3; // expected-note{{instantiation}}
 
 //    -- member function template of a class template
-template<>
-template<>
-void X0<void*>::ft1(void*, const void*) { }
+namespace N0 {
+  template<>
+  template<>
+  void X0<void*>::ft1(void*, const void*) { }
+  
+  template<> template<>
+  void X0<void*>::ft1(void *, int);
 
-void test_func_template(X0<void *> xvp, void *vp, const void *cvp) {
-  xvp.ft1(vp, cvp);
+  template<> template<>
+  void X0<void*>::ft1(void *, unsigned);
+
+  template<> template<>
+  void X0<void*>::ft1(void *, long);
 }
-#endif
+
+template<> template<>
+void N0::X0<void*>::ft1(void *, unsigned) { } // okay
+
+template<> template<>
+void N0::X0<void*>::ft1(void *, float) { } // expected-error{{function template specialization}}
+
+namespace N1 {
+  template<> template<>
+  void N0::X0<void*>::ft1(void *, long) { } // expected-error{{enclosing}}
+}
+
+
+void test_func_template(N0::X0<void *> xvp, void *vp, const void *cvp,
+                        int i, unsigned u) {
+  xvp.ft1(vp, cvp);
+  xvp.ft1(vp, i);
+  xvp.ft1(vp, u);
+}

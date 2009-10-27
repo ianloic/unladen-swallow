@@ -36,14 +36,13 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 namespace {
-  struct VISIBILITY_HIDDEN MachineVerifier : public MachineFunctionPass {
+  struct MachineVerifier : public MachineFunctionPass {
     static char ID; // Pass ID, replacement for typeid
 
     MachineVerifier(bool allowDoubleDefs = false) :

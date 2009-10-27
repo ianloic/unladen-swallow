@@ -33,7 +33,6 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -70,7 +69,7 @@ linearscanRegAlloc("linearscan", "linear scan register allocator",
                    createLinearScanRegisterAllocator);
 
 namespace {
-  struct VISIBILITY_HIDDEN RALinScan : public MachineFunctionPass {
+  struct RALinScan : public MachineFunctionPass {
     static char ID;
     RALinScan() : MachineFunctionPass(&ID) {}
 

@@ -20,7 +20,6 @@
 #include "llvm/Analysis/ProfileInfo.h"
 #include "llvm/Analysis/ProfileInfoLoader.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -38,7 +37,7 @@ ProfileInfoFilename("profile-info-file", cl::init("llvmprof.out"),
                     cl::desc("Profile file loaded by -profile-loader"));
 
 namespace {
-  class VISIBILITY_HIDDEN LoaderPass : public ModulePass, public ProfileInfo {
+  class LoaderPass : public ModulePass, public ProfileInfo {
     std::string Filename;
     std::set<Edge> SpanningTree;
     std::set<const BasicBlock*> BBisUnvisited;

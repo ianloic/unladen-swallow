@@ -39,7 +39,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CompileOptions &compileOpts,
                              Diagnostic &diags)
   : BlockModule(C, M, TD, Types, *this), Context(C),
     Features(C.getLangOptions()), CompileOpts(compileOpts), TheModule(M),
-    TheTargetData(TD), Diags(diags), Types(C, M, TD), MangleCtx(C), Runtime(0),
+    TheTargetData(TD), Diags(diags), Types(C, M, TD), MangleCtx(C), 
+    VtableInfo(*this), Runtime(0),
     MemCpyFn(0), MemMoveFn(0), MemSetFn(0), CFConstantStringClassRef(0),
     VMContext(M.getContext()) {
 
@@ -410,8 +411,7 @@ void CodeGenModule::EmitLLVMUsed() {
   if (LLVMUsed.empty())
     return;
 
-  llvm::Type *i8PTy =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+  const llvm::Type *i8PTy = llvm::Type::getInt8PtrTy(VMContext);
 
   // Convert LLVMUsed to what ConstantArray needs.
   std::vector<llvm::Constant*> UsedArray;
@@ -476,8 +476,7 @@ llvm::Constant *CodeGenModule::EmitAnnotateAttr(llvm::GlobalValue *GV,
 
   // get [N x i8] constants for the annotation string, and the filename string
   // which are the 2nd and 3rd elements of the global annotation structure.
-  const llvm::Type *SBP =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+  const llvm::Type *SBP = llvm::Type::getInt8PtrTy(VMContext);
   llvm::Constant *anno = llvm::ConstantArray::get(VMContext,
                                                   AA->getAnnotation(), true);
   llvm::Constant *unit = llvm::ConstantArray::get(VMContext,
@@ -531,7 +530,23 @@ bool CodeGenModule::MayDeferGeneration(const ValueDecl *Global) {
   const VarDecl *VD = cast<VarDecl>(Global);
   assert(VD->isFileVarDecl() && "Invalid decl");
 
-  return VD->getStorageClass() == VarDecl::Static;
+  // We never want to defer structs that have non-trivial constructors or 
+  // destructors.
+  
+  // FIXME: Handle references.
+  if (const RecordType *RT = VD->getType()->getAs<RecordType>()) {
+    if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(RT->getDecl())) {
+      if (!RD->hasTrivialConstructor() || !RD->hasTrivialDestructor())
+        return false;
+    }
+  }
+      
+  // Static data may be deferred, but out-of-line static data members
+  // cannot be.
+  // FIXME: What if the initializer has side effects?
+  return VD->isInAnonymousNamespace() ||
+         (VD->getStorageClass() == VarDecl::Static &&
+          !(VD->isStaticDataMember() && VD->isOutOfLine()));
 }
 
 void CodeGenModule::EmitGlobal(GlobalDecl GD) {
@@ -810,7 +825,7 @@ llvm::Constant *
 CodeGenModule::CreateRuntimeFunction(const llvm::FunctionType *FTy,
                                      const char *Name) {
   // Convert Name to be a uniqued string from the IdentifierInfo table.
-  Name = getContext().Idents.get(Name).getName();
+  Name = getContext().Idents.get(Name).getNameStart();
   return GetOrCreateLLVMFunction(Name, FTy, GlobalDecl());
 }
 
@@ -896,7 +911,7 @@ llvm::Constant *
 CodeGenModule::CreateRuntimeVariable(const llvm::Type *Ty,
                                      const char *Name) {
   // Convert Name to be a uniqued string from the IdentifierInfo table.
-  Name = getContext().Idents.get(Name).getName();
+  Name = getContext().Idents.get(Name).getNameStart();
   return GetOrCreateLLVMGlobal(Name, llvm::PointerType::getUnqual(Ty), 0);
 }
 
@@ -916,6 +931,37 @@ void CodeGenModule::EmitTentativeDefinition(const VarDecl *D) {
 
   // The tentative definition is the only definition.
   EmitGlobalVarDefinition(D);
+}
+
+static CodeGenModule::GVALinkage
+GetLinkageForVariable(ASTContext &Context, const VarDecl *VD) {
+  // Everything located semantically within an anonymous namespace is
+  // always internal.
+  if (VD->isInAnonymousNamespace())
+    return CodeGenModule::GVA_Internal;
+
+  // Handle linkage for static data members.
+  if (VD->isStaticDataMember()) {
+    switch (VD->getTemplateSpecializationKind()) {
+    case TSK_Undeclared:
+    case TSK_ExplicitSpecialization:
+    case TSK_ExplicitInstantiationDefinition:
+      return CodeGenModule::GVA_StrongExternal;
+      
+    case TSK_ExplicitInstantiationDeclaration:
+      llvm::llvm_unreachable("Variable should not be instantiated");
+      // Fall through to treat this like any other instantiation.
+        
+    case TSK_ImplicitInstantiation:
+      return CodeGenModule::GVA_TemplateInstantiation;
+    }
+  }
+  
+  // Static variables get internal linkage.
+  if (VD->getStorageClass() == VarDecl::Static)
+    return CodeGenModule::GVA_Internal;
+
+  return CodeGenModule::GVA_StrongExternal;
 }
 
 void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
@@ -1011,9 +1057,8 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   GV->setAlignment(getContext().getDeclAlignInBytes(D));
 
   // Set the llvm linkage type as appropriate.
-  if (D->isInAnonymousNamespace())
-    GV->setLinkage(llvm::Function::InternalLinkage);
-  else if (D->getStorageClass() == VarDecl::Static)
+  GVALinkage Linkage = GetLinkageForVariable(getContext(), D);
+  if (Linkage == GVA_Internal)
     GV->setLinkage(llvm::Function::InternalLinkage);
   else if (D->hasAttr<DLLImportAttr>())
     GV->setLinkage(llvm::Function::DLLImportLinkage);
@@ -1024,7 +1069,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
       GV->setLinkage(llvm::GlobalVariable::WeakODRLinkage);
     else
       GV->setLinkage(llvm::GlobalVariable::WeakAnyLinkage);
-  } else if (!CompileOpts.NoCommon &&
+  } else if (Linkage == GVA_TemplateInstantiation)
+    GV->setLinkage(llvm::GlobalVariable::WeakAnyLinkage);   
+  else if (!CompileOpts.NoCommon &&
            !D->hasExternalStorage() && !D->getInit() &&
            !D->getAttr<SectionAttr>()) {
     GV->setLinkage(llvm::GlobalVariable::CommonLinkage);
@@ -1102,6 +1149,11 @@ static void ReplaceUsesOfNonProtoTypeWithRealFunction(llvm::GlobalValue *Old,
     // Finally, remove the old call, replacing any uses with the new one.
     if (!CI->use_empty())
       CI->replaceAllUsesWith(NewCall);
+
+    // Copy any custom metadata attached with CI.
+    llvm::MetadataContext &TheMetadata = CI->getContext().getMetadata();
+    TheMetadata.copyMD(CI, NewCall);
+
     CI->eraseFromParent();
   }
 }
@@ -1202,7 +1254,7 @@ void CodeGenModule::EmitAliasDefinition(const ValueDecl *D) {
 
   // Unique the name through the identifier table.
   const char *AliaseeName = AA->getAliasee().c_str();
-  AliaseeName = getContext().Idents.get(AliaseeName).getName();
+  AliaseeName = getContext().Idents.get(AliaseeName).getNameStart();
 
   // Create a reference to the named value.  This ensures that it is emitted
   // if a deferred decl.
@@ -1289,7 +1341,7 @@ llvm::Value *CodeGenModule::getBuiltinLibFunction(const FunctionDecl *FD,
     cast<llvm::FunctionType>(getTypes().ConvertType(Type));
 
   // Unique the name through the identifier table.
-  Name = getContext().Idents.get(Name).getName();
+  Name = getContext().Idents.get(Name).getNameStart();
   return GetOrCreateLLVMFunction(Name, Ty, GlobalDecl(FD));
 }
 
@@ -1423,27 +1475,24 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   // String pointer.
   llvm::Constant *C = llvm::ConstantArray::get(VMContext, Entry.getKey().str());
 
-  const char *Sect, *Prefix;
-  bool isConstant;
+  const char *Sect = 0;
   llvm::GlobalValue::LinkageTypes Linkage;
+  bool isConstant;
   if (isUTF16) {
-    Prefix = getContext().Target.getUnicodeStringSymbolPrefix();
     Sect = getContext().Target.getUnicodeStringSection();
-    // FIXME: why do utf strings get "l" labels instead of "L" labels?
+    // FIXME: why do utf strings get "_" labels instead of "L" labels?
     Linkage = llvm::GlobalValue::InternalLinkage;
-    // FIXME: Why does GCC not set constant here?
-    isConstant = false;
-  } else {
-    Prefix = ".str";
-    Sect = getContext().Target.getCFStringDataSection();
-    Linkage = llvm::GlobalValue::PrivateLinkage;
-    // FIXME: -fwritable-strings should probably affect this, but we
-    // are following gcc here.
+    // Note: -fwritable-strings doesn't make unicode CFStrings writable, but
+    // does make plain ascii ones writable.
     isConstant = true;
+  } else {
+    Linkage = llvm::GlobalValue::PrivateLinkage;
+    isConstant = !Features.WritableStrings;
   }
+  
   llvm::GlobalVariable *GV =
-    new llvm::GlobalVariable(getModule(), C->getType(), isConstant,
-                             Linkage, C, Prefix);
+    new llvm::GlobalVariable(getModule(), C->getType(), isConstant, Linkage, C,
+                             ".str");
   if (Sect)
     GV->setSection(Sect);
   if (isUTF16) {

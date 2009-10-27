@@ -47,6 +47,9 @@ class DeclaratorInfo {
   friend class ASTContext;
   DeclaratorInfo(QualType ty) : Ty(ty) { }
 public:
+  /// \brief Return the type wrapped by this type source info.
+  QualType getType() const { return Ty; }
+
   /// \brief Return the TypeLoc wrapper for the type source info.
   TypeLoc getTypeLoc() const;
 };
@@ -93,13 +96,35 @@ public:
   /// name (C++ constructor, Objective-C selector, etc.).
   IdentifierInfo *getIdentifier() const { return Name.getAsIdentifierInfo(); }
 
+  /// getName - Get the name of identifier for this declaration as a StringRef.
+  /// This requires that the declaration have a name and that it be a simple
+  /// identifier.
+  llvm::StringRef getName() const {
+    assert(Name.isIdentifier() && "Name is not a simple identifier");
+    return getIdentifier() ? getIdentifier()->getName() : "";
+  }
+
   /// getNameAsCString - Get the name of identifier for this declaration as a
   /// C string (const char*).  This requires that the declaration have a name
   /// and that it be a simple identifier.
+  //
+  // FIXME: Deprecated, move clients to getName().
   const char *getNameAsCString() const {
-    assert(getIdentifier() && "Name is not a simple identifier");
-    return getIdentifier()->getName();
+    assert(Name.isIdentifier() && "Name is not a simple identifier");
+    return getIdentifier() ? getIdentifier()->getNameStart() : "";
   }
+
+  /// getNameAsString - Get a human-readable name for the declaration, even if
+  /// it is one of the special kinds of names (C++ constructor, Objective-C
+  /// selector, etc).  Creating this name requires expensive string
+  /// manipulation, so it should be called only when performance doesn't matter.
+  /// For simple declarations, getNameAsCString() should suffice.
+  //
+  // FIXME: This function should be renamed to indicate that it is not just an
+  // alternate form of getName(), and clients should move as appropriate.
+  //
+  // FIXME: Deprecated, move clients to getName().
+  std::string getNameAsString() const { return Name.getAsString(); }
 
   /// getDeclName - Get the actual, stored name of the declaration,
   /// which may be a special name.
@@ -107,13 +132,6 @@ public:
 
   /// \brief Set the name of this declaration.
   void setDeclName(DeclarationName N) { Name = N; }
-
-  /// getNameAsString - Get a human-readable name for the declaration, even if
-  /// it is one of the special kinds of names (C++ constructor, Objective-C
-  /// selector, etc).  Creating this name requires expensive string
-  /// manipulation, so it should be called only when performance doesn't matter.
-  /// For simple declarations, getNameAsCString() should suffice.
-  std::string getNameAsString() const { return Name.getAsString(); }
 
   /// getQualifiedNameAsString - Returns human-readable qualified name for
   /// declaration, like A::B::i, for i being member of namespace A::B.
@@ -300,6 +318,29 @@ struct EvaluatedStmt {
   APValue Evaluated;
 };
 
+// \brief Describes the kind of template specialization that a
+// particular template specialization declaration represents.
+enum TemplateSpecializationKind {
+  /// This template specialization was formed from a template-id but
+  /// has not yet been declared, defined, or instantiated.
+  TSK_Undeclared = 0,
+  /// This template specialization was implicitly instantiated from a
+  /// template. (C++ [temp.inst]).
+  TSK_ImplicitInstantiation,
+  /// This template specialization was declared or defined by an
+  /// explicit specialization (C++ [temp.expl.spec]) or partial
+  /// specialization (C++ [temp.class.spec]).
+  TSK_ExplicitSpecialization,
+  /// This template specialization was instantiated from a template
+  /// due to an explicit instantiation declaration request
+  /// (C++0x [temp.explicit]).
+  TSK_ExplicitInstantiationDeclaration,
+  /// This template specialization was instantiated from a template
+  /// due to an explicit instantiation definition request
+  /// (C++ [temp.explicit]).
+  TSK_ExplicitInstantiationDefinition
+};
+  
 /// VarDecl - An instance of this class is created to represent a variable
 /// declaration or definition.
 class VarDecl : public DeclaratorDecl, public Redeclarable<VarDecl> {
@@ -561,11 +602,29 @@ public:
     return getDeclContext()->isRecord();
   }
 
+  /// \brief Determine whether this is or was instantiated from an out-of-line 
+  /// definition of a static data member.
+  bool isOutOfLine() const;
+  
   /// \brief If this variable is an instantiated static data member of a
   /// class template specialization, returns the templated static data member
   /// from which it was instantiated.
-  VarDecl *getInstantiatedFromStaticDataMember();
+  VarDecl *getInstantiatedFromStaticDataMember() const;
 
+  /// \brief If this variable is a static data member, determine what kind of 
+  /// template specialization or instantiation this is.
+  TemplateSpecializationKind getTemplateSpecializationKind() const;
+  
+  /// \brief If this variable is an instantiation of a static data member of a
+  /// class template specialization, retrieves the member specialization
+  /// information.
+  MemberSpecializationInfo *getMemberSpecializationInfo() const;
+  
+  /// \brief For a static data member that was instantiated from a static
+  /// data member of a class template, set the template specialiation kind.
+  void setTemplateSpecializationKind(TemplateSpecializationKind TSK,
+                        SourceLocation PointOfInstantiation = SourceLocation());
+  
   /// isFileVarDecl - Returns true for file scoped variable declaration.
   bool isFileVarDecl() const {
     if (getKind() != Decl::Var)
@@ -709,7 +768,11 @@ public:
     Init = (UnparsedDefaultArgument *)0;
   }
 
-  QualType getOriginalType() const;
+  QualType getOriginalType() const {
+    if (getDeclaratorInfo())
+      return getDeclaratorInfo()->getType();
+    return getType();
+  }
 
   /// setOwningFunction - Sets the function declaration that owns this
   /// ParmVarDecl. Since ParmVarDecls are often created before the
@@ -719,62 +782,9 @@ public:
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) {
-    return (D->getKind() == ParmVar ||
-            D->getKind() == OriginalParmVar);
+    return (D->getKind() == ParmVar);
   }
   static bool classof(const ParmVarDecl *D) { return true; }
-};
-
-/// OriginalParmVarDecl - Represent a parameter to a function, when
-/// the type of the parameter has been promoted. This node represents the
-/// parameter to the function with its original type.
-///
-class OriginalParmVarDecl : public ParmVarDecl {
-  friend class ParmVarDecl;
-protected:
-  QualType OriginalType;
-private:
-  OriginalParmVarDecl(DeclContext *DC, SourceLocation L,
-                              IdentifierInfo *Id, QualType T,
-                              DeclaratorInfo *DInfo,
-                              QualType OT, StorageClass S,
-                              Expr *DefArg)
-  : ParmVarDecl(OriginalParmVar, DC, L, Id, T, DInfo, S, DefArg),
-    OriginalType(OT) {}
-public:
-  static OriginalParmVarDecl *Create(ASTContext &C, DeclContext *DC,
-                                     SourceLocation L,IdentifierInfo *Id,
-                                     QualType T, DeclaratorInfo *DInfo,
-                                     QualType OT, StorageClass S, Expr *DefArg);
-
-  void setOriginalType(QualType T) { OriginalType = T; }
-
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Decl *D) { return D->getKind() == OriginalParmVar; }
-  static bool classof(const OriginalParmVarDecl *D) { return true; }
-};
-
-// \brief Describes the kind of template specialization that a
-// particular template specialization declaration represents.
-enum TemplateSpecializationKind {
-  /// This template specialization was formed from a template-id but
-  /// has not yet been declared, defined, or instantiated.
-  TSK_Undeclared = 0,
-  /// This template specialization was implicitly instantiated from a
-  /// template. (C++ [temp.inst]).
-  TSK_ImplicitInstantiation,
-  /// This template specialization was declared or defined by an
-  /// explicit specialization (C++ [temp.expl.spec]) or partial
-  /// specialization (C++ [temp.class.spec]).
-  TSK_ExplicitSpecialization,
-  /// This template specialization was instantiated from a template
-  /// due to an explicit instantiation declaration request
-  /// (C++0x [temp.explicit]).
-  TSK_ExplicitInstantiationDeclaration,
-  /// This template specialization was instantiated from a template
-  /// due to an explicit instantiation definition request
-  /// (C++ [temp.explicit]).
-  TSK_ExplicitInstantiationDefinition
 };
 
 /// FunctionDecl - An instance of this class is created to represent a
@@ -1067,6 +1077,11 @@ public:
   /// declaration returned by getInstantiatedFromMemberFunction().
   FunctionDecl *getInstantiatedFromMemberFunction() const;
 
+  /// \brief If this function is an instantiation of a member function of a
+  /// class template specialization, retrieves the member specialization
+  /// information.
+  MemberSpecializationInfo *getMemberSpecializationInfo() const;
+                       
   /// \brief Specify that this record is an instantiation of the
   /// member function FD.
   void setInstantiationOfMemberFunction(FunctionDecl *FD,
@@ -1096,6 +1111,14 @@ public:
   /// specialization.
   bool isFunctionTemplateSpecialization() const {
     return getPrimaryTemplate() != 0;
+  }
+       
+  /// \brief If this function is actually a function template specialization,
+  /// retrieve information about this function template specialization. 
+  /// Otherwise, returns NULL.
+  FunctionTemplateSpecializationInfo *getTemplateSpecializationInfo() const {
+    return TemplateOrSpecialization.
+             dyn_cast<FunctionTemplateSpecializationInfo*>();
   }
                        
   /// \brief Retrieve the primary template that this function template
@@ -1140,7 +1163,16 @@ public:
 
   /// \brief Determine what kind of template instantiation this function
   /// represents.
-  void setTemplateSpecializationKind(TemplateSpecializationKind TSK);
+  void setTemplateSpecializationKind(TemplateSpecializationKind TSK,
+                        SourceLocation PointOfInstantiation = SourceLocation());
+
+  /// \brief Retrieve the (first) point of instantiation of a function template
+  /// specialization or a member of a class template specialization.
+  ///
+  /// \returns the first point of instantiation, if this function was 
+  /// instantiated from a template; otherwie, returns an invalid source 
+  /// location.
+  SourceLocation getPointOfInstantiation() const;
 
   /// \brief Determine whether this is or was instantiated from an out-of-line 
   /// definition of a member function.
@@ -1279,20 +1311,29 @@ public:
 
 class TypedefDecl : public TypeDecl {
   /// UnderlyingType - This is the type the typedef is set to.
-  QualType UnderlyingType;
+  DeclaratorInfo *DInfo;
+
   TypedefDecl(DeclContext *DC, SourceLocation L,
-              IdentifierInfo *Id, QualType T)
-    : TypeDecl(Typedef, DC, L, Id), UnderlyingType(T) {}
+              IdentifierInfo *Id, DeclaratorInfo *DInfo)
+    : TypeDecl(Typedef, DC, L, Id), DInfo(DInfo) {}
 
   virtual ~TypedefDecl() {}
 public:
 
   static TypedefDecl *Create(ASTContext &C, DeclContext *DC,
-                             SourceLocation L,IdentifierInfo *Id,
-                             QualType T);
+                             SourceLocation L, IdentifierInfo *Id,
+                             DeclaratorInfo *DInfo);
 
-  QualType getUnderlyingType() const { return UnderlyingType; }
-  void setUnderlyingType(QualType newType) { UnderlyingType = newType; }
+  DeclaratorInfo *getTypeDeclaratorInfo() const {
+    return DInfo;
+  }
+
+  QualType getUnderlyingType() const {
+    return DInfo->getType();
+  }
+  void setTypeDeclaratorInfo(DeclaratorInfo *newType) {
+    DInfo = newType;
+  }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return D->getKind() == Typedef; }

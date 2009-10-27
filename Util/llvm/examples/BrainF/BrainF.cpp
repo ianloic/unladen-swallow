@@ -25,6 +25,7 @@
 
 #include "BrainF.h"
 #include "llvm/Constants.h"
+#include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/ADT/STLExtras.h"
 #include <iostream>
@@ -78,7 +79,11 @@ void BrainF::header(LLVMContext& C) {
 
   //%arr = malloc i8, i32 %d
   ConstantInt *val_mem = ConstantInt::get(C, APInt(32, memtotal));
-  ptr_arr = builder->CreateMalloc(IntegerType::getInt8Ty(C), val_mem, "arr");
+  BasicBlock* BB = builder->GetInsertBlock();
+  const Type* IntPtrTy = IntegerType::getInt32Ty(C);
+  ptr_arr = CallInst::CreateMalloc(BB, IntPtrTy, IntegerType::getInt8Ty(C),
+                                   val_mem, NULL, "arr");
+  BB->getInstList().push_back(cast<Instruction>(ptr_arr));
 
   //call void @llvm.memset.i32(i8 *%arr, i8 0, i32 %d, i32 1)
   {
@@ -112,8 +117,8 @@ void BrainF::header(LLVMContext& C) {
   //brainf.end:
   endbb = BasicBlock::Create(C, label, brainf_func);
 
-  //free i8 *%arr
-  new FreeInst(ptr_arr, endbb);
+  //call free(i8 *%arr)
+  endbb->getInstList().push_back(CallInst::CreateFree(ptr_arr, endbb));
 
   //ret void
   ReturnInst::Create(C, endbb);

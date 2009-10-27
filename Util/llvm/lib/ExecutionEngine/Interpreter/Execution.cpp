@@ -720,7 +720,7 @@ void Interpreter::SwitchToNewBasicBlock(BasicBlock *Dest, ExecutionContext &SF){
 //                     Memory Instruction Implementations
 //===----------------------------------------------------------------------===//
 
-void Interpreter::visitAllocationInst(AllocationInst &I) {
+void Interpreter::visitAllocaInst(AllocaInst &I) {
   ExecutionContext &SF = ECStack.back();
 
   const Type *Ty = I.getType()->getElementType();  // Type to be allocated
@@ -747,14 +747,6 @@ void Interpreter::visitAllocationInst(AllocationInst &I) {
 
   if (I.getOpcode() == Instruction::Alloca)
     ECStack.back().Allocas.add(Memory);
-}
-
-void Interpreter::visitFreeInst(FreeInst &I) {
-  ExecutionContext &SF = ECStack.back();
-  assert(isa<PointerType>(I.getOperand(0)->getType()) && "Freeing nonptr?");
-  GenericValue Value = getOperandValue(I.getOperand(0), SF);
-  // TODO: Check to make sure memory is allocated
-  free(GVTOP(Value));   // Free memory
 }
 
 // getElementOffset - The workhorse for getelementptr.

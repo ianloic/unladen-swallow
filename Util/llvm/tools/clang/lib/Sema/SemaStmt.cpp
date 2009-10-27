@@ -80,6 +80,25 @@ void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
   E = E->IgnoreParens();
   if (isa<ObjCImplicitSetterGetterRefExpr>(E))
     DiagID = diag::warn_unused_property_expr;
+  
+  if (const CallExpr *CE = dyn_cast<CallExpr>(E)) {
+    // If the callee has attribute pure, const, or warn_unused_result, warn with
+    // a more specific message to make it clear what is happening.
+    if (const FunctionDecl *FD = CE->getDirectCallee()) {
+      if (FD->getAttr<WarnUnusedResultAttr>()) {
+        Diag(Loc, diag::warn_unused_call) << R1 << R2 << "warn_unused_result";
+        return;
+      }
+      if (FD->getAttr<PureAttr>()) {
+        Diag(Loc, diag::warn_unused_call) << R1 << R2 << "pure";
+        return;
+      }
+      if (FD->getAttr<ConstAttr>()) {
+        Diag(Loc, diag::warn_unused_call) << R1 << R2 << "const";
+        return;
+      }
+    }        
+  }
 
   Diag(Loc, DiagID) << R1 << R2;
 }
@@ -214,20 +233,9 @@ Sema::ActOnIfStmt(SourceLocation IfLoc, FullExprArg CondVal,
   Expr *condExpr = CondResult.takeAs<Expr>();
 
   assert(condExpr && "ActOnIfStmt(): missing expression");
-
-  if (!condExpr->isTypeDependent()) {
-    DefaultFunctionArrayConversion(condExpr);
-    // Take ownership again until we're past the error checking.
+  if (CheckBooleanCondition(condExpr, IfLoc)) {
     CondResult = condExpr;
-    QualType condType = condExpr->getType();
-
-    if (getLangOptions().CPlusPlus) {
-      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-        return StmtError();
-    } else if (!condType->isScalarType()) // C99 6.8.4.1p1
-      return StmtError(Diag(IfLoc,
-                            diag::err_typecheck_statement_requires_scalar)
-                       << condType << condExpr->getSourceRange());
+    return StmtError();
   }
 
   Stmt *thenStmt = ThenVal.takeAs<Stmt>();
@@ -360,6 +368,21 @@ static bool CmpCaseVals(const std::pair<llvm::APSInt, CaseStmt*>& lhs,
   return false;
 }
 
+/// GetTypeBeforeIntegralPromotion - Returns the pre-promotion type of
+/// potentially integral-promoted expression @p expr.
+static QualType GetTypeBeforeIntegralPromotion(const Expr* expr) {
+  const ImplicitCastExpr *ImplicitCast =
+      dyn_cast_or_null<ImplicitCastExpr>(expr);
+  if (ImplicitCast != NULL) {
+    const Expr *ExprBeforePromotion = ImplicitCast->getSubExpr();
+    QualType TypeBeforePromotion = ExprBeforePromotion->getType();
+    if (TypeBeforePromotion->isIntegralType()) {
+      return TypeBeforePromotion;
+    }
+  }
+  return expr->getType();
+}
+
 Action::OwningStmtResult
 Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
                             StmtArg Body) {
@@ -374,11 +397,30 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
   Expr *CondExpr = SS->getCond();
   QualType CondType = CondExpr->getType();
 
-  if (!CondExpr->isTypeDependent() &&
-      !CondType->isIntegerType()) { // C99 6.8.4.2p1
-    Diag(SwitchLoc, diag::err_typecheck_statement_requires_integer)
-      << CondType << CondExpr->getSourceRange();
-    return StmtError();
+  // C++ 6.4.2.p2:
+  // Integral promotions are performed (on the switch condition).
+  //
+  // A case value unrepresentable by the original switch condition
+  // type (before the promotion) doesn't make sense, even when it can
+  // be represented by the promoted type.  Therefore we need to find
+  // the pre-promotion type of the switch condition.
+  QualType CondTypeBeforePromotion =
+      GetTypeBeforeIntegralPromotion(CondExpr);
+
+  if (!CondExpr->isTypeDependent()) {
+    if (!CondType->isIntegerType()) { // C99 6.8.4.2p1
+      Diag(SwitchLoc, diag::err_typecheck_statement_requires_integer)
+          << CondType << CondExpr->getSourceRange();
+      return StmtError();
+    }
+
+    if (CondTypeBeforePromotion->isBooleanType()) {
+      // switch(bool_expr) {...} is often a programmer error, e.g.
+      //   switch(n && mask) { ... }  // Doh - should be "n & mask".
+      // One can always use an if statement instead of switch(bool_expr).
+      Diag(SwitchLoc, diag::warn_bool_switch_condition)
+          << CondExpr->getSourceRange();
+    }
   }
 
   // Get the bitwidth of the switched-on value before promotions.  We must
@@ -387,8 +429,8 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
     = CondExpr->isTypeDependent() || CondExpr->isValueDependent();
   unsigned CondWidth
     = HasDependentValue? 0
-                       : static_cast<unsigned>(Context.getTypeSize(CondType));
-  bool CondIsSigned = CondType->isSignedIntegerType();
+      : static_cast<unsigned>(Context.getTypeSize(CondTypeBeforePromotion));
+  bool CondIsSigned = CondTypeBeforePromotion->isSignedIntegerType();
 
   // Accumulate all of the case values in a vector so that we can sort them
   // and detect duplicates.  This vector contains the APInt for the case after
@@ -440,7 +482,7 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
 
       // If the LHS is not the same type as the condition, insert an implicit
       // cast.
-      ImpCastExprToType(Lo, CondType);
+      ImpCastExprToType(Lo, CondType, CastExpr::CK_IntegralCast);
       CS->setLHS(Lo);
 
       // If this is a case range, remember it in CaseRanges, otherwise CaseVals.
@@ -496,7 +538,7 @@ Sema::ActOnFinishSwitchStmt(SourceLocation SwitchLoc, StmtArg Switch,
 
         // If the LHS is not the same type as the condition, insert an implicit
         // cast.
-        ImpCastExprToType(Hi, CondType);
+        ImpCastExprToType(Hi, CondType, CastExpr::CK_IntegralCast);
         CR->setRHS(Hi);
 
         // If the low value is bigger than the high value, the case is empty.
@@ -577,18 +619,9 @@ Sema::ActOnWhileStmt(SourceLocation WhileLoc, FullExprArg Cond, StmtArg Body) {
   Expr *condExpr = CondArg.takeAs<Expr>();
   assert(condExpr && "ActOnWhileStmt(): missing expression");
 
-  if (!condExpr->isTypeDependent()) {
-    DefaultFunctionArrayConversion(condExpr);
+  if (CheckBooleanCondition(condExpr, WhileLoc)) {
     CondArg = condExpr;
-    QualType condType = condExpr->getType();
-
-    if (getLangOptions().CPlusPlus) {
-      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-        return StmtError();
-    } else if (!condType->isScalarType()) // C99 6.8.5p2
-      return StmtError(Diag(WhileLoc,
-                            diag::err_typecheck_statement_requires_scalar)
-                       << condType << condExpr->getSourceRange());
+    return StmtError();
   }
 
   Stmt *bodyStmt = Body.takeAs<Stmt>();
@@ -605,18 +638,9 @@ Sema::ActOnDoStmt(SourceLocation DoLoc, StmtArg Body,
   Expr *condExpr = Cond.takeAs<Expr>();
   assert(condExpr && "ActOnDoStmt(): missing expression");
 
-  if (!condExpr->isTypeDependent()) {
-    DefaultFunctionArrayConversion(condExpr);
+  if (CheckBooleanCondition(condExpr, DoLoc)) {
     Cond = condExpr;
-    QualType condType = condExpr->getType();
-
-    if (getLangOptions().CPlusPlus) {
-      if (CheckCXXBooleanCondition(condExpr)) // C++ 6.4p4
-        return StmtError();
-    } else if (!condType->isScalarType()) // C99 6.8.5p2
-      return StmtError(Diag(DoLoc,
-                            diag::err_typecheck_statement_requires_scalar)
-                       << condType << condExpr->getSourceRange());
+    return StmtError();
   }
 
   Stmt *bodyStmt = Body.takeAs<Stmt>();
@@ -632,7 +656,7 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
                    StmtArg first, ExprArg second, ExprArg third,
                    SourceLocation RParenLoc, StmtArg body) {
   Stmt *First  = static_cast<Stmt*>(first.get());
-  Expr *Second = static_cast<Expr*>(second.get());
+  Expr *Second = second.takeAs<Expr>();
   Expr *Third  = static_cast<Expr*>(third.get());
   Stmt *Body  = static_cast<Stmt*>(body.get());
 
@@ -652,17 +676,9 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
       }
     }
   }
-  if (Second && !Second->isTypeDependent()) {
-    DefaultFunctionArrayConversion(Second);
-    QualType SecondType = Second->getType();
-
-    if (getLangOptions().CPlusPlus) {
-      if (CheckCXXBooleanCondition(Second)) // C++ 6.4p4
-        return StmtError();
-    } else if (!SecondType->isScalarType()) // C99 6.8.5p2
-      return StmtError(Diag(ForLoc,
-                            diag::err_typecheck_statement_requires_scalar)
-        << SecondType << Second->getSourceRange());
+  if (Second && CheckBooleanCondition(Second, ForLoc)) {
+    second = Second;
+    return StmtError();
   }
 
   DiagnoseUnusedExprResult(First);
@@ -670,7 +686,6 @@ Sema::ActOnForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
   DiagnoseUnusedExprResult(Body);
 
   first.release();
-  second.release();
   third.release();
   body.release();
   return Owned(new (Context) ForStmt(First, Second, Third, Body, ForLoc,

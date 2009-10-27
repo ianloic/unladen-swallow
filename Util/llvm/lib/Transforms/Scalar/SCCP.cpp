@@ -30,6 +30,7 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/CallSite.h"
@@ -400,7 +401,9 @@ private:
   void visitStoreInst     (Instruction &I);
   void visitLoadInst      (LoadInst &I);
   void visitGetElementPtrInst(GetElementPtrInst &I);
-  void visitCallInst      (CallInst &I) { 
+  void visitCallInst      (CallInst &I) {
+    if (isFreeCall(&I))
+      return;
     visitCallSite(CallSite::get(&I));
   }
   void visitInvokeInst    (InvokeInst &II) {
@@ -410,10 +413,9 @@ private:
   void visitCallSite      (CallSite CS);
   void visitUnwindInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
-  void visitAllocationInst(Instruction &I) { markOverdefined(&I); }
+  void visitAllocaInst    (Instruction &I) { markOverdefined(&I); }
   void visitVANextInst    (Instruction &I) { markOverdefined(&I); }
   void visitVAArgInst     (Instruction &I) { markOverdefined(&I); }
-  void visitFreeInst      (Instruction &I) { /*returns void*/ }
 
   void visitInstruction(Instruction &I) {
     // If a new instruction is added to LLVM that we don't handle...
@@ -1229,7 +1231,10 @@ CallOverdefined:
     TMRVI = TrackedMultipleRetVals.find(std::make_pair(F, 0));
     if (TMRVI == TrackedMultipleRetVals.end())
       goto CallOverdefined;
-    
+
+    // Need to mark as overdefined, otherwise it stays undefined which
+    // creates extractvalue undef, <idx>
+    markOverdefined(I);
     // If we are tracking this callee, propagate the return values of the call
     // into this call site.  We do this by walking all the uses. Single-index
     // ExtractValueInst uses can be tracked; anything more complicated is
@@ -1270,7 +1275,6 @@ CallOverdefined:
       mergeInValue(IV, AI, getValueState(*CAI));
   }
 }
-
 
 void SCCPSolver::Solve() {
   // Process the work lists until they are empty!

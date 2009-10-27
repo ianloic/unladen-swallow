@@ -391,15 +391,16 @@ class CXXRecordDecl : public RecordDecl {
   /// declarations that describe a class template, this will be a
   /// pointer to a ClassTemplateDecl. For member
   /// classes of class template specializations, this will be the
-  /// RecordDecl from which the member class was instantiated.
-  llvm::PointerUnion<ClassTemplateDecl*, CXXRecordDecl*>
+  /// MemberSpecializationInfo referring to the member class that was 
+  /// instantiated or specialized.
+  llvm::PointerUnion<ClassTemplateDecl*, MemberSpecializationInfo*>
     TemplateOrInstantiation;
   
   void getNestedVisibleConversionFunctions(CXXRecordDecl *RD,
-          const llvm::SmallPtrSet<QualType, 8> &TopConversionsTypeSet,
-          const llvm::SmallPtrSet<QualType, 8> &HiddenConversionTypes);
+          const llvm::SmallPtrSet<CanQualType, 8> &TopConversionsTypeSet,
+          const llvm::SmallPtrSet<CanQualType, 8> &HiddenConversionTypes);
   void collectConversionFunctions(
-    llvm::SmallPtrSet<QualType, 8>& ConversionsTypeSet);
+    llvm::SmallPtrSet<CanQualType, 8>& ConversionsTypeSet);
   
 protected:
   CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
@@ -703,15 +704,17 @@ public:
   /// the CXXRecordDecl X<T>::A. When a complete definition of
   /// X<int>::A is required, it will be instantiated from the
   /// declaration returned by getInstantiatedFromMemberClass().
-  CXXRecordDecl *getInstantiatedFromMemberClass() const {
-    return TemplateOrInstantiation.dyn_cast<CXXRecordDecl*>();
-  }
-
+  CXXRecordDecl *getInstantiatedFromMemberClass() const;
+  
+  /// \brief If this class is an instantiation of a member class of a
+  /// class template specialization, retrieves the member specialization
+  /// information.
+  MemberSpecializationInfo *getMemberSpecializationInfo() const;
+  
   /// \brief Specify that this record is an instantiation of the
   /// member class RD.
-  void setInstantiationOfMemberClass(CXXRecordDecl *RD) {
-    TemplateOrInstantiation = RD;
-  }
+  void setInstantiationOfMemberClass(CXXRecordDecl *RD,
+                                     TemplateSpecializationKind TSK);
 
   /// \brief Retrieves the class template that is described by this
   /// class declaration.
@@ -732,6 +735,14 @@ public:
     TemplateOrInstantiation = Template;
   }
 
+  /// \brief Determine whether this particular class is a specialization or
+  /// instantiation of a class template or member class of a class template,
+  /// and how it was instantiated or specialized.
+  TemplateSpecializationKind getTemplateSpecializationKind();
+  
+  /// \brief Set the kind of specialization or template instantiation this is.
+  void setTemplateSpecializationKind(TemplateSpecializationKind TSK);
+  
   /// getDefaultConstructor - Returns the default constructor for this class
   CXXConstructorDecl *getDefaultConstructor(ASTContext &Context);
 

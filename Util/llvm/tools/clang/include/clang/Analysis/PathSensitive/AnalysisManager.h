@@ -65,6 +65,11 @@ public:
       AScope(ScopeDecl), DisplayedFunction(!displayProgress),
       VisualizeEGDot(vizdot), VisualizeEGUbi(vizubi), PurgeDead(purge),
       EagerlyAssume(eager), TrimGraph(trim) {}
+  
+  void ClearContexts() {
+    LocCtxMgr.clear();
+    AnaCtxMgr.clear();
+  }
 
   StoreManagerCreator getStoreManagerCreator() {
     return CreateStoreMgr;
@@ -122,8 +127,16 @@ public:
     return AnaCtxMgr.getContext(D)->getParentMap();
   }
 
+  // Get the top level stack frame.
   StackFrameContext *getStackFrame(Decl const *D) {
     return LocCtxMgr.getStackFrame(AnaCtxMgr.getContext(D), 0, 0);
+  }
+
+  // Get a stack frame with parent.
+  StackFrameContext const *getStackFrame(Decl const *D, 
+                                         LocationContext const *Parent,
+                                         Stmt const *S) {
+    return LocCtxMgr.getStackFrame(AnaCtxMgr.getContext(D), Parent, S);
   }
 };
 

@@ -25,9 +25,10 @@
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
+#include "llvm/GlobalValue.h"
 #include "llvm/Instruction.h"
 #include "llvm/Intrinsics.h"
-#include "llvm/GlobalValue.h"
+#include "llvm/Type.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -392,8 +393,6 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
 
   // We want to custom lower some of our intrinsics.
   setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
-  setOperationAction(ISD::INTRINSIC_W_CHAIN, MVT::Other, Custom);
-  setOperationAction(ISD::INTRINSIC_VOID, MVT::Other, Custom);
 
   setOperationAction(ISD::SETCC,     MVT::i32, Expand);
   setOperationAction(ISD::SETCC,     MVT::f32, Expand);
@@ -1367,102 +1366,6 @@ SDValue ARMTargetLowering::LowerGLOBAL_OFFSET_TABLE(SDValue Op,
                                PseudoSourceValue::getConstantPool(), 0);
   SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex++, MVT::i32);
   return DAG.getNode(ARMISD::PIC_ADD, dl, PtrVT, Result, PICLabel);
-}
-
-static SDValue LowerNeonVLDIntrinsic(SDValue Op, SelectionDAG &DAG,
-                                     unsigned NumVecs) {
-  SDNode *Node = Op.getNode();
-  EVT VT = Node->getValueType(0);
-
-  // No expansion needed for 64-bit vectors.
-  if (VT.is64BitVector())
-    return SDValue();
-
-  // FIXME: We need to expand VLD3 and VLD4 of 128-bit vectors into separate
-  // operations to load the even and odd registers.
-  return SDValue();
-}
-
-static SDValue LowerNeonVSTIntrinsic(SDValue Op, SelectionDAG &DAG,
-                                     unsigned NumVecs) {
-  SDNode *Node = Op.getNode();
-  EVT VT = Node->getOperand(3).getValueType();
-
-  // No expansion needed for 64-bit vectors.
-  if (VT.is64BitVector())
-    return SDValue();
-
-  // FIXME: We need to expand VST3 and VST4 of 128-bit vectors into separate
-  // operations to store the even and odd registers.
-  return SDValue();
-}
-
-static SDValue LowerNeonVLDLaneIntrinsic(SDValue Op, SelectionDAG &DAG,
-                                         unsigned NumVecs) {
-  SDNode *Node = Op.getNode();
-  EVT VT = Node->getValueType(0);
-
-  if (!VT.is64BitVector())
-    return SDValue(); // unimplemented
-
-  // Change the lane number operand to be a TargetConstant; otherwise it
-  // will be legalized into a register.
-  ConstantSDNode *Lane = dyn_cast<ConstantSDNode>(Node->getOperand(NumVecs+3));
-  if (!Lane) {
-    assert(false && "vld lane number must be a constant");
-    return SDValue();
-  }
-  SmallVector<SDValue, 8> Ops(Node->op_begin(), Node->op_end());
-  Ops[NumVecs+3] = DAG.getTargetConstant(Lane->getZExtValue(), MVT::i32);
-  return DAG.UpdateNodeOperands(Op, &Ops[0], Ops.size());
-}
-
-static SDValue LowerNeonVSTLaneIntrinsic(SDValue Op, SelectionDAG &DAG,
-                                         unsigned NumVecs) {
-  SDNode *Node = Op.getNode();
-  EVT VT = Node->getOperand(3).getValueType();
-
-  if (!VT.is64BitVector())
-    return SDValue(); // unimplemented
-
-  // Change the lane number operand to be a TargetConstant; otherwise it
-  // will be legalized into a register.
-  ConstantSDNode *Lane = dyn_cast<ConstantSDNode>(Node->getOperand(NumVecs+3));
-  if (!Lane) {
-    assert(false && "vst lane number must be a constant");
-    return SDValue();
-  }
-  SmallVector<SDValue, 8> Ops(Node->op_begin(), Node->op_end());
-  Ops[NumVecs+3] = DAG.getTargetConstant(Lane->getZExtValue(), MVT::i32);
-  return DAG.UpdateNodeOperands(Op, &Ops[0], Ops.size());
-}
-
-SDValue
-ARMTargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) {
-  unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
-  switch (IntNo) {
-  case Intrinsic::arm_neon_vld3:
-    return LowerNeonVLDIntrinsic(Op, DAG, 3);
-  case Intrinsic::arm_neon_vld4:
-    return LowerNeonVLDIntrinsic(Op, DAG, 4);
-  case Intrinsic::arm_neon_vld2lane:
-    return LowerNeonVLDLaneIntrinsic(Op, DAG, 2);
-  case Intrinsic::arm_neon_vld3lane:
-    return LowerNeonVLDLaneIntrinsic(Op, DAG, 3);
-  case Intrinsic::arm_neon_vld4lane:
-    return LowerNeonVLDLaneIntrinsic(Op, DAG, 4);
-  case Intrinsic::arm_neon_vst3:
-    return LowerNeonVSTIntrinsic(Op, DAG, 3);
-  case Intrinsic::arm_neon_vst4:
-    return LowerNeonVSTIntrinsic(Op, DAG, 4);
-  case Intrinsic::arm_neon_vst2lane:
-    return LowerNeonVSTLaneIntrinsic(Op, DAG, 2);
-  case Intrinsic::arm_neon_vst3lane:
-    return LowerNeonVSTLaneIntrinsic(Op, DAG, 3);
-  case Intrinsic::arm_neon_vst4lane:
-    return LowerNeonVSTLaneIntrinsic(Op, DAG, 4);
-  default: return SDValue();    // Don't custom lower most intrinsics.
-  }
 }
 
 SDValue
@@ -2458,8 +2361,11 @@ static bool isVREVMask(const SmallVectorImpl<int> &M, EVT VT,
   assert((BlockSize==16 || BlockSize==32 || BlockSize==64) &&
          "Only possible block sizes for VREV are: 16, 32, 64");
 
-  unsigned NumElts = VT.getVectorNumElements();
   unsigned EltSz = VT.getVectorElementType().getSizeInBits();
+  if (EltSz == 64)
+    return false;
+
+  unsigned NumElts = VT.getVectorNumElements();
   unsigned BlockElts = M[0] + 1;
 
   if (BlockSize <= EltSz || BlockSize != BlockElts * EltSz)
@@ -2476,6 +2382,10 @@ static bool isVREVMask(const SmallVectorImpl<int> &M, EVT VT,
 
 static bool isVTRNMask(const SmallVectorImpl<int> &M, EVT VT,
                        unsigned &WhichResult) {
+  unsigned EltSz = VT.getVectorElementType().getSizeInBits();
+  if (EltSz == 64)
+    return false;
+
   unsigned NumElts = VT.getVectorNumElements();
   WhichResult = (M[0] == 0 ? 0 : 1);
   for (unsigned i = 0; i < NumElts; i += 2) {
@@ -2488,6 +2398,10 @@ static bool isVTRNMask(const SmallVectorImpl<int> &M, EVT VT,
 
 static bool isVUZPMask(const SmallVectorImpl<int> &M, EVT VT,
                        unsigned &WhichResult) {
+  unsigned EltSz = VT.getVectorElementType().getSizeInBits();
+  if (EltSz == 64)
+    return false;
+
   unsigned NumElts = VT.getVectorNumElements();
   WhichResult = (M[0] == 0 ? 0 : 1);
   for (unsigned i = 0; i != NumElts; ++i) {
@@ -2496,7 +2410,7 @@ static bool isVUZPMask(const SmallVectorImpl<int> &M, EVT VT,
   }
 
   // VUZP.32 for 64-bit vectors is a pseudo-instruction alias for VTRN.32.
-  if (VT.is64BitVector() && VT.getVectorElementType().getSizeInBits() == 32)
+  if (VT.is64BitVector() && EltSz == 32)
     return false;
 
   return true;
@@ -2504,6 +2418,10 @@ static bool isVUZPMask(const SmallVectorImpl<int> &M, EVT VT,
 
 static bool isVZIPMask(const SmallVectorImpl<int> &M, EVT VT,
                        unsigned &WhichResult) {
+  unsigned EltSz = VT.getVectorElementType().getSizeInBits();
+  if (EltSz == 64)
+    return false;
+
   unsigned NumElts = VT.getVectorNumElements();
   WhichResult = (M[0] == 0 ? 0 : 1);
   unsigned Idx = WhichResult * NumElts / 2;
@@ -2515,7 +2433,7 @@ static bool isVZIPMask(const SmallVectorImpl<int> &M, EVT VT,
   }
 
   // VZIP.32 for 64-bit vectors is a pseudo-instruction alias for VTRN.32.
-  if (VT.is64BitVector() && VT.getVectorElementType().getSizeInBits() == 32)
+  if (VT.is64BitVector() && EltSz == 32)
     return false;
 
   return true;
@@ -2793,18 +2711,10 @@ static SDValue LowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) {
   DebugLoc dl = Op.getDebugLoc();
   SDValue Vec = Op.getOperand(0);
   SDValue Lane = Op.getOperand(1);
-
-  // FIXME: This is invalid for 8 and 16-bit elements - the information about
-  // sign / zero extension is lost!
-  Op = DAG.getNode(ARMISD::VGETLANEu, dl, MVT::i32, Vec, Lane);
-  Op = DAG.getNode(ISD::AssertZext, dl, MVT::i32, Op, DAG.getValueType(VT));
-
-  if (VT.bitsLT(MVT::i32))
-    Op = DAG.getNode(ISD::TRUNCATE, dl, VT, Op);
-  else if (VT.bitsGT(MVT::i32))
-    Op = DAG.getNode(ISD::ANY_EXTEND, dl, VT, Op);
-
-  return Op;
+  assert(VT == MVT::i32 &&
+         Vec.getValueType().getVectorElementType().getSizeInBits() < 32 &&
+         "unexpected type for custom-lowering vector extract");
+  return DAG.getNode(ARMISD::VGETLANEu, dl, MVT::i32, Vec, Lane);
 }
 
 static SDValue LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) {
@@ -2848,8 +2758,6 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) {
   case ISD::RETURNADDR:    break;
   case ISD::FRAMEADDR:     return LowerFRAMEADDR(Op, DAG);
   case ISD::GLOBAL_OFFSET_TABLE: return LowerGLOBAL_OFFSET_TABLE(Op, DAG);
-  case ISD::INTRINSIC_VOID:
-  case ISD::INTRINSIC_W_CHAIN: return LowerINTRINSIC_W_CHAIN(Op, DAG);
   case ISD::INTRINSIC_WO_CHAIN: return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   case ISD::BIT_CONVERT:   return ExpandBIT_CONVERT(Op.getNode(), DAG);
   case ISD::SHL:
@@ -3128,7 +3036,6 @@ static SDValue PerformSUBCombine(SDNode *N,
 
   return SDValue();
 }
-
 
 /// PerformFMRRDCombine - Target-specific dag combine xforms for ARMISD::FMRRD.
 static SDValue PerformFMRRDCombine(SDNode *N,

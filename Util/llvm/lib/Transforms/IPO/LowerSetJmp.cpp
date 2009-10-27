@@ -43,7 +43,6 @@
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CFG.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/InstVisitor.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -62,8 +61,7 @@ STATISTIC(InvokesTransformed , "Number of invokes modified");
 namespace {
   //===--------------------------------------------------------------------===//
   // LowerSetJmp pass implementation.
-  class VISIBILITY_HIDDEN LowerSetJmp : public ModulePass,
-                      public InstVisitor<LowerSetJmp> {
+  class LowerSetJmp : public ModulePass, public InstVisitor<LowerSetJmp> {
     // LLVM library functions...
     Constant *InitSJMap;        // __llvm_sjljeh_init_setjmpmap
     Constant *DestroySJMap;     // __llvm_sjljeh_destroy_setjmpmap

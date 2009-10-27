@@ -13,7 +13,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/MallocHelper.h"
+#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/Analysis/PointerTracking.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -93,7 +93,7 @@ bool PointerTracking::doInitialization(Module &M) {
 const SCEV *PointerTracking::computeAllocationCount(Value *P,
                                                     const Type *&Ty) const {
   Value *V = P->stripPointerCasts();
-  if (AllocationInst *AI = dyn_cast<AllocationInst>(V)) {
+  if (AllocaInst *AI = dyn_cast<AllocaInst>(V)) {
     Value *arraySize = AI->getArraySize();
     Ty = AI->getAllocatedType();
     // arraySize elements of type Ty.
@@ -102,8 +102,9 @@ const SCEV *PointerTracking::computeAllocationCount(Value *P,
 
   if (CallInst *CI = extractMallocCall(V)) {
     Value *arraySize = getMallocArraySize(CI, P->getContext(), TD);
-    Ty = getMallocAllocatedType(CI);
-    if (!Ty || !arraySize) return SE->getCouldNotCompute();
+    const Type* AllocTy = getMallocAllocatedType(CI);
+    if (!AllocTy || !arraySize) return SE->getCouldNotCompute();
+    Ty = AllocTy;
     // arraySize elements of type Ty.
     return SE->getSCEV(arraySize);
   }

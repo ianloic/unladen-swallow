@@ -30,13 +30,12 @@
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetFrameInfo.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 namespace {
-  struct VISIBILITY_HIDDEN Printer : public MachineFunctionPass {
+  struct Printer : public MachineFunctionPass {
     static char ID;
 
     raw_ostream &OS;
@@ -233,6 +232,70 @@ MachineFunction::getMachineMemOperand(const MachineMemOperand *MMO,
 MachineInstr::mmo_iterator
 MachineFunction::allocateMemRefsArray(unsigned long Num) {
   return Allocator.Allocate<MachineMemOperand *>(Num);
+}
+
+std::pair<MachineInstr::mmo_iterator, MachineInstr::mmo_iterator>
+MachineFunction::extractLoadMemRefs(MachineInstr::mmo_iterator Begin,
+                                    MachineInstr::mmo_iterator End) {
+  // Count the number of load mem refs.
+  unsigned Num = 0;
+  for (MachineInstr::mmo_iterator I = Begin; I != End; ++I)
+    if ((*I)->isLoad())
+      ++Num;
+
+  // Allocate a new array and populate it with the load information.
+  MachineInstr::mmo_iterator Result = allocateMemRefsArray(Num);
+  unsigned Index = 0;
+  for (MachineInstr::mmo_iterator I = Begin; I != End; ++I) {
+    if ((*I)->isLoad()) {
+      if (!(*I)->isStore())
+        // Reuse the MMO.
+        Result[Index] = *I;
+      else {
+        // Clone the MMO and unset the store flag.
+        MachineMemOperand *JustLoad =
+          getMachineMemOperand((*I)->getValue(),
+                               (*I)->getFlags() & ~MachineMemOperand::MOStore,
+                               (*I)->getOffset(), (*I)->getSize(),
+                               (*I)->getBaseAlignment());
+        Result[Index] = JustLoad;
+      }
+      ++Index;
+    }
+  }
+  return std::make_pair(Result, Result + Num);
+}
+
+std::pair<MachineInstr::mmo_iterator, MachineInstr::mmo_iterator>
+MachineFunction::extractStoreMemRefs(MachineInstr::mmo_iterator Begin,
+                                     MachineInstr::mmo_iterator End) {
+  // Count the number of load mem refs.
+  unsigned Num = 0;
+  for (MachineInstr::mmo_iterator I = Begin; I != End; ++I)
+    if ((*I)->isStore())
+      ++Num;
+
+  // Allocate a new array and populate it with the store information.
+  MachineInstr::mmo_iterator Result = allocateMemRefsArray(Num);
+  unsigned Index = 0;
+  for (MachineInstr::mmo_iterator I = Begin; I != End; ++I) {
+    if ((*I)->isStore()) {
+      if (!(*I)->isLoad())
+        // Reuse the MMO.
+        Result[Index] = *I;
+      else {
+        // Clone the MMO and unset the load flag.
+        MachineMemOperand *JustStore =
+          getMachineMemOperand((*I)->getValue(),
+                               (*I)->getFlags() & ~MachineMemOperand::MOLoad,
+                               (*I)->getOffset(), (*I)->getSize(),
+                               (*I)->getBaseAlignment());
+        Result[Index] = JustStore;
+      }
+      ++Index;
+    }
+  }
+  return std::make_pair(Result, Result + Num);
 }
 
 void MachineFunction::dump() const {

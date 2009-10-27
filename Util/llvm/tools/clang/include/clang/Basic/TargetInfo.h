@@ -17,7 +17,7 @@
 // FIXME: Daniel isn't smart enough to use a prototype for this.
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include <cassert>
 #include <vector>
 #include <string>
@@ -83,7 +83,7 @@ public:
   };
 protected:
   IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType,
-          Char16Type, Char32Type, Int64Type;
+          WIntType, Char16Type, Char32Type, Int64Type;
 public:
   IntType getSizeType() const { return SizeType; }
   IntType getIntMaxType() const { return IntMaxType; }
@@ -93,9 +93,19 @@ public:
   }
   IntType getIntPtrType() const { return IntPtrType; }
   IntType getWCharType() const { return WCharType; }
+  IntType getWIntType() const { return WIntType; }
   IntType getChar16Type() const { return Char16Type; }
   IntType getChar32Type() const { return Char32Type; }
   IntType getInt64Type() const { return Int64Type; }
+
+
+  /// getTypeWidth - Return the width (in bits) of the specified integer type 
+  /// enum. For example, SignedInt -> getIntWidth().
+  unsigned getTypeWidth(IntType T) const;
+
+  /// isTypeSigned - Return whether an integer types is signed. Returns true if
+  /// the type is signed; false otherwise.
+  bool isTypeSigned(IntType T) const;
 
   /// getPointerWidth - Return the width of pointers on this target, for the
   /// specified address space.
@@ -185,12 +195,17 @@ public:
   /// For example, SignedShort -> "short".
   static const char *getTypeName(IntType T);
 
+  /// getTypeConstantSuffix - Return the constant suffix for the specified
+  /// integer type enum. For example, SignedLong -> "L".
+  static const char *getTypeConstantSuffix(IntType T);
+
   ///===---- Other target property query methods --------------------------===//
 
   /// getTargetDefines - Appends the target-specific #define values for this
   /// target set to the specified buffer.
   virtual void getTargetDefines(const LangOptions &Opts,
                                 std::vector<char> &DefineBuffer) const = 0;
+
 
   /// getTargetBuiltins - Return information about target-specific builtins for
   /// the current primary target, and info about which builtins are non-portable
@@ -300,12 +315,6 @@ public:
 
   virtual bool useGlobalsForAutomaticVariables() const { return false; }
 
-  /// getUnicodeStringSymbolPrefix - Get the default symbol prefix to
-  /// use for string literals.
-  virtual const char *getUnicodeStringSymbolPrefix() const {
-    return ".str";
-  }
-
   /// getUnicodeStringSection - Return the section to use for unicode
   /// string literals, or 0 if no special section is used.
   virtual const char *getUnicodeStringSection() const {
@@ -317,14 +326,6 @@ public:
   virtual const char *getCFStringSection() const {
     return "__DATA,__cfstring";
   }
-
-  /// getCFStringDataSection - Return the section to use for the
-  /// constant string data associated with a CFString literal, or 0 if
-  /// no special section is used.
-  virtual const char *getCFStringDataSection() const {
-    return "__TEXT,__cstring,cstring_literals";
-  }
-
 
   /// isValidSectionSpecifier - This is an optional hook that targets can
   /// implement to perform semantic checking on attribute((section("foo")))

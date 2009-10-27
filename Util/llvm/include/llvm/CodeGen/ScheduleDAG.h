@@ -23,6 +23,7 @@
 #include "llvm/ADT/PointerIntPair.h"
 
 namespace llvm {
+  class AliasAnalysis;
   class SUnit;
   class MachineConstantPool;
   class MachineFunction;
@@ -490,7 +491,7 @@ namespace llvm {
     /// BuildSchedGraph - Build SUnits and set up their Preds and Succs
     /// to form the scheduling dependency graph.
     ///
-    virtual void BuildSchedGraph() = 0;
+    virtual void BuildSchedGraph(AliasAnalysis *AA) = 0;
 
     /// ComputeLatency - Compute node latency.
     ///
@@ -499,8 +500,8 @@ namespace llvm {
     /// ComputeOperandLatency - Override dependence edge latency using
     /// operand use/def information
     ///
-    virtual void ComputeOperandLatency(SUnit *Def, SUnit *Use,
-                                       SDep& dep) const { };
+    virtual void ComputeOperandLatency(SUnit *, SUnit *,
+                                       SDep&) const { }
 
     /// Schedule - Order nodes according to selected style, filling
     /// in the Sequence member.
@@ -517,21 +518,6 @@ namespace llvm {
     void EmitNoop();
 
     void EmitPhysRegCopy(SUnit *SU, DenseMap<SUnit*, unsigned> &VRBaseMap);
-
-  private:
-    /// EmitLiveInCopy - Emit a copy for a live in physical register. If the
-    /// physical register has only a single copy use, then coalesced the copy
-    /// if possible.
-    void EmitLiveInCopy(MachineBasicBlock *MBB,
-                        MachineBasicBlock::iterator &InsertPos,
-                        unsigned VirtReg, unsigned PhysReg,
-                        const TargetRegisterClass *RC,
-                        DenseMap<MachineInstr*, unsigned> &CopyRegMap);
-
-    /// EmitLiveInCopies - If this is the first basic block in the function,
-    /// and if it has live ins that need to be copied into vregs, emit the
-    /// copies into the top of the block.
-    void EmitLiveInCopies(MachineBasicBlock *MBB);
   };
 
   class SUnitIterator : public std::iterator<std::forward_iterator_tag,

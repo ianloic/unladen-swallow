@@ -81,7 +81,7 @@ static NamingConvention deriveNamingConvention(Selector S) {
   if (!II)
     return NoConvention;
 
-  const char *s = II->getName();
+  const char *s = II->getNameStart();
 
   // A method/function name may contain a prefix.  We don't know it is there,
   // however, until we encounter the first '_'.
@@ -93,12 +93,14 @@ static NamingConvention deriveNamingConvention(Selector S) {
     // Skip '_'.
     if (*s == '_') {
       if (InPossiblePrefix) {
+        // If we already have a convention, return it.  Otherwise, skip
+        // the prefix as if it wasn't there.
+        if (C != NoConvention)
+          break;
+        
         InPossiblePrefix = false;
         AtBeginning = true;
-        // Discard whatever 'convention' we
-        // had already derived since it occurs
-        // in the prefix.
-        C = NoConvention;
+        assert(C == NoConvention);
       }
       ++s;
       continue;
@@ -208,41 +210,16 @@ static inline Selector GetUnarySelector(const char* name, ASTContext& Ctx) {
 // Type querying functions.
 //===----------------------------------------------------------------------===//
 
-static bool hasPrefix(const char* s, const char* prefix) {
-  if (!prefix)
-    return true;
-
-  char c = *s;
-  char cP = *prefix;
-
-  while (c != '\0' && cP != '\0') {
-    if (c != cP) break;
-    c = *(++s);
-    cP = *(++prefix);
-  }
-
-  return cP == '\0';
-}
-
-static bool hasSuffix(const char* s, const char* suffix) {
-  const char* loc = strstr(s, suffix);
-  return loc && strcmp(suffix, loc) == 0;
-}
-
 static bool isRefType(QualType RetTy, const char* prefix,
                       ASTContext* Ctx = 0, const char* name = 0) {
 
   // Recursively walk the typedef stack, allowing typedefs of reference types.
-  while (1) {
-    if (TypedefType* TD = dyn_cast<TypedefType>(RetTy.getTypePtr())) {
-      const char* TDName = TD->getDecl()->getIdentifier()->getName();
-      if (hasPrefix(TDName, prefix) && hasSuffix(TDName, "Ref"))
-        return true;
+  while (TypedefType* TD = dyn_cast<TypedefType>(RetTy.getTypePtr())) {
+    llvm::StringRef TDName = TD->getDecl()->getIdentifier()->getName();
+    if (TDName.startswith(prefix) && TDName.endswith("Ref"))
+      return true;
 
-      RetTy = TD->getDecl()->getUnderlyingType();
-      continue;
-    }
-    break;
+    RetTy = TD->getDecl()->getUnderlyingType();
   }
 
   if (!Ctx || !name)
@@ -254,7 +231,7 @@ static bool isRefType(QualType RetTy, const char* prefix,
     return false;
 
   // Does the name start with the prefix?
-  return hasPrefix(name, prefix);
+  return llvm::StringRef(name).startswith(prefix);
 }
 
 //===----------------------------------------------------------------------===//
@@ -956,7 +933,7 @@ RetainSummary* RetainSummaryManager::getSummary(FunctionDecl* FD) {
     // [PR 3337] Use 'getAs<FunctionType>' to strip away any typedefs on the
     // function's type.
     const FunctionType* FT = FD->getType()->getAs<FunctionType>();
-    const char* FName = FD->getIdentifier()->getName();
+    const char* FName = FD->getIdentifier()->getNameStart();
 
     // Strip away preceding '_'.  Doing this here will effect all the checks
     // down below.
@@ -967,11 +944,17 @@ RetainSummary* RetainSummaryManager::getSummary(FunctionDecl* FD) {
 
     // FIXME: This should all be refactored into a chain of "summary lookup"
     //  filters.
-    assert (ScratchArgs.isEmpty());
-
+    assert(ScratchArgs.isEmpty());
+    
     switch (strlen(FName)) {
       default: break;
-
+      case 14:
+        if (!memcmp(FName, "pthread_create", 14)) {
+          // Part of: <rdar://problem/7299394>.  This will be addressed
+          // better with IPA.
+          S = getPersistentStopSummary();
+        }
+        break;
 
       case 17:
         // Handle: id NSMakeCollectable(CFTypeRef)
@@ -1003,7 +986,7 @@ RetainSummary* RetainSummaryManager::getSummary(FunctionDecl* FD) {
           // Part of <rdar://problem/6961230>. (IOKit)
           // This should be addressed using a API table.
           ScratchArgs = AF.Add(ScratchArgs, 2, DecRef);
-          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing, DoNothing);
+          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing,DoNothing);
         }
         break;
 
@@ -1040,7 +1023,17 @@ RetainSummary* RetainSummaryManager::getSummary(FunctionDecl* FD) {
           // This should be addressed using a API table.  This strcmp is also
           // a little gross, but there is no need to super optimize here.
           ScratchArgs = AF.Add(ScratchArgs, 1, DecRef);
-          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing, DoNothing);
+          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing,
+                                   DoNothing);
+        }
+        else if (!memcmp(FName, "CVPixelBufferCreateWithBytes", 28)) {
+          // FIXES: <rdar://problem/7283567>
+          // Eventually this can be improved by recognizing that the pixel
+          // buffer passed to CVPixelBufferCreateWithBytes is released via
+          // a callback and doing full IPA to make sure this is done correctly.
+          ScratchArgs = AF.Add(ScratchArgs, 7, StopTracking);
+          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing,
+                                   DoNothing);
         }
         break;
 
@@ -1050,6 +1043,19 @@ RetainSummary* RetainSummaryManager::getSummary(FunctionDecl* FD) {
           // This should be addressed using a API table.
           ScratchArgs = AF.Add(ScratchArgs, 2, DecRef);
           S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing, DoNothing);
+        }
+        break;
+        
+      case 34:
+        if (!memcmp(FName, "CVPixelBufferCreateWithPlanarBytes", 34)) {
+          // FIXES: <rdar://problem/7283567>
+          // Eventually this can be improved by recognizing that the pixel
+          // buffer passed to CVPixelBufferCreateWithPlanarBytes is released
+          // via a callback and doing full IPA to make sure this is done
+          // correctly.
+          ScratchArgs = AF.Add(ScratchArgs, 12, StopTracking);
+          S = getPersistentSummary(RetEffect::MakeNoRet(), DoNothing,
+                                   DoNothing);
         }
         break;
     }
@@ -1403,16 +1409,19 @@ void RetainSummaryManager::InitializeClassMethodSummaries() {
   addNSObjectClsMethSummary(GetUnarySelector("allocWithZone", Ctx), Summ);
 
   // Create the [NSAssertionHandler currentHander] summary.
-  addClsMethSummary(&Ctx.Idents.get("NSAssertionHandler"),
-                GetNullarySelector("currentHandler", Ctx),
+  addClassMethSummary("NSAssertionHandler", "currentHandler",
                 getPersistentSummary(RetEffect::MakeNotOwned(RetEffect::ObjC)));
 
   // Create the [NSAutoreleasePool addObject:] summary.
   ScratchArgs = AF.Add(ScratchArgs, 0, Autorelease);
-  addClsMethSummary(&Ctx.Idents.get("NSAutoreleasePool"),
-                    GetUnarySelector("addObject", Ctx),
-                    getPersistentSummary(RetEffect::MakeNoRet(),
-                                         DoNothing, Autorelease));
+  addClassMethSummary("NSAutoreleasePool", "addObject",
+                      getPersistentSummary(RetEffect::MakeNoRet(),
+                                           DoNothing, Autorelease));
+
+  // Create a summary for [NSCursor dragCopyCursor].
+  addClassMethSummary("NSCursor", "dragCopyCursor",
+                      getPersistentSummary(RetEffect::MakeNoRet(), DoNothing,
+                                           DoNothing));
 
   // Create the summaries for [NSObject performSelector...].  We treat
   // these as 'stop tracking' for the arguments because they are often
@@ -2827,14 +2836,13 @@ void CFRefCount::EvalSummary(ExplodedNodeSet& Dst,
           // FIXME: What about layers of ElementRegions?
         }
 
-        // Is the invalidated variable something that we were tracking?
-        SymbolRef Sym = state->getSValAsScalarOrLoc(R).getAsLocSymbol();
-
-        // Remove any existing reference-count binding.
-        if (Sym)
-          state = state->remove<RefBindings>(Sym);
-
-        state = StoreMgr.InvalidateRegion(state, R, *I, Count);
+        StoreManager::InvalidatedSymbols IS;
+        state = StoreMgr.InvalidateRegion(state, R, *I, Count, &IS);
+        for (StoreManager::InvalidatedSymbols::iterator I = IS.begin(),
+             E = IS.end(); I!=E; ++I) {
+          // Remove any existing reference-count binding.
+          state = state->remove<RefBindings>(*I);
+        }
       }
       else {
         // Nuke all other arguments passed by reference.
@@ -3203,10 +3211,8 @@ void CFRefCount::EvalReturn(ExplodedNodeSet& Dst,
           // returned object is suppose to be an Objective-C object, we have
           // a leak (as the caller expects a GC'ed object) because no
           // method should return ownership unless it returns a CF object.
-          X = X ^ RefVal::ErrorGCLeakReturned;
-
-          // Keep this false until this is properly tested.
           hasError = true;
+          X = X ^ RefVal::ErrorGCLeakReturned;
         }
         else if (!RE.isOwned()) {
           // Either we are using GC and the returned object is a CF type

@@ -1429,12 +1429,7 @@ void SelectionDAGLowering::visitJumpTableHeader(JumpTable &JT,
   // can be used as an index into the jump table in a subsequent basic block.
   // This value may be smaller or larger than the target's pointer type, and
   // therefore require extension or truncating.
-  if (VT.bitsGT(TLI.getPointerTy()))
-    SwitchOp = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(),
-                           TLI.getPointerTy(), SUB);
-  else
-    SwitchOp = DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(),
-                           TLI.getPointerTy(), SUB);
+  SwitchOp = DAG.getZExtOrTrunc(SUB, getCurDebugLoc(), TLI.getPointerTy());
 
   unsigned JumpTableReg = FuncInfo.MakeReg(TLI.getPointerTy());
   SDValue CopyTo = DAG.getCopyToReg(getControlRoot(), getCurDebugLoc(),
@@ -1482,13 +1477,7 @@ void SelectionDAGLowering::visitBitTestHeader(BitTestBlock &B) {
                                   SUB, DAG.getConstant(B.Range, VT),
                                   ISD::SETUGT);
 
-  SDValue ShiftOp;
-  if (VT.bitsGT(TLI.getPointerTy()))
-    ShiftOp = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(),
-                          TLI.getPointerTy(), SUB);
-  else
-    ShiftOp = DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(),
-                          TLI.getPointerTy(), SUB);
+  SDValue ShiftOp = DAG.getZExtOrTrunc(SUB, getCurDebugLoc(), TLI.getPointerTy());
 
   B.Reg = FuncInfo.MakeReg(TLI.getPointerTy());
   SDValue CopyTo = DAG.getCopyToReg(getControlRoot(), getCurDebugLoc(),
@@ -2336,12 +2325,7 @@ void SelectionDAGLowering::visitPtrToInt(User &I) {
   SDValue N = getValue(I.getOperand(0));
   EVT SrcVT = N.getValueType();
   EVT DestVT = TLI.getValueType(I.getType());
-  SDValue Result;
-  if (DestVT.bitsLT(SrcVT))
-    Result = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(), DestVT, N);
-  else
-    // Note: ZERO_EXTEND can handle cases where the sizes are equal too
-    Result = DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(), DestVT, N);
+  SDValue Result = DAG.getZExtOrTrunc(N, getCurDebugLoc(), DestVT);
   setValue(&I, Result);
 }
 
@@ -2351,12 +2335,7 @@ void SelectionDAGLowering::visitIntToPtr(User &I) {
   SDValue N = getValue(I.getOperand(0));
   EVT SrcVT = N.getValueType();
   EVT DestVT = TLI.getValueType(I.getType());
-  if (DestVT.bitsLT(SrcVT))
-    setValue(&I, DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(), DestVT, N));
-  else
-    // Note: ZERO_EXTEND can handle cases where the sizes are equal too
-    setValue(&I, DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(),
-                             DestVT, N));
+  setValue(&I, DAG.getZExtOrTrunc(N, getCurDebugLoc(), DestVT));
 }
 
 void SelectionDAGLowering::visitBitCast(User &I) {
@@ -2687,28 +2666,24 @@ void SelectionDAGLowering::visitGetElementPtr(User &I) {
       }
 
       // N = N + Idx * ElementSize;
-      uint64_t ElementSize = TD->getTypeAllocSize(Ty);
+      APInt ElementSize = APInt(TLI.getPointerTy().getSizeInBits(),
+                                TD->getTypeAllocSize(Ty));
       SDValue IdxN = getValue(Idx);
 
       // If the index is smaller or larger than intptr_t, truncate or extend
       // it.
-      if (IdxN.getValueType().bitsLT(N.getValueType()))
-        IdxN = DAG.getNode(ISD::SIGN_EXTEND, getCurDebugLoc(),
-                           N.getValueType(), IdxN);
-      else if (IdxN.getValueType().bitsGT(N.getValueType()))
-        IdxN = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(),
-                           N.getValueType(), IdxN);
+      IdxN = DAG.getSExtOrTrunc(IdxN, getCurDebugLoc(), N.getValueType());
 
       // If this is a multiply by a power of two, turn it into a shl
       // immediately.  This is a very common case.
       if (ElementSize != 1) {
-        if (isPowerOf2_64(ElementSize)) {
-          unsigned Amt = Log2_64(ElementSize);
+        if (ElementSize.isPowerOf2()) {
+          unsigned Amt = ElementSize.logBase2();
           IdxN = DAG.getNode(ISD::SHL, getCurDebugLoc(),
                              N.getValueType(), IdxN,
                              DAG.getConstant(Amt, TLI.getPointerTy()));
         } else {
-          SDValue Scale = DAG.getIntPtrConstant(ElementSize);
+          SDValue Scale = DAG.getConstant(ElementSize, TLI.getPointerTy());
           IdxN = DAG.getNode(ISD::MUL, getCurDebugLoc(),
                              N.getValueType(), IdxN, Scale);
         }
@@ -2742,12 +2717,7 @@ void SelectionDAGLowering::visitAlloca(AllocaInst &I) {
   
   
   EVT IntPtr = TLI.getPointerTy();
-  if (IntPtr.bitsLT(AllocSize.getValueType()))
-    AllocSize = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(),
-                            IntPtr, AllocSize);
-  else if (IntPtr.bitsGT(AllocSize.getValueType()))
-    AllocSize = DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(),
-                            IntPtr, AllocSize);
+  AllocSize = DAG.getZExtOrTrunc(AllocSize, getCurDebugLoc(), IntPtr);
 
   // Handle alignment.  If the requested alignment is less than or equal to
   // the stack alignment, ignore it.  If the size is greater than or equal to
@@ -3941,7 +3911,7 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
         return 0;
       DebugLocTuple PrevLocTpl = MF.getDebugLocTuple(PrevLoc);
       DISubprogram SP(FSI.getSubprogram());
-      DICompileUnit CU(PrevLocTpl.CompileUnit);
+      DICompileUnit CU(PrevLocTpl.Scope);
       unsigned LabelID = DW->RecordInlinedFnStart(SP, CU,
                                                   PrevLocTpl.Line,
                                                   PrevLocTpl.Col);
@@ -3970,7 +3940,7 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
     if (!isValidDebugInfoIntrinsic(DI, CodeGenOpt::None))
       return 0;
 
-    Value *Variable = DI.getVariable();
+    MDNode *Variable = DI.getVariable();
     Value *Address = DI.getAddress();
     if (BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
       Address = BCI->getOperand(0);
@@ -3983,7 +3953,13 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
     if (SI == FuncInfo.StaticAllocaMap.end()) 
       return 0; // VLAs.
     int FI = SI->second;
-    DW->RecordVariable(cast<MDNode>(Variable), FI);
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+    MachineModuleInfo *MMI = DAG.getMachineModuleInfo();
+    if (MMI) 
+      MMI->setVariableDbgInfo(Variable, FI);
+#else
+    DW->RecordVariable(Variable, FI);
+#endif
     return 0;
   }
   case Intrinsic::eh_exception: {
@@ -3998,8 +3974,7 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
     return 0;
   }
 
-  case Intrinsic::eh_selector_i32:
-  case Intrinsic::eh_selector_i64: {
+  case Intrinsic::eh_selector: {
     MachineModuleInfo *MMI = DAG.getMachineModuleInfo();
 
     if (CurMBB->isLandingPad())
@@ -4022,32 +3997,22 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
 
     DAG.setRoot(Op.getValue(1));
 
-    MVT::SimpleValueType VT =
-      (Intrinsic == Intrinsic::eh_selector_i32 ? MVT::i32 : MVT::i64);
-    if (Op.getValueType().getSimpleVT() < VT)
-      Op = DAG.getNode(ISD::SIGN_EXTEND, dl, VT, Op);
-    else if (Op.getValueType().getSimpleVT() < VT)
-      Op = DAG.getNode(ISD::TRUNCATE, dl, VT, Op);
-    
-    setValue(&I, Op);
+    setValue(&I, DAG.getSExtOrTrunc(Op, dl, MVT::i32));
     return 0;
   }
 
-  case Intrinsic::eh_typeid_for_i32:
-  case Intrinsic::eh_typeid_for_i64: {
+  case Intrinsic::eh_typeid_for: {
     MachineModuleInfo *MMI = DAG.getMachineModuleInfo();
-    EVT VT = (Intrinsic == Intrinsic::eh_typeid_for_i32 ?
-                         MVT::i32 : MVT::i64);
 
     if (MMI) {
       // Find the type id for the given typeinfo.
       GlobalVariable *GV = ExtractTypeInfo(I.getOperand(1));
 
       unsigned TypeID = MMI->getTypeIDFor(GV);
-      setValue(&I, DAG.getConstant(TypeID, VT));
+      setValue(&I, DAG.getConstant(TypeID, MVT::i32));
     } else {
       // Return something different to eh_selector.
-      setValue(&I, DAG.getConstant(1, VT));
+      setValue(&I, DAG.getConstant(1, MVT::i32));
     }
 
     return 0;
@@ -4076,13 +4041,8 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
 
   case Intrinsic::eh_dwarf_cfa: {
     EVT VT = getValue(I.getOperand(1)).getValueType();
-    SDValue CfaArg;
-    if (VT.bitsGT(TLI.getPointerTy()))
-      CfaArg = DAG.getNode(ISD::TRUNCATE, dl,
-                           TLI.getPointerTy(), getValue(I.getOperand(1)));
-    else
-      CfaArg = DAG.getNode(ISD::SIGN_EXTEND, dl,
-                           TLI.getPointerTy(), getValue(I.getOperand(1)));
+    SDValue CfaArg = DAG.getSExtOrTrunc(getValue(I.getOperand(1)), dl,
+                                        TLI.getPointerTy());
 
     SDValue Offset = DAG.getNode(ISD::ADD, dl,
                                  TLI.getPointerTy(),
@@ -4242,6 +4202,18 @@ SelectionDAGLowering::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
                                   0, true);
     setValue(&I, Result);
     DAG.setRoot(Result);
+    return 0;
+  }
+  case Intrinsic::objectsize: {
+    // If we don't know by now, we're never going to know.
+    ConstantInt *CI = dyn_cast<ConstantInt>(I.getOperand(2));
+
+    assert(CI && "Non-constant type in __builtin_object_size?");
+
+    if (CI->getZExtValue() < 2)
+      setValue(&I, DAG.getConstant(-1, MVT::i32));
+    else
+      setValue(&I, DAG.getConstant(0, MVT::i32));
     return 0;
   }
   case Intrinsic::var_annotation:
@@ -5524,71 +5496,6 @@ void SelectionDAGLowering::visitInlineAsm(CallSite CS) {
     Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(), MVT::Other,
                         &OutChains[0], OutChains.size());
   DAG.setRoot(Chain);
-}
-
-
-void SelectionDAGLowering::visitMalloc(MallocInst &I) {
-  SDValue Src = getValue(I.getOperand(0));
-
-  // Scale up by the type size in the original i32 type width.  Various
-  // mid-level optimizers may make assumptions about demanded bits etc from the
-  // i32-ness of the optimizer: we do not want to promote to i64 and then
-  // multiply on 64-bit targets.
-  // FIXME: Malloc inst should go away: PR715.
-  uint64_t ElementSize = TD->getTypeAllocSize(I.getType()->getElementType());
-  if (ElementSize != 1) {
-    // Src is always 32-bits, make sure the constant fits.
-    assert(Src.getValueType() == MVT::i32);
-    ElementSize = (uint32_t)ElementSize;
-    Src = DAG.getNode(ISD::MUL, getCurDebugLoc(), Src.getValueType(),
-                      Src, DAG.getConstant(ElementSize, Src.getValueType()));
-  }
-  
-  EVT IntPtr = TLI.getPointerTy();
-
-  if (IntPtr.bitsLT(Src.getValueType()))
-    Src = DAG.getNode(ISD::TRUNCATE, getCurDebugLoc(), IntPtr, Src);
-  else if (IntPtr.bitsGT(Src.getValueType()))
-    Src = DAG.getNode(ISD::ZERO_EXTEND, getCurDebugLoc(), IntPtr, Src);
-
-  TargetLowering::ArgListTy Args;
-  TargetLowering::ArgListEntry Entry;
-  Entry.Node = Src;
-  Entry.Ty = TLI.getTargetData()->getIntPtrType(*DAG.getContext());
-  Args.push_back(Entry);
-
-  bool isTailCall = PerformTailCallOpt &&
-                    isInTailCallPosition(&I, Attribute::None, TLI);
-  std::pair<SDValue,SDValue> Result =
-    TLI.LowerCallTo(getRoot(), I.getType(), false, false, false, false,
-                    0, CallingConv::C, isTailCall,
-                    /*isReturnValueUsed=*/true,
-                    DAG.getExternalSymbol("malloc", IntPtr),
-                    Args, DAG, getCurDebugLoc());
-  if (Result.first.getNode())
-    setValue(&I, Result.first);  // Pointers always fit in registers
-  if (Result.second.getNode())
-    DAG.setRoot(Result.second);
-}
-
-void SelectionDAGLowering::visitFree(FreeInst &I) {
-  TargetLowering::ArgListTy Args;
-  TargetLowering::ArgListEntry Entry;
-  Entry.Node = getValue(I.getOperand(0));
-  Entry.Ty = TLI.getTargetData()->getIntPtrType(*DAG.getContext());
-  Args.push_back(Entry);
-  EVT IntPtr = TLI.getPointerTy();
-  bool isTailCall = PerformTailCallOpt &&
-                    isInTailCallPosition(&I, Attribute::None, TLI);
-  std::pair<SDValue,SDValue> Result =
-    TLI.LowerCallTo(getRoot(), Type::getVoidTy(*DAG.getContext()),
-                    false, false, false, false,
-                    0, CallingConv::C, isTailCall,
-                    /*isReturnValueUsed=*/true,
-                    DAG.getExternalSymbol("free", IntPtr), Args, DAG,
-                    getCurDebugLoc());
-  if (Result.second.getNode())
-    DAG.setRoot(Result.second);
 }
 
 void SelectionDAGLowering::visitVAStart(CallInst &I) {

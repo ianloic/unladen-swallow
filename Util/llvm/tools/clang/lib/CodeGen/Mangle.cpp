@@ -51,8 +51,8 @@ namespace {
                               int64_t nv_r, int64_t v_r);
     void mangleGuardVariable(const VarDecl *D);
 
-    void mangleCXXVtable(QualType Type);
-    void mangleCXXRtti(QualType Type);
+    void mangleCXXVtable(const CXXRecordDecl *RD);
+    void mangleCXXRtti(const CXXRecordDecl *RD);
     void mangleCXXCtor(const CXXConstructorDecl *D, CXXCtorType Type);
     void mangleCXXDtor(const CXXDestructorDecl *D, CXXDtorType Type);
 
@@ -198,16 +198,16 @@ void CXXNameMangler::mangleCXXDtor(const CXXDestructorDecl *D,
   mangle(D);
 }
 
-void CXXNameMangler::mangleCXXVtable(QualType T) {
+void CXXNameMangler::mangleCXXVtable(const CXXRecordDecl *RD) {
   // <special-name> ::= TV <type>  # virtual table
   Out << "_ZTV";
-  mangleType(T);
+  mangleName(RD);
 }
 
-void CXXNameMangler::mangleCXXRtti(QualType T) {
+void CXXNameMangler::mangleCXXRtti(const CXXRecordDecl *RD) {
   // <special-name> ::= TI <type>  # typeinfo structure
   Out << "_ZTI";
-  mangleType(T);
+  mangleName(RD);
 }
 
 void CXXNameMangler::mangleGuardVariable(const VarDecl *D) {
@@ -248,7 +248,12 @@ void CXXNameMangler::mangleFunctionEncoding(const FunctionDecl *FD) {
     FD = PrimaryTemplate->getTemplatedDecl();
   }
 
-  mangleBareFunctionType(FD->getType()->getAs<FunctionType>(), MangleReturnType);
+  // Do the canonicalization out here because parameter types can
+  // undergo additional canonicalization (e.g. array decay).
+  FunctionType *FT = cast<FunctionType>(Context.getASTContext()
+                                          .getCanonicalType(FD->getType()));
+
+  mangleBareFunctionType(FT, MangleReturnType);
 }
 
 static bool isStdNamespace(const DeclContext *DC) {
@@ -705,7 +710,7 @@ void CXXNameMangler::mangleType(QualType T) {
   // Only operate on the canonical type!
   T = Context.getASTContext().getCanonicalType(T);
 
-  bool IsSubstitutable = !isa<BuiltinType>(T);
+  bool IsSubstitutable = T.hasQualifiers() || !isa<BuiltinType>(T);
   if (IsSubstitutable && mangleSubstitution(T))
     return;
 
@@ -1236,10 +1241,7 @@ static bool isCharSpecialization(QualType T, const char *Name) {
   if (!isCharType(TemplateArgs[0].getAsType()))
     return false;
   
-  if (strcmp(SD->getIdentifier()->getName(), Name) != 0)
-    return false;
-
-  return true;
+  return SD->getIdentifier()->getName() == Name;
 }
 
 bool CXXNameMangler::mangleStandardSubstitution(const NamedDecl *ND) {
@@ -1289,6 +1291,24 @@ bool CXXNameMangler::mangleStandardSubstitution(const NamedDecl *ND) {
         return false;
 
       Out << "Ss";
+      return true;
+    }
+    
+    //    <substitution> ::= So # ::std::basic_ostream<char,  
+    //                            ::std::char_traits<char> >
+    if (SD->getIdentifier()->isStr("basic_ostream")) {
+      const TemplateArgumentList &TemplateArgs = SD->getTemplateArgs();
+      
+      if (TemplateArgs.size() != 2)
+        return false;
+      
+      if (!isCharType(TemplateArgs[0].getAsType()))
+        return false;
+      
+      if (!isCharSpecialization(TemplateArgs[1].getAsType(), "char_traits"))
+        return false;
+
+      Out << "So";
       return true;
     }
   }
@@ -1396,18 +1416,18 @@ namespace clang {
     os.flush();
   }
 
-  void mangleCXXVtable(MangleContext &Context, QualType Type,
+  void mangleCXXVtable(MangleContext &Context, const CXXRecordDecl *RD,
                        llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
-    Mangler.mangleCXXVtable(Type);
+    Mangler.mangleCXXVtable(RD);
 
     os.flush();
   }
 
-  void mangleCXXRtti(MangleContext &Context, QualType Type,
+  void mangleCXXRtti(MangleContext &Context, const CXXRecordDecl *RD,
                      llvm::raw_ostream &os) {
     CXXNameMangler Mangler(Context, os);
-    Mangler.mangleCXXRtti(Type);
+    Mangler.mangleCXXRtti(RD);
 
     os.flush();
   }

@@ -16,6 +16,7 @@
 
 #include "clang/Lex/DirectoryLookup.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include <string>
 #include <vector>
 
@@ -58,7 +59,15 @@ public:
 
   /// AddGnuCPlusPlusIncludePaths - Add the necessary paths to suport a gnu
   ///  libstdc++.
-  void AddGnuCPlusPlusIncludePaths(std::string base, std::string arch);
+  void AddGnuCPlusPlusIncludePaths(const std::string &Base, const char *Dir32,
+                                   const char *Dir64,
+                                   const llvm::Triple &triple);
+
+  /// AddMinGWCPlusPlusIncludePaths - Add the necessary paths to suport a MinGW
+  ///  libstdc++.
+  void AddMinGWCPlusPlusIncludePaths(const std::string &Base,
+                                     const char *Arch,
+                                     const char *Version);
 
   /// AddDefaultEnvVarPaths - Adds list of paths from default environment
   ///  variables such as CPATH.
@@ -66,7 +75,8 @@ public:
 
   /// AddDefaultSystemIncludePaths - Adds the default system include paths so
   ///  that e.g. stdio.h is found.
-  void AddDefaultSystemIncludePaths(const LangOptions &Lang);
+  void AddDefaultSystemIncludePaths(const LangOptions &Lang,
+                                    const llvm::Triple &triple);
 
   /// Realize - Merges all search path lists into one list and send it to
   /// HeaderSearch.

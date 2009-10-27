@@ -225,16 +225,6 @@ extern const PassInfo *const LoopSimplifyID;
 
 //===----------------------------------------------------------------------===//
 //
-// LowerAllocations - Turn malloc and free instructions into @malloc and @free
-// calls.
-//
-//   AU.addRequiredID(LowerAllocationsID);
-//
-Pass *createLowerAllocationsPass(bool LowerMallocArgToInteger = false);
-extern const PassInfo *const LowerAllocationsID;
-
-//===----------------------------------------------------------------------===//
-//
 // TailCallElimination - This pass eliminates call instructions to the current
 // function which occur immediately before return instructions.
 //
@@ -341,6 +331,18 @@ FunctionPass *createSSIPass();
 // Information form.
 //
 FunctionPass *createSSIEverythingPass();
+
+//===----------------------------------------------------------------------===//
+//
+// GEPSplitter - Split complex GEPs into simple ones
+//
+FunctionPass *createGEPSplitterPass();
+
+//===----------------------------------------------------------------------===//
+//
+// SCCVN - Aggressively eliminate redundant scalar values
+//
+FunctionPass *createSCCVNPass();
 
 } // End llvm namespace
 

@@ -77,8 +77,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   case Builtin::BI__builtin_va_start:
   case Builtin::BI__builtin_va_end: {
     Value *ArgValue = EmitVAListRef(E->getArg(0));
-    const llvm::Type *DestType =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *DestType = llvm::Type::getInt8PtrTy(VMContext);
     if (ArgValue->getType() != DestType)
       ArgValue = Builder.CreateBitCast(ArgValue, DestType,
                                        ArgValue->getName().data());
@@ -91,8 +90,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *DstPtr = EmitVAListRef(E->getArg(0));
     Value *SrcPtr = EmitVAListRef(E->getArg(1));
 
-    const llvm::Type *Type =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *Type = llvm::Type::getInt8PtrTy(VMContext);
 
     DstPtr = Builder.CreateBitCast(DstPtr, Type);
     SrcPtr = Builder.CreateBitCast(SrcPtr, Type);
@@ -201,6 +199,16 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F, ArgValue, "tmp"));
   }
   case Builtin::BI__builtin_object_size: {
+    // FIXME: We're awaiting the llvm intrincis.
+#if 0
+    // We pass this builtin onto the optimizer so that it can
+    // figure out the object size in more complex cases.
+    Value *F = CGM.getIntrinsic(Intrinsic::objectsize, 0, 0);
+    Builder.CreateCall2(F,
+                        EmitScalarExpr(E->getArg(0)));
+                        EmitScalarExpr(E->getArg(1)));
+    return RValue::get(Address);
+#else
     // FIXME: Implement. For now we just always fail and pretend we
     // don't know the object size.
     llvm::APSInt TypeArg = E->getArg(1)->EvaluateAsInt(CGM.getContext());
@@ -209,6 +217,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     bool UseMinimum = TypeArg.getZExtValue() & 2;
     return RValue::get(
       llvm::ConstantInt::get(ResType, UseMinimum ? 0 : -1LL));
+#endif
   }
   case Builtin::BI__builtin_prefetch: {
     Value *Locality, *RW, *Address = EmitScalarExpr(E->getArg(0));
@@ -349,16 +358,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Builder.CreateStore(FrameAddr, Buf);
     // Call the setjmp intrinsic
     Value *F = CGM.getIntrinsic(Intrinsic::eh_sjlj_setjmp, 0, 0);
-    const llvm::Type *DestType =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *DestType = llvm::Type::getInt8PtrTy(VMContext);
     Buf = Builder.CreateBitCast(Buf, DestType);
     return RValue::get(Builder.CreateCall(F, Buf));
   }
   case Builtin::BI__builtin_longjmp: {
     Value *F = CGM.getIntrinsic(Intrinsic::eh_sjlj_longjmp, 0, 0);
     Value *Buf = EmitScalarExpr(E->getArg(0));
-    const llvm::Type *DestType =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *DestType = llvm::Type::getInt8PtrTy(VMContext);
     Buf = Builder.CreateBitCast(Buf, DestType);
     return RValue::get(Builder.CreateCall(F, Buf));
   }
@@ -760,7 +767,7 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
     return Builder.CreateCall(F, &Ops[0], &Ops[0] + Ops.size(), "cmpss");
   }
   case X86::BI__builtin_ia32_ldmxcsr: {
-    llvm::Type *PtrTy = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *PtrTy = llvm::Type::getInt8PtrTy(VMContext);
     Value *One = llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 1);
     Value *Tmp = Builder.CreateAlloca(llvm::Type::getInt32Ty(VMContext), One, "tmp");
     Builder.CreateStore(Ops[0], Tmp);
@@ -768,7 +775,7 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
                               Builder.CreateBitCast(Tmp, PtrTy));
   }
   case X86::BI__builtin_ia32_stmxcsr: {
-    llvm::Type *PtrTy = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::Type *PtrTy = llvm::Type::getInt8PtrTy(VMContext);
     Value *One = llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 1);
     Value *Tmp = Builder.CreateAlloca(llvm::Type::getInt32Ty(VMContext), One, "tmp");
     One = Builder.CreateCall(CGM.getIntrinsic(Intrinsic::x86_sse_stmxcsr),

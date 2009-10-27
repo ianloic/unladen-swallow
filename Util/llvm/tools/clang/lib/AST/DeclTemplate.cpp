@@ -1,4 +1,4 @@
-//===--- DeclCXX.cpp - C++ Declaration AST Node Implementation ------------===//
+//===--- DeclTemplate.cpp - Template Declaration AST Node Implementation --===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -299,7 +299,7 @@ void TemplateArgumentListBuilder::Append(const TemplateArgument& Arg) {
   switch (Arg.getKind()) {
     default: break;
     case TemplateArgument::Type:
-      assert(Arg.getAsType()->isCanonical() && "Type must be canonical!");
+      assert(Arg.getAsType().isCanonical() && "Type must be canonical!");
       break;
   }
 

@@ -325,7 +325,7 @@ public:
   /// getAllocatableSet - Returns a bitset indexed by register number
   /// indicating if a register is allocatable or not. If a register class is
   /// specified, returns the subset for the class.
-  BitVector getAllocatableSet(MachineFunction &MF,
+  BitVector getAllocatableSet(const MachineFunction &MF,
                               const TargetRegisterClass *RC = NULL) const;
 
   const TargetRegisterDesc &operator[](unsigned RegNo) const {
@@ -561,6 +561,12 @@ public:
     return false;
   }
 
+  /// requiresFrameIndexScavenging - returns true if the target requires post
+  /// PEI scavenging of registers for materializing frame index constants.
+  virtual bool requiresFrameIndexScavenging(const MachineFunction &MF) const {
+    return false;
+  }
+
   /// hasFP - Return true if the specified function should have a dedicated
   /// frame pointer register. For most targets this is true only if the function
   /// has variable sized allocas or if frame pointer elimination is disabled.
@@ -635,23 +641,16 @@ public:
   virtual void processFunctionBeforeFrameFinalized(MachineFunction &MF) const {
   }
 
-  /// saveScavengerRegister - Save the register so it can be used by the
-  /// register scavenger. Return true if the register was saved, false
-  /// otherwise. If this function does not save the register, the scavenger
+  /// saveScavengerRegister - Spill the register so it can be used by the
+  /// register scavenger. Return true if the register was spilled, false
+  /// otherwise. If this function does not spill the register, the scavenger
   /// will instead spill it to the emergency spill slot.
   ///
   virtual bool saveScavengerRegister(MachineBasicBlock &MBB,
                                      MachineBasicBlock::iterator I,
+                                     MachineBasicBlock::iterator &UseMI,
                                      const TargetRegisterClass *RC,
                                      unsigned Reg) const {return false;}
-
-  /// restoreScavengerRegister - Restore a register saved by
-  /// saveScavengerRegister().
-  ///
-  virtual void restoreScavengerRegister(MachineBasicBlock &MBB,
-                                        MachineBasicBlock::iterator I,
-                                        const TargetRegisterClass *RC,
-                                        unsigned Reg) const {}
 
   /// eliminateFrameIndex - This method must be overriden to eliminate abstract
   /// frame indices from instructions which may use them.  The instruction

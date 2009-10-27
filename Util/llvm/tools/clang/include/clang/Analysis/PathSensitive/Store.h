@@ -32,6 +32,7 @@ class Stmt;
 class Expr;
 class ObjCIvarDecl;
 class SubRegionMap;
+class StackFrameContext;
 
 class StoreManager {
 protected:
@@ -88,23 +89,17 @@ public:
   //   caller's responsibility to 'delete' the returned map.
   virtual SubRegionMap *getSubRegionMap(const GRState *state) = 0;
 
-  virtual SVal getLValueVar(const GRState *ST, const VarDecl *VD,
-                            const LocationContext *LC) = 0;
+  virtual SVal getLValueVar(const VarDecl *VD, const LocationContext *LC) = 0;
 
-  virtual SVal getLValueString(const GRState *state,
-                               const StringLiteral* sl) = 0;
+  virtual SVal getLValueString(const StringLiteral* sl) = 0;
 
-  virtual SVal getLValueCompoundLiteral(const GRState *state,
-                                        const CompoundLiteralExpr* cl) = 0;
+  virtual SVal getLValueCompoundLiteral(const CompoundLiteralExpr* cl) = 0;
 
-  virtual SVal getLValueIvar(const GRState *state, const ObjCIvarDecl* decl,
-                             SVal base) = 0;
+  virtual SVal getLValueIvar(const ObjCIvarDecl* decl, SVal base) = 0;
 
-  virtual SVal getLValueField(const GRState *state, SVal base,
-                              const FieldDecl* D) = 0;
+  virtual SVal getLValueField(const FieldDecl* D, SVal Base) = 0;
 
-  virtual SVal getLValueElement(const GRState *state, QualType elementType,
-                                SVal base, SVal offset) = 0;
+  virtual SVal getLValueElement(QualType elementType, SVal offset, SVal Base)=0;
 
   // FIXME: Make out-of-line.
   virtual SVal getSizeInElements(const GRState *state, const MemRegion *region){
@@ -127,8 +122,7 @@ public:
   /// CastRegion - Used by GRExprEngine::VisitCast to handle casts from
   ///  a MemRegion* to a specific location type.  'R' is the region being
   ///  casted and 'CastToTy' the result type of the cast.
-  CastResult CastRegion(const GRState *state, const MemRegion *region,
-                        QualType CastToTy);
+  const MemRegion *CastRegion(const MemRegion *region, QualType CastToTy);
 
   /// EvalBinOp - Perform pointer arithmetic.
   virtual SVal EvalBinOp(const GRState *state, BinaryOperator::Opcode Op,
@@ -147,9 +141,12 @@ public:
                                             const VarDecl *VD,
                                             const LocationContext *LC) = 0;
 
+  typedef llvm::DenseSet<SymbolRef> InvalidatedSymbols;
+  
   virtual const GRState *InvalidateRegion(const GRState *state,
                                           const MemRegion *R,
-                                          const Expr *E, unsigned Count) = 0;
+                                          const Expr *E, unsigned Count,
+                                          InvalidatedSymbols *IS) = 0;
 
   // FIXME: Make out-of-line.
   virtual const GRState *setExtent(const GRState *state,
@@ -157,10 +154,10 @@ public:
     return state;
   }
 
-  // FIXME: Make out-of-line.
-  virtual const GRState *setDefaultValue(const GRState *state,
-                                          const MemRegion *region,
-                                          SVal val) {
+  /// EnterStackFrame - Let the StoreManager to do something when execution
+  /// engine is about to execute into a callee.
+  virtual const GRState *EnterStackFrame(const GRState *state,
+                                         const StackFrameContext *frame) {
     return state;
   }
 
@@ -178,9 +175,8 @@ public:
   virtual void iterBindings(Store store, BindingsHandler& f) = 0;
 
 protected:
-  CastResult MakeElementRegion(const GRState *state, const MemRegion *region,
-                               QualType pointeeTy, QualType castToTy,
-                               uint64_t index = 0);
+  const MemRegion *MakeElementRegion(const MemRegion *Base,
+                                     QualType pointeeTy, uint64_t index = 0);
 
   /// CastRetrievedVal - Used by subclasses of StoreManager to implement
   ///  implicit casts that arise from loads from regions that are reinterpreted

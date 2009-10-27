@@ -34,6 +34,7 @@ namespace llvm {
   class LLVMContext;
   class Module;
   class SwitchInst;
+  class Twine;
   class Value;
 }
 
@@ -189,10 +190,12 @@ private:
   /// labels inside getIDForAddrOfLabel().
   std::map<const LabelStmt*, unsigned> LabelIDs;
 
-  /// IndirectSwitches - Record the list of switches for indirect
-  /// gotos. Emission of the actual switching code needs to be delayed until all
-  /// AddrLabelExprs have been seen.
-  std::vector<llvm::SwitchInst*> IndirectSwitches;
+  /// IndirectGotoSwitch - The first time an indirect goto is seen we create a
+  /// block with the switch for the indirect gotos.  Every time we see the
+  /// address of a label taken, we add the label to the indirect goto.  Every
+  /// subsequent indirect goto is codegen'd as a jump to the
+  /// IndirectGotoSwitch's basic block.
+  llvm::SwitchInst *IndirectGotoSwitch;
 
   /// LocalDeclMap - This keeps track of the LLVM allocas or globals for local C
   /// decls.
@@ -353,6 +356,7 @@ public:
   void BlockForwardSelf();
   llvm::Value *LoadBlockStruct();
 
+  uint64_t AllocateBlockDecl(const BlockDeclRefExpr *E);
   llvm::Value *GetAddrOfBlockDecl(const BlockDeclRefExpr *E);
   const llvm::Type *BuildByRefType(const ValueDecl *D);
 
@@ -506,7 +510,7 @@ public:
   /// CreateTempAlloca - This creates a alloca and inserts it into the entry
   /// block.
   llvm::AllocaInst *CreateTempAlloca(const llvm::Type *Ty,
-                                     const char *Name = "tmp");
+                                     const llvm::Twine &Name = "tmp");
 
   /// EvaluateExprAsBool - Perform the usual unary conversions on the specified
   /// expression and compare the result against zero, returning an Int1Ty value.
@@ -555,6 +559,7 @@ public:
   static unsigned getAccessedFieldNo(unsigned Idx, const llvm::Constant *Elts);
 
   unsigned GetIDForAddrOfLabel(const LabelStmt *L);
+  llvm::BasicBlock *GetIndirectGotoBlock();
 
   /// EmitMemSetToZero - Generate code to memset a value of the given type to 0.
   void EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty);
@@ -813,7 +818,9 @@ public:
   LValue EmitCompoundLiteralLValue(const CompoundLiteralExpr *E);
   LValue EmitConditionalOperatorLValue(const ConditionalOperator *E);
   LValue EmitCastLValue(const CastExpr *E);
-
+  LValue EmitNullInitializationLValue(const CXXZeroInitValueExpr *E);
+  LValue EmitPointerToDataMemberLValue(const DeclRefExpr *E);
+  
   llvm::Value *EmitIvarOffset(const ObjCInterfaceDecl *Interface,
                               const ObjCIvarDecl *Ivar);
   LValue EmitLValueForField(llvm::Value* Base, FieldDecl* Field,
@@ -838,7 +845,8 @@ public:
   LValue EmitObjCKVCRefLValue(const ObjCImplicitSetterGetterRefExpr *E);
   LValue EmitObjCSuperExprLValue(const ObjCSuperExpr *E);
   LValue EmitStmtExprLValue(const StmtExpr *E);
-
+  LValue EmitPointerToDataMemberBinaryExpr(const BinaryOperator *E);
+  
   //===--------------------------------------------------------------------===//
   //                         Scalar Expression Emission
   //===--------------------------------------------------------------------===//
@@ -1013,10 +1021,6 @@ public:
   void EmitBranchOnBoolExpr(const Expr *Cond, llvm::BasicBlock *TrueBlock,
                             llvm::BasicBlock *FalseBlock);
 private:
-
-  /// EmitIndirectSwitches - Emit code for all of the switch
-  /// instructions in IndirectSwitches.
-  void EmitIndirectSwitches();
 
   void EmitReturnOfRValue(RValue RV, QualType Ty);
 

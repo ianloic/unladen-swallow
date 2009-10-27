@@ -127,8 +127,6 @@ const char *Instruction::getOpcodeName(unsigned OpCode) {
   case Xor: return "xor";
 
   // Memory instructions...
-  case Malloc:        return "malloc";
-  case Free:          return "free";
   case Alloca:        return "alloca";
   case Load:          return "load";
   case Store:         return "store";
@@ -304,16 +302,43 @@ bool Instruction::isUsedOutsideOfBlock(const BasicBlock *BB) const {
   return false;
 }
 
+// Code here matches isFreeCall from MallocFreeHelper, which is not in VMCore.
+static bool isFreeCall(const Value* I) {
+  const CallInst *CI = dyn_cast<CallInst>(I);
+  if (!CI)
+    return false;
+
+  const Module* M = CI->getParent()->getParent()->getParent();
+  Function *FreeFunc = M->getFunction("free");
+
+  if (CI->getOperand(0) != FreeFunc)
+    return false;
+
+  // Check free prototype.
+  // FIXME: workaround for PR5130, this will be obsolete when a nobuiltin 
+  // attribute will exist.
+  const FunctionType *FTy = FreeFunc->getFunctionType();
+  if (FTy->getReturnType() != Type::getVoidTy(M->getContext()))
+    return false;
+  if (FTy->getNumParams() != 1)
+    return false;
+  if (FTy->param_begin()->get() != Type::getInt8PtrTy(M->getContext()))
+    return false;
+
+  return true;
+}
+
 /// mayReadFromMemory - Return true if this instruction may read memory.
 ///
 bool Instruction::mayReadFromMemory() const {
   switch (getOpcode()) {
   default: return false;
-  case Instruction::Free:
   case Instruction::VAArg:
   case Instruction::Load:
     return true;
   case Instruction::Call:
+    if (isFreeCall(this))
+      return true;
     return !cast<CallInst>(this)->doesNotAccessMemory();
   case Instruction::Invoke:
     return !cast<InvokeInst>(this)->doesNotAccessMemory();
@@ -327,11 +352,12 @@ bool Instruction::mayReadFromMemory() const {
 bool Instruction::mayWriteToMemory() const {
   switch (getOpcode()) {
   default: return false;
-  case Instruction::Free:
   case Instruction::Store:
   case Instruction::VAArg:
     return true;
   case Instruction::Call:
+    if (isFreeCall(this))
+      return true;
     return !cast<CallInst>(this)->onlyReadsMemory();
   case Instruction::Invoke:
     return !cast<InvokeInst>(this)->onlyReadsMemory();
@@ -381,7 +407,7 @@ bool Instruction::isCommutative(unsigned op) {
   }
 }
 
-// Code here matches isMalloc from MallocHelper, which is not in VMCore.
+// Code here matches isMalloc from MallocFreeHelper, which is not in VMCore.
 static bool isMalloc(const Value* I) {
   const CallInst *CI = dyn_cast<CallInst>(I);
   if (!CI) {
@@ -399,7 +425,19 @@ static bool isMalloc(const Value* I) {
   if (CI->getOperand(0) != MallocFunc)
     return false;
 
-  return true;
+  // Check malloc prototype.
+  // FIXME: workaround for PR5130, this will be obsolete when a nobuiltin 
+  // attribute will exist.
+  const FunctionType *FTy = cast<Function>(MallocFunc)->getFunctionType();
+  if (FTy->getNumParams() != 1)
+    return false;
+  if (IntegerType *ITy = dyn_cast<IntegerType>(FTy->param_begin()->get())) {
+    if (ITy->getBitWidth() != 32 && ITy->getBitWidth() != 64)
+      return false;
+    return true;
+  }
+
+  return false;
 }
 
 bool Instruction::isSafeToSpeculativelyExecute() const {
@@ -427,7 +465,7 @@ bool Instruction::isSafeToSpeculativelyExecute() const {
   case Load: {
     if (cast<LoadInst>(this)->isVolatile())
       return false;
-    if (isa<AllocationInst>(getOperand(0)) || isMalloc(getOperand(0)))
+    if (isa<AllocaInst>(getOperand(0)) || isMalloc(getOperand(0)))
       return true;
     if (GlobalVariable *GV = dyn_cast<GlobalVariable>(getOperand(0)))
       return !GV->hasExternalWeakLinkage();
@@ -442,11 +480,9 @@ bool Instruction::isSafeToSpeculativelyExecute() const {
                   // overflow-checking arithmetic, etc.)
   case VAArg:
   case Alloca:
-  case Malloc:
   case Invoke:
   case PHI:
   case Store:
-  case Free:
   case Ret:
   case Br:
   case Switch:

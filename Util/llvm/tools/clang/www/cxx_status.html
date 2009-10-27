@@ -24,7 +24,7 @@
 <!--*************************************************************************-->
 <h1>C++ Support in Clang</h1>
 <!--*************************************************************************-->
-<p>Last updated: $Date: 2009-10-02 05:19:16 -0700 (Fri, 02 Oct 2009) $</p>
+<p>Last updated: $Date: 2009-10-20 14:10:15 -0700 (Tue, 20 Oct 2009) $</p>
 
 <p>
 This page tracks the status of C++ support in Clang.<br>
@@ -534,8 +534,8 @@ welcome!</p>
   <td>5 [expr]</td>
   <td class="na">N/A</td>
   <td class="na">N/A</td>
-  <td class="complete" align="center"></td>
-  <td></td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="na">N/A</td>
   <td></td>
 </tr>
 <tr>
@@ -1659,9 +1659,8 @@ welcome!</p>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;13.3.3 [over.match.best]</td>
   <td class="na" align="center">N/A</td>  
   <td class="advanced" align="center"></td>
-  <td class="medium" align="center"></td>
+  <td class="advanced" align="center"></td>
   <td class="na" align="center">N/A</td>  
-  <td>Missing support for member pointers</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;13.3.3.1 [over.best.ics]</td>
@@ -1789,8 +1788,7 @@ welcome!</p>
   <td class="advanced" align="center"></td>
   <td class="medium" align="center"></td>
   <td class="na" align="center">N/A</td>  
-  <td>Missing support for the ->* operator (p11, p16) and support for
-  the ternary operator (p24, p25).</td>
+  <td>Missing support for the ternary operator (p24, p25).</td>
 </tr>
 <tr>
   <td>14 [temp]</td>
@@ -2085,11 +2083,11 @@ welcome!</p>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;&nbsp;&nbsp;14.7.3 [temp.expl.spec]</td>
+  <td class="complete" align="center">&#x2713;</td>
   <td class="advanced" align="center"></td>
-  <td class="medium" align="center"></td>
-  <td class="medium" align="center"></td>
-  <td class="broken" align="center"></td>
-  <td>O</td>
+  <td class="complete" align="center">&#x2713;</td>
+  <td class="complete" align="center"></td>
+  <td>ASTs do not carry enough information to reproduce source code accurately</td>
 </tr>
 <tr>
   <td>&nbsp;&nbsp;14.8 [temp.fct.spec]</td>
@@ -2190,9 +2188,9 @@ welcome!</p>
 <tr>
   <td>&nbsp;&nbsp;15.4 [except.spec]</td>
   <td class="complete" align="center"></td>
-  <td></td>
-  <td></td>
-  <td></td>
+  <td class="complete" align="center"></td>
+  <td class="complete" align="center"></td>
+  <td class="broken"></td>
   <td></td>
 </tr>
 <tr>

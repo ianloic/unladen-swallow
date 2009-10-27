@@ -54,3 +54,36 @@ void f3(A *a, A &ar) {
   (a->*pa)();
   (ar.*pa)();
 }
+
+// PR5177
+namespace PR5177 {
+  struct A {
+   bool foo(int*) const;
+  } a;
+
+  struct B1 {
+   bool (A::*pmf)(int*) const;
+   const A* pa;
+
+   B1() : pmf(&A::foo), pa(&a) {}
+   bool operator()() const { return (pa->*pmf)(new int); }
+  };
+
+  void bar(B1 b2) { while (b2()) ; }
+}
+
+// PR5138
+namespace PR5138 {
+  struct foo {
+      virtual void bar(foo *);
+  };
+
+  extern "C" {
+    void baz(foo *);
+  }
+  
+  void (foo::*ptr1)(void *) = (void (foo::*)(void *))&foo::bar;
+  void (*ptr2)(void *) = (void (*)(void *))&baz;
+
+  void (foo::*ptr3)(void) = (void (foo::*)(void))&foo::bar;
+}

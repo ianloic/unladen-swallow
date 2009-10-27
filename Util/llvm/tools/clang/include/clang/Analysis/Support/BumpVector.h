@@ -21,14 +21,29 @@
 
 #include "llvm/Support/type_traits.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/ADT/PointerIntPair.h"
 #include <algorithm>
 
 namespace clang {
   
 class BumpVectorContext {
-  llvm::BumpPtrAllocator Alloc;
+  llvm::PointerIntPair<llvm::BumpPtrAllocator*, 1> Alloc;
 public:
-  llvm::BumpPtrAllocator &getAllocator() { return Alloc; }
+  /// Construct a new BumpVectorContext that creates a new BumpPtrAllocator
+  /// and destroys it when the BumpVectorContext object is destroyed.
+  BumpVectorContext() : Alloc(new llvm::BumpPtrAllocator(), 1) {}
+  
+  /// Construct a new BumpVectorContext that reuses an existing
+  /// BumpPtrAllocator.  This BumpPtrAllocator is not destroyed when the
+  /// BumpVectorContext object is destroyed.
+  BumpVectorContext(llvm::BumpPtrAllocator &A) : Alloc(&A, 0) {}
+  
+  ~BumpVectorContext() {
+    if (Alloc.getInt())
+      delete Alloc.getPointer();
+  }
+  
+  llvm::BumpPtrAllocator &getAllocator() { return *Alloc.getPointer(); }
 };
   
 template<typename T>

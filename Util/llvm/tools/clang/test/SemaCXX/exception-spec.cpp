@@ -24,7 +24,7 @@ void (**j)() throw(int); // expected-error {{not allowed beyond a single}}
 // Pointer to function returning pointer to pointer to function with spec
 void (**(*h())())() throw(int); // expected-error {{not allowed beyond a single}}
 
-struct Incomplete;
+struct Incomplete; // expected-note 3 {{forward declaration}}
 
 // Exception spec must not have incomplete types, or pointers to them, except
 // void.
@@ -61,6 +61,10 @@ void r7() throw(float); // expected-error {{exception specification in declarati
 // Top-level const doesn't matter.
 void r8() throw(int);
 void r8() throw(const int);
+
+// Multiple appearances don't matter.
+void r9() throw(int, int);
+void r9() throw(int, int);
 
 struct A
 {
@@ -134,31 +138,53 @@ void fnptrs()
 {
   // Assignment and initialization of function pointers.
   void (*t1)() throw() = &s1;    // valid
-  t1 = &s2;                      // invalid
-  t1 = &s3;                      // invalid
-  void (&t2)() throw() = s2;     // invalid
+  t1 = &s2;                      // expected-error {{not superset}} expected-error {{incompatible type}}
+  t1 = &s3;                      // expected-error {{not superset}} expected-error {{incompatible type}}
+  void (&t2)() throw() = s2;     // expected-error {{not superset}}
   void (*t3)() throw(int) = &s2; // valid
   void (*t4)() throw(A) = &s1;   // valid
   t4 = &s3;                      // valid
   t4 = &s4;                      // valid
-  t4 = &s5;                      // invalid
+  t4 = &s5;                      // expected-error {{not superset}} expected-error {{incompatible type}}
   void (*t5)() = &s1;            // valid
   t5 = &s2;                      // valid
   t5 = &s6;                      // valid
   t5 = &s7;                      // valid
-  t1 = t3;                       // invalid
+  t1 = t3;                       // expected-error {{not superset}} expected-error {{incompatible type}}
   t3 = t1;                       // valid
   void (*t6)() throw(B1);
-  t6 = t4;                       // invalid
+  t6 = t4;                       // expected-error {{not superset}} expected-error {{incompatible type}}
   t4 = t6;                       // valid
   t5 = t1;                       // valid
-  t1 = t5;                       // invalid
+  t1 = t5;                       // expected-error {{not superset}} expected-error {{incompatible type}}
 
   // return types and arguments must match exactly, no inheritance allowed
   void (*(*t7)())() throw(B1) = &s8;       // valid
-  void (*(*t8)())() throw(A) = &s8;        // invalid
-  void (*(*t9)())() throw(D) = &s8;        // invalid
+  void (*(*t8)())() throw(A) = &s8;        // expected-error {{return types differ}} expected-error {{incompatible type}}
+  void (*(*t9)())() throw(D) = &s8;        // expected-error {{return types differ}} expected-error {{incompatible type}}
   void (*t10)(void (*)() throw(B1)) = &s9; // valid   expected-warning{{disambiguated}}
-  void (*t11)(void (*)() throw(A)) = &s9;  // invalid expected-warning{{disambiguated}}
-  void (*t12)(void (*)() throw(D)) = &s9;  // invalid expected-warning{{disambiguated}}
+  void (*t11)(void (*)() throw(A)) = &s9;  // expected-error {{argument types differ}} expected-error {{incompatible type}} expected-warning{{disambiguated}}
+  void (*t12)(void (*)() throw(D)) = &s9;  // expected-error {{argument types differ}} expected-error {{incompatible type}} expected-warning{{disambiguated}}
 }
+
+// Member function stuff
+
+struct Str1 { void f() throw(int); }; // expected-note {{previous declaration}}
+void Str1::f() // expected-error {{does not match previous declaration}}
+{
+}
+
+void mfnptr()
+{
+  void (Str1::*pfn1)() throw(int) = &Str1::f; // valid
+  void (Str1::*pfn2)() = &Str1::f; // valid
+  void (Str1::*pfn3)() throw() = &Str1::f; // expected-error {{not superset}} expected-error {{incompatible type}}
+}
+
+// Don't suppress errors in template instantiation.
+template <typename T> struct TEx; // expected-note {{template is declared here}}
+
+void tf() throw(TEx<int>); // expected-error {{implicit instantiation of undefined template}}
+
+// DR 437, class throws itself. FIXME: See Sema::CheckSpecifiedExceptionType.
+//struct DR437 { void f() throw(DR437); };

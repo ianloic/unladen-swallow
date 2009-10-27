@@ -32,7 +32,6 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -55,7 +54,7 @@ using namespace llvm;
 /// will attempt merge setcc and brc instructions into brcc's.
 ///
 namespace {
-class VISIBILITY_HIDDEN SelectionDAGLegalize {
+class SelectionDAGLegalize {
   TargetLowering &TLI;
   SelectionDAG &DAG;
   CodeGenOpt::Level OptLevel;
@@ -1655,8 +1654,7 @@ void SelectionDAGLegalize::ExpandDYNAMIC_STACKALLOC(SDNode* Node,
 }
 
 /// LegalizeSetCCCondCode - Legalize a SETCC with given LHS and RHS and
-/// condition code CC on the current target. This routine assumes LHS and rHS
-/// have already been legalized by LegalizeSetCCOperands. It expands SETCC with
+/// condition code CC on the current target. This routine expands SETCC with
 /// illegal condition code into AND / OR of multiple SETCC values.
 void SelectionDAGLegalize::LegalizeSetCCCondCode(EVT VT,
                                                  SDValue &LHS, SDValue &RHS,

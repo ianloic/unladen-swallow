@@ -14,7 +14,6 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/DerivedTypes.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
@@ -55,13 +54,14 @@ namespace {
   /// FixedStackPseudoSourceValue - A specialized PseudoSourceValue
   /// for holding FixedStack values, which must include a frame
   /// index.
-  class VISIBILITY_HIDDEN FixedStackPseudoSourceValue
-    : public PseudoSourceValue {
+  class FixedStackPseudoSourceValue : public PseudoSourceValue {
     const int FI;
   public:
     explicit FixedStackPseudoSourceValue(int fi) : FI(fi) {}
 
     virtual bool isConstant(const MachineFrameInfo *MFI) const;
+
+    virtual bool isAliased(const MachineFrameInfo *MFI) const;
 
     virtual void printCustom(raw_ostream &OS) const {
       OS << "FixedStack" << FI;
@@ -89,6 +89,26 @@ bool PseudoSourceValue::isConstant(const MachineFrameInfo *) const {
   return false;
 }
 
+bool PseudoSourceValue::isAliased(const MachineFrameInfo *MFI) const {
+  if (this == getStack() ||
+      this == getGOT() ||
+      this == getConstantPool() ||
+      this == getJumpTable())
+    return false;
+  llvm_unreachable("Unknown PseudoSourceValue!");
+  return true;
+}
+
 bool FixedStackPseudoSourceValue::isConstant(const MachineFrameInfo *MFI) const{
   return MFI && MFI->isImmutableObjectIndex(FI);
+}
+
+bool FixedStackPseudoSourceValue::isAliased(const MachineFrameInfo *MFI) const {
+  // Negative frame indices are used for special things that don't
+  // appear in LLVM IR. Non-negative indices may be used for things
+  // like static allocas.
+  if (!MFI)
+    return FI >= 0;
+  // Spill slots should not alias others.
+  return !MFI->isFixedObjectIndex(FI) && !MFI->isSpillSlotObjectIndex(FI);
 }

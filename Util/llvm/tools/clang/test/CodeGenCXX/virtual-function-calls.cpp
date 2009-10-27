@@ -1,4 +1,4 @@
-// RUN: clang-cc -emit-llvm-only %s
+// RUN: clang-cc %s -emit-llvm -o - | FileCheck %s
 
 // PR5021
 struct A {
@@ -6,5 +6,6 @@ struct A {
 };
 
 void f(A *a) {
+  // CHECK: call void %
   a->f('c');
 }

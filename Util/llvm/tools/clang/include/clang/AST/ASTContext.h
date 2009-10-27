@@ -81,12 +81,12 @@ class ASTContext {
   llvm::FoldingSet<DependentTypeOfExprType> DependentTypeOfExprTypes;
   llvm::FoldingSet<DependentDecltypeType> DependentDecltypeTypes;
   llvm::FoldingSet<TemplateTypeParmType> TemplateTypeParmTypes;
+  llvm::FoldingSet<SubstTemplateTypeParmType> SubstTemplateTypeParmTypes;
   llvm::FoldingSet<TemplateSpecializationType> TemplateSpecializationTypes;
   llvm::FoldingSet<QualifiedNameType> QualifiedNameTypes;
   llvm::FoldingSet<TypenameType> TypenameTypes;
   llvm::FoldingSet<ObjCInterfaceType> ObjCInterfaceTypes;
   llvm::FoldingSet<ObjCObjectPointerType> ObjCObjectPointerTypes;
-  llvm::FoldingSet<ObjCProtocolListType> ObjCProtocolListTypes;
   llvm::FoldingSet<ElaboratedType> ElaboratedTypes;
 
   llvm::FoldingSet<QualifiedTemplateName> QualifiedTemplateNames;
@@ -143,6 +143,12 @@ class ASTContext {
   /// \brief The type for the C sigjmp_buf type.
   TypeDecl *sigjmp_bufDecl;
 
+  /// \brief Type for the Block descriptor for Blocks CodeGen.
+  RecordDecl *BlockDescriptorType;
+
+  /// \brief Type for the Block descriptor for Blocks CodeGen.
+  RecordDecl *BlockDescriptorExtendedType;
+
   /// \brief Keeps track of all declaration attributes.
   ///
   /// Since so few decls have attrs, we keep them in a hash map instead of
@@ -154,7 +160,8 @@ class ASTContext {
   ///
   /// This data structure stores the mapping from instantiations of static
   /// data members to the static data member representations within the
-  /// class template from which they were instantiated.
+  /// class template from which they were instantiated along with the kind
+  /// of instantiation or specialization (a TemplateSpecializationKind - 1).
   ///
   /// Given the following example:
   ///
@@ -172,8 +179,9 @@ class ASTContext {
   ///
   /// This mapping will contain an entry that maps from the VarDecl for
   /// X<int>::value to the corresponding VarDecl for X<T>::value (within the
-  /// class template X).
-  llvm::DenseMap<VarDecl *, VarDecl *> InstantiatedFromStaticDataMember;
+  /// class template X) and will be marked TSK_ImplicitInstantiation.
+  llvm::DenseMap<const VarDecl *, MemberSpecializationInfo *> 
+    InstantiatedFromStaticDataMember;
 
   /// \brief Keeps track of the UnresolvedUsingDecls from which UsingDecls
   /// where created during instantiation.
@@ -265,11 +273,13 @@ public:
   /// \brief If this variable is an instantiated static data member of a
   /// class template specialization, returns the templated static data member
   /// from which it was instantiated.
-  VarDecl *getInstantiatedFromStaticDataMember(VarDecl *Var);
+  MemberSpecializationInfo *getInstantiatedFromStaticDataMember(
+                                                           const VarDecl *Var);
 
   /// \brief Note that the static data member \p Inst is an instantiation of
   /// the static data member template \p Tmpl of a class template.
-  void setInstantiatedFromStaticDataMember(VarDecl *Inst, VarDecl *Tmpl);
+  void setInstantiatedFromStaticDataMember(VarDecl *Inst, VarDecl *Tmpl,
+                                           TemplateSpecializationKind TSK);
 
   /// \brief If this using decl is instantiated from an unresolved using decl,
   /// return it.
@@ -291,22 +301,22 @@ public:
   const char *getCommentForDecl(const Decl *D);
 
   // Builtin Types.
-  QualType VoidTy;
-  QualType BoolTy;
-  QualType CharTy;
-  QualType WCharTy;  // [C++ 3.9.1p5], integer type in C99.
-  QualType Char16Ty; // [C++0x 3.9.1p5], integer type in C99.
-  QualType Char32Ty; // [C++0x 3.9.1p5], integer type in C99.
-  QualType SignedCharTy, ShortTy, IntTy, LongTy, LongLongTy, Int128Ty;
-  QualType UnsignedCharTy, UnsignedShortTy, UnsignedIntTy, UnsignedLongTy;
-  QualType UnsignedLongLongTy, UnsignedInt128Ty;
-  QualType FloatTy, DoubleTy, LongDoubleTy;
-  QualType FloatComplexTy, DoubleComplexTy, LongDoubleComplexTy;
-  QualType VoidPtrTy, NullPtrTy;
-  QualType OverloadTy;
-  QualType DependentTy;
-  QualType UndeducedAutoTy;
-  QualType ObjCBuiltinIdTy, ObjCBuiltinClassTy;
+  CanQualType VoidTy;
+  CanQualType BoolTy;
+  CanQualType CharTy;
+  CanQualType WCharTy;  // [C++ 3.9.1p5], integer type in C99.
+  CanQualType Char16Ty; // [C++0x 3.9.1p5], integer type in C99.
+  CanQualType Char32Ty; // [C++0x 3.9.1p5], integer type in C99.
+  CanQualType SignedCharTy, ShortTy, IntTy, LongTy, LongLongTy, Int128Ty;
+  CanQualType UnsignedCharTy, UnsignedShortTy, UnsignedIntTy, UnsignedLongTy;
+  CanQualType UnsignedLongLongTy, UnsignedInt128Ty;
+  CanQualType FloatTy, DoubleTy, LongDoubleTy;
+  CanQualType FloatComplexTy, DoubleComplexTy, LongDoubleComplexTy;
+  CanQualType VoidPtrTy, NullPtrTy;
+  CanQualType OverloadTy;
+  CanQualType DependentTy;
+  CanQualType UndeducedAutoTy;
+  CanQualType ObjCBuiltinIdTy, ObjCBuiltinClassTy;
 
   ASTContext(const LangOptions& LOpts, SourceManager &SM, TargetInfo &t,
              IdentifierTable &idents, SelectorTable &sels,
@@ -377,18 +387,62 @@ public:
   /// getComplexType - Return the uniqued reference to the type for a complex
   /// number with the specified element type.
   QualType getComplexType(QualType T);
+  CanQualType getComplexType(CanQualType T) {
+    return CanQualType::CreateUnsafe(getComplexType((QualType) T));
+  }
 
   /// getPointerType - Return the uniqued reference to the type for a pointer to
   /// the specified type.
   QualType getPointerType(QualType T);
+  CanQualType getPointerType(CanQualType T) {
+    return CanQualType::CreateUnsafe(getPointerType((QualType) T));
+  }
 
   /// getBlockPointerType - Return the uniqued reference to the type for a block
   /// of the specified type.
   QualType getBlockPointerType(QualType T);
 
+  /// This gets the struct used to keep track of the descriptor for pointer to
+  /// blocks.
+  QualType getBlockDescriptorType();
+
+  // Set the type for a Block descriptor type.
+  void setBlockDescriptorType(QualType T);
+  /// Get the BlockDescriptorType type, or NULL if it hasn't yet been built.
+  QualType getRawBlockdescriptorType() {
+    if (BlockDescriptorType)
+      return getTagDeclType(BlockDescriptorType);
+    return QualType();
+  }
+
+  /// This gets the struct used to keep track of the extended descriptor for
+  /// pointer to blocks.
+  QualType getBlockDescriptorExtendedType();
+
+  // Set the type for a Block descriptor extended type.
+  void setBlockDescriptorExtendedType(QualType T);
+  /// Get the BlockDescriptorExtendedType type, or NULL if it hasn't yet been
+  /// built.
+  QualType getRawBlockdescriptorExtendedType() {
+    if (BlockDescriptorExtendedType)
+      return getTagDeclType(BlockDescriptorExtendedType);
+    return QualType();
+  }
+
+  /// This gets the struct used to keep track of pointer to blocks, complete
+  /// with captured variables.
+  QualType getBlockParmType(bool BlockHasCopyDispose,
+                            llvm::SmallVector<const Expr *, 8> &BDRDs);
+
+  /// This builds the struct used for __block variables.
+  QualType BuildByRefType(const char *DeclName, QualType Ty);
+
+  /// Returns true iff we need copy/dispose helpers for the given type.
+  bool BlockRequiresCopying(QualType Ty);
+
   /// getLValueReferenceType - Return the uniqued reference to the type for an
   /// lvalue reference to the specified type.
-  QualType getLValueReferenceType(QualType T);
+  QualType getLValueReferenceType(QualType T, bool SpelledAsLValue = true);
 
   /// getRValueReferenceType - Return the uniqued reference to the type for an
   /// rvalue reference to the specified type.
@@ -426,22 +480,6 @@ public:
   QualType getConstantArrayType(QualType EltTy, const llvm::APInt &ArySize,
                                 ArrayType::ArraySizeModifier ASM,
                                 unsigned EltTypeQuals);
-
-  /// getConstantArrayWithExprType - Return a reference to the type for a
-  /// constant array of the specified element type.
-  QualType getConstantArrayWithExprType(QualType EltTy,
-                                        const llvm::APInt &ArySize,
-                                        Expr *ArySizeExpr,
-                                        ArrayType::ArraySizeModifier ASM,
-                                        unsigned EltTypeQuals,
-                                        SourceRange Brackets);
-
-  /// getConstantArrayWithoutExprType - Return a reference to the type
-  /// for a constant array of the specified element type.
-  QualType getConstantArrayWithoutExprType(QualType EltTy,
-                                           const llvm::APInt &ArySize,
-                                           ArrayType::ArraySizeModifier ASM,
-                                           unsigned EltTypeQuals);
 
   /// getVectorType - Return the unique reference to a vector type of
   /// the specified element type and size. VectorType must be a built-in type.
@@ -481,6 +519,9 @@ public:
   /// specified typename decl.
   QualType getTypedefType(TypedefDecl *Decl);
 
+  QualType getSubstTemplateTypeParmType(const TemplateTypeParmType *Replaced,
+                                        QualType Replacement);
+
   QualType getTemplateTypeParmType(unsigned Depth, unsigned Index,
                                    bool ParameterPack,
                                    IdentifierInfo *Name = 0);
@@ -510,10 +551,6 @@ public:
   QualType getObjCObjectPointerType(QualType OIT,
                                     ObjCProtocolDecl **ProtocolList = 0,
                                     unsigned NumProtocols = 0);
-
-  QualType getObjCProtocolListType(QualType T,
-                                   ObjCProtocolDecl **Protocols,
-                                   unsigned NumProtocols);
 
   /// getTypeOfType - GCC extension.
   QualType getTypeOfExprType(Expr *e);
@@ -708,7 +745,7 @@ public:
   QualType GetBuiltinType(unsigned ID, GetBuiltinTypeError &Error);
 
 private:
-  QualType getFromTargetType(unsigned Type) const;
+  CanQualType getFromTargetType(unsigned Type) const;
 
   //===--------------------------------------------------------------------===//
   //                         Type Predicates.
@@ -810,6 +847,12 @@ public:
   const Type *getCanonicalType(const Type *T) {
     return T->getCanonicalTypeInternal().getTypePtr();
   }
+
+  /// getCanonicalParamType - Return the canonical parameter type
+  /// corresponding to the specific potentially non-canonical one.
+  /// Qualifiers are stripped off, functions are turned into function
+  /// pointers, and arrays decay one level into pointers.
+  CanQualType getCanonicalParamType(QualType T);
 
   /// \brief Determine whether the given types are equivalent.
   bool hasSameType(QualType T1, QualType T2) {
@@ -1043,14 +1086,23 @@ public:
   /// \param T the type that will be the basis for type source info. This type
   /// should refer to how the declarator was written in source code, not to
   /// what type semantic analysis resolved the declarator to.
-  DeclaratorInfo *CreateDeclaratorInfo(QualType T);
+  ///
+  /// \param Size the size of the type info to create, or 0 if the size
+  /// should be calculated based on the type.
+  DeclaratorInfo *CreateDeclaratorInfo(QualType T, unsigned Size = 0);
+
+  /// \brief Allocate a DeclaratorInfo where all locations have been
+  /// initialized to a given location, which defaults to the empty
+  /// location.
+  DeclaratorInfo *
+  getTrivialDeclaratorInfo(QualType T, SourceLocation Loc = SourceLocation());
 
 private:
   ASTContext(const ASTContext&); // DO NOT IMPLEMENT
   void operator=(const ASTContext&); // DO NOT IMPLEMENT
 
   void InitBuiltinTypes();
-  void InitBuiltinType(QualType &R, BuiltinType::Kind K);
+  void InitBuiltinType(CanQualType &R, BuiltinType::Kind K);
 
   // Return the ObjC type encoding for a given type.
   void getObjCEncodingForTypeImpl(QualType t, std::string &S,

@@ -381,8 +381,7 @@ bool Sema::SemaBuiltinAtomicOverloaded(CallExpr *TheCall) {
 
   // If the first type needs to be converted (e.g. void** -> int*), do it now.
   if (BuiltinFT->getArgType(0) != FirstArg->getType()) {
-    ImpCastExprToType(FirstArg, BuiltinFT->getArgType(0), CastExpr::CK_Unknown,
-                      /*isLvalue=*/false);
+    ImpCastExprToType(FirstArg, BuiltinFT->getArgType(0), CastExpr::CK_BitCast);
     TheCall->setArg(0, FirstArg);
   }
 
@@ -1421,8 +1420,7 @@ static DeclRefExpr* EvalVal(Expr *E) {
   // viewed AST node.  We then recursively traverse the AST by calling
   // EvalAddr and EvalVal appropriately.
   switch (E->getStmtClass()) {
-  case Stmt::DeclRefExprClass:
-  case Stmt::QualifiedDeclRefExprClass: {
+  case Stmt::DeclRefExprClass: {
     // DeclRefExpr: the base case.  When we hit a DeclRefExpr we are looking
     //  at code that refers to a variable's name.  We check if it has local
     //  storage within the function, and if so, return the expression.

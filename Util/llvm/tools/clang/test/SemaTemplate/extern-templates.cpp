@@ -29,16 +29,14 @@ void test_intptr(X0<int*> xi, X0<int*>::Inner xii) {
   xii.g(0);
 }
 
-// FIXME: we would like the notes to point to the explicit instantiation at the
-// bottom.
-extern template class X0<long*>; // expected-note 2{{instantiation}}
+extern template class X0<long*>; 
 
 void test_longptr(X0<long*> xl, X0<long*>::Inner xli) {
   xl.f(0);
   xli.g(0);
 }
 
-template class X0<long*>;
+template class X0<long*>; // expected-note 2{{instantiation}}
 
 template<typename T>
 class X1 {
@@ -62,6 +60,5 @@ void g_X1(X1<void*> x1, void *ptr) {
 extern template void X1<const void*>::g(const void*);
 
 void g_X1_2(X1<const void *> x1, const void *ptr) {
-  // FIXME: This should not instantiate of x1<const void*>::g
-//  x1.g(ptr);
+  x1.g(ptr);
 }

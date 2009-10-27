@@ -529,6 +529,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(module);
   KEYWORD(asm);
   KEYWORD(sideeffect);
+  KEYWORD(alignstack);
   KEYWORD(gc);
 
   KEYWORD(ccc);
@@ -601,6 +602,14 @@ lltok::Kind LLLexer::LexIdentifier() {
     // Scan CurPtr ahead, seeing if there is just whitespace before the newline.
     if (JustWhitespaceNewLine(CurPtr))
       return lltok::kw_zeroext;
+  } else if (Len == 6 && !memcmp(StartChar, "malloc", 6)) {
+    // FIXME: Remove in LLVM 3.0.
+    // Autoupgrade malloc instruction.
+    return lltok::kw_malloc;
+  } else if (Len == 4 && !memcmp(StartChar, "free", 4)) {
+    // FIXME: Remove in LLVM 3.0.
+    // Autoupgrade malloc instruction.
+    return lltok::kw_free;
   }
 
   // Keywords for instructions.
@@ -640,9 +649,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   INSTKEYWORD(unwind,      Unwind);
   INSTKEYWORD(unreachable, Unreachable);
 
-  INSTKEYWORD(malloc,      Malloc);
   INSTKEYWORD(alloca,      Alloca);
-  INSTKEYWORD(free,        Free);
   INSTKEYWORD(load,        Load);
   INSTKEYWORD(store,       Store);
   INSTKEYWORD(getelementptr, GetElementPtr);

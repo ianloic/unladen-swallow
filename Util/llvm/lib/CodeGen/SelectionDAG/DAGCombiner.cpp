@@ -31,7 +31,6 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -57,7 +56,7 @@ namespace {
 
 //------------------------------ DAGCombiner ---------------------------------//
 
-  class VISIBILITY_HIDDEN DAGCombiner {
+  class DAGCombiner {
     SelectionDAG &DAG;
     const TargetLowering &TLI;
     CombineLevel Level;
@@ -280,8 +279,7 @@ public:
 namespace {
 /// WorkListRemover - This class is a DAGUpdateListener that removes any deleted
 /// nodes from the worklist.
-class VISIBILITY_HIDDEN WorkListRemover :
-  public SelectionDAG::DAGUpdateListener {
+class WorkListRemover : public SelectionDAG::DAGUpdateListener {
   DAGCombiner &DC;
 public:
   explicit WorkListRemover(DAGCombiner &dc) : DC(dc) {}
@@ -4381,15 +4379,17 @@ SDValue DAGCombiner::visitFP_EXTEND(SDNode *N) {
 
 SDValue DAGCombiner::visitFNEG(SDNode *N) {
   SDValue N0 = N->getOperand(0);
+  EVT VT = N->getValueType(0);
 
   if (isNegatibleForFree(N0, LegalOperations))
     return GetNegatedExpression(N0, DAG, LegalOperations);
 
   // Transform fneg(bitconvert(x)) -> bitconvert(x^sign) to avoid loading
   // constant pool values.
-  if (N0.getOpcode() == ISD::BIT_CONVERT && N0.getNode()->hasOneUse() &&
-      N0.getOperand(0).getValueType().isInteger() &&
-      !N0.getOperand(0).getValueType().isVector()) {
+  if (N0.getOpcode() == ISD::BIT_CONVERT && 
+      !VT.isVector() &&
+      N0.getNode()->hasOneUse() &&
+      N0.getOperand(0).getValueType().isInteger()) {
     SDValue Int = N0.getOperand(0);
     EVT IntVT = Int.getValueType();
     if (IntVT.isInteger() && !IntVT.isVector()) {
@@ -4397,7 +4397,7 @@ SDValue DAGCombiner::visitFNEG(SDNode *N) {
               DAG.getConstant(APInt::getSignBit(IntVT.getSizeInBits()), IntVT));
       AddToWorkList(Int.getNode());
       return DAG.getNode(ISD::BIT_CONVERT, N->getDebugLoc(),
-                         N->getValueType(0), Int);
+                         VT, Int);
     }
   }
 
@@ -6230,13 +6230,28 @@ void DAGCombiner::GatherAllAliases(SDNode *N, SDValue OriginalChain,
 
   // Starting off.
   Chains.push_back(OriginalChain);
-
+  unsigned Depth = 0;
+  
   // Look at each chain and determine if it is an alias.  If so, add it to the
   // aliases list.  If not, then continue up the chain looking for the next
   // candidate.
   while (!Chains.empty()) {
     SDValue Chain = Chains.back();
     Chains.pop_back();
+    
+    // For TokenFactor nodes, look at each operand and only continue up the 
+    // chain until we find two aliases.  If we've seen two aliases, assume we'll 
+    // find more and revert to original chain since the xform is unlikely to be
+    // profitable.
+    // 
+    // FIXME: The depth check could be made to return the last non-aliasing 
+    // chain we found before we hit a tokenfactor rather than the original
+    // chain.
+    if (Depth > 6 || Aliases.size() == 2) {
+      Aliases.clear();
+      Aliases.push_back(OriginalChain);
+      break;
+    }
 
     // Don't bother if we've been before.
     if (!Visited.insert(Chain.getNode()))
@@ -6268,8 +6283,7 @@ void DAGCombiner::GatherAllAliases(SDNode *N, SDValue OriginalChain,
       } else {
         // Look further up the chain.
         Chains.push_back(Chain.getOperand(0));
-        // Clean up old chain.
-        AddToWorkList(Chain.getNode());
+        ++Depth;
       }
       break;
     }
@@ -6285,8 +6299,7 @@ void DAGCombiner::GatherAllAliases(SDNode *N, SDValue OriginalChain,
       }
       for (unsigned n = Chain.getNumOperands(); n;)
         Chains.push_back(Chain.getOperand(--n));
-      // Eliminate the token factor if we can.
-      AddToWorkList(Chain.getNode());
+      ++Depth;
       break;
 
     default:
@@ -6312,7 +6325,7 @@ SDValue DAGCombiner::FindBetterChain(SDNode *N, SDValue OldChain) {
     // If a single operand then chain to it.  We don't need to revisit it.
     return Aliases[0];
   }
-
+  
   // Construct a custom tailored token factor.
   return DAG.getNode(ISD::TokenFactor, N->getDebugLoc(), MVT::Other, 
                      &Aliases[0], Aliases.size());

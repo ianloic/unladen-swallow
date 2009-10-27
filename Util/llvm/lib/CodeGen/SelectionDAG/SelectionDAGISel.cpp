@@ -226,7 +226,7 @@ static void EmitLiveInCopy(MachineBasicBlock *MBB,
   assert(Emitted && "Unable to issue a live-in copy instruction!\n");
   (void) Emitted;
 
-CopyRegMap.insert(std::make_pair(prior(Pos), VirtReg));
+  CopyRegMap.insert(std::make_pair(prior(Pos), VirtReg));
   if (Coalesced) {
     if (&*InsertPos == UseMI) ++InsertPos;
     MBB->erase(UseMI);
@@ -385,6 +385,8 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
         DILocation DILoc(Dbg);
         DebugLoc Loc = ExtractDebugLocation(DILoc, MF->getDebugLocInfo());
         SDL->setCurDebugLoc(Loc);
+        if (MF->getDefaultDebugLoc().isUnknown())
+          MF->setDefaultDebugLoc(Loc);
       }
     }
     if (!isa<TerminatorInst>(I))

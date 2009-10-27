@@ -21,6 +21,7 @@
 #include "CGBlocks.h"
 #include "CGCall.h"
 #include "CGCXX.h"
+#include "CGVtable.h"
 #include "CodeGenTypes.h"
 #include "Mangle.h"
 #include "llvm/Module.h"
@@ -29,6 +30,8 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/ValueHandle.h"
 #include <list>
+
+#define ATTACH_DEBUG_INFO_TO_AN_INSN 1 
 
 namespace llvm {
   class Module;
@@ -126,6 +129,9 @@ class CodeGenModule : public BlockModule {
   CodeGenTypes Types;
   MangleContext MangleCtx;
 
+  /// VtableInfo - Holds information about C++ vtables.
+  CGVtableInfo VtableInfo;
+  
   CGObjCRuntime* Runtime;
   CGDebugInfo* DebugInfo;
   
@@ -221,6 +227,7 @@ public:
   llvm::Module &getModule() const { return TheModule; }
   CodeGenTypes &getTypes() { return Types; }
   MangleContext &getMangleContext() { return MangleCtx; }
+  CGVtableInfo &getVtableInfo() { return VtableInfo; }
   Diagnostic &getDiags() const { return Diags; }
   const llvm::TargetData &getTargetData() const { return TheTargetData; }
   llvm::LLVMContext &getLLVMContext() { return VMContext; }
@@ -255,9 +262,6 @@ public:
   llvm::Constant *BuildCovariantThunk(const CXXMethodDecl *MD, bool Extern,
                                       int64_t nv_t, int64_t v_t,
                                       int64_t nv_r, int64_t v_r);
-
-  /// GetVtableIndex - Return the vtable index for a virtual member function.
-  uint64_t GetVtableIndex(const CXXMethodDecl *MD);
 
   /// GetCXXBaseClassOffset - Returns the offset from a derived class to its
   /// base class. Returns null if the offset is 0.

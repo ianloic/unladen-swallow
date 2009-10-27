@@ -402,7 +402,7 @@ public:
   llvm::Constant *VisitCompoundLiteralExpr(CompoundLiteralExpr *E) {
     return Visit(E->getInitializer());
   }
-  
+    
   llvm::Constant *EmitMemberFunctionPointer(CXXMethodDecl *MD) {
     assert(MD->isInstance() && "Member function must not be static!");
     
@@ -413,7 +413,7 @@ public:
     
     // Get the function pointer (or index if this is a virtual function).
     if (MD->isVirtual()) {
-      uint64_t Index = CGM.GetVtableIndex(MD->getCanonicalDecl());
+      int64_t Index = CGM.getVtableInfo().getMethodVtableIndex(MD);
       
       Values[0] = llvm::ConstantInt::get(PtrDiffTy, Index + 1);
     } else {
@@ -434,7 +434,7 @@ public:
         E->getType()->getAs<MemberPointerType>()) {
       QualType T = MPT->getPointeeType();
       if (T->isFunctionProtoType()) {
-        QualifiedDeclRefExpr *DRE = cast<QualifiedDeclRefExpr>(E->getSubExpr());
+        DeclRefExpr *DRE = cast<DeclRefExpr>(E->getSubExpr());
         
         return EmitMemberFunctionPointer(cast<CXXMethodDecl>(DRE->getDecl()));
       }
@@ -444,6 +444,27 @@ public:
     }
     
     return 0;
+  }
+    
+  llvm::Constant *VisitBinSub(BinaryOperator *E) {
+    // This must be a pointer/pointer subtraction.  This only happens for
+    // address of label.
+    if (!isa<AddrLabelExpr>(E->getLHS()->IgnoreParenNoopCasts(CGM.getContext())) ||
+       !isa<AddrLabelExpr>(E->getRHS()->IgnoreParenNoopCasts(CGM.getContext())))
+      return 0;
+    
+    llvm::Constant *LHS = CGM.EmitConstantExpr(E->getLHS(),
+                                               E->getLHS()->getType(), CGF);
+    llvm::Constant *RHS = CGM.EmitConstantExpr(E->getRHS(),
+                                               E->getRHS()->getType(), CGF);
+
+    const llvm::Type *ResultType = ConvertType(E->getType());
+    LHS = llvm::ConstantExpr::getPtrToInt(LHS, ResultType);
+    RHS = llvm::ConstantExpr::getPtrToInt(RHS, ResultType);
+        
+    // No need to divide by element size, since addr of label is always void*,
+    // which has size 1 in GNUish.
+    return llvm::ConstantExpr::getSub(LHS, RHS);
   }
     
   llvm::Constant *VisitCastExpr(CastExpr* E) {
@@ -521,13 +542,28 @@ public:
         return CS;
       }          
     }
-        
+
+    case CastExpr::CK_BitCast: 
+      // This must be a member function pointer cast.
+      return Visit(E->getSubExpr());
+
     default: {
       // FIXME: This should be handled by the CK_NoOp cast kind.
       // Explicit and implicit no-op casts
       QualType Ty = E->getType(), SubTy = E->getSubExpr()->getType();
       if (CGM.getContext().hasSameUnqualifiedType(Ty, SubTy))
-          return Visit(E->getSubExpr());
+        return Visit(E->getSubExpr());
+
+      // Handle integer->integer casts for address-of-label differences.
+      if (Ty->isIntegerType() && SubTy->isIntegerType() &&
+          CGF) {
+        llvm::Value *Src = Visit(E->getSubExpr());
+        if (Src == 0) return 0;
+        
+        // Use EmitScalarConversion to perform the conversion.
+        return cast<llvm::Constant>(CGF->EmitScalarConversion(Src, SubTy, Ty));
+      }
+      
       return 0;
     }
     }
@@ -703,8 +739,7 @@ public:
                                      E->getType().getAddressSpace());
       return C;
     }
-    case Expr::DeclRefExprClass:
-    case Expr::QualifiedDeclRefExprClass: {
+    case Expr::DeclRefExprClass: {
       NamedDecl *Decl = cast<DeclRefExpr>(E)->getDecl();
       if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(Decl))
         return CGM.GetAddrOfFunction(FD);
@@ -805,8 +840,7 @@ llvm::Constant *CodeGenModule::EmitConstantExpr(const Expr *E,
 
         // Apply offset if necessary.
         if (!Offset->isNullValue()) {
-          const llvm::Type *Type =
-            llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+          const llvm::Type *Type = llvm::Type::getInt8PtrTy(VMContext);
           llvm::Constant *Casted = llvm::ConstantExpr::getBitCast(C, Type);
           Casted = llvm::ConstantExpr::getGetElementPtr(Casted, &Offset, 1);
           C = llvm::ConstantExpr::getBitCast(Casted, C->getType());

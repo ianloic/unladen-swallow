@@ -460,9 +460,10 @@ static Value *checkArraySize(Value *Amt, const Type *IntPtrTy) {
   return Amt;
 }
 
-static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
-                           const Type *IntPtrTy, const Type *AllocTy,
-                           Value *ArraySize, const Twine &NameStr) {
+static Instruction *createMalloc(Instruction *InsertBefore,
+                                 BasicBlock *InsertAtEnd, const Type *IntPtrTy,
+                                 const Type *AllocTy, Value *ArraySize,
+                                 Function *MallocF, const Twine &NameStr) {
   assert(((!InsertBefore && InsertAtEnd) || (InsertBefore && !InsertAtEnd)) &&
          "createMalloc needs either InsertBefore or InsertAtEnd");
 
@@ -499,27 +500,34 @@ static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
   BasicBlock* BB = InsertBefore ? InsertBefore->getParent() : InsertAtEnd;
   Module* M = BB->getParent()->getParent();
   const Type *BPTy = Type::getInt8PtrTy(BB->getContext());
-  // prototype malloc as "void *malloc(size_t)"
-  Constant *MallocF = M->getOrInsertFunction("malloc", BPTy, IntPtrTy, NULL);
-  if (!cast<Function>(MallocF)->doesNotAlias(0))
-    cast<Function>(MallocF)->setDoesNotAlias(0);
+  if (!MallocF)
+    // prototype malloc as "void *malloc(size_t)"
+    MallocF = cast<Function>(M->getOrInsertFunction("malloc", BPTy,
+                                                    IntPtrTy, NULL));
+  if (!MallocF->doesNotAlias(0)) MallocF->setDoesNotAlias(0);
   const PointerType *AllocPtrType = PointerType::getUnqual(AllocTy);
   CallInst *MCall = NULL;
-  Value    *MCast = NULL;
+  Instruction *Result = NULL;
   if (InsertBefore) {
     MCall = CallInst::Create(MallocF, AllocSize, "malloccall", InsertBefore);
-    // Create a cast instruction to convert to the right type...
-    MCast = new BitCastInst(MCall, AllocPtrType, NameStr, InsertBefore);
+    Result = MCall;
+    if (Result->getType() != AllocPtrType)
+      // Create a cast instruction to convert to the right type...
+      Result = new BitCastInst(MCall, AllocPtrType, NameStr, InsertBefore);
   } else {
-    MCall = CallInst::Create(MallocF, AllocSize, "malloccall", InsertAtEnd);
-    // Create a cast instruction to convert to the right type...
-    MCast = new BitCastInst(MCall, AllocPtrType, NameStr);
+    MCall = CallInst::Create(MallocF, AllocSize, "malloccall");
+    Result = MCall;
+    if (Result->getType() != AllocPtrType) {
+      InsertAtEnd->getInstList().push_back(MCall);
+      // Create a cast instruction to convert to the right type...
+      Result = new BitCastInst(MCall, AllocPtrType, NameStr);
+    }
   }
   MCall->setTailCall();
   assert(MCall->getType() != Type::getVoidTy(BB->getContext()) &&
          "Malloc has void return type");
 
-  return MCast;
+  return Result;
 }
 
 /// CreateMalloc - Generate the IR for a call to malloc:
@@ -528,10 +536,11 @@ static Value *createMalloc(Instruction *InsertBefore, BasicBlock *InsertAtEnd,
 ///    constant 1.
 /// 2. Call malloc with that argument.
 /// 3. Bitcast the result of the malloc call to the specified type.
-Value *CallInst::CreateMalloc(Instruction *InsertBefore, const Type *IntPtrTy,
-                              const Type *AllocTy, Value *ArraySize,
-                              const Twine &Name) {
-  return createMalloc(InsertBefore, NULL, IntPtrTy, AllocTy, ArraySize, Name);
+Instruction *CallInst::CreateMalloc(Instruction *InsertBefore,
+                                    const Type *IntPtrTy, const Type *AllocTy,
+                                    Value *ArraySize, const Twine &Name) {
+  return createMalloc(InsertBefore, NULL, IntPtrTy, AllocTy, 
+                      ArraySize, NULL, Name);
 }
 
 /// CreateMalloc - Generate the IR for a call to malloc:
@@ -542,10 +551,57 @@ Value *CallInst::CreateMalloc(Instruction *InsertBefore, const Type *IntPtrTy,
 /// 3. Bitcast the result of the malloc call to the specified type.
 /// Note: This function does not add the bitcast to the basic block, that is the
 /// responsibility of the caller.
-Value *CallInst::CreateMalloc(BasicBlock *InsertAtEnd, const Type *IntPtrTy,
-                              const Type *AllocTy, Value *ArraySize, 
-                              const Twine &Name) {
-  return createMalloc(NULL, InsertAtEnd, IntPtrTy, AllocTy, ArraySize, Name);
+Instruction *CallInst::CreateMalloc(BasicBlock *InsertAtEnd,
+                                    const Type *IntPtrTy, const Type *AllocTy,
+                                    Value *ArraySize, Function* MallocF,
+                                    const Twine &Name) {
+  return createMalloc(NULL, InsertAtEnd, IntPtrTy, AllocTy,
+                      ArraySize, MallocF, Name);
+}
+
+static Instruction* createFree(Value* Source, Instruction *InsertBefore,
+                               BasicBlock *InsertAtEnd) {
+  assert(((!InsertBefore && InsertAtEnd) || (InsertBefore && !InsertAtEnd)) &&
+         "createFree needs either InsertBefore or InsertAtEnd");
+  assert(isa<PointerType>(Source->getType()) &&
+         "Can not free something of nonpointer type!");
+
+  BasicBlock* BB = InsertBefore ? InsertBefore->getParent() : InsertAtEnd;
+  Module* M = BB->getParent()->getParent();
+
+  const Type *VoidTy = Type::getVoidTy(M->getContext());
+  const Type *IntPtrTy = Type::getInt8PtrTy(M->getContext());
+  // prototype free as "void free(void*)"
+  Constant *FreeFunc = M->getOrInsertFunction("free", VoidTy, IntPtrTy, NULL);
+
+  CallInst* Result = NULL;
+  Value *PtrCast = Source;
+  if (InsertBefore) {
+    if (Source->getType() != IntPtrTy)
+      PtrCast = new BitCastInst(Source, IntPtrTy, "", InsertBefore);
+    Result = CallInst::Create(FreeFunc, PtrCast, "", InsertBefore);
+  } else {
+    if (Source->getType() != IntPtrTy)
+      PtrCast = new BitCastInst(Source, IntPtrTy, "", InsertAtEnd);
+    Result = CallInst::Create(FreeFunc, PtrCast, "");
+  }
+  Result->setTailCall();
+
+  return Result;
+}
+
+/// CreateFree - Generate the IR for a call to the builtin free function.
+void CallInst::CreateFree(Value* Source, Instruction *InsertBefore) {
+  createFree(Source, InsertBefore, NULL);
+}
+
+/// CreateFree - Generate the IR for a call to the builtin free function.
+/// Note: This function does not add the call to the basic block, that is the
+/// responsibility of the caller.
+Instruction* CallInst::CreateFree(Value* Source, BasicBlock *InsertAtEnd) {
+  Instruction* FreeCall = createFree(Source, NULL, InsertAtEnd);
+  assert(FreeCall && "CreateFree did not create a CallInst");
+  return FreeCall;
 }
 
 //===----------------------------------------------------------------------===//
@@ -827,7 +883,7 @@ void BranchInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 
 
 //===----------------------------------------------------------------------===//
-//                        AllocationInst Implementation
+//                        AllocaInst Implementation
 //===----------------------------------------------------------------------===//
 
 static Value *getAISize(LLVMContext &Context, Value *Amt) {
@@ -837,25 +893,59 @@ static Value *getAISize(LLVMContext &Context, Value *Amt) {
     assert(!isa<BasicBlock>(Amt) &&
            "Passed basic block into allocation size parameter! Use other ctor");
     assert(Amt->getType() == Type::getInt32Ty(Context) &&
-           "Malloc/Allocation array size is not a 32-bit integer!");
+           "Allocation array size is not a 32-bit integer!");
   }
   return Amt;
 }
 
-AllocationInst::AllocationInst(const Type *Ty, Value *ArraySize, unsigned iTy,
-                               unsigned Align, const Twine &Name,
-                               Instruction *InsertBefore)
-  : UnaryInstruction(PointerType::getUnqual(Ty), iTy,
+AllocaInst::AllocaInst(const Type *Ty, Value *ArraySize,
+                       const Twine &Name, Instruction *InsertBefore)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
+                     getAISize(Ty->getContext(), ArraySize), InsertBefore) {
+  setAlignment(0);
+  assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
+  setName(Name);
+}
+
+AllocaInst::AllocaInst(const Type *Ty, Value *ArraySize,
+                       const Twine &Name, BasicBlock *InsertAtEnd)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
+                     getAISize(Ty->getContext(), ArraySize), InsertAtEnd) {
+  setAlignment(0);
+  assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
+  setName(Name);
+}
+
+AllocaInst::AllocaInst(const Type *Ty, const Twine &Name,
+                       Instruction *InsertBefore)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
+                     getAISize(Ty->getContext(), 0), InsertBefore) {
+  setAlignment(0);
+  assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
+  setName(Name);
+}
+
+AllocaInst::AllocaInst(const Type *Ty, const Twine &Name,
+                       BasicBlock *InsertAtEnd)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
+                     getAISize(Ty->getContext(), 0), InsertAtEnd) {
+  setAlignment(0);
+  assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
+  setName(Name);
+}
+
+AllocaInst::AllocaInst(const Type *Ty, Value *ArraySize, unsigned Align,
+                       const Twine &Name, Instruction *InsertBefore)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
                      getAISize(Ty->getContext(), ArraySize), InsertBefore) {
   setAlignment(Align);
   assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
   setName(Name);
 }
 
-AllocationInst::AllocationInst(const Type *Ty, Value *ArraySize, unsigned iTy,
-                               unsigned Align, const Twine &Name,
-                               BasicBlock *InsertAtEnd)
-  : UnaryInstruction(PointerType::getUnqual(Ty), iTy,
+AllocaInst::AllocaInst(const Type *Ty, Value *ArraySize, unsigned Align,
+                       const Twine &Name, BasicBlock *InsertAtEnd)
+  : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
                      getAISize(Ty->getContext(), ArraySize), InsertAtEnd) {
   setAlignment(Align);
   assert(Ty != Type::getVoidTy(Ty->getContext()) && "Cannot allocate void!");
@@ -863,22 +953,22 @@ AllocationInst::AllocationInst(const Type *Ty, Value *ArraySize, unsigned iTy,
 }
 
 // Out of line virtual method, so the vtable, etc has a home.
-AllocationInst::~AllocationInst() {
+AllocaInst::~AllocaInst() {
 }
 
-void AllocationInst::setAlignment(unsigned Align) {
+void AllocaInst::setAlignment(unsigned Align) {
   assert((Align & (Align-1)) == 0 && "Alignment is not a power of 2!");
   SubclassData = Log2_32(Align) + 1;
   assert(getAlignment() == Align && "Alignment representation error!");
 }
 
-bool AllocationInst::isArrayAllocation() const {
+bool AllocaInst::isArrayAllocation() const {
   if (ConstantInt *CI = dyn_cast<ConstantInt>(getOperand(0)))
     return CI->getZExtValue() != 1;
   return true;
 }
 
-const Type *AllocationInst::getAllocatedType() const {
+const Type *AllocaInst::getAllocatedType() const {
   return getType()->getElementType();
 }
 
@@ -893,28 +983,6 @@ bool AllocaInst::isStaticAlloca() const {
   const BasicBlock *Parent = getParent();
   return Parent == &Parent->getParent()->front();
 }
-
-//===----------------------------------------------------------------------===//
-//                             FreeInst Implementation
-//===----------------------------------------------------------------------===//
-
-void FreeInst::AssertOK() {
-  assert(isa<PointerType>(getOperand(0)->getType()) &&
-         "Can not free something of nonpointer type!");
-}
-
-FreeInst::FreeInst(Value *Ptr, Instruction *InsertBefore)
-  : UnaryInstruction(Type::getVoidTy(Ptr->getContext()),
-                     Free, Ptr, InsertBefore) {
-  AssertOK();
-}
-
-FreeInst::FreeInst(Value *Ptr, BasicBlock *InsertAtEnd)
-  : UnaryInstruction(Type::getVoidTy(Ptr->getContext()),
-                     Free, Ptr, InsertAtEnd) {
-  AssertOK();
-}
-
 
 //===----------------------------------------------------------------------===//
 //                           LoadInst Implementation
@@ -2769,17 +2837,6 @@ ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
   }
 }
 
-bool ICmpInst::isSignedPredicate(Predicate pred) {
-  switch (pred) {
-    default: assert(! "Unknown icmp predicate!");
-    case ICMP_SGT: case ICMP_SLT: case ICMP_SGE: case ICMP_SLE: 
-      return true;
-    case ICMP_EQ:  case ICMP_NE: case ICMP_UGT: case ICMP_ULT: 
-    case ICMP_UGE: case ICMP_ULE:
-      return false;
-  }
-}
-
 /// Initialize a set of values that all satisfy the condition with C.
 ///
 ConstantRange 
@@ -2853,7 +2910,7 @@ bool CmpInst::isUnsigned(unsigned short predicate) {
   }
 }
 
-bool CmpInst::isSigned(unsigned short predicate){
+bool CmpInst::isSigned(unsigned short predicate) {
   switch (predicate) {
     default: return false;
     case ICmpInst::ICMP_SLT: case ICmpInst::ICMP_SLE: case ICmpInst::ICMP_SGT: 
@@ -2878,6 +2935,23 @@ bool CmpInst::isUnordered(unsigned short predicate) {
     case FCmpInst::FCMP_UNO: return true;
   }
 }
+
+bool CmpInst::isTrueWhenEqual(unsigned short predicate) {
+  switch(predicate) {
+    default: return false;
+    case ICMP_EQ:   case ICMP_UGE: case ICMP_ULE: case ICMP_SGE: case ICMP_SLE:
+    case FCMP_TRUE: case FCMP_UEQ: case FCMP_UGE: case FCMP_ULE: return true;
+  }
+}
+
+bool CmpInst::isFalseWhenEqual(unsigned short predicate) {
+  switch(predicate) {
+  case ICMP_NE:    case ICMP_UGT: case ICMP_ULT: case ICMP_SGT: case ICMP_SLT:
+  case FCMP_FALSE: case FCMP_ONE: case FCMP_OGT: case FCMP_OLT: return true;
+  default: return false;
+  }
+}
+
 
 //===----------------------------------------------------------------------===//
 //                        SwitchInst Implementation
@@ -3073,32 +3147,10 @@ InsertValueInst *InsertValueInst::clone() const {
   return New;
 }
 
-MallocInst *MallocInst::clone() const {
-  MallocInst *New = new MallocInst(getAllocatedType(),
-                                   (Value*)getOperand(0),
-                                   getAlignment());
-  New->SubclassOptionalData = SubclassOptionalData;
-  if (hasMetadata()) {
-    LLVMContext &Context = getContext();
-    Context.pImpl->TheMetadata.ValueIsCloned(this, New);
-  }
-  return New;
-}
-
 AllocaInst *AllocaInst::clone() const {
   AllocaInst *New = new AllocaInst(getAllocatedType(),
                                    (Value*)getOperand(0),
                                    getAlignment());
-  New->SubclassOptionalData = SubclassOptionalData;
-  if (hasMetadata()) {
-    LLVMContext &Context = getContext();
-    Context.pImpl->TheMetadata.ValueIsCloned(this, New);
-  }
-  return New;
-}
-
-FreeInst *FreeInst::clone() const {
-  FreeInst *New = new FreeInst(getOperand(0));
   New->SubclassOptionalData = SubclassOptionalData;
   if (hasMetadata()) {
     LLVMContext &Context = getContext();

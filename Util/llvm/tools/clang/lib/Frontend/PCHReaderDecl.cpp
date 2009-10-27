@@ -18,7 +18,6 @@
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/DeclGroup.h"
 #include "clang/AST/Expr.h"
-#include "clang/AST/TypeLocVisitor.h"
 using namespace clang;
 
 
@@ -53,7 +52,6 @@ namespace {
     void VisitVarDecl(VarDecl *VD);
     void VisitImplicitParamDecl(ImplicitParamDecl *PD);
     void VisitParmVarDecl(ParmVarDecl *PD);
-    void VisitOriginalParmVarDecl(OriginalParmVarDecl *PD);
     void VisitFileScopeAsmDecl(FileScopeAsmDecl *AD);
     void VisitBlockDecl(BlockDecl *BD);
     std::pair<uint64_t, uint64_t> VisitDeclContext(DeclContext *DC);
@@ -86,6 +84,7 @@ void PCHDeclReader::VisitDecl(Decl *D) {
   D->setImplicit(Record[Idx++]);
   D->setUsed(Record[Idx++]);
   D->setAccess((AccessSpecifier)Record[Idx++]);
+  D->setPCHLevel(Record[Idx++] + 1);
 }
 
 void PCHDeclReader::VisitTranslationUnitDecl(TranslationUnitDecl *TU) {
@@ -107,9 +106,9 @@ void PCHDeclReader::VisitTypedefDecl(TypedefDecl *TD) {
   // set the underlying type of the typedef *before* we try to read
   // the type associated with the TypedefDecl.
   VisitNamedDecl(TD);
-  TD->setUnderlyingType(Reader.GetType(Record[Idx + 1]));
-  TD->setTypeForDecl(Reader.GetType(Record[Idx]).getTypePtr());
-  Idx += 2;
+  uint64_t TypeData = Record[Idx++];
+  TD->setTypeDeclaratorInfo(Reader.GetDeclaratorInfo(Record, Idx));
+  TD->setTypeForDecl(Reader.GetType(TypeData).getTypePtr());
 }
 
 void PCHDeclReader::VisitTagDecl(TagDecl *TD) {
@@ -149,81 +148,11 @@ void PCHDeclReader::VisitEnumConstantDecl(EnumConstantDecl *ECD) {
   ECD->setInitVal(Reader.ReadAPSInt(Record, Idx));
 }
 
-namespace {
-
-class TypeLocReader : public TypeLocVisitor<TypeLocReader> {
-  PCHReader &Reader;
-  const PCHReader::RecordData &Record;
-  unsigned &Idx;
-
-public:
-  TypeLocReader(PCHReader &Reader, const PCHReader::RecordData &Record,
-                unsigned &Idx)
-    : Reader(Reader), Record(Record), Idx(Idx) { }
-
-#define ABSTRACT_TYPELOC(CLASS)
-#define TYPELOC(CLASS, PARENT, TYPE) \
-    void Visit##CLASS(CLASS TyLoc);
-#include "clang/AST/TypeLocNodes.def"
-
-  void VisitTypeLoc(TypeLoc TyLoc) {
-    assert(0 && "A type loc wrapper was not handled!");
-  }
-};
-
-}
-
-void TypeLocReader::VisitDefaultTypeSpecLoc(DefaultTypeSpecLoc TyLoc) {
-  TyLoc.setStartLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitTypedefLoc(TypedefLoc TyLoc) {
-  TyLoc.setNameLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitObjCInterfaceLoc(ObjCInterfaceLoc TyLoc) {
-  TyLoc.setNameLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitObjCProtocolListLoc(ObjCProtocolListLoc TyLoc) {
-  TyLoc.setLAngleLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  TyLoc.setRAngleLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  for (unsigned i = 0, e = TyLoc.getNumProtocols(); i != e; ++i)
-    TyLoc.setProtocolLoc(i, SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitPointerLoc(PointerLoc TyLoc) {
-  TyLoc.setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitBlockPointerLoc(BlockPointerLoc TyLoc) {
-  TyLoc.setCaretLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitMemberPointerLoc(MemberPointerLoc TyLoc) {
-  TyLoc.setStarLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitReferenceLoc(ReferenceLoc TyLoc) {
-  TyLoc.setAmpLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-}
-void TypeLocReader::VisitFunctionLoc(FunctionLoc TyLoc) {
-  TyLoc.setLParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  TyLoc.setRParenLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  for (unsigned i = 0, e = TyLoc.getNumArgs(); i != e; ++i)
-    TyLoc.setArg(i, cast<ParmVarDecl>(Reader.GetDecl(Record[Idx++])));
-}
-void TypeLocReader::VisitArrayLoc(ArrayLoc TyLoc) {
-  TyLoc.setLBracketLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  TyLoc.setRBracketLoc(SourceLocation::getFromRawEncoding(Record[Idx++]));
-  if (Record[Idx++])
-    TyLoc.setSizeExpr(Reader.ReadDeclExpr());
-}
-
 void PCHDeclReader::VisitDeclaratorDecl(DeclaratorDecl *DD) {
   VisitValueDecl(DD);
-  QualType InfoTy = Reader.GetType(Record[Idx++]);
-  if (InfoTy.isNull())
-    return;
-
-  DeclaratorInfo *DInfo = Reader.getContext()->CreateDeclaratorInfo(InfoTy);
-  TypeLocReader TLR(Reader, Record, Idx);
-  for (TypeLoc TL = DInfo->getTypeLoc(); !TL.isNull(); TL = TL.getNextTypeLoc())
-    TLR.Visit(TL);
-  DD->setDeclaratorInfo(DInfo);
+  DeclaratorInfo *DInfo = Reader.GetDeclaratorInfo(Record, Idx);
+  if (DInfo)
+    DD->setDeclaratorInfo(DInfo);
 }
 
 void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
@@ -438,11 +367,6 @@ void PCHDeclReader::VisitImplicitParamDecl(ImplicitParamDecl *PD) {
 void PCHDeclReader::VisitParmVarDecl(ParmVarDecl *PD) {
   VisitVarDecl(PD);
   PD->setObjCDeclQualifier((Decl::ObjCDeclQualifier)Record[Idx++]);
-}
-
-void PCHDeclReader::VisitOriginalParmVarDecl(OriginalParmVarDecl *PD) {
-  VisitParmVarDecl(PD);
-  PD->setOriginalType(Reader.GetType(Record[Idx++]));
 }
 
 void PCHDeclReader::VisitFileScopeAsmDecl(FileScopeAsmDecl *AD) {
@@ -688,7 +612,7 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
     D = Context->getTranslationUnitDecl();
     break;
   case pch::DECL_TYPEDEF:
-    D = TypedefDecl::Create(*Context, 0, SourceLocation(), 0, QualType());
+    D = TypedefDecl::Create(*Context, 0, SourceLocation(), 0, 0);
     break;
   case pch::DECL_ENUM:
     D = EnumDecl::Create(*Context, 0, SourceLocation(), 0, SourceLocation(), 0);
@@ -765,10 +689,6 @@ Decl *PCHReader::ReadDeclRecord(uint64_t Offset, unsigned Index) {
   case pch::DECL_PARM_VAR:
     D = ParmVarDecl::Create(*Context, 0, SourceLocation(), 0, QualType(), 0,
                             VarDecl::None, 0);
-    break;
-  case pch::DECL_ORIGINAL_PARM_VAR:
-    D = OriginalParmVarDecl::Create(*Context, 0, SourceLocation(), 0,
-                                    QualType(),0, QualType(), VarDecl::None, 0);
     break;
   case pch::DECL_FILE_SCOPE_ASM:
     D = FileScopeAsmDecl::Create(*Context, 0, SourceLocation(), 0);

@@ -19,14 +19,13 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/Compiler.h"
 using namespace llvm;
 
 namespace {
   /// ScalarEvolutionAliasAnalysis - This is a simple alias analysis
   /// implementation that uses ScalarEvolution to answer queries.
-  class VISIBILITY_HIDDEN ScalarEvolutionAliasAnalysis : public FunctionPass,
-                                                         public AliasAnalysis {
+  class ScalarEvolutionAliasAnalysis : public FunctionPass,
+                                       public AliasAnalysis {
     ScalarEvolution *SE;
 
   public:

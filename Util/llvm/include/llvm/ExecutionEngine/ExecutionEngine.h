@@ -19,6 +19,8 @@
 #include <map>
 #include <string>
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/ValueMap.h"
+#include "llvm/Support/ValueHandle.h"
 #include "llvm/System/Mutex.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -26,6 +28,7 @@ namespace llvm {
 
 struct GenericValue;
 class Constant;
+class ExecutionEngine;
 class Function;
 class GlobalVariable;
 class GlobalValue;
@@ -37,13 +40,26 @@ class ModuleProvider;
 class MutexGuard;
 class TargetData;
 class Type;
-template<typename> class AssertingVH;
 
 class ExecutionEngineState {
+public:
+  struct AddressMapConfig : public ValueMapConfig<const GlobalValue*> {
+    typedef ExecutionEngineState *ExtraData;
+    static sys::Mutex *getMutex(ExecutionEngineState *EES);
+    static void onDelete(ExecutionEngineState *EES, const GlobalValue *Old);
+    static void onRAUW(ExecutionEngineState *, const GlobalValue *,
+                       const GlobalValue *);
+  };
+
+  typedef ValueMap<const GlobalValue *, void *, AddressMapConfig>
+      GlobalAddressMapTy;
+
 private:
+  ExecutionEngine &EE;
+
   /// GlobalAddressMap - A mapping between LLVM global values and their
   /// actualized version...
-  std::map<AssertingVH<const GlobalValue>, void *> GlobalAddressMap;
+  GlobalAddressMapTy GlobalAddressMap;
 
   /// GlobalAddressReverseMap - This is the reverse mapping of GlobalAddressMap,
   /// used to convert raw addresses into the LLVM global value that is emitted
@@ -52,7 +68,9 @@ private:
   std::map<void *, AssertingVH<const GlobalValue> > GlobalAddressReverseMap;
 
 public:
-  std::map<AssertingVH<const GlobalValue>, void *> &
+  ExecutionEngineState(ExecutionEngine &EE);
+
+  GlobalAddressMapTy &
   getGlobalAddressMap(const MutexGuard &) {
     return GlobalAddressMap;
   }
@@ -61,12 +79,15 @@ public:
   getGlobalAddressReverseMap(const MutexGuard &) {
     return GlobalAddressReverseMap;
   }
+
+  // Returns the address ToUnmap was mapped to.
+  void *RemoveMapping(const MutexGuard &, const GlobalValue *ToUnmap);
 };
 
 
 class ExecutionEngine {
   const TargetData *TD;
-  ExecutionEngineState state;
+  ExecutionEngineState EEState;
   bool LazyCompilationDisabled;
   bool GVCompilationDisabled;
   bool SymbolSearchingDisabled;
@@ -210,8 +231,8 @@ public:
   /// at the specified location.  This is used internally as functions are JIT'd
   /// and as global variables are laid out in memory.  It can and should also be
   /// used by clients of the EE that want to have an LLVM global overlay
-  /// existing data in memory.  After adding a mapping for GV, you must not
-  /// destroy it until you've removed the mapping.
+  /// existing data in memory.  Mappings are automatically removed when their
+  /// GlobalValue is destroyed.
   void addGlobalMapping(const GlobalValue *GV, void *Addr);
   
   /// clearAllGlobalMappings - Clear all global mappings and start over again
@@ -235,29 +256,22 @@ public:
   void *getPointerToGlobalIfAvailable(const GlobalValue *GV);
 
   /// getPointerToGlobal - This returns the address of the specified global
-  /// value.  This may involve code generation if it's a function.  After
-  /// getting a pointer to GV, it and all globals it transitively refers to have
-  /// been passed to addGlobalMapping.  You must clear the mapping for each
-  /// referred-to global before destroying it.  If a referred-to global RTG is a
-  /// function and this ExecutionEngine is a JIT compiler, calling
-  /// updateGlobalMapping(RTG, 0) will leak the function's machine code, so you
-  /// should call freeMachineCodeForFunction(RTG) instead.  Note that
-  /// optimizations can move and delete non-external GlobalValues without
-  /// notifying the ExecutionEngine.
+  /// value.  This may involve code generation if it's a function.
   ///
   void *getPointerToGlobal(const GlobalValue *GV);
 
   /// getPointerToFunction - The different EE's represent function bodies in
   /// different ways.  They should each implement this to say what a function
-  /// pointer should look like.  See getPointerToGlobal for the requirements on
-  /// destroying F and any GlobalValues it refers to.
+  /// pointer should look like.  When F is destroyed, the ExecutionEngine will
+  /// remove its global mapping and free any machine code.  Be sure no threads
+  /// are running inside F when that happens.
   ///
   virtual void *getPointerToFunction(Function *F) = 0;
 
   /// getPointerToFunctionOrStub - If the specified function has been
   /// code-gen'd, return a pointer to the function.  If not, compile it, or use
-  /// a stub to implement lazy compilation if available.  See getPointerToGlobal
-  /// for the requirements on destroying F and any GlobalValues it refers to.
+  /// a stub to implement lazy compilation if available.  See
+  /// getPointerToFunction for the requirements on destroying F.
   ///
   virtual void *getPointerToFunctionOrStub(Function *F) {
     // Default implementation, just codegen the function.
@@ -293,8 +307,7 @@ public:
 
   /// getOrEmitGlobalVariable - Return the address of the specified global
   /// variable, possibly emitting it to memory if needed.  This is used by the
-  /// Emitter.  See getPointerToGlobal for the requirements on destroying GV and
-  /// any GlobalValues it refers to.
+  /// Emitter.
   virtual void *getOrEmitGlobalVariable(const GlobalVariable *GV) {
     return getPointerToGlobal((GlobalValue*)GV);
   }
@@ -465,7 +478,6 @@ class EngineBuilder {
   }
 
   ExecutionEngine *create();
-
 };
 
 } // End llvm namespace

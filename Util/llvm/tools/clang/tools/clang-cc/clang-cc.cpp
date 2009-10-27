@@ -911,15 +911,6 @@ static void HandleMacOSVersionMin(llvm::Triple &Triple) {
   }
   
   unsigned VersionNum = MacOSVersionMin[3]-'0';
-
-  if (VersionNum <= 4 && Triple.getArch() == llvm::Triple::x86_64) {
-    fprintf(stderr,
-            "-mmacosx-version-min=%s is invalid with -arch x86_64.\n",
-            MacOSVersionMin.c_str());
-    exit(1);
-  }
-
-  
   llvm::SmallString<16> NewDarwinString;
   NewDarwinString += "darwin";
   
@@ -1099,8 +1090,8 @@ static llvm::cl::opt<bool>
 nostdinc("nostdinc", llvm::cl::desc("Disable standard #include directories"));
 
 static llvm::cl::opt<bool>
-nostdclanginc("nostdclanginc",
-	      llvm::cl::desc("Disable standard clang #include directories"));
+nobuiltininc("nobuiltininc",
+             llvm::cl::desc("Disable builtin #include directories"));
 
 // Various command line options.  These four add directories to each chain.
 static llvm::cl::list<std::string>
@@ -1139,9 +1130,6 @@ isysroot("isysroot", llvm::cl::value_desc("dir"), llvm::cl::init("/"),
 
 // Add the clang headers, which are relative to the clang binary.
 void AddClangIncludePaths(const char *Argv0, InitHeaderSearch *Init) {
-  if (nostdclanginc)
-    return;
-
   llvm::sys::Path MainExecutablePath =
      llvm::sys::Path::GetMainExecutable(Argv0,
                                     (void*)(intptr_t)AddClangIncludePaths);
@@ -1166,7 +1154,8 @@ void AddClangIncludePaths(const char *Argv0, InitHeaderSearch *Init) {
 /// InitializeIncludePaths - Process the -I options and set them in the
 /// HeaderSearch object.
 void InitializeIncludePaths(const char *Argv0, HeaderSearch &Headers,
-                            FileManager &FM, const LangOptions &Lang) {
+                            FileManager &FM, const LangOptions &Lang,
+                            llvm::Triple &triple) {
   InitHeaderSearch Init(Headers, Verbose, isysroot);
 
   // Handle -I... and -F... options, walking the lists in parallel.
@@ -1242,10 +1231,11 @@ void InitializeIncludePaths(const char *Argv0, HeaderSearch &Headers,
 
   Init.AddDefaultEnvVarPaths(Lang);
 
-  AddClangIncludePaths(Argv0, &Init);
+  if (!nobuiltininc)
+    AddClangIncludePaths(Argv0, &Init);
 
   if (!nostdinc)
-    Init.AddDefaultSystemIncludePaths(Lang);
+    Init.AddDefaultSystemIncludePaths(Lang, triple);
 
   // Now that we have collected all of the include paths, merge them all
   // together and tell the preprocessor about them.
@@ -2189,8 +2179,7 @@ static void ProcessASTInputFile(const std::string &InFile, ProgActions PA,
                                 Diagnostic &Diags, FileManager &FileMgr,
                                 llvm::LLVMContext& Context) {
   std::string Error;
-  llvm::OwningPtr<ASTUnit> AST(ASTUnit::LoadFromPCHFile(InFile, Diags, FileMgr,
-                                                        &Error));
+  llvm::OwningPtr<ASTUnit> AST(ASTUnit::LoadFromPCHFile(InFile, &Error));
   if (!AST) {
     Diags.Report(FullSourceLoc(), diag::err_fe_invalid_ast_file) << Error;
     return;
@@ -2410,7 +2399,7 @@ int main(int argc, char **argv) {
     HeaderSearch HeaderInfo(FileMgr);
 
 
-    InitializeIncludePaths(argv[0], HeaderInfo, FileMgr, LangInfo);
+    InitializeIncludePaths(argv[0], HeaderInfo, FileMgr, LangInfo, Triple);
 
     // Set up the preprocessor with these options.
     DriverPreprocessorFactory PPFactory(Diags, LangInfo, *Target,

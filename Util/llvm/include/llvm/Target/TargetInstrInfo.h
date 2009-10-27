@@ -103,30 +103,62 @@ public:
   /// isTriviallyReMaterializable - Return true if the instruction is trivially
   /// rematerializable, meaning it has no side effects and requires no operands
   /// that aren't always available.
-  bool isTriviallyReMaterializable(const MachineInstr *MI) const {
-    return MI->getDesc().isRematerializable() &&
-           isReallyTriviallyReMaterializable(MI);
+  bool isTriviallyReMaterializable(const MachineInstr *MI,
+                                   AliasAnalysis *AA = 0) const {
+    return MI->getOpcode() == IMPLICIT_DEF ||
+           (MI->getDesc().isRematerializable() &&
+            (isReallyTriviallyReMaterializable(MI, AA) ||
+             isReallyTriviallyReMaterializableGeneric(MI, AA)));
   }
 
 protected:
   /// isReallyTriviallyReMaterializable - For instructions with opcodes for
-  /// which the M_REMATERIALIZABLE flag is set, this function tests whether the
-  /// instruction itself is actually trivially rematerializable, considering
-  /// its operands.  This is used for targets that have instructions that are
-  /// only trivially rematerializable for specific uses.  This predicate must
-  /// return false if the instruction has any side effects other than
-  /// producing a value, or if it requres any address registers that are not
-  /// always available.
-  virtual bool isReallyTriviallyReMaterializable(const MachineInstr *MI) const {
-    return true;
+  /// which the M_REMATERIALIZABLE flag is set, this hook lets the target
+  /// specify whether the instruction is actually trivially rematerializable,
+  /// taking into consideration its operands. This predicate must return false
+  /// if the instruction has any side effects other than producing a value, or
+  /// if it requres any address registers that are not always available.
+  virtual bool isReallyTriviallyReMaterializable(const MachineInstr *MI,
+                                                 AliasAnalysis *AA) const {
+    return false;
   }
 
+private:
+  /// isReallyTriviallyReMaterializableGeneric - For instructions with opcodes
+  /// for which the M_REMATERIALIZABLE flag is set and the target hook
+  /// isReallyTriviallyReMaterializable returns false, this function does
+  /// target-independent tests to determine if the instruction is really
+  /// trivially rematerializable.
+  bool isReallyTriviallyReMaterializableGeneric(const MachineInstr *MI,
+                                                AliasAnalysis *AA) const;
+
 public:
-  /// Return true if the instruction is a register to register move and return
-  /// the source and dest operands and their sub-register indices by reference.
+  /// isMoveInstr - Return true if the instruction is a register to register
+  /// move and return the source and dest operands and their sub-register
+  /// indices by reference.
   virtual bool isMoveInstr(const MachineInstr& MI,
                            unsigned& SrcReg, unsigned& DstReg,
                            unsigned& SrcSubIdx, unsigned& DstSubIdx) const {
+    return false;
+  }
+
+  /// isIdentityCopy - Return true if the instruction is a copy (or
+  /// extract_subreg, insert_subreg, subreg_to_reg) where the source and
+  /// destination registers are the same.
+  bool isIdentityCopy(const MachineInstr &MI) const {
+    unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
+    if (isMoveInstr(MI, SrcReg, DstReg, SrcSubIdx, DstSubIdx) &&
+        SrcReg == DstReg)
+      return true;
+
+    if (MI.getOpcode() == TargetInstrInfo::EXTRACT_SUBREG &&
+        MI.getOperand(0).getReg() == MI.getOperand(1).getReg())
+    return true;
+
+    if ((MI.getOpcode() == TargetInstrInfo::INSERT_SUBREG ||
+         MI.getOpcode() == TargetInstrInfo::SUBREG_TO_REG) &&
+        MI.getOperand(0).getReg() == MI.getOperand(2).getReg())
+      return true;
     return false;
   }
   
@@ -438,10 +470,6 @@ public:
     return true;
   }
 
-  /// isDeadInstruction - Return true if the instruction is considered dead.
-  /// This allows some late codegen passes to delete them.
-  virtual bool isDeadInstruction(const MachineInstr *MI) const = 0;
-
   /// GetInstSize - Returns the size of the specified Instruction.
   /// 
   virtual unsigned GetInstSizeInBytes(const MachineInstr *MI) const {
@@ -479,8 +507,6 @@ public:
                              MachineBasicBlock::iterator MI,
                              unsigned DestReg, unsigned SubReg,
                              const MachineInstr *Orig) const;
-  virtual bool isDeadInstruction(const MachineInstr *MI) const;
-
   virtual unsigned GetFunctionSizeInBytes(const MachineFunction &MF) const;
 };
 

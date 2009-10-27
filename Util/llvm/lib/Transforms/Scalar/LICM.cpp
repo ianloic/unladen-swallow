@@ -35,6 +35,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/IntrinsicInst.h"
 #include "llvm/Instructions.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -338,7 +339,6 @@ void LICM::SinkRegion(DomTreeNode *N) {
   }
 }
 
-
 /// HoistRegion - Walk the specified region of the CFG (defined by all blocks
 /// dominated by the specified block, and that are in the current loop) in depth
 /// first order w.r.t the DominatorTree.  This allows us to visit definitions
@@ -392,6 +392,10 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
       Size = AA->getTypeStoreSize(LI->getType());
     return !pointerInvalidatedByLoop(LI->getOperand(0), Size);
   } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
+    if (isa<DbgStopPointInst>(CI)) {
+      // Don't hoist/sink dbgstoppoints, we handle them separately
+      return false;
+    }
     // Handle obvious cases efficiently.
     AliasAnalysis::ModRefBehavior Behavior = AA->getModRefBehavior(CI);
     if (Behavior == AliasAnalysis::DoesNotAccessMemory)
@@ -482,21 +486,26 @@ void LICM::sink(Instruction &I) {
     if (!isExitBlockDominatedByBlockInLoop(ExitBlocks[0], I.getParent())) {
       // Instruction is not used, just delete it.
       CurAST->deleteValue(&I);
-      if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
+      // If I has users in unreachable blocks, eliminate.
+      // If I is not void type then replaceAllUsesWith undef.
+      // This allows ValueHandlers and custom metadata to adjust itself.
+      if (!I.getType()->isVoidTy())
         I.replaceAllUsesWith(UndefValue::get(I.getType()));
       I.eraseFromParent();
     } else {
       // Move the instruction to the start of the exit block, after any PHI
       // nodes in it.
       I.removeFromParent();
-
       BasicBlock::iterator InsertPt = ExitBlocks[0]->getFirstNonPHI();
       ExitBlocks[0]->getInstList().insert(InsertPt, &I);
     }
   } else if (ExitBlocks.empty()) {
     // The instruction is actually dead if there ARE NO exit blocks.
     CurAST->deleteValue(&I);
-    if (!I.use_empty())  // If I has users in unreachable blocks, eliminate.
+    // If I has users in unreachable blocks, eliminate.
+    // If I is not void type then replaceAllUsesWith undef.
+    // This allows ValueHandlers and custom metadata to adjust itself.
+    if (!I.getType()->isVoidTy())
       I.replaceAllUsesWith(UndefValue::get(I.getType()));
     I.eraseFromParent();
   } else {
@@ -507,7 +516,7 @@ void LICM::sink(Instruction &I) {
     // Firstly, we create a stack object to hold the value...
     AllocaInst *AI = 0;
 
-    if (I.getType() != Type::getVoidTy(I.getContext())) {
+    if (!I.getType()->isVoidTy()) {
       AI = new AllocaInst(I.getType(), 0, I.getName(),
                           I.getParent()->getParent()->getEntryBlock().begin());
       CurAST->add(AI);
@@ -602,7 +611,8 @@ void LICM::sink(Instruction &I) {
 /// that is safe to hoist, this instruction is called to do the dirty work.
 ///
 void LICM::hoist(Instruction &I) {
-  DEBUG(errs() << "LICM hoisting to " << Preheader->getName() << ": " << I);
+  DEBUG(errs() << "LICM hoisting to " << Preheader->getName() << ": "
+        << I << "\n");
 
   // Remove the instruction from its current basic block... but don't delete the
   // instruction.

@@ -192,7 +192,8 @@ bool CXXRecordDecl::hasConstCopyAssignment(ASTContext &Context,
     const CXXMethodDecl* Method = cast<CXXMethodDecl>(*Op);
     if (Method->isStatic())
       continue;
-    // TODO: Skip templates? Or is this implicitly done due to parameter types?
+    if (Method->getPrimaryTemplate())
+      continue;
     const FunctionProtoType *FnType =
       Method->getType()->getAs<FunctionProtoType>();
     assert(FnType && "Overloaded operator has no prototype.");
@@ -259,6 +260,11 @@ void CXXRecordDecl::addedAssignmentOperator(ASTContext &Context,
   const FunctionProtoType *FnType = OpDecl->getType()->getAs<FunctionProtoType>();
   assert(FnType && "Overloaded operator has no proto function type.");
   assert(FnType->getNumArgs() == 1 && !FnType->isVariadic());
+  
+  // Copy assignment operators must be non-templates.
+  if (OpDecl->getPrimaryTemplate() || OpDecl->getDescribedFunctionTemplate())
+    return;
+  
   QualType ArgType = FnType->getArgType(0);
   if (const LValueReferenceType *Ref = ArgType->getAs<LValueReferenceType>())
     ArgType = Ref->getPointeeType();
@@ -287,14 +293,15 @@ void CXXRecordDecl::addedAssignmentOperator(ASTContext &Context,
 
 void
 CXXRecordDecl::collectConversionFunctions(
-                        llvm::SmallPtrSet<QualType, 8>& ConversionsTypeSet) {
+                        llvm::SmallPtrSet<CanQualType, 8>& ConversionsTypeSet) 
+{
   OverloadedFunctionDecl *TopConversions = getConversionFunctions();
   for (OverloadedFunctionDecl::function_iterator
        TFunc = TopConversions->function_begin(),
        TFuncEnd = TopConversions->function_end();
        TFunc != TFuncEnd; ++TFunc) {
     NamedDecl *TopConv = TFunc->get();
-    QualType TConvType;
+    CanQualType TConvType;
     if (FunctionTemplateDecl *TConversionTemplate =
         dyn_cast<FunctionTemplateDecl>(TopConv))
       TConvType = 
@@ -317,8 +324,9 @@ CXXRecordDecl::collectConversionFunctions(
 /// in current class.
 void
 CXXRecordDecl::getNestedVisibleConversionFunctions(CXXRecordDecl *RD,
-                const llvm::SmallPtrSet<QualType, 8> &TopConversionsTypeSet,                               
-                const llvm::SmallPtrSet<QualType, 8> &HiddenConversionTypes) {
+                const llvm::SmallPtrSet<CanQualType, 8> &TopConversionsTypeSet,                               
+                const llvm::SmallPtrSet<CanQualType, 8> &HiddenConversionTypes) 
+{
   bool inTopClass = (RD == this);
   QualType ClassType = getASTContext().getTypeDeclType(this);
   if (const RecordType *Record = ClassType->getAs<RecordType>()) {
@@ -332,7 +340,7 @@ CXXRecordDecl::getNestedVisibleConversionFunctions(CXXRecordDecl *RD,
       NamedDecl *Conv = Func->get();
       // Only those conversions not exact match of conversions in current
       // class are candidateconversion routines.
-      QualType ConvType;
+      CanQualType ConvType;
       if (FunctionTemplateDecl *ConversionTemplate = 
             dyn_cast<FunctionTemplateDecl>(Conv))
         ConvType = 
@@ -356,39 +364,35 @@ CXXRecordDecl::getNestedVisibleConversionFunctions(CXXRecordDecl *RD,
       }
     }
   }
-  
+
+  if (getNumBases() == 0 && getNumVBases() == 0)
+    return;
+
+  llvm::SmallPtrSet<CanQualType, 8> ConversionFunctions;
+  if (!inTopClass)
+    collectConversionFunctions(ConversionFunctions);
+
   for (CXXRecordDecl::base_class_iterator VBase = vbases_begin(),
        E = vbases_end(); VBase != E; ++VBase) {
-    CXXRecordDecl *VBaseClassDecl
-      = cast<CXXRecordDecl>(VBase->getType()->getAs<RecordType>()->getDecl());
-    if (inTopClass)
+    if (const RecordType *RT = VBase->getType()->getAs<RecordType>()) {
+      CXXRecordDecl *VBaseClassDecl
+        = cast<CXXRecordDecl>(RT->getDecl());
       VBaseClassDecl->getNestedVisibleConversionFunctions(RD,
-                                                        TopConversionsTypeSet,
-                                                        TopConversionsTypeSet);
-    else {
-      llvm::SmallPtrSet<QualType, 8> HiddenConversionTypes;
-        collectConversionFunctions(HiddenConversionTypes);
-      VBaseClassDecl->getNestedVisibleConversionFunctions(RD,
-                                                        TopConversionsTypeSet,
-                                                        HiddenConversionTypes);
+                    TopConversionsTypeSet,
+                    (inTopClass ? TopConversionsTypeSet : ConversionFunctions));
     }
   }
   for (CXXRecordDecl::base_class_iterator Base = bases_begin(),
        E = bases_end(); Base != E; ++Base) {
     if (Base->isVirtual())
       continue;
-    CXXRecordDecl *BaseClassDecl
-      = cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
-    if (inTopClass)
+    if (const RecordType *RT = Base->getType()->getAs<RecordType>()) {
+      CXXRecordDecl *BaseClassDecl
+        = cast<CXXRecordDecl>(RT->getDecl());
+
       BaseClassDecl->getNestedVisibleConversionFunctions(RD,
-                                                         TopConversionsTypeSet,
-                                                         TopConversionsTypeSet);
-    else {
-      llvm::SmallPtrSet<QualType, 8> HiddenConversionTypes;
-      collectConversionFunctions(HiddenConversionTypes);
-      BaseClassDecl->getNestedVisibleConversionFunctions(RD,
-                                                         TopConversionsTypeSet,
-                                                         HiddenConversionTypes);
+                    TopConversionsTypeSet,
+                    (inTopClass ? TopConversionsTypeSet : ConversionFunctions));
     }
   }
 }
@@ -403,7 +407,7 @@ CXXRecordDecl::getVisibleConversionFunctions() {
   // If visible conversion list is already evaluated, return it.
   if (ComputedVisibleConversions)
     return &VisibleConversions;
-  llvm::SmallPtrSet<QualType, 8> TopConversionsTypeSet;
+  llvm::SmallPtrSet<CanQualType, 8> TopConversionsTypeSet;
   collectConversionFunctions(TopConversionsTypeSet);
   getNestedVisibleConversionFunctions(this, TopConversionsTypeSet,
                                       TopConversionsTypeSet);
@@ -435,6 +439,54 @@ void CXXRecordDecl::addConversionFunction(FunctionTemplateDecl *ConvDecl) {
   assert(isa<CXXConversionDecl>(ConvDecl->getTemplatedDecl()) &&
          "Function template is not a conversion function template");
   Conversions.addOverload(ConvDecl);
+}
+
+CXXRecordDecl *CXXRecordDecl::getInstantiatedFromMemberClass() const {
+  if (MemberSpecializationInfo *MSInfo = getMemberSpecializationInfo())
+    return cast<CXXRecordDecl>(MSInfo->getInstantiatedFrom());
+  
+  return 0;
+}
+
+MemberSpecializationInfo *CXXRecordDecl::getMemberSpecializationInfo() const {
+  return TemplateOrInstantiation.dyn_cast<MemberSpecializationInfo *>();
+}
+
+void 
+CXXRecordDecl::setInstantiationOfMemberClass(CXXRecordDecl *RD,
+                                             TemplateSpecializationKind TSK) {
+  assert(TemplateOrInstantiation.isNull() && 
+         "Previous template or instantiation?");
+  assert(!isa<ClassTemplateSpecializationDecl>(this));
+  TemplateOrInstantiation 
+    = new (getASTContext()) MemberSpecializationInfo(RD, TSK);
+}
+
+TemplateSpecializationKind CXXRecordDecl::getTemplateSpecializationKind() {
+  if (ClassTemplateSpecializationDecl *Spec
+        = dyn_cast<ClassTemplateSpecializationDecl>(this))
+    return Spec->getSpecializationKind();
+  
+  if (MemberSpecializationInfo *MSInfo = getMemberSpecializationInfo())
+    return MSInfo->getTemplateSpecializationKind();
+  
+  return TSK_Undeclared;
+}
+
+void 
+CXXRecordDecl::setTemplateSpecializationKind(TemplateSpecializationKind TSK) {
+  if (ClassTemplateSpecializationDecl *Spec
+      = dyn_cast<ClassTemplateSpecializationDecl>(this)) {
+    Spec->setSpecializationKind(TSK);
+    return;
+  }
+  
+  if (MemberSpecializationInfo *MSInfo = getMemberSpecializationInfo()) {
+    MSInfo->setTemplateSpecializationKind(TSK);
+    return;
+  }
+  
+  assert(false && "Not a class template or member class specialization");
 }
 
 CXXConstructorDecl *
@@ -650,7 +702,9 @@ CXXConstructorDecl::isCopyConstructor(ASTContext &Context,
   //   const volatile X&, and either there are no other parameters
   //   or else all other parameters have default arguments (8.3.6).
   if ((getNumParams() < 1) ||
-      (getNumParams() > 1 && !getParamDecl(1)->hasDefaultArg()))
+      (getNumParams() > 1 && !getParamDecl(1)->hasDefaultArg()) ||
+      (getPrimaryTemplate() != 0) ||
+      (getDescribedFunctionTemplate() != 0))
     return false;
 
   const ParmVarDecl *Param = getParamDecl(0);

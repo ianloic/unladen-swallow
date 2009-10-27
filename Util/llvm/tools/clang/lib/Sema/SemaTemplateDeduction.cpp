@@ -221,7 +221,7 @@ DeduceTemplateArguments(ASTContext &Context,
                         QualType Arg,
                         Sema::TemplateDeductionInfo &Info,
                         llvm::SmallVectorImpl<TemplateArgument> &Deduced) {
-  assert(Arg->isCanonical() && "Argument type must be canonical");
+  assert(Arg.isCanonical() && "Argument type must be canonical");
 
   // Check whether the template argument is a dependent template-id.
   // FIXME: This is untested code; it can be tested when we implement
@@ -313,7 +313,7 @@ DeduceTemplateArguments(ASTContext &Context,
 /// that corresponds to T. Otherwise, returns T.
 static QualType getUnqualifiedArrayType(ASTContext &Context, QualType T,
                                         Qualifiers &Quals) {
-  assert(T->isCanonical() && "Only operates on canonical types");
+  assert(T.isCanonical() && "Only operates on canonical types");
   if (!isa<ArrayType>(T)) {
     Quals = T.getQualifiers();
     return T.getUnqualifiedType();
@@ -695,7 +695,7 @@ DeduceTemplateArguments(ASTContext &Context,
             CXXRecordDecl *Next = cast<CXXRecordDecl>(NextT->getDecl());
             for (CXXRecordDecl::base_class_iterator Base = Next->bases_begin(),
                                                  BaseEnd = Next->bases_end();
-               Base != BaseEnd; ++Base) {
+                 Base != BaseEnd; ++Base) {
               assert(Base->getType()->isRecordType() &&
                      "Base class that isn't a record?");
               ToVisit.push_back(Base->getType()->getAs<RecordType>());
@@ -1643,15 +1643,15 @@ DeduceTemplateArgumentsDuringPartialOrdering(ASTContext &Context,
   //   performed on the types used for partial ordering: 
   //     - If P is a reference type, P is replaced by the type referred to. 
   CanQual<ReferenceType> ParamRef = Param->getAs<ReferenceType>();
-  if (ParamRef)
+  if (!ParamRef.isNull())
     Param = ParamRef->getPointeeType();
   
   //     - If A is a reference type, A is replaced by the type referred to.
   CanQual<ReferenceType> ArgRef = Arg->getAs<ReferenceType>();
-  if (ArgRef)
+  if (!ArgRef.isNull())
     Arg = ArgRef->getPointeeType();
   
-  if (QualifierComparisons && ParamRef && ArgRef) {
+  if (QualifierComparisons && !ParamRef.isNull() && !ArgRef.isNull()) {
     // C++0x [temp.deduct.partial]p6:
     //   If both P and A were reference types (before being replaced with the 
     //   type referred to above), determine which of the two types (if any) is 

@@ -18,7 +18,6 @@
 #include "X86MachineFunctionInfo.h"
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
-#include "llvm/GlobalVariable.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/ADT/STLExtras.h"
@@ -782,31 +781,9 @@ static bool regIsPICBase(unsigned BaseReg, const MachineRegisterInfo &MRI) {
   return isPICBase;
 }
 
-/// CanRematLoadWithDispOperand - Return true if a load with the specified
-/// operand is a candidate for remat: for this to be true we need to know that
-/// the load will always return the same value, even if moved.
-static bool CanRematLoadWithDispOperand(const MachineOperand &MO,
-                                        X86TargetMachine &TM) {
-  // Loads from constant pool entries can be remat'd.
-  if (MO.isCPI()) return true;
-  
-  // We can remat globals in some cases.
-  if (MO.isGlobal()) {
-    // If this is a load of a stub, not of the global, we can remat it.  This
-    // access will always return the address of the global.
-    if (isGlobalStubReference(MO.getTargetFlags()))
-      return true;
-    
-    // If the global itself is constant, we can remat the load.
-    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(MO.getGlobal()))
-      if (GV->isConstant())
-        return true;
-  }
-  return false;
-}
- 
 bool
-X86InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr *MI) const {
+X86InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr *MI,
+                                                AliasAnalysis *AA) const {
   switch (MI->getOpcode()) {
   default: break;
     case X86::MOV8rm:
@@ -825,7 +802,7 @@ X86InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr *MI) const {
       if (MI->getOperand(1).isReg() &&
           MI->getOperand(2).isImm() &&
           MI->getOperand(3).isReg() && MI->getOperand(3).getReg() == 0 &&
-          CanRematLoadWithDispOperand(MI->getOperand(4), TM)) {
+          MI->isInvariantLoad(AA)) {
         unsigned BaseReg = MI->getOperand(1).getReg();
         if (BaseReg == 0 || BaseReg == X86::RIP)
           return true;
@@ -876,7 +853,7 @@ X86InstrInfo::isReallyTriviallyReMaterializable(const MachineInstr *MI) const {
 /// isSafeToClobberEFLAGS - Return true if it's safe insert an instruction that
 /// would clobber the EFLAGS condition register. Note the result may be
 /// conservative. If it cannot definitely determine the safety after visiting
-/// two instructions it assumes it's not safe.
+/// a few instructions in each direction it assumes it's not safe.
 static bool isSafeToClobberEFLAGS(MachineBasicBlock &MBB,
                                   MachineBasicBlock::iterator I) {
   // It's always safe to clobber EFLAGS at the end of a block.
@@ -884,11 +861,13 @@ static bool isSafeToClobberEFLAGS(MachineBasicBlock &MBB,
     return true;
 
   // For compile time consideration, if we are not able to determine the
-  // safety after visiting 2 instructions, we will assume it's not safe.
-  for (unsigned i = 0; i < 2; ++i) {
+  // safety after visiting 4 instructions in each direction, we will assume
+  // it's not safe.
+  MachineBasicBlock::iterator Iter = I;
+  for (unsigned i = 0; i < 4; ++i) {
     bool SeenDef = false;
-    for (unsigned j = 0, e = I->getNumOperands(); j != e; ++j) {
-      MachineOperand &MO = I->getOperand(j);
+    for (unsigned j = 0, e = Iter->getNumOperands(); j != e; ++j) {
+      MachineOperand &MO = Iter->getOperand(j);
       if (!MO.isReg())
         continue;
       if (MO.getReg() == X86::EFLAGS) {
@@ -901,10 +880,33 @@ static bool isSafeToClobberEFLAGS(MachineBasicBlock &MBB,
     if (SeenDef)
       // This instruction defines EFLAGS, no need to look any further.
       return true;
-    ++I;
+    ++Iter;
 
     // If we make it to the end of the block, it's safe to clobber EFLAGS.
-    if (I == MBB.end())
+    if (Iter == MBB.end())
+      return true;
+  }
+
+  Iter = I;
+  for (unsigned i = 0; i < 4; ++i) {
+    // If we make it to the beginning of the block, it's safe to clobber
+    // EFLAGS iff EFLAGS is not live-in.
+    if (Iter == MBB.begin())
+      return !MBB.isLiveIn(X86::EFLAGS);
+
+    --Iter;
+    bool SawKill = false;
+    for (unsigned j = 0, e = Iter->getNumOperands(); j != e; ++j) {
+      MachineOperand &MO = Iter->getOperand(j);
+      if (MO.isReg() && MO.getReg() == X86::EFLAGS) {
+        if (MO.isDef()) return MO.isDead();
+        if (MO.isKill()) SawKill = true;
+      }
+    }
+
+    if (SawKill)
+      // This instruction kills EFLAGS and doesn't redefine it, so
+      // there's no need to look further.
       return true;
   }
 
@@ -1886,6 +1888,8 @@ void X86InstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
                                   bool isKill,
                                   SmallVectorImpl<MachineOperand> &Addr,
                                   const TargetRegisterClass *RC,
+                                  MachineInstr::mmo_iterator MMOBegin,
+                                  MachineInstr::mmo_iterator MMOEnd,
                                   SmallVectorImpl<MachineInstr*> &NewMIs) const {
   bool isAligned = (RI.getStackAlignment() >= 16) ||
     RI.needsStackRealignment(MF);
@@ -1895,6 +1899,7 @@ void X86InstrInfo::storeRegToAddr(MachineFunction &MF, unsigned SrcReg,
   for (unsigned i = 0, e = Addr.size(); i != e; ++i)
     MIB.addOperand(Addr[i]);
   MIB.addReg(SrcReg, getKillRegState(isKill));
+  (*MIB).setMemRefs(MMOBegin, MMOEnd);
   NewMIs.push_back(MIB);
 }
 
@@ -1977,6 +1982,8 @@ void X86InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
 void X86InstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
                                  SmallVectorImpl<MachineOperand> &Addr,
                                  const TargetRegisterClass *RC,
+                                 MachineInstr::mmo_iterator MMOBegin,
+                                 MachineInstr::mmo_iterator MMOEnd,
                                  SmallVectorImpl<MachineInstr*> &NewMIs) const {
   bool isAligned = (RI.getStackAlignment() >= 16) ||
     RI.needsStackRealignment(MF);
@@ -1985,6 +1992,7 @@ void X86InstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
   MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc), DestReg);
   for (unsigned i = 0, e = Addr.size(); i != e; ++i)
     MIB.addOperand(Addr[i]);
+  (*MIB).setMemRefs(MMOBegin, MMOEnd);
   NewMIs.push_back(MIB);
 }
 
@@ -2442,7 +2450,11 @@ bool X86InstrInfo::unfoldMemoryOperand(MachineFunction &MF, MachineInstr *MI,
 
   // Emit the load instruction.
   if (UnfoldLoad) {
-    loadRegFromAddr(MF, Reg, AddrOps, RC, NewMIs);
+    std::pair<MachineInstr::mmo_iterator,
+              MachineInstr::mmo_iterator> MMOs =
+      MF.extractLoadMemRefs(MI->memoperands_begin(),
+                            MI->memoperands_end());
+    loadRegFromAddr(MF, Reg, AddrOps, RC, MMOs.first, MMOs.second, NewMIs);
     if (UnfoldStore) {
       // Address operands cannot be marked isKill.
       for (unsigned i = 1; i != 1 + X86AddrNumOperands; ++i) {
@@ -2502,7 +2514,11 @@ bool X86InstrInfo::unfoldMemoryOperand(MachineFunction &MF, MachineInstr *MI,
   // Emit the store instruction.
   if (UnfoldStore) {
     const TargetRegisterClass *DstRC = TID.OpInfo[0].getRegClass(&RI);
-    storeRegToAddr(MF, Reg, true, AddrOps, DstRC, NewMIs);
+    std::pair<MachineInstr::mmo_iterator,
+              MachineInstr::mmo_iterator> MMOs =
+      MF.extractStoreMemRefs(MI->memoperands_begin(),
+                             MI->memoperands_end());
+    storeRegToAddr(MF, Reg, true, AddrOps, DstRC, MMOs.first, MMOs.second, NewMIs);
   }
 
   return true;
@@ -2544,7 +2560,7 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
 
   // Emit the load instruction.
   SDNode *Load = 0;
-  const MachineFunction &MF = DAG.getMachineFunction();
+  MachineFunction &MF = DAG.getMachineFunction();
   if (FoldedLoad) {
     EVT VT = *RC->vt_begin();
     bool isAligned = (RI.getStackAlignment() >= 16) ||
@@ -2552,6 +2568,13 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
     Load = DAG.getMachineNode(getLoadRegOpcode(0, RC, isAligned, TM), dl,
                               VT, MVT::Other, &AddrOps[0], AddrOps.size());
     NewNodes.push_back(Load);
+
+    // Preserve memory reference information.
+    std::pair<MachineInstr::mmo_iterator,
+              MachineInstr::mmo_iterator> MMOs =
+      MF.extractLoadMemRefs(cast<MachineSDNode>(N)->memoperands_begin(),
+                            cast<MachineSDNode>(N)->memoperands_end());
+    cast<MachineSDNode>(Load)->setMemRefs(MMOs.first, MMOs.second);
   }
 
   // Emit the data processing instruction.
@@ -2585,6 +2608,13 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
                                        dl, MVT::Other,
                                        &AddrOps[0], AddrOps.size());
     NewNodes.push_back(Store);
+
+    // Preserve memory reference information.
+    std::pair<MachineInstr::mmo_iterator,
+              MachineInstr::mmo_iterator> MMOs =
+      MF.extractStoreMemRefs(cast<MachineSDNode>(N)->memoperands_begin(),
+                             cast<MachineSDNode>(N)->memoperands_end());
+    cast<MachineSDNode>(Load)->setMemRefs(MMOs.first, MMOs.second);
   }
 
   return true;

@@ -24,7 +24,6 @@
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Support/CallSite.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallVector.h"
 using namespace llvm;
@@ -35,7 +34,7 @@ STATISTIC(NumReturnValProped, "Number of return values turned into constants");
 namespace {
   /// IPCP - The interprocedural constant propagation pass
   ///
-  struct VISIBILITY_HIDDEN IPCP : public ModulePass {
+  struct IPCP : public ModulePass {
     static char ID; // Pass identification, replacement for typeid
     IPCP() : ModulePass(&ID) {}
 

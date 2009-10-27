@@ -246,6 +246,12 @@ LLVMC_BUILTIN_PLUGIN_2 = $(word 2, $(LLVMC_BUILTIN_PLUGINS))
 LLVMC_BUILTIN_PLUGIN_3 = $(word 3, $(LLVMC_BUILTIN_PLUGINS))
 LLVMC_BUILTIN_PLUGIN_4 = $(word 4, $(LLVMC_BUILTIN_PLUGINS))
 LLVMC_BUILTIN_PLUGIN_5 = $(word 5, $(LLVMC_BUILTIN_PLUGINS))
+LLVMC_BUILTIN_PLUGIN_6 = $(word 6, $(LLVMC_BUILTIN_PLUGINS))
+LLVMC_BUILTIN_PLUGIN_7 = $(word 7, $(LLVMC_BUILTIN_PLUGINS))
+LLVMC_BUILTIN_PLUGIN_8 = $(word 8, $(LLVMC_BUILTIN_PLUGINS))
+LLVMC_BUILTIN_PLUGIN_9 = $(word 9, $(LLVMC_BUILTIN_PLUGINS))
+LLVMC_BUILTIN_PLUGIN_10 = $(word 10, $(LLVMC_BUILTIN_PLUGINS))
+
 
 ifneq ($(LLVMC_BUILTIN_PLUGIN_1),)
 CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_1=$(LLVMC_BUILTIN_PLUGIN_1)
@@ -266,6 +272,27 @@ endif
 ifneq ($(LLVMC_BUILTIN_PLUGIN_5),)
 CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_5)
 endif
+
+ifneq ($(LLVMC_BUILTIN_PLUGIN_6),)
+CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_6)
+endif
+
+ifneq ($(LLVMC_BUILTIN_PLUGIN_7),)
+CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_7)
+endif
+
+ifneq ($(LLVMC_BUILTIN_PLUGIN_8),)
+CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_8)
+endif
+
+ifneq ($(LLVMC_BUILTIN_PLUGIN_9),)
+CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_9)
+endif
+
+ifneq ($(LLVMC_BUILTIN_PLUGIN_10),)
+CPP.Flags += -DLLVMC_BUILTIN_PLUGIN_5=$(LLVMC_BUILTIN_PLUGIN_10)
+endif
+
 
 endif
 
@@ -643,6 +670,10 @@ endif
 ifeq ($(HOST_OS),SunOS)
 CPP.BaseFlags += -include llvm/System/Solaris.h
 endif
+
+ifeq ($(HOST_OS),AuroraUX)
+CPP.BaseFlags += -include llvm/System/Solaris.h
+endif # !HOST_OS - AuroraUX.
 
 LD.Flags      += -L$(LibDir) -L$(LLVMLibDir)
 CPP.BaseFlags += -D_GNU_SOURCE -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS
@@ -1207,7 +1238,7 @@ endif
 endif
 
 ifeq ($(HOST_OS), $(filter $(HOST_OS), Linux NetBSD FreeBSD))
-LD.Flags += -Wl,--version-script=$(LLVM_SRC_ROOT)/autoconf/ExportMap.map
+  LD.Flags += -Wl,--version-script=$(LLVM_SRC_ROOT)/autoconf/ExportMap.map
 endif
 endif
 
@@ -1509,8 +1540,8 @@ $(ObjDir)/%GenCallingConv.inc.tmp : %.td $(ObjDir)/.dir
 	$(Verb) $(TableGen) -gen-callingconv -o $(call SYSPATH, $@) $<
 
 $(TARGET:%=$(ObjDir)/%GenIntrinsics.inc.tmp): \
-$(ObjDir)/%GenIntrinsics.inc.tmp : Intrinsics%.td $(ObjDir)/.dir
-	$(Echo) "Building $(<F) calling convention information with tblgen"
+$(ObjDir)/%GenIntrinsics.inc.tmp : %.td $(ObjDir)/.dir
+	$(Echo) "Building $(<F) intrinsics information with tblgen"
 	$(Verb) $(TableGen) -gen-tgt-intrinsic -o $(call SYSPATH, $@) $<
 
 clean-local::

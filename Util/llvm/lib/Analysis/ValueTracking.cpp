@@ -469,26 +469,11 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     break;
   }
 
-  case Instruction::Alloca:
-  case Instruction::Malloc: {
-    AllocationInst *AI = cast<AllocationInst>(V);
+  case Instruction::Alloca: {
+    AllocaInst *AI = cast<AllocaInst>(V);
     unsigned Align = AI->getAlignment();
-    if (Align == 0 && TD) {
-      if (isa<AllocaInst>(AI))
-        Align = TD->getABITypeAlignment(AI->getType()->getElementType());
-      else if (isa<MallocInst>(AI)) {
-        // Malloc returns maximally aligned memory.
-        Align = TD->getABITypeAlignment(AI->getType()->getElementType());
-        Align =
-          std::max(Align,
-                   (unsigned)TD->getABITypeAlignment(
-                     Type::getDoubleTy(V->getContext())));
-        Align =
-          std::max(Align,
-                   (unsigned)TD->getABITypeAlignment(
-                      Type::getInt64Ty(V->getContext())));
-      }
-    }
+    if (Align == 0 && TD)
+      Align = TD->getABITypeAlignment(AI->getType()->getElementType());
     
     if (Align > 0)
       KnownZero = Mask & APInt::getLowBitsSet(BitWidth,

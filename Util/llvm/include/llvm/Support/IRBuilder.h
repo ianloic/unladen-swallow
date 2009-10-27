@@ -139,7 +139,7 @@ public:
     if (MDKind == 0) 
       MDKind = Context.getMetadata().getMDKind("dbg");
     if (MDKind == 0)
-      MDKind = Context.getMetadata().RegisterMDKind("dbg");
+      MDKind = Context.getMetadata().registerMDKind("dbg");
     CurDbgLocation = L;
   }
 
@@ -429,16 +429,9 @@ public:
   // Instruction creation methods: Memory Instructions
   //===--------------------------------------------------------------------===//
 
-  MallocInst *CreateMalloc(const Type *Ty, Value *ArraySize = 0,
-                           const Twine &Name = "") {
-    return Insert(new MallocInst(Ty, ArraySize), Name);
-  }
   AllocaInst *CreateAlloca(const Type *Ty, Value *ArraySize = 0,
                            const Twine &Name = "") {
     return Insert(new AllocaInst(Ty, ArraySize), Name);
-  }
-  FreeInst *CreateFree(Value *Ptr) {
-    return Insert(new FreeInst(Ptr));
   }
   // Provided to resolve 'CreateLoad(Ptr, "...")' correctly, instead of
   // converting the string to 'bool' for the isVolatile parameter.

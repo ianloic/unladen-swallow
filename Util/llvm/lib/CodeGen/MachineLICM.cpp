@@ -31,7 +31,6 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -41,7 +40,7 @@ STATISTIC(NumHoisted, "Number of machine instructions hoisted out of loops");
 STATISTIC(NumCSEed,   "Number of hoisted machine instructions CSEed");
 
 namespace {
-  class VISIBILITY_HIDDEN MachineLICM : public MachineFunctionPass {
+  class MachineLICM : public MachineFunctionPass {
     const TargetMachine   *TM;
     const TargetInstrInfo *TII;
     const TargetRegisterInfo *TRI;
@@ -131,10 +130,6 @@ static bool LoopIsOuterMostWithPreheader(MachineLoop *CurLoop) {
 /// loop.
 ///
 bool MachineLICM::runOnMachineFunction(MachineFunction &MF) {
-  const Function *F = MF.getFunction();
-  if (F->hasFnAttr(Attribute::OptimizeForSize))
-    return false;
-
   DEBUG(errs() << "******** Machine LICM ********\n");
 
   Changed = false;
@@ -321,13 +316,10 @@ bool MachineLICM::IsProfitableToHoist(MachineInstr &MI) {
   if (MI.getOpcode() == TargetInstrInfo::IMPLICIT_DEF)
     return false;
 
-  const TargetInstrDesc &TID = MI.getDesc();
-
   // FIXME: For now, only hoist re-materilizable instructions. LICM will
   // increase register pressure. We want to make sure it doesn't increase
   // spilling.
-  if (!TID.mayLoad() && (!TID.isRematerializable() ||
-                         !TII->isTriviallyReMaterializable(&MI)))
+  if (!TII->isTriviallyReMaterializable(&MI, AA))
     return false;
 
   // If result(s) of this instruction is used by PHIs, then don't hoist it.

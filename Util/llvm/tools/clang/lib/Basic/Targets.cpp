@@ -197,10 +197,6 @@ public:
       this->TLSSupported = false;
     }
 
-  virtual const char *getUnicodeStringSymbolPrefix() const {
-    return "__utf16_string_";
-  }
-
   virtual const char *getUnicodeStringSection() const {
     return "__TEXT,__ustring";
   }
@@ -322,6 +318,27 @@ protected:
 public:
   OpenBSDTargetInfo(const std::string &triple)
     : OSTargetInfo<Target>(triple) {}
+};
+
+// AuroraUX target
+template<typename Target>
+class AuroraUXTargetInfo : public OSTargetInfo<Target> {
+protected:
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                                std::vector<char> &Defs) const {
+    DefineStd(Defs, "sun", Opts);
+    DefineStd(Defs, "unix", Opts);
+    Define(Defs, "__ELF__");
+    Define(Defs, "__svr4__");
+    Define(Defs, "__SVR4");
+  }
+public:
+  AuroraUXTargetInfo(const std::string& triple)
+    : OSTargetInfo<Target>(triple) {
+    this->UserLabelPrefix = "";
+    this->WCharType = this->SignedLong;
+    // FIXME: WIntType should be SignedLong
+  }
 };
 
 // Solaris target
@@ -1071,6 +1088,7 @@ public:
     TLSSupported = false;
     WCharType = UnsignedShort;
     WCharWidth = WCharAlign = 16;
+    LongWidth = LongAlign = 32;
     DoubleAlign = LongLongAlign = 64;
   }
   virtual void getTargetDefines(const LangOptions &Opts,
@@ -1459,6 +1477,14 @@ void SparcV8TargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
 } // end anonymous namespace.
 
 namespace {
+class AuroraUXSparcV8TargetInfo : public AuroraUXTargetInfo<SparcV8TargetInfo> {
+public:
+  AuroraUXSparcV8TargetInfo(const std::string& triple) :
+      AuroraUXTargetInfo<SparcV8TargetInfo>(triple) {
+    SizeType = UnsignedInt;
+    PtrDiffType = SignedInt;
+  }
+};
 class SolarisSparcV8TargetInfo : public SolarisTargetInfo<SparcV8TargetInfo> {
 public:
   SolarisSparcV8TargetInfo(const std::string& triple) :
@@ -1507,6 +1533,8 @@ namespace {
       Define(Defines, "ram", "__attribute__((address_space(0)))");
       Define(Defines, "_section(SectName)",
              "__attribute__((section(SectName)))");
+      Define(Defines, "near",
+             "__attribute__((section(\"Address=NEAR\")))");
       Define(Defines, "_address(Addr)",
              "__attribute__((section(\"Address=\"#Addr)))");
       Define(Defines, "_CONFIG(conf)", "asm(\"CONFIG \"#conf)");
@@ -1576,8 +1604,8 @@ namespace {
     }
     virtual bool validateAsmConstraint(const char *&Name,
                                        TargetInfo::ConstraintInfo &info) const {
-      // FIXME: implement
-      return true;
+      // No target constraints for now.
+      return false;
     }
     virtual const char *getClobbers() const {
       // FIXME: Is this really right?
@@ -1849,6 +1877,8 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
     return new PPC64TargetInfo(T);
 
   case llvm::Triple::sparc:
+    if (os == llvm::Triple::AuroraUX)
+      return new AuroraUXSparcV8TargetInfo(T);
     if (os == llvm::Triple::Solaris)
       return new SolarisSparcV8TargetInfo(T);
     return new SparcV8TargetInfo(T);
@@ -1861,6 +1891,8 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
 
   case llvm::Triple::x86:
     switch (os) {
+    case llvm::Triple::AuroraUX:
+      return new AuroraUXTargetInfo<X86_32TargetInfo>(T);
     case llvm::Triple::Darwin:
       return new DarwinI386TargetInfo(T);
     case llvm::Triple::Linux:
@@ -1887,6 +1919,8 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
 
   case llvm::Triple::x86_64:
     switch (os) {
+    case llvm::Triple::AuroraUX:
+      return new AuroraUXTargetInfo<X86_64TargetInfo>(T);
     case llvm::Triple::Darwin:
       return new DarwinX86_64TargetInfo(T);
     case llvm::Triple::Linux:

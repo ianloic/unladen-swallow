@@ -967,6 +967,175 @@ void rdar_7184450_pos(CGContextRef myContext, CGFloat x, CGPoint myStartPoint,
 }
 
 //===----------------------------------------------------------------------===//
+// <rdar://problem/7299394> clang false positive: retained instance passed to
+//                          thread in pthread_create marked as leak
+//
+// Until we have full IPA, the analyzer should stop tracking the reference
+// count of objects passed to pthread_create.
+//
+//===----------------------------------------------------------------------===//
+
+struct _opaque_pthread_t {};
+struct _opaque_pthread_attr_t {};
+typedef struct _opaque_pthread_t *__darwin_pthread_t;
+typedef struct _opaque_pthread_attr_t __darwin_pthread_attr_t;
+typedef __darwin_pthread_t pthread_t;
+typedef __darwin_pthread_attr_t pthread_attr_t;
+
+int pthread_create(pthread_t * restrict, const pthread_attr_t * restrict,
+                   void *(*)(void *), void * restrict);
+
+void *rdar_7299394_start_routine(void *p) {
+  [((id) p) release];
+  return 0;
+}
+void rdar_7299394(pthread_attr_t *attr, pthread_t *thread, void *args) {
+  NSNumber *number = [[NSNumber alloc] initWithInt:5]; // no-warning
+  pthread_create(thread, attr, rdar_7299394_start_routine, number);
+}
+void rdar_7299394_positive(pthread_attr_t *attr, pthread_t *thread) {
+  NSNumber *number = [[NSNumber alloc] initWithInt:5]; // expected-warning{{leak}}
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7283567> False leak associated with call to 
+//                          CVPixelBufferCreateWithBytes ()
+//
+// According to the Core Video Reference (ADC), CVPixelBufferCreateWithBytes and
+// CVPixelBufferCreateWithPlanarBytes can release (via a callback) the
+// pixel buffer object.  These test cases show how the analyzer stops tracking
+// the reference count for the objects passed for this argument.  This
+// could be made smarter.
+//===----------------------------------------------------------------------===//
+
+typedef int int32_t;
+typedef UInt32 FourCharCode;
+typedef FourCharCode OSType;
+typedef uint64_t CVOptionFlags;
+typedef int32_t CVReturn;
+typedef struct __CVBuffer *CVBufferRef;
+typedef CVBufferRef CVImageBufferRef;
+typedef CVImageBufferRef CVPixelBufferRef;
+typedef void (*CVPixelBufferReleaseBytesCallback)( void *releaseRefCon, const void *baseAddress );
+
+extern CVReturn CVPixelBufferCreateWithBytes(CFAllocatorRef allocator,
+            size_t width,
+            size_t height,
+            OSType pixelFormatType,
+            void *baseAddress,
+            size_t bytesPerRow,
+            CVPixelBufferReleaseBytesCallback releaseCallback,
+            void *releaseRefCon,
+            CFDictionaryRef pixelBufferAttributes,
+                   CVPixelBufferRef *pixelBufferOut) ;
+
+typedef void (*CVPixelBufferReleasePlanarBytesCallback)( void *releaseRefCon, const void *dataPtr, size_t dataSize, size_t numberOfPlanes, const void *planeAddresses[] );
+
+extern CVReturn CVPixelBufferCreateWithPlanarBytes(CFAllocatorRef allocator,
+        size_t width,
+        size_t height,
+        OSType pixelFormatType,
+        void *dataPtr,
+        size_t dataSize,
+        size_t numberOfPlanes,
+        void *planeBaseAddress[],
+        size_t planeWidth[],
+        size_t planeHeight[],
+        size_t planeBytesPerRow[],
+        CVPixelBufferReleasePlanarBytesCallback releaseCallback,
+        void *releaseRefCon,
+        CFDictionaryRef pixelBufferAttributes,
+        CVPixelBufferRef *pixelBufferOut) ;
+
+extern CVReturn CVPixelBufferCreateWithBytes(CFAllocatorRef allocator,
+            size_t width,
+            size_t height,
+            OSType pixelFormatType,
+            void *baseAddress,
+            size_t bytesPerRow,
+            CVPixelBufferReleaseBytesCallback releaseCallback,
+            void *releaseRefCon,
+            CFDictionaryRef pixelBufferAttributes,
+                   CVPixelBufferRef *pixelBufferOut) ;
+
+CVReturn rdar_7283567(CFAllocatorRef allocator, size_t width, size_t height,
+                      OSType pixelFormatType, void *baseAddress,
+                      size_t bytesPerRow,
+                      CVPixelBufferReleaseBytesCallback releaseCallback,
+                      CFDictionaryRef pixelBufferAttributes,
+                      CVPixelBufferRef *pixelBufferOut) {
+
+  // For the allocated object, it doesn't really matter what type it is
+  // for the purpose of this test.  All we want to show is that
+  // this is freed later by the callback.
+  NSNumber *number = [[NSNumber alloc] initWithInt:5]; // no-warning
+  
+  return CVPixelBufferCreateWithBytes(allocator, width, height, pixelFormatType,
+                                baseAddress, bytesPerRow, releaseCallback,
+                                number, // potentially released by callback
+                                pixelBufferAttributes, pixelBufferOut) ;
+}
+
+CVReturn rdar_7283567_2(CFAllocatorRef allocator, size_t width, size_t height,
+        OSType pixelFormatType, void *dataPtr, size_t dataSize,
+        size_t numberOfPlanes, void *planeBaseAddress[],
+        size_t planeWidth[], size_t planeHeight[], size_t planeBytesPerRow[],
+        CVPixelBufferReleasePlanarBytesCallback releaseCallback,
+        CFDictionaryRef pixelBufferAttributes,
+        CVPixelBufferRef *pixelBufferOut) {
+    
+    // For the allocated object, it doesn't really matter what type it is
+    // for the purpose of this test.  All we want to show is that
+    // this is freed later by the callback.
+    NSNumber *number = [[NSNumber alloc] initWithInt:5]; // no-warning
+
+    return CVPixelBufferCreateWithPlanarBytes(allocator,
+              width, height, pixelFormatType, dataPtr, dataSize,
+              numberOfPlanes, planeBaseAddress, planeWidth,
+              planeHeight, planeBytesPerRow, releaseCallback,
+              number, // potentially released by callback
+              pixelBufferAttributes, pixelBufferOut) ;
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7265711> allow 'new', 'copy', 'alloc', 'init' prefix to
+//  start before '_' when determining Cocoa fundamental rule
+//
+// Previously the retain/release checker just skipped prefixes before the
+// first '_' entirely.  Now the checker honors the prefix if it results in a
+// recognizable naming convention (e.g., 'new', 'init').
+//===----------------------------------------------------------------------===//
+
+@interface RDar7265711 {}
+- (id) new_stuff;
+@end
+
+void rdar7265711_a(RDar7265711 *x) {
+  id y = [x new_stuff]; // expected-warning{{leak}}
+}
+
+void rdar7265711_b(RDar7265711 *x) {
+  id y = [x new_stuff]; // no-warning
+  [y release];
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7306898> clang thinks [NSCursor dragCopyCursor] returns a
+//                          retained reference
+//===----------------------------------------------------------------------===//
+
+@interface NSCursor : NSObject
++ (NSCursor *)dragCopyCursor;
+@end
+
+void rdar7306898(void) {
+  // 'dragCopyCursor' does not follow Cocoa's fundamental rule.  It is a noun, not an sentence
+  // implying a 'copy' of something.
+  NSCursor *c =  [NSCursor dragCopyCursor]; // no-warning
+  NSNumber *number = [[NSNumber alloc] initWithInt:5]; // expected-warning{{leak}}
+}
+
+//===----------------------------------------------------------------------===//
 // Tests of ownership attributes.
 //===----------------------------------------------------------------------===//
 

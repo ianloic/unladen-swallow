@@ -31,7 +31,7 @@
           <li><a href="#linkage_weak">'<tt>weak</tt>' Linkage</a></li>
           <li><a href="#linkage_appending">'<tt>appending</tt>' Linkage</a></li>
           <li><a href="#linkage_externweak">'<tt>extern_weak</tt>' Linkage</a></li>
-          <li><a href="#linkage_linkonce">'<tt>linkonce_odr</tt>' Linkage</a></li>
+          <li><a href="#linkage_linkonce_odr">'<tt>linkonce_odr</tt>' Linkage</a></li>
           <li><a href="#linkage_weak">'<tt>weak_odr</tt>' Linkage</a></li>
           <li><a href="#linkage_external">'<tt>externally visible</tt>' Linkage</a></li>
           <li><a href="#linkage_dllimport">'<tt>dllimport</tt>' Linkage</a></li>
@@ -156,8 +156,6 @@
       </li>
       <li><a href="#memoryops">Memory Access and Addressing Operations</a>
         <ol>
-          <li><a href="#i_malloc">'<tt>malloc</tt>'   Instruction</a></li>
-          <li><a href="#i_free">'<tt>free</tt>'     Instruction</a></li>
           <li><a href="#i_alloca">'<tt>alloca</tt>'   Instruction</a></li>
          <li><a href="#i_load">'<tt>load</tt>'     Instruction</a></li>
          <li><a href="#i_store">'<tt>store</tt>'    Instruction</a></li>
@@ -271,6 +269,14 @@
           <li><a href="#int_atomic_load_min"><tt>llvm.atomic.load.min</tt></a></li>
           <li><a href="#int_atomic_load_umax"><tt>llvm.atomic.load.umax</tt></a></li>
           <li><a href="#int_atomic_load_umin"><tt>llvm.atomic.load.umin</tt></a></li>
+        </ol>
+      </li>
+      <li><a href="#int_memorymarkers">Memory Use Markers</a>
+        <ol>
+          <li><a href="#int_lifetime_start"><tt>llvm.lifetime.start</tt></a></li>
+          <li><a href="#int_lifetime_end"><tt>llvm.lifetime.end</tt></a></li>
+          <li><a href="#int_invariant_start"><tt>llvm.invariant.start</tt></a></li>
+          <li><a href="#int_invariant_end"><tt>llvm.invariant.end</tt></a></li>
         </ol>
       </li>
       <li><a href="#int_general">General intrinsics</a>
@@ -586,8 +592,8 @@ define i32 @main() {                                              <i>; i32()* </
       is weak until linked, if not linked, the symbol becomes null instead of
       being an undefined reference.</dd>
 
-  <dt><tt><b><a name="linkage_linkonce">linkonce_odr</a></b></tt>: </dt>
-  <dt><tt><b><a name="linkage_weak">weak_odr</a></b></tt>: </dt>
+  <dt><tt><b><a name="linkage_linkonce_odr">linkonce_odr</a></b></tt>: </dt>
+  <dt><tt><b><a name="linkage_weak_odr">weak_odr</a></b></tt>: </dt>
   <dd>Some languages allow differing globals to be merged, such as two functions
       with different semantics.  Other languages, such as <tt>C++</tt>, ensure
       that only equivalent globals are ever merged (the "one definition rule" -
@@ -2019,7 +2025,7 @@ Classifications</a> </div>
 <div class="doc_text">
 
 <p>The string '<tt>undef</tt>' can be used anywhere a constant is expected, and
-   indicates that the user of the value may recieve an unspecified bit-pattern.
+   indicates that the user of the value may receive an unspecified bit-pattern.
    Undefined values may be of any type (other than label or void) and be used
    anywhere a constant is permitted.</p>
 
@@ -2118,7 +2124,7 @@ number of reasons, but the short answer is that an undef "variable" can
 arbitrarily change its value over its "live range".  This is true because the
 "variable" doesn't actually <em>have a live range</em>.  Instead, the value is
 logically read from arbitrary registers that happen to be around when needed,
-so the value is not neccesarily consistent over time.  In fact, %A and %C need
+so the value is not necessarily consistent over time.  In fact, %A and %C need
 to have the same semantics or the core LLVM "replace all uses with" concept
 would not hold.</p>
 
@@ -2300,7 +2306,7 @@ has undefined behavior.</p>
    the two digit hex code.  For example: "<tt>!"test\00"</tt>".</p>
 
 <p>Metadata nodes are represented with notation similar to structure constants
-   (a comma separated list of elements, surrounded by braces and preceeded by an
+   (a comma separated list of elements, surrounded by braces and preceded by an
    exclamation point).  For example: "<tt>!{ metadata !"test\00", i32
    10}</tt>".</p>
 
@@ -2330,8 +2336,10 @@ has undefined behavior.</p>
    to <a href="#moduleasm"> Module-Level Inline Assembly</a>) through the use of
    a special value.  This value represents the inline assembler as a string
    (containing the instructions to emit), a list of operand constraints (stored
-   as a string), and a flag that indicates whether or not the inline asm
-   expression has side effects.  An example inline assembler expression is:</p>
+   as a string), a flag that indicates whether or not the inline asm
+   expression has side effects, and a flag indicating whether the function
+   containing the asm needs to align its stack conservatively.  An example
+   inline assembler expression is:</p>
 
 <div class="doc_code">
 <pre>
@@ -2358,6 +2366,22 @@ i32 (i32) asm "bswap $0", "=r,r"
 call void asm sideeffect "eieio", ""()
 </pre>
 </div>
+
+<p>In some cases inline asms will contain code that will not work unless the
+   stack is aligned in some way, such as calls or SSE instructions on x86,
+   yet will not contain code that does that alignment within the asm.
+   The compiler should make conservative assumptions about what the asm might
+   contain and should generate its usual stack alignment code in the prologue
+   if the '<tt>alignstack</tt>' keyword is present:</p>
+
+<div class="doc_code">
+<pre>
+call void asm alignstack "eieio", ""()
+</pre>
+</div>
+
+<p>If both keywords appear the '<tt>sideeffect</tt>' keyword must come
+   first.</p>
 
 <p>TODO: The format of the asm and constraints string still need to be
    documented here.  Constraints on what can be done (e.g. duplication, moving,
@@ -2619,8 +2643,8 @@ IfUnequal:
 <p>The <tt>switch</tt> instruction specifies a table of values and
    destinations. When the '<tt>switch</tt>' instruction is executed, this table
    is searched for the given value.  If the value is found, control flow is
-   transfered to the corresponding destination; otherwise, control flow is
-   transfered to the default destination.</p>
+   transferred to the corresponding destination; otherwise, control flow is
+   transferred to the default destination.</p>
 
 <h5>Implementation:</h5>
 <p>Depending on properties of the target machine and the particular
@@ -3807,90 +3831,8 @@ Instruction</a> </div>
 
 <p>A key design point of an SSA-based representation is how it represents
    memory.  In LLVM, no memory locations are in SSA form, which makes things
-   very simple.  This section describes how to read, write, allocate, and free
+   very simple.  This section describes how to read, write, and allocate
    memory in LLVM.</p>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsubsection">
-  <a name="i_malloc">'<tt>malloc</tt>' Instruction</a>
-</div>
-
-<div class="doc_text">
-
-<h5>Syntax:</h5>
-<pre>
-  &lt;result&gt; = malloc &lt;type&gt;[, i32 &lt;NumElements&gt;][, align &lt;alignment&gt;]     <i>; yields {type*}:result</i>
-</pre>
-
-<h5>Overview:</h5>
-<p>The '<tt>malloc</tt>' instruction allocates memory from the system heap and
-   returns a pointer to it. The object is always allocated in the generic
-   address space (address space zero).</p>
-
-<h5>Arguments:</h5>
-<p>The '<tt>malloc</tt>' instruction allocates
-   <tt>sizeof(&lt;type&gt;)*NumElements</tt> bytes of memory from the operating
-   system and returns a pointer of the appropriate type to the program.  If
-   "NumElements" is specified, it is the number of elements allocated, otherwise
-   "NumElements" is defaulted to be one.  If a constant alignment is specified,
-   the value result of the allocation is guaranteed to be aligned to at least
-   that boundary.  If not specified, or if zero, the target can choose to align
-   the allocation on any convenient boundary compatible with the type.</p>
-
-<p>'<tt>type</tt>' must be a sized type.</p>
-
-<h5>Semantics:</h5>
-<p>Memory is allocated using the system "<tt>malloc</tt>" function, and a
-   pointer is returned.  The result of a zero byte allocation is undefined.  The
-   result is null if there is insufficient memory available.</p>
-
-<h5>Example:</h5>
-<pre>
-  %array  = malloc [4 x i8]                     <i>; yields {[%4 x i8]*}:array</i>
-
-  %size   = <a href="#i_add">add</a> i32 2, 2                        <i>; yields {i32}:size = i32 4</i>
-  %array1 = malloc i8, i32 4                    <i>; yields {i8*}:array1</i>
-  %array2 = malloc [12 x i8], i32 %size         <i>; yields {[12 x i8]*}:array2</i>
-  %array3 = malloc i32, i32 4, align 1024       <i>; yields {i32*}:array3</i>
-  %array4 = malloc i32, align 1024              <i>; yields {i32*}:array4</i>
-</pre>
-
-<p>Note that the code generator does not yet respect the alignment value.</p>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsubsection">
-  <a name="i_free">'<tt>free</tt>' Instruction</a>
-</div>
-
-<div class="doc_text">
-
-<h5>Syntax:</h5>
-<pre>
-  free &lt;type&gt; &lt;value&gt;                           <i>; yields {void}</i>
-</pre>
-
-<h5>Overview:</h5>
-<p>The '<tt>free</tt>' instruction returns memory back to the unused memory heap
-   to be reallocated in the future.</p>
-
-<h5>Arguments:</h5>
-<p>'<tt>value</tt>' shall be a pointer value that points to a value that was
-   allocated with the '<tt><a href="#i_malloc">malloc</a></tt>' instruction.</p>
-
-<h5>Semantics:</h5>
-<p>Access to the memory pointed to by the pointer is no longer defined after
-   this instruction executes.  If the pointer is null, the operation is a
-   noop.</p>
-
-<h5>Example:</h5>
-<pre>
-  %array  = <a href="#i_malloc">malloc</a> [4 x i8]                     <i>; yields {[4 x i8]*}:array</i>
-            free   [4 x i8]* %array
-</pre>
 
 </div>
 
@@ -6598,7 +6540,8 @@ LLVM</a>.</p>
 
 <h5>Example:</h5>
 <pre>
-%ptr      = malloc i32
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
             store i32 4, %ptr
 
 %result1  = load i32* %ptr      <i>; yields {i32}:result1 = 4</i>
@@ -6649,7 +6592,8 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
             store i32 4, %ptr
 
 %val1     = add i32 4, 4
@@ -6704,7 +6648,8 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
             store i32 4, %ptr
 
 %val1     = add i32 4, 4
@@ -6759,8 +6704,9 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
-        store i32 4, %ptr
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
+            store i32 4, %ptr
 %result1  = call i32 @llvm.atomic.load.add.i32.p0i32( i32* %ptr, i32 4 )
                                 <i>; yields {i32}:result1 = 4</i>
 %result2  = call i32 @llvm.atomic.load.add.i32.p0i32( i32* %ptr, i32 2 )
@@ -6810,8 +6756,9 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
-        store i32 8, %ptr
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
+            store i32 8, %ptr
 %result1  = call i32 @llvm.atomic.load.sub.i32.p0i32( i32* %ptr, i32 4 )
                                 <i>; yields {i32}:result1 = 8</i>
 %result2  = call i32 @llvm.atomic.load.sub.i32.p0i32( i32* %ptr, i32 2 )
@@ -6887,8 +6834,9 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
-        store i32 0x0F0F, %ptr
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
+            store i32 0x0F0F, %ptr
 %result0  = call i32 @llvm.atomic.load.nand.i32.p0i32( i32* %ptr, i32 0xFF )
                                 <i>; yields {i32}:result0 = 0x0F0F</i>
 %result1  = call i32 @llvm.atomic.load.and.i32.p0i32( i32* %ptr, i32 0xFF )
@@ -6965,8 +6913,9 @@ LLVM</a>.</p>
 
 <h5>Examples:</h5>
 <pre>
-%ptr      = malloc i32
-        store i32 7, %ptr
+%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
+%ptr      = bitcast i8* %mallocP to i32*
+            store i32 7, %ptr
 %result0  = call i32 @llvm.atomic.load.min.i32.p0i32( i32* %ptr, i32 -2 )
                                 <i>; yields {i32}:result0 = 7</i>
 %result1  = call i32 @llvm.atomic.load.max.i32.p0i32( i32* %ptr, i32 8 )
@@ -6977,6 +6926,133 @@ LLVM</a>.</p>
                                 <i>; yields {i32}:result3 = 8</i>
 %memval1  = load i32* %ptr      <i>; yields {i32}:memval1 = 30</i>
 </pre>
+
+</div>
+
+
+<!-- ======================================================================= -->
+<div class="doc_subsection">
+  <a name="int_memorymarkers">Memory Use Markers</a>
+</div>
+
+<div class="doc_text">
+
+<p>This class of intrinsics exists to information about the lifetime of memory
+   objects and ranges where variables are immutable.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="int_lifetime_start">'<tt>llvm.lifetime.start</tt>' Intrinsic</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+<pre>
+  declare void @llvm.lifetime.start(i64 &lt;size&gt;, i8* nocapture &lt;ptr&gt;)
+</pre>
+
+<h5>Overview:</h5>
+<p>The '<tt>llvm.lifetime.start</tt>' intrinsic specifies the start of a memory
+   object's lifetime.</p>
+
+<h5>Arguments:</h5>
+<p>The first argument is a constant integer representing the size of the
+   object, or -1 if it is variable sized.  The second argument is a pointer to
+   the object.</p>
+
+<h5>Semantics:</h5>
+<p>This intrinsic indicates that before this point in the code, the value of the
+   memory pointed to by <tt>ptr</tt> is dead.  This means that it is known to
+   never be used and has an undefined value.  A load from the pointer that is
+   preceded by this intrinsic can be replaced with
+   <tt>'<a href="#undefvalues">undef</a>'</tt>.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="int_lifetime_end">'<tt>llvm.lifetime.end</tt>' Intrinsic</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+<pre>
+  declare void @llvm.lifetime.end(i64 &lt;size&gt;, i8* nocapture &lt;ptr&gt;)
+</pre>
+
+<h5>Overview:</h5>
+<p>The '<tt>llvm.lifetime.end</tt>' intrinsic specifies the end of a memory
+   object's lifetime.</p>
+
+<h5>Arguments:</h5>
+<p>The first argument is a constant integer representing the size of the
+   object, or -1 if it is variable sized.  The second argument is a pointer to
+   the object.</p>
+
+<h5>Semantics:</h5>
+<p>This intrinsic indicates that after this point in the code, the value of the
+   memory pointed to by <tt>ptr</tt> is dead.  This means that it is known to
+   never be used and has an undefined value.  Any stores into the memory object
+   following this intrinsic may be removed as dead.
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="int_invariant_start">'<tt>llvm.invariant.start</tt>' Intrinsic</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+<pre>
+  declare {}* @llvm.invariant.start(i64 &lt;size&gt;, i8* nocapture &lt;ptr&gt;) readonly
+</pre>
+
+<h5>Overview:</h5>
+<p>The '<tt>llvm.invariant.start</tt>' intrinsic specifies that the contents of
+   a memory object will not change.</p>
+
+<h5>Arguments:</h5>
+<p>The first argument is a constant integer representing the size of the
+   object, or -1 if it is variable sized.  The second argument is a pointer to
+   the object.</p>
+
+<h5>Semantics:</h5>
+<p>This intrinsic indicates that until an <tt>llvm.invariant.end</tt> that uses
+   the return value, the referenced memory location is constant and
+   unchanging.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">
+  <a name="int_invariant_end">'<tt>llvm.invariant.end</tt>' Intrinsic</a>
+</div>
+
+<div class="doc_text">
+
+<h5>Syntax:</h5>
+<pre>
+  declare void @llvm.invariant.end({}* &lt;start&gt;, i64 &lt;size&gt;, i8* nocapture &lt;ptr&gt;)
+</pre>
+
+<h5>Overview:</h5>
+<p>The '<tt>llvm.invariant.end</tt>' intrinsic specifies that the contents of
+   a memory object are mutable.</p>
+
+<h5>Arguments:</h5>
+<p>The first argument is the matching <tt>llvm.invariant.start</tt> intrinsic.
+   The second argument is a constant integer representing the size of the
+   object, or -1 if it is variable sized and the third argument is a pointer
+   to the object.</p>
+
+<h5>Semantics:</h5>
+<p>This intrinsic indicates that the memory is mutable again.</p>
 
 </div>
 
@@ -7125,7 +7201,7 @@ LLVM</a>.</p>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-09-27 16:27:42 -0700 (Sun, 27 Sep 2009) $
+  Last modified: $Date: 2009-10-26 16:44:29 -0700 (Mon, 26 Oct 2009) $
 </address>
 
 </body>

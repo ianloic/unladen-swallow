@@ -32,7 +32,6 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -43,7 +42,7 @@ STATISTIC(NumEmitted, "Number of machine instructions emitted");
 
 namespace {
   template<class CodeEmitter>
-  class VISIBILITY_HIDDEN Emitter : public MachineFunctionPass {
+  class Emitter : public MachineFunctionPass {
     const X86InstrInfo  *II;
     const TargetData    *TD;
     X86TargetMachine    &TM;
@@ -587,8 +586,8 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
     case TargetInstrInfo::INLINEASM:
       // We allow inline assembler nodes with empty bodies - they can
       // implicitly define registers, which is ok for JIT.
-      assert(MI.getOperand(0).getSymbolName()[0] == 0 && 
-             "JIT does not support inline asm!");
+      if (MI.getOperand(0).getSymbolName()[0])
+        llvm_report_error("JIT does not support inline asm!");
       break;
     case TargetInstrInfo::DBG_LABEL:
     case TargetInstrInfo::EH_LABEL:

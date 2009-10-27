@@ -296,6 +296,22 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old) {
           << NewParam->getDefaultArgRange();
         Diag(Old->getLocation(), diag::note_template_prev_declaration)
           << false;
+      } else if (New->getTemplateSpecializationKind()
+                   != TSK_ImplicitInstantiation &&
+                 New->getTemplateSpecializationKind() != TSK_Undeclared) {
+        // C++ [temp.expr.spec]p21:
+        //   Default function arguments shall not be specified in a declaration
+        //   or a definition for one of the following explicit specializations:
+        //     - the explicit specialization of a function template;
+        //     - the explicit specialization of a member function template;
+        //     - the explicit specialization of a member function of a class 
+        //       template where the class template specialization to which the
+        //       member function specialization belongs is implicitly 
+        //       instantiated.
+        Diag(NewParam->getLocation(), diag::err_template_spec_default_arg)
+          << (New->getTemplateSpecializationKind() ==TSK_ExplicitSpecialization)
+          << New->getDeclName()
+          << NewParam->getDefaultArgRange();
       } else if (New->getDeclContext()->isDependentContext()) {
         // C++ [dcl.fct.default]p6 (DR217):
         //   Default arguments for a member function of a class template shall 
@@ -1642,12 +1658,10 @@ namespace {
       // Traverse the record, looking for methods.
       if (CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(*i)) {
         // If the method is pure virtual, add it to the methods vector.
-        if (MD->isPure()) {
+        if (MD->isPure())
           Methods.push_back(MD);
-          continue;
-        }
 
-        // Otherwise, record all the overridden methods in our set.
+        // Record all the overridden methods in our set.
         for (CXXMethodDecl::method_iterator I = MD->begin_overridden_methods(),
              E = MD->end_overridden_methods(); I != E; ++I) {
           // Keep track of the overridden methods.
@@ -1820,7 +1834,7 @@ void Sema::ActOnFinishCXXMemberSpecification(Scope* S, SourceLocation RLoc,
   if (RD->isAbstract())
     AbstractClassUsageDiagnoser(*this, RD);
 
-  if (!RD->isDependentType())
+  if (!RD->isDependentType() && !RD->isInvalidDecl())
     AddImplicitlyDeclaredMembersToClass(RD);
 }
 
@@ -1962,6 +1976,8 @@ void Sema::AddImplicitlyDeclaredMembersToClass(CXXRecordDecl *ClassDecl) {
     //          and
     for (CXXRecordDecl::base_class_iterator Base = ClassDecl->bases_begin();
          HasConstCopyAssignment && Base != ClassDecl->bases_end(); ++Base) {
+      assert(!Base->getType()->isDependentType() &&
+            "Cannot generate implicit members for class with dependent bases.");
       const CXXRecordDecl *BaseClassDecl
         = cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
       const CXXMethodDecl *MD = 0;
@@ -2490,8 +2506,8 @@ Sema::DeclPtrTy Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
     // original-namespace-definition is the name of the namespace. Subsequently
     // in that declarative region, it is treated as an original-namespace-name.
 
-    NamedDecl *PrevDecl = LookupName(DeclRegionScope, II, LookupOrdinaryName,
-                                     true);
+    NamedDecl *PrevDecl
+      = LookupSingleName(DeclRegionScope, II, LookupOrdinaryName, true);
 
     if (NamespaceDecl *OrigNS = dyn_cast_or_null<NamespaceDecl>(PrevDecl)) {
       // This is an extended namespace definition.
@@ -2599,13 +2615,14 @@ Sema::DeclPtrTy Sema::ActOnUsingDirective(Scope *S,
   UsingDirectiveDecl *UDir = 0;
 
   // Lookup namespace name.
-  LookupResult R = LookupParsedName(S, &SS, NamespcName,
-                                    LookupNamespaceName, false);
+  LookupResult R;
+  LookupParsedName(R, S, &SS, NamespcName, LookupNamespaceName, false);
   if (R.isAmbiguous()) {
     DiagnoseAmbiguousLookup(R, NamespcName, IdentLoc);
     return DeclPtrTy();
   }
-  if (NamedDecl *NS = R) {
+  if (!R.empty()) {
+    NamedDecl *NS = R.getFoundDecl();
     assert(isa<NamespaceDecl>(NS) && "expected namespace decl");
     // C++ [namespace.udir]p1:
     //   A using-directive specifies that the names in the nominated
@@ -2746,15 +2763,17 @@ NamedDecl *Sema::BuildUsingDeclaration(SourceLocation UsingLoc,
 
 
   // Lookup target name.
-  LookupResult R = LookupQualifiedName(LookupContext,
-                                       Name, LookupOrdinaryName);
+  LookupResult R;
+  LookupQualifiedName(R, LookupContext, Name, LookupOrdinaryName);
 
-  if (!R) {
-    DiagnoseMissingMember(IdentLoc, Name, NNS, SS.getRange());
+  if (R.empty()) {
+    Diag(IdentLoc, diag::err_no_member) 
+      << Name << LookupContext << SS.getRange();
     return 0;
   }
 
-  NamedDecl *ND = R.getAsDecl();
+  // FIXME: handle ambiguity?
+  NamedDecl *ND = R.getAsSingleDecl(Context);
 
   if (IsTypeName && !isa<TypeDecl>(ND)) {
     Diag(IdentLoc, diag::err_using_typename_non_type);
@@ -2790,14 +2809,17 @@ Sema::DeclPtrTy Sema::ActOnNamespaceAliasDef(Scope *S,
                                              IdentifierInfo *Ident) {
 
   // Lookup the namespace name.
-  LookupResult R = LookupParsedName(S, &SS, Ident, LookupNamespaceName, false);
+  LookupResult R;
+  LookupParsedName(R, S, &SS, Ident, LookupNamespaceName, false);
 
   // Check if we have a previous declaration with the same name.
-  if (NamedDecl *PrevDecl = LookupName(S, Alias, LookupOrdinaryName, true)) {
+  if (NamedDecl *PrevDecl
+        = LookupSingleName(S, Alias, LookupOrdinaryName, true)) {
     if (NamespaceAliasDecl *AD = dyn_cast<NamespaceAliasDecl>(PrevDecl)) {
       // We already have an alias with the same name that points to the same
       // namespace, so don't create a new one.
-      if (!R.isAmbiguous() && AD->getNamespace() == getNamespaceDecl(R))
+      if (!R.isAmbiguous() && !R.empty() &&
+          AD->getNamespace() == getNamespaceDecl(R.getFoundDecl()))
         return DeclPtrTy();
     }
 
@@ -2813,7 +2835,7 @@ Sema::DeclPtrTy Sema::ActOnNamespaceAliasDef(Scope *S,
     return DeclPtrTy();
   }
 
-  if (!R) {
+  if (R.empty()) {
     Diag(NamespaceLoc, diag::err_expected_namespace_name) << SS.getRange();
     return DeclPtrTy();
   }
@@ -2822,7 +2844,7 @@ Sema::DeclPtrTy Sema::ActOnNamespaceAliasDef(Scope *S,
     NamespaceAliasDecl::Create(Context, CurContext, NamespaceLoc, AliasLoc,
                                Alias, SS.getRange(),
                                (NestedNameSpecifier *)SS.getScopeRep(),
-                               IdentLoc, R);
+                               IdentLoc, R.getFoundDecl());
 
   CurContext->addDecl(AliasDecl);
   return DeclPtrTy::make(AliasDecl);
@@ -2852,7 +2874,7 @@ void Sema::DefineImplicitDefaultConstructor(SourceLocation CurrentLocation,
         MarkDeclarationReferenced(CurrentLocation, BaseCtor);
       else {
         Diag(CurrentLocation, diag::err_defining_default_ctor)
-          << Context.getTagDeclType(ClassDecl) << 1
+          << Context.getTagDeclType(ClassDecl) << 0
           << Context.getTagDeclType(BaseClassDecl);
         Diag(BaseClassDecl->getLocation(), diag::note_previous_class_decl)
               << Context.getTagDeclType(BaseClassDecl);
@@ -2874,8 +2896,9 @@ void Sema::DefineImplicitDefaultConstructor(SourceLocation CurrentLocation,
           MarkDeclarationReferenced(CurrentLocation, FieldCtor);
         else {
           Diag(CurrentLocation, diag::err_defining_default_ctor)
-          << Context.getTagDeclType(ClassDecl) << 0 <<
+          << Context.getTagDeclType(ClassDecl) << 1 <<
               Context.getTagDeclType(FieldClassDecl);
+          Diag((*Field)->getLocation(), diag::note_field_decl);
           Diag(FieldClassDecl->getLocation(), diag::note_previous_class_decl)
           << Context.getTagDeclType(FieldClassDecl);
           err = true;
@@ -3548,7 +3571,7 @@ Sema::CheckReferenceInit(Expr *&Init, QualType DeclType,
         if (DiagnoseUseOfDecl(Fn, DeclLoc))
           return true;
 
-        FixOverloadedFunctionReference(Init, Fn);
+        Init = FixOverloadedFunctionReference(Init, Fn);
       }
 
       T2 = Fn->getType();
@@ -3624,6 +3647,8 @@ Sema::CheckReferenceInit(Expr *&Init, QualType DeclType,
       CastExpr::CastKind CK = CastExpr::CK_NoOp;
       if (DerivedToBase)
         CK = CastExpr::CK_DerivedToBase;
+      else if(CheckExceptionSpecCompatibility(Init, T1))
+        return true;
       ImpCastExprToType(Init, T1, CK, /*isLvalue=*/true);
     }
   }
@@ -3635,7 +3660,7 @@ Sema::CheckReferenceInit(Expr *&Init, QualType DeclType,
   //          applicable conversion functions (13.3.1.6) and choosing
   //          the best one through overload resolution (13.3)),
   if (!isRValRef && !SuppressUserConversions && T2->isRecordType() &&
-      !RequireCompleteType(SourceLocation(), T2, 0)) {
+      !RequireCompleteType(DeclLoc, T2, 0)) {
     CXXRecordDecl *T2RecordDecl
       = dyn_cast<CXXRecordDecl>(T2->getAs<RecordType>()->getDecl());
 
@@ -3697,14 +3722,25 @@ Sema::CheckReferenceInit(Expr *&Init, QualType DeclType,
                                cast<CXXMethodDecl>(Best->Function), 
                                Owned(Init));
         Init = InitConversion.takeAs<Expr>();
-                                    
+
+        if (CheckExceptionSpecCompatibility(Init, T1))
+          return true;
         ImpCastExprToType(Init, T1, CastExpr::CK_UserDefinedConversion, 
                           /*isLvalue=*/true);
       }
       break;
 
     case OR_Ambiguous:
-      assert(false && "Ambiguous reference binding conversions not implemented.");
+      if (ICS) {
+        for (OverloadCandidateSet::iterator Cand = CandidateSet.begin();
+             Cand != CandidateSet.end(); ++Cand)
+          if (Cand->Viable)
+            ICS->ConversionFunctionSet.push_back(Cand->Function);
+        break;
+      }
+      Diag(DeclLoc, diag::err_ref_init_ambiguous) << DeclType << Init->getType()
+            << Init->getSourceRange();
+      PrintOverloadCandidates(CandidateSet, /*OnlyViable=*/true);
       return true;
 
     case OR_No_Viable_Function:
@@ -3786,6 +3822,8 @@ Sema::CheckReferenceInit(Expr *&Init, QualType DeclType,
       CastExpr::CastKind CK = CastExpr::CK_NoOp;
       if (DerivedToBase)
         CK = CastExpr::CK_DerivedToBase;
+      else if(CheckExceptionSpecCompatibility(Init, T1))
+        return true;
       ImpCastExprToType(Init, T1, CK, /*isLvalue=*/false);
     }
     return false;
@@ -4150,7 +4188,7 @@ Sema::DeclPtrTy Sema::ActOnExceptionDeclarator(Scope *S, Declarator &D) {
 
   bool Invalid = D.isInvalidType();
   IdentifierInfo *II = D.getIdentifier();
-  if (NamedDecl *PrevDecl = LookupName(S, II, LookupOrdinaryName)) {
+  if (NamedDecl *PrevDecl = LookupSingleName(S, II, LookupOrdinaryName)) {
     // The scope should be freshly made just for us. There is just no way
     // it contains any previous declaration.
     assert(!S->isDeclScope(DeclPtrTy::make(PrevDecl)));
@@ -4233,8 +4271,7 @@ Sema::DeclPtrTy Sema::ActOnStaticAssertDeclaration(SourceLocation AssertLoc,
 /// We permit this as a special case; if there are any template
 /// parameters present at all, require proper matching, i.e.
 ///   template <> template <class T> friend class A<int>::B;
-Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
-                                          const DeclSpec &DS,
+Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S, const DeclSpec &DS,
                                           MultiTemplateParamsArg TempParams) {
   SourceLocation Loc = DS.getSourceRange().getBegin();
 
@@ -4244,10 +4281,10 @@ Sema::DeclPtrTy Sema::ActOnFriendTypeDecl(Scope *S,
   // Try to convert the decl specifier to a type.  This works for
   // friend templates because ActOnTag never produces a ClassTemplateDecl
   // for a TUK_Friend.
-  bool invalid = false;
-  QualType SourceTy;
-  QualType T = ConvertDeclSpecToType(DS, Loc, invalid, SourceTy);
-  if (invalid) return DeclPtrTy();
+  Declarator TheDeclarator(DS, Declarator::MemberContext);
+  QualType T = GetTypeForDeclarator(TheDeclarator, S);
+  if (TheDeclarator.isInvalidType())
+    return DeclPtrTy();
 
   // This is definitely an error in C++98.  It's probably meant to
   // be forbidden in C++0x, too, but the specification is just
@@ -4335,8 +4372,6 @@ Sema::ActOnFriendFunctionDecl(Scope *S,
                               Declarator &D,
                               bool IsDefinition,
                               MultiTemplateParamsArg TemplateParams) {
-  // FIXME: do something with template parameters
-
   const DeclSpec &DS = D.getDeclSpec();
 
   assert(DS.isFriendSpecified());
@@ -4392,12 +4427,15 @@ Sema::ActOnFriendFunctionDecl(Scope *S,
   // Recover from invalid scope qualifiers as if they just weren't there.
   NamedDecl *PrevDecl = 0;
   if (!ScopeQual.isInvalid() && ScopeQual.isSet()) {
+    // FIXME: RequireCompleteDeclContext
     DC = computeDeclContext(ScopeQual);
 
     // FIXME: handle dependent contexts
     if (!DC) return DeclPtrTy();
 
-    PrevDecl = LookupQualifiedName(DC, Name, LookupOrdinaryName, true);
+    LookupResult R;
+    LookupQualifiedName(R, DC, Name, LookupOrdinaryName, true);
+    PrevDecl = R.getAsSingleDecl(Context);
 
     // If searching in that context implicitly found a declaration in
     // a different context, treat it like it wasn't found at all.
@@ -4430,7 +4468,9 @@ Sema::ActOnFriendFunctionDecl(Scope *S,
       while (DC->isRecord()) 
         DC = DC->getParent();
 
-      PrevDecl = LookupQualifiedName(DC, Name, LookupOrdinaryName, true);
+      LookupResult R;
+      LookupQualifiedName(R, DC, Name, LookupOrdinaryName, true);
+      PrevDecl = R.getAsSingleDecl(Context);
 
       // TODO: decide what we think about using declarations.
       if (PrevDecl)
@@ -4463,7 +4503,7 @@ Sema::ActOnFriendFunctionDecl(Scope *S,
 
   bool Redeclaration = false;
   NamedDecl *ND = ActOnFunctionDeclarator(S, D, DC, T, DInfo, PrevDecl,
-                                          MultiTemplateParamsArg(*this),
+                                          move(TemplateParams),
                                           IsDefinition,
                                           Redeclaration);
   if (!ND) return DeclPtrTy();
@@ -4611,16 +4651,6 @@ bool Sema::CheckOverridingFunctionReturnType(const CXXMethodDecl *New,
   };
 
   return false;
-}
-
-bool Sema::CheckOverridingFunctionExceptionSpec(const CXXMethodDecl *New,
-                                                const CXXMethodDecl *Old) {
-  return CheckExceptionSpecSubset(diag::err_override_exception_spec,
-                                  diag::note_overridden_virtual_function,
-                                  Old->getType()->getAs<FunctionProtoType>(),
-                                  Old->getLocation(),
-                                  New->getType()->getAs<FunctionProtoType>(),
-                                  New->getLocation());
 }
 
 /// ActOnCXXEnterDeclInitializer - Invoked when we are about to parse an

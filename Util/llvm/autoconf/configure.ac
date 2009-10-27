@@ -165,6 +165,11 @@ AC_CACHE_CHECK([type of operating system we're going to host on],
     llvm_cv_no_link_all_option="-Wl,-z,defaultextract"
     llvm_cv_os_type="SunOS"
     llvm_cv_platform_type="Unix" ;;
+  *-*-auroraux*)
+    llvm_cv_link_all_option="-Wl,-z,allextract"
+    llvm_cv_link_all_option="-Wl,-z,defaultextract"
+    llvm_cv_os_type="AuroraUX"
+    llvm_cv_platform_type="Unix" ;;
   *-*-win32*)
     llvm_cv_link_all_option="-Wl,--whole-archive"
     llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
@@ -175,6 +180,11 @@ AC_CACHE_CHECK([type of operating system we're going to host on],
     llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
     llvm_cv_os_type="MingW"
     llvm_cv_platform_type="Win32" ;;
+  *-*-haiku*)
+    llvm_cv_link_all_option="-Wl,--whole-archive"
+    llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
+    llvm_cv_os_type="Haiku"
+    llvm_cv_platform_type="Unix" ;;  
   *-unknown-eabi*)
     llvm_cv_link_all_option="-Wl,--whole-archive"
     llvm_cv_no_link_all_option="-Wl,--no-whole-archive"
@@ -219,10 +229,14 @@ AC_CACHE_CHECK([type of operating system we're going to target],
     llvm_cv_target_os_type="Linux" ;;
   *-*-solaris*)
     llvm_cv_target_os_type="SunOS" ;;
+  *-*-auroraux*)
+    llvm_cv_target_os_type="AuroraUX" ;;
   *-*-win32*)
     llvm_cv_target_os_type="Win32" ;;
   *-*-mingw*)
     llvm_cv_target_os_type="MingW" ;;
+  *-*-haiku*)
+    llvm_cv_target_os_type="Haiku" ;;  
   *-unknown-eabi*)
     llvm_cv_target_os_type="Freestanding" ;;
   *)
@@ -929,6 +943,12 @@ fi
 dnl Tool compatibility is okay if we make it here.
 AC_MSG_RESULT([ok])
 
+dnl Check optional compiler flags. 
+AC_MSG_CHECKING([optional compiler flags])
+CXX_FLAG_CHECK(NO_VARIADIC_MACROS, [-Wno-variadic-macros])
+CXX_FLAG_CHECK(NO_MISSING_FIELD_INITIALIZERS, [-Wno-missing-field-initializers])
+AC_MSG_RESULT([$NO_VARIADIC_MACROS $NO_MISSING_FIELD_INITIALIZERS])
+
 dnl===-----------------------------------------------------------------------===
 dnl===
 dnl=== SECTION 5: Check for libraries
@@ -960,7 +980,7 @@ AC_SEARCH_LIBS(mallinfo,malloc,AC_DEFINE([HAVE_MALLINFO],[1],
 dnl pthread locking functions are optional - but llvm will not be thread-safe
 dnl without locks.
 if test "$ENABLE_THREADS" -eq 1 ; then
-  AC_CHECK_LIB(pthread,pthread_mutex_init)
+  AC_CHECK_LIB(pthread, pthread_mutex_init)
   AC_SEARCH_LIBS(pthread_mutex_lock,pthread,
                  AC_DEFINE([HAVE_PTHREAD_MUTEX_LOCK],[1],
                            [Have pthread_mutex_lock]))
@@ -1335,7 +1355,7 @@ AC_CONFIG_HEADERS([include/llvm/Config/config.h])
 AC_CONFIG_FILES([include/llvm/Config/Targets.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmPrinters.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmParsers.def])
-AC_CONFIG_HEADERS([include/llvm/Support/DataTypes.h])
+AC_CONFIG_HEADERS([include/llvm/System/DataTypes.h])
 
 dnl Configure the makefile's configuration data
 AC_CONFIG_FILES([Makefile.config])

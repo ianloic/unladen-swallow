@@ -19,7 +19,7 @@
 #include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Support/CallSite.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InstVisitor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -139,8 +139,7 @@ public:
   void visitBinaryOperator(BinaryOperator &I);
   void visitICmpInst(ICmpInst &I);
   void visitFCmpInst(FCmpInst &I);
-  void visitAllocationInst(AllocationInst &I);
-  void visitFreeInst(FreeInst &I);
+  void visitAllocaInst(AllocaInst &I);
   void visitLoadInst(LoadInst &I);
   void visitStoreInst(StoreInst &I);
   void visitGetElementPtrInst(GetElementPtrInst &I);
