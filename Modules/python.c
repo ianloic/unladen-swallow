@@ -3,7 +3,7 @@
 #include "Python.h"
 
 #ifdef __FreeBSD__
-#include <floatingpoint.h>
+#include <ieeefp.h>
 #endif
 
 int
