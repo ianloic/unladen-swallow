@@ -3359,18 +3359,8 @@ Value *
 LlvmFunctionBuilder::GetStackLevel()
 {
     Value *stack_pointer = this->builder_.CreateLoad(this->stack_pointer_addr_);
-    Value *stack_pointer_int =
-        this->builder_.CreatePtrToInt(stack_pointer,
-                                      Type::getInt64Ty(this->context_));
-    Value *stack_bottom_int =
-        this->builder_.CreatePtrToInt(this->stack_bottom_,
-                                      Type::getInt64Ty(this->context_));
-    Value *difference =
-        this->builder_.CreateSub(stack_pointer_int, stack_bottom_int);
-    Value *level64 = this->builder_.CreateSDiv(
-        difference,
-        llvm::ConstantExpr::getSizeOf(
-            PyTypeBuilder<PyObject*>::get(this->context_)));
+    Value *level64 =
+        this->builder_.CreatePtrDiff(stack_pointer, this->stack_bottom_);
     // The stack level is stored as an int, not an int64.
     return this->builder_.CreateTrunc(level64,
                                       PyTypeBuilder<int>::get(this->context_),
