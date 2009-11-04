@@ -14,6 +14,7 @@
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Constants.h"
 #include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/TargetFolder.h"
 #include <string>
 
 struct PyCodeObject;
@@ -32,7 +33,8 @@ public:
     LlvmFunctionBuilder(PyGlobalLlvmData *global_data, PyCodeObject *code);
 
     llvm::Function *function() { return function_; }
-    llvm::IRBuilder<>& builder() { return builder_; }
+    typedef llvm::IRBuilder<true, llvm::TargetFolder> BuilderT;
+    BuilderT& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
     /// Returns true if this function actually makes use of the LOAD_GLOBAL
@@ -556,7 +558,7 @@ private:
     llvm::LLVMContext &context_;
     llvm::Module *const module_;
     llvm::Function *const function_;
-    llvm::IRBuilder<> builder_;
+    BuilderT builder_;
     const bool is_generator_;
     llvm::DIFactory *const debug_info_;
     const llvm::DICompileUnit debug_compile_unit_;

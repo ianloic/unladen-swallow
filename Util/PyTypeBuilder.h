@@ -58,7 +58,9 @@ namespace llvm {
                 offsetof(TYPE, FIELD_NAME)); \
         return index; \
     } \
-    static Value *FIELD_NAME(IRBuilder<> &builder, Value *ptr) { \
+    template<bool preserveNames, typename Folder> \
+    static Value *FIELD_NAME(IRBuilder<preserveNames, Folder> &builder, \
+                             Value *ptr) { \
         assert(ptr->getType() == PyTypeBuilder<TYPE*>::get(ptr->getContext()) \
                && "*ptr must be of type " #TYPE); \
         return builder.CreateStructGEP( \

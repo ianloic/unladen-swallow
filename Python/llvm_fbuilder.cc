@@ -161,7 +161,10 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                     // with runtime functions.
                     "#u#" + pystring_to_std_string(code_object->co_name),
                     this->module_)),
-      builder_(this->context_),
+      builder_(this->context_,
+               llvm::TargetFolder(
+                   llvm_data_->getExecutionEngine()->getTargetData(),
+                   this->context_)),
       is_generator_(code_object->co_flags & CO_GENERATOR),
       debug_info_(llvm_data->DebugInfo()),
       debug_compile_unit_(this->debug_info_ == NULL ? llvm::DICompileUnit() :
