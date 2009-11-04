@@ -2869,6 +2869,22 @@ def foo(x):
         # Make sure we compiled both branches to LLVM IR.
         self.assertContains("@len", str(foo.__code__.co_llvm))
 
+    def test_import_does_not_bail(self):
+        # Regression test: this simple import (which hits sys.modules!) used
+        # to cause invalidation due to no-op assignments to the globals dict
+        # done deep within the import machinery.
+        foo = compile_for_llvm("foo", """
+def foo():
+    import os
+    return len([])
+""", optimization_level=None)
+        import os  # Make sure this is in sys.modules.
+        for _ in xrange(JIT_SPIN_COUNT):
+            foo()
+
+        # If we get here, we haven't bailed, but double-check to be sure.
+        self.assertTrue(foo.__code__.__use_llvm__)
+
 
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 
