@@ -134,10 +134,20 @@ find_basic_blocks(PyObject *bytecode, py::LlvmFunctionBuilder &fbuilder,
         // the instruction right after the jump. In either case, if a block
         // for that instruction already exists, use the existing block.
         if (iter.NextIndex() >= instr_info.size()) {
-            PyErr_SetString(PyExc_SystemError, "Fell through out of bytecode.");
-            return -1;
+            // An unconditional jump as the last instruction will have a
+            // NextIndex() just beyond the end of the bytecode.
+            // Handle this by not allocating a fallthrough block and
+            // passing NULL as the fallthrough parameter to 
+            // LlvmFunctionBuilder::JUMP_ABSOLUTE.  This method doesn't use
+            // its fallthrough parameter so this does not cause a problem.
+            if (iter.Opcode() != JUMP_ABSOLUTE &&
+                iter.Opcode() != JUMP_FORWARD) {
+                PyErr_SetString(PyExc_SystemError,
+                                "Fell through out of bytecode.");
+                return -1;
+            }
         }
-        if (instr_info[iter.NextIndex()].block_ == NULL) {
+        else if (instr_info[iter.NextIndex()].block_ == NULL) {
             instr_info[iter.NextIndex()].block_ =
                 fbuilder.CreateBasicBlock(fallthrough_name);
         }
@@ -329,9 +339,13 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
         } else { \
             target = instr_info[target_opindex].block_; \
         } \
-        fallthrough = instr_info[iter.NextIndex()].block_; \
         assert(target != NULL && "Missing target block"); \
-        assert(fallthrough != NULL && "Missing fallthrough block"); \
+        if (iter.NextIndex() < instr_info.size()) { \
+            fallthrough = instr_info[iter.NextIndex()].block_; \
+            assert(fallthrough != NULL && "Missing fallthrough block"); \
+        } else { \
+            fallthrough = NULL; \
+        } \
         fbuilder.opname(TARGET_PARAM, fallthrough); \
         break;
 

@@ -1418,6 +1418,23 @@ def unbound_local(level):
         self.assertRaisesWithArgs(UnboundLocalError,
             ("local variable 'b' referenced before assignment",), inner)
 
+    @at_each_optimization_level
+    def test_ends_with_unconditional_jump(self, level):
+        foo = compile_for_llvm('foo', '''
+from opcode import opmap
+from types import CodeType, FunctionType
+foo_bytecode = [
+    opmap["JUMP_FORWARD"],  4, 0,  #  0  JUMP_FORWARD   4 (to 7)
+    opmap["LOAD_CONST"],    0, 0,  #  3  LOAD_CONST     0 (1)
+    opmap["RETURN_VALUE"],         #  6  RETURN_VALUE
+    opmap["JUMP_ABSOLUTE"], 3, 0,  #  7  JUMP_ABSOLUTE  3
+]
+foo_code = CodeType(0, 0, 1, 0, "".join(chr(x) for x in foo_bytecode),
+                    (1,), (), (), "<string>", "foo", 1, "")
+foo = FunctionType(foo_code, globals())
+''', level)
+        self.assertEquals(1, foo())
+
 
 class LoopExceptionInteractionTests(LlvmTestCase):
     @at_each_optimization_level
