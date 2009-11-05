@@ -364,8 +364,9 @@ public:
         // cache.
         this->parent_.engine_.updateGlobalMapping(
             cast<GlobalValue>(this->getValPtr()), NULL);
-        if (!this->parent_.python_shutting_down_)
+        if (!this->parent_.python_shutting_down_) {
             Py_DECREF(this->obj_);
+        }
         this->setValPtr(NULL);
         delete this;
     }
