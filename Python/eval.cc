@@ -4202,13 +4202,13 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 	*/
 	if (PyCFunction_Check(func) && nk == 0) {
 		int flags = PyCFunction_GET_FLAGS(func);
-		int arity = PyCFunction_GET_ARITY(func);
 		PyThreadState *tstate = PyThreadState_GET();
 
 		PCALL(PCALL_CFUNCTION);
 		if (flags & METH_FIXED) {
 			PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 			PyObject *self = PyCFunction_GET_SELF(func);
+			int arity = PyCFunction_GET_ARITY(func);
 			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
 			switch (na) {
 				default:

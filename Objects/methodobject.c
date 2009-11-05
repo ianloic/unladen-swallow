@@ -90,7 +90,6 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	PyCFunctionObject* f = (PyCFunctionObject*)func;
 	PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 	PyObject *self = PyCFunction_GET_SELF(func);
-	int arity = PyCFunction_GET_ARITY(func);
 	Py_ssize_t size;
 
 	switch (PyCFunction_GET_FLAGS(func) & ~(METH_CLASS | METH_STATIC | METH_COEXIST)) {
@@ -102,6 +101,8 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	case METH_OLDARGS | METH_KEYWORDS:
 		return (*(PyCFunctionWithKeywords)meth)(self, arg, kw);
 	case METH_FIXED:
+	{
+		int arity = PyCFunction_GET_ARITY(func);
 		if (kw == NULL || PyDict_Size(kw) == 0) {
 			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
 			size = PyTuple_GET_SIZE(arg);
@@ -130,6 +131,7 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 			return NULL;
 		}
 		break;
+	}
 	case METH_OLDARGS:
 		/* the really old style */
 		if (kw == NULL || PyDict_Size(kw) == 0) {

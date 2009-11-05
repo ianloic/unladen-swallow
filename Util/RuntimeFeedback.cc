@@ -19,7 +19,9 @@ FunctionRecord::FunctionRecord(const PyObject *func)
     this->func = PyCFunction_GET_FUNCTION(func);
     this->flags = PyCFunction_GET_FLAGS(func);
     this->name = PyCFunction_GET_METHODDEF(func)->ml_name;
-    this->arity = PyCFunction_GET_ARITY(func);
+    this->arity = -1;
+    if (this->flags & METH_FIXED)
+        this->arity = PyCFunction_GET_ARITY(func);
 }
 
 FunctionRecord::FunctionRecord(const FunctionRecord &record)
