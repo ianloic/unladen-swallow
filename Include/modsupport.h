@@ -43,8 +43,8 @@ PyAPI_FUNC(int) PyModule_AddStringConstant(PyObject *, const char *, const char 
 #define PyModule_AddIntMacro(m, c) PyModule_AddIntConstant(m, #c, c)
 #define PyModule_AddStringMacro(m, c) PyModule_AddStringConstant(m, #c, c)
 
-#define PYTHON_API_VERSION 1013
-#define PYTHON_API_STRING "1013"
+#define PYTHON_API_VERSION 1014
+#define PYTHON_API_STRING "1014"
 /* The API version is maintained (independently from the Python version)
    so we can detect mismatches between the interpreter and dynamically
    loaded modules.  These are diagnosed by an error message but
@@ -57,6 +57,8 @@ PyAPI_FUNC(int) PyModule_AddStringConstant(PyObject *, const char *, const char 
 
    Please add a line or two to the top of this log for each API
    version change:
+
+    5-Nov-2009  COW     1014    Unladen Swallow ABI incompatibility.
 
    22-Feb-2006  MvL	1013	PEP 353 - long indices for sequence lengths
 

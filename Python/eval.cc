@@ -4058,17 +4058,23 @@ PyEval_GetFuncDesc(PyObject *func)
 }
 
 static void
-err_args(PyObject *func, int flags, int nargs)
+err_args(PyObject *func, int flags, int arity, int nargs)
 {
-	if (flags & METH_NOARGS)
+	if (arity == 0)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes no arguments (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
 			     nargs);
-	else
+	else if (arity == 1)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes exactly one argument (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
+			     nargs);
+	else
+		PyErr_Format(PyExc_TypeError,
+			     "%.200s() takes exactly %d arguments (%d given)",
+			     ((PyCFunctionObject *)func)->m_ml->ml_name,
+			     arity,
 			     nargs);
 }
 
@@ -4196,22 +4202,39 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 	*/
 	if (PyCFunction_Check(func) && nk == 0) {
 		int flags = PyCFunction_GET_FLAGS(func);
+		int arity = PyCFunction_GET_ARITY(func);
 		PyThreadState *tstate = PyThreadState_GET();
 
 		PCALL(PCALL_CFUNCTION);
-		if (flags & (METH_NOARGS | METH_O)) {
+		if (flags & METH_FIXED) {
 			PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 			PyObject *self = PyCFunction_GET_SELF(func);
-			if (flags & METH_NOARGS && na == 0) {
-				C_TRACE(x, (*meth)(self,NULL));
+			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
+			switch (na) {
+				default:
+					PyErr_BadInternalCall();
+					return NULL;
+				case 3:
+					args[2] = EXT_POP(stack_pointer);
+				case 2:
+					args[1] = EXT_POP(stack_pointer);
+				case 1:
+					args[0] = EXT_POP(stack_pointer);
+				case 0:
+					break;
 			}
-			else if (flags & METH_O && na == 1) {
-				PyObject *arg = EXT_POP(stack_pointer);
-				C_TRACE(x, (*meth)(self,arg));
-				Py_DECREF(arg);
+			/* But wait, you ask, what about {un,bin}ary functions?
+			   Aren't we passing more arguments than it expects?
+			   Yes, but C allows this. Go C. */
+			if (arity == na) {
+				C_TRACE(x, (*(PyCFunctionThreeArgs)meth)
+				           (self, args[0], args[1], args[2]));
+				Py_XDECREF(args[0]);
+				Py_XDECREF(args[1]);
+				Py_XDECREF(args[2]);
 			}
 			else {
-				err_args(func, flags, na);
+				err_args(func, flags, arity, na);
 				x = NULL;
 			}
 		}

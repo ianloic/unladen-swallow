@@ -21,6 +21,7 @@ using llvm::ConstantInt;
 using llvm::ConstantStruct;
 using llvm::ExecutionEngine;
 using llvm::Function;
+using llvm::FunctionType;
 using llvm::GlobalValue;
 using llvm::GlobalVariable;
 using llvm::IntegerType;
@@ -404,8 +405,13 @@ PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
     return result;
 }
 
+#define ONE_ARG  PyObject*(PyObject*, PyObject*)
+#define TWO_ARGS PyObject*(PyObject*, PyObject*, PyObject*)
+#define THREE_ARGS PyObject*(PyObject*, PyObject*, PyObject*, PyObject*)
+
 Constant *
 PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
+                                        int arity,
                                         const llvm::StringRef &name)
 {
     // Reuse an existing LLVM global if we can.
@@ -415,12 +421,26 @@ PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
                 (this->engine_.getGlobalValueAtAddress(func_ptr)))
         return found;
 
+    const FunctionType *func_type = NULL;
+    if (arity == 0 || arity == 1)
+        func_type = PyTypeBuilder<ONE_ARG>::get(this->context());
+    else if (arity == 2)
+        func_type = PyTypeBuilder<TWO_ARGS>::get(this->context());
+    else if (arity == 3)
+        func_type = PyTypeBuilder<THREE_ARGS>::get(this->context());
+    else
+        assert(0 && "Invalid arity");
+
     // Create a new LLVM global if we haven't seen this function pointer before.
     Function *global_func = Function::Create(
-        PyTypeBuilder<PyObject*(PyObject*, PyObject*)>::get(this->context()),
+        func_type,
         GlobalVariable::ExternalLinkage,
         name,
         this->llvm_data_.module());
     this->engine_.addGlobalMapping(global_func, func_ptr);
     return global_func;
 }
+
+#undef ONE_ARG
+#undef TWO_ARGS
+#undef THREE_ARGS

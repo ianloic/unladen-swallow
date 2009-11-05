@@ -73,7 +73,7 @@ public:
     unsigned optimized;
     // We only optimize call sites without keyword, *args or **kwargs arguments.
     unsigned no_opt_kwargs;
-    // We only optimize METH_O and METH_NOARGS functions so far.
+    // We only optimize METH_FIXED functions so far.
     unsigned no_opt_params;
     // We only optimize callsites where we've collected data. Note that since
     // we record only PyCFunctions, any call to a Python function will show up
@@ -259,8 +259,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                                    this->stack_pointer_addr_);
         /* f_stacktop remains NULL unless yield suspends the frame. */
         this->builder_.CreateStore(
-            Constant::getNullValue(
-                    PyTypeBuilder<PyObject **>::get(this->context_)),
+            this->GetNull<PyObject **>(),
             FrameTy::f_stacktop(this->builder_, this->frame_));
 
         this->builder_.CreateStore(
@@ -399,9 +398,7 @@ void
 LlvmFunctionBuilder::FillPropagateExceptionBlock()
 {
     this->builder_.SetInsertPoint(this->propagate_exception_block_);
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_)),
-        this->retval_addr_);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), this->retval_addr_);
     this->builder_.CreateStore(ConstantInt::get(Type::getInt8Ty(this->context_),
                                                 UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
@@ -677,9 +674,7 @@ LlvmFunctionBuilder::FillUnwindBlock()
                                 this->do_return_block_, reset_retval);
 
     this->builder_.SetInsertPoint(reset_retval);
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_)),
-        this->retval_addr_);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), this->retval_addr_);
     this->builder_.CreateBr(this->do_return_block_);
 }
 
@@ -738,9 +733,7 @@ LlvmFunctionBuilder::FillDoReturnBlock()
 
     this->builder_.SetInsertPoint(tracer_raised);
     this->XDecRef(traced_retval);
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_)),
-        this->retval_addr_);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), this->retval_addr_);
     this->builder_.CreateBr(check_frame_exception);
 
     this->builder_.SetInsertPoint(check_frame_exception);
@@ -901,9 +894,7 @@ LlvmFunctionBuilder::CopyFromFrameObject()
                                   "stack_pointer_from_frame");
     this->builder_.CreateStore(stack_pointer, this->stack_pointer_addr_);
     /* f_stacktop remains NULL unless yield suspends the frame. */
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject **>::get(this->context_)),
-        f_stacktop);
+    this->builder_.CreateStore(this->GetNull<PyObject**>(), f_stacktop);
 
     Value *num_blocks = this->builder_.CreateLoad(
         FrameTy::f_iblock(this->builder_, this->frame_));
@@ -941,8 +932,7 @@ LlvmFunctionBuilder::CopyLocalsFromFrameObject()
     Value *locals =
         this->builder_.CreateStructGEP(
                  FrameTy::f_localsplus(this->builder_, this->frame_), 0);
-    Value *null =
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_));
+    Value *null = this->GetNull<PyObject*>();
 
     // Figure out how many total parameters we have.
     int param_count = this->GetParamCount();
@@ -1335,8 +1325,7 @@ LlvmFunctionBuilder::DELETE_ATTR(int index)
 {
     Value *attr = this->LookupName(index);
     Value *obj = this->Pop();
-    Value *value =
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_));
+    Value *value = this->GetNull<PyObject*>();
     Function *pyobj_setattr = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
     Value *result = this->CreateCall(
@@ -1546,8 +1535,7 @@ LlvmFunctionBuilder::WITH_CLEANUP()
     args.push_back(this->builder_.CreateLoad(exc_type));
     args.push_back(this->builder_.CreateLoad(exc_value));
     args.push_back(this->builder_.CreateLoad(exc_traceback));
-    args.push_back(
-        Constant::getNullValue(PyTypeBuilder<PyObject *>::get(this->context_)));
+    args.push_back(this->GetNull<PyObject*>());
     Value *ret = this->CreateCall(
         this->GetGlobalFunction<PyObject *(PyObject *, ...)>(
             "PyObject_CallFunctionObjArgs"),
@@ -1713,13 +1701,14 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
     // Only optimize calls to C functions with a fixed number of parameters,
     // where the number of arguments we have matches exactly.
     int flags = func_record->flags;
+    int arity = func_record->arity;
     int num_args = oparg & 0xff;
-    if (!((flags & METH_NOARGS && num_args == 0) ||
-          (flags & METH_O && num_args == 1))) {
+    if (!(flags & METH_FIXED && arity == num_args)) {
         CF_INC_STATS(no_opt_params);
         this->CALL_FUNCTION_safe(oparg);
         return;
     }
+    assert(num_args <= PY_MAX_FIXED_ARITY);
 
     PyCFunction cfunc_ptr = func_record->func;
 
@@ -1728,6 +1717,7 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
     Constant *llvm_func =
         this->llvm_data_->constant_mirror().GetGlobalForCFunction(
             cfunc_ptr,
+            arity,
             func_record->name);
 
     BasicBlock *not_profiling =
@@ -1793,36 +1783,38 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
 
     // If all the assumptions are valid, we know we have a C function pointer
     // that takes two arguments: first the invocant, second an optional
-    // PyObject *. If the function was tagged with METH_NOARGS, we use NULL for
-    // the second argument. Because "the invocant" differs between built-in
-    // functions like len() and C-level methods like list.append(), we pull
-    // the invocant (called m_self) from the PyCFunction object we popped off
-    // the stack. Once the function returns, we patch up the stack pointer.
+    // PyObject *. If the function was tagged with METH_FIXED and arity=0, we
+    // use NULL for the second argument. Because "the invocant" differs between
+    // built-in functions like len() and C-level methods like list.append(), we
+    // pull the invocant (called m_self) from the PyCFunction object we popped
+    // off the stack. Once the function returns, we patch up the stack pointer.
     this->builder_.SetInsertPoint(all_assumptions_valid);
-    Value *arg;
-    if (num_args == 0) {
-        arg = Constant::getNullValue(
-            PyTypeBuilder<PyObject *>::get(this->context_));
-    }
-    else {
-        assert(num_args == 1);
-        arg = this->builder_.CreateLoad(
-            this->builder_.CreateGEP(
-                stack_pointer,
-                ConstantInt::getSigned(Type::getInt64Ty(this->context_), -1)));
-    }
     Value *self = this->builder_.CreateLoad(
         CFunctionTy::m_self(this->builder_, actual_as_pycfunc),
         "CALL_FUNCTION_actual_self");
+    llvm::SmallVector<Value*, PY_MAX_FIXED_ARITY + 1> args;  // +1 for self.
+    args.push_back(self);
+    if (num_args == 0) {
+        args.push_back(this->GetNull<PyObject *>());
+    }
+    for (int i = num_args; i >= 1; --i) {
+        args.push_back(
+            this->builder_.CreateLoad(
+                this->builder_.CreateGEP(
+                    stack_pointer,
+                    ConstantInt::getSigned(
+                        Type::getInt64Ty(this->context_), -i))));
+    }
 
 #ifdef WITH_TSC
     this->LogTscEvent(CALL_ENTER_C);
 #endif
-    Value *result = this->CreateCall(llvm_func, self, arg);
+    Value *result = this->CreateCall(llvm_func, args.begin(), args.end());
 
     this->DecRef(actual_func);
-    if (num_args == 1) {
-        this->DecRef(arg);
+    // Decrefing args[0] will cause self to be double-decrefed, so avoid that.
+    for (int i = 1; i <= num_args; ++i) {
+        this->DecRef(args[i]);
     }
     Value *new_stack_pointer = this->builder_.CreateGEP(
         stack_pointer,
@@ -2240,12 +2232,8 @@ LlvmFunctionBuilder::DELETE_FAST(int index)
     Value *frame_local_slot = this->builder_.CreateGEP(
         this->fastlocals_, ConstantInt::get(Type::getInt32Ty(this->context_),
                                             index));
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject *>::get(this->context_)),
-        frame_local_slot);
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject *>::get(this->context_)),
-        local_slot);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), frame_local_slot);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), local_slot);
     this->DecRef(orig_value);
 }
 
@@ -2430,9 +2418,7 @@ LlvmFunctionBuilder::END_FINALLY()
         err_type, err_value, err_traceback);
     // This is a "re-raise" rather than a new exception, so we don't
     // jump to the propagate_exception_block_.
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_)),
-        this->retval_addr_);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), this->retval_addr_);
     this->builder_.CreateStore(ConstantInt::get(Type::getInt8Ty(this->context_),
                                                 UNWIND_EXCEPTION),
                                this->unwind_reason_addr_);
@@ -2585,9 +2571,7 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
     this->builder_.CreateStore(
         ConstantInt::get(Type::getInt8Ty(this->context_), UNWIND_EXCEPTION),
         this->unwind_reason_addr_);
-    this->builder_.CreateStore(
-        Constant::getNullValue(PyTypeBuilder<PyObject*>::get(this->context_)),
-        this->retval_addr_);
+    this->builder_.CreateStore(this->GetNull<PyObject*>(), this->retval_addr_);
 
 #ifdef WITH_TSC
     this->LogTscEvent(EXCEPT_RAISE_LLVM);
@@ -2612,22 +2596,17 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
 void
 LlvmFunctionBuilder::RAISE_VARARGS_ZERO()
 {
-    Value *exc_tb = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *exc_inst = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *exc_type = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *exc_tb = this->GetNull<PyObject*>();
+    Value *exc_inst = this->GetNull<PyObject*>();
+    Value *exc_type = this->GetNull<PyObject*>();
     this->DoRaise(exc_type, exc_inst, exc_tb);
 }
 
 void
 LlvmFunctionBuilder::RAISE_VARARGS_ONE()
 {
-    Value *exc_tb = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *exc_inst = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *exc_tb = this->GetNull<PyObject*>();
+    Value *exc_inst = this->GetNull<PyObject*>();
     Value *exc_type = this->Pop();
     this->DoRaise(exc_type, exc_inst, exc_tb);
 }
@@ -2635,8 +2614,7 @@ LlvmFunctionBuilder::RAISE_VARARGS_ONE()
 void
 LlvmFunctionBuilder::RAISE_VARARGS_TWO()
 {
-    Value *exc_tb = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *exc_tb = this->GetNull<PyObject*>();
     Value *exc_inst = this->Pop();
     Value *exc_type = this->Pop();
     this->DoRaise(exc_type, exc_inst, exc_tb);
@@ -3113,8 +3091,7 @@ LlvmFunctionBuilder::SLICE_BOTH()
 void
 LlvmFunctionBuilder::SLICE_LEFT()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
     Value *start = this->Pop();
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
@@ -3124,8 +3101,7 @@ void
 LlvmFunctionBuilder::SLICE_RIGHT()
 {
     Value *stop = this->Pop();
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
 }
@@ -3133,10 +3109,8 @@ LlvmFunctionBuilder::SLICE_RIGHT()
 void
 LlvmFunctionBuilder::SLICE_NONE()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
     this->ApplySlice(seq, start, stop);
 }
@@ -3170,8 +3144,7 @@ LlvmFunctionBuilder::STORE_SLICE_BOTH()
 void
 LlvmFunctionBuilder::STORE_SLICE_LEFT()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
     Value *start = this->Pop();
     Value *seq = this->Pop();
     Value *source = this->Pop();
@@ -3182,8 +3155,7 @@ void
 LlvmFunctionBuilder::STORE_SLICE_RIGHT()
 {
     Value *stop = this->Pop();
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
     Value *source = this->Pop();
     this->AssignSlice(seq, start, stop, source);
@@ -3192,10 +3164,8 @@ LlvmFunctionBuilder::STORE_SLICE_RIGHT()
 void
 LlvmFunctionBuilder::STORE_SLICE_NONE()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
     Value *source = this->Pop();
     this->AssignSlice(seq, start, stop, source);
@@ -3207,20 +3177,17 @@ LlvmFunctionBuilder::DELETE_SLICE_BOTH()
     Value *stop = this->Pop();
     Value *start = this->Pop();
     Value *seq = this->Pop();
-    Value *source = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *source = this->GetNull<PyObject*>();
     this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::DELETE_SLICE_LEFT()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
     Value *start = this->Pop();
     Value *seq = this->Pop();
-    Value *source = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *source = this->GetNull<PyObject*>();
     this->AssignSlice(seq, start, stop, source);
 }
 
@@ -3228,32 +3195,26 @@ void
 LlvmFunctionBuilder::DELETE_SLICE_RIGHT()
 {
     Value *stop = this->Pop();
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
-    Value *source = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *source = this->GetNull<PyObject*>();
     this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::DELETE_SLICE_NONE()
 {
-    Value *stop = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
-    Value *start = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *stop = this->GetNull<PyObject*>();
+    Value *start = this->GetNull<PyObject*>();
     Value *seq = this->Pop();
-    Value *source = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *source = this->GetNull<PyObject*>();
     this->AssignSlice(seq, start, stop, source);
 }
 
 void
 LlvmFunctionBuilder::BUILD_SLICE_TWO()
 {
-    Value *step = Constant::getNullValue(
-        PyTypeBuilder<PyObject *>::get(this->context_));
+    Value *step = this->GetNull<PyObject*>();
     Value *stop = this->Pop();
     Value *start = this->Pop();
     Function *build_slice = this->GetGlobalFunction<
@@ -3576,6 +3537,12 @@ llvm::BasicBlock *
 LlvmFunctionBuilder::CreateBasicBlock(const llvm::Twine &name)
 {
     return BasicBlock::Create(this->context_, name, this->function_);
+}
+
+template<typename T> Value *
+LlvmFunctionBuilder::GetNull()
+{
+    return Constant::getNullValue(PyTypeBuilder<T>::get(this->context_));
 }
 
 Value *

@@ -391,6 +391,10 @@ private:
     /// Marks the end of the function and inserts a return instruction.
     llvm::ReturnInst *CreateRet(llvm::Value *retval);
 
+    /// Get the LLVM NULL Value for the given type.
+    template<typename T>
+    llvm::Value *GetNull();
+
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
     // Returns an i1, true if value is a negative integer.

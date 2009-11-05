@@ -1056,13 +1056,8 @@ Return the dictionary containing the current scope's global variables.");
 
 
 static PyObject *
-builtin_hasattr(PyObject *self, PyObject *args)
+builtin_hasattr(PyObject *self, PyObject *v, PyObject *name)
 {
-	PyObject *v;
-	PyObject *name;
-
-	if (!PyArg_UnpackTuple(args, "hasattr", 2, 2, &v, &name))
-		return NULL;
 #ifdef Py_USING_UNICODE
 	if (PyUnicode_Check(name)) {
 		name = _PyUnicode_AsDefaultEncodedString(name, NULL);
@@ -1112,14 +1107,9 @@ simultaneously existing objects.  (Hint: it's the object's memory address.)");
 
 
 static PyObject *
-builtin_import_from(PyObject *self, PyObject *args)
+builtin_import_from(PyObject *self, PyObject *module, PyObject *name)
 {
-	PyObject *module, *name, *obj;
-
-	if (!PyArg_UnpackTuple(args, "#@import_from", 2, 2, &module, &name))
-		return NULL;
-
-	obj = PyObject_GetAttr(module, name);
+	PyObject *obj = PyObject_GetAttr(module, name);
 	if (obj == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
 		PyErr_Format(PyExc_ImportError,
 			     "cannot import name %.230s",
@@ -1135,14 +1125,11 @@ Simulate the removed IMPORT_FROM opcode. Internal use only.");
 
 
 static PyObject *
-builtin_import_name(PyObject *self, PyObject *args)
+builtin_import_name(PyObject *self, PyObject *level, PyObject *names,
+                    PyObject *module_name)
 {
-	PyObject *module_name, *import, *import_args, *names, *level, *module;
+	PyObject *import, *import_args, *module;
 	PyFrameObject *frame = PyThreadState_Get()->frame;
-
-	if (!PyArg_UnpackTuple(args, "#@import_name", 3, 3,
-			       &level, &names, &module_name))
-		return NULL;
 
 	import = PyDict_GetItemString(frame->f_builtins, "__import__");
 	if (import == NULL) {
@@ -1519,14 +1506,8 @@ is exhausted, it is returned instead of raising StopIteration.");
 
 
 static PyObject *
-builtin_setattr(PyObject *self, PyObject *args)
+builtin_setattr(PyObject *self, PyObject *v, PyObject *name, PyObject *value)
 {
-	PyObject *v;
-	PyObject *name;
-	PyObject *value;
-
-	if (!PyArg_UnpackTuple(args, "setattr", 3, 3, &v, &name, &value))
-		return NULL;
 	if (PyObject_SetAttr(v, name, value) != 0)
 		return NULL;
 	Py_INCREF(Py_None);
@@ -2825,14 +2806,9 @@ empty, returns start.");
 
 
 static PyObject *
-builtin_isinstance(PyObject *self, PyObject *args)
+builtin_isinstance(PyObject *self, PyObject *inst, PyObject *cls)
 {
-	PyObject *inst;
-	PyObject *cls;
 	int retval;
-
-	if (!PyArg_UnpackTuple(args, "isinstance", 2, 2, &inst, &cls))
-		return NULL;
 
 	retval = PyObject_IsInstance(inst, cls);
 	if (retval < 0)
@@ -3004,13 +2980,13 @@ static PyMethodDef builtin_methods[] = {
  	{"format",	builtin_format,     METH_VARARGS, format_doc},
  	{"getattr",	builtin_getattr,    METH_VARARGS, getattr_doc},
  	{"globals",	(PyCFunction)builtin_globals,    METH_NOARGS, globals_doc},
- 	{"hasattr",	builtin_hasattr,    METH_VARARGS, hasattr_doc},
+ 	{"hasattr",	(PyCFunction)builtin_hasattr,    METH_FIXED, hasattr_doc, /*arity=*/2},
  	{"hash",	builtin_hash,       METH_O, hash_doc},
  	{"hex",		builtin_hex,        METH_O, hex_doc},
  	{"id",		builtin_id,         METH_O, id_doc},
  	{"input",	builtin_input,      METH_VARARGS, input_doc},
  	{"intern",	builtin_intern,     METH_VARARGS, intern_doc},
- 	{"isinstance",  builtin_isinstance, METH_VARARGS, isinstance_doc},
+ 	{"isinstance",  (PyCFunction)builtin_isinstance, METH_FIXED, isinstance_doc, /*arity=*/2},
  	{"issubclass",  builtin_issubclass, METH_VARARGS, issubclass_doc},
  	{"iter",	builtin_iter,       METH_VARARGS, iter_doc},
  	{"len",		builtin_len,        METH_O, len_doc},
@@ -3030,7 +3006,7 @@ static PyMethodDef builtin_methods[] = {
  	{"reload",	builtin_reload,     METH_O, reload_doc},
  	{"repr",	builtin_repr,       METH_O, repr_doc},
  	{"round",	(PyCFunction)builtin_round,      METH_VARARGS | METH_KEYWORDS, round_doc},
- 	{"setattr",	builtin_setattr,    METH_VARARGS, setattr_doc},
+ 	{"setattr",	(PyCFunction)builtin_setattr,    METH_FIXED, setattr_doc, /*arity=*/3},
  	{"sorted",	(PyCFunction)builtin_sorted,     METH_VARARGS | METH_KEYWORDS, sorted_doc},
  	{"sum",		builtin_sum,        METH_VARARGS, sum_doc},
 #ifdef Py_USING_UNICODE
@@ -3042,8 +3018,8 @@ static PyMethodDef builtin_methods[] = {
 	{"#@buildclass",	builtin_buildclass,	    METH_VARARGS, buildclass_doc},
  	{"#@displayhook",	builtin_displayhook,     METH_VARARGS, displayhook_doc},
 	{"#@exec",	        builtin_exec,	    METH_VARARGS, exec_doc},
-	{"#@import_from",	builtin_import_from,	    METH_VARARGS, import_from_doc},
-	{"#@import_name",	builtin_import_name,	    METH_VARARGS, import_name_doc},
+	{"#@import_from",	(PyCFunction)builtin_import_from,	    METH_FIXED, import_from_doc, /*arity=*/2},
+	{"#@import_name",	(PyCFunction)builtin_import_name,	    METH_FIXED, import_name_doc, /*arity=*/3},
 	{"#@import_star",	(PyCFunction)builtin_import_star,	    METH_O, import_star_doc},
  	{"#@locals",		(PyCFunction)builtin_locals,     METH_NOARGS, locals_doc},
 	{"#@make_function",	builtin_make_function,	    METH_VARARGS, make_function_doc},

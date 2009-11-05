@@ -2593,6 +2593,30 @@ def foo(trigger):
         self.assertTrue(k < 12000, k)
         self.assertEqual(v, None)
 
+    def test_fast_calls_two_arguments(self):
+        # Test our ability to optimize calls to METH_FIXED/arity=2 functions.
+        foo = compile_for_llvm('foo', 'def foo(x): return isinstance(x, int)',
+                               optimization_level=None)
+        for _ in xrange(JIT_SPIN_COUNT):
+            foo(5)
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertTrue(foo(5))
+        self.assertFalse(foo([]))
+        self.assertContains("@isinstance", str(foo.__code__.co_llvm))
+
+    def test_fast_calls_three_arguments(self):
+        # Test our ability to optimize calls to METH_FIXED/arity=3 functions.
+        foo = compile_for_llvm('foo', 'def foo(x): setattr(x, "y", 5)',
+                               optimization_level=None)
+        class Object(object):
+            pass
+        x = Object()
+        for _ in xrange(JIT_SPIN_COUNT):
+            foo(x)
+        self.assertEqual(x.y, 5)
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertContains("@setattr", str(foo.__code__.co_llvm))
+
     def test_fast_calls_same_method_different_invocant(self):
         # For all strings, x.join will resolve to the same C function, so
         # it should use the fast version of CALL_FUNCTION that calls the

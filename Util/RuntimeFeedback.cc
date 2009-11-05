@@ -19,6 +19,7 @@ FunctionRecord::FunctionRecord(const PyObject *func)
     this->func = PyCFunction_GET_FUNCTION(func);
     this->flags = PyCFunction_GET_FLAGS(func);
     this->name = PyCFunction_GET_METHODDEF(func)->ml_name;
+    this->arity = PyCFunction_GET_ARITY(func);
 }
 
 FunctionRecord::FunctionRecord(const FunctionRecord &record)
@@ -26,6 +27,7 @@ FunctionRecord::FunctionRecord(const FunctionRecord &record)
     this->func = record.func;
     this->flags = record.flags;
     this->name = record.name;
+    this->arity = record.arity;
 }
 
 

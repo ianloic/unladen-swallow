@@ -50,6 +50,7 @@ public:
 
     PyCFunction func;
     int flags;
+    int arity;
     std::string name;
 };
 
