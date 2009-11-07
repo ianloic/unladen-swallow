@@ -63,12 +63,6 @@ bool MachineModuleInfo::doFinalization() {
   return false;
 }
 
-/// BeginFunction - Begin gathering function meta information.
-///
-void MachineModuleInfo::BeginFunction(MachineFunction *MF) {
-  // Coming soon.
-}
-
 /// EndFunction - Discard function meta information.
 ///
 void MachineModuleInfo::EndFunction() {
@@ -82,6 +76,9 @@ void MachineModuleInfo::EndFunction() {
   FilterEnds.clear();
   CallsEHReturn = 0;
   CallsUnwindInit = 0;
+#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
+  VariableDbgInfo.clear();
+#endif
 }
 
 /// AnalyzeModule - Scan the module for global debug information.

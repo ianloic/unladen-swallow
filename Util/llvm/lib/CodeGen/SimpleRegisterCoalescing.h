@@ -45,6 +45,7 @@ namespace llvm {
     const TargetInstrInfo* tii_;
     LiveIntervals *li_;
     const MachineLoopInfo* loopInfo;
+    AliasAnalysis *AA;
     
     BitVector allocatableRegs_;
     DenseMap<const TargetRegisterClass*, BitVector> allocatableRCRegs_;
@@ -145,7 +146,7 @@ namespace llvm {
     /// TrimLiveIntervalToLastUse - If there is a last use in the same basic
     /// block as the copy instruction, trim the ive interval to the last use
     /// and return true.
-    bool TrimLiveIntervalToLastUse(MachineInstrIndex CopyIdx,
+    bool TrimLiveIntervalToLastUse(LiveIndex CopyIdx,
                                    MachineBasicBlock *CopyMBB,
                                    LiveInterval &li, const LiveRange *LR);
 
@@ -234,9 +235,9 @@ namespace llvm {
 
     /// lastRegisterUse - Returns the last use of the specific register between
     /// cycles Start and End or NULL if there are no uses.
-    MachineOperand *lastRegisterUse(MachineInstrIndex Start,
-                                    MachineInstrIndex End, unsigned Reg,
-                                    MachineInstrIndex &LastUseIdx) const;
+    MachineOperand *lastRegisterUse(LiveIndex Start,
+                                    LiveIndex End, unsigned Reg,
+                                    LiveIndex &LastUseIdx) const;
 
     /// CalculateSpillWeights - Compute spill weights for all virtual register
     /// live intervals.

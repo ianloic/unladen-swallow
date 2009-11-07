@@ -27,6 +27,7 @@
 
 namespace llvm {
 
+class Value;
 class Function;
 class MachineRegisterInfo;
 class MachineFrameInfo;
@@ -266,6 +267,9 @@ public:
   void splice(iterator InsertPt, iterator MBBI) {
     BasicBlocks.splice(InsertPt, BasicBlocks, MBBI);
   }
+  void splice(iterator InsertPt, iterator MBBI, iterator MBBE) {
+    BasicBlocks.splice(InsertPt, BasicBlocks, MBBI, MBBE);
+  }
 
   void remove(iterator MBBI) {
     BasicBlocks.remove(MBBI);
@@ -320,15 +324,41 @@ public:
   ///
   void DeleteMachineBasicBlock(MachineBasicBlock *MBB);
 
+  /// getMachineMemOperand - Allocate a new MachineMemOperand.
+  /// MachineMemOperands are owned by the MachineFunction and need not be
+  /// explicitly deallocated.
+  MachineMemOperand *getMachineMemOperand(const Value *v, unsigned f,
+                                          int64_t o, uint64_t s,
+                                          unsigned base_alignment);
+
+  /// getMachineMemOperand - Allocate a new MachineMemOperand by copying
+  /// an existing one, adjusting by an offset and using the given size.
+  /// MachineMemOperands are owned by the MachineFunction and need not be
+  /// explicitly deallocated.
+  MachineMemOperand *getMachineMemOperand(const MachineMemOperand *MMO,
+                                          int64_t Offset, uint64_t Size);
+
+  /// allocateMemRefsArray - Allocate an array to hold MachineMemOperand
+  /// pointers.  This array is owned by the MachineFunction.
+  MachineInstr::mmo_iterator allocateMemRefsArray(unsigned long Num);
+
+  /// extractLoadMemRefs - Allocate an array and populate it with just the
+  /// load information from the given MachineMemOperand sequence.
+  std::pair<MachineInstr::mmo_iterator,
+            MachineInstr::mmo_iterator>
+    extractLoadMemRefs(MachineInstr::mmo_iterator Begin,
+                       MachineInstr::mmo_iterator End);
+
+  /// extractStoreMemRefs - Allocate an array and populate it with just the
+  /// store information from the given MachineMemOperand sequence.
+  std::pair<MachineInstr::mmo_iterator,
+            MachineInstr::mmo_iterator>
+    extractStoreMemRefs(MachineInstr::mmo_iterator Begin,
+                        MachineInstr::mmo_iterator End);
+
   //===--------------------------------------------------------------------===//
   // Debug location.
   //
-
-  /// getOrCreateDebugLocID - Look up the DebugLocTuple index with the given
-  /// source file, line, and column. If none currently exists, create a new
-  /// DebugLocTuple, and insert it into the DebugIdMap.
-  unsigned getOrCreateDebugLocID(MDNode *CompileUnit,
-                                 unsigned Line, unsigned Col);
 
   /// getDebugLocTuple - Get the DebugLocTuple for a given DebugLoc object.
   DebugLocTuple getDebugLocTuple(DebugLoc DL) const;

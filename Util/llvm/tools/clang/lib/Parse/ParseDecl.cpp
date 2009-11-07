@@ -419,13 +419,36 @@ Parser::DeclPtrTy Parser::ParseDeclarationAfterDeclarator(Declarator &D,
   }
 
   // Inform the current actions module that we just parsed this declarator.
-  DeclPtrTy ThisDecl = TemplateInfo.TemplateParams?
-      Actions.ActOnTemplateDeclarator(CurScope,
+  DeclPtrTy ThisDecl;
+  switch (TemplateInfo.Kind) {
+  case ParsedTemplateInfo::NonTemplate:
+    ThisDecl = Actions.ActOnDeclarator(CurScope, D);
+    break;
+      
+  case ParsedTemplateInfo::Template:
+  case ParsedTemplateInfo::ExplicitSpecialization:
+    ThisDecl = Actions.ActOnTemplateDeclarator(CurScope,
                              Action::MultiTemplateParamsArg(Actions,
                                           TemplateInfo.TemplateParams->data(),
                                           TemplateInfo.TemplateParams->size()),
-                                    D)
-    : Actions.ActOnDeclarator(CurScope, D);
+                                               D);
+    break;
+      
+  case ParsedTemplateInfo::ExplicitInstantiation: {
+    Action::DeclResult ThisRes 
+      = Actions.ActOnExplicitInstantiation(CurScope,
+                                           TemplateInfo.ExternLoc,
+                                           TemplateInfo.TemplateLoc,
+                                           D);
+    if (ThisRes.isInvalid()) {
+      SkipUntil(tok::semi, true, true);
+      return DeclPtrTy();
+    }
+    
+    ThisDecl = ThisRes.get();
+    break;
+    }
+  }
 
   // Parse declarator '=' initializer.
   if (Tok.is(tok::equal)) {
@@ -665,13 +688,36 @@ bool Parser::ParseImplicitInt(DeclSpec &DS, CXXScopeSpec *SS,
     }
   }
 
-  // Since this is almost certainly an invalid type name, emit a
-  // diagnostic that says it, eat the token, and mark the declspec as
-  // invalid.
-  SourceRange R;
-  if (SS) R = SS->getRange();
+  // This is almost certainly an invalid type name. Let the action emit a 
+  // diagnostic and attempt to recover.
+  Action::TypeTy *T = 0;
+  if (Actions.DiagnoseUnknownTypeName(*Tok.getIdentifierInfo(), Loc,
+                                      CurScope, SS, T)) {
+    // The action emitted a diagnostic, so we don't have to.
+    if (T) {
+      // The action has suggested that the type T could be used. Set that as
+      // the type in the declaration specifiers, consume the would-be type
+      // name token, and we're done.
+      const char *PrevSpec;
+      unsigned DiagID;
+      DS.SetTypeSpecType(DeclSpec::TST_typename, Loc, PrevSpec, DiagID, T, 
+                         false);
+      DS.SetRangeEnd(Tok.getLocation());
+      ConsumeToken();
+      
+      // There may be other declaration specifiers after this.
+      return true;
+    }
+    
+    // Fall through; the action had no suggestion for us.
+  } else {
+    // The action did not emit a diagnostic, so emit one now.
+    SourceRange R;
+    if (SS) R = SS->getRange();
+    Diag(Loc, diag::err_unknown_typename) << Tok.getIdentifierInfo() << R;
+  }
 
-  Diag(Loc, diag::err_unknown_typename) << Tok.getIdentifierInfo() << R;
+  // Mark this as an error.
   const char *PrevSpec;
   unsigned DiagID;
   DS.SetTypeSpecType(DeclSpec::TST_error, Loc, PrevSpec, DiagID);
@@ -755,6 +801,19 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
         continue;
       }
 
+      if (Next.is(tok::annot_typename)) {
+        // FIXME: is this scope-specifier getting dropped?
+        ConsumeToken(); // the scope-specifier
+        if (Tok.getAnnotationValue())
+          isInvalid = DS.SetTypeSpecType(DeclSpec::TST_typename, Loc, 
+                                         PrevSpec, DiagID, 
+                                         Tok.getAnnotationValue());
+        else
+          DS.SetTypeSpecError();
+        DS.SetRangeEnd(Tok.getAnnotationEndLoc());
+        ConsumeToken(); // The typename
+      }
+
       if (Next.isNot(tok::identifier))
         goto DoneWithDeclSpec;
 
@@ -812,10 +871,13 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       if (!Tok.is(tok::less) || !getLang().ObjC1)
         continue;
 
-      SourceLocation EndProtoLoc;
+      SourceLocation LAngleLoc, EndProtoLoc;
       llvm::SmallVector<DeclPtrTy, 8> ProtocolDecl;
-      ParseObjCProtocolReferences(ProtocolDecl, false, EndProtoLoc);
-      DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size());
+      llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
+      ParseObjCProtocolReferences(ProtocolDecl, ProtocolLocs, false,
+                                  LAngleLoc, EndProtoLoc);
+      DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size(),
+                               ProtocolLocs.data(), LAngleLoc);
 
       DS.SetRangeEnd(EndProtoLoc);
       continue;
@@ -872,10 +934,13 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       if (!Tok.is(tok::less) || !getLang().ObjC1)
         continue;
 
-      SourceLocation EndProtoLoc;
+      SourceLocation LAngleLoc, EndProtoLoc;
       llvm::SmallVector<DeclPtrTy, 8> ProtocolDecl;
-      ParseObjCProtocolReferences(ProtocolDecl, false, EndProtoLoc);
-      DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size());
+      llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
+      ParseObjCProtocolReferences(ProtocolDecl, ProtocolLocs, false,
+                                  LAngleLoc, EndProtoLoc);
+      DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size(),
+                               ProtocolLocs.data(), LAngleLoc);
 
       DS.SetRangeEnd(EndProtoLoc);
 
@@ -1118,10 +1183,13 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
         goto DoneWithDeclSpec;
 
       {
-        SourceLocation EndProtoLoc;
+        SourceLocation LAngleLoc, EndProtoLoc;
         llvm::SmallVector<DeclPtrTy, 8> ProtocolDecl;
-        ParseObjCProtocolReferences(ProtocolDecl, false, EndProtoLoc);
-        DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size());
+        llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
+        ParseObjCProtocolReferences(ProtocolDecl, ProtocolLocs, false,
+                                    LAngleLoc, EndProtoLoc);
+        DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size(),
+                                 ProtocolLocs.data(), LAngleLoc);
         DS.SetRangeEnd(EndProtoLoc);
 
         Diag(Loc, diag::warn_objc_protocol_qualifier_missing_id)
@@ -1232,10 +1300,13 @@ bool Parser::ParseOptionalTypeSpecifier(DeclSpec &DS, bool& isInvalid,
     if (!Tok.is(tok::less) || !getLang().ObjC1)
       return true;
 
-    SourceLocation EndProtoLoc;
+    SourceLocation LAngleLoc, EndProtoLoc;
     llvm::SmallVector<DeclPtrTy, 8> ProtocolDecl;
-    ParseObjCProtocolReferences(ProtocolDecl, false, EndProtoLoc);
-    DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size());
+    llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
+    ParseObjCProtocolReferences(ProtocolDecl, ProtocolLocs, false,
+                                LAngleLoc, EndProtoLoc);
+    DS.setProtocolQualifiers(ProtocolDecl.data(), ProtocolDecl.size(),
+                             ProtocolLocs.data(), LAngleLoc);
 
     DS.SetRangeEnd(EndProtoLoc);
     return true;
@@ -2187,12 +2258,12 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
 ///
 ///       id-expression: [C++ 5.1]
 ///         unqualified-id
-///         qualified-id            [TODO]
+///         qualified-id
 ///
 ///       unqualified-id: [C++ 5.1]
 ///         identifier
 ///         operator-function-id
-///         conversion-function-id  [TODO]
+///         conversion-function-id
 ///          '~' class-name
 ///         template-id
 ///
@@ -2231,15 +2302,7 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
         TemplateIdAnnotation *TemplateId
           = static_cast<TemplateIdAnnotation *>(Tok.getAnnotationValue());
 
-        // FIXME: Could this template-id name a constructor?
-
-        // FIXME: This is an egregious hack, where we silently ignore
-        // the specialization (which should be a function template
-        // specialization name) and use the name instead. This hack
-        // will go away when we have support for function
-        // specializations.
-        D.SetIdentifier(TemplateId->Name, Tok.getLocation());
-        TemplateId->Destroy();
+        D.setTemplateId(TemplateId);
         ConsumeToken();
         goto PastIdentifier;
       } else if (Tok.is(tok::kw_operator)) {
@@ -2448,6 +2511,7 @@ void Parser::ParseParenDeclarator(Declarator &D) {
 ///       parameter-type-list: [C99 6.7.5]
 ///         parameter-list
 ///         parameter-list ',' '...'
+/// [C++]   parameter-list '...'
 ///
 ///       parameter-list: [C99 6.7.5]
 ///         parameter-declaration
@@ -2647,7 +2711,21 @@ void Parser::ParseFunctionDeclarator(SourceLocation LParenLoc, Declarator &D,
     }
 
     // If the next token is a comma, consume it and keep reading arguments.
-    if (Tok.isNot(tok::comma)) break;
+    if (Tok.isNot(tok::comma)) {
+      if (Tok.is(tok::ellipsis)) {
+        IsVariadic = true;
+        EllipsisLoc = ConsumeToken();     // Consume the ellipsis.
+        
+        if (!getLang().CPlusPlus) {
+          // We have ellipsis without a preceding ',', which is ill-formed
+          // in C. Complain and provide the fix.
+          Diag(EllipsisLoc, diag::err_missing_comma_before_ellipsis)
+            << CodeModificationHint::CreateInsertion(EllipsisLoc, ", ");
+        }
+      }
+      
+      break;
+    }
 
     // Consume the comma.
     ConsumeToken();

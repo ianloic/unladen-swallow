@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PIC16.h"
+#include "PIC16ABINames.h"
 #include "PIC16DebugInfo.h" 
 #include "llvm/GlobalVariable.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -30,10 +31,10 @@ void PIC16DbgInfo::PopulateDebugInfo (DIType Ty, unsigned short &TypeNo,
                                       std::string &TagName) {
   if (Ty.isBasicType())
     PopulateBasicTypeInfo (Ty, TypeNo);
-  else if (Ty.isDerivedType())
-    PopulateDerivedTypeInfo (Ty, TypeNo, HasAux, Aux, TagName);
   else if (Ty.isCompositeType())
     PopulateCompositeTypeInfo (Ty, TypeNo, HasAux, Aux, TagName);
+  else if (Ty.isDerivedType())
+    PopulateDerivedTypeInfo (Ty, TypeNo, HasAux, Aux, TagName);
   else {
     TypeNo = PIC16Dbg::T_NULL;
     HasAux = false;
@@ -44,8 +45,7 @@ void PIC16DbgInfo::PopulateDebugInfo (DIType Ty, unsigned short &TypeNo,
 /// PopulateBasicTypeInfo- Populate TypeNo for basic type from Ty.
 ///
 void PIC16DbgInfo::PopulateBasicTypeInfo (DIType Ty, unsigned short &TypeNo) {
-  std::string Name = "";
-  Ty.getName(Name);
+  std::string Name = Ty.getName();
   unsigned short BaseTy = GetTypeDebugNumber(Name);
   TypeNo = TypeNo << PIC16Dbg::S_BASIC;
   TypeNo = TypeNo | (0xffff & BaseTy);
@@ -117,7 +117,7 @@ void PIC16DbgInfo::PopulateStructOrUnionTypeInfo (DIType Ty,
     TypeNo = TypeNo | PIC16Dbg::T_STRUCT;
   else
     TypeNo = TypeNo | PIC16Dbg::T_UNION;
-  CTy.getName(TagName);
+  TagName = CTy.getName();
   // UniqueSuffix is .number where number is obtained from
   // llvm.dbg.composite<number>.
   // FIXME: This will break when composite type is not represented by
@@ -191,7 +191,7 @@ unsigned PIC16DbgInfo::GetTypeDebugNumber(std::string &type)  {
 ///
 short PIC16DbgInfo::getStorageClass(DIGlobalVariable DIGV) {
   short ClassNo;
-  if (PAN::isLocalName(DIGV.getGlobal()->getName())) {
+  if (PAN::isLocalName(DIGV.getName())) {
     // Generating C_AUTO here fails due to error in linker. Change it once
     // linker is fixed.
     ClassNo = PIC16Dbg::C_STAT;
@@ -259,7 +259,7 @@ void PIC16DbgInfo::ChangeDebugLoc(const MachineFunction &MF,
   if (! EmitDebugDirectives) return;
   assert (! DL.isUnknown()  && "can't change to invalid debug loc");
 
-  MDNode *CU = MF.getDebugLocTuple(DL).CompileUnit;
+  MDNode *CU = MF.getDebugLocTuple(DL).Scope;
   unsigned line = MF.getDebugLocTuple(DL).Line;
 
   SwitchToCU(CU);
@@ -305,9 +305,8 @@ void PIC16DbgInfo::EmitCompositeTypeElements (DICompositeType CTy,
     bool HasAux = false;
     int ElementAux[PIC16Dbg::AuxSize] = { 0 };
     std::string TagName = "";
-    std::string ElementName;
     DIDerivedType DITy(Element.getNode());
-    DITy.getName(ElementName);
+    const char *ElementName = DITy.getName();
     unsigned short ElementSize = DITy.getSizeInBits()/8;
     // Get mangleddd name for this structure/union  element.
     std::string MangMemName = ElementName + SuffixNo;
@@ -338,8 +337,7 @@ void PIC16DbgInfo::EmitCompositeTypeDecls(Module &M) {
       continue;
     if (CTy.getTag() == dwarf::DW_TAG_union_type ||
         CTy.getTag() == dwarf::DW_TAG_structure_type ) {
-      std::string Name;
-      CTy.getName(Name);
+      const char *Name = CTy.getName();
       // Get the number after llvm.dbg.composite and make UniqueSuffix from 
       // it.
       std::string DIVar = CTy.getNode()->getNameStr();
@@ -449,7 +447,8 @@ void PIC16DbgInfo::EmitVarDebugInfo(Module &M) {
     bool HasAux = false;
     int Aux[PIC16Dbg::AuxSize] = { 0 };
     std::string TagName = "";
-    std::string VarName = MAI->getGlobalPrefix()+DIGV.getGlobal()->getNameStr();
+    std::string VarName = DIGV.getName();
+    VarName = MAI->getGlobalPrefix() + VarName;
     PopulateDebugInfo(Ty, TypeNo, HasAux, Aux, TagName);
     // Emit debug info only if type information is availaible.
     if (TypeNo != PIC16Dbg::T_NULL) {
@@ -468,9 +467,9 @@ void PIC16DbgInfo::EmitVarDebugInfo(Module &M) {
 void PIC16DbgInfo::SwitchToCU(MDNode *CU) {
   // Get the file path from CU.
   DICompileUnit cu(CU);
-  std::string DirName, FileName;
-  std::string FilePath = cu.getDirectory(DirName) + "/" + 
-                         cu.getFilename(FileName);
+  std::string DirName = cu.getDirectory();
+  std::string FileName = cu.getFilename();
+  std::string FilePath = DirName + "/" + FileName;
 
   // Nothing to do if source file is still same.
   if ( FilePath == CurFile ) return;

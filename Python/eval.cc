@@ -25,6 +25,7 @@
 #include "_llvmfunctionobject.h"
 #include "llvm/Function.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/raw_ostream.h"
 #include "Util/RuntimeFeedback.h"
 #include "Util/Stats.h"
 #endif
@@ -47,21 +48,7 @@ _PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
 }
 
 
-/* Simple function for determinining when we should (re)optimize a function
-   with the given call count. The threshold value of 10000 is arbitrary. This
-   function is very simple, and should only be taken as a baseline for future
-   improvements.
-   TODO(collinwinter): tune this. */
-#define Py_HOT_OR_NOT(call_count) ((call_count) % 10000 == 0)
-
-/* #define Py_PROFILE_HOTNESS
-   Define this if you want stats on how many pure-Python functions were judged
-   hot. This will keep track of how many times each hot function (as determined
-   by Py_HOT_OR_NOT) was called; cold functions will not be counted. The sorted
-   breakdown will be shown at interpreter-shutdown.
-   TODO(collinwinter): add hotness stats over time.
-   */
-#ifdef Py_PROFILE_HOTNESS
+#ifdef Py_WITH_INSTRUMENTATION
 class HotnessTracker {
 	// llvm::DenseSet or llvm::SmallPtrSet may be better, but as of this
 	// writing, they don't seem to work with std::vector.
@@ -80,65 +67,64 @@ public:
 static bool
 compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
 {
-	return first->co_callcount > second->co_callcount;
+	return first->co_hotness > second->co_hotness;
 }
 
 HotnessTracker::~HotnessTracker()
 {
-	printf("%d code objects deemed hot\n", this->hot_code_.size());
+	printf("\n%zd code objects deemed hot\n", this->hot_code_.size());
 
-	printf("Code call counts:\n");
+	printf("Code hotness metric:\n");
 	std::vector<PyCodeObject*> to_sort(this->hot_code_.begin(),
 					   this->hot_code_.end());
 	std::sort(to_sort.begin(), to_sort.end(), compare_hotness);
 	for (std::vector<PyCodeObject*>::iterator co = to_sort.begin();
 	     co != to_sort.end(); ++co) {
-		printf("%s:%d (%s)\t%d\n",
+		printf("%s:%d (%s)\t%ld\n",
 			PyString_AsString((*co)->co_filename),
 			(*co)->co_firstlineno,
 			PyString_AsString((*co)->co_name),
-			(*co)->co_callcount);
+			(*co)->co_hotness);
 	}
 }
 
 static llvm::ManagedStatic<HotnessTracker> hot_code;
-#endif
 
-#ifdef Py_WITH_INSTRUMENTATION
+
 // Keep track of which functions failed fatal guards, but kept being called.
 // This can help gauge the efficacy of optimizations that involve fatal guards.
 class FatalBailTracker {
 public:
 	~FatalBailTracker() {
 		printf("\nCode objects that failed fatal guards:\n");
-		printf("\tfile:line (funcname) bail callcount -> final callcount\n");
+		printf("\tfile:line (funcname) bail hotness -> final hotness\n");
 
 		for (TrackerData::const_iterator it = this->code_.begin();
 				it != this->code_.end(); ++it) {
 			PyCodeObject *code = it->first;
-			if (code->co_callcount == it->second)
+			if (code->co_hotness == it->second)
 				continue;
-			printf("\t%s:%d (%s)\t%d -> %d\n",
+			printf("\t%s:%d (%s)\t%ld -> %ld\n",
 				PyString_AsString(code->co_filename),
 				code->co_firstlineno,
 				PyString_AsString(code->co_name),
 				it->second,
-				code->co_callcount);
+				code->co_hotness);
 		}
 	}
 
 	void RecordFatalBail(PyCodeObject *code) {
 		Py_INCREF(code);
-		this->code_.push_back(std::make_pair(code, code->co_callcount));
+		this->code_.push_back(std::make_pair(code, code->co_hotness));
 	}
 
 private:
-	// Keep a list of (code object, callcount) where callcount is the
-	// value of co_callcount when RecordFatalBail() was called. This is
+	// Keep a list of (code object, hotness) where hotness is the
+	// value of co_hotness when RecordFatalBail() was called. This is
 	// used to hide code objects whose machine code functions are
 	// invalidated during shutdown because their module dict has gone away;
 	// these code objects are uninteresting for our analysis.
-	typedef std::pair<PyCodeObject *, int> DataPoint;
+	typedef std::pair<PyCodeObject *, long> DataPoint;
 	typedef std::vector<DataPoint> TrackerData;
 
 	TrackerData code_;
@@ -172,6 +158,74 @@ _PyEval_RecordWatcherCount(size_t watcher_count)
 	watcher_count_stats->RecordDataPoint(watcher_count);
 }
 
+
+class BailCountStats {
+public:
+	BailCountStats() : total_(0), trace_on_entry_(0), line_trace_(0),
+	                   backedge_trace_(0), call_profile_(0),
+	                   fatal_guard_fail_(0), guard_fail_(0) {};
+
+	~BailCountStats() {
+		printf("\nBailed to the interpreter %ld times\n", this->total_);
+		printf("TRACE_ON_ENTRY: %ld\n", this->trace_on_entry_);
+		printf("LINE_TRACE: %ld\n", this->line_trace_);
+		printf("BACKEDGE_TRACE: %ld\n", this->backedge_trace_);
+		printf("CALL_PROFILE: %ld\n", this->call_profile_);
+		printf("FATAL_GUARD_FAIL: %ld\n", this->fatal_guard_fail_);
+		printf("GUARD_FAIL: %ld\n", this->guard_fail_);
+
+		printf("\n%zd bail sites:\n", this->bail_sites_.size());
+		for (BailData::iterator i = this->bail_sites_.begin(),
+		     end = this->bail_sites_.end(); i != end; ++i) {
+			llvm::outs() << "    " << *i << "\n";
+		}
+	}
+
+	void RecordBail(PyFrameObject *frame, _PyFrameBailReason bail_reason) {
+		++this->total_;
+
+    		std::string record;
+		llvm::raw_string_ostream wrapper(record);
+		wrapper << PyString_AsString(frame->f_code->co_filename) << ":";
+		wrapper << frame->f_code->co_firstlineno << ":";
+		wrapper << PyString_AsString(frame->f_code->co_name) << ":";
+		wrapper << frame->f_lasti;
+    		wrapper.flush();
+
+		this->bail_sites_.insert(record);
+
+#define BAIL_CASE(name, field) \
+	case name: \
+		++this->field; \
+		break;
+
+		switch (bail_reason) {
+			BAIL_CASE(_PYFRAME_TRACE_ON_ENTRY, trace_on_entry_)
+			BAIL_CASE(_PYFRAME_LINE_TRACE, line_trace_)
+			BAIL_CASE(_PYFRAME_BACKEDGE_TRACE, backedge_trace_)
+			BAIL_CASE(_PYFRAME_CALL_PROFILE, call_profile_)
+			BAIL_CASE(_PYFRAME_FATAL_GUARD_FAIL, fatal_guard_fail_)
+			BAIL_CASE(_PYFRAME_GUARD_FAIL, guard_fail_)
+			default:
+				abort();   // Unknown bail reason.
+		}
+#undef BAIL_CASE
+	}
+
+private:
+	typedef std::set<std::string> BailData;
+	BailData bail_sites_;
+
+	long total_;
+	long trace_on_entry_;
+	long line_trace_;
+	long backedge_trace_;
+	long call_profile_;
+	long fatal_guard_fail_;
+	long guard_fail_;
+};
+
+static llvm::ManagedStatic<BailCountStats> bail_count_stats;
 #endif  // Py_WITH_INSTRUMENTATION
 
 
@@ -950,10 +1004,15 @@ PyEval_EvalFrame(PyFrameObject *f)
 		}
 	}
 
-	if (bail_reason != _PYFRAME_NO_BAIL && _Py_BailError) {
-		PyErr_SetString(PyExc_RuntimeError,
-			        "bailed to the interpreter");
-		goto exit_eval_frame;
+	if (bail_reason != _PYFRAME_NO_BAIL) {
+#ifdef Py_WITH_INSTRUMENTATION
+		bail_count_stats->RecordBail(f, bail_reason);
+#endif
+		if (_Py_BailError) {
+			PyErr_SetString(PyExc_RuntimeError,
+	        	                "bailed to the interpreter");
+			goto exit_eval_frame;
+		}
 	}
 #endif  /* WITH_LLVM */
 
@@ -2476,6 +2535,11 @@ PyEval_EvalFrame(PyFrameObject *f)
 			RECORD_TYPE(0, v);
 			x = (*v->ob_type->tp_iternext)(v);
 			if (x != NULL) {
+#ifdef WITH_LLVM
+				/* Putting the ++hotness here simulates doing
+				   this on the loop backedge. */
+				++co->co_hotness;
+#endif  /* WITH_LLVM */
 				PUSH(x);
 				PREDICT(STORE_FAST);
 				PREDICT(UNPACK_SEQUENCE);
@@ -3994,22 +4058,28 @@ PyEval_GetFuncDesc(PyObject *func)
 }
 
 static void
-err_args(PyObject *func, int flags, int nargs)
+err_args(PyObject *func, int flags, int arity, int nargs)
 {
-	if (flags & METH_NOARGS)
+	if (arity == 0)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes no arguments (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
 			     nargs);
-	else
+	else if (arity == 1)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes exactly one argument (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
 			     nargs);
+	else
+		PyErr_Format(PyExc_TypeError,
+			     "%.200s() takes exactly %d arguments (%d given)",
+			     ((PyCFunctionObject *)func)->m_ml->ml_name,
+			     arity,
+			     nargs);
 }
 
 #ifdef WITH_LLVM
-// Increments co's call counter and, if it has passed the hotness
+// Increments co's hotness level and, if it has passed the hotness
 // threshold, compiles the bytecode to native code.  If the code
 // object was marked as needing to be run through LLVM, also compiles
 // the bytecode to native code, even if the code object isn't hot yet.
@@ -4025,14 +4095,14 @@ err_args(PyObject *func, int flags, int nargs)
 static int
 mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 {
-	++co->co_callcount;
+	co->co_hotness += 10;
 	if (co->co_fatalbailcount >= PY_MAX_FATALBAILCOUNT) {
 		co->co_use_llvm = f->f_use_llvm = 0;
 		return 0;
 	}
 
-	if (Py_HOT_OR_NOT(co->co_callcount)) {
-#ifdef Py_PROFILE_HOTNESS
+	if (co->co_hotness > PY_HOTNESS_THRESHOLD) {
+#ifdef Py_WITH_INSTRUMENTATION
 		hot_code->AddHotCode(co);
 #endif
 		if (Py_JitControl == PY_JIT_WHENHOT)
@@ -4057,8 +4127,12 @@ mark_called_and_maybe_compile(PyCodeObject *co, PyFrameObject *f)
 				r = _PyCode_ToOptimizedLlvmIr(
 					co, target_optimization);
 				PY_LOG_TSC_EVENT(LLVM_COMPILE_END);
-				if (r < 0)
+				if (r < 0)  // Error
 					return -1;
+				if (r == 1) {  // Codegen refused
+					co->co_use_llvm = f->f_use_llvm = 0;
+					return 0;
+				}
 			}
 		}
 		if (co->co_native_function == NULL) {
@@ -4131,19 +4205,36 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 		PyThreadState *tstate = PyThreadState_GET();
 
 		PCALL(PCALL_CFUNCTION);
-		if (flags & (METH_NOARGS | METH_O)) {
+		if (flags & METH_FIXED) {
 			PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 			PyObject *self = PyCFunction_GET_SELF(func);
-			if (flags & METH_NOARGS && na == 0) {
-				C_TRACE(x, (*meth)(self,NULL));
+			int arity = PyCFunction_GET_ARITY(func);
+			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
+			switch (na) {
+				default:
+					PyErr_BadInternalCall();
+					return NULL;
+				case 3:
+					args[2] = EXT_POP(stack_pointer);
+				case 2:
+					args[1] = EXT_POP(stack_pointer);
+				case 1:
+					args[0] = EXT_POP(stack_pointer);
+				case 0:
+					break;
 			}
-			else if (flags & METH_O && na == 1) {
-				PyObject *arg = EXT_POP(stack_pointer);
-				C_TRACE(x, (*meth)(self,arg));
-				Py_DECREF(arg);
+			/* But wait, you ask, what about {un,bin}ary functions?
+			   Aren't we passing more arguments than it expects?
+			   Yes, but C allows this. Go C. */
+			if (arity == na) {
+				C_TRACE(x, (*(PyCFunctionThreeArgs)meth)
+				           (self, args[0], args[1], args[2]));
+				Py_XDECREF(args[0]);
+				Py_XDECREF(args[1]);
+				Py_XDECREF(args[2]);
 			}
 			else {
-				err_args(func, flags, na);
+				err_args(func, flags, arity, na);
 				x = NULL;
 			}
 		}

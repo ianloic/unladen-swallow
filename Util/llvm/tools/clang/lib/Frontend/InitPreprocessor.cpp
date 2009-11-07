@@ -274,7 +274,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     if (LangOpts.ObjCNonFragileABI) {
       DefineBuiltinMacro(Buf, "__OBJC2__=1");
       DefineBuiltinMacro(Buf, "OBJC_ZEROCOST_EXCEPTIONS=1");
-      DefineBuiltinMacro(Buf, "__EXCEPTIONS=1");
     }
 
     if (LangOpts.getGCMode() != LangOptions::NonGC)
@@ -299,9 +298,11 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     DefineBuiltinMacro(Buf, "__BLOCKS__=1");
   }
 
+  if (LangOpts.Exceptions)
+    DefineBuiltinMacro(Buf, "__EXCEPTIONS=1");
+
   if (LangOpts.CPlusPlus) {
     DefineBuiltinMacro(Buf, "__DEPRECATED=1");
-    DefineBuiltinMacro(Buf, "__EXCEPTIONS=1");
     DefineBuiltinMacro(Buf, "__GNUG__=4");
     DefineBuiltinMacro(Buf, "__GXX_WEAK__=1");
     if (LangOpts.GNUMode)
@@ -316,13 +317,22 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     DefineBuiltinMacro(Buf, "_GNU_SOURCE=1");
   }
 
-  // Filter out some microsoft extensions when trying to parse in ms-compat
-  // mode.
   if (LangOpts.Microsoft) {
+    // Filter out some microsoft extensions when trying to parse in ms-compat
+    // mode.
     DefineBuiltinMacro(Buf, "__int8=__INT8_TYPE__");
     DefineBuiltinMacro(Buf, "__int16=__INT16_TYPE__");
     DefineBuiltinMacro(Buf, "__int32=__INT32_TYPE__");
     DefineBuiltinMacro(Buf, "__int64=__INT64_TYPE__");
+    // Work around some issues with Visual C++ headerws.
+    if (LangOpts.CPlusPlus) {
+      // Since we define wchar_t in C++ mode.
+      DefineBuiltinMacro(Buf, "_WCHAR_T_DEFINED=1");
+      DefineBuiltinMacro(Buf, "_NATIVE_WCHAR_T_DEFINED=1");
+      // FIXME:  This should be temporary until we have a __pragma
+      // solution, to avoid some errors flagged in VC++ headers.
+      DefineBuiltinMacro(Buf, "_CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES=0");
+    }
   }
 
   if (LangOpts.Optimize)
@@ -364,8 +374,7 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   DefineType("__INTPTR_TYPE__", TI.getIntPtrType(), Buf);
   DefineType("__SIZE_TYPE__", TI.getSizeType(), Buf);
   DefineType("__WCHAR_TYPE__", TI.getWCharType(), Buf);
-  // FIXME: TargetInfo hookize __WINT_TYPE__.
-  DefineBuiltinMacro(Buf, "__WINT_TYPE__=int");
+  DefineType("__WINT_TYPE__", TI.getWIntType(), Buf);
 
   DefineFloatMacros(Buf, "FLT", &TI.getFloatFormat());
   DefineFloatMacros(Buf, "DBL", &TI.getDoubleFormat());

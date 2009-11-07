@@ -29,8 +29,8 @@ public:
 
   virtual SVal EvalMinus(NonLoc val);
   virtual SVal EvalComplement(NonLoc val);
-  virtual SVal EvalBinOpNN(BinaryOperator::Opcode op, NonLoc lhs, NonLoc rhs,
-                           QualType resultTy);
+  virtual SVal EvalBinOpNN(const GRState *state, BinaryOperator::Opcode op,
+                           NonLoc lhs, NonLoc rhs, QualType resultTy);
   virtual SVal EvalBinOpLL(BinaryOperator::Opcode op, Loc lhs, Loc rhs,
                            QualType resultTy);
   virtual SVal EvalBinOpLN(const GRState *state, BinaryOperator::Opcode op,
@@ -67,6 +67,15 @@ SVal SimpleSValuator::EvalCastNL(NonLoc val, QualType castTy) {
     ASTContext &Ctx = ValMgr.getContext();
     QualType T = Ctx.getCanonicalType(se->getType(Ctx));
     if (T == Ctx.getCanonicalType(castTy))
+      return val;
+    
+    // FIXME: Remove this hack when we support symbolic truncation/extension.
+    // HACK: If both castTy and T are integers, ignore the cast.  This is
+    // not a permanent solution.  Eventually we want to precisely handle
+    // extension/truncation of symbolic integers.  This prevents us from losing
+    // precision when we assign 'x = y' and 'y' is symbolic and x and y are
+    // different integer types.
+    if (T->isIntegerType() && castTy->isIntegerType())
       return val;
 
     return UnknownVal();
@@ -197,7 +206,8 @@ static SVal EvalEquality(ValueManager &ValMgr, Loc lhs, Loc rhs, bool isEqual,
   return ValMgr.makeTruthVal(isEqual ? lhs == rhs : lhs != rhs, resultTy);
 }
 
-SVal SimpleSValuator::EvalBinOpNN(BinaryOperator::Opcode op,
+SVal SimpleSValuator::EvalBinOpNN(const GRState *state,
+                                  BinaryOperator::Opcode op,
                                   NonLoc lhs, NonLoc rhs,
                                   QualType resultTy)  {
   // Handle trivial case where left-side and right-side are the same.
@@ -333,8 +343,36 @@ SVal SimpleSValuator::EvalBinOpNN(BinaryOperator::Opcode op,
       }
     }
     case nonloc::SymbolValKind: {
+      nonloc::SymbolVal *slhs = cast<nonloc::SymbolVal>(&lhs);
+      SymbolRef Sym = slhs->getSymbol();
+      
+      // Does the symbol simplify to a constant?  If so, "fold" the constant
+      // by setting 'lhs' to a ConcreteInt and try again.
+      if (Sym->getType(ValMgr.getContext())->isIntegerType())
+        if (const llvm::APSInt *Constant = state->getSymVal(Sym)) {
+          // The symbol evaluates to a constant. If necessary, promote the
+          // folded constant (LHS) to the result type.
+          BasicValueFactory &BVF = ValMgr.getBasicValueFactory();
+          const llvm::APSInt &lhs_I = BVF.Convert(resultTy, *Constant);
+          lhs = nonloc::ConcreteInt(lhs_I);
+          
+          // Also promote the RHS (if necessary).
+
+          // For shifts, it necessary promote the RHS to the result type.
+          if (BinaryOperator::isShiftOp(op))
+            continue;
+          
+          // Other operators: do an implicit conversion.  This shouldn't be
+          // necessary once we support truncation/extension of symbolic values.
+          if (nonloc::ConcreteInt *rhs_I = dyn_cast<nonloc::ConcreteInt>(&rhs)){
+            rhs = nonloc::ConcreteInt(BVF.Convert(resultTy, rhs_I->getValue()));
+          }
+          
+          continue;
+        }
+      
       if (isa<nonloc::ConcreteInt>(rhs)) {
-        return ValMgr.makeNonLoc(cast<nonloc::SymbolVal>(lhs).getSymbol(), op,
+        return ValMgr.makeNonLoc(slhs->getSymbol(), op,
                                  cast<nonloc::ConcreteInt>(rhs).getValue(),
                                  resultTy);
       }
@@ -353,6 +391,13 @@ SVal SimpleSValuator::EvalBinOpLL(BinaryOperator::Opcode op, Loc lhs, Loc rhs,
     case BinaryOperator::EQ:
     case BinaryOperator::NE:
       return EvalEquality(ValMgr, lhs, rhs, op == BinaryOperator::EQ, resultTy);
+    case BinaryOperator::LT:
+    case BinaryOperator::GT:
+      // FIXME: Generalize.  For now, just handle the trivial case where
+      //  the two locations are identical.
+      if (lhs == rhs)
+        return ValMgr.makeTruthVal(false, resultTy);
+      return UnknownVal();
   }
 }
 

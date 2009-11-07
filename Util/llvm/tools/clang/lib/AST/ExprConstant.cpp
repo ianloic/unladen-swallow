@@ -180,6 +180,16 @@ public:
     { return Visit(E->getSubExpr()); }
   APValue VisitChooseExpr(const ChooseExpr *E)
     { return Visit(E->getChosenSubExpr(Info.Ctx)); }
+
+  APValue VisitCastExpr(CastExpr *E) {
+    switch (E->getCastKind()) {
+    default:
+      return APValue();
+
+    case CastExpr::CK_NoOp:
+      return Visit(E->getSubExpr());
+    }
+  }
   // FIXME: Missing: __real__, __imag__
 };
 } // end anonymous namespace
@@ -783,7 +793,7 @@ bool IntExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
 
   // In C++, const, non-volatile integers initialized with ICEs are ICEs.
   // In C, they can also be folded, although they are not ICEs.
-  if (E->getType().getCVRQualifiers() == QualType::Const) {
+  if (E->getType().getCVRQualifiers() == Qualifiers::Const) {
     if (const VarDecl *D = dyn_cast<VarDecl>(E->getDecl())) {
       if (APValue *V = D->getEvaluatedValue())
         return Success(V->getInt(), E);
@@ -863,6 +873,35 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
   switch (E->isBuiltinCall(Info.Ctx)) {
   default:
     return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
+
+  case Builtin::BI__builtin_object_size: {
+    const Expr *Arg = E->getArg(0)->IgnoreParens();
+    Expr::EvalResult Base;
+    if (Arg->EvaluateAsAny(Base, Info.Ctx)
+        && Base.Val.getKind() == APValue::LValue
+        && !Base.HasSideEffects)
+      if (const Expr *LVBase = Base.Val.getLValueBase())
+        if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(LVBase)) {
+          if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+            uint64_t Size = Info.Ctx.getTypeSize(VD->getType()) / 8;
+            uint64_t Offset = Base.Val.getLValueOffset();
+            if (Offset <= Size)
+              Size -= Base.Val.getLValueOffset();
+            else
+              Size = 0;
+            return Success(Size, E);
+          }
+        }
+
+    if (Base.HasSideEffects) {
+      if (E->getArg(1)->EvaluateAsInt(Info.Ctx).getZExtValue() < 2)
+        return Success(-1, E);
+      return Success(0, E);
+    }
+    
+    return Error(E->getLocStart(), diag::note_invalid_subexpr_in_ice, E);
+  }
+
   case Builtin::BI__builtin_classify_type:
     return Success(EvaluateBuiltinClassifyType(E), E);
 
@@ -870,6 +909,12 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
     // __builtin_constant_p always has one operand: it returns true if that
     // operand can be folded, false otherwise.
     return Success(E->getArg(0)->isEvaluatable(Info.Ctx), E);
+      
+  case Builtin::BI__builtin_eh_return_data_regno: {
+    int Operand = E->getArg(0)->EvaluateAsInt(Info.Ctx).getZExtValue();
+    Operand = Info.Ctx.Target.getEHDataRegisterNumber(Operand);
+    return Success(Operand, E);
+  }
   }
 }
 
@@ -1760,6 +1805,33 @@ APValue ComplexExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
 /// in Result.
 bool Expr::Evaluate(EvalResult &Result, ASTContext &Ctx) const {
   EvalInfo Info(Ctx, Result);
+
+  if (getType()->isVectorType()) {
+    if (!EvaluateVector(this, Result.Val, Info))
+      return false;
+  } else if (getType()->isIntegerType()) {
+    if (!IntExprEvaluator(Info, Result.Val).Visit(const_cast<Expr*>(this)))
+      return false;
+  } else if (getType()->hasPointerRepresentation()) {
+    if (!EvaluatePointer(this, Result.Val, Info))
+      return false;
+  } else if (getType()->isRealFloatingType()) {
+    llvm::APFloat f(0.0);
+    if (!EvaluateFloat(this, f, Info))
+      return false;
+
+    Result.Val = APValue(f);
+  } else if (getType()->isAnyComplexType()) {
+    if (!EvaluateComplex(this, Result.Val, Info))
+      return false;
+  } else
+    return false;
+
+  return true;
+}
+
+bool Expr::EvaluateAsAny(EvalResult &Result, ASTContext &Ctx) const {
+  EvalInfo Info(Ctx, Result, true);
 
   if (getType()->isVectorType()) {
     if (!EvaluateVector(this, Result.Val, Info))

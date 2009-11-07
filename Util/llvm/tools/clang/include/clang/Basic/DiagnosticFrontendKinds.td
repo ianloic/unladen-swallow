@@ -17,6 +17,8 @@ def err_fe_error_reading_stdin : Error<"error reading stdin">;
 def err_fe_error_backend : Error<"error in backend: %0">, DefaultFatal;
 def err_fe_invalid_ast_file : Error<"invalid AST file: '%0'">, DefaultFatal;
 def err_fe_invalid_ast_action : Error<"invalid action for AST input">, DefaultFatal;
+def err_fe_invalid_code_complete_file 
+  : Error<"cannot locate code-completion file %0">, DefaultFatal;
 
 def note_fixit_applied : Note<"FIX-IT applied suggested code changes">;
 def note_fixit_in_macro : Note<
@@ -134,6 +136,8 @@ def warn_pch_version_too_old : Error<
     "PCH file uses an older PCH format that is no longer supported">;
 def warn_pch_version_too_new : Error<
     "PCH file uses a newer PCH format that cannot be read">;
+def warn_pch_different_branch : Error<
+    "PCH file built from a different branch (%0) than the compiler (%1)">;
 def warn_cmdline_conflicting_macro_def : Error<
     "definition of the macro '%0' conflicts with the definition used to "
     "build the precompiled header">;

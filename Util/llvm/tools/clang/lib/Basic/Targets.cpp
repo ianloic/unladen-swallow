@@ -197,10 +197,6 @@ public:
       this->TLSSupported = false;
     }
 
-  virtual const char *getUnicodeStringSymbolPrefix() const {
-    return "__utf16_string_";
-  }
-
   virtual const char *getUnicodeStringSection() const {
     return "__TEXT,__ustring";
   }
@@ -324,6 +320,27 @@ public:
     : OSTargetInfo<Target>(triple) {}
 };
 
+// AuroraUX target
+template<typename Target>
+class AuroraUXTargetInfo : public OSTargetInfo<Target> {
+protected:
+  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                                std::vector<char> &Defs) const {
+    DefineStd(Defs, "sun", Opts);
+    DefineStd(Defs, "unix", Opts);
+    Define(Defs, "__ELF__");
+    Define(Defs, "__svr4__");
+    Define(Defs, "__SVR4");
+  }
+public:
+  AuroraUXTargetInfo(const std::string& triple)
+    : OSTargetInfo<Target>(triple) {
+    this->UserLabelPrefix = "";
+    this->WCharType = this->SignedLong;
+    // FIXME: WIntType should be SignedLong
+  }
+};
+
 // Solaris target
 template<typename Target>
 class SolarisTargetInfo : public OSTargetInfo<Target> {
@@ -345,12 +362,6 @@ public:
   }
 };
 } // end anonymous namespace.
-
-/// GetWindowsLanguageOptions - Set the default language options for Windows.
-static void GetWindowsLanguageOptions(LangOptions &Opts,
-                                     const llvm::Triple &Triple) {
-  Opts.Microsoft = true;
-}
 
 //===----------------------------------------------------------------------===//
 // Specific target implementations.
@@ -900,6 +911,12 @@ public:
   virtual const char *getVAListDeclaration() const {
     return "typedef char* __builtin_va_list;";
   }
+  
+  int getEHDataRegisterNumber(unsigned RegNo) const {
+    if (RegNo == 0) return 0;
+    if (RegNo == 1) return 2;
+    return -1;
+  }
 };
 } // end anonymous namespace
 
@@ -954,12 +971,75 @@ public:
     DefineStd(Defines, "WIN32", Opts);
     DefineStd(Defines, "WINNT", Opts);
     Define(Defines, "_X86_");
-    Define(Defines, "__MSVCRT__");
   }
+};
+} // end anonymous namespace
 
+namespace {
+
+/// GetWindowsVisualStudioLanguageOptions - Set the default language options for Windows.
+static void GetWindowsVisualStudioLanguageOptions(LangOptions &Opts) {
+  Opts.Microsoft = true;
+}
+
+// x86-32 Windows Visual Studio target
+class VisualStudioWindowsX86_32TargetInfo : public WindowsX86_32TargetInfo {
+public:
+  VisualStudioWindowsX86_32TargetInfo(const std::string& triple)
+    : WindowsX86_32TargetInfo(triple) {
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    WindowsX86_32TargetInfo::getTargetDefines(Opts, Defines);
+    // The value of the following reflects processor type.
+    // 300=386, 400=486, 500=Pentium, 600=Blend (default)
+    // We lost the original triple, so we use the default.
+    Define(Defines, "_M_IX86", "600");
+  }
   virtual void getDefaultLangOptions(LangOptions &Opts) {
-    X86_32TargetInfo::getDefaultLangOptions(Opts);
-    GetWindowsLanguageOptions(Opts, getTriple());
+    WindowsX86_32TargetInfo::getDefaultLangOptions(Opts);
+    GetWindowsVisualStudioLanguageOptions(Opts);
+  }
+};
+} // end anonymous namespace
+
+namespace {
+// x86-32 MinGW target
+class MinGWX86_32TargetInfo : public WindowsX86_32TargetInfo {
+public:
+  MinGWX86_32TargetInfo(const std::string& triple)
+    : WindowsX86_32TargetInfo(triple) {
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    WindowsX86_32TargetInfo::getTargetDefines(Opts, Defines);
+    Define(Defines, "__MSVCRT__");
+    Define(Defines, "__MINGW32__");
+    Define(Defines, "__declspec", "__declspec");
+  }
+};
+} // end anonymous namespace
+
+namespace {
+// x86-32 Cygwin target
+class CygwinX86_32TargetInfo : public X86_32TargetInfo {
+public:
+  CygwinX86_32TargetInfo(const std::string& triple)
+    : X86_32TargetInfo(triple) {
+    TLSSupported = false;
+    WCharType = UnsignedShort;
+    WCharWidth = WCharAlign = 16;
+    DoubleAlign = LongLongAlign = 64;
+    DescriptionString = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+                        "i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-"
+                        "a0:0:64-f80:32:32";
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    X86_32TargetInfo::getTargetDefines(Opts, Defines);
+    Define(Defines, "__CYGWIN__");
+    Define(Defines, "__CYGWIN32__");
+    DefineStd(Defines, "unix", Opts);
   }
 };
 } // end anonymous namespace
@@ -989,6 +1069,68 @@ public:
            "  void* reg_save_area;"
            "} __va_list_tag;"
            "typedef __va_list_tag __builtin_va_list[1];";
+  }
+  
+  int getEHDataRegisterNumber(unsigned RegNo) const {
+    if (RegNo == 0) return 0;
+    if (RegNo == 1) return 1;
+    return -1;
+  }
+};
+} // end anonymous namespace
+
+namespace {
+// x86-64 Windows target
+class WindowsX86_64TargetInfo : public X86_64TargetInfo {
+public:
+  WindowsX86_64TargetInfo(const std::string& triple)
+    : X86_64TargetInfo(triple) {
+    TLSSupported = false;
+    WCharType = UnsignedShort;
+    WCharWidth = WCharAlign = 16;
+    LongWidth = LongAlign = 32;
+    DoubleAlign = LongLongAlign = 64;
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    X86_64TargetInfo::getTargetDefines(Opts, Defines);
+    Define(Defines, "_WIN64");
+    DefineStd(Defines, "WIN64", Opts);
+  }
+};
+} // end anonymous namespace
+
+namespace {
+// x86-64 Windows Visual Studio target
+class VisualStudioWindowsX86_64TargetInfo : public WindowsX86_64TargetInfo {
+public:
+  VisualStudioWindowsX86_64TargetInfo(const std::string& triple)
+    : WindowsX86_64TargetInfo(triple) {
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    WindowsX86_64TargetInfo::getTargetDefines(Opts, Defines);
+    Define(Defines, "_M_X64");
+  }
+  virtual const char *getVAListDeclaration() const {
+    return "typedef char* va_list;";
+  }
+};
+} // end anonymous namespace
+
+namespace {
+// x86-64 MinGW target
+class MinGWX86_64TargetInfo : public WindowsX86_64TargetInfo {
+public:
+  MinGWX86_64TargetInfo(const std::string& triple)
+    : WindowsX86_64TargetInfo(triple) {
+  }
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                std::vector<char> &Defines) const {
+    WindowsX86_64TargetInfo::getTargetDefines(Opts, Defines);
+    Define(Defines, "__MSVCRT__");
+    Define(Defines, "__MINGW64__");
+    Define(Defines, "__declspec");
   }
 };
 } // end anonymous namespace
@@ -1037,9 +1179,6 @@ public:
   {
     llvm::Triple Triple(TripleStr);
 
-    DescriptionString = ("e-p:32:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
-                         "i64:32:32-f32:32:32-f64:32:32-"
-                         "v64:64:64-v128:128:128-a0:0:32");
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
 
@@ -1065,6 +1204,16 @@ public:
 
     if (Arch.startswith("thumb"))
       IsThumb = true;
+
+    if (IsThumb) {
+      DescriptionString = ("e-p:32:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
+                           "i64:64:64-f32:32:32-f64:64:64-"
+                           "v64:64:64-v128:128:128-a0:0:32");
+    } else {
+      DescriptionString = ("e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+                           "i64:64:64-f32:32:32-f64:64:64-"
+                           "v64:64:64-v128:128:128-a0:0:64");
+    }
   }
   virtual const char *getABI() const { return ABI.c_str(); }
   virtual bool setABI(const std::string &Name) {
@@ -1077,6 +1226,16 @@ public:
     if (Name == "apcs-gnu") {
       DoubleAlign = LongLongAlign = 32;
       SizeType = UnsignedLong;
+
+      if (IsThumb) {
+        DescriptionString = ("e-p:32:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
+                             "i64:32:32-f32:32:32-f64:32:32-"
+                             "v64:64:64-v128:128:128-a0:0:32");
+      } else {
+        DescriptionString = ("e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+                             "i64:32:32-f32:32:32-f64:32:32-"
+                             "v64:64:64-v128:128:128-a0:0:64");
+      }
 
       // FIXME: Override "preferred align" for double and long long.
     } else if (Name == "aapcs") {
@@ -1318,6 +1477,14 @@ void SparcV8TargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
 } // end anonymous namespace.
 
 namespace {
+class AuroraUXSparcV8TargetInfo : public AuroraUXTargetInfo<SparcV8TargetInfo> {
+public:
+  AuroraUXSparcV8TargetInfo(const std::string& triple) :
+      AuroraUXTargetInfo<SparcV8TargetInfo>(triple) {
+    SizeType = UnsignedInt;
+    PtrDiffType = SignedInt;
+  }
+};
 class SolarisSparcV8TargetInfo : public SolarisTargetInfo<SparcV8TargetInfo> {
 public:
   SolarisSparcV8TargetInfo(const std::string& triple) :
@@ -1366,6 +1533,8 @@ namespace {
       Define(Defines, "ram", "__attribute__((address_space(0)))");
       Define(Defines, "_section(SectName)",
              "__attribute__((section(SectName)))");
+      Define(Defines, "near",
+             "__attribute__((section(\"Address=NEAR\")))");
       Define(Defines, "_address(Addr)",
              "__attribute__((section(\"Address=\"#Addr)))");
       Define(Defines, "_CONFIG(conf)", "asm(\"CONFIG \"#conf)");
@@ -1435,8 +1604,8 @@ namespace {
     }
     virtual bool validateAsmConstraint(const char *&Name,
                                        TargetInfo::ConstraintInfo &info) const {
-      // FIXME: implement
-      return true;
+      // No target constraints for now.
+      return false;
     }
     virtual const char *getClobbers() const {
       // FIXME: Is this really right?
@@ -1708,6 +1877,8 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
     return new PPC64TargetInfo(T);
 
   case llvm::Triple::sparc:
+    if (os == llvm::Triple::AuroraUX)
+      return new AuroraUXSparcV8TargetInfo(T);
     if (os == llvm::Triple::Solaris)
       return new SolarisSparcV8TargetInfo(T);
     return new SparcV8TargetInfo(T);
@@ -1720,6 +1891,8 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
 
   case llvm::Triple::x86:
     switch (os) {
+    case llvm::Triple::AuroraUX:
+      return new AuroraUXTargetInfo<X86_32TargetInfo>(T);
     case llvm::Triple::Darwin:
       return new DarwinI386TargetInfo(T);
     case llvm::Triple::Linux:
@@ -1735,16 +1908,19 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
     case llvm::Triple::Solaris:
       return new SolarisTargetInfo<X86_32TargetInfo>(T);
     case llvm::Triple::Cygwin:
+      return new CygwinX86_32TargetInfo(T);
     case llvm::Triple::MinGW32:
-    case llvm::Triple::MinGW64:
+      return new MinGWX86_32TargetInfo(T);
     case llvm::Triple::Win32:
-      return new WindowsX86_32TargetInfo(T);
+      return new VisualStudioWindowsX86_32TargetInfo(T);
     default:
       return new X86_32TargetInfo(T);
     }
 
   case llvm::Triple::x86_64:
     switch (os) {
+    case llvm::Triple::AuroraUX:
+      return new AuroraUXTargetInfo<X86_64TargetInfo>(T);
     case llvm::Triple::Darwin:
       return new DarwinX86_64TargetInfo(T);
     case llvm::Triple::Linux:
@@ -1757,6 +1933,10 @@ TargetInfo* TargetInfo::CreateTargetInfo(const std::string &T) {
       return new FreeBSDTargetInfo<X86_64TargetInfo>(T);
     case llvm::Triple::Solaris:
       return new SolarisTargetInfo<X86_64TargetInfo>(T);
+    case llvm::Triple::MinGW64:
+      return new MinGWX86_64TargetInfo(T);
+    case llvm::Triple::Win32:   // This is what Triple.h supports now.
+      return new VisualStudioWindowsX86_64TargetInfo(T);
     default:
       return new X86_64TargetInfo(T);
     }

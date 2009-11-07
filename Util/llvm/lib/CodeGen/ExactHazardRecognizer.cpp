@@ -22,7 +22,8 @@
 
 using namespace llvm;
 
-ExactHazardRecognizer::ExactHazardRecognizer(const InstrItineraryData &LItinData) :
+ExactHazardRecognizer::
+ExactHazardRecognizer(const InstrItineraryData &LItinData) :
   ScheduleHazardRecognizer(), ItinData(LItinData) 
 {
   // Determine the maximum depth of any itinerary. This determines the
@@ -31,13 +32,11 @@ ExactHazardRecognizer::ExactHazardRecognizer(const InstrItineraryData &LItinData
   ScoreboardDepth = 1;
   if (!ItinData.isEmpty()) {
     for (unsigned idx = 0; ; ++idx) {
-      // If the begin stage of an itinerary has 0 cycles and units,
-      // then we have reached the end of the itineraries.
-      const InstrStage *IS = ItinData.beginStage(idx);
-      const InstrStage *E = ItinData.endStage(idx);
-      if ((IS->getCycles() == 0) && (IS->getUnits() == 0))
+      if (ItinData.isEndMarker(idx))
         break;
 
+      const InstrStage *IS = ItinData.beginStage(idx);
+      const InstrStage *E = ItinData.endStage(idx);
       unsigned ItinDepth = 0;
       for (; IS != E; ++IS)
         ItinDepth += IS->getCycles();

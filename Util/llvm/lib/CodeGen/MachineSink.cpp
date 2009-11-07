@@ -20,11 +20,11 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
@@ -32,12 +32,13 @@ using namespace llvm;
 STATISTIC(NumSunk, "Number of machine instructions sunk");
 
 namespace {
-  class VISIBILITY_HIDDEN MachineSinking : public MachineFunctionPass {
-    const TargetMachine   *TM;
+  class MachineSinking : public MachineFunctionPass {
     const TargetInstrInfo *TII;
-    MachineFunction       *CurMF; // Current MachineFunction
+    const TargetRegisterInfo *TRI;
     MachineRegisterInfo  *RegInfo; // Machine register information
     MachineDominatorTree *DT;   // Machine dominator tree
+    AliasAnalysis *AA;
+    BitVector AllocatableSet;   // Which physregs are allocatable?
 
   public:
     static char ID; // Pass identification
@@ -48,6 +49,7 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
       MachineFunctionPass::getAnalysisUsage(AU);
+      AU.addRequired<AliasAnalysis>();
       AU.addRequired<MachineDominatorTree>();
       AU.addPreserved<MachineDominatorTree>();
     }
@@ -70,10 +72,8 @@ bool MachineSinking::AllUsesDominatedByBlock(unsigned Reg,
                                              MachineBasicBlock *MBB) const {
   assert(TargetRegisterInfo::isVirtualRegister(Reg) &&
          "Only makes sense for vregs");
-  for (MachineRegisterInfo::reg_iterator I = RegInfo->reg_begin(Reg),
-       E = RegInfo->reg_end(); I != E; ++I) {
-    if (I.getOperand().isDef()) continue;  // ignore def.
-    
+  for (MachineRegisterInfo::use_iterator I = RegInfo->use_begin(Reg),
+       E = RegInfo->use_end(); I != E; ++I) {
     // Determine the block of the use.
     MachineInstr *UseInst = &*I;
     MachineBasicBlock *UseBlock = UseInst->getParent();
@@ -89,16 +89,16 @@ bool MachineSinking::AllUsesDominatedByBlock(unsigned Reg,
   return true;
 }
 
-
-
 bool MachineSinking::runOnMachineFunction(MachineFunction &MF) {
   DEBUG(errs() << "******** Machine Sinking ********\n");
   
-  CurMF = &MF;
-  TM = &CurMF->getTarget();
-  TII = TM->getInstrInfo();
-  RegInfo = &CurMF->getRegInfo();
+  const TargetMachine &TM = MF.getTarget();
+  TII = TM.getInstrInfo();
+  TRI = TM.getRegisterInfo();
+  RegInfo = &MF.getRegInfo();
   DT = &getAnalysis<MachineDominatorTree>();
+  AA = &getAnalysis<AliasAnalysis>();
+  AllocatableSet = TRI->getAllocatableSet(MF);
 
   bool EverMadeChange = false;
   
@@ -106,7 +106,7 @@ bool MachineSinking::runOnMachineFunction(MachineFunction &MF) {
     bool MadeChange = false;
 
     // Process all basic blocks.
-    for (MachineFunction::iterator I = CurMF->begin(), E = CurMF->end(); 
+    for (MachineFunction::iterator I = MF.begin(), E = MF.end(); 
          I != E; ++I)
       MadeChange |= ProcessBlock(*I);
     
@@ -149,7 +149,7 @@ bool MachineSinking::ProcessBlock(MachineBasicBlock &MBB) {
 /// instruction out of its current block into a successor.
 bool MachineSinking::SinkInstruction(MachineInstr *MI, bool &SawStore) {
   // Check if it's safe to move the instruction.
-  if (!MI->isSafeToMove(TII, SawStore))
+  if (!MI->isSafeToMove(TII, SawStore, AA))
     return false;
   
   // FIXME: This should include support for sinking instructions within the
@@ -176,10 +176,26 @@ bool MachineSinking::SinkInstruction(MachineInstr *MI, bool &SawStore) {
     if (Reg == 0) continue;
     
     if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
-      // If this is a physical register use, we can't move it.  If it is a def,
-      // we can move it, but only if the def is dead.
-      if (MO.isUse() || !MO.isDead())
+      if (MO.isUse()) {
+        // If the physreg has no defs anywhere, it's just an ambient register
+        // and we can freely move its uses. Alternatively, if it's allocatable,
+        // it could get allocated to something with a def during allocation.
+        if (!RegInfo->def_empty(Reg))
+          return false;
+        if (AllocatableSet.test(Reg))
+          return false;
+        // Check for a def among the register's aliases too.
+        for (const unsigned *Alias = TRI->getAliasSet(Reg); *Alias; ++Alias) {
+          unsigned AliasReg = *Alias;
+          if (!RegInfo->def_empty(AliasReg))
+            return false;
+          if (AllocatableSet.test(AliasReg))
+            return false;
+        }
+      } else if (!MO.isDead()) {
+        // A def that isn't dead. We can't move it.
         return false;
+      }
     } else {
       // Virtual register uses are always safe to sink.
       if (MO.isUse()) continue;
@@ -234,7 +250,7 @@ bool MachineSinking::SinkInstruction(MachineInstr *MI, bool &SawStore) {
   if (SuccToSinkTo->isLandingPad())
     return false;
   
-  // If is not possible to sink an instruction into its own block.  This can
+  // It is not possible to sink an instruction into its own block.  This can
   // happen with loops.
   if (MI->getParent() == SuccToSinkTo)
     return false;

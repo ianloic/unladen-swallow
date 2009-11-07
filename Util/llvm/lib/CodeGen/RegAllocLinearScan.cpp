@@ -33,7 +33,6 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -70,7 +69,7 @@ linearscanRegAlloc("linearscan", "linear scan register allocator",
                    createLinearScanRegisterAllocator);
 
 namespace {
-  struct VISIBILITY_HIDDEN RALinScan : public MachineFunctionPass {
+  struct RALinScan : public MachineFunctionPass {
     static char ID;
     RALinScan() : MachineFunctionPass(&ID) {}
 
@@ -176,11 +175,11 @@ namespace {
 
     /// processActiveIntervals - expire old intervals and move non-overlapping
     /// ones to the inactive list.
-    void processActiveIntervals(MachineInstrIndex CurPoint);
+    void processActiveIntervals(LiveIndex CurPoint);
 
     /// processInactiveIntervals - expire old intervals and move overlapping
     /// ones to the active list.
-    void processInactiveIntervals(MachineInstrIndex CurPoint);
+    void processInactiveIntervals(LiveIndex CurPoint);
 
     /// hasNextReloadInterval - Return the next liveinterval that's being
     /// defined by a reload from the same SS as the specified one.
@@ -366,7 +365,7 @@ unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
     return Reg;
 
   VNInfo *vni = cur.begin()->valno;
-  if ((vni->def == MachineInstrIndex()) ||
+  if ((vni->def == LiveIndex()) ||
       vni->isUnused() || !vni->isDefAccurate())
     return Reg;
   MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
@@ -397,10 +396,10 @@ unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
     // Remove unnecessary kills since a copy does not clobber the register.
     if (li_->hasInterval(SrcReg)) {
       LiveInterval &SrcLI = li_->getInterval(SrcReg);
-      for (MachineRegisterInfo::reg_iterator I = mri_->reg_begin(cur.reg),
-             E = mri_->reg_end(); I != E; ++I) {
+      for (MachineRegisterInfo::use_iterator I = mri_->use_begin(cur.reg),
+             E = mri_->use_end(); I != E; ++I) {
         MachineOperand &O = I.getOperand();
-        if (!O.isUse() || !O.isKill())
+        if (!O.isKill())
           continue;
         MachineInstr *MI = &*I;
         if (SrcLI.liveAt(li_->getDefIndex(li_->getInstructionIndex(MI))))
@@ -586,7 +585,7 @@ void RALinScan::linearScan() {
 
 /// processActiveIntervals - expire old intervals and move non-overlapping ones
 /// to the inactive list.
-void RALinScan::processActiveIntervals(MachineInstrIndex CurPoint)
+void RALinScan::processActiveIntervals(LiveIndex CurPoint)
 {
   DEBUG(errs() << "\tprocessing active intervals:\n");
 
@@ -632,7 +631,7 @@ void RALinScan::processActiveIntervals(MachineInstrIndex CurPoint)
 
 /// processInactiveIntervals - expire old intervals and move overlapping
 /// ones to the active list.
-void RALinScan::processInactiveIntervals(MachineInstrIndex CurPoint)
+void RALinScan::processInactiveIntervals(LiveIndex CurPoint)
 {
   DEBUG(errs() << "\tprocessing inactive intervals:\n");
 
@@ -713,7 +712,7 @@ FindIntervalInVector(RALinScan::IntervalPtrs &IP, LiveInterval *LI) {
   return IP.end();
 }
 
-static void RevertVectorIteratorsTo(RALinScan::IntervalPtrs &V, MachineInstrIndex Point){
+static void RevertVectorIteratorsTo(RALinScan::IntervalPtrs &V, LiveIndex Point){
   for (unsigned i = 0, e = V.size(); i != e; ++i) {
     RALinScan::IntervalPtr &IP = V[i];
     LiveInterval::iterator I = std::upper_bound(IP.first->begin(),
@@ -739,7 +738,7 @@ static void addStackInterval(LiveInterval *cur, LiveStacks *ls_,
   if (SI.hasAtLeastOneValue())
     VNI = SI.getValNumInfo(0);
   else
-    VNI = SI.getNextValue(MachineInstrIndex(), 0, false,
+    VNI = SI.getNextValue(LiveIndex(), 0, false,
                           ls_->getVNInfoAllocator());
 
   LiveInterval &RI = li_->getInterval(cur->reg);
@@ -907,7 +906,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   backUpRegUses();
 
   std::vector<std::pair<unsigned, float> > SpillWeightsToAdd;
-  MachineInstrIndex StartPosition = cur->beginIndex();
+  LiveIndex StartPosition = cur->beginIndex();
   const TargetRegisterClass *RCLeader = RelatedRegClasses.getLeaderValue(RC);
 
   // If start of this live interval is defined by a move instruction and its
@@ -917,7 +916,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   // one, e.g. X86::mov32to32_. These move instructions are not coalescable.
   if (!vrm_->getRegAllocPref(cur->reg) && cur->hasAtLeastOneValue()) {
     VNInfo *vni = cur->begin()->valno;
-    if ((vni->def != MachineInstrIndex()) && !vni->isUnused() &&
+    if ((vni->def != LiveIndex()) && !vni->isUnused() &&
          vni->isDefAccurate()) {
       MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
       unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
@@ -1173,7 +1172,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
       LiveInterval *ReloadLi = added[i];
       if (ReloadLi->weight == HUGE_VALF &&
           li_->getApproximateInstructionCount(*ReloadLi) == 0) {
-        MachineInstrIndex ReloadIdx = ReloadLi->beginIndex();
+        LiveIndex ReloadIdx = ReloadLi->beginIndex();
         MachineBasicBlock *ReloadMBB = li_->getMBBFromIndex(ReloadIdx);
         int ReloadSS = vrm_->getStackSlot(ReloadLi->reg);
         if (LastReloadMBB == ReloadMBB && LastReloadSS == ReloadSS) {
@@ -1243,7 +1242,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
     spilled.insert(sli->reg);
   }
 
-  MachineInstrIndex earliestStart = earliestStartInterval->beginIndex();
+  LiveIndex earliestStart = earliestStartInterval->beginIndex();
 
   DEBUG(errs() << "\t\trolling back to: " << earliestStart << '\n');
 
@@ -1324,7 +1323,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
     LiveInterval *ReloadLi = added[i];
     if (ReloadLi->weight == HUGE_VALF &&
         li_->getApproximateInstructionCount(*ReloadLi) == 0) {
-      MachineInstrIndex ReloadIdx = ReloadLi->beginIndex();
+      LiveIndex ReloadIdx = ReloadLi->beginIndex();
       MachineBasicBlock *ReloadMBB = li_->getMBBFromIndex(ReloadIdx);
       int ReloadSS = vrm_->getStackSlot(ReloadLi->reg);
       if (LastReloadMBB == ReloadMBB && LastReloadSS == ReloadSS) {

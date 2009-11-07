@@ -17,8 +17,7 @@
 
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/Support/Allocator.h"
-#include <list>
-#include <vector>
+#include "clang/Analysis/Support/BumpVector.h"
 #include <cassert>
 
 namespace llvm {
@@ -57,9 +56,41 @@ namespace clang {
 ///     &&, ||          expression that uses result of && or ||, RHS
 ///
 class CFGBlock {
-  typedef std::vector<Stmt*> StatementListTy;
+  class StatementList {
+    typedef BumpVector<Stmt*> ImplTy;
+    ImplTy Impl;
+  public:
+    StatementList(BumpVectorContext &C) : Impl(C, 4) {}
+    
+    typedef std::reverse_iterator<ImplTy::iterator>       iterator;
+    typedef std::reverse_iterator<ImplTy::const_iterator> const_iterator;
+    typedef ImplTy::iterator                              reverse_iterator;
+    typedef ImplTy::const_iterator                        const_reverse_iterator;
+  
+    void push_back(Stmt *s, BumpVectorContext &C) { Impl.push_back(s, C); }
+    Stmt *front() const { return Impl.back(); }
+    Stmt *back() const { return Impl.front(); }
+    
+    iterator begin() { return Impl.rbegin(); }
+    iterator end() { return Impl.rend(); }
+    const_iterator begin() const { return Impl.rbegin(); }
+    const_iterator end() const { return Impl.rend(); }
+    reverse_iterator rbegin() { return Impl.begin(); }
+    reverse_iterator rend() { return Impl.end(); }
+    const_reverse_iterator rbegin() const { return Impl.begin(); }
+    const_reverse_iterator rend() const { return Impl.end(); }
+
+   Stmt*  operator[](size_t i) const  {
+     assert(i < Impl.size());
+     return Impl[Impl.size() - 1 - i];
+   }
+    
+    size_t size() const { return Impl.size(); }
+    bool empty() const { return Impl.empty(); }
+  };
+
   /// Stmts - The set of statements in the basic block.
-  StatementListTy Stmts;
+  StatementList Stmts;
 
   /// Label - An (optional) label that prefixes the executable
   ///  statements in the block.  When this variable is non-NULL, it is
@@ -82,20 +113,21 @@ class CFGBlock {
 
   /// Predecessors/Successors - Keep track of the predecessor / successor
   /// CFG blocks.
-  typedef std::vector<CFGBlock*> AdjacentBlocks;
+  typedef BumpVector<CFGBlock*> AdjacentBlocks;
   AdjacentBlocks Preds;
   AdjacentBlocks Succs;
 
 public:
-  explicit CFGBlock(unsigned blockid) : Label(NULL), Terminator(NULL),
-                                        LoopTarget(NULL), BlockID(blockid) {}
+  explicit CFGBlock(unsigned blockid, BumpVectorContext &C)
+    : Stmts(C), Label(NULL), Terminator(NULL), LoopTarget(NULL),
+      BlockID(blockid), Preds(C, 1), Succs(C, 1) {}
   ~CFGBlock() {};
 
   // Statement iterators
-  typedef StatementListTy::iterator                                  iterator;
-  typedef StatementListTy::const_iterator                      const_iterator;
-  typedef std::reverse_iterator<const_iterator>        const_reverse_iterator;
-  typedef std::reverse_iterator<iterator>                    reverse_iterator;
+  typedef StatementList::iterator                      iterator;
+  typedef StatementList::const_iterator                const_iterator;
+  typedef StatementList::reverse_iterator              reverse_iterator;
+  typedef StatementList::const_reverse_iterator        const_reverse_iterator;
 
   Stmt*                        front()       const { return Stmts.front();   }
   Stmt*                        back()        const { return Stmts.back();    }
@@ -113,7 +145,8 @@ public:
   unsigned                     size()        const { return Stmts.size();    }
   bool                         empty()       const { return Stmts.empty();   }
 
-  Stmt*  operator[](size_t i) const  { assert (i < size()); return Stmts[i]; }
+  Stmt*  operator[](size_t i) const  { return Stmts[i]; }
+
 
   // CFG iterators
   typedef AdjacentBlocks::iterator                              pred_iterator;
@@ -154,7 +187,6 @@ public:
 
   // Manipulation of block contents
 
-  void appendStmt(Stmt* Statement) { Stmts.push_back(Statement); }
   void setTerminator(Stmt* Statement) { Terminator = Statement; }
   void setLabel(Stmt* Statement) { Label = Statement; }
   void setLoopTarget(const Stmt *loopTarget) { LoopTarget = loopTarget; }
@@ -177,17 +209,21 @@ public:
 
   void reverseStmts();
 
-  void addSuccessor(CFGBlock* Block) {
-    if (Block)
-      Block->Preds.push_back(this);
-    Succs.push_back(Block);
-  }
-
   unsigned getBlockID() const { return BlockID; }
 
   void dump(const CFG *cfg, const LangOptions &LO) const;
   void print(llvm::raw_ostream &OS, const CFG* cfg, const LangOptions &LO) const;
   void printTerminator(llvm::raw_ostream &OS, const LangOptions &LO) const;
+  
+  void addSuccessor(CFGBlock* Block, BumpVectorContext &C) {
+    if (Block)
+      Block->Preds.push_back(this, C);
+    Succs.push_back(Block, C);
+  }
+  
+  void appendStmt(Stmt* Statement, BumpVectorContext &C) {
+      Stmts.push_back(Statement, C);
+  }  
 };
 
 
@@ -225,15 +261,14 @@ public:
   // Block Iterators
   //===--------------------------------------------------------------------===//
 
-  typedef std::list<CFGBlock>                      CFGBlockListTy;
-
+  typedef BumpVector<CFGBlock*>                    CFGBlockListTy;    
   typedef CFGBlockListTy::iterator                 iterator;
   typedef CFGBlockListTy::const_iterator           const_iterator;
   typedef std::reverse_iterator<iterator>          reverse_iterator;
   typedef std::reverse_iterator<const_iterator>    const_reverse_iterator;
 
-  CFGBlock&                 front()                { return Blocks.front(); }
-  CFGBlock&                 back()                 { return Blocks.back(); }
+  CFGBlock&                 front()                { return *Blocks.front(); }
+  CFGBlock&                 back()                 { return *Blocks.back(); }
 
   iterator                  begin()                { return Blocks.begin(); }
   iterator                  end()                  { return Blocks.end(); }
@@ -260,7 +295,8 @@ public:
   template <typename CALLBACK>
   void VisitBlockStmts(CALLBACK& O) const {
     for (const_iterator I=begin(), E=end(); I != E; ++I)
-      for (CFGBlock::const_iterator BI=I->begin(), BE=I->end(); BI != BE; ++BI)
+      for (CFGBlock::const_iterator BI=(*I)->begin(), BE=(*I)->end();
+           BI != BE; ++BI)
         O(*BI);
   }
 
@@ -297,29 +333,34 @@ public:
   //===--------------------------------------------------------------------===//
 
   CFG() : Entry(NULL), Exit(NULL), IndirectGotoBlock(NULL), NumBlockIDs(0),
-          BlkExprMap(NULL) {};
+          BlkExprMap(NULL), Blocks(BlkBVC, 10) {};
 
   ~CFG();
 
   llvm::BumpPtrAllocator& getAllocator() {
-    return Alloc;
+    return BlkBVC.getAllocator();
+  }
+  
+  BumpVectorContext &getBumpVectorContext() {
+    return BlkBVC;
   }
 
 private:
   CFGBlock* Entry;
   CFGBlock* Exit;
   CFGBlock* IndirectGotoBlock;  // Special block to contain collective dispatch
-  // for indirect gotos
-  CFGBlockListTy Blocks;
+                                // for indirect gotos
   unsigned  NumBlockIDs;
 
   // BlkExprMap - An opaque pointer to prevent inclusion of DenseMap.h.
   //  It represents a map from Expr* to integers to record the set of
   //  block-level expressions and their "statement number" in the CFG.
   void*     BlkExprMap;
+  
+  BumpVectorContext BlkBVC;
+  
+  CFGBlockListTy Blocks;
 
-  /// Alloc - An internal allocator.
-  llvm::BumpPtrAllocator Alloc;
 };
 } // end namespace clang
 

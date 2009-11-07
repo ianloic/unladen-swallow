@@ -87,13 +87,10 @@ namespace  {
       fprintf(F, "'%s'", T.getAsString().c_str());
 
       if (!T.isNull()) {
-        // If the type is directly a typedef, strip off typedefness to give at
-        // least one level of concreteness.
-        if (TypedefType *TDT = dyn_cast<TypedefType>(T)) {
-          QualType Simplified =
-            TDT->LookThroughTypedefs().getQualifiedType(T.getCVRQualifiers());
+        // If the type is sugared, also dump a (shallow) desugared type.
+        QualType Simplified = T.getDesugaredType();
+        if (Simplified != T)
           fprintf(F, ":'%s'", Simplified.getAsString().c_str());
-        }
       }
     }
     void DumpStmt(const Stmt *Node) {
@@ -247,7 +244,7 @@ void StmtDumper::DumpDeclarator(Decl *D) {
     // print a free standing tag decl (e.g. "struct x;").
     const char *tagname;
     if (const IdentifierInfo *II = TD->getIdentifier())
-      tagname = II->getName();
+      tagname = II->getNameStart();
     else
       tagname = "<anonymous>";
     fprintf(F, "\"%s %s;\"", TD->getKindName(), tagname);
@@ -256,7 +253,7 @@ void StmtDumper::DumpDeclarator(Decl *D) {
     // print using-directive decl (e.g. "using namespace x;")
     const char *ns;
     if (const IdentifierInfo *II = UD->getNominatedNamespace()->getIdentifier())
-      ns = II->getName();
+      ns = II->getNameStart();
     else
       ns = "<anonymous>";
     fprintf(F, "\"%s %s;\"",UD->getDeclKindName(), ns);
@@ -406,7 +403,7 @@ void StmtDumper::VisitMemberExpr(MemberExpr *Node) {
 }
 void StmtDumper::VisitExtVectorElementExpr(ExtVectorElementExpr *Node) {
   DumpExpr(Node);
-  fprintf(F, " %s", Node->getAccessor().getName());
+  fprintf(F, " %s", Node->getAccessor().getNameStart());
 }
 void StmtDumper::VisitBinaryOperator(BinaryOperator *Node) {
   DumpExpr(Node);
@@ -498,7 +495,7 @@ void StmtDumper::VisitObjCMessageExpr(ObjCMessageExpr* Node) {
   DumpExpr(Node);
   fprintf(F, " selector=%s", Node->getSelector().getAsString().c_str());
   IdentifierInfo* clsName = Node->getClassName();
-  if (clsName) fprintf(F, " class=%s", clsName->getName());
+  if (clsName) fprintf(F, " class=%s", clsName->getNameStart());
 }
 
 void StmtDumper::VisitObjCEncodeExpr(ObjCEncodeExpr *Node) {

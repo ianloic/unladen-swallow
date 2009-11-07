@@ -221,6 +221,10 @@ endif( MSVC )
 
 include_directories( ${LLVM_BINARY_DIR}/include ${LLVM_MAIN_INCLUDE_DIR})
 
+if( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
+   SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-include llvm/System/Solaris.h")
+endif( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
+
 include(AddLLVM)
 include(TableGen)
 
@@ -262,6 +266,8 @@ add_subdirectory(lib/MC)
 add_subdirectory(test)
 
 add_subdirectory(utils/FileCheck)
+add_subdirectory(utils/count)
+add_subdirectory(utils/not)
 
 set(LLVM_ENUM_ASM_PRINTERS "")
 set(LLVM_ENUM_ASM_PARSERS "")
@@ -299,7 +305,6 @@ add_subdirectory(lib/ExecutionEngine/Interpreter)
 add_subdirectory(lib/ExecutionEngine/JIT)
 add_subdirectory(lib/Target)
 add_subdirectory(lib/AsmParser)
-add_subdirectory(lib/Debugger)
 add_subdirectory(lib/Archive)
 
 add_subdirectory(projects)

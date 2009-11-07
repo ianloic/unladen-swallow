@@ -20,29 +20,34 @@
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineOperand.h"
-#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/Target/TargetInstrDesc.h"
 #include "llvm/Support/DebugLoc.h"
-#include <list>
 #include <vector>
 
 namespace llvm {
 
+class AliasAnalysis;
 class TargetInstrDesc;
 class TargetInstrInfo;
 class TargetRegisterInfo;
 class MachineFunction;
+class MachineMemOperand;
 
 //===----------------------------------------------------------------------===//
 /// MachineInstr - Representation of each machine instruction.
 ///
 class MachineInstr : public ilist_node<MachineInstr> {
+public:
+  typedef MachineMemOperand **mmo_iterator;
+
+private:
   const TargetInstrDesc *TID;           // Instruction descriptor.
   unsigned short NumImplicitOps;        // Number of implicit operands (which
                                         // are determined at construction time).
 
   std::vector<MachineOperand> Operands; // the operands
-  std::list<MachineMemOperand> MemOperands; // information on memory references
+  mmo_iterator MemRefs;                 // information on memory references
+  mmo_iterator MemRefsEnd;
   MachineBasicBlock *Parent;            // Pointer to the owning basic block.
   DebugLoc debugLoc;                    // Source line information.
 
@@ -132,21 +137,14 @@ public:
   unsigned getNumExplicitOperands() const;
   
   /// Access to memory operands of the instruction
-  std::list<MachineMemOperand>::iterator memoperands_begin()
-  { return MemOperands.begin(); }
-  std::list<MachineMemOperand>::iterator memoperands_end()
-  { return MemOperands.end(); }
-  std::list<MachineMemOperand>::const_iterator memoperands_begin() const
-  { return MemOperands.begin(); }
-  std::list<MachineMemOperand>::const_iterator memoperands_end() const
-  { return MemOperands.end(); }
-  bool memoperands_empty() const { return MemOperands.empty(); }
+  mmo_iterator memoperands_begin() const { return MemRefs; }
+  mmo_iterator memoperands_end() const { return MemRefsEnd; }
+  bool memoperands_empty() const { return MemRefsEnd == MemRefs; }
 
   /// hasOneMemOperand - Return true if this instruction has exactly one
   /// MachineMemOperand.
   bool hasOneMemOperand() const {
-    return !memoperands_empty() &&
-           next(memoperands_begin()) == memoperands_end();
+    return MemRefsEnd - MemRefs == 1;
   }
 
   /// isIdenticalTo - Return true if this instruction is identical to (same
@@ -277,17 +275,26 @@ public:
   /// isSafeToMove - Return true if it is safe to move this instruction. If
   /// SawStore is set to true, it means that there is a store (or call) between
   /// the instruction's location and its intended destination.
-  bool isSafeToMove(const TargetInstrInfo *TII, bool &SawStore) const;
+  bool isSafeToMove(const TargetInstrInfo *TII, bool &SawStore,
+                    AliasAnalysis *AA) const;
 
   /// isSafeToReMat - Return true if it's safe to rematerialize the specified
   /// instruction which defined the specified register instead of copying it.
-  bool isSafeToReMat(const TargetInstrInfo *TII, unsigned DstReg) const;
+  bool isSafeToReMat(const TargetInstrInfo *TII, unsigned DstReg,
+                     AliasAnalysis *AA) const;
 
   /// hasVolatileMemoryRef - Return true if this instruction may have a
   /// volatile memory reference, or if the information describing the
   /// memory reference is not available. Return false if it is known to
   /// have no volatile memory references.
   bool hasVolatileMemoryRef() const;
+
+  /// isInvariantLoad - Return true if this instruction is loading from a
+  /// location whose value is invariant across the function.  For example,
+  /// loading a value from the constant pool or from from the argument area of
+  /// a function if it does not change.  This should only return true of *all*
+  /// loads the instruction does are invariant (if it does multiple loads).
+  bool isInvariantLoad(AliasAnalysis *AA) const;
 
   //
   // Debugging support
@@ -319,13 +326,17 @@ public:
   ///
   void RemoveOperand(unsigned i);
 
-  /// addMemOperand - Add a MachineMemOperand to the machine instruction,
-  /// referencing arbitrary storage.
-  void addMemOperand(MachineFunction &MF,
-                     const MachineMemOperand &MO);
+  /// addMemOperand - Add a MachineMemOperand to the machine instruction.
+  /// This function should be used only occasionally. The setMemRefs function
+  /// is the primary method for setting up a MachineInstr's MemRefs list.
+  void addMemOperand(MachineFunction &MF, MachineMemOperand *MO);
 
-  /// clearMemOperands - Erase all of this MachineInstr's MachineMemOperands.
-  void clearMemOperands(MachineFunction &MF);
+  /// setMemRefs - Assign this MachineInstr's memory reference descriptor
+  /// list. This does not transfer ownership.
+  void setMemRefs(mmo_iterator NewMemRefs, mmo_iterator NewMemRefsEnd) {
+    MemRefs = NewMemRefs;
+    MemRefsEnd = NewMemRefsEnd;
+  }
 
 private:
   /// getRegInfo - If this instruction is embedded into a MachineFunction,

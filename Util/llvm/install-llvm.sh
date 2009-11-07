@@ -16,7 +16,7 @@
 # Keep these arguments in sync with the top-level configure.in.
 LLVM_ARGS="--enable-jit --enable-targets=x86,cpp --enable-bindings=none"
 DEBUG_ARGS="--disable-optimized --enable-debug-runtime --enable-assertions"
-RELEASE_ARGS="--enable-optimized --disable-assertions"
+RELEASE_ARGS="--enable-optimized --disable-assertions --enable-debug-symbols"
 LLVM_DIR=`dirname $0`
 
 case "$1" in

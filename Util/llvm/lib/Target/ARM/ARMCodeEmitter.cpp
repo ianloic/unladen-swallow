@@ -34,7 +34,6 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -56,8 +55,7 @@ namespace {
   };
 
   template<class CodeEmitter>
-  class VISIBILITY_HIDDEN Emitter : public MachineFunctionPass,
-                                    public ARMCodeEmitter {
+  class Emitter : public MachineFunctionPass, public ARMCodeEmitter {
     ARMJITInfo                *JTI;
     const ARMInstrInfo        *II;
     const TargetData          *TD;
@@ -346,7 +344,7 @@ template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI) {
   DEBUG(errs() << "JIT: " << (void*)MCE.getCurrentPCValue() << ":\t" << MI);
 
-  MCE.processDebugLoc(MI.getDebugLoc());
+  MCE.processDebugLoc(MI.getDebugLoc(), true);
 
   NumEmitted++;  // Keep track of the # of mi's emitted
   switch (MI.getDesc().TSFlags & ARMII::FormMask) {
@@ -409,6 +407,7 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI) {
     emitMiscInstruction(MI);
     break;
   }
+  MCE.processDebugLoc(MI.getDebugLoc(), false);
 }
 
 template<class CodeEmitter>
@@ -460,9 +459,9 @@ void Emitter<CodeEmitter>::emitConstPoolInstruction(const MachineInstr &MI) {
       uint32_t Val = *(uint32_t*)CI->getValue().getRawData();
       emitWordLE(Val);
     } else if (const ConstantFP *CFP = dyn_cast<ConstantFP>(CV)) {
-      if (CFP->getType() == Type::getFloatTy(CFP->getContext()))
+      if (CFP->getType()->isFloatTy())
         emitWordLE(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
-      else if (CFP->getType() == Type::getDoubleTy(CFP->getContext()))
+      else if (CFP->getType()->isDoubleTy())
         emitDWordLE(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
       else {
         llvm_unreachable("Unable to handle this constantpool entry!");
@@ -596,7 +595,8 @@ void Emitter<CodeEmitter>::emitPseudoInstruction(const MachineInstr &MI) {
   unsigned Opcode = MI.getDesc().Opcode;
   switch (Opcode) {
   default:
-    llvm_unreachable("ARMCodeEmitter::emitPseudoInstruction");//FIXME:
+    llvm_unreachable("ARMCodeEmitter::emitPseudoInstruction");
+  // FIXME: Add support for MOVimm32.
   case TargetInstrInfo::INLINEASM: {
     // We allow inline assembler nodes with empty bodies - they can
     // implicitly define registers, which is ok for JIT.
@@ -610,6 +610,7 @@ void Emitter<CodeEmitter>::emitPseudoInstruction(const MachineInstr &MI) {
     MCE.emitLabel(MI.getOperand(0).getImm());
     break;
   case TargetInstrInfo::IMPLICIT_DEF:
+  case TargetInstrInfo::KILL:
   case ARM::DWARF_LOC:
     // Do nothing.
     break;
@@ -996,7 +997,7 @@ void Emitter<CodeEmitter>::emitLoadStoreMultipleInstruction(
     Binary |= 0x1 << ARMII::W_BitShift;
 
   // Set registers
-  for (unsigned i = 4, e = MI.getNumOperands(); i != e; ++i) {
+  for (unsigned i = 5, e = MI.getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
     if (!MO.isReg() || MO.isImplicit())
       break;
@@ -1401,11 +1402,11 @@ void Emitter<CodeEmitter>::emitVFPLoadStoreMultipleInstruction(
     Binary |= 0x1 << ARMII::W_BitShift;
 
   // First register is encoded in Dd.
-  Binary |= encodeVFPRd(MI, 4);
+  Binary |= encodeVFPRd(MI, 5);
 
   // Number of registers are encoded in offset field.
   unsigned NumRegs = 1;
-  for (unsigned i = 5, e = MI.getNumOperands(); i != e; ++i) {
+  for (unsigned i = 6, e = MI.getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
     if (!MO.isReg() || MO.isImplicit())
       break;

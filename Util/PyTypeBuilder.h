@@ -58,7 +58,9 @@ namespace llvm {
                 offsetof(TYPE, FIELD_NAME)); \
         return index; \
     } \
-    static Value *FIELD_NAME(IRBuilder<> &builder, Value *ptr) { \
+    template<bool preserveNames, typename Folder> \
+    static Value *FIELD_NAME(IRBuilder<preserveNames, Folder> &builder, \
+                             Value *ptr) { \
         assert(ptr->getType() == PyTypeBuilder<TYPE*>::get(ptr->getContext()) \
                && "*ptr must be of type " #TYPE); \
         return builder.CreateStructGEP( \
@@ -392,8 +394,8 @@ public:
     DEFINE_FIELD(PyCodeObject, co_native_function)
     DEFINE_FIELD(PyCodeObject, co_use_llvm)
     DEFINE_FIELD(PyCodeObject, co_optimization)
-    DEFINE_FIELD(PyCodeObject, co_callcount)
     DEFINE_FIELD(PyCodeObject, co_fatalbailcount)
+    DEFINE_FIELD(PyCodeObject, co_hotness)
     DEFINE_FIELD(PyCodeObject, co_assumed_globals)
     DEFINE_FIELD(PyCodeObject, co_assumed_builtins)
 };

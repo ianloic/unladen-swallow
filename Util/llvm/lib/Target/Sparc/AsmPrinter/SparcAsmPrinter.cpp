@@ -44,7 +44,7 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  class VISIBILITY_HIDDEN SparcAsmPrinter : public AsmPrinter {
+  class SparcAsmPrinter : public AsmPrinter {
     /// We name each basic block in a Function with a unique number, so
     /// that we can consistently refer to them later. This is cleared
     /// at the beginning of each call to runOnMachineFunction().
@@ -119,18 +119,17 @@ bool SparcAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
       // Print the assembly for the instruction.
-      processDebugLoc(II->getDebugLoc());
+      processDebugLoc(II, true);
       printInstruction(II);
       
       if (VerboseAsm && !II->getDebugLoc().isUnknown())
         EmitComments(*II);
       O << '\n';
-      
+      processDebugLoc(II, false);
       ++EmittedInsts;
     }
   }

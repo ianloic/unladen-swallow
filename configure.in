@@ -3714,7 +3714,7 @@ AC_ARG_WITH(llvm,
                            vice-versa.),
             [with_llvm=$withval])
 
-if test "$with_llvm" == "no"
+if test "$with_llvm" = "no"
 then
     AC_MSG_RESULT(disabled)
     BUILD_LLVM=disabled
@@ -3739,7 +3739,7 @@ else
         [Use LLVM for code generation. This makes things fast.])
 fi
 
-if test "$BUILD_LLVM" == "1"
+if test "$BUILD_LLVM" = "1"
 then
     LLVM_BASE="Util/llvm"
     # llvm and llvm_tools are empty make targets that touch these files so they
@@ -3777,13 +3777,13 @@ AC_ARG_WITH(instrumentation,
                            Compile in a bunch of runtime instrumentation useful
                            for optimizing Python itself. Requires --with-llvm.))
 
-if test "$with_instrumentation" == yes
+if test "$with_instrumentation" = yes
 then
     AC_DEFINE(Py_WITH_INSTRUMENTATION, 1,
         [Compile in a bunch of runtime instrumentation useful for optimizing
          Python itself.])
 	AC_MSG_RESULT(yes);
-    if test "$BUILD_LLVM" == "disabled"
+    if test "$BUILD_LLVM" = "disabled"
 	then
 		AC_MSG_ERROR([--with-instrumentation requires --with-llvm])
 	fi
@@ -3800,7 +3800,7 @@ then
 	AC_DEFINE(WITH_TSC, 1, 
 	          [Define to profile with the Pentium timestamp counter]) 
 	AC_MSG_RESULT(yes)
-	if test "$BUILD_LLVM" == "disabled"
+	if test "$BUILD_LLVM" = "disabled"
 	then
 		AC_MSG_ERROR([--with-tsc requires --with-llvm])
 	fi

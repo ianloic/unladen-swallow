@@ -88,3 +88,29 @@ define <16 x i8> @test14(<16 x i8> %a) {
         %b = mul <16 x i8> %a, zeroinitializer
         ret <16 x i8> %b
 }
+
+; rdar://7293527
+define i32 @test15(i32 %A, i32 %B) {
+entry:
+  %shl = shl i32 1, %B
+  %m = mul i32 %shl, %A
+  ret i32 %m
+}
+
+; X * Y (when Y is 0 or 1) --> x & (0-Y)
+define i32 @test16(i32 %b, i1 %c) {
+        %d = zext i1 %c to i32          ; <i32> [#uses=1]
+        ; e = b & (a >> 31)
+        %e = mul i32 %d, %b             ; <i32> [#uses=1]
+        ret i32 %e
+}
+
+; X * Y (when Y is 0 or 1) --> x & (0-Y)
+define i32 @test17(i32 %a, i32 %b) {
+  %a.lobit = lshr i32 %a, 31
+  %e = mul i32 %a.lobit, %b
+  ret i32 %e
+}
+
+
+

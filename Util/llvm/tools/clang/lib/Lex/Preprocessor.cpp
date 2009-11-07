@@ -71,7 +71,6 @@ Preprocessor::Preprocessor(Diagnostic &diags, const LangOptions &opts,
   // Macro expansion is enabled.
   DisableMacroExpansion = false;
   InMacroArgs = false;
-  IsMainFileEofCodeCompletion = false;
   NumCachedTokenLexers = 0;
 
   CachedLexPos = 0;
@@ -123,7 +122,7 @@ Preprocessor::~Preprocessor() {
 
 void Preprocessor::setPTHManager(PTHManager* pm) {
   PTH.reset(pm);
-  FileMgr.setStatCache(PTH->createStatCache());
+  FileMgr.addStatCache(PTH->createStatCache());
 }
 
 void Preprocessor::DumpToken(const Token &Tok, bool DumpFlags) const {
@@ -235,7 +234,7 @@ unsigned Preprocessor::getSpelling(const Token &Tok,
   // If this token is an identifier, just return the string from the identifier
   // table, which is very quick.
   if (const IdentifierInfo *II = Tok.getIdentifierInfo()) {
-    Buffer = II->getName();
+    Buffer = II->getNameStart();
     return II->getLength();
   }
 
@@ -369,13 +368,6 @@ void Preprocessor::EnterMainSourceFile() {
   // Enter the main file source buffer.
   EnterSourceFile(MainFileID, 0);
 
-  if (IsMainFileEofCodeCompletion) {
-    // Tell our newly-created lexer that it should treat its end-of-file as
-    // a code-completion token.
-    IsMainFileEofCodeCompletion = false;
-    static_cast<Lexer *>(getCurrentFileLexer())->SetEofIsCodeCompletion();
-  }
-  
   // Tell the header info that the main file was entered.  If the file is later
   // #imported, it won't be re-entered.
   if (const FileEntry *FE = SourceMgr.getFileEntryForID(MainFileID))

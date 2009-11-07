@@ -142,10 +142,15 @@ void Clang::AddPreprocessingOptions(const Driver &D,
       continue;
 
     if (A->getOption().matches(options::OPT_include)) {
+      // Use PCH if the user requested it, except for C++ (for now).
+      bool UsePCH = D.CCCUsePCH;
+      if (types::isCXX(Inputs[0].getType()))
+        UsePCH = false;
+
       bool FoundPTH = false;
       bool FoundPCH = false;
       llvm::sys::Path P(A->getValue(Args));
-      if (D.CCCUsePCH) {
+      if (UsePCH) {
         P.appendSuffix("pch");
         if (P.exists())
           FoundPCH = true;
@@ -164,8 +169,8 @@ void Clang::AddPreprocessingOptions(const Driver &D,
       if (!FoundPCH && !FoundPTH) {
         P.appendSuffix("gch");
         if (P.exists()) {
-          FoundPCH = D.CCCUsePCH;
-          FoundPTH = !D.CCCUsePCH;
+          FoundPCH = UsePCH;
+          FoundPTH = !UsePCH;
         }
         else
           P.eraseSuffix();
@@ -173,7 +178,7 @@ void Clang::AddPreprocessingOptions(const Driver &D,
 
       if (FoundPCH || FoundPTH) {
         A->claim();
-        if (D.CCCUsePCH)
+        if (UsePCH)
           CmdArgs.push_back("-include-pch");
         else
           CmdArgs.push_back("-include-pth");
@@ -472,6 +477,36 @@ void Clang::AddX86TargetArgs(const ArgList &Args,
   }
 }
 
+static bool needsExceptions(const ArgList &Args,  types::ID InputType,
+                            const llvm::Triple &Triple) {
+  if (Arg *A = Args.getLastArg(options::OPT_fexceptions,
+                               options::OPT_fno_exceptions)) {
+    if (A->getOption().matches(options::OPT_fexceptions))
+      return true;
+    else
+      return false;
+  }
+  switch (InputType) {
+  case types::TY_CXX: case types::TY_CXXHeader:
+  case types::TY_PP_CXX: case types::TY_PP_CXXHeader:
+  case types::TY_ObjCXX: case types::TY_ObjCXXHeader:
+  case types::TY_PP_ObjCXX: case types::TY_PP_ObjCXXHeader:
+    return true;
+
+  case types::TY_ObjC: case types::TY_ObjCHeader:
+  case types::TY_PP_ObjC: case types::TY_PP_ObjCHeader:
+    if (Args.hasArg(options::OPT_fobjc_nonfragile_abi))
+      return true;
+    if (Triple.getOS() != llvm::Triple::Darwin)
+      return false;
+    return (Triple.getDarwinMajorNumber() >= 9 &&
+            Triple.getArch() == llvm::Triple::x86_64);
+
+  default:
+    return false;
+  }
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          Job &Dest,
                          const InputInfo &Output,
@@ -498,7 +533,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     else
       CmdArgs.push_back("-E");
   } else if (isa<PrecompileJobAction>(JA)) {
-    if (D.CCCUsePCH)
+    // Use PCH if the user requested it, except for C++ (for now).
+    bool UsePCH = D.CCCUsePCH;
+    if (types::isCXX(Inputs[0].getType()))
+      UsePCH = false;
+
+    if (UsePCH)
       CmdArgs.push_back("-emit-pch");
     else
       CmdArgs.push_back("-emit-pth");
@@ -532,6 +572,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-static-define");
 
   if (isa<AnalyzeJobAction>(JA)) {
+    // Enable region store model by default.
+    CmdArgs.push_back("-analyzer-store=region");
+
     // Add default argument set.
     if (!Args.hasArg(options::OPT__analyzer_no_default_checks)) {
       CmdArgs.push_back("-warn-dead-stores");
@@ -693,6 +736,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-g");
 
   Args.AddLastArg(CmdArgs, options::OPT_nostdinc);
+  Args.AddLastArg(CmdArgs, options::OPT_nobuiltininc);
 
   Args.AddLastArg(CmdArgs, options::OPT_isysroot);
 
@@ -725,7 +769,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // option.
   if (Arg *Std = Args.getLastArg(options::OPT_std_EQ, options::OPT_ansi)) {
     if (Std->getOption().matches(options::OPT_ansi))
-      CmdArgs.push_back("-std=c89");
+      if (types::isCXX(InputType))
+          CmdArgs.push_back("-std=c++98");
+      else
+          CmdArgs.push_back("-std=c89");
     else
       Std->render(Args, CmdArgs);
 
@@ -805,15 +852,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-fblocks=0");
   }
 
-  // -fexceptions default varies depending on platform and language; only
-  // pass if specified.
- if (Arg *A = Args.getLastArg(options::OPT_fexceptions,
-                               options::OPT_fno_exceptions)) {
-    if (A->getOption().matches(options::OPT_fexceptions))
-      CmdArgs.push_back("-fexceptions");
-    else
-      CmdArgs.push_back("-fexceptions=0");
-  }
+  if (needsExceptions(Args, InputType, getToolChain().getTriple()))
+    CmdArgs.push_back("-fexceptions");
+  else
+    CmdArgs.push_back("-fexceptions=0");
 
   // -frtti is default, only pass non-default.
   if (!Args.hasFlag(options::OPT_frtti, options::OPT_fno_rtti))
@@ -885,7 +927,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Arg *A = Args.getLastArg(options::OPT_funit_at_a_time,
                                options::OPT_fno_unit_at_a_time)) {
     if (A->getOption().matches(options::OPT_fno_unit_at_a_time))
-      D.Diag(clang::diag::err_drv_clang_unsupported) << A->getAsString(Args);
+      D.Diag(clang::diag::warn_drv_clang_unsupported) << A->getAsString(Args);
   }
 
   // Default to -fno-builtin-str{cat,cpy} on Darwin for ARM.
@@ -2120,7 +2162,7 @@ void auroraux::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   const char *Exec =
-    Args.MakeArgString(getToolChain().GetProgramPath(C, "as"));
+    Args.MakeArgString(getToolChain().GetProgramPath(C, "gas"));
   Dest.addCommand(new Command(JA, Exec, CmdArgs));
 }
 
@@ -2135,18 +2177,19 @@ void auroraux::Link::ConstructJob(Compilation &C, const JobAction &JA,
   if ((!Args.hasArg(options::OPT_nostdlib)) &&
      (!Args.hasArg(options::OPT_shared))) {
     CmdArgs.push_back("-e");
-    CmdArgs.push_back("__start");
+    CmdArgs.push_back("_start");
   }
 
   if (Args.hasArg(options::OPT_static)) {
     CmdArgs.push_back("-Bstatic");
+    CmdArgs.push_back("-dn");
   } else {
-    CmdArgs.push_back("--eh-frame-hdr");
+//    CmdArgs.push_back("--eh-frame-hdr");
     CmdArgs.push_back("-Bdynamic");
     if (Args.hasArg(options::OPT_shared)) {
       CmdArgs.push_back("-shared");
     } else {
-      CmdArgs.push_back("-dynamic-linker");
+      CmdArgs.push_back("--dynamic-linker");
       CmdArgs.push_back("/lib/ld.so.1"); // 64Bit Path /lib/amd64/ld.so.1
     }
   }
@@ -2164,11 +2207,14 @@ void auroraux::Link::ConstructJob(Compilation &C, const JobAction &JA,
   if (!Args.hasArg(options::OPT_nostdlib) &&
       !Args.hasArg(options::OPT_nostartfiles)) {
     if (!Args.hasArg(options::OPT_shared)) {
-      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crt0.o")));
+      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crt1.o")));
+      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crti.o")));
       CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtbegin.o")));
     } else {
-      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtbeginS.o")));
+      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crti.o")));
+//      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtbeginS.o")));
     }
+    CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtn.o")));
   }
 
   CmdArgs.push_back(MakeFormattedString(Args,
@@ -2213,8 +2259,8 @@ void auroraux::Link::ConstructJob(Compilation &C, const JobAction &JA,
       !Args.hasArg(options::OPT_nostartfiles)) {
     if (!Args.hasArg(options::OPT_shared))
       CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtend.o")));
-    else
-      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtendS.o")));
+//    else
+//      CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath(C, "crtendS.o")));
   }
 
   const char *Exec =

@@ -74,6 +74,13 @@ public:
 
   BitVector getReservedRegs(const MachineFunction &MF) const;
 
+  /// getMatchingSuperRegClass - Return a subclass of the specified register
+  /// class A so that each register in it has a sub-register of the
+  /// specified sub-register index which is in the specified register class B.
+  virtual const TargetRegisterClass *
+  getMatchingSuperRegClass(const TargetRegisterClass *A,
+                           const TargetRegisterClass *B, unsigned Idx) const;
+
   const TargetRegisterClass *getPointerRegClass(unsigned Kind = 0) const;
 
   std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
@@ -122,14 +129,17 @@ public:
 
   virtual bool requiresRegisterScavenging(const MachineFunction &MF) const;
 
+  virtual bool requiresFrameIndexScavenging(const MachineFunction &MF) const;
+
   virtual bool hasReservedCallFrame(MachineFunction &MF) const;
 
   virtual void eliminateCallFramePseudoInstr(MachineFunction &MF,
                                              MachineBasicBlock &MBB,
                                              MachineBasicBlock::iterator I) const;
 
-  virtual void eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                   int SPAdj, RegScavenger *RS = NULL) const;
+  virtual unsigned eliminateFrameIndex(MachineBasicBlock::iterator II,
+                                       int SPAdj, int *Value = NULL,
+                                       RegScavenger *RS = NULL) const;
 
   virtual void emitPrologue(MachineFunction &MF) const;
   virtual void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;

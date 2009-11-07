@@ -2,7 +2,6 @@
 // RUN: not grep __builtin %t
 
 #include <stdio.h>
-#include <math.h>
 
 void p(char *str, int x) {
   printf("%s: %d\n", str, x);

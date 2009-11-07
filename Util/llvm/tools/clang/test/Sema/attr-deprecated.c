@@ -43,3 +43,15 @@ void test1(struct foo *F) {
 
 typedef struct foo foo_dep __attribute__((deprecated));
 foo_dep *test2;    // expected-warning {{'foo_dep' is deprecated}}
+
+struct bar_dep __attribute__((deprecated, 
+                              invalid_attribute));  // expected-warning {{'invalid_attribute' attribute ignored}}
+
+struct bar_dep *test3;   // expected-warning {{'bar_dep' is deprecated}}
+
+
+// These should not warn because the actually declaration itself is deprecated.
+// rdar://6756623
+foo_dep *test4 __attribute__((deprecated));
+struct bar_dep *test5 __attribute__((deprecated));
+

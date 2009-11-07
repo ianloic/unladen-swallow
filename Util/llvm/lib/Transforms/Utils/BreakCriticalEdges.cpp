@@ -26,7 +26,6 @@
 #include "llvm/Instructions.h"
 #include "llvm/Type.h"
 #include "llvm/Support/CFG.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -35,7 +34,7 @@ using namespace llvm;
 STATISTIC(NumBroken, "Number of blocks inserted");
 
 namespace {
-  struct VISIBILITY_HIDDEN BreakCriticalEdges : public FunctionPass {
+  struct BreakCriticalEdges : public FunctionPass {
     static char ID; // Pass identification, replacement for typeid
     BreakCriticalEdges() : FunctionPass(&ID) {}
 

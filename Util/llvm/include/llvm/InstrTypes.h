@@ -53,7 +53,7 @@ protected:
   virtual void setSuccessorV(unsigned idx, BasicBlock *B) = 0;
 public:
 
-  virtual TerminatorInst *clone(LLVMContext &Context) const = 0;
+  virtual TerminatorInst *clone() const = 0;
 
   /// getNumSuccessors - Return the number of successors that this terminator
   /// has.
@@ -116,9 +116,7 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const UnaryInstruction *) { return true; }
   static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::Malloc ||
-           I->getOpcode() == Instruction::Alloca ||
-           I->getOpcode() == Instruction::Free ||
+    return I->getOpcode() == Instruction::Alloca ||
            I->getOpcode() == Instruction::Load ||
            I->getOpcode() == Instruction::VAArg ||
            I->getOpcode() == Instruction::ExtractValue ||
@@ -216,6 +214,27 @@ public:
     return BO;
   }
 
+  /// CreateNSWSub - Create an Sub operator with the NSW flag set.
+  ///
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name = "") {
+    BinaryOperator *BO = CreateSub(V1, V2, Name);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name, BasicBlock *BB) {
+    BinaryOperator *BO = CreateSub(V1, V2, Name, BB);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+  static BinaryOperator *CreateNSWSub(Value *V1, Value *V2,
+                                      const Twine &Name, Instruction *I) {
+    BinaryOperator *BO = CreateSub(V1, V2, Name, I);
+    BO->setHasNoSignedWrap(true);
+    return BO;
+  }
+
   /// CreateExactSDiv - Create an SDiv operator with the exact flag set.
   ///
   static BinaryOperator *CreateExactSDiv(Value *V1, Value *V2,
@@ -278,7 +297,7 @@ public:
     return static_cast<BinaryOps>(Instruction::getOpcode());
   }
 
-  virtual BinaryOperator *clone(LLVMContext &Context) const;
+  virtual BinaryOperator *clone() const;
 
   /// swapOperands - Exchange the two operands to this instruction.
   /// This instruction is safe to use on any binary instruction and
@@ -290,17 +309,26 @@ public:
   /// setHasNoUnsignedWrap - Set or clear the nsw flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setHasNoUnsignedWrap(bool);
+  void setHasNoUnsignedWrap(bool b = true);
 
   /// setHasNoSignedWrap - Set or clear the nsw flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setHasNoSignedWrap(bool);
+  void setHasNoSignedWrap(bool b = true);
 
   /// setIsExact - Set or clear the exact flag on this instruction,
   /// which must be an operator which supports this flag. See LangRef.html
   /// for the meaning of this flag.
-  void setIsExact(bool);
+  void setIsExact(bool b = true);
+
+  /// hasNoUnsignedWrap - Determine whether the no unsigned wrap flag is set.
+  bool hasNoUnsignedWrap() const;
+
+  /// hasNoSignedWrap - Determine whether the no signed wrap flag is set.
+  bool hasNoSignedWrap() const;
+
+  /// isExact - Determine whether the exact flag is set.
+  bool isExact() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const BinaryOperator *) { return true; }
@@ -689,6 +717,30 @@ public:
   /// @brief Determine if this is an equals/not equals predicate.
   bool isEquality();
 
+  /// @returns true if the comparison is signed, false otherwise.
+  /// @brief Determine if this instruction is using a signed comparison.
+  bool isSigned() const {
+    return isSigned(getPredicate());
+  }
+
+  /// @returns true if the comparison is unsigned, false otherwise.
+  /// @brief Determine if this instruction is using an unsigned comparison.
+  bool isUnsigned() const {
+    return isUnsigned(getPredicate());
+  }
+
+  /// This is just a convenience.
+  /// @brief Determine if this is true when both operands are the same.
+  bool isTrueWhenEqual() const {
+    return isTrueWhenEqual(getPredicate());
+  }
+
+  /// This is just a convenience.
+  /// @brief Determine if this is false when both operands are the same.
+  bool isFalseWhenEqual() const {
+    return isFalseWhenEqual(getPredicate());
+  }
+
   /// @returns true if the predicate is unsigned, false otherwise.
   /// @brief Determine if the predicate is an unsigned operation.
   static bool isUnsigned(unsigned short predicate);
@@ -702,6 +754,12 @@ public:
 
   /// @brief Determine if the predicate is an unordered operation.
   static bool isUnordered(unsigned short predicate);
+
+  /// Determine if the predicate is true when comparing a value with itself.
+  static bool isTrueWhenEqual(unsigned short predicate);
+
+  /// Determine if the predicate is false when comparing a value with itself.
+  static bool isFalseWhenEqual(unsigned short predicate);
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const CmpInst *) { return true; }

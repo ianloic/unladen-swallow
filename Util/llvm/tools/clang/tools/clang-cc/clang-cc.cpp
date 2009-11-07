@@ -138,6 +138,7 @@ enum ProgActions {
   ASTDump,                      // Parse ASTs and dump them.
   ASTView,                      // Parse ASTs and view them in Graphviz.
   PrintDeclContext,             // Print DeclContext and their Decls.
+  DumpRecordLayouts,            // Dump record layout information.
   ParsePrintCallbacks,          // Parse and print each callback.
   ParseSyntaxOnly,              // Parse and perform semantic analysis.
   ParseNoop,                    // Parse with noop callbacks.
@@ -183,6 +184,8 @@ ProgAction(llvm::cl::desc("Choose output type:"), llvm::cl::ZeroOrMore,
                         "Build ASTs and view them with GraphViz"),
              clEnumValN(PrintDeclContext, "print-decl-contexts",
                         "Print DeclContexts and their Decls"),
+             clEnumValN(DumpRecordLayouts, "dump-record-layouts",
+                        "Dump record layout information"),
              clEnumValN(GeneratePTH, "emit-pth",
                         "Generate pre-tokenized header file"),
              clEnumValN(GeneratePCH, "emit-pch",
@@ -214,10 +217,10 @@ OutputFile("o",
  llvm::cl::desc("Specify output file"));
 
 
-static llvm::cl::opt<int>
-DumpCodeCompletion("code-completion-dump",
-                   llvm::cl::value_desc("N"),
-                   llvm::cl::desc("Dump code-completion information at $$N$$"));
+static llvm::cl::opt<ParsedSourceLocation>
+CodeCompletionAt("code-completion-at",
+                 llvm::cl::value_desc("file:line:column"),
+              llvm::cl::desc("Dump code-completion information at a location"));
 
 /// \brief Buld a new code-completion consumer that prints the results of
 /// code completion to standard output.
@@ -515,8 +518,7 @@ static void InitializeLangOptions(LangOptions &Options, LangKind LK){
 enum LangStds {
   lang_unspecified,
   lang_c89, lang_c94, lang_c99,
-  lang_gnu_START,
-  lang_gnu89 = lang_gnu_START, lang_gnu99,
+  lang_gnu89, lang_gnu99,
   lang_cxx98, lang_gnucxx98,
   lang_cxx0x, lang_gnucxx0x
 };
@@ -749,7 +751,22 @@ static void InitializeLanguageStandard(LangOptions &Options, LangKind LK,
   }
 
   // GNUMode - Set if we're in gnu99, gnu89, gnucxx98, etc.
-  Options.GNUMode = LangStd >= lang_gnu_START;
+  switch (LangStd) {
+  default: assert(0 && "Unknown language standard!");
+  case lang_gnucxx0x:
+  case lang_gnucxx98:
+  case lang_gnu99:
+  case lang_gnu89:
+    Options.GNUMode = 1;
+    break;
+  case lang_cxx0x:
+  case lang_cxx98:
+  case lang_c99:
+  case lang_c94:
+  case lang_c89:
+    Options.GNUMode = 0;
+    break;
+  }
 
   if (Options.CPlusPlus) {
     Options.C99 = 0;
@@ -894,15 +911,6 @@ static void HandleMacOSVersionMin(llvm::Triple &Triple) {
   }
   
   unsigned VersionNum = MacOSVersionMin[3]-'0';
-
-  if (VersionNum <= 4 && Triple.getArch() == llvm::Triple::x86_64) {
-    fprintf(stderr,
-            "-mmacosx-version-min=%s is invalid with -arch x86_64.\n",
-            MacOSVersionMin.c_str());
-    exit(1);
-  }
-
-  
   llvm::SmallString<16> NewDarwinString;
   NewDarwinString += "darwin";
   
@@ -1081,6 +1089,10 @@ RelocatablePCH("relocatable-pch",
 static llvm::cl::opt<bool>
 nostdinc("nostdinc", llvm::cl::desc("Disable standard #include directories"));
 
+static llvm::cl::opt<bool>
+nobuiltininc("nobuiltininc",
+             llvm::cl::desc("Disable builtin #include directories"));
+
 // Various command line options.  These four add directories to each chain.
 static llvm::cl::list<std::string>
 F_dirs("F", llvm::cl::value_desc("directory"), llvm::cl::Prefix,
@@ -1116,10 +1128,34 @@ isysroot("isysroot", llvm::cl::value_desc("dir"), llvm::cl::init("/"),
 
 // Finally, implement the code that groks the options above.
 
+// Add the clang headers, which are relative to the clang binary.
+void AddClangIncludePaths(const char *Argv0, InitHeaderSearch *Init) {
+  llvm::sys::Path MainExecutablePath =
+     llvm::sys::Path::GetMainExecutable(Argv0,
+                                    (void*)(intptr_t)AddClangIncludePaths);
+  if (MainExecutablePath.isEmpty())
+    return;
+
+  MainExecutablePath.eraseComponent();  // Remove /clang from foo/bin/clang
+  MainExecutablePath.eraseComponent();  // Remove /bin   from foo/bin
+
+  // Get foo/lib/clang/<version>/include
+  MainExecutablePath.appendComponent("lib");
+  MainExecutablePath.appendComponent("clang");
+  MainExecutablePath.appendComponent(CLANG_VERSION_STRING);
+  MainExecutablePath.appendComponent("include");
+
+  // We pass true to ignore sysroot so that we *always* look for clang headers
+  // relative to our executable, never relative to -isysroot.
+  Init->AddPath(MainExecutablePath.c_str(), InitHeaderSearch::System,
+		false, false, false, true /*ignore sysroot*/);
+}
+
 /// InitializeIncludePaths - Process the -I options and set them in the
 /// HeaderSearch object.
 void InitializeIncludePaths(const char *Argv0, HeaderSearch &Headers,
-                            FileManager &FM, const LangOptions &Lang) {
+                            FileManager &FM, const LangOptions &Lang,
+                            llvm::Triple &triple) {
   InitHeaderSearch Init(Headers, Verbose, isysroot);
 
   // Handle -I... and -F... options, walking the lists in parallel.
@@ -1195,28 +1231,11 @@ void InitializeIncludePaths(const char *Argv0, HeaderSearch &Headers,
 
   Init.AddDefaultEnvVarPaths(Lang);
 
-  // Add the clang headers, which are relative to the clang binary.
-  llvm::sys::Path MainExecutablePath =
-     llvm::sys::Path::GetMainExecutable(Argv0,
-                                    (void*)(intptr_t)InitializeIncludePaths);
-  if (!MainExecutablePath.isEmpty()) {
-    MainExecutablePath.eraseComponent();  // Remove /clang from foo/bin/clang
-    MainExecutablePath.eraseComponent();  // Remove /bin   from foo/bin
-
-    // Get foo/lib/clang/<version>/include
-    MainExecutablePath.appendComponent("lib");
-    MainExecutablePath.appendComponent("clang");
-    MainExecutablePath.appendComponent(CLANG_VERSION_STRING);
-    MainExecutablePath.appendComponent("include");
-
-    // We pass true to ignore sysroot so that we *always* look for clang headers
-    // relative to our executable, never relative to -isysroot.
-    Init.AddPath(MainExecutablePath.c_str(), InitHeaderSearch::System,
-                 false, false, false, true /*ignore sysroot*/);
-  }
+  if (!nobuiltininc)
+    AddClangIncludePaths(Argv0, &Init);
 
   if (!nostdinc)
-    Init.AddDefaultSystemIncludePaths(Lang);
+    Init.AddDefaultSystemIncludePaths(Lang, triple);
 
   // Now that we have collected all of the include paths, merge them all
   // together and tell the preprocessor about them.
@@ -1774,6 +1793,9 @@ static ASTConsumer *CreateConsumerAction(Preprocessor &PP,
   case PrintDeclContext:
     return CreateDeclContextPrinter();
 
+  case DumpRecordLayouts:
+    return CreateRecordLayoutDumper();
+
   case InheritanceView:
     return CreateInheritanceViewer(InheritanceViewCls);
 
@@ -2057,17 +2079,22 @@ static void ProcessInputFile(Preprocessor &PP, PreprocessorFactory &PPF,
     CodeCompleteConsumer *(*CreateCodeCompleter)(Sema &, void *) = 0;
     void *CreateCodeCompleterData = 0;
     
-    if (DumpCodeCompletion) {
-      // To dump code-completion information, we chop off the file at the
-      // location of the string $$N$$, where N is the value provided to
-      // -code-completion-dump, and then tell the lexer to return a 
-      // code-completion token before it hits the end of the file.
-      // FIXME: Find $$N$$ in the main file buffer
-      
-      PP.SetMainFileEofCodeCompletion();
-      
-      // Set up the creation routine for code-completion.
-      CreateCodeCompleter = BuildPrintingCodeCompleter;
+    if (!CodeCompletionAt.FileName.empty()) {
+      // Tell the source manager to chop off the given file at a specific
+      // line and column.
+      if (const FileEntry *Entry 
+            = PP.getFileManager().getFile(CodeCompletionAt.FileName)) {
+        // Truncate the named file at the given line/column.
+        PP.getSourceManager().truncateFileAt(Entry, CodeCompletionAt.Line,
+                                             CodeCompletionAt.Column);
+        
+        // Set up the creation routine for code-completion.
+        CreateCodeCompleter = BuildPrintingCodeCompleter;
+      } else {
+        PP.getDiagnostics().Report(FullSourceLoc(), 
+                                   diag::err_fe_invalid_code_complete_file)
+          << CodeCompletionAt.FileName;
+      }
     }
 
     ParseAST(PP, Consumer.get(), *ContextOwner.get(), Stats,
@@ -2152,8 +2179,7 @@ static void ProcessASTInputFile(const std::string &InFile, ProgActions PA,
                                 Diagnostic &Diags, FileManager &FileMgr,
                                 llvm::LLVMContext& Context) {
   std::string Error;
-  llvm::OwningPtr<ASTUnit> AST(ASTUnit::LoadFromPCHFile(InFile, Diags, FileMgr,
-                                                        &Error));
+  llvm::OwningPtr<ASTUnit> AST(ASTUnit::LoadFromPCHFile(InFile, &Error));
   if (!AST) {
     Diags.Report(FullSourceLoc(), diag::err_fe_invalid_ast_file) << Error;
     return;
@@ -2373,7 +2399,7 @@ int main(int argc, char **argv) {
     HeaderSearch HeaderInfo(FileMgr);
 
 
-    InitializeIncludePaths(argv[0], HeaderInfo, FileMgr, LangInfo);
+    InitializeIncludePaths(argv[0], HeaderInfo, FileMgr, LangInfo, Triple);
 
     // Set up the preprocessor with these options.
     DriverPreprocessorFactory PPFactory(Diags, LangInfo, *Target,

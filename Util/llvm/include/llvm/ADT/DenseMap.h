@@ -145,6 +145,9 @@ public:
     return ValueT();
   }
 
+  // Inserts key,value pair into the map if the key isn't already in the map.
+  // If the key is already in the map, it returns false and doesn't update the
+  // value.
   std::pair<iterator, bool> insert(const std::pair<KeyT, ValueT> &KV) {
     BucketT *TheBucket;
     if (LookupBucketFor(KV.first, TheBucket))
@@ -451,12 +454,12 @@ public:
     return Ptr != RHS.Ptr;
   }
 
-  inline DenseMapIterator& operator++() {          // Preincrement
+  inline DenseMapIterator& operator++() {  // Preincrement
     ++Ptr;
     AdvancePastEmptyBuckets();
     return *this;
   }
-  DenseMapIterator operator++(int) {        // Postincrement
+  DenseMapIterator operator++(int) {  // Postincrement
     DenseMapIterator tmp = *this; ++*this; return tmp;
   }
 

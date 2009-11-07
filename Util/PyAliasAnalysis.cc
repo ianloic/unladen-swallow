@@ -73,14 +73,16 @@ public:
         : FunctionPass(&ID), context_(&global_data.context()),
           global_data_(global_data),
           tracing_possible_(NULL),
-          profiling_possible_(NULL) {}
+          profiling_possible_(NULL),
+          py_ticker_(NULL) {}
 
     // Exists for the pass registration infrastructure.
     PyAliasAnalysis()
         : FunctionPass(&ID), context_(NULL),
           global_data_(*PyGlobalLlvmData::Get()),
           tracing_possible_(NULL),
-          profiling_possible_(NULL) {}
+          profiling_possible_(NULL),
+          py_ticker_(NULL) {}
 
     virtual void getAnalysisUsage(llvm::AnalysisUsage &usage) const {
         AliasAnalysis::getAnalysisUsage(usage);
@@ -135,6 +137,7 @@ private:
 
     const GlobalVariable *tracing_possible_;
     const GlobalVariable *profiling_possible_;
+    const GlobalVariable *py_ticker_;
 
     // These are GlobalVariables for builtin types that we know are constant.
     SmallPtrSet<const GlobalVariable*, 8> constant_types_;
@@ -170,6 +173,8 @@ PyAliasAnalysis::doInitialization(Module& module)
         module.getGlobalVariable("_Py_TracingPossible");
     this->profiling_possible_ =
         module.getGlobalVariable("_Py_ProfilingPossible");
+    this->py_ticker_ =
+        module.getGlobalVariable("_Py_Ticker");
 
     this->constant_types_.clear();
     this->types_with_constant_values_.clear();
@@ -243,11 +248,13 @@ PyAliasAnalysis::alias(const Value *V1, unsigned V1Size,
 {
     if (V1 == V2)
         return MustAlias;
-    // No code copies the address of _Py_{Profiling,Tracing}Possible, so they
-    // can't alias any other pointer.
+    // No code ever copies the address of these variables, so they can't alias
+    // any other pointer.
     if (V1 == this->tracing_possible_ || V2 == this->tracing_possible_)
         return NoAlias;
     if (V1 == this->profiling_possible_ || V2 == this->profiling_possible_)
+        return NoAlias;
+    if (V1 == this->py_ticker_ || V2 == this->py_ticker_)
         return NoAlias;
     return AliasAnalysis::alias(V1, V1Size, V2, V2Size);
 }

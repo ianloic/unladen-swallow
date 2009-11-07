@@ -70,7 +70,7 @@ namespace {
   /// PBQP based allocators solve the register allocation problem by mapping
   /// register allocation problems to Partitioned Boolean Quadratic
   /// Programming problems.
-  class VISIBILITY_HIDDEN PBQPRegAlloc : public MachineFunctionPass {
+  class PBQPRegAlloc : public MachineFunctionPass {
   public:
 
     static char ID;
@@ -684,7 +684,7 @@ void PBQPRegAlloc::addStackInterval(const LiveInterval *spilled,
     vni = stackInterval.getValNumInfo(0);
   else
     vni = stackInterval.getNextValue(
-      MachineInstrIndex(), 0, false, lss->getVNInfoAllocator());
+      LiveIndex(), 0, false, lss->getVNInfoAllocator());
 
   LiveInterval &rhsInterval = lis->getInterval(spilled->reg);
   stackInterval.MergeRangesInAsValue(rhsInterval, vni);

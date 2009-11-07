@@ -159,7 +159,9 @@ static const Type *isSingleElementStruct(QualType T, ASTContext &Context) {
 }
 
 static bool is32Or64BitBasicType(QualType Ty, ASTContext &Context) {
-  if (!Ty->getAs<BuiltinType>() && !Ty->isPointerType())
+  if (!Ty->getAs<BuiltinType>() && !Ty->isAnyPointerType() &&
+      !Ty->isAnyComplexType() && !Ty->isEnumeralType() &&
+      !Ty->isBlockPointerType())
     return false;
 
   uint64_t Size = Context.getTypeSize(Ty);
@@ -291,8 +293,10 @@ bool X86_32ABIInfo::shouldReturnTypeInRegister(QualType Ty,
     return true;
   }
 
-  // If this is a builtin, pointer, or complex type, it is ok.
-  if (Ty->getAs<BuiltinType>() || Ty->isPointerType() || Ty->isAnyComplexType())
+  // If this is a builtin, pointer, enum, or complex type, it is ok.
+  if (Ty->getAs<BuiltinType>() || Ty->isAnyPointerType() || 
+      Ty->isAnyComplexType() || Ty->isEnumeralType() ||
+      Ty->isBlockPointerType())
     return true;
 
   // Arrays are treated like records.
@@ -349,11 +353,17 @@ ABIArgInfo X86_32ABIInfo::classifyReturnType(QualType RetTy,
 
     return ABIArgInfo::getDirect();
   } else if (CodeGenFunction::hasAggregateLLVMType(RetTy)) {
-    // Structures with flexible arrays are always indirect.
-    if (const RecordType *RT = RetTy->getAsStructureType())
+    if (const RecordType *RT = RetTy->getAsStructureType()) {
+      // Structures with either a non-trivial destructor or a non-trivial
+      // copy constructor are always indirect.
+      if (hasNonTrivialDestructorOrCopyConstructor(RT))
+        return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
+      
+      // Structures with flexible arrays are always indirect.
       if (RT->getDecl()->hasFlexibleArrayMember())
         return ABIArgInfo::getIndirect(0);
-
+    }
+    
     // If specified, structs and unions are always indirect.
     if (!IsSmallStructInRegABI && !RetTy->isAnyComplexType())
       return ABIArgInfo::getIndirect(0);
@@ -380,8 +390,7 @@ ABIArgInfo X86_32ABIInfo::classifyReturnType(QualType RetTy,
       } else if (SeltTy->isPointerType()) {
         // FIXME: It would be really nice if this could come out as the proper
         // pointer type.
-        llvm::Type *PtrTy =
-          llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+        const llvm::Type *PtrTy = llvm::Type::getInt8PtrTy(VMContext);
         return ABIArgInfo::getCoerce(PtrTy);
       } else if (SeltTy->isVectorType()) {
         // 64- and 128-bit vectors are never returned in a
@@ -451,7 +460,7 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
 
 llvm::Value *X86_32ABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                       CodeGenFunction &CGF) const {
-  const llvm::Type *BP = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(CGF.getLLVMContext()));
+  const llvm::Type *BP = llvm::Type::getInt8PtrTy(CGF.getLLVMContext());
   const llvm::Type *BPP = llvm::PointerType::getUnqual(BP);
 
   CGBuilderTy &Builder = CGF.Builder;
@@ -832,7 +841,7 @@ ABIArgInfo X86_64ABIInfo::getCoerceResult(QualType Ty,
   if (CoerceTo == llvm::Type::getInt64Ty(CoerceTo->getContext())) {
     // Integer and pointer types will end up in a general purpose
     // register.
-    if (Ty->isIntegralType() || Ty->isPointerType())
+    if (Ty->isIntegralType() || Ty->hasPointerRepresentation())
       return (Ty->isPromotableIntegerType() ?
               ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
   } else if (CoerceTo == llvm::Type::getDoubleTy(CoerceTo->getContext())) {
@@ -1585,8 +1594,7 @@ ABIArgInfo ARMABIInfo::classifyReturnType(QualType RetTy,
 llvm::Value *ARMABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                       CodeGenFunction &CGF) const {
   // FIXME: Need to handle alignment
-  const llvm::Type *BP =
-      llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(CGF.getLLVMContext()));
+  const llvm::Type *BP = llvm::Type::getInt8PtrTy(CGF.getLLVMContext());
   const llvm::Type *BPP = llvm::PointerType::getUnqual(BP);
 
   CGBuilderTy &Builder = CGF.Builder;
@@ -1742,14 +1750,14 @@ const ABIInfo &CodeGenTypes::getABIInfo() const {
     return *(TheABIInfo = new SystemZABIInfo());
 
   case llvm::Triple::x86:
-    if (Triple.getOS() == llvm::Triple::Darwin)
-      return *(TheABIInfo = new X86_32ABIInfo(Context, true, true));
-
     switch (Triple.getOS()) {
+    case llvm::Triple::Darwin:
+      return *(TheABIInfo = new X86_32ABIInfo(Context, true, true));
     case llvm::Triple::Cygwin:
-    case llvm::Triple::DragonFly:
     case llvm::Triple::MinGW32:
     case llvm::Triple::MinGW64:
+    case llvm::Triple::AuroraUX:
+    case llvm::Triple::DragonFly:
     case llvm::Triple::FreeBSD:
     case llvm::Triple::OpenBSD:
       return *(TheABIInfo = new X86_32ABIInfo(Context, false, true));

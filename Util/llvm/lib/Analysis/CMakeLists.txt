@@ -11,7 +11,9 @@ add_llvm_library(LLVMAnalysis
   ConstantFolding.cpp
   DbgInfoPrinter.cpp
   DebugInfo.cpp
+  DomPrinter.cpp
   IVUsers.cpp
+  InlineCost.cpp
   InstCount.cpp
   Interval.cpp
   IntervalPartition.cpp
@@ -21,8 +23,7 @@ add_llvm_library(LLVMAnalysis
   LoopDependenceAnalysis.cpp
   LoopInfo.cpp
   LoopPass.cpp
-  LoopVR.cpp
-  MallocHelper.cpp
+  MallocFreeHelper.cpp
   MemoryDependenceAnalysis.cpp
   PointerTracking.cpp
   PostDominators.cpp

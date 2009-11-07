@@ -204,17 +204,6 @@ namespace llvm {
       LCMPXCHG_DAG,
       LCMPXCHG8_DAG,
 
-      // ATOMADD64_DAG, ATOMSUB64_DAG, ATOMOR64_DAG, ATOMAND64_DAG, 
-      // ATOMXOR64_DAG, ATOMNAND64_DAG, ATOMSWAP64_DAG - 
-      // Atomic 64-bit binary operations.
-      ATOMADD64_DAG,
-      ATOMSUB64_DAG,
-      ATOMOR64_DAG,
-      ATOMXOR64_DAG,
-      ATOMAND64_DAG,
-      ATOMNAND64_DAG,
-      ATOMSWAP64_DAG,
-
       // FNSTCW16m - Store FP control world into i16 memory.
       FNSTCW16m,
 
@@ -248,7 +237,18 @@ namespace llvm {
       // VASTART_SAVE_XMM_REGS - Save xmm argument registers to the stack,
       // according to %al. An operator is needed so that this can be expanded
       // with control flow.
-      VASTART_SAVE_XMM_REGS
+      VASTART_SAVE_XMM_REGS,
+
+      // ATOMADD64_DAG, ATOMSUB64_DAG, ATOMOR64_DAG, ATOMAND64_DAG, 
+      // ATOMXOR64_DAG, ATOMNAND64_DAG, ATOMSWAP64_DAG - 
+      // Atomic 64-bit binary operations.
+      ATOMADD64_DAG = ISD::FIRST_TARGET_MEMORY_OPCODE,
+      ATOMSUB64_DAG,
+      ATOMOR64_DAG,
+      ATOMXOR64_DAG,
+      ATOMAND64_DAG,
+      ATOMNAND64_DAG,
+      ATOMSWAP64_DAG
     };
   }
 
@@ -323,20 +323,26 @@ namespace llvm {
     /// specifies a shuffle of elements that is suitable for input to MOVDDUP.
     bool isMOVDDUPMask(ShuffleVectorSDNode *N);
 
+    /// isPALIGNRMask - Return true if the specified VECTOR_SHUFFLE operand
+    /// specifies a shuffle of elements that is suitable for input to PALIGNR.
+    bool isPALIGNRMask(ShuffleVectorSDNode *N);
+
     /// getShuffleSHUFImmediate - Return the appropriate immediate to shuffle
     /// the specified isShuffleMask VECTOR_SHUFFLE mask with PSHUF* and SHUFP*
     /// instructions.
     unsigned getShuffleSHUFImmediate(SDNode *N);
 
     /// getShufflePSHUFHWImmediate - Return the appropriate immediate to shuffle
-    /// the specified isShuffleMask VECTOR_SHUFFLE mask with PSHUFHW
-    /// instructions.
+    /// the specified VECTOR_SHUFFLE mask with PSHUFHW instruction.
     unsigned getShufflePSHUFHWImmediate(SDNode *N);
 
-    /// getShufflePSHUFKWImmediate - Return the appropriate immediate to shuffle
-    /// the specified isShuffleMask VECTOR_SHUFFLE mask with PSHUFLW
-    /// instructions.
+    /// getShufflePSHUFLWImmediate - Return the appropriate immediate to shuffle
+    /// the specified VECTOR_SHUFFLE mask with PSHUFLW instruction.
     unsigned getShufflePSHUFLWImmediate(SDNode *N);
+
+    /// getShufflePALIGNRImmediate - Return the appropriate immediate to shuffle
+    /// the specified VECTOR_SHUFFLE mask with the PALIGNR instruction.
+    unsigned getShufflePALIGNRImmediate(SDNode *N);
 
     /// isZeroNode - Returns true if Elt is a constant zero or a floating point
     /// constant +0.0.

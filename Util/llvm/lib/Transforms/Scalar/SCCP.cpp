@@ -30,7 +30,7 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/MallocHelper.h"
+#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/CallSite.h"
@@ -401,11 +401,10 @@ private:
   void visitStoreInst     (Instruction &I);
   void visitLoadInst      (LoadInst &I);
   void visitGetElementPtrInst(GetElementPtrInst &I);
-  void visitCallInst      (CallInst &I) { 
-    if (isMalloc(&I))
-      markOverdefined(&I);
-    else
-      visitCallSite(CallSite::get(&I));
+  void visitCallInst      (CallInst &I) {
+    if (isFreeCall(&I))
+      return;
+    visitCallSite(CallSite::get(&I));
   }
   void visitInvokeInst    (InvokeInst &II) {
     visitCallSite(CallSite::get(&II));
@@ -414,10 +413,9 @@ private:
   void visitCallSite      (CallSite CS);
   void visitUnwindInst    (TerminatorInst &I) { /*returns void*/ }
   void visitUnreachableInst(TerminatorInst &I) { /*returns void*/ }
-  void visitAllocationInst(Instruction &I) { markOverdefined(&I); }
+  void visitAllocaInst    (Instruction &I) { markOverdefined(&I); }
   void visitVANextInst    (Instruction &I) { markOverdefined(&I); }
   void visitVAArgInst     (Instruction &I) { markOverdefined(&I); }
-  void visitFreeInst      (Instruction &I) { /*returns void*/ }
 
   void visitInstruction(Instruction &I) {
     // If a new instruction is added to LLVM that we don't handle...
@@ -1166,8 +1164,7 @@ void SCCPSolver::visitLoadInst(LoadInst &I) {
     if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0)))
       if (GV->isConstant() && GV->hasDefinitiveInitializer())
         if (Constant *V =
-             ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE,
-                                                    *Context)) {
+             ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE)) {
           markConstant(IV, &I, V);
           return;
         }
@@ -1188,7 +1185,7 @@ void SCCPSolver::visitCallSite(CallSite CS) {
   if (F == 0 || !F->hasLocalLinkage()) {
 CallOverdefined:
     // Void return and not tracking callee, just bail.
-    if (I->getType() == Type::getVoidTy(I->getContext())) return;
+    if (I->getType()->isVoidTy()) return;
     
     // Otherwise, if we have a single return value case, and if the function is
     // a declaration, maybe we can constant fold it.
@@ -1234,7 +1231,10 @@ CallOverdefined:
     TMRVI = TrackedMultipleRetVals.find(std::make_pair(F, 0));
     if (TMRVI == TrackedMultipleRetVals.end())
       goto CallOverdefined;
-    
+
+    // Need to mark as overdefined, otherwise it stays undefined which
+    // creates extractvalue undef, <idx>
+    markOverdefined(I);
     // If we are tracking this callee, propagate the return values of the call
     // into this call site.  We do this by walking all the uses. Single-index
     // ExtractValueInst uses can be tracked; anything more complicated is
@@ -1267,11 +1267,14 @@ CallOverdefined:
   for (Function::arg_iterator AI = F->arg_begin(), E = F->arg_end();
        AI != E; ++AI, ++CAI) {
     LatticeVal &IV = ValueState[AI];
+    if (AI->hasByValAttr() && !F->onlyReadsMemory()) {
+      IV.markOverdefined();
+      continue;
+    }
     if (!IV.isOverdefined())
       mergeInValue(IV, AI, getValueState(*CAI));
   }
 }
-
 
 void SCCPSolver::Solve() {
   // Process the work lists until they are empty!
@@ -1354,7 +1357,7 @@ bool SCCPSolver::ResolvedUndefsIn(Function &F) {
     
     for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
       // Look for instructions which produce undef values.
-      if (I->getType() == Type::getVoidTy(F.getContext())) continue;
+      if (I->getType()->isVoidTy()) continue;
       
       LatticeVal &LV = getValueState(I);
       if (!LV.isUndefined()) continue;
@@ -1593,8 +1596,7 @@ bool SCCP::runOnFunction(Function &F) {
       //
       for (BasicBlock::iterator BI = BB->begin(), E = BB->end(); BI != E; ) {
         Instruction *Inst = BI++;
-        if (Inst->getType() == Type::getVoidTy(F.getContext()) ||
-            isa<TerminatorInst>(Inst))
+        if (Inst->getType()->isVoidTy() || isa<TerminatorInst>(Inst))
           continue;
         
         LatticeVal &IV = Values[Inst];
@@ -1769,7 +1771,7 @@ bool IPSCCP::runOnModule(Module &M) {
       } else {
         for (BasicBlock::iterator BI = BB->begin(), E = BB->end(); BI != E; ) {
           Instruction *Inst = BI++;
-          if (Inst->getType() == Type::getVoidTy(M.getContext()))
+          if (Inst->getType()->isVoidTy())
             continue;
           
           LatticeVal &IV = Values[Inst];
@@ -1846,7 +1848,7 @@ bool IPSCCP::runOnModule(Module &M) {
   for (DenseMap<Function*, LatticeVal>::const_iterator I = RV.begin(),
          E = RV.end(); I != E; ++I)
     if (!I->second.isOverdefined() &&
-        I->first->getReturnType() != Type::getVoidTy(M.getContext())) {
+        !I->first->getReturnType()->isVoidTy()) {
       Function *F = I->first;
       for (Function::iterator BB = F->begin(), E = F->end(); BB != E; ++BB)
         if (ReturnInst *RI = dyn_cast<ReturnInst>(BB->getTerminator()))

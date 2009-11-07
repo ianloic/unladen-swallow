@@ -28,6 +28,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include <string>
 
 namespace llvm {
 template<typename, unsigned> class SmallVector;
@@ -49,6 +50,7 @@ public:
 
     PyCFunction func;
     int flags;
+    int arity;
     std::string name;
 };
 

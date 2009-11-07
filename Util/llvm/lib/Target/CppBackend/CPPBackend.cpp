@@ -1258,25 +1258,6 @@ namespace {
       Out << "\");";
       break;
     }
-    case Instruction::Malloc: {
-      const MallocInst* mallocI = cast<MallocInst>(I);
-      Out << "MallocInst* " << iName << " = new MallocInst("
-          << getCppName(mallocI->getAllocatedType()) << ", ";
-      if (mallocI->isArrayAllocation())
-        Out << opNames[0] << ", " ;
-      Out << "\"";
-      printEscapedString(mallocI->getName());
-      Out << "\", " << bbname << ");";
-      if (mallocI->getAlignment())
-        nl(Out) << iName << "->setAlignment("
-            << mallocI->getAlignment() << ");";
-      break;
-    }
-    case Instruction::Free: {
-      Out << "FreeInst* " << iName << " = new FreeInst("
-          << getCppName(I->getOperand(0)) << ", " << bbname << ");";
-      break;
-    }
     case Instruction::Alloca: {
       const AllocaInst* allocaI = cast<AllocaInst>(I);
       Out << "AllocaInst* " << iName << " = new AllocaInst("

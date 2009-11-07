@@ -26,11 +26,10 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CaptureTracking.h"
-#include "llvm/Analysis/MallocHelper.h"
+#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/UniqueVector.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/InstIterator.h"
 using namespace llvm;
 
@@ -40,7 +39,7 @@ STATISTIC(NumNoCapture, "Number of arguments marked nocapture");
 STATISTIC(NumNoAlias, "Number of function returns marked noalias");
 
 namespace {
-  struct VISIBILITY_HIDDEN FunctionAttrs : public CallGraphSCCPass {
+  struct FunctionAttrs : public CallGraphSCCPass {
     static char ID; // Pass identification, replacement for typeid
     FunctionAttrs() : CallGraphSCCPass(&ID) {}
 
@@ -153,7 +152,7 @@ bool FunctionAttrs::AddReadAttrs(const std::vector<CallGraphNode *> &SCC) {
         // Writes memory.  Just give up.
         return false;
 
-      if (isa<MallocInst>(I) || isMalloc(I))
+      if (isMalloc(I))
         // malloc claims not to write memory!  PR3754.
         return false;
 
@@ -249,9 +248,6 @@ bool FunctionAttrs::IsFunctionMallocLike(Function *F,
       switch (RVI->getOpcode()) {
         // Extend the analysis by looking upwards.
         case Instruction::BitCast:
-          if (isMalloc(RVI))
-            break;
-          // fall through
         case Instruction::GetElementPtr:
           FlowsToReturn.insert(RVI->getOperand(0));
           continue;
@@ -259,20 +255,19 @@ bool FunctionAttrs::IsFunctionMallocLike(Function *F,
           SelectInst *SI = cast<SelectInst>(RVI);
           FlowsToReturn.insert(SI->getTrueValue());
           FlowsToReturn.insert(SI->getFalseValue());
-        } continue;
+          continue;
+        }
         case Instruction::PHI: {
           PHINode *PN = cast<PHINode>(RVI);
           for (int i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
             FlowsToReturn.insert(PN->getIncomingValue(i));
-        } continue;
+          continue;
+        }
 
         // Check whether the pointer came from an allocation.
         case Instruction::Alloca:
-        case Instruction::Malloc:
           break;
         case Instruction::Call:
-          if (isMalloc(RVI))
-            break;
         case Instruction::Invoke: {
           CallSite CS(RVI);
           if (CS.paramHasAttr(0, Attribute::NoAlias))

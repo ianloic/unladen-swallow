@@ -52,13 +52,12 @@ static cl::opt<unsigned> MaxThreads("xcore-max-threads", cl::Optional,
   cl::init(8));
 
 namespace {
-  class VISIBILITY_HIDDEN XCoreAsmPrinter : public AsmPrinter {
-    DwarfWriter *DW;
+  class XCoreAsmPrinter : public AsmPrinter {
     const XCoreSubtarget &Subtarget;
   public:
     explicit XCoreAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
                              const MCAsmInfo *T, bool V)
-      : AsmPrinter(O, TM, T, V), DW(0),
+      : AsmPrinter(O, TM, T, V),
       Subtarget(TM.getSubtarget<XCoreSubtarget>()) {}
 
     virtual const char *getPassName() const {
@@ -84,7 +83,6 @@ namespace {
 
     void printMachineInstruction(const MachineInstr *MI);
     bool runOnMachineFunction(MachineFunction &F);
-    bool doInitialization(Module &M);
     
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AsmPrinter::getAnalysisUsage(AU);
@@ -276,7 +274,6 @@ bool XCoreAsmPrinter::runOnMachineFunction(MachineFunction &MF)
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
 
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
@@ -354,7 +351,7 @@ bool XCoreAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
 void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
 
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
 
   // Check for mov mnemonic
   unsigned src, dst, srcSR, dstSR;
@@ -367,13 +364,8 @@ void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
-}
 
-bool XCoreAsmPrinter::doInitialization(Module &M) {
-  bool Result = AsmPrinter::doInitialization(M);
-  DW = getAnalysisIfAvailable<DwarfWriter>();
-  
-  return Result;
+  processDebugLoc(MI, false);
 }
 
 // Force static initialization.

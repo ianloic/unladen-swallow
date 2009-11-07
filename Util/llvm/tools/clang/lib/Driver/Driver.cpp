@@ -43,26 +43,28 @@ using namespace clang;
 Driver::Driver(const char *_Name, const char *_Dir,
                const char *_DefaultHostTriple,
                const char *_DefaultImageName,
-               Diagnostic &_Diags)
+               bool IsProduction, Diagnostic &_Diags)
   : Opts(new OptTable()), Diags(_Diags),
     Name(_Name), Dir(_Dir), DefaultHostTriple(_DefaultHostTriple),
     DefaultImageName(_DefaultImageName),
     Host(0),
     CCCIsCXX(false), CCCEcho(false), CCCPrintBindings(false),
     CCCGenericGCCName("gcc"), CCCUseClang(true),
-#ifdef USE_PRODUCTION_CLANG
-    CCCUseClangCXX(false),
-#else
-    CCCUseClangCXX(true),
-#endif
-    CCCUseClangCPP(true), CCCUsePCH(true),
+    CCCUseClangCXX(true), CCCUseClangCPP(true), CCCUsePCH(true),
     SuppressMissingInputWarning(false) {
-#ifdef USE_PRODUCTION_CLANG
-  // In a "production" build, only use clang on architectures we expect to work.
-  CCCClangArchs.insert(llvm::Triple::x86);
-  CCCClangArchs.insert(llvm::Triple::x86_64);
-  CCCClangArchs.insert(llvm::Triple::arm);
-#endif
+  if (IsProduction) {
+    // In a "production" build, only use clang on architectures we expect to
+    // work, and don't use clang C++.
+    //
+    // During development its more convenient to always have the driver use
+    // clang, but we don't want users to be confused when things don't work, or
+    // to file bugs for things we don't support.
+    CCCClangArchs.insert(llvm::Triple::x86);
+    CCCClangArchs.insert(llvm::Triple::x86_64);
+    CCCClangArchs.insert(llvm::Triple::arm);
+
+    CCCUseClangCXX = false;
+  }
 }
 
 Driver::~Driver() {
@@ -408,24 +410,16 @@ void Driver::PrintHelp(bool ShowHidden) const {
 }
 
 void Driver::PrintVersion(const Compilation &C, llvm::raw_ostream &OS) const {
-  static char buf[] = "$URL: http://llvm.org/svn/llvm-project/cfe/trunk/lib/Driver/Driver.cpp $";
-  char *zap = strstr(buf, "/lib/Driver");
-  if (zap)
-    *zap = 0;
-  zap = strstr(buf, "/clang/tools/clang");
-  if (zap)
-    *zap = 0;
-  const char *vers = buf+6;
-  // FIXME: Add cmake support and remove #ifdef
-#ifdef SVN_REVISION
-  const char *revision = SVN_REVISION;
-#else
-  const char *revision = "";
-#endif
   // FIXME: The following handlers should use a callback mechanism, we don't
   // know what the client would like to do.
+#ifdef CLANG_VENDOR
+  OS << CLANG_VENDOR;
+#endif
   OS << "clang version " CLANG_VERSION_STRING " ("
-     << vers << " " << revision << ")" << '\n';
+     << getClangSubversionPath();
+  if (unsigned Revision = getClangSubversionRevision())
+    OS << " " << Revision;
+  OS << ")" << '\n';
 
   const ToolChain &TC = C.getDefaultToolChain();
   OS << "Target: " << TC.getTripleString() << '\n';

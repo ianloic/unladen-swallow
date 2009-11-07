@@ -1,4 +1,4 @@
-//===--- DeclCXX.cpp - C++ Declaration AST Node Implementation ------------===//
+//===--- DeclTemplate.cpp - Template Declaration AST Node Implementation --===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -299,7 +299,7 @@ void TemplateArgumentListBuilder::Append(const TemplateArgument& Arg) {
   switch (Arg.getKind()) {
     default: break;
     case TemplateArgument::Type:
-      assert(Arg.getAsType()->isCanonical() && "Type must be canonical!");
+      assert(Arg.getAsType().isCanonical() && "Type must be canonical!");
       break;
   }
 
@@ -372,6 +372,12 @@ TemplateArgumentList::TemplateArgumentList(ASTContext &Context,
     StructuredArguments.setInt(0);
   Builder.ReleaseArgs();
 }
+
+TemplateArgumentList::TemplateArgumentList(const TemplateArgumentList &Other)
+  : FlatArguments(Other.FlatArguments.getPointer(), 1),
+    NumFlatArguments(Other.flat_size()),
+    StructuredArguments(Other.StructuredArguments.getPointer(), 1),
+    NumStructuredArguments(Other.NumStructuredArguments) { }
 
 TemplateArgumentList::~TemplateArgumentList() {
   // FIXME: Deallocate template arguments

@@ -443,7 +443,8 @@ lookdict_string(PyDictObject *mp, PyObject *key, register long hash)
 Internal routine to insert a new item into the table.
 Used both by the internal resize routine and by the public insert routine.
 Eats a reference to key and one to value.
-Returns -1 if an error occurred, or 0 on success.
+Returns -1 if an error occurred; return 0 on success; return 1 on success if
+the insert didn't actually change the dict.
 */
 static int
 insertdict(register PyDictObject *mp, PyObject *key, long hash, PyObject *value)
@@ -464,6 +465,7 @@ insertdict(register PyDictObject *mp, PyObject *key, long hash, PyObject *value)
 		ep->me_value = value;
 		Py_DECREF(old_value); /* which **CAN** re-enter */
 		Py_DECREF(key);
+		return old_value == value;
 	}
 	else {
 		if (ep->me_key == NULL)
@@ -682,6 +684,7 @@ PyDict_SetItem(register PyObject *op, PyObject *key, PyObject *value)
 	register PyDictObject *mp;
 	register long hash;
 	register Py_ssize_t n_used;
+	int status;
 
 	if (!PyDict_Check(op)) {
 		PyErr_BadInternalCall();
@@ -704,9 +707,11 @@ PyDict_SetItem(register PyObject *op, PyObject *key, PyObject *value)
 	n_used = mp->ma_used;
 	Py_INCREF(value);
 	Py_INCREF(key);
-	if (insertdict(mp, key, hash, value) != 0)
+	status = insertdict(mp, key, hash, value);
+	if (status < 0)
 		return -1;
-	notify_watchers(mp);
+	else if (status == 0)
+		notify_watchers(mp);
 	/* If we added a key, we can safely resize.  Otherwise just return!
 	 * If fill >= 2/3 size, adjust size.  Normally, this doubles or
 	 * quaduples the size, but it's also possible for the dict to shrink
@@ -1280,7 +1285,7 @@ dict_fromkeys(PyObject *cls, PyObject *args)
 		while (_PyDict_Next(seq, &pos, &key, &oldvalue, &hash)) {
 			Py_INCREF(key);
 			Py_INCREF(value);
-			if (insertdict(mp, key, hash, value))
+			if (insertdict(mp, key, hash, value) < 0)
 				return NULL;
 		}
 		return d;
@@ -1298,7 +1303,7 @@ dict_fromkeys(PyObject *cls, PyObject *args)
 		while (_PySet_NextEntry(seq, &pos, &key, &hash)) {
 			Py_INCREF(key);
 			Py_INCREF(value);
-			if (insertdict(mp, key, hash, value))
+			if (insertdict(mp, key, hash, value) < 0)
 				return NULL;
 		}
 		return d;
@@ -1496,7 +1501,7 @@ PyDict_Merge(PyObject *a, PyObject *b, int override)
 				Py_INCREF(entry->me_value);
 				if (insertdict(mp, entry->me_key,
 					       (long)entry->me_hash,
-					       entry->me_value) != 0)
+					       entry->me_value) < 0)
 					return -1;
 			}
 		}

@@ -36,7 +36,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
@@ -50,7 +49,7 @@ namespace {
 
   const std::string bss_section(".bss");
 
-  class VISIBILITY_HIDDEN SPUAsmPrinter : public AsmPrinter {
+  class SPUAsmPrinter : public AsmPrinter {
     std::set<std::string> FnStubs, GVStubs;
   public:
     explicit SPUAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
@@ -285,19 +284,17 @@ namespace {
   };
 
   /// LinuxAsmPrinter - SPU assembly printer, customized for Linux
-  class VISIBILITY_HIDDEN LinuxAsmPrinter : public SPUAsmPrinter {
-    DwarfWriter *DW;
+  class LinuxAsmPrinter : public SPUAsmPrinter {
   public:
     explicit LinuxAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
                              const MCAsmInfo *T, bool V)
-      : SPUAsmPrinter(O, TM, T, V), DW(0) {}
+      : SPUAsmPrinter(O, TM, T, V) {}
 
     virtual const char *getPassName() const {
       return "STI CBEA SPU Assembly Printer";
     }
 
     bool runOnMachineFunction(MachineFunction &F);
-    bool doInitialization(Module &M);
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesAll();
@@ -407,11 +404,11 @@ bool SPUAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 ///
 void SPUAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
   printInstruction(MI);
-
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
+  processDebugLoc(MI, false);
   O << '\n';
 }
 
@@ -462,7 +459,6 @@ bool LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
@@ -483,12 +479,6 @@ bool LinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
-
-bool LinuxAsmPrinter::doInitialization(Module &M) {
-  bool Result = AsmPrinter::doInitialization(M);
-  DW = getAnalysisIfAvailable<DwarfWriter>();
-  return Result;
-}
 
 /*!
   Emit a global variable according to its section, alignment, etc.

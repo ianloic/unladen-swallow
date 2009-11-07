@@ -302,9 +302,7 @@ namespace {
     void visitInlineAsm(CallInst &I);
     bool visitBuiltinCall(CallInst &I, Intrinsic::ID ID, bool &WroteCallee);
 
-    void visitMallocInst(MallocInst &I);
     void visitAllocaInst(AllocaInst &I);
-    void visitFreeInst  (FreeInst   &I);
     void visitLoadInst  (LoadInst   &I);
     void visitStoreInst (StoreInst  &I);
     void visitGetElementPtrInst(GetElementPtrInst &I);
@@ -1628,7 +1626,7 @@ void CWriter::writeOperandWithCast(Value* Operand, const ICmpInst &Cmp) {
   }
   
   // Should this be a signed comparison?  If so, convert to signed.
-  bool castIsSigned = Cmp.isSignedPredicate();
+  bool castIsSigned = Cmp.isSigned();
 
   // If the operand was a pointer, convert to a large integer type.
   const Type* OpTy = Operand->getType();
@@ -3405,10 +3403,6 @@ void CWriter::visitInlineAsm(CallInst &CI) {
   Out << ")";
 }
 
-void CWriter::visitMallocInst(MallocInst &I) {
-  llvm_unreachable("lowerallocations pass didn't work!");
-}
-
 void CWriter::visitAllocaInst(AllocaInst &I) {
   Out << '(';
   printType(Out, I.getType());
@@ -3420,10 +3414,6 @@ void CWriter::visitAllocaInst(AllocaInst &I) {
     writeOperand(I.getOperand(0));
   }
   Out << ')';
-}
-
-void CWriter::visitFreeInst(FreeInst &I) {
-  llvm_unreachable("lowerallocations pass didn't work!");
 }
 
 void CWriter::printGEPExpression(Value *Ptr, gep_type_iterator I,
@@ -3690,7 +3680,6 @@ bool CTargetMachine::addPassesToEmitWholeFile(PassManager &PM,
   if (FileType != TargetMachine::AssemblyFile) return true;
 
   PM.add(createGCLoweringPass());
-  PM.add(createLowerAllocationsPass(true));
   PM.add(createLowerInvokePass());
   PM.add(createCFGSimplificationPass());   // clean up after lower invoke.
   PM.add(new CBackendNameAllUsedStructsAndMergeFunctions());

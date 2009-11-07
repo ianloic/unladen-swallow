@@ -166,6 +166,15 @@ private:
   bool Used : 1;
 
 protected:
+  /// Access - Used by C++ decls for the access specifier.
+  // NOTE: VC++ treats enums as signed, avoid using the AccessSpecifier enum
+  unsigned Access : 2;
+  friend class CXXClassMemberWrapper;
+  
+  // PCHLevel - the "level" of precompiled header/AST file from which this
+  // declaration was built.
+  unsigned PCHLevel : 2;
+  
   /// IdentifierNamespace - This specifies what IDNS_* namespace this lives in.
   unsigned IdentifierNamespace : 16;
 
@@ -177,16 +186,13 @@ private:
 #endif
 
 protected:
-  /// Access - Used by C++ decls for the access specifier.
-  // NOTE: VC++ treats enums as signed, avoid using the AccessSpecifier enum
-  unsigned Access : 2;
-  friend class CXXClassMemberWrapper;
 
   Decl(Kind DK, DeclContext *DC, SourceLocation L)
     : NextDeclInContext(0), DeclCtx(DC),
       Loc(L), DeclKind(DK), InvalidDecl(0),
       HasAttrs(false), Implicit(false), Used(false),
-      IdentifierNamespace(getIdentifierNamespaceForKind(DK)), Access(AS_none) {
+      Access(AS_none), PCHLevel(0),
+      IdentifierNamespace(getIdentifierNamespaceForKind(DK)) {
     if (Decl::CollectingStats()) addDeclKind(DK);
   }
 
@@ -223,6 +229,8 @@ public:
   const TranslationUnitDecl *getTranslationUnitDecl() const {
     return const_cast<Decl*>(this)->getTranslationUnitDecl();
   }
+
+  bool isInAnonymousNamespace() const;
 
   ASTContext &getASTContext() const;
 
@@ -272,6 +280,26 @@ public:
   bool isUsed() const { return Used; }
   void setUsed(bool U = true) { Used = U; }
 
+  /// \brief Retrieve the level of precompiled header from which this
+  /// declaration was generated.
+  ///
+  /// The PCH level of a declaration describes where the declaration originated
+  /// from. A PCH level of 0 indicates that the declaration was not from a 
+  /// precompiled header. A PCH level of 1 indicates that the declaration was
+  /// from a top-level precompiled header; 2 indicates that the declaration 
+  /// comes from a precompiled header on which the top-level precompiled header
+  /// depends, and so on. 
+  unsigned getPCHLevel() const { return PCHLevel; }
+
+  /// \brief The maximum PCH level that any declaration may have.
+  static const unsigned MaxPCHLevel = 3;
+  
+  /// \brief Set the PCH level of this declaration.
+  void setPCHLevel(unsigned Level) { 
+    assert(Level < MaxPCHLevel && "PCH level exceeds the maximum");
+    PCHLevel = Level;
+  }
+  
   unsigned getIdentifierNamespace() const {
     return IdentifierNamespace;
   }
@@ -456,13 +484,13 @@ public:
   /// Destroy - Call destructors and release memory.
   virtual void Destroy(ASTContext& C);
 
-  void print(llvm::raw_ostream &Out, unsigned Indentation = 0);
+  void print(llvm::raw_ostream &Out, unsigned Indentation = 0) const;
   void print(llvm::raw_ostream &Out, const PrintingPolicy &Policy,
-             unsigned Indentation = 0);
+             unsigned Indentation = 0) const;
   static void printGroup(Decl** Begin, unsigned NumDecls,
                          llvm::raw_ostream &Out, const PrintingPolicy &Policy,
                          unsigned Indentation = 0);
-  void dump();
+  void dump() const;
 
 private:
   const Attr *getAttrsImpl() const;

@@ -20,7 +20,7 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Function.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/MallocHelper.h"
+#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/PredIteratorCache.h"
@@ -113,10 +113,13 @@ getCallSiteDependencyFrom(CallSite CS, bool isReadOnlyCall,
     } else if (VAArgInst *V = dyn_cast<VAArgInst>(Inst)) {
       Pointer = V->getOperand(0);
       PointerSize = AA->getTypeStoreSize(V->getType());
-    } else if (FreeInst *F = dyn_cast<FreeInst>(Inst)) {
-      Pointer = F->getPointerOperand();
-      
-      // FreeInsts erase the entire structure
+    } else if (isFreeCall(Inst)) {
+      Pointer = Inst->getOperand(1);
+      // calls to free() erase the entire structure
+      PointerSize = ~0ULL;
+    } else if (isFreeCall(Inst)) {
+      Pointer = Inst->getOperand(0);
+      // calls to free() erase the entire structure
       PointerSize = ~0ULL;
     } else if (isa<CallInst>(Inst) || isa<InvokeInst>(Inst)) {
       // Debug intrinsics don't cause dependences.
@@ -225,16 +228,11 @@ getPointerDependencyFrom(Value *MemPtr, uint64_t MemSize, bool isLoad,
     // the allocation, return Def.  This means that there is no dependence and
     // the access can be optimized based on that.  For example, a load could
     // turn into undef.
-    if (AllocationInst *AI = dyn_cast<AllocationInst>(Inst)) {
-      Value *AccessPtr = MemPtr->getUnderlyingObject();
-      
-      if (AccessPtr == AI ||
-          AA->alias(AI, 1, AccessPtr, 1) == AliasAnalysis::MustAlias)
-        return MemDepResult::getDef(AI);
-      continue;
-    }
-    
-    if (isMalloc(Inst)) {
+    // Note: Only determine this to be a malloc if Inst is the malloc call, not
+    // a subsequent bitcast of the malloc call result.  There can be stores to
+    // the malloced memory between the malloc call and its bitcast uses, and we
+    // need to continue scanning until the malloc call.
+    if (isa<AllocaInst>(Inst) || extractMallocCall(Inst)) {
       Value *AccessPtr = MemPtr->getUnderlyingObject();
       
       if (AccessPtr == Inst ||
@@ -319,15 +317,15 @@ MemDepResult MemoryDependenceAnalysis::getDependency(Instruction *QueryInst) {
       MemPtr = LI->getPointerOperand();
       MemSize = AA->getTypeStoreSize(LI->getType());
     }
+  } else if (isFreeCall(QueryInst)) {
+    MemPtr = QueryInst->getOperand(1);
+    // calls to free() erase the entire structure, not just a field.
+    MemSize = ~0UL;
   } else if (isa<CallInst>(QueryInst) || isa<InvokeInst>(QueryInst)) {
     CallSite QueryCS = CallSite::get(QueryInst);
     bool isReadOnly = AA->onlyReadsMemory(QueryCS);
     LocalCache = getCallSiteDependencyFrom(QueryCS, isReadOnly, ScanPos,
                                            QueryParent);
-  } else if (FreeInst *FI = dyn_cast<FreeInst>(QueryInst)) {
-    MemPtr = FI->getPointerOperand();
-    // FreeInsts erase the entire structure, not just a field.
-    MemSize = ~0UL;
   } else {
     // Non-memory instruction.
     LocalCache = MemDepResult::getClobber(--BasicBlock::iterator(ScanPos));

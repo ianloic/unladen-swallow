@@ -220,18 +220,8 @@ extern const PassInfo *const BreakCriticalEdgesID;
 //
 //   AU.addRequiredID(LoopSimplifyID);
 //
-FunctionPass *createLoopSimplifyPass();
+Pass *createLoopSimplifyPass();
 extern const PassInfo *const LoopSimplifyID;
-
-//===----------------------------------------------------------------------===//
-//
-// LowerAllocations - Turn malloc and free instructions into @malloc and @free
-// calls.
-//
-//   AU.addRequiredID(LowerAllocationsID);
-//
-Pass *createLowerAllocationsPass(bool LowerMallocArgToInteger = false);
-extern const PassInfo *const LowerAllocationsID;
 
 //===----------------------------------------------------------------------===//
 //
@@ -275,20 +265,6 @@ FunctionPass *createBlockPlacementPass();
 //
 Pass *createLCSSAPass();
 extern const PassInfo *const LCSSAID;
-
-//===----------------------------------------------------------------------===//
-//
-// PredicateSimplifier - This pass collapses duplicate variables into one
-// canonical form, and tries to simplify expressions along the way.
-//
-FunctionPass *createPredicateSimplifierPass();
-
-//===----------------------------------------------------------------------===//
-//
-// GVN-PRE - This pass performs global value numbering and partial redundancy
-// elimination.
-//
-FunctionPass *createGVNPREPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -355,6 +331,18 @@ FunctionPass *createSSIPass();
 // Information form.
 //
 FunctionPass *createSSIEverythingPass();
+
+//===----------------------------------------------------------------------===//
+//
+// GEPSplitter - Split complex GEPs into simple ones
+//
+FunctionPass *createGEPSplitterPass();
+
+//===----------------------------------------------------------------------===//
+//
+// SCCVN - Aggressively eliminate redundant scalar values
+//
+FunctionPass *createSCCVNPass();
 
 } // End llvm namespace
 

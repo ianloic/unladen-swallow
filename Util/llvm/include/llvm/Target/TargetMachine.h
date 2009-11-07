@@ -74,9 +74,10 @@ namespace FileModel {
 // Code generation optimization level.
 namespace CodeGenOpt {
   enum Level {
-    Default,
-    None,
-    Aggressive
+    None,        // -O0
+    Less,        // -O1
+    Default,     // -O2, -Os
+    Aggressive   // -O3
   };
 }
 
@@ -362,18 +363,26 @@ public:
     return true;
   }
 
-  /// addPreRegAllocPasses - This method may be implemented by targets that want
-  /// to run passes immediately before register allocation. This should return
+  /// addPreRegAlloc - This method may be implemented by targets that want to
+  /// run passes immediately before register allocation. This should return
   /// true if -print-machineinstrs should print after these passes.
   virtual bool addPreRegAlloc(PassManagerBase &, CodeGenOpt::Level) {
     return false;
   }
 
-  /// addPostRegAllocPasses - This method may be implemented by targets that
-  /// want to run passes after register allocation but before prolog-epilog
+  /// addPostRegAlloc - This method may be implemented by targets that want
+  /// to run passes after register allocation but before prolog-epilog
   /// insertion.  This should return true if -print-machineinstrs should print
   /// after these passes.
   virtual bool addPostRegAlloc(PassManagerBase &, CodeGenOpt::Level) {
+    return false;
+  }
+
+  /// addPreSched2 - This method may be implemented by targets that want to
+  /// run passes after prolog-epilog insertion and before the second instruction
+  /// scheduling pass.  This should return true if -print-machineinstrs should
+  /// print after these passes.
+  virtual bool addPreSched2(PassManagerBase &, CodeGenOpt::Level) {
     return false;
   }
   

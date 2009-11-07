@@ -11,7 +11,7 @@
 #include "llvm/ADT/StringRef.h"
 #include <string>
 
-class PyGlobalLlvmData;
+struct PyGlobalLlvmData;
 
 namespace llvm {
 class Constant;
@@ -67,8 +67,9 @@ public:
     llvm::Constant *GetGlobalVariableFor(PyObject *obj);
 
     // Create an LLVM global variable that is backed by the given function
-    // pointer.
+    // pointer. This currently only works for METH_FIXED functions.
     llvm::Constant *GetGlobalForCFunction(PyCFunction cfunc_ptr,
+                                          int arity,
                                           const llvm::StringRef &name);
 
 private:

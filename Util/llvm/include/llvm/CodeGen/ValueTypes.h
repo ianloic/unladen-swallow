@@ -18,7 +18,7 @@
 
 #include <cassert>
 #include <string>
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace llvm {
@@ -552,10 +552,16 @@ namespace llvm {
         return getExtendedSizeInBits();
     }
 
+    /// getStoreSize - Return the number of bytes overwritten by a store
+    /// of the specified value type.
+    unsigned getStoreSize() const {
+      return (getSizeInBits() + 7) / 8;
+    }
+
     /// getStoreSizeInBits - Return the number of bits overwritten by a store
     /// of the specified value type.
     unsigned getStoreSizeInBits() const {
-      return (getSizeInBits() + 7)/8*8;
+      return getStoreSize() * 8;
     }
 
     /// getRoundIntegerType - Rounds the bit-width of the given integer EVT up

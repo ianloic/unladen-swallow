@@ -675,7 +675,7 @@ static std::string getIvarAccessString(ObjCInterfaceDecl *ClassDecl,
   S = "((struct ";
   S += ClassDecl->getIdentifier()->getName();
   S += "_IMPL *)self)->";
-  S += OID->getNameAsCString();
+  S += OID->getName();
   return S;
 }
 
@@ -1937,8 +1937,7 @@ void RewriteObjC::RewriteObjCQualifiedInterfaceTypes(Decl *Dcl) {
 void RewriteObjC::SynthSelGetUidFunctionDecl() {
   IdentifierInfo *SelGetUidIdent = &Context->Idents.get("sel_registerName");
   llvm::SmallVector<QualType, 16> ArgTys;
-  ArgTys.push_back(Context->getPointerType(
-    Context->CharTy.getQualifiedType(QualType::Const)));
+  ArgTys.push_back(Context->getPointerType(Context->CharTy.withConst()));
   QualType getFuncType = Context->getFunctionType(Context->getObjCSelType(),
                                                    &ArgTys[0], ArgTys.size(),
                                                    false /*isVariadic*/, 0);
@@ -2084,8 +2083,7 @@ void RewriteObjC::SynthMsgSendFpretFunctionDecl() {
 void RewriteObjC::SynthGetClassFunctionDecl() {
   IdentifierInfo *getClassIdent = &Context->Idents.get("objc_getClass");
   llvm::SmallVector<QualType, 16> ArgTys;
-  ArgTys.push_back(Context->getPointerType(
-                     Context->CharTy.getQualifiedType(QualType::Const)));
+  ArgTys.push_back(Context->getPointerType(Context->CharTy.withConst()));
   QualType getClassType = Context->getFunctionType(Context->getObjCIdType(),
                                                    &ArgTys[0], ArgTys.size(),
                                                    false /*isVariadic*/, 0);
@@ -2099,8 +2097,7 @@ void RewriteObjC::SynthGetClassFunctionDecl() {
 void RewriteObjC::SynthGetMetaClassFunctionDecl() {
   IdentifierInfo *getClassIdent = &Context->Idents.get("objc_getMetaClass");
   llvm::SmallVector<QualType, 16> ArgTys;
-  ArgTys.push_back(Context->getPointerType(
-                     Context->CharTy.getQualifiedType(QualType::Const)));
+  ArgTys.push_back(Context->getPointerType(Context->CharTy.withConst()));
   QualType getClassType = Context->getFunctionType(Context->getObjCIdType(),
                                                    &ArgTys[0], ArgTys.size(),
                                                    false /*isVariadic*/, 0);
@@ -2268,7 +2265,7 @@ Stmt *RewriteObjC::SynthMessageExpr(ObjCMessageExpr *Exp) {
   if (clsName) { // class message.
     // FIXME: We need to fix Sema (and the AST for ObjCMessageExpr) to handle
     // the 'super' idiom within a class method.
-    if (!strcmp(clsName->getName(), "super")) {
+    if (clsName->getName() == "super") {
       MsgSendFlavor = MsgSendSuperFunctionDecl;
       if (MsgSendStretFlavor)
         MsgSendStretFlavor = MsgSendSuperStretFunctionDecl;
@@ -2292,9 +2289,9 @@ Stmt *RewriteObjC::SynthMessageExpr(ObjCMessageExpr *Exp) {
       llvm::SmallVector<Expr*, 8> ClsExprs;
       QualType argType = Context->getPointerType(Context->CharTy);
       ClsExprs.push_back(StringLiteral::Create(*Context,
-                                        SuperDecl->getIdentifier()->getName(),
-                                        SuperDecl->getIdentifier()->getLength(),
-                                        false, argType, SourceLocation()));
+                                     SuperDecl->getIdentifier()->getNameStart(),
+                                     SuperDecl->getIdentifier()->getLength(),
+                                     false, argType, SourceLocation()));
       CallExpr *Cls = SynthesizeCallToFunctionDecl(GetMetaClassFunctionDecl,
                                                    &ClsExprs[0],
                                                    ClsExprs.size());
@@ -2346,7 +2343,7 @@ Stmt *RewriteObjC::SynthMessageExpr(ObjCMessageExpr *Exp) {
       llvm::SmallVector<Expr*, 8> ClsExprs;
       QualType argType = Context->getPointerType(Context->CharTy);
       ClsExprs.push_back(StringLiteral::Create(*Context,
-                                               clsName->getName(),
+                                               clsName->getNameStart(),
                                                clsName->getLength(),
                                                false, argType,
                                                SourceLocation()));
@@ -2378,9 +2375,9 @@ Stmt *RewriteObjC::SynthMessageExpr(ObjCMessageExpr *Exp) {
       llvm::SmallVector<Expr*, 8> ClsExprs;
       QualType argType = Context->getPointerType(Context->CharTy);
       ClsExprs.push_back(StringLiteral::Create(*Context,
-                                        SuperDecl->getIdentifier()->getName(),
-                                        SuperDecl->getIdentifier()->getLength(),
-                                        false, argType, SourceLocation()));
+                                     SuperDecl->getIdentifier()->getNameStart(),
+                                     SuperDecl->getIdentifier()->getLength(),
+                                     false, argType, SourceLocation()));
       CallExpr *Cls = SynthesizeCallToFunctionDecl(GetClassFunctionDecl,
                                                    &ClsExprs[0],
                                                    ClsExprs.size());
@@ -2612,10 +2609,12 @@ Stmt *RewriteObjC::RewriteMessageExpr(ObjCMessageExpr *Exp) {
 // typedef struct objc_object Protocol;
 QualType RewriteObjC::getProtocolType() {
   if (!ProtocolTypeDecl) {
+    DeclaratorInfo *DInfo
+      = Context->getTrivialDeclaratorInfo(Context->getObjCIdType());
     ProtocolTypeDecl = TypedefDecl::Create(*Context, TUDecl,
                                            SourceLocation(),
                                            &Context->Idents.get("Protocol"),
-                                           Context->getObjCIdType());
+                                           DInfo);
   }
   return Context->getTypeDeclType(ProtocolTypeDecl);
 }

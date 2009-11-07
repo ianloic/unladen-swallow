@@ -38,10 +38,11 @@ void good_news()
   ia4 *pai = new (int[3][4]);
   pi = ::new int;
   U *pu = new (ps) U;
-  // FIXME: Inherited functions are not looked up currently.
-  //V *pv = new (ps) V;
+  V *pv = new (ps) V;
   
   pi = new (S(1.0f, 2)) int;
+  
+  (void)new int[true];
 }
 
 struct abstract {
@@ -57,6 +58,7 @@ void bad_news(int *ip)
   (void)new int[1.1]; // expected-error {{array size expression must have integral or enumerated type, not 'double'}}
   (void)new int[1][i]; // expected-error {{only the first dimension}}
   (void)new (int[1][i]); // expected-error {{only the first dimension}}
+  (void)new (int[i]); // expected-error {{when type is in parentheses}}
   (void)new int(*(S*)0); // expected-error {{incompatible type initializing}}
   (void)new int(1, 2); // expected-error {{initializer of a builtin type can only take one argument}}
   (void)new S(1); // expected-error {{no matching constructor}}
@@ -113,3 +115,25 @@ void test_delete_conv(X0 x0, X1 x1, X2 x2) {
   delete x1;
   delete x2; // expected-error{{ambiguous conversion of delete expression of type 'struct X2' to a pointer}}
 }
+
+// PR4782
+class X3 {
+public:
+  static void operator delete(void * mem, unsigned long size);
+};
+
+class X4 {
+public:
+  static void release(X3 *x);
+  static void operator delete(void * mem, unsigned long size);
+};
+
+
+void X4::release(X3 *x) {
+  delete x;
+}
+
+class X5 {
+public:
+  void Destroy() const { delete this; }
+};

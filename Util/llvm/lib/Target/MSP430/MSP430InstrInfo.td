@@ -71,7 +71,9 @@ def memdst : Operand<i16> {
 }
 
 // Branch targets have OtherVT type.
-def brtarget : Operand<OtherVT>;
+def brtarget : Operand<OtherVT> {
+  let PrintMethod = "printPCRelImmOperand";
+}
 
 // Operand for printing out a condition code.
 def cc : Operand<i8> {
@@ -155,7 +157,7 @@ let isCall = 1 in
   let Defs = [R12W, R13W, R14W, R15W, SRW],
       Uses = [SPW] in {
     def CALLi     : Pseudo<(outs), (ins i16imm:$dst, variable_ops),
-                           "call\t${dst:call}", [(MSP430call imm:$dst)]>;
+                           "call\t$dst", [(MSP430call imm:$dst)]>;
     def CALLr     : Pseudo<(outs), (ins GR16:$dst, variable_ops),
                            "call\t$dst", [(MSP430call GR16:$dst)]>;
     def CALLm     : Pseudo<(outs), (ins memsrc:$dst, variable_ops),
@@ -242,6 +244,13 @@ def MOV8mr  : Pseudo<(outs), (ins memdst:$dst, GR8:$src),
 def MOV16mr : Pseudo<(outs), (ins memdst:$dst, GR16:$src),
                 "mov.w\t{$src, $dst}",
                 [(store GR16:$src, addr:$dst)]>;
+
+def MOV8mm  : Pseudo<(outs), (ins memdst:$dst, memsrc:$src),
+                "mov.b\t{$src, $dst}",
+                [(store (i8 (load addr:$src)), addr:$dst)]>;
+def MOV16mm : Pseudo<(outs), (ins memdst:$dst, memsrc:$src),
+                "mov.w\t{$src, $dst}",
+                [(store (i16 (load addr:$src)), addr:$dst)]>;
 
 //===----------------------------------------------------------------------===//
 // Arithmetic Instructions
@@ -671,30 +680,26 @@ def OR16rm : Pseudo<(outs GR16:$dst), (ins GR16:$src1, memsrc:$src2),
 let isTwoAddress = 0 in {
 def OR8mr  : Pseudo<(outs), (ins memdst:$dst, GR8:$src),
                 "bis.b\t{$src, $dst}",
-                [(store (or (load addr:$dst), GR8:$src), addr:$dst),
-                 (implicit SRW)]>;
+                [(store (or (load addr:$dst), GR8:$src), addr:$dst)]>;
 def OR16mr : Pseudo<(outs), (ins memdst:$dst, GR16:$src),
                 "bis.w\t{$src, $dst}",
-                [(store (or (load addr:$dst), GR16:$src), addr:$dst),
-                 (implicit SRW)]>;
+                [(store (or (load addr:$dst), GR16:$src), addr:$dst)]>;
 
 def OR8mi  : Pseudo<(outs), (ins memdst:$dst, i8imm:$src),
                 "bis.b\t{$src, $dst}",
-                [(store (or (load addr:$dst), (i8 imm:$src)), addr:$dst),
-                 (implicit SRW)]>;
+                [(store (or (load addr:$dst), (i8 imm:$src)), addr:$dst)]>;
 def OR16mi : Pseudo<(outs), (ins memdst:$dst, i16imm:$src),
                 "bis.w\t{$src, $dst}",
-                [(store (or (load addr:$dst), (i16 imm:$src)), addr:$dst),
-                 (implicit SRW)]>;
+                [(store (or (load addr:$dst), (i16 imm:$src)), addr:$dst)]>;
 
 def OR8mm  : Pseudo<(outs), (ins memdst:$dst, memsrc:$src),
                 "bis.b\t{$src, $dst}",
-                [(store (or (load addr:$dst), (i8 (load addr:$src))), addr:$dst),
-                 (implicit SRW)]>;
+                [(store (or (i8 (load addr:$dst)),
+                            (i8 (load addr:$src))), addr:$dst)]>;
 def OR16mm : Pseudo<(outs), (ins memdst:$dst, memsrc:$src),
                 "bis.w\t{$src, $dst}",
-                [(store (or (load addr:$dst), (i16 (load addr:$src))), addr:$dst),
-                 (implicit SRW)]>;
+                 [(store (or (i16 (load addr:$dst)),
+                             (i16 (load addr:$src))), addr:$dst)]>;
 }
 
 } // isTwoAddress = 1

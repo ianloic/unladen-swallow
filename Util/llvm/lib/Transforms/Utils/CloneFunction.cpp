@@ -20,9 +20,7 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Function.h"
-#include "llvm/LLVMContext.h"
 #include "llvm/Support/CFG.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -43,7 +41,7 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
   // Loop over all instructions, and copy them over.
   for (BasicBlock::const_iterator II = BB->begin(), IE = BB->end();
        II != IE; ++II) {
-    Instruction *NewInst = II->clone(BB->getContext());
+    Instruction *NewInst = II->clone();
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -176,7 +174,7 @@ Function *llvm::CloneFunction(const Function *F,
 namespace {
   /// PruningFunctionCloner - This class is a private class used to implement
   /// the CloneAndPruneFunctionInto method.
-  struct VISIBILITY_HIDDEN PruningFunctionCloner {
+  struct PruningFunctionCloner {
     Function *NewFunc;
     const Function *OldFunc;
     DenseMap<const Value*, Value*> &ValueMap;
@@ -248,7 +246,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
         continue;
     }
       
-    Instruction *NewInst = II->clone(BB->getContext());
+    Instruction *NewInst = II->clone();
     if (II->hasName())
       NewInst->setName(II->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -296,7 +294,7 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
   }
   
   if (!TerminatorDone) {
-    Instruction *NewInst = OldTI->clone(BB->getContext());
+    Instruction *NewInst = OldTI->clone();
     if (OldTI->hasName())
       NewInst->setName(OldTI->getName()+NameSuffix);
     NewBB->getInstList().push_back(NewInst);
@@ -329,8 +327,7 @@ ConstantFoldMappedInstruction(const Instruction *I) {
   SmallVector<Constant*, 8> Ops;
   for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i)
     if (Constant *Op = dyn_cast_or_null<Constant>(MapValue(I->getOperand(i),
-                                                           ValueMap,
-                                                           Context)))
+                                                           ValueMap)))
       Ops.push_back(Op);
     else
       return 0;  // All operands not constant!
@@ -346,7 +343,7 @@ ConstantFoldMappedInstruction(const Instruction *I) {
         if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0)))
           if (GV->isConstant() && GV->hasDefinitiveInitializer())
             return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(),
-                                                          CE, Context);
+                                                          CE);
 
   return ConstantFoldInstOperands(I->getOpcode(), I->getType(), &Ops[0],
                                   Ops.size(), Context, TD);
@@ -366,7 +363,6 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
                                      ClonedCodeInfo *CodeInfo,
                                      const TargetData *TD) {
   assert(NameSuffix && "NameSuffix cannot be null!");
-  LLVMContext &Context = OldFunc->getContext();
   
 #ifndef NDEBUG
   for (Function::const_arg_iterator II = OldFunc->arg_begin(), 
@@ -437,7 +433,7 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
         if (BasicBlock *MappedBlock = 
             cast_or_null<BasicBlock>(ValueMap[PN->getIncomingBlock(pred)])) {
           Value *InVal = MapValue(PN->getIncomingValue(pred),
-                                  ValueMap, Context);
+                                  ValueMap);
           assert(InVal && "Unknown input value?");
           PN->setIncomingValue(pred, InVal);
           PN->setIncomingBlock(pred, MappedBlock);

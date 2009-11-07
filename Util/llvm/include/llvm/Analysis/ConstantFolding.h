@@ -62,12 +62,15 @@ Constant *ConstantFoldCompareInstOperands(unsigned Predicate,
                                           LLVMContext &Context,
                                           const TargetData *TD = 0);
 
+/// ConstantFoldLoadFromConstPtr - Return the value that a load from C would
+/// produce if it is constant and determinable.  If this is not determinable,
+/// return null.
+Constant *ConstantFoldLoadFromConstPtr(Constant *C, const TargetData *TD = 0);
 
 /// ConstantFoldLoadThroughGEPConstantExpr - Given a constant and a
 /// getelementptr constantexpr, return the constant value being addressed by the
 /// constant expression, or null if something is funny and we can't decide.
-Constant *ConstantFoldLoadThroughGEPConstantExpr(Constant *C, ConstantExpr *CE,
-                                                 LLVMContext &Context);
+Constant *ConstantFoldLoadThroughGEPConstantExpr(Constant *C, ConstantExpr *CE);
   
 /// canConstantFoldCallTo - Return true if its even possible to fold a call to
 /// the specified function.

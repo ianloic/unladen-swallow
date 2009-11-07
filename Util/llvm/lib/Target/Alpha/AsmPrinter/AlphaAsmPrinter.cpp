@@ -27,7 +27,6 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegistry.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/Support/FormattedStream.h"
@@ -37,7 +36,7 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  struct VISIBILITY_HIDDEN AlphaAsmPrinter : public AsmPrinter {
+  struct AlphaAsmPrinter : public AsmPrinter {
     /// Unique incrementer for label values for referencing Global values.
     ///
 
@@ -56,7 +55,7 @@ namespace {
     void printBaseOffsetPair(const MachineInstr *MI, int i, bool brackets=true);
     void PrintGlobalVariable(const GlobalVariable *GVar);
     bool runOnMachineFunction(MachineFunction &F);
-    bool doInitialization(Module &M);
+    void EmitStartOfAsmFile(Module &M);
 
     bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                          unsigned AsmVariant, const char *ExtraCode);
@@ -171,19 +170,18 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
        I != E; ++I) {
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
       // Print the assembly for the instruction.
       ++EmittedInsts;
-      processDebugLoc(II->getDebugLoc());
-      
+      processDebugLoc(II, true);
       printInstruction(II);
       
       if (VerboseAsm && !II->getDebugLoc().isUnknown())
         EmitComments(*II);
       O << '\n';
+      processDebugLoc(II, false);
     }
   }
 
@@ -193,14 +191,12 @@ bool AlphaAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
-bool AlphaAsmPrinter::doInitialization(Module &M)
-{
-  if(TM.getSubtarget<AlphaSubtarget>().hasCT())
+void AlphaAsmPrinter::EmitStartOfAsmFile(Module &M) {
+  if (TM.getSubtarget<AlphaSubtarget>().hasCT())
     O << "\t.arch ev6\n"; //This might need to be ev67, so leave this test here
   else
     O << "\t.arch ev6\n";
   O << "\t.set noat\n";
-  return AsmPrinter::doInitialization(M);
 }
 
 void AlphaAsmPrinter::PrintGlobalVariable(const GlobalVariable *GVar) {

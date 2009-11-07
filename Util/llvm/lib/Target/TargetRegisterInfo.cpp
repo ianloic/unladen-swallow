@@ -62,14 +62,14 @@ TargetRegisterInfo::getPhysicalRegisterRegClass(unsigned reg, EVT VT) const {
 
 /// getAllocatableSetForRC - Toggle the bits that represent allocatable
 /// registers for the specific register class.
-static void getAllocatableSetForRC(MachineFunction &MF,
+static void getAllocatableSetForRC(const MachineFunction &MF,
                                    const TargetRegisterClass *RC, BitVector &R){  
   for (TargetRegisterClass::iterator I = RC->allocation_order_begin(MF),
          E = RC->allocation_order_end(MF); I != E; ++I)
     R.set(*I);
 }
 
-BitVector TargetRegisterInfo::getAllocatableSet(MachineFunction &MF,
+BitVector TargetRegisterInfo::getAllocatableSet(const MachineFunction &MF,
                                           const TargetRegisterClass *RC) const {
   BitVector Allocatable(NumRegs);
   if (RC) {
@@ -85,7 +85,7 @@ BitVector TargetRegisterInfo::getAllocatableSet(MachineFunction &MF,
 
 /// getFrameIndexOffset - Returns the displacement from the frame register to
 /// the stack frame of the specified index. This is the default implementation
-/// which is likely incorrect for the target.
+/// which is overridden for some targets.
 int TargetRegisterInfo::getFrameIndexOffset(MachineFunction &MF, int FI) const {
   const TargetFrameInfo &TFI = *MF.getTarget().getFrameInfo();
   MachineFrameInfo *MFI = MF.getFrameInfo();

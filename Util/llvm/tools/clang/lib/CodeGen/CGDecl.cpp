@@ -37,6 +37,7 @@ void CodeGenFunction::EmitDecl(const Decl &D) {
   case Decl::Enum:      // enum X;
   case Decl::EnumConstant: // enum ? { X = ? }
   case Decl::CXXRecord: // struct/union/class X; [C++]
+  case Decl::UsingDirective: // using X; [C++]
     // None of these decls require codegen support.
     return;
 
@@ -103,10 +104,13 @@ CodeGenFunction::CreateStaticBlockVarDecl(const VarDecl &D,
   }
 
   const llvm::Type *LTy = CGM.getTypes().ConvertTypeForMem(Ty);
-  return new llvm::GlobalVariable(CGM.getModule(), LTy,
-                                  Ty.isConstant(getContext()), Linkage,
-                                  CGM.EmitNullConstant(D.getType()), Name, 0,
-                                  D.isThreadSpecified(), Ty.getAddressSpace());
+  llvm::GlobalVariable *GV =
+    new llvm::GlobalVariable(CGM.getModule(), LTy,
+                             Ty.isConstant(getContext()), Linkage,
+                             CGM.EmitNullConstant(D.getType()), Name, 0,
+                             D.isThreadSpecified(), Ty.getAddressSpace());
+  GV->setAlignment(getContext().getDeclAlignInBytes(&D));
+  return GV;
 }
 
 void CodeGenFunction::EmitStaticBlockVarDecl(const VarDecl &D) {
@@ -228,8 +232,7 @@ const llvm::Type *CodeGenFunction::BuildByRefType(const ValueDecl *D) {
 
   std::vector<const llvm::Type *> Types;
   
-  const llvm::PointerType *Int8PtrTy
-    = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+  const llvm::PointerType *Int8PtrTy = llvm::Type::getInt8PtrTy(VMContext);
 
   llvm::PATypeHolder ByRefTypeHolder = llvm::OpaqueType::get(VMContext);
   
@@ -273,8 +276,8 @@ const llvm::Type *CodeGenFunction::BuildByRefType(const ValueDecl *D) {
     unsigned NumPaddingBytes = AlignedOffsetInBytes - CurrentOffsetInBytes;
     if (NumPaddingBytes > 0) {
       const llvm::Type *Ty = llvm::Type::getInt8Ty(VMContext);
-      // FIXME: We need a sema error for alignment larger than the minimum of the
-      // maximal stack alignmint and the alignment of malloc on the system.
+      // FIXME: We need a sema error for alignment larger than the minimum of
+      // the maximal stack alignmint and the alignment of malloc on the system.
       if (NumPaddingBytes > 1)
         Ty = llvm::ArrayType::get(Ty, NumPaddingBytes);
     
@@ -342,8 +345,7 @@ void CodeGenFunction::EmitLocalBlockVarDecl(const VarDecl &D) {
 
     if (!DidCallStackSave) {
       // Save the stack.
-      const llvm::Type *LTy =
-        llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+      const llvm::Type *LTy = llvm::Type::getInt8PtrTy(VMContext);
       llvm::Value *Stack = CreateTempAlloca(LTy, "saved_stack");
 
       llvm::Value *F = CGM.getIntrinsic(llvm::Intrinsic::stacksave);
@@ -375,8 +377,10 @@ void CodeGenFunction::EmitLocalBlockVarDecl(const VarDecl &D) {
                                     false, "tmp");
 
     // Allocate memory for the array.
-    llvm::Value *VLA = Builder.CreateAlloca(llvm::Type::getInt8Ty(VMContext),
-                                            VLASize, "vla");
+    llvm::AllocaInst *VLA = 
+      Builder.CreateAlloca(llvm::Type::getInt8Ty(VMContext), VLASize, "vla");
+    VLA->setAlignment(getContext().getDeclAlignInBytes(&D));
+
     DeclPtr = Builder.CreateBitCast(VLA, LElemPtrTy, "tmp");
   }
 
@@ -428,8 +432,7 @@ void CodeGenFunction::EmitLocalBlockVarDecl(const VarDecl &D) {
   }
 
   if (isByRef) {
-    const llvm::PointerType *PtrToInt8Ty
-      = llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(VMContext));
+    const llvm::PointerType *PtrToInt8Ty = llvm::Type::getInt8PtrTy(VMContext);
 
     EnsureInsertPoint();
     llvm::Value *isa_field = Builder.CreateStructGEP(DeclPtr, 0);

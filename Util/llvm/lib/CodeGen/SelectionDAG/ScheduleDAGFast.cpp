@@ -19,7 +19,6 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
@@ -40,7 +39,7 @@ namespace {
   /// FastPriorityQueue - A degenerate priority queue that considers
   /// all nodes to have the same priority.
   ///
-  struct VISIBILITY_HIDDEN FastPriorityQueue {
+  struct FastPriorityQueue {
     SmallVector<SUnit *, 16> Queue;
 
     bool empty() const { return Queue.empty(); }
@@ -60,7 +59,7 @@ namespace {
 //===----------------------------------------------------------------------===//
 /// ScheduleDAGFast - The actual "fast" list scheduler implementation.
 ///
-class VISIBILITY_HIDDEN ScheduleDAGFast : public ScheduleDAGSDNodes {
+class ScheduleDAGFast : public ScheduleDAGSDNodes {
 private:
   /// AvailableQueue - The priority queue to use for the available SUnits.
   FastPriorityQueue AvailableQueue;
@@ -117,7 +116,7 @@ void ScheduleDAGFast::Schedule() {
   LiveRegCycles.resize(TRI->getNumRegs(), 0);
 
   // Build the scheduling graph.
-  BuildSchedGraph();
+  BuildSchedGraph(NULL);
 
   DEBUG(for (unsigned su = 0, e = SUnits.size(); su != e; ++su)
           SUnits[su].dumpAll(this));
@@ -134,17 +133,17 @@ void ScheduleDAGFast::Schedule() {
 /// the AvailableQueue if the count reaches zero. Also update its cycle bound.
 void ScheduleDAGFast::ReleasePred(SUnit *SU, SDep *PredEdge) {
   SUnit *PredSU = PredEdge->getSUnit();
-  --PredSU->NumSuccsLeft;
-  
+
 #ifndef NDEBUG
-  if (PredSU->NumSuccsLeft < 0) {
+  if (PredSU->NumSuccsLeft == 0) {
     errs() << "*** Scheduling failed! ***\n";
     PredSU->dump(this);
     errs() << " has been released too many times!\n";
     llvm_unreachable(0);
   }
 #endif
-  
+  --PredSU->NumSuccsLeft;
+
   // If all the node's successors are scheduled, this node is ready
   // to be scheduled. Ignore the special EntrySU node.
   if (PredSU->NumSuccsLeft == 0 && PredSU != &EntrySU) {
@@ -588,41 +587,11 @@ void ScheduleDAGFast::ListScheduleBottomUp() {
     ++CurCycle;
   }
 
-  // Reverse the order if it is bottom up.
+  // Reverse the order since it is bottom up.
   std::reverse(Sequence.begin(), Sequence.end());
-  
-  
+
 #ifndef NDEBUG
-  // Verify that all SUnits were scheduled.
-  bool AnyNotSched = false;
-  unsigned DeadNodes = 0;
-  unsigned Noops = 0;
-  for (unsigned i = 0, e = SUnits.size(); i != e; ++i) {
-    if (!SUnits[i].isScheduled) {
-      if (SUnits[i].NumPreds == 0 && SUnits[i].NumSuccs == 0) {
-        ++DeadNodes;
-        continue;
-      }
-      if (!AnyNotSched)
-        errs() << "*** List scheduling failed! ***\n";
-      SUnits[i].dump(this);
-      errs() << "has not been scheduled!\n";
-      AnyNotSched = true;
-    }
-    if (SUnits[i].NumSuccsLeft != 0) {
-      if (!AnyNotSched)
-        errs() << "*** List scheduling failed! ***\n";
-      SUnits[i].dump(this);
-      errs() << "has successors left!\n";
-      AnyNotSched = true;
-    }
-  }
-  for (unsigned i = 0, e = Sequence.size(); i != e; ++i)
-    if (!Sequence[i])
-      ++Noops;
-  assert(!AnyNotSched);
-  assert(Sequence.size() + DeadNodes - Noops == SUnits.size() &&
-         "The number of nodes scheduled doesn't match the expected number!");
+  VerifySchedule(/*isBottomUp=*/true);
 #endif
 }
 

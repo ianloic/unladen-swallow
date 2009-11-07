@@ -14,6 +14,7 @@
 #include "clang/Sema/CodeCompleteConsumer.h"
 #include "clang/AST/ExprCXX.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include <list>
 #include <map>
 #include <vector>
@@ -112,6 +113,7 @@ namespace {
     bool IsNamespace(NamedDecl *ND) const;
     bool IsNamespaceOrAlias(NamedDecl *ND) const;
     bool IsType(NamedDecl *ND) const;
+    bool IsMember(NamedDecl *ND) const;
     //@}    
   };  
 }
@@ -189,16 +191,22 @@ getRequiredQualification(ASTContext &Context,
 }
 
 void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
+  assert(!ShadowMaps.empty() && "Must enter into a results scope");
+  
   if (R.Kind != Result::RK_Declaration) {
     // For non-declaration results, just add the result.
     Results.push_back(R);
     return;
   }
-  
+
+  // Skip unnamed entities.
+  if (!R.Declaration->getDeclName())
+    return;
+      
   // Look through using declarations.
   if (UsingDecl *Using = dyn_cast<UsingDecl>(R.Declaration))
-    return MaybeAddResult(Result(Using->getTargetDecl(), R.Rank, R.Qualifier),
-                          CurContext);
+    MaybeAddResult(Result(Using->getTargetDecl(), R.Rank, R.Qualifier),
+                   CurContext);
   
   // Handle each declaration in an overload set separately.
   if (OverloadedFunctionDecl *Ovl 
@@ -225,8 +233,16 @@ void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
     if (Id->isStr("__va_list_tag") || Id->isStr("__builtin_va_list"))
       return;
     
-    // FIXME: Should we filter out other names in the implementation's
-    // namespace, e.g., those containing a __ or that start with _[A-Z]?
+    // Filter out names reserved for the implementation (C99 7.1.3, 
+    // C++ [lib.global.names]). Users don't need to see those.
+    //
+    // FIXME: Add predicate for this.
+    if (Id->getLength() >= 2) {
+      const char *Name = Id->getNameStart();
+      if (Name[0] == '_' &&
+          (Name[1] == '_' || (Name[1] >= 'A' && Name[1] <= 'Z')))
+        return;
+    }
   }
   
   // C++ constructors are never found by name lookup.
@@ -281,6 +297,7 @@ void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
                                  I->second.first)) {
         // Note that this result was hidden.
         R.Hidden = true;
+        R.QualifierIsInformative = false;
         
         if (!R.Qualifier)
           R.Qualifier = getRequiredQualification(SemaRef.Context, 
@@ -300,6 +317,27 @@ void ResultBuilder::MaybeAddResult(Result R, DeclContext *CurContext) {
   if (!AllDeclsFound.insert(CanonDecl))
     return;
   
+  // If the filter is for nested-name-specifiers, then this result starts a
+  // nested-name-specifier.
+  if ((Filter == &ResultBuilder::IsNestedNameSpecifier) ||
+      (Filter == &ResultBuilder::IsMember &&
+       isa<CXXRecordDecl>(R.Declaration) &&
+       cast<CXXRecordDecl>(R.Declaration)->isInjectedClassName()))
+    R.StartsNestedNameSpecifier = true;
+  
+  // If this result is supposed to have an informative qualifier, add one.
+  if (R.QualifierIsInformative && !R.Qualifier &&
+      !R.StartsNestedNameSpecifier) {
+    DeclContext *Ctx = R.Declaration->getDeclContext();
+    if (NamespaceDecl *Namespace = dyn_cast<NamespaceDecl>(Ctx))
+      R.Qualifier = NestedNameSpecifier::Create(SemaRef.Context, 0, Namespace);
+    else if (TagDecl *Tag = dyn_cast<TagDecl>(Ctx))
+      R.Qualifier = NestedNameSpecifier::Create(SemaRef.Context, 0, false, 
+                             SemaRef.Context.getTypeDeclType(Tag).getTypePtr());
+    else
+      R.QualifierIsInformative = false;
+  }
+    
   // Insert this result into the set of results and into the current shadow
   // map.
   SMap.insert(std::make_pair(R.Declaration->getDeclName(),
@@ -384,6 +422,14 @@ bool ResultBuilder::IsType(NamedDecl *ND) const {
   return isa<TypeDecl>(ND);
 }
 
+/// \brief Since every declaration found within a class is a member that we
+/// care about, always returns true. This predicate exists mostly to 
+/// communicate to the result builder that we are performing a lookup for
+/// member access.
+bool ResultBuilder::IsMember(NamedDecl *ND) const {
+  return true;
+}
+
 // Find the next outer declaration context corresponding to this scope.
 static DeclContext *findOuterContext(Scope *S) {
   for (S = S->getParent(); S; S = S->getParent())
@@ -398,9 +444,7 @@ static DeclContext *findOuterContext(Scope *S) {
 ///
 /// \param Ctx the declaration context from which we will gather results.
 ///
-/// \param InitialRank the initial rank given to results in this declaration
-/// context. Larger rank values will be used for, e.g., members found in
-/// base classes.
+/// \param Rank the rank given to results in this declaration context.
 ///
 /// \param Visited the set of declaration contexts that have already been
 /// visited. Declaration contexts will only be visited once.
@@ -408,18 +452,22 @@ static DeclContext *findOuterContext(Scope *S) {
 /// \param Results the result set that will be extended with any results
 /// found within this declaration context (and, for a C++ class, its bases).
 ///
+/// \param InBaseClass whether we are in a base class.
+///
 /// \returns the next higher rank value, after considering all of the
 /// names within this declaration context.
 static unsigned CollectMemberLookupResults(DeclContext *Ctx, 
-                                           unsigned InitialRank,
+                                           unsigned Rank,
                                            DeclContext *CurContext,
                                  llvm::SmallPtrSet<DeclContext *, 16> &Visited,
-                                           ResultBuilder &Results) {
+                                           ResultBuilder &Results,
+                                           bool InBaseClass = false) {
   // Make sure we don't visit the same context twice.
   if (!Visited.insert(Ctx->getPrimaryContext()))
-    return InitialRank;
+    return Rank;
   
   // Enumerate all of the results in this context.
+  typedef CodeCompleteConsumer::Result Result;
   Results.EnterNewScope();
   for (DeclContext *CurCtx = Ctx->getPrimaryContext(); CurCtx; 
        CurCtx = CurCtx->getNextContext()) {
@@ -427,13 +475,11 @@ static unsigned CollectMemberLookupResults(DeclContext *Ctx,
          DEnd = CurCtx->decls_end();
          D != DEnd; ++D) {
       if (NamedDecl *ND = dyn_cast<NamedDecl>(*D))
-        Results.MaybeAddResult(CodeCompleteConsumer::Result(ND, InitialRank),
-                               CurContext);
+        Results.MaybeAddResult(Result(ND, Rank, 0, InBaseClass), CurContext);
     }
   }
   
   // Traverse the contexts of inherited classes.
-  unsigned NextRank = InitialRank;
   if (CXXRecordDecl *Record = dyn_cast<CXXRecordDecl>(Ctx)) {
     for (CXXRecordDecl::base_class_iterator B = Record->bases_begin(),
          BEnd = Record->bases_end();
@@ -468,19 +514,15 @@ static unsigned CollectMemberLookupResults(DeclContext *Ctx,
       //   c->A::member
       
       // Collect results from this base class (and its bases).
-      NextRank = std::max(NextRank, 
-                          CollectMemberLookupResults(Record->getDecl(), 
-                                                     InitialRank + 1,
-                                                     CurContext,
-                                                     Visited,
-                                                     Results));
+      CollectMemberLookupResults(Record->getDecl(), Rank, CurContext, Visited,
+                                 Results, /*InBaseClass=*/true);
     }
   }
   
   // FIXME: Look into base classes in Objective-C!
   
   Results.ExitScope();
-  return NextRank;
+  return Rank + 1;
 }
 
 /// \brief Collect the results of searching for members within the given
@@ -657,6 +699,11 @@ static void AddFunctionParameterChunks(ASTContext &Context,
     // Add the placeholder string.
     CCStr->AddPlaceholderChunk(PlaceholderStr.c_str());
   }
+  
+  if (const FunctionProtoType *Proto 
+        = Function->getType()->getAs<FunctionProtoType>())
+    if (Proto->isVariadic())
+      CCStr->AddPlaceholderChunk(", ...");
 }
 
 /// \brief Add template parameter chunks to the given code completion string.
@@ -730,6 +777,7 @@ static void AddTemplateParameterChunks(ASTContext &Context,
 /// provided nested-name-specifier is non-NULL.
 void AddQualifierToCompletionString(CodeCompletionString *Result, 
                                     NestedNameSpecifier *Qualifier, 
+                                    bool QualifierIsInformative,
                                     ASTContext &Context) {
   if (!Qualifier)
     return;
@@ -739,7 +787,10 @@ void AddQualifierToCompletionString(CodeCompletionString *Result,
     llvm::raw_string_ostream OS(PrintedNNS);
     Qualifier->print(OS, Context.PrintingPolicy);
   }
-  Result->AddTextChunk(PrintedNNS.c_str());
+  if (QualifierIsInformative)
+    Result->AddInformativeChunk(PrintedNNS.c_str());
+  else
+    Result->AddTextChunk(PrintedNNS.c_str());
 }
 
 /// \brief If possible, create a new code completion string for the given
@@ -757,7 +808,8 @@ CodeCompleteConsumer::Result::CreateCodeCompletionString(Sema &S) {
   
   if (FunctionDecl *Function = dyn_cast<FunctionDecl>(ND)) {
     CodeCompletionString *Result = new CodeCompletionString;
-    AddQualifierToCompletionString(Result, Qualifier, S.Context);
+    AddQualifierToCompletionString(Result, Qualifier, QualifierIsInformative, 
+                                   S.Context);
     Result->AddTextChunk(Function->getNameAsString().c_str());
     Result->AddTextChunk("(");
     AddFunctionParameterChunks(S.Context, Function, Result);
@@ -767,7 +819,8 @@ CodeCompleteConsumer::Result::CreateCodeCompletionString(Sema &S) {
   
   if (FunctionTemplateDecl *FunTmpl = dyn_cast<FunctionTemplateDecl>(ND)) {
     CodeCompletionString *Result = new CodeCompletionString;
-    AddQualifierToCompletionString(Result, Qualifier, S.Context);
+    AddQualifierToCompletionString(Result, Qualifier, QualifierIsInformative, 
+                                   S.Context);
     FunctionDecl *Function = FunTmpl->getTemplatedDecl();
     Result->AddTextChunk(Function->getNameAsString().c_str());
     
@@ -820,7 +873,8 @@ CodeCompleteConsumer::Result::CreateCodeCompletionString(Sema &S) {
   
   if (TemplateDecl *Template = dyn_cast<TemplateDecl>(ND)) {
     CodeCompletionString *Result = new CodeCompletionString;
-    AddQualifierToCompletionString(Result, Qualifier, S.Context);
+    AddQualifierToCompletionString(Result, Qualifier, QualifierIsInformative, 
+                                   S.Context);
     Result->AddTextChunk(Template->getNameAsString().c_str());
     Result->AddTextChunk("<");
     AddTemplateParameterChunks(S.Context, Template, Result);
@@ -828,19 +882,92 @@ CodeCompleteConsumer::Result::CreateCodeCompletionString(Sema &S) {
     return Result;
   }
   
-  if (Qualifier) {
+  if (Qualifier || StartsNestedNameSpecifier) {
     CodeCompletionString *Result = new CodeCompletionString;
-    AddQualifierToCompletionString(Result, Qualifier, S.Context);
+    AddQualifierToCompletionString(Result, Qualifier, QualifierIsInformative, 
+                                   S.Context);
     Result->AddTextChunk(ND->getNameAsString().c_str());
+    if (StartsNestedNameSpecifier)
+      Result->AddTextChunk("::");
     return Result;
   }
   
   return 0;
 }
 
+CodeCompletionString *
+CodeCompleteConsumer::OverloadCandidate::CreateSignatureString(
+                                                          unsigned CurrentArg,
+                                                               Sema &S) const {
+  CodeCompletionString *Result = new CodeCompletionString;
+  FunctionDecl *FDecl = getFunction();
+  const FunctionProtoType *Proto 
+    = dyn_cast<FunctionProtoType>(getFunctionType());
+  if (!FDecl && !Proto) {
+    // Function without a prototype. Just give the return type and a 
+    // highlighted ellipsis.
+    const FunctionType *FT = getFunctionType();
+    Result->AddTextChunk(
+            FT->getResultType().getAsString(S.Context.PrintingPolicy).c_str());
+    Result->AddTextChunk("(");
+    Result->AddPlaceholderChunk("...");
+    Result->AddTextChunk("(");    
+    return Result;
+  }
+  
+  if (FDecl)
+    Result->AddTextChunk(FDecl->getNameAsString().c_str());    
+  else
+    Result->AddTextChunk(
+         Proto->getResultType().getAsString(S.Context.PrintingPolicy).c_str());
+  
+  Result->AddTextChunk("(");
+  unsigned NumParams = FDecl? FDecl->getNumParams() : Proto->getNumArgs();
+  for (unsigned I = 0; I != NumParams; ++I) {
+    if (I)
+      Result->AddTextChunk(", ");
+    
+    std::string ArgString;
+    QualType ArgType;
+    
+    if (FDecl) {
+      ArgString = FDecl->getParamDecl(I)->getNameAsString();
+      ArgType = FDecl->getParamDecl(I)->getOriginalType();
+    } else {
+      ArgType = Proto->getArgType(I);
+    }
+    
+    ArgType.getAsStringInternal(ArgString, S.Context.PrintingPolicy);
+    
+    if (I == CurrentArg)
+      Result->AddPlaceholderChunk(ArgString.c_str());
+    else
+      Result->AddTextChunk(ArgString.c_str());
+  }
+  
+  if (Proto && Proto->isVariadic()) {
+    Result->AddTextChunk(", ");
+    if (CurrentArg < NumParams)
+      Result->AddTextChunk("...");
+    else
+      Result->AddPlaceholderChunk("...");
+  }
+  Result->AddTextChunk(")");
+  
+  return Result;
+}
+
 namespace {
   struct SortCodeCompleteResult {
     typedef CodeCompleteConsumer::Result Result;
+    
+    bool isEarlierDeclarationName(DeclarationName X, DeclarationName Y) const {
+      if (X.getNameKind() != Y.getNameKind())
+        return X.getNameKind() < Y.getNameKind();
+      
+      return llvm::LowercaseString(X.getAsString()) 
+        < llvm::LowercaseString(Y.getAsString());
+    }
     
     bool operator()(const Result &X, const Result &Y) const {
       // Sort first by rank.
@@ -859,14 +986,19 @@ namespace {
       if (X.Hidden != Y.Hidden)
         return !X.Hidden;
       
+      // Non-nested-name-specifiers precede nested-name-specifiers.
+      if (X.StartsNestedNameSpecifier != Y.StartsNestedNameSpecifier)
+        return !X.StartsNestedNameSpecifier;
+      
       // Ordering depends on the kind of result.
       switch (X.Kind) {
         case Result::RK_Declaration:
           // Order based on the declaration names.
-          return X.Declaration->getDeclName() < Y.Declaration->getDeclName();
+          return isEarlierDeclarationName(X.Declaration->getDeclName(),
+                                          Y.Declaration->getDeclName());
           
         case Result::RK_Keyword:
-          return strcmp(X.Keyword, Y.Keyword) == -1;
+          return strcmp(X.Keyword, Y.Keyword) < 0;
       }
       
       // Silence GCC warning.
@@ -912,7 +1044,7 @@ void Sema::CodeCompleteMemberReferenceExpr(Scope *S, ExprTy *BaseE,
       return;
   }
   
-  ResultBuilder Results(*this);
+  ResultBuilder Results(*this, &ResultBuilder::IsMember);
   unsigned NextRank = 0;
   
   if (const RecordType *Record = BaseType->getAs<RecordType>()) {
@@ -1039,8 +1171,7 @@ void Sema::CodeCompleteCase(Scope *S) {
         // At the XXX, our completions are TagDecl::TK_union,
         // TagDecl::TK_struct, and TagDecl::TK_class, rather than TK_union,
         // TK_struct, and TK_class.
-        if (QualifiedDeclRefExpr *QDRE = dyn_cast<QualifiedDeclRefExpr>(DRE))
-          Qualifier = QDRE->getQualifier();
+        Qualifier = DRE->getQualifier();
       }
   }
   
@@ -1130,19 +1261,17 @@ void Sema::CodeCompleteCall(Scope *S, ExprTy *FnIn,
                    IsBetterOverloadCandidate(*this));
   
   // Add the remaining viable overload candidates as code-completion reslults.  
-  typedef CodeCompleteConsumer::Result Result;
-  ResultBuilder Results(*this);
-  Results.EnterNewScope();
+  typedef CodeCompleteConsumer::OverloadCandidate ResultCandidate;
+  llvm::SmallVector<ResultCandidate, 8> Results;
   
   for (OverloadCandidateSet::iterator Cand = CandidateSet.begin(),
                                    CandEnd = CandidateSet.end();
        Cand != CandEnd; ++Cand) {
     if (Cand->Viable)
-      Results.MaybeAddResult(Result(Cand->Function, 0), 0);
+      Results.push_back(ResultCandidate(Cand->Function));
   }
-  
-  Results.ExitScope();
-  HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());
+  CodeCompleter->ProcessOverloadCandidates(NumArgs, Results.data(), 
+                                           Results.size());
 }
 
 void Sema::CodeCompleteQualifiedId(Scope *S, const CXXScopeSpec &SS,
@@ -1171,6 +1300,7 @@ void Sema::CodeCompleteUsing(Scope *S) {
     return;
   
   ResultBuilder Results(*this, &ResultBuilder::IsNestedNameSpecifier);
+  Results.EnterNewScope();
   
   // If we aren't in class scope, we could see the "namespace" keyword.
   if (!S->isClassScope())
@@ -1180,6 +1310,7 @@ void Sema::CodeCompleteUsing(Scope *S) {
   // nested-name-specifier.
   CollectLookupResults(S, Context.getTranslationUnitDecl(), 0, 
                        CurContext, Results);
+  Results.ExitScope();
   
   HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());
 }
@@ -1191,8 +1322,10 @@ void Sema::CodeCompleteUsingDirective(Scope *S) {
   // After "using namespace", we expect to see a namespace name or namespace
   // alias.
   ResultBuilder Results(*this, &ResultBuilder::IsNamespaceOrAlias);
+  Results.EnterNewScope();
   CollectLookupResults(S, Context.getTranslationUnitDecl(), 0, CurContext,
                        Results);
+  Results.ExitScope();
   HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
 }
 
@@ -1218,11 +1351,13 @@ void Sema::CodeCompleteNamespaceDecl(Scope *S)  {
     
     // Add the most recent definition (or extended definition) of each 
     // namespace to the list of results.
+    Results.EnterNewScope();
     for (std::map<NamespaceDecl *, NamespaceDecl *>::iterator 
          NS = OrigToLatest.begin(), NSEnd = OrigToLatest.end();
          NS != NSEnd; ++NS)
       Results.MaybeAddResult(CodeCompleteConsumer::Result(NS->second, 0),
                              CurContext);
+    Results.ExitScope();
   }
   
   HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
@@ -1245,6 +1380,7 @@ void Sema::CodeCompleteOperatorName(Scope *S) {
 
   typedef CodeCompleteConsumer::Result Result;
   ResultBuilder Results(*this, &ResultBuilder::IsType);
+  Results.EnterNewScope();
   
   // Add the names of overloadable operators.
 #define OVERLOADED_OPERATOR(Name,Spelling,Token,Unary,Binary,MemberOnly)      \
@@ -1263,7 +1399,35 @@ void Sema::CodeCompleteOperatorName(Scope *S) {
   Results.setFilter(&ResultBuilder::IsNestedNameSpecifier);
   CollectLookupResults(S, Context.getTranslationUnitDecl(), NextRank + 1, 
                        CurContext, Results);
+  Results.ExitScope();
   
   HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
 }
 
+void Sema::CodeCompleteObjCProperty(Scope *S, ObjCDeclSpec &ODS) { 
+  if (!CodeCompleter)
+    return;
+  unsigned Attributes = ODS.getPropertyAttributes();
+  
+  typedef CodeCompleteConsumer::Result Result;
+  ResultBuilder Results(*this);
+  Results.EnterNewScope();
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_readonly))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("readonly", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_assign))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("assign", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_readwrite))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("readwrite", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_retain))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("retain", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_copy))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("copy", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_nonatomic))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("nonatomic", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_setter))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("setter", 0));
+  if (!(Attributes & ObjCDeclSpec::DQ_PR_getter))
+    Results.MaybeAddResult(CodeCompleteConsumer::Result("getter", 0));
+  Results.ExitScope();
+  HandleCodeCompleteResults(CodeCompleter, Results.data(), Results.size());  
+}

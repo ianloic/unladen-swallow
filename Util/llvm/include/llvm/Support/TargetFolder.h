@@ -60,6 +60,9 @@ public:
   Constant *CreateSub(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getSub(LHS, RHS));
   }
+  Constant *CreateNSWSub(Constant *LHS, Constant *RHS) const {
+    return Fold(ConstantExpr::getNSWSub(LHS, RHS));
+  }
   Constant *CreateFSub(Constant *LHS, Constant *RHS) const {
     return Fold(ConstantExpr::getFSub(LHS, RHS));
   }
@@ -175,6 +178,16 @@ public:
   }
   Constant *CreatePtrToInt(Constant *C, const Type *DestTy) const {
     return CreateCast(Instruction::PtrToInt, C, DestTy);
+  }
+  Constant *CreateZExtOrBitCast(Constant *C, const Type *DestTy) const {
+    if (C->getType() == DestTy)
+      return C; // avoid calling Fold
+    return Fold(ConstantExpr::getZExtOrBitCast(C, DestTy));
+  }
+  Constant *CreateSExtOrBitCast(Constant *C, const Type *DestTy) const {
+    if (C->getType() == DestTy)
+      return C; // avoid calling Fold
+    return Fold(ConstantExpr::getSExtOrBitCast(C, DestTy));
   }
   Constant *CreateTruncOrBitCast(Constant *C, const Type *DestTy) const {
     if (C->getType() == DestTy)

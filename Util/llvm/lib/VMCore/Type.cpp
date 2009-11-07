@@ -358,6 +358,46 @@ const IntegerType *Type::getInt64Ty(LLVMContext &C) {
   return &C.pImpl->Int64Ty;
 }
 
+const PointerType *Type::getFloatPtrTy(LLVMContext &C, unsigned AS) {
+  return getFloatTy(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getDoublePtrTy(LLVMContext &C, unsigned AS) {
+  return getDoubleTy(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getX86_FP80PtrTy(LLVMContext &C, unsigned AS) {
+  return getX86_FP80Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getFP128PtrTy(LLVMContext &C, unsigned AS) {
+  return getFP128Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getPPC_FP128PtrTy(LLVMContext &C, unsigned AS) {
+  return getPPC_FP128Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getInt1PtrTy(LLVMContext &C, unsigned AS) {
+  return getInt1Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getInt8PtrTy(LLVMContext &C, unsigned AS) {
+  return getInt8Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getInt16PtrTy(LLVMContext &C, unsigned AS) {
+  return getInt16Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getInt32PtrTy(LLVMContext &C, unsigned AS) {
+  return getInt32Ty(C)->getPointerTo(AS);
+}
+
+const PointerType *Type::getInt64PtrTy(LLVMContext &C, unsigned AS) {
+  return getInt64Ty(C)->getPointerTo(AS);
+}
+
 //===----------------------------------------------------------------------===//
 //                          Derived Type Constructors
 //===----------------------------------------------------------------------===//
@@ -365,36 +405,14 @@ const IntegerType *Type::getInt64Ty(LLVMContext &C) {
 /// isValidReturnType - Return true if the specified type is valid as a return
 /// type.
 bool FunctionType::isValidReturnType(const Type *RetTy) {
-  if (RetTy->isFirstClassType()) {
-    if (const PointerType *PTy = dyn_cast<PointerType>(RetTy))
-      return PTy->getElementType()->getTypeID() != MetadataTyID;
-    return true;
-  }
-  if (RetTy->getTypeID() == VoidTyID || RetTy->getTypeID() == MetadataTyID ||
-      isa<OpaqueType>(RetTy))
-    return true;
-  
-  // If this is a multiple return case, verify that each return is a first class
-  // value and that there is at least one value.
-  const StructType *SRetTy = dyn_cast<StructType>(RetTy);
-  if (SRetTy == 0 || SRetTy->getNumElements() == 0)
-    return false;
-  
-  for (unsigned i = 0, e = SRetTy->getNumElements(); i != e; ++i)
-    if (!SRetTy->getElementType(i)->isFirstClassType())
-      return false;
-  return true;
+  return RetTy->getTypeID() != LabelTyID &&
+         RetTy->getTypeID() != MetadataTyID;
 }
 
 /// isValidArgumentType - Return true if the specified type is valid as an
 /// argument type.
 bool FunctionType::isValidArgumentType(const Type *ArgTy) {
-  if ((!ArgTy->isFirstClassType() && !isa<OpaqueType>(ArgTy)) ||
-      (isa<PointerType>(ArgTy) &&
-       cast<PointerType>(ArgTy)->getElementType()->getTypeID() == MetadataTyID))
-    return false;
-
-  return true;
+  return ArgTy->isFirstClassType() || isa<OpaqueType>(ArgTy);
 }
 
 FunctionType::FunctionType(const Type *Result,
@@ -512,8 +530,9 @@ void DerivedType::dropAllTypeUses() {
     // pick so long as it doesn't point back to this type.  We choose something
     // concrete to avoid overhead for adding to AbstractTypeUser lists and
     // stuff.
+    const Type *ConcreteTy = Type::getInt32Ty(getContext());
     for (unsigned i = 1, e = NumContainedTys; i != e; ++i)
-      ContainedTys[i] = Type::getInt32Ty(getContext());
+      ContainedTys[i] = ConcreteTy;
   }
 }
 
@@ -830,15 +849,8 @@ ArrayType *ArrayType::get(const Type *ElementType, uint64_t NumElements) {
 }
 
 bool ArrayType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy->getTypeID() == VoidTyID || ElemTy->getTypeID() == LabelTyID ||
-      ElemTy->getTypeID() == MetadataTyID || isa<FunctionType>(ElemTy))
-    return false;
-
-  if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType()->getTypeID() == MetadataTyID)
-      return false;
-
-  return true;
+  return ElemTy->getTypeID() != VoidTyID && ElemTy->getTypeID() != LabelTyID &&
+         ElemTy->getTypeID() != MetadataTyID && !isa<FunctionType>(ElemTy);
 }
 
 VectorType *VectorType::get(const Type *ElementType, unsigned NumElements) {
@@ -862,11 +874,8 @@ VectorType *VectorType::get(const Type *ElementType, unsigned NumElements) {
 }
 
 bool VectorType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy->isInteger() || ElemTy->isFloatingPoint() ||
-      isa<OpaqueType>(ElemTy))
-    return true;
-
-  return false;
+  return ElemTy->isInteger() || ElemTy->isFloatingPoint() ||
+         isa<OpaqueType>(ElemTy);
 }
 
 //===----------------------------------------------------------------------===//
@@ -909,15 +918,8 @@ StructType *StructType::get(LLVMContext &Context, const Type *type, ...) {
 }
 
 bool StructType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy->getTypeID() == VoidTyID || ElemTy->getTypeID() == LabelTyID ||
-      ElemTy->getTypeID() == MetadataTyID || isa<FunctionType>(ElemTy))
-    return false;
-
-  if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType()->getTypeID() == MetadataTyID)
-      return false;
-
-  return true;
+  return ElemTy->getTypeID() != VoidTyID && ElemTy->getTypeID() != LabelTyID &&
+         ElemTy->getTypeID() != MetadataTyID && !isa<FunctionType>(ElemTy);
 }
 
 
@@ -949,20 +951,14 @@ PointerType *PointerType::get(const Type *ValueType, unsigned AddressSpace) {
   return PT;
 }
 
-PointerType *Type::getPointerTo(unsigned addrs) const {
+const PointerType *Type::getPointerTo(unsigned addrs) const {
   return PointerType::get(this, addrs);
 }
 
 bool PointerType::isValidElementType(const Type *ElemTy) {
-  if (ElemTy->getTypeID() == VoidTyID ||
-      ElemTy->getTypeID() == LabelTyID)
-    return false;
-
-  if (const PointerType *PTy = dyn_cast<PointerType>(ElemTy))
-    if (PTy->getElementType()->getTypeID() == MetadataTyID)
-      return false;
-
-  return true;
+  return ElemTy->getTypeID() != VoidTyID &&
+         ElemTy->getTypeID() != LabelTyID &&
+         ElemTy->getTypeID() != MetadataTyID;
 }
 
 

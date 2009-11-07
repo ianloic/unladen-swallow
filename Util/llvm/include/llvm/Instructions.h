@@ -34,23 +34,28 @@ class LLVMContext;
 class DominatorTree;
 
 //===----------------------------------------------------------------------===//
-//                             AllocationInst Class
+//                                AllocaInst Class
 //===----------------------------------------------------------------------===//
 
-/// AllocationInst - This class is the common base class of MallocInst and
-/// AllocaInst.
+/// AllocaInst - an instruction to allocate memory on the stack
 ///
-class AllocationInst : public UnaryInstruction {
-protected:
-  AllocationInst(const Type *Ty, Value *ArraySize, 
-                 unsigned iTy, unsigned Align, const Twine &Name = "", 
-                 Instruction *InsertBefore = 0);
-  AllocationInst(const Type *Ty, Value *ArraySize,
-                 unsigned iTy, unsigned Align, const Twine &Name,
-                 BasicBlock *InsertAtEnd);
+class AllocaInst : public UnaryInstruction {
 public:
+  explicit AllocaInst(const Type *Ty, Value *ArraySize = 0,
+                      const Twine &Name = "", Instruction *InsertBefore = 0);
+  AllocaInst(const Type *Ty, Value *ArraySize, 
+             const Twine &Name, BasicBlock *InsertAtEnd);
+
+  AllocaInst(const Type *Ty, const Twine &Name, Instruction *InsertBefore = 0);
+  AllocaInst(const Type *Ty, const Twine &Name, BasicBlock *InsertAtEnd);
+
+  AllocaInst(const Type *Ty, Value *ArraySize, unsigned Align,
+             const Twine &Name = "", Instruction *InsertBefore = 0);
+  AllocaInst(const Type *Ty, Value *ArraySize, unsigned Align,
+             const Twine &Name, BasicBlock *InsertAtEnd);
+
   // Out of line virtual method, so the vtable, etc. has a home.
-  virtual ~AllocationInst();
+  virtual ~AllocaInst();
 
   /// isArrayAllocation - Return true if there is an allocation size parameter
   /// to the allocation instruction that is not 1.
@@ -80,145 +85,17 @@ public:
   unsigned getAlignment() const { return (1u << SubclassData) >> 1; }
   void setAlignment(unsigned Align);
 
-  virtual AllocationInst *clone(LLVMContext &Context) const = 0;
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const AllocationInst *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::Alloca ||
-           I->getOpcode() == Instruction::Malloc;
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-};
-
-
-//===----------------------------------------------------------------------===//
-//                                MallocInst Class
-//===----------------------------------------------------------------------===//
-
-/// MallocInst - an instruction to allocated memory on the heap
-///
-class MallocInst : public AllocationInst {
-public:
-  explicit MallocInst(const Type *Ty, Value *ArraySize = 0,
-                      const Twine &NameStr = "",
-                      Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, ArraySize, Malloc,
-                     0, NameStr, InsertBefore) {}
-  MallocInst(const Type *Ty, Value *ArraySize,
-             const Twine &NameStr, BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, ArraySize, Malloc, 0, NameStr, InsertAtEnd) {}
-
-  MallocInst(const Type *Ty, const Twine &NameStr,
-             Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, 0, Malloc, 0, NameStr, InsertBefore) {}
-  MallocInst(const Type *Ty, const Twine &NameStr,
-             BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, 0, Malloc, 0, NameStr, InsertAtEnd) {}
-
-  MallocInst(const Type *Ty, Value *ArraySize,
-             unsigned Align, const Twine &NameStr,
-             BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, ArraySize, Malloc,
-                     Align, NameStr, InsertAtEnd) {}
-  MallocInst(const Type *Ty, Value *ArraySize,
-             unsigned Align, const Twine &NameStr = "", 
-             Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, ArraySize,
-                     Malloc, Align, NameStr, InsertBefore) {}
-
-  virtual MallocInst *clone(LLVMContext &Context) const;
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const MallocInst *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return (I->getOpcode() == Instruction::Malloc);
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-};
-
-
-//===----------------------------------------------------------------------===//
-//                                AllocaInst Class
-//===----------------------------------------------------------------------===//
-
-/// AllocaInst - an instruction to allocate memory on the stack
-///
-class AllocaInst : public AllocationInst {
-public:
-  explicit AllocaInst(const Type *Ty,
-                      Value *ArraySize = 0,
-                      const Twine &NameStr = "",
-                      Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, ArraySize, Alloca,
-                     0, NameStr, InsertBefore) {}
-  AllocaInst(const Type *Ty,
-             Value *ArraySize, const Twine &NameStr,
-             BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, ArraySize, Alloca, 0, NameStr, InsertAtEnd) {}
-
-  AllocaInst(const Type *Ty, const Twine &NameStr,
-             Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, 0, Alloca, 0, NameStr, InsertBefore) {}
-  AllocaInst(const Type *Ty, const Twine &NameStr,
-             BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, 0, Alloca, 0, NameStr, InsertAtEnd) {}
-
-  AllocaInst(const Type *Ty, Value *ArraySize,
-             unsigned Align, const Twine &NameStr = "",
-             Instruction *InsertBefore = 0)
-    : AllocationInst(Ty, ArraySize, Alloca,
-                     Align, NameStr, InsertBefore) {}
-  AllocaInst(const Type *Ty, Value *ArraySize,
-             unsigned Align, const Twine &NameStr,
-             BasicBlock *InsertAtEnd)
-    : AllocationInst(Ty, ArraySize, Alloca,
-                     Align, NameStr, InsertAtEnd) {}
-
-  virtual AllocaInst *clone(LLVMContext &Context) const;
-
   /// isStaticAlloca - Return true if this alloca is in the entry block of the
   /// function and is a constant size.  If so, the code generator will fold it
   /// into the prolog/epilog code, so it is basically free.
   bool isStaticAlloca() const;
 
+  virtual AllocaInst *clone() const;
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const AllocaInst *) { return true; }
   static inline bool classof(const Instruction *I) {
     return (I->getOpcode() == Instruction::Alloca);
-  }
-  static inline bool classof(const Value *V) {
-    return isa<Instruction>(V) && classof(cast<Instruction>(V));
-  }
-};
-
-
-//===----------------------------------------------------------------------===//
-//                                 FreeInst Class
-//===----------------------------------------------------------------------===//
-
-/// FreeInst - an instruction to deallocate memory
-///
-class FreeInst : public UnaryInstruction {
-  void AssertOK();
-public:
-  explicit FreeInst(Value *Ptr, Instruction *InsertBefore = 0);
-  FreeInst(Value *Ptr, BasicBlock *InsertAfter);
-
-  virtual FreeInst *clone(LLVMContext &Context) const;
-
-  // Accessor methods for consistency with other memory operations
-  Value *getPointerOperand() { return getOperand(0); }
-  const Value *getPointerOperand() const { return getOperand(0); }
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const FreeInst *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return (I->getOpcode() == Instruction::Free);
   }
   static inline bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
@@ -265,7 +142,7 @@ public:
     SubclassData = (SubclassData & ~1) | (V ? 1 : 0);
   }
 
-  virtual LoadInst *clone(LLVMContext &Context) const;
+  virtual LoadInst *clone() const;
 
   /// getAlignment - Return the alignment of the access that is being performed
   ///
@@ -342,7 +219,7 @@ public:
 
   void setAlignment(unsigned Align);
 
-  virtual StoreInst *clone(LLVMContext &Context) const;
+  virtual StoreInst *clone() const;
 
   Value *getPointerOperand() { return getOperand(1); }
   const Value *getPointerOperand() const { return getOperand(1); }
@@ -525,7 +402,7 @@ public:
     return GEP;
   }
 
-  virtual GetElementPtrInst *clone(LLVMContext &Context) const;
+  virtual GetElementPtrInst *clone() const;
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -604,7 +481,10 @@ public:
 
   /// setIsInBounds - Set or clear the inbounds flag on this GEP instruction.
   /// See LangRef.html for the meaning of inbounds on a getelementptr.
-  void setIsInBounds(bool);
+  void setIsInBounds(bool b = true);
+
+  /// isInBounds - Determine whether the GEP has the inbounds flag.
+  bool isInBounds() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const GetElementPtrInst *) { return true; }
@@ -784,30 +664,6 @@ public:
     return !isEquality(P);
   }
 
-  /// @returns true if the predicate of this ICmpInst is signed, false otherwise
-  /// @brief Determine if this instruction's predicate is signed.
-  bool isSignedPredicate() const { return isSignedPredicate(getPredicate()); }
-
-  /// @returns true if the predicate provided is signed, false otherwise
-  /// @brief Determine if the predicate is signed.
-  static bool isSignedPredicate(Predicate pred);
-
-  /// @returns true if the specified compare predicate is
-  /// true when both operands are equal...
-  /// @brief Determine if the icmp is true when both operands are equal
-  static bool isTrueWhenEqual(ICmpInst::Predicate pred) {
-    return pred == ICmpInst::ICMP_EQ  || pred == ICmpInst::ICMP_UGE ||
-           pred == ICmpInst::ICMP_SGE || pred == ICmpInst::ICMP_ULE ||
-           pred == ICmpInst::ICMP_SLE;
-  }
-
-  /// @returns true if the specified compare instruction is
-  /// true when both operands are equal...
-  /// @brief Determine if the ICmpInst returns true when both operands are equal
-  bool isTrueWhenEqual() {
-    return isTrueWhenEqual(getPredicate());
-  }
-
   /// Initialize a set of values that all satisfy the predicate with C.
   /// @brief Make a ConstantRange for a relation with a constant value.
   static ConstantRange makeConstantRange(Predicate pred, const APInt &C);
@@ -822,7 +678,7 @@ public:
     Op<0>().swap(Op<1>());
   }
 
-  virtual ICmpInst *clone(LLVMContext &Context) const;
+  virtual ICmpInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const ICmpInst *) { return true; }
@@ -931,7 +787,7 @@ public:
     Op<0>().swap(Op<1>());
   }
 
-  virtual FCmpInst *clone(LLVMContext &Context) const;
+  virtual FCmpInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const FCmpInst *) { return true; }
@@ -1039,12 +895,17 @@ public:
   ///    constant 1.
   /// 2. Call malloc with that argument.
   /// 3. Bitcast the result of the malloc call to the specified type.
-  static Value *CreateMalloc(Instruction *InsertBefore, const Type *IntPtrTy,
-                             const Type *AllocTy, Value *ArraySize = 0,
-                             const Twine &Name = "");
-  static Value *CreateMalloc(BasicBlock *InsertAtEnd, const Type *IntPtrTy,
-                             const Type *AllocTy, Value *ArraySize = 0,
-                             const Twine &Name = "");
+  static Instruction *CreateMalloc(Instruction *InsertBefore,
+                                   const Type *IntPtrTy, const Type *AllocTy,
+                                   Value *ArraySize = 0,
+                                   const Twine &Name = "");
+  static Instruction *CreateMalloc(BasicBlock *InsertAtEnd,
+                                   const Type *IntPtrTy, const Type *AllocTy,
+                                   Value *ArraySize = 0, Function* MallocF = 0,
+                                   const Twine &Name = "");
+  /// CreateFree - Generate the IR for a call to the builtin free function.
+  static void CreateFree(Value* Source, Instruction *InsertBefore);
+  static Instruction* CreateFree(Value* Source, BasicBlock *InsertAtEnd);
 
   ~CallInst();
 
@@ -1053,7 +914,7 @@ public:
     SubclassData = (SubclassData & ~1) | unsigned(isTC);
   }
 
-  virtual CallInst *clone(LLVMContext &Context) const;
+  virtual CallInst *clone() const;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -1145,9 +1006,14 @@ public:
   }
 
   /// getCalledValue - Get a pointer to the function that is invoked by this
-  /// instruction
+  /// instruction.
   const Value *getCalledValue() const { return Op<0>(); }
         Value *getCalledValue()       { return Op<0>(); }
+
+  /// setCalledFunction - Set the function called.
+  void setCalledFunction(Value* Fn) {
+    Op<0>() = Fn;
+  }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const CallInst *) { return true; }
@@ -1247,7 +1113,7 @@ public:
     return static_cast<OtherOps>(Instruction::getOpcode());
   }
 
-  virtual SelectInst *clone(LLVMContext &Context) const;
+  virtual SelectInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const SelectInst *) { return true; }
@@ -1285,7 +1151,7 @@ public:
     setName(NameStr);
   }
 
-  virtual VAArgInst *clone(LLVMContext &Context) const;
+  virtual VAArgInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const VAArgInst *) { return true; }
@@ -1325,7 +1191,7 @@ public:
   /// formed with the specified operands.
   static bool isValidOperands(const Value *Vec, const Value *Idx);
 
-  virtual ExtractElementInst *clone(LLVMContext &Context) const;
+  virtual ExtractElementInst *clone() const;
 
   Value *getVectorOperand() { return Op<0>(); }
   Value *getIndexOperand() { return Op<1>(); }
@@ -1386,7 +1252,7 @@ public:
   static bool isValidOperands(const Value *Vec, const Value *NewElt,
                               const Value *Idx);
 
-  virtual InsertElementInst *clone(LLVMContext &Context) const;
+  virtual InsertElementInst *clone() const;
 
   /// getType - Overload to return most specific vector type.
   ///
@@ -1437,7 +1303,7 @@ public:
   static bool isValidOperands(const Value *V1, const Value *V2,
                               const Value *Mask);
 
-  virtual ShuffleVectorInst *clone(LLVMContext &Context) const;
+  virtual ShuffleVectorInst *clone() const;
 
   /// getType - Overload to return most specific vector type.
   ///
@@ -1581,7 +1447,7 @@ public:
     return new ExtractValueInst(Agg, Idxs, Idxs + 1, NameStr, InsertAtEnd);
   }
 
-  virtual ExtractValueInst *clone(LLVMContext &Context) const;
+  virtual ExtractValueInst *clone() const;
 
   /// getIndexedType - Returns the type of the element that would be extracted
   /// with an extractvalue instruction with the specified parameters.
@@ -1751,7 +1617,7 @@ public:
     return new InsertValueInst(Agg, Val, Idx, NameStr, InsertAtEnd);
   }
 
-  virtual InsertValueInst *clone(LLVMContext &Context) const;
+  virtual InsertValueInst *clone() const;
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -1880,7 +1746,7 @@ public:
     resizeOperands(NumValues*2);
   }
 
-  virtual PHINode *clone(LLVMContext &Context) const;
+  virtual PHINode *clone() const;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -1907,19 +1773,29 @@ public:
     return i/2;
   }
 
+  /// getIncomingBlock - Return incoming basic block #i.
+  ///
+  BasicBlock *getIncomingBlock(unsigned i) const {
+    return cast<BasicBlock>(getOperand(i*2+1));
+  }
+  
   /// getIncomingBlock - Return incoming basic block corresponding
-  /// to value use iterator
+  /// to an operand of the PHI.
+  ///
+  BasicBlock *getIncomingBlock(const Use &U) const {
+    assert(this == U.getUser() && "Iterator doesn't point to PHI's Uses?");
+    return cast<BasicBlock>((&U + 1)->get());
+  }
+  
+  /// getIncomingBlock - Return incoming basic block corresponding
+  /// to value use iterator.
   ///
   template <typename U>
   BasicBlock *getIncomingBlock(value_use_iterator<U> I) const {
-    assert(this == *I && "Iterator doesn't point to PHI's Uses?");
-    return static_cast<BasicBlock*>((&I.getUse() + 1)->get());
+    return getIncomingBlock(I.getUse());
   }
-  /// getIncomingBlock - Return incoming basic block number x
-  ///
-  BasicBlock *getIncomingBlock(unsigned i) const {
-    return static_cast<BasicBlock*>(getOperand(i*2+1));
-  }
+  
+  
   void setIncomingBlock(unsigned i, BasicBlock *BB) {
     setOperand(i*2+1, BB);
   }
@@ -2047,7 +1923,7 @@ public:
   }
   virtual ~ReturnInst();
 
-  virtual ReturnInst *clone(LLVMContext &Context) const;
+  virtual ReturnInst *clone() const;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2129,7 +2005,7 @@ public:
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
-  virtual BranchInst *clone(LLVMContext &Context) const;
+  virtual BranchInst *clone() const;
 
   bool isUnconditional() const { return getNumOperands() == 1; }
   bool isConditional()   const { return getNumOperands() == 3; }
@@ -2299,7 +2175,7 @@ public:
   ///
   void removeCase(unsigned idx);
 
-  virtual SwitchInst *clone(LLVMContext &Context) const;
+  virtual SwitchInst *clone() const;
 
   unsigned getNumSuccessors() const { return getNumOperands()/2; }
   BasicBlock *getSuccessor(unsigned idx) const {
@@ -2413,7 +2289,7 @@ public:
                                   Values, NameStr, InsertAtEnd);
   }
 
-  virtual InvokeInst *clone(LLVMContext &Context) const;
+  virtual InvokeInst *clone() const;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2603,7 +2479,7 @@ public:
   explicit UnwindInst(LLVMContext &C, Instruction *InsertBefore = 0);
   explicit UnwindInst(LLVMContext &C, BasicBlock *InsertAtEnd);
 
-  virtual UnwindInst *clone(LLVMContext &Context) const;
+  virtual UnwindInst *clone() const;
 
   unsigned getNumSuccessors() const { return 0; }
 
@@ -2640,7 +2516,7 @@ public:
   explicit UnreachableInst(LLVMContext &C, Instruction *InsertBefore = 0);
   explicit UnreachableInst(LLVMContext &C, BasicBlock *InsertAtEnd);
 
-  virtual UnreachableInst *clone(LLVMContext &Context) const;
+  virtual UnreachableInst *clone() const;
 
   unsigned getNumSuccessors() const { return 0; }
 
@@ -2682,7 +2558,7 @@ public:
   );
 
   /// @brief Clone an identical TruncInst
-  virtual TruncInst *clone(LLVMContext &Context) const;
+  virtual TruncInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const TruncInst *) { return true; }
@@ -2718,7 +2594,7 @@ public:
   );
 
   /// @brief Clone an identical ZExtInst
-  virtual ZExtInst *clone(LLVMContext &Context) const;
+  virtual ZExtInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const ZExtInst *) { return true; }
@@ -2754,7 +2630,7 @@ public:
   );
 
   /// @brief Clone an identical SExtInst
-  virtual SExtInst *clone(LLVMContext &Context) const;
+  virtual SExtInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const SExtInst *) { return true; }
@@ -2790,7 +2666,7 @@ public:
   );
 
   /// @brief Clone an identical FPTruncInst
-  virtual FPTruncInst *clone(LLVMContext &Context) const;
+  virtual FPTruncInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const FPTruncInst *) { return true; }
@@ -2826,7 +2702,7 @@ public:
   );
 
   /// @brief Clone an identical FPExtInst
-  virtual FPExtInst *clone(LLVMContext &Context) const;
+  virtual FPExtInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const FPExtInst *) { return true; }
@@ -2862,7 +2738,7 @@ public:
   );
 
   /// @brief Clone an identical UIToFPInst
-  virtual UIToFPInst *clone(LLVMContext &Context) const;
+  virtual UIToFPInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const UIToFPInst *) { return true; }
@@ -2898,7 +2774,7 @@ public:
   );
 
   /// @brief Clone an identical SIToFPInst
-  virtual SIToFPInst *clone(LLVMContext &Context) const;
+  virtual SIToFPInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const SIToFPInst *) { return true; }
@@ -2934,7 +2810,7 @@ public:
   );
 
   /// @brief Clone an identical FPToUIInst
-  virtual FPToUIInst *clone(LLVMContext &Context) const;
+  virtual FPToUIInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const FPToUIInst *) { return true; }
@@ -2970,7 +2846,7 @@ public:
   );
 
   /// @brief Clone an identical FPToSIInst
-  virtual FPToSIInst *clone(LLVMContext &Context) const;
+  virtual FPToSIInst *clone() const;
 
   /// @brief Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const FPToSIInst *) { return true; }
@@ -3006,7 +2882,7 @@ public:
   );
 
   /// @brief Clone an identical IntToPtrInst
-  virtual IntToPtrInst *clone(LLVMContext &Context) const;
+  virtual IntToPtrInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IntToPtrInst *) { return true; }
@@ -3042,7 +2918,7 @@ public:
   );
 
   /// @brief Clone an identical PtrToIntInst
-  virtual PtrToIntInst *clone(LLVMContext &Context) const;
+  virtual PtrToIntInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const PtrToIntInst *) { return true; }
@@ -3078,7 +2954,7 @@ public:
   );
 
   /// @brief Clone an identical BitCastInst
-  virtual BitCastInst *clone(LLVMContext &Context) const;
+  virtual BitCastInst *clone() const;
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const BitCastInst *) { return true; }

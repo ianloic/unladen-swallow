@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/Target/TargetMachine.h"
@@ -35,14 +36,13 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 namespace {
-  struct VISIBILITY_HIDDEN MachineVerifier : public MachineFunctionPass {
+  struct MachineVerifier : public MachineFunctionPass {
     static char ID; // Pass ID, replacement for typeid
 
     MachineVerifier(bool allowDoubleDefs = false) :
@@ -185,7 +185,7 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
       errs() << "Error opening '" << OutFileName << "': " << ErrorInfo << '\n';
       exit(1);
     }
-    
+
     OS = OutFile;
   } else {
     OS = &errs();
@@ -238,9 +238,7 @@ void MachineVerifier::report(const char *msg, const MachineFunction *MF) {
       << "- function:    " << MF->getFunction()->getNameStr() << "\n";
 }
 
-void
-MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB)
-{
+void MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB) {
   assert(MBB);
   report(msg, MBB->getParent());
   *OS << "- basic block: " << MBB->getBasicBlock()->getNameStr()
@@ -248,19 +246,15 @@ MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB)
       << " (#" << MBB->getNumber() << ")\n";
 }
 
-void
-MachineVerifier::report(const char *msg, const MachineInstr *MI)
-{
+void MachineVerifier::report(const char *msg, const MachineInstr *MI) {
   assert(MI);
   report(msg, MI->getParent());
   *OS << "- instruction: ";
   MI->print(*OS, TM);
 }
 
-void
-MachineVerifier::report(const char *msg,
-                        const MachineOperand *MO, unsigned MONum)
-{
+void MachineVerifier::report(const char *msg,
+                             const MachineOperand *MO, unsigned MONum) {
   assert(MO);
   report(msg, MO->getParent());
   *OS << "- operand " << MONum << ":   ";
@@ -268,9 +262,7 @@ MachineVerifier::report(const char *msg,
   *OS << "\n";
 }
 
-void
-MachineVerifier::markReachable(const MachineBasicBlock *MBB)
-{
+void MachineVerifier::markReachable(const MachineBasicBlock *MBB) {
   BBInfo &MInfo = MBBInfoMap[MBB];
   if (!MInfo.reachable) {
     MInfo.reachable = true;
@@ -280,9 +272,7 @@ MachineVerifier::markReachable(const MachineBasicBlock *MBB)
   }
 }
 
-void
-MachineVerifier::visitMachineFunctionBefore()
-{
+void MachineVerifier::visitMachineFunctionBefore() {
   regsReserved = TRI->getReservedRegs(*MF);
 
   // A sub-register of a reserved register is also reserved
@@ -297,9 +287,7 @@ MachineVerifier::visitMachineFunctionBefore()
   markReachable(&MF->front());
 }
 
-void
-MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB)
-{
+void MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
   const TargetInstrInfo *TII = MF->getTarget().getInstrInfo();
 
   // Start with minimal CFG sanity checks.
@@ -462,27 +450,26 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB)
   regsDefined.clear();
 }
 
-void
-MachineVerifier::visitMachineInstrBefore(const MachineInstr *MI)
-{
+void MachineVerifier::visitMachineInstrBefore(const MachineInstr *MI) {
   const TargetInstrDesc &TI = MI->getDesc();
-  if (MI->getNumExplicitOperands() < TI.getNumOperands()) {
+  if (MI->getNumOperands() < TI.getNumOperands()) {
     report("Too few operands", MI);
     *OS << TI.getNumOperands() << " operands expected, but "
         << MI->getNumExplicitOperands() << " given.\n";
   }
-  if (!TI.isVariadic()) {
-    if (MI->getNumExplicitOperands() > TI.getNumOperands()) {
-      report("Too many operands", MI);
-      *OS << TI.getNumOperands() << " operands expected, but "
-          << MI->getNumExplicitOperands() << " given.\n";
-    }
+
+  // Check the MachineMemOperands for basic consistency.
+  for (MachineInstr::mmo_iterator I = MI->memoperands_begin(),
+       E = MI->memoperands_end(); I != E; ++I) {
+    if ((*I)->isLoad() && !TI.mayLoad())
+      report("Missing mayLoad flag", MI);
+    if ((*I)->isStore() && !TI.mayStore())
+      report("Missing mayStore flag", MI);
   }
 }
 
 void
-MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum)
-{
+MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
   const MachineInstr *MI = MO->getParent();
   const TargetInstrDesc &TI = MI->getDesc();
 
@@ -494,6 +481,16 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum)
       report("Explicit definition marked as use", MO, MONum);
     else if (MO->isImplicit())
       report("Explicit definition marked as implicit", MO, MONum);
+  } else if (MONum < TI.getNumOperands()) {
+    if (MO->isReg()) {
+      if (MO->isDef())
+        report("Explicit operand marked as def", MO, MONum);
+      if (MO->isImplicit())
+        report("Explicit operand marked as implicit", MO, MONum);
+    }
+  } else {
+    if (MO->isReg() && !MO->isImplicit() && !TI.isVariadic())
+      report("Extra explicit operand on non-variadic instruction", MO, MONum);
   }
 
   switch (MO->getType()) {
@@ -605,9 +602,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum)
   }
 }
 
-void
-MachineVerifier::visitMachineInstrAfter(const MachineInstr *MI)
-{
+void MachineVerifier::visitMachineInstrAfter(const MachineInstr *MI) {
   BBInfo &MInfo = MBBInfoMap[MI->getParent()];
   set_union(MInfo.regsKilled, regsKilled);
   set_subtract(regsLive, regsKilled);
@@ -647,8 +642,7 @@ MachineVerifier::visitMachineInstrAfter(const MachineInstr *MI)
 }
 
 void
-MachineVerifier::visitMachineBasicBlockAfter(const MachineBasicBlock *MBB)
-{
+MachineVerifier::visitMachineBasicBlockAfter(const MachineBasicBlock *MBB) {
   MBBInfoMap[MBB].regsLiveOut = regsLive;
   regsLive.clear();
 }
@@ -656,9 +650,7 @@ MachineVerifier::visitMachineBasicBlockAfter(const MachineBasicBlock *MBB)
 // Calculate the largest possible vregsPassed sets. These are the registers that
 // can pass through an MBB live, but may not be live every time. It is assumed
 // that all vregsPassed sets are empty before the call.
-void
-MachineVerifier::calcMaxRegsPassed()
-{
+void MachineVerifier::calcMaxRegsPassed() {
   // First push live-out regs to successors' vregsPassed. Remember the MBBs that
   // have any vregsPassed.
   DenseSet<const MachineBasicBlock*> todo;
@@ -696,9 +688,7 @@ MachineVerifier::calcMaxRegsPassed()
 // Calculate the minimum vregsPassed set. These are the registers that always
 // pass live through an MBB. The calculation assumes that calcMaxRegsPassed has
 // been called earlier.
-void
-MachineVerifier::calcMinRegsPassed()
-{
+void MachineVerifier::calcMinRegsPassed() {
   DenseSet<const MachineBasicBlock*> todo;
   for (MachineFunction::const_iterator MFI = MF->begin(), MFE = MF->end();
        MFI != MFE; ++MFI)
@@ -733,9 +723,7 @@ MachineVerifier::calcMinRegsPassed()
 
 // Check PHI instructions at the beginning of MBB. It is assumed that
 // calcMinRegsPassed has been run so BBInfo::isLiveOut is valid.
-void
-MachineVerifier::checkPHIOps(const MachineBasicBlock *MBB)
-{
+void MachineVerifier::checkPHIOps(const MachineBasicBlock *MBB) {
   for (MachineBasicBlock::const_iterator BBI = MBB->begin(), BBE = MBB->end();
        BBI != BBE && BBI->getOpcode() == TargetInstrInfo::PHI; ++BBI) {
     DenseSet<const MachineBasicBlock*> seen;
@@ -764,9 +752,7 @@ MachineVerifier::checkPHIOps(const MachineBasicBlock *MBB)
   }
 }
 
-void
-MachineVerifier::visitMachineFunctionAfter()
-{
+void MachineVerifier::visitMachineFunctionAfter() {
   calcMaxRegsPassed();
 
   // With the maximal set of vregsPassed we can verify dead-in registers.

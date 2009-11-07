@@ -8,17 +8,16 @@ add_llvm_library(LLVMTransformUtils
   CloneModule.cpp
   CodeExtractor.cpp
   DemoteRegToStack.cpp
-  InlineCost.cpp
   InlineFunction.cpp
   InstructionNamer.cpp
   LCSSA.cpp
   Local.cpp
   LoopSimplify.cpp
-  LowerAllocations.cpp
   LowerInvoke.cpp
   LowerSwitch.cpp
   Mem2Reg.cpp
   PromoteMemoryToRegister.cpp
+  SSAUpdater.cpp
   SSI.cpp
   SimplifyCFG.cpp
   UnifyFunctionExitNodes.cpp

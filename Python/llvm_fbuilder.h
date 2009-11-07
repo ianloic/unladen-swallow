@@ -7,11 +7,14 @@
 #endif
 
 #include "Util/EventTimer.h"
+#include "Util/PyTypeBuilder.h"
 #include "Util/RuntimeFeedback.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
+#include "llvm/Constants.h"
 #include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/TargetFolder.h"
 #include <string>
 
 struct PyCodeObject;
@@ -30,7 +33,8 @@ public:
     LlvmFunctionBuilder(PyGlobalLlvmData *global_data, PyCodeObject *code);
 
     llvm::Function *function() { return function_; }
-    llvm::IRBuilder<>& builder() { return builder_; }
+    typedef llvm::IRBuilder<true, llvm::TargetFolder> BuilderT;
+    BuilderT& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
 
     /// Returns true if this function actually makes use of the LOAD_GLOBAL
@@ -95,13 +99,21 @@ public:
     }
     void JUMP_ABSOLUTE(llvm::BasicBlock *target, llvm::BasicBlock *fallthrough);
 
-    void POP_JUMP_IF_FALSE(llvm::BasicBlock *target,
+    void POP_JUMP_IF_FALSE(unsigned target_idx,
+                           unsigned fallthrough_idx,
+                           llvm::BasicBlock *target,
                            llvm::BasicBlock *fallthrough);
-    void POP_JUMP_IF_TRUE(llvm::BasicBlock *target,
+    void POP_JUMP_IF_TRUE(unsigned target_idx,
+                          unsigned fallthrough_idx,
+                          llvm::BasicBlock *target,
                           llvm::BasicBlock *fallthrough);
-    void JUMP_IF_FALSE_OR_POP(llvm::BasicBlock *target,
+    void JUMP_IF_FALSE_OR_POP(unsigned target_idx,
+                              unsigned fallthrough_idx,
+                              llvm::BasicBlock *target,
                               llvm::BasicBlock *fallthrough);
-    void JUMP_IF_TRUE_OR_POP(llvm::BasicBlock *target,
+    void JUMP_IF_TRUE_OR_POP(unsigned target_idx,
+                             unsigned fallthrough_idx,
+                             llvm::BasicBlock *target,
                              llvm::BasicBlock *fallthrough);
     void CONTINUE_LOOP(llvm::BasicBlock *target,
                        int target_opindex,
@@ -211,6 +223,8 @@ public:
     void RAISE_VARARGS_TWO();
     void RAISE_VARARGS_THREE();
 
+    bool uses_delete_fast;
+
 private:
     /// These two functions increment or decrement the reference count
     /// of a PyObject*. The behavior is undefined if the Value's type
@@ -239,6 +253,17 @@ private:
     /// the frame and the allocas.
     void CopyToFrameObject();
     void CopyFromFrameObject();
+
+    /// We copy the function's locals into an LLVM alloca so that LLVM can
+    /// better reason about them.
+    void CopyLocalsFromFrameObject();
+
+    template<typename T>
+    llvm::Constant *GetSigned(int64_t val) {
+        return llvm::ConstantInt::getSigned(
+                PyTypeBuilder<T>::get(this->context_),
+                val);
+    }
 
     /// Returns the difference between the current stack pointer and
     /// the base of the stack.
@@ -270,6 +295,9 @@ private:
     /// Inserts a call that will print opcode_name and abort the
     /// program when it's reached.
     void DieForUndefinedOpcode(const char *opcode_name);
+
+    /// How many parameters does the currently-compiling function have?
+    int GetParamCount() const;
 
     /// Implements something like the C assert statement.  If
     /// should_be_true (an i1) is false, prints failure_message (with
@@ -307,6 +335,31 @@ private:
     // new block if it's NULL) and leaves the insertion point there.
     void CheckPyTicker(llvm::BasicBlock *next_block = NULL);
 
+    // Helper function for the POP_JUMP_IF_{TRUE,FALSE} and
+    // JUMP_IF_{TRUE,FALSE}_OR_POP, used for omitting untake branches.
+    // If sufficient data is availble, we made decide to omit one side of a
+    // conditional branch, replacing that code with a jump to the interpreter.
+    // If sufficient data is available:
+    //      - set true_block or false_block to a bail-to-interpreter block.
+    //      - set bail_idx and bail_block to handle bailing.
+    // If sufficient data is available or we decide not to optimize:
+    //      - leave true_block and false_block alone.
+    //      - bail_idx will be 0, bail_block will be NULL.
+    //
+    // Out parameters: true_block, false_block, bail_idx, bail_block.
+    void GetPyCondBranchBailBlock(unsigned true_idx,
+                                  llvm::BasicBlock **true_block,
+                                  unsigned false_idx,
+                                  llvm::BasicBlock **false_block,
+                                  unsigned *bail_idx,
+                                  llvm::BasicBlock **bail_block);
+
+    // Helper function for the POP_JUMP_IF_{TRUE,FALSE} and
+    // JUMP_IF_{TRUE,FALSE}_OR_POP. Fill in the bail block for these opcodes
+    // that was obtained from GetPyCondBranchBailBlock().
+    void FillPyCondBranchBailBlock(llvm::BasicBlock *bail_to,
+                                   unsigned bail_idx);
+
     // These are just like the CreateCall* calls on IRBuilder, except they also
     // apply callee's calling convention and attributes to the call site.
     llvm::CallInst *CreateCall(llvm::Value *callee,
@@ -337,6 +390,10 @@ private:
 
     /// Marks the end of the function and inserts a return instruction.
     llvm::ReturnInst *CreateRet(llvm::Value *retval);
+
+    /// Get the LLVM NULL Value for the given type.
+    template<typename T>
+    llvm::Value *GetNull();
 
     // Returns an i1, true if value represents a NULL pointer.
     llvm::Value *IsNull(llvm::Value *value);
@@ -370,6 +427,12 @@ private:
     // Propagates an exception by jumping to the unwind block with an
     // appropriate unwind reason set.
     void PropagateException();
+
+    // Set up a block preceding the bail-to-interpreter block.
+    void CreateBailPoint(unsigned bail_idx, char reason);
+    void CreateBailPoint(char reason) {
+        CreateBailPoint(f_lasti_, reason);
+    }
 
     // Only for use in the constructor: Fills in the block that
     // handles bailing out of JITted code back to the interpreter
@@ -473,6 +536,11 @@ private:
     void CALL_FUNCTION_safe(int num_args);
     void CALL_FUNCTION_fast(int num_args, const PyRuntimeFeedback *);
 
+    // A safe version that always works, and a fast version that omits NULL
+    // checks where we know the local cannot be NULL.
+    void LOAD_FAST_safe(int index);
+    void LOAD_FAST_fast(int index);
+
     /// Emits code to conditionally bail out to the interpreter loop
     /// if a line tracing function is installed.  If the line tracing
     /// function is not installed, execution will continue at
@@ -494,7 +562,7 @@ private:
     llvm::LLVMContext &context_;
     llvm::Module *const module_;
     llvm::Function *const function_;
-    llvm::IRBuilder<> builder_;
+    BuilderT builder_;
     const bool is_generator_;
     llvm::DIFactory *const debug_info_;
     const llvm::DICompileUnit debug_compile_unit_;
@@ -535,6 +603,12 @@ private:
     // and forth when the frame escapes.
     llvm::Value *blockstack_addr_;
     llvm::Value *num_blocks_addr_;
+
+    // Expose the frame's locals to LLVM. We copy them in on function-entry,
+    // copy them out on write. We use a separate alloca for each local
+    // because LLVM's scalar replacement of aggregates pass doesn't handle
+    // array allocas.
+    std::vector<llvm::Value*> locals_;
 
     llvm::BasicBlock *unreachable_block_;
 

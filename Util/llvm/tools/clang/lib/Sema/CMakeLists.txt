@@ -16,10 +16,10 @@ add_clang_library(clangSema
   SemaDeclAttr.cpp
   SemaDeclCXX.cpp
   SemaDeclObjC.cpp
+  SemaExceptionSpec.cpp
   SemaExpr.cpp
   SemaExprCXX.cpp
   SemaExprObjC.cpp
-  SemaInherit.cpp
   SemaInit.cpp
   SemaLookup.cpp
   SemaOverload.cpp

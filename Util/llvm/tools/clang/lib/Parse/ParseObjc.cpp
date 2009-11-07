@@ -148,10 +148,12 @@ Parser::DeclPtrTy Parser::ParseObjCAtInterfaceDeclaration(
     rparenLoc = ConsumeParen();
 
     // Next, we need to check for any protocol references.
-    SourceLocation EndProtoLoc;
+    SourceLocation LAngleLoc, EndProtoLoc;
     llvm::SmallVector<DeclPtrTy, 8> ProtocolRefs;
+    llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
     if (Tok.is(tok::less) &&
-        ParseObjCProtocolReferences(ProtocolRefs, true, EndProtoLoc))
+        ParseObjCProtocolReferences(ProtocolRefs, ProtocolLocs, true,
+                                    LAngleLoc, EndProtoLoc))
       return DeclPtrTy();
 
     if (attrList) // categories don't support attributes.
@@ -183,9 +185,11 @@ Parser::DeclPtrTy Parser::ParseObjCAtInterfaceDeclaration(
   }
   // Next, we need to check for any protocol references.
   llvm::SmallVector<Action::DeclPtrTy, 8> ProtocolRefs;
-  SourceLocation EndProtoLoc;
+  llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
+  SourceLocation LAngleLoc, EndProtoLoc;
   if (Tok.is(tok::less) &&
-      ParseObjCProtocolReferences(ProtocolRefs, true, EndProtoLoc))
+      ParseObjCProtocolReferences(ProtocolRefs, ProtocolLocs, true,
+                                  LAngleLoc, EndProtoLoc))
     return DeclPtrTy();
 
   DeclPtrTy ClsType =
@@ -386,6 +390,10 @@ void Parser::ParseObjCPropertyAttribute(ObjCDeclSpec &DS) {
   SourceLocation LHSLoc = ConsumeParen(); // consume '('
 
   while (1) {
+    if (Tok.is(tok::code_completion)) {
+      Actions.CodeCompleteObjCProperty(CurScope, DS);
+      ConsumeToken();
+    }
     const IdentifierInfo *II = Tok.getIdentifierInfo();
 
     // If this is not an identifier at all, bail out early.
@@ -420,7 +428,7 @@ void Parser::ParseObjCPropertyAttribute(ObjCDeclSpec &DS) {
         return;
       }
 
-      if (II->getName()[0] == 's') {
+      if (II->getNameStart()[0] == 's') {
         DS.setPropertyAttributes(ObjCDeclSpec::DQ_PR_setter);
         DS.setSetterName(Tok.getIdentifierInfo());
         ConsumeToken();  // consume method name
@@ -786,10 +794,12 @@ Parser::DeclPtrTy Parser::ParseObjCMethodDecl(SourceLocation mLoc,
 ///
 bool Parser::
 ParseObjCProtocolReferences(llvm::SmallVectorImpl<Action::DeclPtrTy> &Protocols,
-                            bool WarnOnDeclarations, SourceLocation &EndLoc) {
+                            llvm::SmallVectorImpl<SourceLocation> &ProtocolLocs,
+                            bool WarnOnDeclarations,
+                            SourceLocation &LAngleLoc, SourceLocation &EndLoc) {
   assert(Tok.is(tok::less) && "expected <");
 
-  ConsumeToken(); // the "<"
+  LAngleLoc = ConsumeToken(); // the "<"
 
   llvm::SmallVector<IdentifierLocPair, 8> ProtocolIdents;
 
@@ -801,6 +811,7 @@ ParseObjCProtocolReferences(llvm::SmallVectorImpl<Action::DeclPtrTy> &Protocols,
     }
     ProtocolIdents.push_back(std::make_pair(Tok.getIdentifierInfo(),
                                        Tok.getLocation()));
+    ProtocolLocs.push_back(Tok.getLocation());
     ConsumeToken();
 
     if (Tok.isNot(tok::comma))
@@ -982,11 +993,13 @@ Parser::DeclPtrTy Parser::ParseObjCAtProtocolDeclaration(SourceLocation AtLoc,
   }
 
   // Last, and definitely not least, parse a protocol declaration.
-  SourceLocation EndProtoLoc;
+  SourceLocation LAngleLoc, EndProtoLoc;
 
   llvm::SmallVector<DeclPtrTy, 8> ProtocolRefs;
+  llvm::SmallVector<SourceLocation, 8> ProtocolLocs;
   if (Tok.is(tok::less) &&
-      ParseObjCProtocolReferences(ProtocolRefs, false, EndProtoLoc))
+      ParseObjCProtocolReferences(ProtocolRefs, ProtocolLocs, false,
+                                  LAngleLoc, EndProtoLoc))
     return DeclPtrTy();
 
   DeclPtrTy ProtoType =
@@ -1358,8 +1371,11 @@ Parser::DeclPtrTy Parser::ParseObjCMethodDefinition() {
                                         "parsing Objective-C method");
 
   // parse optional ';'
-  if (Tok.is(tok::semi))
+  if (Tok.is(tok::semi)) {
+    if (ObjCImpDecl)
+      Diag(Tok, diag::warn_semicolon_before_method_nody);
     ConsumeToken();
+  }
 
   // We should have an opening brace now.
   if (Tok.isNot(tok::l_brace)) {

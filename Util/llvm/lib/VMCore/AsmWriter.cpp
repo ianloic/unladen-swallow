@@ -32,6 +32,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/FormattedStream.h"
@@ -678,7 +679,9 @@ void SlotTracker::processFunction() {
 
   ST_DEBUG("Inserting Instructions:\n");
 
-  Metadata &TheMetadata = TheFunction->getContext().getMetadata();
+  MetadataContext &TheMetadata = TheFunction->getContext().getMetadata();
+  typedef SmallVector<std::pair<unsigned, TrackingVH<MDNode> >, 2> MDMapTy;
+  MDMapTy MDs;
 
   // Add all of the basic blocks and instructions with no names.
   for (Function::const_iterator BB = TheFunction->begin(),
@@ -695,12 +698,11 @@ void SlotTracker::processFunction() {
           CreateMetadataSlot(N);
 
       // Process metadata attached with this instruction.
-      const Metadata::MDMapTy *MDs = TheMetadata.getMDs(I);
-      if (MDs)
-        for (Metadata::MDMapTy::const_iterator MI = MDs->begin(),
-               ME = MDs->end(); MI != ME; ++MI)
-          if (MDNode *MDN = dyn_cast_or_null<MDNode>(MI->second))
-            CreateMetadataSlot(MDN);
+      MDs.clear();
+      TheMetadata.getMDs(I, MDs);
+      for (MDMapTy::const_iterator MI = MDs.begin(), ME = MDs.end(); MI != ME; 
+           ++MI)
+        CreateMetadataSlot(MI->second);
     }
   }
 
@@ -817,9 +819,8 @@ void SlotTracker::CreateMetadataSlot(const MDNode *N) {
   unsigned DestSlot = mdnNext++;
   mdnMap[N] = DestSlot;
 
-  for (MDNode::const_elem_iterator MDI = N->elem_begin(),
-         MDE = N->elem_end(); MDI != MDE; ++MDI) {
-    const Value *TV = *MDI;
+  for (unsigned i = 0, e = N->getNumElements(); i != e; ++i) {
+    const Value *TV = N->getElement(i);
     if (TV)
       if (const MDNode *N2 = dyn_cast<MDNode>(TV))
         CreateMetadataSlot(N2);
@@ -869,6 +870,30 @@ static const char *getPredicateText(unsigned predicate) {
   return pred;
 }
 
+static void WriteMDNodeComment(const MDNode *Node,
+			       formatted_raw_ostream &Out) {
+  if (Node->getNumElements() < 1)
+    return;
+  ConstantInt *CI = dyn_cast_or_null<ConstantInt>(Node->getElement(0));
+  if (!CI) return;
+  unsigned Val = CI->getZExtValue();
+  unsigned Tag = Val & ~LLVMDebugVersionMask;
+  if (Val >= LLVMDebugVersion) {
+    if (Tag == dwarf::DW_TAG_auto_variable)
+      Out << "; [ DW_TAG_auto_variable ]";
+    else if (Tag == dwarf::DW_TAG_arg_variable)
+      Out << "; [ DW_TAG_arg_variable ]";
+    else if (Tag == dwarf::DW_TAG_return_variable)
+      Out << "; [ DW_TAG_return_variable ]";
+    else if (Tag == dwarf::DW_TAG_vector_type)
+      Out << "; [ DW_TAG_vector_type ]";
+    else if (Tag == dwarf::DW_TAG_user_base)
+      Out << "; [ DW_TAG_user_base ]";
+    else
+      Out << "; [" << dwarf::TagString(Tag) << " ]";
+  }
+}
+
 static void WriteMDNodes(formatted_raw_ostream &Out, TypePrinting &TypePrinter,
                          SlotTracker &Machine) {
   SmallVector<const MDNode *, 16> Nodes;
@@ -881,9 +906,8 @@ static void WriteMDNodes(formatted_raw_ostream &Out, TypePrinting &TypePrinter,
     Out << '!' << i << " = metadata ";
     const MDNode *Node = Nodes[i];
     Out << "!{";
-    for (MDNode::const_elem_iterator NI = Node->elem_begin(),
-           NE = Node->elem_end(); NI != NE;) {
-      const Value *V = *NI;
+    for (unsigned mi = 0, me = Node->getNumElements(); mi != me; ++mi) {
+      const Value *V = Node->getElement(mi);
       if (!V)
         Out << "null";
       else if (const MDNode *N = dyn_cast<MDNode>(V)) {
@@ -891,14 +915,18 @@ static void WriteMDNodes(formatted_raw_ostream &Out, TypePrinting &TypePrinter,
         Out << '!' << Machine.getMetadataSlot(N);
       }
       else {
-        TypePrinter.print((*NI)->getType(), Out);
+        TypePrinter.print(V->getType(), Out);
         Out << ' ';
-        WriteAsOperandInternal(Out, *NI, &TypePrinter, &Machine);
+        WriteAsOperandInternal(Out, Node->getElement(mi), 
+                               &TypePrinter, &Machine);
       }
-      if (++NI != NE)
+      if (mi + 1 != me)
         Out << ", ";
     }
-    Out << "}\n";
+
+    Out << "}";
+    WriteMDNodeComment(Node, Out);
+    Out << "\n";
   }
 }
 
@@ -1178,6 +1206,8 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Value *V,
     Out << "asm ";
     if (IA->hasSideEffects())
       Out << "sideeffect ";
+    if (IA->isAlignStack())
+      Out << "alignstack ";
     Out << '"';
     PrintEscapedString(IA->getAsmString(), Out);
     Out << "\", \"";
@@ -1195,6 +1225,11 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Value *V,
     Out << "!\"";
     PrintEscapedString(MDS->getString(), Out);
     Out << '"';
+    return;
+  }
+
+  if (V->getValueID() == Value::PseudoSourceValueVal) {
+    V->print(Out);
     return;
   }
 
@@ -1261,17 +1296,25 @@ class AssemblyWriter {
   TypePrinting TypePrinter;
   AssemblyAnnotationWriter *AnnotationWriter;
   std::vector<const Type*> NumberedTypes;
-
-  // Each MDNode is assigned unique MetadataIDNo.
-  std::map<const MDNode *, unsigned> MDNodes;
-  unsigned MetadataIDNo;
+  DenseMap<unsigned, StringRef> MDNames;
 
 public:
   inline AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
                         const Module *M,
                         AssemblyAnnotationWriter *AAW)
-    : Out(o), Machine(Mac), TheModule(M), AnnotationWriter(AAW), MetadataIDNo(0) {
+    : Out(o), Machine(Mac), TheModule(M), AnnotationWriter(AAW) {
     AddModuleTypesToPrinter(TypePrinter, NumberedTypes, M);
+    // FIXME: Provide MDPrinter
+    if (M) {
+      MetadataContext &TheMetadata = M->getContext().getMetadata();
+      SmallVector<std::pair<unsigned, StringRef>, 4> Names;
+      TheMetadata.getHandlerNames(Names);
+      for (SmallVector<std::pair<unsigned, StringRef>, 4>::iterator 
+             I = Names.begin(),
+             E = Names.end(); I != E; ++I) {
+      MDNames[I->first] = I->second;
+      }
+    }
   }
 
   void write(const Module *M) { printModule(M); }
@@ -1923,7 +1966,7 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Out << " unwind ";
     writeOperand(II->getUnwindDest(), true);
 
-  } else if (const AllocationInst *AI = dyn_cast<AllocationInst>(&I)) {
+  } else if (const AllocaInst *AI = dyn_cast<AllocaInst>(&I)) {
     Out << ' ';
     TypePrinter.print(AI->getType()->getElementType(), Out);
     if (!AI->getArraySize() || AI->isArrayAllocation()) {
@@ -1990,11 +2033,17 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Out << ", align " << cast<StoreInst>(I).getAlignment();
   }
 
-  // Print DebugInfo
-  Metadata &TheMetadata = I.getContext().getMetadata();
-  unsigned MDDbgKind = TheMetadata.getMDKind("dbg");
-  if (const MDNode *Dbg = TheMetadata.getMD(MDDbgKind, &I))
-    Out << ", dbg !" << Machine.getMetadataSlot(Dbg);
+  // Print Metadata info
+  if (!MDNames.empty()) {
+    MetadataContext &TheMetadata = I.getContext().getMetadata();
+    typedef SmallVector<std::pair<unsigned, TrackingVH<MDNode> >, 2> MDMapTy;
+    MDMapTy MDs;
+    TheMetadata.getMDs(&I, MDs);
+    for (MDMapTy::const_iterator MI = MDs.begin(), ME = MDs.end(); MI != ME; 
+         ++MI)
+      Out << ", !" << MDNames[MI->first]
+          << " !" << Machine.getMetadataSlot(MI->second);
+  }
   printInfoComment(I);
 }
 
@@ -2076,8 +2125,15 @@ void Value::print(raw_ostream &ROS, AssemblyAnnotationWriter *AAW) const {
   } else if (isa<InlineAsm>(this)) {
     WriteAsOperand(OS, this, true, 0);
   } else {
-    llvm_unreachable("Unknown value to print out!");
+    // Otherwise we don't know what it is. Call the virtual function to
+    // allow a subclass to print itself.
+    printCustom(OS);
   }
+}
+
+// Value::printCustom - subclasses should override this to implement printing.
+void Value::printCustom(raw_ostream &OS) const {
+  llvm_unreachable("Unknown value to print out!");
 }
 
 // Value::dump - allow easy printing of Values from the debugger.

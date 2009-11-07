@@ -5,6 +5,7 @@ add_clang_library(clangCodeGen
   CGBuiltin.cpp
   CGCXX.cpp
   CGCXXClass.cpp
+  CGCXXExpr.cpp
   CGCXXTemp.cpp
   CGCall.cpp
   CGDebugInfo.cpp
@@ -18,7 +19,9 @@ add_clang_library(clangCodeGen
   CGObjCGNU.cpp
   CGObjCMac.cpp
   CGRecordLayoutBuilder.cpp
+  CGRtti.cpp
   CGStmt.cpp
+  CGVtable.cpp
   CodeGenFunction.cpp
   CodeGenModule.cpp
   CodeGenTypes.cpp

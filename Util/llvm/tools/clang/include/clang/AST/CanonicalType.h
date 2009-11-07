@@ -64,21 +64,16 @@ public:
   CanQual(const CanQual<U>& Other,
           typename llvm::enable_if<llvm::is_base_of<T, U>, int>::type = 0);
 
-  /// \brief Implicit conversion to the underlying pointer.
-  ///
-  /// Also provides the ability to use canonical types in a boolean context,
-  /// e.g.,
-  /// @code
-  ///   if (CanQual<PointerType> Ptr = T->getAs<PointerType>()) { ... }
-  /// @endcode
-  operator const T*() const { return getTypePtr(); }
-
   /// \brief Retrieve the underlying type pointer, which refers to a
   /// canonical type.
   T *getTypePtr() const { return cast_or_null<T>(Stored.getTypePtr()); }
 
   /// \brief Implicit conversion to a qualified type.
   operator QualType() const { return Stored; }
+
+  bool isNull() const {
+    return Stored.isNull();
+  }
 
   /// \brief Retrieve a canonical type pointer with a different static type,
   /// upcasting or downcasting as needed.
@@ -103,27 +98,32 @@ public:
   /// proxy.
   CanProxy<T> operator->() const;
 
+  /// \brief Retrieve all qualifiers.
+  Qualifiers getQualifiers() const { return Stored.getQualifiers(); }
+
   /// \brief Retrieve the const/volatile/restrict qualifiers.
   unsigned getCVRQualifiers() const { return Stored.getCVRQualifiers(); }
 
-  /// \brief Set the const/volatile/restrict qualifiers
-  void setCVRQualifiers(unsigned Quals) { Stored.setCVRQualifiers(Quals); }
+  /// \brief Determines whether this type has any qualifiers
+  bool hasQualifiers() const { return Stored.hasQualifiers(); }
 
   bool isConstQualified() const {
-    return (getCVRQualifiers() & QualType::Const) ? true : false;
+    return Stored.isConstQualified();
   }
   bool isVolatileQualified() const {
-    return (getCVRQualifiers() & QualType::Volatile) ? true : false;
+    return Stored.isVolatileQualified();
   }
   bool isRestrictQualified() const {
-    return (getCVRQualifiers() & QualType::Restrict) ? true : false;
+    return Stored.isRestrictQualified();
   }
 
   /// \brief Retrieve the unqualified form of this type.
   CanQual<T> getUnqualifiedType() const;
 
-  CanQual<T> getQualifiedType(unsigned TQs) const {
-    return CanQual<T>::CreateUnsafe(QualType(getTypePtr(), TQs));
+  /// \brief Retrieves a version of this type with const applied.
+  /// Note that this does not always yield a canonical type.
+  QualType withConst() const {
+    return Stored.withConst();
   }
 
   /// \brief Determines whether this canonical type is more qualified than
@@ -322,7 +322,7 @@ public:
   static inline clang::CanQual<T> getFromVoidPointer(void *P) {
     return clang::CanQual<T>::getFromOpaquePtr(P);
   }
-  // CVR qualifiers go in low bits.
+  // qualifier information is encoded in the low bits.
   enum { NumLowBitsAvailable = 0 };
 };
 
@@ -426,13 +426,6 @@ public:
 };
 
 template<>
-struct CanProxyAdaptor<ExtQualType> : public CanProxyBase<ExtQualType> {
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Type*, getBaseType)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(QualType::GCAttrTypes, getObjCGCAttr)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getAddressSpace)
-};
-
-template<>
 struct CanProxyAdaptor<ComplexType> : public CanProxyBase<ComplexType> {
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
 };
@@ -477,7 +470,7 @@ struct CanProxyAdaptor<ArrayType> : public CanProxyBase<ArrayType> {
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
                                       getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Qualifiers, getIndexTypeQualifiers)
 };
 
 template<>
@@ -486,31 +479,7 @@ struct CanProxyAdaptor<ConstantArrayType>
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
                                       getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(const llvm::APInt &, getSize)
-};
-
-template<>
-struct CanProxyAdaptor<ConstantArrayWithExprType>
-  : public CanProxyBase<ConstantArrayWithExprType> {
-  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
-                                      getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(const llvm::APInt &, getSize)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Expr *, getSizeExpr)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceRange, getBracketsRange)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceLocation, getLBracketLoc)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceLocation, getRBracketLoc)
-};
-
-template<>
-struct CanProxyAdaptor<ConstantArrayWithoutExprType>
-  : public CanProxyBase<ConstantArrayWithoutExprType> {
-  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
-                                      getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Qualifiers, getIndexTypeQualifiers)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(const llvm::APInt &, getSize)
 };
 
@@ -520,7 +489,7 @@ struct CanProxyAdaptor<IncompleteArrayType>
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
                                       getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Qualifiers, getIndexTypeQualifiers)
 };
 
 template<>
@@ -529,7 +498,7 @@ struct CanProxyAdaptor<VariableArrayType>
   LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getElementType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(ArrayType::ArraySizeModifier,
                                       getSizeModifier)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getIndexTypeQualifier)
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Qualifiers, getIndexTypeQualifiers)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(Expr *, getSizeExpr)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceRange, getBracketsRange)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(SourceLocation, getLBracketLoc)
@@ -666,9 +635,7 @@ struct CanProxyAdaptor<ObjCObjectPointerType>
 //----------------------------------------------------------------------------//
 template<typename T>
 inline CanQual<T> CanQual<T>::getUnqualifiedType() const {
-  if (CanQual<ExtQualType> EQ = getAs<ExtQualType>())
-    return CanQual<T>::CreateUnsafe(QualType(EQ->getBaseType(), 0));
-  return CanQual<T>::CreateUnsafe(QualType(Stored.getTypePtr(), 0));
+  return CanQual<T>::CreateUnsafe(Stored.getUnqualifiedType());
 }
 
 template<typename T>
@@ -690,7 +657,7 @@ CanQual<T> CanQual<T>::getFromOpaquePtr(void *Ptr) {
 
 template<typename T>
 CanQual<T> CanQual<T>::CreateUnsafe(QualType Other) {
-  assert((Other.isNull() || Other->isCanonical()) && "Type is not canonical!");
+  assert((Other.isNull() || Other.isCanonical()) && "Type is not canonical!");
   assert((Other.isNull() || isa<T>(Other.getTypePtr())) &&
          "Dynamic type does not meet the static type's requires");
   CanQual<T> Result;
@@ -706,10 +673,6 @@ CanProxy<U> CanQual<T>::getAs() const {
 
   if (isa<U>(Stored.getTypePtr()))
     return CanQual<U>::CreateUnsafe(Stored);
-
-  if (const ExtQualType *EQ = Stored->getAs<ExtQualType>())
-    return CanQual<T>::CreateUnsafe(QualType(EQ->getBaseType(), 0))
-             .template getAs<U>();
 
   return CanProxy<U>();
 }

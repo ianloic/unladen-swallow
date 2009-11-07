@@ -20,10 +20,21 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 using namespace llvm;
+
+// Always verify loopinfo if expensive checking is enabled.
+#ifdef XDEBUG
+bool VerifyLoopInfo = true;
+#else
+bool VerifyLoopInfo = false;
+#endif
+static cl::opt<bool,true>
+VerifyLoopInfoX("verify-loop-info", cl::location(VerifyLoopInfo),
+                cl::desc("Verify loop info (time consuming)"));
 
 char LoopInfo::ID = 0;
 static RegisterPass<LoopInfo>
@@ -281,6 +292,9 @@ bool Loop::isLoopSimplifyForm() const {
   // Normal-form loops have a single backedge.
   if (!getLoopLatch())
     return false;
+  // Sort the blocks vector so that we can use binary search to do quick
+  // lookups.
+  SmallPtrSet<BasicBlock *, 16> LoopBBs(block_begin(), block_end());
   // Each predecessor of each exit block of a normal loop is contained
   // within the loop.
   SmallVector<BasicBlock *, 4> ExitBlocks;
@@ -288,7 +302,7 @@ bool Loop::isLoopSimplifyForm() const {
   for (unsigned i = 0, e = ExitBlocks.size(); i != e; ++i)
     for (pred_iterator PI = pred_begin(ExitBlocks[i]),
          PE = pred_end(ExitBlocks[i]); PI != PE; ++PI)
-      if (!contains(*PI))
+      if (!LoopBBs.count(*PI))
         return false;
   // All the requirements are met.
   return true;
@@ -375,10 +389,20 @@ bool LoopInfo::runOnFunction(Function &) {
 }
 
 void LoopInfo::verifyAnalysis() const {
+  // LoopInfo is a FunctionPass, but verifying every loop in the function
+  // each time verifyAnalysis is called is very expensive. The
+  // -verify-loop-info option can enable this. In order to perform some
+  // checking by default, LoopPass has been taught to call verifyLoop
+  // manually during loop pass sequences.
+
+  if (!VerifyLoopInfo) return;
+
   for (iterator I = begin(), E = end(); I != E; ++I) {
     assert(!(*I)->getParentLoop() && "Top-level loop has a parent!");
     (*I)->verifyLoopNest();
   }
+
+  // TODO: check BBMap consistency.
 }
 
 void LoopInfo::getAnalysisUsage(AnalysisUsage &AU) const {

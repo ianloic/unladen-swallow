@@ -77,8 +77,8 @@ void DwarfWriter::EndFunction(MachineFunction *MF) {
 /// label. Returns a unique label ID used to generate a label and provide
 /// correspondence to the source line list.
 unsigned DwarfWriter::RecordSourceLine(unsigned Line, unsigned Col, 
-                                       DICompileUnit CU) {
-  return DD->RecordSourceLine(Line, Col, CU);
+                                       MDNode *Scope) {
+  return DD->RecordSourceLine(Line, Col, Scope);
 }
 
 /// RecordRegionStart - Indicate the start of a region.
@@ -119,3 +119,9 @@ unsigned DwarfWriter::RecordInlinedFnEnd(DISubprogram SP) {
   return DD->RecordInlinedFnEnd(SP);
 }
 
+void DwarfWriter::SetDbgScopeBeginLabels(const MachineInstr *MI, unsigned L) {
+  DD->SetDbgScopeEndLabels(MI, L);
+}
+void DwarfWriter::SetDbgScopeEndLabels(const MachineInstr *MI, unsigned L) {
+  DD->SetDbgScopeBeginLabels(MI, L);
+}

@@ -115,7 +115,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		   and then to machine code when it is first invoked. */
 		co->co_use_llvm = (Py_JitControl == PY_JIT_ALWAYS);
 		co->co_optimization = -1;
-		co->co_callcount = 0;
+		co->co_hotness = 0;
 		co->co_fatalbailcount = 0;
 		co->co_assumed_globals = NULL;
 		co->co_assumed_builtins = NULL;
@@ -143,7 +143,7 @@ static PyMemberDef code_memberlist[] = {
 	{"co_firstlineno", T_INT,	OFF(co_firstlineno),	READONLY},
 	{"co_lnotab",	T_OBJECT,	OFF(co_lnotab),		READONLY},
 #ifdef WITH_LLVM
-	{"co_callcount", T_INT,		OFF(co_callcount),	READONLY},
+	{"co_hotness", T_INT,		OFF(co_hotness),	READONLY},
 	{"co_fatalbailcount", T_INT,	OFF(co_fatalbailcount),	READONLY},
 	{"__use_llvm__", T_BOOL,	OFF(co_use_llvm)},
 #endif
@@ -160,10 +160,14 @@ code_get_optimization(PyCodeObject *code)
 static int
 code_set_optimization(PyCodeObject *code, PyObject *new_opt_level_obj)
 {
+	int retcode;
 	long new_opt_level = PyInt_AsLong(new_opt_level_obj);
 	if (new_opt_level == -1 && PyErr_Occurred())
 		return -1;
-	return _PyCode_ToOptimizedLlvmIr(code, new_opt_level);
+	retcode = _PyCode_ToOptimizedLlvmIr(code, new_opt_level);
+	if (retcode == 1)
+		retcode = 0;
+	return retcode;
 }
 
 static PyObject *
@@ -240,6 +244,18 @@ _PyCode_ToOptimizedLlvmIr(PyCodeObject *code, int new_opt_level)
 			     new_opt_level);
 		return -1;
 	}
+	/* Large functions take a very long time to translate to LLVM
+	   IR, optimize, and JIT, so we just keep them in the
+	   interpreter. */
+	if (PyString_GET_SIZE(code->co_code) > 5000) {
+		return 1;
+	}
+	// The exec statement wants to mess with the frame object in
+	// ways that can inhibit optimizations (or make them harder to
+	// implement), so we refuse to optimize code objects that use
+	// exec.
+	if (code->co_flags & CO_USES_EXEC)
+		return 1;
 	if (code->co_llvm_function == NULL) {
 		code->co_llvm_function = _PyCode_ToLlvmIr(code);
 		if (code->co_llvm_function == NULL)

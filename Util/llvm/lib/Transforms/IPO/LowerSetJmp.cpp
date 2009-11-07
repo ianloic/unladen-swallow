@@ -43,7 +43,6 @@
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CFG.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/InstVisitor.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -62,8 +61,7 @@ STATISTIC(InvokesTransformed , "Number of invokes modified");
 namespace {
   //===--------------------------------------------------------------------===//
   // LowerSetJmp pass implementation.
-  class VISIBILITY_HIDDEN LowerSetJmp : public ModulePass,
-                      public InstVisitor<LowerSetJmp> {
+  class LowerSetJmp : public ModulePass, public InstVisitor<LowerSetJmp> {
     // LLVM library functions...
     Constant *InitSJMap;        // __llvm_sjljeh_init_setjmpmap
     Constant *DestroySJMap;     // __llvm_sjljeh_destroy_setjmpmap
@@ -201,7 +199,7 @@ bool LowerSetJmp::runOnModule(Module& M) {
 // This function is always successful, unless it isn't.
 bool LowerSetJmp::doInitialization(Module& M)
 {
-  const Type *SBPTy = PointerType::getUnqual(Type::getInt8Ty(M.getContext()));
+  const Type *SBPTy = Type::getInt8PtrTy(M.getContext());
   const Type *SBPPTy = PointerType::getUnqual(SBPTy);
 
   // N.B. See llvm/runtime/GCCLibraries/libexception/SJLJ-Exception.h for
@@ -266,7 +264,7 @@ bool LowerSetJmp::IsTransformableFunction(const std::string& Name) {
 void LowerSetJmp::TransformLongJmpCall(CallInst* Inst)
 {
   const Type* SBPTy =
-        PointerType::getUnqual(Type::getInt8Ty(Inst->getContext()));
+        Type::getInt8PtrTy(Inst->getContext());
 
   // Create the call to "__llvm_sjljeh_throw_longjmp". This takes the
   // same parameters as "longjmp", except that the buffer is cast to a
@@ -319,7 +317,7 @@ AllocaInst* LowerSetJmp::GetSetJmpMap(Function* Func)
 
   // Fill in the alloca and call to initialize the SJ map.
   const Type *SBPTy =
-        PointerType::getUnqual(Type::getInt8Ty(Func->getContext()));
+        Type::getInt8PtrTy(Func->getContext());
   AllocaInst* Map = new AllocaInst(SBPTy, 0, "SJMap", Inst);
   CallInst::Create(InitSJMap, Map, "", Inst);
   return SJMap[Func] = Map;
@@ -389,7 +387,7 @@ void LowerSetJmp::TransformSetJmpCall(CallInst* Inst)
 
   // Add this setjmp to the setjmp map.
   const Type* SBPTy =
-          PointerType::getUnqual(Type::getInt8Ty(Inst->getContext()));
+          Type::getInt8PtrTy(Inst->getContext());
   CastInst* BufPtr = 
     new BitCastInst(Inst->getOperand(1), SBPTy, "SBJmpBuf", Inst);
   std::vector<Value*> Args = 

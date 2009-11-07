@@ -96,8 +96,6 @@ namespace llvm {
       return;
     }
     
-    if (UnitAtATime)
-      PM->add(createRaiseAllocationsPass());    // call %malloc -> malloc inst
     PM->add(createCFGSimplificationPass());     // Clean up disgusting code
     if (UnitAtATime) {
       PM->add(createGlobalOptimizerPass());     // Optimize out global vars
@@ -230,10 +228,8 @@ namespace llvm {
     addOnePass(PM, createInstructionCombiningPass(), VerifyEach);
 
     addOnePass(PM, createJumpThreadingPass(), VerifyEach);
-    // Cleanup jump threading.
-    addOnePass(PM, createPromoteMemoryToRegisterPass(), VerifyEach);
     
-    // Delete basic blocks, which optimization passes may have killed...
+    // Delete basic blocks, which optimization passes may have killed.
     addOnePass(PM, createCFGSimplificationPass(), VerifyEach);
 
     // Now that we have optimized the program, discard unreachable functions.

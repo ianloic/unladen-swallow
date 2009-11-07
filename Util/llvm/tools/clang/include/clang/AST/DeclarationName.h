@@ -16,6 +16,7 @@
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/CanonicalType.h"
+#include "clang/Basic/PartialDiagnostic.h"
 
 namespace llvm {
   template <typename T> struct DenseMapInfo;
@@ -196,6 +197,12 @@ public:
   /// an opaque pointer.
   void *getAsOpaquePtr() const { return reinterpret_cast<void*>(Ptr); }
 
+  static DeclarationName getFromOpaquePtr(void *P) {
+    DeclarationName N;
+    N.Ptr = reinterpret_cast<uintptr_t> (P);
+    return N;
+  }
+  
   static DeclarationName getFromOpaqueInteger(uintptr_t P) {
     DeclarationName N;
     N.Ptr = P;
@@ -327,7 +334,15 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
   return DB;
 }
 
-
+/// Insertion operator for partial diagnostics.  This allows binding
+/// DeclarationName's into a partial diagnostic with <<.
+inline const PartialDiagnostic &operator<<(const PartialDiagnostic &PD,
+                                           DeclarationName N) {
+  PD.AddTaggedVal(N.getAsOpaqueInteger(),
+                  Diagnostic::ak_declarationname);
+  return PD;
+}
+  
 }  // end namespace clang
 
 namespace llvm {

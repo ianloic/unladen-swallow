@@ -38,7 +38,6 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 using namespace llvm;
 
@@ -579,8 +578,10 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   MBB.erase(I);
 }
 
-void X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                          int SPAdj, RegScavenger *RS) const{
+unsigned
+X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+                                     int SPAdj, int *Value,
+                                     RegScavenger *RS) const{
   assert(SPAdj == 0 && "Unexpected");
 
   unsigned i = 0;
@@ -617,6 +618,7 @@ void X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                       (uint64_t)MI.getOperand(i+3).getOffset();
     MI.getOperand(i+3).setOffset(Offset);
   }
+  return 0;
 }
 
 void
@@ -1470,7 +1472,7 @@ unsigned getX86SubSuperRegister(unsigned Reg, EVT VT, bool High) {
 #include "X86GenRegisterInfo.inc"
 
 namespace {
-  struct VISIBILITY_HIDDEN MSAC : public MachineFunctionPass {
+  struct MSAC : public MachineFunctionPass {
     static char ID;
     MSAC() : MachineFunctionPass(&ID) {}
 

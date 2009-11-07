@@ -45,15 +45,15 @@ typedef struct PyCodeObject {
        PyGlobalLlvmData::Optimize().  Starts at -1 for unoptimized
        code. */
     int co_optimization;
-    /* Number of times this code has been executed. This is used to decide
-       which code objects are worth sending through LLVM. */
-    int co_callcount;
     /* There are two kinds of guard failures: fatal failures (machine code is
        invalid, requires recompilation) and non-fatal failures (unexpected
        branch taken, machine code is still valid). If fatal guards are failing
        repeatedly in the same code object, we shouldn't waste time repeatedly
        recompiling this code. */
     int co_fatalbailcount;
+    /* Measure of how hot this code object is. This is used to decide
+       which code objects are worth sending through LLVM. */
+    long co_hotness;
     /* Because the globals dict is set on the frame, we record *which* globals
        dict we're assuming. */
     PyObject *co_assumed_globals;
@@ -67,6 +67,9 @@ typedef struct PyCodeObject {
    eval loop forever after. See the comment on the co_fatalbailcount field
    for more details. */
 #define PY_MAX_FATALBAILCOUNT 1
+
+/* The threshold for co_hotness before the code object is considered "hot". */
+#define PY_HOTNESS_THRESHOLD 100000
 
 /* Masks for co_flags above */
 #define CO_OPTIMIZED    (1 << 0)
@@ -90,12 +93,14 @@ typedef struct PyCodeObject {
    avoid even generating the LLVM IR if possible.
 */
 #define CO_BLOCKSTACK   (1 << 7)
+/* Indicates whether this code object uses the exec statement. */
+#define CO_USES_EXEC    (1 << 8)
 /* The following CO_FDO_* flags control individual feedback-directed
    optimizations. These are aggregated into CO_ALL_FDO_OPTS. These optimizations
    are only triggered if we have data to support them, i.e., code compiled by
    setting co_optimization won't benefit from this. */
 /* CO_FDO_GLOBALS: make assumptions about builtins/globals, for great justice */
-#define CO_FDO_GLOBALS  (1 << 8)
+#define CO_FDO_GLOBALS  (1 << 9)
 #define CO_ALL_FDO_OPTS  (CO_FDO_GLOBALS)
 
 #if 0
@@ -154,7 +159,9 @@ PyAPI_FUNC(PyObject*) PyCode_Optimize(PyObject *code, PyObject* consts,
 
 #ifdef WITH_LLVM
 /* Compile a given function to LLVM IR, and apply a set of optimization passes.
-   Returns -1 on error, 0 on success.
+   Returns -1 on error, 0 on succcess, 1 if codegen was refused. If a non-zero
+   status code is returned, callers may need to back out any changes they've
+   made, such as setting co_use_llvm.
 
    You can use _PyCode_WatchGlobals() before calling this to advise the code
    object that it should make assumptions about globals/builtins.

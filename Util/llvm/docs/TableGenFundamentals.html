@@ -398,13 +398,6 @@ which case the user must specify it explicitly.</dd>
   <dd>a dag value.  The first element is required to be a record definition, the
   remaining elements in the list may be arbitrary other values, including nested
   `<tt>dag</tt>' values.</dd>
-<dt><tt>(implicit a)</tt></dt>
-  <dd>an implicitly defined physical register.  This tells the dag instruction
-  selection emitter the input pattern's extra definitions matches implicit
-  physical register definitions.</dd>
-<dt><tt>(parallel (a), (b))</tt></dt>
-  <dd>a list of dags specifying parallel operations which map to the same
-  instruction.</dd>
 <dt><tt>!strconcat(a, b)</tt></dt>
   <dd>A string value that is the result of concatenating the 'a' and 'b'
   strings.</dd>
@@ -760,6 +753,25 @@ opened, as in the case with the <tt>CALL*</tt> instructions above.</p>
 </div>
 
 <!-- *********************************************************************** -->
+<div class="doc_section"><a name="codegen">Code Generator backend info</a></div>
+<!-- *********************************************************************** -->
+
+<p>Expressions used by code generator to describe instructions and isel
+patterns:</p>
+
+<div class="doc_text">
+
+<dt><tt>(implicit a)</tt></dt>
+  <dd>an implicitly defined physical register.  This tells the dag instruction
+  selection emitter the input pattern's extra definitions matches implicit
+  physical register definitions.</dd>
+<dt><tt>(parallel (a), (b))</tt></dt>
+  <dd>a list of dags specifying parallel operations which map to the same
+  instruction.</dd>
+
+</div>
+
+<!-- *********************************************************************** -->
 <div class="doc_section"><a name="backends">TableGen backends</a></div>
 <!-- *********************************************************************** -->
 
@@ -782,7 +794,7 @@ This should highlight the APIs in <tt>TableGen/Record.h</tt>.</p>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.org">LLVM Compiler Infrastructure</a><br>
-  Last modified: $Date: 2009-08-05 08:42:44 -0700 (Wed, 05 Aug 2009) $
+  Last modified: $Date: 2009-10-04 19:51:06 -0700 (Sun, 04 Oct 2009) $
 </address>
 
 </body>

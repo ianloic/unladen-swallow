@@ -16,7 +16,7 @@
 
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/System/Host.h"
@@ -24,27 +24,6 @@
 #include <cstdlib>
 
 namespace clang {
-
-// Bernstein hash function:
-// This is basically copy-and-paste from StringMap.  This likely won't
-// stay here, which is why I didn't both to expose this function from
-// String Map.
-inline unsigned BernsteinHash(const char* x) {
-  unsigned int R = 0;
-  for ( ; *x != '\0' ; ++x) R = R * 33 + *x;
-  return R + (R >> 5);
-}
-
-inline unsigned BernsteinHash(const char* x, unsigned n) {
-  unsigned int R = 0;
-  for (unsigned i = 0 ; i < n ; ++i, ++x) R = R * 33 + *x;
-  return R + (R >> 5);
-}
-
-inline unsigned BernsteinHashPartial(const char* x, unsigned n, unsigned R) {
-  for (unsigned i = 0 ; i < n ; ++i, ++x) R = R * 33 + *x;
-  return R + (R >> 5);
-}
 
 namespace io {
 

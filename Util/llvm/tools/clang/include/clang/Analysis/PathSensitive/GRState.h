@@ -26,7 +26,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/ImmutableMap.h"
@@ -243,10 +243,10 @@ public:
   SVal getLValue(const ObjCIvarDecl *decl, SVal base) const;
 
   /// Get the lvalue for a field reference.
-  SVal getLValue(SVal Base, const FieldDecl *decl) const;
+  SVal getLValue(const FieldDecl *decl, SVal Base) const;
 
   /// Get the lvalue for an array index.
-  SVal getLValue(QualType ElementType, SVal Base, SVal Idx) const;
+  SVal getLValue(QualType ElementType, SVal Idx, SVal Base) const;
 
   const llvm::APSInt *getSymVal(SymbolRef sym) const;
 
@@ -259,6 +259,8 @@ public:
   SVal getSVal(const MemRegion* R) const;
 
   SVal getSValAsScalarOrLoc(const MemRegion *R) const;
+  
+  const llvm::APSInt *getSymVal(SymbolRef sym);
 
   bool scanReachableSymbols(SVal val, SymbolVisitor& visitor) const;
 
@@ -566,6 +568,10 @@ public:
 // Out-of-line method definitions for GRState.
 //===----------------------------------------------------------------------===//
 
+inline const llvm::APSInt *GRState::getSymVal(SymbolRef sym) {
+  return getStateManager().getSymVal(this, sym);
+}
+  
 inline const VarRegion* GRState::getRegion(const VarDecl *D,
                                            const LocationContext *LC) const {
   return getStateManager().getRegionManager().getVarRegion(D, LC);
@@ -617,27 +623,27 @@ inline const GRState *GRState::bindLoc(SVal LV, SVal V) const {
 
 inline SVal GRState::getLValue(const VarDecl* VD,
                                const LocationContext *LC) const {
-  return getStateManager().StoreMgr->getLValueVar(this, VD, LC);
+  return getStateManager().StoreMgr->getLValueVar(VD, LC);
 }
 
 inline SVal GRState::getLValue(const StringLiteral *literal) const {
-  return getStateManager().StoreMgr->getLValueString(this, literal);
+  return getStateManager().StoreMgr->getLValueString(literal);
 }
 
 inline SVal GRState::getLValue(const CompoundLiteralExpr *literal) const {
-  return getStateManager().StoreMgr->getLValueCompoundLiteral(this, literal);
+  return getStateManager().StoreMgr->getLValueCompoundLiteral(literal);
 }
 
 inline SVal GRState::getLValue(const ObjCIvarDecl *D, SVal Base) const {
-  return getStateManager().StoreMgr->getLValueIvar(this, D, Base);
+  return getStateManager().StoreMgr->getLValueIvar(D, Base);
 }
 
-inline SVal GRState::getLValue(SVal Base, const FieldDecl* D) const {
-  return getStateManager().StoreMgr->getLValueField(this, Base, D);
+inline SVal GRState::getLValue(const FieldDecl* D, SVal Base) const {
+  return getStateManager().StoreMgr->getLValueField(D, Base);
 }
 
-inline SVal GRState::getLValue(QualType ElementType, SVal Base, SVal Idx) const{
-  return getStateManager().StoreMgr->getLValueElement(this, ElementType, Base, Idx);
+inline SVal GRState::getLValue(QualType ElementType, SVal Idx, SVal Base) const{
+  return getStateManager().StoreMgr->getLValueElement(ElementType, Idx, Base);
 }
 
 inline const llvm::APSInt *GRState::getSymVal(SymbolRef sym) const {

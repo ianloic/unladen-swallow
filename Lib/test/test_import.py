@@ -1,11 +1,12 @@
-import unittest
+import __builtin__
 import os
+import py_compile
 import random
 import shutil
 import sys
-import py_compile
+import unittest
 import warnings
-from test.test_support import unlink, TESTFN, unload, run_unittest, check_warnings
+from test import test_support
 
 
 def remove_files(name):
@@ -18,11 +19,11 @@ def remove_files(name):
             os.remove(f)
 
 
-class ImportTest(unittest.TestCase):
+class ImportTests(unittest.TestCase):
 
-    def testCaseSensitivity(self):
-        # Brief digression to test that import is case-sensitive:  if we got this
-        # far, we know for sure that "random" exists.
+    def test_case_sensitivity(self):
+        # Brief digression to test that import is case-sensitive:  if we got
+        # this far, we know for sure that "random" exists.
         try:
             import RAnDoM
         except ImportError:
@@ -30,31 +31,34 @@ class ImportTest(unittest.TestCase):
         else:
             self.fail("import of RAnDoM should have failed (case mismatch)")
 
-    def testDoubleConst(self):
-        # Another brief digression to test the accuracy of manifest float constants.
-        from test import double_const  # don't blink -- that *was* the test
+    def test_double_const(self):
+        # Another brief digression to test the accuracy of manifest float
+        # constants.
+        from test import double_const  # Don't blink -- that *was* the test.
 
-    def testImport(self):
+    def test_import(self):
         def test_with_extension(ext):
-            # ext normally ".py"; perhaps ".pyw"
-            source = TESTFN + ext
-            pyo = TESTFN + os.extsep + "pyo"
+            # The extension is normally ".py"; perhaps ".pyw".
+            source = test_support.TESTFN + ext
+            pyo = test_support.TESTFN + os.extsep + "pyo"
             if sys.platform.startswith('java'):
-                pyc = TESTFN + "$py.class"
+                pyc = test_support.TESTFN + "$py.class"
             else:
-                pyc = TESTFN + os.extsep + "pyc"
+                pyc = test_support.TESTFN + os.extsep + "pyc"
 
             f = open(source, "w")
-            print >> f, "# This tests Python's ability to import a", ext, "file."
-            a = random.randrange(1000)
-            b = random.randrange(1000)
-            print >> f, "a =", a
-            print >> f, "b =", b
-            f.close()
+            try:
+                print >> f, "# This tests importing a", ext, "file"
+                a = random.randrange(1000)
+                b = random.randrange(1000)
+                print >> f, "a =", a
+                print >> f, "b =", b
+            finally:
+                f.close()
 
             try:
                 try:
-                    mod = __import__(TESTFN)
+                    mod = __import__(test_support.TESTFN)
                 except ImportError, err:
                     self.fail("import from %s failed: %s" % (ext, err))
 
@@ -66,10 +70,9 @@ class ImportTest(unittest.TestCase):
                 os.unlink(source)
 
             try:
-                try:
-                    reload(mod)
-                except ImportError, err:
-                    self.fail("import from .pyc/.pyo failed: %s" % err)
+                reload(mod)
+            except ImportError, err:
+                self.fail("import from .pyc/.pyo failed: %s" % err)
             finally:
                 try:
                     os.unlink(pyc)
@@ -79,48 +82,52 @@ class ImportTest(unittest.TestCase):
                     os.unlink(pyo)
                 except OSError:
                     pass
-                del sys.modules[TESTFN]
+                del sys.modules[test_support.TESTFN]
 
         sys.path.insert(0, os.curdir)
         try:
             test_with_extension(os.extsep + "py")
             if sys.platform.startswith("win"):
-                for ext in ".PY", ".Py", ".pY", ".pyw", ".PYW", ".pYw":
+                for ext in [".PY", ".Py", ".pY", ".pyw", ".PYW", ".pYw"]:
                     test_with_extension(ext)
         finally:
             del sys.path[0]
 
-    def testImpModule(self):
+    def test_imp_module(self):
         # Verify that the imp module can correctly load and find .py files
         import imp
         x = imp.find_module("os")
         os = imp.load_module("os", *x)
 
     def test_module_with_large_stack(self, module='longlist'):
-        # create module w/list of 65000 elements to test bug #561858
+        # Regression test for http://bugs.python.org/issue561858.
         filename = module + os.extsep + 'py'
 
-        # create a file with a list of 65000 elements
+        # Create a file with a list of 65000 elements.
         f = open(filename, 'w+')
-        f.write('d = [\n')
-        for i in range(65000):
-            f.write('"",\n')
-        f.write(']')
-        f.close()
+        try:
+            f.write('d = [\n')
+            for i in range(65000):
+                f.write('"",\n')
+            f.write(']')
+        finally:
+            f.close()
 
-        # compile & remove .py file, we only need .pyc (or .pyo)
+        # Compile & remove .py file, we only need .pyc (or .pyo).
         f = open(filename, 'r')
-        py_compile.compile(filename)
-        f.close()
+        try:
+            py_compile.compile(filename)
+        finally:
+            f.close()
         os.unlink(filename)
 
-        # need to be able to load from current dir
+        # Need to be able to load from current dir.
         sys.path.append('')
 
-        # this used to crash
+        # This used to crash.
         exec 'import ' + module
 
-        # cleanup
+        # Cleanup.
         del sys.path[-1]
         for ext in 'pyc', 'pyo':
             fname = module + os.extsep + ext
@@ -128,39 +135,43 @@ class ImportTest(unittest.TestCase):
                 os.unlink(fname)
 
     def test_failing_import_sticks(self):
-        source = TESTFN + os.extsep + "py"
+        source = test_support.TESTFN + os.extsep + "py"
         f = open(source, "w")
-        print >> f, "a = 1/0"
-        f.close()
+        try:
+            print >> f, "a = 1/0"
+        finally:
+            f.close()
 
         # New in 2.4, we shouldn't be able to import that no matter how often
         # we try.
         sys.path.insert(0, os.curdir)
         try:
-            for i in 1, 2, 3:
+            for _ in range(3):
                 try:
-                    mod = __import__(TESTFN)
+                    mod = __import__(test_support.TESTFN)
                 except ZeroDivisionError:
-                    if TESTFN in sys.modules:
-                        self.fail("damaged module in sys.modules on %i. try" % i)
+                    if test_support.TESTFN in sys.modules:
+                        self.fail("damaged module in sys.modules")
                 else:
-                    self.fail("was able to import a damaged module on %i. try" % i)
+                    self.fail("was able to import a damaged module")
         finally:
             sys.path.pop(0)
-            remove_files(TESTFN)
+            remove_files(test_support.TESTFN)
 
     def test_failing_reload(self):
         # A failing reload should leave the module object in sys.modules.
-        source = TESTFN + os.extsep + "py"
+        source = test_support.TESTFN + os.extsep + "py"
         f = open(source, "w")
-        print >> f, "a = 1"
-        print >> f, "b = 2"
-        f.close()
+        try:
+            print >> f, "a = 1"
+            print >> f, "b = 2"
+        finally:
+            f.close()
 
         sys.path.insert(0, os.curdir)
         try:
-            mod = __import__(TESTFN)
-            self.assert_(TESTFN in sys.modules, "expected module in sys.modules")
+            mod = __import__(test_support.TESTFN)
+            self.assert_(test_support.TESTFN in sys.modules)
             self.assertEquals(mod.a, 1, "module has wrong attribute values")
             self.assertEquals(mod.b, 2, "module has wrong attribute values")
 
@@ -168,35 +179,35 @@ class ImportTest(unittest.TestCase):
             # convince reload() to reparse it.  Maybe the timestamp didn't
             # move enough.  We force it to get reparsed by removing the
             # compiled file too.
-            remove_files(TESTFN)
+            remove_files(test_support.TESTFN)
 
             # Now damage the module.
             f = open(source, "w")
-            print >> f, "a = 10"
-            print >> f, "b = 20//0"
-            f.close()
+            try:
+                print >> f, "a = 10"
+                print >> f, "b = 20//0"
+            finally:
+                f.close()
 
             self.assertRaises(ZeroDivisionError, reload, mod)
 
             # But we still expect the module to be in sys.modules.
-            mod = sys.modules.get(TESTFN)
-            self.failIf(mod is None, "expected module to still be in sys.modules")
+            mod = sys.modules.get(test_support.TESTFN)
+            self.failIf(mod is None, "expected module to be in sys.modules")
 
             # We should have replaced a w/ 10, but the old b value should
             # stick.
             self.assertEquals(mod.a, 10, "module has wrong attribute values")
             self.assertEquals(mod.b, 2, "module has wrong attribute values")
-
         finally:
             sys.path.pop(0)
-            remove_files(TESTFN)
-            if TESTFN in sys.modules:
-                del sys.modules[TESTFN]
+            remove_files(test_support.TESTFN)
+            if test_support.TESTFN in sys.modules:
+                del sys.modules[test_support.TESTFN]
 
     def test_infinite_reload(self):
-        # Bug #742342 reports that Python segfaults (infinite recursion in C)
-        #  when faced with self-recursive reload()ing.
-
+        # http://bugs.python.org/issue742342 reports that Python segfaults
+        # (infinite recursion in C) when faced with self-recursive reload()ing.
         sys.path.insert(0, os.path.dirname(__file__))
         try:
             import infinite_reload
@@ -204,13 +215,13 @@ class ImportTest(unittest.TestCase):
             sys.path.pop(0)
 
     def test_import_name_binding(self):
-        # import x.y.z binds x in the current namespace
+        # import x.y.z binds x in the current namespace.
         import test as x
         import test.test_support
         self.assert_(x is test, x.__name__)
         self.assert_(hasattr(test.test_support, "__file__"))
 
-        # import x.y.z as w binds z as w
+        # import x.y.z as w binds z as w.
         import test.test_support as y
         self.assert_(y is test.test_support, y.__name__)
 
@@ -221,8 +232,8 @@ class ImportTest(unittest.TestCase):
             warnings.simplefilter('error', ImportWarning)
             self.assertRaises(ImportWarning, __import__, "site-packages")
 
-    def test_importbyfilename(self):
-        path = os.path.abspath(TESTFN)
+    def test_import_by_filename(self):
+        path = os.path.abspath(test_support.TESTFN)
         try:
             __import__(path)
         except ImportError, err:
@@ -231,8 +242,9 @@ class ImportTest(unittest.TestCase):
         else:
             self.fail("import by path didn't raise an exception")
 
+
 class PathsTests(unittest.TestCase):
-    path = TESTFN
+    path = test_support.TESTFN
 
     def setUp(self):
         os.mkdir(self.path)
@@ -242,17 +254,20 @@ class PathsTests(unittest.TestCase):
         shutil.rmtree(self.path)
         sys.path = self.syspath
 
-    # http://bugs.python.org/issue1293
     def test_trailing_slash(self):
+        # Regression test for http://bugs.python.org/issue1293.
         f = open(os.path.join(self.path, 'test_trailing_slash.py'), 'w')
-        f.write("testdata = 'test_trailing_slash'")
-        f.close()
+        try:
+            f.write("testdata = 'test_trailing_slash'")
+        finally:
+            f.close()
         sys.path.append(self.path+'/')
         mod = __import__("test_trailing_slash")
         self.assertEqual(mod.testdata, 'test_trailing_slash')
-        unload("test_trailing_slash")
+        test_support.unload("test_trailing_slash")
 
-class RelativeImport(unittest.TestCase):
+
+class RelativeImportTests(unittest.TestCase):
     def tearDown(self):
         try:
             del sys.modules["test.relimport"]
@@ -262,44 +277,72 @@ class RelativeImport(unittest.TestCase):
     def test_relimport_star(self):
         # This will import * from .test_import.
         from . import relimport
-        self.assertTrue(hasattr(relimport, "RelativeImport"))
+        self.assertTrue(hasattr(relimport, "RelativeImportTests"))
 
     def test_issue3221(self):
+        # Regression test for http://bugs.python.org/issue3221.
         def check_absolute():
             exec "from os import path" in ns
         def check_relative():
             exec "from . import relimport" in ns
+
         # Check both OK with __package__ and __name__ correct
         ns = dict(__package__='test', __name__='test.notarealmodule')
         check_absolute()
         check_relative()
+
         # Check both OK with only __name__ wrong
         ns = dict(__package__='test', __name__='notarealpkg.notarealmodule')
         check_absolute()
         check_relative()
+
         # Check relative fails with only __package__ wrong
         ns = dict(__package__='foo', __name__='test.notarealmodule')
-        with check_warnings() as w:
+        with test_support.check_warnings() as w:
             check_absolute()
             self.assert_('foo' in str(w.message))
             self.assertEqual(w.category, RuntimeWarning)
         self.assertRaises(SystemError, check_relative)
+
         # Check relative fails with __package__ and __name__ wrong
         ns = dict(__package__='foo', __name__='notarealpkg.notarealmodule')
-        with check_warnings() as w:
+        with test_support.check_warnings() as w:
             check_absolute()
             self.assert_('foo' in str(w.message))
             self.assertEqual(w.category, RuntimeWarning)
         self.assertRaises(SystemError, check_relative)
+
         # Check both fail with package set to a non-string
         ns = dict(__package__=object())
         self.assertRaises(ValueError, check_absolute)
         self.assertRaises(ValueError, check_relative)
 
+
+class OverridingImportBuiltinTests(unittest.TestCase):
+    def test_override_builtin(self):
+        # Test that overriding __builtin__.__import__ can bypass sys.modules.
+        import os
+
+        def foo():
+            import os
+            return os
+        self.assertEqual(foo(), os)  # Quick sanity check.
+
+        with test_support.swap_attr(__builtin__, "__import__", lambda *x: 5):
+            self.assertEqual(foo(), 5)
+
+        # Test what happens when we shadow __import__ in globals(); this
+        # currently does not impact the import process, but if this changes,
+        # other code will need to change, so keep this test as a tripwire.
+        with test_support.swap_item(globals(), "__import__", lambda *x: 5):
+            self.assertEqual(foo(), os)
+
+
 def test_main(verbose=None):
-    run_unittest(ImportTest, PathsTests, RelativeImport)
+    test_support.run_unittest(ImportTests, PathsTests, RelativeImportTests,
+                              OverridingImportBuiltinTests)
 
 if __name__ == '__main__':
-    # test needs to be a package, so we can do relative import
+    # Test needs to be a package, so we can do relative import.
     from test.test_import import test_main
     test_main()

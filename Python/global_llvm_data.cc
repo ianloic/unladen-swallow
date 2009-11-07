@@ -75,6 +75,10 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
+
+    this->module_->setDataLayout(
+        this->engine_->getTargetData()->getStringRepresentation());
+
     // When we ask to JIT a function, we should also JIT other
     // functions that function depends on.  This lets us JIT in a
     // background thread to avoid blocking the main thread during

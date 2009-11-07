@@ -35,7 +35,7 @@ PrintDirectory("print-fullpath",
                cl::Hidden);
 
 namespace {
-  class VISIBILITY_HIDDEN PrintDbgInfo : public FunctionPass {
+  class PrintDbgInfo : public FunctionPass {
     raw_ostream &Out;
     void printStopPoint(const DbgStopPointInst *DSI);
     void printFuncStart(const DbgFuncStartInst *FS);
@@ -91,9 +91,8 @@ void PrintDbgInfo::printStopPoint(const DbgStopPointInst *DSI) {
 
 void PrintDbgInfo::printFuncStart(const DbgFuncStartInst *FS) {
   DISubprogram Subprogram(FS->getSubprogram());
-  std::string Res1, Res2;
-  Out << "; fully qualified function name: " << Subprogram.getDisplayName(Res1)
-      << " return type: " << Subprogram.getReturnTypeName(Res2)
+  Out << "; fully qualified function name: " << Subprogram.getDisplayName()
+      << " return type: " << Subprogram.getReturnTypeName()
       << " at line " << Subprogram.getLineNumber()
       << "\n\n";
 }

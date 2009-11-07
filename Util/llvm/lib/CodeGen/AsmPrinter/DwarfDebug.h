@@ -141,6 +141,19 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   /// DbgScopeMap - Tracks the scopes in the current function.
   DenseMap<MDNode *, DbgScope *> DbgScopeMap;
 
+  /// ScopedGVs - Tracks global variables that are not at file scope.
+  /// For example void f() { static int b = 42; }
+  SmallVector<WeakVH, 4> ScopedGVs;
+
+  typedef DenseMap<const MachineInstr *, SmallVector<DbgScope *, 2> > 
+    InsnToDbgScopeMapTy;
+
+  /// DbgScopeBeginMap - Maps instruction with a list DbgScopes it starts.
+  InsnToDbgScopeMapTy DbgScopeBeginMap;
+
+  /// DbgScopeEndMap - Maps instruction with a list DbgScopes it ends.
+  InsnToDbgScopeMapTy DbgScopeEndMap;
+
   /// DbgAbstractScopeMap - Tracks abstract instance scopes in the current
   /// function.
   DenseMap<MDNode *, DbgScope *> DbgAbstractScopeMap;
@@ -284,10 +297,20 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   void AddAddress(DIE *Die, unsigned Attribute,
                   const MachineLocation &Location);
 
+  /// AddComplexAddress - Start with the address based on the location provided,
+  /// and generate the DWARF information necessary to find the actual variable
+  /// (navigating the extra location information encoded in the type) based on
+  /// the starting location.  Add the DWARF information to the die.
+  ///
+  void AddComplexAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
+                         const MachineLocation &Location);
+
+  // FIXME: Should be reformulated in terms of AddComplexAddress.
   /// AddBlockByrefAddress - Start with the address based on the location
   /// provided, and generate the DWARF information necessary to find the
   /// actual Block variable (navigating the Block struct) based on the
-  /// starting location.  Add the DWARF information to the die.
+  /// starting location.  Add the DWARF information to the die.  Obsolete,
+  /// please use AddComplexAddress instead.
   ///
   void AddBlockByrefAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
                             const MachineLocation &Location);
@@ -338,9 +361,10 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   ///
   DIE *CreateDbgScopeVariable(DbgVariable *DV, CompileUnit *Unit);
 
-  /// getOrCreateScope - Returns the scope associated with the given descriptor.
+  /// getDbgScope - Returns the scope associated with the given descriptor.
   ///
   DbgScope *getOrCreateScope(MDNode *N);
+  DbgScope *getDbgScope(MDNode *N, const MachineInstr *MI, MDNode *InlinedAt);
 
   /// ConstructDbgScope - Construct the components of a scope.
   ///
@@ -450,8 +474,8 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
   /// source file names. If none currently exists, create a new id and insert it
   /// in the SourceIds map. This can update DirectoryNames and SourceFileNames maps
   /// as well.
-  unsigned GetOrCreateSourceID(const std::string &DirName,
-                               const std::string &FileName);
+  unsigned GetOrCreateSourceID(const char *DirName,
+                               const char *FileName);
 
   void ConstructCompileUnit(MDNode *N);
 
@@ -459,8 +483,9 @@ class VISIBILITY_HIDDEN DwarfDebug : public Dwarf {
 
   void ConstructSubprogram(MDNode *N);
 
+  // FIXME: This should go away in favor of complex addresses.
   /// Find the type the programmer originally declared the variable to be
-  /// and return that type.
+  /// and return that type.  Obsolete, use GetComplexAddrType instead.
   ///
   DIType GetBlockByrefType(DIType Ty, std::string Name);
 
@@ -494,12 +519,7 @@ public:
   /// RecordSourceLine - Records location information and associates it with a 
   /// label. Returns a unique label ID used to generate a label and provide
   /// correspondence to the source line list.
-  unsigned RecordSourceLine(Value *V, unsigned Line, unsigned Col);
-  
-  /// RecordSourceLine - Records location information and associates it with a 
-  /// label. Returns a unique label ID used to generate a label and provide
-  /// correspondence to the source line list.
-  unsigned RecordSourceLine(unsigned Line, unsigned Col, DICompileUnit CU);
+  unsigned RecordSourceLine(unsigned Line, unsigned Col, MDNode *Scope);
 
   /// getRecordSourceLineCount - Return the number of source lines in the debug
   /// info.
@@ -531,6 +551,20 @@ public:
   /// RecordInlinedFnEnd - Indicate the end of inlined subroutine.
   unsigned RecordInlinedFnEnd(DISubprogram &SP);
 
+  /// ExtractScopeInformation - Scan machine instructions in this function
+  /// and collect DbgScopes. Return true, if atleast one scope was found.
+  bool ExtractScopeInformation(MachineFunction *MF);
+
+  /// CollectVariableInfo - Populate DbgScope entries with variables' info.
+  void CollectVariableInfo();
+
+  /// SetDbgScopeBeginLabels - Update DbgScope begin labels for the scopes that
+  /// start with this machine instruction.
+  void SetDbgScopeBeginLabels(const MachineInstr *MI, unsigned Label);
+
+  /// SetDbgScopeEndLabels - Update DbgScope end labels for the scopes that
+  /// end with this machine instruction.
+  void SetDbgScopeEndLabels(const MachineInstr *MI, unsigned Label);
 };
 
 } // End of namespace llvm

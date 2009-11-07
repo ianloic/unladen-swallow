@@ -32,7 +32,7 @@
 #define LLVM_CODEGEN_MACHINEMODULEINFO_H
 
 #include "llvm/Support/Dwarf.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/UniqueVector.h"
@@ -42,12 +42,16 @@
 #include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/GlobalValue.h"
 #include "llvm/Pass.h"
+#include "llvm/Metadata.h"
+
+#define ATTACH_DEBUG_INFO_TO_AN_INSN 1
 
 namespace llvm {
 
 //===----------------------------------------------------------------------===//
 // Forward declarations.
 class Constant;
+class MDNode;
 class GlobalVariable;
 class MachineBasicBlock;
 class MachineFunction;
@@ -142,8 +146,13 @@ class MachineModuleInfo : public ImmutablePass {
   /// DbgInfoAvailable - True if debugging information is available
   /// in this module.
   bool DbgInfoAvailable;
+
 public:
   static char ID; // Pass identification, replacement for typeid
+
+  typedef SmallVector< std::pair<TrackingVH<MDNode>, unsigned>, 4 > 
+    VariableDbgInfoMapTy;
+  VariableDbgInfoMapTy VariableDbgInfo;
 
   MachineModuleInfo();
   ~MachineModuleInfo();
@@ -153,7 +162,7 @@ public:
 
   /// BeginFunction - Begin gathering function meta information.
   ///
-  void BeginFunction(MachineFunction *MF);
+  void BeginFunction(MachineFunction *) {}
   
   /// EndFunction - Discard function meta information.
   ///
@@ -324,6 +333,14 @@ public:
   /// getPersonality - Return a personality function if available.  The presence
   /// of one is required to emit exception handling info.
   Function *getPersonality() const;
+
+  /// setVariableDbgInfo - Collect information used to emit debugging information
+  /// of a variable.
+  void setVariableDbgInfo(MDNode *N, unsigned S) {
+    VariableDbgInfo.push_back(std::make_pair(N, S));
+  }
+
+  VariableDbgInfoMapTy &getVariableDbgInfo() {  return VariableDbgInfo;  }
 
 }; // End class MachineModuleInfo
 

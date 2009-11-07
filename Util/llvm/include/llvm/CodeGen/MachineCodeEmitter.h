@@ -17,7 +17,7 @@
 #ifndef LLVM_CODEGEN_MACHINECODEEMITTER_H
 #define LLVM_CODEGEN_MACHINECODEEMITTER_H
 
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include "llvm/Support/DebugLoc.h"
 
 namespace llvm {
@@ -237,7 +237,7 @@ public:
   /// MachineInstruction.  This is called before emitting any bytes associated
   /// with the instruction.  Even if successive instructions have the same debug
   /// location, this method will be called for each one.
-  virtual void processDebugLoc(DebugLoc DL) {}
+  virtual void processDebugLoc(DebugLoc DL, bool BeforePrintintInsn) {}
 
   /// emitLabel - Emits a label
   virtual void emitLabel(uint64_t LabelID) = 0;

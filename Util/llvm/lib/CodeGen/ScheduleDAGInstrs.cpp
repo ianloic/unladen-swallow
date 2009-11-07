@@ -17,6 +17,7 @@
 #include "llvm/Operator.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Target/TargetMachine.h"
@@ -31,7 +32,9 @@ using namespace llvm;
 ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
                                      const MachineLoopInfo &mli,
                                      const MachineDominatorTree &mdt)
-  : ScheduleDAG(mf), MLI(mli), MDT(mdt), LoopRegs(MLI, MDT) {}
+  : ScheduleDAG(mf), MLI(mli), MDT(mdt), LoopRegs(MLI, MDT) {
+  MFI = mf.getFrameInfo();
+}
 
 /// Run - perform scheduling.
 ///
@@ -94,21 +97,31 @@ static const Value *getUnderlyingObject(const Value *V) {
 /// getUnderlyingObjectForInstr - If this machine instr has memory reference
 /// information and it can be tracked to a normal reference to a known
 /// object, return the Value for that object. Otherwise return null.
-static const Value *getUnderlyingObjectForInstr(const MachineInstr *MI) {
+static const Value *getUnderlyingObjectForInstr(const MachineInstr *MI,
+                                                const MachineFrameInfo *MFI) {
   if (!MI->hasOneMemOperand() ||
-      !MI->memoperands_begin()->getValue() ||
-      MI->memoperands_begin()->isVolatile())
+      !(*MI->memoperands_begin())->getValue() ||
+      (*MI->memoperands_begin())->isVolatile())
     return 0;
 
-  const Value *V = MI->memoperands_begin()->getValue();
+  const Value *V = (*MI->memoperands_begin())->getValue();
   if (!V)
     return 0;
 
   V = getUnderlyingObject(V);
-  if (!isa<PseudoSourceValue>(V) && !isIdentifiedObject(V))
-    return 0;
+  if (const PseudoSourceValue *PSV = dyn_cast<PseudoSourceValue>(V)) {
+    // For now, ignore PseudoSourceValues which may alias LLVM IR values
+    // because the code that uses this function has no way to cope with
+    // such aliases.
+    if (PSV->isAliased(MFI))
+      return 0;
+    return V;
+  }
 
-  return V;
+  if (isIdentifiedObject(V))
+    return V;
+
+  return 0;
 }
 
 void ScheduleDAGInstrs::StartBlock(MachineBasicBlock *BB) {
@@ -122,7 +135,7 @@ void ScheduleDAGInstrs::StartBlock(MachineBasicBlock *BB) {
     }
 }
 
-void ScheduleDAGInstrs::BuildSchedGraph() {
+void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
   // We'll be allocating one SUnit for each instruction, plus one for
   // the region exit node.
   SUnits.reserve(BB->size());
@@ -195,7 +208,7 @@ void ScheduleDAGInstrs::BuildSchedGraph() {
           SUnit *DefSU = DefList[i];
           if (DefSU != SU &&
               (Kind != SDep::Output || !MO.isDead() ||
-               !DefSU->getInstr()->registerDefIsDead(Reg)))
+               !DefSU->getInstr()->registerDefIsDead(*Alias)))
             DefSU->addPred(SDep(SU, Kind, AOLatency, /*Reg=*/ *Alias));
         }
       }
@@ -335,15 +348,15 @@ void ScheduleDAGInstrs::BuildSchedGraph() {
       if (!ChainTID.isCall() &&
           !ChainTID.hasUnmodeledSideEffects() &&
           ChainMI->hasOneMemOperand() &&
-          !ChainMI->memoperands_begin()->isVolatile() &&
-          ChainMI->memoperands_begin()->getValue())
+          !(*ChainMI->memoperands_begin())->isVolatile() &&
+          (*ChainMI->memoperands_begin())->getValue())
         // We know that the Chain accesses one specific memory location.
-        ChainMMO = &*ChainMI->memoperands_begin();
+        ChainMMO = *ChainMI->memoperands_begin();
       else
         // Unknown memory accesses. Assume the worst.
         ChainMMO = 0;
     } else if (TID.mayStore()) {
-      if (const Value *V = getUnderlyingObjectForInstr(MI)) {
+      if (const Value *V = getUnderlyingObjectForInstr(MI, MFI)) {
         // A store to a specific PseudoSourceValue. Add precise dependencies.
         // Handle the def in MemDefs, if there is one.
         std::map<const Value *, SUnit *>::iterator I = MemDefs.find(V);
@@ -374,9 +387,9 @@ void ScheduleDAGInstrs::BuildSchedGraph() {
         // Treat all other stores conservatively.
         goto new_chain;
     } else if (TID.mayLoad()) {
-      if (TII->isInvariantLoad(MI)) {
+      if (MI->isInvariantLoad(AA)) {
         // Invariant load, no chain dependencies needed!
-      } else if (const Value *V = getUnderlyingObjectForInstr(MI)) {
+      } else if (const Value *V = getUnderlyingObjectForInstr(MI, MFI)) {
         // A load from a specific PseudoSourceValue. Add precise dependencies.
         std::map<const Value *, SUnit *>::iterator I = MemDefs.find(V);
         if (I != MemDefs.end())

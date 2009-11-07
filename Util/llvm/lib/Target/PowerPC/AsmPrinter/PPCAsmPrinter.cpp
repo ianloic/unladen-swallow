@@ -45,7 +45,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
@@ -55,7 +54,7 @@ using namespace llvm;
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
 namespace {
-  class VISIBILITY_HIDDEN PPCAsmPrinter : public AsmPrinter {
+  class PPCAsmPrinter : public AsmPrinter {
   protected:
     struct FnStubInfo {
       std::string Stub, LazyPtr, AnonSymbol;
@@ -344,7 +343,7 @@ namespace {
   };
 
   /// PPCLinuxAsmPrinter - PowerPC assembly printer, customized for Linux
-  class VISIBILITY_HIDDEN PPCLinuxAsmPrinter : public PPCAsmPrinter {
+  class PPCLinuxAsmPrinter : public PPCAsmPrinter {
   public:
     explicit PPCLinuxAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
                                 const MCAsmInfo *T, bool V)
@@ -369,7 +368,7 @@ namespace {
 
   /// PPCDarwinAsmPrinter - PowerPC assembly printer, customized for Darwin/Mac
   /// OS X
-  class VISIBILITY_HIDDEN PPCDarwinAsmPrinter : public PPCAsmPrinter {
+  class PPCDarwinAsmPrinter : public PPCAsmPrinter {
     formatted_raw_ostream &OS;
   public:
     explicit PPCDarwinAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
@@ -381,8 +380,8 @@ namespace {
     }
 
     bool runOnMachineFunction(MachineFunction &F);
-    bool doInitialization(Module &M);
     bool doFinalization(Module &M);
+    void EmitStartOfAsmFile(Module &M);
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesAll();
@@ -545,7 +544,7 @@ void PPCAsmPrinter::printPredicateOperand(const MachineInstr *MI, unsigned OpNo,
 void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   ++EmittedInsts;
   
-  processDebugLoc(MI->getDebugLoc());
+  processDebugLoc(MI, true);
 
   // Check for slwi/srwi mnemonics.
   if (MI->getOpcode() == PPC::RLWINM) {
@@ -595,6 +594,8 @@ void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
   if (VerboseAsm && !MI->getDebugLoc().isUnknown())
     EmitComments(*MI);
   O << '\n';
+
+  processDebugLoc(MI, false);
 }
 
 /// runOnMachineFunction - This uses the printMachineInstruction()
@@ -658,7 +659,6 @@ bool PPCLinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), E = I->end();
          II != E; ++II) {
@@ -842,7 +842,6 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     // Print a label for the basic block.
     if (I != MF.begin()) {
       EmitBasicBlockStart(I);
-      O << '\n';
     }
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
          II != IE; ++II) {
@@ -862,7 +861,7 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 }
 
 
-bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
+void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
   static const char *const CPUDirectives[] = {
     "",
     "ppc",
@@ -885,9 +884,6 @@ bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
   assert(Directive <= PPC::DIR_64 && "Directive out of range.");
   O << "\t.machine " << CPUDirectives[Directive] << '\n';
 
-  bool Result = AsmPrinter::doInitialization(M);
-  assert(MMI);
-
   // Prime text sections so they are adjacent.  This reduces the likelihood a
   // large data or debug section causes a branch to exceed 16M limit.
   TargetLoweringObjectFileMachO &TLOFMacho = 
@@ -907,8 +903,6 @@ bool PPCDarwinAsmPrinter::doInitialization(Module &M) {
                                       16, SectionKind::getText()));
   }
   OutStreamer.SwitchSection(getObjFileLowering().getTextSection());
-
-  return Result;
 }
 
 void PPCDarwinAsmPrinter::PrintGlobalVariable(const GlobalVariable *GVar) {
@@ -1134,7 +1128,7 @@ bool PPCDarwinAsmPrinter::doFinalization(Module &M) {
   // implementation of multiple entry points).  If this doesn't occur, the
   // linker can safely perform dead code stripping.  Since LLVM never generates
   // code that does this, it is always safe to set.
-  O << "\t.subsections_via_symbols\n";
+  OutStreamer.EmitAssemblerFlag(MCStreamer::SubsectionsViaSymbols);
 
   return AsmPrinter::doFinalization(M);
 }

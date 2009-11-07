@@ -132,7 +132,7 @@ static void ProcessObjCMessage(ObjCMessageExpr *Msg, Indexer &Idxer) {
     Analyz.FindObjCMethods(Msg, Results);
     for (ResultsTy::iterator
            I = Results.begin(), E = Results.end(); I != E; ++I) {
-      const ObjCMethodDecl *D = cast<ObjCMethodDecl>(I->getDecl());
+      const ObjCMethodDecl *D = cast<ObjCMethodDecl>(I->AsDecl());
       if (D->isThisDeclarationADefinition())
         I->print(OS);
     }
@@ -146,7 +146,7 @@ static void ProcessASTLocation(ASTLocation ASTLoc, Indexer &Idxer) {
   assert(ASTLoc.isValid());
 
   if (ObjCMessageExpr *Msg =
-        dyn_cast_or_null<ObjCMessageExpr>(ASTLoc.getStmt()))
+        dyn_cast_or_null<ObjCMessageExpr>(ASTLoc.dyn_AsStmt()))
     return ProcessObjCMessage(Msg, Idxer);
 
   Decl *D = ASTLoc.getReferencedDecl();
@@ -184,7 +184,7 @@ static void ProcessASTLocation(ASTLocation ASTLoc, Indexer &Idxer) {
     Analyz.FindDeclarations(D, Results);
     for (ResultsTy::iterator
            I = Results.begin(), E = Results.end(); I != E; ++I) {
-      const Decl *D = I->getDecl();
+      const Decl *D = I->AsDecl();
       bool isDef = false;
       if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
         isDef = FD->isThisDeclarationADefinition();
@@ -225,8 +225,7 @@ int main(int argc, char **argv) {
     std::string ErrMsg;
     llvm::OwningPtr<ASTUnit> AST;
 
-    AST.reset(ASTUnit::LoadFromPCHFile(InFile, Idxer.getDiagnostics(),
-                                       Idxer.getFileManager(), &ErrMsg));
+    AST.reset(ASTUnit::LoadFromPCHFile(InFile, &ErrMsg));
     if (!AST) {
       llvm::errs() << "[" << InFile << "] Error: " << ErrMsg << '\n';
       return 1;
@@ -244,7 +243,7 @@ int main(int argc, char **argv) {
 
   if (!PointAtLocation.empty()) {
     const std::string &Filename = PointAtLocation[0].FileName;
-    const FileEntry *File = Idxer.getFileManager().getFile(Filename);
+    const FileEntry *File = FirstAST->getFileManager().getFile(Filename);
     if (File == 0) {
       llvm::errs() << "File '" << Filename << "' does not exist\n";
       return 1;
@@ -253,7 +252,7 @@ int main(int argc, char **argv) {
     // Safety check. Using an out-of-date AST file will only lead to crashes
     // or incorrect results.
     // FIXME: Check all the source files that make up the AST file.
-    const FileEntry *ASTFile = Idxer.getFileManager().getFile(FirstFile);
+    const FileEntry *ASTFile = FirstAST->getFileManager().getFile(FirstFile);
     if (File->getModificationTime() > ASTFile->getModificationTime()) {
       llvm::errs() << "[" << FirstFile << "] Error: " <<
         "Pointing at a source file which was modified after creating "
@@ -285,7 +284,7 @@ int main(int argc, char **argv) {
       llvm::raw_ostream &OS = llvm::outs();
       ASTLoc.print(OS);
       if (const char *Comment =
-            FirstAST->getASTContext().getCommentForDecl(ASTLoc.getDecl()))
+            FirstAST->getASTContext().getCommentForDecl(ASTLoc.dyn_AsDecl()))
         OS << "Comment associated with this declaration:\n" << Comment << "\n";
     } else {
       ProcessASTLocation(ASTLoc, Idxer);

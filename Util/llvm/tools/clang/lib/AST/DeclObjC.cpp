@@ -118,6 +118,45 @@ ObjCContainerDecl::FindPropertyDeclaration(IdentifierInfo *PropertyId) const {
   return 0;
 }
 
+void ObjCInterfaceDecl::mergeClassExtensionProtocolList(
+                              ObjCProtocolDecl *const* ExtList, unsigned ExtNum,
+                              ASTContext &C)
+{
+  if (ReferencedProtocols.empty()) {
+    ReferencedProtocols.set(ExtList, ExtNum, C);
+    return;
+  }
+  // Check for duplicate protocol in class's protocol list.
+  // This is (O)2. But it is extremely rare and number of protocols in
+  // class or its extension are very few.
+  llvm::SmallVector<ObjCProtocolDecl*, 8> ProtocolRefs;
+  for (unsigned i = 0; i < ExtNum; i++) {
+    bool protocolExists = false;
+    ObjCProtocolDecl *ProtoInExtension = ExtList[i];
+    for (protocol_iterator p = protocol_begin(), e = protocol_end();
+         p != e; p++) {
+      ObjCProtocolDecl *Proto = (*p);
+      if (C.ProtocolCompatibleWithProtocol(ProtoInExtension, Proto)) {
+        protocolExists = true;
+        break;
+      }      
+    }
+    // Do we want to warn on a protocol in extension class which
+    // already exist in the class? Probably not.
+    if (!protocolExists)
+      ProtocolRefs.push_back(ProtoInExtension);
+  }
+  if (ProtocolRefs.empty())
+    return;
+  // Merge ProtocolRefs into class's protocol list;
+  for (protocol_iterator p = protocol_begin(), e = protocol_end();
+       p != e; p++)
+    ProtocolRefs.push_back(*p);
+  ReferencedProtocols.Destroy(C);
+  unsigned NumProtoRefs = ProtocolRefs.size();
+  setProtocolList((ObjCProtocolDecl**)&ProtocolRefs[0], NumProtoRefs, C);
+}
+
 ObjCIvarDecl *ObjCInterfaceDecl::lookupInstanceVariable(IdentifierInfo *ID,
                                               ObjCInterfaceDecl *&clsDeclared) {
   ObjCInterfaceDecl* ClassDecl = this;
@@ -184,7 +223,16 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
   return NULL;
 }
 
-
+ObjCMethodDecl *ObjCInterfaceDecl::lookupPrivateInstanceMethod(
+                                   const Selector &Sel) {
+  ObjCMethodDecl *Method = 0;
+  if (ObjCImplementationDecl *ImpDecl = getImplementation())
+    Method = ImpDecl->getInstanceMethod(Sel);
+  
+  if (!Method && getSuperClass())
+    return getSuperClass()->lookupPrivateInstanceMethod(Sel);
+  return Method;
+}
 
 //===----------------------------------------------------------------------===//
 // ObjCMethodDecl

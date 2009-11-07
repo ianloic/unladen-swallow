@@ -21,6 +21,7 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCValue.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmParser.h"
@@ -31,6 +32,18 @@ using namespace llvm;
 // FIXME: Figure out where this should live, it should be shared by
 // TargetLoweringObjectFile.
 typedef StringMap<const MCSectionMachO*> MachOUniqueMapTy;
+
+AsmParser::AsmParser(SourceMgr &_SM, MCContext &_Ctx, MCStreamer &_Out,
+                     const MCAsmInfo &_MAI) 
+  : Lexer(_SM, _MAI), Ctx(_Ctx), Out(_Out), TargetParser(0),
+    SectionUniquingMap(0) {
+  // Debugging directives.
+  AddDirectiveHandler(".file", &AsmParser::ParseDirectiveFile);
+  AddDirectiveHandler(".line", &AsmParser::ParseDirectiveLine);
+  AddDirectiveHandler(".loc", &AsmParser::ParseDirectiveLoc);
+}
+
+
 
 AsmParser::~AsmParser() {
   // If we have the MachO uniquing map, free it.
@@ -208,12 +221,22 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res) {
     Res = MCUnaryExpr::CreateLNot(Res, getContext());
     return false;
   case AsmToken::String:
-  case AsmToken::Identifier:
-    // This is a label, this should be parsed as part of an expression, to
-    // handle things like LFOO+4.
-    Res = MCSymbolRefExpr::Create(Lexer.getTok().getIdentifier(), getContext());
+  case AsmToken::Identifier: {
+    // This is a symbol reference.
+    MCSymbol *Sym = CreateSymbol(Lexer.getTok().getIdentifier());
     Lexer.Lex(); // Eat identifier.
+
+    // If this is an absolute variable reference, substitute it now to preserve
+    // semantics in the face of reassignment.
+    if (Sym->getValue() && isa<MCConstantExpr>(Sym->getValue())) {
+      Res = Sym->getValue();
+      return false;
+    }
+
+    // Otherwise create a symbol ref.
+    Res = MCSymbolRefExpr::Create(Sym, getContext());
     return false;
+  }
   case AsmToken::Integer:
     Res = MCConstantExpr::Create(Lexer.getTok().getIntVal(), getContext());
     Lexer.Lex(); // Eat token.
@@ -269,7 +292,7 @@ bool AsmParser::ParseAbsoluteExpression(int64_t &Res) {
   if (ParseExpression(Expr))
     return true;
 
-  if (!Expr->EvaluateAsAbsolute(Ctx, Res))
+  if (!Expr->EvaluateAsAbsolute(Res))
     return Error(StartLoc, "expected absolute expression");
 
   return false;
@@ -672,15 +695,11 @@ bool AsmParser::ParseStatement() {
     if (IDVal == ".load")
       return ParseDirectiveDarwinDumpOrLoad(IDLoc, /*IsLoad=*/false);
 
-    // Debugging directives
-
-    if (IDVal == ".file")
-      return ParseDirectiveFile(IDLoc);
-    if (IDVal == ".line")
-      return ParseDirectiveLine(IDLoc);
-    if (IDVal == ".loc")
-      return ParseDirectiveLoc(IDLoc);
-
+    // Look up the handler in the handler table, 
+    bool(AsmParser::*Handler)(StringRef, SMLoc) = DirectiveMap[IDVal];
+    if (Handler)
+      return (this->*Handler)(IDVal, IDLoc);
+    
     // Target hook for parsing target specific directives.
     if (!getTargetParser().ParseDirective(ID))
       return false;
@@ -722,14 +741,25 @@ bool AsmParser::ParseAssignment(const StringRef &Name) {
   // Eat the end of statement marker.
   Lexer.Lex();
 
-  // Diagnose assignment to a label.
-  //
-  // FIXME: Diagnostics. Note the location of the definition as a label.
+  // Validate that the LHS is allowed to be a variable (either it has not been
+  // used as a symbol, or it is an absolute symbol).
+  MCSymbol *Sym = getContext().LookupSymbol(Name);
+  if (Sym) {
+    // Diagnose assignment to a label.
+    //
+    // FIXME: Diagnostics. Note the location of the definition as a label.
+    // FIXME: Diagnose assignment to protected identifier (e.g., register name).
+    if (!Sym->isUndefined() && !Sym->isAbsolute())
+      return Error(EqualLoc, "redefinition of '" + Name + "'");
+    else if (!Sym->isVariable())
+      return Error(EqualLoc, "invalid assignment to '" + Name + "'");
+    else if (!isa<MCConstantExpr>(Sym->getValue()))
+      return Error(EqualLoc, "invalid reassignment of non-absolute variable '" +
+                   Name + "'");
+  } else
+    Sym = CreateSymbol(Name);
+
   // FIXME: Handle '.'.
-  // FIXME: Diagnose assignment to protected identifier (e.g., register name).
-  MCSymbol *Sym = CreateSymbol(Name);
-  if (!Sym->isUndefined() && !Sym->isAbsolute())
-    return Error(EqualLoc, "symbol has already been defined");
 
   // Do the assignment.
   Out.EmitAssignment(Sym, Value);
@@ -1587,7 +1617,7 @@ bool AsmParser::ParseDirectiveEndIf(SMLoc DirectiveLoc) {
 
 /// ParseDirectiveFile
 /// ::= .file [number] string
-bool AsmParser::ParseDirectiveFile(SMLoc DirectiveLoc) {
+bool AsmParser::ParseDirectiveFile(StringRef, SMLoc DirectiveLoc) {
   // FIXME: I'm not sure what this is.
   int64_t FileNumber = -1;
   if (Lexer.is(AsmToken::Integer)) {
@@ -1614,7 +1644,7 @@ bool AsmParser::ParseDirectiveFile(SMLoc DirectiveLoc) {
 
 /// ParseDirectiveLine
 /// ::= .line [number]
-bool AsmParser::ParseDirectiveLine(SMLoc DirectiveLoc) {
+bool AsmParser::ParseDirectiveLine(StringRef, SMLoc DirectiveLoc) {
   if (Lexer.isNot(AsmToken::EndOfStatement)) {
     if (Lexer.isNot(AsmToken::Integer))
       return TokError("unexpected token in '.line' directive");
@@ -1635,7 +1665,7 @@ bool AsmParser::ParseDirectiveLine(SMLoc DirectiveLoc) {
 
 /// ParseDirectiveLoc
 /// ::= .loc number [number [number]]
-bool AsmParser::ParseDirectiveLoc(SMLoc DirectiveLoc) {
+bool AsmParser::ParseDirectiveLoc(StringRef, SMLoc DirectiveLoc) {
   if (Lexer.isNot(AsmToken::Integer))
     return TokError("unexpected token in '.loc' directive");
 

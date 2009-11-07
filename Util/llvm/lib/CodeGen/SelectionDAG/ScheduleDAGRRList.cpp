@@ -24,7 +24,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/ADT/PriorityQueue.h"
 #include "llvm/ADT/SmallSet.h"
@@ -53,7 +52,7 @@ namespace {
 /// ScheduleDAGRRList - The actual register reduction list scheduler
 /// implementation.  This supports both top-down and bottom-up scheduling.
 ///
-class VISIBILITY_HIDDEN ScheduleDAGRRList : public ScheduleDAGSDNodes {
+class ScheduleDAGRRList : public ScheduleDAGSDNodes {
 private:
   /// isBottomUp - This is true if the scheduling problem is bottom-up, false if
   /// it is top-down.
@@ -172,7 +171,7 @@ void ScheduleDAGRRList::Schedule() {
   LiveRegCycles.resize(TRI->getNumRegs(), 0);
 
   // Build the scheduling graph.
-  BuildSchedGraph();
+  BuildSchedGraph(NULL);
 
   DEBUG(for (unsigned su = 0, e = SUnits.size(); su != e; ++su)
           SUnits[su].dumpAll(this));
@@ -197,17 +196,17 @@ void ScheduleDAGRRList::Schedule() {
 /// the AvailableQueue if the count reaches zero. Also update its cycle bound.
 void ScheduleDAGRRList::ReleasePred(SUnit *SU, const SDep *PredEdge) {
   SUnit *PredSU = PredEdge->getSUnit();
-  --PredSU->NumSuccsLeft;
-  
+
 #ifndef NDEBUG
-  if (PredSU->NumSuccsLeft < 0) {
+  if (PredSU->NumSuccsLeft == 0) {
     errs() << "*** Scheduling failed! ***\n";
     PredSU->dump(this);
     errs() << " has been released too many times!\n";
     llvm_unreachable(0);
   }
 #endif
-  
+  --PredSU->NumSuccsLeft;
+
   // If all the node's successors are scheduled, this node is ready
   // to be scheduled. Ignore the special EntrySU node.
   if (PredSU->NumSuccsLeft == 0 && PredSU != &EntrySU) {
@@ -278,6 +277,7 @@ void ScheduleDAGRRList::CapturePred(SDep *PredEdge) {
       AvailableQueue->remove(PredSU);
   }
 
+  assert(PredSU->NumSuccsLeft < UINT_MAX && "NumSuccsLeft will overflow!");
   ++PredSU->NumSuccsLeft;
 }
 
@@ -824,17 +824,17 @@ void ScheduleDAGRRList::ListScheduleBottomUp() {
 /// the AvailableQueue if the count reaches zero. Also update its cycle bound.
 void ScheduleDAGRRList::ReleaseSucc(SUnit *SU, const SDep *SuccEdge) {
   SUnit *SuccSU = SuccEdge->getSUnit();
-  --SuccSU->NumPredsLeft;
-  
+
 #ifndef NDEBUG
-  if (SuccSU->NumPredsLeft < 0) {
+  if (SuccSU->NumPredsLeft == 0) {
     errs() << "*** Scheduling failed! ***\n";
     SuccSU->dump(this);
     errs() << " has been released too many times!\n";
     llvm_unreachable(0);
   }
 #endif
-  
+  --SuccSU->NumPredsLeft;
+
   // If all the node's predecessors are scheduled, this node is ready
   // to be scheduled. Ignore the special ExitSU node.
   if (SuccSU->NumPredsLeft == 0 && SuccSU != &ExitSU) {
@@ -964,8 +964,7 @@ CalcNodeSethiUllmanNumber(const SUnit *SU, std::vector<unsigned> &SUNumbers) {
 
 namespace {
   template<class SF>
-  class VISIBILITY_HIDDEN RegReductionPriorityQueue
-   : public SchedulingPriorityQueue {
+  class RegReductionPriorityQueue : public SchedulingPriorityQueue {
     PriorityQueue<SUnit*, std::vector<SUnit*>, SF> Queue;
     unsigned currentQueueId;
 

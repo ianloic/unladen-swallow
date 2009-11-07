@@ -517,9 +517,7 @@ static void WriteModuleMetadata(const ValueEnumerator &VE,
       }
 
       // Code: [strchar x N]
-      const char *StrBegin = MDS->begin();
-      for (unsigned i = 0, e = MDS->length(); i != e; ++i)
-        Record.push_back(StrBegin[i]);
+      Record.append(MDS->begin(), MDS->end());
 
       // Emit the finished record.
       Stream.EmitRecord(bitc::METADATA_STRING, Record, MDSAbbrev);
@@ -562,30 +560,32 @@ static void WriteMetadataAttachment(const Function &F,
 
   // Write metadata attachments
   // METADATA_ATTACHMENT - [m x [value, [n x [id, mdnode]]]
-  Metadata &TheMetadata = F.getContext().getMetadata();
+  MetadataContext &TheMetadata = F.getContext().getMetadata();
+  typedef SmallVector<std::pair<unsigned, TrackingVH<MDNode> >, 2> MDMapTy;
+  MDMapTy MDs;
   for (Function::const_iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
     for (BasicBlock::const_iterator I = BB->begin(), E = BB->end();
          I != E; ++I) {
-      const Metadata::MDMapTy *P = TheMetadata.getMDs(I);
-      if (!P) continue;
+      MDs.clear();
+      TheMetadata.getMDs(I, MDs);
       bool RecordedInstruction = false;
-      for (Metadata::MDMapTy::const_iterator PI = P->begin(), PE = P->end();
-           PI != PE; ++PI) {
-        if (MDNode *ND = dyn_cast_or_null<MDNode>(PI->second)) {
-          if (RecordedInstruction == false) {
-            Record.push_back(VE.getInstructionID(I));
-            RecordedInstruction = true;
-          }
-          Record.push_back(PI->first);
-          Record.push_back(VE.getValueID(ND));
+      for (MDMapTy::const_iterator PI = MDs.begin(), PE = MDs.end();
+             PI != PE; ++PI) {
+        if (RecordedInstruction == false) {
+          Record.push_back(VE.getInstructionID(I));
+          RecordedInstruction = true;
         }
+        Record.push_back(PI->first);
+        Record.push_back(VE.getValueID(PI->second));
       }
-      if (!StartedMetadataBlock)  {
-        Stream.EnterSubblock(bitc::METADATA_ATTACHMENT_ID, 3);
-        StartedMetadataBlock = true;
+      if (!Record.empty()) {
+        if (!StartedMetadataBlock)  {
+          Stream.EnterSubblock(bitc::METADATA_ATTACHMENT_ID, 3);
+          StartedMetadataBlock = true;
+        }
+        Stream.EmitRecord(bitc::METADATA_ATTACHMENT, Record, 0);
+        Record.clear();
       }
-      Stream.EmitRecord(bitc::METADATA_ATTACHMENT, Record, 0);
-      Record.clear();
     }
 
   if (StartedMetadataBlock)
@@ -601,12 +601,14 @@ static void WriteModuleMetadataStore(const Module *M,
 
   // Write metadata kinds
   // METADATA_KIND - [n x [id, name]]
-  Metadata &TheMetadata = M->getContext().getMetadata();
-  const StringMap<unsigned> *Kinds = TheMetadata.getHandlerNames();
-  for (StringMap<unsigned>::const_iterator
-         I = Kinds->begin(), E = Kinds->end(); I != E; ++I) {
-    Record.push_back(I->second);
-    StringRef KName = I->first();
+  MetadataContext &TheMetadata = M->getContext().getMetadata();
+  SmallVector<std::pair<unsigned, StringRef>, 4> Names;
+  TheMetadata.getHandlerNames(Names);
+  for (SmallVector<std::pair<unsigned, StringRef>, 4>::iterator 
+         I = Names.begin(),
+         E = Names.end(); I != E; ++I) {
+    Record.push_back(I->first);
+    StringRef KName = I->second;
     for (unsigned i = 0, e = KName.size(); i != e; ++i)
       Record.push_back(KName[i]);
     if (!StartedMetadataBlock)  {
@@ -677,7 +679,8 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
     }
 
     if (const InlineAsm *IA = dyn_cast<InlineAsm>(V)) {
-      Record.push_back(unsigned(IA->hasSideEffects()));
+      Record.push_back(unsigned(IA->hasSideEffects()) |
+                       unsigned(IA->isAlignStack()) << 1);
 
       // Add the asm string.
       const std::string &AsmStr = IA->getAsmString();
@@ -729,18 +732,16 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
     } else if (const ConstantFP *CFP = dyn_cast<ConstantFP>(C)) {
       Code = bitc::CST_CODE_FLOAT;
       const Type *Ty = CFP->getType();
-      if (Ty == Type::getFloatTy(Ty->getContext()) ||
-          Ty == Type::getDoubleTy(Ty->getContext())) {
+      if (Ty->isFloatTy() || Ty->isDoubleTy()) {
         Record.push_back(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
-      } else if (Ty == Type::getX86_FP80Ty(Ty->getContext())) {
+      } else if (Ty->isX86_FP80Ty()) {
         // api needed to prevent premature destruction
         // bits are not in the same order as a normal i80 APInt, compensate.
         APInt api = CFP->getValueAPF().bitcastToAPInt();
         const uint64_t *p = api.getRawData();
         Record.push_back((p[1] << 48) | (p[0] >> 16));
         Record.push_back(p[0] & 0xffffLL);
-      } else if (Ty == Type::getFP128Ty(Ty->getContext()) ||
-                 Ty == Type::getPPC_FP128Ty(Ty->getContext())) {
+      } else if (Ty->isFP128Ty() || Ty->isPPC_FP128Ty()) {
         APInt api = CFP->getValueAPF().bitcastToAPInt();
         const uint64_t *p = api.getRawData();
         Record.push_back(p[0]);
@@ -1051,18 +1052,6 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     Vals.push_back(VE.getTypeID(I.getType()));
     for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i)
       Vals.push_back(VE.getValueID(I.getOperand(i)));
-    break;
-
-  case Instruction::Malloc:
-    Code = bitc::FUNC_CODE_INST_MALLOC;
-    Vals.push_back(VE.getTypeID(I.getType()));
-    Vals.push_back(VE.getValueID(I.getOperand(0))); // size.
-    Vals.push_back(Log2_32(cast<MallocInst>(I).getAlignment())+1);
-    break;
-
-  case Instruction::Free:
-    Code = bitc::FUNC_CODE_INST_FREE;
-    PushValueAndType(I.getOperand(0), InstID, Vals, VE);
     break;
 
   case Instruction::Alloca:

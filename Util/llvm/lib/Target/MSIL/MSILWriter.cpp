@@ -30,7 +30,7 @@ using namespace llvm;
 
 namespace llvm {
   // TargetMachine for the MSIL 
-  struct VISIBILITY_HIDDEN MSILTarget : public TargetMachine {
+  struct MSILTarget : public TargetMachine {
     MSILTarget(const Target &T, const std::string &TT, const std::string &FS)
       : TargetMachine(T) {}
 
@@ -1191,12 +1191,6 @@ void MSILWriter::printInstruction(const Instruction* Inst) {
   case Instruction::Alloca:
     printAllocaInstruction(cast<AllocaInst>(Inst));
     break;
-  case Instruction::Malloc:
-    llvm_unreachable("LowerAllocationsPass used");
-    break;
-  case Instruction::Free:
-    llvm_unreachable("LowerAllocationsPass used");
-    break;
   case Instruction::Unreachable:
     printSimpleInstruction("ldstr", "\"Unreachable instruction\"");
     printSimpleInstruction("newobj",
@@ -1702,7 +1696,6 @@ bool MSILTarget::addPassesToEmitWholeFile(PassManager &PM,
   if (FileType != TargetMachine::AssemblyFile) return true;
   MSILWriter* Writer = new MSILWriter(o);
   PM.add(createGCLoweringPass());
-  PM.add(createLowerAllocationsPass(true));
   // FIXME: Handle switch trougth native IL instruction "switch"
   PM.add(createLowerSwitchPass());
   PM.add(createCFGSimplificationPass());

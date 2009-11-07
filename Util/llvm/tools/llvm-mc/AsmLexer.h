@@ -17,7 +17,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCAsmLexer.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm/System/DataTypes.h"
 #include <string>
 #include <cassert>
 
@@ -30,7 +30,7 @@ class MCAsmInfo;
 /// AsmLexer - Lexer class for assembly files.
 class AsmLexer : public MCAsmLexer {
   SourceMgr &SrcMgr;
-  const MCAsmInfo MAI;
+  const MCAsmInfo &MAI;
   
   const char *CurPtr;
   const MemoryBuffer *CurBuf;

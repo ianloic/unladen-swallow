@@ -9,6 +9,7 @@
 
 #include "llvm/ADT/Triple.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include <cassert>
 #include <cstring>
@@ -95,6 +96,7 @@ const char *Triple::getOSTypeName(OSType Kind) {
   case OpenBSD: return "openbsd";
   case Solaris: return "solaris";
   case Win32: return "win32";
+  case Haiku: return "haiku";
   }
 
   return "<invalid>";
@@ -275,6 +277,8 @@ void Triple::Parse() const {
     OS = Solaris;
   else if (OSName.startswith("win32"))
     OS = Win32;
+  else if (OSName.startswith("haiku"))
+  	OS = Haiku;
   else
     OS = UnknownOS;
 
@@ -390,7 +394,14 @@ void Triple::setOS(OSType Kind) {
 }
 
 void Triple::setArchName(const StringRef &Str) {
-  setTriple(Str + "-" + getVendorName() + "-" + getOSAndEnvironmentName());
+  // Work around a miscompilation bug for Twines in gcc 4.0.3.
+  SmallString<64> Triple;
+  Triple += Str;
+  Triple += "-";
+  Triple += getVendorName();
+  Triple += "-";
+  Triple += getOSAndEnvironmentName();
+  setTriple(Triple.str());
 }
 
 void Triple::setVendorName(const StringRef &Str) {

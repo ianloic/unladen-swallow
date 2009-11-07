@@ -52,7 +52,6 @@ namespace {
     void VisitFieldDecl(FieldDecl *D);
     void VisitVarDecl(VarDecl *D);
     void VisitParmVarDecl(ParmVarDecl *D);
-    void VisitOriginalParmVarDecl(OriginalParmVarDecl *D);
     void VisitFileScopeAsmDecl(FileScopeAsmDecl *D);
     void VisitOverloadedFunctionDecl(OverloadedFunctionDecl *D);
     void VisitNamespaceDecl(NamespaceDecl *D);
@@ -77,14 +76,14 @@ namespace {
   };
 }
 
-void Decl::print(llvm::raw_ostream &Out, unsigned Indentation) {
+void Decl::print(llvm::raw_ostream &Out, unsigned Indentation) const {
   print(Out, getASTContext().PrintingPolicy, Indentation);
 }
 
 void Decl::print(llvm::raw_ostream &Out, const PrintingPolicy &Policy,
-                 unsigned Indentation) {
+                 unsigned Indentation) const {
   DeclPrinter Printer(Out, getASTContext(), Policy, Indentation);
-  Printer.Visit(this);
+  Printer.Visit(const_cast<Decl*>(this));
 }
 
 static QualType GetBaseType(QualType T) {
@@ -149,7 +148,7 @@ void Decl::printGroup(Decl** Begin, unsigned NumDecls,
   }
 }
 
-void Decl::dump() {
+void Decl::dump() const {
   print(llvm::errs());
 }
 
@@ -489,7 +488,7 @@ void DeclPrinter::VisitVarDecl(VarDecl *D) {
 
   std::string Name = D->getNameAsString();
   QualType T = D->getType();
-  if (OriginalParmVarDecl *Parm = dyn_cast<OriginalParmVarDecl>(D))
+  if (ParmVarDecl *Parm = dyn_cast<ParmVarDecl>(D))
     T = Parm->getOriginalType();
   T.getAsStringInternal(Name, Policy);
   Out << Name;
@@ -505,10 +504,6 @@ void DeclPrinter::VisitVarDecl(VarDecl *D) {
 }
 
 void DeclPrinter::VisitParmVarDecl(ParmVarDecl *D) {
-  VisitVarDecl(D);
-}
-
-void DeclPrinter::VisitOriginalParmVarDecl(OriginalParmVarDecl *D) {
   VisitVarDecl(D);
 }
 

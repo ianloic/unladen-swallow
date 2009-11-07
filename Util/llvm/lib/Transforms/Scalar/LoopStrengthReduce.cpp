@@ -24,7 +24,6 @@
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
-#include "llvm/LLVMContext.h"
 #include "llvm/Type.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Analysis/Dominators.h"
@@ -1915,7 +1914,7 @@ ICmpInst *LoopStrengthReduce::ChangeCompareStride(Loop *L, ICmpInst *Cond,
         continue;
 
       // Watch out for overflow.
-      if (ICmpInst::isSignedPredicate(Predicate) &&
+      if (ICmpInst::isSigned(Predicate) &&
           (CmpVal & SignBit) != (NewCmpVal & SignBit))
         continue;
 
@@ -1957,7 +1956,7 @@ ICmpInst *LoopStrengthReduce::ChangeCompareStride(Loop *L, ICmpInst *Cond,
         // Check if it is possible to rewrite it using
         // an iv / stride of a smaller integer type.
         unsigned Bits = NewTyBits;
-        if (ICmpInst::isSignedPredicate(Predicate))
+        if (ICmpInst::isSigned(Predicate))
           --Bits;
         uint64_t Mask = (1ULL << Bits) - 1;
         if (((uint64_t)NewCmpVal & Mask) != (uint64_t)NewCmpVal)
@@ -2263,6 +2262,10 @@ void LoopStrengthReduce::OptimizeShadowIV(Loop *L) {
 
       if (!C) continue;
 
+      // Ignore negative constants, as the code below doesn't handle them
+      // correctly. TODO: Remove this restriction.
+      if (!C->getValue().isStrictlyPositive()) continue;
+
       /* Add new PHINode. */
       PHINode *NewPH = PHINode::Create(DestTy, "IV.S.", PH);
 
@@ -2303,7 +2306,6 @@ void LoopStrengthReduce::OptimizeLoopTermCond(Loop *L) {
   // one register value.
   BasicBlock *LatchBlock = L->getLoopLatch();
   BasicBlock *ExitingBlock = L->getExitingBlock();
-  LLVMContext &Context = LatchBlock->getContext();
   
   if (!ExitingBlock)
     // Multiple exits, just look at the exit in the latch block if there is one.
@@ -2394,7 +2396,7 @@ void LoopStrengthReduce::OptimizeLoopTermCond(Loop *L) {
       Cond->moveBefore(TermBr);
     } else {
       // Otherwise, clone the terminating condition and insert into the loopend.
-      Cond = cast<ICmpInst>(Cond->clone(Context));
+      Cond = cast<ICmpInst>(Cond->clone());
       Cond->setName(L->getHeader()->getName() + ".termcond");
       LatchBlock->getInstList().insert(TermBr, Cond);
       
