@@ -91,17 +91,22 @@ bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
   return Py_UNICODE_ISSPACE(c) == 1;
 }
 
-// make sure there's a function in the RegEx object for the associated
-// wrapper. 
-#define ENSURE_TEST_FUNCTION(name) \
-  if (re.name == NULL) { \
-    std::vector<const Type*> func_args; \
-    func_args.push_back(re.charType); \
-    const FunctionType* func_type = \
-      FunctionType::get(re.boolType, func_args, false); \
-    re.name = Function::Create(func_type, \
-        Function::ExternalLinkage, "wrap_" #name, re.module); \
-  } \
+Function* llvm_Py_UNICODE_ISDIGIT = NULL;
+Function* llvm_isalnum = NULL;
+Function* llvm_Py_UNICODE_ISALNUM = NULL;
+Function* llvm_isspace = NULL;
+Function* llvm_Py_UNICODE_ISSPACE = NULL;
+
+// global values
+Value* not_found;
+
+// global types
+const IntegerType* charType;
+const IntegerType* boolType;
+const IntegerType* offsetType;
+const PointerType* charPointerType;
+const PointerType* offsetPointerType;
+
 
 #ifndef TESTER
 /* a Python object representing a regular expression */
@@ -212,23 +217,6 @@ class RegularExpression : CompiledExpression {
     int flags;
     int groups;
 
-    // useful value to reuse
-    Value* not_found;
-
-    // types
-    const IntegerType* charType;
-    const IntegerType* boolType;
-    const IntegerType* offsetType;
-    const PointerType* charPointerType;
-    const PointerType* offsetPointerType;
-
-    // external functions that get lazily created
-    Function* Py_UNICODE_ISDIGIT;
-    Function* isalnum;
-    Function* Py_UNICODE_ISALNUM;
-    Function* isspace;
-    Function* Py_UNICODE_ISSPACE;
-
     // create an LLVM function associated with this re
     inline Function* createFunction(const char* name, 
                                     bool internal, 
@@ -258,12 +246,6 @@ ExecutionEngine* RegularExpression::ee = NULL;
 RegularExpression::RegularExpression() 
   : CompiledExpression(*this, true), find_function(NULL)
 {
-  this->Py_UNICODE_ISDIGIT = NULL;
-  this->isalnum = NULL;
-  this->Py_UNICODE_ISALNUM = NULL;
-  this->isspace = NULL;
-  this->Py_UNICODE_ISSPACE = NULL;
-  
   // use the Unladen Swallow LLVM context
   global_data = PyGlobalLlvmData::Get();
 
@@ -281,16 +263,6 @@ RegularExpression::RegularExpression()
     //ee = EngineBuilder(module).create();
     ee = global_data->getExecutionEngine();
   }
-
-  // the types we use
-  // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
-  charType = IntegerType::get(*context, 16);
-  boolType = IntegerType::get(*context, 1);
-  offsetType = IntegerType::get(*context, 32);
-  charPointerType = PointerType::get(charType, 0);
-  offsetPointerType = PointerType::get(offsetType, 0);
-  // set up some handy constants
-  not_found = ConstantInt::getSigned(offsetType, -1);
 }
 
 RegularExpression::~RegularExpression() 
@@ -333,14 +305,14 @@ RegularExpression::createFunction(const char* name,
 {
   // function argument types
   std::vector<const Type*> args_type;
-  args_type.push_back(re.charPointerType); // string
-  args_type.push_back(re.offsetType); // offset
-  args_type.push_back(re.offsetType); // end_offset
-  args_type.push_back(re.offsetPointerType); // groups
+  args_type.push_back(charPointerType); // string
+  args_type.push_back(offsetType); // offset
+  args_type.push_back(offsetType); // end_offset
+  args_type.push_back(offsetPointerType); // groups
   if (extra_arg_type != NULL) {
     args_type.push_back(extra_arg_type); // start_ptr / counter
   }
-  FunctionType *func_type = FunctionType::get(re.offsetType, args_type, false);
+  FunctionType *func_type = FunctionType::get(offsetType, args_type, false);
 
   Function* func = Function::Create(func_type, 
       internal ? Function::InternalLinkage : Function::ExternalLinkage,
@@ -595,7 +567,7 @@ CompiledExpression::loadCharacter(BasicBlock* block) {
   character = new LoadInst(c_ptr, "c", block);
   // increment the offset
   offset = BinaryOperator::CreateAdd(offset,
-      ConstantInt::get(re.offsetType, 1), "increment", block);
+      ConstantInt::get(offsetType, 1), "increment", block);
   storeOffset(block, offset);
   return block;
 }
@@ -604,7 +576,7 @@ Function*
 CompiledExpression::greedy(Function* repeat, Function* after) 
 {
   // create the function
-  Function* function = re.createFunction("recurse", true, re.offsetType);
+  Function* function = re.createFunction("recurse", true, offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -627,7 +599,7 @@ CompiledExpression::greedy(Function* repeat, Function* after)
 
   // set up BasicBlock to return not_found
   BasicBlock* return_not_found = createBlock("return_not_found", function);
-  ReturnInst::Create(context(), re.not_found, return_not_found);
+  ReturnInst::Create(context(), not_found, return_not_found);
 
   // call repeat
   std::vector<Value*> call_args;
@@ -638,15 +610,15 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
   Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
-      repeat_result, re.not_found, "repeat_result_not_found");
+      repeat_result, not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(re.offsetType, 1), "remaining", count);
+      ConstantInt::get(offsetType, 1), "remaining", count);
   Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(re.offsetType, 0), "stop_recursion");
+      ConstantInt::get(offsetType, 0), "stop_recursion");
   BranchInst::Create(call_after, recurse, stop_recursion, count);
 
   // recurse
@@ -655,7 +627,7 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   Value* recurse_result = CallInst::Create(function, call_args.begin(),
       call_args.end(), "recurse_result", recurse);
   Value* recurse_result_not_found = new ICmpInst(*recurse, ICmpInst::ICMP_EQ,
-      recurse_result, re.not_found, "recurse_result_not_found");
+      recurse_result, not_found, "recurse_result_not_found");
   BranchInst::Create(call_after, return_offset, recurse_result_not_found, 
       recurse);
 
@@ -677,7 +649,7 @@ Function*
 CompiledExpression::nongreedy(Function* repeat, Function* after) 
 {
   // create the function
-  Function* function = re.createFunction("recurse", true, re.offsetType);
+  Function* function = re.createFunction("recurse", true, offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -700,7 +672,7 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
 
   // set up BasicBlock to return not_found
   BasicBlock* return_not_found = createBlock("return_not_found", function);
-  ReturnInst::Create(context(), re.not_found, return_not_found);
+  ReturnInst::Create(context(), not_found, return_not_found);
 
   // call after
   std::vector<Value*> call_args;
@@ -711,7 +683,7 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   Value* after_result = CallInst::Create(after, call_args.begin(),
       call_args.end(), "after_result", call_after);
   Value* after_result_not_found = new ICmpInst(*call_after, ICmpInst::ICMP_EQ,
-      after_result, re.not_found, "after_result_not_found");
+      after_result, not_found, "after_result_not_found");
   BranchInst::Create(call_repeat, return_after_result, after_result_not_found,
       call_after);
 
@@ -719,15 +691,15 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
   Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
-      repeat_result, re.not_found, "repeat_result_not_found");
+      repeat_result, not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(re.offsetType, 1), "remaining", count);
+      ConstantInt::get(offsetType, 1), "remaining", count);
   Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(re.offsetType, 0), "stop_recursion");
+      ConstantInt::get(offsetType, 0), "stop_recursion");
   BranchInst::Create(return_not_found, recurse, stop_recursion, count);
 
   // recurse
@@ -760,11 +732,11 @@ CompiledExpression::testRange(BasicBlock* block,
   BasicBlock* greater_equal = createBlock("greater_equal");
   // test the character >= from
   Value* is_ge = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_UGE, c,
-      ConstantInt::get(re.charType, from), "is_ge");
+      ConstantInt::get(charType, from), "is_ge");
   BranchInst::Create(greater_equal, nonmember, is_ge, block);
   // test the character <= to
   Value* is_le = new llvm::ICmpInst(*greater_equal, llvm::ICmpInst::ICMP_ULE, 
-      c, ConstantInt::get(re.charType, to), "is_le");
+      c, ConstantInt::get(charType, to), "is_le");
   BranchInst::Create(member, nonmember, is_le, greater_equal);
 }
 
@@ -782,12 +754,11 @@ CompiledExpression::testCategory(BasicBlock* block,
       // for unicode we call Py_UNICODE_ISDIGIT
       // except that function doesn't really exist. It's a macro that calls
       // _PyUnicode_IsDigit
-      ENSURE_TEST_FUNCTION(Py_UNICODE_ISDIGIT)
 
       // call the function
       std::vector<Value*> args;
       args.push_back(c);
-      Value* IsDigit_result = CallInst::Create(re.Py_UNICODE_ISDIGIT,
+      Value* IsDigit_result = CallInst::Create(llvm_Py_UNICODE_ISDIGIT,
           args.begin(), args.end(), "IsDigit_result", block);
       // go to the right successor block
       BranchInst::Create(member, nonmember, IsDigit_result, block);
@@ -805,13 +776,11 @@ CompiledExpression::testCategory(BasicBlock* block,
       BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
       Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(re.charType, '_'), "is_underscore");
+        ConstantInt::get(charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
-      // make sure isalnum is available to the JIT
-      ENSURE_TEST_FUNCTION(isalnum);
       // call the function
       Value* args[] = { c };
-      Value* result = CallInst::Create(re.isalnum,
+      Value* result = CallInst::Create(llvm_isalnum,
           args, args+1, "result", tmp2);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, tmp2);
@@ -821,14 +790,12 @@ CompiledExpression::testCategory(BasicBlock* block,
       BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
       Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(re.charType, '_'), "is_underscore");
+        ConstantInt::get(charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
-      // make sure Py_UNICODE_ISALNUM is available to the JIT
-      ENSURE_TEST_FUNCTION(Py_UNICODE_ISALNUM);
       // call the function
       std::vector<Value*> args;
       args.push_back(c);
-      Value* result = CallInst::Create(re.Py_UNICODE_ISALNUM,
+      Value* result = CallInst::Create(llvm_Py_UNICODE_ISALNUM,
           args.begin(), args.end(), "result", tmp2);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, tmp2);
@@ -841,7 +808,7 @@ CompiledExpression::testCategory(BasicBlock* block,
       testRange(tmp1, c, 'A', 'Z', member, tmp2);
       testRange(tmp2, c, '0', '9', member, tmp3);
       Value* is_underscore = new ICmpInst(*tmp3, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(re.charType, '_'), "is_underscore");
+        ConstantInt::get(charType, '_'), "is_underscore");
       BranchInst::Create(member, nonmember, is_underscore, tmp3);
     }
   } else if (!strcmp(category, "category_not_word")) {
@@ -851,31 +818,27 @@ CompiledExpression::testCategory(BasicBlock* block,
     BasicBlock* unmatched = createBlock();
     // create a switch instruction
     SwitchInst* switch_ = SwitchInst::Create(c, unmatched, 6, block);
-    switch_->addCase(ConstantInt::get(re.charType, ' '), member);
-    switch_->addCase(ConstantInt::get(re.charType, '\t'), member);
-    switch_->addCase(ConstantInt::get(re.charType, '\n'), member);
-    switch_->addCase(ConstantInt::get(re.charType, '\r'), member);
-    switch_->addCase(ConstantInt::get(re.charType, '\f'), member);
-    switch_->addCase(ConstantInt::get(re.charType, '\v'), member);
+    switch_->addCase(ConstantInt::get(charType, ' '), member);
+    switch_->addCase(ConstantInt::get(charType, '\t'), member);
+    switch_->addCase(ConstantInt::get(charType, '\n'), member);
+    switch_->addCase(ConstantInt::get(charType, '\r'), member);
+    switch_->addCase(ConstantInt::get(charType, '\f'), member);
+    switch_->addCase(ConstantInt::get(charType, '\v'), member);
     if (re.flags & SRE_FLAG_LOCALE) {
       // also match isspace
-      // make sure isspace is available to the JIT
-      ENSURE_TEST_FUNCTION(isspace);
       // call the function
       std::vector<Value*> args;
       args.push_back(c);
-      Value* result = CallInst::Create(re.isspace,
+      Value* result = CallInst::Create(llvm_isspace,
           args.begin(), args.end(), "result", unmatched);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, unmatched);
     } else if (re.flags & SRE_FLAG_UNICODE) {
       // also match Py_UNICODE_ISSPACE
-      // make sure Py_UNICODE_ISSPACE is available to the JIT
-      ENSURE_TEST_FUNCTION(Py_UNICODE_ISSPACE);
       // call the function
       std::vector<Value*> args;
       args.push_back(c);
-      Value* result = CallInst::Create(re.Py_UNICODE_ISSPACE,
+      Value* result = CallInst::Create(llvm_Py_UNICODE_ISSPACE,
           args.begin(), args.end(), "result", unmatched);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, unmatched);
@@ -918,7 +881,7 @@ CompiledExpression::Compile(PyObject*  seq,
 
   // create the entry BasicBlock
   entry = createBlock("entry");
-  offset_ptr = new AllocaInst(re.offsetType, "offset_ptr", entry);
+  offset_ptr = new AllocaInst(offsetType, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
 
   // create a block that returns the offset
@@ -1059,7 +1022,7 @@ CompiledExpression::Compile(PyObject*  seq,
   BranchInst::Create(first, entry);
 
   // add the return instruction to return_not_found
-  ReturnInst::Create(context(), re.not_found, return_not_found);
+  ReturnInst::Create(context(), not_found, return_not_found);
 
   return re.Optimize(function);
 
@@ -1090,14 +1053,14 @@ CompiledExpression::literal(BasicBlock* block, PyObject* arg, bool not_literal) 
     SwitchInst* switch_ = SwitchInst::Create(character,
         not_literal ? post : return_not_found, 2, block);
     // lower and upper cases
-    switch_->addCase(ConstantInt::get(re.charType, lower),
+    switch_->addCase(ConstantInt::get(charType, lower),
         not_literal ? return_not_found : post);
-    switch_->addCase(ConstantInt::get(re.charType, upper),
+    switch_->addCase(ConstantInt::get(charType, upper),
         not_literal ? return_not_found : post);
   } else {
     // is it equal to the character in the pattern
     Value* c_equal = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
-        character, ConstantInt::get(re.charType, c), "c_equal");
+        character, ConstantInt::get(charType, c), "c_equal");
 
     // depending on the kind of operation either continue or return not_found
     if (not_literal) { /* not_literal */
@@ -1123,7 +1086,7 @@ CompiledExpression::any(BasicBlock* block) {
     // 'any' matches anything except for '\n'
     // is newline?
     Value* c_newline = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
-        character, ConstantInt::get(re.charType, '\n'), "c_newline");
+        character, ConstantInt::get(charType, '\n'), "c_newline");
 
     // create a block to continue to on success
     BasicBlock* post = createBlock("post_any");
@@ -1199,7 +1162,7 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
       }
 
       // add a switch case
-      switch_->addCase(ConstantInt::get(re.charType, PyInt_AsLong(op_arg)),
+      switch_->addCase(ConstantInt::get(charType, PyInt_AsLong(op_arg)),
           negate?return_not_found:matched);
     } else if (!strcmp(op_str, "range")) {
       // parse the start and end of the range
@@ -1299,7 +1262,7 @@ CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
         args.begin(), args.end(), "branch_result", block);
     // check it
     Value* branch_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, 
-        branch_result, re.not_found, "branch_result_not_found");
+        branch_result, not_found, "branch_result_not_found");
     // no match means run the next check, otherwise go to match:
     BranchInst::Create(next, match, branch_result_not_found, block);
 
@@ -1347,7 +1310,7 @@ CompiledExpression::at_end(BasicBlock* block)
       test_slash_n);
   Value* c = new LoadInst(c_ptr, "c", test_slash_n);
   Value* c_slash_n = new ICmpInst(*test_slash_n, ICmpInst::ICMP_EQ, c, 
-      ConstantInt::get(re.charType, '\n'), "c_slash_n");
+      ConstantInt::get(charType, '\n'), "c_slash_n");
   // for MULTILINE the \n means a match, for non MULTILINE we need to check
   // that we're almost at the end
   BranchInst::Create(multiline ? next_block : test_near_end, return_not_found,
@@ -1356,7 +1319,7 @@ CompiledExpression::at_end(BasicBlock* block)
   if (!multiline) {
     // are we near the end?
     Value* offset_plus_one = BinaryOperator::CreateAdd(offset,
-        ConstantInt::get(re.offsetType, 1), "offset_plus_one", test_near_end);
+        ConstantInt::get(offsetType, 1), "offset_plus_one", test_near_end);
     Value* near_end = new ICmpInst(*test_near_end, ICmpInst::ICMP_UGE, 
         offset_plus_one, end_offset, "near_end");
     // either go to the next or return not_found
@@ -1385,7 +1348,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
 
   // are we at the start of the string?
   Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(re.offsetType, 0), "start");
+      ConstantInt::get(offsetType, 0), "start");
   // for multiline, we also check for \n before the offset
   BranchInst::Create(next_block, multiline ? test_slash_n : return_not_found,
       start, block);
@@ -1393,7 +1356,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
   if (multiline) {
     // load the character back one
     Value* previous_offset = BinaryOperator::CreateSub(offset,
-        ConstantInt::get(re.offsetType, 1), "previous_offset", test_slash_n);
+        ConstantInt::get(offsetType, 1), "previous_offset", test_slash_n);
     Value* previous_c_ptr = GetElementPtrInst::Create(string, 
         previous_offset, "previous_c_ptr", 
       test_slash_n);
@@ -1401,7 +1364,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
         test_slash_n);
     // is it \n?
     Value* previous_c_slash_n = new ICmpInst(*test_slash_n, 
-        ICmpInst::ICMP_EQ, previous_c, ConstantInt::get(re.charType, '\n'),
+        ICmpInst::ICMP_EQ, previous_c, ConstantInt::get(charType, '\n'),
         "previous_c_slash_n");
     BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
         test_slash_n);
@@ -1420,7 +1383,7 @@ CompiledExpression::at_beginning_string(BasicBlock* block)
   // are we at the start of the string?
   Value* offset = loadOffset(block);
   Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(re.offsetType, 0), "start");
+      ConstantInt::get(offsetType, 0), "start");
   BranchInst::Create(next_block, return_not_found, start, block);
 
   return next_block;
@@ -1459,16 +1422,16 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // initial block
   // variables to hold the word-ness of the previous and next characters
-  Value* prev_word_ptr = new AllocaInst(re.boolType, "prev_word_ptr", 
+  Value* prev_word_ptr = new AllocaInst(boolType, "prev_word_ptr", 
       block);
-  Value* next_word_ptr = new AllocaInst(re.boolType, "next_word_ptr", 
+  Value* next_word_ptr = new AllocaInst(boolType, "next_word_ptr", 
       block);
 
   // load the offset
   Value* offset = loadOffset(block);
   // set the next/prev word-ness values based on the offset
   Value* not_start = new ICmpInst(*block, ICmpInst::ICMP_NE, offset,
-      ConstantInt::get(re.offsetType, 0), "not_start");
+      ConstantInt::get(offsetType, 0), "not_start");
   new StoreInst(not_start, prev_word_ptr, block);
   Value* not_end = new ICmpInst(*block, ICmpInst::ICMP_ULT, offset, 
       end_offset, "not_end");
@@ -1479,7 +1442,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // test the previous character's word-ness
   Value* prev_off = BinaryOperator::CreateSub(offset, 
-      ConstantInt::get(re.offsetType, 1), "prev_off", test_prev);
+      ConstantInt::get(offsetType, 1), "prev_off", test_prev);
   Value* prev_c_ptr = GetElementPtrInst::Create(string, prev_off, "prev_c_ptr",
       test_prev);
   Value* prev_c = new LoadInst(prev_c_ptr, "prev_c", test_prev);
@@ -1487,7 +1450,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
       post_test_prev);
   
   // the previous is not a word, store that
-  new StoreInst(ConstantInt::get(re.boolType, 0), prev_word_ptr, post_test_prev);
+  new StoreInst(ConstantInt::get(boolType, 0), prev_word_ptr, post_test_prev);
   BranchInst::Create(pre_test_next, post_test_prev);
 
   // if we're not at the end then test the word-ness of the next character
@@ -1500,7 +1463,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
   testCategory(test_next, next_c, "category_word", test_word, post_test_next);
 
   // the next is not a word, store that
-  new StoreInst(ConstantInt::get(re.boolType, 0), next_word_ptr, post_test_next);
+  new StoreInst(ConstantInt::get(boolType, 0), next_word_ptr, post_test_next);
   BranchInst::Create(test_word, post_test_next);
 
   // compare the word-ness of the previous and next characters
@@ -1544,7 +1507,7 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     Value* repeat_result = CallInst::Create(repeated->function, 
         args.begin(), args.end(), "repeat_result", block);
     Value* repeat_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-        repeat_result, re.not_found, "repeat_result_not_found");
+        repeat_result, not_found, "repeat_result_not_found");
     BasicBlock* next = createBlock("repeat");
     BranchInst::Create(return_not_found, next, repeat_result_not_found,
         block);
@@ -1574,11 +1537,11 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     args.push_back(loadOffset(block));
     args.push_back(end_offset);
     args.push_back(groups);
-    args.push_back(ConstantInt::get(re.offsetType, max-min));
+    args.push_back(ConstantInt::get(offsetType, max-min));
     Value* recurse_result = CallInst::Create(recurse, args.begin(), args.end(),
         "recurse_result", block);
     Value* recurse_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-        recurse_result, re.not_found, "recurse_result_not_found");
+        recurse_result, not_found, "recurse_result_not_found");
 
     BasicBlock* return_recurse_result = 
       createBlock("return_recurse_result");
@@ -1620,20 +1583,20 @@ CompiledExpression::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // store the start location
   int start_offset = (id-1)*2;
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, start_offset), "start_ptr", block);
+      ConstantInt::get(offsetType, start_offset), "start_ptr", block);
   new StoreInst(off, start_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_start_offset_ptr = new AllocaInst(re.offsetType, 
+  Value* old_start_offset_ptr = new AllocaInst(offsetType, 
       "old_start_offset_ptr", entry);
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, start_offset), "start_ptr", entry);
+      ConstantInt::get(offsetType, start_offset), "start_ptr", entry);
   new StoreInst(new LoadInst(start_ptr, "old_start", entry), 
       old_start_offset_ptr, entry);
 
   // if this expression fails, restore the start offset
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, start_offset), "start_ptr", 
+      ConstantInt::get(offsetType, start_offset), "start_ptr", 
       return_not_found);
   new StoreInst(new LoadInst(old_start_offset_ptr, "old_start", 
         return_not_found), start_ptr, return_not_found);
@@ -1663,26 +1626,26 @@ CompiledExpression::subpattern_end(BasicBlock* block, PyObject* arg) {
   // store the end location
   int end_offset = (id-1)*2+1;
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, end_offset), "end_ptr", block);
+      ConstantInt::get(offsetType, end_offset), "end_ptr", block);
   new StoreInst(off, end_ptr, block);
 
   // store the group index at the end of the group array for
   // MatchObject.lastindex
   Value* lastindex_ptr = GetElementPtrInst::Create(groups,
-      ConstantInt::get(re.offsetType, re.groups*2), "lastindex_ptr", block);
-  new StoreInst(ConstantInt::get(re.offsetType, id), lastindex_ptr, block);
+      ConstantInt::get(offsetType, re.groups*2), "lastindex_ptr", block);
+  new StoreInst(ConstantInt::get(offsetType, id), lastindex_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_end_offset_ptr = new AllocaInst(re.offsetType, "old_end_offset_ptr",
+  Value* old_end_offset_ptr = new AllocaInst(offsetType, "old_end_offset_ptr",
       entry);
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, end_offset), "end_ptr", entry);
+      ConstantInt::get(offsetType, end_offset), "end_ptr", entry);
   new StoreInst(new LoadInst(end_ptr, "old_end", entry), old_end_offset_ptr, 
       entry);
 
   // if this expression fails, restore the end offset
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, end_offset), "end_ptr", return_not_found);
+      ConstantInt::get(offsetType, end_offset), "end_ptr", return_not_found);
   new StoreInst(new LoadInst(old_end_offset_ptr, "old_end", return_not_found), 
       end_ptr, return_not_found);
 
@@ -1711,17 +1674,17 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // find the start and end positions
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(re.offsetType, (groupnum-1)*2), "start_ptr", block);
+    ConstantInt::get(offsetType, (groupnum-1)*2), "start_ptr", block);
   Value* start_off = new LoadInst(start_ptr, "start_off", block);
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(re.offsetType, (groupnum-1)*2+1), "end_ptr", block);
+    ConstantInt::get(offsetType, (groupnum-1)*2+1), "end_ptr", block);
   Value* end_off = new LoadInst(end_ptr, "end_off", block);
 
   // check if the group exists
   Value* start_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, start_off, 
-      re.not_found, "start_exists");
+      not_found, "start_exists");
   Value* end_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, end_off, 
-      re.not_found, "end_exists");
+      not_found, "end_exists");
   Value* group_exists = BinaryOperator::CreateAnd(start_exists, end_exists,
       "group_exists", block);
 
@@ -1748,7 +1711,7 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // allocate a local variable to hold the offset into the group that we are
   // testing
-  Value* group_off_ptr = new AllocaInst(re.offsetType, "group_off_ptr", entry);
+  Value* group_off_ptr = new AllocaInst(offsetType, "group_off_ptr", entry);
 
   // store the start address in that
   new StoreInst(start_off, group_off_ptr, groupref_test);
@@ -1782,10 +1745,10 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // increment offsets
   string_c_off = BinaryOperator::CreateAdd(string_c_off, 
-      ConstantInt::get(re.offsetType, 1), "increment", groupref_loop_a);
+      ConstantInt::get(offsetType, 1), "increment", groupref_loop_a);
   storeOffset(groupref_loop_a, string_c_off);
   group_off = BinaryOperator::CreateAdd(group_off,
-      ConstantInt::get(re.offsetType, 1), "group_off_inc", groupref_loop_a);
+      ConstantInt::get(offsetType, 1), "group_off_inc", groupref_loop_a);
   new StoreInst(group_off, group_off_ptr, groupref_loop_a);
 
   // compare the group and string values
@@ -1854,12 +1817,12 @@ CompiledExpression::groupref_exists(BasicBlock* block, PyObject* arg) {
   // generate code to check if the specified group has matched
   // get the pointer to the end offset of the group
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(re.offsetType, (groupnum-1)*2+1), "end_ptr", block);
+      ConstantInt::get(offsetType, (groupnum-1)*2+1), "end_ptr", block);
   // load the end value
   Value* end_off = new LoadInst(end_ptr, "end", block);
   // check if the end_off is not found
   Value* end_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, end_off,
-      re.not_found, "end_not_found");
+      not_found, "end_not_found");
   // either yes or no
   BranchInst::Create(no, yes, end_not_found, block);
 
@@ -1897,7 +1860,7 @@ CompiledExpression::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
 
   // did it fail?
   Value* assert_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-      assert_result, re.not_found, "assert_not_found");
+      assert_result, not_found, "assert_not_found");
 
   // create a block for continuation
   BasicBlock* next = createBlock("block");
@@ -2078,6 +2041,34 @@ init_llvmre(void)
 
   Py_INCREF(&RegExType);
   PyModule_AddObject(m, "RegEx", (PyObject *)&RegExType);
+
+  LLVMContext *context = &PyGlobalLlvmData::Get()->context();
+  Module* module = PyGlobalLlvmData::Get()->module();
+
+  // initialize types and values that are used later all over the place
+  // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
+  charType = IntegerType::get(*context, 16);
+  boolType = IntegerType::get(*context, 1);
+  offsetType = IntegerType::get(*context, 32);
+  charPointerType = PointerType::get(charType, 0);
+  offsetPointerType = PointerType::get(offsetType, 0);
+  // set up some handy constants
+  not_found = ConstantInt::getSigned(offsetType, -1);
+
+  // put various character test wrappers into the module
+  std::vector<const Type*> func_args;
+  func_args.push_back(charType);
+  const FunctionType* func_type = FunctionType::get(boolType, func_args, false);
+  llvm_Py_UNICODE_ISDIGIT = Function::Create(func_type, Function::ExternalLinkage,
+     "wrap_Py_UNICODE_ISDIGIT", module);
+  llvm_isalnum = Function::Create(func_type, Function::ExternalLinkage,
+     "wrap_isalnum", module);
+  llvm_Py_UNICODE_ISALNUM = Function::Create(func_type, Function::ExternalLinkage,
+     "wrap_Py_UNICODE_ISALNUM", module);
+  llvm_isspace = Function::Create(func_type, Function::ExternalLinkage,
+     "wrap_isspace", module);
+  llvm_Py_UNICODE_ISSPACE = Function::Create(func_type, Function::ExternalLinkage,
+     "wrap_Py_UNICODE_ISSPACE", module);
 }
 
 #endif /* TESTER */
