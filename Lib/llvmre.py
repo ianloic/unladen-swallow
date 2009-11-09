@@ -54,6 +54,16 @@ class RegexObject(object):
       elif op == 'assert' or op == 'assert_not':
         direction, pat = av
         new_pattern.append((op, (direction, self.__flatten_subpatterns(pat))))
+      elif op == 'in':
+        # until duplicate case handling is fixed, remove duplicates from 'in'
+        arg = []
+        if len(av) and av[0] == ('negate', None):
+          arg.append(av.pop(0))
+        opts = set()
+        for l in av:
+          opts.add(l)
+        arg.extend(opts)
+        new_pattern.append((op, arg))
       else:
         new_pattern.append((op, av))
     return new_pattern
