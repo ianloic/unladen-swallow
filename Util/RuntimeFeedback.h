@@ -159,15 +159,17 @@ public:
     void Clear();
 
     // Assignment copies the list of collected types, fixing up refcounts.
-    PyFullFeedback &operator=(const PyFullFeedback &rhs);
+    PyFullFeedback &operator=(PyFullFeedback rhs);
 
 private:
     // Assume three pointers in the set to start with. We store either
     // PyObject *s (when in type mode) or FunctionRecord *s (when in function
     // mode).
-    typedef llvm::SmallPtrSet<void*, 3> TypeSet;
+    typedef llvm::SmallPtrSet<void*, 3> ObjSet;
 
-    TypeSet data_;
+    void Swap(PyFullFeedback *other);
+
+    ObjSet data_;
     uintptr_t counters_[3];
 
     enum UsageMode {

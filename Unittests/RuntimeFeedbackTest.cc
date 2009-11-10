@@ -300,6 +300,27 @@ TEST_F(PyLimitedFeedbackTest, Copyable)
     EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
 }
 
+TEST_F(PyLimitedFeedbackTest, CopyableFuncs)
+{
+    PyObject *join_meth = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *split_meth = PyObject_GetAttrString(this->a_string_, "split");
+    PyObject *count_meth = PyObject_GetAttrString(this->a_string_, "count");
+
+    this->feedback_.AddFuncSeen(join_meth);
+    this->feedback_.AddFuncSeen(split_meth);
+    PyLimitedFeedback second = this->feedback_;
+    SmallVector<FunctionRecord*, 3> seen;
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+
+    // Demonstrate that the copies are independent.
+    second.AddFuncSeen(count_meth);
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(3U, seen.size());
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+}
+
 TEST_F(PyLimitedFeedbackTest, Assignment)
 {
     long int_start_refcnt = Py_REFCNT(&PyInt_Type);
@@ -416,6 +437,27 @@ TEST_F(PyFullFeedbackTest, Copyable)
     EXPECT_EQ(0U, second.GetCounter(1));
     // second should release its reference to PyInt_Type.
     EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
+}
+
+TEST_F(PyFullFeedbackTest, CopyableFuncs)
+{
+    PyObject *join_meth = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *split_meth = PyObject_GetAttrString(this->a_string_, "split");
+    PyObject *count_meth = PyObject_GetAttrString(this->a_string_, "count");
+
+    this->feedback_.AddFuncSeen(join_meth);
+    this->feedback_.AddFuncSeen(split_meth);
+    PyFullFeedback second = this->feedback_;
+    SmallVector<FunctionRecord*, 3> seen;
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+
+    // Demonstrate that the copies are independent.
+    second.AddFuncSeen(count_meth);
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(3U, seen.size());
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
 }
 
 TEST_F(PyFullFeedbackTest, Assignment)

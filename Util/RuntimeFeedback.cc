@@ -254,10 +254,16 @@ PyFullFeedback::PyFullFeedback(const PyFullFeedback &src)
     this->usage_ = src.usage_;
     for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
         this->counters_[i] = src.counters_[i];
-    this->data_ = src.data_;
-    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
+    for (ObjSet::iterator it = src.data_.begin(), end = src.data_.end();
             it != end; ++it) {
-        Py_XINCREF((PyObject *)*it);
+        void *obj = *it;
+        if (src.usage_ == TypeMode) {
+            Py_XINCREF((PyObject *)obj);
+        }
+        else if (src.usage_ == FuncMode) {
+            obj = new FunctionRecord(*static_cast<const FunctionRecord*>(*it));
+        }
+        this->data_.insert(obj);
     }
 }
 
@@ -267,28 +273,32 @@ PyFullFeedback::~PyFullFeedback()
 }
 
 PyFullFeedback &
-PyFullFeedback::operator=(const PyFullFeedback &rhs)
+PyFullFeedback::operator=(PyFullFeedback rhs)
 {
-    if (this != &rhs) {
-        this->Clear();
-        for (TypeSet::iterator it = rhs.data_.begin(), end = rhs.data_.end();
-                it != end; ++it) {
-            Py_XINCREF((PyObject *)*it);
-        }
-        for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
-            this->counters_[i] = rhs.counters_[i];
-        this->data_ = rhs.data_;
-        this->usage_ = rhs.usage_;
-    }
+    this->Swap(&rhs);
     return *this;
+}
+
+void
+PyFullFeedback::Swap(PyFullFeedback *other)
+{
+    std::swap(this->usage_, other->usage_);
+    std::swap(this->data_, other->data_);
+    for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
+        std::swap(this->counters_[i], other->counters_[i]);
 }
 
 void
 PyFullFeedback::Clear()
 {
-    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
-            it != end; ++it) {
-        Py_XDECREF((PyObject *)*it);
+    for (ObjSet::iterator it = this->data_.begin(),
+            end = this->data_.end(); it != end; ++it) {
+        if (this->usage_ == TypeMode) {
+            Py_XDECREF((PyObject *)*it);
+        }
+        else if (this->usage_ == FuncMode) {
+            delete (FunctionRecord *)*it;
+        }
     }
     this->data_.clear();
     for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
@@ -321,7 +331,7 @@ PyFullFeedback::GetSeenTypesInto(
     assert(this->InTypeMode());
 
     result.clear();
-    for (TypeSet::const_iterator it = this->data_.begin(),
+    for (ObjSet::const_iterator it = this->data_.begin(),
              end = this->data_.end(); it != end; ++it) {
         result.push_back((PyTypeObject *)*it);
     }
@@ -341,7 +351,7 @@ PyFullFeedback::AddFuncSeen(PyObject *obj)
     else if (!this->data_.count(obj)) {
         // Deal with the fact that "for x in y: l.append(x)" results in 
         // multiple method objects for l.append.
-        for (TypeSet::const_iterator it = this->data_.begin(),
+        for (ObjSet::const_iterator it = this->data_.begin(),
                 end = this->data_.end(); it != end; ++it) {
             if (is_duplicate_method(obj, (FunctionRecord *)*it))
                 return;
@@ -359,7 +369,7 @@ PyFullFeedback::GetSeenFuncsInto(
     assert(this->InFuncMode());
 
     result.clear();
-    for (TypeSet::const_iterator it = this->data_.begin(),
+    for (ObjSet::const_iterator it = this->data_.begin(),
             end = this->data_.end(); it != end; ++it) {
         result.push_back((FunctionRecord *)*it);
     }
