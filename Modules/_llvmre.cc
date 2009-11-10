@@ -476,13 +476,9 @@ RegularExpression::Match(Py_UNICODE* characters,
                          int pos, 
                          int end)
 {
-  //printf("RegularExpression::Match - function called w/ characters=%p, length=%d, pos=%d, end=%d\n", characters, length, pos, end);
-
   ReOffset* groups_array = AllocateGroupsArray();
 
   ReOffset result = (match_fp)(characters, pos, end, groups_array);
-
-  //printf("RegularExpression::Match - function returned %d\n", result);
 
   return ProcessResult(pos, result, groups_array);
 }
@@ -2047,7 +2043,6 @@ init_llvmre(void)
   PyModule_AddObject(m, "RegEx", (PyObject *)&RegExType);
 
   LLVMContext *context = &PyGlobalLlvmData::Get()->context();
-  Module* module = PyGlobalLlvmData::Get()->module();
 
   // initialize types and values that are used later all over the place
   charType = PyTypeBuilder<Py_UNICODE>::get(*context);
@@ -2057,11 +2052,6 @@ init_llvmre(void)
   offsetPointerType = PyTypeBuilder<int*>::get(*context);
   // set up some handy constants
   not_found = ConstantInt::getSigned(offsetType, -1);
-
-  // put various character test wrappers into the module
-  std::vector<const Type*> func_args;
-  func_args.push_back(charType);
-  const FunctionType* func_type = FunctionType::get(boolType, func_args, false);
 }
 
 #endif /* TESTER */
