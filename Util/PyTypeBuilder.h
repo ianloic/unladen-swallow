@@ -532,6 +532,13 @@ public:
 #undef DEFINE_OBJECT_HEAD_FIELDS
 #undef DEFINE_FIELD
 
+template<> class TypeBuilder<bool, false> {
+public:
+  static const IntegerType *get(LLVMContext &Context) {
+    return IntegerType::get(Context, 1);
+  }
+};
+
 }  // namespace llvm
 
 namespace py {

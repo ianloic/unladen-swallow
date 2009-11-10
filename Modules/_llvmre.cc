@@ -4,6 +4,7 @@
 #include "_llvmfunctionobject.h"
 #include "llvm_compile.h"
 #include "Python/global_llvm_data.h"
+#include "Util/PyTypeBuilder.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -44,12 +45,16 @@ using llvm::AllocaInst;
 using llvm::LoadInst;
 using llvm::StoreInst;
 using llvm::ICmpInst;
+using llvm::ZExtInst;
+using llvm::SExtInst;
 
 using llvm::ExecutionEngine;
 using llvm::EngineBuilder;
 
 using llvm::LLVMContext;
 using llvm::getGlobalContext;
+
+using llvm::cast;
 
 // helper to produce better error messages
 #define _PyErr_SetString(T,S) \
@@ -63,39 +68,6 @@ typedef ReOffset (*FindFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*, ReO
 // forward declarations
 class RegularExpression;
 class CompiledExpression;
-
-// Wrapper functions for character class tests. To make things simpler these
-// all accept a Py_UNICODE character and return bool
-extern "C"
-bool wrap_Py_UNICODE_ISDIGIT(Py_UNICODE c) {
-  return Py_UNICODE_ISDIGIT(c) == 1;
-}
-
-extern "C"
-bool wrap_isalnum(Py_UNICODE c) {
-  return isalnum(c) != 0;
-}
-
-extern "C"
-bool wrap_Py_UNICODE_ISALNUM(Py_UNICODE c) {
-  return Py_UNICODE_ISALNUM(c) == 1;
-}
-
-extern "C"
-bool wrap_isspace(Py_UNICODE c) {
-  return isspace(c) != 0;
-}
-
-extern "C"
-bool wrap_Py_UNICODE_ISSPACE(Py_UNICODE c) {
-  return Py_UNICODE_ISSPACE(c) == 1;
-}
-
-Function* llvm_Py_UNICODE_ISDIGIT = NULL;
-Function* llvm_isalnum = NULL;
-Function* llvm_Py_UNICODE_ISALNUM = NULL;
-Function* llvm_isspace = NULL;
-Function* llvm_Py_UNICODE_ISSPACE = NULL;
 
 // global values
 Value* not_found;
@@ -188,6 +160,10 @@ class CompiledExpression {
     }
 
     inline LLVMContext& context();
+
+    template<typename R, typename A1, bool isSigned, bool toBool>
+    inline Value* callGlobalFunction(const char* name, Value* argument, 
+        BasicBlock* block);
 };
 
 
@@ -572,6 +548,46 @@ CompiledExpression::loadCharacter(BasicBlock* block) {
   return block;
 }
 
+template<typename R, typename A1, bool isSigned, bool toBool>
+Value* 
+CompiledExpression::callGlobalFunction(const char* name, 
+                                       Value*      a1, 
+                                       BasicBlock* block) {
+  // get the Function* for the global function
+  Function* gf = cast<Function>(
+      re.module->getOrInsertFunction(name,
+        PyTypeBuilder<R(A1)>::get(context()))
+      );
+
+  // get the llvm::Type of the argument
+  const Type* A1_type = PyTypeBuilder<A1>::get(context());
+
+  // convert the argument to the correct type using correct sign semantics
+  // or leave it if the types already match
+  Value* args[1];
+  if (A1_type == a1->getType()) {
+    args[0] = a1;
+  } else if (isSigned) {
+    args[0] = 
+      new SExtInst(a1, A1_type, "", block);
+  } else {
+    args[0] = 
+      new ZExtInst(a1, A1_type, "", block);
+  }
+  // call the function
+  Value* result = CallInst::Create(gf, args, args+1, "result", block);
+
+  if (toBool) {
+    // cast an integer result to boolean. we do this often
+    return new ICmpInst(*block, ICmpInst::ICMP_NE,
+      result, ConstantInt::get(PyTypeBuilder<R>::get(context()), 0),
+      "result_bool");
+  } else {
+    return result;
+  }
+}
+
+
 Function*
 CompiledExpression::greedy(Function* repeat, Function* after) 
 {
@@ -752,16 +768,11 @@ CompiledExpression::testCategory(BasicBlock* block,
   if (!strcmp(category, "category_digit")) {
     if (re.flags & SRE_FLAG_UNICODE) {
       // for unicode we call Py_UNICODE_ISDIGIT
-      // except that function doesn't really exist. It's a macro that calls
-      // _PyUnicode_IsDigit
-
       // call the function
-      std::vector<Value*> args;
-      args.push_back(c);
-      Value* IsDigit_result = CallInst::Create(llvm_Py_UNICODE_ISDIGIT,
-          args.begin(), args.end(), "IsDigit_result", block);
+      Value* result = callGlobalFunction<int, Py_UNICODE, false, true>(
+          "_PyLlvm_UNICODE_ISDIGIT", c, block);
       // go to the right successor block
-      BranchInst::Create(member, nonmember, IsDigit_result, block);
+      BranchInst::Create(member, nonmember, result, block);
     } else {
       // for non-unicode, test if it's in the range '0' - '9'
       testRange(block, c, '0', '9', member, nonmember);
@@ -779,9 +790,8 @@ CompiledExpression::testCategory(BasicBlock* block,
         ConstantInt::get(charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // call the function
-      Value* args[] = { c };
-      Value* result = CallInst::Create(llvm_isalnum,
-          args, args+1, "result", tmp2);
+      Value* result = 
+        callGlobalFunction<int,int,false,true>("isalnum", c, tmp2);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, tmp2);
     } else if (re.flags & SRE_FLAG_UNICODE) {
@@ -793,10 +803,9 @@ CompiledExpression::testCategory(BasicBlock* block,
         ConstantInt::get(charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // call the function
-      std::vector<Value*> args;
-      args.push_back(c);
-      Value* result = CallInst::Create(llvm_Py_UNICODE_ISALNUM,
-          args.begin(), args.end(), "result", tmp2);
+      Value* result =
+        callGlobalFunction<int,Py_UNICODE,false,true>(
+            "_PyLlvm_UNICODE_ISALNUM", c, tmp2);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, tmp2);
     } else {
@@ -826,20 +835,15 @@ CompiledExpression::testCategory(BasicBlock* block,
     switch_->addCase(ConstantInt::get(charType, '\v'), member);
     if (re.flags & SRE_FLAG_LOCALE) {
       // also match isspace
-      // call the function
-      std::vector<Value*> args;
-      args.push_back(c);
-      Value* result = CallInst::Create(llvm_isspace,
-          args.begin(), args.end(), "result", unmatched);
+      Value* result = 
+        callGlobalFunction<int,int,false,true>("isspace", c, unmatched);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, unmatched);
     } else if (re.flags & SRE_FLAG_UNICODE) {
       // also match Py_UNICODE_ISSPACE
-      // call the function
-      std::vector<Value*> args;
-      args.push_back(c);
-      Value* result = CallInst::Create(llvm_Py_UNICODE_ISSPACE,
-          args.begin(), args.end(), "result", unmatched);
+      Value* result =
+        callGlobalFunction<int,Py_UNICODE,false,true>(
+            "_PyLlvm_UNICODE_ISSPACE", c, unmatched);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, unmatched);
     } else {
@@ -2046,12 +2050,11 @@ init_llvmre(void)
   Module* module = PyGlobalLlvmData::Get()->module();
 
   // initialize types and values that are used later all over the place
-  // FIXME: make these optimal for the platform (eg 32bit vs 64 bit)
-  charType = IntegerType::get(*context, 16);
-  boolType = IntegerType::get(*context, 1);
-  offsetType = IntegerType::get(*context, 32);
-  charPointerType = PointerType::get(charType, 0);
-  offsetPointerType = PointerType::get(offsetType, 0);
+  charType = PyTypeBuilder<Py_UNICODE>::get(*context);
+  boolType = PyTypeBuilder<bool>::get(*context);
+  offsetType = PyTypeBuilder<int>::get(*context);
+  charPointerType = PyTypeBuilder<Py_UNICODE*>::get(*context);
+  offsetPointerType = PyTypeBuilder<int*>::get(*context);
   // set up some handy constants
   not_found = ConstantInt::getSigned(offsetType, -1);
 
@@ -2059,16 +2062,6 @@ init_llvmre(void)
   std::vector<const Type*> func_args;
   func_args.push_back(charType);
   const FunctionType* func_type = FunctionType::get(boolType, func_args, false);
-  llvm_Py_UNICODE_ISDIGIT = Function::Create(func_type, Function::ExternalLinkage,
-     "wrap_Py_UNICODE_ISDIGIT", module);
-  llvm_isalnum = Function::Create(func_type, Function::ExternalLinkage,
-     "wrap_isalnum", module);
-  llvm_Py_UNICODE_ISALNUM = Function::Create(func_type, Function::ExternalLinkage,
-     "wrap_Py_UNICODE_ISALNUM", module);
-  llvm_isspace = Function::Create(func_type, Function::ExternalLinkage,
-     "wrap_isspace", module);
-  llvm_Py_UNICODE_ISSPACE = Function::Create(func_type, Function::ExternalLinkage,
-     "wrap_Py_UNICODE_ISSPACE", module);
 }
 
 #endif /* TESTER */

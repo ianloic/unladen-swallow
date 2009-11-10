@@ -192,3 +192,21 @@ PyComplexObject *_dummy_ComplexObject;
 
 /* Expose PyEllipsis to ConstantMirror. */
 PyObject* objectEllipsis() { return Py_Ellipsis; }
+
+/* Inlined functions for _llvmre */
+/* they wrap standard API functions that are implemented as macros */
+int __attribute__((always_inline))
+_PyLlvm_UNICODE_ISSPACE(Py_UNICODE ch) {
+  return Py_UNICODE_ISSPACE(ch) != 0;
+}
+
+int __attribute__((always_inline))
+_PyLlvm_UNICODE_ISDIGIT(Py_UNICODE ch) {
+  return Py_UNICODE_ISDIGIT(ch) != 0;
+}
+
+int __attribute__((always_inline))
+_PyLlvm_UNICODE_ISALNUM(Py_UNICODE ch) {
+  return Py_UNICODE_ISALNUM(ch) != 0;
+}
+
