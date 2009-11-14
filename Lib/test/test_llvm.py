@@ -225,6 +225,16 @@ def loop(range):
         self.assertRaises(RuntimeError, loop, RaisingNext())
 
     @at_each_optimization_level
+    def test_import_name(self, level):
+        importer = compile_for_llvm("importer", """
+def importer():
+    import os
+    return os
+""", level)
+        import os
+        self.assertEqual(importer(), os)
+
+    @at_each_optimization_level
     def test_loop(self, level):
         loop = compile_for_llvm("loop", """
 def loop(range):

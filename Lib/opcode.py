@@ -126,7 +126,8 @@ def_op('RETURN_VALUE', 83)
 def_op('YIELD_VALUE', 86)
 def_op('POP_BLOCK', 87)
 def_op('END_FINALLY', 88)
-# def_op('BUILD_CLASS', 89)  Replaced with a function call to #@buildclass.
+# def_op('BUILD_CLASS', xxx)  Replaced with a function call to #@buildclass.
+def_op('IMPORT_NAME', 89)
 
 HAVE_ARGUMENT = 90              # Opcodes from here have an argument:
 
@@ -149,7 +150,6 @@ def_op('BUILD_MAP', 104)        # Number of dict entries (upto 255)
 name_op('LOAD_ATTR', 105)       # Index in name list
 def_op('COMPARE_OP', 106)       # Comparison operator
 hascompare.append(106)
-# name_op('IMPORT_NAME', 107)   # Replaced by #@import_name.
 # name_op('IMPORT_FROM', 108)   # Replaced by #@import_from.
 
 jrel_op('JUMP_FORWARD', 110)    # Number of bytes to skip

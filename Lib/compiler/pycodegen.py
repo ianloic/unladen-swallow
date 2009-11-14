@@ -858,11 +858,10 @@ class CodeGenerator:
         self.set_lineno(node)
         level = 0 if self.graph.checkFlag(CO_FUTURE_ABSIMPORT) else -1
         for name, alias in node.names:
-            self.emit('LOAD_GLOBAL', '#@import_name')
             self.emit('LOAD_CONST', level)
             self.emit('LOAD_CONST', None)
             self.emit('LOAD_CONST', name)
-            self.emit('CALL_FUNCTION', 3)
+            self.emit('IMPORT_NAME')
             mod = name.split(".")[0]
             if alias:
                 self._resolveDots(name)
@@ -882,23 +881,21 @@ class CodeGenerator:
             assert len(node.names) == 1
             self.namespace = 0
             self.emit('LOAD_GLOBAL', '#@import_star')
-            self.emit('LOAD_GLOBAL', '#@import_name')
             self.emit('LOAD_CONST', level)
             self.emit('LOAD_CONST', tuple(fromlist))
             self.emit('LOAD_CONST', node.modname)
-            self.emit('CALL_FUNCTION', 3)
+            self.emit('IMPORT_NAME')
             self.emit('CALL_FUNCTION', 1)
             self.emit('POP_TOP')
             return
         self.emit('LOAD_GLOBAL', '#@import_from')
-        self.emit('LOAD_GLOBAL', '#@import_name')
         self.emit('LOAD_CONST', level)
         self.emit('LOAD_CONST', tuple(fromlist))
         self.emit('LOAD_CONST', node.modname)
-        self.emit('CALL_FUNCTION', 3)
+        self.emit('IMPORT_NAME')
         for name, alias in node.names:
             # The DUP_TOP_TWO is duplicating [#@import_from, module], where
-            # module is the return value from #@import_name.
+            # module is the return value from IMPORT_NAME.
             self.emit('DUP_TOP_TWO')
             self.emit('LOAD_CONST', name)
             self.emit('CALL_FUNCTION', 2)

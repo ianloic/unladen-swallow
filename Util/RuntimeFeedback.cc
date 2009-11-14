@@ -51,7 +51,7 @@ PyLimitedFeedback::PyLimitedFeedback()
 PyLimitedFeedback::PyLimitedFeedback(const PyLimitedFeedback &src)
 {
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
-        if (src.InTypeMode()) {
+        if (src.InObjectMode()) {
             PyObject *value = (PyObject *)src.data_[i].getPointer();
             Py_XINCREF(value);
             this->data_[i] = src.data_[i];
@@ -140,11 +140,11 @@ PyLimitedFeedback::GetCounter(unsigned counter_id) const
 void
 PyLimitedFeedback::Clear()
 {
-    bool type_mode = this->InTypeMode();
+    bool object_mode = this->InObjectMode();
     bool func_mode = this->InFuncMode();
 
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
-        if (type_mode)
+        if (object_mode)
             Py_XDECREF((PyObject *)this->data_[i].getPointer());
         else if (func_mode)
             delete (FunctionRecord *)this->data_[i].getPointer();
@@ -154,23 +154,22 @@ PyLimitedFeedback::Clear()
 }
 
 void
-PyLimitedFeedback::AddTypeSeen(PyObject *obj)
+PyLimitedFeedback::AddObjectSeen(PyObject *obj)
 {
-    assert(this->InTypeMode());
-    this->SetFlagBit(TYPE_MODE_BIT, true);
+    assert(this->InObjectMode());
+    this->SetFlagBit(OBJECT_MODE_BIT, true);
 
     if (obj == NULL) {
         SetFlagBit(SAW_A_NULL_OBJECT_BIT, true);
         return;
     }
-    PyObject *type = (PyObject *)Py_TYPE(obj);
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
         PyObject *value = (PyObject *)data_[i].getPointer();
-        if (value == type)
+        if (value == obj)
             return;
         if (value == NULL) {
-            Py_INCREF(type);
-            data_[i].setPointer((void *)type);
+            Py_INCREF(obj);
+            data_[i].setPointer((void *)obj);
             return;
         }
     }
@@ -179,10 +178,9 @@ PyLimitedFeedback::AddTypeSeen(PyObject *obj)
 }
 
 void
-PyLimitedFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, 3> &result) const
+PyLimitedFeedback::GetSeenObjectsInto(SmallVector<PyObject*, 3> &result) const
 {
-    assert(this->InTypeMode());
+    assert(this->InObjectMode());
 
     result.clear();
     if (GetFlagBit(SAW_A_NULL_OBJECT_BIT)) {
@@ -193,7 +191,7 @@ PyLimitedFeedback::GetSeenTypesInto(
         PyObject *value = (PyObject *)data_[i].getPointer();
         if (value == NULL)
             return;
-        result.push_back((PyTypeObject*)value);
+        result.push_back(value);
     }
 }
 
@@ -262,7 +260,7 @@ PyFullFeedback::PyFullFeedback(const PyFullFeedback &src)
     for (ObjSet::iterator it = src.data_.begin(), end = src.data_.end();
             it != end; ++it) {
         void *obj = *it;
-        if (src.usage_ == TypeMode) {
+        if (src.usage_ == ObjectMode) {
             Py_XINCREF((PyObject *)obj);
         }
         else if (src.usage_ == FuncMode) {
@@ -298,7 +296,7 @@ PyFullFeedback::Clear()
 {
     for (ObjSet::iterator it = this->data_.begin(),
             end = this->data_.end(); it != end; ++it) {
-        if (this->usage_ == TypeMode) {
+        if (this->usage_ == ObjectMode) {
             Py_XDECREF((PyObject *)*it);
         }
         else if (this->usage_ == FuncMode) {
@@ -312,33 +310,32 @@ PyFullFeedback::Clear()
 }
 
 void
-PyFullFeedback::AddTypeSeen(PyObject *obj)
+PyFullFeedback::AddObjectSeen(PyObject *obj)
 {
-    assert(this->InTypeMode());
-    this->usage_ = TypeMode;
+    assert(this->InObjectMode());
+    this->usage_ = ObjectMode;
 
     if (obj == NULL) {
         this->data_.insert(NULL);
         return;
     }
 
-    PyObject *type = (PyObject *)Py_TYPE(obj);
-    if (!this->data_.count(type)) {
-        Py_INCREF(type);
-        this->data_.insert((void *)type);
+    if (!this->data_.count(obj)) {
+        Py_INCREF(obj);
+        this->data_.insert((void *)obj);
     }
 }
 
 void
-PyFullFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, /*in-object elems=*/3> &result) const
+PyFullFeedback::GetSeenObjectsInto(
+    SmallVector<PyObject*, /*in-object elems=*/3> &result) const
 {
-    assert(this->InTypeMode());
+    assert(this->InObjectMode());
 
     result.clear();
     for (ObjSet::const_iterator it = this->data_.begin(),
              end = this->data_.end(); it != end; ++it) {
-        result.push_back((PyTypeObject *)*it);
+        result.push_back((PyObject *)*it);
     }
 }
 

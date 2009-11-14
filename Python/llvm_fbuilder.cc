@@ -1945,6 +1945,27 @@ LlvmFunctionBuilder::CALL_FUNCTION_VAR_KW(int oparg)
 #undef CALL_FLAG_VAR
 #undef CALL_FLAG_KW
 
+#define FUNC_TYPE PyObject *(PyObject *, PyObject *, PyObject *)
+
+void
+LlvmFunctionBuilder::IMPORT_NAME()
+{
+    Value *mod_name = this->Pop();
+    Value *names = this->Pop();
+    Value *level = this->Pop();
+
+    Value *module = this->CreateCall(
+        this->GetGlobalFunction<FUNC_TYPE>("_PyEval_ImportName"),
+        level, names, mod_name);
+    this->DecRef(level);
+    this->DecRef(names);
+    this->DecRef(mod_name);
+    this->PropagateExceptionOnNull(module);
+    this->Push(module);
+}
+
+#undef FUNC_TYPE
+
 void
 LlvmFunctionBuilder::LOAD_DEREF(int index)
 {

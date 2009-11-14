@@ -2,19 +2,19 @@
 //
 // This file defines PyRuntimeFeedback as the basic unit of feedback
 // data.  Each instance of Py{Limited,Full}Feedback is capable of operating
-// in one of several modes: recording Python types, incrementing a set of
+// in one of several modes: recording Python objects, incrementing a set of
 // counters, or recording called functions. These modes are mutually exclusive,
 // and attempting to mix them is a fatal error.
 //
-// Use the AddTypeSeen(), GetSeenTypesInto(), and TypesOverflowed() methods to
-// store types; the IncCounter() and GetCounter() methods to access the
-// counters; or AddFuncSeen(), GetSeenFuncsInto(), and FuncsOverflowed() methods
-// to store called functions.
+// Use the AddObjectSeen(), GetSeenObjectsInto(), and ObjectsOverflowed()
+// methods to store objects; the IncCounter() and GetCounter() methods to access
+// the counters; or the AddFuncSeen(), GetSeenFuncsInto(), and FuncsOverflowed()
+// methods to store called functions.
 //
 // We provide two implementations of this interface to make it easy to
 // switch between a memory-efficient representation and a
 // representation that can store all the data we could possibly
-// collect.  PyLimitedFeedback stores up to three types, while
+// collect.  PyLimitedFeedback stores up to three objects, while
 // PyFullFeedback uses an unbounded set.
 
 #ifndef UTIL_RUNTIMEFEEDBACK_H
@@ -40,7 +40,7 @@ template<typename, unsigned> class SmallVector;
 enum { PY_FDO_JUMP_TRUE = 0, PY_FDO_JUMP_FALSE, PY_FDO_JUMP_NON_BOOLEAN };
 
 // We copy data out of PyCFunctionObjects, rather than INCREFing them like we do
-// types. We do this to avoid inflating the refcounts for bound methods, which
+// objects. We do this to avoid inflating the refcounts for bound methods, which
 // may result in delaying or preventing the deallocation of the bound invocant;
 // this is especially problematic for files.
 class FunctionRecord {
@@ -61,11 +61,11 @@ public:
     PyLimitedFeedback(const PyLimitedFeedback &src);
     ~PyLimitedFeedback();
 
-    // Records that the type of obj has been seen.
-    void AddTypeSeen(PyObject *obj);
-    // Clears result and fills it with the set of seen types.
-    void GetSeenTypesInto(llvm::SmallVector<PyTypeObject*, 3> &result) const;
-    bool TypesOverflowed() const {
+    // Records that obj has been seen.
+    void AddObjectSeen(PyObject *obj);
+    // Clears result and fills it with the set of seen objects.
+    void GetSeenObjectsInto(llvm::SmallVector<PyObject*, 3> &result) const;
+    bool ObjectsOverflowed() const {
         return GetFlagBit(SAW_MORE_THAN_THREE_OBJS_BIT);
     }
 
@@ -78,15 +78,15 @@ public:
     }
 
     // There are three counters available.  Their storage space
-    // overlaps with the type record, so you can't use both.  They
+    // overlaps with the object record, so you can't use both.  They
     // saturate rather than wrapping on overflow.
     void IncCounter(unsigned counter_id);
     uintptr_t GetCounter(unsigned counter_id) const;
 
-    // Clears out the collected types, functions and counters.
+    // Clears out the collected objects, functions and counters.
     void Clear();
 
-    // Assignment copies the list of collected types, fixing up refcounts.
+    // Assignment copies the list of collected objects, fixing up refcounts.
     PyLimitedFeedback &operator=(PyLimitedFeedback rhs);
 
 private:
@@ -108,30 +108,30 @@ private:
         SAW_A_NULL_OBJECT_BIT = 1,
     //   2: True if this instance is being used in counter mode.
         COUNTER_MODE_BIT = 2,
-    //   3: True if this instance is being used in type-gathering mode.
-        TYPE_MODE_BIT = 3,
+    //   3: True if this instance is being used in object-gathering mode.
+        OBJECT_MODE_BIT = 3,
     //   4: True if this instance is being used in function-gathering mode.
         FUNC_MODE_BIT = 4,
     //   5: Unused.
     };
     //
     // The pointers in this array start out NULL and are filled from
-    // the lowest index as we see new types. We store either PyObject *s (when
-    // operating in type mode) or FunctionRecord *s (in function mode).
+    // the lowest index as we see new objects. We store either PyObject *s (when
+    // operating in object mode) or FunctionRecord *s (in function mode).
     llvm::PointerIntPair<void*, /*bits used from bottom of pointer=*/2>
         data_[NUM_POINTERS];
 
-    bool InTypeMode() const {
-        return GetFlagBit(TYPE_MODE_BIT) ||
+    bool InObjectMode() const {
+        return GetFlagBit(OBJECT_MODE_BIT) ||
             !(GetFlagBit(COUNTER_MODE_BIT) || GetFlagBit(FUNC_MODE_BIT));
     }
     bool InCounterMode() const {
         return GetFlagBit(COUNTER_MODE_BIT) ||
-            !(GetFlagBit(TYPE_MODE_BIT) || GetFlagBit(FUNC_MODE_BIT));
+            !(GetFlagBit(OBJECT_MODE_BIT) || GetFlagBit(FUNC_MODE_BIT));
     }
     bool InFuncMode() const {
         return GetFlagBit(FUNC_MODE_BIT) ||
-            !(GetFlagBit(TYPE_MODE_BIT) || GetFlagBit(COUNTER_MODE_BIT));
+            !(GetFlagBit(OBJECT_MODE_BIT) || GetFlagBit(COUNTER_MODE_BIT));
     }
 };
 
@@ -141,11 +141,11 @@ public:
     PyFullFeedback(const PyFullFeedback &src);
     ~PyFullFeedback();
 
-    // Records that the type of obj has been seen.
-    void AddTypeSeen(PyObject *obj);
-    // Clears result and fills it with the set of seen types.
-    void GetSeenTypesInto(llvm::SmallVector<PyTypeObject*, 3> &result) const;
-    bool TypesOverflowed() const { return false; }
+    // Records that obj has been seen.
+    void AddObjectSeen(PyObject *obj);
+    // Clears result and fills it with the set of seen objects.
+    void GetSeenObjectsInto(llvm::SmallVector<PyObject*, 3> &result) const;
+    bool ObjectsOverflowed() const { return false; }
 
     // Record that a given function was called.
     void AddFuncSeen(PyObject *obj);
@@ -156,15 +156,15 @@ public:
     void IncCounter(unsigned counter_id);
     uintptr_t GetCounter(unsigned counter_id) const;
 
-    // Clears out the collected types and counters.
+    // Clears out the collected objects and counters.
     void Clear();
 
-    // Assignment copies the list of collected types, fixing up refcounts.
+    // Assignment copies the list of collected objects, fixing up refcounts.
     PyFullFeedback &operator=(PyFullFeedback rhs);
 
 private:
     // Assume three pointers in the set to start with. We store either
-    // PyObject *s (when in type mode) or FunctionRecord *s (when in function
+    // PyObject *s (when in object mode) or FunctionRecord *s (when in function
     // mode).
     typedef llvm::SmallPtrSet<void*, 3> ObjSet;
 
@@ -176,13 +176,13 @@ private:
     enum UsageMode {
         UnknownMode,
         CounterMode,
-        TypeMode,
+        ObjectMode,
         FuncMode,
     };
     UsageMode usage_;
 
-    bool InTypeMode() const {
-        return usage_ == TypeMode || usage_ == UnknownMode;
+    bool InObjectMode() const {
+        return usage_ == ObjectMode || usage_ == UnknownMode;
     }
     bool InFuncMode() const {
         return usage_ == FuncMode || usage_ == UnknownMode;

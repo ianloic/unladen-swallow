@@ -255,6 +255,7 @@ static PyObject * load_args(PyObject ***, int);
 /* Record data for use in generating optimized machine code. */
 static void record_type(PyCodeObject *, int, int, int, PyObject *);
 static void record_func(PyCodeObject *, int, int, int, PyObject *);
+static void record_object(PyCodeObject *, int, int, int, PyObject *);
 static void inc_feedback_counter(PyCodeObject *, int, int, int);
 
 int _Py_TracingPossible = 0;
@@ -854,6 +855,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 #ifdef WITH_LLVM
 #define RECORD_TYPE(arg_index, obj) \
 	record_type(co, opcode, f->f_lasti, arg_index, obj)
+#define RECORD_OBJECT(arg_index, obj) \
+	record_object(co, opcode, f->f_lasti, arg_index, obj)
 #define RECORD_FUNC(obj) \
 	record_func(co, opcode, f->f_lasti, 0, obj)
 #define RECORD_TRUE() \
@@ -864,6 +867,8 @@ PyEval_EvalFrame(PyFrameObject *f)
 	inc_feedback_counter(co, opcode, f->f_lasti, PY_FDO_JUMP_NON_BOOLEAN)
 #else
 #define RECORD_TYPE(arg_index, obj)
+#define RECORD_OBJECT(arg_index, obj)
+#define RECORD_FUNC(obj)
 #define RECORD_TRUE()
 #define RECORD_FALSE()
 #define RECORD_NONBOOLEAN()
@@ -2817,6 +2822,22 @@ PyEval_EvalFrame(PyFrameObject *f)
 			}
 			DISPATCH();
 
+		TARGET(IMPORT_NAME)
+			w = POP();
+			v = POP();
+			u = TOP();
+			x = _PyEval_ImportName(u, v, w);
+			Py_DECREF(w);
+			Py_DECREF(v);
+			Py_DECREF(u);
+			SET_TOP(x);
+			if (x == NULL) {
+				why = UNWIND_EXCEPTION;
+				break;
+			}
+			RECORD_OBJECT(0, x);
+			DISPATCH();
+
 		TARGET(EXTENDED_ARG)
 			opcode = NEXTOP();
 			oparg = oparg<<16 | NEXTARG();
@@ -4597,25 +4618,6 @@ ext_call_fail:
 	return result;
 }
 
-// Records the type of obj into the feedback array.
-void record_type(PyCodeObject *co, int expected_opcode,
-		 int opcode_index, int arg_index, PyObject *obj)
-{
-#ifdef WITH_LLVM
-#ifndef NDEBUG
-	unsigned char actual_opcode =
-		PyString_AS_STRING(co->co_code)[opcode_index];
-	assert((actual_opcode == expected_opcode ||
-		actual_opcode == EXTENDED_ARG) &&
-	       "Mismatch between feedback and opcode array.");
-#endif  /* NDEBUG */
-	PyRuntimeFeedback &feedback =
-		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
-			opcode_index, arg_index);
-	feedback.AddTypeSeen(obj);
-#endif  /* WITH_LLVM */
-}
-
 void inc_feedback_counter(PyCodeObject *co, int expected_opcode,
 			  int opcode_index, int counter_id)
 {
@@ -4651,6 +4653,36 @@ void record_func(PyCodeObject *co, int expected_opcode,
 			opcode_index, arg_index);
 	feedback.AddFuncSeen(func);
 #endif  /* WITH_LLVM */
+}
+
+// Records obj into the feedback array. Only use this on long-lived objects,
+// since the feedback system will keep any object live forever.
+void record_object(PyCodeObject *co, int expected_opcode,
+		   int opcode_index, int arg_index, PyObject *obj)
+{
+#ifdef WITH_LLVM
+#ifndef NDEBUG
+	unsigned char actual_opcode =
+		PyString_AS_STRING(co->co_code)[opcode_index];
+	assert((actual_opcode == expected_opcode ||
+		actual_opcode == EXTENDED_ARG) &&
+	       "Mismatch between feedback and opcode array.");
+#endif  /* NDEBUG */
+	PyRuntimeFeedback &feedback =
+		co->co_runtime_feedback->GetOrCreateFeedbackEntry(
+			opcode_index, arg_index);
+	feedback.AddObjectSeen(obj);
+#endif  /* WITH_LLVM */
+}
+
+// Records the type of obj into the feedback array.
+void record_type(PyCodeObject *co, int expected_opcode,
+                 int opcode_index, int arg_index, PyObject *obj)
+{
+	if (obj == NULL)
+		return;
+	PyObject *type = (PyObject *)Py_TYPE(obj);
+	record_object(co, expected_opcode, opcode_index, arg_index, type);
 }
 
 
@@ -4835,6 +4867,42 @@ _PyEval_DeleteName(PyFrameObject *f, int name_index)
 		     PyObject_REPR(a1));
 	return -1;
 }
+
+PyObject *
+_PyEval_ImportName(PyObject *level, PyObject *names, PyObject *module_name)
+{
+	PyObject *import, *import_args, *module;
+	PyFrameObject *frame = PyThreadState_Get()->frame;
+
+	import = PyDict_GetItemString(frame->f_builtins, "__import__");
+	if (import == NULL) {
+		PyErr_SetString(PyExc_ImportError, "__import__ not found");
+		return NULL;
+	}
+	Py_INCREF(import);
+	if (PyInt_AsLong(level) != -1 || PyErr_Occurred())
+		import_args = PyTuple_Pack(5,
+			    module_name,
+			    frame->f_globals,
+			    frame->f_locals == NULL ? Py_None : frame->f_locals,
+			    names,
+			    level);
+	else
+		import_args = PyTuple_Pack(4,
+			    module_name,
+			    frame->f_globals,
+			    frame->f_locals == NULL ? Py_None : frame->f_locals,
+			    names);
+	if (import_args == NULL) {
+		Py_DECREF(import);
+		return NULL;
+	}
+	module = PyEval_CallObject(import, import_args);
+	Py_DECREF(import);
+	Py_DECREF(import_args);
+	return module;
+}
+
 
 #define Py3kExceptionClass_Check(x)     \
     (PyType_Check((x)) &&               \

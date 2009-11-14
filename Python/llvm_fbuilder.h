@@ -182,6 +182,7 @@ public:
     void DELETE_SUBSCR();
     void STORE_MAP();
     void LIST_APPEND();
+    void IMPORT_NAME();
 
     void COMPARE_OP(int cmp_op);
     void CALL_FUNCTION(int num_args);

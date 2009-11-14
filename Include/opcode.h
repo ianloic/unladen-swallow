@@ -93,7 +93,8 @@ enum _Py_opcode {
     YIELD_VALUE =	86,
     POP_BLOCK =		87,
     END_FINALLY =	88,
-/*  BUILD_CLASS =	89,	Replaced by #@buildclass builtin. */
+/*  BUILD_CLASS =	xxx,	Replaced by #@buildclass builtin. */
+    IMPORT_NAME =	89,
 
     HAVE_ARGUMENT =	90,	/* Opcodes from here have an argument: */
 
@@ -114,7 +115,6 @@ enum _Py_opcode {
     BUILD_MAP =		104,	/* Always zero for now */
     LOAD_ATTR =		105,	/* Index in name list */
     COMPARE_OP =	106,	/* Comparison operator */
-/*  IMPORT_NAME	=	107,	 Replaced by #@import_name builtin. */
 /*  IMPORT_FROM	=	108,	 Replaced by #@import_from builtin. */
 
     JUMP_FORWARD =	110,	/* Number of bytes to skip */

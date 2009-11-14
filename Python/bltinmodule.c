@@ -1096,48 +1096,6 @@ PyDoc_STRVAR(import_from_doc,
 Simulate the removed IMPORT_FROM opcode. Internal use only.");
 
 
-static PyObject *
-builtin_import_name(PyObject *self, PyObject *level, PyObject *names,
-                    PyObject *module_name)
-{
-	PyObject *import, *import_args, *module;
-	PyFrameObject *frame = PyThreadState_Get()->frame;
-
-	import = PyDict_GetItemString(frame->f_builtins, "__import__");
-	if (import == NULL) {
-		PyErr_SetString(PyExc_ImportError, "__import__ not found");
-		return NULL;
-	}
-	Py_INCREF(import);
-	if (PyInt_AsLong(level) != -1 || PyErr_Occurred())
-		import_args = PyTuple_Pack(5,
-			    module_name,
-			    frame->f_globals,
-			    frame->f_locals == NULL ? Py_None : frame->f_locals,
-			    names,
-			    level);
-	else
-		import_args = PyTuple_Pack(4,
-			    module_name,
-			    frame->f_globals,
-			    frame->f_locals == NULL ? Py_None : frame->f_locals,
-			    names);
-	if (import_args == NULL) {
-		Py_DECREF(import);
-		return NULL;
-	}
-	module = PyEval_CallObject(import, import_args);
-	Py_DECREF(import);
-	Py_DECREF(import_args);
-	return module;
-}
-
-PyDoc_STRVAR(import_name_doc,
-"#@import_name(level, names, module_name) -> module_name\n\
-\n\
-Simulate the removed IMPORT_NAME opcode. Internal use only.");
-
-
 /* Helper for builtin_import_star below. */
 static int
 import_all_from(PyObject *locals, PyObject *v)
@@ -2999,8 +2957,6 @@ static PyMethodDef builtin_methods[] = {
 	 exec_doc, /*min_arity=*/1, /*max_arity=*/3},
 	{"#@import_from",	(PyCFunction)builtin_import_from,
 	 METH_ARG_RANGE, import_from_doc, /*min_arity=*/2, /*max_arity=*/2},
-	{"#@import_name",	(PyCFunction)builtin_import_name,
-	 METH_ARG_RANGE, import_name_doc, /*min_arity=*/3, /*max_arity=*/3},
 	{"#@import_star",	(PyCFunction)builtin_import_star,	METH_O,
 	 import_star_doc},
  	{"#@locals",		(PyCFunction)builtin_locals,     METH_NOARGS,
