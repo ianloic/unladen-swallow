@@ -50,7 +50,8 @@ public:
 
     PyCFunction func;
     int flags;
-    int arity;
+    short min_arity;
+    short max_arity;
     std::string name;
 };
 

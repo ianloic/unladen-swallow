@@ -73,7 +73,7 @@ public:
     unsigned optimized;
     // We only optimize call sites without keyword, *args or **kwargs arguments.
     unsigned no_opt_kwargs;
-    // We only optimize METH_FIXED functions so far.
+    // We only optimize METH_ARG_RANGE functions so far.
     unsigned no_opt_params;
     // We only optimize callsites where we've collected data. Note that since
     // we record only PyCFunctions, any call to a Python function will show up
@@ -1698,17 +1698,19 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
 
     FunctionRecord *func_record = fdo_data[0];
 
-    // Only optimize calls to C functions with a fixed number of parameters,
-    // where the number of arguments we have matches exactly.
+    // Only optimize calls to C functions with a known number of parameters,
+    // where the number of arguments we have is in that range.
     int flags = func_record->flags;
-    int arity = func_record->arity;
+    int min_arity = func_record->min_arity;
+    int max_arity = func_record->max_arity;
     int num_args = oparg & 0xff;
-    if (!(flags & METH_FIXED && arity == num_args)) {
+    if (!(flags & METH_ARG_RANGE &&
+                min_arity <= num_args && num_args <= max_arity)) {
         CF_INC_STATS(no_opt_params);
         this->CALL_FUNCTION_safe(oparg);
         return;
     }
-    assert(num_args <= PY_MAX_FIXED_ARITY);
+    assert(num_args <= PY_MAX_ARITY);
 
     PyCFunction cfunc_ptr = func_record->func;
 
@@ -1717,7 +1719,7 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
     Constant *llvm_func =
         this->llvm_data_->constant_mirror().GetGlobalForCFunction(
             cfunc_ptr,
-            arity,
+            max_arity,
             func_record->name);
 
     BasicBlock *not_profiling =
@@ -1782,19 +1784,19 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
         all_assumptions_valid, invalid_assumptions);
 
     // If all the assumptions are valid, we know we have a C function pointer
-    // that takes two arguments: first the invocant, second an optional
-    // PyObject *. If the function was tagged with METH_FIXED and arity=0, we
-    // use NULL for the second argument. Because "the invocant" differs between
-    // built-in functions like len() and C-level methods like list.append(), we
-    // pull the invocant (called m_self) from the PyCFunction object we popped
+    // that takes some number of arguments: first the invocant, then some
+    // PyObject *s. If the underlying function is nullary, we use NULL for the
+    // second argument. Because "the invocant" differs between built-in
+    // functions like len() and C-level methods like list.append(), we pull the
+    // invocant (called m_self) from the PyCFunction object we popped
     // off the stack. Once the function returns, we patch up the stack pointer.
     this->builder_.SetInsertPoint(all_assumptions_valid);
     Value *self = this->builder_.CreateLoad(
         CFunctionTy::m_self(this->builder_, actual_as_pycfunc),
         "CALL_FUNCTION_actual_self");
-    llvm::SmallVector<Value*, PY_MAX_FIXED_ARITY + 1> args;  // +1 for self.
+    llvm::SmallVector<Value*, PY_MAX_ARITY + 1> args;  // +1 for self.
     args.push_back(self);
-    if (num_args == 0) {
+    if (num_args == 0 && max_arity == 0) {
         args.push_back(this->GetNull<PyObject *>());
     }
     for (int i = num_args; i >= 1; --i) {
@@ -1804,6 +1806,9 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
                     stack_pointer,
                     ConstantInt::getSigned(
                         Type::getInt64Ty(this->context_), -i))));
+    }
+    for(int i = 0; i < (max_arity - num_args); ++i) {
+        args.push_back(this->GetNull<PyObject *>());
     }
 
 #ifdef WITH_TSC

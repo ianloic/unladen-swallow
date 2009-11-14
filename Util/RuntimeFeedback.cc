@@ -19,9 +19,13 @@ FunctionRecord::FunctionRecord(const PyObject *func)
     this->func = PyCFunction_GET_FUNCTION(func);
     this->flags = PyCFunction_GET_FLAGS(func);
     this->name = PyCFunction_GET_METHODDEF(func)->ml_name;
-    this->arity = -1;
-    if (this->flags & METH_FIXED)
-        this->arity = PyCFunction_GET_ARITY(func);
+    this->min_arity = -1;
+    this->max_arity = -1;
+
+    if (this->flags & METH_ARG_RANGE) {
+        this->min_arity = PyCFunction_GET_MIN_ARITY(func);
+        this->max_arity = PyCFunction_GET_MAX_ARITY(func);
+    }
 }
 
 FunctionRecord::FunctionRecord(const FunctionRecord &record)
@@ -29,7 +33,8 @@ FunctionRecord::FunctionRecord(const FunctionRecord &record)
     this->func = record.func;
     this->flags = record.flags;
     this->name = record.name;
-    this->arity = record.arity;
+    this->min_arity = record.min_arity;
+    this->max_arity = record.max_arity;
 }
 
 

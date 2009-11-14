@@ -161,17 +161,14 @@ PyDoc_STRVAR(any_doc,
 Return True if bool(x) is True for any x in the iterable.");
 
 static PyObject *
-builtin_apply(PyObject *self, PyObject *args)
+builtin_apply(PyObject *self, PyObject *func, PyObject *alist, PyObject *kwdict)
 {
-	PyObject *func, *alist = NULL, *kwdict = NULL;
 	PyObject *t = NULL, *retval = NULL;
 
 	if (PyErr_WarnPy3k("apply() not supported in 3.x; "
 			   "use func(*args, **kwargs)", 1) < 0)
 		return NULL;
 
-	if (!PyArg_UnpackTuple(args, "apply", 1, 3, &func, &alist, &kwdict))
-		return NULL;
 	if (alist != NULL) {
 		if (!PyTuple_Check(alist)) {
 			if (!PySequence_Check(alist)) {
@@ -221,13 +218,10 @@ PyDoc_STRVAR(bin_doc,
 Return the binary representation of an integer or long integer.");
 
 static PyObject *
-builtin_buildclass(PyObject *self, PyObject *args)
+builtin_buildclass(PyObject *self, PyObject *name, PyObject *bases,
+                   PyObject *methods)
 {
-	PyObject *metaclass = NULL, *result, *base, *methods, *bases, *name;
-
-	if (!PyArg_UnpackTuple(args, "#@buildclass", 3, 3,
-	                       &name, &bases, &methods))
-		return NULL;
+	PyObject *metaclass = NULL, *result, *base;
 
 	if (PyDict_Check(methods))
 		metaclass = PyDict_GetItemString(methods, "__metaclass__");
@@ -322,16 +316,18 @@ PyDoc_STRVAR(displayhook_doc,
 Print an object using sys.displayhook(). For internal use only.");
 
 static PyObject *
-builtin_exec(PyObject *self, PyObject *args)
+builtin_exec(PyObject *self, PyObject *prog, PyObject *globals,
+             PyObject *locals)
 {
 	int n;
-	PyObject *v, *prog, *globals = Py_None, *locals = Py_None, *builtins_dict;
+	PyObject *v, *builtins_dict;
 	PyFrameObject *f;
 	int plain = 0;
 
-	if (!PyArg_UnpackTuple(args, "#@exec", 1, 3,
-	                       &prog, &globals, &locals))
-		return NULL;
+	if (globals == NULL)
+		globals = Py_None;
+	if (locals == NULL)
+		locals = Py_None;
 
 	f = PyThreadState_Get()->frame;
 
@@ -438,14 +434,11 @@ Execute Python code. For internal use only.");
 
 
 static PyObject *
-builtin_filter(PyObject *self, PyObject *args)
+builtin_filter(PyObject *self, PyObject *func, PyObject *seq)
 {
-	PyObject *func, *seq, *result, *it, *arg;
+	PyObject *result, *it, *arg;
 	Py_ssize_t len;   /* guess for result list size */
 	register Py_ssize_t j;
-
-	if (!PyArg_UnpackTuple(args, "filter", 2, 2, &func, &seq))
-		return NULL;
 
 	/* Strings and tuples return a result of the same type. */
 	if (PyString_Check(seq))
@@ -551,14 +544,8 @@ PyDoc_STRVAR(filter_doc,
 "or string, return the same type, else return a list.");
 
 static PyObject *
-builtin_format(PyObject *self, PyObject *args)
+builtin_format(PyObject *self, PyObject *value, PyObject *format_spec)
 {
-	PyObject *value;
-	PyObject *format_spec = NULL;
-
-	if (!PyArg_ParseTuple(args, "O|O:format", &value, &format_spec))
-		return NULL;
-
 	return PyObject_Format(value, format_spec);
 }
 
@@ -569,12 +556,12 @@ Returns value.__format__(format_spec)\n\
 format_spec defaults to \"\"");
 
 static PyObject *
-builtin_chr(PyObject *self, PyObject *args)
+builtin_chr(PyObject *self, PyObject *arg)
 {
-	long x;
 	char s[1];
+	long x = PyInt_AsLong(arg);
 
-	if (!PyArg_ParseTuple(args, "l:chr", &x))
+	if (x == -1 && PyErr_Occurred())
 		return NULL;
 	if (x < 0 || x >= 256) {
 		PyErr_SetString(PyExc_ValueError,
@@ -593,11 +580,11 @@ Return a string of one character with ordinal i; 0 <= i < 256.");
 
 #ifdef Py_USING_UNICODE
 static PyObject *
-builtin_unichr(PyObject *self, PyObject *args)
+builtin_unichr(PyObject *self, PyObject *arg)
 {
-	int x;
+	int x = PyInt_AsLong(arg);
 
-	if (!PyArg_ParseTuple(args, "i:unichr", &x))
+	if (x == -1 && PyErr_Occurred())
 		return NULL;
 
 	return PyUnicode_FromOrdinal(x);
@@ -611,13 +598,10 @@ Return a Unicode string of one character with ordinal i; 0 <= i <= 0x10ffff.");
 
 
 static PyObject *
-builtin_cmp(PyObject *self, PyObject *args)
+builtin_cmp(PyObject *self, PyObject *a, PyObject *b)
 {
-	PyObject *a, *b;
 	int c;
 
-	if (!PyArg_UnpackTuple(args, "cmp", 2, 2, &a, &b))
-		return NULL;
 	if (PyObject_Cmp(a, b, &c) < 0)
 		return NULL;
 	return PyInt_FromLong((long)c);
@@ -630,16 +614,13 @@ Return negative if x<y, zero if x==y, positive if x>y.");
 
 
 static PyObject *
-builtin_coerce(PyObject *self, PyObject *args)
+builtin_coerce(PyObject *self, PyObject *v, PyObject *w)
 {
-	PyObject *v, *w;
 	PyObject *res;
 
 	if (PyErr_WarnPy3k("coerce() not supported in 3.x", 1) < 0)
 		return NULL;
 
-	if (!PyArg_UnpackTuple(args, "coerce", 2, 2, &v, &w))
-		return NULL;
 	if (PyNumber_Coerce(&v, &w) < 0)
 		return NULL;
 	res = PyTuple_Pack(2, v, w);
@@ -764,12 +745,8 @@ compile; if absent or zero these statements do influence the compilation,\n\
 in addition to any features explicitly specified.");
 
 static PyObject *
-builtin_dir(PyObject *self, PyObject *args)
+builtin_dir(PyObject *self, PyObject *arg)
 {
-	PyObject *arg = NULL;
-
-	if (!PyArg_UnpackTuple(args, "dir", 0, 1, &arg))
-		return NULL;
 	return PyObject_Dir(arg);
 }
 
@@ -788,12 +765,8 @@ PyDoc_STRVAR(dir_doc,
 "    recursively the attributes of its class's base classes.");
 
 static PyObject *
-builtin_divmod(PyObject *self, PyObject *args)
+builtin_divmod(PyObject *self, PyObject *v, PyObject *w)
 {
-	PyObject *v, *w;
-
-	if (!PyArg_UnpackTuple(args, "divmod", 2, 2, &v, &w))
-		return NULL;
 	return PyNumber_Divmod(v, w);
 }
 
@@ -804,35 +777,37 @@ Return the tuple ((x-x%y)/y, x%y).  Invariant: div*y + mod == x.");
 
 
 static PyObject *
-builtin_eval(PyObject *self, PyObject *args)
+builtin_eval(PyObject *self, PyObject *cmd, PyObject *globals, PyObject *locals)
 {
-	PyObject *cmd, *result, *tmp = NULL;
-	PyObject *globals = Py_None, *locals = Py_None;
+	PyObject *result, *tmp = NULL;
 	char *str;
 	PyCompilerFlags cf;
 
-	if (!PyArg_UnpackTuple(args, "eval", 1, 3, &cmd, &globals, &locals))
-		return NULL;
-	if (locals != Py_None && !PyMapping_Check(locals)) {
+	if (globals == Py_None)
+		globals = NULL;
+	if (locals == Py_None)
+		locals = NULL;
+
+	if (locals != NULL && !PyMapping_Check(locals)) {
 		PyErr_SetString(PyExc_TypeError, "locals must be a mapping");
 		return NULL;
 	}
-	if (globals != Py_None && !PyDict_Check(globals)) {
+	if (globals != NULL && !PyDict_Check(globals)) {
 		PyErr_SetString(PyExc_TypeError, PyMapping_Check(globals) ?
 			"globals must be a real dict; try eval(expr, {}, mapping)"
 			: "globals must be a dict");
 		return NULL;
 	}
-	if (globals == Py_None) {
+	if (globals == NULL) {
 		globals = PyEval_GetGlobals();
-		if (locals == Py_None)
+		if (locals == NULL)
 			locals = PyEval_GetLocals();
 	}
-	else if (locals == Py_None)
+	else if (locals == NULL)
 		locals = globals;
 
 	if (globals == NULL || locals == NULL) {
-		PyErr_SetString(PyExc_TypeError, 
+		PyErr_SetString(PyExc_TypeError,
 			"eval must be given globals and locals "
 			"when called without a frame");
 		return NULL;
@@ -1000,13 +975,10 @@ globals and locals.  If only globals is given, locals defaults to it.");
 
 
 static PyObject *
-builtin_getattr(PyObject *self, PyObject *args)
+builtin_getattr(PyObject *self, PyObject *v, PyObject *name, PyObject *dflt)
 {
-	PyObject *v, *result, *dflt = NULL;
-	PyObject *name;
+	PyObject *result;
 
-	if (!PyArg_UnpackTuple(args, "getattr", 2, 3, &v, &name, &dflt))
-		return NULL;
 #ifdef Py_USING_UNICODE
 	if (PyUnicode_Check(name)) {
 		name = _PyUnicode_AsDefaultEncodedString(name, NULL);
@@ -1465,31 +1437,28 @@ the items of the sequence (or a list of tuples if more than one sequence).");
 
 
 static PyObject *
-builtin_next(PyObject *self, PyObject *args)
+builtin_next(PyObject *self, PyObject *it, PyObject *dflt)
 {
-	PyObject *it, *res;
-	PyObject *def = NULL;
+	PyObject *res;
 
-	if (!PyArg_UnpackTuple(args, "next", 1, 2, &it, &def))
-		return NULL;
 	if (!PyIter_Check(it)) {
 		PyErr_Format(PyExc_TypeError,
 			"%.200s object is not an iterator",
 			it->ob_type->tp_name);
 		return NULL;
 	}
-	
+
 	res = (*it->ob_type->tp_iternext)(it);
 	if (res != NULL) {
 		return res;
-	} else if (def != NULL) {
+	} else if (dflt != NULL) {
 		if (PyErr_Occurred()) {
 			if (!PyErr_ExceptionMatches(PyExc_StopIteration))
 				return NULL;
 			PyErr_Clear();
 		}
-		Py_INCREF(def);
-		return def;
+		Py_INCREF(dflt);
+		return dflt;
 	} else if (PyErr_Occurred()) {
 		return NULL;
 	} else {
@@ -1522,13 +1491,8 @@ Set a named attribute on an object; setattr(x, 'y', v) is equivalent to\n\
 
 
 static PyObject *
-builtin_delattr(PyObject *self, PyObject *args)
+builtin_delattr(PyObject *self, PyObject *v, PyObject *name)
 {
-	PyObject *v;
-	PyObject *name;
-
-	if (!PyArg_UnpackTuple(args, "delattr", 2, 2, &v, &name))
-		return NULL;
 	if (PyObject_SetAttr(v, name, (PyObject *)NULL) != 0)
 		return NULL;
 	Py_INCREF(Py_None);
@@ -1592,7 +1556,7 @@ Return the hexadecimal representation of an integer or long integer.");
 static PyObject *builtin_raw_input(PyObject *, PyObject *);
 
 static PyObject *
-builtin_input(PyObject *self, PyObject *args)
+builtin_input(PyObject *self, PyObject *v)
 {
 	PyObject *line;
 	char *str;
@@ -1600,7 +1564,7 @@ builtin_input(PyObject *self, PyObject *args)
 	PyObject *globals, *locals;
 	PyCompilerFlags cf;
 
-	line = builtin_raw_input(self, args);
+	line = builtin_raw_input(self, v);
 	if (line == NULL)
 		return line;
 	if (!PyArg_Parse(line, "s;embedded '\\0' in input line", &str))
@@ -1628,11 +1592,14 @@ Equivalent to eval(raw_input(prompt)).");
 
 
 static PyObject *
-builtin_intern(PyObject *self, PyObject *args)
+builtin_intern(PyObject *self, PyObject *s)
 {
-	PyObject *s;
-	if (!PyArg_ParseTuple(args, "S:intern", &s))
+	if (!PyString_Check(s)) {
+		PyErr_Format(PyExc_TypeError,
+		             "intern() argument 1 must be string, not %.200s",
+		             Py_TYPE(s)->tp_name);
 		return NULL;
+	}
 	if (!PyString_CheckExact(s)) {
 		PyErr_SetString(PyExc_TypeError,
 				"can't intern subclass of string");
@@ -1653,12 +1620,8 @@ same value.");
 
 
 static PyObject *
-builtin_iter(PyObject *self, PyObject *args)
+builtin_iter(PyObject *self, PyObject *v, PyObject *w)
 {
-	PyObject *v, *w = NULL;
-
-	if (!PyArg_UnpackTuple(args, "iter", 1, 2, &v, &w))
-		return NULL;
 	if (w == NULL)
 		return PyObject_GetIter(v);
 	if (!PyCallable_Check(v)) {
@@ -1918,12 +1881,10 @@ Return the integer ordinal of a one-character string.");
 
 
 static PyObject *
-builtin_pow(PyObject *self, PyObject *args)
+builtin_pow(PyObject *self, PyObject *v, PyObject *w, PyObject *z)
 {
-	PyObject *v, *w, *z = Py_None;
-
-	if (!PyArg_UnpackTuple(args, "pow", 2, 3, &v, &w, &z))
-		return NULL;
+	if (z == NULL)
+		z = Py_None;
 	return PyNumber_Power(v, w, z);
 }
 
@@ -2407,14 +2368,10 @@ These are exactly the valid indices for a list of 4 elements.");
 
 
 static PyObject *
-builtin_raw_input(PyObject *self, PyObject *args)
+builtin_raw_input(PyObject *self, PyObject *v)
 {
-	PyObject *v = NULL;
 	PyObject *fin = PySys_GetObject("stdin");
 	PyObject *fout = PySys_GetObject("stdout");
-
-	if (!PyArg_UnpackTuple(args, "[raw_]input", 0, 1, &v))
-		return NULL;
 
 	if (fin == NULL) {
 		PyErr_SetString(PyExc_RuntimeError, "[raw_]input: lost sys.stdin");
@@ -2632,13 +2589,10 @@ PyDoc_STRVAR(sorted_doc,
 "sorted(iterable, cmp=None, key=None, reverse=False) --> new sorted list");
 
 static PyObject *
-builtin_vars(PyObject *self, PyObject *args)
+builtin_vars(PyObject *self, PyObject *v)
 {
-	PyObject *v = NULL;
 	PyObject *d;
 
-	if (!PyArg_UnpackTuple(args, "vars", 0, 1, &v))
-		return NULL;
 	if (v == NULL) {
 		d = PyEval_GetLocals();
 		if (d == NULL) {
@@ -2668,14 +2622,9 @@ With an argument, equivalent to object.__dict__.");
 
 
 static PyObject*
-builtin_sum(PyObject *self, PyObject *args)
+builtin_sum(PyObject *self, PyObject *seq, PyObject *result)
 {
-	PyObject *seq;
-	PyObject *result = NULL;
 	PyObject *temp, *item, *iter;
-
-	if (!PyArg_UnpackTuple(args, "sum", 1, 2, &seq, &result))
-		return NULL;
 
 	iter = PyObject_GetIter(seq);
 	if (iter == NULL)
@@ -2826,14 +2775,9 @@ isinstance(x, A) or isinstance(x, B) or ... (etc.).");
 
 
 static PyObject *
-builtin_issubclass(PyObject *self, PyObject *args)
+builtin_issubclass(PyObject *self, PyObject *derived, PyObject *cls)
 {
-	PyObject *derived;
-	PyObject *cls;
 	int retval;
-
-	if (!PyArg_UnpackTuple(args, "issubclass", 2, 2, &derived, &cls))
-		return NULL;
 
 	retval = PyObject_IsSubclass(derived, cls);
 	if (retval < 0)
@@ -2964,66 +2908,107 @@ static PyMethodDef builtin_methods[] = {
  	{"abs",		builtin_abs,        METH_O, abs_doc},
  	{"all",		builtin_all,        METH_O, all_doc},
  	{"any",		builtin_any,        METH_O, any_doc},
- 	{"apply",	builtin_apply,      METH_VARARGS, apply_doc},
+ 	{"apply",	(PyCFunction)builtin_apply,      METH_ARG_RANGE,
+ 	 apply_doc, /*min_arity=*/1, /*max_arity=*/3},
 	{"bin",		builtin_bin,	    METH_O, bin_doc},
  	{"callable",	builtin_callable,   METH_O, callable_doc},
- 	{"chr",		builtin_chr,        METH_VARARGS, chr_doc},
- 	{"cmp",		builtin_cmp,        METH_VARARGS, cmp_doc},
- 	{"coerce",	builtin_coerce,     METH_VARARGS, coerce_doc},
- 	{"compile",	(PyCFunction)builtin_compile,    METH_VARARGS | METH_KEYWORDS, compile_doc},
- 	{"delattr",	builtin_delattr,    METH_VARARGS, delattr_doc},
- 	{"dir",		builtin_dir,        METH_VARARGS, dir_doc},
- 	{"divmod",	builtin_divmod,     METH_VARARGS, divmod_doc},
- 	{"eval",	builtin_eval,       METH_VARARGS, eval_doc},
+ 	{"chr",		(PyCFunction)builtin_chr,        METH_ARG_RANGE,
+ 	 chr_doc, /*min_arity=*/1, /*max_arity=*/1},
+ 	{"cmp",		(PyCFunction)builtin_cmp,        METH_ARG_RANGE,
+ 	 cmp_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"coerce",	(PyCFunction)builtin_coerce,     METH_ARG_RANGE,
+ 	 coerce_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"compile",	(PyCFunction)builtin_compile,
+ 	 METH_VARARGS | METH_KEYWORDS, compile_doc},
+ 	{"delattr",	(PyCFunction)builtin_delattr,    METH_ARG_RANGE,
+ 	 delattr_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"dir",		(PyCFunction)builtin_dir,        METH_ARG_RANGE,
+ 	 dir_doc, /*min_arity=*/0, /*max_arity=*/1},
+ 	{"divmod",	(PyCFunction)builtin_divmod,     METH_ARG_RANGE,
+ 	 divmod_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"eval",	(PyCFunction)builtin_eval,       METH_ARG_RANGE,
+ 	 eval_doc, /*min_arity=*/1, /*max_arity=*/3},
  	{"execfile",	builtin_execfile,   METH_VARARGS, execfile_doc},
- 	{"filter",	builtin_filter,     METH_VARARGS, filter_doc},
- 	{"format",	builtin_format,     METH_VARARGS, format_doc},
- 	{"getattr",	builtin_getattr,    METH_VARARGS, getattr_doc},
- 	{"globals",	(PyCFunction)builtin_globals,    METH_NOARGS, globals_doc},
- 	{"hasattr",	(PyCFunction)builtin_hasattr,    METH_FIXED, hasattr_doc, /*arity=*/2},
+ 	{"filter",	(PyCFunction)builtin_filter,     METH_ARG_RANGE,
+ 	 filter_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"format",	(PyCFunction)builtin_format,     METH_ARG_RANGE,
+ 	 format_doc, /*min_arity=*/1, /*max_arity=*/2},
+ 	{"getattr",	(PyCFunction)builtin_getattr,    METH_ARG_RANGE,
+ 	 getattr_doc, /*min_arity=*/2, /*max_arity=*/3},
+ 	{"globals",	(PyCFunction)builtin_globals,    METH_NOARGS,
+ 	 globals_doc},
+ 	{"hasattr",	(PyCFunction)builtin_hasattr,    METH_ARG_RANGE,
+ 	 hasattr_doc, /*min_arity=*/2, /*max_arity=*/2},
  	{"hash",	builtin_hash,       METH_O, hash_doc},
  	{"hex",		builtin_hex,        METH_O, hex_doc},
  	{"id",		builtin_id,         METH_O, id_doc},
- 	{"input",	builtin_input,      METH_VARARGS, input_doc},
- 	{"intern",	builtin_intern,     METH_VARARGS, intern_doc},
- 	{"isinstance",  (PyCFunction)builtin_isinstance, METH_FIXED, isinstance_doc, /*arity=*/2},
- 	{"issubclass",  builtin_issubclass, METH_VARARGS, issubclass_doc},
- 	{"iter",	builtin_iter,       METH_VARARGS, iter_doc},
+ 	{"input",	builtin_input,      METH_ARG_RANGE, input_doc, 0, 1},
+ 	{"intern",	(PyCFunction)builtin_intern,     METH_ARG_RANGE,
+ 	 intern_doc, /*min_arity=*/1, /*max_arity=*/1},
+ 	{"isinstance",  (PyCFunction)builtin_isinstance, METH_ARG_RANGE,
+ 	 isinstance_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"issubclass",  (PyCFunction)builtin_issubclass, METH_ARG_RANGE,
+ 	 issubclass_doc, /*min_arity=*/2, /*max_arity=*/2},
+ 	{"iter",	(PyCFunction)builtin_iter,       METH_ARG_RANGE,
+ 	 iter_doc, /*min_arity=*/1, /*max_arity=*/2},
  	{"len",		builtin_len,        METH_O, len_doc},
- 	{"locals",	(PyCFunction)builtin_locals,     METH_NOARGS, locals_doc},
+ 	{"locals",	(PyCFunction)builtin_locals,     METH_NOARGS,
+ 	 locals_doc},
  	{"map",		builtin_map,        METH_VARARGS, map_doc},
- 	{"max",		(PyCFunction)builtin_max,        METH_VARARGS | METH_KEYWORDS, max_doc},
- 	{"min",		(PyCFunction)builtin_min,        METH_VARARGS | METH_KEYWORDS, min_doc},
-	{"next", 	builtin_next,       METH_VARARGS, next_doc},
+ 	{"max",		(PyCFunction)builtin_max,
+ 	 METH_VARARGS | METH_KEYWORDS, max_doc},
+ 	{"min",		(PyCFunction)builtin_min,
+ 	 METH_VARARGS | METH_KEYWORDS, min_doc},
+	{"next", 	(PyCFunction)builtin_next,       METH_ARG_RANGE,
+	 next_doc, /*min_arity=*/1, /*max_arity=*/2},
  	{"oct",		builtin_oct,        METH_O, oct_doc},
- 	{"open",	(PyCFunction)builtin_open,       METH_VARARGS | METH_KEYWORDS, open_doc},
+ 	{"open",	(PyCFunction)builtin_open,
+ 	 METH_VARARGS | METH_KEYWORDS, open_doc},
  	{"ord",		builtin_ord,        METH_O, ord_doc},
- 	{"pow",		builtin_pow,        METH_VARARGS, pow_doc},
- 	{"print",	(PyCFunction)builtin_print,      METH_VARARGS | METH_KEYWORDS, print_doc},
+ 	{"pow",		(PyCFunction)builtin_pow,        METH_ARG_RANGE,
+ 	 pow_doc, /*min_arity=*/2, /*max_arity=*/3},
+ 	{"print",	(PyCFunction)builtin_print,
+ 	 METH_VARARGS | METH_KEYWORDS, print_doc},
  	{"range",	builtin_range,      METH_VARARGS, range_doc},
- 	{"raw_input",	builtin_raw_input,  METH_VARARGS, raw_input_doc},
+ 	{"raw_input",	(PyCFunction)builtin_raw_input,  METH_ARG_RANGE,
+ 	 raw_input_doc, /*min_arity=*/0, /*max_arity=*/1},
  	{"reduce",	builtin_reduce,     METH_VARARGS, reduce_doc},
  	{"reload",	builtin_reload,     METH_O, reload_doc},
  	{"repr",	builtin_repr,       METH_O, repr_doc},
- 	{"round",	(PyCFunction)builtin_round,      METH_VARARGS | METH_KEYWORDS, round_doc},
- 	{"setattr",	(PyCFunction)builtin_setattr,    METH_FIXED, setattr_doc, /*arity=*/3},
- 	{"sorted",	(PyCFunction)builtin_sorted,     METH_VARARGS | METH_KEYWORDS, sorted_doc},
- 	{"sum",		builtin_sum,        METH_VARARGS, sum_doc},
+ 	{"round",	(PyCFunction)builtin_round,
+ 	 METH_VARARGS | METH_KEYWORDS, round_doc},
+ 	{"setattr",	(PyCFunction)builtin_setattr,	METH_ARG_RANGE,
+ 	 setattr_doc,	/*min_arity=*/3,	/*max_arity=*/3},
+ 	{"sorted",	(PyCFunction)builtin_sorted,
+ 	 METH_VARARGS | METH_KEYWORDS, sorted_doc},
+ 	{"sum",		(PyCFunction)builtin_sum,	METH_ARG_RANGE,
+ 	 sum_doc,	/*min_arity=*/1,	/*max_arity=*/2},
 #ifdef Py_USING_UNICODE
- 	{"unichr",	builtin_unichr,     METH_VARARGS, unichr_doc},
+ 	{"unichr",	(PyCFunction)builtin_unichr,	METH_ARG_RANGE,
+ 	 unichr_doc,	/*min_arity=*/1,	/*max_arity=*/1},
 #endif
- 	{"vars",	builtin_vars,       METH_VARARGS, vars_doc},
+ 	{"vars",	(PyCFunction)builtin_vars,	METH_ARG_RANGE,
+ 	 vars_doc,	/*min_arity=*/0,	/*max_arity=*/1},
   	{"zip",         builtin_zip,        METH_VARARGS, zip_doc},
-    /* The following built-in functions are for internal use only. */
-	{"#@buildclass",	builtin_buildclass,	    METH_VARARGS, buildclass_doc},
- 	{"#@displayhook",	builtin_displayhook,     METH_VARARGS, displayhook_doc},
-	{"#@exec",	        builtin_exec,	    METH_VARARGS, exec_doc},
-	{"#@import_from",	(PyCFunction)builtin_import_from,	    METH_FIXED, import_from_doc, /*arity=*/2},
-	{"#@import_name",	(PyCFunction)builtin_import_name,	    METH_FIXED, import_name_doc, /*arity=*/3},
-	{"#@import_star",	(PyCFunction)builtin_import_star,	    METH_O, import_star_doc},
- 	{"#@locals",		(PyCFunction)builtin_locals,     METH_NOARGS, locals_doc},
-	{"#@make_function",	builtin_make_function,	    METH_VARARGS, make_function_doc},
- 	{"#@print_stmt",    (PyCFunction)builtin_print_stmt,      METH_VARARGS | METH_KEYWORDS, print_doc},
+	/* The following built-in functions are for internal use only. */
+	{"#@buildclass",	(PyCFunction)builtin_buildclass, METH_ARG_RANGE,
+	buildclass_doc,	/*min_arity=*/3,	/*max_arity=*/3},
+ 	{"#@displayhook",	builtin_displayhook,     METH_VARARGS,
+ 	 displayhook_doc},
+	{"#@exec",	        (PyCFunction)builtin_exec,	METH_ARG_RANGE,
+	 exec_doc, /*min_arity=*/1, /*max_arity=*/3},
+	{"#@import_from",	(PyCFunction)builtin_import_from,
+	 METH_ARG_RANGE, import_from_doc, /*min_arity=*/2, /*max_arity=*/2},
+	{"#@import_name",	(PyCFunction)builtin_import_name,
+	 METH_ARG_RANGE, import_name_doc, /*min_arity=*/3, /*max_arity=*/3},
+	{"#@import_star",	(PyCFunction)builtin_import_star,	METH_O,
+	 import_star_doc},
+ 	{"#@locals",		(PyCFunction)builtin_locals,     METH_NOARGS,
+ 	 locals_doc},
+	{"#@make_function",	builtin_make_function,	    METH_VARARGS,
+	 make_function_doc},
+ 	{"#@print_stmt",    (PyCFunction)builtin_print_stmt,
+ 	 METH_VARARGS | METH_KEYWORDS, print_doc},
 	{NULL,		NULL},
 };
 

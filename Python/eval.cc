@@ -4058,14 +4058,19 @@ PyEval_GetFuncDesc(PyObject *func)
 }
 
 static void
-err_args(PyObject *func, int flags, int arity, int nargs)
+err_args(PyObject *func, int flags, int min_arity, int max_arity, int nargs)
 {
-	if (arity == 0)
+	if (min_arity != max_arity)
+		PyErr_Format(PyExc_TypeError,
+				 "%.200s() takes %d-%d arguments (%d given)",
+				 ((PyCFunctionObject *)func)->m_ml->ml_name,
+				 min_arity, max_arity, nargs);
+	else if (min_arity == 0)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes no arguments (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
 			     nargs);
-	else if (arity == 1)
+	else if (min_arity == 1)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes exactly one argument (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
@@ -4074,7 +4079,7 @@ err_args(PyObject *func, int flags, int arity, int nargs)
 		PyErr_Format(PyExc_TypeError,
 			     "%.200s() takes exactly %d arguments (%d given)",
 			     ((PyCFunctionObject *)func)->m_ml->ml_name,
-			     arity,
+			     min_arity,
 			     nargs);
 }
 
@@ -4205,28 +4210,27 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 		PyThreadState *tstate = PyThreadState_GET();
 
 		PCALL(PCALL_CFUNCTION);
-		if (flags & METH_FIXED) {
+		if (flags & METH_ARG_RANGE) {
 			PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 			PyObject *self = PyCFunction_GET_SELF(func);
-			int arity = PyCFunction_GET_ARITY(func);
-			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
+			int min_arity = PyCFunction_GET_MIN_ARITY(func);
+			int max_arity = PyCFunction_GET_MAX_ARITY(func);
+			PyObject *args[PY_MAX_ARITY] = {NULL};
+
 			switch (na) {
 				default:
 					PyErr_BadInternalCall();
 					return NULL;
-				case 3:
-					args[2] = EXT_POP(stack_pointer);
-				case 2:
-					args[1] = EXT_POP(stack_pointer);
-				case 1:
-					args[0] = EXT_POP(stack_pointer);
-				case 0:
-					break;
+				case 3: args[2] = EXT_POP(stack_pointer);
+				case 2: args[1] = EXT_POP(stack_pointer);
+				case 1: args[0] = EXT_POP(stack_pointer);
+				case 0: break;
 			}
+
 			/* But wait, you ask, what about {un,bin}ary functions?
 			   Aren't we passing more arguments than it expects?
 			   Yes, but C allows this. Go C. */
-			if (arity == na) {
+			if (min_arity <= na && na <= max_arity) {
 				C_TRACE(x, (*(PyCFunctionThreeArgs)meth)
 				           (self, args[0], args[1], args[2]));
 				Py_XDECREF(args[0]);
@@ -4234,7 +4238,7 @@ _PyEval_CallFunction(PyObject **stack_pointer, int na, int nk)
 				Py_XDECREF(args[2]);
 			}
 			else {
-				err_args(func, flags, arity, na);
+				err_args(func, flags, min_arity, max_arity, na);
 				x = NULL;
 			}
 		}

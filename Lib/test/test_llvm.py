@@ -2594,7 +2594,7 @@ def foo(trigger):
         self.assertEqual(v, None)
 
     def test_fast_calls_two_arguments(self):
-        # Test our ability to optimize calls to METH_FIXED/arity=2 functions.
+        # Test our ability to optimize calls to METH_ARG_RANGE/arity=2 functions.
         foo = compile_for_llvm('foo', 'def foo(x): return isinstance(x, int)',
                                optimization_level=None)
         for _ in xrange(JIT_SPIN_COUNT):
@@ -2605,7 +2605,7 @@ def foo(trigger):
         self.assertContains("@isinstance", str(foo.__code__.co_llvm))
 
     def test_fast_calls_three_arguments(self):
-        # Test our ability to optimize calls to METH_FIXED/arity=3 functions.
+        # Test our ability to optimize calls to METH_ARG_RANGE/arity=3 functions.
         foo = compile_for_llvm('foo', 'def foo(x): setattr(x, "y", 5)',
                                optimization_level=None)
         class Object(object):
@@ -2616,6 +2616,32 @@ def foo(trigger):
         self.assertEqual(x.y, 5)
         self.assertTrue(foo.__code__.__use_llvm__)
         self.assertContains("@setattr", str(foo.__code__.co_llvm))
+
+    def test_fast_calls_variadic_arguments(self):
+        # Test our ability to optimize calls to METH_ARG_RANGE functions.
+        foo = compile_for_llvm('foo', 'def foo(x): return sum(x, 1)',
+                               optimization_level=None)
+        input = [1, 2]
+        for _ in xrange(JIT_SPIN_COUNT):
+            foo(input)
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertEqual(foo([2, 3]), 6)
+        self.assertRaises(TypeError, foo, 5)
+        self.assertContains("@sum", str(foo.__code__.co_llvm))
+
+    def test_fast_calls_variadic_arguments_missing_args(self):
+        # Test our ability to optimize calls to METH_ARG_RANGE functions.
+        # Call with #args < max arity.
+        foo = compile_for_llvm('foo', 'def foo(x): return sum(x)',
+                               optimization_level=None)
+        input = [1, 2]
+        for _ in xrange(JIT_SPIN_COUNT):
+            foo(input)
+        self.assertTrue(foo.__code__.__use_llvm__)
+        self.assertEqual(foo([2, 3]), 5)
+        self.assertRaises(TypeError, foo, 5)
+        self.assertContains("@sum", str(foo.__code__.co_llvm))
+
 
     def test_fast_calls_same_method_different_invocant(self):
         # For all strings, x.join will resolve to the same C function, so

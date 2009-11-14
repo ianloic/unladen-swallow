@@ -15,13 +15,15 @@ PyAPI_DATA(PyTypeObject) PyCFunction_Type;
 
 #define PyCFunction_Check(op) (Py_TYPE(op) == &PyCFunction_Type)
 
-/* PyCFunction works for METH_FIXED when arity==0 or arity==1. */
+/* PyCFunction works for METH_ARG_RANGE when arity==0 or arity==1. */
 typedef PyObject *(*PyCFunction)(PyObject *, PyObject *);
 typedef PyObject *(*PyCFunctionWithKeywords)(PyObject *, PyObject *,
 					     PyObject *);
 typedef PyObject *(*PyNoArgsFunction)(PyObject *);
 
-/* Support for METH_FIXED with arity of two or three. */
+/* Support for METH_ARG_RANGE with arity of two or three. If the callsite passes
+   fewer arguments than the maximum possible arity, NULLs will be used for those
+   PyObject * slots. */
 typedef PyObject *(*PyCFunctionTwoArgs)(PyObject *, PyObject *, PyObject *);
 typedef PyObject *(*PyCFunctionThreeArgs)(PyObject *, PyObject *,
                                           PyObject *, PyObject *);
@@ -38,10 +40,13 @@ PyAPI_FUNC(int) PyCFunction_GetFlags(PyObject *);
 	(((PyCFunctionObject *)func) -> m_self)
 #define PyCFunction_GET_FLAGS(func) \
 	(((PyCFunctionObject *)func) -> m_ml -> ml_flags)
-/* GET_ARITY only makes sense for METH_FIXED functions. */
-#define PyCFunction_GET_ARITY(func) \
-	(assert(PyCFunction_GET_FLAGS(func) & METH_FIXED), \
-	(((PyCFunctionObject *)func) -> m_ml -> ml_arity))
+/* GET_{MIN,MAX}_ARITY only make sense for METH_ARG_RANGE functions. */
+#define PyCFunction_GET_MIN_ARITY(func) \
+	(assert(PyCFunction_GET_FLAGS(func) & METH_ARG_RANGE), \
+	(((PyCFunctionObject *)func) -> m_ml -> ml_min_arity))
+#define PyCFunction_GET_MAX_ARITY(func) \
+	(assert(PyCFunction_GET_FLAGS(func) & METH_ARG_RANGE), \
+	(((PyCFunctionObject *)func) -> m_ml -> ml_max_arity))
 #define PyCFunction_GET_METHODDEF(func) \
 	(((PyCFunctionObject *)func) -> m_ml)
 PyAPI_FUNC(PyObject *) PyCFunction_Call(PyObject *, PyObject *, PyObject *);
@@ -52,8 +57,12 @@ typedef struct PyMethodDef {
     int		 ml_flags;	/* Combination of METH_xxx flags, which mostly
 				   describe the args expected by the C func */
     const char	*ml_doc;	/* The __doc__ attribute, or NULL */
-    int          ml_arity;      /* Number of parameters for METH_FIXED funcs. */
+    short        ml_min_arity;  /* Min arg count for METH_ARG_RANGE funcs. */
+    short        ml_max_arity;  /* Max arg count for METH_ARG_RANGE funcs. */
 } PyMethodDef;
+
+/* Maximum value for ml_{min,max}_arity. */
+#define PY_MAX_ARITY 3
 
 PyAPI_FUNC(PyObject *) Py_FindMethod(PyMethodDef[], PyObject *, const char *);
 
@@ -63,20 +72,20 @@ PyAPI_FUNC(PyObject *) PyCFunction_NewEx(PyMethodDef *, PyObject *,
 
 /* Flag passed to newmethodobject. These values are spaced out to leave room
    for future expansion without necessarily breaking ABI compatibility. */
-#define METH_OLDARGS  0x0000
-#define METH_VARARGS  0x0001
-#define METH_KEYWORDS 0x0002
-/* METH_NOARGS, METH_O and METH_FIXED must not be combined with the flags above.
-   METH_FIXED supersedes METHO_O and METH_NOARGS. */
-#define METH_O        0x0010     /* Function arity = 1 */
-#define METH_FIXED    0x0020     /* Function arity = constant */
-#define METH_NOARGS   METH_FIXED /* Arity = 0; backwards compatibility. */
+#define METH_OLDARGS   0x0000
+#define METH_VARARGS   0x0001
+#define METH_KEYWORDS  0x0002
+/* METH_NOARGS, METH_O and METH_ARG_RANGE must not be combined with the flags above.
+   METH_ARG_RANGE supersedes METHO_O and METH_NOARGS. */
+#define METH_O         0x0010         /* Function arity = 1 */
+#define METH_ARG_RANGE 0x0020         /* Arity in a known interval */
+#define METH_NOARGS    METH_ARG_RANGE /* Arity = 0; backwards compatibility. */
 
 /* METH_CLASS and METH_STATIC are a little different; these control
    the construction of methods for a class.  These cannot be used for
    functions in modules. */
-#define METH_CLASS    0x0100
-#define METH_STATIC   0x0200
+#define METH_CLASS     0x0100
+#define METH_STATIC    0x0200
 
 /* METH_COEXIST allows a method to be entered eventhough a slot has
    already filled the entry.  When defined, the flag allows a separate
@@ -84,9 +93,6 @@ PyAPI_FUNC(PyObject *) PyCFunction_NewEx(PyMethodDef *, PyObject *,
    slot like sq_contains. */
 
 #define METH_COEXIST   0x1000
-
-/* Maximum value for ml_arity. */
-#define PY_MAX_FIXED_ARITY 3
 
 typedef struct PyMethodChain {
     PyMethodDef *methods;		/* Methods of this type */

@@ -765,12 +765,12 @@ list_ass_item(PyListObject *a, Py_ssize_t i, PyObject *v)
 }
 
 static PyObject *
-listinsert(PyListObject *self, PyObject *args)
+listinsert(PyListObject *self, PyObject *index, PyObject *v)
 {
-	Py_ssize_t i;
-	PyObject *v;
-	if (!PyArg_ParseTuple(args, "nO:insert", &i, &v))
+	Py_ssize_t i = PyInt_AsSsize_t(index);
+	if (i == -1 && PyErr_Occurred())
 		return NULL;
+
 	if (ins1(self, i, v) == 0)
 		Py_RETURN_NONE;
 	return NULL;
@@ -909,14 +909,17 @@ list_inplace_concat(PyListObject *self, PyObject *other)
 }
 
 static PyObject *
-listpop(PyListObject *self, PyObject *args)
+listpop(PyListObject *self, PyObject *arg)
 {
 	Py_ssize_t i = -1;
 	PyObject *v;
 	int status;
 
-	if (!PyArg_ParseTuple(args, "|n:pop", &i))
-		return NULL;
+	if (arg != NULL) {
+		i = PyInt_AsSsize_t(arg);
+		if (i == -1 && PyErr_Occurred())
+			return NULL;
+	}
 
 	if (Py_SIZE(self) == 0) {
 		/* Special-case most common failure cause */
@@ -2258,15 +2261,16 @@ PyList_AsTuple(PyObject *v)
 }
 
 static PyObject *
-listindex(PyListObject *self, PyObject *args)
+listindex(PyListObject *self, PyObject *v, PyObject *start_arg, PyObject *stop_arg)
 {
 	Py_ssize_t i, start=0, stop=Py_SIZE(self);
-	PyObject *v;
 
-	if (!PyArg_ParseTuple(args, "O|O&O&:index", &v,
-	                            _PyEval_SliceIndex, &start,
-	                            _PyEval_SliceIndex, &stop))
+	if(start_arg != NULL && !_PyEval_SliceIndex(start_arg, &start))
 		return NULL;
+
+	if(stop_arg != NULL && !_PyEval_SliceIndex(stop_arg, &stop))
+		return NULL;
+
 	if (start < 0) {
 		start += Py_SIZE(self);
 		if (start < 0)
@@ -2478,15 +2482,19 @@ cmp(x, y) -> -1, 0, 1");
 static PyObject *list_subscript(PyListObject*, PyObject*);
 
 static PyMethodDef list_methods[] = {
-	{"__getitem__", (PyCFunction)list_subscript, METH_O|METH_COEXIST, getitem_doc},
+	{"__getitem__", (PyCFunction)list_subscript, METH_O|METH_COEXIST,
+	 getitem_doc},
 	{"__reversed__",(PyCFunction)list_reversed, METH_NOARGS, reversed_doc},
 	{"__sizeof__",  (PyCFunction)list_sizeof, METH_NOARGS, sizeof_doc},
 	{"append",	(PyCFunction)listappend,  METH_O, append_doc},
-	{"insert",	(PyCFunction)listinsert,  METH_VARARGS, insert_doc},
+	{"insert",	(PyCFunction)listinsert,  METH_ARG_RANGE, insert_doc,
+	 /*min_arity=*/2, /*max_arity=*/2},
 	{"extend",      (PyCFunction)listextend,  METH_O, extend_doc},
-	{"pop",		(PyCFunction)listpop, 	  METH_VARARGS, pop_doc},
+	{"pop",		(PyCFunction)listpop, 	  METH_ARG_RANGE, pop_doc,
+	 /*min_arity=*/0, /*max_arity=*/1},
 	{"remove",	(PyCFunction)listremove,  METH_O, remove_doc},
-	{"index",	(PyCFunction)listindex,   METH_VARARGS, index_doc},
+	{"index",	(PyCFunction)listindex,   METH_ARG_RANGE, index_doc,
+	 /*min_arity=*/1, /*max_arity=*/3},
 	{"count",	(PyCFunction)listcount,   METH_O, count_doc},
 	{"reverse",	(PyCFunction)listreverse, METH_NOARGS, reverse_doc},
 	{"sort",	(PyCFunction)listsort, 	  METH_VARARGS | METH_KEYWORDS, sort_doc},
