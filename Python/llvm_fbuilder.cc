@@ -286,7 +286,7 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
         ConstantInt::get(PyTypeBuilder<char>::get(this->context_),
                          _PYFRAME_TRACE_ON_ENTRY),
         FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->builder_.CreateBr(this->GetBailBlock());
 
     this->builder_.SetInsertPoint(continue_entry);
     Value *frame_code = this->builder_.CreateLoad(
@@ -811,6 +811,20 @@ LlvmFunctionBuilder::FillBailToInterpreterBlock()
     this->CreateRet(bail);
 }
 
+llvm::BasicBlock *
+LlvmFunctionBuilder::GetBailBlock() const
+{
+    // TODO(collinwinter): bail block chaining needs to change this.
+    return this->bail_to_interpreter_block_;
+}
+
+llvm::BasicBlock *
+LlvmFunctionBuilder::GetExceptionBlock() const
+{
+    // TODO(collinwinter): exception block chaining needs to change this.
+    return this->propagate_exception_block_;
+}
+
 void
 LlvmFunctionBuilder::PopAndDecrefTo(Value *target_stack_pointer)
 {
@@ -1079,7 +1093,7 @@ LlvmFunctionBuilder::Return(Value *retval)
 void
 LlvmFunctionBuilder::PropagateException()
 {
-    this->builder_.CreateBr(this->propagate_exception_block_);
+    this->builder_.CreateBr(this->GetExceptionBlock());
 }
 
 void
@@ -2223,7 +2237,7 @@ LlvmFunctionBuilder::CreateBailPoint(unsigned bail_idx, char reason)
     this->builder_.CreateStore(
         ConstantInt::get(PyTypeBuilder<char>::get(this->context_), reason),
         FrameTy::f_bailed_from_llvm(this->builder_, this->frame_));
-    this->builder_.CreateBr(this->bail_to_interpreter_block_);
+    this->builder_.CreateBr(this->GetBailBlock());
 }
 
 void
@@ -2614,7 +2628,7 @@ LlvmFunctionBuilder::DoRaise(Value *exc_type, Value *exc_inst, Value *exc_tb)
         this->builder_.CreateICmpEQ(
             is_reraise,
             ConstantInt::get(is_reraise->getType(), UNWIND_RERAISE)),
-        this->unwind_block_, this->propagate_exception_block_);
+        this->unwind_block_, this->GetExceptionBlock());
 
     this->builder_.SetInsertPoint(dead_code);
 }
@@ -3404,7 +3418,7 @@ LlvmFunctionBuilder::CheckPyTicker(BasicBlock *next_block)
             "_PyLlvm_DecAndCheckPyTicker"),
         this->tstate_);
     this->builder_.CreateCondBr(this->IsNegative(pyticker_result),
-                                this->propagate_exception_block_,
+                                this->GetExceptionBlock(),
                                 next_block);
     this->builder_.SetInsertPoint(next_block);
 }

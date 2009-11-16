@@ -555,6 +555,14 @@ private:
     /// installed, execution will continue at fallthrough_block.
     void BailIfProfiling(llvm::BasicBlock *fallthrough_block);
 
+    /// Return the BasicBlock we should jump to in order to bail to the
+    /// interpreter.
+    llvm::BasicBlock *GetBailBlock() const;
+
+    /// Return the BasicBlock we should jump to in order to handle a Python
+    /// exception.
+    llvm::BasicBlock *GetExceptionBlock() const;
+
     PyGlobalLlvmData *const llvm_data_;
     // The code object is used for looking up peripheral information
     // about the function.  It's not used to examine the bytecode
