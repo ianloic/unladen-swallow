@@ -15,6 +15,7 @@ else:
     # remain compatible with Python  < 2.3
     READ_MODE = "r"
 
+IMPORT_NAME = chr(dis.opname.index('IMPORT_NAME'))
 LOAD_GLOBAL = chr(dis.opname.index('LOAD_GLOBAL'))
 LOAD_CONST = chr(dis.opname.index('LOAD_CONST'))
 STORE_NAME = chr(dis.opname.index('STORE_NAME'))
@@ -343,7 +344,7 @@ class ModuleFinder:
         code = co.co_code
         names = co.co_names
         consts = co.co_consts
-        OPCODE_SIG = LOAD_GLOBAL + LOAD_CONST + LOAD_CONST + LOAD_CONST
+        OPCODE_SIG = LOAD_CONST + LOAD_CONST + LOAD_CONST + IMPORT_NAME
         while code:
             c = code[0]
             if c in STORE_OPS:
@@ -351,22 +352,20 @@ class ModuleFinder:
                 yield "store", (names[oparg],)
                 code = code[3:]
                 continue
-            if code[:12:3] == OPCODE_SIG and '#@import_name' in names:
-                load_global_args = chr(names.index('#@import_name')) + chr(0)
-                if code[:3] == LOAD_GLOBAL + load_global_args:
-                    oparg_1, oparg_2, oparg_3 = unpack('<xHxHxH', code[3:12])
-                    level = consts[oparg_1]
-                    if level == -1: # normal import
-                        yield "import", (consts[oparg_2], consts[oparg_3])
-                    elif level == 0: # absolute import
-                        yield "absolute_import", (consts[oparg_2],
-                                                  consts[oparg_3])
-                    else: # relative import
-                        yield "relative_import", (level,
-                                                  consts[oparg_2],
-                                                  consts[oparg_3])
-                    code = code[9:]
-                    continue
+            if code[:12:3] == OPCODE_SIG:
+                oparg_1, oparg_2, oparg_3 = unpack('<xHxHxH', code[:9])
+                level = consts[oparg_1]
+                if level == -1: # normal import
+                    yield "import", (consts[oparg_2], consts[oparg_3])
+                elif level == 0: # absolute import
+                    yield "absolute_import", (consts[oparg_2],
+                                              consts[oparg_3])
+                else: # relative import
+                    yield "relative_import", (level,
+                                              consts[oparg_2],
+                                              consts[oparg_3])
+                code = code[9:]
+                continue
             if c >= HAVE_ARGUMENT:
                 code = code[3:]
             else:

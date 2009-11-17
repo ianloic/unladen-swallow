@@ -182,6 +182,7 @@ public:
     void DELETE_SUBSCR();
     void STORE_MAP();
     void LIST_APPEND();
+    void IMPORT_NAME();
 
     void COMPARE_OP(int cmp_op);
     void CALL_FUNCTION(int num_args);
@@ -553,6 +554,14 @@ private:
     /// profiling function is installed. If a profiling function is not
     /// installed, execution will continue at fallthrough_block.
     void BailIfProfiling(llvm::BasicBlock *fallthrough_block);
+
+    /// Return the BasicBlock we should jump to in order to bail to the
+    /// interpreter.
+    llvm::BasicBlock *GetBailBlock() const;
+
+    /// Return the BasicBlock we should jump to in order to handle a Python
+    /// exception.
+    llvm::BasicBlock *GetExceptionBlock() const;
 
     PyGlobalLlvmData *const llvm_data_;
     // The code object is used for looking up peripheral information

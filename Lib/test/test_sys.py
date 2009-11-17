@@ -527,9 +527,9 @@ class SizeofTest(unittest.TestCase):
         check(complex(0,1), size(h + '2d'))
         # code
         if WITH_LLVM:
-            check(get_cell().func_code, size(h + '4i8Pi5Pc2il2P'))
+            check(get_cell().func_code, size(h + '4i8Pi6Pc2il2P'))
         else:
-            check(get_cell().func_code, size(h + '4i8Pi2P'))
+            check(get_cell().func_code, size(h + '4i8Pi3P'))
         # BaseException
         check(BaseException(), size(h + '3P'))
         # UnicodeEncodeError

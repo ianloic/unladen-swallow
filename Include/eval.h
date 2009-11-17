@@ -227,6 +227,10 @@ PyAPI_FUNC(enum _PyUnwindReason) _PyEval_DoRaise(PyObject *type, PyObject *val,
 
 PyAPI_FUNC(int) _PyEval_UnpackIterable(PyObject *, int, PyObject **);
 
+PyAPI_FUNC(PyObject *) _PyEval_ImportName(PyObject *level,
+                                          PyObject *names,
+                                          PyObject *module_name);
+
 PyAPI_FUNC(PyObject *) _PyEval_LoadName(struct _frame *, int);
 PyAPI_FUNC(int) _PyEval_StoreName(struct _frame *, int, PyObject *);
 PyAPI_FUNC(int) _PyEval_DeleteName(struct _frame *, int);

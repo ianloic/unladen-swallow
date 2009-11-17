@@ -651,6 +651,15 @@ class BuiltinTest(unittest.TestCase):
         s2 = s.swapcase().swapcase()
         self.assert_(intern(s2) is s)
 
+        # Verify the error message we get when interning a non-string.
+        try:
+            intern(object())
+        except TypeError, e:
+            self.assertEqual(str(e),
+                             "intern() argument 1 must be string, not object")
+        else:
+            self.fail("Failed to raise exception")
+
         # Subclasses of string can't be interned, because they
         # provide too much opportunity for insane things to happen.
         # We don't want them in the interned dict and if they aren't

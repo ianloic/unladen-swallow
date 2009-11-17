@@ -67,7 +67,8 @@ public:
     llvm::Constant *GetGlobalVariableFor(PyObject *obj);
 
     // Create an LLVM global variable that is backed by the given function
-    // pointer. This currently only works for METH_FIXED functions.
+    // pointer. This currently only works for METH_ARG_RANGE functions.
+    // Pass the maximum number of arguments the function accepts.
     llvm::Constant *GetGlobalForCFunction(PyCFunction cfunc_ptr,
                                           int arity,
                                           const llvm::StringRef &name);

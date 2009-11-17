@@ -1843,16 +1843,14 @@ dict_has_key(register PyDictObject *mp, PyObject *key)
 }
 
 static PyObject *
-dict_get(register PyDictObject *mp, PyObject *args)
+dict_get(register PyDictObject *mp, PyObject *key, PyObject *failobj)
 {
-	PyObject *key;
-	PyObject *failobj = Py_None;
 	PyObject *val = NULL;
 	long hash;
 	PyDictEntry *ep;
 
-	if (!PyArg_UnpackTuple(args, "get", 1, 2, &key, &failobj))
-		return NULL;
+	if (failobj == NULL)
+		failobj = Py_None;
 
 	if (!PyString_CheckExact(key) ||
 	    (hash = ((PyStringObject *) key)->ob_shash) == -1) {
@@ -1872,16 +1870,14 @@ dict_get(register PyDictObject *mp, PyObject *args)
 
 
 static PyObject *
-dict_setdefault(register PyDictObject *mp, PyObject *args)
+dict_setdefault(register PyDictObject *mp, PyObject *key, PyObject *failobj)
 {
-	PyObject *key;
-	PyObject *failobj = Py_None;
 	PyObject *val = NULL;
 	long hash;
 	PyDictEntry *ep;
 
-	if (!PyArg_UnpackTuple(args, "setdefault", 1, 2, &key, &failobj))
-		return NULL;
+	if (failobj == NULL)
+		failobj = Py_None;
 
 	if (!PyString_CheckExact(key) ||
 	    (hash = ((PyStringObject *) key)->ob_shash) == -1) {
@@ -1911,15 +1907,12 @@ dict_clear(register PyDictObject *mp)
 }
 
 static PyObject *
-dict_pop(PyDictObject *mp, PyObject *args)
+dict_pop(PyDictObject *mp, PyObject *key, PyObject *deflt)
 {
 	long hash;
 	PyDictEntry *ep;
 	PyObject *old_value, *old_key;
-	PyObject *key, *deflt = NULL;
 
-	if(!PyArg_UnpackTuple(args, "pop", 1, 2, &key, &deflt))
-		return NULL;
 	if (mp->ma_used == 0) {
 		if (deflt) {
 			Py_INCREF(deflt);
@@ -2268,12 +2261,12 @@ static PyMethodDef mapp_methods[] = {
 	 sizeof__doc__},
 	{"has_key",	(PyCFunction)dict_has_key,      METH_O,
 	 has_key__doc__},
-	{"get",         (PyCFunction)dict_get,          METH_VARARGS,
-	 get__doc__},
-	{"setdefault",  (PyCFunction)dict_setdefault,   METH_VARARGS,
-	 setdefault_doc__},
-	{"pop",         (PyCFunction)dict_pop,          METH_VARARGS,
-	 pop__doc__},
+	{"get",         (PyCFunction)dict_get,          METH_ARG_RANGE,
+	 get__doc__, /*min_arity=*/1, /*max_arity=*/2},
+	{"setdefault",  (PyCFunction)dict_setdefault,   METH_ARG_RANGE,
+	 setdefault_doc__, /*min_arity=*/1, /*max_arity=*/2},
+	{"pop",         (PyCFunction)dict_pop,          METH_ARG_RANGE,
+	 pop__doc__, /*min_arity=*/1, /*max_arity=*/2},
 	{"popitem",	(PyCFunction)dict_popitem,	METH_NOARGS,
 	 popitem__doc__},
 	{"keys",	(PyCFunction)dict_keys,		METH_NOARGS,
