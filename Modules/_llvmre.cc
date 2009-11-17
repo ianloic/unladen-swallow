@@ -16,9 +16,12 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Support/IRBuilder.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/Interpreter.h"
+#include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Attributes.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/ADT/APInt.h"
 
 
 // for SRE_FLAG_*
@@ -33,6 +36,7 @@ using llvm::Type;
 using llvm::IntegerType;
 using llvm::PointerType;
 using llvm::FunctionType;
+using llvm::Constant;
 using llvm::ConstantInt;
 
 using llvm::BinaryOperator;
@@ -50,6 +54,8 @@ using llvm::SExtInst;
 
 using llvm::ExecutionEngine;
 using llvm::EngineBuilder;
+using llvm::GenericValue;
+using llvm::APInt;
 
 using llvm::LLVMContext;
 using llvm::getGlobalContext;
@@ -79,6 +85,18 @@ const IntegerType* offsetType;
 const PointerType* charPointerType;
 const PointerType* offsetPointerType;
 
+
+extern "C" {
+int
+_llvmre_isspace(int ch) {
+  return isspace(ch) != 0;
+}
+
+int
+_llvmre_isalnum(int ch) {
+  return isalnum(ch) != 0;
+}
+}
 
 #ifndef TESTER
 /* a Python object representing a regular expression */
@@ -188,7 +206,8 @@ class RegularExpression : CompiledExpression {
     // LLVM module
     Module* module;
     // the execution engine
-    static ExecutionEngine* ee;
+    static ExecutionEngine* jit;
+    static ExecutionEngine* interpreter;
 
     int flags;
     int groups;
@@ -214,10 +233,14 @@ class RegularExpression : CompiledExpression {
     typedef std::vector<Function*> Functions;
     Functions functions;
 
+    // have we JITed this RE?
+    bool jited;
+
 };
 
 LLVMContext* RegularExpression::context = NULL;
-ExecutionEngine* RegularExpression::ee = NULL;
+ExecutionEngine* RegularExpression::jit = NULL;
+ExecutionEngine* RegularExpression::interpreter = NULL;
 
 RegularExpression::RegularExpression() 
   : CompiledExpression(*this, true), find_function(NULL)
@@ -234,11 +257,19 @@ RegularExpression::RegularExpression()
   //module = new Module("LlvmRe", *context);
   module = global_data->module();
 
-  // get an execution engine
-  if (ee == NULL) {
-    //ee = EngineBuilder(module).create();
-    ee = global_data->getExecutionEngine();
+  // get the execution engines
+  if (jit == NULL) {
+    jit = global_data->getExecutionEngine();
   }
+  if (interpreter == NULL) {
+    EngineBuilder eb(module);
+    eb.setEngineKind(llvm::EngineKind::Interpreter);
+    interpreter = eb.create();
+  }
+
+  match_fp = NULL;
+  find_fp = NULL;
+  jited = false;
 }
 
 RegularExpression::~RegularExpression() 
@@ -246,10 +277,10 @@ RegularExpression::~RegularExpression()
   // first free all of the JIT state associated with this expression
   for (Functions::reverse_iterator i = functions.rbegin(); 
       i < functions.rend(); ++i) {
-    ee->freeMachineCodeForFunction(*i);
+    if (jited) {
+      jit->freeMachineCodeForFunction(*i);
+    }
   }
-  match_fp = NULL;
-  find_fp = NULL;
 
   // free the functions associated with this regex
   bool made_changes;
@@ -308,8 +339,9 @@ RegularExpression::Compile(PyObject* seq,
   this->groups = groups;
 
   if (CompiledExpression::Compile(seq, 0, false) && CompileFind()) {
-    match_fp = (MatchFunction) ee->getPointerToFunction(function);
-    find_fp = (FindFunction) ee->getPointerToFunction(find_function);
+    // when we first compile, we will use an inerpreter
+    //match_fp = (MatchFunction) jit->getPointerToFunction(function);
+    //find_fp = (FindFunction) jit->getPointerToFunction(find_function);
     return true;
   } else {
     return false;
@@ -477,8 +509,24 @@ RegularExpression::Match(Py_UNICODE* characters,
                          int end)
 {
   ReOffset* groups_array = AllocateGroupsArray();
+  ReOffset result;
 
-  ReOffset result = (match_fp)(characters, pos, end, groups_array);
+  if (jited) {
+    result = (match_fp)(characters, pos, end, groups_array);
+  } else {
+    std::vector<GenericValue> args;
+    GenericValue _characters, _pos, _end, _groups_array;
+    _characters.PointerVal = characters;
+    _pos.IntVal = APInt(32, pos);
+    _end.IntVal = APInt(32, end);
+    _groups_array.PointerVal = groups_array;
+    args.push_back(_characters);
+    args.push_back(_pos);
+    args.push_back(_end);
+    args.push_back(_groups_array);
+    GenericValue g = interpreter->runFunction(function, args);
+    result = g.IntVal.getLimitedValue();
+  }
 
   return ProcessResult(pos, result, groups_array);
 }
@@ -491,7 +539,27 @@ RegularExpression::Find(Py_UNICODE* characters,
 {
   ReOffset start;
   ReOffset* groups_array = AllocateGroupsArray();
-  ReOffset result = (find_fp)(characters, pos, end, groups_array, &start);
+  ReOffset result;
+
+  if (jited) {
+    result = (find_fp)(characters, pos, end, groups_array, &start);
+  } else {
+    std::vector<GenericValue> args;
+    GenericValue _characters, _pos, _end, _groups_array, _start;
+    _characters.PointerVal = characters;
+    _pos.IntVal = APInt(32, pos);
+    _end.IntVal = APInt(32, end);
+    _groups_array.PointerVal = groups_array;
+    _start.PointerVal = &start;
+    args.push_back(_characters);
+    args.push_back(_pos);
+    args.push_back(_end);
+    args.push_back(_groups_array);
+    args.push_back(_start);
+    GenericValue g = interpreter->runFunction(find_function, args);
+    result = g.IntVal.getLimitedValue();
+  }
+
   return ProcessResult(start, result, groups_array);
 }
 
@@ -550,10 +618,10 @@ CompiledExpression::callGlobalFunction(const char* name,
                                        Value*      a1, 
                                        BasicBlock* block) {
   // get the Function* for the global function
-  Function* gf = cast<Function>(
-      re.module->getOrInsertFunction(name,
-        PyTypeBuilder<R(A1)>::get(context()))
-      );
+  Constant* gc = re.module->getOrInsertFunction(name, 
+      PyTypeBuilder<R(A1)>::get(context()));
+  void *p = re.interpreter->getPointerToGlobalIfAvailable(gc);
+  Function* gf = cast<Function>(gc);
 
   // get the llvm::Type of the argument
   const Type* A1_type = PyTypeBuilder<A1>::get(context());
@@ -787,7 +855,7 @@ CompiledExpression::testCategory(BasicBlock* block,
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // call the function
       Value* result = 
-        callGlobalFunction<int,int,false,true>("isalnum", c, tmp2);
+        callGlobalFunction<int,int,false,true>("_llvmre_isalnum", c, tmp2);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, tmp2);
     } else if (re.flags & SRE_FLAG_UNICODE) {
@@ -832,7 +900,7 @@ CompiledExpression::testCategory(BasicBlock* block,
     if (re.flags & SRE_FLAG_LOCALE) {
       // also match isspace
       Value* result = 
-        callGlobalFunction<int,int,false,true>("isspace", c, unmatched);
+        callGlobalFunction<int,int,false,true>("_llvmre_isspace", c, unmatched);
       // go to the right successor block
       BranchInst::Create(member, nonmember, result, unmatched);
     } else if (re.flags & SRE_FLAG_UNICODE) {
@@ -2052,6 +2120,11 @@ init_llvmre(void)
   offsetPointerType = PyTypeBuilder<int*>::get(*context);
   // set up some handy constants
   not_found = ConstantInt::getSigned(offsetType, -1);
+
+  // force ctype stuff to be linked in...
+  int tmp0 = isspace(0);
+  int tmp1 = isalnum(0);
+  tmp0+tmp1;
 }
 
 #endif /* TESTER */

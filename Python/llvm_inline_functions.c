@@ -15,6 +15,8 @@
 
 #include "Util/EventTimer.h"
 
+#include <ctype.h>
+
 int __attribute__((always_inline))
 _PyLlvm_WrapIntCheck(PyObject *obj)
 {
@@ -209,4 +211,3 @@ int __attribute__((always_inline))
 _PyLlvm_UNICODE_ISALNUM(Py_UNICODE ch) {
   return Py_UNICODE_ISALNUM(ch) != 0;
 }
-
