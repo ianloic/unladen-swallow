@@ -106,6 +106,7 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		Py_INCREF(lnotab);
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
+                co->co_weakreflist = NULL;
 #ifdef WITH_LLVM
 		co->co_llvm_function = NULL;
 		co->co_native_function = NULL;
@@ -420,6 +421,8 @@ code_dealloc(PyCodeObject *co)
 	Py_XDECREF(co->co_lnotab);
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);
+        if (co->co_weakreflist != NULL)
+		PyObject_ClearWeakRefs((PyObject*)co);
 #ifdef WITH_LLVM
 	// co_native_function is destroyed by co_llvm_function.
 	if (co->co_llvm_function) {
@@ -610,8 +613,8 @@ PyTypeObject PyCode_Type = {
 	code_doc,			/* tp_doc */
 	0,				/* tp_traverse */
 	0,				/* tp_clear */
-	code_richcompare,				/* tp_richcompare */
-	0,				/* tp_weaklistoffset */
+	code_richcompare,		/* tp_richcompare */
+	offsetof(PyCodeObject, co_weakreflist), /* tp_weaklistoffset */
 	0,				/* tp_iter */
 	0,				/* tp_iternext */
 	0,				/* tp_methods */

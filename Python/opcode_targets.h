@@ -88,7 +88,7 @@ static void *opcode_targets[256] = {
 	&&TARGET_YIELD_VALUE,
 	&&TARGET_POP_BLOCK,
 	&&TARGET_END_FINALLY,
-	&&_unknown_opcode,
+	&&TARGET_IMPORT_NAME,
 	&&TARGET_STORE_NAME,
 	&&TARGET_DELETE_NAME,
 	&&TARGET_UNPACK_SEQUENCE,

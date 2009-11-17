@@ -12,7 +12,6 @@ protected:
         Py_NoSiteFlag = true;
         Py_Initialize();
         this->an_int_ = PyInt_FromLong(3);
-        this->second_int_ = PyInt_FromLong(7);
         this->a_list_ = PyList_New(0);
         this->a_tuple_ = PyTuple_New(0);
         this->a_dict_ = PyDict_New();
@@ -22,7 +21,6 @@ protected:
     ~PyRuntimeFeedbackTest()
     {
         Py_DECREF(this->an_int_);
-        Py_DECREF(this->second_int_);
         Py_DECREF(this->a_list_);
         Py_DECREF(this->a_tuple_);
         Py_DECREF(this->a_dict_);
@@ -32,7 +30,6 @@ protected:
     }
 
     PyObject *an_int_;
-    PyObject *second_int_;
     PyObject *a_list_;
     PyObject *a_tuple_;
     PyObject *a_dict_;
@@ -45,105 +42,105 @@ protected:
     PyLimitedFeedback feedback_;
 };
 
-TEST_F(PyLimitedFeedbackTest, NoTypes)
+TEST_F(PyLimitedFeedbackTest, NoObjects)
 {
-    SmallVector<PyTypeObject*, 3> seen;
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
-    this->feedback_.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
+    this->feedback_.GetSeenObjectsInto(seen);
     EXPECT_TRUE(seen.empty());
 }
 
 TEST_F(PyLimitedFeedbackTest, NullObject)
 {
-    this->feedback_.AddTypeSeen(NULL);
-    SmallVector<PyTypeObject*, 3> seen;
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.AddObjectSeen(NULL);
+    SmallVector<PyObject*, 3> seen;
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(1U, seen.size());
     EXPECT_EQ(NULL, seen[0]);
 }
 
-TEST_F(PyLimitedFeedbackTest, DuplicateTypes)
+TEST_F(PyLimitedFeedbackTest, DuplicateObjects)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
-    long list_start_refcnt = Py_REFCNT(&PyList_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
+    long list_start_refcnt = Py_REFCNT(this->a_list_);
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    this->feedback_.AddTypeSeen(this->an_int_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(&PyList_Type));
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(this->a_list_));
 
-    SmallVector<PyTypeObject*, 3> seen;
-    this->feedback_.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(2U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
 }
 
-TEST_F(PyLimitedFeedbackTest, FewTypes)
+TEST_F(PyLimitedFeedbackTest, FewObjects)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
-    long list_start_refcnt = Py_REFCNT(&PyList_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
+    long list_start_refcnt = Py_REFCNT(this->a_list_);
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(&PyList_Type));
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(this->a_list_));
 
-    SmallVector<PyTypeObject*, 3> seen;
-    this->feedback_.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(2U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
 }
 
-TEST_F(PyLimitedFeedbackTest, TooManyTypes)
+TEST_F(PyLimitedFeedbackTest, TooManyObjects)
 {
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    this->feedback_.AddTypeSeen(this->second_int_);
-    this->feedback_.AddTypeSeen(this->a_tuple_);
-    this->feedback_.AddTypeSeen(this->a_dict_);
-    SmallVector<PyTypeObject*, 3> seen;
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_tuple_);
+    this->feedback_.AddObjectSeen(this->a_dict_);
+    SmallVector<PyObject*, 3> seen;
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(3U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_EQ(&PyTuple_Type, seen[2]);
-    EXPECT_TRUE(this->feedback_.TypesOverflowed());
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_EQ(this->a_tuple_, seen[2]);
+    EXPECT_TRUE(this->feedback_.ObjectsOverflowed());
 }
 
-TEST_F(PyLimitedFeedbackTest, ExactlyThreeTypes)
+TEST_F(PyLimitedFeedbackTest, ExactlyThreeObjects)
 {
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    this->feedback_.AddTypeSeen(this->a_tuple_);
-    SmallVector<PyTypeObject*, 3> seen;
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->a_tuple_);
+    SmallVector<PyObject*, 3> seen;
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(3U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_EQ(&PyTuple_Type, seen[2]);
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_EQ(this->a_tuple_, seen[2]);
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
 }
 
 TEST_F(PyLimitedFeedbackTest, DtorLowersRefcount)
 {
     PyLimitedFeedback *feedback = new PyLimitedFeedback();
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
-    long list_start_refcnt = Py_REFCNT(&PyList_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
+    long list_start_refcnt = Py_REFCNT(this->a_list_);
 
-    feedback->AddTypeSeen(this->an_int_);
-    feedback->AddTypeSeen(this->a_list_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(&PyList_Type));
+    feedback->AddObjectSeen(this->an_int_);
+    feedback->AddObjectSeen(this->a_list_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(list_start_refcnt + 1, Py_REFCNT(this->a_list_));
 
     delete feedback;
-    EXPECT_EQ(int_start_refcnt, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(list_start_refcnt, Py_REFCNT(&PyList_Type));
+    EXPECT_EQ(int_start_refcnt, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(list_start_refcnt, Py_REFCNT(this->a_list_));
 }
 
 TEST_F(PyLimitedFeedbackTest, SingleFunc)
@@ -267,28 +264,28 @@ TEST_F(PyLimitedFeedbackTest, Counter)
 
 TEST_F(PyLimitedFeedbackTest, Copyable)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    this->feedback_.AddTypeSeen(this->a_string_);
-    this->feedback_.AddTypeSeen(this->a_tuple_);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->a_string_);
+    this->feedback_.AddObjectSeen(this->a_tuple_);
     PyLimitedFeedback second = this->feedback_;
-    EXPECT_TRUE(second.TypesOverflowed());
+    EXPECT_TRUE(second.ObjectsOverflowed());
 
-    SmallVector<PyTypeObject*, 3> seen;
-    second.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    second.GetSeenObjectsInto(seen);
     ASSERT_EQ(3U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_EQ(&PyString_Type, seen[2]);
-    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(&PyInt_Type));
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_EQ(this->a_string_, seen[2]);
+    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(this->an_int_));
 
     // Demonstrate that the copies are independent.
     second.Clear();
-    second.GetSeenTypesInto(seen);
+    second.GetSeenObjectsInto(seen);
     ASSERT_EQ(0U, seen.size());
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(3U, seen.size());
 
     PyLimitedFeedback third;
@@ -296,24 +293,45 @@ TEST_F(PyLimitedFeedbackTest, Copyable)
     second = third;
     EXPECT_EQ(1U, second.GetCounter(0));
     EXPECT_EQ(0U, second.GetCounter(1));
-    // second should release its reference to PyInt_Type.
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
+    // second should release its reference to this->an_int_.
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+}
+
+TEST_F(PyLimitedFeedbackTest, CopyableFuncs)
+{
+    PyObject *join_meth = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *split_meth = PyObject_GetAttrString(this->a_string_, "split");
+    PyObject *count_meth = PyObject_GetAttrString(this->a_string_, "count");
+
+    this->feedback_.AddFuncSeen(join_meth);
+    this->feedback_.AddFuncSeen(split_meth);
+    PyLimitedFeedback second = this->feedback_;
+    SmallVector<FunctionRecord*, 3> seen;
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+
+    // Demonstrate that the copies are independent.
+    second.AddFuncSeen(count_meth);
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(3U, seen.size());
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
 }
 
 TEST_F(PyLimitedFeedbackTest, Assignment)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
-    long str_start_refcnt = Py_REFCNT(&PyString_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
+    long str_start_refcnt = Py_REFCNT(this->a_string_);
     PyLimitedFeedback second;
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    second.AddTypeSeen(this->a_string_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(str_start_refcnt + 1, Py_REFCNT(&PyString_Type));
+    this->feedback_.AddObjectSeen(this->an_int_);
+    second.AddObjectSeen(this->a_string_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(str_start_refcnt + 1, Py_REFCNT(this->a_string_));
 
     second = this->feedback_;
-    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(str_start_refcnt, Py_REFCNT(&PyString_Type));
+    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(str_start_refcnt, Py_REFCNT(this->a_string_));
 }
 
 class PyFullFeedbackTest : public PyRuntimeFeedbackTest {
@@ -321,57 +339,57 @@ protected:
     PyFullFeedback feedback_;
 };
 
-TEST_F(PyFullFeedbackTest, NoTypes)
+TEST_F(PyFullFeedbackTest, NoObjects)
 {
-    SmallVector<PyTypeObject*, 3> seen;
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
-    this->feedback_.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
+    this->feedback_.GetSeenObjectsInto(seen);
     EXPECT_TRUE(seen.empty());
 }
 
 TEST_F(PyFullFeedbackTest, NullObject)
 {
-    this->feedback_.AddTypeSeen(NULL);
-    SmallVector<PyTypeObject*, 3> seen;
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.AddObjectSeen(NULL);
+    SmallVector<PyObject*, 3> seen;
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
+    this->feedback_.GetSeenObjectsInto(seen);
     EXPECT_EQ(1U, seen.size());
     EXPECT_EQ(NULL, seen[0]);
 }
 
-TEST_F(PyFullFeedbackTest, FiveTypes)
+TEST_F(PyFullFeedbackTest, FiveObjects)
 {
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
-    this->feedback_.AddTypeSeen(this->second_int_);
-    this->feedback_.AddTypeSeen(this->a_tuple_);
-    this->feedback_.AddTypeSeen(this->a_dict_);
-    this->feedback_.AddTypeSeen(this->a_string_);
-    SmallVector<PyTypeObject*, 3> seen;
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_tuple_);
+    this->feedback_.AddObjectSeen(this->a_dict_);
+    this->feedback_.AddObjectSeen(this->a_string_);
+    SmallVector<PyObject*, 3> seen;
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(5U, seen.size());
     // These may not be in order, since PyFullFeedback uses a set to
     // store its contents.
     using std::find;
-    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), &PyInt_Type));
-    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), &PyList_Type));
-    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), &PyTuple_Type));
-    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), &PyDict_Type));
-    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), &PyString_Type));
-    EXPECT_FALSE(this->feedback_.TypesOverflowed());
+    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), this->an_int_));
+    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), this->a_list_));
+    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), this->a_tuple_));
+    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), this->a_dict_));
+    EXPECT_TRUE(seen.end() != find(seen.begin(), seen.end(), this->a_string_));
+    EXPECT_FALSE(this->feedback_.ObjectsOverflowed());
 }
 
 TEST_F(PyFullFeedbackTest, Refcounts)
 {
     PyFullFeedback *feedback = new PyFullFeedback();
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
 
-    feedback->AddTypeSeen(this->an_int_);
-    feedback->AddTypeSeen(this->an_int_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
+    feedback->AddObjectSeen(this->an_int_);
+    feedback->AddObjectSeen(this->an_int_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
 
     delete feedback;
-    EXPECT_EQ(int_start_refcnt, Py_REFCNT(&PyInt_Type));
+    EXPECT_EQ(int_start_refcnt, Py_REFCNT(this->an_int_));
 }
 
 TEST_F(PyFullFeedbackTest, Counter)
@@ -390,23 +408,23 @@ TEST_F(PyFullFeedbackTest, Counter)
 
 TEST_F(PyFullFeedbackTest, Copyable)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    this->feedback_.AddTypeSeen(this->a_list_);
+    this->feedback_.AddObjectSeen(this->an_int_);
+    this->feedback_.AddObjectSeen(this->a_list_);
     PyFullFeedback second = this->feedback_;
-    SmallVector<PyTypeObject*, 3> seen;
-    second.GetSeenTypesInto(seen);
+    SmallVector<PyObject*, 3> seen;
+    second.GetSeenObjectsInto(seen);
     ASSERT_EQ(2U, seen.size());
-    EXPECT_EQ(&PyInt_Type, seen[0]);
-    EXPECT_EQ(&PyList_Type, seen[1]);
-    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(&PyInt_Type));
+    EXPECT_EQ(this->an_int_, seen[0]);
+    EXPECT_EQ(this->a_list_, seen[1]);
+    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(this->an_int_));
 
     // Demonstrate that the copies are independent.
-    second.AddTypeSeen(this->a_string_);
-    second.GetSeenTypesInto(seen);
+    second.AddObjectSeen(this->a_string_);
+    second.GetSeenObjectsInto(seen);
     ASSERT_EQ(3U, seen.size());
-    this->feedback_.GetSeenTypesInto(seen);
+    this->feedback_.GetSeenObjectsInto(seen);
     ASSERT_EQ(2U, seen.size());
 
     PyFullFeedback third;
@@ -414,24 +432,45 @@ TEST_F(PyFullFeedbackTest, Copyable)
     second = third;
     EXPECT_EQ(1U, second.GetCounter(0));
     EXPECT_EQ(0U, second.GetCounter(1));
-    // second should release its reference to PyInt_Type.
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
+    // second should release its reference to this->an_int_.
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+}
+
+TEST_F(PyFullFeedbackTest, CopyableFuncs)
+{
+    PyObject *join_meth = PyObject_GetAttrString(this->a_string_, "join");
+    PyObject *split_meth = PyObject_GetAttrString(this->a_string_, "split");
+    PyObject *count_meth = PyObject_GetAttrString(this->a_string_, "count");
+
+    this->feedback_.AddFuncSeen(join_meth);
+    this->feedback_.AddFuncSeen(split_meth);
+    PyFullFeedback second = this->feedback_;
+    SmallVector<FunctionRecord*, 3> seen;
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
+
+    // Demonstrate that the copies are independent.
+    second.AddFuncSeen(count_meth);
+    second.GetSeenFuncsInto(seen);
+    ASSERT_EQ(3U, seen.size());
+    this->feedback_.GetSeenFuncsInto(seen);
+    ASSERT_EQ(2U, seen.size());
 }
 
 TEST_F(PyFullFeedbackTest, Assignment)
 {
-    long int_start_refcnt = Py_REFCNT(&PyInt_Type);
-    long str_start_refcnt = Py_REFCNT(&PyString_Type);
+    long int_start_refcnt = Py_REFCNT(this->an_int_);
+    long str_start_refcnt = Py_REFCNT(this->a_string_);
     PyFullFeedback second;
 
-    this->feedback_.AddTypeSeen(this->an_int_);
-    second.AddTypeSeen(this->a_string_);
-    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(str_start_refcnt + 1, Py_REFCNT(&PyString_Type));
+    this->feedback_.AddObjectSeen(this->an_int_);
+    second.AddObjectSeen(this->a_string_);
+    EXPECT_EQ(int_start_refcnt + 1, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(str_start_refcnt + 1, Py_REFCNT(this->a_string_));
 
     second = this->feedback_;
-    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(&PyInt_Type));
-    EXPECT_EQ(str_start_refcnt, Py_REFCNT(&PyString_Type));
+    EXPECT_EQ(int_start_refcnt + 2, Py_REFCNT(this->an_int_));
+    EXPECT_EQ(str_start_refcnt, Py_REFCNT(this->a_string_));
 }
 
 TEST_F(PyFullFeedbackTest, DuplicateFuncs)

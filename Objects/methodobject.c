@@ -29,16 +29,20 @@ PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
 			return NULL;
 	}
 
-	/* Rewrite the old METH_O flags to the new METH_FIXED so we only have to
-	   implement METH_FIXED. METH_NOARGS is defined to be METH_FIXED, and C
-	   will fill in ml_arity = 0 for us. */
+	/* Rewrite the old METH_O flags to the new METH_ARG_RANGE so we only
+	   have to implement METH_ARG_RANGE. METH_NOARGS is defined to be
+	   METH_ARG_RANGE, and C will fill in ml_min_arity = ml_max_arity = 0
+	   for us. */
 	if (ml->ml_flags & METH_O) {
 		ml->ml_flags &= ~METH_O;
-		ml->ml_flags |= METH_FIXED;
-		ml->ml_arity = 1;
+		ml->ml_flags |= METH_ARG_RANGE;
+		ml->ml_min_arity = 1;
+		ml->ml_max_arity = 1;
 	}
-	else if (ml->ml_flags & METH_FIXED) {
-		if (ml->ml_arity < 0 || ml->ml_arity > PY_MAX_FIXED_ARITY) {
+	else if (ml->ml_flags & METH_ARG_RANGE) {
+		if (ml->ml_min_arity < 0 || ml->ml_min_arity > PY_MAX_ARITY ||
+		    ml->ml_max_arity < 0 || ml->ml_max_arity > PY_MAX_ARITY ||
+		    ml->ml_max_arity < ml->ml_min_arity) {
 			PyErr_BadInternalCall();
 			PyObject_GC_Del(op);
 			return NULL;
@@ -100,34 +104,42 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	case METH_VARARGS | METH_KEYWORDS:
 	case METH_OLDARGS | METH_KEYWORDS:
 		return (*(PyCFunctionWithKeywords)meth)(self, arg, kw);
-	case METH_FIXED:
+	case METH_ARG_RANGE:
 	{
-		int arity = PyCFunction_GET_ARITY(func);
 		if (kw == NULL || PyDict_Size(kw) == 0) {
-			PyObject *args[PY_MAX_FIXED_ARITY] = {NULL};
+			PyObject *args[PY_MAX_ARITY] = {NULL};
+			int min_arity = PyCFunction_GET_MIN_ARITY(func);
+			int max_arity = PyCFunction_GET_MAX_ARITY(func);
 			size = PyTuple_GET_SIZE(arg);
 			switch (size) {
 				default:
 					PyErr_BadInternalCall();
 					return NULL;
-				case 3:
-					args[2] = PyTuple_GET_ITEM(arg, 2);
-				case 2:
-					args[1] = PyTuple_GET_ITEM(arg, 1);
-				case 1:
-					args[0] = PyTuple_GET_ITEM(arg, 0);
-				case 0:
-					break;
+				case 3: args[2] = PyTuple_GET_ITEM(arg, 2);
+				case 2: args[1] = PyTuple_GET_ITEM(arg, 1);
+				case 1: args[0] = PyTuple_GET_ITEM(arg, 0);
+				case 0: break;
 			}
+
 			/* But wait, you ask, what about {un,bin}ary functions?
 			   Aren't we passing more arguments than it expects?
 			   Yes, but C allows this. Go C. */
-			if (size == arity)
+			if (min_arity <= size && size <= max_arity)
 				return (*(PyCFunctionThreeArgs)meth)
 				       (self, args[0], args[1], args[2]);
-			PyErr_Format(PyExc_TypeError,
-			    "%.200s() takes exactly %d argument(s) (%zd given)",
-			    f->m_ml->ml_name, arity, size);
+
+			if (max_arity == min_arity)
+				PyErr_Format(PyExc_TypeError,
+					"%.200s() takes exactly %d argument(s)"
+					" (%zd given)",
+					f->m_ml->ml_name, max_arity, size);
+			else
+				PyErr_Format(PyExc_TypeError,
+					"%.200s() takes %d-%d arguments"
+					" (%zd given)",
+					f->m_ml->ml_name,
+					min_arity, max_arity, size);
+
 			return NULL;
 		}
 		break;
@@ -144,7 +156,7 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 		}
 		break;
 	/* METH_O is deprecated; PyCFunction_NewEx is supposed to convert it to
-	   METH_FIXED and set ml_arity correctly. */
+	   METH_ARG_RANGE and set ml_{min,max}_arity correctly. */
 	case METH_O:
 	default:
 		PyErr_BadInternalCall();

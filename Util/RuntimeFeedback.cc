@@ -19,9 +19,13 @@ FunctionRecord::FunctionRecord(const PyObject *func)
     this->func = PyCFunction_GET_FUNCTION(func);
     this->flags = PyCFunction_GET_FLAGS(func);
     this->name = PyCFunction_GET_METHODDEF(func)->ml_name;
-    this->arity = -1;
-    if (this->flags & METH_FIXED)
-        this->arity = PyCFunction_GET_ARITY(func);
+    this->min_arity = -1;
+    this->max_arity = -1;
+
+    if (this->flags & METH_ARG_RANGE) {
+        this->min_arity = PyCFunction_GET_MIN_ARITY(func);
+        this->max_arity = PyCFunction_GET_MAX_ARITY(func);
+    }
 }
 
 FunctionRecord::FunctionRecord(const FunctionRecord &record)
@@ -29,7 +33,8 @@ FunctionRecord::FunctionRecord(const FunctionRecord &record)
     this->func = record.func;
     this->flags = record.flags;
     this->name = record.name;
-    this->arity = record.arity;
+    this->min_arity = record.min_arity;
+    this->max_arity = record.max_arity;
 }
 
 
@@ -46,7 +51,7 @@ PyLimitedFeedback::PyLimitedFeedback()
 PyLimitedFeedback::PyLimitedFeedback(const PyLimitedFeedback &src)
 {
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
-        if (src.InTypeMode()) {
+        if (src.InObjectMode()) {
             PyObject *value = (PyObject *)src.data_[i].getPointer();
             Py_XINCREF(value);
             this->data_[i] = src.data_[i];
@@ -135,11 +140,11 @@ PyLimitedFeedback::GetCounter(unsigned counter_id) const
 void
 PyLimitedFeedback::Clear()
 {
-    bool type_mode = this->InTypeMode();
+    bool object_mode = this->InObjectMode();
     bool func_mode = this->InFuncMode();
 
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
-        if (type_mode)
+        if (object_mode)
             Py_XDECREF((PyObject *)this->data_[i].getPointer());
         else if (func_mode)
             delete (FunctionRecord *)this->data_[i].getPointer();
@@ -149,23 +154,22 @@ PyLimitedFeedback::Clear()
 }
 
 void
-PyLimitedFeedback::AddTypeSeen(PyObject *obj)
+PyLimitedFeedback::AddObjectSeen(PyObject *obj)
 {
-    assert(this->InTypeMode());
-    this->SetFlagBit(TYPE_MODE_BIT, true);
+    assert(this->InObjectMode());
+    this->SetFlagBit(OBJECT_MODE_BIT, true);
 
     if (obj == NULL) {
         SetFlagBit(SAW_A_NULL_OBJECT_BIT, true);
         return;
     }
-    PyObject *type = (PyObject *)Py_TYPE(obj);
     for (int i = 0; i < PyLimitedFeedback::NUM_POINTERS; ++i) {
         PyObject *value = (PyObject *)data_[i].getPointer();
-        if (value == type)
+        if (value == obj)
             return;
         if (value == NULL) {
-            Py_INCREF(type);
-            data_[i].setPointer((void *)type);
+            Py_INCREF(obj);
+            data_[i].setPointer((void *)obj);
             return;
         }
     }
@@ -174,10 +178,9 @@ PyLimitedFeedback::AddTypeSeen(PyObject *obj)
 }
 
 void
-PyLimitedFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, 3> &result) const
+PyLimitedFeedback::GetSeenObjectsInto(SmallVector<PyObject*, 3> &result) const
 {
-    assert(this->InTypeMode());
+    assert(this->InObjectMode());
 
     result.clear();
     if (GetFlagBit(SAW_A_NULL_OBJECT_BIT)) {
@@ -188,7 +191,7 @@ PyLimitedFeedback::GetSeenTypesInto(
         PyObject *value = (PyObject *)data_[i].getPointer();
         if (value == NULL)
             return;
-        result.push_back((PyTypeObject*)value);
+        result.push_back(value);
     }
 }
 
@@ -254,10 +257,16 @@ PyFullFeedback::PyFullFeedback(const PyFullFeedback &src)
     this->usage_ = src.usage_;
     for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
         this->counters_[i] = src.counters_[i];
-    this->data_ = src.data_;
-    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
+    for (ObjSet::iterator it = src.data_.begin(), end = src.data_.end();
             it != end; ++it) {
-        Py_XINCREF((PyObject *)*it);
+        void *obj = *it;
+        if (src.usage_ == ObjectMode) {
+            Py_XINCREF((PyObject *)obj);
+        }
+        else if (src.usage_ == FuncMode) {
+            obj = new FunctionRecord(*static_cast<const FunctionRecord*>(*it));
+        }
+        this->data_.insert(obj);
     }
 }
 
@@ -267,28 +276,32 @@ PyFullFeedback::~PyFullFeedback()
 }
 
 PyFullFeedback &
-PyFullFeedback::operator=(const PyFullFeedback &rhs)
+PyFullFeedback::operator=(PyFullFeedback rhs)
 {
-    if (this != &rhs) {
-        this->Clear();
-        for (TypeSet::iterator it = rhs.data_.begin(), end = rhs.data_.end();
-                it != end; ++it) {
-            Py_XINCREF((PyObject *)*it);
-        }
-        for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
-            this->counters_[i] = rhs.counters_[i];
-        this->data_ = rhs.data_;
-        this->usage_ = rhs.usage_;
-    }
+    this->Swap(&rhs);
     return *this;
+}
+
+void
+PyFullFeedback::Swap(PyFullFeedback *other)
+{
+    std::swap(this->usage_, other->usage_);
+    std::swap(this->data_, other->data_);
+    for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
+        std::swap(this->counters_[i], other->counters_[i]);
 }
 
 void
 PyFullFeedback::Clear()
 {
-    for (TypeSet::iterator it = this->data_.begin(), end = this->data_.end();
-            it != end; ++it) {
-        Py_XDECREF((PyObject *)*it);
+    for (ObjSet::iterator it = this->data_.begin(),
+            end = this->data_.end(); it != end; ++it) {
+        if (this->usage_ == ObjectMode) {
+            Py_XDECREF((PyObject *)*it);
+        }
+        else if (this->usage_ == FuncMode) {
+            delete (FunctionRecord *)*it;
+        }
     }
     this->data_.clear();
     for (unsigned i = 0; i < llvm::array_lengthof(this->counters_); ++i)
@@ -297,33 +310,32 @@ PyFullFeedback::Clear()
 }
 
 void
-PyFullFeedback::AddTypeSeen(PyObject *obj)
+PyFullFeedback::AddObjectSeen(PyObject *obj)
 {
-    assert(this->InTypeMode());
-    this->usage_ = TypeMode;
+    assert(this->InObjectMode());
+    this->usage_ = ObjectMode;
 
     if (obj == NULL) {
         this->data_.insert(NULL);
         return;
     }
 
-    PyObject *type = (PyObject *)Py_TYPE(obj);
-    if (!this->data_.count(type)) {
-        Py_INCREF(type);
-        this->data_.insert((void *)type);
+    if (!this->data_.count(obj)) {
+        Py_INCREF(obj);
+        this->data_.insert((void *)obj);
     }
 }
 
 void
-PyFullFeedback::GetSeenTypesInto(
-    SmallVector<PyTypeObject*, /*in-object elems=*/3> &result) const
+PyFullFeedback::GetSeenObjectsInto(
+    SmallVector<PyObject*, /*in-object elems=*/3> &result) const
 {
-    assert(this->InTypeMode());
+    assert(this->InObjectMode());
 
     result.clear();
-    for (TypeSet::const_iterator it = this->data_.begin(),
+    for (ObjSet::const_iterator it = this->data_.begin(),
              end = this->data_.end(); it != end; ++it) {
-        result.push_back((PyTypeObject *)*it);
+        result.push_back((PyObject *)*it);
     }
 }
 
@@ -341,7 +353,7 @@ PyFullFeedback::AddFuncSeen(PyObject *obj)
     else if (!this->data_.count(obj)) {
         // Deal with the fact that "for x in y: l.append(x)" results in 
         // multiple method objects for l.append.
-        for (TypeSet::const_iterator it = this->data_.begin(),
+        for (ObjSet::const_iterator it = this->data_.begin(),
                 end = this->data_.end(); it != end; ++it) {
             if (is_duplicate_method(obj, (FunctionRecord *)*it))
                 return;
@@ -359,7 +371,7 @@ PyFullFeedback::GetSeenFuncsInto(
     assert(this->InFuncMode());
 
     result.clear();
-    for (TypeSet::const_iterator it = this->data_.begin(),
+    for (ObjSet::const_iterator it = this->data_.begin(),
             end = this->data_.end(); it != end; ++it) {
         result.push_back((FunctionRecord *)*it);
     }
