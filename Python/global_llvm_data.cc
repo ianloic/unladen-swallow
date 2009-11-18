@@ -4,6 +4,7 @@
 #include "Python/global_llvm_data.h"
 #include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
+#include "Util/Stats.h"
 #include "_llvmfunctionobject.h"
 
 #include "llvm/Analysis/DebugInfo.h"
@@ -18,8 +19,10 @@
 #include "llvm/ModuleProvider.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/ValueHandle.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetSelect.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 
 // Declare the function from initial_llvm_module.cc.
@@ -57,7 +60,8 @@ PyGlobalLlvmData::PyGlobalLlvmData()
       module_provider_(new llvm::ExistingModuleProvider(module_)),
       debug_info_(Py_GenerateDebugInfoFlag ? new llvm::DIFactory(*module_)
                   : NULL),
-      optimizations_(4, (FunctionPassManager*)NULL)
+      optimizations_(4, (FunctionPassManager*)NULL),
+      num_globals_after_last_gc_(0)
 {
     std::string error;
     llvm::InitializeNativeTarget();
@@ -91,6 +95,7 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     this->InstallInitialModule();
 
     this->InitializeOptimizations();
+    this->gc_.add(llvm::createGlobalDCEPass());
 }
 
 void
@@ -246,9 +251,54 @@ PyGlobalLlvmData_Optimize(struct PyGlobalLlvmData *global_data,
                           _LlvmFunction *llvm_function,
                           int level)
 {
-    return global_data->Optimize(
-        *(llvm::Function *)llvm_function->lf_function,
-        level);
+    return _LlvmFunction_Optimize(global_data, llvm_function, level);
+}
+
+#ifdef Py_WITH_INSTRUMENTATION
+// Collect statistics about the time it takes to collect unused globals.
+class GlobalGCTimes : public DataVectorStats<int64_t> {
+public:
+    GlobalGCTimes()
+        : DataVectorStats<int64_t>("Time for a globaldce run in ns") {}
+};
+
+class GlobalGCCollected : public DataVectorStats<int> {
+public:
+    GlobalGCCollected()
+        : DataVectorStats<int>("Number of globals collected by globaldce") {}
+};
+
+static llvm::ManagedStatic<GlobalGCTimes> global_gc_times;
+static llvm::ManagedStatic<GlobalGCCollected> global_gc_collected;
+
+#endif  // Py_WITH_INSTRUMENTATION
+
+void
+PyGlobalLlvmData::MaybeCollectUnusedGlobals()
+{
+    unsigned num_globals = this->module_->getGlobalList().size() +
+        this->module_->getFunctionList().size();
+    // Don't incur the cost of collecting globals if there are too few
+    // of them, or if doing so now would cost a quadratic amount of
+    // time as we allocate more long-lived globals.  The thresholds
+    // here are just guesses, not tuned numbers.
+    if (num_globals < 20 ||
+        num_globals < (this->num_globals_after_last_gc_ +
+                       (this->num_globals_after_last_gc_ >> 2)))
+        return;
+
+    {
+#if Py_WITH_INSTRUMENTATION
+        Timer timer(*global_gc_times);
+#endif
+        this->gc_.run(*this->module_);
+    }
+    num_globals_after_last_gc_ = this->module_->getGlobalList().size() +
+        this->module_->getFunctionList().size();
+#if Py_WITH_INSTRUMENTATION
+    global_gc_collected->RecordDataPoint(
+        num_globals - num_globals_after_last_gc_);
+#endif
 }
 
 llvm::Value *
@@ -256,7 +306,7 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
 {
     // Use operator[] because we want to insert a new value if one
     // wasn't already present.
-    llvm::GlobalVariable *& the_string = this->constant_strings_[value];
+    llvm::WeakVH& the_string = this->constant_strings_[value];
     if (the_string == NULL) {
         llvm::Constant *str_const = llvm::ConstantArray::get(this->context(),
                                                              value, true);
@@ -279,7 +329,8 @@ PyGlobalLlvmData::GetGlobalStringPtr(const std::string &value)
         llvm::ConstantInt::get(int64_type, 0),
         llvm::ConstantInt::get(int64_type, 0)
     };
-    return llvm::ConstantExpr::getGetElementPtr(the_string, indices, 2);
+    return llvm::ConstantExpr::getGetElementPtr(
+        llvm::cast<llvm::Constant>(the_string), indices, 2);
 }
 
 int

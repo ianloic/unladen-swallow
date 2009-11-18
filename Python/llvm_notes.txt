@@ -71,6 +71,22 @@ Previous models:
   an obviously-deficient baseline to be improved upon.
 
 
+Memory use: Destroying unused LLVM globals
+------------------------------------------
+
+When a user compiles a PyCodeObject to an llvm::Function, that Function holds
+references to lots of other llvm::GlobalValues produced by the PyConstantMirror
+(Util/ConstantMirror.h), each of which holds a reference to the PyObject it's
+mirroring.  If the PyCodeObject is destroyed, we want to free all the now-unused
+GlobalVariables and decref their PyObjects.  We do this by running LLVM's
+globaldce pass periodically.  Just before compiling a new PyCodeObject to IR in
+Python/llvm_compile.cc:_PyCode_ToLlvmIr(), we call
+PyGlobalLlvmData::MaybeCollectUnusedGlobals().  If the number of GlobalValues is
+at least 25% more than after the last collection, we run globaldce.  This
+parallels the backoff used for the ordinary cycle detector to avoid taking
+quadratic time for runs with lots of long-lived objects.
+
+
 Optimization: LOAD_GLOBAL compile-time caching
 ----------------------------------------------
 

@@ -23,6 +23,7 @@ collected:
 - How many times LLVM code bailed to the interpreter, why it bailed, and the
   opcodes it bailed from.
 - Stats on how well LLVM was able to optimize conditional branches.
+- Stats on how long LLVM-global gc took and how many globals it collected.
 
 This data will be printed to stderr at interpreter-shutdown.
 
