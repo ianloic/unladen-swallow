@@ -389,20 +389,40 @@ PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
     if (ptr == NULL) {
         return Constant::getNullValue(PyTypeBuilder<T*>::get(this->context()));
     }
-    GlobalValue *result =
-        const_cast<GlobalValue*>(this->engine_.getGlobalValueAtAddress(ptr));
+    // If the JIT already knows of an object at *ptr and knows its
+    // initial value, just return that.  If LLVM doesn't know the
+    // initial value, we'll have to tell it.
+    GlobalVariable *result = const_cast<GlobalVariable*>(
+        llvm::cast_or_null<GlobalVariable>(
+            this->engine_.getGlobalValueAtAddress(ptr)));
+    if (result && result->hasInitializer()) {
+        return result;
+    }
+    Constant *initializer = this->GetConstantFor(ptr);
     if (result == NULL) {
-        Constant *initializer = this->GetConstantFor(ptr);
+        // If we don't know of any object there, create one.
         result = new GlobalVariable(*this->llvm_data_.module(),
                                     initializer->getType(),
                                     false,  // Not constant.
-                                    GlobalValue::InternalLinkage, initializer,
+                                    GlobalValue::InternalLinkage, NULL,
                                     /*name=*/"");
-        Py_INCREF(owner);
+        // And tell the JIT about its address.
         this->engine_.addGlobalMapping(result, ptr);
-        // The object created on the next line owns itself:
-        new RemovePyObjFromGlobalMappingsVH(this, result, owner);
     }
+    assert(!result->hasInitializer());
+
+    // Now assign the object's initial value.  This currently assumes
+    // that any existing GlobalVariable has the same type as the new
+    // initializer.
+
+    // The initializer refers to things inside *ptr, so we have to
+    // make sure they're not deallocated before the GlobalVariable is.
+    Py_INCREF(owner);
+    // The object created on the next line owns itself and the
+    // just inc'ed reference to owner:
+    new RemovePyObjFromGlobalMappingsVH(this, result, owner);
+    result->setInitializer(initializer);
+
     return result;
 }
 
