@@ -1465,7 +1465,7 @@ LlvmFunctionBuilder::WITH_CLEANUP()
     BasicBlock *main_block =
         this->CreateBasicBlock("WITH_CLEANUP_main_block");
 
-    Value *none = this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct);
+    Value *none = this->GetGlobalVariableFor(&_Py_NoneStruct);
     this->builder_.CreateStore(this->Pop(), exc_type);
 
     Value *is_none = this->builder_.CreateICmpEQ(
@@ -2471,7 +2471,7 @@ LlvmFunctionBuilder::END_FINALLY()
     // but for sanity we also double-check that the None is present.
     Value *is_none = this->builder_.CreateICmpEQ(
         finally_discriminator,
-        this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct));
+        this->GetGlobalVariableFor(&_Py_NoneStruct));
     this->DecRef(finally_discriminator);
     this->builder_.CreateCondBr(is_none, finally_fallthrough, not_none);
 
@@ -2760,7 +2760,7 @@ LlvmFunctionBuilder::GenericPowOp(const char *apifunc)
     Value *lhs = this->Pop();
     Function *op = this->GetGlobalFunction<PyObject*(PyObject*, PyObject*,
         PyObject *)>(apifunc);
-    Value *pynone = this->GET_GLOBAL_VARIABLE(PyObject, _Py_NoneStruct);
+    Value *pynone = this->GetGlobalVariableFor(&_Py_NoneStruct);
     Value *result = this->CreateCall(op, lhs, rhs, pynone,
                                                "powop_result");
     this->DecRef(lhs);
@@ -2813,8 +2813,8 @@ LlvmFunctionBuilder::UNARY_NOT()
     Value *value = this->Pop();
     Value *retval = this->builder_.CreateSelect(
         this->IsPythonTrue(value),
-        this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct),
-        this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct),
+        this->GetGlobalVariableFor((PyObject*)&_Py_ZeroStruct),
+        this->GetGlobalVariableFor((PyObject*)&_Py_TrueStruct),
         "UNARY_NOT_result");
     this->IncRef(retval);
     this->Push(retval);
@@ -2988,8 +2988,8 @@ LlvmFunctionBuilder::COMPARE_OP(int cmp_op)
     }
     Value *value = this->builder_.CreateSelect(
         result,
-        this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct),
-        this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct),
+        this->GetGlobalVariableFor((PyObject*)&_Py_TrueStruct),
+        this->GetGlobalVariableFor((PyObject*)&_Py_ZeroStruct),
         "COMPARE_OP_result");
     this->IncRef(value);
     this->Push(value);
@@ -3019,7 +3019,7 @@ LlvmFunctionBuilder::STORE_MAP()
     Value *dict_type = this->builder_.CreateLoad(
         ObjectTy::ob_type(this->builder_, dict));
     Value *is_exact_dict = this->builder_.CreateICmpEQ(
-        dict_type, this->GET_GLOBAL_VARIABLE(PyTypeObject, PyDict_Type));
+        dict_type, this->GetGlobalVariableFor((PyObject*)&PyDict_Type));
     this->Assert(is_exact_dict,
                  "dict argument to STORE_MAP is not exactly a PyDict");
     Function *setitem = this->GetGlobalFunction<
@@ -3700,8 +3700,8 @@ LlvmFunctionBuilder::IsPythonTrue(Value *value)
 
     Value *result_addr = this->CreateAllocaInEntryBlock(
         Type::getInt1Ty(this->context_), NULL, "IsPythonTrue_result");
-    Value *py_false = this->GET_GLOBAL_VARIABLE(PyObject, _Py_ZeroStruct);
-    Value *py_true = this->GET_GLOBAL_VARIABLE(PyObject, _Py_TrueStruct);
+    Value *py_false = this->GetGlobalVariableFor((PyObject*)&_Py_ZeroStruct);
+    Value *py_true = this->GetGlobalVariableFor((PyObject*)&_Py_TrueStruct);
 
     Value *is_PyTrue = this->builder_.CreateICmpEQ(
         py_true, value, "IsPythonTrue_is_PyTrue");

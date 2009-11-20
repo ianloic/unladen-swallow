@@ -16,9 +16,12 @@ extern "C" {
    structures. */
 
 /* Internal wrapper for llvm::Function*s. */
-typedef struct _LlvmFunction {
-    void *lf_function;
-} _LlvmFunction;
+typedef struct _LlvmFunction _LlvmFunction;
+
+/* Really takes an llvm::Function*, and wraps it into a new'ed
+   _LlvmFunction. */
+PyAPI_FUNC(_LlvmFunction *) _LlvmFunction_New(
+    void *llvm_function);
 
 /* JIT compiles the llvm function.  Note that once the function has
    been translated to machine code once, it will never be
@@ -26,6 +29,11 @@ typedef struct _LlvmFunction {
 typedef PyObject *(*PyEvalFrameFunction)(struct _frame *);
 PyAPI_FUNC(PyEvalFrameFunction) _LlvmFunction_Jit(
     _LlvmFunction *llvm_function);
+
+// Forwards to global_data->Optimize(llvm_function->lf_function, level);
+PyAPI_FUNC(int) _LlvmFunction_Optimize(struct PyGlobalLlvmData *global_data,
+                                       _LlvmFunction *llvm_function,
+                                       int level);
 
 PyAPI_FUNC(void) _LlvmFunction_Dealloc(_LlvmFunction *functionobj);
 

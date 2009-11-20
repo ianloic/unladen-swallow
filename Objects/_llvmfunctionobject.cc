@@ -8,16 +8,34 @@
 #include "Python/global_llvm_data.h"
 #include "Util/Stats.h"
 
+#include "llvm/BasicBlock.h"
+#include "llvm/Constants.h"
 #include "llvm/Function.h"
+#include "llvm/Instructions.h"
 #include "llvm/Module.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/MachineCodeInfo.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/ValueHandle.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <sstream>
 #include <string>
 #include <vector>
+
+using llvm::BasicBlock;
+using llvm::Function;
+using llvm::Type;
+using llvm::Value;
+
+struct _LlvmFunction {
+    // This should be an AssertingVH, but that runs into problems on
+    // shutdown, where the Module is destroyed without destroying all
+    // code objects first.
+    Function *lf_function;
+};
 
 #ifdef Py_WITH_INSTRUMENTATION
 // Collect statistics about the number of lines of LLVM IR we're writing,
@@ -54,25 +72,73 @@ static llvm::ManagedStatic<NativeSizeStats> native_size_stats;
 static llvm::ManagedStatic<LlvmIrSizeStats> llvm_ir_size_stats;
 #endif  // Py_WITH_INSTRUMENTATION
 
+_LlvmFunction *
+_LlvmFunction_New(void *llvm_function)
+{
+    llvm::Function *typed_function = (llvm::Function*)llvm_function;
+    _LlvmFunction *wrapper = new _LlvmFunction();
+    wrapper->lf_function = typed_function;
+    return wrapper;
+}
 
 void
 _LlvmFunction_Dealloc(_LlvmFunction *functionobj)
 {
-    llvm::Function *function = (llvm::Function *)functionobj->lf_function;
+    llvm::Function *function = functionobj->lf_function;
+    // Clear the AssertingVH to avoid crashing when we delete the function.
+    functionobj->lf_function = NULL;
     // Allow global optimizations to destroy the function.
     function->setLinkage(llvm::GlobalValue::InternalLinkage);
     if (function->use_empty()) {
         // Delete the function if it's already unused.
-        // Free the machine code for the function first, or LLVM will try to
-        // reuse it later.  This is probably a bug in LLVM. TODO(twouters):
-        // fix the bug in LLVM and remove this workaround.
-        PyGlobalLlvmData *global_llvm_data =
-            PyThreadState_GET()->interp->global_llvm_data;
-        llvm::ExecutionEngine *engine = global_llvm_data->getExecutionEngine();
-        engine->freeMachineCodeForFunction(function);
         function->eraseFromParent();
     }
     delete functionobj;
+}
+
+// Deletes most of the contents of function but keeps all references
+// to global variables so they don't get destroyed by globaldce.
+static void
+clear_body(llvm::Function *function)
+{
+    // Gather all the pieces of *function that could be or use globals.
+    llvm::SmallPtrSet<Value*, 8> globals;
+    // For all basic blocks...
+    for (Function::iterator BB = function->begin(), E = function->end();
+         BB != E; ++BB)
+        // For all instructions...
+        for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I)
+            // For all operands...
+            for (llvm::User::op_iterator U = I->op_begin(), E = I->op_end();
+                 U != E; ++U) {
+                // We could recursively iterate through the Constants
+                // too to find their component GlobalValues, but since
+                // Constants are immortal anyway that doesn't seem
+                // worth it.  GlobalValues are Constants, so this
+                // picks them up too.
+                if (llvm::isa<llvm::Constant>(*U))
+                    globals.insert(*U);
+            }
+    const std::vector<Value*> globals_vect(globals.begin(), globals.end());
+
+    // Clear out the function now that we know what it uses.
+    function->deleteBody();
+
+    BasicBlock *entry =
+        BasicBlock::Create(function->getContext(), "", function);
+
+    // Build a single "call void undef(all_constants)" instruction to
+    // keep a use of all the constants.
+    std::vector<const Type*> types;
+    types.reserve(globals_vect.size());
+    for (std::vector<Value*>::const_iterator C = globals_vect.begin(),
+             E = globals_vect.end(); C != E; ++C)
+        types.push_back((*C)->getType());
+    const llvm::FunctionType *user_t = llvm::FunctionType::get(
+        Type::getVoidTy(function->getContext()), types, false);
+    llvm::CallInst::Create(
+        llvm::UndefValue::get(llvm::PointerType::getUnqual(user_t)),
+        globals_vect.begin(), globals_vect.end(), "", entry);
 }
 
 PyEvalFrameFunction
@@ -98,14 +164,20 @@ _LlvmFunction_Jit(_LlvmFunction *function_obj)
 #else
     native_func = (PyEvalFrameFunction)engine->getPointerToFunction(function);
 #endif
-    // Delete the function body to reduce memory usage. This means we'll
+    // Clear the function body to reduce memory usage. This means we'll
     // need to re-compile the bytecode to IR and reoptimize it again, if we
-    // need it again. function->empty() can be used to test whether a function
-    // has been cleared out like this.
-    function->deleteBody();
+    // need it again.
+    clear_body(function);
     return native_func;
 }
 
+int
+_LlvmFunction_Optimize(PyGlobalLlvmData *global_data,
+                       _LlvmFunction *llvm_function,
+                       int level)
+{
+    return global_data->Optimize(*llvm_function->lf_function, level);
+}
 
 // Python-level wrapper.
 struct PyLlvmFunctionObject {

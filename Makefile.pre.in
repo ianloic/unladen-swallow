@@ -99,7 +99,7 @@ LLVM_BIN_DIR=	@LLVM_PATH@/bin
 ifeq (@BUILD_LLVM@, disabled)
 	LLVMLIBS = UNUSED
 else
-	LLVMLIBS = LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
+	LLVMLIBS = LLVMipo LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
 endif
 
 
@@ -351,7 +351,8 @@ ifneq (@BUILD_LLVM@, disabled)
 		Util/PyAliasAnalysis.o \
 		Util/PyTypeBuilder.o \
 		Util/RuntimeFeedback.o \
-		Util/SingleFunctionInliner.o
+		Util/SingleFunctionInliner.o \
+		Util/Stats.o
 endif
 
 ##########################################################################

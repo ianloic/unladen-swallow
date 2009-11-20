@@ -214,15 +214,8 @@ PyDoc_STRVAR(throw_doc,
 return next yielded value or raise StopIteration.");
 
 static PyObject *
-gen_throw(PyGenObject *gen, PyObject *args)
+gen_throw(PyGenObject *gen, PyObject *typ, PyObject *val, PyObject *tb)
 {
-	PyObject *typ;
-	PyObject *tb = NULL;
-	PyObject *val = NULL;
-
-	if (!PyArg_UnpackTuple(args, "throw", 1, 3, &typ, &val, &tb))
-		return NULL;
-
 	/* First, check the traceback argument, replacing None with
 	   NULL. */
 	if (tb == Py_None)
@@ -316,13 +309,14 @@ static PyGetSetDef gen_getsetlist[] = {
 static PyMemberDef gen_memberlist[] = {
 	{"gi_frame",	T_OBJECT, offsetof(PyGenObject, gi_frame),	RO},
 	{"gi_running",	T_INT,    offsetof(PyGenObject, gi_running),	RO},
-        {"gi_code",     T_OBJECT, offsetof(PyGenObject, gi_code),  RO},
+	{"gi_code",     T_OBJECT, offsetof(PyGenObject, gi_code),  RO},
 	{NULL}	/* Sentinel */
 };
 
 static PyMethodDef gen_methods[] = {
 	{"send",(PyCFunction)gen_send, METH_O, send_doc},
-	{"throw",(PyCFunction)gen_throw, METH_VARARGS, throw_doc},
+	{"throw",(PyCFunction)gen_throw, METH_ARG_RANGE, throw_doc,
+	 /*min_arity=*/1, /*max_arity=*/3},
 	{"close",(PyCFunction)gen_close, METH_NOARGS, close_doc},
 	{NULL, NULL}	/* Sentinel */
 };

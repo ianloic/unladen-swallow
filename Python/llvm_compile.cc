@@ -188,7 +188,10 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
         return NULL;
     }
 
-    py::LlvmFunctionBuilder fbuilder(PyGlobalLlvmData::Get(), code);
+    PyGlobalLlvmData *global_data = PyGlobalLlvmData::Get();
+    global_data->MaybeCollectUnusedGlobals();
+
+    py::LlvmFunctionBuilder fbuilder(global_data, code);
     std::vector<InstrInfo> instr_info(PyString_GET_SIZE(code->co_code));
     if (-1 == set_line_numbers(code, instr_info)) {
         return NULL;
@@ -416,7 +419,5 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
     // Make sure the function survives global optimizations.
     fbuilder.function()->setLinkage(llvm::GlobalValue::ExternalLinkage);
 
-    _LlvmFunction *wrapper = new _LlvmFunction();
-    wrapper->lf_function = fbuilder.function();
-    return wrapper;
+    return _LlvmFunction_New(fbuilder.function());
 }

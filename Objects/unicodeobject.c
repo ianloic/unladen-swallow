@@ -6510,14 +6510,37 @@ a UnicodeEncodeError. Other possible values are 'ignore', 'replace' and\n\
 codecs.register_error that can handle UnicodeEncodeErrors.");
 
 static PyObject *
-unicode_encode(PyUnicodeObject *self, PyObject *args)
+unicode_encode(PyUnicodeObject *self, PyObject *pyencoding, PyObject *pyerrors)
 {
     char *encoding = NULL;
     char *errors = NULL;
     PyObject *v;
-    
-    if (!PyArg_ParseTuple(args, "|ss:encode", &encoding, &errors))
-        return NULL;
+
+    if (pyencoding != NULL) {
+        if (!(PyString_Check(pyencoding) || PyUnicode_Check(pyencoding))) {
+            PyErr_Format(PyExc_TypeError,
+                "encode() argument 1 must be string, not %.200s",
+                Py_TYPE(pyencoding)->tp_name);
+            return NULL;
+        }
+        if (PyUnicode_Check(pyencoding)) {
+            pyencoding = _PyUnicode_AsDefaultEncodedString(pyencoding, NULL);
+        }
+        encoding = PyString_AS_STRING(pyencoding);
+    }
+    if (pyerrors != NULL) {
+        if (!(PyString_Check(pyerrors) || PyUnicode_Check(pyerrors))) {
+            PyErr_Format(PyExc_TypeError,
+                "encode() argument 2 must be string, not %.200s",
+                Py_TYPE(pyerrors)->tp_name);
+            return NULL;
+        }
+        if (PyUnicode_Check(pyerrors)) {
+            pyerrors = _PyUnicode_AsDefaultEncodedString(pyerrors, NULL);
+        }
+        errors = PyString_AS_STRING(pyerrors);
+    }
+
     v = PyUnicode_AsEncodedObject((PyObject *)self, encoding, errors);
     if (v == NULL)
         goto onError;
@@ -7358,22 +7381,30 @@ old replaced by new.  If the optional argument count is\n\
 given, only the first count occurrences are replaced.");
 
 static PyObject*
-unicode_replace(PyUnicodeObject *self, PyObject *args)
+unicode_replace(PyUnicodeObject *self, PyObject *old, PyObject *new,
+                PyObject *count)
 {
     PyUnicodeObject *str1;
     PyUnicodeObject *str2;
     Py_ssize_t maxcount = -1;
     PyObject *result;
 
-    if (!PyArg_ParseTuple(args, "OO|n:replace", &str1, &str2, &maxcount))
-        return NULL;
-    str1 = (PyUnicodeObject *)PyUnicode_FromObject((PyObject *)str1);
+    str1 = (PyUnicodeObject *)PyUnicode_FromObject(old);
     if (str1 == NULL)
-	return NULL;
-    str2 = (PyUnicodeObject *)PyUnicode_FromObject((PyObject *)str2);
+    	return NULL;
+    str2 = (PyUnicodeObject *)PyUnicode_FromObject(new);
     if (str2 == NULL) {
-	Py_DECREF(str1);
-	return NULL;
+        Py_DECREF(str1);
+        return NULL;
+    }
+    if (count != NULL) {
+        maxcount = PyInt_AsSsize_t(count);
+        if (maxcount == -1 && PyErr_Occurred()) {
+            Py_DECREF(str1);
+            Py_DECREF(str2);
+            PyErr_Format(PyExc_TypeError, "an integer is required");
+            return NULL;
+        }
     }
 
     result = replace(self, str1, str2, maxcount);
@@ -7954,8 +7985,10 @@ static PyMethodDef unicode_methods[] = {
     /* Order is according to common usage: often used methods should
        appear first, since lookup is done sequentially. */
 
-    {"encode", (PyCFunction) unicode_encode, METH_VARARGS, encode__doc__},
-    {"replace", (PyCFunction) unicode_replace, METH_VARARGS, replace__doc__},
+    {"encode", (PyCFunction) unicode_encode, METH_ARG_RANGE, encode__doc__,
+     /*min_arity=*/0, /*max_arity=*/2},
+    {"replace", (PyCFunction) unicode_replace, METH_ARG_RANGE, replace__doc__,
+     /*min_arity=*/2, /*max_arity=*/3},
     {"split", (PyCFunction) unicode_split, METH_VARARGS, split__doc__},
     {"rsplit", (PyCFunction) unicode_rsplit, METH_VARARGS, rsplit__doc__},
     {"join", (PyCFunction) unicode_join, METH_O, join__doc__},

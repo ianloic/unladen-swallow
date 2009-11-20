@@ -68,4 +68,25 @@ private:
     DataType data_;
 };
 
+/// An instance of this class records the time in ns between its
+/// construction and destruction into a DataVectorStats<int64_t>.
+class Timer {
+public:
+    Timer(DataVectorStats<int64_t> &stat)
+        : stat_(stat), start_time_(this->GetTime()) {}
+    ~Timer() {
+        int64_t end_time = this->GetTime();
+        int64_t elapsed = end_time - this->start_time_;
+        stat_.RecordDataPoint(elapsed);
+    }
+private:
+    // Returns the current time in nanoseconds.  It doesn't matter
+    // what these ns count from since we only use them to compute time
+    // changes.
+    static int64_t GetTime();
+
+    DataVectorStats<int64_t> &stat_;
+    const int64_t start_time_;
+};
+
 #endif  // UTIL_STATS_H
