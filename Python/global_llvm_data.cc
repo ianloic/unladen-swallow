@@ -146,7 +146,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     O2->add(llvm::createScalarReplAggregatesPass());
     O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createLICMPass());
-    O2->add(llvm::createCondPropagationPass());
+    O2->add(llvm::createJumpThreadingPass());
     O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createGVNPass());
     O2->add(llvm::createSCCPPass());
@@ -188,7 +188,6 @@ PyGlobalLlvmData::InitializeOptimizations()
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
     optO3->add(createScalarReplAggregatesPass());  // Break up aggregate allocas
     optO3->add(createInstructionCombiningPass());  // Combine silly seq's
-    optO3->add(createCondPropagationPass());       // Propagate conditionals
     optO3->add(createTailCallEliminationPass());   // Eliminate tail calls
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
     optO3->add(createReassociatePass());           // Reassociate expressions
@@ -211,7 +210,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     // Run instcombine after redundancy elimination to exploit opportunities
     // opened up by them.
     optO3->add(createInstructionCombiningPass());
-    optO3->add(createCondPropagationPass());       // Propagate conditionals
+    optO3->add(createJumpThreadingPass());         // Thread jumps.
     optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createDeadStoreEliminationPass());  // Delete dead stores
     optO3->add(createAggressiveDCEPass());   // Delete dead instructions

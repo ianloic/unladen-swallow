@@ -163,14 +163,13 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                     this->module_)),
       builder_(this->context_,
                llvm::TargetFolder(
-                   llvm_data_->getExecutionEngine()->getTargetData(),
-                   this->context_)),
+                   llvm_data_->getExecutionEngine()->getTargetData())),
       is_generator_(code_object->co_flags & CO_GENERATOR),
       debug_info_(llvm_data->DebugInfo()),
       debug_compile_unit_(this->debug_info_ == NULL ? llvm::DICompileUnit() :
                           this->debug_info_->CreateCompileUnit(
                               DW_LANG_Python,
-                              pystring_to_std_string(code_object->co_filename),
+                              PyString_AS_STRING(code_object->co_filename),
                               "",  // Directory
                               "Unladen Swallow 2.6.1",
                               false, // Not main.
@@ -179,9 +178,9 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
       debug_subprogram_(this->debug_info_ == NULL ? llvm::DISubprogram() :
                         this->debug_info_->CreateSubprogram(
                             debug_compile_unit_,
-                            function_->getName(),
-                            function_->getName(),
-                            function_->getName(),
+                            PyString_AS_STRING(code_object->co_name),
+                            PyString_AS_STRING(code_object->co_name),
+                            PyString_AS_STRING(code_object->co_name),
                             debug_compile_unit_,
                             code_object->co_firstlineno,
                             llvm::DIType(),
@@ -237,10 +236,6 @@ LlvmFunctionBuilder::LlvmFunctionBuilder(
                 NULL,
                 "local_" + pystring_to_stringref(local_name)));
     }
-
-    if (this->debug_info_ != NULL)
-        this->debug_info_->InsertSubprogramStart(
-            debug_subprogram_, this->builder_.GetInsertBlock());
 
     this->tstate_ = this->CreateCall(
         this->GetGlobalFunction<PyThreadState*()>(
@@ -1099,11 +1094,12 @@ LlvmFunctionBuilder::PropagateException()
 void
 LlvmFunctionBuilder::SetDebugStopPoint(int line_number)
 {
-    if (this->debug_info_ != NULL)
-        this->debug_info_->InsertStopPoint(this->debug_compile_unit_,
-                                           line_number,
-                                           0,
-                                           this->builder_.GetInsertBlock());
+    if (this->debug_info_ != NULL) {
+        this->builder_.SetCurrentDebugLocation(
+            this->debug_info_->CreateLocation(line_number, 0,
+                                              this->debug_subprogram_,
+                                              llvm::DILocation(NULL)).getNode());
+    }
 }
 
 void
@@ -3567,9 +3563,6 @@ LlvmFunctionBuilder::CreateCall(llvm::Value *callee, InputIterator begin,
 llvm::ReturnInst *
 LlvmFunctionBuilder::CreateRet(llvm::Value *retval)
 {
-    if (this->debug_info_ != NULL)
-        this->debug_info_->InsertRegionEnd(debug_subprogram_,
-                                           this->builder_.GetInsertBlock());
     return this->builder_.CreateRet(retval);
 }
 
