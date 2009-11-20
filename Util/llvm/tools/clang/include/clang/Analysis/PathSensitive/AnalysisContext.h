@@ -15,6 +15,7 @@
 #ifndef LLVM_CLANG_ANALYSIS_ANALYSISCONTEXT_H
 #define LLVM_CLANG_ANALYSIS_ANALYSISCONTEXT_H
 
+#include "clang/AST/Stmt.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/DenseMap.h"
@@ -80,6 +81,8 @@ protected:
     : Kind(k), Ctx(ctx), Parent(parent) {}
 
 public:
+  virtual ~LocationContext() {}
+  
   ContextKind getKind() const { return Kind; }
 
   AnalysisContext *getAnalysisContext() const { return Ctx; }
@@ -102,7 +105,7 @@ public:
     return Ctx->getSelfDecl();
   }
 
-  void Profile(llvm::FoldingSetNodeID &ID) {
+  virtual void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, Kind, Ctx, Parent);
   }
 
@@ -119,10 +122,13 @@ public:
   StackFrameContext(AnalysisContext *ctx, const LocationContext *parent,
                     const Stmt *s)
     : LocationContext(StackFrame, ctx, parent), CallSite(s) {}
+  
+  virtual ~StackFrameContext() {}
+
 
   Stmt const *getCallSite() const { return CallSite; }
 
-  void Profile(llvm::FoldingSetNodeID &ID) {
+  virtual void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, getAnalysisContext(), getParent(), CallSite);
   }
 
@@ -141,8 +147,10 @@ public:
   ScopeContext(AnalysisContext *ctx, const LocationContext *parent,
                const Stmt *s)
     : LocationContext(Scope, ctx, parent), Enter(s) {}
+  
+  virtual ~ScopeContext() {}
 
-  void Profile(llvm::FoldingSetNodeID &ID) {
+  virtual void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, getAnalysisContext(), getParent(), Enter);
   }
 

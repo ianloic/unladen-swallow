@@ -19,6 +19,7 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Analysis/PathSensitive/GRState.h"
 #include "clang/Analysis/PathSensitive/ExplodedGraph.h"
+#include "clang/Analysis/PathSensitive/BugType.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -80,10 +81,10 @@ public:
             getOriginalNode(const ExplodedNode* N) = 0;
   };
 
-  BugReport(BugType& bt, const char* desc, const ExplodedNode *n)
+  BugReport(BugType& bt, llvm::StringRef desc, const ExplodedNode *n)
     : BT(bt), Description(desc), EndNode(n) {}
 
-  BugReport(BugType& bt, const char* shortDesc, const char* desc,
+  BugReport(BugType& bt, llvm::StringRef shortDesc, llvm::StringRef desc,
             const ExplodedNode *n)
   : BT(bt), ShortDescription(shortDesc), Description(desc), EndNode(n) {}
 
@@ -183,38 +184,6 @@ public:
   const_iterator end() const { return const_iterator(Reports.end()); }
 };
 
-class BugType {
-private:
-  const std::string Name;
-  const std::string Category;
-  llvm::FoldingSet<BugReportEquivClass> EQClasses;
-  friend class BugReporter;
-  bool SuppressonSink;
-public:
-  BugType(const char *name, const char* cat)
-    : Name(name), Category(cat), SuppressonSink(false) {}
-  virtual ~BugType();
-
-  // FIXME: Should these be made strings as well?
-  const std::string& getName() const { return Name; }
-  const std::string& getCategory() const { return Category; }
-  
-  /// isSuppressOnSink - Returns true if bug reports associated with this bug
-  ///  type should be suppressed if the end node of the report is post-dominated
-  ///  by a sink node.
-  bool isSuppressOnSink() const { return SuppressonSink; }
-  void setSuppressOnSink(bool x) { SuppressonSink = x; }
-
-  virtual void FlushReports(BugReporter& BR);
-
-  typedef llvm::FoldingSet<BugReportEquivClass>::iterator iterator;
-  iterator begin() { return EQClasses.begin(); }
-  iterator end() { return EQClasses.end(); }
-
-  typedef llvm::FoldingSet<BugReportEquivClass>::const_iterator const_iterator;
-  const_iterator begin() const { return EQClasses.begin(); }
-  const_iterator end() const { return EQClasses.end(); }
-};
 
 //===----------------------------------------------------------------------===//
 // Specialized subclasses of BugReport.
@@ -224,11 +193,11 @@ public:
 class RangedBugReport : public BugReport {
   std::vector<SourceRange> Ranges;
 public:
-  RangedBugReport(BugType& D, const char* description, ExplodedNode *n)
+  RangedBugReport(BugType& D, llvm::StringRef description, ExplodedNode *n)
     : BugReport(D, description, n) {}
 
-  RangedBugReport(BugType& D, const char *shortDescription,
-                  const char *description, ExplodedNode *n)
+  RangedBugReport(BugType& D, llvm::StringRef shortDescription,
+                  llvm::StringRef description, ExplodedNode *n)
   : BugReport(D, shortDescription, description, n) {}
 
   ~RangedBugReport();
@@ -260,11 +229,11 @@ private:
   Creators creators;
 
 public:
-  EnhancedBugReport(BugType& D, const char* description, ExplodedNode *n)
+  EnhancedBugReport(BugType& D, llvm::StringRef description, ExplodedNode *n)
    : RangedBugReport(D, description, n) {}
 
-  EnhancedBugReport(BugType& D, const char *shortDescription,
-                  const char *description, ExplodedNode *n)
+  EnhancedBugReport(BugType& D, llvm::StringRef shortDescription,
+                   llvm::StringRef description, ExplodedNode *n)
     : RangedBugReport(D, shortDescription, description, n) {}
 
   ~EnhancedBugReport() {}

@@ -26,7 +26,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CaptureTracking.h"
-#include "llvm/Analysis/MallocFreeHelper.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/UniqueVector.h"
@@ -212,7 +212,7 @@ bool FunctionAttrs::AddNoCaptureAttrs(const std::vector<CallGraphNode *> &SCC) {
 
     for (Function::arg_iterator A = F->arg_begin(), E = F->arg_end(); A!=E; ++A)
       if (isa<PointerType>(A->getType()) && !A->hasNoCaptureAttr() &&
-          !PointerMayBeCaptured(A, true)) {
+          !PointerMayBeCaptured(A, true, /*StoreCaptures=*/false)) {
         A->addAttr(Attribute::NoCapture);
         ++NumNoCapture;
         Changed = true;
@@ -280,7 +280,7 @@ bool FunctionAttrs::IsFunctionMallocLike(Function *F,
           return false;  // Did not come from an allocation.
       }
 
-    if (PointerMayBeCaptured(RetVal, false))
+    if (PointerMayBeCaptured(RetVal, false, /*StoreCaptures=*/false))
       return false;
   }
 

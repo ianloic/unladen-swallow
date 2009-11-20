@@ -19,6 +19,7 @@
 #include "clang/Sema/ExternalSemaSource.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/TemplateBase.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/SourceManager.h"
@@ -28,6 +29,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitstreamReader.h"
 #include "llvm/System/DataTypes.h"
 #include <deque>
@@ -77,7 +79,7 @@ public:
   /// \brief Receives the target triple.
   ///
   /// \returns true to indicate the target triple is invalid or false otherwise.
-  virtual bool ReadTargetTriple(const std::string &Triple) {
+  virtual bool ReadTargetTriple(llvm::StringRef Triple) {
     return false;
   }
 
@@ -86,18 +88,18 @@ public:
   /// \param PCHPredef The start of the predefines buffer in the PCH
   /// file.
   ///
-  /// \param PCHPredefLen The length of the predefines buffer in the PCH
-  /// file.
-  ///
   /// \param PCHBufferID The FileID for the PCH predefines buffer.
+  ///
+  /// \param OriginalFileName The original file name for the PCH, which will
+  /// appear as an entry in the predefines buffer.
   ///
   /// \param SuggestedPredefines If necessary, additional definitions are added
   /// here.
   ///
   /// \returns true to indicate the predefines are invalid or false otherwise.
-  virtual bool ReadPredefinesBuffer(const char *PCHPredef,
-                                    unsigned PCHPredefLen,
+  virtual bool ReadPredefinesBuffer(llvm::StringRef PCHPredef,
                                     FileID PCHBufferID,
+                                    llvm::StringRef OriginalFileName,
                                     std::string &SuggestedPredefines) {
     return false;
   }
@@ -122,10 +124,10 @@ public:
     : PP(PP), Reader(Reader), NumHeaderInfos(0) {}
 
   virtual bool ReadLanguageOptions(const LangOptions &LangOpts);
-  virtual bool ReadTargetTriple(const std::string &Triple);
-  virtual bool ReadPredefinesBuffer(const char *PCHPredef,
-                                    unsigned PCHPredefLen,
+  virtual bool ReadTargetTriple(llvm::StringRef Triple);
+  virtual bool ReadPredefinesBuffer(llvm::StringRef PCHPredef,
                                     FileID PCHBufferID,
+                                    llvm::StringRef OriginalFileName,
                                     std::string &SuggestedPredefines);
   virtual void ReadHeaderFileInfo(const HeaderFileInfo &HFI);
   virtual void ReadCounter(unsigned Value);
@@ -311,9 +313,12 @@ private:
   /// the PCH file.
   llvm::SmallVector<uint64_t, 4> ObjCCategoryImpls;
 
-  /// \brief The original file name that was used to build the PCH
-  /// file.
+  /// \brief The original file name that was used to build the PCH file, which
+  /// may have been modified for relocatable-pch support.
   std::string OriginalFileName;
+
+  /// \brief The actual original file name that was used to build the PCH file.
+  std::string ActualOriginalFileName;
 
   /// \brief Whether this precompiled header is a relocatable PCH file.
   bool RelocatablePCH;
@@ -443,9 +448,7 @@ private:
   void MaybeAddSystemRootToFilename(std::string &Filename);
 
   PCHReadResult ReadPCHBlock();
-  bool CheckPredefinesBuffer(const char *PCHPredef,
-                             unsigned PCHPredefLen,
-                             FileID PCHBufferID);
+  bool CheckPredefinesBuffer(llvm::StringRef PCHPredef, FileID PCHBufferID);
   bool ParseLineTable(llvm::SmallVectorImpl<uint64_t> &Record);
   PCHReadResult ReadSourceManagerBlock();
   PCHReadResult ReadSLocEntryRecord(unsigned ID);
@@ -542,6 +545,12 @@ public:
   /// comments in the source code.
   virtual void ReadComments(std::vector<SourceRange> &Comments);
 
+  /// \brief Reads a TemplateArgumentLocInfo appropriate for the
+  /// given TemplateArgument kind.
+  TemplateArgumentLocInfo
+  GetTemplateArgumentLocInfo(TemplateArgument::ArgKind Kind,
+                             const RecordData &Record, unsigned &Idx);
+
   /// \brief Reads a declarator info from the given record.
   virtual DeclaratorInfo *GetDeclaratorInfo(const RecordData &Record,
                                             unsigned &Idx);
@@ -618,13 +627,15 @@ public:
 
   /// \brief Retrieve the IdentifierInfo for the named identifier.
   ///
-  /// This routine builds a new IdentifierInfo for the given
-  /// identifier. If any declarations with this name are visible from
-  /// translation unit scope, their declarations will be deserialized
-  /// and introduced into the declaration chain of the
-  /// identifier. FIXME: if this identifier names a macro, deserialize
-  /// the macro.
+  /// This routine builds a new IdentifierInfo for the given identifier. If any
+  /// declarations with this name are visible from translation unit scope, their
+  /// declarations will be deserialized and introduced into the declaration
+  /// chain of the identifier. FIXME: if this identifier names a macro,
+  /// deserialize the macro.
   virtual IdentifierInfo* get(const char *NameStart, const char *NameEnd);
+  IdentifierInfo* get(llvm::StringRef Name) {
+    return get(Name.begin(), Name.end());
+  }
 
   /// \brief Load the contents of the global method pool for a given
   /// selector.

@@ -362,7 +362,9 @@ multiclass T2I_ld<string opc, PatFrag opnode> {
                    [(set GPR:$dst, (opnode t2addrmode_so_reg:$addr))]>;
   def pci : T2Ipc <(outs GPR:$dst), (ins i32imm:$addr), IIC_iLoadi,
                    opc, ".w\t$dst, $addr",
-                   [(set GPR:$dst, (opnode (ARMWrapper tconstpool:$addr)))]>;
+                   [(set GPR:$dst, (opnode (ARMWrapper tconstpool:$addr)))]> {
+    let isReMaterializable = 1;
+  }
 }
 
 /// T2I_st - Defines a set of (op r, {imm12|imm8|so_reg}) store patterns.
@@ -454,14 +456,14 @@ def t2SUBrSPs   : T2sI<(outs GPR:$dst), (ins GPR:$sp, t2_so_reg:$rhs),
 
 
 // Pseudo instruction that will expand into a t2SUBrSPi + a copy.
-let usesCustomDAGSchedInserter = 1 in { // Expanded by the scheduler.
+let usesCustomInserter = 1 in { // Expanded after instruction selection.
 def t2SUBrSPi_   : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, t2_so_imm:$imm),
                    NoItinerary, "@ sub.w\t$dst, $sp, $imm", []>;
 def t2SUBrSPi12_ : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, imm0_4095:$imm),
                    NoItinerary, "@ subw\t$dst, $sp, $imm", []>;
 def t2SUBrSPs_   : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, t2_so_reg:$rhs),
                    NoItinerary, "@ sub\t$dst, $sp, $rhs", []>;
-} // usesCustomDAGSchedInserter
+} // usesCustomInserter
 
 
 //===----------------------------------------------------------------------===//
@@ -785,7 +787,7 @@ defm t2BIC  : T2I_bin_w_irs<"bic", BinOpFrag<(and node:$LHS, (not node:$RHS))>>;
 
 let Constraints = "$src = $dst" in
 def t2BFC : T2I<(outs GPR:$dst), (ins GPR:$src, bf_inv_mask_imm:$imm),
-                IIC_iALUi, "bfc", "\t$dst, $imm",
+                IIC_iUNAsi, "bfc", "\t$dst, $imm",
                 [(set GPR:$dst, (and GPR:$src, bf_inv_mask_imm:$imm))]>;
 
 def t2SBFX : T2I<(outs GPR:$dst), (ins GPR:$src, imm0_31:$lsb, imm0_31:$width),
@@ -1080,7 +1082,7 @@ let Defs =
                                AddrModeNone, SizeSpecial, NoItinerary,
                                "str.w\tsp, [$src, #+8] @ eh_setjmp begin\n"
                                "\tadr\tr12, 0f\n"
-                               "\torr\tr12, #1\n"
+                               "\torr.w\tr12, r12, #1\n"
                                "\tstr.w\tr12, [$src, #+4]\n"
                                "\tmovs\tr0, #0\n"
                                "\tb\t1f\n"
@@ -1177,3 +1179,13 @@ let isReMaterializable = 1 in
 def t2MOVi32imm : T2Ix2<(outs GPR:$dst), (ins i32imm:$src), IIC_iMOVi,
                    "movw", "\t$dst, ${src:lo16}\n\tmovt${p}\t$dst, ${src:hi16}",
                      [(set GPR:$dst, (i32 imm:$src))]>;
+
+// Pseudo instruction that combines ldr from constpool and add pc. This should
+// be expanded into two instructions late to allow if-conversion and
+// scheduling.
+let isReMaterializable = 1 in
+def t2LDRpci_pic : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr, pclabel:$cp),
+                   NoItinerary, "@ ldr.w\t$dst, $addr\n$cp:\n\tadd\t$dst, pc",
+               [(set GPR:$dst, (ARMpic_add (load (ARMWrapper tconstpool:$addr)),
+                                           imm:$cp))]>,
+               Requires<[IsThumb2]>;

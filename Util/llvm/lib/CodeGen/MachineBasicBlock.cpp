@@ -17,14 +17,17 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetInstrDesc.h"
+#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/LeakDetector.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Assembly/Writer.h"
 #include <algorithm>
 using namespace llvm;
 
 MachineBasicBlock::MachineBasicBlock(MachineFunction &mf, const BasicBlock *bb)
-  : BB(bb), Number(-1), xParent(&mf), Alignment(0), IsLandingPad(false) {
+  : BB(bb), Number(-1), xParent(&mf), Alignment(0), IsLandingPad(false),
+    AddressTaken(false) {
   Insts.Parent = this;
 }
 
@@ -160,11 +163,11 @@ void MachineBasicBlock::dump() const {
 
 static inline void OutputReg(raw_ostream &os, unsigned RegNo,
                              const TargetRegisterInfo *TRI = 0) {
-  if (!RegNo || TargetRegisterInfo::isPhysicalRegister(RegNo)) {
+  if (RegNo != 0 && TargetRegisterInfo::isPhysicalRegister(RegNo)) {
     if (TRI)
       os << " %" << TRI->get(RegNo).Name;
     else
-      os << " %mreg(" << RegNo << ")";
+      os << " %physreg" << RegNo;
   } else
     os << " %reg" << RegNo;
 }
@@ -177,18 +180,23 @@ void MachineBasicBlock::print(raw_ostream &OS) const {
     return;
   }
 
-  const BasicBlock *LBB = getBasicBlock();
+  if (Alignment) { OS << "Alignment " << Alignment << "\n"; }
+
+  OS << "BB#" << getNumber() << ": ";
+
+  const char *Comma = "";
+  if (const BasicBlock *LBB = getBasicBlock()) {
+    OS << Comma << "derived from LLVM BB ";
+    WriteAsOperand(OS, LBB, /*PrintType=*/false);
+    Comma = ", ";
+  }
+  if (isLandingPad()) { OS << Comma << "EH LANDING PAD"; Comma = ", "; }
+  if (hasAddressTaken()) { OS << Comma << "ADDRESS TAKEN"; Comma = ", "; }
   OS << '\n';
-  if (LBB) OS << LBB->getName() << ": ";
-  OS << (const void*)this
-     << ", LLVM BB @" << (const void*) LBB << ", ID#" << getNumber();
-  if (Alignment) OS << ", Alignment " << Alignment;
-  if (isLandingPad()) OS << ", EH LANDING PAD";
-  OS << ":\n";
 
   const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();  
   if (!livein_empty()) {
-    OS << "Live Ins:";
+    OS << "    Live Ins:";
     for (const_livein_iterator I = livein_begin(),E = livein_end(); I != E; ++I)
       OutputReg(OS, *I, TRI);
     OS << '\n';
@@ -197,7 +205,7 @@ void MachineBasicBlock::print(raw_ostream &OS) const {
   if (!pred_empty()) {
     OS << "    Predecessors according to CFG:";
     for (const_pred_iterator PI = pred_begin(), E = pred_end(); PI != E; ++PI)
-      OS << ' ' << *PI << " (#" << (*PI)->getNumber() << ')';
+      OS << " BB#" << (*PI)->getNumber();
     OS << '\n';
   }
   
@@ -210,7 +218,7 @@ void MachineBasicBlock::print(raw_ostream &OS) const {
   if (!succ_empty()) {
     OS << "    Successors according to CFG:";
     for (const_succ_iterator SI = succ_begin(), E = succ_end(); SI != E; ++SI)
-      OS << ' ' << *SI << " (#" << (*SI)->getNumber() << ')';
+      OS << " BB#" << (*SI)->getNumber();
     OS << '\n';
   }
 }
@@ -235,6 +243,58 @@ void MachineBasicBlock::moveAfter(MachineBasicBlock *NewBefore) {
   getParent()->splice(++BBI, this);
 }
 
+void MachineBasicBlock::updateTerminator() {
+  const TargetInstrInfo *TII = getParent()->getTarget().getInstrInfo();
+  // A block with no successors has no concerns with fall-through edges.
+  if (this->succ_empty()) return;
+
+  MachineBasicBlock *TBB = 0, *FBB = 0;
+  SmallVector<MachineOperand, 4> Cond;
+  bool B = TII->AnalyzeBranch(*this, TBB, FBB, Cond);
+  (void) B;
+  assert(!B && "UpdateTerminators requires analyzable predecessors!");
+  if (Cond.empty()) {
+    if (TBB) {
+      // The block has an unconditional branch. If its successor is now
+      // its layout successor, delete the branch.
+      if (isLayoutSuccessor(TBB))
+        TII->RemoveBranch(*this);
+    } else {
+      // The block has an unconditional fallthrough. If its successor is not
+      // its layout successor, insert a branch.
+      TBB = *succ_begin();
+      if (!isLayoutSuccessor(TBB))
+        TII->InsertBranch(*this, TBB, 0, Cond);
+    }
+  } else {
+    if (FBB) {
+      // The block has a non-fallthrough conditional branch. If one of its
+      // successors is its layout successor, rewrite it to a fallthrough
+      // conditional branch.
+      if (isLayoutSuccessor(TBB)) {
+        TII->RemoveBranch(*this);
+        TII->ReverseBranchCondition(Cond);
+        TII->InsertBranch(*this, FBB, 0, Cond);
+      } else if (isLayoutSuccessor(FBB)) {
+        TII->RemoveBranch(*this);
+        TII->InsertBranch(*this, TBB, 0, Cond);
+      }
+    } else {
+      // The block has a fallthrough conditional branch.
+      MachineBasicBlock *MBBA = *succ_begin();
+      MachineBasicBlock *MBBB = *next(succ_begin());
+      if (MBBA == TBB) std::swap(MBBB, MBBA);
+      if (isLayoutSuccessor(TBB)) {
+        TII->RemoveBranch(*this);
+        TII->ReverseBranchCondition(Cond);
+        TII->InsertBranch(*this, MBBA, 0, Cond);
+      } else if (!isLayoutSuccessor(MBBA)) {
+        TII->RemoveBranch(*this);
+        TII->InsertBranch(*this, TBB, MBBA, Cond);
+      }
+    }
+  }
+}
 
 void MachineBasicBlock::addSuccessor(MachineBasicBlock *succ) {
   Successors.push_back(succ);
@@ -364,10 +424,7 @@ bool MachineBasicBlock::CorrectExtraCFGEdges(MachineBasicBlock *DestA,
   MachineBasicBlock::succ_iterator SI = succ_begin();
   MachineBasicBlock *OrigDestA = DestA, *OrigDestB = DestB;
   while (SI != succ_end()) {
-    if (*SI == DestA && DestA == DestB) {
-      DestA = DestB = 0;
-      ++SI;
-    } else if (*SI == DestA) {
+    if (*SI == DestA) {
       DestA = 0;
       ++SI;
     } else if (*SI == DestB) {
@@ -389,4 +446,9 @@ bool MachineBasicBlock::CorrectExtraCFGEdges(MachineBasicBlock *DestA,
     assert(DestA == 0 && "MachineCFG is missing edges!");
   }
   return MadeChange;
+}
+
+void llvm::WriteAsOperand(raw_ostream &OS, const MachineBasicBlock *MBB,
+                          bool t) {
+  OS << "BB#" << MBB->getNumber();
 }

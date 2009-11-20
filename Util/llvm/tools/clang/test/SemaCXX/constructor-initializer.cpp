@@ -99,7 +99,9 @@ struct Current : Derived {
 
                         // FIXME. This is bad message!
 struct M {              // expected-note {{candidate function}} \
-                        // expected-note {{candidate function}}
+                        // expected-note {{candidate function}} \
+                        // expected-note {{declared here}} \
+                        // expected-note {{declared here}}
   M(int i, int j);      // expected-note {{candidate function}} \
                         // // expected-note {{candidate function}}
 };
@@ -110,9 +112,10 @@ struct N : M  {
   M m1;
 };
 
-struct P : M  { // expected-error {{default constructor for 'struct M' is missing in initialization of base class}}
-  P()  {  }
-  M m; // expected-error {{default constructor for 'struct M' is missing in initialization of member}}
+struct P : M  {
+  P()  {  } // expected-error {{base class 'struct M'}} \
+            // expected-error {{member 'm'}}
+  M m; // expected-note {{member is declared here}}
 };
 
 struct Q {
@@ -121,4 +124,52 @@ struct Q {
   float f1;
 
   float *pf;
+};
+
+// A silly class used to demonstrate field-is-uninitialized in constructors with
+// multiple params.
+class TwoInOne { TwoInOne(TwoInOne a, TwoInOne b) {} };
+class InitializeUsingSelfTest {
+  bool A;
+  char* B;
+  int C;
+  TwoInOne D;
+  InitializeUsingSelfTest(int E)
+      : A(A),  // expected-warning {{field is uninitialized when used here}}
+        B((((B)))),  // expected-warning {{field is uninitialized when used here}}
+        C(A && InitializeUsingSelfTest::C),  // expected-warning {{field is uninitialized when used here}}
+        D(D,  // expected-warning {{field is uninitialized when used here}}
+          D) {}  // expected-warning {{field is uninitialized when used here}}
+};
+
+int IntWrapper(int i) { return 0; };
+class InitializeUsingSelfExceptions {
+  int A;
+  int B;
+  InitializeUsingSelfExceptions(int B)
+      : A(IntWrapper(A)),  // Due to a conservative implementation, we do not report warnings inside function/ctor calls even though it is possible to do so.
+        B(B) {}  // Not a warning; B is a local variable.
+};
+
+class CopyConstructorTest {
+  bool A, B, C;
+  CopyConstructorTest(const CopyConstructorTest& rhs)
+      : A(rhs.A),
+        B(B),  // expected-warning {{field is uninitialized when used here}}
+        C(rhs.C || C) { }  // expected-warning {{field is uninitialized when used here}}
+};
+
+// Make sure we aren't marking default constructors when we shouldn't be.
+template<typename T>
+struct NDC {
+  T &ref;
+  
+  NDC() { }
+  NDC(T &ref) : ref(ref) { }
+};
+  
+struct X0 : NDC<int> {
+  X0(int &ref) : NDC<int>(ref), ndc(ref) { }
+  
+  NDC<int> ndc;
 };

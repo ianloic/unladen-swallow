@@ -112,6 +112,9 @@ def executeShCmd(cmd, cfg, cwd, results):
                         r[2] = tempfile.TemporaryFile(mode=r[1])
                     else:
                         r[2] = open(r[0], r[1])
+                    # Workaround a Win32 and/or subprocess bug when appending.
+                    if r[1] == 'a':
+                        r[2].seek(0, 2)
                 result = r[2]
             final_redirects.append(result)
 
@@ -333,7 +336,24 @@ def executeScript(test, litConfig, tmpBase, commands, cwd):
 
     return executeCommand(command, cwd=cwd, env=test.config.environment)
 
-def parseIntegratedTestScript(test, xfailHasColon, requireAndAnd):
+def isExpectedFail(xfails, xtargets, target_triple):
+    # Check if any xfail matches this target.
+    for item in xfails:
+        if item == '*' or item in target_triple:
+            break
+    else:
+        return False
+
+    # If so, see if it is expected to pass on this target.
+    #
+    # FIXME: Rename XTARGET to something that makes sense, like XPASS.
+    for item in xtargets:
+        if item == '*' or item in target_triple:
+            return False
+
+    return True
+
+def parseIntegratedTestScript(test):
     """parseIntegratedTestScript - Scan an LLVM/Clang style integrated test
     script and extract the lines to 'RUN' as well as 'XFAIL' and 'XTARGET'
     information. The RUN lines also will have variable substitution performed.
@@ -347,6 +367,8 @@ def parseIntegratedTestScript(test, xfailHasColon, requireAndAnd):
     execpath = test.getExecPath()
     execdir,execbase = os.path.split(execpath)
     tmpBase = os.path.join(execdir, 'Output', execbase)
+    if test.index is not None:
+        tmpBase += '_%d' % test.index
 
     # We use #_MARKER_# to hide %% while we do the other substitutions.
     substitutions = [('%%', '#_MARKER_#')]
@@ -377,11 +399,8 @@ def parseIntegratedTestScript(test, xfailHasColon, requireAndAnd):
                 script[-1] = script[-1][:-1] + ln
             else:
                 script.append(ln)
-        elif xfailHasColon and 'XFAIL:' in ln:
+        elif 'XFAIL:' in ln:
             items = ln[ln.index('XFAIL:') + 6:].split(',')
-            xfails.extend([s.strip() for s in items])
-        elif not xfailHasColon and 'XFAIL' in ln:
-            items = ln[ln.index('XFAIL') + 5:].split(',')
             xfails.extend([s.strip() for s in items])
         elif 'XTARGET:' in ln:
             items = ln[ln.index('XTARGET:') + 8:].split(',')
@@ -408,20 +427,8 @@ def parseIntegratedTestScript(test, xfailHasColon, requireAndAnd):
     if script[-1][-1] == '\\':
         return (Test.UNRESOLVED, "Test has unterminated run lines (with '\\')")
 
-    # Validate interior lines for '&&', a lovely historical artifact.
-    if requireAndAnd:
-        for i in range(len(script) - 1):
-            ln = script[i]
-
-            if not ln.endswith('&&'):
-                return (Test.FAIL,
-                        ("MISSING \'&&\': %s\n"  +
-                         "FOLLOWED BY   : %s\n") % (ln, script[i + 1]))
-
-            # Strip off '&&'
-            script[i] = ln[:-2]
-
-    return script,xfails,xtargets,tmpBase,execdir
+    isXFail = isExpectedFail(xfails, xtargets, test.suite.config.target_triple)
+    return script,isXFail,tmpBase,execdir
 
 def formatTestOutput(status, out, err, exitCode, script):
     output = StringIO.StringIO()
@@ -444,11 +451,11 @@ def executeTclTest(test, litConfig):
     if test.config.unsupported:
         return (Test.UNSUPPORTED, 'Test is unsupported')
 
-    res = parseIntegratedTestScript(test, True, False)
+    res = parseIntegratedTestScript(test)
     if len(res) == 2:
         return res
 
-    script, xfails, xtargets, tmpBase, execdir = res
+    script, isXFail, tmpBase, execdir = res
 
     if litConfig.noExecute:
         return (Test.PASS, '')
@@ -459,19 +466,6 @@ def executeTclTest(test, litConfig):
     res = executeTclScriptInternal(test, litConfig, tmpBase, script, execdir)
     if len(res) == 2:
         return res
-
-    isXFail = False
-    for item in xfails:
-        if item == '*' or item in test.suite.config.target_triple:
-            isXFail = True
-            break
-
-    # If this is XFAIL, see if it is expected to pass on this target.
-    if isXFail:
-        for item in xtargets:
-            if item == '*' or item in test.suite.config.target_triple:
-                isXFail = False
-                break
 
     out,err,exitCode = res
     if isXFail:
@@ -486,15 +480,15 @@ def executeTclTest(test, litConfig):
 
     return formatTestOutput(status, out, err, exitCode, script)
 
-def executeShTest(test, litConfig, useExternalSh, requireAndAnd):
+def executeShTest(test, litConfig, useExternalSh):
     if test.config.unsupported:
         return (Test.UNSUPPORTED, 'Test is unsupported')
 
-    res = parseIntegratedTestScript(test, False, requireAndAnd)
+    res = parseIntegratedTestScript(test)
     if len(res) == 2:
         return res
 
-    script, xfails, xtargets, tmpBase, execdir = res
+    script, isXFail, tmpBase, execdir = res
 
     if litConfig.noExecute:
         return (Test.PASS, '')
@@ -510,7 +504,7 @@ def executeShTest(test, litConfig, useExternalSh, requireAndAnd):
         return res
 
     out,err,exitCode = res
-    if xfails:
+    if isXFail:
         ok = exitCode != 0
         status = (Test.XPASS, Test.XFAIL)[ok]
     else:

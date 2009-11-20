@@ -22,6 +22,7 @@
 #include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Parse/DeclSpec.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/ErrorHandling.h"
 using namespace clang;
 
 /// \brief Perform adjustment on the parameter type of a function.
@@ -64,16 +65,6 @@ static bool isOmittedBlockReturnType(const Declarator &D) {
       D.getTypeObject(0).Kind == DeclaratorChunk::Function)
     return true;   // ^(int X, float Y) { ... }
   
-  return false;
-}
-
-/// isDeclaratorDeprecated - Return true if the declarator is deprecated.
-/// We do not want to warn about use of deprecated types (e.g. typedefs) when
-/// defining a declaration that is itself deprecated.
-static bool isDeclaratorDeprecated(const Declarator &D) {
-  for (const AttributeList *AL = D.getAttributes(); AL; AL = AL->getNext())
-    if (AL->getKind() == AttributeList::AT_deprecated)
-      return true;
   return false;
 }
 
@@ -238,7 +229,8 @@ static QualType ConvertDeclSpecToType(Declarator &TheDeclarator, Sema &TheSema){
   case DeclSpec::TST_enum:
   case DeclSpec::TST_union:
   case DeclSpec::TST_struct: {
-    TypeDecl *D = cast_or_null<TypeDecl>(static_cast<Decl *>(DS.getTypeRep()));
+    TypeDecl *D 
+      = dyn_cast_or_null<TypeDecl>(static_cast<Decl *>(DS.getTypeRep()));
     if (!D) {
       // This can happen in C++ with ambiguous lookups.
       Result = Context.IntTy;
@@ -247,8 +239,7 @@ static QualType ConvertDeclSpecToType(Declarator &TheDeclarator, Sema &TheSema){
     }
 
     // If the type is deprecated or unavailable, diagnose it.
-    TheSema.DiagnoseUseOfDecl(D, DS.getTypeSpecTypeLoc(),
-                              isDeclaratorDeprecated(TheDeclarator));
+    TheSema.DiagnoseUseOfDecl(D, DS.getTypeSpecTypeLoc());
     
     assert(DS.getTypeSpecWidth() == 0 && DS.getTypeSpecComplex() == 0 &&
            DS.getTypeSpecSign() == 0 && "No qualifiers on tag names!");
@@ -302,27 +293,6 @@ static QualType ConvertDeclSpecToType(Declarator &TheDeclarator, Sema &TheSema){
         TheDeclarator.setInvalidType(true);
       }
     }
-
-    // If this is a reference to an invalid typedef, propagate the invalidity.
-    if (TypedefType *TDT = dyn_cast<TypedefType>(Result)) {
-      if (TDT->getDecl()->isInvalidDecl())
-        TheDeclarator.setInvalidType(true);
-      
-      // If the type is deprecated or unavailable, diagnose it.
-      TheSema.DiagnoseUseOfDecl(TDT->getDecl(), DS.getTypeSpecTypeLoc(),
-                                isDeclaratorDeprecated(TheDeclarator));
-    } else if (ObjCInterfaceType *OIT = dyn_cast<ObjCInterfaceType>(Result)) {
-      // If the type is deprecated or unavailable, diagnose it.
-      TheSema.DiagnoseUseOfDecl(OIT->getDecl(), DS.getTypeSpecTypeLoc(),
-                                isDeclaratorDeprecated(TheDeclarator));
-    } else if (ObjCObjectPointerType *DPT =
-                 dyn_cast<ObjCObjectPointerType>(Result)) {
-      // If the type is deprecated or unavailable, diagnose it.
-      if (ObjCInterfaceDecl *D = DPT->getInterfaceDecl())
-        TheSema.DiagnoseUseOfDecl(D, DS.getTypeSpecTypeLoc(),
-                                  isDeclaratorDeprecated(TheDeclarator));
-    }
-
 
     // TypeQuals handled by caller.
     break;
@@ -472,7 +442,7 @@ QualType Sema::BuildPointerType(QualType T, unsigned Quals,
   if (T->isReferenceType()) {
     // C++ 8.3.2p4: There shall be no ... pointers to references ...
     Diag(Loc, diag::err_illegal_decl_pointer_to_reference)
-      << getPrintableNameForEntity(Entity);
+      << getPrintableNameForEntity(Entity) << T;
     return QualType();
   }
 
@@ -594,20 +564,28 @@ QualType Sema::BuildArrayType(QualType T, ArrayType::ArraySizeModifier ASM,
   SourceLocation Loc = Brackets.getBegin();
   // C99 6.7.5.2p1: If the element type is an incomplete or function type,
   // reject it (e.g. void ary[7], struct foo ary[7], void ary[7]())
-  if (RequireCompleteType(Loc, T,
-                             diag::err_illegal_decl_array_incomplete_type))
-    return QualType();
+  // Not in C++, though. There we only dislike void.
+  if (getLangOptions().CPlusPlus) {
+    if (T->isVoidType()) {
+      Diag(Loc, diag::err_illegal_decl_array_incomplete_type) << T;
+      return QualType();
+    }
+  } else {
+    if (RequireCompleteType(Loc, T,
+                            diag::err_illegal_decl_array_incomplete_type))
+      return QualType();
+  }
 
   if (T->isFunctionType()) {
     Diag(Loc, diag::err_illegal_decl_array_of_functions)
-      << getPrintableNameForEntity(Entity);
+      << getPrintableNameForEntity(Entity) << T;
     return QualType();
   }
 
   // C++ 8.3.2p4: There shall be no ... arrays of references ...
   if (T->isReferenceType()) {
     Diag(Loc, diag::err_illegal_decl_array_of_references)
-      << getPrintableNameForEntity(Entity);
+      << getPrintableNameForEntity(Entity) << T;
     return QualType();
   }
 
@@ -644,24 +622,24 @@ QualType Sema::BuildArrayType(QualType T, ArrayType::ArraySizeModifier ASM,
   } else if (ArraySize->isValueDependent()) {
     T = Context.getDependentSizedArrayType(T, ArraySize, ASM, Quals, Brackets);
   } else if (!ArraySize->isIntegerConstantExpr(ConstVal, Context) ||
-             (!T->isDependentType() && !T->isConstantSizeType())) {
+             (!T->isDependentType() && !T->isIncompleteType() &&
+              !T->isConstantSizeType())) {
     // Per C99, a variable array is an array with either a non-constant
     // size or an element type that has a non-constant-size
     T = Context.getVariableArrayType(T, ArraySize, ASM, Quals, Brackets);
   } else {
     // C99 6.7.5.2p1: If the expression is a constant expression, it shall
     // have a value greater than zero.
-    if (ConstVal.isSigned()) {
-      if (ConstVal.isNegative()) {
-        Diag(ArraySize->getLocStart(),
-             diag::err_typecheck_negative_array_size)
-          << ArraySize->getSourceRange();
-        return QualType();
-      } else if (ConstVal == 0) {
-        // GCC accepts zero sized static arrays.
-        Diag(ArraySize->getLocStart(), diag::ext_typecheck_zero_array_size)
-          << ArraySize->getSourceRange();
-      }
+    if (ConstVal.isSigned() && ConstVal.isNegative()) {
+      Diag(ArraySize->getLocStart(),
+           diag::err_typecheck_negative_array_size)
+        << ArraySize->getSourceRange();
+      return QualType();
+    }
+    if (ConstVal == 0) {
+      // GCC accepts zero sized static arrays.
+      Diag(ArraySize->getLocStart(), diag::ext_typecheck_zero_array_size)
+        << ArraySize->getSourceRange();
     }
     T = Context.getConstantArrayType(T, ConstVal, ASM, Quals);
   }
@@ -811,7 +789,7 @@ QualType Sema::BuildMemberPointerType(QualType T, QualType Class,
   //   with reference type, or "cv void."
   if (T->isReferenceType()) {
     Diag(Loc, diag::err_illegal_decl_mempointer_to_reference)
-      << (Entity? Entity.getAsString() : "type name");
+      << (Entity? Entity.getAsString() : "type name") << T;
     return QualType();
   }
 
@@ -870,6 +848,11 @@ QualType Sema::BuildBlockPointerType(QualType T, unsigned CVR,
 
 QualType Sema::GetTypeFromParser(TypeTy *Ty, DeclaratorInfo **DInfo) {
   QualType QT = QualType::getFromOpaquePtr(Ty);
+  if (QT.isNull()) {
+    if (DInfo) *DInfo = 0;
+    return QualType();
+  }
+
   DeclaratorInfo *DI = 0;
   if (LocInfoType *LIT = dyn_cast<LocInfoType>(QT)) {
     QT = LIT->getType();
@@ -893,20 +876,19 @@ QualType Sema::GetTypeForDeclarator(Declarator &D, Scope *S,
   // have a type.
   QualType T;
 
-  switch (D.getKind()) {
-  case Declarator::DK_Abstract:
-  case Declarator::DK_Normal:
-  case Declarator::DK_Operator:
-  case Declarator::DK_TemplateId:
+  switch (D.getName().getKind()) {
+  case UnqualifiedId::IK_Identifier:
+  case UnqualifiedId::IK_OperatorFunctionId:
+  case UnqualifiedId::IK_TemplateId:
     T = ConvertDeclSpecToType(D, *this);
     
     if (!D.isInvalidType() && OwnedDecl && D.getDeclSpec().isTypeSpecOwned())
       *OwnedDecl = cast<TagDecl>((Decl *)D.getDeclSpec().getTypeRep());
     break;
 
-  case Declarator::DK_Constructor:
-  case Declarator::DK_Destructor:
-  case Declarator::DK_Conversion:
+  case UnqualifiedId::IK_ConstructorName:
+  case UnqualifiedId::IK_DestructorName:
+  case UnqualifiedId::IK_ConversionFunctionId:
     // Constructors and destructors don't have return types. Use
     // "void" instead. Conversion operators will check their return
     // types separately.
@@ -1190,15 +1172,29 @@ QualType Sema::GetTypeForDeclarator(Declarator &D, Scope *S,
       }
       // The scope spec must refer to a class, or be dependent.
       QualType ClsType;
-      if (isDependentScopeSpecifier(DeclType.Mem.Scope())) {
+      if (isDependentScopeSpecifier(DeclType.Mem.Scope())
+            || dyn_cast_or_null<CXXRecordDecl>(
+                                   computeDeclContext(DeclType.Mem.Scope()))) {
         NestedNameSpecifier *NNS
           = (NestedNameSpecifier *)DeclType.Mem.Scope().getScopeRep();
-        assert(NNS->getAsType() && "Nested-name-specifier must name a type");
-        ClsType = QualType(NNS->getAsType(), 0);
-      } else if (CXXRecordDecl *RD
-                   = dyn_cast_or_null<CXXRecordDecl>(
-                                    computeDeclContext(DeclType.Mem.Scope()))) {
-        ClsType = Context.getTagDeclType(RD);
+        NestedNameSpecifier *NNSPrefix = NNS->getPrefix();
+        switch (NNS->getKind()) {
+        case NestedNameSpecifier::Identifier:
+          ClsType = Context.getTypenameType(NNSPrefix, NNS->getAsIdentifier());
+          break;
+
+        case NestedNameSpecifier::Namespace:
+        case NestedNameSpecifier::Global:
+          llvm::llvm_unreachable("Nested-name-specifier must name a type");
+          break;
+            
+        case NestedNameSpecifier::TypeSpec:
+        case NestedNameSpecifier::TypeSpecWithTemplate:
+          ClsType = QualType(NNS->getAsType(), 0);
+          if (NNSPrefix)
+            ClsType = Context.getQualifiedNameType(NNSPrefix, ClsType);
+          break;
+        }
       } else {
         Diag(DeclType.Mem.Scope().getBeginLoc(),
              diag::err_illegal_decl_mempointer_in_nonclass)
@@ -1327,6 +1323,21 @@ namespace {
         TL.setHasBaseTypeAsWritten(true);
         Visit(TL.getBaseTypeLoc());
       }
+    }
+    void VisitTemplateSpecializationTypeLoc(TemplateSpecializationTypeLoc TL) {
+      DeclaratorInfo *DInfo = 0;
+      Sema::GetTypeFromParser(DS.getTypeRep(), &DInfo);
+
+      // If we got no declarator info from previous Sema routines,
+      // just fill with the typespec loc.
+      if (!DInfo) {
+        TL.initialize(DS.getTypeSpecTypeLoc());
+        return;
+      }
+
+      TemplateSpecializationTypeLoc OldTL =
+        cast<TemplateSpecializationTypeLoc>(DInfo->getTypeLoc());
+      TL.copy(OldTL);
     }
     void VisitTypeLoc(TypeLoc TL) {
       // FIXME: add other typespec types and change this to an assert.
@@ -1690,17 +1701,18 @@ bool Sema::RequireCompleteType(SourceLocation Loc, QualType T,
     return false;
 
   // If we have a class template specialization or a class member of a
-  // class template specialization, try to instantiate it.
-  if (const RecordType *Record = T->getAs<RecordType>()) {
+  // class template specialization, or an array with known size of such,
+  // try to instantiate it.
+  QualType MaybeTemplate = T;
+  if (const ConstantArrayType *Array = Context.getAsConstantArrayType(T))
+    MaybeTemplate = Array->getElementType();
+  if (const RecordType *Record = MaybeTemplate->getAs<RecordType>()) {
     if (ClassTemplateSpecializationDecl *ClassTemplateSpec
           = dyn_cast<ClassTemplateSpecializationDecl>(Record->getDecl())) {
-      if (ClassTemplateSpec->getSpecializationKind() == TSK_Undeclared) {
-        if (Loc.isValid())
-          ClassTemplateSpec->setPointOfInstantiation(Loc);
-        return InstantiateClassTemplateSpecialization(ClassTemplateSpec,
+      if (ClassTemplateSpec->getSpecializationKind() == TSK_Undeclared)
+        return InstantiateClassTemplateSpecialization(Loc, ClassTemplateSpec,
                                                       TSK_ImplicitInstantiation,
                                                       /*Complain=*/diag != 0);
-      }
     } else if (CXXRecordDecl *Rec
                  = dyn_cast<CXXRecordDecl>(Record->getDecl())) {
       if (CXXRecordDecl *Pattern = Rec->getInstantiatedFromMemberClass()) {
@@ -1708,13 +1720,11 @@ bool Sema::RequireCompleteType(SourceLocation Loc, QualType T,
         assert(MSInfo && "Missing member specialization information?");
         // This record was instantiated from a class within a template.
         if (MSInfo->getTemplateSpecializationKind() 
-                                               != TSK_ExplicitSpecialization) {
-          MSInfo->setPointOfInstantiation(Loc);
+                                               != TSK_ExplicitSpecialization)
           return InstantiateClass(Loc, Rec, Pattern,
                                   getTemplateInstantiationArgs(Rec),
                                   TSK_ImplicitInstantiation,
                                   /*Complain=*/diag != 0);
-        }
       }
     }
   }

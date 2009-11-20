@@ -70,6 +70,9 @@ else( MSVC )
     CACHE STRING "Semicolon-separated list of targets to build, or \"all\".")
 endif( MSVC )
 
+set(C_INCLUDE_DIRS "" CACHE STRING
+  "Colon separated list of directories clang will search for headers.")
+
 set(LLVM_TARGET_ARCH "host"
   CACHE STRING "Set target to use for LLVM JIT or use \"host\" for automatic detection.")
 
@@ -164,13 +167,19 @@ option(LLVM_ENABLE_PIC "Build Position-Independent Code" ON)
 
 set(ENABLE_PIC 0)
 if( LLVM_ENABLE_PIC )
-  if( SUPPORTS_FPIC_FLAG )
-    message(STATUS "Building with -fPIC")
-    add_llvm_definitions(-fPIC)
-    set(ENABLE_PIC 1)
- else( SUPPORTS_FPIC_FLAG )
-    message(STATUS "Warning: -fPIC not supported.")
-  endif()
+ if( XCODE )
+   # Xcode has -mdynamic-no-pic on by default, which overrides -fPIC. I don't
+   # know how to disable this, so just force ENABLE_PIC off for now.
+   message(STATUS "Warning: -fPIC not supported with Xcode.")
+ else( XCODE )
+   if( SUPPORTS_FPIC_FLAG )
+      message(STATUS "Building with -fPIC")
+      add_llvm_definitions(-fPIC)
+      set(ENABLE_PIC 1)
+   else( SUPPORTS_FPIC_FLAG )
+      message(STATUS "Warning: -fPIC not supported.")
+   endif()
+ endif()
 endif()
 
 set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_TOOLS_BINARY_DIR} )
@@ -314,21 +323,31 @@ if(LLVM_BUILD_TOOLS)
   add_subdirectory(tools)
 endif()
 
-option(LLVM_BUILD_EXAMPLES "Build LLVM example programs." ON)
+option(LLVM_BUILD_EXAMPLES "Build LLVM example programs." OFF)
 if(LLVM_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif ()
 
-install(DIRECTORY include
-  DESTINATION .
+install(DIRECTORY include/
+  DESTINATION include
+  FILES_MATCHING
+  PATTERN "*.def"
+  PATTERN "*.h"
+  PATTERN "*.td"
+  PATTERN "*.inc"
   PATTERN ".svn" EXCLUDE
-  PATTERN "*.cmake" EXCLUDE
-  PATTERN "*.in" EXCLUDE
-  PATTERN "*.tmp" EXCLUDE
   )
 
-install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include
-  DESTINATION .
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/
+  DESTINATION include
+  FILES_MATCHING
+  PATTERN "*.def"
+  PATTERN "*.h"
+  PATTERN "*.gen"
+  PATTERN "*.inc"
+  # Exclude include/llvm/CMakeFiles/intrinsics_gen.dir, matched by "*.def"
+  PATTERN "CMakeFiles" EXCLUDE
+  PATTERN ".svn" EXCLUDE
   )
 
 # TODO: make and install documentation.

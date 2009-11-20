@@ -171,14 +171,6 @@ FunctionPass *createReassociatePass();
 
 //===----------------------------------------------------------------------===//
 //
-// CondPropagationPass - This pass propagates information about conditional
-// expressions through the program, allowing it to eliminate conditional
-// branches in some cases.
-//
-FunctionPass *createCondPropagationPass();
-
-//===----------------------------------------------------------------------===//
-//
 // TailDuplication - Eliminate unconditional branches through controlled code
 // duplication, creating simpler CFG structures.
 //
@@ -271,7 +263,7 @@ extern const PassInfo *const LCSSAID;
 // GVN - This pass performs global value numbering and redundant load 
 // elimination cotemporaneously.
 //
-FunctionPass *createGVNPass();
+FunctionPass *createGVNPass(bool NoPRE = false, bool NoLoads = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -307,12 +299,6 @@ FunctionPass *createCodeGenPreparePass(const TargetLowering *TLI = 0);
 
 //===----------------------------------------------------------------------===//
 //
-// CodeGenLICM - This pass performs late LICM; hoisting constants out of loops.
-//
-Pass *createCodeGenLICMPass();
-  
-//===----------------------------------------------------------------------===//
-//
 // InstructionNamer - Give any unnamed non-void instructions "tmp" names.
 //
 FunctionPass *createInstructionNamerPass();
@@ -343,6 +329,12 @@ FunctionPass *createGEPSplitterPass();
 // SCCVN - Aggressively eliminate redundant scalar values
 //
 FunctionPass *createSCCVNPass();
+
+//===----------------------------------------------------------------------===//
+//
+// ABCD - Elimination of Array Bounds Checks on Demand
+//
+FunctionPass *createABCDPass();
 
 } // End llvm namespace
 

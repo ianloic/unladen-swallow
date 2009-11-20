@@ -52,7 +52,8 @@ struct UnsafeQualTypeDenseMapInfo {
     return QualType::getFromOpaquePtr((void*) 2);
   }
   static inline unsigned getHashValue(QualType T) {
-    assert(!T.getFastQualifiers() && "hash invalid for types with fast quals");
+    assert(!T.getLocalFastQualifiers() && 
+           "hash invalid for types with fast quals");
     uintptr_t v = reinterpret_cast<uintptr_t>(T.getAsOpaquePtr());
     return (unsigned(v) >> 4) ^ (unsigned(v) >> 9);
   }
@@ -274,6 +275,10 @@ public:
 
   /// \brief Emits a reference to a declarator info.
   void AddDeclaratorInfo(DeclaratorInfo *DInfo, RecordData &Record);
+
+  /// \brief Emits a template argument location.
+  void AddTemplateArgumentLoc(const TemplateArgumentLoc &Arg,
+                              RecordData &Record);
 
   /// \brief Emit a reference to a declaration.
   void AddDeclRef(const Decl *D, RecordData &Record);

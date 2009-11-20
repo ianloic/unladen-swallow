@@ -22,6 +22,7 @@
 #include "llvm/ADT/DenseMap.h"
 
 namespace llvm {
+  class BlockAddress;
   class GCStrategy;
   class Constant;
   class ConstantArray;
@@ -85,6 +86,14 @@ namespace llvm {
     DwarfWriter *DW;
 
   public:
+    /// Flags to specify different kinds of comments to output in
+    /// assembly code.  These flags carry semantic information not
+    /// otherwise easily derivable from the IR text.
+    ///
+    enum CommentFlag {
+      ReloadReuse = 0x1
+    };
+
     /// Output stream on which we're printing assembly code.
     ///
     formatted_raw_ostream &O;
@@ -171,11 +180,11 @@ namespace llvm {
 
     /// EmitStartOfAsmFile - This virtual method can be overridden by targets
     /// that want to emit something at the start of their file.
-    virtual void EmitStartOfAsmFile(Module &M) {}
+    virtual void EmitStartOfAsmFile(Module &) {}
     
     /// EmitEndOfAsmFile - This virtual method can be overridden by targets that
     /// want to emit something at the end of their file.
-    virtual void EmitEndOfAsmFile(Module &M) {}
+    virtual void EmitEndOfAsmFile(Module &) {}
     
     /// doFinalization - Shut down the asmprinter.  If you override this in your
     /// pass, you must make sure to call it explicitly.
@@ -334,6 +343,12 @@ namespace llvm {
     /// block label.
     MCSymbol *GetMBBSymbol(unsigned MBBID) const;
     
+    /// GetBlockAddressSymbol - Return the MCSymbol used to satisfy BlockAddress
+    /// uses of the specified basic block.
+    MCSymbol *GetBlockAddressSymbol(const BlockAddress *BA) const;
+    MCSymbol *GetBlockAddressSymbol(const Function *F,
+                                    const BasicBlock *BB) const;
+
     /// EmitBasicBlockStart - This method prints the label for the specified
     /// MachineBasicBlock, an alignment (if present) and a comment describing
     /// it if appropriate.
@@ -366,9 +381,11 @@ namespace llvm {
 
     /// printImplicitDef - This method prints the specified machine instruction
     /// that is an implicit def.
-    virtual void printImplicitDef(const MachineInstr *MI) const;
-    
-    
+    void printImplicitDef(const MachineInstr *MI) const;
+
+    /// printKill - This method prints the specified kill machine instruction.
+    void printKill(const MachineInstr *MI) const;
+
     /// printPICJumpTableSetLabel - This method prints a set label for the
     /// specified MachineBasicBlock for a jumptable entry.
     virtual void printPICJumpTableSetLabel(unsigned uid,

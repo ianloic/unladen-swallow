@@ -25,12 +25,12 @@ namespace llvm {
 namespace clang {
 
 class ASTConsumer;
+class CodeGenOptions;
 class Diagnostic;
 class FileManager;
-class Preprocessor;
-class PreprocessorFactory;
-class CompileOptions;
 class LangOptions;
+class Preprocessor;
+class TargetOptions;
 
 // AST pretty-printer: prints out the AST in a format that is close to the
 // original C code.  The output is intended to be in a format such that
@@ -70,7 +70,7 @@ ASTConsumer *CreateObjCRewriter(const std::string &InFile,
                                 bool SilenceRewriteMacroWarning);
 
 // LLVM code generator: uses the code generation backend to generate LLVM
-// assembly. This runs optimizations depending on the CompileOptions
+// assembly. This runs optimizations depending on the CodeGenOptions
 // parameter. The output depends on the Action parameter.
 enum BackendAction {
   Backend_EmitAssembly,  // Emit native assembly
@@ -81,15 +81,17 @@ enum BackendAction {
 ASTConsumer *CreateBackendConsumer(BackendAction Action,
                                    Diagnostic &Diags,
                                    const LangOptions &Features,
-                                   const CompileOptions &CompileOpts,
+                                   const CodeGenOptions &CodeGenOpts,
+                                   const TargetOptions &TargetOpts,
                                    const std::string &ModuleID,
                                    llvm::raw_ostream *OS,
                                    llvm::LLVMContext& C);
 
-// HTML printer: uses the rewriter to convert source code to HTML with
-// syntax highlighting suitable for viewing in a web-browser.
-ASTConsumer* CreateHTMLPrinter(llvm::raw_ostream *OS, Diagnostic &D,
-                               Preprocessor *PP, PreprocessorFactory *PPF);
+/// CreateHTMLPrinter - Create an AST consumer which rewrites source code to
+/// HTML with syntax highlighting suitable for viewing in a web-browser.
+ASTConsumer *CreateHTMLPrinter(llvm::raw_ostream *OS, Preprocessor &PP,
+                               bool SyntaxHighlight = true,
+                               bool HighlightMacros = true);
 
 // PCH generator: generates a precompiled header file; this file can be
 // used later with the PCHReader (clang-cc option -include-pch)

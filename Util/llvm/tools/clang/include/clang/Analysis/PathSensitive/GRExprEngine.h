@@ -75,7 +75,12 @@ class GRExprEngine : public GRSubEngine {
   Selector RaiseSel;
 
   llvm::OwningPtr<GRSimpleAPICheck> BatchAuditor;
-  std::vector<Checker*> Checkers;
+
+  typedef llvm::DenseMap<void *, unsigned> CheckerMap;
+  CheckerMap CheckerM;
+  
+  typedef std::vector<std::pair<void *, Checker*> >CheckersOrdered;
+  CheckersOrdered Checkers;
 
   /// BR - The BugReporter associated with this engine.  It is important that
   //   this object be placed at the very end of member variables so that its
@@ -106,14 +111,6 @@ public:
   // was larger than sizeof(void *) (an undefined value).
   ErrorNodes NilReceiverLargerThanVoidPtrRetImplicit;
 
-  /// RetsStackAddr - Nodes in the ExplodedGraph that result from returning
-  ///  the address of a stack variable.
-  ErrorNodes RetsStackAddr;
-
-  /// RetsUndef - Nodes in the ExplodedGraph that result from returning
-  ///  an undefined value.
-  ErrorNodes RetsUndef;
-
   /// UndefBranches - Nodes in the ExplodedGraph that result from
   ///  taking a branch based on an undefined value.
   ErrorNodes UndefBranches;
@@ -126,54 +123,18 @@ public:
   //  calling a function with the attribute "noreturn".
   ErrorNodes NoReturnCalls;
 
-  /// ImplicitNullDeref - Nodes in the ExplodedGraph that result from
-  ///  taking a dereference on a symbolic pointer that MAY be NULL.
-  ErrorNodes ImplicitNullDeref;
-
-  /// ExplicitNullDeref - Nodes in the ExplodedGraph that result from
-  ///  taking a dereference on a symbolic pointer that MUST be NULL.
-  ErrorNodes ExplicitNullDeref;
-
-  /// UndefDeref - Nodes in the ExplodedGraph that result from
-  ///  taking a dereference on an undefined value.
-  ErrorNodes UndefDeref;
-
-  /// ImplicitBadSizedVLA - Nodes in the ExplodedGraph that result from
-  ///  constructing a zero-sized VLA where the size may be zero.
-  ErrorNodes ImplicitBadSizedVLA;
-
-  /// ExplicitBadSizedVLA - Nodes in the ExplodedGraph that result from
-  ///  constructing a zero-sized VLA where the size must be zero.
-  ErrorNodes ExplicitBadSizedVLA;
-
   /// UndefResults - Nodes in the ExplodedGraph where the operands are defined
   ///  by the result is not.  Excludes divide-by-zero errors.
   ErrorNodes UndefResults;
-
-  /// BadCalls - Nodes in the ExplodedGraph resulting from calls to function
-  ///  pointers that are NULL (or other constants) or Undefined.
-  ErrorNodes BadCalls;
 
   /// UndefReceiver - Nodes in the ExplodedGraph resulting from message
   ///  ObjC message expressions where the receiver is undefined (uninitialized).
   ErrorNodes UndefReceivers;
 
-  /// UndefArg - Nodes in the ExplodedGraph resulting from calls to functions
-  ///   where a pass-by-value argument has an undefined value.
-  UndefArgsTy UndefArgs;
-
   /// MsgExprUndefArgs - Nodes in the ExplodedGraph resulting from
   ///   message expressions where a pass-by-value argument has an undefined
   ///  value.
   UndefArgsTy MsgExprUndefArgs;
-
-  /// OutOfBoundMemAccesses - Nodes in the ExplodedGraph resulting from
-  /// out-of-bound memory accesses where the index MAY be out-of-bound.
-  ErrorNodes ImplicitOOBMemAccesses;
-
-  /// OutOfBoundMemAccesses - Nodes in the ExplodedGraph resulting from
-  /// out-of-bound memory accesses where the index MUST be out-of-bound.
-  ErrorNodes ExplicitOOBMemAccesses;
 
 public:
   GRExprEngine(AnalysisManager &mgr);
@@ -194,6 +155,8 @@ public:
   GRTransferFuncs& getTF() { return *StateMgr.TF; }
 
   BugReporter& getBugReporter() { return BR; }
+
+  GRStmtNodeBuilder &getBuilder() { assert(Builder); return *Builder; }
 
   /// setTransferFunctions
   void setTransferFunctions(GRTransferFuncs* tf);
@@ -217,78 +180,28 @@ public:
 
   void RegisterInternalChecks();
 
-  void registerCheck(Checker *check) {
-    Checkers.push_back(check);
+  template <typename CHECKER>
+  void registerCheck(CHECKER *check) {
+    unsigned entry = Checkers.size();
+    void *tag = CHECKER::getTag();
+    Checkers.push_back(std::make_pair(tag, check));
+    CheckerM[tag] = entry;
   }
+  
+  Checker *lookupChecker(void *tag) const;
 
-  bool isRetStackAddr(const ExplodedNode* N) const {
-    return N->isSink() && RetsStackAddr.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isUndefControlFlow(const ExplodedNode* N) const {
-    return N->isSink() && UndefBranches.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isUndefStore(const ExplodedNode* N) const {
-    return N->isSink() && UndefStores.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isImplicitNullDeref(const ExplodedNode* N) const {
-    return N->isSink() && ImplicitNullDeref.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isExplicitNullDeref(const ExplodedNode* N) const {
-    return N->isSink() && ExplicitNullDeref.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isUndefDeref(const ExplodedNode* N) const {
-    return N->isSink() && UndefDeref.count(const_cast<ExplodedNode*>(N)) != 0;
+  template <typename CHECKER>
+  CHECKER *getChecker() const {
+     return static_cast<CHECKER*>(lookupChecker(CHECKER::getTag()));
   }
 
   bool isNoReturnCall(const ExplodedNode* N) const {
     return N->isSink() && NoReturnCalls.count(const_cast<ExplodedNode*>(N)) != 0;
   }
 
-  bool isUndefResult(const ExplodedNode* N) const {
-    return N->isSink() && UndefResults.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isBadCall(const ExplodedNode* N) const {
-    return N->isSink() && BadCalls.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  bool isUndefArg(const ExplodedNode* N) const {
-    return N->isSink() &&
-      (UndefArgs.find(const_cast<ExplodedNode*>(N)) != UndefArgs.end() ||
-       MsgExprUndefArgs.find(const_cast<ExplodedNode*>(N)) != MsgExprUndefArgs.end());
-  }
-
-  bool isUndefReceiver(const ExplodedNode* N) const {
-    return N->isSink() && UndefReceivers.count(const_cast<ExplodedNode*>(N)) != 0;
-  }
-
-  typedef ErrorNodes::iterator ret_stackaddr_iterator;
-  ret_stackaddr_iterator ret_stackaddr_begin() { return RetsStackAddr.begin(); }
-  ret_stackaddr_iterator ret_stackaddr_end() { return RetsStackAddr.end(); }
-
-  typedef ErrorNodes::iterator ret_undef_iterator;
-  ret_undef_iterator ret_undef_begin() { return RetsUndef.begin(); }
-  ret_undef_iterator ret_undef_end() { return RetsUndef.end(); }
-
   typedef ErrorNodes::iterator undef_branch_iterator;
   undef_branch_iterator undef_branches_begin() { return UndefBranches.begin(); }
   undef_branch_iterator undef_branches_end() { return UndefBranches.end(); }
-
-  typedef ErrorNodes::iterator null_deref_iterator;
-  null_deref_iterator null_derefs_begin() { return ExplicitNullDeref.begin(); }
-  null_deref_iterator null_derefs_end() { return ExplicitNullDeref.end(); }
-
-  null_deref_iterator implicit_null_derefs_begin() {
-    return ImplicitNullDeref.begin();
-  }
-  null_deref_iterator implicit_null_derefs_end() {
-    return ImplicitNullDeref.end();
-  }
 
   typedef ErrorNodes::iterator nil_receiver_struct_ret_iterator;
 
@@ -312,22 +225,11 @@ public:
     return NilReceiverLargerThanVoidPtrRetExplicit.end();
   }
 
-  typedef ErrorNodes::iterator undef_deref_iterator;
-  undef_deref_iterator undef_derefs_begin() { return UndefDeref.begin(); }
-  undef_deref_iterator undef_derefs_end() { return UndefDeref.end(); }
-
   typedef ErrorNodes::iterator undef_result_iterator;
   undef_result_iterator undef_results_begin() { return UndefResults.begin(); }
   undef_result_iterator undef_results_end() { return UndefResults.end(); }
 
-  typedef ErrorNodes::iterator bad_calls_iterator;
-  bad_calls_iterator bad_calls_begin() { return BadCalls.begin(); }
-  bad_calls_iterator bad_calls_end() { return BadCalls.end(); }
-
   typedef UndefArgsTy::iterator undef_arg_iterator;
-  undef_arg_iterator undef_arg_begin() { return UndefArgs.begin(); }
-  undef_arg_iterator undef_arg_end() { return UndefArgs.end(); }
-
   undef_arg_iterator msg_expr_undef_arg_begin() {
     return MsgExprUndefArgs.begin();
   }
@@ -343,20 +245,6 @@ public:
 
   undef_receivers_iterator undef_receivers_end() {
     return UndefReceivers.end();
-  }
-
-  typedef ErrorNodes::iterator oob_memacc_iterator;
-  oob_memacc_iterator implicit_oob_memacc_begin() {
-    return ImplicitOOBMemAccesses.begin();
-  }
-  oob_memacc_iterator implicit_oob_memacc_end() {
-    return ImplicitOOBMemAccesses.end();
-  }
-  oob_memacc_iterator explicit_oob_memacc_begin() {
-    return ExplicitOOBMemAccesses.begin();
-  }
-  oob_memacc_iterator explicit_oob_memacc_end() {
-    return ExplicitOOBMemAccesses.end();
   }
 
   void AddCheck(GRSimpleAPICheck* A, Stmt::StmtClass C);
@@ -386,10 +274,7 @@ public:
 
   /// ProcessEndPath - Called by GRCoreEngine.  Used to generate end-of-path
   ///  nodes when the control reaches the end of a function.
-  void ProcessEndPath(GREndPathNodeBuilder& builder) {
-    getTF().EvalEndPath(*this, builder);
-    StateMgr.EndPath(builder.getState());
-  }
+  void ProcessEndPath(GREndPathNodeBuilder& builder);
 
   GRStateManager& getStateManager() { return StateMgr; }
   const GRStateManager& getStateManager() const { return StateMgr; }
@@ -427,7 +312,13 @@ public:
 protected:
   /// CheckerVisit - Dispatcher for performing checker-specific logic
   ///  at specific statements.
-  void CheckerVisit(Stmt *S, ExplodedNodeSet &Dst, ExplodedNodeSet &Src, bool isPrevisit);
+  void CheckerVisit(Stmt *S, ExplodedNodeSet &Dst, ExplodedNodeSet &Src, 
+                    bool isPrevisit);
+  
+  void CheckerVisitBind(const Stmt *AssignE, const Stmt *StoreE,
+                        ExplodedNodeSet &Dst, ExplodedNodeSet &Src, 
+                        SVal location, SVal val, bool isPrevisit);
+
 
   /// Visit - Transfer function logic for all statements.  Dispatches to
   ///  other functions that handle specific kinds of statements.
@@ -456,7 +347,8 @@ protected:
                                 ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
   /// VisitBinaryOperator - Transfer function logic for binary operators.
-  void VisitBinaryOperator(BinaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst);
+  void VisitBinaryOperator(BinaryOperator* B, ExplodedNode* Pred, 
+                           ExplodedNodeSet& Dst, bool asLValue);
 
 
   /// VisitCall - Transfer function for function calls.
@@ -469,33 +361,38 @@ protected:
                     unsigned ParamIdx = 0);
 
   /// VisitCast - Transfer function logic for all casts (implicit and explicit).
-  void VisitCast(Expr* CastE, Expr* Ex, ExplodedNode* Pred, ExplodedNodeSet& Dst);
+  void VisitCast(Expr* CastE, Expr* Ex, ExplodedNode* Pred,
+                 ExplodedNodeSet& Dst);
 
   /// VisitCompoundLiteralExpr - Transfer function logic for compound literals.
   void VisitCompoundLiteralExpr(CompoundLiteralExpr* CL, ExplodedNode* Pred,
                                 ExplodedNodeSet& Dst, bool asLValue);
 
   /// VisitDeclRefExpr - Transfer function logic for DeclRefExprs.
-  void VisitDeclRefExpr(DeclRefExpr* DR, ExplodedNode* Pred, ExplodedNodeSet& Dst,
-                        bool asLValue);
+  void VisitDeclRefExpr(DeclRefExpr* DR, ExplodedNode* Pred,
+                        ExplodedNodeSet& Dst, bool asLValue);
 
   /// VisitDeclStmt - Transfer function logic for DeclStmts.
   void VisitDeclStmt(DeclStmt* DS, ExplodedNode* Pred, ExplodedNodeSet& Dst);
 
   /// VisitGuardedExpr - Transfer function logic for ?, __builtin_choose
-  void VisitGuardedExpr(Expr* Ex, Expr* L, Expr* R, ExplodedNode* Pred, ExplodedNodeSet& Dst);
+  void VisitGuardedExpr(Expr* Ex, Expr* L, Expr* R, ExplodedNode* Pred,
+                        ExplodedNodeSet& Dst);
 
-  void VisitInitListExpr(InitListExpr* E, ExplodedNode* Pred, ExplodedNodeSet& Dst);
+  void VisitInitListExpr(InitListExpr* E, ExplodedNode* Pred,
+                         ExplodedNodeSet& Dst);
 
   /// VisitLogicalExpr - Transfer function logic for '&&', '||'
-  void VisitLogicalExpr(BinaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst);
+  void VisitLogicalExpr(BinaryOperator* B, ExplodedNode* Pred,
+                        ExplodedNodeSet& Dst);
 
   /// VisitMemberExpr - Transfer function for member expressions.
-  void VisitMemberExpr(MemberExpr* M, ExplodedNode* Pred, ExplodedNodeSet& Dst,bool asLValue);
+  void VisitMemberExpr(MemberExpr* M, ExplodedNode* Pred, ExplodedNodeSet& Dst,
+                       bool asLValue);
 
   /// VisitObjCIvarRefExpr - Transfer function logic for ObjCIvarRefExprs.
-  void VisitObjCIvarRefExpr(ObjCIvarRefExpr* DR, ExplodedNode* Pred, ExplodedNodeSet& Dst,
-                            bool asLValue);
+  void VisitObjCIvarRefExpr(ObjCIvarRefExpr* DR, ExplodedNode* Pred,
+                            ExplodedNodeSet& Dst, bool asLValue);
 
   /// VisitObjCForCollectionStmt - Transfer function logic for
   ///  ObjCForCollectionStmt.
@@ -526,9 +423,6 @@ protected:
   /// VisitUnaryOperator - Transfer function logic for unary operators.
   void VisitUnaryOperator(UnaryOperator* B, ExplodedNode* Pred, ExplodedNodeSet& Dst,
                           bool asLValue);
-
-  const GRState* CheckDivideZero(Expr* Ex, const GRState* St, ExplodedNode* Pred,
-                                 SVal Denom);
 
   /// EvalEagerlyAssume - Given the nodes in 'Src', eagerly assume symbolic
   ///  expressions of the form 'x != 0' and generate new nodes (stored in Dst)
@@ -564,39 +458,39 @@ public:
   }
   
 protected:
-  void EvalCall(ExplodedNodeSet& Dst, CallExpr* CE, SVal L, ExplodedNode* Pred);
-
   void EvalObjCMessageExpr(ExplodedNodeSet& Dst, ObjCMessageExpr* ME, ExplodedNode* Pred) {
     assert (Builder && "GRStmtNodeBuilder must be defined.");
     getTF().EvalObjCMessageExpr(Dst, *this, *Builder, ME, Pred);
   }
-
-  void EvalReturn(ExplodedNodeSet& Dst, ReturnStmt* s, ExplodedNode* Pred);
 
   const GRState* MarkBranch(const GRState* St, Stmt* Terminator,
                             bool branchTaken);
 
   /// EvalBind - Handle the semantics of binding a value to a specific location.
   ///  This method is used by EvalStore, VisitDeclStmt, and others.
-  void EvalBind(ExplodedNodeSet& Dst, Expr* Ex, ExplodedNode* Pred,
-                const GRState* St, SVal location, SVal Val);
+  void EvalBind(ExplodedNodeSet& Dst, Stmt *AssignE,
+                Stmt* StoreE, ExplodedNode* Pred,
+                const GRState* St, SVal location, SVal Val,
+                bool atDeclInit = false);
 
 public:
+  // FIXME: 'tag' should be removed, and a LocationContext should be used
+  // instead.
   void EvalLoad(ExplodedNodeSet& Dst, Expr* Ex, ExplodedNode* Pred,
-                const GRState* St, SVal location, const void *tag = 0);
+                const GRState* St, SVal location, const void *tag = 0,
+                QualType LoadTy = QualType());
 
-  ExplodedNode* EvalLocation(Stmt* Ex, ExplodedNode* Pred,
+  // FIXME: 'tag' should be removed, and a LocationContext should be used
+  // instead.
+  void EvalLocation(ExplodedNodeSet &Dst, Stmt *S, ExplodedNode* Pred,
                        const GRState* St, SVal location,
-                       const void *tag = 0);
+                       const void *tag, bool isLoad);
 
-
-  void EvalStore(ExplodedNodeSet& Dst, Expr* E, ExplodedNode* Pred, const GRState* St,
-                 SVal TargetLV, SVal Val, const void *tag = 0);
-
-  void EvalStore(ExplodedNodeSet& Dst, Expr* E, Expr* StoreE, ExplodedNode* Pred,
-                 const GRState* St, SVal TargetLV, SVal Val,
+  // FIXME: 'tag' should be removed, and a LocationContext should be used
+  // instead.
+  void EvalStore(ExplodedNodeSet& Dst, Expr* AssignE, Expr* StoreE,
+                 ExplodedNode* Pred, const GRState* St, SVal TargetLV, SVal Val,
                  const void *tag = 0);
-
 };
 
 } // end clang namespace

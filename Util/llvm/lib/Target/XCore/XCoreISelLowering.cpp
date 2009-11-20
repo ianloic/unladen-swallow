@@ -111,7 +111,8 @@ XCoreTargetLowering::XCoreTargetLowering(XCoreTargetMachine &XTM)
   setOperationAction(ISD::JumpTable, MVT::i32, Custom);
 
   setOperationAction(ISD::GlobalAddress, MVT::i32,   Custom);
-  
+  setOperationAction(ISD::BlockAddress, MVT::i32 , Custom);
+
   // Thread Local Storage
   setOperationAction(ISD::GlobalTLSAddress, MVT::i32, Custom);
   
@@ -158,6 +159,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) {
   {
   case ISD::GlobalAddress:    return LowerGlobalAddress(Op, DAG);
   case ISD::GlobalTLSAddress: return LowerGlobalTLSAddress(Op, DAG);
+  case ISD::BlockAddress:     return LowerBlockAddress(Op, DAG);
   case ISD::ConstantPool:     return LowerConstantPool(Op, DAG);
   case ISD::JumpTable:        return LowerJumpTable(Op, DAG);
   case ISD::LOAD:             return LowerLOAD(Op, DAG);
@@ -285,6 +287,17 @@ LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG)
   SDValue offset = DAG.getNode(ISD::MUL, dl, MVT::i32, BuildGetId(DAG, dl),
                        DAG.getConstant(Size, MVT::i32));
   return DAG.getNode(ISD::ADD, dl, MVT::i32, base, offset);
+}
+
+SDValue XCoreTargetLowering::
+LowerBlockAddress(SDValue Op, SelectionDAG &DAG)
+{
+  DebugLoc DL = Op.getDebugLoc();
+
+  BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
+  SDValue Result = DAG.getBlockAddress(BA, DL, /*isTarget=*/true);
+
+  return DAG.getNode(XCoreISD::PCRelativeWrapper, DL, getPointerTy(), Result);
 }
 
 SDValue XCoreTargetLowering::
@@ -860,7 +873,8 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
       }
       // Create the frame index object for this incoming parameter...
       int FI = MFI->CreateFixedObject(ObjSize,
-                                      LRSaveSize + VA.getLocMemOffset());
+                                      LRSaveSize + VA.getLocMemOffset(),
+                                      true, false);
 
       // Create the SelectionDAG nodes corresponding to a load
       //from this parameter
@@ -884,7 +898,7 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
       // address
       for (unsigned i = array_lengthof(ArgRegs) - 1; i >= FirstVAReg; --i) {
         // Create a stack slot
-        int FI = MFI->CreateFixedObject(4, offset);
+        int FI = MFI->CreateFixedObject(4, offset, true, false);
         if (i == FirstVAReg) {
           XFI->setVarArgsFrameIndex(FI);
         }
@@ -905,7 +919,8 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
     } else {
       // This will point to the next argument passed via stack.
       XFI->setVarArgsFrameIndex(
-          MFI->CreateFixedObject(4, LRSaveSize + CCInfo.getNextStackOffset()));
+        MFI->CreateFixedObject(4, LRSaveSize + CCInfo.getNextStackOffset(),
+                               true, false));
     }
   }
   
@@ -915,6 +930,17 @@ XCoreTargetLowering::LowerCCCArguments(SDValue Chain,
 //===----------------------------------------------------------------------===//
 //               Return Value Calling Convention Implementation
 //===----------------------------------------------------------------------===//
+
+bool XCoreTargetLowering::
+CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
+               const SmallVectorImpl<EVT> &OutTys,
+               const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
+               SelectionDAG &DAG) {
+  SmallVector<CCValAssign, 16> RVLocs;
+  CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
+                 RVLocs, *DAG.getContext());
+  return CCInfo.CheckReturn(OutTys, ArgsFlags, RetCC_XCore);
+}
 
 SDValue
 XCoreTargetLowering::LowerReturn(SDValue Chain,

@@ -15,15 +15,17 @@ add_llvm_library(LLVMAnalysis
   IVUsers.cpp
   InlineCost.cpp
   InstCount.cpp
+  InstructionSimplify.cpp
   Interval.cpp
   IntervalPartition.cpp
+  LazyValueInfo.cpp
   LibCallAliasAnalysis.cpp
   LibCallSemantics.cpp
   LiveValues.cpp
   LoopDependenceAnalysis.cpp
   LoopInfo.cpp
   LoopPass.cpp
-  MallocFreeHelper.cpp
+  MemoryBuiltins.cpp
   MemoryDependenceAnalysis.cpp
   PointerTracking.cpp
   PostDominators.cpp

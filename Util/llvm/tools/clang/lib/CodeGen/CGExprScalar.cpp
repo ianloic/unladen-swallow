@@ -135,11 +135,8 @@ public:
   }
   Value *VisitSizeOfAlignOfExpr(const SizeOfAlignOfExpr *E);
   Value *VisitAddrLabelExpr(const AddrLabelExpr *E) {
-    llvm::Value *V =
-      llvm::ConstantInt::get(llvm::Type::getInt32Ty(CGF.getLLVMContext()),
-                             CGF.GetIDForAddrOfLabel(E->getLabel()));
-
-    return Builder.CreateIntToPtr(V, ConvertType(E->getType()));
+    llvm::Value *V = CGF.GetAddrOfLabel(E->getLabel());
+    return Builder.CreateBitCast(V, ConvertType(E->getType()));
   }
 
   // l-values.
@@ -272,7 +269,12 @@ public:
   Value *VisitCXXNullPtrLiteralExpr(const CXXNullPtrLiteralExpr *E) {
     return llvm::Constant::getNullValue(ConvertType(E->getType()));
   }
-    
+
+  Value *VisitCXXThrowExpr(const CXXThrowExpr *E) {
+    CGF.EmitCXXThrowExpr(E);
+    return 0;
+  }
+
   // Binary Operators.
   Value *EmitMul(const BinOpInfo &Ops) {
     if (CGF.getContext().getLangOptions().OverflowChecking
@@ -345,6 +347,9 @@ public:
   Value *VisitBinLAnd       (const BinaryOperator *E);
   Value *VisitBinLOr        (const BinaryOperator *E);
   Value *VisitBinComma      (const BinaryOperator *E);
+
+  Value *VisitBinPtrMemD(const Expr *E) { return EmitLoadOfLValue(E); }
+  Value *VisitBinPtrMemI(const Expr *E) { return EmitLoadOfLValue(E); }
 
   // Other Operators.
   Value *VisitBlockExpr(const BlockExpr *BE);
@@ -537,13 +542,6 @@ EmitComplexToScalarConversion(CodeGenFunction::ComplexPairTy Src,
 //===----------------------------------------------------------------------===//
 
 Value *ScalarExprEmitter::VisitExpr(Expr *E) {
-  if (const BinaryOperator *BExpr = dyn_cast<BinaryOperator>(E))
-    if (BExpr->getOpcode() == BinaryOperator::PtrMemD) {
-      LValue LV = CGF.EmitPointerToDataMemberBinaryExpr(BExpr);
-      Value *InVal = CGF.EmitLoadOfLValue(LV, E->getType()).getScalarVal();
-      return InVal;
-    }
-  
   CGF.ErrorUnsupported(E, "scalar expression");
   if (E->getType()->isVoidType())
     return 0;
@@ -763,49 +761,20 @@ Value *ScalarExprEmitter::EmitCastExpr(const CastExpr *CE) {
 
   switch (Kind) {
   default:
-    // FIXME: Assert here.
-    // assert(0 && "Unhandled cast kind!");
+    //return CGF.ErrorUnsupported(E, "type of cast");
     break;
+
   case CastExpr::CK_Unknown:
-    // FIXME: We should really assert here - Unknown casts should never get
-    // as far as to codegen.
+    //assert(0 && "Unknown cast kind!");
     break;
+
   case CastExpr::CK_BitCast: {
     Value *Src = Visit(const_cast<Expr*>(E));
     return Builder.CreateBitCast(Src, ConvertType(DestTy));
   }
-  case CastExpr::CK_ArrayToPointerDecay: {
-    assert(E->getType()->isArrayType() &&
-           "Array to pointer decay must have array source type!");
+  case CastExpr::CK_NoOp:
+    return Visit(const_cast<Expr*>(E));
 
-    Value *V = EmitLValue(E).getAddress();  // Bitfields can't be arrays.
-
-    // Note that VLA pointers are always decayed, so we don't need to do
-    // anything here.
-    if (!E->getType()->isVariableArrayType()) {
-      assert(isa<llvm::PointerType>(V->getType()) && "Expected pointer");
-      assert(isa<llvm::ArrayType>(cast<llvm::PointerType>(V->getType())
-                                 ->getElementType()) &&
-             "Expected pointer to array");
-      V = Builder.CreateStructGEP(V, 0, "arraydecay");
-    }
-
-    // The resultant pointer type can be implicitly casted to other pointer
-    // types as well (e.g. void*) and can be implicitly converted to integer.
-    const llvm::Type *DestLTy = ConvertType(DestTy);
-    if (V->getType() != DestLTy) {
-      if (isa<llvm::PointerType>(DestLTy))
-        V = Builder.CreateBitCast(V, DestLTy, "ptrconv");
-      else {
-        assert(isa<llvm::IntegerType>(DestLTy) && "Unknown array decay");
-        V = Builder.CreatePtrToInt(V, DestLTy, "ptrconv");
-      }
-    }
-    return V;
-  }
-  case CastExpr::CK_NullToMemberPointer:
-    return CGF.CGM.EmitNullConstant(DestTy);
-      
   case CastExpr::CK_DerivedToBase: {
     const RecordType *DerivedClassTy = 
       E->getType()->getAs<PointerType>()->getPointeeType()->getAs<RecordType>();
@@ -831,6 +800,33 @@ Value *ScalarExprEmitter::EmitCastExpr(const CastExpr *CE) {
     return CGF.GetAddressCXXOfBaseClass(Src, DerivedClassDecl, BaseClassDecl,
                                         NullCheckValue);
   }
+  case CastExpr::CK_ToUnion: {
+    assert(0 && "Should be unreachable!");
+    break;
+  }
+  case CastExpr::CK_ArrayToPointerDecay: {
+    assert(E->getType()->isArrayType() &&
+           "Array to pointer decay must have array source type!");
+
+    Value *V = EmitLValue(E).getAddress();  // Bitfields can't be arrays.
+
+    // Note that VLA pointers are always decayed, so we don't need to do
+    // anything here.
+    if (!E->getType()->isVariableArrayType()) {
+      assert(isa<llvm::PointerType>(V->getType()) && "Expected pointer");
+      assert(isa<llvm::ArrayType>(cast<llvm::PointerType>(V->getType())
+                                 ->getElementType()) &&
+             "Expected pointer to array");
+      V = Builder.CreateStructGEP(V, 0, "arraydecay");
+    }
+
+    return V;
+  }
+  case CastExpr::CK_FunctionToPointerDecay:
+    return EmitLValue(E).getAddress();
+
+  case CastExpr::CK_NullToMemberPointer:
+    return CGF.CGM.EmitNullConstant(DestTy);
 
   case CastExpr::CK_IntegralToPointer: {
     Value *Src = Visit(const_cast<Expr*>(E));
@@ -850,7 +846,40 @@ Value *ScalarExprEmitter::EmitCastExpr(const CastExpr *CE) {
     Value *Src = Visit(const_cast<Expr*>(E));
     return Builder.CreatePtrToInt(Src, ConvertType(DestTy));
   }
-  
+
+  case CastExpr::CK_ToVoid: {
+    CGF.EmitAnyExpr(E, 0, false, true);
+    return 0;
+  }
+
+  case CastExpr::CK_Dynamic: {
+    Value *V = Visit(const_cast<Expr*>(E));
+    const CXXDynamicCastExpr *DCE = cast<CXXDynamicCastExpr>(CE);
+    return CGF.EmitDynamicCast(V, DCE);
+  }
+
+  case CastExpr::CK_VectorSplat: {
+    const llvm::Type *DstTy = ConvertType(DestTy);
+    Value *Elt = Visit(const_cast<Expr*>(E));
+
+    // Insert the element in element zero of an undef vector
+    llvm::Value *UnV = llvm::UndefValue::get(DstTy);
+    llvm::Value *Idx =
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext), 0);
+    UnV = Builder.CreateInsertElement(UnV, Elt, Idx, "tmp");
+
+    // Splat the element across to all elements
+    llvm::SmallVector<llvm::Constant*, 16> Args;
+    unsigned NumElements = cast<llvm::VectorType>(DstTy)->getNumElements();
+    for (unsigned i = 0; i < NumElements; i++)
+      Args.push_back(llvm::ConstantInt::get(
+                                        llvm::Type::getInt32Ty(VMContext), 0));
+
+    llvm::Constant *Mask = llvm::ConstantVector::get(&Args[0], NumElements);
+    llvm::Value *Yay = Builder.CreateShuffleVector(UnV, UnV, Mask, "splat");
+    return Yay;
+  }
+
   }
 
   // Handle cases where the source is an non-complex type.
@@ -1638,9 +1667,10 @@ Value *ScalarExprEmitter::VisitBinComma(const BinaryOperator *E) {
 /// expression is cheap enough and side-effect-free enough to evaluate
 /// unconditionally instead of conditionally.  This is used to convert control
 /// flow into selects in some cases.
-static bool isCheapEnoughToEvaluateUnconditionally(const Expr *E) {
+static bool isCheapEnoughToEvaluateUnconditionally(const Expr *E,
+                                                   CodeGenFunction &CGF) {
   if (const ParenExpr *PE = dyn_cast<ParenExpr>(E))
-    return isCheapEnoughToEvaluateUnconditionally(PE->getSubExpr());
+    return isCheapEnoughToEvaluateUnconditionally(PE->getSubExpr(), CGF);
 
   // TODO: Allow anything we can constant fold to an integer or fp constant.
   if (isa<IntegerLiteral>(E) || isa<CharacterLiteral>(E) ||
@@ -1651,7 +1681,9 @@ static bool isCheapEnoughToEvaluateUnconditionally(const Expr *E) {
   // X and Y are local variables.
   if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E))
     if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-      if (VD->hasLocalStorage() && !VD->getType().isVolatileQualified())
+      if (VD->hasLocalStorage() && !(CGF.getContext()
+                                     .getCanonicalType(VD->getType())
+                                     .isVolatileQualified()))
         return true;
 
   return false;
@@ -1680,8 +1712,9 @@ VisitConditionalOperator(const ConditionalOperator *E) {
   // If this is a really simple expression (like x ? 4 : 5), emit this as a
   // select instead of as control flow.  We can only do this if it is cheap and
   // safe to evaluate the LHS and RHS unconditionally.
-  if (E->getLHS() && isCheapEnoughToEvaluateUnconditionally(E->getLHS()) &&
-      isCheapEnoughToEvaluateUnconditionally(E->getRHS())) {
+  if (E->getLHS() && isCheapEnoughToEvaluateUnconditionally(E->getLHS(),
+                                                            CGF) &&
+      isCheapEnoughToEvaluateUnconditionally(E->getRHS(), CGF)) {
     llvm::Value *CondV = CGF.EvaluateExprAsBool(E->getCond());
     llvm::Value *LHS = Visit(E->getLHS());
     llvm::Value *RHS = Visit(E->getRHS());

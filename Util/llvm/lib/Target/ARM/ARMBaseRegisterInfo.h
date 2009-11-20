@@ -96,6 +96,8 @@ public:
 
   bool hasFP(const MachineFunction &MF) const;
 
+  bool needsStackRealignment(const MachineFunction &MF) const;
+
   bool cannotEliminateFrame(const MachineFunction &MF) const;
 
   void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
@@ -103,7 +105,7 @@ public:
 
   // Debug information queries.
   unsigned getRARegister() const;
-  unsigned getFrameRegister(MachineFunction &MF) const;
+  unsigned getFrameRegister(const MachineFunction &MF) const;
 
   // Exception handling queries.
   unsigned getEHExceptionRegister() const;

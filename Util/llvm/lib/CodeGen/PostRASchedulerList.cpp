@@ -19,12 +19,12 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "post-RA-sched"
+#include "AntiDepBreaker.h"
 #include "AggressiveAntiDepBreaker.h"
 #include "CriticalAntiDepBreaker.h"
 #include "ExactHazardRecognizer.h"
 #include "SimpleHazardRecognizer.h"
 #include "ScheduleDAGInstrs.h"
-#include "llvm/CodeGen/AntiDepBreaker.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/LatencyPriorityQueue.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
@@ -175,10 +175,11 @@ namespace {
     void FixupKills(MachineBasicBlock *MBB);
 
   private:
-    void ReleaseSucc(SUnit *SU, SDep *SuccEdge);
-    void ReleaseSuccessors(SUnit *SU);
-    void ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle);
-    void ListScheduleTopDown();
+    void ReleaseSucc(SUnit *SU, SDep *SuccEdge, bool IgnoreAntiDep);
+    void ReleaseSuccessors(SUnit *SU, bool IgnoreAntiDep);
+    void ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle, bool IgnoreAntiDep);
+    void ListScheduleTopDown(
+           AntiDepBreaker::CandidateMap *AntiDepCandidates);
     void StartBlockForKills(MachineBasicBlock *BB);
     
     // ToggleKillFlag - Toggle a register operand kill flag. Other
@@ -215,13 +216,14 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
 
   // Check for explicit enable/disable of post-ra scheduling.
   TargetSubtarget::AntiDepBreakMode AntiDepMode = TargetSubtarget::ANTIDEP_NONE;
+  SmallVector<TargetRegisterClass*, 4> CriticalPathRCs;
   if (EnablePostRAScheduler.getPosition() > 0) {
     if (!EnablePostRAScheduler)
       return false;
   } else {
     // Check that post-RA scheduling is enabled for this target.
     const TargetSubtarget &ST = Fn.getTarget().getSubtarget<TargetSubtarget>();
-    if (!ST.enablePostRAScheduler(OptLevel, AntiDepMode))
+    if (!ST.enablePostRAScheduler(OptLevel, AntiDepMode, CriticalPathRCs))
       return false;
   }
 
@@ -242,7 +244,7 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
     (ScheduleHazardRecognizer *)new SimpleHazardRecognizer();
   AntiDepBreaker *ADB = 
     ((AntiDepMode == TargetSubtarget::ANTIDEP_ALL) ?
-     (AntiDepBreaker *)new AggressiveAntiDepBreaker(Fn) :
+     (AntiDepBreaker *)new AggressiveAntiDepBreaker(Fn, CriticalPathRCs) :
      ((AntiDepMode == TargetSubtarget::ANTIDEP_CRITICAL) ? 
       (AntiDepBreaker *)new CriticalAntiDepBreaker(Fn) : NULL));
 
@@ -258,7 +260,7 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
       if (bbcnt++ % DebugDiv != DebugMod)
         continue;
       errs() << "*** DEBUG scheduling " << Fn.getFunction()->getNameStr() <<
-        ":MBB ID#" << MBB->getNumber() << " ***\n";
+        ":BB#" << MBB->getNumber() << " ***\n";
     }
 #endif
 
@@ -320,15 +322,32 @@ void SchedulePostRATDList::Schedule() {
   BuildSchedGraph(AA);
 
   if (AntiDepBreak != NULL) {
+    AntiDepBreaker::CandidateMap AntiDepCandidates;
+    const bool NeedCandidates = AntiDepBreak->NeedCandidates();
+    
     for (unsigned i = 0, Trials = AntiDepBreak->GetMaxTrials();
          i < Trials; ++i) {
-      DEBUG(errs() << "********** Break Anti-Deps, Trial " << 
+      DEBUG(errs() << "\n********** Break Anti-Deps, Trial " << 
             i << " **********\n");
+      
+      // If candidates are required, then schedule forward ignoring
+      // anti-dependencies to collect the candidate operands for
+      // anti-dependence breaking. The candidates will be the def
+      // operands for the anti-dependencies that if broken would allow
+      // an improved schedule
+      if (NeedCandidates) {
+        DEBUG(for (unsigned su = 0, e = SUnits.size(); su != e; ++su)
+                SUnits[su].dumpAll(this));
+
+        AntiDepCandidates.clear();
+        AvailableQueue.initNodes(SUnits);
+        ListScheduleTopDown(&AntiDepCandidates);
+        AvailableQueue.releaseState();
+      }
+
       unsigned Broken = 
-        AntiDepBreak->BreakAntiDependencies(SUnits, Begin, InsertPos,
-                                            InsertPosIndex);
-      if (Broken == 0)
-        break;
+        AntiDepBreak->BreakAntiDependencies(SUnits, AntiDepCandidates,
+                                            Begin, InsertPos, InsertPosIndex);
 
       // We made changes. Update the dependency graph.
       // Theoretically we could update the graph in place:
@@ -336,24 +355,26 @@ void SchedulePostRATDList::Schedule() {
       // the def's anti-dependence *and* output-dependence edges due to
       // that register, and add new anti-dependence and output-dependence
       // edges based on the next live range of the register.
-      SUnits.clear();
-      EntrySU = SUnit();
-      ExitSU = SUnit();
-      BuildSchedGraph(AA);
+      if ((Broken != 0) || NeedCandidates) {
+        SUnits.clear();
+        Sequence.clear();
+        EntrySU = SUnit();
+        ExitSU = SUnit();
+        BuildSchedGraph(AA);
+      }
 
       NumFixedAnti += Broken;
+      if (Broken == 0)
+        break;
     }
   }
 
   DEBUG(errs() << "********** List Scheduling **********\n");
-  
   DEBUG(for (unsigned su = 0, e = SUnits.size(); su != e; ++su)
           SUnits[su].dumpAll(this));
 
   AvailableQueue.initNodes(SUnits);
-
-  ListScheduleTopDown();
-  
+  ListScheduleTopDown(NULL);
   AvailableQueue.releaseState();
 }
 
@@ -453,7 +474,7 @@ bool SchedulePostRATDList::ToggleKillFlag(MachineInstr *MI,
 /// incorrect by instruction reordering.
 ///
 void SchedulePostRATDList::FixupKills(MachineBasicBlock *MBB) {
-  DEBUG(errs() << "Fixup kills for BB ID#" << MBB->getNumber() << '\n');
+  DEBUG(errs() << "Fixup kills for BB#" << MBB->getNumber() << '\n');
 
   std::set<unsigned> killedRegs;
   BitVector ReservedRegs = TRI->getReservedRegs(MF);
@@ -552,7 +573,8 @@ void SchedulePostRATDList::FixupKills(MachineBasicBlock *MBB) {
 
 /// ReleaseSucc - Decrement the NumPredsLeft count of a successor. Add it to
 /// the PendingQueue if the count reaches zero. Also update its cycle bound.
-void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge) {
+void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge,
+                                       bool IgnoreAntiDep) {
   SUnit *SuccSU = SuccEdge->getSUnit();
 
 #ifndef NDEBUG
@@ -568,7 +590,8 @@ void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge) {
   // Compute how many cycles it will be before this actually becomes
   // available.  This is the max of the start time of all predecessors plus
   // their latencies.
-  SuccSU->setDepthToAtLeast(SU->getDepth() + SuccEdge->getLatency());
+  SuccSU->setDepthToAtLeast(SU->getDepth(IgnoreAntiDep) +
+                            SuccEdge->getLatency(), IgnoreAntiDep);
   
   // If all the node's predecessors are scheduled, this node is ready
   // to be scheduled. Ignore the special ExitSU node.
@@ -577,40 +600,75 @@ void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge) {
 }
 
 /// ReleaseSuccessors - Call ReleaseSucc on each of SU's successors.
-void SchedulePostRATDList::ReleaseSuccessors(SUnit *SU) {
+void SchedulePostRATDList::ReleaseSuccessors(SUnit *SU, bool IgnoreAntiDep) {
   for (SUnit::succ_iterator I = SU->Succs.begin(), E = SU->Succs.end();
-       I != E; ++I)
-    ReleaseSucc(SU, &*I);
+       I != E; ++I) {
+    if (IgnoreAntiDep && 
+        ((I->getKind() == SDep::Anti) || (I->getKind() == SDep::Output)))
+      continue;
+    ReleaseSucc(SU, &*I, IgnoreAntiDep);
+  }
 }
 
 /// ScheduleNodeTopDown - Add the node to the schedule. Decrement the pending
 /// count of its successors. If a successor pending count is zero, add it to
 /// the Available queue.
-void SchedulePostRATDList::ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle) {
+void SchedulePostRATDList::ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle,
+                                               bool IgnoreAntiDep) {
   DEBUG(errs() << "*** Scheduling [" << CurCycle << "]: ");
   DEBUG(SU->dump(this));
   
   Sequence.push_back(SU);
-  assert(CurCycle >= SU->getDepth() && "Node scheduled above its depth!");
-  SU->setDepthToAtLeast(CurCycle);
+  assert(CurCycle >= SU->getDepth(IgnoreAntiDep) && 
+         "Node scheduled above its depth!");
+  SU->setDepthToAtLeast(CurCycle, IgnoreAntiDep);
 
-  ReleaseSuccessors(SU);
+  ReleaseSuccessors(SU, IgnoreAntiDep);
   SU->isScheduled = true;
   AvailableQueue.ScheduledNode(SU);
 }
 
 /// ListScheduleTopDown - The main loop of list scheduling for top-down
 /// schedulers.
-void SchedulePostRATDList::ListScheduleTopDown() {
+void SchedulePostRATDList::ListScheduleTopDown(
+                   AntiDepBreaker::CandidateMap *AntiDepCandidates) {
   unsigned CurCycle = 0;
+  const bool IgnoreAntiDep = (AntiDepCandidates != NULL);
+  
+  // We're scheduling top-down but we're visiting the regions in
+  // bottom-up order, so we don't know the hazards at the start of a
+  // region. So assume no hazards (this should usually be ok as most
+  // blocks are a single region).
+  HazardRec->Reset();
+
+  // If ignoring anti-dependencies, the Schedule DAG still has Anti
+  // dep edges, but we ignore them for scheduling purposes
+  AvailableQueue.setIgnoreAntiDep(IgnoreAntiDep);
 
   // Release any successors of the special Entry node.
-  ReleaseSuccessors(&EntrySU);
+  ReleaseSuccessors(&EntrySU, IgnoreAntiDep);
 
-  // All leaves to Available queue.
+  // Add all leaves to Available queue. If ignoring antideps we also
+  // adjust the predecessor count for each node to not include antidep
+  // edges.
   for (unsigned i = 0, e = SUnits.size(); i != e; ++i) {
     // It is available if it has no predecessors.
-    if (SUnits[i].Preds.empty()) {
+    bool available = SUnits[i].Preds.empty();
+    // If we are ignoring anti-dependencies then a node that has only
+    // anti-dep predecessors is available.
+    if (!available && IgnoreAntiDep) {
+      available = true;
+      for (SUnit::const_pred_iterator I = SUnits[i].Preds.begin(),
+             E = SUnits[i].Preds.end(); I != E; ++I) {
+        if ((I->getKind() != SDep::Anti) && (I->getKind() != SDep::Output))  {
+          available = false;
+        } else {
+          SUnits[i].NumPredsLeft -= 1;
+        }
+      }
+    }
+
+    if (available) {
       AvailableQueue.push(&SUnits[i]);
       SUnits[i].isAvailable = true;
     }
@@ -629,26 +687,25 @@ void SchedulePostRATDList::ListScheduleTopDown() {
     // so, add them to the available queue.
     unsigned MinDepth = ~0u;
     for (unsigned i = 0, e = PendingQueue.size(); i != e; ++i) {
-      if (PendingQueue[i]->getDepth() <= CurCycle) {
+      if (PendingQueue[i]->getDepth(IgnoreAntiDep) <= CurCycle) {
         AvailableQueue.push(PendingQueue[i]);
         PendingQueue[i]->isAvailable = true;
         PendingQueue[i] = PendingQueue.back();
         PendingQueue.pop_back();
         --i; --e;
-      } else if (PendingQueue[i]->getDepth() < MinDepth)
-        MinDepth = PendingQueue[i]->getDepth();
+      } else if (PendingQueue[i]->getDepth(IgnoreAntiDep) < MinDepth)
+        MinDepth = PendingQueue[i]->getDepth(IgnoreAntiDep);
     }
 
     DEBUG(errs() << "\n*** Examining Available\n";
           LatencyPriorityQueue q = AvailableQueue;
           while (!q.empty()) {
             SUnit *su = q.pop();
-            errs() << "Height " << su->getHeight() << ": ";
+            errs() << "Height " << su->getHeight(IgnoreAntiDep) << ": ";
             su->dump(this);
           });
 
     SUnit *FoundSUnit = 0;
-
     bool HasNoopHazards = false;
     while (!AvailableQueue.empty()) {
       SUnit *CurSUnit = AvailableQueue.pop();
@@ -672,9 +729,32 @@ void SchedulePostRATDList::ListScheduleTopDown() {
       NotReady.clear();
     }
 
-    // If we found a node to schedule, do it now.
+    // If we found a node to schedule...
     if (FoundSUnit) {
-      ScheduleNodeTopDown(FoundSUnit, CurCycle);
+      // If we are ignoring anti-dependencies and the SUnit we are
+      // scheduling has an antidep predecessor that has not been
+      // scheduled, then we will need to break that antidep if we want
+      // to get this schedule when not ignoring anti-dependencies.
+      if (IgnoreAntiDep) {
+        AntiDepBreaker::AntiDepRegVector AntiDepRegs;
+        for (SUnit::const_pred_iterator I = FoundSUnit->Preds.begin(),
+               E = FoundSUnit->Preds.end(); I != E; ++I) {
+          if (((I->getKind() == SDep::Anti) || 
+               (I->getKind() == SDep::Output)) &&
+              !I->getSUnit()->isScheduled)
+            AntiDepRegs.push_back(I->getReg());
+        }
+        
+        if (AntiDepRegs.size() > 0) {
+          DEBUG(errs() << "*** AntiDep Candidate: ");
+          DEBUG(FoundSUnit->dump(this));
+          AntiDepCandidates->insert(
+            AntiDepBreaker::CandidateMap::value_type(FoundSUnit, AntiDepRegs));
+        }
+      }
+
+      // ... schedule the node...
+      ScheduleNodeTopDown(FoundSUnit, CurCycle, IgnoreAntiDep);
       HazardRec->EmitInstruction(FoundSUnit);
       CycleHasInsts = true;
 
@@ -695,7 +775,8 @@ void SchedulePostRATDList::ListScheduleTopDown() {
         // just advance the current cycle and try again.
         DEBUG(errs() << "*** Stall in cycle " << CurCycle << '\n');
         HazardRec->AdvanceCycle();
-        ++NumStalls;
+        if (!IgnoreAntiDep)
+          ++NumStalls;
       } else {
         // Otherwise, we have no instructions to issue and we have instructions
         // that will fault if we don't do this right.  This is the case for
@@ -703,7 +784,8 @@ void SchedulePostRATDList::ListScheduleTopDown() {
         DEBUG(errs() << "*** Emitting noop in cycle " << CurCycle << '\n');
         HazardRec->EmitNoop();
         Sequence.push_back(0);   // NULL here means noop
-        ++NumNoops;
+        if (!IgnoreAntiDep)
+          ++NumNoops;
       }
 
       ++CurCycle;

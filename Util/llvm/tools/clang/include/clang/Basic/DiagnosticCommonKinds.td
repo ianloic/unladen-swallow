@@ -52,8 +52,11 @@ def warn_integer_too_large_for_signed : Warning<
 def note_invalid_subexpr_in_ice : Note<
   "subexpression not valid in an integer constant expression">;
 
-// clang-cc
-def err_pp_I_dash_not_supported : Error<
-  "-I- not supported, please use -iquote instead">;
+// Targets
+
+def err_target_unknown_triple : Error<
+  "unknown target triple '%0', please use -triple or -arch">;
+def err_target_unknown_abi : Error<"unknown target ABI '%0'">;
+def err_target_invalid_feature : Error<"invalid target feature '%0'">;
 
 }

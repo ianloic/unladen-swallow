@@ -329,7 +329,7 @@ def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
 
 // Subset of DPR that are accessible with VFP2 (and so that also have
 // 32-bit SPR subregs).
-def DPR_VFP2 : RegisterClass<"ARM", [f64, v2i32, v2f32], 64,
+def DPR_VFP2 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
                              [D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
                               D8,  D9,  D10, D11, D12, D13, D14, D15]> {
   let SubRegClassList = [SPR, SPR];
@@ -337,7 +337,7 @@ def DPR_VFP2 : RegisterClass<"ARM", [f64, v2i32, v2f32], 64,
 
 // Subset of DPR which can be used as a source of NEON scalars for 16-bit
 // operations
-def DPR_8 : RegisterClass<"ARM", [f64, v4i16, v2f32], 64,
+def DPR_8 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
                           [D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7]> {
   let SubRegClassList = [SPR_8, SPR_8];
 }
@@ -355,6 +355,13 @@ def QPR_VFP2 : RegisterClass<"ARM", [v16i8, v8i16, v4i32, v2i64, v4f32, v2f64],
                              128,
                              [Q0,  Q1,  Q2,  Q3,  Q4,  Q5,  Q6,  Q7]> {
   let SubRegClassList = [SPR, SPR, SPR, SPR, DPR_VFP2, DPR_VFP2];
+}
+
+// Subset of QPR that have DPR_8 and SPR_8 subregs.
+def QPR_8 : RegisterClass<"ARM", [v16i8, v8i16, v4i32, v2i64, v4f32, v2f64],
+                           128,
+                           [Q0,  Q1,  Q2,  Q3]> {
+  let SubRegClassList = [SPR_8, SPR_8, SPR_8, SPR_8, DPR_8, DPR_8];
 }
 
 // Condition code registers.

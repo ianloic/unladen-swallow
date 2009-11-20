@@ -52,7 +52,8 @@ public:
                               const char *Modifier = 0);
     
   void printBitfieldInvMaskImmOperand(const MCInst *MI, unsigned OpNum);
-  
+
+  void printThumbS4ImmOperand(const MCInst *MI, unsigned OpNum);
   void printThumbITMask(const MCInst *MI, unsigned OpNum) {}
   void printThumbAddrModeRROperand(const MCInst *MI, unsigned OpNum) {}
   void printThumbAddrModeRI5Operand(const MCInst *MI, unsigned OpNum,
@@ -78,6 +79,12 @@ public:
   void printJT2BlockOperand(const MCInst *MI, unsigned OpNum) {}
   void printTBAddrMode(const MCInst *MI, unsigned OpNum) {}
   void printNoHashImmediate(const MCInst *MI, unsigned OpNum);
+  void printVFPf32ImmOperand(const MCInst *MI, int OpNum) {}
+  void printVFPf64ImmOperand(const MCInst *MI, int OpNum) {}
+  void printHex8ImmOperand(const MCInst *MI, int OpNum) {}
+  void printHex16ImmOperand(const MCInst *MI, int OpNum) {}
+  void printHex32ImmOperand(const MCInst *MI, int OpNum) {}
+  void printHex64ImmOperand(const MCInst *MI, int OpNum) {}
 
   void printPCLabel(const MCInst *MI, unsigned OpNum);  
   // FIXME: Implement.

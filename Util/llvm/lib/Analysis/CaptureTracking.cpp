@@ -17,7 +17,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/CaptureTracking.h"
-#include "llvm/Analysis/MallocFreeHelper.h"
 #include "llvm/Instructions.h"
 #include "llvm/Value.h"
 #include "llvm/ADT/SmallSet.h"
@@ -29,8 +28,11 @@ using namespace llvm;
 /// by the enclosing function (which is required to exist).  This routine can
 /// be expensive, so consider caching the results.  The boolean ReturnCaptures
 /// specifies whether returning the value (or part of it) from the function
+/// counts as capturing it or not.  The boolean StoreCaptures specified whether
+/// storing the value (or part of it) into memory anywhere automatically
 /// counts as capturing it or not.
-bool llvm::PointerMayBeCaptured(const Value *V, bool ReturnCaptures) {
+bool llvm::PointerMayBeCaptured(const Value *V,
+                                bool ReturnCaptures, bool StoreCaptures) {
   assert(isa<PointerType>(V->getType()) && "Capture is for pointers only!");
   SmallVector<Use*, 16> Worklist;
   SmallSet<Use*, 16> Visited;
@@ -49,9 +51,6 @@ bool llvm::PointerMayBeCaptured(const Value *V, bool ReturnCaptures) {
 
     switch (I->getOpcode()) {
     case Instruction::Call:
-      if (isFreeCall(I))
-        // Freeing a pointer does not cause it to be captured.
-        break;
     case Instruction::Invoke: {
       CallSite CS = CallSite::get(I);
       // Not captured if the callee is readonly, doesn't return a copy through
@@ -86,7 +85,11 @@ bool llvm::PointerMayBeCaptured(const Value *V, bool ReturnCaptures) {
       break;
     case Instruction::Store:
       if (V == I->getOperand(0))
-        // Stored the pointer - it may be captured.
+        // Stored the pointer - conservatively assume it may be captured.
+        // TODO: If StoreCaptures is not true, we could do Fancy analysis
+        // to determine whether this store is not actually an escape point.
+        // In that case, BasicAliasAnalysis should be updated as well to
+        // take advantage of this.
         return true;
       // Storing to the pointee does not cause the pointer to be captured.
       break;
@@ -102,6 +105,11 @@ bool llvm::PointerMayBeCaptured(const Value *V, bool ReturnCaptures) {
           Worklist.push_back(U);
       }
       break;
+    case Instruction::ICmp:
+      // Comparing the pointer against null does not count as a capture.
+      if (isa<ConstantPointerNull>(I->getOperand(1)))
+        break;
+      return true;
     default:
       // Something else - be conservative and say it is captured.
       return true;

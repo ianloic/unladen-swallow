@@ -151,6 +151,15 @@ public:
       Context.getMetadata().addMD(MDKind, CurDbgLocation, I);
   }
 
+  /// SetDebugLocation -  Set location information for the given instruction.
+  void SetDebugLocation(Instruction *I, MDNode *Loc) {
+    if (MDKind == 0) 
+      MDKind = Context.getMetadata().getMDKind("dbg");
+    if (MDKind == 0)
+      MDKind = Context.getMetadata().registerMDKind("dbg");
+    Context.getMetadata().addMD(MDKind, Loc, I);
+  }
+
   /// Insert - Insert and return the specified instruction.
   template<typename InstTy>
   InstTy *Insert(InstTy *I, const Twine &Name = "") const {
@@ -251,6 +260,13 @@ public:
   /// (for efficient allocation).
   SwitchInst *CreateSwitch(Value *V, BasicBlock *Dest, unsigned NumCases = 10) {
     return Insert(SwitchInst::Create(V, Dest, NumCases));
+  }
+
+  /// CreateIndirectBr - Create an indirect branch instruction with the
+  /// specified address operand, with an optional hint for the number of
+  /// destinations that will be added (for efficient allocation).
+  IndirectBrInst *CreateIndirectBr(Value *Addr, unsigned NumDests = 10) {
+    return Insert(IndirectBrInst::Create(Addr, NumDests));
   }
 
   /// CreateInvoke - Create an invoke instruction.
@@ -383,15 +399,21 @@ public:
     return Insert(BinaryOperator::CreateAShr(LHS, RHS), Name);
   }
   Value *CreateAnd(Value *LHS, Value *RHS, const Twine &Name = "") {
-    if (Constant *LC = dyn_cast<Constant>(LHS))
-      if (Constant *RC = dyn_cast<Constant>(RHS))
+    if (Constant *RC = dyn_cast<Constant>(RHS)) {
+      if (isa<ConstantInt>(RC) && cast<ConstantInt>(RC)->isAllOnesValue())
+        return LHS;  // LHS & -1 -> LHS
+      if (Constant *LC = dyn_cast<Constant>(LHS))
         return Folder.CreateAnd(LC, RC);
+    }
     return Insert(BinaryOperator::CreateAnd(LHS, RHS), Name);
   }
   Value *CreateOr(Value *LHS, Value *RHS, const Twine &Name = "") {
-    if (Constant *LC = dyn_cast<Constant>(LHS))
-      if (Constant *RC = dyn_cast<Constant>(RHS))
+    if (Constant *RC = dyn_cast<Constant>(RHS)) {
+      if (RC->isNullValue())
+        return LHS;  // LHS | 0 -> LHS
+      if (Constant *LC = dyn_cast<Constant>(LHS))
         return Folder.CreateOr(LC, RC);
+    }
     return Insert(BinaryOperator::CreateOr(LHS, RHS), Name);
   }
   Value *CreateXor(Value *LHS, Value *RHS, const Twine &Name = "") {
@@ -687,6 +709,11 @@ public:
       return Folder.CreateIntCast(VC, DestTy, isSigned);
     return Insert(CastInst::CreateIntegerCast(V, DestTy, isSigned), Name);
   }
+private:
+  // Provided to resolve 'CreateIntCast(Ptr, Ptr, "...")', giving a compile time
+  // error, instead of converting the string to bool for the isSigned parameter.
+  Value *CreateIntCast(Value *, const Type *, const char *); // DO NOT IMPLEMENT
+public:
   Value *CreateFPCast(Value *V, const Type *DestTy, const Twine &Name = "") {
     if (V->getType() == DestTy)
       return V;

@@ -74,7 +74,7 @@ class CodeGenFunction : public BlockFunction {
   void operator=(const CodeGenFunction&);  // DO NOT IMPLEMENT
 public:
   CodeGenModule &CGM;  // Per-module state.
-  TargetInfo &Target;
+  const TargetInfo &Target;
 
   typedef std::pair<llvm::Value *, llvm::Value *> ComplexPairTy;
   CGBuilderTy Builder;
@@ -108,11 +108,12 @@ public:
 
   /// PushCleanupBlock - Push a new cleanup entry on the stack and set the
   /// passed in block as the cleanup block.
-  void PushCleanupBlock(llvm::BasicBlock *CleanupBlock);
+  void PushCleanupBlock(llvm::BasicBlock *CleanupEntryBlock,
+                        llvm::BasicBlock *CleanupExitBlock = 0);
 
   /// CleanupBlockInfo - A struct representing a popped cleanup block.
   struct CleanupBlockInfo {
-    /// CleanupBlock - the cleanup block
+    /// CleanupEntryBlock - the cleanup entry block
     llvm::BasicBlock *CleanupBlock;
 
     /// SwitchBlock - the block (if any) containing the switch instruction used
@@ -138,17 +139,24 @@ public:
   class CleanupScope {
     CodeGenFunction& CGF;
     llvm::BasicBlock *CurBB;
-    llvm::BasicBlock *CleanupBB;
-
+    llvm::BasicBlock *CleanupEntryBB;
+    llvm::BasicBlock *CleanupExitBB;
+    
   public:
     CleanupScope(CodeGenFunction &cgf)
-      : CGF(cgf), CurBB(CGF.Builder.GetInsertBlock()) {
-      CleanupBB = CGF.createBasicBlock("cleanup");
-      CGF.Builder.SetInsertPoint(CleanupBB);
+      : CGF(cgf), CurBB(CGF.Builder.GetInsertBlock()),
+      CleanupEntryBB(CGF.createBasicBlock("cleanup")), CleanupExitBB(0) {
+      CGF.Builder.SetInsertPoint(CleanupEntryBB);
     }
 
+    llvm::BasicBlock *getCleanupExitBlock() {
+      if (!CleanupExitBB)
+        CleanupExitBB = CGF.createBasicBlock("cleanup.exit");
+      return CleanupExitBB;
+    }
+    
     ~CleanupScope() {
-      CGF.PushCleanupBlock(CleanupBB);
+      CGF.PushCleanupBlock(CleanupEntryBB, CleanupExitBB);
       // FIXME: This is silly, move this into the builder.
       if (CurBB)
         CGF.Builder.SetInsertPoint(CurBB);
@@ -183,19 +191,13 @@ public:
   void PopConditionalTempDestruction();
 
 private:
-  CGDebugInfo* DebugInfo;
+  CGDebugInfo *DebugInfo;
 
-  /// LabelIDs - Track arbitrary ids assigned to labels for use in implementing
-  /// the GCC address-of-label extension and indirect goto. IDs are assigned to
-  /// labels inside getIDForAddrOfLabel().
-  std::map<const LabelStmt*, unsigned> LabelIDs;
-
-  /// IndirectGotoSwitch - The first time an indirect goto is seen we create a
-  /// block with the switch for the indirect gotos.  Every time we see the
-  /// address of a label taken, we add the label to the indirect goto.  Every
-  /// subsequent indirect goto is codegen'd as a jump to the
-  /// IndirectGotoSwitch's basic block.
-  llvm::SwitchInst *IndirectGotoSwitch;
+  /// IndirectBranch - The first time an indirect goto is seen we create a
+  /// block with an indirect branch.  Every time we see the address of a label
+  /// taken, we add the label to the indirect goto.  Every subsequent indirect
+  /// goto is codegen'd as a jump to the IndirectBranch's basic block.
+  llvm::IndirectBrInst *IndirectBranch;
 
   /// LocalDeclMap - This keeps track of the LLVM allocas or globals for local C
   /// decls.
@@ -240,9 +242,12 @@ private:
   bool DidCallStackSave;
 
   struct CleanupEntry {
-    /// CleanupBlock - The block of code that does the actual cleanup.
-    llvm::BasicBlock *CleanupBlock;
+    /// CleanupEntryBlock - The block of code that does the actual cleanup.
+    llvm::BasicBlock *CleanupEntryBlock;
 
+    /// CleanupExitBlock - The cleanup exit block.
+    llvm::BasicBlock *CleanupExitBlock;
+    
     /// Blocks - Basic blocks that were emitted in the current cleanup scope.
     std::vector<llvm::BasicBlock *> Blocks;
 
@@ -250,8 +255,10 @@ private:
     /// inserted into the current function yet.
     std::vector<llvm::BranchInst *> BranchFixups;
 
-    explicit CleanupEntry(llvm::BasicBlock *cb)
-      : CleanupBlock(cb) {}
+    explicit CleanupEntry(llvm::BasicBlock *CleanupEntryBlock,
+                          llvm::BasicBlock *CleanupExitBlock)
+      : CleanupEntryBlock(CleanupEntryBlock), 
+      CleanupExitBlock(CleanupExitBlock) {}
   };
 
   /// CleanupEntries - Stack of cleanup entries.
@@ -374,8 +381,10 @@ public:
   /// legal to call this function even if there is no current insertion point.
   void FinishFunction(SourceLocation EndLoc=SourceLocation());
 
-  /// GenerateVtable - Generate the vtable for the given type.
-  llvm::Value *GenerateVtable(const CXXRecordDecl *RD);
+  /// DynamicTypeAdjust - Do the non-virtual and virtual adjustments on an
+  /// object pointer to alter the dynamic type of the pointer.  Used by
+  /// GenerateCovariantThunk for building thunks.
+  llvm::Value *DynamicTypeAdjust(llvm::Value *V, int64_t nv, int64_t v);
 
   /// GenerateThunk - Generate a thunk for the given method
   llvm::Constant *GenerateThunk(llvm::Function *Fn, const CXXMethodDecl *MD,
@@ -502,7 +511,7 @@ public:
   //===--------------------------------------------------------------------===//
 
   Qualifiers MakeQualifiers(QualType T) {
-    Qualifiers Quals = T.getQualifiers();
+    Qualifiers Quals = getContext().getCanonicalType(T).getQualifiers();
     Quals.setObjCGCAttr(getContext().getObjCGCAttrKind(T));
     return Quals;
   }
@@ -558,7 +567,7 @@ public:
   /// the input field number being accessed.
   static unsigned getAccessedFieldNo(unsigned Idx, const llvm::Constant *Elts);
 
-  unsigned GetIDForAddrOfLabel(const LabelStmt *L);
+  llvm::BlockAddress *GetAddrOfLabel(const LabelStmt *L);
   llvm::BasicBlock *GetIndirectGotoBlock();
 
   /// EmitMemSetToZero - Generate code to memset a value of the given type to 0.
@@ -637,6 +646,14 @@ public:
                                  const ArrayType *Array,
                                  llvm::Value *This);
 
+  void EmitCXXAggrDestructorCall(const CXXDestructorDecl *D,
+                                 llvm::Value *NumElements,
+                                 llvm::Value *This);
+
+  llvm::Constant * GenerateCXXAggrDestructorHelper(const CXXDestructorDecl *D,
+                                                const ArrayType *Array,
+                                                llvm::Value *This);
+
   void EmitCXXDestructorCall(const CXXDestructorDecl *D, CXXDtorType Type,
                              llvm::Value *This);
 
@@ -645,6 +662,12 @@ public:
 
   llvm::Value *EmitCXXNewExpr(const CXXNewExpr *E);
   void EmitCXXDeleteExpr(const CXXDeleteExpr *E);
+
+  void EmitDeleteCall(const FunctionDecl *DeleteFD, llvm::Value *Ptr,
+                      QualType DeleteTy);
+
+  llvm::Value* EmitCXXTypeidExpr(const CXXTypeidExpr *E);
+  llvm::Value *EmitDynamicCast(llvm::Value *V, const CXXDynamicCastExpr *DCE);
 
   //===--------------------------------------------------------------------===//
   //                            Declaration Emission
@@ -819,17 +842,18 @@ public:
   LValue EmitConditionalOperatorLValue(const ConditionalOperator *E);
   LValue EmitCastLValue(const CastExpr *E);
   LValue EmitNullInitializationLValue(const CXXZeroInitValueExpr *E);
-  LValue EmitPointerToDataMemberLValue(const DeclRefExpr *E);
+  
+  LValue EmitPointerToDataMemberLValue(const FieldDecl *Field);
   
   llvm::Value *EmitIvarOffset(const ObjCInterfaceDecl *Interface,
                               const ObjCIvarDecl *Ivar);
-  LValue EmitLValueForField(llvm::Value* Base, FieldDecl* Field,
+  LValue EmitLValueForField(llvm::Value* Base, const FieldDecl* Field,
                             bool isUnion, unsigned CVRQualifiers);
   LValue EmitLValueForIvar(QualType ObjectTy,
                            llvm::Value* Base, const ObjCIvarDecl *Ivar,
                            unsigned CVRQualifiers);
 
-  LValue EmitLValueForBitfield(llvm::Value* Base, FieldDecl* Field,
+  LValue EmitLValueForBitfield(llvm::Value* Base, const FieldDecl* Field,
                                 unsigned CVRQualifiers);
 
   LValue EmitBlockDeclRefLValue(const BlockDeclRefExpr *E);
@@ -838,6 +862,7 @@ public:
   LValue EmitCXXConstructLValue(const CXXConstructExpr *E);
   LValue EmitCXXBindTemporaryLValue(const CXXBindTemporaryExpr *E);
   LValue EmitCXXExprWithTemporariesLValue(const CXXExprWithTemporaries *E);
+  LValue EmitCXXTypeidLValue(const CXXTypeidExpr *E);
   
   LValue EmitObjCMessageExprLValue(const ObjCMessageExpr *E);
   LValue EmitObjCIvarRefLValue(const ObjCIvarRefExpr *E);
@@ -869,8 +894,11 @@ public:
                   const Decl *TargetDecl = 0);
   RValue EmitCallExpr(const CallExpr *E);
 
-  llvm::Value *BuildVirtualCall(const CXXMethodDecl *MD, llvm::Value *&This,
+  llvm::Value *BuildVirtualCall(const CXXMethodDecl *MD, llvm::Value *This,
                                 const llvm::Type *Ty);
+  llvm::Value *BuildVirtualCall(const CXXDestructorDecl *DD, CXXDtorType Type, 
+                                llvm::Value *&This, const llvm::Type *Ty);
+
   RValue EmitCXXMemberCall(const CXXMethodDecl *MD,
                            llvm::Value *Callee,
                            llvm::Value *This,
@@ -984,7 +1012,7 @@ public:
 
   /// EmitCXXGlobalDtorRegistration - Emits a call to register the global ptr
   /// with the C++ runtime so that its destructor will be called at exit.
-  void EmitCXXGlobalDtorRegistration(const CXXDestructorDecl *Dtor,
+  void EmitCXXGlobalDtorRegistration(llvm::Constant *DtorFn,
                                      llvm::Constant *DeclPtr);
 
   /// GenerateCXXGlobalInitFunc - Generates code for initializing global
@@ -999,6 +1027,8 @@ public:
                                     llvm::Value *AggLoc = 0,
                                     bool IsAggLocVolatile = false,
                                     bool IsInitializer = false);
+
+  void EmitCXXThrowExpr(const CXXThrowExpr *E);
 
   //===--------------------------------------------------------------------===//
   //                             Internal Helpers
@@ -1067,6 +1097,7 @@ private:
     if (CallArgTypeInfo) {
       for (typename T::arg_type_iterator I = CallArgTypeInfo->arg_type_begin(),
            E = CallArgTypeInfo->arg_type_end(); I != E; ++I, ++Arg) {
+        assert(Arg != ArgEnd && "Running over edge of argument list!");
         QualType ArgType = *I;
 
         assert(getContext().getCanonicalType(ArgType.getNonReferenceType()).

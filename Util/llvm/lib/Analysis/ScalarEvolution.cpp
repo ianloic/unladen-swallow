@@ -3265,9 +3265,8 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
     // Now that we know more about the trip count for this loop, forget any
     // existing SCEV values for PHI nodes in this loop since they are only
     // conservative estimates made without the benefit of trip count
-    // information. This is similar to the code in
-    // forgetLoopBackedgeTakenCount, except that it handles SCEVUnknown PHI
-    // nodes specially.
+    // information. This is similar to the code in forgetLoop, except that
+    // it handles SCEVUnknown PHI nodes specially.
     if (ItCount.hasAnyInfo()) {
       SmallVector<Instruction *, 16> Worklist;
       PushLoopPHIs(L, Worklist);
@@ -3301,13 +3300,14 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   return Pair.first->second;
 }
 
-/// forgetLoopBackedgeTakenCount - This method should be called by the
-/// client when it has changed a loop in a way that may effect
-/// ScalarEvolution's ability to compute a trip count, or if the loop
-/// is deleted.
-void ScalarEvolution::forgetLoopBackedgeTakenCount(const Loop *L) {
+/// forgetLoop - This method should be called by the client when it has
+/// changed a loop in a way that may effect ScalarEvolution's ability to
+/// compute a trip count, or if the loop is deleted.
+void ScalarEvolution::forgetLoop(const Loop *L) {
+  // Drop any stored trip count value.
   BackedgeTakenCounts.erase(L);
 
+  // Drop information about expressions based on loop-header PHIs.
   SmallVector<Instruction *, 16> Worklist;
   PushLoopPHIs(L, Worklist);
 
@@ -3811,29 +3811,26 @@ static PHINode *getConstantEvolvingPHI(Value *V, const Loop *L) {
 /// getConstantEvolvingPHI predicate, evaluate its value assuming the PHI node
 /// in the loop has the value PHIVal.  If we can't fold this expression for some
 /// reason, return null.
-static Constant *EvaluateExpression(Value *V, Constant *PHIVal) {
+static Constant *EvaluateExpression(Value *V, Constant *PHIVal,
+                                    const TargetData *TD) {
   if (isa<PHINode>(V)) return PHIVal;
   if (Constant *C = dyn_cast<Constant>(V)) return C;
   if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) return GV;
   Instruction *I = cast<Instruction>(V);
-  LLVMContext &Context = I->getParent()->getContext();
 
   std::vector<Constant*> Operands;
   Operands.resize(I->getNumOperands());
 
   for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
-    Operands[i] = EvaluateExpression(I->getOperand(i), PHIVal);
+    Operands[i] = EvaluateExpression(I->getOperand(i), PHIVal, TD);
     if (Operands[i] == 0) return 0;
   }
 
   if (const CmpInst *CI = dyn_cast<CmpInst>(I))
-    return ConstantFoldCompareInstOperands(CI->getPredicate(),
-                                           &Operands[0], Operands.size(),
-                                           Context);
-  else
-    return ConstantFoldInstOperands(I->getOpcode(), I->getType(),
-                                    &Operands[0], Operands.size(),
-                                    Context);
+    return ConstantFoldCompareInstOperands(CI->getPredicate(), Operands[0],
+                                           Operands[1], TD);
+  return ConstantFoldInstOperands(I->getOpcode(), I->getType(),
+                                  &Operands[0], Operands.size(), TD);
 }
 
 /// getConstantEvolutionLoopExitValue - If we know that the specified Phi is
@@ -3879,7 +3876,7 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
       return RetVal = PHIVal;  // Got exit value!
 
     // Compute the value of the PHI node for the next iteration.
-    Constant *NextPHI = EvaluateExpression(BEValue, PHIVal);
+    Constant *NextPHI = EvaluateExpression(BEValue, PHIVal, TD);
     if (NextPHI == PHIVal)
       return RetVal = NextPHI;  // Stopped evolving!
     if (NextPHI == 0)
@@ -3920,7 +3917,7 @@ ScalarEvolution::ComputeBackedgeTakenCountExhaustively(const Loop *L,
   for (Constant *PHIVal = StartCST;
        IterationNum != MaxIterations; ++IterationNum) {
     ConstantInt *CondVal =
-      dyn_cast_or_null<ConstantInt>(EvaluateExpression(Cond, PHIVal));
+      dyn_cast_or_null<ConstantInt>(EvaluateExpression(Cond, PHIVal, TD));
 
     // Couldn't symbolically evaluate.
     if (!CondVal) return getCouldNotCompute();
@@ -3931,7 +3928,7 @@ ScalarEvolution::ComputeBackedgeTakenCountExhaustively(const Loop *L,
     }
 
     // Compute the value of the PHI node for the next iteration.
-    Constant *NextPHI = EvaluateExpression(BEValue, PHIVal);
+    Constant *NextPHI = EvaluateExpression(BEValue, PHIVal, TD);
     if (NextPHI == 0 || NextPHI == PHIVal)
       return getCouldNotCompute();// Couldn't evaluate or not making progress...
     PHIVal = NextPHI;
@@ -4040,12 +4037,10 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
         Constant *C;
         if (const CmpInst *CI = dyn_cast<CmpInst>(I))
           C = ConstantFoldCompareInstOperands(CI->getPredicate(),
-                                              &Operands[0], Operands.size(),
-                                              getContext());
+                                              Operands[0], Operands[1], TD);
         else
           C = ConstantFoldInstOperands(I->getOpcode(), I->getType(),
-                                       &Operands[0], Operands.size(),
-                                       getContext());
+                                       &Operands[0], Operands.size(), TD);
         return getSCEV(C);
       }
     }

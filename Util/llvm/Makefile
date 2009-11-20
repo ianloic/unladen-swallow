@@ -24,14 +24,19 @@ LEVEL := .
 # "llvmCore", then this is an "Apple-style" build; search for
 # "Apple-style" in the comments for more info.  Anything else is a
 # normal build.
-ifneq ($(RC_ProjectName),llvmCore)  # Normal build (not "Apple-style").
+ifneq ($(findstring llvmCore, $(RC_ProjectName)),llvmCore)  # Normal build (not "Apple-style").
+
 ifeq ($(BUILD_DIRS_ONLY),1)
   DIRS := lib/System lib/Support utils
   OPTIONAL_DIRS :=
 else
   DIRS := lib/System lib/Support utils lib/VMCore lib tools/llvm-config \
           tools runtime docs unittests
-  OPTIONAL_DIRS := examples projects bindings
+  OPTIONAL_DIRS := projects bindings
+endif
+
+ifeq ($(BUILD_EXAMPLES),1)
+  OPTIONAL_DIRS += examples
 endif
 
 EXTRA_DIST := test unittests llvm.spec include win32 Xcode
@@ -94,6 +99,8 @@ cross-compile-build-tools:
 	$(Verb) if [ ! -f BuildTools/Makefile ]; then \
           $(MKDIR) BuildTools; \
 	  cd BuildTools ; \
+	  unset CFLAGS ; \
+	  unset CXXFLAGS ; \
 	  $(PROJ_SRC_DIR)/configure --build=$(BUILD_TRIPLE) \
 		--host=$(BUILD_TRIPLE) --target=$(BUILD_TRIPLE); \
 	  cd .. ; \

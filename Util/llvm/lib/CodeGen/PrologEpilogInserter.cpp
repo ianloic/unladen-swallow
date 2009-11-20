@@ -264,7 +264,8 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
       if ((unsigned)FrameIdx > MaxCSFrameIndex) MaxCSFrameIndex = FrameIdx;
     } else {
       // Spill it to the stack where we must.
-      FrameIdx = FFI->CreateFixedObject(RC->getSize(), FixedSlot->Offset);
+      FrameIdx = FFI->CreateFixedObject(RC->getSize(), FixedSlot->Offset,
+                                        true, false);
     }
 
     I->setFrameIdx(FrameIdx);
@@ -542,7 +543,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
   // Make sure the special register scavenging spill slot is closest to the
   // frame pointer if a frame pointer is required.
   const TargetRegisterInfo *RegInfo = Fn.getTarget().getRegisterInfo();
-  if (RS && RegInfo->hasFP(Fn)) {
+  if (RS && RegInfo->hasFP(Fn) && !RegInfo->needsStackRealignment(Fn)) {
     int SFI = RS->getScavengingFrameIndex();
     if (SFI >= 0)
       AdjustStackOffset(FFI, SFI, StackGrowsDown, Offset, MaxAlign);
@@ -571,7 +572,7 @@ void PEI::calculateFrameObjectOffsets(MachineFunction &Fn) {
 
   // Make sure the special register scavenging spill slot is closest to the
   // stack pointer.
-  if (RS && !RegInfo->hasFP(Fn)) {
+  if (RS && (!RegInfo->hasFP(Fn) || RegInfo->needsStackRealignment(Fn))) {
     int SFI = RS->getScavengingFrameIndex();
     if (SFI >= 0)
       AdjustStackOffset(FFI, SFI, StackGrowsDown, Offset, MaxAlign);

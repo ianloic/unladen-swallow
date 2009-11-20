@@ -27,7 +27,7 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm)
   : BlockFunction(cgm, *this, Builder), CGM(cgm),
     Target(CGM.getContext().Target),
     Builder(cgm.getModule().getContext()),
-    DebugInfo(0), IndirectGotoSwitch(0),
+    DebugInfo(0), IndirectBranch(0),
     SwitchInsn(0), CaseRangeBlock(0), InvokeDest(0),
     CXXThisDecl(0) {
   LLVMIntTy = ConvertType(getContext().IntTy);
@@ -130,10 +130,27 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
 
   EmitFunctionEpilog(*CurFnInfo, ReturnValue);
 
+  // If someone did an indirect goto, emit the indirect goto block at the end of
+  // the function.
+  if (IndirectBranch) {
+    EmitBlock(IndirectBranch->getParent());
+    Builder.ClearInsertionPoint();
+  }
+  
   // Remove the AllocaInsertPt instruction, which is just a convenience for us.
   llvm::Instruction *Ptr = AllocaInsertPt;
   AllocaInsertPt = 0;
   Ptr->eraseFromParent();
+  
+  // If someone took the address of a label but never did an indirect goto, we
+  // made a zero entry PHI node, which is illegal, zap it now.
+  if (IndirectBranch) {
+    llvm::PHINode *PN = cast<llvm::PHINode>(IndirectBranch->getAddress());
+    if (PN->getNumIncomingValues() == 0) {
+      PN->replaceAllUsesWith(llvm::UndefValue::get(PN->getType()));
+      PN->eraseFromParent();
+    }
+  }
 }
 
 void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
@@ -233,19 +250,21 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD,
   // FIXME: Support CXXTryStmt here, too.
   if (const CompoundStmt *S = FD->getCompoundBody()) {
     StartFunction(GD, FD->getResultType(), Fn, Args, S->getLBracLoc());
-    const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(FD);
-    llvm::BasicBlock *DtorEpilogue = 0;
-    if (DD) {
-      DtorEpilogue = createBasicBlock("dtor.epilogue");
-    
-      PushCleanupBlock(DtorEpilogue);
-    }
-    
-    if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD))
+
+    if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD)) {
       EmitCtorPrologue(CD, GD.getCtorType());
-    EmitStmt(S);
+      EmitStmt(S);
       
-    if (DD) {
+      // If any of the member initializers are temporaries bound to references
+      // make sure to emit their destructors.
+      EmitCleanupBlocks(0);
+      
+    } else if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(FD)) {
+      llvm::BasicBlock *DtorEpilogue  = createBasicBlock("dtor.epilogue");
+      PushCleanupBlock(DtorEpilogue);
+
+      EmitStmt(S);
+      
       CleanupBlockInfo Info = PopCleanupBlock();
 
       assert(Info.CleanupBlock == DtorEpilogue && "Block mismatch!");
@@ -256,7 +275,11 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD,
         EmitBlock(Info.SwitchBlock);
       if (Info.EndBlock)
         EmitBlock(Info.EndBlock);
+    } else {
+      // Just a regular function, emit its body.
+      EmitStmt(S);
     }
+    
     FinishFunction(S->getRBracLoc());
   } else if (FD->isImplicit()) {
     const CXXRecordDecl *ClassDecl =
@@ -466,81 +489,32 @@ void CodeGenFunction::EmitMemSetToZero(llvm::Value *DestPtr, QualType Ty) {
                                              TypeInfo.second/8));
 }
 
-unsigned CodeGenFunction::GetIDForAddrOfLabel(const LabelStmt *L) {
-  // Use LabelIDs.size()+1 as the new ID if one hasn't been assigned.
-  unsigned &Entry = LabelIDs[L];
-  if (Entry) return Entry;
+llvm::BlockAddress *CodeGenFunction::GetAddrOfLabel(const LabelStmt *L) {
+  // Make sure that there is a block for the indirect goto.
+  if (IndirectBranch == 0)
+    GetIndirectGotoBlock();
   
-  Entry = LabelIDs.size();
+  llvm::BasicBlock *BB = getBasicBlockForLabel(L);
   
-  // If this is the first "address taken" of a label and the indirect goto has
-  // already been seen, add this to it.
-  if (IndirectGotoSwitch) {
-    // If this is the first address-taken label, set it as the default dest.
-    if (Entry == 1)
-      IndirectGotoSwitch->setSuccessor(0, getBasicBlockForLabel(L));
-    else {
-      // Otherwise add it to the switch as a new dest.
-      const llvm::IntegerType *Int32Ty = llvm::Type::getInt32Ty(VMContext);
-      IndirectGotoSwitch->addCase(llvm::ConstantInt::get(Int32Ty, Entry),
-                                  getBasicBlockForLabel(L));
-    }
-  }
-  
-  return Entry;
+  // Make sure the indirect branch includes all of the address-taken blocks.
+  IndirectBranch->addDestination(BB);
+  return llvm::BlockAddress::get(CurFn, BB);
 }
 
 llvm::BasicBlock *CodeGenFunction::GetIndirectGotoBlock() {
-  // If we already made the switch stmt for indirect goto, return its block.
-  if (IndirectGotoSwitch) return IndirectGotoSwitch->getParent();
+  // If we already made the indirect branch for indirect goto, return its block.
+  if (IndirectBranch) return IndirectBranch->getParent();
   
-  EmitBlock(createBasicBlock("indirectgoto"));
+  CGBuilderTy TmpBuilder(createBasicBlock("indirectgoto"));
   
-  // Create the PHI node that indirect gotos will add entries to.
-  llvm::Value *DestVal =
-    Builder.CreatePHI(llvm::Type::getInt32Ty(VMContext), "indirect.goto.dest");
-  
-  // Create the switch instruction.  For now, set the insert block to this block
-  // which will be fixed as labels are added.
-  IndirectGotoSwitch = Builder.CreateSwitch(DestVal, Builder.GetInsertBlock());
-  
-  // Clear the insertion point to indicate we are in unreachable code.
-  Builder.ClearInsertionPoint();
-  
-  // If we already have labels created, add them.
-  if (!LabelIDs.empty()) {
-    // Invert LabelID's so that the order is determinstic.
-    std::vector<const LabelStmt*> AddrTakenLabelsByID;
-    AddrTakenLabelsByID.resize(LabelIDs.size());
-    
-    for (std::map<const LabelStmt*,unsigned>::iterator 
-         LI = LabelIDs.begin(), LE = LabelIDs.end(); LI != LE; ++LI) {
-      assert(LI->second-1 < AddrTakenLabelsByID.size() &&
-             "Numbering inconsistent");
-      AddrTakenLabelsByID[LI->second-1] = LI->first;
-    }
-    
-    // Set the default entry as the first block.
-    IndirectGotoSwitch->setSuccessor(0,
-                                getBasicBlockForLabel(AddrTakenLabelsByID[0]));
-    
-    const llvm::IntegerType *Int32Ty = llvm::Type::getInt32Ty(VMContext);
-    
-    // FIXME: The iteration order of this is nondeterminstic!
-    for (unsigned i = 1, e = AddrTakenLabelsByID.size(); i != e; ++i)
-      IndirectGotoSwitch->addCase(llvm::ConstantInt::get(Int32Ty, i+1),
-                                 getBasicBlockForLabel(AddrTakenLabelsByID[i]));
-  } else {
-    // Otherwise, create a dead block and set it as the default dest.  This will
-    // be removed by the optimizers after the indirect goto is set up.
-    llvm::BasicBlock *Dummy = createBasicBlock("indgoto.dummy");
-    EmitBlock(Dummy);
-    IndirectGotoSwitch->setSuccessor(0, Dummy);
-    Builder.CreateUnreachable();
-    Builder.ClearInsertionPoint();
-  }
+  const llvm::Type *Int8PtrTy = llvm::Type::getInt8PtrTy(VMContext);
 
-  return IndirectGotoSwitch->getParent();
+  // Create the PHI node that indirect gotos will add entries to.
+  llvm::Value *DestVal = TmpBuilder.CreatePHI(Int8PtrTy, "indirect.goto.dest");
+  
+  // Create the indirect branch instruction.
+  IndirectBranch = TmpBuilder.CreateIndirectBr(DestVal);
+  return IndirectBranch->getParent();
 }
 
 llvm::Value *CodeGenFunction::GetVLASize(const VariableArrayType *VAT) {
@@ -598,8 +572,9 @@ llvm::Value* CodeGenFunction::EmitVAListRef(const Expr* E) {
   return EmitLValue(E).getAddress();
 }
 
-void CodeGenFunction::PushCleanupBlock(llvm::BasicBlock *CleanupBlock) {
-  CleanupEntries.push_back(CleanupEntry(CleanupBlock));
+void CodeGenFunction::PushCleanupBlock(llvm::BasicBlock *CleanupEntryBlock,
+                                       llvm::BasicBlock *CleanupExitBlock) {
+  CleanupEntries.push_back(CleanupEntry(CleanupEntryBlock, CleanupExitBlock));
 }
 
 void CodeGenFunction::EmitCleanupBlocks(size_t OldCleanupStackSize) {
@@ -613,7 +588,7 @@ void CodeGenFunction::EmitCleanupBlocks(size_t OldCleanupStackSize) {
 CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock() {
   CleanupEntry &CE = CleanupEntries.back();
 
-  llvm::BasicBlock *CleanupBlock = CE.CleanupBlock;
+  llvm::BasicBlock *CleanupEntryBlock = CE.CleanupEntryBlock;
 
   std::vector<llvm::BasicBlock *> Blocks;
   std::swap(Blocks, CE.Blocks);
@@ -644,10 +619,11 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock() {
     }
   }
 
-  llvm::BasicBlock *SwitchBlock = 0;
+  llvm::BasicBlock *SwitchBlock = CE.CleanupExitBlock;
   llvm::BasicBlock *EndBlock = 0;
   if (!BranchFixups.empty()) {
-    SwitchBlock = createBasicBlock("cleanup.switch");
+    if (!SwitchBlock)
+      SwitchBlock = createBasicBlock("cleanup.switch");
     EndBlock = createBasicBlock("cleanup.end");
 
     llvm::BasicBlock *CurBB = Builder.GetInsertBlock();
@@ -678,7 +654,7 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock() {
       llvm::BasicBlock *Dest = BI->getSuccessor(0);
 
       // Fixup the branch instruction to point to the cleanup block.
-      BI->setSuccessor(0, CleanupBlock);
+      BI->setSuccessor(0, CleanupEntryBlock);
 
       if (CleanupEntries.empty()) {
         llvm::ConstantInt *ID;
@@ -735,7 +711,7 @@ CodeGenFunction::CleanupBlockInfo CodeGenFunction::PopCleanupBlock() {
     BlockScopes.erase(Blocks[i]);
   }
 
-  return CleanupBlockInfo(CleanupBlock, SwitchBlock, EndBlock);
+  return CleanupBlockInfo(CleanupEntryBlock, SwitchBlock, EndBlock);
 }
 
 void CodeGenFunction::EmitCleanupBlock() {

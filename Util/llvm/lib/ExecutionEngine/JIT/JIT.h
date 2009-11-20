@@ -85,8 +85,10 @@ public:
                                  JITMemoryManager *JMM,
                                  CodeGenOpt::Level OptLevel =
                                    CodeGenOpt::Default,
-                                 bool GVsWithCode = true) {
-    return ExecutionEngine::createJIT(MP, Err, JMM, OptLevel, GVsWithCode);
+                                 bool GVsWithCode = true,
+				 CodeModel::Model CMM = CodeModel::Default) {
+    return ExecutionEngine::createJIT(MP, Err, JMM, OptLevel, GVsWithCode,
+				      CMM);
   }
 
   virtual void addModuleProvider(ModuleProvider *MP);
@@ -128,6 +130,11 @@ public:
   ///
   void *getPointerToFunction(Function *F);
 
+  void *getPointerToBasicBlock(BasicBlock *BB) {
+    assert(0 && "JIT does not support address-of-label yet!");
+    return 0;
+  }
+  
   /// getOrEmitGlobalVariable - Return the address of the specified global
   /// variable, possibly emitting it to memory if needed.  This is used by the
   /// Emitter.
@@ -170,7 +177,8 @@ public:
                                     std::string *ErrorStr,
                                     JITMemoryManager *JMM,
                                     CodeGenOpt::Level OptLevel,
-                                    bool GVsWithCode);
+                                    bool GVsWithCode,
+				    CodeModel::Model CMM);
 
   // Run the JIT on F and return information about the generated code
   void runJITOnFunction(Function *F, MachineCodeInfo *MCI = 0);
@@ -190,7 +198,6 @@ private:
                                        TargetMachine &tm);
   void runJITOnFunctionUnlocked(Function *F, const MutexGuard &locked);
   void updateFunctionStub(Function *F);
-  void updateDlsymStubTable();
 
 protected:
 

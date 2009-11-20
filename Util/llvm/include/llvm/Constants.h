@@ -86,7 +86,7 @@ public:
 
   /// Return a ConstantInt constructed from the string strStart with the given
   /// radix. 
-  static ConstantInt *get(const IntegerType *Ty, const StringRef &Str,
+  static ConstantInt *get(const IntegerType *Ty, StringRef Str,
                           uint8_t radix);
   
   /// If Ty is a vector type, return a Constant with a splat of the given
@@ -255,7 +255,7 @@ public:
   /// only be used for simple constant values like 2.0/1.0 etc, that are
   /// known-valid both as host double and as the target format.
   static Constant *get(const Type* Ty, double V);
-  static Constant *get(const Type* Ty, const StringRef &Str);
+  static Constant *get(const Type* Ty, StringRef Str);
   static ConstantFP *get(LLVMContext &Context, const APFloat &V);
   static ConstantFP *getNegativeZero(const Type* Ty);
   static ConstantFP *getInfinity(const Type *Ty, bool Negative = false);
@@ -353,7 +353,7 @@ public:
   /// of the array by one (you've been warned).  However, in some situations 
   /// this is not desired so if AddNull==false then the string is copied without
   /// null termination.
-  static Constant *get(LLVMContext &Context, const StringRef &Initializer,
+  static Constant *get(LLVMContext &Context, StringRef Initializer,
                        bool AddNull = true);
   
   /// Transparently provide more efficient getOperand methods.
@@ -549,7 +549,47 @@ public:
   }
 };
 
+/// BlockAddress - The address of a basic block.
+///
+class BlockAddress : public Constant {
+  void *operator new(size_t, unsigned);                  // DO NOT IMPLEMENT
+  void *operator new(size_t s) { return User::operator new(s, 2); }
+  BlockAddress(Function *F, BasicBlock *BB);
+public:
+  /// get - Return a BlockAddress for the specified function and basic block.
+  static BlockAddress *get(Function *F, BasicBlock *BB);
+  
+  /// get - Return a BlockAddress for the specified basic block.  The basic
+  /// block must be embedded into a function.
+  static BlockAddress *get(BasicBlock *BB);
+  
+  /// Transparently provide more efficient getOperand methods.
+  DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+  
+  Function *getFunction() const { return (Function*)Op<0>().get(); }
+  BasicBlock *getBasicBlock() const { return (BasicBlock*)Op<1>().get(); }
+  
+  /// isNullValue - Return true if this is the value that would be returned by
+  /// getNullValue.
+  virtual bool isNullValue() const { return false; }
+  
+  virtual void destroyConstant();
+  virtual void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U);
+  
+  /// Methods for support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const BlockAddress *) { return true; }
+  static inline bool classof(const Value *V) {
+    return V->getValueID() == BlockAddressVal;
+  }
+};
 
+template <>
+struct OperandTraits<BlockAddress> : public FixedNumOperandTraits<2> {
+};
+
+DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(BlockAddress, Value)
+  
+//===----------------------------------------------------------------------===//
 /// ConstantExpr - a constant value that is initialized with an expression using
 /// other constant values.
 ///

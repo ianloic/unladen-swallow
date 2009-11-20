@@ -1,4 +1,4 @@
-//===- ARMBaseInstrInfo.h - ARM Base Instruction Information -------------*- C++ -*-===//
+//===- ARMBaseInstrInfo.h - ARM Base Instruction Information ----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -131,6 +131,14 @@ namespace ARMII {
     Xform16Bit    = 1 << 16,
 
     //===------------------------------------------------------------------===//
+    // Code domain.
+    DomainShift   = 17,
+    DomainMask    = 3 << DomainShift,
+    DomainGeneral = 0 << DomainShift,
+    DomainVFP     = 1 << DomainShift,
+    DomainNEON    = 2 << DomainShift,
+
+    //===------------------------------------------------------------------===//
     // Field shifts - such shifts are used to set field while generating
     // machine instructions.
     M_BitShift     = 5,
@@ -157,9 +165,10 @@ namespace ARMII {
 }
 
 class ARMBaseInstrInfo : public TargetInstrInfoImpl {
+  const ARMSubtarget& Subtarget;
 protected:
   // Can be only subclassed.
-  explicit ARMBaseInstrInfo();
+  explicit ARMBaseInstrInfo(const ARMSubtarget &STI);
 public:
   // Return the non-pre/post incrementing version of 'Opc'. Return 0
   // if there is not such an opcode.
@@ -173,6 +182,7 @@ public:
                                               LiveVariables *LV) const;
 
   virtual const ARMBaseRegisterInfo &getRegisterInfo() const =0;
+  const ARMSubtarget &getSubtarget() const { return Subtarget; }
 
   // Branch analysis.
   virtual bool AnalyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
@@ -251,9 +261,20 @@ public:
 
   virtual MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
                                               MachineInstr* MI,
-                                              const SmallVectorImpl<unsigned> &Ops,
+                                           const SmallVectorImpl<unsigned> &Ops,
                                               MachineInstr* LoadMI) const;
 
+  virtual void reMaterialize(MachineBasicBlock &MBB,
+                             MachineBasicBlock::iterator MI,
+                             unsigned DestReg, unsigned SubIdx,
+                             const MachineInstr *Orig,
+                             const TargetRegisterInfo *TRI) const;
+
+  virtual bool isIdentical(const MachineInstr *MI, const MachineInstr *Other,
+                           const MachineRegisterInfo *MRI) const;
+
+  virtual unsigned TailDuplicationLimit(const MachineBasicBlock &MBB,
+                                        unsigned DefaultLimit) const;
 };
 
 static inline
@@ -291,6 +312,11 @@ static inline
 bool isJumpTableBranchOpcode(int Opc) {
   return Opc == ARM::BR_JTr || Opc == ARM::BR_JTm || Opc == ARM::BR_JTadd ||
     Opc == ARM::tBR_JTr || Opc == ARM::t2BR_JT;
+}
+
+static inline
+bool isIndirectBranchOpcode(int Opc) {
+  return Opc == ARM::BRIND || Opc == ARM::tBRIND;
 }
 
 /// getInstrPredicate - If instruction is predicated, returns its predicate

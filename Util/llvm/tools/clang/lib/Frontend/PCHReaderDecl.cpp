@@ -162,7 +162,7 @@ void PCHDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   FD->setPreviousDeclaration(
                    cast_or_null<FunctionDecl>(Reader.GetDecl(Record[Idx++])));
   FD->setStorageClass((FunctionDecl::StorageClass)Record[Idx++]);
-  FD->setInline(Record[Idx++]);
+  FD->setInlineSpecified(Record[Idx++]);
   FD->setVirtualAsWritten(Record[Idx++]);
   FD->setPure(Record[Idx++]);
   FD->setHasInheritedPrototype(Record[Idx++]);
@@ -264,7 +264,12 @@ void PCHDeclReader::VisitObjCClassDecl(ObjCClassDecl *CD) {
   ClassRefs.reserve(NumClassRefs);
   for (unsigned I = 0; I != NumClassRefs; ++I)
     ClassRefs.push_back(cast<ObjCInterfaceDecl>(Reader.GetDecl(Record[Idx++])));
-  CD->setClassList(*Reader.getContext(), ClassRefs.data(), NumClassRefs);
+  llvm::SmallVector<SourceLocation, 16> SLocs;
+  SLocs.reserve(NumClassRefs);
+  for (unsigned I = 0; I != NumClassRefs; ++I)
+    SLocs.push_back(SourceLocation::getFromRawEncoding(Record[Idx++]));
+  CD->setClassList(*Reader.getContext(), ClassRefs.data(), SLocs.data(),
+                   NumClassRefs);
 }
 
 void PCHDeclReader::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *FPD) {
@@ -441,6 +446,8 @@ Attr *PCHReader::ReadAttributes() {
       New = ::new (*Context) BlocksAttr(
                                   (BlocksAttr::BlocksAttrTypes)Record[Idx++]);
       break;
+
+    SIMPLE_ATTR(CDecl);
 
     case Attr::Cleanup:
       New = ::new (*Context) CleanupAttr(

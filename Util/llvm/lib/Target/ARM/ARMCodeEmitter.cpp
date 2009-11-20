@@ -168,7 +168,8 @@ namespace {
     /// Routines that handle operands which add machine relocations which are
     /// fixed up by the relocation stage.
     void emitGlobalAddress(GlobalValue *GV, unsigned Reloc,
-                           bool NeedStub,  bool Indirect, intptr_t ACPV = 0);
+                           bool MayNeedFarStub,  bool Indirect,
+                           intptr_t ACPV = 0);
     void emitExternalSymbolAddress(const char *ES, unsigned Reloc);
     void emitConstPoolAddress(unsigned CPI, unsigned Reloc);
     void emitJumpTableAddress(unsigned JTIndex, unsigned Reloc);
@@ -277,13 +278,13 @@ unsigned Emitter<CodeEmitter>::getMachineOpValue(const MachineInstr &MI,
 ///
 template<class CodeEmitter>
 void Emitter<CodeEmitter>::emitGlobalAddress(GlobalValue *GV, unsigned Reloc,
-                                             bool NeedStub, bool Indirect,
+                                             bool MayNeedFarStub, bool Indirect,
                                              intptr_t ACPV) {
   MachineRelocation MR = Indirect
     ? MachineRelocation::getIndirectSymbol(MCE.getCurrentPCOffset(), Reloc,
-                                           GV, ACPV, NeedStub)
+                                           GV, ACPV, MayNeedFarStub)
     : MachineRelocation::getGV(MCE.getCurrentPCOffset(), Reloc,
-                               GV, ACPV, NeedStub);
+                               GV, ACPV, MayNeedFarStub);
   MCE.addRelocation(MR);
 }
 
@@ -428,6 +429,7 @@ void Emitter<CodeEmitter>::emitConstPoolInstruction(const MachineInstr &MI) {
     DEBUG(errs() << "  ** ARM constant pool #" << CPI << " @ "
           << (void*)MCE.getCurrentPCValue() << " " << *ACPV << '\n');
 
+    assert(ACPV->isGlobalValue() && "unsupported constant pool value");
     GlobalValue *GV = ACPV->getGV();
     if (GV) {
       Reloc::Model RelocM = TM.getRelocationModel();

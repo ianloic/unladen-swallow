@@ -12,6 +12,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+// Force NDEBUG on in any optimized build on Darwin.
+//
+// FIXME: This is a huge hack, to work around ridiculously awful compile times
+// on this file with gcc-4.2 on Darwin, in Release mode.
+#if (!defined(__llvm__) && defined(__APPLE__) && \
+     defined(__OPTIMIZE__) && !defined(NDEBUG))
+#define NDEBUG
+#endif
+
 #define DEBUG_TYPE "x86-isel"
 #include "X86.h"
 #include "X86InstrBuilder.h"
@@ -71,6 +80,7 @@ namespace {
     SDValue Segment;
     GlobalValue *GV;
     Constant *CP;
+    BlockAddress *BlockAddr;
     const char *ES;
     int JT;
     unsigned Align;    // CP alignment.
@@ -78,12 +88,12 @@ namespace {
 
     X86ISelAddressMode()
       : BaseType(RegBase), Scale(1), IndexReg(), Disp(0),
-        Segment(), GV(0), CP(0), ES(0), JT(-1), Align(0),
+        Segment(), GV(0), CP(0), BlockAddr(0), ES(0), JT(-1), Align(0),
         SymbolFlags(X86II::MO_NO_FLAG) {
     }
 
     bool hasSymbolicDisplacement() const {
-      return GV != 0 || CP != 0 || ES != 0 || JT != -1;
+      return GV != 0 || CP != 0 || ES != 0 || JT != -1 || BlockAddr != 0;
     }
     
     bool hasBaseOrIndexReg() const {
@@ -241,6 +251,9 @@ namespace {
         Disp = CurDAG->getTargetExternalSymbol(AM.ES, MVT::i32, AM.SymbolFlags);
       else if (AM.JT != -1)
         Disp = CurDAG->getTargetJumpTable(AM.JT, MVT::i32, AM.SymbolFlags);
+      else if (AM.BlockAddr)
+        Disp = CurDAG->getBlockAddress(AM.BlockAddr, DebugLoc()/*MVT::i32*/,
+                                       true /*AM.SymbolFlags*/);
       else
         Disp = CurDAG->getTargetConstant(AM.Disp, MVT::i32);
 
@@ -657,7 +670,6 @@ void X86DAGToDAGISel::InstructionSelect() {
   const Function *F = MF->getFunction();
   OptForSize = F->hasFnAttr(Attribute::OptimizeForSize);
 
-  DEBUG(BB->dump());
   if (OptLevel != CodeGenOpt::None)
     PreprocessForRMW();
 
@@ -760,10 +772,12 @@ bool X86DAGToDAGISel::MatchWrapper(SDValue N, X86ISelAddressMode &AM) {
     } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(N0)) {
       AM.ES = S->getSymbol();
       AM.SymbolFlags = S->getTargetFlags();
-    } else {
-      JumpTableSDNode *J = cast<JumpTableSDNode>(N0);
+    } else if (JumpTableSDNode *J = dyn_cast<JumpTableSDNode>(N0)) {
       AM.JT = J->getIndex();
       AM.SymbolFlags = J->getTargetFlags();
+    } else {
+      AM.BlockAddr = cast<BlockAddressSDNode>(N0)->getBlockAddress();
+      //AM.SymbolFlags = cast<BlockAddressSDNode>(N0)->getTargetFlags();
     }
 
     if (N.getOpcode() == X86ISD::WrapperRIP)
@@ -789,10 +803,12 @@ bool X86DAGToDAGISel::MatchWrapper(SDValue N, X86ISelAddressMode &AM) {
     } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(N0)) {
       AM.ES = S->getSymbol();
       AM.SymbolFlags = S->getTargetFlags();
-    } else {
-      JumpTableSDNode *J = cast<JumpTableSDNode>(N0);
+    } else if (JumpTableSDNode *J = dyn_cast<JumpTableSDNode>(N0)) {
       AM.JT = J->getIndex();
       AM.SymbolFlags = J->getTargetFlags();
+    } else {
+      AM.BlockAddr = cast<BlockAddressSDNode>(N0)->getBlockAddress();
+      //AM.SymbolFlags = cast<BlockAddressSDNode>(N0)->getTargetFlags();
     }
     return false;
   }
@@ -1942,14 +1958,12 @@ SDNode *X86DAGToDAGISel::Select(SDValue N) {
                             0);
           // We just did a 32-bit clear, insert it into a 64-bit register to
           // clear the whole 64-bit reg.
-          SDValue Undef =
-            SDValue(CurDAG->getMachineNode(TargetInstrInfo::IMPLICIT_DEF,
-                                           dl, MVT::i64), 0);
+          SDValue Zero = CurDAG->getTargetConstant(0, MVT::i64);
           SDValue SubRegNo =
             CurDAG->getTargetConstant(X86::SUBREG_32BIT, MVT::i32);
           ClrNode =
-            SDValue(CurDAG->getMachineNode(TargetInstrInfo::INSERT_SUBREG, dl,
-                                           MVT::i64, Undef, ClrNode, SubRegNo),
+            SDValue(CurDAG->getMachineNode(TargetInstrInfo::SUBREG_TO_REG, dl,
+                                           MVT::i64, Zero, ClrNode, SubRegNo),
                     0);
         } else {
           ClrNode = SDValue(CurDAG->getMachineNode(ClrOpcode, dl, NVT), 0);

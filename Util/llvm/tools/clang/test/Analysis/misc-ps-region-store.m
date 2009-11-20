@@ -1,5 +1,5 @@
-// RUN: clang-cc -triple i386-apple-darwin9 -analyze -checker-cfref --analyzer-store=region --verify -fblocks %s &&
-// RUN: clang-cc -triple x86_64-apple-darwin9 -analyze -checker-cfref --analyzer-store=region --verify -fblocks %s
+// RUN: clang-cc -triple i386-apple-darwin9 -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=region --verify -fblocks %s
+// RUN: clang-cc -triple x86_64-apple-darwin9 -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=region --verify -fblocks %s
 
 typedef struct objc_selector *SEL;
 typedef signed char BOOL;
@@ -286,7 +286,7 @@ struct WrappedStruct { unsigned z; };
 int test_handle_array_wrapper() {
   struct ArrayWrapper x;
   test_handle_array_wrapper(&x);
-  struct WrappedStruct *p = (struct WrappedStruct*) x.y;
+  struct WrappedStruct *p = (struct WrappedStruct*) x.y; // expected-warning{{Casting a non-structure type to a structure type and accessing a field can lead to memory access errors or data corruption.}}
   return p->z;  // no-warning
 }
 
@@ -384,5 +384,128 @@ void rdar_rdar_7332673_test2_aux(char *x);
 void rdar_7332673_test2() {
     char *value;
     if ( rdar_7332673_test2_aux(value) != 1 ) {} // expected-warning{{Pass-by-value argument in function call is undefined}}
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7347252>: Because of a bug in
+//   RegionStoreManager::RemoveDeadBindings(), the symbol for s->session->p
+//   would incorrectly be pruned from the state after the call to
+//   rdar7347252_malloc1(), and would incorrectly result in a warning about
+//   passing a null pointer to rdar7347252_memcpy().
+//===----------------------------------------------------------------------===//
+
+struct rdar7347252_AA { char *p;};
+typedef struct {
+ struct rdar7347252_AA *session;
+ int t;
+ char *q;
+} rdar7347252_SSL1;
+
+int rdar7347252_f(rdar7347252_SSL1 *s);
+char *rdar7347252_malloc1(int);
+char *rdar7347252_memcpy1(char *d, char *s, int n) __attribute__((nonnull (1,2)));
+
+int rdar7347252(rdar7347252_SSL1 *s) {
+ rdar7347252_f(s);  // the SymbolicRegion of 's' is set a default binding of conjured symbol
+ if (s->session->p == ((void*)0)) {
+   if ((s->session->p = rdar7347252_malloc1(10)) == ((void*)0)) {
+     return 0;
+   }
+   rdar7347252_memcpy1(s->session->p, "aa", 2); // no-warning
+ }
+ return 0;
+}
+
+//===----------------------------------------------------------------------===//
+// PR 5316 - "crash when accessing field of lazy compound value"
+//  Previously this caused a crash at the MemberExpr '.chr' when loading
+//  a field value from a LazyCompoundVal
+//===----------------------------------------------------------------------===//
+
+typedef unsigned int pr5316_wint_t;
+typedef pr5316_wint_t pr5316_REFRESH_CHAR;
+typedef struct {
+  pr5316_REFRESH_CHAR chr;
+}
+pr5316_REFRESH_ELEMENT;
+static void pr5316(pr5316_REFRESH_ELEMENT *dst, const pr5316_REFRESH_ELEMENT *src) {
+  while ((*dst++ = *src++).chr != L'\0')  ;
+}
+
+//===----------------------------------------------------------------------===//
+// Exercise creating ElementRegion with symbolic super region.
+//===----------------------------------------------------------------------===//
+void element_region_with_symbolic_superregion(int* p) {
+  int *x;
+  int a;
+  if (p[0] == 1)
+    x = &a;
+  if (p[0] == 1)
+    (void)*x; // no-warning
+}
+
+//===----------------------------------------------------------------------===//
+// Test returning an out-of-bounds pointer (CWE-466)
+//===----------------------------------------------------------------------===//
+
+static int test_cwe466_return_outofbounds_pointer_a[10];
+int *test_cwe466_return_outofbounds_pointer() {
+  int *p = test_cwe466_return_outofbounds_pointer_a+10;
+  return p; // expected-warning{{Returned pointer value points outside the original object}}
+}
+
+//===----------------------------------------------------------------------===//
+// PR 3135 - Test case that shows that a variable may get invalidated when its
+// address is included in a structure that is passed-by-value to an unknown function.
+//===----------------------------------------------------------------------===//
+
+typedef struct { int *a; } pr3135_structure;
+int pr3135_bar(pr3135_structure *x);
+int pr3135() {
+  int x;
+  pr3135_structure y = { &x };
+  // the call to pr3135_bar may initialize x
+  if (pr3135_bar(&y) && x) // no-warning
+    return 1;
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7403269> - Test that we handle compound initializers with
+// partially unspecified array values. Previously this caused a crash.
+//===----------------------------------------------------------------------===//
+
+typedef struct RDar7403269 {
+  unsigned x[10];
+  unsigned y;
+} RDar7403269;
+
+void rdar7403269() {
+  RDar7403269 z = { .y = 0 };
+  if (z.x[4] == 0)
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // no-warning  
+}
+
+typedef struct RDar7403269_b {
+  struct zorg { int w; int k; } x[10];
+  unsigned y;
+} RDar7403269_b;
+
+void rdar7403269_b() {
+  RDar7403269_b z = { .y = 0 };
+  if (z.x[5].w == 0)
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // no-warning
+}
+
+void rdar7403269_b_pos() {
+  RDar7403269_b z = { .y = 0 };
+  if (z.x[5].w == 1)
+    return;
+  int *p = 0;
+  *p = 0xDEADBEEF; // expected-warning{{Dereference of null pointer}}
 }
 

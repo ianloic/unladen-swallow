@@ -90,6 +90,14 @@ def warn_octal_escape_too_large : ExtWarn<"octal escape sequence out of range">;
 def warn_hex_escape_too_large : ExtWarn<"hex escape sequence out of range">;
 
 //===----------------------------------------------------------------------===//
+// PTH Diagnostics
+//===----------------------------------------------------------------------===//
+def err_pth_cannot_read : Error<
+    "PTH file '%0' could not be read">;
+def err_invalid_pth_file : Error<
+    "invalid or corrupt PTH file '%0'">;
+
+//===----------------------------------------------------------------------===//
 // Preprocessor Diagnostics
 //===----------------------------------------------------------------------===//
 def pp_hash_warning : Warning<"#warning%0">, InGroup<DiagGroup<"#warnings">>;
@@ -194,7 +202,8 @@ def err_pp_expected_eol : Error<
   "expected end of line in preprocessor expression">;
 def err_pp_defined_requires_identifier : Error<
   "operator 'defined' requires an identifier">;
-def err_pp_missing_rparen : Error<"missing ')' after 'defined'">;
+def err_pp_missing_lparen : Error<"missing '(' after '%0'">;
+def err_pp_missing_rparen : Error<"missing ')' after '%0'">;
 def err_pp_colon_without_question : Error<"':' without preceding '?'">;
 def err_pp_division_by_zero : Error<
   "division by zero in preprocessor expression">;

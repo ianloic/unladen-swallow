@@ -368,7 +368,11 @@ void TypeLocWriter::VisitSubstTemplateTypeParmTypeLoc(
 }
 void TypeLocWriter::VisitTemplateSpecializationTypeLoc(
                                            TemplateSpecializationTypeLoc TL) {
-  Writer.AddSourceLocation(TL.getNameLoc(), Record);
+  Writer.AddSourceLocation(TL.getTemplateNameLoc(), Record);
+  Writer.AddSourceLocation(TL.getLAngleLoc(), Record);
+  Writer.AddSourceLocation(TL.getRAngleLoc(), Record);
+  for (unsigned i = 0, e = TL.getNumArgs(); i != e; ++i)
+    Writer.AddTemplateArgumentLoc(TL.getArgLoc(i), Record);
 }
 void TypeLocWriter::VisitQualifiedNameTypeLoc(QualifiedNameTypeLoc TL) {
   Writer.AddSourceLocation(TL.getNameLoc(), Record);
@@ -761,6 +765,7 @@ void PCHWriter::WriteLanguageOptions(const LangOptions &LangOpts) {
                                             // be enabled.
   Record.push_back(LangOpts.CharIsSigned); // Whether char is a signed or
                                            // unsigned type
+  Record.push_back(LangOpts.ShortWChar);  // force wchar_t to be unsigned short
   Record.push_back(LangOpts.getGCMode());
   Record.push_back(LangOpts.getVisibilityMode());
   Record.push_back(LangOpts.getStackProtectorMode());
@@ -1243,9 +1248,9 @@ void PCHWriter::WriteType(QualType T) {
   // Emit the type's representation.
   PCHTypeWriter W(*this, Record);
 
-  if (T.hasNonFastQualifiers()) {
-    Qualifiers Qs = T.getQualifiers();
-    AddTypeRef(T.getUnqualifiedType(), Record);
+  if (T.hasLocalNonFastQualifiers()) {
+    Qualifiers Qs = T.getLocalQualifiers();
+    AddTypeRef(T.getLocalUnqualifiedType(), Record);
     Record.push_back(Qs.getAsOpaqueValue());
     W.Code = pch::TYPE_EXT_QUAL;
   } else {
@@ -1763,6 +1768,9 @@ void PCHWriter::WriteAttributeRecord(const Attr *Attr) {
       Record.push_back(cast<BlocksAttr>(Attr)->getType()); // FIXME: stable
       break;
 
+    case Attr::CDecl:
+      break;
+
     case Attr::Cleanup:
       AddDeclRef(cast<CleanupAttr>(Attr)->getFunctionDecl(), Record);
       break;
@@ -2105,6 +2113,29 @@ void PCHWriter::AddSelectorRef(const Selector SelRef, RecordData &Record) {
   Record.push_back(SID);
 }
 
+void PCHWriter::AddTemplateArgumentLoc(const TemplateArgumentLoc &Arg,
+                                       RecordData &Record) {
+  switch (Arg.getArgument().getKind()) {
+  case TemplateArgument::Expression:
+    AddStmt(Arg.getLocInfo().getAsExpr());
+    break;
+  case TemplateArgument::Type:
+    AddDeclaratorInfo(Arg.getLocInfo().getAsDeclaratorInfo(), Record);
+    break;
+  case TemplateArgument::Template:
+    Record.push_back(
+                   Arg.getTemplateQualifierRange().getBegin().getRawEncoding());
+    Record.push_back(Arg.getTemplateQualifierRange().getEnd().getRawEncoding());
+    Record.push_back(Arg.getTemplateNameLoc().getRawEncoding());
+    break;
+  case TemplateArgument::Null:
+  case TemplateArgument::Integral:
+  case TemplateArgument::Declaration:
+  case TemplateArgument::Pack:
+    break;
+  }
+}
+
 void PCHWriter::AddDeclaratorInfo(DeclaratorInfo *DInfo, RecordData &Record) {
   if (DInfo == 0) {
     AddTypeRef(QualType(), Record);
@@ -2123,10 +2154,10 @@ void PCHWriter::AddTypeRef(QualType T, RecordData &Record) {
     return;
   }
 
-  unsigned FastQuals = T.getFastQualifiers();
+  unsigned FastQuals = T.getLocalFastQualifiers();
   T.removeFastQualifiers();
 
-  if (T.hasNonFastQualifiers()) {
+  if (T.hasLocalNonFastQualifiers()) {
     pch::TypeID &ID = TypeIDs[T];
     if (ID == 0) {
       // We haven't seen these qualifiers applied to this type before.
@@ -2141,7 +2172,7 @@ void PCHWriter::AddTypeRef(QualType T, RecordData &Record) {
     return;
   }
 
-  assert(!T.hasQualifiers());
+  assert(!T.hasLocalQualifiers());
   
   if (const BuiltinType *BT = dyn_cast<BuiltinType>(T.getTypePtr())) {
     pch::TypeID ID = 0;

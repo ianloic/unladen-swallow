@@ -42,16 +42,15 @@ Action::DeclPtrTy Action::ActOnUsingDirective(Scope *CurScope,
   return DeclPtrTy();
 }
 
-// Defined out-of-line here because of dependecy on AttributeList
+// Defined out-of-line here because of dependency on AttributeList
 Action::DeclPtrTy Action::ActOnUsingDeclaration(Scope *CurScope,
                                                 AccessSpecifier AS,
                                                 SourceLocation UsingLoc,
                                                 const CXXScopeSpec &SS,
-                                                SourceLocation IdentLoc,
-                                                IdentifierInfo *TargetName,
-                                                OverloadedOperatorKind Op,
+                                                UnqualifiedId &Name,
                                                 AttributeList *AttrList,
-                                                bool IsTypeName) {
+                                                bool IsTypeName,
+                                                SourceLocation TypenameLoc) {
 
   // FIXME: Parser seems to assume that Action::ActOn* takes ownership over
   // passed AttributeList, however other actions don't free it, is it
@@ -161,9 +160,8 @@ bool MinimalAction::isCurrentClassName(const IdentifierInfo &, Scope *,
 
 TemplateNameKind
 MinimalAction::isTemplateName(Scope *S,
-                              const IdentifierInfo &II,
-                              SourceLocation IdLoc,
-                              const CXXScopeSpec *SS,
+                              const CXXScopeSpec &SS,
+                              UnqualifiedId &Name,
                               TypeTy *ObjectType,
                               bool EnteringScope,
                               TemplateTy &TemplateDecl) {
@@ -216,7 +214,9 @@ MinimalAction::ActOnStartClassInterface(SourceLocation AtInterfaceLoc,
 /// Scope will always be top level file scope.
 Action::DeclPtrTy
 MinimalAction::ActOnForwardClassDeclaration(SourceLocation AtClassLoc,
-                                IdentifierInfo **IdentList, unsigned NumElts) {
+                                            IdentifierInfo **IdentList,
+                                            SourceLocation *IdentLocs,
+                                            unsigned NumElts) {
   for (unsigned i = 0; i != NumElts; ++i) {
     // Allocate and add the 'TypeNameInfo' "decl".
     getTable(TypeNameInfoTablePtr)->AddEntry(true, IdentList[i]);

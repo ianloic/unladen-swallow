@@ -1699,18 +1699,24 @@ LLVMValueRef LLVMBuildNot(LLVMBuilderRef B, LLVMValueRef V, const char *Name) {
 
 LLVMValueRef LLVMBuildMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
                              const char *Name) {
-  const Type* IntPtrT = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
-  return wrap(unwrap(B)->Insert(CallInst::CreateMalloc(
-      unwrap(B)->GetInsertBlock(), IntPtrT, unwrap(Ty), 0, 0, ""),
-      Twine(Name)));
+  const Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
+  Constant* AllocSize = ConstantExpr::getSizeOf(unwrap(Ty));
+  AllocSize = ConstantExpr::getTruncOrBitCast(AllocSize, ITy);
+  Instruction* Malloc = CallInst::CreateMalloc(unwrap(B)->GetInsertBlock(), 
+                                               ITy, unwrap(Ty), AllocSize, 
+                                               0, 0, "");
+  return wrap(unwrap(B)->Insert(Malloc, Twine(Name)));
 }
 
 LLVMValueRef LLVMBuildArrayMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
                                   LLVMValueRef Val, const char *Name) {
-  const Type* IntPtrT = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
-  return wrap(unwrap(B)->Insert(CallInst::CreateMalloc(
-      unwrap(B)->GetInsertBlock(), IntPtrT, unwrap(Ty), unwrap(Val), 0, ""),
-      Twine(Name)));
+  const Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
+  Constant* AllocSize = ConstantExpr::getSizeOf(unwrap(Ty));
+  AllocSize = ConstantExpr::getTruncOrBitCast(AllocSize, ITy);
+  Instruction* Malloc = CallInst::CreateMalloc(unwrap(B)->GetInsertBlock(), 
+                                               ITy, unwrap(Ty), AllocSize, 
+                                               unwrap(Val), 0, "");
+  return wrap(unwrap(B)->Insert(Malloc, Twine(Name)));
 }
 
 LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef B, LLVMTypeRef Ty,
@@ -1854,8 +1860,9 @@ LLVMValueRef LLVMBuildPointerCast(LLVMBuilderRef B, LLVMValueRef Val,
 }
 
 LLVMValueRef LLVMBuildIntCast(LLVMBuilderRef B, LLVMValueRef Val,
-                              LLVMTypeRef DestTy, const char *Name) {
-  return wrap(unwrap(B)->CreateIntCast(unwrap(Val), unwrap(DestTy), Name));
+                              LLVMTypeRef DestTy, int isSigned,
+                              const char *Name) {
+  return wrap(unwrap(B)->CreateIntCast(unwrap(Val), unwrap(DestTy), isSigned, Name));
 }
 
 LLVMValueRef LLVMBuildFPCast(LLVMBuilderRef B, LLVMValueRef Val,
@@ -1981,13 +1988,15 @@ int LLVMCreateMemoryBufferWithContentsOfFile(const char *Path,
 
 int LLVMCreateMemoryBufferWithSTDIN(LLVMMemoryBufferRef *OutMemBuf,
                                     char **OutMessage) {
-  if (MemoryBuffer *MB = MemoryBuffer::getSTDIN()) {
-    *OutMemBuf = wrap(MB);
-    return 0;
+  MemoryBuffer *MB = MemoryBuffer::getSTDIN();
+  if (!MB->getBufferSize()) {
+    delete MB;
+    *OutMessage = strdup("stdin is empty.");
+    return 1;
   }
-  
-  *OutMessage = strdup("stdin is empty.");
-  return 1;
+
+  *OutMemBuf = wrap(MB);
+  return 0;
 }
 
 void LLVMDisposeMemoryBuffer(LLVMMemoryBufferRef MemBuf) {

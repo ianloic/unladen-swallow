@@ -4,12 +4,14 @@
 
 define float @test(float %acc, float %a, float %b) {
 entry:
-; VFP2: fnmacs
-; NEON: fnmacs
+; VFP2: vmls.f32
+; NEON: vmls.f32
 
-; NEONFP:     vmls
-; NEONFP-NOT: fcpys
-; NEONFP:     fmrs
+; NEONFP-NOT: vmls
+; NEONFP-NOT: vmov.f32
+; NEONFP:     vmul.f32
+; NEONFP:     vsub.f32
+; NEONFP:     vmov
 
 	%0 = fmul float %a, %b
         %1 = fsub float %acc, %0

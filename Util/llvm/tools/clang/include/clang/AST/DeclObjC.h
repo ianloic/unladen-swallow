@@ -347,6 +347,8 @@ public:
   ObjCIvarDecl *getIvarDecl(IdentifierInfo *Id) const;
 
   ObjCPropertyDecl *FindPropertyDeclaration(IdentifierInfo *PropertyId) const;
+  ObjCPropertyDecl *FindPropertyVisibleInPrimaryClass(
+                                            IdentifierInfo *PropertyId) const;
 
   // Marks the end of the container.
   SourceLocation getAtEndLoc() const { return AtEndLoc; }
@@ -716,10 +718,22 @@ public:
 /// @class NSCursor, NSImage, NSPasteboard, NSWindow;
 ///
 class ObjCClassDecl : public Decl {
-  ObjCList<ObjCInterfaceDecl> ForwardDecls;
+public:
+  class ObjCClassRef {
+    ObjCInterfaceDecl *ID;
+    SourceLocation L;
+  public:
+    ObjCClassRef(ObjCInterfaceDecl *d, SourceLocation l) : ID(d), L(l) {}
+    SourceLocation getLocation() const { return L; }
+    ObjCInterfaceDecl *getInterface() const { return ID; }
+  };
+private:
+  ObjCClassRef *ForwardDecls;
+  unsigned NumDecls;
 
   ObjCClassDecl(DeclContext *DC, SourceLocation L,
-                ObjCInterfaceDecl *const *Elts, unsigned nElts, ASTContext &C);
+                ObjCInterfaceDecl *const *Elts, const SourceLocation *Locs,                
+                unsigned nElts, ASTContext &C);
   virtual ~ObjCClassDecl() {}
 public:
 
@@ -728,17 +742,19 @@ public:
 
   static ObjCClassDecl *Create(ASTContext &C, DeclContext *DC, SourceLocation L,
                                ObjCInterfaceDecl *const *Elts = 0,
+                               const SourceLocation *Locs = 0,
                                unsigned nElts = 0);
+  
+  virtual SourceRange getSourceRange() const;
 
-  typedef ObjCList<ObjCInterfaceDecl>::iterator iterator;
-  iterator begin() const { return ForwardDecls.begin(); }
-  iterator end() const { return ForwardDecls.end(); }
-  unsigned size() const { return ForwardDecls.size(); }
+  typedef const ObjCClassRef* iterator;
+  iterator begin() const { return ForwardDecls; }
+  iterator end() const { return ForwardDecls + NumDecls; }
+  unsigned size() const { return NumDecls; }
 
   /// setClassList - Set the list of forward classes.
-  void setClassList(ASTContext &C, ObjCInterfaceDecl*const*List, unsigned Num) {
-    ForwardDecls.set(List, Num, C);
-  }
+  void setClassList(ASTContext &C, ObjCInterfaceDecl*const*List,
+                    const SourceLocation *Locs, unsigned Num);
 
   static bool classof(const Decl *D) { return D->getKind() == ObjCClass; }
   static bool classof(const ObjCClassDecl *D) { return true; }
@@ -792,7 +808,7 @@ public:
 /// - myMethod;
 /// @end
 ///
-/// Cateogries also allow you to split the implementation of a class across
+/// Categories also allow you to split the implementation of a class across
 /// several files (a feature more naturally supported in C++).
 ///
 /// Categories were originally inspired by dynamic languages such as Common
@@ -862,7 +878,7 @@ public:
 };
 
 class ObjCImplDecl : public ObjCContainerDecl {
-  /// Class interface for this category implementation
+  /// Class interface for this class/category implementation
   ObjCInterfaceDecl *ClassInterface;
 
 protected:
@@ -935,14 +951,20 @@ public:
                                       SourceLocation L, IdentifierInfo *Id,
                                       ObjCInterfaceDecl *classInterface);
 
-  /// getIdentifier - Get the identifier that names the class
+  /// getIdentifier - Get the identifier that names the category
   /// interface associated with this implementation.
+  /// FIXME: This is a bad API, we are overriding the NamedDecl::getIdentifier()
+  /// to mean something different. For example:
+  /// ((NamedDecl *)SomeCategoryImplDecl)->getIdentifier() 
+  /// returns the class interface name, whereas 
+  /// ((ObjCCategoryImplDecl *)SomeCategoryImplDecl)->getIdentifier() 
+  /// returns the category name.
   IdentifierInfo *getIdentifier() const {
     return Id;
   }
   void setIdentifier(IdentifierInfo *II) { Id = II; }
 
-  ObjCCategoryDecl *getCategoryClass() const;
+  ObjCCategoryDecl *getCategoryDecl() const;
 
   /// getName - Get the name of identifier for the class interface associated
   /// with this implementation as a StringRef.

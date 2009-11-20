@@ -95,6 +95,8 @@ public:
   /// operation would return "x".
   Expr *getImplicitObjectArgument();
 
+  virtual SourceRange getSourceRange() const;
+  
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == CXXMemberCallExprClass;
   }
@@ -1064,18 +1066,18 @@ public:
 /// \brief A qualified reference to a name whose declaration cannot
 /// yet be resolved.
 ///
-/// UnresolvedDeclRefExpr is similar to eclRefExpr in that
+/// DependentScopeDeclRefExpr is similar to eclRefExpr in that
 /// it expresses a reference to a declaration such as
 /// X<T>::value. The difference, however, is that an
-/// UnresolvedDeclRefExpr node is used only within C++ templates when
+/// DependentScopeDeclRefExpr node is used only within C++ templates when
 /// the qualification (e.g., X<T>::) refers to a dependent type. In
 /// this case, X<T>::value cannot resolve to a declaration because the
 /// declaration will differ from on instantiation of X<T> to the
-/// next. Therefore, UnresolvedDeclRefExpr keeps track of the
+/// next. Therefore, DependentScopeDeclRefExpr keeps track of the
 /// qualifier (X<T>::) and the name of the entity being referenced
 /// ("value"). Such expressions will instantiate to a DeclRefExpr once the
 /// declaration can be found.
-class UnresolvedDeclRefExpr : public Expr {
+class DependentScopeDeclRefExpr : public Expr {
   /// The name of the entity we will be referencing.
   DeclarationName Name;
 
@@ -1095,10 +1097,10 @@ class UnresolvedDeclRefExpr : public Expr {
   bool IsAddressOfOperand;
 
 public:
-  UnresolvedDeclRefExpr(DeclarationName N, QualType T, SourceLocation L,
-                        SourceRange R, NestedNameSpecifier *NNS,
-                        bool IsAddressOfOperand)
-    : Expr(UnresolvedDeclRefExprClass, T, true, true),
+  DependentScopeDeclRefExpr(DeclarationName N, QualType T, SourceLocation L,
+                            SourceRange R, NestedNameSpecifier *NNS,
+                            bool IsAddressOfOperand)
+    : Expr(DependentScopeDeclRefExprClass, T, true, true),
       Name(N), Loc(L), QualifierRange(R), NNS(NNS),
       IsAddressOfOperand(IsAddressOfOperand) { }
 
@@ -1123,9 +1125,9 @@ public:
   }
 
   static bool classof(const Stmt *T) {
-    return T->getStmtClass() == UnresolvedDeclRefExprClass;
+    return T->getStmtClass() == DependentScopeDeclRefExprClass;
   }
-  static bool classof(const UnresolvedDeclRefExpr *) { return true; }
+  static bool classof(const DependentScopeDeclRefExpr *) { return true; }
 
   virtual StmtIterator child_begin();
   virtual StmtIterator child_end();
@@ -1161,7 +1163,7 @@ class TemplateIdRefExpr : public Expr {
                     NestedNameSpecifier *Qualifier, SourceRange QualifierRange,
                     TemplateName Template, SourceLocation TemplateNameLoc,
                     SourceLocation LAngleLoc,
-                    const TemplateArgument *TemplateArgs,
+                    const TemplateArgumentLoc *TemplateArgs,
                     unsigned NumTemplateArgs,
                     SourceLocation RAngleLoc);
 
@@ -1172,7 +1174,7 @@ public:
   Create(ASTContext &Context, QualType T,
          NestedNameSpecifier *Qualifier, SourceRange QualifierRange,
          TemplateName Template, SourceLocation TemplateNameLoc,
-         SourceLocation LAngleLoc, const TemplateArgument *TemplateArgs,
+         SourceLocation LAngleLoc, const TemplateArgumentLoc *TemplateArgs,
          unsigned NumTemplateArgs, SourceLocation RAngleLoc);
 
   /// \brief Retrieve the nested name specifier used to qualify the name of
@@ -1198,8 +1200,8 @@ public:
 
   /// \brief Retrieve the template arguments provided as part of this
   /// template-id.
-  const TemplateArgument *getTemplateArgs() const {
-    return reinterpret_cast<const TemplateArgument *>(this + 1);
+  const TemplateArgumentLoc *getTemplateArgs() const {
+    return reinterpret_cast<const TemplateArgumentLoc *>(this + 1);
   }
 
   /// \brief Retrieve the number of template arguments provided as part of this
@@ -1378,7 +1380,7 @@ public:
 /// \brief Represents a C++ member access expression where the actual member
 /// referenced could not be resolved, e.g., because the base expression or the
 /// member name was dependent.
-class CXXUnresolvedMemberExpr : public Expr {
+class CXXDependentScopeMemberExpr : public Expr {
   /// \brief The expression for the base pointer or class reference,
   /// e.g., the \c x in x.f.
   Stmt *Base;
@@ -1406,7 +1408,7 @@ class CXXUnresolvedMemberExpr : public Expr {
   ///
   /// FIXME: This member, along with the Qualifier and QualifierRange, could
   /// be stuck into a structure that is optionally allocated at the end of
-  /// the CXXUnresolvedMemberExpr, to save space in the common case.
+  /// the CXXDependentScopeMemberExpr, to save space in the common case.
   NamedDecl *FirstQualifierFoundInScope;
 
   /// \brief The member to which this member expression refers, which
@@ -1429,11 +1431,11 @@ class CXXUnresolvedMemberExpr : public Expr {
   /// \brief Retrieve the explicit template argument list that followed the
   /// member template name, if any.
   const ExplicitTemplateArgumentList *getExplicitTemplateArgumentList() const {
-    return const_cast<CXXUnresolvedMemberExpr *>(this)
+    return const_cast<CXXDependentScopeMemberExpr *>(this)
              ->getExplicitTemplateArgumentList();
   }
 
-  CXXUnresolvedMemberExpr(ASTContext &C,
+  CXXDependentScopeMemberExpr(ASTContext &C,
                           Expr *Base, bool IsArrow,
                           SourceLocation OperatorLoc,
                           NestedNameSpecifier *Qualifier,
@@ -1443,12 +1445,12 @@ class CXXUnresolvedMemberExpr : public Expr {
                           SourceLocation MemberLoc,
                           bool HasExplicitTemplateArgs,
                           SourceLocation LAngleLoc,
-                          const TemplateArgument *TemplateArgs,
+                          const TemplateArgumentLoc *TemplateArgs,
                           unsigned NumTemplateArgs,
                           SourceLocation RAngleLoc);
 
 public:
-  CXXUnresolvedMemberExpr(ASTContext &C,
+  CXXDependentScopeMemberExpr(ASTContext &C,
                           Expr *Base, bool IsArrow,
                           SourceLocation OperatorLoc,
                           NestedNameSpecifier *Qualifier,
@@ -1456,14 +1458,14 @@ public:
                           NamedDecl *FirstQualifierFoundInScope,
                           DeclarationName Member,
                           SourceLocation MemberLoc)
-  : Expr(CXXUnresolvedMemberExprClass, C.DependentTy, true, true),
+  : Expr(CXXDependentScopeMemberExprClass, C.DependentTy, true, true),
     Base(Base), IsArrow(IsArrow), HasExplicitTemplateArgumentList(false),
     OperatorLoc(OperatorLoc),
     Qualifier(Qualifier), QualifierRange(QualifierRange),
     FirstQualifierFoundInScope(FirstQualifierFoundInScope),
     Member(Member), MemberLoc(MemberLoc) { }
 
-  static CXXUnresolvedMemberExpr *
+  static CXXDependentScopeMemberExpr *
   Create(ASTContext &C,
          Expr *Base, bool IsArrow,
          SourceLocation OperatorLoc,
@@ -1474,7 +1476,7 @@ public:
          SourceLocation MemberLoc,
          bool HasExplicitTemplateArgs,
          SourceLocation LAngleLoc,
-         const TemplateArgument *TemplateArgs,
+         const TemplateArgumentLoc *TemplateArgs,
          unsigned NumTemplateArgs,
          SourceLocation RAngleLoc);
 
@@ -1542,7 +1544,7 @@ public:
 
   /// \brief Retrieve the template arguments provided as part of this
   /// template-id.
-  const TemplateArgument *getTemplateArgs() const {
+  const TemplateArgumentLoc *getTemplateArgs() const {
     if (!HasExplicitTemplateArgumentList)
       return 0;
 
@@ -1577,9 +1579,9 @@ public:
   }
 
   static bool classof(const Stmt *T) {
-    return T->getStmtClass() == CXXUnresolvedMemberExprClass;
+    return T->getStmtClass() == CXXDependentScopeMemberExprClass;
   }
-  static bool classof(const CXXUnresolvedMemberExpr *) { return true; }
+  static bool classof(const CXXDependentScopeMemberExpr *) { return true; }
 
   // Iterators
   virtual child_iterator child_begin();

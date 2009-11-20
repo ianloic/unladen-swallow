@@ -1,4 +1,4 @@
-//===- Thumb1RegisterInfo.cpp - Thumb-1 Register Information -------*- C++ -*-===//
+//===- Thumb1RegisterInfo.cpp - Thumb-1 Register Information ----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file contains the Thumb-1 implementation of the TargetRegisterInfo class.
+// This file contains the Thumb-1 implementation of the TargetRegisterInfo
+// class.
 //
 //===----------------------------------------------------------------------===//
 
@@ -75,18 +76,6 @@ Thumb1RegisterInfo::getPhysicalRegisterRegClass(unsigned Reg, EVT VT) const {
 
   return TargetRegisterInfo::getPhysicalRegisterRegClass(Reg, VT);
 }
-
-bool
-Thumb1RegisterInfo::requiresRegisterScavenging(const MachineFunction &MF) const {
-  return true;
-}
-
-bool
-Thumb1RegisterInfo::requiresFrameIndexScavenging(const MachineFunction &MF)
-  const {
-  return true;
-}
-
 
 bool Thumb1RegisterInfo::hasReservedCallFrame(MachineFunction &MF) const {
   const MachineFrameInfo *FFI = MF.getFrameInfo();
@@ -806,7 +795,7 @@ void Thumb1RegisterInfo::emitEpilogue(MachineFunction &MF,
     if (NumBytes != 0)
       emitSPUpdate(MBB, MBBI, TII, dl, *this, NumBytes);
   } else {
-    // Unwind MBBI to point to first LDR / FLDD.
+    // Unwind MBBI to point to first LDR / VLDRD.
     const unsigned *CSRegs = getCalleeSavedRegs();
     if (MBBI != MBB.begin()) {
       do

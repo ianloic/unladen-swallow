@@ -26,6 +26,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/GCMetadata.h"
@@ -43,6 +44,7 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
@@ -66,7 +68,7 @@ static cl::opt<bool>
 EnableFastISelAbort("fast-isel-abort", cl::Hidden,
           cl::desc("Enable abort calls when \"fast\" instruction fails"));
 static cl::opt<bool>
-SchedLiveInCopies("schedule-livein-copies",
+SchedLiveInCopies("schedule-livein-copies", cl::Hidden,
                   cl::desc("Schedule copies of livein registers"),
                   cl::init(false));
 
@@ -149,16 +151,20 @@ namespace llvm {
 }
 
 // EmitInstrWithCustomInserter - This method should be implemented by targets
-// that mark instructions with the 'usesCustomDAGSchedInserter' flag.  These
+// that mark instructions with the 'usesCustomInserter' flag.  These
 // instructions are special in various ways, which require special support to
 // insert.  The specified MachineInstr is created but not inserted into any
-// basic blocks, and the scheduler passes ownership of it to this method.
+// basic blocks, and this method is called to expand it into a sequence of
+// instructions, potentially also creating new basic blocks and control flow.
+// When new basic blocks are inserted and the edges from MBB to its successors
+// are modified, the method should insert pairs of <OldSucc, NewSucc> into the
+// DenseMap.
 MachineBasicBlock *TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
                                                          MachineBasicBlock *MBB,
                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const {
 #ifndef NDEBUG
   errs() << "If a target marks an instruction with "
-          "'usesCustomDAGSchedInserter', it must implement "
+          "'usesCustomInserter', it must implement "
           "TargetLowering::EmitInstrWithCustomInserter!";
 #endif
   llvm_unreachable(0);
@@ -381,13 +387,14 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
     if (MDDbgKind) {
       // Update DebugLoc if debug information is attached with this
       // instruction.
-      if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, I)) {
-        DILocation DILoc(Dbg);
-        DebugLoc Loc = ExtractDebugLocation(DILoc, MF->getDebugLocInfo());
-        SDL->setCurDebugLoc(Loc);
-        if (MF->getDefaultDebugLoc().isUnknown())
-          MF->setDefaultDebugLoc(Loc);
-      }
+      if (!isa<DbgInfoIntrinsic>(I)) 
+        if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, I)) {
+          DILocation DILoc(Dbg);
+          DebugLoc Loc = ExtractDebugLocation(DILoc, MF->getDebugLocInfo());
+          SDL->setCurDebugLoc(Loc);
+          if (MF->getDefaultDebugLoc().isUnknown())
+            MF->setDefaultDebugLoc(Loc);
+        }
     }
     if (!isa<TerminatorInst>(I))
       SDL->visit(*I);
@@ -744,14 +751,15 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
         if (MDDbgKind) {
           // Update DebugLoc if debug information is attached with this
           // instruction.
-          if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, BI)) {
-            DILocation DILoc(Dbg);
-            DebugLoc Loc = ExtractDebugLocation(DILoc,
-                                                MF.getDebugLocInfo());
-            FastIS->setCurDebugLoc(Loc);
-            if (MF.getDefaultDebugLoc().isUnknown())
-              MF.setDefaultDebugLoc(Loc);
-          }
+          if (!isa<DbgInfoIntrinsic>(BI)) 
+            if (MDNode *Dbg = TheMetadata.getMD(MDDbgKind, BI)) {
+              DILocation DILoc(Dbg);
+              DebugLoc Loc = ExtractDebugLocation(DILoc,
+                                                  MF.getDebugLocInfo());
+              FastIS->setCurDebugLoc(Loc);
+              if (MF.getDefaultDebugLoc().isUnknown())
+                MF.setDefaultDebugLoc(Loc);
+            }
         }
 
         // Just before the terminator instruction, insert instructions to
@@ -1288,5 +1296,56 @@ bool SelectionDAGISel::IsLegalAndProfitableToFold(SDNode *N, SDNode *U,
   return !isNonImmUse(Root, N, U);
 }
 
+SDNode *SelectionDAGISel::Select_INLINEASM(SDValue N) {
+  std::vector<SDValue> Ops(N.getNode()->op_begin(), N.getNode()->op_end());
+  SelectInlineAsmMemoryOperands(Ops);
+    
+  std::vector<EVT> VTs;
+  VTs.push_back(MVT::Other);
+  VTs.push_back(MVT::Flag);
+  SDValue New = CurDAG->getNode(ISD::INLINEASM, N.getDebugLoc(),
+                                VTs, &Ops[0], Ops.size());
+  return New.getNode();
+}
+
+SDNode *SelectionDAGISel::Select_UNDEF(const SDValue &N) {
+  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::IMPLICIT_DEF,
+                              N.getValueType());
+}
+
+SDNode *SelectionDAGISel::Select_DBG_LABEL(const SDValue &N) {
+  SDValue Chain = N.getOperand(0);
+  unsigned C = cast<LabelSDNode>(N)->getLabelID();
+  SDValue Tmp = CurDAG->getTargetConstant(C, MVT::i32);
+  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::DBG_LABEL,
+                              MVT::Other, Tmp, Chain);
+}
+
+SDNode *SelectionDAGISel::Select_EH_LABEL(const SDValue &N) {
+  SDValue Chain = N.getOperand(0);
+  unsigned C = cast<LabelSDNode>(N)->getLabelID();
+  SDValue Tmp = CurDAG->getTargetConstant(C, MVT::i32);
+  return CurDAG->SelectNodeTo(N.getNode(), TargetInstrInfo::EH_LABEL,
+                              MVT::Other, Tmp, Chain);
+}
+
+void SelectionDAGISel::CannotYetSelect(SDValue N) {
+  std::string msg;
+  raw_string_ostream Msg(msg);
+  Msg << "Cannot yet select: ";
+  N.getNode()->print(Msg, CurDAG);
+  llvm_report_error(Msg.str());
+}
+
+void SelectionDAGISel::CannotYetSelectIntrinsic(SDValue N) {
+  errs() << "Cannot yet select: ";
+  unsigned iid =
+    cast<ConstantSDNode>(N.getOperand(N.getOperand(0).getValueType() == MVT::Other))->getZExtValue();
+  if (iid < Intrinsic::num_intrinsics)
+    llvm_report_error("Cannot yet select: intrinsic %" + Intrinsic::getName((Intrinsic::ID)iid));
+  else if (const TargetIntrinsicInfo *tii = TM.getIntrinsicInfo())
+    llvm_report_error(Twine("Cannot yet select: target intrinsic %") +
+                      tii->getName(iid));
+}
 
 char SelectionDAGISel::ID = 0;
