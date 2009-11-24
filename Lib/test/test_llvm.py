@@ -116,6 +116,20 @@ class GeneralCompilationTests(ExtraAssertsTestCase, LlvmTestCase):
         self.assertTrue(isinstance(f, _llvm._function))
         self.assertRaises(TypeError, _llvm.compile, f, level)
 
+    def test_co_llvm(self):
+        def f():
+            return 1 + 2
+        for _ in xrange(JIT_SPIN_COUNT):
+            f()
+        str_co_llvm = str(f.__code__.co_llvm)
+        # After code objects are compiled to machine code, the IR form
+        # is mostly cleared out. However, we want to be able to print
+        # the IR generated for any particular function, so this tests
+        # that it gets regenerated when we ask for its string
+        # representation.  The cleared-out form is around 5 lines
+        # long, while all full functions are much longer.
+        self.assertTrue(10 < len(str_co_llvm.split('\n')), msg=str_co_llvm)
+
     @at_each_optimization_level
     def test_run_simple_function(self, level):
         foo = compile_for_llvm("foo", """
