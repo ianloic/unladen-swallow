@@ -65,7 +65,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -143,7 +143,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -224,7 +224,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Debug"
 				IgnoreDefaultLibraryNames="libc"
@@ -305,7 +305,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Debug"
 				IgnoreDefaultLibraryNames="libc"
@@ -382,7 +382,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -460,7 +460,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -538,7 +538,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -616,7 +616,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -2018,6 +2018,10 @@
 			</File>
 			<File
 				RelativePath="..\Util\SingleFunctionInliner.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\Stats.cc"
 				>
 			</File>
 			<File
