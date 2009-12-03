@@ -26,9 +26,9 @@ class DIFactory;
 class ExecutionEngine;
 class GlobalVariable;
 class Module;
+class ModuleProvider;
 class Value;
 class WeakVH;
-struct ExistingModuleProvider;
 }
 
 struct PyGlobalLlvmData {
@@ -54,7 +54,7 @@ public:
     llvm::LLVMContext &context() const { return llvm::getGlobalContext(); }
 
     llvm::Module *module() { return this->module_; }
-    llvm::ExistingModuleProvider *module_provider() {
+    llvm::ModuleProvider *module_provider() {
         return this->module_provider_; }
 
     PyConstantMirror &constant_mirror() { return *this->constant_mirror_; }
@@ -90,9 +90,9 @@ private:
     // We have a single global module that holds all compiled code.
     // Any cached global object that function definitions use will be
     // stored in here.  These are owned by engine_.
-    llvm::Module *const module_;
-    llvm::ExistingModuleProvider *const module_provider_;
-    const llvm::OwningPtr<llvm::DIFactory> debug_info_;
+    llvm::ModuleProvider *module_provider_;
+    llvm::Module *module_;
+    llvm::OwningPtr<llvm::DIFactory> debug_info_;
 
     llvm::ExecutionEngine *engine_;  // Not modified after the constructor.
 

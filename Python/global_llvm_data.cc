@@ -9,6 +9,7 @@
 
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
@@ -19,17 +20,17 @@
 #include "llvm/ModuleProvider.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ValueHandle.h"
+#include "llvm/System/Path.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetSelect.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 
-// Declare the function from initial_llvm_module.cc.
-llvm::Module* FillInitialGlobalModule(llvm::Module*);
-
 using llvm::FunctionPassManager;
 using llvm::Module;
+using llvm::StringRef;
 
 PyGlobalLlvmData *
 PyGlobalLlvmData_New()
@@ -55,15 +56,57 @@ PyGlobalLlvmData::Get()
     return PyThreadState_GET()->interp->global_llvm_data;
 }
 
+#define STRINGIFY(X) STRINGIFY2(X)
+#define STRINGIFY2(X) #X
+// The basename of the bitcode file holding the standard library.
+#define LIBPYTHON_BC "libpython" STRINGIFY(PY_MAJOR_VERSION) "." \
+    STRINGIFY(PY_MINOR_VERSION) ".bc"
+
+// Searches for the bitcode file holding the Python standard library.
+// If one is found, returns its contents in a MemoryBuffer.  If not,
+// dies with a fatal error.
+static llvm::MemoryBuffer *
+find_stdlib_bc()
+{
+    llvm::sys::Path path;
+    llvm::SmallVector<StringRef, 8> sys_path;
+    StringRef(Py_GetPath()).split(sys_path, ":");
+    for (ssize_t i = 0, size = sys_path.size(); i < size; ++i) {
+        StringRef elem = sys_path[i];
+        path = elem;
+        path.appendComponent(LIBPYTHON_BC);
+        llvm::MemoryBuffer *stdlib_file =
+            llvm::MemoryBuffer::getFile(path.str(), NULL);
+        if (stdlib_file != NULL) {
+            return stdlib_file;
+        }
+    }
+    Py_FatalError("Could not find " LIBPYTHON_BC " on sys.path");
+    return NULL;
+}
+
 PyGlobalLlvmData::PyGlobalLlvmData()
-    : module_(new Module("<main>", this->context())),
-      module_provider_(new llvm::ExistingModuleProvider(module_)),
-      debug_info_(Py_GenerateDebugInfoFlag ? new llvm::DIFactory(*module_)
-                  : NULL),
-      optimizations_(4, (FunctionPassManager*)NULL),
+    : optimizations_(4, (FunctionPassManager*)NULL),
       num_globals_after_last_gc_(0)
 {
     std::string error;
+    llvm::MemoryBuffer *stdlib_file = find_stdlib_bc();
+    this->module_provider_ =
+      llvm::getBitcodeModuleProvider(stdlib_file, this->context(), &error);
+    if (this->module_provider_ == NULL) {
+      Py_FatalError(error.c_str());
+    }
+    // TODO(jyasskin): Change this to getModule once we avoid the crash
+    // in BitcodeReader::ParseFunctionBody.  http://llvm.org/PR5663
+    this->module_ = this->module_provider_->materializeModule(&error);
+    if (this->module_ == NULL) {
+      Py_FatalError(error.c_str());
+    }
+
+    if (Py_GenerateDebugInfoFlag) {
+      this->debug_info_.reset(new llvm::DIFactory(*module_));
+    }
+
     llvm::InitializeNativeTarget();
     engine_ = llvm::ExecutionEngine::create(
         module_provider_,
@@ -79,9 +122,6 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     if (engine_ == NULL) {
         Py_FatalError(error.c_str());
     }
-
-    this->module_->setDataLayout(
-        this->engine_->getTargetData()->getStringRepresentation());
 
     // When we ask to JIT a function, we should also JIT other
     // functions that function depends on.  This lets us JIT in a
@@ -101,8 +141,6 @@ PyGlobalLlvmData::PyGlobalLlvmData()
 void
 PyGlobalLlvmData::InstallInitialModule()
 {
-    FillInitialGlobalModule(this->module_);
-
     for (llvm::Module::iterator it = this->module_->begin();
          it != this->module_->end(); ++it) {
         if (it->getName().find("_PyLlvm_Fast") == 0) {

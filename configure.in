@@ -3754,7 +3754,7 @@ then
     # effect is that config.status passes some extra arguments when it
     # re-runs the Python configure script.
     # Keep these arguments in sync with Util/llvm/install-llvm.sh.
-    ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
+    ac_configure_args="$ac_configure_args --enable-jit --enable-targets=host --enable-bindings=none"
     if test "$Py_DEBUG" = 'true' ; then
         ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
         LLVM_PATH="$LLVM_BASE/Debug"

@@ -185,6 +185,7 @@ LIBRARY=	@LIBRARY@
 LDLIBRARY=      @LDLIBRARY@
 BLDLIBRARY=     @BLDLIBRARY@
 DLLLIBRARY=	@DLLLIBRARY@
+BCLIBRARY=	Modules/libpython$(VERSION).bc
 LDLIBRARYDIR=   @LDLIBRARYDIR@
 INSTSONAME=	@INSTSONAME@
 
@@ -342,7 +343,6 @@ PYTHON_OBJS=	\
 ifneq (@BUILD_LLVM@, disabled)
 	PYTHON_OBJS +=	\
 		Python/global_llvm_data.o \
-		Python/initial_llvm_module.o \
 		Python/llvm_fbuilder.o \
 		Python/llvm_compile.o \
 		Util/PyBytecodeIterator.o \
@@ -457,12 +457,11 @@ llvm:
 llvm_tools: llvm
 	@case @BUILD_LLVM@ in \
 	0|disabled) ;; \
-	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang llc";; \
+	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang opt llvm-link llvm-dis";; \
 	esac
 
-
 # Build the interpreter
-$(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) | llvm
+$(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) $(BCLIBRARY) | llvm
 		$(LINKCC) $(LDFLAGS) -o $@ Modules/python.o \
 		$(EXECUTABLE_LINK_ARGS)
 
@@ -768,28 +767,12 @@ $(LIBRARY_OBJS) $(MODOBJS) Modules/python.o: $(PYTHON_HEADERS)
 
 # LLVM-related generated files
 
-Python/llvm_inline_functions.bc: $(srcdir)/Python/llvm_inline_functions.c \
-	$(PYTHON_HEADERS) | llvm_tools
-	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c  $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
+BCLIBRARY_OBJS := Python/llvm_inline_functions.bc
 
-# TODO(jyasskin): nlewycky says that llc -march=cpp is tested much
-# less than other parts of LLVM.  If it breaks us more than a couple
-# times, we should try to run parts of LLVM's standard test suite
-# through it.
-#
-# We generate this into Include/ because under MSVC the objdir is
-# flat, so #includes of generated files with a path don't work.
-Include/initial_llvm_module_body.cc: Python/llvm_inline_functions.bc \
-	| llvm_tools
-	$(LLVM_BIN_DIR)/llc $< -march=cpp -cppgen=contents \
-		-cppfname=FillInitialGlobalModule -o $@ -f
-
-# Since llc's output can have some unused variables, silence warnings
-# about them (for now.)
-# See <http://code.google.com/p/unladen-swallow/issues/detail?id=25>.
-Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
-		Include/initial_llvm_module_body.cc
-	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -Wno-unused -o $@ $<
+$(BCLIBRARY:.bc=.unopt.bc): $(BCLIBRARY_OBJS)
+	$(LLVM_BIN_DIR)/llvm-link -o $@ $^
+$(BCLIBRARY): $(BCLIBRARY:.bc=.unopt.bc)
+	$(LLVM_BIN_DIR)/opt -o $@ -O3 $<
 
 
 ######################################################################
@@ -799,15 +782,16 @@ Python/initial_llvm_module.o: $(srcdir)/Python/initial_llvm_module.cc \
 Util/googletest/gtest.o:
 	$(CXX) -c $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest -I$(srcdir)/Util/googletest/include -o $@ $(srcdir)/Util/googletest/src/gtest-all.cc
 
-Unittests/alltests: $(srcdir)/Unittests/*Test.cc \
+# Must be in the root object directory for Python to find libpython.bc.
+AllUnitTests: $(srcdir)/Unittests/*Test.cc \
 		$(LIBRARY) Util/googletest/gtest.o
 	$(CXX) $(LLVMCXXFLAGS) $(PY_CXXFLAGS) \
 		-I$(srcdir)/Util/googletest/include -o $@ \
 		$(srcdir)/Util/googletest/src/gtest_main.cc $^ \
 		$(EXECUTABLE_LINK_ARGS)
 
-unittest: Unittests/alltests
-	Unittests/alltests
+unittest: AllUnitTests
+	./AllUnitTests
 
 # Test the interpreter (twice, once without .pyc files, once with)
 # In the past, we've had problems where bugs in the marshalling or
@@ -1080,7 +1064,7 @@ inclinstall:
 # This goes into $(exec_prefix)
 LIBPL=		$(LIBP)/config
 libainstall:	all
-	@for i in $(LIBDIR) $(LIBP) $(LIBPL); \
+	@for i in $(LIBDIR) $(LIBP) $(LIBPL) $(DESTSHARED); \
 	do \
 		if test ! -d $(DESTDIR)$$i; then \
 			echo "Creating directory $$i"; \
@@ -1100,6 +1084,7 @@ libainstall:	all
 			echo Skip install of $(LIBRARY) - use make frameworkinstall; \
 		fi; \
 	fi
+	$(INSTALL_DATA) $(BCLIBRARY) $(DESTSHARED)
 	$(INSTALL_DATA) Modules/config.c $(DESTDIR)$(LIBPL)/config.c
 	$(INSTALL_DATA) Modules/python.o $(DESTDIR)$(LIBPL)/python.o
 	$(INSTALL_DATA) $(srcdir)/Modules/config.c.in $(DESTDIR)$(LIBPL)/config.c.in
@@ -1247,6 +1232,12 @@ config.status:	$(srcdir)/configure
 .cc.o:
 	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -o $@ $<
 
+%.bc : %.c $(PYTHON_HEADERS) | llvm_tools
+	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
+
+%.ll : %.bc | llvm_tools
+	$(LLVM_BIN_DIR)/llvm-dis $< -o $@
+
 # Run reindent on the library
 reindent:
 	./$(BUILDPYTHON) $(srcdir)/Tools/scripts/reindent.py -r $(srcdir)/Lib
@@ -1286,8 +1277,8 @@ clean: pycremoval
 	find . -name '*.s[ol]' -exec rm -f {} ';'
 	find $(srcdir)/build -name 'fficonfig.h' -exec rm -f {} ';' || true
 	find $(srcdir)/build -name 'fficonfig.py' -exec rm -f {} ';' || true
-	rm -f Include/initial_llvm_module_body.cc
 	rm -f Python/llvm_inline_functions.bc
+	rm -f $(BCLIBRARY)
 
 profile-removal:
 	find . -name '*.gc??' -exec rm -f {} ';'
