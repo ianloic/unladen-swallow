@@ -74,6 +74,10 @@ PyAPI_FUNC(PyObject *) _PyInt_FormatAdvanced(PyObject *obj,
 					     char *format_spec,
 					     Py_ssize_t format_spec_len);
 
+/* Like PyInt_AsLong, except checks for integer overflow/underflow when
+   converting from long. */
+PyAPI_FUNC(int) _PyInt_AsInt(PyObject *obj);
+
 #ifdef __cplusplus
 }
 #endif

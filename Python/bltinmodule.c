@@ -582,7 +582,7 @@ Return a string of one character with ordinal i; 0 <= i < 256.");
 static PyObject *
 builtin_unichr(PyObject *self, PyObject *arg)
 {
-	int x = PyInt_AsLong(arg);
+	int x = _PyInt_AsInt(arg);
 
 	if (x == -1 && PyErr_Occurred())
 		return NULL;

@@ -336,6 +336,26 @@ PyInt_AsUnsignedLongLongMask(register PyObject *op)
 }
 #endif
 
+int
+_PyInt_AsInt(PyObject *obj)
+{
+	long ival = PyInt_AsLong(obj);
+
+	if (ival == -1 && PyErr_Occurred())
+		return -1;
+	else if (ival > INT_MAX) {
+		PyErr_SetString(PyExc_OverflowError,
+			"signed integer is greater than maximum");
+		return -1;
+	}
+	else if (ival < INT_MIN) {
+		PyErr_SetString(PyExc_OverflowError,
+			"signed integer is less than minimum");
+		return -1;
+	}
+	return (int)ival;
+}
+
 PyObject *
 PyInt_FromString(char *s, char **pend, int base)
 {
