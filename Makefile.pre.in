@@ -99,7 +99,7 @@ LLVM_BIN_DIR=	@LLVM_PATH@/bin
 ifeq (@BUILD_LLVM@, disabled)
 	LLVMLIBS = UNUSED
 else
-	LLVMLIBS = LLVMipo LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
+	LLVMLIBS = LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
 endif
 
 
@@ -345,10 +345,11 @@ ifneq (@BUILD_LLVM@, disabled)
 		Python/global_llvm_data.o \
 		Python/llvm_fbuilder.o \
 		Python/llvm_compile.o \
-		Util/PyBytecodeIterator.o \
 		Util/ConstantMirror.o \
+		Util/DeadGlobalElim.o \
 		Util/EventTimer.o \
 		Util/PyAliasAnalysis.o \
+		Util/PyBytecodeIterator.o \
 		Util/PyTypeBuilder.o \
 		Util/RuntimeFeedback.o \
 		Util/SingleFunctionInliner.o \
@@ -749,9 +750,10 @@ PYTHON_HEADERS= \
 		Python/global_llvm_data_fwd.h \
 		Python/llvm_fbuilder.h \
 		Include/llvm_compile.h \
-		Util/PyBytecodeIterator.h \
 		Util/ConstantMirror.h \
+		Util/DeadGlobalElim.h \
 		Util/EventTimer.h \
+		Util/PyBytecodeIterator.h \
 		Util/PyTypeBuilder.h \
 		Util/RuntimeFeedback.h \
 		Util/RuntimeFeedback_fwd.h \

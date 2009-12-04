@@ -2,6 +2,7 @@
 #include "Python.h"
 
 #include "Python/global_llvm_data.h"
+#include "Util/DeadGlobalElim.h"
 #include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
 #include "Util/Stats.h"
@@ -25,7 +26,6 @@
 #include "llvm/System/Path.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetSelect.h"
-#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 
 using llvm::FunctionPassManager;
@@ -96,12 +96,7 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     if (this->module_provider_ == NULL) {
       Py_FatalError(error.c_str());
     }
-    // TODO(jyasskin): Change this to getModule once we avoid the crash
-    // in BitcodeReader::ParseFunctionBody.  http://llvm.org/PR5663
-    this->module_ = this->module_provider_->materializeModule(&error);
-    if (this->module_ == NULL) {
-      Py_FatalError(error.c_str());
-    }
+    this->module_ = this->module_provider_->getModule();
 
     if (Py_GenerateDebugInfoFlag) {
       this->debug_info_.reset(new llvm::DIFactory(*module_));
@@ -135,12 +130,27 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     this->InstallInitialModule();
 
     this->InitializeOptimizations();
-    this->gc_.add(llvm::createGlobalDCEPass());
+    this->gc_.add(PyCreateDeadGlobalElimPass(&this->bitcode_gvs_));
+}
+
+template<typename Iterator>
+static void insert_gvs(
+    llvm::DenseSet<llvm::AssertingVH<const llvm::GlobalValue> > &set,
+    Iterator first, Iterator last) {
+    for (; first != last; ++first) {
+        set.insert(&*first);
+    }
 }
 
 void
 PyGlobalLlvmData::InstallInitialModule()
 {
+    insert_gvs(bitcode_gvs_, this->module_->begin(), this->module_->end());
+    insert_gvs(bitcode_gvs_, this->module_->global_begin(),
+               this->module_->global_end());
+    insert_gvs(bitcode_gvs_, this->module_->alias_begin(),
+               this->module_->alias_end());
+
     for (llvm::Module::iterator it = this->module_->begin();
          it != this->module_->end(); ++it) {
         if (it->getName().find("_PyLlvm_Fast") == 0) {
@@ -263,6 +273,7 @@ PyGlobalLlvmData::InitializeOptimizations()
 
 PyGlobalLlvmData::~PyGlobalLlvmData()
 {
+    this->bitcode_gvs_.clear();  // Stop asserting values aren't destroyed.
     this->constant_mirror_->python_shutting_down_ = true;
     for (size_t i = 0; i < this->optimizations_.size(); ++i) {
         delete this->optimizations_[i];
