@@ -783,11 +783,10 @@ Util/googletest/gtest.o:
 	$(CXX) -c $(PY_CXXFLAGS) -I$(srcdir)/Util/googletest -I$(srcdir)/Util/googletest/include -o $@ $(srcdir)/Util/googletest/src/gtest-all.cc
 
 # Must be in the root object directory for Python to find libpython.bc.
-AllUnitTests: $(srcdir)/Unittests/*Test.cc \
+AllUnitTests: $(srcdir)/Unittests/*Test.cc $(srcdir)/Unittests/pytest_main.cc \
 		$(LIBRARY) Util/googletest/gtest.o
 	$(CXX) $(LLVMCXXFLAGS) $(PY_CXXFLAGS) \
-		-I$(srcdir)/Util/googletest/include -o $@ \
-		$(srcdir)/Util/googletest/src/gtest_main.cc $^ \
+		-I$(srcdir)/Util/googletest/include -o $@ $^ \
 		$(EXECUTABLE_LINK_ARGS)
 
 unittest: AllUnitTests
