@@ -1771,10 +1771,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\initial_llvm_module.cc"
-				>
-			</File>
-			<File
 				RelativePath="..\Python\llvm_fbuilder.cc"
 				>
 			</File>
@@ -1794,10 +1790,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1805,10 +1801,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1816,10 +1812,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26_d.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26_d.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26_d.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1827,10 +1823,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26_d.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26_d.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26_d.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1838,10 +1834,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1849,10 +1845,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1966,6 +1962,14 @@
 			</File>
 			<File
 				RelativePath="..\Util\ConstantMirror.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\DeadGlobalElim.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\DeadGlobalElim.h"
 				>
 			</File>
 			<File

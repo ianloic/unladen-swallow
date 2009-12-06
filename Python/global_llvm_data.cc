@@ -59,8 +59,18 @@ PyGlobalLlvmData::Get()
 #define STRINGIFY(X) STRINGIFY2(X)
 #define STRINGIFY2(X) #X
 // The basename of the bitcode file holding the standard library.
+#ifdef MS_WINDOWS
+#ifdef Py_DEBUG
+#define LIBPYTHON_BC "python" STRINGIFY(PY_MAJOR_VERSION) \
+    STRINGIFY(PY_MINOR_VERSION) "_d.bc"
+#else
+#define LIBPYTHON_BC "python" STRINGIFY(PY_MAJOR_VERSION) \
+    STRINGIFY(PY_MINOR_VERSION) ".bc"
+#endif
+#else
 #define LIBPYTHON_BC "libpython" STRINGIFY(PY_MAJOR_VERSION) "." \
     STRINGIFY(PY_MINOR_VERSION) ".bc"
+#endif
 
 // Searches for the bitcode file holding the Python standard library.
 // If one is found, returns its contents in a MemoryBuffer.  If not,
