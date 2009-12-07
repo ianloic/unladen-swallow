@@ -700,7 +700,7 @@ class SizeofTest(unittest.TestCase):
         # type
         # (PyTypeObject + PyNumberMethods +  PyMappingMethods +
         #  PySequenceMethods + PyBufferProcs)
-        s = size(vh + 'P2P15Pl4PP9PP11PI') + size('41P 10P 3P 6P')
+        s = size(vh + 'P2P15Pl4PP9PP11PIP') + size('41P 10P 3P 6P')
         class newstyleclass(object):
             pass
         check(newstyleclass, s)

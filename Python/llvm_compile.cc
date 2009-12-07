@@ -406,14 +406,10 @@ _PyCode_ToLlvmIr(PyCodeObject *code)
         return NULL;
     }
 
-    /* If the code object doesn't need the LOAD_GLOBAL optimization, it should
-       not care whether the globals/builtins change. */
-    if (!fbuilder.UsesLoadGlobalOpt() && code->co_assumed_globals) {
-        code->co_flags &= ~CO_FDO_GLOBALS;
-        _PyDict_DropWatcher(code->co_assumed_globals, code);
-        _PyDict_DropWatcher(code->co_assumed_builtins, code);
-        code->co_assumed_globals = NULL;
-        code->co_assumed_builtins = NULL;
+    // Now that we know that there were no errors, register invalidation
+    // callbacks for the code object.
+    if (fbuilder.FinishFunction() < 0) {
+        return NULL;
     }
 
     // Make sure the function survives global optimizations.

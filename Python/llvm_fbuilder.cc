@@ -7,6 +7,7 @@
 
 #include "Python/global_llvm_data.h"
 
+#include "Util/ConstantMirror.h"
 #include "Util/EventTimer.h"
 #include "Util/PyTypeBuilder.h"
 
@@ -108,11 +109,61 @@ public:
 
 static llvm::ManagedStatic<CondBranchStats> cond_branch_stats;
 
+class AccessAttrStats {
+public:
+    ~AccessAttrStats() {
+        errs() << "\nLOAD/STORE_ATTR optimization:\n";
+        errs() << "Total opcodes: " << (this->loads + this->stores) << "\n";
+        errs() << "Optimized opcodes: "
+               << (this->optimized_loads + this->optimized_stores) << "\n";
+        errs() << "LOAD_ATTR opcodes: " << this->loads << "\n";
+        errs() << "Optimized LOAD_ATTR opcodes: "
+               << this->optimized_loads << "\n";
+        errs() << "STORE_ATTR opcodes: " << this->stores << "\n";
+        errs() << "Optimized STORE_ATTR opcodes: "
+               << this->optimized_stores << "\n";
+        errs() << "No opt: no data: " << this->no_opt_no_data << "\n";
+        errs() << "No opt: no mcache support: "
+               << this->no_opt_no_mcache << "\n";
+        errs() << "No opt: overrode getattr: "
+               << this->no_opt_overrode_access << "\n";
+        errs() << "No opt: polymorphic: " << this->no_opt_polymorphic << "\n";
+        errs() << "No opt: non-string name: "
+               << this->no_opt_nonstring_name << "\n";
+    }
+
+    // Total number of LOAD_ATTR opcodes compiled.
+    unsigned loads;
+    // Total number of STORE_ATTR opcodes compiled.
+    unsigned stores;
+    // Number of loads we optimized.
+    unsigned optimized_loads;
+    // Number of stores we optimized.
+    unsigned optimized_stores;
+    // Number of opcodes we were unable to optimize due to missing data.
+    unsigned no_opt_no_data;
+    // Number of opcodes we were unable to optimize because the type didn't
+    // support the method cache.
+    unsigned no_opt_no_mcache;
+    // Number of opcodes we were unable to optimize because the type overrode
+    // tp_getattro.
+    unsigned no_opt_overrode_access;
+    // Number of opcodes we were unable to optimize due to polymorphism.
+    unsigned no_opt_polymorphic;
+    // Number of opcodes we were unable to optimize because the attribute name
+    // was not a string.
+    unsigned no_opt_nonstring_name;
+};
+
+static llvm::ManagedStatic<AccessAttrStats> access_attr_stats;
+
 #define CF_INC_STATS(field) call_function_stats->field++
 #define COND_BRANCH_INC_STATS(field) cond_branch_stats->field++
+#define ACCESS_ATTR_INC_STATS(field) access_attr_stats->field++
 #else
 #define CF_INC_STATS(field)
 #define COND_BRANCH_INC_STATS(field)
+#define ACCESS_ATTR_INC_STATS(field)
 #endif  /* Py_WITH_INSTRUMENTATION */
 
 namespace py {
@@ -1205,11 +1256,7 @@ LlvmFunctionBuilder::LOAD_GLOBAL_fast(int name_index)
     /* Our assumptions are still valid; encode the result of the lookups as an
        immediate in the IR. */
     this->builder_.SetInsertPoint(keep_going);
-    Value *global = ConstantExpr::getIntToPtr(
-        ConstantInt::get(
-            Type::getInt64Ty(this->context_),
-            reinterpret_cast<uintptr_t>(obj)),
-        PyTypeBuilder<PyObject*>::get(this->context_));
+    Value *global = this->EmbedPointer<PyObject*>(obj);
     this->IncRef(global);
     this->Push(global);
 
@@ -1302,9 +1349,18 @@ LlvmFunctionBuilder::DELETE_NAME(int index)
 }
 
 void
-LlvmFunctionBuilder::LOAD_ATTR(int index)
+LlvmFunctionBuilder::LOAD_ATTR(int names_index)
 {
-    Value *attr = this->LookupName(index);
+    ACCESS_ATTR_INC_STATS(loads);
+    if (!this->LOAD_ATTR_fast(names_index)) {
+        this->LOAD_ATTR_safe(names_index);
+    }
+}
+
+void
+LlvmFunctionBuilder::LOAD_ATTR_safe(int names_index)
+{
+    Value *attr = this->LookupName(names_index);
     Value *obj = this->Pop();
     Function *pyobj_getattr = this->GetGlobalFunction<
         PyObject *(PyObject *, PyObject *)>("PyObject_GetAttr");
@@ -1315,10 +1371,64 @@ LlvmFunctionBuilder::LOAD_ATTR(int index)
     this->Push(result);
 }
 
-void
-LlvmFunctionBuilder::STORE_ATTR(int index)
+bool
+LlvmFunctionBuilder::LOAD_ATTR_fast(int names_index)
 {
-    Value *attr = this->LookupName(index);
+    PyObject *name =
+        PyTuple_GET_ITEM(this->code_object_->co_names, names_index);
+    AttributeAccessor accessor(this, name, ATTR_ACCESS_LOAD);
+
+    // Check that we can optimize this load.
+    if (!accessor.CanOptimizeAttrAccess()) {
+        return false;
+    }
+
+    // Emit the appropriate guards.
+    Value *obj_v = this->Pop();
+    BasicBlock *do_load = this->CreateBasicBlock("LOAD_ATTR_do_load");
+    accessor.GuardAttributeAccess(obj_v, do_load);
+
+    // Call the inline function that deals with the lookup.  LLVM propagates
+    // these constant arguments through the body of the function.
+    this->builder_.SetInsertPoint(do_load);
+    PyConstantMirror &mirror = this->llvm_data_->constant_mirror();
+    Value *descr_get_v = mirror.GetGlobalForFunctionPointer<descrgetfunc>(
+            (void*)accessor.descr_get_, "");
+    Value *getattr_func = this->GetGlobalFunction<
+        PyObject *(PyObject *obj, PyTypeObject *type, PyObject *name,
+                   long dictoffset, PyObject *descr, descrgetfunc descr_get,
+                   char is_data_descr)>("_PyLlvm_Object_GenericGetAttr");
+    Value *args[] = {
+        obj_v,
+        accessor.guard_type_v_,
+        accessor.name_v_,
+        accessor.dictoffset_v_, 
+        accessor.descr_v_,
+        descr_get_v,
+        accessor.is_data_descr_v_
+    };
+    Value *result = this->CreateCall(getattr_func, args, array_endof(args));
+
+    // Put the result on the stack and possibly propagate an exception.
+    this->DecRef(obj_v);
+    this->PropagateExceptionOnNull(result);
+    this->Push(result);
+    return true;
+}
+
+void
+LlvmFunctionBuilder::STORE_ATTR(int names_index)
+{
+    ACCESS_ATTR_INC_STATS(stores);
+    if (!this->STORE_ATTR_fast(names_index)) {
+        this->STORE_ATTR_safe(names_index);
+    }
+}
+
+void
+LlvmFunctionBuilder::STORE_ATTR_safe(int names_index)
+{
+    Value *attr = this->LookupName(names_index);
     Value *obj = this->Pop();
     Value *value = this->Pop();
     Function *pyobj_setattr = this->GetGlobalFunction<
@@ -1330,6 +1440,216 @@ LlvmFunctionBuilder::STORE_ATTR(int index)
     this->PropagateExceptionOnNonZero(result);
 }
 
+bool
+LlvmFunctionBuilder::STORE_ATTR_fast(int names_index)
+{
+    PyObject *name =
+        PyTuple_GET_ITEM(this->code_object_->co_names, names_index);
+    AttributeAccessor accessor(this, name, ATTR_ACCESS_STORE);
+
+    // Check that we can optimize this store.
+    if (!accessor.CanOptimizeAttrAccess()) {
+        return false;
+    }
+
+    // Emit appropriate guards.
+    Value *obj_v = this->Pop();
+    BasicBlock *do_store = this->CreateBasicBlock("STORE_ATTR_do_store");
+    accessor.GuardAttributeAccess(obj_v, do_store);
+
+    // Call the inline function that deals with the lookup.  LLVM propagates
+    // these constant arguments through the body of the function.
+    this->builder_.SetInsertPoint(do_store);
+    Value *val_v = this->Pop();
+    PyConstantMirror &mirror = this->llvm_data_->constant_mirror();
+    Value *descr_set_v = mirror.GetGlobalForFunctionPointer<descrsetfunc>(
+        (void*)accessor.descr_set_, "");
+    Value *setattr_func = this->GetGlobalFunction<
+        int (PyObject *obj, PyObject *val, PyTypeObject *type, PyObject *name,
+             long dictoffset, PyObject *descr, descrsetfunc descr_set,
+             char is_data_descr)>("_PyLlvm_Object_GenericSetAttr");
+    Value *args[] = {
+        obj_v,
+        val_v,
+        accessor.guard_type_v_,
+        accessor.name_v_,
+        accessor.dictoffset_v_,
+        accessor.descr_v_,
+        descr_set_v,
+        accessor.is_data_descr_v_
+    };
+    Value *result = this->CreateCall(setattr_func, args, array_endof(args));
+
+    this->DecRef(obj_v);
+    this->DecRef(val_v);
+    this->PropagateExceptionOnNonZero(result);
+    return true;
+}
+
+bool
+LlvmFunctionBuilder::AttributeAccessor::CanOptimizeAttrAccess()
+{
+    // Only optimize string attribute loads.  This leaves unicode hanging for
+    // now, but most objects are still constructed with string objects.  If it
+    // becomes a problem, our instrumentation will detect it.
+    if (!PyString_Check(this->name_)) {
+        ACCESS_ATTR_INC_STATS(no_opt_nonstring_name);
+        return false;
+    }
+
+    // Only optimize monomorphic load sites with data.
+    const PyRuntimeFeedback *feedback = this->fbuilder_->GetFeedback();
+    if (feedback == NULL) {
+        ACCESS_ATTR_INC_STATS(no_opt_no_data);
+        return false;
+    }
+
+    if (feedback->ObjectsOverflowed()) {
+        ACCESS_ATTR_INC_STATS(no_opt_polymorphic);
+        return false;
+    }
+    llvm::SmallVector<PyObject*, 3> types_seen;
+    feedback->GetSeenObjectsInto(types_seen);
+    if (types_seen.size() != 1) {
+        ACCESS_ATTR_INC_STATS(no_opt_polymorphic);
+        return false;
+    }
+
+    // During the course of the compilation, we borrow a reference to the type
+    // object from the feedback.  When compilation finishes, we listen for type
+    // object modifications.  When a type object is freed, it notifies its
+    // listeners, and the code object will be invalidated.  All other
+    // references are borrowed from the type object, which cannot change
+    // without invalidating the code.
+    PyObject *type_obj = types_seen[0];
+    assert(PyType_Check(type_obj));
+    PyTypeObject *type = this->guard_type_ = (PyTypeObject*)type_obj;
+
+    // The type must support the method cache so we can listen for
+    // modifications to it.
+    if (!PyType_HasFeature(type, Py_TPFLAGS_HAVE_VERSION_TAG)) {
+        ACCESS_ATTR_INC_STATS(no_opt_no_mcache);
+        return false;
+    }
+
+    // Don't optimize attribute lookup for types that override tp_getattro or
+    // tp_getattr.
+    bool overridden = true;
+    if (this->access_kind_ == ATTR_ACCESS_LOAD) {
+        overridden = (type->tp_getattro != &PyObject_GenericGetAttr);
+    } else if (this->access_kind_ == ATTR_ACCESS_STORE) {
+        overridden = (type->tp_setattro != &PyObject_GenericSetAttr);
+    } else {
+        assert(0 && "invalid enum!");
+    }
+    if (overridden) {
+        ACCESS_ATTR_INC_STATS(no_opt_overrode_access);
+        return false;
+    }
+
+    // Do the lookups on the type.
+    this->CacheTypeLookup();
+
+    // If we find a descriptor with a getter, make sure its type supports the
+    // method cache, or we won't be able to receive updates.
+    if (this->descr_get_ != NULL &&
+        !PyType_HasFeature(this->guard_descr_type_,
+                           Py_TPFLAGS_HAVE_VERSION_TAG)) {
+        ACCESS_ATTR_INC_STATS(no_opt_no_mcache);
+        return false;
+    }
+
+    // Now that we know for sure that we are going to optimize this lookup, add
+    // the type to the list of types we need to listen for modifications from
+    // and make the llvm::Values.
+    this->fbuilder_->types_used_.insert(type);
+    MakeLlvmValues();
+
+    ACCESS_ATTR_INC_STATS(optimized_loads);
+    return true;
+}
+
+void
+LlvmFunctionBuilder::AttributeAccessor::CacheTypeLookup()
+{
+    this->dictoffset_ = this->guard_type_->tp_dictoffset;
+    this->descr_ = _PyType_Lookup(this->guard_type_, this->name_);
+    if (this->descr_ != NULL) {
+        this->guard_descr_type_ = this->descr_->ob_type;
+        if (PyType_HasFeature(this->guard_descr_type_, Py_TPFLAGS_HAVE_CLASS)) {
+            this->descr_get_ = this->guard_descr_type_->tp_descr_get;
+            this->descr_set_ = this->guard_descr_type_->tp_descr_set;
+            if (this->descr_get_ != NULL && PyDescr_IsData(this->descr_)) {
+                this->is_data_descr_ = true;
+            }
+        }
+    }
+}
+
+void
+LlvmFunctionBuilder::AttributeAccessor::MakeLlvmValues()
+{
+    this->guard_type_v_ =
+        this->fbuilder_->EmbedPointer<PyTypeObject*>(this->guard_type_);
+    this->name_v_ = this->fbuilder_->EmbedPointer<PyObject*>(this->name_);
+    this->dictoffset_v_ =
+        ConstantInt::get(PyTypeBuilder<long>::get(this->fbuilder_->context_),
+                         this->dictoffset_);
+    this->descr_v_ = this->fbuilder_->EmbedPointer<PyObject*>(this->descr_);
+    this->is_data_descr_v_ =
+        ConstantInt::get(PyTypeBuilder<char>::get(this->fbuilder_->context_),
+                         this->is_data_descr_);
+}
+
+void
+LlvmFunctionBuilder::AttributeAccessor::GuardAttributeAccess(
+    Value *obj_v, BasicBlock *do_access)
+{
+    LlvmFunctionBuilder *fbuilder = this->fbuilder_;
+    BuilderT &builder = this->fbuilder_->builder();
+
+    BasicBlock *bail_block = fbuilder->CreateBasicBlock("ATTR_bail_block");
+    BasicBlock *guard_type = fbuilder->CreateBasicBlock("ATTR_check_valid");
+    BasicBlock *guard_descr = fbuilder->CreateBasicBlock("ATTR_check_descr");
+
+    // Make sure that the code object is still valid.  This may fail if the
+    // code object is invalidated inside of a call to the code object.
+    Value *use_llvm = builder.CreateLoad(fbuilder->use_llvm_addr_,
+                                         "co_use_llvm");
+    builder.CreateCondBr(fbuilder->IsNonZero(use_llvm), guard_type, bail_block);
+
+    // Compare ob_type against type and bail if it's the wrong type.  Since
+    // we've subscribed to the type object for modification updates, the code
+    // will be invalidated before the type object is freed.  Therefore we don't
+    // need to incref it, or any of its members.
+    builder.SetInsertPoint(guard_type);
+    Value *type_v = builder.CreateLoad(ObjectTy::ob_type(builder, obj_v));
+    Value *is_right_type = builder.CreateICmpEQ(type_v, this->guard_type_v_);
+    builder.CreateCondBr(is_right_type, guard_descr, bail_block);
+
+    // If there is a descriptor, we need to guard on the descriptor type.  This
+    // means emitting one more guard as well as subscribing to changes in the
+    // descriptor type.
+    builder.SetInsertPoint(guard_descr);
+    if (this->descr_ != NULL) {
+        fbuilder->types_used_.insert(this->guard_descr_type_);
+        Value *descr_type_v =
+            builder.CreateLoad(ObjectTy::ob_type(builder, this->descr_v_));
+        Value *guard_descr_type_v =
+            fbuilder->EmbedPointer<PyTypeObject*>(this->guard_descr_type_);
+        Value *is_right_descr_type =
+            builder.CreateICmpEQ(descr_type_v, guard_descr_type_v);
+        builder.CreateCondBr(is_right_descr_type, do_access, bail_block);
+    } else {
+        builder.CreateBr(do_access);
+    }
+
+    // Fill in the bail bb.
+    builder.SetInsertPoint(bail_block);
+    fbuilder->Push(obj_v);
+    fbuilder->CreateBailPoint(_PYFRAME_GUARD_FAIL);
+}
+
 void
 LlvmFunctionBuilder::DELETE_ATTR(int index)
 {
@@ -1339,7 +1659,7 @@ LlvmFunctionBuilder::DELETE_ATTR(int index)
     Function *pyobj_setattr = this->GetGlobalFunction<
         int(PyObject *, PyObject *, PyObject *)>("PyObject_SetAttr");
     Value *result = this->CreateCall(
-        pyobj_setattr, obj, attr, value, "STORE_ATTR_result");
+        pyobj_setattr, obj, attr, value, "DELETE_ATTR_result");
     this->DecRef(obj);
     this->PropagateExceptionOnNonZero(result);
 }
@@ -1785,10 +2105,7 @@ LlvmFunctionBuilder::CALL_FUNCTION_fast(int oparg,
     Value *is_same = this->builder_.CreateICmpEQ(
         // TODO(jyasskin): change this to "llvm_func" when
         // http://llvm.org/PR5126 is fixed.
-        this->builder_.CreateIntToPtr(
-            ConstantInt::get(Type::getInt64Ty(this->context_),
-                             reinterpret_cast<intptr_t>(cfunc_ptr)),
-            actual_func_ptr->getType()),
+        this->EmbedPointer<PyCFunction>((void*)cfunc_ptr),
         actual_func_ptr);
     this->builder_.CreateCondBr(is_same,
         all_assumptions_valid, invalid_assumptions);
@@ -3725,6 +4042,47 @@ LlvmFunctionBuilder::IsPythonTrue(Value *value)
 
     this->builder_.SetInsertPoint(done);
     return this->builder_.CreateLoad(result_addr);
+}
+
+template<typename T> Value *
+LlvmFunctionBuilder::EmbedPointer(void *ptr)
+{
+    // We assume that the caller has ensured that ptr will stay live for the
+    // life of this native code object.
+    return this->builder_.CreateIntToPtr(
+        ConstantInt::get(Type::getInt64Ty(this->context_),
+                         reinterpret_cast<intptr_t>(ptr)),
+        PyTypeBuilder<T>::get(this->context_));
+}
+
+int
+LlvmFunctionBuilder::FinishFunction()
+{
+    // If the code object doesn't need the LOAD_GLOBAL optimization, it should
+    // not care whether the globals/builtins change.
+    PyCodeObject *code = this->code_object_;
+    if (!this->uses_load_global_opt_ && code->co_assumed_globals) {
+        code->co_flags &= ~CO_FDO_GLOBALS;
+        _PyDict_DropWatcher(code->co_assumed_globals, code);
+        _PyDict_DropWatcher(code->co_assumed_builtins, code);
+        code->co_assumed_globals = NULL;
+        code->co_assumed_builtins = NULL;
+    }
+
+    // We need to register to become invalidated from any types we've touched.
+    for (llvm::SmallPtrSet<PyTypeObject*, 5>::const_iterator
+         i = this->types_used_.begin(), e = this->types_used_.end();
+         i != e; ++i) {
+        // TODO(rnk): When we support recompilation, we will need to remove
+        // ourselves from the code listeners list, or we may be invalidated due
+        // to changes on unrelated types.  This requires remembering a list of
+        // associated types in the code object.
+        if (_PyType_AddCodeListener(*i, (PyObject*)code) < 0) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 }  // namespace py

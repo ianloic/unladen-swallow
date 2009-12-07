@@ -12,8 +12,6 @@
 #ifdef WITH_LLVM
 #include "Python/global_llvm_data_fwd.h"
 
-#include "Util/ConstantMirror.h"
-
 #include "llvm/LLVMContext.h"
 #include "llvm/PassManager.h"
 #include "llvm/ADT/DenseSet.h"
@@ -32,6 +30,8 @@ class Module;
 class ModuleProvider;
 class Value;
 }
+
+class PyConstantMirror;
 
 struct PyGlobalLlvmData {
 public:

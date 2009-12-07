@@ -91,6 +91,19 @@ public:
     DEFINE_OBJECT_HEAD_FIELDS(PyObject)
 };
 
+template<> class TypeBuilder<PyVarObject, false> {
+public:
+    static const StructType *get(llvm::LLVMContext &context) {
+        return cast<StructType>(
+            PyGlobalLlvmData::Get()->module()->getTypeByName(
+                // Clang's name for the PyVarObject struct.
+                "struct.PyVarObject"));
+    }
+
+    DEFINE_OBJECT_HEAD_FIELDS(PyObject)
+    DEFINE_FIELD(PyVarObject, ob_size)
+};
+
 template<> class TypeBuilder<PyStringObject, false> {
 public:
     static const StructType *get(llvm::LLVMContext &context) {
@@ -529,6 +542,47 @@ public:
     DEFINE_FIELD(PyMethodDef, ml_doc)
 };
 
+// We happen to have two functions with these types, so we must define type
+// builder specializations for them.
+template<typename R, typename A1, typename A2, typename A3, typename A4,
+         typename A5, typename A6, typename A7, bool cross>
+class TypeBuilder<R(A1, A2, A3, A4, A5, A6, A7), cross> {
+public:
+    static const FunctionType *get(llvm::LLVMContext &Context) {
+        std::vector<const Type*> params;
+        params.reserve(7);
+        params.push_back(TypeBuilder<A1, cross>::get(Context));
+        params.push_back(TypeBuilder<A2, cross>::get(Context));
+        params.push_back(TypeBuilder<A3, cross>::get(Context));
+        params.push_back(TypeBuilder<A4, cross>::get(Context));
+        params.push_back(TypeBuilder<A5, cross>::get(Context));
+        params.push_back(TypeBuilder<A6, cross>::get(Context));
+        params.push_back(TypeBuilder<A7, cross>::get(Context));
+        return FunctionType::get(TypeBuilder<R, cross>::get(Context),
+                                 params, false);
+    }
+};
+
+template<typename R, typename A1, typename A2, typename A3, typename A4,
+         typename A5, typename A6, typename A7, typename A8, bool cross>
+class TypeBuilder<R(A1, A2, A3, A4, A5, A6, A7, A8), cross> {
+public:
+    static const FunctionType *get(llvm::LLVMContext &Context) {
+        std::vector<const Type*> params;
+        params.reserve(8);
+        params.push_back(TypeBuilder<A1, cross>::get(Context));
+        params.push_back(TypeBuilder<A2, cross>::get(Context));
+        params.push_back(TypeBuilder<A3, cross>::get(Context));
+        params.push_back(TypeBuilder<A4, cross>::get(Context));
+        params.push_back(TypeBuilder<A5, cross>::get(Context));
+        params.push_back(TypeBuilder<A6, cross>::get(Context));
+        params.push_back(TypeBuilder<A7, cross>::get(Context));
+        params.push_back(TypeBuilder<A8, cross>::get(Context));
+        return FunctionType::get(TypeBuilder<R, cross>::get(Context),
+                                 params, false);
+    }
+};
+
 #undef DEFINE_OBJECT_HEAD_FIELDS
 #undef DEFINE_FIELD
 
@@ -536,6 +590,7 @@ public:
 
 namespace py {
 typedef PyTypeBuilder<PyObject> ObjectTy;
+typedef PyTypeBuilder<PyVarObject> VarObjectTy;
 typedef PyTypeBuilder<PyStringObject> StringTy;
 typedef PyTypeBuilder<PyIntObject> IntTy;
 typedef PyTypeBuilder<PyTupleObject> TupleTy;

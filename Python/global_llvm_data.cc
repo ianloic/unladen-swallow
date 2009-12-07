@@ -2,7 +2,7 @@
 #include "Python.h"
 
 #include "Python/global_llvm_data.h"
-#include "Util/DeadGlobalElim.h"
+#include "Util/ConstantMirror.h"
 #include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
 #include "Util/Stats.h"

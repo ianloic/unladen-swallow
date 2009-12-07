@@ -11,8 +11,10 @@ except ImportError:
 
 import __builtin__
 import functools
+import gc
 import sys
 import unittest
+import weakref
 
 
 # Calculate default LLVM optimization level.
@@ -2975,6 +2977,464 @@ def foo():
 
         # If we get here, we haven't bailed, but double-check to be sure.
         self.assertTrue(foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_bails(self):
+        # Test that this simple object uses fast attribute lookup.  We do this
+        # by checking that it bails when we stick a descriptor on the class for
+        # that attribute.
+        class C(object):
+            def __init__(self, foo=0):
+                self.foo = foo
+        def get_foo(c):
+            return c.foo
+        c = C()
+
+        # Spin the code until it is hot, while checking for correctness.
+        for i in xrange(JIT_SPIN_COUNT):
+            self.assertEqual(i, get_foo(c))
+            c.foo += 1
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that the code bails correctly by passing an argument of another
+        # type.
+        class D(object):
+            def __init__(self):
+                self.foo = -1
+        d = D()
+        sys.setbailerror(True)
+        self.assertRaises(RuntimeError, get_foo, d)
+
+        # Check that another object of the same type doesn't bail.
+        c2 = C(foo=-1)
+        self.assertEqual(get_foo(c2), -1)
+
+        # Check that even though it bails, it gets the right answer.
+        sys.setbailerror(False)
+        self.assertEqual(get_foo(d), -1)
+
+    def test_load_attr_fast_new_descriptor_invalidates(self):
+        # Test that this simple object uses fast attribute lookup.  We do this
+        # by modifying the type and checking that it invalidates the code.
+        class C(object):
+            def __init__(self):
+                self.foo = 0
+        def get_foo(c):
+            return c.foo
+        c = C()
+
+        # Spin the code until it is hot.
+        for i in xrange(JIT_SPIN_COUNT):
+            get_foo(c)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that invalidating the code by assigning a descriptor works.
+        # The descriptor on the type will override the object attribute.
+        def new_get_foo(self):
+            return -1
+        C.foo = property(new_get_foo)
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+        self.assertEqual(c.foo, -1)
+        self.assertEqual(get_foo(c), -1)
+
+    def test_load_attr_fast_no_dict(self):
+        # Test that an object with no dict, ie one using slots, uses fast
+        # attribute lookup.  We do this by modifying the type and checking that
+        # it invalidates the code.
+        class C(object):
+            __slots__ = ('foo',)
+            def __init__(self):
+                self.foo = 0
+        def get_foo(c):
+            return c.foo
+        c = C()
+        self.assertFalse(hasattr(c, '__dict__'))
+
+        # Spin the code until it is hot.
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo(c)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that invalidating the code by assigning a descriptor works.
+        # The descriptor on the type will override the object attribute.
+        def new_get_foo(self):
+            return -1
+        C.foo = property(new_get_foo)
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+        self.assertEqual(c.foo, -1)
+        self.assertEqual(get_foo(c), -1)
+
+    def test_load_attr_fast_with_data_descriptor(self):
+        # Test that this simple object uses fast attribute lookup.  We do this
+        # by checking that it bails when we modify the data descriptor.  We do
+        # this by modifying the type and checking that it invalidates the code.
+        class C(object):
+            @property
+            def foo(self):
+                return 0
+        def get_foo(c):
+            return c.foo
+        c = C()
+
+        # Spin the code until it is hot.
+        for _ in xrange(JIT_SPIN_COUNT):
+            self.assertEqual(0, get_foo(c))
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that invalidating the code by assigning a descriptor works.
+        def new_foo(self):
+            return -1
+        C.foo = property(new_foo)
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+        self.assertEqual(c.foo, -1)
+        self.assertEqual(get_foo(c), -1)
+
+    def test_load_attr_fast_mutate_descriptor_type(self):
+        # Make two descriptor classes and them mutate the class of an instance
+        # from one to the other.
+        class DescrOne(object):
+            def __get__(self, inst, type=None):
+                return 1
+            def __set__(self, inst, value):
+                raise AttributeError
+            def __delete__(self, inst, value):
+                raise AttributeError
+        class DescrTwo(object):
+            def __get__(self, inst, type=None):
+                return 2
+            def __set__(self, inst, value):
+                raise AttributeError
+            def __delete__(self, inst, value):
+                raise AttributeError
+
+        class C(object):
+            foo = DescrOne()
+        c = C()
+        def get_foo(c):
+            return c.foo
+        def test_mutate_descriptor():
+            self.assertEqual(get_foo(c), 1)
+            # We can't do C.foo, because that calls __get__
+            descr = C.__dict__["foo"].__class__ = DescrTwo
+            self.assertEqual(get_foo(c), 2)
+
+        # First check that our descriptor works as intended in the interpreter.
+        test_mutate_descriptor()
+        # Reset C.foo to a fresh DescrOne instance.
+        C.foo = DescrOne()
+
+        # Test them in the compiled code.  We're concerned with correctness,
+        # not speed, so we turn off errors on bails.
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo(c)
+        sys.setbailerror(False)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+        test_mutate_descriptor()
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that we were optimizing LOAD_ATTR by mutating the type.
+        C.foo = 3
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_mutate_non_data_descr_to_data_descr(self):
+        # Make a non-data descriptor class and a data-descriptor class and see
+        # if switching between them causes breakage.
+        class NonDataDescr(object):
+            def __get__(self, inst, type=None):
+                return 1
+            # By not defining __set__, we are not a data descriptor, which
+            # lowers our lookup precedence.
+        class DataDescr(object):
+            def __get__(self, inst, type=None):
+                return 3
+            def __set__(self, inst, value):
+                raise AttributeError
+            def __delete__(self, inst, value):
+                raise AttributeError
+
+        class C(object):
+            foo = NonDataDescr()
+        c = C()
+        def get_foo():
+            return c.foo
+        def test_mutate_descriptor():
+            self.assertEqual(get_foo(), 1)
+            c.foo = 2
+            self.assertEqual(C.foo, 1)
+            self.assertEqual(get_foo(), 2)
+            C.__dict__["foo"].__class__ = DataDescr
+            self.assertEqual(C.foo, 3)
+            self.assertEqual(get_foo(), 3)
+            # Reset the descriptor type and delete the attribute shadowing the
+            # descriptor.
+            C.__dict__["foo"].__class__ = NonDataDescr
+            del c.foo
+
+        # Ratify our theories about descriptor semantics in the interpreter.
+        test_mutate_descriptor()
+
+        # Test them in the compiled code.  We're concerned with correctness,
+        # not speed, so we turn off errors on bails.
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo()
+        sys.setbailerror(False)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+        test_mutate_descriptor()
+        # Note that the code is *not* invalidated when we mutate the class of
+        # the descriptor because we cannot listen for modifications.  Instead,
+        # we have a guard on the type of the descriptor.
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that we were optimizing LOAD_ATTR by mutating the type.
+        C.foo = 4
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_mutate_descriptor_to_non_descriptor(self):
+        # Make a descriptor class and then mutate the class so that it's a
+        # vanilla object instead of a descriptor.
+        class MyDescr(object):
+            def __init__(self):
+                self.value = 1
+            def __get__(self, inst, type=None):
+                return self.value
+            def __set__(self, inst, value):
+                raise AttributeError
+            def __delete__(self, inst, value):
+                raise AttributeError
+        class VanillaObject(object):
+            pass
+
+        class C(object):
+            foo = MyDescr()
+        c = C()
+        def get_foo():
+            return c.foo
+        def test_mutate_descriptor():
+            descr = C.__dict__["foo"]  # Again, C.foo would call __get__.
+            descr.value = 1
+            self.assertEqual(get_foo(), 1)
+            descr.value = 2
+            self.assertEqual(get_foo(), 2)
+            descr.value = 3
+            descr.__class__ = VanillaObject
+            self.assertTrue(isinstance(get_foo(), VanillaObject))
+            self.assertEqual(get_foo().value, 3)
+
+        # Ratify our theories about descriptor semantics in the interpreter.
+        test_mutate_descriptor()
+        # Reset the class of the foo descriptor to MyDescr.
+        C.__dict__["foo"].__class__ = MyDescr
+
+        # Test them in the compiled code.  We're concerned with correctness,
+        # not speed, so we turn off errors on bails.
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo()
+        sys.setbailerror(False)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+        test_mutate_descriptor()
+        # Note that the code is *not* invalidated when we mutate the class of
+        # the descriptor because we cannot listen for modifications.  Instead,
+        # we have a guard on the type of the descriptor.
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Check that we were optimizing LOAD_ATTR by mutating the type.
+        C.foo = 4
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_mutate_descriptor_method(self):
+        # Make a descriptor class and then mutate mutate its __get__ method to
+        # return something else.
+        class MyDescr(object):
+            def __get__(self, inst, type=None):
+                return 1
+            def __set__(self, inst, value):
+                raise AttributeError
+            def __delete__(self, inst, value):
+                raise AttributeError
+        def new_get(self, inst, type=None):
+            return 2
+        old_get = MyDescr.__get__
+
+        class C(object):
+            foo = MyDescr()
+        c = C()
+        def get_foo():
+            return c.foo
+        def test_mutate_descriptor():
+            self.assertEqual(c.foo, 1)
+            MyDescr.__get__ = new_get
+            self.assertEqual(c.foo, 2)
+
+        # Ratify our theories about descriptor semantics in the interpreter.
+        test_mutate_descriptor()
+        # Reset the __get__ method.
+        MyDescr.__get__ = old_get
+
+        # Test them in the compiled code.  We're concerned with correctness,
+        # not speed, so we turn off errors on bails.
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo()
+        sys.setbailerror(False)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+        test_mutate_descriptor()
+        # Mutating the descriptor type invalidates the code.
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_freed_type(self):
+        # Train a code object on a certain type, and then free it.  The code
+        # should not be holding a reference to the type, so it should become
+        # invalidated.
+        class C(object):
+            @property
+            def foo(self):
+                return 1
+        def get_foo(o):
+            return o.foo
+        c = C()
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo(c)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+
+        # Do this song and dance to free C.
+        ref = weakref.ref(C)
+        _llvm.clear_feedback(get_foo)
+        del c
+        del C
+        gc.collect()  # Yes, this is necessary, the type gets in cycles.
+        self.assertEqual(ref(), None)  # Check that C was really freed.
+
+        # Now that C is gone, the machine code should be invalid.
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_load_attr_fast_invalidates_during_call(self):
+        # Make sure we properly bail if we are invalidated while the method is
+        # running.
+        class C(object):
+            foo = 1
+        invalidate_code = False
+        def maybe_invalidate():
+            # This must be a separate function from get_foo, because the
+            # conditional will be cold when we change its value, and it will
+            # cause a bail.  Because the functions are separate, it will not
+            # cause a bail in the get_foo code.
+            if invalidate_code:
+                C.foo = 2
+        def get_foo(o):
+            try:
+                maybe_invalidate()
+            except RuntimeError:
+                assert False, "maybe_invalidate bailed!"
+            return o.foo  # This should bail if we've been invalidated.
+
+        c = C()
+        for _ in xrange(JIT_SPIN_COUNT):
+            get_foo(c)
+        self.assertTrue(get_foo.__code__.__use_llvm__)
+        self.assertEqual(get_foo(c), 1)
+        invalidate_code = True
+        sys.setbailerror(False)
+        self.assertEqual(get_foo(c), 2)
+        self.assertFalse(get_foo.__code__.__use_llvm__)
+
+    def test_store_attr_fast_bails(self):
+        class C(object):
+            pass
+        c = C()
+        def set_attr(o, x):
+            o.foo = x
+        for i in xrange(JIT_SPIN_COUNT):
+            set_attr(c, i)
+            self.assertEqual(c.foo, i)
+        # Check that this bails properly when called on itself, a function.
+        self.assertRaises(RuntimeError, set_attr, set_attr, 1)
+        # Check that when it bails, it does the correct thing.
+        sys.setbailerror(False)
+        set_attr(set_attr, 1)
+        self.assertEqual(set_attr.foo, 1)
+        set_attr(set_attr, 2)
+        self.assertEqual(set_attr.foo, 2)
+
+    def test_store_attr_fast_invalidates(self):
+        class C(object):
+            pass
+        c = C()
+        def set_attr(o, x):
+            o.foo = x
+        for i in xrange(JIT_SPIN_COUNT):
+            set_attr(c, i)
+            self.assertEqual(c.foo, i)
+        # Check that sticking a foo descriptor on C invalidates the code.
+        C.foo = property(lambda self: -1)
+        self.assertFalse(set_attr.__code__.__use_llvm__)
+        self.assertEqual(c.foo, -1)
+        self.assertRaises(AttributeError, set_attr, c, 0)
+        self.assertEqual(c.foo, -1)
+
+    def test_store_attr_fast_mutate_vanilla_object_to_data_descriptor(self):
+        # Make a non-data descriptor class and a data-descriptor class and see
+        # if switching between them causes breakage.
+        class VanillaObject(object):
+            pass
+        class DataDescr(object):
+            def __get__(self, inst, type=None):
+                return inst._foo
+            def __set__(self, inst, value):
+                inst._foo = value
+            def __delete__(self, inst, value):
+                raise AttributeError
+
+        obj = VanillaObject()
+        class C(object):
+            foo = obj
+        c = C()
+        def set_foo(x):
+            c.foo = x
+
+        def test_mutate_descriptor():
+            self.assertEqual(c.foo, obj)
+            # Setting foo on c will shadow a non-data descriptor.
+            set_foo(2)
+            self.assertEqual(C.foo, obj)
+            self.assertEqual(c.foo, 2)
+            # Reset things by dropping the shadowing attribute.
+            del c.foo
+
+            # After we change the class, the new setter should be called, which
+            # sets c._foo as the backing store for c.foo.  We test that __set__
+            # is called by checking both c._foo and c.foo.
+            C.__dict__["foo"].__class__ = DataDescr
+            unique_obj = VanillaObject()
+            set_foo(unique_obj)
+            self.assertEqual(c._foo, unique_obj)
+            self.assertEqual(c.foo, unique_obj)
+            # Reset the descriptor type.
+            C.__dict__["foo"].__class__ = VanillaObject
+
+        # Ratify our theories about descriptor semantics in the interpreter.
+        test_mutate_descriptor()
+
+        # Test them in the compiled code.  We're concerned with correctness,
+        # not speed, so we turn off errors on bails.
+        for _ in xrange(JIT_SPIN_COUNT):
+            set_foo(0)
+        # Delete any stale foo attribute shadowing the non-data descriptor.
+        del c.foo
+        sys.setbailerror(False)
+        self.assertTrue(set_foo.__code__.__use_llvm__)
+        test_mutate_descriptor()
+        # Note that the code is *not* invalidated when we mutate the class of
+        # the descriptor because we cannot listen for modifications.  Instead,
+        # we have a guard on the type of the descriptor.
+        self.assertTrue(set_foo.__code__.__use_llvm__)
+
+        # Check that it bails.
+        sys.setbailerror(True)
+        C.__dict__["foo"].__class__ = DataDescr
+        self.assertRaises(RuntimeError, set_foo, 0)
+        C.__dict__["foo"].__class__ = VanillaObject
+
+        # Check that we were optimizing LOAD_ATTR by mutating the type.
+        C.foo = 4
+        self.assertFalse(set_foo.__code__.__use_llvm__)
 
 
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
