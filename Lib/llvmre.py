@@ -1,11 +1,11 @@
 '''A replacement for Python's RE module, using native compilation via LLVM'''
 
 # import flags from re
-from re import I, IGNORECASE, L, LOCALE, M, MULTILINE, S, DOTALL, U, UNICODE, X, VERBOSE
+#from re import I, IGNORECASE, L, LOCALE, M, MULTILINE, S, DOTALL, U, UNICODE, X, VERBOSE
 # import the error from re
-from re import error
+#from re import error
 
-import numbers
+import numbers, sys
 
 class RegexObject(object):
   def __init__(self, pattern, flags):
@@ -68,16 +68,16 @@ class RegexObject(object):
         new_pattern.append((op, av))
     return new_pattern
 
-  def match(self, string, pos=0, endpos=None):
-    if endpos == None: endpos = len(string)
+  def match(self, string, pos=0, endpos=sys.maxsize):
+    endpos = min(endpos, len(string))
     groups = self.__re.match(self.__unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
     else:
       return None
 
-  def search(self, string, pos=0, endpos=None):
-    if endpos == None: endpos = len(string)
+  def search(self, string, pos=0, endpos=sys.maxsize):
+    endpos = min(endpos, len(string))
     groups = self.__re.find(self.__unicode(string), pos, endpos)
     if groups:
       return MatchObject(self, string, pos, endpos, groups, self.__parsed)
@@ -107,8 +107,8 @@ class RegexObject(object):
     else:
       return split
 
-  def __finditer(self, string, pos=0, endpos=None, count=0, ignore_empty=False):
-    if endpos == None: endpos = len(string)
+  def __finditer(self, string, pos=0, endpos=sys.maxsize, count=0, ignore_empty=False):
+    endpos = min(endpos, len(string))
     _pos = pos
     num = 0
     while True:
@@ -134,7 +134,8 @@ class RegexObject(object):
         # no match, stop looking
         raise StopIteration
 
-  def findall(self, string, pos=0, endpos=None):
+  def findall(self, string, pos=0, endpos=sys.maxsize):
+    endpos = min(endpos, len(string))
     all = []
     for m in self.finditer(string, pos, endpos):
       if self.groups == 0:
@@ -145,7 +146,7 @@ class RegexObject(object):
         all.append(m.groups())
     return all
 
-  def finditer(self, string, pos=0, endpos=None):
+  def finditer(self, string, pos=0, endpos=sys.maxsize):
     return self.__finditer(string, pos, endpos)
 
   def sub(self, repl, string, count=0):

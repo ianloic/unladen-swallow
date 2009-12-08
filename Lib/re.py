@@ -102,8 +102,13 @@ This module also defines an exception 'error'.
 """
 
 import sys
+
+# SRE implementation
 import sre_compile
 import sre_parse
+
+# llvmre implementation
+import llvmre
 
 # public symbols
 __all__ = [ "match", "search", "sub", "subn", "split", "findall",
@@ -127,9 +132,6 @@ DEBUG = sre_compile.SRE_FLAG_DEBUG # dump pattern after compilation
 
 # sre exception
 error = sre_compile.error
-
-#from llvmre import *
-#'''
 
 # --------------------------------------------------------------------
 # public interface
@@ -220,10 +222,79 @@ def escape(pattern):
 # --------------------------------------------------------------------
 # internals
 
+class Pattern(object):
+  MAX_SRE_CALLS = 50
+  _num_compiles = 0
+  _num_llvm_compiles = 0
+  def __init__(self, pattern, flags):
+    # start out by calling SRE, after MAX_SRE_CALLS we can use llvmre instead
+    self.__hitcount = 0
+    self.__impl = sre_compile.compile(pattern, flags)
+    self.__call = self.__call_sre
+
+    # these fields are part of the re pattern interface
+    self.pattern = pattern
+    self.flags = flags
+    self.groups = self.__impl.groups
+    self.groupindex = self.__impl.groupindex
+
+    # keep track of how many patterns we compile
+    Pattern._num_compiles = Pattern._num_compiles + 1
+
+  def __call(self, method, *args):
+    '''dummy method to call either SRE or llvmre'''
+    pass
+
+  def __call_sre(self, method, *args):
+    '''call SRE and possibly compile the llvmre'''
+    self.__hitcount = self.__hitcount + 1
+    if self.__hitcount > Pattern.MAX_SRE_CALLS:
+      # we have exceeded the number of SRE calls, compile with llvmre
+      self.__impl = llvmre.compile(self.pattern, self.flags)
+      # replace the __call function with one that doesn't do accounting
+      self.__call = self.__call_llvm
+      # track number of patterns we compile with llvmre
+      Pattern._num_llvm_compiles = Pattern._num_llvm_compiles + 1
+    # call the method on the implementation
+    return getattr(self.__impl, method)(*args)
+
+  def __call_llvm(self, method, *args):
+    # call the method on the implementation
+    return getattr(self.__impl, method)(*args)
+
+  def match(self, string, pos=0, endpos=sys.maxsize):
+    return self.__call('match', string, pos, endpos)
+
+  def search(self, string, pos=0, endpos=sys.maxsize):
+    return self.__call('search', string, pos, endpos)
+
+  def split(self, string, maxsplit=0):
+    return self.__call('split', string, maxsplit)
+
+  def findall(self, string, pos=0, endpos=sys.maxsize):
+    return self.__call('findall', string, pos, endpos)
+
+  def finditer(self, string, pos=0, endpos=sys.maxsize):
+    return self.__call('finditer', string, pos, endpos)
+
+  def sub(self, repl, string, count=0):
+    return self.__call('sub', repl, string, count)
+
+  def subn(self, repl, string, count=0):
+    return self.__call('subn', repl, string, count)
+
+#import atexit
+#def Pattern_atexit():
+#    '''print stats on shutdown'''
+#    print 're.Pattern compiles=%d' % Pattern._num_compiles
+#    print 're.Pattern llvm compiles=%d' % Pattern._num_llvm_compiles
+#atexit.register(Pattern_atexit)
+
+
+from types import StringTypes
+
 _cache = {}
 _cache_repl = {}
-
-_pattern_type = type(sre_compile.compile("", 0))
 
 _MAXCACHE = 100
 
@@ -234,14 +305,14 @@ def _compile(*key):
     if p is not None:
         return p
     pattern, flags = key
-    if isinstance(pattern, _pattern_type):
+    if isinstance(pattern, Pattern):
         if flags:
             raise ValueError('Cannot process flags argument with a compiled pattern')
         return pattern
-    if not sre_compile.isstring(pattern):
+    if not isinstance(pattern, StringTypes):
         raise TypeError, "first argument must be string or compiled pattern"
     try:
-        p = sre_compile.compile(pattern, flags)
+        p = Pattern(pattern, flags)
     except error, v:
         raise error, v # invalid expression
     if len(_cache) >= _MAXCACHE:
@@ -286,7 +357,7 @@ import copy_reg
 def _pickle(p):
     return _compile, (p.pattern, p.flags)
 
-copy_reg.pickle(_pattern_type, _pickle, _compile)
+copy_reg.pickle(Pattern, _pickle, _compile)
 
 # --------------------------------------------------------------------
 # experimental stuff (see python-dev discussions for details)
@@ -326,5 +397,3 @@ class Scanner:
                 append(action)
             i = j
         return result, string[i:]
-
-#'''
