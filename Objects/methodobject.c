@@ -17,6 +17,18 @@ PyObject *
 PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
 {
 	PyCFunctionObject *op;
+
+	// Sanity check early, to avoid having to clean up from the mixed
+	// free list/allocation scheme below.
+	if (ml->ml_flags & METH_ARG_RANGE) {
+		if (ml->ml_min_arity < 0 || ml->ml_min_arity > PY_MAX_ARITY ||
+		    ml->ml_max_arity < 0 || ml->ml_max_arity > PY_MAX_ARITY ||
+		    ml->ml_max_arity < ml->ml_min_arity) {
+			PyErr_BadInternalCall();
+			return NULL;
+		}
+	}
+
 	op = free_list;
 	if (op != NULL) {
 		free_list = (PyCFunctionObject *)(op->m_self);
@@ -29,24 +41,19 @@ PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
 			return NULL;
 	}
 
-	/* Rewrite the old METH_O flags to the new METH_ARG_RANGE so we only
-	   have to implement METH_ARG_RANGE. METH_NOARGS is defined to be
-	   METH_ARG_RANGE, and C will fill in ml_min_arity = ml_max_arity = 0
-	   for us. */
-	if (ml->ml_flags & METH_O) {
+	/* Rewrite the old METH_O/METH_NOARGS flags to the new METH_ARG_RANGE
+	   so we only have to implement METH_ARG_RANGE. */
+	if (ml->ml_flags & METH_NOARGS) {
+		ml->ml_flags &= ~METH_NOARGS;
+		ml->ml_flags |= METH_ARG_RANGE;
+		ml->ml_min_arity = 0;
+		ml->ml_max_arity = 0;
+	}
+	else if (ml->ml_flags & METH_O) {
 		ml->ml_flags &= ~METH_O;
 		ml->ml_flags |= METH_ARG_RANGE;
 		ml->ml_min_arity = 1;
 		ml->ml_max_arity = 1;
-	}
-	else if (ml->ml_flags & METH_ARG_RANGE) {
-		if (ml->ml_min_arity < 0 || ml->ml_min_arity > PY_MAX_ARITY ||
-		    ml->ml_max_arity < 0 || ml->ml_max_arity > PY_MAX_ARITY ||
-		    ml->ml_max_arity < ml->ml_min_arity) {
-			PyErr_BadInternalCall();
-			PyObject_GC_Del(op);
-			return NULL;
-		}
 	}
 
 	op->m_ml = ml;
