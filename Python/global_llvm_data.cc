@@ -197,7 +197,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     optimizations_[2] = O2;
     O2->add(new llvm::TargetData(*engine_->getTargetData()));
     O2->add(llvm::createCFGSimplificationPass());
-    O2->add(PyCreateSingleFunctionInliningPass());
+    O2->add(PyCreateSingleFunctionInliningPass(this->module_provider_));
     O2->add(llvm::createJumpThreadingPass());
     O2->add(llvm::createPromoteMemoryToRegisterPass());
     O2->add(llvm::createInstructionCombiningPass());
@@ -238,7 +238,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     optO3->add(createCFGSimplificationPass());      // Clean up after IPCP & DAE
     //optO3->add(createPruneEHPass());               // Remove dead EH info
     //optO3->add(createFunctionAttrsPass());         // Deduce function attrs
-    optO3->add(PyCreateSingleFunctionInliningPass());
+    optO3->add(PyCreateSingleFunctionInliningPass(this->module_provider_));
     //optO3->add(createFunctionInliningPass());      // Inline small functions
     //optO3->add(createArgumentPromotionPass());  // Scalarize uninlined fn args
     optO3->add(createSimplifyLibCallsPass());    // Library Call Optimizations
