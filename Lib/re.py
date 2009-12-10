@@ -229,67 +229,133 @@ class Pattern(object):
   def __init__(self, pattern, flags):
     # start out by calling SRE, after MAX_SRE_CALLS we can use llvmre instead
     self.__hitcount = 0
-    self.__impl = sre_compile.compile(pattern, flags)
-    self.__call = self.__call_sre
 
     # these fields are part of the re pattern interface
     self.pattern = pattern
     self.flags = flags
+
+    # compile the RE using whatever native library (SRE by default)
+    self._compile()
+
+    # these fields are part of the re pattern interface, the 
+    # implementation provides them
     self.groups = self.__impl.groups
     self.groupindex = self.__impl.groupindex
 
     # keep track of how many patterns we compile
     Pattern._num_compiles = Pattern._num_compiles + 1
 
-  def __call(self, method, *args):
-    '''dummy method to call either SRE or llvmre'''
-    pass
+  def _compile_sre(self):
+    self.__impl = sre_compile.compile(self.pattern, self.flags)
+    self._call = self._call_sre
 
-  def __call_sre(self, method, *args):
+  def _compile_llvmre(self):
+    self.__impl = llvmre.compile(self.pattern, self.flags)
+    self._call = self._call_llvmre
+
+  # by default compile to SRE first
+  _compile = _compile_sre
+
+  def _call_sre(self, method, *args):
     '''call SRE and possibly compile the llvmre'''
     self.__hitcount = self.__hitcount + 1
     if self.__hitcount > Pattern.MAX_SRE_CALLS:
       # we have exceeded the number of SRE calls, compile with llvmre
-      self.__impl = llvmre.compile(self.pattern, self.flags)
-      # replace the __call function with one that doesn't do accounting
-      self.__call = self.__call_llvm
-      # track number of patterns we compile with llvmre
-      Pattern._num_llvm_compiles = Pattern._num_llvm_compiles + 1
+      self._compile_llvmre()
     # call the method on the implementation
     return getattr(self.__impl, method)(*args)
 
-  def __call_llvm(self, method, *args):
+  def _call_simple(self, method, *args):
     # call the method on the implementation
     return getattr(self.__impl, method)(*args)
+
+  # by default call SRE first
+  _call = _call_sre
+
+  # calling llvmre is just a simple call
+  _call_llvmre = _call_simple
 
   def match(self, string, pos=0, endpos=sys.maxsize):
-    return self.__call('match', string, pos, endpos)
+    return self._call('match', string, pos, endpos)
 
   def search(self, string, pos=0, endpos=sys.maxsize):
-    return self.__call('search', string, pos, endpos)
+    return self._call('search', string, pos, endpos)
 
   def split(self, string, maxsplit=0):
-    return self.__call('split', string, maxsplit)
+    return self._call('split', string, maxsplit)
 
   def findall(self, string, pos=0, endpos=sys.maxsize):
-    return self.__call('findall', string, pos, endpos)
+    return self._call('findall', string, pos, endpos)
 
   def finditer(self, string, pos=0, endpos=sys.maxsize):
-    return self.__call('finditer', string, pos, endpos)
+    return self._call('finditer', string, pos, endpos)
 
   def sub(self, repl, string, count=0):
-    return self.__call('sub', repl, string, count)
+    return self._call('sub', repl, string, count)
 
   def subn(self, repl, string, count=0):
-    return self.__call('subn', repl, string, count)
+    return self._call('subn', repl, string, count)
 
-#import atexit
-#def Pattern_atexit():
-#    '''print stats on shutdown'''
-#    print 're.Pattern compiles=%d' % Pattern._num_compiles
-#    print 're.Pattern llvm compiles=%d' % Pattern._num_llvm_compiles
-#atexit.register(Pattern_atexit)
 
+# read PYTHONRE to decide what to do. PYTHONRE can contain zero or more of:
+#  llvmreonly - only compile to native code, don't use SRE
+#  sreonly - only use SRE, never compile to native code with llvmre
+#  stats - collect statistics on regular expression usage and print it at exit
+# separated by spaces
+def process_PYTHONRE():
+  from os import environ
+  if not environ.has_key('PYTHONRE'):
+    # no PYTHONRE environment variable, nothing to do
+    return
+  only = None
+  stats = False
+  for pythonre in environ['PYTHONRE'].split(' '):
+    pythonre = pythonre.strip().lower() # canonicalize
+    if pythonre == 'llvmreonly': only = 'llvmre'
+    elif pythonre == 'sreonly': only = 'sre'
+    elif pythonre == 'stats': stats = True
+    else: pass # ignore anything else
+
+  if stats:
+    class CallCounter(object):
+      '''count calls made to another object or class'''
+      def __init__(self, o, methods):
+        self.__other = o
+        self.__counts = {}
+        for m in methods: self.__count(m)
+
+      def __count(self, m):
+        self.__counts[m] = 0
+        original = getattr(self.__other, m)
+        def counter(*args, **kwargs):
+          self.__counts[m] = self.__counts[m] + 1
+          original(*args, **kwargs)
+        setattr(self.__other, m, counter)
+
+      def counts(self):
+        return self.__counts
+
+    call_counter = CallCounter(Pattern, ['_compile_sre', '_compile_llvmre'])
+
+    # print statistics on exit
+    import atexit
+    def print_stats():
+        '''print stats on shutdown'''
+        counts = call_counter.counts()
+        print 're.Pattern sre compiles=%d' % counts['_compile_sre']
+        print 're.Pattern llvmre compiles=%d' % counts['_compile_llvmre']
+    atexit.register(print_stats)
+
+  if only == 'llvmre':
+    # only and always use llvmre
+    # just compile to llvmre always
+    Pattern._compile = Pattern._compile_llvmre
+  elif only == 'sre':
+    # only and always use sre?
+    # don't count hits or anything
+    Pattern._call = Pattern._call_simple
+  
+process_PYTHONRE()
 
 from types import StringTypes
 
