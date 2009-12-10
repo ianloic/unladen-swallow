@@ -1250,7 +1250,8 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 	return -1;
 }
 
-/* Helper to get a pointer to an object's __dict__ slot, if any */
+/* Helper to get a pointer to an object's __dict__ slot, if any.  Keep in sync
+   with _PyLlvm_Object_GetDictPtr.  */
 
 PyObject **
 _PyObject_GetDictPtr(PyObject *obj)
@@ -1286,7 +1287,8 @@ PyObject_SelfIter(PyObject *obj)
 	return obj;
 }
 
-/* Generic GetAttr functions - put these in your tp_[gs]etattro slot */
+/* Generic GetAttr functions - put these in your tp_[gs]etattro slot.  Keep in
+ * sync with _PyLlvm_Object_Generic[GS]etAttr.  */
 
 PyObject *
 PyObject_GenericGetAttr(PyObject *obj, PyObject *name)
@@ -1325,34 +1327,9 @@ PyObject_GenericGetAttr(PyObject *obj, PyObject *name)
 			goto done;
 	}
 
-#if 0 /* XXX this is not quite _PyType_Lookup anymore */
-	/* Inline _PyType_Lookup */
-	{
-		Py_ssize_t i, n;
-		PyObject *mro, *base, *dict;
-
-		/* Look in tp_dict of types in MRO */
-		mro = tp->tp_mro;
-		assert(mro != NULL);
-		assert(PyTuple_Check(mro));
-		n = PyTuple_GET_SIZE(mro);
-		for (i = 0; i < n; i++) {
-			base = PyTuple_GET_ITEM(mro, i);
-			if (PyClass_Check(base))
-				dict = ((PyClassObject *)base)->cl_dict;
-			else {
-				assert(PyType_Check(base));
-				dict = ((PyTypeObject *)base)->tp_dict;
-			}
-			assert(dict && PyDict_Check(dict));
-			descr = PyDict_GetItem(dict, name);
-			if (descr != NULL)
-				break;
-		}
-	}
-#else
+        // TODO(rnk): This function uses a cache.  Someone should try using
+        // partial inlining for the cache hits.
 	descr = _PyType_Lookup(tp, name);
-#endif
 
 	Py_XINCREF(descr);
 

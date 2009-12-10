@@ -21,6 +21,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/Mangler.h"
 #include "llvm/ADT/SmallString.h"
@@ -329,6 +330,10 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     case MachineOperand::MO_ConstantPoolIndex:
       MCOp = LowerSymbolOperand(MO, GetConstantPoolIndexSymbol(MO));
       break;
+    case MachineOperand::MO_BlockAddress:
+      MCOp = LowerSymbolOperand(MO, AsmPrinter.GetBlockAddressSymbol(
+                                                 MO.getBlockAddress()));
+      break;
     }
     
     OutMI.addOperand(MCOp);
@@ -401,13 +406,13 @@ void X86AsmPrinter::printInstructionThroughMCStreamer(const MachineInstr *MI) {
     printLabel(MI);
     return;
   case TargetInstrInfo::INLINEASM:
-    O << '\t';
     printInlineAsm(MI);
     return;
   case TargetInstrInfo::IMPLICIT_DEF:
     printImplicitDef(MI);
     return;
   case TargetInstrInfo::KILL:
+    printKill(MI);
     return;
   case X86::MOVPC32r: {
     MCInst TmpInst;

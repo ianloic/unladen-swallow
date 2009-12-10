@@ -13,6 +13,7 @@
 
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/ParseDiagnostic.h"
+#include "clang/Parse/Template.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/STLExtras.h"
@@ -24,6 +25,15 @@ using namespace clang;
 static DiagnosticBuilder Diag(Diagnostic &D, SourceLocation Loc,
                               SourceManager &SrcMgr, unsigned DiagID) {
   return D.Report(FullSourceLoc(Loc, SrcMgr), DiagID);
+}
+
+
+void UnqualifiedId::setTemplateId(TemplateIdAnnotation *TemplateId) {
+  assert(TemplateId && "NULL template-id annotation?");
+  Kind = IK_TemplateId;
+  this->TemplateId = TemplateId;
+  StartLocation = TemplateId->TemplateNameLoc;
+  EndLocation = TemplateId->RAngleLoc;
 }
 
 /// DeclaratorChunk::getFunction - Return a DeclaratorChunk for a function.
@@ -334,6 +344,14 @@ bool DeclSpec::SetFriendSpec(SourceLocation Loc, const char *&PrevSpec,
   return false;
 }
 
+bool DeclSpec::SetConstexprSpec(SourceLocation Loc, const char *&PrevSpec,
+                                unsigned &DiagID) {
+  // 'constexpr constexpr' is ok.
+  Constexpr_specified = true;
+  ConstexprLoc = Loc;
+  return false;
+}
+
 void DeclSpec::setProtocolQualifiers(const ActionBase::DeclPtrTy *Protos,
                                      unsigned NP,
                                      SourceLocation *ProtoLocs,
@@ -445,4 +463,29 @@ bool DeclSpec::isMissingDeclaratorOk() {
        || tst == TST_class
        || tst == TST_enum
           ) && getTypeRep() != 0 && StorageClassSpec != DeclSpec::SCS_typedef;
+}
+
+void UnqualifiedId::clear() {
+  if (Kind == IK_TemplateId)
+    TemplateId->Destroy();
+  
+  Kind = IK_Identifier;
+  Identifier = 0;
+  StartLocation = SourceLocation();
+  EndLocation = SourceLocation();
+}
+
+void UnqualifiedId::setOperatorFunctionId(SourceLocation OperatorLoc, 
+                                          OverloadedOperatorKind Op,
+                                          SourceLocation SymbolLocations[3]) {
+  Kind = IK_OperatorFunctionId;
+  StartLocation = OperatorLoc;
+  EndLocation = OperatorLoc;
+  OperatorFunctionId.Operator = Op;
+  for (unsigned I = 0; I != 3; ++I) {
+    OperatorFunctionId.SymbolLocations[I] = SymbolLocations[I].getRawEncoding();
+    
+    if (SymbolLocations[I].isValid())
+      EndLocation = SymbolLocations[I];
+  }
 }

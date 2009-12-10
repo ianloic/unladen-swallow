@@ -2,6 +2,8 @@
 #include "Python.h"
 
 #include "Python/global_llvm_data.h"
+#include "Util/ConstantMirror.h"
+#include "Util/DeadGlobalElim.h"
 #include "Util/PyAliasAnalysis.h"
 #include "Util/SingleFunctionInliner.h"
 #include "Util/Stats.h"
@@ -9,6 +11,7 @@
 
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CallingConv.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
@@ -19,17 +22,16 @@
 #include "llvm/ModuleProvider.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ValueHandle.h"
+#include "llvm/System/Path.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetSelect.h"
-#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
-
-// Declare the function from initial_llvm_module.cc.
-llvm::Module* FillInitialGlobalModule(llvm::Module*);
 
 using llvm::FunctionPassManager;
 using llvm::Module;
+using llvm::StringRef;
 
 PyGlobalLlvmData *
 PyGlobalLlvmData_New()
@@ -55,15 +57,62 @@ PyGlobalLlvmData::Get()
     return PyThreadState_GET()->interp->global_llvm_data;
 }
 
+#define STRINGIFY(X) STRINGIFY2(X)
+#define STRINGIFY2(X) #X
+// The basename of the bitcode file holding the standard library.
+#ifdef MS_WINDOWS
+#ifdef Py_DEBUG
+#define LIBPYTHON_BC "python" STRINGIFY(PY_MAJOR_VERSION) \
+    STRINGIFY(PY_MINOR_VERSION) "_d.bc"
+#else
+#define LIBPYTHON_BC "python" STRINGIFY(PY_MAJOR_VERSION) \
+    STRINGIFY(PY_MINOR_VERSION) ".bc"
+#endif
+#else
+#define LIBPYTHON_BC "libpython" STRINGIFY(PY_MAJOR_VERSION) "." \
+    STRINGIFY(PY_MINOR_VERSION) ".bc"
+#endif
+
+// Searches for the bitcode file holding the Python standard library.
+// If one is found, returns its contents in a MemoryBuffer.  If not,
+// dies with a fatal error.
+static llvm::MemoryBuffer *
+find_stdlib_bc()
+{
+    llvm::sys::Path path;
+    llvm::SmallVector<StringRef, 8> sys_path;
+    StringRef(Py_GetPath()).split(sys_path, ":");
+    for (ssize_t i = 0, size = sys_path.size(); i < size; ++i) {
+        StringRef elem = sys_path[i];
+        path = elem;
+        path.appendComponent(LIBPYTHON_BC);
+        llvm::MemoryBuffer *stdlib_file =
+            llvm::MemoryBuffer::getFile(path.str(), NULL);
+        if (stdlib_file != NULL) {
+            return stdlib_file;
+        }
+    }
+    Py_FatalError("Could not find " LIBPYTHON_BC " on sys.path");
+    return NULL;
+}
+
 PyGlobalLlvmData::PyGlobalLlvmData()
-    : module_(new Module("<main>", this->context())),
-      module_provider_(new llvm::ExistingModuleProvider(module_)),
-      debug_info_(Py_GenerateDebugInfoFlag ? new llvm::DIFactory(*module_)
-                  : NULL),
-      optimizations_(4, (FunctionPassManager*)NULL),
+    : optimizations_(4, (FunctionPassManager*)NULL),
       num_globals_after_last_gc_(0)
 {
     std::string error;
+    llvm::MemoryBuffer *stdlib_file = find_stdlib_bc();
+    this->module_provider_ =
+      llvm::getBitcodeModuleProvider(stdlib_file, this->context(), &error);
+    if (this->module_provider_ == NULL) {
+      Py_FatalError(error.c_str());
+    }
+    this->module_ = this->module_provider_->getModule();
+
+    if (Py_GenerateDebugInfoFlag) {
+      this->debug_info_.reset(new llvm::DIFactory(*module_));
+    }
+
     llvm::InitializeNativeTarget();
     engine_ = llvm::ExecutionEngine::create(
         module_provider_,
@@ -80,9 +129,6 @@ PyGlobalLlvmData::PyGlobalLlvmData()
         Py_FatalError(error.c_str());
     }
 
-    this->module_->setDataLayout(
-        this->engine_->getTargetData()->getStringRepresentation());
-
     // When we ask to JIT a function, we should also JIT other
     // functions that function depends on.  This lets us JIT in a
     // background thread to avoid blocking the main thread during
@@ -95,13 +141,26 @@ PyGlobalLlvmData::PyGlobalLlvmData()
     this->InstallInitialModule();
 
     this->InitializeOptimizations();
-    this->gc_.add(llvm::createGlobalDCEPass());
+    this->gc_.add(PyCreateDeadGlobalElimPass(&this->bitcode_gvs_));
+}
+
+template<typename Iterator>
+static void insert_gvs(
+    llvm::DenseSet<llvm::AssertingVH<const llvm::GlobalValue> > &set,
+    Iterator first, Iterator last) {
+    for (; first != last; ++first) {
+        set.insert(&*first);
+    }
 }
 
 void
 PyGlobalLlvmData::InstallInitialModule()
 {
-    FillInitialGlobalModule(this->module_);
+    insert_gvs(bitcode_gvs_, this->module_->begin(), this->module_->end());
+    insert_gvs(bitcode_gvs_, this->module_->global_begin(),
+               this->module_->global_end());
+    insert_gvs(bitcode_gvs_, this->module_->alias_begin(),
+               this->module_->alias_end());
 
     for (llvm::Module::iterator it = this->module_->begin();
          it != this->module_->end(); ++it) {
@@ -146,7 +205,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     O2->add(llvm::createScalarReplAggregatesPass());
     O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createLICMPass());
-    O2->add(llvm::createCondPropagationPass());
+    O2->add(llvm::createJumpThreadingPass());
     O2->add(CreatePyAliasAnalysis(*this));
     O2->add(llvm::createGVNPass());
     O2->add(llvm::createSCCPPass());
@@ -188,7 +247,6 @@ PyGlobalLlvmData::InitializeOptimizations()
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
     optO3->add(createScalarReplAggregatesPass());  // Break up aggregate allocas
     optO3->add(createInstructionCombiningPass());  // Combine silly seq's
-    optO3->add(createCondPropagationPass());       // Propagate conditionals
     optO3->add(createTailCallEliminationPass());   // Eliminate tail calls
     optO3->add(createCFGSimplificationPass());     // Merge & remove BBs
     optO3->add(createReassociatePass());           // Reassociate expressions
@@ -211,7 +269,7 @@ PyGlobalLlvmData::InitializeOptimizations()
     // Run instcombine after redundancy elimination to exploit opportunities
     // opened up by them.
     optO3->add(createInstructionCombiningPass());
-    optO3->add(createCondPropagationPass());       // Propagate conditionals
+    optO3->add(createJumpThreadingPass());         // Thread jumps.
     optO3->add(CreatePyAliasAnalysis(*this));
     optO3->add(createDeadStoreEliminationPass());  // Delete dead stores
     optO3->add(createAggressiveDCEPass());   // Delete dead instructions
@@ -226,6 +284,7 @@ PyGlobalLlvmData::InitializeOptimizations()
 
 PyGlobalLlvmData::~PyGlobalLlvmData()
 {
+    this->bitcode_gvs_.clear();  // Stop asserting values aren't destroyed.
     this->constant_mirror_->python_shutting_down_ = true;
     for (size_t i = 0; i < this->optimizations_.size(); ++i) {
         delete this->optimizations_[i];

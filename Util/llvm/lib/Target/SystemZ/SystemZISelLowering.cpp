@@ -34,6 +34,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/VectorExtras.h"
 using namespace llvm;
@@ -53,11 +54,6 @@ SystemZTargetLowering::SystemZTargetLowering(SystemZTargetMachine &tm) :
   if (!UseSoftFloat) {
     addRegisterClass(MVT::f32, SystemZ::FP32RegisterClass);
     addRegisterClass(MVT::f64, SystemZ::FP64RegisterClass);
-
-    addLegalFPImmediate(APFloat(+0.0));  // lzer
-    addLegalFPImmediate(APFloat(+0.0f)); // lzdr
-    addLegalFPImmediate(APFloat(-0.0));  // lzer + lner
-    addLegalFPImmediate(APFloat(-0.0f)); // lzdr + lndr
   }
 
   // Compute derived properties from the register classes
@@ -80,7 +76,13 @@ SystemZTargetLowering::SystemZTargetLowering(SystemZTargetMachine &tm) :
   setLoadExtAction(ISD::EXTLOAD,  MVT::f64, Expand);
 
   setStackPointerRegisterToSaveRestore(SystemZ::R15D);
-  setSchedulingPreference(SchedulingForLatency);
+
+  // TODO: It may be better to default to latency-oriented scheduling, however
+  // LLVM's current latency-oriented scheduler can't handle physreg definitions
+  // such as SystemZ has with PSW, so set this to the register-pressure
+  // scheduler, because it can.
+  setSchedulingPreference(SchedulingForRegPressure);
+
   setBooleanContents(ZeroOrOneBooleanContent);
 
   setOperationAction(ISD::BR_JT,            MVT::Other, Expand);
@@ -167,6 +169,17 @@ SDValue SystemZTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) {
     llvm_unreachable("Should not custom lower this!");
     return SDValue();
   }
+}
+
+bool SystemZTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT) const {
+  if (UseSoftFloat || (VT != MVT::f32 && VT != MVT::f64))
+    return false;
+
+  // +0.0  lzer
+  // +0.0f lzdr
+  // -0.0  lzer + lner
+  // -0.0f lzdr + lndr
+  return Imm.isZero() || Imm.isNegZero();
 }
 
 //===----------------------------------------------------------------------===//
@@ -316,7 +329,7 @@ SystemZTargetLowering::LowerCCCArguments(SDValue Chain,
       // Create the nodes corresponding to a load from this parameter slot.
       // Create the frame index object for this incoming parameter...
       int FI = MFI->CreateFixedObject(LocVT.getSizeInBits()/8,
-                                      VA.getLocMemOffset());
+                                      VA.getLocMemOffset(), true, false);
 
       // Create the SelectionDAG nodes corresponding to a load
       // from this parameter
@@ -657,7 +670,7 @@ SDValue SystemZTargetLowering::EmitCmp(SDValue LHS, SDValue RHS,
 
   DebugLoc dl = LHS.getDebugLoc();
   return DAG.getNode((isUnsigned ? SystemZISD::UCMP : SystemZISD::CMP),
-                     dl, MVT::Flag, LHS, RHS);
+                     dl, MVT::i64, LHS, RHS);
 }
 
 

@@ -25,6 +25,7 @@ using llvm::FunctionType;
 using llvm::GlobalValue;
 using llvm::GlobalVariable;
 using llvm::IntegerType;
+using llvm::PointerType;
 using llvm::StructType;
 using llvm::Type;
 using llvm::User;
@@ -321,10 +322,7 @@ PyConstantMirror::ConstantFromMemory(const Type *type, const void *memory) const
         // Try to find a GlobalValue that's mapped to this address.
         // This will let LLVM's optimizers pull values out of here.
         if (GlobalValue *known_constant =
-            // You can't put a const Constant into another Constant,
-            // so make it non-const.
-            const_cast<GlobalValue*>(
-                this->engine_.getGlobalValueAtAddress(the_pointer))) {
+            this->GetGlobalValueAtAddress(the_pointer)) {
             if (known_constant->getType() == type)
                 return known_constant;
             return llvm::ConstantExpr::getBitCast(known_constant, type);
@@ -426,33 +424,38 @@ PyConstantMirror::GetGlobalVariableForOwned(T *ptr, PyObject *owner)
     return result;
 }
 
-#define ONE_ARG  PyObject*(PyObject*, PyObject*)
-#define TWO_ARGS PyObject*(PyObject*, PyObject*, PyObject*)
-#define THREE_ARGS PyObject*(PyObject*, PyObject*, PyObject*, PyObject*)
-
 Constant *
 PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
                                         int arity,
                                         const llvm::StringRef &name)
 {
-    // Reuse an existing LLVM global if we can.
-    void *func_ptr = (void *)cfunc_ptr;
-    if (GlobalValue *found =
-            const_cast<GlobalValue*>
-                (this->engine_.getGlobalValueAtAddress(func_ptr)))
-        return found;
+    void *func_ptr = (void*)cfunc_ptr;
+    if (arity == 0 || arity == 1) {
+        return this->GetGlobalForFunctionPointer<PyCFunction>(func_ptr, name);
+    } else if (arity == 2) {
+        return this->GetGlobalForFunctionPointer<PyCFunctionTwoArgs>(func_ptr,
+                                                                     name);
+    } else if (arity == 3) {
+        return this->GetGlobalForFunctionPointer<PyCFunctionThreeArgs>(func_ptr,
+                                                                       name);
+    } else {
+        Py_FatalError("invalid PyCFunction arity");
+        return NULL;
+    }
+}
 
-    const FunctionType *func_type = NULL;
-    if (arity == 0 || arity == 1)
-        func_type = PyTypeBuilder<ONE_ARG>::get(this->context());
-    else if (arity == 2)
-        func_type = PyTypeBuilder<TWO_ARGS>::get(this->context());
-    else if (arity == 3)
-        func_type = PyTypeBuilder<THREE_ARGS>::get(this->context());
-    else
-        assert(0 && "Invalid arity");
+Constant *
+PyConstantMirror::CreateFunctionOrNull(void *func_ptr,
+                                       const PointerType *func_ptr_type,
+                                       const llvm::StringRef &name) const
+{
+    // If the function pointer is NULL, just return the LLVM version of a NULL
+    // function pointer.
+    if (func_ptr == NULL)
+        return Constant::getNullValue(func_ptr_type);
 
-    // Create a new LLVM global if we haven't seen this function pointer before.
+    const FunctionType *func_type =
+        cast<FunctionType>(func_ptr_type->getElementType());
     Function *global_func = Function::Create(
         func_type,
         GlobalVariable::ExternalLinkage,
@@ -462,6 +465,10 @@ PyConstantMirror::GetGlobalForCFunction(PyCFunction cfunc_ptr,
     return global_func;
 }
 
-#undef ONE_ARG
-#undef TWO_ARGS
-#undef THREE_ARGS
+GlobalValue *
+PyConstantMirror::GetGlobalValueAtAddress(void *ptr) const
+{
+    // You can't put a const Constant into another Constant, so make it
+    // non-const.
+    return const_cast<GlobalValue*>(this->engine_.getGlobalValueAtAddress(ptr));
+}

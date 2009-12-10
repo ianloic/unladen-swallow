@@ -108,7 +108,7 @@ typedef struct _object {
 	PyObject_HEAD
 } PyObject;
 
-typedef struct {
+typedef struct PyVarObject {
 	PyObject_VAR_HEAD
 } PyVarObject;
 
@@ -399,6 +399,10 @@ typedef struct _typeobject {
 	/* Type attribute cache version tag. Added in version 2.6 */
 	unsigned int tp_version_tag;
 
+        /* A list of weakrefs to code objects listening for modifications.
+           Added in Unladen.  */
+        PyObject *tp_code_listeners;
+
 #ifdef COUNT_ALLOCS
 	/* these must be last and never explicitly initialized */
 	Py_ssize_t tp_allocs;
@@ -452,6 +456,7 @@ PyAPI_FUNC(PyObject *) PyType_GenericNew(PyTypeObject *,
 PyAPI_FUNC(PyObject *) _PyType_Lookup(PyTypeObject *, PyObject *);
 PyAPI_FUNC(unsigned int) PyType_ClearCache(void);
 PyAPI_FUNC(void) PyType_Modified(PyTypeObject *);
+PyAPI_FUNC(int) _PyType_AddCodeListener(PyTypeObject *type, PyObject *code);
 
 /* Generic operations on objects */
 PyAPI_FUNC(int) PyObject_Print(PyObject *, FILE *, int);

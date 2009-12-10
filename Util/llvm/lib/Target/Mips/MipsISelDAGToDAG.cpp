@@ -90,6 +90,8 @@ private:
   bool SelectAddr(SDValue Op, SDValue N, 
                   SDValue &Base, SDValue &Offset);
 
+  SDNode *SelectLoadFp64(SDValue N);
+  SDNode *SelectStoreFp64(SDValue N);
 
   // getI32Imm - Return a target constant with the specified
   // value, of type i32.
@@ -108,7 +110,6 @@ private:
 /// InstructionSelect - This callback is invoked by
 /// SelectionDAGISel when it has created a SelectionDAG for us to codegen.
 void MipsDAGToDAGISel::InstructionSelect() {
-  DEBUG(BB->dump());
   // Codegen the basic block.
   DEBUG(errs() << "===== Instruction selection begins:\n");
   DEBUG(Indent = 0);
@@ -171,11 +172,147 @@ SelectAddr(SDValue Op, SDValue Addr, SDValue &Offset, SDValue &Base)
         return true;
       }
     }
+
+    // When loading from constant pools, load the lower address part in
+    // the instruction itself. Instead of:
+    //  lui $2, %hi($CPI1_0)
+    //  addiu $2, $2, %lo($CPI1_0)
+    //  lwc1 $f0, 0($2)
+    // Generate:
+    //  lui $2, %hi($CPI1_0)
+    //  lwc1 $f0, %lo($CPI1_0)($2)
+    if (Addr.getOperand(0).getOpcode() == MipsISD::Hi &&
+        Addr.getOperand(1).getOpcode() == MipsISD::Lo) {
+      SDValue LoVal = Addr.getOperand(1); 
+      if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(
+          LoVal.getOperand(0))) {
+        if (!CP->getOffset()) {
+          Base = Addr.getOperand(0);
+          Offset = LoVal.getOperand(0);
+          return true;
+        }
+      }
+    }
   }
 
   Base   = Addr;
   Offset = CurDAG->getTargetConstant(0, MVT::i32);
   return true;
+}
+
+SDNode *MipsDAGToDAGISel::SelectLoadFp64(SDValue N) {
+  MVT::SimpleValueType NVT = 
+    N.getNode()->getValueType(0).getSimpleVT().SimpleTy;
+
+  if (!Subtarget.isMips1() || NVT != MVT::f64)
+    return NULL;
+
+  if (!Predicate_unindexedload(N.getNode()) ||
+      !Predicate_load(N.getNode()))
+    return NULL;
+
+  SDValue Chain = N.getOperand(0);
+  SDValue N1 = N.getOperand(1);
+  SDValue Offset0, Offset1, Base;
+
+  if (!SelectAddr(N, N1, Offset0, Base) ||
+      N1.getValueType() != MVT::i32)
+    return NULL;
+
+  MachineSDNode::mmo_iterator MemRefs0 = MF->allocateMemRefsArray(1);
+  MemRefs0[0] = cast<MemSDNode>(N)->getMemOperand();
+  DebugLoc dl = N.getDebugLoc();
+
+  // The second load should start after for 4 bytes. 
+  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Offset0))
+    Offset1 = CurDAG->getTargetConstant(C->getSExtValue()+4, MVT::i32);
+  else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(Offset0))
+    Offset1 = CurDAG->getTargetConstantPool(CP->getConstVal(), 
+                                            MVT::i32, 
+                                            CP->getAlignment(), 
+                                            CP->getOffset()+4, 
+                                            CP->getTargetFlags());
+  else
+    return NULL;
+
+  // Instead of:
+  //    ldc $f0, X($3)
+  // Generate:
+  //    lwc $f0, X($3)
+  //    lwc $f1, X+4($3)
+  SDNode *LD0 = CurDAG->getMachineNode(Mips::LWC1, dl, MVT::f32, 
+                                    MVT::Other, Offset0, Base, Chain);
+  SDValue Undef = SDValue(CurDAG->getMachineNode(TargetInstrInfo::IMPLICIT_DEF,
+                                                 dl, NVT), 0);
+  SDValue I0 = CurDAG->getTargetInsertSubreg(Mips::SUBREG_FPEVEN, dl, 
+                            MVT::f64, Undef, SDValue(LD0, 0));
+
+  SDNode *LD1 = CurDAG->getMachineNode(Mips::LWC1, dl, MVT::f32,
+                          MVT::Other, Offset1, Base, SDValue(LD0, 1));
+  SDValue I1 = CurDAG->getTargetInsertSubreg(Mips::SUBREG_FPODD, dl, 
+                            MVT::f64, I0, SDValue(LD1, 0));
+
+  ReplaceUses(N, I1);
+  ReplaceUses(N.getValue(1), Chain);
+  cast<MachineSDNode>(LD0)->setMemRefs(MemRefs0, MemRefs0 + 1);
+  cast<MachineSDNode>(LD1)->setMemRefs(MemRefs0, MemRefs0 + 1);
+  return I1.getNode();
+}
+
+SDNode *MipsDAGToDAGISel::SelectStoreFp64(SDValue N) {
+
+  if (!Subtarget.isMips1() || 
+      N.getOperand(1).getValueType() != MVT::f64)
+    return NULL;
+
+  SDValue Chain = N.getOperand(0);
+
+  if (!Predicate_unindexedstore(N.getNode()) ||
+      !Predicate_store(N.getNode()))
+    return NULL;
+
+  SDValue N1 = N.getOperand(1);
+  SDValue N2 = N.getOperand(2);
+  SDValue Offset0, Offset1, Base;
+
+  if (!SelectAddr(N, N2, Offset0, Base) ||
+      N1.getValueType() != MVT::f64 ||
+      N2.getValueType() != MVT::i32)
+    return NULL;
+
+  MachineSDNode::mmo_iterator MemRefs0 = MF->allocateMemRefsArray(1);
+  MemRefs0[0] = cast<MemSDNode>(N)->getMemOperand();
+  DebugLoc dl = N.getDebugLoc();
+
+  // Get the even and odd part from the f64 register
+  SDValue FPOdd = CurDAG->getTargetExtractSubreg(Mips::SUBREG_FPODD, 
+                                                 dl, MVT::f32, N1);
+  SDValue FPEven = CurDAG->getTargetExtractSubreg(Mips::SUBREG_FPEVEN,
+                                                 dl, MVT::f32, N1);
+
+  // The second store should start after for 4 bytes. 
+  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Offset0))
+    Offset1 = CurDAG->getTargetConstant(C->getSExtValue()+4, MVT::i32);
+  else
+    return NULL;
+
+  // Instead of:
+  //    sdc $f0, X($3)
+  // Generate:
+  //    swc $f0, X($3)
+  //    swc $f1, X+4($3)
+  SDValue Ops0[] = { FPEven, Offset0, Base, Chain };
+  Chain = SDValue(CurDAG->getMachineNode(Mips::SWC1, dl,
+                                       MVT::Other, Ops0, 4), 0);
+  cast<MachineSDNode>(Chain.getNode())->setMemRefs(MemRefs0, MemRefs0 + 1);
+
+  SDValue Ops1[] = { FPOdd, Offset1, Base, Chain };
+  Chain = SDValue(CurDAG->getMachineNode(Mips::SWC1, dl,
+                                       MVT::Other, Ops1, 4), 0);
+  cast<MachineSDNode>(Chain.getNode())->setMemRefs(MemRefs0, MemRefs0 + 1);
+
+  ReplaceUses(N.getValue(0), Chain);
+  return Chain.getNode();
 }
 
 /// Select instructions not customized! Used for
@@ -314,6 +451,28 @@ SDNode* MipsDAGToDAGISel::Select(SDValue N) {
     // Get target GOT address.
     case ISD::GLOBAL_OFFSET_TABLE:
       return getGlobalBaseReg();
+
+    case ISD::ConstantFP: {
+      ConstantFPSDNode *CN = dyn_cast<ConstantFPSDNode>(N);
+      if (N.getValueType() == MVT::f64 && CN->isExactlyValue(+0.0)) { 
+        SDValue Zero = CurDAG->getRegister(Mips::ZERO, MVT::i32);
+        ReplaceUses(N, Zero);
+        return Zero.getNode();
+      }
+      break;
+    }
+
+    case ISD::LOAD:
+      if (SDNode *ResNode = SelectLoadFp64(N))
+        return ResNode;
+      // Other cases are autogenerated.
+      break;
+
+    case ISD::STORE:
+      if (SDNode *ResNode = SelectStoreFp64(N))
+        return ResNode;
+      // Other cases are autogenerated.
+      break;
 
     /// Handle direct and indirect calls when using PIC. On PIC, when 
     /// GOT is smaller than about 64k (small code) the GA target is 

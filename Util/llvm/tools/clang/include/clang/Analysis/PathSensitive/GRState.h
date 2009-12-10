@@ -195,6 +195,9 @@ public:
   //
 
   const GRState *Assume(DefinedOrUnknownSVal cond, bool assumption) const;
+  
+  std::pair<const GRState*, const GRState*>
+  Assume(DefinedOrUnknownSVal cond) const;
 
   const GRState *AssumeInBound(DefinedOrUnknownSVal idx,
                                DefinedOrUnknownSVal upperBound,
@@ -219,11 +222,9 @@ public:
 
   const GRState *BindExpr(const Stmt *S, SVal V, bool Invalidate = true) const;
 
-  const GRState *bindDecl(const VarDecl *VD, const LocationContext *LC,
-                          SVal V) const;
+  const GRState *bindDecl(const VarRegion *VR, SVal V) const;
 
-  const GRState *bindDeclWithNoInit(const VarDecl *VD,
-                                    const LocationContext *LC) const;
+  const GRState *bindDeclWithNoInit(const VarRegion *VR) const;
 
   const GRState *bindLoc(Loc location, SVal V) const;
 
@@ -332,12 +333,6 @@ public:
   void printStdErr() const;
 
   void printDOT(llvm::raw_ostream& Out) const;
-
-  // Tags used for the Generic Data Map.
-  struct NullDerefTag {
-    static int TagInt;
-    typedef const SVal* data_type;
-  };
 };
 
 class GRStateSet {
@@ -404,10 +399,6 @@ private:
 
   /// Alloc - A BumpPtrAllocator to allocate states.
   llvm::BumpPtrAllocator& Alloc;
-
-  /// CurrentStmt - The block-level statement currently being visited.  This
-  ///  is set by GRExprEngine.
-  Stmt* CurrentStmt;
 
   /// TF - Object that represents a bundle of transfer functions
   ///  for manipulating and creating SVals.
@@ -585,6 +576,15 @@ inline const GRState *GRState::Assume(DefinedOrUnknownSVal Cond,
   return getStateManager().ConstraintMgr->Assume(this, cast<DefinedSVal>(Cond),
                                                  Assumption);
 }
+  
+inline std::pair<const GRState*, const GRState*>
+GRState::Assume(DefinedOrUnknownSVal Cond) const {
+  if (Cond.isUnknown())
+    return std::make_pair(this, this);
+  
+  return getStateManager().ConstraintMgr->AssumeDual(this,
+                                                     cast<DefinedSVal>(Cond));
+}
 
 inline const GRState *GRState::AssumeInBound(DefinedOrUnknownSVal Idx,
                                              DefinedOrUnknownSVal UpperBound,
@@ -602,15 +602,12 @@ inline const GRState *GRState::bindCompoundLiteral(const CompoundLiteralExpr* CL
   return getStateManager().StoreMgr->BindCompoundLiteral(this, CL, V);
 }
 
-inline const GRState *GRState::bindDecl(const VarDecl* VD,
-                                        const LocationContext *LC,
-                                        SVal IVal) const {
-  return getStateManager().StoreMgr->BindDecl(this, VD, LC, IVal);
+inline const GRState *GRState::bindDecl(const VarRegion* VR, SVal IVal) const {
+  return getStateManager().StoreMgr->BindDecl(this, VR, IVal);
 }
 
-inline const GRState *GRState::bindDeclWithNoInit(const VarDecl* VD,
-                                                  const LocationContext *LC) const {
-  return getStateManager().StoreMgr->BindDeclWithNoInit(this, VD, LC);
+inline const GRState *GRState::bindDeclWithNoInit(const VarRegion* VR) const {
+  return getStateManager().StoreMgr->BindDeclWithNoInit(this, VR);
 }
 
 inline const GRState *GRState::bindLoc(Loc LV, SVal V) const {

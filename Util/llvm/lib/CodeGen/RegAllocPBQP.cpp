@@ -85,6 +85,8 @@ namespace {
 
     /// PBQP analysis usage.
     virtual void getAnalysisUsage(AnalysisUsage &au) const {
+      au.addRequired<SlotIndexes>();
+      au.addPreserved<SlotIndexes>();
       au.addRequired<LiveIntervals>();
       //au.addRequiredID(SplitCriticalEdgesID);
       au.addRequired<RegisterCoalescer>();
@@ -684,13 +686,18 @@ void PBQPRegAlloc::addStackInterval(const LiveInterval *spilled,
     vni = stackInterval.getValNumInfo(0);
   else
     vni = stackInterval.getNextValue(
-      LiveIndex(), 0, false, lss->getVNInfoAllocator());
+      SlotIndex(), 0, false, lss->getVNInfoAllocator());
 
   LiveInterval &rhsInterval = lis->getInterval(spilled->reg);
   stackInterval.MergeRangesInAsValue(rhsInterval, vni);
 }
 
 bool PBQPRegAlloc::mapPBQPToRegAlloc(const PBQP::Solution &solution) {
+
+  // Assert that this is a valid solution to the regalloc problem.
+  assert(solution.getCost() != std::numeric_limits<PBQP::PBQPNum>::infinity() &&
+         "Invalid (infinite cost) solution for PBQP problem.");
+
   // Set to true if we have any spills
   bool anotherRoundNeeded = false;
 
@@ -832,7 +839,7 @@ bool PBQPRegAlloc::runOnMachineFunction(MachineFunction &MF) {
   tm = &mf->getTarget();
   tri = tm->getRegisterInfo();
   tii = tm->getInstrInfo();
-  mri = &mf->getRegInfo();
+  mri = &mf->getRegInfo(); 
 
   lis = &getAnalysis<LiveIntervals>();
   lss = &getAnalysis<LiveStacks>();

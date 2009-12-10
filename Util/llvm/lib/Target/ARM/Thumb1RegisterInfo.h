@@ -1,4 +1,4 @@
-//===- Thumb1RegisterInfo.h - Thumb-1 Register Information Impl ----*- C++ -*-===//
+//===- Thumb1RegisterInfo.h - Thumb-1 Register Information Impl -*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file contains the Thumb-1 implementation of the TargetRegisterInfo class.
+// This file contains the Thumb-1 implementation of the TargetRegisterInfo
+// class.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,9 +40,6 @@ public:
   /// Code Generation virtual methods...
   const TargetRegisterClass *
     getPhysicalRegisterRegClass(unsigned Reg, EVT VT = MVT::Other) const;
-
-  bool requiresRegisterScavenging(const MachineFunction &MF) const;
-  bool requiresFrameIndexScavenging(const MachineFunction &MF) const;
 
   bool hasReservedCallFrame(MachineFunction &MF) const;
 

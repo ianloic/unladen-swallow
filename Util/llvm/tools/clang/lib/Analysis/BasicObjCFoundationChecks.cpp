@@ -384,7 +384,7 @@ bool AuditCFNumberCreate::Audit(ExplodedNode* N,GRStateManager&){
   if (!LV)
     return false;
 
-  const TypedRegion* R = dyn_cast<TypedRegion>(LV->getBaseRegion());
+  const TypedRegion* R = dyn_cast<TypedRegion>(LV->StripCasts());
 
   if (!R)
     return false;
@@ -535,4 +535,5 @@ void clang::RegisterAppleChecks(GRExprEngine& Eng, const Decl &D) {
   Eng.AddCheck(CreateAuditCFRetainRelease(Ctx, BR), Stmt::CallExprClass);
 
   RegisterNSErrorChecks(BR, Eng, D);
+  RegisterNSAutoreleasePoolChecks(Eng);
 }

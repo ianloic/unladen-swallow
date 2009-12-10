@@ -164,7 +164,11 @@ struct Callable2 {
   double& operator()(...) const;
 };
 
-void test_callable(Callable c, Callable2 c2, const Callable2& c2c) {
+struct DerivesCallable : public Callable {
+};
+
+void test_callable(Callable c, Callable2 c2, const Callable2& c2c,
+                   DerivesCallable dc) {
   int &ir = c(1);
   float &fr = c(1, 3.14159, 17, 42);
 
@@ -175,6 +179,9 @@ void test_callable(Callable c, Callable2 c2, const Callable2& c2c) {
   int &ir2 = c2();
   int &ir3 = c2(1);
   double &fr2 = c2c();
+  
+  int &ir4 = dc(17);
+  double &fr3 = dc(3.14159f);
 }
 
 typedef float FLOAT;
@@ -267,4 +274,53 @@ struct CircC {
 void circ() {
   CircA a;
   a->val = 0; // expected-error {{circular pointer delegation detected}}
+}
+
+// PR5360: Arrays should lead to built-in candidates for subscript.
+typedef enum {
+  LastReg = 23,
+} Register;
+class RegAlloc {
+  int getPriority(Register r) {
+    return usepri[r];
+  }
+  int usepri[LastReg + 1];
+};
+
+// PR5546: Don't generate incorrect and ambiguous overloads for multi-level
+// arrays.
+namespace pr5546
+{
+  enum { X };
+  extern const char *const sMoveCommands[][2][2];
+  const char* a() { return sMoveCommands[X][0][0]; }
+  const char* b() { return (*(sMoveCommands+X))[0][0]; }
+}
+
+// PR5512 and its discussion
+namespace pr5512 {
+  struct Y {
+    operator short();
+    operator float();
+  };
+  void g_test(Y y) {
+    short s = 0;
+    // DR507, this should be ambiguous, but we special-case assignment
+    s = y;
+    // Note: DR507, this is ambiguous as specified
+    //s += y;
+  }
+
+  struct S {};
+  void operator +=(int&, S);
+  void f(S s) {
+    int i = 0;
+    i += s;
+  }
+
+  struct A {operator int();};
+  int a;
+  void b(A x) {
+    a += x;
+  }
 }

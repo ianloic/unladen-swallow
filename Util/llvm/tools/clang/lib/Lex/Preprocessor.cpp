@@ -43,17 +43,17 @@ using namespace clang;
 
 //===----------------------------------------------------------------------===//
 
-PreprocessorFactory::~PreprocessorFactory() {}
-
 Preprocessor::Preprocessor(Diagnostic &diags, const LangOptions &opts,
-                           TargetInfo &target, SourceManager &SM,
+                           const TargetInfo &target, SourceManager &SM,
                            HeaderSearch &Headers,
-                           IdentifierInfoLookup* IILookup)
+                           IdentifierInfoLookup* IILookup,
+                           bool OwnsHeaders)
   : Diags(&diags), Features(opts), Target(target),FileMgr(Headers.getFileMgr()),
     SourceMgr(SM), HeaderInfo(Headers), Identifiers(opts, IILookup),
     BuiltinInfo(Target), CurPPLexer(0), CurDirLookup(0), Callbacks(0) {
   ScratchBuf = new ScratchBuffer(SourceMgr);
   CounterValue = 0; // __COUNTER__ starts at 0.
+  OwnsHeaderSearch = OwnsHeaders;
 
   // Clear stats.
   NumDirectives = NumDefined = NumUndefined = NumPragma = 0;
@@ -116,6 +116,10 @@ Preprocessor::~Preprocessor() {
 
   // Delete the scratch buffer info.
   delete ScratchBuf;
+
+  // Delete the header search info, if we own it.
+  if (OwnsHeaderSearch)
+    delete &HeaderInfo;
 
   delete Callbacks;
 }
@@ -188,13 +192,14 @@ void Preprocessor::PrintStats() {
 // Token Spelling
 //===----------------------------------------------------------------------===//
 
-
 /// getSpelling() - Return the 'spelling' of this token.  The spelling of a
 /// token are the characters used to represent the token in the source file
 /// after trigraph expansion and escaped-newline folding.  In particular, this
 /// wants to get the true, uncanonicalized, spelling of things like digraphs
 /// UCNs, etc.
-std::string Preprocessor::getSpelling(const Token &Tok) const {
+std::string Preprocessor::getSpelling(const Token &Tok,
+                                      const SourceManager &SourceMgr,
+                                      const LangOptions &Features) {
   assert((int)Tok.getLength() >= 0 && "Token character range is bogus!");
 
   // If this token contains nothing interesting, return it directly.
@@ -215,6 +220,15 @@ std::string Preprocessor::getSpelling(const Token &Tok) const {
   assert(Result.size() != unsigned(Tok.getLength()) &&
          "NeedsCleaning flag set on something that didn't need cleaning!");
   return Result;
+}
+
+/// getSpelling() - Return the 'spelling' of this token.  The spelling of a
+/// token are the characters used to represent the token in the source file
+/// after trigraph expansion and escaped-newline folding.  In particular, this
+/// wants to get the true, uncanonicalized, spelling of things like digraphs
+/// UCNs, etc.
+std::string Preprocessor::getSpelling(const Token &Tok) const {
+  return getSpelling(Tok, SourceMgr, Features);
 }
 
 /// getSpelling - This method is used to get the spelling of a token into a
@@ -403,7 +417,7 @@ void Preprocessor::EnterMainSourceFile() {
 /// LookUpIdentifierInfo - Given a tok::identifier token, look up the
 /// identifier information for the token and install it into the token.
 IdentifierInfo *Preprocessor::LookUpIdentifierInfo(Token &Identifier,
-                                                   const char *BufPtr) {
+                                                   const char *BufPtr) const {
   assert(Identifier.is(tok::identifier) && "Not an identifier!");
   assert(Identifier.getIdentifierInfo() == 0 && "Identinfo already exists!");
 
@@ -411,14 +425,14 @@ IdentifierInfo *Preprocessor::LookUpIdentifierInfo(Token &Identifier,
   IdentifierInfo *II;
   if (BufPtr && !Identifier.needsCleaning()) {
     // No cleaning needed, just use the characters from the lexed buffer.
-    II = getIdentifierInfo(BufPtr, BufPtr+Identifier.getLength());
+    II = getIdentifierInfo(llvm::StringRef(BufPtr, Identifier.getLength()));
   } else {
     // Cleaning needed, alloca a buffer, clean into it, then use the buffer.
     llvm::SmallVector<char, 64> IdentifierBuffer;
     IdentifierBuffer.resize(Identifier.getLength());
     const char *TmpBuf = &IdentifierBuffer[0];
     unsigned Size = getSpelling(Identifier, TmpBuf);
-    II = getIdentifierInfo(TmpBuf, TmpBuf+Size);
+    II = getIdentifierInfo(llvm::StringRef(TmpBuf, Size));
   }
   Identifier.setIdentifierInfo(II);
   return II;

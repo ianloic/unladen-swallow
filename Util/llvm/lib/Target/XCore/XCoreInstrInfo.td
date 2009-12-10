@@ -357,9 +357,9 @@ def STWFI : PseudoInstXCore<(outs), (ins GRRegs:$src, MEMii:$addr),
                             "${:comment} STWFI $src, $addr",
                             [(store GRRegs:$src, ADDRspii:$addr)]>;
 
-// SELECT_CC_* - Used to implement the SELECT_CC DAG operation.  Expanded by the
-// scheduler into a branch sequence.
-let usesCustomDAGSchedInserter = 1 in {
+// SELECT_CC_* - Used to implement the SELECT_CC DAG operation.  Expanded after
+// instruction selection into a branch sequence.
+let usesCustomInserter = 1 in {
   def SELECT_CC : PseudoInstXCore<(outs GRRegs:$dst),
                               (ins GRRegs:$cond, GRRegs:$T, GRRegs:$F),
                               "${:comment} SELECT_CC PSEUDO!",
@@ -617,7 +617,7 @@ defm EXTSP : FU6_LU6_np<"extsp">;
 let mayStore = 1 in
 defm ENTSP : FU6_LU6_np<"entsp">;
 
-let isReturn = 1, isTerminator = 1, mayLoad = 1 in {
+let isReturn = 1, isTerminator = 1, mayLoad = 1, isBarrier = 1 in {
 defm RETSP : FU6_LU6<"retsp", XCoreRetsp>;
 }
 }
@@ -678,6 +678,12 @@ def LDAP_lu10 : _FLU10<
                   (ins i32imm:$addr),
                   "ldap r11, $addr",
                   [(set R11, (pcrelwrapper tglobaladdr:$addr))]>;
+
+let Defs = [R11], isReMaterializable = 1 in
+def LDAP_lu10_ba : _FLU10<(outs),
+                          (ins i32imm:$addr),
+                          "ldap r11, $addr",
+                          [(set R11, (pcrelwrapper tblockaddress:$addr))]>;
 
 let isCall=1,
 // All calls clobber the the link register and the non-callee-saved registers:

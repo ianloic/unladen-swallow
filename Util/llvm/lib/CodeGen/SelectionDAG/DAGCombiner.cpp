@@ -37,7 +37,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <set>
 using namespace llvm;
 
 STATISTIC(NodesCombined   , "Number of dag nodes combined");
@@ -4443,14 +4442,13 @@ SDValue DAGCombiner::visitBRCOND(SDNode *N) {
   SDValue Chain = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
   SDValue N2 = N->getOperand(2);
-  ConstantSDNode *N1C = dyn_cast<ConstantSDNode>(N1);
 
-  // never taken branch, fold to chain
-  if (N1C && N1C->isNullValue())
-    return Chain;
-  // unconditional branch
-  if (N1C && N1C->getAPIntValue() == 1)
-    return DAG.getNode(ISD::BR, N->getDebugLoc(), MVT::Other, Chain, N2);
+  // If N is a constant we could fold this into a fallthrough or unconditional
+  // branch. However that doesn't happen very often in normal code, because
+  // Instcombine/SimplifyCFG should have handled the available opportunities.
+  // If we did this folding here, it would be necessary to update the
+  // MachineBasicBlock CFG, which is awkward.
+
   // fold a brcond with a setcc condition into a BR_CC node if BR_CC is legal
   // on the target.
   if (N1.getOpcode() == ISD::SETCC &&
@@ -4517,21 +4515,17 @@ SDValue DAGCombiner::visitBR_CC(SDNode *N) {
   CondCodeSDNode *CC = cast<CondCodeSDNode>(N->getOperand(1));
   SDValue CondLHS = N->getOperand(2), CondRHS = N->getOperand(3);
 
+  // If N is a constant we could fold this into a fallthrough or unconditional
+  // branch. However that doesn't happen very often in normal code, because
+  // Instcombine/SimplifyCFG should have handled the available opportunities.
+  // If we did this folding here, it would be necessary to update the
+  // MachineBasicBlock CFG, which is awkward.
+
   // Use SimplifySetCC to simplify SETCC's.
   SDValue Simp = SimplifySetCC(TLI.getSetCCResultType(CondLHS.getValueType()),
                                CondLHS, CondRHS, CC->get(), N->getDebugLoc(),
                                false);
   if (Simp.getNode()) AddToWorkList(Simp.getNode());
-
-  ConstantSDNode *SCCC = dyn_cast_or_null<ConstantSDNode>(Simp.getNode());
-
-  // fold br_cc true, dest -> br dest (unconditional branch)
-  if (SCCC && !SCCC->isNullValue())
-    return DAG.getNode(ISD::BR, N->getDebugLoc(), MVT::Other,
-                       N->getOperand(0), N->getOperand(4));
-  // fold br_cc false, dest -> unconditional fall through
-  if (SCCC && SCCC->isNullValue())
-    return N->getOperand(0);
 
   // fold to a simpler setcc
   if (Simp.getNode() && Simp.getOpcode() == ISD::SETCC)
@@ -5730,15 +5724,17 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
 
       // If this is an EXTLOAD, the VT's must match.
       if (LLD->getMemoryVT() == RLD->getMemoryVT()) {
-        // FIXME: this conflates two src values, discarding one.  This is not
-        // the right thing to do, but nothing uses srcvalues now.  When they do,
-        // turn SrcValue into a list of locations.
+        // FIXME: this discards src value information.  This is
+        // over-conservative. It would be beneficial to be able to remember
+        // both potential memory locations.
         SDValue Addr;
         if (TheSelect->getOpcode() == ISD::SELECT) {
           // Check that the condition doesn't reach either load.  If so, folding
           // this will induce a cycle into the DAG.
-          if (!LLD->isPredecessorOf(TheSelect->getOperand(0).getNode()) &&
-              !RLD->isPredecessorOf(TheSelect->getOperand(0).getNode())) {
+          if ((!LLD->hasAnyUseOfValue(1) ||
+               !LLD->isPredecessorOf(TheSelect->getOperand(0).getNode())) &&
+              (!RLD->hasAnyUseOfValue(1) ||
+               !RLD->isPredecessorOf(TheSelect->getOperand(0).getNode()))) {
             Addr = DAG.getNode(ISD::SELECT, TheSelect->getDebugLoc(),
                                LLD->getBasePtr().getValueType(),
                                TheSelect->getOperand(0), LLD->getBasePtr(),
@@ -5747,10 +5743,12 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
         } else {
           // Check that the condition doesn't reach either load.  If so, folding
           // this will induce a cycle into the DAG.
-          if (!LLD->isPredecessorOf(TheSelect->getOperand(0).getNode()) &&
-              !RLD->isPredecessorOf(TheSelect->getOperand(0).getNode()) &&
-              !LLD->isPredecessorOf(TheSelect->getOperand(1).getNode()) &&
-              !RLD->isPredecessorOf(TheSelect->getOperand(1).getNode())) {
+          if ((!LLD->hasAnyUseOfValue(1) ||
+               (!LLD->isPredecessorOf(TheSelect->getOperand(0).getNode()) &&
+                !LLD->isPredecessorOf(TheSelect->getOperand(1).getNode()))) &&
+              (!RLD->hasAnyUseOfValue(1) ||
+               (!RLD->isPredecessorOf(TheSelect->getOperand(0).getNode()) &&
+                !RLD->isPredecessorOf(TheSelect->getOperand(1).getNode())))) {
             Addr = DAG.getNode(ISD::SELECT_CC, TheSelect->getDebugLoc(),
                                LLD->getBasePtr().getValueType(),
                                TheSelect->getOperand(0),
@@ -5766,16 +5764,14 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
             Load = DAG.getLoad(TheSelect->getValueType(0),
                                TheSelect->getDebugLoc(),
                                LLD->getChain(),
-                               Addr,LLD->getSrcValue(),
-                               LLD->getSrcValueOffset(),
+                               Addr, 0, 0,
                                LLD->isVolatile(),
                                LLD->getAlignment());
           } else {
             Load = DAG.getExtLoad(LLD->getExtensionType(),
                                   TheSelect->getDebugLoc(),
                                   TheSelect->getValueType(0),
-                                  LLD->getChain(), Addr, LLD->getSrcValue(),
-                                  LLD->getSrcValueOffset(),
+                                  LLD->getChain(), Addr, 0, 0,
                                   LLD->getMemoryVT(),
                                   LLD->isVolatile(),
                                   LLD->getAlignment());

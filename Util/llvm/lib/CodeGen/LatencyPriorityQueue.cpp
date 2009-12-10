@@ -55,6 +55,10 @@ SUnit *LatencyPriorityQueue::getSingleUnscheduledPred(SUnit *SU) {
   SUnit *OnlyAvailablePred = 0;
   for (SUnit::const_pred_iterator I = SU->Preds.begin(), E = SU->Preds.end();
        I != E; ++I) {
+    if (IgnoreAntiDep && 
+        ((I->getKind() == SDep::Anti) || (I->getKind() == SDep::Output))) 
+      continue;
+
     SUnit &Pred = *I->getSUnit();
     if (!Pred.isScheduled) {
       // We found an available, but not scheduled, predecessor.  If it's the
@@ -73,9 +77,14 @@ void LatencyPriorityQueue::push_impl(SUnit *SU) {
   // this node is the sole unscheduled node for.
   unsigned NumNodesBlocking = 0;
   for (SUnit::const_succ_iterator I = SU->Succs.begin(), E = SU->Succs.end();
-       I != E; ++I)
+       I != E; ++I) {
+    if (IgnoreAntiDep && 
+        ((I->getKind() == SDep::Anti) || (I->getKind() == SDep::Output))) 
+      continue;
+
     if (getSingleUnscheduledPred(I->getSUnit()) == SU)
       ++NumNodesBlocking;
+  }
   NumNodesSolelyBlocking[SU->NodeNum] = NumNodesBlocking;
   
   Queue.push(SU);
@@ -88,8 +97,13 @@ void LatencyPriorityQueue::push_impl(SUnit *SU) {
 // the node available.
 void LatencyPriorityQueue::ScheduledNode(SUnit *SU) {
   for (SUnit::const_succ_iterator I = SU->Succs.begin(), E = SU->Succs.end();
-       I != E; ++I)
+       I != E; ++I) {
+    if (IgnoreAntiDep && 
+        ((I->getKind() == SDep::Anti) || (I->getKind() == SDep::Output))) 
+      continue;
+
     AdjustPriorityOfUnscheduledPreds(I->getSUnit());
+  }
 }
 
 /// AdjustPriorityOfUnscheduledPreds - One of the predecessors of SU was just

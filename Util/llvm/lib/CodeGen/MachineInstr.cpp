@@ -13,6 +13,7 @@
 
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/Constants.h"
+#include "llvm/Function.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/Value.h"
 #include "llvm/Assembly/Writer.h"
@@ -180,29 +181,31 @@ bool MachineOperand::isIdenticalTo(const MachineOperand &Other) const {
   case MachineOperand::MO_ExternalSymbol:
     return !strcmp(getSymbolName(), Other.getSymbolName()) &&
            getOffset() == Other.getOffset();
+  case MachineOperand::MO_BlockAddress:
+    return getBlockAddress() == Other.getBlockAddress();
   }
 }
 
 /// print - Print the specified machine operand.
 ///
 void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
+  // If the instruction is embedded into a basic block, we can find the
+  // target info for the instruction.
+  if (!TM)
+    if (const MachineInstr *MI = getParent())
+      if (const MachineBasicBlock *MBB = MI->getParent())
+        if (const MachineFunction *MF = MBB->getParent())
+          TM = &MF->getTarget();
+
   switch (getType()) {
   case MachineOperand::MO_Register:
     if (getReg() == 0 || TargetRegisterInfo::isVirtualRegister(getReg())) {
       OS << "%reg" << getReg();
     } else {
-      // If the instruction is embedded into a basic block, we can find the
-      // target info for the instruction.
-      if (TM == 0)
-        if (const MachineInstr *MI = getParent())
-          if (const MachineBasicBlock *MBB = MI->getParent())
-            if (const MachineFunction *MF = MBB->getParent())
-              TM = &MF->getTarget();
-      
       if (TM)
         OS << "%" << TM->getRegisterInfo()->get(getReg()).Name;
       else
-        OS << "%mreg" << getReg();
+        OS << "%physreg" << getReg();
     }
 
     if (getSubReg() != 0)
@@ -248,9 +251,7 @@ void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
       OS << getFPImm()->getValueAPF().convertToDouble();
     break;
   case MachineOperand::MO_MachineBasicBlock:
-    OS << "mbb<"
-       << ((Value*)getMBB()->getBasicBlock())->getName()
-       << "," << (void*)getMBB() << '>';
+    OS << "<BB#" << getMBB()->getNumber() << ">";
     break;
   case MachineOperand::MO_FrameIndex:
     OS << "<fi#" << getIndex() << '>';
@@ -264,13 +265,19 @@ void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
     OS << "<jt#" << getIndex() << '>';
     break;
   case MachineOperand::MO_GlobalAddress:
-    OS << "<ga:" << ((Value*)getGlobal())->getName();
+    OS << "<ga:";
+    WriteAsOperand(OS, getGlobal(), /*PrintType=*/false);
     if (getOffset()) OS << "+" << getOffset();
     OS << '>';
     break;
   case MachineOperand::MO_ExternalSymbol:
     OS << "<es:" << getSymbolName();
     if (getOffset()) OS << "+" << getOffset();
+    OS << '>';
+    break;
+  case MachineOperand::MO_BlockAddress:
+    OS << "<";
+    WriteAsOperand(OS, getBlockAddress(), /*PrintType=*/false);
     OS << '>';
     break;
   default:
@@ -369,7 +376,7 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const MachineMemOperand &MMO) {
 /// MachineInstr ctor - This constructor creates a dummy MachineInstr with
 /// TID NULL and no operands.
 MachineInstr::MachineInstr()
-  : TID(0), NumImplicitOps(0), MemRefs(0), MemRefsEnd(0),
+  : TID(0), NumImplicitOps(0), AsmPrinterFlags(0), MemRefs(0), MemRefsEnd(0),
     Parent(0), debugLoc(DebugLoc::getUnknownLoc()) {
   // Make sure that we get added to a machine basicblock
   LeakDetector::addGarbageObject(this);
@@ -389,7 +396,8 @@ void MachineInstr::addImplicitDefUseOperands() {
 /// TargetInstrDesc or the numOperands if it is not zero. (for
 /// instructions with variable number of operands).
 MachineInstr::MachineInstr(const TargetInstrDesc &tid, bool NoImp)
-  : TID(&tid), NumImplicitOps(0), MemRefs(0), MemRefsEnd(0), Parent(0),
+  : TID(&tid), NumImplicitOps(0), AsmPrinterFlags(0),
+    MemRefs(0), MemRefsEnd(0), Parent(0),
     debugLoc(DebugLoc::getUnknownLoc()) {
   if (!NoImp && TID->getImplicitDefs())
     for (const unsigned *ImpDefs = TID->getImplicitDefs(); *ImpDefs; ++ImpDefs)
@@ -407,7 +415,7 @@ MachineInstr::MachineInstr(const TargetInstrDesc &tid, bool NoImp)
 /// MachineInstr ctor - As above, but with a DebugLoc.
 MachineInstr::MachineInstr(const TargetInstrDesc &tid, const DebugLoc dl,
                            bool NoImp)
-  : TID(&tid), NumImplicitOps(0), MemRefs(0), MemRefsEnd(0),
+  : TID(&tid), NumImplicitOps(0), AsmPrinterFlags(0), MemRefs(0), MemRefsEnd(0),
     Parent(0), debugLoc(dl) {
   if (!NoImp && TID->getImplicitDefs())
     for (const unsigned *ImpDefs = TID->getImplicitDefs(); *ImpDefs; ++ImpDefs)
@@ -427,7 +435,8 @@ MachineInstr::MachineInstr(const TargetInstrDesc &tid, const DebugLoc dl,
 /// basic block.
 ///
 MachineInstr::MachineInstr(MachineBasicBlock *MBB, const TargetInstrDesc &tid)
-  : TID(&tid), NumImplicitOps(0), MemRefs(0), MemRefsEnd(0), Parent(0), 
+  : TID(&tid), NumImplicitOps(0), AsmPrinterFlags(0),
+    MemRefs(0), MemRefsEnd(0), Parent(0), 
     debugLoc(DebugLoc::getUnknownLoc()) {
   assert(MBB && "Cannot use inserting ctor with null basic block!");
   if (TID->ImplicitDefs)
@@ -447,7 +456,7 @@ MachineInstr::MachineInstr(MachineBasicBlock *MBB, const TargetInstrDesc &tid)
 ///
 MachineInstr::MachineInstr(MachineBasicBlock *MBB, const DebugLoc dl,
                            const TargetInstrDesc &tid)
-  : TID(&tid), NumImplicitOps(0), MemRefs(0), MemRefsEnd(0),
+  : TID(&tid), NumImplicitOps(0), AsmPrinterFlags(0), MemRefs(0), MemRefsEnd(0),
     Parent(0), debugLoc(dl) {
   assert(MBB && "Cannot use inserting ctor with null basic block!");
   if (TID->ImplicitDefs)
@@ -466,7 +475,7 @@ MachineInstr::MachineInstr(MachineBasicBlock *MBB, const DebugLoc dl,
 /// MachineInstr ctor - Copies MachineInstr arg exactly
 ///
 MachineInstr::MachineInstr(MachineFunction &MF, const MachineInstr &MI)
-  : TID(&MI.getDesc()), NumImplicitOps(0),
+  : TID(&MI.getDesc()), NumImplicitOps(0), AsmPrinterFlags(0),
     MemRefs(MI.MemRefs), MemRefsEnd(MI.MemRefsEnd),
     Parent(0), debugLoc(MI.getDebugLoc()) {
   Operands.reserve(MI.getNumOperands());
@@ -1054,25 +1063,77 @@ void MachineInstr::dump() const {
 }
 
 void MachineInstr::print(raw_ostream &OS, const TargetMachine *TM) const {
-  // Specialize printing if op#0 is definition
-  unsigned StartOp = 0;
-  if (getNumOperands() && getOperand(0).isReg() && getOperand(0).isDef()) {
-    getOperand(0).print(OS, TM);
-    OS << " = ";
-    ++StartOp;   // Don't print this operand again!
+  // We can be a bit tidier if we know the TargetMachine and/or MachineFunction.
+  const MachineFunction *MF = 0;
+  if (const MachineBasicBlock *MBB = getParent()) {
+    MF = MBB->getParent();
+    if (!TM && MF)
+      TM = &MF->getTarget();
   }
 
+  // Print explicitly defined operands on the left of an assignment syntax.
+  unsigned StartOp = 0, e = getNumOperands();
+  for (; StartOp < e && getOperand(StartOp).isReg() &&
+         getOperand(StartOp).isDef() &&
+         !getOperand(StartOp).isImplicit();
+       ++StartOp) {
+    if (StartOp != 0) OS << ", ";
+    getOperand(StartOp).print(OS, TM);
+  }
+
+  if (StartOp != 0)
+    OS << " = ";
+
+  // Print the opcode name.
   OS << getDesc().getName();
 
+  // Print the rest of the operands.
+  bool OmittedAnyCallClobbers = false;
+  bool FirstOp = true;
   for (unsigned i = StartOp, e = getNumOperands(); i != e; ++i) {
-    if (i != StartOp)
-      OS << ",";
+    const MachineOperand &MO = getOperand(i);
+
+    // Omit call-clobbered registers which aren't used anywhere. This makes
+    // call instructions much less noisy on targets where calls clobber lots
+    // of registers. Don't rely on MO.isDead() because we may be called before
+    // LiveVariables is run, or we may be looking at a non-allocatable reg.
+    if (MF && getDesc().isCall() &&
+        MO.isReg() && MO.isImplicit() && MO.isDef()) {
+      unsigned Reg = MO.getReg();
+      if (Reg != 0 && TargetRegisterInfo::isPhysicalRegister(Reg)) {
+        const MachineRegisterInfo &MRI = MF->getRegInfo();
+        if (MRI.use_empty(Reg) && !MRI.isLiveOut(Reg)) {
+          bool HasAliasLive = false;
+          for (const unsigned *Alias = TM->getRegisterInfo()->getAliasSet(Reg);
+               unsigned AliasReg = *Alias; ++Alias)
+            if (!MRI.use_empty(AliasReg) || MRI.isLiveOut(AliasReg)) {
+              HasAliasLive = true;
+              break;
+            }
+          if (!HasAliasLive) {
+            OmittedAnyCallClobbers = true;
+            continue;
+          }
+        }
+      }
+    }
+
+    if (FirstOp) FirstOp = false; else OS << ",";
     OS << " ";
-    getOperand(i).print(OS, TM);
+    MO.print(OS, TM);
   }
 
+  // Briefly indicate whether any call clobbers were omitted.
+  if (OmittedAnyCallClobbers) {
+    if (FirstOp) FirstOp = false; else OS << ",";
+    OS << " ...";
+  }
+
+  bool HaveSemi = false;
   if (!memoperands_empty()) {
-    OS << ", Mem:";
+    if (!HaveSemi) OS << ";"; HaveSemi = true;
+
+    OS << " mem:";
     for (mmo_iterator i = memoperands_begin(), e = memoperands_end();
          i != e; ++i) {
       OS << **i;
@@ -1081,15 +1142,16 @@ void MachineInstr::print(raw_ostream &OS, const TargetMachine *TM) const {
     }
   }
 
-  if (!debugLoc.isUnknown()) {
-    const MachineFunction *MF = getParent()->getParent();
+  if (!debugLoc.isUnknown() && MF) {
+    if (!HaveSemi) OS << ";"; HaveSemi = true;
+
+    // TODO: print InlinedAtLoc information
+
     DebugLocTuple DLT = MF->getDebugLocTuple(debugLoc);
     DICompileUnit CU(DLT.Scope);
     if (!CU.isNull())
-      OS << " [dbg: "
-         << CU.getDirectory() << '/' << CU.getFilename() << ","
-         << DLT.Line << ","
-         << DLT.Col  << "]";
+      OS << " dbg:" << CU.getDirectory() << '/' << CU.getFilename() << ":"
+         << DLT.Line << ":" << DLT.Col;
   }
 
   OS << "\n";

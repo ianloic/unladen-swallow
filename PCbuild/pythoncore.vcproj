@@ -65,7 +65,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -143,7 +143,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -224,7 +224,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Debug"
 				IgnoreDefaultLibraryNames="libc"
@@ -305,7 +305,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName)_d.dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Debug"
 				IgnoreDefaultLibraryNames="libc"
@@ -382,7 +382,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -460,7 +460,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -538,7 +538,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -616,7 +616,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
+				AdditionalDependencies="getbuildinfo.o LLVMAnalysis.lib LLVMAsmPrinter.lib LLVMBitReader.lib LLVMCodeGen.lib LLVMCore.lib LLVMExecutionEngine.lib LLVMipa.lib LLVMipo.lib LLVMJIT.lib LLVMMC.lib LLVMScalarOpts.lib LLVMSelectionDAG.lib LLVMSupport.lib LLVMSystem.lib LLVMTarget.lib LLVMTransformUtils.lib LLVMX86AsmPrinter.lib LLVMX86CodeGen.lib LLVMX86Info.lib"
 				OutputFile="$(OutDir)\$(PyDllName).dll"
 				AdditionalLibraryDirectories="..\Util\llvm\obj-x64\lib\Release"
 				IgnoreDefaultLibraryNames="libc"
@@ -1771,10 +1771,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\Python\initial_llvm_module.cc"
-				>
-			</File>
-			<File
 				RelativePath="..\Python\llvm_fbuilder.cc"
 				>
 			</File>
@@ -1794,10 +1790,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1805,10 +1801,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1816,10 +1812,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26_d.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26_d.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26_d.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1827,10 +1823,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26_d.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26_d.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26_d.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1838,10 +1834,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1849,10 +1845,10 @@
 					>
 					<Tool
 						Name="VCCustomBuildTool"
-						Description="Compiling $(InputFileName) to initial_llvm_module_body.cc..."
-						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\initial_llvm_module_body.cc&quot;&#x0D;&#x0A;"
+						Description="Compiling $(InputFileName) to python26.bc..."
+						CommandLine="build_clang.bat $(ConfigurationName) $(PlatformName) $(InputPath) &quot;$(IntDir)\$(InputName).bc&quot; &quot;$(IntDir)\python26.unopt.bc&quot; &quot;$(TargetDir)\python26.bc&quot;&#x0D;&#x0A;"
 						AdditionalDependencies=""
-						Outputs="$(IntDir)\initial_llvm_module_body.cc"
+						Outputs="$(TargetDir)\python26.bc"
 					/>
 				</FileConfiguration>
 				<FileConfiguration
@@ -1969,6 +1965,14 @@
 				>
 			</File>
 			<File
+				RelativePath="..\Util\DeadGlobalElim.cc"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\DeadGlobalElim.h"
+				>
+			</File>
+			<File
 				RelativePath="..\Util\EventTimer.cc"
 				>
 			</File>
@@ -2018,6 +2022,10 @@
 			</File>
 			<File
 				RelativePath="..\Util\SingleFunctionInliner.h"
+				>
+			</File>
+			<File
+				RelativePath="..\Util\Stats.cc"
 				>
 			</File>
 			<File

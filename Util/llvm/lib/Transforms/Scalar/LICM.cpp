@@ -63,15 +63,6 @@ static cl::opt<bool>
 DisablePromotion("disable-licm-promotion", cl::Hidden,
                  cl::desc("Disable memory promotion in LICM pass"));
 
-// This feature is currently disabled by default because CodeGen is not yet
-// capable of rematerializing these constants in PIC mode, so it can lead to
-// degraded performance. Compile test/CodeGen/X86/remat-constant.ll with
-// -relocation-model=pic to see an example of this.
-static cl::opt<bool>
-EnableLICMConstantMotion("enable-licm-constant-variables", cl::Hidden,
-                         cl::desc("Enable hoisting/sinking of constant "
-                                  "global variables"));
-
 namespace {
   struct LICM : public LoopPass {
     static char ID; // Pass identification, replacement for typeid
@@ -263,7 +254,6 @@ bool LICM::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   // Get the preheader block to move instructions into...
   Preheader = L->getLoopPreheader();
-  assert(Preheader&&"Preheader insertion pass guarantees we have a preheader!");
 
   // Loop over the body of this loop, looking for calls, invokes, and stores.
   // Because subloops have already been incorporated into AST, we skip blocks in
@@ -286,12 +276,14 @@ bool LICM::runOnLoop(Loop *L, LPPassManager &LPM) {
   // us to sink instructions in one pass, without iteration.  After sinking
   // instructions, we perform another pass to hoist them out of the loop.
   //
-  SinkRegion(DT->getNode(L->getHeader()));
-  HoistRegion(DT->getNode(L->getHeader()));
+  if (L->hasDedicatedExits())
+    SinkRegion(DT->getNode(L->getHeader()));
+  if (Preheader)
+    HoistRegion(DT->getNode(L->getHeader()));
 
   // Now that all loop invariants have been removed from the loop, promote any
   // memory references to scalars that we can...
-  if (!DisablePromotion)
+  if (!DisablePromotion && Preheader && L->hasDedicatedExits())
     PromoteValuesInLoop();
 
   // Clear out loops state information for the next iteration
@@ -382,8 +374,7 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
 
     // Loads from constant memory are always safe to move, even if they end up
     // in the same alias set as something that ends up being modified.
-    if (EnableLICMConstantMotion &&
-        AA->pointsToConstantMemory(LI->getOperand(0)))
+    if (AA->pointsToConstantMemory(LI->getOperand(0)))
       return true;
     
     // Don't hoist loads which have may-aliased stores in loop.

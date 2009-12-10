@@ -23,6 +23,15 @@ class MipsSubtarget;
 class TargetInstrInfo;
 class Type;
 
+namespace Mips {
+  /// SubregIndex - The index of various sized subregister classes. Note that 
+  /// these indices must be kept in sync with the class indices in the 
+  /// MipsRegisterInfo.td file.
+  enum SubregIndex {
+    SUBREG_FPEVEN = 1, SUBREG_FPODD = 2
+  };
+}
+
 struct MipsRegisterInfo : public MipsGenRegisterInfo {
   const MipsSubtarget &Subtarget;
   const TargetInstrInfo &TII;
@@ -65,7 +74,7 @@ struct MipsRegisterInfo : public MipsGenRegisterInfo {
   
   /// Debug information queries.
   unsigned getRARegister() const;
-  unsigned getFrameRegister(MachineFunction &MF) const;
+  unsigned getFrameRegister(const MachineFunction &MF) const;
 
   /// Exception handling queries.
   unsigned getEHExceptionRegister() const;

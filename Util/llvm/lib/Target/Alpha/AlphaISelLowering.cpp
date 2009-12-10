@@ -157,11 +157,6 @@ AlphaTargetLowering::AlphaTargetLowering(TargetMachine &TM)
 
   setStackPointerRegisterToSaveRestore(Alpha::R30);
 
-  addLegalFPImmediate(APFloat(+0.0)); //F31
-  addLegalFPImmediate(APFloat(+0.0f)); //F31
-  addLegalFPImmediate(APFloat(-0.0)); //-F31
-  addLegalFPImmediate(APFloat(-0.0f)); //-F31
-
   setJumpBufSize(272);
   setJumpBufAlignment(16);
 
@@ -431,7 +426,7 @@ AlphaTargetLowering::LowerFormalArguments(SDValue Chain,
       }
     } else { //more args
       // Create the frame index object for this incoming parameter...
-      int FI = MFI->CreateFixedObject(8, 8 * (ArgNo - 6));
+      int FI = MFI->CreateFixedObject(8, 8 * (ArgNo - 6), true, false);
 
       // Create the SelectionDAG nodes corresponding to a load
       //from this parameter
@@ -449,7 +444,7 @@ AlphaTargetLowering::LowerFormalArguments(SDValue Chain,
       if (TargetRegisterInfo::isPhysicalRegister(args_int[i]))
         args_int[i] = AddLiveIn(MF, args_int[i], &Alpha::GPRCRegClass);
       SDValue argt = DAG.getCopyFromReg(Chain, dl, args_int[i], MVT::i64);
-      int FI = MFI->CreateFixedObject(8, -8 * (6 - i));
+      int FI = MFI->CreateFixedObject(8, -8 * (6 - i), true, false);
       if (i == 0) VarArgsBase = FI;
       SDValue SDFI = DAG.getFrameIndex(FI, MVT::i64);
       LS.push_back(DAG.getStore(Chain, dl, argt, SDFI, NULL, 0));
@@ -457,7 +452,7 @@ AlphaTargetLowering::LowerFormalArguments(SDValue Chain,
       if (TargetRegisterInfo::isPhysicalRegister(args_float[i]))
         args_float[i] = AddLiveIn(MF, args_float[i], &Alpha::F8RCRegClass);
       argt = DAG.getCopyFromReg(Chain, dl, args_float[i], MVT::f64);
-      FI = MFI->CreateFixedObject(8, - 8 * (12 - i));
+      FI = MFI->CreateFixedObject(8, - 8 * (12 - i), true, false);
       SDFI = DAG.getFrameIndex(FI, MVT::i64);
       LS.push_back(DAG.getStore(Chain, dl, argt, SDFI, NULL, 0));
     }
@@ -918,4 +913,14 @@ bool
 AlphaTargetLowering::isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const {
   // The Alpha target isn't yet aware of offsets.
   return false;
+}
+
+bool AlphaTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT) const {
+  if (VT != MVT::f32 && VT != MVT::f64)
+    return false;
+  // +0.0   F31
+  // +0.0f  F31
+  // -0.0  -F31
+  // -0.0f -F31
+  return Imm.isZero() || Imm.isNegZero();
 }

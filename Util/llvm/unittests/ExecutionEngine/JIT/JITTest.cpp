@@ -61,6 +61,7 @@ class RecordingJITMemoryManager : public JITMemoryManager {
 public:
   RecordingJITMemoryManager()
     : Base(JITMemoryManager::CreateDefaultMemManager()) {
+    stubsAllocated = 0;
   }
 
   virtual void setMemoryWritable() { Base->setMemoryWritable(); }
@@ -68,8 +69,6 @@ public:
   virtual void setPoisonMemory(bool poison) { Base->setPoisonMemory(poison); }
   virtual void AllocateGOT() { Base->AllocateGOT(); }
   virtual uint8_t *getGOTBase() const { return Base->getGOTBase(); }
-  virtual void SetDlsymTable(void *ptr) { Base->SetDlsymTable(ptr); }
-  virtual void *getDlsymTable() const { return Base->getDlsymTable(); }
   struct StartFunctionBodyCall {
     StartFunctionBodyCall(uint8_t *Result, const Function *F,
                           uintptr_t ActualSize, uintptr_t ActualSizeResult)
@@ -90,8 +89,10 @@ public:
       StartFunctionBodyCall(Result, F, InitialActualSize, ActualSize));
     return Result;
   }
+  int stubsAllocated;
   virtual uint8_t *allocateStub(const GlobalValue* F, unsigned StubSize,
                                 unsigned Alignment) {
+    stubsAllocated++;
     return Base->allocateStub(F, StubSize, Alignment);
   }
   struct EndFunctionBodyCall {
@@ -182,6 +183,7 @@ class JITTest : public testing::Test {
     M = new Module("<main>", Context);
     MP = new ExistingModuleProvider(M);
     RJMM = new RecordingJITMemoryManager;
+    RJMM->setPoisonMemory(true);
     std::string Error;
     TheJIT.reset(EngineBuilder(MP).setEngineKind(EngineKind::JIT)
                  .setJITMemoryManager(RJMM)
@@ -303,18 +305,16 @@ TEST_F(JITTest, FarCallToKnownFunction) {
       ConstantInt::get(TypeBuilder<int, false>::get(Context), 7));
   Builder.CreateRet(result);
 
-  TheJIT->EnableDlsymStubs(false);
-  TheJIT->DisableLazyCompilation();
+  TheJIT->DisableLazyCompilation(true);
   int (*TestFunctionPtr)() = reinterpret_cast<int(*)()>(
       (intptr_t)TheJIT->getPointerToFunction(TestFunction));
   // This used to crash in trying to call PlusOne().
   EXPECT_EQ(8, TestFunctionPtr());
 }
 
-#if !defined(__arm__) && !defined(__powerpc__) && !defined(__ppc__)
 // Test a function C which calls A and B which call each other.
 TEST_F(JITTest, NonLazyCompilationStillNeedsStubs) {
-  TheJIT->DisableLazyCompilation();
+  TheJIT->DisableLazyCompilation(true);
 
   const FunctionType *Func1Ty =
       cast<FunctionType>(TypeBuilder<void(void), false>::get(Context));
@@ -370,7 +370,7 @@ TEST_F(JITTest, NonLazyCompilationStillNeedsStubs) {
 // Regression test for PR5162.  This used to trigger an AssertingVH inside the
 // JIT's Function to stub mapping.
 TEST_F(JITTest, NonLazyLeaksNoStubs) {
-  TheJIT->DisableLazyCompilation();
+  TheJIT->DisableLazyCompilation(true);
 
   // Create two functions with a single basic block each.
   const FunctionType *FuncTy =
@@ -407,9 +407,9 @@ TEST_F(JITTest, NonLazyLeaksNoStubs) {
   EXPECT_EQ(Func2->getNumUses(), 0u);
   Func2->eraseFromParent();
 }
-#endif
 
 TEST_F(JITTest, ModuleDeletion) {
+  TheJIT->DisableLazyCompilation(false);
   LoadAssembly("define void @main() { "
                "  call i32 @computeVal() "
                "  ret void "
@@ -436,10 +436,16 @@ TEST_F(JITTest, ModuleDeletion) {
             RJMM->deallocateFunctionBodyCalls.size());
 
   SmallPtrSet<const void*, 2> ExceptionTablesDeallocated;
+  unsigned NumTablesDeallocated = 0;
   for (unsigned i = 0, e = RJMM->deallocateExceptionTableCalls.size();
        i != e; ++i) {
     ExceptionTablesDeallocated.insert(
         RJMM->deallocateExceptionTableCalls[i].ET);
+    if (RJMM->deallocateExceptionTableCalls[i].ET != NULL) {
+        // If JITEmitDebugInfo is off, we'll "deallocate" NULL, which doesn't
+        // appear in startExceptionTableCalls.
+        NumTablesDeallocated++;
+    }
   }
   for (unsigned i = 0, e = RJMM->startExceptionTableCalls.size(); i != e; ++i) {
     EXPECT_TRUE(ExceptionTablesDeallocated.count(
@@ -448,7 +454,79 @@ TEST_F(JITTest, ModuleDeletion) {
       << RJMM->startExceptionTableCalls[i].F_dump;
   }
   EXPECT_EQ(RJMM->startExceptionTableCalls.size(),
-            RJMM->deallocateExceptionTableCalls.size());
+            NumTablesDeallocated);
+}
+
+typedef int (*FooPtr) ();
+
+TEST_F(JITTest, NoStubs) {
+  LoadAssembly("define void @bar() {"
+	       "entry: "
+	       "ret void"
+	       "}"
+	       " "
+	       "define i32 @foo() {"
+	       "entry:"
+	       "call void @bar()"
+	       "ret i32 undef"
+	       "}"
+	       " "
+	       "define i32 @main() {"
+	       "entry:"
+	       "%0 = call i32 @foo()"
+	       "call void @bar()"
+	       "ret i32 undef"
+	       "}");
+  Function *foo = M->getFunction("foo");
+  uintptr_t tmp = (uintptr_t)(TheJIT->getPointerToFunction(foo));
+  FooPtr ptr = (FooPtr)(tmp);
+
+  (ptr)();
+
+  // We should now allocate no more stubs, we have the code to foo
+  // and the existing stub for bar.
+  int stubsBefore = RJMM->stubsAllocated;
+  Function *func = M->getFunction("main");
+  TheJIT->getPointerToFunction(func);
+
+  Function *bar = M->getFunction("bar");
+  TheJIT->getPointerToFunction(bar);
+
+  ASSERT_EQ(stubsBefore, RJMM->stubsAllocated);
+}
+
+TEST_F(JITTest, FunctionPointersOutliveTheirCreator) {
+  TheJIT->DisableLazyCompilation(true);
+  LoadAssembly("define i8()* @get_foo_addr() { "
+               "  ret i8()* @foo "
+               "} "
+               " "
+               "define i8 @foo() { "
+               "  ret i8 42 "
+               "} ");
+  Function *F_get_foo_addr = M->getFunction("get_foo_addr");
+
+  typedef char(*fooT)();
+  fooT (*get_foo_addr)() = reinterpret_cast<fooT(*)()>(
+      (intptr_t)TheJIT->getPointerToFunction(F_get_foo_addr));
+  fooT foo_addr = get_foo_addr();
+
+  // Now free get_foo_addr.  This should not free the machine code for foo or
+  // any call stub returned as foo's canonical address.
+  TheJIT->freeMachineCodeForFunction(F_get_foo_addr);
+
+  // Check by calling the reported address of foo.
+  EXPECT_EQ(42, foo_addr());
+
+  // The reported address should also be the same as the result of a subsequent
+  // getPointerToFunction(foo).
+#if 0
+  // Fails until PR5126 is fixed:
+  Function *F_foo = M->getFunction("foo");
+  fooT foo = reinterpret_cast<fooT>(
+      (intptr_t)TheJIT->getPointerToFunction(F_foo));
+  EXPECT_EQ((intptr_t)foo, (intptr_t)foo_addr);
+#endif
 }
 
 // This code is copied from JITEventListenerTest, but it only runs once for all

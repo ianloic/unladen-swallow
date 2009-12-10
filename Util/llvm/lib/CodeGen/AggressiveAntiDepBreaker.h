@@ -17,12 +17,13 @@
 #ifndef LLVM_CODEGEN_AGGRESSIVEANTIDEPBREAKER_H
 #define LLVM_CODEGEN_AGGRESSIVEANTIDEPBREAKER_H
 
-#include "llvm/CodeGen/AntiDepBreaker.h"
+#include "AntiDepBreaker.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
+#include "llvm/Target/TargetSubtarget.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallSet.h"
@@ -85,8 +86,11 @@ namespace llvm {
     unsigned GetGroup(unsigned Reg);
     
     // GetGroupRegs - Return a vector of the registers belonging to a
-    // group.
-    void GetGroupRegs(unsigned Group, std::vector<unsigned> &Regs);
+    // group. If RegRefs is non-NULL then only included referenced registers.
+    void GetGroupRegs(
+       unsigned Group,
+       std::vector<unsigned> &Regs,
+       std::multimap<unsigned, AggressiveAntiDepState::RegisterReference> *RegRefs);
 
     // UnionGroups - Union Reg1's and Reg2's groups to form a new
     // group. Return the index of the GroupNode representing the
@@ -114,6 +118,10 @@ namespace llvm {
     /// because they may not be safe to break.
     const BitVector AllocatableSet;
 
+    /// CriticalPathSet - The set of registers that should only be
+    /// renamed if they are on the critical path.
+    BitVector CriticalPathSet;
+
     /// State - The state used to identify and rename anti-dependence
     /// registers.
     AggressiveAntiDepState *State;
@@ -124,12 +132,16 @@ namespace llvm {
     AggressiveAntiDepState *SavedState;
 
   public:
-    AggressiveAntiDepBreaker(MachineFunction& MFi);
+    AggressiveAntiDepBreaker(MachineFunction& MFi, 
+                             TargetSubtarget::RegClassVector& CriticalPathRCs);
     ~AggressiveAntiDepBreaker();
     
     /// GetMaxTrials - As anti-dependencies are broken, additional
     /// dependencies may be exposed, so multiple passes are required.
     unsigned GetMaxTrials();
+
+    /// NeedCandidates - Candidates required.
+    bool NeedCandidates() { return true; }
 
     /// Start - Initialize anti-dep breaking for a new basic block.
     void StartBlock(MachineBasicBlock *BB);
@@ -138,6 +150,7 @@ namespace llvm {
     /// of the ScheduleDAG and break them by renaming registers.
     ///
     unsigned BreakAntiDependencies(std::vector<SUnit>& SUnits,
+                                   CandidateMap& Candidates,
                                    MachineBasicBlock::iterator& Begin,
                                    MachineBasicBlock::iterator& End,
                                    unsigned InsertPosIndex);
@@ -151,6 +164,9 @@ namespace llvm {
     void FinishBlock();
 
   private:
+    typedef std::map<const TargetRegisterClass *,
+                     TargetRegisterClass::const_iterator> RenameOrderType;
+
     /// IsImplicitDefUse - Return true if MO represents a register
     /// that is both implicitly used and defined in MI
     bool IsImplicitDefUse(MachineInstr *MI, MachineOperand& MO);
@@ -159,11 +175,15 @@ namespace llvm {
     /// return that register and all subregisters.
     void GetPassthruRegs(MachineInstr *MI, std::set<unsigned>& PassthruRegs);
 
+    void HandleLastUse(unsigned Reg, unsigned KillIdx, const char *tag,
+                       const char *header =NULL, const char *footer =NULL);
+
     void PrescanInstruction(MachineInstr *MI, unsigned Count,
                             std::set<unsigned>& PassthruRegs);
     void ScanInstruction(MachineInstr *MI, unsigned Count);
     BitVector GetRenameRegisters(unsigned Reg);
     bool FindSuitableFreeRegisters(unsigned AntiDepGroupIndex,
+                                   RenameOrderType& RenameOrder,
                                    std::map<unsigned, unsigned> &RenameMap);
   };
 }

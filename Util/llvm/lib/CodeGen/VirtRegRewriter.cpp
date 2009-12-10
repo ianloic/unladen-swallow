@@ -77,27 +77,38 @@ struct TrivialRewriter : public VirtRegRewriter {
     DEBUG(MF.dump());
 
     MachineRegisterInfo *mri = &MF.getRegInfo();
+    const TargetRegisterInfo *tri = MF.getTarget().getRegisterInfo();
 
     bool changed = false;
 
     for (LiveIntervals::iterator liItr = LIs->begin(), liEnd = LIs->end();
          liItr != liEnd; ++liItr) {
 
-      if (TargetRegisterInfo::isVirtualRegister(liItr->first)) {
-        if (VRM.hasPhys(liItr->first)) {
-          unsigned preg = VRM.getPhys(liItr->first);
-          mri->replaceRegWith(liItr->first, preg);
-          mri->setPhysRegUsed(preg);
+      const LiveInterval *li = liItr->second;
+      unsigned reg = li->reg;
+
+      if (TargetRegisterInfo::isPhysicalRegister(reg)) {
+        if (!li->empty())
+          mri->setPhysRegUsed(reg);
+      }
+      else {
+        if (!VRM.hasPhys(reg))
+          continue;
+        unsigned pReg = VRM.getPhys(reg);
+        mri->setPhysRegUsed(pReg);
+        for (MachineRegisterInfo::reg_iterator regItr = mri->reg_begin(reg),
+             regEnd = mri->reg_end(); regItr != regEnd;) {
+          MachineOperand &mop = regItr.getOperand();
+          assert(mop.isReg() && mop.getReg() == reg && "reg_iterator broken?");
+          ++regItr;
+          unsigned subRegIdx = mop.getSubReg();
+          unsigned pRegOp = subRegIdx ? tri->getSubReg(pReg, subRegIdx) : pReg;
+          mop.setReg(pRegOp);
+          mop.setSubReg(0);
           changed = true;
         }
       }
-      else {
-        if (!liItr->second->empty()) {
-          mri->setPhysRegUsed(liItr->first);
-        }
-      }
     }
-
     
     DEBUG(errs() << "**** Post Machine Instrs ****\n");
     DEBUG(MF.dump());
@@ -483,19 +494,20 @@ static void InvalidateKills(MachineInstr &MI,
 }
 
 /// InvalidateRegDef - If the def operand of the specified def MI is now dead
-/// (since it's spill instruction is removed), mark it isDead. Also checks if
+/// (since its spill instruction is removed), mark it isDead. Also checks if
 /// the def MI has other definition operands that are not dead. Returns it by
 /// reference.
 static bool InvalidateRegDef(MachineBasicBlock::iterator I,
                              MachineInstr &NewDef, unsigned Reg,
-                             bool &HasLiveDef) {
+                             bool &HasLiveDef, 
+                             const TargetRegisterInfo *TRI) {
   // Due to remat, it's possible this reg isn't being reused. That is,
   // the def of this reg (by prev MI) is now dead.
   MachineInstr *DefMI = I;
   MachineOperand *DefOp = NULL;
   for (unsigned i = 0, e = DefMI->getNumOperands(); i != e; ++i) {
     MachineOperand &MO = DefMI->getOperand(i);
-    if (!MO.isReg() || !MO.isUse() || !MO.isKill() || MO.isUndef())
+    if (!MO.isReg() || !MO.isDef() || !MO.isKill() || MO.isUndef())
       continue;
     if (MO.getReg() == Reg)
       DefOp = &MO;
@@ -512,7 +524,8 @@ static bool InvalidateRegDef(MachineBasicBlock::iterator I,
     MachineInstr *NMI = I;
     for (unsigned j = 0, ee = NMI->getNumOperands(); j != ee; ++j) {
       MachineOperand &MO = NMI->getOperand(j);
-      if (!MO.isReg() || MO.getReg() != Reg)
+      if (!MO.isReg() || MO.getReg() == 0 ||
+          (MO.getReg() != Reg && !TRI->isSubRegister(Reg, MO.getReg())))
         continue;
       if (MO.isUse())
         FoundUse = true;
@@ -556,11 +569,30 @@ static void UpdateKills(MachineInstr &MI, const TargetRegisterInfo* TRI,
         KillOps[*SR] = NULL;
         RegKills.reset(*SR);
       }
+    } else {
+      // Check for subreg kills as well.
+      // d4 = 
+      // store d4, fi#0
+      // ...
+      //    = s8<kill>
+      // ...
+      //    = d4  <avoiding reload>
+      for (const unsigned *SR = TRI->getSubRegisters(Reg); *SR; ++SR) {
+        unsigned SReg = *SR;
+        if (RegKills[SReg] && KillOps[SReg]->getParent() != &MI) {
+          KillOps[SReg]->setIsKill(false);
+          unsigned KReg = KillOps[SReg]->getReg();
+          KillOps[KReg] = NULL;
+          RegKills.reset(KReg);
 
-      if (!MI.isRegTiedToDefOperand(i))
-        // Unless it's a two-address operand, this is the new kill.
-        MO.setIsKill();
+          for (const unsigned *SSR = TRI->getSubRegisters(KReg); *SSR; ++SSR) {
+            KillOps[*SSR] = NULL;
+            RegKills.reset(*SSR);
+          }
+        }
+      }
     }
+
     if (MO.isKill()) {
       RegKills.set(Reg);
       KillOps[Reg] = &MO;
@@ -573,13 +605,17 @@ static void UpdateKills(MachineInstr &MI, const TargetRegisterInfo* TRI,
 
   for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
-    if (!MO.isReg() || !MO.isDef())
+    if (!MO.isReg() || !MO.getReg() || !MO.isDef())
       continue;
     unsigned Reg = MO.getReg();
     RegKills.reset(Reg);
     KillOps[Reg] = NULL;
     // It also defines (or partially define) aliases.
     for (const unsigned *SR = TRI->getSubRegisters(Reg); *SR; ++SR) {
+      RegKills.reset(*SR);
+      KillOps[*SR] = NULL;
+    }
+    for (const unsigned *SR = TRI->getSuperRegisters(Reg); *SR; ++SR) {
       RegKills.reset(*SR);
       KillOps[*SR] = NULL;
     }
@@ -601,7 +637,7 @@ static void ReMaterialize(MachineBasicBlock &MBB,
          "Don't know how to remat instructions that define > 1 values!");
 #endif
   TII->reMaterialize(MBB, MII, DestReg,
-                     ReMatDefMI->getOperand(0).getSubReg(), ReMatDefMI);
+                     ReMatDefMI->getOperand(0).getSubReg(), ReMatDefMI, TRI);
   MachineInstr *NewMI = prior(MII);
   for (unsigned i = 0, e = NewMI->getNumOperands(); i != e; ++i) {
     MachineOperand &MO = NewMI->getOperand(i);
@@ -816,11 +852,8 @@ unsigned ReuseInfo::GetRegForReload(const TargetRegisterClass *RC,
                "A reuse cannot be a virtual register");
         if (PRRU != RealPhysRegUsed) {
           // What was the sub-register index?
-          unsigned SubReg;
-          for (SubIdx = 1; (SubReg = TRI->getSubReg(PRRU, SubIdx)); SubIdx++)
-            if (SubReg == RealPhysRegUsed)
-              break;
-          assert(SubReg == RealPhysRegUsed &&
+          SubIdx = TRI->getSubRegIndex(PRRU, RealPhysRegUsed);
+          assert(SubIdx &&
                  "Operand physreg is not a sub-register of PhysRegUsed");
         }
 
@@ -1430,8 +1463,9 @@ private:
                            std::vector<MachineOperand*> &KillOps,
                            VirtRegMap &VRM) {
 
+    MachineBasicBlock::iterator oldNextMII = next(MII);
     TII->storeRegToStackSlot(MBB, next(MII), PhysReg, true, StackSlot, RC);
-    MachineInstr *StoreMI = next(MII);
+    MachineInstr *StoreMI = prior(oldNextMII);
     VRM.addSpillSlotUse(StackSlot, StoreMI);
     DEBUG(errs() << "Store:\t" << *StoreMI);
 
@@ -1453,7 +1487,7 @@ private:
         // being reused.
         for (unsigned j = 0, ee = KillRegs.size(); j != ee; ++j) {
           bool HasOtherDef = false;
-          if (InvalidateRegDef(PrevMII, *MII, KillRegs[j], HasOtherDef)) {
+          if (InvalidateRegDef(PrevMII, *MII, KillRegs[j], HasOtherDef, TRI)) {
             MachineInstr *DeadDef = PrevMII;
             if (ReMatDefs.count(DeadDef) && !HasOtherDef) {
               // FIXME: This assumes a remat def does not have side effects.
@@ -1466,7 +1500,9 @@ private:
       }
     }
 
-    LastStore = next(MII);
+    // Allow for multi-instruction spill sequences, as on PPC Altivec.  Presume
+    // the last of multiple instructions is the actual store.
+    LastStore = prior(oldNextMII);
 
     // If the stack slot value was previously available in some other
     // register, change it now.  Otherwise, make the register available,
@@ -1701,6 +1737,7 @@ private:
 
             // Mark is killed.
             MachineInstr *CopyMI = prior(InsertLoc);
+            CopyMI->setAsmPrinterFlag(AsmPrinter::ReloadReuse);
             MachineOperand *KillOpnd = CopyMI->findRegisterUseOperand(InReg);
             KillOpnd->setIsKill();
             UpdateKills(*CopyMI, TRI, RegKills, KillOps);
@@ -1748,8 +1785,9 @@ private:
           const TargetRegisterClass *RC = RegInfo->getRegClass(VirtReg);
           unsigned Phys = VRM.getPhys(VirtReg);
           int StackSlot = VRM.getStackSlot(VirtReg);
+          MachineBasicBlock::iterator oldNextMII = next(MII);
           TII->storeRegToStackSlot(MBB, next(MII), Phys, isKill, StackSlot, RC);
-          MachineInstr *StoreMI = next(MII);
+          MachineInstr *StoreMI = prior(oldNextMII);
           VRM.addSpillSlotUse(StackSlot, StoreMI);
           DEBUG(errs() << "Store:\t" << *StoreMI);
           VRM.virtFolded(VirtReg, StoreMI, VirtRegMap::isMod);
@@ -1980,6 +2018,7 @@ private:
           TII->copyRegToReg(MBB, InsertLoc, DesignatedReg, PhysReg, RC, RC);
 
           MachineInstr *CopyMI = prior(InsertLoc);
+          CopyMI->setAsmPrinterFlag(AsmPrinter::ReloadReuse);
           UpdateKills(*CopyMI, TRI, RegKills, KillOps);
 
           // This invalidates DesignatedReg.
@@ -2108,6 +2147,7 @@ private:
                 // virtual or needing to clobber any values if it's physical).
                 NextMII = &MI;
                 --NextMII;  // backtrack to the copy.
+                NextMII->setAsmPrinterFlag(AsmPrinter::ReloadReuse);
                 // Propagate the sub-register index over.
                 if (SubIdx) {
                   DefMO = NextMII->findRegisterDefOperand(DestReg);

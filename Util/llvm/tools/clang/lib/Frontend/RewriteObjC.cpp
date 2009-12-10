@@ -744,7 +744,7 @@ void RewriteObjC::RewriteForwardClassDecl(ObjCClassDecl *ClassDecl) {
   typedefString += "\n";
   for (ObjCClassDecl::iterator I = ClassDecl->begin(), E = ClassDecl->end();
        I != E; ++I) {
-    ObjCInterfaceDecl *ForwardDecl = *I;
+    ObjCInterfaceDecl *ForwardDecl = I->getInterface();
     typedefString += "#ifndef _REWRITER_typedef_";
     typedefString += ForwardDecl->getNameAsString();
     typedefString += "\n";
@@ -2569,7 +2569,7 @@ Stmt *RewriteObjC::SynthMessageExpr(ObjCMessageExpr *Exp) {
 
     // Build sizeof(returnType)
     SizeOfAlignOfExpr *sizeofExpr = new (Context) SizeOfAlignOfExpr(true,
-                                      returnType,
+                            Context->getTrivialDeclaratorInfo(returnType),
                                       Context->getSizeType(),
                                       SourceLocation(), SourceLocation());
     // (sizeof(returnType) <= 8 ? objc_msgSend(...) : objc_msgSend_stret(...))

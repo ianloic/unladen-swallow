@@ -51,7 +51,7 @@ class DirectoryLookup;
 class Preprocessor {
   Diagnostic        *Diags;
   LangOptions        Features;
-  TargetInfo        &Target;
+  const TargetInfo  &Target;
   FileManager       &FileMgr;
   SourceManager     &SourceMgr;
   ScratchBuffer     *ScratchBuf;
@@ -75,6 +75,8 @@ class Preprocessor {
   IdentifierInfo *Ident_Pragma, *Ident__VA_ARGS__; // _Pragma, __VA_ARGS__
   IdentifierInfo *Ident__has_feature;              // __has_feature
   IdentifierInfo *Ident__has_builtin;              // __has_builtin
+  IdentifierInfo *Ident__has_include;              // __has_include
+  IdentifierInfo *Ident__has_include_next;         // __has_include_next
 
   SourceLocation DATELoc, TIMELoc;
   unsigned CounterValue;  // Next __COUNTER__ value.
@@ -92,9 +94,12 @@ class Preprocessor {
   bool DisableMacroExpansion : 1;  // True if macro expansion is disabled.
   bool InMacroArgs : 1;            // True if parsing fn macro invocation args.
 
+  /// Whether the preprocessor owns the header search object.
+  bool OwnsHeaderSearch : 1;
+
   /// Identifiers - This is mapping/lookup information for all identifiers in
   /// the program, including program keywords.
-  IdentifierTable Identifiers;
+  mutable IdentifierTable Identifiers;
 
   /// Selectors - This table contains all the selectors in the program. Unlike
   /// IdentifierTable above, this table *isn't* populated by the preprocessor.
@@ -205,9 +210,11 @@ private:  // Cached tokens state.
   std::vector<CachedTokensTy::size_type> BacktrackPositions;
 
 public:
-  Preprocessor(Diagnostic &diags, const LangOptions &opts, TargetInfo &target,
+  Preprocessor(Diagnostic &diags, const LangOptions &opts,
+               const TargetInfo &target,
                SourceManager &SM, HeaderSearch &Headers,
-               IdentifierInfoLookup *IILookup = 0);
+               IdentifierInfoLookup *IILookup = 0,
+               bool OwnsHeaderSearch = false);
 
   ~Preprocessor();
 
@@ -215,7 +222,7 @@ public:
   void setDiagnostics(Diagnostic &D) { Diags = &D; }
 
   const LangOptions &getLangOptions() const { return Features; }
-  TargetInfo &getTargetInfo() const { return Target; }
+  const TargetInfo &getTargetInfo() const { return Target; }
   FileManager &getFileManager() const { return FileMgr; }
   SourceManager &getSourceManager() const { return SourceMgr; }
   HeaderSearch &getHeaderSearchInfo() const { return HeaderInfo; }
@@ -244,7 +251,12 @@ public:
     return CurPPLexer == L;
   }
 
-  /// getCurrentLexer - Return the current file lexer being lexed from.  Note
+  /// getCurrentLexer - Return the current lexer being lexed from.  Note
+  /// that this ignores any potentially active macro expansions and _Pragma
+  /// expansions going on at the time.
+  PreprocessorLexer *getCurrentLexer() const { return CurPPLexer; }
+
+  /// getCurrentFileLexer - Return the current file lexer being lexed from.  Note
   /// that this ignores any potentially active macro expansions and _Pragma
   /// expansions going on at the time.
   PreprocessorLexer *getCurrentFileLexer() const;
@@ -289,12 +301,8 @@ public:
   /// pointers is preferred unless the identifier is already available as a
   /// string (this avoids allocation and copying of memory to construct an
   /// std::string).
-  IdentifierInfo *getIdentifierInfo(const char *NameStart,
-                                    const char *NameEnd) {
-    return &Identifiers.get(NameStart, NameEnd);
-  }
-  IdentifierInfo *getIdentifierInfo(const char *NameStr) {
-    return getIdentifierInfo(NameStr, NameStr+strlen(NameStr));
+  IdentifierInfo *getIdentifierInfo(llvm::StringRef Name) const {
+    return &Identifiers.get(Name);
   }
 
   /// AddPragmaHandler - Add the specified pragma handler to the preprocessor.
@@ -495,6 +503,15 @@ public:
   /// UCNs, etc.
   std::string getSpelling(const Token &Tok) const;
 
+  /// getSpelling() - Return the 'spelling' of the Tok token.  The spelling of a
+  /// token is the characters used to represent the token in the source file
+  /// after trigraph expansion and escaped-newline folding.  In particular, this
+  /// wants to get the true, uncanonicalized, spelling of things like digraphs
+  /// UCNs, etc.
+  static std::string getSpelling(const Token &Tok,
+                                 const SourceManager &SourceMgr,
+                                 const LangOptions &Features);
+
   /// getSpelling - This method is used to get the spelling of a token into a
   /// preallocated buffer, instead of as an std::string.  The caller is required
   /// to allocate enough space for the token, which is guaranteed to be at least
@@ -576,7 +593,7 @@ public:
   /// LookUpIdentifierInfo - Given a tok::identifier token, look up the
   /// identifier information for the token and install it into the token.
   IdentifierInfo *LookUpIdentifierInfo(Token &Identifier,
-                                       const char *BufPtr = 0);
+                                       const char *BufPtr = 0) const;
 
   /// HandleIdentifier - This callback is invoked when the lexer reads an
   /// identifier and has filled in the tokens IdentifierInfo member.  This
@@ -622,6 +639,43 @@ public:
   ///  SourceLocation.
   MacroInfo* AllocateMacroInfo(SourceLocation L);
 
+  /// GetIncludeFilenameSpelling - Turn the specified lexer token into a fully
+  /// checked and spelled filename, e.g. as an operand of #include. This returns
+  /// true if the input filename was in <>'s or false if it were in ""'s.  The
+  /// caller is expected to provide a buffer that is large enough to hold the
+  /// spelling of the filename, but is also expected to handle the case when
+  /// this method decides to use a different buffer.
+  bool GetIncludeFilenameSpelling(SourceLocation Loc,
+                                  const char *&BufStart, const char *&BufEnd);
+
+  /// LookupFile - Given a "foo" or <foo> reference, look up the indicated file,
+  /// return null on failure.  isAngled indicates whether the file reference is
+  /// for system #include's or not (i.e. using <> instead of "").
+  const FileEntry *LookupFile(const char *FilenameStart,const char *FilenameEnd,
+                              bool isAngled, const DirectoryLookup *FromDir,
+                              const DirectoryLookup *&CurDir);
+
+  /// GetCurLookup - The DirectoryLookup structure used to find the current
+  /// FileEntry, if CurLexer is non-null and if applicable.  This allows us to
+  /// implement #include_next and find directory-specific properties.
+  const DirectoryLookup *GetCurDirLookup() { return CurDirLookup; }
+
+  /// isInPrimaryFile - Return true if we're in the top-level file, not in a
+  /// #include.
+  bool isInPrimaryFile() const;
+
+  /// ConcatenateIncludeName - Handle cases where the #include name is expanded
+  /// from a macro as multiple tokens, which need to be glued together.  This
+  /// occurs for code like:
+  ///    #define FOO <a/b.h>
+  ///    #include FOO
+  /// because in this case, "<a/b.h>" is returned as 7 tokens, not one.
+  ///
+  /// This code concatenates and consumes tokens up to the '>' token.  It returns
+  /// false if the > was found, otherwise it returns true if it finds and consumes
+  /// the EOM marker.
+  bool ConcatenateIncludeName(llvm::SmallVector<char, 128> &FilenameBuffer);
+
 private:
 
   void PushIncludeMacroStack() {
@@ -645,10 +699,6 @@ private:
   /// ReleaseMacroInfo - Release the specified MacroInfo.  This memory will
   ///  be reused for allocating new MacroInfo objects.
   void ReleaseMacroInfo(MacroInfo* MI);
-
-  /// isInPrimaryFile - Return true if we're in the top-level file, not in a
-  /// #include.
-  bool isInPrimaryFile() const;
 
   /// ReadMacroName - Lex and validate a macro name, which occurs after a
   /// #define or #undef.  This emits a diagnostic, sets the token kind to eom,
@@ -722,24 +772,6 @@ private:
   /// start getting tokens from it using the PTH cache.
   void EnterSourceFileWithPTH(PTHLexer *PL, const DirectoryLookup *Dir);
 
-  /// GetIncludeFilenameSpelling - Turn the specified lexer token into a fully
-  /// checked and spelled filename, e.g. as an operand of #include. This returns
-  /// true if the input filename was in <>'s or false if it were in ""'s.  The
-  /// caller is expected to provide a buffer that is large enough to hold the
-  /// spelling of the filename, but is also expected to handle the case when
-  /// this method decides to use a different buffer.
-  bool GetIncludeFilenameSpelling(SourceLocation Loc,
-                                  const char *&BufStart, const char *&BufEnd);
-
-  /// LookupFile - Given a "foo" or <foo> reference, look up the indicated file,
-  /// return null on failure.  isAngled indicates whether the file reference is
-  /// for system #include's or not (i.e. using <> instead of "").
-  const FileEntry *LookupFile(const char *FilenameStart,const char *FilenameEnd,
-                              bool isAngled, const DirectoryLookup *FromDir,
-                              const DirectoryLookup *&CurDir);
-
-
-
   /// IsFileLexer - Returns true if we are lexing from a file and not a
   ///  pragma or a macro.
   static bool IsFileLexer(const Lexer* L, const PreprocessorLexer* P) {
@@ -807,14 +839,6 @@ public:
   void HandlePragmaDependency(Token &DependencyTok);
   void HandlePragmaComment(Token &CommentTok);
   void HandleComment(SourceRange Comment);
-};
-
-/// PreprocessorFactory - A generic factory interface for lazily creating
-///  Preprocessor objects on-demand when they are needed.
-class PreprocessorFactory {
-public:
-  virtual ~PreprocessorFactory();
-  virtual Preprocessor* CreatePreprocessor() = 0;
 };
 
 /// \brief Abstract base class that describes a handler that will receive

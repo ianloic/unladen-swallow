@@ -1,5 +1,6 @@
 #include "Util/PyAliasAnalysis.h"
 
+#include "Util/ConstantMirror.h"
 #include "Util/PyTypeBuilder.h"
 
 #include "llvm/ADT/APInt.h"

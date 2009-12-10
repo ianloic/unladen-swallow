@@ -37,7 +37,6 @@ class AnalysisManager : public BugReporterData {
 
   enum AnalysisScope { ScopeTU, ScopeDecl } AScope;
 
-  bool DisplayedFunction;
   bool VisualizeEGDot;
   bool VisualizeEGUbi;
   bool PurgeDead;
@@ -62,9 +61,11 @@ public:
 
     : Ctx(ctx), Diags(diags), LangInfo(lang), PD(pd),
       CreateStoreMgr(storemgr), CreateConstraintMgr(constraintmgr),
-      AScope(ScopeDecl), DisplayedFunction(!displayProgress),
+      AScope(ScopeDecl),
       VisualizeEGDot(vizdot), VisualizeEGUbi(vizubi), PurgeDead(purge),
       EagerlyAssume(eager), TrimGraph(trim) {}
+  
+  ~AnalysisManager() { FlushDiagnostics(); }
   
   void ClearContexts() {
     LocCtxMgr.clear();
@@ -98,6 +99,11 @@ public:
   virtual PathDiagnosticClient *getPathDiagnosticClient() {
     return PD.get();
   }
+  
+  void FlushDiagnostics() {
+    if (PD.get())
+      PD->FlushDiagnostics();
+  }
 
   bool shouldVisualizeGraphviz() const { return VisualizeEGDot; }
 
@@ -112,8 +118,6 @@ public:
   bool shouldPurgeDead() const { return PurgeDead; }
 
   bool shouldEagerlyAssume() const { return EagerlyAssume; }
-
-  void DisplayFunction(Decl *D);
 
   CFG *getCFG(Decl const *D) {
     return AnaCtxMgr.getContext(D)->getCFG();

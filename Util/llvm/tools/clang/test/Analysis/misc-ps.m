@@ -1,8 +1,8 @@
 // NOTE: Use '-fobjc-gc' to test the analysis being run twice, and multiple reports are not issued.
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -fobjc-gc -analyzer-constraints=basic --verify -fblocks %s &&
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=basic -analyzer-constraints=range --verify -fblocks %s &&
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=basic --verify -fblocks %s &&
-// RUN: clang-cc -analyze -checker-cfref --analyzer-store=region -analyzer-constraints=range --verify -fblocks %s
+// RUN: clang-cc -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=basic -fobjc-gc -analyzer-constraints=basic --verify -fblocks %s
+// RUN: clang-cc -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=basic -analyzer-constraints=range --verify -fblocks %s
+// RUN: clang-cc -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=region -analyzer-constraints=basic --verify -fblocks %s
+// RUN: clang-cc -analyze -analyzer-experimental-internal-checks -checker-cfref --analyzer-store=region -analyzer-constraints=range --verify -fblocks %s
 
 typedef struct objc_ivar *Ivar;
 typedef struct objc_selector *SEL;
@@ -121,12 +121,12 @@ void check_zero_sized_VLA(int x) {
   if (x)
     return;
 
-  int vla[x]; // expected-warning{{Variable-length array 'vla' has zero elements (undefined behavior)}}
+  int vla[x]; // expected-warning{{Declared variable-length array (VLA) has zero size}}
 }
 
 void check_uninit_sized_VLA() {
   int x;
-  int vla[x]; // expected-warning{{Variable-length array 'vla' garbage value for array size}}
+  int vla[x]; // expected-warning{{Declared variable-length array (VLA) uses a garbage value as its size}}
 }
 
 // sizeof(void)
@@ -152,6 +152,12 @@ void handle_sizeof_void(unsigned flag) {
     
   // Infeasible.
   *p = 1; // no-warning
+}
+
+// check deference of undefined values
+void check_deref_undef(void) {
+  int *p;
+  *p = 0xDEADBEEF; // expected-warning{{Dereference of undefined pointer value}}
 }
 
 // PR 3422
@@ -686,7 +692,6 @@ void *rdar7152418_bar();
 // conversions of the symbol as necessary.
 //===----------------------------------------------------------------------===//
 
-
 // Previously this would crash once we started eagerly evaluating symbols whose 
 // values were constrained to a single value.
 void test_symbol_fold_1(signed char x) {
@@ -716,5 +721,32 @@ unsigned test_symbol_fold_3(void) {
   if (x == 54)
     return (x << 8) | 0x5;
   return 0;
-}  
+} 
 
+//===----------------------------------------------------------------------===//
+// Tests for the warning of casting a non-struct type to a struct type
+//===----------------------------------------------------------------------===//
+
+typedef struct {unsigned int v;} NSSwappedFloat;
+
+NSSwappedFloat test_cast_nonstruct_to_struct(float x) {
+  struct hodor {
+    float number;
+    NSSwappedFloat sf;
+  };
+  return ((struct hodor *)&x)->sf; // expected-warning{{Casting a non-structure type to a structure type and accessing a field can lead to memory access errors or data corruption}}
+}
+
+NSSwappedFloat test_cast_nonstruct_to_union(float x) {
+  union bran {
+    float number;
+    NSSwappedFloat sf;
+  };
+  return ((union bran *)&x)->sf; // no-warning
+}
+
+void test_undefined_array_subscript() {
+  int i, a[10];
+  int *p = &a[i]; // expected-warning{{Array subscript is undefined}}
+}
+@end

@@ -18,6 +18,7 @@
 #include "llvm/Module.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -35,6 +36,7 @@
 #include "llvm/Support/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
@@ -512,7 +514,7 @@ void AsmPrinter::EmitXXStructorList(Constant *List) {
 //===----------------------------------------------------------------------===//
 /// LEB 128 number encoding.
 
-/// PrintULEB128 - Print a series of hexidecimal values (separated by commas)
+/// PrintULEB128 - Print a series of hexadecimal values (separated by commas)
 /// representing an unsigned leb128 value.
 void AsmPrinter::PrintULEB128(unsigned Value) const {
   char Buffer[20];
@@ -525,7 +527,7 @@ void AsmPrinter::PrintULEB128(unsigned Value) const {
   } while (Value);
 }
 
-/// PrintSLEB128 - Print a series of hexidecimal values (separated by commas)
+/// PrintSLEB128 - Print a series of hexadecimal values (separated by commas)
 /// representing a signed leb128 value.
 void AsmPrinter::PrintSLEB128(int Value) const {
   int Sign = Value >> (8 * sizeof(Value) - 1);
@@ -546,7 +548,7 @@ void AsmPrinter::PrintSLEB128(int Value) const {
 // Emission and print routines
 //
 
-/// PrintHex - Print a value as a hexidecimal value.
+/// PrintHex - Print a value as a hexadecimal value.
 ///
 void AsmPrinter::PrintHex(int Value) const { 
   char Buffer[20];
@@ -727,7 +729,7 @@ static void printStringChar(formatted_raw_ostream &O, unsigned char C) {
 /// Special characters are emitted properly.
 /// \literal (Eg. '\t') \endliteral
 void AsmPrinter::EmitString(const std::string &String) const {
-  EmitString(String.c_str(), String.size());
+  EmitString(String.data(), String.size());
 }
 
 void AsmPrinter::EmitString(const char *String, unsigned Size) const {
@@ -919,6 +921,8 @@ void AsmPrinter::EmitConstantValueOnly(const Constant *CV) {
     default:
       llvm_unreachable("Unsupported operator!");
     }
+  } else if (const BlockAddress *BA = dyn_cast<BlockAddress>(CV)) {
+    GetBlockAddressSymbol(BA)->print(O, MAI);
   } else {
     llvm_unreachable("Unknown constant value!");
   }
@@ -1355,30 +1359,30 @@ void AsmPrinter::PrintSpecial(const MachineInstr *MI, const char *Code) const {
 /// instruction's DebugLoc.
 void AsmPrinter::processDebugLoc(const MachineInstr *MI, 
                                  bool BeforePrintingInsn) {
-  if (!MAI || !DW)
+  if (!MAI || !DW || !MAI->doesSupportDebugInformation()
+      || !DW->ShouldEmitDwarfDebug())
     return;
   DebugLoc DL = MI->getDebugLoc();
-  if (MAI->doesSupportDebugInformation() && DW->ShouldEmitDwarfDebug()) {
-    if (!DL.isUnknown()) {
-      DebugLocTuple CurDLT = MF->getDebugLocTuple(DL);
-      if (BeforePrintingInsn) {
-        if (CurDLT.Scope != 0 && PrevDLT != CurDLT) {
-	  unsigned L = DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,
-	  				    CurDLT.Scope);
-          printLabel(L);
-#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
-          DW->SetDbgScopeBeginLabels(MI, L);
-#endif
-        } else {
-#ifdef ATTACH_DEBUG_INFO_TO_AN_INSN
-          DW->SetDbgScopeEndLabels(MI, 0);
-#endif
-        }
-      } 
+  if (DL.isUnknown())
+    return;
+  DebugLocTuple CurDLT = MF->getDebugLocTuple(DL);
+  if (CurDLT.Scope == 0)
+    return;
+
+  if (BeforePrintingInsn) {
+    if (CurDLT != PrevDLT) {
+      unsigned L = DW->RecordSourceLine(CurDLT.Line, CurDLT.Col,
+                                        CurDLT.Scope);
+      printLabel(L);
+      DW->BeginScope(MI, L);
       PrevDLT = CurDLT;
     }
+  } else {
+    // After printing instruction
+    DW->EndScope(MI);
   }
 }
+
 
 /// printInlineAsm - This method formats and prints the specified machine
 /// instruction that is an inline asm.
@@ -1395,6 +1399,8 @@ void AsmPrinter::printInlineAsm(const MachineInstr *MI) const {
 
   // Disassemble the AsmStr, printing out the literal pieces, the operands, etc.
   const char *AsmStr = MI->getOperand(NumDefs).getSymbolName();
+
+  O << '\t';
 
   // If this asmstr is empty, just print the #APP/#NOAPP markers.
   // These are useful to see where empty asm's wound up.
@@ -1587,6 +1593,17 @@ void AsmPrinter::printImplicitDef(const MachineInstr *MI) const {
     << TRI->getName(MI->getOperand(0).getReg());
 }
 
+void AsmPrinter::printKill(const MachineInstr *MI) const {
+  if (!VerboseAsm) return;
+  O.PadToColumn(MAI->getCommentColumn());
+  O << MAI->getCommentString() << " kill:";
+  for (unsigned n = 0, e = MI->getNumOperands(); n != e; ++n) {
+    const MachineOperand &op = MI->getOperand(n);
+    assert(op.isReg() && "KILL instruction must have only register operands");
+    O << ' ' << TRI->getName(op.getReg()) << (op.isDef() ? "<def>" : "<kill>");
+  }
+}
+
 /// printLabel - This method prints a local label used by debug and
 /// exception handling tables.
 void AsmPrinter::printLabel(const MachineInstr *MI) const {
@@ -1613,6 +1630,28 @@ bool AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
   return true;
 }
 
+MCSymbol *AsmPrinter::GetBlockAddressSymbol(const BlockAddress *BA) const {
+  return GetBlockAddressSymbol(BA->getFunction(), BA->getBasicBlock());
+}
+
+MCSymbol *AsmPrinter::GetBlockAddressSymbol(const Function *F,
+                                            const BasicBlock *BB) const {
+  assert(BB->hasName() &&
+         "Address of anonymous basic block not supported yet!");
+
+  // This code must use the function name itself, and not the function number,
+  // since it must be possible to generate the label name from within other
+  // functions.
+  std::string FuncName = Mang->getMangledName(F);
+
+  SmallString<60> Name;
+  raw_svector_ostream(Name) << MAI->getPrivateGlobalPrefix() << "BA"
+    << FuncName.size() << '_' << FuncName << '_'
+    << Mang->makeNameProper(BB->getName());
+
+  return OutContext.GetOrCreateSymbol(Name.str());
+}
+
 MCSymbol *AsmPrinter::GetMBBSymbol(unsigned MBBID) const {
   SmallString<60> Name;
   raw_svector_ostream(Name) << MAI->getPrivateGlobalPrefix() << "BB"
@@ -1626,9 +1665,27 @@ MCSymbol *AsmPrinter::GetMBBSymbol(unsigned MBBID) const {
 /// MachineBasicBlock, an alignment (if present) and a comment describing
 /// it if appropriate.
 void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
+  // Emit an alignment directive for this block, if needed.
   if (unsigned Align = MBB->getAlignment())
     EmitAlignment(Log2_32(Align));
 
+  // If the block has its address taken, emit a special label to satisfy
+  // references to the block. This is done so that we don't need to
+  // remember the number of this label, and so that we can make
+  // forward references to labels without knowing what their numbers
+  // will be.
+  if (MBB->hasAddressTaken()) {
+    GetBlockAddressSymbol(MBB->getBasicBlock()->getParent(),
+                          MBB->getBasicBlock())->print(O, MAI);
+    O << ':';
+    if (VerboseAsm) {
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Address Taken";
+    }
+    O << '\n';
+  }
+
+  // Print the main label for the block.
   if (MBB->pred_empty() || MBB->isOnlyReachableByFallthrough()) {
     if (VerboseAsm)
       O << MAI->getCommentString() << " BB#" << MBB->getNumber() << ':';
@@ -1639,6 +1696,7 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
       O << '\n';
   }
   
+  // Print some comments to accompany the label.
   if (VerboseAsm) {
     if (const BasicBlock *BB = MBB->getBasicBlock())
       if (BB->hasName()) {
@@ -1766,21 +1824,80 @@ GCMetadataPrinter *AsmPrinter::GetOrCreateGCPrinter(GCStrategy *S) {
 
 /// EmitComments - Pretty-print comments for instructions
 void AsmPrinter::EmitComments(const MachineInstr &MI) const {
-  assert(VerboseAsm && !MI.getDebugLoc().isUnknown());
-  
-  DebugLocTuple DLT = MF->getDebugLocTuple(MI.getDebugLoc());
+  if (!VerboseAsm)
+    return;
 
-  // Print source line info.
-  O.PadToColumn(MAI->getCommentColumn());
-  O << MAI->getCommentString() << " SrcLine ";
-  if (DLT.Scope) {
-    DICompileUnit CU(DLT.Scope);
-    if (!CU.isNull())
-      O << CU.getFilename() << " ";
+  bool Newline = false;
+
+  if (!MI.getDebugLoc().isUnknown()) {
+    DebugLocTuple DLT = MF->getDebugLocTuple(MI.getDebugLoc());
+
+    // Print source line info.
+    O.PadToColumn(MAI->getCommentColumn());
+    O << MAI->getCommentString() << " SrcLine ";
+    if (DLT.Scope) {
+      DICompileUnit CU(DLT.Scope);
+      if (!CU.isNull())
+        O << CU.getFilename() << " ";
+    }
+    O << DLT.Line;
+    if (DLT.Col != 0)
+      O << ":" << DLT.Col;
+    Newline = true;
   }
-  O << DLT.Line;
-  if (DLT.Col != 0) 
-    O << ":" << DLT.Col;
+
+  // Check for spills and reloads
+  int FI;
+
+  const MachineFrameInfo *FrameInfo =
+    MI.getParent()->getParent()->getFrameInfo();
+
+  // We assume a single instruction only has a spill or reload, not
+  // both.
+  if (TM.getInstrInfo()->isLoadFromStackSlotPostFE(&MI, FI)) {
+    if (FrameInfo->isSpillSlotObjectIndex(FI)) {
+      if (Newline) O << '\n';
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Reload";
+      Newline = true;
+    }
+  }
+  else if (TM.getInstrInfo()->hasLoadFromStackSlot(&MI, FI)) {
+    if (FrameInfo->isSpillSlotObjectIndex(FI)) {
+      if (Newline) O << '\n';
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Folded Reload";
+      Newline = true;
+    }
+  }
+  else if (TM.getInstrInfo()->isStoreToStackSlotPostFE(&MI, FI)) {
+    if (FrameInfo->isSpillSlotObjectIndex(FI)) {
+      if (Newline) O << '\n';
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Spill";
+      Newline = true;
+    }
+  }
+  else if (TM.getInstrInfo()->hasStoreToStackSlot(&MI, FI)) {
+    if (FrameInfo->isSpillSlotObjectIndex(FI)) {
+      if (Newline) O << '\n';
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Folded Spill";
+      Newline = true;
+    }
+  }
+
+  // Check for spill-induced copies
+  unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
+  if (TM.getInstrInfo()->isMoveInstr(MI, SrcReg, DstReg,
+                                      SrcSubIdx, DstSubIdx)) {
+    if (MI.getAsmPrinterFlag(ReloadReuse)) {
+      if (Newline) O << '\n';
+      O.PadToColumn(MAI->getCommentColumn());
+      O << MAI->getCommentString() << " Reload Reuse";
+      Newline = true;
+    }
+  }
 }
 
 /// PrintChildLoopComment - Print comments about child loops within
@@ -1811,8 +1928,7 @@ static void PrintChildLoopComment(formatted_raw_ostream &O,
 }
 
 /// EmitComments - Pretty-print comments for basic blocks
-void AsmPrinter::EmitComments(const MachineBasicBlock &MBB) const
-{
+void AsmPrinter::EmitComments(const MachineBasicBlock &MBB) const {
   if (VerboseAsm) {
     // Add loop depth information
     const MachineLoop *loop = LI->getLoopFor(&MBB);

@@ -60,10 +60,11 @@ protected:
 
 public:
   static MDString *get(LLVMContext &Context, StringRef Str);
+  static MDString *get(LLVMContext &Context, const char *Str);
   
   StringRef getString() const { return Str; }
 
-  unsigned getLength() const { return Str.size(); }
+  unsigned getLength() const { return (unsigned)Str.size(); }
 
   typedef StringRef::iterator iterator;
   
@@ -191,7 +192,7 @@ public:
 
   /// getNumElements - Return number of NamedMDNode elements.
   unsigned getNumElements() const {
-    return Node.size();
+    return (unsigned)Node.size();
   }
 
   /// addElement - Add metadata element.

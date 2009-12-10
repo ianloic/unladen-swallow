@@ -17,6 +17,7 @@
 #include "clang/Basic/TemplateKinds.h"
 #include "clang/Basic/TokenKinds.h"
 #include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/OperatorKinds.h"
 #include <cstdlib>
 
 namespace clang {
@@ -62,12 +63,12 @@ class Token {
 
   /// Kind - The actual flavor of token this is.
   ///
-  unsigned Kind : 8;  // DON'T make Kind a 'tok::TokenKind';
+  unsigned char Kind; // DON'T make Kind a 'tok::TokenKind';
                       // MSVC will treat it as a signed char and
                       // TokenKinds > 127 won't be handled correctly.
 
   /// Flags - Bits we track about this token, members of the TokenFlags enum.
-  unsigned Flags : 8;
+  unsigned char Flags;
 public:
 
   // Various flags set per token:
@@ -245,66 +246,6 @@ struct PPConditionalInfo {
   /// FoundElse - True if we've seen a #else in this block.  If so,
   /// #elif/#else directives are not allowed.
   bool FoundElse;
-};
-
-/// TemplateIdAnnotation - Information about a template-id annotation
-/// token, which contains the template declaration, template
-/// arguments, whether those template arguments were types or
-/// expressions, and the source locations for important tokens. All of
-/// the information about template arguments is allocated directly
-/// after this structure.
-struct TemplateIdAnnotation {
-  /// TemplateNameLoc - The location of the template name within the
-  /// source.
-  SourceLocation TemplateNameLoc;
-
-  /// FIXME: Temporarily stores the name of a specialization
-  IdentifierInfo *Name;
-
-  /// The declaration of the template corresponding to the
-  /// template-name. This is an Action::DeclTy*.
-  void *Template;
-
-  /// The kind of template that Template refers to.
-  TemplateNameKind Kind;
-
-  /// The location of the '<' before the template argument
-  /// list.
-  SourceLocation LAngleLoc;
-
-  /// The location of the '>' after the template argument
-  /// list.
-  SourceLocation RAngleLoc;
-
-  /// NumArgs - The number of template arguments.
-  unsigned NumArgs;
-
-  /// \brief Retrieves a pointer to the template arguments
-  void **getTemplateArgs() { return (void **)(this + 1); }
-
-  /// \brief Retrieves a pointer to the array of template argument
-  /// locations.
-  SourceLocation *getTemplateArgLocations() {
-    return (SourceLocation *)(getTemplateArgs() + NumArgs);
-  }
-
-  /// \brief Retrieves a pointer to the array of flags that states
-  /// whether the template arguments are types.
-  bool *getTemplateArgIsType() {
-    return (bool *)(getTemplateArgLocations() + NumArgs);
-  }
-
-  static TemplateIdAnnotation* Allocate(unsigned NumArgs) {
-    TemplateIdAnnotation *TemplateId
-      = (TemplateIdAnnotation *)std::malloc(sizeof(TemplateIdAnnotation) +
-                                            sizeof(void*) * NumArgs +
-                                            sizeof(SourceLocation) * NumArgs +
-                                            sizeof(bool) * NumArgs);
-    TemplateId->NumArgs = NumArgs;
-    return TemplateId;
-  }
-
-  void Destroy() { free(this); }
 };
 
 }  // end namespace clang

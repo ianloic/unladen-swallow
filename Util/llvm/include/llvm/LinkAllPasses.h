@@ -82,6 +82,7 @@ namespace {
       (void) llvm::createInternalizePass(false);
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
+      (void) llvm::createLazyValueInfoPass();
       (void) llvm::createLiveValuesPass();
       (void) llvm::createLoopDependenceAnalysisPass();
       (void) llvm::createLoopExtractorPass();
@@ -119,11 +120,9 @@ namespace {
       (void) llvm::createTailDuplicationPass();
       (void) llvm::createJumpThreadingPass();
       (void) llvm::createUnifyFunctionExitNodesPass();
-      (void) llvm::createCondPropagationPass();
       (void) llvm::createNullProfilerRSPass();
       (void) llvm::createRSProfilingPass();
       (void) llvm::createInstCountPass();
-      (void) llvm::createCodeGenLICMPass();
       (void) llvm::createCodeGenPreparePass();
       (void) llvm::createGVNPass();
       (void) llvm::createMemCpyOptPass();
@@ -142,6 +141,7 @@ namespace {
       (void) llvm::createSSIEverythingPass();
       (void) llvm::createGEPSplitterPass();
       (void) llvm::createSCCVNPass();
+      (void) llvm::createABCDPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::FindUsedTypes();

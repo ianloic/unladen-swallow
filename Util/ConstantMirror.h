@@ -7,6 +7,9 @@
 #endif
 
 #include "Python.h"
+
+#include "Util/PyTypeBuilder.h"
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
@@ -16,6 +19,8 @@ struct PyGlobalLlvmData;
 namespace llvm {
 class Constant;
 class ExecutionEngine;
+class PointerType;
+class GlobalValue;
 class GlobalVariable;
 class LLVMContext;
 class StructType;
@@ -66,12 +71,18 @@ public:
     // creating two GlobalVariables for the same object.
     llvm::Constant *GetGlobalVariableFor(PyObject *obj);
 
-    // Create an LLVM global variable that is backed by the given function
-    // pointer. This currently only works for METH_ARG_RANGE functions.
-    // Pass the maximum number of arguments the function accepts.
+    // Create an LLVM global variable that is backed by the given PyCFunction
+    // function pointer.  This currently only works for METH_ARG_RANGE
+    // functions.  Pass the maximum number of arguments the function accepts.
     llvm::Constant *GetGlobalForCFunction(PyCFunction cfunc_ptr,
                                           int arity,
                                           const llvm::StringRef &name);
+
+    // Create an LLVM global variable that is backed by the given function
+    // pointer.
+    template <typename T>
+    llvm::Constant *GetGlobalForFunctionPointer(void *func_ptr,
+                                                const llvm::StringRef &name);
 
 private:
     friend struct PyGlobalLlvmData;
@@ -87,6 +98,16 @@ private:
     llvm::StructType *ResizeVarObjectType(const llvm::StructType *type,
                                           unsigned dynamic_size) const;
 
+    // Create an llvm::Function with the given address, type, and name, or a
+    // NULL function pointer.
+    llvm::Constant *CreateFunctionOrNull(void *func_ptr,
+                                         const llvm::PointerType *func_ptr_type,
+                                         const llvm::StringRef &name) const;
+
+    // If LLVM knows a global value at address ptr, return it, otherwise return
+    // NULL.
+    llvm::GlobalValue *GetGlobalValueAtAddress(void *ptr) const;
+
     // Attempted shorthand for getting the context.
     llvm::LLVMContext &context() const;
 
@@ -100,5 +121,20 @@ private:
        python code after all modules and the thread state are gone. */
     bool python_shutting_down_;
 };
+
+// C++ templates require that we keep the templated part in the header.
+template<typename T> llvm::Constant *
+PyConstantMirror::GetGlobalForFunctionPointer(void *func_ptr,
+                                              const llvm::StringRef &name)
+{
+    // Reuse an existing LLVM global if we can.
+    if (llvm::GlobalValue *found = this->GetGlobalValueAtAddress(func_ptr))
+        return found;
+
+    // Otherwise, create a new LLVM global.
+    const llvm::PointerType *func_ptr_type =
+        PyTypeBuilder<T>::get(this->context());
+    return this->CreateFunctionOrNull(func_ptr, func_ptr_type, name);
+}
 
 #endif  // UTIL_CONSTANTMIRROR_H

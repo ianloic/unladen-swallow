@@ -115,6 +115,10 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   if (!preheader)
     return false;
   
+  // If LoopSimplify form is not available, stay out of trouble.
+  if (!L->hasDedicatedExits())
+    return false;
+
   // We can't remove loops that contain subloops.  If the subloops were dead,
   // they would already have been removed in earlier executions of this pass.
   if (L->begin() != L->end())
@@ -161,7 +165,7 @@ bool LoopDeletion::runOnLoop(Loop* L, LPPassManager& LPM) {
   // Tell ScalarEvolution that the loop is deleted. Do this before
   // deleting the loop so that ScalarEvolution can look at the loop
   // to determine what it needs to clean up.
-  SE.forgetLoopBackedgeTakenCount(L);
+  SE.forgetLoop(L);
 
   // Connect the preheader directly to the exit block.
   TerminatorInst* TI = preheader->getTerminator();

@@ -9,6 +9,7 @@
 #include "Util/EventTimer.h"
 #include "Util/PyTypeBuilder.h"
 #include "Util/RuntimeFeedback.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -36,10 +37,6 @@ public:
     typedef llvm::IRBuilder<true, llvm::TargetFolder> BuilderT;
     BuilderT& builder() { return builder_; }
     llvm::BasicBlock *unreachable_block() { return unreachable_block_; }
-
-    /// Returns true if this function actually makes use of the LOAD_GLOBAL
-    /// optimization; returns false otherwise.
-    bool UsesLoadGlobalOpt() const { return this->uses_load_global_opt_; }
 
     /// Sets the current instruction index.  This is only put into the
     /// frame object when tracing.
@@ -73,6 +70,10 @@ public:
     /// unconditional branch to there if the current block doesn't yet
     /// have a terminator instruction.
     void FallThroughTo(llvm::BasicBlock *next_block);
+
+    /// Register callbacks that might invalidate native code based on the
+    /// optimizations performed in the generated code.
+    int FinishFunction();
 
     /// The following methods operate like the opcodes with the same
     /// name.
@@ -538,6 +539,108 @@ private:
     void CALL_FUNCTION_safe(int num_args);
     void CALL_FUNCTION_fast(int num_args, const PyRuntimeFeedback *);
 
+    // LOAD/STORE_ATTR_safe always works, while LOAD/STORE_ATTR_fast is
+    // optimized to skip the descriptor/method lookup on the type if the object
+    // type matches.  It will return false if it fails.
+    void LOAD_ATTR_safe(int names_index);
+    bool LOAD_ATTR_fast(int names_index);
+    void STORE_ATTR_safe(int names_index);
+    bool STORE_ATTR_fast(int names_index);
+
+    // Specifies which kind of attribute access we are performing, either load
+    // or store.  Eventually we may support delete, but they are rare enough
+    // that it is unlikely to be worth it.
+    enum AttrAccessKind {
+        ATTR_ACCESS_LOAD,
+        ATTR_ACCESS_STORE
+    };
+
+    // This class encapsulates the common data and code for doing optimized
+    // attribute access.  This object helps perform checks, generate guard
+    // code, and register invalidation listeners when generating an optimized
+    // LOAD_ATTR or STORE_ATTR opcode.
+    class AttributeAccessor {
+    public:
+        // Construct an attribute accessor object.  "name" is a reference to
+        // the attribute to access borrowed from co_names, and access_kind
+        // determines whether we are generating a LOAD_ATTR or STORE_ATTR
+        // opcode.
+        AttributeAccessor(LlvmFunctionBuilder *fbuilder, PyObject *name,
+                          AttrAccessKind kind)
+            : fbuilder_(fbuilder),
+              access_kind_(kind),
+              guard_type_(0),
+              name_(name),
+              dictoffset_(0),
+              descr_(0),
+              guard_descr_type_(0),
+              is_data_descr_(false),
+              descr_get_(0),
+              descr_set_(0),
+              guard_type_v_(0),
+              name_v_(0),
+              dictoffset_v_(0),
+              descr_v_(0),
+              is_data_descr_v_(0) { }
+
+        // This helper method returns false if a LOAD_ATTR or STORE_ATTR opcode
+        // cannot be optimized.  If the opcode can be optimized, it fills in
+        // all of the fields of this object by reading the feedback from the
+        // code object.
+        bool CanOptimizeAttrAccess();
+
+        // This helper method emits the common type guards for an optimized
+        // LOAD_ATTR or STORE_ATTR.
+        void GuardAttributeAccess(llvm::Value *obj_v,
+                                  llvm::BasicBlock *do_access);
+
+        LlvmFunctionBuilder *fbuilder_;
+        AttrAccessKind access_kind_;
+
+        // This is the type we have chosen to guard on from the feedback.  All
+        // of the other attributes hold references borrowed from this type
+        // reference.  The validity of this type reference is ensured by
+        // listening for type modification and destruction.
+        PyTypeObject *guard_type_;
+
+        PyObject *name_;
+        long dictoffset_;
+
+        // This is the descriptor cached from the type object.  It may be NULL
+        // if the type has no attribute with the name we're looking up.
+        PyObject *descr_;
+        // This is the type of the descriptor, if it exists, at compile time.
+        // We guard that the type of the descriptor is the same at run time as
+        // it is at compile time.
+        PyTypeObject *guard_descr_type_;
+        // These fields mirror the descriptor accessor fields if they are
+        // available.
+        bool is_data_descr_;
+        descrgetfunc descr_get_;
+        descrsetfunc descr_set_;
+
+        // llvm::Value versions of the above data created with EmbedPointer or
+        // ConstantInt::get.
+        llvm::Value *guard_type_v_;
+        llvm::Value *name_v_;
+        llvm::Value *dictoffset_v_;
+        llvm::Value *descr_v_;
+        llvm::Value *is_data_descr_v_;
+
+    private:
+        // Cache all of the data required to do attribute access.  This fills
+        // in all of the non-llvm::Value fields of this object.
+        void CacheTypeLookup();
+
+        // Make LLVM Value versions of all the data we're caching in the IR.
+        // Note that we borrow references to the descriptor from the type
+        // object.  If the type object is modified to drop its references, this
+        // code will be invalidated.  Furthermore, if the type object itself is
+        // freed, this code will be invalidated, which will safely drop our
+        // references.
+        void MakeLlvmValues();
+    };
+
     // A safe version that always works, and a fast version that omits NULL
     // checks where we know the local cannot be NULL.
     void LOAD_FAST_safe(int index);
@@ -555,6 +658,10 @@ private:
     /// profiling function is installed. If a profiling function is not
     /// installed, execution will continue at fallthrough_block.
     void BailIfProfiling(llvm::BasicBlock *fallthrough_block);
+
+    /// Embed a pointer of some type directly into the LLVM IR.
+    template <typename T>
+    llvm::Value *EmbedPointer(void *ptr);
 
     /// Return the BasicBlock we should jump to in order to bail to the
     /// interpreter.
@@ -638,6 +745,8 @@ private:
     llvm::Value *unwind_reason_addr_;
     llvm::BasicBlock *do_return_block_;
     llvm::Value *retval_addr_;
+
+    llvm::SmallPtrSet<PyTypeObject*, 5> types_used_;
 };
 
 }  // namespace py

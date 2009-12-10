@@ -225,45 +225,36 @@ llvmfunction_str(PyLlvmFunctionObject *functionobj)
     std::string result;
     llvm::raw_string_ostream wrapper(result);
 
-    llvm::Function *const function = _PyLlvmFunction_GetFunction(functionobj);
-    if (function == NULL) {
-        PyErr_BadInternalCall();
-        return NULL;
-    }
-    else if (!function->empty()) {
-        function->print(wrapper);
-    }
-    else {
-        // This is an llvm::Function that we've cleared out. Compile the code
-        // object back to IR, then throw that IR away. We assume that people
-        // aren't printing out code objects in tight loops.
-        PyCodeObject *code = functionobj->code_object;
-        _LlvmFunction *cur_function = code->co_llvm_function;
-        int cur_opt_level = code->co_optimization;
-        // Null these out to trick _PyCode_ToOptimizedLlvmIr() into recompiling
-        // this function, then restore the original values when we're done.
-        // TODO(collinwinter): this approach is suboptimal.
-        code->co_llvm_function = NULL;
-        code->co_optimization = 0;
+    // We clear out all llvm::Functions after emitting machine code for
+    // them. Compile the code object back to IR, then throw that IR away. We
+    // assume that people aren't printing out code objects in tight loops.
+    PyCodeObject *code = functionobj->code_object;
+    _LlvmFunction *cur_function = code->co_llvm_function;
+    int cur_opt_level = code->co_optimization;
+    // Null these out to trick _PyCode_ToOptimizedLlvmIr() into recompiling
+    // this function, then restore the original values when we're done.
+    // TODO(collinwinter): this approach is suboptimal.
+    code->co_llvm_function = NULL;
+    code->co_optimization = 0;
 
-        int ret = _PyCode_ToOptimizedLlvmIr(code, cur_opt_level);
-        _LlvmFunction *new_function = code->co_llvm_function;
-        code->co_llvm_function = cur_function;
-        code->co_optimization = cur_opt_level;
-        // The only way we could have rejected compilation is if the code
-        // object changed. I don't know how this could happen, but Python has
-        // surprised me before.
-        if (ret == 1) {  // Compilation rejected.
-            PyErr_BadInternalCall();
-            return NULL;
-        }
-        else if (ret == -1)  // Error during compilation.
-            return NULL;
-
-        llvm::Function *func = (llvm::Function *)new_function->lf_function;
-        func->print(wrapper);
-        _LlvmFunction_Dealloc(new_function);
+    int ret = _PyCode_ToOptimizedLlvmIr(code, cur_opt_level);
+    _LlvmFunction *new_function = code->co_llvm_function;
+    code->co_llvm_function = cur_function;
+    code->co_optimization = cur_opt_level;
+    // The only way we could have rejected compilation is if the code
+    // object changed. I don't know how this could happen, but Python has
+    // surprised me before.
+    if (ret == 1) {  // Compilation rejected.
+      PyErr_BadInternalCall();
+      return NULL;
     }
+    else if (ret == -1)  // Error during compilation.
+      return NULL;
+
+    llvm::Function *func = (llvm::Function *)new_function->lf_function;
+    func->print(wrapper);
+    _LlvmFunction_Dealloc(new_function);
+
     wrapper.flush();
     return PyString_FromStringAndSize(result.data(), result.size());
 }

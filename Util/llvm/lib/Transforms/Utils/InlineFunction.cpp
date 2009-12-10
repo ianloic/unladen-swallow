@@ -386,7 +386,7 @@ bool llvm::InlineFunction(CallSite CS, CallGraph *CG, const TargetData *TD,
     // (which can happen, e.g., because an argument was constant), but we'll be
     // happy with whatever the cloner can do.
     CloneAndPruneFunctionInto(Caller, CalledFunc, ValueMap, Returns, ".i",
-                              &InlinedFunctionInfo, TD);
+                              &InlinedFunctionInfo, TD, TheCall);
 
     // Remember the first block that is newly cloned over.
     FirstNewBlock = LastBlock; ++FirstNewBlock;
@@ -619,7 +619,16 @@ bool llvm::InlineFunction(CallSite CS, CallGraph *CG, const TargetData *TD,
                "Ret value not consistent in function!");
         PHI->addIncoming(RI->getReturnValue(), RI->getParent());
       }
+    
+      // Now that we inserted the PHI, check to see if it has a single value
+      // (e.g. all the entries are the same or undef).  If so, remove the PHI so
+      // it doesn't block other optimizations.
+      if (Value *V = PHI->hasConstantValue()) {
+        PHI->replaceAllUsesWith(V);
+        PHI->eraseFromParent();
+      }
     }
+
 
     // Add a branch to the merge points and remove return instructions.
     for (unsigned i = 0, e = Returns.size(); i != e; ++i) {

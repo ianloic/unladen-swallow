@@ -136,8 +136,51 @@ bool Sema::CheckInitializerTypes(Expr *&Init, QualType &DeclType,
                                  SourceLocation InitLoc,
                                  DeclarationName InitEntity, bool DirectInit) {
   if (DeclType->isDependentType() ||
-      Init->isTypeDependent() || Init->isValueDependent())
+      Init->isTypeDependent() || Init->isValueDependent()) {
+    // We have either a dependent type or a type- or value-dependent
+    // initializer, so we don't perform any additional checking at
+    // this point.
+
+    // If the declaration is a non-dependent, incomplete array type
+    // that has an initializer, then its type will be completed once
+    // the initializer is instantiated.
+    if (!DeclType->isDependentType()) {
+      if (const IncompleteArrayType *ArrayT
+                           = Context.getAsIncompleteArrayType(DeclType)) {
+        if (InitListExpr *ILE = dyn_cast<InitListExpr>(Init)) {
+          if (!ILE->isTypeDependent()) {
+            // Compute the constant array type from the length of the 
+            // initializer list. 
+            // FIXME: This will be wrong if there are designated 
+            // initializations. Good thing they don't exist in C++!
+            llvm::APInt NumElements(Context.getTypeSize(Context.getSizeType()),
+                                    ILE->getNumInits());
+            llvm::APInt Zero(Context.getTypeSize(Context.getSizeType()), 0);
+            if (NumElements == Zero) {
+              // Sizing an array implicitly to zero is not allowed by ISO C,
+              // but is supported by GNU.
+              Diag(ILE->getLocStart(), diag::ext_typecheck_zero_array_size);
+            }
+            
+            DeclType = Context.getConstantArrayType(ArrayT->getElementType(),
+                                                    NumElements,
+                                                    ArrayT->getSizeModifier(),
+                                           ArrayT->getIndexTypeCVRQualifiers());
+            return false;
+          }
+        }
+        
+        // Make the array type-dependent by making it dependently-sized.
+        DeclType = Context.getDependentSizedArrayType(ArrayT->getElementType(),
+                                                      /*NumElts=*/0,
+                                                     ArrayT->getSizeModifier(),
+                                           ArrayT->getIndexTypeCVRQualifiers(),
+                                                      SourceRange());
+      }
+    }
+
     return false;
+  }
 
   // C++ [dcl.init.ref]p1:
   //   A variable declared to be a T& or T&&, that is "reference to type T"
@@ -174,7 +217,8 @@ bool Sema::CheckInitializerTypes(Expr *&Init, QualType &DeclType,
       //      copy-initialization where the cv-unqualified version of the
       //      source type is the same class as, or a derived class of, the
       //      class of the destination, constructors are considered.
-      if ((DeclTypeC.getUnqualifiedType() == InitTypeC.getUnqualifiedType()) ||
+      if ((DeclTypeC.getLocalUnqualifiedType() 
+                                     == InitTypeC.getLocalUnqualifiedType()) ||
           IsDerivedFrom(InitTypeC, DeclTypeC)) {
         const CXXRecordDecl *RD =
           cast<CXXRecordDecl>(DeclType->getAs<RecordType>()->getDecl());

@@ -12,24 +12,26 @@
 #ifdef WITH_LLVM
 #include "Python/global_llvm_data_fwd.h"
 
-#include "Util/ConstantMirror.h"
-
 #include "llvm/LLVMContext.h"
 #include "llvm/PassManager.h"
-#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/Support/ValueHandle.h"
 
 #include <string>
 
 namespace llvm {
 class DIFactory;
 class ExecutionEngine;
+class GlobalValue;
 class GlobalVariable;
 class Module;
+class ModuleProvider;
 class Value;
-class WeakVH;
-struct ExistingModuleProvider;
 }
+
+class PyConstantMirror;
 
 struct PyGlobalLlvmData {
 public:
@@ -54,7 +56,7 @@ public:
     llvm::LLVMContext &context() const { return llvm::getGlobalContext(); }
 
     llvm::Module *module() { return this->module_; }
-    llvm::ExistingModuleProvider *module_provider() {
+    llvm::ModuleProvider *module_provider() {
         return this->module_provider_; }
 
     PyConstantMirror &constant_mirror() { return *this->constant_mirror_; }
@@ -90,9 +92,9 @@ private:
     // We have a single global module that holds all compiled code.
     // Any cached global object that function definitions use will be
     // stored in here.  These are owned by engine_.
-    llvm::Module *const module_;
-    llvm::ExistingModuleProvider *const module_provider_;
-    const llvm::OwningPtr<llvm::DIFactory> debug_info_;
+    llvm::ModuleProvider *module_provider_;
+    llvm::Module *module_;
+    llvm::OwningPtr<llvm::DIFactory> debug_info_;
 
     llvm::ExecutionEngine *engine_;  // Not modified after the constructor.
 
@@ -101,6 +103,10 @@ private:
 
     // Cached data in module_.  The WeakVH should only hold GlobalVariables.
     llvm::StringMap<llvm::WeakVH> constant_strings_;
+
+    // All the GlobalValues that are backed by the stdlib bitcode file.  We're
+    // not allowed to delete these.
+    llvm::DenseSet<llvm::AssertingVH<const llvm::GlobalValue> > bitcode_gvs_;
 
     llvm::OwningPtr<PyConstantMirror> constant_mirror_;
 

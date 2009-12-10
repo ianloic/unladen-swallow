@@ -79,7 +79,7 @@ PyAPI_FUNC(PyObject *) PyCFunction_NewEx(PyMethodDef *, PyObject *,
    METH_ARG_RANGE supersedes METHO_O and METH_NOARGS. */
 #define METH_O         0x0010         /* Function arity = 1 */
 #define METH_ARG_RANGE 0x0020         /* Arity in a known interval */
-#define METH_NOARGS    METH_ARG_RANGE /* Arity = 0; backwards compatibility. */
+#define METH_NOARGS    0x0040         /* Arity = 0; backwards compatibility. */
 
 /* METH_CLASS and METH_STATIC are a little different; these control
    the construction of methods for a class.  These cannot be used for

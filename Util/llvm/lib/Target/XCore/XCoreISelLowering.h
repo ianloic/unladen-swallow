@@ -120,6 +120,7 @@ namespace llvm {
     SDValue LowerSTORE(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG);
+    SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG);
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG);
     SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG);
     SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG);
@@ -159,6 +160,12 @@ namespace llvm {
                   CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                   DebugLoc dl, SelectionDAG &DAG);
+
+    virtual bool
+      CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
+                     const SmallVectorImpl<EVT> &OutTys,
+                     const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
+                     SelectionDAG &DAG);
   };
 }
 

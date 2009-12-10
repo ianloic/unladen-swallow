@@ -1,4 +1,4 @@
-// RUN: clang-cc -triple x86_64-apple-darwin10 -analyze -warn-objc-unused-ivars %s -verify
+// RUN: clang-cc -fblocks -analyze -warn-objc-unused-ivars %s -verify
 
 //===--- BEGIN: Delta-debugging reduced headers. --------------------------===//
 
@@ -43,3 +43,25 @@
   b();
 }
 @end
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/6260004> Detect that ivar is in use, if used in category 
+//  in the same file as the implementation
+//===----------------------------------------------------------------------===//
+
+@protocol Protocol6260004
+- (id) getId;
+@end
+
+@interface RDar6260004 {
+@private
+  id x; // no-warning
+}
+@end
+@implementation RDar6260004 @end
+@implementation RDar6260004 (Protocol6260004)
+- (id) getId {
+  return x;
+}
+@end
+

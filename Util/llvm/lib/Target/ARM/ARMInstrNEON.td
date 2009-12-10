@@ -102,6 +102,19 @@ def addrmode_neonldstm : Operand<i32>,
 }
 */
 
+def h8imm  : Operand<i8> {
+  let PrintMethod = "printHex8ImmOperand";
+}
+def h16imm : Operand<i16> {
+  let PrintMethod = "printHex16ImmOperand";
+}
+def h32imm : Operand<i32> {
+  let PrintMethod = "printHex32ImmOperand";
+}
+def h64imm : Operand<i64> {
+  let PrintMethod = "printHex64ImmOperand";
+}
+
 //===----------------------------------------------------------------------===//
 // NEON load / store instructions
 //===----------------------------------------------------------------------===//
@@ -133,7 +146,7 @@ def VLDMS : NI<(outs),
 // Use vldmia to load a Q register as a D register pair.
 def VLDRQ : NI4<(outs QPR:$dst), (ins addrmode4:$addr),
                IIC_fpLoadm,
-               "vldmia $addr, ${dst:dregpair}",
+               "vldmia\t$addr, ${dst:dregpair}",
                [(set QPR:$dst, (v2f64 (load addrmode4:$addr)))]> {
   let Inst{27-25} = 0b110;
   let Inst{24}    = 0; // P bit
@@ -145,7 +158,7 @@ def VLDRQ : NI4<(outs QPR:$dst), (ins addrmode4:$addr),
 // Use vstmia to store a Q register as a D register pair.
 def VSTRQ : NI4<(outs), (ins QPR:$src, addrmode4:$addr),
                IIC_fpStorem,
-               "vstmia $addr, ${src:dregpair}",
+               "vstmia\t$addr, ${src:dregpair}",
                [(store (v2f64 QPR:$src), addrmode4:$addr)]> {
   let Inst{27-25} = 0b110;
   let Inst{24}    = 0; // P bit
@@ -267,66 +280,107 @@ def  VLD4q32b : VLD4WB<0b1000, "vld4.32">;
 
 //   VLD2LN   : Vector Load (single 2-element structure to one lane)
 class VLD2LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b10,op11_8,0b0000, (outs DPR:$dst1, DPR:$dst2),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, nohash_imm:$lane),
-          IIC_VLD2,
-          !strconcat(OpcodeStr, "\t\\{$dst1[$lane],$dst2[$lane]\\}, $addr"),
-          "$src1 = $dst1, $src2 = $dst2", []>;
+  : NLdStLN<1,0b10,op11_8, (outs DPR:$dst1, DPR:$dst2),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, nohash_imm:$lane),
+            IIC_VLD2,
+            !strconcat(OpcodeStr, "\t\\{$dst1[$lane],$dst2[$lane]\\}, $addr"),
+            "$src1 = $dst1, $src2 = $dst2", []>;
 
+// vld2 to single-spaced registers.
 def VLD2LNd8  : VLD2LN<0b0001, "vld2.8">;
-def VLD2LNd16 : VLD2LN<0b0101, "vld2.16">;
-def VLD2LNd32 : VLD2LN<0b1001, "vld2.32">;
+def VLD2LNd16 : VLD2LN<0b0101, "vld2.16"> {
+  let Inst{5} = 0;
+}
+def VLD2LNd32 : VLD2LN<0b1001, "vld2.32"> {
+  let Inst{6} = 0;
+}
 
 // vld2 to double-spaced even registers.
-def VLD2LNq16a: VLD2LN<0b0101, "vld2.16">;
-def VLD2LNq32a: VLD2LN<0b1001, "vld2.32">;
+def VLD2LNq16a: VLD2LN<0b0101, "vld2.16"> {
+  let Inst{5} = 1;
+}
+def VLD2LNq32a: VLD2LN<0b1001, "vld2.32"> {
+  let Inst{6} = 1;
+}
 
 // vld2 to double-spaced odd registers.
-def VLD2LNq16b: VLD2LN<0b0101, "vld2.16">;
-def VLD2LNq32b: VLD2LN<0b1001, "vld2.32">;
+def VLD2LNq16b: VLD2LN<0b0101, "vld2.16"> {
+  let Inst{5} = 1;
+}
+def VLD2LNq32b: VLD2LN<0b1001, "vld2.32"> {
+  let Inst{6} = 1;
+}
 
 //   VLD3LN   : Vector Load (single 3-element structure to one lane)
 class VLD3LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b10,op11_8,0b0000, (outs DPR:$dst1, DPR:$dst2, DPR:$dst3),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3,
-          nohash_imm:$lane), IIC_VLD3,
-          !strconcat(OpcodeStr,
-          "\t\\{$dst1[$lane],$dst2[$lane],$dst3[$lane]\\}, $addr"),
-          "$src1 = $dst1, $src2 = $dst2, $src3 = $dst3", []>;
+  : NLdStLN<1,0b10,op11_8, (outs DPR:$dst1, DPR:$dst2, DPR:$dst3),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3,
+            nohash_imm:$lane), IIC_VLD3,
+            !strconcat(OpcodeStr,
+            "\t\\{$dst1[$lane],$dst2[$lane],$dst3[$lane]\\}, $addr"),
+            "$src1 = $dst1, $src2 = $dst2, $src3 = $dst3", []>;
 
-def VLD3LNd8  : VLD3LN<0b0010, "vld3.8">;
-def VLD3LNd16 : VLD3LN<0b0110, "vld3.16">;
-def VLD3LNd32 : VLD3LN<0b1010, "vld3.32">;
+// vld3 to single-spaced registers.
+def VLD3LNd8  : VLD3LN<0b0010, "vld3.8"> {
+  let Inst{4} = 0;
+}
+def VLD3LNd16 : VLD3LN<0b0110, "vld3.16"> {
+  let Inst{5-4} = 0b00;
+}
+def VLD3LNd32 : VLD3LN<0b1010, "vld3.32"> {
+  let Inst{6-4} = 0b000;
+}
 
 // vld3 to double-spaced even registers.
-def VLD3LNq16a: VLD3LN<0b0110, "vld3.16">;
-def VLD3LNq32a: VLD3LN<0b1010, "vld3.32">;
+def VLD3LNq16a: VLD3LN<0b0110, "vld3.16"> {
+  let Inst{5-4} = 0b10;
+}
+def VLD3LNq32a: VLD3LN<0b1010, "vld3.32"> {
+  let Inst{6-4} = 0b100;
+}
 
 // vld3 to double-spaced odd registers.
-def VLD3LNq16b: VLD3LN<0b0110, "vld3.16">;
-def VLD3LNq32b: VLD3LN<0b1010, "vld3.32">;
+def VLD3LNq16b: VLD3LN<0b0110, "vld3.16"> {
+  let Inst{5-4} = 0b10;
+}
+def VLD3LNq32b: VLD3LN<0b1010, "vld3.32"> {
+  let Inst{6-4} = 0b100;
+}
 
 //   VLD4LN   : Vector Load (single 4-element structure to one lane)
 class VLD4LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b10,op11_8,0b0000,
-          (outs DPR:$dst1, DPR:$dst2, DPR:$dst3, DPR:$dst4),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3, DPR:$src4,
-          nohash_imm:$lane), IIC_VLD4,
-          !strconcat(OpcodeStr,
-          "\t\\{$dst1[$lane],$dst2[$lane],$dst3[$lane],$dst4[$lane]\\}, $addr"),
-          "$src1 = $dst1, $src2 = $dst2, $src3 = $dst3, $src4 = $dst4", []>;
+  : NLdStLN<1,0b10,op11_8,
+            (outs DPR:$dst1, DPR:$dst2, DPR:$dst3, DPR:$dst4),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3, DPR:$src4,
+            nohash_imm:$lane), IIC_VLD4,
+            !strconcat(OpcodeStr,
+            "\t\\{$dst1[$lane],$dst2[$lane],$dst3[$lane],$dst4[$lane]\\}, $addr"),
+            "$src1 = $dst1, $src2 = $dst2, $src3 = $dst3, $src4 = $dst4", []>;
 
+// vld4 to single-spaced registers.
 def VLD4LNd8  : VLD4LN<0b0011, "vld4.8">;
-def VLD4LNd16 : VLD4LN<0b0111, "vld4.16">;
-def VLD4LNd32 : VLD4LN<0b1011, "vld4.32">;
+def VLD4LNd16 : VLD4LN<0b0111, "vld4.16"> {
+  let Inst{5} = 0;
+}
+def VLD4LNd32 : VLD4LN<0b1011, "vld4.32"> {
+  let Inst{6} = 0;
+}
 
 // vld4 to double-spaced even registers.
-def VLD4LNq16a: VLD4LN<0b0111, "vld4.16">;
-def VLD4LNq32a: VLD4LN<0b1011, "vld4.32">;
+def VLD4LNq16a: VLD4LN<0b0111, "vld4.16"> {
+  let Inst{5} = 1;
+}
+def VLD4LNq32a: VLD4LN<0b1011, "vld4.32"> {
+  let Inst{6} = 1;
+}
 
 // vld4 to double-spaced odd registers.
-def VLD4LNq16b: VLD4LN<0b0111, "vld4.16">;
-def VLD4LNq32b: VLD4LN<0b1011, "vld4.32">;
+def VLD4LNq16b: VLD4LN<0b0111, "vld4.16"> {
+  let Inst{5} = 1;
+}
+def VLD4LNq32b: VLD4LN<0b1011, "vld4.32"> {
+  let Inst{6} = 1;
+}
 
 //   VLD1DUP  : Vector Load (single element to all lanes)
 //   VLD2DUP  : Vector Load (single 2-element structure to all lanes)
@@ -450,64 +504,105 @@ def  VST4q32b : VST4WB<0b1000, "vst4.32">;
 
 //   VST2LN   : Vector Store (single 2-element structure from one lane)
 class VST2LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b00,op11_8,0b0000, (outs),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, nohash_imm:$lane),
-          IIC_VST,
-          !strconcat(OpcodeStr, "\t\\{$src1[$lane],$src2[$lane]\\}, $addr"),
-          "", []>;
+  : NLdStLN<1,0b00,op11_8, (outs),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, nohash_imm:$lane),
+            IIC_VST,
+            !strconcat(OpcodeStr, "\t\\{$src1[$lane],$src2[$lane]\\}, $addr"),
+            "", []>;
 
+// vst2 to single-spaced registers.
 def VST2LNd8  : VST2LN<0b0001, "vst2.8">;
-def VST2LNd16 : VST2LN<0b0101, "vst2.16">;
-def VST2LNd32 : VST2LN<0b1001, "vst2.32">;
+def VST2LNd16 : VST2LN<0b0101, "vst2.16"> {
+  let Inst{5} = 0;
+}
+def VST2LNd32 : VST2LN<0b1001, "vst2.32"> {
+  let Inst{6} = 0;
+}
 
 // vst2 to double-spaced even registers.
-def VST2LNq16a: VST2LN<0b0101, "vst2.16">;
-def VST2LNq32a: VST2LN<0b1001, "vst2.32">;
+def VST2LNq16a: VST2LN<0b0101, "vst2.16"> {
+  let Inst{5} = 1;
+}
+def VST2LNq32a: VST2LN<0b1001, "vst2.32"> {
+  let Inst{6} = 1;
+}
 
 // vst2 to double-spaced odd registers.
-def VST2LNq16b: VST2LN<0b0101, "vst2.16">;
-def VST2LNq32b: VST2LN<0b1001, "vst2.32">;
+def VST2LNq16b: VST2LN<0b0101, "vst2.16"> {
+  let Inst{5} = 1;
+}
+def VST2LNq32b: VST2LN<0b1001, "vst2.32"> {
+  let Inst{6} = 1;
+}
 
 //   VST3LN   : Vector Store (single 3-element structure from one lane)
 class VST3LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b00,op11_8,0b0000, (outs),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3,
-           nohash_imm:$lane), IIC_VST,
-          !strconcat(OpcodeStr,
-          "\t\\{$src1[$lane],$src2[$lane],$src3[$lane]\\}, $addr"), "", []>;
+  : NLdStLN<1,0b00,op11_8, (outs),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3,
+            nohash_imm:$lane), IIC_VST,
+            !strconcat(OpcodeStr,
+            "\t\\{$src1[$lane],$src2[$lane],$src3[$lane]\\}, $addr"), "", []>;
 
-def VST3LNd8  : VST3LN<0b0010, "vst3.8">;
-def VST3LNd16 : VST3LN<0b0110, "vst3.16">;
-def VST3LNd32 : VST3LN<0b1010, "vst3.32">;
+// vst3 to single-spaced registers.
+def VST3LNd8  : VST3LN<0b0010, "vst3.8"> {
+  let Inst{4} = 0;
+}
+def VST3LNd16 : VST3LN<0b0110, "vst3.16"> {
+  let Inst{5-4} = 0b00;
+}
+def VST3LNd32 : VST3LN<0b1010, "vst3.32"> {
+  let Inst{6-4} = 0b000;
+}
 
 // vst3 to double-spaced even registers.
-def VST3LNq16a: VST3LN<0b0110, "vst3.16">;
-def VST3LNq32a: VST3LN<0b1010, "vst3.32">;
+def VST3LNq16a: VST3LN<0b0110, "vst3.16"> {
+  let Inst{5-4} = 0b10;
+}
+def VST3LNq32a: VST3LN<0b1010, "vst3.32"> {
+  let Inst{6-4} = 0b100;
+}
 
 // vst3 to double-spaced odd registers.
-def VST3LNq16b: VST3LN<0b0110, "vst3.16">;
-def VST3LNq32b: VST3LN<0b1010, "vst3.32">;
+def VST3LNq16b: VST3LN<0b0110, "vst3.16"> {
+  let Inst{5-4} = 0b10;
+}
+def VST3LNq32b: VST3LN<0b1010, "vst3.32"> {
+  let Inst{6-4} = 0b100;
+}
 
 //   VST4LN   : Vector Store (single 4-element structure from one lane)
 class VST4LN<bits<4> op11_8, string OpcodeStr>
-  : NLdSt<1,0b00,op11_8,0b0000, (outs),
-          (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3, DPR:$src4,
-           nohash_imm:$lane), IIC_VST,
-          !strconcat(OpcodeStr,
-          "\t\\{$src1[$lane],$src2[$lane],$src3[$lane],$src4[$lane]\\}, $addr"),
-          "", []>;
+  : NLdStLN<1,0b00,op11_8, (outs),
+            (ins addrmode6:$addr, DPR:$src1, DPR:$src2, DPR:$src3, DPR:$src4,
+            nohash_imm:$lane), IIC_VST,
+            !strconcat(OpcodeStr,
+            "\t\\{$src1[$lane],$src2[$lane],$src3[$lane],$src4[$lane]\\}, $addr"),
+            "", []>;
 
+// vst4 to single-spaced registers.
 def VST4LNd8  : VST4LN<0b0011, "vst4.8">;
-def VST4LNd16 : VST4LN<0b0111, "vst4.16">;
-def VST4LNd32 : VST4LN<0b1011, "vst4.32">;
+def VST4LNd16 : VST4LN<0b0111, "vst4.16"> {
+  let Inst{5} = 0;
+}
+def VST4LNd32 : VST4LN<0b1011, "vst4.32"> {
+  let Inst{6} = 0;
+}
 
 // vst4 to double-spaced even registers.
-def VST4LNq16a: VST4LN<0b0111, "vst4.16">;
-def VST4LNq32a: VST4LN<0b1011, "vst4.32">;
+def VST4LNq16a: VST4LN<0b0111, "vst4.16"> {
+  let Inst{5} = 1;
+}
+def VST4LNq32a: VST4LN<0b1011, "vst4.32"> {
+  let Inst{6} = 1;
+}
 
 // vst4 to double-spaced odd registers.
-def VST4LNq16b: VST4LN<0b0111, "vst4.16">;
-def VST4LNq32b: VST4LN<0b1011, "vst4.32">;
+def VST4LNq16b: VST4LN<0b0111, "vst4.16"> {
+  let Inst{5} = 1;
+}
+def VST4LNq32b: VST4LN<0b1011, "vst4.32"> {
+  let Inst{6} = 1;
+}
 
 } // mayStore = 1, hasExtraSrcRegAllocReq = 1
 
@@ -2282,7 +2377,7 @@ def  VCNTq    : N2VQInt<0b11, 0b11, 0b00, 0b00, 0b01010, 0,
 
 //   VMOV     : Vector Move (Register)
 
-def  VMOVD    : N3V<0, 0, 0b10, 0b0001, 0, 1, (outs DPR:$dst), (ins DPR:$src),
+def  VMOVDneon: N3V<0, 0, 0b10, 0b0001, 0, 1, (outs DPR:$dst), (ins DPR:$src),
                     IIC_VMOVD, "vmov\t$dst, $src", "", []>;
 def  VMOVQ    : N3V<0, 0, 0b10, 0b0001, 1, 1, (outs QPR:$dst), (ins QPR:$src),
                     IIC_VMOVD, "vmov\t$dst, $src", "", []>;
@@ -2325,38 +2420,38 @@ def vmovImm64 : PatLeaf<(build_vector), [{
 // be encoded based on the immed values.
 
 def VMOVv8i8  : N1ModImm<1, 0b000, 0b1110, 0, 0, 0, 1, (outs DPR:$dst),
-                         (ins i8imm:$SIMM), IIC_VMOVImm,
+                         (ins h8imm:$SIMM), IIC_VMOVImm,
                          "vmov.i8\t$dst, $SIMM", "",
                          [(set DPR:$dst, (v8i8 vmovImm8:$SIMM))]>;
 def VMOVv16i8 : N1ModImm<1, 0b000, 0b1110, 0, 1, 0, 1, (outs QPR:$dst),
-                         (ins i8imm:$SIMM), IIC_VMOVImm,
+                         (ins h8imm:$SIMM), IIC_VMOVImm,
                          "vmov.i8\t$dst, $SIMM", "",
                          [(set QPR:$dst, (v16i8 vmovImm8:$SIMM))]>;
 
 def VMOVv4i16 : N1ModImm<1, 0b000, 0b1000, 0, 0, 0, 1, (outs DPR:$dst),
-                         (ins i16imm:$SIMM), IIC_VMOVImm,
+                         (ins h16imm:$SIMM), IIC_VMOVImm,
                          "vmov.i16\t$dst, $SIMM", "",
                          [(set DPR:$dst, (v4i16 vmovImm16:$SIMM))]>;
 def VMOVv8i16 : N1ModImm<1, 0b000, 0b1000, 0, 1, 0, 1, (outs QPR:$dst),
-                         (ins i16imm:$SIMM), IIC_VMOVImm,
+                         (ins h16imm:$SIMM), IIC_VMOVImm,
                          "vmov.i16\t$dst, $SIMM", "",
                          [(set QPR:$dst, (v8i16 vmovImm16:$SIMM))]>;
 
 def VMOVv2i32 : N1ModImm<1, 0b000, 0b0000, 0, 0, 0, 1, (outs DPR:$dst),
-                         (ins i32imm:$SIMM), IIC_VMOVImm,
+                         (ins h32imm:$SIMM), IIC_VMOVImm,
                          "vmov.i32\t$dst, $SIMM", "",
                          [(set DPR:$dst, (v2i32 vmovImm32:$SIMM))]>;
 def VMOVv4i32 : N1ModImm<1, 0b000, 0b0000, 0, 1, 0, 1, (outs QPR:$dst),
-                         (ins i32imm:$SIMM), IIC_VMOVImm,
+                         (ins h32imm:$SIMM), IIC_VMOVImm,
                          "vmov.i32\t$dst, $SIMM", "",
                          [(set QPR:$dst, (v4i32 vmovImm32:$SIMM))]>;
 
 def VMOVv1i64 : N1ModImm<1, 0b000, 0b1110, 0, 0, 1, 1, (outs DPR:$dst),
-                         (ins i64imm:$SIMM), IIC_VMOVImm,
+                         (ins h64imm:$SIMM), IIC_VMOVImm,
                          "vmov.i64\t$dst, $SIMM", "",
                          [(set DPR:$dst, (v1i64 vmovImm64:$SIMM))]>;
 def VMOVv2i64 : N1ModImm<1, 0b000, 0b1110, 0, 1, 1, 1, (outs QPR:$dst),
-                         (ins i64imm:$SIMM), IIC_VMOVImm,
+                         (ins h64imm:$SIMM), IIC_VMOVImm,
                          "vmov.i64\t$dst, $SIMM", "",
                          [(set QPR:$dst, (v2i64 vmovImm64:$SIMM))]>;
 
@@ -2409,10 +2504,10 @@ def : Pat<(extractelt (v4i32 QPR:$src), imm:$lane),
                              (DSubReg_i32_reg imm:$lane))),
                      (SubReg_i32_lane imm:$lane))>;
 def : Pat<(extractelt (v2f32 DPR:$src1), imm:$src2),
-          (EXTRACT_SUBREG (COPY_TO_REGCLASS DPR:$src1, DPR_VFP2),
+          (EXTRACT_SUBREG (v2f32 (COPY_TO_REGCLASS (v2f32 DPR:$src1), DPR_VFP2)),
                           (SSubReg_f32_reg imm:$src2))>;
 def : Pat<(extractelt (v4f32 QPR:$src1), imm:$src2),
-          (EXTRACT_SUBREG (COPY_TO_REGCLASS QPR:$src1, QPR_VFP2),
+          (EXTRACT_SUBREG (v4f32 (COPY_TO_REGCLASS (v4f32 QPR:$src1), QPR_VFP2)),
                           (SSubReg_f32_reg imm:$src2))>;
 //def : Pat<(extractelt (v2i64 QPR:$src1), imm:$src2),
 //          (EXTRACT_SUBREG QPR:$src1, (DSubReg_f64_reg imm:$src2))>;
@@ -2459,11 +2554,11 @@ def : Pat<(insertelt (v4i32 QPR:$src1), GPR:$src2, imm:$lane),
                   (DSubReg_i32_reg imm:$lane)))>;
 
 def : Pat<(v2f32 (insertelt DPR:$src1, SPR:$src2, imm:$src3)),
-          (INSERT_SUBREG (COPY_TO_REGCLASS DPR:$src1, DPR_VFP2),
-                         SPR:$src2, (SSubReg_f32_reg imm:$src3))>;
+          (INSERT_SUBREG (v2f32 (COPY_TO_REGCLASS DPR:$src1, DPR_VFP2)),
+                                SPR:$src2, (SSubReg_f32_reg imm:$src3))>;
 def : Pat<(v4f32 (insertelt QPR:$src1, SPR:$src2, imm:$src3)),
-          (INSERT_SUBREG (COPY_TO_REGCLASS QPR:$src1, QPR_VFP2),
-                         SPR:$src2, (SSubReg_f32_reg imm:$src3))>;
+          (INSERT_SUBREG (v4f32 (COPY_TO_REGCLASS QPR:$src1, QPR_VFP2)),
+                                SPR:$src2, (SSubReg_f32_reg imm:$src3))>;
 
 //def : Pat<(v2i64 (insertelt QPR:$src1, DPR:$src2, imm:$src3)),
 //          (INSERT_SUBREG QPR:$src1, DPR:$src2, (DSubReg_f64_reg imm:$src3))>;
@@ -2841,13 +2936,16 @@ def VMULfd_sfp : N3VDs<1, 0, 0b00, 0b1101, 1, "vmul.f32", v2f32, v2f32, fmul,1>;
 def : N3VDsPat<fmul, VMULfd_sfp>;
 
 // Vector Multiply-Accumulate/Subtract used for single-precision FP
-let neverHasSideEffects = 1 in
-def VMLAfd_sfp : N3VDMulOps<0, 0, 0b00, 0b1101, 1, IIC_VMACD, "vmla.f32", v2f32,fmul,fadd>;
-def : N3VDMulOpsPat<fmul, fadd, VMLAfd_sfp>;
+// vml[as].f32 can cause 4-8 cycle stalls in following ASIMD instructions, so
+// we want to avoid them for now. e.g., alternating vmla/vadd instructions.
 
-let neverHasSideEffects = 1 in
-def VMLSfd_sfp : N3VDMulOps<0, 0, 0b10, 0b1101, 1, IIC_VMACD, "vmls.f32", v2f32,fmul,fsub>;
-def : N3VDMulOpsPat<fmul, fsub, VMLSfd_sfp>;
+//let neverHasSideEffects = 1 in
+//def VMLAfd_sfp : N3VDMulOps<0, 0, 0b00, 0b1101, 1, IIC_VMACD, "vmla.f32", v2f32,fmul,fadd>;
+//def : N3VDMulOpsPat<fmul, fadd, VMLAfd_sfp>;
+
+//let neverHasSideEffects = 1 in
+//def VMLSfd_sfp : N3VDMulOps<0, 0, 0b10, 0b1101, 1, IIC_VMACD, "vmls.f32", v2f32,fmul,fsub>;
+//def : N3VDMulOpsPat<fmul, fsub, VMLSfd_sfp>;
 
 // Vector Absolute used for single-precision FP
 let neverHasSideEffects = 1 in

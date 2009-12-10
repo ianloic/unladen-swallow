@@ -161,7 +161,7 @@ void PCHDeclWriter::VisitFunctionDecl(FunctionDecl *D) {
     Writer.AddStmt(D->getBody());
   Writer.AddDeclRef(D->getPreviousDeclaration(), Record);
   Record.push_back(D->getStorageClass()); // FIXME: stable encoding
-  Record.push_back(D->isInline());
+  Record.push_back(D->isInlineSpecified());
   Record.push_back(D->isVirtualAsWritten());
   Record.push_back(D->isPure());
   Record.push_back(D->hasInheritedPrototype());
@@ -260,7 +260,9 @@ void PCHDeclWriter::VisitObjCClassDecl(ObjCClassDecl *D) {
   VisitDecl(D);
   Record.push_back(D->size());
   for (ObjCClassDecl::iterator I = D->begin(), IEnd = D->end(); I != IEnd; ++I)
-    Writer.AddDeclRef(*I, Record);
+    Writer.AddDeclRef(I->getInterface(), Record);
+  for (ObjCClassDecl::iterator I = D->begin(), IEnd = D->end(); I != IEnd; ++I)
+    Writer.AddSourceLocation(I->getLocation(), Record);
   Code = pch::DECL_OBJC_CLASS;
 }
 

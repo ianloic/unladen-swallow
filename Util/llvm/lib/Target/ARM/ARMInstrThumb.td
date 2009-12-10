@@ -66,6 +66,11 @@ def thumb_immshifted_shamt : SDNodeXForm<imm, [{
   return CurDAG->getTargetConstant(V, MVT::i32);
 }]>;
 
+// Scaled 4 immediate.
+def t_imm_s4 : Operand<i32> {
+  let PrintMethod = "printThumbS4ImmOperand";
+}
+
 // Define Thumb specific addressing modes.
 
 // t_addrmode_rr := reg + reg
@@ -134,20 +139,20 @@ def tPICADD : TIt<(outs GPR:$dst), (ins GPR:$lhs, pclabel:$cp), IIC_iALUr,
                  [(set GPR:$dst, (ARMpic_add GPR:$lhs, imm:$cp))]>;
 
 // PC relative add.
-def tADDrPCi : T1I<(outs tGPR:$dst), (ins i32imm:$rhs), IIC_iALUi,
-                  "add\t$dst, pc, $rhs * 4", []>;
+def tADDrPCi : T1I<(outs tGPR:$dst), (ins t_imm_s4:$rhs), IIC_iALUi,
+                  "add\t$dst, pc, $rhs", []>;
 
 // ADD rd, sp, #imm8
-def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, i32imm:$rhs), IIC_iALUi,
-                  "add\t$dst, $sp, $rhs * 4", []>;
+def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, t_imm_s4:$rhs), IIC_iALUi,
+                  "add\t$dst, $sp, $rhs", []>;
 
 // ADD sp, sp, #imm7
-def tADDspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, i32imm:$rhs), IIC_iALUi,
-                  "add\t$dst, $rhs * 4", []>;
+def tADDspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
+                  "add\t$dst, $rhs", []>;
 
 // SUB sp, sp, #imm7
-def tSUBspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, i32imm:$rhs), IIC_iALUi,
-                  "sub\t$dst, $rhs * 4", []>;
+def tSUBspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
+                  "sub\t$dst, $rhs", []>;
 
 // ADD rm, sp
 def tADDrSP : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
@@ -158,9 +163,9 @@ def tADDspr : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
                   "add\t$dst, $rhs", []>;
 
 // Pseudo instruction that will expand into a tSUBspi + a copy.
-let usesCustomDAGSchedInserter = 1 in { // Expanded by the scheduler.
-def tSUBspi_ : PseudoInst<(outs GPR:$dst), (ins GPR:$lhs, i32imm:$rhs),
-               NoItinerary, "@ sub\t$dst, $rhs * 4", []>;
+let usesCustomInserter = 1 in { // Expanded after instruction selection.
+def tSUBspi_ : PseudoInst<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs),
+               NoItinerary, "@ sub\t$dst, $rhs", []>;
 
 def tADDspr_ : PseudoInst<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs),
                NoItinerary, "@ add\t$dst, $rhs", []>;
@@ -168,7 +173,7 @@ def tADDspr_ : PseudoInst<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs),
 let Defs = [CPSR] in
 def tANDsp : PseudoInst<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs),
              NoItinerary, "@ and\t$dst, $rhs", []>;
-} // usesCustomDAGSchedInserter
+} // usesCustomInserter
 
 //===----------------------------------------------------------------------===//
 //  Control Flow Instructions.
@@ -178,6 +183,12 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
   def tBX_RET : TI<(outs), (ins), IIC_Br, "bx\tlr", [(ARMretflag)]>;
   // Alternative return instruction used by vararg functions.
   def tBX_RET_vararg : TI<(outs), (ins tGPR:$target), IIC_Br, "bx\t$target", []>;
+}
+
+// Indirect branches
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
+  def tBRIND : TI<(outs), (ins GPR:$dst), IIC_Br, "mov\tpc, $dst",
+                  [(brind GPR:$dst)]>;
 }
 
 // FIXME: remove when we have a way to marking a MI with these properties.
@@ -272,6 +283,15 @@ let isBranch = 1, isTerminator = 1 in
                  "b$cc\t$target",
                  [/*(ARMbrcond bb:$target, imm:$cc)*/]>;
 
+// Compare and branch on zero / non-zero
+let isBranch = 1, isTerminator = 1 in {
+  def tCBZ  : T1I<(outs), (ins tGPR:$cmp, brtarget:$target), IIC_Br,
+                  "cbz\t$cmp, $target", []>;
+
+  def tCBNZ : T1I<(outs), (ins tGPR:$cmp, brtarget:$target), IIC_Br,
+                  "cbnz\t$cmp, $target", []>;
+}
+
 //===----------------------------------------------------------------------===//
 //  Load Store Instructions.
 //
@@ -311,9 +331,10 @@ def tRestore : T1pIs<(outs tGPR:$dst), (ins t_addrmode_sp:$addr), IIC_iLoadi,
                     "ldr", "\t$dst, $addr", []>;
 
 // Load tconstpool
+// FIXME: Use ldr.n to work around a Darwin assembler bug.
 let canFoldAsLoad = 1 in
 def tLDRpci : T1pIs<(outs tGPR:$dst), (ins i32imm:$addr), IIC_iLoadi,
-                  "ldr", "\t$dst, $addr",
+                  "ldr", ".n\t$dst, $addr",
                   [(set tGPR:$dst, (load (ARMWrapper tconstpool:$addr)))]>;
 
 // Special LDR for loads from non-pc-relative constpools.
@@ -611,8 +632,8 @@ def tUXTH  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
 
 
 // Conditional move tMOVCCr - Used to implement the Thumb SELECT_CC DAG operation.
-// Expanded by the scheduler into a branch sequence.
-let usesCustomDAGSchedInserter = 1 in  // Expanded by the scheduler.
+// Expanded after instruction selection into a branch sequence.
+let usesCustomInserter = 1 in  // Expanded after instruction selection.
   def tMOVCCr_pseudo :
   PseudoInst<(outs tGPR:$dst), (ins tGPR:$false, tGPR:$true, pred:$cc),
               NoItinerary, "@ tMOVCCr $cc",
@@ -724,3 +745,13 @@ def : T1Pat<(i32 thumb_immshifted:$src),
 
 def : T1Pat<(i32 imm0_255_comp:$src),
             (tMVN (tMOVi8 (imm_comp_XFORM imm:$src)))>;
+
+// Pseudo instruction that combines ldr from constpool and add pc. This should
+// be expanded into two instructions late to allow if-conversion and
+// scheduling.
+let isReMaterializable = 1 in
+def tLDRpci_pic : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr, pclabel:$cp),
+                   NoItinerary, "@ ldr.n\t$dst, $addr\n$cp:\n\tadd\t$dst, pc",
+               [(set GPR:$dst, (ARMpic_add (load (ARMWrapper tconstpool:$addr)),
+                                           imm:$cp))]>,
+               Requires<[IsThumb1Only]>;

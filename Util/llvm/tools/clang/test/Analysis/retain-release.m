@@ -1,4 +1,4 @@
-// RUN: clang-cc -triple x86_64-apple-darwin10 -analyze -checker-cfref -analyzer-store=basic -verify %s &&
+// RUN: clang-cc -triple x86_64-apple-darwin10 -analyze -checker-cfref -analyzer-store=basic -verify %s
 // RUN: clang-cc -triple x86_64-apple-darwin10 -analyze -checker-cfref -analyzer-store=region -verify %s
 
 #if __has_feature(attribute_ns_returns_retained)
@@ -1095,6 +1095,32 @@ CVReturn rdar_7283567_2(CFAllocatorRef allocator, size_t width, size_t height,
               planeHeight, planeBytesPerRow, releaseCallback,
               number, // potentially released by callback
               pixelBufferAttributes, pixelBufferOut) ;
+}
+
+//===----------------------------------------------------------------------===//
+// <rdar://problem/7358899> False leak associated with 
+//  CGBitmapContextCreateWithData
+//===----------------------------------------------------------------------===//
+typedef uint32_t CGBitmapInfo;
+typedef void (*CGBitmapContextReleaseDataCallback)(void *releaseInfo, void *data);
+    
+CGContextRef CGBitmapContextCreateWithData(void *data,
+    size_t width, size_t height, size_t bitsPerComponent,
+    size_t bytesPerRow, CGColorSpaceRef space, CGBitmapInfo bitmapInfo,
+    CGBitmapContextReleaseDataCallback releaseCallback, void *releaseInfo);
+
+void rdar_7358899(void *data,
+      size_t width, size_t height, size_t bitsPerComponent,
+      size_t bytesPerRow, CGColorSpaceRef space, CGBitmapInfo bitmapInfo,
+      CGBitmapContextReleaseDataCallback releaseCallback) {
+
+    // For the allocated object, it doesn't really matter what type it is
+    // for the purpose of this test.  All we want to show is that
+    // this is freed later by the callback.
+    NSNumber *number = [[NSNumber alloc] initWithInt:5]; // no-warning
+
+  CGBitmapContextCreateWithData(data, width, height, bitsPerComponent, // expected-warning{{leak}}
+    bytesPerRow, space, bitmapInfo, releaseCallback, number);
 }
 
 //===----------------------------------------------------------------------===//

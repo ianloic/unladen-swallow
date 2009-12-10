@@ -414,6 +414,9 @@ void PPCAsmPrinter::printOp(const MachineOperand &MO) {
     O << MAI->getPrivateGlobalPrefix() << "CPI" << getFunctionNumber()
       << '_' << MO.getIndex();
     return;
+  case MachineOperand::MO_BlockAddress:
+    GetBlockAddressSymbol(MO.getBlockAddress())->print(O, MAI);
+    return;
   case MachineOperand::MO_ExternalSymbol: {
     // Computing the address of an external symbol, not calling it.
     std::string Name(MAI->getGlobalPrefix());
@@ -591,7 +594,7 @@ void PPCAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
 
   printInstruction(MI);
   
-  if (VerboseAsm && !MI->getDebugLoc().isUnknown())
+  if (VerboseAsm)
     EmitComments(*MI);
   O << '\n';
 
@@ -669,13 +672,13 @@ bool PPCLinuxAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   O << "\t.size\t" << CurrentFnName << ",.-" << CurrentFnName << '\n';
 
-  // Print out jump tables referenced by the function.
-  EmitJumpTableInfo(MF.getJumpTableInfo(), MF);
-
   OutStreamer.SwitchSection(getObjFileLowering().SectionForGlobal(F, Mang, TM));
 
   // Emit post-function debug information.
   DW->EndFunction(&MF);
+
+  // Print out jump tables referenced by the function.
+  EmitJumpTableInfo(MF.getJumpTableInfo(), MF);
 
   // We didn't modify anything.
   return false;
@@ -850,11 +853,11 @@ bool PPCDarwinAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
-  // Print out jump tables referenced by the function.
-  EmitJumpTableInfo(MF.getJumpTableInfo(), MF);
-
   // Emit post-function debug information.
   DW->EndFunction(&MF);
+
+  // Print out jump tables referenced by the function.
+  EmitJumpTableInfo(MF.getJumpTableInfo(), MF);
 
   // We didn't modify anything.
   return false;

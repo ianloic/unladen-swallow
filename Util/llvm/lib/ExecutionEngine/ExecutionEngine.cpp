@@ -40,7 +40,8 @@ ExecutionEngine *(*ExecutionEngine::JITCtor)(ModuleProvider *MP,
                                              std::string *ErrorStr,
                                              JITMemoryManager *JMM,
                                              CodeGenOpt::Level OptLevel,
-                                             bool GVsWithCode) = 0;
+                                             bool GVsWithCode,
+					     CodeModel::Model CMM) = 0;
 ExecutionEngine *(*ExecutionEngine::InterpCtor)(ModuleProvider *MP,
                                                 std::string *ErrorStr) = 0;
 ExecutionEngine::EERegisterFn ExecutionEngine::ExceptionTableRegister = 0;
@@ -49,10 +50,9 @@ ExecutionEngine::EERegisterFn ExecutionEngine::ExceptionTableRegister = 0;
 ExecutionEngine::ExecutionEngine(ModuleProvider *P)
   : EEState(*this),
     LazyFunctionCreator(0) {
-  LazyCompilationDisabled = false;
+  CompilingLazily         = false;
   GVCompilationDisabled   = false;
   SymbolSearchingDisabled = false;
-  DlsymStubsEnabled       = false;
   Modules.push_back(P);
   assert(P && "ModuleProvider is null?");
 }
@@ -445,7 +445,7 @@ ExecutionEngine *EngineBuilder::create() {
     if (ExecutionEngine::JITCtor) {
       ExecutionEngine *EE =
         ExecutionEngine::JITCtor(MP, ErrorStr, JMM, OptLevel,
-                                 AllocateGVsWithCode);
+                                 AllocateGVsWithCode, CMModel);
       if (EE) return EE;
     }
   }
@@ -760,8 +760,11 @@ GenericValue ExecutionEngine::getConstantValue(const Constant *C) {
       Result.PointerVal = 0;
     else if (const Function *F = dyn_cast<Function>(C))
       Result = PTOGV(getPointerToFunctionOrStub(const_cast<Function*>(F)));
-    else if (const GlobalVariable* GV = dyn_cast<GlobalVariable>(C))
+    else if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(C))
       Result = PTOGV(getOrEmitGlobalVariable(const_cast<GlobalVariable*>(GV)));
+    else if (const BlockAddress *BA = dyn_cast<BlockAddress>(C))
+      Result = PTOGV(getPointerToBasicBlock(const_cast<BasicBlock*>(
+                                                        BA->getBasicBlock())));
     else
       llvm_unreachable("Unknown constant pointer type!");
     break;

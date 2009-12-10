@@ -88,10 +88,9 @@ public:
 class ExecutionEngine {
   const TargetData *TD;
   ExecutionEngineState EEState;
-  bool LazyCompilationDisabled;
+  bool CompilingLazily;
   bool GVCompilationDisabled;
   bool SymbolSearchingDisabled;
-  bool DlsymStubsEnabled;
 
   friend class EngineBuilder;  // To allow access to JITCtor and InterpCtor.
 
@@ -114,7 +113,8 @@ protected:
                                      std::string *ErrorStr,
                                      JITMemoryManager *JMM,
                                      CodeGenOpt::Level OptLevel,
-                                     bool GVsWithCode);
+                                     bool GVsWithCode,
+				     CodeModel::Model CMM);
   static ExecutionEngine *(*InterpCtor)(ModuleProvider *MP,
                                         std::string *ErrorStr);
 
@@ -174,7 +174,9 @@ public:
                                     JITMemoryManager *JMM = 0,
                                     CodeGenOpt::Level OptLevel =
                                       CodeGenOpt::Default,
-                                    bool GVsWithCode = true);
+                                    bool GVsWithCode = true,
+				    CodeModel::Model CMM =
+				      CodeModel::Default);
 
   /// addModuleProvider - Add a ModuleProvider to the list of modules that we
   /// can JIT from.  Note that this takes ownership of the ModuleProvider: when
@@ -268,6 +270,12 @@ public:
   ///
   virtual void *getPointerToFunction(Function *F) = 0;
 
+  /// getPointerToBasicBlock - The different EE's represent basic blocks in
+  /// different ways.  Return the representation for a blockaddress of the
+  /// specified block.
+  ///
+  virtual void *getPointerToBasicBlock(BasicBlock *BB) = 0;
+  
   /// getPointerToFunctionOrStub - If the specified function has been
   /// code-gen'd, return a pointer to the function.  If not, compile it, or use
   /// a stub to implement lazy compilation if available.  See
@@ -319,13 +327,29 @@ public:
   virtual void RegisterJITEventListener(JITEventListener *) {}
   virtual void UnregisterJITEventListener(JITEventListener *) {}
 
-  /// DisableLazyCompilation - If called, the JIT will abort if lazy compilation
-  /// is ever attempted.
+  /// DisableLazyCompilation - When lazy compilation is off (the default), the
+  /// JIT will eagerly compile every function reachable from the argument to
+  /// getPointerToFunction.  If lazy compilation is turned on, the JIT will only
+  /// compile the one function and emit stubs to compile the rest when they're
+  /// first called.  If lazy compilation is turned off again while some lazy
+  /// stubs are still around, and one of those stubs is called, the program will
+  /// abort.
+  ///
+  /// In order to safely compile lazily in a threaded program, the user must
+  /// ensure that 1) only one thread at a time can call any particular lazy
+  /// stub, and 2) any thread modifying LLVM IR must hold the JIT's lock
+  /// (ExecutionEngine::lock) or otherwise ensure that no other thread calls a
+  /// lazy stub.  See http://llvm.org/PR5184 for details.
   void DisableLazyCompilation(bool Disabled = true) {
-    LazyCompilationDisabled = Disabled;
+    CompilingLazily = !Disabled;
   }
+  bool isCompilingLazily() const {
+    return CompilingLazily;
+  }
+  // Deprecated in favor of isCompilingLazily (to reduce double-negatives).
+  // Remove this in LLVM 2.8.
   bool isLazyCompilationDisabled() const {
-    return LazyCompilationDisabled;
+    return !CompilingLazily;
   }
 
   /// DisableGVCompilation - If called, the JIT will abort if it's asked to
@@ -347,15 +371,7 @@ public:
   bool isSymbolSearchingDisabled() const {
     return SymbolSearchingDisabled;
   }
-  
-  /// EnableDlsymStubs - 
-  void EnableDlsymStubs(bool Enabled = true) {
-    DlsymStubsEnabled = Enabled;
-  }
-  bool areDlsymStubsEnabled() const {
-    return DlsymStubsEnabled;
-  }
-  
+
   /// InstallLazyFunctionCreator - If an unknown function is needed, the
   /// specified function pointer is invoked to create it.  If it returns null,
   /// the JIT will abort.
@@ -412,6 +428,7 @@ class EngineBuilder {
   CodeGenOpt::Level OptLevel;
   JITMemoryManager *JMM;
   bool AllocateGVsWithCode;
+  CodeModel::Model CMModel;
 
   /// InitEngine - Does the common initialization of default options.
   ///
@@ -421,6 +438,7 @@ class EngineBuilder {
     OptLevel = CodeGenOpt::Default;
     JMM = NULL;
     AllocateGVsWithCode = false;
+    CMModel = CodeModel::Default;
   }
 
  public:
@@ -462,6 +480,13 @@ class EngineBuilder {
   /// defaults to CodeGenOpt::Default.
   EngineBuilder &setOptLevel(CodeGenOpt::Level l) {
     OptLevel = l;
+    return *this;
+  }
+
+  /// setCodeModel - Set the CodeModel that the ExecutionEngine target
+  /// data is using. Defaults to target specific default "CodeModel::Default".
+  EngineBuilder &setCodeModel(CodeModel::Model M) {
+    CMModel = M;
     return *this;
   }
 

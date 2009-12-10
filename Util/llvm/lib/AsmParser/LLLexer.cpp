@@ -576,6 +576,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(oge); KEYWORD(ord); KEYWORD(uno); KEYWORD(ueq); KEYWORD(une);
 
   KEYWORD(x);
+  KEYWORD(blockaddress);
 #undef KEYWORD
 
   // Keywords for types.
@@ -645,6 +646,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   INSTKEYWORD(ret,         Ret);
   INSTKEYWORD(br,          Br);
   INSTKEYWORD(switch,      Switch);
+  INSTKEYWORD(indirectbr,  IndirectBr);
   INSTKEYWORD(invoke,      Invoke);
   INSTKEYWORD(unwind,      Unwind);
   INSTKEYWORD(unreachable, Unreachable);

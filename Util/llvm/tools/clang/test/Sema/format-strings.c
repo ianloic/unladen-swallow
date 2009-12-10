@@ -1,10 +1,17 @@
 // RUN: clang-cc -fsyntax-only -verify -Wformat-nonliteral %s
 
-// Define this to get vasprintf on Linux
-#define _GNU_SOURCE
-
-#include <stdio.h>
 #include <stdarg.h>
+typedef __typeof(sizeof(int)) size_t;
+typedef struct _FILE FILE;
+int fprintf(FILE *, const char *restrict, ...);
+int printf(const char *restrict, ...);
+int snprintf(char *restrict, size_t, const char *restrict, ...);
+int sprintf(char *restrict, const char *restrict, ...);
+int vasprintf(char **, const char *, va_list);
+int vfprintf(FILE *, const char *restrict, va_list);
+int vprintf(const char *restrict, va_list);
+int vsnprintf(char *, size_t, const char *, va_list);
+int vsprintf(char *restrict, const char *restrict, va_list);
 
 char * global_fmt;
 
@@ -83,7 +90,7 @@ void check_wide_string(char* b, ...)
   va_start(ap,b);
 
   printf(L"foo %d",2); // expected-warning {{incompatible pointer types}}, expected-warning {{should not be a wide string}}
-  vasprintf(&b,L"bar %d",ap); // expected-warning {{incompatible pointer types}}, expected-warning {{should not be a wide string}}
+  vsprintf(b,L"bar %d",ap); // expected-warning {{incompatible pointer types}}, expected-warning {{should not be a wide string}}
 }
 
 void check_asterisk_precision_width(int x) {

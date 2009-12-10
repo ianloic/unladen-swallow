@@ -333,6 +333,8 @@ void XCoreAsmPrinter::printOperand(const MachineInstr *MI, int opNum) {
   case MachineOperand::MO_JumpTableIndex:
     O << MAI->getPrivateGlobalPrefix() << "JTI" << getFunctionNumber()
       << '_' << MO.getIndex();
+  case MachineOperand::MO_BlockAddress:
+    GetBlockAddressSymbol(MO.getBlockAddress())->print(O, MAI);
     break;
   default:
     llvm_unreachable("not implemented");
@@ -361,7 +363,7 @@ void XCoreAsmPrinter::printMachineInstruction(const MachineInstr *MI) {
     return;
   }
   printInstruction(MI);
-  if (VerboseAsm && !MI->getDebugLoc().isUnknown())
+  if (VerboseAsm)
     EmitComments(*MI);
   O << '\n';
 

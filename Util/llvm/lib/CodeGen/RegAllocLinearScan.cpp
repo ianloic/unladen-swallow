@@ -59,19 +59,35 @@ PreSplitIntervals("pre-alloc-split",
                   cl::desc("Pre-register allocation live interval splitting"),
                   cl::init(false), cl::Hidden);
 
-static cl::opt<bool>
-NewSpillFramework("new-spill-framework",
-                  cl::desc("New spilling framework"),
-                  cl::init(false), cl::Hidden);
-
 static RegisterRegAlloc
 linearscanRegAlloc("linearscan", "linear scan register allocator",
                    createLinearScanRegisterAllocator);
 
 namespace {
+  // When we allocate a register, add it to a fixed-size queue of
+  // registers to skip in subsequent allocations. This trades a small
+  // amount of register pressure and increased spills for flexibility in
+  // the post-pass scheduler.
+  //
+  // Note that in a the number of registers used for reloading spills
+  // will be one greater than the value of this option.
+  //
+  // One big limitation of this is that it doesn't differentiate between
+  // different register classes. So on x86-64, if there is xmm register
+  // pressure, it can caused fewer GPRs to be held in the queue.
+  static cl::opt<unsigned>
+  NumRecentlyUsedRegs("linearscan-skip-count",
+                      cl::desc("Number of registers for linearscan to remember to skip."),
+                      cl::init(0),
+                      cl::Hidden);
+ 
   struct RALinScan : public MachineFunctionPass {
     static char ID;
-    RALinScan() : MachineFunctionPass(&ID) {}
+    RALinScan() : MachineFunctionPass(&ID) {
+      // Initialize the queue to record recently-used registers.
+      if (NumRecentlyUsedRegs > 0)
+        RecentRegs.resize(NumRecentlyUsedRegs, 0);
+    }
 
     typedef std::pair<LiveInterval*, LiveInterval::iterator> IntervalPtr;
     typedef SmallVector<IntervalPtr, 32> IntervalPtrs;
@@ -137,6 +153,18 @@ namespace {
 
     std::auto_ptr<Spiller> spiller_;
 
+    // The queue of recently-used registers.
+    SmallVector<unsigned, 3> RecentRegs;
+
+    // Record that we just picked this register.
+    void recordRecentlyUsed(unsigned reg) {
+      assert(reg != 0 && "Recently used register is NOREG!");
+      if (!RecentRegs.empty()) {
+        std::copy(RecentRegs.begin() + 1, RecentRegs.end(), RecentRegs.begin());
+        RecentRegs.back() = reg;
+      }
+    }
+
   public:
     virtual const char* getPassName() const {
       return "Linear Scan Register Allocator";
@@ -145,6 +173,7 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
       AU.addRequired<LiveIntervals>();
+      AU.addPreserved<SlotIndexes>();
       if (StrongPHIElim)
         AU.addRequiredID(StrongPHIEliminationID);
       // Make sure PassManager knows which analyses to make available
@@ -165,6 +194,12 @@ namespace {
     /// runOnMachineFunction - register allocate the whole function
     bool runOnMachineFunction(MachineFunction&);
 
+    // Determine if we skip this register due to its being recently used.
+    bool isRecentlyUsed(unsigned reg) const {
+      return std::find(RecentRegs.begin(), RecentRegs.end(), reg) !=
+             RecentRegs.end();
+    }
+
   private:
     /// linearScan - the linear scan algorithm
     void linearScan();
@@ -175,11 +210,11 @@ namespace {
 
     /// processActiveIntervals - expire old intervals and move non-overlapping
     /// ones to the inactive list.
-    void processActiveIntervals(LiveIndex CurPoint);
+    void processActiveIntervals(SlotIndex CurPoint);
 
     /// processInactiveIntervals - expire old intervals and move overlapping
     /// ones to the active list.
-    void processInactiveIntervals(LiveIndex CurPoint);
+    void processInactiveIntervals(SlotIndex CurPoint);
 
     /// hasNextReloadInterval - Return the next liveinterval that's being
     /// defined by a reload from the same SS as the specified one.
@@ -365,7 +400,7 @@ unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
     return Reg;
 
   VNInfo *vni = cur.begin()->valno;
-  if ((vni->def == LiveIndex()) ||
+  if ((vni->def == SlotIndex()) ||
       vni->isUnused() || !vni->isDefAccurate())
     return Reg;
   MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
@@ -402,7 +437,7 @@ unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
         if (!O.isKill())
           continue;
         MachineInstr *MI = &*I;
-        if (SrcLI.liveAt(li_->getDefIndex(li_->getInstructionIndex(MI))))
+        if (SrcLI.liveAt(li_->getInstructionIndex(MI).getDefIndex()))
           O.setIsKill(false);
       }
     }
@@ -440,9 +475,7 @@ bool RALinScan::runOnMachineFunction(MachineFunction &fn) {
   vrm_ = &getAnalysis<VirtRegMap>();
   if (!rewriter_.get()) rewriter_.reset(createVirtRegRewriter());
   
-  if (NewSpillFramework) {
-    spiller_.reset(createSpiller(mf_, li_, ls_, vrm_));
-  }
+  spiller_.reset(createSpiller(mf_, li_, ls_, loopInfo, vrm_));
   
   initIntervalSets();
 
@@ -479,10 +512,17 @@ void RALinScan::initIntervalSets()
 
   for (LiveIntervals::iterator i = li_->begin(), e = li_->end(); i != e; ++i) {
     if (TargetRegisterInfo::isPhysicalRegister(i->second->reg)) {
-      mri_->setPhysRegUsed(i->second->reg);
-      fixed_.push_back(std::make_pair(i->second, i->second->begin()));
-    } else
-      unhandled_.push(i->second);
+      if (!i->second->empty()) {
+        mri_->setPhysRegUsed(i->second->reg);
+        fixed_.push_back(std::make_pair(i->second, i->second->begin()));
+      }
+    } else {
+      if (i->second->empty()) {
+        assignRegOrStackSlotAtInterval(i->second);
+      }
+      else
+        unhandled_.push(i->second);
+    }
   }
 }
 
@@ -502,13 +542,13 @@ void RALinScan::linearScan() {
     ++NumIters;
     DEBUG(errs() << "\n*** CURRENT ***: " << *cur << '\n');
 
-    if (!cur->empty()) {
-      processActiveIntervals(cur->beginIndex());
-      processInactiveIntervals(cur->beginIndex());
+    assert(!cur->empty() && "Empty interval in unhandled set.");
 
-      assert(TargetRegisterInfo::isVirtualRegister(cur->reg) &&
-             "Can only allocate virtual registers!");
-    }
+    processActiveIntervals(cur->beginIndex());
+    processInactiveIntervals(cur->beginIndex());
+
+    assert(TargetRegisterInfo::isVirtualRegister(cur->reg) &&
+           "Can only allocate virtual registers!");
 
     // Allocating a virtual register. try to find a free
     // physical register or spill an interval (possibly this one) in order to
@@ -585,7 +625,7 @@ void RALinScan::linearScan() {
 
 /// processActiveIntervals - expire old intervals and move non-overlapping ones
 /// to the inactive list.
-void RALinScan::processActiveIntervals(LiveIndex CurPoint)
+void RALinScan::processActiveIntervals(SlotIndex CurPoint)
 {
   DEBUG(errs() << "\tprocessing active intervals:\n");
 
@@ -631,7 +671,7 @@ void RALinScan::processActiveIntervals(LiveIndex CurPoint)
 
 /// processInactiveIntervals - expire old intervals and move overlapping
 /// ones to the active list.
-void RALinScan::processInactiveIntervals(LiveIndex CurPoint)
+void RALinScan::processInactiveIntervals(SlotIndex CurPoint)
 {
   DEBUG(errs() << "\tprocessing inactive intervals:\n");
 
@@ -712,7 +752,7 @@ FindIntervalInVector(RALinScan::IntervalPtrs &IP, LiveInterval *LI) {
   return IP.end();
 }
 
-static void RevertVectorIteratorsTo(RALinScan::IntervalPtrs &V, LiveIndex Point){
+static void RevertVectorIteratorsTo(RALinScan::IntervalPtrs &V, SlotIndex Point){
   for (unsigned i = 0, e = V.size(); i != e; ++i) {
     RALinScan::IntervalPtr &IP = V[i];
     LiveInterval::iterator I = std::upper_bound(IP.first->begin(),
@@ -738,7 +778,7 @@ static void addStackInterval(LiveInterval *cur, LiveStacks *ls_,
   if (SI.hasAtLeastOneValue())
     VNI = SI.getValNumInfo(0);
   else
-    VNI = SI.getNextValue(LiveIndex(), 0, false,
+    VNI = SI.getNextValue(SlotIndex(), 0, false,
                           ls_->getVNInfoAllocator());
 
   LiveInterval &RI = li_->getInterval(cur->reg);
@@ -832,9 +872,15 @@ void RALinScan::findIntervalsToSpill(LiveInterval *cur,
 
 namespace {
   struct WeightCompare {
+  private:
+    const RALinScan &Allocator;
+
+  public:
+    WeightCompare(const RALinScan &Alloc) : Allocator(Alloc) {};
+
     typedef std::pair<unsigned, float> RegWeightPair;
     bool operator()(const RegWeightPair &LHS, const RegWeightPair &RHS) const {
-      return LHS.second < RHS.second;
+      return LHS.second < RHS.second && !Allocator.isRecentlyUsed(LHS.first);
     }
   };
 }
@@ -906,7 +952,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   backUpRegUses();
 
   std::vector<std::pair<unsigned, float> > SpillWeightsToAdd;
-  LiveIndex StartPosition = cur->beginIndex();
+  SlotIndex StartPosition = cur->beginIndex();
   const TargetRegisterClass *RCLeader = RelatedRegClasses.getLeaderValue(RC);
 
   // If start of this live interval is defined by a move instruction and its
@@ -916,7 +962,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   // one, e.g. X86::mov32to32_. These move instructions are not coalescable.
   if (!vrm_->getRegAllocPref(cur->reg) && cur->hasAtLeastOneValue()) {
     VNInfo *vni = cur->begin()->valno;
-    if ((vni->def != LiveIndex()) && !vni->isUnused() &&
+    if ((vni->def != SlotIndex()) && !vni->isUnused() &&
          vni->isDefAccurate()) {
       MachineInstr *CopyMI = li_->getInstructionFromIndex(vni->def);
       unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
@@ -1078,7 +1124,8 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
            e = RC->allocation_order_end(*mf_); i != e; ++i) {
       unsigned reg = *i;
       float regWeight = SpillWeights[reg];
-      if (minWeight > regWeight)
+      // Skip recently allocated registers.
+      if (minWeight > regWeight && !isRecentlyUsed(reg))
         Found = true;
       RegsWeights.push_back(std::make_pair(reg, regWeight));
     }
@@ -1096,7 +1143,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   }
 
   // Sort all potential spill candidates by weight.
-  std::sort(RegsWeights.begin(), RegsWeights.end(), WeightCompare());
+  std::sort(RegsWeights.begin(), RegsWeights.end(), WeightCompare(*this));
   minReg = RegsWeights[0].first;
   minWeight = RegsWeights[0].second;
   if (minWeight == HUGE_VALF) {
@@ -1118,6 +1165,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
         DowngradedRegs.clear();
         assignRegOrStackSlotAtInterval(cur);
       } else {
+        assert(false && "Ran out of registers during register allocation!");
         llvm_report_error("Ran out of registers during register allocation!");
       }
       return;
@@ -1148,11 +1196,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
     SmallVector<LiveInterval*, 8> spillIs;
     std::vector<LiveInterval*> added;
     
-    if (!NewSpillFramework) {
-      added = li_->addIntervalsForSpills(*cur, spillIs, loopInfo, *vrm_);
-    } else {
-      added = spiller_->spill(cur); 
-    }
+    added = spiller_->spill(cur, spillIs); 
 
     std::sort(added.begin(), added.end(), LISorter());
     addStackInterval(cur, ls_, li_, mri_, *vrm_);
@@ -1172,7 +1216,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
       LiveInterval *ReloadLi = added[i];
       if (ReloadLi->weight == HUGE_VALF &&
           li_->getApproximateInstructionCount(*ReloadLi) == 0) {
-        LiveIndex ReloadIdx = ReloadLi->beginIndex();
+        SlotIndex ReloadIdx = ReloadLi->beginIndex();
         MachineBasicBlock *ReloadMBB = li_->getMBBFromIndex(ReloadIdx);
         int ReloadSS = vrm_->getStackSlot(ReloadLi->reg);
         if (LastReloadMBB == ReloadMBB && LastReloadSS == ReloadSS) {
@@ -1232,17 +1276,13 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
          earliestStartInterval : sli;
        
     std::vector<LiveInterval*> newIs;
-    if (!NewSpillFramework) {
-      newIs = li_->addIntervalsForSpills(*sli, spillIs, loopInfo, *vrm_);
-    } else {
-      newIs = spiller_->spill(sli);
-    }
+    newIs = spiller_->spill(sli, spillIs);
     addStackInterval(sli, ls_, li_, mri_, *vrm_);
     std::copy(newIs.begin(), newIs.end(), std::back_inserter(added));
     spilled.insert(sli->reg);
   }
 
-  LiveIndex earliestStart = earliestStartInterval->beginIndex();
+  SlotIndex earliestStart = earliestStartInterval->beginIndex();
 
   DEBUG(errs() << "\t\trolling back to: " << earliestStart << '\n');
 
@@ -1323,7 +1363,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
     LiveInterval *ReloadLi = added[i];
     if (ReloadLi->weight == HUGE_VALF &&
         li_->getApproximateInstructionCount(*ReloadLi) == 0) {
-      LiveIndex ReloadIdx = ReloadLi->beginIndex();
+      SlotIndex ReloadIdx = ReloadLi->beginIndex();
       MachineBasicBlock *ReloadMBB = li_->getMBBFromIndex(ReloadIdx);
       int ReloadSS = vrm_->getStackSlot(ReloadLi->reg);
       if (LastReloadMBB == ReloadMBB && LastReloadSS == ReloadSS) {
@@ -1366,7 +1406,8 @@ unsigned RALinScan::getFreePhysReg(LiveInterval* cur,
     // Ignore "downgraded" registers.
     if (SkipDGRegs && DowngradedRegs.count(Reg))
       continue;
-    if (isRegAvail(Reg)) {
+    // Skip recently allocated registers.
+    if (isRegAvail(Reg) && !isRecentlyUsed(Reg)) {
       FreeReg = Reg;
       if (FreeReg < inactiveCounts.size())
         FreeRegInactiveCount = inactiveCounts[FreeReg];
@@ -1378,9 +1419,12 @@ unsigned RALinScan::getFreePhysReg(LiveInterval* cur,
 
   // If there are no free regs, or if this reg has the max inactive count,
   // return this register.
-  if (FreeReg == 0 || FreeRegInactiveCount == MaxInactiveCount)
+  if (FreeReg == 0 || FreeRegInactiveCount == MaxInactiveCount) {
+    // Remember what register we picked so we can skip it next time.
+    if (FreeReg != 0) recordRecentlyUsed(FreeReg);
     return FreeReg;
- 
+  }
+
   // Continue scanning the registers, looking for the one with the highest
   // inactive count.  Alkis found that this reduced register pressure very
   // slightly on X86 (in rev 1.94 of this file), though this should probably be
@@ -1391,13 +1435,16 @@ unsigned RALinScan::getFreePhysReg(LiveInterval* cur,
     if (SkipDGRegs && DowngradedRegs.count(Reg))
       continue;
     if (isRegAvail(Reg) && Reg < inactiveCounts.size() &&
-        FreeRegInactiveCount < inactiveCounts[Reg]) {
+        FreeRegInactiveCount < inactiveCounts[Reg] && !isRecentlyUsed(Reg)) {
       FreeReg = Reg;
       FreeRegInactiveCount = inactiveCounts[Reg];
       if (FreeRegInactiveCount == MaxInactiveCount)
         break;    // We found the one with the max inactive count.
     }
   }
+
+  // Remember what register we picked so we can skip it next time.
+  recordRecentlyUsed(FreeReg);
 
   return FreeReg;
 }

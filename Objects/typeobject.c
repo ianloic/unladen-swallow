@@ -72,23 +72,52 @@ PyType_Modified(PyTypeObject *type)
 	   We don't assign new version tags eagerly, but only as
 	   needed.
 	 */
-	PyObject *raw, *ref;
+	PyObject *subclasses, *listeners, *weakref, *subclass, *code;
 	Py_ssize_t i, n;
 
 	if (!PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG))
 		return;
 
-	raw = type->tp_subclasses;
-	if (raw != NULL) {
-		n = PyList_GET_SIZE(raw);
+	subclasses = type->tp_subclasses;
+	if (subclasses != NULL) {
+		n = PyList_GET_SIZE(subclasses);
 		for (i = 0; i < n; i++) {
-			ref = PyList_GET_ITEM(raw, i);
-			ref = PyWeakref_GET_OBJECT(ref);
-			if (ref != Py_None) {
-				PyType_Modified((PyTypeObject *)ref);
+			weakref = PyList_GET_ITEM(subclasses, i);
+			subclass = PyWeakref_GET_OBJECT(weakref);
+			Py_INCREF(subclass);
+			if (subclass != Py_None) {
+				assert(PyType_Check(subclass));
+				PyType_Modified((PyTypeObject *)subclass);
 			}
+			Py_DECREF(subclass);
 		}
 	}
+
+	/* Invalidate any listening code objects.  Delete the list, since
+	 * there's no point to invalidating a code object multiple times.  */
+	listeners = type->tp_code_listeners;
+	type->tp_code_listeners = NULL;
+	if (listeners != NULL) {
+		n = PyList_GET_SIZE(listeners);
+		for (i = 0; i < n; i++) {
+			weakref = PyList_GET_ITEM(listeners, i);
+			code = PyWeakref_GET_OBJECT(weakref);
+			Py_INCREF(code);
+
+			/* Drop the weakref from the list.  */
+			PyList_SET_ITEM(listeners, i, NULL);
+			Py_DECREF(weakref);
+
+			if (code != Py_None) {
+				assert(PyCode_Check(code));
+				_PyCode_InvalidateMachineCode(
+                                    (PyCodeObject*)code);
+			}
+			Py_DECREF(code);
+		}
+		Py_DECREF(listeners);
+	}
+
 	type->tp_flags &= ~Py_TPFLAGS_VALID_VERSION_TAG;
 }
 
@@ -348,9 +377,9 @@ type_get_bases(PyTypeObject *type, void *context)
 static PyTypeObject *best_base(PyObject *);
 static int mro_internal(PyTypeObject *);
 static int compatible_for_assignment(PyTypeObject *, PyTypeObject *, char *);
+static void update_all_slots(PyTypeObject *);
 static int add_subclass(PyTypeObject*, PyTypeObject*);
 static void remove_subclass(PyTypeObject *, PyTypeObject *);
-static void update_all_slots(PyTypeObject *);
 
 typedef int (*update_callback)(PyTypeObject *, void *);
 static int update_subclasses(PyTypeObject *type, PyObject *name,
@@ -505,8 +534,7 @@ type_set_bases(PyTypeObject *type, PyObject *value, void *context)
 	for (i = PyTuple_GET_SIZE(old_bases) - 1; i >= 0; i--) {
 		ob = PyTuple_GET_ITEM(old_bases, i);
 		if (PyType_Check(ob)) {
-			remove_subclass(
-				(PyTypeObject*)ob, type);
+			remove_subclass((PyTypeObject*)ob, type);
 		}
 	}
 
@@ -2604,6 +2632,14 @@ type_dealloc(PyTypeObject *type)
 {
 	PyHeapTypeObject *et;
 
+	/* Call PyType_Modified to invalidate any code objects that reference
+	   us.  There should be no real subclasses in the subclasses list,
+	   because otherwise they would hold a reference to us as their base
+	   class.  */
+	if (PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)) {
+		PyType_Modified(type);
+	}
+
 	/* Assert this is a heap-allocated type object */
 	assert(type->tp_flags & Py_TPFLAGS_HEAPTYPE);
 	_PyObject_GC_UNTRACK(type);
@@ -2615,6 +2651,7 @@ type_dealloc(PyTypeObject *type)
 	Py_XDECREF(type->tp_mro);
 	Py_XDECREF(type->tp_cache);
 	Py_XDECREF(type->tp_subclasses);
+	Py_XDECREF(type->tp_code_listeners);
 	/* A type's tp_doc is heap allocated, unlike the tp_doc slots
 	 * of most other objects.  It's okay to cast it to char *.
 	 */
@@ -2678,9 +2715,10 @@ type_traverse(PyTypeObject *type, visitproc visit, void *arg)
 	Py_VISIT(type->tp_base);
 
 	/* There's no need to visit type->tp_subclasses or
-	   ((PyHeapTypeObject *)type)->ht_slots, because they can't be involved
-	   in cycles; tp_subclasses is a list of weak references,
-	   and slots is a tuple of strings. */
+	   ((PyHeapTypeObject *)type)->ht_slots or type->tp_code_listeners,
+	   because they can't be involved in cycles; tp_subclasses and
+	   tp_code_listeners are lists of weak references, and slots is a tuple
+	   of strings. */
 
 	return 0;
 }
@@ -2710,6 +2748,7 @@ type_clear(PyTypeObject *type)
 	       class's dict; the cycle will be broken that way.
 
 	   tp_subclasses:
+	   tp_code_listeners:
 	       A list of weak references can't be part of a cycle; and
 	       lists have their own tp_clear.
 
@@ -4061,7 +4100,7 @@ PyType_Ready(PyTypeObject *type)
 	for (i = 0; i < n; i++) {
 		PyObject *b = PyTuple_GET_ITEM(bases, i);
 		if (PyType_Check(b) &&
-		    add_subclass((PyTypeObject *)b, type) < 0)
+		    add_subclass((PyTypeObject*)b, type) < 0)
 			goto error;
 	}
 
@@ -4077,20 +4116,20 @@ PyType_Ready(PyTypeObject *type)
 }
 
 static int
-add_subclass(PyTypeObject *base, PyTypeObject *type)
+add_to_weakref_list(PyObject **list_ptr, PyObject *item)
 {
 	Py_ssize_t i;
 	int result;
 	PyObject *list, *ref, *newobj;
 
-	list = base->tp_subclasses;
+	list = *list_ptr;
 	if (list == NULL) {
-		base->tp_subclasses = list = PyList_New(0);
+		*list_ptr = list = PyList_New(0);
 		if (list == NULL)
 			return -1;
 	}
 	assert(PyList_Check(list));
-	newobj = PyWeakref_NewRef((PyObject *)type, NULL);
+	newobj = PyWeakref_NewRef(item, NULL);
 	i = PyList_GET_SIZE(list);
 	while (--i >= 0) {
 		ref = PyList_GET_ITEM(list, i);
@@ -4103,7 +4142,19 @@ add_subclass(PyTypeObject *base, PyTypeObject *type)
 	return result;
 }
 
-static void
+int
+_PyType_AddCodeListener(PyTypeObject *type, PyObject *code)
+{
+	return add_to_weakref_list(&type->tp_code_listeners, code);
+}
+
+int
+add_subclass(PyTypeObject *base, PyTypeObject *type)
+{
+	return add_to_weakref_list(&base->tp_subclasses, (PyObject*)type);
+}
+
+void
 remove_subclass(PyTypeObject *base, PyTypeObject *type)
 {
 	Py_ssize_t i;

@@ -10,8 +10,7 @@ A<int> *a2; // expected-error{{template argument for non-type template parameter
 A<1 >> 2> *a3; // expected-warning{{use of right-shift operator ('>>') in template argument will require parentheses in C++0x}}
 
 // C++ [temp.arg.nontype]p5:
-A<A> *a4; // expected-error{{must have an integral or enumeration type}} \
-          // FIXME: the error message above is a bit lame
+A<A> *a4; // expected-error{{must be an expression}}
 
 enum E { Enumerator = 17 };
 A<E> *a5; // expected-error{{template argument for non-type template parameter must be an expression}}
@@ -121,4 +120,34 @@ template<int (*)(int, int)> struct FuncPtr0;
 extern FuncPtr0<&func0> *fp0;
 int func0(int, int);
 extern FuncPtr0<&func0> *fp0;
+
+// PR5350
+namespace ns {
+  template <typename T>
+  struct Foo {
+    static const bool value = true;
+  };
+  
+  template <bool b>
+  struct Bar {};
+  
+  const bool value = false;
+  
+  Bar<bool(ns::Foo<int>::value)> x;
+}
+
+// PR5349
+namespace ns {
+  enum E { k };
+  
+  template <E e>
+  struct Baz  {};
+  
+  Baz<k> f1;  // This works.
+  Baz<E(0)> f2;  // This too.
+  Baz<static_cast<E>(0)> f3;  // And this.
+  
+  Baz<ns::E(0)> b1;  // This doesn't work.
+  Baz<static_cast<ns::E>(0)> b2;  // This neither.  
+}
 

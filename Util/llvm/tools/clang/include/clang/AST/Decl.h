@@ -232,6 +232,7 @@ public:
   void setOriginalNamespace(NamespaceDecl *ND) { OrigNamespace = ND; }
 
   virtual NamespaceDecl *getCanonicalDecl() { return OrigNamespace; }
+  const NamespaceDecl *getCanonicalDecl() const { return OrigNamespace; }
 
   virtual SourceRange getSourceRange() const {
     return SourceRange(getLocation(), RBracLoc);
@@ -552,6 +553,9 @@ public:
   }
 
   virtual VarDecl *getCanonicalDecl();
+  const VarDecl *getCanonicalDecl() const {
+    return const_cast<VarDecl*>(this)->getCanonicalDecl();
+  }
 
   /// hasLocalStorage - Returns true if a variable with function scope
   ///  is a non-static local variable.
@@ -605,6 +609,9 @@ public:
   /// \brief Determine whether this is or was instantiated from an out-of-line 
   /// definition of a static data member.
   bool isOutOfLine() const;
+
+  /// \brief If this is a static data member, find its out-of-line definition.
+  VarDecl *getOutOfLineDefinition();
   
   /// \brief If this variable is an instantiated static data member of a
   /// class template specialization, returns the templated static data member
@@ -1041,9 +1048,18 @@ public:
   StorageClass getStorageClass() const { return StorageClass(SClass); }
   void setStorageClass(StorageClass SC) { SClass = SC; }
 
-  bool isInline() const { return IsInline; }
-  void setInline(bool I) { IsInline = I; }
+  /// \brief Determine whether the "inline" keyword was specified for this
+  /// function.
+  bool isInlineSpecified() const { return IsInline; }
+                       
+  /// Set whether the "inline" keyword was specified for this function.
+  void setInlineSpecified(bool I) { IsInline = I; }
 
+  /// \brief Determine whether this function should be inlined, because it is
+  /// either marked "inline" or is a member function of a C++ class that
+  /// was defined in the class body.
+  bool isInlined() const;
+                       
   bool isInlineDefinitionExternallyVisible() const;
                        
   /// isOverloadedOperator - Whether this function declaration
@@ -1120,7 +1136,17 @@ public:
     return TemplateOrSpecialization.
              dyn_cast<FunctionTemplateSpecializationInfo*>();
   }
-                       
+
+  /// \brief Determines whether this function is a function template
+  /// specialization or a member of a class template specialization that can
+  /// be implicitly instantiated.
+  bool isImplicitlyInstantiable() const;
+              
+  /// \brief Retrieve the function declaration from which this function could
+  /// be instantiated, if it is an instantiation (rather than a non-template
+  /// or a specialization, for example).
+  FunctionDecl *getTemplateInstantiationPattern() const;
+
   /// \brief Retrieve the primary template that this function template
   /// specialization either specializes or was instantiated from.
   ///
@@ -1173,7 +1199,7 @@ public:
   /// instantiated from a template; otherwie, returns an invalid source 
   /// location.
   SourceLocation getPointOfInstantiation() const;
-
+                       
   /// \brief Determine whether this is or was instantiated from an out-of-line 
   /// definition of a member function.
   bool isOutOfLine() const;
@@ -1402,6 +1428,9 @@ public:
   virtual SourceRange getSourceRange() const;
 
   virtual TagDecl* getCanonicalDecl();
+  const TagDecl* getCanonicalDecl() const {
+    return const_cast<TagDecl*>(this)->getCanonicalDecl();
+  }
 
   /// isDefinition - Return true if this decl has its body specified.
   bool isDefinition() const {
@@ -1491,6 +1520,9 @@ class EnumDecl : public TagDecl {
     }
 public:
   EnumDecl *getCanonicalDecl() {
+    return cast<EnumDecl>(TagDecl::getCanonicalDecl());
+  }
+  const EnumDecl *getCanonicalDecl() const {
     return cast<EnumDecl>(TagDecl::getCanonicalDecl());
   }
 

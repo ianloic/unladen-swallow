@@ -34,6 +34,7 @@ namespace clang {
   class BlockDecl;
   class CXXOperatorCallExpr;
   class CXXMemberCallExpr;
+  class TemplateArgumentLoc;
 
 /// Expr - This represents one expression.  Note that Expr's are subclasses of
 /// Stmt.  This allows an expression to be transparently used any place a Stmt
@@ -86,7 +87,7 @@ public:
     // type. Additionally, inspect Expr::isLvalue to determine whether
     // an expression that is adjusted in this manner should be
     // considered an lvalue.
-    assert((TR.isNull() || !TR->isReferenceType()) &&
+    assert((t.isNull() || !t->isReferenceType()) &&
            "Expressions can't have reference type");
 
     TR = t;
@@ -134,7 +135,7 @@ public:
   /// with location to warn on and the source range[s] to report with the
   /// warning.
   bool isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
-                              SourceRange &R2) const;
+                              SourceRange &R2, ASTContext &Ctx) const;
 
   /// isLvalue - C99 6.3.2.1: an lvalue is an expression with an object type or
   /// incomplete type other than void. Nonarray expressions that can be lvalues:
@@ -249,6 +250,12 @@ public:
   /// folded, but discard the result.
   bool isEvaluatable(ASTContext &Ctx) const;
 
+  /// HasSideEffects - This routine returns true for all those expressions
+  /// which must be evaluated each time and must not be optimization away 
+  /// or evaluated at compile time. Example is a function call, volatile
+  /// variable read.
+  bool HasSideEffects(ASTContext &Ctx) const;
+  
   /// EvaluateAsInt - Call Evaluate and return the folded integer. This
   /// must be called on an expression that constant folds to an integer.
   llvm::APSInt EvaluateAsInt(ASTContext &Ctx) const;
@@ -351,13 +358,13 @@ struct ExplicitTemplateArgumentList {
   unsigned NumTemplateArgs;
   
   /// \brief Retrieve the template arguments
-  TemplateArgument *getTemplateArgs() {
-    return reinterpret_cast<TemplateArgument *> (this + 1);
+  TemplateArgumentLoc *getTemplateArgs() {
+    return reinterpret_cast<TemplateArgumentLoc *> (this + 1);
   }
   
   /// \brief Retrieve the template arguments
-  const TemplateArgument *getTemplateArgs() const {
-    return reinterpret_cast<const TemplateArgument *> (this + 1);
+  const TemplateArgumentLoc *getTemplateArgs() const {
+    return reinterpret_cast<const TemplateArgumentLoc *> (this + 1);
   }
 };
   
@@ -418,7 +425,7 @@ class DeclRefExpr : public Expr {
               NamedDecl *D, SourceLocation NameLoc,
               bool HasExplicitTemplateArgumentList,
               SourceLocation LAngleLoc,
-              const TemplateArgument *ExplicitTemplateArgs,
+              const TemplateArgumentLoc *ExplicitTemplateArgs,
               unsigned NumExplicitTemplateArgs,
               SourceLocation RAngleLoc,
               QualType T, bool TD, bool VD);
@@ -460,7 +467,7 @@ public:
                              SourceLocation NameLoc,
                              bool HasExplicitTemplateArgumentList,
                              SourceLocation LAngleLoc,
-                             const TemplateArgument *ExplicitTemplateArgs,
+                             const TemplateArgumentLoc *ExplicitTemplateArgs,
                              unsigned NumExplicitTemplateArgs,
                              SourceLocation RAngleLoc,
                              QualType T, bool TD, bool VD);
@@ -513,7 +520,7 @@ public:
   
   /// \brief Retrieve the template arguments provided as part of this
   /// template-id.
-  const TemplateArgument *getTemplateArgs() const {
+  const TemplateArgumentLoc *getTemplateArgs() const {
     if (!hasExplicitTemplateArgumentList())
       return 0;
     
@@ -975,7 +982,7 @@ class SizeOfAlignOfExpr : public Expr {
   bool isSizeof : 1;  // true if sizeof, false if alignof.
   bool isType : 1;    // true if operand is a type, false if an expression
   union {
-    void *Ty;
+    DeclaratorInfo *Ty;
     Stmt *Ex;
   } Argument;
   SourceLocation OpLoc, RParenLoc;
@@ -984,15 +991,15 @@ protected:
   virtual void DoDestroy(ASTContext& C);
 
 public:
-  SizeOfAlignOfExpr(bool issizeof, QualType T,
+  SizeOfAlignOfExpr(bool issizeof, DeclaratorInfo *DInfo,
                     QualType resultType, SourceLocation op,
                     SourceLocation rp) :
       Expr(SizeOfAlignOfExprClass, resultType,
            false, // Never type-dependent (C++ [temp.dep.expr]p3).
            // Value-dependent if the argument is type-dependent.
-           T->isDependentType()),
+           DInfo->getType()->isDependentType()),
       isSizeof(issizeof), isType(true), OpLoc(op), RParenLoc(rp) {
-    Argument.Ty = T.getAsOpaquePtr();
+    Argument.Ty = DInfo;
   }
 
   SizeOfAlignOfExpr(bool issizeof, Expr *E,
@@ -1015,8 +1022,11 @@ public:
 
   bool isArgumentType() const { return isType; }
   QualType getArgumentType() const {
+    return getArgumentTypeInfo()->getType();
+  }
+  DeclaratorInfo *getArgumentTypeInfo() const {
     assert(isArgumentType() && "calling getArgumentType() when arg is expr");
-    return QualType::getFromOpaquePtr(Argument.Ty);
+    return Argument.Ty;
   }
   Expr *getArgumentExpr() {
     assert(!isArgumentType() && "calling getArgumentExpr() when arg is type");
@@ -1027,8 +1037,8 @@ public:
   }
 
   void setArgument(Expr *E) { Argument.Ex = E; isType = false; }
-  void setArgument(QualType T) {
-    Argument.Ty = T.getAsOpaquePtr();
+  void setArgument(DeclaratorInfo *DInfo) {
+    Argument.Ty = DInfo;
     isType = true;
   }
 
@@ -1304,7 +1314,7 @@ class MemberExpr : public Expr {
   MemberExpr(Expr *base, bool isarrow, NestedNameSpecifier *qual,
              SourceRange qualrange, NamedDecl *memberdecl, SourceLocation l,
              bool has_explicit, SourceLocation langle,
-             const TemplateArgument *targs, unsigned numtargs,
+             const TemplateArgumentLoc *targs, unsigned numtargs,
              SourceLocation rangle, QualType ty);
 
 public:
@@ -1326,7 +1336,7 @@ public:
                             SourceLocation l,
                             bool has_explicit,
                             SourceLocation langle,
-                            const TemplateArgument *targs,
+                            const TemplateArgumentLoc *targs,
                             unsigned numtargs,
                             SourceLocation rangle,
                             QualType ty);
@@ -1383,7 +1393,7 @@ public:
 
   /// \brief Retrieve the template arguments provided as part of this
   /// template-id.
-  const TemplateArgument *getTemplateArgs() const {
+  const TemplateArgumentLoc *getTemplateArgs() const {
     if (!HasExplicitTemplateArgumentList)
       return 0;
 
@@ -1509,6 +1519,9 @@ public:
     /// CK_NoOp - Used for const_cast.
     CK_NoOp,
 
+    /// CK_BaseToDerived - Base to derived class casts.
+    CK_BaseToDerived,
+
     /// CK_DerivedToBase - Derived to base class casts.
     CK_DerivedToBase,
 
@@ -1531,6 +1544,10 @@ public:
     /// member pointer in derived class.
     CK_BaseToDerivedMemberPointer,
 
+    /// CK_DerivedToBaseMemberPointer - Member pointer in derived class to
+    /// member pointer in base class.
+    CK_DerivedToBaseMemberPointer,
+    
     /// CK_UserDefinedConversion - Conversion using a user defined type
     /// conversion function.
     CK_UserDefinedConversion,
@@ -1830,13 +1847,18 @@ public:
   bool isAdditiveOp() const { return Opc == Add || Opc == Sub; }
   static bool isShiftOp(Opcode Opc) { return Opc == Shl || Opc == Shr; }
   bool isShiftOp() const { return isShiftOp(Opc); }
-  bool isBitwiseOp() const { return Opc >= And && Opc <= Or; }
+
+  static bool isBitwiseOp(Opcode Opc) { return Opc >= And && Opc <= Or; }
+  bool isBitwiseOp() const { return isBitwiseOp(Opc); }
 
   static bool isRelationalOp(Opcode Opc) { return Opc >= LT && Opc <= GE; }
   bool isRelationalOp() const { return isRelationalOp(Opc); }
 
   static bool isEqualityOp(Opcode Opc) { return Opc == EQ || Opc == NE; }
   bool isEqualityOp() const { return isEqualityOp(Opc); }
+
+  static bool isComparisonOp(Opcode Opc) { return Opc >= LT && Opc <= NE; }
+  bool isComparisonOp() const { return isComparisonOp(Opc); }
 
   static bool isLogicalOp(Opcode Opc) { return Opc == LAnd || Opc == LOr; }
   bool isLogicalOp() const { return isLogicalOp(Opc); }

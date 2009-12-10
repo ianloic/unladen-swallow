@@ -16,6 +16,7 @@
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Parse/DeclSpec.h"
 #include "clang/Parse/Scope.h"
+#include "clang/Parse/Template.h"
 #include "ExtensionRAIIObject.h"
 using namespace clang;
 
@@ -282,10 +283,13 @@ Parser::DeclPtrTy Parser::ParseUsingDeclaration(unsigned Context,
                                                 SourceLocation &DeclEnd,
                                                 AccessSpecifier AS) {
   CXXScopeSpec SS;
+  SourceLocation TypenameLoc;
   bool IsTypeName;
 
   // Ignore optional 'typename'.
+  // FIXME: This is wrong; we should parse this as a typename-specifier.
   if (Tok.is(tok::kw_typename)) {
+    TypenameLoc = Tok.getLocation();
     ConsumeToken();
     IsTypeName = true;
   }
@@ -302,40 +306,21 @@ Parser::DeclPtrTy Parser::ParseUsingDeclaration(unsigned Context,
     SkipUntil(tok::semi);
     return DeclPtrTy();
   }
-  if (Tok.is(tok::annot_template_id)) {
-    // C++0x N2914 [namespace.udecl]p5:
-    // A using-declaration shall not name a template-id.
-    Diag(Tok, diag::err_using_decl_can_not_refer_to_template_spec);
+
+  // Parse the unqualified-id. We allow parsing of both constructor and 
+  // destructor names and allow the action module to diagnose any semantic
+  // errors.
+  UnqualifiedId Name;
+  if (ParseUnqualifiedId(SS, 
+                         /*EnteringContext=*/false,
+                         /*AllowDestructorName=*/true,
+                         /*AllowConstructorName=*/true, 
+                         /*ObjectType=*/0, 
+                         Name)) {
     SkipUntil(tok::semi);
     return DeclPtrTy();
   }
-
-  IdentifierInfo *TargetName = 0;
-  OverloadedOperatorKind Op = OO_None;
-  SourceLocation IdentLoc;
-
-  if (Tok.is(tok::kw_operator)) {
-    IdentLoc = Tok.getLocation();
-
-    Op = TryParseOperatorFunctionId();
-    if (!Op) {
-      // If there was an invalid operator, skip to end of decl, and eat ';'.
-      SkipUntil(tok::semi);
-      return DeclPtrTy();
-    }
-  } else if (Tok.is(tok::identifier)) {
-    // Parse identifier.
-    TargetName = Tok.getIdentifierInfo();
-    IdentLoc = ConsumeToken();
-  } else {
-    // FIXME: Use a better diagnostic here.
-    Diag(Tok, diag::err_expected_ident_in_using);
-
-    // If there was invalid identifier, skip to end of decl, and eat ';'.
-    SkipUntil(tok::semi);
-    return DeclPtrTy();
-  }
-
+  
   // Parse (optional) attributes (most likely GNU strong-using extension).
   if (Tok.is(tok::kw___attribute))
     AttrList = ParseAttributes();
@@ -343,11 +328,11 @@ Parser::DeclPtrTy Parser::ParseUsingDeclaration(unsigned Context,
   // Eat ';'.
   DeclEnd = Tok.getLocation();
   ExpectAndConsume(tok::semi, diag::err_expected_semi_after,
-                   AttrList ? "attributes list" : "namespace name", tok::semi);
+                   AttrList ? "attributes list" : "using declaration", 
+                   tok::semi);
 
-  return Actions.ActOnUsingDeclaration(CurScope, AS, UsingLoc, SS,
-                                       IdentLoc, TargetName, Op,
-                                       AttrList, IsTypeName);
+  return Actions.ActOnUsingDeclaration(CurScope, AS, UsingLoc, SS, Name,
+                                       AttrList, IsTypeName, TypenameLoc);
 }
 
 /// ParseStaticAssertDeclaration - Parse C++0x static_assert-declaratoion.
@@ -589,6 +574,8 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
     if (Tok.isNot(tok::identifier) && Tok.isNot(tok::annot_template_id))
       Diag(Tok, diag::err_expected_ident);
 
+  TemplateParameterLists *TemplateParams = TemplateInfo.TemplateParams;
+
   // Parse the (optional) class name or simple-template-id.
   IdentifierInfo *Name = 0;
   SourceLocation NameLoc;
@@ -596,6 +583,53 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
   if (Tok.is(tok::identifier)) {
     Name = Tok.getIdentifierInfo();
     NameLoc = ConsumeToken();
+    
+    if (Tok.is(tok::less)) {
+      // The name was supposed to refer to a template, but didn't. 
+      // Eat the template argument list and try to continue parsing this as
+      // a class (or template thereof).
+      TemplateArgList TemplateArgs;
+      SourceLocation LAngleLoc, RAngleLoc;
+      if (ParseTemplateIdAfterTemplateName(TemplateTy(), NameLoc, &SS, 
+                                           true, LAngleLoc,
+                                           TemplateArgs, RAngleLoc)) {
+        // We couldn't parse the template argument list at all, so don't
+        // try to give any location information for the list.
+        LAngleLoc = RAngleLoc = SourceLocation();
+      }
+      
+      Diag(NameLoc, diag::err_explicit_spec_non_template)
+        << (TemplateInfo.Kind == ParsedTemplateInfo::ExplicitInstantiation)
+        << (TagType == DeclSpec::TST_class? 0
+            : TagType == DeclSpec::TST_struct? 1
+            : 2)
+        << Name
+        << SourceRange(LAngleLoc, RAngleLoc);
+      
+      // Strip off the last template parameter list if it was empty, since 
+      // we've removed its template argument list.
+      if (TemplateParams && TemplateInfo.LastParameterListWasEmpty) {
+        if (TemplateParams && TemplateParams->size() > 1) {
+          TemplateParams->pop_back();
+        } else {
+          TemplateParams = 0;
+          const_cast<ParsedTemplateInfo&>(TemplateInfo).Kind 
+            = ParsedTemplateInfo::NonTemplate;
+        }
+      } else if (TemplateInfo.Kind
+                                == ParsedTemplateInfo::ExplicitInstantiation) {
+        // Pretend this is just a forward declaration.
+        TemplateParams = 0;
+        const_cast<ParsedTemplateInfo&>(TemplateInfo).Kind 
+          = ParsedTemplateInfo::NonTemplate;
+        const_cast<ParsedTemplateInfo&>(TemplateInfo).TemplateLoc 
+          = SourceLocation();
+        const_cast<ParsedTemplateInfo&>(TemplateInfo).ExternLoc
+          = SourceLocation();
+      }
+        
+      
+    }
   } else if (Tok.is(tok::annot_template_id)) {
     TemplateId = static_cast<TemplateIdAnnotation *>(Tok.getAnnotationValue());
     NameLoc = ConsumeToken();
@@ -660,7 +694,6 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
   // Create the tag portion of the class or class template.
   Action::DeclResult TagOrTempResult = true; // invalid
   Action::TypeResult TypeResult = true; // invalid
-  TemplateParameterLists *TemplateParams = TemplateInfo.TemplateParams;
 
   // FIXME: When TUK == TUK_Reference and we have a template-id, we need
   // to turn that template-id into a type.
@@ -671,7 +704,6 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
     // or explicit instantiation.
     ASTTemplateArgsPtr TemplateArgsPtr(Actions,
                                        TemplateId->getTemplateArgs(),
-                                       TemplateId->getTemplateArgIsType(),
                                        TemplateId->NumArgs);
     if (TemplateInfo.Kind == ParsedTemplateInfo::ExplicitInstantiation &&
         TUK == Action::TUK_Declaration) {
@@ -687,7 +719,6 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
                                              TemplateId->TemplateNameLoc,
                                              TemplateId->LAngleLoc,
                                              TemplateArgsPtr,
-                                      TemplateId->getTemplateArgLocations(),
                                              TemplateId->RAngleLoc,
                                              Attr);
     } else if (TUK == Action::TUK_Reference) {
@@ -696,7 +727,6 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
                                       TemplateId->TemplateNameLoc,
                                       TemplateId->LAngleLoc,
                                       TemplateArgsPtr,
-                                      TemplateId->getTemplateArgLocations(),
                                       TemplateId->RAngleLoc);
 
       TypeResult = Actions.ActOnTagTemplateIdType(TypeResult, TUK,
@@ -744,7 +774,6 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
                        TemplateId->TemplateNameLoc,
                        TemplateId->LAngleLoc,
                        TemplateArgsPtr,
-                       TemplateId->getTemplateArgLocations(),
                        TemplateId->RAngleLoc,
                        Attr,
                        Action::MultiTemplateParamsArg(Actions,
@@ -1047,7 +1076,7 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
   SourceLocation DSStart = Tok.getLocation();
   // decl-specifier-seq:
   // Parse the common declaration-specifiers piece.
-  DeclSpec DS;
+  ParsingDeclSpec DS(*this);
   ParseDeclarationSpecifiers(DS, TemplateInfo, AS, DSC_class);
 
   Action::MultiTemplateParamsArg TemplateParams(Actions,
@@ -1060,7 +1089,7 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
     return;
   }
 
-  Declarator DeclaratorInfo(DS, Declarator::MemberContext);
+  ParsingDeclarator DeclaratorInfo(*this, DS, Declarator::MemberContext);
 
   if (Tok.isNot(tok::colon)) {
     // Parse the first declarator.
@@ -1179,6 +1208,8 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
       HandleMemberFunctionDefaultArgs(DeclaratorInfo, ThisDecl);
     }
 
+    DeclaratorInfo.complete(ThisDecl);
+
     // If we don't have a comma, it is either the end of the list (a ';')
     // or an error, bail out.
     if (Tok.isNot(tok::comma))
@@ -1269,7 +1300,8 @@ void Parser::ParseCXXMemberSpecification(SourceLocation RecordLoc,
 
     // Check for extraneous top-level semicolon.
     if (Tok.is(tok::semi)) {
-      Diag(Tok, diag::ext_extra_struct_semi);
+      Diag(Tok, diag::ext_extra_struct_semi)
+        << CodeModificationHint::CreateRemoval(SourceRange(Tok.getLocation()));
       ConsumeToken();
       continue;
     }

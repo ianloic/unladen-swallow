@@ -25698,7 +25698,7 @@ if test "${with_llvm+set}" = set; then
 fi
 
 
-if test "$with_llvm" == "no"
+if test "$with_llvm" = "no"
 then
     { $as_echo "$as_me:$LINENO: result: disabled" >&5
 $as_echo "disabled" >&6; }
@@ -25781,7 +25781,7 @@ _ACEOF
 
 fi
 
-if test "$BUILD_LLVM" == "1"
+if test "$BUILD_LLVM" = "1"
 then
     LLVM_BASE="Util/llvm"
     # llvm and llvm_tools are empty make targets that touch these files so they
@@ -25796,7 +25796,7 @@ then
     # effect is that config.status passes some extra arguments when it
     # re-runs the Python configure script.
     # Keep these arguments in sync with Util/llvm/install-llvm.sh.
-    ac_configure_args="$ac_configure_args --enable-jit --enable-targets=x86,cpp --enable-bindings=none"
+    ac_configure_args="$ac_configure_args --enable-jit --enable-targets=host --enable-bindings=none"
     if test "$Py_DEBUG" = 'true' ; then
         ac_configure_args="$ac_configure_args --disable-optimized --enable-debug-runtime --enable-assertions"
         LLVM_PATH="$LLVM_BASE/Debug"
@@ -25825,7 +25825,7 @@ if test "${with_instrumentation+set}" = set; then
 fi
 
 
-if test "$with_instrumentation" == yes
+if test "$with_instrumentation" = yes
 then
 
 cat >>confdefs.h <<\_ACEOF
@@ -25834,7 +25834,7 @@ _ACEOF
 
 	{ $as_echo "$as_me:$LINENO: result: yes" >&5
 $as_echo "yes" >&6; };
-    if test "$BUILD_LLVM" == "disabled"
+    if test "$BUILD_LLVM" = "disabled"
 	then
 		{ { $as_echo "$as_me:$LINENO: error: --with-instrumentation requires --with-llvm" >&5
 $as_echo "$as_me: error: --with-instrumentation requires --with-llvm" >&2;}
@@ -25861,7 +25861,7 @@ _ACEOF
 
 	{ $as_echo "$as_me:$LINENO: result: yes" >&5
 $as_echo "yes" >&6; }
-	if test "$BUILD_LLVM" == "disabled"
+	if test "$BUILD_LLVM" = "disabled"
 	then
 		{ { $as_echo "$as_me:$LINENO: error: --with-tsc requires --with-llvm" >&5
 $as_echo "$as_me: error: --with-tsc requires --with-llvm" >&2;}
