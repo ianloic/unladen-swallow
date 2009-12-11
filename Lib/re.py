@@ -234,6 +234,8 @@ class Pattern(object):
     self.pattern = pattern
     self.flags = flags
 
+    if self._compile == None: self._compile = self._compile_sre
+
     # compile the RE using whatever native library (SRE by default)
     self._compile()
 
@@ -254,7 +256,7 @@ class Pattern(object):
     self._call = self._call_llvmre
 
   # by default compile to SRE first
-  _compile = _compile_sre
+  _compile = None
 
   def _call_sre(self, method, *args):
     '''call SRE and possibly compile the llvmre'''
