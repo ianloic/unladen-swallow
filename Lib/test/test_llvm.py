@@ -77,6 +77,10 @@ class ExtraAssertsTestCase(unittest.TestCase):
         if obj not in container:
             self.fail("%r not found in %r" % (obj, container))
 
+    def assertNotContains(self, obj, container):
+        if obj in container:
+            self.fail("%r found in %r" % (obj, container))
+
 
 class LlvmTestCase(unittest.TestCase):
 
@@ -3437,6 +3441,18 @@ def foo():
         self.assertFalse(set_foo.__code__.__use_llvm__)
 
 
+class InliningTests(LlvmTestCase, ExtraAssertsTestCase):
+
+    def test_manual_optimization(self):
+        foo = compile_for_llvm("foo", "def foo(): return 5",
+                               optimization_level=None)
+        foo.__code__.co_optimization = 0
+        self.assertContains("@_PyLlvm_WrapDecref", str(foo.__code__.co_llvm))
+        # Run inlining.
+        foo.__code__.co_optimization = 2
+        self.assertNotContains("@_PyLlvm_WrapDecref", str(foo.__code__.co_llvm))
+
+
 class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 
     def configure_func(self, func, *args):
@@ -3479,7 +3495,7 @@ class LlvmRebindBuiltinsTests(test_dynamic.RebindBuiltinsTests):
 
 def test_main():
     tests = [LoopExceptionInteractionTests, GeneralCompilationTests,
-             OperatorTests, LiteralsTests, BailoutTests]
+             OperatorTests, LiteralsTests, BailoutTests, InliningTests]
     if sys.flags.optimize >= 1:
         print >>sys.stderr, "test_llvm -- skipping some tests due to -O flag."
         sys.stderr.flush()

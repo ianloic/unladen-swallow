@@ -4,6 +4,8 @@
 #include "llvm/BasicBlock.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
+#include "llvm/ModuleProvider.h"
+#include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 namespace {
@@ -14,6 +16,7 @@ using llvm::CallInst;
 using llvm::Function;
 using llvm::FunctionPass;
 using llvm::InvokeInst;
+using llvm::ModuleProvider;
 using llvm::dyn_cast;
 using llvm::isa;
 
@@ -23,7 +26,8 @@ using llvm::isa;
 class SingleFunctionInliner : public FunctionPass {
 public:
     static char ID;
-    SingleFunctionInliner() : FunctionPass(&ID) {}
+    SingleFunctionInliner(ModuleProvider *mp = NULL)
+        : FunctionPass(&ID), provider_(mp) {}
 
     virtual bool runOnFunction(Function &f)
     {
@@ -43,8 +47,13 @@ public:
                 // This may miss inlining indirect calls that become
                 // direct after inlining something else.
                 Function *called_function = call->getCalledFunction();
-                if (called_function != NULL &&
-                    !called_function->isDeclaration() &&
+                if (called_function == NULL)
+                    continue;
+                if (this->provider_ != NULL &&
+                    called_function->hasNotBeenReadFromBitcode()) {
+                    this->provider_->materializeFunction(called_function);
+                }
+                if (!called_function->isDeclaration() &&
                     called_function->hasFnAttr(Attribute::AlwaysInline)) {
                     call_sites.push_back(call);
                 }
@@ -57,6 +66,9 @@ public:
         }
         return changed;
     }
+
+private:
+    ModuleProvider *provider_;
 };
 
 // The address of this variable identifies the pass.  See
@@ -65,7 +77,7 @@ char SingleFunctionInliner::ID = 0;
 
 }  // anonymous namespace
 
-FunctionPass *PyCreateSingleFunctionInliningPass()
+FunctionPass *PyCreateSingleFunctionInliningPass(ModuleProvider *mp)
 {
-    return new SingleFunctionInliner();
+    return new SingleFunctionInliner(mp);
 }
