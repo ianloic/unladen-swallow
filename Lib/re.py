@@ -130,6 +130,9 @@ X = VERBOSE = sre_compile.SRE_FLAG_VERBOSE # ignore whitespace and comments
 T = TEMPLATE = sre_compile.SRE_FLAG_TEMPLATE # disable backtracking
 DEBUG = sre_compile.SRE_FLAG_DEBUG # dump pattern after compilation
 
+LLVMREONLY = DEBUG*2 # only compile to llvmre
+SREONLY = DEBUG*4 # only compile to SRE
+
 # sre exception
 error = sre_compile.error
 
@@ -234,7 +237,16 @@ class Pattern(object):
     self.pattern = pattern
     self.flags = flags
 
+    if flags & SREONLY:
+      self._compile = self._compile_sre
+      self._call = self._call_simple
+    elif flags & LLVMREONLY:
+      self._compile = self._compile_llvmre
+      self._call = self._call_llvmre
+
+    # by default compile and call SRE first
     if self._compile == None: self._compile = self._compile_sre
+    if self._call == None: self._call = self._call_sre
 
     # compile the RE using whatever native library (SRE by default)
     self._compile()
@@ -249,7 +261,6 @@ class Pattern(object):
 
   def _compile_sre(self):
     self.__impl = sre_compile.compile(self.pattern, self.flags)
-    self._call = self._call_sre
 
   def _compile_llvmre(self):
     self.__impl = llvmre.compile(self.pattern, self.flags)
@@ -271,8 +282,7 @@ class Pattern(object):
     # call the method on the implementation
     return getattr(self.__impl, method)(*args)
 
-  # by default call SRE first
-  _call = _call_sre
+  _call = None
 
   # calling llvmre is just a simple call
   _call_llvmre = _call_simple
