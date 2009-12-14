@@ -1,6 +1,8 @@
 /* Note: this file is not compiled if configured with --without-llvm. */
 #include "Python.h"
 
+#include "osdefs.h"
+#undef MAXPATHLEN  /* Conflicts with definition in LLVM's config.h */
 #include "Python/global_llvm_data.h"
 #include "Util/ConstantMirror.h"
 #include "Util/DeadGlobalElim.h"
@@ -81,7 +83,8 @@ find_stdlib_bc()
 {
     llvm::sys::Path path;
     llvm::SmallVector<StringRef, 8> sys_path;
-    StringRef(Py_GetPath()).split(sys_path, ":");
+    const char delim[] = { DELIM, '\0' };
+    StringRef(Py_GetPath()).split(sys_path, delim);
     for (ssize_t i = 0, size = sys_path.size(); i < size; ++i) {
         StringRef elem = sys_path[i];
         path = elem;
