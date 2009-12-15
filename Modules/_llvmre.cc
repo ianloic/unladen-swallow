@@ -19,7 +19,9 @@
 #include "llvm/CallingConv.h"
 #include "llvm/Attributes.h"
 #include "llvm/LLVMContext.h"
-
+#include "llvm/Support/InstIterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/Casting.h"
 
 // for SRE_FLAG_*
 #include "sre_constants.h"
@@ -55,6 +57,12 @@ using llvm::LLVMContext;
 using llvm::getGlobalContext;
 
 using llvm::cast;
+using llvm::dyn_cast;
+using llvm::inst_begin;
+using llvm::inst_end;
+using llvm::inst_iterator;
+
+using llvm::SmallPtrSet;
 
 // helper to produce better error messages
 #define _PyErr_SetString(T,S) \
@@ -398,10 +406,12 @@ RegularExpression::Optimize(Function* f)
 {
   return true;
 
+#if 0
   if (flags & 128) {
     // don't optimize if the DEBUG flag is set
     return true;
   }
+#endif
 	if (global_data->Optimize(*f, 3) < 0) {
     PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
     return false;
@@ -1928,10 +1938,32 @@ RegEx_dealloc(RegEx* self)
   }
 }
 
+typedef SmallPtrSet<Function*, 16> DumpedFunctionSet;
+
+static void
+dump_function(Function* function, DumpedFunctionSet& dumped) {
+  function->dump();
+  dumped.insert(function);
+
+  // iterate the function's instructions, looking for a call
+  for (inst_iterator i = inst_begin(function), e = inst_end(function); 
+      i != e; i++) { 
+    if (CallInst* inst = dyn_cast<CallInst>(&*i)) {
+      // found a call, what's being called?
+      Function* called = inst->getCalledFunction();
+      if (called && !dumped.count(called)) {
+        // it's never dumped before, dump it.
+        dump_function(called, dumped);
+      }
+    }
+  }
+}
+
 static PyObject*
 RegEx_dump(RegEx* self) {
   if (self->re) {
-    self->re->module->dump();
+    DumpedFunctionSet dumped;
+    dump_function(self->re->find_function, dumped);
   }
   Py_INCREF(Py_None);
   return Py_None;
