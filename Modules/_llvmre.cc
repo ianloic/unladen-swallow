@@ -77,16 +77,6 @@ typedef ReOffset (*FindFunction)(Py_UNICODE*, ReOffset, ReOffset, ReOffset*, ReO
 class RegularExpression;
 class CompiledExpression;
 
-// global values
-Value* not_found;
-
-// global types
-const IntegerType* charType;
-const IntegerType* boolType;
-const IntegerType* offsetType;
-const PointerType* charPointerType;
-const PointerType* offsetPointerType;
-
 
 #ifndef TESTER
 /* a Python object representing a regular expression */
@@ -98,6 +88,39 @@ typedef struct {
 
 } RegEx;
 #endif /* TESTER */
+
+/* a singleton object representing global state, reusable values and
+ * functions that don't belong anywhere else */
+class RegularExpressionModule {
+  public:
+    // values
+    Value* not_found;
+
+    // types
+    const IntegerType* charType;
+    const IntegerType* boolType;
+    const IntegerType* offsetType;
+    const PointerType* charPointerType;
+    const PointerType* offsetPointerType;
+
+    RegularExpressionModule() {
+      // get Unladen Swallow's LLVM context
+      LLVMContext *context = &PyGlobalLlvmData::Get()->context();
+
+      // initialize types and values that are used later all over the place
+      charType = PyTypeBuilder<Py_UNICODE>::get(*context);
+      boolType = PyTypeBuilder<bool>::get(*context);
+      offsetType = PyTypeBuilder<int>::get(*context);
+      charPointerType = PyTypeBuilder<Py_UNICODE*>::get(*context);
+      offsetPointerType = PyTypeBuilder<int*>::get(*context);
+      // set up some handy constants
+      not_found = ConstantInt::getSigned(offsetType, -1);
+    }
+    ~RegularExpressionModule() {
+      // I don't think we can clean up those values safely :(
+    }
+};
+static RegularExpressionModule* REM = NULL;
 
 /* a compiled regular expression atom */
 class CompiledExpression {
@@ -289,14 +312,14 @@ RegularExpression::createFunction(const char* name,
 {
   // function argument types
   std::vector<const Type*> args_type;
-  args_type.push_back(charPointerType); // string
-  args_type.push_back(offsetType); // offset
-  args_type.push_back(offsetType); // end_offset
-  args_type.push_back(offsetPointerType); // groups
+  args_type.push_back(REM->charPointerType); // string
+  args_type.push_back(REM->offsetType); // offset
+  args_type.push_back(REM->offsetType); // end_offset
+  args_type.push_back(REM->offsetPointerType); // groups
   if (extra_arg_type != NULL) {
     args_type.push_back(extra_arg_type); // start_ptr / counter
   }
-  FunctionType *func_type = FunctionType::get(offsetType, args_type, false);
+  FunctionType *func_type = FunctionType::get(REM->offsetType, args_type, false);
 
   Function* func = Function::Create(func_type, 
       internal ? Function::InternalLinkage : Function::ExternalLinkage,
@@ -328,7 +351,7 @@ bool
 RegularExpression::CompileFind() 
 {
     // create the find function
-  find_function = createFunction("find", false, offsetPointerType);
+  find_function = createFunction("find", false, REM->offsetPointerType);
   // get and name the arguments
   Function::arg_iterator func_args = find_function->arg_begin();
   Value* string = func_args++;
@@ -357,7 +380,7 @@ RegularExpression::CompileFind()
       "return_match_result", find_function);
 
   // create the entry BasicBlock
-  Value* offset_ptr = new AllocaInst(offsetType, "offset_ptr", entry);
+  Value* offset_ptr = new AllocaInst(REM->offsetType, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
   BranchInst::Create(test_offset, entry);
 
@@ -379,18 +402,18 @@ RegularExpression::CompileFind()
   Value* match_result = CallInst::Create(function,
       call_args.begin(), call_args.end(), "match_result", match);
   Value* match_result_not_found = new ICmpInst(*match, ICmpInst::ICMP_EQ, 
-      match_result, not_found, "match_result_not_found");
+      match_result, REM->not_found, "match_result_not_found");
   BranchInst::Create(increment, return_match_result, match_result_not_found, 
       match);
 
   // create the increment BasicBlock
   offset = BinaryOperator::CreateAdd(offset, 
-      ConstantInt::get(offsetType, 1), "increment", increment);
+      ConstantInt::get(REM->offsetType, 1), "increment", increment);
   new StoreInst(offset, offset_ptr, increment);
   BranchInst::Create(test_offset, increment);
 
   // create the return_not_found BasicBlock
-  ReturnInst::Create(*context, not_found, return_not_found);
+  ReturnInst::Create(*context, REM->not_found, return_not_found);
 
   // create the return_match_result BasicBlock
   // put the offset in our outparam
@@ -426,7 +449,7 @@ RegularExpression::AllocateGroupsArray()
     int groups_size = groups*2 + 1;
     // allocate the array
     ReOffset* groups_array = new ReOffset[groups_size];
-    // set all members to -1 (aka not_found)
+    // set all members to -1 (aka REM->not_found)
     for (int i=0; i<groups_size; i++) {
       groups_array[i] = -1;
     }
@@ -537,7 +560,7 @@ CompiledExpression::loadCharacter(BasicBlock* block) {
   // make sure it's not past the end of the string
   Value* ended = new ICmpInst(*block, ICmpInst::ICMP_UGE, offset, end_offset, 
       "ended");
-  // if it's ended, return not_found, otherwise, continue
+  // if it's ended, return REM->not_found, otherwise, continue
   // I'm scared this will fuck things up
   BasicBlock* new_block = createBlock();
   BranchInst::Create(return_not_found, new_block, ended, block);
@@ -549,7 +572,7 @@ CompiledExpression::loadCharacter(BasicBlock* block) {
   character = new LoadInst(c_ptr, "c", block);
   // increment the offset
   offset = BinaryOperator::CreateAdd(offset,
-      ConstantInt::get(offsetType, 1), "increment", block);
+      ConstantInt::get(REM->offsetType, 1), "increment", block);
   storeOffset(block, offset);
   return block;
 }
@@ -598,7 +621,7 @@ Function*
 CompiledExpression::greedy(Function* repeat, Function* after) 
 {
   // create the function
-  Function* function = re.createFunction("recurse", true, offsetType);
+  Function* function = re.createFunction("recurse", true, REM->offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -619,9 +642,9 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   BasicBlock* call_after = createBlock("call_after", function);
   BasicBlock* return_offset = createBlock("return_offset", function);
 
-  // set up BasicBlock to return not_found
+  // set up BasicBlock to return REM->not_found
   BasicBlock* return_not_found = createBlock("return_not_found", function);
-  ReturnInst::Create(context(), not_found, return_not_found);
+  ReturnInst::Create(context(), REM->not_found, return_not_found);
 
   // call repeat
   std::vector<Value*> call_args;
@@ -632,15 +655,15 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
   Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
-      repeat_result, not_found, "repeat_result_not_found");
+      repeat_result, REM->not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(offsetType, 1), "remaining", count);
+      ConstantInt::get(REM->offsetType, 1), "remaining", count);
   Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(offsetType, 0), "stop_recursion");
+      ConstantInt::get(REM->offsetType, 0), "stop_recursion");
   BranchInst::Create(call_after, recurse, stop_recursion, count);
 
   // recurse
@@ -649,7 +672,7 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   Value* recurse_result = CallInst::Create(function, call_args.begin(),
       call_args.end(), "recurse_result", recurse);
   Value* recurse_result_not_found = new ICmpInst(*recurse, ICmpInst::ICMP_EQ,
-      recurse_result, not_found, "recurse_result_not_found");
+      recurse_result, REM->not_found, "recurse_result_not_found");
   BranchInst::Create(call_after, return_offset, recurse_result_not_found, 
       recurse);
 
@@ -671,7 +694,7 @@ Function*
 CompiledExpression::nongreedy(Function* repeat, Function* after) 
 {
   // create the function
-  Function* function = re.createFunction("recurse", true, offsetType);
+  Function* function = re.createFunction("recurse", true, REM->offsetType);
 
   Function::arg_iterator args = function->arg_begin();
   Value* string = args++;
@@ -692,9 +715,9 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   BasicBlock* recurse = createBlock("recurse", function);
   BasicBlock* return_after_result = createBlock("return_after_result", function);
 
-  // set up BasicBlock to return not_found
+  // set up BasicBlock to return REM->not_found
   BasicBlock* return_not_found = createBlock("return_not_found", function);
-  ReturnInst::Create(context(), not_found, return_not_found);
+  ReturnInst::Create(context(), REM->not_found, return_not_found);
 
   // call after
   std::vector<Value*> call_args;
@@ -705,7 +728,7 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   Value* after_result = CallInst::Create(after, call_args.begin(),
       call_args.end(), "after_result", call_after);
   Value* after_result_not_found = new ICmpInst(*call_after, ICmpInst::ICMP_EQ,
-      after_result, not_found, "after_result_not_found");
+      after_result, REM->not_found, "after_result_not_found");
   BranchInst::Create(call_repeat, return_after_result, after_result_not_found,
       call_after);
 
@@ -713,15 +736,15 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   Value* repeat_result = CallInst::Create(repeat, call_args.begin(),
       call_args.end(), "repeat_result", call_repeat);
   Value* repeat_result_not_found = new ICmpInst(*call_repeat, ICmpInst::ICMP_EQ,
-      repeat_result, not_found, "repeat_result_not_found");
+      repeat_result, REM->not_found, "repeat_result_not_found");
   BranchInst::Create(return_not_found, count, repeat_result_not_found, 
       call_repeat);
 
   // count
   Value* remaining = BinaryOperator::CreateSub(countdown,
-      ConstantInt::get(offsetType, 1), "remaining", count);
+      ConstantInt::get(REM->offsetType, 1), "remaining", count);
   Value* stop_recursion = new ICmpInst(*count, ICmpInst::ICMP_EQ, remaining,
-      ConstantInt::get(offsetType, 0), "stop_recursion");
+      ConstantInt::get(REM->offsetType, 0), "stop_recursion");
   BranchInst::Create(return_not_found, recurse, stop_recursion, count);
 
   // recurse
@@ -754,11 +777,11 @@ CompiledExpression::testRange(BasicBlock* block,
   BasicBlock* greater_equal = createBlock("greater_equal");
   // test the character >= from
   Value* is_ge = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_UGE, c,
-      ConstantInt::get(charType, from), "is_ge");
+      ConstantInt::get(REM->charType, from), "is_ge");
   BranchInst::Create(greater_equal, nonmember, is_ge, block);
   // test the character <= to
   Value* is_le = new llvm::ICmpInst(*greater_equal, llvm::ICmpInst::ICMP_ULE, 
-      c, ConstantInt::get(charType, to), "is_le");
+      c, ConstantInt::get(REM->charType, to), "is_le");
   BranchInst::Create(member, nonmember, is_le, greater_equal);
 }
 
@@ -793,7 +816,7 @@ CompiledExpression::testCategory(BasicBlock* block,
       BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
       Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(charType, '_'), "is_underscore");
+        ConstantInt::get(REM->charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // call the function
       Value* result = 
@@ -806,7 +829,7 @@ CompiledExpression::testCategory(BasicBlock* block,
       BasicBlock* tmp2 = createBlock("category_word_2");
       testRange(block, c, '0', '9', member, tmp1);
       Value* is_underscore = new ICmpInst(*tmp1, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(charType, '_'), "is_underscore");
+        ConstantInt::get(REM->charType, '_'), "is_underscore");
       BranchInst::Create(member, tmp2, is_underscore, tmp1);
       // call the function
       Value* result =
@@ -823,7 +846,7 @@ CompiledExpression::testCategory(BasicBlock* block,
       testRange(tmp1, c, 'A', 'Z', member, tmp2);
       testRange(tmp2, c, '0', '9', member, tmp3);
       Value* is_underscore = new ICmpInst(*tmp3, ICmpInst::ICMP_EQ, c,
-        ConstantInt::get(charType, '_'), "is_underscore");
+        ConstantInt::get(REM->charType, '_'), "is_underscore");
       BranchInst::Create(member, nonmember, is_underscore, tmp3);
     }
   } else if (!strcmp(category, "category_not_word")) {
@@ -833,12 +856,12 @@ CompiledExpression::testCategory(BasicBlock* block,
     BasicBlock* unmatched = createBlock();
     // create a switch instruction
     SwitchInst* switch_ = SwitchInst::Create(c, unmatched, 6, block);
-    switch_->addCase(ConstantInt::get(charType, ' '), member);
-    switch_->addCase(ConstantInt::get(charType, '\t'), member);
-    switch_->addCase(ConstantInt::get(charType, '\n'), member);
-    switch_->addCase(ConstantInt::get(charType, '\r'), member);
-    switch_->addCase(ConstantInt::get(charType, '\f'), member);
-    switch_->addCase(ConstantInt::get(charType, '\v'), member);
+    switch_->addCase(ConstantInt::get(REM->charType, ' '), member);
+    switch_->addCase(ConstantInt::get(REM->charType, '\t'), member);
+    switch_->addCase(ConstantInt::get(REM->charType, '\n'), member);
+    switch_->addCase(ConstantInt::get(REM->charType, '\r'), member);
+    switch_->addCase(ConstantInt::get(REM->charType, '\f'), member);
+    switch_->addCase(ConstantInt::get(REM->charType, '\v'), member);
     if (re.flags & SRE_FLAG_LOCALE) {
       // also match isspace
       Value* result = 
@@ -891,7 +914,7 @@ CompiledExpression::Compile(PyObject*  seq,
 
   // create the entry BasicBlock
   entry = createBlock("entry");
-  offset_ptr = new AllocaInst(offsetType, "offset_ptr", entry);
+  offset_ptr = new AllocaInst(REM->offsetType, "offset_ptr", entry);
   new StoreInst(offset, offset_ptr, entry);
 
   // create a block that returns the offset
@@ -1032,7 +1055,7 @@ CompiledExpression::Compile(PyObject*  seq,
   BranchInst::Create(first, entry);
 
   // add the return instruction to return_not_found
-  ReturnInst::Create(context(), not_found, return_not_found);
+  ReturnInst::Create(context(), REM->not_found, return_not_found);
 
   return re.Optimize(function);
 
@@ -1063,16 +1086,16 @@ CompiledExpression::literal(BasicBlock* block, PyObject* arg, bool not_literal) 
     SwitchInst* switch_ = SwitchInst::Create(character,
         not_literal ? post : return_not_found, 2, block);
     // lower and upper cases
-    switch_->addCase(ConstantInt::get(charType, lower),
+    switch_->addCase(ConstantInt::get(REM->charType, lower),
         not_literal ? return_not_found : post);
-    switch_->addCase(ConstantInt::get(charType, upper),
+    switch_->addCase(ConstantInt::get(REM->charType, upper),
         not_literal ? return_not_found : post);
   } else {
     // is it equal to the character in the pattern
     Value* c_equal = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
-        character, ConstantInt::get(charType, c), "c_equal");
+        character, ConstantInt::get(REM->charType, c), "c_equal");
 
-    // depending on the kind of operation either continue or return not_found
+    // depending on the kind of operation either continue or return REM->not_found
     if (not_literal) { /* not_literal */
       BranchInst::Create(return_not_found, post, c_equal, block);
     } else { /* literal */
@@ -1096,7 +1119,7 @@ CompiledExpression::any(BasicBlock* block) {
     // 'any' matches anything except for '\n'
     // is newline?
     Value* c_newline = new llvm::ICmpInst(*block, llvm::ICmpInst::ICMP_EQ, 
-        character, ConstantInt::get(charType, '\n'), "c_newline");
+        character, ConstantInt::get(REM->charType, '\n'), "c_newline");
 
     // create a block to continue to on success
     BasicBlock* post = createBlock("post_any");
@@ -1172,7 +1195,7 @@ CompiledExpression::in(BasicBlock* block, PyObject* arg) {
       }
 
       // add a switch case
-      switch_->addCase(ConstantInt::get(charType, PyInt_AsLong(op_arg)),
+      switch_->addCase(ConstantInt::get(REM->charType, PyInt_AsLong(op_arg)),
           negate?return_not_found:matched);
     } else if (!strcmp(op_str, "range")) {
       // parse the start and end of the range
@@ -1272,7 +1295,7 @@ CompiledExpression::branch(BasicBlock* block, PyObject* arg) {
         args.begin(), args.end(), "branch_result", block);
     // check it
     Value* branch_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, 
-        branch_result, not_found, "branch_result_not_found");
+        branch_result, REM->not_found, "branch_result_not_found");
     // no match means run the next check, otherwise go to match:
     BranchInst::Create(next, match, branch_result_not_found, block);
 
@@ -1320,7 +1343,7 @@ CompiledExpression::at_end(BasicBlock* block)
       test_slash_n);
   Value* c = new LoadInst(c_ptr, "c", test_slash_n);
   Value* c_slash_n = new ICmpInst(*test_slash_n, ICmpInst::ICMP_EQ, c, 
-      ConstantInt::get(charType, '\n'), "c_slash_n");
+      ConstantInt::get(REM->charType, '\n'), "c_slash_n");
   // for MULTILINE the \n means a match, for non MULTILINE we need to check
   // that we're almost at the end
   BranchInst::Create(multiline ? next_block : test_near_end, return_not_found,
@@ -1329,10 +1352,10 @@ CompiledExpression::at_end(BasicBlock* block)
   if (!multiline) {
     // are we near the end?
     Value* offset_plus_one = BinaryOperator::CreateAdd(offset,
-        ConstantInt::get(offsetType, 1), "offset_plus_one", test_near_end);
+        ConstantInt::get(REM->offsetType, 1), "offset_plus_one", test_near_end);
     Value* near_end = new ICmpInst(*test_near_end, ICmpInst::ICMP_UGE, 
         offset_plus_one, end_offset, "near_end");
-    // either go to the next or return not_found
+    // either go to the next or return REM->not_found
     BranchInst::Create(next_block, return_not_found, near_end, test_near_end);
   }
 
@@ -1358,7 +1381,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
 
   // are we at the start of the string?
   Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(offsetType, 0), "start");
+      ConstantInt::get(REM->offsetType, 0), "start");
   // for multiline, we also check for \n before the offset
   BranchInst::Create(next_block, multiline ? test_slash_n : return_not_found,
       start, block);
@@ -1366,7 +1389,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
   if (multiline) {
     // load the character back one
     Value* previous_offset = BinaryOperator::CreateSub(offset,
-        ConstantInt::get(offsetType, 1), "previous_offset", test_slash_n);
+        ConstantInt::get(REM->offsetType, 1), "previous_offset", test_slash_n);
     Value* previous_c_ptr = GetElementPtrInst::Create(string, 
         previous_offset, "previous_c_ptr", 
       test_slash_n);
@@ -1374,7 +1397,7 @@ CompiledExpression::at_beginning(BasicBlock* block)
         test_slash_n);
     // is it \n?
     Value* previous_c_slash_n = new ICmpInst(*test_slash_n, 
-        ICmpInst::ICMP_EQ, previous_c, ConstantInt::get(charType, '\n'),
+        ICmpInst::ICMP_EQ, previous_c, ConstantInt::get(REM->charType, '\n'),
         "previous_c_slash_n");
     BranchInst::Create(next_block, return_not_found, previous_c_slash_n,
         test_slash_n);
@@ -1393,7 +1416,7 @@ CompiledExpression::at_beginning_string(BasicBlock* block)
   // are we at the start of the string?
   Value* offset = loadOffset(block);
   Value* start = new ICmpInst(*block, ICmpInst::ICMP_EQ, offset, 
-      ConstantInt::get(offsetType, 0), "start");
+      ConstantInt::get(REM->offsetType, 0), "start");
   BranchInst::Create(next_block, return_not_found, start, block);
 
   return next_block;
@@ -1432,16 +1455,16 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // initial block
   // variables to hold the word-ness of the previous and next characters
-  Value* prev_word_ptr = new AllocaInst(boolType, "prev_word_ptr", 
+  Value* prev_word_ptr = new AllocaInst(REM->boolType, "prev_word_ptr", 
       block);
-  Value* next_word_ptr = new AllocaInst(boolType, "next_word_ptr", 
+  Value* next_word_ptr = new AllocaInst(REM->boolType, "next_word_ptr", 
       block);
 
   // load the offset
   Value* offset = loadOffset(block);
   // set the next/prev word-ness values based on the offset
   Value* not_start = new ICmpInst(*block, ICmpInst::ICMP_NE, offset,
-      ConstantInt::get(offsetType, 0), "not_start");
+      ConstantInt::get(REM->offsetType, 0), "not_start");
   new StoreInst(not_start, prev_word_ptr, block);
   Value* not_end = new ICmpInst(*block, ICmpInst::ICMP_ULT, offset, 
       end_offset, "not_end");
@@ -1452,7 +1475,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
 
   // test the previous character's word-ness
   Value* prev_off = BinaryOperator::CreateSub(offset, 
-      ConstantInt::get(offsetType, 1), "prev_off", test_prev);
+      ConstantInt::get(REM->offsetType, 1), "prev_off", test_prev);
   Value* prev_c_ptr = GetElementPtrInst::Create(string, prev_off, "prev_c_ptr",
       test_prev);
   Value* prev_c = new LoadInst(prev_c_ptr, "prev_c", test_prev);
@@ -1460,7 +1483,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
       post_test_prev);
   
   // the previous is not a word, store that
-  new StoreInst(ConstantInt::get(boolType, 0), prev_word_ptr, post_test_prev);
+  new StoreInst(ConstantInt::get(REM->boolType, 0), prev_word_ptr, post_test_prev);
   BranchInst::Create(pre_test_next, post_test_prev);
 
   // if we're not at the end then test the word-ness of the next character
@@ -1473,7 +1496,7 @@ CompiledExpression::at_boundary(BasicBlock* block, bool non_boundary) {
   testCategory(test_next, next_c, "category_word", test_word, post_test_next);
 
   // the next is not a word, store that
-  new StoreInst(ConstantInt::get(boolType, 0), next_word_ptr, post_test_next);
+  new StoreInst(ConstantInt::get(REM->boolType, 0), next_word_ptr, post_test_next);
   BranchInst::Create(test_word, post_test_next);
 
   // compare the word-ness of the previous and next characters
@@ -1517,7 +1540,7 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     Value* repeat_result = CallInst::Create(repeated->function, 
         args.begin(), args.end(), "repeat_result", block);
     Value* repeat_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-        repeat_result, not_found, "repeat_result_not_found");
+        repeat_result, REM->not_found, "repeat_result_not_found");
     BasicBlock* next = createBlock("repeat");
     BranchInst::Create(return_not_found, next, repeat_result_not_found,
         block);
@@ -1547,11 +1570,11 @@ CompiledExpression::repeat(BasicBlock* block, PyObject* arg, PyObject* seq,
     args.push_back(loadOffset(block));
     args.push_back(end_offset);
     args.push_back(groups);
-    args.push_back(ConstantInt::get(offsetType, max-min));
+    args.push_back(ConstantInt::get(REM->offsetType, max-min));
     Value* recurse_result = CallInst::Create(recurse, args.begin(), args.end(),
         "recurse_result", block);
     Value* recurse_result_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-        recurse_result, not_found, "recurse_result_not_found");
+        recurse_result, REM->not_found, "recurse_result_not_found");
 
     BasicBlock* return_recurse_result = 
       createBlock("return_recurse_result");
@@ -1593,20 +1616,20 @@ CompiledExpression::subpattern_begin(BasicBlock* block, PyObject* arg) {
   // store the start location
   int start_offset = (id-1)*2;
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, start_offset), "start_ptr", block);
+      ConstantInt::get(REM->offsetType, start_offset), "start_ptr", block);
   new StoreInst(off, start_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_start_offset_ptr = new AllocaInst(offsetType, 
+  Value* old_start_offset_ptr = new AllocaInst(REM->offsetType, 
       "old_start_offset_ptr", entry);
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, start_offset), "start_ptr", entry);
+      ConstantInt::get(REM->offsetType, start_offset), "start_ptr", entry);
   new StoreInst(new LoadInst(start_ptr, "old_start", entry), 
       old_start_offset_ptr, entry);
 
   // if this expression fails, restore the start offset
   start_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, start_offset), "start_ptr", 
+      ConstantInt::get(REM->offsetType, start_offset), "start_ptr", 
       return_not_found);
   new StoreInst(new LoadInst(old_start_offset_ptr, "old_start", 
         return_not_found), start_ptr, return_not_found);
@@ -1636,26 +1659,26 @@ CompiledExpression::subpattern_end(BasicBlock* block, PyObject* arg) {
   // store the end location
   int end_offset = (id-1)*2+1;
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, end_offset), "end_ptr", block);
+      ConstantInt::get(REM->offsetType, end_offset), "end_ptr", block);
   new StoreInst(off, end_ptr, block);
 
   // store the group index at the end of the group array for
   // MatchObject.lastindex
   Value* lastindex_ptr = GetElementPtrInst::Create(groups,
-      ConstantInt::get(offsetType, re.groups*2), "lastindex_ptr", block);
-  new StoreInst(ConstantInt::get(offsetType, id), lastindex_ptr, block);
+      ConstantInt::get(REM->offsetType, re.groups*2), "lastindex_ptr", block);
+  new StoreInst(ConstantInt::get(REM->offsetType, id), lastindex_ptr, block);
 
   // save the previous end offset when the function begins
-  Value* old_end_offset_ptr = new AllocaInst(offsetType, "old_end_offset_ptr",
+  Value* old_end_offset_ptr = new AllocaInst(REM->offsetType, "old_end_offset_ptr",
       entry);
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, end_offset), "end_ptr", entry);
+      ConstantInt::get(REM->offsetType, end_offset), "end_ptr", entry);
   new StoreInst(new LoadInst(end_ptr, "old_end", entry), old_end_offset_ptr, 
       entry);
 
   // if this expression fails, restore the end offset
   end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, end_offset), "end_ptr", return_not_found);
+      ConstantInt::get(REM->offsetType, end_offset), "end_ptr", return_not_found);
   new StoreInst(new LoadInst(old_end_offset_ptr, "old_end", return_not_found), 
       end_ptr, return_not_found);
 
@@ -1684,17 +1707,17 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // find the start and end positions
   Value* start_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(offsetType, (groupnum-1)*2), "start_ptr", block);
+    ConstantInt::get(REM->offsetType, (groupnum-1)*2), "start_ptr", block);
   Value* start_off = new LoadInst(start_ptr, "start_off", block);
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-    ConstantInt::get(offsetType, (groupnum-1)*2+1), "end_ptr", block);
+    ConstantInt::get(REM->offsetType, (groupnum-1)*2+1), "end_ptr", block);
   Value* end_off = new LoadInst(end_ptr, "end_off", block);
 
   // check if the group exists
   Value* start_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, start_off, 
-      not_found, "start_exists");
+      REM->not_found, "start_exists");
   Value* end_exists = new ICmpInst(*block, ICmpInst::ICMP_NE, end_off, 
-      not_found, "end_exists");
+      REM->not_found, "end_exists");
   Value* group_exists = BinaryOperator::CreateAnd(start_exists, end_exists,
       "group_exists", block);
 
@@ -1721,7 +1744,7 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // allocate a local variable to hold the offset into the group that we are
   // testing
-  Value* group_off_ptr = new AllocaInst(offsetType, "group_off_ptr", entry);
+  Value* group_off_ptr = new AllocaInst(REM->offsetType, "group_off_ptr", entry);
 
   // store the start address in that
   new StoreInst(start_off, group_off_ptr, groupref_test);
@@ -1755,16 +1778,16 @@ CompiledExpression::groupref(BasicBlock* block, PyObject* arg) {
 
   // increment offsets
   string_c_off = BinaryOperator::CreateAdd(string_c_off, 
-      ConstantInt::get(offsetType, 1), "increment", groupref_loop_a);
+      ConstantInt::get(REM->offsetType, 1), "increment", groupref_loop_a);
   storeOffset(groupref_loop_a, string_c_off);
   group_off = BinaryOperator::CreateAdd(group_off,
-      ConstantInt::get(offsetType, 1), "group_off_inc", groupref_loop_a);
+      ConstantInt::get(REM->offsetType, 1), "group_off_inc", groupref_loop_a);
   new StoreInst(group_off, group_off_ptr, groupref_loop_a);
 
   // compare the group and string values
   Value* groupref_match = new ICmpInst(*groupref_loop_a, ICmpInst::ICMP_EQ, 
       group_c, string_c, "groupref_match");
-  // if they match then continue looping, otherwise return not_found
+  // if they match then continue looping, otherwise return REM->not_found
   BranchInst::Create(groupref_loop, return_not_found, groupref_match, 
       groupref_loop_a);
 
@@ -1827,12 +1850,12 @@ CompiledExpression::groupref_exists(BasicBlock* block, PyObject* arg) {
   // generate code to check if the specified group has matched
   // get the pointer to the end offset of the group
   Value* end_ptr = GetElementPtrInst::Create(groups, 
-      ConstantInt::get(offsetType, (groupnum-1)*2+1), "end_ptr", block);
+      ConstantInt::get(REM->offsetType, (groupnum-1)*2+1), "end_ptr", block);
   // load the end value
   Value* end_off = new LoadInst(end_ptr, "end", block);
   // check if the end_off is not found
   Value* end_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ, end_off,
-      not_found, "end_not_found");
+      REM->not_found, "end_not_found");
   // either yes or no
   BranchInst::Create(no, yes, end_not_found, block);
 
@@ -1870,7 +1893,7 @@ CompiledExpression::assert_(BasicBlock* block, PyObject* arg, bool assert_not) {
 
   // did it fail?
   Value* assert_not_found = new ICmpInst(*block, ICmpInst::ICMP_EQ,
-      assert_result, not_found, "assert_not_found");
+      assert_result, REM->not_found, "assert_not_found");
 
   // create a block for continuation
   BasicBlock* next = createBlock("block");
@@ -2074,16 +2097,8 @@ init_llvmre(void)
   Py_INCREF(&RegExType);
   PyModule_AddObject(m, "RegEx", (PyObject *)&RegExType);
 
-  LLVMContext *context = &PyGlobalLlvmData::Get()->context();
-
-  // initialize types and values that are used later all over the place
-  charType = PyTypeBuilder<Py_UNICODE>::get(*context);
-  boolType = PyTypeBuilder<bool>::get(*context);
-  offsetType = PyTypeBuilder<int>::get(*context);
-  charPointerType = PyTypeBuilder<Py_UNICODE*>::get(*context);
-  offsetPointerType = PyTypeBuilder<int*>::get(*context);
-  // set up some handy constants
-  not_found = ConstantInt::getSigned(offsetType, -1);
+  REM = new RegularExpressionModule();
+  // FIXME: deallocate REM on Python module destruction
 }
 
 #endif /* TESTER */
