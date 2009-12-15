@@ -24,6 +24,9 @@ class RegexObject(object):
     self.groupindex = self.__parsed.pattern.groupdict
     self.pattern = pattern
 
+    if flags & 128: # SRE_FLAG_DEBUG
+      self.__re.dump()
+
   def __unicode(self, s):
     '''return @s as a unicode string'''
     try:
