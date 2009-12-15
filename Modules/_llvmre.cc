@@ -119,6 +119,36 @@ class RegularExpressionModule {
     ~RegularExpressionModule() {
       // I don't think we can clean up those values safely :(
     }
+
+  private:
+    typedef SmallPtrSet<Function*, 16> DumpedFunctionSet;
+
+    void dump(Function* function, DumpedFunctionSet& dumped) {
+      function->dump();
+      dumped.insert(function);
+
+      // iterate the function's instructions, looking for a call
+      for (inst_iterator i = inst_begin(function), e = inst_end(function); 
+          i != e; i++) { 
+        if (CallInst* inst = dyn_cast<CallInst>(&*i)) {
+          // found a call, what's being called?
+          Function* called = inst->getCalledFunction();
+          if (called && !dumped.count(called)) {
+            // it's never dumped before, dump it.
+            dump(called, dumped);
+          }
+        }
+      }
+    }
+  public:
+    // dump a function and everything it calls
+    void dump(Function* function) {
+      DumpedFunctionSet dumped;
+      dump(function, dumped);
+    }
+
+
+    
 };
 static RegularExpressionModule* REM = NULL;
 
@@ -1961,32 +1991,10 @@ RegEx_dealloc(RegEx* self)
   }
 }
 
-typedef SmallPtrSet<Function*, 16> DumpedFunctionSet;
-
-static void
-dump_function(Function* function, DumpedFunctionSet& dumped) {
-  function->dump();
-  dumped.insert(function);
-
-  // iterate the function's instructions, looking for a call
-  for (inst_iterator i = inst_begin(function), e = inst_end(function); 
-      i != e; i++) { 
-    if (CallInst* inst = dyn_cast<CallInst>(&*i)) {
-      // found a call, what's being called?
-      Function* called = inst->getCalledFunction();
-      if (called && !dumped.count(called)) {
-        // it's never dumped before, dump it.
-        dump_function(called, dumped);
-      }
-    }
-  }
-}
-
 static PyObject*
 RegEx_dump(RegEx* self) {
   if (self->re) {
-    DumpedFunctionSet dumped;
-    dump_function(self->re->find_function, dumped);
+    REM->dump(self->re->find_function);
   }
   Py_INCREF(Py_None);
   return Py_None;
