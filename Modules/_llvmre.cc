@@ -147,8 +147,15 @@ class RegularExpressionModule {
       dump(function, dumped);
     }
 
+    // optimize an LLVM function
+    void optimize(Function* function) {
+      // FIXME: we need to implement cross-function optimization,
+      // like inlining.
 
-    
+      // FIXME: chose re-specific optimizations
+      PyGlobalLlvmData::Get()->Optimize(*function, 2);
+    }
+
 };
 static RegularExpressionModule* REM = NULL;
 
@@ -235,9 +242,6 @@ class RegularExpression : CompiledExpression {
     virtual ~RegularExpression();
 
     bool Compile(PyObject* seq, int flags, int groups);
-
-    // call unladen-swallow's optimizer on a function
-    bool Optimize(Function* f);
 
     PyObject* Match(Py_UNICODE* characters, int length, int pos, int end);
     PyObject* Find(Py_UNICODE* characters, int length, int pos, int end);
@@ -451,24 +455,7 @@ RegularExpression::CompileFind()
       start_ptr, return_match_result);
   ReturnInst::Create(*context, match_result, return_match_result);
 
-  return Optimize(find_function);
-}
-
-bool
-RegularExpression::Optimize(Function* f)
-{
-  return true;
-
-#if 0
-  if (flags & 128) {
-    // don't optimize if the DEBUG flag is set
-    return true;
-  }
-#endif
-	if (global_data->Optimize(*f, 3) < 0) {
-    PyErr_Format(PyExc_SystemError, "Failed to optimize to level %d", 3);
-    return false;
-  }
+  REM->optimize(find_function);
   return true;
 }
 
@@ -715,7 +702,7 @@ CompiledExpression::greedy(Function* repeat, Function* after)
   // return_offset
   ReturnInst::Create(context(), recurse_result, return_offset);
 
-  re.Optimize(function);
+  REM->optimize(function);
 
   return function; 
 }
@@ -787,7 +774,7 @@ CompiledExpression::nongreedy(Function* repeat, Function* after)
   // return_after_result
   ReturnInst::Create(context(), after_result, return_after_result);
 
-  re.Optimize(function);
+  REM->optimize(function);
 
   return function; 
 }
@@ -1087,8 +1074,10 @@ CompiledExpression::Compile(PyObject*  seq,
   // add the return instruction to return_not_found
   ReturnInst::Create(context(), REM->not_found, return_not_found);
 
-  return re.Optimize(function);
+  // optimize the function
+  REM->optimize(function);
 
+  return true;
 }
 
 BasicBlock*
