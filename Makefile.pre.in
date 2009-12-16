@@ -98,8 +98,10 @@ LLVM_INC_DIR=	@LLVM_INC_DIR@
 LLVM_BIN_DIR=	@LLVM_PATH@/bin
 ifeq (@BUILD_LLVM@, disabled)
 	LLVMLIBS = UNUSED
+	LLVM_LIB_PATHS =
 else
 	LLVMLIBS = LLVMX86AsmParser LLVMX86AsmPrinter LLVMX86CodeGen LLVMSelectionDAG LLVMAsmPrinter LLVMX86Info LLVMBitReader LLVMJIT LLVMExecutionEngine LLVMCodeGen LLVMScalarOpts LLVMTransformUtils LLVMipa LLVMAnalysis LLVMTarget LLVMMC LLVMCore LLVMSupport LLVMSystem
+	LLVM_LIB_PATHS = $(patsubst %, $(LLVM_LIB_DIR)/lib%.a, $(LLVMLIBS))
 endif
 
 
@@ -447,22 +449,22 @@ coverage:
 	$(MAKE) all CFLAGS="$(CFLAGS) -O0 -pg -fprofile-arcs -ftest-coverage" LIBS="$(LIBS) -lgcov"
 
 # Only build LLVM if we need to.
+.PHONY: llvm
+ifeq (@BUILD_LLVM@, 1)
 llvm:
-	@case @BUILD_LLVM@ in \
-	0) mkdir -p Util;; \
-	1) $(MAKE) -C Util/llvm libs-only;; \
-	disabled) ;; \
-	esac
+	$(MAKE) -C Util/llvm tools-only ONLY_TOOLS="clang opt llvm-link llvm-dis"
+else
+llvm: ;
+endif
 
-# Only build clang and llc if we need to.
-llvm_tools: llvm
-	@case @BUILD_LLVM@ in \
-	0|disabled) ;; \
-	1) $(MAKE) -C Util/llvm/tools ONLY_TOOLS="clang opt llvm-link llvm-dis";; \
-	esac
+# Declare some of LLVM's build outputs to depend on LLVM.  We only
+# declare the ones that other files need to depend on.
+$(LLVM_BIN_DIR)/clang $(LLVM_BIN_DIR)/opt $(LLVM_BIN_DIR)/llvm-link \
+	$(LLVM_BIN_DIR)/llvm-dis $(LLVM_LIB_PATHS) \
+	$(LLVM_INC_DIR)/llvm/Intrinsics.gen: llvm
 
 # Build the interpreter
-$(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) $(BCLIBRARY) | llvm
+$(BUILDPYTHON): Modules/python.o $(LIBRARY) $(LDLIBRARY) $(BCLIBRARY)
 		$(LINKCC) $(LDFLAGS) -o $@ Modules/python.o \
 		$(EXECUTABLE_LINK_ARGS)
 
@@ -481,15 +483,17 @@ sharedmods: $(BUILDPYTHON)
 # avoid long command lines, same as LIBRARY_OBJS.
 # We "link in" LLVM by extracting all .o files from LLVM's .a's, then
 # merging them into libpythonX.Y.a.
-$(LIBRARY): $(LIBRARY_OBJS)
+$(LIBRARY): $(LIBRARY_OBJS) $(LLVM_LIB_PATHS)
 	-rm -rf $@ $@-objs
 	$(AR) cqS $@ Modules/getbuildinfo.o
+	set -e; \
 	if test @BUILD_LLVM@ != disabled; then \
 		export OUR_PWD=$(OUR_PWD); \
 		mkdir $@-objs; \
-		(cd $@-objs; \
-		for lib in $(LLVMLIBS) ; do \
-			$(AR) x $${OUR_PWD}$(LLVM_LIB_DIR)/lib$$lib.a; \
+		(set -e; \
+		cd $@-objs; \
+		for lib in $(LLVM_LIB_PATHS) ; do \
+			$(AR) x $${OUR_PWD}$$lib; \
 		done); \
 		$(AR) cqS $@ $@-objs/*.o; \
 		rm -fr $@-objs; \
@@ -771,9 +775,9 @@ $(LIBRARY_OBJS) $(MODOBJS) Modules/python.o: $(PYTHON_HEADERS)
 
 BCLIBRARY_OBJS := Python/llvm_inline_functions.bc
 
-$(BCLIBRARY:.bc=.unopt.bc): $(BCLIBRARY_OBJS)
-	$(LLVM_BIN_DIR)/llvm-link -o $@ $^
-$(BCLIBRARY): $(BCLIBRARY:.bc=.unopt.bc)
+$(BCLIBRARY:.bc=.unopt.bc): $(BCLIBRARY_OBJS) $(LLVM_BIN_DIR)/llvm-link
+	$(LLVM_BIN_DIR)/llvm-link -o $@ $(filter %.bc, $^)
+$(BCLIBRARY): $(BCLIBRARY:.bc=.unopt.bc) $(LLVM_BIN_DIR)/opt
 	$(LLVM_BIN_DIR)/opt -o $@ -O3 $<
 
 
@@ -1230,13 +1234,13 @@ config.status:	$(srcdir)/configure
 .c.o:
 	$(CC) -c $(PY_CFLAGS) -o $@ $<
 
-.cc.o:
+%.o: %.cc $(LLVM_INC_DIR)/llvm/Intrinsics.gen
 	$(CXX) -c $(LLVMCXXFLAGS) $(PY_CXXFLAGS) -o $@ $<
 
-%.bc : %.c $(PYTHON_HEADERS) | llvm_tools
+%.bc : %.c $(PYTHON_HEADERS) $(LLVM_BIN_DIR)/clang
 	$(LLVM_BIN_DIR)/clang -O3 -emit-llvm -c $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE $< -o $@
 
-%.ll : %.bc | llvm_tools
+%.ll : %.bc $(LLVM_BIN_DIR)/llvm-dis
 	$(LLVM_BIN_DIR)/llvm-dis $< -o $@
 
 # Run reindent on the library
@@ -1353,6 +1357,5 @@ Python/thread.o: @THREADHEADERS@
 .PHONY: frameworkinstallmaclib frameworkinstallapps frameworkinstallunixtools
 .PHONY: frameworkaltinstallunixtools recheck autoconf clean clobber distclean 
 .PHONY: smelly funny patchcheck
-.PHONY: llvm llvm_tools
 
 # IF YOU PUT ANYTHING HERE IT WILL GO AWAY
