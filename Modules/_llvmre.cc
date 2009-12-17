@@ -22,6 +22,9 @@
 #include "llvm/Support/InstIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/PassManager.h"
+#include "llvm/Support/StandardPasses.h"
+#include "llvm/Target/TargetData.h"
 
 // for SRE_FLAG_*
 #include "sre_constants.h"
@@ -55,6 +58,8 @@ using llvm::EngineBuilder;
 
 using llvm::LLVMContext;
 using llvm::getGlobalContext;
+
+using llvm::FunctionPassManager;
 
 using llvm::cast;
 using llvm::dyn_cast;
@@ -103,23 +108,6 @@ class RegularExpressionModule {
     const PointerType* charPointerType;
     const PointerType* offsetPointerType;
 
-    RegularExpressionModule() {
-      // get Unladen Swallow's LLVM context
-      LLVMContext *context = &PyGlobalLlvmData::Get()->context();
-
-      // initialize types and values that are used later all over the place
-      charType = PyTypeBuilder<Py_UNICODE>::get(*context);
-      boolType = PyTypeBuilder<bool>::get(*context);
-      offsetType = PyTypeBuilder<int>::get(*context);
-      charPointerType = PyTypeBuilder<Py_UNICODE*>::get(*context);
-      offsetPointerType = PyTypeBuilder<int*>::get(*context);
-      // set up some handy constants
-      not_found = ConstantInt::getSigned(offsetType, -1);
-    }
-    ~RegularExpressionModule() {
-      // I don't think we can clean up those values safely :(
-    }
-
   private:
     typedef SmallPtrSet<Function*, 16> DumpedFunctionSet;
 
@@ -147,13 +135,42 @@ class RegularExpressionModule {
       dump(function, dumped);
     }
 
+  private:
+    FunctionPassManager* fpm;
+
+  public:
     // optimize an LLVM function
     void optimize(Function* function) {
       // FIXME: we need to implement cross-function optimization,
       // like inlining.
 
-      // FIXME: chose re-specific optimizations
-      PyGlobalLlvmData::Get()->Optimize(*function, 2);
+      fpm->run(*function);
+    }
+
+    RegularExpressionModule() {
+      // get Unladen Swallow's LLVM context
+      LLVMContext *context = &PyGlobalLlvmData::Get()->context();
+
+      // initialize types and values that are used later all over the place
+      charType = PyTypeBuilder<Py_UNICODE>::get(*context);
+      boolType = PyTypeBuilder<bool>::get(*context);
+      offsetType = PyTypeBuilder<int>::get(*context);
+      charPointerType = PyTypeBuilder<Py_UNICODE*>::get(*context);
+      offsetPointerType = PyTypeBuilder<int*>::get(*context);
+      // set up some handy constants
+      not_found = ConstantInt::getSigned(offsetType, -1);
+
+      // set up the function pass manager
+      fpm = new FunctionPassManager(
+          PyGlobalLlvmData::Get()->module_provider());
+      fpm->add(new llvm::TargetData(
+            *PyGlobalLlvmData::Get()->getExecutionEngine()->getTargetData()));
+      llvm::createStandardFunctionPasses(fpm, 2);
+      fpm->add(llvm::createVerifierPass());
+    }
+    ~RegularExpressionModule() {
+      // I don't think we can clean *Type and not_found safely
+      delete fpm;
     }
 
 };
