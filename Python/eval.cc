@@ -33,6 +33,8 @@
 #include <ctype.h>
 #include <set>
 
+using llvm::errs;
+
 
 // Make a call to stop the call overhead timer before going through to
 // PyObject_Call.
@@ -72,19 +74,19 @@ compare_hotness(const PyCodeObject *first, const PyCodeObject *second)
 
 HotnessTracker::~HotnessTracker()
 {
-	printf("\n%zd code objects deemed hot\n", this->hot_code_.size());
+	errs() << "\nCode objects deemed hot (n=" << this->hot_code_.size()
+	       << ")\n";
 
-	printf("Code hotness metric:\n");
+	errs() << "Function -> hotness metric:\n";
 	std::vector<PyCodeObject*> to_sort(this->hot_code_.begin(),
 					   this->hot_code_.end());
 	std::sort(to_sort.begin(), to_sort.end(), compare_hotness);
 	for (std::vector<PyCodeObject*>::iterator co = to_sort.begin();
 	     co != to_sort.end(); ++co) {
-		printf("%s:%d (%s)\t%ld\n",
-			PyString_AsString((*co)->co_filename),
-			(*co)->co_firstlineno,
-			PyString_AsString((*co)->co_name),
-			(*co)->co_hotness);
+		errs() << PyString_AsString((*co)->co_filename)
+		       << ":" << (*co)->co_firstlineno << " "
+		       << "(" << PyString_AsString((*co)->co_name) << ")"
+		       << " -> " << (*co)->co_hotness << "\n";
 	}
 }
 
@@ -96,20 +98,21 @@ static llvm::ManagedStatic<HotnessTracker> hot_code;
 class FatalBailTracker {
 public:
 	~FatalBailTracker() {
-		printf("\nCode objects that failed fatal guards:\n");
-		printf("\tfile:line (funcname) bail hotness -> final hotness\n");
+		errs() << "\nCode objects that failed fatal guards:\n";
+		errs() << "\tfile:line (funcname) bail hotness"
+		       << " -> final hotness\n";
 
 		for (TrackerData::const_iterator it = this->code_.begin();
 				it != this->code_.end(); ++it) {
 			PyCodeObject *code = it->first;
 			if (code->co_hotness == it->second)
 				continue;
-			printf("\t%s:%d (%s)\t%ld -> %ld\n",
-				PyString_AsString(code->co_filename),
-				code->co_firstlineno,
-				PyString_AsString(code->co_name),
-				it->second,
-				code->co_hotness);
+			errs() << "\t"
+			       << PyString_AsString(code->co_name) << ":"
+			       << code->co_firstlineno << " "
+			       << "(" << PyString_AsString(code->co_name) << ")"
+			       << "\t" << it->second << " -> "
+			       << code->co_hotness << "\n";
 		}
 	}
 
@@ -166,18 +169,20 @@ public:
 	                   fatal_guard_fail_(0), guard_fail_(0) {};
 
 	~BailCountStats() {
-		printf("\nBailed to the interpreter %ld times\n", this->total_);
-		printf("TRACE_ON_ENTRY: %ld\n", this->trace_on_entry_);
-		printf("LINE_TRACE: %ld\n", this->line_trace_);
-		printf("BACKEDGE_TRACE: %ld\n", this->backedge_trace_);
-		printf("CALL_PROFILE: %ld\n", this->call_profile_);
-		printf("FATAL_GUARD_FAIL: %ld\n", this->fatal_guard_fail_);
-		printf("GUARD_FAIL: %ld\n", this->guard_fail_);
+		errs() << "\nBailed to the interpreter " << this->total_
+		       << " times\n";
+		errs() << "TRACE_ON_ENTRY: " << this->trace_on_entry_ << "\n";
+		errs() << "LINE_TRACE: " << this->line_trace_ << "\n";
+		errs() << "BACKEDGE_TRACE:" << this->backedge_trace_ << "\n";
+		errs() << "CALL_PROFILE: " << this->call_profile_ << "\n";
+		errs() << "FATAL_GUARD_FAIL: " << this->fatal_guard_fail_
+		       << "\n";
+		errs() << "GUARD_FAIL: " << this->guard_fail_ << "\n";
 
-		printf("\n%zd bail sites:\n", this->bail_sites_.size());
+		errs() << "\n" << this->bail_sites_.size() << " bail sites:\n";
 		for (BailData::iterator i = this->bail_sites_.begin(),
 		     end = this->bail_sites_.end(); i != end; ++i) {
-			llvm::outs() << "    " << *i << "\n";
+			errs() << "    " << *i << "\n";
 		}
 	}
 

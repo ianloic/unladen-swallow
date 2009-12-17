@@ -1382,6 +1382,7 @@ LlvmFunctionBuilder::LOAD_ATTR_fast(int names_index)
     if (!accessor.CanOptimizeAttrAccess()) {
         return false;
     }
+    ACCESS_ATTR_INC_STATS(optimized_loads);
 
     // Emit the appropriate guards.
     Value *obj_v = this->Pop();
@@ -1451,6 +1452,7 @@ LlvmFunctionBuilder::STORE_ATTR_fast(int names_index)
     if (!accessor.CanOptimizeAttrAccess()) {
         return false;
     }
+    ACCESS_ATTR_INC_STATS(optimized_stores);
 
     // Emit appropriate guards.
     Value *obj_v = this->Pop();
@@ -1565,7 +1567,6 @@ LlvmFunctionBuilder::AttributeAccessor::CanOptimizeAttrAccess()
     this->fbuilder_->types_used_.insert(type);
     MakeLlvmValues();
 
-    ACCESS_ATTR_INC_STATS(optimized_loads);
     return true;
 }
 
